@@ -130,6 +130,8 @@ pub struct Store {
     lock: Mutex<()>,
     last: Mutex<Option<Value>>,
     loaded: Mutex<Option<(FileStamp, Value)>>,
+    #[cfg(test)]
+    read_barriers: Mutex<Option<Arc<(std::sync::Barrier, std::sync::Barrier)>>>,
 }
 impl Store {
     pub fn shared(path: PathBuf) -> Arc<Self> {
@@ -143,6 +145,8 @@ impl Store {
             lock: Mutex::new(()),
             last: Mutex::new(None),
             loaded: Mutex::new(None),
+            #[cfg(test)]
+            read_barriers: Mutex::new(None),
         }
     }
     fn load(&self) -> Result<Value> {
@@ -220,11 +224,17 @@ impl Store {
             _ => return Err(Failure::io(io::Error::other("sessões inválidas"))),
         };
         let doc = json!({"guests":normalized,"sessions":sessions});
-        if stamp == file_stamp(&self.path) {
-            *self.loaded.lock().unwrap_or_else(|e| e.into_inner()) =
-                stamp.map(|stamp| (stamp, doc.clone()));
+        #[cfg(test)]
+        if let Some(barriers) = { let mut hook = self.read_barriers.lock().unwrap(); hook.take() } {
+            barriers.0.wait();
+            barriers.1.wait();
         }
-        *self.last.lock().unwrap_or_else(|e| e.into_inner()) = Some(doc.clone());
+        // Publicação e confirmação da identidade são indivisíveis para os escritores locais.
+        let mut loaded = self.loaded.lock().unwrap_or_else(|e| e.into_inner());
+        if stamp == file_stamp(&self.path) {
+            *loaded = stamp.map(|stamp| (stamp, doc.clone()));
+            *self.last.lock().unwrap_or_else(|e| e.into_inner()) = Some(doc.clone());
+        }
         Ok(doc)
     }
     pub fn snapshot(&self, preserve: bool) -> Option<Value> {
@@ -282,8 +292,8 @@ impl Store {
         let result = f(&mut state)?;
         if result.is_none() { return Ok(None); }
         write(&self.path, &state).map_err(Failure::io)?;
-        *self.loaded.lock().unwrap_or_else(|e| e.into_inner()) =
-            file_stamp(&self.path).map(|stamp| (stamp, state.clone()));
+        let mut loaded = self.loaded.lock().unwrap_or_else(|e| e.into_inner());
+        *loaded = file_stamp(&self.path).map(|stamp| (stamp, state.clone()));
         *self.last.lock().unwrap_or_else(|e| e.into_inner()) = Some(state);
         Ok(result)
     }
@@ -366,14 +376,18 @@ impl Store {
                 if saved.is_err() {
                     // O nome não pode adotar outra vida só porque o disco recusou a primeira.
                     let mut loaded = self.loaded.lock().unwrap_or_else(|e| e.into_inner());
-                    if let Some((stamp, current)) = loaded.as_mut().filter(|(stamp, current)| {
-                        Some(stamp.clone()) == file_stamp(&self.path)
-                            && current["sessions"].get(name) == Some(entry)
-                    }) {
-                        let _ = stamp;
+                    let mut last = self.last.lock().unwrap_or_else(|e| e.into_inner());
+                    if let Some(current) = last.as_mut().filter(|current| current["sessions"].get(name) == Some(entry)) {
                         current["sessions"][name]["life"] = json!(life);
-                        *self.last.lock().unwrap_or_else(|e| e.into_inner()) =
-                            Some(current.clone());
+                        if let Some((stamp, cached)) = loaded.as_mut().filter(|(stamp, cached)| {
+                            Some(stamp.clone()) == file_stamp(&self.path)
+                                && cached["sessions"].get(name) == Some(entry)
+                        }) {
+                            let _ = stamp;
+                            cached["sessions"][name]["life"] = json!(life);
+                        }
+                    } else {
+                        return None;
                     }
                 }
                 Some(g)
@@ -432,4 +446,44 @@ pub fn valid_root(root: &str) -> Result<String> {
         .strip_prefix(r"\\?\")
         .unwrap_or(&p.to_string_lossy())
         .to_string())
+}
+
+#[cfg(test)]
+mod review_tests {
+    use super::*;
+    fn fixture(path: &Path) {
+        let value: Value = serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/store.json")).unwrap();
+        write(path, &value["failed_adoption"]["before"]).unwrap();
+    }
+    #[test]
+    fn login_guests_review_adopts_last_good_life_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("guests.json");
+        fixture(&path);
+        let store = Store::new(path.clone());
+        assert!(store.snapshot(true).is_some());
+        std::fs::write(&path, b"{").unwrap();
+        assert!(store.owner("session", Some("k:first"), true).is_some());
+        assert!(store.owner("session", Some("k:second"), true).is_none(), "GUE-022/D02: a última leitura boa adota somente uma vida");
+        assert_eq!(std::fs::read(path).unwrap(), b"{");
+    }
+    #[test]
+    fn login_guests_review_stale_read_cannot_undo_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("guests.json");
+        fixture(&path);
+        let mut initial = read(&path).unwrap().unwrap();
+        for g in initial["guests"].as_array_mut().unwrap() { g["owner_sees"] = json!(true); }
+        write(&path, &initial).unwrap();
+        let store = Arc::new(Store::new(path.clone()));
+        let barriers = Arc::new((std::sync::Barrier::new(2), std::sync::Barrier::new(2)));
+        *store.read_barriers.lock().unwrap() = Some(barriers.clone());
+        let reader = { let store = store.clone(); std::thread::spawn(move || store.snapshot(true)) };
+        barriers.0.wait();
+        store.mutate(|doc| { for g in doc["guests"].as_array_mut().unwrap() { g["owner_sees"] = json!(false); } Ok(()) }).unwrap();
+        barriers.1.wait();
+        reader.join().unwrap();
+        std::fs::write(&path, b"{").unwrap();
+        assert!(!store.snapshot(true).unwrap()["guests"][0]["owner_sees"].as_bool().unwrap(), "D02: leitura antiga não desfaz a ocultação publicada");
+    }
 }
