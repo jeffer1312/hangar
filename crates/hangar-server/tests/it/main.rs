@@ -10,6 +10,7 @@ mod groups_text;
 mod session_defaults;
 mod tags;
 mod config_sync;
+mod machine_peers;
 mod push_expo;
 mod artifacts;
 mod session_media;

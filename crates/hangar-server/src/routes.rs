@@ -97,6 +97,8 @@ pub struct AppState {
     pub peers: Arc<crate::groups::peers::PeerClient>,
     /// Id desta máquina entre as do dono (`CP_SERVER_ID`); vazio = sem id.
     pub server_id: String,
+    pub peer_network: Arc<dyn crate::machine_peers::network::Network>,
+    pub machine_identity: std::sync::RwLock<Option<String>>,
     /// Voz ao vivo; o teste troca por um hub com pastas temporárias.
     pub voice: Arc<crate::voice::hub::VoiceHub>,
     pub speech: Arc<crate::speech::Service>,
@@ -126,6 +128,16 @@ impl AppState {
     }
 
     /// `server_id` = `HANGAR_SERVER_ID`, lido só no `main`.
+    pub fn current_server_id(&self) -> String {
+        self.machine_identity.read().unwrap_or_else(|e| e.into_inner()).clone().unwrap_or_else(|| self.server_id.clone())
+    }
+
+    pub fn set_server_id(&self, id: String) {
+        if let Some(groups) = &self.groups { groups.set_server_id(id.clone()); }
+        self.list.tags.bind(self.accounts.clone(), id.clone());
+        *self.machine_identity.write().unwrap_or_else(|e| e.into_inner()) = Some(id);
+    }
+
     pub fn with_server_id(cfg: Config, server_id: String) -> AppState {
         Self::build(cfg, crate::terminal_control::TerminalPool::new(), server_id)
     }
@@ -186,7 +198,7 @@ impl AppState {
                 .with_paths(list.env().dirs.as_ref().map(|d| d.home.clone()).unwrap_or_default(),
                     list.env().dirs.as_ref().map(|d| d.claude.join(".hangar-pair")).unwrap_or_default())
                 .with_mux(list.env().capture_program.to_string_lossy().into_owned())), list.clone(), diag.clone());
-        AppState { accounts: crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture()), command_catalog: Arc::default(), groups, server_id, peers: Arc::new(crate::groups::peers_from_env()), auth: Auth::configured(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, public_v6: None, front: None, diag,
+        AppState { accounts: crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture()), command_catalog: Arc::default(), groups, server_id, machine_identity: std::sync::RwLock::new(None), peer_network: Arc::new(crate::machine_peers::network::SystemNetwork), peers: Arc::new(crate::groups::peers_from_env()), auth: Auth::configured(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, public_v6: None, front: None, diag,
             workspace_slots: Arc::new(tokio::sync::Semaphore::new(4)),
             interactions, plugin,
             remote_browser: Arc::default(),
@@ -653,6 +665,10 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/session-defaults", axum::routing::get(crate::session_defaults::handle).put(crate::session_defaults::handle))
         // Sugestão de nome da sessão genérica: só o dono, nunca repassada (o Python não tem a rota).
         .route("/api/sessions/{name}/rename-suggestion", axum::routing::post(crate::dictation::rename_suggestion::route).delete(crate::dictation::rename_suggestion::route))
+        .route("/api/peers", axum::routing::any(crate::machine_peers::handle))
+        .route("/api/peers/{*path}", axum::routing::any(crate::machine_peers::handle))
+        .route("/api/alcance", axum::routing::any(crate::machine_peers::handle))
+        .route("/api/alcance/pareamento", axum::routing::any(crate::machine_peers::handle))
         .route("/api/tags", axum::routing::get(crate::tags::handle).put(crate::tags::handle))
         .route("/api/config-sync/manifest", axum::routing::get(crate::config_sync::http::handle))
         .route("/api/config-sync/bundle", axum::routing::get(crate::config_sync::http::handle))

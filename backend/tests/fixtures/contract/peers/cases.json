@@ -1,0 +1,2778 @@
+{
+  "source_commit": "fc1ed83a37fe22c126328f3717ccd6b37db17e10",
+  "command": "python backend/tests/fixtures/contract/peers/generate.py --reference <checkout-Python> --output backend/tests/fixtures/contract/peers/cases.json",
+  "cases": [
+    {
+      "name": "body-/api/peers-missing",
+      "method": "POST",
+      "path": "/api/peers",
+      "body": null,
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": "",
+      "difference": "rust-body-envelope",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "body-/api/peers-array",
+      "method": "POST",
+      "path": "/api/peers",
+      "body": null,
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": "[]",
+      "difference": "rust-body-envelope",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "dict_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary",
+            "input": []
+          }
+        ]
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "body-/api/peers-invalid",
+      "method": "POST",
+      "path": "/api/peers",
+      "body": null,
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": "{",
+      "difference": "rust-body-envelope",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "json_invalid",
+            "loc": [
+              "body",
+              1
+            ],
+            "msg": "JSON decode error",
+            "input": {},
+            "ctx": {
+              "error": "Expecting property name enclosed in double quotes"
+            }
+          }
+        ]
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "body-/api/peers-null",
+      "method": "POST",
+      "path": "/api/peers",
+      "body": null,
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": "null",
+      "difference": "rust-body-envelope",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "body-/api/peers-string",
+      "method": "POST",
+      "path": "/api/peers",
+      "body": null,
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": "\"text\"",
+      "difference": "rust-body-envelope",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "dict_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary",
+            "input": "text"
+          }
+        ]
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "body-/api/peers/app-list-missing",
+      "method": "PUT",
+      "path": "/api/peers/app-list",
+      "body": null,
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": "",
+      "difference": "rust-body-envelope",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "body-/api/peers/app-list-array",
+      "method": "PUT",
+      "path": "/api/peers/app-list",
+      "body": null,
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": "[]",
+      "difference": "rust-body-envelope",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "dict_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary",
+            "input": []
+          }
+        ]
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "body-/api/peers/app-list-invalid",
+      "method": "PUT",
+      "path": "/api/peers/app-list",
+      "body": null,
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": "{",
+      "difference": "rust-body-envelope",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "json_invalid",
+            "loc": [
+              "body",
+              1
+            ],
+            "msg": "JSON decode error",
+            "input": {},
+            "ctx": {
+              "error": "Expecting property name enclosed in double quotes"
+            }
+          }
+        ]
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "body-/api/peers/app-list-null",
+      "method": "PUT",
+      "path": "/api/peers/app-list",
+      "body": null,
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": "null",
+      "difference": "rust-body-envelope",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "body-/api/peers/app-list-string",
+      "method": "PUT",
+      "path": "/api/peers/app-list",
+      "body": null,
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": "\"text\"",
+      "difference": "rust-body-envelope",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "dict_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary",
+            "input": "text"
+          }
+        ]
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "body-/api/peers/a/enabled-missing",
+      "method": "PUT",
+      "path": "/api/peers/a/enabled",
+      "body": null,
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": "",
+      "difference": "rust-body-envelope",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "body-/api/peers/a/enabled-array",
+      "method": "PUT",
+      "path": "/api/peers/a/enabled",
+      "body": null,
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": "[]",
+      "difference": "rust-body-envelope",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "dict_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary",
+            "input": []
+          }
+        ]
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "body-/api/peers/a/enabled-invalid",
+      "method": "PUT",
+      "path": "/api/peers/a/enabled",
+      "body": null,
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": "{",
+      "difference": "rust-body-envelope",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "json_invalid",
+            "loc": [
+              "body",
+              1
+            ],
+            "msg": "JSON decode error",
+            "input": {},
+            "ctx": {
+              "error": "Expecting property name enclosed in double quotes"
+            }
+          }
+        ]
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "body-/api/peers/a/enabled-null",
+      "method": "PUT",
+      "path": "/api/peers/a/enabled",
+      "body": null,
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": "null",
+      "difference": "rust-body-envelope",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "body-/api/peers/a/enabled-string",
+      "method": "PUT",
+      "path": "/api/peers/a/enabled",
+      "body": null,
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": "\"text\"",
+      "difference": "rust-body-envelope",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "dict_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary",
+            "input": "text"
+          }
+        ]
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "body-/api/peers/identificador-missing",
+      "method": "PUT",
+      "path": "/api/peers/identificador",
+      "body": null,
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": "",
+      "difference": "rust-body-envelope",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "body-/api/peers/identificador-array",
+      "method": "PUT",
+      "path": "/api/peers/identificador",
+      "body": null,
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": "[]",
+      "difference": "rust-body-envelope",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "dict_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary",
+            "input": []
+          }
+        ]
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "body-/api/peers/identificador-invalid",
+      "method": "PUT",
+      "path": "/api/peers/identificador",
+      "body": null,
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": "{",
+      "difference": "rust-body-envelope",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "json_invalid",
+            "loc": [
+              "body",
+              1
+            ],
+            "msg": "JSON decode error",
+            "input": {},
+            "ctx": {
+              "error": "Expecting property name enclosed in double quotes"
+            }
+          }
+        ]
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "body-/api/peers/identificador-null",
+      "method": "PUT",
+      "path": "/api/peers/identificador",
+      "body": null,
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": "null",
+      "difference": "rust-body-envelope",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "body-/api/peers/identificador-string",
+      "method": "PUT",
+      "path": "/api/peers/identificador",
+      "body": null,
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": "\"text\"",
+      "difference": "rust-body-envelope",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "dict_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary",
+            "input": "text"
+          }
+        ]
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "announce-empty-body",
+      "method": "POST",
+      "path": "/api/peers/anunciar",
+      "body": null,
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 200,
+      "response": [],
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "empty",
+      "method": "GET",
+      "path": "/api/peers",
+      "body": null,
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 200,
+      "response": [],
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "auth-/api/peers",
+      "method": "GET",
+      "path": "/api/peers",
+      "body": null,
+      "initial": null,
+      "raw": null,
+      "auth": false,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "auth-/api/peers/app-list",
+      "method": "GET",
+      "path": "/api/peers/app-list",
+      "body": null,
+      "initial": null,
+      "raw": null,
+      "auth": false,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "auth-/api/peers/identificador",
+      "method": "GET",
+      "path": "/api/peers/identificador",
+      "body": null,
+      "initial": null,
+      "raw": null,
+      "auth": false,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "auth-/api/peers/descobrir",
+      "method": "GET",
+      "path": "/api/peers/descobrir",
+      "body": null,
+      "initial": null,
+      "raw": null,
+      "auth": false,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "auth-/api/alcance",
+      "method": "GET",
+      "path": "/api/alcance",
+      "body": null,
+      "initial": null,
+      "raw": null,
+      "auth": false,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 401,
+      "response": {
+        "detail": {
+          "code": "erro_nao_autorizado",
+          "params": {},
+          "msg": "unauthorized"
+        }
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "malformed-list",
+      "method": "GET",
+      "path": "/api/peers",
+      "body": null,
+      "initial": {
+        "bad": "broken",
+        "app": {
+          "app": {}
+        },
+        "z": {
+          "base_url": "http://z",
+          "token": "abcdefghijk",
+          "enabled": false
+        },
+        "a": {
+          "base_url": "http://a",
+          "token": 123,
+          "enabled": "yes",
+          "web_url": "https://a"
+        }
+      },
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 200,
+      "response": [
+        {
+          "id": "a",
+          "base_url": "http://a",
+          "token": "•••",
+          "web_url": "https://a"
+        },
+        {
+          "id": "z",
+          "base_url": "http://z",
+          "token": "abcd••••••••hijk",
+          "enabled": false
+        }
+      ],
+      "peers": {
+        "bad": "broken",
+        "app": {
+          "app": {}
+        },
+        "z": {
+          "base_url": "http://z",
+          "token": "abcdefghijk",
+          "enabled": false
+        },
+        "a": {
+          "base_url": "http://a",
+          "token": 123,
+          "enabled": "yes",
+          "web_url": "https://a"
+        }
+      },
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "mask-",
+      "method": "GET",
+      "path": "/api/peers",
+      "body": null,
+      "initial": {
+        "a": {
+          "base_url": "http://a",
+          "token": ""
+        }
+      },
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 200,
+      "response": [
+        {
+          "id": "a",
+          "base_url": "http://a",
+          "token": ""
+        }
+      ],
+      "peers": {
+        "a": {
+          "base_url": "http://a",
+          "token": ""
+        }
+      },
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "mask-a",
+      "method": "GET",
+      "path": "/api/peers",
+      "body": null,
+      "initial": {
+        "a": {
+          "base_url": "http://a",
+          "token": "a"
+        }
+      },
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 200,
+      "response": [
+        {
+          "id": "a",
+          "base_url": "http://a",
+          "token": "•"
+        }
+      ],
+      "peers": {
+        "a": {
+          "base_url": "http://a",
+          "token": "a"
+        }
+      },
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "mask-12345678",
+      "method": "GET",
+      "path": "/api/peers",
+      "body": null,
+      "initial": {
+        "a": {
+          "base_url": "http://a",
+          "token": "12345678"
+        }
+      },
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 200,
+      "response": [
+        {
+          "id": "a",
+          "base_url": "http://a",
+          "token": "••••••••"
+        }
+      ],
+      "peers": {
+        "a": {
+          "base_url": "http://a",
+          "token": "12345678"
+        }
+      },
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "mask-123456789",
+      "method": "GET",
+      "path": "/api/peers",
+      "body": null,
+      "initial": {
+        "a": {
+          "base_url": "http://a",
+          "token": "123456789"
+        }
+      },
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 200,
+      "response": [
+        {
+          "id": "a",
+          "base_url": "http://a",
+          "token": "1234••••••••6789"
+        }
+      ],
+      "peers": {
+        "a": {
+          "base_url": "http://a",
+          "token": "123456789"
+        }
+      },
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "mask-á😀abcdéfghi",
+      "method": "GET",
+      "path": "/api/peers",
+      "body": null,
+      "initial": {
+        "a": {
+          "base_url": "http://a",
+          "token": "á😀abcdéfghi"
+        }
+      },
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 200,
+      "response": [
+        {
+          "id": "a",
+          "base_url": "http://a",
+          "token": "á😀ab••••••••fghi"
+        }
+      ],
+      "peers": {
+        "a": {
+          "base_url": "http://a",
+          "token": "á😀abcdéfghi"
+        }
+      },
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "id-a",
+      "method": "POST",
+      "path": "/api/peers",
+      "body": {
+        "id": "a",
+        "base_url": "http://example",
+        "token": "secret"
+      },
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 200,
+      "response": [
+        {
+          "id": "a",
+          "base_url": "http://example",
+          "token": "••••••"
+        }
+      ],
+      "peers": {
+        "a": {
+          "base_url": "http://example",
+          "token": "secret"
+        }
+      },
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "id-a_b-9",
+      "method": "POST",
+      "path": "/api/peers",
+      "body": {
+        "id": "a_b-9",
+        "base_url": "http://example",
+        "token": "secret"
+      },
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 200,
+      "response": [
+        {
+          "id": "a_b-9",
+          "base_url": "http://example",
+          "token": "••••••"
+        }
+      ],
+      "peers": {
+        "a_b-9": {
+          "base_url": "http://example",
+          "token": "secret"
+        }
+      },
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "id-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "method": "POST",
+      "path": "/api/peers",
+      "body": {
+        "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "base_url": "http://example",
+        "token": "secret"
+      },
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 200,
+      "response": [
+        {
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "base_url": "http://example",
+          "token": "••••••"
+        }
+      ],
+      "peers": {
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": {
+          "base_url": "http://example",
+          "token": "secret"
+        }
+      },
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "id-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "method": "POST",
+      "path": "/api/peers",
+      "body": {
+        "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "base_url": "http://example",
+        "token": "secret"
+      },
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 400,
+      "response": {
+        "detail": {
+          "code": "peers_registro_invalido",
+          "params": {},
+          "msg": "identificador: use minúsculas, números, '-' ou '_' (até 32 caracteres)"
+        }
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "id-Casa",
+      "method": "POST",
+      "path": "/api/peers",
+      "body": {
+        "id": "Casa",
+        "base_url": "http://example",
+        "token": "secret"
+      },
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 400,
+      "response": {
+        "detail": {
+          "code": "peers_registro_invalido",
+          "params": {},
+          "msg": "identificador: use minúsculas, números, '-' ou '_' (até 32 caracteres)"
+        }
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "id-a\n",
+      "method": "POST",
+      "path": "/api/peers",
+      "body": {
+        "id": "a\n",
+        "base_url": "http://example",
+        "token": "secret"
+      },
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 400,
+      "response": {
+        "detail": {
+          "code": "peers_registro_invalido",
+          "params": {},
+          "msg": "identificador: use minúsculas, números, '-' ou '_' (até 32 caracteres)"
+        }
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "id-",
+      "method": "POST",
+      "path": "/api/peers",
+      "body": {
+        "id": "",
+        "base_url": "http://example",
+        "token": "secret"
+      },
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 400,
+      "response": {
+        "detail": {
+          "code": "peers_registro_invalido",
+          "params": {},
+          "msg": "identificador: use minúsculas, números, '-' ou '_' (até 32 caracteres)"
+        }
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "id-a b",
+      "method": "POST",
+      "path": "/api/peers",
+      "body": {
+        "id": "a b",
+        "base_url": "http://example",
+        "token": "secret"
+      },
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 400,
+      "response": {
+        "detail": {
+          "code": "peers_registro_invalido",
+          "params": {},
+          "msg": "identificador: use minúsculas, números, '-' ou '_' (até 32 caracteres)"
+        }
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "id-1",
+      "method": "POST",
+      "path": "/api/peers",
+      "body": {
+        "id": 1,
+        "base_url": "http://example",
+        "token": "secret"
+      },
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 400,
+      "response": {
+        "detail": {
+          "code": "peers_registro_invalido",
+          "params": {},
+          "msg": "identificador: use minúsculas, números, '-' ou '_' (até 32 caracteres)"
+        }
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "id-[1]",
+      "method": "POST",
+      "path": "/api/peers",
+      "body": {
+        "id": [
+          1
+        ],
+        "base_url": "http://example",
+        "token": "secret"
+      },
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 400,
+      "response": {
+        "detail": {
+          "code": "peers_registro_invalido",
+          "params": {},
+          "msg": "identificador: use minúsculas, números, '-' ou '_' (até 32 caracteres)"
+        }
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "fields-('ftp://x', 't', None)",
+      "method": "POST",
+      "path": "/api/peers",
+      "body": {
+        "id": "a",
+        "base_url": "ftp://x",
+        "token": "t",
+        "web_url": null
+      },
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 400,
+      "response": {
+        "detail": {
+          "code": "peers_registro_invalido",
+          "params": {},
+          "msg": "endereço precisa ser http(s):// e o token não pode ficar vazio"
+        }
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "fields-('http://x', '', None)",
+      "method": "POST",
+      "path": "/api/peers",
+      "body": {
+        "id": "a",
+        "base_url": "http://x",
+        "token": "",
+        "web_url": null
+      },
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 400,
+      "response": {
+        "detail": {
+          "code": "peers_registro_invalido",
+          "params": {},
+          "msg": "endereço precisa ser http(s):// e o token não pode ficar vazio"
+        }
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "fields-(7, 't', None)",
+      "method": "POST",
+      "path": "/api/peers",
+      "body": {
+        "id": "a",
+        "base_url": 7,
+        "token": "t",
+        "web_url": null
+      },
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 400,
+      "response": {
+        "detail": {
+          "code": "peers_registro_invalido",
+          "params": {},
+          "msg": "endereço e token precisam ser texto"
+        }
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "fields-('http://x', 7, None)",
+      "method": "POST",
+      "path": "/api/peers",
+      "body": {
+        "id": "a",
+        "base_url": "http://x",
+        "token": 7,
+        "web_url": null
+      },
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 400,
+      "response": {
+        "detail": {
+          "code": "peers_registro_invalido",
+          "params": {},
+          "msg": "endereço e token precisam ser texto"
+        }
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "fields-('http://x', 't', 7)",
+      "method": "POST",
+      "path": "/api/peers",
+      "body": {
+        "id": "a",
+        "base_url": "http://x",
+        "token": "t",
+        "web_url": 7
+      },
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 400,
+      "response": {
+        "detail": {
+          "code": "peers_registro_invalido",
+          "params": {},
+          "msg": "web_url precisa ser texto"
+        }
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "fields-('  https://x/// ', ' t ', ' https://w ')",
+      "method": "POST",
+      "path": "/api/peers",
+      "body": {
+        "id": "a",
+        "base_url": "  https://x/// ",
+        "token": " t ",
+        "web_url": " https://w "
+      },
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 200,
+      "response": [
+        {
+          "id": "a",
+          "base_url": "https://x",
+          "token": "•",
+          "web_url": "https://w"
+        }
+      ],
+      "peers": {
+        "a": {
+          "base_url": "https://x",
+          "token": "t",
+          "web_url": "https://w"
+        }
+      },
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "fields-('http://127.0.0.1', 't', None)",
+      "method": "POST",
+      "path": "/api/peers",
+      "body": {
+        "id": "a",
+        "base_url": "http://127.0.0.1",
+        "token": "t",
+        "web_url": null
+      },
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 200,
+      "response": [
+        {
+          "id": "a",
+          "base_url": "http://127.0.0.1",
+          "token": "•"
+        }
+      ],
+      "peers": {
+        "a": {
+          "base_url": "http://127.0.0.1",
+          "token": "t"
+        }
+      },
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "upsert-preserves",
+      "method": "POST",
+      "path": "/api/peers",
+      "body": {
+        "id": "a",
+        "base_url": "http://new",
+        "token": "new"
+      },
+      "initial": {
+        "a": {
+          "base_url": "http://old",
+          "token": "old",
+          "web_url": "https://web",
+          "enabled": false,
+          "unknown": [
+            1
+          ],
+          "app": {
+            "id": "one",
+            "pos": 0
+          }
+        }
+      },
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 200,
+      "response": [
+        {
+          "id": "a",
+          "base_url": "http://new",
+          "token": "•••",
+          "web_url": "https://web",
+          "enabled": false
+        }
+      ],
+      "peers": {
+        "a": {
+          "base_url": "http://new",
+          "token": "new",
+          "web_url": "https://web",
+          "enabled": false,
+          "unknown": [
+            1
+          ],
+          "app": {
+            "id": "one",
+            "pos": 0
+          }
+        }
+      },
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "remove-preserves-app",
+      "method": "DELETE",
+      "path": "/api/peers/a",
+      "body": null,
+      "initial": {
+        "a": {
+          "base_url": "http://old",
+          "token": "old",
+          "web_url": "https://web",
+          "enabled": false,
+          "unknown": [
+            1
+          ],
+          "app": {
+            "id": "one",
+            "pos": 0
+          }
+        }
+      },
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 200,
+      "response": [],
+      "peers": {
+        "a": {
+          "app": {
+            "id": "one",
+            "pos": 0
+          }
+        }
+      },
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "remove-unknown",
+      "method": "DELETE",
+      "path": "/api/peers/missing",
+      "body": null,
+      "initial": {
+        "a": {
+          "base_url": "http://old",
+          "token": "old",
+          "web_url": "https://web",
+          "enabled": false,
+          "unknown": [
+            1
+          ],
+          "app": {
+            "id": "one",
+            "pos": 0
+          }
+        }
+      },
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 404,
+      "response": {
+        "detail": {
+          "code": "peers_desconhecido",
+          "params": {},
+          "msg": "servidor 'missing' não está no peers.json"
+        }
+      },
+      "peers": {
+        "a": {
+          "base_url": "http://old",
+          "token": "old",
+          "web_url": "https://web",
+          "enabled": false,
+          "unknown": [
+            1
+          ],
+          "app": {
+            "id": "one",
+            "pos": 0
+          }
+        }
+      },
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "enabled-True",
+      "method": "PUT",
+      "path": "/api/peers/a/enabled",
+      "body": {
+        "enabled": true
+      },
+      "initial": {
+        "a": {
+          "base_url": "http://old",
+          "token": "old",
+          "web_url": "https://web",
+          "enabled": false,
+          "unknown": [
+            1
+          ],
+          "app": {
+            "id": "one",
+            "pos": 0
+          }
+        }
+      },
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 200,
+      "response": [
+        {
+          "id": "a",
+          "base_url": "http://old",
+          "token": "•••",
+          "web_url": "https://web",
+          "enabled": true
+        }
+      ],
+      "peers": {
+        "a": {
+          "base_url": "http://old",
+          "token": "old",
+          "web_url": "https://web",
+          "enabled": true,
+          "unknown": [
+            1
+          ],
+          "app": {
+            "id": "one",
+            "pos": 0
+          }
+        }
+      },
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "enabled-False",
+      "method": "PUT",
+      "path": "/api/peers/a/enabled",
+      "body": {
+        "enabled": false
+      },
+      "initial": {
+        "a": {
+          "base_url": "http://old",
+          "token": "old",
+          "web_url": "https://web",
+          "enabled": false,
+          "unknown": [
+            1
+          ],
+          "app": {
+            "id": "one",
+            "pos": 0
+          }
+        }
+      },
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 200,
+      "response": [
+        {
+          "id": "a",
+          "base_url": "http://old",
+          "token": "•••",
+          "web_url": "https://web",
+          "enabled": false
+        }
+      ],
+      "peers": {
+        "a": {
+          "base_url": "http://old",
+          "token": "old",
+          "web_url": "https://web",
+          "enabled": false,
+          "unknown": [
+            1
+          ],
+          "app": {
+            "id": "one",
+            "pos": 0
+          }
+        }
+      },
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "enabled-0",
+      "method": "PUT",
+      "path": "/api/peers/a/enabled",
+      "body": {
+        "enabled": 0
+      },
+      "initial": {
+        "a": {
+          "base_url": "http://old",
+          "token": "old",
+          "web_url": "https://web",
+          "enabled": false,
+          "unknown": [
+            1
+          ],
+          "app": {
+            "id": "one",
+            "pos": 0
+          }
+        }
+      },
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 400,
+      "response": {
+        "detail": {
+          "code": "peers_registro_invalido",
+          "params": {},
+          "msg": "enabled precisa ser true ou false"
+        }
+      },
+      "peers": {
+        "a": {
+          "base_url": "http://old",
+          "token": "old",
+          "web_url": "https://web",
+          "enabled": false,
+          "unknown": [
+            1
+          ],
+          "app": {
+            "id": "one",
+            "pos": 0
+          }
+        }
+      },
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "enabled-false",
+      "method": "PUT",
+      "path": "/api/peers/a/enabled",
+      "body": {
+        "enabled": "false"
+      },
+      "initial": {
+        "a": {
+          "base_url": "http://old",
+          "token": "old",
+          "web_url": "https://web",
+          "enabled": false,
+          "unknown": [
+            1
+          ],
+          "app": {
+            "id": "one",
+            "pos": 0
+          }
+        }
+      },
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 400,
+      "response": {
+        "detail": {
+          "code": "peers_registro_invalido",
+          "params": {},
+          "msg": "enabled precisa ser true ou false"
+        }
+      },
+      "peers": {
+        "a": {
+          "base_url": "http://old",
+          "token": "old",
+          "web_url": "https://web",
+          "enabled": false,
+          "unknown": [
+            1
+          ],
+          "app": {
+            "id": "one",
+            "pos": 0
+          }
+        }
+      },
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "enabled-None",
+      "method": "PUT",
+      "path": "/api/peers/a/enabled",
+      "body": {
+        "enabled": null
+      },
+      "initial": {
+        "a": {
+          "base_url": "http://old",
+          "token": "old",
+          "web_url": "https://web",
+          "enabled": false,
+          "unknown": [
+            1
+          ],
+          "app": {
+            "id": "one",
+            "pos": 0
+          }
+        }
+      },
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 400,
+      "response": {
+        "detail": {
+          "code": "peers_registro_invalido",
+          "params": {},
+          "msg": "enabled precisa ser true ou false"
+        }
+      },
+      "peers": {
+        "a": {
+          "base_url": "http://old",
+          "token": "old",
+          "web_url": "https://web",
+          "enabled": false,
+          "unknown": [
+            1
+          ],
+          "app": {
+            "id": "one",
+            "pos": 0
+          }
+        }
+      },
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "token",
+      "method": "GET",
+      "path": "/api/peers/a/token",
+      "body": null,
+      "initial": {
+        "a": {
+          "base_url": "http://old",
+          "token": "old",
+          "web_url": "https://web",
+          "enabled": false,
+          "unknown": [
+            1
+          ],
+          "app": {
+            "id": "one",
+            "pos": 0
+          }
+        }
+      },
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 200,
+      "response": {
+        "token": "old"
+      },
+      "peers": {
+        "a": {
+          "base_url": "http://old",
+          "token": "old",
+          "web_url": "https://web",
+          "enabled": false,
+          "unknown": [
+            1
+          ],
+          "app": {
+            "id": "one",
+            "pos": 0
+          }
+        }
+      },
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "token-missing",
+      "method": "GET",
+      "path": "/api/peers/missing/token",
+      "body": null,
+      "initial": {
+        "a": {
+          "base_url": "http://old",
+          "token": "old",
+          "web_url": "https://web",
+          "enabled": false,
+          "unknown": [
+            1
+          ],
+          "app": {
+            "id": "one",
+            "pos": 0
+          }
+        }
+      },
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 404,
+      "response": {
+        "detail": {
+          "code": "peers_desconhecido",
+          "params": {},
+          "msg": "peer 'missing' desconhecido"
+        }
+      },
+      "peers": {
+        "a": {
+          "base_url": "http://old",
+          "token": "old",
+          "web_url": "https://web",
+          "enabled": false,
+          "unknown": [
+            1
+          ],
+          "app": {
+            "id": "one",
+            "pos": 0
+          }
+        }
+      },
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "app-empty",
+      "method": "GET",
+      "path": "/api/peers/app-list",
+      "body": null,
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 200,
+      "response": {
+        "rev": "4f53cda18c2baa0c",
+        "servers": []
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "app-write",
+      "method": "PUT",
+      "path": "/api/peers/app-list",
+      "body": {
+        "rev": "4f53cda18c2baa0c",
+        "servers": [
+          {
+            "id": "srv-one",
+            "label": "Máquina",
+            "address": "https://one",
+            "token": "t",
+            "disabled": false,
+            "invite": false
+          }
+        ]
+      },
+      "initial": {
+        "a": {
+          "base_url": "https://one",
+          "token": "owner"
+        }
+      },
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 200,
+      "response": {
+        "rev": "459431265c8cf09a",
+        "servers": [
+          {
+            "id": "srv-one",
+            "label": "Máquina",
+            "address": "https://one",
+            "token": "t",
+            "disabled": false,
+            "invite": false
+          }
+        ]
+      },
+      "peers": {
+        "a": {
+          "base_url": "https://one",
+          "token": "owner",
+          "app": {
+            "id": "srv-one",
+            "label": "Máquina",
+            "address": "https://one",
+            "token": "t",
+            "disabled": false,
+            "invite": false,
+            "pos": 0
+          }
+        }
+      },
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "app-conflict",
+      "method": "PUT",
+      "path": "/api/peers/app-list",
+      "body": {
+        "rev": "old",
+        "servers": []
+      },
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 409,
+      "response": {
+        "detail": {
+          "code": "peers_lista_mudou",
+          "params": {},
+          "msg": "a lista mudou em outro app"
+        }
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "app-rev-type",
+      "method": "PUT",
+      "path": "/api/peers/app-list",
+      "body": {
+        "rev": 3,
+        "servers": []
+      },
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 400,
+      "response": {
+        "detail": {
+          "code": "peers_registro_invalido",
+          "params": {},
+          "msg": "rev obrigatório"
+        }
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "app-invalid-id",
+      "method": "PUT",
+      "path": "/api/peers/app-list",
+      "body": {
+        "rev": "4f53cda18c2baa0c",
+        "servers": [
+          {
+            "id": "",
+            "label": "Máquina",
+            "address": "https://one",
+            "token": "t",
+            "disabled": false,
+            "invite": false
+          }
+        ]
+      },
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 400,
+      "response": {
+        "detail": {
+          "code": "peers_registro_invalido",
+          "params": {},
+          "msg": "id da máquina vazio ou longo demais"
+        }
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "app-invalid-id",
+      "method": "PUT",
+      "path": "/api/peers/app-list",
+      "body": {
+        "rev": "4f53cda18c2baa0c",
+        "servers": [
+          {
+            "id": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "label": "Máquina",
+            "address": "https://one",
+            "token": "t",
+            "disabled": false,
+            "invite": false
+          }
+        ]
+      },
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 400,
+      "response": {
+        "detail": {
+          "code": "peers_registro_invalido",
+          "params": {},
+          "msg": "id da máquina vazio ou longo demais"
+        }
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "app-invalid-address",
+      "method": "PUT",
+      "path": "/api/peers/app-list",
+      "body": {
+        "rev": "4f53cda18c2baa0c",
+        "servers": [
+          {
+            "id": "srv-one",
+            "label": "Máquina",
+            "address": "ftp://x",
+            "token": "t",
+            "disabled": false,
+            "invite": false
+          }
+        ]
+      },
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 400,
+      "response": {
+        "detail": {
+          "code": "peers_registro_invalido",
+          "params": {},
+          "msg": "endereço precisa ser http(s)://"
+        }
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "app-invalid-label",
+      "method": "PUT",
+      "path": "/api/peers/app-list",
+      "body": {
+        "rev": "4f53cda18c2baa0c",
+        "servers": [
+          {
+            "id": "srv-one",
+            "label": 2,
+            "address": "https://one",
+            "token": "t",
+            "disabled": false,
+            "invite": false
+          }
+        ]
+      },
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 400,
+      "response": {
+        "detail": {
+          "code": "peers_registro_invalido",
+          "params": {},
+          "msg": "label precisa ser texto"
+        }
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "app-invalid-disabled",
+      "method": "PUT",
+      "path": "/api/peers/app-list",
+      "body": {
+        "rev": "4f53cda18c2baa0c",
+        "servers": [
+          {
+            "id": "srv-one",
+            "label": "Máquina",
+            "address": "https://one",
+            "token": "t",
+            "disabled": 0,
+            "invite": false
+          }
+        ]
+      },
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 400,
+      "response": {
+        "detail": {
+          "code": "peers_registro_invalido",
+          "params": {},
+          "msg": "disabled precisa ser true ou false"
+        }
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "app-invalid-invite",
+      "method": "PUT",
+      "path": "/api/peers/app-list",
+      "body": {
+        "rev": "4f53cda18c2baa0c",
+        "servers": [
+          {
+            "id": "srv-one",
+            "label": "Máquina",
+            "address": "https://one",
+            "token": "t",
+            "disabled": false,
+            "invite": "false"
+          }
+        ]
+      },
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 400,
+      "response": {
+        "detail": {
+          "code": "peers_registro_invalido",
+          "params": {},
+          "msg": "invite precisa ser true ou false"
+        }
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "app-invalid-lan",
+      "method": "PUT",
+      "path": "/api/peers/app-list",
+      "body": {
+        "rev": "4f53cda18c2baa0c",
+        "servers": [
+          {
+            "id": "srv-one",
+            "label": "Máquina",
+            "address": "https://one",
+            "token": "t",
+            "disabled": false,
+            "invite": false,
+            "lan": {
+              "url": "x"
+            }
+          }
+        ]
+      },
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 400,
+      "response": {
+        "detail": {
+          "code": "peers_registro_invalido",
+          "params": {},
+          "msg": "lan precisa ser {url, id}"
+        }
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "app-invalid-token",
+      "method": "PUT",
+      "path": "/api/peers/app-list",
+      "body": {
+        "rev": "4f53cda18c2baa0c",
+        "servers": [
+          {
+            "id": "srv-one",
+            "label": "Máquina",
+            "address": "https://one",
+            "token": null,
+            "disabled": false,
+            "invite": false
+          }
+        ]
+      },
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 400,
+      "response": {
+        "detail": {
+          "code": "peers_registro_invalido",
+          "params": {},
+          "msg": "token precisa ser texto"
+        }
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "app-duplicate",
+      "method": "PUT",
+      "path": "/api/peers/app-list",
+      "body": {
+        "rev": "4f53cda18c2baa0c",
+        "servers": [
+          {
+            "id": "srv-one",
+            "label": "Máquina",
+            "address": "https://one",
+            "token": "t",
+            "disabled": false,
+            "invite": false
+          },
+          {
+            "id": "srv-one",
+            "label": "Máquina",
+            "address": "https://one",
+            "token": "t",
+            "disabled": false,
+            "invite": false
+          }
+        ]
+      },
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 400,
+      "response": {
+        "detail": {
+          "code": "peers_registro_invalido",
+          "params": {},
+          "msg": "id de máquina repetido"
+        }
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "app-not-list",
+      "method": "PUT",
+      "path": "/api/peers/app-list",
+      "body": {
+        "rev": "4f53cda18c2baa0c",
+        "servers": {}
+      },
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 400,
+      "response": {
+        "detail": {
+          "code": "peers_registro_invalido",
+          "params": {},
+          "msg": "servers precisa ser uma lista"
+        }
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "ping",
+      "method": "GET",
+      "path": "/api/peers/ping",
+      "body": null,
+      "initial": null,
+      "raw": null,
+      "auth": false,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 200,
+      "response": {
+        "hangar": true
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "proof-15-a",
+      "method": "GET",
+      "path": "/api/peers/prova?desafio=aaaaaaaaaaaaaaa",
+      "body": null,
+      "initial": null,
+      "raw": null,
+      "auth": false,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 400,
+      "response": {
+        "detail": {
+          "code": "peers_desafio_invalido",
+          "params": {},
+          "msg": "desafio inválido"
+        }
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "proof-16-a",
+      "method": "GET",
+      "path": "/api/peers/prova?desafio=aaaaaaaaaaaaaaaa",
+      "body": null,
+      "initial": null,
+      "raw": null,
+      "auth": false,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 200,
+      "response": {
+        "identificador": "fixture",
+        "prova": "4036dc07aa0e8a30ba239de3edcacdced7ec890f25f756768db2704e73b74b5d"
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "proof-16-á",
+      "method": "GET",
+      "path": "/api/peers/prova?desafio=áááááááááááááááá",
+      "body": null,
+      "initial": null,
+      "raw": null,
+      "auth": false,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 200,
+      "response": {
+        "identificador": "fixture",
+        "prova": "63ee878cce532b58b26f361b5bb773598200cf2cbfc518401852e0b5496062d3"
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "proof-128-a",
+      "method": "GET",
+      "path": "/api/peers/prova?desafio=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "body": null,
+      "initial": null,
+      "raw": null,
+      "auth": false,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 200,
+      "response": {
+        "identificador": "fixture",
+        "prova": "5211783a0378c84a645b380c4f78345e2361425db207914d428fefb7ad8d1f91"
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "proof-129-a",
+      "method": "GET",
+      "path": "/api/peers/prova?desafio=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "body": null,
+      "initial": null,
+      "raw": null,
+      "auth": false,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 400,
+      "response": {
+        "detail": {
+          "code": "peers_desafio_invalido",
+          "params": {},
+          "msg": "desafio inválido"
+        }
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "identity",
+      "method": "GET",
+      "path": "/api/peers/identificador",
+      "body": null,
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 200,
+      "response": {
+        "identificador": "fixture",
+        "lan_url": ""
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "identity-write-novo",
+      "method": "PUT",
+      "path": "/api/peers/identificador",
+      "body": {
+        "identificador": "novo"
+      },
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "# comentário\nCP_SERVER_ID=fixture\nOTHER=yes\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 200,
+      "response": {
+        "identificador": "novo",
+        "avisos": []
+      },
+      "peers": null,
+      "env": "# comentário\nCP_SERVER_ID=novo\nOTHER=yes\n"
+    },
+    {
+      "name": "identity-write-",
+      "method": "PUT",
+      "path": "/api/peers/identificador",
+      "body": {
+        "identificador": ""
+      },
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "# comentário\nCP_SERVER_ID=fixture\nOTHER=yes\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 200,
+      "response": {
+        "identificador": "",
+        "avisos": []
+      },
+      "peers": null,
+      "env": "# comentário\nOTHER=yes\n"
+    },
+    {
+      "name": "identity-write-1",
+      "method": "PUT",
+      "path": "/api/peers/identificador",
+      "body": {
+        "identificador": 1
+      },
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "# comentário\nCP_SERVER_ID=fixture\nOTHER=yes\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 400,
+      "response": {
+        "detail": {
+          "code": "peers_id_invalido",
+          "params": {},
+          "msg": "identificador: use minúsculas, números, '-' ou '_' (até 32 caracteres)"
+        }
+      },
+      "peers": null,
+      "env": "# comentário\nCP_SERVER_ID=fixture\nOTHER=yes\n"
+    },
+    {
+      "name": "identity-write-A\n",
+      "method": "PUT",
+      "path": "/api/peers/identificador",
+      "body": {
+        "identificador": "A\n"
+      },
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "# comentário\nCP_SERVER_ID=fixture\nOTHER=yes\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 400,
+      "response": {
+        "detail": {
+          "code": "peers_id_invalido",
+          "params": {},
+          "msg": "identificador: use minúsculas, números, '-' ou '_' (até 32 caracteres)"
+        }
+      },
+      "peers": null,
+      "env": "# comentário\nCP_SERVER_ID=fixture\nOTHER=yes\n"
+    },
+    {
+      "name": "check-no-url",
+      "method": "GET",
+      "path": "/api/peers/check?id=remote",
+      "body": null,
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 400,
+      "response": {
+        "detail": {
+          "code": "peers_check_url_obrigatoria",
+          "params": {},
+          "msg": "url obrigatória"
+        }
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "check-no-id",
+      "method": "GET",
+      "path": "/api/peers/check?url=http://remote",
+      "body": null,
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 400,
+      "response": {
+        "detail": {
+          "code": "peers_check_id_obrigatorio",
+          "params": {},
+          "msg": "id obrigatório"
+        }
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "check-ok",
+      "method": "GET",
+      "path": "/api/peers/check?url=http://remote&id=remote",
+      "body": null,
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 200,
+      "response": {
+        "estado": "ok",
+        "identificador": "remote",
+        "motivo": "",
+        "tempo_ms": 0
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "check-other",
+      "method": "GET",
+      "path": "/api/peers/check?url=http://remote&id=other",
+      "body": null,
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 200,
+      "response": {
+        "estado": "estranho",
+        "identificador": "remote",
+        "motivo": "identidade",
+        "tempo_ms": 0
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "discovery-unavailable",
+      "method": "GET",
+      "path": "/api/peers/descobrir",
+      "body": null,
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 503,
+      "response": {
+        "detail": {
+          "code": "descoberta_sem_tailscale",
+          "params": {},
+          "msg": "tailscale não respondeu"
+        }
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "reach",
+      "method": "GET",
+      "path": "/api/alcance",
+      "body": null,
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 200,
+      "response": {
+        "loopback": true,
+        "bind": "127.0.0.1",
+        "enderecos": [
+          {
+            "tipo": "nesta_maquina",
+            "url": "http://127.0.0.1:5173",
+            "estado": "ok",
+            "tempo_ms": 12,
+            "motivo": ""
+          },
+          {
+            "tipo": "rede_local",
+            "url": "http://192.0.2.10:5173",
+            "estado": "ok",
+            "tempo_ms": 12,
+            "motivo": ""
+          },
+          {
+            "tipo": "publico",
+            "url": "",
+            "estado": "nao_configurado",
+            "tempo_ms": null,
+            "motivo": ""
+          }
+        ]
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    },
+    {
+      "name": "pair-unknown",
+      "method": "GET",
+      "path": "/api/alcance/pareamento?endereco=other",
+      "body": null,
+      "initial": null,
+      "raw": null,
+      "auth": true,
+      "initial_env": "CP_FRONT_PORT=5173\n",
+      "wire_body": null,
+      "difference": null,
+      "status": 404,
+      "response": {
+        "detail": {
+          "code": "alcance_endereco_desconhecido",
+          "params": {
+            "endereco": "other"
+          },
+          "msg": "candidato de pareamento desconhecido"
+        }
+      },
+      "peers": null,
+      "env": "CP_FRONT_PORT=5173\n"
+    }
+  ]
+}

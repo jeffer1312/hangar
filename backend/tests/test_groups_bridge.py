@@ -382,7 +382,7 @@ def test_orq_grupo_in_python_mode_refuses(monkeypatch, client, mode):
 
 
 def test_child_gets_group_env(monkeypatch, tmp_path):
-    from app import list_bridge, peers, rust_server
+    from app import list_bridge, rust_server
     monkeypatch.setattr(list_bridge, "dirs_env", lambda: "{}")
     monkeypatch.setattr(settings, "server_id", "casa")
     sup = rust_server.Supervisor(tmp_path / "bin", "127.0.0.1", 1, 2, "t", "127.0.0.1", lambda: False)
@@ -392,7 +392,7 @@ def test_child_gets_group_env(monkeypatch, tmp_path):
         from app import internal_api
         internal_api.set_secret(None)
     assert env["HANGAR_SERVER_ID"] == "casa"
-    assert env["HANGAR_PEERS_FILE"] == str(peers._PEERS_FILE)
+    assert "HANGAR_PEERS_FILE" not in env
     assert env["HANGAR_PAIR_ARCHIVE"] == str(pair._arquivo_dir())
     assert rust_server.RUST_SERVER_PROTOCOL == 96
 

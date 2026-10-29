@@ -1,0 +1,845 @@
+{
+  "source_commit": "fc1ed83a37fe22c126328f3717ccd6b37db17e10",
+  "cases": [
+    {
+      "name": "healthy",
+      "input": {
+        "token": "contract-owner",
+        "port_open": true,
+        "latency": 0.05,
+        "restarts": [],
+        "mux": true,
+        "claude": true,
+        "others": [
+          "codex"
+        ],
+        "logged_in": true,
+        "tailscale": "instalado",
+        "tailscale_login": "logado",
+        "public_url": "https://fixture.invalid",
+        "lan": true
+      },
+      "lines": [
+        [
+          "ok",
+          "token de acesso definido",
+          ""
+        ],
+        [
+          "ok",
+          "Hangar respondendo em http://127.0.0.1:8765 (50 ms)",
+          ""
+        ],
+        [
+          "ok",
+          "nenhum reinício automático do backend nos últimos 7 dias",
+          ""
+        ],
+        [
+          "ok",
+          "multiplexador de terminal (tmux) no PATH",
+          ""
+        ],
+        [
+          "ok",
+          "Claude Code instalado e logado",
+          ""
+        ],
+        [
+          "ok",
+          "publicado no Tailscale: https://fixture.invalid",
+          ""
+        ],
+        [
+          "ok",
+          "endereço da rede local responde (celular no mesmo Wi-Fi)",
+          ""
+        ]
+      ]
+    },
+    {
+      "name": "factory-token",
+      "input": {
+        "token": "change-me",
+        "port_open": true,
+        "latency": 0.05,
+        "restarts": [],
+        "mux": true,
+        "claude": true,
+        "others": [
+          "codex"
+        ],
+        "logged_in": true,
+        "tailscale": "instalado",
+        "tailscale_login": "logado",
+        "public_url": "https://fixture.invalid",
+        "lan": true
+      },
+      "lines": [
+        [
+          "erro",
+          "token de acesso não definido",
+          "edite backend/.env: CP_AUTH_TOKEN=<sua senha> e reinicie o Hangar"
+        ],
+        [
+          "ok",
+          "Hangar respondendo em http://127.0.0.1:8765 (50 ms)",
+          ""
+        ],
+        [
+          "ok",
+          "nenhum reinício automático do backend nos últimos 7 dias",
+          ""
+        ],
+        [
+          "ok",
+          "multiplexador de terminal (tmux) no PATH",
+          ""
+        ],
+        [
+          "ok",
+          "Claude Code instalado e logado",
+          ""
+        ],
+        [
+          "ok",
+          "publicado no Tailscale: https://fixture.invalid",
+          ""
+        ],
+        [
+          "ok",
+          "endereço da rede local responde (celular no mesmo Wi-Fi)",
+          ""
+        ]
+      ]
+    },
+    {
+      "name": "offline",
+      "input": {
+        "token": "contract-owner",
+        "port_open": false,
+        "latency": 0.05,
+        "restarts": [],
+        "mux": true,
+        "claude": true,
+        "others": [
+          "codex"
+        ],
+        "logged_in": true,
+        "tailscale": "instalado",
+        "tailscale_login": "logado",
+        "public_url": "https://fixture.invalid",
+        "lan": true
+      },
+      "lines": [
+        [
+          "ok",
+          "token de acesso definido",
+          ""
+        ],
+        [
+          "erro",
+          "Hangar não responde na porta 8765",
+          "systemctl --user restart hangar-backend  (log: ~/.hangar/logs/privado/backend.log; journalctl --user -u hangar-backend -n 50)"
+        ],
+        [
+          "ok",
+          "nenhum reinício automático do backend nos últimos 7 dias",
+          ""
+        ],
+        [
+          "ok",
+          "multiplexador de terminal (tmux) no PATH",
+          ""
+        ],
+        [
+          "ok",
+          "Claude Code instalado e logado",
+          ""
+        ],
+        [
+          "ok",
+          "publicado no Tailscale: https://fixture.invalid",
+          ""
+        ],
+        [
+          "ok",
+          "endereço da rede local responde (celular no mesmo Wi-Fi)",
+          ""
+        ]
+      ]
+    },
+    {
+      "name": "hung",
+      "input": {
+        "token": "contract-owner",
+        "port_open": true,
+        "latency": null,
+        "restarts": [],
+        "mux": true,
+        "claude": true,
+        "others": [
+          "codex"
+        ],
+        "logged_in": true,
+        "tailscale": "instalado",
+        "tailscale_login": "logado",
+        "public_url": "https://fixture.invalid",
+        "lan": true
+      },
+      "lines": [
+        [
+          "ok",
+          "token de acesso definido",
+          ""
+        ],
+        [
+          "erro",
+          "Hangar travado: a porta 8765 aceita conexão mas não responde em 10 s",
+          "systemctl --user restart hangar-backend  (log: ~/.hangar/logs/privado/backend.log; journalctl --user -u hangar-backend -n 50)"
+        ],
+        [
+          "ok",
+          "nenhum reinício automático do backend nos últimos 7 dias",
+          ""
+        ],
+        [
+          "ok",
+          "multiplexador de terminal (tmux) no PATH",
+          ""
+        ],
+        [
+          "ok",
+          "Claude Code instalado e logado",
+          ""
+        ],
+        [
+          "ok",
+          "publicado no Tailscale: https://fixture.invalid",
+          ""
+        ],
+        [
+          "ok",
+          "endereço da rede local responde (celular no mesmo Wi-Fi)",
+          ""
+        ]
+      ]
+    },
+    {
+      "name": "slow",
+      "input": {
+        "token": "contract-owner",
+        "port_open": true,
+        "latency": 4.1,
+        "restarts": [],
+        "mux": true,
+        "claude": true,
+        "others": [
+          "codex"
+        ],
+        "logged_in": true,
+        "tailscale": "instalado",
+        "tailscale_login": "logado",
+        "public_url": "https://fixture.invalid",
+        "lan": true
+      },
+      "lines": [
+        [
+          "ok",
+          "token de acesso definido",
+          ""
+        ],
+        [
+          "aviso",
+          "Hangar lento: respondeu em 4.1 s na porta 8765",
+          "máquina sobrecarregada? veja CPU/memória; no Windows a vigia reinicia acima de 3 s"
+        ],
+        [
+          "ok",
+          "nenhum reinício automático do backend nos últimos 7 dias",
+          ""
+        ],
+        [
+          "ok",
+          "multiplexador de terminal (tmux) no PATH",
+          ""
+        ],
+        [
+          "ok",
+          "Claude Code instalado e logado",
+          ""
+        ],
+        [
+          "ok",
+          "publicado no Tailscale: https://fixture.invalid",
+          ""
+        ],
+        [
+          "ok",
+          "endereço da rede local responde (celular no mesmo Wi-Fi)",
+          ""
+        ]
+      ]
+    },
+    {
+      "name": "restarts-unknown",
+      "input": {
+        "token": "contract-owner",
+        "port_open": true,
+        "latency": 0.05,
+        "restarts": null,
+        "mux": true,
+        "claude": true,
+        "others": [
+          "codex"
+        ],
+        "logged_in": true,
+        "tailscale": "instalado",
+        "tailscale_login": "logado",
+        "public_url": "https://fixture.invalid",
+        "lan": true
+      },
+      "lines": [
+        [
+          "ok",
+          "token de acesso definido",
+          ""
+        ],
+        [
+          "ok",
+          "Hangar respondendo em http://127.0.0.1:8765 (50 ms)",
+          ""
+        ],
+        [
+          "aviso",
+          "não deu para ler os reinícios automáticos do backend",
+          ""
+        ],
+        [
+          "ok",
+          "multiplexador de terminal (tmux) no PATH",
+          ""
+        ],
+        [
+          "ok",
+          "Claude Code instalado e logado",
+          ""
+        ],
+        [
+          "ok",
+          "publicado no Tailscale: https://fixture.invalid",
+          ""
+        ],
+        [
+          "ok",
+          "endereço da rede local responde (celular no mesmo Wi-Fi)",
+          ""
+        ]
+      ]
+    },
+    {
+      "name": "restarts",
+      "input": {
+        "token": "contract-owner",
+        "port_open": true,
+        "latency": 0.05,
+        "restarts": [
+          "2026-10-28T10:00:00"
+        ],
+        "mux": true,
+        "claude": true,
+        "others": [
+          "codex"
+        ],
+        "logged_in": true,
+        "tailscale": "instalado",
+        "tailscale_login": "logado",
+        "public_url": "https://fixture.invalid",
+        "lan": true
+      },
+      "lines": [
+        [
+          "ok",
+          "token de acesso definido",
+          ""
+        ],
+        [
+          "ok",
+          "Hangar respondendo em http://127.0.0.1:8765 (50 ms)",
+          ""
+        ],
+        [
+          "aviso",
+          "o vigia reiniciou o backend 1 vez(es) nos últimos 7 dias (última: 2026-10-28T10:00:00)",
+          "detalhes: journalctl --user -u hangar-backend --since -7d"
+        ],
+        [
+          "ok",
+          "multiplexador de terminal (tmux) no PATH",
+          ""
+        ],
+        [
+          "ok",
+          "Claude Code instalado e logado",
+          ""
+        ],
+        [
+          "ok",
+          "publicado no Tailscale: https://fixture.invalid",
+          ""
+        ],
+        [
+          "ok",
+          "endereço da rede local responde (celular no mesmo Wi-Fi)",
+          ""
+        ]
+      ]
+    },
+    {
+      "name": "no-mux",
+      "input": {
+        "token": "contract-owner",
+        "port_open": true,
+        "latency": 0.05,
+        "restarts": [],
+        "mux": false,
+        "claude": true,
+        "others": [
+          "codex"
+        ],
+        "logged_in": true,
+        "tailscale": "instalado",
+        "tailscale_login": "logado",
+        "public_url": "https://fixture.invalid",
+        "lan": true
+      },
+      "lines": [
+        [
+          "ok",
+          "token de acesso definido",
+          ""
+        ],
+        [
+          "ok",
+          "Hangar respondendo em http://127.0.0.1:8765 (50 ms)",
+          ""
+        ],
+        [
+          "ok",
+          "nenhum reinício automático do backend nos últimos 7 dias",
+          ""
+        ],
+        [
+          "erro",
+          "tmux não encontrado — sem ele nenhuma sessão abre",
+          "instale o tmux pelo gerenciador de pacotes"
+        ],
+        [
+          "ok",
+          "Claude Code instalado e logado",
+          ""
+        ],
+        [
+          "ok",
+          "publicado no Tailscale: https://fixture.invalid",
+          ""
+        ],
+        [
+          "ok",
+          "endereço da rede local responde (celular no mesmo Wi-Fi)",
+          ""
+        ]
+      ]
+    },
+    {
+      "name": "codex-only",
+      "input": {
+        "token": "contract-owner",
+        "port_open": true,
+        "latency": 0.05,
+        "restarts": [],
+        "mux": true,
+        "claude": false,
+        "others": [
+          "codex"
+        ],
+        "logged_in": true,
+        "tailscale": "instalado",
+        "tailscale_login": "logado",
+        "public_url": "https://fixture.invalid",
+        "lan": true
+      },
+      "lines": [
+        [
+          "ok",
+          "token de acesso definido",
+          ""
+        ],
+        [
+          "ok",
+          "Hangar respondendo em http://127.0.0.1:8765 (50 ms)",
+          ""
+        ],
+        [
+          "ok",
+          "nenhum reinício automático do backend nos últimos 7 dias",
+          ""
+        ],
+        [
+          "ok",
+          "multiplexador de terminal (tmux) no PATH",
+          ""
+        ],
+        [
+          "ok",
+          "agentes de código: Codex",
+          ""
+        ],
+        [
+          "ok",
+          "publicado no Tailscale: https://fixture.invalid",
+          ""
+        ],
+        [
+          "ok",
+          "endereço da rede local responde (celular no mesmo Wi-Fi)",
+          ""
+        ]
+      ]
+    },
+    {
+      "name": "no-agent",
+      "input": {
+        "token": "contract-owner",
+        "port_open": true,
+        "latency": 0.05,
+        "restarts": [],
+        "mux": true,
+        "claude": false,
+        "others": [],
+        "logged_in": true,
+        "tailscale": "instalado",
+        "tailscale_login": "logado",
+        "public_url": "https://fixture.invalid",
+        "lan": true
+      },
+      "lines": [
+        [
+          "ok",
+          "token de acesso definido",
+          ""
+        ],
+        [
+          "ok",
+          "Hangar respondendo em http://127.0.0.1:8765 (50 ms)",
+          ""
+        ],
+        [
+          "ok",
+          "nenhum reinício automático do backend nos últimos 7 dias",
+          ""
+        ],
+        [
+          "ok",
+          "multiplexador de terminal (tmux) no PATH",
+          ""
+        ],
+        [
+          "erro",
+          "nenhum agente de código no PATH (Claude Code, Codex, Pi, omp ou Kimi Code)",
+          "curl -fsSL https://claude.ai/install.sh | bash  (Windows: irm https://claude.ai/install.ps1 | iex)"
+        ],
+        [
+          "ok",
+          "publicado no Tailscale: https://fixture.invalid",
+          ""
+        ],
+        [
+          "ok",
+          "endereço da rede local responde (celular no mesmo Wi-Fi)",
+          ""
+        ]
+      ]
+    },
+    {
+      "name": "logged-out",
+      "input": {
+        "token": "contract-owner",
+        "port_open": true,
+        "latency": 0.05,
+        "restarts": [],
+        "mux": true,
+        "claude": true,
+        "others": [
+          "codex"
+        ],
+        "logged_in": false,
+        "tailscale": "instalado",
+        "tailscale_login": "logado",
+        "public_url": "https://fixture.invalid",
+        "lan": true
+      },
+      "lines": [
+        [
+          "ok",
+          "token de acesso definido",
+          ""
+        ],
+        [
+          "ok",
+          "Hangar respondendo em http://127.0.0.1:8765 (50 ms)",
+          ""
+        ],
+        [
+          "ok",
+          "nenhum reinício automático do backend nos últimos 7 dias",
+          ""
+        ],
+        [
+          "ok",
+          "multiplexador de terminal (tmux) no PATH",
+          ""
+        ],
+        [
+          "erro",
+          "Claude Code instalado mas sem login",
+          "abra um terminal, rode `claude` e siga o login; depois rode hangar-doctor de novo"
+        ],
+        [
+          "ok",
+          "publicado no Tailscale: https://fixture.invalid",
+          ""
+        ],
+        [
+          "ok",
+          "endereço da rede local responde (celular no mesmo Wi-Fi)",
+          ""
+        ]
+      ]
+    },
+    {
+      "name": "no-tailscale",
+      "input": {
+        "token": "contract-owner",
+        "port_open": true,
+        "latency": 0.05,
+        "restarts": [],
+        "mux": true,
+        "claude": true,
+        "others": [
+          "codex"
+        ],
+        "logged_in": true,
+        "tailscale": "ausente",
+        "tailscale_login": "logado",
+        "public_url": "https://fixture.invalid",
+        "lan": true
+      },
+      "lines": [
+        [
+          "ok",
+          "token de acesso definido",
+          ""
+        ],
+        [
+          "ok",
+          "Hangar respondendo em http://127.0.0.1:8765 (50 ms)",
+          ""
+        ],
+        [
+          "ok",
+          "nenhum reinício automático do backend nos últimos 7 dias",
+          ""
+        ],
+        [
+          "ok",
+          "multiplexador de terminal (tmux) no PATH",
+          ""
+        ],
+        [
+          "ok",
+          "Claude Code instalado e logado",
+          ""
+        ],
+        [
+          "aviso",
+          "Tailscale não instalado — o celular só entra no mesmo Wi-Fi",
+          "quer usar fora de casa? rode o instalador de novo e responda Sim ao Tailscale"
+        ],
+        [
+          "ok",
+          "endereço da rede local responde (celular no mesmo Wi-Fi)",
+          ""
+        ]
+      ]
+    },
+    {
+      "name": "tailscale-logout",
+      "input": {
+        "token": "contract-owner",
+        "port_open": true,
+        "latency": 0.05,
+        "restarts": [],
+        "mux": true,
+        "claude": true,
+        "others": [
+          "codex"
+        ],
+        "logged_in": true,
+        "tailscale": "instalado",
+        "tailscale_login": "",
+        "public_url": "https://fixture.invalid",
+        "lan": true
+      },
+      "lines": [
+        [
+          "ok",
+          "token de acesso definido",
+          ""
+        ],
+        [
+          "ok",
+          "Hangar respondendo em http://127.0.0.1:8765 (50 ms)",
+          ""
+        ],
+        [
+          "ok",
+          "nenhum reinício automático do backend nos últimos 7 dias",
+          ""
+        ],
+        [
+          "ok",
+          "multiplexador de terminal (tmux) no PATH",
+          ""
+        ],
+        [
+          "ok",
+          "Claude Code instalado e logado",
+          ""
+        ],
+        [
+          "erro",
+          "Tailscale instalado mas sem login",
+          "sudo tailscale up  (Windows: tailscale up) e depois o instalador de novo"
+        ],
+        [
+          "ok",
+          "endereço da rede local responde (celular no mesmo Wi-Fi)",
+          ""
+        ]
+      ]
+    },
+    {
+      "name": "no-public-url",
+      "input": {
+        "token": "contract-owner",
+        "port_open": true,
+        "latency": 0.05,
+        "restarts": [],
+        "mux": true,
+        "claude": true,
+        "others": [
+          "codex"
+        ],
+        "logged_in": true,
+        "tailscale": "instalado",
+        "tailscale_login": "logado",
+        "public_url": "",
+        "lan": true
+      },
+      "lines": [
+        [
+          "ok",
+          "token de acesso definido",
+          ""
+        ],
+        [
+          "ok",
+          "Hangar respondendo em http://127.0.0.1:8765 (50 ms)",
+          ""
+        ],
+        [
+          "ok",
+          "nenhum reinício automático do backend nos últimos 7 dias",
+          ""
+        ],
+        [
+          "ok",
+          "multiplexador de terminal (tmux) no PATH",
+          ""
+        ],
+        [
+          "ok",
+          "Claude Code instalado e logado",
+          ""
+        ],
+        [
+          "aviso",
+          "Tailscale logado mas o Hangar não está publicado nele",
+          "rode o instalador de novo (ele publica e grava CP_PUBLIC_URL em backend/.env)"
+        ],
+        [
+          "ok",
+          "endereço da rede local responde (celular no mesmo Wi-Fi)",
+          ""
+        ]
+      ]
+    },
+    {
+      "name": "lan-down",
+      "input": {
+        "token": "contract-owner",
+        "port_open": true,
+        "latency": 0.05,
+        "restarts": [],
+        "mux": true,
+        "claude": true,
+        "others": [
+          "codex"
+        ],
+        "logged_in": true,
+        "tailscale": "instalado",
+        "tailscale_login": "logado",
+        "public_url": "https://fixture.invalid",
+        "lan": false
+      },
+      "lines": [
+        [
+          "ok",
+          "token de acesso definido",
+          ""
+        ],
+        [
+          "ok",
+          "Hangar respondendo em http://127.0.0.1:8765 (50 ms)",
+          ""
+        ],
+        [
+          "ok",
+          "nenhum reinício automático do backend nos últimos 7 dias",
+          ""
+        ],
+        [
+          "ok",
+          "multiplexador de terminal (tmux) no PATH",
+          ""
+        ],
+        [
+          "ok",
+          "Claude Code instalado e logado",
+          ""
+        ],
+        [
+          "ok",
+          "publicado no Tailscale: https://fixture.invalid",
+          ""
+        ],
+        [
+          "aviso",
+          "endereço da rede local não responde",
+          "firewall? Linux: sudo ./scripts/lan-setup.sh 8765 — Windows: regra 'hangar 8765' no perfil Private"
+        ]
+      ]
+    }
+  ]
+}

@@ -3,6 +3,12 @@
 fn main() -> std::process::ExitCode {
     // `open`/`resolve`: o lançador como comando de terminal, com runtime próprio (fora do `run`).
     let args: Vec<String> = std::env::args_os().skip(1).map(|a| a.to_string_lossy().into_owned()).collect();
+    if args.first().map(String::as_str) == Some("peers") {
+        return hangar_server::machine_peers::cli::cli(&args[1..]);
+    }
+    if args.first().map(String::as_str) == Some("doctor") {
+        return hangar_server::machine_peers::doctor::cli(&args[1..]);
+    }
     if matches!(args.first().map(String::as_str), Some("orq-info" | "provider-info")) {
         return hangar_server::provider_info::cli(&args[0], &args[1..]);
     }

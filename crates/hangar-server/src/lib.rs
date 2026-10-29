@@ -82,6 +82,7 @@ pub mod dictation;
 pub mod workspace_routes;
 pub mod uploads;
 pub mod user_data;
+pub mod machine_peers;
 pub mod install_root;
 pub mod update;
 pub mod ui;

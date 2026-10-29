@@ -1,0 +1,413 @@
+//! Máquinas do dono, lista dos apps e alcance, sem passagem pelo backend Python.
+pub mod cli;
+pub mod doctor;
+pub mod network;
+pub mod store;
+use crate::{
+    routes::{AppState, gate},
+    session_write::{detail_body, json_response},
+};
+use axum::{
+    extract::{ConnectInfo, Request, State},
+    http::{Method, StatusCode},
+    response::Response,
+};
+use serde_json::{Value, json};
+use std::{
+    net::SocketAddr,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+
+/// Mesmo valor efetivo do servidor: ambiente vence o `.env` dos dados do usuário.
+pub fn config_value(
+    home: &Path,
+    backend: Option<&Path>,
+    key: &str,
+) -> Result<Option<String>, String> {
+    match std::env::var(key) {
+        Ok(value) => Ok(Some(value)),
+        Err(std::env::VarError::NotPresent) => crate::user_data::env_value(home, backend, key),
+        Err(error) => Err(format!("configuração {key} inválida: {error}")),
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Error {
+    pub status: u16,
+    pub code: &'static str,
+    pub msg: String,
+}
+impl Error {
+    pub fn invalid(msg: impl Into<String>) -> Self {
+        Self {
+            status: 400,
+            code: "peers_registro_invalido",
+            msg: msg.into(),
+        }
+    }
+    pub fn missing(msg: impl Into<String>) -> Self {
+        Self {
+            status: 404,
+            code: "peers_desconhecido",
+            msg: msg.into(),
+        }
+    }
+    pub fn unavailable() -> Self {
+        Self {
+            status: 503,
+            code: "peers_arquivo_ilegivel",
+            msg: "não foi possível ler ou gravar a configuração das máquinas".into(),
+        }
+    }
+    pub fn response(self) -> Response {
+        json_response(
+            StatusCode::from_u16(self.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+            detail_body(self.code, &self.msg, json!({})),
+        )
+    }
+}
+#[derive(Clone)]
+pub struct Service {
+    pub home: PathBuf,
+    pub backend: Option<PathBuf>,
+    pub store: store::Store,
+    pub env: PathBuf,
+    pub token: String,
+    pub port: u16,
+    pub bind: String,
+    pub initial_id: String,
+    pub network: Arc<dyn network::Network>,
+    pub environment: std::collections::BTreeMap<String, String>,
+    pub on_identity: Option<Arc<dyn Fn(String) + Send + Sync>>,
+}
+impl Service {
+    pub fn new(
+        home: &Path,
+        backend: Option<&Path>,
+        token: String,
+        port: u16,
+        bind: String,
+        initial_id: String,
+    ) -> Result<Self, Error> {
+        let path = |name| {
+            crate::user_data::path(home, backend, name)
+                .map_err(|_| Error::unavailable())?
+                .ok_or_else(Error::unavailable)
+        };
+        Ok(Self {
+            home: home.into(),
+            backend: backend.map(Path::to_path_buf),
+            store: store::Store::new(path("peers.json")?),
+            env: path(".env")?,
+            token,
+            port,
+            bind,
+            initial_id,
+            network: Arc::new(network::SystemNetwork),
+            environment: std::env::vars().collect(),
+            on_identity: None,
+        })
+    }
+    pub fn from_state(st: &Arc<AppState>) -> Result<Self, Error> {
+        let mut service = Self::new(
+            &st.accounts.env.home,
+            crate::session_open::cli::backend_dir().as_deref(),
+            st.cfg.auth_token.clone(),
+            st.cfg.listen.port(),
+            st.cfg.listen.ip().to_string(),
+            st.current_server_id(),
+        )?;
+        service.network = st.peer_network.clone();
+        service.environment = st.accounts.env.base.clone();
+        let state = Arc::downgrade(st);
+        service.on_identity = Some(Arc::new(move |id| {
+            if let Some(state) = state.upgrade() {
+                state.set_server_id(id)
+            }
+        }));
+        Ok(service)
+    }
+    pub fn value(&self, key: &str) -> String {
+        self.environment
+            .get(key)
+            .cloned()
+            .or_else(|| {
+                crate::user_data::env_value(&self.home, self.backend.as_deref(), key)
+                    .ok()
+                    .flatten()
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn identity(&self) -> String {
+        self.initial_id.clone()
+    }
+    pub fn save_identity(&self, value: &Value) -> Result<String, Error> {
+        let value = store::truthy_field(value, "identificador");
+        if store::truthy(&value) {
+            store::valid_id(&value).map_err(|mut e| {
+                e.code = "peers_id_invalido";
+                e
+            })?;
+        }
+        let value = value.as_str().unwrap_or("");
+        let _lock = store::lock(&self.env)?;
+        let old = match crate::runtime::queue::read_replaced_to_string(&self.env) {
+            Ok(s) => s.replace("\r\n", "\n").replace('\r', "\n"),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(_) => return Err(Error::unavailable()),
+        };
+        let mut seen = false;
+        let mut output = String::new();
+        for line in old.split_inclusive('\n') {
+            if line.starts_with("CP_SERVER_ID=") {
+                seen = true;
+                if !value.is_empty() {
+                    output.push_str(&format!("CP_SERVER_ID={value}\n"));
+                }
+            } else {
+                output.push_str(line);
+            }
+        }
+        if !seen && !value.is_empty() {
+            if !output.is_empty() && !output.ends_with('\n') {
+                output.push('\n');
+            }
+            output.push_str(&format!("CP_SERVER_ID={value}\n"));
+        }
+        store::clean_temporary(&self.env)?;
+        crate::runtime::queue::atomic_write(&self.env, output.as_bytes())
+            .map_err(|_| Error::unavailable())?;
+        if let Some(changed) = &self.on_identity {
+            changed(value.into());
+        }
+        Ok(value.into())
+    }
+    pub fn proof(&self, challenge: &str) -> Result<Value, Error> {
+        if !(16..=128).contains(&challenge.chars().count()) {
+            return Err(Error {
+                status: 400,
+                code: "peers_desafio_invalido",
+                msg: "desafio inválido".into(),
+            });
+        }
+        let id = self.identity();
+        let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, self.token.as_bytes());
+        let digest = ring::hmac::sign(&key, format!("{challenge}|{id}").as_bytes());
+        Ok(
+            json!({"identificador":id,"prova":digest.as_ref().iter().map(|b|format!("{b:02x}")).collect::<String>()}),
+        )
+    }
+}
+
+/// A credencial ambiente do convidado só aceita origens declaradas; peers desativados continuam válidos.
+pub fn origin_allowed(
+    home: &Path,
+    backend: Option<&Path>,
+    origin: &str,
+    host: Option<&str>,
+    public_url: &str,
+    extras: &[String],
+) -> bool {
+    let authority = |s: &str| {
+        let rest = s
+            .split_once("://")
+            .map(|(_, r)| r)
+            .or_else(|| s.strip_prefix("//"))?;
+        let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+        (!authority.is_empty()).then(|| authority.to_owned())
+    };
+    let Some(target) = authority(origin) else {
+        return false;
+    };
+    if host.is_some_and(|h| h.trim() == target)
+        || authority(public_url).as_deref() == Some(target.as_str())
+        || extras
+            .iter()
+            .any(|s| authority(s).unwrap_or_else(|| s.clone()) == target)
+    {
+        return true;
+    }
+    let Ok(Some(path)) = crate::user_data::path(home, backend, "peers.json") else {
+        return false;
+    };
+    let data = store::Store::new(path).tolerant();
+    let rows: Vec<&Value> = match data.get("peers") {
+        Some(Value::Object(entries)) => entries.values().collect(),
+        Some(Value::Array(entries)) => entries.iter().collect(),
+        Some(_) => Vec::new(),
+        None => data.values().collect(),
+    };
+    rows.into_iter()
+        .filter_map(|v| v["base_url"].as_str())
+        .any(|s| authority(s).as_deref() == Some(target.as_str()))
+}
+
+pub async fn handle(
+    State(st): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    request: Request,
+) -> Response {
+    let path = request.uri().path().to_owned();
+    let method = request.method().clone();
+    let public =
+        method == Method::GET && matches!(path.as_str(), "/api/peers/ping" | "/api/peers/prova");
+    if !public && !gate(&st, peer, &request).1 {
+        return Error {
+            status: 401,
+            code: "erro_nao_autorizado",
+            msg: "unauthorized".into(),
+        }
+        .response();
+    }
+    if path == "/api/peers/ping" && method == Method::GET {
+        return json_response(StatusCode::OK, json!({"hangar":true}));
+    }
+    let query: std::collections::HashMap<String, String> =
+        form_urlencoded::parse(request.uri().query().unwrap_or("").as_bytes())
+            .into_owned()
+            .collect();
+    let needs_body = (method == Method::POST && path == "/api/peers")
+        || (method == Method::PUT
+            && (matches!(
+                path.as_str(),
+                "/api/peers/app-list" | "/api/peers/identificador"
+            ) || path.starts_with("/api/peers/") && path.ends_with("/enabled")));
+    let body = if needs_body {
+        match axum::body::to_bytes(request.into_body(), 16 * 1024 * 1024)
+            .await
+            .ok()
+            .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+            .filter(Value::is_object)
+        {
+            Some(v) => v,
+            None => {
+                return Error {
+                    status: 422,
+                    code: "erro_corpo_invalido",
+                    msg: "corpo inválido".into(),
+                }
+                .response();
+            }
+        }
+    } else {
+        Value::Null
+    };
+    let service = match Service::from_state(&st) {
+        Ok(s) => s,
+        Err(e) => return e.response(),
+    };
+    let result = dispatch(service, &method, &path, &query, body).await;
+    match result {
+        Ok(v) => json_response(StatusCode::OK, v),
+        Err(e) if e.code == "alcance_endereco_desconhecido" => json_response(
+            StatusCode::NOT_FOUND,
+            detail_body(
+                e.code,
+                &e.msg,
+                json!({"endereco":query.get("endereco").cloned().unwrap_or_default()}),
+            ),
+        ),
+        Err(e) => e.response(),
+    }
+}
+pub async fn dispatch(
+    service: Service,
+    method: &Method,
+    path: &str,
+    query: &std::collections::HashMap<String, String>,
+    body: Value,
+) -> Result<Value, Error> {
+    let q = |key: &str| query.get(key).map(String::as_str).unwrap_or("");
+    match (method.as_str(), path) {
+        ("GET", "/api/peers/prova") => service.proof(q("desafio")),
+        ("GET", "/api/peers/check") => {
+            if q("url").is_empty() {
+                return Err(Error {
+                    status: 400,
+                    code: "peers_check_url_obrigatoria",
+                    msg: "url obrigatória".into(),
+                });
+            }
+            if q("id").is_empty() {
+                return Err(Error {
+                    status: 400,
+                    code: "peers_check_id_obrigatorio",
+                    msg: "id obrigatório".into(),
+                });
+            }
+            Ok(network::check(&service, q("url"), q("id")).await)
+        }
+        ("GET", "/api/peers/identificador") => {
+            Ok(json!({"identificador":service.identity(),"lan_url":network::lan_url(&service)}))
+        }
+        ("PUT", "/api/peers/identificador") => {
+            let old = service.identity();
+            let copy = service.clone();
+            let id = tokio::task::spawn_blocking(move || copy.save_identity(&body))
+                .await
+                .map_err(|_| Error::unavailable())??;
+            let mut service = service;
+            service.initial_id = id.clone();
+            let notices = if !id.is_empty() && old != id {
+                network::announce(&service, &old).await
+            } else {
+                json!([])
+            };
+            Ok(json!({"identificador":id,"avisos":notices}))
+        }
+        ("POST", "/api/peers/anunciar") => {
+            if service.identity().is_empty() {
+                return Err(Error {
+                    status: 400,
+                    code: "peers_sem_identificador",
+                    msg: "esta máquina não tem identificador".into(),
+                });
+            }
+            Ok(network::announce(&service, "").await)
+        }
+        ("GET", "/api/peers/descobrir") => network::discover(&service).await,
+        ("GET", "/api/alcance") => Ok(network::reach(&service).await),
+        ("GET", "/api/alcance/pareamento") => network::pairing(&service, q("endereco")).await,
+        _ => {
+            let method = method.clone();
+            let path = path.to_owned();
+            tokio::task::spawn_blocking(move || match (method.as_str(), path.as_str()) {
+                ("GET", "/api/peers") => Ok(service.store.list()),
+                ("POST", "/api/peers") => service.store.put(&body),
+                ("GET", "/api/peers/app-list") => service.store.app_list(),
+                ("PUT", "/api/peers/app-list") => service.store.app_write(&body),
+                _ => {
+                    let rest = path
+                        .strip_prefix("/api/peers/")
+                        .ok_or_else(|| Error::missing("rota desconhecida"))?;
+                    let decoded = percent_encoding::percent_decode_str(rest)
+                        .decode_utf8()
+                        .map_err(|_| Error::invalid("identificador inválido"))?;
+                    if let Some(id) = decoded
+                        .strip_suffix("/enabled")
+                        .filter(|_| method == Method::PUT)
+                    {
+                        service.store.enabled(id, &body["enabled"])
+                    } else if let Some(id) = decoded
+                        .strip_suffix("/token")
+                        .filter(|_| method == Method::GET)
+                    {
+                        service.store.token(id)
+                    } else if method == Method::DELETE {
+                        service.store.remove(&decoded)
+                    } else {
+                        Err(Error {
+                            status: 405,
+                            code: "peers_metodo_invalido",
+                            msg: "método não permitido".into(),
+                        })
+                    }
+                }
+            })
+            .await
+            .map_err(|_| Error::unavailable())?
+        }
+    }
+}

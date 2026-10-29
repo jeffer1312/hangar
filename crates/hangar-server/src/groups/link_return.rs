@@ -107,7 +107,7 @@ async fn run(st: Arc<AppState>, groups: Arc<GroupService>) {
             let children: Vec<&SessionRow> = rows.iter()
                 .filter(|r| r.linked_by.as_deref().is_some_and(|p| !is_remote(p)) && returnable(&r.provider)).collect();
             if !children.is_empty() {
-                watcher.round(&st, groups.server_id(), &children, &|| sub.rows()).await;
+                watcher.round(&st, &groups.server_id(), &children, &|| sub.rows()).await;
             }
             if scanned.elapsed() >= RESCAN {
                 scanned = Instant::now();

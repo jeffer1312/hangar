@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# O CLI usa o binário da instalação, inclusive com o serviço parado.
+set -euo pipefail
+root="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")/.." && pwd)"
+if [[ -n "${CP_RUST_SERVER_BIN:-}" ]]; then
+    executable="${CP_RUST_SERVER_BIN/#\~/$HOME}"
+    if [[ ! -x "$executable" || ! -f "$executable" ]]; then
+        echo 'hangar: CP_RUST_SERVER_BIN não é um executável' >&2
+        exit 126
+    fi
+elif [[ -x "$HOME/.hangar/current/bin/hangar-server" ]]; then
+    executable="$(readlink -f "$HOME/.hangar/current/bin/hangar-server")"
+else
+    executable=""
+    for candidate in "$root/crates/target/release/hangar-server" "$HOME/.hangar/bin/hangar-server"; do
+        if [[ -x "$candidate" && -f "$candidate" && ( -z "$executable" || "$candidate" -nt "$executable" ) ]]; then executable="$candidate"; fi
+    done
+    if [[ -z "$executable" ]]; then
+        echo 'hangar: hangar-server não encontrado; instale o Hangar ou configure CP_RUST_SERVER_BIN' >&2
+        exit 126
+    fi
+fi
+exec "$executable" "$@"

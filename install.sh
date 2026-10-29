@@ -723,9 +723,7 @@ fi
 [ -n "$TS_STATE" ] && mark_step preparar fazendo
 
 if [ "$CHECK" = 1 ]; then
-  if [ "$PACOTE" = 1 ] || [ -x backend/.venv/bin/python ]; then
-    say "Diagnóstico"; py_backend -m app.doctor || PENDENTE+=("doctor")
-  fi
+  say "Diagnóstico"; ./scripts/hangar-doctor || PENDENTE+=("doctor")
   if [ ${#PENDENTE[@]} -eq 0 ]; then mark_step preparar ok; FINAL_STATE=ok; say "Nada faltando."; exit 0; fi
   mark_step preparar pendente; FINAL_STATE=pendente
   say "Faltam: ${PENDENTE[*]}"; exit 1
@@ -1321,7 +1319,7 @@ if [ "$TEM_TTY" = 1 ] && [ "$UPDATE" = 0 ]; then
   # Só no terminal: a URL do QR carrega o token, e o log não pode tê-lo.
   # rc 0 é a prova de que o desenho saiu (2 = sem tty); sem ela a tela mandaria ler um QR que
   # não existe.
-  if py_backend -m app.doctor --qr > /dev/tty 2>/dev/null; then
+  if ./scripts/hangar-doctor --qr > /dev/tty 2>/dev/null; then
     QR_MOSTRADO=1
   fi
 fi
