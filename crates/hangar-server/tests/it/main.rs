@@ -339,3 +339,4 @@ mod json_indented;
 mod guest_loops;
 
 mod codex_trust;
+mod command_capture;

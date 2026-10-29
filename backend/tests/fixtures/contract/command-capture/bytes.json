@@ -1,0 +1,56 @@
+{
+  "source_commit": "acd736decbdb3331dae9747bc63500dafca1a939",
+  "command": "cd backend && uv run python tests/fixtures/contract/command-capture/generate_bytes.py",
+  "cases": [
+    {
+      "name": "binary",
+      "script": "printf '\\377\\000a\\r\\n'; printf '\\376b\\r' >&2",
+      "budget_ms": 2000,
+      "expected": {
+        "success": true,
+        "stdout_hex": "ff00610d0a",
+        "stderr_hex": "fe620d"
+      }
+    },
+    {
+      "name": "failure",
+      "script": "printf stdout; printf stderr >&2; exit 7",
+      "budget_ms": 2000,
+      "expected": {
+        "success": false,
+        "stdout_hex": "7374646f7574",
+        "stderr_hex": "737464657272"
+      }
+    },
+    {
+      "name": "cwd",
+      "script": "printf %s \"$PWD\"",
+      "budget_ms": 2000,
+      "expected": {
+        "success": true,
+        "stdout_hex": "24524f4f542f776f726b",
+        "stderr_hex": ""
+      }
+    },
+    {
+      "name": "partial",
+      "script": "printf before; printf error >&2; /bin/sleep 2",
+      "budget_ms": 150,
+      "expected": {
+        "error": "timeout",
+        "stdout_hex": "6265666f7265",
+        "stderr_hex": "6572726f72"
+      }
+    },
+    {
+      "name": "timeout-empty",
+      "script": "/bin/sleep 2",
+      "budget_ms": 150,
+      "expected": {
+        "error": "timeout",
+        "stdout_hex": "",
+        "stderr_hex": ""
+      }
+    }
+  ]
+}
