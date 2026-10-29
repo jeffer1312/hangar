@@ -78,6 +78,7 @@ def _pinning_worker(binary):
         publisher.publish(server, library)
         context = shared_auth.Context(server, OWNER, 12345)
         try:
+            assert Path(context.config["state_path"]).parent.parent == (Path.home() / ".hangar").resolve()
             old_library, _ = rust_bins.auth_pair(server)
             for _ in range(8):
                 assert context.evaluate(shared_auth.HTTP, "198.51.100.1", "wrong").status == shared_auth.UNAUTHORIZED
