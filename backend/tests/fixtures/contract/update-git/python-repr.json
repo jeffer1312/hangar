@@ -1,0 +1,149 @@
+{
+  "source_commit": "cc543fcd2ea6ee89d628f95e812f90896505b702",
+  "command": "python generate-python-repr.py <fixture>",
+  "cases": [
+    {
+      "kind": "scalar",
+      "raw": "null",
+      "output_json": "\"None\""
+    },
+    {
+      "kind": "scalar",
+      "raw": "true",
+      "output_json": "\"True\""
+    },
+    {
+      "kind": "scalar",
+      "raw": "false",
+      "output_json": "\"False\""
+    },
+    {
+      "kind": "scalar",
+      "raw": "1",
+      "output_json": "\"1\""
+    },
+    {
+      "kind": "scalar",
+      "raw": "1.0",
+      "output_json": "\"1.0\""
+    },
+    {
+      "kind": "scalar",
+      "raw": "1e-7",
+      "output_json": "\"1e-07\""
+    },
+    {
+      "kind": "scalar",
+      "raw": "1e20",
+      "output_json": "\"1e+20\""
+    },
+    {
+      "kind": "scalar",
+      "raw": "NaN",
+      "output_json": "\"nan\""
+    },
+    {
+      "kind": "scalar",
+      "raw": "Infinity",
+      "output_json": "\"inf\""
+    },
+    {
+      "kind": "scalar",
+      "raw": "-Infinity",
+      "output_json": "\"-inf\""
+    },
+    {
+      "kind": "scalar",
+      "raw": "\"texto\"",
+      "output_json": "\"texto\""
+    },
+    {
+      "kind": "scalar",
+      "raw": "\"a\\\"b\"",
+      "output_json": "\"a\\\"b\""
+    },
+    {
+      "kind": "scalar",
+      "raw": "\"a'b\"",
+      "output_json": "\"a'b\""
+    },
+    {
+      "kind": "scalar",
+      "raw": "\"\\ud800\"",
+      "output_json": "\"\\ud800\""
+    },
+    {
+      "kind": "scalar",
+      "raw": "[\"\\ud800\",NaN,Infinity,-Infinity,null,true,false]",
+      "output_json": "\"['\\\\ud800', nan, inf, -inf, None, True, False]\""
+    },
+    {
+      "kind": "scalar",
+      "raw": "{\"z\":\"linha\\nseguinte\",\"a\":[1,2.0]}",
+      "output_json": "\"{'z': 'linha\\\\nseguinte', 'a': [1, 2.0]}\""
+    },
+    {
+      "kind": "deep",
+      "shape": "array",
+      "depth": 900,
+      "bytes": 1801,
+      "sha256": "9909389265ebf66b274f8225f93821ebe6f187566adb6e40b3a13e649a448243"
+    },
+    {
+      "kind": "deep",
+      "shape": "object",
+      "depth": 900,
+      "bytes": 6301,
+      "sha256": "05518f9f02a3381d29db942608359f6e0271da3dd161acab4bc33b71f4304b00"
+    },
+    {
+      "kind": "deep",
+      "shape": "ordered",
+      "depth": 900,
+      "bytes": 13501,
+      "sha256": "557fbddeb14f82bd6d6a265747f1307b229fae4e82f5a5d5350b427cbf5ee670"
+    },
+    {
+      "kind": "deep",
+      "shape": "array",
+      "depth": 1500,
+      "bytes": 3001,
+      "sha256": "98ba95d50797aa344a32182ad1e03706625429100bf3ba23859fff64db6cff6d"
+    },
+    {
+      "kind": "deep",
+      "shape": "object",
+      "depth": 1500,
+      "bytes": 10501,
+      "sha256": "10d680d368815e6172bcff24c9006b4c23af52d69b9e2a4d90d33cbf4f7d160e"
+    },
+    {
+      "kind": "deep",
+      "shape": "ordered",
+      "depth": 1500,
+      "bytes": 22501,
+      "sha256": "d17b80179acefa555627dc102a2bd5052412840e997847068c82b63e50fcc7fe"
+    },
+    {
+      "kind": "deep",
+      "shape": "array",
+      "depth": 10000,
+      "bytes": 20001,
+      "sha256": "bdac01fae96e38fb30b2955615672752ffb9ddb477ba705aa4e079c50c7021bd"
+    },
+    {
+      "kind": "deep",
+      "shape": "object",
+      "depth": 10000,
+      "bytes": 70001,
+      "sha256": "c9bef67dcf17298ce55e6336661279ffa01eea0ca391b8a1aff6e980839ba064"
+    },
+    {
+      "kind": "deep",
+      "shape": "ordered",
+      "depth": 10000,
+      "bytes": 150001,
+      "sha256": "f1bba118cbc9b133090b043fae7adb5d6b74155be6bc75529d0251910c8091b1"
+    }
+  ]
+}

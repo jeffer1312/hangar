@@ -324,3 +324,4 @@ mod engine_cli;
 mod engine_routes;
 mod engine_catalog_cache;
 mod engine_deep_body;
+mod python_repr;
