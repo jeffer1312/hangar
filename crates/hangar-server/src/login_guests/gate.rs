@@ -89,6 +89,12 @@ pub struct Watcher {
     path: String,
 }
 impl Watcher {
+    pub async fn ended(watcher: Option<&Self>) {
+        match watcher {
+            Some(watcher) => watcher.until_ended().await,
+            None => std::future::pending().await,
+        }
+    }
     pub async fn until_ended(&self) {
         loop {
             tokio::time::sleep(Duration::from_secs(5)).await;
@@ -226,4 +232,23 @@ pub async fn guard(
     } else {
         response
     }
+}
+
+/// Só o login próprio usa credencial ambiente; convites e token explícito do dono têm outro porteiro.
+pub(crate) async fn terminal_origin_allowed(st: &Arc<AppState>, headers: &axum::http::HeaderMap) -> bool {
+    let Some(origin) = headers.get("origin") else { return true };
+    let Ok(origin) = origin.to_str() else { return false };
+    let origin = origin.to_owned();
+    let host = headers.get("host").and_then(|v|v.to_str().ok()).map(str::to_owned);
+    let home = st.accounts.env.home.clone();
+    let runtime = st.accounts.env.claude_base.join("runtime-config.json");
+    tokio::task::spawn_blocking(move || {
+        let backend = crate::session_open::cli::backend_dir();
+        let public = crate::machine_peers::config_value(&home, backend.as_deref(), "CP_PUBLIC_URL").ok().flatten().unwrap_or_default();
+        let configured = crate::machine_peers::config_value(&home, backend.as_deref(), "CP_TERM_ORIGINS").ok().flatten().unwrap_or_default();
+        let runtime = super::store::read(&runtime).ok().flatten();
+        let saved = runtime.as_ref().and_then(|v|v["term_origins"].as_str()).unwrap_or_default();
+        let extras:Vec<String> = configured.split(',').chain(saved.split(',')).map(str::trim).filter(|v|!v.is_empty()).map(str::to_owned).collect();
+        crate::machine_peers::origin_allowed(&home, backend.as_deref(), &origin, host.as_deref(), &public, &extras)
+    }).await.unwrap_or(false)
 }

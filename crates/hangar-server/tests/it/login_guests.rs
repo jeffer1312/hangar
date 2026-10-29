@@ -484,3 +484,78 @@ async fn login_guests_public_credentials_match_python_precedence() {
     }
     task.abort();
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn login_guests_terminal_origin_matches_python_without_owner_restriction() {
+    use hangar_server::{accounts::{AccountService,environment::AccountEnvironment},list::{bridge::{ListBridge,ListEnv,parse_dirs},facts::FactsClient,mux::Mux},login_guests::{Service,Settings},term::{Terms,TermConfig}};
+    use serde_json::json;
+    use std::time::Duration;
+    use tokio_tungstenite::tungstenite::{client::IntoClientRequest,Error};
+    let root=tempfile::tempdir().unwrap();let program=crate::list_support::sessions(root.path(),1);
+    let home=root.path().join("home");let claude=home.join(".claude");
+    std::fs::create_dir_all(home.join(".hangar/current")).unwrap();std::fs::create_dir_all(home.join(".hangar/config")).unwrap();
+    std::fs::write(home.join(".hangar/config/.env"),"CP_PUBLIC_URL=https://public.example:8443\nCP_TERM_ORIGINS=https://extra.example\n").unwrap();
+    std::fs::write(home.join(".hangar/config/peers.json"),r#"{"peers":{"peer":{"base_url":"https://peer.example:8443","enabled":false}}}"#).unwrap();
+    let upstream=crate::refused_address();let mut state=AppState::new(crate::fake::config(upstream,""));
+    state.accounts=AccountService::new(AccountEnvironment::from_map([("HOME".into(),home.to_string_lossy().into_owned()),("USERPROFILE".into(),home.to_string_lossy().into_owned())].into()));
+    state.term=Arc::new(Terms::new(TermConfig{program:program.clone().into_os_string(),..TermConfig::default()}));
+    state.list=Arc::new(ListBridge::new(ListEnv{mux:Mux::with_program(&program,Duration::from_secs(5)),capture_program:program.into_os_string(),procs:Arc::new(hangar_server::list::procs::SystemProcs::default()),dirs:parse_dirs(&json!({"home":home,"claude":claude,"codex_home":home.join(".codex"),"pi_sessions":home.join(".pi/agent/sessions"),"omp_config":home.join(".omp"),"omp_agent":home.join(".omp/agent"),"kimi_home":home.join(".kimi-code")}).to_string())},FactsClient::new(upstream,crate::fake::SECRET.into())));
+    let service=Service::new(Settings{guests:claude.join("guests.json"),vault:home.join("vault.json"),runtime_config:claude.join("runtime-config.json"),sync_enabled:false,bootstrap:String::new(),secret:vec![1],secure:false,rate_max:10,rate_window:300});
+    service.store.create("Ana",home.to_str().unwrap(),true,true,"fixture".into(),"guest-token".into()).unwrap();state.login_guests=Arc::new(service);
+    let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();
+    let task=tokio::spawn(async move{axum::serve(listener,hangar_server::routes::router(Arc::new(state)).into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap()});
+    let cases:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/terminal.json")).unwrap();
+    for (index,row) in cases["rows"].as_array().unwrap().iter().enumerate() {
+        let token=if row["guest"]==true {"guest-token"}else{crate::fake::OWNER};
+        let mut request=format!("ws://{address}/api/sessions/s0/term?token={token}").into_client_request().unwrap();
+        request.headers_mut().insert("host","fixture".parse().unwrap());
+        if let Some(origin)=row["origin"].as_str(){request.headers_mut().insert("origin",origin.parse().unwrap());}
+        match tokio_tungstenite::connect_async(request).await {
+            Ok((mut socket,response))=>{assert_eq!(response.status(),101);assert_eq!(row["accepted"],true,"GUE-038 origem {index}");let _=socket.close(None).await;},
+            Err(Error::Http(response))=>{assert_eq!(row["accepted"],false,"GUE-038 origem {index}: {}",response.status());assert_eq!(response.status(),403);},
+            Err(error)=>panic!("GUE-038 transporte {index}: {error}"),
+        }
+    }
+    task.abort();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn login_guests_terminal_closes_after_login_revocation() {
+    use hangar_server::{accounts::{AccountService,environment::AccountEnvironment},list::{bridge::{ListBridge,ListEnv,parse_dirs},facts::FactsClient,mux::Mux},login_guests::{Service,Settings},term::{Terms,TermConfig}};
+    use serde_json::json;
+    use std::time::Duration;
+    use futures_util::{SinkExt,StreamExt};
+    use tokio_tungstenite::tungstenite::{Message};
+    let root=tempfile::tempdir().unwrap();let program=crate::list_support::sessions(root.path(),1);
+    let script=std::fs::read_to_string(&program).unwrap().replace("[ \"$1\" = list-panes ]", "[ \"$1\" = attach ] && exec cat\n[ \"$1\" = list-panes ]");
+    std::fs::write(&program,script).unwrap();
+    let home=root.path().join("home");let claude=home.join(".claude");
+    std::fs::create_dir_all(home.join(".hangar/current")).unwrap();std::fs::create_dir_all(home.join(".hangar/config")).unwrap();
+    std::fs::write(home.join(".hangar/config/.env"),"CP_PUBLIC_URL=https://public.example:8443\nCP_TERM_ORIGINS=https://extra.example\n").unwrap();
+    std::fs::write(home.join(".hangar/config/peers.json"),r#"{"peers":{"peer":{"base_url":"https://peer.example:8443","enabled":false}}}"#).unwrap();
+    let upstream=crate::refused_address();let mut state=AppState::new(crate::fake::config(upstream,""));
+    state.accounts=AccountService::new(AccountEnvironment::from_map([("HOME".into(),home.to_string_lossy().into_owned()),("USERPROFILE".into(),home.to_string_lossy().into_owned())].into()));
+    state.term=Arc::new(Terms::new(TermConfig{program:program.clone().into_os_string(),..TermConfig::default()}));
+    state.list=Arc::new(ListBridge::new(ListEnv{mux:Mux::with_program(&program,Duration::from_secs(5)),capture_program:program.into_os_string(),procs:Arc::new(hangar_server::list::procs::SystemProcs::default()),dirs:parse_dirs(&json!({"home":home,"claude":claude,"codex_home":home.join(".codex"),"pi_sessions":home.join(".pi/agent/sessions"),"omp_config":home.join(".omp"),"omp_agent":home.join(".omp/agent"),"kimi_home":home.join(".kimi-code")}).to_string())},FactsClient::new(upstream,crate::fake::SECRET.into())));
+    let service=Service::new(Settings{guests:claude.join("guests.json"),vault:home.join("vault.json"),runtime_config:claude.join("runtime-config.json"),sync_enabled:false,bootstrap:String::new(),secret:vec![1],secure:false,rate_max:10,rate_window:300});
+    service.store.create("Ana",home.to_str().unwrap(),true,true,"fixture".into(),"guest-token".into()).unwrap();state.login_guests=Arc::new(service);
+    let service=state.login_guests.clone();let terms=state.term.clone();
+    let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();
+    let task=tokio::spawn(async move{axum::serve(listener,hangar_server::routes::router(Arc::new(state)).into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap()});
+    let (mut socket,response)=tokio_tungstenite::connect_async(format!("ws://{address}/api/sessions/s0/term?token=guest-token")).await.unwrap();
+    assert_eq!(response.status(),101);
+    socket.send(Message::Binary(b"fixture\n".to_vec().into())).await.unwrap();
+    let alive=tokio::time::timeout(Duration::from_secs(3),socket.next()).await.ok().flatten();
+    assert!(matches!(alive,Some(Ok(Message::Binary(_)))|Some(Ok(Message::Text(_)))),"GUE-034: PTY falso está vivo antes de revogar");
+    service.store.delete("fixture").unwrap();
+    let code=tokio::time::timeout(Duration::from_secs(7),async {
+        while let Some(Ok(message))=socket.next().await {if let Message::Close(frame)=message{return frame.map(|f|u16::from(f.code));}}
+        None
+    }).await.ok().flatten();
+    let _=socket.close(None).await;
+    let _=tokio::time::timeout(Duration::from_secs(5),async{while terms.is_active("s0"){tokio::time::sleep(Duration::from_millis(20)).await;}}).await;
+    task.abort();
+    assert_eq!(code,Some(4410),"GUE-034: revogação encerra o terminal com 4410");
+}

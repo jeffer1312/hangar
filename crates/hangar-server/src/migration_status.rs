@@ -244,7 +244,7 @@ const PROBES: &[(&str, &str)] = &[
     ("GET", "/api/orq"), ("GET", "/api/orq/x/conductor"), ("GET", "/api/sessions/x/pi/models"), ("POST", "/api/sessions/x/pi/model"),
     ("GET", "/api/sessions/x/kimi/models"), ("POST", "/api/sessions/x/kimi/model"), ("GET", "/api/omp/plugin-sync"),
     ("GET", "/api/claude-configs"), ("GET", "/api/engines"), ("POST", "/api/sessions/x/conta"),
-    ("GET", "/api/guests"), ("POST", "/api/sessions/x/share"),
+    ("POST", "/api/guests"), ("POST", "/api/sessions/x/share"),
     ("GET", "/api/peers"), ("POST", "/api/sessions/x/pair"),
     ("GET", "/mcp"), ("POST", "/mcp"), ("DELETE", "/mcp"),
     ("GET", "/api/push/settings"),
