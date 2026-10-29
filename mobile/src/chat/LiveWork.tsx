@@ -111,34 +111,7 @@ export const AgentesRodando = memo(function AgentesRodando({ agentes, inicio, on
         const model = agentModel(a, matchAgentSubagent(subs, a, ids));
         const t0 = inicio(a.id);
         const tempo = t0 !== null ? m.tool_executando_ha({ tempo: formatElapsed(Math.max(0, agora - t0) / 1000) }) : m.estado_em_execucao();
-        return (
-          <Pressable
-            key={a.id}
-            onPress={onAbrir}
-            disabled={!onAbrir}
-            style={({ pressed }) => [styles.agente, { borderColor: theme.tokens.border.subtle }, pressed && { backgroundColor: theme.tokens.bg.hover }]}
-            accessibilityRole={onAbrir ? 'button' : undefined}
-            accessibilityLabel={[a.description, a.subagentType, model, tempo].filter(Boolean).join(', ')}
-            accessibilityHint={onAbrir ? m.tool_abrir_agente() : undefined}
-          >
-            <ActivityIndicator size="small" color={theme.tokens.accent.base} />
-            <View style={styles.agenteCorpo}>
-              <View style={styles.agenteCab}>
-                <Text style={[styles.agenteDesc, { color: theme.tokens.text.primary }]} numberOfLines={1}>
-                  {a.description || m.atividade_subagente()}
-                </Text>
-                {a.subagentType ? (
-                  <Text style={[styles.tag, { color: theme.tokens.text.secondary, backgroundColor: superficie(theme, 0.8) }]} numberOfLines={1}>
-                    {a.subagentType}
-                  </Text>
-                ) : null}
-              </View>
-              {model ? <Text style={[styles.model, { color: theme.tokens.text.muted }]} numberOfLines={1}>{model}</Text> : null}
-              <Text style={[styles.tempo, { color: theme.tokens.accent.base }]} numberOfLines={1}>{tempo}</Text>
-            </View>
-            {onAbrir ? <Icon name="ChevronRight" size={16} color={theme.tokens.text.muted} /> : null}
-          </Pressable>
-        );
+        return <AgentCard key={a.id} description={a.description} tag={a.subagentType} model={model} tempo={tempo} onPress={onAbrir} />;
       })}
       {error ? <View>
         <Text style={[styles.model, { color: theme.tokens.status.warning }]} accessibilityRole="alert">{error}</Text>
@@ -149,6 +122,40 @@ export const AgentesRodando = memo(function AgentesRodando({ agentes, inicio, on
     </View>
   );
 });
+
+/** Cartão de um subagente rodando, sem estado: a conversa e a animação da novidade desenham com ele. */
+export function AgentCard({ description, tag, model, tempo, onPress }: {
+  description?: string | null; tag?: string | null; model?: string | null; tempo: string; onPress?: () => void;
+}) {
+  const { theme } = useUnistyles();
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={!onPress}
+      style={({ pressed }) => [styles.agente, { borderColor: theme.tokens.border.subtle }, pressed && { backgroundColor: theme.tokens.bg.hover }]}
+      accessibilityRole={onPress ? 'button' : undefined}
+      accessibilityLabel={[description, tag, model, tempo].filter(Boolean).join(', ')}
+      accessibilityHint={onPress ? m.tool_abrir_agente() : undefined}
+    >
+      <ActivityIndicator size="small" color={theme.tokens.accent.base} />
+      <View style={styles.agenteCorpo}>
+        <View style={styles.agenteCab}>
+          <Text style={[styles.agenteDesc, { color: theme.tokens.text.primary }]} numberOfLines={1}>
+            {description || m.atividade_subagente()}
+          </Text>
+          {tag ? (
+            <Text style={[styles.tag, { color: theme.tokens.text.secondary, backgroundColor: superficie(theme, 0.8) }]} numberOfLines={1}>
+              {tag}
+            </Text>
+          ) : null}
+        </View>
+        {model ? <Text style={[styles.model, { color: theme.tokens.text.muted }]} numberOfLines={1}>{model}</Text> : null}
+        <Text style={[styles.tempo, { color: theme.tokens.accent.base }]} numberOfLines={1}>{tempo}</Text>
+      </View>
+      {onPress ? <Icon name="ChevronRight" size={16} color={theme.tokens.text.muted} /> : null}
+    </Pressable>
+  );
+}
 
 const EMPTY_EVENTS: ChatEvent[] = [];
 

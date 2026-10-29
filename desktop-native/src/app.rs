@@ -70,6 +70,7 @@ mod pair_accept;
 mod external;
 mod servers;
 pub(crate) use servers::{ServerEntry, new_id as new_server_id};
+pub(crate) use rows::{agent_card, agent_clock};
 mod shortcuts;
 mod shortcut_transfer;
 mod keyboard;
