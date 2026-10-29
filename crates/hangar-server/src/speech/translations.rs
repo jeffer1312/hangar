@@ -57,23 +57,26 @@ fn key(identity: &str, language: &str, text: &str) -> String {
 fn already_in(text: &str, language: &str) -> bool {
     const PT: &[&str] = &[
         "de", "que", "não", "para", "com", "uma", "um", "os", "as", "do", "da", "em", "no", "na",
-        "se", "por", "quando", "ou", "mais", "é", "são", "o", "a",
+        "se", "por", "quando", "ou", "mais", "é", "são", "o", "a", "use",
     ];
     const EN: &[&str] = &[
         "the", "and", "to", "of", "for", "with", "when", "is", "in", "on", "that", "it", "or",
-        "use", "this", "an", "are", "from", "by", "a",
+        "use", "this", "an", "are", "from", "by", "a", "as", "do", "no",
     ];
     static WORDS: LazyLock<Regex> =
         LazyLock::new(|| Regex::new("[a-zà-ú]+").expect("expressão de palavras válida"));
     let lower = text.to_lowercase();
     let (mut pt, mut en) = (0, 0);
     for word in WORDS.find_iter(&lower) {
-        pt += usize::from(PT.contains(&word.as_str()));
-        en += usize::from(EN.contains(&word.as_str()));
+        // Formas compartilhadas não provam idioma; evidência dos dois lados exige tradução.
+        let portuguese = PT.contains(&word.as_str());
+        let english = EN.contains(&word.as_str());
+        pt += usize::from(portuguese && !english);
+        en += usize::from(english && !portuguese);
     }
     match language {
-        "pt" => pt > en,
-        "en" => en > pt,
+        "pt" => pt > 0 && en == 0,
+        "en" => en > 0 && pt == 0,
         _ => false,
     }
 }
@@ -354,6 +357,72 @@ mod tests {
                 case["expected"]
             );
         }
+    }
+
+    #[test]
+    fn mixed_or_ambiguous_descriptions_are_never_treated_as_already_translated() {
+        for (text, language) in [
+            ("Use this command para executar", "en"),
+            ("Use o comando to run tests", "pt"),
+            ("The hook executa com esta configuração", "en"),
+            ("Este é o arquivo for the command", "pt"),
+            ("Use this para testar when ready", "en"),
+            ("When ready, execute com o perfil atual", "en"),
+            ("O arquivo is ready para teste", "pt"),
+            ("a", "pt"),
+            ("a", "en"),
+            ("command", "en"),
+        ] {
+            assert!(!already_in(text, language), "{language}: {text}");
+        }
+    }
+
+    #[tokio::test]
+    async fn clearly_target_language_descriptions_still_work_without_a_provider() {
+        let mut server = fake(vec![]).await;
+        server.config.values["llm_api_key"] = serde_json::json!("");
+        for (language, texts) in [
+            (
+                "pt",
+                vec![
+                    "Lê o arquivo quando o hook roda.",
+                    "Use o comando para executar os testes.",
+                    "Uma descrição em português com os caminhos.",
+                ],
+            ),
+            (
+                "en",
+                vec![
+                    "Reads the file when the hook runs.",
+                    "Use this command to run the tests.",
+                    "The file opens with this profile.",
+                ],
+            ),
+        ] {
+            let texts = texts.into_iter().map(str::to_owned).collect::<Vec<_>>();
+            assert_eq!(
+                Service::default()
+                    .translate(&server.config, &texts, language)
+                    .await,
+                (texts, String::new())
+            );
+        }
+        assert_eq!(server.hits.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn mixed_descriptions_are_sent_to_the_provider() {
+        let server = fake(vec![content("[\"Use this command to run.\"]")]).await;
+        let (translated, error) = Service::default()
+            .translate(
+                &server.config,
+                &["Use this command para executar".into()],
+                "en",
+            )
+            .await;
+        assert_eq!(translated, vec!["Use this command to run."]);
+        assert!(error.is_empty());
+        assert_eq!(server.hits.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
