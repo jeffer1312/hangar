@@ -117,7 +117,8 @@ async function readMachines(servers: readonly Server[], opts: Pick<UpdateAllOpti
     } catch (error) {
       registerDiagnostic({ evento: 'update_all.identity_failed', nivel: 'aviso',
         codigo: error instanceof Error ? error.name : 'erro' }, server.baseUrl);
-      if (httpStatus(error) === undefined) offline.add(server.id);
+      // Resposta ilegível (SyntaxError) veio de quem atendeu: só rede e prazo contam como desligada.
+      if (httpStatus(error) === undefined && !(error instanceof SyntaxError)) offline.add(server.id);
       return '';
     }
   }));
