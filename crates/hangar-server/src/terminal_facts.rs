@@ -126,8 +126,10 @@ impl LocalTerminalFacts {
         let pane_pid=fields[0].parse::<i64>().ok().filter(|pid|*pid>0).ok_or(ServiceError("terminal_pane_unavailable"))?;
         let (metadata, conversation, transcript) = (target.metadata.clone(), binding.conversation.clone(), target.transcript.clone());
         // Sem o registro nativo, o `/pull` aberto do plugin desta vida prova a conversa (o Claude Code só o
-        // aceita com o `session_id` dela), sem ler os arquivos abertos do processo.
-        let plugin_proof = prove_conversation && self.plugin_proves(target);
+        // aceita com o `session_id` dela), sem ler os arquivos abertos do processo. O `/pull` visto há pouco
+        // só cobre a leitura que falta: outra conversa aberta no processo vence.
+        let pulling = prove_conversation && self.plugin_proves(target, None);
+        let recent = prove_conversation && !pulling && self.plugin_proves(target, Some(Instant::now()));
         tokio::task::spawn_blocking(move || {
             let procs=SystemProcs::default();let children=procs.children(Duration::ZERO).map_err(|_|ServiceError("terminal_agent_unavailable"))?;
             if !crate::list::discover::descendants(pane_pid,&children).contains(&i64::from(metadata.agent_pid)) {return Err(ServiceError("terminal_agent_changed"));}
@@ -136,16 +138,21 @@ impl LocalTerminalFacts {
             if procs.argv_checked(i64::from(metadata.agent_pid)).map_err(|_|ServiceError("terminal_agent_unavailable"))?.is_empty() {return Err(ServiceError("terminal_agent_unavailable"));}
             if !same_birth(born, metadata.agent_birth) { return Err(ServiceError("terminal_agent_changed")); }
             // Registro de outra conversa é troca de vida mesmo sem a prova da conversa.
-            if native_record(&metadata, &conversation)?.is_none() && prove_conversation && !plugin_proof {
-                current_transcript(&procs, &metadata, &conversation, &transcript)?;
+            if native_record(&metadata, &conversation)?.is_none() && prove_conversation && !pulling {
+                match current_transcript(&procs, &metadata, &conversation, &transcript) {
+                    Err(error) if recent && error.0 == "terminal_conversation_unavailable" => {},
+                    other => other?,
+                }
             }
             Ok(pane_pid)
         }).await.map_err(|_| ServiceError("terminal_agent_unavailable"))?
     }
-    fn plugin_proves(&self, target: &TerminalTarget) -> bool {
+    /// `recent` = vale também o `/pull` visto há pouco.
+    fn plugin_proves(&self, target: &TerminalTarget, recent: Option<Instant>) -> bool {
         // Plugin sem vínculo ou ilegível não prova nada: segue a leitura do processo.
+        let binding = Self::binding(target);
         self.plugin.as_ref().is_some_and(|store| self.plugin_facts(target).is_ok_and(|facts| plugin_current(&facts, target.metadata.cut(target.created)))
-            && store.conversation_proved(&Self::binding(target), Instant::now()).unwrap_or(false))
+            && match recent { Some(now) => store.conversation_proved(&binding, now), None => store.conversation_pulling(&binding) }.unwrap_or(false))
     }
     /// Sem o registro nativo, o `/pull` aberto do plugin é a prova da conversa: quem o entrega ao plugin
     /// (`Fill`) fica sem ela até ele voltar.

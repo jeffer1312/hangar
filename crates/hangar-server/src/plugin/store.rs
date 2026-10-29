@@ -511,11 +511,19 @@ impl Store {
         Ok(PullStatus { open: s.waiter.is_some(), last_seen_s: seen.map(|seen| now.saturating_duration_since(seen).as_secs()),
             reported: s.reported.is_some(), ended: s.ended.is_some_and(|ended| seen.is_none_or(|seen| ended >= seen)) })
     }
-    /// O `/pull` aberto, ou visto há pouco: entre um `/pull` e o seguinte a prova não pisca.
+    /// O `/pull` aberto, ou visto há pouco: entre um `/pull` e o seguinte a prova não pisca. O visto há
+    /// pouco não diz a conversa de agora: só vale onde nenhuma outra leitura a contradiz.
     pub fn conversation_proved(&self, binding: &InteractionBinding, now: Instant) -> Result<bool, ServiceError> {
+        self.proof(binding, Some(now))
+    }
+    /// Só o `/pull` aberto agora, que o Claude Code aceita com a conversa atual.
+    pub fn conversation_pulling(&self, binding: &InteractionBinding) -> Result<bool, ServiceError> {
+        self.proof(binding, None)
+    }
+    fn proof(&self, binding: &InteractionBinding, now: Option<Instant>) -> Result<bool, ServiceError> {
         let mut memory = self.memory.lock().map_err(|_| unavailable())?;
         let s = session(&mut memory, binding)?;
-        Ok(s.owner.as_ref().is_some_and(|owner| (s.waiter.is_some() || now.saturating_duration_since(owner.seen) <= PULL_PROOF)
+        Ok(s.owner.as_ref().is_some_and(|owner| (s.waiter.is_some() || now.is_some_and(|now| now.saturating_duration_since(owner.seen) <= PULL_PROOF))
             && s.ended.is_none_or(|ended| ended < owner.seen)))
     }
     /// A conversa nova que o plugin informou depois de a do vínculo acabar, se houver.

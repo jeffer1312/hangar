@@ -1941,7 +1941,7 @@ impl RuntimeRegistry {
         // encerra a antiga com `session.end`). Sem ele, vale o registro nativo do processo.
         let binding=crate::terminal_facts::LocalTerminalFacts::binding(&target);
         let (reported,proved)=match &self.plugin {
-            Some(plugin)=>match (plugin.reported_conversation(&binding),plugin.conversation_proved(&binding,std::time::Instant::now())) {
+            Some(plugin)=>match (plugin.reported_conversation(&binding),plugin.conversation_pulling(&binding)) {
                 (Ok(reported),proved)=>(reported,proved.unwrap_or(false)),
                 (Err(error),_)=>{
                     if crate::warn_limit::allow(Some(key),error.0) {tracing::warn!(key,session=name,code=error.0,"troca de conversa: sinal do plugin ilegível; vale o registro nativo");}
