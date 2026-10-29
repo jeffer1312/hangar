@@ -3523,11 +3523,14 @@ em recados, grupos e pares.
 **Por quê.** Pedido de 28/10: sessões abertas sem nome ficavam como `hangar-2` e ninguém sabia o
 que eram. Renomear sozinho foi descartado pelo usuário em favor da sugestão com um clique.
 
-**Limites.** O modelo de organização escolhido para o provedor da sessão vence; sem ele, o Claude
-usa o alias `sonnet`, porque a organização do ditado nasce desligada e a sugestão não funcionava
-sem configurar; o `haiku` foi descartado pela medição de 08/09 neste mesmo executor (27,8–39,2 s
-contra 3,6–4,5 s do sonnet). O Codex não tem alias estável e o catálogo muda por conta: sem modelo
-escolhido, usa o `model` do perfil ativo da conta, ou o do topo do `config.toml`; sem esse também, não há
-sugestão, e a causa vai ao diário (`rename_suggestion_no_model`), sem aviso na tela. Erro do executor vira 204 e registro no diário
+**Limites.** O modelo sai sempre do catálogo da conta da sessão (o mesmo do seletor do ditado, que
+já conhece motor, gateway e prefixo de conta), porque a organização do ditado nasce desligada e a
+sugestão não funcionava sem configurar. Ordem: o modelo de organização escolhido (fora do catálogo =
+`dictation_model_unavailable`); no Codex, o `model` do `config.toml` da conta (perfil ativo vence o
+topo) se o catálogo o oferece; o padrão marcado no catálogo (`active` do Claude); o primeiro do
+catálogo. Alias fixo foi descartado na revisão: numa sessão em motor, `--model sonnet` ia ao proxy
+do motor e cobrava outra credencial. Catálogo vazio = sem sugestão, e a causa vai ao diário
+(`rename_suggestion_no_model`), sem aviso na tela. Cada sugestão ocupa uma das vagas do ditado e a
+trava compartilhada da conta enquanto roda. Erro do executor vira 204 e registro no diário
 (`rust.rename_suggestion`). O executor só roda a pedido do dono, por isso o gatilho é do cliente e
 não um trabalho de fundo.

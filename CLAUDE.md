@@ -574,7 +574,7 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
 - **Sugestão de nome só para o nome que a pasta deu, e nunca aplicada sozinha.** `name_auto` no
   `SessionSpec` marca o nome genérico; o executor da organização do ditado gera a sugestão a pedido
   do cliente do dono; a faixa aplica a rota de renomear. Sem modelo de organização escolhido, o
-  Claude usa `sonnet` e o Codex o modelo da conta; sem nenhum, registra `rename_suggestion_no_model`. Evidência em
+  modelo sai do catálogo da conta (padrão marcado; no Codex, o do `config.toml`); vazio registra `rename_suggestion_no_model`. Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#sugestão-de-nome-para-sessão-com-nome-genérico-28102026).
 - **Etiqueta de máquina e conta mora no servidor da máquina** (`/api/tags`, `~/.hangar/tags.json`,
   Rust) e chega aos clientes pelo evento `tags` da lista do dono, já resolvida por `conta` da linha.
