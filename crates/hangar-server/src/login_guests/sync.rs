@@ -96,13 +96,25 @@ impl Sync {
         let (exp, generation) = exp
             .split_once(':')
             .map_or((exp, None), |(e, g)| (e, (!g.is_empty()).then_some(g)));
-        if exp.parse::<u64>().ok()? < now {
+        if exp.is_empty() || !exp.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        // O Python aceita expiração inteira sem teto; compare os dígitos sem truncar.
+        let expiration = exp.trim_start_matches('0');
+        let expiration = if expiration.is_empty() { "0" } else { expiration };
+        let now = now.to_string();
+        if expiration.len() < now.len()
+            || (expiration.len() == now.len() && expiration < now.as_str())
+        {
             return None;
         }
         Some((user.to_owned(), generation.map(str::to_owned)))
     }
     pub fn authenticate(&self, cookie: &str, now: u64) -> Result<(String, Option<String>)> {
         let (user, generation) = self.verify(cookie, now).ok_or_else(unauthorized)?;
+        if user.is_empty() {
+            return Err(unauthorized());
+        }
         if let Some(vault) = self.load()? {
             let acc = account(&vault, &user).ok_or_else(unauthorized)?;
             if generation.as_deref().map_or(vault["user"] != user, |g| {

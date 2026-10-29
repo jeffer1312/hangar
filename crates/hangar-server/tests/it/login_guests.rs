@@ -672,3 +672,39 @@ async fn login_guests_public_body_limits_preserve_consumption_and_priority() {
         assert_eq!(consumed.load(Ordering::SeqCst),row["consumed"].as_bool().unwrap(),"GUE-080: {row}");
     }
 }
+
+#[tokio::test]
+async fn login_guests_sync_cookies_preserve_expiration_and_origin() {
+    use hangar_server::login_guests::{Service, Settings};
+    let fixture: Value = serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/cookies.json")).unwrap();
+    for row in fixture["rows"].as_array().unwrap() {
+        let home = tempfile::tempdir().unwrap();
+        let mut service = Service::new(Settings {
+            guests: home.path().join("guests.json"), vault: home.path().join("vault.json"),
+            runtime_config: home.path().join("config.json"), sync_enabled: true,
+            bootstrap: String::new(), secret: b"fixture-secret".to_vec(), secure: false,
+            rate_max: 10, rate_window: 300,
+        });
+        service.now = if row["now"] == 0 { || 0 } else { || 2000000000 };
+        let mut request = axum::http::Request::builder()
+            .method(row["method"].as_str().unwrap()).uri(row["path"].as_str().unwrap())
+            .header("content-type", "application/json")
+            .header("cookie", format!("cp_sync={}",row["cookie"].as_str().unwrap()));
+        if let Some(site) = row["site"].as_str() { request = request.header("sec-fetch-site",site); }
+        let response = Arc::new(service).respond(false,"127.0.0.1".into(),false,
+            request.body(axum::body::Body::from(row["body"].to_string())).unwrap()).await;
+        assert_eq!(response.status().as_u16(),row["status"].as_u64().unwrap() as u16,"cookie {}",row["name"]);
+        assert_eq!(response.headers().get("set-cookie").map(|v|v.to_str().unwrap()),row["set_cookie"].as_str(),"renovação {}",row["name"]);
+        let body=axum::body::to_bytes(response.into_body(),1024*1024).await.unwrap();
+        assert_eq!(serde_json::from_slice::<Value>(&body).unwrap(),row["response"],"resposta {}",row["name"]);
+        assert!(!home.path().join("vault.json").exists(),"cofre não registrado permanece ausente");
+    }
+}
+
+#[test]
+fn login_guests_shortcut_placeholder_matches_python() {
+    let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/placeholder.json")).unwrap();
+    for row in fixture["rows"].as_array().unwrap() {
+        assert_eq!(hangar_server::shortcuts::has_placeholder(row["text"].as_str().unwrap()).as_deref(), row["result"].as_str(), "marcador {:?}",row["text"]);
+    }
+}

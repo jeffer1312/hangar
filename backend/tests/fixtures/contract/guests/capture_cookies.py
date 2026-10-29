@@ -27,13 +27,15 @@ with tempfile.TemporaryDirectory() as scratch:
     cases=[{'name':f'exp_{i}','cookie':signed(user,exp),'method':'GET','site':None} for i,(user,exp) in enumerate(specs)]
     cases.extend({'name':f'site_{method}_{site}','cookie':signed('ana','2000000001'),'method':method,'site':site}
                  for method in ['GET','PUT'] for site in ['same-origin','same-site','cross-site','none','SAME-SITE'])
+    cases.extend({'name':f'epoch_{exp}','cookie':signed('ana',exp),'method':'GET','site':None,'now':0} for exp in ['0','000'])
     rows=[]
     with patch('app.sync.time.time',lambda:2000000000):
         for case in cases:
             client.cookies.clear();headers={'Cookie':'cp_sync='+case['cookie']}
             if case['site'] is not None:headers['Sec-Fetch-Site']=case['site']
             body={'enc_blob':None,'base_rev':0} if case['method']=='PUT' else None
-            response=client.request(case['method'],'/api/sync/vault',headers=headers,json=body)
+            with patch('app.sync.time.time',lambda:case.get('now',2000000000)):
+                response=client.request(case['method'],'/api/sync/vault',headers=headers,json=body)
             rows.append(case|{'path':'/api/sync/vault','body':body,'status':response.status_code,'response':response.json(),'set_cookie':response.headers.get('set-cookie')})
     result={'source_commit':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),
             'command':'cd backend && uv run python tests/fixtures/contract/guests/capture_cookies.py','rows':rows}

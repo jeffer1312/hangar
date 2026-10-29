@@ -53,9 +53,10 @@ As capturas adicionais executam o Python isolado pelo comando registrado em cada
 | `placeholder.json` | 18 textos na guarda de marcador pendente do atalho |
 | `base64.json` | 16 formulários de cadastro e configuração, incluindo bits de preenchimento não canônicos |
 | `blobs.json` | 21 combinações de preenchimento, caracteres e precedência de erro no bloco cifrado |
-| `cookies.json` | 24 cookies e contextos de origem, com expiração, geração, renovação e CSRF |
+| `cookies.json` | 26 cookies e contextos de origem, com expiração, geração, renovação e CSRF |
 | `rate.json` | Dez sequências do limitador, com relógio fracionário, retrocesso e limites extremos |
 | `request-body.json` | 38 corpos e tipos de conteúdo; inclui UTF-16/32, surrogates, parser e falha posterior da resposta |
+| `settings.json` | 23 coerções reais de opções no dotenv, incluindo inteiros grandes e entradas inválidas |
 
 Diferenças deliberadas autorizadas para esta migração:
 

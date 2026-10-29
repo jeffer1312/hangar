@@ -1,5 +1,5 @@
 {
-  "source_commit": "55995dfe0247cef582829429623d9337390b08fa",
+  "source_commit": "1007ef522418bb26b7ac0b472a2f5b20c5d79a89",
   "command": "cd backend && uv run python tests/fixtures/contract/guests/capture_cookies.py",
   "rows": [
     {
@@ -385,6 +385,36 @@
         }
       },
       "set_cookie": null
+    },
+    {
+      "name": "epoch_0",
+      "cookie": "ana.0.af99f790a99f9713e3a1557c3626e124adac357742e206716e30ee39d3f8c162",
+      "method": "GET",
+      "site": null,
+      "now": 0,
+      "path": "/api/sync/vault",
+      "body": null,
+      "status": 200,
+      "response": {
+        "enc_blob": null,
+        "rev": 0
+      },
+      "set_cookie": "cp_sync=ana.2592000.0c891d6a4e84b64af4aba390856e3710adf0484dfc0ae47d36b0d7e71bfcb965; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax"
+    },
+    {
+      "name": "epoch_000",
+      "cookie": "ana.000.9d918dbb0cbff7d7c3c50f1f455b3d1e7cafc869b8394eea8400f0681fdba2d3",
+      "method": "GET",
+      "site": null,
+      "now": 0,
+      "path": "/api/sync/vault",
+      "body": null,
+      "status": 200,
+      "response": {
+        "enc_blob": null,
+        "rev": 0
+      },
+      "set_cookie": "cp_sync=ana.2592000.0c891d6a4e84b64af4aba390856e3710adf0484dfc0ae47d36b0d7e71bfcb965; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax"
     }
   ]
 }
