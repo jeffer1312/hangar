@@ -20,10 +20,21 @@ with tempfile.TemporaryDirectory() as temp:
     sys.path.insert(0,str(reference/'backend'))
     from app import atualizar
     rows=[]
-    for name,script in [('merged',"printf 'first\\n'; printf 'second\\n' >&2"),('ansi',"printf '\\033[31mred\\033[0m\\n'"),('nonzero',"printf 'failure\\n' >&2; exit 7"),('invalid-utf8',"printf '\\377\\n'")]:
+    for name,script in [('merged',"printf 'first\\n'; printf 'second\\n' >&2"),('ansi',"printf '\\033[31mred\\033[0m\\n'"),('nonzero',"printf 'failure\\n' >&2; exit 7"),('invalid-utf8',"printf '\\377\\n'"),('universal-newlines',"printf 'one\\rtwo\\r\\nthree\\n'"),('split-crlf',"printf 'one\\r'; sleep 0.05; printf '\\ntwo\\rthree\\n'")]:
         logs=[]
         result=atualizar._rodar(['sh','-c',script],cwd=Path(temp),timeout=3,log=logs.append)
         rows.append({'name':name,'script':script,'code':result.returncode,'stdout':result.stdout,'stderr':result.stderr,'logs':logs})
+    script='sleep 0.9; exec 1>&- 2>&-; sleep 0.3'
+    logs=[]
+    result=atualizar._rodar(['sh','-c',script],cwd=Path(temp),timeout=1,log=logs.append)
+    rows.append({'name':'post-eof-grace','script':script,'timeout':1,'code':result.returncode,'stdout':result.stdout,'stderr':result.stderr,'logs':logs})
+    result=atualizar._rodar(['sh','-c','sleep 60 >/dev/null 2>&1 & echo $! > persistent.pid'],cwd=Path(temp),timeout=3,log=lambda _:None)
+    persistent=int((Path(temp)/'persistent.pid').read_text())
+    try:
+        os.kill(persistent,0)
+        rows.append({'name':'success-preserves-descendant','survived':True,'code':result.returncode})
+    finally:
+        os.kill(persistent,signal.SIGKILL)
     pidfile=Path(temp)/'child.pid'
     try:
         atualizar._rodar(['sh','-c','sleep 60 & echo $! > child.pid; wait'],cwd=Path(temp),timeout=.1,log=lambda _:None)

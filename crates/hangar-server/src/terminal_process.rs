@@ -140,17 +140,17 @@ mod windows {
     impl CommandTree {
         pub(crate) fn configure(command:&mut Command)->io::Result<Self> {
             command.creation_flags(0x00000004 | 0x08000000);
-            Self::create()
+            Self::create(true)
         }
         pub(crate) fn configure_std(command: &mut std::process::Command) -> io::Result<Self> {
             use std::os::windows::process::CommandExt;
             command.creation_flags(0x00000004 | 0x08000000);
-            Self::create()
+            Self::create(false)
         }
-        fn create() -> io::Result<Self> {
+        fn create(kill_on_close: bool) -> io::Result<Self> {
             let handle=unsafe {CreateJobObjectW(std::ptr::null_mut(),std::ptr::null())};
             if handle.is_null(){return Err(io::Error::last_os_error());}
-            let job=Resource(handle);let mut limits=Extended::default();limits.basic.flags=0x2000;
+            let job=Resource(handle);let mut limits=Extended::default();limits.basic.flags=if kill_on_close {0x2000} else {0};
             check(unsafe {SetInformationJobObject(handle,9,&limits as *const _ as _,std::mem::size_of::<Extended>() as u32)})?;
             Ok(Self {job,process:std::ptr::null_mut(),assigned:false})
         }

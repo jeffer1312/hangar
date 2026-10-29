@@ -1,5 +1,5 @@
 {
-  "source_commit": "fc1ed83a37fe22c126328f3717ccd6b37db17e10",
+  "source_commit": "6a9ef541209b612da065542ae5dd14987532fe51",
   "command": "python generate-process.py --reference <checkout> --output process-cases.json",
   "cases": [
     {
@@ -46,6 +46,44 @@
         "$ sh -c printf '\\377\\n'",
         "�"
       ]
+    },
+    {
+      "name": "universal-newlines",
+      "script": "printf 'one\\rtwo\\r\\nthree\\n'",
+      "code": 0,
+      "stdout": "one\ntwo\nthree",
+      "stderr": "",
+      "logs": [
+        "$ sh -c printf 'one\\rtwo\\r\\nthree\\n'",
+        "one\ntwo\nthree"
+      ]
+    },
+    {
+      "name": "split-crlf",
+      "script": "printf 'one\\r'; sleep 0.05; printf '\\ntwo\\rthree\\n'",
+      "code": 0,
+      "stdout": "one\ntwo\nthree",
+      "stderr": "",
+      "logs": [
+        "$ sh -c printf 'one\\r'; sleep 0.05; printf '\\ntwo\\rthree\\n'",
+        "one\ntwo\nthree"
+      ]
+    },
+    {
+      "name": "post-eof-grace",
+      "script": "sleep 0.9; exec 1>&- 2>&-; sleep 0.3",
+      "timeout": 1,
+      "code": 0,
+      "stdout": "",
+      "stderr": "",
+      "logs": [
+        "$ sh -c sleep 0.9; exec 1>&- 2>&-; sleep 0.3"
+      ]
+    },
+    {
+      "name": "success-preserves-descendant",
+      "survived": true,
+      "code": 0
     },
     {
       "name": "timeout-child",
