@@ -186,7 +186,7 @@ async fn serve(st: Arc<AppState>, name: String, req: Request, forwarded: bool) -
             return None;
         }
         let srv = shell::server(&lookup).ok()?;
-        if srv["pid"] != sc["pid"] {
+        if !shell::same_pid(&srv["pid"], &sc["pid"]) {
             return None;
         }
         let port = input::integer(&srv["porta"]).ok()?;

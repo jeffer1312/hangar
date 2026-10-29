@@ -143,3 +143,88 @@ def test_unattested_library_never_reuses_another_pair_or_filesystem_candidate(ch
                             cwd=root, env={**environment, "FAKE_WRONG": wrong}, capture_output=True, text=True)
     assert result.returncode != 0
     assert _published(server) == before and resolver.auth_pair(server) == old_pair
+
+
+def test_corrupt_immutable_library_preserves_the_whole_pair(checkout):
+    root, server, _, resolver, environment = checkout
+    digest = hashlib.sha256(b"new-library-from-cargo").hexdigest()
+    immutable = server.parent / "auth" / digest / "libhangar_auth.so"
+    immutable.parent.mkdir(parents=True)
+    immutable.write_bytes(b"corrupt-immutable-library")
+    before, old_pair = _published(server), resolver.auth_pair(server)
+    result = subprocess.run(["bash", str(root / "scripts/cargo-pinned"), "build", "-p", "hangar-server"],
+                            cwd=root, env=environment, capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "auth_library_hash_mismatch" in result.stderr
+    assert _published(server) == before
+    assert resolver.auth_pair(server) == old_pair
+
+
+def _attested_artifacts(root, source_target):
+    bucket = source_target / "debug"
+    bucket.mkdir(parents=True)
+    server, library = bucket / "hangar-server", bucket / "libhangar_auth.so"
+    server.write_bytes(b"new-server-from-cargo")
+    server.chmod(0o755)
+    library.write_bytes(b"new-library-from-cargo")
+    profile = {"test": False}
+    return [
+        {"reason": "compiler-artifact", "manifest_path": str(root / "crates/hangar-server/Cargo.toml"),
+         "target": {"name": "hangar-server"}, "executable": str(server), "profile": profile},
+        {"reason": "compiler-artifact", "manifest_path": str(root / "crates/hangar-auth/Cargo.toml"),
+         "target": {"name": "hangar_auth", "crate_types": ["cdylib"]}, "filenames": [str(library)], "profile": profile},
+    ]
+
+
+@pytest.mark.parametrize("after_replace", [False, True])
+def test_metadata_publication_failure_restores_the_whole_pair(checkout, monkeypatch, after_replace):
+    root, server, _, resolver, environment = checkout
+    source_target = Path(environment["FAKE_TARGET"])
+    records = _attested_artifacts(root, source_target)
+    publisher = _module("pin_auth_metadata_failure", ROOT / "scripts/pin-auth-pair.py")
+    before, old_pair = _published(server), resolver.auth_pair(server)
+    replace, injected = publisher.os.replace, []
+
+    def fail_metadata(source, destination):
+        if Path(destination) == server.with_suffix(".auth.json") and not injected:
+            injected.append(True)
+            assert server.read_bytes() == b"new-server-from-cargo"
+            if after_replace:
+                replace(source, destination)
+            raise OSError("metadata_publication_failed")
+        return replace(source, destination)
+
+    monkeypatch.setattr(publisher.os, "replace", fail_metadata)
+    with pytest.raises(OSError, match="metadata_publication_failed"):
+        publisher.pin_artifacts(records, source_target, root / "crates/target", root / "crates")
+    digest = hashlib.sha256(b"new-library-from-cargo").hexdigest()
+    immutable = Path("auth") / digest / "libhangar_auth.so"
+    assert _published(server) == {**before, immutable: b"new-library-from-cargo"}
+    assert resolver.auth_pair(server) == old_pair
+
+
+def test_metadata_publication_and_rollback_failures_are_both_visible(checkout, monkeypatch):
+    root, server, _, _, environment = checkout
+    source_target = Path(environment["FAKE_TARGET"])
+    records = _attested_artifacts(root, source_target)
+    publisher = _module("pin_auth_rollback_failure", ROOT / "scripts/pin-auth-pair.py")
+    replace, injected = publisher.os.replace, []
+
+    def fail_publication_and_rollback(source, destination):
+        if Path(destination) == server.with_suffix(".auth.json") and not injected:
+            injected.append(True)
+            raise OSError("metadata_publication_failed")
+        if injected and Path(destination) == server:
+            raise PermissionError("server_rollback_failed")
+        return replace(source, destination)
+
+    monkeypatch.setattr(publisher.os, "replace", fail_publication_and_rollback)
+    with pytest.raises(BaseExceptionGroup, match="auth_pair_publication_and_rollback_failed") as failure:
+        publisher.pin_artifacts(records, source_target, root / "crates/target", root / "crates")
+    original, rollback = failure.value.exceptions
+    assert isinstance(original, OSError) and str(original) == "metadata_publication_failed"
+    assert isinstance(rollback, RuntimeError) and str(rollback) == f"auth_pair_rollback_failed: {server}"
+    assert isinstance(rollback.__cause__, PermissionError) and str(rollback.__cause__) == "server_rollback_failed"
+    saved = list(server.parent.glob(".cargo-pinned-backup-*"))
+    assert len(saved) == 1 and saved[0].read_bytes() == b"old-server"
+    assert rollback.__notes__ == [f"previous_artifact: {saved[0]}"]

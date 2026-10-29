@@ -16,10 +16,10 @@ def digest(path):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def publish(server, library):
-    server, library = Path(server).resolve(strict=True), Path(library).resolve(strict=True)
+def _prepare_library(server, library, filename=None):
+    server, library = Path(server).resolve(), Path(library).resolve(strict=True)
     sha = digest(library)
-    target = server.parent / "auth" / sha / library.name
+    target = server.parent / "auth" / sha / (filename or library.name)
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists():
         if digest(target) != sha:
@@ -37,6 +37,12 @@ def publish(server, library):
                     raise ValueError("auth_library_hash_mismatch")
         finally:
             temp.unlink(missing_ok=True)
+    return sha, target
+
+
+def publish(server, library):
+    server = Path(server).resolve(strict=True)
+    sha, target = _prepare_library(server, library)
     value = {"abi": 1, "store_version": 1, "server_sha256": digest(server),
              "library_sha256": sha, "library": target.relative_to(server.parent).as_posix()}
     with tempfile.NamedTemporaryFile(dir=server.parent, delete=False) as stream:
@@ -92,21 +98,66 @@ def pin_artifacts(records, source_target, target_dir, workspace):
         copies[library_destination] = library
         pairs.append((destination, library_destination))
 
-    # O plano inteiro é validado antes da primeira troca no target desta worktree.
-    for destination, artifact in copies.items():
-        if destination == artifact:
-            continue
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(dir=destination.parent, delete=False) as stream:
-            temporary = Path(stream.name)
-        try:
-            shutil.copyfile(artifact, temporary)
-            shutil.copymode(artifact, temporary)
-            os.replace(temporary, destination)
-        finally:
-            temporary.unlink(missing_ok=True)
+    # A biblioteca imutável precisa estar íntegra antes de trocar qualquer executável.
     for server, library in pairs:
-        publish(server, library)
+        _prepare_library(server, copies[library], library.name)
+
+    backups, changed = {}, []
+
+    def remember(destination):
+        if destination in backups:
+            return
+        if not destination.exists():
+            backups[destination] = None
+            return
+        with tempfile.NamedTemporaryFile(prefix=".cargo-pinned-backup-", dir=destination.parent, delete=False) as stream:
+            backups[destination] = Path(stream.name)
+        shutil.copyfile(destination, backups[destination])
+        shutil.copymode(destination, backups[destination])
+
+    try:
+        for destination, artifact in copies.items():
+            if destination == artifact:
+                continue
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            remember(destination)
+            with tempfile.NamedTemporaryFile(dir=destination.parent, delete=False) as stream:
+                temporary = Path(stream.name)
+            try:
+                shutil.copyfile(artifact, temporary)
+                shutil.copymode(artifact, temporary)
+                os.replace(temporary, destination)
+                changed.append(destination)
+            finally:
+                temporary.unlink(missing_ok=True)
+        for server, library in pairs:
+            metadata = server.with_suffix(".auth.json")
+            remember(metadata)
+            changed.append(metadata)
+            publish(server, library)
+    except BaseException as error:
+        failures = []
+        for destination in reversed(changed):
+            try:
+                backup = backups[destination]
+                if backup is None:
+                    destination.unlink(missing_ok=True)
+                else:
+                    os.replace(backup, destination)
+            except BaseException as rollback:
+                failure = RuntimeError(f"auth_pair_rollback_failed: {destination}")
+                failure.__cause__ = rollback
+                if backups[destination] is not None:
+                    failure.add_note(f"previous_artifact: {backups[destination]}")
+                    backups[destination] = None
+                failures.append(failure)
+        if failures:
+            raise BaseExceptionGroup("auth_pair_publication_and_rollback_failed", [error, *failures])
+        raise
+    finally:
+        for backup in backups.values():
+            if backup is not None:
+                backup.unlink(missing_ok=True)
 
 
 def main():

@@ -91,10 +91,16 @@ impl Desktop {
     }
 
     fn publish(&self, scene: &Scene) {
-        std::fs::write(scene.nav_dir().join("browser.json"), json!({"chave": KEY, "pid": 123,
-            "targetId": null, "url": "http://contract.test/original"}).to_string()).unwrap();
-        std::fs::write(scene.nav_dir().join("_srv.json"), json!({"porta": self.address.port(),
-            "pid": 123, "token": TOKEN}).to_string()).unwrap();
+        let sidecar = self.context.inputs["raw_sidecar"].as_str().map(str::to_owned).unwrap_or_else(||
+            json!({"chave": KEY, "pid": 123, "targetId": null, "url": "http://contract.test/original"}).to_string());
+        std::fs::write(scene.nav_dir().join("browser.json"), sidecar).unwrap();
+        self.publish_server(scene, self.address.port());
+    }
+
+    fn publish_server(&self, scene: &Scene, port: u16) {
+        let server = self.context.inputs["raw_server"].as_str().map(|raw| raw.replace("__PORT__", &port.to_string()))
+            .unwrap_or_else(|| json!({"porta": port, "pid": 123, "token": TOKEN}).to_string());
+        std::fs::write(scene.nav_dir().join("_srv.json"), server).unwrap();
     }
 
     async fn wait(&self, predicate: impl Fn(&Seen) -> bool) {
@@ -359,14 +365,14 @@ async fn barrier(client: &mut Client, events: &mut Vec<Value>) {
 }
 
 async fn open(scene: &Scene, inputs: &Value, desktop: &Desktop) -> (Client, Vec<Value>) {
-    std::fs::write(scene.nav_dir().join("_srv.json"), json!({"porta": desktop.address.port(), "pid": 123, "token": TOKEN}).to_string()).unwrap();
+    desktop.publish_server(scene, desktop.address.port());
     let (mut client, handshake) = tokio_tungstenite::connect_async(format!(
         "ws://{}/api/sessions/nav-contract/nav-remoto?token={OWNER}&{}", scene.owner.address,
         inputs["query"].as_str().unwrap_or(""))).await.unwrap();
     assert_eq!(handshake.status(), 101);
     let mut events = vec![];
     receive(&mut client, &mut events, |event| event["url"] == "http://contract.test/ready" || event["t"] == "erro").await;
-    std::fs::write(scene.nav_dir().join("_srv.json"), json!({"porta": desktop.command_address.port(), "pid": 123, "token": TOKEN}).to_string()).unwrap();
+    desktop.publish_server(scene, desktop.command_address.port());
     (client, events)
 }
 
@@ -406,7 +412,11 @@ async fn frozen_case(name: &str) {
         | "layout_order_huge_width_before_infinite_height"
         | "layout_order_modifier_list" | "layout_order_modifier_object"
         | "layout_order_wheel_list" | "layout_order_wheel_object");
-    let reference = support::contract(if layout_validation_order { "layout-validation-order" } else { "transport-gaps" });
+    let reader_codec = matches!(name,
+        "reader_codec_ignored_surrogate_sidecar" | "reader_codec_ignored_nonfinite_sidecar"
+        | "reader_codec_ignored_surrogate_server" | "reader_codec_ignored_nonfinite_server");
+    let reference = support::contract(if layout_validation_order { "layout-validation-order" }
+        else if reader_codec { "reader-codec" } else { "transport-gaps" });
     assert_eq!(reference["source_commit"], "ba2db1021ab7fb801eca50a50f9509dcb825ac7e");
     let case = reference["public"].as_array().unwrap().iter().find(|case| case["name"] == name).unwrap();
     let inputs = &case["inputs"];
@@ -658,6 +668,8 @@ cases! {
     serialized_viewers_apply_and_restore,
     pending_capture_and_rust_layout_keep_other_viewer_input_independent,
     cdp_response_exactly_32mib, cdp_response_over_32mib,
+    reader_codec_ignored_surrogate_sidecar, reader_codec_ignored_nonfinite_sidecar,
+    reader_codec_ignored_surrogate_server, reader_codec_ignored_nonfinite_server,
     special_x_nan, special_x_infinity, special_x_negative_infinity, special_x_huge, special_x_surrogate,
     special_y_nan, special_y_infinity, special_y_negative_infinity, special_y_huge, special_y_surrogate,
     special_mod_nan, special_mod_infinity, special_mod_negative_infinity, special_mod_huge, special_mod_surrogate,

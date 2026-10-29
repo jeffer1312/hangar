@@ -1,5 +1,5 @@
 //! O controlador relê seu endereço e credencial a cada comando.
-use super::{input, ws::Failure};
+use super::{input, value, ws::Failure};
 use serde_json::{Value, json};
 use std::{error::Error, io, path::Path};
 const NOT_OPEN: &str = "o app desktop não está aberto nesta máquina";
@@ -51,7 +51,10 @@ pub(super) fn sidecar(dir: &Path, name: &str, target: bool) -> Option<Value> {
         }
         let value = match std::fs::read_to_string(&path)
             .map_err(|e| e.to_string())
-            .and_then(|raw| serde_json::from_str::<Value>(&raw).map_err(|e| e.to_string()))
+            .and_then(|raw| value::decode(&raw).ok_or_else(|| {
+                serde_json::from_str::<Value>(&raw).err().map(|error| error.to_string())
+                    .unwrap_or_else(|| "JSON de navegador inválido".to_owned())
+            }))
         {
             Ok(value) => value,
             Err(error) => {
@@ -75,9 +78,9 @@ pub(super) fn string_field(value: &Value, field: &str) -> String {
     value.get(field).map(input::string).unwrap_or_default()
 }
 pub(super) fn server(dir: &Path) -> Result<Value, Failure> {
-    let value = std::fs::read(dir.join("_srv.json"))
+    let value = std::fs::read_to_string(dir.join("_srv.json"))
         .ok()
-        .and_then(|raw| serde_json::from_slice::<Value>(&raw).ok())
+        .and_then(|raw| value::decode(&raw))
         .filter(Value::is_object)
         .ok_or_else(|| Failure::plain(NOT_OPEN))?;
     if !input::truth(&value["porta"]) || !input::truth(&value["token"]) {
@@ -85,13 +88,29 @@ pub(super) fn server(dir: &Path) -> Result<Value, Failure> {
     }
     Ok(value)
 }
-#[derive(Clone, PartialEq)]
+pub(super) fn same_pid(left: &Value, right: &Value) -> bool {
+    // O marcador conserva o JSON, mas NaN continua diferente de NaN.
+    match (value::nonfinite(left), value::nonfinite(right)) {
+        (Some(left), Some(right)) => left == right,
+        (Some(_), None) | (None, Some(_)) => false,
+        (None, None) => left == right,
+    }
+}
+
+#[derive(Clone)]
 pub(super) struct Controller {
     port: i64,
     token: String,
     pid: Value,
     key: String,
     browser_pid: Value,
+}
+
+impl PartialEq for Controller {
+    fn eq(&self, other: &Self) -> bool {
+        self.port == other.port && self.token == other.token && self.key == other.key
+            && same_pid(&self.pid, &other.pid) && same_pid(&self.browser_pid, &other.browser_pid)
+    }
 }
 
 pub(super) async fn controller(dir: &Path, name: &str) -> Result<Controller, Failure> {

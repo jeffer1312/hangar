@@ -1,0 +1,632 @@
+{
+  "source_commit": "ba2db1021ab7fb801eca50a50f9509dcb825ac7e",
+  "source_sha256": {
+    "backend/app/navsock.py": "76dc90655e1aa7371a8c4ee5a83dd2abf6cf7bd3606929d9a93daf70915b7dc2",
+    "backend/app/navshell.py": "f9dc19c79208868f469ff8cc0384be3a2a83fd1472e55f85d3f3a069641c57fc"
+  },
+  "measured_input_sha256": "94d1928c2f0dce9c0275d01820c94c7b2b770392b1c6f170ff5662615154da2a",
+  "generator": "backend/.venv/bin/python backend/tests/fixtures/contract/remote-browser/generate_transport_gaps.py",
+  "python_version": "3.14.8",
+  "websockets_version": "16.0",
+  "platform": "linux",
+  "isolation": {
+    "blocked_processes": [
+      {
+        "operation": "subprocess.Popen",
+        "executable": "git",
+        "arguments": [
+          "git",
+          "describe",
+          "--tags",
+          "--match",
+          "dist-latest",
+          "--long",
+          "--always",
+          "--dirty"
+        ],
+        "expected_version_probe": true
+      },
+      {
+        "operation": "subprocess.Popen",
+        "executable": "git",
+        "arguments": [
+          "git",
+          "rev-list",
+          "--count",
+          "HEAD"
+        ],
+        "expected_version_probe": true
+      }
+    ],
+    "connections": [
+      {
+        "address": "('127.0.0.1', 42859)",
+        "allowed": true
+      },
+      {
+        "address": "('127.0.0.1', 42859)",
+        "allowed": true
+      },
+      {
+        "address": "('127.0.0.1', 44317)",
+        "allowed": true
+      },
+      {
+        "address": "('127.0.0.1', 44317)",
+        "allowed": true
+      },
+      {
+        "address": "('127.0.0.1', 44317)",
+        "allowed": true
+      },
+      {
+        "address": "('127.0.0.1', 44317)",
+        "allowed": true
+      },
+      {
+        "address": "('127.0.0.1', 42859)",
+        "allowed": true
+      },
+      {
+        "address": "('127.0.0.1', 42859)",
+        "allowed": true
+      },
+      {
+        "address": "('127.0.0.1', 40437)",
+        "allowed": true
+      },
+      {
+        "address": "('127.0.0.1', 40437)",
+        "allowed": true
+      },
+      {
+        "address": "('127.0.0.1', 40437)",
+        "allowed": true
+      },
+      {
+        "address": "('127.0.0.1', 40437)",
+        "allowed": true
+      },
+      {
+        "address": "('127.0.0.1', 42859)",
+        "allowed": true
+      },
+      {
+        "address": "('127.0.0.1', 42859)",
+        "allowed": true
+      },
+      {
+        "address": "('127.0.0.1', 34903)",
+        "allowed": true
+      },
+      {
+        "address": "('127.0.0.1', 34903)",
+        "allowed": true
+      },
+      {
+        "address": "('127.0.0.1', 34903)",
+        "allowed": true
+      },
+      {
+        "address": "('127.0.0.1', 34903)",
+        "allowed": true
+      },
+      {
+        "address": "('127.0.0.1', 42859)",
+        "allowed": true
+      },
+      {
+        "address": "('127.0.0.1', 42859)",
+        "allowed": true
+      },
+      {
+        "address": "('127.0.0.1', 32997)",
+        "allowed": true
+      },
+      {
+        "address": "('127.0.0.1', 32997)",
+        "allowed": true
+      },
+      {
+        "address": "('127.0.0.1', 32997)",
+        "allowed": true
+      },
+      {
+        "address": "('127.0.0.1', 32997)",
+        "allowed": true
+      }
+    ],
+    "unexpected": [],
+    "remaining_sockets": [],
+    "remaining_threads": []
+  },
+  "cdp_peer_extensions": [],
+  "comparison": {
+    "complete_fields": [
+      "expected",
+      "expected_encoded"
+    ],
+    "measured_fields": [
+      "public[].observations.burst_seconds",
+      "public[].observations.before_rate_boundary_seconds",
+      "public[].observations.after_rate_boundary_seconds",
+      "public[].observations.after_screencast_seconds",
+      "cdp.closed_waiters.elapsed_seconds"
+    ],
+    "burst_seconds": [
+      0,
+      0.041666666666666664
+    ],
+    "after_screencast_seconds": [
+      1.4,
+      2.5
+    ],
+    "before_rate_boundary_seconds": [
+      0.079,
+      0.08333333333333333
+    ],
+    "after_rate_boundary_seconds": [
+      0.1,
+      0.2
+    ],
+    "closed_waiters_seconds": [
+      0,
+      2
+    ],
+    "encoded": "\u00c1rvore integral tipada: strings em pontos de c\u00f3digo, inteiros decimais, floats IEEE754 big-endian; conserva NaN/Infinity/surrogates sem JSON inv\u00e1lido."
+  },
+  "limits": [
+    "Prepara\u00e7\u00e3o do gerador n\u00e3o \u00e9 execu\u00e7\u00e3o; JSON s\u00f3 existe depois de executar esta fonte.",
+    "Linux; n\u00e3o representa Electron/WebView2, SSE real, desktop ou sess\u00e3o do usu\u00e1rio.",
+    "nav_ws original usa seu par\u00e2metro p\u00fablico existe somente para a sess\u00e3o tempor\u00e1ria; Rust usa descoberta real.",
+    "Rajada exige janela real menor que 1/24 s; lentid\u00e3o do ensaio falha explicitamente, sem fabricar rel\u00f3gio.",
+    "NS070 conserva a serializa\u00e7\u00e3o do mesmo leitor; outro espectador progride com captura e comando recebidos pelo caminho migrado pendentes.",
+    "Casos especiais s\u00e3o caracteriza\u00e7\u00e3o de efeitos completos, inclusive diverg\u00eancias que exigem decis\u00e3o do coordenador."
+  ],
+  "public": [
+    {
+      "name": "reader_codec_ignored_surrogate_sidecar",
+      "inputs": {
+        "raw_sidecar": "{\"chave\": \"contract::nav-contract\", \"pid\": 123, \"targetId\": null, \"url\": \"http://contract.test/original\",\"ignored\":\"\\ud800\"}"
+      },
+      "expected": {
+        "events_by_viewer": [
+          [
+            {
+              "t": "url",
+              "url": "http://contract.test/original"
+            },
+            {
+              "t": "url",
+              "url": "http://contract.test/ready"
+            },
+            {
+              "t": "layout",
+              "resposta": "layout: 900x700"
+            }
+          ]
+        ],
+        "cdp": [
+          {
+            "peer": 0,
+            "message": {
+              "id": 1,
+              "method": "Page.enable",
+              "params": {}
+            }
+          },
+          {
+            "peer": 0,
+            "message": {
+              "id": 2,
+              "method": "Page.startScreencast",
+              "params": {
+                "format": "jpeg",
+                "quality": 45,
+                "maxWidth": 1400,
+                "maxHeight": 1400,
+                "everyNthFrame": 5
+              }
+            }
+          }
+        ],
+        "cmd": [
+          {
+            "authorization": "Bearer remote-browser-contract-desktop",
+            "body": {
+              "chave": "contract::nav-contract",
+              "verbo": "layout",
+              "args": []
+            },
+            "receiver_pid": 123
+          },
+          {
+            "authorization": "Bearer remote-browser-contract-desktop",
+            "body": {
+              "chave": "contract::nav-contract",
+              "verbo": "layout",
+              "args": [
+                "900",
+                "700"
+              ]
+            },
+            "receiver_pid": 123
+          },
+          {
+            "authorization": "Bearer remote-browser-contract-desktop",
+            "body": {
+              "chave": "contract::nav-contract",
+              "verbo": "layout",
+              "args": []
+            },
+            "receiver_pid": 123
+          },
+          {
+            "authorization": "Bearer remote-browser-contract-desktop",
+            "body": {
+              "chave": "contract::nav-contract",
+              "verbo": "layout",
+              "args": [
+                "mobile"
+              ]
+            },
+            "receiver_pid": 123
+          }
+        ],
+        "desktop_layout": "mobile",
+        "cdp_keys": [
+          "contract::nav-contract"
+        ],
+        "log": [],
+        "cdp_close": [
+          {
+            "code": 1000,
+            "reason": ""
+          }
+        ],
+        "viewer_close": [
+          {
+            "code": 1000,
+            "reason": ""
+          }
+        ]
+      },
+      "observations": {}
+    },
+    {
+      "name": "reader_codec_ignored_surrogate_server",
+      "inputs": {
+        "raw_server": "{\"porta\":__PORT__,\"pid\":123,\"token\":\"remote-browser-contract-desktop\",\"ignored\":\"\\ud800\"}"
+      },
+      "expected": {
+        "events_by_viewer": [
+          [
+            {
+              "t": "url",
+              "url": "http://contract.test/original"
+            },
+            {
+              "t": "url",
+              "url": "http://contract.test/ready"
+            },
+            {
+              "t": "layout",
+              "resposta": "layout: 900x700"
+            }
+          ]
+        ],
+        "cdp": [
+          {
+            "peer": 0,
+            "message": {
+              "id": 1,
+              "method": "Page.enable",
+              "params": {}
+            }
+          },
+          {
+            "peer": 0,
+            "message": {
+              "id": 2,
+              "method": "Page.startScreencast",
+              "params": {
+                "format": "jpeg",
+                "quality": 45,
+                "maxWidth": 1400,
+                "maxHeight": 1400,
+                "everyNthFrame": 5
+              }
+            }
+          }
+        ],
+        "cmd": [
+          {
+            "authorization": "Bearer remote-browser-contract-desktop",
+            "body": {
+              "chave": "contract::nav-contract",
+              "verbo": "layout",
+              "args": []
+            },
+            "receiver_pid": 123
+          },
+          {
+            "authorization": "Bearer remote-browser-contract-desktop",
+            "body": {
+              "chave": "contract::nav-contract",
+              "verbo": "layout",
+              "args": [
+                "900",
+                "700"
+              ]
+            },
+            "receiver_pid": 123
+          },
+          {
+            "authorization": "Bearer remote-browser-contract-desktop",
+            "body": {
+              "chave": "contract::nav-contract",
+              "verbo": "layout",
+              "args": []
+            },
+            "receiver_pid": 123
+          },
+          {
+            "authorization": "Bearer remote-browser-contract-desktop",
+            "body": {
+              "chave": "contract::nav-contract",
+              "verbo": "layout",
+              "args": [
+                "mobile"
+              ]
+            },
+            "receiver_pid": 123
+          }
+        ],
+        "desktop_layout": "mobile",
+        "cdp_keys": [
+          "contract::nav-contract"
+        ],
+        "log": [],
+        "cdp_close": [
+          {
+            "code": 1000,
+            "reason": ""
+          }
+        ],
+        "viewer_close": [
+          {
+            "code": 1000,
+            "reason": ""
+          }
+        ]
+      },
+      "observations": {}
+    },
+    {
+      "name": "reader_codec_ignored_nonfinite_sidecar",
+      "inputs": {
+        "raw_sidecar": "{\"chave\": \"contract::nav-contract\", \"pid\": 123, \"targetId\": null, \"url\": \"http://contract.test/original\",\"ignored\":[NaN,Infinity,-Infinity]}"
+      },
+      "expected": {
+        "events_by_viewer": [
+          [
+            {
+              "t": "url",
+              "url": "http://contract.test/original"
+            },
+            {
+              "t": "url",
+              "url": "http://contract.test/ready"
+            },
+            {
+              "t": "layout",
+              "resposta": "layout: 900x700"
+            }
+          ]
+        ],
+        "cdp": [
+          {
+            "peer": 0,
+            "message": {
+              "id": 1,
+              "method": "Page.enable",
+              "params": {}
+            }
+          },
+          {
+            "peer": 0,
+            "message": {
+              "id": 2,
+              "method": "Page.startScreencast",
+              "params": {
+                "format": "jpeg",
+                "quality": 45,
+                "maxWidth": 1400,
+                "maxHeight": 1400,
+                "everyNthFrame": 5
+              }
+            }
+          }
+        ],
+        "cmd": [
+          {
+            "authorization": "Bearer remote-browser-contract-desktop",
+            "body": {
+              "chave": "contract::nav-contract",
+              "verbo": "layout",
+              "args": []
+            },
+            "receiver_pid": 123
+          },
+          {
+            "authorization": "Bearer remote-browser-contract-desktop",
+            "body": {
+              "chave": "contract::nav-contract",
+              "verbo": "layout",
+              "args": [
+                "900",
+                "700"
+              ]
+            },
+            "receiver_pid": 123
+          },
+          {
+            "authorization": "Bearer remote-browser-contract-desktop",
+            "body": {
+              "chave": "contract::nav-contract",
+              "verbo": "layout",
+              "args": []
+            },
+            "receiver_pid": 123
+          },
+          {
+            "authorization": "Bearer remote-browser-contract-desktop",
+            "body": {
+              "chave": "contract::nav-contract",
+              "verbo": "layout",
+              "args": [
+                "mobile"
+              ]
+            },
+            "receiver_pid": 123
+          }
+        ],
+        "desktop_layout": "mobile",
+        "cdp_keys": [
+          "contract::nav-contract"
+        ],
+        "log": [],
+        "cdp_close": [
+          {
+            "code": 1000,
+            "reason": ""
+          }
+        ],
+        "viewer_close": [
+          {
+            "code": 1000,
+            "reason": ""
+          }
+        ]
+      },
+      "observations": {}
+    },
+    {
+      "name": "reader_codec_ignored_nonfinite_server",
+      "inputs": {
+        "raw_server": "{\"porta\":__PORT__,\"pid\":123,\"token\":\"remote-browser-contract-desktop\",\"ignored\":[NaN,Infinity,-Infinity]}"
+      },
+      "expected": {
+        "events_by_viewer": [
+          [
+            {
+              "t": "url",
+              "url": "http://contract.test/original"
+            },
+            {
+              "t": "url",
+              "url": "http://contract.test/ready"
+            },
+            {
+              "t": "layout",
+              "resposta": "layout: 900x700"
+            }
+          ]
+        ],
+        "cdp": [
+          {
+            "peer": 0,
+            "message": {
+              "id": 1,
+              "method": "Page.enable",
+              "params": {}
+            }
+          },
+          {
+            "peer": 0,
+            "message": {
+              "id": 2,
+              "method": "Page.startScreencast",
+              "params": {
+                "format": "jpeg",
+                "quality": 45,
+                "maxWidth": 1400,
+                "maxHeight": 1400,
+                "everyNthFrame": 5
+              }
+            }
+          }
+        ],
+        "cmd": [
+          {
+            "authorization": "Bearer remote-browser-contract-desktop",
+            "body": {
+              "chave": "contract::nav-contract",
+              "verbo": "layout",
+              "args": []
+            },
+            "receiver_pid": 123
+          },
+          {
+            "authorization": "Bearer remote-browser-contract-desktop",
+            "body": {
+              "chave": "contract::nav-contract",
+              "verbo": "layout",
+              "args": [
+                "900",
+                "700"
+              ]
+            },
+            "receiver_pid": 123
+          },
+          {
+            "authorization": "Bearer remote-browser-contract-desktop",
+            "body": {
+              "chave": "contract::nav-contract",
+              "verbo": "layout",
+              "args": []
+            },
+            "receiver_pid": 123
+          },
+          {
+            "authorization": "Bearer remote-browser-contract-desktop",
+            "body": {
+              "chave": "contract::nav-contract",
+              "verbo": "layout",
+              "args": [
+                "mobile"
+              ]
+            },
+            "receiver_pid": 123
+          }
+        ],
+        "desktop_layout": "mobile",
+        "cdp_keys": [
+          "contract::nav-contract"
+        ],
+        "log": [],
+        "cdp_close": [
+          {
+            "code": 1000,
+            "reason": ""
+          }
+        ],
+        "viewer_close": [
+          {
+            "code": 1000,
+            "reason": ""
+          }
+        ]
+      },
+      "observations": {}
+    }
+  ],
+  "cdp": {},
+  "slow_discovery": {},
+  "partial_cases": [
+    "reader_codec_ignored_surrogate_sidecar",
+    "reader_codec_ignored_nonfinite_sidecar",
+    "reader_codec_ignored_surrogate_server",
+    "reader_codec_ignored_nonfinite_server"
+  ]
+}

@@ -206,6 +206,16 @@ class Desktop:
         self.close_started = asyncio.Event()
         self.capture_times = []
 
+    def publish(self, nav, port):
+        sidecar = self.inputs.get("raw_sidecar", json.dumps({"chave": KEY, "pid": 123,
+            "targetId": None, "url": "http://contract.test/original"}))
+        (nav / "browser.json").write_text(sidecar)
+        self.publish_server(nav, port)
+
+    def publish_server(self, nav, port):
+        server = self.inputs.get("raw_server", json.dumps({"porta": port, "pid": 123, "token": TOKEN}))
+        (nav / "_srv.json").write_text(server.replace("__PORT__", str(port)))
+
     async def notify(self):
         async with self.changed:
             self.changed.notify_all()
@@ -433,6 +443,19 @@ def special_inputs():
     return cases
 
 
+def reader_codec_inputs():
+    cases = []
+    for label, ignored in [("surrogate", r'"\ud800"'), ("nonfinite", "[NaN,Infinity,-Infinity]")]:
+        sidecar = json.dumps({"chave": KEY, "pid": 123, "targetId": None,
+                             "url": "http://contract.test/original"})[:-1] + ',"ignored":' + ignored + '}'
+        server = '{"porta":__PORT__,"pid":123,"token":' + json.dumps(TOKEN) + ',"ignored":' + ignored + '}'
+        cases.extend([
+            (f"reader_codec_ignored_{label}_sidecar", {"raw_sidecar": sidecar}),
+            (f"reader_codec_ignored_{label}_server", {"raw_server": server}),
+        ])
+    return cases
+
+
 async def public_cases(root, measured):
     resources = Cleanup()
     try:
@@ -505,7 +528,7 @@ async def public_cases_owned(root, measured, resources):
         ("pending_capture_and_rust_layout_keep_other_viewer_input_independent", {"gate_at": 1, "hold_capture": True}),
         ("cdp_response_exactly_32mib", {"response_bytes": LIMIT}),
         ("cdp_response_over_32mib", {"response_bytes": LIMIT + 1}),
-    ] + special_inputs() + [("registered_restore_continues_after_viewer_exit", {"gate_at": 4})]
+    ] + special_inputs() + reader_codec_inputs() + [("registered_restore_continues_after_viewer_exit", {"gate_at": 4})]
     selected = json.loads(os.environ.get("HANGAR_GAP_CASES", "[]"))
     if selected:
         plans = [(name, inputs) for name, inputs in plans if name in selected]
@@ -535,9 +558,8 @@ async def public_cases_owned(root, measured, resources):
                 case_cleanup.add("listener CDP bruto", raw_cdp.close, 40)
                 case_cleanup.add("fechamento CDP bruto", lambda: asyncio.wait_for(raw_cdp.wait_closed(), 5), 50)
             cdp_port = raw_cdp.sockets[0].getsockname()[1] if raw_cdp else port
-            (nav / "browser.json").write_text(json.dumps({"chave": KEY, "pid": 123, "targetId": None, "url": "http://contract.test/original"}))
             # A conexão CDP é resolvida antes de o controlador de comandos ser publicado.
-            (nav / "_srv.json").write_text(json.dumps({"porta": cdp_port, "pid": 123, "token": TOKEN}))
+            desktop.publish(nav, cdp_port)
 
             async def drain(client, received):
                 try:
@@ -547,7 +569,7 @@ async def public_cases_owned(root, measured, resources):
                     pass
 
             async def open_viewer():
-                (nav / "_srv.json").write_text(json.dumps({"porta": cdp_port, "pid": 123, "token": TOKEN}))
+                desktop.publish_server(nav, cdp_port)
                 client = await websockets.connect(f"ws://127.0.0.1:{port}/api/sessions/{NAME}/nav-remoto?token={OWNER}&{inputs.get('query', '')}", max_size=LIMIT)
                 clients.append(client)
                 events.append([])
@@ -555,7 +577,7 @@ async def public_cases_owned(root, measured, resources):
                 case_cleanup.add("fechamento do espectador", client.close, 10)
                 case_cleanup.add("eventos finais do espectador", lambda client=client, received=received: asyncio.wait_for(drain(client, received), 7), 11)
                 await receive(client, events[-1], lambda value: value.get("url") == "http://contract.test/ready" or value.get("t") == "erro")
-                (nav / "_srv.json").write_text(json.dumps({"porta": command_port, "pid": 123, "token": TOKEN}))
+                desktop.publish_server(nav, command_port)
 
             async def send(message, peer=0):
                 await clients[peer].send(json.dumps(message))
