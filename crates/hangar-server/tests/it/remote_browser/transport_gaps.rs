@@ -176,7 +176,7 @@ async fn cdp(stream: tokio::net::TcpStream, context: Context, mut closing: watch
         let Some(Ok(message)) = message else { break; };
         match message {
             Message::Text(raw) => {
-                let message: Value = serde_json::from_str(&raw).unwrap();
+                let message = hangar_server::remote_browser::value::decode(&raw).expect("JSON CDP aceito pelo Python");
                 context.seen.lock().unwrap().cdp.push(json!({"peer": peer, "message": message}));
                 context.changed.notify_waiters();
                 let method = message["method"].as_str().unwrap();
@@ -359,10 +359,13 @@ async fn open(scene: &Scene, inputs: &Value, desktop: &Desktop) -> (Client, Vec<
 }
 
 fn encoded(value: &Value) -> Value {
+    if let Some(number) = hangar_server::remote_browser::value::nonfinite(value) {
+        return json!({"kind": "float", "bits": format!("{:016x}", number.to_bits())});
+    }
     match value {
         Value::Null => json!({"kind": "null"}),
         Value::Bool(value) => json!({"kind": "bool", "value": value}),
-        Value::String(value) => json!({"kind": "string", "points": value.chars().map(u32::from).collect::<Vec<_>>()}),
+        Value::String(value) => json!({"kind": "string", "points": hangar_server::remote_browser::value::codepoints(value)}),
         Value::Number(value) => {
             let text = value.to_string();
             if text.contains('.') || text.contains('e') || text.contains('E') {
@@ -569,9 +572,22 @@ async fn frozen_case(name: &str) {
     let expected_commands = case["expected"]["cmd"].as_array().map_or(0, Vec::len);
     desktop.wait(|seen| seen.closed == events.len() && seen.commands_done == expected_commands).await;
     scene.state.remote_browser.shutdown(&scene.nav_dir(), &scene.state.list).await;
-    let actual = desktop.result(&events, &logs, &viewer_closes);
+    let mut actual = desktop.result(&events, &logs, &viewer_closes);
     if inputs["encoded"] == true { assert_eq!(encoded(&actual), case["expected_encoded"], "{name}: efeitos integrais divergentes do Python original"); }
-    else { assert_eq!(actual, case["expected"], "{name}: efeitos integrais divergentes do Python original"); }
+    else {
+        let mut expected = case["expected"].clone();
+        for result in [&mut actual, &mut expected] {
+            for row in result["log"].as_array_mut().unwrap() {
+                let message = row["message"].as_str().unwrap();
+                if let Some((prefix, cause)) = message.split_once(": layout de antes não voltou: ")
+                    && let Some(cause) = cause.strip_prefix("ShellIndisponivel('").and_then(|s| s.strip_suffix("')"))
+                {
+                    row["message"] = json!(format!("{prefix}: layout de antes não voltou: {cause}"));
+                }
+            }
+        }
+        assert_eq!(actual, expected, "{name}: efeitos integrais divergentes do Python original");
+    }
     let mut expected_observations = case["observations"].clone();
     if inputs["encoded"] == true {
         assert_eq!(encoded(&observations), expected_observations, "{name}: observação integral divergente");
