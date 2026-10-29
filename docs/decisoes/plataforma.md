@@ -3634,16 +3634,21 @@ percorre a janela a partir do fim e guarda no máximo os 3.000 caracteres de con
 conservando a mesma saída sem materializar o texto de todos os eventos.
 
 **Correções do caminho.** Pedidos simultâneos de síntese do mesmo hash compartilham uma
-produção. O temporário é exclusivo e a troca atômica tolera leitores no Windows. Cancelamento
-e prazo do motor local encerram sua árvore; stdin e áudio continuam binários, sem shell. O
-comando configurado mantém suas variáveis de provedor, removendo somente a autoridade privada
-do Hangar. Não existe teto arbitrário de bytes que recuse um WAV válido dentro do limite de
+produção; o aguardante recebe 503 após 30 s, sem liberar a posse do produtor. O áudio atravessa
+um canal de dois blocos de 64 KiB até um temporário exclusivo, fechado e validado antes da troca
+atômica que tolera leitores no Windows. Cancelamento e prazo do motor local conservam sua
+árvore e o guard até o fim da limpeza, mesmo depois de responder 504; stdin e áudio continuam
+binários, sem shell. O comando configurado mantém suas variáveis de provedor, removendo somente
+a autoridade privada do Hangar. Não existe teto arbitrário de bytes que recuse um WAV válido dentro do limite de
 texto. Áudio vazio/inválido, JSON externo inválido e falha de disco têm erro visível.
 
-O cliente de texto reaproveita conexões, recusa redirecionamento de credenciais e não usa
-assinatura como reserva. Cache e pausa de pensamento distinguem a configuração do provedor;
-trocar de chave não deixa uma falha antiga bloqueando a tradução nova. Tradução de descrições
-conserva lotes, resultado parcial e cache persistente; só limite HTTP real provoca repetição.
+O cliente de texto reaproveita conexões, recusa UTF-8 inválido em resposta de sucesso e
+redirecionamento de credenciais, sem usar assinatura como reserva. Cache e pausa de pensamento
+distinguem a configuração do provedor;
+trocar de chave não deixa uma falha antiga bloqueando a tradução nova. O prazo do lote inclui
+o item em curso; cancelá-lo conserva o original sem contaminar pausa ou cache. Tradução de
+descrições conserva lotes, resultado parcial e cache persistente; só limite HTTP real provoca repetição.
+Cache ilegível ou corrompido conserva o arquivo e expõe a causa, sem apagar entradas anteriores.
 As mensagens corrigidas levam acentos, mantendo os códigos usados pelos clientes.
 
 **Limite de medição.** Uma prova HTTP com provedor controlado mede a borda e o cache do Hangar;
