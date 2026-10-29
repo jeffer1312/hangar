@@ -230,7 +230,15 @@ pub fn validate(name: &str, value: &Value) -> Result<Value, Value> {
         Err(json!({"detail":errors}))
     }
 }
+fn diagnostic_check(text: &str) -> Result<(), serde_json::Error> {
+    let mut decoder = serde_json::Deserializer::from_str(text);
+    decoder.disable_recursion_limit();
+    serde::de::IgnoredAny::deserialize(&mut decoder)?;
+    decoder.end()
+}
+
 fn diagnostic_parse(text: &str) -> Result<Value, serde_json::Error> {
+    diagnostic_check(text)?;
     let mut decoder = serde_json::Deserializer::from_str(text);
     // O diagnóstico precisa alcançar a mesma entrada que o leitor lossless.
     decoder.disable_recursion_limit();
@@ -254,7 +262,7 @@ pub fn parse(bytes: &[u8]) -> Result<Value, (axum::http::StatusCode, Value)> {
     if let Some(value) = super::codec::loads(text) { return Ok(value); }
     let normalized = super::body_numbers::for_limit(text);
     let text = if let Some((first, normalized)) = &normalized {
-        let reached = match diagnostic_parse(normalized) {
+        let reached = match diagnostic_check(normalized) {
             Ok(_) => true,
             Err(error) => {
                 let previous:usize=normalized.split_inclusive('\n').take(error.line().saturating_sub(1)).map(str::len).sum();
@@ -287,7 +295,7 @@ pub fn parse(bytes: &[u8]) -> Result<Value, (axum::http::StatusCode, Value)> {
             "Invalid \\uXXXX escape"
         } else if raw.starts_with("invalid escape") { "Invalid \\escape" }
             else if raw.starts_with("invalid number") {
-                if diagnostic_parse(&text[..text.floor_char_boundary(byte)]).is_ok() {
+                if diagnostic_check(&text[..text.floor_char_boundary(byte)]).is_ok() {
                     "Extra data"
                 } else { "Expecting ',' delimiter" }
             }

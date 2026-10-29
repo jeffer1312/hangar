@@ -24,6 +24,9 @@ inputs = [
     ('object_leading_zero', '{"x":0' + large + '}'),
     ('nested_boundary', '[' * 150 + small + ']' * 150),
     ('nested_overflow', '[' * 150 + large + ']' * 150),
+    ('duplicate_overflow_float', '{"x":1e400,"x":0}'),
+    ('duplicate_nested_overflow_float', '{"x":{"y":1e400},"x":0}'),
+    ('duplicate_surrogate_value', '{"x":"\\ud800","x":0}'),
 ]
 rows = []
 for name, raw in inputs:
