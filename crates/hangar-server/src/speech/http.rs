@@ -143,9 +143,9 @@ async fn public_inner(st: Arc<AppState>, peer: SocketAddr, req: Request) -> Resp
         };
         let voices = path == "/api/tts/voices";
         let result = if voices {
-            super::tts::voices(&config).await
+            st.speech.tts.voices(&config).await
         } else {
-            super::tts::balance(&config).await
+            st.speech.tts.balance(&config).await
         };
         return match result {
             Ok(value) => json_response(
@@ -476,13 +476,18 @@ async fn conversations(
     let home = st.accounts.env.home.clone();
     let dirs = st.list.env().dirs.clone();
     tokio::task::spawn_blocking(move || {
-        let rows = if let Some(dirs) = dirs {
-            crate::list::local_transfers::transfers(&rows, &dirs)
-                .map(|(rows, _)| rows)
-                .map_err(std::io::Error::other)?
-        } else {
-            rows.as_ref().clone()
-        };
+        let mut rows = rows.as_ref().clone();
+        if let Some(dirs) = dirs {
+            let (overrides, _) = crate::list::local_transfers::transfers(&rows, &dirs)
+                .map_err(std::io::Error::other)?;
+            for row in overrides {
+                if let Some(current) = rows.iter_mut().find(|current| current.name == row.name) {
+                    *current = row;
+                } else {
+                    rows.push(row);
+                }
+            }
+        }
         let requests: Vec<_> = names
             .into_iter()
             .filter_map(|name| {
