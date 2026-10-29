@@ -1,5 +1,5 @@
 {
-  "source_commit": "fc1ed83a37fe22c126328f3717ccd6b37db17e10",
+  "source_commit": "03b5873636e323793439a43717c5a0528a5e7bdd",
   "command": "cd backend && uv run python tests/fixtures/contract/guests/capture_store.py",
   "initial": {
     "guests": [
@@ -22,6 +22,58 @@
     ],
     "sessions": {}
   },
+  "matrix_disk": {
+    "guests": [
+      {
+        "id": "0000000000000000",
+        "name": "Ana",
+        "token_hash": "6c02cf2083469e72758a38be0b7c6eabe9bc58580774daf6b2cf4b6ea1469722",
+        "root": "⟦ROOT⟧",
+        "sees_owner": false,
+        "owner_sees": false
+      },
+      {
+        "id": "1111111111111111",
+        "name": "Bia",
+        "token_hash": "3f08aace122ee2368432c1ca23a049bc640bafbf00fdf33a52429f38ba12dbf9",
+        "root": "⟦ROOT⟧",
+        "sees_owner": true,
+        "owner_sees": true
+      }
+    ],
+    "sessions": {
+      "s0": {
+        "guest": "0000000000000000",
+        "life": null
+      },
+      "s1": {
+        "guest": "1111111111111111",
+        "life": null
+      }
+    }
+  },
+  "list_matrix": [
+    {
+      "viewer": null,
+      "names": [
+        "s1",
+        "s2"
+      ]
+    },
+    {
+      "viewer": "0000000000000000",
+      "names": [
+        "s0"
+      ]
+    },
+    {
+      "viewer": "1111111111111111",
+      "names": [
+        "s1",
+        "s2"
+      ]
+    }
+  ],
   "rows": [
     {
       "name": "same_life",

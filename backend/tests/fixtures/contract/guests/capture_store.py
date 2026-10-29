@@ -19,6 +19,15 @@ with tempfile.TemporaryDirectory() as scratch:
         with patch('secrets.token_hex', lambda n: str(i) * (n * 2)), patch('secrets.token_urlsafe', lambda n: 'token-' + str(i)):
             guests.append(store.create(name, scratch, sees, owner)[0])
     initial = json.loads(store._path_override.read_text())
+    matrix_disk = initial | {'sessions':{'s0':{'guest':guests[0].id,'life':None},
+                                       's1':{'guest':guests[1].id,'life':None}}}
+    store._path_override.write_text(json.dumps(matrix_disk))
+    store._reset()
+    with patch('app.guest_users.session_life', lambda _: None):
+        matrix = [{'viewer':g.id if g else None,
+                   'names':store.filter_visible(g, ['s0','s1','s2'], lambda n:n)} for g in [None,*guests]]
+    store._path_override.write_text(json.dumps(initial))
+    store._reset()
     rows = []
     def record(label, life):
         store._life_cache.clear()
@@ -44,7 +53,7 @@ with tempfile.TemporaryDirectory() as scratch:
     record('deleted_owner', 't:123')
     result = {'source_commit':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),
               'command':'cd backend && uv run python tests/fixtures/contract/guests/capture_store.py',
-              'initial':initial, 'rows':rows}
+              'initial':initial, 'matrix_disk':matrix_disk, 'list_matrix':matrix, 'rows':rows}
     raw = json.dumps(result, ensure_ascii=False, indent=2).replace(scratch, '⟦ROOT⟧')
     (HERE / 'store.json').write_text(raw + '\n', encoding='utf-8')
     print(f'{len(rows)} estados de propriedade Python capturados')
