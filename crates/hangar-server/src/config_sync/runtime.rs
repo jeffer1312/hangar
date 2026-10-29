@@ -6,6 +6,7 @@ use std::{collections::{BTreeMap,BTreeSet}, path::PathBuf, sync::{Arc, LazyLock,
 use crate::machine_peers::dotenv::{SettingsEnvironment, SettingsSnapshot};
 use super::runtime_values::{Values, ValueGuard};
 use crate::orchestration::codec;
+use super::runtime_error::RuntimeError;
 
 pub const SECRETS: &[&str] = &["groq_api_key","elevenlabs_api_key","llm_api_key","llm_briefing_api_key","jev_api_key","jev_texto_api_key","jev_aux_api_key"];
 type Cache = BTreeMap<PathBuf, (SystemTime,u64,Values)>;
@@ -63,12 +64,12 @@ impl RuntimeConfig {
         }
         self.environment(key)
     }
-    fn thinking(&self)->Option<Map<String,Value>> {
+    fn thinking(&self)->Option<Values> {
         let path=self.env.home.join(".claude/settings.json");
         match std::fs::read_to_string(path) {
-            Ok(raw) if raw.trim().is_empty()=>Some(Map::new()),
-            Ok(raw)=>serde_json::from_str::<Value>(&raw).ok()?.as_object().cloned(),
-            Err(error) if error.kind()==std::io::ErrorKind::NotFound=>Some(Map::new()),
+            Ok(raw) if crate::transcript::py::strip(&raw).is_empty()=>Some(Values(Map::new())),
+            Ok(raw)=>Values::read(crate::transcript::py::strip(&raw).as_bytes()),
+            Err(error) if error.kind()==std::io::ErrorKind::NotFound=>Some(Values(Map::new())),
             Err(_)=>None,
         }
     }
@@ -83,14 +84,14 @@ impl RuntimeConfig {
                 for provider in value.as_array().into_iter().flatten().filter(|p|p.is_object()) {
                     let masked=match mask_value(&provider["api_key"]) {
                         Ok(masked)=>masked,
-                        Err(error)=>{ for item in list {codec::discard(item);} return Err(error); }
+                        Err(error)=>{ for item in list {codec::discard(item);} return Err(error.message); }
                     };
                     let mut provider=Values::copied(provider.as_object().unwrap());
                     provider.insert("api_key".into(),json!(masked));
                     list.push(Value::Object(provider.into_map()));
                 }
                 let defined=!list.is_empty();(Value::Array(list),defined)
-            }else if SECRETS.contains(&key) {(json!(mask_value(&value)?),truthy(&value))}
+            }else if SECRETS.contains(&key) {(json!(mask_value(&value).map_err(|error|error.message)?),truthy(&value))}
             else {let defined=!value.is_null();(std::mem::replace(&mut value.0,Value::Null),defined)};
             let mut field=json!({"valor":null,"definido":defined,"origem":origin});
             field["valor"]=value;
@@ -102,11 +103,14 @@ impl RuntimeConfig {
         Ok(Value::Object(result.into_map()))
     }
     pub fn apply(&self, changes:&Map<String,Value>, remove:&BTreeSet<String>)->Result<Map<String,Value>,String> {
+        self.apply_checked(changes, remove).map_err(|error|error.message)
+    }
+    pub fn apply_checked(&self, changes:&Map<String,Value>, remove:&BTreeSet<String>)->Result<Map<String,Value>,RuntimeError> {
         let _guard=WRITES.lock().unwrap_or_else(|e|e.into_inner());
         let mut current=match std::fs::read(&self.path) {
             Ok(raw)=>Values::read(&raw).ok_or("runtime-config.json ilegível; arquivo preservado")?,
             Err(error) if error.kind()==std::io::ErrorKind::NotFound=>Values(Map::new()),
-            Err(error)=>return Err(error.to_string()),
+            Err(error)=>return Err(RuntimeError::new("OSError",error.to_string())),
         };
         let mut requested=Values::copied(changes);
         let proxy = requested.shift_remove("jev_aux_cliproxy").unwrap_or(Value::Null);
@@ -130,7 +134,7 @@ impl RuntimeConfig {
         let mut thinking=None;
         for (key,value) in changes.iter() {
             if key=="mostrar_pensamento" {
-                thinking=Some(value.as_bool().ok_or("mostrar_pensamento: esperado true/false")?);
+                thinking=Some(ValueGuard(codec::clone_value(value)));
                 continue;
             }
             if !preferences::editable(key) {continue;}
@@ -146,7 +150,7 @@ impl RuntimeConfig {
                                 if !secret.is_empty() && incoming.trim()==mask(secret) {
                                     let kind=item["kind"].as_str().unwrap_or("").trim();
                                     if previous["kind"].as_str()!=Some(kind) || (kind!="elevenlabs" && item["base_url"].as_str().unwrap_or("").trim()!=previous["base_url"].as_str().unwrap_or("")) {
-                                        return Err(format!("transcription_providers: item {} mudou de tipo ou endpoint; digite a chave de novo",index+1));
+                                        return Err(format!("transcription_providers: item {} mudou de tipo ou endpoint; digite a chave de novo",index+1).into());
                                     }
                                     item["api_key"]=json!(secret);
                                 }
@@ -157,52 +161,66 @@ impl RuntimeConfig {
             }
             if SECRETS.contains(&key.as_str()) {
                 let effective=ValueGuard(self.effective(key,&current));
-                if let (Some(incoming),Some(secret))=(value.as_str(),effective.as_str()) {
-                    if !secret.is_empty() && (incoming.trim().is_empty()||incoming.trim()==mask(secret)) {continue;}
+                if let Some(incoming)=value.as_str().filter(|_|!codec::contains_nonfinite(&value)) {
+                    let masked=mask_value(&effective)?;
+                    let incoming=crate::transcript::py::strip(incoming);
+                    if truthy(&effective) && (incoming.is_empty()||incoming==masked) {continue;}
                 }
+            }
+            if preferences::INTEGER.contains(&key.as_str()) && codec::infinite(&value) {
+                return Err(RuntimeError::new("OverflowError","cannot convert float infinity to integer"));
             }
             current.insert(key.clone(),preferences::coerce(key,&value)?);
         }
-        if let Some(value)=thinking {self.write_thinking(value)?;}
+        if let Some(value)=thinking {
+            self.write_thinking(value.as_bool().ok_or("mostrar_pensamento: esperado true/false")?)?;
+        }
         let document = Value::Object(current.clone().into_map());
         let encoded = codec::dumps_indented_utf8(&document,2);
         codec::discard(document);
-        let encoded = encoded.map_err(|_|"runtime-config.json contém surrogate Unicode isolado; arquivo preservado")?;
+        let encoded = encoded.map_err(|_|RuntimeError::new("UnicodeEncodeError","runtime-config.json contém surrogate Unicode isolado; arquivo preservado"))?;
         super::files::write_file(&self.path,&super::bundle::Blob {
             data:encoded.into_bytes(),mode:0o600,
-        }).map_err(|e|e.to_string())?;
+        }).map_err(|e|RuntimeError::new("OSError",e.to_string()))?;
         CACHE.lock().unwrap_or_else(|e|e.into_inner()).remove(&self.path);
         if touches_aux||["jev_api_key","jev_endpoint","jev_model"].iter().any(|key|changes.contains_key(*key)||remove.contains(*key)) {
             self.sync_jev().map_err(|error|format!("jev: salvo, mas o Computer Use não recebeu a configuração: {error}"))?;
         }
         Ok(current.into_map())
     }
-    fn write_thinking(&self,value:bool)->Result<(),String> {
+    fn write_thinking(&self,value:bool)->Result<(),RuntimeError> {
         let mut data=self.thinking().ok_or("mostrar_pensamento: settings.json ilegível — não mexi nele")?;
         if data.get("showThinkingSummaries").is_some_and(|v|truthy(v)==value) {return Ok(());}
         data.insert("showThinkingSummaries".into(),json!(value));
+        let document=ValueGuard(Value::Object(data.into_map()));
+        let text=codec::dumps_indented_utf8(&document,2).map_err(|_|RuntimeError::new(
+            "UnicodeEncodeError","settings.json contém surrogate Unicode isolado; arquivo preservado"))?;
         let path=self.env.home.join(".claude/settings.json");
         let mode=super::files::mode(&path).unwrap_or(0o600);
         super::files::write_file(&path,&super::bundle::Blob {
-            data:format!("{}\n",crate::transcript::pyjson::dumps_indent(&Value::Object(data),2,false)).into_bytes(),mode,
-        }).map_err(|e|format!("mostrar_pensamento: {e}"))
+            data:format!("{text}\n").into_bytes(),mode,
+        }).map_err(|e|RuntimeError::from(format!("mostrar_pensamento: {e}")))
     }
 }
-fn mask_value(value:&Value)->Result<String,String> {
+fn mask_value(value:&Value)->Result<String,RuntimeError> {
     if !truthy(value) {return Ok(String::new());}
     match value {
         Value::String(text) if !codec::contains_nonfinite(value)=>Ok(mask(text)),
         Value::Array(values) if values.len()<=8=>Ok("•".repeat(values.len())),
         Value::Object(values) if values.len()<=8=>Ok("•".repeat(values.len())),
-        Value::Array(_)=>Err("can only concatenate list (not \"str\") to list".into()),
-        Value::Object(_)=>Err("slice(None, 4, None)".into()),
+        Value::Array(values)=>{
+            let first=ValueGuard(Value::Array(values[..4].iter().map(codec::clone_value).collect()));
+            let last=ValueGuard(Value::Array(values[values.len()-4..].iter().map(codec::clone_value).collect()));
+            Ok(format!("{}••••••••{}",codec::python_string(&first),codec::python_string(&last)))
+        },
+        Value::Object(_)=>Err(RuntimeError::new("KeyError","slice(None, 4, None)")),
         _=>{
             let kind=match value {
                 Value::Bool(_)=>"bool",
                 Value::Number(number) if !number.is_f64()=>"int",
                 _=>"float",
             };
-            Err(format!("object of type '{kind}' has no len()"))
+            Err(RuntimeError::new("TypeError",format!("object of type '{kind}' has no len()")))
         }
     }
 }

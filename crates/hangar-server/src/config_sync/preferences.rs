@@ -206,11 +206,10 @@ pub fn coerce(key: &str, value: &Value) -> Result<Value, String> {
         }
         return Ok(number);
     }
-    let mut text = value
+    let text = value
         .as_str()
-        .ok_or_else(|| format!("{key}: esperado texto"))?
-        .trim()
-        .to_owned();
+        .ok_or_else(|| format!("{key}: esperado texto"))?;
+    let mut text = crate::transcript::py::strip(text).to_owned();
     if key == "dictation_organization_mode"
         && !["", "none", "harness", "external_api"].contains(&text.as_str())
     {

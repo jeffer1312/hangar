@@ -15,6 +15,8 @@ pub mod paths;
 pub mod plugin_publish;
 pub mod preferences;
 pub mod runtime;
+pub mod runtime_http;
+pub mod runtime_error;
 mod runtime_defaults;
 mod runtime_values;
 pub mod translate;

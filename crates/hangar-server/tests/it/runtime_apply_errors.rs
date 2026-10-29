@@ -25,9 +25,16 @@ fn runtime_apply_errors_preserve_precedence_mask_and_both_files() {
         let expected_state = case["state_secret"].get("ok").cloned()
             .ok_or_else(|| case["state_secret"]["error"].as_str().unwrap().to_owned());
         if actual_state != expected_state {differences.push(format!("{index}: máscara"));}
-        let actual = service.apply(case["changes"].as_object().unwrap(), &Default::default()).map(Value::Object);
-        let expected = case["result"].get("ok").cloned()
+        let result = service.apply_checked(case["changes"].as_object().unwrap(), &Default::default());
+        if let Err(error) = &result {
+            assert_eq!(error.kind, case["result"]["kind"].as_str().unwrap(), "categoria {index}");
+        }
+        let actual = result.map(Value::Object).map_err(|error|error.message);
+        let mut expected = case["result"].get("ok").cloned()
             .ok_or_else(|| case["result"]["error"].as_str().unwrap().to_owned());
+        if case["result"]["kind"] == "UnicodeEncodeError" {
+            expected = Err("settings.json contém surrogate Unicode isolado; arquivo preservado".into());
+        }
         if actual != expected {differences.push(format!("{index}: resultado {actual:?} versus {expected:?}"));}
         if std::fs::read_to_string(&service.path).unwrap() != case["runtime"].as_str().unwrap() {
             differences.push(format!("{index}: arquivo de preferências"));

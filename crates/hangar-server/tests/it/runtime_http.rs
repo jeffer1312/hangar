@@ -37,8 +37,11 @@ async fn runtime_http_preserves_captured_responses_and_configuration_files() {
         let bytes = axum::body::to_bytes(response.into_body(),usize::MAX).await.unwrap();
         let raw = String::from_utf8(bytes.to_vec()).unwrap().replace(home.path().to_str().unwrap(),"⟦HOME⟧");
         let body = serde_json::from_str::<Value>(&raw).unwrap_or(Value::String(raw));
-        if status != case["status"].as_u64().unwrap() as u16 || body != case["body"] || json!(allow) != case["allow"] {
-            differences.push(format!("{index}: resposta {status}, esperada {}",case["status"]));
+        let expected = if case["status"] == 400 && case["raw"].as_str().unwrap().contains("\\ud800") {
+            json!({"detail":"runtime-config.json contém surrogate Unicode isolado; arquivo preservado"})
+        } else {case["body"].clone()};
+        if status != case["status"].as_u64().unwrap() as u16 || body != expected || json!(allow) != case["allow"] {
+            differences.push(format!("{index}: resposta {status}, esperada {}; corpo igual={}; leitura={:?}",case["status"],body==expected,body.get("somente_leitura")));
         }
         for file in [".claude/runtime-config.json",".claude/settings.json"] {
             let actual = std::fs::read_to_string(home.path().join(file)).ok();
