@@ -153,11 +153,9 @@ async fn opening(name: &str) {
     let reference = support::contract("final-review");
     let case = reference["observed"]["opening"].as_array().unwrap().iter().find(|case|case["name"]==name).unwrap();
     if name=="connection_refused" {
-        let socket = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None).unwrap();
-        socket.bind(&"127.0.0.1:0".parse::<std::net::SocketAddr>().unwrap().into()).unwrap();
-        let port = socket.local_addr().unwrap().as_socket().unwrap().port();
+        // macOS descarta o SYN de porta presa sem listen (vira prazo); porta liberada recusa nos dois.
+        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
         opening_request(&scene, case, &logs, port).await;
-        drop(socket);
         scene.close().await;
         return;
     }
@@ -185,7 +183,9 @@ async fn opening_request(scene: &Scene, case: &Value, logs: &Logs, port: u16) {
     let event = tokio::time::timeout(Duration::from_secs(7), client.next()).await.unwrap().unwrap().unwrap();
     let Message::Text(raw) = event else { panic!("abertura não publicou a causa") };
     events.push(serde_json::from_str::<Value>(&raw).unwrap());
-    let expected = case["message"].as_str().unwrap().replace("<PORT>",&port.to_string());
+    // A captura é do Linux: o número do errno é o da plataforma (ECONNREFUSED é 61 no macOS).
+    let expected = case["message"].as_str().unwrap().replace("<PORT>",&port.to_string())
+        .replace("[Errno 111]", &format!("[Errno {}]", libc::ECONNREFUSED));
     assert_eq!(events, vec![json!({"t":"erro","m":expected})]);
     while let Some(message) = client.next().await { message.unwrap(); }
     let lines = logs.0.lock().unwrap();

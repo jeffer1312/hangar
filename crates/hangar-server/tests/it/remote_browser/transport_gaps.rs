@@ -318,7 +318,8 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Logs {
 }
 
 async fn receive(client: &mut Client, events: &mut Vec<Value>, predicate: impl Fn(&Value) -> bool) {
-    tokio::time::timeout(Duration::from_secs(7), async {
+    // Teto, não ritmo: a resposta de 32 MiB em debug passa de 7 s no runner macOS Intel.
+    tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             let message = client.next().await.expect("WS terminou antes da resposta").unwrap();
             if let Message::Text(raw) = message {
@@ -441,10 +442,11 @@ async fn frozen_case(name: &str) {
             for session in 502..510 { desktop.frame(0, session, json!(0), json!(false)); }
             desktop.wait(|seen| seen.cdp.iter().filter(|row| row["message"]["method"] == "Page.screencastFrameAck").count() == 9).await;
             assert!(began.elapsed().as_secs_f64() < 1.0 / 24.0, "rajada saiu da janela real de observação; não concluir taxa por um ensaio lento");
-            tokio::time::sleep_until(tokio::time::Instant::from_std(began + Duration::from_millis(80))).await;
+            // Sonda a 60 ms, não 80: 3 ms de folga até o limite de 1/12 s estouravam no runner macOS.
+            tokio::time::sleep_until(tokio::time::Instant::from_std(began + Duration::from_millis(60))).await;
             desktop.frame(0, 510, json!(0), json!(false));
             desktop.wait(|seen| seen.cdp.iter().filter(|row| row["message"]["method"] == "Page.screencastFrameAck").count() == 10).await;
-            assert!((0.079..1.0 / 12.0).contains(&began.elapsed().as_secs_f64()), "a sonda anterior ao limite saiu da janela real de observação");
+            assert!((0.059..1.0 / 12.0).contains(&began.elapsed().as_secs_f64()), "a sonda anterior ao limite saiu da janela real de observação");
             tokio::time::sleep_until(tokio::time::Instant::from_std(began + Duration::from_millis(110))).await;
             desktop.frame(0, 511, json!(0), json!(false));
             receive(&mut clients[0], &mut events[0], |event| event["t"] == "q").await;
