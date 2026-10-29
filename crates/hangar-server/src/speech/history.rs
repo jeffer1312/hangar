@@ -18,7 +18,7 @@ static ANSI: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\x1b\[[0-9;:?]*[ -/
 
 pub fn read(info: &InternalInfo, limit: usize) -> io::Result<Vec<ChatEvent>> {
     if let Some(request) = info.history_request(Some(limit)) {
-        return crate::transcript::merged_history(&request);
+        return history::merged_history_window(&request);
     }
     if !matches!(info.provider.as_str(), "pi" | "omp" | "kimi") {
         return Ok(Vec::new());
@@ -78,12 +78,7 @@ pub fn read(info: &InternalInfo, limit: usize) -> io::Result<Vec<ChatEvent>> {
             .unwrap_or(std::cmp::Ordering::Equal)
             .then(a.1.cmp(&b.1))
     });
-    let skip = items.len().saturating_sub(limit);
-    Ok(items
-        .into_iter()
-        .skip(skip)
-        .map(|(_, _, event)| event)
-        .collect())
+    Ok(items.into_iter().map(|(_, _, event)| event).collect())
 }
 
 fn load_queue(path: &Path) -> io::Result<Vec<serde_json::Map<String, Value>>> {

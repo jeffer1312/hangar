@@ -126,7 +126,7 @@ async fn public_inner(st: Arc<AppState>, peer: SocketAddr, req: Request) -> Resp
             return detail(
                 StatusCode::BAD_REQUEST,
                 "erro_tts_audio_invalido",
-                "identificador de audio invalido",
+                "identificador de áudio inválido",
                 json!({}),
             );
         }
@@ -141,13 +141,21 @@ async fn public_inner(st: Arc<AppState>, peer: SocketAddr, req: Request) -> Resp
             Ok(c) => c,
             Err(e) => return failure(e),
         };
-        let result = if path == "/api/tts/voices" {
+        let voices = path == "/api/tts/voices";
+        let result = if voices {
             super::tts::voices(&config).await
         } else {
             super::tts::balance(&config).await
         };
         return match result {
-            Ok(value) => json_response(StatusCode::OK, value),
+            Ok(value) => json_response(
+                StatusCode::OK,
+                if voices {
+                    json!({"voices":value})
+                } else {
+                    value
+                },
+            ),
             Err(error) => failure(error),
         };
     }
@@ -276,7 +284,7 @@ async fn synthesize(st: &AppState, value: &Value) -> Response {
         return detail(
             StatusCode::BAD_REQUEST,
             "erro_tts_sem_texto",
-            "nao sobrou nada pra falar depois de limpar o texto",
+            "não sobrou nada pra falar depois de limpar o texto",
             json!({}),
         );
     }
@@ -333,7 +341,7 @@ async fn audio(path: &Path, headers: &HeaderMap) -> Response {
             return detail(
                 StatusCode::NOT_FOUND,
                 "erro_tts_sem_cache",
-                "audio nao esta mais em cache",
+                "áudio não está mais em cache",
                 json!({}),
             );
         }
@@ -507,7 +515,7 @@ fn summarize(events: &[ChatEvent]) -> String {
                 ChatKind::AssistantMsg => "assistente",
                 _ => return None,
             };
-            let text = event.text.as_deref()?.trim();
+            let text = crate::transcript::py::strip(event.text.as_deref()?);
             (!text.is_empty()).then_some((speaker, text))
         })
         .collect();
@@ -531,5 +539,62 @@ fn summarize(events: &[ChatEvent]) -> String {
         last
     } else {
         format!("{earlier}\n{last}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn group_context_matches_the_python_window_hook_filter_and_queue() {
+        let fixtures: Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/speech/http_history.json"
+        ))
+        .unwrap();
+        for case in fixtures["cases"].as_array().unwrap() {
+            let directory = tempfile::tempdir().unwrap();
+            let transcript = directory.path().join("conversation.jsonl");
+            let queue = directory.path().join("queue.jsonl");
+            for (path, rows) in [(&transcript, &case["records"]), (&queue, &case["queue"])] {
+                let lines = rows
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(Value::to_string)
+                    .collect::<Vec<_>>()
+                    .join("\n")
+                    + "\n";
+                std::fs::write(path, lines).unwrap();
+            }
+            let info = crate::transcript::InternalInfo {
+                provider: case["provider"].as_str().unwrap().into(),
+                jsonl: Some(transcript),
+                session_key: String::new(),
+                history: json!({"queue":queue}),
+                headless: false,
+                lifecycle_id: None,
+                cwd: None,
+            };
+            let limit = case["limit"].as_u64().unwrap() as usize;
+            let events = super::super::history::read(&info, limit).unwrap();
+            let projection: Vec<_> = events
+                .iter()
+                .skip(events.len().saturating_sub(limit))
+                .map(|event| json!({"kind":event.kind,"text":event.text,"ts":event.ts}))
+                .collect();
+            assert_eq!(
+                json!(projection),
+                case["events"],
+                "eventos: {}",
+                case["name"]
+            );
+            assert_eq!(
+                summarize(&events),
+                case["summary"],
+                "contexto: {}",
+                case["name"]
+            );
+        }
     }
 }

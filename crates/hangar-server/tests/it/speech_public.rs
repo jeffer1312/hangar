@@ -19,7 +19,6 @@ use hangar_server::{
     routes::{AppState, router},
 };
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 struct Server {
     _root: tempfile::TempDir,
@@ -42,7 +41,11 @@ impl Server {
         std::fs::create_dir_all(claude.join("projects")).unwrap();
         std::fs::create_dir_all(claude.join(".hangar-tts")).unwrap();
         for (extension, audio) in [("mp3", "ID3fixture-audio"), ("wav", "RIFFfixture-wave")] {
-            let hash = format!("{:x}", Sha256::digest(extension.as_bytes()));
+            let hash = ring::digest::digest(&ring::digest::SHA256, extension.as_bytes())
+                .as_ref()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
             let path = claude
                 .join(".hangar-tts")
                 .join(format!("{hash}.{extension}"));
@@ -109,6 +112,26 @@ fn fixture() -> Value {
     serde_json::from_str(include_str!("../fixtures/speech/http_contract.json")).unwrap()
 }
 
+/// D-011: somente estas mensagens mudam a grafia; os contratos Python ficam intactos.
+fn accented_messages(value: &Value) -> Value {
+    match value {
+        Value::String(text) => Value::String(match text.as_str() {
+            "identificador de audio invalido" => "identificador de áudio inválido",
+            "audio nao esta mais em cache" => "áudio não está mais em cache",
+            "nao sobrou nada pra falar depois de limpar o texto" => "não sobrou nada pra falar depois de limpar o texto",
+            "chave do provedor nao configurada: configure a organizacao do texto em Configuracoes -> Voz" =>
+                "Chave do provedor não configurada: configure a organização do texto em Configurações → Voz.",
+            "chave da ElevenLabs nao configurada — abra Configurações do servidor" =>
+                "Chave da ElevenLabs não configurada — abra Configurações do servidor.",
+            "provedor desconhecido: outra" => "Provedor desconhecido: outra",
+            other => other,
+        }.to_owned()),
+        Value::Array(values) => Value::Array(values.iter().map(accented_messages).collect()),
+        Value::Object(values) => Value::Object(values.iter().map(|(key,value)|(key.clone(),accented_messages(value))).collect()),
+        value => value.clone(),
+    }
+}
+
 #[tokio::test]
 async fn speech_public_matches_the_frozen_python_http_contract() {
     let server = Server::start().await;
@@ -136,8 +159,8 @@ async fn speech_public_matches_the_frozen_python_http_contract() {
         let headers = response.headers().clone();
         let bytes = response.bytes().await.unwrap();
         let body = serde_json::from_slice::<Value>(&bytes).ok();
-        let expected_body = case.get("response");
-        let body_matches = if let Some(expected) = expected_body {
+        let expected_body = case.get("response").map(accented_messages);
+        let body_matches = if let Some(expected) = expected_body.as_ref() {
             body.as_ref() == Some(expected)
         } else {
             String::from_utf8_lossy(&bytes) == case["response_text"].as_str().unwrap()
