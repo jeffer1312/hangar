@@ -1,5 +1,5 @@
 //! Uma captura de capacidade por CLI, compartilhada entre instalação e diagnóstico.
-use crate::accounts::environment::AccountEnvironment;
+use crate::accounts::{environment::AccountEnvironment, quotas::other::py_strip};
 use crate::command_capture::{Output, capture};
 use num_bigint::BigInt;
 use std::{
@@ -13,7 +13,7 @@ type Slot = Arc<tokio::sync::Mutex<Cached>>;
 
 #[derive(Clone)]
 pub struct Probe {
-    cache: Arc<Mutex<BTreeMap<(String, String), Slot>>>,
+    cache: Arc<Mutex<BTreeMap<(String, String, [u8; 32]), Slot>>>,
     pub ttl: Duration,
     pub timeout: Duration,
 }
@@ -31,7 +31,7 @@ impl Probe {
         self.cache
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .retain(|(name, _), _| name != cli);
+            .retain(|(name, _, _), _| name != cli);
     }
     pub fn invalidate(&self) {
         self.cache.lock().unwrap_or_else(|e| e.into_inner()).clear();
@@ -46,7 +46,7 @@ impl Probe {
             .cache
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .entry((cli.into(), arg.into()))
+            .entry((cli.into(), arg.into(), environment_key(env)))
             .or_default()
             .clone();
         let mut slot = slot.lock().await;
@@ -102,14 +102,14 @@ impl Probe {
                     out.stdout
                 };
                 Some(
-                    raw.trim()
+                    py_strip(&raw)
                         .split([
                             '\n', '\r', '\u{b}', '\u{c}', '\u{1c}', '\u{1d}', '\u{1e}', '\u{85}',
                             '\u{2028}', '\u{2029}',
                         ])
                         .next()
+                        .map(py_strip)
                         .unwrap_or("")
-                        .trim()
                         .into(),
                 )
             }
@@ -146,7 +146,7 @@ fn resolve(cli: &str, env: &AccountEnvironment) -> Option<std::path::PathBuf> {
 pub fn parse_version(raw: &str) -> Option<Vec<BigInt>> {
     static VERSION: std::sync::LazyLock<regex::Regex> =
         std::sync::LazyLock::new(|| regex::Regex::new(r"^\s*(\d+)\.(\d+)\.(\d+)").unwrap());
-    let parts = VERSION.captures(raw)?;
+    let parts = VERSION.captures(py_strip(raw))?;
     (1..=3)
         .map(|index| {
             let ascii: String = parts[index]
@@ -156,4 +156,16 @@ pub fn parse_version(raw: &str) -> Option<Vec<BigInt>> {
             ascii.parse().ok()
         })
         .collect()
+}
+
+fn environment_key(env: &AccountEnvironment) -> [u8; 32] {
+    let mut digest = ring::digest::Context::new(&ring::digest::SHA256);
+    // O cache distingue todo o contexto sem conservar outra cópia das credenciais.
+    for (key, value) in &env.base {
+        for part in [key.as_bytes(), value.as_bytes()] {
+            digest.update(&(part.len() as u64).to_le_bytes());
+            digest.update(part);
+        }
+    }
+    digest.finish().as_ref().try_into().unwrap()
 }

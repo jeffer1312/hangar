@@ -30,6 +30,24 @@ pub async fn capture(
     env: AccountEnvironment,
     budget: Duration,
 ) -> Result<Output, String> {
+    capture_inner(args, env, budget, false).await
+}
+
+/// Preserva a conta selecionada sem transmitir os segredos internos do servidor.
+pub async fn capture_with_account_env(
+    args: Vec<String>,
+    env: AccountEnvironment,
+    budget: Duration,
+) -> Result<Output, String> {
+    capture_inner(args, env, budget, true).await
+}
+
+async fn capture_inner(
+    args: Vec<String>,
+    env: AccountEnvironment,
+    budget: Duration,
+    preserve_account: bool,
+) -> Result<Output, String> {
     let Some(program) = args.first() else {
         return Err("FileNotFoundError".into());
     };
@@ -38,7 +56,8 @@ pub async fn capture(
         .args(&args[1..])
         .env_clear()
         .envs(env.base.iter().filter(|(key, _)| {
-            key.as_str() != "CLAUDE_CONFIG_DIR"
+            let key = key.to_ascii_uppercase();
+            (preserve_account || key != "CLAUDE_CONFIG_DIR")
                 && !terminal_process::PRIVATE_ENV_KEYS.contains(&key.as_str())
         }))
         .stdin(Stdio::null())

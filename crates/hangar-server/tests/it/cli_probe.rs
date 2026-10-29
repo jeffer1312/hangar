@@ -11,7 +11,16 @@ async fn cli_probe_matches_python_and_shares_capture() {
     ))
     .unwrap();
     let quote = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
-    for case in fixture["cases"].as_array().unwrap() {
+    let whitespace: Value = serde_json::from_str(include_str!(
+        "../../../../backend/tests/fixtures/contract/engines/cli-probe-whitespace.json"
+    ))
+    .unwrap();
+    for case in fixture["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .chain(whitespace["cases"].as_array().unwrap())
+    {
         let home = tempfile::tempdir().unwrap();
         let env = AccountEnvironment::from_map(
             [
@@ -103,4 +112,79 @@ async fn cli_probe_non_executable_is_absent() {
         .into(),
     );
     assert_eq!(Probe::default().version_text(&env, "claude").await, None);
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn cli_probe_cache_isolates_environment_and_invalidates_all_contexts() {
+    use hangar_server::cli_probe::Probe;
+    use std::os::unix::fs::PermissionsExt;
+    let home = tempfile::tempdir().unwrap();
+    let script = home.path().join("claude");
+    std::fs::write(
+        &script,
+        r#"#!/bin/sh
+printf '%s' "$PROBE_VERSION"
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let make = |version: &str| {
+        AccountEnvironment::from_map(
+            [
+                ("HOME".into(), home.path().to_string_lossy().into_owned()),
+                ("PATH".into(), home.path().to_string_lossy().into_owned()),
+                ("PROBE_VERSION".into(), version.into()),
+            ]
+            .into(),
+        )
+    };
+    let probe = Probe::default();
+    for version in ["1.2.3", "4.5.6", "1.2.3"] {
+        assert_eq!(
+            probe
+                .version_text(&make(version), "claude")
+                .await
+                .as_deref(),
+            Some(version)
+        );
+    }
+    std::fs::write(&script, "#!/bin/sh\nprintf changed\n").unwrap();
+    probe.invalidate_cli("claude");
+    for version in ["1.2.3", "4.5.6"] {
+        assert_eq!(
+            probe
+                .version_text(&make(version), "claude")
+                .await
+                .as_deref(),
+            Some("changed")
+        );
+    }
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn cli_probe_account_capture_preserves_account_and_filters_private_keys() {
+    use hangar_server::command_capture::{capture, capture_with_account_env};
+    let env = AccountEnvironment::from_map(
+        [
+            ("CLAUDE_CONFIG_DIR".into(), "/fixture/account".into()),
+            ("CP_AUTH_TOKEN".into(), "synthetic-private-value".into()),
+        ]
+        .into(),
+    );
+    let args = vec![
+        "/bin/sh".into(),
+        "-c".into(),
+        "printf '%s|%s' \"$CLAUDE_CONFIG_DIR\" \"$CP_AUTH_TOKEN\"".into(),
+    ];
+    let budget = std::time::Duration::from_secs(2);
+    assert_eq!(
+        capture_with_account_env(args.clone(), env.clone(), budget)
+            .await
+            .unwrap()
+            .stdout,
+        "/fixture/account|"
+    );
+    assert_eq!(capture(args, env, budget).await.unwrap().stdout, "|");
 }
