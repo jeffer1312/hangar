@@ -382,7 +382,7 @@ mod tests {
         SessionSpec { version:SPEC_VERSION,key:"k".into(),name:"s".into(),cwd:"/w".into(),provider:AgentProvider::Claude,
             surface:Surface::Headless,account,account_source:AccountSource::Default,model:None,effort:None,service_tier:None,
             permission_mode:None,subagent_model:None,customizations:None,jev:false,read_only:false,worktree:None,creator:None,
-            created_at:1.0,conversation:None,name_auto:None,rename_suggestion:None,rename_dismissed:false }
+            created_at:1.0,conversation:None,name_auto:None,rename_suggestion:None,rename_weak_at:None,rename_dismissed:false }
     }
     fn catalog(paths:&[&str]) -> Value { Value::Array(paths.iter().map(|p|json!({"path":p,"label":p.trim_start_matches('/')})).collect()) }
     fn quota(path:&str,pct:f64) -> Value { json!({"provedor":"claude","id":format!("claude:{path}"),"label":path.trim_start_matches('/'),"estado":"lida","janelas":[{"pct":pct},{"pct":pct/2.0}]}) }

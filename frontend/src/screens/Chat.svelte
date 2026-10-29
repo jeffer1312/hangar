@@ -57,7 +57,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   import PairChatModal from '../components/PairChatModal.svelte';
   import LoopSheet from '../components/LoopSheet.svelte';
   import RenameSuggestionStrip from '../components/RenameSuggestionStrip.svelte';
-  import { requestRenameSuggestionOnce } from '@hangar/core';
+  import { requestRenameSuggestionOnce, type RenameSuggestionResult } from '@hangar/core';
   import DesktopSessionContext from '../components/DesktopSessionContext.svelte';
   import FileViewer from '../components/files/FileViewer.svelte';
   import { filesStores } from '../lib/filesStore.svelte';
@@ -1775,15 +1775,24 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
 
   // Faixa "Renomear para X?" só na vista celular: o desktop web não ganha recurso novo.
   const renameServer = $derived(desktop || nested || soLeituraPar ? undefined : listServers().find((s) => s.id === chatServerId));
-  let renameReturned = $state<string | null>(null);
+  let renameReturned = $state<RenameSuggestionResult | null>(null);
   let renameHidden = $state(false);
-  const renameSuggestion = $derived(renameHidden || !renameServer ? null : (sessaoAtual?.rename_suggestion || renameReturned));
+  const rowRenameSuggestion = $derived(sessaoAtual?.rename_suggestion ?? null);
+  const rowRenameWeak = $derived(sessaoAtual?.rename_weak === true);
+  const renameSuggestion = $derived(renameHidden || !renameServer ? null : (renameReturned?.suggestion || rowRenameSuggestion));
+  const renameWeak = $derived(renameReturned ? renameReturned.weak : rowRenameWeak);
+  // A linha que mudou depois do pedido é a sugestão mais nova.
+  $effect(() => {
+    void rowRenameSuggestion;
+    void rowRenameWeak;
+    renameReturned = null;
+  });
   $effect(() => {
     const server = renameServer;
     const row = sessaoAtual;
-    if (!server || !row || row.rename_suggestion) return;
-    const hasUserMessage = events.some((e) => e.kind === 'user_msg' && !e.id.startsWith('queued-'));
-    untrack(() => requestRenameSuggestionOnce(server, row, hasUserMessage))?.then((s) => { if (s) renameReturned = s; });
+    if (!server || !row || (row.rename_suggestion && !row.rename_weak)) return;
+    const userMessages = events.filter((e) => e.kind === 'user_msg' && !e.id.startsWith('queued-')).length;
+    untrack(() => requestRenameSuggestionOnce(server, row, userMessages))?.then((s) => { if (s) renameReturned = s; });
   });
   const contaPior = $derived.by(() => {
     const conta = sessaoAtual?.conta;
@@ -3482,9 +3491,10 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
     {#if !splitTab}
     <NavBar title={sessionName} subtitle={desktop ? null : serverLabel || null} conta={desktop ? null : contaChip} onContaTap={desktop ? undefined : () => (accountsOpen = true)} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} state={desktop ? currentState : undefined} stateLabel={codexWaitKey ? m.chat_codex_opening() : undefined} {status} onExpandUsage={() => (usageOpen = true)} limited={stateEvent?.limited ?? false} limitReset={stateEvent?.limit_reset ?? null} onOpenActivity={desktop && hasActivity ? () => (ctxPanel.aba = 'atividade') : undefined} {activityBadge} {activityRunning} onOpenTerminal={botaoTerminal ? abrirTerminalReal : undefined} terminalAlert={tuiOverlay && !mirrorOpen && !xtermOpen && !terminalPanelOpen} onOpenNavegador={desktop ? alternarNavegador : undefined} onOpenRun={desktop && !orqSession ? () => (runOpen = true) : undefined} {runRunning} onMenu={desktop ? undefined : () => (moreOpen = true)} onOpenAttachments={desktop ? () => (anexosOpen = true) : undefined} working={currentState === 'working'} providerLabel={providerBadge} onProviderTap={isCodex ? () => (limitsOpen = true) : undefined} loopLabel={loopChip?.label ?? null} loopColor={LOOP_TONE_COLOR[loopChip?.tone ?? 'muted']} onLoopTap={() => (loopSheetOpen = true)} />
     {#if renameSuggestion && renameServer}
-      <RenameSuggestionStrip server={renameServer} {sessionName} suggestion={renameSuggestion}
+      <RenameSuggestionStrip server={renameServer} {sessionName} suggestion={renameSuggestion} weak={renameWeak}
         onRenamed={(name) => { if (name !== sessionName) onNavigateToChat(name); }}
-        onDismissed={() => (renameHidden = true)} />
+        onDismissed={() => (renameHidden = true)}
+        onSuggested={(s) => (renameReturned = s)} />
     {/if}
     {/if}
   </div>

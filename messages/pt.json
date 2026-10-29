@@ -9441,6 +9441,8 @@
   "rename_suggest_title": "Renomear para {name}?",
   "rename_suggest_apply": "Renomear",
   "rename_suggest_dismiss": "Agora não",
+  "rename_suggest_weak": "Pouco contexto: outra sugestão na próxima mensagem",
+  "rename_suggest_again": "Outra",
   "news_tags_sample_session": "api-pagamentos",
   "news_tags_sample_session_other": "site-novo",
   "news_tags_sample_machine": "VPS",

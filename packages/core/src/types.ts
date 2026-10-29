@@ -63,6 +63,8 @@ export interface SessionInfo {
   git_cwd?: string | null;
   /** Nome sugerido para a sessão de nome genérico; some quando a pessoa renomeia ou diz "agora não". */
   rename_suggestion?: string | null;
+  /** A sugestão saiu com pouco contexto: o servidor gera outra na próxima mensagem da pessoa. */
+  rename_weak?: boolean;
   /** Servidores MCP criados por plugin (`$.tool.register`); a pele 'terminal' deixa as chamadas deles fora da dobra. */
   plugin_tool_servers?: string[] | null;
   // Linhas adicionadas/removidas no working tree vs HEAD (git diff --numstat, staged+unstaged;

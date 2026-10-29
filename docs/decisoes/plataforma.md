@@ -3595,3 +3595,16 @@ do motor e cobrava outra credencial. Catálogo vazio = sem sugestão, e a causa 
 trava compartilhada da conta enquanto roda. Erro do executor vira 204 e registro no diário
 (`rust.rename_suggestion`). O executor só roda a pedido do dono, por isso o gatilho é do cliente e
 não um trabalho de fundo.
+
+**Sugestão fraca se refaz (29/10/2026).** O modelo responde o nome e, na segunda linha, `boa` ou
+`fraca` (pedido vago ou curto demais). A fraca grava `rename_weak_at` (quantos pedidos a conversa
+tinha) e a linha da lista leva `rename_weak`; os clientes mostram "Pouco contexto: outra sugestão na
+próxima mensagem" e pedem de novo a cada mensagem da pessoa. O servidor só refaz quando a conversa
+tem mais pedidos que `rename_weak_at`, lendo o primeiro pedido e os três últimos, com o nome que não
+serviu. "Outra" (`?again=1`) refaz na hora em qualquer caso. Aceita ou recusada, nada mais muda. O
+gatilho é a mensagem da pessoa, nunca um prazo: sem mensagem nova não há contexto novo.
+
+**Conferência da vida pela mesma fonte (29/10/2026).** Depois do executor, a sessão é relida pela
+descoberta (`list.discover`), a mesma da leitura inicial. O retrato publicado reescreve a vida do
+Claude com terminal para `k:<chave>` enquanto a descoberta dá `t:<nascimento>`: comparar os dois
+descartava toda sugestão como `dictation_target_changed`, e a faixa nunca apareceu.

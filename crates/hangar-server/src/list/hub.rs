@@ -582,7 +582,7 @@ fn guest_rows<'a>(rows: impl IntoIterator<Item = &'a SessionRow>, guest: &Guest)
         if guest.invite { r.pair_task = None; }
         (r.pair_external, r.pair_externals, r.then_target) = (None, None, None);
         // Renomear pela sugestão é do dono.
-        r.rename_suggestion = None;
+        (r.rename_suggestion, r.rename_weak) = (None, false);
         r.guest_kind = guest.kind_of(&r.name).map(|k| match k { Kind::Share => "share", Kind::Pair => "pair" }.to_owned());
         r
     }).collect()
