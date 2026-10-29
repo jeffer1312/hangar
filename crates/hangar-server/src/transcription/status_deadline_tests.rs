@@ -99,7 +99,8 @@ async fn public_status_deadline_includes_waiting_for_shared_configuration() {
         .await
         .unwrap();
     });
-    let guard = state.transcription.snapshot.write().await;
+    let guard = state.transcription.snapshot.read().await;
+    assert!(state.transcription.snapshot.try_read().is_ok());
     let request = tokio::spawn(async move {
         reqwest::Client::new()
             .get(format!(
@@ -111,7 +112,10 @@ async fn public_status_deadline_includes_waiting_for_shared_configuration() {
             .unwrap()
     });
     tokio::time::timeout(Duration::from_secs(2), async {
-        while calls.load(Ordering::SeqCst) == 0 {
+        // O escritor na fila comprova que o corpo HTTP já foi consumido; contar a chamada não comprova.
+        while calls.load(Ordering::SeqCst) == 0
+            || state.transcription.snapshot.try_read().is_ok()
+        {
             tokio::task::yield_now().await;
         }
     })
