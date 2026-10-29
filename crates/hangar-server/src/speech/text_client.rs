@@ -111,7 +111,9 @@ async fn read_response(mut response: reqwest::Response) -> Result<Vec<u8>, Speec
 }
 
 fn parse_content(bytes: &[u8]) -> Result<String, SpeechError> {
-    let value: Value = serde_json::from_str(&String::from_utf8_lossy(bytes))
+    let text = std::str::from_utf8(bytes)
+        .map_err(|_| SpeechError::new(502, "A resposta do provedor não é UTF-8 válido."))?;
+    let value: Value = serde_json::from_str(text)
         .map_err(|_| SpeechError::new(502, "A resposta do provedor não é um JSON válido."))?;
     let text = value["choices"]
         .get(0)
@@ -445,15 +447,20 @@ mod tests {
 
     #[tokio::test]
     async fn a_provider_error_never_returns_the_credential_it_echoed() {
-        let server = fake(vec![(401, json!({"error":"A chave fixture-key foi recusada."}))]).await;
-        let error = chat(&server.config, "s", "p", 0.0, Duration::from_secs(2)).await.unwrap_err();
+        let server = fake(vec![(
+            401,
+            json!({"error":"A chave fixture-key foi recusada."}),
+        )])
+        .await;
+        let error = chat(&server.config, "s", "p", 0.0, Duration::from_secs(2))
+            .await
+            .unwrap_err();
         assert_eq!(error.status, 502);
         assert!(!error.detail.contains("fixture-key"));
         assert!(error.detail.contains("[segredo removido]"));
     }
 
-    #[tokio::test]
-    async fn an_unreadable_http_error_body_keeps_the_upstream_status() {
+    async fn raw_response(response: Vec<u8>) -> (SpeechConfig, tokio::task::JoinHandle<()>) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -480,7 +487,7 @@ mod tests {
                     }
                 }
             }
-            stream.write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 100\r\nConnection: close\r\n\r\npartial").await.unwrap();
+            stream.write_all(&response).await.unwrap();
             stream.shutdown().await.unwrap();
         });
         let config = SpeechConfig {
@@ -488,12 +495,37 @@ mod tests {
             home: Default::default(),
             cache_dir: Default::default(),
         };
+        (config, task)
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_http_error_body_keeps_the_upstream_status() {
+        let (config,task)=raw_response(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 100\r\nConnection: close\r\n\r\npartial".to_vec()).await;
         let error = chat(&config, "s", "p", 0.0, Duration::from_secs(2))
             .await
             .unwrap_err();
         task.await.unwrap();
         assert_eq!(error.status, 502);
         assert_eq!(error.detail, "provedor 503: (sem corpo)");
+    }
+
+    #[tokio::test]
+    async fn invalid_utf8_in_a_successful_provider_response_is_a_visible_error() {
+        let body = b"{\"choices\":[{\"message\":{\"content\":\"invalid \xff\"}}]}";
+        let mut response=format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",body.len()).into_bytes();
+        response.extend_from_slice(body);
+        let (config, task) = raw_response(response).await;
+        let error = chat(&config, "s", "p", 0.0, Duration::from_secs(2))
+            .await
+            .unwrap_err();
+        task.await.unwrap();
+        assert_eq!(error.status, 502);
+        assert_eq!(error.detail, "A resposta do provedor não é UTF-8 válido.");
+        let valid = json!({"choices":[{"message":{"content":"caractere legítimo �"}}]}).to_string();
+        assert_eq!(
+            parse_content(valid.as_bytes()).unwrap(),
+            "caractere legítimo �"
+        );
     }
 
     proptest::proptest! {
