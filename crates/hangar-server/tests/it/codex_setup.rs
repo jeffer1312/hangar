@@ -215,3 +215,65 @@ done
         "model = \"antigo\"\n"
     );
 }
+
+#[tokio::test]
+#[cfg(unix)]
+async fn codex_native_uses_separate_cwd_and_retries_directory_cleanup() {
+    use hangar_server::{accounts::environment::AccountEnvironment, codex_setup::native::Native};
+    use std::os::unix::fs::PermissionsExt;
+    let expected: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../backend/tests/fixtures/contract/codex-integration/native-cleanup.json"
+    ))
+    .unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let bin = root.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let script = bin.join("codex");
+    let observed = root.path().join("observed");
+    std::fs::write(
+        &script,
+        r##"#!/bin/sh
+while IFS= read -r message; do
+ id=$(printf '%s' "$message" | /usr/bin/sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+ case "$message" in
+ *'"method":"initialize"'*)
+   printf '%s' "$PWD" > "$FIXTURE_OBSERVED"
+   printf 'fixture' > ./owned
+   printf '{"id":%s,"result":{}}\n' "$id";;
+ esac
+done
+"##,
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let env = AccountEnvironment::from_map(
+        [
+            ("HOME".into(), root.path().to_string_lossy().into_owned()),
+            ("PATH".into(), bin.to_string_lossy().into_owned()),
+            (
+                "FIXTURE_OBSERVED".into(),
+                observed.to_string_lossy().into_owned(),
+            ),
+        ]
+        .into(),
+    );
+    let mut native = Native::open(&env, root.path(), &root.path().join(".codex"))
+        .await
+        .unwrap();
+    let cwd = std::path::PathBuf::from(std::fs::read_to_string(observed).unwrap());
+    std::fs::set_permissions(&cwd, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let first_error = native.close().await.is_err();
+    let retained = cwd.exists();
+    std::fs::set_permissions(&cwd, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let retry = native.close().await;
+    let actual = json!({
+        "cwd_differs_from_home":cwd != root.path(),
+        "first_close_error":first_error,
+        "directory_retained_after_error":retained,
+        "directory_removed_after_retry":!cwd.exists(),
+    });
+    let mut expected = expected["result"].clone();
+    expected.as_object_mut().unwrap().remove("cleanup_calls");
+    assert_eq!(actual, expected);
+    assert!(retry.is_ok());
+}

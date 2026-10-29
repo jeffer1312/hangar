@@ -2,12 +2,17 @@
 use crate::accounts::{AccountService, environment::AccountEnvironment};
 use hangar_codex::client::{Client, Incoming};
 use serde_json::{Value, json};
-use std::{path::Path, process::Stdio, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    process::Stdio,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 pub struct Native {
     client: Client,
-    close: Option<tokio::sync::oneshot::Sender<Option<tempfile::TempDir>>>,
-    directory: Option<tempfile::TempDir>,
+    close: Option<tokio::sync::oneshot::Sender<()>>,
+    pending_directories: Arc<Mutex<Vec<PathBuf>>>,
     cleanup: Option<tokio::task::JoinHandle<Result<(), String>>>,
     pub events: tokio::sync::mpsc::UnboundedReceiver<(String, Value)>,
 }
@@ -28,6 +33,10 @@ impl Native {
         codex: &Path,
         directory: Option<tempfile::TempDir>,
     ) -> Result<Self, String> {
+        let working_directory = tempfile::Builder::new()
+            .prefix("hangar-codex-admin-")
+            .tempdir()
+            .map_err(|_| "não foi possível criar o diretório administrativo do Codex")?;
         let service = AccountService::new(env.clone());
         let mut command = service.codex_command().ok_or("Codex não encontrado")?;
         command
@@ -37,7 +46,7 @@ impl Native {
             .env("HOME", home)
             .env("USERPROFILE", home)
             .env("CODEX_HOME", codex)
-            .current_dir(home)
+            .current_dir(working_directory.path())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -80,29 +89,24 @@ impl Native {
                 }
             }
         });
+        let mut directories = vec![working_directory.keep()];
+        if let Some(directory) = directory {
+            directories.push(directory.keep());
+        }
+        let pending_directories = Arc::new(Mutex::new(directories));
+        let pending = pending_directories.clone();
         let (close, done) = tokio::sync::oneshot::channel();
         let cleanup = tokio::spawn(async move {
-            let directory = done.await.ok().flatten();
+            let _ = done.await;
             drain.abort();
             crate::terminal_process::finish(&mut tree).await;
             let _ = child.wait().await;
-            let result = directory
-                .map_or(Ok(()), tempfile::TempDir::close)
-                .map_err(|error| {
-                    format!(
-                        "não foi possível remover o diretório temporário do Codex: {:?}",
-                        error.kind()
-                    )
-                });
-            if let Err(error) = &result {
-                tracing::warn!(%error, "limpeza do Codex incompleta");
-            }
-            result
+            remove_directories(pending).await
         });
         let mut native = Self {
             client,
             close: Some(close),
-            directory,
+            pending_directories,
             cleanup: Some(cleanup),
             events: receive,
         };
@@ -142,18 +146,65 @@ impl Native {
     }
     pub async fn close(&mut self) -> Result<(), String> {
         if let Some(close) = self.close.take() {
-            let _ = close.send(self.directory.take());
+            let _ = close.send(());
         }
-        if let Some(task) = self.cleanup.take() {
-            task.await.map_err(|_| "limpeza do Codex interrompida")??;
+        if self.cleanup.is_none()
+            && !self
+                .pending_directories
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_empty()
+        {
+            self.cleanup = Some(tokio::spawn(remove_directories(
+                self.pending_directories.clone(),
+            )));
+        }
+        if let Some(task) = self.cleanup.as_mut() {
+            // Cancelar o aguardante não perde a tarefa nem os diretórios que ainda precisam sair.
+            let result = task.await.map_err(|_| "limpeza do Codex interrompida");
+            self.cleanup = None;
+            result??;
         }
         Ok(())
     }
 }
+async fn remove_directories(pending: Arc<Mutex<Vec<PathBuf>>>) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || remove_pending(&pending))
+        .await
+        .map_err(|_| "limpeza do Codex interrompida")?
+}
+fn remove_pending(pending: &Mutex<Vec<PathBuf>>) -> Result<(), String> {
+    let mut paths = pending.lock().unwrap_or_else(|e| e.into_inner());
+    while let Some(path) = paths.first() {
+        if let Err(error) = std::fs::remove_dir_all(path) {
+            let error = format!(
+                "não foi possível remover o diretório temporário do Codex: {:?}",
+                error.kind()
+            );
+            tracing::warn!(%error, "limpeza do Codex incompleta");
+            return Err(error);
+        }
+        paths.remove(0);
+    }
+    Ok(())
+}
 impl Drop for Native {
     fn drop(&mut self) {
         if let Some(close) = self.close.take() {
-            let _ = close.send(self.directory.take());
+            let _ = close.send(());
+        } else if self.cleanup.is_none()
+            && !self
+                .pending_directories
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_empty()
+        {
+            let pending = self.pending_directories.clone();
+            let _ = std::thread::Builder::new()
+                .name("codex-cleanup".into())
+                .spawn(move || {
+                    let _ = remove_pending(&pending);
+                });
         }
     }
 }
