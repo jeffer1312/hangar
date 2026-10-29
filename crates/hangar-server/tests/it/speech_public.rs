@@ -25,6 +25,7 @@ struct Server {
     config: std::path::PathBuf,
     base: String,
     task: tokio::task::JoinHandle<()>,
+    state: Arc<AppState>,
 }
 
 impl Drop for Server {
@@ -87,10 +88,12 @@ impl Server {
             procs:Arc::new(SystemProcs::default()), dirs:parse_dirs(&json!({"home":home,"claude":claude,"codex_home":home.join(".codex"),
                 "pi_sessions":home.join(".pi/agent/sessions"),"omp_config":home.join(".omp"),"omp_agent":home.join(".omp/agent"),"kimi_home":home.join(".kimi-code")}).to_string()) },
             FactsClient::new(upstream,"fixture-private".into())));
+        let state = Arc::new(state);
+        let serving = state.clone();
         let task = tokio::spawn(async move {
             axum::serve(
                 listener,
-                router(Arc::new(state)).into_make_service_with_connect_info::<SocketAddr>(),
+                router(serving).into_make_service_with_connect_info::<SocketAddr>(),
             )
             .await
             .unwrap();
@@ -100,12 +103,77 @@ impl Server {
             config: claude.join("runtime-config.json"),
             base: format!("http://{address}"),
             task,
+            state,
         }
     }
 
     fn configure(&self, value: &Value) {
         std::fs::write(&self.config, value.to_string()).unwrap();
     }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn speech_public_group_suggestion_keeps_native_sessions_with_and_without_transfers() {
+    use axum::{Router, routing::post};
+    let server = Server::start().await;
+    crate::list_support::sessions(server._root.path(), 2);
+    let prompts = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let capture = prompts.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let model = tokio::spawn(async move {
+        axum::serve(listener,Router::new().route("/chat/completions",post(move |axum::Json(body):axum::Json<Value>| {
+            let capture=capture.clone();async move {
+                capture.lock().unwrap().push(body["messages"][1]["content"].as_str().unwrap().to_owned());
+                axum::Json(json!({"choices":[{"message":{"content":"Conferir a tarefa do grupo"}}]}))
+            }
+        }))).await.unwrap();
+    });
+    server.configure(&json!({"llm_base_url":format!("http://{address}"),"llm_api_key":"fixture","dictation_organization_mode":"none"}));
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let response = client
+        .post(format!("{}/api/pair/task-suggestion", server.base))
+        .bearer_auth("fixture-owner")
+        .json(&json!({"sessions":["s0","s1","s0","absent"]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200, "{}", response.text().await.unwrap());
+    let first = prompts.lock().unwrap()[0].clone();
+    assert_eq!(first.matches("## Sessão s0").count(), 1);
+    assert_eq!(first.matches("## Sessão s1").count(), 1);
+    assert!(first.contains("linha 0"));
+    let home = server._root.path().join("home");
+    let source = home.join("recovering.jsonl");
+    let raw=r#"{"type":"user","uuid":"recovery","timestamp":"2026-10-29T12:00:00Z","message":{"role":"user","content":"Continuar a recuperação."}}"#.to_owned()+"\n";
+    std::fs::write(&source, &raw).unwrap();
+    let digest = ring::digest::digest(&ring::digest::SHA256, raw.as_bytes())
+        .as_ref()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>();
+    let transfers = home.join(".hangar/conversation-transfers");
+    std::fs::create_dir_all(&transfers).unwrap();
+    std::fs::write(transfers.join("a563a017-af37-42e8-a8e5-2bd837584f8e.json"),json!({
+        "id":"a563a017-af37-42e8-a8e5-2bd837584f8e","name":"recovering","source_life":"k:old","phase":"source_stopped",
+        "source":{"path":source,"provider":"claude","digest":digest,"selected_uuids":["recovery"]},
+        "origin_meta":{"provider":"claude","cwd":home,"jsonl":source,"headless":false},"destination_meta":null,"boundary":null,"error_code":null
+    }).to_string()).unwrap();
+    server.state.list.invalidate();
+    let response = client
+        .post(format!("{}/api/pair/task-suggestion", server.base))
+        .bearer_auth("fixture-owner")
+        .json(&json!({"sessions":["s0","recovering"]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200, "{}", response.text().await.unwrap());
+    let second = prompts.lock().unwrap()[1].clone();
+    assert!(second.contains("## Sessão s0"));
+    assert!(second.contains("## Sessão recovering"));
+    assert!(second.contains("Continuar a recuperação."));
+    model.abort();
 }
 
 fn fixture() -> Value {

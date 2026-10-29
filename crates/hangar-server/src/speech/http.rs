@@ -560,6 +560,73 @@ fn summarize(events: &[ChatEvent]) -> String {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn voices_and_balance_succeed_through_the_public_rust_handler() {
+        use crate::{
+            accounts::{AccountService, environment::AccountEnvironment},
+            auth::TrustedHosts,
+            config::Config,
+        };
+        use axum::{Router, routing::get};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let upstream = tokio::spawn(async move {
+            axum::serve(listener,Router::new().route("/voices",get(||async { axum::Json(json!({"voices":[{"voice_id":"voice-fixture","name":"Voz de prova"}]})) }))
+                .route("/user/subscription",get(||async { axum::Json(json!({"character_count":321,"character_limit":1200})) }))).await.unwrap();
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let home = directory.path();
+        std::fs::create_dir_all(home.join(".claude")).unwrap();
+        std::fs::write(
+            home.join(".claude/runtime-config.json"),
+            r#"{"elevenlabs_api_key":"fixture-key"}"#,
+        )
+        .unwrap();
+        let mut state = AppState::new(Config {
+            listen: "127.0.0.1:0".parse().unwrap(),
+            upstream: "127.0.0.1:1".parse().unwrap(),
+            internal_secret: "private".into(),
+            auth_token: "owner".into(),
+            log_path: None,
+            trusted: TrustedHosts::parse("127.0.0.1"),
+        });
+        state.accounts = AccountService::new(AccountEnvironment::from_map(
+            std::collections::BTreeMap::from([
+                ("HOME".into(), home.to_string_lossy().into_owned()),
+                ("USERPROFILE".into(), home.to_string_lossy().into_owned()),
+            ]),
+        ));
+        state.speech = Arc::new(super::super::Service {
+            tts: super::super::tts::Service::at(format!("http://{address}")),
+            ..Default::default()
+        });
+        let state = Arc::new(state);
+        for (path, expected) in [
+            (
+                "/api/tts/voices",
+                json!({"voices":[{"id":"voice-fixture","nome":"Voz de prova"}]}),
+            ),
+            ("/api/tts/saldo", json!({"usados":321,"limite":1200})),
+        ] {
+            let request = Request::builder()
+                .uri(path)
+                .header("authorization", "Bearer owner")
+                .body(Body::empty())
+                .unwrap();
+            let response = public(state.clone(), "127.0.0.1:34567".parse().unwrap(), request).await;
+            assert_eq!(response.status(), StatusCode::OK, "{path}");
+            assert_eq!(
+                serde_json::from_slice::<Value>(
+                    &to_bytes(response.into_body(), 4096).await.unwrap()
+                )
+                .unwrap(),
+                expected,
+                "{path}"
+            );
+        }
+        upstream.abort();
+    }
+
     fn expand_paths(value: &Value, home: &Path) -> Value {
         match value {
             Value::String(value) => {
