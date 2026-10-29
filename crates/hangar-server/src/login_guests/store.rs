@@ -99,11 +99,34 @@ pub struct Guest {
     pub sees_owner: bool,
     pub owner_sees: bool,
 }
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct FileStamp {
+    modified: std::time::SystemTime,
+    size: u64,
+    identity: Option<(u64, u64)>,
+}
+fn file_stamp(path: &Path) -> Option<FileStamp> {
+    let metadata = std::fs::metadata(path).ok()?;
+    #[cfg(unix)]
+    let identity = {
+        use std::os::unix::fs::MetadataExt;
+        Some((metadata.dev(), metadata.ino()))
+    };
+    #[cfg(not(unix))]
+    let identity = None;
+    Some(FileStamp {
+        modified: metadata.modified().ok()?,
+        size: metadata.len(),
+        identity,
+    })
+}
+
 #[derive(Debug)]
 pub struct Store {
     pub path: PathBuf,
     lock: Mutex<()>,
     last: Mutex<Option<Value>>,
+    loaded: Mutex<Option<(FileStamp, Value)>>,
 }
 impl Store {
     pub fn new(path: PathBuf) -> Self {
@@ -111,9 +134,21 @@ impl Store {
             path,
             lock: Mutex::new(()),
             last: Mutex::new(None),
+            loaded: Mutex::new(None),
         }
     }
     fn load(&self) -> Result<Value> {
+        let stamp = file_stamp(&self.path);
+        if let Some(stamp) = &stamp {
+            let loaded = self.loaded.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some((previous, doc)) = loaded.as_ref().filter(|(previous, _)| previous == stamp)
+            {
+                let _ = previous;
+                return Ok(doc.clone());
+            }
+        }
+        // Uma falha transitória precisa tentar a fonte na próxima consulta, sem cache de erro.
+        *self.loaded.lock().unwrap_or_else(|e| e.into_inner()) = None;
         let doc = read(&self.path)
             .map_err(Failure::io)?
             .unwrap_or_else(|| json!({"guests":[],"sessions":{}}));
@@ -141,7 +176,7 @@ impl Store {
                     .contains(&k.as_str())
                 }) && ["id", "name", "root", "token_hash"]
                     .iter()
-                    .all(|k| g.contains_key(*k))
+                    .all(|k| g.get(*k).is_some_and(Value::is_string))
             });
             if !valid {
                 return Err(Failure::io(io::Error::other("convidado inválido")));
@@ -177,6 +212,10 @@ impl Store {
             _ => return Err(Failure::io(io::Error::other("sessões inválidas"))),
         };
         let doc = json!({"guests":normalized,"sessions":sessions});
+        if stamp == file_stamp(&self.path) {
+            *self.loaded.lock().unwrap_or_else(|e| e.into_inner()) =
+                stamp.map(|stamp| (stamp, doc.clone()));
+        }
         *self.last.lock().unwrap_or_else(|e| e.into_inner()) = Some(doc.clone());
         Ok(doc)
     }
@@ -226,6 +265,8 @@ impl Store {
         let mut state = self.load()?;
         let result = f(&mut state)?;
         write(&self.path, &state).map_err(Failure::io)?;
+        *self.loaded.lock().unwrap_or_else(|e| e.into_inner()) =
+            file_stamp(&self.path).map(|stamp| (stamp, state.clone()));
         *self.last.lock().unwrap_or_else(|e| e.into_inner()) = Some(state);
         Ok(result)
     }
@@ -284,12 +325,25 @@ impl Store {
         match (entry["life"].as_str(), life) {
             (Some(a), Some(b)) if a != b => None,
             (None, Some(life)) => {
-                let _ = self.mutate(|fresh| {
+                let saved = self.mutate(|fresh| {
                     if fresh["sessions"].get(name) == Some(entry) {
                         fresh["sessions"][name]["life"] = json!(life);
                     }
                     Ok(())
                 });
+                if saved.is_err() {
+                    // O nome não pode adotar outra vida só porque o disco recusou a primeira.
+                    let mut loaded = self.loaded.lock().unwrap_or_else(|e| e.into_inner());
+                    if let Some((stamp, current)) = loaded.as_mut().filter(|(stamp, current)| {
+                        Some(stamp.clone()) == file_stamp(&self.path)
+                            && current["sessions"].get(name) == Some(entry)
+                    }) {
+                        let _ = stamp;
+                        current["sessions"][name]["life"] = json!(life);
+                        *self.last.lock().unwrap_or_else(|e| e.into_inner()) =
+                            Some(current.clone());
+                    }
+                }
                 Some(g)
             }
             _ => Some(g),

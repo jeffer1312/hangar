@@ -197,8 +197,18 @@ impl Sync {
                 || ["user", "salt", "verifier_salt", "auth_verifier"]
                     .iter()
                     .any(|k| v[k].as_str().is_none_or(str::is_empty))
-                || v["rev"].as_u64().is_none()
+                || !v["rev"].is_number()
+                || !v["rev"].to_string().bytes().all(|b| b.is_ascii_digit())
                 || v.get("enc_blob").is_none()
+            {
+                return Err(Failure::code(
+                    500,
+                    "sync_vault_unreadable",
+                    "cofre ilegível",
+                ));
+            }
+            if !v["enc_blob"].is_null()
+                && super::schema::validate("SetupBlob", &v["enc_blob"]).is_err()
             {
                 return Err(Failure::code(
                     500,

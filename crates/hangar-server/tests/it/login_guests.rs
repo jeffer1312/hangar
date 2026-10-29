@@ -390,3 +390,97 @@ mod arbitrary_inputs {
         }
     }
 }
+
+#[tokio::test]
+async fn login_guests_setup_preserves_vault_and_changes_enabled_state() {
+    use hangar_server::login_guests::{Service,Settings};
+    let cases:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/setup.json")).unwrap();
+    for row in cases["rows"].as_array().unwrap() {
+        let home=tempfile::tempdir().unwrap();
+        for (key,file) in [("vault","vault.json"),("config","config.json")] {
+            if let Some(raw)=row["initial"][key].as_str(){std::fs::write(home.path().join(file),raw).unwrap();}
+        }
+        let mut service=Service::new(Settings{guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),runtime_config:home.path().join("config.json"),sync_enabled:false,bootstrap:String::new(),secret:b"fixture-secret".to_vec(),secure:false,rate_max:10,rate_window:300});
+        service.entropy=|n|vec![b'x';n];service.now=||2000000000;let service=Arc::new(service);
+        let request=axum::http::Request::builder().method(row["method"].as_str().unwrap()).uri(row["path"].as_str().unwrap()).body(axum::body::Body::from(row["body"].to_string())).unwrap();
+        let response=service.respond(row["owner"].as_bool().unwrap(),"127.0.0.1".into(),false,request).await;
+        assert_eq!(response.status().as_u16(),row["status"].as_u64().unwrap() as u16,"GUE-053/054/057/058 {}",row["name"]);
+        assert_eq!(response.headers().get("set-cookie").map(|v|v.to_str().unwrap()),row["set_cookie"].as_str(),"GUE-057 cookie");
+        let body=axum::body::to_bytes(response.into_body(),1024*1024).await.unwrap();
+        let actual:Value=serde_json::from_slice(&body).unwrap();
+        if row["status"]==500 {
+            // D03: conserva status/efeitos; falha antes opaca recebe código sem dado sensível.
+            assert_eq!(actual,serde_json::json!({"detail":{"code":"sync_vault_unreadable","params":{},"msg":"cofre ilegível"}}));
+        }else{assert_eq!(actual,row["response"],"GUE-054 resposta {}",row["name"]);}
+        for (key,file) in [("vault","vault.json"),("config","config.json")] {
+            let actual=std::fs::read_to_string(home.path().join(file)).ok();
+            let expected=row["after"][key].as_str();
+            match (actual.as_deref(),expected) {
+                (Some(a),Some(b))=>match (serde_json::from_str::<Value>(a),serde_json::from_str::<Value>(b)) {
+                    (Ok(a),Ok(b))=>assert_eq!(a,b,"GUE-054/058 disco {} {key}",row["name"]),
+                    _=>assert_eq!(a,b,"GUE-054 inválido preservado"),
+                },
+                _=>assert_eq!(actual.as_deref(),expected,"GUE-054 existência {} {key}",row["name"]),
+            }
+        }
+    }
+}
+
+#[test]
+fn login_guests_store_preserves_session_life_and_failed_adoption() {
+    use hangar_server::login_guests::store::Store;
+    let home=tempfile::tempdir().unwrap();
+    let fixture:Value=serde_json::from_str(&include_str!("../../../../backend/tests/fixtures/contract/guests/store.json").replace("⟦ROOT⟧",home.path().to_str().unwrap())).unwrap();
+    for row in fixture["rows"].as_array().unwrap() {
+        let path=home.path().join("guests.json");
+        std::fs::write(&path,row["before"].to_string()).unwrap();
+        let store=Store::new(path.clone());
+        let owner=store.owner("session",row["life"].as_str(),true).map(|g|g.id);
+        assert_eq!(serde_json::json!(owner),row["owner"],"GUE-018/019/022 {}",row["name"]);
+        assert_eq!(serde_json::from_slice::<Value>(&std::fs::read(path).unwrap()).unwrap(),row["disk"],"GUE-022 disco {}",row["name"]);
+    }
+    let row=&fixture["failed_adoption"];
+    let path=home.path().join("guests.json");std::fs::write(&path,row["before"].to_string()).unwrap();
+    let lock=home.path().join("guests.lock");let _=std::fs::remove_file(&lock);std::fs::create_dir(&lock).unwrap();
+    let store=Store::new(path.clone());
+    assert_eq!(serde_json::json!(store.owner("session",Some("k:first"),true).map(|g|g.id)),row["first"],"GUE-022: leitura sobrevive falha de gravação");
+    assert_eq!(serde_json::json!(store.owner("session",Some("k:second"),true).map(|g|g.id)),row["second"],"GUE-022: vida adotada fica em memória");
+    assert_eq!(serde_json::from_slice::<Value>(&std::fs::read(path).unwrap()).unwrap(),row["disk"],"GUE-022: disco intacto após falha");
+}
+
+#[tokio::test]
+async fn login_guests_rejects_structural_identity_types_without_overwriting() {
+    use hangar_server::login_guests::{Service,Settings};
+    let home=tempfile::tempdir().unwrap();
+    let cases:Value=serde_json::from_str(&include_str!("../../../../backend/tests/fixtures/contract/guests/identity-types.json").replace("⟦ROOT⟧",home.path().to_str().unwrap())).unwrap();
+    for row in cases["rows"].as_array().unwrap() {
+        let path=home.path().join("guests.json");std::fs::write(&path,row["initial"].to_string()).unwrap();
+        let service=Arc::new(Service::new(Settings{guests:path.clone(),vault:home.path().join("vault.json"),runtime_config:home.path().join("config.json"),sync_enabled:false,bootstrap:String::new(),secret:vec![1],secure:false,rate_max:10,rate_window:300}));
+        for (owner,route,method,body,status) in [(false,"/api/me","GET",Value::Null,401),(true,"/api/guests","POST",serde_json::json!({"root":home.path(),"name":"Nova"}),500)] {
+            let request=axum::http::Request::builder().method(method).uri(route).header("authorization","Bearer guest-token").body(axum::body::Body::from(body.to_string())).unwrap();
+            let response=service.respond(owner,"127.0.0.1".into(),false,request).await;
+            // D03/GUE-067: só os quatro campos estruturais deixam de aceitar tipos arbitrários.
+            assert_eq!(response.status().as_u16(),status,"GUE-067 {} {} {route}",row["field"],row["value"]);
+        }
+        assert_eq!(serde_json::from_slice::<Value>(&std::fs::read(&path).unwrap()).unwrap(),row["initial"],"GUE-013/067: arquivo preservado");
+    }
+}
+
+#[tokio::test]
+async fn login_guests_public_credentials_match_python_precedence() {
+    use hangar_server::login_guests::{Service,Settings};
+    let home=tempfile::tempdir().unwrap();
+    let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();
+    let mut state=AppState::new(Config{listen:address,upstream:crate::refused_address(),internal_secret:"fixture".into(),auth_token:"owner".into(),log_path:None,trusted:TrustedHosts::parse("127.0.0.1")});
+    let service=Service::new(Settings{guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),runtime_config:home.path().join("config.json"),sync_enabled:false,bootstrap:String::new(),secret:vec![1],secure:false,rate_max:10,rate_window:300});
+    service.store.create("Ana",home.path().to_str().unwrap(),false,true,"fixture".into(),"guest-token".into()).unwrap();state.login_guests=Arc::new(service);
+    let task=tokio::spawn(async move{axum::serve(listener,hangar_server::routes::router(Arc::new(state)).into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap()});
+    let cases:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/credentials.json")).unwrap();
+    for (index,row) in cases["rows"].as_array().unwrap().iter().enumerate() {
+        let mut request=reqwest::Client::new().request(row["method"].as_str().unwrap().parse().unwrap(),format!("http://{address}{}",row["path"].as_str().unwrap())).header("x-forwarded-proto",row["scheme"].as_str().unwrap());
+        for (key,value) in row["headers"].as_object().unwrap(){request=request.header(key,value.as_str().unwrap());}
+        let response=request.body("{}").send().await.unwrap();assert_eq!(response.status().as_u16(),row["status"].as_u64().unwrap() as u16,"GUE-029/064 credencial {index}");
+        assert_eq!(response.json::<Value>().await.unwrap(),row["response"],"GUE-029/064 resposta {index}");
+    }
+    task.abort();
+}

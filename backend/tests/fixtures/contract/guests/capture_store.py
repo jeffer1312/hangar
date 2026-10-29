@@ -32,10 +32,11 @@ with tempfile.TemporaryDirectory() as scratch:
     def record(label, life):
         store._life_cache.clear()
         with patch('app.guest_users.session_life', lambda _: life):
+            before = json.loads(store._path_override.read_text())
             owner = store.owner_of('session')
             row = {'name':label, 'life':life, 'owner':owner.id if owner else None,
                    'visible':[store.visible_to(g, 'session') for g in [None, *guests]],
-                   'disk':json.loads(store._path_override.read_text())}
+                   'before':before, 'disk':json.loads(store._path_override.read_text())}
             rows.append(row)
     with patch('app.guest_users.session_life', lambda _: 'k:first'):
         store.claim('session', guests[0].id)
@@ -51,9 +52,20 @@ with tempfile.TemporaryDirectory() as scratch:
     record('adopt_unknown_life', 't:123')
     store.delete(guests[1].id)
     record('deleted_owner', 't:123')
+    adoption = initial | {'sessions':{'session':{'guest':guests[0].id,'life':None}}}
+    store._path_override.write_text(json.dumps(adoption)); store._reset()
+    with patch('app.guest_users._save', side_effect=OSError('fixture failure')):
+        store._life_cache.clear()
+        with patch('app.guest_users.session_life',lambda _: 'k:first'):
+            first = store.owner_of('session')
+        store._life_cache.clear()
+        with patch('app.guest_users.session_life',lambda _: 'k:second'):
+            second = store.owner_of('session')
+    failed_adoption = {'before':adoption,'first':first.id if first else None,
+                       'second':second.id if second else None,'disk':json.loads(store._path_override.read_text())}
     result = {'source_commit':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),
               'command':'cd backend && uv run python tests/fixtures/contract/guests/capture_store.py',
-              'initial':initial, 'matrix_disk':matrix_disk, 'list_matrix':matrix, 'rows':rows}
+              'failed_adoption':failed_adoption, 'initial':initial, 'matrix_disk':matrix_disk, 'list_matrix':matrix, 'rows':rows}
     raw = json.dumps(result, ensure_ascii=False, indent=2).replace(scratch, '⟦ROOT⟧')
     (HERE / 'store.json').write_text(raw + '\n', encoding='utf-8')
     print(f'{len(rows)} estados de propriedade Python capturados')

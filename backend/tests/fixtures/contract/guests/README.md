@@ -30,3 +30,31 @@ captura; o resultado esperado não é produzido pelo Rust.
 
 Esta captura inicial não fecha o inventário. Concorrência, falhas de disco, cache, vida de sessão,
 SSE, WebSocket, raiz de arquivos, instalação e Windows exigem provas próprias.
+
+As capturas adicionais executam o Python isolado pelo comando registrado em cada JSON:
+
+| Arquivo | Entradas e comparação |
+| --- | --- |
+| `validation.json` | 98 entradas de sete modelos; 90 erros comparados integralmente, inclusive ordem e localização dos campos |
+| `revision.json` | Oito gravações do cofre, incluindo inteiros acima de 64 bits e coerções; resposta e arquivo |
+| `fs.json` | Sete consultas de raízes/pastas, incluindo escape e symlink; status e corpo |
+| `storage.json` | Nove arquivos legados; padrões, IDs repetidos, pares de sessão e recusa de corrupção |
+| `store.json` | Sete estados de vida, matriz de três observadores e falha de adoção persistida; propriedade e arquivo |
+| `setup.json` | 17 estados de ativação/desativação; status, corpo, cookie e arquivos |
+| `credentials.json` | 13 combinações de Bearer, query e cookies HTTP/HTTPS |
+| `identity-types.json` | 24 combinações de campo estrutural e tipo, com leitura autenticada e tentativa de escrita |
+
+Diferenças deliberadas autorizadas para esta migração:
+
+- Falhas de leitura do cofre que retornavam `500 Internal Server Error` passam a retornar
+  `500` com `detail.code=sync_vault_unreadable`, sem conteúdo do arquivo. Os testes conservam a
+  igualdade do status e dos efeitos; só esse corpo tem uma expectativa explícita diferente.
+- `id`, `name`, `root` e `token_hash` de `guests.json` precisam ser strings. `null`, inteiro,
+  número fracionário, booleano, lista e objeto invalidam o arquivo inteiro: autenticação recusada
+  e escrita impedida. O arquivo fica intacto. O último snapshot válido serve somente à
+  visibilidade da lista, nunca à autenticação nem à gravação. Os demais padrões históricos
+  continuam valendo.
+
+O teste do SSE usa a matriz Python e um multiplexador falso: verifica a lista publicada e o
+encerramento após revogação, sem sessões reais. As entradas HTTP e os arquivos também passam
+por `proptest`. Essas provas não substituem a conferência de Windows e do uso real.
