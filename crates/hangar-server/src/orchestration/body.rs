@@ -243,25 +243,51 @@ pub fn parse(bytes: &[u8]) -> Result<Value, (axum::http::StatusCode, Value)> {
     })?;
     let text = decoded.text.as_ref();
     if let Some(value) = super::codec::loads(text) { return Ok(value); }
+    let normalized = super::body_numbers::for_limit(text);
+    let text = if let Some((first, normalized)) = &normalized {
+        let reached = match serde_json::from_str::<Value>(normalized) {
+            Ok(_) => true,
+            Err(error) => {
+                let previous:usize=normalized.split_inclusive('\n').take(error.line().saturating_sub(1)).map(str::len).sum();
+                previous + error.column().saturating_sub(usize::from(!error.is_eof())) > *first
+            }
+        };
+        if reached {
+            return Err((StatusCode::BAD_REQUEST, json!({"detail":"There was an error parsing the body"})));
+        }
+        normalized.as_str()
+    } else { text };
     serde_json::from_str(text).map_err(|e|{
         let raw=e.to_string();let eof=e.is_eof();
         let previous:usize=text.split_inclusive('\n').take(e.line().saturating_sub(1)).map(str::len).sum();
         let byte=(previous+e.column().saturating_sub(usize::from(!eof))).min(text.len());
         let mut position=text[..text.floor_char_boundary(byte)].chars().count();
         let last=text.trim_end().chars().next_back();
+        let unicode_escape = raw.starts_with("invalid escape").then(|| {
+            text[..text.floor_char_boundary(byte)].rfind("\\u")
+                .filter(|start| byte.saturating_sub(*start) <= 6)
+        }).flatten();
         let message=if raw.starts_with("trailing comma") {
             // O diagnóstico aponta a vírgula, não o fechamento que a revelou.
             if let Some((offset, _)) = text[..text.floor_char_boundary(byte)].char_indices().rev().find(|(_, c)| !c.is_whitespace()) {
                 position = text[..offset].chars().count();
             }
             if text.as_bytes().get(byte) == Some(&b'}') { "Illegal trailing comma before end of object" } else { "Illegal trailing comma before end of array" }
+        } else if let Some(start) = unicode_escape {
+            position = text[..start + 1].chars().count();
+            "Invalid \\uXXXX escape"
         } else if raw.starts_with("invalid escape") { "Invalid \\escape" }
+            else if raw.starts_with("invalid number") {
+                if serde_json::from_str::<Value>(&text[..text.floor_char_boundary(byte)]).is_ok() {
+                    "Extra data"
+                } else { "Expecting ',' delimiter" }
+            }
             else if raw.starts_with("trailing characters"){"Extra data"}
             else if raw.starts_with("key must be a string")||(eof&&matches!(last,Some('{'))){"Expecting property name enclosed in double quotes"}
             else if raw.starts_with("expected `:`"){"Expecting ':' delimiter"}
             else if raw.starts_with("expected `,`")||(eof&&!matches!(last,Some('['|':'|','))){"Expecting ',' delimiter"}
             else {"Expecting value"};
-        let position = decoded.position(position).saturating_sub(usize::from(raw.starts_with("invalid escape")));
+        let position = decoded.position(position).saturating_sub(usize::from(raw.starts_with("invalid escape") && unicode_escape.is_none()));
         (StatusCode::UNPROCESSABLE_ENTITY,json!({"detail":[{"type":"json_invalid","loc":["body",position],"msg":"JSON decode error","input":{},"ctx":{"error":message}}]}))
     })
 }

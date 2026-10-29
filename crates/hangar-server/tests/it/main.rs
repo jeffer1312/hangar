@@ -8,6 +8,7 @@ mod common;
 mod remote_browser;
 mod cli_probe;
 mod json_body;
+mod json_numbers;
 mod groups_text;
 mod session_defaults;
 mod tags;
