@@ -42,30 +42,37 @@ pub async fn chat(
         .body(crate::transcript::pyjson::dumps_unicode(&body, false))
         .send()
         .await
-        .map_err(|error| {
-            SpeechError::new(
-                502,
-                format!("Falha ao contatar o provedor: {}", error.without_url()),
-            )
-        })?;
+        .map_err(transport_error)?;
     let status = response.status();
-    let bytes = read_response(response).await;
     if !status.is_success() {
-        let detail = bytes
-            .map(|bytes| {
-                String::from_utf8_lossy(&bytes)
-                    .replace(&key, "[segredo removido]")
-                    .chars()
-                    .take(300)
-                    .collect::<String>()
-            })
-            .unwrap_or_else(|_| "(sem corpo)".into());
+        // O corpo pode conter credenciais em qualquer codificação; nenhuma variante é pública.
+        let detail = match status.as_u16() {
+            401 | 403 => "Autenticação recusada pelo serviço de texto.",
+            429 => "Limite de chamadas atingido no serviço de texto.",
+            300..=399 => "O serviço de texto tentou redirecionar a solicitação.",
+            _ => "O serviço de texto respondeu com erro.",
+        };
         return Err(SpeechError::new(
             502,
             format!("provedor {}: {detail}", status.as_u16()),
         ));
     }
+    let bytes = read_response(response).await;
     parse_content(&bytes?)
+}
+
+fn transport_error(error: reqwest::Error) -> SpeechError {
+    // Até a cadeia de causas pode repetir URL, credencial ou cabeçalho; só a categoria é segura.
+    let detail = if error.is_timeout() {
+        "O serviço de texto não respondeu no prazo."
+    } else if error.is_connect() {
+        "Não foi possível conectar ao serviço de texto."
+    } else if error.is_builder() {
+        "O endereço ou a credencial do serviço de texto são inválidos."
+    } else {
+        "Falha no transporte da solicitação ao serviço de texto."
+    };
+    SpeechError::new(502, detail)
 }
 
 fn client() -> Result<&'static reqwest::Client, SpeechError> {
@@ -435,29 +442,70 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn http_failure_details_are_limited_in_characters() {
+    async fn http_failure_only_returns_the_status_and_a_safe_cause() {
         let value = json!({"error":"ação".repeat(300)});
-        let expected = value.to_string().chars().take(300).collect::<String>();
         let server = fake(vec![(500, value)]).await;
         let error = chat(&server.config, "s", "p", 0.0, Duration::from_secs(2))
             .await
             .unwrap_err();
-        assert_eq!(error.detail, format!("provedor 500: {expected}"));
+        assert_eq!(
+            error.detail,
+            "provedor 500: O serviço de texto respondeu com erro."
+        );
     }
 
     #[tokio::test]
     async fn a_provider_error_never_returns_the_credential_it_echoed() {
-        let server = fake(vec![(
-            401,
-            json!({"error":"A chave fixture-key foi recusada."}),
-        )])
-        .await;
-        let error = chat(&server.config, "s", "p", 0.0, Duration::from_secs(2))
+        use base64::Engine;
+        let escaped = "fixture-key"
+            .chars()
+            .map(|c| format!("\\u{:04x}", c as u32))
+            .collect::<String>();
+        let encoded = base64::engine::general_purpose::STANDARD.encode("fixture-key");
+        for echoed in ["fixture-key".to_owned(), escaped, encoded] {
+            let server = fake(vec![(401, json!({"error":echoed}))]).await;
+            let error = chat(&server.config, "s", "p", 0.0, Duration::from_secs(2))
+                .await
+                .unwrap_err();
+            assert_eq!(error.status, 502);
+            assert_eq!(
+                error.detail,
+                "provedor 401: Autenticação recusada pelo serviço de texto."
+            );
+            assert!(!error.detail.contains(&echoed));
+        }
+    }
+
+    #[tokio::test]
+    async fn transport_failures_never_return_the_url_or_its_secret_components() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        let config = SpeechConfig {
+            values: json!({"llm_base_url":format!("http://fixture-key@{address}/v1?secret=Zml4dHVyZS1rZXk="),"llm_api_key":"fixture-key"}),
+            home: Default::default(),
+            cache_dir: Default::default(),
+        };
+        let error = chat(&config, "s", "p", 0.0, Duration::from_secs(2))
             .await
             .unwrap_err();
         assert_eq!(error.status, 502);
+        assert_eq!(
+            error.detail,
+            "Não foi possível conectar ao serviço de texto."
+        );
         assert!(!error.detail.contains("fixture-key"));
-        assert!(error.detail.contains("[segredo removido]"));
+        assert!(!error.detail.contains("Zml4dHVyZS1rZXk="));
+        assert!(!error.detail.contains(&address.to_string()));
+        let mut invalid = config.clone();
+        invalid.values["llm_base_url"] = json!("not-a-url/fixture-key");
+        let error = chat(&invalid, "s", "p", 0.0, Duration::from_secs(2))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.detail,
+            "O endereço ou a credencial do serviço de texto são inválidos."
+        );
     }
 
     async fn raw_response(response: Vec<u8>) -> (SpeechConfig, tokio::task::JoinHandle<()>) {
@@ -506,7 +554,10 @@ mod tests {
             .unwrap_err();
         task.await.unwrap();
         assert_eq!(error.status, 502);
-        assert_eq!(error.detail, "provedor 503: (sem corpo)");
+        assert_eq!(
+            error.detail,
+            "provedor 503: O serviço de texto respondeu com erro."
+        );
     }
 
     #[tokio::test]
