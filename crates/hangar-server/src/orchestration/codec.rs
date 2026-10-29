@@ -54,7 +54,7 @@ pub fn dumps(value: &Value, sort_keys: bool) -> String {
             codepoints(left).cmp(&codepoints(right))
         })
     } else {
-        crate::transcript::pyjson::dumps(value, false)
+        crate::transcript::pyjson::dumps_literal(value)
     };
     restore_markers(raw, true)
 }
@@ -66,7 +66,7 @@ pub fn dumps_indented_utf8(value: &Value, indent: usize) -> Result<String, &'sta
 }
 
 fn restore_markers(mut raw: String, ascii: bool) -> String {
-    let quote = |value: &Value| if ascii { crate::transcript::pyjson::dumps(value, false) } else { crate::transcript::pyjson::dumps_unicode(value, false) };
+    let quote = |value: &Value| if ascii { crate::transcript::pyjson::dumps_literal(value) } else { crate::transcript::pyjson::dumps_unicode(value, false) };
     for token in ["NaN", "Infinity", "-Infinity"] {
         raw = raw.replace(
             &quote(&json!(format!("{}{token}", *MARK))),

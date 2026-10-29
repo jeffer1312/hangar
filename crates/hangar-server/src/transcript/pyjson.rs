@@ -26,7 +26,7 @@ pub fn dumps_unicode(v: &Value, sort_keys: bool) -> String {
 /// Separadores e Unicode da resposta HTTP, sem copiar a árvore recebida.
 pub fn dumps_compact_unicode(v: &Value) -> String {
     let mut out = String::new();
-    super::json_writer::write(&mut out, v, false, None, None, true);
+    super::json_writer::write(&mut out, v, false, None, None, true, true);
     out
 }
 
@@ -34,7 +34,7 @@ pub fn dumps_compact_unicode(v: &Value) -> String {
 /// `[]` vazios compactos.
 pub fn dumps_indent(v: &Value, indent: usize, ascii: bool) -> String {
     let mut out = String::new();
-    super::json_writer::write(&mut out, v, ascii, Some(indent), None, false);
+    super::json_writer::write(&mut out, v, ascii, Some(indent), None, false, true);
     out
 }
 
@@ -99,17 +99,24 @@ fn write_value(out: &mut String, v: &Value, sort_keys: bool, ascii: bool) {
     let compare = |left: &str, right: &str| {
         left.chars().map(py::py_code).cmp(right.chars().map(py::py_code))
     };
-    super::json_writer::write(out, v, ascii, None, if sort_keys { Some(&compare) } else { None }, false);
+    super::json_writer::write(out, v, ascii, None, if sort_keys { Some(&compare) } else { None }, false, true);
 }
 
 /// O codec do cofre usa marcadores próprios e fornece a ordem dos pontos de código.
 pub(crate) fn dumps_ordered(v: &Value, compare: &dyn Fn(&str, &str) -> std::cmp::Ordering) -> String {
     let mut out = String::new();
-    super::json_writer::write(&mut out, v, true, None, Some(compare), false);
+    super::json_writer::write(&mut out, v, true, None, Some(compare), false, false);
     out
 }
 
-pub(super) fn write_str(out: &mut String, s: &str, ascii: bool) {
+/// O codec com marcadores próprios precisa conservar os caracteres Unicode legítimos.
+pub(crate) fn dumps_literal(v: &Value) -> String {
+    let mut out = String::new();
+    super::json_writer::write(&mut out, v, true, None, None, false, false);
+    out
+}
+
+pub(super) fn write_str(out: &mut String, s: &str, ascii: bool, legacy_surrogates: bool) {
     out.push('"');
     for c in s.chars() {
         match c {
@@ -124,7 +131,7 @@ pub(super) fn write_str(out: &mut String, s: &str, ascii: bool) {
                 let _ = write!(out, "\\u{:04x}", c as u32);
             }
             // O Python escreve o surrogate solto como \udXXX; com ensure_ascii=False ele sai cru.
-            c if ascii && py::is_marker(c) => {
+            c if ascii && legacy_surrogates && py::is_marker(c) => {
                 let _ = write!(out, "\\u{:04x}", py::surrogate_of(c));
             }
             c if ascii && c as u32 > 0x7e => {

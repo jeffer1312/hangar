@@ -16,13 +16,14 @@ pub(super) fn write(
     indent: Option<usize>,
     order: Option<&dyn Fn(&str, &str) -> Ordering>,
     compact: bool,
+    legacy_surrogates: bool,
 ) {
     use super::pyjson::{number_repr, write_str};
     let mut pending = vec![Task::Value(value, 0)];
     while let Some(task) = pending.pop() {
         match task {
             Task::Text(text) => out.push_str(text),
-            Task::Key(key) => write_str(out, key, ascii),
+            Task::Key(key) => write_str(out, key, ascii, legacy_surrogates),
             Task::Line(level) => {
                 out.push('\n');
                 out.extend(std::iter::repeat_n(' ', indent.unwrap_or(0) * level));
@@ -31,7 +32,7 @@ pub(super) fn write(
                 Value::Null => out.push_str("null"),
                 Value::Bool(value) => out.push_str(if *value { "true" } else { "false" }),
                 Value::Number(value) => out.push_str(&number_repr(value)),
-                Value::String(value) => write_str(out, value, ascii),
+                Value::String(value) => write_str(out, value, ascii, legacy_surrogates),
                 Value::Array(items) => {
                     out.push('[');
                     pending.push(Task::Text("]"));
