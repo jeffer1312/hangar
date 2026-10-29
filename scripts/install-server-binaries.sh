@@ -28,7 +28,7 @@ run_bootstrap() {
     rm -rf -- "$scratch"; return 1
   elif ! node -e 'try {const m=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.exit(m&&!Array.isArray(m)&&typeof m==="object"?0:1)} catch {process.exit(1)}' "$manifest"; then
     printf '%s\n' 'binários Rust não baixados: não consegui ler o manifesto da release'; rm -rf -- "$scratch"; return 1
-  elif [ -n "$tag" ] && [ "$tag" != server-latest ] && ! node -e 'const fs=require("fs");try { const m=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); const p=process.argv[2]; process.exit(["hangar-server","hangar-cano"].every(n=>m.files&&m.files[p+"/"+n]&&typeof m.files[p+"/"+n]==="object")?0:1); } catch { process.exit(1); }' "$manifest" "$platform"; then
+  elif [ -n "$tag" ] && [ "$tag" != server-latest ] && ! node -e 'const fs=require("fs");try { const m=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); const p=process.argv[2]; const object=v=>v!==null&&typeof v==="object"&&!Array.isArray(v);process.exit(object(m.files)&&["hangar-server","hangar-cano"].every(n=>object(m.files[p+"/"+n]))?0:1); } catch { process.exit(1); }' "$manifest" "$platform"; then
     branch_tag=$tag; missing="sem build para $platform"
   fi
   if [ -n "$branch_tag" ]; then
@@ -52,7 +52,7 @@ run_bootstrap() {
       actual=$(node -e 'process.stdout.write(require("crypto").createHash("sha256").update(require("fs").readFileSync(process.argv[1])).digest("hex"))' "$data") || actual=''
       if [ "$actual" != "$sha" ]; then printf '%s: o sha256 não confere com a release; o binário anterior ficou\n' "$name"; failed=1; continue; fi
       data=$(mktemp "$dest/.$name.XXXXXXXX.tmp") || { failed=1; continue; }
-      if ! cp -- "$scratch/$name" "$data" || ! chmod 755 "$data" || ! mv -f -- "$data" "$target"; then rm -f -- "$data"; printf '%s: não consegui gravar o binário\n' "$name"; failed=1; continue; fi
+      if ! cp -- "$scratch/$name" "$data" || ! chmod 755 "$data" || ! node -e 'require("fs").renameSync(process.argv[1],process.argv[2])' "$data" "$target"; then rm -f -- "$data"; printf '%s: não consegui gravar o binário\n' "$name"; failed=1; continue; fi
     fi
     if [ -n "$branch_tag" ]; then installed="${installed:+$installed, }$name"; fi
   done

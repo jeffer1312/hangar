@@ -1,0 +1,145 @@
+{
+  "source_commit": "52cd396bad65ddaa44f729119df6e4e861ec0aa6",
+  "command": "python backend/tests/fixtures/contract/update-git/generate-bootstrap-review.py --reference <checkout-Python> --output backend/tests/fixtures/contract/update-git/bootstrap-review.json",
+  "cases": [
+    {
+      "name": "directory",
+      "entry": null,
+      "code": 1,
+      "urls": [
+        "https://github.com/jeffer1312/hangar/releases/download/server-latest/server-latest.json",
+        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-server",
+        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-cano"
+      ],
+      "files": {
+        "hangar-cano": "new-hangar-cano"
+      },
+      "directories": [
+        "hangar-server"
+      ],
+      "links": []
+    },
+    {
+      "name": "symlink-directory",
+      "entry": null,
+      "code": 0,
+      "urls": [
+        "https://github.com/jeffer1312/hangar/releases/download/server-latest/server-latest.json",
+        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-server",
+        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-cano"
+      ],
+      "files": {
+        "hangar-cano": "new-hangar-cano",
+        "hangar-server": "new-hangar-server"
+      },
+      "directories": [
+        "unchanged"
+      ],
+      "links": []
+    },
+    {
+      "name": "entry-array",
+      "entry": [],
+      "code": 1,
+      "urls": [
+        "https://github.com/jeffer1312/hangar/releases/download/server-beta/server-latest.json",
+        "https://github.com/jeffer1312/hangar/releases/download/server-latest/server-latest.json",
+        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-server",
+        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-cano"
+      ],
+      "files": {
+        "hangar-cano": "new-hangar-cano",
+        "hangar-server": "new-hangar-server"
+      },
+      "directories": [],
+      "links": []
+    },
+    {
+      "name": "entry-list",
+      "entry": [
+        "invalid"
+      ],
+      "code": 1,
+      "urls": [
+        "https://github.com/jeffer1312/hangar/releases/download/server-beta/server-latest.json",
+        "https://github.com/jeffer1312/hangar/releases/download/server-latest/server-latest.json",
+        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-server",
+        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-cano"
+      ],
+      "files": {
+        "hangar-cano": "new-hangar-cano",
+        "hangar-server": "new-hangar-server"
+      },
+      "directories": [],
+      "links": []
+    },
+    {
+      "name": "entry-string",
+      "entry": "invalid",
+      "code": 1,
+      "urls": [
+        "https://github.com/jeffer1312/hangar/releases/download/server-beta/server-latest.json",
+        "https://github.com/jeffer1312/hangar/releases/download/server-latest/server-latest.json",
+        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-server",
+        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-cano"
+      ],
+      "files": {
+        "hangar-cano": "new-hangar-cano",
+        "hangar-server": "new-hangar-server"
+      },
+      "directories": [],
+      "links": []
+    },
+    {
+      "name": "entry-number",
+      "entry": 7,
+      "code": 1,
+      "urls": [
+        "https://github.com/jeffer1312/hangar/releases/download/server-beta/server-latest.json",
+        "https://github.com/jeffer1312/hangar/releases/download/server-latest/server-latest.json",
+        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-server",
+        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-cano"
+      ],
+      "files": {
+        "hangar-cano": "new-hangar-cano",
+        "hangar-server": "new-hangar-server"
+      },
+      "directories": [],
+      "links": []
+    },
+    {
+      "name": "entry-bool",
+      "entry": true,
+      "code": 1,
+      "urls": [
+        "https://github.com/jeffer1312/hangar/releases/download/server-beta/server-latest.json",
+        "https://github.com/jeffer1312/hangar/releases/download/server-latest/server-latest.json",
+        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-server",
+        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-cano"
+      ],
+      "files": {
+        "hangar-cano": "new-hangar-cano",
+        "hangar-server": "new-hangar-server"
+      },
+      "directories": [],
+      "links": []
+    },
+    {
+      "name": "entry-null",
+      "entry": null,
+      "code": 1,
+      "urls": [
+        "https://github.com/jeffer1312/hangar/releases/download/server-beta/server-latest.json",
+        "https://github.com/jeffer1312/hangar/releases/download/server-latest/server-latest.json",
+        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-server",
+        "https://github.com/jeffer1312/hangar/releases/download/server-latest/hangar-cano"
+      ],
+      "files": {
+        "hangar-cano": "new-hangar-cano",
+        "hangar-server": "new-hangar-server"
+      },
+      "directories": [],
+      "links": []
+    }
+  ]
+}

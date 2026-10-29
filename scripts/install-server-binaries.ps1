@@ -1,4 +1,4 @@
-# Bootstrap do primeiro servidor; o executor Rust assume as trocas seguintes.
+﻿# Bootstrap do primeiro servidor; o executor Rust assume as trocas seguintes.
 param([switch]$NeverFail, [switch]$Fetch)
 $ErrorActionPreference = 'Stop'
 function Install-ServerBinaries {
@@ -24,7 +24,7 @@ function Install-ServerBinaries {
         }
         if (-not $branchTag -and $manifest -isnot [pscustomobject]) { throw 'manifesto não é um objeto' }
         if ($manifest -and $tag -and $tag -ne 'server-latest') {
-            if (-not $manifest.files -or -not $manifest.files."$platform/hangar-server" -or -not $manifest.files."$platform/hangar-cano") {
+            if ($manifest.files -isnot [pscustomobject] -or $manifest.files."$platform/hangar-server" -isnot [pscustomobject] -or $manifest.files."$platform/hangar-cano" -isnot [pscustomobject]) {
                 $branchTag = $tag; $missing = "sem build para $platform"; $manifest = $null
             }
         }
@@ -38,7 +38,7 @@ function Install-ServerBinaries {
         Get-ChildItem -LiteralPath $dest -ErrorAction SilentlyContinue | Where-Object { -not $_.PSIsContainer -and $_.Name.StartsWith("$name.exe.old", [StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
         if ($branchTag -and (Test-Path -LiteralPath $target)) { $kept += $name; continue }
         $entry = $manifest.files."$platform/$name"
-        if ($entry.name -isnot [string] -or $entry.sha256 -isnot [string]) { Write-Warning "${name}: a release não traz build para $platform"; $failed = $true; continue }
+        if ($entry -isnot [pscustomobject] -or $entry.name -isnot [string] -or $entry.sha256 -isnot [string]) { Write-Warning "${name}: a release não traz build para $platform"; $failed = $true; continue }
         $sha = $entry.sha256.ToLowerInvariant()
         $current = if (Test-Path -LiteralPath $target -PathType Leaf) { try { (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash.ToLowerInvariant() } catch { '' } } else { '' }
         if ($current -ne $sha) {
