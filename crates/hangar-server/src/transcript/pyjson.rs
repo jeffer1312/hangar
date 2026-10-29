@@ -71,85 +71,8 @@ pub fn loads_lossless(s: &str) -> Option<Value> {
 }
 
 pub(crate) fn decode_raw(raw: &str) -> Option<Value> {
-        use serde::Deserialize;
-        fn typed<'de, T: Deserialize<'de>>(raw: &'de str) -> Option<T> {
-            let mut decoder = serde_json::Deserializer::from_str(raw);
-            decoder.disable_recursion_limit();
-            let value = T::deserialize(&mut decoder).ok()?;
-            decoder.end().ok()?;
-            Some(value)
-        }
-        type Raw = Box<serde_json::value::RawValue>;
-        enum Frame {
-            Array(Vec<Value>, std::vec::IntoIter<Raw>),
-            Object(serde_json::Map<String, Value>, String, indexmap::map::IntoIter<String, Raw>),
-        }
-        // A profundidade pertence aos dados; não pode consumir a pilha da thread HTTP.
-        let mut frames = Vec::new();
-        let mut next = raw.to_owned();
-        'decode: loop {
-        let text = next;
-        let raw = text.trim_matches([' ', '\t', '\r', '\n']);
-        let mut value = match raw.as_bytes().first()? {
-            b'{' => {
-                let entries: indexmap::IndexMap<String, Raw> = typed(raw)?;
-                let mut entries = entries.into_iter();
-                if let Some((key, child)) = entries.next() {
-                    frames.push(Frame::Object(serde_json::Map::new(), key, entries));
-                    next = child.get().to_owned();
-                    continue;
-                }
-                Value::Object(serde_json::Map::new())
-            }
-            b'[' => {
-                let entries: Vec<Raw> = typed(raw)?;
-                let mut entries = entries.into_iter();
-                if let Some(child) = entries.next() {
-                    frames.push(Frame::Array(Vec::new(), entries));
-                    next = child.get().to_owned();
-                    continue;
-                }
-                Value::Array(Vec::new())
-            }
-            b'"' => Value::String(typed(raw)?),
-            b't' | b'f' => Value::Bool(typed(raw)?),
-            b'n' if raw == "null" => Value::Null,
-            _ => {
-                if raw == "-0" || raw.contains(['.','e','E']) {
-                    let number: f64 = typed(raw)?;
-                    Value::Number(Number::from_f64(number)?)
-                } else {
-                    let _: Number = typed(raw)?;
-                    let canonical = raw.parse::<num_bigint::BigInt>().ok()?.to_string();
-                    Value::Number(canonical.parse::<Number>().ok()?)
-                }
-            },
-        };
-        while let Some(frame) = frames.pop() {
-            value = match frame {
-                Frame::Array(mut values, mut rest) => {
-                    values.push(value);
-                    if let Some(child) = rest.next() {
-                        frames.push(Frame::Array(values, rest));
-                        next = child.get().to_owned();
-                        continue 'decode;
-                    }
-                    Value::Array(values)
-                }
-                Frame::Object(mut values, key, mut rest) => {
-                    values.insert(key, value);
-                    if let Some((key, child)) = rest.next() {
-                        frames.push(Frame::Object(values, key, rest));
-                        next = child.get().to_owned();
-                        continue 'decode;
-                    }
-                    Value::Object(values)
-                }
-            };
-        }
-        return Some(value);
-        }
-    }
+    super::json_tree::decode(raw)
+}
 
 /// Troca cada `\uD8xx`..`\uDFxx` sem par, dentro de string JSON, pelo marcador cru.
 fn mark_lone_surrogates(s: &str) -> String {

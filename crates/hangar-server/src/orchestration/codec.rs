@@ -124,33 +124,49 @@ pub fn contains_surrogate(value: &Value) -> bool {
                 })
         })
     }
-    fn visit(value: &Value, prefix: &str) -> bool {
+    let prefix = format!("{}surrogate:", *MARK);
+    let mut pending = vec![value];
+    while let Some(value) = pending.pop() {
         match value {
-            Value::String(text) => in_text(text, prefix),
-            Value::Array(items) => items.iter().any(|v| visit(v, prefix)),
-            Value::Object(items) => items.iter().any(|(k, v)| in_text(k, prefix) || visit(v, prefix)),
-            _ => false,
+            Value::String(text) if in_text(text, &prefix) => return true,
+            Value::Array(items) => pending.extend(items),
+            Value::Object(items) => {
+                if items.keys().any(|key| in_text(key, &prefix)) { return true; }
+                pending.extend(items.values());
+            }
+            _ => {}
         }
     }
-    visit(value, &format!("{}surrogate:", *MARK))
+    false
 }
 
 /// JSONResponse recusa números não finitos, embora o cofre possa conservá-los.
 pub fn contains_nonfinite(value: &Value) -> bool {
-    match value {
-        Value::String(text) => ["NaN", "Infinity", "-Infinity"].iter().any(|token| text == &format!("{}{token}", *MARK)),
-        Value::Array(values) => values.iter().any(contains_nonfinite),
-        Value::Object(values) => values.values().any(contains_nonfinite),
-        _ => false,
+    let mut pending = vec![value];
+    while let Some(value) = pending.pop() {
+        match value {
+            Value::String(text) if ["NaN", "Infinity", "-Infinity"].iter().any(|token| text == &format!("{}{token}", *MARK)) => return true,
+            Value::Array(values) => pending.extend(values),
+            Value::Object(values) => pending.extend(values.values()),
+            _ => {}
+        }
     }
+    false
 }
 
 /// Resposta tipada do FastAPI converte números não finitos em null, mas não corrige Unicode inválido.
 pub fn normalize_response(value: Value) -> Value {
-    match value {
-        Value::String(_) if crate::orchestration::codec::contains_nonfinite(&value) => Value::Null,
-        Value::Array(values) => Value::Array(values.into_iter().map(normalize_response).collect()),
-        Value::Object(values) => Value::Object(values.into_iter().map(|(key, value)| (key, normalize_response(value))).collect()),
-        value => value,
-    }
+    let result = crate::transcript::json_tree::map_leaves(&value, |leaf| {
+        if contains_nonfinite(leaf) { Value::Null } else { leaf.clone() }
+    });
+    discard(value);
+    result
+}
+
+pub fn clone_value(value: &Value) -> Value {
+    crate::transcript::json_tree::map_leaves(value, Value::clone)
+}
+
+pub fn discard(value: Value) {
+    crate::transcript::json_tree::discard(value);
 }
