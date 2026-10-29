@@ -340,3 +340,4 @@ mod guest_loops;
 
 mod codex_trust;
 mod command_capture;
+mod codex_ecc;

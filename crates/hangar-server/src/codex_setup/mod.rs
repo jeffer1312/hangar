@@ -4,3 +4,4 @@ pub mod native;
 
 pub mod hooks;
 pub mod trust;
+pub mod ecc;
