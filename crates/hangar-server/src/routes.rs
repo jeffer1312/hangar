@@ -952,6 +952,13 @@ pub(crate) async fn pass(st: &AppState, mut req: Request, fwd: &Forward) -> Resp
     resp
 }
 
+// O porteiro concede os catálogos globais só a convite, nunca a um par de leitura.
+fn invited_engine_catalog(caller: &Option<Caller>, req: &Request) -> bool {
+    on_guest_port(req) && req.method() == Method::GET
+        && matches!(req.uri().path(), "/api/engines" | "/api/model-options")
+        && matches!(caller, Some(Caller::Guest(grant)) if grant.invite)
+}
+
 pub(crate) async fn pass_any(
     State(st): State<Arc<AppState>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -985,7 +992,10 @@ pub(crate) async fn pass_any(
             }
         }
         let (forward,caller)=match who(&st,peer,&req).await {Ok(value)=>value, Err(e)=>return crate::auth::unavailable(e)};
-        if !matches!(caller,Some(Caller::Owner)) {
+        let session_read = req.extensions().get::<SessionPath>().is_some_and(|path|
+            caller.as_ref().is_some_and(|who| who.can(&path.session, req.method())));
+        let catalog_read = invited_engine_catalog(&caller, &req);
+        if !matches!(caller,Some(Caller::Owner)) && !session_read && !catalog_read {
             return if caller.is_some() {StatusCode::FORBIDDEN.into_response()} else {crate::share_reach::unauthorized(&st,&forward.client_ip).await};
         }
         let (method,path,query)=(req.method().clone(),req.uri().path().to_owned(),req.uri().query().map(str::to_owned));
@@ -1006,7 +1016,9 @@ pub(crate) async fn pass_any(
     }
     if models || orchestration || sync || engines {
         let (forward, caller) = match who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
-        let allowed = matches!(&caller, Some(Caller::Owner)) || (models && req.extensions().get::<SessionPath>()
+        let allowed = matches!(&caller, Some(Caller::Owner))
+            || (engines && invited_engine_catalog(&caller, &req))
+            || (models && req.extensions().get::<SessionPath>()
             .is_some_and(|path| caller.as_ref().is_some_and(|who| who.can(&path.session, req.method()))));
         if !allowed {
             return if caller.is_some() { StatusCode::FORBIDDEN.into_response() }

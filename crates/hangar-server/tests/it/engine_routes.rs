@@ -648,3 +648,58 @@ fn engine_provider_selection_matches_python_logins_and_preference() {
         assert_eq!(snapshot.response(),case["result"],"{}",case["name"]);
     }
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn engine_model_options_preserve_share_permissions() {
+    use crate::remote_browser::support::{self,Scene,Server,OWNER};
+    use hangar_server::share::store::Kind;
+    if support::isolated("engine_routes::engine_model_options_preserve_share_permissions", |_| {}).await { return; }
+    let provider = Server::owner(axum::Router::new().route("/v1/models",axum::routing::get(||async {
+        ([("content-type","application/json")],r#"{"data":[{"id":"fixture-model"}]}"#)
+    }))).await;
+    let scene = Scene::new().await;
+    std::fs::write(scene.home.join(".claude/engines.json"),json!({"fixture-engine":{
+        "base_url":format!("http://{}",provider.address),"api_key":"fixture-secret","model":"fixture-model"
+    }}).to_string()).unwrap();
+    let sidecar = scene.home.join(".hangar/claude-headless/headless.json");
+    let mut meta:Value = serde_json::from_slice(&std::fs::read(&sidecar).unwrap()).unwrap();
+    meta["engine"]=json!("fixture-engine");
+    std::fs::write(sidecar,meta.to_string()).unwrap();
+    let invite = scene.guest_token("headless",Kind::Share).await;
+    let terminal = scene.guest_token("s0",Kind::Share).await;
+    let pair = scene.guest_token("headless",Kind::Pair).await;
+    let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(5)).build().unwrap();
+    let mut failures = Vec::new();
+    for (path,token,expected) in [
+        ("/api/sessions/headless/model/options",&invite,200),
+        ("/api/sessions/s0/model/options",&terminal,503),
+        ("/api/engines",&invite,200),
+        ("/api/model-options?provider=claude&engine=fixture-engine",&invite,200),
+    ] {
+        let owner = client.get(format!("http://{}{path}",scene.owner.address)).bearer_auth(OWNER).send().await.unwrap();
+        let owner_status=owner.status().as_u16();
+        let owner_body=owner.text().await.unwrap();
+        assert_eq!(owner_status,expected,"precondição do dono em {path}: {owner_body}");
+        let guest = client.get(format!("http://{}{path}",scene.guest.address)).bearer_auth(token).send().await.unwrap();
+        let status=guest.status().as_u16();
+        let body=guest.text().await.unwrap();
+        if status!=expected || body!=owner_body {
+            failures.push(format!("{path}: convidado {status} {body}, dono {owner_status} {owner_body}"));
+        }
+    }
+    for (method,path,token) in [
+        ("GET","/api/sessions/s0/model/options",&invite),
+        ("GET","/api/sessions/headless/model/options",&pair),
+        ("PUT","/api/engines/fixture-engine",&invite),
+        ("GET","/api/providers",&invite),
+    ] {
+        let response=client.request(method.parse().unwrap(),format!("http://{}{path}",scene.guest.address))
+            .bearer_auth(token).body("{}").send().await.unwrap();
+        if response.status()!=403 { failures.push(format!("recusa {method} {path}: {}",response.status())); }
+    }
+    assert!(scene.upstream.paths().iter().any(|path|path=="/api/sessions/s0/model/options"),"sem motor conserva o transporte existente");
+    scene.close().await;
+    provider.close().await;
+    assert!(failures.is_empty(),"{}",failures.join("\n"));
+}
