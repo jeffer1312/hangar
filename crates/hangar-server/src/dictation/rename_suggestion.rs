@@ -248,26 +248,41 @@ async fn suggest(st: &AppState, name: &str, again: bool) -> Response {
     if spec.rename_dismissed {
         return StatusCode::NO_CONTENT.into_response();
     }
-    let Some(jsonl) = t.row.jsonl.clone() else { return StatusCode::NO_CONTENT.into_response() };
+    // A boa guardada não depende da conversa: volta sem reler o transcript.
+    if let (Some(suggestion), None, false) = (&spec.rename_suggestion, spec.rename_weak_at, again) {
+        return suggestion_body(suggestion, false);
+    }
+    // O pedido automático falha calado; o "Outra" foi um clique, e a falha dele aparece.
+    let failed = |code: &'static str| if again {
+        st.diag.report("rust.rename_suggestion", name, code, "outra sugestao de nome nao gerada");
+        refuse(StatusCode::BAD_GATEWAY, code, "não foi possível gerar outro nome")
+    } else {
+        quiet(st, name, code)
+    };
+    let Some(jsonl) = t.row.jsonl.clone() else { return failed("dictation_target_missing") };
     let provider = t.row.provider.clone();
     let requests = match tokio::task::spawn_blocking(move || user_requests(&provider, Path::new(&jsonl))).await {
         Ok(Ok(requests)) => requests,
-        Ok(Err(code)) => return quiet(st, name, code),
-        Err(_) => return quiet(st, name, "dictation_context_unavailable"),
+        Ok(Err(code)) => return failed(code),
+        Err(_) => return failed("dictation_context_unavailable"),
     };
     if requests.first.is_none() {
         return StatusCode::NO_CONTENT.into_response();
     }
-    if let Some(suggestion) = &spec.rename_suggestion {
-        let stale = spec.rename_weak_at.is_some_and(|at| requests.count > at);
-        if !again && !stale {
-            return suggestion_body(suggestion, spec.rename_weak_at.is_some());
-        }
+    if let (Some(suggestion), Some(at), false) = (&spec.rename_suggestion, spec.rename_weak_at, again) {
+        if requests.count <= at { return suggestion_body(suggestion, true); }
     }
-    let (suggestion, weak) = match generate(st, &t.row, &requests, spec.rename_suggestion.as_deref()).await {
-        Ok(Some((s, weak))) => match free(&s, &t.taken) { Some(s) => (s, weak), None => return StatusCode::NO_CONTENT.into_response() },
-        Ok(None) => return StatusCode::NO_CONTENT.into_response(),
-        Err(code) => return quiet(st, name, code),
+    let previous = spec.rename_suggestion.as_deref();
+    let generated = match generate(st, &t.row, &requests, previous).await {
+        Ok(generated) => generated.and_then(|(s, weak)| free(&s, &t.taken).map(|s| (s, weak))),
+        Err(code) => return failed(code),
+    };
+    let Some((suggestion, weak)) = generated.filter(|(s, _)| !again || Some(s.as_str()) != previous) else {
+        return if again {
+            refuse(StatusCode::CONFLICT, "rename_suggestion_same", "o modelo não achou outro nome para esta conversa")
+        } else {
+            StatusCode::NO_CONTENT.into_response()
+        };
     };
     let (home, stored, weak_at) = (t.home, suggestion.clone(), weak.then_some(requests.count));
     let written = blocking(move || store(&home, &key, &stored, weak_at)).await;
@@ -277,7 +292,7 @@ async fn suggest(st: &AppState, name: &str, again: bool) -> Response {
             suggestion_body(&suggestion, weak)
         }
         Ok(false) => StatusCode::NO_CONTENT.into_response(),
-        Err(_) => quiet(st, name, "rename_suggestion_store_failed"),
+        Err(_) => failed("rename_suggestion_store_failed"),
     }
 }
 

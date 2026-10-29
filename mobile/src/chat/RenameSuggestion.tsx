@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { useRouter } from 'expo-router';
@@ -25,6 +25,8 @@ export const RenameSuggestion = memo(function RenameSuggestion({ serverId, name,
   const [returned, setReturned] = useState<RenameSuggestionResult | null>(null);
   const [hidden, setHidden] = useState(false);
   const [busy, setBusy] = useState(false);
+  // Só a resposta do pedido mais recente vale: a do automático não cobre a do "Outra".
+  const latest = useRef(0);
 
   // A linha que mudou depois do pedido é a sugestão mais nova.
   useEffect(() => { setReturned(null); }, [rowSuggestion, rowWeak]);
@@ -32,7 +34,10 @@ export const RenameSuggestion = memo(function RenameSuggestion({ serverId, name,
   useEffect(() => {
     const row = useSessions.getState().rows.find((r) => r.serverId === serverId && r.name === name);
     if (!server || !row) return;
-    requestRenameSuggestionOnce(server, row, userMessages)?.then((s) => { if (s) setReturned(s); });
+    const asked = requestRenameSuggestionOnce(server, row, userMessages);
+    if (!asked) return;
+    const mine = ++latest.current;
+    asked.then((s) => { if (s && mine === latest.current) setReturned(s); });
   }, [server, serverId, name, rowLoaded, rowSuggestion, rowWeak, userMessages]);
 
   const suggestion = hidden ? null : returned?.suggestion ?? rowSuggestion;
@@ -41,8 +46,10 @@ export const RenameSuggestion = memo(function RenameSuggestion({ serverId, name,
   const again = useCallback(() => {
     if (!server) return;
     setBusy(true);
+    const mine = ++latest.current;
     requestRenameSuggestion(server, name, true)
-      .then((s) => { if (s) setReturned(s); })
+      .then((s) => { if (s && mine === latest.current) setReturned(s); })
+      .catch((e: unknown) => toast.erro(messageOf(e)))
       .finally(() => setBusy(false));
   }, [server, name]);
 

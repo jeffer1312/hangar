@@ -1005,32 +1005,39 @@ const renameSuggestionPath = (name: string) => `/api/sessions/${encodeURICompone
 /** Nome sugerido e se o modelo achou a conversa curta demais para acertar (`weak`). */
 export interface RenameSuggestionResult { suggestion: string; weak: boolean }
 
-/** Pede o nome sugerido para a sessão genérica; `again` pede outra agora ("Outra"). Nunca lança:
- *  sem sugestão (204), nome escolhido (409), servidor antigo (404) ou falha dão `null`, e a tela
- *  não avisa nada. */
+/** Pede o nome sugerido para a sessão genérica. O pedido automático nunca lança: sem sugestão (204),
+ *  nome escolhido (409), servidor antigo (404) ou falha dão `null`, e a tela não avisa nada. `again`
+ *  é o "Outra", um clique: a falha lança com o motivo do servidor. */
 export async function requestRenameSuggestion(server: Server, name: string, again = false): Promise<RenameSuggestionResult | null> {
-  try {
-    // O servidor espera o executor do ditado (até 60 s).
+  // O servidor espera o executor do ditado (até 60 s).
+  const ask = async () => {
     const path = renameSuggestionPath(name) + (again ? '?again=1' : '');
     const res = await apiFetchRes(path, { method: 'POST', signal: AbortSignal.timeout(75_000) }, server);
+    if (again) await ensureOk(res, server);
     if (res.status !== 200) return null;
     const body = await res.json() as { suggestion?: unknown; weak?: unknown };
     return typeof body.suggestion === 'string' && body.suggestion ? { suggestion: body.suggestion, weak: body.weak === true } : null;
+  };
+  if (again) return ask();
+  try {
+    return await ask();
   } catch {
     return null;
   }
 }
 
-// Uma vez por sessão e por vida do cliente: o executor é caro e a resposta fica guardada no spec.
-// Sugestão fraca volta a ser pedida uma vez por mensagem nova da pessoa: o servidor a refaz aí.
-const renameSuggestionAsked = new Set<string>();
+// Quantas mensagens a pessoa tinha no último pedido, por sessão e por vida do cliente: o executor é
+// caro e a resposta fica guardada no spec. Só a fraca volta a ser pedida, com mensagem nova depois dela.
+const renameSuggestionAsked = new Map<string, number>();
 
 /** Gatilho da faixa "Renomear para X?" ao abrir a conversa e, com sugestão fraca, a cada mensagem
  *  da pessoa (`userMessages` conta as dela); `null` = não pediu. */
 export function requestRenameSuggestionOnce(server: Server, row: SessionInfo, userMessages: number): Promise<RenameSuggestionResult | null> | null {
-  const key = `${server.id}::${row.name}::${row.rename_weak ? userMessages : 0}`;
-  if (server.invite || userMessages === 0 || (row.rename_suggestion && !row.rename_weak) || renameSuggestionAsked.has(key) || !looksGenericName(row.name, row.cwd)) return null;
-  renameSuggestionAsked.add(key);
+  const key = `${server.id}::${row.name}`;
+  const last = renameSuggestionAsked.get(key);
+  if (server.invite || userMessages === 0 || (row.rename_suggestion && !row.rename_weak) || !looksGenericName(row.name, row.cwd)) return null;
+  if (last !== undefined && (!row.rename_weak || userMessages <= last)) return null;
+  renameSuggestionAsked.set(key, userMessages);
   return requestRenameSuggestion(server, row.name);
 }
 

@@ -1792,8 +1792,17 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
     const row = sessaoAtual;
     if (!server || !row || (row.rename_suggestion && !row.rename_weak)) return;
     const userMessages = events.filter((e) => e.kind === 'user_msg' && !e.id.startsWith('queued-')).length;
-    untrack(() => requestRenameSuggestionOnce(server, row, userMessages))?.then((s) => { if (s) renameReturned = s; });
+    const asked = untrack(() => requestRenameSuggestionOnce(server, row, userMessages));
+    if (!asked) return;
+    const mine = ++renameLatest;
+    asked.then((s) => { if (s && mine === renameLatest) renameReturned = s; });
   });
+  // Só a resposta mais recente vale: a do pedido automático não cobre a do "Outra".
+  let renameLatest = 0;
+  function renameSuggested(s: RenameSuggestionResult) {
+    renameLatest++;
+    renameReturned = s;
+  }
   const contaPior = $derived.by(() => {
     const conta = sessaoAtual?.conta;
     const minha = conta ? faixaDeCota(quotaFeed.contas)?.find((c) => c.id === conta) : null;
@@ -3494,7 +3503,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
       <RenameSuggestionStrip server={renameServer} {sessionName} suggestion={renameSuggestion} weak={renameWeak}
         onRenamed={(name) => { if (name !== sessionName) onNavigateToChat(name); }}
         onDismissed={() => (renameHidden = true)}
-        onSuggested={(s) => (renameReturned = s)} />
+        onSuggested={renameSuggested} />
     {/if}
     {/if}
   </div>

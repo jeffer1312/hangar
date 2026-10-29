@@ -4,9 +4,9 @@ use super::sidebar::Target;
 
 #[derive(Default)]
 pub(super) struct RenameSuggest {
-    /// Já pedida nesta vida do app: a sugestão fica no servidor e volta pela linha da lista. A fraca é pedida de novo a
-    /// cada pedido seu, por isso a contagem entra na chave.
-    asked: HashSet<(Target, usize)>,
+    /// Quantos pedidos seus a conversa tinha no último pedido desta vida do app: a sugestão fica no servidor e volta pela
+    /// linha da lista, e só a fraca é pedida de novo, quando chega pedido seu depois dela.
+    asked: HashMap<Target, usize>,
     /// "Agora não" clicado: some na hora, antes de a lista refletir a recusa.
     pub(super) dismissed: HashSet<Target>,
     /// "Outra" esperando o servidor.
@@ -47,10 +47,9 @@ impl Hangar {
             || !looks_generic(&session.name, session.cwd.as_deref().unwrap_or_default()) { return; }
         let asked = self.chat.events.iter().filter(|event| event.kind == "user_msg" && !event.queued()).count();
         if asked == 0 { return; }
-        let key = (target.clone(), if session.rename_weak { asked } else { 0 });
-        if self.rename_suggest.asked.contains(&key) { return; }
+        if self.rename_suggest.asked.get(&target).is_some_and(|&last| !session.rename_weak || asked <= last) { return; }
         let Some(api) = self.machine_api(&target.server) else { return };
-        self.rename_suggest.asked.insert(key);
+        self.rename_suggest.asked.insert(target.clone(), asked);
         self.runtime.spawn(async move {
             // O executor do ditado gera o nome; o prazo cobre a fila dele.
             let _ = api.server_send(reqwest::Method::POST, &["sessions", target.name.as_str(), "rename-suggestion"], None, 120).await;
