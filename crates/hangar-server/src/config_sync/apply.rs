@@ -206,7 +206,7 @@ impl Apply {
         }
         Ok(())
     }
-    fn fix_commands(&mut self, item: &str, value: &mut Value, place: &str) {
+    pub(super) fn fix_commands(&mut self, item: &str, value: &mut Value, place: &str) {
         if let Some(command) = value["command"].as_str() {
             let (command, missing) = paths::fix_programs(
                 command,
