@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   definirArmazem, definirProtegido, estaDesligado, esquecerServidor, registrarFalha, registrarSucesso, retentarAgora,
   _limparEsfriamentoParaTestes,
-  endOutage, onServerRecovered, respondeuRecentemente, retryAfterMs, SERVIDOR_CANDIDATO, startOutage,
+  onServerRecovered, respondeuRecentemente, retryAfterMs, SERVIDOR_CANDIDATO, startOutage,
 } from './esfriamento';
 
 beforeEach(() => { _limparEsfriamentoParaTestes(); definirProtegido(() => false); });
@@ -174,6 +174,18 @@ describe('servidor desligado', () => {
 describe('início da queda', () => {
   const armazemDe = (dados: Map<string, string>) => ({ getItem: (k: string) => dados.get(k) ?? null,
     setItem: (k: string, v: string) => { dados.set(k, v); }, removeItem: (k: string) => { dados.delete(k); } });
+
+  it('atualização com só o registro de tentativas: a queda conta da primeira leitura e fica gravada', () => {
+    vi.useFakeTimers({ now: 10_000 });
+    const dados = new Map([['hangar_servidores_desligados', JSON.stringify({ pc: { failures: 3, retryAt: 70_000 } })]]);
+    definirArmazem(armazemDe(dados));
+    try {
+      expect(startOutage('pc')).toBe(10_000);
+      expect(JSON.parse(dados.get('hangar_quedas')!)).toEqual({ pc: 10_000 });
+    } finally {
+      definirArmazem(null);
+    }
+  });
 
   it('conta da primeira falha e sobrevive à recarga até uma lista boa', async () => {
     vi.useFakeTimers({ now: 10_000 });

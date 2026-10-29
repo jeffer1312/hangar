@@ -185,6 +185,13 @@ function createSessionsStore() {
         if (latencias.has(id)) { latencias = new Map(latencias); latencias.delete(id); }
       }
     }
+    // Removido enquanto esperava a nova tentativa: não há stream, mas o início da queda fica gravado.
+    for (const id of [...retryTimers.keys()]) {
+      if (!streams.has(id) && !list.some((s) => s.id === id)) {
+        clearTimeout(retryTimers.get(id)); retryTimers.delete(id);
+        slots.delete(id); tentativas.delete(id); esquecerServidor(id);
+      }
+    }
     for (const s of list) {
       if (onlyId !== undefined && s.id !== onlyId) continue;
       if (s.inviteEnded) {
