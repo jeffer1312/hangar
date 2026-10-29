@@ -26,7 +26,7 @@ import json, os, pathlib, sys
 root = pathlib.Path(os.environ["FAKE_REPO"])
 initial = pathlib.Path(os.environ["FAKE_TARGET"])
 if sys.argv[1] == "metadata":
-    print(json.dumps({"target_directory": str(initial)}))
+    print(json.dumps({"target_directory": str(initial),"build_directory":str(initial),"workspace_root":str(root/"crates"),"packages":[{"name":name,"source":None} for name in ["hangar-auth","hangar-server"]]}))
     sys.exit(0)
 target = pathlib.Path(os.environ.get("CARGO_TARGET_DIR", initial))
 for index, arg in enumerate(sys.argv):
@@ -67,7 +67,7 @@ def checkout(tmp_path):
     root = tmp_path / "checkout"
     scripts = root / "scripts"
     scripts.mkdir(parents=True)
-    for name in ("cargo-pinned", "pin-auth-pair.py"):
+    for name in ("cargo-pinned", "pin-auth-pair.py", "cargo-freshness.py"):
         shutil.copyfile(ROOT / "scripts" / name, scripts / name)
     for name in ("hangar-auth", "hangar-server"):
         manifest = root / "crates" / name / "Cargo.toml"
