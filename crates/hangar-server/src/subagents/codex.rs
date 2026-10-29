@@ -396,20 +396,20 @@ mod tests {
         write(root.path(), "sibling", Some("parent"), &[]);
         write(root.path(), "foreign", Some("another-parent"), &[]);
         assert_eq!(list_checked(&parent).unwrap().len(), 2);
-        let dir = child.parent().unwrap();
-        let cached = directory(dir).unwrap();
+        let dir = child.parent().unwrap().canonicalize().unwrap();
+        let cached = directory(&dir).unwrap();
         let root_cache = directory(&sessions_root(&parent).unwrap()).unwrap();
         std::fs::remove_file(&child).unwrap();
-        let stale = keep_cached_directory_stamp(dir, &cached);
-        assert_eq!(stale.stamp, stamp(dir).unwrap());
-        assert!(Arc::ptr_eq(&stale, &directory(dir).unwrap()));
+        let stale = keep_cached_directory_stamp(&dir, &cached);
+        assert_eq!(stale.stamp, stamp(&dir).unwrap());
+        assert!(Arc::ptr_eq(&stale, &directory(&dir).unwrap()));
         assert!(get_checked(&parent, "mine", 0).unwrap().is_none());
-        let refreshed = directory(dir).unwrap();
+        let refreshed = directory(&dir).unwrap();
         assert!(!Arc::ptr_eq(&stale, &refreshed));
         assert_eq!(list_checked(&parent).unwrap()[0]["agentId"], "sibling");
         assert!(get_checked(&parent, "sibling", 0).unwrap().is_some());
         assert_eq!(list_checked(&parent).unwrap().len(), 1);
-        assert!(Arc::ptr_eq(&refreshed, &directory(dir).unwrap()));
+        assert!(Arc::ptr_eq(&refreshed, &directory(&dir).unwrap()));
         assert!(Arc::ptr_eq(&root_cache, &directory(&sessions_root(&parent).unwrap()).unwrap()));
     }
 
@@ -420,16 +420,16 @@ mod tests {
         let child = write(root.path(), "pending", Some("parent"), &[]);
         std::fs::write(&child, "").unwrap();
         assert!(list_checked(&parent).unwrap().is_empty());
-        let dir = child.parent().unwrap();
-        let cached = directory(dir).unwrap();
-        assert_eq!(cached.pending, vec![child.clone()]);
+        let dir = child.parent().unwrap().canonicalize().unwrap();
+        let cached = directory(&dir).unwrap();
+        assert_eq!(cached.pending, vec![child.canonicalize().unwrap()]);
         std::fs::remove_file(&child).unwrap();
-        let stale = keep_cached_directory_stamp(dir, &cached);
+        let stale = keep_cached_directory_stamp(&dir, &cached);
         assert!(list_checked(&parent).unwrap().is_empty());
-        let refreshed = directory(dir).unwrap();
+        let refreshed = directory(&dir).unwrap();
         assert!(!Arc::ptr_eq(&stale, &refreshed));
         assert!(refreshed.pending.is_empty());
-        assert!(Arc::ptr_eq(&refreshed, &directory(dir).unwrap()));
+        assert!(Arc::ptr_eq(&refreshed, &directory(&dir).unwrap()));
     }
 
     #[test]
@@ -438,13 +438,13 @@ mod tests {
         let parent = write(root.path(), "parent", None, &[]);
         let child = write(root.path(), "mine", Some("parent"), &[]);
         assert!(get_checked(&parent, "mine", 0).unwrap().is_some());
-        let dir = child.parent().unwrap();
-        let cached = directory(dir).unwrap();
+        let dir = child.parent().unwrap().canonicalize().unwrap();
+        let cached = directory(&dir).unwrap();
         std::fs::remove_file(&child).unwrap();
         std::fs::create_dir(&child).unwrap();
-        let stale = keep_cached_directory_stamp(dir, &cached);
+        let stale = keep_cached_directory_stamp(&dir, &cached);
         assert_eq!(get_checked(&parent, "mine", 0).unwrap_err(), "codex_subagents_source_unavailable");
-        assert!(Arc::ptr_eq(&stale, &directory(dir).unwrap()));
+        assert!(Arc::ptr_eq(&stale, &directory(&dir).unwrap()));
     }
 
     #[cfg(unix)]
@@ -455,16 +455,16 @@ mod tests {
         let parent = write(root.path(), "parent", None, &[]);
         let child = write(root.path(), "mine", Some("parent"), &[]);
         assert!(get_checked(&parent, "mine", 0).unwrap().is_some());
-        let dir = child.parent().unwrap();
-        let cached = directory(dir).unwrap();
-        let permissions = std::fs::metadata(dir).unwrap().permissions();
-        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0)).unwrap();
+        let dir = child.parent().unwrap().canonicalize().unwrap();
+        let cached = directory(&dir).unwrap();
+        let permissions = std::fs::metadata(&dir).unwrap().permissions();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0)).unwrap();
         let header_error = header(&child).err();
         let discovery = get_checked(&parent, "mine", 0);
-        std::fs::set_permissions(dir, permissions).unwrap();
+        std::fs::set_permissions(&dir, permissions).unwrap();
         assert_eq!(header_error.unwrap().kind(), std::io::ErrorKind::PermissionDenied);
         assert_eq!(discovery.unwrap_err(), "codex_subagents_source_unavailable");
-        assert!(Arc::ptr_eq(&cached, &directory(dir).unwrap()));
+        assert!(Arc::ptr_eq(&cached, &directory(&dir).unwrap()));
     }
 
     #[test]
