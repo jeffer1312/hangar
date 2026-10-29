@@ -296,3 +296,4 @@ mod cliproxy_config;
 mod value_coercion;
 mod runtime_environment;
 mod plugin_publish;
+mod codec_values;

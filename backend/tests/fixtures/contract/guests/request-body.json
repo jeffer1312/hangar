@@ -1,0 +1,1322 @@
+{
+  "source_commit": "3d99939b99b13eca36e78b6b348807266477b649",
+  "command": "cd backend && uv run python tests/fixtures/contract/guests/capture_request_body.py",
+  "rows": [
+    {
+      "content_type": null,
+      "raw_hex": "7b7d",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "{}"
+          }
+        ]
+      },
+      "parser": {
+        "accepted": true,
+        "value_ascii": "{}",
+        "contains_surrogate": false
+      },
+      "failure": null
+    },
+    {
+      "content_type": "application/json",
+      "raw_hex": "7b7d",
+      "status": 422,
+      "response": {
+        "detail": "Informe os dados da conta"
+      },
+      "parser": {
+        "accepted": true,
+        "value_ascii": "{}",
+        "contains_surrogate": false
+      },
+      "failure": null
+    },
+    {
+      "content_type": "application/json; charset=iso-8859-1",
+      "raw_hex": "7b7d",
+      "status": 422,
+      "response": {
+        "detail": "Informe os dados da conta"
+      },
+      "parser": {
+        "accepted": true,
+        "value_ascii": "{}",
+        "contains_surrogate": false
+      },
+      "failure": null
+    },
+    {
+      "content_type": "application/vnd.api+json",
+      "raw_hex": "7b7d",
+      "status": 422,
+      "response": {
+        "detail": "Informe os dados da conta"
+      },
+      "parser": {
+        "accepted": true,
+        "value_ascii": "{}",
+        "contains_surrogate": false
+      },
+      "failure": null
+    },
+    {
+      "content_type": "text/plain",
+      "raw_hex": "7b7d",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "{}"
+          }
+        ]
+      },
+      "parser": {
+        "accepted": true,
+        "value_ascii": "{}",
+        "contains_surrogate": false
+      },
+      "failure": null
+    },
+    {
+      "content_type": "application/octet-stream",
+      "raw_hex": "7b7d",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "{}"
+          }
+        ]
+      },
+      "parser": {
+        "accepted": true,
+        "value_ascii": "{}",
+        "contains_surrogate": false
+      },
+      "failure": null
+    },
+    {
+      "content_type": "TEXT/PLAIN",
+      "raw_hex": "7b7d",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "{}"
+          }
+        ]
+      },
+      "parser": {
+        "accepted": true,
+        "value_ascii": "{}",
+        "contains_surrogate": false
+      },
+      "failure": null
+    },
+    {
+      "content_type": "text/json",
+      "raw_hex": "7b7d",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "model_attributes_type",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": "{}"
+          }
+        ]
+      },
+      "parser": {
+        "accepted": true,
+        "value_ascii": "{}",
+        "contains_surrogate": false
+      },
+      "failure": null
+    },
+    {
+      "content_type": "application/json",
+      "raw_hex": "fffe7b007d00",
+      "status": 422,
+      "response": {
+        "detail": "Informe os dados da conta"
+      },
+      "parser": {
+        "accepted": true,
+        "value_ascii": "{}",
+        "contains_surrogate": false
+      },
+      "failure": null
+    },
+    {
+      "content_type": "application/json",
+      "raw_hex": "7b007d00",
+      "status": 422,
+      "response": {
+        "detail": "Informe os dados da conta"
+      },
+      "parser": {
+        "accepted": true,
+        "value_ascii": "{}",
+        "contains_surrogate": false
+      },
+      "failure": null
+    },
+    {
+      "content_type": "application/json",
+      "raw_hex": "fffe00007b0000007d000000",
+      "status": 422,
+      "response": {
+        "detail": "Informe os dados da conta"
+      },
+      "parser": {
+        "accepted": true,
+        "value_ascii": "{}",
+        "contains_surrogate": false
+      },
+      "failure": null
+    },
+    {
+      "content_type": "application/json",
+      "raw_hex": "0000007b0000007d",
+      "status": 422,
+      "response": {
+        "detail": "Informe os dados da conta"
+      },
+      "parser": {
+        "accepted": true,
+        "value_ascii": "{}",
+        "contains_surrogate": false
+      },
+      "failure": null
+    },
+    {
+      "content_type": "application/octet-stream",
+      "raw_hex": "ff",
+      "status": 500,
+      "response": "Internal Server Error",
+      "parser": {
+        "accepted": false,
+        "exception": "UnicodeDecodeError",
+        "message": "'utf-8' codec can't decode byte 0xff in position 0: invalid start byte"
+      },
+      "failure": {
+        "exception": "UnicodeDecodeError",
+        "message": "'utf-8' codec can't decode byte 0xff in position 0: invalid start byte",
+        "frames": [
+          {
+            "file": "encoders.py",
+            "function": "jsonable_encoder"
+          },
+          {
+            "file": "encoders.py",
+            "function": "jsonable_encoder"
+          },
+          {
+            "file": "encoders.py",
+            "function": "jsonable_encoder"
+          },
+          {
+            "file": "encoders.py",
+            "function": "<lambda>"
+          }
+        ]
+      }
+    },
+    {
+      "content_type": "application/json",
+      "raw_hex": "ff",
+      "status": 400,
+      "response": {
+        "detail": "There was an error parsing the body"
+      },
+      "parser": {
+        "accepted": false,
+        "exception": "UnicodeDecodeError",
+        "message": "'utf-8' codec can't decode byte 0xff in position 0: invalid start byte"
+      },
+      "failure": null
+    },
+    {
+      "content_type": "application/json",
+      "raw_hex": "7b2275736572223a22eda080227d",
+      "status": 500,
+      "response": "Internal Server Error",
+      "parser": {
+        "accepted": true,
+        "value_ascii": "{'user': '\\ud800'}",
+        "contains_surrogate": true
+      },
+      "failure": {
+        "exception": "UnicodeEncodeError",
+        "message": "'utf-8' codec can't encode character '\\ud800' in position 152: surrogates not allowed",
+        "frames": [
+          {
+            "file": "exception_handlers.py",
+            "function": "request_validation_exception_handler"
+          },
+          {
+            "file": "responses.py",
+            "function": "__init__"
+          },
+          {
+            "file": "responses.py",
+            "function": "__init__"
+          },
+          {
+            "file": "responses.py",
+            "function": "render"
+          }
+        ]
+      }
+    },
+    {
+      "content_type": "application/json",
+      "raw_hex": "7b22756e6b6e6f776e223a22eda080227d",
+      "status": 500,
+      "response": "Internal Server Error",
+      "parser": {
+        "accepted": true,
+        "value_ascii": "{'unknown': '\\ud800'}",
+        "contains_surrogate": true
+      },
+      "failure": {
+        "exception": "UnicodeEncodeError",
+        "message": "'utf-8' codec can't encode character '\\ud800' in position 110: surrogates not allowed",
+        "frames": [
+          {
+            "file": "exception_handlers.py",
+            "function": "request_validation_exception_handler"
+          },
+          {
+            "file": "responses.py",
+            "function": "__init__"
+          },
+          {
+            "file": "responses.py",
+            "function": "__init__"
+          },
+          {
+            "file": "responses.py",
+            "function": "render"
+          }
+        ]
+      }
+    },
+    {
+      "content_type": "application/json",
+      "raw_hex": "eda080",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "json_invalid",
+            "loc": [
+              "body",
+              0
+            ],
+            "msg": "JSON decode error",
+            "input": {},
+            "ctx": {
+              "error": "Expecting value"
+            }
+          }
+        ]
+      },
+      "parser": {
+        "accepted": false,
+        "exception": "JSONDecodeError",
+        "message": "Expecting value: line 1 column 1 (char 0)"
+      },
+      "failure": null
+    },
+    {
+      "content_type": "application/json",
+      "raw_hex": "7b2275736572223aeda0807d",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "json_invalid",
+            "loc": [
+              "body",
+              8
+            ],
+            "msg": "JSON decode error",
+            "input": {},
+            "ctx": {
+              "error": "Expecting value"
+            }
+          }
+        ]
+      },
+      "parser": {
+        "accepted": false,
+        "exception": "JSONDecodeError",
+        "message": "Expecting value: line 1 column 9 (char 8)"
+      },
+      "failure": null
+    },
+    {
+      "content_type": "application/json",
+      "raw_hex": "7b2275736572223a22eda080222c7d",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "json_invalid",
+            "loc": [
+              "body",
+              11
+            ],
+            "msg": "JSON decode error",
+            "input": {},
+            "ctx": {
+              "error": "Illegal trailing comma before end of object"
+            }
+          }
+        ]
+      },
+      "parser": {
+        "accepted": false,
+        "exception": "JSONDecodeError",
+        "message": "Illegal trailing comma before end of object: line 1 column 12 (char 11)"
+      },
+      "failure": null
+    },
+    {
+      "content_type": "application/json",
+      "raw_hex": "7b2275736572223a22eda080227d20747261696c696e67",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "json_invalid",
+            "loc": [
+              "body",
+              13
+            ],
+            "msg": "JSON decode error",
+            "input": {},
+            "ctx": {
+              "error": "Extra data"
+            }
+          }
+        ]
+      },
+      "parser": {
+        "accepted": false,
+        "exception": "JSONDecodeError",
+        "message": "Extra data: line 1 column 14 (char 13)"
+      },
+      "failure": null
+    },
+    {
+      "content_type": "application/json",
+      "raw_hex": "fffe7b002200750073006500720022003a00220000d822007d00",
+      "status": 500,
+      "response": "Internal Server Error",
+      "parser": {
+        "accepted": true,
+        "value_ascii": "{'user': '\\ud800'}",
+        "contains_surrogate": true
+      },
+      "failure": {
+        "exception": "UnicodeEncodeError",
+        "message": "'utf-8' codec can't encode character '\\ud800' in position 152: surrogates not allowed",
+        "frames": [
+          {
+            "file": "exception_handlers.py",
+            "function": "request_validation_exception_handler"
+          },
+          {
+            "file": "responses.py",
+            "function": "__init__"
+          },
+          {
+            "file": "responses.py",
+            "function": "__init__"
+          },
+          {
+            "file": "responses.py",
+            "function": "render"
+          }
+        ]
+      }
+    },
+    {
+      "content_type": "application/json",
+      "raw_hex": "fffe7b00220075006e006b006e006f0077006e0022003a00220000d822007d00",
+      "status": 500,
+      "response": "Internal Server Error",
+      "parser": {
+        "accepted": true,
+        "value_ascii": "{'unknown': '\\ud800'}",
+        "contains_surrogate": true
+      },
+      "failure": {
+        "exception": "UnicodeEncodeError",
+        "message": "'utf-8' codec can't encode character '\\ud800' in position 110: surrogates not allowed",
+        "frames": [
+          {
+            "file": "exception_handlers.py",
+            "function": "request_validation_exception_handler"
+          },
+          {
+            "file": "responses.py",
+            "function": "__init__"
+          },
+          {
+            "file": "responses.py",
+            "function": "__init__"
+          },
+          {
+            "file": "responses.py",
+            "function": "render"
+          }
+        ]
+      }
+    },
+    {
+      "content_type": "application/json",
+      "raw_hex": "fffe00d8",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "json_invalid",
+            "loc": [
+              "body",
+              0
+            ],
+            "msg": "JSON decode error",
+            "input": {},
+            "ctx": {
+              "error": "Expecting value"
+            }
+          }
+        ]
+      },
+      "parser": {
+        "accepted": false,
+        "exception": "JSONDecodeError",
+        "message": "Expecting value: line 1 column 1 (char 0)"
+      },
+      "failure": null
+    },
+    {
+      "content_type": "application/json",
+      "raw_hex": "fffe7b002200750073006500720022003a0000d87d00",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "json_invalid",
+            "loc": [
+              "body",
+              8
+            ],
+            "msg": "JSON decode error",
+            "input": {},
+            "ctx": {
+              "error": "Expecting value"
+            }
+          }
+        ]
+      },
+      "parser": {
+        "accepted": false,
+        "exception": "JSONDecodeError",
+        "message": "Expecting value: line 1 column 9 (char 8)"
+      },
+      "failure": null
+    },
+    {
+      "content_type": "application/json",
+      "raw_hex": "fffe7b002200750073006500720022003a00220000d822002c007d00",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "json_invalid",
+            "loc": [
+              "body",
+              11
+            ],
+            "msg": "JSON decode error",
+            "input": {},
+            "ctx": {
+              "error": "Illegal trailing comma before end of object"
+            }
+          }
+        ]
+      },
+      "parser": {
+        "accepted": false,
+        "exception": "JSONDecodeError",
+        "message": "Illegal trailing comma before end of object: line 1 column 12 (char 11)"
+      },
+      "failure": null
+    },
+    {
+      "content_type": "application/json",
+      "raw_hex": "fffe7b002200750073006500720022003a00220000d822007d00200074007200610069006c0069006e006700",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "json_invalid",
+            "loc": [
+              "body",
+              13
+            ],
+            "msg": "JSON decode error",
+            "input": {},
+            "ctx": {
+              "error": "Extra data"
+            }
+          }
+        ]
+      },
+      "parser": {
+        "accepted": false,
+        "exception": "JSONDecodeError",
+        "message": "Extra data: line 1 column 14 (char 13)"
+      },
+      "failure": null
+    },
+    {
+      "content_type": "application/json",
+      "raw_hex": "7b002200750073006500720022003a00220000d822007d00",
+      "status": 500,
+      "response": "Internal Server Error",
+      "parser": {
+        "accepted": true,
+        "value_ascii": "{'user': '\\ud800'}",
+        "contains_surrogate": true
+      },
+      "failure": {
+        "exception": "UnicodeEncodeError",
+        "message": "'utf-8' codec can't encode character '\\ud800' in position 152: surrogates not allowed",
+        "frames": [
+          {
+            "file": "exception_handlers.py",
+            "function": "request_validation_exception_handler"
+          },
+          {
+            "file": "responses.py",
+            "function": "__init__"
+          },
+          {
+            "file": "responses.py",
+            "function": "__init__"
+          },
+          {
+            "file": "responses.py",
+            "function": "render"
+          }
+        ]
+      }
+    },
+    {
+      "content_type": "application/json",
+      "raw_hex": "7b00220075006e006b006e006f0077006e0022003a00220000d822007d00",
+      "status": 500,
+      "response": "Internal Server Error",
+      "parser": {
+        "accepted": true,
+        "value_ascii": "{'unknown': '\\ud800'}",
+        "contains_surrogate": true
+      },
+      "failure": {
+        "exception": "UnicodeEncodeError",
+        "message": "'utf-8' codec can't encode character '\\ud800' in position 110: surrogates not allowed",
+        "frames": [
+          {
+            "file": "exception_handlers.py",
+            "function": "request_validation_exception_handler"
+          },
+          {
+            "file": "responses.py",
+            "function": "__init__"
+          },
+          {
+            "file": "responses.py",
+            "function": "__init__"
+          },
+          {
+            "file": "responses.py",
+            "function": "render"
+          }
+        ]
+      }
+    },
+    {
+      "content_type": "application/json",
+      "raw_hex": "00d8",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "json_invalid",
+            "loc": [
+              "body",
+              0
+            ],
+            "msg": "JSON decode error",
+            "input": {},
+            "ctx": {
+              "error": "Expecting value"
+            }
+          }
+        ]
+      },
+      "parser": {
+        "accepted": false,
+        "exception": "JSONDecodeError",
+        "message": "Expecting value: line 1 column 1 (char 0)"
+      },
+      "failure": null
+    },
+    {
+      "content_type": "application/json",
+      "raw_hex": "7b002200750073006500720022003a0000d87d00",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "json_invalid",
+            "loc": [
+              "body",
+              8
+            ],
+            "msg": "JSON decode error",
+            "input": {},
+            "ctx": {
+              "error": "Expecting value"
+            }
+          }
+        ]
+      },
+      "parser": {
+        "accepted": false,
+        "exception": "JSONDecodeError",
+        "message": "Expecting value: line 1 column 9 (char 8)"
+      },
+      "failure": null
+    },
+    {
+      "content_type": "application/json",
+      "raw_hex": "7b002200750073006500720022003a00220000d822002c007d00",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "json_invalid",
+            "loc": [
+              "body",
+              11
+            ],
+            "msg": "JSON decode error",
+            "input": {},
+            "ctx": {
+              "error": "Illegal trailing comma before end of object"
+            }
+          }
+        ]
+      },
+      "parser": {
+        "accepted": false,
+        "exception": "JSONDecodeError",
+        "message": "Illegal trailing comma before end of object: line 1 column 12 (char 11)"
+      },
+      "failure": null
+    },
+    {
+      "content_type": "application/json",
+      "raw_hex": "7b002200750073006500720022003a00220000d822007d00200074007200610069006c0069006e006700",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "json_invalid",
+            "loc": [
+              "body",
+              13
+            ],
+            "msg": "JSON decode error",
+            "input": {},
+            "ctx": {
+              "error": "Extra data"
+            }
+          }
+        ]
+      },
+      "parser": {
+        "accepted": false,
+        "exception": "JSONDecodeError",
+        "message": "Extra data: line 1 column 14 (char 13)"
+      },
+      "failure": null
+    },
+    {
+      "content_type": "application/json",
+      "raw_hex": "fffe00007b0000002200000075000000730000006500000072000000220000003a0000002200000000d80000220000007d000000",
+      "status": 500,
+      "response": "Internal Server Error",
+      "parser": {
+        "accepted": true,
+        "value_ascii": "{'user': '\\ud800'}",
+        "contains_surrogate": true
+      },
+      "failure": {
+        "exception": "UnicodeEncodeError",
+        "message": "'utf-8' codec can't encode character '\\ud800' in position 152: surrogates not allowed",
+        "frames": [
+          {
+            "file": "exception_handlers.py",
+            "function": "request_validation_exception_handler"
+          },
+          {
+            "file": "responses.py",
+            "function": "__init__"
+          },
+          {
+            "file": "responses.py",
+            "function": "__init__"
+          },
+          {
+            "file": "responses.py",
+            "function": "render"
+          }
+        ]
+      }
+    },
+    {
+      "content_type": "application/json",
+      "raw_hex": "fffe00007b00000022000000750000006e0000006b0000006e0000006f000000770000006e000000220000003a0000002200000000d80000220000007d000000",
+      "status": 500,
+      "response": "Internal Server Error",
+      "parser": {
+        "accepted": true,
+        "value_ascii": "{'unknown': '\\ud800'}",
+        "contains_surrogate": true
+      },
+      "failure": {
+        "exception": "UnicodeEncodeError",
+        "message": "'utf-8' codec can't encode character '\\ud800' in position 110: surrogates not allowed",
+        "frames": [
+          {
+            "file": "exception_handlers.py",
+            "function": "request_validation_exception_handler"
+          },
+          {
+            "file": "responses.py",
+            "function": "__init__"
+          },
+          {
+            "file": "responses.py",
+            "function": "__init__"
+          },
+          {
+            "file": "responses.py",
+            "function": "render"
+          }
+        ]
+      }
+    },
+    {
+      "content_type": "application/json",
+      "raw_hex": "fffe000000d80000",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "json_invalid",
+            "loc": [
+              "body",
+              0
+            ],
+            "msg": "JSON decode error",
+            "input": {},
+            "ctx": {
+              "error": "Expecting value"
+            }
+          }
+        ]
+      },
+      "parser": {
+        "accepted": false,
+        "exception": "JSONDecodeError",
+        "message": "Expecting value: line 1 column 1 (char 0)"
+      },
+      "failure": null
+    },
+    {
+      "content_type": "application/json",
+      "raw_hex": "fffe00007b0000002200000075000000730000006500000072000000220000003a00000000d800007d000000",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "json_invalid",
+            "loc": [
+              "body",
+              8
+            ],
+            "msg": "JSON decode error",
+            "input": {},
+            "ctx": {
+              "error": "Expecting value"
+            }
+          }
+        ]
+      },
+      "parser": {
+        "accepted": false,
+        "exception": "JSONDecodeError",
+        "message": "Expecting value: line 1 column 9 (char 8)"
+      },
+      "failure": null
+    },
+    {
+      "content_type": "application/json",
+      "raw_hex": "fffe00007b0000002200000075000000730000006500000072000000220000003a0000002200000000d80000220000002c0000007d000000",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "json_invalid",
+            "loc": [
+              "body",
+              11
+            ],
+            "msg": "JSON decode error",
+            "input": {},
+            "ctx": {
+              "error": "Illegal trailing comma before end of object"
+            }
+          }
+        ]
+      },
+      "parser": {
+        "accepted": false,
+        "exception": "JSONDecodeError",
+        "message": "Illegal trailing comma before end of object: line 1 column 12 (char 11)"
+      },
+      "failure": null
+    },
+    {
+      "content_type": "application/json",
+      "raw_hex": "fffe00007b0000002200000075000000730000006500000072000000220000003a0000002200000000d80000220000007d00000020000000740000007200000061000000690000006c000000690000006e00000067000000",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "json_invalid",
+            "loc": [
+              "body",
+              13
+            ],
+            "msg": "JSON decode error",
+            "input": {},
+            "ctx": {
+              "error": "Extra data"
+            }
+          }
+        ]
+      },
+      "parser": {
+        "accepted": false,
+        "exception": "JSONDecodeError",
+        "message": "Extra data: line 1 column 14 (char 13)"
+      },
+      "failure": null
+    },
+    {
+      "content_type": "application/json",
+      "raw_hex": "7b22eda080223a2276616c7565227d",
+      "status": 500,
+      "response": "Internal Server Error",
+      "parser": {
+        "accepted": true,
+        "value_ascii": "{'\\ud800': 'value'}",
+        "contains_surrogate": true
+      },
+      "failure": {
+        "exception": "UnicodeEncodeError",
+        "message": "'utf-8' codec can't encode character '\\ud800' in position 145: surrogates not allowed",
+        "frames": [
+          {
+            "file": "exception_handlers.py",
+            "function": "request_validation_exception_handler"
+          },
+          {
+            "file": "responses.py",
+            "function": "__init__"
+          },
+          {
+            "file": "responses.py",
+            "function": "__init__"
+          },
+          {
+            "file": "responses.py",
+            "function": "render"
+          }
+        ]
+      }
+    },
+    {
+      "content_type": "application/json",
+      "raw_hex": "7b226e6573746564223a5b22eda080225d7d",
+      "status": 500,
+      "response": "Internal Server Error",
+      "parser": {
+        "accepted": true,
+        "value_ascii": "{'nested': ['\\ud800']}",
+        "contains_surrogate": true
+      },
+      "failure": {
+        "exception": "UnicodeEncodeError",
+        "message": "'utf-8' codec can't encode character '\\ud800' in position 110: surrogates not allowed",
+        "frames": [
+          {
+            "file": "exception_handlers.py",
+            "function": "request_validation_exception_handler"
+          },
+          {
+            "file": "responses.py",
+            "function": "__init__"
+          },
+          {
+            "file": "responses.py",
+            "function": "__init__"
+          },
+          {
+            "file": "responses.py",
+            "function": "render"
+          }
+        ]
+      }
+    },
+    {
+      "content_type": "application/json",
+      "raw_hex": "7b226e6f726d616c223a226e6f726d616c227d",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "normal"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": "normal"
+          }
+        ]
+      },
+      "parser": {
+        "accepted": true,
+        "value_ascii": "{'normal': 'normal'}",
+        "contains_surrogate": false
+      },
+      "failure": null
+    },
+    {
+      "content_type": "application/json",
+      "raw_hex": "fffe7b00220000d822003a002200760061006c007500650022007d00",
+      "status": 500,
+      "response": "Internal Server Error",
+      "parser": {
+        "accepted": true,
+        "value_ascii": "{'\\ud800': 'value'}",
+        "contains_surrogate": true
+      },
+      "failure": {
+        "exception": "UnicodeEncodeError",
+        "message": "'utf-8' codec can't encode character '\\ud800' in position 145: surrogates not allowed",
+        "frames": [
+          {
+            "file": "exception_handlers.py",
+            "function": "request_validation_exception_handler"
+          },
+          {
+            "file": "responses.py",
+            "function": "__init__"
+          },
+          {
+            "file": "responses.py",
+            "function": "__init__"
+          },
+          {
+            "file": "responses.py",
+            "function": "render"
+          }
+        ]
+      }
+    },
+    {
+      "content_type": "application/json",
+      "raw_hex": "fffe7b0022006e006500730074006500640022003a005b00220000d822005d007d00",
+      "status": 500,
+      "response": "Internal Server Error",
+      "parser": {
+        "accepted": true,
+        "value_ascii": "{'nested': ['\\ud800']}",
+        "contains_surrogate": true
+      },
+      "failure": {
+        "exception": "UnicodeEncodeError",
+        "message": "'utf-8' codec can't encode character '\\ud800' in position 110: surrogates not allowed",
+        "frames": [
+          {
+            "file": "exception_handlers.py",
+            "function": "request_validation_exception_handler"
+          },
+          {
+            "file": "responses.py",
+            "function": "__init__"
+          },
+          {
+            "file": "responses.py",
+            "function": "__init__"
+          },
+          {
+            "file": "responses.py",
+            "function": "render"
+          }
+        ]
+      }
+    },
+    {
+      "content_type": "application/json",
+      "raw_hex": "fffe7b0022006e006f0072006d0061006c0022003a0022006e006f0072006d0061006c0022007d00",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "normal"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": "normal"
+          }
+        ]
+      },
+      "parser": {
+        "accepted": true,
+        "value_ascii": "{'normal': 'normal'}",
+        "contains_surrogate": false
+      },
+      "failure": null
+    },
+    {
+      "content_type": "application/json",
+      "raw_hex": "7b00220000d822003a002200760061006c007500650022007d00",
+      "status": 500,
+      "response": "Internal Server Error",
+      "parser": {
+        "accepted": true,
+        "value_ascii": "{'\\ud800': 'value'}",
+        "contains_surrogate": true
+      },
+      "failure": {
+        "exception": "UnicodeEncodeError",
+        "message": "'utf-8' codec can't encode character '\\ud800' in position 145: surrogates not allowed",
+        "frames": [
+          {
+            "file": "exception_handlers.py",
+            "function": "request_validation_exception_handler"
+          },
+          {
+            "file": "responses.py",
+            "function": "__init__"
+          },
+          {
+            "file": "responses.py",
+            "function": "__init__"
+          },
+          {
+            "file": "responses.py",
+            "function": "render"
+          }
+        ]
+      }
+    },
+    {
+      "content_type": "application/json",
+      "raw_hex": "7b0022006e006500730074006500640022003a005b00220000d822005d007d00",
+      "status": 500,
+      "response": "Internal Server Error",
+      "parser": {
+        "accepted": true,
+        "value_ascii": "{'nested': ['\\ud800']}",
+        "contains_surrogate": true
+      },
+      "failure": {
+        "exception": "UnicodeEncodeError",
+        "message": "'utf-8' codec can't encode character '\\ud800' in position 110: surrogates not allowed",
+        "frames": [
+          {
+            "file": "exception_handlers.py",
+            "function": "request_validation_exception_handler"
+          },
+          {
+            "file": "responses.py",
+            "function": "__init__"
+          },
+          {
+            "file": "responses.py",
+            "function": "__init__"
+          },
+          {
+            "file": "responses.py",
+            "function": "render"
+          }
+        ]
+      }
+    },
+    {
+      "content_type": "application/json",
+      "raw_hex": "7b0022006e006f0072006d0061006c0022003a0022006e006f0072006d0061006c0022007d00",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "normal"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": "normal"
+          }
+        ]
+      },
+      "parser": {
+        "accepted": true,
+        "value_ascii": "{'normal': 'normal'}",
+        "contains_surrogate": false
+      },
+      "failure": null
+    },
+    {
+      "content_type": "application/json",
+      "raw_hex": "fffe00007b0000002200000000d80000220000003a0000002200000076000000610000006c0000007500000065000000220000007d000000",
+      "status": 500,
+      "response": "Internal Server Error",
+      "parser": {
+        "accepted": true,
+        "value_ascii": "{'\\ud800': 'value'}",
+        "contains_surrogate": true
+      },
+      "failure": {
+        "exception": "UnicodeEncodeError",
+        "message": "'utf-8' codec can't encode character '\\ud800' in position 145: surrogates not allowed",
+        "frames": [
+          {
+            "file": "exception_handlers.py",
+            "function": "request_validation_exception_handler"
+          },
+          {
+            "file": "responses.py",
+            "function": "__init__"
+          },
+          {
+            "file": "responses.py",
+            "function": "__init__"
+          },
+          {
+            "file": "responses.py",
+            "function": "render"
+          }
+        ]
+      }
+    },
+    {
+      "content_type": "application/json",
+      "raw_hex": "fffe00007b000000220000006e0000006500000073000000740000006500000064000000220000003a0000005b0000002200000000d80000220000005d0000007d000000",
+      "status": 500,
+      "response": "Internal Server Error",
+      "parser": {
+        "accepted": true,
+        "value_ascii": "{'nested': ['\\ud800']}",
+        "contains_surrogate": true
+      },
+      "failure": {
+        "exception": "UnicodeEncodeError",
+        "message": "'utf-8' codec can't encode character '\\ud800' in position 110: surrogates not allowed",
+        "frames": [
+          {
+            "file": "exception_handlers.py",
+            "function": "request_validation_exception_handler"
+          },
+          {
+            "file": "responses.py",
+            "function": "__init__"
+          },
+          {
+            "file": "responses.py",
+            "function": "__init__"
+          },
+          {
+            "file": "responses.py",
+            "function": "render"
+          }
+        ]
+      }
+    },
+    {
+      "content_type": "application/json",
+      "raw_hex": "fffe00007b000000220000006e0000006f000000720000006d000000610000006c000000220000003a000000220000006e0000006f000000720000006d000000610000006c000000220000007d000000",
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "extra_forbidden",
+            "loc": [
+              "body",
+              "normal"
+            ],
+            "msg": "Extra inputs are not permitted",
+            "input": "normal"
+          }
+        ]
+      },
+      "parser": {
+        "accepted": true,
+        "value_ascii": "{'normal': 'normal'}",
+        "contains_surrogate": false
+      },
+      "failure": null
+    }
+  ]
+}

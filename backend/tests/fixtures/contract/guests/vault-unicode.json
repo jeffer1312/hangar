@@ -1,0 +1,156 @@
+{
+  "source_commit": "fd1ae6bbdf8096598132bed74a188d01c63fba1e",
+  "command": "cd backend && uv run python tests/fixtures/contract/guests/capture_vault_unicode.py",
+  "rows": [
+    {
+      "raw_body": "{\"enc_blob\": {\"x\": \"normal\"}, \"base_rev\": 0}",
+      "put": {
+        "status": 200,
+        "response": {
+          "rev": 1
+        }
+      },
+      "get": {
+        "status": 200,
+        "response": {
+          "enc_blob": {
+            "x": "normal"
+          },
+          "rev": 1
+        }
+      },
+      "stale": {
+        "status": 409,
+        "response": {
+          "detail": {
+            "enc_blob": {
+              "x": "normal"
+            },
+            "rev": 1
+          }
+        }
+      },
+      "disk_blob": {
+        "x": "normal"
+      },
+      "disk_rev": 1
+    },
+    {
+      "raw_body": "{\"enc_blob\": {\"x\": \"\\ud800\"}, \"base_rev\": 0}",
+      "put": {
+        "status": 200,
+        "response": {
+          "rev": 1
+        }
+      },
+      "get": {
+        "status": 500,
+        "response": "Internal Server Error"
+      },
+      "stale": {
+        "status": 500,
+        "response": "Internal Server Error"
+      },
+      "disk_blob": {
+        "x": "\ud800"
+      },
+      "disk_rev": 1
+    },
+    {
+      "raw_body": "{\"enc_blob\": {\"\\udfff\": \"x\"}, \"base_rev\": 0}",
+      "put": {
+        "status": 200,
+        "response": {
+          "rev": 1
+        }
+      },
+      "get": {
+        "status": 500,
+        "response": "Internal Server Error"
+      },
+      "stale": {
+        "status": 500,
+        "response": "Internal Server Error"
+      },
+      "disk_blob": {
+        "\udfff": "x"
+      },
+      "disk_rev": 1
+    },
+    {
+      "raw_body": "{\"enc_blob\": {\"x\": [\"\\ud800\"]}, \"base_rev\": 0}",
+      "put": {
+        "status": 200,
+        "response": {
+          "rev": 1
+        }
+      },
+      "get": {
+        "status": 500,
+        "response": "Internal Server Error"
+      },
+      "stale": {
+        "status": 500,
+        "response": "Internal Server Error"
+      },
+      "disk_blob": {
+        "x": [
+          "\ud800"
+        ]
+      },
+      "disk_rev": 1
+    },
+    {
+      "raw_body": "{\"enc_blob\": {\"x\": NaN}, \"base_rev\": 0}",
+      "put": {
+        "status": 200,
+        "response": {
+          "rev": 1
+        }
+      },
+      "get": {
+        "status": 200,
+        "response": {
+          "enc_blob": {
+            "x": null
+          },
+          "rev": 1
+        }
+      },
+      "stale": {
+        "status": 500,
+        "response": "Internal Server Error"
+      },
+      "disk_blob": {
+        "x": NaN
+      },
+      "disk_rev": 1
+    },
+    {
+      "raw_body": "{\"enc_blob\": {\"x\": Infinity}, \"base_rev\": 0}",
+      "put": {
+        "status": 200,
+        "response": {
+          "rev": 1
+        }
+      },
+      "get": {
+        "status": 200,
+        "response": {
+          "enc_blob": {
+            "x": null
+          },
+          "rev": 1
+        }
+      },
+      "stale": {
+        "status": 500,
+        "response": "Internal Server Error"
+      },
+      "disk_blob": {
+        "x": Infinity
+      },
+      "disk_rev": 1
+    }
+  ]
+}

@@ -110,3 +110,47 @@ pub fn response(status: axum::http::StatusCode, value: Value) -> axum::response:
     )
         .into_response()
 }
+
+pub fn contains_surrogate(value: &Value) -> bool {
+    fn in_text(text: &str, prefix: &str) -> bool {
+        text.split(prefix).skip(1).any(|tail| {
+            let bytes = tail.as_bytes();
+            bytes.get(4) == Some(&b';')
+                && bytes.get(..4).is_some_and(|code| {
+                    code.iter().all(u8::is_ascii_hexdigit)
+                        && std::str::from_utf8(code).ok()
+                            .and_then(|s| u32::from_str_radix(s, 16).ok())
+                            .is_some_and(|n| (0xd800..=0xdfff).contains(&n))
+                })
+        })
+    }
+    fn visit(value: &Value, prefix: &str) -> bool {
+        match value {
+            Value::String(text) => in_text(text, prefix),
+            Value::Array(items) => items.iter().any(|v| visit(v, prefix)),
+            Value::Object(items) => items.iter().any(|(k, v)| in_text(k, prefix) || visit(v, prefix)),
+            _ => false,
+        }
+    }
+    visit(value, &format!("{}surrogate:", *MARK))
+}
+
+/// JSONResponse recusa números não finitos, embora o cofre possa conservá-los.
+pub fn contains_nonfinite(value: &Value) -> bool {
+    match value {
+        Value::String(text) => ["NaN", "Infinity", "-Infinity"].iter().any(|token| text == &format!("{}{token}", *MARK)),
+        Value::Array(values) => values.iter().any(contains_nonfinite),
+        Value::Object(values) => values.values().any(contains_nonfinite),
+        _ => false,
+    }
+}
+
+/// Resposta tipada do FastAPI converte números não finitos em null, mas não corrige Unicode inválido.
+pub fn normalize_response(value: Value) -> Value {
+    match value {
+        Value::String(_) if crate::orchestration::codec::contains_nonfinite(&value) => Value::Null,
+        Value::Array(values) => Value::Array(values.into_iter().map(normalize_response).collect()),
+        Value::Object(values) => Value::Object(values.into_iter().map(|(key, value)| (key, normalize_response(value))).collect()),
+        value => value,
+    }
+}
