@@ -160,6 +160,8 @@ impl TerminalIo for LineIo {
    match key.as_str() {
     "C-u" => if c.ends_with('\n') { c.pop(); } else { let cut = c.rfind('\n').map_or(0, |n| n + 1); c.truncate(cut); },
     "\r" => c.clear(),
+    // Como no Claude: `?` sozinho no campo vazio abre a ajuda de atalhos e não entra.
+    "?" if c.is_empty() => {}
     _ if has("-l") => c.push_str(&key),
     _ => {}
    }
@@ -197,6 +199,13 @@ async fn terminal_input_multiline_text_leaves_the_field_whole_when_facts_drop_be
   assert_eq!((r.disposition, r.cleanup), (Disposition::Deferred, Cleanup::Proved), "allowed={allowed}: {r:?} {writes:?}");
   assert_eq!(*io.composer.lock().unwrap(), "", "allowed={allowed}: o campo fica vazio");
  }
+}
+#[tokio::test]
+async fn terminal_input_lone_question_mark_is_pasted_so_it_reaches_the_composer() {
+ let io = Arc::new(LineIo::new(""));
+ let r = TerminalDriver::new(binding(), Arc::new(Services::new()), io.clone(), instant_limits()).prompt("?", "id").await;
+ assert_eq!(r.disposition, Disposition::Accepted, "{r:?}");
+ assert_eq!(*io.writes.lock().unwrap(), vec!["paste".to_string(), "\r".to_string()]);
 }
 #[tokio::test]
 async fn terminal_input_cleanup_stops_at_text_that_is_not_ours() {
