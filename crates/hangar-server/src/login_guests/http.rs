@@ -123,17 +123,16 @@ impl Service {
                     .into_response();
             }
         };
-        let body = if bytes.is_empty() {
-            Value::Null
-        } else {
-            match serde_json::from_slice::<Value>(&bytes) {
-                Ok(v) => v,
-                Err(_) => {
-                    return reply(
-                        Failure::code(422, "erro_corpo_invalido", "corpo JSON inválido"),
-                        &headers,
-                    );
-                }
+        let body = match crate::orchestration::body::parse(&bytes) {
+            Ok(value) => value,
+            Err((status, body)) => {
+                return reply(
+                    Failure {
+                        status: status.as_u16(),
+                        body,
+                    },
+                    &headers,
+                );
             }
         };
         let service = self.clone();

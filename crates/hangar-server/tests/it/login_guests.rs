@@ -293,9 +293,100 @@ async fn login_guests_vault_revisions_keep_python_integer_range() {
         let request=axum::http::Request::builder().method("PUT").uri("/api/sync/vault")
             .header("cookie",format!("cp_sync={}",cases["cookie"].as_str().unwrap())).body(axum::body::Body::from(row["body"].to_string())).unwrap();
         let response=service.respond(false,"127.0.0.1".into(),false,request).await;
-        assert_eq!(response.status().as_u16(),row["status"].as_u64().unwrap() as u16,"GUE-054/081 revisão {index}");
+        assert_eq!(response.status().as_u16(),row["status"].as_u64().unwrap() as u16,"GUE-044/081 revisão {index}");
         let body=axum::body::to_bytes(response.into_body(),1024*1024).await.unwrap();
-        assert_eq!(serde_json::from_slice::<Value>(&body).unwrap(),row["response"],"GUE-054/081 resposta {index}");
-        assert_eq!(serde_json::from_slice::<Value>(&std::fs::read(home.path().join("vault.json")).unwrap()).unwrap(),row["vault"],"GUE-054 disco {index}");
+        assert_eq!(serde_json::from_slice::<Value>(&body).unwrap(),row["response"],"GUE-044/081 resposta {index}");
+        assert_eq!(serde_json::from_slice::<Value>(&std::fs::read(home.path().join("vault.json")).unwrap()).unwrap(),row["vault"],"GUE-044 disco {index}");
+    }
+}
+
+#[tokio::test]
+async fn login_guests_storage_normalizes_legacy_documents_before_writing() {
+    use hangar_server::login_guests::{Service,Settings};
+    let home=tempfile::tempdir().unwrap();
+    let cases:Value=serde_json::from_str(&include_str!("../../../../backend/tests/fixtures/contract/guests/storage.json").replace("⟦ROOT⟧",home.path().to_str().unwrap())).unwrap();
+    for (index,row) in cases["rows"].as_array().unwrap().iter().enumerate() {
+        std::fs::write(home.path().join("guests.json"),row["initial"].to_string()).unwrap();
+        let mut service=Service::new(Settings{guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),runtime_config:home.path().join("config.json"),sync_enabled:false,bootstrap:String::new(),secret:vec![1],secure:false,rate_max:10,rate_window:300});
+        service.id=||"ab".repeat(8);service.token=||"new-token".into();let service=Arc::new(service);
+        let request=axum::http::Request::builder().method("POST").uri("/api/guests").body(axum::body::Body::from(row["body"].to_string())).unwrap();
+        let response=service.respond(true,"127.0.0.1".into(),false,request).await;
+        assert_eq!(response.status().as_u16(),row["status"].as_u64().unwrap() as u16,"GUE-012/013 arquivo {index}");
+        let body=axum::body::to_bytes(response.into_body(),1024*1024).await.unwrap();
+        assert_eq!(serde_json::from_slice::<Value>(&body).unwrap(),row["response"],"GUE-012/013 resposta {index}");
+        assert_eq!(serde_json::from_slice::<Value>(&std::fs::read(home.path().join("guests.json")).unwrap()).unwrap(),row["disk"],"GUE-012/013 disco {index}");
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn login_guests_sse_filters_and_ends_when_token_is_revoked() {
+    use hangar_server::list::{bridge::{ListBridge,ListEnv,parse_dirs},facts::FactsClient,mux::Mux};
+    use hangar_server::login_guests::{Service,Settings};
+    use serde_json::json;
+    use std::time::Duration;
+    let root=tempfile::tempdir().unwrap();
+    let program=crate::list_support::sessions(root.path(),3);
+    let home=root.path().join("home");let claude=home.join(".claude");
+    let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/store.json")).unwrap();
+    let disk:Value=serde_json::from_str(&fixture["matrix_disk"].to_string().replace("⟦ROOT⟧",root.path().to_str().unwrap())).unwrap();
+    std::fs::write(claude.join("guests.json"),disk.to_string()).unwrap();
+    let (python,upstream)=crate::fake::spawn_fake().await;
+    let mut state=AppState::new(crate::fake::config(upstream,""));
+    state.list=Arc::new(ListBridge::new(ListEnv {mux:Mux::with_program(&program,Duration::from_secs(5)),capture_program:program.into_os_string(),procs:Arc::new(hangar_server::list::procs::SystemProcs::default()),dirs:parse_dirs(&json!({"home":home,"claude":claude,"codex_home":home.join(".codex"),"pi_sessions":home.join(".pi/agent/sessions"),"omp_config":home.join(".omp"),"omp_agent":home.join(".omp/agent"),"kimi_home":home.join(".kimi-code")}).to_string())},FactsClient::new(upstream,crate::fake::SECRET.into())));
+    state.login_guests=Arc::new(Service::new(Settings{guests:claude.join("guests.json"),vault:root.path().join("vault.json"),runtime_config:claude.join("runtime-config.json"),sync_enabled:false,bootstrap:String::new(),secret:b"fixture".to_vec(),secure:false,rate_max:10,rate_window:300}));
+    let service=state.login_guests.clone();
+    let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();
+    let task=tokio::spawn(async move{axum::serve(listener,hangar_server::routes::router(Arc::new(state)).into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap()});
+    let response=reqwest::Client::new().get(format!("http://{address}/api/sessions/events")).bearer_auth("token-0").send().await.unwrap();
+    assert_eq!(response.status(),200,"GUE-028: SSE nativo");
+    assert!(response.headers().get("content-type").is_some_and(|v|v.to_str().unwrap().starts_with("text/event-stream")),"GUE-028: tipo do stream");
+    let mut events=crate::fake::sse(response);
+    use futures_util::StreamExt;
+    let first=tokio::time::timeout(Duration::from_secs(5),async {
+        while let Some(Ok(event))=events.next().await {if event.event=="sessions" {return Some(event.data);}}
+        None
+    }).await.ok().flatten();
+    assert!(first.is_some(),"GUE-028: publica sessions no stream nativo");
+    let rows:Value=serde_json::from_str(&first.unwrap()).unwrap();
+    let names:Vec<_>=rows.as_array().unwrap().iter().map(|v|v["name"].clone()).collect();
+    assert_eq!(json!(names),fixture["list_matrix"][1]["names"],"GUE-028: mesma matriz do Python");
+    service.store.delete(&"0".repeat(16)).unwrap();
+    tokio::time::timeout(Duration::from_secs(7),async {while let Some(event)=events.next().await {
+        let event=event.unwrap();assert_ne!(event.event,"sessions","GUE-033: não publica outra lista após revogar");
+    }}).await.expect("GUE-033/034: SSE termina após revogar");
+    assert_eq!(python.hits_to("/api/sessions/events"),0,"GUE-028: não encaminha o stream ao Python");
+    task.abort();
+}
+
+mod arbitrary_inputs {
+    use super::*;
+    use proptest::prelude::*;
+    fn document() -> impl Strategy<Value=Value> {
+        prop_oneof![Just(Value::Null),any::<bool>().prop_map(Value::Bool),any::<i64>().prop_map(|v|serde_json::json!(v)),".{0,80}".prop_map(Value::String)]
+            .prop_recursive(3,32,8,|inner|prop_oneof![proptest::collection::vec(inner.clone(),0..8).prop_map(Value::Array),
+                proptest::collection::vec((prop_oneof![Just("guests".to_owned()),Just("sessions".to_owned()),Just("root".to_owned()),Just("name".to_owned()),Just("user".to_owned()),Just("base_rev".to_owned()),".{0,16}"],inner),0..8).prop_map(|fields|Value::Object(fields.into_iter().collect()))])
+    }
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+        #[test]
+        fn login_guests_external_payloads_and_sidecars_do_not_panic(value in document(), raw in proptest::collection::vec(any::<u8>(),0..256)) {
+            use hangar_server::login_guests::{Service,Settings};
+            let home=tempfile::tempdir().unwrap();
+            let service=Arc::new(Service::new(Settings{guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),runtime_config:home.path().join("config.json"),sync_enabled:true,bootstrap:String::new(),secret:vec![1],secure:false,rate_max:10,rate_window:300}));
+            let rt=tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            rt.block_on(async {
+                for (path,bytes) in [("/api/guests",value.to_string().into_bytes()),("/api/sync/setup",value.to_string().into_bytes()),("/api/sync/login",raw)] {
+                    let request=axum::http::Request::builder().method("POST").uri(path).body(axum::body::Body::from(bytes)).unwrap();
+                    let response=service.respond(true,"127.0.0.1".into(),false,request).await;
+                    let body=axum::body::to_bytes(response.into_body(),1024*1024).await.unwrap();
+                    let body:Value=serde_json::from_slice(&body).unwrap();
+                    assert_ne!(body["detail"]["code"],"guests_worker_failed");
+                }
+            });
+            std::fs::write(home.path().join("guests.json"),value.to_string()).unwrap();
+            let _=service.store.lookup(b"untrusted");
+            let _=service.store.visible(None,"untrusted",None);
+        }
     }
 }

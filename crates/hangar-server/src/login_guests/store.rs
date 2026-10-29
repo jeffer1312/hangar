@@ -117,10 +117,16 @@ impl Store {
         let doc = read(&self.path)
             .map_err(Failure::io)?
             .unwrap_or_else(|| json!({"guests":[],"sessions":{}}));
-        let guests = doc
+        let object = doc
+            .as_object()
+            .ok_or_else(|| Failure::io(io::Error::other("arquivo inválido")))?;
+        let empty = json!([]);
+        let guests = object
             .get("guests")
-            .and_then(Value::as_array)
+            .unwrap_or(&empty)
+            .as_array()
             .ok_or_else(|| Failure::io(io::Error::other("convidados inválidos")))?;
+        let mut normalized: Vec<Value> = Vec::new();
         for g in guests {
             let valid = g.as_object().is_some_and(|g| {
                 g.keys().all(|k| {
@@ -140,10 +146,37 @@ impl Store {
             if !valid {
                 return Err(Failure::io(io::Error::other("convidado inválido")));
             }
+            let mut g = g.clone();
+            let fields = g.as_object_mut().expect("objeto conferido");
+            fields.entry("sees_owner").or_insert(json!(false));
+            fields.entry("owner_sees").or_insert(json!(true));
+            // O dict original mantém a posição inicial e substitui o valor do ID repetido.
+            if let Some(index) = normalized.iter().position(|old| old["id"] == g["id"]) {
+                normalized[index] = g;
+            } else {
+                normalized.push(g);
+            }
         }
-        if doc.get("sessions").is_some_and(|v| !v.is_object()) {
-            return Err(Failure::io(io::Error::other("sessões inválidas")));
-        }
+        let sessions = match object.get("sessions") {
+            None => json!({}),
+            Some(Value::Object(values)) => Value::Object(values.clone()),
+            Some(Value::Array(pairs)) => {
+                let mut values = serde_json::Map::new();
+                for pair in pairs {
+                    let pair = pair
+                        .as_array()
+                        .filter(|p| p.len() == 2)
+                        .ok_or_else(|| Failure::io(io::Error::other("sessões inválidas")))?;
+                    let key = pair[0]
+                        .as_str()
+                        .ok_or_else(|| Failure::io(io::Error::other("sessão inválida")))?;
+                    values.insert(key.into(), pair[1].clone());
+                }
+                Value::Object(values)
+            }
+            _ => return Err(Failure::io(io::Error::other("sessões inválidas"))),
+        };
+        let doc = json!({"guests":normalized,"sessions":sessions});
         *self.last.lock().unwrap_or_else(|e| e.into_inner()) = Some(doc.clone());
         Ok(doc)
     }
