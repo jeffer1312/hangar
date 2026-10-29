@@ -1,0 +1,4806 @@
+{
+  "source_commit": "fc1ed83a37fe22c126328f3717ccd6b37db17e10",
+  "command": "cd backend && uv run python tests/fixtures/contract/config_sync/generate_bundle.py",
+  "injections": [
+    "árvore temporária",
+    "PATH sem CLIs",
+    "pós-aplicação isolada",
+    "relógio e UUID fixos"
+  ],
+  "cases": [
+    {
+      "items": [
+        "claude_instructions"
+      ],
+      "source": {
+        "hangar": "⟦FIXTURE⟧/source/hangar",
+        "claude": "⟦FIXTURE⟧/source/home/.claude",
+        "codex": "⟦FIXTURE⟧/source/home/.codex",
+        "home": "⟦FIXTURE⟧/source/home"
+      },
+      "target": {
+        "hangar": "⟦FIXTURE⟧/target/hangar",
+        "claude": "⟦FIXTURE⟧/target/home/.claude",
+        "codex": "⟦FIXTURE⟧/target/home/.codex",
+        "home": "⟦FIXTURE⟧/target/home"
+      },
+      "initial": {
+        "source/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "source/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        },
+        "source/home/.claude/.credentials.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.local.md": {
+          "text": "só desta máquina\n",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.md": {
+          "text": "# regras\n",
+          "mode": 420
+        },
+        "source/home/.claude/engines.json": {
+          "text": "{\"kimi\": {\"base_url\": \"https://k\", \"api_key\": \"sk-kimi\"}}",
+          "mode": 420
+        },
+        "source/home/.claude/hooks/guard_tmux.py": {
+          "link": "⟦FIXTURE⟧/source/hangar/backend/hooks/guard_tmux.py"
+        },
+        "source/home/.claude/hooks/lembrete.py": {
+          "text": "print('⟦FIXTURE⟧/source/home/notas')\n",
+          "mode": 420
+        },
+        "source/home/.claude/plugins/known_marketplaces.json": {
+          "text": "{\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}",
+          "mode": 420
+        },
+        "source/home/.claude/rules/a.md": {
+          "text": "regra a\n",
+          "mode": 420
+        },
+        "source/home/.claude/settings.json": {
+          "text": "{\"model\": \"opus\", \"env\": {\"JIRA_TOKEN\": \"segredo-jira\"}, \"enabledPlugins\": {\"ponytail@ponytail\": true}, \"extraKnownMarketplaces\": {\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}, \"statusLine\": {\"type\": \"command\", \"command\": \"'⟦FIXTURE⟧/source/home/.local/share/fnm/v24/bin/node' '⟦FIXTURE⟧/source/hangar/scripts/statusline.js'\"}, \"hooks\": {\"PreToolUse\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"\\\"⟦FIXTURE⟧/source/hangar/.venv/bin/python3\\\" \\\"⟦FIXTURE⟧/source/hangar/backend/hooks/state_hook.py\\\" || exit 0\"}]}, {\"hooks\": [{\"type\": \"command\", \"command\": \"python3 ⟦FIXTURE⟧/source/home/.claude/hooks/lembrete.py\"}]}, {\"matcher\": \"Bash\", \"hooks\": [{\"type\": \"command\", \"command\": \"/bin/sh '⟦FIXTURE⟧/source/home/.orca/agent-hooks/claude-hook.sh'\"}]}]}}",
+          "mode": 420
+        },
+        "source/home/.claude/skills/minha": {
+          "link": "⟦FIXTURE⟧/source/home/Projetos/skills/minha"
+        },
+        "source/home/.claude/skills/orquestrar": {
+          "link": "⟦FIXTURE⟧/source/hangar/skills/orquestrar"
+        },
+        "source/home/.claude.json": {
+          "text": "{\"oauthAccount\": {\"emailAddress\": \"ana@x\"}, \"userID\": \"u-ana\", \"mcpServers\": {\"hangar\": {\"type\": \"http\", \"url\": \"http://127.0.0.1:8765/mcp/\"}, \"grafana\": {\"type\": \"http\", \"url\": \"https://g\", \"headers\": {\"Authorization\": \"Bearer seg\"}}}}",
+          "mode": 420
+        },
+        "source/home/.codex/AGENTS.md": {
+          "link": "⟦FIXTURE⟧/source/home/.claude/CLAUDE.md"
+        },
+        "source/home/.codex/auth.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.codex/config.toml": {
+          "text": "model = \"gpt-6\"\n[projects.\"/x\"]\ntrust_level = \"trusted\"\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\n[mcp_servers.docs]\ncommand = \"npx\"\n",
+          "mode": 420
+        },
+        "source/home/.orca/agent-hooks/claude-hook.sh": {
+          "text": "#!/bin/sh\n. ./lib.sh\n",
+          "mode": 493
+        },
+        "source/home/.orca/agent-hooks/lib.sh": {
+          "text": "# lib\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/.venv/lib.bin": {
+          "text": "xxxxxxxxxx",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/SKILL.md": {
+          "text": "skill em repo\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/run.sh": {
+          "text": "#!/bin/sh\necho \"${HOME}\" {HOME}\n",
+          "mode": 493
+        },
+        "source/prefs.json": {
+          "text": "{\"elevenlabs_api_key\": \"el-key\", \"sync\": true, \"tts_max_chars\": 900}",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "target/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        }
+      },
+      "bundle": {
+        "items": {
+          "claude_instructions": {
+            "entries": {
+              "CLAUDE.md": {
+                "kind": "file",
+                "files": [
+                  ""
+                ],
+                "text": [],
+                "hash": "adf01323c71b95d2c43478616b72daf69411cb6ccb483a50fff17f3bf8bf0f84"
+              },
+              "rules/a.md": {
+                "kind": "file",
+                "files": [
+                  ""
+                ],
+                "text": [],
+                "hash": "9f0e6f5650624e15368513a3291462d8fe8bc8add1033e05943a64d3c53ab9fd"
+              }
+            },
+            "hashes": {
+              "CLAUDE.md": "adf01323c71b95d2c43478616b72daf69411cb6ccb483a50fff17f3bf8bf0f84",
+              "rules/a.md": "9f0e6f5650624e15368513a3291462d8fe8bc8add1033e05943a64d3c53ab9fd"
+            },
+            "descriptions": {
+              "CLAUDE.md": "regras",
+              "rules/a.md": "regra a"
+            }
+          }
+        },
+        "warnings": {
+          "claude_instructions": []
+        },
+        "files": {
+          "files/claude_instructions/CLAUDE.md": {
+            "data": "IyByZWdyYXMK",
+            "mode": 420
+          },
+          "files/claude_instructions/rules/a.md": {
+            "data": "cmVncmEgYQo=",
+            "mode": 420
+          }
+        }
+      },
+      "report": {
+        "items": {
+          "claude_instructions": {
+            "status": "applied",
+            "changed": [
+              "CLAUDE.md",
+              "rules/a.md"
+            ],
+            "warnings": []
+          }
+        },
+        "backup": ""
+      },
+      "final": {
+        "source/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "source/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        },
+        "source/home/.claude/.credentials.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.local.md": {
+          "text": "só desta máquina\n",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.md": {
+          "text": "# regras\n",
+          "mode": 420
+        },
+        "source/home/.claude/engines.json": {
+          "text": "{\"kimi\": {\"base_url\": \"https://k\", \"api_key\": \"sk-kimi\"}}",
+          "mode": 420
+        },
+        "source/home/.claude/hooks/guard_tmux.py": {
+          "link": "⟦FIXTURE⟧/source/hangar/backend/hooks/guard_tmux.py"
+        },
+        "source/home/.claude/hooks/lembrete.py": {
+          "text": "print('⟦FIXTURE⟧/source/home/notas')\n",
+          "mode": 420
+        },
+        "source/home/.claude/plugins/known_marketplaces.json": {
+          "text": "{\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}",
+          "mode": 420
+        },
+        "source/home/.claude/rules/a.md": {
+          "text": "regra a\n",
+          "mode": 420
+        },
+        "source/home/.claude/settings.json": {
+          "text": "{\"model\": \"opus\", \"env\": {\"JIRA_TOKEN\": \"segredo-jira\"}, \"enabledPlugins\": {\"ponytail@ponytail\": true}, \"extraKnownMarketplaces\": {\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}, \"statusLine\": {\"type\": \"command\", \"command\": \"'⟦FIXTURE⟧/source/home/.local/share/fnm/v24/bin/node' '⟦FIXTURE⟧/source/hangar/scripts/statusline.js'\"}, \"hooks\": {\"PreToolUse\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"\\\"⟦FIXTURE⟧/source/hangar/.venv/bin/python3\\\" \\\"⟦FIXTURE⟧/source/hangar/backend/hooks/state_hook.py\\\" || exit 0\"}]}, {\"hooks\": [{\"type\": \"command\", \"command\": \"python3 ⟦FIXTURE⟧/source/home/.claude/hooks/lembrete.py\"}]}, {\"matcher\": \"Bash\", \"hooks\": [{\"type\": \"command\", \"command\": \"/bin/sh '⟦FIXTURE⟧/source/home/.orca/agent-hooks/claude-hook.sh'\"}]}]}}",
+          "mode": 420
+        },
+        "source/home/.claude/skills/minha": {
+          "link": "⟦FIXTURE⟧/source/home/Projetos/skills/minha"
+        },
+        "source/home/.claude/skills/orquestrar": {
+          "link": "⟦FIXTURE⟧/source/hangar/skills/orquestrar"
+        },
+        "source/home/.claude.json": {
+          "text": "{\"oauthAccount\": {\"emailAddress\": \"ana@x\"}, \"userID\": \"u-ana\", \"mcpServers\": {\"hangar\": {\"type\": \"http\", \"url\": \"http://127.0.0.1:8765/mcp/\"}, \"grafana\": {\"type\": \"http\", \"url\": \"https://g\", \"headers\": {\"Authorization\": \"Bearer seg\"}}}}",
+          "mode": 420
+        },
+        "source/home/.codex/AGENTS.md": {
+          "link": "⟦FIXTURE⟧/source/home/.claude/CLAUDE.md"
+        },
+        "source/home/.codex/auth.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.codex/config.toml": {
+          "text": "model = \"gpt-6\"\n[projects.\"/x\"]\ntrust_level = \"trusted\"\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\n[mcp_servers.docs]\ncommand = \"npx\"\n",
+          "mode": 420
+        },
+        "source/home/.orca/agent-hooks/claude-hook.sh": {
+          "text": "#!/bin/sh\n. ./lib.sh\n",
+          "mode": 493
+        },
+        "source/home/.orca/agent-hooks/lib.sh": {
+          "text": "# lib\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/.venv/lib.bin": {
+          "text": "xxxxxxxxxx",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/SKILL.md": {
+          "text": "skill em repo\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/run.sh": {
+          "text": "#!/bin/sh\necho \"${HOME}\" {HOME}\n",
+          "mode": 493
+        },
+        "source/prefs.json": {
+          "text": "{\"elevenlabs_api_key\": \"el-key\", \"sync\": true, \"tts_max_chars\": 900}",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "target/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        },
+        "target/home/.claude/CLAUDE.md": {
+          "text": "# regras\n",
+          "mode": 420
+        },
+        "target/home/.claude/rules/a.md": {
+          "text": "regra a\n",
+          "mode": 420
+        }
+      },
+      "progress": [
+        {
+          "phase": "read",
+          "item": "claude_instructions",
+          "entry": null,
+          "index": 0,
+          "total": 1
+        },
+        {
+          "phase": "read",
+          "item": "claude_instructions",
+          "entry": "CLAUDE.md"
+        },
+        {
+          "phase": "read",
+          "item": "claude_instructions",
+          "entry": "rules/a.md"
+        }
+      ]
+    },
+    {
+      "items": [
+        "claude_skills"
+      ],
+      "source": {
+        "hangar": "⟦FIXTURE⟧/source/hangar",
+        "claude": "⟦FIXTURE⟧/source/home/.claude",
+        "codex": "⟦FIXTURE⟧/source/home/.codex",
+        "home": "⟦FIXTURE⟧/source/home"
+      },
+      "target": {
+        "hangar": "⟦FIXTURE⟧/target/hangar",
+        "claude": "⟦FIXTURE⟧/target/home/.claude",
+        "codex": "⟦FIXTURE⟧/target/home/.codex",
+        "home": "⟦FIXTURE⟧/target/home"
+      },
+      "initial": {
+        "source/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "source/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        },
+        "source/home/.claude/.credentials.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.local.md": {
+          "text": "só desta máquina\n",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.md": {
+          "text": "# regras\n",
+          "mode": 420
+        },
+        "source/home/.claude/engines.json": {
+          "text": "{\"kimi\": {\"base_url\": \"https://k\", \"api_key\": \"sk-kimi\"}}",
+          "mode": 420
+        },
+        "source/home/.claude/hooks/guard_tmux.py": {
+          "link": "⟦FIXTURE⟧/source/hangar/backend/hooks/guard_tmux.py"
+        },
+        "source/home/.claude/hooks/lembrete.py": {
+          "text": "print('⟦FIXTURE⟧/source/home/notas')\n",
+          "mode": 420
+        },
+        "source/home/.claude/plugins/known_marketplaces.json": {
+          "text": "{\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}",
+          "mode": 420
+        },
+        "source/home/.claude/rules/a.md": {
+          "text": "regra a\n",
+          "mode": 420
+        },
+        "source/home/.claude/settings.json": {
+          "text": "{\"model\": \"opus\", \"env\": {\"JIRA_TOKEN\": \"segredo-jira\"}, \"enabledPlugins\": {\"ponytail@ponytail\": true}, \"extraKnownMarketplaces\": {\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}, \"statusLine\": {\"type\": \"command\", \"command\": \"'⟦FIXTURE⟧/source/home/.local/share/fnm/v24/bin/node' '⟦FIXTURE⟧/source/hangar/scripts/statusline.js'\"}, \"hooks\": {\"PreToolUse\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"\\\"⟦FIXTURE⟧/source/hangar/.venv/bin/python3\\\" \\\"⟦FIXTURE⟧/source/hangar/backend/hooks/state_hook.py\\\" || exit 0\"}]}, {\"hooks\": [{\"type\": \"command\", \"command\": \"python3 ⟦FIXTURE⟧/source/home/.claude/hooks/lembrete.py\"}]}, {\"matcher\": \"Bash\", \"hooks\": [{\"type\": \"command\", \"command\": \"/bin/sh '⟦FIXTURE⟧/source/home/.orca/agent-hooks/claude-hook.sh'\"}]}]}}",
+          "mode": 420
+        },
+        "source/home/.claude/skills/minha": {
+          "link": "⟦FIXTURE⟧/source/home/Projetos/skills/minha"
+        },
+        "source/home/.claude/skills/orquestrar": {
+          "link": "⟦FIXTURE⟧/source/hangar/skills/orquestrar"
+        },
+        "source/home/.claude.json": {
+          "text": "{\"oauthAccount\": {\"emailAddress\": \"ana@x\"}, \"userID\": \"u-ana\", \"mcpServers\": {\"hangar\": {\"type\": \"http\", \"url\": \"http://127.0.0.1:8765/mcp/\"}, \"grafana\": {\"type\": \"http\", \"url\": \"https://g\", \"headers\": {\"Authorization\": \"Bearer seg\"}}}}",
+          "mode": 420
+        },
+        "source/home/.codex/AGENTS.md": {
+          "link": "⟦FIXTURE⟧/source/home/.claude/CLAUDE.md"
+        },
+        "source/home/.codex/auth.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.codex/config.toml": {
+          "text": "model = \"gpt-6\"\n[projects.\"/x\"]\ntrust_level = \"trusted\"\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\n[mcp_servers.docs]\ncommand = \"npx\"\n",
+          "mode": 420
+        },
+        "source/home/.orca/agent-hooks/claude-hook.sh": {
+          "text": "#!/bin/sh\n. ./lib.sh\n",
+          "mode": 493
+        },
+        "source/home/.orca/agent-hooks/lib.sh": {
+          "text": "# lib\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/.venv/lib.bin": {
+          "text": "xxxxxxxxxx",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/SKILL.md": {
+          "text": "skill em repo\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/run.sh": {
+          "text": "#!/bin/sh\necho \"${HOME}\" {HOME}\n",
+          "mode": 493
+        },
+        "source/prefs.json": {
+          "text": "{\"elevenlabs_api_key\": \"el-key\", \"sync\": true, \"tts_max_chars\": 900}",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "target/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        }
+      },
+      "bundle": {
+        "items": {
+          "claude_skills": {
+            "entries": {
+              "skills/minha": {
+                "kind": "dir",
+                "files": [
+                  "SKILL.md",
+                  "run.sh"
+                ],
+                "text": [],
+                "hash": "d61fa43c6616c6457019dc52cdbdf80a1bf00f9ef67ade1dd170e3d67800322a"
+              }
+            },
+            "hashes": {
+              "skills/minha": "d61fa43c6616c6457019dc52cdbdf80a1bf00f9ef67ade1dd170e3d67800322a"
+            },
+            "descriptions": {
+              "skills/minha": "skill em repo"
+            }
+          }
+        },
+        "warnings": {
+          "claude_skills": [
+            {
+              "code": "config_sync_heavy_dir_skipped",
+              "params": {
+                "entry": "skills/minha",
+                "dir": ".venv"
+              }
+            }
+          ]
+        },
+        "files": {
+          "files/claude_skills/skills/minha/SKILL.md": {
+            "data": "c2tpbGwgZW0gcmVwbwo=",
+            "mode": 420
+          },
+          "files/claude_skills/skills/minha/run.sh": {
+            "data": "IyEvYmluL3NoCmVjaG8gIiR7SE9NRX0iIHtIT01FfQo=",
+            "mode": 493
+          }
+        }
+      },
+      "report": {
+        "items": {
+          "claude_skills": {
+            "status": "applied",
+            "changed": [
+              "skills/minha"
+            ],
+            "warnings": [
+              {
+                "code": "config_sync_heavy_dir_skipped",
+                "params": {
+                  "entry": "skills/minha",
+                  "dir": ".venv"
+                }
+              }
+            ]
+          }
+        },
+        "backup": ""
+      },
+      "final": {
+        "source/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "source/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        },
+        "source/home/.claude/.credentials.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.local.md": {
+          "text": "só desta máquina\n",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.md": {
+          "text": "# regras\n",
+          "mode": 420
+        },
+        "source/home/.claude/engines.json": {
+          "text": "{\"kimi\": {\"base_url\": \"https://k\", \"api_key\": \"sk-kimi\"}}",
+          "mode": 420
+        },
+        "source/home/.claude/hooks/guard_tmux.py": {
+          "link": "⟦FIXTURE⟧/source/hangar/backend/hooks/guard_tmux.py"
+        },
+        "source/home/.claude/hooks/lembrete.py": {
+          "text": "print('⟦FIXTURE⟧/source/home/notas')\n",
+          "mode": 420
+        },
+        "source/home/.claude/plugins/known_marketplaces.json": {
+          "text": "{\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}",
+          "mode": 420
+        },
+        "source/home/.claude/rules/a.md": {
+          "text": "regra a\n",
+          "mode": 420
+        },
+        "source/home/.claude/settings.json": {
+          "text": "{\"model\": \"opus\", \"env\": {\"JIRA_TOKEN\": \"segredo-jira\"}, \"enabledPlugins\": {\"ponytail@ponytail\": true}, \"extraKnownMarketplaces\": {\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}, \"statusLine\": {\"type\": \"command\", \"command\": \"'⟦FIXTURE⟧/source/home/.local/share/fnm/v24/bin/node' '⟦FIXTURE⟧/source/hangar/scripts/statusline.js'\"}, \"hooks\": {\"PreToolUse\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"\\\"⟦FIXTURE⟧/source/hangar/.venv/bin/python3\\\" \\\"⟦FIXTURE⟧/source/hangar/backend/hooks/state_hook.py\\\" || exit 0\"}]}, {\"hooks\": [{\"type\": \"command\", \"command\": \"python3 ⟦FIXTURE⟧/source/home/.claude/hooks/lembrete.py\"}]}, {\"matcher\": \"Bash\", \"hooks\": [{\"type\": \"command\", \"command\": \"/bin/sh '⟦FIXTURE⟧/source/home/.orca/agent-hooks/claude-hook.sh'\"}]}]}}",
+          "mode": 420
+        },
+        "source/home/.claude/skills/minha": {
+          "link": "⟦FIXTURE⟧/source/home/Projetos/skills/minha"
+        },
+        "source/home/.claude/skills/orquestrar": {
+          "link": "⟦FIXTURE⟧/source/hangar/skills/orquestrar"
+        },
+        "source/home/.claude.json": {
+          "text": "{\"oauthAccount\": {\"emailAddress\": \"ana@x\"}, \"userID\": \"u-ana\", \"mcpServers\": {\"hangar\": {\"type\": \"http\", \"url\": \"http://127.0.0.1:8765/mcp/\"}, \"grafana\": {\"type\": \"http\", \"url\": \"https://g\", \"headers\": {\"Authorization\": \"Bearer seg\"}}}}",
+          "mode": 420
+        },
+        "source/home/.codex/AGENTS.md": {
+          "link": "⟦FIXTURE⟧/source/home/.claude/CLAUDE.md"
+        },
+        "source/home/.codex/auth.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.codex/config.toml": {
+          "text": "model = \"gpt-6\"\n[projects.\"/x\"]\ntrust_level = \"trusted\"\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\n[mcp_servers.docs]\ncommand = \"npx\"\n",
+          "mode": 420
+        },
+        "source/home/.orca/agent-hooks/claude-hook.sh": {
+          "text": "#!/bin/sh\n. ./lib.sh\n",
+          "mode": 493
+        },
+        "source/home/.orca/agent-hooks/lib.sh": {
+          "text": "# lib\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/.venv/lib.bin": {
+          "text": "xxxxxxxxxx",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/SKILL.md": {
+          "text": "skill em repo\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/run.sh": {
+          "text": "#!/bin/sh\necho \"${HOME}\" {HOME}\n",
+          "mode": 493
+        },
+        "source/prefs.json": {
+          "text": "{\"elevenlabs_api_key\": \"el-key\", \"sync\": true, \"tts_max_chars\": 900}",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "target/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        },
+        "target/home/.claude/skills/minha/SKILL.md": {
+          "text": "skill em repo\n",
+          "mode": 420
+        },
+        "target/home/.claude/skills/minha/run.sh": {
+          "text": "#!/bin/sh\necho \"${HOME}\" {HOME}\n",
+          "mode": 493
+        }
+      },
+      "progress": [
+        {
+          "phase": "read",
+          "item": "claude_skills",
+          "entry": null,
+          "index": 0,
+          "total": 1
+        },
+        {
+          "phase": "read",
+          "item": "claude_skills",
+          "entry": "skills/minha"
+        }
+      ]
+    },
+    {
+      "items": [
+        "claude_agents"
+      ],
+      "source": {
+        "hangar": "⟦FIXTURE⟧/source/hangar",
+        "claude": "⟦FIXTURE⟧/source/home/.claude",
+        "codex": "⟦FIXTURE⟧/source/home/.codex",
+        "home": "⟦FIXTURE⟧/source/home"
+      },
+      "target": {
+        "hangar": "⟦FIXTURE⟧/target/hangar",
+        "claude": "⟦FIXTURE⟧/target/home/.claude",
+        "codex": "⟦FIXTURE⟧/target/home/.codex",
+        "home": "⟦FIXTURE⟧/target/home"
+      },
+      "initial": {
+        "source/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "source/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        },
+        "source/home/.claude/.credentials.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.local.md": {
+          "text": "só desta máquina\n",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.md": {
+          "text": "# regras\n",
+          "mode": 420
+        },
+        "source/home/.claude/engines.json": {
+          "text": "{\"kimi\": {\"base_url\": \"https://k\", \"api_key\": \"sk-kimi\"}}",
+          "mode": 420
+        },
+        "source/home/.claude/hooks/guard_tmux.py": {
+          "link": "⟦FIXTURE⟧/source/hangar/backend/hooks/guard_tmux.py"
+        },
+        "source/home/.claude/hooks/lembrete.py": {
+          "text": "print('⟦FIXTURE⟧/source/home/notas')\n",
+          "mode": 420
+        },
+        "source/home/.claude/plugins/known_marketplaces.json": {
+          "text": "{\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}",
+          "mode": 420
+        },
+        "source/home/.claude/rules/a.md": {
+          "text": "regra a\n",
+          "mode": 420
+        },
+        "source/home/.claude/settings.json": {
+          "text": "{\"model\": \"opus\", \"env\": {\"JIRA_TOKEN\": \"segredo-jira\"}, \"enabledPlugins\": {\"ponytail@ponytail\": true}, \"extraKnownMarketplaces\": {\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}, \"statusLine\": {\"type\": \"command\", \"command\": \"'⟦FIXTURE⟧/source/home/.local/share/fnm/v24/bin/node' '⟦FIXTURE⟧/source/hangar/scripts/statusline.js'\"}, \"hooks\": {\"PreToolUse\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"\\\"⟦FIXTURE⟧/source/hangar/.venv/bin/python3\\\" \\\"⟦FIXTURE⟧/source/hangar/backend/hooks/state_hook.py\\\" || exit 0\"}]}, {\"hooks\": [{\"type\": \"command\", \"command\": \"python3 ⟦FIXTURE⟧/source/home/.claude/hooks/lembrete.py\"}]}, {\"matcher\": \"Bash\", \"hooks\": [{\"type\": \"command\", \"command\": \"/bin/sh '⟦FIXTURE⟧/source/home/.orca/agent-hooks/claude-hook.sh'\"}]}]}}",
+          "mode": 420
+        },
+        "source/home/.claude/skills/minha": {
+          "link": "⟦FIXTURE⟧/source/home/Projetos/skills/minha"
+        },
+        "source/home/.claude/skills/orquestrar": {
+          "link": "⟦FIXTURE⟧/source/hangar/skills/orquestrar"
+        },
+        "source/home/.claude.json": {
+          "text": "{\"oauthAccount\": {\"emailAddress\": \"ana@x\"}, \"userID\": \"u-ana\", \"mcpServers\": {\"hangar\": {\"type\": \"http\", \"url\": \"http://127.0.0.1:8765/mcp/\"}, \"grafana\": {\"type\": \"http\", \"url\": \"https://g\", \"headers\": {\"Authorization\": \"Bearer seg\"}}}}",
+          "mode": 420
+        },
+        "source/home/.codex/AGENTS.md": {
+          "link": "⟦FIXTURE⟧/source/home/.claude/CLAUDE.md"
+        },
+        "source/home/.codex/auth.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.codex/config.toml": {
+          "text": "model = \"gpt-6\"\n[projects.\"/x\"]\ntrust_level = \"trusted\"\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\n[mcp_servers.docs]\ncommand = \"npx\"\n",
+          "mode": 420
+        },
+        "source/home/.orca/agent-hooks/claude-hook.sh": {
+          "text": "#!/bin/sh\n. ./lib.sh\n",
+          "mode": 493
+        },
+        "source/home/.orca/agent-hooks/lib.sh": {
+          "text": "# lib\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/.venv/lib.bin": {
+          "text": "xxxxxxxxxx",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/SKILL.md": {
+          "text": "skill em repo\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/run.sh": {
+          "text": "#!/bin/sh\necho \"${HOME}\" {HOME}\n",
+          "mode": 493
+        },
+        "source/prefs.json": {
+          "text": "{\"elevenlabs_api_key\": \"el-key\", \"sync\": true, \"tts_max_chars\": 900}",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "target/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        }
+      },
+      "bundle": {
+        "items": {
+          "claude_agents": {
+            "entries": {},
+            "hashes": {},
+            "descriptions": {}
+          }
+        },
+        "warnings": {
+          "claude_agents": []
+        },
+        "files": {}
+      },
+      "report": {
+        "items": {
+          "claude_agents": {
+            "status": "same",
+            "changed": [],
+            "warnings": []
+          }
+        },
+        "backup": ""
+      },
+      "final": {
+        "source/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "source/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        },
+        "source/home/.claude/.credentials.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.local.md": {
+          "text": "só desta máquina\n",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.md": {
+          "text": "# regras\n",
+          "mode": 420
+        },
+        "source/home/.claude/engines.json": {
+          "text": "{\"kimi\": {\"base_url\": \"https://k\", \"api_key\": \"sk-kimi\"}}",
+          "mode": 420
+        },
+        "source/home/.claude/hooks/guard_tmux.py": {
+          "link": "⟦FIXTURE⟧/source/hangar/backend/hooks/guard_tmux.py"
+        },
+        "source/home/.claude/hooks/lembrete.py": {
+          "text": "print('⟦FIXTURE⟧/source/home/notas')\n",
+          "mode": 420
+        },
+        "source/home/.claude/plugins/known_marketplaces.json": {
+          "text": "{\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}",
+          "mode": 420
+        },
+        "source/home/.claude/rules/a.md": {
+          "text": "regra a\n",
+          "mode": 420
+        },
+        "source/home/.claude/settings.json": {
+          "text": "{\"model\": \"opus\", \"env\": {\"JIRA_TOKEN\": \"segredo-jira\"}, \"enabledPlugins\": {\"ponytail@ponytail\": true}, \"extraKnownMarketplaces\": {\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}, \"statusLine\": {\"type\": \"command\", \"command\": \"'⟦FIXTURE⟧/source/home/.local/share/fnm/v24/bin/node' '⟦FIXTURE⟧/source/hangar/scripts/statusline.js'\"}, \"hooks\": {\"PreToolUse\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"\\\"⟦FIXTURE⟧/source/hangar/.venv/bin/python3\\\" \\\"⟦FIXTURE⟧/source/hangar/backend/hooks/state_hook.py\\\" || exit 0\"}]}, {\"hooks\": [{\"type\": \"command\", \"command\": \"python3 ⟦FIXTURE⟧/source/home/.claude/hooks/lembrete.py\"}]}, {\"matcher\": \"Bash\", \"hooks\": [{\"type\": \"command\", \"command\": \"/bin/sh '⟦FIXTURE⟧/source/home/.orca/agent-hooks/claude-hook.sh'\"}]}]}}",
+          "mode": 420
+        },
+        "source/home/.claude/skills/minha": {
+          "link": "⟦FIXTURE⟧/source/home/Projetos/skills/minha"
+        },
+        "source/home/.claude/skills/orquestrar": {
+          "link": "⟦FIXTURE⟧/source/hangar/skills/orquestrar"
+        },
+        "source/home/.claude.json": {
+          "text": "{\"oauthAccount\": {\"emailAddress\": \"ana@x\"}, \"userID\": \"u-ana\", \"mcpServers\": {\"hangar\": {\"type\": \"http\", \"url\": \"http://127.0.0.1:8765/mcp/\"}, \"grafana\": {\"type\": \"http\", \"url\": \"https://g\", \"headers\": {\"Authorization\": \"Bearer seg\"}}}}",
+          "mode": 420
+        },
+        "source/home/.codex/AGENTS.md": {
+          "link": "⟦FIXTURE⟧/source/home/.claude/CLAUDE.md"
+        },
+        "source/home/.codex/auth.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.codex/config.toml": {
+          "text": "model = \"gpt-6\"\n[projects.\"/x\"]\ntrust_level = \"trusted\"\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\n[mcp_servers.docs]\ncommand = \"npx\"\n",
+          "mode": 420
+        },
+        "source/home/.orca/agent-hooks/claude-hook.sh": {
+          "text": "#!/bin/sh\n. ./lib.sh\n",
+          "mode": 493
+        },
+        "source/home/.orca/agent-hooks/lib.sh": {
+          "text": "# lib\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/.venv/lib.bin": {
+          "text": "xxxxxxxxxx",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/SKILL.md": {
+          "text": "skill em repo\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/run.sh": {
+          "text": "#!/bin/sh\necho \"${HOME}\" {HOME}\n",
+          "mode": 493
+        },
+        "source/prefs.json": {
+          "text": "{\"elevenlabs_api_key\": \"el-key\", \"sync\": true, \"tts_max_chars\": 900}",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "target/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        }
+      },
+      "progress": [
+        {
+          "phase": "read",
+          "item": "claude_agents",
+          "entry": null,
+          "index": 0,
+          "total": 1
+        }
+      ]
+    },
+    {
+      "items": [
+        "claude_hooks"
+      ],
+      "source": {
+        "hangar": "⟦FIXTURE⟧/source/hangar",
+        "claude": "⟦FIXTURE⟧/source/home/.claude",
+        "codex": "⟦FIXTURE⟧/source/home/.codex",
+        "home": "⟦FIXTURE⟧/source/home"
+      },
+      "target": {
+        "hangar": "⟦FIXTURE⟧/target/hangar",
+        "claude": "⟦FIXTURE⟧/target/home/.claude",
+        "codex": "⟦FIXTURE⟧/target/home/.codex",
+        "home": "⟦FIXTURE⟧/target/home"
+      },
+      "initial": {
+        "source/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "source/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        },
+        "source/home/.claude/.credentials.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.local.md": {
+          "text": "só desta máquina\n",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.md": {
+          "text": "# regras\n",
+          "mode": 420
+        },
+        "source/home/.claude/engines.json": {
+          "text": "{\"kimi\": {\"base_url\": \"https://k\", \"api_key\": \"sk-kimi\"}}",
+          "mode": 420
+        },
+        "source/home/.claude/hooks/guard_tmux.py": {
+          "link": "⟦FIXTURE⟧/source/hangar/backend/hooks/guard_tmux.py"
+        },
+        "source/home/.claude/hooks/lembrete.py": {
+          "text": "print('⟦FIXTURE⟧/source/home/notas')\n",
+          "mode": 420
+        },
+        "source/home/.claude/plugins/known_marketplaces.json": {
+          "text": "{\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}",
+          "mode": 420
+        },
+        "source/home/.claude/rules/a.md": {
+          "text": "regra a\n",
+          "mode": 420
+        },
+        "source/home/.claude/settings.json": {
+          "text": "{\"model\": \"opus\", \"env\": {\"JIRA_TOKEN\": \"segredo-jira\"}, \"enabledPlugins\": {\"ponytail@ponytail\": true}, \"extraKnownMarketplaces\": {\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}, \"statusLine\": {\"type\": \"command\", \"command\": \"'⟦FIXTURE⟧/source/home/.local/share/fnm/v24/bin/node' '⟦FIXTURE⟧/source/hangar/scripts/statusline.js'\"}, \"hooks\": {\"PreToolUse\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"\\\"⟦FIXTURE⟧/source/hangar/.venv/bin/python3\\\" \\\"⟦FIXTURE⟧/source/hangar/backend/hooks/state_hook.py\\\" || exit 0\"}]}, {\"hooks\": [{\"type\": \"command\", \"command\": \"python3 ⟦FIXTURE⟧/source/home/.claude/hooks/lembrete.py\"}]}, {\"matcher\": \"Bash\", \"hooks\": [{\"type\": \"command\", \"command\": \"/bin/sh '⟦FIXTURE⟧/source/home/.orca/agent-hooks/claude-hook.sh'\"}]}]}}",
+          "mode": 420
+        },
+        "source/home/.claude/skills/minha": {
+          "link": "⟦FIXTURE⟧/source/home/Projetos/skills/minha"
+        },
+        "source/home/.claude/skills/orquestrar": {
+          "link": "⟦FIXTURE⟧/source/hangar/skills/orquestrar"
+        },
+        "source/home/.claude.json": {
+          "text": "{\"oauthAccount\": {\"emailAddress\": \"ana@x\"}, \"userID\": \"u-ana\", \"mcpServers\": {\"hangar\": {\"type\": \"http\", \"url\": \"http://127.0.0.1:8765/mcp/\"}, \"grafana\": {\"type\": \"http\", \"url\": \"https://g\", \"headers\": {\"Authorization\": \"Bearer seg\"}}}}",
+          "mode": 420
+        },
+        "source/home/.codex/AGENTS.md": {
+          "link": "⟦FIXTURE⟧/source/home/.claude/CLAUDE.md"
+        },
+        "source/home/.codex/auth.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.codex/config.toml": {
+          "text": "model = \"gpt-6\"\n[projects.\"/x\"]\ntrust_level = \"trusted\"\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\n[mcp_servers.docs]\ncommand = \"npx\"\n",
+          "mode": 420
+        },
+        "source/home/.orca/agent-hooks/claude-hook.sh": {
+          "text": "#!/bin/sh\n. ./lib.sh\n",
+          "mode": 493
+        },
+        "source/home/.orca/agent-hooks/lib.sh": {
+          "text": "# lib\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/.venv/lib.bin": {
+          "text": "xxxxxxxxxx",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/SKILL.md": {
+          "text": "skill em repo\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/run.sh": {
+          "text": "#!/bin/sh\necho \"${HOME}\" {HOME}\n",
+          "mode": 493
+        },
+        "source/prefs.json": {
+          "text": "{\"elevenlabs_api_key\": \"el-key\", \"sync\": true, \"tts_max_chars\": 900}",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "target/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        }
+      },
+      "bundle": {
+        "items": {
+          "claude_hooks": {
+            "entries": {
+              "hooks/lembrete.py": {
+                "kind": "file",
+                "files": [
+                  ""
+                ],
+                "text": [
+                  ""
+                ],
+                "hash": "d8ef4e4d5ca0d2c86e4b45614531126e0c97409484d50c8c56c7fbf116fc804b"
+              }
+            },
+            "hashes": {
+              "hooks/lembrete.py": "d8ef4e4d5ca0d2c86e4b45614531126e0c97409484d50c8c56c7fbf116fc804b",
+              "statusLine": "917cad24792b24e5a36aaf90fdbadd4eab068fa90d6d4342843a293a5b8bc045",
+              "hooks:PreToolUse": "6bd6869da54f5413d8e1b400f90c9a8ee2fa9dbae75769fca6feafe467ce6c41",
+              "ref:⟦CLAUDE⟧/hooks/lembrete.py": "a5ec4e4ae005b515c39a83f996dd2021037f7ccd1d3c14174068831551e1540c",
+              "ref:⟦HOME⟧/.orca/agent-hooks/claude-hook.sh": "92d165ab3235e426a077581c4243649a386addfe660bfd17bc8bbd2054f1338b",
+              "ref:⟦HOME⟧/.orca/agent-hooks/lib.sh": "7fdf11d4cd93e0f6e669b1add0389edeb7b8f70d05ca82200f7a3c3ae20711c4"
+            },
+            "descriptions": {
+              "ref:⟦HOME⟧/.orca/agent-hooks/lib.sh": "lib"
+            },
+            "hooks": {
+              "PreToolUse": [
+                {
+                  "hooks": [
+                    {
+                      "type": "command",
+                      "command": "python3 ⟦CLAUDE⟧/hooks/lembrete.py"
+                    }
+                  ]
+                },
+                {
+                  "matcher": "Bash",
+                  "hooks": [
+                    {
+                      "type": "command",
+                      "command": "/bin/sh '⟦HOME⟧/.orca/agent-hooks/claude-hook.sh'"
+                    }
+                  ]
+                }
+              ]
+            },
+            "labels": {
+              "hooks:PreToolUse": [
+                "lembrete.py",
+                "claude-hook.sh"
+              ],
+              "statusLine": [
+                "statusline.js"
+              ]
+            },
+            "statusLine": {
+              "type": "command",
+              "command": "'⟦HOME⟧/.local/share/fnm/v24/bin/node' '⟦HANGAR⟧/scripts/statusline.js'"
+            },
+            "refs": {
+              "⟦CLAUDE⟧/hooks/lembrete.py": {
+                "member": "refs/54dcb45aded7aa862ba1e69d6e6f607a95e10dc7",
+                "text": true
+              },
+              "⟦HOME⟧/.orca/agent-hooks/claude-hook.sh": {
+                "member": "refs/046e074072cd9d44730548814c4fb5a6ef514d91",
+                "text": false
+              },
+              "⟦HOME⟧/.orca/agent-hooks/lib.sh": {
+                "member": "refs/fa813df7381f6935589b101cc21b193ebc913474",
+                "text": false
+              },
+              "⟦HANGAR⟧/scripts/statusline.js": {
+                "member": ""
+              }
+            }
+          }
+        },
+        "warnings": {
+          "claude_hooks": []
+        },
+        "files": {
+          "files/claude_hooks/hooks/lembrete.py": {
+            "data": "cHJpbnQoJ+KfpkhPTUXin6cvbm90YXMnKQo=",
+            "mode": 420
+          },
+          "refs/54dcb45aded7aa862ba1e69d6e6f607a95e10dc7": {
+            "data": "cHJpbnQoJ+KfpkhPTUXin6cvbm90YXMnKQo=",
+            "mode": 420
+          },
+          "refs/046e074072cd9d44730548814c4fb5a6ef514d91": {
+            "data": "IyEvYmluL3NoCi4gLi9saWIuc2gK",
+            "mode": 493
+          },
+          "refs/fa813df7381f6935589b101cc21b193ebc913474": {
+            "data": "IyBsaWIK",
+            "mode": 420
+          }
+        }
+      },
+      "report": {
+        "items": {
+          "claude_hooks": {
+            "status": "applied",
+            "changed": [
+              "hooks/lembrete.py",
+              "⟦FIXTURE⟧/target/home/.orca/agent-hooks/claude-hook.sh",
+              "⟦FIXTURE⟧/target/home/.orca/agent-hooks/lib.sh",
+              "hooks:PreToolUse",
+              "statusLine"
+            ],
+            "warnings": [
+              {
+                "code": "config_sync_missing_program",
+                "params": {
+                  "program": "python3",
+                  "where": "PreToolUse"
+                }
+              },
+              {
+                "code": "config_sync_missing_program",
+                "params": {
+                  "program": "node",
+                  "where": "statusLine"
+                }
+              }
+            ]
+          }
+        },
+        "backup": ""
+      },
+      "final": {
+        "source/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "source/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        },
+        "source/home/.claude/.credentials.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.local.md": {
+          "text": "só desta máquina\n",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.md": {
+          "text": "# regras\n",
+          "mode": 420
+        },
+        "source/home/.claude/engines.json": {
+          "text": "{\"kimi\": {\"base_url\": \"https://k\", \"api_key\": \"sk-kimi\"}}",
+          "mode": 420
+        },
+        "source/home/.claude/hooks/guard_tmux.py": {
+          "link": "⟦FIXTURE⟧/source/hangar/backend/hooks/guard_tmux.py"
+        },
+        "source/home/.claude/hooks/lembrete.py": {
+          "text": "print('⟦FIXTURE⟧/source/home/notas')\n",
+          "mode": 420
+        },
+        "source/home/.claude/plugins/known_marketplaces.json": {
+          "text": "{\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}",
+          "mode": 420
+        },
+        "source/home/.claude/rules/a.md": {
+          "text": "regra a\n",
+          "mode": 420
+        },
+        "source/home/.claude/settings.json": {
+          "text": "{\"model\": \"opus\", \"env\": {\"JIRA_TOKEN\": \"segredo-jira\"}, \"enabledPlugins\": {\"ponytail@ponytail\": true}, \"extraKnownMarketplaces\": {\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}, \"statusLine\": {\"type\": \"command\", \"command\": \"'⟦FIXTURE⟧/source/home/.local/share/fnm/v24/bin/node' '⟦FIXTURE⟧/source/hangar/scripts/statusline.js'\"}, \"hooks\": {\"PreToolUse\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"\\\"⟦FIXTURE⟧/source/hangar/.venv/bin/python3\\\" \\\"⟦FIXTURE⟧/source/hangar/backend/hooks/state_hook.py\\\" || exit 0\"}]}, {\"hooks\": [{\"type\": \"command\", \"command\": \"python3 ⟦FIXTURE⟧/source/home/.claude/hooks/lembrete.py\"}]}, {\"matcher\": \"Bash\", \"hooks\": [{\"type\": \"command\", \"command\": \"/bin/sh '⟦FIXTURE⟧/source/home/.orca/agent-hooks/claude-hook.sh'\"}]}]}}",
+          "mode": 420
+        },
+        "source/home/.claude/skills/minha": {
+          "link": "⟦FIXTURE⟧/source/home/Projetos/skills/minha"
+        },
+        "source/home/.claude/skills/orquestrar": {
+          "link": "⟦FIXTURE⟧/source/hangar/skills/orquestrar"
+        },
+        "source/home/.claude.json": {
+          "text": "{\"oauthAccount\": {\"emailAddress\": \"ana@x\"}, \"userID\": \"u-ana\", \"mcpServers\": {\"hangar\": {\"type\": \"http\", \"url\": \"http://127.0.0.1:8765/mcp/\"}, \"grafana\": {\"type\": \"http\", \"url\": \"https://g\", \"headers\": {\"Authorization\": \"Bearer seg\"}}}}",
+          "mode": 420
+        },
+        "source/home/.codex/AGENTS.md": {
+          "link": "⟦FIXTURE⟧/source/home/.claude/CLAUDE.md"
+        },
+        "source/home/.codex/auth.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.codex/config.toml": {
+          "text": "model = \"gpt-6\"\n[projects.\"/x\"]\ntrust_level = \"trusted\"\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\n[mcp_servers.docs]\ncommand = \"npx\"\n",
+          "mode": 420
+        },
+        "source/home/.orca/agent-hooks/claude-hook.sh": {
+          "text": "#!/bin/sh\n. ./lib.sh\n",
+          "mode": 493
+        },
+        "source/home/.orca/agent-hooks/lib.sh": {
+          "text": "# lib\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/.venv/lib.bin": {
+          "text": "xxxxxxxxxx",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/SKILL.md": {
+          "text": "skill em repo\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/run.sh": {
+          "text": "#!/bin/sh\necho \"${HOME}\" {HOME}\n",
+          "mode": 493
+        },
+        "source/prefs.json": {
+          "text": "{\"elevenlabs_api_key\": \"el-key\", \"sync\": true, \"tts_max_chars\": 900}",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "target/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        },
+        "target/home/.claude/hooks/lembrete.py": {
+          "text": "print('⟦FIXTURE⟧/target/home/notas')\n",
+          "mode": 420
+        },
+        "target/home/.claude/settings.json": {
+          "text": "{\n  \"hooks\": {\n    \"PreToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"python3 ⟦FIXTURE⟧/target/home/.claude/hooks/lembrete.py\"\n          }\n        ]\n      },\n      {\n        \"matcher\": \"Bash\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"/bin/sh '⟦FIXTURE⟧/target/home/.orca/agent-hooks/claude-hook.sh'\"\n          }\n        ]\n      }\n    ]\n  },\n  \"statusLine\": {\n    \"type\": \"command\",\n    \"command\": \"'⟦FIXTURE⟧/target/home/.local/share/fnm/v24/bin/node' '⟦FIXTURE⟧/target/hangar/scripts/statusline.js'\"\n  }\n}\n",
+          "mode": 384
+        },
+        "target/home/.orca/agent-hooks/claude-hook.sh": {
+          "text": "#!/bin/sh\n. ./lib.sh\n",
+          "mode": 493
+        },
+        "target/home/.orca/agent-hooks/lib.sh": {
+          "text": "# lib\n",
+          "mode": 420
+        }
+      },
+      "progress": [
+        {
+          "phase": "read",
+          "item": "claude_hooks",
+          "entry": null,
+          "index": 0,
+          "total": 1
+        },
+        {
+          "phase": "read",
+          "item": "claude_hooks",
+          "entry": "hooks/lembrete.py"
+        }
+      ]
+    },
+    {
+      "items": [
+        "claude_plugins"
+      ],
+      "source": {
+        "hangar": "⟦FIXTURE⟧/source/hangar",
+        "claude": "⟦FIXTURE⟧/source/home/.claude",
+        "codex": "⟦FIXTURE⟧/source/home/.codex",
+        "home": "⟦FIXTURE⟧/source/home"
+      },
+      "target": {
+        "hangar": "⟦FIXTURE⟧/target/hangar",
+        "claude": "⟦FIXTURE⟧/target/home/.claude",
+        "codex": "⟦FIXTURE⟧/target/home/.codex",
+        "home": "⟦FIXTURE⟧/target/home"
+      },
+      "initial": {
+        "source/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "source/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        },
+        "source/home/.claude/.credentials.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.local.md": {
+          "text": "só desta máquina\n",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.md": {
+          "text": "# regras\n",
+          "mode": 420
+        },
+        "source/home/.claude/engines.json": {
+          "text": "{\"kimi\": {\"base_url\": \"https://k\", \"api_key\": \"sk-kimi\"}}",
+          "mode": 420
+        },
+        "source/home/.claude/hooks/guard_tmux.py": {
+          "link": "⟦FIXTURE⟧/source/hangar/backend/hooks/guard_tmux.py"
+        },
+        "source/home/.claude/hooks/lembrete.py": {
+          "text": "print('⟦FIXTURE⟧/source/home/notas')\n",
+          "mode": 420
+        },
+        "source/home/.claude/plugins/known_marketplaces.json": {
+          "text": "{\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}",
+          "mode": 420
+        },
+        "source/home/.claude/rules/a.md": {
+          "text": "regra a\n",
+          "mode": 420
+        },
+        "source/home/.claude/settings.json": {
+          "text": "{\"model\": \"opus\", \"env\": {\"JIRA_TOKEN\": \"segredo-jira\"}, \"enabledPlugins\": {\"ponytail@ponytail\": true}, \"extraKnownMarketplaces\": {\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}, \"statusLine\": {\"type\": \"command\", \"command\": \"'⟦FIXTURE⟧/source/home/.local/share/fnm/v24/bin/node' '⟦FIXTURE⟧/source/hangar/scripts/statusline.js'\"}, \"hooks\": {\"PreToolUse\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"\\\"⟦FIXTURE⟧/source/hangar/.venv/bin/python3\\\" \\\"⟦FIXTURE⟧/source/hangar/backend/hooks/state_hook.py\\\" || exit 0\"}]}, {\"hooks\": [{\"type\": \"command\", \"command\": \"python3 ⟦FIXTURE⟧/source/home/.claude/hooks/lembrete.py\"}]}, {\"matcher\": \"Bash\", \"hooks\": [{\"type\": \"command\", \"command\": \"/bin/sh '⟦FIXTURE⟧/source/home/.orca/agent-hooks/claude-hook.sh'\"}]}]}}",
+          "mode": 420
+        },
+        "source/home/.claude/skills/minha": {
+          "link": "⟦FIXTURE⟧/source/home/Projetos/skills/minha"
+        },
+        "source/home/.claude/skills/orquestrar": {
+          "link": "⟦FIXTURE⟧/source/hangar/skills/orquestrar"
+        },
+        "source/home/.claude.json": {
+          "text": "{\"oauthAccount\": {\"emailAddress\": \"ana@x\"}, \"userID\": \"u-ana\", \"mcpServers\": {\"hangar\": {\"type\": \"http\", \"url\": \"http://127.0.0.1:8765/mcp/\"}, \"grafana\": {\"type\": \"http\", \"url\": \"https://g\", \"headers\": {\"Authorization\": \"Bearer seg\"}}}}",
+          "mode": 420
+        },
+        "source/home/.codex/AGENTS.md": {
+          "link": "⟦FIXTURE⟧/source/home/.claude/CLAUDE.md"
+        },
+        "source/home/.codex/auth.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.codex/config.toml": {
+          "text": "model = \"gpt-6\"\n[projects.\"/x\"]\ntrust_level = \"trusted\"\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\n[mcp_servers.docs]\ncommand = \"npx\"\n",
+          "mode": 420
+        },
+        "source/home/.orca/agent-hooks/claude-hook.sh": {
+          "text": "#!/bin/sh\n. ./lib.sh\n",
+          "mode": 493
+        },
+        "source/home/.orca/agent-hooks/lib.sh": {
+          "text": "# lib\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/.venv/lib.bin": {
+          "text": "xxxxxxxxxx",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/SKILL.md": {
+          "text": "skill em repo\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/run.sh": {
+          "text": "#!/bin/sh\necho \"${HOME}\" {HOME}\n",
+          "mode": 493
+        },
+        "source/prefs.json": {
+          "text": "{\"elevenlabs_api_key\": \"el-key\", \"sync\": true, \"tts_max_chars\": 900}",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "target/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        }
+      },
+      "bundle": {
+        "items": {
+          "claude_plugins": {
+            "enabledPlugins": {
+              "ponytail@ponytail": true
+            },
+            "extraKnownMarketplaces": {
+              "ponytail": {
+                "source": {
+                  "source": "git",
+                  "url": "https://x/ponytail.git"
+                }
+              }
+            },
+            "sources": {
+              "ponytail": {
+                "source": "git",
+                "url": "https://x/ponytail.git"
+              }
+            },
+            "hashes": {
+              "plugin:ponytail@ponytail": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b",
+              "marketplace:ponytail": "ea44a03a10bfbc7bdc151faf819c5c4ae0bfb8a01a7994e06361a4837f6d7032"
+            },
+            "descriptions": {}
+          }
+        },
+        "warnings": {
+          "claude_plugins": []
+        },
+        "files": {}
+      },
+      "report": {
+        "items": {
+          "claude_plugins": {
+            "status": "applied",
+            "changed": [
+              "plugin:ponytail@ponytail",
+              "marketplace:ponytail"
+            ],
+            "warnings": [
+              {
+                "code": "config_sync_missing_program",
+                "params": {
+                  "program": "claude",
+                  "where": "plugins"
+                }
+              }
+            ]
+          }
+        },
+        "backup": ""
+      },
+      "final": {
+        "source/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "source/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        },
+        "source/home/.claude/.credentials.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.local.md": {
+          "text": "só desta máquina\n",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.md": {
+          "text": "# regras\n",
+          "mode": 420
+        },
+        "source/home/.claude/engines.json": {
+          "text": "{\"kimi\": {\"base_url\": \"https://k\", \"api_key\": \"sk-kimi\"}}",
+          "mode": 420
+        },
+        "source/home/.claude/hooks/guard_tmux.py": {
+          "link": "⟦FIXTURE⟧/source/hangar/backend/hooks/guard_tmux.py"
+        },
+        "source/home/.claude/hooks/lembrete.py": {
+          "text": "print('⟦FIXTURE⟧/source/home/notas')\n",
+          "mode": 420
+        },
+        "source/home/.claude/plugins/known_marketplaces.json": {
+          "text": "{\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}",
+          "mode": 420
+        },
+        "source/home/.claude/rules/a.md": {
+          "text": "regra a\n",
+          "mode": 420
+        },
+        "source/home/.claude/settings.json": {
+          "text": "{\"model\": \"opus\", \"env\": {\"JIRA_TOKEN\": \"segredo-jira\"}, \"enabledPlugins\": {\"ponytail@ponytail\": true}, \"extraKnownMarketplaces\": {\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}, \"statusLine\": {\"type\": \"command\", \"command\": \"'⟦FIXTURE⟧/source/home/.local/share/fnm/v24/bin/node' '⟦FIXTURE⟧/source/hangar/scripts/statusline.js'\"}, \"hooks\": {\"PreToolUse\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"\\\"⟦FIXTURE⟧/source/hangar/.venv/bin/python3\\\" \\\"⟦FIXTURE⟧/source/hangar/backend/hooks/state_hook.py\\\" || exit 0\"}]}, {\"hooks\": [{\"type\": \"command\", \"command\": \"python3 ⟦FIXTURE⟧/source/home/.claude/hooks/lembrete.py\"}]}, {\"matcher\": \"Bash\", \"hooks\": [{\"type\": \"command\", \"command\": \"/bin/sh '⟦FIXTURE⟧/source/home/.orca/agent-hooks/claude-hook.sh'\"}]}]}}",
+          "mode": 420
+        },
+        "source/home/.claude/skills/minha": {
+          "link": "⟦FIXTURE⟧/source/home/Projetos/skills/minha"
+        },
+        "source/home/.claude/skills/orquestrar": {
+          "link": "⟦FIXTURE⟧/source/hangar/skills/orquestrar"
+        },
+        "source/home/.claude.json": {
+          "text": "{\"oauthAccount\": {\"emailAddress\": \"ana@x\"}, \"userID\": \"u-ana\", \"mcpServers\": {\"hangar\": {\"type\": \"http\", \"url\": \"http://127.0.0.1:8765/mcp/\"}, \"grafana\": {\"type\": \"http\", \"url\": \"https://g\", \"headers\": {\"Authorization\": \"Bearer seg\"}}}}",
+          "mode": 420
+        },
+        "source/home/.codex/AGENTS.md": {
+          "link": "⟦FIXTURE⟧/source/home/.claude/CLAUDE.md"
+        },
+        "source/home/.codex/auth.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.codex/config.toml": {
+          "text": "model = \"gpt-6\"\n[projects.\"/x\"]\ntrust_level = \"trusted\"\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\n[mcp_servers.docs]\ncommand = \"npx\"\n",
+          "mode": 420
+        },
+        "source/home/.orca/agent-hooks/claude-hook.sh": {
+          "text": "#!/bin/sh\n. ./lib.sh\n",
+          "mode": 493
+        },
+        "source/home/.orca/agent-hooks/lib.sh": {
+          "text": "# lib\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/.venv/lib.bin": {
+          "text": "xxxxxxxxxx",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/SKILL.md": {
+          "text": "skill em repo\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/run.sh": {
+          "text": "#!/bin/sh\necho \"${HOME}\" {HOME}\n",
+          "mode": 493
+        },
+        "source/prefs.json": {
+          "text": "{\"elevenlabs_api_key\": \"el-key\", \"sync\": true, \"tts_max_chars\": 900}",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "target/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        },
+        "target/home/.claude/settings.json": {
+          "text": "{\n  \"enabledPlugins\": {\n    \"ponytail@ponytail\": true\n  },\n  \"extraKnownMarketplaces\": {\n    \"ponytail\": {\n      \"source\": {\n        \"source\": \"git\",\n        \"url\": \"https://x/ponytail.git\"\n      }\n    }\n  }\n}\n",
+          "mode": 384
+        }
+      },
+      "progress": [
+        {
+          "phase": "read",
+          "item": "claude_plugins",
+          "entry": null,
+          "index": 0,
+          "total": 1
+        }
+      ]
+    },
+    {
+      "items": [
+        "claude_mcp"
+      ],
+      "source": {
+        "hangar": "⟦FIXTURE⟧/source/hangar",
+        "claude": "⟦FIXTURE⟧/source/home/.claude",
+        "codex": "⟦FIXTURE⟧/source/home/.codex",
+        "home": "⟦FIXTURE⟧/source/home"
+      },
+      "target": {
+        "hangar": "⟦FIXTURE⟧/target/hangar",
+        "claude": "⟦FIXTURE⟧/target/home/.claude",
+        "codex": "⟦FIXTURE⟧/target/home/.codex",
+        "home": "⟦FIXTURE⟧/target/home"
+      },
+      "initial": {
+        "source/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "source/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        },
+        "source/home/.claude/.credentials.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.local.md": {
+          "text": "só desta máquina\n",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.md": {
+          "text": "# regras\n",
+          "mode": 420
+        },
+        "source/home/.claude/engines.json": {
+          "text": "{\"kimi\": {\"base_url\": \"https://k\", \"api_key\": \"sk-kimi\"}}",
+          "mode": 420
+        },
+        "source/home/.claude/hooks/guard_tmux.py": {
+          "link": "⟦FIXTURE⟧/source/hangar/backend/hooks/guard_tmux.py"
+        },
+        "source/home/.claude/hooks/lembrete.py": {
+          "text": "print('⟦FIXTURE⟧/source/home/notas')\n",
+          "mode": 420
+        },
+        "source/home/.claude/plugins/known_marketplaces.json": {
+          "text": "{\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}",
+          "mode": 420
+        },
+        "source/home/.claude/rules/a.md": {
+          "text": "regra a\n",
+          "mode": 420
+        },
+        "source/home/.claude/settings.json": {
+          "text": "{\"model\": \"opus\", \"env\": {\"JIRA_TOKEN\": \"segredo-jira\"}, \"enabledPlugins\": {\"ponytail@ponytail\": true}, \"extraKnownMarketplaces\": {\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}, \"statusLine\": {\"type\": \"command\", \"command\": \"'⟦FIXTURE⟧/source/home/.local/share/fnm/v24/bin/node' '⟦FIXTURE⟧/source/hangar/scripts/statusline.js'\"}, \"hooks\": {\"PreToolUse\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"\\\"⟦FIXTURE⟧/source/hangar/.venv/bin/python3\\\" \\\"⟦FIXTURE⟧/source/hangar/backend/hooks/state_hook.py\\\" || exit 0\"}]}, {\"hooks\": [{\"type\": \"command\", \"command\": \"python3 ⟦FIXTURE⟧/source/home/.claude/hooks/lembrete.py\"}]}, {\"matcher\": \"Bash\", \"hooks\": [{\"type\": \"command\", \"command\": \"/bin/sh '⟦FIXTURE⟧/source/home/.orca/agent-hooks/claude-hook.sh'\"}]}]}}",
+          "mode": 420
+        },
+        "source/home/.claude/skills/minha": {
+          "link": "⟦FIXTURE⟧/source/home/Projetos/skills/minha"
+        },
+        "source/home/.claude/skills/orquestrar": {
+          "link": "⟦FIXTURE⟧/source/hangar/skills/orquestrar"
+        },
+        "source/home/.claude.json": {
+          "text": "{\"oauthAccount\": {\"emailAddress\": \"ana@x\"}, \"userID\": \"u-ana\", \"mcpServers\": {\"hangar\": {\"type\": \"http\", \"url\": \"http://127.0.0.1:8765/mcp/\"}, \"grafana\": {\"type\": \"http\", \"url\": \"https://g\", \"headers\": {\"Authorization\": \"Bearer seg\"}}}}",
+          "mode": 420
+        },
+        "source/home/.codex/AGENTS.md": {
+          "link": "⟦FIXTURE⟧/source/home/.claude/CLAUDE.md"
+        },
+        "source/home/.codex/auth.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.codex/config.toml": {
+          "text": "model = \"gpt-6\"\n[projects.\"/x\"]\ntrust_level = \"trusted\"\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\n[mcp_servers.docs]\ncommand = \"npx\"\n",
+          "mode": 420
+        },
+        "source/home/.orca/agent-hooks/claude-hook.sh": {
+          "text": "#!/bin/sh\n. ./lib.sh\n",
+          "mode": 493
+        },
+        "source/home/.orca/agent-hooks/lib.sh": {
+          "text": "# lib\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/.venv/lib.bin": {
+          "text": "xxxxxxxxxx",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/SKILL.md": {
+          "text": "skill em repo\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/run.sh": {
+          "text": "#!/bin/sh\necho \"${HOME}\" {HOME}\n",
+          "mode": 493
+        },
+        "source/prefs.json": {
+          "text": "{\"elevenlabs_api_key\": \"el-key\", \"sync\": true, \"tts_max_chars\": 900}",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "target/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        }
+      },
+      "bundle": {
+        "items": {
+          "claude_mcp": {
+            "servers": {
+              "grafana": {
+                "type": "http",
+                "url": "https://g",
+                "headers": {
+                  "Authorization": "Bearer seg"
+                }
+              }
+            },
+            "refs": {},
+            "hashes": {
+              "grafana": "ec2dac36ef79961cdf8d17aa1cc33614b7b583a703bea34d6333a689472f1911"
+            },
+            "descriptions": {}
+          }
+        },
+        "warnings": {},
+        "files": {}
+      },
+      "report": {
+        "items": {
+          "claude_mcp": {
+            "status": "applied",
+            "changed": [
+              "grafana"
+            ],
+            "warnings": []
+          }
+        },
+        "backup": ""
+      },
+      "final": {
+        "source/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "source/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        },
+        "source/home/.claude/.credentials.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.local.md": {
+          "text": "só desta máquina\n",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.md": {
+          "text": "# regras\n",
+          "mode": 420
+        },
+        "source/home/.claude/engines.json": {
+          "text": "{\"kimi\": {\"base_url\": \"https://k\", \"api_key\": \"sk-kimi\"}}",
+          "mode": 420
+        },
+        "source/home/.claude/hooks/guard_tmux.py": {
+          "link": "⟦FIXTURE⟧/source/hangar/backend/hooks/guard_tmux.py"
+        },
+        "source/home/.claude/hooks/lembrete.py": {
+          "text": "print('⟦FIXTURE⟧/source/home/notas')\n",
+          "mode": 420
+        },
+        "source/home/.claude/plugins/known_marketplaces.json": {
+          "text": "{\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}",
+          "mode": 420
+        },
+        "source/home/.claude/rules/a.md": {
+          "text": "regra a\n",
+          "mode": 420
+        },
+        "source/home/.claude/settings.json": {
+          "text": "{\"model\": \"opus\", \"env\": {\"JIRA_TOKEN\": \"segredo-jira\"}, \"enabledPlugins\": {\"ponytail@ponytail\": true}, \"extraKnownMarketplaces\": {\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}, \"statusLine\": {\"type\": \"command\", \"command\": \"'⟦FIXTURE⟧/source/home/.local/share/fnm/v24/bin/node' '⟦FIXTURE⟧/source/hangar/scripts/statusline.js'\"}, \"hooks\": {\"PreToolUse\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"\\\"⟦FIXTURE⟧/source/hangar/.venv/bin/python3\\\" \\\"⟦FIXTURE⟧/source/hangar/backend/hooks/state_hook.py\\\" || exit 0\"}]}, {\"hooks\": [{\"type\": \"command\", \"command\": \"python3 ⟦FIXTURE⟧/source/home/.claude/hooks/lembrete.py\"}]}, {\"matcher\": \"Bash\", \"hooks\": [{\"type\": \"command\", \"command\": \"/bin/sh '⟦FIXTURE⟧/source/home/.orca/agent-hooks/claude-hook.sh'\"}]}]}}",
+          "mode": 420
+        },
+        "source/home/.claude/skills/minha": {
+          "link": "⟦FIXTURE⟧/source/home/Projetos/skills/minha"
+        },
+        "source/home/.claude/skills/orquestrar": {
+          "link": "⟦FIXTURE⟧/source/hangar/skills/orquestrar"
+        },
+        "source/home/.claude.json": {
+          "text": "{\"oauthAccount\": {\"emailAddress\": \"ana@x\"}, \"userID\": \"u-ana\", \"mcpServers\": {\"hangar\": {\"type\": \"http\", \"url\": \"http://127.0.0.1:8765/mcp/\"}, \"grafana\": {\"type\": \"http\", \"url\": \"https://g\", \"headers\": {\"Authorization\": \"Bearer seg\"}}}}",
+          "mode": 420
+        },
+        "source/home/.codex/AGENTS.md": {
+          "link": "⟦FIXTURE⟧/source/home/.claude/CLAUDE.md"
+        },
+        "source/home/.codex/auth.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.codex/config.toml": {
+          "text": "model = \"gpt-6\"\n[projects.\"/x\"]\ntrust_level = \"trusted\"\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\n[mcp_servers.docs]\ncommand = \"npx\"\n",
+          "mode": 420
+        },
+        "source/home/.orca/agent-hooks/claude-hook.sh": {
+          "text": "#!/bin/sh\n. ./lib.sh\n",
+          "mode": 493
+        },
+        "source/home/.orca/agent-hooks/lib.sh": {
+          "text": "# lib\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/.venv/lib.bin": {
+          "text": "xxxxxxxxxx",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/SKILL.md": {
+          "text": "skill em repo\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/run.sh": {
+          "text": "#!/bin/sh\necho \"${HOME}\" {HOME}\n",
+          "mode": 493
+        },
+        "source/prefs.json": {
+          "text": "{\"elevenlabs_api_key\": \"el-key\", \"sync\": true, \"tts_max_chars\": 900}",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "target/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        },
+        "target/home/.claude.json": {
+          "text": "{\n  \"mcpServers\": {\n    \"grafana\": {\n      \"type\": \"http\",\n      \"url\": \"https://g\",\n      \"headers\": {\n        \"Authorization\": \"Bearer seg\"\n      }\n    }\n  }\n}\n",
+          "mode": 384
+        }
+      },
+      "progress": [
+        {
+          "phase": "read",
+          "item": "claude_mcp",
+          "entry": null,
+          "index": 0,
+          "total": 1
+        }
+      ]
+    },
+    {
+      "items": [
+        "claude_env"
+      ],
+      "source": {
+        "hangar": "⟦FIXTURE⟧/source/hangar",
+        "claude": "⟦FIXTURE⟧/source/home/.claude",
+        "codex": "⟦FIXTURE⟧/source/home/.codex",
+        "home": "⟦FIXTURE⟧/source/home"
+      },
+      "target": {
+        "hangar": "⟦FIXTURE⟧/target/hangar",
+        "claude": "⟦FIXTURE⟧/target/home/.claude",
+        "codex": "⟦FIXTURE⟧/target/home/.codex",
+        "home": "⟦FIXTURE⟧/target/home"
+      },
+      "initial": {
+        "source/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "source/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        },
+        "source/home/.claude/.credentials.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.local.md": {
+          "text": "só desta máquina\n",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.md": {
+          "text": "# regras\n",
+          "mode": 420
+        },
+        "source/home/.claude/engines.json": {
+          "text": "{\"kimi\": {\"base_url\": \"https://k\", \"api_key\": \"sk-kimi\"}}",
+          "mode": 420
+        },
+        "source/home/.claude/hooks/guard_tmux.py": {
+          "link": "⟦FIXTURE⟧/source/hangar/backend/hooks/guard_tmux.py"
+        },
+        "source/home/.claude/hooks/lembrete.py": {
+          "text": "print('⟦FIXTURE⟧/source/home/notas')\n",
+          "mode": 420
+        },
+        "source/home/.claude/plugins/known_marketplaces.json": {
+          "text": "{\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}",
+          "mode": 420
+        },
+        "source/home/.claude/rules/a.md": {
+          "text": "regra a\n",
+          "mode": 420
+        },
+        "source/home/.claude/settings.json": {
+          "text": "{\"model\": \"opus\", \"env\": {\"JIRA_TOKEN\": \"segredo-jira\"}, \"enabledPlugins\": {\"ponytail@ponytail\": true}, \"extraKnownMarketplaces\": {\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}, \"statusLine\": {\"type\": \"command\", \"command\": \"'⟦FIXTURE⟧/source/home/.local/share/fnm/v24/bin/node' '⟦FIXTURE⟧/source/hangar/scripts/statusline.js'\"}, \"hooks\": {\"PreToolUse\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"\\\"⟦FIXTURE⟧/source/hangar/.venv/bin/python3\\\" \\\"⟦FIXTURE⟧/source/hangar/backend/hooks/state_hook.py\\\" || exit 0\"}]}, {\"hooks\": [{\"type\": \"command\", \"command\": \"python3 ⟦FIXTURE⟧/source/home/.claude/hooks/lembrete.py\"}]}, {\"matcher\": \"Bash\", \"hooks\": [{\"type\": \"command\", \"command\": \"/bin/sh '⟦FIXTURE⟧/source/home/.orca/agent-hooks/claude-hook.sh'\"}]}]}}",
+          "mode": 420
+        },
+        "source/home/.claude/skills/minha": {
+          "link": "⟦FIXTURE⟧/source/home/Projetos/skills/minha"
+        },
+        "source/home/.claude/skills/orquestrar": {
+          "link": "⟦FIXTURE⟧/source/hangar/skills/orquestrar"
+        },
+        "source/home/.claude.json": {
+          "text": "{\"oauthAccount\": {\"emailAddress\": \"ana@x\"}, \"userID\": \"u-ana\", \"mcpServers\": {\"hangar\": {\"type\": \"http\", \"url\": \"http://127.0.0.1:8765/mcp/\"}, \"grafana\": {\"type\": \"http\", \"url\": \"https://g\", \"headers\": {\"Authorization\": \"Bearer seg\"}}}}",
+          "mode": 420
+        },
+        "source/home/.codex/AGENTS.md": {
+          "link": "⟦FIXTURE⟧/source/home/.claude/CLAUDE.md"
+        },
+        "source/home/.codex/auth.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.codex/config.toml": {
+          "text": "model = \"gpt-6\"\n[projects.\"/x\"]\ntrust_level = \"trusted\"\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\n[mcp_servers.docs]\ncommand = \"npx\"\n",
+          "mode": 420
+        },
+        "source/home/.orca/agent-hooks/claude-hook.sh": {
+          "text": "#!/bin/sh\n. ./lib.sh\n",
+          "mode": 493
+        },
+        "source/home/.orca/agent-hooks/lib.sh": {
+          "text": "# lib\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/.venv/lib.bin": {
+          "text": "xxxxxxxxxx",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/SKILL.md": {
+          "text": "skill em repo\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/run.sh": {
+          "text": "#!/bin/sh\necho \"${HOME}\" {HOME}\n",
+          "mode": 493
+        },
+        "source/prefs.json": {
+          "text": "{\"elevenlabs_api_key\": \"el-key\", \"sync\": true, \"tts_max_chars\": 900}",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "target/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        }
+      },
+      "bundle": {
+        "items": {
+          "claude_env": {
+            "env": {
+              "JIRA_TOKEN": "segredo-jira"
+            },
+            "hashes": {
+              "JIRA_TOKEN": "418049bc96d9d29c4295587dcd0aab0b0c669f94159464cb66b11dbe3c2883b4"
+            }
+          }
+        },
+        "warnings": {},
+        "files": {}
+      },
+      "report": {
+        "items": {
+          "claude_env": {
+            "status": "applied",
+            "changed": [
+              "JIRA_TOKEN"
+            ],
+            "warnings": []
+          }
+        },
+        "backup": ""
+      },
+      "final": {
+        "source/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "source/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        },
+        "source/home/.claude/.credentials.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.local.md": {
+          "text": "só desta máquina\n",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.md": {
+          "text": "# regras\n",
+          "mode": 420
+        },
+        "source/home/.claude/engines.json": {
+          "text": "{\"kimi\": {\"base_url\": \"https://k\", \"api_key\": \"sk-kimi\"}}",
+          "mode": 420
+        },
+        "source/home/.claude/hooks/guard_tmux.py": {
+          "link": "⟦FIXTURE⟧/source/hangar/backend/hooks/guard_tmux.py"
+        },
+        "source/home/.claude/hooks/lembrete.py": {
+          "text": "print('⟦FIXTURE⟧/source/home/notas')\n",
+          "mode": 420
+        },
+        "source/home/.claude/plugins/known_marketplaces.json": {
+          "text": "{\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}",
+          "mode": 420
+        },
+        "source/home/.claude/rules/a.md": {
+          "text": "regra a\n",
+          "mode": 420
+        },
+        "source/home/.claude/settings.json": {
+          "text": "{\"model\": \"opus\", \"env\": {\"JIRA_TOKEN\": \"segredo-jira\"}, \"enabledPlugins\": {\"ponytail@ponytail\": true}, \"extraKnownMarketplaces\": {\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}, \"statusLine\": {\"type\": \"command\", \"command\": \"'⟦FIXTURE⟧/source/home/.local/share/fnm/v24/bin/node' '⟦FIXTURE⟧/source/hangar/scripts/statusline.js'\"}, \"hooks\": {\"PreToolUse\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"\\\"⟦FIXTURE⟧/source/hangar/.venv/bin/python3\\\" \\\"⟦FIXTURE⟧/source/hangar/backend/hooks/state_hook.py\\\" || exit 0\"}]}, {\"hooks\": [{\"type\": \"command\", \"command\": \"python3 ⟦FIXTURE⟧/source/home/.claude/hooks/lembrete.py\"}]}, {\"matcher\": \"Bash\", \"hooks\": [{\"type\": \"command\", \"command\": \"/bin/sh '⟦FIXTURE⟧/source/home/.orca/agent-hooks/claude-hook.sh'\"}]}]}}",
+          "mode": 420
+        },
+        "source/home/.claude/skills/minha": {
+          "link": "⟦FIXTURE⟧/source/home/Projetos/skills/minha"
+        },
+        "source/home/.claude/skills/orquestrar": {
+          "link": "⟦FIXTURE⟧/source/hangar/skills/orquestrar"
+        },
+        "source/home/.claude.json": {
+          "text": "{\"oauthAccount\": {\"emailAddress\": \"ana@x\"}, \"userID\": \"u-ana\", \"mcpServers\": {\"hangar\": {\"type\": \"http\", \"url\": \"http://127.0.0.1:8765/mcp/\"}, \"grafana\": {\"type\": \"http\", \"url\": \"https://g\", \"headers\": {\"Authorization\": \"Bearer seg\"}}}}",
+          "mode": 420
+        },
+        "source/home/.codex/AGENTS.md": {
+          "link": "⟦FIXTURE⟧/source/home/.claude/CLAUDE.md"
+        },
+        "source/home/.codex/auth.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.codex/config.toml": {
+          "text": "model = \"gpt-6\"\n[projects.\"/x\"]\ntrust_level = \"trusted\"\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\n[mcp_servers.docs]\ncommand = \"npx\"\n",
+          "mode": 420
+        },
+        "source/home/.orca/agent-hooks/claude-hook.sh": {
+          "text": "#!/bin/sh\n. ./lib.sh\n",
+          "mode": 493
+        },
+        "source/home/.orca/agent-hooks/lib.sh": {
+          "text": "# lib\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/.venv/lib.bin": {
+          "text": "xxxxxxxxxx",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/SKILL.md": {
+          "text": "skill em repo\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/run.sh": {
+          "text": "#!/bin/sh\necho \"${HOME}\" {HOME}\n",
+          "mode": 493
+        },
+        "source/prefs.json": {
+          "text": "{\"elevenlabs_api_key\": \"el-key\", \"sync\": true, \"tts_max_chars\": 900}",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "target/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        },
+        "target/home/.claude/settings.json": {
+          "text": "{\n  \"env\": {\n    \"JIRA_TOKEN\": \"segredo-jira\"\n  }\n}\n",
+          "mode": 384
+        }
+      },
+      "progress": [
+        {
+          "phase": "read",
+          "item": "claude_env",
+          "entry": null,
+          "index": 0,
+          "total": 1
+        }
+      ]
+    },
+    {
+      "items": [
+        "claude_settings"
+      ],
+      "source": {
+        "hangar": "⟦FIXTURE⟧/source/hangar",
+        "claude": "⟦FIXTURE⟧/source/home/.claude",
+        "codex": "⟦FIXTURE⟧/source/home/.codex",
+        "home": "⟦FIXTURE⟧/source/home"
+      },
+      "target": {
+        "hangar": "⟦FIXTURE⟧/target/hangar",
+        "claude": "⟦FIXTURE⟧/target/home/.claude",
+        "codex": "⟦FIXTURE⟧/target/home/.codex",
+        "home": "⟦FIXTURE⟧/target/home"
+      },
+      "initial": {
+        "source/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "source/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        },
+        "source/home/.claude/.credentials.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.local.md": {
+          "text": "só desta máquina\n",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.md": {
+          "text": "# regras\n",
+          "mode": 420
+        },
+        "source/home/.claude/engines.json": {
+          "text": "{\"kimi\": {\"base_url\": \"https://k\", \"api_key\": \"sk-kimi\"}}",
+          "mode": 420
+        },
+        "source/home/.claude/hooks/guard_tmux.py": {
+          "link": "⟦FIXTURE⟧/source/hangar/backend/hooks/guard_tmux.py"
+        },
+        "source/home/.claude/hooks/lembrete.py": {
+          "text": "print('⟦FIXTURE⟧/source/home/notas')\n",
+          "mode": 420
+        },
+        "source/home/.claude/plugins/known_marketplaces.json": {
+          "text": "{\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}",
+          "mode": 420
+        },
+        "source/home/.claude/rules/a.md": {
+          "text": "regra a\n",
+          "mode": 420
+        },
+        "source/home/.claude/settings.json": {
+          "text": "{\"model\": \"opus\", \"env\": {\"JIRA_TOKEN\": \"segredo-jira\"}, \"enabledPlugins\": {\"ponytail@ponytail\": true}, \"extraKnownMarketplaces\": {\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}, \"statusLine\": {\"type\": \"command\", \"command\": \"'⟦FIXTURE⟧/source/home/.local/share/fnm/v24/bin/node' '⟦FIXTURE⟧/source/hangar/scripts/statusline.js'\"}, \"hooks\": {\"PreToolUse\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"\\\"⟦FIXTURE⟧/source/hangar/.venv/bin/python3\\\" \\\"⟦FIXTURE⟧/source/hangar/backend/hooks/state_hook.py\\\" || exit 0\"}]}, {\"hooks\": [{\"type\": \"command\", \"command\": \"python3 ⟦FIXTURE⟧/source/home/.claude/hooks/lembrete.py\"}]}, {\"matcher\": \"Bash\", \"hooks\": [{\"type\": \"command\", \"command\": \"/bin/sh '⟦FIXTURE⟧/source/home/.orca/agent-hooks/claude-hook.sh'\"}]}]}}",
+          "mode": 420
+        },
+        "source/home/.claude/skills/minha": {
+          "link": "⟦FIXTURE⟧/source/home/Projetos/skills/minha"
+        },
+        "source/home/.claude/skills/orquestrar": {
+          "link": "⟦FIXTURE⟧/source/hangar/skills/orquestrar"
+        },
+        "source/home/.claude.json": {
+          "text": "{\"oauthAccount\": {\"emailAddress\": \"ana@x\"}, \"userID\": \"u-ana\", \"mcpServers\": {\"hangar\": {\"type\": \"http\", \"url\": \"http://127.0.0.1:8765/mcp/\"}, \"grafana\": {\"type\": \"http\", \"url\": \"https://g\", \"headers\": {\"Authorization\": \"Bearer seg\"}}}}",
+          "mode": 420
+        },
+        "source/home/.codex/AGENTS.md": {
+          "link": "⟦FIXTURE⟧/source/home/.claude/CLAUDE.md"
+        },
+        "source/home/.codex/auth.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.codex/config.toml": {
+          "text": "model = \"gpt-6\"\n[projects.\"/x\"]\ntrust_level = \"trusted\"\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\n[mcp_servers.docs]\ncommand = \"npx\"\n",
+          "mode": 420
+        },
+        "source/home/.orca/agent-hooks/claude-hook.sh": {
+          "text": "#!/bin/sh\n. ./lib.sh\n",
+          "mode": 493
+        },
+        "source/home/.orca/agent-hooks/lib.sh": {
+          "text": "# lib\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/.venv/lib.bin": {
+          "text": "xxxxxxxxxx",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/SKILL.md": {
+          "text": "skill em repo\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/run.sh": {
+          "text": "#!/bin/sh\necho \"${HOME}\" {HOME}\n",
+          "mode": 493
+        },
+        "source/prefs.json": {
+          "text": "{\"elevenlabs_api_key\": \"el-key\", \"sync\": true, \"tts_max_chars\": 900}",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "target/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        }
+      },
+      "bundle": {
+        "items": {
+          "claude_settings": {
+            "settings": {
+              "model": "opus"
+            },
+            "hashes": {
+              "model": "242dbbf670c011d544cda19dacb3c55bfe51a769e1cc083b365e792538ceb90e"
+            }
+          }
+        },
+        "warnings": {},
+        "files": {}
+      },
+      "report": {
+        "items": {
+          "claude_settings": {
+            "status": "applied",
+            "changed": [
+              "model"
+            ],
+            "warnings": []
+          }
+        },
+        "backup": ""
+      },
+      "final": {
+        "source/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "source/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        },
+        "source/home/.claude/.credentials.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.local.md": {
+          "text": "só desta máquina\n",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.md": {
+          "text": "# regras\n",
+          "mode": 420
+        },
+        "source/home/.claude/engines.json": {
+          "text": "{\"kimi\": {\"base_url\": \"https://k\", \"api_key\": \"sk-kimi\"}}",
+          "mode": 420
+        },
+        "source/home/.claude/hooks/guard_tmux.py": {
+          "link": "⟦FIXTURE⟧/source/hangar/backend/hooks/guard_tmux.py"
+        },
+        "source/home/.claude/hooks/lembrete.py": {
+          "text": "print('⟦FIXTURE⟧/source/home/notas')\n",
+          "mode": 420
+        },
+        "source/home/.claude/plugins/known_marketplaces.json": {
+          "text": "{\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}",
+          "mode": 420
+        },
+        "source/home/.claude/rules/a.md": {
+          "text": "regra a\n",
+          "mode": 420
+        },
+        "source/home/.claude/settings.json": {
+          "text": "{\"model\": \"opus\", \"env\": {\"JIRA_TOKEN\": \"segredo-jira\"}, \"enabledPlugins\": {\"ponytail@ponytail\": true}, \"extraKnownMarketplaces\": {\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}, \"statusLine\": {\"type\": \"command\", \"command\": \"'⟦FIXTURE⟧/source/home/.local/share/fnm/v24/bin/node' '⟦FIXTURE⟧/source/hangar/scripts/statusline.js'\"}, \"hooks\": {\"PreToolUse\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"\\\"⟦FIXTURE⟧/source/hangar/.venv/bin/python3\\\" \\\"⟦FIXTURE⟧/source/hangar/backend/hooks/state_hook.py\\\" || exit 0\"}]}, {\"hooks\": [{\"type\": \"command\", \"command\": \"python3 ⟦FIXTURE⟧/source/home/.claude/hooks/lembrete.py\"}]}, {\"matcher\": \"Bash\", \"hooks\": [{\"type\": \"command\", \"command\": \"/bin/sh '⟦FIXTURE⟧/source/home/.orca/agent-hooks/claude-hook.sh'\"}]}]}}",
+          "mode": 420
+        },
+        "source/home/.claude/skills/minha": {
+          "link": "⟦FIXTURE⟧/source/home/Projetos/skills/minha"
+        },
+        "source/home/.claude/skills/orquestrar": {
+          "link": "⟦FIXTURE⟧/source/hangar/skills/orquestrar"
+        },
+        "source/home/.claude.json": {
+          "text": "{\"oauthAccount\": {\"emailAddress\": \"ana@x\"}, \"userID\": \"u-ana\", \"mcpServers\": {\"hangar\": {\"type\": \"http\", \"url\": \"http://127.0.0.1:8765/mcp/\"}, \"grafana\": {\"type\": \"http\", \"url\": \"https://g\", \"headers\": {\"Authorization\": \"Bearer seg\"}}}}",
+          "mode": 420
+        },
+        "source/home/.codex/AGENTS.md": {
+          "link": "⟦FIXTURE⟧/source/home/.claude/CLAUDE.md"
+        },
+        "source/home/.codex/auth.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.codex/config.toml": {
+          "text": "model = \"gpt-6\"\n[projects.\"/x\"]\ntrust_level = \"trusted\"\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\n[mcp_servers.docs]\ncommand = \"npx\"\n",
+          "mode": 420
+        },
+        "source/home/.orca/agent-hooks/claude-hook.sh": {
+          "text": "#!/bin/sh\n. ./lib.sh\n",
+          "mode": 493
+        },
+        "source/home/.orca/agent-hooks/lib.sh": {
+          "text": "# lib\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/.venv/lib.bin": {
+          "text": "xxxxxxxxxx",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/SKILL.md": {
+          "text": "skill em repo\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/run.sh": {
+          "text": "#!/bin/sh\necho \"${HOME}\" {HOME}\n",
+          "mode": 493
+        },
+        "source/prefs.json": {
+          "text": "{\"elevenlabs_api_key\": \"el-key\", \"sync\": true, \"tts_max_chars\": 900}",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "target/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        },
+        "target/home/.claude/settings.json": {
+          "text": "{\n  \"model\": \"opus\"\n}\n",
+          "mode": 384
+        }
+      },
+      "progress": [
+        {
+          "phase": "read",
+          "item": "claude_settings",
+          "entry": null,
+          "index": 0,
+          "total": 1
+        }
+      ]
+    },
+    {
+      "items": [
+        "codex"
+      ],
+      "source": {
+        "hangar": "⟦FIXTURE⟧/source/hangar",
+        "claude": "⟦FIXTURE⟧/source/home/.claude",
+        "codex": "⟦FIXTURE⟧/source/home/.codex",
+        "home": "⟦FIXTURE⟧/source/home"
+      },
+      "target": {
+        "hangar": "⟦FIXTURE⟧/target/hangar",
+        "claude": "⟦FIXTURE⟧/target/home/.claude",
+        "codex": "⟦FIXTURE⟧/target/home/.codex",
+        "home": "⟦FIXTURE⟧/target/home"
+      },
+      "initial": {
+        "source/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "source/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        },
+        "source/home/.claude/.credentials.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.local.md": {
+          "text": "só desta máquina\n",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.md": {
+          "text": "# regras\n",
+          "mode": 420
+        },
+        "source/home/.claude/engines.json": {
+          "text": "{\"kimi\": {\"base_url\": \"https://k\", \"api_key\": \"sk-kimi\"}}",
+          "mode": 420
+        },
+        "source/home/.claude/hooks/guard_tmux.py": {
+          "link": "⟦FIXTURE⟧/source/hangar/backend/hooks/guard_tmux.py"
+        },
+        "source/home/.claude/hooks/lembrete.py": {
+          "text": "print('⟦FIXTURE⟧/source/home/notas')\n",
+          "mode": 420
+        },
+        "source/home/.claude/plugins/known_marketplaces.json": {
+          "text": "{\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}",
+          "mode": 420
+        },
+        "source/home/.claude/rules/a.md": {
+          "text": "regra a\n",
+          "mode": 420
+        },
+        "source/home/.claude/settings.json": {
+          "text": "{\"model\": \"opus\", \"env\": {\"JIRA_TOKEN\": \"segredo-jira\"}, \"enabledPlugins\": {\"ponytail@ponytail\": true}, \"extraKnownMarketplaces\": {\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}, \"statusLine\": {\"type\": \"command\", \"command\": \"'⟦FIXTURE⟧/source/home/.local/share/fnm/v24/bin/node' '⟦FIXTURE⟧/source/hangar/scripts/statusline.js'\"}, \"hooks\": {\"PreToolUse\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"\\\"⟦FIXTURE⟧/source/hangar/.venv/bin/python3\\\" \\\"⟦FIXTURE⟧/source/hangar/backend/hooks/state_hook.py\\\" || exit 0\"}]}, {\"hooks\": [{\"type\": \"command\", \"command\": \"python3 ⟦FIXTURE⟧/source/home/.claude/hooks/lembrete.py\"}]}, {\"matcher\": \"Bash\", \"hooks\": [{\"type\": \"command\", \"command\": \"/bin/sh '⟦FIXTURE⟧/source/home/.orca/agent-hooks/claude-hook.sh'\"}]}]}}",
+          "mode": 420
+        },
+        "source/home/.claude/skills/minha": {
+          "link": "⟦FIXTURE⟧/source/home/Projetos/skills/minha"
+        },
+        "source/home/.claude/skills/orquestrar": {
+          "link": "⟦FIXTURE⟧/source/hangar/skills/orquestrar"
+        },
+        "source/home/.claude.json": {
+          "text": "{\"oauthAccount\": {\"emailAddress\": \"ana@x\"}, \"userID\": \"u-ana\", \"mcpServers\": {\"hangar\": {\"type\": \"http\", \"url\": \"http://127.0.0.1:8765/mcp/\"}, \"grafana\": {\"type\": \"http\", \"url\": \"https://g\", \"headers\": {\"Authorization\": \"Bearer seg\"}}}}",
+          "mode": 420
+        },
+        "source/home/.codex/AGENTS.md": {
+          "link": "⟦FIXTURE⟧/source/home/.claude/CLAUDE.md"
+        },
+        "source/home/.codex/auth.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.codex/config.toml": {
+          "text": "model = \"gpt-6\"\n[projects.\"/x\"]\ntrust_level = \"trusted\"\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\n[mcp_servers.docs]\ncommand = \"npx\"\n",
+          "mode": 420
+        },
+        "source/home/.orca/agent-hooks/claude-hook.sh": {
+          "text": "#!/bin/sh\n. ./lib.sh\n",
+          "mode": 493
+        },
+        "source/home/.orca/agent-hooks/lib.sh": {
+          "text": "# lib\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/.venv/lib.bin": {
+          "text": "xxxxxxxxxx",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/SKILL.md": {
+          "text": "skill em repo\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/run.sh": {
+          "text": "#!/bin/sh\necho \"${HOME}\" {HOME}\n",
+          "mode": 493
+        },
+        "source/prefs.json": {
+          "text": "{\"elevenlabs_api_key\": \"el-key\", \"sync\": true, \"tts_max_chars\": 900}",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "target/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        }
+      },
+      "bundle": {
+        "items": {
+          "codex": {
+            "hashes": {
+              "AGENTS.md": "a765d501ff4c734a82b89c9aecbf28f7f3f487c49a909c2d48e91e4d65ab1851",
+              "config:model": "843041a02bd0b38de02bc7d0e661e9ca84c908656fabc41f7a644733e9d20b3e",
+              "config:mcp_servers": "b10cb1dd57d8c3e5e3ad6798a1d435bfca5b32c8c8a107c02b850abd5dd08fa8"
+            },
+            "agents_md": {
+              "member": "files/codex/AGENTS.md",
+              "text": false
+            },
+            "config": {
+              "model": "gpt-6",
+              "mcp_servers": {
+                "docs": {
+                  "command": "npx"
+                }
+              }
+            }
+          }
+        },
+        "warnings": {
+          "codex": []
+        },
+        "files": {
+          "files/codex/AGENTS.md": {
+            "data": "IyByZWdyYXMK",
+            "mode": 420
+          }
+        }
+      },
+      "report": {
+        "items": {
+          "codex": {
+            "status": "applied",
+            "changed": [
+              "AGENTS.md"
+            ],
+            "warnings": [
+              {
+                "code": "config_sync_missing_program",
+                "params": {
+                  "program": "codex",
+                  "where": "config.toml"
+                }
+              }
+            ]
+          }
+        },
+        "backup": ""
+      },
+      "final": {
+        "source/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "source/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        },
+        "source/home/.claude/.credentials.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.local.md": {
+          "text": "só desta máquina\n",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.md": {
+          "text": "# regras\n",
+          "mode": 420
+        },
+        "source/home/.claude/engines.json": {
+          "text": "{\"kimi\": {\"base_url\": \"https://k\", \"api_key\": \"sk-kimi\"}}",
+          "mode": 420
+        },
+        "source/home/.claude/hooks/guard_tmux.py": {
+          "link": "⟦FIXTURE⟧/source/hangar/backend/hooks/guard_tmux.py"
+        },
+        "source/home/.claude/hooks/lembrete.py": {
+          "text": "print('⟦FIXTURE⟧/source/home/notas')\n",
+          "mode": 420
+        },
+        "source/home/.claude/plugins/known_marketplaces.json": {
+          "text": "{\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}",
+          "mode": 420
+        },
+        "source/home/.claude/rules/a.md": {
+          "text": "regra a\n",
+          "mode": 420
+        },
+        "source/home/.claude/settings.json": {
+          "text": "{\"model\": \"opus\", \"env\": {\"JIRA_TOKEN\": \"segredo-jira\"}, \"enabledPlugins\": {\"ponytail@ponytail\": true}, \"extraKnownMarketplaces\": {\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}, \"statusLine\": {\"type\": \"command\", \"command\": \"'⟦FIXTURE⟧/source/home/.local/share/fnm/v24/bin/node' '⟦FIXTURE⟧/source/hangar/scripts/statusline.js'\"}, \"hooks\": {\"PreToolUse\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"\\\"⟦FIXTURE⟧/source/hangar/.venv/bin/python3\\\" \\\"⟦FIXTURE⟧/source/hangar/backend/hooks/state_hook.py\\\" || exit 0\"}]}, {\"hooks\": [{\"type\": \"command\", \"command\": \"python3 ⟦FIXTURE⟧/source/home/.claude/hooks/lembrete.py\"}]}, {\"matcher\": \"Bash\", \"hooks\": [{\"type\": \"command\", \"command\": \"/bin/sh '⟦FIXTURE⟧/source/home/.orca/agent-hooks/claude-hook.sh'\"}]}]}}",
+          "mode": 420
+        },
+        "source/home/.claude/skills/minha": {
+          "link": "⟦FIXTURE⟧/source/home/Projetos/skills/minha"
+        },
+        "source/home/.claude/skills/orquestrar": {
+          "link": "⟦FIXTURE⟧/source/hangar/skills/orquestrar"
+        },
+        "source/home/.claude.json": {
+          "text": "{\"oauthAccount\": {\"emailAddress\": \"ana@x\"}, \"userID\": \"u-ana\", \"mcpServers\": {\"hangar\": {\"type\": \"http\", \"url\": \"http://127.0.0.1:8765/mcp/\"}, \"grafana\": {\"type\": \"http\", \"url\": \"https://g\", \"headers\": {\"Authorization\": \"Bearer seg\"}}}}",
+          "mode": 420
+        },
+        "source/home/.codex/AGENTS.md": {
+          "link": "⟦FIXTURE⟧/source/home/.claude/CLAUDE.md"
+        },
+        "source/home/.codex/auth.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.codex/config.toml": {
+          "text": "model = \"gpt-6\"\n[projects.\"/x\"]\ntrust_level = \"trusted\"\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\n[mcp_servers.docs]\ncommand = \"npx\"\n",
+          "mode": 420
+        },
+        "source/home/.orca/agent-hooks/claude-hook.sh": {
+          "text": "#!/bin/sh\n. ./lib.sh\n",
+          "mode": 493
+        },
+        "source/home/.orca/agent-hooks/lib.sh": {
+          "text": "# lib\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/.venv/lib.bin": {
+          "text": "xxxxxxxxxx",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/SKILL.md": {
+          "text": "skill em repo\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/run.sh": {
+          "text": "#!/bin/sh\necho \"${HOME}\" {HOME}\n",
+          "mode": 493
+        },
+        "source/prefs.json": {
+          "text": "{\"elevenlabs_api_key\": \"el-key\", \"sync\": true, \"tts_max_chars\": 900}",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "target/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        },
+        "target/home/.codex/AGENTS.md": {
+          "text": "# regras\n",
+          "mode": 420
+        }
+      },
+      "progress": [
+        {
+          "phase": "read",
+          "item": "codex",
+          "entry": null,
+          "index": 0,
+          "total": 1
+        }
+      ]
+    },
+    {
+      "items": [
+        "engines"
+      ],
+      "source": {
+        "hangar": "⟦FIXTURE⟧/source/hangar",
+        "claude": "⟦FIXTURE⟧/source/home/.claude",
+        "codex": "⟦FIXTURE⟧/source/home/.codex",
+        "home": "⟦FIXTURE⟧/source/home"
+      },
+      "target": {
+        "hangar": "⟦FIXTURE⟧/target/hangar",
+        "claude": "⟦FIXTURE⟧/target/home/.claude",
+        "codex": "⟦FIXTURE⟧/target/home/.codex",
+        "home": "⟦FIXTURE⟧/target/home"
+      },
+      "initial": {
+        "source/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "source/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        },
+        "source/home/.claude/.credentials.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.local.md": {
+          "text": "só desta máquina\n",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.md": {
+          "text": "# regras\n",
+          "mode": 420
+        },
+        "source/home/.claude/engines.json": {
+          "text": "{\"kimi\": {\"base_url\": \"https://k\", \"api_key\": \"sk-kimi\"}}",
+          "mode": 420
+        },
+        "source/home/.claude/hooks/guard_tmux.py": {
+          "link": "⟦FIXTURE⟧/source/hangar/backend/hooks/guard_tmux.py"
+        },
+        "source/home/.claude/hooks/lembrete.py": {
+          "text": "print('⟦FIXTURE⟧/source/home/notas')\n",
+          "mode": 420
+        },
+        "source/home/.claude/plugins/known_marketplaces.json": {
+          "text": "{\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}",
+          "mode": 420
+        },
+        "source/home/.claude/rules/a.md": {
+          "text": "regra a\n",
+          "mode": 420
+        },
+        "source/home/.claude/settings.json": {
+          "text": "{\"model\": \"opus\", \"env\": {\"JIRA_TOKEN\": \"segredo-jira\"}, \"enabledPlugins\": {\"ponytail@ponytail\": true}, \"extraKnownMarketplaces\": {\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}, \"statusLine\": {\"type\": \"command\", \"command\": \"'⟦FIXTURE⟧/source/home/.local/share/fnm/v24/bin/node' '⟦FIXTURE⟧/source/hangar/scripts/statusline.js'\"}, \"hooks\": {\"PreToolUse\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"\\\"⟦FIXTURE⟧/source/hangar/.venv/bin/python3\\\" \\\"⟦FIXTURE⟧/source/hangar/backend/hooks/state_hook.py\\\" || exit 0\"}]}, {\"hooks\": [{\"type\": \"command\", \"command\": \"python3 ⟦FIXTURE⟧/source/home/.claude/hooks/lembrete.py\"}]}, {\"matcher\": \"Bash\", \"hooks\": [{\"type\": \"command\", \"command\": \"/bin/sh '⟦FIXTURE⟧/source/home/.orca/agent-hooks/claude-hook.sh'\"}]}]}}",
+          "mode": 420
+        },
+        "source/home/.claude/skills/minha": {
+          "link": "⟦FIXTURE⟧/source/home/Projetos/skills/minha"
+        },
+        "source/home/.claude/skills/orquestrar": {
+          "link": "⟦FIXTURE⟧/source/hangar/skills/orquestrar"
+        },
+        "source/home/.claude.json": {
+          "text": "{\"oauthAccount\": {\"emailAddress\": \"ana@x\"}, \"userID\": \"u-ana\", \"mcpServers\": {\"hangar\": {\"type\": \"http\", \"url\": \"http://127.0.0.1:8765/mcp/\"}, \"grafana\": {\"type\": \"http\", \"url\": \"https://g\", \"headers\": {\"Authorization\": \"Bearer seg\"}}}}",
+          "mode": 420
+        },
+        "source/home/.codex/AGENTS.md": {
+          "link": "⟦FIXTURE⟧/source/home/.claude/CLAUDE.md"
+        },
+        "source/home/.codex/auth.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.codex/config.toml": {
+          "text": "model = \"gpt-6\"\n[projects.\"/x\"]\ntrust_level = \"trusted\"\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\n[mcp_servers.docs]\ncommand = \"npx\"\n",
+          "mode": 420
+        },
+        "source/home/.orca/agent-hooks/claude-hook.sh": {
+          "text": "#!/bin/sh\n. ./lib.sh\n",
+          "mode": 493
+        },
+        "source/home/.orca/agent-hooks/lib.sh": {
+          "text": "# lib\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/.venv/lib.bin": {
+          "text": "xxxxxxxxxx",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/SKILL.md": {
+          "text": "skill em repo\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/run.sh": {
+          "text": "#!/bin/sh\necho \"${HOME}\" {HOME}\n",
+          "mode": 493
+        },
+        "source/prefs.json": {
+          "text": "{\"elevenlabs_api_key\": \"el-key\", \"sync\": true, \"tts_max_chars\": 900}",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "target/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        }
+      },
+      "bundle": {
+        "items": {
+          "engines": {
+            "engines": {
+              "kimi": {
+                "base_url": "https://k",
+                "api_key": "sk-kimi"
+              }
+            },
+            "hashes": {
+              "kimi": "913203ba52f9022668561441b169ae7209bc94a081bc157c230e43a4d9eb4749"
+            }
+          }
+        },
+        "warnings": {},
+        "files": {}
+      },
+      "report": {
+        "items": {
+          "engines": {
+            "status": "applied",
+            "changed": [
+              "kimi"
+            ],
+            "warnings": []
+          }
+        },
+        "backup": ""
+      },
+      "final": {
+        "source/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "source/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        },
+        "source/home/.claude/.credentials.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.local.md": {
+          "text": "só desta máquina\n",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.md": {
+          "text": "# regras\n",
+          "mode": 420
+        },
+        "source/home/.claude/engines.json": {
+          "text": "{\"kimi\": {\"base_url\": \"https://k\", \"api_key\": \"sk-kimi\"}}",
+          "mode": 420
+        },
+        "source/home/.claude/hooks/guard_tmux.py": {
+          "link": "⟦FIXTURE⟧/source/hangar/backend/hooks/guard_tmux.py"
+        },
+        "source/home/.claude/hooks/lembrete.py": {
+          "text": "print('⟦FIXTURE⟧/source/home/notas')\n",
+          "mode": 420
+        },
+        "source/home/.claude/plugins/known_marketplaces.json": {
+          "text": "{\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}",
+          "mode": 420
+        },
+        "source/home/.claude/rules/a.md": {
+          "text": "regra a\n",
+          "mode": 420
+        },
+        "source/home/.claude/settings.json": {
+          "text": "{\"model\": \"opus\", \"env\": {\"JIRA_TOKEN\": \"segredo-jira\"}, \"enabledPlugins\": {\"ponytail@ponytail\": true}, \"extraKnownMarketplaces\": {\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}, \"statusLine\": {\"type\": \"command\", \"command\": \"'⟦FIXTURE⟧/source/home/.local/share/fnm/v24/bin/node' '⟦FIXTURE⟧/source/hangar/scripts/statusline.js'\"}, \"hooks\": {\"PreToolUse\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"\\\"⟦FIXTURE⟧/source/hangar/.venv/bin/python3\\\" \\\"⟦FIXTURE⟧/source/hangar/backend/hooks/state_hook.py\\\" || exit 0\"}]}, {\"hooks\": [{\"type\": \"command\", \"command\": \"python3 ⟦FIXTURE⟧/source/home/.claude/hooks/lembrete.py\"}]}, {\"matcher\": \"Bash\", \"hooks\": [{\"type\": \"command\", \"command\": \"/bin/sh '⟦FIXTURE⟧/source/home/.orca/agent-hooks/claude-hook.sh'\"}]}]}}",
+          "mode": 420
+        },
+        "source/home/.claude/skills/minha": {
+          "link": "⟦FIXTURE⟧/source/home/Projetos/skills/minha"
+        },
+        "source/home/.claude/skills/orquestrar": {
+          "link": "⟦FIXTURE⟧/source/hangar/skills/orquestrar"
+        },
+        "source/home/.claude.json": {
+          "text": "{\"oauthAccount\": {\"emailAddress\": \"ana@x\"}, \"userID\": \"u-ana\", \"mcpServers\": {\"hangar\": {\"type\": \"http\", \"url\": \"http://127.0.0.1:8765/mcp/\"}, \"grafana\": {\"type\": \"http\", \"url\": \"https://g\", \"headers\": {\"Authorization\": \"Bearer seg\"}}}}",
+          "mode": 420
+        },
+        "source/home/.codex/AGENTS.md": {
+          "link": "⟦FIXTURE⟧/source/home/.claude/CLAUDE.md"
+        },
+        "source/home/.codex/auth.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.codex/config.toml": {
+          "text": "model = \"gpt-6\"\n[projects.\"/x\"]\ntrust_level = \"trusted\"\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\n[mcp_servers.docs]\ncommand = \"npx\"\n",
+          "mode": 420
+        },
+        "source/home/.orca/agent-hooks/claude-hook.sh": {
+          "text": "#!/bin/sh\n. ./lib.sh\n",
+          "mode": 493
+        },
+        "source/home/.orca/agent-hooks/lib.sh": {
+          "text": "# lib\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/.venv/lib.bin": {
+          "text": "xxxxxxxxxx",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/SKILL.md": {
+          "text": "skill em repo\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/run.sh": {
+          "text": "#!/bin/sh\necho \"${HOME}\" {HOME}\n",
+          "mode": 493
+        },
+        "source/prefs.json": {
+          "text": "{\"elevenlabs_api_key\": \"el-key\", \"sync\": true, \"tts_max_chars\": 900}",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "target/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        },
+        "target/home/.claude/engines.json": {
+          "text": "{\n  \"kimi\": {\n    \"base_url\": \"https://k\",\n    \"api_key\": \"sk-kimi\"\n  }\n}\n",
+          "mode": 384
+        }
+      },
+      "progress": [
+        {
+          "phase": "read",
+          "item": "engines",
+          "entry": null,
+          "index": 0,
+          "total": 1
+        }
+      ]
+    },
+    {
+      "items": [
+        "hangar_prefs"
+      ],
+      "source": {
+        "hangar": "⟦FIXTURE⟧/source/hangar",
+        "claude": "⟦FIXTURE⟧/source/home/.claude",
+        "codex": "⟦FIXTURE⟧/source/home/.codex",
+        "home": "⟦FIXTURE⟧/source/home"
+      },
+      "target": {
+        "hangar": "⟦FIXTURE⟧/target/hangar",
+        "claude": "⟦FIXTURE⟧/target/home/.claude",
+        "codex": "⟦FIXTURE⟧/target/home/.codex",
+        "home": "⟦FIXTURE⟧/target/home"
+      },
+      "initial": {
+        "source/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "source/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        },
+        "source/home/.claude/.credentials.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.local.md": {
+          "text": "só desta máquina\n",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.md": {
+          "text": "# regras\n",
+          "mode": 420
+        },
+        "source/home/.claude/engines.json": {
+          "text": "{\"kimi\": {\"base_url\": \"https://k\", \"api_key\": \"sk-kimi\"}}",
+          "mode": 420
+        },
+        "source/home/.claude/hooks/guard_tmux.py": {
+          "link": "⟦FIXTURE⟧/source/hangar/backend/hooks/guard_tmux.py"
+        },
+        "source/home/.claude/hooks/lembrete.py": {
+          "text": "print('⟦FIXTURE⟧/source/home/notas')\n",
+          "mode": 420
+        },
+        "source/home/.claude/plugins/known_marketplaces.json": {
+          "text": "{\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}",
+          "mode": 420
+        },
+        "source/home/.claude/rules/a.md": {
+          "text": "regra a\n",
+          "mode": 420
+        },
+        "source/home/.claude/settings.json": {
+          "text": "{\"model\": \"opus\", \"env\": {\"JIRA_TOKEN\": \"segredo-jira\"}, \"enabledPlugins\": {\"ponytail@ponytail\": true}, \"extraKnownMarketplaces\": {\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}, \"statusLine\": {\"type\": \"command\", \"command\": \"'⟦FIXTURE⟧/source/home/.local/share/fnm/v24/bin/node' '⟦FIXTURE⟧/source/hangar/scripts/statusline.js'\"}, \"hooks\": {\"PreToolUse\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"\\\"⟦FIXTURE⟧/source/hangar/.venv/bin/python3\\\" \\\"⟦FIXTURE⟧/source/hangar/backend/hooks/state_hook.py\\\" || exit 0\"}]}, {\"hooks\": [{\"type\": \"command\", \"command\": \"python3 ⟦FIXTURE⟧/source/home/.claude/hooks/lembrete.py\"}]}, {\"matcher\": \"Bash\", \"hooks\": [{\"type\": \"command\", \"command\": \"/bin/sh '⟦FIXTURE⟧/source/home/.orca/agent-hooks/claude-hook.sh'\"}]}]}}",
+          "mode": 420
+        },
+        "source/home/.claude/skills/minha": {
+          "link": "⟦FIXTURE⟧/source/home/Projetos/skills/minha"
+        },
+        "source/home/.claude/skills/orquestrar": {
+          "link": "⟦FIXTURE⟧/source/hangar/skills/orquestrar"
+        },
+        "source/home/.claude.json": {
+          "text": "{\"oauthAccount\": {\"emailAddress\": \"ana@x\"}, \"userID\": \"u-ana\", \"mcpServers\": {\"hangar\": {\"type\": \"http\", \"url\": \"http://127.0.0.1:8765/mcp/\"}, \"grafana\": {\"type\": \"http\", \"url\": \"https://g\", \"headers\": {\"Authorization\": \"Bearer seg\"}}}}",
+          "mode": 420
+        },
+        "source/home/.codex/AGENTS.md": {
+          "link": "⟦FIXTURE⟧/source/home/.claude/CLAUDE.md"
+        },
+        "source/home/.codex/auth.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.codex/config.toml": {
+          "text": "model = \"gpt-6\"\n[projects.\"/x\"]\ntrust_level = \"trusted\"\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\n[mcp_servers.docs]\ncommand = \"npx\"\n",
+          "mode": 420
+        },
+        "source/home/.orca/agent-hooks/claude-hook.sh": {
+          "text": "#!/bin/sh\n. ./lib.sh\n",
+          "mode": 493
+        },
+        "source/home/.orca/agent-hooks/lib.sh": {
+          "text": "# lib\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/.venv/lib.bin": {
+          "text": "xxxxxxxxxx",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/SKILL.md": {
+          "text": "skill em repo\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/run.sh": {
+          "text": "#!/bin/sh\necho \"${HOME}\" {HOME}\n",
+          "mode": 493
+        },
+        "source/prefs.json": {
+          "text": "{\"elevenlabs_api_key\": \"el-key\", \"sync\": true, \"tts_max_chars\": 900}",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "target/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        }
+      },
+      "bundle": {
+        "items": {
+          "hangar_prefs": {
+            "prefs": {
+              "elevenlabs_api_key": "el-key",
+              "tts_max_chars": 900
+            },
+            "hashes": {
+              "elevenlabs_api_key": "89bcb65c98448f31f40c8463a16d4326bc76b06b59a7c7b63068baca4977b94d",
+              "tts_max_chars": "bdc5d8a48c23897906b09a9a3680bd2e9c8b3121edbda36f949800f0959c8d55"
+            }
+          }
+        },
+        "warnings": {},
+        "files": {}
+      },
+      "report": {
+        "items": {
+          "hangar_prefs": {
+            "status": "applied",
+            "changed": [
+              "elevenlabs_api_key",
+              "tts_max_chars"
+            ],
+            "warnings": []
+          }
+        },
+        "backup": ""
+      },
+      "final": {
+        "source/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "source/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        },
+        "source/home/.claude/.credentials.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.local.md": {
+          "text": "só desta máquina\n",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.md": {
+          "text": "# regras\n",
+          "mode": 420
+        },
+        "source/home/.claude/engines.json": {
+          "text": "{\"kimi\": {\"base_url\": \"https://k\", \"api_key\": \"sk-kimi\"}}",
+          "mode": 420
+        },
+        "source/home/.claude/hooks/guard_tmux.py": {
+          "link": "⟦FIXTURE⟧/source/hangar/backend/hooks/guard_tmux.py"
+        },
+        "source/home/.claude/hooks/lembrete.py": {
+          "text": "print('⟦FIXTURE⟧/source/home/notas')\n",
+          "mode": 420
+        },
+        "source/home/.claude/plugins/known_marketplaces.json": {
+          "text": "{\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}",
+          "mode": 420
+        },
+        "source/home/.claude/rules/a.md": {
+          "text": "regra a\n",
+          "mode": 420
+        },
+        "source/home/.claude/settings.json": {
+          "text": "{\"model\": \"opus\", \"env\": {\"JIRA_TOKEN\": \"segredo-jira\"}, \"enabledPlugins\": {\"ponytail@ponytail\": true}, \"extraKnownMarketplaces\": {\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}, \"statusLine\": {\"type\": \"command\", \"command\": \"'⟦FIXTURE⟧/source/home/.local/share/fnm/v24/bin/node' '⟦FIXTURE⟧/source/hangar/scripts/statusline.js'\"}, \"hooks\": {\"PreToolUse\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"\\\"⟦FIXTURE⟧/source/hangar/.venv/bin/python3\\\" \\\"⟦FIXTURE⟧/source/hangar/backend/hooks/state_hook.py\\\" || exit 0\"}]}, {\"hooks\": [{\"type\": \"command\", \"command\": \"python3 ⟦FIXTURE⟧/source/home/.claude/hooks/lembrete.py\"}]}, {\"matcher\": \"Bash\", \"hooks\": [{\"type\": \"command\", \"command\": \"/bin/sh '⟦FIXTURE⟧/source/home/.orca/agent-hooks/claude-hook.sh'\"}]}]}}",
+          "mode": 420
+        },
+        "source/home/.claude/skills/minha": {
+          "link": "⟦FIXTURE⟧/source/home/Projetos/skills/minha"
+        },
+        "source/home/.claude/skills/orquestrar": {
+          "link": "⟦FIXTURE⟧/source/hangar/skills/orquestrar"
+        },
+        "source/home/.claude.json": {
+          "text": "{\"oauthAccount\": {\"emailAddress\": \"ana@x\"}, \"userID\": \"u-ana\", \"mcpServers\": {\"hangar\": {\"type\": \"http\", \"url\": \"http://127.0.0.1:8765/mcp/\"}, \"grafana\": {\"type\": \"http\", \"url\": \"https://g\", \"headers\": {\"Authorization\": \"Bearer seg\"}}}}",
+          "mode": 420
+        },
+        "source/home/.codex/AGENTS.md": {
+          "link": "⟦FIXTURE⟧/source/home/.claude/CLAUDE.md"
+        },
+        "source/home/.codex/auth.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.codex/config.toml": {
+          "text": "model = \"gpt-6\"\n[projects.\"/x\"]\ntrust_level = \"trusted\"\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\n[mcp_servers.docs]\ncommand = \"npx\"\n",
+          "mode": 420
+        },
+        "source/home/.orca/agent-hooks/claude-hook.sh": {
+          "text": "#!/bin/sh\n. ./lib.sh\n",
+          "mode": 493
+        },
+        "source/home/.orca/agent-hooks/lib.sh": {
+          "text": "# lib\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/.venv/lib.bin": {
+          "text": "xxxxxxxxxx",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/SKILL.md": {
+          "text": "skill em repo\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/run.sh": {
+          "text": "#!/bin/sh\necho \"${HOME}\" {HOME}\n",
+          "mode": 493
+        },
+        "source/prefs.json": {
+          "text": "{\"elevenlabs_api_key\": \"el-key\", \"sync\": true, \"tts_max_chars\": 900}",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "target/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        },
+        "target/prefs.json": {
+          "text": "{\n  \"elevenlabs_api_key\": \"el-key\",\n  \"tts_max_chars\": 900\n}",
+          "mode": 384
+        }
+      },
+      "progress": [
+        {
+          "phase": "read",
+          "item": "hangar_prefs",
+          "entry": null,
+          "index": 0,
+          "total": 1
+        }
+      ]
+    },
+    {
+      "items": [
+        "claude_accounts"
+      ],
+      "source": {
+        "hangar": "⟦FIXTURE⟧/source/hangar",
+        "claude": "⟦FIXTURE⟧/source/home/.claude",
+        "codex": "⟦FIXTURE⟧/source/home/.codex",
+        "home": "⟦FIXTURE⟧/source/home"
+      },
+      "target": {
+        "hangar": "⟦FIXTURE⟧/target/hangar",
+        "claude": "⟦FIXTURE⟧/target/home/.claude",
+        "codex": "⟦FIXTURE⟧/target/home/.codex",
+        "home": "⟦FIXTURE⟧/target/home"
+      },
+      "initial": {
+        "source/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "source/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        },
+        "source/home/.claude/.credentials.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.local.md": {
+          "text": "só desta máquina\n",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.md": {
+          "text": "# regras\n",
+          "mode": 420
+        },
+        "source/home/.claude/engines.json": {
+          "text": "{\"kimi\": {\"base_url\": \"https://k\", \"api_key\": \"sk-kimi\"}}",
+          "mode": 420
+        },
+        "source/home/.claude/hooks/guard_tmux.py": {
+          "link": "⟦FIXTURE⟧/source/hangar/backend/hooks/guard_tmux.py"
+        },
+        "source/home/.claude/hooks/lembrete.py": {
+          "text": "print('⟦FIXTURE⟧/source/home/notas')\n",
+          "mode": 420
+        },
+        "source/home/.claude/plugins/known_marketplaces.json": {
+          "text": "{\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}",
+          "mode": 420
+        },
+        "source/home/.claude/rules/a.md": {
+          "text": "regra a\n",
+          "mode": 420
+        },
+        "source/home/.claude/settings.json": {
+          "text": "{\"model\": \"opus\", \"env\": {\"JIRA_TOKEN\": \"segredo-jira\"}, \"enabledPlugins\": {\"ponytail@ponytail\": true}, \"extraKnownMarketplaces\": {\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}, \"statusLine\": {\"type\": \"command\", \"command\": \"'⟦FIXTURE⟧/source/home/.local/share/fnm/v24/bin/node' '⟦FIXTURE⟧/source/hangar/scripts/statusline.js'\"}, \"hooks\": {\"PreToolUse\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"\\\"⟦FIXTURE⟧/source/hangar/.venv/bin/python3\\\" \\\"⟦FIXTURE⟧/source/hangar/backend/hooks/state_hook.py\\\" || exit 0\"}]}, {\"hooks\": [{\"type\": \"command\", \"command\": \"python3 ⟦FIXTURE⟧/source/home/.claude/hooks/lembrete.py\"}]}, {\"matcher\": \"Bash\", \"hooks\": [{\"type\": \"command\", \"command\": \"/bin/sh '⟦FIXTURE⟧/source/home/.orca/agent-hooks/claude-hook.sh'\"}]}]}}",
+          "mode": 420
+        },
+        "source/home/.claude/skills/minha": {
+          "link": "⟦FIXTURE⟧/source/home/Projetos/skills/minha"
+        },
+        "source/home/.claude/skills/orquestrar": {
+          "link": "⟦FIXTURE⟧/source/hangar/skills/orquestrar"
+        },
+        "source/home/.claude.json": {
+          "text": "{\"oauthAccount\": {\"emailAddress\": \"ana@x\"}, \"userID\": \"u-ana\", \"mcpServers\": {\"hangar\": {\"type\": \"http\", \"url\": \"http://127.0.0.1:8765/mcp/\"}, \"grafana\": {\"type\": \"http\", \"url\": \"https://g\", \"headers\": {\"Authorization\": \"Bearer seg\"}}}}",
+          "mode": 420
+        },
+        "source/home/.codex/AGENTS.md": {
+          "link": "⟦FIXTURE⟧/source/home/.claude/CLAUDE.md"
+        },
+        "source/home/.codex/auth.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.codex/config.toml": {
+          "text": "model = \"gpt-6\"\n[projects.\"/x\"]\ntrust_level = \"trusted\"\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\n[mcp_servers.docs]\ncommand = \"npx\"\n",
+          "mode": 420
+        },
+        "source/home/.orca/agent-hooks/claude-hook.sh": {
+          "text": "#!/bin/sh\n. ./lib.sh\n",
+          "mode": 493
+        },
+        "source/home/.orca/agent-hooks/lib.sh": {
+          "text": "# lib\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/.venv/lib.bin": {
+          "text": "xxxxxxxxxx",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/SKILL.md": {
+          "text": "skill em repo\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/run.sh": {
+          "text": "#!/bin/sh\necho \"${HOME}\" {HOME}\n",
+          "mode": 493
+        },
+        "source/prefs.json": {
+          "text": "{\"elevenlabs_api_key\": \"el-key\", \"sync\": true, \"tts_max_chars\": 900}",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "target/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        }
+      },
+      "bundle": {
+        "items": {
+          "claude_accounts": {
+            "accounts": {},
+            "hashes": {}
+          }
+        },
+        "warnings": {},
+        "files": {}
+      },
+      "report": {
+        "items": {
+          "claude_accounts": {
+            "status": "same",
+            "changed": [],
+            "warnings": []
+          }
+        },
+        "backup": ""
+      },
+      "final": {
+        "source/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "source/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        },
+        "source/home/.claude/.credentials.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.local.md": {
+          "text": "só desta máquina\n",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.md": {
+          "text": "# regras\n",
+          "mode": 420
+        },
+        "source/home/.claude/engines.json": {
+          "text": "{\"kimi\": {\"base_url\": \"https://k\", \"api_key\": \"sk-kimi\"}}",
+          "mode": 420
+        },
+        "source/home/.claude/hooks/guard_tmux.py": {
+          "link": "⟦FIXTURE⟧/source/hangar/backend/hooks/guard_tmux.py"
+        },
+        "source/home/.claude/hooks/lembrete.py": {
+          "text": "print('⟦FIXTURE⟧/source/home/notas')\n",
+          "mode": 420
+        },
+        "source/home/.claude/plugins/known_marketplaces.json": {
+          "text": "{\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}",
+          "mode": 420
+        },
+        "source/home/.claude/rules/a.md": {
+          "text": "regra a\n",
+          "mode": 420
+        },
+        "source/home/.claude/settings.json": {
+          "text": "{\"model\": \"opus\", \"env\": {\"JIRA_TOKEN\": \"segredo-jira\"}, \"enabledPlugins\": {\"ponytail@ponytail\": true}, \"extraKnownMarketplaces\": {\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}, \"statusLine\": {\"type\": \"command\", \"command\": \"'⟦FIXTURE⟧/source/home/.local/share/fnm/v24/bin/node' '⟦FIXTURE⟧/source/hangar/scripts/statusline.js'\"}, \"hooks\": {\"PreToolUse\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"\\\"⟦FIXTURE⟧/source/hangar/.venv/bin/python3\\\" \\\"⟦FIXTURE⟧/source/hangar/backend/hooks/state_hook.py\\\" || exit 0\"}]}, {\"hooks\": [{\"type\": \"command\", \"command\": \"python3 ⟦FIXTURE⟧/source/home/.claude/hooks/lembrete.py\"}]}, {\"matcher\": \"Bash\", \"hooks\": [{\"type\": \"command\", \"command\": \"/bin/sh '⟦FIXTURE⟧/source/home/.orca/agent-hooks/claude-hook.sh'\"}]}]}}",
+          "mode": 420
+        },
+        "source/home/.claude/skills/minha": {
+          "link": "⟦FIXTURE⟧/source/home/Projetos/skills/minha"
+        },
+        "source/home/.claude/skills/orquestrar": {
+          "link": "⟦FIXTURE⟧/source/hangar/skills/orquestrar"
+        },
+        "source/home/.claude.json": {
+          "text": "{\"oauthAccount\": {\"emailAddress\": \"ana@x\"}, \"userID\": \"u-ana\", \"mcpServers\": {\"hangar\": {\"type\": \"http\", \"url\": \"http://127.0.0.1:8765/mcp/\"}, \"grafana\": {\"type\": \"http\", \"url\": \"https://g\", \"headers\": {\"Authorization\": \"Bearer seg\"}}}}",
+          "mode": 420
+        },
+        "source/home/.codex/AGENTS.md": {
+          "link": "⟦FIXTURE⟧/source/home/.claude/CLAUDE.md"
+        },
+        "source/home/.codex/auth.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.codex/config.toml": {
+          "text": "model = \"gpt-6\"\n[projects.\"/x\"]\ntrust_level = \"trusted\"\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\n[mcp_servers.docs]\ncommand = \"npx\"\n",
+          "mode": 420
+        },
+        "source/home/.orca/agent-hooks/claude-hook.sh": {
+          "text": "#!/bin/sh\n. ./lib.sh\n",
+          "mode": 493
+        },
+        "source/home/.orca/agent-hooks/lib.sh": {
+          "text": "# lib\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/.venv/lib.bin": {
+          "text": "xxxxxxxxxx",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/SKILL.md": {
+          "text": "skill em repo\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/run.sh": {
+          "text": "#!/bin/sh\necho \"${HOME}\" {HOME}\n",
+          "mode": 493
+        },
+        "source/prefs.json": {
+          "text": "{\"elevenlabs_api_key\": \"el-key\", \"sync\": true, \"tts_max_chars\": 900}",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "target/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        }
+      },
+      "progress": [
+        {
+          "phase": "read",
+          "item": "claude_accounts",
+          "entry": null,
+          "index": 0,
+          "total": 1
+        }
+      ]
+    },
+    {
+      "items": [
+        "hangar_appearance"
+      ],
+      "source": {
+        "hangar": "⟦FIXTURE⟧/source/hangar",
+        "claude": "⟦FIXTURE⟧/source/home/.claude",
+        "codex": "⟦FIXTURE⟧/source/home/.codex",
+        "home": "⟦FIXTURE⟧/source/home"
+      },
+      "target": {
+        "hangar": "⟦FIXTURE⟧/target/hangar",
+        "claude": "⟦FIXTURE⟧/target/home/.claude",
+        "codex": "⟦FIXTURE⟧/target/home/.codex",
+        "home": "⟦FIXTURE⟧/target/home"
+      },
+      "initial": {
+        "source/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "source/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        },
+        "source/home/.claude/.credentials.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.local.md": {
+          "text": "só desta máquina\n",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.md": {
+          "text": "# regras\n",
+          "mode": 420
+        },
+        "source/home/.claude/engines.json": {
+          "text": "{\"kimi\": {\"base_url\": \"https://k\", \"api_key\": \"sk-kimi\"}}",
+          "mode": 420
+        },
+        "source/home/.claude/hooks/guard_tmux.py": {
+          "link": "⟦FIXTURE⟧/source/hangar/backend/hooks/guard_tmux.py"
+        },
+        "source/home/.claude/hooks/lembrete.py": {
+          "text": "print('⟦FIXTURE⟧/source/home/notas')\n",
+          "mode": 420
+        },
+        "source/home/.claude/plugins/known_marketplaces.json": {
+          "text": "{\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}",
+          "mode": 420
+        },
+        "source/home/.claude/rules/a.md": {
+          "text": "regra a\n",
+          "mode": 420
+        },
+        "source/home/.claude/settings.json": {
+          "text": "{\"model\": \"opus\", \"env\": {\"JIRA_TOKEN\": \"segredo-jira\"}, \"enabledPlugins\": {\"ponytail@ponytail\": true}, \"extraKnownMarketplaces\": {\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}, \"statusLine\": {\"type\": \"command\", \"command\": \"'⟦FIXTURE⟧/source/home/.local/share/fnm/v24/bin/node' '⟦FIXTURE⟧/source/hangar/scripts/statusline.js'\"}, \"hooks\": {\"PreToolUse\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"\\\"⟦FIXTURE⟧/source/hangar/.venv/bin/python3\\\" \\\"⟦FIXTURE⟧/source/hangar/backend/hooks/state_hook.py\\\" || exit 0\"}]}, {\"hooks\": [{\"type\": \"command\", \"command\": \"python3 ⟦FIXTURE⟧/source/home/.claude/hooks/lembrete.py\"}]}, {\"matcher\": \"Bash\", \"hooks\": [{\"type\": \"command\", \"command\": \"/bin/sh '⟦FIXTURE⟧/source/home/.orca/agent-hooks/claude-hook.sh'\"}]}]}}",
+          "mode": 420
+        },
+        "source/home/.claude/skills/minha": {
+          "link": "⟦FIXTURE⟧/source/home/Projetos/skills/minha"
+        },
+        "source/home/.claude/skills/orquestrar": {
+          "link": "⟦FIXTURE⟧/source/hangar/skills/orquestrar"
+        },
+        "source/home/.claude.json": {
+          "text": "{\"oauthAccount\": {\"emailAddress\": \"ana@x\"}, \"userID\": \"u-ana\", \"mcpServers\": {\"hangar\": {\"type\": \"http\", \"url\": \"http://127.0.0.1:8765/mcp/\"}, \"grafana\": {\"type\": \"http\", \"url\": \"https://g\", \"headers\": {\"Authorization\": \"Bearer seg\"}}}}",
+          "mode": 420
+        },
+        "source/home/.codex/AGENTS.md": {
+          "link": "⟦FIXTURE⟧/source/home/.claude/CLAUDE.md"
+        },
+        "source/home/.codex/auth.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.codex/config.toml": {
+          "text": "model = \"gpt-6\"\n[projects.\"/x\"]\ntrust_level = \"trusted\"\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\n[mcp_servers.docs]\ncommand = \"npx\"\n",
+          "mode": 420
+        },
+        "source/home/.orca/agent-hooks/claude-hook.sh": {
+          "text": "#!/bin/sh\n. ./lib.sh\n",
+          "mode": 493
+        },
+        "source/home/.orca/agent-hooks/lib.sh": {
+          "text": "# lib\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/.venv/lib.bin": {
+          "text": "xxxxxxxxxx",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/SKILL.md": {
+          "text": "skill em repo\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/run.sh": {
+          "text": "#!/bin/sh\necho \"${HOME}\" {HOME}\n",
+          "mode": 493
+        },
+        "source/prefs.json": {
+          "text": "{\"elevenlabs_api_key\": \"el-key\", \"sync\": true, \"tts_max_chars\": 900}",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "target/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        }
+      },
+      "bundle": {
+        "items": {
+          "hangar_appearance": {
+            "hashes": {}
+          }
+        },
+        "warnings": {},
+        "files": {}
+      },
+      "report": {
+        "items": {
+          "hangar_appearance": {
+            "status": "same",
+            "changed": [],
+            "warnings": []
+          }
+        },
+        "backup": ""
+      },
+      "final": {
+        "source/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "source/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        },
+        "source/home/.claude/.credentials.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.local.md": {
+          "text": "só desta máquina\n",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.md": {
+          "text": "# regras\n",
+          "mode": 420
+        },
+        "source/home/.claude/engines.json": {
+          "text": "{\"kimi\": {\"base_url\": \"https://k\", \"api_key\": \"sk-kimi\"}}",
+          "mode": 420
+        },
+        "source/home/.claude/hooks/guard_tmux.py": {
+          "link": "⟦FIXTURE⟧/source/hangar/backend/hooks/guard_tmux.py"
+        },
+        "source/home/.claude/hooks/lembrete.py": {
+          "text": "print('⟦FIXTURE⟧/source/home/notas')\n",
+          "mode": 420
+        },
+        "source/home/.claude/plugins/known_marketplaces.json": {
+          "text": "{\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}",
+          "mode": 420
+        },
+        "source/home/.claude/rules/a.md": {
+          "text": "regra a\n",
+          "mode": 420
+        },
+        "source/home/.claude/settings.json": {
+          "text": "{\"model\": \"opus\", \"env\": {\"JIRA_TOKEN\": \"segredo-jira\"}, \"enabledPlugins\": {\"ponytail@ponytail\": true}, \"extraKnownMarketplaces\": {\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}, \"statusLine\": {\"type\": \"command\", \"command\": \"'⟦FIXTURE⟧/source/home/.local/share/fnm/v24/bin/node' '⟦FIXTURE⟧/source/hangar/scripts/statusline.js'\"}, \"hooks\": {\"PreToolUse\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"\\\"⟦FIXTURE⟧/source/hangar/.venv/bin/python3\\\" \\\"⟦FIXTURE⟧/source/hangar/backend/hooks/state_hook.py\\\" || exit 0\"}]}, {\"hooks\": [{\"type\": \"command\", \"command\": \"python3 ⟦FIXTURE⟧/source/home/.claude/hooks/lembrete.py\"}]}, {\"matcher\": \"Bash\", \"hooks\": [{\"type\": \"command\", \"command\": \"/bin/sh '⟦FIXTURE⟧/source/home/.orca/agent-hooks/claude-hook.sh'\"}]}]}}",
+          "mode": 420
+        },
+        "source/home/.claude/skills/minha": {
+          "link": "⟦FIXTURE⟧/source/home/Projetos/skills/minha"
+        },
+        "source/home/.claude/skills/orquestrar": {
+          "link": "⟦FIXTURE⟧/source/hangar/skills/orquestrar"
+        },
+        "source/home/.claude.json": {
+          "text": "{\"oauthAccount\": {\"emailAddress\": \"ana@x\"}, \"userID\": \"u-ana\", \"mcpServers\": {\"hangar\": {\"type\": \"http\", \"url\": \"http://127.0.0.1:8765/mcp/\"}, \"grafana\": {\"type\": \"http\", \"url\": \"https://g\", \"headers\": {\"Authorization\": \"Bearer seg\"}}}}",
+          "mode": 420
+        },
+        "source/home/.codex/AGENTS.md": {
+          "link": "⟦FIXTURE⟧/source/home/.claude/CLAUDE.md"
+        },
+        "source/home/.codex/auth.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.codex/config.toml": {
+          "text": "model = \"gpt-6\"\n[projects.\"/x\"]\ntrust_level = \"trusted\"\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\n[mcp_servers.docs]\ncommand = \"npx\"\n",
+          "mode": 420
+        },
+        "source/home/.orca/agent-hooks/claude-hook.sh": {
+          "text": "#!/bin/sh\n. ./lib.sh\n",
+          "mode": 493
+        },
+        "source/home/.orca/agent-hooks/lib.sh": {
+          "text": "# lib\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/.venv/lib.bin": {
+          "text": "xxxxxxxxxx",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/SKILL.md": {
+          "text": "skill em repo\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/run.sh": {
+          "text": "#!/bin/sh\necho \"${HOME}\" {HOME}\n",
+          "mode": 493
+        },
+        "source/prefs.json": {
+          "text": "{\"elevenlabs_api_key\": \"el-key\", \"sync\": true, \"tts_max_chars\": 900}",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "target/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        }
+      },
+      "progress": [
+        {
+          "phase": "read",
+          "item": "hangar_appearance",
+          "entry": null,
+          "index": 0,
+          "total": 1
+        }
+      ]
+    },
+    {
+      "items": [
+        "claude_instructions",
+        "claude_skills",
+        "claude_agents",
+        "claude_hooks",
+        "claude_plugins",
+        "claude_mcp",
+        "claude_env",
+        "claude_settings",
+        "codex",
+        "engines",
+        "hangar_prefs",
+        "claude_accounts",
+        "hangar_appearance"
+      ],
+      "source": {
+        "hangar": "⟦FIXTURE⟧/source/hangar",
+        "claude": "⟦FIXTURE⟧/source/home/.claude",
+        "codex": "⟦FIXTURE⟧/source/home/.codex",
+        "home": "⟦FIXTURE⟧/source/home"
+      },
+      "target": {
+        "hangar": "⟦FIXTURE⟧/target/hangar",
+        "claude": "⟦FIXTURE⟧/target/home/.claude",
+        "codex": "⟦FIXTURE⟧/target/home/.codex",
+        "home": "⟦FIXTURE⟧/target/home"
+      },
+      "initial": {
+        "source/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "source/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        },
+        "source/home/.claude/.credentials.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.local.md": {
+          "text": "só desta máquina\n",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.md": {
+          "text": "# regras\n",
+          "mode": 420
+        },
+        "source/home/.claude/engines.json": {
+          "text": "{\"kimi\": {\"base_url\": \"https://k\", \"api_key\": \"sk-kimi\"}}",
+          "mode": 420
+        },
+        "source/home/.claude/hooks/guard_tmux.py": {
+          "link": "⟦FIXTURE⟧/source/hangar/backend/hooks/guard_tmux.py"
+        },
+        "source/home/.claude/hooks/lembrete.py": {
+          "text": "print('⟦FIXTURE⟧/source/home/notas')\n",
+          "mode": 420
+        },
+        "source/home/.claude/plugins/known_marketplaces.json": {
+          "text": "{\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}",
+          "mode": 420
+        },
+        "source/home/.claude/rules/a.md": {
+          "text": "regra a\n",
+          "mode": 420
+        },
+        "source/home/.claude/settings.json": {
+          "text": "{\"model\": \"opus\", \"env\": {\"JIRA_TOKEN\": \"segredo-jira\"}, \"enabledPlugins\": {\"ponytail@ponytail\": true}, \"extraKnownMarketplaces\": {\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}, \"statusLine\": {\"type\": \"command\", \"command\": \"'⟦FIXTURE⟧/source/home/.local/share/fnm/v24/bin/node' '⟦FIXTURE⟧/source/hangar/scripts/statusline.js'\"}, \"hooks\": {\"PreToolUse\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"\\\"⟦FIXTURE⟧/source/hangar/.venv/bin/python3\\\" \\\"⟦FIXTURE⟧/source/hangar/backend/hooks/state_hook.py\\\" || exit 0\"}]}, {\"hooks\": [{\"type\": \"command\", \"command\": \"python3 ⟦FIXTURE⟧/source/home/.claude/hooks/lembrete.py\"}]}, {\"matcher\": \"Bash\", \"hooks\": [{\"type\": \"command\", \"command\": \"/bin/sh '⟦FIXTURE⟧/source/home/.orca/agent-hooks/claude-hook.sh'\"}]}]}}",
+          "mode": 420
+        },
+        "source/home/.claude/skills/minha": {
+          "link": "⟦FIXTURE⟧/source/home/Projetos/skills/minha"
+        },
+        "source/home/.claude/skills/orquestrar": {
+          "link": "⟦FIXTURE⟧/source/hangar/skills/orquestrar"
+        },
+        "source/home/.claude.json": {
+          "text": "{\"oauthAccount\": {\"emailAddress\": \"ana@x\"}, \"userID\": \"u-ana\", \"mcpServers\": {\"hangar\": {\"type\": \"http\", \"url\": \"http://127.0.0.1:8765/mcp/\"}, \"grafana\": {\"type\": \"http\", \"url\": \"https://g\", \"headers\": {\"Authorization\": \"Bearer seg\"}}}}",
+          "mode": 420
+        },
+        "source/home/.codex/AGENTS.md": {
+          "link": "⟦FIXTURE⟧/source/home/.claude/CLAUDE.md"
+        },
+        "source/home/.codex/auth.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.codex/config.toml": {
+          "text": "model = \"gpt-6\"\n[projects.\"/x\"]\ntrust_level = \"trusted\"\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\n[mcp_servers.docs]\ncommand = \"npx\"\n",
+          "mode": 420
+        },
+        "source/home/.orca/agent-hooks/claude-hook.sh": {
+          "text": "#!/bin/sh\n. ./lib.sh\n",
+          "mode": 493
+        },
+        "source/home/.orca/agent-hooks/lib.sh": {
+          "text": "# lib\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/.venv/lib.bin": {
+          "text": "xxxxxxxxxx",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/SKILL.md": {
+          "text": "skill em repo\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/run.sh": {
+          "text": "#!/bin/sh\necho \"${HOME}\" {HOME}\n",
+          "mode": 493
+        },
+        "source/prefs.json": {
+          "text": "{\"elevenlabs_api_key\": \"el-key\", \"sync\": true, \"tts_max_chars\": 900}",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "target/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        }
+      },
+      "bundle": {
+        "items": {
+          "claude_instructions": {
+            "entries": {
+              "CLAUDE.md": {
+                "kind": "file",
+                "files": [
+                  ""
+                ],
+                "text": [],
+                "hash": "adf01323c71b95d2c43478616b72daf69411cb6ccb483a50fff17f3bf8bf0f84"
+              },
+              "rules/a.md": {
+                "kind": "file",
+                "files": [
+                  ""
+                ],
+                "text": [],
+                "hash": "9f0e6f5650624e15368513a3291462d8fe8bc8add1033e05943a64d3c53ab9fd"
+              }
+            },
+            "hashes": {
+              "CLAUDE.md": "adf01323c71b95d2c43478616b72daf69411cb6ccb483a50fff17f3bf8bf0f84",
+              "rules/a.md": "9f0e6f5650624e15368513a3291462d8fe8bc8add1033e05943a64d3c53ab9fd"
+            },
+            "descriptions": {
+              "CLAUDE.md": "regras",
+              "rules/a.md": "regra a"
+            }
+          },
+          "claude_skills": {
+            "entries": {
+              "skills/minha": {
+                "kind": "dir",
+                "files": [
+                  "SKILL.md",
+                  "run.sh"
+                ],
+                "text": [],
+                "hash": "d61fa43c6616c6457019dc52cdbdf80a1bf00f9ef67ade1dd170e3d67800322a"
+              }
+            },
+            "hashes": {
+              "skills/minha": "d61fa43c6616c6457019dc52cdbdf80a1bf00f9ef67ade1dd170e3d67800322a"
+            },
+            "descriptions": {
+              "skills/minha": "skill em repo"
+            }
+          },
+          "claude_agents": {
+            "entries": {},
+            "hashes": {},
+            "descriptions": {}
+          },
+          "claude_hooks": {
+            "entries": {
+              "hooks/lembrete.py": {
+                "kind": "file",
+                "files": [
+                  ""
+                ],
+                "text": [
+                  ""
+                ],
+                "hash": "d8ef4e4d5ca0d2c86e4b45614531126e0c97409484d50c8c56c7fbf116fc804b"
+              }
+            },
+            "hashes": {
+              "hooks/lembrete.py": "d8ef4e4d5ca0d2c86e4b45614531126e0c97409484d50c8c56c7fbf116fc804b",
+              "statusLine": "917cad24792b24e5a36aaf90fdbadd4eab068fa90d6d4342843a293a5b8bc045",
+              "hooks:PreToolUse": "6bd6869da54f5413d8e1b400f90c9a8ee2fa9dbae75769fca6feafe467ce6c41",
+              "ref:⟦CLAUDE⟧/hooks/lembrete.py": "a5ec4e4ae005b515c39a83f996dd2021037f7ccd1d3c14174068831551e1540c",
+              "ref:⟦HOME⟧/.orca/agent-hooks/claude-hook.sh": "92d165ab3235e426a077581c4243649a386addfe660bfd17bc8bbd2054f1338b",
+              "ref:⟦HOME⟧/.orca/agent-hooks/lib.sh": "7fdf11d4cd93e0f6e669b1add0389edeb7b8f70d05ca82200f7a3c3ae20711c4"
+            },
+            "descriptions": {
+              "ref:⟦HOME⟧/.orca/agent-hooks/lib.sh": "lib"
+            },
+            "hooks": {
+              "PreToolUse": [
+                {
+                  "hooks": [
+                    {
+                      "type": "command",
+                      "command": "python3 ⟦CLAUDE⟧/hooks/lembrete.py"
+                    }
+                  ]
+                },
+                {
+                  "matcher": "Bash",
+                  "hooks": [
+                    {
+                      "type": "command",
+                      "command": "/bin/sh '⟦HOME⟧/.orca/agent-hooks/claude-hook.sh'"
+                    }
+                  ]
+                }
+              ]
+            },
+            "labels": {
+              "hooks:PreToolUse": [
+                "lembrete.py",
+                "claude-hook.sh"
+              ],
+              "statusLine": [
+                "statusline.js"
+              ]
+            },
+            "statusLine": {
+              "type": "command",
+              "command": "'⟦HOME⟧/.local/share/fnm/v24/bin/node' '⟦HANGAR⟧/scripts/statusline.js'"
+            },
+            "refs": {
+              "⟦CLAUDE⟧/hooks/lembrete.py": {
+                "member": "refs/54dcb45aded7aa862ba1e69d6e6f607a95e10dc7",
+                "text": true
+              },
+              "⟦HOME⟧/.orca/agent-hooks/claude-hook.sh": {
+                "member": "refs/046e074072cd9d44730548814c4fb5a6ef514d91",
+                "text": false
+              },
+              "⟦HOME⟧/.orca/agent-hooks/lib.sh": {
+                "member": "refs/fa813df7381f6935589b101cc21b193ebc913474",
+                "text": false
+              },
+              "⟦HANGAR⟧/scripts/statusline.js": {
+                "member": ""
+              }
+            }
+          },
+          "claude_plugins": {
+            "enabledPlugins": {
+              "ponytail@ponytail": true
+            },
+            "extraKnownMarketplaces": {
+              "ponytail": {
+                "source": {
+                  "source": "git",
+                  "url": "https://x/ponytail.git"
+                }
+              }
+            },
+            "sources": {
+              "ponytail": {
+                "source": "git",
+                "url": "https://x/ponytail.git"
+              }
+            },
+            "hashes": {
+              "plugin:ponytail@ponytail": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b",
+              "marketplace:ponytail": "ea44a03a10bfbc7bdc151faf819c5c4ae0bfb8a01a7994e06361a4837f6d7032"
+            },
+            "descriptions": {}
+          },
+          "claude_mcp": {
+            "servers": {
+              "grafana": {
+                "type": "http",
+                "url": "https://g",
+                "headers": {
+                  "Authorization": "Bearer seg"
+                }
+              }
+            },
+            "refs": {},
+            "hashes": {
+              "grafana": "ec2dac36ef79961cdf8d17aa1cc33614b7b583a703bea34d6333a689472f1911"
+            },
+            "descriptions": {}
+          },
+          "claude_env": {
+            "env": {
+              "JIRA_TOKEN": "segredo-jira"
+            },
+            "hashes": {
+              "JIRA_TOKEN": "418049bc96d9d29c4295587dcd0aab0b0c669f94159464cb66b11dbe3c2883b4"
+            }
+          },
+          "claude_settings": {
+            "settings": {
+              "model": "opus"
+            },
+            "hashes": {
+              "model": "242dbbf670c011d544cda19dacb3c55bfe51a769e1cc083b365e792538ceb90e"
+            }
+          },
+          "codex": {
+            "hashes": {
+              "AGENTS.md": "a765d501ff4c734a82b89c9aecbf28f7f3f487c49a909c2d48e91e4d65ab1851",
+              "config:model": "843041a02bd0b38de02bc7d0e661e9ca84c908656fabc41f7a644733e9d20b3e",
+              "config:mcp_servers": "b10cb1dd57d8c3e5e3ad6798a1d435bfca5b32c8c8a107c02b850abd5dd08fa8"
+            },
+            "agents_md": {
+              "member": "files/codex/AGENTS.md",
+              "text": false
+            },
+            "config": {
+              "model": "gpt-6",
+              "mcp_servers": {
+                "docs": {
+                  "command": "npx"
+                }
+              }
+            }
+          },
+          "engines": {
+            "engines": {
+              "kimi": {
+                "base_url": "https://k",
+                "api_key": "sk-kimi"
+              }
+            },
+            "hashes": {
+              "kimi": "913203ba52f9022668561441b169ae7209bc94a081bc157c230e43a4d9eb4749"
+            }
+          },
+          "hangar_prefs": {
+            "prefs": {
+              "elevenlabs_api_key": "el-key",
+              "tts_max_chars": 900
+            },
+            "hashes": {
+              "elevenlabs_api_key": "89bcb65c98448f31f40c8463a16d4326bc76b06b59a7c7b63068baca4977b94d",
+              "tts_max_chars": "bdc5d8a48c23897906b09a9a3680bd2e9c8b3121edbda36f949800f0959c8d55"
+            }
+          },
+          "claude_accounts": {
+            "accounts": {},
+            "hashes": {}
+          },
+          "hangar_appearance": {
+            "hashes": {}
+          }
+        },
+        "warnings": {
+          "claude_instructions": [],
+          "claude_skills": [
+            {
+              "code": "config_sync_heavy_dir_skipped",
+              "params": {
+                "entry": "skills/minha",
+                "dir": ".venv"
+              }
+            }
+          ],
+          "claude_agents": [],
+          "claude_hooks": [],
+          "claude_plugins": [],
+          "codex": []
+        },
+        "files": {
+          "files/claude_instructions/CLAUDE.md": {
+            "data": "IyByZWdyYXMK",
+            "mode": 420
+          },
+          "files/claude_instructions/rules/a.md": {
+            "data": "cmVncmEgYQo=",
+            "mode": 420
+          },
+          "files/claude_skills/skills/minha/SKILL.md": {
+            "data": "c2tpbGwgZW0gcmVwbwo=",
+            "mode": 420
+          },
+          "files/claude_skills/skills/minha/run.sh": {
+            "data": "IyEvYmluL3NoCmVjaG8gIiR7SE9NRX0iIHtIT01FfQo=",
+            "mode": 493
+          },
+          "files/claude_hooks/hooks/lembrete.py": {
+            "data": "cHJpbnQoJ+KfpkhPTUXin6cvbm90YXMnKQo=",
+            "mode": 420
+          },
+          "refs/54dcb45aded7aa862ba1e69d6e6f607a95e10dc7": {
+            "data": "cHJpbnQoJ+KfpkhPTUXin6cvbm90YXMnKQo=",
+            "mode": 420
+          },
+          "refs/046e074072cd9d44730548814c4fb5a6ef514d91": {
+            "data": "IyEvYmluL3NoCi4gLi9saWIuc2gK",
+            "mode": 493
+          },
+          "refs/fa813df7381f6935589b101cc21b193ebc913474": {
+            "data": "IyBsaWIK",
+            "mode": 420
+          },
+          "files/codex/AGENTS.md": {
+            "data": "IyByZWdyYXMK",
+            "mode": 420
+          }
+        }
+      },
+      "report": {
+        "items": {
+          "claude_instructions": {
+            "status": "applied",
+            "changed": [
+              "CLAUDE.md",
+              "rules/a.md"
+            ],
+            "warnings": []
+          },
+          "claude_skills": {
+            "status": "applied",
+            "changed": [
+              "skills/minha"
+            ],
+            "warnings": [
+              {
+                "code": "config_sync_heavy_dir_skipped",
+                "params": {
+                  "entry": "skills/minha",
+                  "dir": ".venv"
+                }
+              }
+            ]
+          },
+          "claude_agents": {
+            "status": "same",
+            "changed": [],
+            "warnings": []
+          },
+          "claude_hooks": {
+            "status": "applied",
+            "changed": [
+              "hooks/lembrete.py",
+              "⟦FIXTURE⟧/target/home/.orca/agent-hooks/claude-hook.sh",
+              "⟦FIXTURE⟧/target/home/.orca/agent-hooks/lib.sh",
+              "hooks:PreToolUse",
+              "statusLine"
+            ],
+            "warnings": [
+              {
+                "code": "config_sync_missing_program",
+                "params": {
+                  "program": "python3",
+                  "where": "PreToolUse"
+                }
+              },
+              {
+                "code": "config_sync_missing_program",
+                "params": {
+                  "program": "node",
+                  "where": "statusLine"
+                }
+              }
+            ]
+          },
+          "claude_plugins": {
+            "status": "applied",
+            "changed": [
+              "plugin:ponytail@ponytail",
+              "marketplace:ponytail"
+            ],
+            "warnings": [
+              {
+                "code": "config_sync_missing_program",
+                "params": {
+                  "program": "claude",
+                  "where": "plugins"
+                }
+              }
+            ]
+          },
+          "claude_mcp": {
+            "status": "applied",
+            "changed": [
+              "grafana"
+            ],
+            "warnings": []
+          },
+          "claude_env": {
+            "status": "applied",
+            "changed": [
+              "JIRA_TOKEN"
+            ],
+            "warnings": []
+          },
+          "claude_settings": {
+            "status": "applied",
+            "changed": [
+              "model"
+            ],
+            "warnings": []
+          },
+          "codex": {
+            "status": "applied",
+            "changed": [
+              "AGENTS.md"
+            ],
+            "warnings": [
+              {
+                "code": "config_sync_missing_program",
+                "params": {
+                  "program": "codex",
+                  "where": "config.toml"
+                }
+              }
+            ]
+          },
+          "engines": {
+            "status": "applied",
+            "changed": [
+              "kimi"
+            ],
+            "warnings": []
+          },
+          "hangar_prefs": {
+            "status": "applied",
+            "changed": [
+              "elevenlabs_api_key",
+              "tts_max_chars"
+            ],
+            "warnings": []
+          },
+          "claude_accounts": {
+            "status": "same",
+            "changed": [],
+            "warnings": []
+          },
+          "hangar_appearance": {
+            "status": "same",
+            "changed": [],
+            "warnings": []
+          }
+        },
+        "backup": "⟦FIXTURE⟧/target/home/.hangar/config-sync/backups/20000101-000000-012345"
+      },
+      "final": {
+        "source/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "source/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "source/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        },
+        "source/home/.claude/.credentials.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.local.md": {
+          "text": "só desta máquina\n",
+          "mode": 420
+        },
+        "source/home/.claude/CLAUDE.md": {
+          "text": "# regras\n",
+          "mode": 420
+        },
+        "source/home/.claude/engines.json": {
+          "text": "{\"kimi\": {\"base_url\": \"https://k\", \"api_key\": \"sk-kimi\"}}",
+          "mode": 420
+        },
+        "source/home/.claude/hooks/guard_tmux.py": {
+          "link": "⟦FIXTURE⟧/source/hangar/backend/hooks/guard_tmux.py"
+        },
+        "source/home/.claude/hooks/lembrete.py": {
+          "text": "print('⟦FIXTURE⟧/source/home/notas')\n",
+          "mode": 420
+        },
+        "source/home/.claude/plugins/known_marketplaces.json": {
+          "text": "{\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}",
+          "mode": 420
+        },
+        "source/home/.claude/rules/a.md": {
+          "text": "regra a\n",
+          "mode": 420
+        },
+        "source/home/.claude/settings.json": {
+          "text": "{\"model\": \"opus\", \"env\": {\"JIRA_TOKEN\": \"segredo-jira\"}, \"enabledPlugins\": {\"ponytail@ponytail\": true}, \"extraKnownMarketplaces\": {\"ponytail\": {\"source\": {\"source\": \"git\", \"url\": \"https://x/ponytail.git\"}}}, \"statusLine\": {\"type\": \"command\", \"command\": \"'⟦FIXTURE⟧/source/home/.local/share/fnm/v24/bin/node' '⟦FIXTURE⟧/source/hangar/scripts/statusline.js'\"}, \"hooks\": {\"PreToolUse\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"\\\"⟦FIXTURE⟧/source/hangar/.venv/bin/python3\\\" \\\"⟦FIXTURE⟧/source/hangar/backend/hooks/state_hook.py\\\" || exit 0\"}]}, {\"hooks\": [{\"type\": \"command\", \"command\": \"python3 ⟦FIXTURE⟧/source/home/.claude/hooks/lembrete.py\"}]}, {\"matcher\": \"Bash\", \"hooks\": [{\"type\": \"command\", \"command\": \"/bin/sh '⟦FIXTURE⟧/source/home/.orca/agent-hooks/claude-hook.sh'\"}]}]}}",
+          "mode": 420
+        },
+        "source/home/.claude/skills/minha": {
+          "link": "⟦FIXTURE⟧/source/home/Projetos/skills/minha"
+        },
+        "source/home/.claude/skills/orquestrar": {
+          "link": "⟦FIXTURE⟧/source/hangar/skills/orquestrar"
+        },
+        "source/home/.claude.json": {
+          "text": "{\"oauthAccount\": {\"emailAddress\": \"ana@x\"}, \"userID\": \"u-ana\", \"mcpServers\": {\"hangar\": {\"type\": \"http\", \"url\": \"http://127.0.0.1:8765/mcp/\"}, \"grafana\": {\"type\": \"http\", \"url\": \"https://g\", \"headers\": {\"Authorization\": \"Bearer seg\"}}}}",
+          "mode": 420
+        },
+        "source/home/.codex/AGENTS.md": {
+          "link": "⟦FIXTURE⟧/source/home/.claude/CLAUDE.md"
+        },
+        "source/home/.codex/auth.json": {
+          "text": "{\"token\": \"nao-pode-sair\"}",
+          "mode": 420
+        },
+        "source/home/.codex/config.toml": {
+          "text": "model = \"gpt-6\"\n[projects.\"/x\"]\ntrust_level = \"trusted\"\n[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\n[mcp_servers.docs]\ncommand = \"npx\"\n",
+          "mode": 420
+        },
+        "source/home/.orca/agent-hooks/claude-hook.sh": {
+          "text": "#!/bin/sh\n. ./lib.sh\n",
+          "mode": 493
+        },
+        "source/home/.orca/agent-hooks/lib.sh": {
+          "text": "# lib\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/.venv/lib.bin": {
+          "text": "xxxxxxxxxx",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/SKILL.md": {
+          "text": "skill em repo\n",
+          "mode": 420
+        },
+        "source/home/Projetos/skills/minha/run.sh": {
+          "text": "#!/bin/sh\necho \"${HOME}\" {HOME}\n",
+          "mode": 493
+        },
+        "source/prefs.json": {
+          "text": "{\"elevenlabs_api_key\": \"el-key\", \"sync\": true, \"tts_max_chars\": 900}",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/guard_tmux.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/backend/hooks/state_hook.py": {
+          "text": "# hook do hangar\n",
+          "mode": 420
+        },
+        "target/hangar/scripts/statusline.js": {
+          "text": "// barra\n",
+          "mode": 420
+        },
+        "target/hangar/skills/orquestrar/SKILL.md": {
+          "text": "skill do hangar\n",
+          "mode": 420
+        },
+        "target/home/.claude/CLAUDE.md": {
+          "text": "# regras\n",
+          "mode": 420
+        },
+        "target/home/.claude/engines.json": {
+          "text": "{\n  \"kimi\": {\n    \"base_url\": \"https://k\",\n    \"api_key\": \"sk-kimi\"\n  }\n}\n",
+          "mode": 384
+        },
+        "target/home/.claude/hooks/lembrete.py": {
+          "text": "print('⟦FIXTURE⟧/target/home/notas')\n",
+          "mode": 420
+        },
+        "target/home/.claude/rules/a.md": {
+          "text": "regra a\n",
+          "mode": 420
+        },
+        "target/home/.claude/settings.json": {
+          "text": "{\n  \"hooks\": {\n    \"PreToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"python3 ⟦FIXTURE⟧/target/home/.claude/hooks/lembrete.py\"\n          }\n        ]\n      },\n      {\n        \"matcher\": \"Bash\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"/bin/sh '⟦FIXTURE⟧/target/home/.orca/agent-hooks/claude-hook.sh'\"\n          }\n        ]\n      }\n    ]\n  },\n  \"statusLine\": {\n    \"type\": \"command\",\n    \"command\": \"'⟦FIXTURE⟧/target/home/.local/share/fnm/v24/bin/node' '⟦FIXTURE⟧/target/hangar/scripts/statusline.js'\"\n  },\n  \"enabledPlugins\": {\n    \"ponytail@ponytail\": true\n  },\n  \"extraKnownMarketplaces\": {\n    \"ponytail\": {\n      \"source\": {\n        \"source\": \"git\",\n        \"url\": \"https://x/ponytail.git\"\n      }\n    }\n  },\n  \"env\": {\n    \"JIRA_TOKEN\": \"segredo-jira\"\n  },\n  \"model\": \"opus\"\n}\n",
+          "mode": 384
+        },
+        "target/home/.claude/skills/minha/SKILL.md": {
+          "text": "skill em repo\n",
+          "mode": 420
+        },
+        "target/home/.claude/skills/minha/run.sh": {
+          "text": "#!/bin/sh\necho \"${HOME}\" {HOME}\n",
+          "mode": 493
+        },
+        "target/home/.claude.json": {
+          "text": "{\n  \"mcpServers\": {\n    \"grafana\": {\n      \"type\": \"http\",\n      \"url\": \"https://g\",\n      \"headers\": {\n        \"Authorization\": \"Bearer seg\"\n      }\n    }\n  }\n}\n",
+          "mode": 384
+        },
+        "target/home/.codex/AGENTS.md": {
+          "text": "# regras\n",
+          "mode": 420
+        },
+        "target/home/.hangar/config-sync/backups/20000101-000000-012345/json/e263f0ecbdbce014ec496f35a1f9478acca11c695286da00070f24cbe34c83e8.json": {
+          "text": "{\n  \"path\": \"⟦FIXTURE⟧/target/home/.claude/settings.json\",\n  \"conteudo_hex\": \"7b0a202022686f6f6b73223a207b0a2020202022507265546f6f6c557365223a205b0a2020202020207b0a202020202020202022686f6f6b73223a205b0a202020202020202020207b0a2020202020202020202020202274797065223a2022636f6d6d616e64222c0a20202020202020202020202022636f6d6d616e64223a2022707974686f6e33202f746d702f636f6e6669672d73796e632d62756e646c652d323437336f6773762f7461726765742f686f6d652f2e636c617564652f686f6f6b732f6c656d62726574652e7079220a202020202020202020207d0a20202020202020205d0a2020202020207d2c0a2020202020207b0a2020202020202020226d617463686572223a202242617368222c0a202020202020202022686f6f6b73223a205b0a202020202020202020207b0a2020202020202020202020202274797065223a2022636f6d6d616e64222c0a20202020202020202020202022636f6d6d616e64223a20222f62696e2f736820272f746d702f636f6e6669672d73796e632d62756e646c652d323437336f6773762f7461726765742f686f6d652f2e6f7263612f6167656e742d686f6f6b732f636c617564652d686f6f6b2e736827220a202020202020202020207d0a20202020202020205d0a2020202020207d0a202020205d0a20207d2c0a2020227374617475734c696e65223a207b0a202020202274797065223a2022636f6d6d616e64222c0a2020202022636f6d6d616e64223a2022272f746d702f636f6e6669672d73796e632d62756e646c652d323437336f6773762f7461726765742f686f6d652f2e6c6f63616c2f73686172652f666e6d2f7632342f62696e2f6e6f64652720272f746d702f636f6e6669672d73796e632d62756e646c652d323437336f6773762f7461726765742f68616e6761722f736372697074732f7374617475736c696e652e6a7327220a20207d0a7d0a\",\n  \"symlink\": null\n}\n",
+          "mode": 384
+        },
+        "target/home/.orca/agent-hooks/claude-hook.sh": {
+          "text": "#!/bin/sh\n. ./lib.sh\n",
+          "mode": 493
+        },
+        "target/home/.orca/agent-hooks/lib.sh": {
+          "text": "# lib\n",
+          "mode": 420
+        },
+        "target/prefs.json": {
+          "text": "{\n  \"elevenlabs_api_key\": \"el-key\",\n  \"tts_max_chars\": 900\n}",
+          "mode": 384
+        }
+      },
+      "progress": [
+        {
+          "phase": "read",
+          "item": "claude_instructions",
+          "entry": null,
+          "index": 0,
+          "total": 13
+        },
+        {
+          "phase": "read",
+          "item": "claude_instructions",
+          "entry": "CLAUDE.md"
+        },
+        {
+          "phase": "read",
+          "item": "claude_instructions",
+          "entry": "rules/a.md"
+        },
+        {
+          "phase": "read",
+          "item": "claude_skills",
+          "entry": null,
+          "index": 1,
+          "total": 13
+        },
+        {
+          "phase": "read",
+          "item": "claude_skills",
+          "entry": "skills/minha"
+        },
+        {
+          "phase": "read",
+          "item": "claude_agents",
+          "entry": null,
+          "index": 2,
+          "total": 13
+        },
+        {
+          "phase": "read",
+          "item": "claude_hooks",
+          "entry": null,
+          "index": 3,
+          "total": 13
+        },
+        {
+          "phase": "read",
+          "item": "claude_hooks",
+          "entry": "hooks/lembrete.py"
+        },
+        {
+          "phase": "read",
+          "item": "claude_plugins",
+          "entry": null,
+          "index": 4,
+          "total": 13
+        },
+        {
+          "phase": "read",
+          "item": "claude_mcp",
+          "entry": null,
+          "index": 5,
+          "total": 13
+        },
+        {
+          "phase": "read",
+          "item": "claude_env",
+          "entry": null,
+          "index": 6,
+          "total": 13
+        },
+        {
+          "phase": "read",
+          "item": "claude_settings",
+          "entry": null,
+          "index": 7,
+          "total": 13
+        },
+        {
+          "phase": "read",
+          "item": "codex",
+          "entry": null,
+          "index": 8,
+          "total": 13
+        },
+        {
+          "phase": "read",
+          "item": "engines",
+          "entry": null,
+          "index": 9,
+          "total": 13
+        },
+        {
+          "phase": "read",
+          "item": "hangar_prefs",
+          "entry": null,
+          "index": 10,
+          "total": 13
+        },
+        {
+          "phase": "read",
+          "item": "claude_accounts",
+          "entry": null,
+          "index": 11,
+          "total": 13
+        },
+        {
+          "phase": "read",
+          "item": "hangar_appearance",
+          "entry": null,
+          "index": 12,
+          "total": 13
+        }
+      ]
+    }
+  ]
+}

@@ -246,9 +246,15 @@ pub fn parse(bytes: &[u8]) -> Result<Value, (axum::http::StatusCode, Value)> {
         let raw=e.to_string();let eof=e.is_eof();
         let previous:usize=text.split_inclusive('\n').take(e.line().saturating_sub(1)).map(str::len).sum();
         let byte=(previous+e.column().saturating_sub(usize::from(!eof))).min(text.len());
-        let position=text[..text.floor_char_boundary(byte)].chars().count();
+        let mut position=text[..text.floor_char_boundary(byte)].chars().count();
         let last=text.trim_end().chars().next_back();
-        let message=if raw.starts_with("trailing characters"){"Extra data"}
+        let message=if raw.starts_with("trailing comma") {
+            // O diagnóstico aponta a vírgula, não o fechamento que a revelou.
+            if let Some((offset, _)) = text[..text.floor_char_boundary(byte)].char_indices().rev().find(|(_, c)| !c.is_whitespace()) {
+                position = text[..offset].chars().count();
+            }
+            if text.as_bytes().get(byte) == Some(&b'}') { "Illegal trailing comma before end of object" } else { "Illegal trailing comma before end of array" }
+        } else if raw.starts_with("trailing characters"){"Extra data"}
             else if raw.starts_with("key must be a string")||(eof&&matches!(last,Some('{'))){"Expecting property name enclosed in double quotes"}
             else if raw.starts_with("expected `:`"){"Expecting ':' delimiter"}
             else if raw.starts_with("expected `,`")||(eof&&!matches!(last,Some('['|':'|','))){"Expecting ',' delimiter"}

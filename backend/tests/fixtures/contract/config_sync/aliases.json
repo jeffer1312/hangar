@@ -1,0 +1,211 @@
+{
+  "source_commit": "fc1ed83a37fe22c126328f3717ccd6b37db17e10",
+  "command": "cd backend && uv run python tests/fixtures/contract/config_sync/generate_aliases.py",
+  "cases": [
+    {
+      "initial": null,
+      "value": null,
+      "before": {},
+      "result": {},
+      "raw": "{}"
+    },
+    {
+      "initial": null,
+      "value": "",
+      "before": {},
+      "result": {},
+      "raw": "{}"
+    },
+    {
+      "initial": null,
+      "value": "  ",
+      "before": {},
+      "result": {},
+      "raw": "{}"
+    },
+    {
+      "initial": null,
+      "value": "  Nome  ",
+      "before": {},
+      "result": {
+        "a": "Nome"
+      },
+      "raw": "{\n \"a\": \"Nome\"\n}"
+    },
+    {
+      "initial": null,
+      "value": "𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á",
+      "before": {},
+      "result": {
+        "a": "𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á"
+      },
+      "raw": "{\n \"a\": \"𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á\"\n}"
+    },
+    {
+      "initial": "{}",
+      "value": null,
+      "before": {},
+      "result": {},
+      "raw": "{}"
+    },
+    {
+      "initial": "{}",
+      "value": "",
+      "before": {},
+      "result": {},
+      "raw": "{}"
+    },
+    {
+      "initial": "{}",
+      "value": "  ",
+      "before": {},
+      "result": {},
+      "raw": "{}"
+    },
+    {
+      "initial": "{}",
+      "value": "  Nome  ",
+      "before": {},
+      "result": {
+        "a": "Nome"
+      },
+      "raw": "{\n \"a\": \"Nome\"\n}"
+    },
+    {
+      "initial": "{}",
+      "value": "𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á",
+      "before": {},
+      "result": {
+        "a": "𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á"
+      },
+      "raw": "{\n \"a\": \"𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á\"\n}"
+    },
+    {
+      "initial": "[]",
+      "value": null,
+      "before": {},
+      "result": {},
+      "raw": "{}"
+    },
+    {
+      "initial": "[]",
+      "value": "",
+      "before": {},
+      "result": {},
+      "raw": "{}"
+    },
+    {
+      "initial": "[]",
+      "value": "  ",
+      "before": {},
+      "result": {},
+      "raw": "{}"
+    },
+    {
+      "initial": "[]",
+      "value": "  Nome  ",
+      "before": {},
+      "result": {
+        "a": "Nome"
+      },
+      "raw": "{\n \"a\": \"Nome\"\n}"
+    },
+    {
+      "initial": "[]",
+      "value": "𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á",
+      "before": {},
+      "result": {
+        "a": "𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á"
+      },
+      "raw": "{\n \"a\": \"𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á\"\n}"
+    },
+    {
+      "initial": "{",
+      "value": null,
+      "before": {},
+      "result": {},
+      "raw": "{}"
+    },
+    {
+      "initial": "{",
+      "value": "",
+      "before": {},
+      "result": {},
+      "raw": "{}"
+    },
+    {
+      "initial": "{",
+      "value": "  ",
+      "before": {},
+      "result": {},
+      "raw": "{}"
+    },
+    {
+      "initial": "{",
+      "value": "  Nome  ",
+      "before": {},
+      "result": {
+        "a": "Nome"
+      },
+      "raw": "{\n \"a\": \"Nome\"\n}"
+    },
+    {
+      "initial": "{",
+      "value": "𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á",
+      "before": {},
+      "result": {
+        "a": "𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á"
+      },
+      "raw": "{\n \"a\": \"𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á\"\n}"
+    },
+    {
+      "initial": "{\"a\": \"  Original  \", \"vazio\": \" \", \"numero\": 4}",
+      "value": null,
+      "before": {
+        "a": "Original"
+      },
+      "result": {},
+      "raw": "{}"
+    },
+    {
+      "initial": "{\"a\": \"  Original  \", \"vazio\": \" \", \"numero\": 4}",
+      "value": "",
+      "before": {
+        "a": "Original"
+      },
+      "result": {},
+      "raw": "{}"
+    },
+    {
+      "initial": "{\"a\": \"  Original  \", \"vazio\": \" \", \"numero\": 4}",
+      "value": "  ",
+      "before": {
+        "a": "Original"
+      },
+      "result": {},
+      "raw": "{}"
+    },
+    {
+      "initial": "{\"a\": \"  Original  \", \"vazio\": \" \", \"numero\": 4}",
+      "value": "  Nome  ",
+      "before": {
+        "a": "Original"
+      },
+      "result": {
+        "a": "Nome"
+      },
+      "raw": "{\n \"a\": \"Nome\"\n}"
+    },
+    {
+      "initial": "{\"a\": \"  Original  \", \"vazio\": \" \", \"numero\": 4}",
+      "value": "𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á",
+      "before": {
+        "a": "Original"
+      },
+      "result": {
+        "a": "𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á"
+      },
+      "raw": "{\n \"a\": \"𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á𝄞á\"\n}"
+    }
+  ]
+}

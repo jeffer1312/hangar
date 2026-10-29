@@ -34,6 +34,8 @@ const COMMENT_EVERY: Duration = Duration::from_secs(15);
 const SEND_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct AppState {
+    pub config_sync_context: Option<crate::config_sync::export::Context>,
+    pub config_sync_translation: crate::config_sync::translate::Translator,
     pub omp_sync: Arc<std::sync::OnceLock<Arc<crate::omp_sync::Service>>>,
     pub interactions: Arc<crate::interactions::InteractionStore>,
     pub dictation_models: Arc<crate::dictation::catalog::Models>,
@@ -189,6 +191,8 @@ impl AppState {
             interactions, plugin,
             remote_browser: Arc::default(),
             transcription: Arc::default(),
+            config_sync_context: None,
+            config_sync_translation: Default::default(),
             omp_sync: Arc::default(),
             dictation_models: Arc::default(),
             dictation_slots: Arc::new(tokio::sync::Semaphore::new(4)),
@@ -650,6 +654,9 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         // Sugestão de nome da sessão genérica: só o dono, nunca repassada (o Python não tem a rota).
         .route("/api/sessions/{name}/rename-suggestion", axum::routing::post(crate::dictation::rename_suggestion::route).delete(crate::dictation::rename_suggestion::route))
         .route("/api/tags", axum::routing::get(crate::tags::handle).put(crate::tags::handle))
+        .route("/api/config-sync/manifest", axum::routing::get(crate::config_sync::http::handle))
+        .route("/api/config-sync/bundle", axum::routing::get(crate::config_sync::http::handle))
+        .route("/api/config-sync/translate", axum::routing::post(crate::config_sync::http::handle))
         .route("/api/push/expo/subscribe", axum::routing::post(crate::push_expo::subscribe))
         .route("/api/push/vapid", get(crate::push::http::route).fallback(pass_any))
         .route("/api/push/settings", get(crate::push::http::route).fallback(pass_any))
