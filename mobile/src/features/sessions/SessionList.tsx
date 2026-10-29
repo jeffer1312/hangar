@@ -12,6 +12,7 @@ import {
   groupBadges,
   groupGlobal,
   machineNoticeVisible,
+  machinesAllDown,
   renameSession,
   setPairAccess,
   resumeSession,
@@ -501,7 +502,8 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
           );
         }}
         ListEmptyComponent={home && machineErrors.length ? null
-          : busca ? vazio(m.lista_vazia_filtro(), null, true) : vazio(m.lista_nenhuma_ativa(), null)}
+          : busca ? vazio(m.lista_vazia_filtro(), null, true)
+          : machinesAllDown(byServer) ? vazio(null, m.home_machines_offline()) : vazio(m.lista_nenhuma_ativa(), null)}
         contentContainerStyle={styles.listContent}
         keyboardShouldPersistTaps="handled"
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}

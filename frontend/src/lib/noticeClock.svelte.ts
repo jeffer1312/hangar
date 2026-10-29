@@ -7,7 +7,8 @@ export function noticeClock(buckets: () => readonly ServerBucket[]): { readonly 
   const end = $derived(nextNoticeEnd(buckets(), now));
   $effect(() => {
     if (end === null) return;
-    const timer = setTimeout(() => { now = Date.now(); }, Math.max(0, end - Date.now()));
+    // O timer pode disparar um pouco antes: sem o `max`, o aviso ficaria preso até outro evento.
+    const timer = setTimeout(() => { now = Math.max(Date.now(), end); }, Math.max(0, end - Date.now()));
     return () => clearTimeout(timer);
   });
   return { get now() { return now; } };

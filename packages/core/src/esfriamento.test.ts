@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   definirArmazem, definirProtegido, estaDesligado, esquecerServidor, registrarFalha, registrarSucesso, retentarAgora,
   _limparEsfriamentoParaTestes,
-  onServerRecovered, respondeuRecentemente, retryAfterMs, SERVIDOR_CANDIDATO,
+  onServerRecovered, outageSince, respondeuRecentemente, retryAfterMs, SERVIDOR_CANDIDATO,
 } from './esfriamento';
 
 beforeEach(() => { _limparEsfriamentoParaTestes(); definirProtegido(() => false); });
@@ -165,6 +165,32 @@ describe('servidor desligado', () => {
       expect(estaDesligado('pc')).toBe(true);  // …e a marca continua lá
       expect(retryAfterMs('pc')).toBeGreaterThan(400);
       expect(retryAfterMs('pc')).toBeLessThanOrEqual(500);
+    } finally {
+      definirArmazem(null);
+    }
+  });
+});
+
+describe('início da queda', () => {
+  it('conta da primeira falha, sobrevive à recarga e some quando a máquina responde', async () => {
+    vi.useFakeTimers({ now: 10_000 });
+    const dados = new Map<string, string>();
+    const armazem = { getItem: (k: string) => dados.get(k) ?? null, setItem: (k: string, v: string) => { dados.set(k, v); }, removeItem: (k: string) => { dados.delete(k); } };
+    definirArmazem(armazem);
+    try {
+      registrarFalha('pc');
+      expect(outageSince('pc')).toBe(10_000);
+      vi.advanceTimersByTime(60_000);
+      registrarFalha('pc');
+      expect(retryAfterMs('pc')).toBe(5_000);   // a escala segue igual
+      expect(outageSince('pc')).toBe(10_000);
+      vi.resetModules();   // recarga: memória nova, mesmo armazém
+      const recarregado = await import('./esfriamento');
+      recarregado.definirArmazem(armazem);
+      expect(recarregado.outageSince('pc')).toBe(10_000);
+      recarregado.registrarSucesso('pc');
+      expect(recarregado.outageSince('pc')).toBeUndefined();
+      recarregado.definirArmazem(null);
     } finally {
       definirArmazem(null);
     }

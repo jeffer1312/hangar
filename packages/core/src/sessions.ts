@@ -11,16 +11,19 @@ export type KeyringState = 'unlocked' | 'locked' | 'absent';
 
 // `tags`: último evento `tags` do servidor; ausente = versão antiga, valem o nome e a cor locais.
 // `tagsRaw`: o `data` cru dele, para a reconexão que repete o mesmo evento não refazer as linhas.
-// `offlineSince`: primeira falha da queda atual; só existe com `error === 'offline'`.
+// `offlineSince`: primeira falha da queda atual; vale até a próxima lista boa (`error: null`).
 export interface Slot { sessions: SessionInfo[] | null; error: string | null; keyring?: KeyringState | null; tags?: TagsEvent | null; tagsRaw?: string; offlineSince?: number }
 
-/** Slot novo com o `patch` por cima do anterior: o que ele não cita (etiquetas, chaveiro) segue igual. */
+/** Slot novo com o `patch` por cima do anterior: o que ele não cita (etiquetas, chaveiro) segue igual.
+ *  `patch.offlineSince` é o início gravado da queda (`outageSince`), usado quando o slot ainda não tem um. */
 export function patchSlot(slots: ReadonlyMap<string, Slot>, id: string, patch: Partial<Slot>): Slot {
   const prev = slots.get(id);
   const { offlineSince: _, ...next } = { sessions: null, error: null, ...prev, ...patch };
-  if (next.error !== 'offline') return next;
-  // Cada nova tentativa frustrada regrava o slot; a queda continua contando da primeira.
-  return { ...next, offlineSince: (prev?.error === 'offline' && prev.offlineSince) || Date.now() };
+  if (!next.error) return next;
+  // Tentativas frustradas regravam o slot, às vezes alternando offline e erro HTTP; a queda
+  // continua contando da primeira até uma lista boa.
+  const since = (prev?.error && prev.offlineSince) || patch.offlineSince || (next.error === 'offline' ? Date.now() : undefined);
+  return since ? { ...next, offlineSince: since } : next;
 }
 
 // A máquina pode só estar desligada: o aviso vermelho cobre as primeiras tentativas, não a queda inteira.
@@ -37,6 +40,12 @@ function noticeUntil(b: Notice): number {
 
 export function machineNoticeVisible(b: Notice, now: number): boolean {
   return noticeUntil(b) > now;
+}
+
+/** Toda máquina própria fora do ar: lista vazia não é "nenhuma sessão ativa". */
+export function machinesAllDown(buckets: readonly Pick<ServerBucket, 'server' | 'error'>[]): boolean {
+  const own = buckets.filter((b) => !b.server.invite);
+  return own.length > 0 && own.every((b) => b.error === 'offline');
 }
 
 /** Próximo instante em que um aviso some, para um único timer redesenhar a tela; null = nenhum. */

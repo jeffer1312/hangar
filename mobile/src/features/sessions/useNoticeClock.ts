@@ -7,7 +7,8 @@ export function useNoticeClock(byServer: readonly ServerBucket[]): number {
   const end = nextNoticeEnd(byServer, now);
   useEffect(() => {
     if (end === null) return;
-    const timer = setTimeout(() => setNow(Date.now()), Math.max(0, end - Date.now()));
+    // O timer pode disparar um pouco antes: sem o `max`, o aviso ficaria preso até outro evento.
+    const timer = setTimeout(() => setNow(Math.max(Date.now(), end)), Math.max(0, end - Date.now()));
     return () => clearTimeout(timer);
   }, [end]);
   return now;

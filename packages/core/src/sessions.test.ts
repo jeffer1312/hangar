@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Slot } from './sessions';
 import type { Server } from './servers';
 import type { SessionInfo } from './types';
-import { aggregateSessions, epocasDeRecriacao, machineNoticeVisible, nextNoticeEnd, OFFLINE_NOTICE_MS, patchSlot, sweepHidden } from './sessions';
+import { aggregateSessions, epocasDeRecriacao, machineNoticeVisible, machinesAllDown, nextNoticeEnd, OFFLINE_NOTICE_MS, patchSlot, sweepHidden } from './sessions';
 
 const srv = (id: string): Server => ({ id, label: `srv-${id}`, baseUrl: `http://${id}`, token: 't' });
 const sess = (name: string, extra: Partial<SessionInfo> = {}): SessionInfo =>
@@ -199,6 +199,29 @@ describe('aviso de máquina fora do ar', () => {
     m.set('a', patchSlot(m, 'a', { error: 'offline' }));
     expect(m.get('a')!.offlineSince).toBe(90_000);
     expect(aggregateSessions([srv('a')], m).byServer[0].offlineSince).toBe(90_000);
+  });
+
+  it('a queda vem do início gravado e não reabre quando o erro alterna antes de uma lista boa', () => {
+    vi.useFakeTimers({ now: 500_000 });
+    const m = new Map<string, Slot>();
+    m.set('a', patchSlot(m, 'a', { error: 'offline', offlineSince: 7_000 }));
+    expect(m.get('a')!.offlineSince).toBe(7_000);
+    m.set('a', patchSlot(m, 'a', { error: 'erro do servidor' }));
+    expect(m.get('a')!.offlineSince).toBe(7_000);
+    m.set('a', patchSlot(m, 'a', { error: 'offline', offlineSince: undefined }));
+    expect(m.get('a')!.offlineSince).toBe(7_000);
+    m.set('b', patchSlot(m, 'b', { error: 'erro do servidor' }));
+    expect(m.get('b')!.offlineSince).toBeUndefined();
+  });
+
+  it('todas as máquinas próprias fora do ar, convite não conta', () => {
+    const down = { server: srv('a'), sessions: [], loaded: false, error: 'offline' };
+    const up = { server: srv('b'), sessions: [], loaded: true, error: null };
+    const guest = { server: { ...srv('g'), invite: true }, sessions: [], loaded: true, error: null };
+    expect(machinesAllDown([down, guest])).toBe(true);
+    expect(machinesAllDown([down, up])).toBe(false);
+    expect(machinesAllDown([down, { ...up, error: 'erro do servidor' }])).toBe(false);
+    expect(machinesAllDown([guest])).toBe(false);
   });
 
   it('offline só aparece dentro da janela; outro erro fica; sem erro não há aviso', () => {

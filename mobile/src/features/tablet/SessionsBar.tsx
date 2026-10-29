@@ -2,7 +2,7 @@ import { useEffect, useMemo } from 'react';
 import { ActivityIndicator, FlatList, Pressable, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useKeyboardState } from 'react-native-keyboard-controller';
-import { machineNoticeVisible, rotuloEstado, type AggSession } from '@hangar/core';
+import { machineNoticeVisible, machinesAllDown, rotuloEstado, type AggSession } from '@hangar/core';
 import { useTabletPrefs, type SessionsBarPlacement } from '../../stores/tabletPrefs';
 import { useSessions } from '../../stores/sessions';
 import { useServers } from '../../stores/servers';
@@ -77,8 +77,10 @@ export function SessionsBar({ placement, selected, onPick, onNew }: Props) {
         renderItem={renderItem} showsHorizontalScrollIndicator={false} showsVerticalScrollIndicator={false}
         ListEmptyComponent={<View style={styles.emptyState}>
           {loading ? <ActivityIndicator accessibilityLabel={m.lista_carregando()} /> :
-            <Text style={[styles.empty, { color: theme.tokens.text.muted }]}>{m.tablet_sessions_empty()}</Text>}
-          {byServer.filter(b => machineNoticeVisible(b, noticeNow)).map(b =><Text key={b.server.id} accessibilityRole="alert"
+            <Text style={[styles.empty, { color: theme.tokens.text.muted }]}>
+              {machinesAllDown(byServer) ? m.home_machines_offline() : m.tablet_sessions_empty()}
+            </Text>}
+          {byServer.filter(b => machineNoticeVisible(b, noticeNow)).map(b => <Text key={b.server.id} accessibilityRole="alert"
             style={[styles.empty, { color: theme.tokens.status.error }]}>
             {b.error === 'offline' ? m.lista_servidor_offline({ label: b.server.label }) : `${b.server.label}: ${b.error}`}
           </Text>)}

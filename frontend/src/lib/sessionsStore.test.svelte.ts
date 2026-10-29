@@ -107,6 +107,14 @@ it('resposta recebida fora da lista retoma o stream e atualiza as sessões antig
   expect(objetos.get('lan')).toBe(lan);
 });
 
+it('queda registrada antes da recarga mantém o início dela no slot', () => {
+  vi.useFakeTimers({ now: 1_000_000 });
+  registrarFalha('vpn');
+  vi.setSystemTime(1_000_000 + 3_600_000);
+  sessionsStore.retain();
+  expect(sessionsStore.byServer.find(s => s.server.id === 'vpn')?.offlineSince).toBe(1_000_000);
+});
+
 it('servidor desligado antes da montagem aguarda o prazo; reconexão explícita tenta agora', () => {
   registrarFalha('vpn');
   sessionsStore.retain();

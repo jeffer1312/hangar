@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { machineNoticeVisible, stateColors } from '@hangar/core';
+  import { machineNoticeVisible, machinesAllDown, stateColors } from '@hangar/core';
   import SessionCard from './SessionCard.svelte';
   import ConfirmSheet from './ConfirmSheet.svelte';
   import KeyringNotice from './KeyringNotice.svelte';
@@ -55,7 +55,7 @@
     {#if sessionsStore.loading || machines.some((b) => !b.loaded && !b.error)}
       <p class="empty" role="status">{m.lista_carregando()}</p>
     {:else if machines.length === 0}
-      <p class="empty">{m.lista_nenhuma_ativa()}</p>
+      <p class="empty">{machinesAllDown(sessionsStore.byServer) ? m.home_machines_offline() : m.lista_nenhuma_ativa()}</p>
     {/if}
   {:else}
     {#each groups as g (g.state)}

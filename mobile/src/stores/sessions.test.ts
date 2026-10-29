@@ -782,6 +782,19 @@ describe('recusas e recuperação da lista', () => {
     rel();
   });
 
+  test('queda gravada antes de reabrir o app mantém o início dela, sem nova janela de aviso', async () => {
+    const first = useServers.getState().servers[0];
+    useServers.setState({ servers: [first, second] });
+    const since = Date.now() - 3_600_000;
+    prefs.set(outageKey, JSON.stringify({ srv2: { failures: 6, retryAt: Date.now() + 600_000, since } }));
+    const rel = useSessions.getState().retain();
+    await settle();
+    const bucket = useSessions.getState().byServer.find((b) => b.server.id === 'srv2')!;
+    expect(bucket.error).toBe('offline');
+    expect(bucket.offlineSince).toBe(since);
+    rel();
+  });
+
   test('401 antigo não remove token substituído enquanto o GET estava em voo', async () => {
     const old = deferred<Response>();
     fetchMock.mockReturnValueOnce(old.promise);

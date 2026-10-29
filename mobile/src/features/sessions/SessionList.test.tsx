@@ -88,7 +88,7 @@ vi.mock('../../paraglide/messages', () => ({ ...Object.fromEntries((
   'native_brand lista_buscar lista_filtrar lista_filtro_limpar native_connected config_modal_titulo switcher_buscar_conversas nav_custos ' +
   'native_new_chat_title native_sidebar_all_sessions lista_sessoes_plural sessao_expandir sessao_recolher ' +
   'lista_carregando lista_vazia_filtro lista_nenhuma_ativa comum_cancelar sessao_excluir sessao_excluir_curto servidor_nao_existe ' +
-  'comum_carregando lista_nenhum_servidor lista_pareie_qr native_sidebar_awaiting home_sessions_awaiting home_sessions_working home_sessions_ready sessao_recolher ' +
+  'comum_carregando lista_nenhum_servidor lista_pareie_qr native_sidebar_awaiting home_sessions_awaiting home_sessions_working home_sessions_ready home_machines_offline sessao_recolher ' +
   'sessao_renomear sessao_git convite_parar orq_row_badge native_par_convidar native_par_menu sessao_worktree_abrir'
 ).split(' ').map((key) => [key, () => key])),
   home_sessions_more_ready: ({ n }: { n: number }) => `home_sessions_more_ready:${n}`,
@@ -621,11 +621,15 @@ describe('SessionList', () => {
       expect(container.textContent).toContain('fixture-server:offline');
       await act(async () => vi.advanceTimersByTime(OFFLINE_NOTICE_MS - 1));
       expect(container.textContent).toContain('fixture-server:offline');
+      // O timer pode disparar um pouco antes do fim da janela: o aviso não pode ficar preso.
+      vi.setSystemTime(Date.now() - 1);
       await act(async () => vi.advanceTimersByTime(1));
       expect(container.textContent).not.toContain('fixture-server:offline');
       // Sem lista nem aviso: não volta a dizer "carregando" para a máquina desligada.
       expect(container.textContent).not.toContain('fixture-server: lista_carregando');
-      expect(container.textContent).toContain('lista_nenhuma_ativa');
+      // Todas as máquinas fora: lista vazia não diz "nenhuma sessão ativa".
+      expect(container.textContent).toContain('home_machines_offline');
+      expect(container.textContent).not.toContain('lista_nenhuma_ativa');
     } finally {
       vi.useRealTimers();
     }

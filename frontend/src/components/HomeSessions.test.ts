@@ -70,11 +70,16 @@ it('máquina offline aparece só no começo da queda e some sozinha depois', asy
     expect(await mount()).toContain('b offline');
     vi.advanceTimersByTime(OFFLINE_NOTICE_MS - 1); await tick();
     expect(target.textContent).toContain('b offline');
+    // O timer pode disparar um pouco antes do fim da janela: o aviso não pode ficar preso.
+    vi.setSystemTime(Date.now() - 1);
     vi.advanceTimersByTime(1); await tick();
     expect(target.textContent).not.toContain('b offline');
     // Sem lista nem aviso: não volta a dizer "carregando" para a máquina desligada.
     expect(target.textContent).not.toContain('Carregando');
-    expect(target.textContent).toContain('Nenhuma sessão ativa');
+    // Todas as máquinas fora: lista vazia não diz "nenhuma sessão ativa".
+    expect(target.textContent).toContain('Suas máquinas estão fora do ar');
+    expect(target.textContent).not.toContain('Nenhuma sessão ativa');
+    expect(target.querySelector('[role="alert"]')).toBeNull();
   } finally {
     vi.useRealTimers();
   }

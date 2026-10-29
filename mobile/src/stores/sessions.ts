@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { openSessionsStream, aggregateSessions, jsonlDaSessao, sweepHidden, registrarDiag, decidirRota, discoverRemoteRoute, esquecerRota, rotaDecidida, baseOf, UNCONFIRMED_BASE, probeServerResponse, comTeto, parseTagsEvent, patchSlot, placeExternalRows, listExternalPairs, attachGuest, createExternalPairSync } from '@hangar/core';
 import type { SessionInfo, Server, AggSession, ExternalPair } from '@hangar/core';
-import { sortSessions, definirArmazem, definirProtegido, definirSemPrazo, registrarFalha, registrarSucesso, retryAfterMs, estaDesligado, respondeuRecentemente, retentarAgora, esquecerServidor, onServerRecovered, _limparEsfriamentoParaTestes } from '@hangar/core';
+import { sortSessions, definirArmazem, definirProtegido, definirSemPrazo, registrarFalha, registrarSucesso, retryAfterMs, estaDesligado, outageSince, respondeuRecentemente, retentarAgora, esquecerServidor, onServerRecovered, _limparEsfriamentoParaTestes } from '@hangar/core';
 import type { Slot, ServerBucket, Aggregate } from '@hangar/core';
 import { useServers } from './servers';
 import * as m from '../paraglide/messages';
@@ -36,7 +36,7 @@ export interface SessionsState {
 // internas — fora do set() para não virar proxy
 const slots = new Map<string, Slot>();
 // Sem resposta boa o chaveiro deixa de valer; lista e etiquetas ficam.
-const failedSlot = (id: string, error: string) => patchSlot(slots, id, { error, keyring: undefined });
+const failedSlot = (id: string, error: string) => patchSlot(slots, id, { error, keyring: undefined, offlineSince: outageSince(id) });
 const streams = new Map<string, ReturnType<typeof openSessionsStream>>();
 type ConnectionAttempt = { server: Server; generation: number; abort: AbortController; routing: boolean };
 const connecting = new Map<string, ConnectionAttempt>();

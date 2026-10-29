@@ -7765,6 +7765,7 @@
   "home_sessions_working": "Working",
   "home_sessions_ready": "Ready",
   "home_sessions_more_ready": "{n} more ready",
+  "home_machines_offline": "Your machines are offline",
   "home_new_conversation": "New conversation…",
   "home_open_app": "When opening the app",
   "home_open_app_sessions": "Session list",

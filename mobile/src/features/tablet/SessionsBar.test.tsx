@@ -126,6 +126,16 @@ describe('SessionsBar', () => {
     expect(container.textContent).toContain(m.tablet_sessions_empty());
     expect(container.querySelector(`[aria-label="${m.tablet_new_session()}"]`)).not.toBeNull();
   });
+  it('máquina desligada há tempo não fica avisando, e a lista vazia diz que as máquinas estão fora', () => {
+    state.rows = [];
+    state.byServer = [{ server: { id: 'nb', label: 'Notebook', baseUrl: '', token: '' }, sessions: [], loaded: false,
+      error: 'offline', offlineSince: Date.now() - 3_600_000 }];
+    render('bottom');
+    expect(container.textContent).not.toContain(m.lista_servidor_offline({ label: 'Notebook' }));
+    expect(container.textContent).toContain(m.home_machines_offline());
+    expect(container.textContent).not.toContain(m.tablet_sessions_empty());
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+  });
   it.each(['left', 'bottom', 'top'] as const)('%s troca a sessão pela identidade completa', placement => {
     state.rows = [session, { ...session, serverId: 'casa', serverLabel: 'Casa' }];
     const { onPick } = render(placement);

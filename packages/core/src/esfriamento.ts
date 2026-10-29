@@ -4,7 +4,8 @@ import { registrar as registrarDiag } from './diag';
 const CHAVE = 'hangar_servidores_desligados';
 const CHAVE_RESPOSTAS = 'hangar_servidores_responderam';
 
-type Estado = { failures: number; retryAt: number };
+// `since`: primeira falha da queda; o aviso de offline conta dele, inclusive depois da recarga.
+type Estado = { failures: number; retryAt: number; since?: number };
 // As duas primeiras esperas são curtas: queda isolada (backend reiniciando) volta em segundos,
 // e só quem falha três vezes seguidas passa a esperar de verdade.
 const RETRY_DELAYS_MS = [2_000, 5_000, 30_000, 60_000, 120_000, 240_000, 300_000, 600_000, 1_800_000];
@@ -124,7 +125,10 @@ function carregar(): void {
       for (const [id, value] of Object.entries(saved)) {
         if (!value || !Number.isInteger(value.failures) || value.failures < 1 ||
           !Number.isFinite(value.retryAt)) continue;
-        if ((estados.get(id)?.retryAt ?? 0) <= value.retryAt) estados.set(id, value);
+        const since = Number.isFinite(value.since) ? value.since : undefined;
+        if ((estados.get(id)?.retryAt ?? 0) <= value.retryAt) {
+          estados.set(id, { failures: value.failures, retryAt: value.retryAt, since });
+        }
       }
     }
     // Marca do teste de adicionar gravada por versão anterior: apaga, não só ignora.
@@ -181,9 +185,16 @@ export function registrarFalha(id: string): void {
   carregar();
   if (protegido(id) || retryAfterMs(id) > 0) return;
   const teto = respondeuRecentemente(id) ? TETO_RECENTE : RETRY_DELAYS_MS.length;
-  const failures = Math.min((estados.get(id)?.failures ?? 0) + 1, teto);
-  estados.set(id, { failures, retryAt: Date.now() + RETRY_DELAYS_MS[failures - 1] });
+  const atual = estados.get(id);
+  const failures = Math.min((atual?.failures ?? 0) + 1, teto);
+  estados.set(id, { failures, retryAt: Date.now() + RETRY_DELAYS_MS[failures - 1], since: atual?.since ?? Date.now() });
   gravar();
+}
+
+/** Primeira falha da queda atual; ausente = sem queda registrada (ou gravada por versão antiga). */
+export function outageSince(id: string): number | undefined {
+  carregar();
+  return estados.get(id)?.since;
 }
 
 /** Respondeu: está de pé. */

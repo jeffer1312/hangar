@@ -15,10 +15,11 @@ import { forgetServer, setLiveTerminals } from './hangarTerminals.svelte';
 import { ouvirFechamentoNav, podarNavMortos } from './navegadorPanel.svelte';
 import { aggregateSessions, epocasDeRecriacao, jsonlDaSessao, parseTagsEvent, patchSlot, sweepHidden, type Slot, type Aggregate, type Epocas } from '@hangar/core';
 import { hasOpenChat } from './sessionServer';
-import { avisarSemArmazem, definirArmazem, definirProtegido, definirSemPrazo, estaDesligado, esquecerServidor, onServerRecovered, registrarFalha, registrarSucesso, respondeuRecentemente, retentarAgora, retryAfterMs } from '@hangar/core';
+import { avisarSemArmazem, definirArmazem, definirProtegido, definirSemPrazo, estaDesligado, esquecerServidor, onServerRecovered, outageSince, registrarFalha, registrarSucesso, respondeuRecentemente, retentarAgora, retryAfterMs } from '@hangar/core';
 
 // Fora do ar o chaveiro deixa de valer; lista e etiquetas ficam.
-const OFFLINE: Partial<Slot> = { error: 'offline', keyring: undefined };
+// O início gravado da queda vale depois da recarga: máquina já fora há horas não reabre o aviso.
+const offline = (id: string): Partial<Slot> => ({ error: 'offline', keyring: undefined, offlineSince: outageSince(id) });
 
 function createSessionsStore() {
   let servers = $state<Server[]>([]);
@@ -200,12 +201,12 @@ function createSessionsStore() {
       if (streams.has(s.id)) continue;
       if (intocavel(s.id) && estaDesligado(s.id)) retentarAgora(s.id);
       if (retryAfterMs(s.id) > 0) {
-        slots.set(s.id, patchSlot(slots, s.id, OFFLINE));
+        slots.set(s.id, patchSlot(slots, s.id, offline(s.id)));
         scheduleRetry(s.id);
         continue;
       }
       clearTimeout(retryTimers.get(s.id)); retryTimers.delete(s.id);
-      if (estaDesligado(s.id)) slots.set(s.id, patchSlot(slots, s.id, OFFLINE));
+      if (estaDesligado(s.id)) slots.set(s.id, patchSlot(slots, s.id, offline(s.id)));
       if (!rotaDecidida(s.id)) {
         void decidirRota(s).then(() => { if (refs > 0 && servers.some((x) => x.id === s.id)) connect(servers, s.id); });
         continue;
@@ -267,7 +268,7 @@ function createSessionsStore() {
           cancelarPrazo();   // o stream acabou; NÃO mede — silêncio não é latência
           // Mesmo tratamento do onerror: o slot que motivou o watchdog está potencialmente velho —
           // marca offline (mantendo a última lista boa) em vez de segui-lo servindo como bom.
-          slots.set(s.id, patchSlot(slots, s.id, OFFLINE));
+          slots.set(s.id, patchSlot(slots, s.id, offline(s.id)));
           forgetServer(s.id);
           recompute();
           scheduleRetry(s.id);
@@ -288,7 +289,7 @@ function createSessionsStore() {
         if (!isCurrent()) return;
         falhou('primeiro_quadro_timeout', PRIMEIRO_QUADRO_MS);
         if (primeiros.get(s.id) === tPrimeiro) primeiros.delete(s.id);
-        slots.set(s.id, patchSlot(slots, s.id, OFFLINE));
+        slots.set(s.id, patchSlot(slots, s.id, offline(s.id)));
         forgetServer(s.id);
         recompute();
         // Conexão que nunca entregou quadro é o caso da máquina morta atrás da VPN: o socket fica
@@ -432,7 +433,7 @@ function createSessionsStore() {
       es.onerror = () => {
         if (!isCurrent()) return;
         falhou(es.readyState === 2 ? 'stream_fechado' : 'stream_interrompido');
-        slots.set(s.id, patchSlot(slots, s.id, OFFLINE));
+        slots.set(s.id, patchSlot(slots, s.id, offline(s.id)));
         forgetServer(s.id);
         recompute();
         // Assume o controle do retry (o nativo martela): fecha e reagenda com backoff.
