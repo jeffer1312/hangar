@@ -573,6 +573,8 @@ impl Sources for LiveSources {
 
     fn committed(&self) -> Option<Arc<str>> { self.hub.upgrade()?.committed() }
 
+    fn committed_known(&self) -> bool { self.hub.upgrade().is_some_and(|hub| hub.committed_known()) }
+
     async fn publish_preview(&self, event: PreviewEvent) -> bool {
         match serde_json::to_string(&event) {
             Ok(data) => self.publish_raw("preview", &data),

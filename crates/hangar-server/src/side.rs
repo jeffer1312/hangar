@@ -378,6 +378,8 @@ pub struct Hub {
     pub(crate) monitor: Mutex<Option<(tokio::task::AbortHandle, tokio::task::AbortHandle, OwnerKey)>>,
     /// Última resposta gravada no transcript desta ligação, normalizada (`preview::norm`).
     committed: Mutex<Option<Arc<str>>>,
+    /// Geração + 1 cuja leitura inicial de `committed` já voltou; 0 = nenhuma.
+    seeded: std::sync::atomic::AtomicU64,
     /// Acorda o `Monitor`: `rebind` (rodada já) ou resposta gravada (prévia sai já).
     wake: Arc<Notify>,
     /// O ator do Codex com terminal desta sessão é do Rust: o feed publica o estado. O pane continua no
@@ -454,6 +456,7 @@ impl Hub {
                 side: Mutex::new(None),
                 monitor: Mutex::new(None),
                 committed: Mutex::new(None),
+                seeded: std::sync::atomic::AtomicU64::new(0),
                 wake: Arc::new(Notify::new()),
                 runtime_owned: std::sync::atomic::AtomicBool::new(owned),
                 guests: std::sync::atomic::AtomicUsize::new(0),
@@ -582,6 +585,16 @@ impl Hub {
     pub(crate) fn diag(&self) -> &crate::diag::DiagClient { &self.ctx.diag }
 
     pub fn committed(&self) -> Option<Arc<str>> { self.committed.lock().unwrap().clone() }
+
+    pub fn committed_known(&self) -> bool {
+        let generation = self.bound.lock().unwrap().as_ref().map(|b| b.generation);
+        generation.is_some_and(|g| self.seeded.load(std::sync::atomic::Ordering::Acquire) == g + 1)
+    }
+
+    fn mark_seeded(&self, generation: u64) {
+        self.seeded.store(generation + 1, std::sync::atomic::Ordering::Release);
+        self.wake.notify_one();
+    }
 
     /// Resposta gravada lida na geração `generation`; troca de ligação no meio descarta.
     pub(crate) fn set_committed(&self, generation: u64, text: String, only_if_empty: bool) {
@@ -1133,11 +1146,14 @@ async fn seed_committed(hub: &Weak<Hub>, only_if_empty: bool) {
         }
     })
     .await;
+    let Some(h) = hub.upgrade() else { return };
     match last {
-        Ok(Some(text)) => if let Some(h) = hub.upgrade() { h.set_committed(generation, text, only_if_empty) },
+        Ok(Some(text)) => h.set_committed(generation, text, only_if_empty),
         Ok(None) => {}
         Err(e) => tracing::warn!(panic = e.is_panic(), code = "state_committed_seed", "estado: leitura da resposta gravada caiu"),
     }
+    // Com ou sem texto: a prévia só esperava esta leitura terminar.
+    h.mark_seeded(generation);
 }
 
 /// `GET /__hangar_server/state/{name}/events` na porta privada: o Python lê daqui `state`,

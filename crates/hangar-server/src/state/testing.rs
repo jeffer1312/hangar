@@ -46,6 +46,7 @@ impl Sources for HubFake {
     async fn preview_capture(&self) -> Option<Result<Frame, CaptureFailed>> { None }
     async fn preview_files(&self, _: &str) -> Vec<HookFile> { Vec::new() }
     fn committed(&self) -> Option<Arc<str>> { self.hub.upgrade()?.committed() }
+    fn committed_known(&self) -> bool { self.hub.upgrade().is_some_and(|hub| hub.committed_known()) }
     async fn publish_preview(&self, event: PreviewEvent) -> bool { self.publish_raw("preview", &serde_json::to_string(&event).unwrap()) }
     fn wall(&self) -> f64 { wall_now() }
 }
