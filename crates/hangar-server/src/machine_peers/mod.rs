@@ -323,6 +323,18 @@ pub async fn handle(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     request: Request,
 ) -> Response {
+    if let Some(response)=crate::http_cors::preflight(request.method(),request.headers()){return response;}
+    let headers=request.headers().clone();
+    let mut response=handle_inner(State(st),ConnectInfo(peer),request).await;
+    crate::http_cors::apply(&headers,&mut response);
+    response
+}
+
+async fn handle_inner(
+    State(st): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    request: Request,
+) -> Response {
     let path = request.uri().path().to_owned();
     let method = request.method().clone();
     let public =
