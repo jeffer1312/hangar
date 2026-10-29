@@ -32,8 +32,9 @@ pub async fn handle(State(state): State<Arc<AppState>>, ConnectInfo(peer): Conne
         Err(_) => return crate::engines::body::json_error(StatusCode::SERVICE_UNAVAILABLE,json!({"detail":{"code":"config_unavailable","params":{},"msg":"configuração indisponível"}})),
     };
     let root = crate::install_root::root(&service.env.home).unwrap_or_else(||service.env.home.join(".hangar/current"));
-    let Some(version) = crate::boot_version::get(&root) else {
-        return crate::engines::body::json_error(StatusCode::SERVICE_UNAVAILABLE,json!({"detail":{"code":"config_starting","params":{},"msg":"configuração em preparação"}}));
+    let version = match crate::boot_version::ensure(root.clone(),service.env.base.clone()).await {
+        Ok(version)=>version,
+        Err(_)=>return crate::engines::body::json_error(StatusCode::SERVICE_UNAVAILABLE,json!({"detail":{"code":"config_unavailable","params":{},"msg":"configuração indisponível"}})),
     };
     let writing = request.method() != Method::GET;
     let body = if writing {

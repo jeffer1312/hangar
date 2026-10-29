@@ -14,6 +14,11 @@ pub fn get(root:&Path)->Option<Snapshot>{
 }
 /// A primeira publicação vence; a raiz permite injetar uma versão isolada em provas.
 pub fn publish(root:&Path,snapshot:Snapshot)->Snapshot{slot(root).get_or_init(||snapshot).clone()}
+/// O git pode esperar pelo disco; a saúde do Supervisor não deve esperar por ele.
+pub async fn ensure(root:PathBuf,environment:BTreeMap<String,String>)->Result<Snapshot,tokio::task::JoinError>{
+    if let Some(snapshot)=get(&root){return Ok(snapshot);}
+    tokio::task::spawn_blocking(move||capture(&root,&environment)).await
+}
 pub fn capture(root:&Path,environment:&BTreeMap<String,String>)->Snapshot{
     capture_with(root,|args,timeout|{
         let mut command=vec!["git".to_owned()];command.extend(args.iter().map(|v|(*v).to_owned()));

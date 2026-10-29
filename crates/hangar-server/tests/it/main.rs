@@ -315,6 +315,7 @@ mod config_account_alias;
 mod runtime_special;
 mod runtime_apply_errors;
 mod runtime_http;
+mod runtime_boot;
 mod json_literal_unicode;
 mod migration_branch;
 

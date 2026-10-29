@@ -150,6 +150,15 @@ pub async fn serve_until_with_guest(
     guest: Option<std::net::SocketAddr>,
     stop: impl std::future::Future<Output = ()>,
 ) -> std::io::Result<()> {
+    let _ = state.settings_snapshot();
+    let boot_environment = state.accounts.env.base.clone();
+    let boot_root = install_root::root(&state.accounts.env.home)
+        .unwrap_or_else(||state.accounts.env.home.join(".hangar/current"));
+    let _boot_version = AbortOnDrop(tokio::spawn(async move {
+        if boot_version::ensure(boot_root,boot_environment).await.is_err() {
+            tracing::warn!(code="boot_version_failed","versão em execução não foi preparada");
+        }
+    }));
     if state.login_guests.needs_initialization {
         state.login_guests=std::sync::Arc::new(login_guests::Service::from_state(&state).await);
     }
