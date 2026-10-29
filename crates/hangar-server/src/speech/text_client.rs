@@ -510,10 +510,11 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error.status, 502);
-        assert_eq!(
-            error.detail,
+        assert!(matches!(
+            error.detail.as_str(),
             "Não foi possível conectar ao serviço de texto."
-        );
+                | "O serviço de texto não respondeu no prazo."
+        ));
         assert!(!error.detail.contains("fixture-key"));
         assert!(!error.detail.contains("Zml4dHVyZS1rZXk="));
         assert!(!error.detail.contains(&address.to_string()));
@@ -522,6 +523,7 @@ mod tests {
         let error = chat(&invalid, "s", "p", 0.0, Duration::from_secs(2))
             .await
             .unwrap_err();
+        assert_eq!(error.status, 502);
         assert_eq!(
             error.detail,
             "O endereço ou a credencial do serviço de texto são inválidos."

@@ -426,7 +426,7 @@ fn retention_removes_only_old_owned_audio_and_preserves_other_files_directories_
         "old.mp3".to_owned(),
         "notes.txt".to_owned(),
         ".speech-audio-active".to_owned(),
-        format!("{}.mp3", "A".repeat(64)),
+        format!("{}.mp3", "AB".repeat(32)),
         format!("{}.wav", "g".repeat(64)),
         format!("{}.MP3", "d".repeat(64)),
         format!("{}.json", "e".repeat(64)),
