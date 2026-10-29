@@ -179,7 +179,7 @@ pub(super) mod testing {
         hits: Arc<AtomicUsize>,
         bodies: Arc<Mutex<Vec<Value>>>,
         headers: Arc<Mutex<Vec<axum::http::HeaderMap>>>,
-        first_gate: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
+        gate: Option<(usize, Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
     }
 
     pub struct FakeServer {
@@ -205,6 +205,26 @@ pub(super) mod testing {
         values: Vec<(u16, Value)>,
         first_gate: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
     ) -> FakeServer {
+        fake_controlled(
+            values,
+            first_gate.map(|(entered, release)| (0, entered, release)),
+        )
+        .await
+    }
+
+    pub async fn fake_gated_at(
+        values: Vec<(u16, Value)>,
+        index: usize,
+        entered: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+    ) -> FakeServer {
+        fake_controlled(values, Some((index, entered, release))).await
+    }
+
+    async fn fake_controlled(
+        values: Vec<(u16, Value)>,
+        gate: Option<(usize, Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
+    ) -> FakeServer {
         async fn reply(State(state): State<Replies>, request: Request) -> Response {
             state
                 .headers
@@ -226,8 +246,8 @@ pub(super) mod testing {
                 .unwrap()
                 .pop_front()
                 .unwrap_or_else(|| (200, json!({"choices":[{"message":{"content":"ok"}}]})));
-            if index == 0
-                && let Some((entered, release)) = &state.first_gate
+            if let Some((at, entered, release)) = &state.gate
+                && index == *at
             {
                 entered.notify_one();
                 release.notified().await;
@@ -246,7 +266,7 @@ pub(super) mod testing {
             hits: Arc::default(),
             bodies: Arc::default(),
             headers: Arc::default(),
-            first_gate,
+            gate,
         };
         let router = Router::new()
             .route("/v1/chat/completions", post(reply))

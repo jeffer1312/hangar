@@ -4,22 +4,27 @@ use regex::Regex;
 use std::{
     collections::{BTreeMap, HashSet},
     path::{Path, PathBuf},
-    sync::LazyLock,
+    sync::{Arc, LazyLock},
     time::Duration,
 };
+use tokio::time::Instant;
+
+type CacheLease = Arc<tokio::sync::OwnedMutexGuard<()>>;
 
 pub struct Service {
-    lock: tokio::sync::Mutex<()>,
+    lock: Arc<tokio::sync::Mutex<()>>,
     waits: [Duration; 2],
     batch_size: usize,
+    budget: Duration,
 }
 
 impl Default for Service {
     fn default() -> Self {
         Self {
-            lock: tokio::sync::Mutex::default(),
+            lock: Arc::default(),
             waits: [Duration::from_secs(20), Duration::from_secs(30)],
             batch_size: 20,
+            budget: Duration::from_secs(60),
         }
     }
 }
@@ -109,8 +114,9 @@ impl LoadedCache {
     }
 }
 
-async fn load(path: PathBuf) -> LoadedCache {
+async fn load(path: PathBuf, lease: CacheLease) -> LoadedCache {
     tokio::task::spawn_blocking(move || {
+        let _lease = lease;
         let bytes = match crate::runtime::queue::read_replaced(&path) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -156,11 +162,17 @@ async fn load(path: PathBuf) -> LoadedCache {
     })
 }
 
-async fn save(path: &Path, cache: &BTreeMap<String, String>) -> Result<(), String> {
+async fn save(
+    path: &Path,
+    cache: &BTreeMap<String, String>,
+    lease: CacheLease,
+) -> Result<(), String> {
     let path = path.to_owned();
     let bytes = serde_json::to_vec(cache)
         .map_err(|_| "Não consegui codificar o cache de tradução.".to_owned())?;
     tokio::task::spawn_blocking(move || {
+        // Se o prazo da resposta terminar, a publicação atômica ainda conserva a exclusão.
+        let _lease = lease;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -175,13 +187,14 @@ async fn call(
     config: &SpeechConfig,
     batch: &[String],
     language: &str,
+    timeout: Duration,
 ) -> Result<Vec<String>, SpeechError> {
     let Some(name) = language_name(language) else {
         return Err(SpeechError::new(400, "Idioma de tradução inválido."));
     };
     let system = SYSTEM.replace("{lang}", name);
     let prompt = crate::transcript::pyjson::dumps_unicode(&serde_json::json!(batch), false);
-    let raw = text_client::chat(config, &system, &prompt, 0.1, Duration::from_secs(60)).await?;
+    let raw = text_client::chat(config, &system, &prompt, 0.1, timeout).await?;
     parse_batch(&raw, batch)
 }
 
@@ -215,13 +228,21 @@ impl Service {
         texts: &[String],
         language: &str,
     ) -> (Vec<String>, String) {
+        let deadline = Instant::now() + self.budget;
         if language_name(language).is_none() {
             return (texts.to_vec(), "Idioma de tradução inválido.".into());
         }
-        let _lock = self.lock.lock().await;
+        let lease = match tokio::time::timeout_at(deadline, self.lock.clone().lock_owned()).await {
+            Ok(lease) => Arc::new(lease),
+            Err(_) => return (texts.to_vec(), budget_message(0, texts.len())),
+        };
         let path = config.home.join(".hangar/config-sync/traducoes.json");
         let identity = cache_identity(config);
-        let loaded = load(path.clone()).await;
+        let loaded =
+            match tokio::time::timeout_at(deadline, load(path.clone(), lease.clone())).await {
+                Ok(loaded) => loaded,
+                Err(_) => return (texts.to_vec(), budget_message(0, texts.len())),
+            };
         // Sem uma leitura completa não sabemos quais entradas uma gravação apagaria.
         let writable = loaded.error.is_none();
         let mut cache = loaded.entries;
@@ -237,9 +258,21 @@ impl Service {
             })
             .cloned()
             .collect();
+        let mut completed = 0;
         for (index, batch) in missing.chunks(self.batch_size).enumerate() {
-            match self.call_waiting(config, batch, language).await {
+            let attempt = if Instant::now() < deadline {
+                tokio::time::timeout_at(
+                    deadline,
+                    self.call_waiting(config, batch, language, deadline),
+                )
+                .await
+                .unwrap_or_else(|_| Err(budget_exhausted()))
+            } else {
+                Err(budget_exhausted())
+            };
+            match attempt {
                 Ok(values) => {
+                    completed += batch.len();
                     cache.extend(
                         batch
                             .iter()
@@ -247,13 +280,22 @@ impl Service {
                             .map(|(text, value)| (key(&identity, language, text), value)),
                     );
                     if writable {
-                        if let Err(reason) = save(&path, &cache).await {
-                            error = reason;
+                        match tokio::time::timeout_at(deadline, save(&path, &cache, lease.clone()))
+                            .await
+                        {
+                            Ok(Ok(())) => {}
+                            Ok(Err(reason)) => append_error(&mut error, reason),
+                            Err(_) => {
+                                append_error(&mut error, budget_message(completed, missing.len()));
+                                break;
+                            }
                         }
                     }
                 }
                 Err(reason) => {
-                    let reason = if is_rate_limit(&reason) {
+                    let reason = if reason.status == 504 {
+                        budget_message(completed, missing.len())
+                    } else if is_rate_limit(&reason) {
                         format!(
                             "O provedor limitou as chamadas; traduzi {} de {}, compare de novo para continuar",
                             index * self.batch_size,
@@ -262,12 +304,7 @@ impl Service {
                     } else {
                         reason.detail
                     };
-                    if error.is_empty() {
-                        error = reason;
-                    } else {
-                        error.push(' ');
-                        error.push_str(&reason);
-                    }
+                    append_error(&mut error, reason);
                     break;
                 }
             }
@@ -291,16 +328,53 @@ impl Service {
         config: &SpeechConfig,
         batch: &[String],
         language: &str,
+        deadline: Instant,
     ) -> Result<Vec<String>, SpeechError> {
-        for wait in self.waits {
-            match call(config, batch, language).await {
-                Ok(values) => return Ok(values),
-                Err(error) if is_rate_limit(&error) => tokio::time::sleep(wait).await,
-                Err(error) => return Err(error),
+        for attempt in 0..=self.waits.len() {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(budget_exhausted());
+            }
+            let result = call(
+                config,
+                batch,
+                language,
+                remaining.min(Duration::from_secs(60)),
+            )
+            .await;
+            if Instant::now() >= deadline {
+                return Err(budget_exhausted());
+            }
+            match result {
+                Err(error) if is_rate_limit(&error) && attempt < self.waits.len() => {
+                    let wake = Instant::now() + self.waits[attempt];
+                    if wake >= deadline {
+                        return Err(budget_exhausted());
+                    }
+                    tokio::time::sleep_until(wake).await;
+                }
+                result => return result,
             }
         }
-        call(config, batch, language).await
+        Err(budget_exhausted())
     }
+}
+
+fn append_error(error: &mut String, reason: String) {
+    if !error.is_empty() {
+        error.push(' ');
+    }
+    error.push_str(&reason);
+}
+
+fn budget_message(completed: usize, total: usize) -> String {
+    format!(
+        "O prazo total de tradução não permite continuar; traduzi {completed} de {total}, compare de novo para continuar."
+    )
+}
+
+fn budget_exhausted() -> SpeechError {
+    SpeechError::new(504, "O prazo total de tradução terminou.")
 }
 
 fn is_rate_limit(error: &SpeechError) -> bool {
@@ -751,6 +825,138 @@ mod tests {
             second_result
         );
         assert_eq!(server.hits.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn waiting_for_the_cache_lock_counts_toward_the_total_budget() {
+        let server = fake(vec![]).await;
+        let service = Arc::new(Service {
+            budget: Duration::from_secs(2),
+            ..Default::default()
+        });
+        let guard = service.lock.clone().lock_owned().await;
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let texts = vec!["Runs the tests for the file.".to_owned()];
+        let mut task = tokio::spawn({
+            let service = service.clone();
+            let config = server.config.clone();
+            let texts = texts.clone();
+            let entered = entered.clone();
+            async move {
+                entered.notify_one();
+                service.translate(&config, &texts, "pt").await
+            }
+        });
+        entered.notified().await;
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(3)).await;
+        let result = tokio::time::timeout(Duration::from_secs(1), &mut task).await;
+        tokio::time::resume();
+        drop(guard);
+        let expired = result.is_ok();
+        let (translated, error) = match result {
+            Ok(value) => value.unwrap(),
+            Err(_) => task.await.unwrap(),
+        };
+        assert!(
+            expired,
+            "a espera do lock deve terminar dentro do orçamento do próprio pedido"
+        );
+        assert_eq!(translated, texts);
+        assert!(error.contains("prazo total"));
+        assert_eq!(server.hits.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn a_rate_limit_does_not_start_a_backoff_that_cannot_fit_the_budget() {
+        let server = fake(vec![(429, serde_json::json!({"error":"limit"}))]).await;
+        let service = Service {
+            budget: Duration::from_secs(2),
+            ..Default::default()
+        };
+        let texts = vec!["Runs the tests for the file.".to_owned()];
+        let (translated, error) = service.translate(&server.config, &texts, "pt").await;
+        assert_eq!(translated, texts);
+        assert!(error.contains("prazo total"));
+        assert_eq!(server.hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn an_expired_batch_returns_saved_progress_without_caching_the_cancelled_call() {
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let server = fake_gated_at(
+            vec![
+                content("[\"Executa os testes.\"]"),
+                content("[\"Resposta tardia.\"]"),
+                content("[\"Abre o navegador.\"]"),
+            ],
+            1,
+            entered.clone(),
+            release.clone(),
+        )
+        .await;
+        let service = Arc::new(Service {
+            budget: Duration::from_secs(2),
+            batch_size: 1,
+            ..Default::default()
+        });
+        let texts = vec![
+            "Runs the tests for the file.".to_owned(),
+            "Opens the browser for the user.".to_owned(),
+            "Checks the files for the user.".to_owned(),
+        ];
+        let mut task = tokio::spawn({
+            let service = service.clone();
+            let config = server.config.clone();
+            let texts = texts.clone();
+            async move { service.translate(&config, &texts, "pt").await }
+        });
+        entered.notified().await;
+        let path = server
+            .config
+            .home
+            .join(".hangar/config-sync/traducoes.json");
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(saved.contains("Executa os testes."));
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(3)).await;
+        let result = tokio::time::timeout(Duration::from_secs(1), &mut task).await;
+        tokio::time::resume();
+        release.notify_one();
+        let expired = result.is_ok();
+        let (translated, error) = match result {
+            Ok(value) => value.unwrap(),
+            Err(_) => task.await.unwrap(),
+        };
+        assert!(
+            expired,
+            "a chamada em curso deve ser cancelada pelo prazo total"
+        );
+        assert_eq!(
+            translated,
+            vec![
+                "Executa os testes.".to_owned(),
+                texts[1].clone(),
+                texts[2].clone()
+            ]
+        );
+        assert!(error.contains("traduzi 1 de 3"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), saved);
+        assert_eq!(server.hits.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert!(service.lock.try_lock().is_ok());
+        let resumed = service
+            .translate(&server.config, &[texts[1].clone()], "pt")
+            .await;
+        assert_eq!(
+            resumed,
+            (vec!["Abre o navegador.".to_owned()], String::new())
+        );
+        assert_eq!(server.hits.load(std::sync::atomic::Ordering::SeqCst), 3);
+        let values: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        assert_eq!(values.as_object().unwrap().len(), 2);
+        assert!(!values.to_string().contains("Resposta tardia."));
     }
 
     proptest::proptest! {
