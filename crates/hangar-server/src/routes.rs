@@ -617,7 +617,8 @@ pub fn router(state: Arc<AppState>) -> Router {
 fn router_with(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router {
     let api = public_routes(state.clone(), pair);
     // O MCP chama as tools pelas mesmas rotas que o `hangar-send` chama: o roteador público inteiro.
-    api.clone().merge(crate::mcp::router(state, api))
+    api.clone().merge(crate::mcp::router(state.clone(), api))
+        .layer(axum::middleware::from_fn_with_state(state, crate::login_guests::gate::guard))
 }
 
 fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router {
@@ -874,7 +875,7 @@ pub(crate) fn owner_gate(st: &AppState, peer: SocketAddr, req: &Request)
 /// na 8765, o dono pelo token.
 pub(crate) fn who(st: &AppState, peer: SocketAddr, req: &Request)
     -> impl std::future::Future<Output = Result<(Forward, Option<Caller>), auth::AuthError>> + Send + use<> {
-    let guest = on_guest_port(req).then(|| (forward_for(st, peer, req), caller(req).cloned()));
+    let guest = (on_guest_port(req) || req.extensions().get::<crate::login_guests::gate::Login>().is_some()).then(|| (forward_for(st, peer, req), caller(req).cloned()));
     let owner = gate(st, peer, req);
     async move {
     if let Some(guest) = guest { return Ok(guest); }
@@ -886,7 +887,7 @@ pub(crate) fn who(st: &AppState, peer: SocketAddr, req: &Request)
 /// O repasse de quem pede, sem decidir se é o dono. Convidado vai como loopback para o Python
 /// aceitar o cabeçalho assinado.
 pub(crate) fn forward_for(st: &AppState, peer: SocketAddr, req: &Request) -> Forward {
-    if on_guest_port(req) {
+    if on_guest_port(req) || req.extensions().get::<crate::login_guests::gate::Login>().is_some() {
         let guest = caller(req).and_then(Caller::grant).cloned();
         let client_ip = if guest.is_some() { "127.0.0.1".into() } else { peer.ip().to_string() };
         return Forward { client_ip, https: false, guest, auth_receipt: None };

@@ -55,6 +55,7 @@ impl Settings {
 }
 pub struct Service {
     pub store: Store,
+    pub(crate) lives: std::sync::OnceLock<Arc<crate::share::life::Lives>>,
     pub(super) sync: Sync,
     pub now: fn() -> u64,
     pub entropy: fn(usize) -> Vec<u8>,
@@ -71,6 +72,7 @@ impl Service {
         sync.rate_window = settings.rate_window;
         Self {
             store: Store::new(settings.guests),
+            lives: std::sync::OnceLock::new(),
             sync,
             now: || {
                 std::time::SystemTime::now()
@@ -90,6 +92,20 @@ impl Service {
         https: bool,
         request: Request,
     ) -> Response {
+        const LIMIT: usize = 100 * 1024 * 1024;
+        if request
+            .headers()
+            .get(header::CONTENT_LENGTH)
+            .and_then(|h| h.to_str().ok())
+            .and_then(|s| s.parse::<u64>().ok())
+            .is_some_and(|n| n > LIMIT as u64)
+        {
+            return (
+                axum::http::StatusCode::PAYLOAD_TOO_LARGE,
+                "request body too large",
+            )
+                .into_response();
+        }
         let (parts, body) = request.into_parts();
         let headers = parts.headers.clone();
         let method = parts.method.clone();
@@ -97,13 +113,14 @@ impl Service {
             .decode_utf8_lossy()
             .into_owned();
         let query = parts.uri.query().map(str::to_owned);
-        let bytes = match to_bytes(body, 64 * 1024 * 1024).await {
+        let bytes = match to_bytes(body, LIMIT).await {
             Ok(b) => b,
             Err(_) => {
-                return reply(
-                    Failure::code(413, "erro_corpo_invalido", "corpo muito grande"),
-                    &headers,
-                );
+                return (
+                    axum::http::StatusCode::PAYLOAD_TOO_LARGE,
+                    "request body too large",
+                )
+                    .into_response();
             }
         };
         let body = if bytes.is_empty() {

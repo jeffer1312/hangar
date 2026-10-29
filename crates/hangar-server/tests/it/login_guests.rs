@@ -158,3 +158,44 @@ fn login_guests_gate_matches_python_matrix() {
         assert_eq!(actual, row["allowed"].as_bool().unwrap(), "GUE-031/032: {} {}", row["method"], row["path"]);
     }
 }
+
+#[tokio::test]
+async fn login_guests_public_gate_denies_owner_routes_before_upstream() {
+    use hangar_server::login_guests::{Service, Settings};
+    let home = tempfile::tempdir().unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let mut state = AppState::new(Config { listen:address, upstream:crate::refused_address(),
+        internal_secret:"fixture".into(), auth_token:"owner".into(), log_path:None,
+        trusted:TrustedHosts::parse("127.0.0.1") });
+    let service = Service::new(Settings { guests:home.path().join("guests.json"), vault:home.path().join("vault.json"),
+        runtime_config:home.path().join("runtime-config.json"), sync_enabled:false, bootstrap:String::new(),
+        secret:b"fixture".to_vec(), secure:false, rate_max:10, rate_window:300 });
+    service.store.create("Ana", home.path().to_str().unwrap(), false, true, "ana".into(), "guest".into()).unwrap();
+    state.login_guests = Arc::new(service);
+    let task=tokio::spawn(async move { axum::serve(listener,hangar_server::routes::router(Arc::new(state))
+        .into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap(); });
+    let client=reqwest::Client::new();
+    for path in ["/api/config", "/api/voice", "/api/peers", "/api/sessions/owner/share"] {
+        let response=client.get(format!("http://{address}{path}")).bearer_auth("guest").send().await.unwrap();
+        assert_eq!(response.status().as_u16(),403,"GUE-030/032: {path}");
+        let body:Value=response.json().await.unwrap();
+        assert_eq!(body["detail"]["code"],"erro_fora_do_convidado");
+    }
+    task.abort();
+}
+
+#[tokio::test]
+async fn login_guests_body_limit_precedes_authentication() {
+    use hangar_server::login_guests::{Service,Settings};
+    let home=tempfile::tempdir().unwrap();
+    let service=Arc::new(Service::new(Settings {guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),runtime_config:home.path().join("config.json"),sync_enabled:true,bootstrap:String::new(),secret:b"fixture".to_vec(),secure:false,rate_max:10,rate_window:300}));
+    let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/limits.json")).unwrap();
+    let expected=&fixture["rows"][0];
+    let request=axum::http::Request::post("/api/guests").header("content-length",104857601u64).body(axum::body::Body::empty()).unwrap();
+    let response=service.respond(false,"127.0.0.1".into(),false,request).await;
+    assert_eq!(response.status().as_u16(),expected["status"].as_u64().unwrap() as u16,"GUE-080: limite anterior à autenticação");
+    assert_eq!(response.headers()["content-type"].to_str().unwrap(),expected["content_type"].as_str().unwrap());
+    let body=axum::body::to_bytes(response.into_body(),1024).await.unwrap();
+    assert_eq!(std::str::from_utf8(&body).unwrap(),expected["response"].as_str().unwrap());
+}
