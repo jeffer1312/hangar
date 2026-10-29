@@ -387,7 +387,12 @@
   {:else if telaAtual === 'orquestracao'}
     <OrquestracaoContas desktop={isDesktop} />
   {:else if telaAtual === 'diario'}
-    <DiarioSettings server={resolvedServer} />
+    <!-- Outro servidor = outra tela: resposta em voo e envio do anterior não caem nesta. -->
+    {#if resolvedServer}
+      {#key resolvedServer.id}<DiarioSettings server={resolvedServer} />{/key}
+    {:else}
+      <p>{m.config_modal_escolha_servidor()}</p>
+    {/if}
   {:else if telaAtual === 'sobre'}
     <SobreSettings onMigration={convidado ? undefined : () => onIrPara('migration')} />
   {:else if telaAtual === 'migration'}

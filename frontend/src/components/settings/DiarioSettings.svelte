@@ -8,18 +8,16 @@
   import { getDiagSummaryForServer, getDiagFileForServer, type ResumoDiag, type LinhaDiag, type Server } from '@hangar/core';
   import { fmtBytes, sendDiagReportAll, resendDiagReportMissed, diagReportMachines, diagReportNext, diagReportTargets, DIAG_REPORT_TEXT_MAX,
     type DiagReportAllResult, type DiagReportResult, type DiagReportScope } from '@hangar/core';
-  import { findServer, getActiveId, listServers, onServersChanged } from '../../lib/auth';
+  import { listServers, onServersChanged } from '../../lib/auth';
   import { papelDo } from '../../lib/papel.svelte';
   import { copyText } from '../../lib/clipboard';
   import * as m from '../../paraglide/messages';
 
-  // `server`: o do seletor do grupo Servidor; sem ele, o ativo. A prévia, o download e o relatório leem o mesmo.
-  let { server = null }: { server?: Server | null } = $props();
-  const ativo = () => findServer(getActiveId() ?? '') ?? null;
-  let active = $state(ativo());
+  // `server`: o do seletor do grupo Servidor. A prévia, o download e o relatório leem o mesmo.
+  let { server }: { server: Server } = $props();
   let all = $state(listServers());
-  $effect(() => onServersChanged(() => { active = ativo(); all = listServers(); }));
-  const servidor = $derived(server ?? active);
+  $effect(() => onServersChanged(() => { all = listServers(); }));
+  const servidor = $derived(server);
   // Convidado não manda relatório da máquina de outra pessoa (o servidor recusa com 403).
   const podeReportar = $derived(!!servidor && !servidor.invite && papelDo(servidor) !== 'guest');
   // O erro costuma estar noutra máquina da pessoa (a VM, não o PC de onde ela envia): o padrão é mandar de todas.
@@ -100,8 +98,7 @@
             l.ms !== undefined && `${l.ms}ms`].filter(Boolean).join(' · ');
   }
 
-  async function carregar(alvo: Server | null) {
-    if (!alvo) return;
+  async function carregar(alvo: Server) {
     recarregando = true;
     try {
       resumo = await getDiagSummaryForServer(alvo);
@@ -119,7 +116,6 @@
   $effect(() => { void carregar(servidor); });
 
   async function baixar() {
-    if (!servidor) return;
     baixando = true; erro = '';
     try {
       const blob = new Blob([await getDiagFileForServer(servidor)], { type: 'application/x-ndjson' });
