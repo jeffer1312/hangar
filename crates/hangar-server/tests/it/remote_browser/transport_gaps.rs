@@ -325,6 +325,18 @@ async fn receive(client: &mut Client, events: &mut Vec<Value>, predicate: impl F
     }).await.expect("o WS não publicou a resposta esperada");
 }
 
+async fn receive_close(client: &mut Client, events: &mut Vec<Value>) -> Value {
+    tokio::time::timeout(Duration::from_secs(7), async {
+        loop {
+            match client.next().await.expect("WS terminou sem Close").unwrap() {
+                Message::Text(raw) => events.push(serde_json::from_str(&raw).unwrap()),
+                Message::Close(frame) => break close_value(frame.as_ref()),
+                _ => {}
+            }
+        }
+    }).await.expect("o servidor não encerrou o WS após o erro")
+}
+
 async fn send(client: &mut Client, message: Value) {
     client.send(Message::Text(message.to_string().into())).await.unwrap();
 }
@@ -387,7 +399,14 @@ async fn frozen_case(name: &str) {
     use tracing_subscriber::prelude::*;
     let logs = Logs::default();
     tracing::subscriber::set_global_default(tracing_subscriber::registry().with(logs.clone())).unwrap();
-    let reference = support::contract("transport-gaps");
+    let layout_validation_order = matches!(name,
+        "layout_order_invalid_width_string_before_infinite_height"
+        | "layout_order_null_width_before_infinite_height"
+        | "layout_order_zero_width_before_infinite_height"
+        | "layout_order_huge_width_before_infinite_height"
+        | "layout_order_modifier_list" | "layout_order_modifier_object"
+        | "layout_order_wheel_list" | "layout_order_wheel_object");
+    let reference = support::contract(if layout_validation_order { "layout-validation-order" } else { "transport-gaps" });
     assert_eq!(reference["source_commit"], "ba2db1021ab7fb801eca50a50f9509dcb825ac7e");
     let case = reference["public"].as_array().unwrap().iter().find(|case| case["name"] == name).unwrap();
     let inputs = &case["inputs"];
@@ -399,6 +418,7 @@ async fn frozen_case(name: &str) {
     let mut clients = vec![client];
     let mut events = vec![initial];
     let mut observations = json!({});
+    let mut server_close = None;
     match name {
         "initial_dimensions_before_frame" => {
             send(&mut clients[0], json!({"t": "m", "acao": "press", "x": 0.5, "y": 0.5})).await;
@@ -464,6 +484,29 @@ async fn frozen_case(name: &str) {
                 receive(&mut clients[0], &mut events[0], |event| event["t"] == "layout").await;
                 send(&mut clients[0], json!({"t": "txt", "s": BARRIER})).await;
                 desktop.wait(|seen| seen.cdp.iter().any(|row| row["peer"] == 0 && row["message"]["method"] == "Input.insertText" && row["message"]["params"]["text"] == BARRIER)).await;
+            }
+        }
+        _ if layout_validation_order => {
+            clients[0].send(Message::Text(inputs["raw"].as_str().unwrap().to_owned().into())).await.unwrap();
+            if inputs["ignored"] == true {
+                barrier(&mut clients[0], &mut events[0]).await;
+                assert_eq!(events[0].last().unwrap()["url"], "http://contract.test/barrier");
+                let seen = desktop.context.seen.lock().unwrap();
+                let before_barrier = seen.cdp.iter().position(|row|
+                    row["message"]["method"] == "Input.insertText" && row["message"]["params"]["text"] == BARRIER)
+                    .expect("a barreira não chegou ao CDP");
+                observations["cdp_before_barrier"] = json!(&seen.cdp[..before_barrier]);
+                observations["requests_before_barrier"] = json!(seen.cmd);
+                observations["events_before_barrier"] = json!(&events[0][..events[0].len() - 1]);
+                observations["layout_before_barrier"] = json!(seen.layout);
+                assert!(seen.cmd.is_empty(), "layout ignorado chegou ao controlador");
+                assert!(!events[0][..events[0].len() - 1].iter().any(|event| event["t"] == "layout" || event["t"] == "erro"),
+                    "layout ignorado publicou efeito antes da barreira");
+            } else {
+                receive(&mut clients[0], &mut events[0], |event| event["t"] == "erro").await;
+                let close = receive_close(&mut clients[0], &mut events[0]).await;
+                observations["viewer_close_before_client_close"] = close.clone();
+                server_close = Some(close);
             }
         }
         _ if inputs.get("raw").is_some() => {
@@ -537,6 +580,7 @@ async fn frozen_case(name: &str) {
         }
     }
     let mut viewer_closes = vec![json!({"code": 1006, "reason": ""}); events.len()];
+    if let Some(close) = server_close { viewer_closes[0] = close; }
     for client in &mut clients { close_viewer(client).await; }
     for (peer, client) in clients.iter_mut().enumerate() {
         while let Some(message) = client.next().await {
@@ -633,6 +677,12 @@ cases! {
     metadata_height_nan, metadata_height_infinity, metadata_height_negative_infinity, metadata_height_huge, metadata_height_surrogate,
     only_height_selects_dimensions_before_mode, fractional_pixels_are_truncated,
     numeric_key_is_stringified_before_dispatch,
+    layout_order_invalid_width_string_before_infinite_height,
+    layout_order_null_width_before_infinite_height,
+    layout_order_zero_width_before_infinite_height,
+    layout_order_huge_width_before_infinite_height,
+    layout_order_modifier_list, layout_order_modifier_object,
+    layout_order_wheel_list, layout_order_wheel_object,
 }
 
 #[tokio::test]

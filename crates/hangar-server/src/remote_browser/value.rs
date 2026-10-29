@@ -149,6 +149,16 @@ fn float_integer(number: f64) -> Result<Value, Failure> {
     Ok(Value::Number(integer.to_string().parse().expect("inteiro decimal")))
 }
 
+fn numeric_type_error(value: &Value, expected: &str) -> Failure {
+    let kind = match value {
+        Value::Null => "NoneType",
+        Value::Array(_) => "list",
+        Value::Object(_) => "dict",
+        _ => unreachable!("tipo numérico já convertido"),
+    };
+    Failure::exception("TypeError", format!("{expected}, not '{kind}'"))
+}
+
 pub(super) fn integer(value: &Value) -> Result<Value, Failure> {
     if let Some(number) = nonfinite(value) {
         return float_integer(number);
@@ -165,7 +175,7 @@ pub(super) fn integer(value: &Value) -> Result<Value, Failure> {
                 .map(|number| Value::Number(number.to_string().parse().expect("inteiro decimal")))
                 .ok_or_else(|| Failure::value(format!("invalid literal for int() with base 10: {}", quoted(text))))
         }
-        _ => Err(Failure::exception("TypeError", "int() argument must be a string, a bytes-like object or a real number".into())),
+        _ => Err(numeric_type_error(value, "int() argument must be a string, a bytes-like object or a real number")),
     }
 }
 
@@ -180,7 +190,7 @@ pub(super) fn number(value: &Value) -> Result<f64, Failure> {
             .map(|text| text.trim().chars().map(|c| crate::orq_conductor::decimal(c).map_or(c, |n| char::from(b'0' + n))).collect::<String>())
             .and_then(|text| text.parse().ok())
             .ok_or_else(|| Failure::value(format!("could not convert string to float: {}", quoted(text)))),
-        _ => Err(Failure::exception("TypeError", "float() argument must be a string or a real number".into())),
+        _ => Err(numeric_type_error(value, "float() argument must be a string or a real number")),
     }
 }
 

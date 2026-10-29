@@ -77,14 +77,21 @@ impl Layouts {
         owner: &mut Option<u64>,
     ) -> Result<Option<LayoutChange>, Failure> {
         if message.get("w").is_some() || message.get("h").is_some() {
-            let dimension = |key| -> Result<Option<i64>, Failure> {
-                match super::value::integer(&message[key]) {
-                    Ok(value) => Ok(value.as_i64().filter(|v| (1..=8192).contains(v))),
+            let zero = json!(0);
+            let dimension = |key| -> Result<Option<Value>, Failure> {
+                let value = &message[key];
+                match super::value::integer(if super::input::truth(value) { value } else { &zero }) {
+                    Ok(value) => Ok(Some(value)),
                     Err(error) if error.repr.starts_with("OverflowError(") => Err(error),
                     Err(_) => Ok(None),
                 }
             };
-            let (Some(width), Some(height)) = (dimension("w")?, dimension("h")?) else {
+            let Some(width) = dimension("w")? else { return Ok(None); };
+            let Some(height) = dimension("h")? else { return Ok(None); };
+            let (Some(width), Some(height)) = (
+                width.as_i64().filter(|v| (1..=8192).contains(v)),
+                height.as_i64().filter(|v| (1..=8192).contains(v)),
+            ) else {
                 return Ok(None);
             };
             let id = *owner.get_or_insert_with(|| self.next.fetch_add(1, Ordering::Relaxed));

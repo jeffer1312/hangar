@@ -421,6 +421,14 @@ def special_inputs():
         ("only_height_selects_dimensions_before_mode", {"raw": json.dumps({"t": "layout", "h": 700, "modo": "desktop"})}),
         ("fractional_pixels_are_truncated", {"raw": json.dumps({"t": "m", "acao": "press", "x": 0.1234, "y": 0.3459})}),
         ("numeric_key_is_stringified_before_dispatch", {"raw": json.dumps({"t": "k", "key": 12345})}),
+        ("layout_order_invalid_width_string_before_infinite_height", {"raw": json.dumps({"t": "layout", "w": "bad", "h": float("inf")}), "encoded": True, "ignored": True}),
+        ("layout_order_null_width_before_infinite_height", {"raw": json.dumps({"t": "layout", "w": None, "h": float("inf")}), "encoded": True}),
+        ("layout_order_zero_width_before_infinite_height", {"raw": json.dumps({"t": "layout", "w": 0, "h": float("inf")}), "encoded": True}),
+        ("layout_order_huge_width_before_infinite_height", {"raw": json.dumps({"t": "layout", "w": 10 ** 100, "h": float("inf")}), "encoded": True}),
+        ("layout_order_modifier_list", {"raw": json.dumps({"t": "k", "key": "Enter", "mod": [1]}), "encoded": True}),
+        ("layout_order_modifier_object", {"raw": json.dumps({"t": "k", "key": "Enter", "mod": {"value": 1}}), "encoded": True}),
+        ("layout_order_wheel_list", {"raw": json.dumps({"t": "w", "dy": [1]}), "encoded": True}),
+        ("layout_order_wheel_object", {"raw": json.dumps({"t": "w", "dy": {"value": 1}}), "encoded": True}),
     ])
     return cases
 
@@ -625,6 +633,23 @@ async def public_cases_owned(root, measured, resources):
                     observations["layout_after_handler_ended_before_apply_release"] = desktop.layout
                     observations["requests_after_handler_ended_before_apply_release"] = copy.deepcopy(desktop.requests)
                     observations["unregistered_application"] = NAME not in navsock._imposto
+                elif name.startswith("layout_order_"):
+                    await clients[0].send(inputs["raw"])
+                    if inputs.get("ignored"):
+                        await barrier()
+                        assert events[0][-1].get("url") == "http://contract.test/barrier"
+                        before_barrier = next(index for index, row in enumerate(desktop.commands)
+                                              if row["message"]["method"] == "Input.insertText" and row["message"]["params"].get("text") == BARRIER)
+                        observations["cdp_before_barrier"] = copy.deepcopy(desktop.commands[:before_barrier])
+                        observations["requests_before_barrier"] = copy.deepcopy(desktop.requests)
+                        observations["events_before_barrier"] = copy.deepcopy(events[0][:-1])
+                        observations["layout_before_barrier"] = desktop.layout
+                        assert not desktop.requests
+                        assert not any(event.get("t") in ("layout", "erro") for event in events[0][:-1])
+                    else:
+                        await receive(clients[0], events[0], lambda value: value.get("t") == "erro")
+                        await asyncio.wait_for(clients[0].wait_closed(), 7)
+                        observations["viewer_close_before_client_close"] = {"code": clients[0].close_code, "reason": clients[0].close_reason or ""}
                 elif "raw" in inputs:
                     await clients[0].send(inputs["raw"])
                     await barrier()
