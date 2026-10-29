@@ -58,7 +58,14 @@ pub async fn public(st: Arc<AppState>, peer: SocketAddr, req: Request) -> Respon
     if declared_too_large(&req) {
         return refuse_declared(req);
     }
-    let (forward, caller) = who(&st, peer, &req);
+    let (forward, caller) = match who(&st, peer, &req).await {
+        Ok(value) => value,
+        Err(e) => {
+            let mut response = crate::auth::unavailable(e);
+            cors(req.headers(), response.headers_mut());
+            return response;
+        }
+    };
     let Some(caller) = caller else {
         return pass(&st, req, &forward).await;
     };

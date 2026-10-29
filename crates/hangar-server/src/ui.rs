@@ -101,7 +101,15 @@ pub fn matches(_method: &Method, path: &str) -> bool {
 pub async fn fallback(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, mut req: Request) -> Response {
     if matches(req.method(), req.uri().path()) {
         req.headers_mut().remove("x-hangar-static-origin");
-        let scheme = if gate(&st, peer, &req).0.https { "https" } else { "http" };
+        let (forward, _) = match gate(&st, peer, &req).await {
+            Ok(value) => value,
+            Err(e) => {
+                let mut response = crate::auth::unavailable(e);
+                cors(req.headers(), response.headers_mut());
+                return response;
+            }
+        };
+        let scheme = if forward.https { "https" } else { "http" };
         if let Some(origin) = req.headers().get(header::HOST).and_then(|v|v.to_str().ok())
             .and_then(|host|format!("{scheme}://{host}").parse::<HeaderValue>().ok()) {
             req.headers_mut().insert("x-hangar-static-origin",origin);

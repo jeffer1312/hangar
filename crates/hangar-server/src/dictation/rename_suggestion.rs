@@ -165,14 +165,14 @@ fn quiet(st: &AppState, name: &str, code: &str) -> Response {
 
 pub async fn route(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let headers = req.headers().clone();
-    let mut response = if !gate(&st, peer, &req).1 {
-        refuse(StatusCode::FORBIDDEN, "rename_suggestion_owner_only", "só o dono pede ou recusa a sugestão de nome")
-    } else {
-        match session_name(req.uri().path()) {
+    let mut response = match gate(&st, peer, &req).await {
+        Err(e) => crate::auth::unavailable(e),
+        Ok((_, false)) => refuse(StatusCode::FORBIDDEN, "rename_suggestion_owner_only", "só o dono pede ou recusa a sugestão de nome"),
+        Ok((_, true)) => match session_name(req.uri().path()) {
             None => StatusCode::NOT_FOUND.into_response(),
             Some(name) if req.method() == Method::DELETE => dismiss(&st, &name).await,
             Some(name) => suggest(&st, &name).await,
-        }
+        },
     };
     cors(&headers, response.headers_mut());
     response
