@@ -208,6 +208,30 @@ describe('sendDiagReportAll', () => {
     expect(diagReportTargets(machines, serverB, 'this', {}).map((s) => s.id)).toEqual(['b']);
     expect(diagReportTargets(machines, serverB, 'pick', { c: true }).map((s) => s.id)).toEqual(['b', 'c']);
     expect(diagReportTargets(machines, serverB, 'pick', { b: false }).map((s) => s.id)).toEqual([]);
+    const off = { ...serverA, id: 'off', disabled: true };
+    expect(diagReportTargets(diagReportMachines([off, serverB], off), off, 'all', {}).map((s) => s.id)).toEqual(['b']);
+    expect(diagReportTargets(diagReportMachines([off, serverB], off), off, 'this', {})).toEqual([]);
+  });
+
+  it('reenvio sem a assinatura do envio anterior não manda avulso: as que faltam ficam sem suporte', async () => {
+    const before = { code: 'aaaa2222', group: null, results: [
+      { server: serverA, result: { ok: true as const, code: 'aaaa2222', diary: 'sent' as const } },
+      { server: serverC, result: { ok: false as const, code: 'network', status: 0, kind: 'unreachable' as const } }] };
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+    const res = await resendDiagReportMissed(before, { client: 'pwa 1.0' });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(res.results[1].result).toMatchObject({ ok: false, kind: 'unsupported' });
+  });
+
+  it('reenvio sem código ainda: só as que falharam e podem dar certo, e a primeira vira o código', async () => {
+    const before = { code: null, group: null, results: [
+      { server: serverA, result: { ok: false as const, code: 'x', status: 404, kind: 'unsupported' as const } },
+      { server: serverC, result: { ok: false as const, code: 'network', status: 0, kind: 'unreachable' as const } }] };
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(lead('cccc4444'));
+    const res = await resendDiagReportMissed(before, { client: 'pwa 1.0' });
+    expect(bodies(fetchMock).map(([url]) => url)).toEqual(['https://c.test/api/diag/report']);
+    expect(res.code).toBe('cccc4444');
+    expect(res.results.map((r) => [r.server.id, r.result.ok])).toEqual([['a', false], ['c', true]]);
   });
 
   it('nenhuma deu certo: sem código, com o motivo de cada uma', async () => {

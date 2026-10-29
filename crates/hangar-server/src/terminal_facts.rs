@@ -296,22 +296,30 @@ fn current_transcript(procs: &dyn ProcessView, metadata: &TerminalMetadata, conv
     let Ok(expected) = transcript.canonicalize() else { return missing() };
     let Ok(fds) = procs.fds_checked(i64::from(metadata.agent_pid)) else { return missing() };
     let mut current = std::collections::BTreeSet::new();
+    let mut unreadable = false;
     for path in fds.into_iter().filter(|path| path.extension().is_some_and(|extension| extension == "jsonl")) {
-        // Arquivo apagado ainda aberto não é conversa de ninguém; outra falha deixa a leitura sem prova.
+        // Arquivo apagado ainda aberto não é conversa de ninguém. Outra falha não encerra a leitura: um transcript
+        // de outra conversa adiante ainda decide, e sem ele a leitura fica ambígua, sem prova nem com o `/pull`.
         let path = match path.canonicalize() {
             Ok(path) => path,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(_) => return missing(),
+            Err(error) => {
+                if crate::warn_limit::allow(Some(conversation), "terminal_transcript_fd_unreadable") {
+                    tracing::warn!(conversation, kind = ?error.kind(), "arquivo aberto do agente ilegível; conversa sem prova");
+                }
+                unreadable = true;
+                continue;
+            }
         };
         if path.starts_with(&projects) { current.insert(path); }
     }
     // O argv conserva o SID de abertura depois do /clear; só arquivo aberto prova a conversa atual.
-    let mut current = current.into_iter();
-    let Some(path) = current.next() else { return missing() };
-    if current.next().is_some() { return Err(unavailable()); }
-    if path != expected || path.file_stem().and_then(|stem| stem.to_str()) != Some(conversation) {
+    if current.len() > 1 { return Err(unavailable()); }
+    if let Some(path) = current.first() && (path != &expected || path.file_stem().and_then(|stem| stem.to_str()) != Some(conversation)) {
         return Err(ServiceError("terminal_conversation_changed"));
     }
+    if unreadable { return Err(unavailable()); }
+    if current.is_empty() { return missing(); }
     Ok(())
 }
 fn native_state(status: &str) -> Option<&'static str> { match status { "idle" | "shell" => Some("idle"), "busy" => Some("working"), "waiting" => Some("awaiting_input"), _ => None } }

@@ -1306,7 +1306,9 @@ impl Executor {
     }
     async fn conversation_unproved(&self)->bool {
         let binding=crate::terminal_facts::LocalTerminalFacts::binding(&self.target);
-        if self.options.plugin.as_ref().is_some_and(|store|store.conversation_proved(&binding,std::time::Instant::now()).unwrap_or(false)) {return false;}
+        // Só o `/pull` aberto: o visto há pouco pode ser do agente anterior com o mesmo vínculo, e o intervalo
+        // entre dois `/pull` já não pisca pelo `stall_notice`.
+        if self.options.plugin.as_ref().is_some_and(|store|store.conversation_pulling(&binding).unwrap_or(false)) {return false;}
         let (config,pid)=(self.target.metadata.config_dir.clone(),i64::from(self.target.metadata.agent_pid));
         // Qualquer falha de leitura (ausente, corrompido, de outro pid) deixa a conversa sem prova.
         tokio::task::spawn_blocking(move||super::lifecycle::read_native_conversation(&config,pid).is_err()).await.unwrap_or(true)
@@ -1599,11 +1601,11 @@ impl Executor {
         let now=tokio::time::Instant::now();
         // Uma captura do pane a cada poucos segundos basta para o aviso; o tique é mais curto.
         let read_due=self.composer_read_at.is_none_or(|at|now.duration_since(at)>=COMPOSER_READ_EVERY);
-        let mut empty=None;
         if read_due {
             self.composer_read_at=Some(now);
-            empty=driver.composer_empty().await;
-            if let Some(empty)=empty {self.hold_composer(!empty).await;}
+            // Leitura que falhou não afirma texto no campo: a tela não pede para apagar o que pode não existir.
+            let busy=driver.composer_empty().await==Some(false);
+            self.hold_composer(busy).await;
         }
         let since=match &self.uncertain_since {Some((seen,at)) if *seen==entry=>*at, _=>{self.uncertain_since=Some((entry,now)); return}};
         if now.duration_since(since)<self.options.give_up_after {return;}
@@ -1612,14 +1614,16 @@ impl Executor {
             Ok(_)=>return,
             Err(_)=>{skip(&self.target.key,"give_up_facts","prazo da entrega incerta: fatos indisponíveis, sem saber se o Claude parou"); return},
         }
-        // Texto ainda no composer é a própria entrega parada: desistir deixaria o dono com ele preso no prompt.
-        if !read_due {empty=driver.composer_empty().await;}
+        // Última chance da prova antes de desistir.
+        if self.confirm_rows().await.is_err() {skip(&self.target.key,"give_up_receipt","prazo da entrega incerta: transcript ilegível, tenta no próximo tique"); return;}
+        // Texto ainda no composer é a própria entrega parada: desistir deixaria o dono com ele preso no prompt. Lido
+        // logo antes de desistir, porque a pessoa pode ter digitado durante as esperas acima.
+        let empty=driver.composer_empty().await;
         if empty!=Some(true) {
+            self.hold_composer(empty==Some(false)).await;
             skip(&self.target.key,"give_up_composer_busy","prazo da entrega incerta: o composer tem texto; a desistência fica com o Descartar");
             return;
         }
-        // Última chance da prova antes de desistir.
-        if self.confirm_rows().await.is_err() {skip(&self.target.key,"give_up_receipt","prazo da entrega incerta: transcript ilegível, tenta no próximo tique"); return;}
         let id=format!("give_up:{entry}:{}",self.sequence.fetch_add(1,Ordering::Relaxed));
         let given=self.queue.exec(self.target.generation,&id,sample(),Action::GiveUp {entry_id:entry.clone()}).await;
         self.uncertain_since=None;

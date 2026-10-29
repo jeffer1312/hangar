@@ -516,9 +516,11 @@ export function diagReportMachines(servers: Server[], current: Server | null, gu
 
 export type DiagReportScope = 'all' | 'this' | 'pick';
 
-/** As máquinas que a escolha manda; marcada sem escolha explícita só a da tela. */
+/** As máquinas que a escolha manda; marcada sem escolha explícita só a da tela. A da tela só vai quando está
+ *  entre as elegíveis (desligada, par ou removida não recebe relatório). */
 export function diagReportTargets(machines: Server[], current: Server | null, scope: DiagReportScope, picked: Record<string, boolean>): Server[] {
-  if (machines.length < 2 || scope === 'this') return current ? [current] : [];
+  if (scope === 'this') return machines.filter((s) => s.id === current?.id);
+  if (machines.length < 2) return machines;
   return scope === 'all' ? machines : machines.filter((s) => picked[s.id] ?? s.id === current?.id);
 }
 
@@ -543,6 +545,10 @@ export async function sendDiagReportAll(servers: Server[], input: { text?: strin
 
 /** Reenvia só às máquinas que falharam num envio, no mesmo código, e junta ao resultado dele. */
 export async function resendDiagReportMissed(previous: DiagReportAllResult, input: { text?: string; client: string }): Promise<DiagReportAllResult> {
+  // Envio com código e sem assinatura: as que faltam iriam avulsas, fora do código que a tela mostra.
+  if (previous.code !== null && previous.group === null) {
+    return { ...previous, results: previous.results.map((r) => diagReportRetryable(r.result) ? { server: r.server, result: diagReportFailure('unsupported', 0) } : r) };
+  }
   const missed = previous.results.filter((r) => diagReportRetryable(r.result)).map((r) => r.server);
   const again = await sendDiagReportAll(missed, input, previous.group ?? undefined);
   const resent = new Set(missed.map((s) => s.id));

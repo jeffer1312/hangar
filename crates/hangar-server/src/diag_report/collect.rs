@@ -22,6 +22,8 @@ pub(crate) const SERVER_LOG_MAX_LINES: usize = 1500;
 /// Teto do diário inteiro compactado (C2b).
 pub(crate) const DIARY_GZ_MAX: usize = 10 << 20;
 pub(crate) const PROBE_WAIT: Duration = Duration::from_secs(5);
+/// Leitura do alvo do terminal de uma sessão: lock do registro e um arquivo.
+const TARGET_WAIT: Duration = Duration::from_secs(2);
 
 /// Subidas e quedas do backend e do `hangar-server`, conferidas no diário real.
 const RESTARTS: [&str; 6] = ["backend.inicio", "backend.encerrando", "hangar_server.de_pe", "hangar_server.caiu",
@@ -407,18 +409,32 @@ pub(crate) async fn sessions(st: &crate::routes::AppState, s: &Scrubber) -> Sess
         })).await;
         let counted = match counted { Ok(Ok(counted)) => counted, _ => Vec::new() };
         let mut out = Vec::new();
+        // Cada alvo com prazo próprio: o registro preso (fila no meio de uma troca) não leva junto os fatos já
+        // lidos. Estourou uma vez, as seguintes esperariam o mesmo lock: ficam sem a linha do plugin.
+        let mut stuck = false;
         for (key, name, waiting) in counted {
             let mut fact = runtime_fact(snapshots.get(&key).unwrap_or(&Value::Null), waiting, s);
-            match registry.terminal_target(&name).await {
-                Ok(Some(target)) => {
-                    let record = target.metadata.config_dir.join("sessions").join(format!("{}.json", target.metadata.agent_pid));
-                    fact.native_record = tokio::fs::try_exists(record).await.ok();
+            let read = async {
+                let target = registry.terminal_target(&name).await?;
+                let record = match &target {
+                    Some(target) => tokio::fs::try_exists(target.metadata.config_dir.join("sessions").join(format!("{}.json", target.metadata.agent_pid))).await.ok(),
+                    None => None,
+                };
+                Ok::<_, crate::runtime::protocol::RuntimeError>((target, record))
+            };
+            match if stuck { None } else { tokio::time::timeout(TARGET_WAIT, read).await.ok() } {
+                Some(Ok((Some(target), record))) => {
+                    fact.native_record = record;
                     fact.plugin = registry.plugin().ok().and_then(|plugin| plugin
                         .pull_status(&crate::terminal_facts::LocalTerminalFacts::binding(&target), std::time::Instant::now()).ok());
                 }
-                Ok(None) => {}
+                Some(Ok((None, _))) => {}
                 // O relatório sem a linha do plugin é o que diz "não consegui ler"; o motivo fica no log.
-                Err(error) => tracing::warn!(session = %name, code = %error.code, "relatório: alvo do terminal ilegível"),
+                Some(Err(error)) => tracing::warn!(session = %name, code = %error.code, "relatório: alvo do terminal ilegível"),
+                None => {
+                    if !stuck { tracing::warn!(session = %name, "relatório: alvo do terminal sem resposta no prazo; as demais ficam sem a linha do plugin"); }
+                    stuck = true;
+                }
             }
             out.push((clean(s, &name, VALUE_MAX), fact));
         }

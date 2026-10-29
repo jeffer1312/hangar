@@ -85,9 +85,9 @@ function ReportSection({ server }: { server: Server }) {
 
   const send = async () => {
     if (report?.state === 'sending') return;
-    // Envio com código e máquinas que não foram: o reenvio vai só a elas, no mesmo código.
-    const prev = report?.state === 'done' && report.result.code
-      && report.result.results.some(({ result: r }) => diagReportRetryable(r)) ? report.result : null;
+    // Envio com máquinas que não foram e podem ir: o reenvio vai só a elas, no código dele (ou no primeiro que der
+    // certo). Sem nenhuma assim (envio expirado), é um envio novo.
+    const prev = report?.state === 'done' && report.result.results.some(({ result: r }) => diagReportRetryable(r)) ? report.result : null;
     if (!prev && !targets.length) return;
     const now = ++generation.current;
     setReport({ state: 'sending' });
@@ -120,7 +120,9 @@ function ReportSection({ server }: { server: Server }) {
   const unsupported = !!done && !done.code && missed.every((x) => x.failure.kind === 'unsupported');
   // Quantas máquinas o envio teve, não a escolha de agora: trocar a escolha depois não muda o texto do erro.
   const several = (done?.results.length ?? 0) > 1;
-  const retryMissed = !!sentCode && !!done?.results.some(({ result: r }) => diagReportRetryable(r));
+  const retryMissed = !!done?.results.some(({ result: r }) => diagReportRetryable(r));
+  // Envio expirado: repetir nele não adianta, e a nota pede um relatório novo.
+  const expired = missed.some((x) => x.failure.kind === 'expired');
   return (
     <SectionCard icon="LifeBuoy" title={m.native_settings_diary_report_title()}>
       {many ? (
@@ -189,11 +191,11 @@ function ReportSection({ server }: { server: Server }) {
               onPress={() => { void copy(sentCode); }}
             />
           ) : null}
-          {sentCode && !retryMissed ? null : (
+          {sentCode && !retryMissed && !expired ? null : (
             <Pill
-              icon={report?.state === 'done' ? 'RefreshCw' : 'Send'}
+              icon={retryMissed ? 'RefreshCw' : 'Send'}
               label={sending ? m.native_settings_diary_report_sending()
-                : report?.state === 'done' ? m.native_settings_diary_report_retry()
+                : retryMissed ? m.native_settings_diary_report_retry()
                 : m.native_settings_diary_report_send()}
               disabled={sending || unsupported || (!retryMissed && !targets.length)}
               onPress={() => { void send(); }}

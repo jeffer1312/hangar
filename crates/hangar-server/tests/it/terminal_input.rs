@@ -134,8 +134,9 @@ async fn terminal_input_facts_lost_after_write_clean_own_text_and_defer() {
  }
 }
 /// Campo como o do Claude: o Ctrl+U tira só a linha do cursor (no fim) e, numa linha vazia, só a quebra.
-struct LineIo { composer: Mutex<String>, buffer: Mutex<Vec<u8>>, writes: Mutex<Vec<String>>, foreign: Mutex<String> }
-impl LineIo { fn new(start: &str) -> Self { Self { composer: Mutex::new(start.into()), buffer: Mutex::new(vec![]), writes: Mutex::new(vec![]), foreign: Mutex::new(String::new()) } } }
+/// `lost`: a colagem não chega ao campo (só o texto da pessoa entra).
+struct LineIo { composer: Mutex<String>, buffer: Mutex<Vec<u8>>, writes: Mutex<Vec<String>>, foreign: Mutex<String>, lost: Mutex<bool> }
+impl LineIo { fn new(start: &str) -> Self { Self { composer: Mutex::new(start.into()), buffer: Mutex::new(vec![]), writes: Mutex::new(vec![]), foreign: Mutex::new(String::new()), lost: Mutex::new(false) } } }
 impl TerminalIo for LineIo {
  fn command<'a>(&'a self, r: CommandRequest) -> IoFuture<'a, CommandOutput> { Box::pin(async move {
   let out = |s: String| Ok(CommandOutput { success: true, stdout: s.into_bytes() });
@@ -148,7 +149,7 @@ impl TerminalIo for LineIo {
    self.writes.lock().unwrap().push("paste".into());
    // A pessoa digitando ao mesmo tempo: o texto dela entra antes do nosso.
    c.insert_str(0, &self.foreign.lock().unwrap());
-   c.push_str(&String::from_utf8(self.buffer.lock().unwrap().clone()).unwrap());
+   if !*self.lost.lock().unwrap() { c.push_str(&String::from_utf8(self.buffer.lock().unwrap().clone()).unwrap()); }
    return out(String::new());
   }
   if has("send-keys") {
@@ -186,7 +187,8 @@ async fn terminal_input_multiline_text_leaves_the_field_whole_when_facts_drop_be
  for allowed in 0..6 {
   let io = Arc::new(LineIo::new(""));
   let s = Arc::new(DroppingFacts { inner: Services::new(), io: io.clone(), allowed, seen: Mutex::new(0) });
-  let r = TerminalDriver::new(binding(), s, io.clone(), instant_limits()).prompt(text, "id").await;
+  let limits = InputLimits { cleanup_attempts: 20, ..instant_limits() };
+  let r = TerminalDriver::new(binding(), s, io.clone(), limits).prompt(text, "id").await;
   let writes = io.writes.lock().unwrap().clone();
   // Enter já enviado: a dúvida depois dele continua incerta (pode ter chegado), e o campo não fica com texto.
   if writes.iter().any(|w| w == "\r") { assert_eq!(*io.composer.lock().unwrap(), "", "allowed={allowed}"); continue; }
@@ -204,6 +206,18 @@ async fn terminal_input_cleanup_stops_at_text_that_is_not_ours() {
  assert_ne!(r.disposition, Disposition::Accepted);
  assert!(!io.writes.lock().unwrap().iter().any(|w| w == "C-u" || w == "\r"), "{:?}", io.writes.lock().unwrap());
  assert_eq!(*io.composer.lock().unwrap(), "texto da pessoa\nlinha um\nlinha dois", "nunca apaga o que não é nosso");
+}
+#[tokio::test]
+async fn terminal_input_cleanup_never_takes_the_persons_prefix_of_our_text_as_ours() {
+ // O nosso texto não chegou ao campo, e o que a pessoa digitou é igual ao começo dele: não é nosso, fica.
+ let io = Arc::new(LineIo::new(""));
+ *io.foreign.lock().unwrap() = "linha um".into();
+ *io.lost.lock().unwrap() = true;
+ let s = Arc::new(DroppingFacts { inner: Services::new(), io: io.clone(), allowed: 0, seen: Mutex::new(0) });
+ let r = TerminalDriver::new(binding(), s, io.clone(), InputLimits { cleanup_attempts: 20, ..instant_limits() }).prompt("linha um\nlinha dois", "id").await;
+ assert_ne!(r.disposition, Disposition::Accepted);
+ assert!(!io.writes.lock().unwrap().iter().any(|w| w == "C-u"), "{:?}", io.writes.lock().unwrap());
+ assert_eq!(*io.composer.lock().unwrap(), "linha um");
 }
 #[tokio::test]
 async fn terminal_input_socket_partial_never_falls_back() {

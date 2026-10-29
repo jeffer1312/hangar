@@ -85,6 +85,13 @@ Dois tipos de relatório, pelo campo `kind` do corpo:
   `PUT /api/relatorio/diario` com `x-hangar-stamp`, `x-hangar-code: <código>`, `x-hangar-upload: <senha>` e
   `content-length` até 10 MiB. O corpo (gzip) vai ao KV sem ser aberto, em `diag/<código>/diario.jsonl.gz`.
   Respostas: 201, 403 (carimbo, código ou senha errada/vencida/já usada), 411 (sem `content-length`), 413, 429, 503.
+- **Diagnóstico de várias máquinas** ("todas as minhas máquinas"): o primeiro relatório recebe também `group_token`, a
+  assinatura do código dele (HMAC com o segredo `GROUP_SECRET`, vale 30 min). As outras máquinas mandam
+  `x-hangar-group: <código do primeiro>` e `x-hangar-group-token`; o worker confere sem ler o KV, não cobra o limite
+  por IP, limita 7 por minuto por grupo (`GROUP_LIMITER`) e 10 por minuto no total delas (`GROUPS_LIMITER`), e grava
+  `diag/<código>` com `group` e a marca `diag/<primeiro>/m/<código>`. Respostas próprias: 400 `grupo` (assinatura
+  errada ou vencida) e 429 `grupo-cheio`. As máquinas de um envio: `npx wrangler kv key list --binding REPORTS
+  --prefix "diag/<primeiro>/m/" --remote`.
 
 O e-mail do diagnóstico chega com o assunto `[Hangar] diagnóstico <código> · <sistema>`. Para abrir o relatório e baixar o
 diário:
@@ -107,6 +114,10 @@ Pré-requisitos para publicar (nada disso está no repositório):
 2. Email Sending/Routing ativo para o domínio `hangar.dev.br`, com o endereço de destino já verificado.
 3. O segredo `REPORT_TO` (endereço de destino, `wrangler secret put REPORT_TO`) e as rotas `hangar.dev.br/api/relatorio` e
    `hangar.dev.br/api/relatorio/diario` na zona.
+4. O segredo `GROUP_SECRET` (valor aleatório longo, `wrangler secret put GROUP_SECRET`). Sem ele o envio de várias
+   máquinas não agrupa: só o primeiro relatório sai, e as outras máquinas aparecem como sem suporte.
+5. Os limitadores do `wrangler.jsonc` (`LIMITER` 1001, `GLOBAL_LIMITER` 1002, `DIAG_LIMITER` 1003, `DIARY_LIMITER` 1004,
+   `GROUP_LIMITER` 1005, `GROUPS_LIMITER` 1006): o deploy os cria.
 
 ```bash
 cd site/worker && CLOUDFLARE_ACCOUNT_ID=<id da conta> npx wrangler deploy

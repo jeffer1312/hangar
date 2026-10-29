@@ -403,10 +403,16 @@ impl Hangar {
         let machines = self.diag_report_machines();
         let scope = self.device.report_scope;
         // Envio com código e máquinas que não foram: o reenvio vai só a elas, no mesmo código.
+        // Só as que repetir pode resolver; as outras (sem suporte, envio expirado) ficam no resultado com a nota delas.
+        let retryable = |o: &Outcome| matches!(o, Outcome::Failed { retry: true, .. });
         let prev = match &self.device.report {
-            Some(Report::Done { code: Some(code), diary_sent, missed, total, token, .. }) if !missed.is_empty() =>
-                Some(((code.clone(), *diary_sent, *total), token.clone(), missed.iter().map(|(id, _, _)| id.clone()).collect::<Vec<_>>())),
+            Some(Report::Done { code: Some(code), diary_sent, missed, total, token, .. }) if missed.iter().any(|(_, _, o)| retryable(o)) =>
+                Some(((code.clone(), *diary_sent, *total), token.clone(), missed.iter().filter(|(_, _, o)| retryable(o)).map(|(id, _, _)| id.clone()).collect::<Vec<_>>())),
             _ => None,
+        };
+        let kept: Vec<Missed> = match (&prev, &self.device.report) {
+            (Some(_), Some(Report::Done { missed, .. })) => missed.iter().filter(|(_, _, o)| !retryable(o)).cloned().collect(),
+            _ => Vec::new(),
         };
         let connect = |s: &ServerEntry| (s.id.clone(), s.label.clone(),
             if self.is_active_key(&servers::norm(&s.address)) { Ok(api.clone()) } else { crate::api::Api::new(&s.address, &s.token) });
@@ -423,7 +429,7 @@ impl Hangar {
         let done = self.device_send_later();
         self.runtime.spawn(async move {
             let mut lead: Option<String> = prev.as_ref().map(|(code, _, _)| code.clone());
-            let mut results = Vec::new();
+            let mut results = kept;
             for (id, label, api) in targets {
                 let group = lead.clone().zip(token.clone());
                 let outcome = match api {
@@ -966,8 +972,14 @@ impl Hangar {
                             }))))
                     .when(!diary_sent, |el| el.child(note(tr("settings_diary_report_diary_failed"), theme::warning())))
                     .child(missed_notes(missed, *total))
-                    .when(missed.iter().any(|(_, _, o)| matches!(o, Outcome::Failed { retry: true, .. })),
-                        |el| el.child(div().child(send("diary-report-retry", "settings_diary_report_retry"))))
+                    .map(|el| {
+                        let retry = missed.iter().any(|(_, _, o)| matches!(o, Outcome::Failed { retry: true, .. }));
+                        // Envio expirado: repetir nele não adianta, e a nota pede um relatório novo.
+                        let expired = missed.iter().any(|(_, _, o)| matches!(o, Outcome::Failed { code, .. } if code == "diag_report_group_unknown"));
+                        if retry { el.child(div().child(send("diary-report-retry", "settings_diary_report_retry"))) }
+                        else if expired { el.child(div().child(send("diary-report-send", "settings_diary_report_send"))) }
+                        else { el }
+                    })
             }
             Some(Report::Done { code: None, missed, total, .. }) => {
                 let retry = missed.iter().any(|(_, _, o)| matches!(o, Outcome::Failed { retry: true, .. }));

@@ -984,10 +984,12 @@ impl TerminalDriver {
             Err(error) if error.code == "facts_unavailable" => match self.snapshot_agent().await { Ok(now) => (now, true), Err(_) => return false },
             Err(_) => return false,
         };
-        if !self.ours(&now, text, before) { return false; }
+        // A limpeza só começa vendo o nosso texto inteiro: um começo dele pode ter sido digitado pela pessoa.
+        if !now.owned(text, before) { return false; }
         // O Ctrl+U apaga só a linha do cursor (numa linha vazia, só a quebra): o texto de várias linhas sai aos
-        // pedaços, e cada pedaço que sobra tem de ser o começo do nosso. Qualquer outra coisa é da pessoa.
-        for _ in 0..self.limits.cleanup_attempts.max(text.lines().count() * 2 + 2) {
+        // pedaços, e cada pedaço que sobra tem de ser o começo do nosso. Qualquer outra coisa é da pessoa. O
+        // orçamento é o configurado: texto longo demais fica como entrega incerta, sem prender a entrada.
+        for _ in 0..self.limits.cleanup_attempts {
             if if agent { self.key_agent("C-u").await } else { self.key_inner("C-u").await }.is_err() { return false; }
             self.settle().await;
             let Ok(after) = (if agent { self.snapshot_agent().await } else { self.snapshot().await }) else { return false; };

@@ -78,7 +78,8 @@ struct Waiter { id: u64, sender: Option<oneshot::Sender<Value>> }
 impl Waiter {
     fn send(&mut self, value: Value) -> bool { self.sender.take().is_some_and(|sender| sender.send(value).is_ok()) }
 }
-struct Owner { instance: String, modes: HashSet<String>, seen: Instant }
+/// `pulled`: início do `/pull` mais recente; `seen`, a última vez que se soube do plugin (início ou fim de um).
+struct Owner { instance: String, modes: HashSet<String>, seen: Instant, pulled: Instant }
 struct Publication {
     receipt: Receipt,
     mode: PluginMode,
@@ -264,7 +265,7 @@ impl Store {
             s.publication = None;
         }
         let modes = if pull.modos.is_empty() { HashSet::from(["fill".to_owned()]) } else { pull.modos.into_iter().collect() };
-        s.owner = Some(Owner { instance: pull.instance, modes, seen: now });
+        s.owner = Some(Owner { instance: pull.instance, modes, seen: now, pulled: now });
         if s.state.is_none() { s.state = pull.estado.map(|state| (now, state, None)); }
         if let Some((_, payload)) = s.agent_outbox.pop_front() {
             s.heartbeat = Some(now);
@@ -523,10 +524,13 @@ impl Store {
     fn proof(&self, binding: &InteractionBinding, now: Option<Instant>) -> Result<bool, ServiceError> {
         let mut memory = self.memory.lock().map_err(|_| unavailable())?;
         let s = session(&mut memory, binding)?;
-        // Conversa nova informada pelo plugin desmente o `/pull` visto há pouco.
+        // Conversa nova informada pelo plugin desmente o `/pull` visto há pouco. O fim conta contra o início do
+        // `/pull`: um aberto antes do `session.end` não prova a conversa que acabou, mesmo terminando depois. O
+        // `/pull` só de subagentes vem de um `claude -p` com o ambiente da sessão: não é o plugin dela.
         let recent = |owner: &Owner| s.reported.is_none() && now.is_some_and(|now| now.saturating_duration_since(owner.seen) <= PULL_PROOF);
         Ok(s.owner.as_ref().is_some_and(|owner| (s.waiter.is_some() || recent(owner))
-            && s.ended.is_none_or(|ended| ended < owner.seen)))
+            && owner.modes.iter().any(|mode| mode != AGENT_MESSAGE_MODE)
+            && s.ended.is_none_or(|ended| ended < owner.pulled)))
     }
     /// A conversa nova que o plugin informou depois de a do vínculo acabar, se houver.
     pub fn reported_conversation(&self, binding: &InteractionBinding) -> Result<Option<String>, ServiceError> {
@@ -764,6 +768,26 @@ mod tests {
         let mut other = pull("i"); other.session_id = Some("sid-nova".into());
         assert!(store.begin_pull(&binding, other, Instant::now()).is_err());
         assert!(!store.conversation_proved(&binding, Instant::now()).unwrap(), "o plugin já pede com outra conversa");
+    }
+
+    #[test]
+    fn a_pull_open_across_the_end_never_proves_the_ended_conversation() {
+        let (store, binding) = setup();
+        let poll = store.begin_pull(&binding, pull("i"), Instant::now() - Duration::from_millis(20)).unwrap();
+        store.record_state(&binding, "fim".into(), None, Instant::now() - Duration::from_millis(10)).unwrap();
+        assert!(!store.conversation_pulling(&binding).unwrap(), "aberto antes do fim");
+        drop(poll);
+        assert!(!store.conversation_proved(&binding, Instant::now()).unwrap(), "encerrado depois do fim");
+    }
+
+    #[test]
+    fn a_pull_only_for_subagents_proves_nothing() {
+        let (store, binding) = setup();
+        let mut agents = pull("i"); agents.modos = vec![AGENT_MESSAGE_MODE.into()];
+        let poll = store.begin_pull(&binding, agents, Instant::now()).unwrap();
+        assert!(!store.conversation_pulling(&binding).unwrap());
+        assert!(!store.conversation_proved(&binding, Instant::now()).unwrap());
+        drop(poll);
     }
 
     #[test]

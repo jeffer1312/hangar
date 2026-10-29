@@ -31,20 +31,21 @@
   let copiado = $state(false);
 
   const targets = $derived(diagReportTargets(machines, servidor, scope, picked));
-  const client = `pwa ${__HANGAR_VERSION__}`;
+  // Lido na hora do envio: a constante só existe no build, e o componente monta também nos testes.
+  const client = () => `pwa ${__HANGAR_VERSION__}`;
 
   async function reportar() {
     if (!targets.length || enviando) return;
     enviando = true; resultado = null; copiado = false;
-    resultado = await sendDiagReportAll(targets, { text: texto, client });
+    resultado = await sendDiagReportAll(targets, { text: texto, client: client() });
     enviando = false;
   }
 
-  // Envio que já tem código e máquinas que não foram: reenvia só a elas, no mesmo código.
+  // Envio com máquinas que não foram e podem ir: reenvia só a elas, no código dele (ou o primeiro que der certo).
   async function resendMissed() {
-    if (!resultado?.code || enviando) return;
+    if (!resultado || enviando) return;
     enviando = true;
-    resultado = await resendDiagReportMissed(resultado, { text: texto, client });
+    resultado = await resendDiagReportMissed(resultado, { text: texto, client: client() });
     enviando = false;
   }
 
@@ -57,8 +58,11 @@
   }
   const missed = $derived(resultado?.results.filter((r) => !r.result.ok) ?? []);
   const diaryFailed = $derived(resultado?.results.some((r) => r.result.ok && r.result.diary === 'failed') ?? false);
-  const onlyUnsupported = $derived(!!resultado && resultado.code === null && missed.every((r) => !r.result.ok && r.result.kind === 'unsupported'));
+  // Pela escolha de agora: outra máquina marcada depois de um envio sem suporte pode ser enviada.
+  const onlyUnsupported = $derived(!!resultado && resultado.code === null
+    && targets.every((t) => missed.some((r) => r.server.id === t.id && !r.result.ok && r.result.kind === 'unsupported')));
   const retryable = $derived(missed.some((r) => diagReportRetryable(r.result)));
+  const expired = $derived(missed.some((r) => !r.result.ok && r.result.kind === 'expired'));
   // Quantas máquinas o envio teve, não a escolha de agora: trocar a escolha depois não muda o texto do erro.
   const several = $derived((resultado?.results.length ?? 0) > 1);
 
@@ -173,6 +177,11 @@
           <button class="btn primario" onclick={resendMissed} disabled={enviando}>
             {enviando ? m.config_diag_report_sending() : m.config_diag_report_retry()}
           </button>
+        {:else if expired}
+          <!-- Envio expirado: repetir nele não adianta, e a nota pede um relatório novo. -->
+          <button class="btn primario" onclick={reportar} disabled={enviando || !targets.length}>
+            {enviando ? m.config_diag_report_sending() : m.config_diag_report_send()}
+          </button>
         {/if}
       {:else}
         {#if machines.length > 1}
@@ -195,7 +204,7 @@
         <textarea id="diag-report-texto" bind:value={texto} maxlength={DIAG_REPORT_TEXT_MAX} rows="3"
                   disabled={enviando} placeholder={m.config_diag_report_text_placeholder()}></textarea>
         <p class="rep-aviso">{m.config_diag_report_notice()}</p>
-        <button class="btn primario" onclick={reportar} disabled={enviando || !targets.length || onlyUnsupported}>
+        <button class="btn primario" onclick={retryable ? resendMissed : reportar} disabled={enviando || !targets.length || onlyUnsupported}>
           {enviando ? m.config_diag_report_sending()
             : resultado && !onlyUnsupported ? m.config_diag_report_retry()
             : m.config_diag_report_send()}

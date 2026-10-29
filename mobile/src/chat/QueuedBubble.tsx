@@ -70,7 +70,8 @@ export const QueuedBubble = memo(function QueuedBubble({ event, working, problem
           eventId={event.id} imageCount={event.image_count ?? 0} onQuoteClick={onQuoteClick} />
       </View>
       {notes.length ? <Text style={styles.note}>{notes.join(' · ')}</Text> : null}
-      {queued && !event.queued_consumed && (failed || holdsQueue) && sessionName && serverId
+      {/* Descartar não tira o texto do campo do terminal: com texto lá, a pessoa apaga ou envia antes. */}
+      {queued && !event.queued_consumed && (failed || (holdsQueue && problem !== 'terminal_input_delivery_composer_busy')) && sessionName && serverId
         ? <DiscardQueued id={event.id.slice('queued-'.length)} text={event.text ?? ''} sessionName={sessionName} serverId={serverId} /> : null}
     </View>
   );
