@@ -1215,7 +1215,7 @@ cada 5 s por até 3 min:
 
 A rota só aceita link com o nome Tailscale desta máquina (`tailscale status --json`), para não virar
 cliente HTTP genérico. Link local (`http://<ip>:8766`) não é conferido. Sem o Rust (modo `python`),
-o Python responde 404 (ou 405, quando serve o `frontend/dist` na raiz) e o cliente diz que a conferência precisa do servidor Rust, sem mostrar o link.
+o Python responde 404 (405 só em backend antigo, que ainda servia o `frontend/dist` na raiz) e o cliente diz que a conferência precisa do servidor Rust, sem mostrar o link.
 Pelo Hangar Connect (8768), o Python só repassa o pedido do dono à rota privada do Rust
 `/__hangar_server/share/reachability`, sem decidir nada; sem o Rust, responde 404
 `share_needs_rust_server`.

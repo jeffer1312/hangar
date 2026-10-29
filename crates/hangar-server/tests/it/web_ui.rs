@@ -360,7 +360,12 @@ async fn static_missing_and_symlinks_never_reach_python_and_replacement_is_live(
     write(&dist.join("404.html"),"ausente");
     let missing=fixture.get("/unknown").await;
     assert_eq!(missing.status(),404);
+    assert_eq!(missing.headers()["cache-control"],"no-cache");
     assert_eq!(missing.text().await.unwrap(),"ausente");
+    let ranged=reqwest::Client::new().get(format!("{}/unknown",fixture.base)).header("range","bytes=0-1").send().await.unwrap();
+    assert_eq!(ranged.status(),404);
+    assert!(ranged.headers().get("content-range").is_none());
+    assert_eq!(ranged.text().await.unwrap(),"ausente");
     #[cfg(unix)] {
         write(&fixture.root().join("secret.txt"),"segredo");
         std::os::unix::fs::symlink(fixture.root().join("secret.txt"),dist.join("escape.txt")).unwrap();
@@ -431,7 +436,9 @@ async fn static_windows_invalid_filename_is_not_found() {
     write(&dist.join("index.html"), "tela");
     let name = "x".repeat(300);
     let error = dist.join(&name).canonicalize().unwrap_err();
-    assert_eq!(error.raw_os_error(), Some(windows_sys::Win32::Foundation::ERROR_INVALID_NAME as i32));
+    let code = error.raw_os_error();
+    assert!([windows_sys::Win32::Foundation::ERROR_FILENAME_EXCED_RANGE, windows_sys::Win32::Foundation::ERROR_INVALID_NAME]
+        .iter().any(|c| code == Some(*c as i32)), "{error:?}");
     let response = fixture.get(&format!("/{name}")).await;
     assert_eq!(response.status(), 404);
     assert_eq!(response.json::<Value>().await.unwrap(), json!({"detail":"Not Found"}));

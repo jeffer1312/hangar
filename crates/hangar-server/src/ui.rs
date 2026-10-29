@@ -227,16 +227,16 @@ fn file_response(path: &Path, headers: &HeaderMap, missing: bool) -> io::Result<
     file.read_to_end(&mut bytes)?;
     let size = bytes.len() as u64;
     // Range usa a representação original; o gzip conserva o validador próprio já publicado.
-    if !headers.contains_key(header::RANGE) { bytes = maybe_gzip(headers,response.headers_mut(),bytes); }
+    if missing || !headers.contains_key(header::RANGE) { bytes = maybe_gzip(headers,response.headers_mut(),bytes); }
     let gz = if response.headers().contains_key(header::CONTENT_ENCODING) { "-gz" } else { "" };
     let etag = format!("\"{:x}-{:x}{gz}\"",modified.as_nanos(),size);
     response.headers_mut().insert(header::ETAG,etag.parse().unwrap());
     response.headers_mut().insert(header::LAST_MODIFIED,last.parse().unwrap());
     response.headers_mut().insert(header::ACCEPT_RANGES,HeaderValue::from_static("bytes"));
     response.headers_mut().insert(header::VARY,HeaderValue::from_static("Accept-Encoding"));
+    if path.extension().is_some_and(|e|e=="html") { response.headers_mut().insert(header::CACHE_CONTROL,HeaderValue::from_static("no-cache")); }
+    else if !missing && path.parent().and_then(Path::file_name).is_some_and(|n|n=="assets") { response.headers_mut().insert(header::CACHE_CONTROL,HeaderValue::from_static("public, max-age=31536000, immutable")); }
     if !missing {
-        if path.extension().is_some_and(|e|e=="html") { response.headers_mut().insert(header::CACHE_CONTROL,HeaderValue::from_static("no-cache")); }
-        else if path.parent().and_then(Path::file_name).is_some_and(|n|n=="assets") { response.headers_mut().insert(header::CACHE_CONTROL,HeaderValue::from_static("public, max-age=31536000, immutable")); }
         let fresh = if headers.contains_key(header::IF_NONE_MATCH) { not_modified(headers,&etag) }
             else { headers.get(header::IF_MODIFIED_SINCE).and_then(|v|v.to_str().ok()).and_then(http_date_timestamp)
                 .is_some_and(|timestamp| timestamp>=modified.as_secs() as i64) };
@@ -250,7 +250,7 @@ fn file_response(path: &Path, headers: &HeaderMap, missing: bool) -> io::Result<
         }
     }
     if missing { *response.status_mut()=StatusCode::NOT_FOUND; }
-    if let Some(range) = headers.get(header::RANGE).and_then(|v|v.to_str().ok())
+    if let Some(range) = headers.get(header::RANGE).and_then(|v|v.to_str().ok()).filter(|_| !missing)
         .filter(|_|headers.get(header::IF_RANGE).is_none_or(|v|v==etag.as_str() || v==last.as_str())) {
         use crate::workspace_routes::RangeError;
         let ranges = match crate::workspace_routes::ranges(&bounded_range_numbers(range),size) {
