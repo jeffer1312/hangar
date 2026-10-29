@@ -38,11 +38,11 @@ pub(super) enum PanelEvent {
 
 #[cfg(all(test, not(target_os = "macos")))]
 mod remote_viewer_tests {
-    use super::*;
+    use super::BrowserPanel;
     use crate::{browser::{relay, server::Request}, ws::{TextEvent, TextSocket}};
-    use gpui::{TestAppContext, prelude::*};
+    use gpui::TestAppContext;
     use serde_json::json;
-    use std::time::Duration;
+    use std::{rc::Rc, time::Duration};
     use tokio::io::AsyncReadExt;
 
     struct ViewerServer {
