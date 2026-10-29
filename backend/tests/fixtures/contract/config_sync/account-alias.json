@@ -1,0 +1,142 @@
+{
+  "source": "7e36ee96d9dcd18e772776319b03890bbe3e3489",
+  "command": "uv run python tests/fixtures/contract/config_sync/generate_account_alias.py",
+  "cases": [
+    {
+      "alias": "\u001c",
+      "steps": [
+        {
+          "result": {
+            "changed": [],
+            "warnings": []
+          },
+          "alias": "Original",
+          "disk": "{\"claude:<HOME>/.claude-fixture\": \"Original\"}"
+        },
+        {
+          "result": {
+            "changed": [],
+            "warnings": []
+          },
+          "alias": "Original",
+          "disk": "{\"claude:<HOME>/.claude-fixture\": \"Original\"}"
+        }
+      ]
+    },
+    {
+      "alias": "\u001cNome\u001f",
+      "steps": [
+        {
+          "result": {
+            "changed": [
+              "fixture"
+            ],
+            "warnings": []
+          },
+          "alias": "Nome",
+          "disk": "{\n \"claude:<HOME>/.claude-fixture\": \"Nome\"\n}"
+        },
+        {
+          "result": {
+            "changed": [],
+            "warnings": []
+          },
+          "alias": "Nome",
+          "disk": "{\n \"claude:<HOME>/.claude-fixture\": \"Nome\"\n}"
+        }
+      ]
+    },
+    {
+      "alias": "  ",
+      "steps": [
+        {
+          "result": {
+            "changed": [],
+            "warnings": []
+          },
+          "alias": "Original",
+          "disk": "{\"claude:<HOME>/.claude-fixture\": \"Original\"}"
+        },
+        {
+          "result": {
+            "changed": [],
+            "warnings": []
+          },
+          "alias": "Original",
+          "disk": "{\"claude:<HOME>/.claude-fixture\": \"Original\"}"
+        }
+      ]
+    },
+    {
+      "alias": "Nome",
+      "steps": [
+        {
+          "result": {
+            "changed": [
+              "fixture"
+            ],
+            "warnings": []
+          },
+          "alias": "Nome",
+          "disk": "{\n \"claude:<HOME>/.claude-fixture\": \"Nome\"\n}"
+        },
+        {
+          "result": {
+            "changed": [],
+            "warnings": []
+          },
+          "alias": "Nome",
+          "disk": "{\n \"claude:<HOME>/.claude-fixture\": \"Nome\"\n}"
+        }
+      ]
+    },
+    {
+      "alias": "\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e",
+      "steps": [
+        {
+          "result": {
+            "changed": [
+              "fixture"
+            ],
+            "warnings": []
+          },
+          "alias": "\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e",
+          "disk": "{\n \"claude:<HOME>/.claude-fixture\": \"\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\"\n}"
+        },
+        {
+          "result": {
+            "changed": [],
+            "warnings": []
+          },
+          "alias": "\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e",
+          "disk": "{\n \"claude:<HOME>/.claude-fixture\": \"\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e\"\n}"
+        }
+      ]
+    },
+    {
+      "alias": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx fim",
+      "steps": [
+        {
+          "result": {
+            "changed": [
+              "fixture"
+            ],
+            "warnings": []
+          },
+          "alias": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "disk": "{\n \"claude:<HOME>/.claude-fixture\": \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx \"\n}"
+        },
+        {
+          "result": {
+            "changed": [
+              "fixture"
+            ],
+            "warnings": []
+          },
+          "alias": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "disk": "{\n \"claude:<HOME>/.claude-fixture\": \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx \"\n}"
+        }
+      ]
+    }
+  ]
+}
