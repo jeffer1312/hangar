@@ -26,6 +26,8 @@ use tokio::task::JoinHandle;
 pub const OWNER: &str = "remote-browser-contract-owner";
 pub const SECRET: &str = "remote-browser-test-internal";
 
+static ELECTRON_PORT: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 #[cfg(unix)]
 pub async fn isolated(test: &str, inspect: impl FnOnce(&Path)) -> bool {
     isolated_with_timeout(test, Duration::from_secs(20), inspect).await
@@ -34,6 +36,12 @@ pub async fn isolated(test: &str, inspect: impl FnOnce(&Path)) -> bool {
 #[cfg(unix)]
 pub async fn isolated_with_timeout(test: &str, deadline: Duration, inspect: impl FnOnce(&Path)) -> bool {
     if std::env::var("HANGAR_REMOTE_BROWSER_TEST").as_deref() == Ok(test) { return false; }
+    let needs_electron_port = test == "remote_browser::transport::electron_target_precedes_native_and_queries_live_url"
+        || test == "remote_browser::revisions::evaluate_timeout_keeps_original_debug_and_sidecar_url"
+        || test == "remote_browser::url_gaps::ws_electron_precedes_usable_native"
+        || test.starts_with("remote_browser::url_gaps::ws_evaluate_");
+    // Os filhos são isolados, mas compartilham a porta fixa do Electron.
+    let _electron_port = if needs_electron_port { Some(ELECTRON_PORT.lock().await) } else { None };
     let uses_local_reference = ["remote_browser::url::", "remote_browser::commands::", "remote_browser::url_gaps::"]
         .iter().any(|prefix| test.starts_with(prefix));
     let reference_tmp = uses_local_reference.then(|| std::env::var_os("HANGAR_REMOTE_BROWSER_TMPDIR"))
