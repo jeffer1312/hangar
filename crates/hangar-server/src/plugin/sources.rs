@@ -172,6 +172,25 @@ impl Sources for NativeSources {
             found.ok_or(ServiceError("plugin_identity_missing"))
         })
     }
+    fn adopt<'a>(&'a self, name: &'a str, key: &'a str, conversation: &'a str) -> SourceFuture<'a, bool> {
+        Box::pin(async move {
+            let state = self.state()?;
+            let registry = state.state.runtime.get().ok_or(ServiceError("plugin_runtime_absent"))?;
+            let claim = crate::runtime::claude_terminal::PluginClaim { key: key.to_owned(), conversation: conversation.to_owned() };
+            match registry.adopt_claude_by_plugin(name, claim).await {
+                Ok(adopted) => {
+                    if adopted { tracing::info!(session = %name, code = "plugin_adopted", "Claude com terminal adotado pela conversa do /pull do plugin"); }
+                    Ok(adopted)
+                }
+                Err(error) => {
+                    if crate::warn_limit::allow(Some(name), &format!("plugin_adopt:{}", error.code)) {
+                        tracing::warn!(session = %name, code = %error.code, "o /pull do plugin não adotou o Claude com terminal");
+                    }
+                    Ok(false)
+                }
+            }
+        })
+    }
     fn discovery(&self) -> SourceFuture<'_, Vec<Discovery>> {
         Box::pin(async move {
             let state = self.state()?;

@@ -47,6 +47,9 @@ pub trait Sources: Send + Sync {
     fn rate<'a>(&'a self, identity: &'a Identity, tokens: u64, seconds: f64) -> SourceFuture<'a, ()>;
     /// O turno terminou com erro de API: se foi o limite de uso da conta, a troca de conta fica sabendo.
     fn turn_error<'a>(&'a self, identity: &'a Identity) -> SourceFuture<'a, ()>;
+    /// A sessão `name` sem ator: o plugin cuja chave é `key` diz que o Claude dela roda `conversation`, e a
+    /// adoção confere isso no processo. `Ok(false)`: não adotou.
+    fn adopt<'a>(&'a self, name: &'a str, key: &'a str, conversation: &'a str) -> SourceFuture<'a, bool>;
 }
 
 pub struct RouteState {
@@ -213,6 +216,16 @@ async fn whoami(State(st): State<Arc<RouteState>>, ConnectInfo(peer): ConnectInf
         Err(error) => fail(error),
     }
 }
+/// Só o `/pull` do dono (não só `agent_message`, que é o de um `claude -p` filho com outra conversa) e com a chave
+/// no token: sem chave, o nome assinado não liga o pedido a um processo.
+async fn adopt_by_pull(st: &RouteState, body: &Envelope<Pull>) -> Result<Identity, ServiceError> {
+    let missing = ServiceError("plugin_identity_missing");
+    let key = body.token.split_once('.').map(|(key, _)| key).filter(|key| !key.is_empty()).ok_or(missing)?;
+    let conversation = body.body.session_id.as_deref().filter(|sid| !sid.is_empty()).ok_or(missing)?;
+    let owner = body.body.modos.is_empty() || body.body.modos.iter().any(|mode| mode != super::AGENT_MESSAGE_MODE);
+    if !owner || !st.sources.adopt(&body.sessao, key, conversation).await? { return Err(missing); }
+    admit(st, body).await
+}
 /// O `/pull` é o que prova a conversa sem o registro nativo: recusa dele vai ao log, uma vez por sessão e código,
 /// para o relatório dizer se o plugin tentou e foi recusado ou se parou de tentar.
 /// `session` só depois de autenticado: o nome que chega sem token aceito não ocupa vaga do limitador.
@@ -223,8 +236,17 @@ fn pull_refused(session: Option<&str>, error: ServiceError) -> Response {
     fail(error)
 }
 async fn pull(State(st): State<Arc<RouteState>>, Json(body): Json<Envelope<Pull>>) -> Response {
-    let identity = match admit(&st, &body).await { Ok(identity) => identity, Err(error) => return pull_refused(None, error) };
     let session = body.sessao.clone();
+    let identity = match admit(&st, &body).await {
+        Ok(identity) => identity,
+        // O token valeu para o nome (a recusa vem depois dele) e a sessão não tem ator: sem o registro nativo, a
+        // adoção esperava uma prova que só este `/pull` traz. Ele pede a adoção com a conversa dele e entra.
+        Err(ServiceError("plugin_identity_missing")) => match adopt_by_pull(&st, &body).await {
+            Ok(identity) => identity,
+            Err(error) => return pull_refused(Some(&session), error),
+        },
+        Err(error) => return pull_refused(None, error),
+    };
     let present = match st.sources.band_present(&identity).await { Ok(present) => present, Err(error) => return pull_refused(Some(&session), error) };
     let instance = body.body.instance.clone();
     let poll = match st.store.begin_pull(&identity.binding, body.body, Instant::now()) { Ok(poll) => poll, Err(error) => return pull_refused(Some(&session), error) };
