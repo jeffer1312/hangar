@@ -163,9 +163,13 @@ mod hyprland {
                 "dispatch focuswindow {address}; dispatch setfloating {address}; dispatch resizewindowpixel exact 1100 700,{address}; dispatch centerwindow 1"
             );
             self.run("hyprctl", &["--batch", &batch]);
+            // A captura é por área da tela: durante a animação ela pegaria o que está em volta.
+            std::thread::sleep(std::time::Duration::from_millis(700));
         }
 
         fn capture(&self, window: &DeskWindow) -> Option<Vec<u8>> {
+            // Sem trocar o foco: outra janela por cima apareceria na transmissão.
+            self.run("hyprctl", &["dispatch", "alterzorder", &format!("top,address:{}", window.id)]);
             let area = format!("{},{} {}x{}", window.x, window.y, window.w, window.h);
             self.run("grim", &["-g", &area, "-t", "jpeg", "-q", "75", "-"]).map(|out| out.stdout)
         }

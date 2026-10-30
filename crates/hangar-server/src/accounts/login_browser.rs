@@ -245,9 +245,9 @@ pub fn url_file_name(operation: &str) -> String {
 }
 
 /// Nome e conteúdo do programa que o CLI chama como `BROWSER`: só guarda o link ao lado dele, e o
-/// Rust decide onde abrir. `None` onde o login segue pelo link impresso.
-pub fn browser_script(platform: Platform, operation: &str) -> Option<(String, String)> {
-    let url = url_file_name(operation);
+/// Rust decide onde abrir. `url` é o nome final do arquivo do link, na mesma pasta do script. `None`
+/// onde o login segue pelo link impresso.
+pub fn browser_script(platform: Platform, operation: &str, url: &str) -> Option<(String, String)> {
     match platform {
         Platform::Linux => Some((
             format!("claude-login-browser-{operation}"),
@@ -1104,11 +1104,11 @@ mod tests {
 
     #[test]
     fn windows_script_is_ascii_and_writes_beside_itself() {
-        let (name, content) = browser_script(Platform::Windows, "abc").unwrap();
+        let (name, content) = browser_script(Platform::Windows, "abc", "h.claude-login-url-abc").unwrap();
         assert_eq!(name, "claude-login-browser-abc.cmd");
         assert!(content.is_ascii());
-        assert!(content.contains(r#">"%~dp0claude-login-url-abc" echo %*"#), "{content}");
-        assert!(browser_script(Platform::Other, "abc").is_none());
+        assert!(content.contains(r#">"%~dp0h.claude-login-url-abc" echo %*"#), "{content}");
+        assert!(browser_script(Platform::Other, "abc", "x").is_none());
     }
 
     #[cfg(unix)]
@@ -1117,7 +1117,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let folder = root.path().join("a b");
         std::fs::create_dir(&folder).unwrap();
-        let (name, content) = browser_script(Platform::Linux, "abc").unwrap();
+        let (name, content) = browser_script(Platform::Linux, "abc", &url_file_name("abc")).unwrap();
         let script = folder.join(name);
         write_browser_script(&script, &content).unwrap();
         let status = std::process::Command::new(&script).arg(LINK).status().unwrap();

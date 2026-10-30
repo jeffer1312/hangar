@@ -327,10 +327,13 @@ impl AccountService {
             fs::remove_file(&record).map_err(|_| AccountError::io())?;
         }
         let operation = nonce().map_err(|_| AccountError::io())?;
+        let url_file = self.sidecar(&key, &login_browser::url_file_name(&operation))?;
+        // O nome inteiro: o script grava ao lado dele, com o prefixo que a conta dá aos arquivos.
+        let url_name = url_file.file_name().map(|name| name.to_string_lossy().into_owned()).ok_or_else(AccountError::io)?;
         // Onde o sistema não tem script, a tentativa segue sem destino, pelo link impresso.
         let script = target
             .as_ref()
-            .and_then(|_| login_browser::browser_script(login_browser::current_platform(), &operation));
+            .and_then(|_| login_browser::browser_script(login_browser::current_platform(), &operation, &url_name));
         let target = target.filter(|_| script.is_some());
         crate::runtime::queue::atomic_write(
             &record,
@@ -381,7 +384,6 @@ impl AccountService {
             return Err(error);
         }
         if let (Some(login), Some(_)) = (target, script_file) {
-            let url_file = self.sidecar(&key, &login_browser::url_file_name(&attempt.operation))?;
             let task = tokio::spawn(self.clone().dispatch_browser(attempt.clone(), login, url_file));
             *attempt.dispatch.lock().unwrap() = Some(task.abort_handle());
         }
@@ -765,7 +767,13 @@ mod tests {
         let channel = Arc::new(FakeChannel::default());
         service.start_claude_login_to("work", client.clone(), Some(fast(profile_target(), channel.clone()))).await.unwrap();
         let operation = operation_of(&service, &key).await;
-        assert!(service.sidecar(&key, &login_browser::browser_script(login_browser::current_platform(), &operation).unwrap().0).unwrap().exists());
+        let url_name = service.sidecar(&key, &login_browser::url_file_name(&operation)).unwrap().file_name().unwrap().to_string_lossy().into_owned();
+        let script = service.sidecar(&key, &login_browser::browser_script(login_browser::current_platform(), &operation, &url_name).unwrap().0).unwrap();
+        assert!(script.exists());
+        // O caminho de verdade: o script que o CLI chama tem que gravar onde a tentativa lê.
+        #[cfg(unix)]
+        assert!(std::process::Command::new(&script).arg(link(34047).trim().trim_matches('"')).status().unwrap().success());
+        #[cfg(not(unix))]
         write_link(&service, &key, &operation, 34047);
         let step = browser_state(&service, &client, "open").await;
         assert_eq!(step["browser"]["machine"], "casa");
