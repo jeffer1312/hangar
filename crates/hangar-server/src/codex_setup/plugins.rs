@@ -30,7 +30,7 @@ impl Runtime for NativeRuntime {
         ecc::prepare(root, backups, &ecc::NativeRunner(self.0.clone())).await
     }
 }
-fn resolved(path: &Path) -> Result<PathBuf, String> {
+pub(super) fn resolved(path: &Path) -> Result<PathBuf, String> {
     resolved_depth(path, 0)
 }
 fn resolved_depth(path: &Path, depth: usize) -> Result<PathBuf, String> {
@@ -150,7 +150,7 @@ pub async fn adapt(
             Ok(if data == result {
                 raw.to_vec()
             } else {
-                files::bytes(&result)
+                files::bytes(&result)?
             })
         })
         .map_err(|error| error.to_string())?;

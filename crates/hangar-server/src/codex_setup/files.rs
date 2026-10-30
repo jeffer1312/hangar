@@ -8,6 +8,10 @@ use std::{
     time::Duration,
 };
 
+#[cfg(test)]
+#[path = "files_contract_tests.rs"]
+mod contract_tests;
+
 #[derive(Debug)]
 pub enum Error {
     Io(io::Error),
@@ -38,18 +42,17 @@ pub fn read(path: &Path) -> Result<Option<Vec<u8>>, Error> {
 pub fn object(path: &Path) -> Result<Value, Error> {
     match read(path)? {
         None => Ok(json!({})),
-        Some(raw) => serde_json::from_slice(&raw)
-            .ok()
-            .filter(Value::is_object)
-            .ok_or_else(|| Error::Invalid(format!("Objeto JSON esperado em {}", path.display()))),
+        Some(raw) => {
+            let invalid = || Error::Invalid(format!("Objeto JSON esperado em {}", path.display()));
+            let value = crate::orchestration::body::parse(&raw).map_err(|_| invalid())?;
+            if value.is_object() { Ok(value) }
+            else { crate::orchestration::codec::discard(value); Err(invalid()) }
+        },
     }
 }
-pub fn bytes(data: &Value) -> Vec<u8> {
-    format!(
-        "{}\n",
-        crate::transcript::pyjson::dumps_indent(data, 2, false)
-    )
-    .into_bytes()
+pub fn bytes(data: &Value) -> Result<Vec<u8>, Error> {
+    let text = crate::orchestration::codec::dumps_indented_utf8(data,2).map_err(|error|Error::Invalid(error.into()))?;
+    Ok(format!("{text}\n").into_bytes())
 }
 pub fn hash(raw: &[u8]) -> String {
     ring::digest::digest(&ring::digest::SHA256, raw)
@@ -59,13 +62,18 @@ pub fn hash(raw: &[u8]) -> String {
         .collect()
 }
 fn restricted_directory(path: &Path) -> Result<(), Error> {
-    fs::create_dir_all(path)?;
+    if let Some(parent) = path.parent() { fs::create_dir_all(parent)?; }
+    let mut builder = fs::DirBuilder::new();
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
     }
-    Ok(())
+    match builder.create(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists && path.is_dir() => Ok(()),
+        Err(error) => Err(error.into()),
+    }
 }
 pub fn backup(path: &Path, raw: &[u8], root: &Path) -> Result<(), Error> {
     restricted_directory(root)?;
@@ -79,7 +87,7 @@ pub fn backup(path: &Path, raw: &[u8], root: &Path) -> Result<(), Error> {
         options.mode(0o600);
     }
     match options.open(root.join(format!("{name}.json"))) {
-        Ok(mut file) => file.write_all(&bytes(&data))?,
+        Ok(mut file) => file.write_all(&bytes(&data)?)?,
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
         Err(e) => return Err(e.into()),
     }
