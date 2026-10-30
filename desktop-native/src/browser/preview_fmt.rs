@@ -125,11 +125,12 @@ pub fn compact_ax(nodes: &[Value], refs_only: bool) -> Compact {
 
 pub const MASK: &str = "••••";
 
-/// O valor trocado por `••••` em texto: literal, como string JSON (o `eval`), base64 (padrão e de URL, com e sem `=`)
+/// As formas do valor que o `mask` troca: literal, como string JSON (o `eval`), base64 (padrão e de URL, com e sem `=`)
 /// e percent-encoded (tudo, `encodeURIComponent` e formulário), como o `mask` do `hangar-server` (`vault/exec.rs`).
-pub fn mask(text: &str, value: &str) -> String {
+/// Calculadas uma vez por senha; a mais longa primeiro, porque o base64 sem `=` é prefixo do com `=`.
+pub fn mask_forms(value: &str) -> Vec<String> {
     use base64::{Engine as _, engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD}};
-    if value.is_empty() { return text.to_owned(); }
+    if value.is_empty() { return Vec::new(); }
     let percent = |keep: &[u8]| value.bytes()
         .map(|b| if b.is_ascii_alphanumeric() || keep.contains(&b) { char::from(b).to_string() } else { format!("%{b:02X}") }).collect::<String>();
     let json = serde_json::to_string(value).unwrap_or_default();
@@ -137,9 +138,13 @@ pub fn mask(text: &str, value: &str) -> String {
         url::form_urlencoded::byte_serialize(value.as_bytes()).collect()];
     for engine in [STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD] { forms.push(engine.encode(value)); }
     forms.retain(|f| !f.is_empty());
-    // O mais longo antes: o base64 sem `=` é prefixo do com `=`.
     forms.sort_by_key(|f| std::cmp::Reverse(f.len()));
     forms.dedup();
+    forms
+}
+
+/// Cada forma de `mask_forms` trocada por `••••` em texto.
+pub fn mask(text: &str, forms: &[String]) -> String {
     forms.iter().fold(text.to_owned(), |out, form| out.replace(form.as_str(), MASK))
 }
 
@@ -244,6 +249,7 @@ mod tests {
     fn the_secret_is_masked_in_every_encoding() {
         use base64::{Engine as _, engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD}};
         let value = "s3nh@ Fo+/x?=é\"";
+        let mask = |text: &str, value: &str| mask(text, &mask_forms(value));
         for form in [value.to_owned(), STANDARD.encode(value), URL_SAFE_NO_PAD.encode(value), "s3nh%40%20Fo%2B%2Fx%3F%3D%C3%A9%22".into(),
             url::form_urlencoded::byte_serialize(value.as_bytes()).collect()] {
             assert_eq!(mask(&format!("antes {form} depois"), value), format!("antes {MASK} depois"), "forma {form}");

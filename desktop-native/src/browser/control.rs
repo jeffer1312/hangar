@@ -5,7 +5,7 @@ use std::{cell::{Cell, RefCell}, collections::{HashMap, HashSet, VecDeque}, futu
 use futures::{future::{Either, select}, lock::Mutex};
 use serde_json::{Value, json};
 
-use super::preview_fmt::{Layout, SNAPSHOT_MAX, capped, compact_ax, key_event, mask, parse_layout};
+use super::preview_fmt::{Layout, SNAPSHOT_MAX, capped, compact_ax, key_event, mask, mask_forms, parse_layout};
 
 pub trait Page {
     fn call(&self, method: &str, params: Value) -> impl Future<Output = Result<Value, String>>;
@@ -124,18 +124,21 @@ struct State {
     secrets: Vec<Secret>,
 }
 
-/// Senha do cofre na memória do controlador: zerada ao sair. Sem `Debug` de propósito.
-pub struct Secret(String);
+/// Senha do cofre na memória do controlador, com as formas que a resposta troca por `••••` (preenchidas ao guardá-la):
+/// tudo zerado ao sair. Sem `Debug` de propósito.
+pub struct Secret { value: String, forms: Vec<String> }
 
 impl Secret {
-    pub fn new(value: String) -> Self { Self(value) }
-    pub fn as_str(&self) -> &str { &self.0 }
+    pub fn new(value: String) -> Self { Self { value, forms: Vec::new() } }
+    pub fn as_str(&self) -> &str { &self.value }
 }
 
 impl Drop for Secret {
     fn drop(&mut self) {
-        // SAFETY: zero é UTF-8 válido; a escrita volátil não é cortada pelo compilador.
-        for byte in unsafe { self.0.as_bytes_mut() } { unsafe { std::ptr::write_volatile(byte, 0) } }
+        for text in std::iter::once(&mut self.value).chain(self.forms.iter_mut()) {
+            // SAFETY: zero é UTF-8 válido; a escrita volátil não é cortada pelo compilador.
+            for byte in unsafe { text.as_bytes_mut() } { unsafe { std::ptr::write_volatile(byte, 0) } }
+        }
         std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
     }
 }
@@ -395,7 +398,7 @@ impl<P: Page> Controller<P> {
     }
 
     fn masked(&self, text: String) -> String {
-        self.state.borrow().secrets.iter().fold(text, |out, secret| mask(&out, secret.as_str()))
+        self.state.borrow().secrets.iter().fold(text, |out, secret| mask(&out, &secret.forms))
     }
 
     async fn run_inner(&self, verb: &str, args: &[String], mut secret: Option<Secret>) -> Reply {
@@ -678,6 +681,8 @@ impl<P: Page> Controller<P> {
             s.marked.insert(id);
             if !s.secrets.iter().any(|known| known.as_str() == secret.as_str()) {
                 if s.secrets.len() >= SECRETS_MAX { s.secrets.remove(0); }
+                let mut secret = secret;
+                secret.forms = mask_forms(secret.as_str());
                 s.secrets.push(secret);
             }
         }

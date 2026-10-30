@@ -30,6 +30,9 @@ struct Status {
     role: String,
     #[serde(default)]
     owner: Option<String>,
+    /// Endereço da dona no `peers.json`, quando esta máquina aponta para outra.
+    #[serde(default)]
+    owner_url: Option<String>,
     state: String,
     #[serde(default)]
     detail: Option<String>,
@@ -51,7 +54,7 @@ struct Backup {
 const RECOVERY_MIN: usize = 12;
 
 #[derive(Clone, Debug)]
-struct Peer { id: String, url: String }
+struct Peer { id: String }
 
 /// Campos da cópia de segurança e da restauração; nascem com a página e somem com ela.
 struct BackupFields {
@@ -158,13 +161,17 @@ impl VaultPage {
             let status = result.map_err(|e| vault_failure(&e))
                 .and_then(|v| serde_json::from_value::<Status>(v).map_err(|_| tr("invalid_response")));
             if let Ok(status) = &status {
-                if status.role == "owner" { this.writer = Some(this.api.clone()); }
+                this.writer = match (status.role.as_str(), &status.owner_url) {
+                    ("owner", _) => Some(this.api.clone()),
+                    ("remote", Some(url)) => this.hangar.upgrade().and_then(|h| h.read(cx).vault_owner_api(url)),
+                    _ => None,
+                };
                 if status.state == "open" { this.load_entries(window, cx); }
-                // Na dona as outras máquinas são as opções da cópia; nas demais, da dona e da restauração.
-                this.load_peers(window, cx);
             }
             this.status = Some(status);
         });
+        // As outras máquinas só servem às listas de escolha (dona, cópia, restauração): pedidas junto com o estado.
+        self.load_peers(window, cx);
         cx.notify();
     }
 
@@ -179,17 +186,13 @@ impl VaultPage {
 
     fn load_peers(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let (seq, api) = (self.seq, self.api.clone());
-        run(&self.runtime, async move { api.server_read(&["peers"], &[], 15).await }, window, cx, move |this: &mut Self, result, _, cx| {
+        run(&self.runtime, async move { api.server_read(&["peers"], &[], 15).await }, window, cx, move |this: &mut Self, result, _, _| {
             if seq != this.seq { return; }
-            let value = match result {
-                Ok(value) => value,
-                Err(error) => { this.peers_error = Some(vault_failure(&error)); return; }
-            };
-            this.peers = value.as_array().map(|list| list.iter().filter_map(|p| Some(Peer {
-                id: p.get("id")?.as_str()?.to_owned(), url: p.get("base_url")?.as_str()?.to_owned() })).collect()).unwrap_or_default();
-            let owner = this.status_ok().and_then(|s| s.owner.clone());
-            let url = owner.and_then(|id| this.peers.iter().find(|p| p.id == id).map(|p| p.url.clone()));
-            if let Some(url) = url { this.writer = this.hangar.upgrade().and_then(|h| h.read(cx).vault_owner_api(&url)); }
+            match result {
+                Ok(value) => this.peers = value.as_array().map(|list| list.iter()
+                    .filter_map(|p| Some(Peer { id: p.get("id")?.as_str()?.to_owned() })).collect()).unwrap_or_default(),
+                Err(error) => this.peers_error = Some(vault_failure(&error)),
+            }
         });
     }
 
