@@ -170,6 +170,7 @@ pub async fn serve_until_with_guest(
     let browser_list = state.list.clone();
     let transcription = state.transcription.clone();
     let omp_sync = state.omp_sync.clone();
+    let codex_setup = state.codex_setup.clone();
     let codex_logins=state.accounts.codex_logins.clone();
     let codex_readers=state.accounts.codex_readers.clone();
     let device_logins=state.accounts.device_logins.clone();
@@ -252,6 +253,10 @@ pub async fn serve_until_with_guest(
     }.await;
     let cleanup = async {
         if let Some(service) = omp_sync.get() { service.close().await; }
+        let codex_setup_result = match codex_setup.get() {
+            Some(Ok(service)) => service.shutdown().await,
+            Some(Err(_)) | None => Ok(()),
+        };
         transcription.shutdown().await;
         if let Some((stop,task))=refresh_loop {
             let _=stop.send(true);
@@ -261,6 +266,7 @@ pub async fn serve_until_with_guest(
         if let Some(registry)=runtime_registry {
             registry.shutdown().await.map_err(|error|std::io::Error::other(error.code))?;
         }
+        codex_setup_result.map_err(std::io::Error::other)?;
         Ok::<_, std::io::Error>(())
     };
     let (_, cleanup) = tokio::join!(remote_browser.shutdown(&browser_dir, &browser_list), cleanup);

@@ -45,6 +45,7 @@ pub mod status;
 pub mod fragments;
 pub mod messages;
 pub mod service;
+mod service_binding;
 pub mod artifacts;
 pub mod batch;
 pub mod reload;

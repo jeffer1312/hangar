@@ -40,6 +40,7 @@ pub struct AppState {
     settings_snapshot: std::sync::OnceLock<Result<Arc<crate::machine_peers::dotenv::SettingsSnapshot>,String>>,
     pub login_guests: Arc<crate::login_guests::Service>,
     pub omp_sync: Arc<std::sync::OnceLock<Arc<crate::omp_sync::Service>>>,
+    pub codex_setup: Arc<std::sync::OnceLock<Result<Arc<crate::codex_setup::service::Service>, String>>>,
     pub interactions: Arc<crate::interactions::InteractionStore>,
     pub dictation_models: Arc<crate::dictation::catalog::Models>,
     /// Vagas para processos e chamadas de organização do ditado (catálogo sem cache e execução).
@@ -221,6 +222,7 @@ impl AppState {
             config_sync_context: None,
             config_sync_translation: Default::default(),
             omp_sync: Arc::default(),
+            codex_setup: Arc::default(),
             dictation_models: Arc::default(),
             dictation_slots: Arc::new(tokio::sync::Semaphore::new(4)),
             transcription_slots: Arc::new(tokio::sync::Semaphore::new(4)),
