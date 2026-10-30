@@ -292,6 +292,8 @@ class Settings(BaseSettings):
     # Reconciliacao automatica do Codex (codex_integracao.acompanhar + abertura de TUI). Portao
     # PROPRIO por cima do `automations`, editavel pela tela (card do Codex em Harnesses).
     codex_sync: bool = True
+    # Desligar o 1M do Codex fica gravado aqui: sem a chave no config.toml, o padrão é ligado.
+    codex_extended_context: bool = True
     # Organização é opt-in, independentemente de credenciais antigas de LLM.
     dictation_organization_mode: str = "none"
     dictation_claude_model: str = ""

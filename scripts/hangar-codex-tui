@@ -625,6 +625,8 @@ def main() -> int:
     ap.add_argument("--sandbox", choices=("read-only", "workspace-write", "danger-full-access"), default=None)
     ap.add_argument("--tool-output-token-limit", type=int, default=None)
     ap.add_argument("--transfer-id", default=None, help=argparse.SUPPRESS)
+    # Sobrescritas de config que o servidor decidiu (o 1M padrão); viram `-c` no app-server.
+    ap.add_argument("--config", action="append", default=[], help=argparse.SUPPRESS)
     args = ap.parse_args()
     if args.tool_output_token_limit is not None and args.tool_output_token_limit <= 0:
         ap.error("--tool-output-token-limit precisa ser positivo")
@@ -786,7 +788,8 @@ def main() -> int:
                 [_codex(), "app-server", "--listen", endpoint, *instruction_overrides,
                  "-c", f'sandbox_mode="{sandbox}"', "-c", f'approval_policy="{approval}"',
                  *tool_output_override(args.tool_output_token_limit),
-                 *service_tier_override(selected_service_tier()), *identity_override(os.environ)],
+                 *service_tier_override(selected_service_tier()), *identity_override(os.environ),
+                 *(arg for value in args.config for arg in ("-c", value))],
                 stdout=subprocess.DEVNULL, stderr=erros, cwd=cwd,
             )
         except (OSError, SystemExit) as exc:

@@ -250,7 +250,7 @@
   "chat_plan_pedido": "Implemente o plano proposto.",
   "codex_contexto_salvando": "Salvando…",
   "codex_contexto_titulo": "Contexto estendido (até 1M)",
-  "codex_contexto_ajuda": "Solicitar até 1 milhão de tokens. O Codex aplica o limite suportado por cada modelo, incluindo Astra e Sol.",
+  "codex_contexto_ajuda": "Ligado por padrão: solicita até 1 milhão de tokens. O Codex aplica o limite suportado por cada modelo, incluindo Astra e Sol.",
   "codex_contexto_novas": "Vale para novas sessões no Hangar e no terminal. Ativar define contexto de 1M e compactação em 900 mil tokens; desativar restaura a configuração anterior ao contexto estendido.",
   "codex_contexto_padrao": "Salvo no servidor ao alterar, não só nesta conversa. Vale para as próximas sessões do Codex padrão desta máquina, inclusive pelo terminal. Ativar define contexto de até 1M e compactação em 900 mil tokens, respeitando o limite do modelo. Sessões abertas não mudam.",
   "codex_contexto_limites": "Teto da janela no catálogo local, antes da margem de uso (tokens):",

@@ -144,10 +144,35 @@ pub fn launch_env(base:&AccountEnvironment,sidecar_dir:&Path,meta:&Value) -> Res
     if let (Some(current),Value::Object(fields)) = (current,&mut meta) && current.get("key").is_some_and(|key|Some(key) == fields.get("key")) {
         fields.extend(current);
     }
-    let env = environment(base,&meta,&runtime_config(base))?;
+    let config = runtime_config(base);
+    let env = environment(base,&meta,&config)?;
     let mut program = argv(&meta)?;
     program.extend(identity(&env));
+    program.extend(context_overrides(Path::new(&env["CODEX_HOME"]),&config).into_iter().flat_map(|value|["-c".to_owned(),value]));
     Ok(Launch { program,env })
+}
+
+/// Contexto de 1M e compactação de 900 mil, os valores que `codex_opcoes.py` grava ao ligar.
+const CONTEXT:u64 = 1_000_000;
+const COMPACTION:u64 = 900_000;
+
+/// O 1M é o padrão do Hangar: sem `model_context_window` no `config.toml` da conta (nem no perfil
+/// ativo), a sessão sobe com ele, a menos que a pessoa o tenha desligado (`codex_extended_context`).
+/// O Codex limita ao teto de cada modelo. Arquivo ilegível fica com o Codex, que o recusa sozinho.
+pub fn context_overrides(codex_home:&Path,runtime_config:&Value) -> Vec<String> {
+    if runtime_config["codex_extended_context"] == Value::Bool(false) { return Vec::new(); }
+    let config = match std::fs::read_to_string(codex_home.join("config.toml")) {
+        Ok(raw)=>match toml::from_str::<toml::Table>(&raw) { Ok(config)=>config, Err(_)=>return Vec::new() },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound=>toml::Table::new(),
+        Err(_)=>return Vec::new(),
+    };
+    let profile = config.get("profile").and_then(toml::Value::as_str)
+        .and_then(|name|config.get("profiles")?.get(name)?.as_table());
+    let set = |key:&str|config.contains_key(key) || profile.is_some_and(|p|p.contains_key(key));
+    if set("model_context_window") { return Vec::new(); }
+    let mut overrides = vec![format!("model_context_window={CONTEXT}")];
+    if !set("model_auto_compact_token_limit") { overrides.push(format!("model_auto_compact_token_limit={COMPACTION}")); }
+    overrides
 }
 
 /// `identity_override`: a identidade da sessão no shell dos comandos do Codex, por `set` (vale com
@@ -192,9 +217,36 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let sidecars = home.path().join("sidecars");
         let launch = launch_env(&base(home.path()),&sidecars,&json!({"name":"cx \"a\"","key":"k1","permission_mode":"Full Access"})).unwrap();
-        let tail:Vec<&str> = launch.program.iter().map(String::as_str).skip(7).collect();
+        let tail:Vec<&str> = launch.program.iter().map(String::as_str).skip(7).take(6).collect();
         assert_eq!(tail,["-c","shell_environment_policy.set.CP_SESSION_NAME=\"cx \\\"a\\\"\"","-c","shell_environment_policy.set.CP_SESSION_KEY=\"k1\"",
             "-c","shell_environment_policy.set.HANGAR_CANO_KEY=\"k1\""],"TMUX e TMUX_PANE saem do ambiente do cano: nada a repassar");
+    }
+
+    /// Sem nada salvo, 1M; o desligado gravado no Hangar e o valor escrito no `config.toml` mandam.
+    #[test]
+    fn context_defaults_to_one_million_when_nothing_is_saved() {
+        let home = tempfile::tempdir().unwrap();
+        let one_million = ["model_context_window=1000000","model_auto_compact_token_limit=900000"];
+        assert_eq!(context_overrides(home.path(),&json!({})),one_million,"instalação nova, sem config.toml");
+        std::fs::write(home.path().join("config.toml"),"model = \"gpt-6.1-sol\"\n").unwrap();
+        assert_eq!(context_overrides(home.path(),&json!({"codex_extended_context":true})),one_million);
+        assert!(context_overrides(home.path(),&json!({"codex_extended_context":false})).is_empty(),"desligado pela pessoa");
+        std::fs::write(home.path().join("config.toml"),"model_auto_compact_token_limit = 250000\n").unwrap();
+        assert_eq!(context_overrides(home.path(),&json!({})),one_million[..1],"compactação própria continua valendo");
+        for explicit in ["model_context_window = 300000\n","model_context_window = 1000000\n",
+            "profile = \"p\"\n[profiles.p]\nmodel_context_window = 300000\n"] {
+            std::fs::write(home.path().join("config.toml"),explicit).unwrap();
+            assert!(context_overrides(home.path(),&json!({})).is_empty(),"{explicit}");
+        }
+        std::fs::write(home.path().join("config.toml"),"não é toml [").unwrap();
+        assert!(context_overrides(home.path(),&json!({})).is_empty(),"o próprio Codex recusa o arquivo");
+    }
+
+    #[test]
+    fn headless_launch_opens_with_one_million_by_default() {
+        let home = tempfile::tempdir().unwrap();
+        let launch = launch_env(&base(home.path()),&home.path().join("sidecars"),&json!({"name":"cx","key":"k1"})).unwrap();
+        assert!(launch.program.windows(2).any(|w|w == ["-c","model_context_window=1000000"]),"{:?}",launch.program);
     }
 
     #[test]

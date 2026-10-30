@@ -83,6 +83,8 @@ pub fn creation(spec: &SessionSpec, codex_home: &str, prompt: Option<&str>) -> L
 pub fn pane(name: &str, key: &str, launch: &Launch, jev: bool, runtime_config: &Value, read_only: Option<&[String]>, windows: bool)
     -> Result<PaneSpec, OpenError> {
     let mut command = launcher_argv(launch)?;
+    let context = crate::runtime::codex_launch::context_overrides(Path::new(&launch.codex_home), runtime_config);
+    command.extend(context.into_iter().flat_map(|value| ["--config".to_owned(), value]));
     if let Some(prefix) = read_only {
         command = super::terminal::sandboxed(prefix, &command, windows);
     }
@@ -207,6 +209,18 @@ mod tests {
         assert!(pane.command[4].starts_with("exec hangar-codex-tui --cwd /w"), "{:?}", pane.command);
         assert_eq!(pane.env, [("HANGAR_JEV".to_owned(), "off".to_owned()), ("HANGAR_CLAUDE_SETTINGS".to_owned(), String::new())]);
         assert_eq!((pane.provider, pane.key.as_str(), pane.config_dir), (AgentProvider::Codex, "k", None));
+    }
+
+    /// Sem nada salvo a TUI sobe com 1M; o desligado gravado no Hangar não leva nada ao lançador.
+    #[test]
+    fn the_pane_asks_the_launcher_for_one_million_unless_turned_off() {
+        let home = tempfile::tempdir().unwrap();
+        let launch = Launch { codex_home: home.path().to_string_lossy().into_owned(), ..launch() };
+        let command = pane("cx", "k", &launch, false, &json!({}), None, false).unwrap().command;
+        assert!(command.windows(2).any(|w| w == ["--config", "model_context_window=1000000"]), "{command:?}");
+        assert!(command.windows(2).any(|w| w == ["--config", "model_auto_compact_token_limit=900000"]), "{command:?}");
+        let off = pane("cx", "k", &launch, false, &json!({"codex_extended_context": false}), None, false).unwrap().command;
+        assert!(!off.iter().any(|a| a == "--config"), "{off:?}");
     }
 
     #[cfg(unix)]

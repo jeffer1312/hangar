@@ -250,7 +250,7 @@
   "chat_plan_pedido": "Implement the proposed plan.",
   "codex_contexto_salvando": "Saving…",
   "codex_contexto_titulo": "Extended context (up to 1M)",
-  "codex_contexto_ajuda": "Request up to 1 million tokens. Codex applies each model's supported limit, including Astra and Sol.",
+  "codex_contexto_ajuda": "On by default: requests up to 1 million tokens. Codex applies each model's supported limit, including Astra and Sol.",
   "codex_contexto_novas": "Applies to new sessions in Hangar and the terminal. Enabling sets context to 1M and compaction to 900K tokens; disabling restores the configuration from before extended context.",
   "codex_contexto_padrao": "Saved on the server when changed, not just for this conversation. Applies to future sessions of this machine's default Codex, including the terminal. Enabling sets up to 1M context and 900K compaction, within the model's limit. Open sessions stay unchanged.",
   "codex_contexto_limites": "Window caps in the local catalog, before reserved headroom (tokens):",
