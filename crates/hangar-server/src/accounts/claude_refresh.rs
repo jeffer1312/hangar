@@ -497,7 +497,8 @@ mod tests {
         fs::create_dir(&bin).unwrap();
         fs::write(account_home.join(".credentials.json"),
             json!({"claudeAiOauth":{"accessToken":"before","refreshToken":"refresh","expiresAt":1000}}).to_string()).unwrap();
-        crate::write_test_executable(&bin.join("claude"), b"#!/bin/sh\nexec sleep 30\n");
+        // Caminho absoluto: o `PATH` da CLI é só esta pasta, e sem o `sleep` ela sairia antes de a sessão pedir a conta.
+        crate::write_test_executable(&bin.join("claude"), b"#!/bin/sh\nexec /bin/sleep 30\n");
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, axum::Router::new()).await.unwrap(); });
@@ -507,7 +508,7 @@ mod tests {
         env.codex_default = temp.path().join(".codex");
         env.claude_fixed = format!("test:{}", account_home.display());
         env.base.insert("PATH".into(), bin.to_string_lossy().into_owned());
-        // Sem o tmux da máquina: leitura que falha sob a suíte em paralelo daria a conta como ocupada.
+        // Sem o tmux da máquina: o resultado não pode depender do que roda nela.
         env.terminal_fixture = Some(Arc::new(|| Ok(String::new())));
         let service = AccountService::new(env);
         let account = service.claude_by_label("test").unwrap();
@@ -564,7 +565,7 @@ mod tests {
         env.claude_fixed = format!("test:{}", account_home.display());
         env.base
             .insert("PATH".into(), bin.to_string_lossy().into_owned());
-        // Sem o tmux da máquina: leitura que falha sob a suíte em paralelo daria a conta como ocupada.
+        // Sem o tmux da máquina: o resultado não pode depender do que roda nela.
         env.terminal_fixture = Some(Arc::new(|| Ok(String::new())));
         let service = AccountService::new(env);
         let account = service.claude_by_label("test").unwrap();
