@@ -53,10 +53,14 @@ vi.mock('@hangar/core', async (importOriginal) => ({
 }));
 vi.mock('../../lib/loginConta', () => ({
   iniciarLogin: vi.fn(async () => ({ ok: true })),
+  destinosLogin: vi.fn(async () => ({ targets: [], last: null })),
   passoLogin: vi.fn(async () => ({ etapa: 'aguardando', url: 'https://claude.com/cai/oauth/authorize' })),
   confirmarLogin: vi.fn(async () => ({ ok: true, email: 'u@exemplo.com', plano: 'max' })),
   cancelarLogin: vi.fn(async () => ({ ok: true })),
 }));
+
+// Entrar lê primeiro onde abrir a autorização; sem destinos, segue direto para o login.
+const destinosLidos = async () => { for (let i = 0; i < 4; i++) await tick(); };
 
 const credMock = vi.mocked(credLib);
 const apiMock = vi.mocked(apiLib);
@@ -659,10 +663,25 @@ describe('ContasSettings — criar e apagar reusam as rotas de sempre', () => {
 });
 
 describe('ContasSettings — o botão Entrar (Task 7)', () => {
+  it('com navegadores na lista, escolher um deles leva o destino ao início do login', async () => {
+    const destino = { machine: 'casa', kind: 'chrome_profile' as const, profile: 'Default', label: 'Jefferson', email: 'j@exemplo.com' };
+    loginMock.destinosLogin.mockResolvedValueOnce({ targets: [destino], last: null });
+    const t = montar([DESLOGADA]);
+    await tick(); await tick();
+    t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click(); await destinosLidos();
+    expect(loginMock.iniciarLogin).not.toHaveBeenCalled();
+    const opcoes = [...t.el.querySelectorAll<HTMLButtonElement>('.ct-login-destinos .ct-btn')];
+    expect(opcoes.length).toBe(2);
+    opcoes[0].click();
+    await destinosLidos();
+    expect(loginMock.iniciarLogin).toHaveBeenCalledWith(ALVO, 'testes', destino);
+    expect(t.el.querySelector('.ct-login-destinos')).toBeNull();
+  });
+
   it('substitui a lista por login focado, sem URL crua nem sucesso antecipado', async () => {
     const t = montar([DESLOGADA]);
     await tick(); await tick();
-    t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
+    t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click(); await destinosLidos();
     await tick(); await tick(); await tick(); await tick();
     expect(loginMock.iniciarLogin).toHaveBeenCalledWith(ALVO, 'testes');
     expect(t.el.querySelector('.ct-login')).not.toBeNull();
@@ -681,7 +700,7 @@ describe('ContasSettings — o botão Entrar (Task 7)', () => {
   it('mantém o sucesso confirmado até Concluir e volta à conta conectada', async () => {
     const t = montar([DESLOGADA]);
     await tick(); await tick();
-    t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
+    t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click(); await destinosLidos();
     await tick(); await tick(); await tick(); await tick();
     const input = t.el.querySelector<HTMLInputElement>('.ct-campo-cod')!;
     input.value = 'CODE-123';
@@ -715,7 +734,7 @@ describe('ContasSettings — o botão Entrar (Task 7)', () => {
     const t = montar([DESLOGADA]);
     try {
       await vi.advanceTimersByTimeAsync(0);
-      t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
+      t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click(); await destinosLidos();
       await vi.advanceTimersByTimeAsync(0);
       expect(t.el.querySelector('.ct-campo-cod')).not.toBeNull();
       credMock.listarCredenciais.mockResolvedValue([claude({ ...DESLOGADA,
@@ -745,7 +764,7 @@ describe('ContasSettings — o botão Entrar (Task 7)', () => {
     const t = montar([DESLOGADA]);
     try {
       await vi.advanceTimersByTimeAsync(0);
-      t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
+      t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click(); await destinosLidos();
       await vi.advanceTimersByTimeAsync(0);
       const input = t.el.querySelector<HTMLInputElement>('.ct-campo-cod')!;
       input.value = 'CODE-123'; input.dispatchEvent(new Event('input'));
@@ -775,7 +794,7 @@ describe('ContasSettings — o botão Entrar (Task 7)', () => {
     const t = montar([DESLOGADA]);
     try {
       await vi.advanceTimersByTimeAsync(0);
-      t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
+      t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click(); await destinosLidos();
       await vi.advanceTimersByTimeAsync(0);
       expect(t.el.querySelector('.ct-campo-cod')).not.toBeNull();
       await vi.advanceTimersByTimeAsync(2000);
@@ -796,7 +815,7 @@ describe('ContasSettings — o botão Entrar (Task 7)', () => {
     const t = montar([DESLOGADA]);
     try {
       await tick(); await tick();
-      t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
+      t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click(); await destinosLidos();
       await tick(); await tick(); await tick(); await tick();
       const input = t.el.querySelector<HTMLInputElement>('.ct-campo-cod')!;
       input.value = 'codigo-invalido'; input.dispatchEvent(new Event('input'));
@@ -819,7 +838,7 @@ describe('ContasSettings — o botão Entrar (Task 7)', () => {
     const t = montar([DESLOGADA]);
     try {
       await tick(); await tick();
-      t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
+      t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click(); await destinosLidos();
       await tick(); await tick(); await tick(); await tick();
       const input = t.el.querySelector<HTMLInputElement>('.ct-campo-cod')!;
       input.value = 'codigo'; input.dispatchEvent(new Event('input'));
@@ -850,7 +869,7 @@ describe('ContasSettings — o botão Entrar (Task 7)', () => {
     try {
       const t = montar([DESLOGADA]);
       await tick(); await tick();
-      t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
+      t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click(); await destinosLidos();
       await tick(); await tick(); await tick(); await tick();
       expect(loginMock.iniciarLogin).toHaveBeenCalledWith(ALVO, 'testes');
       unmount(t.comp);
@@ -876,7 +895,7 @@ describe('ContasSettings — o botão Entrar (Task 7)', () => {
         new Promise<void>((r) => { resolver = r; }) as never);
       const t = montar([DESLOGADA]);
       await tick(); await tick();
-      t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
+      t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click(); await destinosLidos();
       await tick(); await tick(); await tick(); await tick();
       expect(loginMock.iniciarLogin).toHaveBeenCalledWith(ALVO, 'testes');
       unmount(t.comp);      // desmonta ANTES de o iniciarLogin resolver
@@ -898,7 +917,7 @@ describe('ContasSettings — o botão Entrar (Task 7)', () => {
     const t = montar([DESLOGADA], null);
     await tick(); await tick();
     expect(credMock.listarCredenciais).toHaveBeenCalledWith(null);
-    t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
+    t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click(); await destinosLidos();
     await tick(); await tick(); await tick(); await tick();
     expect(loginMock.iniciarLogin).toHaveBeenCalledWith(null, 'testes');
     unmount(t.comp);
@@ -988,7 +1007,7 @@ describe('ContasSettings — o botão Entrar (Task 7)', () => {
     const comp = mount(ContasSettings, { target: el, props });
     credMock.listarCredenciais.mockResolvedValue([DESLOGADA]);
     await tick(); await tick(); await tick();
-    el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
+    el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click(); await destinosLidos();
     await tick(); await tick(); await tick(); await tick();
     const input = el.querySelector<HTMLInputElement>('.ct-campo-cod')!;
     input.value = 'CODE-123';
@@ -1020,7 +1039,7 @@ describe('ContasSettings — o botão Entrar (Task 7)', () => {
     const comp = mount(ContasSettings, { target: el, props });
     credMock.listarCredenciais.mockResolvedValue([DESLOGADA]);
     await tick(); await tick(); await tick();
-    el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
+    el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click(); await destinosLidos();
     await tick(); await tick(); await tick(); await tick();
     const input = el.querySelector<HTMLInputElement>('.ct-campo-cod')!;
     input.value = 'CODE-123';
@@ -1045,7 +1064,7 @@ describe('ContasSettings — o botão Entrar (Task 7)', () => {
       Object.assign(new Error(m.erro_login_timeout()), { status: 0 }));
     const t = montar([DESLOGADA]);
     await tick(); await tick();
-    t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
+    t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click(); await destinosLidos();
     await tick(); await tick(); await tick(); await tick();
     const input = t.el.querySelector<HTMLInputElement>('.ct-campo-cod')!;
     input.value = 'CODE-123';
@@ -1063,7 +1082,7 @@ describe('ContasSettings — o botão Entrar (Task 7)', () => {
   it('confirmar com campo vazio não chama a API', async () => {
     const t = montar([DESLOGADA]);
     await tick(); await tick();
-    t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
+    t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click(); await destinosLidos();
     await tick(); await tick(); await tick(); await tick();
     const confirmar = t.el.querySelector<HTMLButtonElement>('.ct-rodape .ct-btn.primario')!;
     expect(confirmar.disabled).toBe(true);
@@ -1074,7 +1093,7 @@ describe('ContasSettings — o botão Entrar (Task 7)', () => {
   it('cancelar chama cancelarLogin, limpa o painel e reabilita o Entrar', async () => {
     const t = montar([DESLOGADA]);
     await tick(); await tick();
-    t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
+    t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click(); await destinosLidos();
     await tick(); await tick(); await tick(); await tick();
     // O rodapé do login é o único .ct-rodape da tela (o da lista virou botão do cabeçalho).
     const rodapeLogin = t.el.querySelector<HTMLElement>('.ct-rodape.login')!;
@@ -1093,7 +1112,7 @@ describe('ContasSettings — o botão Entrar (Task 7)', () => {
       Object.assign(new Error(mensagemDeErro('erro_login_ja_em_curso')!), { status: 409 }));
     const t = montar([DESLOGADA]);
     await tick(); await tick();
-    t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
+    t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click(); await destinosLidos();
     await tick(); await tick(); await tick(); await tick();
     expect(t.el.querySelector('.ct-login')).not.toBeNull();
     expect(t.el.querySelector('.ct-lista')).toBeNull();
@@ -1106,7 +1125,7 @@ describe('ContasSettings — o botão Entrar (Task 7)', () => {
     loginMock.iniciarLogin.mockRejectedValueOnce(new Error('Failed to fetch'));
     const t = montar([DESLOGADA]);
     await tick(); await tick();
-    t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
+    t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click(); await destinosLidos();
     await tick(); await tick(); await tick(); await tick();
     const aviso = t.el.querySelector<HTMLElement>('.ct-aviso.erro')!;
     expect(aviso.textContent).toContain(m.falha_conexao());

@@ -31,7 +31,51 @@ pub(super) struct SignIn {
     has_code: bool,
     poll: Option<JoinHandle<()>>,
     _subscription: Subscription,
+    /// Antes da tentativa: onde abrir a autorização.
+    choosing: Option<Choosing>,
+    /// O navegador escolhido, repetido em "Tentar de novo".
+    target: Option<Value>,
+    /// `browser` do passo do login: estado, motivo e máquina.
+    browser: Option<Value>,
+    view: Option<LoginView>,
+    view_focus: FocusHandle,
 }
+
+enum Choosing {
+    Loading,
+    Ready { targets: Vec<Value>, last: Option<Value> },
+}
+
+/// A janela do login transmitida da máquina do navegador.
+struct LoginView {
+    frame: Option<Arc<RenderImage>>,
+    size: (f64, f64),
+    title: String,
+    can_input: bool,
+    notice: Option<&'static str>,
+    bounds: Rc<Cell<Bounds<Pixels>>>,
+    last_move: Option<Instant>,
+    input: tokio::sync::mpsc::UnboundedSender<Value>,
+    frames: JoinHandle<()>,
+    sender: JoinHandle<()>,
+}
+
+impl Drop for LoginView {
+    fn drop(&mut self) {
+        self.frames.abort();
+        self.sender.abort();
+    }
+}
+
+/// O quadro decodificado fora da tela, ou o que o servidor disse no lugar dele.
+pub(in crate::app) enum ViewReply {
+    Frame { image: Arc<RenderImage>, size: (f64, f64), title: String, can_input: bool },
+    Notice(&'static str),
+    Lost,
+}
+
+const VIEW_EVERY: Duration = Duration::from_millis(350);
+const VIEW_MOVE_EVERY: Duration = Duration::from_millis(80);
 
 impl Drop for SignIn {
     // Tarefa do tokio não morre com o handle: sem isto a leitura do passo seguiria no servidor anterior.
@@ -50,6 +94,8 @@ pub(super) struct Change { pub(super) id: String, pub(super) kind: ChangeKind }
 pub(in crate::app) enum ActionReply {
     Started(u64, Result<Value, Failure>, oneshot::Sender<bool>),
     Step(u64, Result<Value, Failure>),
+    Targets(u64, Result<Value, Failure>),
+    View(u64, ViewReply),
     Code(u64, Result<Value, Failure>, oneshot::Sender<bool>),
     Stopped(u64, bool, Result<Value, Failure>),
     /// O `Option<bool>` é a escolha de guardar as conversas que a exclusão levou, para repeti-la ao liberar.
@@ -246,9 +292,23 @@ impl Hangar {
             _ => {}
         });
         self.accounts.outcome = None;
-        self.accounts.sign_in = Some(SignIn { label, name, attempt: 0, open: false, starting: false, sending: false, stopping: false,
+        self.accounts.login_attempt += 1;
+        let attempt = self.accounts.login_attempt;
+        self.accounts.sign_in = Some(SignIn { label: label.clone(), name, attempt, open: false, starting: false, sending: false, stopping: false,
             failed: false, url: None, copied: false, step_failed: false, error: None, done: None, code, has_code: false, poll: None,
-            _subscription: subscription });
+            _subscription: subscription, choosing: Some(Choosing::Loading), target: None, browser: None, view: None, view_focus: cx.focus_handle() });
+        let Some(api) = self.api.clone() else { return };
+        let done = self.accounts_send_later();
+        self.runtime.spawn(async move {
+            let result = api.server_read(&["conta-estado", &label, "login", "targets"], &[], 8).await;
+            done(AccountsReply::Action(ActionReply::Targets(attempt, result))).await;
+        });
+        cx.notify();
+    }
+
+    fn choose_target(&mut self, target: Option<Value>, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(s) = self.accounts.sign_in.as_mut() else { return };
+        (s.choosing, s.target) = (None, target);
         self.begin_login(window, cx);
     }
 
@@ -259,14 +319,18 @@ impl Hangar {
         let attempt = self.accounts.login_attempt;
         let Some(s) = self.accounts.sign_in.as_mut() else { return };
         if let Some(poll) = s.poll.take() { poll.abort(); }
-        (s.attempt, s.starting, s.failed, s.url, s.copied, s.step_failed, s.error, s.done, s.has_code) =
-            (attempt, true, false, None, false, false, None, None, false);
+        (s.attempt, s.starting, s.failed, s.url, s.copied, s.step_failed, s.error, s.done, s.has_code, s.browser, s.view) =
+            (attempt, true, false, None, false, false, None, None, false, None, None);
         s.code.update(cx, |input, cx| input.set_value("", window, cx));
-        let label = s.label.clone();
+        let (label, target) = (s.label.clone(), s.target.clone());
         let (done, turn) = (self.accounts_send_later(), login_turn(&api, &label));
         self.runtime.spawn(async move {
             let _turn = turn.lock().await;
-            let result = api.server_post(&["conta-estado", &label, "login"], 30).await;
+            let path = ["conta-estado", label.as_str(), "login"];
+            let result = match target {
+                Some(target) => api.server_send(reqwest::Method::POST, &path, Some(json!({"target": target})), 30).await,
+                None => api.server_post(&path, 30).await,
+            };
             let opened = result.as_ref().map_or_else(|e| e.uncertain, |_| true);
             let (owner, owned) = oneshot::channel();
             done(AccountsReply::Action(ActionReply::Started(attempt, result, owner))).await;
@@ -338,9 +402,86 @@ impl Hangar {
         cx.notify();
     }
 
+    /// Só enquanto a tela está aberta: cada quadro passa por duas máquinas.
+    fn open_login_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(api) = self.api.clone() else { return };
+        let (frames_done, input_done) = (self.accounts_send_later(), self.accounts_send_later());
+        let runtime = self.runtime.clone();
+        let Some(s) = self.accounts.sign_in.as_mut() else { return };
+        let (attempt, label) = (s.attempt, s.label.clone());
+        let (input, mut queue) = tokio::sync::mpsc::unbounded_channel::<Value>();
+        let (frame_api, frame_label) = (api.clone(), label.clone());
+        let frames = runtime.spawn(async move {
+            loop {
+                let reply = match frame_api.server_read(&["conta-estado", &frame_label, "login", "view"], &[], 10).await {
+                    Ok(frame) => view_reply(&frame),
+                    Err(_) => ViewReply::Lost,
+                };
+                frames_done(AccountsReply::Action(ActionReply::View(attempt, reply))).await;
+                tokio::time::sleep(VIEW_EVERY).await;
+            }
+        });
+        // Fila única: clique e tecla têm que chegar na ordem em que foram feitos.
+        let sender = runtime.spawn(async move {
+            while let Some(event) = queue.recv().await {
+                let sent = api.server_send(reqwest::Method::POST, &["conta-estado", &label, "login", "view", "input"], Some(event), 10).await;
+                if let Err(error) = sent && error.status == Some(409) {
+                    input_done(AccountsReply::Action(ActionReply::View(attempt, ViewReply::Notice("accounts_login_view_no_input")))).await;
+                }
+            }
+        });
+        s.view = Some(LoginView { frame: None, size: (1., 1.), title: String::new(), can_input: true, notice: None, bounds: Rc::default(),
+            last_move: None, input, frames, sender });
+        s.view_focus.focus(window, cx);
+        cx.notify();
+    }
+
+    fn close_login_view(&mut self, cx: &mut Context<Self>) {
+        if let Some(s) = self.accounts.sign_in.as_mut()
+            && let Some(mut view) = s.view.take()
+            && let Some(frame) = view.frame.take()
+        {
+            cx.drop_image(frame, None);
+        }
+        cx.notify();
+    }
+
+    fn view_input(&self, event: Value) {
+        if let Some(view) = self.accounts.sign_in.as_ref().and_then(|s| s.view.as_ref()) {
+            let _ = view.input.send(event);
+        }
+    }
+
+    /// Coordenada da imagem desenhada, na medida que o servidor deu para a janela.
+    fn view_point(&self, point: Point<Pixels>, clamp: bool) -> Option<(f64, f64)> {
+        let view = self.accounts.sign_in.as_ref()?.view.as_ref()?;
+        let (x, y) = crate::app::remote_browser::fraction(view.bounds.get(), (view.size.0 as f32, view.size.1 as f32), point, clamp)?;
+        Some((f64::from(x) * view.size.0, f64::from(y) * view.size.1))
+    }
+
+    fn view_mouse(&self, action: &str, point: Point<Pixels>) {
+        if let Some((x, y)) = self.view_point(point, action == "up") {
+            self.view_input(json!({"t": "mouse", "action": action, "x": x, "y": y}));
+        }
+    }
+
+    fn activate_login_view(&mut self, cx: &mut Context<Self>) {
+        let Some(api) = self.api.clone() else { return };
+        let Some(s) = self.accounts.sign_in.as_mut() else { return };
+        let label = s.label.clone();
+        if let Some(view) = s.view.as_mut() { view.notice = None; }
+        self.runtime.spawn(async move {
+            if let Err(error) = api.server_post(&["conta-estado", &label, "login", "view", "activate"], 15).await {
+                eprintln!("[contas] reativar a sessão falhou: {:?}", error.status);
+            }
+        });
+        cx.notify();
+    }
+
     fn finish_login(&mut self, email: Option<String>, plan: Option<String>, cx: &mut Context<Self>) {
         let Some(s) = self.accounts.sign_in.as_mut() else { return };
         if let Some(poll) = s.poll.take() { poll.abort(); }
+        s.view = None;
         (s.open, s.sending, s.failed, s.error, s.step_failed, s.done) = (false, false, false, None, false, Some((email, plan)));
         // A cota nova só vem com a leitura forçada; a falha dela aparece na tela de conectada.
         self.accounts.notice = None;
@@ -449,6 +590,31 @@ impl Hangar {
     pub(super) fn receive_action(&mut self, reply: ActionReply, window: &mut Window, cx: &mut Context<Self>) {
         let page_open = self.settings == Some(Page::Accounts);
         match reply {
+            ActionReply::Targets(attempt, result) => {
+                let Some(s) = self.accounts.sign_in.as_mut().filter(|s| s.attempt == attempt && s.choosing.is_some()) else { return };
+                let targets = result.as_ref().ok().and_then(|reply| reply["targets"].as_array().cloned()).unwrap_or_default();
+                // Nada para escolher, ou a lista não veio: segue o caminho de sempre, com o link.
+                if targets.is_empty() {
+                    self.choose_target(None, window, cx);
+                    return;
+                }
+                let last = result.ok().map(|reply| reply["last"].clone()).filter(|last| !last.is_null());
+                s.choosing = Some(Choosing::Ready { targets, last });
+            }
+            ActionReply::View(attempt, reply) => {
+                let Some(view) = self.accounts.sign_in.as_mut().filter(|s| s.attempt == attempt).and_then(|s| s.view.as_mut()) else {
+                    if let ViewReply::Frame { image, .. } = reply { cx.drop_image(image, None); }
+                    return;
+                };
+                match reply {
+                    ViewReply::Frame { image, size, title, can_input } => {
+                        if let Some(old) = view.frame.replace(image) { cx.drop_image(old, None); }
+                        (view.size, view.title, view.can_input, view.notice) = (size, title, can_input, None);
+                    }
+                    ViewReply::Notice(notice) => view.notice = Some(notice),
+                    ViewReply::Lost => view.notice = Some("accounts_login_view_lost"),
+                }
+            }
             ActionReply::Started(attempt, result, owner) => {
                 let s = self.accounts.sign_in.as_mut().filter(|s| s.attempt == attempt && page_open);
                 let _ = owner.send(s.is_some());
@@ -470,6 +636,7 @@ impl Hangar {
                     }
                     Ok(step) => {
                         s.step_failed = false;
+                        s.browser = step.get("browser").filter(|browser| !browser.is_null()).cloned();
                         if let Some(url) = step.get("url").and_then(Value::as_str).filter(|u| u.starts_with("https://") || u.starts_with("http://")) {
                             s.url = Some(url.to_owned());
                         }
@@ -582,6 +749,69 @@ impl Hangar {
         }
     }
 
+    fn render_login_view(&self, view: &LoginView, machine: &str, cx: &mut Context<Self>) -> Div {
+        let Some(s) = self.accounts.sign_in.as_ref() else { return div() };
+        let note = |text: String, color: Hsla| div().size_full().flex().items_center().justify_center().p_4()
+            .text_size(px(12.)).text_color(color).text_center().whitespace_normal().child(text);
+        let bounds = view.bounds.clone();
+        let page = div().id("accounts-login-view").relative().w_full().h(px(460.)).overflow_hidden().rounded(px(8.)).bg(theme::background())
+            .border_1().border_color(theme::border())
+            .track_focus(&s.view_focus).role(Role::Application).aria_label(tr("accounts_login_view_open"))
+            .child(canvas(|_, _, _| {}, move |b, _, _, _| bounds.set(b)).absolute().inset_0())
+            .map(|el| match &view.frame {
+                Some(image) => el.child(img(image.clone()).absolute().inset_0().size_full().object_fit(ObjectFit::Contain)),
+                None => el.child(note(tr(view.notice.unwrap_or("accounts_login_view_waiting")), theme::muted())),
+            })
+            .on_mouse_down(MouseButton::Left, cx.listener(|this, e: &MouseDownEvent, window, cx| {
+                if let Some(s) = this.accounts.sign_in.as_ref() { s.view_focus.focus(window, cx); }
+                this.view_mouse("down", e.position);
+            }))
+            .on_mouse_up(MouseButton::Left, cx.listener(|this, e: &MouseUpEvent, _, _| this.view_mouse("up", e.position)))
+            .on_mouse_up_out(MouseButton::Left, cx.listener(|this, e: &MouseUpEvent, _, _| this.view_mouse("up", e.position)))
+            .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _, _| {
+                let Some(view) = this.accounts.sign_in.as_mut().and_then(|s| s.view.as_mut()) else { return };
+                if view.last_move.is_some_and(|at| at.elapsed() < VIEW_MOVE_EVERY) { return; }
+                view.last_move = Some(Instant::now());
+                this.view_mouse("move", e.position);
+            }))
+            .on_scroll_wheel(cx.listener(|this, e: &ScrollWheelEvent, _, _| {
+                let Some((x, y)) = this.view_point(e.position, false) else { return };
+                let delta = e.delta.pixel_delta(px(17.78));
+                if f32::from(delta.y) != 0. { this.view_input(json!({"t": "wheel", "x": x, "y": y, "down": f32::from(delta.y) < 0.})); }
+            }))
+            .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
+                let keystroke = &e.keystroke;
+                cx.stop_propagation();
+                if keystroke.modifiers.control && !keystroke.modifiers.alt && keystroke.key == "v" {
+                    if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) { this.view_input(json!({"t": "text", "text": text})); }
+                    return;
+                }
+                // Sem atalhos: só digitação e as teclas de navegar.
+                if keystroke.modifiers.control || keystroke.modifiers.alt || keystroke.modifiers.platform { return; }
+                if let Some(key) = view_key(&keystroke.key) {
+                    this.view_input(json!({"t": "key", "key": key}));
+                } else if let Some(text) = keystroke.key_char.clone().filter(|text| !text.is_empty()) {
+                    this.view_input(json!({"t": "text", "text": text}));
+                }
+            }));
+        let session_down = !view.can_input || view.notice == Some("accounts_login_view_no_input");
+        div().flex().flex_col().gap(px(8.))
+            .child(div().flex().items_center().gap(px(8.))
+                .child(Button::new("accounts-login-view-back").outline().xsmall().icon(IconName::ArrowLeft).label(tr("accounts_login_view_back"))
+                    .on_click(cx.listener(|this, _, _, _| this.view_input(json!({"t": "back"})))))
+                .child(div().flex_1().min_w_0().truncate().text_size(px(12.)).text_color(theme::muted()).child(view.title.clone()))
+                .child(Button::new("accounts-login-view-close").ghost().xsmall().label(tr("accounts_login_view_close"))
+                    .on_click(cx.listener(|this, _, _, cx| this.close_login_view(cx)))))
+            .when(session_down, |el| el.child(div().flex().items_center().gap(px(8.))
+                .child(div().flex_1().min_w_0().flex().flex_col().gap(px(2.)).text_size(px(12.)).whitespace_normal()
+                    .child(div().text_color(theme::warning()).child(tr("accounts_login_view_no_input").replace("{machine}", machine)))
+                    .child(div().text_color(theme::muted()).child(tr("accounts_login_view_activate_help"))))
+                .child(Button::new("accounts-login-view-activate").outline().xsmall().label(tr("accounts_login_view_activate"))
+                    .on_click(cx.listener(|this, _, _, cx| this.activate_login_view(cx))))))
+            .when(!session_down && view.frame.is_some(), |el| el.children(view.notice.map(|notice| div().text_size(px(12.)).text_color(theme::warning()).child(tr(notice)))))
+            .child(page)
+    }
+
     /// A página no lugar da lista enquanto há uma tentativa de login: os passos do web, um por vez.
     pub(super) fn render_sign_in(&self, cx: &mut Context<Self>) -> Option<Div> {
         let s = self.accounts.sign_in.as_ref()?;
@@ -596,6 +826,29 @@ impl Hangar {
         let line = |text: String, color: Hsla| div().text_size(px(13.)).whitespace_normal().child(div().text_color(color).child(text));
         let footer = || div().mt(px(4.)).flex().justify_end().gap(px(8.));
         let mut panel = settings_box().mt(px(24.)).p(px(20.)).gap(px(16.)).child(head);
+        if let Some(choosing) = &s.choosing {
+            panel = panel.child(div().flex().flex_col().gap(px(4.))
+                .child(div().font_weight(FontWeight::MEDIUM).text_size(px(13.)).child(tr("accounts_login_where_title")))
+                .child(div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(tr("accounts_login_where_help"))));
+            match choosing {
+                Choosing::Loading => panel = panel.child(line(tr("accounts_login_where_loading"), theme::muted())),
+                Choosing::Ready { targets, last } => {
+                    let same = |a: &Value, b: &Value| a["machine"] == b["machine"] && a["kind"] == b["kind"] && a["profile"] == b["profile"];
+                    let mut list = div().flex().flex_col().gap(px(6.));
+                    for (index, target) in targets.iter().enumerate() {
+                        let is_last = last.as_ref().is_some_and(|last| same(last, target));
+                        let chosen = target.clone();
+                        list = list.child(Button::new(("accounts-login-target", index)).w_full().small().label(target_label(target, is_last))
+                            .map(|button| if is_last { button.primary() } else { button.outline() })
+                            .on_click(cx.listener(move |this, _, window, cx| this.choose_target(Some(chosen.clone()), window, cx))));
+                    }
+                    panel = panel.child(list.child(Button::new("accounts-login-link-only").ghost().w_full().small().label(tr("accounts_login_where_link"))
+                        .on_click(cx.listener(|this, _, window, cx| this.choose_target(None, window, cx)))));
+                }
+            }
+            return Some(panel.child(footer().child(Button::new("accounts-login-where-back").outline().small().label(tr("settings_back"))
+                .on_click(cx.listener(|this, _, window, cx| this.close_sign_in(window, cx))))));
+        }
         if let Some((email, plan)) = &s.done {
             let fact = |label: &'static str, value: &Option<String>| value.clone().map(|value| div().flex().gap(px(12.)).text_size(px(13.))
                 .child(div().w(px(72.)).text_color(theme::muted()).child(tr(label))).child(div().child(value)));
@@ -612,6 +865,27 @@ impl Hangar {
             .when(s.step_failed, |el| el.child(line(tr("accounts_login_step_failed"), theme::danger())));
         let waiting = s.open && !s.failed;
         let locked = s.sending || s.stopping;
+        if waiting && let Some(browser) = &s.browser {
+            let machine = browser["machine"].as_str().unwrap_or_default();
+            let viewable = s.target.as_ref().is_some_and(|target| target["kind"] == "chrome_profile");
+            match browser["state"].as_str() {
+                Some("error") => panel = panel.child(line(
+                    tr("accounts_login_browser_error").replace("{machine}", machine).replace("{reason}", &tr(browser_reason(browser["reason"].as_str()))),
+                    theme::danger(),
+                )),
+                Some("open") => {
+                    panel = panel.child(line(tr("accounts_login_browser_open").replace("{machine}", machine), theme::text()));
+                    if let Some(view) = &s.view {
+                        panel = panel.child(self.render_login_view(view, machine, cx));
+                    } else if viewable {
+                        panel = panel.child(div().flex().child(Button::new("accounts-login-view-open").outline().small().icon(IconName::Monitor)
+                            .label(tr("accounts_login_view_open"))
+                            .on_click(cx.listener(|this, _, window, cx| this.open_login_view(window, cx)))));
+                    }
+                }
+                _ => panel = panel.child(line(tr("accounts_login_browser_opening").replace("{machine}", machine), theme::muted())),
+            }
+        }
         if s.starting || (waiting && s.url.is_none()) {
             panel = panel.child(line(tr("accounts_login_preparing"), theme::muted()));
         } else if let (true, Some(url)) = (waiting, s.url.clone()) {
@@ -658,9 +932,81 @@ impl Hangar {
     }
 }
 
+fn target_label(target: &Value, is_last: bool) -> String {
+    let machine = target["machine"].as_str().unwrap_or_default();
+    let name = match target["kind"].as_str() {
+        Some("chrome_profile") => {
+            let label = target["label"].as_str().unwrap_or_default();
+            target["email"].as_str().map_or_else(|| label.to_owned(), |email| format!("{label} ({email})"))
+        }
+        _ => tr("accounts_login_where_default"),
+    };
+    if is_last { tr("accounts_login_where_last").replace("{machine}", machine).replace("{name}", &name) } else { format!("{machine}: {name}") }
+}
+
+fn browser_reason(reason: Option<&str>) -> &'static str {
+    match reason {
+        Some("erro_login_machine_unreachable") => "accounts_login_reason_unreachable",
+        Some("erro_login_port_busy") => "accounts_login_reason_port",
+        Some("erro_login_target_missing") => "accounts_login_reason_target",
+        _ => "accounts_login_reason_other",
+    }
+}
+
+fn view_key(key: &str) -> Option<&'static str> {
+    Some(match key {
+        "enter" => "Enter",
+        "tab" => "Tab",
+        "backspace" => "Backspace",
+        "delete" => "Delete",
+        "escape" => "Escape",
+        "left" => "ArrowLeft",
+        "right" => "ArrowRight",
+        "up" => "ArrowUp",
+        "down" => "ArrowDown",
+        "home" => "Home",
+        "end" => "End",
+        _ => return None,
+    })
+}
+
+fn view_reply(frame: &Value) -> ViewReply {
+    if frame["available"] != true { return ViewReply::Notice("accounts_login_view_unavailable"); }
+    if frame["closed"] == true { return ViewReply::Notice("accounts_login_view_closed"); }
+    if frame["pending"] == true { return ViewReply::Notice("accounts_login_view_waiting"); }
+    let image = frame["d"].as_str()
+        .and_then(|data| base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data).ok())
+        .and_then(|bytes| crate::media::decode(&bytes, 4096, 4096, None));
+    let Some(image) = image else { return ViewReply::Notice("accounts_login_view_capture") };
+    ViewReply::Frame {
+        image,
+        size: (frame["w"].as_f64().unwrap_or(1.), frame["h"].as_f64().unwrap_or(1.)),
+        title: frame["title"].as_str().unwrap_or_default().to_owned(),
+        can_input: frame["input"].as_bool().unwrap_or(true),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::account_slug;
+    use super::{view_key, view_reply, ViewReply};
+    use serde_json::json;
+
+    #[test]
+    fn view_reply_says_why_there_is_no_frame() {
+        let notice = |frame| match view_reply(&frame) { ViewReply::Notice(notice) => notice, _ => "outro" };
+        assert_eq!(notice(json!({"available": false})), "accounts_login_view_unavailable");
+        assert_eq!(notice(json!({"available": true, "closed": true})), "accounts_login_view_closed");
+        assert_eq!(notice(json!({"available": true, "pending": true})), "accounts_login_view_waiting");
+        assert_eq!(notice(json!({"available": true, "error": "x"})), "accounts_login_view_capture");
+    }
+
+    #[test]
+    fn only_navigation_keys_go_by_name() {
+        assert_eq!(view_key("enter"), Some("Enter"));
+        assert_eq!(view_key("a"), None);
+        assert_eq!(view_key("f4"), None);
+    }
 
     #[test]
     fn slug_is_what_the_server_accepts() {

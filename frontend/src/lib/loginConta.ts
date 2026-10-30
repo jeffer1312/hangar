@@ -15,7 +15,41 @@ export interface PassoLogin {
   url?: string | null;
   email?: string | null;
   plano?: string | null;
+  browser?: EstadoNavegador | null;
 }
+
+export interface EstadoNavegador {
+  state: 'opening' | 'open' | 'error';
+  reason?: string | null;
+  machine: string;
+}
+
+export interface DestinoLogin {
+  machine: string;
+  kind: 'chrome_profile' | 'default_browser';
+  profile?: string;
+  label: string;
+  email?: string;
+}
+
+export interface QuadroTela {
+  available: boolean;
+  pending?: boolean;
+  closed?: boolean;
+  error?: string;
+  d?: string;
+  w?: number;
+  h?: number;
+  title?: string;
+  input?: boolean;
+}
+
+export type EntradaTela =
+  | { t: 'mouse'; action: 'move' | 'down' | 'up'; x: number; y: number }
+  | { t: 'wheel'; x: number; y: number; down: boolean }
+  | { t: 'key'; key: string }
+  | { t: 'text'; text: string }
+  | { t: 'back' };
 
 export interface ResultadoLogin {
   ok: boolean;
@@ -86,8 +120,30 @@ function em<T>(alvo: Server | null, path: string, init?: RequestInit, timeoutMs 
   return alvo ? reqEm<T>(alvo, path, init, timeoutMs) : req<T>(path, init);
 }
 
-export function iniciarLogin(alvo: Server | null, conta: string): Promise<{ ok: boolean }> {
-  return em(alvo, `/api/conta-estado/${encodeURIComponent(conta)}/login`, { method: 'POST' });
+export function iniciarLogin(alvo: Server | null, conta: string, destino?: DestinoLogin): Promise<{ ok: boolean }> {
+  return em(alvo, `/api/conta-estado/${encodeURIComponent(conta)}/login`, {
+    method: 'POST',
+    ...(destino ? { body: JSON.stringify({ target: destino }) } : {}),
+  });
+}
+
+export function destinosLogin(alvo: Server | null, conta: string): Promise<{ targets: DestinoLogin[]; last: DestinoLogin | null }> {
+  return em(alvo, `/api/conta-estado/${encodeURIComponent(conta)}/login/targets`);
+}
+
+export function quadroTela(alvo: Server | null, conta: string): Promise<QuadroTela> {
+  return em(alvo, `/api/conta-estado/${encodeURIComponent(conta)}/login/view`);
+}
+
+export function entradaTela(alvo: Server | null, conta: string, entrada: EntradaTela): Promise<{ ok: boolean }> {
+  return em(alvo, `/api/conta-estado/${encodeURIComponent(conta)}/login/view/input`, {
+    method: 'POST',
+    body: JSON.stringify(entrada),
+  });
+}
+
+export function reativarSessaoTela(alvo: Server | null, conta: string): Promise<{ ok: boolean }> {
+  return em(alvo, `/api/conta-estado/${encodeURIComponent(conta)}/login/view/activate`, { method: 'POST' });
 }
 
 export function passoLogin(alvo: Server | null, conta: string): Promise<PassoLogin> {
