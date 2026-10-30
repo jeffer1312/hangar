@@ -37,6 +37,7 @@ import { pickKey } from '../pair/groupPairs';
 import { useIdentities } from '../pair/identities';
 import { ConversationList } from './ConversationList';
 import { KeyringNotice } from './KeyringNotice';
+import { VaultRequests } from '../vault/VaultRequests';
 import { useNoticeClock } from './useNoticeClock';
 import { RenameSheet } from './RenameSheet';
 import { WorktreeSheet } from '../worktrees/WorktreeSheet';
@@ -521,6 +522,7 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
         {conversas ? null : buscarDentro}
         {machineStatus}
         {keyringNotices}
+        <VaultRequests byServer={byServer} />
         <View style={styles.corpo}>{corpo}</View>
         {home ? null : rodape}
       </View>
