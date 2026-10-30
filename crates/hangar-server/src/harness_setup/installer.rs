@@ -63,7 +63,7 @@ impl Installer {
             return Ok(self.status());
         }
         state.diary = crate::diag::diary_dir_in(&service.accounts.env);
-        state.operation = uuid::Uuid::new_v4().to_string();
+        state.operation = crate::session_open::open::uuid4(&crate::mods::state::random_hex(16));
         state.generation += 1;
         let generation = state.generation;
         state.value = empty();
