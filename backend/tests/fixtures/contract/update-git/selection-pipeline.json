@@ -1,0 +1,1203 @@
+{
+  "source_commit": "8552d4f3d",
+  "command": "python generate-selection-pipeline.py --reference <checkout> --output selection-pipeline.json",
+  "scope": "Testes e fixtures originais executados, bundles antes de executar, fontes externas originais injetadas pelos próprios testes.",
+  "cases": [
+    {
+      "branch": "main",
+      "head_before": "99827a26e32f81421699943932b38b9ee5db1614",
+      "bundles": {
+        "repo": "IyB2MiBnaXQgYnVuZGxlCjk5ODI3YTI2ZTMyZjgxNDIxNjk5OTQzOTMyYjM4YjllZTVkYjE2MTQgcmVmcy9oZWFkcy9tYWluCjk5ODI3YTI2ZTMyZjgxNDIxNjk5OTQzOTMyYjM4YjllZTVkYjE2MTQgcmVmcy9yZW1vdGVzL29yaWdpbi9IRUFECjk5ODI3YTI2ZTMyZjgxNDIxNjk5OTQzOTMyYjM4YjllZTVkYjE2MTQgcmVmcy9yZW1vdGVzL29yaWdpbi9tYWluCjk5ODI3YTI2ZTMyZjgxNDIxNjk5OTQzOTMyYjM4YjllZTVkYjE2MTQgSEVBRAoKUEFDSwAAAAIAAAADmwd4nH3KzQ2CIQwA0DtTdAGTlpafJsa4CmiJHAiG1P3d4Hvn58cMSKrWISlXGaNHTC02S72wvjtRNBydm4iG9vPPPuBw96c/gIoyZ9KS4YaMGF57reluFyV8z1w2zw5/Ti4hyKECeJwzNDAwMzFRSNQrqShh6MqzrH4yV83o05Onx1ReV0i9CNreDgDHKA5eM3icK83lAgACRgDtK85DIjso4Nf8hFjrv3sNljrpQEA=",
+        "origin": "IyB2MiBnaXQgYnVuZGxlCjI5MjgxMjRlYTQ3NjQzYTNlOGE4MzU0Y2I4ODYzNjYzYzgwZDNmZmMgcmVmcy9oZWFkcy9tYWluCjI5MjgxMjRlYTQ3NjQzYTNlOGE4MzU0Y2I4ODYzNjYzYzgwZDNmZmMgSEVBRAoKUEFDSwAAAAIAAAAQnQt4nH3KUQ7CIAwA0H9OwQV0sMIKiTHexBRoozGbhHUm3t4b+L6fDmabiB2IVMYY2SdpxKHOAUUCzyQ5zBWggDedBm9qM1ZKAlgjpVKxAUihuCQvElNumINjFyEZOvTxHlbtRW96tR4zwOIzLvbkwDlT3+v6VOU/xRSqL97aRL1P49j1vvP48Dj3r/kBgaM3V5gKeJx9ykEOAiEMAMA7r+ADmpZCSxOz8Sss0OhhXUNq4vP9gXMeX3NGzLtArWlkw2aVEAlMJ0uBoZCgGKduWcK7rfnySIUMoBdLiKxZIetoZCa1auosWMswsRbaxx/nih5vfvctoigRowrHCxBA6OdxPN3nnxL2q389/AAXCCzsnQt4nH3KSwrCMBAA0H1OkQtok0k6yYCIN5F8JijSNqRTwduLFxDe8slg1tAyu1pMM1AxBN9yaRRqLvBjEeNcEWdQPQ1eRRNFCAmQHbRoPVgkIu/IQXYxE/Ncs0XrVTrksQ0t+iI3uWobyDm0FFCfjDNGlW1ZniL8p6icyovXOqXep3Hsct95vHmc+0d9AdCFNgKbB3icfcrNDYIhDADQO1N0AZOWlp8mxrgKaIkcCIbU/d3ge+fnxwxIqtYhKVcZo0dMLTZLvbC+O1E0HJ2biIb2888+4HD3pz+AijJn0pLhhowYXnut6W4XJXzPXDbPDn9OLiHIpAZ4nDM0MDAzMVFI1CupKGHoyrOsfjJXzejTk6fHVF5XSL0I2t5uCFGQBFawWNIkYoL+loc7v/0sys6t2+b35dIREwMDAwOFpMTk7NS8FAb3jMz9zN9rbGOlFj95YTud4d2ivhYADusq+TN4nCvN5QIAAkYA7bYBeJwrTs1VyE2tSC1SyMtXSM7PKylKLMnnAgBepwgYrgF4nDMxMDAwUEgsKGConP+79nt5cNiNT//7TnFtUJONmlkEALtXDYCqAnicMzQwMDMxUSgqLS6JL04tKkst0iuoZHjI8E68/cLBC1xZb689/pfz+YfYnnUAWlgT6LYCeJyLULBVMOQKCg0OiQ92DQpzDYoPCPIP8Xf291GwVTA244pUsFUw4gIAw70JaOkBgSR4nEtJmRAgMmvzHoaEf/saj+6dU2Rtz+faUvm9AACbmQwkrgF4nDMxMDAwUEgsKGBwUjsRUXJjyh1nrxVWE7/fZf073+wvAKSCDUKqAnicMzQwMDMxUSgqLS6JL04tKkst0iuoZEj2ihE9F+K/dkb6vOmmuUmV8xcskwIANXAQF7YCeJyLULBVMOQKCg0OiQ92DQpzDYoPCPIP8Xf291GwVTA25YpUsFUw4gIAw7UJZ6MEeJwBQwC8/zEwMDY0NCBhLnR4dACKbjl75J0mMvLk5cYk63ga6FK3hzQwMDAwIGJhY2tlbmQAmrO8AGD+voHFvZxyOz8ORYR593CKRxyhoQJ4nDM0MDAzMVFI1CupKGHoyrOsfjJXzejTk6fHVF5XSL0I2t4OAMcoDl75m2Uo7ZkRlIft87+MABZCmIxZ6w=="
+      },
+      "target": "",
+      "enabled": true,
+      "state": {
+        "fase": "pronto",
+        "ok": true,
+        "avisos": [],
+        "waiting_for_server_build": false,
+        "reiniciar_manual": true,
+        "erro": null
+      },
+      "head_after": "353f00c5f2116949049da3ff78892c67185df7fa",
+      "branch_after": "main",
+      "upstream": "origin/main",
+      "behind": true,
+      "requests": [
+        {
+          "url": "https://github.com/jeffer1312/hangar/releases/download/server-latest",
+          "manifest": {
+            "commit": "353f00c5f2116949049da3ff78892c67185df7fa",
+            "files": {
+              "linux-x86_64/hangar-server": {
+                "name": "hangar-server-linux-x86_64",
+                "sha256": "810c8efe1dfbb5535ebbd3029b471a846c12632a974e5418fe6bb3c3ce80216e"
+              },
+              "linux-x86_64/hangar-cano": {
+                "name": "hangar-cano-linux-x86_64",
+                "sha256": "c0193e19c1b20d9e09be0ac6133c0e7b2de0f9d7e430a8b24be2b5144ca5f205"
+              },
+              "linux-x86_64/hangar-auth": {
+                "name": "hangar-auth-linux-x86_64",
+                "sha256": "aa3b2505b9b739760a8a7861c978c3f9a0337909ed1f5542c91657d468ef5654"
+              }
+            }
+          }
+        }
+      ],
+      "prepare_reused_manifest": true,
+      "name": "test_topo_sem_binario_para_no_commit_do_binario_publicado",
+      "parameters": {}
+    },
+    {
+      "branch": "main",
+      "head_before": "99827a26e32f81421699943932b38b9ee5db1614",
+      "bundles": {
+        "repo": "IyB2MiBnaXQgYnVuZGxlCjk5ODI3YTI2ZTMyZjgxNDIxNjk5OTQzOTMyYjM4YjllZTVkYjE2MTQgcmVmcy9oZWFkcy9tYWluCjk5ODI3YTI2ZTMyZjgxNDIxNjk5OTQzOTMyYjM4YjllZTVkYjE2MTQgcmVmcy9yZW1vdGVzL29yaWdpbi9IRUFECjk5ODI3YTI2ZTMyZjgxNDIxNjk5OTQzOTMyYjM4YjllZTVkYjE2MTQgcmVmcy9yZW1vdGVzL29yaWdpbi9tYWluCjk5ODI3YTI2ZTMyZjgxNDIxNjk5OTQzOTMyYjM4YjllZTVkYjE2MTQgSEVBRAoKUEFDSwAAAAIAAAADmwd4nH3KzQ2CIQwA0DtTdAGTlpafJsa4CmiJHAiG1P3d4Hvn58cMSKrWISlXGaNHTC02S72wvjtRNBydm4iG9vPPPuBw96c/gIoyZ9KS4YaMGF57reluFyV8z1w2zw5/Ti4hyKECeJwzNDAwMzFRSNQrqShh6MqzrH4yV83o05Onx1ReV0i9CNreDgDHKA5eM3icK83lAgACRgDtK85DIjso4Nf8hFjrv3sNljrpQEA=",
+        "origin": "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"
+      },
+      "target": "",
+      "enabled": true,
+      "state": {
+        "fase": "pronto",
+        "ok": true,
+        "avisos": [],
+        "waiting_for_server_build": false,
+        "reiniciar_manual": true,
+        "erro": null
+      },
+      "head_after": "97ca8f37c5a8bc7d33fba5681ff589d7940e0538",
+      "branch_after": "main",
+      "upstream": "origin/main",
+      "behind": true,
+      "requests": [
+        {
+          "url": "https://github.com/jeffer1312/hangar/releases/download/server-latest",
+          "manifest": {
+            "commit": "353f00c5f2116949049da3ff78892c67185df7fa",
+            "files": {
+              "linux-x86_64/hangar-server": {
+                "name": "hangar-server-linux-x86_64",
+                "sha256": "810c8efe1dfbb5535ebbd3029b471a846c12632a974e5418fe6bb3c3ce80216e"
+              },
+              "linux-x86_64/hangar-cano": {
+                "name": "hangar-cano-linux-x86_64",
+                "sha256": "c0193e19c1b20d9e09be0ac6133c0e7b2de0f9d7e430a8b24be2b5144ca5f205"
+              },
+              "linux-x86_64/hangar-auth": {
+                "name": "hangar-auth-linux-x86_64",
+                "sha256": "aa3b2505b9b739760a8a7861c978c3f9a0337909ed1f5542c91657d468ef5654"
+              }
+            }
+          }
+        }
+      ],
+      "prepare_reused_manifest": true,
+      "name": "test_commit_que_muda_o_rust_espera_o_binario_dele",
+      "parameters": {}
+    },
+    {
+      "branch": "main",
+      "head_before": "0319f658cd7194531fca4a60aee735b6643ef73e",
+      "bundles": {
+        "repo": "IyB2MiBnaXQgYnVuZGxlCjAzMTlmNjU4Y2Q3MTk0NTMxZmNhNGE2MGFlZTczNWI2NjQzZWY3M2UgcmVmcy9oZWFkcy9tYWluCjAzMTlmNjU4Y2Q3MTk0NTMxZmNhNGE2MGFlZTczNWI2NjQzZWY3M2UgcmVmcy9yZW1vdGVzL29yaWdpbi9IRUFECjAzMTlmNjU4Y2Q3MTk0NTMxZmNhNGE2MGFlZTczNWI2NjQzZWY3M2UgcmVmcy9yZW1vdGVzL29yaWdpbi9tYWluCjAzMTlmNjU4Y2Q3MTk0NTMxZmNhNGE2MGFlZTczNWI2NjQzZWY3M2UgSEVBRAoKUEFDSwAAAAIAAAADmwd4nH3KQQoDIQwAwLuvyAcKiYmrgVL6Fe1G1oNYJP1/f7BzHt9mQFK0dElHkd5bxFRjtdQy69mIomFvXEU01J9fa4PD09/+AsrKfJDmDA9kxPBZcw53uynhu8e0sVf4A051IcqhAnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3g4AxygOXjN4nCvN5QIAAkYA7WenNRg617HsPEozg1QtA0qwly7o",
+        "origin": "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"
+      },
+      "target": "",
+      "enabled": true,
+      "state": {
+        "fase": "pronto",
+        "ok": true,
+        "avisos": [],
+        "waiting_for_server_build": false,
+        "reiniciar_manual": true,
+        "erro": null
+      },
+      "head_after": "bfb7e07a155ad5bf5c01f6469048141042fa07a3",
+      "branch_after": "main",
+      "upstream": "origin/main",
+      "behind": false,
+      "requests": [
+        {
+          "url": "https://github.com/jeffer1312/hangar/releases/download/server-latest",
+          "manifest": {
+            "commit": "202bc0d2934b6eac98a29416bcd9bc2cdd683e2c",
+            "files": {
+              "linux-x86_64/hangar-server": {
+                "name": "hangar-server-linux-x86_64",
+                "sha256": "810c8efe1dfbb5535ebbd3029b471a846c12632a974e5418fe6bb3c3ce80216e"
+              },
+              "linux-x86_64/hangar-cano": {
+                "name": "hangar-cano-linux-x86_64",
+                "sha256": "c0193e19c1b20d9e09be0ac6133c0e7b2de0f9d7e430a8b24be2b5144ca5f205"
+              },
+              "linux-x86_64/hangar-auth": {
+                "name": "hangar-auth-linux-x86_64",
+                "sha256": "aa3b2505b9b739760a8a7861c978c3f9a0337909ed1f5542c91657d468ef5654"
+              }
+            }
+          }
+        }
+      ],
+      "prepare_reused_manifest": true,
+      "name": "test_commit_so_de_python_depois_do_binario_chega",
+      "parameters": {}
+    },
+    {
+      "branch": "main",
+      "head_before": "0319f658cd7194531fca4a60aee735b6643ef73e",
+      "bundles": {
+        "repo": "IyB2MiBnaXQgYnVuZGxlCjAzMTlmNjU4Y2Q3MTk0NTMxZmNhNGE2MGFlZTczNWI2NjQzZWY3M2UgcmVmcy9oZWFkcy9tYWluCjAzMTlmNjU4Y2Q3MTk0NTMxZmNhNGE2MGFlZTczNWI2NjQzZWY3M2UgcmVmcy9yZW1vdGVzL29yaWdpbi9IRUFECjAzMTlmNjU4Y2Q3MTk0NTMxZmNhNGE2MGFlZTczNWI2NjQzZWY3M2UgcmVmcy9yZW1vdGVzL29yaWdpbi9tYWluCjAzMTlmNjU4Y2Q3MTk0NTMxZmNhNGE2MGFlZTczNWI2NjQzZWY3M2UgSEVBRAoKUEFDSwAAAAIAAAADmwd4nH3KQQoDIQwAwLuvyAcKiYmrgVL6Fe1G1oNYJP1/f7BzHt9mQFK0dElHkd5bxFRjtdQy69mIomFvXEU01J9fa4PD09/+AsrKfJDmDA9kxPBZcw53uynhu8e0sVf4A051IcqhAnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3g4AxygOXjN4nCvN5QIAAkYA7WenNRg617HsPEozg1QtA0qwly7o",
+        "origin": "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"
+      },
+      "target": "",
+      "enabled": true,
+      "state": {
+        "fase": "pronto",
+        "ok": true,
+        "avisos": [],
+        "waiting_for_server_build": false,
+        "reiniciar_manual": true,
+        "erro": null
+      },
+      "head_after": "4b8e141d4268f9a1b4ad542cc3e247181d98a1ac",
+      "branch_after": "main",
+      "upstream": "origin/main",
+      "behind": false,
+      "requests": [
+        {
+          "url": "https://github.com/jeffer1312/hangar/releases/download/server-latest",
+          "manifest": {
+            "commit": "7122f9c5daa5f9ae869234e03ad73238759d8eb4",
+            "files": {
+              "linux-x86_64/hangar-server": {
+                "name": "hangar-server-linux-x86_64",
+                "sha256": "810c8efe1dfbb5535ebbd3029b471a846c12632a974e5418fe6bb3c3ce80216e"
+              },
+              "linux-x86_64/hangar-cano": {
+                "name": "hangar-cano-linux-x86_64",
+                "sha256": "c0193e19c1b20d9e09be0ac6133c0e7b2de0f9d7e430a8b24be2b5144ca5f205"
+              },
+              "linux-x86_64/hangar-auth": {
+                "name": "hangar-auth-linux-x86_64",
+                "sha256": "aa3b2505b9b739760a8a7861c978c3f9a0337909ed1f5542c91657d468ef5654"
+              }
+            }
+          }
+        }
+      ],
+      "prepare_reused_manifest": true,
+      "name": "test_main_recebe_branch_que_mesclou_o_build_publicado",
+      "parameters": {
+        "build_change": "none"
+      }
+    },
+    {
+      "branch": "main",
+      "head_before": "0319f658cd7194531fca4a60aee735b6643ef73e",
+      "bundles": {
+        "repo": "IyB2MiBnaXQgYnVuZGxlCjAzMTlmNjU4Y2Q3MTk0NTMxZmNhNGE2MGFlZTczNWI2NjQzZWY3M2UgcmVmcy9oZWFkcy9tYWluCjAzMTlmNjU4Y2Q3MTk0NTMxZmNhNGE2MGFlZTczNWI2NjQzZWY3M2UgcmVmcy9yZW1vdGVzL29yaWdpbi9IRUFECjAzMTlmNjU4Y2Q3MTk0NTMxZmNhNGE2MGFlZTczNWI2NjQzZWY3M2UgcmVmcy9yZW1vdGVzL29yaWdpbi9tYWluCjAzMTlmNjU4Y2Q3MTk0NTMxZmNhNGE2MGFlZTczNWI2NjQzZWY3M2UgSEVBRAoKUEFDSwAAAAIAAAADmwd4nH3KQQoDIQwAwLuvyAcKiYmrgVL6Fe1G1oNYJP1/f7BzHt9mQFK0dElHkd5bxFRjtdQy69mIomFvXEU01J9fa4PD09/+AsrKfJDmDA9kxPBZcw53uynhu8e0sVf4A051IcqhAnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3g4AxygOXjN4nCvN5QIAAkYA7WenNRg617HsPEozg1QtA0qwly7o",
+        "origin": "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"
+      },
+      "target": "",
+      "enabled": true,
+      "state": {
+        "fase": "pronto",
+        "ok": true,
+        "avisos": [],
+        "waiting_for_server_build": false,
+        "reiniciar_manual": true,
+        "erro": null
+      },
+      "head_after": "4b8e141d4268f9a1b4ad542cc3e247181d98a1ac",
+      "branch_after": "main",
+      "upstream": "origin/main",
+      "behind": true,
+      "requests": [
+        {
+          "url": "https://github.com/jeffer1312/hangar/releases/download/server-latest",
+          "manifest": {
+            "commit": "7122f9c5daa5f9ae869234e03ad73238759d8eb4",
+            "files": {
+              "linux-x86_64/hangar-server": {
+                "name": "hangar-server-linux-x86_64",
+                "sha256": "810c8efe1dfbb5535ebbd3029b471a846c12632a974e5418fe6bb3c3ce80216e"
+              },
+              "linux-x86_64/hangar-cano": {
+                "name": "hangar-cano-linux-x86_64",
+                "sha256": "c0193e19c1b20d9e09be0ac6133c0e7b2de0f9d7e430a8b24be2b5144ca5f205"
+              },
+              "linux-x86_64/hangar-auth": {
+                "name": "hangar-auth-linux-x86_64",
+                "sha256": "aa3b2505b9b739760a8a7861c978c3f9a0337909ed1f5542c91657d468ef5654"
+              }
+            }
+          }
+        }
+      ],
+      "prepare_reused_manifest": true,
+      "name": "test_main_recebe_branch_que_mesclou_o_build_publicado",
+      "parameters": {
+        "build_change": "pending"
+      }
+    },
+    {
+      "branch": "main",
+      "head_before": "0319f658cd7194531fca4a60aee735b6643ef73e",
+      "bundles": {
+        "repo": "IyB2MiBnaXQgYnVuZGxlCjAzMTlmNjU4Y2Q3MTk0NTMxZmNhNGE2MGFlZTczNWI2NjQzZWY3M2UgcmVmcy9oZWFkcy9tYWluCjAzMTlmNjU4Y2Q3MTk0NTMxZmNhNGE2MGFlZTczNWI2NjQzZWY3M2UgcmVmcy9yZW1vdGVzL29yaWdpbi9IRUFECjAzMTlmNjU4Y2Q3MTk0NTMxZmNhNGE2MGFlZTczNWI2NjQzZWY3M2UgcmVmcy9yZW1vdGVzL29yaWdpbi9tYWluCjAzMTlmNjU4Y2Q3MTk0NTMxZmNhNGE2MGFlZTczNWI2NjQzZWY3M2UgSEVBRAoKUEFDSwAAAAIAAAADmwd4nH3KQQoDIQwAwLuvyAcKiYmrgVL6Fe1G1oNYJP1/f7BzHt9mQFK0dElHkd5bxFRjtdQy69mIomFvXEU01J9fa4PD09/+AsrKfJDmDA9kxPBZcw53uynhu8e0sVf4A051IcqhAnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3g4AxygOXjN4nCvN5QIAAkYA7WenNRg617HsPEozg1QtA0qwly7o",
+        "origin": "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"
+      },
+      "target": "",
+      "enabled": true,
+      "state": {
+        "fase": "pronto",
+        "ok": true,
+        "avisos": [],
+        "waiting_for_server_build": false,
+        "reiniciar_manual": true,
+        "erro": null
+      },
+      "head_after": "4b83432ed24622d91493f79177cb843bf76eccde",
+      "branch_after": "main",
+      "upstream": "origin/main",
+      "behind": false,
+      "requests": [
+        {
+          "url": "https://github.com/jeffer1312/hangar/releases/download/server-latest",
+          "manifest": {
+            "commit": "7122f9c5daa5f9ae869234e03ad73238759d8eb4",
+            "files": {
+              "linux-x86_64/hangar-server": {
+                "name": "hangar-server-linux-x86_64",
+                "sha256": "810c8efe1dfbb5535ebbd3029b471a846c12632a974e5418fe6bb3c3ce80216e"
+              },
+              "linux-x86_64/hangar-cano": {
+                "name": "hangar-cano-linux-x86_64",
+                "sha256": "c0193e19c1b20d9e09be0ac6133c0e7b2de0f9d7e430a8b24be2b5144ca5f205"
+              },
+              "linux-x86_64/hangar-auth": {
+                "name": "hangar-auth-linux-x86_64",
+                "sha256": "aa3b2505b9b739760a8a7861c978c3f9a0337909ed1f5542c91657d468ef5654"
+              }
+            }
+          }
+        }
+      ],
+      "prepare_reused_manifest": true,
+      "name": "test_main_recebe_branch_que_mesclou_o_build_publicado",
+      "parameters": {
+        "build_change": "reverted"
+      }
+    },
+    {
+      "branch": "main",
+      "head_before": "0319f658cd7194531fca4a60aee735b6643ef73e",
+      "bundles": {
+        "repo": "IyB2MiBnaXQgYnVuZGxlCjAzMTlmNjU4Y2Q3MTk0NTMxZmNhNGE2MGFlZTczNWI2NjQzZWY3M2UgcmVmcy9oZWFkcy9tYWluCjAzMTlmNjU4Y2Q3MTk0NTMxZmNhNGE2MGFlZTczNWI2NjQzZWY3M2UgcmVmcy9yZW1vdGVzL29yaWdpbi9IRUFECjAzMTlmNjU4Y2Q3MTk0NTMxZmNhNGE2MGFlZTczNWI2NjQzZWY3M2UgcmVmcy9yZW1vdGVzL29yaWdpbi9tYWluCjAzMTlmNjU4Y2Q3MTk0NTMxZmNhNGE2MGFlZTczNWI2NjQzZWY3M2UgSEVBRAoKUEFDSwAAAAIAAAADmwd4nH3KQQoDIQwAwLuvyAcKiYmrgVL6Fe1G1oNYJP1/f7BzHt9mQFK0dElHkd5bxFRjtdQy69mIomFvXEU01J9fa4PD09/+AsrKfJDmDA9kxPBZcw53uynhu8e0sVf4A051IcqhAnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3g4AxygOXjN4nCvN5QIAAkYA7WenNRg617HsPEozg1QtA0qwly7o",
+        "origin": "IyB2MiBnaXQgYnVuZGxlCjIwMmJjMGQyOTM0YjZlYWM5OGEyOTQxNmJjZDliYzJjZGQ2ODNlMmMgcmVmcy9oZWFkcy9tYWluCjIwMmJjMGQyOTM0YjZlYWM5OGEyOTQxNmJjZDliYzJjZGQ2ODNlMmMgSEVBRAoKUEFDSwAAAAIAAAAQnQt4nH3KWwrCMBAF0P+sIhvQJp08QcSdyDS5QZHWkE4Fd+8OPN9HBqATw1BrBdF72NQqw5XZxdYcZm7ZzYVoIas6D2yiswXlmZl8zN4bXxGC86mEBSU452osaAlV8SGP99CiL3KTq7YxEwWbY9QnQ8ao8l7Xpwj+FLVweWGrE/c+jWOX+47xwTj3r/oBaO03VZgKeJx9ykEOAiEMAMA7r+ADmpZCC4nZ+JVCIXpY12xq4vP9gXMeP+eMmLtArcnyQl2VEAlWmywFrEGCsjiNlSW89ZwvjwaVxupimgYVZhpVMFsS42mk1AlAu3DQjz+OM3q8+d23iNKIGJtIvAABhHHs+9N9/imhX/3r4Qdevi2LnQt4nH3KSwrCMBAA0H1OkQtok0wy04CIN5F8JijSNqRTwduLFxDe8slg1q5lhlpMM64ikW+5tEg1F/djEedQEYNTPQ1eRRuwsWGYSyUbfQDbSvIJTWImCBnRAzcCVumQxza06Ivc5KotRQC0kUifDBijyrYsTxH+U1RO5cVrnVLv0zh2ue883jzO/aO+NGo24psHeJx9ykEKAyEMAMC7r8gHComJq4FS+hXtRtaDWCT9f3+wcx7fZkBStHRJR5HeW8RUY7XUMuvZiKJhb1xFNNSfX2uDw9Pf/gLKynyQ5gwPZMTwWXMOd7sp4bvHtLFX+ANOdSHKpAZ4nDM0MDAzMVFI1CupKGHoyrOsfjJXzejTk6fHVF5XSL0I2t5uCFGQBFawWNIkYoL+loc7v/0sys6t2+b35dIREwMDAwOFpMTk7NS8FAb3jMz9zN9rbGOlFj95YTud4d2ivhYADusq+TN4nCvN5QIAAkYA7bYBeJwrTs1VyE2tSC1SyMtXSM7PKylKLMnnAgBepwgYrgF4nDMxMDAwUEgsKGConP+79nt5cNiNT//7TnFtUJONmlkEALtXDYCqAnicMzQwMDMxUSgqLS6JL04tKkst0iuoZHjI8E68/cLBC1xZb689/pfz+YfYnnUAWlgT6LYCeJyLULBVMOQKCg0OiQ92DQpzDYoPCPIP8Xf291GwVTA244pUsFUw4gIAw70JaOkBgSR4nEtJmRAgMmvzHoaEf/saj+6dU2Rtz+faUvm9AACbmQwkrgF4nDMxMDAwUEgsKGBwUjsRUXJjyh1nrxVWE7/fZf073+wvAKSCDUKqAnicMzQwMDMxUSgqLS6JL04tKkst0iuoZEj2ihE9F+K/dkb6vOmmuUmV8xcskwIANXAQF7YCeJyLULBVMOQKCg0OiQ92DQpzDYoPCPIP8Xf291GwVTA25YpUsFUw4gIAw7UJZ6MEeJwBQwC8/zEwMDY0NCBhLnR4dACKbjl75J0mMvLk5cYk63ga6FK3hzQwMDAwIGJhY2tlbmQAmrO8AGD+voHFvZxyOz8ORYR593CKRxyhoQJ4nDM0MDAzMVFI1CupKGHoyrOsfjJXzejTk6fHVF5XSL0I2t4OAMcoDl63mBvcaHlnTr7pAE3Vp+o7yqbwOw=="
+      },
+      "target": "",
+      "enabled": true,
+      "state": {
+        "fase": "pronto",
+        "ok": true,
+        "avisos": [],
+        "waiting_for_server_build": false,
+        "reiniciar_manual": true,
+        "erro": null
+      },
+      "head_after": "d083cfb7da2c35663c8714d27d6ed3a3b300ab76",
+      "branch_after": "main",
+      "upstream": "origin/main",
+      "behind": true,
+      "requests": [
+        {
+          "url": "https://github.com/jeffer1312/hangar/releases/download/server-latest",
+          "manifest": {
+            "commit": "202bc0d2934b6eac98a29416bcd9bc2cdd683e2c",
+            "files": {
+              "linux-x86_64/hangar-server": {
+                "name": "hangar-server-linux-x86_64",
+                "sha256": "810c8efe1dfbb5535ebbd3029b471a846c12632a974e5418fe6bb3c3ce80216e"
+              },
+              "linux-x86_64/hangar-cano": {
+                "name": "hangar-cano-linux-x86_64",
+                "sha256": "c0193e19c1b20d9e09be0ac6133c0e7b2de0f9d7e430a8b24be2b5144ca5f205"
+              },
+              "linux-x86_64/hangar-auth": {
+                "name": "hangar-auth-linux-x86_64",
+                "sha256": "aa3b2505b9b739760a8a7861c978c3f9a0337909ed1f5542c91657d468ef5654"
+              }
+            },
+            "platforms": {
+              "linux-x86_64": {
+                "commit": "d083cfb7da2c35663c8714d27d6ed3a3b300ab76",
+                "protocol": 35
+              },
+              "windows-x86_64": {
+                "commit": "202bc0d2934b6eac98a29416bcd9bc2cdd683e2c",
+                "protocol": 36
+              }
+            }
+          }
+        }
+      ],
+      "prepare_reused_manifest": true,
+      "name": "test_build_deste_sistema_atrasado_no_manifesto_por_sistema",
+      "parameters": {}
+    },
+    {
+      "branch": "main",
+      "head_before": "0319f658cd7194531fca4a60aee735b6643ef73e",
+      "bundles": {
+        "repo": "IyB2MiBnaXQgYnVuZGxlCjAzMTlmNjU4Y2Q3MTk0NTMxZmNhNGE2MGFlZTczNWI2NjQzZWY3M2UgcmVmcy9oZWFkcy9tYWluCjAzMTlmNjU4Y2Q3MTk0NTMxZmNhNGE2MGFlZTczNWI2NjQzZWY3M2UgcmVmcy9yZW1vdGVzL29yaWdpbi9IRUFECjAzMTlmNjU4Y2Q3MTk0NTMxZmNhNGE2MGFlZTczNWI2NjQzZWY3M2UgcmVmcy9yZW1vdGVzL29yaWdpbi9tYWluCjAzMTlmNjU4Y2Q3MTk0NTMxZmNhNGE2MGFlZTczNWI2NjQzZWY3M2UgSEVBRAoKUEFDSwAAAAIAAAADmwd4nH3KQQoDIQwAwLuvyAcKiYmrgVL6Fe1G1oNYJP1/f7BzHt9mQFK0dElHkd5bxFRjtdQy69mIomFvXEU01J9fa4PD09/+AsrKfJDmDA9kxPBZcw53uynhu8e0sVf4A051IcqhAnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3g4AxygOXjN4nCvN5QIAAkYA7WenNRg617HsPEozg1QtA0qwly7o",
+        "origin": "IyB2MiBnaXQgYnVuZGxlCjIwMmJjMGQyOTM0YjZlYWM5OGEyOTQxNmJjZDliYzJjZGQ2ODNlMmMgcmVmcy9oZWFkcy9tYWluCjIwMmJjMGQyOTM0YjZlYWM5OGEyOTQxNmJjZDliYzJjZGQ2ODNlMmMgSEVBRAoKUEFDSwAAAAIAAAAQnQt4nH3KWwrCMBAF0P+sIhvQJp08QcSdyDS5QZHWkE4Fd+8OPN9HBqATw1BrBdF72NQqw5XZxdYcZm7ZzYVoIas6D2yiswXlmZl8zN4bXxGC86mEBSU452osaAlV8SGP99CiL3KTq7YxEwWbY9QnQ8ao8l7Xpwj+FLVweWGrE/c+jWOX+47xwTj3r/oBaO03VZgKeJx9ykEOAiEMAMA7r+ADmpZCC4nZ+JVCIXpY12xq4vP9gXMeP+eMmLtArcnyQl2VEAlWmywFrEGCsjiNlSW89ZwvjwaVxupimgYVZhpVMFsS42mk1AlAu3DQjz+OM3q8+d23iNKIGJtIvAABhHHs+9N9/imhX/3r4Qdevi2LnQt4nH3KSwrCMBAA0H1OkQtok0wy04CIN5F8JijSNqRTwduLFxDe8slg1q5lhlpMM64ikW+5tEg1F/djEedQEYNTPQ1eRRuwsWGYSyUbfQDbSvIJTWImCBnRAzcCVumQxza06Ivc5KotRQC0kUifDBijyrYsTxH+U1RO5cVrnVLv0zh2ue883jzO/aO+NGo24psHeJx9ykEKAyEMAMC7r8gHComJq4FS+hXtRtaDWCT9f3+wcx7fZkBStHRJR5HeW8RUY7XUMuvZiKJhb1xFNNSfX2uDw9Pf/gLKynyQ5gwPZMTwWXMOd7sp4bvHtLFX+ANOdSHKpAZ4nDM0MDAzMVFI1CupKGHoyrOsfjJXzejTk6fHVF5XSL0I2t5uCFGQBFawWNIkYoL+loc7v/0sys6t2+b35dIREwMDAwOFpMTk7NS8FAb3jMz9zN9rbGOlFj95YTud4d2ivhYADusq+TN4nCvN5QIAAkYA7bYBeJwrTs1VyE2tSC1SyMtXSM7PKylKLMnnAgBepwgYrgF4nDMxMDAwUEgsKGConP+79nt5cNiNT//7TnFtUJONmlkEALtXDYCqAnicMzQwMDMxUSgqLS6JL04tKkst0iuoZHjI8E68/cLBC1xZb689/pfz+YfYnnUAWlgT6LYCeJyLULBVMOQKCg0OiQ92DQpzDYoPCPIP8Xf291GwVTA244pUsFUw4gIAw70JaOkBgSR4nEtJmRAgMmvzHoaEf/saj+6dU2Rtz+faUvm9AACbmQwkrgF4nDMxMDAwUEgsKGBwUjsRUXJjyh1nrxVWE7/fZf073+wvAKSCDUKqAnicMzQwMDMxUSgqLS6JL04tKkst0iuoZEj2ihE9F+K/dkb6vOmmuUmV8xcskwIANXAQF7YCeJyLULBVMOQKCg0OiQ92DQpzDYoPCPIP8Xf291GwVTA25YpUsFUw4gIAw7UJZ6MEeJwBQwC8/zEwMDY0NCBhLnR4dACKbjl75J0mMvLk5cYk63ga6FK3hzQwMDAwIGJhY2tlbmQAmrO8AGD+voHFvZxyOz8ORYR593CKRxyhoQJ4nDM0MDAzMVFI1CupKGHoyrOsfjJXzejTk6fHVF5XSL0I2t4OAMcoDl63mBvcaHlnTr7pAE3Vp+o7yqbwOw=="
+      },
+      "target": "",
+      "enabled": true,
+      "state": {
+        "fase": "pronto",
+        "ok": true,
+        "avisos": [
+          "não consegui conferir o binário do Rust publicado para este sistema; o código foi ao topo"
+        ],
+        "waiting_for_server_build": false,
+        "reiniciar_manual": true,
+        "erro": null
+      },
+      "head_after": "202bc0d2934b6eac98a29416bcd9bc2cdd683e2c",
+      "branch_after": "main",
+      "upstream": "origin/main",
+      "behind": false,
+      "requests": [
+        {
+          "url": "https://github.com/jeffer1312/hangar/releases/download/server-latest",
+          "manifest": {
+            "commit": "d083cfb7da2c35663c8714d27d6ed3a3b300ab76",
+            "files": {
+              "linux-x86_64/hangar-server": {
+                "name": "hangar-server-linux-x86_64",
+                "sha256": "810c8efe1dfbb5535ebbd3029b471a846c12632a974e5418fe6bb3c3ce80216e"
+              },
+              "linux-x86_64/hangar-cano": {
+                "name": "hangar-cano-linux-x86_64",
+                "sha256": "c0193e19c1b20d9e09be0ac6133c0e7b2de0f9d7e430a8b24be2b5144ca5f205"
+              },
+              "linux-x86_64/hangar-auth": {
+                "name": "hangar-auth-linux-x86_64",
+                "sha256": "aa3b2505b9b739760a8a7861c978c3f9a0337909ed1f5542c91657d468ef5654"
+              }
+            },
+            "platforms": {
+              "windows-x86_64": {
+                "protocol": 36
+              }
+            }
+          }
+        }
+      ],
+      "prepare_reused_manifest": true,
+      "name": "test_manifesto_por_sistema_sem_este_sistema_nao_confere",
+      "parameters": {
+        "platforms": {
+          "windows-x86_64": {
+            "protocol": 36
+          }
+        }
+      }
+    },
+    {
+      "branch": "main",
+      "head_before": "0319f658cd7194531fca4a60aee735b6643ef73e",
+      "bundles": {
+        "repo": "IyB2MiBnaXQgYnVuZGxlCjAzMTlmNjU4Y2Q3MTk0NTMxZmNhNGE2MGFlZTczNWI2NjQzZWY3M2UgcmVmcy9oZWFkcy9tYWluCjAzMTlmNjU4Y2Q3MTk0NTMxZmNhNGE2MGFlZTczNWI2NjQzZWY3M2UgcmVmcy9yZW1vdGVzL29yaWdpbi9IRUFECjAzMTlmNjU4Y2Q3MTk0NTMxZmNhNGE2MGFlZTczNWI2NjQzZWY3M2UgcmVmcy9yZW1vdGVzL29yaWdpbi9tYWluCjAzMTlmNjU4Y2Q3MTk0NTMxZmNhNGE2MGFlZTczNWI2NjQzZWY3M2UgSEVBRAoKUEFDSwAAAAIAAAADmwd4nH3KQQoDIQwAwLuvyAcKiYmrgVL6Fe1G1oNYJP1/f7BzHt9mQFK0dElHkd5bxFRjtdQy69mIomFvXEU01J9fa4PD09/+AsrKfJDmDA9kxPBZcw53uynhu8e0sVf4A051IcqhAnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3g4AxygOXjN4nCvN5QIAAkYA7WenNRg617HsPEozg1QtA0qwly7o",
+        "origin": "IyB2MiBnaXQgYnVuZGxlCjIwMmJjMGQyOTM0YjZlYWM5OGEyOTQxNmJjZDliYzJjZGQ2ODNlMmMgcmVmcy9oZWFkcy9tYWluCjIwMmJjMGQyOTM0YjZlYWM5OGEyOTQxNmJjZDliYzJjZGQ2ODNlMmMgSEVBRAoKUEFDSwAAAAIAAAAQnQt4nH3KWwrCMBAF0P+sIhvQJp08QcSdyDS5QZHWkE4Fd+8OPN9HBqATw1BrBdF72NQqw5XZxdYcZm7ZzYVoIas6D2yiswXlmZl8zN4bXxGC86mEBSU452osaAlV8SGP99CiL3KTq7YxEwWbY9QnQ8ao8l7Xpwj+FLVweWGrE/c+jWOX+47xwTj3r/oBaO03VZgKeJx9ykEOAiEMAMA7r+ADmpZCC4nZ+JVCIXpY12xq4vP9gXMeP+eMmLtArcnyQl2VEAlWmywFrEGCsjiNlSW89ZwvjwaVxupimgYVZhpVMFsS42mk1AlAu3DQjz+OM3q8+d23iNKIGJtIvAABhHHs+9N9/imhX/3r4Qdevi2LnQt4nH3KSwrCMBAA0H1OkQtok0wy04CIN5F8JijSNqRTwduLFxDe8slg1q5lhlpMM64ikW+5tEg1F/djEedQEYNTPQ1eRRuwsWGYSyUbfQDbSvIJTWImCBnRAzcCVumQxza06Ivc5KotRQC0kUifDBijyrYsTxH+U1RO5cVrnVLv0zh2ue883jzO/aO+NGo24psHeJx9ykEKAyEMAMC7r8gHComJq4FS+hXtRtaDWCT9f3+wcx7fZkBStHRJR5HeW8RUY7XUMuvZiKJhb1xFNNSfX2uDw9Pf/gLKynyQ5gwPZMTwWXMOd7sp4bvHtLFX+ANOdSHKpAZ4nDM0MDAzMVFI1CupKGHoyrOsfjJXzejTk6fHVF5XSL0I2t5uCFGQBFawWNIkYoL+loc7v/0sys6t2+b35dIREwMDAwOFpMTk7NS8FAb3jMz9zN9rbGOlFj95YTud4d2ivhYADusq+TN4nCvN5QIAAkYA7bYBeJwrTs1VyE2tSC1SyMtXSM7PKylKLMnnAgBepwgYrgF4nDMxMDAwUEgsKGConP+79nt5cNiNT//7TnFtUJONmlkEALtXDYCqAnicMzQwMDMxUSgqLS6JL04tKkst0iuoZHjI8E68/cLBC1xZb689/pfz+YfYnnUAWlgT6LYCeJyLULBVMOQKCg0OiQ92DQpzDYoPCPIP8Xf291GwVTA244pUsFUw4gIAw70JaOkBgSR4nEtJmRAgMmvzHoaEf/saj+6dU2Rtz+faUvm9AACbmQwkrgF4nDMxMDAwUEgsKGBwUjsRUXJjyh1nrxVWE7/fZf073+wvAKSCDUKqAnicMzQwMDMxUSgqLS6JL04tKkst0iuoZEj2ihE9F+K/dkb6vOmmuUmV8xcskwIANXAQF7YCeJyLULBVMOQKCg0OiQ92DQpzDYoPCPIP8Xf291GwVTA25YpUsFUw4gIAw7UJZ6MEeJwBQwC8/zEwMDY0NCBhLnR4dACKbjl75J0mMvLk5cYk63ga6FK3hzQwMDAwIGJhY2tlbmQAmrO8AGD+voHFvZxyOz8ORYR593CKRxyhoQJ4nDM0MDAzMVFI1CupKGHoyrOsfjJXzejTk6fHVF5XSL0I2t4OAMcoDl63mBvcaHlnTr7pAE3Vp+o7yqbwOw=="
+      },
+      "target": "",
+      "enabled": true,
+      "state": {
+        "fase": "pronto",
+        "ok": true,
+        "avisos": [
+          "não consegui conferir o binário do Rust publicado para este sistema; o código foi ao topo"
+        ],
+        "waiting_for_server_build": false,
+        "reiniciar_manual": true,
+        "erro": null
+      },
+      "head_after": "202bc0d2934b6eac98a29416bcd9bc2cdd683e2c",
+      "branch_after": "main",
+      "upstream": "origin/main",
+      "behind": false,
+      "requests": [
+        {
+          "url": "https://github.com/jeffer1312/hangar/releases/download/server-latest",
+          "manifest": {
+            "commit": "d083cfb7da2c35663c8714d27d6ed3a3b300ab76",
+            "files": {
+              "linux-x86_64/hangar-server": {
+                "name": "hangar-server-linux-x86_64",
+                "sha256": "810c8efe1dfbb5535ebbd3029b471a846c12632a974e5418fe6bb3c3ce80216e"
+              },
+              "linux-x86_64/hangar-cano": {
+                "name": "hangar-cano-linux-x86_64",
+                "sha256": "c0193e19c1b20d9e09be0ac6133c0e7b2de0f9d7e430a8b24be2b5144ca5f205"
+              },
+              "linux-x86_64/hangar-auth": {
+                "name": "hangar-auth-linux-x86_64",
+                "sha256": "aa3b2505b9b739760a8a7861c978c3f9a0337909ed1f5542c91657d468ef5654"
+              }
+            },
+            "platforms": null
+          }
+        }
+      ],
+      "prepare_reused_manifest": true,
+      "name": "test_manifesto_por_sistema_sem_este_sistema_nao_confere",
+      "parameters": {
+        "platforms": null
+      }
+    },
+    {
+      "branch": "main",
+      "head_before": "0319f658cd7194531fca4a60aee735b6643ef73e",
+      "bundles": {
+        "repo": "IyB2MiBnaXQgYnVuZGxlCjAzMTlmNjU4Y2Q3MTk0NTMxZmNhNGE2MGFlZTczNWI2NjQzZWY3M2UgcmVmcy9oZWFkcy9tYWluCjAzMTlmNjU4Y2Q3MTk0NTMxZmNhNGE2MGFlZTczNWI2NjQzZWY3M2UgcmVmcy9yZW1vdGVzL29yaWdpbi9IRUFECjAzMTlmNjU4Y2Q3MTk0NTMxZmNhNGE2MGFlZTczNWI2NjQzZWY3M2UgcmVmcy9yZW1vdGVzL29yaWdpbi9tYWluCjAzMTlmNjU4Y2Q3MTk0NTMxZmNhNGE2MGFlZTczNWI2NjQzZWY3M2UgSEVBRAoKUEFDSwAAAAIAAAADmwd4nH3KQQoDIQwAwLuvyAcKiYmrgVL6Fe1G1oNYJP1/f7BzHt9mQFK0dElHkd5bxFRjtdQy69mIomFvXEU01J9fa4PD09/+AsrKfJDmDA9kxPBZcw53uynhu8e0sVf4A051IcqhAnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3g4AxygOXjN4nCvN5QIAAkYA7WenNRg617HsPEozg1QtA0qwly7o",
+        "origin": "IyB2MiBnaXQgYnVuZGxlCjIwMmJjMGQyOTM0YjZlYWM5OGEyOTQxNmJjZDliYzJjZGQ2ODNlMmMgcmVmcy9oZWFkcy9tYWluCjIwMmJjMGQyOTM0YjZlYWM5OGEyOTQxNmJjZDliYzJjZGQ2ODNlMmMgSEVBRAoKUEFDSwAAAAIAAAAQnQt4nH3KWwrCMBAF0P+sIhvQJp08QcSdyDS5QZHWkE4Fd+8OPN9HBqATw1BrBdF72NQqw5XZxdYcZm7ZzYVoIas6D2yiswXlmZl8zN4bXxGC86mEBSU452osaAlV8SGP99CiL3KTq7YxEwWbY9QnQ8ao8l7Xpwj+FLVweWGrE/c+jWOX+47xwTj3r/oBaO03VZgKeJx9ykEOAiEMAMA7r+ADmpZCC4nZ+JVCIXpY12xq4vP9gXMeP+eMmLtArcnyQl2VEAlWmywFrEGCsjiNlSW89ZwvjwaVxupimgYVZhpVMFsS42mk1AlAu3DQjz+OM3q8+d23iNKIGJtIvAABhHHs+9N9/imhX/3r4Qdevi2LnQt4nH3KSwrCMBAA0H1OkQtok0wy04CIN5F8JijSNqRTwduLFxDe8slg1q5lhlpMM64ikW+5tEg1F/djEedQEYNTPQ1eRRuwsWGYSyUbfQDbSvIJTWImCBnRAzcCVumQxza06Ivc5KotRQC0kUifDBijyrYsTxH+U1RO5cVrnVLv0zh2ue883jzO/aO+NGo24psHeJx9ykEKAyEMAMC7r8gHComJq4FS+hXtRtaDWCT9f3+wcx7fZkBStHRJR5HeW8RUY7XUMuvZiKJhb1xFNNSfX2uDw9Pf/gLKynyQ5gwPZMTwWXMOd7sp4bvHtLFX+ANOdSHKpAZ4nDM0MDAzMVFI1CupKGHoyrOsfjJXzejTk6fHVF5XSL0I2t5uCFGQBFawWNIkYoL+loc7v/0sys6t2+b35dIREwMDAwOFpMTk7NS8FAb3jMz9zN9rbGOlFj95YTud4d2ivhYADusq+TN4nCvN5QIAAkYA7bYBeJwrTs1VyE2tSC1SyMtXSM7PKylKLMnnAgBepwgYrgF4nDMxMDAwUEgsKGConP+79nt5cNiNT//7TnFtUJONmlkEALtXDYCqAnicMzQwMDMxUSgqLS6JL04tKkst0iuoZHjI8E68/cLBC1xZb689/pfz+YfYnnUAWlgT6LYCeJyLULBVMOQKCg0OiQ92DQpzDYoPCPIP8Xf291GwVTA244pUsFUw4gIAw70JaOkBgSR4nEtJmRAgMmvzHoaEf/saj+6dU2Rtz+faUvm9AACbmQwkrgF4nDMxMDAwUEgsKGBwUjsRUXJjyh1nrxVWE7/fZf073+wvAKSCDUKqAnicMzQwMDMxUSgqLS6JL04tKkst0iuoZEj2ihE9F+K/dkb6vOmmuUmV8xcskwIANXAQF7YCeJyLULBVMOQKCg0OiQ92DQpzDYoPCPIP8Xf291GwVTA25YpUsFUw4gIAw7UJZ6MEeJwBQwC8/zEwMDY0NCBhLnR4dACKbjl75J0mMvLk5cYk63ga6FK3hzQwMDAwIGJhY2tlbmQAmrO8AGD+voHFvZxyOz8ORYR593CKRxyhoQJ4nDM0MDAzMVFI1CupKGHoyrOsfjJXzejTk6fHVF5XSL0I2t4OAMcoDl63mBvcaHlnTr7pAE3Vp+o7yqbwOw=="
+      },
+      "target": "",
+      "enabled": true,
+      "state": {
+        "fase": "pronto",
+        "ok": true,
+        "avisos": [
+          "não consegui conferir o binário do Rust publicado para este sistema; o código foi ao topo"
+        ],
+        "waiting_for_server_build": false,
+        "reiniciar_manual": true,
+        "erro": null
+      },
+      "head_after": "202bc0d2934b6eac98a29416bcd9bc2cdd683e2c",
+      "branch_after": "main",
+      "upstream": "origin/main",
+      "behind": false,
+      "requests": [
+        {
+          "url": "https://github.com/jeffer1312/hangar/releases/download/server-latest",
+          "manifest": {
+            "commit": "d083cfb7da2c35663c8714d27d6ed3a3b300ab76",
+            "files": {
+              "linux-x86_64/hangar-server": {
+                "name": "hangar-server-linux-x86_64",
+                "sha256": "810c8efe1dfbb5535ebbd3029b471a846c12632a974e5418fe6bb3c3ce80216e"
+              },
+              "linux-x86_64/hangar-cano": {
+                "name": "hangar-cano-linux-x86_64",
+                "sha256": "c0193e19c1b20d9e09be0ac6133c0e7b2de0f9d7e430a8b24be2b5144ca5f205"
+              },
+              "linux-x86_64/hangar-auth": {
+                "name": "hangar-auth-linux-x86_64",
+                "sha256": "aa3b2505b9b739760a8a7861c978c3f9a0337909ed1f5542c91657d468ef5654"
+              }
+            },
+            "platforms": []
+          }
+        }
+      ],
+      "prepare_reused_manifest": true,
+      "name": "test_manifesto_por_sistema_sem_este_sistema_nao_confere",
+      "parameters": {
+        "platforms": []
+      }
+    },
+    {
+      "branch": "main",
+      "head_before": "0319f658cd7194531fca4a60aee735b6643ef73e",
+      "bundles": {
+        "repo": "IyB2MiBnaXQgYnVuZGxlCjAzMTlmNjU4Y2Q3MTk0NTMxZmNhNGE2MGFlZTczNWI2NjQzZWY3M2UgcmVmcy9oZWFkcy9tYWluCjAzMTlmNjU4Y2Q3MTk0NTMxZmNhNGE2MGFlZTczNWI2NjQzZWY3M2UgcmVmcy9yZW1vdGVzL29yaWdpbi9IRUFECjAzMTlmNjU4Y2Q3MTk0NTMxZmNhNGE2MGFlZTczNWI2NjQzZWY3M2UgcmVmcy9yZW1vdGVzL29yaWdpbi9tYWluCjAzMTlmNjU4Y2Q3MTk0NTMxZmNhNGE2MGFlZTczNWI2NjQzZWY3M2UgSEVBRAoKUEFDSwAAAAIAAAADmwd4nH3KQQoDIQwAwLuvyAcKiYmrgVL6Fe1G1oNYJP1/f7BzHt9mQFK0dElHkd5bxFRjtdQy69mIomFvXEU01J9fa4PD09/+AsrKfJDmDA9kxPBZcw53uynhu8e0sVf4A051IcqhAnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3g4AxygOXjN4nCvN5QIAAkYA7WenNRg617HsPEozg1QtA0qwly7o",
+        "origin": "IyB2MiBnaXQgYnVuZGxlCjIwMmJjMGQyOTM0YjZlYWM5OGEyOTQxNmJjZDliYzJjZGQ2ODNlMmMgcmVmcy9oZWFkcy9tYWluCjIwMmJjMGQyOTM0YjZlYWM5OGEyOTQxNmJjZDliYzJjZGQ2ODNlMmMgSEVBRAoKUEFDSwAAAAIAAAAQnQt4nH3KWwrCMBAF0P+sIhvQJp08QcSdyDS5QZHWkE4Fd+8OPN9HBqATw1BrBdF72NQqw5XZxdYcZm7ZzYVoIas6D2yiswXlmZl8zN4bXxGC86mEBSU452osaAlV8SGP99CiL3KTq7YxEwWbY9QnQ8ao8l7Xpwj+FLVweWGrE/c+jWOX+47xwTj3r/oBaO03VZgKeJx9ykEOAiEMAMA7r+ADmpZCC4nZ+JVCIXpY12xq4vP9gXMeP+eMmLtArcnyQl2VEAlWmywFrEGCsjiNlSW89ZwvjwaVxupimgYVZhpVMFsS42mk1AlAu3DQjz+OM3q8+d23iNKIGJtIvAABhHHs+9N9/imhX/3r4Qdevi2LnQt4nH3KSwrCMBAA0H1OkQtok0wy04CIN5F8JijSNqRTwduLFxDe8slg1q5lhlpMM64ikW+5tEg1F/djEedQEYNTPQ1eRRuwsWGYSyUbfQDbSvIJTWImCBnRAzcCVumQxza06Ivc5KotRQC0kUifDBijyrYsTxH+U1RO5cVrnVLv0zh2ue883jzO/aO+NGo24psHeJx9ykEKAyEMAMC7r8gHComJq4FS+hXtRtaDWCT9f3+wcx7fZkBStHRJR5HeW8RUY7XUMuvZiKJhb1xFNNSfX2uDw9Pf/gLKynyQ5gwPZMTwWXMOd7sp4bvHtLFX+ANOdSHKpAZ4nDM0MDAzMVFI1CupKGHoyrOsfjJXzejTk6fHVF5XSL0I2t5uCFGQBFawWNIkYoL+loc7v/0sys6t2+b35dIREwMDAwOFpMTk7NS8FAb3jMz9zN9rbGOlFj95YTud4d2ivhYADusq+TN4nCvN5QIAAkYA7bYBeJwrTs1VyE2tSC1SyMtXSM7PKylKLMnnAgBepwgYrgF4nDMxMDAwUEgsKGConP+79nt5cNiNT//7TnFtUJONmlkEALtXDYCqAnicMzQwMDMxUSgqLS6JL04tKkst0iuoZHjI8E68/cLBC1xZb689/pfz+YfYnnUAWlgT6LYCeJyLULBVMOQKCg0OiQ92DQpzDYoPCPIP8Xf291GwVTA244pUsFUw4gIAw70JaOkBgSR4nEtJmRAgMmvzHoaEf/saj+6dU2Rtz+faUvm9AACbmQwkrgF4nDMxMDAwUEgsKGBwUjsRUXJjyh1nrxVWE7/fZf073+wvAKSCDUKqAnicMzQwMDMxUSgqLS6JL04tKkst0iuoZEj2ihE9F+K/dkb6vOmmuUmV8xcskwIANXAQF7YCeJyLULBVMOQKCg0OiQ92DQpzDYoPCPIP8Xf291GwVTA25YpUsFUw4gIAw7UJZ6MEeJwBQwC8/zEwMDY0NCBhLnR4dACKbjl75J0mMvLk5cYk63ga6FK3hzQwMDAwIGJhY2tlbmQAmrO8AGD+voHFvZxyOz8ORYR593CKRxyhoQJ4nDM0MDAzMVFI1CupKGHoyrOsfjJXzejTk6fHVF5XSL0I2t4OAMcoDl63mBvcaHlnTr7pAE3Vp+o7yqbwOw=="
+      },
+      "target": "",
+      "enabled": true,
+      "state": {
+        "fase": "pronto",
+        "ok": true,
+        "avisos": [],
+        "waiting_for_server_build": false,
+        "reiniciar_manual": true,
+        "erro": null
+      },
+      "head_after": "202bc0d2934b6eac98a29416bcd9bc2cdd683e2c",
+      "branch_after": "main",
+      "upstream": "origin/main",
+      "behind": false,
+      "requests": [
+        {
+          "url": "https://github.com/jeffer1312/hangar/releases/download/server-latest",
+          "manifest": {
+            "commit": "202bc0d2934b6eac98a29416bcd9bc2cdd683e2c",
+            "files": {
+              "linux-x86_64/hangar-server": {
+                "name": "hangar-server-linux-x86_64",
+                "sha256": "810c8efe1dfbb5535ebbd3029b471a846c12632a974e5418fe6bb3c3ce80216e"
+              },
+              "linux-x86_64/hangar-cano": {
+                "name": "hangar-cano-linux-x86_64",
+                "sha256": "c0193e19c1b20d9e09be0ac6133c0e7b2de0f9d7e430a8b24be2b5144ca5f205"
+              },
+              "linux-x86_64/hangar-auth": {
+                "name": "hangar-auth-linux-x86_64",
+                "sha256": "aa3b2505b9b739760a8a7861c978c3f9a0337909ed1f5542c91657d468ef5654"
+              }
+            }
+          }
+        }
+      ],
+      "prepare_reused_manifest": true,
+      "name": "test_topo_com_binario_avanca_ate_o_topo",
+      "parameters": {}
+    },
+    {
+      "branch": "main",
+      "head_before": "0319f658cd7194531fca4a60aee735b6643ef73e",
+      "bundles": {
+        "repo": "IyB2MiBnaXQgYnVuZGxlCjAzMTlmNjU4Y2Q3MTk0NTMxZmNhNGE2MGFlZTczNWI2NjQzZWY3M2UgcmVmcy9oZWFkcy9tYWluCjAzMTlmNjU4Y2Q3MTk0NTMxZmNhNGE2MGFlZTczNWI2NjQzZWY3M2UgcmVmcy9yZW1vdGVzL29yaWdpbi9IRUFECjAzMTlmNjU4Y2Q3MTk0NTMxZmNhNGE2MGFlZTczNWI2NjQzZWY3M2UgcmVmcy9yZW1vdGVzL29yaWdpbi9tYWluCjAzMTlmNjU4Y2Q3MTk0NTMxZmNhNGE2MGFlZTczNWI2NjQzZWY3M2UgSEVBRAoKUEFDSwAAAAIAAAADmwd4nH3KQQoDIQwAwLuvyAcKiYmrgVL6Fe1G1oNYJP1/f7BzHt9mQFK0dElHkd5bxFRjtdQy69mIomFvXEU01J9fa4PD09/+AsrKfJDmDA9kxPBZcw53uynhu8e0sVf4A051IcqhAnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3g4AxygOXjN4nCvN5QIAAkYA7WenNRg617HsPEozg1QtA0qwly7o",
+        "origin": "IyB2MiBnaXQgYnVuZGxlCjIwMmJjMGQyOTM0YjZlYWM5OGEyOTQxNmJjZDliYzJjZGQ2ODNlMmMgcmVmcy9oZWFkcy9tYWluCjIwMmJjMGQyOTM0YjZlYWM5OGEyOTQxNmJjZDliYzJjZGQ2ODNlMmMgSEVBRAoKUEFDSwAAAAIAAAAQnQt4nH3KWwrCMBAF0P+sIhvQJp08QcSdyDS5QZHWkE4Fd+8OPN9HBqATw1BrBdF72NQqw5XZxdYcZm7ZzYVoIas6D2yiswXlmZl8zN4bXxGC86mEBSU452osaAlV8SGP99CiL3KTq7YxEwWbY9QnQ8ao8l7Xpwj+FLVweWGrE/c+jWOX+47xwTj3r/oBaO03VZgKeJx9ykEOAiEMAMA7r+ADmpZCC4nZ+JVCIXpY12xq4vP9gXMeP+eMmLtArcnyQl2VEAlWmywFrEGCsjiNlSW89ZwvjwaVxupimgYVZhpVMFsS42mk1AlAu3DQjz+OM3q8+d23iNKIGJtIvAABhHHs+9N9/imhX/3r4Qdevi2LnQt4nH3KSwrCMBAA0H1OkQtok0wy04CIN5F8JijSNqRTwduLFxDe8slg1q5lhlpMM64ikW+5tEg1F/djEedQEYNTPQ1eRRuwsWGYSyUbfQDbSvIJTWImCBnRAzcCVumQxza06Ivc5KotRQC0kUifDBijyrYsTxH+U1RO5cVrnVLv0zh2ue883jzO/aO+NGo24psHeJx9ykEKAyEMAMC7r8gHComJq4FS+hXtRtaDWCT9f3+wcx7fZkBStHRJR5HeW8RUY7XUMuvZiKJhb1xFNNSfX2uDw9Pf/gLKynyQ5gwPZMTwWXMOd7sp4bvHtLFX+ANOdSHKpAZ4nDM0MDAzMVFI1CupKGHoyrOsfjJXzejTk6fHVF5XSL0I2t5uCFGQBFawWNIkYoL+loc7v/0sys6t2+b35dIREwMDAwOFpMTk7NS8FAb3jMz9zN9rbGOlFj95YTud4d2ivhYADusq+TN4nCvN5QIAAkYA7bYBeJwrTs1VyE2tSC1SyMtXSM7PKylKLMnnAgBepwgYrgF4nDMxMDAwUEgsKGConP+79nt5cNiNT//7TnFtUJONmlkEALtXDYCqAnicMzQwMDMxUSgqLS6JL04tKkst0iuoZHjI8E68/cLBC1xZb689/pfz+YfYnnUAWlgT6LYCeJyLULBVMOQKCg0OiQ92DQpzDYoPCPIP8Xf291GwVTA244pUsFUw4gIAw70JaOkBgSR4nEtJmRAgMmvzHoaEf/saj+6dU2Rtz+faUvm9AACbmQwkrgF4nDMxMDAwUEgsKGBwUjsRUXJjyh1nrxVWE7/fZf073+wvAKSCDUKqAnicMzQwMDMxUSgqLS6JL04tKkst0iuoZEj2ihE9F+K/dkb6vOmmuUmV8xcskwIANXAQF7YCeJyLULBVMOQKCg0OiQ92DQpzDYoPCPIP8Xf291GwVTA25YpUsFUw4gIAw7UJZ6MEeJwBQwC8/zEwMDY0NCBhLnR4dACKbjl75J0mMvLk5cYk63ga6FK3hzQwMDAwIGJhY2tlbmQAmrO8AGD+voHFvZxyOz8ORYR593CKRxyhoQJ4nDM0MDAzMVFI1CupKGHoyrOsfjJXzejTk6fHVF5XSL0I2t4OAMcoDl63mBvcaHlnTr7pAE3Vp+o7yqbwOw=="
+      },
+      "target": "",
+      "enabled": false,
+      "state": {
+        "fase": "pronto",
+        "ok": true,
+        "avisos": [],
+        "waiting_for_server_build": false,
+        "reiniciar_manual": true,
+        "erro": null
+      },
+      "head_after": "202bc0d2934b6eac98a29416bcd9bc2cdd683e2c",
+      "branch_after": "main",
+      "upstream": "origin/main",
+      "behind": false,
+      "requests": [],
+      "prepare_reused_manifest": false,
+      "name": "test_sem_binario_deste_sistema_vai_ao_topo_como_antes",
+      "parameters": {
+        "caso": "sem_rust"
+      }
+    },
+    {
+      "branch": "main",
+      "head_before": "0618e35b7297a017ce6cefecd82abdc24642ffc0",
+      "bundles": {
+        "repo": "IyB2MiBnaXQgYnVuZGxlCjA2MThlMzViNzI5N2EwMTdjZTZjZWZlY2Q4MmFiZGMyNDY0MmZmYzAgcmVmcy9oZWFkcy9tYWluCjA2MThlMzViNzI5N2EwMTdjZTZjZWZlY2Q4MmFiZGMyNDY0MmZmYzAgcmVmcy9yZW1vdGVzL29yaWdpbi9IRUFECjA2MThlMzViNzI5N2EwMTdjZTZjZWZlY2Q4MmFiZGMyNDY0MmZmYzAgcmVmcy9yZW1vdGVzL29yaWdpbi9tYWluCjA2MThlMzViNzI5N2EwMTdjZTZjZWZlY2Q4MmFiZGMyNDY0MmZmYzAgSEVBRAoKUEFDSwAAAAIAAAADmwd4nH3KQQoDIQwAwLuvyAcKiYmrgVL6Fe1G1oNYJP1/f7BzHt9mQFK0dElHkd5bxFRjtdQy69mIomFvXEU01J9fa4PD09/+AsrKfJDmAg9kxPBZcw53uynhu8e0sVf4A068IcyhAnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3g4AxygOXjN4nCvN5QIAAkYA7TfEIHVqwvP4kXZPWlaJHAWCgWCV",
+        "origin": "IyB2MiBnaXQgYnVuZGxlCjk0ZDQ3YzFmYjZhYTI2ZmY0OGI3MmNmNGMxOGM5MWYwNDg5NmJiNGQgcmVmcy9oZWFkcy9tYWluCjk0ZDQ3YzFmYjZhYTI2ZmY0OGI3MmNmNGMxOGM5MWYwNDg5NmJiNGQgcmVmcy9oZWFkcy90ZXN0ZQo5NGQ0N2MxZmI2YWEyNmZmNDhiNzJjZjRjMThjOTFmMDQ4OTZiYjRkIEhFQUQKClBBQ0sAAAACAAAAEJ0LeJx9ylEKwjAMAND/nqIX0LVLtrQg4k0k7RIU2SxdJnh7b+D7ftZFfGIJoFqFpkli0oUF64ikijKyZhwrQIHoGnfZzC8Kc8JCChmQWSHPlQtSqBQpcQ5pohEEHR/2eHdv/mI3u/pIGWCOmZI/BQjB1fe6Ps3kT3GF60u2ZeDWhn7sdt+lf6Sf29f9AE+NNu6YCnicfcpLCgIxDADQfU/RCyj5tEkLIl6l7SToYlSGCB7fG/jWLw6zjGUqtEZbcRzeGJHBu4lW2DoQVBdaXjS9x2HPyGa8VIQqF3AhHEwy1L3WQqsj8yw6wSiNT9xfR458iVtcM2pnFuza8gkYIK3Xvj8i7E9J8xzfSD8WdCzRnQt4nH3KUQrCMAwA0P+eohfQpemWdiDiTaRNUxTZVrpM8PbiBYT3+bSLWKxZfGGogIVCGGvmOoeSGX8cUZwK0YSmpS6rWiAXxU854BwSuMBCLFW4REy5MI40Yq0MJh362LpVe9GbXq0Ls/fk5hDtCTyA4W1Znqryp5ic+CVrGVJrQz92ve/S39LP7WO+g1g3mJsHeJx9ykEKAyEMAMC7r8gHComJq4FS+hXtRtaDWCT9f3+wcx7fZkBStHRJR5HeW8RUY7XUMuvZiKJhb1xFNNSfX2uDw9Pf/gLKynyQ5gIPZMTwWXMOd7sp4bvHtLFX+ANOvCHMpAZ4nDM0MDAzMVFI1CupKGHoyrOsfjJXzejTk6fHVF5XSL0I2t5uCFGQBFawWNIkYoL+loc7v/0sys6t2+b35dIREwMDAwOFpMTk7NS8FAb3jMz9zN9rbGOlFj95YTud4d2ivhYADusq+TN4nCvN5QIAAkYA7bYBeJwrTs1VyE2tSC1SyMtXSM7PKylKLMnnAgBepwgYrgF4nDMxMDAwUEgsKGConP+79nt5cNiNT//7TnFtUJONmlkEALtXDYCqAnicMzQwMDMxUSgqLS6JL04tKkst0iuoZHjI8E68/cLBC1xZb689/pfz+YfYnnUAWlgT6LYCeJyLULBVMOQKCg0OiQ92DQpzDYoPCPIP8Xf291GwVTA244pUsFUw4gIAw70JaOkBgSR4nEtJmRAgMmvzHoaEf/saj+6dU2Rtz+faUvm9AACbmQwkrgF4nDMxMDAwUEgsKGBwUjsRUXJjyh1nrxVWE7/fZf073+wvAKSCDUKqAnicMzQwMDMxUSgqLS6JL04tKkst0iuoZEj2ihE9F+K/dkb6vOmmuUmV8xcskwIANXAQF7YCeJyLULBVMOQKCg0OiQ92DQpzDYoPCPIP8Xf291GwVTA25YpUsFUw4gIAw7UJZ6MEeJwBQwC8/zEwMDY0NCBhLnR4dACKbjl75J0mMvLk5cYk63ga6FK3hzQwMDAwIGJhY2tlbmQAmrO8AGD+voHFvZxyOz8ORYR593CKRxyhoQJ4nDM0MDAzMVFI1CupKGHoyrOsfjJXzejTk6fHVF5XSL0I2t4OAMcoDl5MjGCYi0hn2CNrXPOvTBiUyIQJGA=="
+      },
+      "target": "teste",
+      "enabled": true,
+      "state": {
+        "fase": "pronto",
+        "ok": true,
+        "avisos": [],
+        "waiting_for_server_build": false,
+        "reiniciar_manual": true,
+        "erro": null
+      },
+      "head_after": "94d47c1fb6aa26ff48b72cf4c18c91f04896bb4d",
+      "branch_after": "teste",
+      "upstream": "origin/teste",
+      "behind": false,
+      "requests": [
+        {
+          "url": "https://github.com/jeffer1312/hangar/releases/download/server-teste",
+          "error": "HTTPError",
+          "status": 404,
+          "message": "HTTP Error 404: x"
+        }
+      ],
+      "prepare_reused_manifest": false,
+      "name": "test_sem_binario_deste_sistema_vai_ao_topo_como_antes",
+      "parameters": {
+        "caso": "branch_sem_release"
+      }
+    },
+    {
+      "branch": "main",
+      "head_before": "0618e35b7297a017ce6cefecd82abdc24642ffc0",
+      "bundles": {
+        "repo": "IyB2MiBnaXQgYnVuZGxlCjA2MThlMzViNzI5N2EwMTdjZTZjZWZlY2Q4MmFiZGMyNDY0MmZmYzAgcmVmcy9oZWFkcy9tYWluCjA2MThlMzViNzI5N2EwMTdjZTZjZWZlY2Q4MmFiZGMyNDY0MmZmYzAgcmVmcy9yZW1vdGVzL29yaWdpbi9IRUFECjA2MThlMzViNzI5N2EwMTdjZTZjZWZlY2Q4MmFiZGMyNDY0MmZmYzAgcmVmcy9yZW1vdGVzL29yaWdpbi9tYWluCjA2MThlMzViNzI5N2EwMTdjZTZjZWZlY2Q4MmFiZGMyNDY0MmZmYzAgSEVBRAoKUEFDSwAAAAIAAAADmwd4nH3KQQoDIQwAwLuvyAcKiYmrgVL6Fe1G1oNYJP1/f7BzHt9mQFK0dElHkd5bxFRjtdQy69mIomFvXEU01J9fa4PD09/+AsrKfJDmAg9kxPBZcw53uynhu8e0sVf4A068IcyhAnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3g4AxygOXjN4nCvN5QIAAkYA7TfEIHVqwvP4kXZPWlaJHAWCgWCV",
+        "origin": "IyB2MiBnaXQgYnVuZGxlCjk0ZDQ3YzFmYjZhYTI2ZmY0OGI3MmNmNGMxOGM5MWYwNDg5NmJiNGQgcmVmcy9oZWFkcy9tYWluCjk0ZDQ3YzFmYjZhYTI2ZmY0OGI3MmNmNGMxOGM5MWYwNDg5NmJiNGQgSEVBRAoKUEFDSwAAAAIAAAAQnQt4nH3KUQrCMAwA0P+eohfQtUu2tCDiTSTtEhTZLF0meHtv4Pt+1kV8YgmgWoWmSWLShQXriKSKMrJmHCtAgegad9nMLwpzwkIKGZBZIc+VC1KoFClxDmmiEQQdH/Z4d2/+Yje7+kgZYI6Zkj8FCMHV97o+zeRPcYXrS7Zl4NaGfux236V/pJ/b1/0AT4027pgKeJx9yksKAjEMANB9T9ELKPm0SQsiXqXtJOhiVIYIHt8b+NYvDrOMZSq0RltxHN4YkcG7iVbYOhBUF1peNL3HYc/IZrxUhCoXcCEcTDLUvdZCqyPzLDrBKI1P3F9HjnyJW1wzamcW7NryCRggrde+PyLsT0nzHN9IPxZ0LNGdC3icfcpRCsIwDADQ/56iF9Cl6ZZ2IOJNpE1TFNlWukzw9uIFhPf5tItYrFl8YaiAhUIYa+Y6h5IZfxxRnArRhKalLqtaIBfFTzngHBK4wEIsVbhETLkwjjRirQwmHfrYulV70ZterQuz9+TmEO0JPIDhbVmeqvKnmJz4JWsZUmtDP3a979Lf0s/tY76DWDeYmwd4nH3KQQoDIQwAwLuvyAcKiYmrgVL6Fe1G1oNYJP1/f7BzHt9mQFK0dElHkd5bxFRjtdQy69mIomFvXEU01J9fa4PD09/+AsrKfJDmAg9kxPBZcw53uynhu8e0sVf4A068IcykBnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3m4IUZAEVrBY0iRigv6Whzu//SzKzq3b5vfl0hETAwMDA4WkxOTs1LwUBveMzP3M32tsY6UWP3lhO53h3aK+FgAO6yr5M3icK83lAgACRgDttgF4nCtOzVXITa1ILVLIy1dIzs8rKUosyecCAF6nCBiuAXicMzEwMDBQSCwoYKic/7v2e3lw2I1P//tOcW1Qk42aWQQAu1cNgKoCeJwzNDAwMzFRKCotLokvTi0qSy3SK6hkeMjwTrz9wsELXFlvrz3+l/P5h9iedQBaWBPotgJ4nItQsFUw5AoKDQ6JD3YNCnMNig8I8g/xd/b3UbBVMDbjilSwVTDiAgDDvQlo6QGBJHicS0mZECAya/MehoR/+xqP7p1TZG3P59pS+b0AAJuZDCSuAXicMzEwMDBQSCwoYHBSOxFRcmPKHWevFVYTv99l/Tvf7C8ApIINQqoCeJwzNDAwMzFRKCotLokvTi0qSy3SK6hkSPaKET0X4r92Rvq86aa5SZXzFyyTAgA1cBAXtgJ4nItQsFUw5AoKDQ6JD3YNCnMNig8I8g/xd/b3UbBVMDblilSwVTDiAgDDtQlnowR4nAFDALz/MTAwNjQ0IGEudHh0AIpuOXvknSYy8uTlxiTreBroUreHNDAwMDAgYmFja2VuZACas7wAYP6+gcW9nHI7Pw5FhHn3cIpHHKGhAnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3g4AxygOXkyMYJiLSGfYI2tc869MGJTIhAkY"
+      },
+      "target": "",
+      "enabled": true,
+      "state": {
+        "fase": "pronto",
+        "ok": true,
+        "avisos": [
+          "não consegui conferir o binário do Rust publicado para este sistema; o código foi ao topo"
+        ],
+        "waiting_for_server_build": false,
+        "reiniciar_manual": true,
+        "erro": null
+      },
+      "head_after": "94d47c1fb6aa26ff48b72cf4c18c91f04896bb4d",
+      "branch_after": "main",
+      "upstream": "origin/main",
+      "behind": false,
+      "requests": [
+        {
+          "url": "https://github.com/jeffer1312/hangar/releases/download/server-latest",
+          "error": "OSError",
+          "status": null,
+          "message": "rede fora"
+        }
+      ],
+      "prepare_reused_manifest": false,
+      "name": "test_sem_como_conferir_vai_ao_topo_e_diz",
+      "parameters": {
+        "caso": "rede"
+      }
+    },
+    {
+      "branch": "main",
+      "head_before": "0618e35b7297a017ce6cefecd82abdc24642ffc0",
+      "bundles": {
+        "repo": "IyB2MiBnaXQgYnVuZGxlCjA2MThlMzViNzI5N2EwMTdjZTZjZWZlY2Q4MmFiZGMyNDY0MmZmYzAgcmVmcy9oZWFkcy9tYWluCjA2MThlMzViNzI5N2EwMTdjZTZjZWZlY2Q4MmFiZGMyNDY0MmZmYzAgcmVmcy9yZW1vdGVzL29yaWdpbi9IRUFECjA2MThlMzViNzI5N2EwMTdjZTZjZWZlY2Q4MmFiZGMyNDY0MmZmYzAgcmVmcy9yZW1vdGVzL29yaWdpbi9tYWluCjA2MThlMzViNzI5N2EwMTdjZTZjZWZlY2Q4MmFiZGMyNDY0MmZmYzAgSEVBRAoKUEFDSwAAAAIAAAADmwd4nH3KQQoDIQwAwLuvyAcKiYmrgVL6Fe1G1oNYJP1/f7BzHt9mQFK0dElHkd5bxFRjtdQy69mIomFvXEU01J9fa4PD09/+AsrKfJDmAg9kxPBZcw53uynhu8e0sVf4A068IcyhAnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3g4AxygOXjN4nCvN5QIAAkYA7TfEIHVqwvP4kXZPWlaJHAWCgWCV",
+        "origin": "IyB2MiBnaXQgYnVuZGxlCjk0ZDQ3YzFmYjZhYTI2ZmY0OGI3MmNmNGMxOGM5MWYwNDg5NmJiNGQgcmVmcy9oZWFkcy9tYWluCjk0ZDQ3YzFmYjZhYTI2ZmY0OGI3MmNmNGMxOGM5MWYwNDg5NmJiNGQgSEVBRAoKUEFDSwAAAAIAAAAQnQt4nH3KUQrCMAwA0P+eohfQtUu2tCDiTSTtEhTZLF0meHtv4Pt+1kV8YgmgWoWmSWLShQXriKSKMrJmHCtAgegad9nMLwpzwkIKGZBZIc+VC1KoFClxDmmiEQQdH/Z4d2/+Yje7+kgZYI6Zkj8FCMHV97o+zeRPcYXrS7Zl4NaGfux236V/pJ/b1/0AT4027pgKeJx9yksKAjEMANB9T9ELKPm0SQsiXqXtJOhiVIYIHt8b+NYvDrOMZSq0RltxHN4YkcG7iVbYOhBUF1peNL3HYc/IZrxUhCoXcCEcTDLUvdZCqyPzLDrBKI1P3F9HjnyJW1wzamcW7NryCRggrde+PyLsT0nzHN9IPxZ0LNGdC3icfcpRCsIwDADQ/56iF9Cl6ZZ2IOJNpE1TFNlWukzw9uIFhPf5tItYrFl8YaiAhUIYa+Y6h5IZfxxRnArRhKalLqtaIBfFTzngHBK4wEIsVbhETLkwjjRirQwmHfrYulV70ZterQuz9+TmEO0JPIDhbVmeqvKnmJz4JWsZUmtDP3a979Lf0s/tY76DWDeYmwd4nH3KQQoDIQwAwLuvyAcKiYmrgVL6Fe1G1oNYJP1/f7BzHt9mQFK0dElHkd5bxFRjtdQy69mIomFvXEU01J9fa4PD09/+AsrKfJDmAg9kxPBZcw53uynhu8e0sVf4A068IcykBnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3m4IUZAEVrBY0iRigv6Whzu//SzKzq3b5vfl0hETAwMDA4WkxOTs1LwUBveMzP3M32tsY6UWP3lhO53h3aK+FgAO6yr5M3icK83lAgACRgDttgF4nCtOzVXITa1ILVLIy1dIzs8rKUosyecCAF6nCBiuAXicMzEwMDBQSCwoYKic/7v2e3lw2I1P//tOcW1Qk42aWQQAu1cNgKoCeJwzNDAwMzFRKCotLokvTi0qSy3SK6hkeMjwTrz9wsELXFlvrz3+l/P5h9iedQBaWBPotgJ4nItQsFUw5AoKDQ6JD3YNCnMNig8I8g/xd/b3UbBVMDbjilSwVTDiAgDDvQlo6QGBJHicS0mZECAya/MehoR/+xqP7p1TZG3P59pS+b0AAJuZDCSuAXicMzEwMDBQSCwoYHBSOxFRcmPKHWevFVYTv99l/Tvf7C8ApIINQqoCeJwzNDAwMzFRKCotLokvTi0qSy3SK6hkSPaKET0X4r92Rvq86aa5SZXzFyyTAgA1cBAXtgJ4nItQsFUw5AoKDQ6JD3YNCnMNig8I8g/xd/b3UbBVMDblilSwVTDiAgDDtQlnowR4nAFDALz/MTAwNjQ0IGEudHh0AIpuOXvknSYy8uTlxiTreBroUreHNDAwMDAgYmFja2VuZACas7wAYP6+gcW9nHI7Pw5FhHn3cIpHHKGhAnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3g4AxygOXkyMYJiLSGfYI2tc869MGJTIhAkY"
+      },
+      "target": "",
+      "enabled": true,
+      "state": {
+        "fase": "pronto",
+        "ok": true,
+        "avisos": [
+          "não consegui conferir o binário do Rust publicado para este sistema; o código foi ao topo"
+        ],
+        "waiting_for_server_build": false,
+        "reiniciar_manual": true,
+        "erro": null
+      },
+      "head_after": "94d47c1fb6aa26ff48b72cf4c18c91f04896bb4d",
+      "branch_after": "main",
+      "upstream": "origin/main",
+      "behind": false,
+      "requests": [
+        {
+          "url": "https://github.com/jeffer1312/hangar/releases/download/server-latest",
+          "error": "HTTPError",
+          "status": 500,
+          "message": "HTTP Error 500: x"
+        }
+      ],
+      "prepare_reused_manifest": false,
+      "name": "test_sem_como_conferir_vai_ao_topo_e_diz",
+      "parameters": {
+        "caso": "http_500"
+      }
+    },
+    {
+      "branch": "main",
+      "head_before": "0618e35b7297a017ce6cefecd82abdc24642ffc0",
+      "bundles": {
+        "repo": "IyB2MiBnaXQgYnVuZGxlCjA2MThlMzViNzI5N2EwMTdjZTZjZWZlY2Q4MmFiZGMyNDY0MmZmYzAgcmVmcy9oZWFkcy9tYWluCjA2MThlMzViNzI5N2EwMTdjZTZjZWZlY2Q4MmFiZGMyNDY0MmZmYzAgcmVmcy9yZW1vdGVzL29yaWdpbi9IRUFECjA2MThlMzViNzI5N2EwMTdjZTZjZWZlY2Q4MmFiZGMyNDY0MmZmYzAgcmVmcy9yZW1vdGVzL29yaWdpbi9tYWluCjA2MThlMzViNzI5N2EwMTdjZTZjZWZlY2Q4MmFiZGMyNDY0MmZmYzAgSEVBRAoKUEFDSwAAAAIAAAADmwd4nH3KQQoDIQwAwLuvyAcKiYmrgVL6Fe1G1oNYJP1/f7BzHt9mQFK0dElHkd5bxFRjtdQy69mIomFvXEU01J9fa4PD09/+AsrKfJDmAg9kxPBZcw53uynhu8e0sVf4A068IcyhAnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3g4AxygOXjN4nCvN5QIAAkYA7TfEIHVqwvP4kXZPWlaJHAWCgWCV",
+        "origin": "IyB2MiBnaXQgYnVuZGxlCjk0ZDQ3YzFmYjZhYTI2ZmY0OGI3MmNmNGMxOGM5MWYwNDg5NmJiNGQgcmVmcy9oZWFkcy9tYWluCjk0ZDQ3YzFmYjZhYTI2ZmY0OGI3MmNmNGMxOGM5MWYwNDg5NmJiNGQgSEVBRAoKUEFDSwAAAAIAAAAQnQt4nH3KUQrCMAwA0P+eohfQtUu2tCDiTSTtEhTZLF0meHtv4Pt+1kV8YgmgWoWmSWLShQXriKSKMrJmHCtAgegad9nMLwpzwkIKGZBZIc+VC1KoFClxDmmiEQQdH/Z4d2/+Yje7+kgZYI6Zkj8FCMHV97o+zeRPcYXrS7Zl4NaGfux236V/pJ/b1/0AT4027pgKeJx9yksKAjEMANB9T9ELKPm0SQsiXqXtJOhiVIYIHt8b+NYvDrOMZSq0RltxHN4YkcG7iVbYOhBUF1peNL3HYc/IZrxUhCoXcCEcTDLUvdZCqyPzLDrBKI1P3F9HjnyJW1wzamcW7NryCRggrde+PyLsT0nzHN9IPxZ0LNGdC3icfcpRCsIwDADQ/56iF9Cl6ZZ2IOJNpE1TFNlWukzw9uIFhPf5tItYrFl8YaiAhUIYa+Y6h5IZfxxRnArRhKalLqtaIBfFTzngHBK4wEIsVbhETLkwjjRirQwmHfrYulV70ZterQuz9+TmEO0JPIDhbVmeqvKnmJz4JWsZUmtDP3a979Lf0s/tY76DWDeYmwd4nH3KQQoDIQwAwLuvyAcKiYmrgVL6Fe1G1oNYJP1/f7BzHt9mQFK0dElHkd5bxFRjtdQy69mIomFvXEU01J9fa4PD09/+AsrKfJDmAg9kxPBZcw53uynhu8e0sVf4A068IcykBnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3m4IUZAEVrBY0iRigv6Whzu//SzKzq3b5vfl0hETAwMDA4WkxOTs1LwUBveMzP3M32tsY6UWP3lhO53h3aK+FgAO6yr5M3icK83lAgACRgDttgF4nCtOzVXITa1ILVLIy1dIzs8rKUosyecCAF6nCBiuAXicMzEwMDBQSCwoYKic/7v2e3lw2I1P//tOcW1Qk42aWQQAu1cNgKoCeJwzNDAwMzFRKCotLokvTi0qSy3SK6hkeMjwTrz9wsELXFlvrz3+l/P5h9iedQBaWBPotgJ4nItQsFUw5AoKDQ6JD3YNCnMNig8I8g/xd/b3UbBVMDbjilSwVTDiAgDDvQlo6QGBJHicS0mZECAya/MehoR/+xqP7p1TZG3P59pS+b0AAJuZDCSuAXicMzEwMDBQSCwoYHBSOxFRcmPKHWevFVYTv99l/Tvf7C8ApIINQqoCeJwzNDAwMzFRKCotLokvTi0qSy3SK6hkSPaKET0X4r92Rvq86aa5SZXzFyyTAgA1cBAXtgJ4nItQsFUw5AoKDQ6JD3YNCnMNig8I8g/xd/b3UbBVMDblilSwVTDiAgDDtQlnowR4nAFDALz/MTAwNjQ0IGEudHh0AIpuOXvknSYy8uTlxiTreBroUreHNDAwMDAgYmFja2VuZACas7wAYP6+gcW9nHI7Pw5FhHn3cIpHHKGhAnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3g4AxygOXkyMYJiLSGfYI2tc869MGJTIhAkY"
+      },
+      "target": "",
+      "enabled": true,
+      "state": {
+        "fase": "pronto",
+        "ok": true,
+        "avisos": [
+          "não consegui conferir o binário do Rust publicado para este sistema; o código foi ao topo"
+        ],
+        "waiting_for_server_build": false,
+        "reiniciar_manual": true,
+        "erro": null
+      },
+      "head_after": "94d47c1fb6aa26ff48b72cf4c18c91f04896bb4d",
+      "branch_after": "main",
+      "upstream": "origin/main",
+      "behind": false,
+      "requests": [
+        {
+          "url": "https://github.com/jeffer1312/hangar/releases/download/server-latest",
+          "manifest": {
+            "commit": "--output=/tmp/x",
+            "files": {
+              "linux-x86_64/hangar-server": {
+                "name": "hangar-server-linux-x86_64",
+                "sha256": "810c8efe1dfbb5535ebbd3029b471a846c12632a974e5418fe6bb3c3ce80216e"
+              },
+              "linux-x86_64/hangar-cano": {
+                "name": "hangar-cano-linux-x86_64",
+                "sha256": "c0193e19c1b20d9e09be0ac6133c0e7b2de0f9d7e430a8b24be2b5144ca5f205"
+              },
+              "linux-x86_64/hangar-auth": {
+                "name": "hangar-auth-linux-x86_64",
+                "sha256": "aa3b2505b9b739760a8a7861c978c3f9a0337909ed1f5542c91657d468ef5654"
+              }
+            }
+          }
+        }
+      ],
+      "prepare_reused_manifest": true,
+      "name": "test_sem_como_conferir_vai_ao_topo_e_diz",
+      "parameters": {
+        "caso": "commit_torto"
+      }
+    },
+    {
+      "branch": "main",
+      "head_before": "0618e35b7297a017ce6cefecd82abdc24642ffc0",
+      "bundles": {
+        "repo": "IyB2MiBnaXQgYnVuZGxlCjA2MThlMzViNzI5N2EwMTdjZTZjZWZlY2Q4MmFiZGMyNDY0MmZmYzAgcmVmcy9oZWFkcy9tYWluCjA2MThlMzViNzI5N2EwMTdjZTZjZWZlY2Q4MmFiZGMyNDY0MmZmYzAgcmVmcy9yZW1vdGVzL29yaWdpbi9IRUFECjA2MThlMzViNzI5N2EwMTdjZTZjZWZlY2Q4MmFiZGMyNDY0MmZmYzAgcmVmcy9yZW1vdGVzL29yaWdpbi9tYWluCjA2MThlMzViNzI5N2EwMTdjZTZjZWZlY2Q4MmFiZGMyNDY0MmZmYzAgSEVBRAoKUEFDSwAAAAIAAAADmwd4nH3KQQoDIQwAwLuvyAcKiYmrgVL6Fe1G1oNYJP1/f7BzHt9mQFK0dElHkd5bxFRjtdQy69mIomFvXEU01J9fa4PD09/+AsrKfJDmAg9kxPBZcw53uynhu8e0sVf4A068IcyhAnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3g4AxygOXjN4nCvN5QIAAkYA7TfEIHVqwvP4kXZPWlaJHAWCgWCV",
+        "origin": "IyB2MiBnaXQgYnVuZGxlCjk0ZDQ3YzFmYjZhYTI2ZmY0OGI3MmNmNGMxOGM5MWYwNDg5NmJiNGQgcmVmcy9oZWFkcy9tYWluCjk0ZDQ3YzFmYjZhYTI2ZmY0OGI3MmNmNGMxOGM5MWYwNDg5NmJiNGQgSEVBRAoKUEFDSwAAAAIAAAAQnQt4nH3KUQrCMAwA0P+eohfQtUu2tCDiTSTtEhTZLF0meHtv4Pt+1kV8YgmgWoWmSWLShQXriKSKMrJmHCtAgegad9nMLwpzwkIKGZBZIc+VC1KoFClxDmmiEQQdH/Z4d2/+Yje7+kgZYI6Zkj8FCMHV97o+zeRPcYXrS7Zl4NaGfux236V/pJ/b1/0AT4027pgKeJx9yksKAjEMANB9T9ELKPm0SQsiXqXtJOhiVIYIHt8b+NYvDrOMZSq0RltxHN4YkcG7iVbYOhBUF1peNL3HYc/IZrxUhCoXcCEcTDLUvdZCqyPzLDrBKI1P3F9HjnyJW1wzamcW7NryCRggrde+PyLsT0nzHN9IPxZ0LNGdC3icfcpRCsIwDADQ/56iF9Cl6ZZ2IOJNpE1TFNlWukzw9uIFhPf5tItYrFl8YaiAhUIYa+Y6h5IZfxxRnArRhKalLqtaIBfFTzngHBK4wEIsVbhETLkwjjRirQwmHfrYulV70ZterQuz9+TmEO0JPIDhbVmeqvKnmJz4JWsZUmtDP3a979Lf0s/tY76DWDeYmwd4nH3KQQoDIQwAwLuvyAcKiYmrgVL6Fe1G1oNYJP1/f7BzHt9mQFK0dElHkd5bxFRjtdQy69mIomFvXEU01J9fa4PD09/+AsrKfJDmAg9kxPBZcw53uynhu8e0sVf4A068IcykBnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3m4IUZAEVrBY0iRigv6Whzu//SzKzq3b5vfl0hETAwMDA4WkxOTs1LwUBveMzP3M32tsY6UWP3lhO53h3aK+FgAO6yr5M3icK83lAgACRgDttgF4nCtOzVXITa1ILVLIy1dIzs8rKUosyecCAF6nCBiuAXicMzEwMDBQSCwoYKic/7v2e3lw2I1P//tOcW1Qk42aWQQAu1cNgKoCeJwzNDAwMzFRKCotLokvTi0qSy3SK6hkeMjwTrz9wsELXFlvrz3+l/P5h9iedQBaWBPotgJ4nItQsFUw5AoKDQ6JD3YNCnMNig8I8g/xd/b3UbBVMDbjilSwVTDiAgDDvQlo6QGBJHicS0mZECAya/MehoR/+xqP7p1TZG3P59pS+b0AAJuZDCSuAXicMzEwMDBQSCwoYHBSOxFRcmPKHWevFVYTv99l/Tvf7C8ApIINQqoCeJwzNDAwMzFRKCotLokvTi0qSy3SK6hkSPaKET0X4r92Rvq86aa5SZXzFyyTAgA1cBAXtgJ4nItQsFUw5AoKDQ6JD3YNCnMNig8I8g/xd/b3UbBVMDblilSwVTDiAgDDtQlnowR4nAFDALz/MTAwNjQ0IGEudHh0AIpuOXvknSYy8uTlxiTreBroUreHNDAwMDAgYmFja2VuZACas7wAYP6+gcW9nHI7Pw5FhHn3cIpHHKGhAnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3g4AxygOXkyMYJiLSGfYI2tc869MGJTIhAkY"
+      },
+      "target": "",
+      "enabled": true,
+      "state": {
+        "fase": "pronto",
+        "ok": true,
+        "avisos": [
+          "não consegui conferir o binário do Rust publicado para este sistema; o código foi ao topo"
+        ],
+        "waiting_for_server_build": false,
+        "reiniciar_manual": true,
+        "erro": null
+      },
+      "head_after": "94d47c1fb6aa26ff48b72cf4c18c91f04896bb4d",
+      "branch_after": "main",
+      "upstream": "origin/main",
+      "behind": false,
+      "requests": [
+        {
+          "url": "https://github.com/jeffer1312/hangar/releases/download/server-latest",
+          "manifest": {
+            "commit": "ffffffffffffffffffffffffffffffffffffffff",
+            "files": {
+              "linux-x86_64/hangar-server": {
+                "name": "hangar-server-linux-x86_64",
+                "sha256": "810c8efe1dfbb5535ebbd3029b471a846c12632a974e5418fe6bb3c3ce80216e"
+              },
+              "linux-x86_64/hangar-cano": {
+                "name": "hangar-cano-linux-x86_64",
+                "sha256": "c0193e19c1b20d9e09be0ac6133c0e7b2de0f9d7e430a8b24be2b5144ca5f205"
+              },
+              "linux-x86_64/hangar-auth": {
+                "name": "hangar-auth-linux-x86_64",
+                "sha256": "aa3b2505b9b739760a8a7861c978c3f9a0337909ed1f5542c91657d468ef5654"
+              }
+            }
+          }
+        }
+      ],
+      "prepare_reused_manifest": true,
+      "name": "test_sem_como_conferir_vai_ao_topo_e_diz",
+      "parameters": {
+        "caso": "commit_ausente"
+      }
+    },
+    {
+      "branch": "main",
+      "head_before": "ee3c76625340f621a326a7ff5542c9133b47b0e2",
+      "bundles": {
+        "repo": "IyB2MiBnaXQgYnVuZGxlCmVlM2M3NjYyNTM0MGY2MjFhMzI2YTdmZjU1NDJjOTEzM2I0N2IwZTIgcmVmcy9oZWFkcy9tYWluCjk0ZDQ3YzFmYjZhYTI2ZmY0OGI3MmNmNGMxOGM5MWYwNDg5NmJiNGQgcmVmcy9yZW1vdGVzL29yaWdpbi9IRUFECjk0ZDQ3YzFmYjZhYTI2ZmY0OGI3MmNmNGMxOGM5MWYwNDg5NmJiNGQgcmVmcy9yZW1vdGVzL29yaWdpbi9tYWluCmVlM2M3NjYyNTM0MGY2MjFhMzI2YTdmZjU1NDJjOTEzM2I0N2IwZTIgSEVBRAoKUEFDSwAAAAIAAAAQnQt4nH3KUQrCMAwA0P+eohfQpemWdiDiTaRNUxTZVrpM8PbiBYT3+bSLWKxZfGGogIVCGGvmOoeSGX8cUZwK0YSmpS6rWiAXxU854BwSuMBCLFW4REy5MI40Yq0MJh362LpVe9GbXq0Ls/fk5hDtCTyA4W1Znqryp5ic+CVrGVJrQz92ve/S39LP7WO+g1g3mJ0LeJx9ylEKwjAMAND/nqIX0LVLtrQg4k0k7RIU2SxdJnh7b+D7ftZFfGIJoFqFpkli0oUF64ikijKyZhwrQIHoGnfZzC8Kc8JCChmQWSHPlQtSqBQpcQ5pohEEHR/2eHdv/mI3u/pIGWCOmZI/BQjB1fe6Ps3kT3GF60u2ZeDWhn7sdt+lf6Sf29f9AE+NNu6bB3icfcpBCgMhDADAu6/IBwqJiauBUvoV7UbWg1gk/X9/sHMe32ZAUrR0SUeR3lvEVGO11DLr2YiiYW9cRTTUn19rg8PT3/4Cysp8kOYCD2TE8FlzDne7KeG7x7SxV/gDTrwhzJgKeJx9yksKAjEMANB9T9ELKPm0SQsiXqXtJOhiVIYIHt8b+NYvDrOMZSq0RltxHN4YkcG7iVbYOhBUF1peNL3HYc/IZrxUhCoXcCEcTDLUvdZCqyPzLDrBKI1P3F9HjnyJW1wzamcW7NryCRggrde+PyLsT0nzHN9IPxZ0LNGjBHicAUMAvP8xMDA2NDQgYS50eHQAim45e+SdJjLy5OXGJOt4GuhSt4c0MDAwMCBiYWNrZW5kAJqzvABg/r6Bxb2ccjs/DkWEefdwikccoTN4nCvN5QIAAkYA7a4BeJwzMTAwMFBILChgcFI7EVFyY8odZ68VVhO/32X9O9/sLwCkgg1CqgJ4nDM0MDAzMVEoKi0uiS9OLSpLLdIrqGRI9ooRPRfiv3ZG+rzpprlJlfMXLJMCADVwEBe2Anici1CwVTDkCgoNDokPdg0Kcw2KDwjyD/F39vdRsFUwNuWKVLBVMOICAMO1CWekBnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3m4IUZAEVrBY0iRigv6Whzu//SzKzq3b5vfl0hETAwMDA4WkxOTs1LwUBveMzP3M32tsY6UWP3lhO53h3aK+FgAO6yr5tgF4nCtOzVXITa1ILVLIy1dIzs8rKUosyecCAF6nCBiuAXicMzEwMDBQSCwoYKic/7v2e3lw2I1P//tOcW1Qk42aWQQAu1cNgKoCeJwzNDAwMzFRKCotLokvTi0qSy3SK6hkeMjwTrz9wsELXFlvrz3+l/P5h9iedQBaWBPotgJ4nItQsFUw5AoKDQ6JD3YNCnMNig8I8g/xd/b3UbBVMDbjilSwVTDiAgDDvQlooQJ4nDM0MDAzMVFI1CupKGHoyrOsfjJXzejTk6fHVF5XSL0I2t4OAMcoDl7pAYFEeJxLSZkQIDJr8x6GhH/7Go/unVNkbc/n2lL5vQAAm5kMJGc5nkVo8tGOkuhvQmAHvz1nJk3+",
+        "origin": "IyB2MiBnaXQgYnVuZGxlCjk0ZDQ3YzFmYjZhYTI2ZmY0OGI3MmNmNGMxOGM5MWYwNDg5NmJiNGQgcmVmcy9oZWFkcy9tYWluCjk0ZDQ3YzFmYjZhYTI2ZmY0OGI3MmNmNGMxOGM5MWYwNDg5NmJiNGQgSEVBRAoKUEFDSwAAAAIAAAAQnQt4nH3KUQrCMAwA0P+eohfQtUu2tCDiTSTtEhTZLF0meHtv4Pt+1kV8YgmgWoWmSWLShQXriKSKMrJmHCtAgegad9nMLwpzwkIKGZBZIc+VC1KoFClxDmmiEQQdH/Z4d2/+Yje7+kgZYI6Zkj8FCMHV97o+zeRPcYXrS7Zl4NaGfux236V/pJ/b1/0AT4027pgKeJx9yksKAjEMANB9T9ELKPm0SQsiXqXtJOhiVIYIHt8b+NYvDrOMZSq0RltxHN4YkcG7iVbYOhBUF1peNL3HYc/IZrxUhCoXcCEcTDLUvdZCqyPzLDrBKI1P3F9HjnyJW1wzamcW7NryCRggrde+PyLsT0nzHN9IPxZ0LNGdC3icfcpRCsIwDADQ/56iF9Cl6ZZ2IOJNpE1TFNlWukzw9uIFhPf5tItYrFl8YaiAhUIYa+Y6h5IZfxxRnArRhKalLqtaIBfFTzngHBK4wEIsVbhETLkwjjRirQwmHfrYulV70ZterQuz9+TmEO0JPIDhbVmeqvKnmJz4JWsZUmtDP3a979Lf0s/tY76DWDeYmwd4nH3KQQoDIQwAwLuvyAcKiYmrgVL6Fe1G1oNYJP1/f7BzHt9mQFK0dElHkd5bxFRjtdQy69mIomFvXEU01J9fa4PD09/+AsrKfJDmAg9kxPBZcw53uynhu8e0sVf4A068IcykBnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3m4IUZAEVrBY0iRigv6Whzu//SzKzq3b5vfl0hETAwMDA4WkxOTs1LwUBveMzP3M32tsY6UWP3lhO53h3aK+FgAO6yr5M3icK83lAgACRgDttgF4nCtOzVXITa1ILVLIy1dIzs8rKUosyecCAF6nCBiuAXicMzEwMDBQSCwoYKic/7v2e3lw2I1P//tOcW1Qk42aWQQAu1cNgKoCeJwzNDAwMzFRKCotLokvTi0qSy3SK6hkeMjwTrz9wsELXFlvrz3+l/P5h9iedQBaWBPotgJ4nItQsFUw5AoKDQ6JD3YNCnMNig8I8g/xd/b3UbBVMDbjilSwVTDiAgDDvQlo6QGBJHicS0mZECAya/MehoR/+xqP7p1TZG3P59pS+b0AAJuZDCSuAXicMzEwMDBQSCwoYHBSOxFRcmPKHWevFVYTv99l/Tvf7C8ApIINQqoCeJwzNDAwMzFRKCotLokvTi0qSy3SK6hkSPaKET0X4r92Rvq86aa5SZXzFyyTAgA1cBAXtgJ4nItQsFUw5AoKDQ6JD3YNCnMNig8I8g/xd/b3UbBVMDblilSwVTDiAgDDtQlnowR4nAFDALz/MTAwNjQ0IGEudHh0AIpuOXvknSYy8uTlxiTreBroUreHNDAwMDAgYmFja2VuZACas7wAYP6+gcW9nHI7Pw5FhHn3cIpHHKGhAnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3g4AxygOXkyMYJiLSGfYI2tc869MGJTIhAkY"
+      },
+      "target": "",
+      "enabled": true,
+      "state": {
+        "fase": "pronto",
+        "ok": true,
+        "avisos": [
+          "não consegui conferir o binário do Rust publicado para este sistema; o código não troca de contrato com ele até conferir"
+        ],
+        "waiting_for_server_build": false,
+        "reiniciar_manual": true,
+        "erro": null
+      },
+      "head_after": "df3684b7f3934aaf396cab470c7178a9085723e4",
+      "branch_after": "main",
+      "upstream": "origin/main",
+      "behind": true,
+      "requests": [
+        {
+          "url": "https://github.com/jeffer1312/hangar/releases/download/server-latest",
+          "error": "HTTPError",
+          "status": 404,
+          "message": "HTTP Error 404: x"
+        }
+      ],
+      "prepare_reused_manifest": false,
+      "name": "test_sem_binario_conferido_nao_troca_o_contrato_do_checkout",
+      "parameters": {
+        "caso": "manifesto_da_main_regravando"
+      }
+    },
+    {
+      "branch": "main",
+      "head_before": "ee3c76625340f621a326a7ff5542c9133b47b0e2",
+      "bundles": {
+        "repo": "IyB2MiBnaXQgYnVuZGxlCmVlM2M3NjYyNTM0MGY2MjFhMzI2YTdmZjU1NDJjOTEzM2I0N2IwZTIgcmVmcy9oZWFkcy9tYWluCjk0ZDQ3YzFmYjZhYTI2ZmY0OGI3MmNmNGMxOGM5MWYwNDg5NmJiNGQgcmVmcy9yZW1vdGVzL29yaWdpbi9IRUFECjk0ZDQ3YzFmYjZhYTI2ZmY0OGI3MmNmNGMxOGM5MWYwNDg5NmJiNGQgcmVmcy9yZW1vdGVzL29yaWdpbi9tYWluCmVlM2M3NjYyNTM0MGY2MjFhMzI2YTdmZjU1NDJjOTEzM2I0N2IwZTIgSEVBRAoKUEFDSwAAAAIAAAAQnQt4nH3KUQrCMAwA0P+eohfQpemWdiDiTaRNUxTZVrpM8PbiBYT3+bSLWKxZfGGogIVCGGvmOoeSGX8cUZwK0YSmpS6rWiAXxU854BwSuMBCLFW4REy5MI40Yq0MJh362LpVe9GbXq0Ls/fk5hDtCTyA4W1Znqryp5ic+CVrGVJrQz92ve/S39LP7WO+g1g3mJ0LeJx9ylEKwjAMAND/nqIX0LVLtrQg4k0k7RIU2SxdJnh7b+D7ftZFfGIJoFqFpkli0oUF64ikijKyZhwrQIHoGnfZzC8Kc8JCChmQWSHPlQtSqBQpcQ5pohEEHR/2eHdv/mI3u/pIGWCOmZI/BQjB1fe6Ps3kT3GF60u2ZeDWhn7sdt+lf6Sf29f9AE+NNu6bB3icfcpBCgMhDADAu6/IBwqJiauBUvoV7UbWg1gk/X9/sHMe32ZAUrR0SUeR3lvEVGO11DLr2YiiYW9cRTTUn19rg8PT3/4Cysp8kOYCD2TE8FlzDne7KeG7x7SxV/gDTrwhzJgKeJx9yksKAjEMANB9T9ELKPm0SQsiXqXtJOhiVIYIHt8b+NYvDrOMZSq0RltxHN4YkcG7iVbYOhBUF1peNL3HYc/IZrxUhCoXcCEcTDLUvdZCqyPzLDrBKI1P3F9HjnyJW1wzamcW7NryCRggrde+PyLsT0nzHN9IPxZ0LNGjBHicAUMAvP8xMDA2NDQgYS50eHQAim45e+SdJjLy5OXGJOt4GuhSt4c0MDAwMCBiYWNrZW5kAJqzvABg/r6Bxb2ccjs/DkWEefdwikccoTN4nCvN5QIAAkYA7a4BeJwzMTAwMFBILChgcFI7EVFyY8odZ68VVhO/32X9O9/sLwCkgg1CqgJ4nDM0MDAzMVEoKi0uiS9OLSpLLdIrqGRI9ooRPRfiv3ZG+rzpprlJlfMXLJMCADVwEBe2Anici1CwVTDkCgoNDokPdg0Kcw2KDwjyD/F39vdRsFUwNuWKVLBVMOICAMO1CWekBnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3m4IUZAEVrBY0iRigv6Whzu//SzKzq3b5vfl0hETAwMDA4WkxOTs1LwUBveMzP3M32tsY6UWP3lhO53h3aK+FgAO6yr5tgF4nCtOzVXITa1ILVLIy1dIzs8rKUosyecCAF6nCBiuAXicMzEwMDBQSCwoYKic/7v2e3lw2I1P//tOcW1Qk42aWQQAu1cNgKoCeJwzNDAwMzFRKCotLokvTi0qSy3SK6hkeMjwTrz9wsELXFlvrz3+l/P5h9iedQBaWBPotgJ4nItQsFUw5AoKDQ6JD3YNCnMNig8I8g/xd/b3UbBVMDbjilSwVTDiAgDDvQlooQJ4nDM0MDAzMVFI1CupKGHoyrOsfjJXzejTk6fHVF5XSL0I2t4OAMcoDl7pAYFEeJxLSZkQIDJr8x6GhH/7Go/unVNkbc/n2lL5vQAAm5kMJGc5nkVo8tGOkuhvQmAHvz1nJk3+",
+        "origin": "IyB2MiBnaXQgYnVuZGxlCjk0ZDQ3YzFmYjZhYTI2ZmY0OGI3MmNmNGMxOGM5MWYwNDg5NmJiNGQgcmVmcy9oZWFkcy9tYWluCjk0ZDQ3YzFmYjZhYTI2ZmY0OGI3MmNmNGMxOGM5MWYwNDg5NmJiNGQgSEVBRAoKUEFDSwAAAAIAAAAQnQt4nH3KUQrCMAwA0P+eohfQtUu2tCDiTSTtEhTZLF0meHtv4Pt+1kV8YgmgWoWmSWLShQXriKSKMrJmHCtAgegad9nMLwpzwkIKGZBZIc+VC1KoFClxDmmiEQQdH/Z4d2/+Yje7+kgZYI6Zkj8FCMHV97o+zeRPcYXrS7Zl4NaGfux236V/pJ/b1/0AT4027pgKeJx9yksKAjEMANB9T9ELKPm0SQsiXqXtJOhiVIYIHt8b+NYvDrOMZSq0RltxHN4YkcG7iVbYOhBUF1peNL3HYc/IZrxUhCoXcCEcTDLUvdZCqyPzLDrBKI1P3F9HjnyJW1wzamcW7NryCRggrde+PyLsT0nzHN9IPxZ0LNGdC3icfcpRCsIwDADQ/56iF9Cl6ZZ2IOJNpE1TFNlWukzw9uIFhPf5tItYrFl8YaiAhUIYa+Y6h5IZfxxRnArRhKalLqtaIBfFTzngHBK4wEIsVbhETLkwjjRirQwmHfrYulV70ZterQuz9+TmEO0JPIDhbVmeqvKnmJz4JWsZUmtDP3a979Lf0s/tY76DWDeYmwd4nH3KQQoDIQwAwLuvyAcKiYmrgVL6Fe1G1oNYJP1/f7BzHt9mQFK0dElHkd5bxFRjtdQy69mIomFvXEU01J9fa4PD09/+AsrKfJDmAg9kxPBZcw53uynhu8e0sVf4A068IcykBnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3m4IUZAEVrBY0iRigv6Whzu//SzKzq3b5vfl0hETAwMDA4WkxOTs1LwUBveMzP3M32tsY6UWP3lhO53h3aK+FgAO6yr5M3icK83lAgACRgDttgF4nCtOzVXITa1ILVLIy1dIzs8rKUosyecCAF6nCBiuAXicMzEwMDBQSCwoYKic/7v2e3lw2I1P//tOcW1Qk42aWQQAu1cNgKoCeJwzNDAwMzFRKCotLokvTi0qSy3SK6hkeMjwTrz9wsELXFlvrz3+l/P5h9iedQBaWBPotgJ4nItQsFUw5AoKDQ6JD3YNCnMNig8I8g/xd/b3UbBVMDbjilSwVTDiAgDDvQlo6QGBJHicS0mZECAya/MehoR/+xqP7p1TZG3P59pS+b0AAJuZDCSuAXicMzEwMDBQSCwoYHBSOxFRcmPKHWevFVYTv99l/Tvf7C8ApIINQqoCeJwzNDAwMzFRKCotLokvTi0qSy3SK6hkSPaKET0X4r92Rvq86aa5SZXzFyyTAgA1cBAXtgJ4nItQsFUw5AoKDQ6JD3YNCnMNig8I8g/xd/b3UbBVMDblilSwVTDiAgDDtQlnowR4nAFDALz/MTAwNjQ0IGEudHh0AIpuOXvknSYy8uTlxiTreBroUreHNDAwMDAgYmFja2VuZACas7wAYP6+gcW9nHI7Pw5FhHn3cIpHHKGhAnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3g4AxygOXkyMYJiLSGfYI2tc869MGJTIhAkY"
+      },
+      "target": "",
+      "enabled": true,
+      "state": {
+        "fase": "pronto",
+        "ok": true,
+        "avisos": [
+          "não consegui conferir o binário do Rust publicado para este sistema; o código não troca de contrato com ele até conferir"
+        ],
+        "waiting_for_server_build": false,
+        "reiniciar_manual": true,
+        "erro": null
+      },
+      "head_after": "df3684b7f3934aaf396cab470c7178a9085723e4",
+      "branch_after": "main",
+      "upstream": "origin/main",
+      "behind": true,
+      "requests": [
+        {
+          "url": "https://github.com/jeffer1312/hangar/releases/download/server-latest",
+          "manifest": {
+            "commit": "ee3c76625340f621a326a7ff5542c9133b47b0e2",
+            "files": {
+              "windows-x86_64/hangar-server": {
+                "name": "hangar-server-linux-x86_64",
+                "sha256": "810c8efe1dfbb5535ebbd3029b471a846c12632a974e5418fe6bb3c3ce80216e"
+              },
+              "windows-x86_64/hangar-cano": {
+                "name": "hangar-cano-linux-x86_64",
+                "sha256": "c0193e19c1b20d9e09be0ac6133c0e7b2de0f9d7e430a8b24be2b5144ca5f205"
+              },
+              "windows-x86_64/hangar-auth": {
+                "name": "hangar-auth-linux-x86_64",
+                "sha256": "aa3b2505b9b739760a8a7861c978c3f9a0337909ed1f5542c91657d468ef5654"
+              }
+            }
+          }
+        }
+      ],
+      "prepare_reused_manifest": true,
+      "name": "test_sem_binario_conferido_nao_troca_o_contrato_do_checkout",
+      "parameters": {
+        "caso": "sem_build_deste_sistema"
+      }
+    },
+    {
+      "branch": "main",
+      "head_before": "ee3c76625340f621a326a7ff5542c9133b47b0e2",
+      "bundles": {
+        "repo": "IyB2MiBnaXQgYnVuZGxlCmVlM2M3NjYyNTM0MGY2MjFhMzI2YTdmZjU1NDJjOTEzM2I0N2IwZTIgcmVmcy9oZWFkcy9tYWluCjk0ZDQ3YzFmYjZhYTI2ZmY0OGI3MmNmNGMxOGM5MWYwNDg5NmJiNGQgcmVmcy9yZW1vdGVzL29yaWdpbi9IRUFECjk0ZDQ3YzFmYjZhYTI2ZmY0OGI3MmNmNGMxOGM5MWYwNDg5NmJiNGQgcmVmcy9yZW1vdGVzL29yaWdpbi9tYWluCmVlM2M3NjYyNTM0MGY2MjFhMzI2YTdmZjU1NDJjOTEzM2I0N2IwZTIgSEVBRAoKUEFDSwAAAAIAAAAQnQt4nH3KUQrCMAwA0P+eohfQpemWdiDiTaRNUxTZVrpM8PbiBYT3+bSLWKxZfGGogIVCGGvmOoeSGX8cUZwK0YSmpS6rWiAXxU854BwSuMBCLFW4REy5MI40Yq0MJh362LpVe9GbXq0Ls/fk5hDtCTyA4W1Znqryp5ic+CVrGVJrQz92ve/S39LP7WO+g1g3mJ0LeJx9ylEKwjAMAND/nqIX0LVLtrQg4k0k7RIU2SxdJnh7b+D7ftZFfGIJoFqFpkli0oUF64ikijKyZhwrQIHoGnfZzC8Kc8JCChmQWSHPlQtSqBQpcQ5pohEEHR/2eHdv/mI3u/pIGWCOmZI/BQjB1fe6Ps3kT3GF60u2ZeDWhn7sdt+lf6Sf29f9AE+NNu6bB3icfcpBCgMhDADAu6/IBwqJiauBUvoV7UbWg1gk/X9/sHMe32ZAUrR0SUeR3lvEVGO11DLr2YiiYW9cRTTUn19rg8PT3/4Cysp8kOYCD2TE8FlzDne7KeG7x7SxV/gDTrwhzJgKeJx9yksKAjEMANB9T9ELKPm0SQsiXqXtJOhiVIYIHt8b+NYvDrOMZSq0RltxHN4YkcG7iVbYOhBUF1peNL3HYc/IZrxUhCoXcCEcTDLUvdZCqyPzLDrBKI1P3F9HjnyJW1wzamcW7NryCRggrde+PyLsT0nzHN9IPxZ0LNGjBHicAUMAvP8xMDA2NDQgYS50eHQAim45e+SdJjLy5OXGJOt4GuhSt4c0MDAwMCBiYWNrZW5kAJqzvABg/r6Bxb2ccjs/DkWEefdwikccoTN4nCvN5QIAAkYA7a4BeJwzMTAwMFBILChgcFI7EVFyY8odZ68VVhO/32X9O9/sLwCkgg1CqgJ4nDM0MDAzMVEoKi0uiS9OLSpLLdIrqGRI9ooRPRfiv3ZG+rzpprlJlfMXLJMCADVwEBe2Anici1CwVTDkCgoNDokPdg0Kcw2KDwjyD/F39vdRsFUwNuWKVLBVMOICAMO1CWekBnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3m4IUZAEVrBY0iRigv6Whzu//SzKzq3b5vfl0hETAwMDA4WkxOTs1LwUBveMzP3M32tsY6UWP3lhO53h3aK+FgAO6yr5tgF4nCtOzVXITa1ILVLIy1dIzs8rKUosyecCAF6nCBiuAXicMzEwMDBQSCwoYKic/7v2e3lw2I1P//tOcW1Qk42aWQQAu1cNgKoCeJwzNDAwMzFRKCotLokvTi0qSy3SK6hkeMjwTrz9wsELXFlvrz3+l/P5h9iedQBaWBPotgJ4nItQsFUw5AoKDQ6JD3YNCnMNig8I8g/xd/b3UbBVMDbjilSwVTDiAgDDvQlooQJ4nDM0MDAzMVFI1CupKGHoyrOsfjJXzejTk6fHVF5XSL0I2t4OAMcoDl7pAYFEeJxLSZkQIDJr8x6GhH/7Go/unVNkbc/n2lL5vQAAm5kMJGc5nkVo8tGOkuhvQmAHvz1nJk3+",
+        "origin": "IyB2MiBnaXQgYnVuZGxlCjk0ZDQ3YzFmYjZhYTI2ZmY0OGI3MmNmNGMxOGM5MWYwNDg5NmJiNGQgcmVmcy9oZWFkcy9tYWluCjk0ZDQ3YzFmYjZhYTI2ZmY0OGI3MmNmNGMxOGM5MWYwNDg5NmJiNGQgSEVBRAoKUEFDSwAAAAIAAAAQnQt4nH3KUQrCMAwA0P+eohfQtUu2tCDiTSTtEhTZLF0meHtv4Pt+1kV8YgmgWoWmSWLShQXriKSKMrJmHCtAgegad9nMLwpzwkIKGZBZIc+VC1KoFClxDmmiEQQdH/Z4d2/+Yje7+kgZYI6Zkj8FCMHV97o+zeRPcYXrS7Zl4NaGfux236V/pJ/b1/0AT4027pgKeJx9yksKAjEMANB9T9ELKPm0SQsiXqXtJOhiVIYIHt8b+NYvDrOMZSq0RltxHN4YkcG7iVbYOhBUF1peNL3HYc/IZrxUhCoXcCEcTDLUvdZCqyPzLDrBKI1P3F9HjnyJW1wzamcW7NryCRggrde+PyLsT0nzHN9IPxZ0LNGdC3icfcpRCsIwDADQ/56iF9Cl6ZZ2IOJNpE1TFNlWukzw9uIFhPf5tItYrFl8YaiAhUIYa+Y6h5IZfxxRnArRhKalLqtaIBfFTzngHBK4wEIsVbhETLkwjjRirQwmHfrYulV70ZterQuz9+TmEO0JPIDhbVmeqvKnmJz4JWsZUmtDP3a979Lf0s/tY76DWDeYmwd4nH3KQQoDIQwAwLuvyAcKiYmrgVL6Fe1G1oNYJP1/f7BzHt9mQFK0dElHkd5bxFRjtdQy69mIomFvXEU01J9fa4PD09/+AsrKfJDmAg9kxPBZcw53uynhu8e0sVf4A068IcykBnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3m4IUZAEVrBY0iRigv6Whzu//SzKzq3b5vfl0hETAwMDA4WkxOTs1LwUBveMzP3M32tsY6UWP3lhO53h3aK+FgAO6yr5M3icK83lAgACRgDttgF4nCtOzVXITa1ILVLIy1dIzs8rKUosyecCAF6nCBiuAXicMzEwMDBQSCwoYKic/7v2e3lw2I1P//tOcW1Qk42aWQQAu1cNgKoCeJwzNDAwMzFRKCotLokvTi0qSy3SK6hkeMjwTrz9wsELXFlvrz3+l/P5h9iedQBaWBPotgJ4nItQsFUw5AoKDQ6JD3YNCnMNig8I8g/xd/b3UbBVMDbjilSwVTDiAgDDvQlo6QGBJHicS0mZECAya/MehoR/+xqP7p1TZG3P59pS+b0AAJuZDCSuAXicMzEwMDBQSCwoYHBSOxFRcmPKHWevFVYTv99l/Tvf7C8ApIINQqoCeJwzNDAwMzFRKCotLokvTi0qSy3SK6hkSPaKET0X4r92Rvq86aa5SZXzFyyTAgA1cBAXtgJ4nItQsFUw5AoKDQ6JD3YNCnMNig8I8g/xd/b3UbBVMDblilSwVTDiAgDDtQlnowR4nAFDALz/MTAwNjQ0IGEudHh0AIpuOXvknSYy8uTlxiTreBroUreHNDAwMDAgYmFja2VuZACas7wAYP6+gcW9nHI7Pw5FhHn3cIpHHKGhAnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3g4AxygOXkyMYJiLSGfYI2tc869MGJTIhAkY"
+      },
+      "target": "",
+      "enabled": true,
+      "state": {
+        "fase": "pronto",
+        "ok": true,
+        "avisos": [
+          "não consegui conferir o binário do Rust publicado para este sistema; o código não troca de contrato com ele até conferir"
+        ],
+        "waiting_for_server_build": false,
+        "reiniciar_manual": true,
+        "erro": null
+      },
+      "head_after": "df3684b7f3934aaf396cab470c7178a9085723e4",
+      "branch_after": "main",
+      "upstream": "origin/main",
+      "behind": true,
+      "requests": [
+        {
+          "url": "https://github.com/jeffer1312/hangar/releases/download/server-latest",
+          "error": "OSError",
+          "status": null,
+          "message": "rede fora"
+        }
+      ],
+      "prepare_reused_manifest": false,
+      "name": "test_sem_binario_conferido_nao_troca_o_contrato_do_checkout",
+      "parameters": {
+        "caso": "rede"
+      }
+    },
+    {
+      "branch": "main",
+      "head_before": "ee3c76625340f621a326a7ff5542c9133b47b0e2",
+      "bundles": {
+        "repo": "IyB2MiBnaXQgYnVuZGxlCmVlM2M3NjYyNTM0MGY2MjFhMzI2YTdmZjU1NDJjOTEzM2I0N2IwZTIgcmVmcy9oZWFkcy9tYWluCjk0ZDQ3YzFmYjZhYTI2ZmY0OGI3MmNmNGMxOGM5MWYwNDg5NmJiNGQgcmVmcy9yZW1vdGVzL29yaWdpbi9IRUFECjk0ZDQ3YzFmYjZhYTI2ZmY0OGI3MmNmNGMxOGM5MWYwNDg5NmJiNGQgcmVmcy9yZW1vdGVzL29yaWdpbi9tYWluCmVlM2M3NjYyNTM0MGY2MjFhMzI2YTdmZjU1NDJjOTEzM2I0N2IwZTIgSEVBRAoKUEFDSwAAAAIAAAAQnQt4nH3KUQrCMAwA0P+eohfQpemWdiDiTaRNUxTZVrpM8PbiBYT3+bSLWKxZfGGogIVCGGvmOoeSGX8cUZwK0YSmpS6rWiAXxU854BwSuMBCLFW4REy5MI40Yq0MJh362LpVe9GbXq0Ls/fk5hDtCTyA4W1Znqryp5ic+CVrGVJrQz92ve/S39LP7WO+g1g3mJ0LeJx9ylEKwjAMAND/nqIX0LVLtrQg4k0k7RIU2SxdJnh7b+D7ftZFfGIJoFqFpkli0oUF64ikijKyZhwrQIHoGnfZzC8Kc8JCChmQWSHPlQtSqBQpcQ5pohEEHR/2eHdv/mI3u/pIGWCOmZI/BQjB1fe6Ps3kT3GF60u2ZeDWhn7sdt+lf6Sf29f9AE+NNu6bB3icfcpBCgMhDADAu6/IBwqJiauBUvoV7UbWg1gk/X9/sHMe32ZAUrR0SUeR3lvEVGO11DLr2YiiYW9cRTTUn19rg8PT3/4Cysp8kOYCD2TE8FlzDne7KeG7x7SxV/gDTrwhzJgKeJx9yksKAjEMANB9T9ELKPm0SQsiXqXtJOhiVIYIHt8b+NYvDrOMZSq0RltxHN4YkcG7iVbYOhBUF1peNL3HYc/IZrxUhCoXcCEcTDLUvdZCqyPzLDrBKI1P3F9HjnyJW1wzamcW7NryCRggrde+PyLsT0nzHN9IPxZ0LNGjBHicAUMAvP8xMDA2NDQgYS50eHQAim45e+SdJjLy5OXGJOt4GuhSt4c0MDAwMCBiYWNrZW5kAJqzvABg/r6Bxb2ccjs/DkWEefdwikccoTN4nCvN5QIAAkYA7a4BeJwzMTAwMFBILChgcFI7EVFyY8odZ68VVhO/32X9O9/sLwCkgg1CqgJ4nDM0MDAzMVEoKi0uiS9OLSpLLdIrqGRI9ooRPRfiv3ZG+rzpprlJlfMXLJMCADVwEBe2Anici1CwVTDkCgoNDokPdg0Kcw2KDwjyD/F39vdRsFUwNuWKVLBVMOICAMO1CWekBnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3m4IUZAEVrBY0iRigv6Whzu//SzKzq3b5vfl0hETAwMDA4WkxOTs1LwUBveMzP3M32tsY6UWP3lhO53h3aK+FgAO6yr5tgF4nCtOzVXITa1ILVLIy1dIzs8rKUosyecCAF6nCBiuAXicMzEwMDBQSCwoYKic/7v2e3lw2I1P//tOcW1Qk42aWQQAu1cNgKoCeJwzNDAwMzFRKCotLokvTi0qSy3SK6hkeMjwTrz9wsELXFlvrz3+l/P5h9iedQBaWBPotgJ4nItQsFUw5AoKDQ6JD3YNCnMNig8I8g/xd/b3UbBVMDbjilSwVTDiAgDDvQlooQJ4nDM0MDAzMVFI1CupKGHoyrOsfjJXzejTk6fHVF5XSL0I2t4OAMcoDl7pAYFEeJxLSZkQIDJr8x6GhH/7Go/unVNkbc/n2lL5vQAAm5kMJGc5nkVo8tGOkuhvQmAHvz1nJk3+",
+        "origin": "IyB2MiBnaXQgYnVuZGxlCjk0ZDQ3YzFmYjZhYTI2ZmY0OGI3MmNmNGMxOGM5MWYwNDg5NmJiNGQgcmVmcy9oZWFkcy9tYWluCjk0ZDQ3YzFmYjZhYTI2ZmY0OGI3MmNmNGMxOGM5MWYwNDg5NmJiNGQgSEVBRAoKUEFDSwAAAAIAAAAQnQt4nH3KUQrCMAwA0P+eohfQtUu2tCDiTSTtEhTZLF0meHtv4Pt+1kV8YgmgWoWmSWLShQXriKSKMrJmHCtAgegad9nMLwpzwkIKGZBZIc+VC1KoFClxDmmiEQQdH/Z4d2/+Yje7+kgZYI6Zkj8FCMHV97o+zeRPcYXrS7Zl4NaGfux236V/pJ/b1/0AT4027pgKeJx9yksKAjEMANB9T9ELKPm0SQsiXqXtJOhiVIYIHt8b+NYvDrOMZSq0RltxHN4YkcG7iVbYOhBUF1peNL3HYc/IZrxUhCoXcCEcTDLUvdZCqyPzLDrBKI1P3F9HjnyJW1wzamcW7NryCRggrde+PyLsT0nzHN9IPxZ0LNGdC3icfcpRCsIwDADQ/56iF9Cl6ZZ2IOJNpE1TFNlWukzw9uIFhPf5tItYrFl8YaiAhUIYa+Y6h5IZfxxRnArRhKalLqtaIBfFTzngHBK4wEIsVbhETLkwjjRirQwmHfrYulV70ZterQuz9+TmEO0JPIDhbVmeqvKnmJz4JWsZUmtDP3a979Lf0s/tY76DWDeYmwd4nH3KQQoDIQwAwLuvyAcKiYmrgVL6Fe1G1oNYJP1/f7BzHt9mQFK0dElHkd5bxFRjtdQy69mIomFvXEU01J9fa4PD09/+AsrKfJDmAg9kxPBZcw53uynhu8e0sVf4A068IcykBnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3m4IUZAEVrBY0iRigv6Whzu//SzKzq3b5vfl0hETAwMDA4WkxOTs1LwUBveMzP3M32tsY6UWP3lhO53h3aK+FgAO6yr5M3icK83lAgACRgDttgF4nCtOzVXITa1ILVLIy1dIzs8rKUosyecCAF6nCBiuAXicMzEwMDBQSCwoYKic/7v2e3lw2I1P//tOcW1Qk42aWQQAu1cNgKoCeJwzNDAwMzFRKCotLokvTi0qSy3SK6hkeMjwTrz9wsELXFlvrz3+l/P5h9iedQBaWBPotgJ4nItQsFUw5AoKDQ6JD3YNCnMNig8I8g/xd/b3UbBVMDbjilSwVTDiAgDDvQlo6QGBJHicS0mZECAya/MehoR/+xqP7p1TZG3P59pS+b0AAJuZDCSuAXicMzEwMDBQSCwoYHBSOxFRcmPKHWevFVYTv99l/Tvf7C8ApIINQqoCeJwzNDAwMzFRKCotLokvTi0qSy3SK6hkSPaKET0X4r92Rvq86aa5SZXzFyyTAgA1cBAXtgJ4nItQsFUw5AoKDQ6JD3YNCnMNig8I8g/xd/b3UbBVMDblilSwVTDiAgDDtQlnowR4nAFDALz/MTAwNjQ0IGEudHh0AIpuOXvknSYy8uTlxiTreBroUreHNDAwMDAgYmFja2VuZACas7wAYP6+gcW9nHI7Pw5FhHn3cIpHHKGhAnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3g4AxygOXkyMYJiLSGfYI2tc869MGJTIhAkY"
+      },
+      "target": "",
+      "enabled": true,
+      "state": {
+        "fase": "pronto",
+        "ok": true,
+        "avisos": [
+          "não consegui conferir o binário do Rust publicado para este sistema; o código não troca de contrato com ele até conferir"
+        ],
+        "waiting_for_server_build": false,
+        "reiniciar_manual": true,
+        "erro": null
+      },
+      "head_after": "df3684b7f3934aaf396cab470c7178a9085723e4",
+      "branch_after": "main",
+      "upstream": "origin/main",
+      "behind": true,
+      "requests": [
+        {
+          "url": "https://github.com/jeffer1312/hangar/releases/download/server-latest",
+          "manifest": {
+            "commit": "ffffffffffffffffffffffffffffffffffffffff",
+            "files": {
+              "linux-x86_64/hangar-server": {
+                "name": "hangar-server-linux-x86_64",
+                "sha256": "810c8efe1dfbb5535ebbd3029b471a846c12632a974e5418fe6bb3c3ce80216e"
+              },
+              "linux-x86_64/hangar-cano": {
+                "name": "hangar-cano-linux-x86_64",
+                "sha256": "c0193e19c1b20d9e09be0ac6133c0e7b2de0f9d7e430a8b24be2b5144ca5f205"
+              },
+              "linux-x86_64/hangar-auth": {
+                "name": "hangar-auth-linux-x86_64",
+                "sha256": "aa3b2505b9b739760a8a7861c978c3f9a0337909ed1f5542c91657d468ef5654"
+              }
+            }
+          }
+        }
+      ],
+      "prepare_reused_manifest": true,
+      "name": "test_sem_binario_conferido_nao_troca_o_contrato_do_checkout",
+      "parameters": {
+        "caso": "commit_ausente"
+      }
+    },
+    {
+      "branch": "main",
+      "head_before": "df3684b7f3934aaf396cab470c7178a9085723e4",
+      "bundles": {
+        "repo": "IyB2MiBnaXQgYnVuZGxlCmRmMzY4NGI3ZjM5MzRhYWYzOTZjYWI0NzBjNzE3OGE5MDg1NzIzZTQgcmVmcy9oZWFkcy9tYWluCjk0ZDQ3YzFmYjZhYTI2ZmY0OGI3MmNmNGMxOGM5MWYwNDg5NmJiNGQgcmVmcy9yZW1vdGVzL29yaWdpbi9IRUFECjk0ZDQ3YzFmYjZhYTI2ZmY0OGI3MmNmNGMxOGM5MWYwNDg5NmJiNGQgcmVmcy9yZW1vdGVzL29yaWdpbi9tYWluCmRmMzY4NGI3ZjM5MzRhYWYzOTZjYWI0NzBjNzE3OGE5MDg1NzIzZTQgSEVBRAoKUEFDSwAAAAIAAAAQmAp4nH3KSwoCMQwA0H1P0Qso+bRJCyJepe0k6GJUhgge3xv41i8Os4xlKrRGW3Ec3hiRwbuJVtg6EFQXWl40vcdhz8hmvFSEKhdwIRxMMtS91kKrI/MsOsEojU/cX0eOfIlbXDNqZxbs2vIJGCCt174/IuxPSfMc30g/FnQs0Z0LeJx9ylEKwjAMAND/nqIX0LVLtrQg4k0k7RIU2SxdJnh7b+D7ftZFfGIJoFqFpkli0oUF64ikijKyZhwrQIHoGnfZzC8Kc8JCChmQWSHPlQtSqBQpcQ5pohEEHR/2eHdv/mI3u/pIGWCOmZI/BQjB1fe6Ps3kT3GF60u2ZeDWhn7sdt+lf6Sf29f9AE+NNu6dC3icfcpRCsIwDADQ/56iF9Cl6ZZ2IOJNpE1TFNlWukzw9uIFhPf5tItYrFl8YaiAhUIYa+Y6h5IZfxxRnArRhKalLqtaIBfFTzngHBK4wEIsVbhETLkwjjRirQwmHfrYulV70ZterQuz9+TmEO0JPIDhbVmeqvKnmJz4JWsZUmtDP3a979Lf0s/tY76DWDeYmwd4nH3KQQoDIQwAwLuvyAcKiYmrgVL6Fe1G1oNYJP1/f7BzHt9mQFK0dElHkd5bxFRjtdQy69mIomFvXEU01J9fa4PD09/+AsrKfJDmAg9kxPBZcw53uynhu8e0sVf4A068IcykBnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3m4IUZAEVrBY0iRigv6Whzu//SzKzq3b5vfl0hETAwMDA4WkxOTs1LwUhlmb9zAk/NvXeHTvnCJrez7XlsrvBQAgZSt6M3icK83lAgACRgDttgF4nCtOzVXITa1ILVLIy1dIzs8rKUosyecCAF6nCBiuAXicMzEwMDBQSCwoYHBSOxFRcmPKHWevFVYTv99l/Tvf7C8ApIINQqoCeJwzNDAwMzFRKCotLokvTi0qSy3SK6hkSPaKET0X4r92Rvq86aa5SZXzFyyTAgA1cBAXtgJ4nItQsFUw5AoKDQ6JD3YNCnMNig8I8g/xd/b3UbBVMDblilSwVTDiAgDDtQln6QGBJHicS0mZECDinpG5n/l7jW2s1OInL2ynM7xb1NcCAIofC6OuAXicMzEwMDBQSCwoYKic/7v2e3lw2I1P//tOcW1Qk42aWQQAu1cNgKoCeJwzNDAwMzFRKCotLokvTi0qSy3SK6hkeMjwTrz9wsELXFlvrz3+l/P5h9iedQBaWBPotgJ4nItQsFUw5AoKDQ6JD3YNCnMNig8I8g/xd/b3UbBVMDbjilSwVTDiAgDDvQloowR4nAFDALz/MTAwNjQ0IGEudHh0AIpuOXvknSYy8uTlxiTreBroUreHNDAwMDAgYmFja2VuZACas7wAYP6+gcW9nHI7Pw5FhHn3cIpHHKGhAnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3g4AxygOXqhxP9h4KutXk+0cU3lbpnHTsXod",
+        "origin": "IyB2MiBnaXQgYnVuZGxlCjk0ZDQ3YzFmYjZhYTI2ZmY0OGI3MmNmNGMxOGM5MWYwNDg5NmJiNGQgcmVmcy9oZWFkcy9tYWluCjk0ZDQ3YzFmYjZhYTI2ZmY0OGI3MmNmNGMxOGM5MWYwNDg5NmJiNGQgSEVBRAoKUEFDSwAAAAIAAAAQnQt4nH3KUQrCMAwA0P+eohfQtUu2tCDiTSTtEhTZLF0meHtv4Pt+1kV8YgmgWoWmSWLShQXriKSKMrJmHCtAgegad9nMLwpzwkIKGZBZIc+VC1KoFClxDmmiEQQdH/Z4d2/+Yje7+kgZYI6Zkj8FCMHV97o+zeRPcYXrS7Zl4NaGfux236V/pJ/b1/0AT4027pgKeJx9yksKAjEMANB9T9ELKPm0SQsiXqXtJOhiVIYIHt8b+NYvDrOMZSq0RltxHN4YkcG7iVbYOhBUF1peNL3HYc/IZrxUhCoXcCEcTDLUvdZCqyPzLDrBKI1P3F9HjnyJW1wzamcW7NryCRggrde+PyLsT0nzHN9IPxZ0LNGdC3icfcpRCsIwDADQ/56iF9Cl6ZZ2IOJNpE1TFNlWukzw9uIFhPf5tItYrFl8YaiAhUIYa+Y6h5IZfxxRnArRhKalLqtaIBfFTzngHBK4wEIsVbhETLkwjjRirQwmHfrYulV70ZterQuz9+TmEO0JPIDhbVmeqvKnmJz4JWsZUmtDP3a979Lf0s/tY76DWDeYmwd4nH3KQQoDIQwAwLuvyAcKiYmrgVL6Fe1G1oNYJP1/f7BzHt9mQFK0dElHkd5bxFRjtdQy69mIomFvXEU01J9fa4PD09/+AsrKfJDmAg9kxPBZcw53uynhu8e0sVf4A068IcykBnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3m4IUZAEVrBY0iRigv6Whzu//SzKzq3b5vfl0hETAwMDA4WkxOTs1LwUBveMzP3M32tsY6UWP3lhO53h3aK+FgAO6yr5M3icK83lAgACRgDttgF4nCtOzVXITa1ILVLIy1dIzs8rKUosyecCAF6nCBiuAXicMzEwMDBQSCwoYKic/7v2e3lw2I1P//tOcW1Qk42aWQQAu1cNgKoCeJwzNDAwMzFRKCotLokvTi0qSy3SK6hkeMjwTrz9wsELXFlvrz3+l/P5h9iedQBaWBPotgJ4nItQsFUw5AoKDQ6JD3YNCnMNig8I8g/xd/b3UbBVMDbjilSwVTDiAgDDvQlo6QGBJHicS0mZECAya/MehoR/+xqP7p1TZG3P59pS+b0AAJuZDCSuAXicMzEwMDBQSCwoYHBSOxFRcmPKHWevFVYTv99l/Tvf7C8ApIINQqoCeJwzNDAwMzFRKCotLokvTi0qSy3SK6hkSPaKET0X4r92Rvq86aa5SZXzFyyTAgA1cBAXtgJ4nItQsFUw5AoKDQ6JD3YNCnMNig8I8g/xd/b3UbBVMDblilSwVTDiAgDDtQlnowR4nAFDALz/MTAwNjQ0IGEudHh0AIpuOXvknSYy8uTlxiTreBroUreHNDAwMDAgYmFja2VuZACas7wAYP6+gcW9nHI7Pw5FhHn3cIpHHKGhAnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3g4AxygOXkyMYJiLSGfYI2tc869MGJTIhAkY"
+      },
+      "target": "",
+      "enabled": true,
+      "state": {
+        "fase": "pronto",
+        "ok": true,
+        "avisos": [
+          "não consegui conferir o binário do Rust publicado para este sistema; o código não troca de contrato com ele até conferir"
+        ],
+        "waiting_for_server_build": false,
+        "reiniciar_manual": true,
+        "erro": null
+      },
+      "head_after": "df3684b7f3934aaf396cab470c7178a9085723e4",
+      "branch_after": "main",
+      "upstream": "origin/main",
+      "behind": true,
+      "requests": [
+        {
+          "url": "https://github.com/jeffer1312/hangar/releases/download/server-latest",
+          "error": "HTTPError",
+          "status": 500,
+          "message": "HTTP Error 500: x"
+        }
+      ],
+      "prepare_reused_manifest": false,
+      "name": "test_sem_binario_conferido_e_nada_no_contrato_do_checkout_fica_onde_esta",
+      "parameters": {}
+    },
+    {
+      "branch": "main",
+      "head_before": "94d47c1fb6aa26ff48b72cf4c18c91f04896bb4d",
+      "bundles": {
+        "repo": "IyB2MiBnaXQgYnVuZGxlCjk0ZDQ3YzFmYjZhYTI2ZmY0OGI3MmNmNGMxOGM5MWYwNDg5NmJiNGQgcmVmcy9oZWFkcy9tYWluCjk0ZDQ3YzFmYjZhYTI2ZmY0OGI3MmNmNGMxOGM5MWYwNDg5NmJiNGQgcmVmcy9yZW1vdGVzL29yaWdpbi9IRUFECjk0ZDQ3YzFmYjZhYTI2ZmY0OGI3MmNmNGMxOGM5MWYwNDg5NmJiNGQgcmVmcy9yZW1vdGVzL29yaWdpbi9tYWluCjk0ZDQ3YzFmYjZhYTI2ZmY0OGI3MmNmNGMxOGM5MWYwNDg5NmJiNGQgSEVBRAoKUEFDSwAAAAIAAAAQnQt4nH3KUQrCMAwA0P+eohfQtUu2tCDiTSTtEhTZLF0meHtv4Pt+1kV8YgmgWoWmSWLShQXriKSKMrJmHCtAgegad9nMLwpzwkIKGZBZIc+VC1KoFClxDmmiEQQdH/Z4d2/+Yje7+kgZYI6Zkj8FCMHV97o+zeRPcYXrS7Zl4NaGfux236V/pJ/b1/0AT4027pgKeJx9yksKAjEMANB9T9ELKPm0SQsiXqXtJOhiVIYIHt8b+NYvDrOMZSq0RltxHN4YkcG7iVbYOhBUF1peNL3HYc/IZrxUhCoXcCEcTDLUvdZCqyPzLDrBKI1P3F9HjnyJW1wzamcW7NryCRggrde+PyLsT0nzHN9IPxZ0LNGdC3icfcpRCsIwDADQ/56iF9Cl6ZZ2IOJNpE1TFNlWukzw9uIFhPf5tItYrFl8YaiAhUIYa+Y6h5IZfxxRnArRhKalLqtaIBfFTzngHBK4wEIsVbhETLkwjjRirQwmHfrYulV70ZterQuz9+TmEO0JPIDhbVmeqvKnmJz4JWsZUmtDP3a979Lf0s/tY76DWDeYmwd4nH3KQQoDIQwAwLuvyAcKiYmrgVL6Fe1G1oNYJP1/f7BzHt9mQFK0dElHkd5bxFRjtdQy69mIomFvXEU01J9fa4PD09/+AsrKfJDmAg9kxPBZcw53uynhu8e0sVf4A068IcykBnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3m4IUZAEVrBY0iRigv6Whzu//SzKzq3b5vfl0hETAwMDA4WkxOTs1LwUBveMzP3M32tsY6UWP3lhO53h3aK+FgAO6yr5M3icK83lAgACRgDttgF4nCtOzVXITa1ILVLIy1dIzs8rKUosyecCAF6nCBiuAXicMzEwMDBQSCwoYKic/7v2e3lw2I1P//tOcW1Qk42aWQQAu1cNgKoCeJwzNDAwMzFRKCotLokvTi0qSy3SK6hkeMjwTrz9wsELXFlvrz3+l/P5h9iedQBaWBPotgJ4nItQsFUw5AoKDQ6JD3YNCnMNig8I8g/xd/b3UbBVMDbjilSwVTDiAgDDvQlo6QGBJHicS0mZECAya/MehoR/+xqP7p1TZG3P59pS+b0AAJuZDCSuAXicMzEwMDBQSCwoYHBSOxFRcmPKHWevFVYTv99l/Tvf7C8ApIINQqoCeJwzNDAwMzFRKCotLokvTi0qSy3SK6hkSPaKET0X4r92Rvq86aa5SZXzFyyTAgA1cBAXtgJ4nItQsFUw5AoKDQ6JD3YNCnMNig8I8g/xd/b3UbBVMDblilSwVTDiAgDDtQlnowR4nAFDALz/MTAwNjQ0IGEudHh0AIpuOXvknSYy8uTlxiTreBroUreHNDAwMDAgYmFja2VuZACas7wAYP6+gcW9nHI7Pw5FhHn3cIpHHKGhAnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3g4AxygOXkyMYJiLSGfYI2tc869MGJTIhAkY",
+        "origin": "IyB2MiBnaXQgYnVuZGxlCjk0ZDQ3YzFmYjZhYTI2ZmY0OGI3MmNmNGMxOGM5MWYwNDg5NmJiNGQgcmVmcy9oZWFkcy9tYWluCjk0ZDQ3YzFmYjZhYTI2ZmY0OGI3MmNmNGMxOGM5MWYwNDg5NmJiNGQgSEVBRAoKUEFDSwAAAAIAAAAQnQt4nH3KUQrCMAwA0P+eohfQtUu2tCDiTSTtEhTZLF0meHtv4Pt+1kV8YgmgWoWmSWLShQXriKSKMrJmHCtAgegad9nMLwpzwkIKGZBZIc+VC1KoFClxDmmiEQQdH/Z4d2/+Yje7+kgZYI6Zkj8FCMHV97o+zeRPcYXrS7Zl4NaGfux236V/pJ/b1/0AT4027pgKeJx9yksKAjEMANB9T9ELKPm0SQsiXqXtJOhiVIYIHt8b+NYvDrOMZSq0RltxHN4YkcG7iVbYOhBUF1peNL3HYc/IZrxUhCoXcCEcTDLUvdZCqyPzLDrBKI1P3F9HjnyJW1wzamcW7NryCRggrde+PyLsT0nzHN9IPxZ0LNGdC3icfcpRCsIwDADQ/56iF9Cl6ZZ2IOJNpE1TFNlWukzw9uIFhPf5tItYrFl8YaiAhUIYa+Y6h5IZfxxRnArRhKalLqtaIBfFTzngHBK4wEIsVbhETLkwjjRirQwmHfrYulV70ZterQuz9+TmEO0JPIDhbVmeqvKnmJz4JWsZUmtDP3a979Lf0s/tY76DWDeYmwd4nH3KQQoDIQwAwLuvyAcKiYmrgVL6Fe1G1oNYJP1/f7BzHt9mQFK0dElHkd5bxFRjtdQy69mIomFvXEU01J9fa4PD09/+AsrKfJDmAg9kxPBZcw53uynhu8e0sVf4A068IcykBnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3m4IUZAEVrBY0iRigv6Whzu//SzKzq3b5vfl0hETAwMDA4WkxOTs1LwUBveMzP3M32tsY6UWP3lhO53h3aK+FgAO6yr5M3icK83lAgACRgDttgF4nCtOzVXITa1ILVLIy1dIzs8rKUosyecCAF6nCBiuAXicMzEwMDBQSCwoYKic/7v2e3lw2I1P//tOcW1Qk42aWQQAu1cNgKoCeJwzNDAwMzFRKCotLokvTi0qSy3SK6hkeMjwTrz9wsELXFlvrz3+l/P5h9iedQBaWBPotgJ4nItQsFUw5AoKDQ6JD3YNCnMNig8I8g/xd/b3UbBVMDbjilSwVTDiAgDDvQlo6QGBJHicS0mZECAya/MehoR/+xqP7p1TZG3P59pS+b0AAJuZDCSuAXicMzEwMDBQSCwoYHBSOxFRcmPKHWevFVYTv99l/Tvf7C8ApIINQqoCeJwzNDAwMzFRKCotLokvTi0qSy3SK6hkSPaKET0X4r92Rvq86aa5SZXzFyyTAgA1cBAXtgJ4nItQsFUw5AoKDQ6JD3YNCnMNig8I8g/xd/b3UbBVMDblilSwVTDiAgDDtQlnowR4nAFDALz/MTAwNjQ0IGEudHh0AIpuOXvknSYy8uTlxiTreBroUreHNDAwMDAgYmFja2VuZACas7wAYP6+gcW9nHI7Pw5FhHn3cIpHHKGhAnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3g4AxygOXkyMYJiLSGfYI2tc869MGJTIhAkY"
+      },
+      "target": "",
+      "enabled": true,
+      "state": {
+        "fase": "pronto",
+        "ok": true,
+        "avisos": [
+          "o binário do Rust publicado para este sistema (commit ee3c7662) fala outro contrato que este código; o Python atende sozinho até sair o binário novo"
+        ],
+        "waiting_for_server_build": false,
+        "reiniciar_manual": true,
+        "erro": null
+      },
+      "head_after": "94d47c1fb6aa26ff48b72cf4c18c91f04896bb4d",
+      "branch_after": "main",
+      "upstream": "origin/main",
+      "behind": false,
+      "requests": [
+        {
+          "url": "https://github.com/jeffer1312/hangar/releases/download/server-latest",
+          "manifest": {
+            "commit": "ee3c76625340f621a326a7ff5542c9133b47b0e2",
+            "files": {
+              "linux-x86_64/hangar-server": {
+                "name": "hangar-server-linux-x86_64",
+                "sha256": "810c8efe1dfbb5535ebbd3029b471a846c12632a974e5418fe6bb3c3ce80216e"
+              },
+              "linux-x86_64/hangar-cano": {
+                "name": "hangar-cano-linux-x86_64",
+                "sha256": "c0193e19c1b20d9e09be0ac6133c0e7b2de0f9d7e430a8b24be2b5144ca5f205"
+              },
+              "linux-x86_64/hangar-auth": {
+                "name": "hangar-auth-linux-x86_64",
+                "sha256": "aa3b2505b9b739760a8a7861c978c3f9a0337909ed1f5542c91657d468ef5654"
+              }
+            }
+          }
+        }
+      ],
+      "prepare_reused_manifest": true,
+      "name": "test_ja_no_topo_com_binario_de_outro_contrato_nao_recua_e_avisa",
+      "parameters": {}
+    },
+    {
+      "branch": "main",
+      "head_before": "9ad6e2eb561d25f6276b804024dd02ff8000a248",
+      "bundles": {
+        "repo": "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",
+        "origin": "IyB2MiBnaXQgYnVuZGxlCjk0ZDQ3YzFmYjZhYTI2ZmY0OGI3MmNmNGMxOGM5MWYwNDg5NmJiNGQgcmVmcy9oZWFkcy9tYWluCjk0ZDQ3YzFmYjZhYTI2ZmY0OGI3MmNmNGMxOGM5MWYwNDg5NmJiNGQgSEVBRAoKUEFDSwAAAAIAAAAQnQt4nH3KUQrCMAwA0P+eohfQtUu2tCDiTSTtEhTZLF0meHtv4Pt+1kV8YgmgWoWmSWLShQXriKSKMrJmHCtAgegad9nMLwpzwkIKGZBZIc+VC1KoFClxDmmiEQQdH/Z4d2/+Yje7+kgZYI6Zkj8FCMHV97o+zeRPcYXrS7Zl4NaGfux236V/pJ/b1/0AT4027pgKeJx9yksKAjEMANB9T9ELKPm0SQsiXqXtJOhiVIYIHt8b+NYvDrOMZSq0RltxHN4YkcG7iVbYOhBUF1peNL3HYc/IZrxUhCoXcCEcTDLUvdZCqyPzLDrBKI1P3F9HjnyJW1wzamcW7NryCRggrde+PyLsT0nzHN9IPxZ0LNGdC3icfcpRCsIwDADQ/56iF9Cl6ZZ2IOJNpE1TFNlWukzw9uIFhPf5tItYrFl8YaiAhUIYa+Y6h5IZfxxRnArRhKalLqtaIBfFTzngHBK4wEIsVbhETLkwjjRirQwmHfrYulV70ZterQuz9+TmEO0JPIDhbVmeqvKnmJz4JWsZUmtDP3a979Lf0s/tY76DWDeYmwd4nH3KQQoDIQwAwLuvyAcKiYmrgVL6Fe1G1oNYJP1/f7BzHt9mQFK0dElHkd5bxFRjtdQy69mIomFvXEU01J9fa4PD09/+AsrKfJDmAg9kxPBZcw53uynhu8e0sVf4A068IcykBnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3m4IUZAEVrBY0iRigv6Whzu//SzKzq3b5vfl0hETAwMDA4WkxOTs1LwUBveMzP3M32tsY6UWP3lhO53h3aK+FgAO6yr5M3icK83lAgACRgDttgF4nCtOzVXITa1ILVLIy1dIzs8rKUosyecCAF6nCBiuAXicMzEwMDBQSCwoYKic/7v2e3lw2I1P//tOcW1Qk42aWQQAu1cNgKoCeJwzNDAwMzFRKCotLokvTi0qSy3SK6hkeMjwTrz9wsELXFlvrz3+l/P5h9iedQBaWBPotgJ4nItQsFUw5AoKDQ6JD3YNCnMNig8I8g/xd/b3UbBVMDbjilSwVTDiAgDDvQlo6QGBJHicS0mZECAya/MehoR/+xqP7p1TZG3P59pS+b0AAJuZDCSuAXicMzEwMDBQSCwoYHBSOxFRcmPKHWevFVYTv99l/Tvf7C8ApIINQqoCeJwzNDAwMzFRKCotLokvTi0qSy3SK6hkSPaKET0X4r92Rvq86aa5SZXzFyyTAgA1cBAXtgJ4nItQsFUw5AoKDQ6JD3YNCnMNig8I8g/xd/b3UbBVMDblilSwVTDiAgDDtQlnowR4nAFDALz/MTAwNjQ0IGEudHh0AIpuOXvknSYy8uTlxiTreBroUreHNDAwMDAgYmFja2VuZACas7wAYP6+gcW9nHI7Pw5FhHn3cIpHHKGhAnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3g4AxygOXkyMYJiLSGfYI2tc869MGJTIhAkY"
+      },
+      "target": "",
+      "enabled": true,
+      "state": {
+        "fase": "pronto",
+        "ok": true,
+        "avisos": [],
+        "waiting_for_server_build": false,
+        "reiniciar_manual": true,
+        "erro": null
+      },
+      "head_after": "9ad6e2eb561d25f6276b804024dd02ff8000a248",
+      "branch_after": "main",
+      "upstream": "origin/main",
+      "behind": false,
+      "requests": [
+        {
+          "url": "https://github.com/jeffer1312/hangar/releases/download/server-latest",
+          "manifest": {
+            "commit": "94d47c1fb6aa26ff48b72cf4c18c91f04896bb4d",
+            "files": {
+              "linux-x86_64/hangar-server": {
+                "name": "hangar-server-linux-x86_64",
+                "sha256": "810c8efe1dfbb5535ebbd3029b471a846c12632a974e5418fe6bb3c3ce80216e"
+              },
+              "linux-x86_64/hangar-cano": {
+                "name": "hangar-cano-linux-x86_64",
+                "sha256": "c0193e19c1b20d9e09be0ac6133c0e7b2de0f9d7e430a8b24be2b5144ca5f205"
+              },
+              "linux-x86_64/hangar-auth": {
+                "name": "hangar-auth-linux-x86_64",
+                "sha256": "aa3b2505b9b739760a8a7861c978c3f9a0337909ed1f5542c91657d468ef5654"
+              }
+            }
+          }
+        }
+      ],
+      "prepare_reused_manifest": true,
+      "name": "test_commit_local_adiante_do_topo_nao_e_atras_do_topo",
+      "parameters": {}
+    },
+    {
+      "branch": "main",
+      "head_before": "42080adc8526aa09a73b83a755980bc1981bc64e",
+      "bundles": {
+        "repo": "IyB2MiBnaXQgYnVuZGxlCjQyMDgwYWRjODUyNmFhMDlhNzNiODNhNzU1OTgwYmMxOTgxYmM2NGUgcmVmcy9oZWFkcy9tYWluCjQyMDgwYWRjODUyNmFhMDlhNzNiODNhNzU1OTgwYmMxOTgxYmM2NGUgcmVmcy9yZW1vdGVzL29yaWdpbi9IRUFECjQyMDgwYWRjODUyNmFhMDlhNzNiODNhNzU1OTgwYmMxOTgxYmM2NGUgcmVmcy9yZW1vdGVzL29yaWdpbi9tYWluCjQyMDgwYWRjODUyNmFhMDlhNzNiODNhNzU1OTgwYmMxOTgxYmM2NGUgSEVBRAoKUEFDSwAAAAIAAAADmwd4nH3KQQoDIQwAwLuvyAcKiYmrgVL6Fe1G1oNYJP1/f7BzHt9mQFK0dElHkd5bxFRjtdQy69mIomFvXEU01J9fa4PD09/+AsrKfJBmhQcyYvisOYe73ZTw3WPa2Cv8AU8DIc6hAnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3g4AxygOXjN4nCvN5QIAAkYA7f6hYGdUew4sSeoN/7LlFHx26iNa",
+        "origin": "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"
+      },
+      "target": "teste",
+      "enabled": true,
+      "state": {
+        "fase": "pronto",
+        "ok": true,
+        "avisos": [],
+        "waiting_for_server_build": false,
+        "reiniciar_manual": true,
+        "erro": null
+      },
+      "head_after": "d7d49c3ebfc2b81426e010765e465dc8258cef3b",
+      "branch_after": "teste",
+      "upstream": "origin/teste",
+      "behind": true,
+      "requests": [
+        {
+          "url": "https://github.com/jeffer1312/hangar/releases/download/server-teste",
+          "manifest": {
+            "commit": "a2841da3e6f3881abc30887b3d34c46e4ae010bf",
+            "files": {
+              "linux-x86_64/hangar-server": {
+                "name": "hangar-server-linux-x86_64",
+                "sha256": "810c8efe1dfbb5535ebbd3029b471a846c12632a974e5418fe6bb3c3ce80216e"
+              },
+              "linux-x86_64/hangar-cano": {
+                "name": "hangar-cano-linux-x86_64",
+                "sha256": "c0193e19c1b20d9e09be0ac6133c0e7b2de0f9d7e430a8b24be2b5144ca5f205"
+              },
+              "linux-x86_64/hangar-auth": {
+                "name": "hangar-auth-linux-x86_64",
+                "sha256": "aa3b2505b9b739760a8a7861c978c3f9a0337909ed1f5542c91657d468ef5654"
+              }
+            }
+          }
+        }
+      ],
+      "prepare_reused_manifest": true,
+      "name": "test_branch_de_teste_nova_nasce_no_commit_escolhido_com_upstream",
+      "parameters": {}
+    },
+    {
+      "branch": "main",
+      "head_before": "42080adc8526aa09a73b83a755980bc1981bc64e",
+      "bundles": {
+        "repo": "IyB2MiBnaXQgYnVuZGxlCjQyMDgwYWRjODUyNmFhMDlhNzNiODNhNzU1OTgwYmMxOTgxYmM2NGUgcmVmcy9oZWFkcy9tYWluCjQyMDgwYWRjODUyNmFhMDlhNzNiODNhNzU1OTgwYmMxOTgxYmM2NGUgcmVmcy9yZW1vdGVzL29yaWdpbi9IRUFECjQyMDgwYWRjODUyNmFhMDlhNzNiODNhNzU1OTgwYmMxOTgxYmM2NGUgcmVmcy9yZW1vdGVzL29yaWdpbi9tYWluCjQyMDgwYWRjODUyNmFhMDlhNzNiODNhNzU1OTgwYmMxOTgxYmM2NGUgSEVBRAoKUEFDSwAAAAIAAAADmwd4nH3KQQoDIQwAwLuvyAcKiYmrgVL6Fe1G1oNYJP1/f7BzHt9mQFK0dElHkd5bxFRjtdQy69mIomFvXEU01J9fa4PD09/+AsrKfJBmhQcyYvisOYe73ZTw3WPa2Cv8AU8DIc6hAnicMzQwMDMxUUjUK6koYejKs6x+MlfN6NOTp8dUXldIvQja3g4AxygOXjN4nCvN5QIAAkYA7f6hYGdUew4sSeoN/7LlFHx26iNa",
+        "origin": "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"
+      },
+      "target": "",
+      "enabled": true,
+      "state": {
+        "fase": "pronto",
+        "ok": true,
+        "avisos": [],
+        "waiting_for_server_build": false,
+        "reiniciar_manual": true,
+        "erro": null
+      },
+      "head_after": "a2841da3e6f3881abc30887b3d34c46e4ae010bf",
+      "branch_after": "main",
+      "upstream": "origin/main",
+      "behind": true,
+      "requests": [
+        {
+          "url": "https://github.com/jeffer1312/hangar/releases/download/server-latest",
+          "manifest": {
+            "commit": "a2841da3e6f3881abc30887b3d34c46e4ae010bf",
+            "files": {
+              "linux-x86_64/hangar-server": {
+                "name": "hangar-server-linux-x86_64",
+                "sha256": "810c8efe1dfbb5535ebbd3029b471a846c12632a974e5418fe6bb3c3ce80216e"
+              },
+              "linux-x86_64/hangar-cano": {
+                "name": "hangar-cano-linux-x86_64",
+                "sha256": "c0193e19c1b20d9e09be0ac6133c0e7b2de0f9d7e430a8b24be2b5144ca5f205"
+              },
+              "linux-x86_64/hangar-auth": {
+                "name": "hangar-auth-linux-x86_64",
+                "sha256": "aa3b2505b9b739760a8a7861c978c3f9a0337909ed1f5542c91657d468ef5654"
+              }
+            }
+          }
+        }
+      ],
+      "prepare_reused_manifest": true,
+      "name": "test_merge_que_muda_o_contrato_conta_pelo_primeiro_pai",
+      "parameters": {}
+    }
+  ]
+}

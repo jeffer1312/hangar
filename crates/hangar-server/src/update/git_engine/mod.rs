@@ -353,29 +353,23 @@ pub fn switches(current: &str, target: &str) -> bool {
         && current != target
         && !(target == "main" && matches!(current, "main" | "master"))
 }
+fn without_ansi(value: &str) -> std::borrow::Cow<'_, str> {
+    static ANSI: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"\x1b\[[0-9;]*[a-zA-Z]").unwrap());
+    ANSI.replace_all(value, "")
+}
 pub fn tail(result: &ProcessOutput, limit: usize) -> String {
-    let text = if result.stderr.is_empty() {
-        &result.stdout
-    } else {
-        &result.stderr
-    };
-    let lines: Vec<_> = text.trim().lines().collect();
-    lines[lines.len().saturating_sub(limit)..].join("\n")
+    let text = without_ansi(if result.stderr.is_empty() { &result.stdout } else { &result.stderr });
+    let lines = crate::transcript::py::splitlines(crate::transcript::py::strip(&text));
+    let start = if limit == 0 { 0 } else { lines.len().saturating_sub(limit) };
+    lines[start..].join("\n")
 }
 pub fn failure_reason(result: &ProcessOutput) -> String {
     let joined = format!("{}{}", result.stdout, result.stderr);
-    let marked: Vec<_> = joined
-        .lines()
-        .filter_map(|line| {
-            line.split_once("##HANGAR-FALHA##")
-                .map(|(_, value)| value.trim())
-        })
+    let text = without_ansi(&joined);
+    let marked: Vec<_> = crate::transcript::py::splitlines(&text).into_iter()
+        .filter_map(|line| line.split_once("##HANGAR-FALHA##").map(|(_, value)| crate::transcript::py::strip(value)))
         .collect();
-    if marked.is_empty() {
-        tail(result, 12)
-    } else {
-        marked.join("\n")
-    }
+    if marked.is_empty() { tail(result, 12) } else { marked.join("\n") }
 }
 
 pub fn valid_branch(value: &str) -> bool {

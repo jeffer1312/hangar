@@ -1,0 +1,65 @@
+{
+  "source_commit": "8552d4f3d",
+  "command": "python generate-chromium-refresh.py --reference <checkout> --output chromium-refresh.json",
+  "cases": [
+    {
+      "name": "absent",
+      "marker": null,
+      "age_hours": 0,
+      "code": 0,
+      "calls": []
+    },
+    {
+      "name": "failed-system",
+      "marker": "sistema: /usr/bin/google-chrome (baixar falhou: x)\n",
+      "age_hours": 2,
+      "code": 1,
+      "calls": [
+        {
+          "args": [
+            "<ROOT>/scripts/install-chromium.sh"
+          ],
+          "cwd": "<ROOT>",
+          "timeout": 900
+        }
+      ]
+    },
+    {
+      "name": "recent",
+      "marker": "baixado: /x/chrome-headless-shell (1.2.3.4)\n",
+      "age_hours": 2,
+      "code": 0,
+      "calls": []
+    },
+    {
+      "name": "old",
+      "marker": "baixado: /x/chrome-headless-shell (1.2.3.4)\n",
+      "age_hours": 25,
+      "code": 0,
+      "calls": [
+        {
+          "args": [
+            "<ROOT>/scripts/install-chromium.sh"
+          ],
+          "cwd": "<ROOT>",
+          "timeout": 900
+        }
+      ]
+    },
+    {
+      "name": "failed-recent",
+      "marker": "download falhou: sem rede\n",
+      "age_hours": 2,
+      "code": 0,
+      "calls": [
+        {
+          "args": [
+            "<ROOT>/scripts/install-chromium.sh"
+          ],
+          "cwd": "<ROOT>",
+          "timeout": 900
+        }
+      ]
+    }
+  ]
+}

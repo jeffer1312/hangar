@@ -421,3 +421,16 @@ mod update_download;
 mod update_stale_pair;
 
 mod update_screen_state;
+
+mod update_selection_pipeline;
+
+mod update_preflight_guards;
+mod update_chromium_refresh;
+mod update_error_tail;
+
+mod update_screen_restart;
+
+mod update_step_effects;
+
+mod update_dist_key;
+mod update_state_write_failure;

@@ -1,0 +1,39 @@
+{
+  "source_commit": "8552d4f3d",
+  "command": "python generate-step-effects.py --reference <checkout> --output step-effects.json",
+  "cases": [
+    {
+      "name": "test_passos_rodam_sabendo_que_o_binario_e_da_atualizacao",
+      "calls": [
+        {
+          "method": "checar",
+          "result": {
+            "pode": true,
+            "faltando": [],
+            "branch": "main",
+            "branch_de_trabalho": false
+          }
+        },
+        {
+          "method": "executar",
+          "result": {
+            "ok": true,
+            "erro": null
+          }
+        }
+      ],
+      "head": "eb5d2e57d07f1f85fd3e5b32cf97dd2f8db7558e",
+      "branch": "main",
+      "invalid_steps": null
+    },
+    {
+      "name": "test_passo_malformado_vai_pro_estado_e_nao_so_pro_log",
+      "calls": [],
+      "head": "eb5d2e57d07f1f85fd3e5b32cf97dd2f8db7558e",
+      "branch": "main",
+      "invalid_steps": [
+        "2026-01-01-torto.md"
+      ]
+    }
+  ]
+}
