@@ -169,6 +169,14 @@ export function vaultErrorText(code: string): string | undefined {
   return Object.prototype.hasOwnProperty.call(ERROR_TEXT, code) ? ERROR_TEXT[code as VaultErrorCode]?.() : undefined;
 }
 
+/** Frase de uma falha de chamada do cofre, pelo código; 404 sem código é servidor sem as rotas do cofre.
+ *  `undefined`: quem chama mostra a mensagem do servidor. */
+export function vaultFailureText(err: unknown): string | undefined {
+  const { code, status } = (err ?? {}) as { code?: unknown; status?: unknown };
+  if (typeof code === 'string' && code) return vaultErrorText(code);
+  return status === 404 ? m.vault_err_sem_cofre() : undefined;
+}
+
 /** Criar o cofre ou gravar nele pode esperar o chaveiro. */
 const KEYRING_MS = 45_000;
 

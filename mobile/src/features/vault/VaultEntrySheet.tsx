@@ -93,6 +93,7 @@ export function VaultEntrySheet({ server, entry, onClose, onChanged }: {
   };
 
   return <MachineSheet title={entry ? entry.name : m.vault_app_add()} onClose={onClose}>
+    <MachineHelp>{m.vault_token_hint()}</MachineHelp>
     <MachineGroup>
       <MachineField label={m.vault_app_field_name()} value={name} onChangeText={setName} editable={!busy} />
       <MachineField label={m.vault_app_field_username()} value={username} onChangeText={setUsername} editable={!busy}
@@ -116,7 +117,6 @@ export function VaultEntrySheet({ server, entry, onClose, onChanged }: {
       <MachineRow title={busy ? m.vault_app_saving() : m.vault_app_save()} action disabled={!canSave} onPress={save} />
       {entry ? <MachineRow title={m.vault_app_delete()} danger disabled={busy} onPress={remove} /> : null}
     </MachineGroup>
-    {!entry ? <MachineHelp>{m.vault_app_add_help()}</MachineHelp> : null}
   </MachineSheet>;
 }
 

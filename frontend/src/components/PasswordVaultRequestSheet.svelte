@@ -14,7 +14,7 @@
   import { tick } from 'svelte';
   import BottomSheet from './BottomSheet.svelte';
   import * as m from '../paraglide/messages';
-  import { answerVaultRequest, vaultErrorText, type Server, type VaultAnswer, type VaultEvent, type VaultPolicy, type VaultRequest } from '@hangar/core';
+  import { answerVaultRequest, vaultFailureText, type Server, type VaultAnswer, type VaultEvent, type VaultPolicy, type VaultRequest } from '@hangar/core';
 
   let { server, event }: { server: Server; event: VaultEvent } = $props();
 
@@ -62,8 +62,7 @@
     new Date(r.expires_at * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
   function failure(err: unknown): string {
-    const code = (err as { code?: string })?.code;
-    const known = code ? vaultErrorText(code) : undefined;
+    const known = vaultFailureText(err);
     if (known) return known;
     return m.vault_web_request_failed({ error: err instanceof Error ? err.message : String(err) });
   }

@@ -6,7 +6,7 @@
   import { listOwnServers } from '../../lib/auth';
   import {
     addVaultEntry, deleteVaultEntry, findOwnerServer, getVaultStatus, listVaultEntries, listVaultPeers, putVaultConfig, restoreVault,
-    revealVaultPassword, setVaultRecovery, updateVaultEntry, vaultErrorText,
+    revealVaultPassword, setVaultRecovery, updateVaultEntry, vaultFailureText,
     type Server, type VaultEntry, type VaultPeer, type VaultPolicy, type VaultStatus,
   } from '@hangar/core';
 
@@ -21,10 +21,7 @@
   let revealed = $state<Record<string, string>>({});
   let busyId = $state<string | null>(null);
 
-  const reason = (err: unknown) => {
-    const code = (err as { code?: string })?.code;
-    return (code && vaultErrorText(code)) || (err instanceof Error ? err.message : String(err));
-  };
+  const reason = (err: unknown) => vaultFailureText(err) ?? (err instanceof Error ? err.message : String(err));
 
   async function load() {
     statusError = null;
@@ -467,6 +464,7 @@
   {#if editing}
     <form class="pv-form" onsubmit={saveForm}>
       <h2 class="pv-form-titulo">{editing === 'new' ? m.vault_web_add_title() : m.vault_web_edit_title()}</h2>
+      <p class="pv-muted">{m.vault_token_hint()}</p>
       <label class="pv-campo"><span>{m.vault_web_name()}</span>
         <input type="text" autocomplete="off" bind:value={fName} disabled={saving} required /></label>
       <label class="pv-campo"><span>{m.vault_web_username()}</span>
@@ -484,7 +482,8 @@
           </button>
         </span></label>
       <label class="pv-campo"><span>{m.vault_web_site()}</span>
-        <input type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" bind:value={fUrl} disabled={saving} /></label>
+        <!-- `type="text"`: `type="url"` faria o navegador recusar `auth.exemplo.com` sem esquema. -->
+        <input type="text" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" bind:value={fUrl} disabled={saving} /></label>
       <label class="pv-campo"><span>{m.vault_web_notes()}</span>
         <textarea rows="3" bind:value={fNotes} disabled={saving}></textarea></label>
       <fieldset class="pv-politica" disabled={saving}>
