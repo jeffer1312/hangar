@@ -96,7 +96,17 @@ def test_list_sessions_route(api_client):
 
 
 def test_resposta_json_grande_usa_gzip(api_client):
-    r = api_client.get("/api/config", headers={**_h(), "Accept-Encoding": "gzip"})
+    async def payload():
+        return {"texto": "x" * 4096}
+
+    api_client.app.add_api_route("/api/test-gzip", payload)
+    try:
+        r = api_client.get("/api/test-gzip", headers={**_h(), "Accept-Encoding": "gzip"})
+    finally:
+        api_client.app.router.routes[:] = [
+            route for route in api_client.app.router.routes
+            if getattr(route, "path", None) != "/api/test-gzip"
+        ]
     assert r.status_code == 200
     assert r.headers["content-encoding"] == "gzip"
     assert "Accept-Encoding" in r.headers["vary"]

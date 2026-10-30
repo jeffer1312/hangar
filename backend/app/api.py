@@ -69,7 +69,7 @@ from app.state import corrige_ocioso_kimi, forget_frame, menu_codex
 from app.uploads import MAX_BYTES
 from app.config import (list_config_dirs, _backend_config_base, settings,
                         resolve_scan_roots,
-                        automations_enabled, resolve_bind_ip, variaveis_env)
+                        automations_enabled, resolve_bind_ip)
 from app import runtime_config
 from app.guest_user_gate import GuestUserGate
 from app.connect_port import CONNECT_PORT, ConnectPortGate
@@ -4229,102 +4229,6 @@ def term_input(name: str, body: TermInputBody):
     except RuntimeError as e:
         raise _falha_do_runtime(e) from None
     return {"ok": True}
-
-
-def _painel_disponivel() -> bool:
-    # O termsock NAO importa `pty` no topo justamente pra este import funcionar no Windows.
-    from app import termsock
-    return termsock.painel_disponivel()
-
-
-
-
-def _origem_do_terminal_ok(request: Request) -> bool:
-    """A mesma pergunta que o handshake do terminal faz, respondida por HTTP (que tem corpo).
-
-    Sem `Origin` (cliente que nao e navegador) e True: o handshake tambem so cobra origem quando o
-    cabecalho existe, e responder False aqui poria um aviso de recusa numa tela que abre normal.
-    O dono abre com `?token=` e o handshake nao confere a Origin dele: so o login de convidado cobra.
-    """
-    from app import termsock
-    origem = request.headers.get("origin")
-    if not origem or guest_users.current.get() is None:
-        return True
-    return termsock._origem_aceita(origem, request.headers.get("host"))
-
-
-@app.get("/api/config", dependencies=[Depends(require_auth)])
-def get_config(request: Request):
-    """Config editavel pelo app + o que e so-leitura (exige reiniciar o servico).
-
-    O bloco so-leitura (`_somente_leitura`) volta tambem no POST: parte dele depende de campo
-    editavel. Segredo NUNCA volta inteiro: `estado()` devolve mascarado (gsk_••••1234) — da pra
-    conferir QUAL chave esta la sem conseguir copia-la de volta."""
-    return {
-        "campos": runtime_config.estado(),
-        "somente_leitura": _somente_leitura(request),
-        # IRMÃ do `somente_leitura`, nunca dentro dele: aquele bloco é um mapa chave -> valor
-        # simples, tipado assim no core e desenhado linha a linha pela tela. Uma lista lá dentro
-        # quebraria o tipo e desenharia "[object Object]".
-        "variaveis_env": variaveis_env(),
-    }
-
-
-def _somente_leitura(request: Request) -> dict:
-    """O que a tela mostra sem poder editar. Volta também no PATCH: parte dela (a capacidade de
-    traduzir o pensamento) muda com um campo editável, e a linha ficava velha até reabrir o modal."""
-    return {
-            "port": settings.port,
-            "lan_bind_ip": settings.lan_bind_ip,
-            "server_id": settings.server_id,
-            "public_url": settings.public_url,
-            # CAPACIDADE, nao nome de sistema: "da pra abrir o painel aqui?". O
-            # `os.name == "posix"` que estava aqui respondia outra pergunta — e a diferenca deixou
-            # de ser teorica em 22/08/2026, quando o Windows ganhou motor (ConPTY): a resposta la
-            # virou True sem ninguem tocar nesta linha, que e o ponto de perguntar por capacidade.
-            # Ela tambem responde False num POSIX sem `pty`. Import tardio pelo mesmo motivo de
-            # sempre: o termsock nao pode ser importado no topo deste modulo.
-            "terminal_panel": _painel_disponivel(),
-            # A ORIGEM DESTE cliente abriria o terminal aqui? O handshake do WebSocket recusa com
-            # 403 e o navegador nao entrega corpo nem motivo — a tela dizia so "desconectado", e o
-            # unico lugar com a explicacao era o log do servidor. Com este campo a propria tela
-            # nomeia a origem recusada e manda pro campo que a libera.
-            "terminal_origem_ok": _origem_do_terminal_ok(request),
-            # A versao do PROCESSO VIVO, nao a do checkout. Durante a janela entre o `git pull` e o
-            # restart as duas divergem, e e exatamente ai que o botao Atualizar vive: dizer a do
-            # disco aqui seria afirmar estar rodando codigo que ninguem carregou (o defeito que
-            # `diag.VERSAO_EM_EXECUCAO` corrigiu em f4013343).
-            "versao": diag.VERSAO_EM_EXECUCAO,
-    }
-
-
-# POST **e** PATCH: o PATCH morria em erro de CORS cross-origin e a culpa foi posta no "proxy na
-# frente do backend". ERRADO — o culpado era o plugin apiCorsPreflight do frontend/vite.config.ts,
-# que respondia TODO preflight de /api com uma LISTA FIXA de metodos que nao tinha PATCH (nem PUT,
-# o que so apareceu em 2026-07-31, derrubando salvar motor). Hoje o plugin ECOA o metodo pedido e
-# nao ha mais lista pra envelhecer. O cliente segue no POST porque funciona; o PATCH vale pra quem
-# chamar a API na mao.
-@app.post("/api/config", dependencies=[Depends(require_auth)])
-@app.patch("/api/config", dependencies=[Depends(require_auth)])
-async def patch_config(request: Request):
-    """Grava overrides. Campo desconhecido e ignorado (o cliente nao inventa setting); tipo errado
-    volta 400 com a mensagem, em vez de gravar lixo que so quebraria depois."""
-    body = await request.json()
-    if not isinstance(body, dict):
-        raise HTTPException(400, detail=erro("erro_corpo_deve_ser_objeto", "corpo deve ser um objeto"))
-    remover = {campo for campo, valor in body.items() if valor is None}
-    mudancas = {campo: valor for campo, valor in body.items() if valor is not None}
-    try:
-        await asyncio.to_thread(runtime_config.aplicar, mudancas, remover=remover)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    if "claude_function_hooks" in body:
-        # O wrapper do shell lê o caminho do plugin de um arquivo; ele acompanha o interruptor.
-        try:
-            await asyncio.to_thread(plugin_bridge.publish_address)
-        except OSError:
-            _log.warning("plugin: caminho do plugin não regravado", exc_info=True)
-    return {"campos": runtime_config.estado(), "somente_leitura": _somente_leitura(request)}
 
 
 def _motores_para_cliente() -> dict[str, dict]:
