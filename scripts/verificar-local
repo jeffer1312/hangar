@@ -684,10 +684,13 @@ VM_MAX="${HANGAR_VERIFICAR_WINDOWS_MAX:-600}"
 
 vm_rodar() {   # $1 = sha, resto = passos; saída inteira no stdout
     local sha="$1"; shift
-    local tem bundle ps b64 nome
+    local tem bundle ps b64 nome runner
     git -C "$FIXO" update-ref refs/verificar/alvo "$sha" || return 2
-    tem="$(echo "mkdir -p $VM_GIT; git -C $VM_GIT rev-parse -q --verify refs/verificar/alvo 2>/dev/null" \
-        | vm_ssh '& "C:\Program Files\Git\bin\bash.exe" -s' | tr -d '\r')" || true
+    # O shell padrão do OpenSSH pode ser cmd: o operador & pertence ao PowerShell.
+    ps="\$ProgressPreference='SilentlyContinue'; & 'C:\\Program Files\\Git\\bin\\bash.exe' -s; exit \$LASTEXITCODE"
+    b64="$(printf '%s' "$ps" | iconv -t UTF-16LE | base64 -w0)"
+    tem="$(printf 'mkdir -p %q; git -C %q rev-parse -q --verify refs/verificar/alvo 2>/dev/null\n' "$VM_GIT" "$VM_GIT" \
+        | vm_ssh "powershell -NoProfile -NonInteractive -EncodedCommand $b64" | tr -d '\r')" || true
     nome=-
     if [[ "$tem" != "$sha" ]]; then
         nome="in-${sha:0:10}-$$.bundle"
@@ -708,19 +711,27 @@ vm_rodar() {   # $1 = sha, resto = passos; saída inteira no stdout
             rm -f "$bundle"
         fi
     fi
-    # Mutex do sistema: some com o processo, então SSH caído não deixa a fila presa. Prioridade
-    # abaixo do normal passa para os filhos (cargo, pytest) e não disputa com o Hangar da VM.
+    # Arquivo remoto deixa o stdin fechado também durante a espera do mutex.
+    runner="run-${sha:0:10}-$$.sh"
+    scp -q -o BatchMode=yes "$SCRIPT" "$VM:$VM_WIN/$runner" 2>/dev/null || { echo "scp do roteiro para $VM falhou"; return 2; }
+    # Mutex do sistema: prioridade abaixo do normal também vale para os filhos.
     ps="\$ProgressPreference='SilentlyContinue'
 \$m = New-Object System.Threading.Mutex(\$false, 'Global\\hangar-verificacao')
-try { if (-not \$m.WaitOne(${VM_MAX}000)) { 'verificar-local: outra verificação ocupa a VM'; exit 3 } } catch [System.Threading.AbandonedMutexException] { }
-[System.Diagnostics.Process]::GetCurrentProcess().PriorityClass = 'BelowNormal'
-& 'C:\\Program Files\\Git\\bin\\bash.exe' -s -- --executar windows $sha $([[ $nome == - ]] && echo - || echo "$VM_WIN/$nome") $*
-\$rc = \$LASTEXITCODE
-\$m.ReleaseMutex()
-exit \$rc"
+\$owned = \$false
+try {
+    try { \$owned = \$m.WaitOne(${VM_MAX}000) } catch [System.Threading.AbandonedMutexException] { \$owned = \$true }
+    if (-not \$owned) { 'verificar-local: outra verificação ocupa a VM'; exit 3 }
+    [System.Diagnostics.Process]::GetCurrentProcess().PriorityClass = 'BelowNormal'
+    & 'C:\\Program Files\\Git\\bin\\bash.exe' '$VM_WIN/$runner' --executar windows $sha $([[ $nome == - ]] && echo - || echo "$VM_WIN/$nome") $*
+    exit \$LASTEXITCODE
+} finally {
+    if (\$owned) { \$m.ReleaseMutex() }
+    \$m.Dispose()
+    Remove-Item -LiteralPath '$VM_WIN/$runner' -Force -ErrorAction SilentlyContinue
+}"
     b64="$(printf '%s' "$ps" | iconv -t UTF-16LE | base64 -w0)"
     timeout --kill-after=10 "$VM_MAX" ssh -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
-        "$VM" "powershell -NoProfile -NonInteractive -EncodedCommand $b64" < "$SCRIPT" \
+        "$VM" "powershell -NoProfile -NonInteractive -EncodedCommand $b64" < /dev/null \
         2> >(grep -v 'post-quantum\|store now\|upgraded\|openssh.com' >&2) | tr -d '\r'
     local rc="${PIPESTATUS[0]}"
     (( rc == 124 || rc == 137 )) && echo "verificar-local: a VM $VM não terminou em ${VM_MAX}s; Windows não verificado"
