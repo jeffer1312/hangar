@@ -914,17 +914,10 @@ async fn filename_extension_preserves_percent_encoded_python_behavior() {
 }
 
 #[test]
-fn frozen_linux_and_windows_galleries_read_old_files_without_rewriting_goldens() {
+fn gallery_reads_older_vault_files() {
     use base64::Engine;
-    for text in [
-        include_str!(
-            "../../../../backend/tests/fixtures/uploads_contract/linux/binary-and-gallery.json"
-        ),
-        include_str!(
-            "../../../../backend/tests/fixtures/uploads_contract/win32/binary-and-gallery.json"
-        ),
-    ] {
-        let golden: serde_json::Value = serde_json::from_str(text).unwrap();
+    {
+        let golden: serde_json::Value = serde_json::from_str(crate::uploads_contract::cases::BINARY_AND_GALLERY).unwrap();
         let fixture = tempfile::tempdir().unwrap();
         for row in golden["normalized_tree"].as_array().unwrap() {
             let relative = row["path"]
