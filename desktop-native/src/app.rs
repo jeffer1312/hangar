@@ -36,6 +36,8 @@ mod group_sheet;
 mod hangar_live;
 mod harness;
 mod keyring;
+mod vault;
+mod vault_requests;
 mod rename_suggest;
 mod tags;
 mod viewer;
@@ -596,6 +598,10 @@ pub struct Hangar {
     /// Máquinas (chave `servers::norm`, ativa e outras) com o chaveiro trancado, pelo evento `keyring` da lista de cada uma.
     /// Só a queda do stream dela limpa: o servidor reenvia o estado ao reconectar.
     keyring: HashMap<String, keyring::Prompt>,
+    /// Pedidos do cofre esperando resposta, pelo evento `vault` da lista de cada máquina dona (chave `servers::norm`).
+    vault: HashMap<String, Entity<vault_requests::VaultRequests>>,
+    /// Página Cofre aberta, com a conexão em que nasceu.
+    vault_page: Option<(u64, Entity<vault::VaultPage>)>,
     rename_suggest: rename_suggest::RenameSuggest,
     /// Último evento `tags` da lista de cada máquina (chave `servers::norm`); máquina sem ele é servidor antigo.
     /// Fica na queda do stream: a etiqueta não muda por a máquina estar fora.
@@ -1078,7 +1084,7 @@ impl Hangar {
             history_installed: false, pending_chat: Vec::new(),
             history_limit: 400, has_older: false, etag: None, error: None, list_error: None,
             delivery: DeliveryTracker::default(), stopping: HashSet::new(), stop_feedback: HashMap::new(), drafts: HashMap::new(), input_history: HashMap::new(),
-            flight: InFlight::default(), action_feedback: HashMap::new(), file_cards: HashMap::new(), queue: Default::default(), live_terms: Vec::new(), keyring: HashMap::new(), rename_suggest: Default::default(), tags: HashMap::new(), question_open: None, question_card: None,
+            flight: InFlight::default(), action_feedback: HashMap::new(), file_cards: HashMap::new(), queue: Default::default(), live_terms: Vec::new(), keyring: HashMap::new(), vault: HashMap::new(), vault_page: None, rename_suggest: Default::default(), tags: HashMap::new(), question_open: None, question_card: None,
             hangar_open: false, hangar_focus: cx.focus_handle(), hangar_error: None, live_clock: None, ask_form: AskForm::default(), ask_drafts: HashMap::new(), plans_dismissed: HashSet::new(), answered_tools: HashSet::new(), answering: HashMap::new(), ask_scroll: Default::default(), plan_scroll: Default::default(), plan_view: None,
             plan_review: Default::default(),
             list_state, rail_hover: None, follow: Default::default(), row_ids: Vec::new(), row_signatures: Vec::new(), conversation: Default::default(), row_assets: Vec::new(), expanded: HashSet::new(), kept_expanded: HashMap::new(), orq_days: HashSet::new(),
@@ -1780,11 +1786,21 @@ impl Hangar {
                         servers::RemoteUpdate::Stream(Update::Frame(frame)) if frame.event == "keyring" => keyring::locked(&frame.data),
                         _ => None,
                     };
+                    // Pedidos do cofre dela, com a mesma regra da queda.
+                    let vault = match &update {
+                        servers::RemoteUpdate::Stream(Update::Offline(_)) => Some(None),
+                        servers::RemoteUpdate::Stream(Update::Frame(frame)) if frame.event == "vault" => Some(Some(frame.data.clone())),
+                        _ => None,
+                    };
                     // Menu, renomear, fechar e grupo das linhas desta máquina acompanham a lista dela como os da ativa.
                     if self.receive_remote(generation, key.clone(), update, cx) { self.sidebar_sessions_changed(window, cx); }
                     self.remote_changed(&key, window, cx);
                     if live { self.live_changed(&key, window, cx); }
                     if let Some(locked) = keyring && self.set_keyring(&key, locked, window, cx) {
+                        self.redraw(panes::Area::Nav, cx);
+                        cx.notify();
+                    }
+                    if let Some(data) = vault && self.set_vault_requests(&key, data.as_ref(), window, cx) {
                         self.redraw(panes::Area::Nav, cx);
                         cx.notify();
                     }
@@ -1857,6 +1873,7 @@ impl Hangar {
                     self.list_error = Some(self.active_failure(&error));
                     let server = self.active_key();
                     if self.set_keyring(&server, false, window, cx) { self.redraw(panes::Area::Nav, cx); }
+                    if self.set_vault_requests(&server, None, window, cx) { self.redraw(panes::Area::Nav, cx); }
                     // Stream da lista caído: o chip e os blocos não mostram terminal velho dele.
                     if !std::mem::take(&mut self.live_terms).is_empty() {
                         let server = self.active_key();
@@ -1892,6 +1909,12 @@ impl Hangar {
                     visible = state.is_some_and(|locked| self.set_keyring(&server, locked, window, cx));
                     if visible { self.redraw(panes::Area::Nav, cx); }
                     state.is_some()
+                }
+                else if frame.event == "vault" {
+                    let server = self.active_key();
+                    visible = self.set_vault_requests(&server, Some(&frame.data), window, cx);
+                    if visible { self.redraw(panes::Area::Nav, cx); }
+                    vault_requests::parse(&frame.data).is_some()
                 }
                 else if frame.event == "tags" {
                     let server = self.active_key();
@@ -5770,6 +5793,7 @@ impl Hangar {
                     children.push((key, at, self.render_server_header(&id, &m.key, &label, count, invite, error, cx)));
                     // Num servidor só, o aviso do chaveiro aparece embaixo da lista, junto da falha dela.
                     if multi && let Some(notice) = self.render_keyring_notice(&m.key, false, cx) { children.push((String::new(), at, notice)); }
+                    if multi && let Some(cards) = self.render_vault_requests(&m.key, cx) { children.push((String::new(), at, cards)); }
                     hidden = self.sidebar.is_collapsed(&format!("server:{}", m.key));
                     if !hidden { rows(list, m.remote.as_deref(), at, &mut children, window, cx); }
                 }
@@ -5863,6 +5887,7 @@ impl Hangar {
                 .child(div().flex_1().min_w_0().child(text))
                 .child(Button::new("reconnect").xsmall().ghost().label(tr("retry")).on_click(cx.listener(|this, _, window, cx| this.connect(window, cx))))))
             .children((!multi).then(|| self.render_keyring_notice(&self.active_key(), false, cx)).flatten())
+            .children((!multi).then(|| self.render_vault_requests(&self.active_key(), cx)).flatten())
             // O CTA do rodapé da barra do web, com o recolher ao lado.
             .child(div().flex_shrink_0().px(px(8.)).pt(px(8.)).pb(px(8.)).flex().items_center().gap_2()
                 .child(self.new_session_button(false, cx))
@@ -5955,7 +5980,8 @@ impl Hangar {
             .when_some(self.list_error.clone(), |el, text| el.child(div().flex_shrink_0().max_w(px(260.)).flex().items_center().gap_1()
                 .child(div().min_w_0().truncate().text_xs().text_color(theme::warning()).child(text))
                 .child(Button::new("reconnect").xsmall().ghost().label(tr("retry")).on_click(cx.listener(|this, _, window, cx| this.connect(window, cx))))))
-            .children(self.keyring_keys().iter().filter_map(|key| self.render_keyring_notice(key, true, cx)).collect::<Vec<_>>()),
+            .children(self.keyring_keys().iter().filter_map(|key| self.render_keyring_notice(key, true, cx)).collect::<Vec<_>>())
+            .children(self.render_vault_chips(cx)),
             px(if floating { theme::PANEL_RADIUS } else { 0. }))
     }
 

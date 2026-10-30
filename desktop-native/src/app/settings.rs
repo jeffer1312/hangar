@@ -14,13 +14,13 @@ mod appearance_page;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Page {
     General, Appearance, Diary, About, Migration,
-    Servers, Sync, Connect, Devices, SharedConfig, Accounts, Orchestration, Harnesses, Voice, Jev, Windows, Notifications, Shortcuts, Attachments, Worktrees, Advanced,
+    Servers, Sync, Connect, Devices, SharedConfig, Accounts, Vault, Orchestration, Harnesses, Voice, Jev, Windows, Notifications, Shortcuts, Attachments, Worktrees, Advanced,
 }
 
 impl Page {
     const DEVICE: [Page; 3] = [Page::General, Page::Appearance, Page::About];
     // O diário é do servidor escolhido no seletor ("O registro de uso de <servidor>"), não do aparelho.
-    const SERVER: [Page; 17] = [Page::Diary, Page::Servers, Page::Sync, Page::Connect, Page::Devices, Page::SharedConfig, Page::Accounts, Page::Orchestration, Page::Harnesses,
+    const SERVER: [Page; 18] = [Page::Diary, Page::Servers, Page::Sync, Page::Connect, Page::Devices, Page::SharedConfig, Page::Accounts, Page::Vault, Page::Orchestration, Page::Harnesses,
         Page::Voice, Page::Jev, Page::Windows, Page::Notifications, Page::Shortcuts, Page::Attachments, Page::Worktrees, Page::Advanced];
 
     /// As seções da navegação, na ordem dela; a voz abre uma pelo `key`.
@@ -35,7 +35,7 @@ impl Page {
     pub(super) fn key(self) -> &'static str {
         match self {
             Page::General => "general", Page::Appearance => "appearance", Page::Diary => "diary", Page::About => "about", Page::Migration => "migration",
-            Page::Servers => "servers", Page::Sync => "sync", Page::Connect => "connect", Page::Devices => "devices", Page::SharedConfig => "shared_config", Page::Accounts => "accounts", Page::Orchestration => "orchestration",
+            Page::Servers => "servers", Page::Sync => "sync", Page::Connect => "connect", Page::Devices => "devices", Page::SharedConfig => "shared_config", Page::Accounts => "accounts", Page::Vault => "vault", Page::Orchestration => "orchestration",
             Page::Harnesses => "harnesses", Page::Voice => "voice", Page::Jev => "jev", Page::Windows => "windows", Page::Notifications => "notifications",
             Page::Shortcuts => "shortcuts", Page::Attachments => "attachments", Page::Worktrees => "worktrees", Page::Advanced => "advanced",
         }
@@ -45,7 +45,7 @@ impl Page {
         match self {
             Page::General => IconName::Globe, Page::Appearance => IconName::Palette, Page::Diary => IconName::FileText,
             Page::About => IconName::Info, Page::Migration => IconName::Activity, Page::Servers => IconName::Server, Page::Sync => IconName::RefreshCw, Page::Connect => IconName::Globe, Page::Devices => IconName::Smartphone, Page::SharedConfig => IconName::Layers,
-            Page::Accounts => IconName::User, Page::Orchestration => IconName::Users, Page::Harnesses => IconName::Activity,
+            Page::Accounts => IconName::User, Page::Vault => IconName::KeyRound, Page::Orchestration => IconName::Users, Page::Harnesses => IconName::Activity,
             Page::Voice => IconName::Mic, Page::Jev => IconName::Zap, Page::Windows => IconName::Monitor, Page::Notifications => IconName::Bell,
             Page::Shortcuts => IconName::Keyboard, Page::Attachments => IconName::Paperclip, Page::Worktrees => IconName::GitBranch, Page::Advanced => IconName::SlidersHorizontal,
         }
@@ -484,6 +484,8 @@ impl Hangar {
         self.costs.view = None;
         (self.worktrees.view, self.worktrees.open) = (None, None);
         self.settings = Some(page);
+        // O Cofre relê a cada abertura, e a senha revelada não passa para a próxima.
+        self.vault_page = None;
         self.settings_ui.live = false;
         self.settings_ui.hit = None;
         // Toda página abre do topo; a rolagem é uma só para todas as páginas.
@@ -510,6 +512,7 @@ impl Hangar {
     pub(super) fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.settings.take().is_some() {
             self.keyboard.cancel_edit();
+            self.vault_page = None;
             self.accounts_page_left();
             self.sync_page_left();
             self.connect_page_left();
@@ -851,6 +854,7 @@ impl Hangar {
             Page::About => self.render_about(cx),
             Page::Migration => self.render_migration(cx),
             Page::Accounts => self.render_accounts(accounts_wide, window, cx),
+            Page::Vault => self.render_vault(window, cx),
             Page::Orchestration => self.render_orchestration(cx),
             Page::Shortcuts => self.render_shortcuts_page(cx),
             Page::Worktrees => self.render_worktree_settings(window, cx),
