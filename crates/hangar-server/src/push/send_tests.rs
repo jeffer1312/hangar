@@ -33,8 +33,18 @@ fn guest_push_persisted_payload_matches_original() {
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn guest_push_subscribe_waits_for_expired_delivery_and_survives_prune() {
+#[test]
+fn guest_push_subscribe_waits_for_expired_delivery_and_survives_prune() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .max_blocking_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(push_writers_with_one_blocking_thread());
+}
+
+async fn push_writers_with_one_blocking_thread() {
     use crate::{
         accounts::{AccountService, environment::AccountEnvironment},
         auth::TrustedHosts,
@@ -130,7 +140,7 @@ async fn guest_push_subscribe_waits_for_expired_delivery_and_survives_prune() {
             .unwrap(),
         )
         .unwrap();
-        let delivery = tokio::spawn(async move {
+        let mut delivery = tokio::spawn(async move {
             sender
                 .broadcast(Outgoing::single("s", Notice::Awaiting(None)))
                 .await
@@ -139,6 +149,45 @@ async fn guest_push_subscribe_waits_for_expired_delivery_and_survives_prune() {
             .await
             .unwrap()
             .unwrap();
+        for subscription in [
+            json!({}),
+            json!({"endpoint":null}),
+            json!({"endpoint":false}),
+            json!({"endpoint":0}),
+            json!({"endpoint":""}),
+            json!({"endpoint":[]}),
+        ] {
+            let mut request = Request::builder()
+                .method("POST")
+                .uri("/api/push/subscribe")
+                .header("authorization", "Bearer owner")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(
+                        &json!({"subscription":subscription,"label":"Servidor","serverId":"s"}),
+                    )
+                    .unwrap(),
+                ))
+                .unwrap();
+            request.extensions_mut().insert(ConnectInfo(
+                "192.0.2.1:1234".parse::<std::net::SocketAddr>().unwrap(),
+            ));
+            let response = tokio::time::timeout(
+                Duration::from_secs(1),
+                crate::routes::router(st.clone()).oneshot(request),
+            )
+            .await
+            .expect("inscrição inválida deve recusar antes de esperar o envio")
+            .unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            let bytes = axum::body::to_bytes(response.into_body(), 1024)
+                .await
+                .unwrap();
+            assert_eq!(
+                serde_json::from_slice::<Value>(&bytes).unwrap(),
+                json!({"detail":"subscription sem endpoint"})
+            );
+        }
         let probe = store::lock_probe(&dir);
         let mut request = Request::builder()
             .method("POST")
@@ -155,15 +204,68 @@ async fn guest_push_subscribe_waits_for_expired_delivery_and_survives_prune() {
         request.extensions_mut().insert(ConnectInfo(
             "192.0.2.1:1234".parse::<std::net::SocketAddr>().unwrap(),
         ));
-        let writing =
-            tokio::spawn(async move { crate::routes::router(st).oneshot(request).await.unwrap() });
+        let writer_state = st.clone();
+        let writing = tokio::spawn(async move {
+            crate::routes::router(writer_state)
+                .oneshot(request)
+                .await
+                .unwrap()
+        });
         let blocked = tokio::time::timeout(Duration::from_secs(5), probe)
             .await
             .unwrap()
             .unwrap();
+        let mut preferences = Vec::new();
+        for (path, body) in [
+            ("/api/push/mute", json!({"session":"s", "muted":true})),
+            (
+                "/api/push/quiet-hours",
+                json!({"start":"22:00", "end":"07:00"}),
+            ),
+        ] {
+            let probe = store::lock_probe(&dir);
+            let mut request = Request::builder()
+                .method("POST")
+                .uri(path)
+                .header("authorization", "Bearer owner")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap();
+            request.extensions_mut().insert(ConnectInfo(
+                "192.0.2.1:1234".parse::<std::net::SocketAddr>().unwrap(),
+            ));
+            let state = st.clone();
+            preferences.push(tokio::spawn(async move {
+                crate::routes::router(state).oneshot(request).await.unwrap()
+            }));
+            assert!(
+                tokio::time::timeout(Duration::from_secs(5), probe)
+                    .await
+                    .unwrap()
+                    .unwrap()
+            );
+        }
         release.notify_one();
-        delivery.await.unwrap();
+        let completed = tokio::time::timeout(Duration::from_secs(3), &mut delivery).await;
+        // Solta a trava mesmo no RED para o pool encerrar sem prender a suíte.
+        if completed.is_err() {
+            delivery.abort();
+            let _ = delivery.await;
+        }
         let response = writing.await.unwrap();
+        for writer in preferences {
+            assert_eq!(writer.await.unwrap().status(), StatusCode::OK);
+        }
+        assert_eq!(
+            store::settings(&dir).unwrap(),
+            json!({
+                "muted":["s"], "quiet_hours":{"start":"22:00", "end":"07:00"}
+            })
+        );
+        assert!(
+            completed.is_ok(),
+            "envio e escritor precisam concluir com um único trabalhador bloqueante"
+        );
         server.abort();
         assert_eq!(
             blocked,

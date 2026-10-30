@@ -157,22 +157,33 @@ async fn admit(st: &Arc<AppState>, peer: SocketAddr, mut req: Request) -> Respon
         Ok(value) => value,
         Err(failure) => return reply(StatusCode::from_u16(failure.status).unwrap(), failure.body),
     };
+    if path == "/api/push/subscribe"
+        && let Err(detail) = store::validate_subscription(&normalized["subscription"])
+    {
+        codec::discard(normalized);
+        return reply(StatusCode::BAD_REQUEST, json!({"detail":detail}));
+    }
     let operation = path.clone();
+    // A espera da trava não pode ocupar o pool usado pelo envio para ler e podar.
+    let guard = store::writer_lock(&dir).await;
     let result = tokio::task::spawn_blocking(move || {
         let result = match operation.as_str() {
-            "/api/push/subscribe" => store::add(
+            "/api/push/subscribe" => store::add_locked(
+                &guard,
                 &dir,
                 codec::clone_value(&normalized["subscription"]),
                 normalized["label"].as_str().unwrap(),
                 normalized["serverId"].as_str().unwrap(),
                 normalized["locale"].as_str().unwrap_or("en"),
             ),
-            "/api/push/mute" => store::set_muted(
+            "/api/push/mute" => store::set_muted_locked(
+                &guard,
                 &dir,
                 normalized["session"].as_str().unwrap(),
                 normalized["muted"].as_bool().unwrap(),
             ),
-            _ => store::set_quiet_hours(
+            _ => store::set_quiet_hours_locked(
+                &guard,
                 &dir,
                 normalized["start"].as_str(),
                 normalized["end"].as_str(),

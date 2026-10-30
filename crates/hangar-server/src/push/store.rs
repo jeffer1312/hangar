@@ -10,6 +10,13 @@ static LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 pub(super) async fn delivery_lock() -> tokio::sync::MutexGuard<'static, ()> {
     LOCK.lock().await
 }
+pub(super) async fn writer_lock(dir: &Path) -> tokio::sync::MutexGuard<'static, ()> {
+    #[cfg(test)]
+    observe_lock(dir);
+    #[cfg(not(test))]
+    let _ = dir;
+    delivery_lock().await
+}
 pub fn dir(claude: &Path) -> PathBuf {
     claude.join(".hangar-push")
 }
@@ -64,7 +71,26 @@ fn endpoint(entry: &Value) -> Result<&Value> {
             .unwrap_or(&Value::Null)),
     }
 }
+pub(super) fn validate_subscription(subscription: &Value) -> Result<()> {
+    if truthy(subscription.get("endpoint").unwrap_or(&Value::Null)) {
+        Ok(())
+    } else {
+        Err("subscription sem endpoint")
+    }
+}
+#[cfg(test)]
 pub fn add(
+    dir: &Path,
+    subscription: Value,
+    label: &str,
+    server_id: &str,
+    locale: &str,
+) -> Result<()> {
+    let guard = LOCK.blocking_lock();
+    add_locked(&guard, dir, subscription, label, server_id, locale)
+}
+pub(super) fn add_locked(
+    _guard: &tokio::sync::MutexGuard<'static, ()>,
     dir: &Path,
     mut subscription: Value,
     label: &str,
@@ -72,13 +98,8 @@ pub fn add(
     locale: &str,
 ) -> Result<()> {
     let result = (|| {
+        validate_subscription(&subscription)?;
         let new = subscription.get("endpoint").unwrap_or(&Value::Null);
-        if !truthy(new) {
-            return Err("subscription sem endpoint");
-        }
-        #[cfg(test)]
-        observe_lock(dir);
-        let _guard = LOCK.blocking_lock();
         let all = subs(dir)?;
         if all.iter().any(|entry| endpoint(entry).is_err()) {
             codec::discard(Value::Array(all));
@@ -106,14 +127,19 @@ pub fn add(
     codec::discard(subscription);
     result
 }
+#[cfg(test)]
 pub fn prune(dir: &Path, dead: &[String]) -> Result<()> {
     if dead.is_empty() {
         return Ok(());
     }
     let _guard = LOCK.blocking_lock();
-    prune_locked(dir, dead)
+    prune_locked(&_guard, dir, dead)
 }
-pub(super) fn prune_locked(dir: &Path, dead: &[String]) -> Result<()> {
+pub(super) fn prune_locked(
+    _guard: &tokio::sync::MutexGuard<'static, ()>,
+    dir: &Path,
+    dead: &[String],
+) -> Result<()> {
     let all = subs(dir)?;
     if all.iter().any(|entry| endpoint(entry).is_err()) {
         codec::discard(Value::Array(all));
@@ -165,7 +191,6 @@ fn update_prefs(
     dir: &Path,
     change: impl FnOnce(&mut serde_json::Map<String, Value>) -> Result<()>,
 ) -> Result<()> {
-    let _guard = LOCK.blocking_lock();
     let mut value = prefs(dir)?;
     let result = match value.as_object_mut() {
         Some(map) => validate_muted(map).and_then(|()| change(map)),
@@ -182,7 +207,17 @@ fn validate_muted(prefs: &serde_json::Map<String, Value>) -> Result<()> {
         _ => Err("push_settings_invalid"),
     }
 }
+#[cfg(test)]
 pub fn set_muted(dir: &Path, session: &str, muted: bool) -> Result<()> {
+    let guard = LOCK.blocking_lock();
+    set_muted_locked(&guard, dir, session, muted)
+}
+pub(super) fn set_muted_locked(
+    _guard: &tokio::sync::MutexGuard<'static, ()>,
+    dir: &Path,
+    session: &str,
+    muted: bool,
+) -> Result<()> {
     update_prefs(dir, |prefs| {
         let mut names = std::collections::BTreeSet::new();
         if let Some(Value::Array(values)) = prefs.get("muted") {
@@ -246,7 +281,17 @@ fn time(text: &str) -> Option<(NaiveTime, Option<i64>)> {
 pub fn parse_time(text: &str) -> Option<NaiveTime> {
     time(text).map(|(value, _)| value)
 }
+#[cfg(test)]
 pub fn set_quiet_hours(dir: &Path, start: Option<&str>, end: Option<&str>) -> Result<()> {
+    let guard = LOCK.blocking_lock();
+    set_quiet_hours_locked(&guard, dir, start, end)
+}
+pub(super) fn set_quiet_hours_locked(
+    _guard: &tokio::sync::MutexGuard<'static, ()>,
+    dir: &Path,
+    start: Option<&str>,
+    end: Option<&str>,
+) -> Result<()> {
     update_prefs(dir, |prefs| {
         match (
             start.filter(|s| !s.is_empty()),

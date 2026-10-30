@@ -431,7 +431,7 @@ impl Sender {
             }
             return;
         };
-        let _delivery = store::delivery_lock().await;
+        let delivery = store::delivery_lock().await;
         let dir = self.dir();
         let read_dir = dir.clone();
         let subs = match tokio::task::spawn_blocking(move || store::subs(&read_dir))
@@ -521,7 +521,7 @@ impl Sender {
         if !dead.is_empty() {
             let dir2 = dir.clone();
             if !matches!(
-                tokio::task::spawn_blocking(move || store::prune_locked(&dir2, &dead)).await,
+                tokio::task::spawn_blocking(move || store::prune_locked(&delivery, &dir2, &dead)).await,
                 Ok(Ok(()))
             ) {
                 self.st.diag.report(
