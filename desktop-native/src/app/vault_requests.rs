@@ -36,6 +36,14 @@ pub(super) fn parse(data: &Value) -> Option<Vec<Request>> { serde_json::from_val
 #[derive(Clone, Copy)]
 enum Decision { Allow, Deny, Save { keep: bool }, Decline }
 
+/// Clique que responde o cartão `id`. Pela referência fraca: o `cx.listener` devolvido de uma closure ficava preso ao empréstimo do `cx`.
+fn answer_on(id: &str, decision: Decision, cx: &mut Context<VaultRequests>) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static + use<> {
+    let (id, requests) = (id.to_owned(), cx.entity().downgrade());
+    move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+        let _ = requests.update(cx, |this, cx| this.answer(id.clone(), decision, window, cx));
+    }
+}
+
 struct EntryFields { password: Entity<InputState>, name: Entity<InputState> }
 
 struct Card { request: Request, fields: Option<EntryFields>, policy: Policy, sending: bool, error: Option<String> }
@@ -127,7 +135,7 @@ impl VaultRequests {
         let line = |text: String| div().text_xs().text_color(theme::muted()).whitespace_normal().child(text);
         let button = |suffix: &str, label: String| Button::new(SharedString::from(format!("vault-request-{suffix}-{id}"))).xsmall().w_full()
             .label(label).disabled(off);
-        let on = |decision: Decision, cx: &mut Context<Self>| { let id = id.clone(); cx.listener(move |this: &mut Self, _, window, cx| this.answer(id.clone(), decision, window, cx)) };
+        let on = |decision: Decision, cx: &mut Context<Self>| answer_on(&id, decision, cx);
         let (title, body) = match r.kind {
             Kind::Approve => {
                 let entry = r.entry_name.clone().unwrap_or_default();
@@ -164,7 +172,7 @@ impl VaultRequests {
                         };
                         body.child(Input::new(&fields.password).xsmall().mask_toggle().disabled(off).aria_label(tr("vault_field_password")))
                             .child(Input::new(&fields.name).xsmall().disabled(off).aria_label(tr("vault_field_name")))
-                            .child(div().role(Role::RadioGroup).aria_label(tr("vault_field_policy")).flex().flex_col().gap_1().text_xs()
+                            .child(div().id(SharedString::from(format!("vault-request-policy-{id}"))).role(Role::RadioGroup).aria_label(tr("vault_field_policy")).flex().flex_col().gap_1().text_xs()
                                 .child(radio("ask", Policy::Ask, cx))
                                 .child(radio("free", Policy::Free, cx)))
                             .child(button("keep", tr("vault_request_keep")).primary().on_click(on(Decision::Save { keep: true }, cx)))

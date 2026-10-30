@@ -33,10 +33,33 @@ struct Status {
     state: String,
     #[serde(default)]
     detail: Option<String>,
+    /// Só na dona com máquina de cópia escolhida.
+    #[serde(default)]
+    backup: Option<Backup>,
 }
+
+#[derive(Clone, Debug, serde::Deserialize)]
+struct Backup {
+    peer: String,
+    #[serde(default)]
+    last_ok_at: Option<f64>,
+    #[serde(default)]
+    last_error: Option<String>,
+}
+
+/// Mínimo da senha de recuperação: ela é a única defesa da cópia guardada fora.
+const RECOVERY_MIN: usize = 12;
 
 #[derive(Clone, Debug)]
 struct Peer { id: String, url: String }
+
+/// Campos da cópia de segurança e da restauração; nascem com a página e somem com ela.
+struct BackupFields {
+    recovery: Entity<InputState>,
+    confirm: Entity<InputState>,
+    restore_password: Entity<InputState>,
+    restore_server: Entity<InputState>,
+}
 
 /// Frase de uma recusa do cofre pelo código; código que esta versão não conhece fica com a frase do servidor.
 pub(super) fn vault_failure(error: &Failure) -> String {
@@ -95,12 +118,27 @@ pub(super) struct VaultPage {
     busy: HashSet<String>,
     config_busy: bool,
     error: Option<String>,
+    fields: BackupFields,
+    recovery_busy: bool,
+    recovery_saved: bool,
+    recovery_error: Option<String>,
+    restore_peer: Option<String>,
+    restore_busy: bool,
+    restore_error: Option<String>,
 }
 
 impl VaultPage {
     fn new(api: Api, runtime: Arc<Runtime>, hangar: WeakEntity<Hangar>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let masked = |hint: String, window: &mut Window, cx: &mut Context<Self>| cx.new(|cx| InputState::new(window, cx).masked(true).placeholder(hint));
+        let fields = BackupFields {
+            recovery: masked(tr("vault_recovery_new"), window, cx),
+            confirm: masked(tr("vault_recovery_confirm"), window, cx),
+            restore_password: masked(tr("vault_recovery_password"), window, cx),
+            restore_server: cx.new(|cx| InputState::new(window, cx).placeholder(tr("vault_restore_server_hint"))),
+        };
         let mut page = Self { api, runtime, hangar, seq: 0, status: None, entries: None, peers: Vec::new(), peers_error: None, writer: None,
-            revealed: HashMap::new(), copied: None, busy: HashSet::new(), config_busy: false, error: None };
+            revealed: HashMap::new(), copied: None, busy: HashSet::new(), config_busy: false, error: None, fields, recovery_busy: false,
+            recovery_saved: false, recovery_error: None, restore_peer: None, restore_busy: false, restore_error: None };
         page.load(window, cx);
         page
     }
@@ -122,7 +160,8 @@ impl VaultPage {
             if let Ok(status) = &status {
                 if status.role == "owner" { this.writer = Some(this.api.clone()); }
                 if status.state == "open" { this.load_entries(window, cx); }
-                if status.role != "owner" { this.load_peers(window, cx); }
+                // Na dona as outras máquinas são as opções da cópia; nas demais, da dona e da restauração.
+                this.load_peers(window, cx);
             }
             this.status = Some(status);
         });
@@ -164,6 +203,84 @@ impl VaultPage {
                 match result {
                     Ok(_) => this.load(window, cx),
                     Err(error) => this.error = Some(vault_failure(&error)),
+                }
+            });
+        cx.notify();
+    }
+
+    /// Estado que a rota devolveu no lugar do atual, sem reler a lista.
+    fn take_status(&mut self, value: Value) {
+        match serde_json::from_value::<Status>(value) {
+            Ok(status) => self.status = Some(Ok(status)),
+            Err(_) => self.error = Some(tr("invalid_response")),
+        }
+    }
+
+    fn set_backup_peer(&mut self, peer: String, window: &mut Window, cx: &mut Context<Self>) {
+        if self.config_busy { return; }
+        (self.config_busy, self.error) = (true, None);
+        let api = self.api.clone();
+        run(&self.runtime, async move { api.server_send(reqwest::Method::PUT, &["vault", "config"], Some(json!({"backup_peer": peer})), 45).await },
+            window, cx, |this: &mut Self, result, _, _| {
+                this.config_busy = false;
+                match result {
+                    Ok(value) => this.take_status(value),
+                    Err(error) => this.error = Some(vault_failure(&error)),
+                }
+            });
+        cx.notify();
+    }
+
+    fn set_recovery(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.recovery_busy { return; }
+        let password = self.fields.recovery.read(cx).value().to_string();
+        let confirm = self.fields.confirm.read(cx).value().to_string();
+        let problem = if password.chars().count() < RECOVERY_MIN { Some(tr("vault_error_recuperacao_curta")) }
+            else if password != confirm { Some(tr("vault_recovery_mismatch")) } else { None };
+        self.recovery_saved = false;
+        if let Some(problem) = problem { self.recovery_error = Some(problem); cx.notify(); return; }
+        (self.recovery_busy, self.recovery_error) = (true, None);
+        let api = self.api.clone();
+        run(&self.runtime, async move { api.server_send(reqwest::Method::POST, &["vault", "recovery"], Some(json!({"password": password})), 45).await },
+            window, cx, |this: &mut Self, result, window, cx| {
+                this.recovery_busy = false;
+                match result {
+                    Ok(value) => {
+                        for input in [this.fields.recovery.clone(), this.fields.confirm.clone()] { input.update(cx, |i, cx| i.set_value("", window, cx)); }
+                        this.recovery_saved = true;
+                        this.take_status(value);
+                    }
+                    Err(error) => this.recovery_error = Some(vault_failure(&error)),
+                }
+            });
+        cx.notify();
+    }
+
+    fn restore(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.restore_busy { return; }
+        let Some(peer) = self.restore_peer.clone() else { self.restore_error = Some(tr("vault_restore_pick_peer")); cx.notify(); return };
+        let password = self.fields.restore_password.read(cx).value().to_string();
+        if password.is_empty() { self.restore_error = Some(tr("vault_password_required")); cx.notify(); return; }
+        let mut body = json!({"password": password, "from_peer": peer});
+        let server = self.fields.restore_server.read(cx).value().trim().to_owned();
+        if !server.is_empty() { body["server_id"] = json!(server); }
+        (self.restore_busy, self.restore_error) = (true, None);
+        let api = self.api.clone();
+        // Buscar a cópia na outra máquina e gravar a chave nova pode levar o tempo do chaveiro.
+        run(&self.runtime, async move { api.server_send(reqwest::Method::POST, &["vault", "restore"], Some(body), 90).await },
+            window, cx, |this: &mut Self, result, window, cx| {
+                this.restore_busy = false;
+                match result {
+                    Ok(_) => {
+                        this.fields.restore_password.update(cx, |i, cx| i.set_value("", window, cx));
+                        this.load(window, cx);
+                    }
+                    // O cofre voltou; só a senha de recuperação precisa ser definida de novo, na seção da cópia.
+                    Err(error) if error.code.as_deref() == Some("erro_cofre_recuperacao_nao_gravada") => {
+                        this.load(window, cx);
+                        this.recovery_error = Some(vault_failure(&error));
+                    }
+                    Err(error) => this.restore_error = Some(vault_failure(&error)),
                 }
             });
         cx.notify();
@@ -329,6 +446,71 @@ impl VaultPage {
     }
 
     /// Onde o cofre fica. Criar aqui só sem dona: com dona, as senhas dela ficariam fora do alcance.
+    /// Uma opção por máquina do `peers.json`, com a escolhida marcada.
+    fn peer_choices(&self, prefix: &'static str, chosen: Option<&str>, disabled: bool,
+        pick: fn(&mut Self, String, &mut Window, &mut Context<Self>), cx: &mut Context<Self>) -> Vec<Button> {
+        self.peers.iter().map(|p| {
+            let id = p.id.clone();
+            Button::new(SharedString::from(format!("{prefix}-{id}"))).outline().small().label(id.clone())
+                .selected(chosen == Some(id.as_str())).disabled(disabled)
+                .on_click(cx.listener(move |this, _, window, cx| pick(this, id.clone(), window, cx)))
+        }).collect()
+    }
+
+    /// Cópia diária para outra máquina: quem guarda, como foi a última e a senha que abre a cópia.
+    fn render_backup(&self, status: &Status, cx: &mut Context<Self>) -> AnyElement {
+        let label = |key: &str| div().text_sm().font_weight(FontWeight::MEDIUM).child(tr(key));
+        let chosen = status.backup.as_ref().map(|b| b.peer.as_str());
+        let peers = self.peer_choices("vault-backup-peer", chosen, self.config_busy, |this, id, window, cx| this.set_backup_peer(id, window, cx), cx);
+        let last = match &status.backup {
+            None => muted(tr("vault_backup_off")),
+            Some(Backup { last_error: Some(error), .. }) => div().text_sm().text_color(theme::danger()).whitespace_normal()
+                .child(tr("vault_backup_failed").replace("{error}", error)),
+            Some(Backup { last_ok_at: Some(at), .. }) => muted(tr("vault_backup_last")
+                .replace("{when}", &super::side::ago(chrono::Local::now().timestamp() as f64 - at))),
+            Some(_) => muted(tr("vault_backup_never")),
+        };
+        let off = self.recovery_busy;
+        let status_line = if self.recovery_saved { Some((tr("vault_recovery_saved"), theme::success())) } else { None };
+        settings_box().id("vault-backup")
+            .child(section_head(IconName::RotateCcwClock, tr("vault_backup"), Some(tr("vault_backup_hint")), None, px(16.)))
+            .child(div().px_4().pb(px(16.)).flex().flex_col().gap_3()
+                .child(div().flex().flex_col().gap_2().child(label("vault_backup_peer"))
+                    .child(if peers.is_empty() { muted(tr("vault_backup_no_peers")) } else { div().flex().flex_wrap().gap_2().children(peers) })
+                    .child(div().id("vault-backup-last").role(Role::Status).child(last)))
+                .child(div().flex().flex_col().gap_2().child(label("vault_recovery"))
+                    .child(div().text_sm().text_color(theme::warning()).whitespace_normal().child(tr("vault_recovery_hint")))
+                    .child(Input::new(&self.fields.recovery).small().mask_toggle().disabled(off).aria_label(tr("vault_recovery_new")))
+                    .child(Input::new(&self.fields.confirm).small().mask_toggle().disabled(off).aria_label(tr("vault_recovery_confirm")))
+                    .children(self.recovery_error.clone().map(|error| alert("vault-recovery-error", error)))
+                    .child(div().flex().items_center().gap_3()
+                        .child(Button::new("vault-recovery-save").primary().small().label(tr("vault_recovery_save")).loading(off).disabled(off)
+                            .on_click(cx.listener(|this, _, window, cx| this.set_recovery(window, cx))))
+                        .children(status_line.map(|(text, color)| div().id("vault-recovery-status").role(Role::Status).text_sm().text_color(color).child(text))))))
+            .into_any_element()
+    }
+
+    /// Restaurar só entra num cofre vazio: as senhas voltam da cópia que outra máquina guarda.
+    fn render_restore(&self, cx: &mut Context<Self>) -> AnyElement {
+        let label = |key: &str| div().text_sm().font_weight(FontWeight::MEDIUM).child(tr(key));
+        let off = self.restore_busy;
+        let peers = self.peer_choices("vault-restore-peer", self.restore_peer.as_deref(), off,
+            |this, id, _, cx| { this.restore_peer = Some(id); cx.notify(); }, cx);
+        settings_box().id("vault-restore")
+            .child(section_head(IconName::RefreshCw, tr("vault_restore"), Some(tr("vault_restore_hint")), None, px(16.)))
+            .child(div().px_4().pb(px(16.)).flex().flex_col().gap_2()
+                .child(label("vault_restore_peer"))
+                .child(if peers.is_empty() { muted(tr("vault_backup_no_peers")) } else { div().flex().flex_wrap().gap_2().children(peers) })
+                .child(label("vault_restore_server"))
+                .child(Input::new(&self.fields.restore_server).small().disabled(off).aria_label(tr("vault_restore_server")))
+                .child(label("vault_recovery_password"))
+                .child(Input::new(&self.fields.restore_password).small().mask_toggle().disabled(off).aria_label(tr("vault_recovery_password")))
+                .children(self.restore_error.clone().map(|error| alert("vault-restore-error", error)))
+                .child(div().child(Button::new("vault-restore-go").primary().small().label(tr("vault_restore_go")).loading(off).disabled(off)
+                    .on_click(cx.listener(|this, _, window, cx| this.restore(window, cx))))))
+            .into_any_element()
+    }
+
     fn render_where(&self, status: &Status, cx: &mut Context<Self>) -> AnyElement {
         let owner = status.owner.clone().unwrap_or_default();
         let text = match status.role.as_str() {
@@ -366,7 +548,10 @@ impl Render for VaultPage {
             Some(Ok(status)) => status.clone(),
         };
         let body = if status.state == "open" { self.render_entries(cx) } else { self.render_closed(&status, cx) };
-        page.child(body).child(self.render_where(&status, cx))
+        let empty = matches!(&self.entries, Some(Ok(list)) if list.is_empty());
+        let backup = (status.role == "owner" && status.state == "open").then(|| self.render_backup(&status, cx));
+        let restore = (status.role == "none" || (status.role == "owner" && empty)).then(|| self.render_restore(cx));
+        page.child(body).children(backup).children(restore).child(self.render_where(&status, cx))
     }
 }
 
