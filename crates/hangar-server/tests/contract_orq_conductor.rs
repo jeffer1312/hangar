@@ -1,62 +1,48 @@
+mod contract_orq_conductor_cases;
+
 use serde_json::Value;
 #[test]
-fn conductor_frozen_python_contract() {
+fn conductor_feed_answers_each_case() {
     std::thread::Builder::new()
         .stack_size(64 * 1024 * 1024)
-        .spawn(frozen_contract)
+        .spawn(feed_cases)
         .unwrap()
         .join()
         .unwrap();
 }
-fn frozen_contract() {
-    use serde::Deserialize;
-    let mut decoder = serde_json::Deserializer::from_str(include_str!(
-        "../../../backend/tests/fixtures/contract/orq-conductor/feed.json"
-    ));
-    decoder.disable_recursion_limit();
-    let fixture = Value::deserialize(&mut decoder).unwrap();
-    for case in fixture["cases"].as_array().unwrap() {
+fn feed_cases() {
+    let cases = contract_orq_conductor_cases::cases();
+    assert_eq!(cases.len(), 93);
+    for case in &cases {
         let root = tempfile::tempdir().unwrap();
-        for (path, text) in case["files"].as_object().unwrap() {
-            std::fs::write(root.path().join(path), text.as_str().unwrap()).unwrap()
+        for (path, text) in &case.files {
+            std::fs::write(root.path().join(path), text).unwrap()
         }
-        if let Some(bytes) = case["bytes"].as_array() {
-            std::fs::write(
-                root.path().join("registro.md"),
-                bytes
-                    .iter()
-                    .map(|v| v.as_u64().unwrap() as u8)
-                    .collect::<Vec<_>>(),
-            )
-            .unwrap()
+        if let Some(bytes) = &case.journal_bytes {
+            std::fs::write(root.path().join("registro.md"), bytes).unwrap()
         }
         let actual = hangar_server::orq_conductor::feed_json_with_timezone(
             root.path(),
             chrono::FixedOffset::east_opt(0).unwrap(),
         );
-        if case.get("error").is_some() {
-            assert!(
-                actual.is_err(),
-                "{}: erro Python precisa continuar uma recusa",
-                case["name"]
-            )
-        } else {
+        if let Some(expected) = &case.expected {
             let bytes = actual.unwrap();
             let text = String::from_utf8(bytes).unwrap();
-            let expected = case["expected_json"].as_str().unwrap();
             let marker = contract_marker(&text, expected);
             assert_eq!(
                 normalized_json(&text, &marker),
                 normalized_json(expected, &marker),
                 "cenário {}",
-                case["name"]
+                case.name
             );
             assert_eq!(
                 large_integer_tokens(&text),
                 large_integer_tokens(expected),
                 "inteiros exatos no cenário {}",
-                case["name"]
+                case.name
             );
+        } else {
+            assert!(actual.is_err(), "{}: precisa continuar uma recusa", case.name)
         }
     }
 }

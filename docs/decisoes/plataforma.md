@@ -3151,8 +3151,8 @@ Etapa histórica de 18/10/2026, substituída pela migração completa descrita e
 
 Em 18/10/2026, `GET /api/orq/{exec_id}/conductor` passou a montar registro, sombra do Jev e eventos
 no `hangar-server`. O contrato foi congelado executando `orq_conductor.py` e `orq.py` do commit
-`70d0b9ef4`, em `backend/tests/fixtures/contract/orq-conductor/`: o gerador registra a origem e o
-comando, e o teste Rust compara os valores sem produzir o esperado.
+`70d0b9ef4`; os 93 casos, com o esperado escrito, moram em
+`crates/hangar-server/tests/contract_orq_conductor_cases.rs`.
 
 O watchdog não foi migrado: `GET /api/orq`, `runs._active_run` e os fatos da lista dependem dele.
 O Rust faz uma ida a `/internal/orq/{exec_id}/conductor-facts` para receber caminho validado e
