@@ -374,3 +374,6 @@ mod codex_phase_types;
 
 mod codex_config_edits;
 mod config_apply_http;
+
+mod codex_fingerprints;
+mod codex_stage_sources;

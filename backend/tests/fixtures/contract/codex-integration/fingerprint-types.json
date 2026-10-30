@@ -1,0 +1,669 @@
+{
+  "source_commit": "8a3ce81c1",
+  "command": "cd backend && uv run python tests/fixtures/contract/codex-integration/generate_fingerprint_types.py",
+  "cases": [
+    {
+      "toml": "projects=1979-05-27\n",
+      "phase": "instructions",
+      "sources": false,
+      "result": {
+        "error": "TypeError",
+        "message": "'datetime.date' object is not iterable"
+      }
+    },
+    {
+      "toml": "projects=1979-05-27\n",
+      "phase": "instructions",
+      "sources": true,
+      "result": {
+        "error": "TypeError",
+        "message": "'datetime.date' object is not iterable"
+      }
+    },
+    {
+      "toml": "projects=1979-05-27\n",
+      "phase": "plugins",
+      "sources": false,
+      "result": {
+        "error": "TypeError",
+        "message": "'datetime.date' object is not iterable"
+      }
+    },
+    {
+      "toml": "projects=1979-05-27\n",
+      "phase": "plugins",
+      "sources": true,
+      "result": {
+        "error": "TypeError",
+        "message": "'datetime.date' object is not iterable"
+      }
+    },
+    {
+      "toml": "projects=1979-05-27\n",
+      "phase": "fragments",
+      "sources": false,
+      "result": {
+        "error": "TypeError",
+        "message": "'datetime.date' object is not iterable"
+      }
+    },
+    {
+      "toml": "projects=1979-05-27\n",
+      "phase": "fragments",
+      "sources": true,
+      "result": {
+        "error": "TypeError",
+        "message": "'datetime.date' object is not iterable"
+      }
+    },
+    {
+      "toml": "projects=1979-05-27\n",
+      "phase": "skills",
+      "sources": false,
+      "result": {
+        "error": "TypeError",
+        "message": "'datetime.date' object is not iterable"
+      }
+    },
+    {
+      "toml": "projects=1979-05-27\n",
+      "phase": "skills",
+      "sources": true,
+      "result": {
+        "error": "TypeError",
+        "message": "'datetime.date' object is not iterable"
+      }
+    },
+    {
+      "toml": "plugins=1979-05-27\n",
+      "phase": "instructions",
+      "sources": false,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "plugins=1979-05-27\n",
+      "phase": "instructions",
+      "sources": true,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "plugins=1979-05-27\n",
+      "phase": "plugins",
+      "sources": false,
+      "result": {
+        "error": "TypeError",
+        "message": "Object of type date is not JSON serializable"
+      }
+    },
+    {
+      "toml": "plugins=1979-05-27\n",
+      "phase": "plugins",
+      "sources": true,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "plugins=1979-05-27\n",
+      "phase": "fragments",
+      "sources": false,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "plugins=1979-05-27\n",
+      "phase": "fragments",
+      "sources": true,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "plugins=1979-05-27\n",
+      "phase": "skills",
+      "sources": false,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "plugins=1979-05-27\n",
+      "phase": "skills",
+      "sources": true,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "marketplaces=1979-05-27\n",
+      "phase": "instructions",
+      "sources": false,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "marketplaces=1979-05-27\n",
+      "phase": "instructions",
+      "sources": true,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "marketplaces=1979-05-27\n",
+      "phase": "plugins",
+      "sources": false,
+      "result": {
+        "error": "TypeError",
+        "message": "Object of type date is not JSON serializable"
+      }
+    },
+    {
+      "toml": "marketplaces=1979-05-27\n",
+      "phase": "plugins",
+      "sources": true,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "marketplaces=1979-05-27\n",
+      "phase": "fragments",
+      "sources": false,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "marketplaces=1979-05-27\n",
+      "phase": "fragments",
+      "sources": true,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "marketplaces=1979-05-27\n",
+      "phase": "skills",
+      "sources": false,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "marketplaces=1979-05-27\n",
+      "phase": "skills",
+      "sources": true,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "mcp_servers=1979-05-27\n",
+      "phase": "instructions",
+      "sources": false,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "mcp_servers=1979-05-27\n",
+      "phase": "instructions",
+      "sources": true,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "mcp_servers=1979-05-27\n",
+      "phase": "plugins",
+      "sources": false,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "mcp_servers=1979-05-27\n",
+      "phase": "plugins",
+      "sources": true,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "mcp_servers=1979-05-27\n",
+      "phase": "fragments",
+      "sources": false,
+      "result": {
+        "error": "TypeError",
+        "message": "Object of type date is not JSON serializable"
+      }
+    },
+    {
+      "toml": "mcp_servers=1979-05-27\n",
+      "phase": "fragments",
+      "sources": true,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "mcp_servers=1979-05-27\n",
+      "phase": "skills",
+      "sources": false,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "mcp_servers=1979-05-27\n",
+      "phase": "skills",
+      "sources": true,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "agents=1979-05-27\n",
+      "phase": "instructions",
+      "sources": false,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "agents=1979-05-27\n",
+      "phase": "instructions",
+      "sources": true,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "agents=1979-05-27\n",
+      "phase": "plugins",
+      "sources": false,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "agents=1979-05-27\n",
+      "phase": "plugins",
+      "sources": true,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "agents=1979-05-27\n",
+      "phase": "fragments",
+      "sources": false,
+      "result": {
+        "error": "TypeError",
+        "message": "Object of type date is not JSON serializable"
+      }
+    },
+    {
+      "toml": "agents=1979-05-27\n",
+      "phase": "fragments",
+      "sources": true,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "agents=1979-05-27\n",
+      "phase": "skills",
+      "sources": false,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "agents=1979-05-27\n",
+      "phase": "skills",
+      "sources": true,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "shell_environment_policy=1979-05-27\n",
+      "phase": "instructions",
+      "sources": false,
+      "result": {
+        "error": "AttributeError",
+        "message": "'datetime.date' object has no attribute 'get'"
+      }
+    },
+    {
+      "toml": "shell_environment_policy=1979-05-27\n",
+      "phase": "instructions",
+      "sources": true,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "shell_environment_policy=1979-05-27\n",
+      "phase": "plugins",
+      "sources": false,
+      "result": {
+        "error": "AttributeError",
+        "message": "'datetime.date' object has no attribute 'get'"
+      }
+    },
+    {
+      "toml": "shell_environment_policy=1979-05-27\n",
+      "phase": "plugins",
+      "sources": true,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "shell_environment_policy=1979-05-27\n",
+      "phase": "fragments",
+      "sources": false,
+      "result": {
+        "error": "AttributeError",
+        "message": "'datetime.date' object has no attribute 'get'"
+      }
+    },
+    {
+      "toml": "shell_environment_policy=1979-05-27\n",
+      "phase": "fragments",
+      "sources": true,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "shell_environment_policy=1979-05-27\n",
+      "phase": "skills",
+      "sources": false,
+      "result": {
+        "error": "AttributeError",
+        "message": "'datetime.date' object has no attribute 'get'"
+      }
+    },
+    {
+      "toml": "shell_environment_policy=1979-05-27\n",
+      "phase": "skills",
+      "sources": true,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "features=1979-05-27\n",
+      "phase": "instructions",
+      "sources": false,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "features=1979-05-27\n",
+      "phase": "instructions",
+      "sources": true,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "features=1979-05-27\n",
+      "phase": "plugins",
+      "sources": false,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "features=1979-05-27\n",
+      "phase": "plugins",
+      "sources": true,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "features=1979-05-27\n",
+      "phase": "fragments",
+      "sources": false,
+      "result": {
+        "error": "TypeError",
+        "message": "Object of type date is not JSON serializable"
+      }
+    },
+    {
+      "toml": "features=1979-05-27\n",
+      "phase": "fragments",
+      "sources": true,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "features=1979-05-27\n",
+      "phase": "skills",
+      "sources": false,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "features=1979-05-27\n",
+      "phase": "skills",
+      "sources": true,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "project_doc_max_bytes=1979-05-27\n",
+      "phase": "instructions",
+      "sources": false,
+      "result": {
+        "error": "ValueError",
+        "message": "project_doc_max_bytes inv\u00e1lido"
+      }
+    },
+    {
+      "toml": "project_doc_max_bytes=1979-05-27\n",
+      "phase": "instructions",
+      "sources": true,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "project_doc_max_bytes=1979-05-27\n",
+      "phase": "plugins",
+      "sources": false,
+      "result": {
+        "error": "ValueError",
+        "message": "project_doc_max_bytes inv\u00e1lido"
+      }
+    },
+    {
+      "toml": "project_doc_max_bytes=1979-05-27\n",
+      "phase": "plugins",
+      "sources": true,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "project_doc_max_bytes=1979-05-27\n",
+      "phase": "fragments",
+      "sources": false,
+      "result": {
+        "error": "ValueError",
+        "message": "project_doc_max_bytes inv\u00e1lido"
+      }
+    },
+    {
+      "toml": "project_doc_max_bytes=1979-05-27\n",
+      "phase": "fragments",
+      "sources": true,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "project_doc_max_bytes=1979-05-27\n",
+      "phase": "skills",
+      "sources": false,
+      "result": {
+        "error": "ValueError",
+        "message": "project_doc_max_bytes inv\u00e1lido"
+      }
+    },
+    {
+      "toml": "project_doc_max_bytes=1979-05-27\n",
+      "phase": "skills",
+      "sources": true,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "project_doc_fallback_filenames=1979-05-27\n",
+      "phase": "instructions",
+      "sources": false,
+      "result": {
+        "error": "TypeError",
+        "message": "Object of type date is not JSON serializable"
+      }
+    },
+    {
+      "toml": "project_doc_fallback_filenames=1979-05-27\n",
+      "phase": "instructions",
+      "sources": true,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "project_doc_fallback_filenames=1979-05-27\n",
+      "phase": "plugins",
+      "sources": false,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "project_doc_fallback_filenames=1979-05-27\n",
+      "phase": "plugins",
+      "sources": true,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "project_doc_fallback_filenames=1979-05-27\n",
+      "phase": "fragments",
+      "sources": false,
+      "result": {
+        "error": "TypeError",
+        "message": "Object of type date is not JSON serializable"
+      }
+    },
+    {
+      "toml": "project_doc_fallback_filenames=1979-05-27\n",
+      "phase": "fragments",
+      "sources": true,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "project_doc_fallback_filenames=1979-05-27\n",
+      "phase": "skills",
+      "sources": false,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "project_doc_fallback_filenames=1979-05-27\n",
+      "phase": "skills",
+      "sources": true,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "extra=1979-05-27\n",
+      "phase": "instructions",
+      "sources": false,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "extra=1979-05-27\n",
+      "phase": "instructions",
+      "sources": true,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "extra=1979-05-27\n",
+      "phase": "plugins",
+      "sources": false,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "extra=1979-05-27\n",
+      "phase": "plugins",
+      "sources": true,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "extra=1979-05-27\n",
+      "phase": "fragments",
+      "sources": false,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "extra=1979-05-27\n",
+      "phase": "fragments",
+      "sources": true,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "extra=1979-05-27\n",
+      "phase": "skills",
+      "sources": false,
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "toml": "extra=1979-05-27\n",
+      "phase": "skills",
+      "sources": true,
+      "result": {
+        "ok": true
+      }
+    }
+  ]
+}

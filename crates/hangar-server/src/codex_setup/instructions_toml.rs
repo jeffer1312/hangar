@@ -150,3 +150,141 @@ mod tests {
         }
     }
 }
+
+pub(super) struct Typed {
+    pub value: Value,
+    pub dates: BTreeMap<Vec<String>, String>,
+}
+impl Drop for Typed {
+    fn drop(&mut self) {
+        crate::orchestration::codec::discard(std::mem::take(&mut self.value));
+    }
+}
+pub(super) fn read_typed(path: &Path) -> Result<Typed, Error> {
+    use toml::de::DeValue;
+    let text = std::fs::read_to_string(path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound && path.is_symlink() {
+            Error::Invalid(format!("Link sem destino: {}", path.display()))
+        } else {
+            Error::Io(error)
+        }
+    })?;
+    let table = toml::de::DeTable::parse(&text)
+        .map_err(|e| Error::Invalid(e.to_string()))?
+        .into_inner();
+    enum Task<'a> {
+        Value(DeValue<'a>, Vec<String>),
+        Array(usize),
+        Object(Vec<String>),
+    }
+    let mut tasks = vec![Task::Value(DeValue::Table(table), vec![])];
+    let mut values = Vec::new();
+    let mut dates = BTreeMap::new();
+    while let Some(task) = tasks.pop() {
+        match task {
+            Task::Value(value, path) => match value {
+                DeValue::String(value) => values.push(Value::String(value.into_owned())),
+                DeValue::Boolean(value) => values.push(Value::Bool(value)),
+                DeValue::Integer(value) => {
+                    let number = integer(&value.to_string())
+                        .ok_or_else(|| Error::Invalid("Inteiro TOML inválido".into()))?;
+                    values.push(
+                        serde_json::from_str(&number).map_err(|e| Error::Invalid(e.to_string()))?,
+                    );
+                }
+                DeValue::Float(value) => {
+                    let number = value
+                        .as_str()
+                        .parse::<f64>()
+                        .map_err(|e| Error::Invalid(e.to_string()))?;
+                    values.push(if number.is_finite() {
+                        serde_json::json!(number)
+                    } else {
+                        crate::orchestration::codec::loads(if number.is_nan() {
+                            "NaN"
+                        } else if number.is_sign_negative() {
+                            "-Infinity"
+                        } else {
+                            "Infinity"
+                        })
+                        .unwrap()
+                    });
+                }
+                DeValue::Datetime(value) => {
+                    dates.insert(
+                        path,
+                        if value.date.is_some() && value.time.is_some() {
+                            "datetime"
+                        } else if value.date.is_some() {
+                            "date"
+                        } else {
+                            "time"
+                        }
+                        .into(),
+                    );
+                    values.push(
+                        serde_json::to_value(value).map_err(|e| Error::Invalid(e.to_string()))?,
+                    );
+                }
+                DeValue::Array(items) => {
+                    tasks.push(Task::Array(items.len()));
+                    for (index, item) in items.into_iter().enumerate().rev() {
+                        let mut child = path.clone();
+                        child.push(index.to_string());
+                        tasks.push(Task::Value(item.into_inner(), child));
+                    }
+                }
+                DeValue::Table(items) => {
+                    let keys: Vec<_> = items.keys().map(|key| key.get_ref().to_string()).collect();
+                    tasks.push(Task::Object(keys));
+                    for (key, item) in items.into_iter().rev() {
+                        let mut child = path.clone();
+                        child.push(key.into_inner().into_owned());
+                        tasks.push(Task::Value(item.into_inner(), child));
+                    }
+                }
+            },
+            Task::Array(length) => {
+                let start = values.len() - length;
+                let children = values.split_off(start);
+                values.push(Value::Array(children));
+            }
+            Task::Object(keys) => {
+                let children = values.split_off(values.len() - keys.len());
+                values.push(Value::Object(keys.into_iter().zip(children).collect()));
+            }
+        }
+    }
+    Ok(Typed {
+        value: values.pop().unwrap(),
+        dates,
+    })
+}
+#[cfg(test)]
+mod typed_tests {
+    use super::*;
+    #[test]
+    fn codex_service_toml_preserves_date_paths_without_confusing_personal_tables() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../backend/tests/fixtures/contract/codex-integration/toml-types.json"
+        ))
+        .unwrap();
+        let mut failures = Vec::new();
+        for case in fixture["cases"].as_array().unwrap() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("config.toml");
+            std::fs::write(&path, case["toml"].as_str().unwrap()).unwrap();
+            let typed = read_typed(&path).unwrap();
+            let actual: Vec<_> = typed
+                .dates
+                .iter()
+                .map(|(path, kind)| serde_json::json!({"path":path,"kind":kind}))
+                .collect();
+            drop(typed);
+            if serde_json::json!(actual) != case["dates"] {
+                failures.push(serde_json::json!({"case":case,"actual":actual}));
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+}

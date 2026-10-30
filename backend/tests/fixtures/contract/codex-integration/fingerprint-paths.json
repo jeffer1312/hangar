@@ -1,0 +1,106 @@
+{
+  "source_commit": "8a3ce81c1",
+  "command": "cd backend && uv run python tests/fixtures/contract/codex-integration/generate_fingerprint_paths.py",
+  "cases": [
+    {
+      "path": "home/.claude/agents",
+      "kind": "file",
+      "phase": "fragments",
+      "sources": false,
+      "result": {
+        "error": "NotADirectoryError",
+        "message": "[Errno 20] Not a directory: '$ROOT/home/.claude/agents'"
+      }
+    },
+    {
+      "path": "home/.claude/agents",
+      "kind": "file",
+      "phase": "fragments",
+      "sources": true,
+      "result": {
+        "error": "NotADirectoryError",
+        "message": "[Errno 20] Not a directory: '$ROOT/home/.claude/agents'"
+      }
+    },
+    {
+      "path": "home/.claude/commands",
+      "kind": "file",
+      "phase": "fragments",
+      "sources": false,
+      "result": {
+        "error": "NotADirectoryError",
+        "message": "[Errno 20] Not a directory: '$ROOT/home/.claude/commands'"
+      }
+    },
+    {
+      "path": "home/.claude/commands",
+      "kind": "file",
+      "phase": "fragments",
+      "sources": true,
+      "result": {
+        "error": "NotADirectoryError",
+        "message": "[Errno 20] Not a directory: '$ROOT/home/.claude/commands'"
+      }
+    },
+    {
+      "path": "home/.claude/skills",
+      "kind": "file",
+      "phase": "skills",
+      "sources": false,
+      "result": {
+        "error": "NotADirectoryError",
+        "message": "[Errno 20] Not a directory: '$ROOT/home/.claude/skills'"
+      }
+    },
+    {
+      "path": "home/.claude/skills",
+      "kind": "file",
+      "phase": "skills",
+      "sources": true,
+      "result": {
+        "error": "NotADirectoryError",
+        "message": "[Errno 20] Not a directory: '$ROOT/home/.claude/skills'"
+      }
+    },
+    {
+      "path": "repo/skills",
+      "kind": "file",
+      "phase": "skills",
+      "sources": false,
+      "result": {
+        "error": "NotADirectoryError",
+        "message": "[Errno 20] Not a directory: '$ROOT/repo/skills'"
+      }
+    },
+    {
+      "path": "repo/skills",
+      "kind": "file",
+      "phase": "skills",
+      "sources": true,
+      "result": {
+        "error": "NotADirectoryError",
+        "message": "[Errno 20] Not a directory: '$ROOT/repo/skills'"
+      }
+    },
+    {
+      "path": "home/.codex/config.toml",
+      "kind": "dangling",
+      "phase": "instructions",
+      "sources": false,
+      "result": {
+        "error": "ValueError",
+        "message": "Link sem destino: $ROOT/home/.codex/config.toml"
+      }
+    },
+    {
+      "path": "home/.codex/config.toml",
+      "kind": "dangling",
+      "phase": "instructions",
+      "sources": true,
+      "result": {
+        "error": "ValueError",
+        "message": "Link sem destino: $ROOT/home/.codex/config.toml"
+      }
+    }
+  ]
+}

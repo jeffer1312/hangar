@@ -700,7 +700,7 @@ fn relink(text: &Path, at: &Path) -> io::Result<()> {
 
 /// Acesso e modificação de `meta` em `path`, e depois o modo (o `copystat`: o modo por último, para um
 /// modo sem escrita não barrar as datas).
-fn copy_stat(path: &Path, meta: &fs::Metadata) -> Result<()> {
+pub(crate) fn copy_stat(path: &Path, meta: &fs::Metadata) -> Result<()> {
     let times = fs::FileTimes::new().set_accessed(meta.accessed().at(path)?).set_modified(meta.modified().at(path)?);
     #[cfg(unix)]
     let file = fs::File::open(path).at(path)?;

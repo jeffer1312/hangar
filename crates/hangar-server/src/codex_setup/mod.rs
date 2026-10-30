@@ -54,3 +54,6 @@ pub mod phase;
 pub mod skills;
 
 pub mod config_edits;
+
+pub mod fingerprints;
+pub mod stage_sources;
