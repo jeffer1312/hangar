@@ -23,6 +23,8 @@ impl Default for Service {
     }
 }
 
+const CACHED_OUTPUT_LIMIT: usize = 64 * 1024;
+
 const SYSTEM: &str = concat!(
     "Você reescreve, em português do Brasil, o resumo do raciocínio de um assistente de ",
     "programação. Regras: uma frase curta por passo, no gerúndio ou no infinitivo ",
@@ -89,10 +91,13 @@ impl Service {
         let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
         match result {
             Ok(output) => {
-                if cache.values.len() >= 500 {
-                    cache.values.clear();
+                // A leitura aceita 4 MiB; sem teto por item, 500 entradas reteriam gigabytes.
+                if output.len() <= CACHED_OUTPUT_LIMIT {
+                    if cache.values.len() >= 500 {
+                        cache.values.clear();
+                    }
+                    cache.values.insert(key, output.clone());
                 }
-                cache.values.insert(key, output.clone());
                 output
             }
             Err(error) => {
@@ -101,8 +106,14 @@ impl Service {
                     status = error.status,
                     "A tradução do pensamento falhou; provedor pausado por 120 s."
                 );
-                if cache.paused.len() >= 16 {
-                    cache.paused.clear();
+                if cache.paused.len() >= 16
+                    && let Some(oldest) = cache
+                        .paused
+                        .iter()
+                        .min_by_key(|(_, until)| **until)
+                        .map(|(profile, _)| profile.clone())
+                {
+                    cache.paused.remove(&oldest);
                 }
                 cache
                     .paused
@@ -284,6 +295,39 @@ mod tests {
             vec!["novo"]
         );
         assert_eq!(service.cache.lock().unwrap().values.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_oversized_translation_is_returned_but_not_cached() {
+        let large = "a".repeat(CACHED_OUTPUT_LIMIT + 1);
+        let server = fake(vec![content(&large), content(&large)]).await;
+        let service = Service::default();
+        let texts = vec!["Checking code".to_owned()];
+        assert_eq!(service.translate(&server.config, &texts).await, vec![large.clone()]);
+        assert_eq!(service.translate(&server.config, &texts).await, vec![large]);
+        assert_eq!(server.hits.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert!(service.cache.lock().unwrap().values.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_full_pause_list_only_releases_the_oldest_profile() {
+        let server = fake(vec![(500, serde_json::json!({"error":"indisponível"}))]).await;
+        let service = Service::default();
+        let now = Instant::now();
+        {
+            let mut cache = service.cache.lock().unwrap();
+            for n in 0..16u64 {
+                cache
+                    .paused
+                    .insert(format!("perfil-{n}"), now + Duration::from_secs(60 + n));
+            }
+        }
+        assert_eq!(service.translate(&server.config, &["one".into()]).await, vec!["one"]);
+        let cache = service.cache.lock().unwrap();
+        assert_eq!(cache.paused.len(), 16);
+        assert!(!cache.paused.contains_key("perfil-0"));
+        assert!((1..16).all(|n| cache.paused.contains_key(&format!("perfil-{n}"))));
+        assert!(cache.paused.contains_key(&text_client::profile(&server.config)));
     }
 
     #[tokio::test]

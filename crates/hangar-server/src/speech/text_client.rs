@@ -21,15 +21,14 @@ pub async fn chat(
         };
         return Err(SpeechError::new(503, detail));
     }
-    let mut body = json!({"model":model,"messages":[{"role":"system","content":system},
-        {"role":"user","content":prompt}],"temperature":temperature});
-    let effort = config.string("llm_reasoning_effort");
-    if !trim(&effort).is_empty() {
-        body["reasoning_effort"] = json!(trim(&effort));
-    }
-    if prefer_throughput(&endpoint, &model) {
-        body["provider"] = json!({"sort":"throughput"});
-    }
+    let body = request_body(
+        &endpoint,
+        &model,
+        system,
+        prompt,
+        temperature,
+        &config.string("llm_reasoning_effort"),
+    );
     let response = client()?
         .post(format!(
             "{}/chat/completions",
@@ -59,6 +58,25 @@ pub async fn chat(
     }
     let bytes = read_response(response).await;
     parse_content(&bytes?)
+}
+
+fn request_body(
+    endpoint: &str,
+    model: &str,
+    system: &str,
+    prompt: &str,
+    temperature: f64,
+    effort: &str,
+) -> Value {
+    let mut body = json!({"model":model,"messages":[{"role":"system","content":system},
+        {"role":"user","content":prompt}],"temperature":temperature});
+    if !trim(effort).is_empty() {
+        body["reasoning_effort"] = json!(trim(effort));
+    }
+    if prefer_throughput(endpoint, model) {
+        body["provider"] = json!({"sort":"throughput"});
+    }
+    body
 }
 
 fn transport_error(error: reqwest::Error) -> SpeechError {
@@ -122,11 +140,21 @@ fn parse_content(bytes: &[u8]) -> Result<String, SpeechError> {
         .map_err(|_| SpeechError::new(502, "A resposta do provedor não é UTF-8 válido."))?;
     let value: Value = serde_json::from_str(text)
         .map_err(|_| SpeechError::new(502, "A resposta do provedor não é um JSON válido."))?;
-    if value["choices"][0]["finish_reason"].as_str() == Some("length") {
-        return Err(SpeechError::new(
-            502,
-            "A resposta do provedor foi interrompida pelo limite de tokens.",
-        ));
+    match value["choices"][0]["finish_reason"].as_str() {
+        Some("length") => {
+            return Err(SpeechError::new(
+                502,
+                "A resposta do provedor foi interrompida pelo limite de tokens.",
+            ));
+        }
+        // O filtro pode devolver só parte do texto, que não serve como tradução.
+        Some("content_filter") => {
+            return Err(SpeechError::new(
+                502,
+                "A resposta do provedor foi cortada pelo filtro de conteúdo.",
+            ));
+        }
+        _ => {}
     }
     let text = value["choices"]
         .get(0)
@@ -409,6 +437,21 @@ mod tests {
         assert!(!prefer_throughput("not a URL", "openai/gpt-x"));
     }
 
+    #[test]
+    fn openrouter_requests_carry_the_throughput_sort_only_without_a_user_suffix() {
+        let body = request_body("https://openrouter.ai/api/v1", "openai/gpt-x", "s", "p", 0.0, "");
+        assert_eq!(body["provider"], json!({"sort":"throughput"}));
+        let body = request_body(
+            "https://openrouter.ai/api/v1",
+            "openai/gpt-x:floor",
+            "s",
+            "p",
+            0.0,
+            "",
+        );
+        assert!(body.get("provider").is_none());
+    }
+
     #[tokio::test]
     async fn absent_reasoning_effort_is_absent_from_the_request() {
         let server = fake(vec![content("texto")]).await;
@@ -477,6 +520,10 @@ mod tests {
             .unwrap_err();
         assert_eq!(error.status, 502);
         assert_eq!(error.detail, "A resposta do provedor foi interrompida pelo limite de tokens.");
+        let filtered = json!({"choices":[{"finish_reason":"content_filter","message":{"content":"texto parcial"}}]});
+        let error = parse_content(filtered.to_string().as_bytes()).unwrap_err();
+        assert_eq!(error.status, 502);
+        assert_eq!(error.detail, "A resposta do provedor foi cortada pelo filtro de conteúdo.");
         for reason in [Value::Null, json!("stop")] {
             let value = json!({"choices":[{"finish_reason":reason,"message":{"content":"texto completo"}}]});
             assert_eq!(parse_content(value.to_string().as_bytes()).unwrap(), "texto completo");
