@@ -47,7 +47,7 @@ pub fn matches(method: &Method, path: &str) -> bool {
     if matches!(*method,Method::GET|Method::POST|Method::DELETE) && path.strip_prefix("/api/codex-contas/")
         .and_then(|tail|tail.strip_suffix("/login")).is_some_and(|id|!id.is_empty() && !id.contains('/')) {return true;}
     if *method == Method::POST && codex_sign_out(path).is_some() {return true;}
-    if claude_matches(method, path) {
+    if claude_matches(method, path) || super::login_browser::matches(method, path) {
         return true;
     }
     (matches!(*method, Method::GET | Method::POST)
@@ -109,6 +109,9 @@ pub async fn public(state: Arc<crate::routes::AppState>, request: Request) -> Re
     }
     if claude_matches(&method, &path) {
         return claude_public(state, request).await;
+    }
+    if super::login_browser::matches(&method, &path) {
+        return super::login_browser::public(state, request).await;
     }
     if !deletion && let Some(id) = codex_sign_out(&path) {
         let Ok(id) = percent_encoding::percent_decode_str(id).decode_utf8() else {
