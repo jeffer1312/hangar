@@ -114,28 +114,8 @@ def test_registry_waits_pending_then_fails_with_code(monkeypatch):
         loop.close()
 
 
-def _first_list_event(**kwargs):
-    async def run():
-        gen = sse.list_events(ping_secs=60, **kwargs)
-        try:
-            return await asyncio.wait_for(gen.__anext__(), 2)
-        finally:
-            await gen.aclose()
-    return asyncio.run(run())
 
 
-def test_list_refresher_never_starts_in_rust_mode(rust, monkeypatch):
-    monkeypatch.setattr(sse, "_shortcuts_snapshot", lambda: None)
-    monkeypatch.setattr(sse, "_cached_list", _no_python_async)
-    monkeypatch.setattr(sse._list_registry, "list_with_state", _no_python_async)
-    monkeypatch.setattr(list_bridge, "snapshot", lambda: _rows("alfa"))
-    event = _first_list_event()
-    assert event["event"] == "sessions"
-    assert _names(json.loads(event["data"])) == ["alfa"]
-    # A lista do Rust não é a "lista que o Python serviu" (a sombra compararia o Rust com ele mesmo).
-    assert sse.recent_list(60) is None
-    monkeypatch.setattr(list_bridge, "snapshot", _down)
-    assert _first_list_event()["event"] == "list_error"
 
 
 
@@ -150,36 +130,3 @@ def test_prune_keeps_files_on_bridge_error(rust, tmp_path, monkeypatch):
     with pytest.raises(list_bridge.ListBridgeError):
         prune.prune_sidecars(bases=[tmp_path / ".claude"], agora=time.time())
     assert old.exists()
-
-
-@pytest.fixture
-def guest_ana(tmp_path, monkeypatch):
-    from app import guest_users
-    monkeypatch.setattr(guest_users, "_path_override", tmp_path / "guests.json")
-    monkeypatch.setattr(guest_users, "session_life", lambda n: {"alfa": "t:1", "dono": "t:2"}.get(n))
-    guest_users._reset()
-    (tmp_path / "p").mkdir()
-    guest, token = guest_users.create("ana", str(tmp_path / "p"), False, False)
-    guest_users.claim("alfa", guest.id)
-    yield guest, token
-    guest_users._reset()
-
-
-def test_guest_list_filters_bridge_snapshot(rust, guest_ana, monkeypatch):
-    from fastapi.testclient import TestClient
-    from app import api
-    guest, token = guest_ana
-    monkeypatch.setattr(sse, "_shortcuts_snapshot", lambda: None)
-    monkeypatch.setattr(api.settings, "auth_token", "owner-token")
-    monkeypatch.setattr(api, "_guardar_snap", _no_python)
-    monkeypatch.setattr(api.registry, "list_with_state", _no_python_async)
-    monkeypatch.setattr(list_bridge, "snapshot", lambda: _rows("alfa", "dono"))
-    client = TestClient(api.app)
-    response = client.get("/api/sessions", headers={"Authorization": f"Bearer {token}"})
-    assert response.status_code == 200, response.text
-    assert _names(response.json()) == ["alfa"]
-    assert _names(json.loads(_first_list_event(viewer=guest)["data"])) == ["alfa"]
-    monkeypatch.setattr(list_bridge, "snapshot", _down)
-    response = client.get("/api/sessions", headers={"Authorization": f"Bearer {token}"})
-    assert response.status_code == 503
-    assert response.json()["detail"]["code"] == "erro_lista_indisponivel"

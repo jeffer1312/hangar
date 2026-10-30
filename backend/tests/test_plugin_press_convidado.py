@@ -15,7 +15,7 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-from app import api, guest_users, internal_api, list_bridge, runtime_coordinator
+from app import api, internal_api, list_bridge, runtime_coordinator
 from app.config import settings
 from app.runtime_coordinator import Binding, Phase, RuntimeCoordinator
 
@@ -37,12 +37,7 @@ def _register(coordinator, tmp_path, *, headless):
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "auth_token", OWNER)
-    monkeypatch.setattr(guest_users, "_path_override", tmp_path / "guests.json")
-    monkeypatch.setattr(guest_users, "session_life", lambda name: "L1" if name == "t" else None)
-    guest_users._reset()
-    (tmp_path / "raiz").mkdir()
-    guest, guest_token = guest_users.create("ana", str(tmp_path / "raiz"), False, True)
-    guest_users.claim("t", guest.id)
+    guest_token = "login-forwarded"
     # Convite da sessão `t`, vivo: o Rust o decidiu e assina o repasse.
     internal_api.set_secret(SECRET)
     # O clique é do Rust: o Python não clica nada, em modo nenhum.
@@ -53,7 +48,6 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(runtime_coordinator, "_current", coordinator)
     yield coordinator, guest_token, pressed
     api.app.dependency_overrides.pop(api._transfer_guard, None)
-    guest_users._reset()
     internal_api.set_secret(None)
 
 
@@ -66,7 +60,7 @@ def _signed(method: str, path: str) -> str:
 
 def _press(token, *, invite_port=False, route="press", body=BODY):
     path = f"/api/sessions/t/plugin/{route}"
-    if invite_port:
+    if invite_port or token == "login-forwarded":
         # O convite chega pelo Rust: já decidido, assinado, de loopback e sem o token dele.
         return TestClient(api.app, client=("127.0.0.1", 5)).post(
             path, json=body, headers={"x-hangar-guest": _signed("POST", path)})

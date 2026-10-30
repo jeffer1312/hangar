@@ -88,11 +88,6 @@ def _h():
     return {"Authorization": "Bearer secret"}
 
 
-def test_list_sessions_route(api_client):
-    with patch("app.api.registry.list", return_value=[SessionInfo(name="cc", cwd="/p")]):
-        r = api_client.get("/api/sessions", headers=_h())
-    assert r.status_code == 200
-    assert r.json()[0]["name"] == "cc"
 
 
 def test_resposta_json_grande_usa_gzip(api_client):

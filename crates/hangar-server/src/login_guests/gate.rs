@@ -207,6 +207,11 @@ pub async fn guard(
     if !check(&st, &guest, &method, &path).await {
         return deny(request.headers());
     }
+    let headers=request.headers().clone();
+    request=match crate::shortcuts::guest::intercept(&st,&guest,&path,request).await {
+        Ok(request)=>request,
+        Err(mut response)=>{crate::routes::cors(&headers,response.headers_mut());return response;}
+    };
     let token = String::from_utf8_lossy(&token).into_owned();
     let watcher = Watcher {
         st: st.clone(),

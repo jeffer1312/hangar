@@ -24,7 +24,6 @@ from app.models import SessionInfo, session_key
 from app.pqueue import PromptQueue, merged_history
 from app.archive import _texto_simples, conversation_files
 from app.chain import ThenLink
-from app import guest_users
 from app.pair import PairLink
 from app.adapters.claude_headless import sessions as headless_sessions
 from app.adapters.codex import sessions as codex_sessions
@@ -1578,15 +1577,8 @@ class SessionRegistry:
         transfers = [i for i in infos if i.transfer_phase and i.transfer_phase not in terminal_phases]
         infos = [i for i in infos if not i.transfer_phase or i.transfer_phase in terminal_phases]
         # `shared` é do Rust (a lista dele a marca pela loja de convites); aqui só o dono.
-        async def decorate_access(rows):
-            if guest_users.has_claims():
-                def owners():
-                    for row in rows:
-                        row.owner = guest_users.owner_name(row.name)
-                await asyncio.to_thread(owners)
 
         if not infos:
-            await decorate_access(transfers)
             return transfers
         # Estado pela marca dos hooks quando existe (custo ~0); senao cai no pane (fallback).
         # NOTA: o sweep de STATUSLINE (mais abaixo) captura pane mesmo de sessao com marcador —
@@ -1999,7 +1991,6 @@ class SessionRegistry:
         await asyncio.to_thread(_decorate_planos)
         for info in infos:
             _decorate_loop(info)
-        await decorate_access(infos + transfers)
         return infos + transfers
 
     # ── Troca terminal ⇄ sem terminal (mesma conversa) ──────────────────────────────────────

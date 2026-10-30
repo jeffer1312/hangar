@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException, Request, Response
 
-from app import auth, diag, sse, sync
+from app import auth, diag, sse
 
 
 SECRET = "segredo-que-nao-pode-aparecer@example.invalid"
@@ -63,24 +63,6 @@ async def test_auth_bloqueio_e_recuperacao_sem_repetir_poll(diario, monkeypatch)
     assert "192.0.2.15" not in json.dumps(rows)
 
 
-def test_sync_registra_causas_e_resultado_sem_login_senha_ou_vault(diario, tmp_path, monkeypatch):
-    monkeypatch.setattr(sync.settings, "sync_bootstrap", "bootstrap-correto")
-    monkeypatch.setattr(sync, "_data_path", lambda: tmp_path / "vault.json")
-    monkeypatch.setattr(sync, "_FAILS", {})
-    body = sync.RegisterBody(user=SECRET, salt=SECRET, auth_hash=SECRET, bootstrap=SECRET)
-    with pytest.raises(HTTPException):
-        sync.register(body)
-    sync.register(body.model_copy(update={"bootstrap": "bootstrap-correto"}))
-    with pytest.raises(HTTPException):
-        sync.login(sync.LoginBody(user=SECRET, auth_hash="incorreta"), _request(), Response())
-    sync.login(sync.LoginBody(user=SECRET, auth_hash=SECRET), _request(), Response())
-    with pytest.raises(HTTPException):
-        sync.put_vault(sync.VaultPutBody(enc_blob={"texto": SECRET}, base_rev=10), SECRET)
-    sync.put_vault(sync.VaultPutBody(enc_blob={"texto": SECRET}, base_rev=0), SECRET)
-    rows = diario()
-    assert {r.get("detalhe") for r in rows} >= {"bootstrap_invalido", "credenciais_invalidas", "revisao_desatualizada"}
-    assert {r["evento"] for r in rows} >= {"sync.cadastrado", "sync.login_concluido", "sync.gravado"}
-    assert SECRET not in json.dumps(rows)
 
 
 @pytest.mark.asyncio

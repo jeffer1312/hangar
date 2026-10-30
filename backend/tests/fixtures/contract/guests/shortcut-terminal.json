@@ -1,0 +1,695 @@
+{
+  "source_commit": "e111cf8f20047afed3b14900ea3b4caf8a23c4f2",
+  "command": "cd backend && uv run python tests/fixtures/contract/guests/capture_shortcut_terminal.py",
+  "isolation": "Funções originais; tmux e foco não executados, saída simulada; Windows é ramo simulado em Linux com latin-1, não prova OEM/psmux real; IDs/relógio fixos.",
+  "start": [
+    {
+      "windows": false,
+      "failure": "",
+      "result": {
+        "id": "abcdef",
+        "label": "Rotulo X;",
+        "tmux": "shortcut-owner_a_b-abcdef"
+      },
+      "calls": [
+        [
+          "fixture-scope",
+          "--",
+          "tmux",
+          "new-session",
+          "-d",
+          "-s",
+          "shortcut-owner_a_b-abcdef",
+          "-c",
+          "/fixture/project",
+          "-e",
+          "DISPLAY=:fixture",
+          "--",
+          "/fixture/shell",
+          "-c",
+          "echo a;\necho b",
+          ";",
+          "set-option",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "@cp_hidden",
+          "1",
+          ";",
+          "set-option",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "@cp_shortcut_owner",
+          "owner.a:b",
+          ";",
+          "set-option",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "@cp_shortcut_id",
+          "abcdef",
+          ";",
+          "set-option",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "@cp_shortcut_seq",
+          "2000000000123456789",
+          ";",
+          "set-option",
+          "-w",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "remain-on-exit",
+          "on",
+          ";",
+          "set-option",
+          "-w",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "remain-on-exit-format",
+          "",
+          ";",
+          "set-option",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "status",
+          "off"
+        ],
+        [
+          "tmux",
+          "set-option",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "@cp_shortcut_label",
+          "Rotulo X\\;"
+        ],
+        [
+          "tmux",
+          "set-option",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "@cp_shortcut_key",
+          "global:k\\;"
+        ],
+        [
+          "tmux",
+          "set-option",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "@cp_shortcut_ask",
+          "0"
+        ],
+        [
+          "tmux",
+          "set-option",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "@cp_shortcut_cwd",
+          "/fixture/project"
+        ],
+        [
+          "tmux",
+          "set-option",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "@cp_shortcut_cmd",
+          "echo a;\necho b"
+        ]
+      ],
+      "files": {}
+    },
+    {
+      "windows": false,
+      "failure": "new-session",
+      "result": null,
+      "calls": [
+        [
+          "fixture-scope",
+          "--",
+          "tmux",
+          "new-session",
+          "-d",
+          "-s",
+          "shortcut-owner_a_b-abcdef",
+          "-c",
+          "/fixture/project",
+          "-e",
+          "DISPLAY=:fixture",
+          "--",
+          "/fixture/shell",
+          "-c",
+          "echo a;\necho b",
+          ";",
+          "set-option",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "@cp_hidden",
+          "1",
+          ";",
+          "set-option",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "@cp_shortcut_owner",
+          "owner.a:b",
+          ";",
+          "set-option",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "@cp_shortcut_id",
+          "abcdef",
+          ";",
+          "set-option",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "@cp_shortcut_seq",
+          "2000000000123456789",
+          ";",
+          "set-option",
+          "-w",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "remain-on-exit",
+          "on",
+          ";",
+          "set-option",
+          "-w",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "remain-on-exit-format",
+          "",
+          ";",
+          "set-option",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "status",
+          "off"
+        ]
+      ],
+      "files": {}
+    },
+    {
+      "windows": false,
+      "failure": "@cp_hidden",
+      "result": null,
+      "calls": [
+        [
+          "fixture-scope",
+          "--",
+          "tmux",
+          "new-session",
+          "-d",
+          "-s",
+          "shortcut-owner_a_b-abcdef",
+          "-c",
+          "/fixture/project",
+          "-e",
+          "DISPLAY=:fixture",
+          "--",
+          "/fixture/shell",
+          "-c",
+          "echo a;\necho b",
+          ";",
+          "set-option",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "@cp_hidden",
+          "1",
+          ";",
+          "set-option",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "@cp_shortcut_owner",
+          "owner.a:b",
+          ";",
+          "set-option",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "@cp_shortcut_id",
+          "abcdef",
+          ";",
+          "set-option",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "@cp_shortcut_seq",
+          "2000000000123456789",
+          ";",
+          "set-option",
+          "-w",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "remain-on-exit",
+          "on",
+          ";",
+          "set-option",
+          "-w",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "remain-on-exit-format",
+          "",
+          ";",
+          "set-option",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "status",
+          "off"
+        ]
+      ],
+      "files": {}
+    },
+    {
+      "windows": false,
+      "failure": "@cp_shortcut_key",
+      "result": null,
+      "calls": [
+        [
+          "fixture-scope",
+          "--",
+          "tmux",
+          "new-session",
+          "-d",
+          "-s",
+          "shortcut-owner_a_b-abcdef",
+          "-c",
+          "/fixture/project",
+          "-e",
+          "DISPLAY=:fixture",
+          "--",
+          "/fixture/shell",
+          "-c",
+          "echo a;\necho b",
+          ";",
+          "set-option",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "@cp_hidden",
+          "1",
+          ";",
+          "set-option",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "@cp_shortcut_owner",
+          "owner.a:b",
+          ";",
+          "set-option",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "@cp_shortcut_id",
+          "abcdef",
+          ";",
+          "set-option",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "@cp_shortcut_seq",
+          "2000000000123456789",
+          ";",
+          "set-option",
+          "-w",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "remain-on-exit",
+          "on",
+          ";",
+          "set-option",
+          "-w",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "remain-on-exit-format",
+          "",
+          ";",
+          "set-option",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "status",
+          "off"
+        ],
+        [
+          "tmux",
+          "set-option",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "@cp_shortcut_label",
+          "Rotulo X\\;"
+        ],
+        [
+          "tmux",
+          "set-option",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "@cp_shortcut_key",
+          "global:k\\;"
+        ],
+        [
+          "tmux",
+          "list-sessions",
+          "-F",
+          "#{session_name}\t#{@cp_shortcut_owner}\t#{@cp_shortcut_id}\t#{session_created}\t#{pane_dead}\t#{pane_dead_status}\t#{pane_pid}\t#{@cp_shortcut_seq}\t#{@cp_shortcut_key}\t#{@cp_shortcut_origin}\t#{@cp_shortcut_ask}\t#{@cp_shortcut_label}"
+        ],
+        [
+          "kill",
+          "shortcut-owner_a_b-abcdef"
+        ]
+      ],
+      "files": {}
+    },
+    {
+      "windows": true,
+      "failure": "",
+      "result": {
+        "id": "abcdef",
+        "label": "Rotulo X;",
+        "tmux": "shortcut-owner_a_b-abcdef"
+      },
+      "calls": [
+        [
+          "fixture-scope",
+          "--",
+          "tmux",
+          "new-session",
+          "-d",
+          "-s",
+          "shortcut-owner_a_b-abcdef",
+          "-c",
+          "/fixture/project",
+          "-e",
+          "DISPLAY=:fixture",
+          "cmd /d /c \"<DIR>/abcdef.cmd\""
+        ],
+        [
+          "tmux",
+          "set-option",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "@cp_hidden",
+          "1"
+        ],
+        [
+          "tmux",
+          "set-option",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "@cp_shortcut_owner",
+          "owner.a:b"
+        ],
+        [
+          "tmux",
+          "set-option",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "@cp_shortcut_id",
+          "abcdef"
+        ],
+        [
+          "tmux",
+          "set-option",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "@cp_shortcut_seq",
+          "2000000000123456789"
+        ],
+        [
+          "tmux",
+          "set-option",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "@cp_shortcut_label",
+          "Rotulo X;"
+        ],
+        [
+          "tmux",
+          "set-option",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "@cp_shortcut_key",
+          "global:k;"
+        ],
+        [
+          "tmux",
+          "set-option",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "@cp_shortcut_ask",
+          "0"
+        ],
+        [
+          "tmux",
+          "set-option",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "@cp_shortcut_cwd",
+          "/fixture/project"
+        ],
+        [
+          "tmux",
+          "set-option",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "status",
+          "off"
+        ]
+      ],
+      "files": {
+        "abcdef.cmd": "40636d64202f64202f6320223c4449523e2f6162636465662d636d642e636d64220d0a403e223c4449523e2f6162636465662e6578697422206563686f20254552524f524c4556454c250d0a3a680d0a407061757365203e6e756c0d0a40676f746f20680d0a",
+        "abcdef-cmd.cmd": "406563686f206f66660d0a6563686f20613b0d0a6563686f20620d0a"
+      }
+    },
+    {
+      "windows": true,
+      "failure": "new-session",
+      "result": null,
+      "calls": [
+        [
+          "fixture-scope",
+          "--",
+          "tmux",
+          "new-session",
+          "-d",
+          "-s",
+          "shortcut-owner_a_b-abcdef",
+          "-c",
+          "/fixture/project",
+          "-e",
+          "DISPLAY=:fixture",
+          "cmd /d /c \"<DIR>/abcdef.cmd\""
+        ]
+      ],
+      "files": {}
+    },
+    {
+      "windows": true,
+      "failure": "@cp_hidden",
+      "result": null,
+      "calls": [
+        [
+          "fixture-scope",
+          "--",
+          "tmux",
+          "new-session",
+          "-d",
+          "-s",
+          "shortcut-owner_a_b-abcdef",
+          "-c",
+          "/fixture/project",
+          "-e",
+          "DISPLAY=:fixture",
+          "cmd /d /c \"<DIR>/abcdef.cmd\""
+        ],
+        [
+          "tmux",
+          "set-option",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "@cp_hidden",
+          "1"
+        ],
+        [
+          "tmux",
+          "list-sessions",
+          "-F",
+          "#{session_name}\t#{@cp_shortcut_owner}\t#{@cp_shortcut_id}\t#{session_created}\t#{pane_dead}\t#{pane_dead_status}\t#{pane_pid}\t#{@cp_shortcut_seq}\t#{@cp_shortcut_key}\t#{@cp_shortcut_origin}\t#{@cp_shortcut_ask}\t#{@cp_shortcut_label}"
+        ],
+        [
+          "kill",
+          "shortcut-owner_a_b-abcdef"
+        ]
+      ],
+      "files": {}
+    },
+    {
+      "windows": true,
+      "failure": "@cp_shortcut_key",
+      "result": null,
+      "calls": [
+        [
+          "fixture-scope",
+          "--",
+          "tmux",
+          "new-session",
+          "-d",
+          "-s",
+          "shortcut-owner_a_b-abcdef",
+          "-c",
+          "/fixture/project",
+          "-e",
+          "DISPLAY=:fixture",
+          "cmd /d /c \"<DIR>/abcdef.cmd\""
+        ],
+        [
+          "tmux",
+          "set-option",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "@cp_hidden",
+          "1"
+        ],
+        [
+          "tmux",
+          "set-option",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "@cp_shortcut_owner",
+          "owner.a:b"
+        ],
+        [
+          "tmux",
+          "set-option",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "@cp_shortcut_id",
+          "abcdef"
+        ],
+        [
+          "tmux",
+          "set-option",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "@cp_shortcut_seq",
+          "2000000000123456789"
+        ],
+        [
+          "tmux",
+          "set-option",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "@cp_shortcut_label",
+          "Rotulo X;"
+        ],
+        [
+          "tmux",
+          "set-option",
+          "-t",
+          "=shortcut-owner_a_b-abcdef:",
+          "@cp_shortcut_key",
+          "global:k;"
+        ],
+        [
+          "tmux",
+          "list-sessions",
+          "-F",
+          "#{session_name}\t#{@cp_shortcut_owner}\t#{@cp_shortcut_id}\t#{session_created}\t#{pane_dead}\t#{pane_dead_status}\t#{pane_pid}\t#{@cp_shortcut_seq}\t#{@cp_shortcut_key}\t#{@cp_shortcut_origin}\t#{@cp_shortcut_ask}\t#{@cp_shortcut_label}"
+        ],
+        [
+          "kill",
+          "shortcut-owner_a_b-abcdef"
+        ]
+      ],
+      "files": {}
+    }
+  ],
+  "status": [
+    {
+      "code": 0,
+      "raw": "1\t\t\n",
+      "result": [
+        true,
+        null
+      ]
+    },
+    {
+      "code": 0,
+      "raw": "1\t0\t\n",
+      "result": [
+        false,
+        0
+      ]
+    },
+    {
+      "code": 0,
+      "raw": "1\t3\t\n",
+      "result": [
+        false,
+        3
+      ]
+    },
+    {
+      "code": 0,
+      "raw": "1\t\tHUP\n",
+      "result": [
+        false,
+        null
+      ]
+    },
+    {
+      "code": 0,
+      "raw": "0\t\t\n",
+      "result": [
+        true,
+        null
+      ]
+    },
+    {
+      "code": 1,
+      "raw": "1\t3\t\n",
+      "result": [
+        true,
+        null
+      ]
+    }
+  ],
+  "batch": [
+    {
+      "raw": "start https://x/a%20b",
+      "escaped": "start https://x/a%%20b",
+      "restored": "start https://x/a%20b"
+    },
+    {
+      "raw": "for %i in (a) do echo %i",
+      "escaped": "for %%i in (a) do echo %%i",
+      "restored": "for %i in (a) do echo %i"
+    },
+    {
+      "raw": "echo %1 %* %~dp0",
+      "escaped": "echo %%1 %%* %%~dp0",
+      "restored": "echo %1 %* %~dp0"
+    },
+    {
+      "raw": "echo 100%%",
+      "escaped": "echo 100%%%%",
+      "restored": "echo 100%%"
+    },
+    {
+      "raw": "echo %HANGAR_TEST_VAR% %NAO_EXISTE_XYZ%",
+      "escaped": "echo %HANGAR_TEST_VAR% %%NAO_EXISTE_XYZ%%",
+      "restored": "echo %HANGAR_TEST_VAR% %NAO_EXISTE_XYZ%"
+    },
+    {
+      "raw": "echo %ERRORLEVEL% %cd%",
+      "escaped": "echo %ERRORLEVEL% %cd%",
+      "restored": "echo %ERRORLEVEL% %cd%"
+    },
+    {
+      "raw": "echo %VAR:~0,3%",
+      "escaped": "echo %%VAR:~0,3%%",
+      "restored": "echo %VAR:~0,3%"
+    }
+  ],
+  "concurrent": {
+    "started": 1,
+    "reused": [
+      false,
+      true,
+      true,
+      true
+    ],
+    "ids": [
+      "abcdef"
+    ]
+  }
+}

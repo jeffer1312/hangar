@@ -132,7 +132,6 @@ def test_kill_session_without_rust_leaves_the_invite_to_its_sweep(monkeypatch, c
 def test_mode_change_holds_the_invite_and_moves_its_life(monkeypatch, bridge):
     monkeypatch.setattr(share_bridge, "changing_mode", set())
     monkeypatch.setattr(api, "session_life", lambda name: "k:novo")
-    monkeypatch.setattr(api.guest_users, "set_life", lambda *a: None)
     monkeypatch.setattr(api, "_invalidate_lists", lambda: None)
     seen = []
 

@@ -70,9 +70,7 @@ from app.config import (list_config_dirs, _backend_config_base, settings,
                         resolve_scan_roots,
                         automations_enabled, resolve_bind_ip)
 from app import runtime_config
-from app.guest_user_gate import GuestUserGate
 from app.connect_port import CONNECT_PORT, ConnectPortGate
-from app import guest_users, guest_users_api
 from app.guest_header import guest_of, guest_safe
 from app.share_life import session_life
 from app import contas, default_model, procinfo
@@ -98,7 +96,6 @@ from app import codex_contas as codex_accounts
 from app.codex_contas_login import CodexContasLogin
 from app.pair import PairLink
 from app.hook_state import hook_state
-from app.sync import sync_admin_router, sync_router
 from app.deploy import deploy_router
 from app import desktop_palette
 
@@ -490,7 +487,7 @@ async def _providers_via_rust(request: Request, call_next):
             return JSONResponse({"detail": error.detail}, status_code=error.status_code, headers=error.headers)
         if account_bridge.owner_mode() == "python":
             return JSONResponse({"detail": {"code": "providers_need_rust_server"}}, status_code=503)
-        response = await account_bridge.forward_stream(request, guest=guest_of(request) is not None or guest_users.current.get() is not None)
+        response = await account_bridge.forward_stream(request, guest=guest_of(request) is not None)
         return await call_next(request) if response.status_code == 421 else response
     unavailable = (erro("orq_conductor_need_rust_server", "o condutor precisa do servidor Rust, que não está rodando")
                    if re.fullmatch(r"/api/orq/[^/]+/conductor", path) else
@@ -521,7 +518,7 @@ async def _worktrees_pelo_rust(request: Request, call_next):
              or method == "POST" and path in {"/api/worktrees/create", "/api/worktrees/delete", "/api/worktrees/delete-merged"})
     if not owned:
         return await call_next(request)
-    if guest_of(request) is not None or guest_users.current.get() is not None:
+    if guest_of(request) is not None:
         return JSONResponse({"detail": "convidado não acessa worktrees"}, status_code=403)
     if account_bridge.owner_mode() == "python" and path != "/api/worktrees/settings":
         return await call_next(request)
@@ -535,7 +532,7 @@ async def _jev_aux_pelo_rust(request: Request, call_next):
     delivery = request.url.path == "/api/jev/delivery"
     if not delivery and not request.url.path.startswith("/api/jev/aux/"):
         return await call_next(request)
-    if delivery and (guest_of(request) is not None or guest_users.current.get() is not None):
+    if delivery and (guest_of(request) is not None):
         return JSONResponse({"detail": "Not Found"}, status_code=404)
     return await _repasse_ao_rust(request, erro("erro_jev_aux_precisa_rust", "o servidor está sem o processo Rust; reinicie o Hangar"),
                                   "/__hangar_server/forwarded" if delivery else "/__hangar_server/jev/aux")
@@ -549,7 +546,7 @@ async def _grupos_pelo_rust(request: Request, call_next):
     path = request.url.path
     if not (path.startswith("/api/groups/") or (request.method == "GET" and path.startswith("/api/sessions/") and path.endswith("/group"))):
         return await call_next(request)
-    if guest_of(request) is not None or guest_users.current.get() is not None:
+    if guest_of(request) is not None:
         return JSONResponse({"detail": erro("erro_fora_do_convite", "fora da sessao compartilhada")}, status_code=403)
     resp = await _repasse_ao_rust(request, _groups_need_rust(), "/__hangar_server/forwarded")
     # Recado a sessão que só o Python atende volta no corpo: sai dele e é entregue antes da resposta,
@@ -576,7 +573,7 @@ async def _planos_pelo_rust(request: Request, call_next):
     dono, recusa o convidado."""
     path, metodo = request.url.path, request.method
     if metodo == "GET" and path == _CATALOGO:
-        if guest_of(request) is not None or guest_users.current.get() is not None:
+        if guest_of(request) is not None:
             return JSONResponse({"detail": erro("erro_fora_da_pasta", "a seleção de plugins pertence ao dono")}, status_code=403)
         return await _repasse_ao_rust(request, erro("claude_customizations_unavailable", "a seleção de plugins e skills precisa do servidor Rust"),
                                       "/__hangar_server/forwarded")
@@ -613,7 +610,7 @@ async def _midia_pelo_rust(request: Request, call_next):
     if account_bridge.owner_mode() == "python":
         return JSONResponse({"detail": erro("erro_midia_precisa_rust", "anexos, transcrição e saída de ferramenta precisam do servidor Rust, que não está rodando")},
                             status_code=503)
-    guest = guest_of(request) is not None or guest_users.current.get() is not None
+    guest = guest_of(request) is not None
     return await account_bridge.forward_stream(request, guest=guest)
 
 
@@ -625,7 +622,7 @@ _MERMAID_HEADERS = ("x-hangar-css-width", "x-hangar-css-height", "cache-control"
 async def mermaid_pelo_rust(request: Request):
     """O desenho é do Rust (`mermaid::serve`). Aqui chegam o dono pelo Connect, que segue pela ponte,
     e quem o Rust não reconheceu como dono. O convidado fica sem a rota, como antes."""
-    if guest_of(request) is not None or guest_users.current.get() is not None:
+    if guest_of(request) is not None:
         return JSONResponse({"detail": "Not Found"}, status_code=404)
     return await _repasse_ao_rust(request, erro("mermaid_indisponivel", "o desenho de diagramas precisa do servidor Rust"),
                                   "/__hangar_server/forwarded", keep=_MERMAID_HEADERS, limit=64 * 1024 * 1024)
@@ -634,7 +631,7 @@ async def mermaid_pelo_rust(request: Request):
 @app.api_route("/api/session-defaults", methods=["GET", "PUT"], dependencies=[Depends(require_auth)])
 async def session_defaults_forward(request: Request):
     """O Connect só transporta o padrão; leitura e escrita pertencem ao Rust."""
-    if guest_of(request) is not None or guest_users.current.get() is not None:
+    if guest_of(request) is not None:
         raise HTTPException(403, detail=erro("session_defaults_owner_only", "só o dono pode acessar o padrão da abertura"))
     return await _repasse_ao_rust(request, erro("session_defaults_unavailable", "o padrão da abertura precisa do servidor Rust"),
                                   "/__hangar_server/forwarded")
@@ -705,7 +702,6 @@ async def _correlaciona_diag(request: Request, call_next):
 
 # Porteiro do convidado com login ANTES do CORS: o CORS o envolve, entao ate o 403 dele sai com
 # Access-Control-Allow-Origin e o app do convidado le o codigo em vez de "erro de rede".
-app.add_middleware(GuestUserGate)
 # Body-size ANTES do CORS no codigo -> CORS fica por FORA (envolve ate o 413, adicionando headers CORS
 # na rejeicao). Ver _BodySizeLimitMiddleware.
 app.add_middleware(_BodySizeLimitMiddleware, max_bytes=MAX_BYTES)
@@ -729,9 +725,6 @@ app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
 # Por fora de tudo (o último registrado é o mais externo): os porteiros e o CORS já veem o cliente
 # trocado de quem chegou pela porta do Connect.
 app.add_middleware(ConnectPortGate)
-app.include_router(sync_admin_router)
-app.include_router(sync_router)
-app.include_router(guest_users_api.router)
 app.include_router(deploy_router)
 # Roteadores por assunto (Task 1 do plano descoberta-e-configuracao): cada Task do lote escreve
 # só no módulo dela. Última edição de api.py deste plano.
@@ -1457,53 +1450,6 @@ async def whoami(request: Request):
     return {"name": nome, "origem": origem}
 
 
-@app.get("/api/sessions", dependencies=[Depends(require_auth)], response_model=list[SessionInfo])
-async def list_sessions(request: Request):
-    # list_with_state: resolucao otimizada (1 scan /proc + 1 chamada tmux em lote) + estado vivo por
-    # sessao (working/idle/awaiting_input) classificado do pane. async pq captura os panes concorrente.
-    # MuxIndisponivel nao e tratada aqui: o handler de `_mux_indisponivel` cobre esta rota e as
-    # outras quinze que chamam registry.list(). Um try/except so nesta seria a mesma resposta
-    # escrita duas vezes, e a que envelhece primeiro.
-    #
-    # A RESOLUCAO (scan de /proc + fork de tmux) vem do snapshot de `_guardar_snap`, com TTL de 1s e
-    # single-flight; o ESTADO continua sendo classificado a cada chamada, entao a resposta nao fica
-    # velha. Medido em 06/09/2026: sem isto as chamadas nao se sobrepoem — 1 custa 13ms, 3 custam
-    # 35ms de parede, 6 custam 67ms e 12 custam 134ms, linear, porque cada uma refaz a varredura
-    # inteira. E o front chama isto a cada 2s POR cliente. Com o snapshot, N clientes que caem na
-    # mesma janela pagam uma varredura so. `to_thread` porque `_guardar_snap` bloqueia (mesma regra
-    # do git status na corrotina, o incidente de 2026-07-23).
-    #
-    # CADA requisicao decora as SUAS copias, e isto nao e zelo: `list_with_state` escreve NOS
-    # objetos (`info.state`, `info.last_activity`, `info.question`...), e o snapshot e a mesma lista
-    # servida a todo mundo dentro do TTL. Sem a copia, duas chamadas concorrentes — que e justamente
-    # o que este cache existe pra permitir — se intercalam nos MESMOS SessionInfo entre os awaits da
-    # decoracao, e o estado decorado ainda vazaria pro snapshot que `/history` e `/workflows` leem
-    # esperando a lista crua. `model_copy` rasa basta: a decoracao ATRIBUI campos, nunca muta em
-    # lugar o que ja esta neles.
-    # Com a lista SSE aberta, o refresher já decorou isto há menos de um tique: serve dele. Com o
-    # Rust dono, o retrato é dele (até 2 s, produzido na hora se mais velho).
-    from app.sse import recent_list
-    guest = guest_of(request)
-    viewer = guest_users.current.get()
-    decorated = (await asyncio.to_thread(list_bridge.snapshot) if await registry_mod.rust_owns_list_async()
-                 else recent_list(2.0))
-    if decorated is not None:
-        if guest is not None:
-            decorated = [i for i in decorated if guest.sees(i.name)]
-        # Mesmo recorte do caminho sem cache: convidado com login próprio só vê o que lhe cabe.
-        if viewer is not None or guest_users.has_claims():
-            decorated = await asyncio.to_thread(guest_users.filter_visible, viewer, decorated,
-                                                lambda i: i.name)
-        return decorated if guest is None else [guest_safe(i, guest) for i in decorated]
-    snap = await asyncio.to_thread(_guardar_snap)
-    # Convidado ve so a sessao compartilhada; o filtro fica depois do snapshot para nao tocar no cache.
-    if guest is not None:
-        snap = [i for i in snap if guest.sees(i.name)]
-    if viewer is not None or guest_users.has_claims():
-        snap = await asyncio.to_thread(guest_users.filter_visible, viewer, snap, lambda i: i.name)
-    decorated = await registry.list_with_state([i.model_copy() for i in snap])
-    # O pareamento e o encadeamento são decorados acima e citam outras sessões do dono.
-    return decorated if guest is None else [guest_safe(i, guest) for i in decorated]
 
 
 @app.post("/api/diag", dependencies=[Depends(require_auth)])
@@ -1624,6 +1570,8 @@ def _codex_as_claude_mode(name: str) -> str | None:
     return "acceptEdits" if sandbox == "workspace-write" else "manual"
 
 
+
+
 async def _open_in_rust(raw: bytes, request: Request | None) -> CreatedSessionInfo | None:
     """Claude com terminal abre no Rust. O que entra pela 8765 ele decide antes de repassar; à ponte,
     num sentido, só vai o que entrou direto aqui: o Connect (8768), inclusive o bastão por ela. O
@@ -1632,8 +1580,7 @@ async def _open_in_rust(raw: bytes, request: Request | None) -> CreatedSessionIn
     port = (request.scope.get("server") or (None, None))[1] if request is not None else None
     if port != CONNECT_PORT or port == settings.port:
         return None
-    guest = guest_users.current.get()
-    payload = b'{"request":' + raw + b',"guest":' + json.dumps(guest.id if guest is not None else None).encode() + b"}"
+    payload = b'{"request":' + raw + b"}"
     # O prazo da criação, que prepara conta e worktree. O nome na rota é só rótulo: a ponte lê o pedido.
     answer = await asyncio.to_thread(runtime_coordinator.rust_claude, "_", "open", "POST", payload, 180)
     if answer is None:
@@ -1642,8 +1589,8 @@ async def _open_in_rust(raw: bytes, request: Request | None) -> CreatedSessionIn
     data = json.loads(raw)
     if status >= 400:
         raise HTTPException(status, detail=data["detail"])
-    # O dono da sessão do convidado o Rust já gravou no `guests.json`.
     return CreatedSessionInfo(**data["info"])
+
 
 
 @app.post("/api/sessions", dependencies=[Depends(require_auth)], response_model=CreatedSessionInfo)
@@ -2496,13 +2443,6 @@ async def subagents_pelo_rust(request: Request, name: str, agent_id: str | None 
     return await account_bridge.forward_public(request, "/__hangar_server/subagents")
 
 
-@app.get("/api/sessions/events", dependencies=[Depends(require_auth)])
-async def sessions_events(request: Request):
-    from app.sse import list_events
-    guest = guest_of(request)
-    return EventSourceResponse(
-        list_events(only=guest, viewer=guest_users.current.get()),
-        send_timeout=30)
 
 
 @app.get("/api/sessions/{name}/events", dependencies=[Depends(require_auth)])
@@ -2539,7 +2479,7 @@ async def events(name: str, request: Request):
     # SSE do Codex nunca ligava (chat vazio, sem estado ao vivo).
     return EventSourceResponse(
         merged_events(name, info.jsonl, provider=info.provider, start_offset=start_offset,
-                      count_app=guest_of(request) is None and guest_users.current.get() is None),
+                      count_app=guest_of(request) is None),
         send_timeout=30)
 
 
@@ -3817,8 +3757,7 @@ _MOD_SEM_RUST = erro("mods_need_rust_server", "O clique do mod precisa do servid
 
 
 def _convidado(request: Request) -> bool:
-    from app import guest_users
-    return guest_of(request) is not None or guest_users.current.get() is not None
+    return guest_of(request) is not None
 
 
 async def _mod_no_rust(name: str, op: str, request: Request) -> Response | None:
@@ -4751,8 +4690,7 @@ def _shortcut_shell(name: str, body: ShortcutShellBody, request: Request, *, pow
     from app.guest_header import guest_of
     # Convidado nao cria nem reaproveita copia No Hangar: ele nao a ve, nao a fecha, e o reuso traria
     # uma janela pra frente na tela do dono.
-    guest_user = guest_users.current.get()
-    if body.runs_in == "hangar" and (guest_of(request) is not None or guest_user is not None):
+    if body.runs_in == "hangar" and (guest_of(request) is not None):
         raise HTTPException(403, detail=erro("erro_shortcut_hangar_convidado",
                                              "convidado nao roda atalho No Hangar"))
     cwd = _session_cwd(name)
@@ -4769,10 +4707,6 @@ def _shortcut_shell(name: str, body: ShortcutShellBody, request: Request, *, pow
             raise _project_error(e)
         except ValueError as e:
             raise HTTPException(400, detail=erro("erro_shortcut_pasta", str(e), detalhe=str(e)))
-    # `pasta` absoluta passa direto pelo resolve_folder: o convidado não sai da pasta dele.
-    if guest_user is not None and not guest_users.inside_root(guest_user, cwd):
-        raise HTTPException(403, detail=erro("erro_fora_da_pasta",
-                                             "o convidado só abre sessão dentro da pasta dele"))
     # Atalho importado com a credencial em branco: rodar mandaria o marcador literal pro programa.
     from app.shortcut_transfer import has_placeholder
     missing = has_placeholder(command)
@@ -6378,9 +6312,6 @@ def fs_branches(root: str, path: str | None = None):
         raise HTTPException(exc.status, detail=erro("erro_criacao_sessao", exc.detail)) from None
 
 
-def _no_guest() -> None:
-    if guest_users.current.get() is not None:
-        raise HTTPException(403, detail="convidado não acessa worktrees")
 
 
 def _allowed_repo(path: str) -> str:
@@ -6430,7 +6361,6 @@ async def _worktree_inputs():
 @app.get("/api/worktrees", dependencies=[Depends(require_auth)])
 async def worktrees_list(repo: str | None = None, sizes: bool = True):
     """`repo`: só as desse repositório; `sizes=false`: não agenda medir o espaço (menu de branch)."""
-    _no_guest()
     sessions, allowed, roots = await _worktree_inputs()
     if repo is not None:
         repo = await asyncio.to_thread(_allowed_repo, repo)
@@ -6447,7 +6377,6 @@ def _allowed_worktree(path: str) -> str:
 
 @app.get("/api/worktrees/detail", dependencies=[Depends(require_auth)])
 async def worktrees_detail(path: str):
-    _no_guest()
     path = await asyncio.to_thread(_allowed_worktree, path)
     sessions = await asyncio.to_thread(registry.list)
     return await asyncio.to_thread(worktrees.status, path, sessions)
@@ -6459,7 +6388,6 @@ class WorktreeRepoBody(_StrictBody):
 
 @app.post("/api/worktrees/fetch", dependencies=[Depends(require_auth)])
 async def worktrees_fetch(body: WorktreeRepoBody):
-    _no_guest()
     try:
         await asyncio.to_thread(lambda: worktrees.fetch(_allowed_repo(body.repo)))
     except GitError as exc:
@@ -6477,7 +6405,6 @@ class WorktreeDeleteBody(_StrictBody):
 
 @app.post("/api/worktrees/delete", dependencies=[Depends(require_auth)])
 async def worktrees_delete(body: WorktreeDeleteBody):
-    _no_guest()
     repo, path = await asyncio.to_thread(lambda: (_allowed_repo(body.repo), _allowed_repo(body.path)))
     sessions = await asyncio.to_thread(registry.list)
     try:
@@ -6501,7 +6428,6 @@ class WorktreeDeleteMergedBody(_StrictBody):
 
 @app.post("/api/worktrees/delete-merged", dependencies=[Depends(require_auth)])
 async def worktrees_delete_merged(body: WorktreeDeleteMergedBody):
-    _no_guest()
     if body.confirm and body.paths is None:
         raise HTTPException(422, detail="confirmar exige a lista das worktrees mostradas")
     repo = await asyncio.to_thread(_allowed_repo, body.repo)
@@ -6528,7 +6454,6 @@ class WorktreeCreateBody(_StrictBody):
 @app.post("/api/worktrees/create", dependencies=[Depends(require_auth)])
 async def worktrees_create(body: WorktreeCreateBody):
     """Só a worktree, sem sessão; com sessão, o caminho continua sendo o `POST /api/sessions`."""
-    _no_guest()
     name = sanitize_session_name(body.name)
     if not name:
         raise HTTPException(400, detail="nome de pasta inválido")

@@ -122,15 +122,12 @@ async def _worker(binary):
             os.environ[name] = str(home)
         os.environ["CLAUDE_CONFIG_DIR"] = str(home / ".claude")
         os.environ["CODEX_HOME"] = str(home / ".codex")
-        from app import auth, shared_auth, navsock, termsock, guest_users
-        from app.guest_user_gate import GuestUserGate
+        from app import auth, shared_auth, navsock, termsock
         auth.settings.auth_token = OWNER
         (home / ".claude").mkdir()
-        guest_users._path_override = home / ".claude/guests.json"
-        guest_users._reset()
-        _, guest_token = guest_users.create("isolated-guest", str(home), False, True)
+        guest_token = "isolated-guest-token"
+        (home / ".claude/guests.json").write_text(json.dumps({"guests": [{"id": "fixture", "name": "isolated-guest", "root": str(home), "token_hash": __import__("hashlib").sha256(guest_token.encode()).hexdigest(), "sees_owner": False, "owner_sees": True}], "sessions": {}}))
         app = FastAPI()
-        app.add_middleware(GuestUserGate)
         admitted, release, sse_release = asyncio.Event(), asyncio.Event(), asyncio.Event()
         captured = {}
         body_calls = sse_calls = upgrade_calls = 0
@@ -338,8 +335,8 @@ async def _worker(binary):
                 assert len(hits(ip)) == 7
                 assert (await request(root, browser, ip=ip)).status_code == 401
                 assert (await request(root, browser, guest_token, ip)).status_code == 403
-                assert (await request(direct, "/api/me", guest_token, ip)).status_code == 200
-                assert len(hits(ip)) == 8
+                assert (await request(direct, "/api/me", guest_token, ip)).status_code == 401
+                assert len(hits(ip)) == 9
 
                 ip = "192.0.2.1"
                 for _ in range(9):

@@ -15,7 +15,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from app import diag, guest_users
+from app import diag
 from app.auth import require_auth
 from app.config import settings
 from app.mensagens import erro
@@ -195,7 +195,7 @@ def facts() -> dict:
 
 
 def _require_owner(request: Request) -> None:
-    if guest_of(request) is not None or guest_users.current.get() is not None:
+    if guest_of(request) is not None:
         raise HTTPException(403, detail=erro("migration_status_owner", "Só o dono vê o estado da migração."))
 
 

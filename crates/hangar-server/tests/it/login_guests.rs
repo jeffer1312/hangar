@@ -1322,3 +1322,54 @@ async fn login_guests_diary_deduplicates_and_bounds_cookie_origins() {
     }
     let text=serde_json::to_string(&guest_diary_lines(&diary)).unwrap();assert!(!text.contains("fixture-"));assert!(!text.contains("cp_sync"));
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn login_guests_shortcut_authorization_freezes_folder_before_generic_transport() {
+    use hangar_server::{accounts::{AccountService,environment::AccountEnvironment},list::{bridge::{ListBridge,ListEnv,parse_dirs},facts::FactsClient,mux::Mux},login_guests::{Service,Settings}};
+    use serde_json::json;
+    use std::time::Duration;
+    let root=tempfile::tempdir().unwrap();let program=crate::list_support::sessions(root.path(),1);
+    let home=root.path().join("home");let claude=home.join(".claude");let cwd=root.path().join("w0");
+    let script=std::fs::read_to_string(&program).unwrap();
+    std::fs::write(&program,script.replace("#!/bin/sh\n",&format!("#!/bin/sh\nprintf '%s\\n' \"$@\" >> '{}'\n",root.path().join("arguments").display()))).unwrap();
+
+    let upstream_listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let upstream=upstream_listener.local_addr().unwrap();
+    let seen=Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));let recorded=seen.clone();
+    let upstream_task=tokio::spawn(async move{axum::serve(upstream_listener,axum::Router::new().fallback(move|request:axum::extract::Request|{let recorded=recorded.clone();async move{
+        assert!(request.headers().contains_key("x-hangar-guest"));
+        let bytes=axum::body::to_bytes(request.into_body(),1024*1024).await.unwrap();let body:Value=serde_json::from_slice(&bytes).unwrap();recorded.lock().unwrap().push(body.clone());axum::response::Response::builder().header("content-type","application/json").body(axum::body::Body::from(body.to_string())).unwrap()
+    }})).await.unwrap()});
+    let mut state=AppState::new(crate::fake::config(upstream,""));
+    state.accounts=AccountService::new(AccountEnvironment::from_map([("HOME".into(),home.to_string_lossy().into_owned()),("PATH".into(),"/usr/bin:/bin".into())].into()));
+    state.list=Arc::new(ListBridge::new(ListEnv{mux:Mux::with_program(&program,Duration::from_secs(5)),capture_program:program.into_os_string(),procs:Arc::new(hangar_server::list::procs::SystemProcs::default()),dirs:parse_dirs(&json!({"home":home,"claude":claude,"codex_home":home.join(".codex"),"pi_sessions":home.join(".pi/agent/sessions"),"omp_config":home.join(".omp"),"omp_agent":home.join(".omp/agent"),"kimi_home":home.join(".kimi-code")}).to_string())},FactsClient::new(upstream,crate::fake::SECRET.into())));
+    state.share=None;
+    state.login_guests=Arc::new(Service::new(Settings{guests:claude.join("guests.json"),vault:home.join("vault.json"),runtime_config:claude.join("runtime-config.json"),sync_enabled:false,bootstrap:String::new(),secret:vec![1],secure:false,rate_max:10.into(),rate_window:300.into()}));
+    state.login_guests.store.create("Ana",cwd.to_str().unwrap(),true,true,"fixture".into(),"guest-token".into()).unwrap();
+    let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();
+    let task=tokio::spawn(async move{axum::serve(listener,hangar_server::routes::router(Arc::new(state)).into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap()});
+    let client=reqwest::Client::new();
+    let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/shortcut-http.json")).unwrap();
+    for index in [0,1,2,3,4,15,17,18,19,20,21,22,24,25,26,28,29,31,41,42] {
+        let row=&fixture["rows"][index];let path=row["route"].as_str().unwrap().replace("/s/","/s0/");
+        let response=client.post(format!("http://{address}{path}")).bearer_auth("guest-token").json(&row["body"]).send().await.unwrap();
+        let status=response.status().as_u16();let body:Value=response.json().await.unwrap();
+        assert_eq!((status,body),(row["status"].as_u64().unwrap() as u16,row["response"].clone()),"GUE-085/086 caso original {index}");
+    }
+    for body in [json!({"command":"true","runs_in":"hangar","key":"x"}),json!({"command":"true","pasta":root.path()})] {
+        let response=client.post(format!("http://{address}/api/sessions/s0/shortcut-shell")).bearer_auth("guest-token").json(&body).send().await.unwrap();assert_eq!(response.status(),403);
+    }
+    assert!(seen.lock().unwrap().is_empty());
+    let response=client.post(format!("http://{address}/api/sessions/s0/shortcut-shell")).bearer_auth("guest-token").json(&json!({"command":"true"})).send().await.unwrap();assert_eq!(response.status(),200);
+    let body:Value=response.json().await.unwrap();assert_eq!(body["pasta"],json!(cwd));
+    assert_eq!(seen.lock().unwrap().len(),1);
+    let response=client.post(format!("http://{address}/api/sessions/s0/run-code")).bearer_auth("guest-token").json(&json!({"command":"true"})).send().await.unwrap();
+    assert_eq!(response.status(),202);let body:Value=response.json().await.unwrap();
+    assert_eq!(body["terminal"]["label"],fixture["rows"][23]["calls"][0][1][3]);
+    assert_eq!(body["terminal"]["alive"],fixture["rows"][23]["response"]["terminal"]["alive"]);
+    assert_eq!(seen.lock().unwrap().len(),1,"run-code não retorna ao Python");
+    let arguments=std::fs::read_to_string(root.path().join("arguments")).unwrap();
+    assert!(arguments.contains(&format!("new-session\n-d\n-s\n")));
+    assert!(arguments.contains(&format!("\n-c\n{}\n",cwd.display())),"pasta autorizada congelada no lançamento");
+    task.abort();upstream_task.abort();
+}

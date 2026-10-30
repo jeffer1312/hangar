@@ -6,7 +6,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 from fastapi.testclient import TestClient
 
-from app import account_bridge, guest_users, runtime_coordinator
+from app import account_bridge, runtime_coordinator
 
 
 @pytest.fixture
@@ -69,11 +69,11 @@ def test_needs_auth(connect):
     assert seen == []
 
 
-def test_guest_is_refused_without_reaching_rust(connect, monkeypatch):
+def test_guest_is_refused_without_reaching_rust(connect, monkeypatch, forwarded_guest):
     client, seen = connect
-    monkeypatch.setattr(guest_users, "current", contextvars.ContextVar("guest", default=object()))
-    got = client.put("/api/sessions/prewarm", json=BODY)
-    assert got.status_code == 403
-    assert got.json()["detail"]["code"] == "prewarm_owner_only"
-    assert client.delete("/api/sessions/prewarm/k1").status_code == 403
-    assert seen == []
+    with forwarded_guest():
+        got = client.put("/api/sessions/prewarm", json=BODY)
+        assert got.status_code == 403
+        assert got.json()["detail"]["code"] == "prewarm_owner_only"
+        assert client.delete("/api/sessions/prewarm/k1").status_code == 403
+        assert seen == []
