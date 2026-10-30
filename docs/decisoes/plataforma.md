@@ -3709,6 +3709,18 @@ A memória do `hangar-server` ele não lê (`kernel.yama.ptrace_scope=1`; o agen
 servidor, não o contrário). A VPS `srv1633222` não tem chaveiro do sistema (sem
 `gnome-keyring-daemon` nem `secret-tool`).
 
+**Medição do item da chave (daemon isolado, HOME/XDG_RUNTIME_DIR/barramento temporários,
+gnome-keyring 51.1, componentes `secrets` e `pkcs11,secrets,ssh`).** `CreateItem` na coleção
+`login` aberta, com sessão `plain`, volta prompt `/` e o valor de 32 bytes lido de volta por
+`GetSecrets` na mesma conexão é igual. Com o `login` trancado, `SearchItems` põe o item na lista
+`locked` e `GetSecret` responde `org.freedesktop.Secret.Error.IsLocked`. O defeito de
+`keyring.rs` (`Get` de cliente que já saiu derruba o daemon) não se reproduziu: 30 `secret-tool
+lookup`, 30 `busctl get-property` com o `login` aberto e trancado, 30 `Get`/`GetAll`/`OpenSession`
+com `--expect-reply=no` (o cliente sai antes da resposta) e `GetSecret` com a sessão de um processo
+que já saiu (`NoSession`) deixaram o daemon de pé. Mesmo assim o cofre abre uma conexão só, que vive
+com o servidor, abre e fecha a sessão `plain` nela e nunca pergunta sem dono do nome
+(`NoAutoStart`): o caso que derrubou o daemon de verdade não foi isolado.
+
 **Limite.** A aprovação e a saída apagada barram o uso normal, não um agente decidido a burlar: com
 a chave no chaveiro ele abre o cofre, e no shell e no arquivo ele vê o valor se quiser. Senha que
 passa pelo `app.hangar.dev.br` é decifrada no servidor intermediário. Notebook fechado = nenhuma

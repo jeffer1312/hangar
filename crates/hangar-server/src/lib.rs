@@ -84,6 +84,7 @@ pub mod user_data;
 pub mod install_root;
 pub mod update;
 pub mod ui;
+pub mod vault;
 pub mod voice;
 pub mod plans;
 mod forwarded;

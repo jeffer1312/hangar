@@ -118,6 +118,8 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     if crate::accounts::http::matches(method, path) { return true; }
     // Senha do chaveiro (`keyring::unlock_route`): nunca repassada.
     if *method == Method::POST && path == "/api/keyring/unlock" { return true; }
+    // Cofre de senhas (`vault::http`): nunca repassado.
+    if crate::vault::http::matches(method, path) { return true; }
     // Relatório de diagnóstico (`diag_report::report_route`): só o dono, nunca repassado.
     if *method == Method::POST && path == "/api/diag/report" { return true; }
     // SideStore no aparelho do cabo (`device_install::routes`): nunca repassado.
