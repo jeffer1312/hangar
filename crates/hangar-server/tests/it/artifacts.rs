@@ -491,7 +491,7 @@ async fn artifacts_same_size_rewrite_in_the_middle_with_restored_mtime_invalidat
 }
 
 #[tokio::test]
-async fn artifacts_preflight_uses_the_existing_cors_upstream_without_bypassing_get_auth() {
+async fn artifacts_preflight_uses_native_cors_without_bypassing_get_auth() {
     use axum::{extract::Request, response::IntoResponse};
     struct Stop(tokio::task::JoinHandle<()>);
     impl Drop for Stop {
@@ -543,9 +543,9 @@ async fn artifacts_preflight_uses_the_existing_cors_upstream_without_bypassing_g
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         response.headers()["access-control-allow-origin"],
-        "https://app.example.invalid"
+        "*"
     );
-    assert_eq!(response.headers()["access-control-allow-methods"], "GET");
+    assert!(response.headers()["access-control-allow-methods"].to_str().unwrap().split(", ").any(|method| method == "GET"));
     assert_eq!(
         response.headers()["access-control-allow-headers"],
         "authorization"

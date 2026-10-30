@@ -1129,8 +1129,8 @@ a página por sessão em `~/.hangar/paginas` e a conversa mostra o cartão: PWA 
 dos seus dados: configurações compartilhadas, instalação e saúde de agentes, login e cofre de
 sincronização, autorização e visibilidade de sessões, descoberta das máquinas e atualização do
 checkout. Os handlers e módulos Python de domínio foram removidos; nenhuma dessas rotas ganhou
-uma ponte de reserva. O painel passou a mostrar `POST /api/guests`, pois a listagem administrativa
-já pertence a `/api/me`.
+uma ponte de reserva. O painel passou a mostrar `POST /api/guests`, a rota real de criação.
+`/api/me` identifica o papel e o nome de quem entrou.
 
 Na falha de leitura de `guests.json`, permanece a última leitura válida, conforme decisão do
 usuário. O porteiro decide a identidade no Rust; consumidores independentes ainda atendidos pelo

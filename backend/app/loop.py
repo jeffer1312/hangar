@@ -33,6 +33,19 @@ class LoopLink:
             return None
 
 _REFINE_TIMEOUT = 60
+_REFINE_SYSTEM = (
+    "Você reescreve OBJETIVOS pra um loop autônomo de código. Boas práticas:\n"
+    "- Objetivo é UMA coisa só e VERIFICÁVEL: descreve o RESULTADO final, não os passos.\n"
+    "- Pequeno e concreto (ex: \"migre utils/date.ts pra date-fns mantendo o check verde\"), "
+    "nunca amplo (\"refatore o projeto\").\n"
+    "- Peça EVIDÊNCIA, não promessa: inclua \"rode o comando de verificação e mostre a saída\".\n"
+    "- Deixe explícito: não editar arquivos de teste nem o comando de verificação; corrigir o código.\n"
+    "A saída é SEMPRE um objetivo reescrito — NUNCA uma pergunta, recusa ou comentário. Se faltar "
+    "contexto, PRESERVE a intenção e marque a lacuna inline entre <colchetes> "
+    "(ex: \"Melhore o haiku em <arquivo> até <critério de qualidade>, rode o check e mostre a saída\").\n"
+    "Responda SÓ com o objetivo reescrito em pt-BR, texto puro, sem preâmbulo, sem aspas, sem markdown."
+)
+
 class ClaudePError(Exception):
     """claude -p indisponivel/timeout/exit≠0/vazio. Compartilhado por refine_goal e ask-history;
     o endpoint mapeia pra 502."""
