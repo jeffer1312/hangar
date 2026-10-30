@@ -68,23 +68,35 @@ async fn login_guest_precedence_matches_the_original_gate() {
     if isolated("login_guest_precedence_matches_the_original_gate").await { return; }
     let scene = Scene::new().await;
     login_guest(&scene);
-    let reference = support::contract("final-review");
     use tower::ServiceExt;
-    for case in reference["observed"]["guest_tokens"].as_array().unwrap() {
-        let query = case["query"].as_str().unwrap().replace("owner", OWNER);
+    // (caso, cabeçalhos, query, https, o convidado de login é a credencial que vale)
+    let cases: [(&str, &[(&str, &str)], &str, bool, bool); 10] = [
+        ("query_first_nonempty", &[], "token=&token=login-guest&token=owner", false, true),
+        ("query_owner_before_guest", &[], "token=owner&token=login-guest", false, false),
+        ("last_authorization", &[("authorization", "Bearer owner"), ("authorization", "Bearer login-guest")], "token=owner", false, true),
+        ("bearer_empty", &[("authorization", "Bearer ")], "token=login-guest", false, false),
+        ("host_cookie", &[("cookie", "cp_token=owner; __Host-cp_token=login-guest")], "", true, true),
+        ("https_plain_cookie", &[("cookie", "cp_token=login-guest")], "", true, false),
+        ("last_cookie", &[("cookie", "cp_token=owner"), ("cookie", "cp_token=login-guest")], "", false, true),
+        ("quoted_cookie", &[("cookie", r#"cp_token="login\055guest""#)], "", false, true),
+        ("invalid_cookie", &[("cookie", "broken; cp_token=login-guest")], "", false, false),
+        ("empty_host_cookie", &[("cookie", "__Host-cp_token=; cp_token=login-guest")], "", false, false),
+    ];
+    for (name, pairs, query, https, is_guest) in cases {
+        let query = query.replace("owner", OWNER);
         let mut headers = HeaderMap::new();
-        for pair in case["headers"].as_array().unwrap() {
-            let name = axum::http::HeaderName::from_bytes(pair[0].as_str().unwrap().as_bytes()).unwrap();
-            headers.append(name, HeaderValue::from_str(&pair[1].as_str().unwrap().replace("owner", OWNER)).unwrap());
+        for (key, value) in pairs {
+            let key = axum::http::HeaderName::from_bytes(key.as_bytes()).unwrap();
+            headers.append(key, HeaderValue::from_str(&value.replace("owner", OWNER)).unwrap());
         }
-        if case["https"] == true { headers.insert("x-forwarded-proto", HeaderValue::from_static("https")); }
-        // O roteador público recebe os bytes do cabeçalho como o scope ASGI capturado.
+        if https { headers.insert("x-forwarded-proto", HeaderValue::from_static("https")); }
+        // O roteador público recebe os bytes do cabeçalho como chegaram.
         let mut request = axum::http::Request::builder().uri(format!("/api/sessions/missing/navegador?{query}"))
             .body(axum::body::Body::empty()).unwrap();
         *request.headers_mut() = headers;
         request.extensions_mut().insert(axum::extract::ConnectInfo("127.0.0.1:12345".parse::<std::net::SocketAddr>().unwrap()));
         let response = hangar_server::routes::router(scene.state.clone()).oneshot(request).await.unwrap();
-        assert_eq!(response.status()==403, case["token"]=="login-guest", "{}", case["name"]);
+        assert_eq!(response.status()==403, is_guest, "{name}");
     }
     scene.upstream.assert_no_browser_or_discovery_calls();
     scene.close().await;
@@ -150,12 +162,19 @@ async fn opening(name: &str) {
     tracing::subscriber::set_global_default(tracing_subscriber::registry().with(logs.clone())).unwrap();
     let scene = Scene::new().await;
     seed_session(&scene);
-    let reference = support::contract("final-review");
-    let case = reference["observed"]["opening"].as_array().unwrap().iter().find(|case|case["name"]==name).unwrap();
+    // (tipo da causa no log, mensagem ao espectador)
+    let case = match name {
+        "http_401" => ("InvalidStatus", "server rejected WebSocket connection: HTTP 401".to_owned()),
+        "http_403" => ("InvalidStatus", "server rejected WebSocket connection: HTTP 403".to_owned()),
+        // O número do errno é o da plataforma (ECONNREFUSED é 61 no macOS).
+        "connection_refused" => ("ConnectionRefusedError", format!("[Errno {}] Connect call failed ('127.0.0.1', <PORT>)", libc::ECONNREFUSED)),
+        "handshake_timeout" => ("TimeoutError", "timed out during opening handshake".to_owned()),
+        other => panic!("{other}"),
+    };
     if name=="connection_refused" {
         // macOS descarta o SYN de porta presa sem listen (vira prazo); porta liberada recusa nos dois.
         let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-        opening_request(&scene, case, &logs, port).await;
+        opening_request(&scene, &case, &logs, port).await;
         scene.close().await;
         return;
     }
@@ -170,11 +189,11 @@ async fn opening(name: &str) {
         if timeout { let _ = socket.read(&mut data).await; }
         else { socket.write_all(format!("HTTP/1.1 {status}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n").as_bytes()).await.unwrap(); }
     });
-    opening_request(&scene, case, &logs, port).await;
+    opening_request(&scene, &case, &logs, port).await;
     serving.await.unwrap();
     scene.close().await;
 }
-async fn opening_request(scene: &Scene, case: &Value, logs: &Logs, port: u16) {
+async fn opening_request(scene: &Scene, (kind, message): &(&str, String), logs: &Logs, port: u16) {
     std::fs::write(scene.nav_dir().join("browser.json"),json!({"chave":KEY,"pid":123,"targetId":null}).to_string()).unwrap();
     std::fs::write(scene.nav_dir().join("_srv.json"),json!({"porta":port,"pid":123,"token":"never-print-this-desktop-secret"}).to_string()).unwrap();
     let (mut client, response) = connect(scene, "").await.unwrap();
@@ -183,13 +202,11 @@ async fn opening_request(scene: &Scene, case: &Value, logs: &Logs, port: u16) {
     let event = tokio::time::timeout(Duration::from_secs(7), client.next()).await.unwrap().unwrap().unwrap();
     let Message::Text(raw) = event else { panic!("abertura não publicou a causa") };
     events.push(serde_json::from_str::<Value>(&raw).unwrap());
-    // A captura é do Linux: o número do errno é o da plataforma (ECONNREFUSED é 61 no macOS).
-    let expected = case["message"].as_str().unwrap().replace("<PORT>",&port.to_string())
-        .replace("[Errno 111]", &format!("[Errno {}]", libc::ECONNREFUSED));
+    let expected = message.replace("<PORT>",&port.to_string());
     assert_eq!(events, vec![json!({"t":"erro","m":expected})]);
     while let Some(message) = client.next().await { message.unwrap(); }
     let lines = logs.0.lock().unwrap();
-    assert!(lines.iter().any(|line| line["level"]=="WARN" && line["message"].as_str().unwrap().contains(case["type"].as_str().unwrap())), "tipo da causa foi perdido");
+    assert!(lines.iter().any(|line| line["level"]=="WARN" && line["message"].as_str().unwrap().contains(kind)), "tipo da causa foi perdido");
     assert!(!serde_json::to_string(&*lines).unwrap().contains("never-print-this-desktop-secret"));
     scene.upstream.assert_no_browser_or_discovery_calls();
 }
@@ -239,8 +256,7 @@ async fn debug_failure(name: &str, evaluate: bool) {
     std::fs::write(scene.nav_dir().join("browser.json"),json!({"chave":KEY,"pid":123,"targetId":if evaluate { json!("debug-target") } else { Value::Null },"url":"http://contract.test/fallback"}).to_string()).unwrap();
     std::fs::write(scene.nav_dir().join("_srv.json"),json!({"porta":peer.address.port(),"pid":123,"token":"debug-desktop-secret"}).to_string()).unwrap();
     let (mut client, _) = connect(&scene, "").await.unwrap();
-    let reference = support::contract("final-review");
-    let expected = reference["observed"]["debug"][if evaluate {1} else {0}]["message"].as_str().unwrap();
+    let expected = if evaluate { "navsock: url atual falhou: TimeoutError()" } else { "navsock: print falhou: TimeoutError()" };
     tokio::time::timeout(Duration::from_secs(24), async {
         loop {
             let ready = changed.notified();
@@ -250,7 +266,7 @@ async fn debug_failure(name: &str, evaluate: bool) {
     }).await.expect("o diagnóstico DEBUG original desapareceu");
     let mut events = Vec::new();
     until(&mut client, &mut events, |event|event["t"]=="url").await;
-    assert_eq!(events.last().unwrap()["url"], reference["observed"]["fallback_url"]);
+    assert_eq!(events.last().unwrap()["url"], "http://contract.test/fallback");
     client.close(None).await.unwrap();
     while let Some(message) = client.next().await {
         if let Message::Text(raw) = message.unwrap() { events.push(serde_json::from_str(&raw).unwrap()); }
@@ -391,13 +407,9 @@ async fn cookie_ascii_preserves_the_valid_login_guest_prefix() {
     use tower::ServiceExt;
     let scene = Scene::new().await;
     login_guest(&scene);
-    let reference = support::contract("cookie-ascii");
-    assert_eq!(reference["observed"]["token"], "login-guest");
-    let raw = reference["observed"]["raw_cookie_hex"].as_str().unwrap();
-    let bytes: Vec<_> = (0..raw.len()).step_by(2).map(|index| u8::from_str_radix(&raw[index..index+2],16).unwrap()).collect();
     let mut request = axum::http::Request::builder().uri("/api/sessions/missing/navegador")
         .body(axum::body::Body::empty()).unwrap();
-    request.headers_mut().insert("cookie", HeaderValue::from_bytes(&bytes).unwrap());
+    request.headers_mut().insert("cookie", HeaderValue::from_bytes(b"cp_token=login-guest; \xc3\xaa=1").unwrap());
     request.extensions_mut().insert(axum::extract::ConnectInfo("127.0.0.1:12345".parse::<std::net::SocketAddr>().unwrap()));
     let response = hangar_server::routes::router(scene.state.clone()).oneshot(request).await.unwrap();
     assert_eq!(response.status(), 403, "a chave não ASCII depois do cookie não descarta o convidado válido");
