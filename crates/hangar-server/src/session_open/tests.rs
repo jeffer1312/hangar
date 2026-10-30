@@ -1276,7 +1276,10 @@ fn the_claude_pane_is_the_one_python_launched() {
             } else { vec![w.clone()] }).collect::<Vec<_>>();
         let (env, words) = launched_pane(&python);
         let words = inner(words);
-        let (our_env, _) = launched_pane(&ours);
+        let (mut our_env, _) = launched_pane(&ours);
+        // Diferença aceita: o prazo das tools do cofre não existe no lançamento do Python.
+        let idle = our_env.iter().position(|(k, _)| k == crate::vault::exec::CLAUDE_IDLE_VAR);
+        our_env.remove(idle.unwrap_or_else(|| panic!("{name}: sem o prazo das tools do cofre")));
         let our_words = inner(shell_words(&terminal::tests::undo_not_inherited(ours.last().unwrap())));
         assert_eq!(our_env, env, "{name}: -e");
         assert_eq!(our_words, words, "{name}: comando");

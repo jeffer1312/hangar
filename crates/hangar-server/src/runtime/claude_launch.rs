@@ -292,6 +292,8 @@ mod tests {
         env.remove("CP_AUTH_TOKEN");
         // Matriz, item 1: `CP_PROVIDER` em toda sessão.
         env.insert("CP_PROVIDER".into(), "claude".into());
+        // Diferença aceita: o prazo das tools do cofre não existe no lançamento do Python.
+        env.insert(crate::vault::exec::CLAUDE_IDLE_VAR.into(), crate::vault::exec::CLAUDE_IDLE_MS.into());
         env
     }
 
