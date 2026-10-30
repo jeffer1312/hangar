@@ -2,13 +2,16 @@
 use super::*;
 use super::sidebar::Target;
 
+/// A sessão numa vida dela: outra sessão aberta depois com o mesmo nome não herda o pedido nem a recusa.
+pub(super) type Life = (Target, Option<String>);
+
 #[derive(Default)]
 pub(super) struct RenameSuggest {
     /// Quantos pedidos seus a conversa tinha no último pedido desta vida do app: a sugestão fica no servidor e volta pela
     /// linha da lista, e só a fraca é pedida de novo, quando chega pedido seu depois dela.
-    asked: HashMap<Target, usize>,
+    asked: HashMap<Life, usize>,
     /// "Agora não" clicado: some na hora, antes de a lista refletir a recusa.
-    pub(super) dismissed: HashSet<Target>,
+    pub(super) dismissed: HashSet<Life>,
     /// "Outra" esperando o servidor.
     pub(super) again: HashSet<Target>,
 }
@@ -38,6 +41,11 @@ fn sanitize(name: &str) -> String {
 }
 
 impl Hangar {
+    pub(super) fn rename_life(&self, target: &Target) -> Life {
+        let life = self.target_session(target).and_then(|s| s.lifecycle_id.clone().or_else(|| s.jsonl.clone()));
+        (target.clone(), life)
+    }
+
     /// Pede a sugestão da aberta uma vez por sessão nesta vida do app, e a fraca de novo a cada pedido seu. 204 e falha
     /// ficam calados: ninguém pediu nada.
     pub(super) fn request_rename_suggestion(&mut self) {
@@ -47,9 +55,10 @@ impl Hangar {
             || !looks_generic(&session.name, session.cwd.as_deref().unwrap_or_default()) { return; }
         let asked = self.chat.events.iter().filter(|event| event.kind == "user_msg" && !event.queued()).count();
         if asked == 0 { return; }
-        if self.rename_suggest.asked.get(&target).is_some_and(|&last| !session.rename_weak || asked <= last) { return; }
+        let life = self.rename_life(&target);
+        if self.rename_suggest.asked.get(&life).is_some_and(|&last| !session.rename_weak || asked <= last) { return; }
         let Some(api) = self.machine_api(&target.server) else { return };
-        self.rename_suggest.asked.insert(target.clone(), asked);
+        self.rename_suggest.asked.insert(life, asked);
         self.runtime.spawn(async move {
             // O executor do ditado gera o nome; o prazo cobre a fila dele.
             let _ = api.server_send(reqwest::Method::POST, &["sessions", target.name.as_str(), "rename-suggestion"], None, 120).await;
@@ -59,7 +68,7 @@ impl Hangar {
     /// Faixa da aberta, enquanto a linha traz a sugestão e ninguém disse "Agora não".
     pub(super) fn render_rename_suggestion(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let target = self.selected_target()?;
-        if self.rename_suggest.dismissed.contains(&target) { return None; }
+        if self.rename_suggest.dismissed.contains(&self.rename_life(&target)) { return None; }
         let session = self.target_session(&target)?;
         let suggestion = session.rename_suggestion.clone().filter(|s| *s != session.name && !session.read_only())?;
         let state = Strip { weak: session.rename_weak, renaming: self.is_renaming(&target), again: self.rename_suggest.again.contains(&target) };

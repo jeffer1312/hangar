@@ -1033,7 +1033,8 @@ const renameSuggestionAsked = new Map<string, number>();
 /** Gatilho da faixa "Renomear para X?" ao abrir a conversa e, com sugestão fraca, a cada mensagem
  *  da pessoa (`userMessages` conta as dela); `null` = não pediu. */
 export function requestRenameSuggestionOnce(server: Server, row: SessionInfo, userMessages: number): Promise<RenameSuggestionResult | null> | null {
-  const key = `${server.id}::${row.name}`;
+  // A conversa entra na chave: outra sessão aberta depois com o mesmo nome não herda o pedido.
+  const key = `${server.id}::${row.name}::${row.jsonl ?? ''}`;
   const last = renameSuggestionAsked.get(key);
   if (server.invite || userMessages === 0 || (row.rename_suggestion && !row.rename_weak) || !looksGenericName(row.name, row.cwd)) return null;
   if (last !== undefined && (!row.rename_weak || userMessages <= last)) return null;
