@@ -123,4 +123,3 @@ proptest::proptest! {
         }
     }
 }
-
