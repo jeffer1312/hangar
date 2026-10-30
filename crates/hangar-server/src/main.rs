@@ -1,6 +1,12 @@
 //! hangar-server: sobe como filho do Python (app/main.py), na porta pública.
 
 fn main() -> std::process::ExitCode {
+    let hook_args: Vec<_> = std::env::args_os().skip(1).collect();
+    if let Some(mode) = hook_args.first().and_then(|arg| arg.to_str())
+        && matches!(mode, "codex-hook-allow" | "codex-hook-json")
+    {
+        std::process::exit(hangar_server::codex_setup::hook_command::run(mode, &hook_args[1..]));
+    }
     // `open`/`resolve`: o lançador como comando de terminal, com runtime próprio (fora do `run`).
     let args: Vec<String> = std::env::args_os().skip(1).map(|a| a.to_string_lossy().into_owned()).collect();
     if matches!(args.first().map(String::as_str),Some("panel-data"|"panel-action")){

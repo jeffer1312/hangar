@@ -46,6 +46,8 @@ pub mod fragments;
 pub mod messages;
 pub mod service;
 mod service_binding;
+pub mod hook_wrappers;
+pub mod hook_command;
 pub mod artifacts;
 pub mod batch;
 pub mod reload;
