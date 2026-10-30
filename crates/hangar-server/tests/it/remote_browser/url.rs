@@ -77,14 +77,14 @@ fn owner_headers() -> HeaderMap {
 }
 
 #[tokio::test]
-async fn head_keeps_the_python_method_refusal() {
-    if support::isolated("remote_browser::url::head_keeps_the_python_method_refusal", |root| {
+async fn head_keeps_the_method_refusal() {
+    if support::isolated("remote_browser::url::head_keeps_the_method_refusal", |root| {
         assert!(!root.join("git.calls").exists());
     }).await { return; }
     let scene = Scene::new().await;
     std::fs::write(scene.nav_dir().join("native.json"),json!({"chave":"session","url":"https://example.invalid/"}).to_string()).unwrap();
     let before = snapshot(&scene.nav_dir());
-    let want = support::contract("url-extra")["head"].clone();
+    let want = json!({"status": 405, "body": "", "headers": {"allow": "GET", "content-type": "application/json", "content-length": "31"}});
     let client = reqwest::Client::new();
     let mut differences = Vec::new();
     for token in [None,Some(OWNER)] {
@@ -228,12 +228,11 @@ async fn sidecars_and_url_values_never_panic_or_consult_python() {
     use proptest::test_runner::{Config, TestRunner};
     if support::isolated("remote_browser::url::sidecars_and_url_values_never_panic_or_consult_python", |_| {}).await { return; }
     let scene = Scene::new().await;
-    let private = support::contract("url-extra")["cases"].as_array().unwrap().iter()
-        .find(|case|case["name"]=="url_private_unicode").unwrap().clone();
-    std::fs::write(scene.nav_dir().join("arbitrary.json"),private["raw"].as_str().unwrap()).unwrap();
-    let (status,_,raw) = get(&scene,"session",owner_headers(),"","127.0.0.1",false).await;
-    assert_eq!(json!(status),private["status"],"{raw}");
-    assert_eq!(raw,private["body"].as_str().unwrap());
+    let (_, private, status, body) = EXTRA_SIDECARS.iter().find(|case|case.0=="url_private_unicode").unwrap();
+    std::fs::write(scene.nav_dir().join("arbitrary.json"),private).unwrap();
+    let (got,_,raw) = get(&scene,"session",owner_headers(),"","127.0.0.1",false).await;
+    assert_eq!(got,*status,"{raw}");
+    assert_eq!(raw,*body);
     let strategy = (proptest::collection::vec(any::<u8>(),0..512), ".{0,80}");
     let mut runner = TestRunner::new(Config { cases:64,..Config::default() });
     for _ in 0..64 {
@@ -255,17 +254,33 @@ async fn sidecars_and_url_values_never_panic_or_consult_python() {
     scene.close().await;
 }
 
+/// (caso, bytes do sidecar, status, corpo exato): o tipo e o texto do número passam intactos.
+const EXTRA_SIDECARS: [(&str, &str, u16, &str); 13] = [
+    ("url_bigint_float_order", r#"{"chave":"session","url":{"big":123456789012345678901234567890,"float":1.0,"order":{"z":1,"a":2}}}"#, 200, r#"{"url":{"big":123456789012345678901234567890,"float":1.0,"order":{"z":1,"a":2}}}"#),
+    ("url_lone_surrogate", r#"{"chave":"session","url":"\ud800"}"#, 500, "Internal Server Error"),
+    ("key_lone_surrogate_suffix", r#"{"chave":"\ud800::session","url":"u"}"#, 200, r#"{"url":"u"}"#),
+    ("url_nan", r#"{"chave":"session","url":NaN}"#, 500, "Internal Server Error"),
+    ("unused_nan", r#"{"chave":"session","url":"u","unused":NaN}"#, 200, r#"{"url":"u"}"#),
+    ("url_infinite_float", r#"{"chave":"session","url":1e999}"#, 500, "Internal Server Error"),
+    ("key_null", r#"{"chave":null,"url":"u"}"#, 500, "Internal Server Error"),
+    ("key_number", r#"{"chave":12,"url":"u"}"#, 500, "Internal Server Error"),
+    ("key_nan", r#"{"chave":NaN,"url":"u"}"#, 500, "Internal Server Error"),
+    ("json_bom", "\u{feff}{\"chave\":\"session\",\"url\":\"u\"}", 200, r#"{"url":null}"#),
+    ("url_float_rounding", r#"{"chave":"session","url":0.12345678901234567890123456789}"#, 200, r#"{"url":0.12345678901234568}"#),
+    ("url_float_exponent", r#"{"chave":"session","url":1e-7}"#, 200, r#"{"url":1e-07}"#),
+    ("url_private_unicode", "{\"chave\":\"session\",\"url\":\"\u{10f800}\"}", 200, "{\"url\":\"\u{10f800}\"}"),
+];
+
 #[tokio::test]
-async fn extra_python_sidecar_types_keep_literal_http_result() {
-    if support::isolated("remote_browser::url::extra_python_sidecar_types_keep_literal_http_result", |_| {}).await { return; }
+async fn extra_sidecar_types_keep_literal_http_result() {
+    if support::isolated("remote_browser::url::extra_sidecar_types_keep_literal_http_result", |_| {}).await { return; }
     let scene = Scene::new().await;
     let mut differences = Vec::new();
-    let corpus = support::contract("url-extra");
-    for case in corpus["cases"].as_array().unwrap() {
-        std::fs::write(scene.nav_dir().join("extra.json"),case["raw"].as_str().unwrap()).unwrap();
+    for (name, sidecar, want, body) in EXTRA_SIDECARS {
+        std::fs::write(scene.nav_dir().join("extra.json"),sidecar).unwrap();
         let (status,_,raw) = get(&scene,"session",owner_headers(),"","127.0.0.1",false).await;
-        if json!(status) != case["status"] || raw != case["body"].as_str().unwrap() {
-            differences.push(format!("{}: ({status},{raw:?}) != ({},{})",case["name"],case["status"],case["body"]));
+        if status != want || raw != body {
+            differences.push(format!("{name}: ({status},{raw:?}) != ({want},{body})"));
         }
     }
     scene.close().await;

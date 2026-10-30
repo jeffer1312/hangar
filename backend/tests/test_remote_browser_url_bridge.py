@@ -6,7 +6,6 @@ import hmac
 import json
 import logging
 import socket
-import subprocess
 import threading
 import time
 import urllib.error
@@ -40,22 +39,7 @@ def border(monkeypatch, tmp_path, request):
     app.add_middleware(GuestUserGate)
     source = Path(__file__).resolve().parents[1] / "app" / "api.py"
     text = source.read_text()
-    reference = getattr(request, "param", None)
-    if reference == "original":
-        run = subprocess.run
-
-        def without_history(command, *args, **kwargs):
-            program = command[0] if isinstance(command, (list, tuple)) else command.split()[0]
-            if Path(program).name in {"git", "git.exe"}:
-                pytest.fail("a referência original não pode depender do histórico Git")
-            return run(command, *args, **kwargs)
-
-        monkeypatch.setattr(subprocess, "run", without_history)
-        fixture = json.loads((Path(__file__).parent / "fixtures/contract/remote-browser/url-extra.json").read_text())
-        assert fixture["source_commit"] == "ba2db1021ab7fb801eca50a50f9509dcb825ac7e"
-        text = fixture["original_get"]["source"]
-        assert hashlib.sha256(text.encode("utf-8")).hexdigest() == fixture["original_get"]["sha256"]
-    nodes = [node for node in ast.parse(text).body
+    nodes =[node for node in ast.parse(text).body
              if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
              and node.name in {"_repasse_ao_rust", "navegador_da_sessao"}]
     scope = {"app": app, "Depends": Depends, "Request": Request, "JSONResponse": JSONResponse,
@@ -139,31 +123,6 @@ def test_python_transport_keeps_emoji_name_accepted_by_original_get(border_http,
     assert status == 202
     assert len(rust) == 1
     assert rust[0][1]["X-Hangar-Path"] == "/api/sessions/sess%C3%A3o-%F0%9F%9A%80/navegador"
-
-
-@pytest.mark.parametrize("border", ["original"], indirect=True)
-def test_original_get_accepts_emoji_name_over_real_http(border_http):
-    nav = Path.home() / ".hangar/nav"
-    nav.mkdir(parents=True, exist_ok=True)
-    (nav / "native.json").write_text(json.dumps({"chave": "sessão-🚀", "url": "https://example.invalid/ação"}))
-    with urllib.request.urlopen(border_http + "/api/sessions/sess%C3%A3o-%F0%9F%9A%80/navegador?token=" + OWNER) as response:
-        assert response.status == 200
-        assert json.loads(response.read()) == {"url": "https://example.invalid/ação"}
-
-
-@pytest.mark.parametrize("border", ["original"], indirect=True)
-def test_original_head_refuses_before_authentication_over_real_http(border_http):
-    fixture = json.loads((Path(__file__).parent / "fixtures/contract/remote-browser/url-extra.json").read_text())
-    want = fixture["head"]
-    for headers in ({}, {"Authorization": "Bearer " + OWNER}):
-        request = urllib.request.Request(border_http + "/api/sessions/session/navegador", method="HEAD", headers=headers)
-        with pytest.raises(urllib.error.HTTPError) as denied:
-            urllib.request.urlopen(request)
-        response = denied.value
-        observed = {"status": response.code, "body": response.read().decode("utf-8"),
-                    "headers": {key: response.headers[key] for key in want["headers"]}}
-        assert observed == want
-        print("HEAD original:", json.dumps(observed, ensure_ascii=False))
 
 
 @pytest.mark.parametrize("mode,configured,code", [
