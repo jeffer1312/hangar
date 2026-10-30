@@ -1,0 +1,3010 @@
+{
+  "source_commit": "a136bcb1693bd542974608dcf1d60073e802fcd9",
+  "source": "Execução do merged_history e _conversa_para_resumo originais; limit=30 define o crescimento da janela, sem truncar as mensagens nativas exportadas.",
+  "cases": [
+    {
+      "name": "claude-window-contains-40-short-messages",
+      "provider": "claude",
+      "records": [
+        {
+          "type": "user",
+          "uuid": "0",
+          "timestamp": "2026-10-29T12:00:00Z",
+          "message": {
+            "role": "user",
+            "content": "Mensagem 0."
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "1",
+          "timestamp": "2026-10-29T12:00:01Z",
+          "message": {
+            "role": "user",
+            "content": "Mensagem 1."
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "2",
+          "timestamp": "2026-10-29T12:00:02Z",
+          "message": {
+            "role": "user",
+            "content": "Mensagem 2."
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "3",
+          "timestamp": "2026-10-29T12:00:03Z",
+          "message": {
+            "role": "user",
+            "content": "Mensagem 3."
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "4",
+          "timestamp": "2026-10-29T12:00:04Z",
+          "message": {
+            "role": "user",
+            "content": "Mensagem 4."
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "5",
+          "timestamp": "2026-10-29T12:00:05Z",
+          "message": {
+            "role": "user",
+            "content": "Mensagem 5."
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "6",
+          "timestamp": "2026-10-29T12:00:06Z",
+          "message": {
+            "role": "user",
+            "content": "Mensagem 6."
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "7",
+          "timestamp": "2026-10-29T12:00:07Z",
+          "message": {
+            "role": "user",
+            "content": "Mensagem 7."
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "8",
+          "timestamp": "2026-10-29T12:00:08Z",
+          "message": {
+            "role": "user",
+            "content": "Mensagem 8."
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "9",
+          "timestamp": "2026-10-29T12:00:09Z",
+          "message": {
+            "role": "user",
+            "content": "Mensagem 9."
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "10",
+          "timestamp": "2026-10-29T12:00:10Z",
+          "message": {
+            "role": "user",
+            "content": "Mensagem 10."
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "11",
+          "timestamp": "2026-10-29T12:00:11Z",
+          "message": {
+            "role": "user",
+            "content": "Mensagem 11."
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "12",
+          "timestamp": "2026-10-29T12:00:12Z",
+          "message": {
+            "role": "user",
+            "content": "Mensagem 12."
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "13",
+          "timestamp": "2026-10-29T12:00:13Z",
+          "message": {
+            "role": "user",
+            "content": "Mensagem 13."
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "14",
+          "timestamp": "2026-10-29T12:00:14Z",
+          "message": {
+            "role": "user",
+            "content": "Mensagem 14."
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "15",
+          "timestamp": "2026-10-29T12:00:15Z",
+          "message": {
+            "role": "user",
+            "content": "Mensagem 15."
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "16",
+          "timestamp": "2026-10-29T12:00:16Z",
+          "message": {
+            "role": "user",
+            "content": "Mensagem 16."
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "17",
+          "timestamp": "2026-10-29T12:00:17Z",
+          "message": {
+            "role": "user",
+            "content": "Mensagem 17."
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "18",
+          "timestamp": "2026-10-29T12:00:18Z",
+          "message": {
+            "role": "user",
+            "content": "Mensagem 18."
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "19",
+          "timestamp": "2026-10-29T12:00:19Z",
+          "message": {
+            "role": "user",
+            "content": "Mensagem 19."
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "20",
+          "timestamp": "2026-10-29T12:00:20Z",
+          "message": {
+            "role": "user",
+            "content": "Mensagem 20."
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "21",
+          "timestamp": "2026-10-29T12:00:21Z",
+          "message": {
+            "role": "user",
+            "content": "Mensagem 21."
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "22",
+          "timestamp": "2026-10-29T12:00:22Z",
+          "message": {
+            "role": "user",
+            "content": "Mensagem 22."
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "23",
+          "timestamp": "2026-10-29T12:00:23Z",
+          "message": {
+            "role": "user",
+            "content": "Mensagem 23."
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "24",
+          "timestamp": "2026-10-29T12:00:24Z",
+          "message": {
+            "role": "user",
+            "content": "Mensagem 24."
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "25",
+          "timestamp": "2026-10-29T12:00:25Z",
+          "message": {
+            "role": "user",
+            "content": "Mensagem 25."
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "26",
+          "timestamp": "2026-10-29T12:00:26Z",
+          "message": {
+            "role": "user",
+            "content": "Mensagem 26."
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "27",
+          "timestamp": "2026-10-29T12:00:27Z",
+          "message": {
+            "role": "user",
+            "content": "Mensagem 27."
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "28",
+          "timestamp": "2026-10-29T12:00:28Z",
+          "message": {
+            "role": "user",
+            "content": "Mensagem 28."
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "29",
+          "timestamp": "2026-10-29T12:00:29Z",
+          "message": {
+            "role": "user",
+            "content": "Mensagem 29."
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "30",
+          "timestamp": "2026-10-29T12:00:30Z",
+          "message": {
+            "role": "user",
+            "content": "Mensagem 30."
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "31",
+          "timestamp": "2026-10-29T12:00:31Z",
+          "message": {
+            "role": "user",
+            "content": "Mensagem 31."
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "32",
+          "timestamp": "2026-10-29T12:00:32Z",
+          "message": {
+            "role": "user",
+            "content": "Mensagem 32."
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "33",
+          "timestamp": "2026-10-29T12:00:33Z",
+          "message": {
+            "role": "user",
+            "content": "Mensagem 33."
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "34",
+          "timestamp": "2026-10-29T12:00:34Z",
+          "message": {
+            "role": "user",
+            "content": "Mensagem 34."
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "35",
+          "timestamp": "2026-10-29T12:00:35Z",
+          "message": {
+            "role": "user",
+            "content": "Mensagem 35."
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "36",
+          "timestamp": "2026-10-29T12:00:36Z",
+          "message": {
+            "role": "user",
+            "content": "Mensagem 36."
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "37",
+          "timestamp": "2026-10-29T12:00:37Z",
+          "message": {
+            "role": "user",
+            "content": "Mensagem 37."
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "38",
+          "timestamp": "2026-10-29T12:00:38Z",
+          "message": {
+            "role": "user",
+            "content": "Mensagem 38."
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "39",
+          "timestamp": "2026-10-29T12:00:39Z",
+          "message": {
+            "role": "user",
+            "content": "Mensagem 39."
+          }
+        }
+      ],
+      "queue": [],
+      "limit": 30,
+      "summary": "usuário: Mensagem 0.\nusuário: Mensagem 1.\nusuário: Mensagem 2.\nusuário: Mensagem 3.\nusuário: Mensagem 4.\nusuário: Mensagem 5.\nusuário: Mensagem 6.\nusuário: Mensagem 7.\nusuário: Mensagem 8.\nusuário: Mensagem 9.\nusuário: Mensagem 10.\nusuário: Mensagem 11.\nusuário: Mensagem 12.\nusuário: Mensagem 13.\nusuário: Mensagem 14.\nusuário: Mensagem 15.\nusuário: Mensagem 16.\nusuário: Mensagem 17.\nusuário: Mensagem 18.\nusuário: Mensagem 19.\nusuário: Mensagem 20.\nusuário: Mensagem 21.\nusuário: Mensagem 22.\nusuário: Mensagem 23.\nusuário: Mensagem 24.\nusuário: Mensagem 25.\nusuário: Mensagem 26.\nusuário: Mensagem 27.\nusuário: Mensagem 28.\nusuário: Mensagem 29.\nusuário: Mensagem 30.\nusuário: Mensagem 31.\nusuário: Mensagem 32.\nusuário: Mensagem 33.\nusuário: Mensagem 34.\nusuário: Mensagem 35.\nusuário: Mensagem 36.\nusuário: Mensagem 37.\nusuário: Mensagem 38.\nÚLTIMA MENSAGEM (usuário): Mensagem 39.",
+      "events": [
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 0.",
+          "ts": null
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 1.",
+          "ts": null
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 2.",
+          "ts": null
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 3.",
+          "ts": null
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 4.",
+          "ts": null
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 5.",
+          "ts": null
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 6.",
+          "ts": null
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 7.",
+          "ts": null
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 8.",
+          "ts": null
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 9.",
+          "ts": null
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 10.",
+          "ts": null
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 11.",
+          "ts": null
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 12.",
+          "ts": null
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 13.",
+          "ts": null
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 14.",
+          "ts": null
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 15.",
+          "ts": null
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 16.",
+          "ts": null
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 17.",
+          "ts": null
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 18.",
+          "ts": null
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 19.",
+          "ts": null
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 20.",
+          "ts": null
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 21.",
+          "ts": null
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 22.",
+          "ts": null
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 23.",
+          "ts": null
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 24.",
+          "ts": null
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 25.",
+          "ts": null
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 26.",
+          "ts": null
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 27.",
+          "ts": null
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 28.",
+          "ts": null
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 29.",
+          "ts": null
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 30.",
+          "ts": null
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 31.",
+          "ts": null
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 32.",
+          "ts": null
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 33.",
+          "ts": null
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 34.",
+          "ts": null
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 35.",
+          "ts": null
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 36.",
+          "ts": null
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 37.",
+          "ts": null
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 38.",
+          "ts": null
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 39.",
+          "ts": null
+        }
+      ]
+    },
+    {
+      "name": "pi-window-contains-40-short-messages",
+      "provider": "pi",
+      "records": [
+        {
+          "type": "message",
+          "id": "0",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000000000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 0."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "1",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000001000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 1."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "2",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000002000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 2."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "3",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000003000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 3."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "4",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000004000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 4."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "5",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000005000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 5."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "6",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000006000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 6."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "7",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000007000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 7."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "8",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000008000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 8."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "9",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000009000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 9."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "10",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000010000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 10."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "11",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000011000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 11."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "12",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000012000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 12."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "13",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000013000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 13."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "14",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000014000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 14."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "15",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000015000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 15."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "16",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000016000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 16."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "17",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000017000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 17."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "18",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000018000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 18."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "19",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000019000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 19."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "20",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000020000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 20."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "21",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000021000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 21."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "22",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000022000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 22."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "23",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000023000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 23."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "24",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000024000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 24."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "25",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000025000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 25."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "26",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000026000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 26."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "27",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000027000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 27."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "28",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000028000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 28."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "29",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000029000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 29."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "30",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000030000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 30."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "31",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000031000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 31."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "32",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000032000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 32."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "33",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000033000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 33."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "34",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000034000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 34."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "35",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000035000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 35."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "36",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000036000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 36."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "37",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000037000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 37."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "38",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000038000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 38."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "39",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000039000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 39."
+              }
+            ]
+          }
+        }
+      ],
+      "queue": [],
+      "limit": 30,
+      "summary": "usuário: Mensagem 0.\nusuário: Mensagem 1.\nusuário: Mensagem 2.\nusuário: Mensagem 3.\nusuário: Mensagem 4.\nusuário: Mensagem 5.\nusuário: Mensagem 6.\nusuário: Mensagem 7.\nusuário: Mensagem 8.\nusuário: Mensagem 9.\nusuário: Mensagem 10.\nusuário: Mensagem 11.\nusuário: Mensagem 12.\nusuário: Mensagem 13.\nusuário: Mensagem 14.\nusuário: Mensagem 15.\nusuário: Mensagem 16.\nusuário: Mensagem 17.\nusuário: Mensagem 18.\nusuário: Mensagem 19.\nusuário: Mensagem 20.\nusuário: Mensagem 21.\nusuário: Mensagem 22.\nusuário: Mensagem 23.\nusuário: Mensagem 24.\nusuário: Mensagem 25.\nusuário: Mensagem 26.\nusuário: Mensagem 27.\nusuário: Mensagem 28.\nusuário: Mensagem 29.\nusuário: Mensagem 30.\nusuário: Mensagem 31.\nusuário: Mensagem 32.\nusuário: Mensagem 33.\nusuário: Mensagem 34.\nusuário: Mensagem 35.\nusuário: Mensagem 36.\nusuário: Mensagem 37.\nusuário: Mensagem 38.\nÚLTIMA MENSAGEM (usuário): Mensagem 39.",
+      "events": [
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 0.",
+          "ts": 1700000000.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 1.",
+          "ts": 1700000001.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 2.",
+          "ts": 1700000002.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 3.",
+          "ts": 1700000003.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 4.",
+          "ts": 1700000004.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 5.",
+          "ts": 1700000005.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 6.",
+          "ts": 1700000006.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 7.",
+          "ts": 1700000007.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 8.",
+          "ts": 1700000008.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 9.",
+          "ts": 1700000009.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 10.",
+          "ts": 1700000010.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 11.",
+          "ts": 1700000011.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 12.",
+          "ts": 1700000012.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 13.",
+          "ts": 1700000013.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 14.",
+          "ts": 1700000014.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 15.",
+          "ts": 1700000015.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 16.",
+          "ts": 1700000016.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 17.",
+          "ts": 1700000017.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 18.",
+          "ts": 1700000018.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 19.",
+          "ts": 1700000019.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 20.",
+          "ts": 1700000020.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 21.",
+          "ts": 1700000021.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 22.",
+          "ts": 1700000022.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 23.",
+          "ts": 1700000023.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 24.",
+          "ts": 1700000024.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 25.",
+          "ts": 1700000025.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 26.",
+          "ts": 1700000026.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 27.",
+          "ts": 1700000027.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 28.",
+          "ts": 1700000028.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 29.",
+          "ts": 1700000029.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 30.",
+          "ts": 1700000030.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 31.",
+          "ts": 1700000031.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 32.",
+          "ts": 1700000032.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 33.",
+          "ts": 1700000033.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 34.",
+          "ts": 1700000034.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 35.",
+          "ts": 1700000035.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 36.",
+          "ts": 1700000036.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 37.",
+          "ts": 1700000037.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 38.",
+          "ts": 1700000038.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 39.",
+          "ts": 1700000039.0
+        }
+      ]
+    },
+    {
+      "name": "omp-window-contains-40-short-messages",
+      "provider": "omp",
+      "records": [
+        {
+          "type": "message",
+          "id": "0",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000000000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 0."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "1",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000001000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 1."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "2",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000002000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 2."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "3",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000003000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 3."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "4",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000004000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 4."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "5",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000005000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 5."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "6",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000006000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 6."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "7",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000007000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 7."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "8",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000008000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 8."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "9",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000009000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 9."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "10",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000010000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 10."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "11",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000011000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 11."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "12",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000012000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 12."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "13",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000013000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 13."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "14",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000014000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 14."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "15",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000015000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 15."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "16",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000016000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 16."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "17",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000017000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 17."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "18",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000018000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 18."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "19",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000019000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 19."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "20",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000020000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 20."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "21",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000021000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 21."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "22",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000022000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 22."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "23",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000023000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 23."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "24",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000024000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 24."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "25",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000025000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 25."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "26",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000026000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 26."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "27",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000027000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 27."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "28",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000028000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 28."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "29",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000029000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 29."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "30",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000030000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 30."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "31",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000031000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 31."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "32",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000032000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 32."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "33",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000033000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 33."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "34",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000034000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 34."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "35",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000035000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 35."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "36",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000036000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 36."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "37",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000037000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 37."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "38",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000038000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 38."
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "39",
+          "message": {
+            "role": "user",
+            "timestamp": 1700000039000,
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 39."
+              }
+            ]
+          }
+        }
+      ],
+      "queue": [],
+      "limit": 30,
+      "summary": "usuário: Mensagem 0.\nusuário: Mensagem 1.\nusuário: Mensagem 2.\nusuário: Mensagem 3.\nusuário: Mensagem 4.\nusuário: Mensagem 5.\nusuário: Mensagem 6.\nusuário: Mensagem 7.\nusuário: Mensagem 8.\nusuário: Mensagem 9.\nusuário: Mensagem 10.\nusuário: Mensagem 11.\nusuário: Mensagem 12.\nusuário: Mensagem 13.\nusuário: Mensagem 14.\nusuário: Mensagem 15.\nusuário: Mensagem 16.\nusuário: Mensagem 17.\nusuário: Mensagem 18.\nusuário: Mensagem 19.\nusuário: Mensagem 20.\nusuário: Mensagem 21.\nusuário: Mensagem 22.\nusuário: Mensagem 23.\nusuário: Mensagem 24.\nusuário: Mensagem 25.\nusuário: Mensagem 26.\nusuário: Mensagem 27.\nusuário: Mensagem 28.\nusuário: Mensagem 29.\nusuário: Mensagem 30.\nusuário: Mensagem 31.\nusuário: Mensagem 32.\nusuário: Mensagem 33.\nusuário: Mensagem 34.\nusuário: Mensagem 35.\nusuário: Mensagem 36.\nusuário: Mensagem 37.\nusuário: Mensagem 38.\nÚLTIMA MENSAGEM (usuário): Mensagem 39.",
+      "events": [
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 0.",
+          "ts": 1700000000.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 1.",
+          "ts": 1700000001.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 2.",
+          "ts": 1700000002.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 3.",
+          "ts": 1700000003.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 4.",
+          "ts": 1700000004.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 5.",
+          "ts": 1700000005.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 6.",
+          "ts": 1700000006.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 7.",
+          "ts": 1700000007.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 8.",
+          "ts": 1700000008.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 9.",
+          "ts": 1700000009.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 10.",
+          "ts": 1700000010.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 11.",
+          "ts": 1700000011.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 12.",
+          "ts": 1700000012.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 13.",
+          "ts": 1700000013.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 14.",
+          "ts": 1700000014.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 15.",
+          "ts": 1700000015.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 16.",
+          "ts": 1700000016.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 17.",
+          "ts": 1700000017.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 18.",
+          "ts": 1700000018.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 19.",
+          "ts": 1700000019.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 20.",
+          "ts": 1700000020.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 21.",
+          "ts": 1700000021.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 22.",
+          "ts": 1700000022.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 23.",
+          "ts": 1700000023.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 24.",
+          "ts": 1700000024.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 25.",
+          "ts": 1700000025.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 26.",
+          "ts": 1700000026.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 27.",
+          "ts": 1700000027.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 28.",
+          "ts": 1700000028.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 29.",
+          "ts": 1700000029.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 30.",
+          "ts": 1700000030.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 31.",
+          "ts": 1700000031.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 32.",
+          "ts": 1700000032.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 33.",
+          "ts": 1700000033.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 34.",
+          "ts": 1700000034.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 35.",
+          "ts": 1700000035.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 36.",
+          "ts": 1700000036.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 37.",
+          "ts": 1700000037.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 38.",
+          "ts": 1700000038.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 39.",
+          "ts": 1700000039.0
+        }
+      ]
+    },
+    {
+      "name": "kimi-window-contains-40-short-messages",
+      "provider": "kimi",
+      "records": [
+        {
+          "type": "context.append_message",
+          "time": 1700000000000,
+          "message": {
+            "role": "user",
+            "origin": {
+              "kind": "user"
+            },
+            "id": "0",
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 0."
+              }
+            ]
+          }
+        },
+        {
+          "type": "context.append_message",
+          "time": 1700000001000,
+          "message": {
+            "role": "user",
+            "origin": {
+              "kind": "user"
+            },
+            "id": "1",
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 1."
+              }
+            ]
+          }
+        },
+        {
+          "type": "context.append_message",
+          "time": 1700000002000,
+          "message": {
+            "role": "user",
+            "origin": {
+              "kind": "user"
+            },
+            "id": "2",
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 2."
+              }
+            ]
+          }
+        },
+        {
+          "type": "context.append_message",
+          "time": 1700000003000,
+          "message": {
+            "role": "user",
+            "origin": {
+              "kind": "user"
+            },
+            "id": "3",
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 3."
+              }
+            ]
+          }
+        },
+        {
+          "type": "context.append_message",
+          "time": 1700000004000,
+          "message": {
+            "role": "user",
+            "origin": {
+              "kind": "user"
+            },
+            "id": "4",
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 4."
+              }
+            ]
+          }
+        },
+        {
+          "type": "context.append_message",
+          "time": 1700000005000,
+          "message": {
+            "role": "user",
+            "origin": {
+              "kind": "user"
+            },
+            "id": "5",
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 5."
+              }
+            ]
+          }
+        },
+        {
+          "type": "context.append_message",
+          "time": 1700000006000,
+          "message": {
+            "role": "user",
+            "origin": {
+              "kind": "user"
+            },
+            "id": "6",
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 6."
+              }
+            ]
+          }
+        },
+        {
+          "type": "context.append_message",
+          "time": 1700000007000,
+          "message": {
+            "role": "user",
+            "origin": {
+              "kind": "user"
+            },
+            "id": "7",
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 7."
+              }
+            ]
+          }
+        },
+        {
+          "type": "context.append_message",
+          "time": 1700000008000,
+          "message": {
+            "role": "user",
+            "origin": {
+              "kind": "user"
+            },
+            "id": "8",
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 8."
+              }
+            ]
+          }
+        },
+        {
+          "type": "context.append_message",
+          "time": 1700000009000,
+          "message": {
+            "role": "user",
+            "origin": {
+              "kind": "user"
+            },
+            "id": "9",
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 9."
+              }
+            ]
+          }
+        },
+        {
+          "type": "context.append_message",
+          "time": 1700000010000,
+          "message": {
+            "role": "user",
+            "origin": {
+              "kind": "user"
+            },
+            "id": "10",
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 10."
+              }
+            ]
+          }
+        },
+        {
+          "type": "context.append_message",
+          "time": 1700000011000,
+          "message": {
+            "role": "user",
+            "origin": {
+              "kind": "user"
+            },
+            "id": "11",
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 11."
+              }
+            ]
+          }
+        },
+        {
+          "type": "context.append_message",
+          "time": 1700000012000,
+          "message": {
+            "role": "user",
+            "origin": {
+              "kind": "user"
+            },
+            "id": "12",
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 12."
+              }
+            ]
+          }
+        },
+        {
+          "type": "context.append_message",
+          "time": 1700000013000,
+          "message": {
+            "role": "user",
+            "origin": {
+              "kind": "user"
+            },
+            "id": "13",
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 13."
+              }
+            ]
+          }
+        },
+        {
+          "type": "context.append_message",
+          "time": 1700000014000,
+          "message": {
+            "role": "user",
+            "origin": {
+              "kind": "user"
+            },
+            "id": "14",
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 14."
+              }
+            ]
+          }
+        },
+        {
+          "type": "context.append_message",
+          "time": 1700000015000,
+          "message": {
+            "role": "user",
+            "origin": {
+              "kind": "user"
+            },
+            "id": "15",
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 15."
+              }
+            ]
+          }
+        },
+        {
+          "type": "context.append_message",
+          "time": 1700000016000,
+          "message": {
+            "role": "user",
+            "origin": {
+              "kind": "user"
+            },
+            "id": "16",
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 16."
+              }
+            ]
+          }
+        },
+        {
+          "type": "context.append_message",
+          "time": 1700000017000,
+          "message": {
+            "role": "user",
+            "origin": {
+              "kind": "user"
+            },
+            "id": "17",
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 17."
+              }
+            ]
+          }
+        },
+        {
+          "type": "context.append_message",
+          "time": 1700000018000,
+          "message": {
+            "role": "user",
+            "origin": {
+              "kind": "user"
+            },
+            "id": "18",
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 18."
+              }
+            ]
+          }
+        },
+        {
+          "type": "context.append_message",
+          "time": 1700000019000,
+          "message": {
+            "role": "user",
+            "origin": {
+              "kind": "user"
+            },
+            "id": "19",
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 19."
+              }
+            ]
+          }
+        },
+        {
+          "type": "context.append_message",
+          "time": 1700000020000,
+          "message": {
+            "role": "user",
+            "origin": {
+              "kind": "user"
+            },
+            "id": "20",
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 20."
+              }
+            ]
+          }
+        },
+        {
+          "type": "context.append_message",
+          "time": 1700000021000,
+          "message": {
+            "role": "user",
+            "origin": {
+              "kind": "user"
+            },
+            "id": "21",
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 21."
+              }
+            ]
+          }
+        },
+        {
+          "type": "context.append_message",
+          "time": 1700000022000,
+          "message": {
+            "role": "user",
+            "origin": {
+              "kind": "user"
+            },
+            "id": "22",
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 22."
+              }
+            ]
+          }
+        },
+        {
+          "type": "context.append_message",
+          "time": 1700000023000,
+          "message": {
+            "role": "user",
+            "origin": {
+              "kind": "user"
+            },
+            "id": "23",
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 23."
+              }
+            ]
+          }
+        },
+        {
+          "type": "context.append_message",
+          "time": 1700000024000,
+          "message": {
+            "role": "user",
+            "origin": {
+              "kind": "user"
+            },
+            "id": "24",
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 24."
+              }
+            ]
+          }
+        },
+        {
+          "type": "context.append_message",
+          "time": 1700000025000,
+          "message": {
+            "role": "user",
+            "origin": {
+              "kind": "user"
+            },
+            "id": "25",
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 25."
+              }
+            ]
+          }
+        },
+        {
+          "type": "context.append_message",
+          "time": 1700000026000,
+          "message": {
+            "role": "user",
+            "origin": {
+              "kind": "user"
+            },
+            "id": "26",
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 26."
+              }
+            ]
+          }
+        },
+        {
+          "type": "context.append_message",
+          "time": 1700000027000,
+          "message": {
+            "role": "user",
+            "origin": {
+              "kind": "user"
+            },
+            "id": "27",
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 27."
+              }
+            ]
+          }
+        },
+        {
+          "type": "context.append_message",
+          "time": 1700000028000,
+          "message": {
+            "role": "user",
+            "origin": {
+              "kind": "user"
+            },
+            "id": "28",
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 28."
+              }
+            ]
+          }
+        },
+        {
+          "type": "context.append_message",
+          "time": 1700000029000,
+          "message": {
+            "role": "user",
+            "origin": {
+              "kind": "user"
+            },
+            "id": "29",
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 29."
+              }
+            ]
+          }
+        },
+        {
+          "type": "context.append_message",
+          "time": 1700000030000,
+          "message": {
+            "role": "user",
+            "origin": {
+              "kind": "user"
+            },
+            "id": "30",
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 30."
+              }
+            ]
+          }
+        },
+        {
+          "type": "context.append_message",
+          "time": 1700000031000,
+          "message": {
+            "role": "user",
+            "origin": {
+              "kind": "user"
+            },
+            "id": "31",
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 31."
+              }
+            ]
+          }
+        },
+        {
+          "type": "context.append_message",
+          "time": 1700000032000,
+          "message": {
+            "role": "user",
+            "origin": {
+              "kind": "user"
+            },
+            "id": "32",
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 32."
+              }
+            ]
+          }
+        },
+        {
+          "type": "context.append_message",
+          "time": 1700000033000,
+          "message": {
+            "role": "user",
+            "origin": {
+              "kind": "user"
+            },
+            "id": "33",
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 33."
+              }
+            ]
+          }
+        },
+        {
+          "type": "context.append_message",
+          "time": 1700000034000,
+          "message": {
+            "role": "user",
+            "origin": {
+              "kind": "user"
+            },
+            "id": "34",
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 34."
+              }
+            ]
+          }
+        },
+        {
+          "type": "context.append_message",
+          "time": 1700000035000,
+          "message": {
+            "role": "user",
+            "origin": {
+              "kind": "user"
+            },
+            "id": "35",
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 35."
+              }
+            ]
+          }
+        },
+        {
+          "type": "context.append_message",
+          "time": 1700000036000,
+          "message": {
+            "role": "user",
+            "origin": {
+              "kind": "user"
+            },
+            "id": "36",
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 36."
+              }
+            ]
+          }
+        },
+        {
+          "type": "context.append_message",
+          "time": 1700000037000,
+          "message": {
+            "role": "user",
+            "origin": {
+              "kind": "user"
+            },
+            "id": "37",
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 37."
+              }
+            ]
+          }
+        },
+        {
+          "type": "context.append_message",
+          "time": 1700000038000,
+          "message": {
+            "role": "user",
+            "origin": {
+              "kind": "user"
+            },
+            "id": "38",
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 38."
+              }
+            ]
+          }
+        },
+        {
+          "type": "context.append_message",
+          "time": 1700000039000,
+          "message": {
+            "role": "user",
+            "origin": {
+              "kind": "user"
+            },
+            "id": "39",
+            "content": [
+              {
+                "type": "text",
+                "text": "Mensagem 39."
+              }
+            ]
+          }
+        }
+      ],
+      "queue": [],
+      "limit": 30,
+      "summary": "usuário: Mensagem 0.\nusuário: Mensagem 1.\nusuário: Mensagem 2.\nusuário: Mensagem 3.\nusuário: Mensagem 4.\nusuário: Mensagem 5.\nusuário: Mensagem 6.\nusuário: Mensagem 7.\nusuário: Mensagem 8.\nusuário: Mensagem 9.\nusuário: Mensagem 10.\nusuário: Mensagem 11.\nusuário: Mensagem 12.\nusuário: Mensagem 13.\nusuário: Mensagem 14.\nusuário: Mensagem 15.\nusuário: Mensagem 16.\nusuário: Mensagem 17.\nusuário: Mensagem 18.\nusuário: Mensagem 19.\nusuário: Mensagem 20.\nusuário: Mensagem 21.\nusuário: Mensagem 22.\nusuário: Mensagem 23.\nusuário: Mensagem 24.\nusuário: Mensagem 25.\nusuário: Mensagem 26.\nusuário: Mensagem 27.\nusuário: Mensagem 28.\nusuário: Mensagem 29.\nusuário: Mensagem 30.\nusuário: Mensagem 31.\nusuário: Mensagem 32.\nusuário: Mensagem 33.\nusuário: Mensagem 34.\nusuário: Mensagem 35.\nusuário: Mensagem 36.\nusuário: Mensagem 37.\nusuário: Mensagem 38.\nÚLTIMA MENSAGEM (usuário): Mensagem 39.",
+      "events": [
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 0.",
+          "ts": 1700000000.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 1.",
+          "ts": 1700000001.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 2.",
+          "ts": 1700000002.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 3.",
+          "ts": 1700000003.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 4.",
+          "ts": 1700000004.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 5.",
+          "ts": 1700000005.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 6.",
+          "ts": 1700000006.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 7.",
+          "ts": 1700000007.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 8.",
+          "ts": 1700000008.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 9.",
+          "ts": 1700000009.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 10.",
+          "ts": 1700000010.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 11.",
+          "ts": 1700000011.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 12.",
+          "ts": 1700000012.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 13.",
+          "ts": 1700000013.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 14.",
+          "ts": 1700000014.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 15.",
+          "ts": 1700000015.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 16.",
+          "ts": 1700000016.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 17.",
+          "ts": 1700000017.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 18.",
+          "ts": 1700000018.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 19.",
+          "ts": 1700000019.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 20.",
+          "ts": 1700000020.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 21.",
+          "ts": 1700000021.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 22.",
+          "ts": 1700000022.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 23.",
+          "ts": 1700000023.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 24.",
+          "ts": 1700000024.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 25.",
+          "ts": 1700000025.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 26.",
+          "ts": 1700000026.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 27.",
+          "ts": 1700000027.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 28.",
+          "ts": 1700000028.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 29.",
+          "ts": 1700000029.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 30.",
+          "ts": 1700000030.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 31.",
+          "ts": 1700000031.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 32.",
+          "ts": 1700000032.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 33.",
+          "ts": 1700000033.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 34.",
+          "ts": 1700000034.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 35.",
+          "ts": 1700000035.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 36.",
+          "ts": 1700000036.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 37.",
+          "ts": 1700000037.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 38.",
+          "ts": 1700000038.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "Mensagem 39.",
+          "ts": 1700000039.0
+        }
+      ]
+    }
+  ]
+}

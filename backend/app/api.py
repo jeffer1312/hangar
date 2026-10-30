@@ -18,7 +18,7 @@ from datetime import datetime
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
-from typing import Annotated, Literal, Optional
+from typing import Literal, Optional
 from fastapi import FastAPI, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,7 +27,7 @@ from starlette.requests import ClientDisconnect
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sse_starlette.sse import EventSourceResponse
 from app import (agentes_sync, atomico, atualizacoes, atualizar, closed_names, diag, harness_api,
-                 loop_monitor, pensamento_pt, permission_mode, plugin_bridge, procinfo, quem_chama, tmux,
+                 loop_monitor, permission_mode, plugin_bridge, procinfo, quem_chama, tmux,
                  uds_messaging)
 from app import groups_bridge, internal_api, list_bridge, migration_status, share_bridge, update_channel
 from app.auth import require_auth, require_loopback
@@ -76,9 +76,6 @@ from app.connect_port import CONNECT_PORT, ConnectPortGate
 from app import guest_users, guest_users_api
 from app.guest_header import guest_of, guest_safe
 from app.share_life import session_life
-from app import tts
-from app.tts_text import preparar as tts_preparar
-from app import narrar
 from app import contas, default_model, engine_probe, engines, procinfo
 from app.costs import report as costs_report, usd_brl as _usd_brl, PERIODOS as _COST_PERIODOS
 from app import costs_sources, pricing
@@ -1694,26 +1691,8 @@ class _StrictBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class TtsBody(_StrictBody):
-    # max_length: sem teto, um corpo de 100 MB era parseado INTEIRO antes do 413 do preparo/teto
-    # de caracteres poder recusar. 200_000 e bem acima do teto real (_TTS_TETO) — so evita o corpo
-    # gigante, quem recusa por caractere de verdade continua sendo a rota.
-    text: str = Field(min_length=1, max_length=200_000)
-    voice: str = ""
-    provider: str = "elevenlabs"
-    # Confirmacao explicita do usuario pra passar do limite de aviso. Ver _TTS_TETO abaixo: o teto
-    # duro nao e confirmavel, so o limite de aviso.
-    confirm: bool = False
-    # Fase 2 (narracao guiada): instrucao que ja tratou este `text` via POST /api/tts/narrar ("" =
-    # leitura direta, o caminho de hoje). So entra na chave do cache (tts.hash_de) — chega aqui
-    # depois que o texto ja esta pronto pra virar audio, nunca dispara a Groq.
-    instruction: str = ""
 
 
-class NarrarBody(_StrictBody):
-    text: str = Field(min_length=1, max_length=200_000)
-    code_blocks: list[str] = Field(default_factory=list)
-    instruction: str = Field(min_length=1, max_length=2000)
 
 
 class PushSubscribeBody(_StrictBody):
@@ -4035,43 +4014,10 @@ async def pair_contract_put(name: str, body: PairContractBody):
     return await _group_route("PUT", name, "contract", body)
 
 
-class GroupTaskSuggestionBody(_StrictBody):
-    sessions: list[str]
 
 
-def _conversa_para_resumo(name: str, info: SessionInfo) -> str:
-    from app.pqueue import merged_history
-    msgs = [ev for ev in merged_history(name, info.jsonl, info.provider, 30)
-            if ev.kind in ("user_msg", "assistant_msg") and (ev.text or "").strip()]
-    if not msgs:
-        return ""
-    quem = lambda ev: "usuário" if ev.kind == "user_msg" else "assistente"
-    anteriores = "\n".join(f"{quem(ev)}: {ev.text.strip()[:500]}" for ev in msgs[:-1])[-3000:]
-    # É na última mensagem que o agente costuma deixar o próximo passo: ela vai inteira e marcada.
-    ultima = f"ÚLTIMA MENSAGEM ({quem(msgs[-1])}): {msgs[-1].text.strip()[:2000]}"
-    return f"{anteriores}\n{ultima}" if anteriores else ultima
 
 
-@app.post("/api/pair/task-suggestion", dependencies=[Depends(require_auth)])
-async def group_task_suggestion(body: GroupTaskSuggestionBody):
-    """Sugere a tarefa do grupo pelo fim da conversa de cada sessão. Sessão sem conversa (ou de
-    outro servidor) fica de fora; nenhuma com conversa → 422, sem chamar o LLM."""
-    conversas: dict[str, str] = {}
-    for nome in dict.fromkeys(body.sessions):
-        info = await _cached_info(nome)
-        if not info or not info.jsonl:
-            continue
-        texto = await asyncio.to_thread(_conversa_para_resumo, nome, info)
-        if texto:
-            conversas[nome] = texto
-    if not conversas:
-        raise HTTPException(422, detail=erro("erro_grupo_sem_conversa",
-                                             "nenhuma das sessões tem conversa para resumir"))
-    try:
-        tarefa = await asyncio.to_thread(narrar.sugerir_tarefa_grupo, conversas)
-    except narrar.NarrarError as e:
-        raise HTTPException(e.status, e.detail)
-    return {"task": tarefa}
 
 
 @app.delete("/api/sessions/{name}/pair", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
@@ -4529,41 +4475,12 @@ async def limits(name: str):
     }
 
 
-@app.websocket("/api/voice")
-async def server_voice_socket(ws: WebSocket):
-    # O dono pela 8765 é atendido pelo Rust; aqui chega o Connect (e o convidado, para ser recusado).
-    from app import voicesock
-    await voicesock.voice_ws(ws)
 
 
-@app.api_route("/api/voice/settings", methods=["GET", "PUT"], dependencies=[Depends(require_auth)])
-async def server_voice_settings(request: Request):
-    from app import voicesock
-    if voicesock.is_guest(request):
-        raise HTTPException(403, detail=erro("voice_owner_only", "Só o dono usa a voz do servidor."))
-    return await voicesock.forward_settings(request)
 
 
-@app.api_route("/api/voice/memory", methods=["GET"], dependencies=[Depends(require_auth)])
-@app.api_route("/api/voice/memory/{memory_id}", methods=["DELETE"], dependencies=[Depends(require_auth)])
-async def server_voice_memory(request: Request, memory_id: str | None = None):
-    from app import voicesock
-    if voicesock.is_guest(request):
-        raise HTTPException(403, detail=erro("voice_owner_only", "Só o dono usa a voz do servidor."))
-    target = "/__hangar_server/voice/memory" + (f"/{urllib.parse.quote(memory_id, safe='')}" if memory_id else "")
-    return await voicesock.forward_settings(request, target)
 
 
-@app.post("/api/share/reachability", dependencies=[Depends(require_auth)])
-async def share_reachability(request: Request):
-    # Só o Connect (8768) chega aqui; a decisão é do Rust, o Python só repassa.
-    from app import voicesock
-    if voicesock.is_guest(request):
-        raise HTTPException(403, detail=erro("share_owner_only", "Só o dono confere o link de convite."))
-    return await voicesock.forward_settings(
-        request, "/__hangar_server/share/reachability", timeout=220,  # o Rust insiste até ~200 s
-        unavailable=lambda: JSONResponse({"detail": erro(
-            "share_needs_rust_server", "a conferência do link precisa do servidor Rust")}, status_code=404))
 
 
 class CodexModelBody(_StrictBody):
@@ -4790,14 +4707,6 @@ def _painel_disponivel() -> bool:
     return termsock.painel_disponivel()
 
 
-def _traducao_pensamento_disponivel() -> bool:
-    from app import narrar
-    if not runtime_config.get("traduzir_pensamento"):
-        return False
-    try:
-        return bool(narrar._provedor()[1])
-    except Exception:  # noqa: BLE001 — capacidade: config estranha vale como "sem provedor"
-        return False
 
 
 def _origem_do_terminal_ok(request: Request) -> bool:
@@ -5115,9 +5024,6 @@ def _somente_leitura(request: Request) -> dict:
             # Ela tambem responde False num POSIX sem `pty`. Import tardio pelo mesmo motivo de
             # sempre: o termsock nao pode ser importado no topo deste modulo.
             "terminal_panel": _painel_disponivel(),
-            # Ha provedor de LLM com chave? Sem isso o front nem pede a traducao do pensamento —
-            # cada bloco visivel virava um POST que so voltava 503.
-            "traducao_pensamento": _traducao_pensamento_disponivel(),
             # A ORIGEM DESTE cliente abriria o terminal aqui? O handshake do WebSocket recusa com
             # 403 e o navegador nao entrega corpo nem motivo — a tela dizia so "desconectado", e o
             # unico lugar com a explicacao era o log do servidor. Com este campo a propria tela
@@ -5443,28 +5349,8 @@ async def engine_cliproxy_management_key(body: CliproxyManagementBody):
     return await asyncio.to_thread(_cliproxy_naming)
 
 
-class PensamentoPtBody(_StrictBody):
-    # Teto por ITEM só contra abuso: o pensamento do Pi e do Kimi vem CRU, sem tamanho previsível,
-    # e recusar com 422 acima de `MAX_CHARS` deixava a pessoa abrindo o bloco sem nada acontecer.
-    # O corte em `MAX_CHARS` é feito no handler; aqui só o que nem cabe num pedido razoável.
-    textos: list[Annotated[str, Field(max_length=200_000)]] = Field(min_length=1, max_length=20)
 
 
-@app.post("/api/pensamento/pt", dependencies=[Depends(require_auth)])
-async def pensamento_para_pt(body: PensamentoPtBody):
-    """Resumo do pensamento em portugues, curto. Chamado quando a pessoa ABRE o bloco.
-
-    Nunca 502: falha de provedor devolve o texto ORIGINAL (ver pensamento_pt.traduzir). O bloco ja
-    esta aberto na tela quando esta chamada sai — trocar o conteudo por uma mensagem de erro seria
-    apagar o que ela acabou de pedir pra ler.
-    """
-    # Corta em vez de recusar: um resumo do começo do pensamento é o que a pessoa pediu; um 422
-    # calado não é (medido: 198 no diário de uma semana, 110 num dia só).
-    textos = [t[:pensamento_pt.MAX_CHARS] for t in body.textos]
-    if not runtime_config.get("traduzir_pensamento"):
-        return {"textos": textos}
-    saida = await asyncio.to_thread(pensamento_pt.traduzir_varios, textos)
-    return {"textos": saida}
 
 
 class CheckoutBody(_StrictBody):
@@ -8069,89 +7955,3 @@ async def commands(name: str, request: Request):
             raise HTTPException(409, detail=erro("erro_codex_controle", "O Codex não aceitou a alteração; atualize a sessão e tente novamente.")) from None
     return await _repasse_ao_rust(request, erro("commands_need_rust_server", "os comandos precisam do servidor Rust, que não está rodando"),
                                   "/__hangar_server/forwarded")
-
-
-_TTS_LIMITE_PADRAO = 5000
-# Teto DURO, que nenhuma confirmacao passa — derivado do MODELO EM USO (tts.TETO_CARACTERES), nao
-# um numero solto aqui: um teto maior que o do modelo deixaria confirmar um gasto que a ElevenLabs
-# ainda ia recusar. Dois numeros diferentes de proposito: o limite configuravel e um AVISO de
-# custo (o usuario confirma e passa); este e o que impede um cliente autenticado de mandar
-# megabytes numa requisicao.
-_TTS_TETO = tts.TETO_CARACTERES
-
-
-def _tts_limite() -> int:
-    """Limite de AVISO em caracteres. Configuravel; 0/ausente cai no padrao."""
-    try:
-        v = int(runtime_config.get("tts_max_chars") or 0)
-    except (TypeError, ValueError):
-        v = 0
-    return v if v > 0 else _TTS_LIMITE_PADRAO
-
-
-@app.post("/api/tts", dependencies=[Depends(require_auth)])
-async def tts_sintetizar(body: TtsBody):
-    texto = tts_preparar(body.text)
-    if not texto:
-        raise HTTPException(400, detail=erro("erro_tts_sem_texto", "nao sobrou nada pra falar depois de limpar o texto"))
-    if len(texto) > _TTS_TETO:
-        raise HTTPException(413, detail=erro("erro_tts_teto", f"texto com {len(texto)} caracteres passa do teto de {_TTS_TETO} — selecione um trecho menor", n=len(texto), teto=_TTS_TETO))
-    limite = _tts_limite()
-    if len(texto) > limite and not body.confirm:
-        # 409, nao 413: nao e "grande demais", e "confirme que voce quer gastar isso". O front pede
-        # a confirmacao e repete o POST com confirm=true. Checado AQUI e nao so na tela porque a
-        # tela evita o susto e o servidor e quem guarda a conta.
-        raise HTTPException(409, detail=erro("erro_tts_limite", f"são {len(texto)} caracteres, acima do limite de {limite} — confirme para gerar", n=len(texto), limite=limite))
-    try:
-        h, veio_do_cache, provedor_final = await asyncio.to_thread(
-            tts.sintetizar, texto, body.voice, body.provider, body.instruction)
-    except tts.TtsError as e:
-        raise HTTPException(e.status, e.detail)
-    # provider ecoa o que RESPONDEU de fato (pode ter virado "local" pelo fallback sem chave) — o
-    # front usa isso pra avisar na barra, em vez de trocar de voz caladamente.
-    return {"url": f"/api/tts/audio/{h}", "chars": len(texto), "cached": veio_do_cache, "provider": provedor_final}
-
-
-@app.post("/api/tts/narrar", dependencies=[Depends(require_auth)])
-async def tts_narrar(body: NarrarBody):
-    """Fase 2 (narracao guiada): trata o texto falavel de uma selecao pela Groq ANTES de virar
-    audio — o resultado volta pro front pra REVISAO (o usuario confere antes de gastar credito da
-    ElevenLabs), nao sintetiza nada aqui."""
-    try:
-        texto_tratado = await asyncio.to_thread(narrar.narrar, body.text, body.code_blocks, body.instruction)
-    except narrar.NarrarError as e:
-        raise HTTPException(e.status, e.detail)
-    usou_groq = not narrar.eh_instrucao_padrao(body.instruction)
-    chars_sent = (len(body.text) + sum(len(b) for b in body.code_blocks) + len(body.instruction)) if usou_groq else 0
-    return {"text": texto_tratado, "chars_sent": chars_sent, "used_groq": usou_groq}
-
-
-@app.get("/api/tts/voices", dependencies=[Depends(require_auth)])
-async def tts_vozes():
-    try:
-        return {"voices": await asyncio.to_thread(tts.listar_vozes)}
-    except tts.TtsError as e:
-        raise HTTPException(e.status, e.detail)
-
-
-@app.get("/api/tts/saldo", dependencies=[Depends(require_auth)])
-async def tts_saldo():
-    try:
-        return await asyncio.to_thread(tts.saldo)
-    except tts.TtsError as e:
-        raise HTTPException(e.status, e.detail)
-
-
-@app.get("/api/tts/audio/{h}", dependencies=[Depends(require_auth)])
-async def tts_audio(h: str):
-    # Hash validado ANTES de tocar no disco: o parametro vem da URL e sem isto viraria path
-    # traversal. Mesmo espirito do guard de resolve_upload.
-    if not re.fullmatch(r"[0-9a-f]{64}", h):
-        raise HTTPException(400, detail=erro("erro_tts_audio_invalido", "identificador de audio invalido"))
-    caminho = tts.caminho_do_cache(h)
-    if not caminho.exists():
-        raise HTTPException(404, detail=erro("erro_tts_sem_cache", "audio nao esta mais em cache"))
-    # Extensao real do arquivo em cache, nao suposicao: o motor local pode ter devolvido WAV
-    # (ver tts.extensao_de) — servir isso como audio/mpeg quebra o <audio> no WebKit.
-    media_type = "audio/wav" if caminho.suffix == ".wav" else "audio/mpeg"
-    return FileResponse(caminho, media_type=media_type)

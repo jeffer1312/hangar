@@ -246,23 +246,6 @@ def test_bridge_gives_up_on_a_silent_rust_with_a_code(monkeypatch):
         groups_bridge.configure(None, None)
 
 
-def test_task_suggestion_reads_only_sessions_with_a_conversation(monkeypatch, client):
-    """BRG-33: sess\u00e3o sem conversa ou de outro servidor (sem linha aqui) fica de fora; nenhuma \u2192 422 sem o LLM."""
-    from app.models import SessionInfo
-    infos = {"a": SessionInfo(name="a", jsonl="/t/a.jsonl"), "b": SessionInfo(name="b", jsonl="/t/b.jsonl")}
-
-    async def cached(name):
-        return infos.get(name)
-    monkeypatch.setattr(api, "_cached_info", cached)
-    monkeypatch.setattr(api, "_conversa_para_resumo", lambda name, info: "fim da conversa" if name == "a" else "")
-    asked = []
-    monkeypatch.setattr(api.narrar, "sugerir_tarefa_grupo", lambda conversas: asked.append(conversas) or "T-1")
-    r = client.post("/api/pair/task-suggestion", json={"sessions": ["a", "b", "lab::x", "a"]}, headers=H)
-    assert (r.status_code, r.json()) == (200, {"task": "T-1"})
-    assert asked == [{"a": "fim da conversa"}]
-    r = client.post("/api/pair/task-suggestion", json={"sessions": ["b", "lab::x"]}, headers=H)
-    assert (r.status_code, r.json()["detail"]["code"]) == (422, "erro_grupo_sem_conversa")
-    assert len(asked) == 1
 
 
 def test_close_that_skipped_rust_leaves_without_rebuilding_orq_facts(monkeypatch, client):
@@ -411,7 +394,7 @@ def test_child_gets_group_env(monkeypatch, tmp_path):
     assert env["HANGAR_SERVER_ID"] == "casa"
     assert env["HANGAR_PEERS_FILE"] == str(peers._PEERS_FILE)
     assert env["HANGAR_PAIR_ARCHIVE"] == str(pair._arquivo_dir())
-    assert rust_server.RUST_SERVER_PROTOCOL == 95
+    assert rust_server.RUST_SERVER_PROTOCOL == 96
 
 
 @pytest.mark.parametrize("mode", ["python", None])

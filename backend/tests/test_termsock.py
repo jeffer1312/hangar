@@ -782,40 +782,8 @@ def test_config_expoe_capacidade_do_painel_de_terminal():
     assert valor is True
 
 
-def test_config_diz_se_a_traducao_do_pensamento_tem_provedor(monkeypatch):
-    # Sem chave o front nem pede: cada bloco visivel virava um POST que so voltava 503.
-    from app import narrar, runtime_config
-    c = _client()
-    # Sem override em disco: o runtime-config.json da máquina pode ter a tradução desligada.
-    monkeypatch.setattr(runtime_config, "_carregar", lambda: {})
-    monkeypatch.setattr(narrar, "_provedor", lambda perfil="padrao": ("https://x", "", "m"))
-    r = c.get("/api/config", headers={"Authorization": "Bearer secret"})
-    assert r.json()["somente_leitura"]["traducao_pensamento"] is False
-    monkeypatch.setattr(narrar, "_provedor", lambda perfil="padrao": ("https://x", "k", "m"))
-    r = c.get("/api/config", headers={"Authorization": "Bearer secret"})
-    assert r.json()["somente_leitura"]["traducao_pensamento"] is True
-    # Desligado na config: com provedor e tudo, o front não pede e a rota devolve o original.
-    monkeypatch.setattr(runtime_config, "_carregar", lambda: {"traduzir_pensamento": False})
-    r = c.get("/api/config", headers={"Authorization": "Bearer secret"})
-    assert r.json()["somente_leitura"]["traducao_pensamento"] is False
-    r = c.post("/api/pensamento/pt", json={"textos": ["thinking hard"]}, headers={"Authorization": "Bearer secret"})
-    assert r.json() == {"textos": ["thinking hard"]}
 
 
-def test_salvar_config_devolve_a_leitura_atualizada(monkeypatch, tmp_path):
-    # A capacidade de traduzir muda com um campo editável: a resposta do POST traz o bloco
-    # somente-leitura novo, senão a linha "disponível" ficava velha até reabrir o modal.
-    from app import narrar, runtime_config
-    monkeypatch.setattr(runtime_config, "_caminho", lambda: tmp_path / "runtime-config.json")
-    monkeypatch.setattr(narrar, "_provedor", lambda perfil="padrao": ("https://x", "k", "m"))
-    c = _client()
-    h = {"Authorization": "Bearer secret"}
-    r = c.post("/api/config", json={"traduzir_pensamento": False}, headers=h)
-    assert r.status_code == 200
-    assert r.json()["campos"]["traduzir_pensamento"]["valor"] is False
-    assert r.json()["somente_leitura"]["traducao_pensamento"] is False
-    r = c.post("/api/config", json={"traduzir_pensamento": True}, headers=h)
-    assert r.json()["somente_leitura"]["traducao_pensamento"] is True
 
 
 def test_origem_mesma_do_host_e_aceita_mesmo_com_public_url_diferente(monkeypatch):

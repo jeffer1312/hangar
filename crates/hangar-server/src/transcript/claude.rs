@@ -141,6 +141,9 @@ fn parse_raw(obj: &Map<String, Value>, resolve: PeerResolver) -> Vec<ChatEvent> 
     match (etype, content) {
         (Some("user"), _) => user(obj, uid, content, resolve),
         (Some("assistant"), Some(Value::Array(items))) => assistant(obj, msg, uid, items),
+        // O snapshot transferido conserva respostas em texto puro, aceitas pelo parser original.
+        (Some("assistant"), Some(Value::String(text))) if !strip(text).is_empty() =>
+            assistant(obj, msg, uid, &[serde_json::json!({"type":"text", "text":text})]),
         _ => Vec::new(),
     }
 }
@@ -1035,3 +1038,13 @@ mod tests {
         }
     }
 }
+    #[test]
+    fn imported_plain_text_assistant_is_the_same_event_as_a_text_block() {
+        let line = |content: Value| serde_json::json!({"type":"assistant", "uuid":"transferred", "timestamp":"2026-01-01T00:03:00Z",
+            "message":{"role":"assistant","content":content}});
+        let string = line(serde_json::json!("antigo"));
+        let blocks = line(serde_json::json!([{"type":"text","text":"antigo"}]));
+        let events = |value: Value| crate::transcript::parse_claude_object(value.as_object().unwrap());
+        assert_eq!(serde_json::to_value(events(string)).unwrap(), serde_json::to_value(events(blocks)).unwrap());
+        assert!(events(line(serde_json::json!(" \n\t"))).is_empty());
+    }

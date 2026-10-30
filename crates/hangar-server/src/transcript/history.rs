@@ -104,6 +104,15 @@ pub fn merged_history(req: &HistoryRequest) -> io::Result<Vec<ChatEvent>> {
 /// eventos: quem só quer o fim (a última resposta da lista) não relê o transcript inteiro quando
 /// a cauda é só anexo e tool_result.
 pub(crate) fn merged_history_capped(req: &HistoryRequest, max_window: u64) -> io::Result<Vec<ChatEvent>> {
+    merged_history_impl(req, max_window, true)
+}
+
+/// A sugestão de tarefa conserva a janela lida inteira, como o consumidor original do histórico.
+pub(crate) fn merged_history_window(req: &HistoryRequest) -> io::Result<Vec<ChatEvent>> {
+    merged_history_impl(req, u64::MAX, false)
+}
+
+fn merged_history_impl(req: &HistoryRequest, max_window: u64, truncate: bool) -> io::Result<Vec<ChatEvent>> {
     let mut parsed = match req.limit {
         Some(limit) => {
             let mut window = req.tail_window.max(1).min(max_window);
@@ -134,7 +143,7 @@ pub(crate) fn merged_history_capped(req: &HistoryRequest, max_window: u64) -> io
     // Estável como o sort do Python: empate em (ts, i) mantém a ordem de chegada.
     items.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal).then(a.1.cmp(&b.1)));
     let mut evs: Vec<ChatEvent> = items.into_iter().map(|(_, _, ev)| ev).collect();
-    if let Some(limit) = req.limit {
+    if let Some(limit) = req.limit.filter(|_| truncate) {
         if evs.len() > limit {
             evs.drain(..evs.len() - limit);
         }

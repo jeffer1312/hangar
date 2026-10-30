@@ -1,0 +1,2535 @@
+{
+  "source_commit": "a136bcb1693bd542974608dcf1d60073e802fcd9",
+  "capture": "python shlex.split; random.Random(372); entradas e sa\u00edda integral preservadas",
+  "commands": [
+    {
+      "input": "cmd a b",
+      "args": [
+        "cmd",
+        "a",
+        "b"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \"a b\"",
+      "args": [
+        "cmd",
+        "a b"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd 'a b'",
+      "args": [
+        "cmd",
+        "a b"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \"a\\$b\"",
+      "args": [
+        "cmd",
+        "a\\$b"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \"a\\`b\"",
+      "args": [
+        "cmd",
+        "a\\`b"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \"a\\nb\"",
+      "args": [
+        "cmd",
+        "a\\nb"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd a\\ b",
+      "args": [
+        "cmd",
+        "a b"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd #texto",
+      "args": [
+        "cmd",
+        "#texto"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \"\"",
+      "args": [
+        "cmd",
+        ""
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \u00a0 x",
+      "args": [
+        "cmd",
+        "\u00a0",
+        "x"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \"a\\\nb\"",
+      "args": [
+        "cmd",
+        "a\\\nb"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd 'a\\b'",
+      "args": [
+        "cmd",
+        "a\\b"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \"C:\\Apps\\voz.exe\"",
+      "args": [
+        "cmd",
+        "C:\\Apps\\voz.exe"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \"aspas sem par",
+      "invalid": true
+    },
+    {
+      "input": "cmd escape\\",
+      "invalid": true
+    },
+    {
+      "input": "",
+      "args": [],
+      "invalid": true
+    },
+    {
+      "input": "''",
+      "args": [
+        ""
+      ],
+      "invalid": true
+    },
+    {
+      "input": "cmd \"#\r",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u00a0\"",
+      "invalid": true
+    },
+    {
+      "input": "cmd \n\u00a0\\b\u0301\\a\u0301\t`\n#'`",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u0301'\\a\t\u0301\\ #$'\" a\u0301\t\u00a0b'\u0301\r",
+      "invalid": true
+    },
+    {
+      "input": "cmd \t\t\u00e1\u0301b#'\"b\\\r\n\"\"b\n\u0301",
+      "invalid": true
+    },
+    {
+      "input": "cmd \nb``\u00e1\u00e1\u0301\u00e1a\u0301b\t'a\u0301\u00a0",
+      "invalid": true
+    },
+    {
+      "input": "cmd $\u00e1\"\\$\t$\u00a0\t#\\\r\u0301\n\u0301\r\"$b\\",
+      "invalid": true
+    },
+    {
+      "input": "cmd $\rb`'\u00e1\u00a0\nab`' b$",
+      "args": [
+        "cmd",
+        "$",
+        "b`\u00e1\u00a0\nab`",
+        "b$"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \n\n\u00a0$a",
+      "args": [
+        "cmd",
+        "\u00a0$a"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd # b\u00e1\"\r#\u00a0\u00e1a\u00e1\t\n' \u0301'a$\r\t`\"\"#\\ba",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u00e1 a a#\u0301\u0301\u00a0'`\\\"\r$\u00a0 \u00a0\u00e1",
+      "invalid": true
+    },
+    {
+      "input": "cmd \"#",
+      "invalid": true
+    },
+    {
+      "input": "cmd a\"'ba",
+      "invalid": true
+    },
+    {
+      "input": "cmd `#\"\r\u00e1\"` #'\n` \ra \t",
+      "invalid": true
+    },
+    {
+      "input": "cmd ",
+      "args": [
+        "cmd"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd ",
+      "args": [
+        "cmd"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd #'\r\u00e1`",
+      "invalid": true
+    },
+    {
+      "input": "cmd ' \r\u00a0\r\u00a0\u00a0\r\u00e1\\\r\u00e1\u00e1'#",
+      "args": [
+        "cmd",
+        " \r\u00a0\r\u00a0\u00a0\r\u00e1\\\r\u00e1\u00e1#"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \t\"\t`\u00a0#\n\u00e1\"",
+      "args": [
+        "cmd",
+        "\t`\u00a0#\n\u00e1"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \u0301\"\n\u0301'a``\u00e1\r$b a\t$b$\u00e1\\\u00e1\u00a0",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u00a0\n\"\r \nb\u00a0$\u00a0\u0301\n$\u00a0\u0301a",
+      "invalid": true
+    },
+    {
+      "input": "cmd \\\n\u0301\u00a0a\u00a0#`\t\t\u00e1b\u00e1\"\u0301\u0301#\\\r$'\"\u00e1",
+      "args": [
+        "cmd",
+        "\n\u0301\u00a0a\u00a0#`",
+        "\u00e1b\u00e1\u0301\u0301#\\\r$'\u00e1"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \t#\\b#`b\ra\u0301`b\n#'#\r\t\n",
+      "invalid": true
+    },
+    {
+      "input": "cmd \rb\u0301` \n\u0301a\u00e1a\r\\b'`\u00a0\u00e1\r\u0301`",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u00a0\u0301$bb\"\\ ```$\"\"\u00a0`'\"'\"#\t",
+      "invalid": true
+    },
+    {
+      "input": "cmd \r\ta\u00e1\r#\ta\t\\ab`\u0301\n\n\n$\r\"\u0301$`$\u00e1`\r\tb",
+      "invalid": true
+    },
+    {
+      "input": "cmd ",
+      "args": [
+        "cmd"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd ba'\n \\\na\\\\\n\n\r\u00a0a \u00a0\\\\\n'\r\n\u0301\u00e1#",
+      "args": [
+        "cmd",
+        "ba\n \\\na\\\\\n\n\r\u00a0a \u00a0\\\\\n",
+        "\u0301\u00e1#"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \u00e1 \u00e1\r\t\r$\"#\"",
+      "args": [
+        "cmd",
+        "\u00e1",
+        "\u00e1",
+        "$#"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \r$\t`'\u0301b\r\u00e1a\u0301\u00a0b$\n\\ `'\u00a0\u00e1\\'$",
+      "args": [
+        "cmd",
+        "$",
+        "`\u0301b\r\u00e1a\u0301\u00a0b$\n\\ `\u00a0\u00e1'$"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \\`\r`",
+      "args": [
+        "cmd",
+        "`",
+        "`"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd `\r'\u00a0\u00a0`\r'#\\\\b\\bba#\u00a0\u00e1\r```#``\t",
+      "args": [
+        "cmd",
+        "`",
+        "\u00a0\u00a0`\r#\\bbba#\u00a0\u00e1",
+        "```#``"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd #'$ \"\u00e1\r$`\t \"\u0301\u00e1\t aa\t",
+      "invalid": true
+    },
+    {
+      "input": "cmd ",
+      "args": [
+        "cmd"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \r ",
+      "args": [
+        "cmd"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd b\n#\u00e1\"\n'",
+      "invalid": true
+    },
+    {
+      "input": "cmd a\t\n\"$ `\u0301\n\u00a0\u00e1'\"'\na\r$\r\u00a0#a\\#`\u00e1\"",
+      "invalid": true
+    },
+    {
+      "input": "cmd \r",
+      "args": [
+        "cmd"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd ",
+      "args": [
+        "cmd"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd  \n\u00e1",
+      "args": [
+        "cmd",
+        "\u00e1"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \\\u0301b\\#'`$ba$$#\"\\\t \u0301b' $\\'",
+      "args": [
+        "cmd",
+        "\u0301b#`$ba$$#\"\\\t \u0301b",
+        "$'"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd `\t'\\\r\t\"\r#\u00e1#\t\t'",
+      "args": [
+        "cmd",
+        "`",
+        "\\\r\t\"\r#\u00e1#\t\t"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd `\u00a0\\'a'\r\u00a0\\\n\t\nba\u0301\r\t#\\\\b\u00a0\"\u00e1b\\#",
+      "invalid": true
+    },
+    {
+      "input": "cmd `\" \u00e1\ra'\t`b`'#",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u00e1#\"a\\\t\nb \ta\u00a0",
+      "invalid": true
+    },
+    {
+      "input": "cmd \nb'\nb\t\n\u00a0bb \"#\u00a0\u00a0\u0301\nb\nb$",
+      "invalid": true
+    },
+    {
+      "input": "cmd \t`\"a\u00a0#\"b\u00e1\u00a0\t\t\"\u00e1\"'\u0301",
+      "invalid": true
+    },
+    {
+      "input": "cmd `",
+      "args": [
+        "cmd",
+        "`"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \u00e1ba\u00e1\u00e1\\\u0301\u0301\\$b\u0301$\u00e1\\$bb\u0301#\u00a0",
+      "args": [
+        "cmd",
+        "\u00e1ba\u00e1\u00e1\u0301\u0301$b\u0301$\u00e1$bb\u0301#\u00a0"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd a$\\$`\n'b \u00e1\u00a0\u0301\u00e1 '\r'  `\"\t$`'#\u00e1\u00a0",
+      "args": [
+        "cmd",
+        "a$$`",
+        "b \u00e1\u00a0\u0301\u00e1 ",
+        "  `\"\t$`#\u00e1\u00a0"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \u00e1`\u00a0a\u00e1 '\\a`\na\u00a0\"''$\u0301 \u00e1$\"\\",
+      "invalid": true
+    },
+    {
+      "input": "cmd '\u00e1a\r `\\``a\u00a0\u00a0\n\u00e1\t",
+      "invalid": true
+    },
+    {
+      "input": "cmd $#ba`\n\"bb\u00e1#` b\"\u0301\t\u0301\n",
+      "args": [
+        "cmd",
+        "$#ba`",
+        "bb\u00e1#` b\u0301",
+        "\u0301"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \u00a0",
+      "args": [
+        "cmd",
+        "\u00a0"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd  \rb\"",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u00e1b\u00a0\t",
+      "args": [
+        "cmd",
+        "\u00e1b\u00a0"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd #\u0301#\n \t\u0301\rb\u0301a$\u00a0b",
+      "args": [
+        "cmd",
+        "#\u0301#",
+        "\u0301",
+        "b\u0301a$\u00a0b"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd b##b\u00a0\"'#\u0301 $\u00e1",
+      "invalid": true
+    },
+    {
+      "input": "cmd ''\tb\r\r\rb#b\u0301$\r\u00e1 \r $\\",
+      "invalid": true
+    },
+    {
+      "input": "cmd ``\t\"\"'\n\" ab#$\nb\n\\ \n",
+      "invalid": true
+    },
+    {
+      "input": "cmd \t\\' \u0301\t\u0301\u0301`\n  \r$b\u0301\n\\\u0301\"\t",
+      "invalid": true
+    },
+    {
+      "input": "cmd \" \r\\ ",
+      "invalid": true
+    },
+    {
+      "input": "cmd $\r`\"\u0301'# \r`\\\r",
+      "invalid": true
+    },
+    {
+      "input": "cmd   $\ta a\na$\n\\aa\\ \t\"\rb\t`",
+      "invalid": true
+    },
+    {
+      "input": "cmd \n#\r# b\u0301#b\n ",
+      "args": [
+        "cmd",
+        "#",
+        "#",
+        "b\u0301#b"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \u0301`\"a\u0301$\u0301$a\\`\t\u00e1`\"\u0301b `\\\u00e1\u00a0\"'$\u00e1\u00a0",
+      "invalid": true
+    },
+    {
+      "input": "cmd \ta\u00a0\u0301\t$\t \u0301",
+      "args": [
+        "cmd",
+        "a\u00a0\u0301",
+        "$",
+        "\u0301"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \n\t $b\ra\\`\u00a0\u00e1\u00e1",
+      "args": [
+        "cmd",
+        "$b",
+        "a`\u00a0\u00e1\u00e1"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd `\r$",
+      "args": [
+        "cmd",
+        "`",
+        "$"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \u00e1\t\u00a0$'",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u0301'#\u0301\u0301\r\u00e1`\ra\"`\\`'\r'a",
+      "invalid": true
+    },
+    {
+      "input": "cmd '$\"\n$\t\u00e1\u0301\ta\u00e1\r`'`\\'",
+      "args": [
+        "cmd",
+        "$\"\n$\t\u00e1\u0301\ta\u00e1\r``'"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd b\u0301\u00e1a##$# \n\"$#$\u00e1 b\u00e1\t",
+      "invalid": true
+    },
+    {
+      "input": "cmd #$\u00a0#a\u00e1#\r",
+      "args": [
+        "cmd",
+        "#$\u00a0#a\u00e1#"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \r`\u00e1\t\u0301",
+      "args": [
+        "cmd",
+        "`\u00e1",
+        "\u0301"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \r\u0301",
+      "args": [
+        "cmd",
+        "\u0301"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd ",
+      "args": [
+        "cmd"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \r`b`\"`a\n$\u0301\u00e1\t$b\"\n#\n\"\t\u0301\r",
+      "invalid": true
+    },
+    {
+      "input": "cmd `",
+      "args": [
+        "cmd",
+        "`"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \n\"\u00a0\u0301$\u0301'\u0301\u0301`",
+      "invalid": true
+    },
+    {
+      "input": "cmd `\u00a0\\\r`'\"\"\u00e1`\u00a0\u0301 ",
+      "invalid": true
+    },
+    {
+      "input": "cmd \ra\t\t\r\"\u00a0\r\"\t\\'a`",
+      "args": [
+        "cmd",
+        "a",
+        "\u00a0\r",
+        "'a`"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \u0301\"\u00e1\u0301a\u0301'\t\u00e1\\\"\t#`#\u00a0'",
+      "invalid": true
+    },
+    {
+      "input": "cmd $`\\\r \u00a0`'#b$\"\u00a0'\\\n",
+      "args": [
+        "cmd",
+        "$`\r",
+        "\u00a0`#b$\"\u00a0\n"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd `",
+      "args": [
+        "cmd",
+        "`"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd  $'\u0301\u00a0\n$\"'#\t",
+      "args": [
+        "cmd",
+        "$\u0301\u00a0\n$\"#"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd $\r\u00a0\\\r\"\t$\u00a0\n\\\u00a0 \u0301'\\`\u0301`# \"$b\\\t\u00a0\u00e1",
+      "args": [
+        "cmd",
+        "$",
+        "\u00a0\r\t$\u00a0\n\\\u00a0 \u0301'\\`\u0301`# $b\t\u00a0\u00e1"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd '#a'\\b`\u00e1",
+      "args": [
+        "cmd",
+        "#ab`\u00e1"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd a\\` \\a\u00a0\n\u00e1a\r'\\'\t\t\\\r\u00e1\"$\n",
+      "invalid": true
+    },
+    {
+      "input": "cmd $'\t\"#\u00e1\\\r\u0301b'\"",
+      "invalid": true
+    },
+    {
+      "input": "cmd 'a` \u0301\u00a0a\"a$\u00e1\u00a0\u00a0\u00a0 \n\n",
+      "invalid": true
+    },
+    {
+      "input": "cmd $\u00e1a\n$\u00a0\u00a0`\t\\a$a`'''",
+      "invalid": true
+    },
+    {
+      "input": "cmd ``\\\r\"\t\t`\u0301\u0301\"a\\\u00a0$\u0301$\\\t\n$`",
+      "args": [
+        "cmd",
+        "``\r\t\t`\u0301\u0301a\u00a0$\u0301$\t",
+        "$`"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \u00a0$\"\u00e1ab`\u0301$\r\"\t",
+      "args": [
+        "cmd",
+        "\u00a0$\u00e1ab`\u0301$\r"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd ' \\\n#\\`\r'\r`\r\u00e1$\u0301a\n\"\u00a0\u00e1\"\\ \u00a0\u0301 ",
+      "args": [
+        "cmd",
+        " \\\n#\\`\r",
+        "`",
+        "\u00e1$\u0301a",
+        "\u00a0\u00e1 \u00a0\u0301"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd #\\\r`\n\"\t #\u00a0'\u00a0bb '\\$\"'\\'\r\\\n\u00a0",
+      "args": [
+        "cmd",
+        "#\r`",
+        "\t #\u00a0'\u00a0bb '\\$\\",
+        "\n\u00a0"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd a\r",
+      "args": [
+        "cmd",
+        "a"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \n\u00a0\n  \u0301''\n\tb\n\\\" b``b\n'",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u00a0#\u00a0 \u0301\u0301`\\\r'\\\u00a0\\\u00a0a\u00e1\"",
+      "invalid": true
+    },
+    {
+      "input": "cmd \"'\u00a0\u0301\u00a0\u00e1\\\"#\u00a0\\ `\u00a0\ta\u00a0\t",
+      "invalid": true
+    },
+    {
+      "input": "cmd  '\u00e1\r\n",
+      "invalid": true
+    },
+    {
+      "input": "cmd bb\r\u00a0\n\u0301\u00a0a\n\u0301\"\u0301aaa\u00a0b\r\\`\\` \nb\u00e1#\\",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u00a0#\u00e1#\n#\u00e1a\\ \u00e1\u00e1\"\r \\$\u00e1\\#\\",
+      "invalid": true
+    },
+    {
+      "input": "cmd #'\"`\taa\u00a0\"\\\\'\"\"\t",
+      "args": [
+        "cmd",
+        "#\"`\taa\u00a0\"\\\\"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd  \u0301\"##a\u00e1$\u00a0b \u00e1\u00a0\t\tb$\u00a0b`\u00e1",
+      "invalid": true
+    },
+    {
+      "input": "cmd ",
+      "args": [
+        "cmd"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \\# '`a\t\\\u00a0\r\t\"\"\u0301'",
+      "args": [
+        "cmd",
+        "#",
+        "`a\t\\\u00a0\r\t\"\"\u0301"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \\\u0301\"a\n'a$\u00a0\n\r\n\u00a0#\u00a0",
+      "invalid": true
+    },
+    {
+      "input": "cmd \n\\`\u00e1\t'`\u0301a\r\u00e1\"\t\r'b\n\u00a0\\\t\\\u00e1\\",
+      "invalid": true
+    },
+    {
+      "input": "cmd #\t \"'\r#\u0301\t\ta\u00e1 \"b",
+      "args": [
+        "cmd",
+        "#",
+        "'\r#\u0301\t\ta\u00e1 b"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd b\u0301'\t#\u00a0\t",
+      "invalid": true
+    },
+    {
+      "input": "cmd `\u00a0 $$\n'a\u00e1\n\t\t#'`\n`b\t'\t\u0301\u0301a",
+      "invalid": true
+    },
+    {
+      "input": "cmd \"'$\tb",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u0301$ba\"'\n\"'$ ",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u00a0\u00e1`\u0301\n\na\u0301\u00e1a\u00a0'\r''\t\rb\\\u0301\t\"\\\u0301\u00e1a\u0301",
+      "invalid": true
+    },
+    {
+      "input": "cmd '$\u00a0\r\r\t$##\"b#\r\n$$a\\\r\"\u0301\"\r \u00e1\"\"\u0301",
+      "invalid": true
+    },
+    {
+      "input": "cmd \n\ta`\u0301",
+      "args": [
+        "cmd",
+        "a`\u0301"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd b  \u00e1`a`\"\r\u0301\r\n\u00e1\\\u00e1\"\t\r\n\u0301 \\ \t\u00e1 '\r\"",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u0301\r\u0301\n\u0301\n\t \"a\\",
+      "invalid": true
+    },
+    {
+      "input": "cmd \n\"\nab\r\\\u0301a$a\r \r\t`$'\\\u00a0\n",
+      "invalid": true
+    },
+    {
+      "input": "cmd \n \r$'\n\n'\u0301\" \u00e1 \u00e1",
+      "invalid": true
+    },
+    {
+      "input": "cmd `",
+      "args": [
+        "cmd",
+        "`"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \\ \u00a0\u00e1\\\n'\\\u00e1\u0301'\u0301$\\\\a#b",
+      "args": [
+        "cmd",
+        " \u00a0\u00e1\n\\\u00e1\u0301\u0301$\\a#b"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \t\"a\u0301$ab#\u0301\r\" \u00a0`'\u0301",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u00e1\"\u00e1\"\u00e1 $b\t",
+      "args": [
+        "cmd",
+        "\u00e1\u00e1\u00e1",
+        "$b"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \u00a0\"\r\n'b",
+      "invalid": true
+    },
+    {
+      "input": "cmd \n\r'\n\r\t#\r\"'\u00e1$\u00e1\n$` `\r\t\u00e1\na\n'",
+      "invalid": true
+    },
+    {
+      "input": "cmd `\u00e1 \u00a0#\u00a0\u0301\u00e1",
+      "args": [
+        "cmd",
+        "`\u00e1",
+        "\u00a0#\u00a0\u0301\u00e1"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \u00e1\r$$ $\n\u00e1bb\n\u0301b\u00e1\n#\r\\#\r\t' \t\t\t\tb",
+      "invalid": true
+    },
+    {
+      "input": "cmd \\\"a\t\u00a0#\u00e1$a`\u00a0",
+      "args": [
+        "cmd",
+        "\"a",
+        "\u00a0#\u00e1$a`\u00a0"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \n`\n\t \"a``\"a$\rb \r\\$$b\u00a0\t\\",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u0301\\\"\r'\u00e1\\\t#ba\t\"'\"\u00e1`\"a\n\n",
+      "args": [
+        "cmd",
+        "\u0301\"",
+        "\u00e1\\\t#ba\t\"\u00e1`a"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \u00a0\u0301b \u0301'`",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u00e1``\\#\u00e1\"#\\#\"\"\t$$\u00e1`$",
+      "invalid": true
+    },
+    {
+      "input": "cmd \nb\n\n' \u0301#aa\r\u00e1`b#$ \\\t\n#\u0301\r#\\\n\u00e1",
+      "invalid": true
+    },
+    {
+      "input": "cmd a\u00e1'\u00e1'\u00a0",
+      "args": [
+        "cmd",
+        "a\u00e1\u00e1\u00a0"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd #`\n\u00a0#\t\t\ta\tb\"b\u00a0\u0301 b$`\"`\n\\\n",
+      "args": [
+        "cmd",
+        "#`",
+        "\u00a0#",
+        "a",
+        "bb\u00a0\u0301 b$``",
+        "\n"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd b\u0301\"",
+      "invalid": true
+    },
+    {
+      "input": "cmd '\r$\n\u00a0$\"\r\n \"'\u00e1\r`\u00a0\u00e1",
+      "args": [
+        "cmd",
+        "\r$\n\u00a0$\"\r\n \"\u00e1",
+        "`\u00a0\u00e1"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \\\r#\"\u0301#\r\u0301a`a\"#\\ bb\u00a0\u0301\\a\"",
+      "invalid": true
+    },
+    {
+      "input": "cmd '\rb``\tb\u0301\u00a0",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u00e1\"\\\tb\u00e1\u00e1$a\n\u0301b\\\u00e1",
+      "invalid": true
+    },
+    {
+      "input": "cmd a\\`\\\rb$$'\\\"' \u0301#\n\r \\",
+      "invalid": true
+    },
+    {
+      "input": "cmd \r$\n\u0301'\n`$#\r' ",
+      "args": [
+        "cmd",
+        "$",
+        "\u0301\n`$#\r"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \"\n a\u0301`\u00a0\"\rb\"\\'",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u00a0\n\u0301 `\n\ta\u0301\u0301b\\\u0301$\"$a'\u0301\u00a0a\\a#'\u0301a",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u00a0 \\`a\n`\t  \u00a0\r\n\"#'''\\\tbb\t\u0301\\\u0301",
+      "invalid": true
+    },
+    {
+      "input": "cmd a\u00e1\u0301$`\u00a0\n\t`",
+      "args": [
+        "cmd",
+        "a\u00e1\u0301$`\u00a0",
+        "`"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \t\"ab\u00a0#\u00e1 \\##\r\r\\``b\"",
+      "args": [
+        "cmd",
+        "ab\u00a0#\u00e1 \\##\r\r\\``b"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd  a#b\t\t\u00a0``'$\n\nb` \u00a0\u0301 \t`\n\\",
+      "invalid": true
+    },
+    {
+      "input": "cmd \\a'\\\r\u00e1#\u00a0b'\"a''aa$\u00e1b",
+      "invalid": true
+    },
+    {
+      "input": "cmd b\u00a0",
+      "args": [
+        "cmd",
+        "b\u00a0"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \n#\u0301\rb\u00a0\"#\\$\u0301b\u0301a\"\u00e1",
+      "args": [
+        "cmd",
+        "#\u0301",
+        "b\u00a0#\\$\u0301b\u0301a\u00e1"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd b\n$\n\u0301\r\r\\\n\u00a0\rb\t\u0301\\b$\u0301\t\t$",
+      "args": [
+        "cmd",
+        "b",
+        "$",
+        "\u0301",
+        "\n\u00a0",
+        "b",
+        "\u0301b$\u0301",
+        "$"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \"$\\b\u00e1\u00a0\\\t`$'\u0301$\n\t\"",
+      "args": [
+        "cmd",
+        "$\\b\u00e1\u00a0\\\t`$'\u0301$\n\t"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \\'\u00e1\u00a0#\"\n\r\r\u00e1a\"\r\n\r\u0301\rb\u00e1'",
+      "invalid": true
+    },
+    {
+      "input": "cmd \r$\"\r`\r`aa\" \n'\u0301\t`#\t$'\u00e1\r`\"",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u00e1 \r`$ \\a\n\\\\\u00e1\u00e1\n\\ \t\\\u0301\n\u00e1\na\u00e1a$ \u00a0",
+      "args": [
+        "cmd",
+        "\u00e1",
+        "`$",
+        "a",
+        "\\\u00e1\u00e1",
+        " ",
+        "\u0301",
+        "\u00e1",
+        "a\u00e1a$",
+        "\u00a0"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd $ \\\"\n\"\r",
+      "invalid": true
+    },
+    {
+      "input": "cmd  \t#\u00a0\n\u0301\\\t`#`\u00a0\u00e1b$\"\u00e1$`\n`#\u0301\u00a0 \"",
+      "args": [
+        "cmd",
+        "#\u00a0",
+        "\u0301\t`#`\u00a0\u00e1b$\u00e1$`\n`#\u0301\u00a0 "
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \r'\u00a0\n#\t`\"\t#b`\u0301\t\r\\ \n\"\"#\u00a0\\a\"\" \r\u00e1",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u00e1a'\"\r \"\u0301$#`\n\n##b\\a `\r``",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u00e1a\u00a0$` \t\\\u00e1ba",
+      "args": [
+        "cmd",
+        "\u00e1a\u00a0$`",
+        "\u00e1ba"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd  # \u00a0\u0301\n\u0301\\$\"\n\u0301a\"\r\u00e1\u00a0#b\u00e1\r'b'`\u00e1$'a",
+      "invalid": true
+    },
+    {
+      "input": "cmd \"\r`\\\u00a0\u00e1\u0301 b\t\u00e1\u00e1#\r\t\t\"a'\tb\u00a0a\u0301\r''\"",
+      "invalid": true
+    },
+    {
+      "input": "cmd $ab\r\n\r\t\n \u0301$\n \u00e1\u00a0\u00e1\t\u00e1`\u00a0\\'\u00a0\u00a0\t $",
+      "args": [
+        "cmd",
+        "$ab",
+        "\u0301$",
+        "\u00e1\u00a0\u00e1",
+        "\u00e1`\u00a0'\u00a0\u00a0",
+        "$"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \n#\u0301a\u00a0b'",
+      "invalid": true
+    },
+    {
+      "input": "cmd  \u00a0b\u0301\r\r\u00e1a\u00e1\n'\u0301`\t'b\\$a\"a'",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u00a0\t\"\r#\u00e1'a\u00a0$\u00a0a\u00a0\u00a0'`\\ \t",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u0301\\ \u00a0\u00a0\u00e1a\u00e1\t\r\u0301\" b' \"\u00a0\u0301`a\"b\u00a0\u00e1'\\\"",
+      "invalid": true
+    },
+    {
+      "input": "cmd \n\u0301 \\'\u00a0\raab` \\b\ra\t\ta\n``\t\u00e1\u0301\u00e1\n",
+      "args": [
+        "cmd",
+        "\u0301",
+        "'\u00a0",
+        "aab`",
+        "b",
+        "a",
+        "a",
+        "``",
+        "\u00e1\u0301\u00e1"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd #a\u00e1'b\nbaa\t'\na\u00e1\n\r \r\"\u00e1#\n",
+      "invalid": true
+    },
+    {
+      "input": "cmd `$\t$\u00a0\u0301\u0301\r\"\t\u00a0##",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u00a0'a bb\\'a\t#`\n\r'a a",
+      "invalid": true
+    },
+    {
+      "input": "cmd \r\r\u0301a\\\n\"$\"\n`#",
+      "args": [
+        "cmd",
+        "\u0301a\n$",
+        "`#"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd ' ",
+      "invalid": true
+    },
+    {
+      "input": "cmd \\#\"b\\\n#\u00e1' a\r b\r`\"\u0301\"\"`\u00e1a\"",
+      "invalid": true
+    },
+    {
+      "input": "cmd \r\u00e1'\\\u00a0\r\u00a0`#\n\\a\u00e1''\u00e1\r\\#",
+      "invalid": true
+    },
+    {
+      "input": "cmd \r\"\r\u00e1\"\u0301 \n\\\n $\na\u00e1 \u00e1`\t$b\"\r\n",
+      "invalid": true
+    },
+    {
+      "input": "cmd \t\r\r\ra \t\n\u0301\"\r",
+      "invalid": true
+    },
+    {
+      "input": "cmd '`\u00a0`",
+      "invalid": true
+    },
+    {
+      "input": "cmd b'\u00e1\"\u00a0\u0301\u00e1\"#\n \u0301 #\\`\n \u00a0 b$$\ta ",
+      "invalid": true
+    },
+    {
+      "input": "cmd '\u00a0\t\u00a0\"\"\u0301",
+      "invalid": true
+    },
+    {
+      "input": "cmd \na`\n\tb#a",
+      "args": [
+        "cmd",
+        "a`",
+        "b#a"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd $`\"b \"$'",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u00a0\n$b`\r#\"$a\u00e1\u0301\tb#`''`$#\\a$$b",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u00e1\t\u00e1\u00a0\t\u00a0a'\\b\t\r\u00e1$b\r'a #\n \u0301\n\rb\\\r\t",
+      "args": [
+        "cmd",
+        "\u00e1",
+        "\u00e1\u00a0",
+        "\u00a0a\\b\t\r\u00e1$b\ra",
+        "#",
+        "\u0301",
+        "b\r"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \" '\u00a0b'`b\u00a0 \n\t\t#'\t",
+      "invalid": true
+    },
+    {
+      "input": "cmd 'b\n##\\aa' #\\\u0301\u00e1\t \n\\\u00e1",
+      "args": [
+        "cmd",
+        "b\n##\\aa",
+        "#\u0301\u00e1",
+        "\u00e1"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \t$\"\u0301\\\u00e1\"\u00e1b\"'\t'\u00e1$$\n\"`$\r$ # \u0301",
+      "args": [
+        "cmd",
+        "$\u0301\\\u00e1\u00e1b'\t'\u00e1$$\n`$",
+        "$",
+        "#",
+        "\u0301"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd `a",
+      "args": [
+        "cmd",
+        "`a"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \t\u00e1`\u00e1\u00e1\u00e1\\\u00e1b'$# '\u00a0\"\u00e1\"\\\u0301\t'\t\n$$",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u00e1`\n\n\t\u0301\u0301\t'",
+      "invalid": true
+    },
+    {
+      "input": "cmd ##ba#aab\t\u0301\u00e1 ",
+      "args": [
+        "cmd",
+        "##ba#aab",
+        "\u0301\u00e1"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \"\u0301\u0301\"\r #\tb\\$ab$\"\t'#\u00a0$\u00a0''\"# \r\r",
+      "args": [
+        "cmd",
+        "\u0301\u0301",
+        "#",
+        "b$ab$\t'#\u00a0$\u00a0''#"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd a` '\t#b\u00a0\t$\u0301' \r`  a\\`\\",
+      "invalid": true
+    },
+    {
+      "input": "cmd #'`'",
+      "args": [
+        "cmd",
+        "#`"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \r\u00e1\r\\\t\\\"",
+      "args": [
+        "cmd",
+        "\u00e1",
+        "\t\""
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd  \n\u00e1\u00a0a\u0301 \u00e1$\u00e1 \\\"\"\t\u0301\u0301\" b'\"",
+      "invalid": true
+    },
+    {
+      "input": "cmd a\n\\\"\\\"a\\\\\u0301\u00e1a\"aa#'\t\t\u00a0`\n\u00a0#",
+      "invalid": true
+    },
+    {
+      "input": "cmd \r\r\t\n'`\u00e1\t\t$$\u00e1\u00a0\"\t\t\n\u00a0$\\",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u0301\\\"",
+      "args": [
+        "cmd",
+        "\u0301\""
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \u0301`\na`$\r'aa'$ \"\u00e1\u00e1\u0301\r\n\u00e1\t\u00e1'$\n",
+      "invalid": true
+    },
+    {
+      "input": "cmd \"\r\na\"b\r\\\n'\u0301`\u00e1\u0301\n\n#\n\"b \u0301\nbb\n\\",
+      "invalid": true
+    },
+    {
+      "input": "cmd `a\n'`'\"$b\r$\ta\u0301",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u00a0\u00a0#\t#'\n\u0301a`\"b\"'\u0301' \\#'\"\r`'\t\n\u00e1a$",
+      "invalid": true
+    },
+    {
+      "input": "cmd a\u00a0\u0301a\\\t$\\'  \u00e1 \t\"\u00a0#\"\r\"\u00e1\"\r#bb\u00e1'",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u0301 \na\r\u00e1\n'\u00e1\u0301`\u00a0",
+      "invalid": true
+    },
+    {
+      "input": "cmd #`$ \u0301\u00a0\r`'\n\u00e1a \r``\n\u00a0a\u00e1\r\u0301\rb",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u00e1\\\\#\tb\\\u00a0\\`\r   \" $\na\"ab '\"\"`",
+      "invalid": true
+    },
+    {
+      "input": "cmd ` \u0301\\\\\u0301\t\tb",
+      "args": [
+        "cmd",
+        "`",
+        "\u0301\\\u0301",
+        "b"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \\\\\\b#\u00e1\r$\n\r",
+      "args": [
+        "cmd",
+        "\\b#\u00e1",
+        "$"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd b\u00e1",
+      "args": [
+        "cmd",
+        "b\u00e1"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \u0301\u00e1#\\b\t''\r'\\\n\"\\\u00e1$\r $\ra#$\u00e1\u00e1b#a",
+      "invalid": true
+    },
+    {
+      "input": "cmd \\\u0301#\t$ #'\u00a0\"#\u00a0\r\u00e1\u0301b#\\#\"",
+      "invalid": true
+    },
+    {
+      "input": "cmd \t\rbb``a\u0301a\"\tb\u0301`$b'\r\r\t$\t\u00a0",
+      "invalid": true
+    },
+    {
+      "input": "cmd ' \\\t\r'\u00e1\u00a0a\n $'",
+      "invalid": true
+    },
+    {
+      "input": "cmd  bb\\`\u00e1\\\u0301\u00a0\u00a0$`b \u00e1\r #",
+      "args": [
+        "cmd",
+        "bb`\u00e1\u0301\u00a0\u00a0$`b",
+        "\u00e1",
+        "#"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd $\t\u00a0b`'#\\\\b\rab\u00e1\\'\\\n`\t`",
+      "args": [
+        "cmd",
+        "$",
+        "\u00a0b`#\\\\b\rab\u00e1\\\n`",
+        "`"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd 'b\t\r`$\t\t``#`\"\u0301\r\r",
+      "invalid": true
+    },
+    {
+      "input": "cmd  a\u00a0\t\t`\u00a0\r'`",
+      "invalid": true
+    },
+    {
+      "input": "cmd \t\rb\u0301\u0301 `\"$\\\t\n\\`\u0301\u00e1b \u00a0b\r$\u00e1b\t",
+      "invalid": true
+    },
+    {
+      "input": "cmd \t'\u0301$ \u0301`\r'\u00a0\u00a0\tbab\n\t\n`\t\r",
+      "args": [
+        "cmd",
+        "\u0301$ \u0301`\r\u00a0\u00a0",
+        "bab",
+        "`"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \u0301 \u0301\r \" \u00a0\t\u0301\u0301`$$ # \r\u00a0$#\u00a0b`",
+      "invalid": true
+    },
+    {
+      "input": "cmd a$\ta\"`\\'\n\u00a0aa`#\n$\\\u00e1 \t#",
+      "invalid": true
+    },
+    {
+      "input": "cmd \\a`\u00e1",
+      "args": [
+        "cmd",
+        "a`\u00e1"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd #\u00e1\u00e1'\r\u0301#\n\u0301`\rb\n\r\tb\u00a0a",
+      "invalid": true
+    },
+    {
+      "input": "cmd \r\r\u00e1",
+      "args": [
+        "cmd",
+        "\u00e1"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd a'\u00a0\u00a0$\\\u00e1\r\n\\\u00a0'\u0301\u00e1\u00a0a\u0301\r\u00e1\r\"#\r$\\\u00a0",
+      "invalid": true
+    },
+    {
+      "input": "cmd \\\"\t\u00a0\u00e1$#\u00a0`\u00a0 \t\u0301",
+      "args": [
+        "cmd",
+        "\"",
+        "\u00a0\u00e1$#\u00a0`\u00a0",
+        "\u0301"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \\'\\ \n\u00a0`\n\u00e1\u0301#$\"\u00e1a$`a\u00e1\\$\u00e1\u00e1\u00a0a",
+      "invalid": true
+    },
+    {
+      "input": "cmd $\n\t\u0301b \\\na$$$\"\u00e1",
+      "invalid": true
+    },
+    {
+      "input": "cmd ",
+      "args": [
+        "cmd"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd a\u00a0#'\"'# \\$b\\#\\\u00a0",
+      "args": [
+        "cmd",
+        "a\u00a0#\"#",
+        "$b#\u00a0"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \\\r$ #\u00a0\t'`\n'b$aa\\# `\r\\a\t\n\n",
+      "args": [
+        "cmd",
+        "\r$",
+        "#\u00a0",
+        "`\nb$aa#",
+        "`",
+        "a"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \u0301\n\"\r\u0301\u00e1\"\r$ \n#`",
+      "args": [
+        "cmd",
+        "\u0301",
+        "\r\u0301\u00e1",
+        "$",
+        "#`"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \r\t\u00e1\r\u00a0 \t\\\r\t\r\tab\u0301\u0301\\$$\"\"",
+      "args": [
+        "cmd",
+        "\u00e1",
+        "\u00a0",
+        "\r",
+        "ab\u0301\u0301$$"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd ab\tb#\tb$\r#a\"' $\n\u00e1\u00e1# '",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u00e1\t\\`\\$\u0301#`\u00a0\t a\\\\\u0301#\u00e1' \r#\u00a0\t\u0301\n\u00a0",
+      "invalid": true
+    },
+    {
+      "input": "cmd \"\u00e1\n\t \u00a0\r\u0301'' \n\ra\n` b",
+      "invalid": true
+    },
+    {
+      "input": "cmd #\u00e1\n\u00a0\t\u00e1\r \"\\$``aa\n\u00a0",
+      "invalid": true
+    },
+    {
+      "input": "cmd ",
+      "args": [
+        "cmd"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \u00a0`\"\n $\\\\b`\t\t\tb'\"\r\u00e1",
+      "args": [
+        "cmd",
+        "\u00a0`\n $\\b`\t\t\tb'",
+        "\u00e1"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \u00e1aab\t\"aa\u0301\u0301'\t'b\t\n",
+      "invalid": true
+    },
+    {
+      "input": "cmd \t'\u00e1\u0301$",
+      "invalid": true
+    },
+    {
+      "input": "cmd \t\\'\u00a0\u00a0\\\ra   \\\r ba\u0301` '\"\t \rb\\",
+      "invalid": true
+    },
+    {
+      "input": "cmd a$'\"\u00e1`$a`b\u00a0$\r#",
+      "invalid": true
+    },
+    {
+      "input": "cmd \r ",
+      "args": [
+        "cmd"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \u00a0\\b\"$\\\u0301'\t\t\u00a0a\r\u00e1ab\u00a0\ra\u0301'''\n\ta\u0301#",
+      "invalid": true
+    },
+    {
+      "input": "cmd a\u00e1'\u00e1\r\u00a0\r\u0301'\u00e1b$\"\"b $a\t'\ta\u00a0\u0301\u0301`\r\"",
+      "invalid": true
+    },
+    {
+      "input": "cmd $\n\"\r\u00a0",
+      "invalid": true
+    },
+    {
+      "input": "cmd a$\u00a0\"``  \"\t'",
+      "invalid": true
+    },
+    {
+      "input": "cmd `#\t\ra`\u00e1'\u00e1\\aa\r \r\u0301\"'a  \r\t$\\`$\r",
+      "args": [
+        "cmd",
+        "`#",
+        "a`\u00e1\u00e1\\aa\r \r\u0301\"a",
+        "$`$"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \" #\u00a0\r\n \r '\u00a0#`\t#\\\t\u00a0\r",
+      "invalid": true
+    },
+    {
+      "input": "cmd \n\u0301\\b\"\n\\$bb\u00a0#\n\" \u0301''a\u00e1\t ",
+      "args": [
+        "cmd",
+        "\u0301b\n\\$bb\u00a0#\n",
+        "\u0301a\u00e1"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \u00e1  \u00a0\\\\\u00a0 `a",
+      "args": [
+        "cmd",
+        "\u00e1",
+        "\u00a0\\\u00a0",
+        "`a"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd '\u00a0\\\n\u00a0\u00a0'\\'\t\n\t\t\\\u00a0#\n `\u0301\r\u0301`'\"",
+      "invalid": true
+    },
+    {
+      "input": "cmd `b\ta\"#$ \\\"\u0301\t\nb\"\\'\t\u00e1\\\\b\u00e1b\\b\u00e1",
+      "args": [
+        "cmd",
+        "`b",
+        "a#$ \"\u0301\t\nb'",
+        "\u00e1\\b\u00e1bb\u00e1"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \u0301 \u0301\u00e1\u0301",
+      "args": [
+        "cmd",
+        "\u0301",
+        "\u0301\u00e1\u0301"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd #\"\"a\"\r\\\"\"\\\u00e1\u00e1\u00a0\u0301$",
+      "args": [
+        "cmd",
+        "#a\r\"\u00e1\u00e1\u00a0\u0301$"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd $\\\rb\t\\   ``#\u0301b``\n\\b#\t\u00e1\t\n$\"\u0301",
+      "invalid": true
+    },
+    {
+      "input": "cmd \n'a\u00e1\"\\`",
+      "invalid": true
+    },
+    {
+      "input": "cmd b$b\\aa\t\u00a0\\'a'\n\"\"\u00e1\n\\",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u0301a\"\u00a0\t\r\"'\r \r\\\n\"\"\u00e1\u00e1b\u00e1\u0301a\"\u00e1\r\n\u0301\u00e1$",
+      "invalid": true
+    },
+    {
+      "input": "cmd  \\$\u00a0\u0301\n \n\n\r\n\u0301 $'ab\u00a0#\r#\n$b",
+      "invalid": true
+    },
+    {
+      "input": "cmd ` $\u00a0b #a`\u00a0b`\\b'\t\\\t$",
+      "invalid": true
+    },
+    {
+      "input": "cmd b#a\n\u00e1\u0301\"\\b`$b$\u0301a$# \u00a0\n",
+      "invalid": true
+    },
+    {
+      "input": "cmd \\\\\u0301\u0301'`\u00a0\u00a0$",
+      "invalid": true
+    },
+    {
+      "input": "cmd \r\u00a0 #\u00e1\\#\\\n\"\r\"b\t\u00a0$b\r\u00e1\u00e1\tb``",
+      "args": [
+        "cmd",
+        "\u00a0",
+        "#\u00e1#\n\rb",
+        "\u00a0$b",
+        "\u00e1\u00e1",
+        "b``"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \u0301\r\na#\r$\r$\t#\tb\n\\\t\\'\u00a0$'\u00e1#\n`\u00a0b",
+      "invalid": true
+    },
+    {
+      "input": "cmd \"\r#b'a",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u0301b\n' \u00e1\u0301\u00a0",
+      "invalid": true
+    },
+    {
+      "input": "cmd \"\u0301'\n",
+      "invalid": true
+    },
+    {
+      "input": "cmd  '#\"",
+      "invalid": true
+    },
+    {
+      "input": "cmd \\\n\u00a0\t\r \"'bb'\\\u00e1$",
+      "invalid": true
+    },
+    {
+      "input": "cmd \\#$a\u00e1\\\r\\\n\u00a0\u0301#\t# \u00e1a#\u0301 \r\u00e1 `\r\\\u0301#a",
+      "args": [
+        "cmd",
+        "#$a\u00e1\r\n\u00a0\u0301#",
+        "#",
+        "\u00e1a#\u0301",
+        "\u00e1",
+        "`",
+        "\u0301#a"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \"\u00a0 \u00e1\t\n#'` `\u00a0\u00e1''\u00e1\u00a0'\u0301`\r'\t\n\u00e1$",
+      "invalid": true
+    },
+    {
+      "input": "cmd \\\r$#\n\t`\u0301\t",
+      "args": [
+        "cmd",
+        "\r$#",
+        "`\u0301"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \u0301  \n#\u0301",
+      "args": [
+        "cmd",
+        "\u0301",
+        "#\u0301"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \n\u00e1\"\t#\"\u0301\"b\\\r\"'",
+      "invalid": true
+    },
+    {
+      "input": "cmd  \t\\\u00a0",
+      "args": [
+        "cmd",
+        "\u00a0"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \r$\n\t \t\r`b` \\",
+      "invalid": true
+    },
+    {
+      "input": "cmd b\"",
+      "invalid": true
+    },
+    {
+      "input": "cmd ''\u00e1 \t \u0301$\\`a\n`b  `b$\u0301 \u0301\u0301\" \n",
+      "invalid": true
+    },
+    {
+      "input": "cmd  \n`#\t\u00e1\"\t\t\r\t'b#\u00a0' \"\u0301\n\\\t'\u0301\u00a0 `$a",
+      "invalid": true
+    },
+    {
+      "input": "cmd '`\u00e1\u00a0$b\u0301`\\ba\u00e1\tb\u0301'\u00a0\n\"\r'\\'`\n",
+      "invalid": true
+    },
+    {
+      "input": "cmd #\n\n\u0301bb \u00e1\t\u00a0\u00e1\ra\u00a0a 'b\r",
+      "invalid": true
+    },
+    {
+      "input": "cmd \n\u0301$ba\r\u00a0\n'\\\r\u00a0\n \\\t`$a\"$#$\t#\\#$",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u00e1\"`a`\u00e1#\u00e1\u0301\u00a0$ ",
+      "invalid": true
+    },
+    {
+      "input": "cmd \r\"b \n#\u0301\u00e1##a#\u00a0b#\u00a0\\a",
+      "invalid": true
+    },
+    {
+      "input": "cmd \r",
+      "args": [
+        "cmd"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \"\u0301`\n$\n\u00e1#\"\\\na\n`\r\u00a0 '\r##",
+      "invalid": true
+    },
+    {
+      "input": "cmd \\b\\\"b'\u00a0",
+      "invalid": true
+    },
+    {
+      "input": "cmd \\\\\"a\n$\u00a0#$\n\u00e1a",
+      "invalid": true
+    },
+    {
+      "input": "cmd $\u00a0 \\\u0301\ra'\u00e1\r\t'\u0301\\\n\u0301\u0301\u00a0\n\"\u00e1`",
+      "invalid": true
+    },
+    {
+      "input": "cmd \n",
+      "args": [
+        "cmd"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd b\u0301\n\r\u00e1b",
+      "args": [
+        "cmd",
+        "b\u0301",
+        "\u00e1b"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd ' \u00e1\u00e1b$\u00a0`'\r\"\"a\u00e1\n'\" \n\"\u00e1\"`\t#\t$\t",
+      "invalid": true
+    },
+    {
+      "input": "cmd  \u00a0a\u00e1\\\na`\\#\"\\\nb\n\"\t`b\u00e1'$\\",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u00e1#\u00e1\u00a0#\u00e1\u00a0\n\t$$",
+      "args": [
+        "cmd",
+        "\u00e1#\u00e1\u00a0#\u00e1\u00a0",
+        "$$"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \n'``\\",
+      "invalid": true
+    },
+    {
+      "input": "cmd #\n#'\n\u0301\\\\",
+      "invalid": true
+    },
+    {
+      "input": "cmd a",
+      "args": [
+        "cmd",
+        "a"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \\\u0301\"a''\u00a0`\n$\"`$b\u00a0\u0301 \u00a0\na",
+      "args": [
+        "cmd",
+        "\u0301a''\u00a0`\n$`$b\u00a0\u0301",
+        "\u00a0",
+        "a"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \rb\\\\a\r\u00e1",
+      "args": [
+        "cmd",
+        "b\\a",
+        "\u00e1"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \"\"\t\r",
+      "args": [
+        "cmd",
+        ""
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd   \u00a0\t`a\r\r\\\u00a0\t b\u00a0\n\u00e1",
+      "args": [
+        "cmd",
+        "\u00a0",
+        "`a",
+        "\u00a0",
+        "b\u00a0",
+        "\u00e1"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd a\n\t\r\u00a0\"\u00e1\r`##",
+      "invalid": true
+    },
+    {
+      "input": "cmd \"$$\u00e1\r$'\t\t#b\\\u0301\u00a0 ",
+      "invalid": true
+    },
+    {
+      "input": "cmd b",
+      "args": [
+        "cmd",
+        "b"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd $ ",
+      "args": [
+        "cmd",
+        "$"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \r\u00a0b\" \u00a0\u00e1b",
+      "invalid": true
+    },
+    {
+      "input": "cmd $\"\t\\b\u00e1  \u00a0b\t\n\u00a0$\u0301a\r\\#\n'` `a'\\",
+      "invalid": true
+    },
+    {
+      "input": "cmd   \u0301`$#\\\r`$\u00a0a\r\r\\` \t\u00a0\n\t \u00a0ab$#",
+      "args": [
+        "cmd",
+        "\u0301`$#\r`$\u00a0a",
+        "`",
+        "\u00a0",
+        "\u00a0ab$#"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \u00a0\"b`b\ra\\\\#\\\u00a0\\#\t'\n\u00a0'aa",
+      "invalid": true
+    },
+    {
+      "input": "cmd \t#' a\t\"\u00e1\r\r\u00a0\t\u00e1\\\\\u0301\t\nb\"$b\\",
+      "invalid": true
+    },
+    {
+      "input": "cmd \t\"\"\n",
+      "args": [
+        "cmd",
+        ""
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd #\\\u0301\r \"`$\\ b\n\\b\u00e1\n#b#$\u00a0",
+      "invalid": true
+    },
+    {
+      "input": "cmd ``\n\u00e1$\u0301`\u0301 $\rab`b",
+      "args": [
+        "cmd",
+        "``",
+        "\u00e1$\u0301`\u0301",
+        "$",
+        "ab`b"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \u00e1\u00a0#\n\\\r ",
+      "args": [
+        "cmd",
+        "\u00e1\u00a0#",
+        "\r"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \u00a0\" $\r\"\rb\r\t\u00a0\u00a0\t`\"\r$\rb'\u00a0\"\n",
+      "args": [
+        "cmd",
+        "\u00a0 $\r",
+        "b",
+        "\u00a0\u00a0",
+        "`\r$\rb'\u00a0"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd `\t\n`a\u0301a\" \u0301",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u0301'\"b\u00e1\u00e1\\\t\n\r\\b\ta\n\u00a0\u00e1`\t\t\u00a0\rb`#'",
+      "args": [
+        "cmd",
+        "\u0301\"b\u00e1\u00e1\\\t\n\r\\b\ta\n\u00a0\u00e1`\t\t\u00a0\rb`#"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd  \"\u00a0\\ \n\t\u0301\t#a\"$$\u00a0\u00e1\u0301\r\t'\t$\n",
+      "invalid": true
+    },
+    {
+      "input": "cmd b\r#`\t\u0301$\r`\r\r `#`'#\n\u00e1 \t\r\"`\\\u0301#\u0301`",
+      "invalid": true
+    },
+    {
+      "input": "cmd b`\r`\n$\r# \u00e1\\`\t\u00e1bb\n\u0301\r``\r''\"\u0301",
+      "invalid": true
+    },
+    {
+      "input": "cmd  \u00e1\r`\u0301\u00e1\"\n'\u00a0\u0301\\\\\" \n",
+      "args": [
+        "cmd",
+        "\u00e1",
+        "`\u0301\u00e1\n'\u00a0\u0301\\"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \n`###'\u00a0b\u00a0\r\t $'\u0301 `#$\n",
+      "args": [
+        "cmd",
+        "`###\u00a0b\u00a0\r\t $\u0301",
+        "`#$"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd b\n\u0301\"a\r\\\u00e1\n\"\u00e1",
+      "args": [
+        "cmd",
+        "b",
+        "\u0301a\r\\\u00e1\n\u00e1"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \u0301",
+      "args": [
+        "cmd",
+        "\u0301"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd `\\\t$\u0301\\\u00e1#\u00e1\t'\r\t$\r \u00a0\u0301b\r\n",
+      "invalid": true
+    },
+    {
+      "input": "cmd \na\u00e1'a\u0301\u00a0 b#\n\"$a'\t\"\r\"`",
+      "args": [
+        "cmd",
+        "a\u00e1a\u0301\u00a0 b#\n\"$a",
+        "\r`"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \u00a0\u0301\"",
+      "invalid": true
+    },
+    {
+      "input": "cmd \\`\t\"$'\ta`\u00e1$ ",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u0301a\n\"\\b\t'\u00a0#'`$\t",
+      "invalid": true
+    },
+    {
+      "input": "cmd '`$\n#\\$\r`\u0301\t\u0301\u00e1 \u0301\r\u00a0\t$a\u00a0",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u0301\u00a0\t\n \"\r`#\u0301'\ta\t\t\u0301\u00e1\r\"\ta\u00e1",
+      "args": [
+        "cmd",
+        "\u0301\u00a0",
+        "\r`#\u0301'\ta\t\t\u0301\u00e1\r",
+        "a\u00e1"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \na\u00a0a\\\n\"\\\u0301\t\n\u00a0",
+      "invalid": true
+    },
+    {
+      "input": "cmd \t`'\u0301b$\r\\\\\t\\'",
+      "args": [
+        "cmd",
+        "`\u0301b$\r\\\\\t\\"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd   \r\\\u0301$#$\n\u00e1#a\\$\u00a0#",
+      "args": [
+        "cmd",
+        "\u0301$#$",
+        "\u00e1#a$\u00a0#"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd `#a\u0301\u00a0\u00e1 \\`aa\r\ta\\'\n`a\r\r$\r\u00e1\"",
+      "invalid": true
+    },
+    {
+      "input": "cmd #\u00e1\r \n\u00a0a\u0301\t$#\\a#b$\"\n\u00a0`",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u0301a \\a\u0301\\\t\u0301$\\`a\t\u0301\r$# \r'\u0301#\\",
+      "invalid": true
+    },
+    {
+      "input": "cmd  \"`\u00a0$a$\r\\#\"\u00a0\t\n'$\\\u0301\"$\u00e1",
+      "invalid": true
+    },
+    {
+      "input": "cmd ``'$`'\r\r a$a'\\",
+      "invalid": true
+    },
+    {
+      "input": "cmd \\a\u0301#'",
+      "invalid": true
+    },
+    {
+      "input": "cmd  \t\u00a0\"#ab\u00a0\t'\tb\\' \\\u00a0`\r\"\t\n",
+      "args": [
+        "cmd",
+        "\u00a0#ab\u00a0\t'\tb\\' \\\u00a0`\r"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \r#\u00a0$b\u00e1a\"#\u00e1#'\u00e1\t'\"bb\r\u00a0b\u00a0\\",
+      "invalid": true
+    },
+    {
+      "input": "cmd \\\\\u0301\u00a0$\r\r\n$\ra\u00a0\tb$ ''$#",
+      "args": [
+        "cmd",
+        "\\\u0301\u00a0$",
+        "$",
+        "a\u00a0",
+        "b$",
+        "$#"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \u00a0```\u00a0a`\u00e1\t\\\r` ''\r\u00e1'#\r\\\\\"b\tba",
+      "invalid": true
+    },
+    {
+      "input": "cmd ' a $ \u0301\u00e1a",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u0301\u00e1 \u00e1\u0301\n\u00a0$ \r\u00a0'\r\\\"$\na\n\t",
+      "invalid": true
+    },
+    {
+      "input": "cmd a\u00a0`\"\t\u00e1#\r\"a \r\t\u0301\t$\u00e1\nb'\u00a0`\\\u00a0",
+      "invalid": true
+    },
+    {
+      "input": "cmd ",
+      "args": [
+        "cmd"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \\\"`\"\raa`\r\n$`\n#\u00a0#\"'\n",
+      "invalid": true
+    },
+    {
+      "input": "cmd 'b\u0301\u00a0'  b\u00e1$\u00a0\u00e1\t",
+      "args": [
+        "cmd",
+        "b\u0301\u00a0",
+        "b\u00e1$\u00a0\u00e1"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd b$\t\\a\\\\b`\\#b$\n \u00e1\"",
+      "invalid": true
+    },
+    {
+      "input": "cmd \\'b\t\\\r\"b\tb`\"a`b$ \u0301\ra\u00e1\u00a0# ",
+      "args": [
+        "cmd",
+        "'b",
+        "\rb\tb`a`b$",
+        "\u0301",
+        "a\u00e1\u00a0#"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd `\u00a0ab`#`b$\u00e1\ta\t\u00e1 #\\\n\r\u00a0\"'\\\"'a\"\"\t",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u00e1\r\u00a0\u00e1a\t\\\r#a\\\\$b\u0301\u00e1\r#\u00e1#\"ab",
+      "invalid": true
+    },
+    {
+      "input": "cmd $ `",
+      "args": [
+        "cmd",
+        "$",
+        "`"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd `\u00e1#`$\u0301\u0301\"`",
+      "invalid": true
+    },
+    {
+      "input": "cmd \\$\r\t\t$\n\"\u0301\"$'$\u00a0\u00e1\\#\u00e1\u00a0a \\\"`\rb\"",
+      "invalid": true
+    },
+    {
+      "input": "cmd $\\\u00a0\u00a0\u00e1\u0301\u0301\u0301\u00e1ba'\u00a0\t\u00e1\r\u00e1\"a\"\u00e1",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u00a0\r\n\r\n\\b $b`\u00e1 \\\r",
+      "args": [
+        "cmd",
+        "\u00a0",
+        "b",
+        "$b`\u00e1",
+        "\r"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \\`#$\\b'\u00e1\t $a\\",
+      "invalid": true
+    },
+    {
+      "input": "cmd #\r\\\u00e1\u00e1b#\\\ra\u00a0 ",
+      "args": [
+        "cmd",
+        "#",
+        "\u00e1\u00e1b#\ra\u00a0"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd #b\\\t\\#`a\ta\u0301\u00a0",
+      "args": [
+        "cmd",
+        "#b\t#`a",
+        "a\u0301\u00a0"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd $`a\rb\n\n\n\n\r`\n",
+      "args": [
+        "cmd",
+        "$`a",
+        "b",
+        "`"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd #$\\",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u00a0\r\"\u0301\t\t\t",
+      "invalid": true
+    },
+    {
+      "input": "cmd $\t\t\u00a0a'' `\"\t\r $\t\u00e1\\\\\"\n\u00a0\t\n",
+      "args": [
+        "cmd",
+        "$",
+        "\u00a0a",
+        "`\t\r $\t\u00e1\\",
+        "\u00a0"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd b''\"`\u00e1\"#\t  \u0301b\t\u0301`\t\r$b\u0301'",
+      "invalid": true
+    },
+    {
+      "input": "cmd a$$$\\a\u00e1\r`\" ``\u00a0b\\\u00e1b \u00a0\n#\t\n'\u00e1\n",
+      "invalid": true
+    },
+    {
+      "input": "cmd \r\u00e1bb#$#a`a\u00e1\"",
+      "invalid": true
+    },
+    {
+      "input": "cmd '$\u0301'a\\'\\\r`'\r$\u0301\na\u00e1$\u00a0\u00e1\u00a0\r'\r",
+      "args": [
+        "cmd",
+        "$\u0301a'\r`\r$\u0301\na\u00e1$\u00a0\u00e1\u00a0\r"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \n$\u00a0",
+      "args": [
+        "cmd",
+        "$\u00a0"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \t' 'ab ",
+      "args": [
+        "cmd",
+        " ab"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd ##\n\r\r#\r#\u00a0\n'$\n\u0301\u00a0''$`",
+      "invalid": true
+    },
+    {
+      "input": "cmd \r\u00a0a` \r\u0301`\"$\"\u00a0#\"\u00a0\u00a0\\\t##\" ",
+      "args": [
+        "cmd",
+        "\u00a0a`",
+        "\u0301`$\u00a0#\u00a0\u00a0\\\t##"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \n'b\u0301#a \\#a",
+      "invalid": true
+    },
+    {
+      "input": "cmd \\`\"\u00e1`\"\r`",
+      "args": [
+        "cmd",
+        "`\u00e1`",
+        "`"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \u0301\n\u00e1\u00a0\r\u00a0\"`\u00e1$\"\u00a0a'#\u00a0a\t",
+      "invalid": true
+    },
+    {
+      "input": "cmd \t\r$\t\u0301\u00e1\\'b\u00a0`'$\"\tb\u0301\n#\n\r\n\r #\"\t$",
+      "invalid": true
+    },
+    {
+      "input": "cmd \r`'$$'`\u00e1#\r\t\t",
+      "args": [
+        "cmd",
+        "`$$`\u00e1#"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \n\\\r\n'$\n\u0301`\u0301b ",
+      "invalid": true
+    },
+    {
+      "input": "cmd \r\t `  b #\u00e1",
+      "args": [
+        "cmd",
+        "`",
+        "b",
+        "#\u00e1"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd b\u00a0\n\t\u0301 \"`a'b#\r ",
+      "invalid": true
+    },
+    {
+      "input": "cmd $# \u00a0$b\n\r$\tb$``\t#`\"",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u0301 \u0301#b\r \u00a0b'\u00a0`\u00e1\n",
+      "invalid": true
+    },
+    {
+      "input": "cmd \r\n'\r\r\"#`\t\u00a0'\"\u0301\u00e1# \\$#\\",
+      "invalid": true
+    },
+    {
+      "input": "cmd \r\\$\u00e1'",
+      "invalid": true
+    },
+    {
+      "input": "cmd \n\\\u00e1\n'$\u00e1\u00a0b\u0301\r\t\\\t\ta` ` #'\r##'",
+      "invalid": true
+    },
+    {
+      "input": "cmd 'a\"\n\\\u0301",
+      "invalid": true
+    },
+    {
+      "input": "cmd \"#",
+      "invalid": true
+    },
+    {
+      "input": "cmd  #$$\t\\a",
+      "args": [
+        "cmd",
+        "#$$",
+        "a"
+      ],
+      "invalid": false
+    },
+    {
+      "input": "cmd \u00a0a\t'`\u00a0`",
+      "invalid": true
+    },
+    {
+      "input": "cmd \u00e1#\"ba'$\u0301 \"\u0301$\n'\t \u00e1\u00a0`ba\n\u00a0\t\\\u0301\\",
+      "invalid": true
+    },
+    {
+      "input": "cmd \\\t#$\"",
+      "invalid": true
+    },
+    {
+      "input": "cmd \n\n` \r`\n\r''\u0301`",
+      "args": [
+        "cmd",
+        "`",
+        "`",
+        "\u0301`"
+      ],
+      "invalid": false
+    }
+  ]
+}

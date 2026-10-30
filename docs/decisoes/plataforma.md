@@ -294,8 +294,8 @@ Este
 chamam os motores dentro do Rust. As portas Python não as atendem nem repassam: por elas
 (convidado com login próprio, 8768) e no modo `python`, o ditado responde 404.
 Os fatos de configuração continuam no Python, sem chamar o Rust de volta; as pontes de
-catálogo só ficam onde ainda têm consumidores. TTS é outra capacidade e continua identificado
-como Python no painel, enquanto voz ao vivo e transcrição aparecem na mesma área com seu dono real.
+catálogo só ficam onde ainda têm consumidores. TTS é outra capacidade: sua migração e a dos
+consumidores de narração estão descritas em [Leitura, narração e traduções no Rust](#leitura-narração-e-traduções-no-rust-29102026).
 
 As referências de equivalência vêm da execução do Python antes da remoção, em
 `backend/tests/fixtures/contract/dictation_public/`. Elas incluem validação da borda HTTP,
@@ -3608,3 +3608,79 @@ gatilho é a mensagem da pessoa, nunca um prazo: sem mensagem nova não há cont
 descoberta (`list.discover`), a mesma da leitura inicial. O retrato publicado reescreve a vida do
 Claude com terminal para `k:<chave>` enquanto a descoberta dá `t:<nascimento>`: comparar os dois
 descartava toda sugestão como `dictation_target_changed`, e a faixa nunca apareceu.
+
+## Leitura, narração e traduções no Rust (29/10/2026)
+
+**Regra.** As cinco rotas `/api/tts*`, `/api/pensamento/pt`,
+`/api/config-sync/translate` e `/api/pair/task-suggestion` são atendidas em `speech/` no
+`hangar-server`. O Python não conserva os motores, handlers, schemas ou repasses dessas
+funções. O Connect já estava desativado; seus handlers e endpoints privados de voz saíram,
+assim como a ponte antiga da conferência de convite que só ele usava. O transporte genérico
+que o compartilhamento ainda usa tem responsabilidade própria.
+
+**Configuração.** O Rust lê `runtime-config.json` e os valores de ambiente que já existiam,
+sem buscar credenciais em uma rota interna. Narração e traduções funcionam independentemente
+do modo de organização do ditado. Endpoint próprio não herda a chave de outro serviço. A
+edição dos campos continua no escritor da configuração geral; a capacidade
+`somente_leitura.traducao_pensamento` é calculada no Rust sobre a resposta geral existente,
+sem uma chamada adicional ao Python. Mudar configuração vale no pedido seguinte.
+
+**Equivalência.** Referências congeladas em `crates/hangar-server/tests/fixtures/speech/`,
+capturadas dos helpers e handlers Python antes da remoção: 724 casos de preparo, 60 hashes,
+417 comandos locais, 36 de cliente de texto, 84 HTTP, 12 de ranges de áudio, 10 de histórico
+Pi/omp/Kimi, quatro de janela nativa e 11 de histórico transferido. Os programas de captura estão preservados nas
+próprias referências. Os testes Rust comparam as saídas e exercitam HTTP com o upstream Python
+indisponível. HEAD de áudio continua 405, e tipo MIME, Range e validadores conservam o contrato
+de arquivo anterior, com uma correção: `If-Range` aceita o ETag forte; uma data sem a precisão
+do arquivo recebe o áudio completo (200). Isso impede juntar faixas de representações alteradas
+no mesmo segundo. As duas respostas antigas por data permanecem nas capturas, e a diferença é
+conferida explicitamente nos testes, junto com a alteração de bytes dentro do mesmo segundo.
+
+O hash continua usando a codificação JSON Python, incluindo espaços e floats; áudios remotos já
+em cache não geram novo gasto por causa da migração. A síntese local inclui o SHA-256 do argv
+normalizado na identidade: trocar o comando troca o áudio. O cache local antigo não comprova
+qual comando o produziu e não é reutilizado pela nova síntese; suas URLs continuam legíveis até
+a retenção vencer. Nenhum argumento ou credencial é persistido nessa identidade.
+O contexto da sugestão conserva a janela
+inteira que o consumidor original lia, os hooks e a fila dos provedores, e os snapshots e a
+fronteira das conversas transferidas. Overrides de transferência substituem somente suas
+linhas; uma máquina sem transferência não perde as sessões nativas da sugestão. O resumo
+percorre a janela a partir do fim e guarda no máximo os 3.000 caracteres de contexto anterior,
+conservando a mesma saída sem materializar o texto de todos os eventos.
+
+**Correções do caminho.** Pedidos simultâneos de síntese do mesmo hash compartilham uma
+produção; o aguardante recebe 503 após 30 s, sem liberar a posse do produtor. O áudio atravessa
+um canal de dois blocos de 64 KiB até um temporário exclusivo, fechado e validado antes da troca
+atômica que tolera leitores no Windows. Cancelamento e prazo do motor local conservam sua
+árvore e o guard até o fim da limpeza, mesmo depois de responder 504; stdin e áudio continuam
+binários, sem shell. O comando configurado mantém suas variáveis de provedor, removendo somente
+a autoridade privada do Hangar. Não existe teto arbitrário de bytes que recuse um WAV válido dentro do limite de
+texto. Áudio vazio/inválido, JSON externo inválido e falha de disco têm erro visível.
+Há no máximo dois motores locais simultâneos; a espera por vaga termina em 30 s com 503, e a
+vaga acompanha a limpeza da árvore. A manutenção por pasta roda no máximo uma vez por hora
+enquanto há uso, repetindo após um minuto em caso de erro. Só remove arquivos regulares com
+nome de hash e extensão MP3/WAV. A seleção protege o último uso mesmo quando o mtime de um
+arquivo somente leitura não pode ser renovado; arquivos alheios e links ficam intactos.
+
+O cliente de texto reaproveita conexões, recusa UTF-8 inválido em resposta de sucesso e
+resposta interrompida por limite de tokens, além de redirecionamento de credenciais, sem usar
+assinatura como reserva. Cache e pausa de pensamento distinguem a configuração do provedor;
+o esforço usa o mesmo valor normalizado enviado ao provedor, evitando repetir chamadas por
+espaços externos. Trocar de chave não deixa uma falha antiga bloqueando a tradução nova.
+O prazo do lote inclui
+o item em curso; cancelá-lo conserva o original sem contaminar pausa ou cache. Tradução de
+descrições conserva lotes, resultado parcial e cache persistente; só limite HTTP real provoca repetição.
+Cache ilegível ou corrompido conserva o arquivo e expõe a causa, sem apagar entradas anteriores.
+Erros públicos dos provedores de texto e áudio levam somente status e categoria fixa: o corpo
+externo pode ecoar credenciais codificadas e nunca entra no diagnóstico público. O cache de
+descrições distingue endpoint, modelo e esforço; entradas antigas sem essa identidade ficam
+preservadas no arquivo, mas não são reutilizadas automaticamente. Palavras comuns aos dois
+idiomas não provam idioma, e textos mistos passam pela tradução. O orçamento total é de 60 s,
+incluindo espera pelo mutex, disco, chamadas e backoff; conserva lotes concluídos e responde
+com resultado parcial e causa. Se uma gravação atômica já começou ao vencer o prazo, a exclusão
+acompanha sua conclusão sem atrasar a resposta nem permitir uma gravação concorrente.
+As mensagens corrigidas levam acentos, mantendo os códigos usados pelos clientes.
+
+**Limite de medição.** Uma prova HTTP com provedor controlado mede a borda e o cache do Hangar;
+ela não comprova aceleração da inferência de fala ou do modelo externo. Não atribuir ao Rust
+ganho de ponta a ponta que não tenha sido medido.

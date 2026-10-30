@@ -1,4 +1,4 @@
-//! `WS /api/voice` e `GET`/`PUT /api/voice/settings` do dono; quem não é dono segue ao Python.
+//! Chamada, configurações e memória de voz do dono, atendidas inteiramente no Rust.
 use crate::routes::AppState;
 use crate::session_write::json_response;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -16,25 +16,19 @@ pub async fn ws(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<
     let (client_ip, https) = st.cfg.trusted.resolve(peer.ip(), req.headers());
     let fwd = crate::proxy::Forward { client_ip, https, guest: None, auth_receipt: None };
     let token = crate::auth::query_param(req.uri().query(), "token").filter(|t| !t.is_empty());
-    let owner = if token.is_some() {
-        match st.auth.owner(&fwd.client_ip, token.as_deref().map(str::as_bytes)).await {
-            Ok(owner) => owner, Err(e) => return crate::auth::unavailable(e),
-        }
-    } else { false };
-    if !owner || req.method() != Method::GET { return crate::routes::pass(&st, req, &fwd).await; }
-    let (mut parts, body) = req.into_parts();
+    let decision = match st.auth.evaluate(crate::auth::AuthAttempt {
+        profile: crate::auth::Profile::VoiceWebSocket, origin: fwd.client_ip.clone(),
+        presented_token: token.map(String::into_bytes), verified_guest: false, login_guest: false,
+    }).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
+    if decision.status != crate::auth::AuthDecision::OWNER.status {
+        return refusal(req.headers(), decision);
+    }
+    if req.method() != Method::GET { return refuse(StatusCode::METHOD_NOT_ALLOWED, "method_not_allowed"); }
+    let (mut parts, _) = req.into_parts();
     let ws = match WebSocketUpgrade::from_request_parts(&mut parts, &()).await {
         Ok(ws) => ws,
-        Err(_) => return crate::routes::pass(&st, Request::from_parts(parts, body), &fwd).await,
+        Err(_) => return refuse(StatusCode::BAD_REQUEST, "voice_websocket_required"),
     };
-    ws.on_upgrade(move |socket| serve_socket(st, socket))
-}
-
-/// Ponte do Connect: o Python já conferiu o dono; aqui só o segredo interno.
-pub async fn private_ws(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    if !crate::workspace_routes::private_ok(&st, peer, req.headers()) { return StatusCode::NOT_FOUND.into_response(); }
-    let (mut parts, _) = req.into_parts();
-    let Ok(ws) = WebSocketUpgrade::from_request_parts(&mut parts, &()).await else { return StatusCode::BAD_REQUEST.into_response() };
     ws.on_upgrade(move |socket| serve_socket(st, socket))
 }
 
@@ -107,7 +101,7 @@ async fn close(socket: &mut WebSocket) { let _ = tokio::time::timeout(SEND_WITHI
 
 pub async fn settings_route(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let (fwd, owner) = match crate::routes::gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
-    if !owner { return crate::routes::pass(&st, req, &fwd).await; }
+    if !owner { return unauthorized(&st, req.headers().clone(), &fwd, req.method().clone(), req.uri().query().map(str::to_owned)).await; }
     let (home, claude_dir) = (st.voice.home().to_path_buf(), st.voice.claude_dir().to_path_buf());
     let headers = req.headers().clone();
     let mut resp = settings_reply(&st, req, home, claude_dir).await;
@@ -116,26 +110,13 @@ pub async fn settings_route(State(st): State<Arc<AppState>>, ConnectInfo(peer): 
     resp
 }
 
-/// Ponte do Connect para as configurações: mesma resposta do dono, sem CORS (quem lê é o Python).
-pub async fn private_settings(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    if !crate::workspace_routes::private_ok(&st, peer, req.headers()) { return StatusCode::NOT_FOUND.into_response(); }
-    let (home, claude_dir) = (st.voice.home().to_path_buf(), st.voice.claude_dir().to_path_buf());
-    settings_reply(&st, req, home, claude_dir).await
-}
-
 pub async fn memory_route(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let (fwd, owner) = match crate::routes::gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
-    if !owner { return crate::routes::pass(&st, req, &fwd).await; }
+    if !owner { return unauthorized(&st, req.headers().clone(), &fwd, req.method().clone(), req.uri().query().map(str::to_owned)).await; }
     let headers = req.headers().clone();
     let mut resp = memory_reply(&st, req, "/api/voice/memory").await;
     crate::routes::cors(&headers, resp.headers_mut());
     resp
-}
-
-/// Ponte do Connect para a memória: mesma resposta do dono, sem CORS (quem lê é o Python).
-pub async fn private_memory(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    if !crate::workspace_routes::private_ok(&st, peer, req.headers()) { return StatusCode::NOT_FOUND.into_response(); }
-    memory_reply(&st, req, "/__hangar_server/voice/memory").await
 }
 
 async fn memory_reply(st: &AppState, req: Request, base: &str) -> Response {
@@ -160,6 +141,27 @@ async fn memory_reply(st: &AppState, req: Request, base: &str) -> Response {
 fn refusal_kind(why: &super::memory::Refusal) -> &str { if let super::memory::Refusal::Io(k) = why { k } else { "other" } }
 
 fn refuse(status: StatusCode, code: &str) -> Response { json_response(status, json!({"error_code": code})) }
+
+async fn unauthorized(st: &AppState, headers: axum::http::HeaderMap, fwd: &crate::proxy::Forward, method: Method, query: Option<String>) -> Response {
+    let decision = match st.auth.evaluate(crate::auth::AuthAttempt {
+        profile: crate::auth::Profile::RequireAuthHttp, origin: fwd.client_ip.clone(),
+        presented_token: crate::auth::presented_token(&headers, query.as_deref(), &method, fwd.https),
+        verified_guest: false, login_guest: false,
+    }).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
+    refusal(&headers, decision)
+}
+
+fn refusal(headers: &axum::http::HeaderMap, decision: crate::auth::AuthDecision) -> Response {
+    let blocked = decision.status == crate::auth::AuthDecision::BLOCKED.status;
+    let mut response = refuse(if blocked { StatusCode::TOO_MANY_REQUESTS } else { StatusCode::UNAUTHORIZED }, "voice_owner_only");
+    crate::routes::cors(headers, response.headers_mut());
+    response
+}
+
+pub async fn preflight(req: Request) -> Response {
+    crate::share::gate::preflight(&req)
+        .unwrap_or_else(|| refuse(StatusCode::METHOD_NOT_ALLOWED, "method_not_allowed"))
+}
 
 /// Quanto o `GET` das configurações espera pela lista de vozes do Codex.
 const VOICE_LIST_IN_GET: std::time::Duration = std::time::Duration::from_millis(1500);

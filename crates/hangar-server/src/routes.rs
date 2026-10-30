@@ -97,6 +97,7 @@ pub struct AppState {
     pub server_id: String,
     /// Voz ao vivo; o teste troca por um hub com pastas temporárias.
     pub voice: Arc<crate::voice::hub::VoiceHub>,
+    pub speech: Arc<crate::speech::Service>,
     /// Convites e par externo; `None` sem `HANGAR_SHARES_FILE` (o Python segue dono).
     pub share: Option<Arc<crate::share::ShareState>>,
     /// A porta do convidado já está escutando; a saúde anuncia.
@@ -213,6 +214,7 @@ impl AppState {
             write_gate_wait: std::time::Duration::from_secs(30),
             btw_programs: Default::default(),
             voice: Arc::new(crate::voice::hub::VoiceHub::new()),
+            speech: Arc::default(),
             share, guest_bound: Default::default() }
     }
 
@@ -564,19 +566,14 @@ fn terminal_router_with(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> 
         .route("/__hangar_server/claude/{*rest}", axum::routing::any(crate::session_write::bridge::claude))
         .route("/__hangar_server/presence", axum::routing::get(crate::presence::private))
         .route("/__hangar_server/mods/{name}/{op}", axum::routing::post(crate::mods::routes::bridge))
-        .route("/__hangar_server/voice/settings", axum::routing::any(crate::voice::routes::private_settings))
         .route("/__hangar_server/jev/aux", axum::routing::any(crate::jev_aux::private))
-        .route("/__hangar_server/voice/memory", axum::routing::any(crate::voice::routes::private_memory))
-        .route("/__hangar_server/voice/memory/{id}", axum::routing::any(crate::voice::routes::private_memory))
         .route("/__hangar_server/subagents", get(crate::subagents::private))
-        .route("/__hangar_server/share/reachability", axum::routing::post(crate::share_reach::private))
         .route("/__hangar_server/share", axum::routing::post(crate::share::bridge::private))
         .layer(axum::middleware::from_fn(crate::migration_status::count_bridge));
-    // Painel, canal do estado e voz ficam fora da contagem: conexões longas, não chamadas da ponte.
+    // Painel e canal do estado ficam fora da contagem: conexões longas, não chamadas da ponte.
     let share = private_share_router(&state, pair);
     router.route("/__hangar_server/term", get(crate::term::private_ws))
         .route("/__hangar_server/state/{name}/events", get(crate::side::private_events))
-        .route("/__hangar_server/voice", get(crate::voice::routes::private_ws))
         .route("/__hangar_server/remote-browser", get(crate::remote_browser::ws::private))
         .with_state(state)
         .merge(share)
@@ -665,12 +662,12 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/presence/heartbeat", axum::routing::post(crate::presence::route).fallback(pass_any))
         .route("/api/jev/aux/cliproxy", get(crate::jev_aux::cliproxy).fallback(pass_any))
         .route("/api/jev/aux/models", axum::routing::post(crate::jev_aux::models).fallback(pass_any))
-        .route("/api/voice", get(crate::voice::routes::ws).fallback(pass_any))
-        .route("/api/voice/settings", get(crate::voice::routes::settings_route).fallback(pass_any))
+        .route("/api/voice", get(crate::voice::routes::ws).options(crate::voice::routes::preflight))
+        .route("/api/voice/settings", get(crate::voice::routes::settings_route).options(crate::voice::routes::preflight))
         // Mesmo caminho: o axum junta o PUT à rota de cima (um repasse só, o dela).
         .route("/api/voice/settings", axum::routing::put(crate::voice::routes::settings_route))
-        .route("/api/voice/memory", get(crate::voice::routes::memory_route).fallback(pass_any))
-        .route("/api/voice/memory/{id}", axum::routing::delete(crate::voice::routes::memory_route).fallback(pass_any))
+        .route("/api/voice/memory", get(crate::voice::routes::memory_route).options(crate::voice::routes::preflight))
+        .route("/api/voice/memory/{id}", axum::routing::delete(crate::voice::routes::memory_route).options(crate::voice::routes::preflight))
         // Grupos (`/pair`, `/group-message`, `/pair/contract`, `/pair-remote`, `/unpair-remote`).
         .merge(crate::groups::routes::router())
         // Planos e catálogo de plugins e skills: o dono no Rust; o resto segue ao Python.
@@ -865,7 +862,11 @@ pub(crate) async fn pass(st: &AppState, mut req: Request, fwd: &Forward) -> Resp
         }
     }
     let upgrade = req.headers().contains_key(header::UPGRADE);
+    let configuration = req.uri().path() == "/api/config"
+        && matches!(*req.method(), Method::GET | Method::POST | Method::PATCH);
+    if configuration { req.headers_mut().remove(header::ACCEPT_ENCODING); }
     let mut resp = proxy::forward(&st.http, st.cfg.upstream, req, &admitted_forward).await;
+    if configuration { resp = crate::speech::configuration_reply(st, resp).await; }
     resp.extensions_mut().insert(crate::migration_status::Forwarded);
     if !st.auth.shared() { match resp.status() {
         StatusCode::UNAUTHORIZED => if let Err(e) = st.auth.record_failure(&fwd.client_ip).await { return auth::unavailable(e); },
@@ -883,6 +884,9 @@ pub(crate) async fn pass_any(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     mut req: Request,
 ) -> Response {
+    if crate::speech::http::matches(req.method(), req.uri().path()) {
+        return crate::speech::http::public(st, peer, req).await;
+    }
     if crate::dictation::http::matches(req.method(), req.uri().path()) {
         return crate::dictation::http::public(st, peer, req).await;
     }

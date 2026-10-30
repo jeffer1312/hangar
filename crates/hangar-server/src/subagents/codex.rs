@@ -27,10 +27,12 @@ struct Identity {
     forked: bool,
 }
 
-fn stamp(path: &Path) -> Option<Stamp> {
-    let metadata = path.metadata().ok()?;
-    Some((metadata.modified().ok(), metadata.len(), metadata.created().ok()))
+fn checked_stamp(path: &Path) -> std::io::Result<Stamp> {
+    let metadata = path.metadata()?;
+    Ok((metadata.modified().ok(), metadata.len(), metadata.created().ok()))
 }
+
+fn stamp(path: &Path) -> Option<Stamp> { checked_stamp(path).ok() }
 
 static HEADERS: LazyLock<Mutex<Capped<PathBuf, (Stamp, Option<Identity>)>>> =
     LazyLock::new(|| Mutex::new(Capped::new(SESSION_CAP * 4)));
@@ -59,7 +61,7 @@ fn valid_id(id: &str) -> bool {
 }
 
 fn header(path: &Path) -> std::io::Result<Option<Identity>> {
-    let seen = stamp(path).ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))?;
+    let seen = checked_stamp(path)?;
     if let Some((old, identity)) = HEADERS.lock().unwrap_or_else(PoisonError::into_inner).get(path)
         && *old == seen { return Ok(identity.clone()); }
     // O cabeçalho é pequeno; um arquivo que não termina a primeira linha não prende a consulta.
@@ -114,14 +116,21 @@ fn date_dirs(root: &Path, since: NaiveDate) -> std::io::Result<Vec<PathBuf>> {
     Ok(out)
 }
 
-fn directory(dir: &Path) -> std::io::Result<Arc<Directory>> {
-    let Some(seen) = stamp(dir) else { return Err(std::io::Error::from(std::io::ErrorKind::NotFound)) };
+fn directory(dir: &Path) -> std::io::Result<Arc<Directory>> { directory_snapshot(dir, false) }
+
+fn directory_snapshot(dir: &Path, rescan: bool) -> std::io::Result<Arc<Directory>> {
+    let seen = checked_stamp(dir)?;
     let cached = DIRECTORIES.lock().unwrap_or_else(PoisonError::into_inner).get(dir).cloned();
-    if let Some(cached) = cached.filter(|old| old.stamp == seen) {
+    if let Some(cached) = cached.filter(|old| !rescan && old.stamp == seen) {
         // O arquivo pode aparecer antes de a primeira linha ser escrita, sem mudar a pasta depois.
         let mut ready = Vec::new();
         for path in &cached.pending {
-            if let Some(identity) = header(path)? { ready.push((path.clone(), identity)); }
+            match header(path) {
+                Ok(Some(identity)) => ready.push((path.clone(), identity)),
+                Ok(None) => {},
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return directory_snapshot(dir, true),
+                Err(error) => return Err(error),
+            }
         }
         if ready.is_empty() { return Ok(cached); }
         let mut next = (*cached).clone();
@@ -160,14 +169,29 @@ fn children(parent: &Path) -> Result<Vec<(PathBuf, Identity)>, &'static str> {
     // Um filho não pode nascer antes do pai; arquivos antigos da conta nem têm o cabeçalho aberto.
     for dir in date_dirs(&root, since).map_err(|_| "codex_subagents_source_unavailable")? {
         let snapshot = directory(&dir).map_err(|_| "codex_subagents_source_unavailable")?;
-        for (path, _) in snapshot.families.get(&own.id).into_iter().flatten() {
-            let real = path.canonicalize().map_err(|_| "codex_subagents_source_unavailable")?;
-            if !real.starts_with(&root) { continue; }
-            let identity = header(&real).map_err(|_| "codex_subagents_source_unavailable")?.ok_or("codex_subagents_source_unavailable")?;
-            if identity.parent.as_deref() == Some(&own.id) && identity.born >= own.born
-                && real.file_name().and_then(|n| n.to_str()).is_some_and(|name| name.ends_with(&format!("-{}.jsonl", identity.id))) {
-                out.push((real, identity));
+        let family = match child_family(&snapshot, &root, &own) {
+            Ok(family) => family,
+            // A exclusão pode conservar o carimbo da pasta; a releitura é única e só para ela.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let refreshed = directory_snapshot(&dir, true).map_err(|_| "codex_subagents_source_unavailable")?;
+                child_family(&refreshed, &root, &own).map_err(|_| "codex_subagents_source_unavailable")?
             }
+            Err(_) => return Err("codex_subagents_source_unavailable"),
+        };
+        out.extend(family);
+    }
+    Ok(out)
+}
+
+fn child_family(snapshot: &Directory, root: &Path, own: &Identity) -> std::io::Result<Vec<(PathBuf, Identity)>> {
+    let mut out = Vec::new();
+    for (path, _) in snapshot.families.get(&own.id).into_iter().flatten() {
+        let real = path.canonicalize()?;
+        if !real.starts_with(root) { continue; }
+        let identity = header(&real)?.ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidData))?;
+        if identity.parent.as_deref() == Some(&own.id) && identity.born >= own.born
+            && real.file_name().and_then(|n| n.to_str()).is_some_and(|name| name.ends_with(&format!("-{}.jsonl", identity.id))) {
+            out.push((real, identity));
         }
     }
     Ok(out)
@@ -354,6 +378,98 @@ mod tests {
         std::fs::remove_file(&child).unwrap();
         assert!(get_checked(&parent, "mine", 200).unwrap().is_none());
         assert_eq!(list_checked(&parent).unwrap().len(), 2);
+    }
+
+    fn keep_cached_directory_stamp(dir: &Path, cached: &Directory) -> Arc<Directory> {
+        let mut stale = cached.clone();
+        stale.stamp = stamp(dir).unwrap();
+        let stale = Arc::new(stale);
+        DIRECTORIES.lock().unwrap_or_else(PoisonError::into_inner).insert(dir.to_path_buf(), stale.clone());
+        stale
+    }
+
+    #[test]
+    fn a_removed_child_rescans_only_its_cached_directory_even_when_the_stamp_is_unchanged() {
+        let root = tempfile::tempdir().unwrap();
+        let parent = write(root.path(), "parent", None, &[]);
+        let child = write(root.path(), "mine", Some("parent"), &[]);
+        write(root.path(), "sibling", Some("parent"), &[]);
+        write(root.path(), "foreign", Some("another-parent"), &[]);
+        assert_eq!(list_checked(&parent).unwrap().len(), 2);
+        let dir = child.parent().unwrap().canonicalize().unwrap();
+        let cached = directory(&dir).unwrap();
+        let root_cache = directory(&sessions_root(&parent).unwrap()).unwrap();
+        std::fs::remove_file(&child).unwrap();
+        let stale = keep_cached_directory_stamp(&dir, &cached);
+        assert_eq!(stale.stamp, stamp(&dir).unwrap());
+        assert!(Arc::ptr_eq(&stale, &directory(&dir).unwrap()));
+        assert!(get_checked(&parent, "mine", 0).unwrap().is_none());
+        let refreshed = directory(&dir).unwrap();
+        assert!(!Arc::ptr_eq(&stale, &refreshed));
+        assert_eq!(list_checked(&parent).unwrap()[0]["agentId"], "sibling");
+        assert!(get_checked(&parent, "sibling", 0).unwrap().is_some());
+        assert_eq!(list_checked(&parent).unwrap().len(), 1);
+        assert!(Arc::ptr_eq(&refreshed, &directory(&dir).unwrap()));
+        assert!(Arc::ptr_eq(&root_cache, &directory(&sessions_root(&parent).unwrap()).unwrap()));
+    }
+
+    #[test]
+    fn a_removed_pending_header_refreshes_the_unchanged_directory_once() {
+        let root = tempfile::tempdir().unwrap();
+        let parent = write(root.path(), "parent", None, &[]);
+        let child = write(root.path(), "pending", Some("parent"), &[]);
+        std::fs::write(&child, "").unwrap();
+        assert!(list_checked(&parent).unwrap().is_empty());
+        let dir = child.parent().unwrap().canonicalize().unwrap();
+        let cached = directory(&dir).unwrap();
+        assert_eq!(cached.pending, vec![child.canonicalize().unwrap()]);
+        std::fs::remove_file(&child).unwrap();
+        let stale = keep_cached_directory_stamp(&dir, &cached);
+        assert!(list_checked(&parent).unwrap().is_empty());
+        let refreshed = directory(&dir).unwrap();
+        assert!(!Arc::ptr_eq(&stale, &refreshed));
+        assert!(refreshed.pending.is_empty());
+        assert!(Arc::ptr_eq(&refreshed, &directory(&dir).unwrap()));
+    }
+
+    #[test]
+    fn a_child_read_error_is_visible_without_invalidating_a_healthy_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let parent = write(root.path(), "parent", None, &[]);
+        let child = write(root.path(), "mine", Some("parent"), &[]);
+        assert!(get_checked(&parent, "mine", 0).unwrap().is_some());
+        let dir = child.parent().unwrap().canonicalize().unwrap();
+        let cached = directory(&dir).unwrap();
+        std::fs::remove_file(&child).unwrap();
+        std::fs::create_dir(&child).unwrap();
+        let stale = keep_cached_directory_stamp(&dir, &cached);
+        assert_eq!(get_checked(&parent, "mine", 0).unwrap_err(), "codex_subagents_source_unavailable");
+        assert!(Arc::ptr_eq(&stale, &directory(&dir).unwrap()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn permission_denied_is_not_reclassified_as_a_missing_child() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let parent = write(root.path(), "parent", None, &[]);
+        let child = write(root.path(), "mine", Some("parent"), &[]);
+        assert!(get_checked(&parent, "mine", 0).unwrap().is_some());
+        let dir = child.parent().unwrap().canonicalize().unwrap();
+        let cached = directory(&dir).unwrap();
+        let permissions = std::fs::metadata(&dir).unwrap().permissions();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0)).unwrap();
+        let header_error = header(&child).err();
+        let discovery = get_checked(&parent, "mine", 0);
+        std::fs::set_permissions(&dir, permissions).unwrap();
+        if let Some(error) = header_error {
+            assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+            assert_eq!(discovery.unwrap_err(), "codex_subagents_source_unavailable");
+        } else {
+            // Processos privilegiados podem ler mesmo quando os bits de permissão estão zerados.
+            assert!(discovery.unwrap().is_some());
+        }
+        assert!(Arc::ptr_eq(&cached, &directory(&dir).unwrap()));
     }
 
     #[test]

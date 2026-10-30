@@ -1,0 +1,728 @@
+{
+  "source_commit": "a136bcb1693bd542974608dcf1d60073e802fcd9",
+  "source": "Fixture joined original de backend/tests/test_conversation_history.py executada com MonkeyPatch e diretório temporário; _conversa_para_resumo original extraído por AST; respostas vêm de pqueue.merged_history original. Marcadores substituem somente caminhos do registro, nunca os bytes das fontes.",
+  "cases": [
+    {
+      "name": "source-fork-compaction-and-active",
+      "record": {
+        "id": "a563a017-af37-42e8-a8e5-2bd837584f8e",
+        "name": "s",
+        "source_life": "k:original",
+        "phase": "complete",
+        "source": {
+          "path": "@SOURCE@",
+          "provider": "claude",
+          "digest": "27493c4bf6cf7fb19c71ce60926f2e679c1a523087cef260bf2df8a55ab41437",
+          "selected_uuids": [
+            "851a5e898d7a885ae33e3aab541e0e8691cba0e5",
+            "tool",
+            "result",
+            "compact",
+            "after"
+          ]
+        },
+        "origin_meta": {
+          "provider": "claude",
+          "jsonl": "@ORIGIN@",
+          "cwd": "@HOME@",
+          "key": "original"
+        },
+        "destination_meta": {
+          "provider": "codex",
+          "thread_id": "019f99de-9572-7221-89c0-80c62f883d44",
+          "codex_home": "@CODEX@",
+          "lifecycle_id": "k:original",
+          "transfer_id": "a563a017-af37-42e8-a8e5-2bd837584f8e"
+        },
+        "boundary": {
+          "thread_id": "019f99de-9572-7221-89c0-80c62f883d44",
+          "rollout_path": "@ROLLOUT@",
+          "min_offset": 291,
+          "imported_item_ids": [
+            "imported"
+          ],
+          "prefix_digest": "d20ef21fbfbce94de1b5b3e6e7e1abe958712f904034ead49e3698606cc3b3c5"
+        },
+        "error_code": null
+      },
+      "source_bytes": "{\"type\": \"user\", \"uuid\": \"851a5e898d7a885ae33e3aab541e0e8691cba0e5\", \"parentUuid\": null, \"timestamp\": \"2026-01-01T00:00:00Z\", \"cwd\": \"/tmp/tmpdddzddqb\", \"message\": {\"role\": \"user\", \"content\": \"ok\"}}\n{\"type\": \"assistant\", \"uuid\": \"tool\", \"parentUuid\": \"851a5e898d7a885ae33e3aab541e0e8691cba0e5\", \"timestamp\": \"2026-01-01T00:01:00Z\", \"message\": {\"role\": \"assistant\", \"content\": [{\"type\": \"tool_use\", \"id\": \"call\", \"name\": \"Read\", \"input\": {\"file_path\": \"/original/report.md\"}}]}}\n{\"type\": \"user\", \"uuid\": \"result\", \"parentUuid\": \"tool\", \"timestamp\": \"2026-01-01T00:02:00Z\", \"message\": {\"role\": \"user\", \"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"call\", \"content\": \"resultado original\"}]}}\n{\"type\": \"system\", \"subtype\": \"compact_boundary\", \"uuid\": \"compact\", \"parentUuid\": null, \"logicalParentUuid\": \"result\"}\n{\"type\": \"user\", \"uuid\": \"summary\", \"parentUuid\": \"compact\", \"isCompactSummary\": true, \"message\": {\"role\": \"user\", \"content\": \"RESUMO NÃO DEVE ENTRAR\"}}\n{\"type\": \"assistant\", \"uuid\": \"after\", \"parentUuid\": \"summary\", \"timestamp\": \"2026-01-01T00:03:00Z\", \"message\": {\"role\": \"assistant\", \"content\": \"antigo\"}}\n{\"type\": \"assistant\", \"uuid\": \"fork\", \"parentUuid\": \"851a5e898d7a885ae33e3aab541e0e8691cba0e5\", \"isSidechain\": true, \"message\": {\"role\": \"assistant\", \"content\": \"FORK NÃO DEVE ENTRAR\"}}\n{\"type\": \"last-prompt\", \"leafUuid\": \"after\"}\n",
+      "rollout_bytes": "{\"type\": \"session_meta\", \"payload\": {\"id\": \"019f99de-9572-7221-89c0-80c62f883d44\", \"cwd\": \"/tmp/tmpdddzddqb\"}}\n{\"timestamp\": \"2026-02-01T00:00:00Z\", \"type\": \"response_item\", \"payload\": {\"type\": \"message\", \"id\": \"imported\", \"role\": \"user\", \"content\": [{\"type\": \"input_text\", \"text\": \"ok\"}]}}\n{\"timestamp\": \"2026-02-02T00:00:00Z\", \"type\": \"response_item\", \"payload\": {\"type\": \"message\", \"id\": \"new\", \"role\": \"user\", \"content\": [{\"type\": \"input_text\", \"text\": \"novo\"}]}}\n",
+      "queue": [],
+      "summary": "usuário: ok\nassistente: antigo\nÚLTIMA MENSAGEM (usuário): novo",
+      "events": [
+        {
+          "kind": "user_msg",
+          "text": "ok",
+          "ts": 1767225600.0
+        },
+        {
+          "kind": "tool_use",
+          "text": null,
+          "ts": 1767225660.0
+        },
+        {
+          "kind": "tool_result",
+          "text": null,
+          "ts": 1767225720.0
+        },
+        {
+          "kind": "assistant_msg",
+          "text": "antigo",
+          "ts": 1767225780.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "novo",
+          "ts": 1769990400.0
+        }
+      ]
+    },
+    {
+      "name": "original-import-never-confirms-current-queue",
+      "record": {
+        "id": "a563a017-af37-42e8-a8e5-2bd837584f8e",
+        "name": "s",
+        "source_life": "k:original",
+        "phase": "complete",
+        "source": {
+          "path": "@SOURCE@",
+          "provider": "claude",
+          "digest": "27493c4bf6cf7fb19c71ce60926f2e679c1a523087cef260bf2df8a55ab41437",
+          "selected_uuids": [
+            "851a5e898d7a885ae33e3aab541e0e8691cba0e5",
+            "tool",
+            "result",
+            "compact",
+            "after"
+          ]
+        },
+        "origin_meta": {
+          "provider": "claude",
+          "jsonl": "@ORIGIN@",
+          "cwd": "@HOME@",
+          "key": "original"
+        },
+        "destination_meta": {
+          "provider": "codex",
+          "thread_id": "019f99de-9572-7221-89c0-80c62f883d44",
+          "codex_home": "@CODEX@",
+          "lifecycle_id": "k:original",
+          "transfer_id": "a563a017-af37-42e8-a8e5-2bd837584f8e"
+        },
+        "boundary": {
+          "thread_id": "019f99de-9572-7221-89c0-80c62f883d44",
+          "rollout_path": "@ROLLOUT@",
+          "min_offset": 291,
+          "imported_item_ids": [
+            "imported"
+          ],
+          "prefix_digest": "d20ef21fbfbce94de1b5b3e6e7e1abe958712f904034ead49e3698606cc3b3c5"
+        },
+        "error_code": null
+      },
+      "source_bytes": "{\"type\": \"user\", \"uuid\": \"851a5e898d7a885ae33e3aab541e0e8691cba0e5\", \"parentUuid\": null, \"timestamp\": \"2026-01-01T00:00:00Z\", \"cwd\": \"/tmp/tmpdddzddqb\", \"message\": {\"role\": \"user\", \"content\": \"ok\"}}\n{\"type\": \"assistant\", \"uuid\": \"tool\", \"parentUuid\": \"851a5e898d7a885ae33e3aab541e0e8691cba0e5\", \"timestamp\": \"2026-01-01T00:01:00Z\", \"message\": {\"role\": \"assistant\", \"content\": [{\"type\": \"tool_use\", \"id\": \"call\", \"name\": \"Read\", \"input\": {\"file_path\": \"/original/report.md\"}}]}}\n{\"type\": \"user\", \"uuid\": \"result\", \"parentUuid\": \"tool\", \"timestamp\": \"2026-01-01T00:02:00Z\", \"message\": {\"role\": \"user\", \"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"call\", \"content\": \"resultado original\"}]}}\n{\"type\": \"system\", \"subtype\": \"compact_boundary\", \"uuid\": \"compact\", \"parentUuid\": null, \"logicalParentUuid\": \"result\"}\n{\"type\": \"user\", \"uuid\": \"summary\", \"parentUuid\": \"compact\", \"isCompactSummary\": true, \"message\": {\"role\": \"user\", \"content\": \"RESUMO NÃO DEVE ENTRAR\"}}\n{\"type\": \"assistant\", \"uuid\": \"after\", \"parentUuid\": \"summary\", \"timestamp\": \"2026-01-01T00:03:00Z\", \"message\": {\"role\": \"assistant\", \"content\": \"antigo\"}}\n{\"type\": \"assistant\", \"uuid\": \"fork\", \"parentUuid\": \"851a5e898d7a885ae33e3aab541e0e8691cba0e5\", \"isSidechain\": true, \"message\": {\"role\": \"assistant\", \"content\": \"FORK NÃO DEVE ENTRAR\"}}\n{\"type\": \"last-prompt\", \"leafUuid\": \"after\"}\n",
+      "rollout_bytes": "{\"type\": \"session_meta\", \"payload\": {\"id\": \"019f99de-9572-7221-89c0-80c62f883d44\", \"cwd\": \"/tmp/tmpdddzddqb\"}}\n{\"timestamp\": \"2026-02-01T00:00:00Z\", \"type\": \"response_item\", \"payload\": {\"type\": \"message\", \"id\": \"imported\", \"role\": \"user\", \"content\": [{\"type\": \"input_text\", \"text\": \"ok\"}]}}\n{\"timestamp\": \"2026-02-02T00:00:00Z\", \"type\": \"response_item\", \"payload\": {\"type\": \"message\", \"id\": \"new\", \"role\": \"user\", \"content\": [{\"type\": \"input_text\", \"text\": \"novo\"}]}}\n",
+      "queue": [
+        {
+          "id": "ok",
+          "text": "ok",
+          "ts": 1769990400,
+          "delivered": true
+        },
+        {
+          "id": "local",
+          "text": "Resultado local.",
+          "ts": 1769990401,
+          "papel": "assistant"
+        }
+      ],
+      "summary": "usuário: ok\nassistente: antigo\nusuário: novo\nusuário: ok\nÚLTIMA MENSAGEM (assistente): Resultado local.",
+      "events": [
+        {
+          "kind": "user_msg",
+          "text": "ok",
+          "ts": 1767225600.0
+        },
+        {
+          "kind": "tool_use",
+          "text": null,
+          "ts": 1767225660.0
+        },
+        {
+          "kind": "tool_result",
+          "text": null,
+          "ts": 1767225720.0
+        },
+        {
+          "kind": "assistant_msg",
+          "text": "antigo",
+          "ts": 1767225780.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "novo",
+          "ts": 1769990400.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "ok",
+          "ts": null
+        },
+        {
+          "kind": "assistant_msg",
+          "text": "Resultado local.",
+          "ts": null
+        }
+      ]
+    },
+    {
+      "name": "import-replay-after-boundary",
+      "record": {
+        "id": "a563a017-af37-42e8-a8e5-2bd837584f8e",
+        "name": "s",
+        "source_life": "k:original",
+        "phase": "complete",
+        "source": {
+          "path": "@SOURCE@",
+          "provider": "claude",
+          "digest": "27493c4bf6cf7fb19c71ce60926f2e679c1a523087cef260bf2df8a55ab41437",
+          "selected_uuids": [
+            "851a5e898d7a885ae33e3aab541e0e8691cba0e5",
+            "tool",
+            "result",
+            "compact",
+            "after"
+          ]
+        },
+        "origin_meta": {
+          "provider": "claude",
+          "jsonl": "@ORIGIN@",
+          "cwd": "@HOME@",
+          "key": "original"
+        },
+        "destination_meta": {
+          "provider": "codex",
+          "thread_id": "019f99de-9572-7221-89c0-80c62f883d44",
+          "codex_home": "@CODEX@",
+          "lifecycle_id": "k:original",
+          "transfer_id": "a563a017-af37-42e8-a8e5-2bd837584f8e"
+        },
+        "boundary": {
+          "thread_id": "019f99de-9572-7221-89c0-80c62f883d44",
+          "rollout_path": "@ROLLOUT@",
+          "min_offset": 291,
+          "imported_item_ids": [
+            "imported"
+          ],
+          "prefix_digest": "d20ef21fbfbce94de1b5b3e6e7e1abe958712f904034ead49e3698606cc3b3c5"
+        },
+        "error_code": null
+      },
+      "source_bytes": "{\"type\": \"user\", \"uuid\": \"851a5e898d7a885ae33e3aab541e0e8691cba0e5\", \"parentUuid\": null, \"timestamp\": \"2026-01-01T00:00:00Z\", \"cwd\": \"/tmp/tmpdddzddqb\", \"message\": {\"role\": \"user\", \"content\": \"ok\"}}\n{\"type\": \"assistant\", \"uuid\": \"tool\", \"parentUuid\": \"851a5e898d7a885ae33e3aab541e0e8691cba0e5\", \"timestamp\": \"2026-01-01T00:01:00Z\", \"message\": {\"role\": \"assistant\", \"content\": [{\"type\": \"tool_use\", \"id\": \"call\", \"name\": \"Read\", \"input\": {\"file_path\": \"/original/report.md\"}}]}}\n{\"type\": \"user\", \"uuid\": \"result\", \"parentUuid\": \"tool\", \"timestamp\": \"2026-01-01T00:02:00Z\", \"message\": {\"role\": \"user\", \"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"call\", \"content\": \"resultado original\"}]}}\n{\"type\": \"system\", \"subtype\": \"compact_boundary\", \"uuid\": \"compact\", \"parentUuid\": null, \"logicalParentUuid\": \"result\"}\n{\"type\": \"user\", \"uuid\": \"summary\", \"parentUuid\": \"compact\", \"isCompactSummary\": true, \"message\": {\"role\": \"user\", \"content\": \"RESUMO NÃO DEVE ENTRAR\"}}\n{\"type\": \"assistant\", \"uuid\": \"after\", \"parentUuid\": \"summary\", \"timestamp\": \"2026-01-01T00:03:00Z\", \"message\": {\"role\": \"assistant\", \"content\": \"antigo\"}}\n{\"type\": \"assistant\", \"uuid\": \"fork\", \"parentUuid\": \"851a5e898d7a885ae33e3aab541e0e8691cba0e5\", \"isSidechain\": true, \"message\": {\"role\": \"assistant\", \"content\": \"FORK NÃO DEVE ENTRAR\"}}\n{\"type\": \"last-prompt\", \"leafUuid\": \"after\"}\n",
+      "rollout_bytes": "{\"type\": \"session_meta\", \"payload\": {\"id\": \"019f99de-9572-7221-89c0-80c62f883d44\", \"cwd\": \"/tmp/tmpdddzddqb\"}}\n{\"timestamp\": \"2026-02-01T00:00:00Z\", \"type\": \"response_item\", \"payload\": {\"type\": \"message\", \"id\": \"imported\", \"role\": \"user\", \"content\": [{\"type\": \"input_text\", \"text\": \"ok\"}]}}\n{\"timestamp\": \"2026-02-02T00:00:00Z\", \"type\": \"response_item\", \"payload\": {\"type\": \"message\", \"id\": \"new\", \"role\": \"user\", \"content\": [{\"type\": \"input_text\", \"text\": \"novo\"}]}}\n{\"timestamp\": \"2026-02-04T00:00:00Z\", \"type\": \"response_item\", \"payload\": {\"type\": \"message\", \"id\": \"imported\", \"role\": \"user\", \"content\": [{\"type\": \"input_text\", \"text\": \"ok\"}]}}\n",
+      "queue": [
+        {
+          "id": "ok",
+          "text": "ok",
+          "ts": 1769990400,
+          "delivered": true
+        },
+        {
+          "id": "local",
+          "text": "Resultado local.",
+          "ts": 1769990401,
+          "papel": "assistant"
+        }
+      ],
+      "summary": "usuário: ok\nassistente: antigo\nusuário: novo\nusuário: ok\nÚLTIMA MENSAGEM (assistente): Resultado local.",
+      "events": [
+        {
+          "kind": "user_msg",
+          "text": "ok",
+          "ts": 1767225600.0
+        },
+        {
+          "kind": "tool_use",
+          "text": null,
+          "ts": 1767225660.0
+        },
+        {
+          "kind": "tool_result",
+          "text": null,
+          "ts": 1767225720.0
+        },
+        {
+          "kind": "assistant_msg",
+          "text": "antigo",
+          "ts": 1767225780.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "novo",
+          "ts": 1769990400.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "ok",
+          "ts": null
+        },
+        {
+          "kind": "assistant_msg",
+          "text": "Resultado local.",
+          "ts": null
+        }
+      ]
+    },
+    {
+      "name": "partial-active-line",
+      "record": {
+        "id": "a563a017-af37-42e8-a8e5-2bd837584f8e",
+        "name": "s",
+        "source_life": "k:original",
+        "phase": "complete",
+        "source": {
+          "path": "@SOURCE@",
+          "provider": "claude",
+          "digest": "27493c4bf6cf7fb19c71ce60926f2e679c1a523087cef260bf2df8a55ab41437",
+          "selected_uuids": [
+            "851a5e898d7a885ae33e3aab541e0e8691cba0e5",
+            "tool",
+            "result",
+            "compact",
+            "after"
+          ]
+        },
+        "origin_meta": {
+          "provider": "claude",
+          "jsonl": "@ORIGIN@",
+          "cwd": "@HOME@",
+          "key": "original"
+        },
+        "destination_meta": {
+          "provider": "codex",
+          "thread_id": "019f99de-9572-7221-89c0-80c62f883d44",
+          "codex_home": "@CODEX@",
+          "lifecycle_id": "k:original",
+          "transfer_id": "a563a017-af37-42e8-a8e5-2bd837584f8e"
+        },
+        "boundary": {
+          "thread_id": "019f99de-9572-7221-89c0-80c62f883d44",
+          "rollout_path": "@ROLLOUT@",
+          "min_offset": 291,
+          "imported_item_ids": [
+            "imported"
+          ],
+          "prefix_digest": "d20ef21fbfbce94de1b5b3e6e7e1abe958712f904034ead49e3698606cc3b3c5"
+        },
+        "error_code": null
+      },
+      "source_bytes": "{\"type\": \"user\", \"uuid\": \"851a5e898d7a885ae33e3aab541e0e8691cba0e5\", \"parentUuid\": null, \"timestamp\": \"2026-01-01T00:00:00Z\", \"cwd\": \"/tmp/tmpdddzddqb\", \"message\": {\"role\": \"user\", \"content\": \"ok\"}}\n{\"type\": \"assistant\", \"uuid\": \"tool\", \"parentUuid\": \"851a5e898d7a885ae33e3aab541e0e8691cba0e5\", \"timestamp\": \"2026-01-01T00:01:00Z\", \"message\": {\"role\": \"assistant\", \"content\": [{\"type\": \"tool_use\", \"id\": \"call\", \"name\": \"Read\", \"input\": {\"file_path\": \"/original/report.md\"}}]}}\n{\"type\": \"user\", \"uuid\": \"result\", \"parentUuid\": \"tool\", \"timestamp\": \"2026-01-01T00:02:00Z\", \"message\": {\"role\": \"user\", \"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"call\", \"content\": \"resultado original\"}]}}\n{\"type\": \"system\", \"subtype\": \"compact_boundary\", \"uuid\": \"compact\", \"parentUuid\": null, \"logicalParentUuid\": \"result\"}\n{\"type\": \"user\", \"uuid\": \"summary\", \"parentUuid\": \"compact\", \"isCompactSummary\": true, \"message\": {\"role\": \"user\", \"content\": \"RESUMO NÃO DEVE ENTRAR\"}}\n{\"type\": \"assistant\", \"uuid\": \"after\", \"parentUuid\": \"summary\", \"timestamp\": \"2026-01-01T00:03:00Z\", \"message\": {\"role\": \"assistant\", \"content\": \"antigo\"}}\n{\"type\": \"assistant\", \"uuid\": \"fork\", \"parentUuid\": \"851a5e898d7a885ae33e3aab541e0e8691cba0e5\", \"isSidechain\": true, \"message\": {\"role\": \"assistant\", \"content\": \"FORK NÃO DEVE ENTRAR\"}}\n{\"type\": \"last-prompt\", \"leafUuid\": \"after\"}\n",
+      "rollout_bytes": "{\"type\": \"session_meta\", \"payload\": {\"id\": \"019f99de-9572-7221-89c0-80c62f883d44\", \"cwd\": \"/tmp/tmpdddzddqb\"}}\n{\"timestamp\": \"2026-02-01T00:00:00Z\", \"type\": \"response_item\", \"payload\": {\"type\": \"message\", \"id\": \"imported\", \"role\": \"user\", \"content\": [{\"type\": \"input_text\", \"text\": \"ok\"}]}}\n{\"timestamp\": \"2026-02-02T00:00:00Z\", \"type\": \"response_item\", \"payload\": {\"type\": \"message\", \"id\": \"new\", \"role\": \"user\", \"content\": [{\"type\": \"input_text\", \"text\": \"novo\"}]}}\n{\"timestamp\": \"2026-02-04T00:00:00Z\", \"type\": \"response_item\", \"payload\": {\"type\": \"message\", \"id\": \"new\", \"role\": \"user\", \"content\": [{\"type\": \"input_text\", \"text\": \"ok\"}]}}",
+      "queue": [
+        {
+          "id": "ok",
+          "text": "ok",
+          "ts": 1769990400,
+          "delivered": true
+        },
+        {
+          "id": "local",
+          "text": "Resultado local.",
+          "ts": 1769990401,
+          "papel": "assistant"
+        }
+      ],
+      "summary": "usuário: ok\nassistente: antigo\nusuário: novo\nusuário: ok\nÚLTIMA MENSAGEM (assistente): Resultado local.",
+      "events": [
+        {
+          "kind": "user_msg",
+          "text": "ok",
+          "ts": 1767225600.0
+        },
+        {
+          "kind": "tool_use",
+          "text": null,
+          "ts": 1767225660.0
+        },
+        {
+          "kind": "tool_result",
+          "text": null,
+          "ts": 1767225720.0
+        },
+        {
+          "kind": "assistant_msg",
+          "text": "antigo",
+          "ts": 1767225780.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "novo",
+          "ts": 1769990400.0
+        },
+        {
+          "kind": "user_msg",
+          "text": "ok",
+          "ts": null
+        },
+        {
+          "kind": "assistant_msg",
+          "text": "Resultado local.",
+          "ts": null
+        }
+      ]
+    },
+    {
+      "name": "changed-source",
+      "record": {
+        "id": "a563a017-af37-42e8-a8e5-2bd837584f8e",
+        "name": "s",
+        "source_life": "k:original",
+        "phase": "complete",
+        "source": {
+          "path": "@SOURCE@",
+          "provider": "claude",
+          "digest": "27493c4bf6cf7fb19c71ce60926f2e679c1a523087cef260bf2df8a55ab41437",
+          "selected_uuids": [
+            "851a5e898d7a885ae33e3aab541e0e8691cba0e5",
+            "tool",
+            "result",
+            "compact",
+            "after"
+          ]
+        },
+        "origin_meta": {
+          "provider": "claude",
+          "jsonl": "@ORIGIN@",
+          "cwd": "@HOME@",
+          "key": "original"
+        },
+        "destination_meta": {
+          "provider": "codex",
+          "thread_id": "019f99de-9572-7221-89c0-80c62f883d44",
+          "codex_home": "@CODEX@",
+          "lifecycle_id": "k:original",
+          "transfer_id": "a563a017-af37-42e8-a8e5-2bd837584f8e"
+        },
+        "boundary": {
+          "thread_id": "019f99de-9572-7221-89c0-80c62f883d44",
+          "rollout_path": "@ROLLOUT@",
+          "min_offset": 291,
+          "imported_item_ids": [
+            "imported"
+          ],
+          "prefix_digest": "d20ef21fbfbce94de1b5b3e6e7e1abe958712f904034ead49e3698606cc3b3c5"
+        },
+        "error_code": null
+      },
+      "source_bytes": "{\"type\": \"user\", \"uuid\": \"851a5e898d7a885ae33e3aab541e0e8691cba0e5\", \"parentUuid\": null, \"timestamp\": \"2026-01-01T00:00:00Z\", \"cwd\": \"/tmp/tmpdddzddqb\", \"message\": {\"role\": \"user\", \"content\": \"ok\"}}\n{\"type\": \"assistant\", \"uuid\": \"tool\", \"parentUuid\": \"851a5e898d7a885ae33e3aab541e0e8691cba0e5\", \"timestamp\": \"2026-01-01T00:01:00Z\", \"message\": {\"role\": \"assistant\", \"content\": [{\"type\": \"tool_use\", \"id\": \"call\", \"name\": \"Read\", \"input\": {\"file_path\": \"/original/report.md\"}}]}}\n{\"type\": \"user\", \"uuid\": \"result\", \"parentUuid\": \"tool\", \"timestamp\": \"2026-01-01T00:02:00Z\", \"message\": {\"role\": \"user\", \"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"call\", \"content\": \"resultado original\"}]}}\n{\"type\": \"system\", \"subtype\": \"compact_boundary\", \"uuid\": \"compact\", \"parentUuid\": null, \"logicalParentUuid\": \"result\"}\n{\"type\": \"user\", \"uuid\": \"summary\", \"parentUuid\": \"compact\", \"isCompactSummary\": true, \"message\": {\"role\": \"user\", \"content\": \"RESUMO NÃO DEVE ENTRAR\"}}\n{\"type\": \"assistant\", \"uuid\": \"after\", \"parentUuid\": \"summary\", \"timestamp\": \"2026-01-01T00:03:00Z\", \"message\": {\"role\": \"assistant\", \"content\": \"antigo\"}}\n{\"type\": \"assistant\", \"uuid\": \"fork\", \"parentUuid\": \"851a5e898d7a885ae33e3aab541e0e8691cba0e5\", \"isSidechain\": true, \"message\": {\"role\": \"assistant\", \"content\": \"FORK NÃO DEVE ENTRAR\"}}\n{\"type\": \"last-prompt\", \"leafUuid\": \"after\"}\n\n",
+      "rollout_bytes": "{\"type\": \"session_meta\", \"payload\": {\"id\": \"019f99de-9572-7221-89c0-80c62f883d44\", \"cwd\": \"/tmp/tmpdddzddqb\"}}\n{\"timestamp\": \"2026-02-01T00:00:00Z\", \"type\": \"response_item\", \"payload\": {\"type\": \"message\", \"id\": \"imported\", \"role\": \"user\", \"content\": [{\"type\": \"input_text\", \"text\": \"ok\"}]}}\n{\"timestamp\": \"2026-02-02T00:00:00Z\", \"type\": \"response_item\", \"payload\": {\"type\": \"message\", \"id\": \"new\", \"role\": \"user\", \"content\": [{\"type\": \"input_text\", \"text\": \"novo\"}]}}\n",
+      "queue": [],
+      "error": {
+        "type": "HistoryError",
+        "detail": "o snapshot da origem mudou"
+      }
+    },
+    {
+      "name": "changed-prefix",
+      "record": {
+        "id": "a563a017-af37-42e8-a8e5-2bd837584f8e",
+        "name": "s",
+        "source_life": "k:original",
+        "phase": "complete",
+        "source": {
+          "path": "@SOURCE@",
+          "provider": "claude",
+          "digest": "27493c4bf6cf7fb19c71ce60926f2e679c1a523087cef260bf2df8a55ab41437",
+          "selected_uuids": [
+            "851a5e898d7a885ae33e3aab541e0e8691cba0e5",
+            "tool",
+            "result",
+            "compact",
+            "after"
+          ]
+        },
+        "origin_meta": {
+          "provider": "claude",
+          "jsonl": "@ORIGIN@",
+          "cwd": "@HOME@",
+          "key": "original"
+        },
+        "destination_meta": {
+          "provider": "codex",
+          "thread_id": "019f99de-9572-7221-89c0-80c62f883d44",
+          "codex_home": "@CODEX@",
+          "lifecycle_id": "k:original",
+          "transfer_id": "a563a017-af37-42e8-a8e5-2bd837584f8e"
+        },
+        "boundary": {
+          "thread_id": "019f99de-9572-7221-89c0-80c62f883d44",
+          "rollout_path": "@ROLLOUT@",
+          "min_offset": 291,
+          "imported_item_ids": [
+            "imported"
+          ],
+          "prefix_digest": "d20ef21fbfbce94de1b5b3e6e7e1abe958712f904034ead49e3698606cc3b3c5"
+        },
+        "error_code": null
+      },
+      "source_bytes": "{\"type\": \"user\", \"uuid\": \"851a5e898d7a885ae33e3aab541e0e8691cba0e5\", \"parentUuid\": null, \"timestamp\": \"2026-01-01T00:00:00Z\", \"cwd\": \"/tmp/tmpdddzddqb\", \"message\": {\"role\": \"user\", \"content\": \"ok\"}}\n{\"type\": \"assistant\", \"uuid\": \"tool\", \"parentUuid\": \"851a5e898d7a885ae33e3aab541e0e8691cba0e5\", \"timestamp\": \"2026-01-01T00:01:00Z\", \"message\": {\"role\": \"assistant\", \"content\": [{\"type\": \"tool_use\", \"id\": \"call\", \"name\": \"Read\", \"input\": {\"file_path\": \"/original/report.md\"}}]}}\n{\"type\": \"user\", \"uuid\": \"result\", \"parentUuid\": \"tool\", \"timestamp\": \"2026-01-01T00:02:00Z\", \"message\": {\"role\": \"user\", \"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"call\", \"content\": \"resultado original\"}]}}\n{\"type\": \"system\", \"subtype\": \"compact_boundary\", \"uuid\": \"compact\", \"parentUuid\": null, \"logicalParentUuid\": \"result\"}\n{\"type\": \"user\", \"uuid\": \"summary\", \"parentUuid\": \"compact\", \"isCompactSummary\": true, \"message\": {\"role\": \"user\", \"content\": \"RESUMO NÃO DEVE ENTRAR\"}}\n{\"type\": \"assistant\", \"uuid\": \"after\", \"parentUuid\": \"summary\", \"timestamp\": \"2026-01-01T00:03:00Z\", \"message\": {\"role\": \"assistant\", \"content\": \"antigo\"}}\n{\"type\": \"assistant\", \"uuid\": \"fork\", \"parentUuid\": \"851a5e898d7a885ae33e3aab541e0e8691cba0e5\", \"isSidechain\": true, \"message\": {\"role\": \"assistant\", \"content\": \"FORK NÃO DEVE ENTRAR\"}}\n{\"type\": \"last-prompt\", \"leafUuid\": \"after\"}\n",
+      "rollout_bytes": "{\"type\": \"session_meta\", \"payload\": {\"id\": \"019f99de-9572-7221-89c0-80c62f883d44\", \"cwd\": \"/tmp/tmpdddzddqb\"}}\n{\"timestamp\": \"2026-02-01T00:00:00Z\", \"type\": \"response_item\", \"payload\": {\"type\": \"message\", \"id\": \"imported\", \"role\": \"user\", \"content\": [{\"type\": \"input_text\", \"text\": \"xx\"}]}}\n{\"timestamp\": \"2026-02-02T00:00:00Z\", \"type\": \"response_item\", \"payload\": {\"type\": \"message\", \"id\": \"new\", \"role\": \"user\", \"content\": [{\"type\": \"input_text\", \"text\": \"novo\"}]}}\n",
+      "queue": [],
+      "error": {
+        "type": "HistoryError",
+        "detail": "o prefixo importado do rollout mudou"
+      }
+    },
+    {
+      "name": "missing-prefix-digest",
+      "record": {
+        "id": "a563a017-af37-42e8-a8e5-2bd837584f8e",
+        "name": "s",
+        "source_life": "k:original",
+        "phase": "complete",
+        "source": {
+          "path": "@SOURCE@",
+          "provider": "claude",
+          "digest": "27493c4bf6cf7fb19c71ce60926f2e679c1a523087cef260bf2df8a55ab41437",
+          "selected_uuids": [
+            "851a5e898d7a885ae33e3aab541e0e8691cba0e5",
+            "tool",
+            "result",
+            "compact",
+            "after"
+          ]
+        },
+        "origin_meta": {
+          "provider": "claude",
+          "jsonl": "@ORIGIN@",
+          "cwd": "@HOME@",
+          "key": "original"
+        },
+        "destination_meta": {
+          "provider": "codex",
+          "thread_id": "019f99de-9572-7221-89c0-80c62f883d44",
+          "codex_home": "@CODEX@",
+          "lifecycle_id": "k:original",
+          "transfer_id": "a563a017-af37-42e8-a8e5-2bd837584f8e"
+        },
+        "boundary": {
+          "thread_id": "019f99de-9572-7221-89c0-80c62f883d44",
+          "rollout_path": "@ROLLOUT@",
+          "min_offset": 291,
+          "imported_item_ids": [
+            "imported"
+          ],
+          "prefix_digest": null
+        },
+        "error_code": null
+      },
+      "source_bytes": "{\"type\": \"user\", \"uuid\": \"851a5e898d7a885ae33e3aab541e0e8691cba0e5\", \"parentUuid\": null, \"timestamp\": \"2026-01-01T00:00:00Z\", \"cwd\": \"/tmp/tmpdddzddqb\", \"message\": {\"role\": \"user\", \"content\": \"ok\"}}\n{\"type\": \"assistant\", \"uuid\": \"tool\", \"parentUuid\": \"851a5e898d7a885ae33e3aab541e0e8691cba0e5\", \"timestamp\": \"2026-01-01T00:01:00Z\", \"message\": {\"role\": \"assistant\", \"content\": [{\"type\": \"tool_use\", \"id\": \"call\", \"name\": \"Read\", \"input\": {\"file_path\": \"/original/report.md\"}}]}}\n{\"type\": \"user\", \"uuid\": \"result\", \"parentUuid\": \"tool\", \"timestamp\": \"2026-01-01T00:02:00Z\", \"message\": {\"role\": \"user\", \"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"call\", \"content\": \"resultado original\"}]}}\n{\"type\": \"system\", \"subtype\": \"compact_boundary\", \"uuid\": \"compact\", \"parentUuid\": null, \"logicalParentUuid\": \"result\"}\n{\"type\": \"user\", \"uuid\": \"summary\", \"parentUuid\": \"compact\", \"isCompactSummary\": true, \"message\": {\"role\": \"user\", \"content\": \"RESUMO NÃO DEVE ENTRAR\"}}\n{\"type\": \"assistant\", \"uuid\": \"after\", \"parentUuid\": \"summary\", \"timestamp\": \"2026-01-01T00:03:00Z\", \"message\": {\"role\": \"assistant\", \"content\": \"antigo\"}}\n{\"type\": \"assistant\", \"uuid\": \"fork\", \"parentUuid\": \"851a5e898d7a885ae33e3aab541e0e8691cba0e5\", \"isSidechain\": true, \"message\": {\"role\": \"assistant\", \"content\": \"FORK NÃO DEVE ENTRAR\"}}\n{\"type\": \"last-prompt\", \"leafUuid\": \"after\"}\n",
+      "rollout_bytes": "{\"type\": \"session_meta\", \"payload\": {\"id\": \"019f99de-9572-7221-89c0-80c62f883d44\", \"cwd\": \"/tmp/tmpdddzddqb\"}}\n{\"timestamp\": \"2026-02-01T00:00:00Z\", \"type\": \"response_item\", \"payload\": {\"type\": \"message\", \"id\": \"imported\", \"role\": \"user\", \"content\": [{\"type\": \"input_text\", \"text\": \"ok\"}]}}\n{\"timestamp\": \"2026-02-02T00:00:00Z\", \"type\": \"response_item\", \"payload\": {\"type\": \"message\", \"id\": \"new\", \"role\": \"user\", \"content\": [{\"type\": \"input_text\", \"text\": \"novo\"}]}}\n",
+      "queue": [],
+      "error": {
+        "type": "HistoryError",
+        "detail": "a fronteira da importação não possui digest verificado"
+      }
+    },
+    {
+      "name": "wrong-selected-source-branch",
+      "record": {
+        "id": "a563a017-af37-42e8-a8e5-2bd837584f8e",
+        "name": "s",
+        "source_life": "k:original",
+        "phase": "complete",
+        "source": {
+          "path": "@SOURCE@",
+          "provider": "claude",
+          "digest": "27493c4bf6cf7fb19c71ce60926f2e679c1a523087cef260bf2df8a55ab41437",
+          "selected_uuids": [
+            "wrong"
+          ]
+        },
+        "origin_meta": {
+          "provider": "claude",
+          "jsonl": "@ORIGIN@",
+          "cwd": "@HOME@",
+          "key": "original"
+        },
+        "destination_meta": {
+          "provider": "codex",
+          "thread_id": "019f99de-9572-7221-89c0-80c62f883d44",
+          "codex_home": "@CODEX@",
+          "lifecycle_id": "k:original",
+          "transfer_id": "a563a017-af37-42e8-a8e5-2bd837584f8e"
+        },
+        "boundary": {
+          "thread_id": "019f99de-9572-7221-89c0-80c62f883d44",
+          "rollout_path": "@ROLLOUT@",
+          "min_offset": 291,
+          "imported_item_ids": [
+            "imported"
+          ],
+          "prefix_digest": "d20ef21fbfbce94de1b5b3e6e7e1abe958712f904034ead49e3698606cc3b3c5"
+        },
+        "error_code": null
+      },
+      "source_bytes": "{\"type\": \"user\", \"uuid\": \"851a5e898d7a885ae33e3aab541e0e8691cba0e5\", \"parentUuid\": null, \"timestamp\": \"2026-01-01T00:00:00Z\", \"cwd\": \"/tmp/tmpdddzddqb\", \"message\": {\"role\": \"user\", \"content\": \"ok\"}}\n{\"type\": \"assistant\", \"uuid\": \"tool\", \"parentUuid\": \"851a5e898d7a885ae33e3aab541e0e8691cba0e5\", \"timestamp\": \"2026-01-01T00:01:00Z\", \"message\": {\"role\": \"assistant\", \"content\": [{\"type\": \"tool_use\", \"id\": \"call\", \"name\": \"Read\", \"input\": {\"file_path\": \"/original/report.md\"}}]}}\n{\"type\": \"user\", \"uuid\": \"result\", \"parentUuid\": \"tool\", \"timestamp\": \"2026-01-01T00:02:00Z\", \"message\": {\"role\": \"user\", \"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"call\", \"content\": \"resultado original\"}]}}\n{\"type\": \"system\", \"subtype\": \"compact_boundary\", \"uuid\": \"compact\", \"parentUuid\": null, \"logicalParentUuid\": \"result\"}\n{\"type\": \"user\", \"uuid\": \"summary\", \"parentUuid\": \"compact\", \"isCompactSummary\": true, \"message\": {\"role\": \"user\", \"content\": \"RESUMO NÃO DEVE ENTRAR\"}}\n{\"type\": \"assistant\", \"uuid\": \"after\", \"parentUuid\": \"summary\", \"timestamp\": \"2026-01-01T00:03:00Z\", \"message\": {\"role\": \"assistant\", \"content\": \"antigo\"}}\n{\"type\": \"assistant\", \"uuid\": \"fork\", \"parentUuid\": \"851a5e898d7a885ae33e3aab541e0e8691cba0e5\", \"isSidechain\": true, \"message\": {\"role\": \"assistant\", \"content\": \"FORK NÃO DEVE ENTRAR\"}}\n{\"type\": \"last-prompt\", \"leafUuid\": \"after\"}\n",
+      "rollout_bytes": "{\"type\": \"session_meta\", \"payload\": {\"id\": \"019f99de-9572-7221-89c0-80c62f883d44\", \"cwd\": \"/tmp/tmpdddzddqb\"}}\n{\"timestamp\": \"2026-02-01T00:00:00Z\", \"type\": \"response_item\", \"payload\": {\"type\": \"message\", \"id\": \"imported\", \"role\": \"user\", \"content\": [{\"type\": \"input_text\", \"text\": \"ok\"}]}}\n{\"timestamp\": \"2026-02-02T00:00:00Z\", \"type\": \"response_item\", \"payload\": {\"type\": \"message\", \"id\": \"new\", \"role\": \"user\", \"content\": [{\"type\": \"input_text\", \"text\": \"novo\"}]}}\n",
+      "queue": [],
+      "error": {
+        "type": "HistoryError",
+        "detail": "o ramo selecionado diverge do snapshot"
+      }
+    },
+    {
+      "name": "invalid-active-json",
+      "record": {
+        "id": "a563a017-af37-42e8-a8e5-2bd837584f8e",
+        "name": "s",
+        "source_life": "k:original",
+        "phase": "complete",
+        "source": {
+          "path": "@SOURCE@",
+          "provider": "claude",
+          "digest": "27493c4bf6cf7fb19c71ce60926f2e679c1a523087cef260bf2df8a55ab41437",
+          "selected_uuids": [
+            "851a5e898d7a885ae33e3aab541e0e8691cba0e5",
+            "tool",
+            "result",
+            "compact",
+            "after"
+          ]
+        },
+        "origin_meta": {
+          "provider": "claude",
+          "jsonl": "@ORIGIN@",
+          "cwd": "@HOME@",
+          "key": "original"
+        },
+        "destination_meta": {
+          "provider": "codex",
+          "thread_id": "019f99de-9572-7221-89c0-80c62f883d44",
+          "codex_home": "@CODEX@",
+          "lifecycle_id": "k:original",
+          "transfer_id": "a563a017-af37-42e8-a8e5-2bd837584f8e"
+        },
+        "boundary": {
+          "thread_id": "019f99de-9572-7221-89c0-80c62f883d44",
+          "rollout_path": "@ROLLOUT@",
+          "min_offset": 291,
+          "imported_item_ids": [
+            "imported"
+          ],
+          "prefix_digest": "d20ef21fbfbce94de1b5b3e6e7e1abe958712f904034ead49e3698606cc3b3c5"
+        },
+        "error_code": null
+      },
+      "source_bytes": "{\"type\": \"user\", \"uuid\": \"851a5e898d7a885ae33e3aab541e0e8691cba0e5\", \"parentUuid\": null, \"timestamp\": \"2026-01-01T00:00:00Z\", \"cwd\": \"/tmp/tmpdddzddqb\", \"message\": {\"role\": \"user\", \"content\": \"ok\"}}\n{\"type\": \"assistant\", \"uuid\": \"tool\", \"parentUuid\": \"851a5e898d7a885ae33e3aab541e0e8691cba0e5\", \"timestamp\": \"2026-01-01T00:01:00Z\", \"message\": {\"role\": \"assistant\", \"content\": [{\"type\": \"tool_use\", \"id\": \"call\", \"name\": \"Read\", \"input\": {\"file_path\": \"/original/report.md\"}}]}}\n{\"type\": \"user\", \"uuid\": \"result\", \"parentUuid\": \"tool\", \"timestamp\": \"2026-01-01T00:02:00Z\", \"message\": {\"role\": \"user\", \"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"call\", \"content\": \"resultado original\"}]}}\n{\"type\": \"system\", \"subtype\": \"compact_boundary\", \"uuid\": \"compact\", \"parentUuid\": null, \"logicalParentUuid\": \"result\"}\n{\"type\": \"user\", \"uuid\": \"summary\", \"parentUuid\": \"compact\", \"isCompactSummary\": true, \"message\": {\"role\": \"user\", \"content\": \"RESUMO NÃO DEVE ENTRAR\"}}\n{\"type\": \"assistant\", \"uuid\": \"after\", \"parentUuid\": \"summary\", \"timestamp\": \"2026-01-01T00:03:00Z\", \"message\": {\"role\": \"assistant\", \"content\": \"antigo\"}}\n{\"type\": \"assistant\", \"uuid\": \"fork\", \"parentUuid\": \"851a5e898d7a885ae33e3aab541e0e8691cba0e5\", \"isSidechain\": true, \"message\": {\"role\": \"assistant\", \"content\": \"FORK NÃO DEVE ENTRAR\"}}\n{\"type\": \"last-prompt\", \"leafUuid\": \"after\"}\n",
+      "rollout_bytes": "{\"type\": \"session_meta\", \"payload\": {\"id\": \"019f99de-9572-7221-89c0-80c62f883d44\", \"cwd\": \"/tmp/tmpdddzddqb\"}}\n{\"timestamp\": \"2026-02-01T00:00:00Z\", \"type\": \"response_item\", \"payload\": {\"type\": \"message\", \"id\": \"imported\", \"role\": \"user\", \"content\": [{\"type\": \"input_text\", \"text\": \"ok\"}]}}\n{\"timestamp\": \"2026-02-02T00:00:00Z\", \"type\": \"response_item\", \"payload\": {\"type\": \"message\", \"id\": \"new\", \"role\": \"user\", \"content\": [{\"type\": \"input_text\", \"text\": \"novo\"}]}}\nnot-json\n",
+      "queue": [],
+      "error": {
+        "type": "HistoryError",
+        "detail": "o rollout ativo contém uma linha inválida"
+      }
+    },
+    {
+      "name": "source-incomplete-final-line",
+      "record": {
+        "id": "a563a017-af37-42e8-a8e5-2bd837584f8e",
+        "name": "s",
+        "source_life": "k:original",
+        "phase": "complete",
+        "source": {
+          "path": "@SOURCE@",
+          "provider": "claude",
+          "digest": "c73033968bdea2c30d9bb6a10df01ef97b0dc29a42b18cfb7f8a68b5c6e5d801",
+          "selected_uuids": [
+            "851a5e898d7a885ae33e3aab541e0e8691cba0e5",
+            "tool",
+            "result",
+            "compact",
+            "after"
+          ]
+        },
+        "origin_meta": {
+          "provider": "claude",
+          "jsonl": "@ORIGIN@",
+          "cwd": "@HOME@",
+          "key": "original"
+        },
+        "destination_meta": {
+          "provider": "codex",
+          "thread_id": "019f99de-9572-7221-89c0-80c62f883d44",
+          "codex_home": "@CODEX@",
+          "lifecycle_id": "k:original",
+          "transfer_id": "a563a017-af37-42e8-a8e5-2bd837584f8e"
+        },
+        "boundary": {
+          "thread_id": "019f99de-9572-7221-89c0-80c62f883d44",
+          "rollout_path": "@ROLLOUT@",
+          "min_offset": 291,
+          "imported_item_ids": [
+            "imported"
+          ],
+          "prefix_digest": "d20ef21fbfbce94de1b5b3e6e7e1abe958712f904034ead49e3698606cc3b3c5"
+        },
+        "error_code": null
+      },
+      "source_bytes": "{\"type\": \"user\", \"uuid\": \"851a5e898d7a885ae33e3aab541e0e8691cba0e5\", \"parentUuid\": null, \"timestamp\": \"2026-01-01T00:00:00Z\", \"cwd\": \"/tmp/tmpdddzddqb\", \"message\": {\"role\": \"user\", \"content\": \"ok\"}}\n{\"type\": \"assistant\", \"uuid\": \"tool\", \"parentUuid\": \"851a5e898d7a885ae33e3aab541e0e8691cba0e5\", \"timestamp\": \"2026-01-01T00:01:00Z\", \"message\": {\"role\": \"assistant\", \"content\": [{\"type\": \"tool_use\", \"id\": \"call\", \"name\": \"Read\", \"input\": {\"file_path\": \"/original/report.md\"}}]}}\n{\"type\": \"user\", \"uuid\": \"result\", \"parentUuid\": \"tool\", \"timestamp\": \"2026-01-01T00:02:00Z\", \"message\": {\"role\": \"user\", \"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"call\", \"content\": \"resultado original\"}]}}\n{\"type\": \"system\", \"subtype\": \"compact_boundary\", \"uuid\": \"compact\", \"parentUuid\": null, \"logicalParentUuid\": \"result\"}\n{\"type\": \"user\", \"uuid\": \"summary\", \"parentUuid\": \"compact\", \"isCompactSummary\": true, \"message\": {\"role\": \"user\", \"content\": \"RESUMO NÃO DEVE ENTRAR\"}}\n{\"type\": \"assistant\", \"uuid\": \"after\", \"parentUuid\": \"summary\", \"timestamp\": \"2026-01-01T00:03:00Z\", \"message\": {\"role\": \"assistant\", \"content\": \"antigo\"}}\n{\"type\": \"assistant\", \"uuid\": \"fork\", \"parentUuid\": \"851a5e898d7a885ae33e3aab541e0e8691cba0e5\", \"isSidechain\": true, \"message\": {\"role\": \"assistant\", \"content\": \"FORK NÃO DEVE ENTRAR\"}}\n{\"type\": \"last-prompt\", \"leafUuid\": \"after\"}",
+      "rollout_bytes": "{\"type\": \"session_meta\", \"payload\": {\"id\": \"019f99de-9572-7221-89c0-80c62f883d44\", \"cwd\": \"/tmp/tmpdddzddqb\"}}\n{\"timestamp\": \"2026-02-01T00:00:00Z\", \"type\": \"response_item\", \"payload\": {\"type\": \"message\", \"id\": \"imported\", \"role\": \"user\", \"content\": [{\"type\": \"input_text\", \"text\": \"ok\"}]}}\n{\"timestamp\": \"2026-02-02T00:00:00Z\", \"type\": \"response_item\", \"payload\": {\"type\": \"message\", \"id\": \"new\", \"role\": \"user\", \"content\": [{\"type\": \"input_text\", \"text\": \"novo\"}]}}\n",
+      "queue": [],
+      "error": {
+        "type": "HistoryError",
+        "detail": "o snapshot da origem tem linha incompleta"
+      }
+    },
+    {
+      "name": "source-cycle",
+      "record": {
+        "id": "a563a017-af37-42e8-a8e5-2bd837584f8e",
+        "name": "s",
+        "source_life": "k:original",
+        "phase": "complete",
+        "source": {
+          "path": "@SOURCE@",
+          "provider": "claude",
+          "digest": "cf9aca1edbde90f2f0defb5cf7e82ab6e80a9ed3a90e5d949ff95c7c1d05a5c5",
+          "selected_uuids": [
+            "851a5e898d7a885ae33e3aab541e0e8691cba0e5",
+            "tool",
+            "result",
+            "compact",
+            "after"
+          ]
+        },
+        "origin_meta": {
+          "provider": "claude",
+          "jsonl": "@ORIGIN@",
+          "cwd": "@HOME@",
+          "key": "original"
+        },
+        "destination_meta": {
+          "provider": "codex",
+          "thread_id": "019f99de-9572-7221-89c0-80c62f883d44",
+          "codex_home": "@CODEX@",
+          "lifecycle_id": "k:original",
+          "transfer_id": "a563a017-af37-42e8-a8e5-2bd837584f8e"
+        },
+        "boundary": {
+          "thread_id": "019f99de-9572-7221-89c0-80c62f883d44",
+          "rollout_path": "@ROLLOUT@",
+          "min_offset": 291,
+          "imported_item_ids": [
+            "imported"
+          ],
+          "prefix_digest": "d20ef21fbfbce94de1b5b3e6e7e1abe958712f904034ead49e3698606cc3b3c5"
+        },
+        "error_code": null
+      },
+      "source_bytes": "{\"type\": \"user\", \"uuid\": \"851a5e898d7a885ae33e3aab541e0e8691cba0e5\", \"parentUuid\": \"tool\", \"timestamp\": \"2026-01-01T00:00:00Z\", \"cwd\": \"/tmp/tmpdddzddqb\", \"message\": {\"role\": \"user\", \"content\": \"ok\"}}\n{\"type\": \"assistant\", \"uuid\": \"tool\", \"parentUuid\": \"851a5e898d7a885ae33e3aab541e0e8691cba0e5\", \"timestamp\": \"2026-01-01T00:01:00Z\", \"message\": {\"role\": \"assistant\", \"content\": [{\"type\": \"tool_use\", \"id\": \"call\", \"name\": \"Read\", \"input\": {\"file_path\": \"/original/report.md\"}}]}}\n{\"type\": \"user\", \"uuid\": \"result\", \"parentUuid\": \"tool\", \"timestamp\": \"2026-01-01T00:02:00Z\", \"message\": {\"role\": \"user\", \"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"call\", \"content\": \"resultado original\"}]}}\n{\"type\": \"system\", \"subtype\": \"compact_boundary\", \"uuid\": \"compact\", \"parentUuid\": null, \"logicalParentUuid\": \"result\"}\n{\"type\": \"user\", \"uuid\": \"summary\", \"parentUuid\": \"compact\", \"isCompactSummary\": true, \"message\": {\"role\": \"user\", \"content\": \"RESUMO NÃO DEVE ENTRAR\"}}\n{\"type\": \"assistant\", \"uuid\": \"after\", \"parentUuid\": \"summary\", \"timestamp\": \"2026-01-01T00:03:00Z\", \"message\": {\"role\": \"assistant\", \"content\": \"antigo\"}}\n{\"type\": \"assistant\", \"uuid\": \"fork\", \"parentUuid\": \"851a5e898d7a885ae33e3aab541e0e8691cba0e5\", \"isSidechain\": true, \"message\": {\"role\": \"assistant\", \"content\": \"FORK NÃO DEVE ENTRAR\"}}\n{\"type\": \"last-prompt\", \"leafUuid\": \"after\"}\n",
+      "rollout_bytes": "{\"type\": \"session_meta\", \"payload\": {\"id\": \"019f99de-9572-7221-89c0-80c62f883d44\", \"cwd\": \"/tmp/tmpdddzddqb\"}}\n{\"timestamp\": \"2026-02-01T00:00:00Z\", \"type\": \"response_item\", \"payload\": {\"type\": \"message\", \"id\": \"imported\", \"role\": \"user\", \"content\": [{\"type\": \"input_text\", \"text\": \"ok\"}]}}\n{\"timestamp\": \"2026-02-02T00:00:00Z\", \"type\": \"response_item\", \"payload\": {\"type\": \"message\", \"id\": \"new\", \"role\": \"user\", \"content\": [{\"type\": \"input_text\", \"text\": \"novo\"}]}}\n",
+      "queue": [],
+      "error": {
+        "type": "HistoryError",
+        "detail": "o ramo da origem não pode ser reconstruído"
+      }
+    }
+  ]
+}
