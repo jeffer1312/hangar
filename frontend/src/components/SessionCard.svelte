@@ -6,6 +6,7 @@ import { textoProblema } from '../lib/problema';
   import { cwdParts, rotuloEstado, stateColors, untrackedReason, providerName, relativeTime, fmtWhen, isOrq, worktreeLabel } from '@hangar/core';
   import { getPushSettings, setSessionMute, getBranches, checkoutBranch, gitAction, openEditor, setThenLink, clearThenLink, canPair, canLeave } from '@hangar/core';
   import { leavePair, pairExternals, setPairAccess, type PairExternal } from '@hangar/core';
+  import { hideSession, showSession } from '@hangar/core';
   import { sessionServerFor, type SessionServer } from '../lib/sessionServer';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
   import { worktreeStatus } from '../lib/worktreeStatus.svelte';
@@ -289,6 +290,22 @@ import { textoProblema } from '../lib/problema';
   async function copyCwd() {
     if (await copyText(session.cwd ?? '')) menuOpen = false;
     else say(m.toast_copiar_falhou(), true);
+  }
+  // A marca mora no servidor da sessão; a linha some/volta pelo SSE da lista. Esperando você, o
+  // servidor tiraria a marca na rodada seguinte, por isso ocultar fica desligado.
+  const hidden = $derived(session.hidden_from_list === true);
+  const hideBlocked = $derived(!hidden && asking);
+  function toggleHidden() {
+    const server = listOwnServers().find((s) => s.id === serverId);
+    if (!server) return;
+    void act(async () => {
+      try {
+        await (hidden ? showSession(server, session.name) : hideSession(server, session.name));
+      } catch (e) {
+        throw new Error(hidden ? m.session_show_failed({ error: errMsg(e) }) : m.session_hide_failed({ error: errMsg(e) }));
+      }
+      return null;
+    });
   }
   function doOpenEditor() {
     void act(async () => { await withServer(serverId, () => openEditor(session.name)); return null; });
@@ -780,6 +797,11 @@ import { textoProblema } from '../lib/problema';
           {#if !invite}
             {@render item(muteError ? m.ctx_flash_silenciar({ n: muteError }) : muted ? m.ctx_reativar_notif() : m.ctx_silenciar_notif(),
               'M6 16V11a6 6 0 0 1 12 0v5l2 2H4l2-2zM10 21h4', toggleMute, { disabled: muted === null })}
+            {#if serverId}
+              {@render item(hidden ? m.session_show_in_list() : m.session_hide_from_list(),
+                hidden ? 'M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z' : 'M3 3l18 18M10.6 5.1A10 10 0 0 1 12 5c6 0 10 7 10 7a17 17 0 0 1-3 3.6M6.6 6.6C3.9 8.3 2 12 2 12s4 7 10 7a10 10 0 0 0 5.4-1.6M9.9 9.9a3 3 0 0 0 4.2 4.2',
+                toggleHidden, { disabled: hideBlocked, value: hideBlocked ? m.session_hide_waiting() : null })}
+            {/if}
             {#if onPairAccept}
               {@render item(m.native_par_menu(), 'M8 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM16 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8z', () => menuPick(() => onPairAccept?.()), {})}
             {/if}
