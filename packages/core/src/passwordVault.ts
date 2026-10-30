@@ -131,6 +131,15 @@ export function putVaultConfig(s: Server, change: VaultConfigChange): Promise<Va
   return vaultFetchForServer(s, '/api/vault/config', { method: 'PUT', body: JSON.stringify(change) }, KEYRING_MS);
 }
 
+export interface VaultPeer { id: string; base_url: string }
+
+/** Máquinas do `peers.json` de `s`: os candidatos a dona e a destino do backup. */
+export async function listVaultPeers(s: Server): Promise<VaultPeer[]> {
+  const list: unknown = await vaultFetchForServer(s, '/api/peers', undefined, KEYRING_MS);
+  if (!Array.isArray(list)) return [];
+  return list.flatMap((p) => (p && typeof p.id === 'string' && typeof p.base_url === 'string' ? [{ id: p.id, base_url: p.base_url }] : []));
+}
+
 export function listVaultEntries(s: Server): Promise<VaultEntry[]> {
   return vaultFetchForServer(s, '/api/vault/entries', undefined, KEYRING_MS);
 }
