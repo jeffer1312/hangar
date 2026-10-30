@@ -3,10 +3,10 @@
   import ConfirmSheet from '../ConfirmSheet.svelte';
   import * as m from '../../paraglide/messages';
   import { copyText } from '../../lib/clipboard';
-  import { listOwnServers } from '../../lib/auth';
   import {
-    addVaultEntry, deleteVaultEntry, getVaultStatus, listVaultEntries, putVaultConfig, revealVaultPassword, updateVaultEntry,
-    type Server, type VaultEntry, type VaultPolicy, type VaultStatus,
+    addVaultEntry, deleteVaultEntry, getVaultStatus, listVaultEntries, listVaultPeers, putVaultConfig, restoreVault,
+    revealVaultPassword, setVaultRecovery, updateVaultEntry,
+    type Server, type VaultEntry, type VaultPeer, type VaultPolicy, type VaultStatus,
   } from '@hangar/core';
 
   let { server }: { server: Server } = $props();
@@ -46,16 +46,32 @@
   // ── Onde fica o cofre ──────────────────────────────────────────────────────────────────────
   let configuring = $state(false);
   let configError = $state<string | null>(null);
-  // Outras máquinas do dono que guardam um cofre, lidas só quando a pessoa pede para escolher.
-  let candidates = $state<{ server: Server; id: string }[] | null>(null);
-  let probing = $state(false);
+  // Máquinas do `peers.json` desta: candidatas a dona e a guardar a cópia. Lidas só quando pedidas.
+  let peers = $state<VaultPeer[] | null>(null);
+  let peersFor = $state<'owner' | 'backup' | 'restore' | null>(null);
+  let peersLoading = $state(false);
+  let peersError = $state<string | null>(null);
 
-  async function setOwner(owner: string) {
+  async function showPeers(purpose: 'owner' | 'backup' | 'restore') {
+    peersFor = purpose;
+    peersError = null;
+    if (peers) return;
+    peersLoading = true;
+    try {
+      peers = await listVaultPeers(server);
+    } catch (err) {
+      peersError = m.vault_web_peers_failed({ error: reason(err) });
+    } finally {
+      peersLoading = false;
+    }
+  }
+
+  async function setConfig(change: { owner: string } | { backup_peer: string }) {
     configuring = true;
     configError = null;
     try {
-      await putVaultConfig(server, { owner });
-      candidates = null;
+      await putVaultConfig(server, change);
+      peersFor = null;
       await load();
     } catch (err) {
       configError = reason(err);
@@ -63,20 +79,79 @@
       configuring = false;
     }
   }
+  const setOwner = (owner: string) => setConfig({ owner });
 
-  async function findOwners() {
-    probing = true;
-    configError = null;
-    const others = listOwnServers().filter((s) => s.id !== server.id);
-    const found = await Promise.all(others.map(async (s) => {
-      try {
-        const st = await getVaultStatus(s);
-        return st.role === 'owner' && st.server_id ? { server: s, id: st.server_id } : null;
-      } catch { return null; }
-    }));
-    candidates = found.filter((c): c is { server: Server; id: string } => !!c);
-    probing = false;
+  // ── Cópia de segurança e restauração ────────────────────────────────────────────────────────
+  // A senha de recuperação nunca fica no estado depois do envio.
+  const RECOVERY_MIN = 12;
+  let rPassword = $state('');
+  let rConfirm = $state('');
+  let rVisible = $state(false);
+  let rSaving = $state(false);
+  let rError = $state<string | null>(null);
+  let rDone = $state(false);
+  const rMismatch = $derived(!!rConfirm && rPassword !== rConfirm);
+  const rCanSave = $derived(rPassword.length >= RECOVERY_MIN && rPassword === rConfirm);
+
+  async function saveRecovery(e: SubmitEvent) {
+    e.preventDefault();
+    if (rSaving || !rCanSave) return;
+    const typed = rPassword;
+    rPassword = '';
+    rConfirm = '';
+    rSaving = true;
+    rError = null;
+    rDone = false;
+    try {
+      status = await setVaultRecovery(server, typed);
+      rDone = true;
+    } catch (err) {
+      rError = reason(err);
+    } finally {
+      rSaving = false;
+      rVisible = false;
+    }
   }
+
+  let restorePeer = $state<string | null>(null);
+  let restoreFrom = $state('');
+  let restorePassword = $state('');
+  let restoring = $state(false);
+  let restoreError = $state<string | null>(null);
+  const restoreCodes: Record<string, () => string> = {
+    erro_cofre_recuperacao_errada: m.vault_web_restore_wrong,
+    erro_cofre_nao_vazio: m.vault_web_restore_not_empty,
+    erro_cofre_backup_ausente: m.vault_web_restore_no_copy,
+    erro_cofre_backup_ilegivel: m.vault_web_restore_unreadable,
+    erro_cofre_backup_peer_fora: m.vault_web_restore_peer_down,
+    erro_cofre_recuperacao_nao_gravada: m.vault_web_restore_recovery_not_saved,
+  };
+
+  async function restore(e: SubmitEvent) {
+    e.preventDefault();
+    if (restoring || !restorePeer || !restorePassword) return;
+    const typed = restorePassword;
+    restorePassword = '';
+    const from = restoreFrom.trim();
+    restoring = true;
+    restoreError = null;
+    try {
+      await restoreVault(server, typed, restorePeer, from || undefined);
+      restorePeer = null;
+      await load();
+    } catch (err) {
+      const code = codeOf(err);
+      restoreError = (code && restoreCodes[code]?.()) || reason(err);
+      // O cofre voltou, só a senha de recuperação faltou: a tela mostra o cofre aberto.
+      if (code === 'erro_cofre_recuperacao_nao_gravada') await load();
+    } finally {
+      restoring = false;
+    }
+  }
+
+  const when = (at: number) => new Date(at * 1000).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' });
+  const canRestore = $derived(!!status && status.role !== 'remote' &&
+    (status.state === 'absent' || (status.state === 'open' && entries?.length === 0)));
 
   // ── Revelar e copiar ────────────────────────────────────────────────────────────────────────
   async function fetchPassword(id: string): Promise<string | null> {
@@ -218,29 +293,98 @@
       <div class="pv-acoes">
         {#if status.role !== 'owner'}
           <button type="button" class="pv-btn" disabled={configuring} onclick={() => setOwner('self')}>{m.vault_web_make_owner()}</button>
-          <button type="button" class="pv-btn" disabled={configuring || probing} onclick={findOwners}>
-            {probing ? m.vault_web_finding_owners() : m.vault_web_choose_owner()}
+          <button type="button" class="pv-btn" disabled={configuring || peersLoading} onclick={() => showPeers('owner')}>
+            {m.vault_web_choose_owner()}
           </button>
         {/if}
         {#if status.state !== 'open'}
           <button type="button" class="pv-btn" onclick={load}>{m.vault_web_retry()}</button>
         {/if}
       </div>
-      {#if candidates}
-        {#if candidates.length === 0}
-          <p class="pv-muted">{m.vault_web_no_owners()}</p>
-        {:else}
-          <div class="pv-acoes">
-            {#each candidates as c (c.server.id)}
-              <button type="button" class="pv-btn" disabled={configuring} onclick={() => setOwner(c.id)}>
-                {m.vault_web_use_owner({ label: c.server.label })}
-              </button>
-            {/each}
-          </div>
-        {/if}
-      {/if}
-      {#if configError}<p class="pv-erro-txt" role="alert">{configError}</p>{/if}
+      {#if peersFor === 'owner'}{@render peerChoice((id) => setOwner(id), status.owner ?? null)}{/if}
+      {#if configError && peersFor !== 'backup'}<p class="pv-erro-txt" role="alert">{configError}</p>{/if}
     </div>
+
+    {#if status.role === 'owner' && status.state === 'open'}
+      <p class="pv-secao">{m.vault_web_backup_title()}</p>
+      <div class="pv-box">
+        <p class="pv-where">
+          {status.backup?.peer ? m.vault_web_backup_peer({ peer: status.backup.peer }) : m.vault_web_backup_none()}
+        </p>
+        {#if status.backup?.last_ok_at}
+          <p class="pv-muted">{m.vault_web_backup_last_ok({ when: when(status.backup.last_ok_at) })}</p>
+        {:else if status.backup?.peer}
+          <p class="pv-muted">{m.vault_web_backup_never()}</p>
+        {/if}
+        {#if status.backup?.last_error}
+          <p class="pv-erro-txt" role="alert">{m.vault_web_backup_last_error({ error: status.backup.last_error })}</p>
+        {/if}
+        <div class="pv-acoes">
+          <button type="button" class="pv-btn" disabled={configuring || peersLoading} onclick={() => showPeers('backup')}>
+            {status.backup?.peer ? m.vault_web_backup_change() : m.vault_web_backup_choose()}
+          </button>
+        </div>
+        {#if peersFor === 'backup'}{@render peerChoice((id) => setConfig({ backup_peer: id }), status.backup?.peer ?? null)}{/if}
+        {#if configError && peersFor === 'backup'}<p class="pv-erro-txt" role="alert">{configError}</p>{/if}
+
+        <form class="pv-form-inline" onsubmit={saveRecovery}>
+          <p class="pv-campo-tit">{m.vault_web_recovery_title()}</p>
+          <p class="pv-aviso">{m.vault_web_recovery_warning()}</p>
+          <label class="pv-campo"><span>{m.vault_web_recovery_password()}</span>
+            <span class="pv-pw">
+              <input type={rVisible ? 'text' : 'password'} autocomplete="new-password" autocapitalize="off" spellcheck="false"
+                bind:value={rPassword} oninput={() => { rError = null; rDone = false; }} disabled={rSaving} />
+              <button type="button" class="pv-reveal" onclick={() => (rVisible = !rVisible)} disabled={rSaving}
+                aria-label={rVisible ? m.vault_web_hide_password() : m.vault_web_show_password()} aria-pressed={rVisible}>
+                <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+                  <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" /><circle cx="12" cy="12" r="3" />
+                  {#if rVisible}<path d="M3 3l18 18" />{/if}
+                </svg>
+              </button>
+            </span></label>
+          <label class="pv-campo"><span>{m.vault_web_recovery_confirm()}</span>
+            <input type={rVisible ? 'text' : 'password'} autocomplete="new-password" autocapitalize="off" spellcheck="false"
+              bind:value={rConfirm} disabled={rSaving} aria-invalid={rMismatch} /></label>
+          {#if rPassword && rPassword.length < RECOVERY_MIN}
+            <p class="pv-muted">{m.vault_web_recovery_short({ n: RECOVERY_MIN })}</p>
+          {:else if rMismatch}
+            <p class="pv-erro-txt">{m.vault_web_recovery_mismatch()}</p>
+          {/if}
+          {#if rError}<p class="pv-erro-txt" role="alert">{m.vault_web_recovery_failed({ error: rError })}</p>{/if}
+          {#if rDone}<p class="pv-muted" role="status">{m.vault_web_recovery_saved()}</p>{/if}
+          <div class="pv-acoes">
+            <button type="submit" class="pv-btn pv-primario" disabled={rSaving || !rCanSave}>
+              {rSaving ? m.vault_web_saving() : m.vault_web_recovery_save()}
+            </button>
+          </div>
+        </form>
+      </div>
+    {/if}
+
+    {#if canRestore}
+      <p class="pv-secao">{m.vault_web_restore_title()}</p>
+      <form class="pv-box" onsubmit={restore}>
+        <p class="pv-muted">{m.vault_web_restore_hint()}</p>
+        <div class="pv-acoes">
+          <button type="button" class="pv-btn" disabled={restoring || peersLoading} onclick={() => showPeers('restore')}>
+            {restorePeer ? m.vault_web_restore_from({ peer: restorePeer }) : m.vault_web_restore_choose()}
+          </button>
+        </div>
+        {#if peersFor === 'restore'}{@render peerChoice((id) => { restorePeer = id; peersFor = null; }, restorePeer)}{/if}
+        <label class="pv-campo"><span>{m.vault_web_restore_server_id()}</span>
+          <input type="text" autocomplete="off" autocapitalize="off" spellcheck="false" bind:value={restoreFrom}
+            placeholder={status.server_id ?? ''} disabled={restoring} /></label>
+        <label class="pv-campo"><span>{m.vault_web_recovery_password()}</span>
+          <input type="password" autocomplete="off" autocapitalize="off" spellcheck="false"
+            bind:value={restorePassword} oninput={() => (restoreError = null)} disabled={restoring} /></label>
+        {#if restoreError}<p class="pv-erro-txt" role="alert">{restoreError}</p>{/if}
+        <div class="pv-acoes">
+          <button type="submit" class="pv-btn pv-primario" disabled={restoring || !restorePeer || !restorePassword}>
+            {restoring ? m.vault_web_restoring() : m.vault_web_restore()}
+          </button>
+        </div>
+      </form>
+    {/if}
 
     {#if status.state === 'open'}
       <div class="pv-topo">
@@ -284,6 +428,23 @@
     {/if}
   {/if}
 </div>
+
+{#snippet peerChoice(pick: (id: string) => void, current: string | null)}
+  {#if peersLoading}
+    <p class="pv-muted" role="status">{m.vault_web_loading()}</p>
+  {:else if peersError}
+    <p class="pv-erro-txt" role="alert">{peersError}</p>
+  {:else if peers && peers.length === 0}
+    <p class="pv-muted">{m.vault_web_no_peers()}</p>
+  {:else if peers}
+    <div class="pv-acoes">
+      {#each peers as p (p.id)}
+        <button type="button" class="pv-btn" class:pv-atual={p.id === current} aria-pressed={p.id === current}
+          disabled={configuring} onclick={() => pick(p.id)}>{p.id}</button>
+      {/each}
+    </div>
+  {/if}
+{/snippet}
 
 <BottomSheet open={!!editing} onClose={closeForm} ariaLabel={editing === 'new' ? m.vault_web_add_title() : m.vault_web_edit_title()}>
   {#if editing}
@@ -358,6 +519,9 @@
   .pv-btn:disabled { opacity: 0.5; cursor: default; }
   .pv-primario { background: var(--accent); border-color: var(--accent); color: #0b0e13; }
   .pv-perigo { color: var(--error); }
+  .pv-atual { border-color: var(--accent); }
+  .pv-form-inline { display: flex; flex-direction: column; gap: var(--space-2); margin-top: var(--space-2); }
+  .pv-campo-tit { font-size: var(--text-sm); font-weight: 600; color: var(--text-primary); }
   .pv-lista {
     list-style: none; margin: 0; padding: 0;
     background: var(--surface-card); border: 1px solid var(--border-subtle);
