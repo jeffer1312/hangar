@@ -356,17 +356,16 @@ async fn stopped_server(name: &str, entry: &str) {
         .expect("a parada não respeitou o prazo do Supervisor").unwrap();
     assert!(output.status.success(),"servidor saiu em falha: {}",String::from_utf8_lossy(&output.stderr));
     assert_eq!(desktop.current_layout(),"mobile");
-    let reference = support::contract("shutdown-reference");
-    let expected = &reference["observed"];
-    assert_eq!(desktop.requests(),*expected["cmd"].as_array().unwrap());
-    assert_eq!(desktop.current_layout(),expected["desktop_layout"].as_str().unwrap());
+    let command = |args: Value| json!({"authorization":"Bearer remote-browser-contract-desktop","receiver_pid":123,
+        "body":{"chave":"contract::nav-contract","verbo":"layout","args":args}});
+    assert_eq!(desktop.requests(),[command(json!([])),command(json!(["900","700"])),command(json!([])),command(json!(["mobile"]))]);
     let mut closed = None;
     while let Some(message) = client.next().await {
         if let Message::Close(frame) = message.unwrap() {
             closed = frame.map(|frame|json!({"code":u16::from(frame.code),"reason":frame.reason.to_string()}));
         }
     }
-    assert_eq!(closed.expect("a parada não enviou Close"),expected["client_close"]);
+    assert_eq!(closed.expect("a parada não enviou Close"),json!({"code":1012,"reason":""}));
     crate::assert_closed(public,"porta do servidor parado").await;
     scene.upstream.assert_no_browser_or_discovery_calls();
     desktop.server.close().await;
