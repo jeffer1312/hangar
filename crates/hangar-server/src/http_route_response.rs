@@ -28,5 +28,6 @@ pub fn suppress_head(method:&Method,response:&mut Response){
     if !response.headers().contains_key("content-length")&&!matches!(response.status().as_u16(),204|304){
         if let Some(length)=response.body().size_hint().exact(){response.headers_mut().insert("content-length",HeaderValue::from_str(&length.to_string()).unwrap());}
     }
-    *response.body_mut()=Body::empty();
+    // Corpo de tamanho desconhecido não vira Content-Length: 0 na camada HTTP externa.
+    *response.body_mut()=Body::from_stream(futures_util::stream::empty::<Result<axum::body::Bytes,std::convert::Infallible>>());
 }

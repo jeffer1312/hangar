@@ -71,3 +71,63 @@ async fn guest_loop_http_login_stays_inside_its_session() {
         assert_eq!(serde_json::from_slice::<Value>(&raw).unwrap(),case["response"],"{}",case["path"]);
     }
 }
+
+#[tokio::test]
+async fn guest_loop_http_transfer_guard_matches_original() {
+    let fixture: Value = serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/loop-transfer-order.json")).unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let state = state(home.path());
+    let runtime = Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new(
+        crate::refused_address(), "fixture".into(), "fixture-instance".into()));
+    runtime.ingress().hold("fixture", std::time::Duration::from_secs(1)).await.unwrap();
+    assert!(state.state.runtime.set(runtime).is_ok());
+    let router = hangar_server::routes::router(state);
+    let mut failures = Vec::new();
+    let mut count = 0;
+    for (index, case) in fixture["rows"].as_array().unwrap().iter().enumerate() {
+        if case["busy"] != true { continue; }
+        count += 1;
+        let bytes = case["body_hex"].as_str().unwrap().as_bytes().chunks_exact(2)
+            .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap()).collect::<Vec<_>>();
+        let mut builder = Request::post("/api/sessions/fixture/loop")
+            .header("authorization", format!("Bearer {}", case["token"].as_str().unwrap()));
+        if let Some(media) = case["content_type"].as_str() { builder = builder.header("content-type", media); }
+        let mut request = builder.body(Body::from(bytes)).unwrap();
+        request.extensions_mut().insert(ConnectInfo(format!("192.0.2.{}:1234", index + 1).parse::<SocketAddr>().unwrap()));
+        let response = tokio::time::timeout(std::time::Duration::from_secs(2), router.clone().oneshot(request)).await.unwrap().unwrap();
+        let status = response.status().as_u16();
+        let raw = to_bytes(response.into_body(), 1048576).await.unwrap();
+        let body = serde_json::from_slice::<Value>(&raw).unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&raw).into_owned()));
+        if status != case["status"].as_u64().unwrap() as u16 || body != case["response"] { failures.push((index, status, body)); }
+    }
+    assert_eq!(count, 42);
+    assert!(failures.is_empty(), "GUE-083: trava de transferência divergente {failures:?}");
+}
+
+#[tokio::test]
+async fn guest_loop_http_preflight_and_declared_limit_keep_middleware_order() {
+    // Captura do middleware original: caminho irrelevante para preflight/413 antes do handler.
+    let fixture: Value = serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/update-git/cors.json")).unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let mut state = state(home.path());
+    Arc::get_mut(&mut Arc::get_mut(&mut state).unwrap().login_guests).unwrap().body_limit = 64;
+    let router = hangar_server::routes::router(state);
+    let mut count = 0;
+    for case in fixture["cases"].as_array().unwrap() {
+        let preflight = case["method"] == "OPTIONS" && case["headers"]["origin"].is_string() && case["headers"]["access-control-request-method"].is_string();
+        if !preflight && case["expected"]["status"] != 413 { continue; }
+        count += 1;
+        let mut builder = Request::builder().method(case["method"].as_str().unwrap()).uri("/api/sessions/fixture/loop");
+        for (key, value) in case["headers"].as_object().unwrap() { builder = builder.header(key, value.as_str().unwrap()); }
+        let mut request = builder.body(Body::empty()).unwrap();
+        request.extensions_mut().insert(ConnectInfo("192.0.2.1:1234".parse::<SocketAddr>().unwrap()));
+        let response = router.clone().oneshot(request).await.unwrap();
+        let status = response.status().as_u16();
+        let headers = response.headers().iter().map(|(key, value)| (key.as_str().to_owned(), Value::String(value.to_str().unwrap().to_owned()))).collect::<serde_json::Map<_, _>>();
+        let raw = to_bytes(response.into_body(), 1048576).await.unwrap();
+        assert_eq!(status, case["expected"]["status"].as_u64().unwrap() as u16, "GUE-080/083/084 {case}");
+        assert_eq!(Value::Object(headers), case["expected"]["headers"], "GUE-080/083/084 {case}");
+        assert_eq!(raw.as_ref(), case["expected"]["body"].as_str().unwrap().as_bytes(), "GUE-080/083/084 {case}");
+    }
+    assert_eq!(count, 32);
+}
