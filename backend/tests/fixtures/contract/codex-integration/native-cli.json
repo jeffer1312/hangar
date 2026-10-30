@@ -1,0 +1,310 @@
+{
+  "source_commit": "8a3ce81c1",
+  "platform": "posix",
+  "command": "cd backend && uv run python tests/fixtures/contract/codex-integration/generate_native_cli.py",
+  "boundary": "Execut\u00e1vel controlado; CLI, \u00e1rvore de processos, prazo, cancelamento, fechamento e limpeza originais. Identificador do diret\u00f3rio de diagn\u00f3stico fixado em fixture.",
+  "program": "\nimport json, os, sys, time\nscenario = sys.argv[1]\nassert sys.argv[2:4] == ['-c', 'project_root_markers=[]']\nif scenario in ('timeout', 'cancel', 'close'):\n    time.sleep(30)\nif scenario == 'exit':\n    print('fixture-secret', file=sys.stderr)\n    sys.exit(7)\nif scenario == 'auto':\n    print('auto-upgrade was in flight', file=sys.stderr)\n    sys.exit(1)\nif scenario == 'invalid':\n    print('not json')\nelif scenario == 'array':\n    print('[]')\nelif scenario == 'errors':\n    print(json.dumps({'errors': ['fixture-error']}))\nelif scenario == 'inventory':\n    print(json.dumps({'installed': [{'pluginId': 'a@m', 'version': '1'}]}))\nelif scenario == 'bad_inventory':\n    print(json.dumps({'installed': [None]}))\nelif scenario == 'markets':\n    print(json.dumps({'marketplaces': [{'name': 'm'}]}))\nelse:\n    print(json.dumps({'args': sys.argv[4:], 'home': os.environ['HOME'],\n        'profile': os.environ['USERPROFILE'], 'codexHome': os.environ['CODEX_HOME'], 'cwd': os.getcwd()}))\n",
+  "cases": [
+    {
+      "name": "command",
+      "operation": "cli",
+      "scenario": "ok",
+      "result": {
+        "ok": {
+          "args": [
+            "fixture",
+            "a\u00e7\u00e3o com espa\u00e7o"
+          ],
+          "home": "$ROOT/home",
+          "profile": "$ROOT/home",
+          "codexHome": "$ROOT/home/.codex",
+          "cwd": "$ADMIN"
+        }
+      },
+      "logs": [],
+      "operations_empty": true,
+      "directories_removed": true,
+      "directories_outside_home": true
+    },
+    {
+      "name": "add",
+      "operation": "add",
+      "scenario": "ok",
+      "result": {
+        "ok": {
+          "args": [
+            "plugin",
+            "add",
+            "a@m",
+            "--json"
+          ],
+          "home": "$ROOT/home",
+          "profile": "$ROOT/home",
+          "codexHome": "$ROOT/home/.codex",
+          "cwd": "$ADMIN"
+        }
+      },
+      "logs": [],
+      "operations_empty": true,
+      "directories_removed": true,
+      "directories_outside_home": true
+    },
+    {
+      "name": "list",
+      "operation": "list",
+      "scenario": "inventory",
+      "result": {
+        "ok": [
+          {
+            "pluginId": "a@m",
+            "version": "1"
+          }
+        ]
+      },
+      "logs": [],
+      "operations_empty": true,
+      "directories_removed": true,
+      "directories_outside_home": true
+    },
+    {
+      "name": "markets",
+      "operation": "markets",
+      "scenario": "markets",
+      "result": {
+        "ok": [
+          {
+            "name": "m"
+          }
+        ]
+      },
+      "logs": [],
+      "operations_empty": true,
+      "directories_removed": true,
+      "directories_outside_home": true
+    },
+    {
+      "name": "bad-list",
+      "operation": "list",
+      "scenario": "bad_inventory",
+      "result": {
+        "error": "O Codex retornou um invent\u00e1rio de plugins inv\u00e1lido.",
+        "class": "CodexNativoErro"
+      },
+      "logs": [],
+      "operations_empty": true,
+      "directories_removed": true,
+      "directories_outside_home": true
+    },
+    {
+      "name": "bad-markets",
+      "operation": "markets",
+      "scenario": "ok",
+      "result": {
+        "error": "O Codex retornou um invent\u00e1rio de marketplaces inv\u00e1lido.",
+        "class": "CodexNativoErro"
+      },
+      "logs": [],
+      "operations_empty": true,
+      "directories_removed": true,
+      "directories_outside_home": true
+    },
+    {
+      "name": "upgrade",
+      "operation": "upgrade",
+      "scenario": "ok",
+      "result": {
+        "ok": {
+          "args": [
+            "plugin",
+            "marketplace",
+            "upgrade",
+            "m",
+            "--json"
+          ],
+          "home": "$ROOT/home",
+          "profile": "$ROOT/home",
+          "codexHome": "$ROOT/home/.codex",
+          "cwd": "$ADMIN"
+        }
+      },
+      "logs": [],
+      "operations_empty": true,
+      "directories_removed": true,
+      "directories_outside_home": true
+    },
+    {
+      "name": "auto",
+      "operation": "upgrade",
+      "scenario": "auto",
+      "result": {
+        "ok": {
+          "selectedMarketplaces": [
+            "m"
+          ],
+          "upgradedRoots": [],
+          "errors": []
+        }
+      },
+      "logs": [],
+      "operations_empty": true,
+      "directories_removed": true,
+      "directories_outside_home": true
+    },
+    {
+      "name": "exit",
+      "operation": "cli",
+      "scenario": "exit",
+      "result": {
+        "error": "O comando do Codex falhou (c\u00f3digo 7).",
+        "class": "CodexNativoErro"
+      },
+      "logs": [
+        {
+          "comando": [
+            "fixture",
+            "a\u00e7\u00e3o com espa\u00e7o"
+          ],
+          "codigo": 7,
+          "stdout": "",
+          "stderr": "fixture-secret\n"
+        }
+      ],
+      "operations_empty": true,
+      "directories_removed": true,
+      "directories_outside_home": true
+    },
+    {
+      "name": "invalid",
+      "operation": "cli",
+      "scenario": "invalid",
+      "result": {
+        "error": "O comando do Codex n\u00e3o retornou JSON v\u00e1lido.",
+        "class": "CodexNativoErro"
+      },
+      "logs": [
+        {
+          "comando": [
+            "fixture",
+            "a\u00e7\u00e3o com espa\u00e7o"
+          ],
+          "codigo": 0,
+          "stdout": "not json\n",
+          "stderr": ""
+        }
+      ],
+      "operations_empty": true,
+      "directories_removed": true,
+      "directories_outside_home": true
+    },
+    {
+      "name": "array",
+      "operation": "cli",
+      "scenario": "array",
+      "result": {
+        "error": "O comando do Codex retornou um resultado inv\u00e1lido.",
+        "class": "CodexNativoErro"
+      },
+      "logs": [
+        {
+          "comando": [
+            "fixture",
+            "a\u00e7\u00e3o com espa\u00e7o"
+          ],
+          "codigo": 0,
+          "stdout": "[]\n",
+          "stderr": ""
+        }
+      ],
+      "operations_empty": true,
+      "directories_removed": true,
+      "directories_outside_home": true
+    },
+    {
+      "name": "errors",
+      "operation": "cli",
+      "scenario": "errors",
+      "result": {
+        "ok": {
+          "errors": [
+            "fixture-error"
+          ]
+        }
+      },
+      "logs": [
+        {
+          "comando": [
+            "fixture",
+            "a\u00e7\u00e3o com espa\u00e7o"
+          ],
+          "codigo": 0,
+          "stdout": "{\"errors\": [\"fixture-error\"]}\n",
+          "stderr": ""
+        }
+      ],
+      "operations_empty": true,
+      "directories_removed": true,
+      "directories_outside_home": true
+    },
+    {
+      "name": "timeout",
+      "operation": "cli",
+      "scenario": "timeout",
+      "result": {
+        "error": "O comando do Codex excedeu o tempo limite.",
+        "class": "CodexNativoErro"
+      },
+      "logs": [],
+      "operations_empty": true,
+      "directories_removed": true,
+      "directories_outside_home": true
+    },
+    {
+      "name": "cancel",
+      "operation": "cli",
+      "scenario": "cancel",
+      "result": {
+        "cancelled": true
+      },
+      "logs": [],
+      "operations_empty": true,
+      "directories_removed": true,
+      "directories_outside_home": true
+    },
+    {
+      "name": "close",
+      "operation": "cli",
+      "scenario": "close",
+      "result": {
+        "error": "O comando do Codex falhou (c\u00f3digo -15).",
+        "class": "CodexNativoErro"
+      },
+      "logs": [
+        {
+          "comando": [
+            "fixture",
+            "a\u00e7\u00e3o com espa\u00e7o"
+          ],
+          "codigo": -15,
+          "stdout": "",
+          "stderr": ""
+        }
+      ],
+      "operations_empty": true,
+      "directories_removed": true,
+      "directories_outside_home": true
+    },
+    {
+      "name": "closed",
+      "operation": "cli",
+      "scenario": "ok",
+      "result": {
+        "error": "O cliente nativo do Codex est\u00e1 encerrando.",
+        "class": "CodexNativoErro"
+      },
+      "logs": [],
+      "operations_empty": true,
+      "directories_removed": true,
+      "directories_outside_home": true
+    }
+  ]
+}

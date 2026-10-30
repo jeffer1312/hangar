@@ -1,6 +1,7 @@
 //! Reconciliação nativa do Codex e escritas compartilhadas de configuração.
 pub mod files;
 pub mod native;
+pub mod native_cli;
 pub mod import_api;
 
 pub mod ecc;
