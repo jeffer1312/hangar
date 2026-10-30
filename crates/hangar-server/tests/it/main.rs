@@ -386,3 +386,4 @@ mod codex_hook_commands;
 mod codex_stage_flow;
 
 mod guest_push;
+mod codex_pipeline_hooks;

@@ -11,6 +11,15 @@ impl State {
     pub fn new(value:Value)->Self{Self{data:Arc::new(Mutex::new(ValueGuard(value))),confirmed:Arc::new(Mutex::new(BTreeSet::new()))}}
     pub fn snapshot(&self)->Value{crate::orchestration::codec::clone_value(&self.data.lock().unwrap_or_else(|e|e.into_inner()))}
     pub fn update(&self,apply:impl FnOnce(&mut Value)){apply(&mut self.data.lock().unwrap_or_else(|e|e.into_inner()));}
+    pub fn hooks_changed(&self){
+        self.update(|value|{
+            value["confianca_pendente"]=serde_json::json!(true);
+            let warnings=value["avisos"].as_array_mut().expect("Estado inicializado");
+            if !warnings.iter().any(|item|{let serialized=ValueGuard(super::messages::serialize(item));serialized["codigo"]=="aviso_hooks_alterados"}){
+                warnings.push(super::messages::message("aviso_hooks_alterados",&serde_json::Map::new()).expect("Mensagem versionada"));
+            }
+        });
+    }
     pub fn confirmed(&self)->BTreeSet<String>{self.confirmed.lock().unwrap_or_else(|e|e.into_inner()).clone()}
     pub fn set_confirmed(&self,value:BTreeSet<String>){*self.confirmed.lock().unwrap_or_else(|e|e.into_inner())=value;}
 }
