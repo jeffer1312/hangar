@@ -613,6 +613,9 @@ async fn an_old_claude_that_ignores_the_stop_is_killed_and_the_reopen_goes_on() 
     let _ = std::process::Command::new("kill").args(["-9",&old_agent.to_string()]).status();
     assert_eq!(outcome,Ok(()));
     assert!(std::fs::read_to_string(format!("/proc/{old_agent}/cmdline")).unwrap_or_default().is_empty(),"o antigo saiu à força");
+    let args = fx.args();
+    let command = args.last().unwrap();
+    assert!(command.contains(&format!("claude --resume {SID}")) && command.contains("--permission-mode acceptEdits"),"a mesma conversa no mesmo modo: {command}");
     let (found,_) = registry.terminal_view("s1").await.unwrap();
     registry.close(&found,2).await.unwrap();
     fx.finish();
@@ -929,4 +932,226 @@ async fn reload_without_stalled_delivery_still_refuses_a_waiting_queue() {
     assert_eq!((status,body["detail"]["code"].as_str()),(409,Some("erro_fila_pendente")),"{body}");
     assert!(hangar_server::runtime::process::liveness(deaf.first,&deaf.key)==hangar_server::runtime::process::Liveness::Ours,"nada foi encerrado");
     deaf.registry.close_with_kill(&deaf.key,1).await.unwrap();
+}
+
+/// O terminal da sessão `s1` na conta padrão, com o spec gravado pela chave dele.
+fn terminal_with_spec(fx:&Fixture,key:&str) {
+    std::process::Command::new(&fx.tmux).args(["new-session","-d","-s","s1","-c"]).arg(&fx.cwd).arg("-e").arg(format!("CP_SESSION_KEY={key}")).status().unwrap();
+    let spec = json!({"version":1,"key":key,"name":"s1","cwd":fx.cwd,"provider":"claude","surface":"terminal","account":{"kind":"default"},
+        "account_source":"default","model":null,"effort":null,"service_tier":null,"permission_mode":"acceptEdits","subagent_model":null,
+        "customizations":null,"jev":false,"read_only":false,"worktree":null,"creator":null,"created_at":1.0});
+    std::fs::create_dir_all(fx.home.join(".hangar/session-specs")).unwrap();
+    std::fs::write(fx.home.join(format!(".hangar/session-specs/{key}.json")),spec.to_string()).unwrap();
+}
+
+fn logged_in_default(fx:&Fixture) {
+    std::fs::write(fx.home.join(".claude/.credentials.json"),"{\"claudeAiOauth\":{\"accessToken\":\"a\"}}").unwrap();
+}
+
+/// O sem terminal de verdade: o cano desta compilação e um `claude` falso que responde aos pedidos de
+/// controle e anota os argumentos em `claude.args`.
+async fn headless_registry(fx:&Fixture) -> Arc<RuntimeRegistry> {
+    crate::use_cano_bin();
+    let bin = fx.home.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let fake = fx.home.join("fake-claude.sh");
+    crate::write_executable(&fake,format!(r#"#!/bin/bash
+printf '%s\n' "$*" >> '{args}'
+while IFS= read -r -t 120 line; do
+  case "$line" in
+    *'"type":"control_request"'*)
+      rid=$(sed -E 's/^.*"request_id":"([^"]*)".*$/\1/' <<<"$line")
+      printf '{{"type":"control_response","response":{{"subtype":"success","request_id":"%s","response":{{"commands":[]}}}}}}\n' "$rid";;
+  esac
+done
+"#,args=fx.home.join("claude.args").display()));
+    crate::write_executable(&bin.join("claude"),format!("#!/bin/bash\nexec -a claude /bin/bash '{}' \"$@\"\n",fake.display()));
+    let path = format!("{}:{}",bin.display(),std::env::var("PATH").unwrap());
+    let env = AccountEnvironment::from_map([("HOME".to_owned(),fx.home.to_string_lossy().into_owned()),("PATH".to_owned(),path)].into());
+    let registry = crate::runtime_open::registry_with(|registry|registry.with_codex_environment(env)
+        .with_terms(Arc::new(hangar_server::term::Terms::default()))
+        .with_processes(Arc::new(hangar_server::list::procs::SystemProcs::default()))).await;
+    registry.bind_watcher(Arc::new(Watcher::new(WatchConfig { home:fx.home.clone(),queue_dir:fx.queue.clone(),
+        mux:Mux::with_program(&fx.tmux,Duration::from_secs(5)),mux_program:fx.tmux.clone().into_os_string() }).with_scope_probe(Vec::new)));
+    registry
+}
+
+/// Com o painel de terminal: sem ele a guarda da reabertura de um terminal não abre.
+async fn terminal_registry(fx:&Fixture) -> Arc<RuntimeRegistry> {
+    let registry = crate::runtime_open::registry_with(|registry|registry
+        .with_codex_environment(AccountEnvironment::from_map([("HOME".to_owned(),fx.home.to_string_lossy().into_owned()),("PATH".to_owned(),std::env::var("PATH").unwrap())].into()))
+        .with_terms(Arc::new(hangar_server::term::Terms::default()))).await;
+    registry.bind_watcher(Arc::new(Watcher::new(WatchConfig { home:fx.home.clone(),queue_dir:fx.queue.clone(),
+        mux:Mux::with_program(&fx.tmux,Duration::from_secs(5)),mux_program:fx.tmux.clone().into_os_string() }).with_scope_probe(Vec::new)));
+    registry
+}
+
+fn generation(fx:&Fixture,key:&str) -> u64 {
+    let state:Value = serde_json::from_slice(&std::fs::read(fx.queue.join(format!("runtime/{key}.json"))).unwrap()).unwrap();
+    state["generation"].as_u64().unwrap()
+}
+
+fn gone(pid:u32) -> bool { std::fs::read_to_string(format!("/proc/{pid}/cmdline")).unwrap_or_default().is_empty() }
+
+fn to_bypass() -> SessionChange {
+    SessionChange { reason:ChangeReason::Bypass,surface:None,account:None,permission_mode:Some(hangar_server::session_open::PermissionMode::BypassPermissions),
+        model:None,effort:None,service_tier:None }
+}
+
+#[tokio::test]
+async fn a_terminal_session_goes_headless_on_the_same_conversation_and_mode() {
+    let fx = fixture();
+    fx.transcript();
+    let key = "34".repeat(16);
+    terminal_with_spec(&fx,&key);
+    let old_agent = fx.agent().unwrap();
+    let registry = headless_registry(&fx).await;
+    let reopened = registry.reopen_claude_session("s1",mode_switch(false),None).await.expect("é sessão Claude daqui");
+    let reopened = reopened.map_err(|f|(f.error.code,f.error.message,f.stopped)).unwrap();
+    assert!(reopened.changed);
+    assert!(gone(old_agent),"o pane fechou");
+    let meta:Value = serde_json::from_slice(&std::fs::read(fx.sidecar_path("s1")).unwrap()).unwrap();
+    assert_eq!((meta["headless"].as_bool(),meta["session_id"].as_str(),meta["permission_mode"].as_str(),meta["key"].as_str()),
+        (Some(true),Some(SID),Some("acceptEdits"),Some(key.as_str())));
+    registry.close_with_kill(&key,generation(&fx,&key)).await.unwrap();
+}
+
+#[tokio::test]
+async fn bypass_reopens_a_terminal_on_the_same_conversation() {
+    let fx = fixture();
+    fx.transcript();
+    let key = "78".repeat(16);
+    terminal_with_spec(&fx,&key);
+    let old_agent = fx.agent().unwrap();
+    // A reabertura só termina ao ver o modo pedido no rodapé do pane novo.
+    std::fs::write(fx.state.with_extension("screen"),"\n❯ \n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n").unwrap();
+    let registry = terminal_registry(&fx).await;
+    let reopened = registry.reopen_claude_session("s1",to_bypass(),None).await.expect("é sessão Claude daqui");
+    reopened.map_err(|f|(f.error.code,f.error.message,f.stopped)).unwrap();
+    assert!(gone(old_agent),"o Claude antigo saiu");
+    let args = fx.args();
+    let command = args.last().unwrap();
+    assert!(command.contains(&format!("claude --resume {SID}")) && command.contains("--permission-mode bypassPermissions"),"{command}");
+    let (found,_) = registry.terminal_view("s1").await.unwrap();
+    registry.close(&found,2).await.unwrap();
+    fx.finish();
+}
+
+#[tokio::test]
+async fn bypass_reopens_a_headless_session_on_the_same_conversation() {
+    let fx = fixture();
+    fx.transcript();
+    let key = "9a".repeat(16);
+    fx.put_sidecar(json!({"name":"s1","provider":"claude","headless":true,"key":key,"cwd":fx.cwd,"session_id":SID,"permission_mode":"manual","cano":null}));
+    let registry = headless_registry(&fx).await;
+    let reopened = registry.reopen_claude_session("s1",to_bypass(),None).await.expect("é sessão Claude daqui");
+    reopened.map_err(|f|(f.error.code,f.error.message,f.stopped)).unwrap();
+    let meta:Value = serde_json::from_slice(&std::fs::read(fx.sidecar_path("s1")).unwrap()).unwrap();
+    assert_eq!((meta["permission_mode"].as_str(),meta["session_id"].as_str()),(Some("bypassPermissions"),Some(SID)));
+    let args = std::fs::read_to_string(fx.home.join("claude.args")).unwrap();
+    assert!(args.contains(&format!("--resume {SID}")) && args.contains("--permission-mode bypassPermissions"),"{args}");
+    registry.close_with_kill(&key,generation(&fx,&key)).await.unwrap();
+}
+
+/// Pergunta aberta na tela: a troca de modo recusa com a frase do app e nada muda.
+#[tokio::test]
+async fn an_open_question_holds_the_mode_switch_of_a_terminal() {
+    let fx = fixture();
+    fx.transcript();
+    let key = "bc".repeat(16);
+    terminal_with_spec(&fx,&key);
+    let old_agent = fx.agent().unwrap();
+    let asks = fx.home.join(".claude/.hangar-askq");
+    std::fs::create_dir_all(&asks).unwrap();
+    std::fs::write(asks.join(format!("{SID}.json")),json!({"tool_use_id":"t1","tool_input":{"questions":[
+        {"question":"Cor?","header":"Cor","multiSelect":false,"options":[{"label":"Azul","description":""},{"label":"Verde","description":""}]}]}}).to_string()).unwrap();
+    let registry = terminal_registry(&fx).await;
+    let (_python,server) = crate::runtime_codex_watch::serve_owner(registry).await;
+    let (status,body) = post(server,"modo-execucao",json!({"terminal":false})).await;
+    assert_eq!((status,body["detail"]["code"].as_str(),body["detail"]["msg"].as_str()),
+        (409,Some("erro_sessao_esperando_resposta"),Some("há uma permissão ou pergunta esperando resposta")),"{body}");
+    assert!(!gone(old_agent),"o Claude do terminal segue vivo");
+    assert!(!fx.sidecar_path("s1").exists());
+    fx.finish();
+}
+
+fn seed_quota(fx:&Fixture,account:&std::path::Path,pct:f64) {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
+    std::fs::write(account.join(".hangar-conta"),"").unwrap();
+    let cache = json!({format!("claude:{}",account.display()):{"gravado_em":now,
+        "cota":{"estado":"lida","janelas":[{"rotulo":"5h","pct":pct}],"ts":now,"motivo":null,"reset_credits":null}}});
+    std::fs::create_dir_all(fx.home.join(".hangar")).unwrap();
+    std::fs::write(fx.home.join(".hangar/cotas-cache.json"),cache.to_string()).unwrap();
+}
+
+#[tokio::test]
+async fn a_full_destination_account_is_refused_before_anything_stops() {
+    let fx = fixture();
+    let b = account_b(&fx);
+    logged_in_default(&fx);
+    seed_quota(&fx,&b,99.5);
+    let server = serve_with_accounts(&fx,fx.registry().await).await;
+    let (status,body) = post(server,"conta",json!({"config_dir":b})).await;
+    assert_eq!((status,&body["detail"]),(409,&json!({"code":"erro_conta_cheia","params":{"conta":"b","pct":99.5},"msg":"a conta b está em 100% da cota"})),"{body}");
+    assert!(fx.args().is_empty(),"nenhum terminal pedido");
+}
+
+#[tokio::test]
+async fn an_unknown_account_folder_is_refused() {
+    let fx = fixture();
+    logged_in_default(&fx);
+    let server = serve_with_accounts(&fx,fx.registry().await).await;
+    let (status,body) = post(server,"conta",json!({"config_dir":fx.home.join(".claude-x")})).await;
+    assert_eq!((status,body["detail"]["code"].as_str(),body["detail"]["msg"].as_str()),(400,Some("erro_config_dir_invalido"),Some("config_dir invalido")),"{body}");
+}
+
+#[tokio::test]
+async fn switching_to_the_account_the_terminal_is_in_changes_nothing() {
+    let fx = fixture();
+    logged_in_default(&fx);
+    fx.transcript();
+    let key = "de".repeat(16);
+    terminal_with_spec(&fx,&key);
+    let (old_agent,before) = (fx.agent().unwrap(),fx.args());
+    let registry = fx.registry().await;
+    let server = serve_with_accounts(&fx,registry.clone()).await;
+    let current = fx.home.join(".claude");
+    let (status,body) = post(server,"conta",json!({"config_dir":current})).await;
+    assert_eq!((status,&body),(200,&json!({"ok":true,"config_dir":current})),"{body}");
+    assert!(!gone(old_agent),"o Claude do terminal segue vivo");
+    assert_eq!(fx.args(),before,"nenhum terminal novo");
+    fx.finish();
+}
+
+#[tokio::test]
+async fn the_account_route_moves_a_headless_conversation_to_the_new_account() {
+    let fx = fixture();
+    let b = account_b(&fx);
+    logged_in_default(&fx);
+    fx.transcript();
+    let key = "f1".repeat(16);
+    fx.put_sidecar(json!({"name":"s1","provider":"claude","headless":true,"key":key,"cwd":fx.cwd,"session_id":SID,"permission_mode":"acceptEdits","cano":null}));
+    let registry = headless_registry(&fx).await;
+    let server = serve_with_accounts(&fx,registry.clone()).await;
+    let (status,body) = post(server,"conta",json!({"config_dir":b})).await;
+    assert_eq!((status,&body),(200,&json!({"ok":true,"config_dir":b})),"{body}");
+    let project = hangar_workspace::worktrees::sanitize_cwd(&fx.cwd.to_string_lossy());
+    assert!(b.join(format!("projects/{project}/{SID}.jsonl")).exists(),"a conversa foi para a conta B");
+    assert!(!fx.home.join(format!(".claude/projects/{project}/{SID}.jsonl")).exists(),"nada ficou na conta de antes");
+    let meta:Value = serde_json::from_slice(&std::fs::read(fx.sidecar_path("s1")).unwrap()).unwrap();
+    assert_eq!((meta["headless"].as_bool(),meta["config_dir"].as_str(),meta["session_id"].as_str()),(Some(true),b.to_str(),Some(SID)));
+    registry.close_with_kill(&key,generation(&fx,&key)).await.unwrap();
+}
+
+#[tokio::test]
+async fn resume_refuses_a_bad_id_and_a_session_that_does_not_exist() {
+    let fx = fixture();
+    // O multiplexador de pé com outra sessão: `s1` não existe.
+    std::process::Command::new(&fx.tmux).args(["new-session","-d","-s","outra","-c"]).arg(&fx.cwd).status().unwrap();
+    let (_python,server) = crate::runtime_codex_watch::serve_owner(fx.registry().await).await;
+    let (status,body) = post(server,"resume",json!({"session_id":"nao-e-uuid"})).await;
+    assert_eq!((status,body["detail"]["code"].as_str(),body["detail"]["msg"].as_str()),(422,Some("erro_session_id_invalido"),Some("session_id invalido")),"{body}");
+    let (status,body) = post(server,"resume",json!({"session_id":SID})).await;
+    assert_eq!((status,body["detail"]["code"].as_str(),body["detail"]["msg"].as_str()),(404,Some("erro_sessao_inexistente"),Some("sessao nao encontrada")),"{body}");
+    fx.finish();
 }
