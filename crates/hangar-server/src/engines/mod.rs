@@ -14,7 +14,7 @@ pub mod catalog;
 
 pub mod model_http;
 
-mod decimal;
+pub(crate) mod decimal;
 
 
 pub mod body;

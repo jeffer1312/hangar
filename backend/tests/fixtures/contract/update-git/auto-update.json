@@ -1,0 +1,1654 @@
+{
+  "source_commit": "fd6fa0e6e12345198f6962c485a4c26a795021ff",
+  "command": "python generate-auto-update.py --reference <checkout-Python> --output <fixture>",
+  "now": "2026-01-02T12:00:00+00:00",
+  "cases": [
+    {
+      "name": "ready",
+      "input": {
+        "target": "main",
+        "pre": {
+          "pode": true,
+          "branch": "main",
+          "alvo": "main",
+          "branch_de_trabalho": false,
+          "divergiu": false,
+          "ahead": 0,
+          "ahead_incerto": false,
+          "behind": 1,
+          "sujo": 0
+        },
+        "state": {},
+        "switch": false,
+        "pin": "origin/main",
+        "dist_error": false,
+        "dist_hex": "666978747572652d686561640a",
+        "git_code": 0,
+        "git_out": "fixture-head\n"
+      },
+      "reason": null,
+      "calls": [
+        [
+          "target",
+          [],
+          {}
+        ],
+        [
+          "preflight",
+          [],
+          {}
+        ],
+        [
+          "switch",
+          [],
+          {}
+        ],
+        [
+          "state",
+          [],
+          {}
+        ],
+        [
+          "pin",
+          [
+            "main"
+          ],
+          {}
+        ],
+        [
+          "download",
+          [
+            "https://github.com/jeffer1312/hangar/releases/download/dist-latest/frontend-dist.sha"
+          ],
+          {
+            "timeout": 15
+          }
+        ],
+        [
+          "git",
+          [
+            "rev-parse",
+            "origin/main"
+          ],
+          {
+            "timeout": 30
+          }
+        ]
+      ],
+      "warnings": [],
+      "rendered_warnings": []
+    },
+    {
+      "name": "channel",
+      "input": {
+        "target": "beta",
+        "pre": {
+          "pode": true,
+          "branch": "main",
+          "alvo": "main",
+          "branch_de_trabalho": false,
+          "divergiu": false,
+          "ahead": 0,
+          "ahead_incerto": false,
+          "behind": 1,
+          "sujo": 0
+        },
+        "state": {},
+        "switch": false,
+        "pin": "origin/main",
+        "dist_error": false,
+        "dist_hex": "666978747572652d686561640a",
+        "git_code": 0,
+        "git_out": "fixture-head\n"
+      },
+      "reason": "branch de teste configurada (CP_UPDATE_BRANCH)",
+      "calls": [
+        [
+          "target",
+          [],
+          {}
+        ]
+      ],
+      "warnings": [],
+      "rendered_warnings": []
+    },
+    {
+      "name": "dependencies",
+      "input": {
+        "target": "main",
+        "pre": {
+          "pode": false,
+          "branch": "main",
+          "alvo": "main",
+          "branch_de_trabalho": false,
+          "divergiu": false,
+          "ahead": 0,
+          "ahead_incerto": false,
+          "behind": 1,
+          "sujo": 0
+        },
+        "state": {},
+        "switch": false,
+        "pin": "origin/main",
+        "dist_error": false,
+        "dist_hex": "666978747572652d686561640a",
+        "git_code": 0,
+        "git_out": "fixture-head\n"
+      },
+      "reason": "dependencias faltando",
+      "calls": [
+        [
+          "target",
+          [],
+          {}
+        ],
+        [
+          "preflight",
+          [],
+          {}
+        ]
+      ],
+      "warnings": [],
+      "rendered_warnings": []
+    },
+    {
+      "name": "work-branch",
+      "input": {
+        "target": "main",
+        "pre": {
+          "pode": true,
+          "branch": "work/task",
+          "alvo": "main",
+          "branch_de_trabalho": true,
+          "divergiu": false,
+          "ahead": 0,
+          "ahead_incerto": false,
+          "behind": 1,
+          "sujo": 0
+        },
+        "state": {},
+        "switch": false,
+        "pin": "origin/main",
+        "dist_error": false,
+        "dist_hex": "666978747572652d686561640a",
+        "git_code": 0,
+        "git_out": "fixture-head\n"
+      },
+      "reason": "checkout na branch work/task",
+      "calls": [
+        [
+          "target",
+          [],
+          {}
+        ],
+        [
+          "preflight",
+          [],
+          {}
+        ]
+      ],
+      "warnings": [],
+      "rendered_warnings": []
+    },
+    {
+      "name": "switch",
+      "input": {
+        "target": "main",
+        "pre": {
+          "pode": true,
+          "branch": "beta",
+          "alvo": "main",
+          "branch_de_trabalho": false,
+          "divergiu": false,
+          "ahead": 0,
+          "ahead_incerto": false,
+          "behind": 1,
+          "sujo": 0
+        },
+        "state": {},
+        "switch": true,
+        "pin": "origin/main",
+        "dist_error": false,
+        "dist_hex": "666978747572652d686561640a",
+        "git_code": 0,
+        "git_out": "fixture-head\n"
+      },
+      "reason": "checkout na branch beta, fora do alvo main",
+      "calls": [
+        [
+          "target",
+          [],
+          {}
+        ],
+        [
+          "preflight",
+          [],
+          {}
+        ],
+        [
+          "switch",
+          [],
+          {}
+        ]
+      ],
+      "warnings": [],
+      "rendered_warnings": []
+    },
+    {
+      "name": "diverged",
+      "input": {
+        "target": "main",
+        "pre": {
+          "pode": true,
+          "branch": "main",
+          "alvo": "main",
+          "branch_de_trabalho": false,
+          "divergiu": true,
+          "ahead": 1,
+          "ahead_incerto": false,
+          "behind": 1,
+          "sujo": 0
+        },
+        "state": {},
+        "switch": false,
+        "pin": "origin/main",
+        "dist_error": false,
+        "dist_hex": "666978747572652d686561640a",
+        "git_code": 0,
+        "git_out": "fixture-head\n"
+      },
+      "reason": "checkout divergiu de origin/main",
+      "calls": [
+        [
+          "target",
+          [],
+          {}
+        ],
+        [
+          "preflight",
+          [],
+          {}
+        ],
+        [
+          "switch",
+          [],
+          {}
+        ]
+      ],
+      "warnings": [],
+      "rendered_warnings": []
+    },
+    {
+      "name": "ahead",
+      "input": {
+        "target": "main",
+        "pre": {
+          "pode": true,
+          "branch": "main",
+          "alvo": "main",
+          "branch_de_trabalho": false,
+          "divergiu": false,
+          "ahead": 1,
+          "ahead_incerto": false,
+          "behind": 1,
+          "sujo": 0
+        },
+        "state": {},
+        "switch": false,
+        "pin": "origin/main",
+        "dist_error": false,
+        "dist_hex": "666978747572652d686561640a",
+        "git_code": 0,
+        "git_out": "fixture-head\n"
+      },
+      "reason": "checkout adiante de origin/main (commits locais nao pushados)",
+      "calls": [
+        [
+          "target",
+          [],
+          {}
+        ],
+        [
+          "preflight",
+          [],
+          {}
+        ],
+        [
+          "switch",
+          [],
+          {}
+        ]
+      ],
+      "warnings": [],
+      "rendered_warnings": []
+    },
+    {
+      "name": "uncertain",
+      "input": {
+        "target": "main",
+        "pre": {
+          "pode": true,
+          "branch": "main",
+          "alvo": "main",
+          "branch_de_trabalho": false,
+          "divergiu": false,
+          "ahead": 0,
+          "ahead_incerto": true,
+          "behind": 1,
+          "sujo": 0
+        },
+        "state": {},
+        "switch": false,
+        "pin": "origin/main",
+        "dist_error": false,
+        "dist_hex": "666978747572652d686561640a",
+        "git_code": 0,
+        "git_out": "fixture-head\n"
+      },
+      "reason": "nao deu pra contar os commits locais",
+      "calls": [
+        [
+          "target",
+          [],
+          {}
+        ],
+        [
+          "preflight",
+          [],
+          {}
+        ],
+        [
+          "switch",
+          [],
+          {}
+        ]
+      ],
+      "warnings": [],
+      "rendered_warnings": []
+    },
+    {
+      "name": "current",
+      "input": {
+        "target": "main",
+        "pre": {
+          "pode": true,
+          "branch": "main",
+          "alvo": "main",
+          "branch_de_trabalho": false,
+          "divergiu": false,
+          "ahead": 0,
+          "ahead_incerto": false,
+          "behind": 0,
+          "sujo": 0
+        },
+        "state": {},
+        "switch": false,
+        "pin": "origin/main",
+        "dist_error": false,
+        "dist_hex": "666978747572652d686561640a",
+        "git_code": 0,
+        "git_out": "fixture-head\n"
+      },
+      "reason": "em dia",
+      "calls": [
+        [
+          "target",
+          [],
+          {}
+        ],
+        [
+          "preflight",
+          [],
+          {}
+        ],
+        [
+          "switch",
+          [],
+          {}
+        ]
+      ],
+      "warnings": [],
+      "rendered_warnings": []
+    },
+    {
+      "name": "dirty",
+      "input": {
+        "target": "main",
+        "pre": {
+          "pode": true,
+          "branch": "main",
+          "alvo": "main",
+          "branch_de_trabalho": false,
+          "divergiu": false,
+          "ahead": 0,
+          "ahead_incerto": false,
+          "behind": 1,
+          "sujo": 1
+        },
+        "state": {},
+        "switch": false,
+        "pin": "origin/main",
+        "dist_error": false,
+        "dist_hex": "666978747572652d686561640a",
+        "git_code": 0,
+        "git_out": "fixture-head\n"
+      },
+      "reason": "arvore suja (trabalho nao commitado)",
+      "calls": [
+        [
+          "target",
+          [],
+          {}
+        ],
+        [
+          "preflight",
+          [],
+          {}
+        ],
+        [
+          "switch",
+          [],
+          {}
+        ]
+      ],
+      "warnings": [],
+      "rendered_warnings": []
+    },
+    {
+      "name": "running",
+      "input": {
+        "target": "main",
+        "pre": {
+          "pode": true,
+          "branch": "main",
+          "alvo": "main",
+          "branch_de_trabalho": false,
+          "divergiu": false,
+          "ahead": 0,
+          "ahead_incerto": false,
+          "behind": 1,
+          "sujo": 0
+        },
+        "state": {
+          "fase": "rodando"
+        },
+        "switch": false,
+        "pin": "origin/main",
+        "dist_error": false,
+        "dist_hex": "666978747572652d686561640a",
+        "git_code": 0,
+        "git_out": "fixture-head\n"
+      },
+      "reason": "atualizacao ja rodando",
+      "calls": [
+        [
+          "target",
+          [],
+          {}
+        ],
+        [
+          "preflight",
+          [],
+          {}
+        ],
+        [
+          "switch",
+          [],
+          {}
+        ],
+        [
+          "state",
+          [],
+          {}
+        ]
+      ],
+      "warnings": [],
+      "rendered_warnings": []
+    },
+    {
+      "name": "failed-recent",
+      "input": {
+        "target": "main",
+        "pre": {
+          "pode": true,
+          "branch": "main",
+          "alvo": "main",
+          "branch_de_trabalho": false,
+          "divergiu": false,
+          "ahead": 0,
+          "ahead_incerto": false,
+          "behind": 1,
+          "sujo": 0
+        },
+        "state": {
+          "ok": false,
+          "ts": "2026-01-02T11:00:00+00:00"
+        },
+        "switch": false,
+        "pin": "origin/main",
+        "dist_error": false,
+        "dist_hex": "666978747572652d686561640a",
+        "git_code": 0,
+        "git_out": "fixture-head\n"
+      },
+      "reason": "ultima atualizacao falhou",
+      "calls": [
+        [
+          "target",
+          [],
+          {}
+        ],
+        [
+          "preflight",
+          [],
+          {}
+        ],
+        [
+          "switch",
+          [],
+          {}
+        ],
+        [
+          "state",
+          [],
+          {}
+        ]
+      ],
+      "warnings": [],
+      "rendered_warnings": []
+    },
+    {
+      "name": "failed-expired",
+      "input": {
+        "target": "main",
+        "pre": {
+          "pode": true,
+          "branch": "main",
+          "alvo": "main",
+          "branch_de_trabalho": false,
+          "divergiu": false,
+          "ahead": 0,
+          "ahead_incerto": false,
+          "behind": 1,
+          "sujo": 0
+        },
+        "state": {
+          "ok": false,
+          "ts": "2026-01-01T12:00:00+00:00"
+        },
+        "switch": false,
+        "pin": "origin/main",
+        "dist_error": false,
+        "dist_hex": "666978747572652d686561640a",
+        "git_code": 0,
+        "git_out": "fixture-head\n"
+      },
+      "reason": null,
+      "calls": [
+        [
+          "target",
+          [],
+          {}
+        ],
+        [
+          "preflight",
+          [],
+          {}
+        ],
+        [
+          "switch",
+          [],
+          {}
+        ],
+        [
+          "state",
+          [],
+          {}
+        ],
+        [
+          "pin",
+          [
+            "main"
+          ],
+          {}
+        ],
+        [
+          "download",
+          [
+            "https://github.com/jeffer1312/hangar/releases/download/dist-latest/frontend-dist.sha"
+          ],
+          {
+            "timeout": 15
+          }
+        ],
+        [
+          "git",
+          [
+            "rev-parse",
+            "origin/main"
+          ],
+          {
+            "timeout": 30
+          }
+        ]
+      ],
+      "warnings": [],
+      "rendered_warnings": []
+    },
+    {
+      "name": "failed-future",
+      "input": {
+        "target": "main",
+        "pre": {
+          "pode": true,
+          "branch": "main",
+          "alvo": "main",
+          "branch_de_trabalho": false,
+          "divergiu": false,
+          "ahead": 0,
+          "ahead_incerto": false,
+          "behind": 1,
+          "sujo": 0
+        },
+        "state": {
+          "ok": false,
+          "ts": "2026-01-02T13:00:00+00:00"
+        },
+        "switch": false,
+        "pin": "origin/main",
+        "dist_error": false,
+        "dist_hex": "666978747572652d686561640a",
+        "git_code": 0,
+        "git_out": "fixture-head\n"
+      },
+      "reason": "ultima atualizacao falhou",
+      "calls": [
+        [
+          "target",
+          [],
+          {}
+        ],
+        [
+          "preflight",
+          [],
+          {}
+        ],
+        [
+          "switch",
+          [],
+          {}
+        ],
+        [
+          "state",
+          [],
+          {}
+        ]
+      ],
+      "warnings": [],
+      "rendered_warnings": []
+    },
+    {
+      "name": "failed-invalid",
+      "input": {
+        "target": "main",
+        "pre": {
+          "pode": true,
+          "branch": "main",
+          "alvo": "main",
+          "branch_de_trabalho": false,
+          "divergiu": false,
+          "ahead": 0,
+          "ahead_incerto": false,
+          "behind": 1,
+          "sujo": 0
+        },
+        "state": {
+          "ok": false,
+          "ts": "invalid"
+        },
+        "switch": false,
+        "pin": "origin/main",
+        "dist_error": false,
+        "dist_hex": "666978747572652d686561640a",
+        "git_code": 0,
+        "git_out": "fixture-head\n"
+      },
+      "reason": null,
+      "calls": [
+        [
+          "target",
+          [],
+          {}
+        ],
+        [
+          "preflight",
+          [],
+          {}
+        ],
+        [
+          "switch",
+          [],
+          {}
+        ],
+        [
+          "state",
+          [],
+          {}
+        ],
+        [
+          "pin",
+          [
+            "main"
+          ],
+          {}
+        ],
+        [
+          "download",
+          [
+            "https://github.com/jeffer1312/hangar/releases/download/dist-latest/frontend-dist.sha"
+          ],
+          {
+            "timeout": 15
+          }
+        ],
+        [
+          "git",
+          [
+            "rev-parse",
+            "origin/main"
+          ],
+          {
+            "timeout": 30
+          }
+        ]
+      ],
+      "warnings": [
+        [
+          "auto-update: ts invalido no estado da atualizacao (%r)",
+          "invalid"
+        ]
+      ],
+      "rendered_warnings": [
+        "auto-update: ts invalido no estado da atualizacao ('invalid')"
+      ]
+    },
+    {
+      "name": "pin-missing",
+      "input": {
+        "target": "main",
+        "pre": {
+          "pode": true,
+          "branch": "main",
+          "alvo": "main",
+          "branch_de_trabalho": false,
+          "divergiu": false,
+          "ahead": 0,
+          "ahead_incerto": false,
+          "behind": 1,
+          "sujo": 0
+        },
+        "state": {},
+        "switch": false,
+        "pin": null,
+        "dist_error": false,
+        "dist_hex": "666978747572652d686561640a",
+        "git_code": 0,
+        "git_out": "fixture-head\n"
+      },
+      "reason": "nao deu pra conferir o binario do Rust publicado",
+      "calls": [
+        [
+          "target",
+          [],
+          {}
+        ],
+        [
+          "preflight",
+          [],
+          {}
+        ],
+        [
+          "switch",
+          [],
+          {}
+        ],
+        [
+          "state",
+          [],
+          {}
+        ],
+        [
+          "pin",
+          [
+            "main"
+          ],
+          {}
+        ]
+      ],
+      "warnings": [],
+      "rendered_warnings": []
+    },
+    {
+      "name": "pin-older",
+      "input": {
+        "target": "main",
+        "pre": {
+          "pode": true,
+          "branch": "main",
+          "alvo": "main",
+          "branch_de_trabalho": false,
+          "divergiu": false,
+          "ahead": 0,
+          "ahead_incerto": false,
+          "behind": 1,
+          "sujo": 0
+        },
+        "state": {},
+        "switch": false,
+        "pin": "older",
+        "dist_error": false,
+        "dist_hex": "666978747572652d686561640a",
+        "git_code": 0,
+        "git_out": "fixture-head\n"
+      },
+      "reason": "binario do Rust do topo ainda nao publicado para este sistema",
+      "calls": [
+        [
+          "target",
+          [],
+          {}
+        ],
+        [
+          "preflight",
+          [],
+          {}
+        ],
+        [
+          "switch",
+          [],
+          {}
+        ],
+        [
+          "state",
+          [],
+          {}
+        ],
+        [
+          "pin",
+          [
+            "main"
+          ],
+          {}
+        ]
+      ],
+      "warnings": [],
+      "rendered_warnings": []
+    },
+    {
+      "name": "dist-error",
+      "input": {
+        "target": "main",
+        "pre": {
+          "pode": true,
+          "branch": "main",
+          "alvo": "main",
+          "branch_de_trabalho": false,
+          "divergiu": false,
+          "ahead": 0,
+          "ahead_incerto": false,
+          "behind": 1,
+          "sujo": 0
+        },
+        "state": {},
+        "switch": false,
+        "pin": "origin/main",
+        "dist_error": true,
+        "dist_hex": "666978747572652d686561640a",
+        "git_code": 0,
+        "git_out": "fixture-head\n"
+      },
+      "reason": "sem acesso ao dist do CI",
+      "calls": [
+        [
+          "target",
+          [],
+          {}
+        ],
+        [
+          "preflight",
+          [],
+          {}
+        ],
+        [
+          "switch",
+          [],
+          {}
+        ],
+        [
+          "state",
+          [],
+          {}
+        ],
+        [
+          "pin",
+          [
+            "main"
+          ],
+          {}
+        ],
+        [
+          "download",
+          [
+            "https://github.com/jeffer1312/hangar/releases/download/dist-latest/frontend-dist.sha"
+          ],
+          {
+            "timeout": 15
+          }
+        ]
+      ],
+      "warnings": [],
+      "rendered_warnings": []
+    },
+    {
+      "name": "dist-utf8",
+      "input": {
+        "target": "main",
+        "pre": {
+          "pode": true,
+          "branch": "main",
+          "alvo": "main",
+          "branch_de_trabalho": false,
+          "divergiu": false,
+          "ahead": 0,
+          "ahead_incerto": false,
+          "behind": 1,
+          "sujo": 0
+        },
+        "state": {},
+        "switch": false,
+        "pin": "origin/main",
+        "dist_error": false,
+        "dist_hex": "ff",
+        "git_code": 0,
+        "git_out": "fixture-head\n"
+      },
+      "reason": "sem acesso ao dist do CI",
+      "calls": [
+        [
+          "target",
+          [],
+          {}
+        ],
+        [
+          "preflight",
+          [],
+          {}
+        ],
+        [
+          "switch",
+          [],
+          {}
+        ],
+        [
+          "state",
+          [],
+          {}
+        ],
+        [
+          "pin",
+          [
+            "main"
+          ],
+          {}
+        ],
+        [
+          "download",
+          [
+            "https://github.com/jeffer1312/hangar/releases/download/dist-latest/frontend-dist.sha"
+          ],
+          {
+            "timeout": 15
+          }
+        ]
+      ],
+      "warnings": [],
+      "rendered_warnings": []
+    },
+    {
+      "name": "git-error",
+      "input": {
+        "target": "main",
+        "pre": {
+          "pode": true,
+          "branch": "main",
+          "alvo": "main",
+          "branch_de_trabalho": false,
+          "divergiu": false,
+          "ahead": 0,
+          "ahead_incerto": false,
+          "behind": 1,
+          "sujo": 0
+        },
+        "state": {},
+        "switch": false,
+        "pin": "origin/main",
+        "dist_error": false,
+        "dist_hex": "666978747572652d686561640a",
+        "git_code": 1,
+        "git_out": "fixture-head\n"
+      },
+      "reason": "rev-parse origin/main falhou",
+      "calls": [
+        [
+          "target",
+          [],
+          {}
+        ],
+        [
+          "preflight",
+          [],
+          {}
+        ],
+        [
+          "switch",
+          [],
+          {}
+        ],
+        [
+          "state",
+          [],
+          {}
+        ],
+        [
+          "pin",
+          [
+            "main"
+          ],
+          {}
+        ],
+        [
+          "download",
+          [
+            "https://github.com/jeffer1312/hangar/releases/download/dist-latest/frontend-dist.sha"
+          ],
+          {
+            "timeout": 15
+          }
+        ],
+        [
+          "git",
+          [
+            "rev-parse",
+            "origin/main"
+          ],
+          {
+            "timeout": 30
+          }
+        ]
+      ],
+      "warnings": [],
+      "rendered_warnings": []
+    },
+    {
+      "name": "git-empty",
+      "input": {
+        "target": "main",
+        "pre": {
+          "pode": true,
+          "branch": "main",
+          "alvo": "main",
+          "branch_de_trabalho": false,
+          "divergiu": false,
+          "ahead": 0,
+          "ahead_incerto": false,
+          "behind": 1,
+          "sujo": 0
+        },
+        "state": {},
+        "switch": false,
+        "pin": "origin/main",
+        "dist_error": false,
+        "dist_hex": "666978747572652d686561640a",
+        "git_code": 0,
+        "git_out": ""
+      },
+      "reason": "rev-parse origin/main falhou",
+      "calls": [
+        [
+          "target",
+          [],
+          {}
+        ],
+        [
+          "preflight",
+          [],
+          {}
+        ],
+        [
+          "switch",
+          [],
+          {}
+        ],
+        [
+          "state",
+          [],
+          {}
+        ],
+        [
+          "pin",
+          [
+            "main"
+          ],
+          {}
+        ],
+        [
+          "download",
+          [
+            "https://github.com/jeffer1312/hangar/releases/download/dist-latest/frontend-dist.sha"
+          ],
+          {
+            "timeout": 15
+          }
+        ],
+        [
+          "git",
+          [
+            "rev-parse",
+            "origin/main"
+          ],
+          {
+            "timeout": 30
+          }
+        ]
+      ],
+      "warnings": [],
+      "rendered_warnings": []
+    },
+    {
+      "name": "dist-mismatch",
+      "input": {
+        "target": "main",
+        "pre": {
+          "pode": true,
+          "branch": "main",
+          "alvo": "main",
+          "branch_de_trabalho": false,
+          "divergiu": false,
+          "ahead": 0,
+          "ahead_incerto": false,
+          "behind": 1,
+          "sujo": 0
+        },
+        "state": {},
+        "switch": false,
+        "pin": "origin/main",
+        "dist_error": false,
+        "dist_hex": "6f74686572",
+        "git_code": 0,
+        "git_out": "fixture-head\n"
+      },
+      "reason": "dist do CI ainda nao e deste commit",
+      "calls": [
+        [
+          "target",
+          [],
+          {}
+        ],
+        [
+          "preflight",
+          [],
+          {}
+        ],
+        [
+          "switch",
+          [],
+          {}
+        ],
+        [
+          "state",
+          [],
+          {}
+        ],
+        [
+          "pin",
+          [
+            "main"
+          ],
+          {}
+        ],
+        [
+          "download",
+          [
+            "https://github.com/jeffer1312/hangar/releases/download/dist-latest/frontend-dist.sha"
+          ],
+          {
+            "timeout": 15
+          }
+        ],
+        [
+          "git",
+          [
+            "rev-parse",
+            "origin/main"
+          ],
+          {
+            "timeout": 30
+          }
+        ]
+      ],
+      "warnings": [],
+      "rendered_warnings": []
+    },
+    {
+      "name": "failed-naive",
+      "input": {
+        "target": "main",
+        "pre": {
+          "pode": true,
+          "branch": "main",
+          "alvo": "main",
+          "branch_de_trabalho": false,
+          "divergiu": false,
+          "ahead": 0,
+          "ahead_incerto": false,
+          "behind": 1,
+          "sujo": 0
+        },
+        "state": {
+          "ok": false,
+          "ts": "2026-01-02T11:00:00"
+        },
+        "switch": false,
+        "pin": "origin/main",
+        "dist_error": false,
+        "dist_hex": "666978747572652d686561640a",
+        "git_code": 0,
+        "git_out": "fixture-head\n"
+      },
+      "reason": null,
+      "calls": [
+        [
+          "target",
+          [],
+          {}
+        ],
+        [
+          "preflight",
+          [],
+          {}
+        ],
+        [
+          "switch",
+          [],
+          {}
+        ],
+        [
+          "state",
+          [],
+          {}
+        ],
+        [
+          "pin",
+          [
+            "main"
+          ],
+          {}
+        ],
+        [
+          "download",
+          [
+            "https://github.com/jeffer1312/hangar/releases/download/dist-latest/frontend-dist.sha"
+          ],
+          {
+            "timeout": 15
+          }
+        ],
+        [
+          "git",
+          [
+            "rev-parse",
+            "origin/main"
+          ],
+          {
+            "timeout": 30
+          }
+        ]
+      ],
+      "warnings": [
+        [
+          "auto-update: ts invalido no estado da atualizacao (%r)",
+          "2026-01-02T11:00:00"
+        ]
+      ],
+      "rendered_warnings": [
+        "auto-update: ts invalido no estado da atualizacao ('2026-01-02T11:00:00')"
+      ]
+    },
+    {
+      "name": "failed-date",
+      "input": {
+        "target": "main",
+        "pre": {
+          "pode": true,
+          "branch": "main",
+          "alvo": "main",
+          "branch_de_trabalho": false,
+          "divergiu": false,
+          "ahead": 0,
+          "ahead_incerto": false,
+          "behind": 1,
+          "sujo": 0
+        },
+        "state": {
+          "ok": false,
+          "ts": "2026-01-02"
+        },
+        "switch": false,
+        "pin": "origin/main",
+        "dist_error": false,
+        "dist_hex": "666978747572652d686561640a",
+        "git_code": 0,
+        "git_out": "fixture-head\n"
+      },
+      "reason": null,
+      "calls": [
+        [
+          "target",
+          [],
+          {}
+        ],
+        [
+          "preflight",
+          [],
+          {}
+        ],
+        [
+          "switch",
+          [],
+          {}
+        ],
+        [
+          "state",
+          [],
+          {}
+        ],
+        [
+          "pin",
+          [
+            "main"
+          ],
+          {}
+        ],
+        [
+          "download",
+          [
+            "https://github.com/jeffer1312/hangar/releases/download/dist-latest/frontend-dist.sha"
+          ],
+          {
+            "timeout": 15
+          }
+        ],
+        [
+          "git",
+          [
+            "rev-parse",
+            "origin/main"
+          ],
+          {
+            "timeout": 30
+          }
+        ]
+      ],
+      "warnings": [
+        [
+          "auto-update: ts invalido no estado da atualizacao (%r)",
+          "2026-01-02"
+        ]
+      ],
+      "rendered_warnings": [
+        "auto-update: ts invalido no estado da atualizacao ('2026-01-02')"
+      ]
+    },
+    {
+      "name": "failed-separator",
+      "input": {
+        "target": "main",
+        "pre": {
+          "pode": true,
+          "branch": "main",
+          "alvo": "main",
+          "branch_de_trabalho": false,
+          "divergiu": false,
+          "ahead": 0,
+          "ahead_incerto": false,
+          "behind": 1,
+          "sujo": 0
+        },
+        "state": {
+          "ok": false,
+          "ts": "2026-01-02x11:00:00+00:00"
+        },
+        "switch": false,
+        "pin": "origin/main",
+        "dist_error": false,
+        "dist_hex": "666978747572652d686561640a",
+        "git_code": 0,
+        "git_out": "fixture-head\n"
+      },
+      "reason": "ultima atualizacao falhou",
+      "calls": [
+        [
+          "target",
+          [],
+          {}
+        ],
+        [
+          "preflight",
+          [],
+          {}
+        ],
+        [
+          "switch",
+          [],
+          {}
+        ],
+        [
+          "state",
+          [],
+          {}
+        ]
+      ],
+      "warnings": [],
+      "rendered_warnings": []
+    },
+    {
+      "name": "failed-basic",
+      "input": {
+        "target": "main",
+        "pre": {
+          "pode": true,
+          "branch": "main",
+          "alvo": "main",
+          "branch_de_trabalho": false,
+          "divergiu": false,
+          "ahead": 0,
+          "ahead_incerto": false,
+          "behind": 1,
+          "sujo": 0
+        },
+        "state": {
+          "ok": false,
+          "ts": "20260102T110000+0000"
+        },
+        "switch": false,
+        "pin": "origin/main",
+        "dist_error": false,
+        "dist_hex": "666978747572652d686561640a",
+        "git_code": 0,
+        "git_out": "fixture-head\n"
+      },
+      "reason": "ultima atualizacao falhou",
+      "calls": [
+        [
+          "target",
+          [],
+          {}
+        ],
+        [
+          "preflight",
+          [],
+          {}
+        ],
+        [
+          "switch",
+          [],
+          {}
+        ],
+        [
+          "state",
+          [],
+          {}
+        ]
+      ],
+      "warnings": [],
+      "rendered_warnings": []
+    },
+    {
+      "name": "failed-week",
+      "input": {
+        "target": "main",
+        "pre": {
+          "pode": true,
+          "branch": "main",
+          "alvo": "main",
+          "branch_de_trabalho": false,
+          "divergiu": false,
+          "ahead": 0,
+          "ahead_incerto": false,
+          "behind": 1,
+          "sujo": 0
+        },
+        "state": {
+          "ok": false,
+          "ts": "2026-W01-5T11:00:00+00:00"
+        },
+        "switch": false,
+        "pin": "origin/main",
+        "dist_error": false,
+        "dist_hex": "666978747572652d686561640a",
+        "git_code": 0,
+        "git_out": "fixture-head\n"
+      },
+      "reason": "ultima atualizacao falhou",
+      "calls": [
+        [
+          "target",
+          [],
+          {}
+        ],
+        [
+          "preflight",
+          [],
+          {}
+        ],
+        [
+          "switch",
+          [],
+          {}
+        ],
+        [
+          "state",
+          [],
+          {}
+        ]
+      ],
+      "warnings": [],
+      "rendered_warnings": []
+    },
+    {
+      "name": "failed-null",
+      "input": {
+        "target": "main",
+        "pre": {
+          "pode": true,
+          "branch": "main",
+          "alvo": "main",
+          "branch_de_trabalho": false,
+          "divergiu": false,
+          "ahead": 0,
+          "ahead_incerto": false,
+          "behind": 1,
+          "sujo": 0
+        },
+        "state": {
+          "ok": false,
+          "ts": null
+        },
+        "switch": false,
+        "pin": "origin/main",
+        "dist_error": false,
+        "dist_hex": "666978747572652d686561640a",
+        "git_code": 0,
+        "git_out": "fixture-head\n"
+      },
+      "reason": null,
+      "calls": [
+        [
+          "target",
+          [],
+          {}
+        ],
+        [
+          "preflight",
+          [],
+          {}
+        ],
+        [
+          "switch",
+          [],
+          {}
+        ],
+        [
+          "state",
+          [],
+          {}
+        ],
+        [
+          "pin",
+          [
+            "main"
+          ],
+          {}
+        ],
+        [
+          "download",
+          [
+            "https://github.com/jeffer1312/hangar/releases/download/dist-latest/frontend-dist.sha"
+          ],
+          {
+            "timeout": 15
+          }
+        ],
+        [
+          "git",
+          [
+            "rev-parse",
+            "origin/main"
+          ],
+          {
+            "timeout": 30
+          }
+        ]
+      ],
+      "warnings": [
+        [
+          "auto-update: ts invalido no estado da atualizacao (%r)",
+          null
+        ]
+      ],
+      "rendered_warnings": [
+        "auto-update: ts invalido no estado da atualizacao (None)"
+      ]
+    }
+  ]
+}

@@ -19,26 +19,23 @@ use super::{HealthProbe, Layout, Reading, Restarter, Settings, StateFile, StepRu
 /// Teto do download do Rust do checkout, o mesmo dos comandos da migração.
 pub const FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
 
-/// O checkout não tem `bin/`, e o `rust_bins` dele acha o Rust em `~/.hangar/bin`: o `app.rust_release`
-/// do checkout o baixa da release da branch. Devolve o aviso quando não deu; quem chama segue.
+/// Baixa o par da branch antes da troca; falha vira aviso e não impede o modo desenvolvedor.
 pub async fn fetch_rust(runner: Arc<dyn StepRunner + Send + Sync>, checkout: &Path) -> Option<String> {
-    let checkout = checkout.to_path_buf();
-    let failed = tokio::task::spawn_blocking(move || {
-        let windows = cfg!(windows);
-        let python = crate::install_root::python_exe(&checkout, windows);
-        if !python.is_file() { return Some(format!("sem o Python do checkout em {}", python.display())); }
-        // O runner marca o passo como dono do download (`HANGAR_UPDATE_OWNS_RUST=1`), e com ele o `rust_release` não baixa.
-        let command = if windows {
-            format!("set HANGAR_UPDATE_OWNS_RUST=&& \"{}\" -m app.rust_release", python.display())
-        } else {
-            format!("HANGAR_UPDATE_OWNS_RUST= '{}' -m app.rust_release", python.display().to_string().replace('\'', "'\\''"))
-        };
-        let StepRun { code, output } = runner.run(&command, &checkout.join("backend"));
-        (code != Some(0)).then(|| format!("o app.rust_release saiu com {code:?}: {}", output.trim()))
-    }).await.unwrap_or_else(|e| Some(e.to_string()))?;
-    let warning = format!("o Rust do modo desenvolvedor não foi atualizado ({failed}); o servidor pode subir com o binário antigo de ~/.hangar/bin");
-    tracing::warn!(code = "update_dev_rust_fetch_failed", "update: {warning}");
-    Some(warning)
+    match std::env::current_exe() {
+        Ok(binary)=>fetch_rust_with_binary(runner,checkout,&binary).await,
+        Err(error)=>Some(format!("não consegui localizar o executor Rust: {error}")),
+    }
+}
+async fn fetch_rust_with_binary(runner:Arc<dyn StepRunner+Send+Sync>,checkout:&Path,binary:&Path)->Option<String>{
+    let checkout=checkout.to_path_buf();let binary=binary.to_path_buf();
+    let failed=tokio::task::spawn_blocking(move||{
+        let command=if cfg!(windows){format!("\"{}\" rust-release \"{}\"",binary.display(),checkout.display())}
+        else{format!("'{}' rust-release '{}'",binary.display().to_string().replace('\'',"'\\''"),checkout.display().to_string().replace('\'',"'\\''"))};
+        let StepRun{code,output}=runner.run(&command,&checkout.join("backend"));
+        (code!=Some(0)).then(||format!("o hangar-server rust-release saiu com {code:?}: {}",output.trim()))
+    }).await.unwrap_or_else(|error|Some(error.to_string()))?;
+    let warning=format!("o Rust do modo desenvolvedor não foi atualizado ({failed}); o servidor pode subir com o binário antigo de ~/.hangar/bin");
+    tracing::warn!(code="update_dev_rust_fetch_failed","update: {warning}");Some(warning)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -322,13 +319,7 @@ mod tests {
         fn runner(&self, code: Option<i32>) -> Arc<Recorder> {
             Arc::new(Recorder { home: self.home.clone(), code, calls: std::sync::Mutex::default() })
         }
-        /// O Python do venv do checkout, onde o `fetch_rust` o procura.
-        fn venv(&self) -> PathBuf {
-            let python = crate::install_root::python_exe(&real(&self.checkout), cfg!(windows));
-            std::fs::create_dir_all(python.parent().unwrap()).unwrap();
-            std::fs::write(&python, "").unwrap();
-            python
-        }
+
     }
 
     /// Grava o comando, a pasta e para onde o `current` apontava quando rodou.
@@ -340,8 +331,7 @@ mod tests {
         }
     }
 
-    /// O checkout não tem `bin/`: o Rust dele vem do `~/.hangar/bin`, que o `rust_release` do checkout
-    /// atualiza antes da troca. Falha vira aviso e a troca segue; o `off` não baixa nada.
+    /// O Rust do checkout é atualizado antes da troca. Falha vira aviso; o `off` não baixa nada.
     #[tokio::test]
     async fn dev_mode_on_fetches_the_checkout_rust_before_switching_and_a_failure_is_only_a_warning() {
         let m = Machine::new();
@@ -354,46 +344,44 @@ mod tests {
 
         let runner = m.runner(Some(0));
         assert_eq!(on(runner.clone()).await, Ok(Outcome::Switched(real(&m.checkout))));
-        assert!(runner.calls.lock().unwrap().is_empty(), "sem venv não há o que rodar");
+        assert_eq!(runner.calls.lock().unwrap().len(), 1, "o download não depende do venv");
         let missing = warnings.lock().unwrap().clone();
-        assert!(missing.len() == 1 && missing[0].contains("Python"), "{missing:?}");
+        assert!(missing.is_empty(), "{missing:?}");
 
         let off = m.runner(Some(0));
         switch(&m.home, &m.state_dir(), &Request::Off, false, &m.restart(), &health, &fast(), off.clone(), &|_| (), &warn).await.unwrap();
         assert!(off.calls.lock().unwrap().is_empty(), "o off volta ao bin/ do pacote");
 
-        let python = m.venv();
         warnings.lock().unwrap().clear();
         let failing = m.runner(None);
         assert_eq!(on(failing.clone()).await, Ok(Outcome::Switched(real(&m.checkout))), "a falha não impede a troca");
         let calls = failing.calls.lock().unwrap().clone();
         assert_eq!(calls.len(), 1);
         let (command, cwd, current) = &calls[0];
-        assert!(command.contains(&python.display().to_string()) && command.ends_with("-m app.rust_release"), "{command}");
-        assert!(command.contains("HANGAR_UPDATE_OWNS_RUST="), "o runner marca o passo como dono do download: {command}");
+        assert!(command.contains("rust-release") && command.contains(&m.checkout.display().to_string()), "{command}");
         assert_eq!(cwd, &real(&m.checkout).join("backend"));
         assert_eq!(current, &package, "roda antes da troca e do reinício");
         let failed = warnings.lock().unwrap().clone();
         assert!(failed.len() == 1 && failed[0].contains("sem rede"), "{failed:?}");
     }
 
-    /// O comando de verdade, pelo shell: o venv numa pasta com espaço e aspa, e o
-    /// `HANGAR_UPDATE_OWNS_RUST=1` do `ShellRunner` não chega ao `rust_release`.
+    /// O executor nativo aceita o checkout com espaço e aspa sem depender de Python.
     #[cfg(unix)]
     #[tokio::test]
-    async fn dev_mode_fetch_rust_runs_the_checkout_venv_from_backend_without_the_update_marker() {
+    async fn dev_mode_fetch_rust_runs_the_native_executor_from_backend() {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let checkout = dir.path().join("che ck'out");
-        let python = crate::install_root::python_exe(&checkout, false);
-        std::fs::create_dir_all(python.parent().unwrap()).unwrap();
-        std::fs::write(&python, "#!/bin/sh\n[ \"$HANGAR_UPDATE_OWNS_RUST\" = 1 ] && exit 3\necho \"$PWD $*\" > \"$0.ran\"\n").unwrap();
-        std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let binary = checkout.join("bin/hangar-server");
+        std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        std::fs::write(&binary, "#!/bin/sh\necho \"$PWD $*\" > \"$0.ran\"\n").unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
         let runner = Arc::new(super::super::ShellRunner { timeout: Duration::from_secs(20) });
-        assert_eq!(fetch_rust(runner, &checkout).await, None);
-        let ran = std::fs::read_to_string(python.with_extension("ran")).unwrap();
+        std::fs::create_dir_all(checkout.join("backend")).unwrap();
+        assert_eq!(fetch_rust_with_binary(runner, &checkout, &binary).await, None);
+        let ran = std::fs::read_to_string(binary.with_extension("ran")).unwrap();
         // Canônico: no macOS o temporário fica sob /var, link para /private/var, e o $PWD vem resolvido.
-        assert_eq!(ran.trim(), format!("{} -m app.rust_release", checkout.join("backend").canonicalize().unwrap().display()));
+        assert_eq!(ran.trim(), format!("{} rust-release {}", checkout.join("backend").canonicalize().unwrap().display(), checkout.display()));
     }
 
     #[tokio::test]

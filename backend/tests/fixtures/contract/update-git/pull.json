@@ -1,0 +1,339 @@
+{
+  "source_commit": "8552d4f3dba6aeba59160cb43914a3b7707b1663",
+  "command": "python generate-pull.py --reference <checkout> --output <fixture>",
+  "normalization": "OIDs do commit local comparados aos commits old/new gerados na própria captura.",
+  "cases": [
+    {
+      "name": "fast-forward",
+      "result": {
+        "value": null
+      },
+      "calls": [
+        {
+          "args": [
+            "fetch",
+            "origin"
+          ],
+          "timeout": 300
+        },
+        {
+          "args": [
+            "fetch",
+            "origin",
+            "--force",
+            "refs/tags/dist-latest:refs/tags/dist-latest"
+          ],
+          "timeout": 60
+        },
+        {
+          "args": [
+            "merge",
+            "--ff-only",
+            "origin/main"
+          ],
+          "timeout": 120
+        }
+      ],
+      "warnings": [
+        "tag dist-latest nao atualizada: fatal: couldn't find remote ref refs/tags/dist-latest"
+      ],
+      "head": "new",
+      "content": "new\n",
+      "collision": "remote\n",
+      "stash": [],
+      "stashed_untracked": null
+    },
+    {
+      "name": "diverged",
+      "result": {
+        "value": null
+      },
+      "calls": [
+        {
+          "args": [
+            "fetch",
+            "origin"
+          ],
+          "timeout": 300
+        },
+        {
+          "args": [
+            "fetch",
+            "origin",
+            "--force",
+            "refs/tags/dist-latest:refs/tags/dist-latest"
+          ],
+          "timeout": 60
+        },
+        {
+          "args": [
+            "merge",
+            "--ff-only",
+            "origin/main"
+          ],
+          "timeout": 120
+        },
+        {
+          "args": [
+            "stash",
+            "push",
+            "--include-untracked",
+            "-m",
+            "hangar antes do reset"
+          ],
+          "timeout": 120
+        },
+        {
+          "args": [
+            "reset",
+            "--hard",
+            "origin/main"
+          ],
+          "timeout": 120
+        }
+      ],
+      "warnings": [
+        "tag dist-latest nao atualizada: fatal: couldn't find remote ref refs/tags/dist-latest"
+      ],
+      "head": "new",
+      "content": "new\n",
+      "collision": "remote\n",
+      "stash": [],
+      "stashed_untracked": null
+    },
+    {
+      "name": "untracked-collision",
+      "result": {
+        "value": null
+      },
+      "calls": [
+        {
+          "args": [
+            "fetch",
+            "origin"
+          ],
+          "timeout": 300
+        },
+        {
+          "args": [
+            "fetch",
+            "origin",
+            "--force",
+            "refs/tags/dist-latest:refs/tags/dist-latest"
+          ],
+          "timeout": 60
+        },
+        {
+          "args": [
+            "merge",
+            "--ff-only",
+            "origin/main"
+          ],
+          "timeout": 120
+        },
+        {
+          "args": [
+            "stash",
+            "push",
+            "--include-untracked",
+            "-m",
+            "hangar antes do reset"
+          ],
+          "timeout": 120
+        },
+        {
+          "args": [
+            "reset",
+            "--hard",
+            "origin/main"
+          ],
+          "timeout": 120
+        }
+      ],
+      "warnings": [
+        "tag dist-latest nao atualizada: fatal: couldn't find remote ref refs/tags/dist-latest"
+      ],
+      "head": "new",
+      "content": "new\n",
+      "collision": "remote\n",
+      "stash": [
+        "On main: hangar antes do reset"
+      ],
+      "stashed_untracked": "untracked\n"
+    },
+    {
+      "name": "fetch-failed",
+      "result": {
+        "error": "nao consegui buscar o codigo novo: fixture-git-failed",
+        "type": "RuntimeError"
+      },
+      "calls": [
+        {
+          "args": [
+            "fetch",
+            "origin"
+          ],
+          "timeout": 300
+        }
+      ],
+      "warnings": [],
+      "head": "old",
+      "content": "old\n",
+      "collision": null,
+      "stash": [],
+      "stashed_untracked": null
+    },
+    {
+      "name": "tag-failed",
+      "result": {
+        "value": null
+      },
+      "calls": [
+        {
+          "args": [
+            "fetch",
+            "origin"
+          ],
+          "timeout": 300
+        },
+        {
+          "args": [
+            "fetch",
+            "origin",
+            "--force",
+            "refs/tags/dist-latest:refs/tags/dist-latest"
+          ],
+          "timeout": 60
+        },
+        {
+          "args": [
+            "merge",
+            "--ff-only",
+            "origin/main"
+          ],
+          "timeout": 120
+        }
+      ],
+      "warnings": [
+        "tag dist-latest nao atualizada: fixture-git-failed"
+      ],
+      "head": "new",
+      "content": "new\n",
+      "collision": "remote\n",
+      "stash": [],
+      "stashed_untracked": null
+    },
+    {
+      "name": "stash-failed",
+      "result": {
+        "error": "nao consegui guardar o que estava no disco: fixture-git-failed",
+        "type": "RuntimeError"
+      },
+      "calls": [
+        {
+          "args": [
+            "fetch",
+            "origin"
+          ],
+          "timeout": 300
+        },
+        {
+          "args": [
+            "fetch",
+            "origin",
+            "--force",
+            "refs/tags/dist-latest:refs/tags/dist-latest"
+          ],
+          "timeout": 60
+        },
+        {
+          "args": [
+            "merge",
+            "--ff-only",
+            "origin/main"
+          ],
+          "timeout": 120
+        },
+        {
+          "args": [
+            "stash",
+            "push",
+            "--include-untracked",
+            "-m",
+            "hangar antes do reset"
+          ],
+          "timeout": 120
+        }
+      ],
+      "warnings": [
+        "tag dist-latest nao atualizada: fatal: couldn't find remote ref refs/tags/dist-latest"
+      ],
+      "head": "old",
+      "content": "old\n",
+      "collision": "untracked\n",
+      "stash": [],
+      "stashed_untracked": null
+    },
+    {
+      "name": "reset-failed",
+      "result": {
+        "error": "nao consegui alinhar com o codigo novo: fixture-git-failed",
+        "type": "RuntimeError"
+      },
+      "calls": [
+        {
+          "args": [
+            "fetch",
+            "origin"
+          ],
+          "timeout": 300
+        },
+        {
+          "args": [
+            "fetch",
+            "origin",
+            "--force",
+            "refs/tags/dist-latest:refs/tags/dist-latest"
+          ],
+          "timeout": 60
+        },
+        {
+          "args": [
+            "merge",
+            "--ff-only",
+            "origin/main"
+          ],
+          "timeout": 120
+        },
+        {
+          "args": [
+            "stash",
+            "push",
+            "--include-untracked",
+            "-m",
+            "hangar antes do reset"
+          ],
+          "timeout": 120
+        },
+        {
+          "args": [
+            "reset",
+            "--hard",
+            "origin/main"
+          ],
+          "timeout": 120
+        }
+      ],
+      "warnings": [
+        "tag dist-latest nao atualizada: fatal: couldn't find remote ref refs/tags/dist-latest"
+      ],
+      "head": "old",
+      "content": "old\n",
+      "collision": null,
+      "stash": [
+        "On main: hangar antes do reset"
+      ],
+      "stashed_untracked": "untracked\n"
+    }
+  ]
+}

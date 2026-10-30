@@ -389,4 +389,31 @@ mod guest_push;
 mod codex_pipeline_hooks;
 
 mod codex_pipeline_round;
+
+mod update_git;
+mod update_channel_http;
+
+mod update_periodic_tick;
+
+mod update_launch;
+mod update_launch_gate;
+
+mod update_state_contract;
+
+mod update_lock_contract;
+
+mod update_rescue;
+
+mod update_git_transitions;
+
+mod update_restart;
+
+mod update_local_dist;
+
+mod update_key_dist;
+
 mod peer_diagnostic;
+
+mod update_native_contract;
+
+mod update_download;

@@ -1292,8 +1292,8 @@ function Pare-Servico {
         # desce do backend) o matava - a atualizacao terminava "interrompida". Sobe enquanto o PAI
         # ainda e motor; para no ultimo.
         $pai = $paisMapa[$cur]
-        $souMotor = $cmdMapa[$cur] -and $cmdMapa[$cur] -match 'app\.atualizar'
-        $paiMotor = $pai -and $cmdMapa[$pai] -and $cmdMapa[$pai] -match 'app\.atualizar'
+        $souMotor = $cmdMapa[$cur] -and $cmdMapa[$cur] -match 'app\.atualizar|hangar-server(?:\.exe)?"?\s+checkout-update(?:\s|$)'
+        $paiMotor = $pai -and $cmdMapa[$pai] -and $cmdMapa[$pai] -match 'app\.atualizar|hangar-server(?:\.exe)?"?\s+checkout-update(?:\s|$)'
         if ($souMotor -and -not $paiMotor) { break }
         # PID e RECICLADO: o ppid e so um numero gravado no nascimento, e se aquele pai morreu o
         # numero pode pertencer hoje a um processo qualquer — inclusive ao Vite que a gente QUER
@@ -1333,7 +1333,7 @@ function Pare-Servico {
     # nao bastou; reconhecer pelo comando nao depende do mapa de pais estar completo nem do WMI ter
     # respondido. No Linux quem resolve isso e o escopo transiente do systemd, que aqui nao existe.
     $atualizador = @(@($tabela) |
-        Where-Object { $_ -and $_.CommandLine -and $_.CommandLine -match 'app\.atualizar' } |
+        Where-Object { $_ -and $_.CommandLine -and $_.CommandLine -match 'app\.atualizar|hangar-server(?:\.exe)?"?\s+checkout-update(?:\s|$)'  } |
         Select-Object -ExpandProperty ProcessId)
     if ($atualizador.Count -gt 0) {
         $alvos = @($alvos | Where-Object { -not ($atualizador -contains [int]$_) })

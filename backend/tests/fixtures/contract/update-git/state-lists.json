@@ -1,0 +1,220 @@
+{
+  "source_commit": "55f460e66f9b4d9fee4c5a2e0040db52819c7375",
+  "command": "python backend/tests/fixtures/contract/update-git/generate-state-lists.py --reference <checkout-Python> --output <fixture>",
+  "cases": [
+    {
+      "operation": "_log_do_estado",
+      "initial": null,
+      "text": "nova",
+      "exception": null,
+      "state": {
+        "log": [
+          "nova"
+        ]
+      }
+    },
+    {
+      "operation": "_log_do_estado",
+      "initial": [],
+      "text": "nova",
+      "exception": null,
+      "state": {
+        "log": [
+          "nova"
+        ]
+      }
+    },
+    {
+      "operation": "_log_do_estado",
+      "initial": [
+        "anterior"
+      ],
+      "text": "nova",
+      "exception": null,
+      "state": {
+        "log": [
+          "anterior",
+          "nova"
+        ]
+      }
+    },
+    {
+      "operation": "_log_do_estado",
+      "initial": "ab",
+      "text": "nova",
+      "exception": "AttributeError",
+      "message": "'str' object has no attribute 'extend'",
+      "state": {
+        "log": "ab"
+      }
+    },
+    {
+      "operation": "_log_do_estado",
+      "initial": {
+        "x": 1
+      },
+      "text": "nova",
+      "exception": "AttributeError",
+      "message": "'dict' object has no attribute 'extend'",
+      "state": {
+        "log": {
+          "x": 1
+        }
+      }
+    },
+    {
+      "operation": "_log_do_estado",
+      "initial": 0,
+      "text": "nova",
+      "exception": null,
+      "state": {
+        "log": [
+          "nova"
+        ]
+      }
+    },
+    {
+      "operation": "_log_do_estado",
+      "initial": true,
+      "text": "nova",
+      "exception": "AttributeError",
+      "message": "'bool' object has no attribute 'extend'",
+      "state": {
+        "log": true
+      }
+    },
+    {
+      "operation": "_avisar",
+      "initial": null,
+      "text": "nova",
+      "exception": null,
+      "state": {
+        "avisos": [
+          "nova"
+        ]
+      }
+    },
+    {
+      "operation": "_avisar",
+      "initial": [],
+      "text": "nova",
+      "exception": null,
+      "state": {
+        "avisos": [
+          "nova"
+        ]
+      }
+    },
+    {
+      "operation": "_avisar",
+      "initial": [
+        "anterior"
+      ],
+      "text": "nova",
+      "exception": null,
+      "state": {
+        "avisos": [
+          "anterior",
+          "nova"
+        ]
+      }
+    },
+    {
+      "operation": "_avisar",
+      "initial": "ab",
+      "text": "nova",
+      "exception": null,
+      "state": {
+        "avisos": [
+          "a",
+          "b",
+          "nova"
+        ]
+      }
+    },
+    {
+      "operation": "_avisar",
+      "initial": {
+        "x": 1
+      },
+      "text": "nova",
+      "exception": null,
+      "state": {
+        "avisos": [
+          "x",
+          "nova"
+        ]
+      }
+    },
+    {
+      "operation": "_avisar",
+      "initial": 0,
+      "text": "nova",
+      "exception": null,
+      "state": {
+        "avisos": [
+          "nova"
+        ]
+      }
+    },
+    {
+      "operation": "_avisar",
+      "initial": true,
+      "text": "nova",
+      "exception": "TypeError",
+      "message": "'bool' object is not iterable",
+      "state": {
+        "avisos": true
+      }
+    },
+    {
+      "operation": "_log_do_estado",
+      "initial": [],
+      "text": "",
+      "state": {
+        "log": [
+          ""
+        ]
+      },
+      "exception": null
+    },
+    {
+      "operation": "_log_do_estado",
+      "initial": [],
+      "text": "a\nb\n",
+      "state": {
+        "log": [
+          "a",
+          "b"
+        ]
+      },
+      "exception": null
+    },
+    {
+      "operation": "_log_do_estado",
+      "initial": [],
+      "text": "a\rb\r\n",
+      "state": {
+        "log": [
+          "a",
+          "b"
+        ]
+      },
+      "exception": null
+    },
+    {
+      "operation": "_log_do_estado",
+      "initial": [],
+      "text": "ab c\u001cd",
+      "state": {
+        "log": [
+          "a",
+          "b",
+          "c",
+          "d"
+        ]
+      },
+      "exception": null
+    }
+  ]
+}

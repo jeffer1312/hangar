@@ -735,15 +735,15 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/device-install/certs", axum::routing::post(crate::device_install::routes::certs))
         // Tela web ligada ou não: só o dono, nunca repassado.
         .route("/api/web-ui", get(crate::ui::setting).put(crate::ui::setting))
-        // Atualização: o Rust atende o dono na máquina migrada; o resto segue ao motor `git` do Python.
+        // Atualização do pacote e do checkout, com a mesma decisão do dono.
         .route("/api/atualizacao", get(crate::update::http::status).fallback(pass_any))
         .route("/api/atualizacao/iniciar", axum::routing::post(crate::update::http::start).fallback(pass_any))
         .route("/api/atualizacao/reiniciar", axum::routing::post(crate::update::http::restart).fallback(pass_any))
         .route("/api/atualizacao/dev-mode", axum::routing::post(crate::update::http::switch_dev_mode).fallback(pass_any))
         // Aviso importante aceito na tela: só do dono, em todo modo, nunca repassado.
         .route("/api/update/accept", axum::routing::post(crate::update::http::accept))
-        // Canal de testes: no pacote é do Rust (`latest` ou `beta`); no git, a branch do Python.
-        .route("/api/update-channel", get(crate::update::http::channel_read).put(crate::update::http::channel_write).fallback(pass_any))
+        // Canal de testes: canal publicado no pacote ou branch do checkout.
+        .route("/api/update-channel", axum::routing::any(crate::update::git_engine::http::channel))
         // A tela web é servida aqui; o que não é dela segue ao Python.
         .fallback(crate::ui::fallback)
         .layer(axum::middleware::from_fn(crate::migration_status::count_public))
@@ -980,6 +980,9 @@ pub(crate) async fn pass_any(
     let decoded_path=percent_encoding::percent_decode_str(req.uri().path()).decode_utf8_lossy();
     if crate::config_sync::runtime_http::owns_path(req.uri().path()) {
         return crate::config_sync::runtime_http::handle(State(st),ConnectInfo(peer),req).await;
+    }
+    if crate::update::git_engine::http::owns_channel_path(&decoded_path)||crate::update::git_engine::http::owns_update_path(&decoded_path){
+        return crate::update::git_engine::http::channel(State(st),ConnectInfo(peer),req).await;
     }
     if crate::machine_peers::owns_http_path(&decoded_path){
         return crate::machine_peers::handle(State(st),ConnectInfo(peer),req).await;

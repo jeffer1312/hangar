@@ -1,7 +1,7 @@
 //! Detecção dos bytes JSON e posições originais, inclusive surrogates isolados.
 use std::borrow::Cow;
 
-pub(super) struct Decoded<'a> {
+pub(crate) struct Decoded<'a> {
     pub text: Cow<'a, str>,
     replacements: Vec<(usize, usize)>,
 }
@@ -73,7 +73,7 @@ impl Builder {
     }
 }
 
-pub(super) fn decode(bytes: &[u8]) -> Result<Decoded<'_>, ()> {
+pub(crate) fn decode(bytes: &[u8]) -> Result<Decoded<'_>, ()> {
     let (encoding, skip) = detect(bytes);
     let bytes = &bytes[skip..];
     if matches!(encoding, Encoding::Utf8) && let Ok(text) = std::str::from_utf8(bytes) {

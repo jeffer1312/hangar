@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from app import atualizar, diag, diag_logging, log_paths
+from app import diag, diag_logging, log_paths
 
 
 @pytest.fixture
@@ -67,41 +67,3 @@ def test_restore_vazio_grava_log_sem_tocar_tmux(tmp_path, ambiente, windows, loc
     assert "restore: as sessões do Hangar voltam pelo servidor" in (root / "logs" / "privado" / "claude-resume.log").read_text()
     assert not (resurrect / "claude-resume.log").exists()
     assert (resurrect / "claude-sessions.tsv").read_text() == ""
-
-
-def test_motor_atualizador_instala_log_central_antes_de_executar(tmp_path, monkeypatch, ambiente):
-    for key in ("HOME", "USERPROFILE", "LOCALAPPDATA"):
-        monkeypatch.setenv(key, ambiente[key])
-    root = tmp_path / "logs"
-    monkeypatch.setattr(log_paths, "base", lambda: root)
-    monkeypatch.setattr(diag, "_base", lambda: root / "diario")
-    tree = ast.parse(Path(atualizar.__file__).read_text(encoding="utf-8"))
-    main = next(node for node in tree.body if isinstance(node, ast.If)
-                and ast.unparse(node.test) == "__name__ == '__main__'")
-    loggers = [logging.getLogger(name) for name in ("hangar", "app", "uvicorn.error", "asyncio")]
-    saved = [(logger, logger.handlers[:], logger.level) for logger in loggers]
-    called = []
-
-    def executar(porta):
-        called.append(porta)
-        logging.getLogger("hangar.atualizar").error("falha privada: token-secreto")
-
-    try:
-        for logger in loggers:
-            logger.handlers = []
-        exec(compile(ast.Module(body=main.body, type_ignores=[]), atualizar.__file__, "exec"),
-             {"logging": logging, "sys": type("Args", (), {"argv": ["atualizar", "9000"]}),
-              "executar": executar})
-        assert called == [9000]
-        assert "token-secreto" in (root / "privado" / "atualizacao.log").read_text()
-        raw = diag.caminho_do_dia().read_text()
-        assert "token-secreto" not in raw
-        assert any(row["evento"] == "backend.erro" for row in map(json.loads, raw.splitlines()))
-    finally:
-        created = {handler for logger in loggers for handler in logger.handlers
-                   if isinstance(handler, (diag_logging.PrivateLog, diag_logging.DiaryHandler))}
-        for logger, handlers, level in saved:
-            logger.handlers = handlers
-            logger.setLevel(level)
-        for handler in created:
-            handler.close()

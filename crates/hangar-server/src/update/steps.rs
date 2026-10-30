@@ -244,6 +244,17 @@ fn failure(step: &Step, why: &str) -> UpdateError { UpdateError::Step(format!("{
 /// anterior não roda de novo; a prova de cada um continua conferida.
 pub fn apply_machine_steps(root: &Path, home: &Path, state_dir: &Path, runner: &dyn StepRunner, state: &StateFile)
     -> Result<Vec<String>, UpdateError> {
+    apply_selected_steps(root, home, state_dir, runner, state, true, true)
+}
+
+/// O checkout e a subida usam os mesmos passos; a subida exclui os destrutivos.
+pub fn apply_checkout_steps(root: &Path, home: &Path, state_dir: &Path, runner: &dyn StepRunner, state: &StateFile, destructive: bool)
+    -> Result<Vec<String>, UpdateError> {
+    apply_selected_steps(root, home, state_dir, runner, state, false, destructive)
+}
+
+fn apply_selected_steps(root: &Path, home: &Path, state_dir: &Path, runner: &dyn StepRunner, state: &StateFile, machine_only: bool, destructive: bool)
+    -> Result<Vec<String>, UpdateError> {
     let (steps, invalid) = read_steps(&root.join("docs").join("atualizacoes"), cfg!(windows));
     if !invalid.is_empty() {
         state.write(serde_json::json!({"passos_invalidos": invalid}));
@@ -264,7 +275,7 @@ pub fn apply_machine_steps(root: &Path, home: &Path, state_dir: &Path, runner: &
     };
     let mut done = Vec::new();
     let mut previous: Option<String> = None;
-    for step in steps.iter().filter(|s| s.machine && !done_before.contains(&s.id)) {
+    for step in steps.iter().filter(|s| (!machine_only || s.machine) && (destructive || !s.destructive) && !done_before.contains(&s.id)) {
         let repeated = !step.command.is_empty() && previous.as_deref() == Some(step.command.as_str());
         if !step.command.is_empty() && !repeated { execute(step)?; }
         let missing = |s: &Step| s.proof.iter().filter(|p| !exists(p, root, home)).cloned().collect::<Vec<_>>();
@@ -274,7 +285,8 @@ pub fn apply_machine_steps(root: &Path, home: &Path, state_dir: &Path, runner: &
             absent = missing(step);
         }
         if !absent.is_empty() {
-            return Err(failure(step, &format!("o passo rodou mas não deixou: {}", absent.join(" "))));
+            let prefix = if machine_only { "o passo rodou mas não deixou" } else { "o passo rodou mas nao deixou" };
+            return Err(failure(step, &format!("{prefix}: {}", absent.join(" "))));
         }
         mark(state_dir, &step.id)?;
         if !step.command.is_empty() { previous = Some(step.command.clone()); }

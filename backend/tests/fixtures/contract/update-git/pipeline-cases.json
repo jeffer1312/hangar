@@ -1,0 +1,187 @@
+{
+  "source_commit": "55f460e66f9b4d9fee4c5a2e0040db52819c7375",
+  "command": "python backend/tests/fixtures/contract/update-git/generate-pipeline.py --reference <checkout-Python> --output backend/tests/fixtures/contract/update-git/pipeline-cases.json",
+  "cases": [
+    {
+      "name": "success",
+      "state": {
+        "fase": "pronto",
+        "ok": true,
+        "voltou": null,
+        "no_ar": null,
+        "reiniciar_manual": true,
+        "shell_mudou": false,
+        "waiting_for_server_build": false,
+        "texto": "Atualizado",
+        "erro": null,
+        "resgate": null,
+        "avisos": []
+      },
+      "head": "new",
+      "screen": "new-screen",
+      "previous_exists": false,
+      "prepare_calls": [
+        {
+          "dist": true,
+          "content": "new"
+        }
+      ]
+    },
+    {
+      "name": "prepare-failure",
+      "state": {
+        "fase": "pronto",
+        "ok": false,
+        "voltou": true,
+        "no_ar": true,
+        "reiniciar_manual": true,
+        "shell_mudou": false,
+        "waiting_for_server_build": false,
+        "texto": "Voltando para a versão anterior",
+        "erro": "as dependencias do backend nao sincronizaram: fixture-uv-failed",
+        "resgate": null,
+        "avisos": []
+      },
+      "head": "old",
+      "screen": "old-screen",
+      "previous_exists": false,
+      "prepare_calls": [
+        {
+          "dist": true,
+          "content": "new"
+        },
+        {
+          "dist": false,
+          "content": "old"
+        }
+      ]
+    },
+    {
+      "name": "rollback-prepare-failure",
+      "state": {
+        "fase": "pronto",
+        "ok": false,
+        "voltou": false,
+        "no_ar": true,
+        "reiniciar_manual": false,
+        "shell_mudou": false,
+        "waiting_for_server_build": false,
+        "texto": "Voltando para a versão anterior",
+        "erro": "as dependencias do backend nao sincronizaram: fixture-uv-failed; e a volta para a versao anterior tambem falhou: as dependencias do backend nao sincronizaram: fixture-uv-failed",
+        "resgate": null,
+        "avisos": []
+      },
+      "head": "old",
+      "screen": "old-screen",
+      "previous_exists": false,
+      "prepare_calls": [
+        {
+          "dist": true,
+          "content": "new"
+        },
+        {
+          "dist": false,
+          "content": "old"
+        }
+      ]
+    },
+    {
+      "name": "work-branch",
+      "state": {
+        "fase": "pronto",
+        "ok": false,
+        "voltou": false,
+        "no_ar": true,
+        "reiniciar_manual": false,
+        "shell_mudou": false,
+        "waiting_for_server_build": false,
+        "texto": null,
+        "erro": "este checkout esta na branch 'feature', e a atualizacao alinha o disco com origin/main — troque para a main antes de atualizar",
+        "resgate": null,
+        "avisos": []
+      },
+      "head": "old",
+      "screen": "old-screen",
+      "previous_exists": false,
+      "prepare_calls": []
+    },
+    {
+      "name": "missing-target",
+      "state": {
+        "fase": "pronto",
+        "ok": false,
+        "voltou": false,
+        "no_ar": true,
+        "reiniciar_manual": false,
+        "shell_mudou": false,
+        "waiting_for_server_build": false,
+        "texto": null,
+        "erro": "a branch 'missing' (CP_UPDATE_BRANCH) nao existe no origin; nada foi alterado",
+        "resgate": null,
+        "avisos": []
+      },
+      "head": "old",
+      "screen": "old-screen",
+      "previous_exists": false,
+      "prepare_calls": []
+    },
+    {
+      "name": "restart-failure",
+      "state": {
+        "fase": "pronto",
+        "ok": false,
+        "voltou": true,
+        "no_ar": true,
+        "reiniciar_manual": false,
+        "shell_mudou": false,
+        "waiting_for_server_build": false,
+        "texto": "Voltando para a versão anterior",
+        "erro": "o servidor nao reiniciou: nao consegui reiniciar o servidor: fixture-restart-failed",
+        "resgate": null,
+        "avisos": []
+      },
+      "head": "old",
+      "screen": "old-screen",
+      "previous_exists": false,
+      "prepare_calls": [
+        {
+          "dist": true,
+          "content": "new"
+        },
+        {
+          "dist": false,
+          "content": "old"
+        }
+      ]
+    },
+    {
+      "name": "same-pid",
+      "state": {
+        "fase": "pronto",
+        "ok": false,
+        "voltou": true,
+        "no_ar": true,
+        "reiniciar_manual": false,
+        "shell_mudou": false,
+        "waiting_for_server_build": false,
+        "texto": "Voltando para a versão anterior",
+        "erro": "o servidor nao reiniciou: o processo na porta e o mesmo de antes (pid 4242)",
+        "resgate": null,
+        "avisos": []
+      },
+      "head": "old",
+      "screen": "old-screen",
+      "previous_exists": false,
+      "prepare_calls": [
+        {
+          "dist": true,
+          "content": "new"
+        },
+        {
+          "dist": false,
+          "content": "old"
+        }
+      ]
+    }
+  ]
+}

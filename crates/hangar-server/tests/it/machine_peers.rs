@@ -583,6 +583,51 @@ async fn child_restart_reads_the_persisted_identity_without_python_snapshot() {
     assert_eq!(child_identity(home.path(),Some("manual")).await["identificador"],"manual");
 }
 
+#[tokio::test]
+async fn migration_contract_head_preserves_method_response_before_authentication() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(home.path().join(".hangar/config")).unwrap();
+    std::fs::write(home.path().join(".hangar/config/peers.json"), "{}").unwrap();
+    std::fs::write(home.path().join(".hangar/config/.env"), "").unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let mut state = AppState::new(Config {
+        listen: address,
+        upstream: crate::refused_address(),
+        internal_secret: "contract-internal".into(),
+        auth_token: "contract-owner".into(),
+        log_path: None,
+        trusted: TrustedHosts::parse("127.0.0.1"),
+    });
+    state.accounts = AccountService::new(AccountEnvironment::from_map(
+        [
+            ("HOME".into(), home.path().display().to_string()),
+            ("USERPROFILE".into(), home.path().display().to_string()),
+        ]
+        .into(),
+    ));
+    let router = hangar_server::routes::router(Arc::new(state));
+    let task = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await
+        .unwrap();
+    });
+    let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/update-git/head.json")).unwrap();
+    let client=reqwest::Client::new();
+    for row in fixture["cases"].as_array().unwrap(){
+        let mut request=client.head(format!("http://{address}{}",row["path"].as_str().unwrap()));
+        if row["authenticated"]==true{request=request.bearer_auth("contract-owner");}
+        let response=request.send().await.unwrap();
+        assert_eq!(response.status().as_u16(),row["status"].as_u64().unwrap() as u16,"{}",row["path"]);
+        assert_eq!(response.headers().get("allow").and_then(|v|v.to_str().ok()),row["allow"].as_str());
+        assert_eq!(response.text().await.unwrap(),row["body"].as_str().unwrap());
+    }
+    task.abort();
+}
+
 #[test]
 fn peer_settings_snapshot_are_frozen_before_later_dotenv_edits() {
     let home=tempfile::tempdir().unwrap();let config=home.path().join(".hangar/config");std::fs::create_dir_all(&config).unwrap();

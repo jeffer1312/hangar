@@ -26,10 +26,10 @@ from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import ClientDisconnect
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sse_starlette.sse import EventSourceResponse
-from app import (agentes_sync, atomico, atualizacoes, atualizar, closed_names, diag, harness_api,
+from app import (agentes_sync, atomico, closed_names, diag, harness_api,
                  loop_monitor, permission_mode, plugin_bridge, procinfo, quem_chama, tmux,
                  uds_messaging)
-from app import groups_bridge, internal_api, list_bridge, migration_status, share_bridge, update_channel
+from app import groups_bridge, internal_api, list_bridge, migration_status, share_bridge
 from app.auth import require_auth, require_loopback
 from app.send_executor import send_thread as _send_thread
 from app import bastao as bastao_mod   # `bastao` sem sufixo é a ROTA GET, mais abaixo neste arquivo
@@ -94,7 +94,7 @@ from app.archive import (ArchiveEntry, ArchiveFolder, archive_cwd, archive_jsonl
                          list_conversations, list_folders, list_recent, tail_events)
 from app.search import SearchHit, search, extract_terms, search_terms, build_ask_prompt
 from app.askquestion import clear_pending_askq, read_pending_askq
-from app import alcance, credenciais, peers_api
+from app import credenciais
 from app import config_sync_api
 from app import codex_contas as codex_accounts
 from app.codex_contas_login import CodexContasLogin
@@ -226,26 +226,6 @@ async def _lifespan(app: FastAPI):
     # Poda periodica dos sidecars de sessao morta (Task G3): varre na subida e depois a cada
     # 24h — ver app/prune.py para o criterio conservador (chave de sessao nao viva + idade
     # minima de 7 dias) e o porquê de periodica em vez de so no startup.
-    fetch_task = asyncio.create_task(_fetch_loop())
-
-    def _fetch_done(t: asyncio.Task) -> None:
-        if not t.cancelled():
-            exc = t.exception()
-            if exc is not None:
-                _log.exception("_fetch_loop crashed", exc_info=exc)
-
-    fetch_task.add_done_callback(_fetch_done)
-
-    auto_update_task = asyncio.create_task(_auto_update_loop())
-
-    def _auto_update_done(t: asyncio.Task) -> None:
-        if not t.cancelled():
-            exc = t.exception()
-            if exc is not None:
-                _log.exception("_auto_update_loop crashed", exc_info=exc)
-
-    auto_update_task.add_done_callback(_auto_update_done)
-
     prune_task = asyncio.create_task(_prune_loop())
 
     def _prune_done(t: asyncio.Task) -> None:
@@ -757,11 +737,8 @@ app.include_router(guest_users_api.router)
 app.include_router(deploy_router)
 # Roteadores por assunto (Task 1 do plano descoberta-e-configuracao): cada Task do lote escreve
 # só no módulo dela. Última edição de api.py deste plano.
-app.include_router(alcance.alcance_router)
 app.include_router(credenciais.credenciais_router)
 app.include_router(harness_api.harness_router)
-app.include_router(peers_api.peers_router)
-app.include_router(update_channel.router)
 app.include_router(plugin_bridge.plugin_router)
 app.include_router(config_sync_api.config_sync_router)
 # Convites e par externo são do Rust; aqui só o repasse do dono que chega pelo Connect.
@@ -4276,275 +4253,6 @@ def _origem_do_terminal_ok(request: Request) -> bool:
     if not origem or guest_users.current.get() is None:
         return True
     return termsock._origem_aceita(origem, request.headers.get("host"))
-
-
-# ─── Atualizar ─────────────────────────────────────────────────────────────────────────────────
-
-_ALVOS_AUSENTES_AVISADOS: set[str] = set()
-# Por alvo: (instante, até onde o código pode ir, binário instalado diferente do publicado, API de
-# cliente do publicado). Rede e o hash do binário não cabem no polling de 2 s da tela.
-_PUBLICADO: dict[str, tuple[float, str, bool, int]] = {}
-_PUBLICADO_TTL_S = 300
-
-
-def _publicado(destino: str, procurar: bool) -> tuple[str, bool, int]:
-    """O commit do binário Rust publicado para este sistema, se o instalado aqui é outro e a API de
-    cliente que ele fala."""
-    agora = time.monotonic()
-    guardado = _PUBLICADO.get(destino)
-    if guardado and not procurar and agora - guardado[0] < _PUBLICADO_TTL_S:
-        return guardado[1], guardado[2], guardado[3]
-    ate, release = atualizar.pinned_target(destino)
-    # Sem como conferir, a lista mostra o topo, como antes; é o motor que avisa o motivo.
-    valor = (ate or f"origin/{destino}", atualizar.rust_release.stale(release), atualizar.published_api(release))
-    _PUBLICADO[destino] = (agora, *valor)
-    return valor
-
-
-def _mudancas_pendentes(ate: str | None = None) -> list[dict] | None:
-    """Os commits que entraram em `origin/<alvo>` e ainda não estão aqui — o changelog da tela.
-
-    Título de commit, e não um `CHANGELOG.md` mantido à mão: as mensagens deste repo já são
-    descritivas, e um arquivo à parte seria uma segunda cópia pra envelhecer. Passo que merecer
-    texto próprio ganha um arquivo em `docs/atualizacoes/`, cujo corpo entra junto.
-
-    `None` quando o git não compara (ref do alvo ainda não buscada): a tela oferece o Atualizar, e
-    é o motor que diz o motivo. Lista vazia ali seria "Tudo em dia" sem sinal nenhum.
-    """
-    destino = atualizar.alvo()
-    p = atualizar._git("log", "--format=%h%x00%s", f"HEAD..{ate or f'origin/{destino}'}", timeout=30)
-    if p.returncode != 0:
-        # Uma vez por alvo enquanto falhar: o polling da tela passa aqui a cada 2s.
-        if destino not in _ALVOS_AUSENTES_AVISADOS:
-            _ALVOS_AUSENTES_AVISADOS.add(destino)
-            diag.registrar("atualizacao.alvo_ausente", "aviso",
-                           detalhe=f"origin/{destino} rc={p.returncode}: {atualizar._cauda(p, 3)}")
-        return None
-    _ALVOS_AUSENTES_AVISADOS.discard(destino)
-    linhas = []
-    for linha in p.stdout.splitlines():
-        sha, _, titulo = linha.partition("\x00")
-        if titulo:
-            linhas.append({"sha": sha, "titulo": titulo})
-    return linhas
-
-
-@app.get("/api/atualizacao", dependencies=[Depends(require_auth)])
-async def get_atualizacao(procurar: bool = False):
-    """Estado da atualização: as três versões, o que há de novo, e o que o motor está fazendo.
-
-    As TRÊS versões porque "a versão instalada" tem três respostas — o disco, o processo vivo e o
-    bundle que o navegador carregou — e elas divergem justamente na janela em que alguém está
-    atualizando. Comparar só o disco com `origin/main` diria "tudo em dia" pra quem está olhando
-    uma tela de dias atrás.
-
-    Tudo em `to_thread`: são chamadas de `git` (subprocess), e o precedente de 23/07 é que elas
-    nunca podem rodar na corrotina.
-    """
-    def _ler() -> dict:
-        # `procurar=1` vai à REDE antes de comparar. Sem isto, o botão "Procurar de novo" só relia
-        # o `origin/main` que já estava no disco — a foto do último fetch do laço, que roda a cada
-        # 30min — e respondia "Tudo em dia" com informação velha, afirmando ter procurado. Não é
-        # o padrão porque o polling da tela bate aqui a cada 2s durante uma atualização, e um
-        # `git fetch` nessa cadência é rede à toa.
-        if procurar:
-            atualizar._git("fetch", "origin", timeout=120)
-        pre = atualizar.checar()
-        # Só até o commit do binário Rust publicado: o código depois dele rodaria com o binário de antes.
-        ate, servidor_velho, api_publicado = _publicado(atualizar.alvo(), procurar)
-        mudancas = _mudancas_pendentes(ate)
-        # Checkout fora da branch do alvo (campo esvaziado na branch de teste, ou branch já contida
-        # na main) não tem commit a puxar, mas tem troca a fazer.
-        troca = atualizar._troca_de_branch(pre) and not pre.get("branch_de_trabalho")
-        # Código em dia com o binário publicado depois dele: a atualização só troca o binário.
-        disponivel = mudancas is None or bool(mudancas) or troca or servidor_velho
-        mudancas = mudancas or []
-        return {
-            "versoes": {"repo": diag._git_describe(), "backend": diag.VERSAO_EM_EXECUCAO},
-            # A versão que a pessoa lê: data do commit + hash. `remoto` é o que está em
-            # origin/<alvo> desde o último fetch; `atras` é quantos commits faltam.
-            "versao_legivel": {"repo": diag.versao_legivel(),
-                               "backend": diag.VERSAO_LEGIVEL_EM_EXECUCAO,
-                               "remoto": diag.versao_legivel(f"origin/{atualizar.alvo()}")},
-            "atras": len(mudancas),
-            "atualizacao_disponivel": disponivel,
-            "servidor_desatualizado": servidor_velho,
-            "api_publicado": api_publicado,
-            "mudancas": mudancas,
-            "passos": [{"id": s["id"], "titulo": s["titulo"], "texto": s["texto"]}
-                       for s in atualizacoes.pendentes()],
-            "pre_voo": pre,
-            # `estado_para_tela`, não `estado`: converte "rodando" com o processo morto na falha
-            # que ele não conseguiu escrever. Sem isso a tela fica presa numa atualização que já
-            # não existe, e só sai editando o JSON na mão.
-            "estado": atualizar.estado_para_tela(),
-        }
-    return await asyncio.to_thread(_ler)
-
-
-@app.post("/api/atualizacao/iniciar", dependencies=[Depends(require_auth)])
-async def post_atualizacao_iniciar():
-    """Lança a atualização e devolve na hora — ela roda FORA deste processo, que vai reiniciar."""
-    pre = await asyncio.to_thread(atualizar.checar)
-    # Recusa ANTES de lançar o motor: a atualização alinha o disco com `origin/<alvo>` e arrastaria a
-    # branch de trabalho junto (medido em 25/08/2026 numa máquina com `mobile-expo` no checkout).
-    if pre.get("branch_de_trabalho"):
-        raise HTTPException(409, detail=erro(
-            "erro_atualizacao_branch",
-            f"este checkout esta na branch {pre.get('branch')}, nao na {pre.get('alvo') or 'main'}",
-            branch=pre.get("branch"), alvo=pre.get("alvo") or "main"))
-    if not pre.get("pode"):
-        faltando = pre.get("faltando") or []
-        raise HTTPException(409, detail=erro(
-            "erro_atualizacao_dependencia", f"falta o que a atualizacao precisa: {', '.join(faltando)}",
-            faltando=faltando))
-    # A resposta guardada é de antes desta atualização.
-    _PUBLICADO.clear()
-    r = await asyncio.to_thread(atualizar.iniciar, settings.port)
-    if not r.get("ok"):
-        raise HTTPException(409, detail=erro("erro_atualizacao_ja_rodando",
-                                             "ja existe uma atualizacao rodando"))
-    return r
-
-
-@app.post("/api/atualizacao/reiniciar", dependencies=[Depends(require_auth)])
-async def post_atualizacao_reiniciar():
-    """Reinicia o servidor sem atualizar nada — o caso do disco já estar à frente do processo."""
-    r = await asyncio.to_thread(atualizar.reiniciar_agora, settings.port)
-    if r.get("erro") == "ja_rodando":
-        raise HTTPException(409, detail=erro("erro_atualizacao_ja_rodando", "ja existe uma atualizacao rodando"))
-    if not r.get("ok"):
-        raise HTTPException(409, detail=erro(
-            "erro_reinicio_indisponivel",
-            f"esta maquina nao reinicia sozinha (topologia {r.get('topologia')})",
-            topologia=r.get("topologia")))
-    return r
-
-
-async def _fetch_loop():
-    """`git fetch` de tempos em tempos, senão `origin/main` é a foto do último pull de alguém.
-
-    Sem isto o botão simplesmente nunca apareceria numa máquina que ninguém puxa à mão. Fail-soft
-    e em `to_thread`: máquina sem rede não pode virar erro na tela nem derrubar o laço.
-    """
-    # Modo pacote: sem `.git`, quem verifica a versão nova é o Rust (`update::periodic`).
-    if diag.install_manifest() is not None:
-        return
-    while True:
-        try:
-            await asyncio.to_thread(atualizar._git, "fetch", "origin", timeout=120)
-        except Exception:                            # noqa: BLE001 — sem rede é o caso comum
-            _log.debug("fetch periodico falhou", exc_info=True)
-        await asyncio.sleep(1800)
-
-
-# ─── Auto-update ────────────────────────────────────────────────────────────────────────────────
-# O botão pede um clique; a correção de bug não pode esperar o clique em cada máquina. Este laço
-# checa a cada hora e dispara o MESMO motor do botão (`atualizar.iniciar`), sem ninguém tocar em
-# nada. Os gates vivem em `_auto_update_motivo`: qualquer um deles recusando, o tick vira um log e
-# a próxima hora tenta de novo.
-_AUTO_UPDATE_INTERVALO = 3600
-_AUTO_UPDATE_FALHA_JANELA_S = 86400   # uma atualização que falhou segura novas tentativas por 24h
-_DIST_SHA_URL = "https://github.com/jeffer1312/hangar/releases/download/dist-latest/frontend-dist.sha"
-
-
-def _auto_update_motivo() -> Optional[str]:
-    """Por que o auto-update NÃO deve disparar neste tick. None = dispara.
-
-    Diferenças pro botão, de propósito: árvore suja ou commits locais adiante BLOQUEIAM aqui (o
-    botão resguarda e pergunta; o automático não pode decidir sobre trabalho de ninguém), e sem o
-    dist do CI deste commit exato NÃO cai no build local — espera o próximo tick (sha publicado =
-    CI verde + build pronto, que é condição, não aceleração). Sobrava uma corrida de segundos — push entre o gate e o fetch do motor, ou release `dist-latest` móvel —
-    em que o build local de fallback podia ainda acontecer: consequencia e lentidao, nao tela errada, entao ficou aceita e registrada aqui.
-    """
-    # O CI só publica o dist da main: branch de teste atualiza pelo botão, que compila a tela aqui.
-    if atualizar.alvo() != "main":
-        return "branch de teste configurada (CP_UPDATE_BRANCH)"
-    pre = atualizar.checar()
-    if not pre.get("pode"):
-        return "dependencias faltando"
-    if pre.get("branch_de_trabalho"):
-        return f"checkout na branch {pre.get('branch')}"
-    # Trocar de branch é decisão de quem aperta o botão, nunca do laço.
-    if atualizar._troca_de_branch(pre):
-        return f"checkout na branch {pre.get('branch')}, fora do alvo {pre.get('alvo')}"
-    # divergiu ANTES de ahead: divergiu = ahead>0 AND behind>0, e o motivo mais preciso e o dela.
-    if pre.get("divergiu"):
-        return "checkout divergiu de origin/main"
-    if pre.get("ahead"):
-        return "checkout adiante de origin/main (commits locais nao pushados)"
-    if pre.get("ahead_incerto"):
-        return "nao deu pra contar os commits locais"
-    if not pre.get("behind"):
-        return "em dia"
-    if pre.get("sujo"):
-        return "arvore suja (trabalho nao commitado)"
-    # estado_para_tela, NAO estado: o cru congela em "rodando" se o motor morrer sem gravar o
-    # desfecho (kill, queda de energia), e cada tick devolveria "ja rodando" pra sempre — o auto-update
-    # morria em silencio ate alguem abrir a tela. A conversao de dono-morto ja existe aqui.
-    est = atualizar.estado_para_tela()
-    if est.get("fase") == "rodando":
-        return "atualizacao ja rodando"
-    if est.get("ok") is False:
-        try:
-            idade = (datetime.now().astimezone() - datetime.fromisoformat(est.get("ts"))).total_seconds()
-        except (TypeError, ValueError):
-            # ts corrompido: abre, mas com log — senao a maquina re-tenta a cada hora com zero linha de log
-            # explicando por que a janela de repeticao nao segurou.
-            _log.warning("auto-update: ts invalido no estado da atualizacao (%r)", est.get("ts"))
-            idade = _AUTO_UPDATE_FALHA_JANELA_S
-        if idade < _AUTO_UPDATE_FALHA_JANELA_S:
-            return "ultima atualizacao falhou"
-    # Como o dist: o automático espera o topo inteiro publicado; parar antes dele é só no botão.
-    ate = atualizar.pinned_target("main")[0]
-    if ate is None:
-        return "nao deu pra conferir o binario do Rust publicado"
-    if ate != "origin/main":
-        return "binario do Rust do topo ainda nao publicado para este sistema"
-    try:
-        with urllib.request.urlopen(_DIST_SHA_URL, timeout=15) as r:
-            sha_dist = r.read().decode().strip()
-    except Exception:                                  # noqa: BLE001 — qualquer falha aqui = dist ilegivel
-        return "sem acesso ao dist do CI"
-    p = atualizar._git("rev-parse", "origin/main", timeout=30)
-    sha_alvo = p.stdout.strip()
-    if p.returncode != 0 or not sha_alvo:
-        return "rev-parse origin/main falhou"
-    if sha_dist != sha_alvo:
-        return "dist do CI ainda nao e deste commit"
-    return None
-
-
-
-async def _auto_update_loop():
-    """Checa a cada hora e dispara a atualização quando TODOS os gates abrem. Fail-soft inteiro:
-    qualquer exceção vira log e o próximo tick, nunca derruba o laço nem o backend."""
-    if diag.install_manifest() is not None:   # modo pacote: o automático é o do Rust
-        return
-    await asyncio.sleep(_AUTO_UPDATE_INTERVALO)   # nunca na subida: o boot já é o ponto de ruído
-    while True:
-        try:
-            if automations_enabled():
-                # rc checado, NAO so o lance de excecao: fetch falho por rc (rede fora, auth quebrada) nao lanca nada — a origin/main fica velha, o gate reporta "em dia" e a máquina NUNCA se atualiza com zero log. rc checado, loga warning com a cauda: "sem rede" deixa de parecer "sem novidade".
-                p = await asyncio.to_thread(atualizar._git, "fetch", "origin", timeout=120)
-                if p.returncode != 0:
-                    _log.warning("auto-update: fetch falhou (rc=%s): %s", p.returncode, atualizar._cauda(p))
-                motivo = await asyncio.to_thread(_auto_update_motivo)
-                if motivo is None:
-                    # Sessão trabalhando é gate async (classify captura os panes), não cabe no helper.
-                    infos = await registry.list_with_state()
-                    if any(i.state == "working" for i in infos):
-                        motivo = "sessao trabalhando"
-                if motivo is None:
-                    _log.info("auto-update: disparando atualizacao")
-                    r = await asyncio.to_thread(atualizar.iniciar, settings.port, expected_branch="main")
-                    if not r.get("ok"):
-                        _log.warning("auto-update: iniciar recusou (%s)", r.get("erro"))
-                elif motivo != "em dia":
-                    _log.info("auto-update: pulando (%s)", motivo)
-        except Exception:                            # noqa: BLE001 — sem rede/sem tmux é comum
-            _log.exception("auto-update: tick falhou")
-        await asyncio.sleep(_AUTO_UPDATE_INTERVALO)
 
 
 @app.get("/api/config", dependencies=[Depends(require_auth)])

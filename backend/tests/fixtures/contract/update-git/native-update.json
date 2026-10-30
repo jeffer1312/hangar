@@ -1,0 +1,788 @@
+{
+  "source_commit": "214b6ca5fec0693343c40de4eec2127f960f8aef",
+  "command": "python generate-native-update.py <reference> <output>",
+  "cases": [
+    {
+      "input": {
+        "name": "missing",
+        "marker": null
+      },
+      "requests": [],
+      "downloads": [],
+      "commands": [],
+      "events": [],
+      "warnings": []
+    },
+    {
+      "input": {
+        "name": "source-build",
+        "marker": "{\"sem_build\":true}"
+      },
+      "requests": [],
+      "downloads": [],
+      "commands": [],
+      "events": [],
+      "warnings": []
+    },
+    {
+      "input": {
+        "name": "marker-array",
+        "marker": "[]"
+      },
+      "requests": [],
+      "downloads": [],
+      "commands": [],
+      "events": [
+        {
+          "evento": "atualizacao.nativo",
+          "nivel": "aviso",
+          "codigo": "contrato_ilegivel",
+          "erro_tipo": "ValueError"
+        }
+      ],
+      "warnings": []
+    },
+    {
+      "input": {
+        "name": "marker-invalid",
+        "marker": "{quebrado"
+      },
+      "requests": [],
+      "downloads": [],
+      "commands": [],
+      "events": [
+        {
+          "evento": "atualizacao.nativo",
+          "nivel": "aviso",
+          "codigo": "contrato_ilegivel",
+          "erro_tipo": "JSONDecodeError"
+        }
+      ],
+      "warnings": []
+    },
+    {
+      "input": {
+        "name": "beta",
+        "target": "beta"
+      },
+      "requests": [],
+      "downloads": [],
+      "commands": [],
+      "events": [],
+      "warnings": []
+    },
+    {
+      "input": {
+        "name": "compatible-False-2-2",
+        "windows": false,
+        "required": 2,
+        "api": 2
+      },
+      "requests": [
+        {
+          "source": "manifest",
+          "timeout": 15.0
+        },
+        {
+          "source": "api",
+          "timeout": 3
+        }
+      ],
+      "downloads": [
+        {
+          "deadline": 30
+        }
+      ],
+      "commands": [
+        {
+          "args": [
+            "<ROOT>/scripts/install-native.sh"
+          ],
+          "timeout": 900,
+          "cwd": "<ROOT>"
+        }
+      ],
+      "events": [],
+      "warnings": []
+    },
+    {
+      "input": {
+        "name": "compatible-False-2-3",
+        "windows": false,
+        "required": 2,
+        "api": 3
+      },
+      "requests": [
+        {
+          "source": "manifest",
+          "timeout": 15.0
+        },
+        {
+          "source": "api",
+          "timeout": 3
+        }
+      ],
+      "downloads": [
+        {
+          "deadline": 30
+        }
+      ],
+      "commands": [
+        {
+          "args": [
+            "<ROOT>/scripts/install-native.sh"
+          ],
+          "timeout": 900,
+          "cwd": "<ROOT>"
+        }
+      ],
+      "events": [],
+      "warnings": []
+    },
+    {
+      "input": {
+        "name": "compatible-False-missing-1",
+        "windows": false,
+        "required": "missing",
+        "api": 1
+      },
+      "requests": [
+        {
+          "source": "manifest",
+          "timeout": 15.0
+        },
+        {
+          "source": "api",
+          "timeout": 3
+        }
+      ],
+      "downloads": [
+        {
+          "deadline": 30
+        }
+      ],
+      "commands": [
+        {
+          "args": [
+            "<ROOT>/scripts/install-native.sh"
+          ],
+          "timeout": 900,
+          "cwd": "<ROOT>"
+        }
+      ],
+      "events": [],
+      "warnings": []
+    },
+    {
+      "input": {
+        "name": "compatible-True-2-2",
+        "windows": true,
+        "required": 2,
+        "api": 2
+      },
+      "requests": [
+        {
+          "source": "manifest",
+          "timeout": 15.0
+        },
+        {
+          "source": "api",
+          "timeout": 3
+        }
+      ],
+      "downloads": [
+        {
+          "deadline": 30
+        }
+      ],
+      "commands": [
+        {
+          "args": [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "<ROOT>/scripts/install-native.ps1"
+          ],
+          "timeout": 900,
+          "cwd": "<ROOT>"
+        }
+      ],
+      "events": [],
+      "warnings": []
+    },
+    {
+      "input": {
+        "name": "compatible-True-2-3",
+        "windows": true,
+        "required": 2,
+        "api": 3
+      },
+      "requests": [
+        {
+          "source": "manifest",
+          "timeout": 15.0
+        },
+        {
+          "source": "api",
+          "timeout": 3
+        }
+      ],
+      "downloads": [
+        {
+          "deadline": 30
+        }
+      ],
+      "commands": [
+        {
+          "args": [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "<ROOT>/scripts/install-native.ps1"
+          ],
+          "timeout": 900,
+          "cwd": "<ROOT>"
+        }
+      ],
+      "events": [],
+      "warnings": []
+    },
+    {
+      "input": {
+        "name": "compatible-True-missing-1",
+        "windows": true,
+        "required": "missing",
+        "api": 1
+      },
+      "requests": [
+        {
+          "source": "manifest",
+          "timeout": 15.0
+        },
+        {
+          "source": "api",
+          "timeout": 3
+        }
+      ],
+      "downloads": [
+        {
+          "deadline": 30
+        }
+      ],
+      "commands": [
+        {
+          "args": [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "<ROOT>/scripts/install-native.ps1"
+          ],
+          "timeout": 900,
+          "cwd": "<ROOT>"
+        }
+      ],
+      "events": [],
+      "warnings": []
+    },
+    {
+      "input": {
+        "name": "api-1",
+        "api": 1
+      },
+      "requests": [
+        {
+          "source": "manifest",
+          "timeout": 15.0
+        },
+        {
+          "source": "api",
+          "timeout": 3
+        }
+      ],
+      "downloads": [
+        {
+          "deadline": 30
+        }
+      ],
+      "commands": [],
+      "events": [
+        {
+          "evento": "atualizacao.nativo",
+          "nivel": "ok",
+          "codigo": "api_insuficiente",
+          "requires_api": 2,
+          "api": 1
+        }
+      ],
+      "warnings": []
+    },
+    {
+      "input": {
+        "name": "api-None",
+        "api": null
+      },
+      "requests": [
+        {
+          "source": "manifest",
+          "timeout": 15.0
+        },
+        {
+          "source": "api",
+          "timeout": 3
+        }
+      ],
+      "downloads": [
+        {
+          "deadline": 30
+        }
+      ],
+      "commands": [],
+      "events": [
+        {
+          "evento": "atualizacao.nativo",
+          "nivel": "aviso",
+          "codigo": "contrato_ilegivel",
+          "erro_tipo": "ValueError"
+        }
+      ],
+      "warnings": []
+    },
+    {
+      "input": {
+        "name": "api-'2'",
+        "api": "2"
+      },
+      "requests": [
+        {
+          "source": "manifest",
+          "timeout": 15.0
+        },
+        {
+          "source": "api",
+          "timeout": 3
+        }
+      ],
+      "downloads": [
+        {
+          "deadline": 30
+        }
+      ],
+      "commands": [],
+      "events": [
+        {
+          "evento": "atualizacao.nativo",
+          "nivel": "aviso",
+          "codigo": "contrato_ilegivel",
+          "erro_tipo": "ValueError"
+        }
+      ],
+      "warnings": []
+    },
+    {
+      "input": {
+        "name": "api-True",
+        "api": true
+      },
+      "requests": [
+        {
+          "source": "manifest",
+          "timeout": 15.0
+        },
+        {
+          "source": "api",
+          "timeout": 3
+        }
+      ],
+      "downloads": [
+        {
+          "deadline": 30
+        }
+      ],
+      "commands": [],
+      "events": [
+        {
+          "evento": "atualizacao.nativo",
+          "nivel": "aviso",
+          "codigo": "contrato_ilegivel",
+          "erro_tipo": "ValueError"
+        }
+      ],
+      "warnings": []
+    },
+    {
+      "input": {
+        "name": "api-0",
+        "api": 0
+      },
+      "requests": [
+        {
+          "source": "manifest",
+          "timeout": 15.0
+        },
+        {
+          "source": "api",
+          "timeout": 3
+        }
+      ],
+      "downloads": [
+        {
+          "deadline": 30
+        }
+      ],
+      "commands": [],
+      "events": [
+        {
+          "evento": "atualizacao.nativo",
+          "nivel": "aviso",
+          "codigo": "contrato_ilegivel",
+          "erro_tipo": "ValueError"
+        }
+      ],
+      "warnings": []
+    },
+    {
+      "input": {
+        "name": "api-503",
+        "source": "api",
+        "failure": "503"
+      },
+      "requests": [
+        {
+          "source": "manifest",
+          "timeout": 15.0
+        },
+        {
+          "source": "api",
+          "timeout": 3
+        }
+      ],
+      "downloads": [
+        {
+          "deadline": 30
+        }
+      ],
+      "commands": [],
+      "events": [
+        {
+          "evento": "atualizacao.nativo",
+          "nivel": "aviso",
+          "codigo": "contrato_ilegivel",
+          "erro_tipo": "HTTPError"
+        }
+      ],
+      "warnings": []
+    },
+    {
+      "input": {
+        "name": "api-unreadable",
+        "source": "api",
+        "failure": "unreadable"
+      },
+      "requests": [
+        {
+          "source": "manifest",
+          "timeout": 15.0
+        },
+        {
+          "source": "api",
+          "timeout": 3
+        }
+      ],
+      "downloads": [
+        {
+          "deadline": 30
+        }
+      ],
+      "commands": [],
+      "events": [
+        {
+          "evento": "atualizacao.nativo",
+          "nivel": "aviso",
+          "codigo": "contrato_ilegivel",
+          "erro_tipo": "JSONDecodeError"
+        }
+      ],
+      "warnings": []
+    },
+    {
+      "input": {
+        "name": "api-not-object",
+        "source": "api",
+        "failure": "not-object"
+      },
+      "requests": [
+        {
+          "source": "manifest",
+          "timeout": 15.0
+        },
+        {
+          "source": "api",
+          "timeout": 3
+        }
+      ],
+      "downloads": [
+        {
+          "deadline": 30
+        }
+      ],
+      "commands": [],
+      "events": [
+        {
+          "evento": "atualizacao.nativo",
+          "nivel": "aviso",
+          "codigo": "contrato_ilegivel",
+          "erro_tipo": "ValueError"
+        }
+      ],
+      "warnings": []
+    },
+    {
+      "input": {
+        "name": "manifest-503",
+        "source": "manifest",
+        "failure": "503"
+      },
+      "requests": [
+        {
+          "source": "manifest",
+          "timeout": 15.0
+        }
+      ],
+      "downloads": [
+        {
+          "deadline": 30
+        }
+      ],
+      "commands": [],
+      "events": [
+        {
+          "evento": "atualizacao.nativo",
+          "nivel": "aviso",
+          "codigo": "contrato_ilegivel",
+          "erro_tipo": "HTTPError"
+        }
+      ],
+      "warnings": []
+    },
+    {
+      "input": {
+        "name": "manifest-unreadable",
+        "source": "manifest",
+        "failure": "unreadable"
+      },
+      "requests": [
+        {
+          "source": "manifest",
+          "timeout": 15.0
+        }
+      ],
+      "downloads": [
+        {
+          "deadline": 30
+        }
+      ],
+      "commands": [],
+      "events": [
+        {
+          "evento": "atualizacao.nativo",
+          "nivel": "aviso",
+          "codigo": "contrato_ilegivel",
+          "erro_tipo": "JSONDecodeError"
+        }
+      ],
+      "warnings": []
+    },
+    {
+      "input": {
+        "name": "manifest-not-object",
+        "source": "manifest",
+        "failure": "not-object"
+      },
+      "requests": [
+        {
+          "source": "manifest",
+          "timeout": 15.0
+        }
+      ],
+      "downloads": [
+        {
+          "deadline": 30
+        }
+      ],
+      "commands": [],
+      "events": [
+        {
+          "evento": "atualizacao.nativo",
+          "nivel": "aviso",
+          "codigo": "contrato_ilegivel",
+          "erro_tipo": "ValueError"
+        }
+      ],
+      "warnings": []
+    },
+    {
+      "input": {
+        "name": "required-None",
+        "required": null
+      },
+      "requests": [
+        {
+          "source": "manifest",
+          "timeout": 15.0
+        },
+        {
+          "source": "api",
+          "timeout": 3
+        }
+      ],
+      "downloads": [
+        {
+          "deadline": 30
+        }
+      ],
+      "commands": [],
+      "events": [
+        {
+          "evento": "atualizacao.nativo",
+          "nivel": "aviso",
+          "codigo": "contrato_ilegivel",
+          "erro_tipo": "ValueError"
+        }
+      ],
+      "warnings": []
+    },
+    {
+      "input": {
+        "name": "required-'2'",
+        "required": "2"
+      },
+      "requests": [
+        {
+          "source": "manifest",
+          "timeout": 15.0
+        },
+        {
+          "source": "api",
+          "timeout": 3
+        }
+      ],
+      "downloads": [
+        {
+          "deadline": 30
+        }
+      ],
+      "commands": [],
+      "events": [
+        {
+          "evento": "atualizacao.nativo",
+          "nivel": "aviso",
+          "codigo": "contrato_ilegivel",
+          "erro_tipo": "ValueError"
+        }
+      ],
+      "warnings": []
+    },
+    {
+      "input": {
+        "name": "required-True",
+        "required": true
+      },
+      "requests": [
+        {
+          "source": "manifest",
+          "timeout": 15.0
+        },
+        {
+          "source": "api",
+          "timeout": 3
+        }
+      ],
+      "downloads": [
+        {
+          "deadline": 30
+        }
+      ],
+      "commands": [],
+      "events": [
+        {
+          "evento": "atualizacao.nativo",
+          "nivel": "aviso",
+          "codigo": "contrato_ilegivel",
+          "erro_tipo": "ValueError"
+        }
+      ],
+      "warnings": []
+    },
+    {
+      "input": {
+        "name": "required-0",
+        "required": 0
+      },
+      "requests": [
+        {
+          "source": "manifest",
+          "timeout": 15.0
+        },
+        {
+          "source": "api",
+          "timeout": 3
+        }
+      ],
+      "downloads": [
+        {
+          "deadline": 30
+        }
+      ],
+      "commands": [],
+      "events": [
+        {
+          "evento": "atualizacao.nativo",
+          "nivel": "aviso",
+          "codigo": "contrato_ilegivel",
+          "erro_tipo": "ValueError"
+        }
+      ],
+      "warnings": []
+    },
+    {
+      "input": {
+        "name": "old-404",
+        "required": "missing",
+        "source": "api",
+        "failure": "404"
+      },
+      "requests": [
+        {
+          "source": "manifest",
+          "timeout": 15.0
+        },
+        {
+          "source": "api",
+          "timeout": 3
+        }
+      ],
+      "downloads": [
+        {
+          "deadline": 30
+        }
+      ],
+      "commands": [
+        {
+          "args": [
+            "<ROOT>/scripts/install-native.sh"
+          ],
+          "timeout": 900,
+          "cwd": "<ROOT>"
+        }
+      ],
+      "events": [],
+      "warnings": []
+    }
+  ]
+}

@@ -119,7 +119,7 @@ try {
         Assert ('start' -notin $script:events) "Duplicou processo: $scenario"
         Assert ($script:task.Settings.RestartCount -eq 3) "Perdeu recuperacao automatica: $scenario"
     }
-    foreach ($scenario in @('healthy', 'transient', 'recent', 'updating', 'rust-updating', 'migrating', 'dev-mode', 'installing')) {
+    foreach ($scenario in @('healthy', 'transient', 'recent', 'updating', 'rust-updating', 'checkout-updating', 'migrating', 'dev-mode', 'installing')) {
         Reset-State
         switch ($scenario) {
             healthy { $script:httpReplies.Clear(); $script:httpReplies.Enqueue($true) }
@@ -127,6 +127,7 @@ try {
             recent { $script:lastRun = Get-Date }
             updating { }
             'rust-updating' { $script:processRows = @($rows[0], $rows[1], $pacote[2]) }
+            'checkout-updating' { $script:processRows = @($rows[0], $rows[1], (Row 53 11 'hangar-server.exe' 'C:\repo\hangar-server.exe checkout-update --run --port 8765')) }
             migrating { $script:processRows = @($rows[0], $rows[1], (Row 51 1 'hangar-server.exe' 'C:\Users\u\.hangar\migrate\hangar-server.exe migrate-package')) }
             'dev-mode' { $script:processRows = @($rows[0], $rows[1], (Row 52 1 'hangar-server.exe' 'C:\Users\u\.hangar\current\bin\hangar-server.exe dev-mode off')) }
             installing { $script:processRows = @($rows[0], $rows[1], (Row 50 1 'powershell.exe' 'powershell -File install.ps1 -Update')) }
@@ -207,6 +208,10 @@ try {
     . ([scriptblock]::Create($assignment.Extent.Text))
     $b = $tarefas[0]
     Assert ($b.Padrao -eq [regex]::Escape('C:\repo\backend') -and $b.ExeProc -eq 'uv|python') 'Maquina nao migrada mudou de padrao'
+    $releaseFunction = $ast.Find({ param($node)
+        $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Liberar-Instalacao'
+    }, $true)
+    . ([scriptblock]::Create($releaseFunction.Extent.Text))
     $outerTry = $ast.EndBlock.Statements | Where-Object { $_ -is [Management.Automation.Language.TryStatementAst] } | Select-Object -First 1
     Reset-State
     # O pause/restore de verdade passa por Export-/Register-ScheduledTask e so o Agendador real

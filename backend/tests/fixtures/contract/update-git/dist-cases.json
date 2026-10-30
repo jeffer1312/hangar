@@ -1,0 +1,34 @@
+{
+  "source_commit": "9e64dd6787df8362490adf3daac050a381494404",
+  "command": "python backend/tests/fixtures/contract/update-git/generate-dist.py --reference <checkout-Python> --output backend/tests/fixtures/contract/update-git/dist-cases.json",
+  "cases": [
+    {
+      "name": "regular",
+      "result": null,
+      "error": null,
+      "index": "new",
+      "previous": "old"
+    },
+    {
+      "name": "incomplete",
+      "result": "o dist do CI veio incompleto",
+      "error": null,
+      "index": "old",
+      "previous": null
+    },
+    {
+      "name": "internal-link",
+      "result": null,
+      "error": null,
+      "index": "new",
+      "previous": "old"
+    },
+    {
+      "name": "external-link",
+      "result": null,
+      "error": "LinkOutsideDestinationError",
+      "index": "old",
+      "previous": null
+    }
+  ]
+}

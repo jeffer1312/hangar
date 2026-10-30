@@ -43,6 +43,12 @@ fn main() -> std::process::ExitCode {
         return hangar_server::update::install::cli(&args[1..]);
     }
     // Liga e desliga o modo desenvolvedor numa máquina já migrada.
+    if args.first().map(String::as_str) == Some("rust-release") {
+        return hangar_server::update::git_engine::releases::cli(&args[1..]);
+    }
+    if args.first().map(String::as_str) == Some("checkout-update") {
+        return hangar_server::update::git_engine::launch::cli(&args[1..]);
+    }
     if args.first().map(String::as_str) == Some("dev-mode") {
         return hangar_server::update::dev_mode::cli(&args[1..]);
     }
@@ -219,10 +225,11 @@ async fn run() {
     {
         let home = state.accounts.env.home.clone();
         let _ = tokio::task::spawn_blocking(move || hangar_server::update::dev::note_boot(&home)).await;
-        match hangar_server::http_client().build() {
-            Ok(client) => { hangar_server::update::periodic::spawn(hangar_server::update::periodic::Live {
-                env: state.accounts.env.clone(), list: state.list.clone(), listen: state.cfg.listen, client }); }
-            Err(e) => tracing::warn!("update: verificação periódica sem cliente http: {e}"),
+        match (hangar_server::http_client().build(),hangar_server::config_sync::runtime::RuntimeConfig::from_state(&state)) {
+            (Ok(client),Ok(runtime)) => { hangar_server::update::periodic::spawn(hangar_server::update::periodic::Live {
+                env: state.accounts.env.clone(), list: state.list.clone(), listen: state.cfg.listen, client, runtime }); }
+            (Err(e),_) => tracing::warn!("update: verificação periódica sem cliente http: {e}"),
+            (_,Err(e)) => tracing::warn!("update: verificação periódica sem configuração: {e}"),
         }
     }
     let prewarm = state.prewarm.clone();

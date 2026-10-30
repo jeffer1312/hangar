@@ -1,5 +1,5 @@
 {
-  "source_commit": "9e64dd6787df8362490adf3daac050a381494404",
+  "source_commit": "9307e87589bfe929c6c9fbbcc2c29b3c945b215f",
   "command": "python backend/tests/fixtures/contract/update-git/generate-release.py --reference <checkout-Python> --output backend/tests/fixtures/contract/update-git/release-cases.json",
   "cases": [
     {
@@ -7,43 +7,60 @@
       "result": [],
       "urls": [
         "https://release.invalid/server-latest/server-latest.json",
-        "https://release.invalid/server-latest/hangar-server",
-        "https://release.invalid/server-latest/hangar-cano"
+        "https://release.invalid/server-latest/hangar-auth",
+        "https://release.invalid/server-latest/hangar-cano",
+        "https://release.invalid/server-latest/hangar-server"
       ],
       "before_publish": {
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/libhangar_auth.so\", \"library_sha256\": \"4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e\", \"server_sha256\": \"16dcd26eb594e3f88a897199d8e15406bd2740e4da36204d5afb693620567fa1\", \"store_version\": 1}",
+        "hangar-server": "new-hangar-server",
         "hangar-cano": "new-hangar-cano",
-        "hangar-server": "new-hangar-server"
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/libhangar_auth.so": "new-hangar-auth"
       },
       "install_warnings": null,
       "after_publish": {
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/libhangar_auth.so\", \"library_sha256\": \"4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e\", \"server_sha256\": \"16dcd26eb594e3f88a897199d8e15406bd2740e4da36204d5afb693620567fa1\", \"store_version\": 1}",
+        "hangar-server": "new-hangar-server",
         "hangar-cano": "new-hangar-cano",
-        "hangar-server": "new-hangar-server"
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/libhangar_auth.so": "new-hangar-auth"
       },
       "restore_warnings": null,
       "after_restore": {
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/libhangar_auth.so\", \"library_sha256\": \"4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e\", \"server_sha256\": \"16dcd26eb594e3f88a897199d8e15406bd2740e4da36204d5afb693620567fa1\", \"store_version\": 1}",
+        "hangar-server": "new-hangar-server",
         "hangar-cano": "new-hangar-cano",
-        "hangar-server": "new-hangar-server"
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/libhangar_auth.so": "new-hangar-auth"
       }
     },
     {
       "name": "same",
       "result": [],
       "urls": [
-        "https://release.invalid/server-latest/server-latest.json"
+        "https://release.invalid/server-latest/server-latest.json",
+        "https://release.invalid/server-latest/hangar-auth"
       ],
       "before_publish": {
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/libhangar_auth.so\", \"library_sha256\": \"4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e\", \"server_sha256\": \"16dcd26eb594e3f88a897199d8e15406bd2740e4da36204d5afb693620567fa1\", \"store_version\": 1}",
+        "hangar-auth": "new-hangar-auth",
         "hangar-cano": "new-hangar-cano",
-        "hangar-server": "new-hangar-server"
+        "hangar-server": "new-hangar-server",
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/libhangar_auth.so": "new-hangar-auth"
       },
       "install_warnings": null,
       "after_publish": {
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/libhangar_auth.so\", \"library_sha256\": \"4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e\", \"server_sha256\": \"16dcd26eb594e3f88a897199d8e15406bd2740e4da36204d5afb693620567fa1\", \"store_version\": 1}",
+        "hangar-auth": "new-hangar-auth",
         "hangar-cano": "new-hangar-cano",
-        "hangar-server": "new-hangar-server"
+        "hangar-server": "new-hangar-server",
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/libhangar_auth.so": "new-hangar-auth"
       },
       "restore_warnings": null,
       "after_restore": {
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/libhangar_auth.so\", \"library_sha256\": \"4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e\", \"server_sha256\": \"16dcd26eb594e3f88a897199d8e15406bd2740e4da36204d5afb693620567fa1\", \"store_version\": 1}",
+        "hangar-auth": "new-hangar-auth",
         "hangar-cano": "new-hangar-cano",
-        "hangar-server": "new-hangar-server"
+        "hangar-server": "new-hangar-server",
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/libhangar_auth.so": "new-hangar-auth"
       }
     },
     {
@@ -51,22 +68,32 @@
       "result": [],
       "urls": [
         "https://release.invalid/server-latest/server-latest.json",
-        "https://release.invalid/server-latest/hangar-server",
-        "https://release.invalid/server-latest/hangar-cano"
+        "https://release.invalid/server-latest/hangar-auth",
+        "https://release.invalid/server-latest/hangar-cano",
+        "https://release.invalid/server-latest/hangar-server"
       ],
       "before_publish": {
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/libhangar_auth.so\", \"library_sha256\": \"4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e\", \"server_sha256\": \"16dcd26eb594e3f88a897199d8e15406bd2740e4da36204d5afb693620567fa1\", \"store_version\": 1}",
+        "hangar-server": "new-hangar-server",
         "hangar-cano": "new-hangar-cano",
-        "hangar-server": "new-hangar-server"
+        "hangar-auth": "old-hangar-auth",
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/libhangar_auth.so": "new-hangar-auth"
       },
       "install_warnings": null,
       "after_publish": {
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/libhangar_auth.so\", \"library_sha256\": \"4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e\", \"server_sha256\": \"16dcd26eb594e3f88a897199d8e15406bd2740e4da36204d5afb693620567fa1\", \"store_version\": 1}",
+        "hangar-server": "new-hangar-server",
         "hangar-cano": "new-hangar-cano",
-        "hangar-server": "new-hangar-server"
+        "hangar-auth": "old-hangar-auth",
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/libhangar_auth.so": "new-hangar-auth"
       },
       "restore_warnings": null,
       "after_restore": {
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/libhangar_auth.so\", \"library_sha256\": \"4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e\", \"server_sha256\": \"16dcd26eb594e3f88a897199d8e15406bd2740e4da36204d5afb693620567fa1\", \"store_version\": 1}",
+        "hangar-server": "new-hangar-server",
         "hangar-cano": "new-hangar-cano",
-        "hangar-server": "new-hangar-server"
+        "hangar-auth": "old-hangar-auth",
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/libhangar_auth.so": "new-hangar-auth"
       }
     },
     {
@@ -74,36 +101,46 @@
       "result": [],
       "urls": [
         "https://release.invalid/server-latest/server-latest.json",
-        "https://release.invalid/server-latest/hangar-server",
-        "https://release.invalid/server-latest/hangar-cano"
+        "https://release.invalid/server-latest/hangar-auth",
+        "https://release.invalid/server-latest/hangar-cano",
+        "https://release.invalid/server-latest/hangar-server"
       ],
       "before_publish": {
+        "hangar-auth": "old-hangar-auth",
         "hangar-cano": "old-hangar-cano",
         "hangar-server": "old-hangar-server"
       },
       "install_warnings": [],
       "after_publish": {
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/libhangar_auth.so\", \"library_sha256\": \"4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e\", \"server_sha256\": \"16dcd26eb594e3f88a897199d8e15406bd2740e4da36204d5afb693620567fa1\", \"store_version\": 1}",
+        "hangar-server": "new-hangar-server",
+        "hangar-server.auth.json.prev": "",
+        "hangar-server.prev": "old-hangar-server",
         "hangar-cano": "new-hangar-cano",
         "hangar-cano.prev": "old-hangar-cano",
-        "hangar-server": "new-hangar-server",
-        "hangar-server.prev": "old-hangar-server"
+        "hangar-auth": "old-hangar-auth",
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/libhangar_auth.so": "new-hangar-auth"
       },
       "restore_warnings": [],
       "after_restore": {
+        "hangar-server": "old-hangar-server",
         "hangar-cano": "old-hangar-cano",
-        "hangar-server": "old-hangar-server"
+        "hangar-auth": "old-hangar-auth",
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/libhangar_auth.so": "new-hangar-auth"
       }
     },
     {
       "name": "hash-mismatch",
       "result": [
-        "hangar-server: o sha256 não confere com a release; o binário anterior ficou",
-        "hangar-cano: o sha256 não confere com a release; o binário anterior ficou"
+        "hangar-auth: o sha256 não confere com a release; o binário anterior ficou",
+        "hangar-cano: o sha256 não confere com a release; o binário anterior ficou",
+        "hangar-server: o sha256 não confere com a release; o binário anterior ficou"
       ],
       "urls": [
         "https://release.invalid/server-latest/server-latest.json",
-        "https://release.invalid/server-latest/hangar-server",
-        "https://release.invalid/server-latest/hangar-cano"
+        "https://release.invalid/server-latest/hangar-auth",
+        "https://release.invalid/server-latest/hangar-cano",
+        "https://release.invalid/server-latest/hangar-server"
       ],
       "before_publish": {},
       "install_warnings": null,
@@ -117,31 +154,26 @@
         "hangar-cano: a release não traz build para linux-x86_64"
       ],
       "urls": [
-        "https://release.invalid/server-latest/server-latest.json",
-        "https://release.invalid/server-latest/hangar-server"
+        "https://release.invalid/server-latest/server-latest.json"
       ],
-      "before_publish": {
-        "hangar-server": "new-hangar-server"
-      },
+      "before_publish": {},
       "install_warnings": null,
-      "after_publish": {
-        "hangar-server": "new-hangar-server"
-      },
+      "after_publish": {},
       "restore_warnings": null,
-      "after_restore": {
-        "hangar-server": "new-hangar-server"
-      }
+      "after_restore": {}
     },
     {
       "name": "download-failure",
       "result": [
-        "hangar-server: o download falhou (fixture-download-failed)",
-        "hangar-cano: o download falhou (fixture-download-failed)"
+        "hangar-auth: o download falhou (fixture-download-failed)",
+        "hangar-cano: o download falhou (fixture-download-failed)",
+        "hangar-server: o download falhou (fixture-download-failed)"
       ],
       "urls": [
         "https://release.invalid/server-latest/server-latest.json",
-        "https://release.invalid/server-latest/hangar-server",
-        "https://release.invalid/server-latest/hangar-cano"
+        "https://release.invalid/server-latest/hangar-auth",
+        "https://release.invalid/server-latest/hangar-cano",
+        "https://release.invalid/server-latest/hangar-server"
       ],
       "before_publish": {},
       "install_warnings": null,
@@ -166,49 +198,59 @@
     {
       "name": "branch-404-empty",
       "result": [
-        "release server-beta ausente; instalei os da main (hangar-server, hangar-cano)"
+        "release server-beta ausente; instalei os da main (hangar-auth, hangar-cano, hangar-server)"
       ],
       "urls": [
         "https://release.invalid/server-beta/server-latest.json",
         "https://release.invalid/server-latest/server-latest.json",
-        "https://release.invalid/server-latest/hangar-server",
-        "https://release.invalid/server-latest/hangar-cano"
+        "https://release.invalid/server-latest/hangar-auth",
+        "https://release.invalid/server-latest/hangar-cano",
+        "https://release.invalid/server-latest/hangar-server"
       ],
       "before_publish": {
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/libhangar_auth.so\", \"library_sha256\": \"4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e\", \"server_sha256\": \"16dcd26eb594e3f88a897199d8e15406bd2740e4da36204d5afb693620567fa1\", \"store_version\": 1}",
+        "hangar-server": "new-hangar-server",
         "hangar-cano": "new-hangar-cano",
-        "hangar-server": "new-hangar-server"
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/libhangar_auth.so": "new-hangar-auth"
       },
       "install_warnings": null,
       "after_publish": {
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/libhangar_auth.so\", \"library_sha256\": \"4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e\", \"server_sha256\": \"16dcd26eb594e3f88a897199d8e15406bd2740e4da36204d5afb693620567fa1\", \"store_version\": 1}",
+        "hangar-server": "new-hangar-server",
         "hangar-cano": "new-hangar-cano",
-        "hangar-server": "new-hangar-server"
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/libhangar_auth.so": "new-hangar-auth"
       },
       "restore_warnings": null,
       "after_restore": {
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/libhangar_auth.so\", \"library_sha256\": \"4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e\", \"server_sha256\": \"16dcd26eb594e3f88a897199d8e15406bd2740e4da36204d5afb693620567fa1\", \"store_version\": 1}",
+        "hangar-server": "new-hangar-server",
         "hangar-cano": "new-hangar-cano",
-        "hangar-server": "new-hangar-server"
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/libhangar_auth.so": "new-hangar-auth"
       }
     },
     {
       "name": "branch-404-keeps",
       "result": [
-        "release server-beta ausente; mantive os binários instalados (hangar-server, hangar-cano)"
+        "release server-beta ausente; mantive os binários instalados (hangar-auth, hangar-cano, hangar-server)"
       ],
       "urls": [
         "https://release.invalid/server-beta/server-latest.json",
         "https://release.invalid/server-latest/server-latest.json"
       ],
       "before_publish": {
+        "hangar-auth": "old-hangar-auth",
         "hangar-cano": "old-hangar-cano",
         "hangar-server": "old-hangar-server"
       },
       "install_warnings": null,
       "after_publish": {
+        "hangar-auth": "old-hangar-auth",
         "hangar-cano": "old-hangar-cano",
         "hangar-server": "old-hangar-server"
       },
       "restore_warnings": null,
       "after_restore": {
+        "hangar-auth": "old-hangar-auth",
         "hangar-cano": "old-hangar-cano",
         "hangar-server": "old-hangar-server"
       }
@@ -216,27 +258,34 @@
     {
       "name": "branch-no-platform",
       "result": [
-        "release server-beta sem build para linux-x86_64; instalei os da main (hangar-server, hangar-cano)"
+        "release server-beta sem build para linux-x86_64; instalei os da main (hangar-auth, hangar-cano, hangar-server)"
       ],
       "urls": [
         "https://release.invalid/server-beta/server-latest.json",
         "https://release.invalid/server-latest/server-latest.json",
-        "https://release.invalid/server-latest/hangar-server",
-        "https://release.invalid/server-latest/hangar-cano"
+        "https://release.invalid/server-latest/hangar-auth",
+        "https://release.invalid/server-latest/hangar-cano",
+        "https://release.invalid/server-latest/hangar-server"
       ],
       "before_publish": {
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/libhangar_auth.so\", \"library_sha256\": \"4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e\", \"server_sha256\": \"16dcd26eb594e3f88a897199d8e15406bd2740e4da36204d5afb693620567fa1\", \"store_version\": 1}",
+        "hangar-server": "new-hangar-server",
         "hangar-cano": "new-hangar-cano",
-        "hangar-server": "new-hangar-server"
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/libhangar_auth.so": "new-hangar-auth"
       },
       "install_warnings": null,
       "after_publish": {
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/libhangar_auth.so\", \"library_sha256\": \"4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e\", \"server_sha256\": \"16dcd26eb594e3f88a897199d8e15406bd2740e4da36204d5afb693620567fa1\", \"store_version\": 1}",
+        "hangar-server": "new-hangar-server",
         "hangar-cano": "new-hangar-cano",
-        "hangar-server": "new-hangar-server"
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/libhangar_auth.so": "new-hangar-auth"
       },
       "restore_warnings": null,
       "after_restore": {
+        "hangar-server.auth.json": "{\"abi\": 1, \"library\": \"auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/libhangar_auth.so\", \"library_sha256\": \"4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e\", \"server_sha256\": \"16dcd26eb594e3f88a897199d8e15406bd2740e4da36204d5afb693620567fa1\", \"store_version\": 1}",
+        "hangar-server": "new-hangar-server",
         "hangar-cano": "new-hangar-cano",
-        "hangar-server": "new-hangar-server"
+        "auth/4ead60c14d689987368106106f0894340baa4f1fe6de2f50292249ac6d921e9e/libhangar_auth.so": "new-hangar-auth"
       }
     },
     {

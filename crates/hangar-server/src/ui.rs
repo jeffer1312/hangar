@@ -411,7 +411,7 @@ fn install(archive: &[u8], ui_dir: &Path, key: &str) -> Result<PathBuf, FetchErr
 }
 
 /// Só arquivo e pasta, com caminho relativo dentro do destino.
-fn unpack(archive: &[u8], dest: &Path) -> Result<(), FetchError> {
+pub(crate) fn unpack(archive: &[u8], dest: &Path) -> Result<(), FetchError> {
     let bad = |e: io::Error| fail("ui_archive_invalid", e);
     let mut ar = tar::Archive::new(flate2::read::GzDecoder::new(archive));
     for entry in ar.entries().map_err(bad)? {

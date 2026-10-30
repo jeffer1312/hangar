@@ -1,0 +1,173 @@
+{
+  "source_commit": "dbea18cff86a4a17a82868673cd6e9ff26021e37",
+  "command": "python generate-startup-steps.py --reference <checkout-Python> --output <fixture>",
+  "cases": [
+    {
+      "name": "package",
+      "windows": false,
+      "package": true,
+      "pending": [],
+      "done": [],
+      "failed": false,
+      "calls": [
+        [
+          "manifest"
+        ]
+      ],
+      "stdout": "",
+      "result": null
+    },
+    {
+      "name": "linux-applied",
+      "windows": false,
+      "package": false,
+      "pending": [],
+      "done": [
+        "one",
+        "two"
+      ],
+      "failed": false,
+      "calls": [
+        [
+          "manifest"
+        ],
+        [
+          "apply",
+          {
+            "incluir_destrutivos": false
+          }
+        ]
+      ],
+      "stdout": "[hangar] passos de atualizacao aplicados: one, two\n",
+      "result": null
+    },
+    {
+      "name": "linux-empty",
+      "windows": false,
+      "package": false,
+      "pending": [],
+      "done": [],
+      "failed": false,
+      "calls": [
+        [
+          "manifest"
+        ],
+        [
+          "apply",
+          {
+            "incluir_destrutivos": false
+          }
+        ]
+      ],
+      "stdout": "",
+      "result": null
+    },
+    {
+      "name": "linux-failed",
+      "windows": false,
+      "package": false,
+      "pending": [],
+      "done": [],
+      "failed": true,
+      "calls": [
+        [
+          "manifest"
+        ],
+        [
+          "apply",
+          {
+            "incluir_destrutivos": false
+          }
+        ]
+      ],
+      "stdout": "[hangar] AVISO: passo de atualizacao falhou (fixture failure); o app segue subindo\n",
+      "result": null
+    },
+    {
+      "name": "windows-installer",
+      "windows": true,
+      "package": false,
+      "pending": [
+        {
+          "comando": "powershell install.ps1"
+        }
+      ],
+      "done": [],
+      "failed": false,
+      "calls": [
+        [
+          "manifest"
+        ],
+        [
+          "pending",
+          {
+            "incluir_destrutivos": false
+          }
+        ]
+      ],
+      "stdout": "[hangar] passos de atualizacao pendentes que chamam o instalador ficam para o botao Atualizar\n",
+      "result": null
+    },
+    {
+      "name": "windows-mixed",
+      "windows": true,
+      "package": false,
+      "pending": [
+        {
+          "comando": "other.ps1"
+        },
+        {
+          "comando": "install.ps1"
+        }
+      ],
+      "done": [],
+      "failed": false,
+      "calls": [
+        [
+          "manifest"
+        ],
+        [
+          "pending",
+          {
+            "incluir_destrutivos": false
+          }
+        ]
+      ],
+      "stdout": "[hangar] passos de atualizacao pendentes que chamam o instalador ficam para o botao Atualizar\n",
+      "result": null
+    },
+    {
+      "name": "windows-applied",
+      "windows": true,
+      "package": false,
+      "pending": [
+        {
+          "comando": "other.ps1"
+        }
+      ],
+      "done": [
+        "one"
+      ],
+      "failed": false,
+      "calls": [
+        [
+          "manifest"
+        ],
+        [
+          "pending",
+          {
+            "incluir_destrutivos": false
+          }
+        ],
+        [
+          "apply",
+          {
+            "incluir_destrutivos": false
+          }
+        ]
+      ],
+      "stdout": "[hangar] passos de atualizacao aplicados: one\n",
+      "result": null
+    }
+  ]
+}

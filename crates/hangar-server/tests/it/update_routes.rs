@@ -96,18 +96,16 @@ async fn update_routes_package_mode_is_answered_by_rust_in_the_client_shape() {
 }
 
 #[tokio::test]
-async fn update_routes_unmigrated_machine_and_strangers_go_to_python() {
-    let fixture = Fixture::start("0.1.0.1").await;
-    let unmigrated = fixture.call(reqwest::Method::GET, "/api/atualizacao", true).await;
-    assert_eq!(unmigrated.text().await.unwrap(), "python");
-    assert_eq!(fixture.call(reqwest::Method::POST, "/api/atualizacao/iniciar", true).await.text().await.unwrap(), "python");
-    assert_eq!(fixture.call(reqwest::Method::POST, "/api/atualizacao/reiniciar", true).await.text().await.unwrap(), "python");
-
+async fn update_routes_unmigrated_and_unauthorized_never_return_to_python() {
+    let fixture=Fixture::start("0.1.0.1").await;
+    for (method,path) in [(reqwest::Method::GET,"/api/atualizacao"),(reqwest::Method::POST,"/api/atualizacao/iniciar"),(reqwest::Method::POST,"/api/atualizacao/reiniciar")] {
+        let response=fixture.call(method.clone(),path,true).await;assert_eq!(response.status(),503);
+        assert_eq!(body(response).await["detail"]["code"],"update_checkout_unavailable");
+        assert_eq!(fixture.call(method,path,false).await.status(),401);
+    }
     fixture.package("0.1.0.1");
-    // Sem o token do dono: o Python decide (e recusa), nunca o Rust.
-    for (method, path) in [(reqwest::Method::GET, "/api/atualizacao"), (reqwest::Method::POST, "/api/atualizacao/iniciar"),
-                           (reqwest::Method::POST, "/api/atualizacao/reiniciar")] {
-        assert_eq!(fixture.call(method, path, false).await.text().await.unwrap(), "python", "{path}");
+    for (method,path) in [(reqwest::Method::GET,"/api/atualizacao"),(reqwest::Method::POST,"/api/atualizacao/iniciar"),(reqwest::Method::POST,"/api/atualizacao/reiniciar")] {
+        assert_eq!(fixture.call(method,path,false).await.status(),401);
     }
 }
 
@@ -221,7 +219,7 @@ async fn update_routes_dev_mode_refuses_with_a_code_and_launches_nothing() {
     assert!(!fixture.state().exists(), "nada lançado");
 
     // Sem o token do dono: o Python decide, nunca o Rust.
-    assert_eq!(fixture.dev_mode(on, false).await.text().await.unwrap(), "python");
+    assert_eq!(fixture.dev_mode(on, false).await.status(),401);
 }
 
 #[tokio::test]
@@ -399,4 +397,31 @@ async fn update_accept_brings_back_the_unseen_migration_warning_until_accepted()
     assert_eq!(notes["warnings"], json!([]));
     let status = body(fixture.call(reqwest::Method::GET, "/api/atualizacao", true).await).await;
     assert!(status.get("pending_warning").is_none(), "{status}");
+}
+
+#[tokio::test]
+async fn update_state_http_preserves_special_refusals_and_complete_deep_state() {
+    use hangar_server::orchestration::codec;
+    let rows:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/update-git/state-http.json")).unwrap();
+    let fixture=Fixture::start("0.1.0.8200").await;fixture.package("0.1.0.8200");
+    let path=fixture.home.path().join(".claude/.hangar-update/estado.json");std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let mut differences=vec![];let mut base=None;
+    for row in rows["cases"].as_array().unwrap(){
+        std::fs::write(&path,row["input"].as_str().unwrap()).unwrap();
+        let response=fixture.call(reqwest::Method::GET,"/api/atualizacao",true).await;
+        let expected_status=if row["name"]=="deep"{200}else{row["status"].as_u64().unwrap() as u16};
+        let status=response.status().as_u16();let content_type=response.headers().get("content-type").unwrap().to_str().unwrap().to_owned();let text=response.text().await.unwrap();
+        if status!=expected_status {differences.push(format!("{}: {status} != {expected_status}",row["name"]));continue;}
+        if status==500 {assert_eq!(text,row["body"].as_str().unwrap());assert_eq!(content_type,row["content_type"].as_str().unwrap());continue;}
+        let mut value=codec::loads(&text).unwrap();let expected_state=codec::loads(row["input"].as_str().unwrap()).unwrap();
+        assert_eq!(codec::dumps(&value["estado"],false),codec::dumps(&expected_state,false));
+        if let Some(base)=&base {
+            let mut expected=codec::clone_value(base);
+            let old=std::mem::replace(&mut expected["estado"],expected_state);codec::discard(old);
+            assert_eq!(codec::dumps(&value,true),codec::dumps(&expected,true),"{}: corpo completo",row["name"]);codec::discard(expected);
+        } else {codec::discard(expected_state);base=Some(codec::clone_value(&value));}
+        codec::discard(std::mem::take(&mut value));
+    }
+    if let Some(base)=base{codec::discard(base);}
+    assert!(differences.is_empty(),"{}",differences.join("\n"));
 }

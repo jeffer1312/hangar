@@ -1,0 +1,189 @@
+{
+  "source_commit": "fc1ed83a37fe22c126328f3717ccd6b37db17e10",
+  "command": "python backend/tests/fixtures/contract/update-git/generate.py --reference <checkout-Python> --output backend/tests/fixtures/contract/update-git/cases.json",
+  "preflight": [
+    {
+      "name": "clean",
+      "expected": {
+        "pode": true,
+        "faltando": [],
+        "branch": "main",
+        "alvo": "main",
+        "branch_de_trabalho": false,
+        "sujo": 0,
+        "ahead": 0,
+        "ahead_incerto": false,
+        "behind": 0,
+        "divergiu": false,
+        "topologia": "manual",
+        "commit": "<HEAD>"
+      }
+    },
+    {
+      "name": "untracked",
+      "expected": {
+        "pode": true,
+        "faltando": [],
+        "branch": "main",
+        "alvo": "main",
+        "branch_de_trabalho": false,
+        "sujo": 0,
+        "ahead": 0,
+        "ahead_incerto": false,
+        "behind": 0,
+        "divergiu": false,
+        "topologia": "manual",
+        "commit": "<HEAD>"
+      }
+    },
+    {
+      "name": "tracked",
+      "expected": {
+        "pode": true,
+        "faltando": [],
+        "branch": "main",
+        "alvo": "main",
+        "branch_de_trabalho": false,
+        "sujo": 1,
+        "ahead": 0,
+        "ahead_incerto": false,
+        "behind": 0,
+        "divergiu": false,
+        "topologia": "manual",
+        "commit": "<HEAD>"
+      }
+    },
+    {
+      "name": "ahead",
+      "expected": {
+        "pode": true,
+        "faltando": [],
+        "branch": "main",
+        "alvo": "main",
+        "branch_de_trabalho": false,
+        "sujo": 0,
+        "ahead": 1,
+        "ahead_incerto": false,
+        "behind": 0,
+        "divergiu": false,
+        "topologia": "manual",
+        "commit": "<HEAD>"
+      }
+    },
+    {
+      "name": "behind",
+      "expected": {
+        "pode": true,
+        "faltando": [],
+        "branch": "main",
+        "alvo": "main",
+        "branch_de_trabalho": false,
+        "sujo": 0,
+        "ahead": 0,
+        "ahead_incerto": false,
+        "behind": 1,
+        "divergiu": false,
+        "topologia": "manual",
+        "commit": "<HEAD>"
+      }
+    },
+    {
+      "name": "diverged",
+      "expected": {
+        "pode": true,
+        "faltando": [],
+        "branch": "main",
+        "alvo": "main",
+        "branch_de_trabalho": false,
+        "sujo": 0,
+        "ahead": 1,
+        "ahead_incerto": false,
+        "behind": 1,
+        "divergiu": true,
+        "topologia": "manual",
+        "commit": "<HEAD>"
+      }
+    },
+    {
+      "name": "work-branch",
+      "expected": {
+        "pode": true,
+        "faltando": [],
+        "branch": "work/task",
+        "alvo": "main",
+        "branch_de_trabalho": true,
+        "sujo": 0,
+        "ahead": 0,
+        "ahead_incerto": false,
+        "behind": 0,
+        "divergiu": false,
+        "topologia": "manual",
+        "commit": "<HEAD>"
+      }
+    },
+    {
+      "name": "switch-channel",
+      "expected": {
+        "pode": true,
+        "faltando": [],
+        "branch": "main",
+        "alvo": "beta",
+        "branch_de_trabalho": false,
+        "sujo": 0,
+        "ahead": 0,
+        "ahead_incerto": false,
+        "behind": 0,
+        "divergiu": false,
+        "topologia": "manual",
+        "commit": "<HEAD>"
+      }
+    },
+    {
+      "name": "return-from-channel",
+      "expected": {
+        "pode": true,
+        "faltando": [],
+        "branch": "beta",
+        "alvo": "main",
+        "branch_de_trabalho": false,
+        "sujo": 0,
+        "ahead": 0,
+        "ahead_incerto": false,
+        "behind": 0,
+        "divergiu": false,
+        "topologia": "manual",
+        "commit": "<HEAD>"
+      }
+    }
+  ],
+  "output": [
+    {
+      "code": 1,
+      "stdout": "one\ntwo\n",
+      "stderr": "",
+      "tail": "one\ntwo",
+      "reason": "one\ntwo"
+    },
+    {
+      "code": 0,
+      "stdout": "",
+      "stderr": "diagnostic\n",
+      "tail": "diagnostic",
+      "reason": "diagnostic"
+    },
+    {
+      "code": 7,
+      "stdout": "fatal: authentication failed\n",
+      "stderr": "",
+      "tail": "fatal: authentication failed",
+      "reason": "fatal: authentication failed"
+    },
+    {
+      "code": 1,
+      "stdout": "",
+      "stderr": "",
+      "tail": "",
+      "reason": ""
+    }
+  ]
+}

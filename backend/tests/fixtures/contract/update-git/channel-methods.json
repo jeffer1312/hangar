@@ -1,0 +1,562 @@
+{
+  "source_commit": "dbea18cff86a4a17a82868673cd6e9ff26021e37",
+  "command": "uv run --project backend --with httpx python backend/tests/fixtures/contract/update-git/generate-channel-methods.py --reference <checkout-Python> --output backend/tests/fixtures/contract/update-git/channel-methods.json",
+  "cases": [
+    {
+      "path": "/api/update-channel",
+      "method": "GET",
+      "status": 200,
+      "text": "{\"branch\":\"\",\"checkout_branch\":\"main\",\"last_branch\":\"\"}",
+      "headers": {
+        "allow": null,
+        "content-type": "application/json",
+        "content-length": "55",
+        "location": null
+      },
+      "effects": []
+    },
+    {
+      "path": "/api/update-channel",
+      "method": "HEAD",
+      "status": 405,
+      "text": "",
+      "headers": {
+        "allow": "GET",
+        "content-type": "application/json",
+        "content-length": "31",
+        "location": null
+      },
+      "effects": []
+    },
+    {
+      "path": "/api/update-channel",
+      "method": "PUT",
+      "status": 200,
+      "text": "{\"branch\":\"beta\",\"checkout_branch\":\"main\",\"last_branch\":\"beta\"}",
+      "headers": {
+        "allow": null,
+        "content-type": "application/json",
+        "content-length": "63",
+        "location": null
+      },
+      "effects": [
+        {
+          "branch": "beta",
+          "last": "beta"
+        }
+      ]
+    },
+    {
+      "path": "/api/update-channel",
+      "method": "POST",
+      "status": 405,
+      "text": "{\"detail\":\"Method Not Allowed\"}",
+      "headers": {
+        "allow": "GET",
+        "content-type": "application/json",
+        "content-length": "31",
+        "location": null
+      },
+      "effects": []
+    },
+    {
+      "path": "/api/update-channel",
+      "method": "DELETE",
+      "status": 405,
+      "text": "{\"detail\":\"Method Not Allowed\"}",
+      "headers": {
+        "allow": "GET",
+        "content-type": "application/json",
+        "content-length": "31",
+        "location": null
+      },
+      "effects": []
+    },
+    {
+      "path": "/api/update-channel",
+      "method": "OPTIONS",
+      "status": 405,
+      "text": "{\"detail\":\"Method Not Allowed\"}",
+      "headers": {
+        "allow": "GET",
+        "content-type": "application/json",
+        "content-length": "31",
+        "location": null
+      },
+      "effects": []
+    },
+    {
+      "path": "/api/update-channel",
+      "method": "PATCH",
+      "status": 405,
+      "text": "{\"detail\":\"Method Not Allowed\"}",
+      "headers": {
+        "allow": "GET",
+        "content-type": "application/json",
+        "content-length": "31",
+        "location": null
+      },
+      "effects": []
+    },
+    {
+      "path": "/api/update-channel/",
+      "method": "GET",
+      "status": 307,
+      "text": "",
+      "headers": {
+        "allow": null,
+        "content-type": null,
+        "content-length": "0",
+        "location": "http://fixture/api/update-channel"
+      },
+      "effects": []
+    },
+    {
+      "path": "/api/update-channel/",
+      "method": "HEAD",
+      "status": 307,
+      "text": "",
+      "headers": {
+        "allow": null,
+        "content-type": null,
+        "content-length": "0",
+        "location": "http://fixture/api/update-channel"
+      },
+      "effects": []
+    },
+    {
+      "path": "/api/update-channel/",
+      "method": "PUT",
+      "status": 307,
+      "text": "",
+      "headers": {
+        "allow": null,
+        "content-type": null,
+        "content-length": "0",
+        "location": "http://fixture/api/update-channel"
+      },
+      "effects": []
+    },
+    {
+      "path": "/api/update-channel/",
+      "method": "POST",
+      "status": 307,
+      "text": "",
+      "headers": {
+        "allow": null,
+        "content-type": null,
+        "content-length": "0",
+        "location": "http://fixture/api/update-channel"
+      },
+      "effects": []
+    },
+    {
+      "path": "/api/update-channel/",
+      "method": "DELETE",
+      "status": 307,
+      "text": "",
+      "headers": {
+        "allow": null,
+        "content-type": null,
+        "content-length": "0",
+        "location": "http://fixture/api/update-channel"
+      },
+      "effects": []
+    },
+    {
+      "path": "/api/update-channel/",
+      "method": "OPTIONS",
+      "status": 307,
+      "text": "",
+      "headers": {
+        "allow": null,
+        "content-type": null,
+        "content-length": "0",
+        "location": "http://fixture/api/update-channel"
+      },
+      "effects": []
+    },
+    {
+      "path": "/api/update-channel/",
+      "method": "PATCH",
+      "status": 307,
+      "text": "",
+      "headers": {
+        "allow": null,
+        "content-type": null,
+        "content-length": "0",
+        "location": "http://fixture/api/update-channel"
+      },
+      "effects": []
+    },
+    {
+      "path": "/api/update-channel///",
+      "method": "GET",
+      "status": 307,
+      "text": "",
+      "headers": {
+        "allow": null,
+        "content-type": null,
+        "content-length": "0",
+        "location": "http://fixture/api/update-channel"
+      },
+      "effects": []
+    },
+    {
+      "path": "/api/update-channel///",
+      "method": "HEAD",
+      "status": 307,
+      "text": "",
+      "headers": {
+        "allow": null,
+        "content-type": null,
+        "content-length": "0",
+        "location": "http://fixture/api/update-channel"
+      },
+      "effects": []
+    },
+    {
+      "path": "/api/update-channel///",
+      "method": "PUT",
+      "status": 307,
+      "text": "",
+      "headers": {
+        "allow": null,
+        "content-type": null,
+        "content-length": "0",
+        "location": "http://fixture/api/update-channel"
+      },
+      "effects": []
+    },
+    {
+      "path": "/api/update-channel///",
+      "method": "POST",
+      "status": 307,
+      "text": "",
+      "headers": {
+        "allow": null,
+        "content-type": null,
+        "content-length": "0",
+        "location": "http://fixture/api/update-channel"
+      },
+      "effects": []
+    },
+    {
+      "path": "/api/update-channel///",
+      "method": "DELETE",
+      "status": 307,
+      "text": "",
+      "headers": {
+        "allow": null,
+        "content-type": null,
+        "content-length": "0",
+        "location": "http://fixture/api/update-channel"
+      },
+      "effects": []
+    },
+    {
+      "path": "/api/update-channel///",
+      "method": "OPTIONS",
+      "status": 307,
+      "text": "",
+      "headers": {
+        "allow": null,
+        "content-type": null,
+        "content-length": "0",
+        "location": "http://fixture/api/update-channel"
+      },
+      "effects": []
+    },
+    {
+      "path": "/api/update-channel///",
+      "method": "PATCH",
+      "status": 307,
+      "text": "",
+      "headers": {
+        "allow": null,
+        "content-type": null,
+        "content-length": "0",
+        "location": "http://fixture/api/update-channel"
+      },
+      "effects": []
+    },
+    {
+      "path": "/api/update-channel/nope",
+      "method": "GET",
+      "status": 404,
+      "text": "{\"detail\":\"Not Found\"}",
+      "headers": {
+        "allow": null,
+        "content-type": "application/json",
+        "content-length": "22",
+        "location": null
+      },
+      "effects": []
+    },
+    {
+      "path": "/api/update-channel/nope",
+      "method": "HEAD",
+      "status": 404,
+      "text": "",
+      "headers": {
+        "allow": null,
+        "content-type": "application/json",
+        "content-length": "22",
+        "location": null
+      },
+      "effects": []
+    },
+    {
+      "path": "/api/update-channel/nope",
+      "method": "PUT",
+      "status": 404,
+      "text": "{\"detail\":\"Not Found\"}",
+      "headers": {
+        "allow": null,
+        "content-type": "application/json",
+        "content-length": "22",
+        "location": null
+      },
+      "effects": []
+    },
+    {
+      "path": "/api/update-channel/nope",
+      "method": "POST",
+      "status": 404,
+      "text": "{\"detail\":\"Not Found\"}",
+      "headers": {
+        "allow": null,
+        "content-type": "application/json",
+        "content-length": "22",
+        "location": null
+      },
+      "effects": []
+    },
+    {
+      "path": "/api/update-channel/nope",
+      "method": "DELETE",
+      "status": 404,
+      "text": "{\"detail\":\"Not Found\"}",
+      "headers": {
+        "allow": null,
+        "content-type": "application/json",
+        "content-length": "22",
+        "location": null
+      },
+      "effects": []
+    },
+    {
+      "path": "/api/update-channel/nope",
+      "method": "OPTIONS",
+      "status": 404,
+      "text": "{\"detail\":\"Not Found\"}",
+      "headers": {
+        "allow": null,
+        "content-type": "application/json",
+        "content-length": "22",
+        "location": null
+      },
+      "effects": []
+    },
+    {
+      "path": "/api/update-channel/nope",
+      "method": "PATCH",
+      "status": 404,
+      "text": "{\"detail\":\"Not Found\"}",
+      "headers": {
+        "allow": null,
+        "content-type": "application/json",
+        "content-length": "22",
+        "location": null
+      },
+      "effects": []
+    },
+    {
+      "path": "/api/%75pdate-channel",
+      "method": "GET",
+      "status": 200,
+      "text": "{\"branch\":\"\",\"checkout_branch\":\"main\",\"last_branch\":\"\"}",
+      "headers": {
+        "allow": null,
+        "content-type": "application/json",
+        "content-length": "55",
+        "location": null
+      },
+      "effects": []
+    },
+    {
+      "path": "/api/%75pdate-channel",
+      "method": "HEAD",
+      "status": 405,
+      "text": "",
+      "headers": {
+        "allow": "GET",
+        "content-type": "application/json",
+        "content-length": "31",
+        "location": null
+      },
+      "effects": []
+    },
+    {
+      "path": "/api/%75pdate-channel",
+      "method": "PUT",
+      "status": 200,
+      "text": "{\"branch\":\"beta\",\"checkout_branch\":\"main\",\"last_branch\":\"beta\"}",
+      "headers": {
+        "allow": null,
+        "content-type": "application/json",
+        "content-length": "63",
+        "location": null
+      },
+      "effects": [
+        {
+          "branch": "beta",
+          "last": "beta"
+        }
+      ]
+    },
+    {
+      "path": "/api/%75pdate-channel",
+      "method": "POST",
+      "status": 405,
+      "text": "{\"detail\":\"Method Not Allowed\"}",
+      "headers": {
+        "allow": "GET",
+        "content-type": "application/json",
+        "content-length": "31",
+        "location": null
+      },
+      "effects": []
+    },
+    {
+      "path": "/api/%75pdate-channel",
+      "method": "DELETE",
+      "status": 405,
+      "text": "{\"detail\":\"Method Not Allowed\"}",
+      "headers": {
+        "allow": "GET",
+        "content-type": "application/json",
+        "content-length": "31",
+        "location": null
+      },
+      "effects": []
+    },
+    {
+      "path": "/api/%75pdate-channel",
+      "method": "OPTIONS",
+      "status": 405,
+      "text": "{\"detail\":\"Method Not Allowed\"}",
+      "headers": {
+        "allow": "GET",
+        "content-type": "application/json",
+        "content-length": "31",
+        "location": null
+      },
+      "effects": []
+    },
+    {
+      "path": "/api/%75pdate-channel",
+      "method": "PATCH",
+      "status": 405,
+      "text": "{\"detail\":\"Method Not Allowed\"}",
+      "headers": {
+        "allow": "GET",
+        "content-type": "application/json",
+        "content-length": "31",
+        "location": null
+      },
+      "effects": []
+    },
+    {
+      "path": "/api/update-channel/?x=1",
+      "method": "GET",
+      "status": 307,
+      "text": "",
+      "headers": {
+        "allow": null,
+        "content-type": null,
+        "content-length": "0",
+        "location": "http://fixture/api/update-channel?x=1"
+      },
+      "effects": []
+    },
+    {
+      "path": "/api/update-channel/?x=1",
+      "method": "HEAD",
+      "status": 307,
+      "text": "",
+      "headers": {
+        "allow": null,
+        "content-type": null,
+        "content-length": "0",
+        "location": "http://fixture/api/update-channel?x=1"
+      },
+      "effects": []
+    },
+    {
+      "path": "/api/update-channel/?x=1",
+      "method": "PUT",
+      "status": 307,
+      "text": "",
+      "headers": {
+        "allow": null,
+        "content-type": null,
+        "content-length": "0",
+        "location": "http://fixture/api/update-channel?x=1"
+      },
+      "effects": []
+    },
+    {
+      "path": "/api/update-channel/?x=1",
+      "method": "POST",
+      "status": 307,
+      "text": "",
+      "headers": {
+        "allow": null,
+        "content-type": null,
+        "content-length": "0",
+        "location": "http://fixture/api/update-channel?x=1"
+      },
+      "effects": []
+    },
+    {
+      "path": "/api/update-channel/?x=1",
+      "method": "DELETE",
+      "status": 307,
+      "text": "",
+      "headers": {
+        "allow": null,
+        "content-type": null,
+        "content-length": "0",
+        "location": "http://fixture/api/update-channel?x=1"
+      },
+      "effects": []
+    },
+    {
+      "path": "/api/update-channel/?x=1",
+      "method": "OPTIONS",
+      "status": 307,
+      "text": "",
+      "headers": {
+        "allow": null,
+        "content-type": null,
+        "content-length": "0",
+        "location": "http://fixture/api/update-channel?x=1"
+      },
+      "effects": []
+    },
+    {
+      "path": "/api/update-channel/?x=1",
+      "method": "PATCH",
+      "status": 307,
+      "text": "",
+      "headers": {
+        "allow": null,
+        "content-type": null,
+        "content-length": "0",
+        "location": "http://fixture/api/update-channel?x=1"
+      },
+      "effects": []
+    }
+  ]
+}

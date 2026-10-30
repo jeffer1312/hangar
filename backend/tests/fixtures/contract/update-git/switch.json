@@ -1,0 +1,633 @@
+{
+  "source_commit": "8552d4f3dba6aeba59160cb43914a3b7707b1663",
+  "command": "python generate-switch.py --reference <checkout> --output <fixture>",
+  "normalization": "Minuto no nome do resgate, OID old e caminhos temporários; demais bytes integrais.",
+  "cases": [
+    {
+      "name": "new",
+      "target": "beta",
+      "reference": "origin/beta",
+      "result": {
+        "ok": true
+      },
+      "calls": [
+        {
+          "args": [
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "refs/heads/beta"
+          ],
+          "timeout": 30
+        },
+        {
+          "args": [
+            "checkout",
+            "-b",
+            "beta",
+            "origin/beta"
+          ],
+          "timeout": 120
+        },
+        {
+          "args": [
+            "branch",
+            "--set-upstream-to",
+            "origin/beta"
+          ],
+          "timeout": 30
+        }
+      ],
+      "warnings": [],
+      "state_warnings": [],
+      "branch": "beta",
+      "head": "remote",
+      "upstream": "origin/beta",
+      "refs": [],
+      "marker": "beta",
+      "marker_directory": false,
+      "beta_file": "remote\n",
+      "stashed_untracked": null
+    },
+    {
+      "name": "new-selected",
+      "target": "beta",
+      "reference": "<OLD>",
+      "result": {
+        "ok": true
+      },
+      "calls": [
+        {
+          "args": [
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "refs/heads/beta"
+          ],
+          "timeout": 30
+        },
+        {
+          "args": [
+            "checkout",
+            "-b",
+            "beta",
+            "<OLD>"
+          ],
+          "timeout": 120
+        },
+        {
+          "args": [
+            "branch",
+            "--set-upstream-to",
+            "origin/beta"
+          ],
+          "timeout": 30
+        }
+      ],
+      "warnings": [],
+      "state_warnings": [],
+      "branch": "beta",
+      "head": "old",
+      "upstream": "origin/beta",
+      "refs": [],
+      "marker": "beta",
+      "marker_directory": false,
+      "beta_file": null,
+      "stashed_untracked": null
+    },
+    {
+      "name": "existing",
+      "target": "beta",
+      "reference": "origin/beta",
+      "result": {
+        "ok": true
+      },
+      "calls": [
+        {
+          "args": [
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "refs/heads/beta"
+          ],
+          "timeout": 30
+        },
+        {
+          "args": [
+            "merge-base",
+            "--is-ancestor",
+            "refs/heads/beta",
+            "origin/beta"
+          ],
+          "timeout": 30
+        },
+        {
+          "args": [
+            "checkout",
+            "beta"
+          ],
+          "timeout": 120
+        }
+      ],
+      "warnings": [],
+      "state_warnings": [],
+      "branch": "beta",
+      "head": "old",
+      "upstream": "",
+      "refs": [],
+      "marker": "beta",
+      "marker_directory": false,
+      "beta_file": null,
+      "stashed_untracked": null
+    },
+    {
+      "name": "local-ahead",
+      "target": "beta",
+      "reference": "origin/beta",
+      "result": {
+        "ok": true
+      },
+      "calls": [
+        {
+          "args": [
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "refs/heads/beta"
+          ],
+          "timeout": 30
+        },
+        {
+          "args": [
+            "merge-base",
+            "--is-ancestor",
+            "refs/heads/beta",
+            "origin/beta"
+          ],
+          "timeout": 30
+        },
+        {
+          "args": [
+            "branch",
+            "--force",
+            "resgate/<MINUTE>-beta",
+            "refs/heads/beta"
+          ],
+          "timeout": 60
+        },
+        {
+          "args": [
+            "rev-parse",
+            "--verify",
+            "refs/heads/resgate/<MINUTE>-beta"
+          ],
+          "timeout": 30
+        },
+        {
+          "args": [
+            "checkout",
+            "beta"
+          ],
+          "timeout": 120
+        }
+      ],
+      "warnings": [
+        "a branch local beta tinha commits fora do origin: guardados em resgate/<MINUTE>-beta"
+      ],
+      "state_warnings": [
+        "a branch local beta tinha commits fora do origin: guardados em resgate/<MINUTE>-beta"
+      ],
+      "branch": "beta",
+      "head": "local",
+      "upstream": "",
+      "refs": [
+        {
+          "name": "resgate/<MINUTE>-beta",
+          "at_local": true
+        }
+      ],
+      "marker": "beta",
+      "marker_directory": false,
+      "beta_file": null,
+      "stashed_untracked": null
+    },
+    {
+      "name": "collision",
+      "target": "beta",
+      "reference": "origin/beta",
+      "result": {
+        "ok": true
+      },
+      "calls": [
+        {
+          "args": [
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "refs/heads/beta"
+          ],
+          "timeout": 30
+        },
+        {
+          "args": [
+            "checkout",
+            "-b",
+            "beta",
+            "origin/beta"
+          ],
+          "timeout": 120
+        },
+        {
+          "args": [
+            "stash",
+            "push",
+            "--include-untracked",
+            "-m",
+            "hangar antes de trocar para beta"
+          ],
+          "timeout": 120
+        },
+        {
+          "args": [
+            "checkout",
+            "-b",
+            "beta",
+            "origin/beta"
+          ],
+          "timeout": 120
+        },
+        {
+          "args": [
+            "branch",
+            "--set-upstream-to",
+            "origin/beta"
+          ],
+          "timeout": 30
+        }
+      ],
+      "warnings": [
+        "arquivos soltos guardados no stash 'hangar antes de trocar para beta'"
+      ],
+      "state_warnings": [
+        "arquivos soltos guardados no stash 'hangar antes de trocar para beta'"
+      ],
+      "branch": "beta",
+      "head": "remote",
+      "upstream": "origin/beta",
+      "refs": [],
+      "marker": "beta",
+      "marker_directory": false,
+      "beta_file": "remote\n",
+      "stashed_untracked": "untracked\n"
+    },
+    {
+      "name": "stash-failed",
+      "target": "beta",
+      "reference": "origin/beta",
+      "result": {
+        "error": "nao consegui guardar o que estava no disco: fixture-git-failed",
+        "type": "RuntimeError"
+      },
+      "calls": [
+        {
+          "args": [
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "refs/heads/beta"
+          ],
+          "timeout": 30
+        },
+        {
+          "args": [
+            "checkout",
+            "-b",
+            "beta",
+            "origin/beta"
+          ],
+          "timeout": 120
+        },
+        {
+          "args": [
+            "stash",
+            "push",
+            "--include-untracked",
+            "-m",
+            "hangar antes de trocar para beta"
+          ],
+          "timeout": 120
+        }
+      ],
+      "warnings": [],
+      "state_warnings": [],
+      "branch": "main",
+      "head": "old",
+      "upstream": "",
+      "refs": [],
+      "marker": null,
+      "marker_directory": false,
+      "beta_file": "untracked\n",
+      "stashed_untracked": null
+    },
+    {
+      "name": "retry-failed",
+      "target": "beta",
+      "reference": "origin/beta",
+      "result": {
+        "error": "nao consegui trocar para a branch beta: fixture-git-failed",
+        "type": "RuntimeError"
+      },
+      "calls": [
+        {
+          "args": [
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "refs/heads/beta"
+          ],
+          "timeout": 30
+        },
+        {
+          "args": [
+            "checkout",
+            "-b",
+            "beta",
+            "origin/beta"
+          ],
+          "timeout": 120
+        },
+        {
+          "args": [
+            "stash",
+            "push",
+            "--include-untracked",
+            "-m",
+            "hangar antes de trocar para beta"
+          ],
+          "timeout": 120
+        },
+        {
+          "args": [
+            "checkout",
+            "-b",
+            "beta",
+            "origin/beta"
+          ],
+          "timeout": 120
+        }
+      ],
+      "warnings": [
+        "arquivos soltos guardados no stash 'hangar antes de trocar para beta'"
+      ],
+      "state_warnings": [
+        "arquivos soltos guardados no stash 'hangar antes de trocar para beta'"
+      ],
+      "branch": "main",
+      "head": "old",
+      "upstream": "",
+      "refs": [],
+      "marker": null,
+      "marker_directory": false,
+      "beta_file": null,
+      "stashed_untracked": "untracked\n"
+    },
+    {
+      "name": "rescue-failed",
+      "target": "beta",
+      "reference": "origin/beta",
+      "result": {
+        "error": "nao consegui guardar a branch local beta: fixture-git-failed",
+        "type": "FalhaDeResgate"
+      },
+      "calls": [
+        {
+          "args": [
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "refs/heads/beta"
+          ],
+          "timeout": 30
+        },
+        {
+          "args": [
+            "merge-base",
+            "--is-ancestor",
+            "refs/heads/beta",
+            "origin/beta"
+          ],
+          "timeout": 30
+        },
+        {
+          "args": [
+            "branch",
+            "--force",
+            "resgate/<MINUTE>-beta",
+            "refs/heads/beta"
+          ],
+          "timeout": 60
+        }
+      ],
+      "warnings": [],
+      "state_warnings": [],
+      "branch": "main",
+      "head": "old",
+      "upstream": "",
+      "refs": [],
+      "marker": null,
+      "marker_directory": false,
+      "beta_file": null,
+      "stashed_untracked": null
+    },
+    {
+      "name": "upstream-failed",
+      "target": "beta",
+      "reference": "origin/beta",
+      "result": {
+        "ok": true
+      },
+      "calls": [
+        {
+          "args": [
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "refs/heads/beta"
+          ],
+          "timeout": 30
+        },
+        {
+          "args": [
+            "checkout",
+            "-b",
+            "beta",
+            "origin/beta"
+          ],
+          "timeout": 120
+        },
+        {
+          "args": [
+            "branch",
+            "--set-upstream-to",
+            "origin/beta"
+          ],
+          "timeout": 30
+        }
+      ],
+      "warnings": [
+        "a branch beta ficou sem upstream: fixture-git-failed"
+      ],
+      "state_warnings": [
+        "a branch beta ficou sem upstream: fixture-git-failed"
+      ],
+      "branch": "beta",
+      "head": "remote",
+      "upstream": "origin/beta",
+      "refs": [],
+      "marker": "beta",
+      "marker_directory": false,
+      "beta_file": "remote\n",
+      "stashed_untracked": null
+    },
+    {
+      "name": "marker-failed",
+      "target": "beta",
+      "reference": "origin/beta",
+      "result": {
+        "ok": true
+      },
+      "calls": [
+        {
+          "args": [
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "refs/heads/beta"
+          ],
+          "timeout": 30
+        },
+        {
+          "args": [
+            "checkout",
+            "-b",
+            "beta",
+            "origin/beta"
+          ],
+          "timeout": 120
+        },
+        {
+          "args": [
+            "branch",
+            "--set-upstream-to",
+            "origin/beta"
+          ],
+          "timeout": 30
+        }
+      ],
+      "warnings": [
+        "nao consegui gravar a branch da atualizacao (beta): [Errno 21] Is a directory: '<STATE>/branch'"
+      ],
+      "state_warnings": [
+        "nao consegui gravar a branch da atualizacao (beta): [Errno 21] Is a directory: '<STATE>/branch'"
+      ],
+      "branch": "beta",
+      "head": "remote",
+      "upstream": "origin/beta",
+      "refs": [],
+      "marker": null,
+      "marker_directory": true,
+      "beta_file": "remote\n",
+      "stashed_untracked": null
+    },
+    {
+      "name": "return-main",
+      "target": "main",
+      "reference": "origin/main",
+      "result": {
+        "ok": true
+      },
+      "calls": [
+        {
+          "args": [
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "refs/heads/main"
+          ],
+          "timeout": 30
+        },
+        {
+          "args": [
+            "merge-base",
+            "--is-ancestor",
+            "refs/heads/main",
+            "origin/main"
+          ],
+          "timeout": 30
+        },
+        {
+          "args": [
+            "checkout",
+            "main"
+          ],
+          "timeout": 120
+        }
+      ],
+      "warnings": [],
+      "state_warnings": [],
+      "branch": "main",
+      "head": "old",
+      "upstream": "",
+      "refs": [],
+      "marker": null,
+      "marker_directory": false,
+      "beta_file": null,
+      "stashed_untracked": null
+    },
+    {
+      "name": "return-master",
+      "target": "master",
+      "reference": "origin/master",
+      "result": {
+        "ok": true
+      },
+      "calls": [
+        {
+          "args": [
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "refs/heads/master"
+          ],
+          "timeout": 30
+        },
+        {
+          "args": [
+            "merge-base",
+            "--is-ancestor",
+            "refs/heads/master",
+            "origin/master"
+          ],
+          "timeout": 30
+        },
+        {
+          "args": [
+            "checkout",
+            "master"
+          ],
+          "timeout": 120
+        }
+      ],
+      "warnings": [],
+      "state_warnings": [],
+      "branch": "master",
+      "head": "old",
+      "upstream": "",
+      "refs": [],
+      "marker": null,
+      "marker_directory": false,
+      "beta_file": null,
+      "stashed_untracked": null
+    }
+  ]
+}

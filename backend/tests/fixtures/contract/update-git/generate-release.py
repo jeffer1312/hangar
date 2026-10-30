@@ -41,7 +41,7 @@ with tempfile.TemporaryDirectory(prefix='hangar-release-reference-') as scratch:
         release.platform_key=lambda:None if name=='unsupported' else 'linux-x86_64'
         hold=[] if name=='hold' else None
         result=release.fetch(dest=dest,hold=hold)
-        disk=lambda:{p.name:p.read_bytes().decode() for p in dest.iterdir() if p.is_file()}
+        disk=lambda:{str(p.relative_to(dest)):p.read_bytes().decode() for p in dest.rglob('*') if p.is_file()}
         before=disk()
         installed=release.install_held(hold) if hold is not None else None
         after=disk()

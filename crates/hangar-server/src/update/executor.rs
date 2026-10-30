@@ -243,10 +243,15 @@ impl Spawner for Detached {
         // Recolhe o processo quando ele sai (zumbi contaria como vivo para a tela) e conclui o
         // estado se ele morreu antes de assumi-lo.
         let state_dir = self.state_dir.clone();
+        let checkout = args.first().is_some_and(|command| command == "checkout-update");
         std::thread::spawn(move || {
             let mut child = child;
             if let Ok(status) = child.wait() && !status.success() {
-                conclude_early_exit(&state_dir, pid, status.code(), log.as_deref());
+                if checkout {
+                    conclude_checkout_early_exit(&state_dir, pid, status.code(), log.as_deref());
+                } else {
+                    conclude_early_exit(&state_dir, pid, status.code(), log.as_deref());
+                }
             }
         });
         Ok(pid)
@@ -318,7 +323,7 @@ pub fn start(home: &Path, claude_base: &Path, args: &Args, spawner: &dyn Spawner
         }
         _ => None,
     };
-    state.write(fresh);
+    state.try_write(fresh).map_err(StartError::Launch)?;
     match spawner.spawn(&args.argv()) {
         Ok(pid) => Ok(Started { pid, request_id }),
         Err(e) => {
@@ -350,9 +355,9 @@ pub fn launch(home: &Path, claude_base: &Path, args: &Args, require_scope: bool)
 pub async fn restart_only<R: Restarter, H: HealthProbe>(parts: &Parts, request_id: &str, restarter: &R, health: &H, settings: &Settings) -> bool {
     let state = StateFile::new(&parts.state_dir);
     let Some(_lock) = lock(parts, &state) else { return false };
-    state.write(json!({"fase": "rodando", "ok": null, "erro": null, "voltou": null, "no_ar": null, "resgate": null,
+    if !state.publish(json!({"fase": "rodando", "ok": null, "erro": null, "voltou": null, "no_ar": null, "resgate": null,
         "pid": std::process::id(), "reinicio_erro": null, "avisos": [], "log": [], "commit_de": "", "commit_para": null,
-        "reiniciar_manual": false, "shell_mudou": false, "waiting_for_server_build": false, "request_id": request_id}));
+        "reiniciar_manual": false, "shell_mudou": false, "waiting_for_server_build": false, "request_id": request_id})) { return false; }
     for note in &parts.notes { state.warn(note); }
     state.step("reiniciar");
     let before = match health.read().await { Reading::Rust { pid, .. } => pid, _ => None };
@@ -361,10 +366,10 @@ pub async fn restart_only<R: Restarter, H: HealthProbe>(parts: &Parts, request_i
         Ok(()) => super::wait_new(health, before, settings).await,
     };
     match result {
-        Ok(()) => { state.write(json!({"fase": "pronto", "ok": true, "texto": "Reiniciado"})); true }
+        Ok(()) => { if !state.publish(json!({"fase": "pronto", "ok": true, "texto": "Reiniciado"})) { return false; } true }
         Err(erro) => {
             tracing::warn!("update: reinício falhou: {erro}");
-            state.write(json!({"fase": "pronto", "ok": false, "erro": erro, "reinicio_erro": erro, "voltou": false}));
+            if !state.publish(json!({"fase": "pronto", "ok": false, "erro": erro, "reinicio_erro": erro, "voltou": false})) { return false; }
             false
         }
     }
@@ -378,12 +383,12 @@ pub async fn dev_update<R: Restarter, H: HealthProbe>(parts: &Parts, root: &Path
     let Some(_lock) = lock(parts, &state) else { return false };
     let fail = |erro: String, no_ar: bool| {
         tracing::warn!("update: modo desenvolvedor: {erro}");
-        state.write(json!({"fase": "pronto", "ok": false, "erro": erro, "voltou": false, "no_ar": no_ar}));
+        if !state.publish(json!({"fase": "pronto", "ok": false, "erro": erro, "voltou": false, "no_ar": no_ar})) { return false; }
         false
     };
-    state.write(json!({"fase": "rodando", "ok": null, "erro": null, "resgate": null, "voltou": null, "no_ar": null, "pid": std::process::id(),
+    if !state.publish(json!({"fase": "rodando", "ok": null, "erro": null, "resgate": null, "voltou": null, "no_ar": null, "pid": std::process::id(),
         "commit_de": "", "commit_para": null, "reiniciar_manual": false, "shell_mudou": false, "waiting_for_server_build": false,
-        "request_id": null, "log": [], "avisos": [], "passos_invalidos": []}));
+        "request_id": null, "log": [], "avisos": [], "passos_invalidos": []})) { return false; }
     for note in &parts.notes { state.warn(note); }
     state.step("baixar");
     let root_owned = root.to_path_buf();
@@ -399,10 +404,10 @@ pub async fn dev_update<R: Restarter, H: HealthProbe>(parts: &Parts, root: &Path
         Err(why) => return fail(why, true),
     };
     state.log(&output);
-    state.write(json!({"commit_de": from, "commit_para": to}));
+    if !state.publish(json!({"commit_de": from, "commit_para": to})) { return false; }
     if let Some(warning) = super::dev_mode::fetch_rust(runner, root).await { state.warn(&warning); }
     if restarter.manual() {
-        state.write(json!({"fase": "pronto", "ok": true, "texto": "Atualizado", "reiniciar_manual": true}));
+        if !state.publish(json!({"fase": "pronto", "ok": true, "texto": "Atualizado", "reiniciar_manual": true})) { return false; }
         return true;
     }
     state.step("reiniciar");
@@ -412,7 +417,7 @@ pub async fn dev_update<R: Restarter, H: HealthProbe>(parts: &Parts, root: &Path
         Ok(()) => super::wait_new(health, before, settings).await,
     };
     match result {
-        Ok(()) => { state.write(json!({"fase": "pronto", "ok": true, "texto": "Atualizado"})); true }
+        Ok(()) => { if !state.publish(json!({"fase": "pronto", "ok": true, "texto": "Atualizado"})) { return false; } true }
         Err(why) => { let no_ar = !matches!(health.read().await, Reading::Down(_)); fail(why, no_ar) }
     }
 }
@@ -444,9 +449,9 @@ pub async fn dev_mode<R: Restarter, H: HealthProbe>(parts: &Parts, request: &Dev
                 "codigo": super::dev_mode::BUSY, "voltou": false, "no_ar": true, "pid": std::process::id()}));
             return false;
         };
-        state.write(json!({"fase": "rodando", "ok": null, "erro": null, "codigo": null, "voltou": null, "no_ar": null, "resgate": null,
+        if !state.publish(json!({"fase": "rodando", "ok": null, "erro": null, "codigo": null, "voltou": null, "no_ar": null, "resgate": null,
             "pid": std::process::id(), "reinicio_erro": null, "request_id": null, "versao_para": null, "reiniciar_manual": false,
-            "log": [], "avisos": []}));
+            "log": [], "avisos": []})) { return false; }
         state.step("baixar");
         let downloaded = super::download_published(&parts.release, &parts.layout, &parts.home, settings).await;
         drop(lock);
@@ -479,12 +484,11 @@ pub async fn dev_mode<R: Restarter, H: HealthProbe>(parts: &Parts, request: &Dev
     // O pid vai em todo desfecho: a tela casa o fim pelo pid que o pedido devolveu, e recusa não passa pelo `trocar`.
     let pid = std::process::id();
     match result {
-        Ok(DevOutcome::Switched(_)) => { state.write(json!({"fase": "pronto", "ok": true, "texto": label, "pid": pid})); true }
+        Ok(DevOutcome::Switched(_)) => { state.publish(json!({"fase": "pronto", "ok": true, "texto": label, "pid": pid})) }
         Ok(DevOutcome::SwitchedManual(_)) => {
-            state.write(json!({"fase": "pronto", "ok": true, "texto": label, "reiniciar_manual": true, "pid": pid}));
-            true
+            state.publish(json!({"fase": "pronto", "ok": true, "texto": label, "reiniciar_manual": true, "pid": pid}))
         }
-        Ok(DevOutcome::Already(text)) => { state.write(json!({"fase": "pronto", "ok": true, "texto": text, "pid": pid})); true }
+        Ok(DevOutcome::Already(text)) => { state.publish(json!({"fase": "pronto", "ok": true, "texto": text, "pid": pid})) }
         Err(failure) if failure.code == BUSY => {
             tracing::warn!("update: dev-mode: {failure}");
             // Estado com o pid de outra rodada é dela; sem pid é o "começando" deste pedido.
@@ -508,9 +512,9 @@ pub async fn dev_mode<R: Restarter, H: HealthProbe>(parts: &Parts, request: &Dev
 /// Numa thread comum: o `migrate::run` cria o próprio runtime.
 async fn migrate(parts: &Parts, checkout: Option<PathBuf>) -> bool {
     let state = StateFile::new(&parts.state_dir);
-    state.write(json!({"fase": "rodando", "ok": null, "erro": null, "codigo": null, "voltou": null, "no_ar": null, "resgate": null,
+    if !state.publish(json!({"fase": "rodando", "ok": null, "erro": null, "codigo": null, "voltou": null, "no_ar": null, "resgate": null,
         "pid": std::process::id(), "reinicio_erro": null, "request_id": null, "versao_para": null, "reiniciar_manual": false,
-        "log": [], "avisos": []}));
+        "log": [], "avisos": []})) { return false; }
     // Um dos passos que a tela conhece (`state::STEPS`): chave fora da lista cairia no "Baixando".
     state.step("trocar");
     let args: Vec<String> = checkout.map(|dir| vec!["--checkout".to_owned(), dir.display().to_string()]).unwrap_or_default();
@@ -526,8 +530,7 @@ async fn migrate(parts: &Parts, checkout: Option<PathBuf>) -> bool {
     match result {
         Ok(lines) => {
             for line in lines.iter().filter_map(|l| l.strip_prefix("aviso: ")) { state.warn(line); }
-            state.write(json!({"fase": "pronto", "ok": true, "texto": lines.first().cloned().unwrap_or_default(), "pid": pid}));
-            true
+            state.publish(json!({"fase": "pronto", "ok": true, "texto": lines.first().cloned().unwrap_or_default(), "pid": pid}))
         }
         Err((_, why)) => {
             let why = why.trim_start_matches("##HANGAR-FALHA##").trim().to_owned();
@@ -780,8 +783,8 @@ mod tests {
         let read = state.read();
         assert_eq!((read["fase"].clone(), read["ok"].clone(), read["etapa"].clone(), read["pid"].clone(), read["codigo"].clone()),
             (json!("pronto"), json!(true), json!("reiniciar"), json!(std::process::id()), json!(null)));
-        // Checkout sem venv: o Rust dele não foi atualizado, e a tela mostra o aviso.
-        assert!(read["avisos"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().contains("Python")), "{read:?}");
+        // A falha do download nativo aparece na tela, sem depender de um venv.
+        assert!(read["avisos"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().contains("hangar-server rust-release saiu com Some(1): sem rede")), "{read:?}");
         assert_eq!(restart.0.load(Ordering::SeqCst), 1);
 
         // Trava ocupada por quem não gravou o estado (o `start` acabou de gravar o "começando"): a
@@ -852,7 +855,7 @@ mod tests {
         let calls = runner.calls.lock().unwrap().clone();
         assert_eq!(calls.len(), 1);
         let (command, cwd, restarts, pulled) = &calls[0];
-        assert!(command.contains(&python.display().to_string()) && command.ends_with("-m app.rust_release"), "{command}");
+        assert!(command.contains("rust-release") && command.contains(&clone.display().to_string()) && !command.contains("app.rust_release"), "{command}");
         assert_eq!((cwd, *restarts, *pulled), (&clone.join("backend"), 0, true));
         assert_eq!(restart.0.load(Ordering::SeqCst), 1);
         let state = StateFile::new(&parts.state_dir).read();
@@ -945,5 +948,20 @@ mod review_tests {
         assert_eq!(state["ok"], false);
         assert!(state["erro"].as_str().unwrap().contains("trava"), "{state:?}");
         assert_eq!(restart.0.load(Ordering::SeqCst), 0);
+    }
+}
+
+/// Conclusão do filho do checkout, separada da política do motor de pacote.
+pub fn conclude_checkout_early_exit(state_dir: &Path, pid: u32, code: Option<i32>, log: Option<&Path>) {
+    let _guard = match super::git_engine::Service::transition_guard_at(state_dir) {
+        Ok(Some(guard)) => guard,
+        Ok(None) => return,
+        Err(error) => {tracing::warn!(code="update_lock_unavailable",%error,"conclusão do filho sem acesso à guarda");return;}
+    };
+    match std::fs::read_to_string(state_dir.join("rodando.lock")) {
+        Ok(owner) if owner.trim() == pid.to_string() => conclude_early_exit(state_dir,pid,code,log),
+        Ok(_) => {},
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+        Err(error) => tracing::warn!(code="update_lock_unavailable",%error,"conclusão do filho sem acesso à posse"),
     }
 }

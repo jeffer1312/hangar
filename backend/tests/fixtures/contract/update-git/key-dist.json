@@ -1,0 +1,215 @@
+{
+  "source_commit": "8552d4f3dba6aeba59160cb43914a3b7707b1663",
+  "command": "python generate-key-dist.py --reference <checkout-Python> --output <fixture>",
+  "cases": [
+    {
+      "name": "key-success",
+      "key": "8be1489e0c587a729609728b43c9bfc7d27799e49865348e7167b08ee98da2af",
+      "urls": [
+        {
+          "url": "https://github.com/jeffer1312/hangar/releases/download/dist-commits/frontend-dist-8be1489e0c587a729609728b43c9bfc7d27799e49865348e7167b08ee98da2af.tar.gz.sha256",
+          "timeout": 15
+        },
+        {
+          "url": "https://github.com/jeffer1312/hangar/releases/download/dist-commits/frontend-dist-8be1489e0c587a729609728b43c9bfc7d27799e49865348e7167b08ee98da2af.tar.gz",
+          "timeout": 180
+        }
+      ],
+      "commands": [],
+      "events": [],
+      "warning": null,
+      "screen": "new-screen",
+      "previous": "old-screen"
+    },
+    {
+      "name": "key-missing",
+      "key": "8be1489e0c587a729609728b43c9bfc7d27799e49865348e7167b08ee98da2af",
+      "urls": [
+        {
+          "url": "https://github.com/jeffer1312/hangar/releases/download/dist-commits/frontend-dist-8be1489e0c587a729609728b43c9bfc7d27799e49865348e7167b08ee98da2af.tar.gz.sha256",
+          "timeout": 15
+        }
+      ],
+      "commands": [
+        {
+          "args": [
+            "npm",
+            "--prefix",
+            "frontend",
+            "run",
+            "build"
+          ],
+          "timeout": 600
+        }
+      ],
+      "events": [],
+      "warning": null,
+      "screen": "local-screen",
+      "previous": "old-screen"
+    },
+    {
+      "name": "key-hash",
+      "key": "8be1489e0c587a729609728b43c9bfc7d27799e49865348e7167b08ee98da2af",
+      "urls": [
+        {
+          "url": "https://github.com/jeffer1312/hangar/releases/download/dist-commits/frontend-dist-8be1489e0c587a729609728b43c9bfc7d27799e49865348e7167b08ee98da2af.tar.gz.sha256",
+          "timeout": 15
+        },
+        {
+          "url": "https://github.com/jeffer1312/hangar/releases/download/dist-commits/frontend-dist-8be1489e0c587a729609728b43c9bfc7d27799e49865348e7167b08ee98da2af.tar.gz",
+          "timeout": 180
+        }
+      ],
+      "commands": [
+        {
+          "args": [
+            "npm",
+            "--prefix",
+            "frontend",
+            "run",
+            "build"
+          ],
+          "timeout": 600
+        }
+      ],
+      "events": [
+        {
+          "args": [
+            "atualizacao.tela_da_chave",
+            "aviso"
+          ],
+          "fields": {
+            "codigo": "sha256_divergente",
+            "detalhe": ""
+          }
+        }
+      ],
+      "warning": null,
+      "screen": "local-screen",
+      "previous": "old-screen"
+    },
+    {
+      "name": "key-truncated",
+      "key": "8be1489e0c587a729609728b43c9bfc7d27799e49865348e7167b08ee98da2af",
+      "urls": [
+        {
+          "url": "https://github.com/jeffer1312/hangar/releases/download/dist-commits/frontend-dist-8be1489e0c587a729609728b43c9bfc7d27799e49865348e7167b08ee98da2af.tar.gz.sha256",
+          "timeout": 15
+        },
+        {
+          "url": "https://github.com/jeffer1312/hangar/releases/download/dist-commits/frontend-dist-8be1489e0c587a729609728b43c9bfc7d27799e49865348e7167b08ee98da2af.tar.gz",
+          "timeout": 180
+        }
+      ],
+      "commands": [
+        {
+          "args": [
+            "npm",
+            "--prefix",
+            "frontend",
+            "run",
+            "build"
+          ],
+          "timeout": 600
+        }
+      ],
+      "events": [
+        {
+          "args": [
+            "atualizacao.tela_da_chave",
+            "aviso"
+          ],
+          "fields": {
+            "codigo": "download_falhou",
+            "detalhe": "ReadError('not a gzip file')"
+          }
+        }
+      ],
+      "warning": null,
+      "screen": "local-screen",
+      "previous": "old-screen"
+    },
+    {
+      "name": "key-cut",
+      "key": "8be1489e0c587a729609728b43c9bfc7d27799e49865348e7167b08ee98da2af",
+      "urls": [
+        {
+          "url": "https://github.com/jeffer1312/hangar/releases/download/dist-commits/frontend-dist-8be1489e0c587a729609728b43c9bfc7d27799e49865348e7167b08ee98da2af.tar.gz.sha256",
+          "timeout": 15
+        },
+        {
+          "url": "https://github.com/jeffer1312/hangar/releases/download/dist-commits/frontend-dist-8be1489e0c587a729609728b43c9bfc7d27799e49865348e7167b08ee98da2af.tar.gz",
+          "timeout": 180
+        }
+      ],
+      "commands": [
+        {
+          "args": [
+            "npm",
+            "--prefix",
+            "frontend",
+            "run",
+            "build"
+          ],
+          "timeout": 600
+        }
+      ],
+      "events": [
+        {
+          "args": [
+            "atualizacao.tela_da_chave",
+            "aviso"
+          ],
+          "fields": {
+            "codigo": "download_falhou",
+            "detalhe": "IncompleteRead(3 bytes read, 7 more expected)"
+          }
+        }
+      ],
+      "warning": null,
+      "screen": "local-screen",
+      "previous": "old-screen"
+    },
+    {
+      "name": "key-incomplete",
+      "key": "8be1489e0c587a729609728b43c9bfc7d27799e49865348e7167b08ee98da2af",
+      "urls": [
+        {
+          "url": "https://github.com/jeffer1312/hangar/releases/download/dist-commits/frontend-dist-8be1489e0c587a729609728b43c9bfc7d27799e49865348e7167b08ee98da2af.tar.gz.sha256",
+          "timeout": 15
+        },
+        {
+          "url": "https://github.com/jeffer1312/hangar/releases/download/dist-commits/frontend-dist-8be1489e0c587a729609728b43c9bfc7d27799e49865348e7167b08ee98da2af.tar.gz",
+          "timeout": 180
+        }
+      ],
+      "commands": [
+        {
+          "args": [
+            "npm",
+            "--prefix",
+            "frontend",
+            "run",
+            "build"
+          ],
+          "timeout": 600
+        }
+      ],
+      "events": [
+        {
+          "args": [
+            "atualizacao.tela_da_chave",
+            "aviso"
+          ],
+          "fields": {
+            "codigo": "tar_incompleto",
+            "detalhe": "o dist do CI veio incompleto"
+          }
+        }
+      ],
+      "warning": null,
+      "screen": "local-screen",
+      "previous": "old-screen"
+    }
+  ]
+}
