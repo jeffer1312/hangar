@@ -1,6 +1,6 @@
 //! Cada cenário de `hangar-server conta`: passos (argumentos, saída, stdout, stderr), árvore final do
 //! HOME e diário. Em `tree`, só a diferença para `BASE_TREE` (`null` = o caminho não existe); em
-//! `diary`, a posição em `EVENTS`. `table` devolve tudo por extenso.
+//! `diary`, a posição em `EVENTS`. `fixture` devolve tudo por extenso.
 
 pub const BASE_TREE: &str = r##"{
 "<HOME>/.claude": {"kind": "dir"},

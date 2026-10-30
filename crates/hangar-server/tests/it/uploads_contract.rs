@@ -433,6 +433,13 @@ fn quoted(value: Option<&Value>) -> bool {
 async fn replay(name: &str, text: &str) -> Vec<String> {
     let golden = table(text);
     let records = golden["normalized_response"].as_array().unwrap();
+    let total = match name {
+        "active-content-range" => 20,
+        "errors-and-isolation" | "retention-and-audio" => 16,
+        "video-without-ffmpeg" => 2,
+        other => panic!("cenário sem total: {other}"),
+    };
+    assert_eq!(records.len(), total, "{name}");
     let r = Replay::new().await;
     let mut diffs = Vec::new();
     let mut uploads: Vec<PathBuf> = Vec::new();
