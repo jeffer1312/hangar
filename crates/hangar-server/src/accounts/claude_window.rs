@@ -355,9 +355,12 @@ const BROWSER: Option<&str> = Some(if cfg!(windows) { "hostname.exe" } else { "t
 /// As janelas do multiplexador da máquina, no ambiente das contas. Sem as variáveis de tela do
 /// `TerminalEnv::local`: o shell do login não as usa, e achá-las pode consultar o systemd.
 pub fn local(accounts: &super::environment::AccountEnvironment) -> ClaudeWindows {
+    // Na forma da chave da conta: a pasta padrão escrita de outro jeito ganharia o `-e` no psmux.
+    let default = accounts.home.join(".claude");
+    let default_config_dir = AccountKey::new(super::Provider::Claude, &default).map_or(default, |key| key.canonical_home);
     let env = TerminalEnv { windows: cfg!(windows), program: "tmux".into(), display: Vec::new(),
         server_config_dir: accounts.base.get("CLAUDE_CONFIG_DIR").filter(|dir| !dir.is_empty()).cloned(),
-        default_config_dir: accounts.home.join(".claude"), birth: std::time::Duration::ZERO };
+        default_config_dir, birth: std::time::Duration::ZERO };
     let diary = crate::diag::diary_dir_in(accounts);
     let mux = ProcessWindowMux { mux: ProcessMux { diary: diary.clone(), ..ProcessMux::default() }, program: env.program.clone() };
     ClaudeWindows::new(Box::new(mux), env, BROWSER.map(str::to_owned), diary)

@@ -27,10 +27,10 @@ struct Recorder {
     opened: std::sync::Mutex<Option<(AccountKey, String)>>,
 }
 impl WindowBackend for Recorder {
-    fn call<'a>(&'a self, key: &'a AccountKey, operation: &'a str, action: &'a str, _: Option<&'a str>) -> BoxFuture<'a, Result<Value, &'static str>> {
+    fn call<'a>(&'a self, key: &'a AccountKey, operation: &'a str, action: &'a str, code: Option<&'a str>) -> BoxFuture<'a, Result<Value, &'static str>> {
         let current = (key.clone(), operation.to_owned());
         let mut opened = self.opened.lock().unwrap();
-        let matches = action == "open" || opened.as_ref() == Some(&current);
+        let matches = (action == "open" || opened.as_ref() == Some(&current)) && (action != "code" || code == Some("synthetic-code"));
         if action == "open" { *opened = Some(current); }
         drop(opened);
         self.actions.send(if matches { action.to_owned() } else { format!("{action} fora da abertura") }).unwrap();
