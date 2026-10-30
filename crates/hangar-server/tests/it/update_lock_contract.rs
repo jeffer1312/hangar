@@ -17,7 +17,8 @@ fn update_turn_child() {
     fs::write(root.join(format!("ready-{index}")),b"ready").unwrap();wait_file(&root.join("go"));
     let turn=service(&root).take_turn();
     let report=match &turn {Ok(Some(_))=>"acquired".to_owned(),Ok(None)=>"busy".to_owned(),Err(error)=>format!("error:{error}")};
-    fs::write(root.join(format!("report-{index}")),report).unwrap();
+    // O pai espera o arquivo existir: ele só pode aparecer já com o conteúdo inteiro.
+    let partial=root.join(format!("report-{index}.tmp"));fs::write(&partial,report).unwrap();fs::rename(&partial,root.join(format!("report-{index}"))).unwrap();
     wait_file(&root.join("release"));drop(turn);
 }
 #[test]
@@ -70,7 +71,10 @@ fn update_turn_transfer_releases_guard_and_cleanup_checks_current_owner() {
     let turn=service.take_turn().unwrap().unwrap();let path=service.state_dir.join("rodando.lock");
     turn.transferred();assert!(path.exists());
     let guard=fs::OpenOptions::new().read(true).write(true).open(service.state_dir.join("rodando.guard")).unwrap();
-    guard.try_lock().unwrap();drop(guard);
+    // Filho de outro teste entre o fork e o exec segura a cópia da guarda por instantes.
+    let deadline=Instant::now()+Duration::from_secs(5);
+    while guard.try_lock().is_err() {assert!(Instant::now()<deadline,"a guarda continuou travada depois da transferência");std::thread::sleep(Duration::from_millis(1));}
+    drop(guard);
     fs::write(&path,"999999999").unwrap();service.release_turn().unwrap();assert_eq!(fs::read_to_string(&path).unwrap(),"999999999");
     fs::write(&path,std::process::id().to_string()).unwrap();service.release_turn().unwrap();assert!(!path.exists());
     assert!(service.state_dir.join("rodando.guard").exists());

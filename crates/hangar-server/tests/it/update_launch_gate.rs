@@ -16,7 +16,9 @@ fn update_launch_authorization_child() {
  std::fs::write(root.join("child-started"),b"ready").unwrap();
  let allowed=service.await_launch_authorization(&nonce);
  if allowed.is_ok(){std::fs::write(root.join("work-started"),b"work").unwrap();}
- std::fs::write(root.join("child-result"),if allowed.is_ok(){"allowed"}else{"refused"}).unwrap();
+ // O pai espera o arquivo existir: ele só pode aparecer já com o conteúdo inteiro.
+ let partial=root.join("child-result.tmp");
+ std::fs::write(&partial,if allowed.is_ok(){"allowed"}else{"refused"}).unwrap();std::fs::rename(&partial,root.join("child-result")).unwrap();
 }
 struct RealChild<'a>{root:&'a std::path::Path,child:Mutex<Option<std::process::Child>>}
 impl Spawner for RealChild<'_> {

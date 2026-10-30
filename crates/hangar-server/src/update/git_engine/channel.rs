@@ -188,10 +188,16 @@ impl Service {
         // A identidade da guarda permanece: removê-la permite travar dois arquivos diferentes.
         let file=std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false)
             .open(state_dir.join("rodando.guard"))?;
-        match file.try_lock() {
-            Ok(())=>Ok(Some(file)),
-            Err(std::fs::TryLockError::WouldBlock)=>Ok(None),
-            Err(std::fs::TryLockError::Error(error))=>Err(error),
+        // Um filho deste processo entre o fork e o exec ainda carrega a cópia de uma guarda já
+        // solta e a mantém travada por instantes: só um bloqueio que dura é "ocupado".
+        let deadline=std::time::Instant::now()+std::time::Duration::from_millis(50);
+        loop {
+            match file.try_lock() {
+                Ok(())=>return Ok(Some(file)),
+                Err(std::fs::TryLockError::WouldBlock) if std::time::Instant::now()<deadline=>std::thread::sleep(std::time::Duration::from_millis(1)),
+                Err(std::fs::TryLockError::WouldBlock)=>return Ok(None),
+                Err(std::fs::TryLockError::Error(error))=>return Err(error),
+            }
         }
     }
     pub fn take_turn(&self)->std::io::Result<Option<Turn>> {
