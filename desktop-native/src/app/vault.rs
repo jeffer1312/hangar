@@ -553,7 +553,8 @@ impl Render for VaultPage {
         let body = if status.state == "open" { self.render_entries(cx) } else { self.render_closed(&status, cx) };
         let empty = matches!(&self.entries, Some(Ok(list)) if list.is_empty());
         let backup = (status.role == "owner" && status.state == "open").then(|| self.render_backup(&status, cx));
-        let restore = (status.role == "none" || (status.role == "owner" && empty)).then(|| self.render_restore(cx));
+        // Chave perdida também restaura: o servidor guarda o arquivo velho de lado e cria uma chave nova.
+        let restore = (status.role == "none" || (status.role == "owner" && (empty || status.state == "key_lost"))).then(|| self.render_restore(cx));
         page.child(body).children(backup).children(restore).child(self.render_where(&status, cx))
     }
 }
@@ -673,7 +674,9 @@ impl Hangar {
     /// A máquina deste aparelho que é a dona, pelo endereço que o `peers.json` do servidor conectado dá a ela.
     pub(super) fn vault_owner_api(&self, url: &str) -> Option<Api> {
         let want = machines::host_key(url);
-        self.servers.iter().filter(|s| !s.invite && !s.disabled).find(|s| machines::host_key(&s.address) == want)
+        // Pelo endereço salvo ou pelo da rede local aprendido: o `peers.json` pode dar qualquer um dos dois.
+        self.servers.iter().filter(|s| !s.invite && !s.disabled)
+            .find(|s| std::iter::once(s.address.as_str()).chain(s.lan.as_ref().map(|l| l.url.as_str())).any(|u| machines::host_key(u) == want))
             .and_then(|s| self.machine_api(&servers::norm(&s.address)))
     }
 }
