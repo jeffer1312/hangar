@@ -94,12 +94,11 @@
 
   function save(keep: boolean) {
     if (!shown || !password) return;
-    const typed = password;
-    password = '';   // o valor não fica no estado depois da tentativa
+    // Recusa com o pedido aberto (chaveiro trancado, nome repetido) mantém o texto; o sucesso fecha e limpa.
     const n = name.trim();
     void send(keep
-      ? { interaction_id: shown.interaction_id, decision: 'save', password: typed, keep, policy, ...(n ? { name: n } : {}) }
-      : { interaction_id: shown.interaction_id, decision: 'save', password: typed, keep });
+      ? { interaction_id: shown.interaction_id, decision: 'save', password, keep, policy, ...(n ? { name: n } : {}) }
+      : { interaction_id: shown.interaction_id, decision: 'save', password, keep });
   }
 
   function decline() {

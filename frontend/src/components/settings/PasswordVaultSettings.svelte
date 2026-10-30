@@ -3,6 +3,7 @@
   import ConfirmSheet from '../ConfirmSheet.svelte';
   import * as m from '../../paraglide/messages';
   import { copyText } from '../../lib/clipboard';
+  import { listOwnServers } from '../../lib/auth';
   import {
     addVaultEntry, deleteVaultEntry, getVaultStatus, listVaultEntries, listVaultPeers, putVaultConfig, restoreVault,
     revealVaultPassword, setVaultRecovery, updateVaultEntry,
@@ -20,8 +21,38 @@
   let revealed = $state<Record<string, string>>({});
   let busyId = $state<string | null>(null);
 
-  const reason = (err: unknown) => err instanceof Error ? err.message : String(err);
   const codeOf = (err: unknown) => (err as { code?: string })?.code;
+  const reason = (err: unknown) => {
+    const code = codeOf(err);
+    if (code === 'erro_cofre_ausente') return m.vault_web_error_absent();
+    if (code === 'erro_cofre_dona_remota') return m.vault_web_error_owner_remote();
+    return err instanceof Error ? err.message : String(err);
+  };
+
+  // Quem recebe as escritas e a leitura da senha: a dona. Numa máquina que aponta para outra, a
+  // lista vem encaminhada, mas o resto só vai à dona, achada entre os servidores salvos neste aparelho.
+  let writer = $state<Server | null>(null);
+
+  function hostKey(url: string): string {
+    try {
+      const u = new URL(url.trim());
+      return `${u.host}${u.pathname.replace(/\/+$/, '')}`.toLowerCase();
+    } catch {
+      return url.trim().replace(/\/+$/, '').toLowerCase();
+    }
+  }
+
+  let resolving = $state(false);
+  async function resolveWriter(owner: string | undefined) {
+    if (!owner) return;
+    resolving = true;
+    const ok = await loadPeers();
+    resolving = false;
+    const peer = ok ? peers?.find((p) => p.id === owner) : undefined;
+    if (!peer) return;
+    const want = hostKey(peer.base_url);
+    writer = listOwnServers().find((s) => hostKey(s.baseUrl) === want) ?? null;
+  }
 
   async function load() {
     statusError = null;
@@ -30,9 +61,12 @@
       status = await getVaultStatus(server);
     } catch (err) {
       status = null;
+      writer = null;
       statusError = reason(err);
       return;
     }
+    writer = status.role === 'owner' ? server : null;
+    if (status.role === 'remote') void resolveWriter(status.owner);
     if (status.state !== 'open') { entries = null; return; }
     try {
       entries = await listVaultEntries(server);
@@ -52,18 +86,24 @@
   let peersLoading = $state(false);
   let peersError = $state<string | null>(null);
 
-  async function showPeers(purpose: 'owner' | 'backup' | 'restore') {
-    peersFor = purpose;
-    peersError = null;
-    if (peers) return;
+  async function loadPeers(): Promise<boolean> {
+    if (peers) return true;
     peersLoading = true;
+    peersError = null;
     try {
       peers = await listVaultPeers(server);
+      return true;
     } catch (err) {
       peersError = m.vault_web_peers_failed({ error: reason(err) });
+      return false;
     } finally {
       peersLoading = false;
     }
+  }
+
+  function showPeers(purpose: 'owner' | 'backup' | 'restore') {
+    peersFor = purpose;
+    void loadPeers();
   }
 
   async function setConfig(change: { owner: string } | { backup_peer: string }) {
@@ -91,7 +131,9 @@
   let rError = $state<string | null>(null);
   let rDone = $state(false);
   const rMismatch = $derived(!!rConfirm && rPassword !== rConfirm);
-  const rCanSave = $derived(rPassword.length >= RECOVERY_MIN && rPassword === rConfirm);
+  // Conta caracteres, não unidades UTF-16: o servidor mede o mesmo.
+  const rLength = $derived([...rPassword].length);
+  const rCanSave = $derived(rLength >= RECOVERY_MIN && rPassword === rConfirm);
 
   async function saveRecovery(e: SubmitEvent) {
     e.preventDefault();
@@ -156,9 +198,11 @@
   // ── Revelar e copiar ────────────────────────────────────────────────────────────────────────
   async function fetchPassword(id: string): Promise<string | null> {
     if (revealed[id] !== undefined) return revealed[id];
+    const w = writer;
+    if (!w) return null;
     busyId = id;
     try {
-      const { password } = await revealVaultPassword(server, id);
+      const { password } = await revealVaultPassword(w, id);
       return password;
     } catch (err) {
       notice = m.vault_web_reveal_failed({ error: reason(err) });
@@ -221,7 +265,8 @@
 
   async function saveForm(e: SubmitEvent) {
     e.preventDefault();
-    if (!editing || saving || !canSave) return;
+    const w = writer;
+    if (!editing || saving || !canSave || !w) return;
     const fields = {
       name: fName.trim(),
       username: fUser.trim() || null,
@@ -234,9 +279,9 @@
     saving = true;
     formError = null;
     try {
-      if (target === 'new') await addVaultEntry(server, { ...fields, password: typed });
+      if (target === 'new') await addVaultEntry(w, { ...fields, password: typed });
       else {
-        await updateVaultEntry(server, target.id, typed ? { ...fields, password: typed } : fields);
+        await updateVaultEntry(w, target.id, typed ? { ...fields, password: typed } : fields);
         forget(target.id);
       }
       closeForm();
@@ -252,10 +297,11 @@
   let deleting = $state<VaultEntry | null>(null);
   async function confirmDelete() {
     const e = deleting;
-    if (!e) return;
+    const w = writer;
+    if (!e || !w) return;
     notice = null;
     try {
-      await deleteVaultEntry(server, e.id);
+      await deleteVaultEntry(w, e.id);
       forget(e.id);
       await load();
     } catch (err) {
@@ -345,7 +391,7 @@
           <label class="pv-campo"><span>{m.vault_web_recovery_confirm()}</span>
             <input type={rVisible ? 'text' : 'password'} autocomplete="new-password" autocapitalize="off" spellcheck="false"
               bind:value={rConfirm} disabled={rSaving} aria-invalid={rMismatch} /></label>
-          {#if rPassword && rPassword.length < RECOVERY_MIN}
+          {#if rPassword && rLength < RECOVERY_MIN}
             <p class="pv-muted">{m.vault_web_recovery_short({ n: RECOVERY_MIN })}</p>
           {:else if rMismatch}
             <p class="pv-erro-txt">{m.vault_web_recovery_mismatch()}</p>
@@ -389,8 +435,9 @@
     {#if status.state === 'open'}
       <div class="pv-topo">
         <p class="pv-secao">{m.vault_web_entries_title()}</p>
-        <button type="button" class="pv-btn pv-primario" onclick={() => openForm('new')}>{m.vault_web_add()}</button>
+        {#if writer}<button type="button" class="pv-btn pv-primario" onclick={() => openForm('new')}>{m.vault_web_add()}</button>{/if}
       </div>
+      {#if !writer && !resolving}<p class="pv-muted" role="status">{m.vault_web_read_only({ owner: status.owner ?? '' })}</p>{/if}
       {#if notice}<p class="pv-muted" role="status">{notice}</p>{/if}
       {#if entriesError}
         <div class="pv-box pv-erro" role="alert">
@@ -413,14 +460,14 @@
                 <span class="pv-tag">{e.policy === 'free' ? m.vault_web_policy_free() : m.vault_web_policy_ask()}</span>
                 {#if revealed[e.id] !== undefined}<code class="pv-senha">{revealed[e.id]}</code>{/if}
               </div>
-              <div class="pv-item-acoes">
+              {#if writer}<div class="pv-item-acoes">
                 <button type="button" class="pv-btn" disabled={busyId === e.id} onclick={() => toggleReveal(e.id)}>
                   {revealed[e.id] !== undefined ? m.vault_web_hide() : m.vault_web_reveal()}
                 </button>
                 <button type="button" class="pv-btn" disabled={busyId === e.id} onclick={() => copy(e.id)}>{m.vault_web_copy()}</button>
                 <button type="button" class="pv-btn" onclick={() => openForm(e)}>{m.vault_web_edit()}</button>
                 <button type="button" class="pv-btn pv-perigo" onclick={() => (deleting = e)}>{m.vault_web_delete()}</button>
-              </div>
+              </div>{/if}
             </li>
           {/each}
         </ul>
