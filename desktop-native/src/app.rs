@@ -67,6 +67,7 @@ mod settings;
 mod mention;
 mod server_config;
 mod worktree_settings;
+mod auto_hide;
 mod invite;
 mod pair_accept;
 mod external;
@@ -776,6 +777,7 @@ pub struct Hangar {
     harness: harness::Harnesses,
     server_config: server_config::ServerConfig,
     worktree_settings: worktree_settings::WorktreeSettings,
+    auto_hide: auto_hide::AutoHidePage,
     sync: sync::Sync,
     connect: connect::Connect,
     devices: devices::Devices,
@@ -1099,7 +1101,7 @@ impl Hangar {
             desktop_note: None,
             palette_seq: 0, backdrop_seq: 0, backdrop_pending: false, backdrop: None, backdrop_note: None, backdrop_busy: None, grain: crate::media::grain(),
             device: device::Device::new(window, cx), accounts: accounts::Accounts::default(), orchestration: orchestration::Orchestration::default(), orq_history: None, orq_history_serial: 0, home_usage: Default::default(), recents: Default::default(), reopen: None, shortcuts: shortcuts::Shortcuts::default(),
-            worktree_settings: worktree_settings::WorktreeSettings::default(),
+            worktree_settings: worktree_settings::WorktreeSettings::default(), auto_hide: Default::default(),
             server_config: server_config::ServerConfig::default(), harness: harness::Harnesses::default(), sync: sync::Sync::default(), connect: connect::Connect::default(), devices: devices::Devices::default(), shared: shared_config::SharedConfig::default(), machines: machines::Machines::default(),
             costs: Default::default(), worktrees: Default::default(), artifacts: Default::default(), usage_stats: Default::default(), search: Default::default(), topbar: Default::default(), computer: computer::Computer::default(), new_session: None, sidebar, machines_tray,
             terminal: None, terminal_serial: 0,
@@ -5788,6 +5790,21 @@ impl Hangar {
                         children.push((String::new(), "", section(group.label.clone(), None).into_any_element()));
                     }
                     rows(list, None, "", &mut children, window, cx);
+                }
+            }
+        }
+        // As ocultas de todas as máquinas no fim, recolhidas por padrão; cada linha diz de qual máquina é.
+        let hidden_rows = self.hidden_sessions();
+        if !hidden_rows.is_empty() {
+            children.push(("hidden/head".into(), "hidden", self.render_hidden_header(hidden_rows.len(), window, cx)));
+            if self.hidden_open() {
+                for (key, session) in hidden_rows {
+                    let remote = remote_of(&key);
+                    let selected = selected_name == Some(session.name.as_str()) && self.open_key() == remote;
+                    let row_key = format!("hidden/row:{}::{}", remote.as_deref().unwrap_or(""), session.name);
+                    let row = if conversations { self.render_conversation_row(session.clone(), selected, remote, multi, None, window, cx) }
+                        else { self.render_session_row(session.clone(), selected, remote, multi, None, window, cx) };
+                    children.push((row_key, "hidden", row));
                 }
             }
         }

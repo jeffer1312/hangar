@@ -377,6 +377,7 @@ impl Hangar {
             Page::Accounts => self.accounts_opened(cx),
             Page::Orchestration => self.orchestration_opened(cx),
             Page::Worktrees => self.worktree_settings_opened(cx),
+            Page::Sessions => self.auto_hide_opened(cx),
             Page::Shortcuts => self.shortcuts_opened(cx),
             Page::Harnesses => self.harness_opened(cx),
             Page::Voice | Page::Jev | Page::Notifications | Page::Attachments | Page::Advanced => self.server_config_opened(page, cx),

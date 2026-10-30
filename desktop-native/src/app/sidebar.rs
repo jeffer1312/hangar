@@ -111,7 +111,7 @@ struct MenuRead { target: Target, seq: u64, mute: Mute, branches: Option<Branche
 
 #[derive(Clone, Debug)]
 /// O renomear leva o número do pedido: resposta de um diálogo cancelado não fecha a tentativa seguinte na mesma sessão.
-pub(super) enum Write { Rename(String, u64), Mute(bool), Editor, Delete, Mode(bool), Reload, Account { path: String, label: String, engine_account: Option<String> }, DismissRename, AnotherRename }
+pub(super) enum Write { Rename(String, u64), Mute(bool), Editor, Delete, Mode(bool), Reload, Account { path: String, label: String, engine_account: Option<String> }, DismissRename, AnotherRename, Hide, Show }
 
 /// Gravações de git e o remover vínculo: o resultado é a notificação da sessão, já em texto.
 enum GitWrite { Pull, Checkout(String), StashCheckout(String), Unlink }
@@ -132,6 +132,8 @@ pub(super) enum SidebarReply {
     Sheet(super::group_sheet::SheetReply),
     /// Identificador de uma máquina, pela chave dela.
     Identity(String, Result<Value, Failure>),
+    /// Leitura ou gravação da ocultação automática numa máquina (página Sessões).
+    AutoHide(super::auto_hide::AutoHideReply),
 }
 
 /// Uma notificação por sessão: o "git pull…" dá lugar ao resultado, como o `flash` único do web.
@@ -382,7 +384,8 @@ fn sort_key(text: &str) -> String {
 }
 
 pub(super) fn layout<'a>(sessions: &'a [SessionInfo], query: &str, by_project: bool, hidden: &HashSet<String>) -> Layout<'a> {
-    let live: Vec<&SessionInfo> = sessions.iter().filter(|s| !hidden.contains(&s.name)).collect();
+    // As ocultas da lista vão para o grupo do fim, que junta as máquinas (`hidden_group`).
+    let live: Vec<&SessionInfo> = sessions.iter().filter(|s| !hidden.contains(&s.name) && !s.hidden_from_list).collect();
     let total = live.len();
     // Filtro escondido não filtra: com a lista curta de novo, o texto que ficou no campo não esconde ninguém.
     let q = if total > FILTER_FROM { query.trim().to_lowercase() } else { String::new() };
@@ -406,6 +409,22 @@ pub(super) fn layout<'a>(sessions: &'a [SessionInfo], query: &str, by_project: b
         by_key
     } else if rest.is_empty() { Vec::new() } else { vec![Group { key: "*".into(), label: tr("sessions"), sessions: rest }] };
     Layout { waiting, groups, by_project, total, filtering: !q.is_empty() }
+}
+
+/// Chave do grupo "Ocultas" no `sidebar-collapsed.json`, com o sentido invertido: presente = aberto. Recolhido é o padrão.
+pub(super) const HIDDEN_GROUP: &str = "sidebar:hidden-open";
+
+/// As ocultas de todas as máquinas, por nome; sendo fechadas (`closing`) ficam de fora como no resto da barra.
+pub(super) fn hidden_group<'k, 'a>(lists: &[(&'k str, &'a [SessionInfo])], closing: &HashSet<Target>) -> Vec<(&'k str, &'a SessionInfo)> {
+    let mut out: Vec<(&str, &SessionInfo)> = lists.iter().flat_map(|&(key, sessions)| sessions.iter()
+        .filter(move |s| s.hidden_from_list && !closing.contains(&Target::new(key, &s.name))).map(move |s| (key, s))).collect();
+    out.sort_by_cached_key(|(_, s)| text_key(&s.name));
+    out
+}
+
+/// Abas e bandeja: a oculta só fica enquanto é a aberta, e sai quando a pessoa troca de sessão.
+pub(super) fn listed_on(session: &SessionInfo, target: &Target, open: Option<&Target>) -> bool {
+    !session.hidden_from_list || open == Some(target)
 }
 
 /// Uma máquina da barra no agrupar por máquina: a entrada da conexão (ausente num servidor só sem lista salva), a chave, a
@@ -560,6 +579,26 @@ impl Hangar {
         l
     }
 
+    /// O grupo "Ocultas" do fim da barra: as máquinas com seção, como `machine_lists`.
+    pub(super) fn hidden_sessions(&self) -> Vec<(String, &SessionInfo)> {
+        let keys: Vec<String> = if self.multi_server() {
+            self.servers.iter().filter(|s| servers::has_section(s)).map(|s| servers::norm(&s.address)).collect()
+        } else { vec![self.active_key()] };
+        let lists: Vec<(&str, &[SessionInfo])> = keys.iter().map(|key| (key.as_str(), self.sessions_of(key))).collect();
+        hidden_group(&lists, &self.sidebar.deleting).into_iter().map(|(key, s)| (key.to_owned(), s)).collect()
+    }
+
+    pub(super) fn hidden_open(&self) -> bool { self.sidebar.is_collapsed(HIDDEN_GROUP) }
+
+    /// "Ver sessões ocultas": fecha as Configurações e mostra a barra cheia com o grupo aberto.
+    pub(super) fn show_hidden_group(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_settings(window, cx);
+        // Com abas não há barra; a busca acha as ocultas com a marca.
+        if appearance::get().navigation.tabs() { self.open_search(window, cx); return; }
+        if self.rail() { self.toggle_rail(cx); }
+        if !self.hidden_open() { self.toggle_group(HIDDEN_GROUP.into(), cx); }
+    }
+
     /// A sessão da linha, lida da lista viva da máquina dela.
     pub(super) fn target_session(&self, target: &Target) -> Option<&SessionInfo> {
         self.sessions_of(&target.server).iter().find(|s| s.name == target.name)
@@ -622,6 +661,7 @@ impl Hangar {
                 }
             }
         }
+        if self.hidden_open() { order.extend(self.hidden_sessions().into_iter().map(|(key, s)| Target::new(&key, &s.name))); }
         order
     }
 
@@ -965,6 +1005,9 @@ impl Hangar {
                 // O executor do ditado gera o nome; o prazo cobre a fila dele.
                 Write::AnotherRename => api.server_send_query(reqwest::Method::POST, &["sessions", name.as_str(), "rename-suggestion"],
                     &[("again", "1")], None, 120).await,
+                // A linha só muda quando a lista seguinte trouxer a marca: nada some antes do servidor gravar.
+                Write::Hide => api.server_send(reqwest::Method::PUT, &["sessions", name.as_str(), "hidden"], None, 15).await,
+                Write::Show => api.server_send(reqwest::Method::DELETE, &["sessions", name.as_str(), "hidden"], None, 15).await,
                 Write::Mode(terminal) => api.act(name, &["modo-execucao"], Some(json!({"terminal": terminal})), false, crate::api::REOPEN_SECONDS).await,
                 Write::Reload => api.act(name, &["recarregar"], None, false, crate::api::REOPEN_SECONDS).await,
                 Write::Account { path, engine_account, .. } => api.act(name, &["conta"], Some(account_body(path, engine_account.as_deref())), false, crate::api::REOPEN_SECONDS).await,
@@ -1147,6 +1190,11 @@ impl Hangar {
         cx.notify();
     }
 
+    /// Falha de ocultar/mostrar e da ocultação automática: 404 sem código é rota que o servidor ainda não tem.
+    pub(super) fn visibility_failure(error: &Failure) -> String {
+        if error.status == Some(404) && error.code.is_none() { tr("sessions_server_outdated") } else { Self::fetch_failure(error) }
+    }
+
     /// Foco na linha/aba de onde o menu saiu (o `menuOrigem` do web), para o diálogo devolvê-lo ao fechar.
     pub(super) fn focus_origin(&self, target: &Target, window: &mut Window, cx: &mut Context<Self>) {
         self.row_focus(target).unwrap_or(&self.root_focus).focus(window, cx);
@@ -1218,6 +1266,7 @@ impl Hangar {
             SidebarReply::Group(seq, reply) => self.receive_group(seq, reply, window, cx),
             SidebarReply::Sheet(reply) => self.receive_sheet(reply, window, cx),
             SidebarReply::Identity(key, result) => self.receive_identity(key, result, window, cx),
+            SidebarReply::AutoHide(reply) => self.receive_auto_hide(reply, window, cx),
             SidebarReply::Chained(from, seq, target, result) => {
                 // Só o diálogo que mandou este pedido recebe a resposta; fechado, ela vai à notificação.
                 let open = self.sidebar.chain.as_ref().filter(|c| c.status.borrow().sent == Some(seq));
@@ -1321,6 +1370,9 @@ impl Hangar {
                         self.rename_suggest.again.remove(&target);
                         result.err().map(|error| Notification::error(Self::fetch_failure(&error)))
                     }
+                    (Write::Hide | Write::Show, Ok(_)) => None,
+                    (Write::Hide, Err(error)) => Some(Notification::error(tr("sidebar_hide_failed").replace("{n}", &Self::visibility_failure(&error)))),
+                    (Write::Show, Err(error)) => Some(Notification::error(tr("sidebar_show_failed").replace("{n}", &Self::visibility_failure(&error)))),
                     (Write::DismissRename, Ok(_)) => None,
                     (Write::DismissRename, Err(error)) => {
                         self.rename_suggest.dismissed.retain(|(dismissed, _)| *dismissed != target);
@@ -1349,15 +1401,26 @@ impl Hangar {
     /// `count`: as sessões que a seção mostra, com os grupos juntados.
     pub(super) fn render_group_header(&self, group: &Group, count: usize, awaiting: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let open = !self.sidebar.collapsed.contains(&group.key);
-        let id = SharedString::from(format!("group-{}", group.key));
+        self.group_trigger(&group.key, group.label.clone(), open, Some(count), awaiting, window, cx)
+    }
+
+    /// "Ocultas (N)" no fim da barra: o mesmo cabeçalho, aberto quando a chave está no arquivo.
+    pub(super) fn render_hidden_header(&self, count: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        self.group_trigger(HIDDEN_GROUP, tr("sidebar_hidden_group").replace("{n}", &count.to_string()), self.hidden_open(), None, 0, window, cx)
+    }
+
+    /// `count` ausente: o rótulo já leva a contagem.
+    #[allow(clippy::too_many_arguments)]
+    fn group_trigger(&self, key: &str, label: String, open: bool, count: Option<usize>, awaiting: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let id = SharedString::from(format!("group-{key}"));
         let focus = window.use_keyed_state(SharedString::from(format!("{id}-focus")), cx, |_, cx| cx.focus_handle().tab_stop(true)).read(cx).clone();
-        let (key, weak) = (group.key.clone(), cx.entity().downgrade());
-        AccordionTrigger::new(id).open(open).track_focus(&focus).aria_label(format!("{} · {count}", group.label))
+        let (key, weak) = (key.to_owned(), cx.entity().downgrade());
+        AccordionTrigger::new(id).open(open).track_focus(&focus).aria_label(count.map_or_else(|| label.clone(), |n| format!("{label} · {n}")))
             .flex_shrink_0().mt(px(8.)).h(px(28.)).px(px(8.)).rounded(px(8.)).border_1().border_color(transparent_black())
             .flex().items_center().gap(px(6.)).cursor_pointer().hover(|el| el.bg(theme::hover())).focus_visible(|el| el.border_color(theme::accent_focus()))
             .child(chrome::small_icon(if open { IconName::ChevronDown } else { IconName::ChevronRight }, 14., theme::faint()))
-            .child(div().min_w_0().truncate().text_xs().font_weight(FontWeight::MEDIUM).text_color(theme::muted()).child(group.label.clone()))
-            .child(div().flex_shrink_0().font_family(theme::MONO).text_size(px(11.)).text_color(theme::faint()).child(count.to_string()))
+            .child(div().min_w_0().truncate().text_xs().font_weight(FontWeight::MEDIUM).text_color(theme::muted()).child(label))
+            .when_some(count, |el, n| el.child(div().flex_shrink_0().font_family(theme::MONO).text_size(px(11.)).text_color(theme::faint()).child(n.to_string())))
             .when(awaiting > 0, |el| el.child(div().flex_shrink_0().font_family(theme::MONO).text_size(px(11.)).text_color(theme::warning())
                 .child(format!("{awaiting} {}", tr("sidebar_awaiting_short")))))
             .on_change(move |_, _, _, cx| { let _ = weak.update(cx, |this, cx| this.toggle_group(key.clone(), cx)); })
@@ -1468,6 +1531,19 @@ fn mute_item(hangar: &WeakEntity<Hangar>, target: &Target, mute: Option<Mute>) -
     }
 }
 
+/// "Ocultar da lista" / "Mostrar na lista". Esperando você não oculta: o servidor tiraria a marca na rodada seguinte.
+fn hide_item(hangar: &WeakEntity<Hangar>, target: &Target, session: &SessionInfo) -> PopupMenuItem {
+    let hidden = session.hidden_from_list;
+    let waiting = !hidden && (session.state == "awaiting_input" || session.pending_questions > 0);
+    let label = tr(if hidden { "sidebar_show" } else { "sidebar_hide" });
+    let label = if waiting { format!("{label} · {}", tr("sidebar_hide_waiting")) } else { label };
+    let (hangar, target) = (hangar.clone(), target.clone());
+    PopupMenuItem::new(label).disabled(waiting).on_click(move |_, _, cx| {
+        let what = if hidden { Write::Show } else { Write::Hide };
+        let _ = hangar.update(cx, |this, cx| this.write(target.clone(), what, cx));
+    })
+}
+
 /// Como a linha sai da lista pelo menu: a sessão de fora nunca se fecha daqui (é da outra pessoa), só se sai do par.
 #[derive(Debug, PartialEq)]
 enum MenuExit { Close, LeavePair(api::dto::OutsideMark), Nothing }
@@ -1563,7 +1639,9 @@ fn fill_menu(menu: PopupMenu, hangar: &WeakEntity<Hangar>, target: &Target, sess
     // são do servidor inteiro ou mexem no processo do dono.
     menu_style(menu).min_w(px(240.)).label(session.name.clone())
         .item(item(tr("sidebar_rename"), |this, target, window, cx| this.start_session_rename(target, window, cx)))
+        // Depois do Silenciar, para o `replace_item(2, …)` continuar achando ele.
         .when(!invite, |menu| menu.item(mute_item(hangar, target, mute))
+            .item(hide_item(hangar, target, session))
             .item(item(tr_shared("compartilhar_menu", &[]), |this, target, window, cx| this.open_share_dialog(target, window, cx)))
             .item(item(tr("par_menu"), |this, target, window, cx| this.open_pair_accept_dialog(Some(target), None, window, cx))))
         .when_some(cwd, |menu, cwd| menu
@@ -1944,6 +2022,24 @@ impl Hangar {
 mod tests {
     // Sem glob: o `test` do gpui_kit, que o `super::*` traz, esconderia o `#[test]` da linguagem.
     use super::{BranchList, HashSet, SessionInfo, first_line, has_git, layout, machine_split, rail_label, row_server_visible, save_json};
+
+    #[test]
+    fn layout_moves_hidden_sessions_to_the_final_group_and_keeps_the_open_one_in_tabs() {
+        use super::{Target, hidden_group, listed_on};
+        let hidden = |name: &str| SessionInfo { name: name.into(), hidden_from_list: true, ..Default::default() };
+        let nb = vec![SessionInfo { name: "api".into(), ..Default::default() }, hidden("zeta")];
+        let dp = vec![hidden("beta"), hidden("closing")];
+        let l = layout(&nb, "", false, &HashSet::new());
+        let names: Vec<&str> = l.groups.iter().flat_map(|g| g.sessions.iter().map(|s| s.name.as_str())).collect();
+        assert_eq!((names, l.total), (vec!["api"], 1), "a oculta sai do layout da máquina");
+        let closing = HashSet::from([Target::new("dp", "closing")]);
+        let group: Vec<(&str, &str)> = hidden_group(&[("nb", nb.as_slice()), ("dp", dp.as_slice())], &closing).into_iter().map(|(k, s)| (k, s.name.as_str())).collect();
+        assert_eq!(group, [("dp", "beta"), ("nb", "zeta")], "junta as máquinas por nome, sem a que está sendo fechada");
+        let (zeta, open) = (Target::new("nb", "zeta"), Target::new("nb", "zeta"));
+        assert!(listed_on(&nb[1], &zeta, Some(&open)), "a aberta fica nas abas");
+        assert!(!listed_on(&nb[1], &zeta, Some(&Target::new("nb", "api"))), "trocou de sessão, a oculta sai");
+        assert!(listed_on(&nb[0], &Target::new("nb", "api"), None));
+    }
 
     #[test]
     fn outside_session_menu_leaves_the_pair_and_never_closes() {

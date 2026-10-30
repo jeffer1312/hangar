@@ -541,7 +541,11 @@ impl Hangar {
                 rows.push(self.search_row(format!("search-session-{}", target.id()), on, entry, cx)
                     .child(div().size(px(8.)).flex_shrink_0().rounded_full().bg(theme::status(&s.state)))
                     .child(div().flex_1().min_w_0().flex().flex_col().gap(px(1.))
-                        .child(div().truncate().text_size(px(13.5)).font_weight(FontWeight::MEDIUM).child(highlighted(s.name.clone(), &words)))
+                        .child(div().flex().items_center().gap(px(6.)).min_w_0()
+                            .child(div().truncate().text_size(px(13.5)).font_weight(FontWeight::MEDIUM).child(highlighted(s.name.clone(), &words)))
+                            // A busca é o caminho até a oculta: a marca diz por que ela não está na barra.
+                            .when(s.hidden_from_list, |el| el.child(div().flex_shrink_0().px(px(6.)).rounded_full().bg(theme::inset())
+                                .text_size(px(10.5)).text_color(theme::muted()).child(tr("sidebar_hidden_badge")))))
                         .children(place.map(|c| div().truncate().font_family(theme::MONO).text_size(px(11.5)).text_color(theme::faint()).child(c))))
                     .children(s.last_activity.map(|t| div().flex_shrink_0().text_size(px(12.)).text_color(theme::faint()).child(ago(t))))
                     .into_any_element());
