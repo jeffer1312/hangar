@@ -130,7 +130,7 @@ pub fn local_targets(machine: &str, host: &BrowserHost) -> Vec<Target> {
     targets
 }
 
-fn current_platform() -> Platform {
+pub(crate) fn current_platform() -> Platform {
     if cfg!(target_os = "linux") {
         Platform::Linux
     } else if cfg!(windows) {
@@ -238,6 +238,117 @@ pub fn merge_targets(
     (targets, last)
 }
 
+pub fn url_file_name(operation: &str) -> String {
+    format!("claude-login-url-{operation}")
+}
+
+/// Nome e conteúdo do programa que o CLI chama como `BROWSER`: só guarda o link ao lado dele, e o
+/// Rust decide onde abrir. `None` onde o login segue pelo link impresso.
+pub fn browser_script(platform: Platform, operation: &str) -> Option<(String, String)> {
+    let url = url_file_name(operation);
+    match platform {
+        Platform::Linux => Some((
+            format!("claude-login-browser-{operation}"),
+            format!("#!/bin/sh\nd=$(dirname \"$0\")\nprintf '%s\\n' \"$1\" > \"$d/{url}.tmp\" && mv \"$d/{url}.tmp\" \"$d/{url}\"\n"),
+        )),
+        Platform::Windows => Some((
+            format!("claude-login-browser-{operation}.cmd"),
+            format!("@echo off\r\n>\"%~dp0{url}\" echo %*\r\n"),
+        )),
+        Platform::Other => None,
+    }
+}
+
+/// Tudo que a tentativa pode deixar na pasta da conta.
+pub fn attempt_file_names(operation: &str) -> [String; 4] {
+    let url = url_file_name(operation);
+    [
+        format!("claude-login-browser-{operation}"),
+        format!("claude-login-browser-{operation}.cmd"),
+        format!("{url}.tmp"),
+        url,
+    ]
+}
+
+/// No Windows o link chega entre aspas, e o `echo` deixa espaço e quebra de linha no fim.
+pub fn clean_url(raw: &str) -> &str {
+    raw.trim().trim_matches('"').trim()
+}
+
+pub fn write_browser_script(file: &std::path::Path, content: &str) -> std::io::Result<()> {
+    std::fs::write(file, content)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
+
+/// Corpo do `POST /login`: vazio continua valendo e não abre navegador.
+pub fn target_from_body(body: &[u8]) -> Result<Option<Target>, ()> {
+    if body.iter().all(u8::is_ascii_whitespace) {
+        return Ok(None);
+    }
+    #[derive(Deserialize)]
+    struct LoginBody {
+        #[serde(default)]
+        target: Option<Target>,
+    }
+    serde_json::from_slice::<LoginBody>(body).map(|parsed| parsed.target).map_err(|_| ())
+}
+
+/// Como a tentativa fala com a máquina do navegador; os testes trocam por um falso.
+pub trait BrowserChannel: Send + Sync {
+    fn is_local(&self, machine: &str) -> bool;
+    /// Erro = motivo curto, para a tela: o código devolvido pela máquina ou a falta de resposta.
+    fn open(&self, request: OpenRequest) -> futures_util::future::BoxFuture<'_, Result<(), String>>;
+    /// Erro = não deu para perguntar agora, e a consulta tenta de novo.
+    fn result<'a>(&'a self, machine: &'a str, operation: &'a str) -> futures_util::future::BoxFuture<'a, Result<Option<String>, ()>>;
+}
+
+pub struct AppChannel {
+    pub peers: Arc<crate::groups::peers::PeerClient>,
+    pub server_id: String,
+    pub browser: Arc<LoginBrowser>,
+}
+
+impl BrowserChannel for AppChannel {
+    fn is_local(&self, machine: &str) -> bool {
+        machine == self.server_id
+    }
+
+    fn open(&self, request: OpenRequest) -> futures_util::future::BoxFuture<'_, Result<(), String>> {
+        Box::pin(async move {
+            if self.is_local(&request.target.machine) {
+                return self.browser.open(request).await.map_err(|error| error.code.to_string());
+            }
+            let machine = request.target.machine.clone();
+            let body = serde_json::to_value(&request).map_err(|_| "login_request_invalid".to_string())?;
+            match self.peers.call(&machine, reqwest::Method::POST, "/api/login-browser/open", Some(&body)).await {
+                Ok(_) => Ok(()),
+                Err(crate::groups::peers::PeerError::Refused { detail, .. }) => {
+                    Err(detail["code"].as_str().unwrap_or("erro_login_browser_failed").to_owned())
+                }
+                Err(_) => Err("erro_login_machine_unreachable".to_owned()),
+            }
+        })
+    }
+
+    fn result<'a>(&'a self, machine: &'a str, operation: &'a str) -> futures_util::future::BoxFuture<'a, Result<Option<String>, ()>> {
+        Box::pin(async move {
+            if self.is_local(machine) {
+                return Ok(self.browser.result(operation));
+            }
+            let path = format!("/api/login-browser/result?operation={operation}");
+            match self.peers.call(machine, reqwest::Method::GET, &path, None).await {
+                Ok(Some(reply)) => Ok(reply["query"].as_str().map(str::to_owned)),
+                _ => Err(()),
+            }
+        })
+    }
+}
+
 const LISTEN_CAP: std::time::Duration = std::time::Duration::from_secs(600);
 const CLOSE_PAGE: &str = "<!doctype html><meta charset=\"utf-8\"><title>Hangar</title>\
     <p>Pode fechar esta aba. / You can close this tab.</p>";
@@ -245,7 +356,7 @@ const CLOSE_PAGE: &str = "<!doctype html><meta charset=\"utf-8\"><title>Hangar</
 pub type Launcher = Arc<dyn Fn(BrowserCommand) -> std::io::Result<()> + Send + Sync>;
 pub type HostProbe = Arc<dyn Fn() -> BrowserHost + Send + Sync>;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OpenRequest {
     pub url: String,
     pub operation: String,
@@ -572,6 +683,46 @@ mod tests {
 
     fn with_redirect(redirect: &str) -> String {
         format!("https://claude.com/cai/oauth/authorize?redirect_uri={redirect}&state=s")
+    }
+
+    #[test]
+    fn empty_login_body_is_still_valid_and_broken_body_is_not() {
+        assert_eq!(target_from_body(b""), Ok(None));
+        assert_eq!(target_from_body(b"{}"), Ok(None));
+        assert_eq!(target_from_body(b"{broken"), Err(()));
+        let chosen = target_from_body(br#"{"target":{"machine":"m","kind":"chrome_profile","profile":"Default"}}"#);
+        assert_eq!(chosen.unwrap().unwrap().profile.as_deref(), Some("Default"));
+    }
+
+    #[test]
+    fn url_file_is_cleaned_of_quotes_and_line_ending() {
+        assert_eq!(clean_url("\"https://x/?a=1&b=2\" \r\n"), "https://x/?a=1&b=2");
+        assert_eq!(clean_url("https://x/\n"), "https://x/");
+    }
+
+    #[test]
+    fn windows_script_is_ascii_and_writes_beside_itself() {
+        let (name, content) = browser_script(Platform::Windows, "abc").unwrap();
+        assert_eq!(name, "claude-login-browser-abc.cmd");
+        assert!(content.is_ascii());
+        assert!(content.contains(r#">"%~dp0claude-login-url-abc" echo %*"#), "{content}");
+        assert!(browser_script(Platform::Other, "abc").is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn linux_script_keeps_the_whole_link_even_with_a_space_in_the_folder() {
+        let root = tempfile::tempdir().unwrap();
+        let folder = root.path().join("a b");
+        std::fs::create_dir(&folder).unwrap();
+        let (name, content) = browser_script(Platform::Linux, "abc").unwrap();
+        let script = folder.join(name);
+        write_browser_script(&script, &content).unwrap();
+        let status = std::process::Command::new(&script).arg(LINK).status().unwrap();
+        assert!(status.success());
+        let saved = std::fs::read_to_string(folder.join(url_file_name("abc"))).unwrap();
+        assert_eq!(clean_url(&saved), LINK);
+        assert!(!folder.join("claude-login-url-abc.tmp").exists());
     }
 
     #[test]
