@@ -1,14 +1,11 @@
 import asyncio
-import io
 import json
-import urllib.error
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 import pytest
 from fastapi import HTTPException, Request, Response
 
-from app import auth, diag, peers, sse, sync
+from app import auth, diag, sse, sync
 
 
 SECRET = "segredo-que-nao-pode-aparecer@example.invalid"
@@ -64,41 +61,6 @@ async def test_auth_bloqueio_e_recuperacao_sem_repetir_poll(diario, monkeypatch)
     rows = diario()
     assert [r["detalhe"] for r in rows] == ["token_ausente", "bloqueio_temporario", "acesso_restabelecido"]
     assert "192.0.2.15" not in json.dumps(rows)
-
-
-@pytest.mark.parametrize("resultado", ["ok", "http", "transporte", "json"])
-def test_peer_liga_requisicao_e_preserva_causa_sem_body(diario, monkeypatch, resultado):
-    monkeypatch.setattr(peers, "peer_cfg", lambda _: ("http://peer.invalid", SECRET))
-    outgoing = []
-
-    def abrir(request, **kwargs):
-        outgoing.append(request)
-        if resultado == "http":
-            raise urllib.error.HTTPError(request.full_url, 403, SECRET, {}, io.BytesIO(SECRET.encode()))
-        if resultado == "transporte":
-            raise urllib.error.URLError(TimeoutError(SECRET))
-        response = MagicMock()
-        # O peers.py lê em pedaços (`read1`) para respeitar o prazo total da chamada.
-        corpo = io.BytesIO((SECRET if resultado == "json" else json.dumps({"token": SECRET})).encode())
-        response.__enter__.return_value = SimpleNamespace(status=200, read=corpo.read, read1=corpo.read1)
-        return response
-
-    monkeypatch.setattr(peers.urllib.request, "urlopen", abrir)
-    if resultado == "ok":
-        assert peers.call("outro", "POST", "/api/pair", {"texto": SECRET}) == (200, {"token": SECRET})
-    else:
-        with pytest.raises(peers.PeerError) as exc:
-            peers.call("outro", "POST", "/api/pair", {"texto": SECRET})
-        assert exc.value.transport is (resultado != "http")
-    assert outgoing[0].get_header("X-hangar-req") == "req-diagnostico"
-    rows = diario()
-    event = next(r for r in rows if r["evento"] in {"peer.falhou", "peer.respondeu"})
-    assert event["ms"] >= 0 and event["etapa"] == "POST"
-    if resultado == "transporte":
-        assert event["erro_tipo"] == "TimeoutError"
-    assert all(r["req"] == "req-diagnostico" for r in rows)
-    assert len({r["operacao"] for r in rows}) == 1
-    assert SECRET not in json.dumps(rows)
 
 
 def test_sync_registra_causas_e_resultado_sem_login_senha_ou_vault(diario, tmp_path, monkeypatch):

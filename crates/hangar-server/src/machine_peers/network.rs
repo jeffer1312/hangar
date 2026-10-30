@@ -266,9 +266,12 @@ pub async fn announce(s: &Service, old: &str) -> Value {
     }
     let id = s.identity();
     let body = json!({"id":id,"base_url":base,"token":s.token});
-    let client = crate::groups::peers::PeerClient::new(crate::groups::peers::PeerBook::new(Some(
+    let mut client = crate::groups::peers::PeerClient::new(crate::groups::peers::PeerBook::new(Some(
         s.store.path.clone(),
     )));
+    let mut environment=crate::accounts::environment::AccountEnvironment::from_map(s.environment.clone());
+    environment.home=s.home.clone();
+    if let Some(directory)=crate::diag::diary_dir_in(&environment){client=client.with_diagnostics(directory,s.request_id.clone());}
     let mut rows = Vec::new();
     for peer in ids {
         let mut result = client

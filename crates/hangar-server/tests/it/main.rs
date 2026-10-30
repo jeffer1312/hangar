@@ -389,3 +389,4 @@ mod guest_push;
 mod codex_pipeline_hooks;
 
 mod codex_pipeline_round;
+mod peer_diagnostic;

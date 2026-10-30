@@ -143,6 +143,7 @@ pub struct Service {
     pub port: u16,
     pub bind: String,
     pub initial_id: String,
+    pub request_id: String,
     pub network: Arc<dyn network::Network>,
     pub environment: std::collections::BTreeMap<String, String>,
     settings: Option<Arc<dotenv::SettingsSnapshot>>,
@@ -174,6 +175,7 @@ impl Service {
             port,
             bind,
             initial_id,
+            request_id: String::new(),
             network: Arc::new(network::SystemNetwork),
             environment,
             settings: None,
@@ -411,10 +413,11 @@ async fn handle_inner(
         },
     };
     let mut body = RequestValue(body);
-    let service = match Service::from_state(&st) {
+    let mut service = match Service::from_state(&st) {
         Ok(s) => s,
         Err(e) => return e.response(),
     };
+    service.request_id=crate::routes::diag_req(&request);
     let result = dispatch(service, &method, &path, &query, std::mem::take(&mut body.0)).await;
     match result {
         Ok(value) => {
