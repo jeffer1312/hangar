@@ -249,3 +249,29 @@ mod tests {
         active.store(false,Ordering::Release);tokio::time::timeout(Duration::from_secs(1),task).await.unwrap().unwrap();
     }
 }
+
+pub(crate) fn pid_alive(pid:u32)->io::Result<bool>{
+    pid_alive_with(i64::from(pid),||{
+        #[cfg(unix)] {
+            let pid=i32::try_from(pid).map_err(|_|io::Error::new(io::ErrorKind::InvalidInput,"PID fora da faixa do sistema"))?;
+            if unsafe{libc::kill(pid,0)}==0{return Ok(());}
+            let error=io::Error::last_os_error();
+            return match error.raw_os_error(){Some(libc::ESRCH)=>Err(io::ErrorKind::NotFound.into()),Some(libc::EPERM)=>Err(io::ErrorKind::PermissionDenied.into()),_=>Err(error)};
+        }
+        #[cfg(windows)] unsafe {
+            use windows_sys::Win32::{Foundation::{CloseHandle,GetLastError,ERROR_ACCESS_DENIED,ERROR_INVALID_PARAMETER},System::Threading::{OpenProcess,GetExitCodeProcess,PROCESS_QUERY_LIMITED_INFORMATION}};
+            let handle=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,0,pid);
+            if handle.is_null(){return match GetLastError(){ERROR_ACCESS_DENIED=>Err(io::ErrorKind::PermissionDenied.into()),ERROR_INVALID_PARAMETER=>Err(io::ErrorKind::NotFound.into()),error=>Err(io::Error::from_raw_os_error(error as i32))};}
+            let mut code=0;let result=GetExitCodeProcess(handle,&mut code);let error=if result==0{Some(io::Error::last_os_error())}else{None};CloseHandle(handle);
+            if let Some(error)=error{return Err(error);}
+            if code==259{Ok(())}else{Err(io::ErrorKind::NotFound.into())}
+        }
+    })
+}
+fn pid_alive_with(pid:i64,probe:impl FnOnce()->io::Result<()>)->io::Result<bool>{
+    if pid<=0{return Ok(false);}
+    match probe(){Ok(())=>Ok(true),Err(error) if error.kind()==io::ErrorKind::NotFound=>Ok(false),Err(error) if error.kind()==io::ErrorKind::PermissionDenied=>Ok(true),Err(error)=>Err(error)}
+}
+#[cfg(test)]
+#[path="process_liveness_tests.rs"]
+mod liveness_tests;
