@@ -1,0 +1,91 @@
+{
+  "source_commit": "9d7d1a051",
+  "command": "cd backend && uv run python tests/fixtures/contract/guests/capture_push_kimi_finish.py",
+  "isolation": "AST dos quatro produtores; correção de idle, fila, lista, entrega e relógio substituídos. Não prova parser wire nem multiplexador.",
+  "rows": [
+    {
+      "rechecks": 0,
+      "advance_marker": false,
+      "notices": [
+        [
+          "session"
+        ]
+      ],
+      "sleeps": [
+        20.0
+      ],
+      "series": {}
+    },
+    {
+      "rechecks": 0,
+      "advance_marker": true,
+      "notices": [
+        [
+          "session"
+        ]
+      ],
+      "sleeps": [
+        20.0
+      ],
+      "series": {}
+    },
+    {
+      "rechecks": 1,
+      "advance_marker": false,
+      "notices": [
+        [
+          "session"
+        ]
+      ],
+      "sleeps": [
+        5.0,
+        20.0
+      ],
+      "series": {}
+    },
+    {
+      "rechecks": 1,
+      "advance_marker": true,
+      "notices": [
+        [
+          "session"
+        ]
+      ],
+      "sleeps": [
+        5.0,
+        20.0
+      ],
+      "series": {}
+    },
+    {
+      "rechecks": 2,
+      "advance_marker": false,
+      "notices": [
+        [
+          "session"
+        ]
+      ],
+      "sleeps": [
+        5.0,
+        5.0,
+        20.0
+      ],
+      "series": {}
+    },
+    {
+      "rechecks": 2,
+      "advance_marker": true,
+      "notices": [
+        [
+          "session"
+        ]
+      ],
+      "sleeps": [
+        5.0,
+        5.0,
+        20.0
+      ],
+      "series": {}
+    }
+  ]
+}

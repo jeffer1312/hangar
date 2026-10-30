@@ -1,0 +1,267 @@
+{
+  "source_commit": "9d7d1a051",
+  "command": "cd backend && uv run python tests/fixtures/contract/guests/capture_push_dead.py",
+  "isolation": "Callback original; lista vazia no trabalho independente; resolução e envio substituídos. Não prova rede nem descoberta de processos.",
+  "rows": [
+    {
+      "enabled": null,
+      "present": false,
+      "notices": [],
+      "started": {
+        "other": 900.0
+      },
+      "last_idle": {
+        "other": 901.0
+      }
+    },
+    {
+      "enabled": null,
+      "present": true,
+      "notices": [],
+      "started": {
+        "other": 900.0
+      },
+      "last_idle": {
+        "other": 901.0
+      }
+    },
+    {
+      "enabled": false,
+      "present": false,
+      "notices": [],
+      "started": {
+        "other": 900.0
+      },
+      "last_idle": {
+        "other": 901.0
+      }
+    },
+    {
+      "enabled": false,
+      "present": true,
+      "notices": [],
+      "started": {
+        "other": 900.0
+      },
+      "last_idle": {
+        "other": 901.0
+      }
+    },
+    {
+      "enabled": true,
+      "present": false,
+      "notices": [],
+      "started": {
+        "other": 900.0
+      },
+      "last_idle": {
+        "other": 901.0
+      }
+    },
+    {
+      "enabled": true,
+      "present": true,
+      "notices": [
+        "fixture"
+      ],
+      "started": {
+        "other": 900.0
+      },
+      "last_idle": {
+        "other": 901.0
+      }
+    },
+    {
+      "enabled": 0,
+      "present": false,
+      "notices": [],
+      "started": {
+        "other": 900.0
+      },
+      "last_idle": {
+        "other": 901.0
+      }
+    },
+    {
+      "enabled": 0,
+      "present": true,
+      "notices": [],
+      "started": {
+        "other": 900.0
+      },
+      "last_idle": {
+        "other": 901.0
+      }
+    },
+    {
+      "enabled": 1,
+      "present": false,
+      "notices": [],
+      "started": {
+        "other": 900.0
+      },
+      "last_idle": {
+        "other": 901.0
+      }
+    },
+    {
+      "enabled": 1,
+      "present": true,
+      "notices": [
+        "fixture"
+      ],
+      "started": {
+        "other": 900.0
+      },
+      "last_idle": {
+        "other": 901.0
+      }
+    },
+    {
+      "enabled": "",
+      "present": false,
+      "notices": [],
+      "started": {
+        "other": 900.0
+      },
+      "last_idle": {
+        "other": 901.0
+      }
+    },
+    {
+      "enabled": "",
+      "present": true,
+      "notices": [],
+      "started": {
+        "other": 900.0
+      },
+      "last_idle": {
+        "other": 901.0
+      }
+    },
+    {
+      "enabled": "false",
+      "present": false,
+      "notices": [],
+      "started": {
+        "other": 900.0
+      },
+      "last_idle": {
+        "other": 901.0
+      }
+    },
+    {
+      "enabled": "false",
+      "present": true,
+      "notices": [
+        "fixture"
+      ],
+      "started": {
+        "other": 900.0
+      },
+      "last_idle": {
+        "other": 901.0
+      }
+    },
+    {
+      "enabled": [],
+      "present": false,
+      "notices": [],
+      "started": {
+        "other": 900.0
+      },
+      "last_idle": {
+        "other": 901.0
+      }
+    },
+    {
+      "enabled": [],
+      "present": true,
+      "notices": [],
+      "started": {
+        "other": 900.0
+      },
+      "last_idle": {
+        "other": 901.0
+      }
+    },
+    {
+      "enabled": [
+        1
+      ],
+      "present": false,
+      "notices": [],
+      "started": {
+        "other": 900.0
+      },
+      "last_idle": {
+        "other": 901.0
+      }
+    },
+    {
+      "enabled": [
+        1
+      ],
+      "present": true,
+      "notices": [
+        "fixture"
+      ],
+      "started": {
+        "other": 900.0
+      },
+      "last_idle": {
+        "other": 901.0
+      }
+    },
+    {
+      "enabled": {},
+      "present": false,
+      "notices": [],
+      "started": {
+        "other": 900.0
+      },
+      "last_idle": {
+        "other": 901.0
+      }
+    },
+    {
+      "enabled": {},
+      "present": true,
+      "notices": [],
+      "started": {
+        "other": 900.0
+      },
+      "last_idle": {
+        "other": 901.0
+      }
+    },
+    {
+      "enabled": {
+        "x": 1
+      },
+      "present": false,
+      "notices": [],
+      "started": {
+        "other": 900.0
+      },
+      "last_idle": {
+        "other": 901.0
+      }
+    },
+    {
+      "enabled": {
+        "x": 1
+      },
+      "present": true,
+      "notices": [
+        "fixture"
+      ],
+      "started": {
+        "other": 900.0
+      },
+      "last_idle": {
+        "other": 901.0
+      }
+    }
+  ]
+}

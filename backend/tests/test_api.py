@@ -816,149 +816,6 @@ def test_routes_require_auth(api_client):
 # Testes de config dirs (Task 4)
 # ---------------------------------------------------------------------------
 
-@pytest.fixture(autouse=False)
-def _transition_fixture(monkeypatch):
-    """Isola _on_hook_transition: sem tmux real (registry.list vazio) e captura os pushes
-    disparados via _notify_async em vez de rodar a thread/rede de verdade."""
-    from types import SimpleNamespace
-    calls = []
-    monkeypatch.setattr(api_mod, "_notify_async", lambda sid, fn: calls.append((sid, fn)))
-    monkeypatch.setattr(api_mod.registry, "list", lambda: [])
-    # O push de "terminou" saiu do caminho sincrono: no Kimi so o `_work` sabe se o "idle" que
-    # chegou e de verdade (marcador congelado, ver corrige_ocioso_kimi). `_work` roda em thread —
-    # aqui executa em linha pra o teste continuar deterministico.
-    monkeypatch.setattr(api_mod.threading, "Thread",
-                        lambda target, daemon=None: SimpleNamespace(start=target))
-    monkeypatch.setattr(api_mod, "_FINISH_SETTLE", 0)
-    api_mod._working_started.clear()
-    api_mod._last_idle.clear()
-    api_mod._recheca_armada.clear()
-    return calls
-
-
-def test_finish_ping_skipped_on_short_turn(_transition_fixture, monkeypatch):
-    calls = _transition_fixture
-    monkeypatch.setattr(api_mod.settings, "notify_finished", True)
-    monkeypatch.setattr(api_mod.settings, "finish_min_seconds", 45)
-    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("working", 1000.0))
-    api_mod._on_hook_transition("s1", "working")
-    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("idle", 1010.0))  # 10s: curto demais
-    api_mod._on_hook_transition("s1", "idle")
-    assert calls == []
-
-
-def test_finish_ping_fires_on_long_turn(_transition_fixture, monkeypatch):
-    calls = _transition_fixture
-    monkeypatch.setattr(api_mod.settings, "notify_finished", True)
-    monkeypatch.setattr(api_mod.settings, "finish_min_seconds", 45)
-    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("working", 1000.0))
-    api_mod._on_hook_transition("s2", "working")
-    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("idle", 1050.0))  # 50s: dispara
-    api_mod._on_hook_transition("s2", "idle")
-    assert calls == [("s2", api_mod.push.notify_finished)]
-
-
-def test_finish_ping_waits_for_the_session_to_really_stop(_transition_fixture, monkeypatch):
-    calls = _transition_fixture
-    monkeypatch.setattr(api_mod.settings, "notify_finished", True)
-    monkeypatch.setattr(api_mod.settings, "finish_min_seconds", 45)
-    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("working", 1000.0))
-    api_mod._on_hook_transition("s7", "working")
-    # Fim de turno, mas quando a espera acaba a sessão já voltou a trabalhar (recado na fila): nada sai.
-    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("working", 1200.0))
-    api_mod._terminou_se_parou("s7", 1000.0, None)
-    assert calls == [] and api_mod._working_started["s7"] == 1000.0
-    # O turno seguinte continua a mesma série: o início fica o do primeiro.
-    api_mod._on_hook_transition("s7", "working")
-    assert api_mod._working_started["s7"] == 1000.0
-    # Ele dura 10 s, mas a série inteira passou de 45: avisa no fim de verdade.
-    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("idle", 1210.0))
-    api_mod._on_hook_transition("s7", "idle")
-    assert calls == [("s7", api_mod.push.notify_finished)] and "s7" not in api_mod._working_started
-
-
-def test_finish_ping_holds_while_background_work_is_open(_transition_fixture, monkeypatch):
-    from types import SimpleNamespace
-    from app import background_open
-    calls = _transition_fixture
-    monkeypatch.setattr(api_mod.settings, "notify_finished", True)
-    monkeypatch.setattr(api_mod.settings, "finish_min_seconds", 45)
-    info = SimpleNamespace(name="s8", jsonl="/tmp/s8.jsonl", provider="claude", last_reply="**Pronto**: build verde")
-    monkeypatch.setattr(api_mod.registry, "list", lambda: [info])
-    monkeypatch.setattr(api_mod, "session_key", lambda p: "s8")
-    monkeypatch.setattr(api_mod, "drain", lambda *a, **k: 0)
-    monkeypatch.setattr(api_mod, "_maybe_chain", lambda n: None)
-    monkeypatch.setattr(api_mod, "_agendar_confirmacao", lambda *a: None)
-    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("working", 1000.0))
-    api_mod._on_hook_transition("s8", "working")
-    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("idle", 1100.0))
-    monkeypatch.setattr(background_open, "scan", lambda jsonl: background_open.Scan(1, "ainda não"))
-    api_mod._on_hook_transition("s8", "idle")
-    assert calls == [] and "s8" in api_mod._working_started    # agente rodando: espera ele
-    monkeypatch.setattr(background_open, "scan",
-                        lambda jsonl: background_open.Scan(0, "**Pronto**: build [verde](http://ci) do meu_var"))
-    api_mod._on_hook_transition("s8", "idle")
-    assert [sid for sid, _ in calls] == ["s8"] and "s8" not in api_mod._working_started
-    enviado = []
-    monkeypatch.setattr(api_mod.push, "notify_finished", lambda name, reply=None: enviado.append((name, reply)))
-    calls[0][1]("s8")
-    assert enviado == [("s8", "Pronto: build verde do meu_var")]
-
-
-def test_finish_series_restarts_after_a_long_stop(_transition_fixture, monkeypatch):
-    # O fim real nunca chegou (tarefa de fundo que ninguém fechou): sem isto, todo turno curto depois
-    # mediria desde o início velho e viraria um "terminou".
-    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("working", 1000.0))
-    api_mod._on_hook_transition("s6", "working")
-    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("idle", 1100.0))
-    monkeypatch.setattr(api_mod, "_push_terminou", lambda sid, st: None)
-    api_mod._on_hook_transition("s6", "idle")
-    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("working", 1100.0 + api_mod._SERIES_GAP + 1))
-    api_mod._on_hook_transition("s6", "working")
-    assert api_mod._working_started["s6"] == 1100.0 + api_mod._SERIES_GAP + 1
-
-
-def test_finish_ping_respects_flag(_transition_fixture, monkeypatch):
-    calls = _transition_fixture
-    monkeypatch.setattr(api_mod.settings, "notify_finished", False)
-    monkeypatch.setattr(api_mod.settings, "finish_min_seconds", 45)
-    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("working", 1000.0))
-    api_mod._on_hook_transition("s3", "working")
-    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("idle", 1050.0))
-    api_mod._on_hook_transition("s3", "idle")
-    assert calls == []  # flag desligado -> nunca dispara, mesmo com turno longo
-
-
-def test_dead_ping_always_fires(_transition_fixture, monkeypatch):
-    calls = _transition_fixture
-    monkeypatch.setattr(api_mod.settings, "notify_dead", True)
-    api_mod._on_hook_transition("s4", "dead")
-    assert calls == [("s4", api_mod.push.notify_dead)]
-
-
-def test_dead_ping_respects_flag(_transition_fixture, monkeypatch):
-    calls = _transition_fixture
-    monkeypatch.setattr(api_mod.settings, "notify_dead", False)
-    api_mod._on_hook_transition("s5", "dead")
-    assert calls == []
-
-
-def test_working_started_cleaned_up_on_idle(_transition_fixture, monkeypatch):
-    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("working", 1000.0))
-    api_mod._on_hook_transition("s6", "working")
-    assert "s6" in api_mod._working_started
-    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("idle", 1001.0))
-    api_mod._on_hook_transition("s6", "idle")
-    assert "s6" not in api_mod._working_started
-
-
-def test_working_started_cleaned_up_on_dead(_transition_fixture, monkeypatch):
-    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("working", 1000.0))
-    api_mod._on_hook_transition("s7", "working")
-    assert "s7" in api_mod._working_started
-    api_mod._on_hook_transition("s7", "dead")
-    assert "s7" not in api_mod._working_started
-
 
 def _rust_owner_world(monkeypatch):
     """Rust de pé, dono de Claude e Codex; uma sessão Claude e uma Kimi na lista. Grava o que o
@@ -975,7 +832,6 @@ def _rust_owner_world(monkeypatch):
     monkeypatch.setattr(api_mod, "_drenar", lambda name, jsonl, provider: feitos.append(("drain", name)) or 0)
     monkeypatch.setattr(api_mod, "_agendar_confirmacao", lambda name, delay: feitos.append(("confirm", name)))
     monkeypatch.setattr(api_mod, "_maybe_chain", lambda name: feitos.append(("then", name)))
-    monkeypatch.setattr(api_mod, "_push_terminou", lambda sid, started: feitos.append(("terminou", sid)))
     monkeypatch.setattr(api_mod.loop_mod, "LoopLink", lambda name: SimpleNamespace(
         get=lambda: {"status": "running"} if name == "c1" else None,
         update=lambda **kw: feitos.append(("pausa", name))))
@@ -992,9 +848,7 @@ def test_rust_owned_session_transitions_do_nothing_in_python(monkeypatch):
     feitos = _rust_owner_world(monkeypatch)
     for state in ("idle", "awaiting_input", "dead"):
         api_mod._on_hook_transition("claude-sid", state)
-    enviados = []
-    api_mod._notify_async("claude-sid", enviados.append)
-    assert feitos == [] and enviados == []
+    assert feitos == []
 
 
 def test_kimi_transitions_still_run_in_python_with_rust_up(monkeypatch):
@@ -1312,26 +1166,6 @@ def test_history_sem_transcript_medivel_nao_tem_etag(api_client, fake_session_wi
 # ---------------------------------------------------------------------------
 from types import SimpleNamespace
 from app.models import AskQuestion, AskQuestionItem, AskOption
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def test_push_mute_route(api_client, monkeypatch, tmp_path):
@@ -2101,7 +1935,6 @@ def _rodar_transicao_idle(monkeypatch, tmp_path, mtime_do_wire, marcador_ts, lim
     # _work roda numa thread; aqui executa o alvo direto pra o teste ser deterministico.
     monkeypatch.setattr(api_mod.threading, "Thread",
                         lambda target, daemon=None: SimpleNamespace(start=target))
-    monkeypatch.setattr(api_mod, "_FINISH_SETTLE", 0)
     if limpar:
         api_mod._recheca_armada.clear()
     api_mod._on_hook_transition("sid-k", "idle")
@@ -2135,88 +1968,6 @@ def test_recheca_do_kimi_e_uma_cadeia_por_sessao(monkeypatch, tmp_path):
     api_mod._armar_recheca("sid-k")
     _, _, t2 = _rodar_transicao_idle(monkeypatch, tmp_path, _AGORA + 90, _AGORA, limpar=False)
     assert not any(a[1] is api_mod._recheca_kimi for a in t2)   # nao abre a segunda corrente
-
-
-def test_push_terminou_nao_sai_no_idle_falso_do_kimi(monkeypatch, tmp_path):
-    # O push de "terminou" era o unico dos quatro que ficava fora do `_work` — avisava "terminou"
-    # com a sessao escrevendo codigo, e ainda consumia o inicio do turno, entao o fim REAL vinha sem
-    # saber ha quanto tempo ela trabalhava e o debounce de turno longo nunca mais disparava.
-    monkeypatch.setattr(api_mod.runtime_config, "get",
-                        lambda k: True if k == "notify_finished" else 1)
-    avisos = []
-    monkeypatch.setattr(api_mod, "_notify_async", lambda sid, fn: avisos.append(sid))
-    api_mod._working_started["sid-k"] = _AGORA - 300      # turno longo em andamento
-    _rodar_transicao_idle(monkeypatch, tmp_path, _AGORA + 90, _AGORA)
-    assert avisos == []                                   # nada de "terminou" no meio do turno
-    assert "sid-k" in api_mod._working_started            # o inicio do turno NAO foi consumido
-
-    # E o fim de verdade (transcript parado) avisa, com a duracao inteira preservada.
-    _rodar_transicao_idle(monkeypatch, tmp_path, _AGORA, _AGORA)
-    assert avisos == ["sid-k"]
-    assert "sid-k" not in api_mod._working_started
-
-
-def test_push_terminou_nao_consome_o_inicio_de_outro_turno(monkeypatch):
-    # Corrida real: entre o inicio do `_work` e o push rodam registry.list() e drain(), e o proprio
-    # drain pode largar um prompt novo — a sessao volta a "working" e o caminho sincrono grava o
-    # inicio do turno NOVO. Um `pop` cego levaria embora esse valor: o push deste turno sairia com
-    # duracao errada e o turno seguinte, ao acabar de verdade, acharia `started is None` e nunca
-    # avisaria.
-    monkeypatch.setattr(api_mod.runtime_config, "get",
-                        lambda k: True if k == "notify_finished" else 1)
-    from types import SimpleNamespace
-    avisos = []
-    monkeypatch.setattr(api_mod, "_notify_async", lambda sid, fn: avisos.append(sid))
-    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("idle", _AGORA))
-    # A espera de a sessão sossegar roda numa thread: aqui em linha e sem espera.
-    monkeypatch.setattr(api_mod.threading, "Thread", lambda target, daemon=None: SimpleNamespace(start=target))
-    monkeypatch.setattr(api_mod, "_FINISH_SETTLE", 0)
-    monkeypatch.setattr(api_mod.registry, "list", lambda: [])
-
-    api_mod._working_started["s9"] = _AGORA - 300          # turno NOVO ja registrado
-    api_mod._push_terminou("s9", _AGORA - 999)             # push do turno VELHO chega atrasado
-    assert avisos == []                                    # nao e dele pra consumir
-    assert api_mod._working_started["s9"] == _AGORA - 300   # o do turno novo continua intacto
-
-    api_mod._push_terminou("s9", _AGORA - 300)             # agora sim, o dono certo
-    assert avisos == ["s9"]
-    assert "s9" not in api_mod._working_started
-
-
-def test_working_started_e_protegido_dos_dois_lados(monkeypatch):
-    # O compare-and-delete de `_push_terminou` so vale se os ESCRITORES pegarem o mesmo lock: quem
-    # grava o inicio do turno roda no laco do hook_state.watch e quem consome roda numa thread de
-    # `_work`. Protegido de um lado so, o produtor passa entre o get e o del — e o turno seguinte
-    # termina com `started is None`, sem aviso nenhum e sem rastro.
-    import threading as _th
-    monkeypatch.setattr(api_mod.runtime_config, "get",
-                        lambda k: True if k == "notify_finished" else 1)
-    monkeypatch.setattr(api_mod, "_notify_async", lambda sid, fn: None)
-    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("working", _AGORA))
-
-    api_mod._working_started.clear()
-    erros = []
-
-    def escrever():           # o produtor: hook "working" chegando em rajada
-        try:
-            for i in range(300):
-                api_mod._on_hook_transition("s-lock", "working")
-        except Exception as e:      # noqa: BLE001 — o teste quer QUALQUER falha da corrida
-            erros.append(e)
-
-    def consumir():           # o consumidor: fim de turno tentando fechar a conta
-        try:
-            for i in range(300):
-                api_mod._push_terminou("s-lock", api_mod._working_started.get("s-lock"))
-        except Exception as e:      # noqa: BLE001
-            erros.append(e)
-
-    ts = [_th.Thread(target=escrever), _th.Thread(target=consumir)]
-    for t in ts:
-        t.start()
-    for t in ts:
-        t.join()
-    assert erros == []        # sem KeyError/RuntimeError de mutacao concorrente
 
 
 def test_recheca_desiste_depois_de_falhas_seguidas(monkeypatch, tmp_path):

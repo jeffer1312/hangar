@@ -1,0 +1,302 @@
+{
+  "source_commit": "9d7d1a05174abcddd1821782674e6c539c5f66ae",
+  "isolation": "AST do produtor; valores de runtime_config.get injetados; rel\u00f3gio/lista/entrega simulados, n\u00e3o prova o leitor do arquivo.",
+  "rows": [
+    {
+      "key": "notify_finished",
+      "value": null,
+      "notices": [],
+      "series": {},
+      "error": null
+    },
+    {
+      "key": "notify_finished",
+      "value": false,
+      "notices": [],
+      "series": {},
+      "error": null
+    },
+    {
+      "key": "notify_finished",
+      "value": true,
+      "notices": [
+        [
+          "fixture"
+        ]
+      ],
+      "series": {},
+      "error": null
+    },
+    {
+      "key": "notify_finished",
+      "value": 0,
+      "notices": [],
+      "series": {},
+      "error": null
+    },
+    {
+      "key": "notify_finished",
+      "value": 1,
+      "notices": [
+        [
+          "fixture"
+        ]
+      ],
+      "series": {},
+      "error": null
+    },
+    {
+      "key": "notify_finished",
+      "value": 45,
+      "notices": [
+        [
+          "fixture"
+        ]
+      ],
+      "series": {},
+      "error": null
+    },
+    {
+      "key": "notify_finished",
+      "value": 101,
+      "notices": [
+        [
+          "fixture"
+        ]
+      ],
+      "series": {},
+      "error": null
+    },
+    {
+      "key": "notify_finished",
+      "value": "",
+      "notices": [],
+      "series": {},
+      "error": null
+    },
+    {
+      "key": "notify_finished",
+      "value": "false",
+      "notices": [
+        [
+          "fixture"
+        ]
+      ],
+      "series": {},
+      "error": null
+    },
+    {
+      "key": "notify_finished",
+      "value": "45",
+      "notices": [
+        [
+          "fixture"
+        ]
+      ],
+      "series": {},
+      "error": null
+    },
+    {
+      "key": "notify_finished",
+      "value": [],
+      "notices": [],
+      "series": {},
+      "error": null
+    },
+    {
+      "key": "notify_finished",
+      "value": [
+        1
+      ],
+      "notices": [
+        [
+          "fixture"
+        ]
+      ],
+      "series": {},
+      "error": null
+    },
+    {
+      "key": "notify_finished",
+      "value": {},
+      "notices": [],
+      "series": {},
+      "error": null
+    },
+    {
+      "key": "notify_finished",
+      "value": {
+        "x": 1
+      },
+      "notices": [
+        [
+          "fixture"
+        ]
+      ],
+      "series": {},
+      "error": null
+    },
+    {
+      "key": "notify_finished",
+      "value": NaN,
+      "notices": [
+        [
+          "fixture"
+        ]
+      ],
+      "series": {},
+      "error": null
+    },
+    {
+      "key": "notify_finished",
+      "value": Infinity,
+      "notices": [
+        [
+          "fixture"
+        ]
+      ],
+      "series": {},
+      "error": null
+    },
+    {
+      "key": "finish_min_seconds",
+      "value": null,
+      "notices": [],
+      "series": {},
+      "error": "TypeError"
+    },
+    {
+      "key": "finish_min_seconds",
+      "value": false,
+      "notices": [
+        [
+          "fixture"
+        ]
+      ],
+      "series": {},
+      "error": null
+    },
+    {
+      "key": "finish_min_seconds",
+      "value": true,
+      "notices": [
+        [
+          "fixture"
+        ]
+      ],
+      "series": {},
+      "error": null
+    },
+    {
+      "key": "finish_min_seconds",
+      "value": 0,
+      "notices": [
+        [
+          "fixture"
+        ]
+      ],
+      "series": {},
+      "error": null
+    },
+    {
+      "key": "finish_min_seconds",
+      "value": 1,
+      "notices": [
+        [
+          "fixture"
+        ]
+      ],
+      "series": {},
+      "error": null
+    },
+    {
+      "key": "finish_min_seconds",
+      "value": 45,
+      "notices": [
+        [
+          "fixture"
+        ]
+      ],
+      "series": {},
+      "error": null
+    },
+    {
+      "key": "finish_min_seconds",
+      "value": 101,
+      "notices": [],
+      "series": {},
+      "error": null
+    },
+    {
+      "key": "finish_min_seconds",
+      "value": "",
+      "notices": [],
+      "series": {},
+      "error": "TypeError"
+    },
+    {
+      "key": "finish_min_seconds",
+      "value": "false",
+      "notices": [],
+      "series": {},
+      "error": "TypeError"
+    },
+    {
+      "key": "finish_min_seconds",
+      "value": "45",
+      "notices": [],
+      "series": {},
+      "error": "TypeError"
+    },
+    {
+      "key": "finish_min_seconds",
+      "value": [],
+      "notices": [],
+      "series": {},
+      "error": "TypeError"
+    },
+    {
+      "key": "finish_min_seconds",
+      "value": [
+        1
+      ],
+      "notices": [],
+      "series": {},
+      "error": "TypeError"
+    },
+    {
+      "key": "finish_min_seconds",
+      "value": {},
+      "notices": [],
+      "series": {},
+      "error": "TypeError"
+    },
+    {
+      "key": "finish_min_seconds",
+      "value": {
+        "x": 1
+      },
+      "notices": [],
+      "series": {},
+      "error": "TypeError"
+    },
+    {
+      "key": "finish_min_seconds",
+      "value": NaN,
+      "notices": [
+        [
+          "fixture"
+        ]
+      ],
+      "series": {},
+      "error": null
+    },
+    {
+      "key": "finish_min_seconds",
+      "value": Infinity,
+      "notices": [],
+      "series": {},
+      "error": null
+    }
+  ]
+}

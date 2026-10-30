@@ -1030,20 +1030,6 @@ def _rust_conduz(info) -> bool:
     return c is not None and c.mode in {"pending", "rust"} and c.rust_owns(info.provider, bool(getattr(info, "headless", False)))
 
 
-def _notify_async(session_id: str, send_fn) -> None:
-    """Resolve uuid->nome e manda o push escolhido, TUDO numa thread: registry.list() mexe no tmux
-    e o webpush e rede — nada disso pode bloquear o loop do watch."""
-    def _work() -> None:
-        try:
-            info = next(
-                (s for s in registry.list() if s.jsonl and session_key(s.jsonl) == session_id),
-                None,
-            )
-            if info and not _rust_conduz(info):
-                send_fn(info.name)
-        except Exception:
-            _log.warning("push falhou (%s)", session_id, exc_info=True)
-    threading.Thread(target=_work, daemon=True).start()
 
 
 _CONFIRM_GRACE = 8.0  # s entre o send e a checagem "o transcript gravou o prompt?"
@@ -1336,13 +1322,6 @@ def _maybe_chain(name: str) -> None:
         link.clear()  # one-shot sempre, mesmo se target/text vier malformado -> nao fica repetindo lixo
 
 
-_working_started: dict[str, float] = {}  # session_id -> ts de quando entrou em "working" (mede duracao do turno pro push de "terminou")
-# Lock PROPRIO do `_working_started`, separado do da cadeia de recheck: quem escreve ali roda no laco
-# do hook_state.watch e quem le/consome roda numa thread de `_work`. Um compare-and-delete protegido
-# so de um lado nao protege nada — o produtor concorrente passaria por cima entre o get e o del, e o
-# turno seguinte terminaria com `started is None`, sem aviso e sem rastro. Nunca aninhar com
-# `_recheca_lock`: sao independentes de proposito.
-_turno_lock = threading.Lock()
 # Sessoes com uma reavaliacao de "idle mentiroso" ja agendada. UMA cadeia por sessao: sem isto, cada
 # transicao espuria abria a sua propria corrente de Timers, e duas correntes em paralelo dobram o
 # `registry.list()` (que toca tmux) a cada 5s, sem limite e sem ninguem notar.
@@ -1372,121 +1351,7 @@ def _recheca_kimi(session_id: str, state: str) -> None:
     _on_hook_transition(session_id, state)
 
 
-def _push_terminou(session_id: str, started: Optional[float]) -> None:
-    """Push de 'terminou': avisa se o turno que comecou em `started` passou do minimo configurado.
-
-    Mora numa funcao propria porque o disparo saiu do caminho sincrono — no Kimi so o `_work` sabe
-    se o 'idle' que chegou e de verdade, e avisar 'terminou' no meio do trabalho e tao errado quanto
-    re-promptar a sessao.
-
-    `started` vem de FORA, lido no inicio do `_work`, e o consumo aqui e CONDICIONAL. Popar direto
-    seria uma corrida real: entre o inicio do `_work` e este ponto rodam `registry.list()` e
-    `drain()`, e o proprio drain pode largar um prompt novo — a sessao volta a "working" e o
-    caminho sincrono grava o inicio do turno NOVO. Um `pop` cego levaria embora esse valor: o push
-    deste turno sairia com duracao errada e o turno seguinte, ao acabar de verdade, acharia
-    `started is None` e nunca avisaria."""
-    if started is None:
-        return
-    m = hook_state.get_state(session_id)
-    idle_ts = m[1] if m and m[0] == "idle" else None
-
-    def run() -> None:
-        try:
-            _terminou_se_parou(session_id, started, idle_ts)
-        except Exception:
-            # Sem isto a thread morria calada: nem aviso nem limpeza do início da série.
-            _log.warning("terminou: falhou para %s", session_id[:8], exc_info=True)
-    threading.Thread(target=run, daemon=True).start()
-
-
-# Fim de turno não é fim de trabalho: recado na fila e agente ou shell em segundo plano acordam a
-# sessão de novo. O "terminou" espera ela sossegar e só sai com ela parada de verdade.
-_FINISH_SETTLE = 20.0
-# Parada mais longa que isto entre um turno e o próximo é trabalho novo, não continuação.
-_SERIES_GAP = 30 * 60
-_last_idle: dict[str, float] = {}
-
-
-def _resumo_resposta(texto: str | None, limite: int = 160) -> str | None:
-    """Uma linha do começo da última resposta, sem a marcação do markdown."""
-    if not texto:
-        return None
-    linha = " ".join(texto.split())
-    linha = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", linha)            # [texto](link) -> texto
-    linha = re.sub(r"[`*#>|]+|(?<!\w)_+|_+(?!\w)", "", linha).strip()  # mantém o _ dentro de nome
-    return (linha[:limite - 1].rstrip() + "…") if len(linha) > limite else (linha or None)
-
-
-def _terminou_se_parou(session_id: str, started: float, idle_ts: float | None) -> None:
-    time.sleep(_FINISH_SETTLE)
-    m = hook_state.get_state(session_id)
-    # Outro "parou" depois deste tem a sua própria espera: só ela decide.
-    if not m or m[0] != "idle" or (idle_ts is not None and m[1] != idle_ts):
-        return       # voltou a trabalhar: o início da série fica para o fim de verdade
-    with _turno_lock:
-        if _working_started.get(session_id) != started:
-            return
-    info = next((s for s in registry.list() if s.jsonl and session_key(s.jsonl) == session_id), None)
-    resposta = None
-    if info is not None and info.jsonl and getattr(info, "provider", "claude") == "claude":
-        from app import background_open
-        try:
-            fim = background_open.scan(info.jsonl)
-        except OSError as e:
-            _log.warning("terminou: não li o transcript de %s (%s); aviso sai mesmo assim", info.name, type(e).__name__)
-        else:
-            if fim.open:
-                _log.info("terminou: %s segue com %d tarefa(s) em segundo plano; aviso espera", info.name, fim.open)
-                return   # o aviso sai quando o trabalho de fundo acordar a sessão e ela parar
-            resposta = fim.last_reply
-    with _turno_lock:
-        if _working_started.get(session_id) != started:
-            return
-        del _working_started[session_id]
-    if not runtime_config.get("notify_finished") or m[1] - started < runtime_config.get("finish_min_seconds"):
-        return
-    resumo = _resumo_resposta(resposta)
-    _notify_async(session_id, (lambda name: push.notify_finished(name, resumo)) if resumo else push.notify_finished)
-
-
 def _on_hook_transition(session_id: str, state: str) -> None:
-    """hook_state -> mudanca de estado. Drain SERVER-SIDE: o gatilho antigo morava na conexao SSE de
-    cada chat — sem celular conectado, entrada deferred ficava parada indefinidamente. idle/working =
-    o pane aceita texto (Claude Code enfileira internamente); o drain re-checa deliverable sozinho.
-    Tambem agenda a confirmacao de entrega das drenadas.
-
-    Alem do drain, e o choke-point dos pushes de 'terminou' (working -> idle apos turno longo, com
-    debounce) e 'caiu' (-> dead, sempre) — ver push.py. Tambem o choke-point do encadeamento de sessao
-    (feature #12, _maybe_chain): idle == turno realmente terminado (so o hook Stop escreve idle), entao
-    e o ponto certo pra disparar o vinculo 'then' sem correr risco de pegar um redraw no meio do turno."""
-    if state == "working":
-        m = hook_state.get_state(session_id)
-        if m:
-            with _turno_lock:
-                # Só o primeiro turno da série grava: os que vêm por recado ou trabalho de fundo
-                # continuam o mesmo trabalho, e o "terminou" mede ele inteiro. Quem apaga é o fim real;
-                # se ele nunca veio, a parada longa antes deste turno abre uma série nova.
-                parou = _last_idle.get(session_id)
-                if session_id not in _working_started or (parou is not None and m[1] - parou > _SERIES_GAP):
-                    _working_started[session_id] = m[1]
-    elif state == "idle":
-        m = hook_state.get_state(session_id)
-        if m:
-            with _turno_lock:
-                _last_idle[session_id] = m[1]
-        # O push de "terminou" NAO sai daqui: ele espera o `_work` decidir se este idle e de verdade
-        # (no Kimi ele pode ser o marcador congelado do turno anterior — ver corrige_ocioso_kimi).
-        # Antes disso, avisar "terminou" no meio do trabalho era o mesmo erro das outras automacoes,
-        # com o agravante de o `pop` abaixo consumir o inicio do turno: o fim REAL viria sem saber
-        # ha quanto tempo a sessao trabalhava, e o debounce de turno longo nunca mais dispararia.
-        pass
-    elif state == "dead":
-        with _turno_lock:
-            _working_started.pop(session_id, None)
-            _last_idle.pop(session_id, None)
-        if runtime_config.get("notify_dead"):
-            _notify_async(session_id, push.notify_dead)
-
     if state == "awaiting_input":
         # Loop runner: awaiting cobre pedido de permissao tb -> pausa o loop (retoma no idle seguinte).
         def _pause_loop() -> None:
@@ -1506,30 +1371,13 @@ def _on_hook_transition(session_id: str, state: str) -> None:
                                codigo=getattr(e, "code", None) or type(e).__name__)
         threading.Thread(target=_pause_loop, daemon=True).start()
         return
-    # Inicio do turno lido AQUI, antes de qualquer subprocess: o `drain` la embaixo pode largar um
-    # prompt novo e a sessao voltar pra "working", e ai o valor no dict ja seria de OUTRO turno.
-    # Quem consome (`_push_terminou`) confere que ainda e este antes de tirar.
-    with _turno_lock:
-        inicio_do_turno = _working_started.get(session_id) if state == "idle" else None
-
     def _work() -> None:
         try:
             info = next((s for s in registry.list()
                          if s.jsonl and session_key(s.jsonl) == session_id), None)
             if info and _rust_conduz(info):
                 return
-            # Sessao nao encontrada (morreu, ou nao esta no tmux): o push de "terminou" continua
-            # saindo pelo caminho de sempre. Nao ha como desconfiar do idle sem o transcript.
-            if state == "idle" and not (info and info.jsonl):
-                _push_terminou(session_id, inicio_do_turno)
             if info and info.jsonl:
-                # Kimi: este "idle" pode ser MENTIRA. Um turno que comeca a partir de um prompt
-                # enfileirado na TUI nao dispara evento nenhum, entao o marcador fica congelado no
-                # idle do turno ANTERIOR enquanto o novo roda (ver state.corrige_ocioso_kimi). Sem
-                # esta checagem, tres automacoes disparam com a sessao trabalhando: o loop
-                # re-prompta, o `then` e CONSUMIDO (one-shot: o fim de turno real nao o dispara de
-                # novo) e o push diz "terminou". O drain segue — enfileirar texto e sempre seguro,
-                # e e o que o Claude/Kimi ja fazem sozinhos.
                 real = state
                 if state == "idle" and getattr(info, "provider", "claude") == "kimi":
                     m = hook_state.get_state(session_id)
@@ -1551,9 +1399,6 @@ def _on_hook_transition(session_id: str, state: str) -> None:
                 # reusando o info.name ja resolvido nesta thread — ver _maybe_chain.
                 if real == "idle" and not loop_active:
                     _maybe_chain(info.name)
-                if real == "idle":
-                    # so no fim de turno PROVADO (ver o elif la em cima)
-                    _push_terminou(session_id, inicio_do_turno)
                 # Idle desmentido pelo transcript: o fim de turno REAL nao vai gerar transicao
                 # nenhuma (o Stop grava idle sobre idle, e hook_state._apply so avisa quando o
                 # estado MUDA). Sem reagendar, o turno terminaria sem drenar a fila, sem ticar o

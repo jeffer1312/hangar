@@ -3,6 +3,7 @@
 //! a cada `stall_poll_seconds` ("caiu", "travada", "limite" e o auto-resume). A memória dos avisos
 //! fica em disco por sessão: reiniciar não perde um "terminou" nem repete um "travada".
 mod terminal_notices;
+mod finished;
 use super::send::{Notice, Sender};
 use crate::list::facts_files::HookStates;
 use crate::routes::AppState;
@@ -355,6 +356,14 @@ impl Watch {
 
     /// "Terminou" depois de a sessão sossegar, sem trabalho de fundo aberto e com a série longa.
     async fn finished(self: Arc<Self>, sid: String, started: f64, idle_ts: f64) {
+        let initial = match finished::FinishSources::row(self.as_ref(), &sid).await {
+            Ok(row) => row,
+            Err(code) => { finished::FinishSources::failure(self.as_ref(), &sid, &code); return; }
+        };
+        if initial.is_some_and(|row| terminal_notices::owns(&row.provider)) {
+            finished::confirm_and_finish(self.as_ref(), &sid, started, idle_ts).await;
+            return;
+        }
         tokio::time::sleep(FINISH_SETTLE).await;
         if !self.state_of(&sid).is_some_and(|m| m.state == "idle" && m.ts == idle_ts) { return; }
         let same = |me: &Self| me.memory.lock().unwrap_or_else(|e| e.into_inner()).started.get(&sid) == Some(&started);
