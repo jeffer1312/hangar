@@ -195,3 +195,11 @@ export function sweepHidden(hidden: ReadonlyMap<string, string | null>,
   }
   return kept;
 }
+
+/** Linhas visíveis e ocultas (`hidden_from_list`), cada grupo na ordem em que chegou. */
+export function splitHidden<T extends Pick<SessionInfo, 'hidden_from_list'>>(rows: readonly T[]): { shown: T[]; hidden: T[] } {
+  const shown: T[] = [];
+  const hidden: T[] = [];
+  for (const row of rows) (row.hidden_from_list ? hidden : shown).push(row);
+  return { shown, hidden };
+}

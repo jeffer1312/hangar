@@ -1048,6 +1048,87 @@ export async function dismissRenameSuggestion(server: Server, name: string): Pro
   await ensureOk(res, server);
 }
 
+const hiddenPath = (name: string) => `/api/sessions/${encodeURIComponent(name)}/hidden`;
+
+// Servidor sem as rotas de ocultar responde 404 sem código; o 404 com `erro_sessao_inexistente`
+// é a sessão que sumiu e mantém a própria frase.
+async function ensureVisibilityOk(res: Response, server: Server): Promise<void> {
+  try {
+    await ensureOk(res, server);
+  } catch (e) {
+    const { status, code } = e as { status?: number; code?: string };
+    if (status === 404 && code !== 'erro_sessao_inexistente') {
+      throw Object.assign(new Error(m.session_visibility_server_outdated()), { status: 404, code: 'session_visibility_server_outdated' });
+    }
+    throw e;
+  }
+}
+
+/** "Ocultar da lista": a marca fica no servidor da sessão e vale em todos os aparelhos. */
+export async function hideSession(server: Server, name: string): Promise<void> {
+  const res = await apiFetchRes(hiddenPath(name), { method: 'PUT', signal: AbortSignal.timeout(8000) }, server);
+  await ensureVisibilityOk(res, server);
+}
+
+/** "Mostrar na lista": tira a marca e recomeça o prazo da ocultação automática. */
+export async function showSession(server: Server, name: string): Promise<void> {
+  const res = await apiFetchRes(hiddenPath(name), { method: 'DELETE', signal: AbortSignal.timeout(8000) }, server);
+  await ensureVisibilityOk(res, server);
+}
+
+/** Ocultação automática de um servidor. */
+export interface AutoHideConfig { enabled: boolean; after_minutes: number }
+
+export async function getAutoHide(server: Server): Promise<AutoHideConfig> {
+  const res = await apiFetchRes('/api/session-auto-hide', { signal: AbortSignal.timeout(8000) }, server);
+  await ensureVisibilityOk(res, server);
+  return res.json() as Promise<AutoHideConfig>;
+}
+
+/** Grava e devolve o valor que o servidor guardou. */
+export async function saveAutoHide(server: Server, cfg: AutoHideConfig): Promise<AutoHideConfig> {
+  const res = await apiFetchRes('/api/session-auto-hide', {
+    method: 'PUT', body: JSON.stringify({ enabled: cfg.enabled, after_minutes: cfg.after_minutes }), signal: AbortSignal.timeout(8000),
+  }, server);
+  await ensureVisibilityOk(res, server);
+  return res.json() as Promise<AutoHideConfig>;
+}
+
+/** Resultado de uma máquina; `error` é a frase pronta para a tela. */
+export interface AutoHideResult { serverId: string; ok: boolean; config?: AutoHideConfig; error?: string }
+
+// Todas em paralelo: a máquina que falha não impede as outras.
+function autoHidePerServer(servers: readonly Server[], fn: (server: Server) => Promise<AutoHideConfig>): Promise<AutoHideResult[]> {
+  return Promise.all(servers.map(async (server): Promise<AutoHideResult> => {
+    try {
+      return { serverId: server.id, ok: true, config: await fn(server) };
+    } catch (e) {
+      return { serverId: server.id, ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }));
+}
+
+/** Lê a configuração de cada servidor; quem chama passa as máquinas próprias (`ownUpdatableServers`). */
+export function readAutoHideAll(servers: readonly Server[]): Promise<AutoHideResult[]> {
+  return autoHidePerServer(servers, getAutoHide);
+}
+
+/** Grava a mesma configuração em cada servidor e devolve o resultado de cada um. */
+export function saveAutoHideAll(servers: readonly Server[], cfg: AutoHideConfig): Promise<AutoHideResult[]> {
+  return autoHidePerServer(servers, (server) => saveAutoHide(server, cfg));
+}
+
+/** Servidores fora da configuração mais comum entre as respostas boas (empate: a que veio primeiro),
+ *  mais os que falharam. Sem nenhuma resposta boa, todos. */
+export function autoHideDiverges(results: readonly AutoHideResult[]): string[] {
+  const keyOf = (c: AutoHideConfig) => `${c.enabled}:${c.after_minutes}`;
+  const counts = new Map<string, number>();
+  for (const r of results) if (r.ok && r.config) counts.set(keyOf(r.config), (counts.get(keyOf(r.config)) ?? 0) + 1);
+  let majority: string | null = null;
+  for (const [key, n] of counts) if (majority === null || n > counts.get(majority)!) majority = key;
+  return results.filter((r) => !r.ok || !r.config || keyOf(r.config) !== majority).map((r) => r.serverId);
+}
+
 // Abrir ou retomar sessão leva bem mais que o prazo padrão: estourar antes faz a tela acusar erro
 // com a sessão nascendo e o reenvio duplicá-la.
 const SESSION_BIRTH_MS = 120_000;
