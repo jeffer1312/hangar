@@ -806,11 +806,10 @@ impl Tools {
         };
         if !exec::ref_ok(&a.target) { return Err("erro_cofre_argumento_invalido: `ref` é a ref @eN de um snapshot".into()); }
         let (name, key) = self.vault_caller(headers).await?;
-        if password { self.vault_agent(&name).await?; }
         let owner = exec::Owner::of(&self.st)?;
         let home = self.home();
-        let host = self.fill_host(&home, &name).await?;
-        let entries = owner.entries().await?;
+        let long_enough = async { if password { self.vault_agent(&name).await.map(drop) } else { Ok(()) } };
+        let ((), host, entries) = tokio::try_join!(long_enough, self.fill_host(&home, &name), owner.entries())?;
         let entry = entries.iter().find(|e| crate::vault::same_name(&e.name, &a.entry)).ok_or_else(|| exec::vault_text(VaultError::UnknownEntry))?;
         if let Some(url) = entry.url.as_deref().filter(|u| !u.trim().is_empty()) && !exec::same_site(url, &host) {
             return Err(format!("erro_cofre_dominio_diferente: a página é de {host} e a senha é de {url}"));

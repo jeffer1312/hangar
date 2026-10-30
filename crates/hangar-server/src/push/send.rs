@@ -85,13 +85,10 @@ impl Outgoing {
     }
 
     /// Pedido do cofre: título fixo e `url` `/` (o Expo abre a lista, onde o cartão está).
-    pub fn vault_request(session: &str, notice: Notice) -> Self {
-        let vault = match &notice {
-            Notice::VaultRequest { server_id, request_id, .. } => Some((server_id.clone(), request_id.clone())),
-            _ => None,
-        };
+    pub fn vault_request(session: &str, server_id: String, request_id: String, origin: String, label: String) -> Self {
+        let notice = Notice::VaultRequest { server_id: server_id.clone(), request_id: request_id.clone(), origin, label };
         Self { session: session.to_owned(), body: Box::new(move |l| notice.body(l)), title: Some(Box::new(|l| msg(l, "cofre").to_owned())),
-            tag: None, url: Some("/".to_owned()), vault }
+            tag: None, url: Some("/".to_owned()), vault: Some((server_id, request_id)) }
     }
 
     /// Várias sessões no mesmo ciclo: "N sessões aguardando: a, b", abre a lista.
@@ -186,9 +183,9 @@ impl Sender {
         });
     }
 
-    /// Pedido do cofre: só mudo (pela sessão que pediu) e horário de silêncio seguram. Não depende de
+    /// Pedido do cofre: só o horário de silêncio segura; o mudo da sessão que pediu, não. Não depende de
     /// app aberto nem do dono no PC: o agente fica parado esperando a resposta.
-    pub fn vault_request(self: &Arc<Self>, session: &str, notice: Notice) {
+    pub fn vault_request(self: &Arc<Self>, session: &str, server_id: String, request_id: String, origin: String, label: String) {
         if test_binary() { return; }
         let (me, session) = (self.clone(), session.to_owned());
         tokio::spawn(async move {
@@ -197,9 +194,8 @@ impl Sender {
                 tracing::warn!(code = "push_gate_read_failed", "aviso do cofre: preferências não leram; aviso segurado");
                 return;
             };
-            // O mudo da sessão que pede não cala o cofre: quem decide se avisa é o dono, não ela.
             if store::in_quiet_hours(&prefs, chrono::Local::now().time()) { return; }
-            me.broadcast(Outgoing::vault_request(&session, notice)).await
+            me.broadcast(Outgoing::vault_request(&session, server_id, request_id, origin, label)).await
         });
     }
 

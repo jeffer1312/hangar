@@ -21,7 +21,7 @@ pub const LONG_POLL_TIMEOUT: Duration = Duration::from_secs(30);
 /// Corpo com senha sem `Content-Length`: cobre a maior senha do cofre (16 KiB) com todo byte
 /// escapado no JSON, para o vetor não crescer.
 const SECRET_RESERVE: usize = 128 * 1024;
-const MAX_BODY: usize = 1 << 20;
+pub(crate) const MAX_BODY: usize = 1 << 20;
 /// Texto do erro de sucesso acima de `MAX_BODY`; quem lê pode pedir menos.
 pub const TOO_LARGE: &str = "resposta maior que 1 MiB";
 
@@ -125,7 +125,7 @@ pub struct PeerClient {
     book: Arc<PeerBook>,
     http: OnceLock<reqwest::Client>,
     waiting: OnceLock<reqwest::Client>,
-    /// `call_secret` e `call_long`: sem redirect.
+    /// `send_secret` (curto e longo): sem redirect.
     secret: OnceLock<reqwest::Client>,
     long: OnceLock<reqwest::Client>,
 }
@@ -186,27 +186,10 @@ impl PeerClient {
         request(http, server, &format!("{}{path}", cfg.base_url), Some(&cfg.token), method, body).await
     }
 
-    /// Como `call`, com o corpo 2xx cru em `Zeroizing`: a resposta pode levar senha e nunca vira
-    /// `Value`, que não zera. Recusa (fora de 2xx) volta como no `call`.
-    pub async fn call_secret(&self, server: &str, method: reqwest::Method, path: &str, body: Option<&Value>)
-        -> Result<(u16, Zeroizing<Vec<u8>>), PeerError> {
-        self.send_secret(false, server, method, path, json_body(body), MAX_BODY).await
-    }
-
-    /// `call_secret` da consulta longa do cofre: sem o `READ_TIMEOUT` de 8 s; leitura e total de
-    /// `LONG_POLL_TIMEOUT`.
-    pub async fn call_long(&self, server: &str, method: reqwest::Method, path: &str, body: Option<&Value>)
-        -> Result<(u16, Zeroizing<Vec<u8>>), PeerError> {
-        self.send_secret(true, server, method, path, json_body(body), MAX_BODY).await
-    }
-
-    /// `call_secret` com corpo opaco nos dois sentidos e resposta até `limit` (a cópia do cofre).
-    pub async fn call_bytes(&self, server: &str, method: reqwest::Method, path: &str, body: Option<Vec<u8>>, limit: usize)
-        -> Result<(u16, Zeroizing<Vec<u8>>), PeerError> {
-        self.send_secret(false, server, method, path, body.map(|b| (b, "application/octet-stream")), limit).await
-    }
-
-    async fn send_secret(&self, long: bool, server: &str, method: reqwest::Method, path: &str, body: Option<(Vec<u8>, &'static str)>,
+    /// Como `call`, sem redirect e com o corpo 2xx cru em `Zeroizing` até `limit`: a resposta pode levar
+    /// senha e nunca vira `Value`, que não zera. Recusa (fora de 2xx) volta como no `call`. `long`: a
+    /// consulta longa do cofre, sem o `READ_TIMEOUT` de 8 s, leitura e total de `LONG_POLL_TIMEOUT`.
+    pub(crate) async fn send_secret(&self, long: bool, server: &str, method: reqwest::Method, path: &str, body: Option<(Vec<u8>, &'static str)>,
                          limit: usize) -> Result<(u16, Zeroizing<Vec<u8>>), PeerError> {
         let book = self.book.clone();
         let key = server.to_owned();
@@ -288,7 +271,7 @@ impl PeerClient {
     }
 }
 
-fn json_body(body: Option<&Value>) -> Option<(Vec<u8>, &'static str)> { body.map(|b| (b.to_string().into_bytes(), "application/json")) }
+pub(crate) fn json_body(body: Option<&Value>) -> Option<(Vec<u8>, &'static str)> { body.map(|b| (b.to_string().into_bytes(), "application/json")) }
 
 /// O cliente com os prazos do `peers.call`: 8 s por leitura e 16 s no total.
 pub(crate) fn client(builder: reqwest::ClientBuilder) -> reqwest::Result<reqwest::Client> {

@@ -25,7 +25,8 @@ fn private_file(path: &Path) -> io::Result<std::fs::File> {
     options.open(path)
 }
 
-fn private_dir(dir: &Path) -> io::Result<()> {
+/// Cria a pasta e a deixa 0700 (só o dono), também quando ela já existia.
+pub(super) fn private_dir(dir: &Path) -> io::Result<()> {
     std::fs::create_dir_all(dir)?;
     #[cfg(unix)]
     std::fs::set_permissions(dir, std::os::unix::fs::PermissionsExt::from_mode(0o700))?;

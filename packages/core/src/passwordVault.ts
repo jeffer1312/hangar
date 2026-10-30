@@ -19,6 +19,24 @@ export interface VaultStatus {
   backup?: VaultBackupStatus;
   /** Id da máquina que respondeu, quando ela fala do próprio cofre. */
   server_id?: string;
+  /** `role: "remote"`: o endereço da dona no `peers.json` desta máquina (ver `findOwnerServer`). */
+  owner_url?: string;
+}
+
+/** Host, porta e caminho, sem barra final e sem caixa: o mesmo endereço escrito de dois jeitos casa. */
+function hostKey(url: string): string {
+  try {
+    const u = new URL(url.trim());
+    return `${u.host}${u.pathname.replace(/\/+$/, '')}`.toLowerCase();
+  } catch { return url.trim().replace(/\/+$/, '').toLowerCase(); }
+}
+
+/** O servidor salvo neste aparelho que é a dona em `ownerUrl` (pelo endereço principal, da rede
+ *  local ou do Tailscale); `null` se nenhum. Convite e servidor desligado não contam. */
+export function findOwnerServer(ownerUrl: string, servers: Server[]): Server | null {
+  const want = hostKey(ownerUrl);
+  return servers.find((s) => !s.invite && !s.disabled
+    && [s.baseUrl, s.lan?.url, s.remote?.url].some((u) => !!u && hostKey(u) === want)) ?? null;
 }
 
 /** `owner`: id do servidor dono ou `"self"`; `null` apaga o campo. */
@@ -87,15 +105,9 @@ export type VaultErrorCode =
   | 'erro_cofre_trancado'
   | 'erro_cofre_chave_perdida'
   | 'erro_cofre_dona_fora'
-  | 'erro_cofre_negado'
-  | 'erro_cofre_sem_resposta'
   | 'erro_cofre_entrada_desconhecida'
   | 'erro_cofre_sem_chaveiro'
-  | 'erro_cofre_sessao_sem_prazo'
   | 'erro_cofre_pedido_perdido'
-  | 'erro_cofre_dominio_diferente'
-  | 'erro_cofre_campo_nao_senha'
-  | 'erro_cofre_sem_navegador'
   | 'erro_cofre_nome_repetido'
   | 'erro_cofre_ausente'
   | 'erro_cofre_ilegivel'
@@ -166,10 +178,6 @@ export function revealVaultPassword(s: Server, id: string): Promise<{ password: 
 /** Responde o cartão na máquina dona (`s` é a dona, nunca a que pediu). */
 export function answerVaultRequest(s: Server, id: string, answer: VaultAnswer): Promise<void> {
   return vaultFetchForServer(s, requestPath(id), { method: 'POST', body: JSON.stringify(answer) }, KEYRING_MS);
-}
-
-export function cancelVaultRequest(s: Server, id: string): Promise<void> {
-  return vaultFetchForServer(s, requestPath(id), { method: 'DELETE' });
 }
 
 /** Define a senha de recuperação da cópia na VPS; responde o estado, com `backup`. */

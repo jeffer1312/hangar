@@ -69,20 +69,10 @@ async fn body<T: DeserializeOwned>(req: Request) -> Option<T> {
 }
 
 fn failure(st: &AppState, error: VaultError) -> Response {
-    let (status, code, msg) = match error {
-        VaultError::Key(KeyError::Locked) => (StatusCode::CONFLICT, "erro_cofre_trancado", "o chaveiro está trancado"),
-        VaultError::Key(KeyError::Lost | KeyError::Absent) =>
-            (StatusCode::CONFLICT, "erro_cofre_chave_perdida", "o cofre existe e a chave dele sumiu do chaveiro"),
-        VaultError::Key(KeyError::Unsupported) =>
-            (StatusCode::NOT_IMPLEMENTED, "erro_cofre_sem_chaveiro", "esta máquina não tem chaveiro do sistema para o cofre"),
-        VaultError::Key(KeyError::Bus) => (StatusCode::SERVICE_UNAVAILABLE, "erro_cofre_chaveiro_indisponivel", "o chaveiro não respondeu"),
-        VaultError::Absent => (StatusCode::CONFLICT, "erro_cofre_ausente", "esta máquina não tem cofre"),
-        VaultError::Unreadable => (StatusCode::INTERNAL_SERVER_ERROR, "erro_cofre_ilegivel", "o arquivo do cofre não abriu com a chave do chaveiro"),
-        VaultError::Io => (StatusCode::SERVICE_UNAVAILABLE, "erro_cofre_indisponivel", "não foi possível ler ou gravar o cofre"),
-        VaultError::UnknownEntry => (StatusCode::NOT_FOUND, "erro_cofre_entrada_desconhecida", "senha não encontrada no cofre"),
-        VaultError::DuplicateName => (StatusCode::CONFLICT, "erro_cofre_nome_repetido", "já existe uma senha com esse nome"),
-        VaultError::Invalid => return invalid(),
-    };
+    // Corpo fora de forma nas rotas é o código fixo, sem dizer qual campo.
+    if error == VaultError::Invalid { return invalid(); }
+    let (status, code, msg) = error.code_msg();
+    let status = StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     if matches!(error, VaultError::Key(KeyError::Bus) | VaultError::Unreadable | VaultError::Io) {
         st.diag.report("rust.vault_failed", "", code, "o cofre não abriu ou não gravou");
     }
@@ -149,11 +139,13 @@ async fn status_body(st: &AppState, local: bool) -> Response {
         Ok(_) => return mine(here),
         Err(error) => return config_failure(st, error),
     };
-    let body = match (Remote { peers: &st.peers, owner: &owner_id }).status().await {
+    let mut body = match (Remote { peers: &st.peers, owner: &owner_id }).status().await {
         Ok(Status { role: Role::Owner, state }) => json!({"role": "remote", "owner": owner_id, "state": state}),
         Ok(_) => json!({"role": "remote", "owner": owner_id, "state": "absent", "detail": format!("{owner_id} não guarda cofre")}),
         Err(error) => json!({"role": "remote", "owner": owner_id, "state": "offline", "detail": error.reason()}),
     };
+    // O cliente acha entre os servidores dele qual é a dona, para abrir o cofre lá.
+    if let Some(url) = st.peers.base_url(&owner_id) { body["owner_url"] = json!(url); }
     ok(body)
 }
 
@@ -219,7 +211,11 @@ pub async fn config(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
             Some(None) => cfg.backup_peer = None,
             None => {}
         }
-        if before.as_ref() != Some(&cfg) && let Err(error) = config::save(&st.hangar_dir, &cfg) { break 'r config_failure(&st, error); }
+        if before.as_ref() != Some(&cfg) {
+            let dir = st.hangar_dir.clone();
+            let saved = tokio::task::spawn_blocking(move || config::save(&dir, &cfg)).await.unwrap_or(Err(ConfigError::Io));
+            if let Err(error) = saved { break 'r config_failure(&st, error); }
+        }
         drop(config_guard);
         status_body(&st, false).await
     };

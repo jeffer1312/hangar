@@ -112,8 +112,8 @@ impl Remote<'_> {
     }
 
     async fn secret<T: DeserializeOwned>(&self, long: bool, method: Method, path: &str, body: Option<&Value>) -> Result<T, RemoteError> {
-        let sent = if long { self.peers.call_long(self.owner, method, path, body).await }
-            else { self.peers.call_secret(self.owner, method, path, body).await };
+        let sent = self.peers.send_secret(long, self.owner, method, path, crate::groups::peers::json_body(body),
+            crate::groups::peers::MAX_BODY).await;
         let (_, raw) = sent.map_err(|e| self.fail(e))?;
         // O erro do serde pode citar o trecho lido: fica de fora.
         serde_json::from_slice(&raw).map_err(|_| self.unreadable())

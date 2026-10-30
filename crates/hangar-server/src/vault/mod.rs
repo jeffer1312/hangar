@@ -56,6 +56,24 @@ pub enum VaultError {
     Invalid,
 }
 
+impl VaultError {
+    /// `(status HTTP, código, frase)`: a rota, a tool e a cópia diária dizem o mesmo.
+    pub fn code_msg(self) -> (u16, &'static str, &'static str) {
+        match self {
+            Self::Key(KeyError::Locked) => (409, "erro_cofre_trancado", "o chaveiro está trancado"),
+            Self::Key(KeyError::Lost | KeyError::Absent) => (409, "erro_cofre_chave_perdida", "o cofre existe e a chave dele sumiu do chaveiro"),
+            Self::Key(KeyError::Unsupported) => (501, "erro_cofre_sem_chaveiro", "esta máquina não tem chaveiro do sistema para o cofre"),
+            Self::Key(KeyError::Bus) => (503, "erro_cofre_chaveiro_indisponivel", "o chaveiro não respondeu"),
+            Self::Absent => (409, "erro_cofre_ausente", "esta máquina não tem cofre"),
+            Self::Unreadable => (500, "erro_cofre_ilegivel", "o arquivo do cofre não abriu com a chave do chaveiro"),
+            Self::Io => (503, "erro_cofre_indisponivel", "não foi possível ler ou gravar o cofre"),
+            Self::UnknownEntry => (404, "erro_cofre_entrada_desconhecida", "senha não encontrada no cofre"),
+            Self::DuplicateName => (409, "erro_cofre_nome_repetido", "já existe uma senha com esse nome"),
+            Self::Invalid => (422, "erro_cofre_argumento_invalido", "nome, motivo ou alvo vazio ou longo demais"),
+        }
+    }
+}
+
 impl From<store::StoreError> for VaultError {
     fn from(error: store::StoreError) -> Self {
         match error {
@@ -133,9 +151,7 @@ fn secret_ok(password: &str) -> bool { !password.is_empty() && password.len() <=
 
 pub(crate) fn same_name(a: &str, b: &str) -> bool { a.trim().to_lowercase() == b.trim().to_lowercase() }
 
-fn now() -> f64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or_default()
-}
+use crate::accounts::quotas::now;
 
 fn new_id() -> Result<String, VaultError> {
     let mut raw = [0u8; 16];

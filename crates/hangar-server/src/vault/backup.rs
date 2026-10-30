@@ -121,21 +121,11 @@ pub fn prune(names: &[String]) -> Vec<String> {
     names[..cut].iter().enumerate().filter(|(i, _)| Some(*i) != newest_full).map(|(_, n)| n.clone()).collect()
 }
 
-#[cfg(unix)]
-fn private_dir(dir: &Path) -> io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
-}
-
-#[cfg(not(unix))]
-fn private_dir(_dir: &Path) -> io::Result<()> { Ok(()) }
-
 /// `PUT /api/vault/backup/{server_id}`: grava a cópia (0600, pasta 0700) e poda as velhas.
 pub fn keep_copy(hangar_dir: &Path, server_id: &str, bytes: &[u8], entries: u64) -> io::Result<String> {
     let dir = copies_dir(hangar_dir, server_id);
-    std::fs::create_dir_all(&dir)?;
-    private_dir(&copies_root(hangar_dir))?;
-    private_dir(&dir)?;
+    super::files::private_dir(&copies_root(hangar_dir))?;
+    super::files::private_dir(&dir)?;
     let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%.6fZ");
     let name = format!("{stamp}{}", if entries == 0 { EMPTY_SUFFIX } else { COPY_SUFFIX });
     crate::runtime::queue::atomic_write(&dir.join(&name), bytes)?;
@@ -197,25 +187,16 @@ pub fn status(hangar_dir: &Path, peer: &str) -> Value {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Sent { Skipped(&'static str), Sent, Failed(String) }
 
-fn key_text(error: KeyError) -> &'static str {
-    match error {
-        KeyError::Locked => "o chaveiro está trancado",
-        KeyError::Absent | KeyError::Lost => "a chave do cofre sumiu do chaveiro",
-        KeyError::Bus => "o chaveiro não respondeu",
-        KeyError::Unsupported => "esta máquina não tem chaveiro do sistema",
-    }
+fn vault_text(error: VaultError) -> &'static str { error.code_msg().2 }
+
+/// O desfecho da rodada no `backup-state.json`, fora do executor.
+async fn record(hangar_dir: &Path, peer: &str, result: Result<u64, String>) -> Sent {
+    let (dir, peer) = (hangar_dir.to_owned(), peer.to_owned());
+    tokio::task::spawn_blocking(move || record_now(&dir, &peer, result)).await
+        .unwrap_or_else(|_| Sent::Failed("a gravação do backup-state.json foi interrompida".into()))
 }
 
-fn vault_text(error: VaultError) -> &'static str {
-    match error {
-        VaultError::Key(error) => key_text(error),
-        VaultError::Absent => "esta máquina não tem cofre",
-        VaultError::Unreadable => "o arquivo do cofre não abriu com a chave do chaveiro",
-        _ => "não foi possível ler o cofre",
-    }
-}
-
-fn record(hangar_dir: &Path, peer: &str, result: Result<u64, String>) -> Sent {
+fn record_now(hangar_dir: &Path, peer: &str, result: Result<u64, String>) -> Sent {
     let mut state = load_state(hangar_dir);
     if state.peer.as_deref() != Some(peer) { state = SendState { peer: Some(peer.to_owned()), ..SendState::default() }; }
     let sent = match result {
@@ -245,30 +226,32 @@ pub async fn send_once(vault: &Vault, peers: &PeerClient, hangar_dir: &Path, ser
         Err(_) => return Sent::Failed("o vault.json desta máquina não lê".into()),
     };
     if !config::valid_server_id(server_id) {
-        return record(hangar_dir, &peer, Err("esta máquina não tem CP_SERVER_ID válido para nomear a cópia".into()));
+        return record(hangar_dir, &peer, Err("esta máquina não tem CP_SERVER_ID válido para nomear a cópia".into())).await;
     }
-    let recovery = match vault.keys.read_recovery().await {
-        Ok(Some(item)) => match Recovery::from_item(&item) {
-            Some(recovery) => recovery,
-            None => return record(hangar_dir, &peer, Err("o item da senha de recuperação no chaveiro está torto: defina de novo".into())),
-        },
-        Ok(None) => return Sent::Skipped("sem senha de recuperação"),
-        Err(error) => return record(hangar_dir, &peer, Err(key_text(error).into())),
-    };
     let doc = match vault.read(hangar_dir, Ok).await {
         Ok(doc) => doc,
-        Err(error) => return record(hangar_dir, &peer, Err(vault_text(error).into())),
+        Err(error) => return record(hangar_dir, &peer, Err(vault_text(error).into())).await,
     };
     let state = load_state(hangar_dir);
     if state.peer.as_deref() == Some(peer.as_str()) && state.revision == Some(doc.revision) { return Sent::Skipped("sem mudança"); }
+    // Só com cópia a mandar o item da recuperação sai do chaveiro.
+    let recovery = match vault.keys.read_recovery().await {
+        Ok(Some(item)) => match Recovery::from_item(&item) {
+            Some(recovery) => recovery,
+            None => return record(hangar_dir, &peer, Err("o item da senha de recuperação no chaveiro está torto: defina de novo".into())).await,
+        },
+        Ok(None) => return Sent::Skipped("sem senha de recuperação"),
+        Err(error) => return record(hangar_dir, &peer, Err(vault_text(VaultError::Key(error)).into())).await,
+    };
     let (revision, entries) = (doc.revision, doc.entries.len());
     let sealed = match tokio::task::spawn_blocking(move || seal_copy(&recovery, &doc)).await {
         Ok(Ok(sealed)) => sealed,
-        _ => return record(hangar_dir, &peer, Err("a cópia não cifrou".into())),
+        _ => return record(hangar_dir, &peer, Err("a cópia não cifrou".into())).await,
     };
-    if sealed.len() > MAX_COPY { return record(hangar_dir, &peer, Err("o cofre cifrado passa de 4 MiB".into())); }
+    if sealed.len() > MAX_COPY { return record(hangar_dir, &peer, Err("o cofre cifrado passa de 4 MiB".into())).await; }
     let path = format!("/api/vault/backup/{server_id}?entries={entries}");
-    let result = match peers.call_bytes(&peer, reqwest::Method::PUT, &path, Some(sealed), 64 * 1024).await {
+    let body = Some((sealed, "application/octet-stream"));
+    let result = match peers.send_secret(false, &peer, reqwest::Method::PUT, &path, body, 64 * 1024).await {
         Ok((_, raw)) => {
             let reported = serde_json::from_slice::<Value>(&raw).ok()
                 .and_then(|v| v.get("server_id").and_then(Value::as_str).map(str::to_owned));
@@ -280,7 +263,7 @@ pub async fn send_once(vault: &Vault, peers: &PeerClient, hangar_dir: &Path, ser
         }
         Err(error) => Err(error.text(&peer)),
     };
-    record(hangar_dir, &peer, result)
+    record(hangar_dir, &peer, result).await
 }
 
 /// Rodada do laço e da senha nova: uma por vez.
@@ -312,9 +295,12 @@ pub async fn set_recovery(vault: &Vault, hangar_dir: &Path, password: Zeroizing<
     let recovery = tokio::task::spawn_blocking(move || Recovery::new(&password)).await.map_err(|_| VaultError::Io)??;
     vault.keys.write_recovery(recovery.to_item()).await.map_err(VaultError::Key)?;
     // A cópia que está lá abre com a senha velha: esquecer a revisão aceita força a próxima.
-    let mut state = load_state(hangar_dir);
-    if state.revision.take().is_some() { save_state(hangar_dir, &state).map_err(|_| VaultError::Io)?; }
-    Ok(())
+    let dir = hangar_dir.to_owned();
+    tokio::task::spawn_blocking(move || {
+        let mut state = load_state(&dir);
+        if state.revision.take().is_some() { save_state(&dir, &state).map_err(|_| VaultError::Io)?; }
+        Ok(())
+    }).await.map_err(|_| VaultError::Io)?
 }
 
 // --- Restauração -----------------------------------------------------------------------------
@@ -393,7 +379,7 @@ pub async fn restore(vault: &Vault, peers: &PeerClient, hangar_dir: &Path, from_
         Ok(_) => {}
     }
     if !vault.restorable(hangar_dir).await.map_err(RestoreError::Vault)? { return Err(RestoreError::NotEmpty); }
-    let raw = match peers.call_bytes(from_peer, reqwest::Method::GET, &format!("/api/vault/backup/{server_id}"), None, MAX_COPY).await {
+    let raw = match peers.send_secret(false, from_peer, reqwest::Method::GET, &format!("/api/vault/backup/{server_id}"), None, MAX_COPY).await {
         Ok((_, raw)) => raw,
         Err(PeerError::Refused { status: 404, detail }) if detail.get("code").and_then(Value::as_str) == Some("erro_cofre_backup_ausente") =>
             return Err(RestoreError::NoCopy),

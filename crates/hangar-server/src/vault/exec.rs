@@ -8,7 +8,7 @@ use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use tokio::{io::AsyncReadExt, time::Instant};
 use zeroize::Zeroizing;
 
-use super::{Summary, VaultError, KeyError, config::{self, Placement},
+use super::{Summary, VaultError, config::{self, Placement},
     remote::{Remote, RemoteError, UseStart, WaitStatus}, requests::{self, RequestError}, wire::{AskReq, UseReq, WAIT_HOLD}};
 use crate::{groups::peers::PeerClient, routes::AppState};
 
@@ -44,18 +44,7 @@ pub enum WaitFail { Retry(String), Stop(String) }
 fn remote_text(error: &RemoteError) -> String { format!("{}: {}", error.code(), error.reason()) }
 
 pub fn vault_text(error: VaultError) -> String {
-    let (code, msg) = match error {
-        VaultError::Key(KeyError::Locked) => ("erro_cofre_trancado", "o chaveiro da dona está trancado"),
-        VaultError::Key(KeyError::Lost | KeyError::Absent) => ("erro_cofre_chave_perdida", "o cofre existe e a chave dele sumiu do chaveiro"),
-        VaultError::Key(KeyError::Unsupported) => ("erro_cofre_sem_chaveiro", "esta máquina não tem chaveiro do sistema para o cofre"),
-        VaultError::Key(KeyError::Bus) => ("erro_cofre_chaveiro_indisponivel", "o chaveiro não respondeu"),
-        VaultError::Absent => ("erro_cofre_ausente", "esta máquina não tem cofre"),
-        VaultError::Unreadable => ("erro_cofre_ilegivel", "o arquivo do cofre não abriu com a chave do chaveiro"),
-        VaultError::Io => ("erro_cofre_indisponivel", "não foi possível ler ou gravar o cofre"),
-        VaultError::UnknownEntry => ("erro_cofre_entrada_desconhecida", "senha não encontrada no cofre (veja vault_list)"),
-        VaultError::DuplicateName => ("erro_cofre_nome_repetido", "já existe uma senha com esse nome"),
-        VaultError::Invalid => ("erro_cofre_argumento_invalido", "nome, motivo ou alvo vazio ou longo demais"),
-    };
+    let (_, code, msg) = error.code_msg();
     format!("{code}: {msg}")
 }
 
@@ -322,7 +311,16 @@ fn base64_core(engine: &impl Engine, value: &[u8], skip: usize) -> Option<String
 
 /// O valor trocado por `••••` em texto, base64 (padrão e de URL, com e sem `=`, também no meio de
 /// outro conteúdo), percent-encoded (maiúsculo e minúsculo, de URL e de formulário) e escapado em JSON.
-pub fn mask(text: &str, value: &str) -> Zeroizing<String> {
+pub fn mask(text: &str, value: &str) -> Zeroizing<String> { mask_with(text, &forms(value)) }
+
+fn mask_with(text: &str, forms: &[Zeroizing<String>]) -> Zeroizing<String> {
+    let mut out = Zeroizing::new(text.to_owned());
+    for form in forms { out = Zeroizing::new(out.replace(form.as_str(), MASK)); }
+    out
+}
+
+/// As formas do valor que a saída pode trazer, a mais longa antes.
+fn forms(value: &str) -> Vec<Zeroizing<String>> {
     use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD};
     let mut forms: Vec<Zeroizing<String>> = vec![Zeroizing::new(value.to_owned())];
     for engine in [STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD] { forms.push(Zeroizing::new(engine.encode(value))); }
@@ -342,9 +340,20 @@ pub fn mask(text: &str, value: &str) -> Zeroizing<String> {
     // O mais longo antes: o base64 sem `=` é prefixo do com `=`.
     forms.sort_by_key(|f| std::cmp::Reverse(f.len()));
     forms.dedup();
-    let mut out = Zeroizing::new(text.to_owned());
-    for form in &forms { out = Zeroizing::new(out.replace(form.as_str(), MASK)); }
-    out
+    forms
+}
+
+/// A cauda mascarada sem mascarar a saída inteira: corta antes com folga da forma mais longa e, depois
+/// da máscara, tira a folga, onde pode ter ficado o fim de uma forma partida no corte.
+fn masked_tail(text: &str, value: &str) -> String {
+    let forms = forms(value);
+    // Em bytes: nenhuma forma tem mais caracteres que isso.
+    let slack = forms.first().map_or(0, |f| f.len());
+    let count = text.chars().count();
+    if count <= TAIL_CHARS + slack { return tail(&mask_with(text, &forms)); }
+    let cut = Zeroizing::new(text.chars().skip(count - TAIL_CHARS - slack).collect::<String>());
+    let masked = mask_with(&cut, &forms);
+    tail(&masked.chars().skip(slack).collect::<String>())
 }
 
 /// O host de um endereço (com ou sem esquema), em minúsculas, sem usuário, porta nem ponto final.
@@ -467,8 +476,7 @@ pub async fn run(command: &str, cwd: &Path, base_env: Env, name: &str, value: &Z
         }
         Ok(Ok((status, o, e))) => {
             let text = Zeroizing::new(format!("{}\n{}", String::from_utf8_lossy(&o), String::from_utf8_lossy(&e)));
-            let masked = mask(text.trim(), value);
-            (exit_code(status), tail(&masked))
+            (exit_code(status), masked_tail(text.trim(), value))
         }
         Ok(Err(e)) => (-1, format!("a saída do comando não leu: {e}")),
     }

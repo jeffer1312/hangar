@@ -447,7 +447,6 @@ fn announce(st: &Arc<AppState>, session: &str, card: &Card) {
     // Teste nunca manda aviso real ao celular do dono.
     if cfg!(test) { return; }
     let label = card.entry_name.clone().or_else(|| card.label.clone()).unwrap_or_default();
-    let notice = crate::push::send::Notice::VaultRequest { server_id: st.server_id.clone(), request_id: card.id.clone(),
-        origin: card.origin.clone(), label };
-    crate::push::send::Sender::new(st.clone(), crate::push::server_env()).vault_request(session, notice);
+    crate::push::send::Sender::new(st.clone(), crate::push::server_env())
+        .vault_request(session, st.server_id.clone(), card.id.clone(), card.origin.clone(), label);
 }
