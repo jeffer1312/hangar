@@ -114,6 +114,8 @@ async fn run(case: &Case, python: std::net::SocketAddr) -> (Answer, Answer) {
             log_path: None,
             trusted: TrustedHosts::parse("127.0.0.1"),
         });
+        // Sem isto, a limpeza de worktrees do servidor lê as configurações do HOME real.
+        state.origins_home = home.clone();
         state.accounts = hangar_server::accounts::AccountService::new(
             hangar_server::accounts::environment::AccountEnvironment::from_map([
                 ("HOME".into(), home_text.clone()),
