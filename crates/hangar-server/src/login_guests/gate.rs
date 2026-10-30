@@ -182,6 +182,14 @@ pub async fn guard(
     if let Some(response) = crate::share::gate::preflight(&request) {
         return response;
     }
+    // O navegador já recusa login em seu porteiro nativo; sondar dono aqui alteraria
+    // a precedência de credenciais e zeraria o contador próprio do WebSocket.
+    let browser_ws = crate::share::gate::is_websocket(&request)
+        && path.strip_prefix("/api/sessions/").and_then(|tail| tail.split_once('/'))
+            .is_some_and(|(name, rest)| !name.is_empty() && rest == "nav-remoto");
+    if crate::remote_browser::url::matches(request.method(), &path) || browser_ws {
+        return next.run(request).await;
+    }
     let (forward, owner) = match crate::routes::gate(&st, peer, &request).await { Ok(value)=>value, Err(error)=>return crate::auth::unavailable(error) };
     if owner {
         return next.run(request).await;

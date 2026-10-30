@@ -97,6 +97,11 @@ pub fn area_of(path: &str) -> usize {
 /// O Rust atende este pedido do dono sem repassar? Mesma decisão do `routes::router`: as rotas
 /// GET registradas lá, mais os `matches` de Git/arquivos e de worktrees que o `pass_any` consulta.
 pub fn rust_route(method: &Method, path: &str) -> bool {
+    // Essas famílias resolvem também os métodos recusados dentro do Rust.
+    if crate::login_guests::owns_path(path) || crate::loops::http::owns_path(path)
+        || crate::push::http::owns_path(path) || crate::machine_peers::owns_http_path(path)
+        || matches!(path, "/api/config-sync/apply" | "/api/update-channel") { return true; }
+    if *method == Method::GET && matches!(path, "/api/config-sync/manifest" | "/api/config-sync/bundle") { return true; }
     if crate::ui::matches(method, path) || crate::dictation::http::matches(method, path)
         || crate::speech::http::matches(method, path) { return true; }
     // O serviço MCP responde também aos métodos recusados, sem repasse ao Python.
@@ -509,9 +514,13 @@ mod tests {
             let path = line.split('"').nth(1).unwrap().replace("{name}", "x");
             if !path.starts_with("/api/") { continue; }
             // Uma rota pode juntar métodos (`get(…).post(…)`): cada um tem de estar na tabela.
-            let methods:Vec<Method> = [("get(",Method::GET),("post(",Method::POST),("delete(",Method::DELETE),("put(",Method::PUT),("patch(",Method::PATCH)]
+            let mut methods:Vec<Method> = [("get(",Method::GET),("post(",Method::POST),("delete(",Method::DELETE),("put(",Method::PUT),("patch(",Method::PATCH)]
                 .into_iter().filter(|(call,_)| line.contains(&format!("::{call}")) || line.contains(&format!(" {call}")) || line.contains(&format!(".{call}")) || line.contains(&format!("({call}")))
                 .map(|(_,method)| method).collect();
+            if line.contains("::any(") {
+                methods = vec![Method::GET, Method::POST, Method::PUT, Method::PATCH,
+                    Method::DELETE, Method::HEAD, Method::OPTIONS, Method::TRACE, Method::CONNECT];
+            }
             assert!(!methods.is_empty(), "método que o leitor não conhece: {line}");
             for method in methods { assert!(rust_route(&method, &path), "rota do roteador fora da tabela: {method} {path}"); }
             api += 1;

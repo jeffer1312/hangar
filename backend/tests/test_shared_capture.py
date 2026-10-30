@@ -85,4 +85,3 @@ def test_capture_runs_on_tmux_pool(monkeypatch):
     monkeypatch.setattr(state.tmux, "capture_pane", capture)
     asyncio.run(state.shared_capture("s", 0))
     assert threads[0].startswith("hangar-tmux")
-
