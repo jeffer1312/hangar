@@ -419,3 +419,5 @@ mod update_native_contract;
 mod update_download;
 
 mod update_stale_pair;
+
+mod update_screen_state;
