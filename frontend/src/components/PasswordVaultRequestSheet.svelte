@@ -79,7 +79,12 @@
     } catch (err) {
       error = failure(err);
       // Pedido trocado: mostra o atual para a pessoa decidir de novo sobre o que vê.
-      if (live && live.interaction_id !== card.interaction_id) shown = live;
+      // O texto digitado para o pedido antigo nunca fica pronto para ser gravado no novo.
+      if (live && live.interaction_id !== card.interaction_id) {
+        shown = live;
+        password = '';
+        name = live.label ?? '';
+      }
     } finally {
       sending = false;
     }
