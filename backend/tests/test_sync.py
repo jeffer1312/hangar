@@ -55,12 +55,13 @@ def test_status_unregistered(client):
 
 
 def test_client_setup_restores_update_target(tmp_path, monkeypatch):
-    from app import atualizar, config
+    from app import config
     original = config.settings
     monkeypatch.setattr(original, "update_branch", "test/original")
     with pytest.MonkeyPatch.context() as patch:
         _make_client(tmp_path, patch)
-    assert atualizar.alvo() == "test/original"
+    assert config.settings is original
+    assert config.settings.update_branch == "test/original"
 
 
 def test_register_requires_bootstrap(client):
