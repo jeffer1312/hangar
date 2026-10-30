@@ -304,6 +304,7 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
     }
     let _worktree_sweep=crate::AbortOnDrop(crate::worktree_policy::spawn(state.clone()));
     let _keyring_watch = crate::AbortOnDrop(crate::keyring::spawn(state.list.keyring.clone()));
+    let _vault_backup = crate::AbortOnDrop(crate::vault::backup::spawn(state.clone()));
     let v6_state = state.clone();
     // Abortada na saída: a tarefa segura o estado do servidor, que sobreviveria a ele.
     // As sessões com terminal que o multiplexador perdeu voltam pelo spec; antes da varredura de grupos, que
@@ -692,6 +693,9 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/vault/ask-entry", axum::routing::post(crate::vault::http::ask_entry).options(pass_any))
         .route("/api/vault/requests/{id}", axum::routing::post(crate::vault::http::request).delete(crate::vault::http::request).options(pass_any))
         .route("/api/vault/requests/{id}/wait", get(crate::vault::http::wait).options(pass_any))
+        .route("/api/vault/recovery", axum::routing::post(crate::vault::http::recovery).options(pass_any))
+        .route("/api/vault/restore", axum::routing::post(crate::vault::http::restore).options(pass_any))
+        .route("/api/vault/backup/{server_id}", get(crate::vault::http::backup_copy).put(crate::vault::http::backup_copy).options(pass_any))
         // Relatório de diagnóstico: só o dono, nunca repassado; só o preflight do CORS vai ao Python.
         .route("/api/diag/report", axum::routing::post(crate::diag_report::report_route).options(pass_any))
         // SideStore no iPhone/iPad do cabo: só o dono, nunca repassado (a senha da Apple ID não vai ao Python).

@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use std::{net::SocketAddr, sync::Arc};
 use zeroize::Zeroizing;
 
-use super::{EntryChange, KeyError, NewEntry, Role, Status, VaultError, config::{self, ConfigError, Placement}, remote::{Remote, RemoteError, UseStart, WaitStatus},
+use super::{EntryChange, KeyError, NewEntry, Role, Status, VaultError, backup::{self, RestoreError}, config::{self, ConfigError, Placement}, remote::{Remote, RemoteError, UseStart, WaitStatus},
     requests::{Answer, RequestError}, store, wire::{AskReq, UseReply, UseReq, WAIT_HOLD, WaitReply, WaitState, own_id, request_id_ok}};
 use crate::{routes::AppState, session_write::detail};
 
@@ -24,6 +24,8 @@ pub fn matches(method: &Method, path: &str) -> bool {
         ["use"] | ["ask-entry"] => method == Method::POST,
         ["requests", id] if !id.is_empty() => matches!(*method, Method::POST | Method::DELETE),
         ["requests", id, "wait"] if !id.is_empty() => method == Method::GET,
+        ["recovery"] | ["restore"] => method == Method::POST,
+        ["backup", id] if !id.is_empty() => matches!(*method, Method::GET | Method::PUT),
         _ => false,
     }
 }
@@ -136,6 +138,9 @@ async fn status_body(st: &AppState, local: bool) -> Response {
         st.vault_requests.note_state(here.state);
         let mut body = json!(here);
         if let Some(id) = own_id(&st.server_id) { body["server_id"] = json!(id); }
+        if here.role == Role::Owner && let Ok(config::Config { backup_peer: Some(peer), .. }) = config::load(&st.hangar_dir) {
+            body["backup"] = super::backup::status(&st.hangar_dir, &peer);
+        }
         ok(body)
     };
     if local || here.role == Role::Owner { return mine(here); }
@@ -393,6 +398,102 @@ pub async fn request(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
         match st.vault_requests.answer(&st.vault, &st.hangar_dir, &id, answer).await {
             Ok(()) => StatusCode::NO_CONTENT.into_response(),
             Err(error) => request_failure(&st, error),
+        }
+    };
+    done(&headers, resp)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecoveryReq { password: Zeroizing<String> }
+
+/// `POST /api/vault/recovery`: define (ou troca) a senha de recuperação e manda uma cópia já.
+pub async fn recovery(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
+    let headers = req.headers().clone();
+    let allowed = owner(&st, peer, &req);
+    let resp = 'r: {
+        if let Err(resp) = allowed.await { break 'r resp; }
+        let Some(asked) = body::<RecoveryReq>(req).await else { break 'r invalid() };
+        if !backup::password_ok(&asked.password) { break 'r invalid(); }
+        if let Err(error) = backup::set_recovery(&st.vault, &st.hangar_dir, asked.password).await { break 'r failure(&st, error); }
+        let later = st.clone();
+        tokio::spawn(async move { backup::run(&later).await; });
+        status_body(&st, true).await
+    };
+    done(&headers, resp)
+}
+
+/// `server_id`: de qual máquina é a cópia; sem ele, a desta (a dona perdida com o mesmo id).
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RestoreReq {
+    password: Zeroizing<String>,
+    from_peer: String,
+    #[serde(default)]
+    server_id: Option<String>,
+}
+
+fn restore_failure(st: &AppState, from_peer: &str, error: RestoreError) -> Response {
+    match error {
+        RestoreError::NotEmpty => fail(StatusCode::CONFLICT, "erro_cofre_nao_vazio", "o cofre desta máquina já tem senhas; a restauração só entra num cofre vazio"),
+        RestoreError::WrongPassword => fail(StatusCode::UNAUTHORIZED, "erro_cofre_recuperacao_errada", "senha de recuperação errada (ou cópia adulterada)"),
+        RestoreError::NoCopy => fail(StatusCode::NOT_FOUND, "erro_cofre_backup_ausente", "a máquina não guarda cópia deste cofre"),
+        RestoreError::PeerDown(reason) => detail(StatusCode::BAD_GATEWAY, "erro_cofre_backup_peer_fora", "a máquina da cópia não respondeu",
+            json!({"peer": from_peer, "reason": reason})),
+        RestoreError::Unreadable => fail(StatusCode::BAD_GATEWAY, "erro_cofre_backup_ilegivel", "a cópia recebida não está no formato do cofre"),
+        RestoreError::Vault(error) => failure(st, error),
+        RestoreError::RecoveryNotSaved(_) => fail(StatusCode::CONFLICT, "erro_cofre_recuperacao_nao_gravada",
+            "o cofre voltou, mas a senha de recuperação não gravou no chaveiro: defina de novo"),
+    }
+}
+
+pub async fn restore(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
+    let headers = req.headers().clone();
+    let allowed = owner(&st, peer, &req);
+    let resp = 'r: {
+        if let Err(resp) = allowed.await { break 'r resp; }
+        let Some(RestoreReq { password, from_peer, server_id }) = body::<RestoreReq>(req).await else { break 'r invalid() };
+        if let Err(resp) = known_peer(&st, &from_peer) { break 'r resp; }
+        let server_id = server_id.unwrap_or_else(|| st.server_id.clone());
+        if !config::valid_server_id(&server_id) || !backup::password_ok(&password) { break 'r invalid(); }
+        match backup::restore(&st.vault, &st.peers, &st.hangar_dir, &from_peer, &server_id, password).await {
+            Ok(()) => status_body(&st, true).await,
+            Err(error) => restore_failure(&st, &from_peer, error),
+        }
+    };
+    done(&headers, resp)
+}
+
+/// `PUT /api/vault/backup/{server_id}?entries=N` guarda a cópia de outra máquina (corpo opaco, sem a
+/// chave); `GET` devolve a mais nova. Qualquer máquina do dono pode guardar.
+pub async fn backup_copy(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, Path(server_id): Path<String>, req: Request) -> Response {
+    use http_body_util::BodyExt;
+    let headers = req.headers().clone();
+    let (allowed, putting) = (owner(&st, peer, &req), req.method() == Method::PUT);
+    let entries = crate::auth::query_param(req.uri().query(), "entries").and_then(|v| v.parse::<u64>().ok());
+    let resp = 'r: {
+        if let Err(resp) = allowed.await { break 'r resp; }
+        if !config::valid_server_id(&server_id) { break 'r invalid(); }
+        let dir = st.hangar_dir.clone();
+        if !putting {
+            break 'r match tokio::task::spawn_blocking(move || backup::newest_copy(&dir, &server_id)).await {
+                Ok(Ok(Some(bytes))) => (StatusCode::OK, [(header::CONTENT_TYPE, "application/octet-stream"), (header::CACHE_CONTROL, "no-store")],
+                    bytes).into_response(),
+                Ok(Ok(None)) => fail(StatusCode::NOT_FOUND, "erro_cofre_backup_ausente", "esta máquina não guarda cópia deste cofre"),
+                _ => failure(&st, VaultError::Io),
+            };
+        }
+        let Some(entries) = entries else { break 'r invalid() };
+        let bytes = match http_body_util::Limited::new(req.into_body(), backup::MAX_COPY).collect().await {
+            Ok(collected) => collected.to_bytes(),
+            Err(error) if error.downcast_ref::<http_body_util::LengthLimitError>().is_some() =>
+                break 'r fail(StatusCode::PAYLOAD_TOO_LARGE, "erro_cofre_backup_grande", "a cópia passa de 4 MiB"),
+            Err(_) => break 'r invalid(),
+        };
+        if !backup::looks_like_copy(&bytes) { break 'r invalid(); }
+        match tokio::task::spawn_blocking(move || backup::keep_copy(&dir, &server_id, &bytes, entries)).await {
+            Ok(Ok(_)) => ok(json!({"server_id": own_id(&st.server_id)})),
+            _ => failure(&st, VaultError::Io),
         }
     };
     done(&headers, resp)

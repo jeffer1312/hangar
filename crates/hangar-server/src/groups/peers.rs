@@ -190,18 +190,24 @@ impl PeerClient {
     /// `Value`, que não zera. Recusa (fora de 2xx) volta como no `call`.
     pub async fn call_secret(&self, server: &str, method: reqwest::Method, path: &str, body: Option<&Value>)
         -> Result<(u16, Zeroizing<Vec<u8>>), PeerError> {
-        self.send_secret(false, server, method, path, body).await
+        self.send_secret(false, server, method, path, json_body(body), MAX_BODY).await
     }
 
     /// `call_secret` da consulta longa do cofre: sem o `READ_TIMEOUT` de 8 s; leitura e total de
     /// `LONG_POLL_TIMEOUT`.
     pub async fn call_long(&self, server: &str, method: reqwest::Method, path: &str, body: Option<&Value>)
         -> Result<(u16, Zeroizing<Vec<u8>>), PeerError> {
-        self.send_secret(true, server, method, path, body).await
+        self.send_secret(true, server, method, path, json_body(body), MAX_BODY).await
     }
 
-    async fn send_secret(&self, long: bool, server: &str, method: reqwest::Method, path: &str, body: Option<&Value>)
+    /// `call_secret` com corpo opaco nos dois sentidos e resposta até `limit` (a cópia do cofre).
+    pub async fn call_bytes(&self, server: &str, method: reqwest::Method, path: &str, body: Option<Vec<u8>>, limit: usize)
         -> Result<(u16, Zeroizing<Vec<u8>>), PeerError> {
+        self.send_secret(false, server, method, path, body.map(|b| (b, "application/octet-stream")), limit).await
+    }
+
+    async fn send_secret(&self, long: bool, server: &str, method: reqwest::Method, path: &str, body: Option<(Vec<u8>, &'static str)>,
+                         limit: usize) -> Result<(u16, Zeroizing<Vec<u8>>), PeerError> {
         let book = self.book.clone();
         let key = server.to_owned();
         let cfg = tokio::task::spawn_blocking(move || book.get(&key)).await.ok().flatten().ok_or(PeerError::Unknown)?;
@@ -216,16 +222,17 @@ impl PeerClient {
                 slot.get_or_init(|| built)
             }
         };
+        let kind = body.as_ref().map_or("application/json", |(_, kind)| *kind);
         let mut req = http.request(method, format!("{}{path}", cfg.base_url))
-            .header(reqwest::header::CONTENT_TYPE, "application/json").bearer_auth(&cfg.token);
-        if let Some(body) = body { req = req.body(body.to_string()); }
+            .header(reqwest::header::CONTENT_TYPE, kind).bearer_auth(&cfg.token);
+        if let Some((body, _)) = body { req = req.body(body); }
         let mut resp = req.send().await.map_err(|e| transport(server, &e))?;
         let status = resp.status();
         // Capacidade reservada antes: o vetor que cresce deixa cópias do corpo sem zerar.
-        let mut raw = Zeroizing::new(Vec::with_capacity(resp.content_length().map_or(SECRET_RESERVE, |n| (n as usize).min(MAX_BODY))));
+        let mut raw = Zeroizing::new(Vec::with_capacity(resp.content_length().map_or(SECRET_RESERVE.min(limit), |n| (n as usize).min(limit))));
         loop {
             match resp.chunk().await {
-                Ok(Some(chunk)) if raw.len() + chunk.len() > MAX_BODY => {
+                Ok(Some(chunk)) if raw.len() + chunk.len() > limit => {
                     if status.is_success() { return Err(PeerError::Transport(TOO_LARGE.into())); }
                     break;
                 }
@@ -280,6 +287,8 @@ impl PeerClient {
         }
     }
 }
+
+fn json_body(body: Option<&Value>) -> Option<(Vec<u8>, &'static str)> { body.map(|b| (b.to_string().into_bytes(), "application/json")) }
 
 /// O cliente com os prazos do `peers.call`: 8 s por leitura e 16 s no total.
 pub(crate) fn client(builder: reqwest::ClientBuilder) -> reqwest::Result<reqwest::Client> {

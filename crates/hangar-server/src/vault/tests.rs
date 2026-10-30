@@ -36,7 +36,7 @@ fn contains(haystack: &[u8], needle: &str) -> bool { haystack.windows(needle.len
 #[test]
 fn the_sealed_file_round_trips_and_does_not_carry_the_password_in_clear() {
     let key = [7u8; 32];
-    let sealed = store::seal(&key, &store::Doc { entries: vec![entry("banco")] }).unwrap();
+    let sealed = store::seal(&key, &store::Doc { entries: vec![entry("banco")], ..Default::default() }).unwrap();
     assert_eq!(sealed[0], store::VERSION);
     assert!(!contains(&sealed, PASSWORD));
     let doc = store::unseal(&key, &sealed).unwrap();

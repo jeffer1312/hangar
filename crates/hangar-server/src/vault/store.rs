@@ -29,8 +29,13 @@ pub struct Entry {
     pub updated_at: f64,
 }
 
+/// `revision` sobe a cada gravação: a cópia diária só vai quando ele mudou desde a última aceita.
 #[derive(Clone, Default, Serialize, Deserialize)]
-pub struct Doc { pub entries: Vec<Entry> }
+pub struct Doc {
+    pub entries: Vec<Entry>,
+    #[serde(default)]
+    pub revision: u64,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StoreError {
@@ -58,7 +63,16 @@ impl io::Write for Count {
     fn flush(&mut self) -> io::Result<()> { Ok(()) }
 }
 
-pub fn seal(key: &[u8; 32], doc: &Doc) -> Result<Vec<u8>, StoreError> {
+pub fn seal(key: &[u8; 32], doc: &Doc) -> Result<Vec<u8>, StoreError> { seal_with(key, &[VERSION], doc) }
+
+pub fn unseal(key: &[u8; 32], bytes: &[u8]) -> Result<Doc, StoreError> {
+    if bytes.first() != Some(&VERSION) { return Err(StoreError::Unreadable); }
+    unseal_with(key, 1, bytes)
+}
+
+/// `head || nonce || AES-256-GCM(json)`; `head` vai em claro e entra como dado autenticado (a cópia
+/// diária põe o sal nele).
+pub fn seal_with(key: &[u8; 32], head: &[u8], doc: &Doc) -> Result<Vec<u8>, StoreError> {
     let mut nonce = [0u8; NONCE_LEN];
     ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut nonce).map_err(|_| StoreError::Io)?;
     // Tamanho medido antes: o buffer já nasce com o JSON e a etiqueta, e nada realoca deixando
@@ -67,20 +81,22 @@ pub fn seal(key: &[u8; 32], doc: &Doc) -> Result<Vec<u8>, StoreError> {
     serde_json::to_writer(&mut size, doc).map_err(|_| StoreError::Io)?;
     let mut body = Zeroizing::new(Vec::with_capacity(size.0 + aead::AES_256_GCM.tag_len()));
     serde_json::to_writer(&mut *body, doc).map_err(|_| StoreError::Io)?;
-    cipher(key)?.seal_in_place_append_tag(aead::Nonce::assume_unique_for_key(nonce), aead::Aad::from([VERSION]), &mut *body)
+    cipher(key)?.seal_in_place_append_tag(aead::Nonce::assume_unique_for_key(nonce), aead::Aad::from(head), &mut *body)
         .map_err(|_| StoreError::Io)?;
-    let mut out = Vec::with_capacity(1 + NONCE_LEN + body.len());
-    out.push(VERSION);
+    let mut out = Vec::with_capacity(head.len() + NONCE_LEN + body.len());
+    out.extend_from_slice(head);
     out.extend_from_slice(&nonce);
     out.extend_from_slice(&body);
     Ok(out)
 }
 
-pub fn unseal(key: &[u8; 32], bytes: &[u8]) -> Result<Doc, StoreError> {
-    if bytes.len() < 1 + NONCE_LEN + aead::AES_256_GCM.tag_len() || bytes[0] != VERSION { return Err(StoreError::Unreadable); }
-    let nonce: [u8; NONCE_LEN] = bytes[1..1 + NONCE_LEN].try_into().map_err(|_| StoreError::Unreadable)?;
-    let mut body = Zeroizing::new(bytes[1 + NONCE_LEN..].to_vec());
-    let plain = cipher(key)?.open_in_place(aead::Nonce::assume_unique_for_key(nonce), aead::Aad::from([VERSION]), &mut body[..])
+/// O inverso de `seal_with`, com os primeiros `head_len` bytes como cabeçalho.
+pub fn unseal_with(key: &[u8; 32], head_len: usize, bytes: &[u8]) -> Result<Doc, StoreError> {
+    if bytes.len() < head_len + NONCE_LEN + aead::AES_256_GCM.tag_len() { return Err(StoreError::Unreadable); }
+    let (head, rest) = bytes.split_at(head_len);
+    let nonce: [u8; NONCE_LEN] = rest[..NONCE_LEN].try_into().map_err(|_| StoreError::Unreadable)?;
+    let mut body = Zeroizing::new(rest[NONCE_LEN..].to_vec());
+    let plain = cipher(key)?.open_in_place(aead::Nonce::assume_unique_for_key(nonce), aead::Aad::from(head), &mut body[..])
         .map_err(|_| StoreError::Unreadable)?;
     serde_json::from_slice(plain).map_err(|_| StoreError::Unreadable)
 }

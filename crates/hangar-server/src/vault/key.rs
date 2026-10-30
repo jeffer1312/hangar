@@ -26,6 +26,9 @@ pub trait KeyStore: Send + Sync {
     /// `Ok(None)` = nenhum item da chave.
     fn read(&self) -> BoxFuture<'_, Result<Option<Key>, KeyError>>;
     fn write(&self, key: Key) -> BoxFuture<'_, Result<(), KeyError>>;
+    /// Item da senha de recuperação (`backup::RECOVERY_LEN` bytes: sal || chave derivada); `Ok(None)` = não definida.
+    fn read_recovery(&self) -> BoxFuture<'_, Result<Option<Zeroizing<Vec<u8>>>, KeyError>> { Box::pin(async { Err(KeyError::Unsupported) }) }
+    fn write_recovery(&self, _item: Zeroizing<Vec<u8>>) -> BoxFuture<'_, Result<(), KeyError>> { Box::pin(async { Err(KeyError::Unsupported) }) }
 }
 
 /// A chave de um cofre que pode existir: sem item, `Lost` se o `vault.bin` existe.
@@ -120,18 +123,39 @@ mod linux {
     impl KeyStore for SecretService {
         fn read(&self) -> BoxFuture<'_, Result<Option<Key>, KeyError>> {
             Box::pin(async move {
-                let (conn, session) = self.open().await?;
-                let found = tokio::time::timeout(LIMIT, read_key(&conn, &session)).await.unwrap_or(Err(KeyError::Bus.into()));
-                self.finish(&conn, &session, found).await
+                let Some(value) = self.read_item(VAULT_KEY).await? else { return Ok(None) };
+                if value.len() != KEY_LEN { return Err(KeyError::Lost); }
+                let mut key = Zeroizing::new([0u8; KEY_LEN]);
+                key.copy_from_slice(&value);
+                Ok(Some(key))
             })
         }
 
         fn write(&self, key: Key) -> BoxFuture<'_, Result<(), KeyError>> {
-            Box::pin(async move {
-                let (conn, session) = self.open().await?;
-                let written = tokio::time::timeout(LIMIT, write_key(&conn, &session, &key)).await.unwrap_or(Err(KeyError::Bus.into()));
-                self.finish(&conn, &session, written).await
-            })
+            Box::pin(async move { self.write_item(VAULT_KEY, "Hangar: chave do cofre de senhas", &key[..]).await })
+        }
+
+        fn read_recovery(&self) -> BoxFuture<'_, Result<Option<Zeroizing<Vec<u8>>>, KeyError>> {
+            Box::pin(async move { self.read_item(RECOVERY_KEY).await })
+        }
+
+        fn write_recovery(&self, item: Zeroizing<Vec<u8>>) -> BoxFuture<'_, Result<(), KeyError>> {
+            Box::pin(async move { self.write_item(RECOVERY_KEY, "Hangar: chave da cópia do cofre de senhas", &item).await })
+        }
+    }
+
+    impl SecretService {
+        async fn read_item(&self, kind: &'static str) -> Result<Option<Zeroizing<Vec<u8>>>, KeyError> {
+            let (conn, session) = self.open().await?;
+            let found = tokio::time::timeout(LIMIT, read_secret(&conn, &session, kind)).await.unwrap_or(Err(KeyError::Bus.into()));
+            self.finish(&conn, &session, found).await
+        }
+
+        async fn write_item(&self, kind: &'static str, label: &'static str, value: &[u8]) -> Result<(), KeyError> {
+            let (conn, session) = self.open().await?;
+            let written = tokio::time::timeout(LIMIT, write_secret(&conn, &session, kind, label, value)).await
+                .unwrap_or(Err(KeyError::Bus.into()));
+            self.finish(&conn, &session, written).await
         }
     }
 
@@ -177,15 +201,18 @@ mod linux {
         }
     }
 
-    fn attributes() -> HashMap<&'static str, &'static str> {
-        HashMap::from([("application", "hangar"), ("kind", "vault-key")])
+    const VAULT_KEY: &str = "vault-key";
+    const RECOVERY_KEY: &str = "vault-backup-key";
+
+    fn attributes(kind: &'static str) -> HashMap<&'static str, &'static str> {
+        HashMap::from([("application", "hangar"), ("kind", kind)])
     }
 
-    async fn read_key(conn: &zbus::Connection, session: &OwnedObjectPath) -> Result<Option<Key>, Fail> {
+    async fn read_secret(conn: &zbus::Connection, session: &OwnedObjectPath, kind: &'static str) -> Result<Option<Zeroizing<Vec<u8>>>, Fail> {
         let service = proxy(conn, SERVICE, "org.freedesktop.Secret.Service").await?;
         let flags = zbus::proxy::MethodFlags::NoAutoStart.into();
         let (unlocked, locked) = service.call_with_flags::<_, _, (Vec<OwnedObjectPath>, Vec<OwnedObjectPath>)>(
-            "SearchItems", flags, &(attributes(),)).await.map_err(fail)?.ok_or(KeyError::Bus)?;
+            "SearchItems", flags, &(attributes(kind),)).await.map_err(fail)?.ok_or(KeyError::Bus)?;
         let in_login = |items: Vec<OwnedObjectPath>| -> Vec<OwnedObjectPath> {
             let mut items: Vec<_> = items.into_iter().filter(|p| p.as_str().starts_with(&format!("{LOGIN}/"))).collect();
             items.sort_by(|a, b| a.as_str().cmp(b.as_str()));
@@ -202,21 +229,18 @@ mod linux {
             let value = Zeroizing::new(value);
             if path == item { found = Some(value); }
         }
-        let value = found.ok_or(KeyError::Bus)?;
-        if value.len() != KEY_LEN { return Err(KeyError::Lost.into()); }
-        let mut key = Zeroizing::new([0u8; KEY_LEN]);
-        key.copy_from_slice(&value);
-        Ok(Some(key))
+        Ok(Some(found.ok_or(KeyError::Bus)?))
     }
 
     /// `replace`: um item que sobrou com os mesmos atributos (sem 32 bytes) dá lugar à chave nova.
-    async fn write_key(conn: &zbus::Connection, session: &OwnedObjectPath, key: &Key) -> Result<(), Fail> {
+    async fn write_secret(conn: &zbus::Connection, session: &OwnedObjectPath, kind: &'static str, label: &'static str, value: &[u8])
+        -> Result<(), Fail> {
         let collection = proxy(conn, LOGIN, "org.freedesktop.Secret.Collection").await?;
         let properties: HashMap<&str, Value> = HashMap::from([
-            ("org.freedesktop.Secret.Item.Label", Value::from("Hangar: chave do cofre de senhas")),
-            ("org.freedesktop.Secret.Item.Attributes", Value::from(attributes())),
+            ("org.freedesktop.Secret.Item.Label", Value::from(label)),
+            ("org.freedesktop.Secret.Item.Attributes", Value::from(attributes(kind))),
         ]);
-        let value = Zeroizing::new(key.to_vec());
+        let value = Zeroizing::new(value.to_vec());
         let secret = (session, Vec::<u8>::new(), &*value, "application/octet-stream");
         let (_, prompt) = collection.call_with_flags::<_, _, (OwnedObjectPath, OwnedObjectPath)>("CreateItem",
             zbus::proxy::MethodFlags::NoAutoStart.into(), &(properties, secret, true)).await

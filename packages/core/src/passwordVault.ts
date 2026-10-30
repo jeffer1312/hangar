@@ -107,6 +107,13 @@ export type VaultErrorCode =
   | 'erro_cofre_config_ilegivel'
   | 'erro_cofre_pedido_respondido'
   | 'erro_cofre_pedidos_demais'
+  | 'erro_cofre_recuperacao_errada'
+  | 'erro_cofre_recuperacao_nao_gravada'
+  | 'erro_cofre_nao_vazio'
+  | 'erro_cofre_backup_ausente'
+  | 'erro_cofre_backup_grande'
+  | 'erro_cofre_backup_ilegivel'
+  | 'erro_cofre_backup_peer_fora'
   | 'erro_interacao_desatualizada'
   | 'erro_corpo_invalido';
 
@@ -154,12 +161,14 @@ export function cancelVaultRequest(s: Server, id: string): Promise<void> {
   return vaultFetchForServer(s, requestPath(id), { method: 'DELETE' });
 }
 
-/** Define a senha de recuperação da cópia na VPS (Task 6). */
-export function setVaultRecovery(s: Server, password: string): Promise<void> {
+/** Define a senha de recuperação da cópia na VPS; responde o estado, com `backup`. */
+export function setVaultRecovery(s: Server, password: string): Promise<VaultStatus> {
   return vaultFetchForServer(s, '/api/vault/recovery', { method: 'POST', body: JSON.stringify({ password }) }, KEYRING_MS);
 }
 
-/** Restaura num cofre vazio a partir da cópia guardada em `fromPeer` (Task 6). */
-export function restoreVault(s: Server, password: string, fromPeer: string): Promise<void> {
-  return vaultFetchForServer(s, '/api/vault/restore', { method: 'POST', body: JSON.stringify({ password, from_peer: fromPeer }) }, KEYRING_MS);
+/** Restaura num cofre vazio a partir da cópia guardada em `fromPeer`. `serverId`: de qual máquina
+ * é a cópia (a dona perdida); sem ele, a de `s`. */
+export function restoreVault(s: Server, password: string, fromPeer: string, serverId?: string): Promise<VaultStatus> {
+  const body = serverId ? { password, from_peer: fromPeer, server_id: serverId } : { password, from_peer: fromPeer };
+  return vaultFetchForServer(s, '/api/vault/restore', { method: 'POST', body: JSON.stringify(body) }, KEYRING_MS);
 }

@@ -1,5 +1,6 @@
 //! Cofre de senhas do dono, nesta máquina: `vault.bin` cifrado com a chave do chaveiro. O valor
 //! da senha nunca entra em log, diário, evento nem mensagem de erro.
+pub mod backup;
 pub mod config;
 pub mod http;
 pub mod key;
@@ -8,6 +9,8 @@ pub mod requests;
 pub mod store;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_backup;
 #[cfg(test)]
 mod tests_remote;
 #[cfg(test)]
@@ -207,6 +210,7 @@ impl Vault {
             let _held = slot;
             let mut doc = store::load(&path, &key)?;
             let out = f(&mut doc)?;
+            doc.revision += 1;
             store::save(&path, &key, &doc)?;
             Ok(out)
         }).await.map_err(|_| VaultError::Io)?
