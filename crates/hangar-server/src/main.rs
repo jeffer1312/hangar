@@ -183,6 +183,27 @@ async fn run() {
         }
     }
     state.front = hangar_server::routes::front_address(&state.accounts.env.home, state.cfg.listen);
+    let pairing = state.settings_snapshot().and_then(|snapshot| {
+        hangar_server::machine_peers::pairing::Settings::from_snapshot(&snapshot)
+    });
+    match pairing {
+        Ok(settings) => {
+            let printed = tokio::task::spawn_blocking(move || {
+                use std::io::IsTerminal;
+                hangar_server::machine_peers::pairing::print(
+                    &settings,
+                    &hangar_server::machine_peers::network::lan_ip(),
+                    // stdout pertence ao anúncio privado lido pelo Supervisor.
+                    std::io::stderr().is_terminal(),
+                    &mut std::io::stderr().lock(),
+                )
+            }).await;
+            if !matches!(printed, Ok(Ok(()))) {
+                tracing::warn!(code = "pairing_print_failed", "não foi possível imprimir o pareamento");
+            }
+        }
+        Err(error) => tracing::warn!(code = "pairing_config_failed", %error, "pareamento sem configuração válida"),
+    }
     state.costs.schedule_warmup(std::time::Duration::from_secs(30));
     hangar_server::pages::routes::spawn_sweep(state.list.clone(), state.pages.clone());
     // Só aqui, nunca no `serve_until`: os testes sobem servidores contra o tmux de verdade.
