@@ -128,7 +128,9 @@ function OperationControls({ server }: { server: Server }) {
             setResult(state);
             await new Promise((resolve) => setTimeout(resolve, 2000));
             ensureActive(signal);
-            state = (await bounded(getAtualizacaoEm(server), signal, 20_000)).estado;
+            // Leitura que falha aqui não troca o motivo da falha por um erro de rede: tenta na próxima volta.
+            try { state = (await bounded(getAtualizacaoEm(server), signal, 20_000)).estado; }
+            catch { ensureActive(signal); }
           }
           if (state.ok !== true || state.reinicio_erro || state.erro) {
             const reason = state.reinicio_erro || state.erro || m.mobile_machines_unconfirmed_reason();

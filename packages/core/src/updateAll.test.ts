@@ -317,6 +317,12 @@ describe('API e execução por máquina', () => {
     await updateAll([server('stuck')], onChange, options);
     expect(final('stuck')).toMatchObject({ status: 'falhou', state: expect.objectContaining({ relatorio: 'pendente' }) });
     expect(reads.get('stuck')).toBeLessThanOrEqual(2 + (12 * 60 * 1000) / 2000);
+
+    // Falha perto do teto da atualização: a espera do relatório não vira "ultrapassou o limite".
+    read = (_id, count) => count === 1 ? json(ready()) : count < 870 ? json(ready({ fase: 'rodando' })) : failed('pendente');
+    await updateAll([server('late')], onChange, options);
+    expect(final('late')).toMatchObject({ status: 'falhou', error: 'fixture-down' });
+    expect(final('late')?.errorCode).toBeUndefined();
   });
 
   it('encerra após 300 leituras seguidas sem resposta', async () => {

@@ -785,7 +785,10 @@ async fn roll_back<R: Restarter, H: HealthProbe>(job: &Job<'_>, state: &StateFil
 /// As linhas de erro da versão nova que não respondeu, uma `update: saída` cada, antes do `update: fim`.
 async fn log_startup_output(mark: startup_output::Mark, home: &Path) {
     let scrubber = crate::diag_report::Scrubber::new(Some(home.to_string_lossy().into_owned()), std::env::var("LOCALAPPDATA").ok());
-    let lines = tokio::task::spawn_blocking(move || startup_output::errors(&mark.read(), &scrubber)).await.unwrap_or_default();
+    let lines = tokio::task::spawn_blocking(move || match mark.read() {
+        Ok(text) => startup_output::errors(&text, &scrubber),
+        Err(why) => vec![format!("saída da versão nova não lida: {why}")],
+    }).await.unwrap_or_else(|e| vec![format!("saída da versão nova não lida: {e}")]);
     for line in lines { tracing::info!(line = %line, "update: saída"); }
 }
 

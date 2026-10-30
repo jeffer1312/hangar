@@ -144,7 +144,7 @@ export default function Layout() {
       const answer = (value: boolean) => {
         void Promise.allSettled(pending.map((server) => putAutoReportEm(server, value))).then((results) => {
           const failed = pending.filter((_, i) => results[i].status === 'rejected');
-          if (failed.length) toast.erro(m.update_all_failed({ erro: failed.map((s) => s.label).join(', ') }));
+          if (failed.length) toast.erro(m.auto_report_save_failed({ machines: failed.map((s) => s.label).join(', ') }));
         });
       };
       Alert.alert(m.auto_report_question_title(), m.auto_report_question_body({ machines: pending.map((s) => s.label).join(', ') }), [

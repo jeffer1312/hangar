@@ -9352,6 +9352,7 @@
   "auto_report_question_body": "When an update fails, send a diagnostic report to the Hangar developer on its own? The report carries no conversation. Applies to: {machines}",
   "auto_report_yes": "Send",
   "auto_report_no": "Don't send",
+  "auto_report_save_failed": "Answer not saved on: {machines}",
   "update_all_timeout": "The update exceeded the 30-minute limit.",
   "update_all_warnings": "Warnings",
   "accounts_list_filter_all": "All",

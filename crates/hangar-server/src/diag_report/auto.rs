@@ -122,24 +122,48 @@ pub fn merge(estado: &mut Map<String, Value>, home: &Path, state_dir: &Path) {
 
 static SENDING: std::sync::LazyLock<tokio::sync::Mutex<()>> = std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
 
+/// Sem rede ou com o worker limitando, a falha fica sem envio e volta a ser tentada na próxima subida.
+fn is_transient(code: &str) -> bool { matches!(code, "diag_report_unreachable" | "diag_report_rate_limited") }
+
+/// A falha atual, se a pessoa consentiu e ela ainda não saiu. Bloqueante.
+fn unsent_failure(home: &Path, state_dir: &Path) -> Option<(String, Map<String, Value>)> {
+    let estado = crate::update::StateFile::new(state_dir).read();
+    let key = failure_key(&estado)?;
+    if read_outcome(state_dir).is_some_and(|o| o.falha == key && !o.erro.as_deref().is_some_and(is_transient)) { return None; }
+    match consent(home) {
+        Ok(Some(true)) => Some((key, estado)),
+        Ok(_) => None,
+        Err(e) => {
+            tracing::warn!(code = "auto_report_unavailable", "relatório automático: escolha não lida: {e}");
+            None
+        }
+    }
+}
+
 /// Manda o relatório da falha atual, uma vez por falha, se a pessoa consentiu.
-pub async fn check_failure(st: &AppState) {
+pub async fn check_failure(st: &AppState) { send_failure(st, &RETRY_WAITS).await }
+
+async fn send_failure(st: &AppState, waits: &[u64]) {
     let _one = SENDING.lock().await;
     let home = st.accounts.env.home.clone();
     let state_dir = crate::update::state_dir(&st.accounts.env.claude_base);
-    let estado = crate::update::StateFile::new(&state_dir).read();
-    let Some(key) = failure_key(&estado) else { return };
-    if read_outcome(&state_dir).is_some_and(|o| o.falha == key) || consent(&home).ok().flatten() != Some(true) { return; }
+    let unsent = || {
+        let (home, state_dir) = (home.clone(), state_dir.clone());
+        tokio::task::spawn_blocking(move || unsent_failure(&home, &state_dir))
+    };
+    let Ok(Some((key, estado))) = unsent().await else { return };
     let report: String = format!("Enviado sozinho: a atualização para {} falhou. {}", text(&estado, "versao_para"), text(&estado, "erro"))
         .chars().take(super::TEXT_MAX).collect();
     let version = crate::update::running_package().map_or(env!("CARGO_PKG_VERSION"), |p| p.version.as_str());
-    let mut outcome = Outcome { falha: key, ..Outcome::default() };
-    for (attempt, wait) in RETRY_WAITS.iter().enumerate() {
+    let mut outcome = Outcome { falha: key.clone(), ..Outcome::default() };
+    for (attempt, wait) in waits.iter().enumerate() {
         tokio::time::sleep(std::time::Duration::from_secs(*wait)).await;
+        // A espera é longa: quem desligou o relatório ou começou outra rodada nesse meio-tempo não manda.
+        if attempt > 0 && !matches!(unsent().await, Ok(Some((current, _))) if current == key) { return; }
         let input = super::ClientInput { text: Some(report.clone()), client: format!("auto-update {version}"), failures: Vec::new(), group: None, group_token: None };
         match super::route::send(st, input).await {
             Ok((sent, _)) => { outcome.codigo = Some(sent.code); break; }
-            Err(f) if f.code == "diag_report_rate_limited" && attempt + 1 < RETRY_WAITS.len() => {}
+            Err(f) if is_transient(f.code) && attempt + 1 < waits.len() => {}
             Err(f) => { outcome.erro = Some(f.code.to_owned()); break; }
         }
     }
@@ -149,15 +173,38 @@ pub async fn check_failure(st: &AppState) {
     }
     let saved = serde_json::to_vec(&outcome).map_err(io::Error::other)
         .and_then(|bytes| crate::runtime::queue::atomic_write(&state_dir.join(OUTCOME_FILE), &bytes));
-    if let Err(e) = saved { tracing::warn!(code = "auto_report_outcome_unsaved", "relatório automático: resultado não gravado: {e}"); }
+    if let Err(e) = saved {
+        tracing::warn!(code = "auto_report_outcome_unsaved", "relatório automático: resultado não gravado: {e}");
+        st.diag.report("rust.diag_report_auto", "", "auto_report_outcome_unsaved", "resultado do relatório automático não gravado");
+    }
 }
 
-/// Confere na subida (a falha com reinício volta com outro processo) e a cada executor que sai.
+/// Avisa a cada gravação do `estado.json`. O executor é outro processo: depois do reinício, quem está
+/// de pé não o lançou e só vê o arquivo.
+fn watch_state(state_dir: &Path, changed: Arc<tokio::sync::Notify>) -> notify::Result<notify::RecommendedWatcher> {
+    use notify::Watcher;
+    std::fs::create_dir_all(state_dir).map_err(notify::Error::io)?;
+    let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+        // O notify assina abrir e fechar: a leitura do próprio estado acordaria sem fim.
+        let wake = event.is_ok_and(|e| !e.kind.is_access() && e.paths.iter().any(|p| p.file_name().is_some_and(|n| n == "estado.json")));
+        if wake { changed.notify_one(); }
+    })?;
+    watcher.watch(state_dir, notify::RecursiveMode::NonRecursive)?;
+    Ok(watcher)
+}
+
+/// Confere na subida e a cada gravação do estado.
 pub fn spawn(st: Arc<AppState>) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
+        let changed = Arc::new(tokio::sync::Notify::new());
+        let state_dir = crate::update::state_dir(&st.accounts.env.claude_base);
+        let _watcher = watch_state(&state_dir, changed.clone()).inspect_err(|e| {
+            tracing::warn!(code = "auto_report_watch_unavailable", "relatório automático: estado sem vigia: {e}");
+            st.diag.report("rust.diag_report_auto", "", "auto_report_watch_unavailable", "falha de atualização só é conferida na subida");
+        });
         check_failure(&st).await;
         loop {
-            crate::update::executor::EXITED.notified().await;
+            changed.notified().await;
             check_failure(&st).await;
         }
     })
@@ -259,6 +306,23 @@ mod tests {
         }
     }
 
+    /// O executor é outro processo: depois do reinício, quem está de pé não o lançou e só vê o arquivo.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn failure_written_after_the_server_came_up_is_sent() {
+        let m = Machine::start(201).await;
+        std::fs::create_dir_all(m.home.path().join(".hangar")).unwrap();
+        std::fs::write(consent_path(m.home.path()), json!({"auto_report": true}).to_string()).unwrap();
+        let task = spawn(m.st.clone());
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        m.fail(None);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while m.worker.reports.lock().unwrap().is_empty() && std::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        task.abort();
+        assert_eq!(m.worker.reports.lock().unwrap().len(), 1);
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn refused_send_is_recorded_and_not_repeated() {
         let m = Machine::start(500).await;
@@ -267,5 +331,16 @@ mod tests {
         check_failure(&m.st).await;
         assert_eq!(m.worker.reports.lock().unwrap().len(), 1);
         assert_eq!(m.screen()["relatorio_erro"], "diag_report_refused");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn limited_send_is_shown_and_tried_again_later() {
+        let m = Machine::start(429).await;
+        m.fail(Some(true));
+        send_failure(&m.st, &[0, 0]).await;
+        assert_eq!(m.worker.reports.lock().unwrap().len(), 2);
+        assert_eq!(m.screen()["relatorio_erro"], "diag_report_rate_limited");
+        send_failure(&m.st, &[0]).await;
+        assert_eq!(m.worker.reports.lock().unwrap().len(), 3);
     }
 }

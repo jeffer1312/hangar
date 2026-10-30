@@ -33,7 +33,7 @@
   <div class="pergunta">
     <h2>{m.auto_report_question_title()}</h2>
     <p>{m.auto_report_question_body({ machines: pending.map((s) => s.label).join(', ') })}</p>
-    {#if error}<p class="erro" role="alert">{m.update_all_failed({ erro: error })}</p>{/if}
+    {#if error}<p class="erro" role="alert">{m.auto_report_save_failed({ machines: error })}</p>{/if}
     <div class="acoes">
       <button class="bt secundario" disabled={saving} onclick={() => answer(false)}>{m.auto_report_no()}</button>
       <button class="bt primario" disabled={saving} onclick={() => answer(true)}>{m.auto_report_yes()}</button>

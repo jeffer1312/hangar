@@ -74,11 +74,15 @@
     getAutoReportEm(alvo).then((v) => { if (alvo === servidor) autoReport = v; },
       (e) => { if (alvo === servidor) autoReportError = e instanceof Error ? e.message : String(e); });
   });
-  async function setAutoReport(value: boolean) {
+  async function setAutoReport(input: HTMLInputElement) {
     autoReportSaving = true; autoReportError = '';
-    try { autoReport = await putAutoReportEm(servidor, value); }
+    try { autoReport = await putAutoReportEm(servidor, input.checked); }
     catch (e) { autoReportError = e instanceof Error ? e.message : String(e); }
-    finally { autoReportSaving = false; }
+    finally {
+      autoReportSaving = false;
+      // Gravação recusada não muda `autoReport`: o interruptor voltaria só no próximo valor diferente.
+      input.checked = autoReport === true;
+    }
   }
 
   async function copiar(code: string) {
@@ -241,7 +245,7 @@
             <span class="rep-aviso" id="auto-report-ajuda">{autoReport === null ? m.auto_report_unanswered() : m.auto_report_setting_hint()}</span>
           </span>
           <input type="checkbox" class="switch" aria-label={m.auto_report_setting()} aria-describedby="auto-report-ajuda"
-            checked={autoReport === true} disabled={autoReportSaving} onchange={(e) => setAutoReport(e.currentTarget.checked)} />
+            checked={autoReport === true} disabled={autoReportSaving} onchange={(e) => setAutoReport(e.currentTarget)} />
         </label>
       {/if}
       {#if autoReportError}<p class="erro" role="alert">{autoReportError}</p>{/if}

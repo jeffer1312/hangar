@@ -3494,10 +3494,12 @@ código que não abre.
 (`{"auto_report": bool}`, rota `GET`/`PUT /api/auto-report` só do dono). Sem o arquivo, a resposta
 é `null` e nada sai. Os três clientes perguntam uma vez, na abertura, para as máquinas próprias
 sem resposta (uma pergunta cobre todas), e a escolha muda na tela da máquina (nativo e Expo) ou em
-Diário de uso (PWA). O servidor confere a falha na subida, quando um executor que ele lançou sai
-(`executor::EXITED`) e quando a pessoa responde "sim", sem ler o estado de tempos em tempos; manda uma vez por falha (chave
+Diário de uso (PWA). O servidor confere a falha na subida, a cada gravação do `estado.json` (vigia
+de arquivo: quem grava é o executor, outro processo, e depois da volta o servidor de pé não o lançou)
+e quando a pessoa responde "sim", sem ler o estado de tempos em tempos; manda uma vez por falha (chave
 `ts|versao_para|erro`, falhas de até 24 h) e grava o código ou o erro em
-`.hangar-update/relatorio.json`. `GET /api/atualizacao` junta ao `estado` `relatorio` (`pendente`
+`.hangar-update/relatorio.json`. Sem rede ou com o worker limitando, a falha volta a ser tentada na
+próxima subida, dentro das 24 h; recusa do worker não se repete. `GET /api/atualizacao` junta ao `estado` `relatorio` (`pendente`
 ou o código) e `relatorio_erro`; as telas de atualização mostram a linha e seguem lendo enquanto
 está `pendente`, até 12 min. 429 do worker tenta de novo depois de 1, 3 e 7 min.
 

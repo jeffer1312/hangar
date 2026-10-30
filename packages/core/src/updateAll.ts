@@ -249,8 +249,10 @@ export async function updateAll(
     }
     let silent = 0;
     let failedAt: number | undefined;
+    let failure: UpdateAllState | undefined;
     let latest: UpdateAllState = { status: 'esperando', warnings: [] };
     for (;;) {
+      let waitReport = false;
       await sleep(POLL_MS);
       let value: UpdateAllState;
       try {
@@ -260,8 +262,8 @@ export async function updateAll(
         value = { status, state, warnings: state.avisos ?? [] };
         if (status === 'falhou') value.error = state.erro?.replace(/\.+$/, '') || '?';
         const reportPending = status === 'falhou' && state.relatorio === 'pendente';
-        if (reportPending) failedAt ??= now();
-        const waitReport = reportPending && now() - failedAt! < REPORT_WAIT_MS;
+        if (reportPending) { failedAt ??= now(); failure = value; }
+        waitReport = reportPending && now() - failedAt! < REPORT_WAIT_MS;
         if ((status === 'atualizado' || status === 'atualizado_manual' || status === 'falhou') && !waitReport) return finish(value);
       } catch (error) {
         const status = httpStatus(error);
@@ -271,7 +273,9 @@ export async function updateAll(
         silent++;
         value = { ...latest, status: 'esperando', error: errorMessage(error) };
       }
-      if (silent >= SILENT_READS || now() - startedAt >= FOLLOW_CEILING_MS) {
+      if (silent >= SILENT_READS || (now() - startedAt >= FOLLOW_CEILING_MS && !waitReport)) {
+        // Já falhou e só esperava o relatório: o motivo da falha vale mais que o limite da espera.
+        if (failure) return finish(failure);
         return finish({ status: 'falhou', errorCode: silent >= SILENT_READS ? 'silent' : 'timeout',
           state: value.state, warnings: value.warnings });
       }

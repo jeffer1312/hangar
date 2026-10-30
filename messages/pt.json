@@ -9352,6 +9352,7 @@
   "auto_report_question_body": "Quando a atualização falhar, mandar sozinho um relatório de diagnóstico ao desenvolvedor do Hangar? O relatório não leva conversa. Vale para: {machines}",
   "auto_report_yes": "Mandar",
   "auto_report_no": "Não mandar",
+  "auto_report_save_failed": "Resposta não guardada em: {machines}",
   "update_all_timeout": "A atualização ultrapassou o limite de 30 minutos.",
   "update_all_warnings": "Avisos",
   "accounts_list_filter_all": "Todas",

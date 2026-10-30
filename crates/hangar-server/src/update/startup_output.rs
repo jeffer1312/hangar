@@ -50,26 +50,30 @@ impl Mark {
         Mark::Journal { since: SystemTime::now() }
     }
 
-    /// O que entrou depois da marca. Bloqueante; falha de leitura vira nenhuma linha.
-    pub fn read(&self) -> String {
+    /// O que entrou depois da marca. Bloqueante. `Err`: por que não deu para ler, que também vai ao
+    /// relatório; sem isso ele sairia sem a causa e sem dizer por quê.
+    pub fn read(&self) -> Result<String, String> {
         match self {
-            Mark::Nothing => String::new(),
+            Mark::Nothing => Ok(String::new()),
             Mark::File { dir, newest, at } => {
+                let logs = backend_logs(dir);
+                if logs.is_empty() { return Err("nenhum hangar-backend*.log na pasta de logs".to_owned()); }
                 let mut out = String::new();
-                for (path, modified, _) in backend_logs(dir) {
+                for (path, modified, _) in logs {
                     let offset = match newest { Some((marked, len)) if *marked == path => *len, _ if modified > *at => 0, _ => continue };
                     out += &tail_from(&path, offset);
                     out.push('\n');
                 }
-                out
+                Ok(out)
             }
             Mark::Journal { since } => {
                 let epoch = since.duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_secs());
-                std::process::Command::new("journalctl")
-                    .args(["--user", "-u", "hangar-backend.service", "--since", &format!("@{epoch}"), "-o", "cat", "--no-pager"])
+                let output = std::process::Command::new("journalctl")
+                    .args(["--user", "-u", "hangar-backend.service", "--since", &format!("@{epoch}"), "-n", "5000", "-o", "cat", "--no-pager"])
                     .stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).output()
-                    .ok().filter(|o| o.status.success())
-                    .map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default()
+                    .map_err(|e| format!("journalctl não rodou: {e}"))?;
+                if !output.status.success() { return Err(format!("journalctl saiu com {}", output.status)); }
+                Ok(String::from_utf8_lossy(&output.stdout).into_owned())
             }
         }
     }
@@ -161,6 +165,6 @@ mod tests {
         std::fs::write(&log, "ERROR velho\n").unwrap();
         let mark = Mark::File { dir: dir.path().into(), newest: Some((log.clone(), 12)), at: SystemTime::now() };
         std::fs::write(&log, "ERROR velho\nERROR novo\n").unwrap();
-        assert_eq!(errors(&mark.read(), &scrubber()), vec!["ERROR novo".to_owned()]);
+        assert_eq!(errors(&mark.read().unwrap(), &scrubber()), vec!["ERROR novo".to_owned()]);
     }
 }

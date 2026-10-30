@@ -186,6 +186,7 @@
           ultimaMarca = marca;
           diag.registrar({ evento: 'atualizacao.tique', detalhe: marca });
         }
+        if (estado.relatorio !== 'pendente') relatorioDesde = null;
         if (!open || estado.fase !== 'pronto') return;
         // Falha com o relatório automático saindo: segue lendo até o código chegar (o servidor tenta por até ~11 min).
         if (estado.ok === false && estado.relatorio === 'pendente' && Date.now() - (relatorioDesde ??= Date.now()) < 12 * 60 * 1000) return;
@@ -275,6 +276,7 @@
   }
 
   async function atualizar() {
+    relatorioDesde = null;
     enviando = true;
     erroDeRede = '';
     try {

@@ -193,10 +193,6 @@ pub trait Spawner: Sync {
     fn spawn(&self, args: &[String]) -> std::io::Result<u32>;
 }
 
-/// Avisado quando um executor lançado por este servidor sai: quem envia o relatório automático
-/// confere a falha sem ler o estado de tempos em tempos.
-pub static EXITED: std::sync::LazyLock<tokio::sync::Notify> = std::sync::LazyLock::new(tokio::sync::Notify::new);
-
 /// O executor destacado, pelo binário real deste servidor.
 pub struct Detached {
     pub exe: PathBuf,
@@ -252,7 +248,6 @@ impl Spawner for Detached {
             if let Ok(status) = child.wait() && !status.success() {
                 conclude_early_exit(&state_dir, pid, status.code(), log.as_deref());
             }
-            EXITED.notify_one();
         });
         Ok(pid)
     }
