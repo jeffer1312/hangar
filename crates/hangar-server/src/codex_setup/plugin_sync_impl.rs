@@ -108,12 +108,8 @@ fn timestamp(reg: &Value, key: &str, default: f64) -> Result<f64, Error> {
             .ok_or_else(|| error("TypeError", "Data de atualização inválida")),
     }
 }
-fn iso(value: f64) -> Result<String, Error> {
-    let seconds = value.floor();
-    let nanos = ((value - seconds) * 1_000_000.0).round() as u32 * 1000;
-    let date = chrono::DateTime::from_timestamp(seconds as i64, nanos)
-        .ok_or_else(|| error("ValueError", "Data de atualização fora do intervalo"))?;
-    Ok(date.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, false))
+fn iso(value: f64) -> Result<Option<String>, Error> {
+    crate::codex_setup::timestamp::iso(value).map_err(|failure| error(failure.kind, failure.message))
 }
 
 pub(super) async fn run(
