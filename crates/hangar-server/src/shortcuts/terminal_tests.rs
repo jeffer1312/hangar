@@ -109,11 +109,14 @@ async fn guest_shortcut_creation_preserves_original_commands_and_files() {
             "GUE-086/090 resultado {row}"
         );
         let directory = home.path().join("Hangar/shortcuts");
-        let actual = serde_json::to_string(&*fake.calls.lock().unwrap())
-            .unwrap()
-            .replace(directory.to_str().unwrap(), "<DIR>");
+        // Normalizar antes do JSON: as contrabarras do Windows são escapadas pelo serializer.
+        // Só o separador após a pasta substituída muda; argumentos e comandos ficam intactos.
+        let normalize = |text: &str| text.replace(directory.to_str().unwrap(), "<DIR>")
+            .replace("<DIR>\\", "<DIR>/");
+        let actual: Vec<Vec<String>> = fake.calls.lock().unwrap().iter()
+            .map(|call| call.iter().map(|arg| normalize(arg)).collect()).collect();
         assert_eq!(
-            serde_json::from_str::<Value>(&actual).unwrap(),
+            json!(actual),
             row["calls"],
             "GUE-086 comandos windows={} falha={}",
             row["windows"],
@@ -124,9 +127,7 @@ async fn guest_shortcut_creation_preserves_original_commands_and_files() {
             for entry in std::fs::read_dir(&directory).unwrap() {
                 let entry = entry.unwrap();
                 let bytes = std::fs::read(entry.path()).unwrap();
-                let text = String::from_utf8(bytes)
-                    .unwrap()
-                    .replace(directory.to_str().unwrap(), "<DIR>");
+                let text = normalize(&String::from_utf8(bytes).unwrap());
                 files.insert(
                     entry.file_name().to_str().unwrap().into(),
                     json!(
