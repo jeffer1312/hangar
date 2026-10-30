@@ -28,8 +28,9 @@ pub const SECRET: &str = "remote-browser-test-internal";
 
 static ELECTRON_PORT: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// Texto das conferências de tempo real que recusam medir num ensaio lento (`transport_gaps`).
-pub const SLOW_RUN: &str = "saiu da janela real de observação";
+/// A pré-condição do ensaio de taxa (`transport_gaps`), conferida antes de medir: a rajada não coube no
+/// tempo real porque a máquina estava lenta. As conferências depois dela medem o servidor e não se repetem.
+pub const SLOW_RUN: &str = "rajada saiu da janela real de observação";
 const SLOW_RUN_ATTEMPTS: u32 = 5;
 
 #[cfg(unix)]
@@ -84,6 +85,8 @@ pub async fn isolated_with_timeout(test: &str, deadline: Duration, inspect: impl
     let slow = !output.status.success() && [&output.stdout, &output.stderr].iter()
         .any(|bytes| String::from_utf8_lossy(bytes).contains(SLOW_RUN));
     if !slow || attempts == SLOW_RUN_ATTEMPTS { break (root, output); }
+    eprintln!("{test}: ensaio lento demais para medir (tentativa {attempts} de {SLOW_RUN_ATTEMPTS}), refazendo: {}",
+        String::from_utf8_lossy(&output.stderr).lines().find(|l| l.contains(SLOW_RUN)).unwrap_or_default());
     };
     crate::assert_ran_one(&output.stdout);
     assert!(output.status.success(), "ensaio isolado falhou: {} {}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
