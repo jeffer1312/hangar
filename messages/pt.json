@@ -6340,8 +6340,6 @@
   "native_accounts_login_view_capture": "Não consegui capturar a janela.",
   "native_accounts_login_view_lost": "A máquina parou de responder; tentando de novo.",
   "native_accounts_login_view_no_input": "A sessão de {machine} está desconectada: dá para ver, mas não para clicar.",
-  "native_accounts_login_view_type": "Digitar na janela",
-  "native_accounts_login_view_send": "Enviar",
   "native_accounts_login_view_activate": "Reativar a sessão",
   "native_accounts_login_view_activate_help": "Deixa a área de trabalho aberta na tela física dessa máquina.",
   "native_accounts_engine_names_unknown": "A lista de modelos deste servidor não carregou: sem ela não dá para saber se o nome já existe. Use Atualizar na página antes de criar.",

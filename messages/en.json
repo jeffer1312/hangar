@@ -6340,8 +6340,6 @@
   "native_accounts_login_view_capture": "Could not capture the window.",
   "native_accounts_login_view_lost": "The machine stopped answering; trying again.",
   "native_accounts_login_view_no_input": "The session on {machine} is disconnected: you can see it, but not click.",
-  "native_accounts_login_view_type": "Type into the window",
-  "native_accounts_login_view_send": "Send",
   "native_accounts_login_view_activate": "Reactivate the session",
   "native_accounts_login_view_activate_help": "Leaves the desktop open on that machine's physical screen.",
   "native_accounts_engine_names_unknown": "This server's model list did not load: without it there is no way to tell whether the name already exists. Use Refresh on the page before creating.",

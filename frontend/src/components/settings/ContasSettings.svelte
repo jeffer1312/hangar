@@ -16,8 +16,7 @@ import { apagarConta, accountHolders, type AccountHolders, claudeAccountFolder, 
   import { formatarIntervalo } from '../../lib/contaEstado';
   import { listarCredenciais, definirApelido, definirCookie, consumirRedefinicaoCodex,
     novaChaveIdempotente, type Credencial } from '../../lib/credenciais';
-  import { iniciarLogin, passoLogin, confirmarLogin, cancelarLogin, destinosLogin, type DestinoLogin, type PassoLogin, type ResultadoLogin } from '../../lib/loginConta';
-  import LoginViewer from './LoginViewer.svelte';
+  import { iniciarLogin, passoLogin, confirmarLogin, cancelarLogin, type PassoLogin, type ResultadoLogin } from '../../lib/loginConta';
   import { copyText } from '../../lib/clipboard';
   import { initials } from '@hangar/core';
   import { diaDoReset, faltaPara, janelaLonga, nivelDePct, VELHA_APOS_S, motivoParado,
@@ -626,9 +625,6 @@ import { apagarConta, accountHolders, type AccountHolders, claudeAccountFolder, 
   let loginPoll: ReturnType<typeof setInterval> | null = null;
   let loginIniciando = $state(false);
   let loginParado = $state(false);
-  let loginDestinos = $state.raw<{ targets: DestinoLogin[]; last: DestinoLogin | null } | null>(null);
-  let loginDestino = $state.raw<DestinoLogin | null>(null);
-  let loginVendoTela = $state(false);
   // B4 — o onDestroy só enxerga `loginDe`, que é escrito DEPOIS do await do iniciar:
   // desmontar ENTRE o clique e a resposta do servidor deixava o poll órfão e a tentativa
   // presa (o próximo Entrar caía em 409 sem botão de Cancelar). Flag como a do
@@ -636,48 +632,8 @@ import { apagarConta, accountHolders, type AccountHolders, claudeAccountFolder, 
   // armar poll nem registrar tentativa.
   let destruido = $state(false);
 
-  // Onde abrir a autorização: com a lista vazia ou sem resposta, segue pelo link de sempre.
-  async function escolherEntrar(conta: Credencial) {
+  async function iniciarEntrar(conta: Credencial) {
     if (loginDe || loginIniciando) return;
-    const tentativa = { ...conta };
-    loginConta = tentativa;
-    loginSucesso = null;
-    loginErro = '';
-    loginFalhou = false;
-    loginDestino = null;
-    loginVendoTela = false;
-    loginPasso = { etapa: 'idle' };
-    loginIniciando = true;
-    let destinos: { targets: DestinoLogin[]; last: DestinoLogin | null } | null = null;
-    try { destinos = await destinosLogin(apiTarget, conta.nome_natural); } catch { destinos = null; }
-    if (destruido || loginConta !== tentativa) return;
-    loginIniciando = false;
-    if (destinos?.targets.length) loginDestinos = destinos;
-    else await iniciarEntrar(tentativa);
-  }
-
-  function nomeDestino(destino: DestinoLogin, ultimo: boolean) {
-    const nome = destino.kind === 'chrome_profile'
-      ? (destino.email ? `${destino.label} (${destino.email})` : destino.label)
-      : m.native_accounts_login_where_default();
-    return ultimo ? m.native_accounts_login_where_last({ machine: destino.machine, name: nome }) : `${destino.machine}: ${nome}`;
-  }
-
-  function mesmoDestino(a: DestinoLogin | null, b: DestinoLogin) {
-    return !!a && a.machine === b.machine && a.kind === b.kind && a.profile === b.profile;
-  }
-
-  function motivoNavegador(motivo?: string | null) {
-    if (motivo === 'erro_login_machine_unreachable') return m.native_accounts_login_reason_unreachable();
-    if (motivo === 'erro_login_port_busy') return m.native_accounts_login_reason_port();
-    if (motivo === 'erro_login_target_missing') return m.native_accounts_login_reason_target();
-    return m.native_accounts_login_reason_other();
-  }
-
-  async function iniciarEntrar(conta: Credencial, destino: DestinoLogin | null = null) {
-    if (loginDe || loginIniciando) return;
-    loginDestinos = null;
-    loginDestino = destino;
     const tentativa = { ...conta };
     loginConta = tentativa;
     loginSucesso = null;
@@ -696,7 +652,7 @@ import { apagarConta, accountHolders, type AccountHolders, claudeAccountFolder, 
     loginCodigo = '';
     loginPasso = { etapa: 'idle' };
     try {
-      await (destino ? iniciarLogin(alvo, conta.nome_natural, destino) : iniciarLogin(alvo, conta.nome_natural));
+      await iniciarLogin(alvo, conta.nome_natural);
       if (destruido || g !== geracao || loginConta !== tentativa) {
         // Desmontou ou o alvo trocou ENTRE o clique e a resposta: sem tela onde mostrar erro
         // (o mesmo ramo silencioso do onDestroy), mas a janela do servidor — a máquina ANTIGA —
@@ -834,7 +790,6 @@ import { apagarConta, accountHolders, type AccountHolders, claudeAccountFolder, 
     loginConta = null; loginSucesso = null; loginCodigo = ''; loginErro = '';
     loginConsultaErro = false; loginCopiado = false; loginFalhou = false;
     loginEnviando = false; loginIniciando = false;
-    loginDestinos = null; loginDestino = null; loginVendoTela = false;
     await tick();
     const cartao = [...(superficie?.querySelectorAll<HTMLElement>('[data-conta-id]') ?? [])]
       .find(node => node.dataset.contaId === id);
@@ -877,7 +832,7 @@ import { apagarConta, accountHolders, type AccountHolders, claudeAccountFolder, 
         return;
       } finally { if (loginConta === tentativa) loginParado = false; }
     }
-    await iniciarEntrar(tentativa, loginDestino);
+    await iniciarEntrar(tentativa);
   }
 
   // B8 — o poll e a tentativa em voo NÃO podem sobreviver à desmontagem do componente.
@@ -919,40 +874,7 @@ import { apagarConta, accountHolders, type AccountHolders, claudeAccountFolder, 
         <h2 id="contas-login-titulo" tabindex="-1" use:focarLogin>{m.contas_login_titulo({ nome: loginConta.nome })}</h2>
         {#if loginErro}<p class="ct-aviso erro" role="alert">{loginErro}</p>{/if}
         {#if loginConsultaErro}<p class="ct-aviso erro" role="alert">{m.falha_conexao()}</p>{/if}
-        {#if loginDe && !loginFalhou && loginPasso.browser}
-          {@const navegador = loginPasso.browser}
-          {#if navegador.state === 'error'}
-            <p class="ct-aviso erro" role="alert">{m.native_accounts_login_browser_error({ machine: navegador.machine, reason: motivoNavegador(navegador.reason) })}</p>
-          {:else if navegador.state === 'open'}
-            <p class="ct-login-descricao">{m.native_accounts_login_browser_open({ machine: navegador.machine })}</p>
-            {#if loginVendoTela}
-              <LoginViewer alvo={apiTarget} conta={loginDe} maquina={navegador.machine} onFechar={() => { loginVendoTela = false; }} />
-            {:else if loginDestino?.kind === 'chrome_profile'}
-              <div class="ct-login-links">
-                <button type="button" class="ct-btn" onclick={() => { loginVendoTela = true; }}>{m.native_accounts_login_view_open()}</button>
-              </div>
-            {/if}
-          {:else}
-            <p class="ct-login-progresso" role="status"><span class="ct-login-spinner" aria-hidden="true"></span>{m.native_accounts_login_browser_opening({ machine: navegador.machine })}</p>
-          {/if}
-        {/if}
-        {#if loginDestinos}
-          <div class="ct-passo-txt">
-            <b>{m.native_accounts_login_where_title()}</b>
-            <p>{m.native_accounts_login_where_help()}</p>
-          </div>
-          <div class="ct-login-destinos">
-            {#each loginDestinos.targets as destino, i (i)}
-              {@const ultimo = mesmoDestino(loginDestinos.last, destino)}
-              <button type="button" class="ct-btn" class:primario={ultimo}
-                onclick={() => { if (loginConta) void iniciarEntrar(loginConta, destino); }}>{nomeDestino(destino, ultimo)}</button>
-            {/each}
-            <button type="button" class="ct-btn" onclick={() => { if (loginConta) void iniciarEntrar(loginConta); }}>{m.native_accounts_login_where_link()}</button>
-          </div>
-          <div class="ct-rodape login">
-            <button type="button" class="ct-btn" onclick={voltarContas}>{m.comum_voltar()}</button>
-          </div>
-        {:else if loginIniciando || (loginDe && !loginPasso.url && !loginFalhou)}
+        {#if loginIniciando || (loginDe && !loginPasso.url && !loginFalhou)}
           <p class="ct-login-progresso" role="status"><span class="ct-login-spinner" aria-hidden="true"></span>{m.contas_login_preparando()}</p>
         {:else if loginDe && !loginFalhou}
           <form onsubmit={(e) => { e.preventDefault(); confirmarEntrar(); }}>
@@ -989,7 +911,7 @@ import { apagarConta, accountHolders, type AccountHolders, claudeAccountFolder, 
             </div>
           </form>
         {/if}
-        {#if !loginDestinos && (!loginDe || !loginPasso.url || loginFalhou)}
+        {#if !loginDe || !loginPasso.url || loginFalhou}
           <div class="ct-rodape login">
             <button type="button" class="ct-btn" onclick={cancelarEntrar} disabled={loginIniciando || loginParado}>{m.comum_voltar()}</button>
             {#if !loginIniciando && (!loginDe || loginFalhou)}
@@ -1365,7 +1287,7 @@ import { apagarConta, accountHolders, type AccountHolders, claudeAccountFolder, 
               <button type="button" class="ct-acao primaria"
                 aria-label={m.contas_entrar_titulo({ nome: conta.nome })}
                 disabled={!!loginDe || loginIniciando}
-                onclick={() => escolherEntrar(conta)}>{m.contas_entrar()}</button>
+                onclick={() => iniciarEntrar(conta)}>{m.contas_entrar()}</button>
             {/if}
             <!-- Mesmo fluxo do Entrar (login_conta compara o token anterior e confirma pela
                  credencial nova): renovar É entrar de novo, só muda o momento. -->
@@ -1374,7 +1296,7 @@ import { apagarConta, accountHolders, type AccountHolders, claudeAccountFolder, 
               <button type="button" class="ct-acao primaria"
                 aria-label={m.contas_entrar_titulo({ nome: conta.nome })}
                 disabled={!!loginDe || loginIniciando}
-                onclick={() => escolherEntrar(conta)}>{m.contas_renovar_login()}</button>
+                onclick={() => iniciarEntrar(conta)}>{m.contas_renovar_login()}</button>
             {/if}
 
             {#if motor}
@@ -1611,7 +1533,7 @@ import { apagarConta, accountHolders, type AccountHolders, claudeAccountFolder, 
   {#if novo}
     <NovaCredencialSheet {apiTarget} nomesExistentes={Object.keys(motoresMapa)}
       baseDeslogada={baseDeslogada?.nome ?? null}
-      onEntrarBase={() => { const b = baseDeslogada; novo = null; if (b) void escolherEntrar(b); }}
+      onEntrarBase={() => { const b = baseDeslogada; novo = null; if (b) void iniciarEntrar(b); }}
       onFechar={() => { novo = null; carregar(); }}
       onCriada={() => { void carregar(geracao); }} />
   {/if}
@@ -1924,8 +1846,6 @@ import { apagarConta, accountHolders, type AccountHolders, claudeAccountFolder, 
               border-radius: var(--radius-sm); color: var(--text-primary);
               font-family: var(--font-mono); font-size: var(--text-sm); box-sizing: border-box; }
   .ct-btn.primario { background: var(--accent); border-color: var(--accent); color: var(--text-inverse); }
-  .ct-login-destinos { display: flex; flex-direction: column; gap: var(--space-2); }
-  .ct-login-destinos .ct-btn { width: 100%; box-sizing: border-box; }
   .ct-login-progresso { display: flex; align-items: center; justify-content: center; gap: var(--space-2);
                        margin: var(--space-4) 0; color: var(--text-secondary); font-size: var(--text-sm); }
   .ct-login-spinner { width: 16px; height: 16px; border: 2px solid var(--border-default);
