@@ -1,9 +1,10 @@
 //! Rotas do cofre: só o dono, nunca repassadas ao Python. Corpo malformado é recusado com código
 //! fixo, sem ecoar nada: a recusa padrão do `Json` do axum e o erro do serde podem repetir a senha.
-use axum::{body::to_bytes, extract::{ConnectInfo, Path, Request, State}, http::{HeaderMap, Method, StatusCode, header}, response::{IntoResponse, Response}};
+use axum::{extract::{ConnectInfo, Path, Request, State}, http::{HeaderMap, Method, StatusCode, header}, response::{IntoResponse, Response}};
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use std::{net::SocketAddr, sync::Arc};
+use zeroize::Zeroizing;
 
 use super::{EntryChange, KeyError, NewEntry, Role, Status, VaultError, config::{self, ConfigError, Placement}, remote::{Remote, RemoteError}, store};
 use crate::{routes::AppState, session_write::detail};
@@ -27,26 +28,37 @@ fn fail(status: StatusCode, code: &str, msg: &str) -> Response { detail(status, 
 
 fn invalid() -> Response { fail(StatusCode::UNPROCESSABLE_ENTITY, "erro_corpo_invalido", "corpo inválido") }
 
-/// Convidado nunca; sem o token do dono, 401 e a falha conta para o bloqueio.
-async fn owner(st: &AppState, peer: SocketAddr, req: &Request) -> Result<(), Response> {
-    if crate::routes::on_guest_port(req) || req.headers().contains_key("x-hangar-guest") {
-        return Err(fail(StatusCode::FORBIDDEN, "erro_cofre_so_dono", "só o dono usa o cofre"));
+/// Convidado nunca; sem o token do dono, 401 e a falha conta para o bloqueio. Síncrona até o
+/// `async move`: o futuro não guarda `&Request` (o corpo não é `Sync`, e o handler deixaria de ser `Send`).
+fn owner(st: &AppState, peer: SocketAddr, req: &Request) -> impl Future<Output = Result<(), Response>> + Send + use<> {
+    let guest = crate::routes::on_guest_port(req) || req.headers().contains_key("x-hangar-guest");
+    let gate = crate::routes::gate(st, peer, req);
+    let auth = st.auth.clone();
+    async move {
+        if guest { return Err(fail(StatusCode::FORBIDDEN, "erro_cofre_so_dono", "só o dono usa o cofre")); }
+        let (fwd, owner) = gate.await.map_err(crate::auth::unavailable)?;
+        if !owner {
+            auth.record_failure(&fwd.client_ip).await.map_err(crate::auth::unavailable)?;
+            return Err(fail(StatusCode::UNAUTHORIZED, "unauthorized", "token do dono ausente ou errado"));
+        }
+        Ok(())
     }
-    let (fwd, owner) = crate::routes::gate(st, peer, req).await.map_err(crate::auth::unavailable)?;
-    if !owner {
-        st.auth.record_failure(&fwd.client_ip).await.map_err(crate::auth::unavailable)?;
-        return Err(fail(StatusCode::UNAUTHORIZED, "unauthorized", "token do dono ausente ou errado"));
-    }
-    Ok(())
 }
 
-/// O corpo lido é zerado depois do parse; `None` = malformado, sem dizer o quê.
+/// `None` = malformado, sem dizer o quê. O buffer nasce com a capacidade do limite (crescer
+/// deixaria cópias do corpo sem zerar), e cada pedaço recebido é zerado depois de copiado.
 async fn body<T: DeserializeOwned>(req: Request) -> Option<T> {
-    let bytes = to_bytes(req.into_body(), MAX_BODY).await.ok()?;
-    let mut raw = bytes.try_into_mut().unwrap_or_else(|b| b[..].into());
-    let parsed = serde_json::from_slice::<T>(&raw).ok();
-    zeroize::Zeroize::zeroize(raw.as_mut());
-    parsed
+    use http_body_util::BodyExt;
+    let mut body = req.into_body();
+    let mut raw = Zeroizing::new(Vec::with_capacity(MAX_BODY));
+    while let Some(frame) = body.frame().await {
+        let Ok(data) = frame.ok()?.into_data() else { continue };
+        let fits = raw.len() + data.len() <= MAX_BODY;
+        if fits { raw.extend_from_slice(&data); }
+        if let Ok(mut owned) = data.try_into_mut() { zeroize::Zeroize::zeroize(owned.as_mut()); }
+        if !fits { return None; }
+    }
+    serde_json::from_slice::<T>(&raw).ok()
 }
 
 fn failure(st: &AppState, error: VaultError) -> Response {
@@ -101,9 +113,11 @@ fn ok(body: Value) -> Response { crate::session_write::json_response(StatusCode:
 
 pub async fn status(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let headers = req.headers().clone();
-    let resp = match owner(&st, peer, &req).await {
+    let (allowed, local) = (owner(&st, peer, &req), local_only(&req));
+    drop(req);
+    let resp = match allowed.await {
         Err(resp) => resp,
-        Ok(()) => status_body(&st, local_only(&req)).await,
+        Ok(()) => status_body(&st, local).await,
     };
     done(&headers, resp)
 }
@@ -148,8 +162,9 @@ fn known_peer(st: &AppState, id: &str) -> Result<(), Response> {
 
 pub async fn config(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let headers = req.headers().clone();
+    let allowed = owner(&st, peer, &req);
     let resp = 'r: {
-        if let Err(resp) = owner(&st, peer, &req).await { break 'r resp; }
+        if let Err(resp) = allowed.await { break 'r resp; }
         let Some(change) = body::<ConfigChange>(req).await else { break 'r invalid() };
         if change.owner.is_none() && change.backup_peer.is_none() { break 'r invalid(); }
         let before = match config::load(&st.hangar_dir) { Ok(cfg) => cfg, Err(error) => break 'r config_failure(&st, error) };
@@ -186,10 +201,11 @@ pub async fn config(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
 
 pub async fn entries(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let headers = req.headers().clone();
+    let (allowed, local, reading) = (owner(&st, peer, &req), local_only(&req), req.method() == Method::GET);
     let resp = 'r: {
-        if let Err(resp) = owner(&st, peer, &req).await { break 'r resp; }
-        if req.method() == axum::http::Method::GET {
-            if !local_only(&req) {
+        if let Err(resp) = allowed.await { break 'r resp; }
+        if reading {
+            if !local {
                 match config::placement(&st.hangar_dir) {
                     Ok(Placement::Remote(id)) => break 'r match (Remote { peers: &st.peers, owner: &id }).entries().await {
                         Ok(list) => ok(json!(list)),
@@ -215,9 +231,10 @@ pub async fn entries(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
 
 pub async fn entry(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, Path(id): Path<String>, req: Request) -> Response {
     let headers = req.headers().clone();
+    let (allowed, deleting) = (owner(&st, peer, &req), req.method() == Method::DELETE);
     let resp = 'r: {
-        if let Err(resp) = owner(&st, peer, &req).await { break 'r resp; }
-        if req.method() == axum::http::Method::DELETE {
+        if let Err(resp) = allowed.await { break 'r resp; }
+        if deleting {
             break 'r match st.vault.remove(&st.hangar_dir, &id).await {
                 Ok(()) => StatusCode::NO_CONTENT.into_response(),
                 Err(error) => failure(&st, error),
@@ -237,12 +254,17 @@ struct Reveal<'a> { password: &'a str }
 
 pub async fn password(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, Path(id): Path<String>, req: Request) -> Response {
     let headers = req.headers().clone();
+    let allowed = owner(&st, peer, &req);
+    drop(req);
     let resp = 'r: {
-        if let Err(resp) = owner(&st, peer, &req).await { break 'r resp; }
+        if let Err(resp) = allowed.await { break 'r resp; }
         match st.vault.password(&st.hangar_dir, &id).await {
             Ok(password) => {
-                let Ok(body) = serde_json::to_vec(&Reveal { password: password.as_str() }) else { break 'r failure(&st, VaultError::Io) };
-                (StatusCode::OK, [(header::CONTENT_TYPE, "application/json"), (header::CACHE_CONTROL, "no-store")], body).into_response()
+                // Capacidade exata de saída e dono zerado: o corpo some zerado quando o hyper o solta.
+                let mut body = Zeroizing::new(Vec::with_capacity(password.len() * 6 + 16));
+                if serde_json::to_writer(&mut *body, &Reveal { password: password.as_str() }).is_err() { break 'r failure(&st, VaultError::Io) }
+                (StatusCode::OK, [(header::CONTENT_TYPE, "application/json"), (header::CACHE_CONTROL, "no-store")],
+                    axum::body::Body::from(bytes::Bytes::from_owner(body))).into_response()
             }
             Err(error) => failure(&st, error),
         }

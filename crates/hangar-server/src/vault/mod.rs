@@ -137,13 +137,15 @@ fn new_id() -> Result<String, VaultError> {
 pub struct Vault {
     keys: Arc<dyn KeyStore>,
     /// Aberta uma vez, a chave fica até o servidor sair: trancar o chaveiro depois não fecha o cofre.
-    key: tokio::sync::Mutex<Option<Key>>,
+    /// A trava vai junto para o `spawn_blocking`: cliente que desiste não a solta com a gravação
+    /// ainda rodando, e o próximo pedido não lê o arquivo velho.
+    key: Arc<tokio::sync::Mutex<Option<Key>>>,
 }
 
 impl Vault {
     pub fn system() -> Self { Self::new(Arc::new(key::SecretService::default())) }
 
-    pub fn new(keys: Arc<dyn KeyStore>) -> Self { Self { keys, key: tokio::sync::Mutex::new(None) } }
+    pub fn new(keys: Arc<dyn KeyStore>) -> Self { Self { keys, key: Arc::new(tokio::sync::Mutex::new(None)) } }
 
     async fn key_for(&self, slot: &mut Option<Key>, path: &Path) -> Result<Key, VaultError> {
         if let Some(key) = slot.as_ref() { return Ok(key.clone()); }
@@ -171,13 +173,14 @@ impl Vault {
     /// `PUT /api/vault/config {owner: "self"}`: chave e cofre vazio; com o cofre de pé, nada muda.
     pub async fn create(&self, hangar_dir: &Path) -> Result<(), VaultError> {
         let path = store::path(hangar_dir);
-        let mut slot = self.key.lock().await;
+        let mut slot = self.key.clone().lock_owned().await;
         if store::exists(&path) { return Ok(()); }
         let key = key::create(&*self.keys).await.map_err(VaultError::Key)?;
-        let sealed = key.clone();
-        tokio::task::spawn_blocking(move || store::save(&path, &sealed, &store::Doc::default())).await.map_err(|_| VaultError::Io)??;
-        *slot = Some(key);
-        Ok(())
+        tokio::task::spawn_blocking(move || {
+            store::save(&path, &key, &store::Doc::default())?;
+            *slot = Some(key);
+            Ok(())
+        }).await.map_err(|_| VaultError::Io)?
     }
 
     async fn read<T: Send + 'static>(&self, hangar_dir: &Path, f: impl FnOnce(store::Doc) -> Result<T, VaultError> + Send + 'static)
@@ -191,9 +194,10 @@ impl Vault {
     async fn write<T: Send + 'static>(&self, hangar_dir: &Path, f: impl FnOnce(&mut store::Doc) -> Result<T, VaultError> + Send + 'static)
         -> Result<T, VaultError> {
         let path = store::path(hangar_dir);
-        let mut slot = self.key.lock().await;
+        let mut slot = self.key.clone().lock_owned().await;
         let key = self.key_for(&mut slot, &path).await?;
         tokio::task::spawn_blocking(move || {
+            let _held = slot;
             let mut doc = store::load(&path, &key)?;
             let out = f(&mut doc)?;
             store::save(&path, &key, &doc)?;

@@ -38,9 +38,14 @@ pub async fn open(store: &dyn KeyStore, vault_exists: bool) -> Result<Key, KeyEr
 }
 
 /// Só para o cofre que ainda não existe. Item que sobrou de um cofre apagado é reaproveitado: nenhum
-/// arquivo depende de outra chave.
+/// arquivo depende de outra chave. Item que sobrou sem 32 bytes é trocado por uma chave nova
+/// (`write` substitui o item de mesmos atributos); senão o cofre nunca nasceria.
 pub async fn create(store: &dyn KeyStore) -> Result<Key, KeyError> {
-    if let Some(key) = store.read().await? { return Ok(key); }
+    match store.read().await {
+        Ok(Some(key)) => return Ok(key),
+        Ok(None) | Err(KeyError::Lost) => {}
+        Err(error) => return Err(error),
+    }
     let mut key = Zeroizing::new([0u8; KEY_LEN]);
     ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut key[..]).map_err(|_| KeyError::Bus)?;
     store.write(key.clone()).await?;
@@ -79,53 +84,75 @@ mod linux {
             Ok(conn)
         }
 
-        /// Erro de barramento solta a conexão: a próxima chamada abre outra.
-        async fn settle<T>(&self, result: Result<T, KeyError>) -> Result<T, KeyError> {
-            if result.as_ref().err() == Some(&KeyError::Bus) {
-                tracing::warn!(code = "vault_key_bus", "o Secret Service não respondeu à chave do cofre");
-                *self.conn.lock().await = None;
+        /// Só conexão caída é solta. Prazo estourado ou recusa mantêm a conexão: soltá-la com um
+        /// pedido no ar faria do Hangar o cliente que sai do barramento no meio do pedido.
+        async fn settle<T>(&self, result: Result<T, Fail>) -> Result<T, KeyError> {
+            match result {
+                Ok(value) => Ok(value),
+                Err(Fail { error, dead }) => {
+                    if dead {
+                        tracing::warn!(code = "vault_key_bus_lost", "a conexão com o Secret Service caiu; a próxima abre outra");
+                        *self.conn.lock().await = None;
+                    } else if error == KeyError::Bus {
+                        tracing::warn!(code = "vault_key_bus", "o Secret Service não respondeu à chave do cofre");
+                    }
+                    Err(error)
+                }
             }
-            result
+        }
+
+        async fn open(&self) -> Result<(zbus::Connection, OwnedObjectPath), KeyError> {
+            let conn = self.connection().await?;
+            match tokio::time::timeout(LIMIT, open_session(&conn)).await {
+                Ok(Ok(session)) => Ok((conn, session)),
+                Ok(Err(fail)) => self.settle(Err(fail)).await,
+                Err(_) => self.settle(Err(KeyError::Bus.into())).await,
+            }
+        }
+
+        /// A sessão fecha mesmo quando a operação estourou o prazo.
+        async fn finish<T>(&self, conn: &zbus::Connection, session: &OwnedObjectPath, result: Result<T, Fail>) -> Result<T, KeyError> {
+            let _ = tokio::time::timeout(LIMIT, close_session(conn, session)).await;
+            self.settle(result).await
         }
     }
 
     impl KeyStore for SecretService {
         fn read(&self) -> BoxFuture<'_, Result<Option<Key>, KeyError>> {
             Box::pin(async move {
-                let conn = self.connection().await?;
-                let found = tokio::time::timeout(LIMIT, async {
-                    let session = open_session(&conn).await?;
-                    let found = read_key(&conn, &session).await;
-                    close_session(&conn, &session).await;
-                    found
-                }).await.unwrap_or(Err(KeyError::Bus));
-                self.settle(found).await
+                let (conn, session) = self.open().await?;
+                let found = tokio::time::timeout(LIMIT, read_key(&conn, &session)).await.unwrap_or(Err(KeyError::Bus.into()));
+                self.finish(&conn, &session, found).await
             })
         }
 
         fn write(&self, key: Key) -> BoxFuture<'_, Result<(), KeyError>> {
             Box::pin(async move {
-                let conn = self.connection().await?;
-                let written = tokio::time::timeout(LIMIT, async {
-                    let session = open_session(&conn).await?;
-                    let written = write_key(&conn, &session, &key).await;
-                    close_session(&conn, &session).await;
-                    written
-                }).await.unwrap_or(Err(KeyError::Bus));
-                self.settle(written).await
+                let (conn, session) = self.open().await?;
+                let written = tokio::time::timeout(LIMIT, write_key(&conn, &session, &key)).await.unwrap_or(Err(KeyError::Bus.into()));
+                self.finish(&conn, &session, written).await
             })
         }
     }
 
-    fn classify(error: &zbus::Error) -> KeyError {
-        match error {
-            zbus::Error::MethodError(name, ..) if name.to_string() == "org.freedesktop.Secret.Error.IsLocked" => KeyError::Locked,
-            _ => KeyError::Bus,
-        }
+    /// `dead`: a conexão caiu (E/S), e só então se solta.
+    struct Fail { error: KeyError, dead: bool }
+
+    impl From<KeyError> for Fail {
+        fn from(error: KeyError) -> Self { Self { error, dead: false } }
     }
 
-    async fn proxy<'a>(conn: &zbus::Connection, path: &'a str, interface: &'a str) -> Result<zbus::Proxy<'a>, KeyError> {
-        build_proxy(conn, path, interface).await.map_err(|_| KeyError::Bus)
+    fn fail(error: zbus::Error) -> Fail {
+        let dead = matches!(error, zbus::Error::InputOutput(_));
+        let error = match &error {
+            zbus::Error::MethodError(name, ..) if name.to_string() == "org.freedesktop.Secret.Error.IsLocked" => KeyError::Locked,
+            _ => KeyError::Bus,
+        };
+        Fail { error, dead }
+    }
+
+    async fn proxy<'a>(conn: &zbus::Connection, path: &'a str, interface: &'a str) -> Result<zbus::Proxy<'a>, Fail> {
+        build_proxy(conn, path, interface).await.map_err(fail)
     }
 
     async fn build_proxy<'a>(conn: &zbus::Connection, path: &'a str, interface: &'a str) -> zbus::Result<zbus::Proxy<'a>> {
@@ -134,14 +161,14 @@ mod linux {
     }
 
     /// Sem dono do nome não pergunta: perguntar subiria um daemon com o `login` trancado.
-    async fn open_session(conn: &zbus::Connection) -> Result<OwnedObjectPath, KeyError> {
-        let bus = zbus::fdo::DBusProxy::new(conn).await.map_err(|_| KeyError::Bus)?;
-        let name = zbus::names::BusName::try_from(SECRETS).map_err(|_| KeyError::Bus)?;
-        if !bus.name_has_owner(name).await.map_err(|_| KeyError::Bus)? { return Err(KeyError::Bus); }
+    async fn open_session(conn: &zbus::Connection) -> Result<OwnedObjectPath, Fail> {
+        let bus = zbus::fdo::DBusProxy::new(conn).await.map_err(fail)?;
+        let name = zbus::names::BusName::try_from(SECRETS).map_err(|_| Fail::from(KeyError::Bus))?;
+        if !bus.name_has_owner(name).await.map_err(|e| fail(e.into()))? { return Err(KeyError::Bus.into()); }
         let service = proxy(conn, SERVICE, "org.freedesktop.Secret.Service").await?;
         let reply = service.call_with_flags::<_, _, (OwnedValue, OwnedObjectPath)>("OpenSession",
-            zbus::proxy::MethodFlags::NoAutoStart.into(), &("plain", Value::from(""))).await.map_err(|e| classify(&e))?;
-        reply.map(|(_, session)| session).ok_or(KeyError::Bus)
+            zbus::proxy::MethodFlags::NoAutoStart.into(), &("plain", Value::from(""))).await.map_err(fail)?;
+        Ok(reply.map(|(_, session)| session).ok_or(KeyError::Bus)?)
     }
 
     async fn close_session(conn: &zbus::Connection, session: &OwnedObjectPath) {
@@ -154,11 +181,11 @@ mod linux {
         HashMap::from([("application", "hangar"), ("kind", "vault-key")])
     }
 
-    async fn read_key(conn: &zbus::Connection, session: &OwnedObjectPath) -> Result<Option<Key>, KeyError> {
+    async fn read_key(conn: &zbus::Connection, session: &OwnedObjectPath) -> Result<Option<Key>, Fail> {
         let service = proxy(conn, SERVICE, "org.freedesktop.Secret.Service").await?;
         let flags = zbus::proxy::MethodFlags::NoAutoStart.into();
         let (unlocked, locked) = service.call_with_flags::<_, _, (Vec<OwnedObjectPath>, Vec<OwnedObjectPath>)>(
-            "SearchItems", flags, &(attributes(),)).await.map_err(|e| classify(&e))?.ok_or(KeyError::Bus)?;
+            "SearchItems", flags, &(attributes(),)).await.map_err(fail)?.ok_or(KeyError::Bus)?;
         let in_login = |items: Vec<OwnedObjectPath>| -> Vec<OwnedObjectPath> {
             let mut items: Vec<_> = items.into_iter().filter(|p| p.as_str().starts_with(&format!("{LOGIN}/"))).collect();
             items.sort_by(|a, b| a.as_str().cmp(b.as_str()));
@@ -166,23 +193,24 @@ mod linux {
         };
         let (unlocked, locked) = (in_login(unlocked), in_login(locked));
         let Some(item) = unlocked.into_iter().next() else {
-            return if locked.is_empty() { Ok(None) } else { Err(KeyError::Locked) };
+            return if locked.is_empty() { Ok(None) } else { Err(KeyError::Locked.into()) };
         };
         let secrets = service.call_with_flags::<_, _, HashMap<OwnedObjectPath, Secret>>(
-            "GetSecrets", flags, &(vec![item.clone()], session)).await.map_err(|e| classify(&e))?.ok_or(KeyError::Bus)?;
+            "GetSecrets", flags, &(vec![item.clone()], session)).await.map_err(fail)?.ok_or(KeyError::Bus)?;
         let mut found = None;
         for (path, (_, _, value, _)) in secrets {
             let value = Zeroizing::new(value);
             if path == item { found = Some(value); }
         }
         let value = found.ok_or(KeyError::Bus)?;
-        if value.len() != KEY_LEN { return Err(KeyError::Lost); }
+        if value.len() != KEY_LEN { return Err(KeyError::Lost.into()); }
         let mut key = Zeroizing::new([0u8; KEY_LEN]);
         key.copy_from_slice(&value);
         Ok(Some(key))
     }
 
-    async fn write_key(conn: &zbus::Connection, session: &OwnedObjectPath, key: &Key) -> Result<(), KeyError> {
+    /// `replace`: um item que sobrou com os mesmos atributos (sem 32 bytes) dá lugar à chave nova.
+    async fn write_key(conn: &zbus::Connection, session: &OwnedObjectPath, key: &Key) -> Result<(), Fail> {
         let collection = proxy(conn, LOGIN, "org.freedesktop.Secret.Collection").await?;
         let properties: HashMap<&str, Value> = HashMap::from([
             ("org.freedesktop.Secret.Item.Label", Value::from("Hangar: chave do cofre de senhas")),
@@ -191,10 +219,10 @@ mod linux {
         let value = Zeroizing::new(key.to_vec());
         let secret = (session, Vec::<u8>::new(), &*value, "application/octet-stream");
         let (_, prompt) = collection.call_with_flags::<_, _, (OwnedObjectPath, OwnedObjectPath)>("CreateItem",
-            zbus::proxy::MethodFlags::NoAutoStart.into(), &(properties, secret, false)).await
-            .map_err(|e| classify(&e))?.ok_or(KeyError::Bus)?;
+            zbus::proxy::MethodFlags::NoAutoStart.into(), &(properties, secret, true)).await
+            .map_err(fail)?.ok_or(KeyError::Bus)?;
         // Prompt = coleção trancada; sem display ele não abre, e quem destranca é o aviso do chaveiro.
-        if prompt.as_str() != "/" { return Err(KeyError::Locked); }
+        if prompt.as_str() != "/" { return Err(KeyError::Locked.into()); }
         Ok(())
     }
 }

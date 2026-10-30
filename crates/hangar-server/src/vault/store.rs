@@ -50,10 +50,23 @@ fn cipher(key: &[u8; 32]) -> Result<aead::LessSafeKey, StoreError> {
     Ok(aead::LessSafeKey::new(aead::UnboundKey::new(&aead::AES_256_GCM, key).map_err(|_| StoreError::Io)?))
 }
 
+/// Só conta os bytes.
+struct Count(usize);
+
+impl io::Write for Count {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> { self.0 += bytes.len(); Ok(bytes.len()) }
+    fn flush(&mut self) -> io::Result<()> { Ok(()) }
+}
+
 pub fn seal(key: &[u8; 32], doc: &Doc) -> Result<Vec<u8>, StoreError> {
     let mut nonce = [0u8; NONCE_LEN];
     ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut nonce).map_err(|_| StoreError::Io)?;
-    let mut body = Zeroizing::new(serde_json::to_vec(doc).map_err(|_| StoreError::Io)?);
+    // Tamanho medido antes: o buffer já nasce com o JSON e a etiqueta, e nada realoca deixando
+    // cópia da senha sem zerar.
+    let mut size = Count(0);
+    serde_json::to_writer(&mut size, doc).map_err(|_| StoreError::Io)?;
+    let mut body = Zeroizing::new(Vec::with_capacity(size.0 + aead::AES_256_GCM.tag_len()));
+    serde_json::to_writer(&mut *body, doc).map_err(|_| StoreError::Io)?;
     cipher(key)?.seal_in_place_append_tag(aead::Nonce::assume_unique_for_key(nonce), aead::Aad::from([VERSION]), &mut *body)
         .map_err(|_| StoreError::Io)?;
     let mut out = Vec::with_capacity(1 + NONCE_LEN + body.len());

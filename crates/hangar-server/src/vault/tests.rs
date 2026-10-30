@@ -9,14 +9,17 @@ const OWNER: &str = "dono";
 
 /// Chaveiro falso: um item opcional, trancado ou não.
 #[derive(Default)]
-struct FakeKeys { key: Mutex<Option<[u8; 32]>>, locked: Mutex<bool>, writes: Mutex<u32> }
+struct FakeKeys { key: Mutex<Option<[u8; 32]>>, locked: Mutex<bool>, writes: Mutex<u32>, wrong_size: Mutex<bool> }
 
 impl KeyStore for FakeKeys {
     fn read(&self) -> BoxFuture<'_, Result<Option<Key>, KeyError>> {
-        let found = if *self.locked.lock().unwrap() { Err(KeyError::Locked) } else { Ok(self.key.lock().unwrap().map(Zeroizing::new)) };
+        let found = if *self.locked.lock().unwrap() { Err(KeyError::Locked) }
+            else if *self.wrong_size.lock().unwrap() { Err(KeyError::Lost) }
+            else { Ok(self.key.lock().unwrap().map(Zeroizing::new)) };
         Box::pin(async move { found })
     }
     fn write(&self, key: Key) -> BoxFuture<'_, Result<(), KeyError>> {
+        *self.wrong_size.lock().unwrap() = false;
         *self.key.lock().unwrap() = Some(*key);
         *self.writes.lock().unwrap() += 1;
         Box::pin(async { Ok(()) })
@@ -82,6 +85,19 @@ async fn a_vault_file_without_the_key_item_is_key_lost_and_no_key_is_created() {
     vault.create(dir.path()).await.unwrap();
     assert_eq!(*empty.writes.lock().unwrap(), 0, "chave nova por cima de um cofre existente");
     assert_eq!(vault.status(dir.path()).await.state, State::KeyLost);
+}
+
+/// Item que sobrou sem 32 bytes e sem `vault.bin`: o cofre nasce com chave nova no lugar dele.
+#[tokio::test]
+async fn a_leftover_wrong_size_item_without_a_vault_is_replaced_on_create() {
+    let dir = tempfile::tempdir().unwrap();
+    let keys = Arc::new(FakeKeys::default());
+    *keys.wrong_size.lock().unwrap() = true;
+    let vault = Vault::new(keys.clone());
+    vault.create(dir.path()).await.unwrap();
+    assert_eq!(*keys.writes.lock().unwrap(), 1);
+    assert_eq!(vault.status(dir.path()).await, Status { role: Role::Owner, state: State::Open });
+    assert_eq!(Vault::new(keys).status(dir.path()).await.state, State::Open, "outra vida do servidor lê a chave nova");
 }
 
 #[tokio::test]
