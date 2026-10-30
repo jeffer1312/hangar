@@ -1,0 +1,541 @@
+{
+  "source_commit": "8a3ce81c1",
+  "platform": "posix",
+  "command": "cd backend && uv run python tests/fixtures/contract/codex-integration/generate_native_cli_json.py",
+  "boundary": "Bytes de stdout controlados; parser, diagn\u00f3stico e limpeza originais.",
+  "program": "\nimport json, sys\nscenario = sys.argv[1]\nassert sys.argv[2:4] == ['-c', 'project_root_markers=[]']\nif scenario == 'deep':\n    value = 1\n    for _ in range(200):\n        value = [value]\n    print(json.dumps({'value': value}))\nelif scenario == 'nonfinite':\n    print('{\"nan\":NaN,\"positive\":Infinity,\"negative\":-Infinity}')\nelif scenario == 'surrogate':\n    print(r'{\"value\":\"\\ud800\"}')\nelif scenario == 'utf16':\n    sys.stdout.buffer.write('{\"value\":\"a\u00e7\u00e3o\"}'.encode('utf-16'))\nelif scenario == 'bom':\n    sys.stdout.buffer.write(b'\\xef\\xbb\\xbf{\"value\":1}')\nelif scenario == 'empty':\n    pass\nelif scenario == 'whitespace':\n    print('   ')\nelse:\n    print('{\"value\":1234567890123456789012345678901234567890}')\n",
+  "cases": [
+    {
+      "name": "deep",
+      "operation": "cli",
+      "scenario": "deep",
+      "result": {
+        "ok": {
+          "value": [
+            [
+              [
+                [
+                  [
+                    [
+                      [
+                        [
+                          [
+                            [
+                              [
+                                [
+                                  [
+                                    [
+                                      [
+                                        [
+                                          [
+                                            [
+                                              [
+                                                [
+                                                  [
+                                                    [
+                                                      [
+                                                        [
+                                                          [
+                                                            [
+                                                              [
+                                                                [
+                                                                  [
+                                                                    [
+                                                                      [
+                                                                        [
+                                                                          [
+                                                                            [
+                                                                              [
+                                                                                [
+                                                                                  [
+                                                                                    [
+                                                                                      [
+                                                                                        [
+                                                                                          [
+                                                                                            [
+                                                                                              [
+                                                                                                [
+                                                                                                  [
+                                                                                                    [
+                                                                                                      [
+                                                                                                        [
+                                                                                                          [
+                                                                                                            [
+                                                                                                              [
+                                                                                                                [
+                                                                                                                  [
+                                                                                                                    [
+                                                                                                                      [
+                                                                                                                        [
+                                                                                                                          [
+                                                                                                                            [
+                                                                                                                              [
+                                                                                                                                [
+                                                                                                                                  [
+                                                                                                                                    [
+                                                                                                                                      [
+                                                                                                                                        [
+                                                                                                                                          [
+                                                                                                                                            [
+                                                                                                                                              [
+                                                                                                                                                [
+                                                                                                                                                  [
+                                                                                                                                                    [
+                                                                                                                                                      [
+                                                                                                                                                        [
+                                                                                                                                                          [
+                                                                                                                                                            [
+                                                                                                                                                              [
+                                                                                                                                                                [
+                                                                                                                                                                  [
+                                                                                                                                                                    [
+                                                                                                                                                                      [
+                                                                                                                                                                        [
+                                                                                                                                                                          [
+                                                                                                                                                                            [
+                                                                                                                                                                              [
+                                                                                                                                                                                [
+                                                                                                                                                                                  [
+                                                                                                                                                                                    [
+                                                                                                                                                                                      [
+                                                                                                                                                                                        [
+                                                                                                                                                                                          [
+                                                                                                                                                                                            [
+                                                                                                                                                                                              [
+                                                                                                                                                                                                [
+                                                                                                                                                                                                  [
+                                                                                                                                                                                                    [
+                                                                                                                                                                                                      [
+                                                                                                                                                                                                        [
+                                                                                                                                                                                                          [
+                                                                                                                                                                                                            [
+                                                                                                                                                                                                              [
+                                                                                                                                                                                                                [
+                                                                                                                                                                                                                  [
+                                                                                                                                                                                                                    [
+                                                                                                                                                                                                                      [
+                                                                                                                                                                                                                        [
+                                                                                                                                                                                                                          [
+                                                                                                                                                                                                                            [
+                                                                                                                                                                                                                              [
+                                                                                                                                                                                                                                [
+                                                                                                                                                                                                                                  [
+                                                                                                                                                                                                                                    [
+                                                                                                                                                                                                                                      [
+                                                                                                                                                                                                                                        [
+                                                                                                                                                                                                                                          [
+                                                                                                                                                                                                                                            [
+                                                                                                                                                                                                                                              [
+                                                                                                                                                                                                                                                [
+                                                                                                                                                                                                                                                  [
+                                                                                                                                                                                                                                                    [
+                                                                                                                                                                                                                                                      [
+                                                                                                                                                                                                                                                        [
+                                                                                                                                                                                                                                                          [
+                                                                                                                                                                                                                                                            [
+                                                                                                                                                                                                                                                              [
+                                                                                                                                                                                                                                                                [
+                                                                                                                                                                                                                                                                  [
+                                                                                                                                                                                                                                                                    [
+                                                                                                                                                                                                                                                                      [
+                                                                                                                                                                                                                                                                        [
+                                                                                                                                                                                                                                                                          [
+                                                                                                                                                                                                                                                                            [
+                                                                                                                                                                                                                                                                              [
+                                                                                                                                                                                                                                                                                [
+                                                                                                                                                                                                                                                                                  [
+                                                                                                                                                                                                                                                                                    [
+                                                                                                                                                                                                                                                                                      [
+                                                                                                                                                                                                                                                                                        [
+                                                                                                                                                                                                                                                                                          [
+                                                                                                                                                                                                                                                                                            [
+                                                                                                                                                                                                                                                                                              [
+                                                                                                                                                                                                                                                                                                [
+                                                                                                                                                                                                                                                                                                  [
+                                                                                                                                                                                                                                                                                                    [
+                                                                                                                                                                                                                                                                                                      [
+                                                                                                                                                                                                                                                                                                        [
+                                                                                                                                                                                                                                                                                                          [
+                                                                                                                                                                                                                                                                                                            [
+                                                                                                                                                                                                                                                                                                              [
+                                                                                                                                                                                                                                                                                                                [
+                                                                                                                                                                                                                                                                                                                  [
+                                                                                                                                                                                                                                                                                                                    [
+                                                                                                                                                                                                                                                                                                                      [
+                                                                                                                                                                                                                                                                                                                        [
+                                                                                                                                                                                                                                                                                                                          [
+                                                                                                                                                                                                                                                                                                                            [
+                                                                                                                                                                                                                                                                                                                              [
+                                                                                                                                                                                                                                                                                                                                [
+                                                                                                                                                                                                                                                                                                                                  [
+                                                                                                                                                                                                                                                                                                                                    [
+                                                                                                                                                                                                                                                                                                                                      [
+                                                                                                                                                                                                                                                                                                                                        [
+                                                                                                                                                                                                                                                                                                                                          [
+                                                                                                                                                                                                                                                                                                                                            [
+                                                                                                                                                                                                                                                                                                                                              [
+                                                                                                                                                                                                                                                                                                                                                [
+                                                                                                                                                                                                                                                                                                                                                  [
+                                                                                                                                                                                                                                                                                                                                                    [
+                                                                                                                                                                                                                                                                                                                                                      [
+                                                                                                                                                                                                                                                                                                                                                        [
+                                                                                                                                                                                                                                                                                                                                                          [
+                                                                                                                                                                                                                                                                                                                                                            [
+                                                                                                                                                                                                                                                                                                                                                              [
+                                                                                                                                                                                                                                                                                                                                                                [
+                                                                                                                                                                                                                                                                                                                                                                  [
+                                                                                                                                                                                                                                                                                                                                                                    [
+                                                                                                                                                                                                                                                                                                                                                                      [
+                                                                                                                                                                                                                                                                                                                                                                        [
+                                                                                                                                                                                                                                                                                                                                                                          [
+                                                                                                                                                                                                                                                                                                                                                                            [
+                                                                                                                                                                                                                                                                                                                                                                              [
+                                                                                                                                                                                                                                                                                                                                                                                [
+                                                                                                                                                                                                                                                                                                                                                                                  [
+                                                                                                                                                                                                                                                                                                                                                                                    [
+                                                                                                                                                                                                                                                                                                                                                                                      [
+                                                                                                                                                                                                                                                                                                                                                                                        [
+                                                                                                                                                                                                                                                                                                                                                                                          [
+                                                                                                                                                                                                                                                                                                                                                                                            [
+                                                                                                                                                                                                                                                                                                                                                                                              [
+                                                                                                                                                                                                                                                                                                                                                                                                [
+                                                                                                                                                                                                                                                                                                                                                                                                  [
+                                                                                                                                                                                                                                                                                                                                                                                                    [
+                                                                                                                                                                                                                                                                                                                                                                                                      [
+                                                                                                                                                                                                                                                                                                                                                                                                        [
+                                                                                                                                                                                                                                                                                                                                                                                                          [
+                                                                                                                                                                                                                                                                                                                                                                                                            [
+                                                                                                                                                                                                                                                                                                                                                                                                              [
+                                                                                                                                                                                                                                                                                                                                                                                                                [
+                                                                                                                                                                                                                                                                                                                                                                                                                  [
+                                                                                                                                                                                                                                                                                                                                                                                                                    [
+                                                                                                                                                                                                                                                                                                                                                                                                                      [
+                                                                                                                                                                                                                                                                                                                                                                                                                        [
+                                                                                                                                                                                                                                                                                                                                                                                                                          1
+                                                                                                                                                                                                                                                                                                                                                                                                                        ]
+                                                                                                                                                                                                                                                                                                                                                                                                                      ]
+                                                                                                                                                                                                                                                                                                                                                                                                                    ]
+                                                                                                                                                                                                                                                                                                                                                                                                                  ]
+                                                                                                                                                                                                                                                                                                                                                                                                                ]
+                                                                                                                                                                                                                                                                                                                                                                                                              ]
+                                                                                                                                                                                                                                                                                                                                                                                                            ]
+                                                                                                                                                                                                                                                                                                                                                                                                          ]
+                                                                                                                                                                                                                                                                                                                                                                                                        ]
+                                                                                                                                                                                                                                                                                                                                                                                                      ]
+                                                                                                                                                                                                                                                                                                                                                                                                    ]
+                                                                                                                                                                                                                                                                                                                                                                                                  ]
+                                                                                                                                                                                                                                                                                                                                                                                                ]
+                                                                                                                                                                                                                                                                                                                                                                                              ]
+                                                                                                                                                                                                                                                                                                                                                                                            ]
+                                                                                                                                                                                                                                                                                                                                                                                          ]
+                                                                                                                                                                                                                                                                                                                                                                                        ]
+                                                                                                                                                                                                                                                                                                                                                                                      ]
+                                                                                                                                                                                                                                                                                                                                                                                    ]
+                                                                                                                                                                                                                                                                                                                                                                                  ]
+                                                                                                                                                                                                                                                                                                                                                                                ]
+                                                                                                                                                                                                                                                                                                                                                                              ]
+                                                                                                                                                                                                                                                                                                                                                                            ]
+                                                                                                                                                                                                                                                                                                                                                                          ]
+                                                                                                                                                                                                                                                                                                                                                                        ]
+                                                                                                                                                                                                                                                                                                                                                                      ]
+                                                                                                                                                                                                                                                                                                                                                                    ]
+                                                                                                                                                                                                                                                                                                                                                                  ]
+                                                                                                                                                                                                                                                                                                                                                                ]
+                                                                                                                                                                                                                                                                                                                                                              ]
+                                                                                                                                                                                                                                                                                                                                                            ]
+                                                                                                                                                                                                                                                                                                                                                          ]
+                                                                                                                                                                                                                                                                                                                                                        ]
+                                                                                                                                                                                                                                                                                                                                                      ]
+                                                                                                                                                                                                                                                                                                                                                    ]
+                                                                                                                                                                                                                                                                                                                                                  ]
+                                                                                                                                                                                                                                                                                                                                                ]
+                                                                                                                                                                                                                                                                                                                                              ]
+                                                                                                                                                                                                                                                                                                                                            ]
+                                                                                                                                                                                                                                                                                                                                          ]
+                                                                                                                                                                                                                                                                                                                                        ]
+                                                                                                                                                                                                                                                                                                                                      ]
+                                                                                                                                                                                                                                                                                                                                    ]
+                                                                                                                                                                                                                                                                                                                                  ]
+                                                                                                                                                                                                                                                                                                                                ]
+                                                                                                                                                                                                                                                                                                                              ]
+                                                                                                                                                                                                                                                                                                                            ]
+                                                                                                                                                                                                                                                                                                                          ]
+                                                                                                                                                                                                                                                                                                                        ]
+                                                                                                                                                                                                                                                                                                                      ]
+                                                                                                                                                                                                                                                                                                                    ]
+                                                                                                                                                                                                                                                                                                                  ]
+                                                                                                                                                                                                                                                                                                                ]
+                                                                                                                                                                                                                                                                                                              ]
+                                                                                                                                                                                                                                                                                                            ]
+                                                                                                                                                                                                                                                                                                          ]
+                                                                                                                                                                                                                                                                                                        ]
+                                                                                                                                                                                                                                                                                                      ]
+                                                                                                                                                                                                                                                                                                    ]
+                                                                                                                                                                                                                                                                                                  ]
+                                                                                                                                                                                                                                                                                                ]
+                                                                                                                                                                                                                                                                                              ]
+                                                                                                                                                                                                                                                                                            ]
+                                                                                                                                                                                                                                                                                          ]
+                                                                                                                                                                                                                                                                                        ]
+                                                                                                                                                                                                                                                                                      ]
+                                                                                                                                                                                                                                                                                    ]
+                                                                                                                                                                                                                                                                                  ]
+                                                                                                                                                                                                                                                                                ]
+                                                                                                                                                                                                                                                                              ]
+                                                                                                                                                                                                                                                                            ]
+                                                                                                                                                                                                                                                                          ]
+                                                                                                                                                                                                                                                                        ]
+                                                                                                                                                                                                                                                                      ]
+                                                                                                                                                                                                                                                                    ]
+                                                                                                                                                                                                                                                                  ]
+                                                                                                                                                                                                                                                                ]
+                                                                                                                                                                                                                                                              ]
+                                                                                                                                                                                                                                                            ]
+                                                                                                                                                                                                                                                          ]
+                                                                                                                                                                                                                                                        ]
+                                                                                                                                                                                                                                                      ]
+                                                                                                                                                                                                                                                    ]
+                                                                                                                                                                                                                                                  ]
+                                                                                                                                                                                                                                                ]
+                                                                                                                                                                                                                                              ]
+                                                                                                                                                                                                                                            ]
+                                                                                                                                                                                                                                          ]
+                                                                                                                                                                                                                                        ]
+                                                                                                                                                                                                                                      ]
+                                                                                                                                                                                                                                    ]
+                                                                                                                                                                                                                                  ]
+                                                                                                                                                                                                                                ]
+                                                                                                                                                                                                                              ]
+                                                                                                                                                                                                                            ]
+                                                                                                                                                                                                                          ]
+                                                                                                                                                                                                                        ]
+                                                                                                                                                                                                                      ]
+                                                                                                                                                                                                                    ]
+                                                                                                                                                                                                                  ]
+                                                                                                                                                                                                                ]
+                                                                                                                                                                                                              ]
+                                                                                                                                                                                                            ]
+                                                                                                                                                                                                          ]
+                                                                                                                                                                                                        ]
+                                                                                                                                                                                                      ]
+                                                                                                                                                                                                    ]
+                                                                                                                                                                                                  ]
+                                                                                                                                                                                                ]
+                                                                                                                                                                                              ]
+                                                                                                                                                                                            ]
+                                                                                                                                                                                          ]
+                                                                                                                                                                                        ]
+                                                                                                                                                                                      ]
+                                                                                                                                                                                    ]
+                                                                                                                                                                                  ]
+                                                                                                                                                                                ]
+                                                                                                                                                                              ]
+                                                                                                                                                                            ]
+                                                                                                                                                                          ]
+                                                                                                                                                                        ]
+                                                                                                                                                                      ]
+                                                                                                                                                                    ]
+                                                                                                                                                                  ]
+                                                                                                                                                                ]
+                                                                                                                                                              ]
+                                                                                                                                                            ]
+                                                                                                                                                          ]
+                                                                                                                                                        ]
+                                                                                                                                                      ]
+                                                                                                                                                    ]
+                                                                                                                                                  ]
+                                                                                                                                                ]
+                                                                                                                                              ]
+                                                                                                                                            ]
+                                                                                                                                          ]
+                                                                                                                                        ]
+                                                                                                                                      ]
+                                                                                                                                    ]
+                                                                                                                                  ]
+                                                                                                                                ]
+                                                                                                                              ]
+                                                                                                                            ]
+                                                                                                                          ]
+                                                                                                                        ]
+                                                                                                                      ]
+                                                                                                                    ]
+                                                                                                                  ]
+                                                                                                                ]
+                                                                                                              ]
+                                                                                                            ]
+                                                                                                          ]
+                                                                                                        ]
+                                                                                                      ]
+                                                                                                    ]
+                                                                                                  ]
+                                                                                                ]
+                                                                                              ]
+                                                                                            ]
+                                                                                          ]
+                                                                                        ]
+                                                                                      ]
+                                                                                    ]
+                                                                                  ]
+                                                                                ]
+                                                                              ]
+                                                                            ]
+                                                                          ]
+                                                                        ]
+                                                                      ]
+                                                                    ]
+                                                                  ]
+                                                                ]
+                                                              ]
+                                                            ]
+                                                          ]
+                                                        ]
+                                                      ]
+                                                    ]
+                                                  ]
+                                                ]
+                                              ]
+                                            ]
+                                          ]
+                                        ]
+                                      ]
+                                    ]
+                                  ]
+                                ]
+                              ]
+                            ]
+                          ]
+                        ]
+                      ]
+                    ]
+                  ]
+                ]
+              ]
+            ]
+          ]
+        }
+      },
+      "logs": [],
+      "operations_empty": true,
+      "directories_removed": true,
+      "directories_outside_home": true
+    },
+    {
+      "name": "nonfinite",
+      "operation": "cli",
+      "scenario": "nonfinite",
+      "result": {
+        "ok": {
+          "nan": NaN,
+          "positive": Infinity,
+          "negative": -Infinity
+        }
+      },
+      "logs": [],
+      "operations_empty": true,
+      "directories_removed": true,
+      "directories_outside_home": true
+    },
+    {
+      "name": "surrogate",
+      "operation": "cli",
+      "scenario": "surrogate",
+      "result": {
+        "ok": {
+          "value": "\ud800"
+        }
+      },
+      "logs": [],
+      "operations_empty": true,
+      "directories_removed": true,
+      "directories_outside_home": true
+    },
+    {
+      "name": "utf16",
+      "operation": "cli",
+      "scenario": "utf16",
+      "result": {
+        "ok": {
+          "value": "a\u00e7\u00e3o"
+        }
+      },
+      "logs": [],
+      "operations_empty": true,
+      "directories_removed": true,
+      "directories_outside_home": true
+    },
+    {
+      "name": "bom",
+      "operation": "cli",
+      "scenario": "bom",
+      "result": {
+        "ok": {
+          "value": 1
+        }
+      },
+      "logs": [],
+      "operations_empty": true,
+      "directories_removed": true,
+      "directories_outside_home": true
+    },
+    {
+      "name": "empty",
+      "operation": "cli",
+      "scenario": "empty",
+      "result": {
+        "error": "O comando do Codex n\u00e3o retornou JSON v\u00e1lido.",
+        "class": "CodexNativoErro"
+      },
+      "logs": [
+        {
+          "comando": [
+            "fixture",
+            "a\u00e7\u00e3o com espa\u00e7o"
+          ],
+          "codigo": 0,
+          "stdout": "",
+          "stderr": ""
+        }
+      ],
+      "operations_empty": true,
+      "directories_removed": true,
+      "directories_outside_home": true
+    },
+    {
+      "name": "whitespace",
+      "operation": "cli",
+      "scenario": "whitespace",
+      "result": {
+        "error": "O comando do Codex n\u00e3o retornou JSON v\u00e1lido.",
+        "class": "CodexNativoErro"
+      },
+      "logs": [
+        {
+          "comando": [
+            "fixture",
+            "a\u00e7\u00e3o com espa\u00e7o"
+          ],
+          "codigo": 0,
+          "stdout": "   \n",
+          "stderr": ""
+        }
+      ],
+      "operations_empty": true,
+      "directories_removed": true,
+      "directories_outside_home": true
+    },
+    {
+      "name": "wide",
+      "operation": "cli",
+      "scenario": "wide",
+      "result": {
+        "ok": {
+          "value": 1234567890123456789012345678901234567890
+        }
+      },
+      "logs": [],
+      "operations_empty": true,
+      "directories_removed": true,
+      "directories_outside_home": true
+    }
+  ]
+}

@@ -1,6 +1,10 @@
 //! Escritas comparadas e backups restritos; uma colisão conserva o arquivo externo.
 use crate::accounts::environment::AccountEnvironment;
 use serde_json::{Value, json};
+
+#[cfg(test)]
+#[path="files_config_tests.rs"]
+mod config_tests;
 use std::{
     fs,
     io::{self, Write},
@@ -207,7 +211,7 @@ pub async fn edit_config(
         let raw = read(path).map_err(|e| e.to_string())?;
         let current = match raw.as_deref().filter(|b| !b.is_empty()) {
             None => json!({}),
-            Some(b) => toml::from_str::<Value>(
+            Some(b) => super::instructions_toml::parse(
                 std::str::from_utf8(b).map_err(|_| "config.toml não é UTF-8")?,
             )
             .map_err(|_| "config.toml inválido")?,

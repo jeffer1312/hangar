@@ -28,6 +28,12 @@ async fn native_cli_waits_for_output_owned_by_descendants() {
     assert_fixture(fixture).await;
 }
 
+#[tokio::test]
+async fn native_cli_preserves_python_json_values_and_encodings() {
+    let fixture = crate::orchestration::codec::loads(include_str!("../../../../backend/tests/fixtures/contract/codex-integration/native-cli-json.json")).unwrap();
+    assert_fixture(fixture).await;
+}
+
 async fn assert_fixture(fixture:Value) {
     let mut differences = Vec::new();
     for row in fixture["cases"].as_array().unwrap() {
@@ -81,9 +87,9 @@ async fn assert_fixture(fixture:Value) {
             "operations_empty":cli.active_operations()==0,
             "directories_removed":directories.iter().all(|path|!path.exists()),
             "directories_outside_home":directories.iter().all(|path|path!=&home)});
-        let mut encoded = serde_json::to_string(&actual).unwrap().replace(root.path().to_str().unwrap(),"$ROOT");
+        let mut encoded = crate::orchestration::codec::dumps(&actual,false).replace(root.path().to_str().unwrap(),"$ROOT");
         for directory in &directories {encoded=encoded.replace(directory.to_str().unwrap(),"$ADMIN");}
-        let actual: Value = serde_json::from_str(&encoded).unwrap();
+        let actual = crate::orchestration::codec::loads(&encoded).unwrap();
         let expected = json!({"result":row["result"],"logs":row["logs"],"operations_empty":row["operations_empty"],"directories_removed":row["directories_removed"],"directories_outside_home":row["directories_outside_home"]});
         if actual != expected {differences.push((row["name"].clone(),actual,expected));}
         if row["name"] != "closed" && directories.is_empty() {differences.push((row["name"].clone(),json!("nenhum processo observado"),json!("processo próprio")));}

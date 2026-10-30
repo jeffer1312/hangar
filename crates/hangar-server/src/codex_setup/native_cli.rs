@@ -78,11 +78,11 @@ impl AdminCli {
                     inner.state.lock().unwrap_or_else(|e|e.into_inner()).operations.retain(|item|!Arc::ptr_eq(item,&operation));
                 }
                 let result = match (result,&cleanup) {
-                    (Ok(_),Err(error))=>Err(error.clone().into()),
+                    (Ok(value),Err(error))=>{crate::orchestration::codec::discard(value);Err(error.clone().into())},
                     (result,_)=>result,
                 };
                 done.send_replace(Some(cleanup));
-                let _ = reply.send(result);
+                if let Err(Ok(value))=reply.send(result){crate::orchestration::codec::discard(value);}
             });
         }
         result.await.map_err(|_|Failure::from("Operação administrativa do Codex interrompida.".to_owned()))?

@@ -65,7 +65,8 @@ pub(super) async fn run(
     let stdout=std::mem::take(&mut *stdout.lock().unwrap_or_else(|e|e.into_inner()));
     let stderr=std::mem::take(&mut *stderr.lock().unwrap_or_else(|e|e.into_inner()));
     let tail=String::from_utf8_lossy(&stderr).chars().rev().take(500).collect::<Vec<_>>().into_iter().rev().collect::<String>().trim().to_owned();
-    let parsed=serde_json::from_slice::<Value>(&stdout);
+    let parsed=if stdout.is_empty(){Err(())}else{crate::orchestration::body::parse(&stdout).map_err(|_|())}
+        .map(crate::config_sync::runtime_values::ValueGuard);
     let diagnostic=!status.success() && (expected.is_empty() || !tail.contains(expected))
         || status.success() && parsed.as_ref().map_or(true,|value|!value.is_object() || crate::config_sync::apply::truthy(&value["errors"]));
     if diagnostic {
@@ -74,9 +75,9 @@ pub(super) async fn run(
         let _=tokio::task::spawn_blocking(move ||diagnose(&env,&codex,&args,code,&raw_out,&raw_err)).await;
     }
     if !status.success() {return Err(Failure {message:format!("O comando do Codex falhou (código {code})."),stderr:tail});}
-    let value=parsed.map_err(|_|Failure::from("O comando do Codex não retornou JSON válido.".to_owned()))?;
+    let mut value=parsed.map_err(|_|Failure::from("O comando do Codex não retornou JSON válido.".to_owned()))?;
     if !value.is_object() {return Err("O comando do Codex retornou um resultado inválido.".to_owned().into());}
-    Ok(value)
+    Ok(value.take())
 }
 
 fn read(mut pipe:impl tokio::io::AsyncRead+Unpin+Send+'static,buffer:Arc<Mutex<Vec<u8>>>)->(tokio::task::JoinHandle<std::io::Result<()>>,oneshot::Receiver<()>) {
