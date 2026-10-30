@@ -1,0 +1,108 @@
+{
+  "source_commit": "8552d4f3d",
+  "command": "python generate-pipeline-errors.py --reference <checkout> --output step-effects.json",
+  "cases": [
+    {
+      "name": "test_falha_no_meio_nao_reinicia",
+      "calls": [
+        {
+          "method": "checar",
+          "result": {
+            "pode": true,
+            "faltando": [],
+            "branch": "main",
+            "branch_de_trabalho": false
+          }
+        },
+        {
+          "method": "executar",
+          "result": {
+            "fase": "pronto",
+            "ok": false,
+            "erro": "build quebrou",
+            "voltou": false
+          }
+        }
+      ],
+      "head": "2804247bbf97ef992d831b91d0a37b41c3a014fa",
+      "branch": "main",
+      "invalid_steps": null
+    },
+    {
+      "name": "test_erro_inesperado_vira_estado_e_nao_traceback",
+      "calls": [
+        {
+          "method": "checar",
+          "result": {
+            "pode": true,
+            "faltando": [],
+            "branch": "main",
+            "branch_de_trabalho": false
+          }
+        },
+        {
+          "method": "executar",
+          "result": {
+            "fase": "pronto",
+            "ok": false,
+            "erro": "passo com defeito",
+            "voltou": false
+          }
+        }
+      ],
+      "head": "2804247bbf97ef992d831b91d0a37b41c3a014fa",
+      "branch": "main",
+      "invalid_steps": null
+    },
+    {
+      "name": "test_a_vez_e_solta_mesmo_quando_falha",
+      "calls": [
+        {
+          "method": "checar",
+          "result": {
+            "pode": true,
+            "faltando": [],
+            "branch": "main",
+            "branch_de_trabalho": false
+          }
+        },
+        {
+          "method": "executar",
+          "result": {
+            "fase": "pronto",
+            "ok": false,
+            "erro": "x",
+            "voltou": false
+          }
+        }
+      ],
+      "head": "2804247bbf97ef992d831b91d0a37b41c3a014fa",
+      "branch": "main",
+      "invalid_steps": null
+    },
+    {
+      "name": "unexpected-after-code",
+      "calls": [
+        {
+          "method": "executar",
+          "result": {
+            "fase": "pronto",
+            "ok": false,
+            "erro": "passo com defeito",
+            "voltou": true
+          }
+        }
+      ],
+      "restored_head": true,
+      "events": [
+        [
+          "prepare",
+          false
+        ],
+        [
+          "restart"
+        ]
+      ]
+    }
+  ]
+}

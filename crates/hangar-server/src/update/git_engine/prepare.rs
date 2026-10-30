@@ -274,42 +274,40 @@ impl Service {
                 .map_err(|e| e.to_string())?;
         }
         if dist {
-            let mut held: Vec<Held> = vec![];
-            let (ui, binaries) = std::thread::scope(|scope| {
-                let ui = scope.spawn(|| self.update_dist(source));
-                let tag = releases::tag_for(
-                    &self
-                        .git(&["rev-parse", "--abbrev-ref", "HEAD"], 30)
-                        .map(|v| v.stdout.trim().to_owned())
-                        .unwrap_or_default(),
-                );
-                let binaries = releases::fetch(
-                    source,
-                    releases::BASE,
-                    Some(&tag),
-                    platform,
-                    &self.home.join(".hangar/bin"),
-                    release,
-                    Some(&mut held),
-                );
-                (
-                    ui.join()
-                        .unwrap_or_else(|_| Err("a preparação da tela foi interrompida".into())),
-                    binaries,
-                )
-            });
-            if let Ok(Some(warning)) = &ui {
-                self.state().warn(warning);
-            }
-            for warning in binaries.unwrap_or_default() {
-                self.state().warn(&warning);
-            }
-            ui?;
-            for warning in releases::publish(&held) {
-                self.state().warn(&warning);
-            }
+            self.prepare_assets(
+                &|| self.update_dist(source),
+                &|held| {
+                    let tag = releases::tag_for(
+                        &self.git(&["rev-parse", "--abbrev-ref", "HEAD"], 30)
+                            .map(|v| v.stdout.trim().to_owned()).unwrap_or_default(),
+                    );
+                    releases::fetch(source, releases::BASE, Some(&tag), platform,
+                        &self.home.join(".hangar/bin"), release, Some(held))
+                },
+                &releases::publish,
+            )?;
             self.refresh_chromium();
         }
         Ok(())
     }
+    /// A publicação espera a tela; os avisos das duas tarefas sobrevivem à recusa dela.
+    pub fn prepare_assets(
+        &self,
+        ui: &(dyn Fn() -> Result<Option<String>, String> + Sync),
+        binaries: &dyn Fn(&mut Vec<Held>) -> Option<Vec<String>>,
+        publish: &dyn Fn(&[Held]) -> Vec<String>,
+    ) -> Result<(), String> {
+        let mut held = vec![];
+        let (ui, binaries) = std::thread::scope(|scope| {
+            let ui = scope.spawn(ui);
+            let binaries = binaries(&mut held);
+            (ui.join().unwrap_or_else(|_| Err("a preparação da tela foi interrompida".into())), binaries)
+        });
+        if let Ok(Some(warning)) = &ui { self.state().warn(warning); }
+        for warning in binaries.unwrap_or_default() { self.state().warn(&warning); }
+        ui?;
+        for warning in publish(&held) { self.state().warn(&warning); }
+        Ok(())
+    }
+
 }

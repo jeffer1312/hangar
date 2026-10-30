@@ -6,6 +6,11 @@ use super::{
 };
 use serde_json::{Value, json};
 pub type Preparer<'a> = dyn Fn(&Service, &str, bool, Option<&Release>, &(dyn Source + Sync), Option<&str>) -> Result<(), String> + 'a;
+fn panic_cause(payload: &(dyn std::any::Any + Send)) -> String {
+    payload.downcast_ref::<String>().cloned()
+        .or_else(|| payload.downcast_ref::<&str>().map(|text| (*text).to_owned()))
+        .unwrap_or_else(|| "a atualização foi interrompida por uma falha interna".into())
+}
 const STEPS: [(&str, &str); 6] = [
     ("resguardar", "Guardando o que estava aqui"),
     ("codigo", "Puxando o código novo"),
@@ -109,8 +114,8 @@ impl Service {
         if let Err(error)=self.release_turn(){tracing::warn!(code="update_lock_unavailable",%error,"trava da atualização não removida");}
         match outcome {
             Ok(value) => value,
-            Err(_) => engine.failed(
-                "a atualização foi interrompida por uma falha interna",
+            Err(payload) => engine.failed(
+                &panic_cause(payload.as_ref()),
                 port,
                 None,
             ),
@@ -190,7 +195,7 @@ impl Service {
         }
         self.environment
             .insert("HANGAR_UPDATE_OWNS_RUST".into(), "1".into());
-        let prepared = (|| -> Result<(), String> {
+        let prepared = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<(), String> {
             if let Some(platform) = platform {
                 let errors = releases::discard(&self.home.join(".hangar/bin"), platform);
                 if !errors.is_empty() {
@@ -232,7 +237,7 @@ impl Service {
             .map_err(|e| e.to_string())?;
             self.step("instalar")?;
             preparer(self, topology, true, release.as_ref(), source, platform)
-        })();
+        })).unwrap_or_else(|payload| Err(panic_cause(payload.as_ref())));
         if let Err(mut error) = prepared {
             if !from.is_empty()
                 && self

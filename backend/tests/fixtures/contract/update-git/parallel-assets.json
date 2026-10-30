@@ -1,0 +1,53 @@
+{
+  "source_commit": "8552d4f3d",
+  "command": "python generate-parallel-assets.py --reference <checkout> --output parallel-assets.json",
+  "cases": [
+    {
+      "name": "test_preparar_baixa_dist_e_binario_juntos_e_guarda_os_dois_avisos",
+      "fails": null,
+      "calls": [
+        {
+          "ok": true,
+          "warnings": [
+            "tela não atualizada: X",
+            "binários: Y"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "test_preparar_com_dist_que_explode_guarda_o_aviso_do_binario",
+      "fails": null,
+      "calls": [
+        {
+          "ok": false,
+          "error": "build travou",
+          "warnings": [
+            "binários: Y"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "test_binario_baixado_junto_so_e_gravado_com_a_tela_no_lugar",
+      "fails": false,
+      "calls": [
+        {
+          "ok": true,
+          "warnings": []
+        }
+      ]
+    },
+    {
+      "name": "test_binario_baixado_junto_so_e_gravado_com_a_tela_no_lugar",
+      "fails": true,
+      "calls": [
+        {
+          "ok": false,
+          "error": "build travou",
+          "warnings": []
+        }
+      ]
+    }
+  ]
+}

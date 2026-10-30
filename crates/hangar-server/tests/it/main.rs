@@ -432,5 +432,10 @@ mod update_screen_restart;
 
 mod update_step_effects;
 
+mod update_channel_pipeline;
 mod update_dist_key;
 mod update_state_write_failure;
+
+mod update_parallel_assets;
+
+mod update_pipeline_errors;
