@@ -481,7 +481,17 @@ fn declared_too_large(headers: &HeaderMap, limit: usize) -> bool {
 fn too_large() -> Response { crate::http_body_limit::rejected() }
 /// O tamanho declarado é recusado antes do porteiro; o fluxo só é consumido pela rota que o lê.
 pub async fn body_limit(State(st): State<Arc<AppState>>, request: Request, next: axum::middleware::Next) -> Response {
-    if declared_too_large(request.headers(), st.login_guests.body_limit) { return too_large(); }
+    let path = request.uri().path();
+    if !owns_path(path) && !crate::loops::http::owns_path(path)
+        && !crate::config_sync::runtime_http::owns_path(path)
+    {
+        return next.run(request).await;
+    }
+    if declared_too_large(request.headers(), st.login_guests.body_limit) {
+        let mut response = too_large();
+        crate::http_cors::apply(request.headers(), &mut response);
+        return response;
+    }
     next.run(request).await
 }
 pub async fn route(
