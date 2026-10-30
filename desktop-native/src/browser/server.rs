@@ -6,7 +6,7 @@ use futures::channel::oneshot;
 use serde_json::{Value, json};
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::TcpStream, runtime::Runtime};
 
-use super::{control::Reply, preview_fmt::sidecar_name};
+use super::{control::{Reply, Secret}, preview_fmt::sidecar_name};
 
 const HEAD_MAX: usize = 16 * 1024;
 const BODY_MAX: usize = 128 * 1024;
@@ -17,7 +17,8 @@ const LOGIN_SECS: u64 = 110;
 
 pub enum Request {
     /// Verbo do `/cmd`, o do hangar-preview.
-    Command { key: String, verb: String, args: Vec<String>, tab: Option<i64>, reply: oneshot::Sender<Reply> },
+    /// `secret`: o `valor` do corpo (senha do cofre do `fill-secret`), fora dos `args`.
+    Command { key: String, verb: String, args: Vec<String>, tab: Option<i64>, secret: Option<Secret>, reply: oneshot::Sender<Reply> },
     /// Comando CDP do `/cdp`, já conferido contra `relay::RELAYED`.
     Cdp { key: String, method: String, params: Value, reply: oneshot::Sender<Result<Value, String>> },
     /// Espectador novo da tela remota; tira o anterior daquele navegador.
@@ -43,7 +44,7 @@ struct Head {
 enum Route { Cmd, Cdp(String), Browser(String), Local(String) }
 
 /// `cdp`: a página é de fora do app (`hangar-preview --cdp`), e `alvo` escolhe qual; aí a chave de sessão não entra.
-struct Body { key: String, verb: String, args: Vec<String>, tab: Option<i64>, cdp: Option<String>, alvo: Option<String> }
+struct Body { key: String, verb: String, args: Vec<String>, tab: Option<i64>, cdp: Option<String>, alvo: Option<String>, secret: Option<Secret> }
 
 fn nav_dir() -> Option<PathBuf> { std::env::home_dir().map(|h| h.join(".hangar").join("nav")) }
 
@@ -203,7 +204,9 @@ fn parse_body(bytes: &[u8]) -> Result<Body, String> {
     let key = match v["chave"].as_str() { Some(k) => k.to_owned(), None if cdp.is_some() => String::new(), None => return Err(invalid()) };
     let verb = v["verbo"].as_str().ok_or_else(invalid)?.to_owned();
     let args = v["args"].as_array().into_iter().flatten().map(|a| a.as_str().map_or_else(|| a.to_string(), str::to_owned)).collect();
-    Ok(Body { key, verb, args, tab: v["aba"].as_i64(), cdp, alvo: v["alvo"].as_str().map(str::to_owned) })
+    // shortcut: o corpo lido e o `Value` não são zerados; só o valor que fica vivo no controlador é.
+    let secret = v["valor"].as_str().map(|s| Secret::new(s.to_owned()));
+    Ok(Body { key, verb, args, tab: v["aba"].as_i64(), cdp, alvo: v["alvo"].as_str().map(str::to_owned), secret })
 }
 
 pub fn start(runtime: &Runtime, requests: async_channel::Sender<Request>) -> std::io::Result<u16> {
@@ -342,7 +345,7 @@ async fn answer(bytes: &[u8], requests: &async_channel::Sender<Request>) -> Stri
         match super::external::submit(&cdp, body.alvo, body.verb, body.args) { Ok(rx) => rx, Err(e) => return e }
     } else {
         let (tx, rx) = oneshot::channel();
-        if requests.send(Request::Command { key: body.key, verb: body.verb, args: body.args, tab: body.tab, reply: tx }).await.is_err() {
+        if requests.send(Request::Command { key: body.key, verb: body.verb, args: body.args, tab: body.tab, secret: body.secret, reply: tx }).await.is_err() {
             return "erro: o app nativo esta fechando".into();
         }
         rx

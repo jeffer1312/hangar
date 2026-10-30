@@ -42,7 +42,8 @@ fn states(node: &Value, role: &str, name: &str) -> String {
     if on("required") { out += " [required]"; }
     if flags.get("invalid").and_then(|v| v.as_str()).is_some_and(|v| v != "false") { out += " [invalid]"; }
     match &node["value"]["value"] {
-        Value::String(value) if !value.is_empty() && value != name => {
+        // Campo de senha: o Chromium põe um `•` por caractere, e nem o tamanho da senha sai.
+        Value::String(value) if !value.is_empty() && value != name && !value.chars().all(|c| c == '•') => {
             let short: String = value.chars().take(80).collect();
             out += &format!(" value=\"{short}{}\"", if short.len() < value.len() { "…" } else { "" });
         }
@@ -120,6 +121,26 @@ pub fn compact_ax(nodes: &[Value], refs_only: bool) -> Compact {
         }
     }
     out
+}
+
+pub const MASK: &str = "••••";
+
+/// O valor trocado por `••••` em texto: literal, como string JSON (o `eval`), base64 (padrão e de URL, com e sem `=`)
+/// e percent-encoded (tudo, `encodeURIComponent` e formulário), como o `mask` do `hangar-server` (`vault/exec.rs`).
+pub fn mask(text: &str, value: &str) -> String {
+    use base64::{Engine as _, engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD}};
+    if value.is_empty() { return text.to_owned(); }
+    let percent = |keep: &[u8]| value.bytes()
+        .map(|b| if b.is_ascii_alphanumeric() || keep.contains(&b) { char::from(b).to_string() } else { format!("%{b:02X}") }).collect::<String>();
+    let json = serde_json::to_string(value).unwrap_or_default();
+    let mut forms = vec![value.to_owned(), json.trim_matches('"').to_owned(), percent(b""), percent(b"-_.!~*'()"),
+        url::form_urlencoded::byte_serialize(value.as_bytes()).collect()];
+    for engine in [STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD] { forms.push(engine.encode(value)); }
+    forms.retain(|f| !f.is_empty());
+    // O mais longo antes: o base64 sem `=` é prefixo do com `=`.
+    forms.sort_by_key(|f| std::cmp::Reverse(f.len()));
+    forms.dedup();
+    forms.iter().fold(text.to_owned(), |out, form| out.replace(form.as_str(), MASK))
 }
 
 /// Junta as linhas até `max` caracteres; o que passar vira um aviso com o caminho para ver o resto.
@@ -206,6 +227,30 @@ mod tests {
 
     fn node(id: &str, role: &str, name: &str, backend: Option<i64>, children: &[&str]) -> Value {
         json!({"nodeId": id, "role": {"value": role}, "name": {"value": name}, "backendDOMNodeId": backend, "childIds": children})
+    }
+
+    /// Medido no Chromium 149: o `getFullAXTree` dá `value` cru no campo de texto e um `•` por caractere no de senha.
+    #[test]
+    fn a_password_field_shows_no_value_not_even_its_length() {
+        let mut user = node("2", "textbox", "Usuário", Some(5), &[]);
+        user["value"] = json!({"type": "string", "value": "meuusuario"});
+        let mut pass = node("3", "textbox", "Senha", Some(6), &[]);
+        pass["value"] = json!({"type": "string", "value": "••••••••••••"});
+        let out = compact_ax(&[node("1", "RootWebArea", "Login", None, &["2", "3"]), user, pass], false);
+        assert_eq!(out.lines, vec!["- RootWebArea \"Login\"", "  - textbox \"Usuário\" [ref=@e1] value=\"meuusuario\"", "  - textbox \"Senha\" [ref=@e2]"]);
+    }
+
+    #[test]
+    fn the_secret_is_masked_in_every_encoding() {
+        use base64::{Engine as _, engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD}};
+        let value = "s3nh@ Fo+/x?=é\"";
+        for form in [value.to_owned(), STANDARD.encode(value), URL_SAFE_NO_PAD.encode(value), "s3nh%40%20Fo%2B%2Fx%3F%3D%C3%A9%22".into(),
+            url::form_urlencoded::byte_serialize(value.as_bytes()).collect()] {
+            assert_eq!(mask(&format!("antes {form} depois"), value), format!("antes {MASK} depois"), "forma {form}");
+        }
+        assert_eq!(mask(&format!("ok: {}", serde_json::to_string(value).unwrap()), value), format!("ok: \"{MASK}\""), "o eval devolve JSON");
+        assert_eq!(mask("nada aqui", value), "nada aqui");
+        assert_eq!(mask("x", ""), "x");
     }
 
     #[test]

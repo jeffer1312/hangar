@@ -165,7 +165,7 @@ async fn catalog_is_the_python_one_with_the_whole_open_request() {
     let mut mcp = Mcp::open(s.addr, &[]).await;
     let listed = mcp.request("tools/list", json!({})).await["result"]["tools"].clone();
     // Tools que nasceram depois do Python (ele não tem mais MCP) ficam fora da comparação.
-    let listed: Vec<Value> = listed.as_array().unwrap().iter().filter(|t| !matches!(t["name"].as_str(), Some("interrupt" | "contract" | "request_secret" | "vault_list" | "vault_exec" | "vault_file"))).cloned().collect();
+    let listed: Vec<Value> = listed.as_array().unwrap().iter().filter(|t| !matches!(t["name"].as_str(), Some("interrupt" | "contract" | "request_secret" | "vault_list" | "vault_exec" | "vault_file" | "vault_fill"))).cloned().collect();
     let python: Vec<Value> = serde_json::from_str(PYTHON_CATALOG).unwrap();
     let names = |tools: &[Value]| tools.iter().map(|t| t["name"].as_str().unwrap().to_owned()).collect::<Vec<_>>();
     assert_eq!(names(&listed), names(&python), "as 14 tools do Python, na mesma ordem");

@@ -253,6 +253,29 @@ pub fn mask(text: &str, value: &str) -> Zeroizing<String> {
     out
 }
 
+/// O host de um endereço (com ou sem esquema), em minúsculas, sem usuário, porta nem ponto final.
+pub fn host_of(url: &str) -> Option<String> {
+    let rest = url.trim();
+    let rest = rest.split_once("://").map_or(rest, |(_, r)| r);
+    let authority = rest.split(['/', '?', '#']).next()?;
+    let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    let host = match host.strip_prefix('[') { Some(v6) => v6.split(']').next()?, None => host.split(':').next()? };
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    (!host.is_empty()).then_some(host)
+}
+
+/// A página é do site da `url` da entrada: o mesmo host ou um subdomínio dele (`www.` da entrada não conta).
+pub fn same_site(entry_url: &str, page_host: &str) -> bool {
+    let Some(host) = host_of(entry_url) else { return false };
+    let host = host.strip_prefix("www.").filter(|h| h.contains('.')).unwrap_or(&host);
+    page_host == host || page_host.ends_with(&format!(".{host}"))
+}
+
+/// Ref de snapshot (`@eN`): o único alvo que o `fill-secret` aceita.
+pub fn ref_ok(target: &str) -> bool {
+    target.len() > 2 && target.starts_with("@e") && target[2..].bytes().all(|b| b.is_ascii_digit())
+}
+
 fn tail(text: &str) -> String {
     let count = text.chars().count();
     if count <= TAIL_CHARS { return text.to_owned(); }
@@ -325,3 +348,7 @@ pub async fn run(command: &str, cwd: &Path, base_env: Vec<(OsString, OsString)>,
         Ok((Err(e), _, _)) => (-1, format!("a saída do comando não leu: {e}")),
     }
 }
+
+#[cfg(test)]
+#[path = "tests_fill.rs"]
+mod tests_fill;

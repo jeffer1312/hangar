@@ -1,4 +1,4 @@
-//! As 20 tools. Cada uma chama a rota pública que o `hangar-send`/`hangar-preview` chama, pelo
+//! As 21 tools. Cada uma chama a rota pública que o `hangar-send`/`hangar-preview` chama, pelo
 //! roteador deste processo e como o dono; o `html_render` publica direto na loja de páginas e os
 //! verbos do navegador vão ao app desktop, como no CLI.
 use std::collections::HashMap;
@@ -25,7 +25,8 @@ use crate::groups::model::Sidecar;
 use crate::groups::peers::PeerClient;
 use crate::routes::AppState;
 use crate::transcript::pyjson::dumps_unicode;
-use crate::vault::{exec, files, remote::WaitStatus, wire::{AskReq, UseKind, UseReq}};
+use crate::vault::{VaultError, exec, files, remote::WaitStatus, wire::{AskReq, UseKind, UseReq}};
+use zeroize::Zeroizing;
 
 const VOICE_CLOSE_REFUSED: &str = "recusado: a voz fecha sessão pela própria ferramenta close_session, que pede o sim \
 falado do usuário";
@@ -123,6 +124,9 @@ struct VaultExec { entry: String, env: String, command: String, reason: String, 
 
 #[derive(Deserialize)]
 struct VaultFile { entry: String, reason: String }
+
+#[derive(Deserialize)]
+struct VaultFill { entry: String, field: String, #[serde(rename = "ref")] target: String, reason: String }
 
 const VAULT_NO_KEY: &str = "erro_cofre_sem_chave_sessao: o cofre só atende uma sessão identificada pela chave dela (X-Hangar-Key, \
 a CP_SESSION_KEY); registre o MCP de novo (scripts/registrar-mcp.py) e reabra a sessão";
@@ -276,6 +280,12 @@ fn verb_args(raw: Option<&[Value]>) -> Result<Vec<String>, String> {
     }).collect()
 }
 
+/// O verbo que `browser`/`browser_batch` não mandam. `fill-secret` sai só do `vault_fill`, com o valor fora dos args.
+fn verb_refusal(verb: &str) -> Option<String> {
+    if verb == "fill-secret" { return Some("erro_cofre_so_vault_fill: fill-secret só pela tool vault_fill".into()); }
+    (!NAV_VERBS.contains(&verb)).then(|| format!("verbo desconhecido: {verb} (aceitos: {})", NAV_VERBS.join(", ")))
+}
+
 /// `interrupt`: a voz não abre filha ligada (nasce sem `creator`), e Esc na própria sessão mataria o turno de quem chama.
 fn interrupt_caller_refusal(me: &str, voice: bool, alvo: &str) -> Option<String> {
     if voice { return Some("recusado: a voz não interrompe sessão; só quem abriu a filha com `link` interrompe".into()); }
@@ -317,6 +327,7 @@ impl Tools {
             "vault_list" => self.vault_list(headers).await,
             "vault_exec" => match args(name, raw) { Ok(a) => self.vault_exec(headers, a).await, Err(e) => Err(e) },
             "vault_file" => match args(name, raw) { Ok(a) => self.vault_file(headers, a).await, Err(e) => Err(e) },
+            "vault_fill" => match args(name, raw) { Ok(a) => self.vault_fill(headers, a).await, Err(e) => Err(e) },
             _ => Err(format!("Unknown tool: {name}")),
         };
         outcome.unwrap_or_else(|msg| CallToolResult::error(vec![ContentBlock::text(msg)]))
@@ -558,7 +569,7 @@ impl Tools {
     }
 
     async fn nav_verb(&self, name: &str, verb: &str, mut args: Vec<String>, tab: Option<i64>) -> Result<String, String> {
-        if !NAV_VERBS.contains(&verb) { return Err(format!("verbo desconhecido: {verb} (aceitos: {})", NAV_VERBS.join(", "))); }
+        if let Some(refusal) = verb_refusal(verb) { return Err(refusal); }
         if verb == "eval" && args.is_empty() { return Err("eval precisa de um trecho JS".into()); }
         let home = self.home();
         if verb == "shot" {
@@ -776,6 +787,53 @@ impl Tools {
         files::expire_later(path.clone());
         Ok(dict(json!({"file": path})))
     }
+
+    /// O host da página do navegador da sessão; só http(s) tem domínio para comparar com a entrada.
+    async fn fill_host(&self, home: &Path, name: &str) -> Result<String, String> {
+        let url = nav::page_url(&self.http, home, name).await.map_err(|e| format!("erro_cofre_sem_navegador: {}", e.0))?;
+        exec::host_of(&url).filter(|_| url.starts_with("https://") || url.starts_with("http://"))
+            .ok_or_else(|| format!("erro_cofre_dominio_diferente: a página ({url}) não tem domínio"))
+    }
+
+    /// O usuário sai do resumo da entrada (o `vault_list` já o mostra); a senha, pelo pedido de uso
+    /// `fill` com o domínio da página como alvo.
+    async fn vault_fill(&self, headers: &HeaderMap, a: VaultFill) -> Outcome {
+        let deadline = tokio::time::Instant::now() + exec::BUDGET;
+        let password = match a.field.as_str() {
+            "password" => true,
+            "username" => false,
+            _ => return Err("erro_cofre_argumento_invalido: `field` é \"username\" ou \"password\"".into()),
+        };
+        if !exec::ref_ok(&a.target) { return Err("erro_cofre_argumento_invalido: `ref` é a ref @eN de um snapshot".into()); }
+        let (name, key) = self.vault_caller(headers).await?;
+        if password { self.vault_agent(&name).await?; }
+        let owner = exec::Owner::of(&self.st)?;
+        let home = self.home();
+        let host = self.fill_host(&home, &name).await?;
+        let entries = owner.entries().await?;
+        let entry = entries.iter().find(|e| e.name == a.entry).ok_or_else(|| exec::vault_text(VaultError::UnknownEntry))?;
+        if let Some(url) = entry.url.as_deref().filter(|u| !u.trim().is_empty()) && !exec::same_site(url, &host) {
+            return Err(format!("erro_cofre_dominio_diferente: a página é de {host} e a senha é de {url}"));
+        }
+        let value = if password {
+            let req = UseReq { origin_server: self.vault_origin(), session_key: key, session: name.clone(), entry: a.entry, kind: UseKind::Fill,
+                reason: a.reason, target: host.clone() };
+            exec::secret(&owner, req, deadline).await?
+        } else {
+            Zeroizing::new(entry.username.clone().ok_or("erro_cofre_sem_usuario: esta senha não tem usuário cadastrado")?)
+        };
+        let lock = self.nav_lock(&name);
+        let _held = lock.lock().await;
+        // A página pode ter navegado durante a aprovação: o valor só entra no domínio aprovado.
+        let now = self.fill_host(&home, &name).await?;
+        if now != host { return Err(format!("erro_cofre_dominio_diferente: a página saiu de {host} para {now} durante a aprovação")); }
+        let answer = nav::fill_secret(&self.http, &home, &name, &[a.target, a.field], &value).await
+            .map_err(|e| format!("erro_cofre_sem_navegador: {}", e.0))?;
+        let answer = exec::mask(&answer, &value);
+        if answer.starts_with("ok:") { return Ok(text("preenchido")); }
+        let detail = answer.strip_prefix("erro:").map_or(answer.as_str(), str::trim);
+        Err(if detail.starts_with("erro_cofre_") { detail.to_owned() } else { format!("erro_cofre_preenchimento: {detail}") })
+    }
 }
 
 #[cfg(test)]
@@ -801,6 +859,13 @@ mod tests {
         assert!(refused(Some(&child(None, &["pai"]))), "par comum, sem vínculo");
         assert!(refused(Some(&child(Some("pai"), &["outra"]))), "pai saiu do grupo");
         assert!(refused(None), "sem arquivo de grupo");
+    }
+
+    #[test]
+    fn the_browser_tool_cannot_send_fill_secret() {
+        assert!(verb_refusal("fill-secret").is_some_and(|e| e.starts_with("erro_cofre_so_vault_fill:")));
+        assert!(verb_refusal("fill").is_none());
+        assert!(verb_refusal("inventado").is_some_and(|e| e.starts_with("verbo desconhecido")));
     }
 
     #[test]

@@ -3741,3 +3741,16 @@ corta a tool em 60 s (`tool_timeout_sec` padrão): a sessão Codex sem terminal 
 `notifications/cancelled`, só cancela o token: o `call_tool` das tools do cofre corre contra ele, e
 largar a espera cancela o pedido na dona. **Medição pendente:** a sessão de teste com uma tool que
 espera 6 min, com e sem a variável, ainda não foi feita (prova da Task 4).
+
+**`vault_fill`: o que a árvore de acessibilidade mostra. Medição (30/10/2026, Chromium 149.0.7827.55
+do Playwright, sem janela, perfil temporário):** página com um `input type=text` e dois
+`type=password` (um vazio, um com `value` no HTML); `Input.insertText` em cada um com o foco nele;
+`Accessibility.getFullAXTree`. O campo de texto vem com `value` cru (`"meuusuario"`); o de senha vem
+com um `•` por caractere (`"••••••••••••"` para 12), tanto o digitado quanto o do HTML. Nenhuma
+propriedade do nó diz que é senha: os dois são `textbox` com as mesmas `properties`. Por isso o
+snapshot esconde o valor de três jeitos: valor só de `•` nunca sai (nem o tamanho), o nó que o
+`fill-secret` preencheu sai sem `value` mesmo que a acessibilidade exponha senhas, e toda resposta
+de texto do controlador troca a senha preenchida por `••••` (literal, JSON, base64 e percent-encoded)
+enquanto o navegador viver, inclusive depois de a página navegar (a marca do nó some; a máscara não).
+**Limite:** o `eval` continua sendo um oráculo para um agente decidido (`value.length`,
+`value.split('')`, trocar o `type` e tirar `shot`); a máscara barra a leitura comum, não essa.
