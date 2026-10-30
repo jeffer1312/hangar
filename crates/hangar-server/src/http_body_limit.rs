@@ -2,7 +2,7 @@
 use axum::{body::{Body,Bytes},extract::Request,http::{HeaderMap,StatusCode},middleware::Next,response::Response};
 pub const MAX_BYTES:usize=100*1024*1024;
 pub fn rejected()->Response{
-    Response::builder().status(StatusCode::PAYLOAD_TOO_LARGE).header("content-type","text/plain; charset=utf-8").header("content-length", "22").body(Body::from_stream(futures_util::stream::once(async{Ok::<_,std::convert::Infallible>(Bytes::from_static(b"request body too large"))}))).unwrap()
+    Response::builder().status(StatusCode::PAYLOAD_TOO_LARGE).header("content-type","text/plain; charset=utf-8").body(Body::from_stream(futures_util::stream::once(async{Ok::<_,std::convert::Infallible>(Bytes::from_static(b"request body too large"))}))).unwrap()
 }
 pub fn precheck(headers:&HeaderMap)->Option<Response>{precheck_with_limit(headers,MAX_BYTES)}
 pub fn precheck_with_limit(headers:&HeaderMap,limit:usize)->Option<Response>{
