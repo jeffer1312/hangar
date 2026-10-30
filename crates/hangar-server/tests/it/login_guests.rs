@@ -289,7 +289,29 @@ async fn login_guests_filesystem_uses_only_guest_root() {
         let response=request.send().await.unwrap();assert_eq!(response.status().as_u16(),row["status"].as_u64().unwrap() as u16,"GUE-036 {}",row["name"]);
         let body:Value=response.json().await.unwrap();assert_eq!(body,row["response"],"GUE-036 {}",row["name"]);
     }
+    let initialized = std::process::Command::new("git").args(["init","-q","-b","main"])
+        .arg(root.join("project")).env("GIT_CONFIG_NOSYSTEM","1")
+        .env("GIT_CONFIG_GLOBAL","/dev/null").output().unwrap();
+    assert!(initialized.status.success());
+    std::fs::File::open(root.join("project")).unwrap().set_times(std::fs::FileTimes::new().set_modified(std::time::UNIX_EPOCH+std::time::Duration::from_secs(2000000000))).unwrap();
+    let encoded = form_urlencoded::Serializer::new(String::new()).append_pair("x",home.path().to_str().unwrap()).finish();
+    let raw = include_str!("../../../../backend/tests/fixtures/contract/guests/fs-http.json")
+        .replace("⟦ROOT⟧",home.path().to_str().unwrap()).replace("⟦URLROOT⟧",&encoded[2..]);
+    let fixture:Value=serde_json::from_str(&raw).unwrap();
+    let mut differences=Vec::new();
+    for row in fixture["rows"].as_array().unwrap() {
+        let response=reqwest::Client::new().request(row["method"].as_str().unwrap().parse().unwrap(),
+            format!("http://{address}{}?{}",row["path"].as_str().unwrap(),row["query"].as_str().unwrap()))
+            .bearer_auth("guest").header("content-type","application/json")
+            .body(row["body"].as_str().unwrap().to_owned()).send().await.unwrap();
+        let status=response.status().as_u16();let bytes=response.bytes().await.unwrap();
+        let body=if bytes.is_empty(){Value::Null}else{serde_json::from_slice(&bytes).unwrap_or_else(|_|serde_json::json!(String::from_utf8_lossy(&bytes)))};
+        if status!=row["status"].as_u64().unwrap() as u16 || body!=row["response"] {
+            differences.push(format!("{} {}?{}: {status} {body}; esperado {} {}",row["method"],row["path"],row["query"],row["status"],row["response"]));
+        }
+    }
     task.abort();
+    assert!(differences.is_empty(), "GUE-036 HTTP: {}", differences.join("\n"));
 }
 
 #[tokio::test]

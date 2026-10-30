@@ -1110,7 +1110,9 @@ pub(crate) async fn pass_any(
             return crate::session_write::json_response(StatusCode::FORBIDDEN,serde_json::json!({"detail":"worktrees pertencem ao dono"}));
         }
     }
-    if crate::workspace_routes::matches(req.method(), req.uri().path()) {
+    if crate::workspace_routes::login_fs_path(&req).is_some()
+        || crate::workspace_routes::matches(req.method(), req.uri().path())
+    {
         let (forward, who) = match who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
         // Só o convite (não o par) alcança as rotas da sessão dele; `/api/fs/*` não tem sessão.
         let share = who.as_ref().and_then(Caller::grant).zip(session.as_ref())
