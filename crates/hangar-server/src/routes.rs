@@ -112,6 +112,8 @@ pub struct AppState {
     pub diag_report_base: String,
     /// Cofre de senhas desta máquina; o teste troca o chaveiro por um falso.
     pub vault: Arc<crate::vault::Vault>,
+    /// Pedidos do cofre (aprovação e cadastro) na memória; o `hub` publica o evento `vault` deles.
+    pub vault_requests: Arc<crate::vault::requests::Requests>,
 }
 
 impl AppState {
@@ -186,6 +188,7 @@ impl AppState {
                 .with_paths(list.env().dirs.as_ref().map(|d| d.home.clone()).unwrap_or_default(),
                     list.env().dirs.as_ref().map(|d| d.claude.join(".hangar-pair")).unwrap_or_default())
                 .with_mux(list.env().capture_program.to_string_lossy().into_owned())), list.clone(), diag.clone());
+        let vault_requests = Arc::new(crate::vault::requests::Requests::default());
         AppState { accounts: crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture()), command_catalog: Arc::default(), groups, server_id, peers: Arc::new(crate::groups::peers_from_env()), auth: Auth::configured(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, public_v6: None, front: None, diag,
             workspace_slots: Arc::new(tokio::sync::Semaphore::new(4)),
             interactions, plugin,
@@ -203,11 +206,12 @@ impl AppState {
             update_release_base: crate::update::RELEASE_BASE.to_owned(),
             diag_report_base: crate::diag_report::WORKER_BASE.to_owned(),
             vault: Arc::new(crate::vault::Vault::system()),
+            hub: Arc::new(crate::list::hub::ListHub::with_vault(vault_requests.feed())),
+            vault_requests,
             hangar_dir, device_install,
             upload_naming: Default::default(),
             origins: std::sync::Mutex::new(indexmap::IndexMap::new()),
             list, state,
-            hub: Arc::default(),
             term: Arc::default(),
             mods,
             pages: Arc::new(crate::pages::store::Store::new(crate::pages::store::Store::default_root())),
@@ -684,6 +688,10 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/vault/entries", get(crate::vault::http::entries).post(crate::vault::http::entries).options(pass_any))
         .route("/api/vault/entries/{id}", axum::routing::patch(crate::vault::http::entry).delete(crate::vault::http::entry).options(pass_any))
         .route("/api/vault/entries/{id}/password", get(crate::vault::http::password).options(pass_any))
+        .route("/api/vault/use", axum::routing::post(crate::vault::http::use_entry).options(pass_any))
+        .route("/api/vault/ask-entry", axum::routing::post(crate::vault::http::ask_entry).options(pass_any))
+        .route("/api/vault/requests/{id}", axum::routing::post(crate::vault::http::request).delete(crate::vault::http::request).options(pass_any))
+        .route("/api/vault/requests/{id}/wait", get(crate::vault::http::wait).options(pass_any))
         // Relatório de diagnóstico: só o dono, nunca repassado; só o preflight do CORS vai ao Python.
         .route("/api/diag/report", axum::routing::post(crate::diag_report::report_route).options(pass_any))
         // SideStore no iPhone/iPad do cabo: só o dono, nunca repassado (a senha da Apple ID não vai ao Python).

@@ -29,6 +29,8 @@ pub fn msg(locale: &str, key: &str) -> &'static str {
         "loop_stopped" => if en { "loop stopped: {reason}" } else { "loop parado: {reason}" },
         "loop_exhausted" => if en { "loop exhausted its iterations: {reason}" } else { "loop esgotou as iterações: {reason}" },
         "loop_failed" => if en { "loop failed: {reason}" } else { "loop falhou: {reason}" },
+        "cofre" => if en { "Password vault" } else { "Cofre de senhas" },
+        "cofre_pedido" => if en { "{origin} asks for {label}" } else { "{origin} pede {label}" },
         _ => "",
     }
 }
@@ -42,7 +44,9 @@ fn clip(text: &str) -> String {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Notice { Awaiting(Option<String>), Finished(Option<String>), Dead, Stalled, Limited(Option<String>),
     /// Desfecho do loop: a frase fixa no idioma da inscrição, o motivo como veio.
-    Loop { status: String, reason: String } }
+    Loop { status: String, reason: String },
+    /// Pedido do cofre esperando o dono; `label` é o nome da senha ou o rótulo do cadastro, nunca o valor.
+    VaultRequest { server_id: String, request_id: String, origin: String, label: String } }
 
 impl Notice {
     pub fn body(&self, locale: &str) -> String {
@@ -59,6 +63,7 @@ impl Notice {
                 "" => reason.clone(),
                 text => text.replace("{reason}", reason),
             },
+            Self::VaultRequest { origin, label, .. } => clip(&msg(locale, "cofre_pedido").replace("{origin}", origin).replace("{label}", label)),
         }
     }
 }
@@ -70,11 +75,23 @@ pub struct Outgoing {
     pub title: Option<Box<dyn Fn(&str) -> String + Send + Sync>>,
     pub tag: Option<&'static str>,
     pub url: Option<String>,
+    /// (`server_id`, `request_id`) do pedido do cofre: o aviso abre a folha dele.
+    pub vault: Option<(String, String)>,
 }
 
 impl Outgoing {
     pub fn single(session: &str, notice: Notice) -> Self {
-        Self { session: session.to_owned(), body: Box::new(move |l| notice.body(l)), title: None, tag: None, url: None }
+        Self { session: session.to_owned(), body: Box::new(move |l| notice.body(l)), title: None, tag: None, url: None, vault: None }
+    }
+
+    /// Pedido do cofre: título fixo e `url` `/` (o Expo abre a lista, onde o cartão está).
+    pub fn vault_request(session: &str, notice: Notice) -> Self {
+        let vault = match &notice {
+            Notice::VaultRequest { server_id, request_id, .. } => Some((server_id.clone(), request_id.clone())),
+            _ => None,
+        };
+        Self { session: session.to_owned(), body: Box::new(move |l| notice.body(l)), title: Some(Box::new(|l| msg(l, "cofre").to_owned())),
+            tag: None, url: Some("/".to_owned()), vault }
     }
 
     /// Várias sessões no mesmo ciclo: "N sessões aguardando: a, b", abre a lista.
@@ -86,7 +103,7 @@ impl Outgoing {
             session: joined,
             body: Box::new(move |l| format!("{}: {j2}", msg(l, "sessoes").replace("{n}", &n2))),
             title: Some(Box::new(move |l| msg(l, "sessoes").replace("{n}", &n))),
-            tag: Some(COALESCE_TAG), url: Some("/".to_owned()),
+            tag: Some(COALESCE_TAG), url: Some("/".to_owned()), vault: None,
         }
     }
 
@@ -99,6 +116,13 @@ impl Outgoing {
         let url = self.url.clone().unwrap_or_else(|| format!("/?server={}&session={}", entry["serverId"].as_str().unwrap_or(""), self.session));
         let mut p = json!({"title": format!("{label} · {}", self.title_suffix(locale)), "body": (self.body)(locale), "session": self.session, "url": url});
         if let Some(tag) = self.tag { p["tag"] = json!(tag); }
+        if let Some((server_id, request_id)) = &self.vault {
+            // O id que o cliente conhece para esta máquina é o da inscrição.
+            let server = entry["serverId"].as_str().filter(|s| !s.is_empty()).unwrap_or(server_id);
+            p["url"] = json!(format!("/?server={server}&vault_request={request_id}"));
+            p["server_id"] = json!(server);
+            p["request_id"] = json!(request_id);
+        }
         p
     }
 }
@@ -152,6 +176,21 @@ impl Sender {
         tokio::spawn(async move {
             if me.gate(&session).await.suppressed() { return; }
             me.broadcast(Outgoing::single(&session, notice)).await
+        });
+    }
+
+    /// Pedido do cofre: só mudo (pela sessão que pediu) e horário de silêncio seguram. Não depende de
+    /// app aberto nem do dono no PC: o agente fica parado esperando a resposta.
+    pub fn vault_request(self: &Arc<Self>, session: &str, notice: Notice) {
+        let (me, session) = (self.clone(), session.to_owned());
+        tokio::spawn(async move {
+            let dir = me.dir();
+            let Ok(prefs) = tokio::task::spawn_blocking(move || store::prefs(&dir)).await else {
+                tracing::warn!(code = "push_gate_read_failed", "aviso do cofre: preferências não leram; aviso segurado");
+                return;
+            };
+            if store::is_muted(&prefs, &session) || store::in_quiet_hours(&prefs, chrono::Local::now().time()) { return; }
+            me.broadcast(Outgoing::vault_request(&session, notice)).await
         });
     }
 

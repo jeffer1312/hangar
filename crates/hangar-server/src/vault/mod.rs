@@ -4,11 +4,14 @@ pub mod config;
 pub mod http;
 pub mod key;
 pub mod remote;
+pub mod requests;
 pub mod store;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod tests_remote;
+#[cfg(test)]
+mod tests_requests;
 pub mod wire;
 
 use serde::{Deserialize, Deserializer, Serialize};
@@ -256,6 +259,12 @@ impl Vault {
             doc.entries.retain(|e| e.id != id);
             if doc.entries.len() == before { Err(VaultError::UnknownEntry) } else { Ok(()) }
         }).await
+    }
+
+    /// A entrada pelo nome, com a senha: é como o agente a pede (`requests::start_use`).
+    pub async fn by_name(&self, hangar_dir: &Path, name: &str) -> Result<Entry, VaultError> {
+        let name = name.to_owned();
+        self.read(hangar_dir, move |doc| doc.entries.into_iter().find(|e| same_name(&e.name, &name)).ok_or(VaultError::UnknownEntry)).await
     }
 
     pub async fn password(&self, hangar_dir: &Path, id: &str) -> Result<Zeroizing<String>, VaultError> {

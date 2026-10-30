@@ -6,7 +6,8 @@ use serde_json::{Value, json};
 use std::{net::SocketAddr, sync::Arc};
 use zeroize::Zeroizing;
 
-use super::{EntryChange, KeyError, NewEntry, Role, Status, VaultError, config::{self, ConfigError, Placement}, remote::{Remote, RemoteError}, store};
+use super::{EntryChange, KeyError, NewEntry, Role, Status, VaultError, config::{self, ConfigError, Placement}, remote::{Remote, RemoteError, UseStart, WaitStatus},
+    requests::{Answer, RequestError}, store, wire::{AskReq, UseReply, UseReq, WAIT_HOLD, WaitReply, WaitState, request_id_ok}};
 use crate::{routes::AppState, session_write::detail};
 
 const MAX_BODY: usize = 64 * 1024;
@@ -20,6 +21,9 @@ pub fn matches(method: &Method, path: &str) -> bool {
         ["entries"] => matches!(*method, Method::GET | Method::POST),
         ["entries", id] if !id.is_empty() => matches!(*method, Method::PATCH | Method::DELETE),
         ["entries", id, "password"] if !id.is_empty() => method == Method::GET,
+        ["use"] | ["ask-entry"] => method == Method::POST,
+        ["requests", id] if !id.is_empty() => matches!(*method, Method::POST | Method::DELETE),
+        ["requests", id, "wait"] if !id.is_empty() => method == Method::GET,
         _ => false,
     }
 }
@@ -126,10 +130,12 @@ pub async fn status(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
 /// ela não responde). `local`: nunca encaminha.
 async fn status_body(st: &AppState, local: bool) -> Response {
     let here = st.vault.status(&st.hangar_dir).await;
-    if local || here.role == Role::Owner { return ok(json!(here)); }
+    // O estado daqui vai para o evento `vault` da lista; o de outra dona, não.
+    let mine = |here: Status| { st.vault_requests.note_state(here.state); ok(json!(here)) };
+    if local || here.role == Role::Owner { return mine(here); }
     let owner_id = match config::placement(&st.hangar_dir) {
         Ok(Placement::Remote(id)) => id,
-        Ok(_) => return ok(json!(here)),
+        Ok(_) => return mine(here),
         Err(error) => return config_failure(st, error),
     };
     let body = match (Remote { peers: &st.peers, owner: &owner_id }).status().await {
@@ -252,6 +258,16 @@ pub async fn entry(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
 #[derive(serde::Serialize)]
 struct Reveal<'a> { password: &'a str }
 
+/// Corpo que leva senha. `secret_len` é o tamanho do valor: cada byte escapa em até 6 no JSON, e a
+/// capacidade nasce com isso (crescer deixaria cópia sem zerar). O dono zerado faz o corpo sumir
+/// zerado quando o hyper o solta.
+fn secret_json<T: serde::Serialize>(st: &AppState, value: &T, secret_len: usize) -> Response {
+    let mut body = Zeroizing::new(Vec::with_capacity(secret_len * 6 + 128));
+    if serde_json::to_writer(&mut *body, value).is_err() { return failure(st, VaultError::Io); }
+    (StatusCode::OK, [(header::CONTENT_TYPE, "application/json"), (header::CACHE_CONTROL, "no-store")],
+        axum::body::Body::from(bytes::Bytes::from_owner(body))).into_response()
+}
+
 pub async fn password(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, Path(id): Path<String>, req: Request) -> Response {
     let headers = req.headers().clone();
     let allowed = owner(&st, peer, &req);
@@ -259,14 +275,108 @@ pub async fn password(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connec
     let resp = 'r: {
         if let Err(resp) = allowed.await { break 'r resp; }
         match st.vault.password(&st.hangar_dir, &id).await {
-            Ok(password) => {
-                // Capacidade exata de saída e dono zerado: o corpo some zerado quando o hyper o solta.
-                let mut body = Zeroizing::new(Vec::with_capacity(password.len() * 6 + 16));
-                if serde_json::to_writer(&mut *body, &Reveal { password: password.as_str() }).is_err() { break 'r failure(&st, VaultError::Io) }
-                (StatusCode::OK, [(header::CONTENT_TYPE, "application/json"), (header::CACHE_CONTROL, "no-store")],
-                    axum::body::Body::from(bytes::Bytes::from_owner(body))).into_response()
-            }
+            Ok(password) => secret_json(&st, &Reveal { password: password.as_str() }, password.len()),
             Err(error) => failure(&st, error),
+        }
+    };
+    done(&headers, resp)
+}
+
+fn lost() -> Response { fail(StatusCode::NOT_FOUND, "erro_cofre_pedido_perdido", "a dona do cofre não conhece mais este pedido") }
+
+fn request_failure(st: &AppState, error: RequestError) -> Response {
+    match error {
+        RequestError::Vault(error) => failure(st, error),
+        RequestError::Lost => lost(),
+        RequestError::Stale => fail(StatusCode::CONFLICT, "erro_interacao_desatualizada", "o pedido mudou; abra o cartão de novo"),
+        RequestError::Answered => fail(StatusCode::CONFLICT, "erro_cofre_pedido_respondido", "este pedido já foi respondido"),
+        RequestError::TooMany => fail(StatusCode::TOO_MANY_REQUESTS, "erro_cofre_pedidos_demais", "pedidos demais esperando resposta no cofre"),
+    }
+}
+
+/// `POST /api/vault/use`: senha liberada (ou já autorizada para a sessão) volta o valor; o resto
+/// abre um pedido e volta o id dele.
+pub async fn use_entry(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
+    let headers = req.headers().clone();
+    let allowed = owner(&st, peer, &req);
+    let resp = 'r: {
+        if let Err(resp) = allowed.await { break 'r resp; }
+        let Some(asked) = body::<UseReq>(req).await else { break 'r invalid() };
+        match super::requests::use_entry(&st, asked).await {
+            Ok(UseStart::Request(id)) => ok(json!({"request_id": id})),
+            Ok(UseStart::Value(value)) => {
+                let len = value.len();
+                secret_json(&st, &UseReply { request_id: None, value: Some(value) }, len)
+            }
+            Err(error) => request_failure(&st, error),
+        }
+    };
+    done(&headers, resp)
+}
+
+pub async fn ask_entry(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
+    let headers = req.headers().clone();
+    let allowed = owner(&st, peer, &req);
+    let resp = 'r: {
+        if let Err(resp) = allowed.await { break 'r resp; }
+        let Some(asked) = body::<AskReq>(req).await else { break 'r invalid() };
+        match super::requests::ask_entry(&st, asked) {
+            Ok(id) => ok(json!({"request_id": id})),
+            Err(error) => request_failure(&st, error),
+        }
+    };
+    done(&headers, resp)
+}
+
+fn wait_reply(status: WaitStatus) -> WaitReply {
+    let plain = |status| WaitReply { status, value: None, entry: None, temporary: None };
+    match status {
+        WaitStatus::Pending => plain(WaitState::Pending),
+        WaitStatus::Allowed(value) => WaitReply { status: WaitState::Allowed, value: Some(value), entry: None, temporary: None },
+        WaitStatus::Saved { entry, temporary } => WaitReply { status: WaitState::Saved, value: None, entry: Some(entry), temporary: Some(temporary) },
+        WaitStatus::Denied => plain(WaitState::Denied),
+        WaitStatus::Declined => plain(WaitState::Declined),
+        WaitStatus::TimedOut => plain(WaitState::TimedOut),
+        WaitStatus::Cancelled => plain(WaitState::Cancelled),
+    }
+}
+
+/// `GET /api/vault/requests/{id}/wait`: segura até `WAIT_HOLD` e responde `pending` sem novidade.
+pub async fn wait(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, Path(id): Path<String>, req: Request) -> Response {
+    let headers = req.headers().clone();
+    let allowed = owner(&st, peer, &req);
+    drop(req);
+    let resp = 'r: {
+        if let Err(resp) = allowed.await { break 'r resp; }
+        if !request_id_ok(&id) { break 'r lost(); }
+        match st.vault_requests.wait(&id, WAIT_HOLD).await {
+            Ok(status) => {
+                let len = match &status { WaitStatus::Allowed(value) => value.len(), _ => 0 };
+                secret_json(&st, &wait_reply(status), len)
+            }
+            Err(error) => request_failure(&st, error),
+        }
+    };
+    done(&headers, resp)
+}
+
+/// `POST` responde o pedido (cartão do dono); `DELETE` é quem pediu desistindo.
+pub async fn request(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, Path(id): Path<String>, req: Request) -> Response {
+    let headers = req.headers().clone();
+    let (allowed, deleting) = (owner(&st, peer, &req), req.method() == Method::DELETE);
+    let resp = 'r: {
+        if let Err(resp) = allowed.await { break 'r resp; }
+        if !request_id_ok(&id) { break 'r lost(); }
+        if deleting {
+            break 'r match st.vault_requests.cancel(&id) {
+                Ok(()) => StatusCode::NO_CONTENT.into_response(),
+                Err(error) => request_failure(&st, error),
+            };
+        }
+        let Some(answer) = body::<Answer>(req).await else { break 'r invalid() };
+        match st.vault_requests.answer(&st.vault, &st.hangar_dir, &id, answer).await {
+            Ok(()) => StatusCode::NO_CONTENT.into_response(),
+            Err(error) => request_failure(&st, error),
         }
     };
     done(&headers, resp)

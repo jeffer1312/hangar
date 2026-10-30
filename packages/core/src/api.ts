@@ -441,7 +441,14 @@ async function apiFetchForServer<T>(s: Server, path: string, init?: RequestInit,
     const { msg, code, envelope } = await lerErro(res);
     throw Object.assign(new Error(`${res.status}: ${msg}`), { status: res.status, code, envelope });
   }
+  // 204 não tem corpo: `res.json()` falharia num pedido que deu certo.
+  if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
+}
+
+/** Rotas do cofre (`passwordVault.ts`): o mesmo pedido de `apiFetchForServer`. */
+export function vaultFetchForServer<T>(s: Server, path: string, init?: RequestInit, prazoMs?: number): Promise<T> {
+  return apiFetchForServer<T>(s, path, init, prazoMs);
 }
 
 export { recentFailures, type RecentFailure };
