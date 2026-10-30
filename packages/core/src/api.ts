@@ -1050,14 +1050,14 @@ export async function dismissRenameSuggestion(server: Server, name: string): Pro
 
 const hiddenPath = (name: string) => `/api/sessions/${encodeURIComponent(name)}/hidden`;
 
-// Servidor sem as rotas de ocultar responde 404 sem código; o 404 com `erro_sessao_inexistente`
-// é a sessão que sumiu e mantém a própria frase.
+// Servidor sem as rotas de ocultar responde 404 sem código (mesma regra do nativo); 404 com código
+// (`erro_sessao_inexistente`) mantém a própria frase.
 async function ensureVisibilityOk(res: Response, server: Server): Promise<void> {
   try {
     await ensureOk(res, server);
   } catch (e) {
     const { status, code } = e as { status?: number; code?: string };
-    if (status === 404 && code !== 'erro_sessao_inexistente') {
+    if (status === 404 && !code) {
       throw Object.assign(new Error(m.session_visibility_server_outdated()), { status: 404, code: 'session_visibility_server_outdated' });
     }
     throw e;

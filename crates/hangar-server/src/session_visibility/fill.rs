@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use hangar_api::session::SessionRow;
 
 use super::auto::{self, AutoHide};
-use super::registered;
+use super::{blocking, registered};
 use super::store::{self, Mark};
 use crate::diag::DiagClient;
 use crate::list::mux::Mux;
@@ -48,13 +48,12 @@ async fn pane_key(mux: &Mux, row: &SessionRow) -> Option<String> {
     key
 }
 
-async fn blocking<T: Send + 'static>(job: impl FnOnce() -> io::Result<T> + Send + 'static) -> io::Result<T> {
-    tokio::task::spawn_blocking(job).await.unwrap_or_else(|_| Err(io::Error::other("tarefa interrompida")))
-}
-
 /// Falha deixa a linha visível e vai ao log e ao diário; a rodada seguinte tenta de novo.
 fn failed(diag: &DiagClient, code: &str, error: &io::Error) {
-    tracing::warn!(code, %error, "ocultar da lista: arquivo ilegível ou não gravado");
+    // Roda a cada rodada da lista: arquivo ilegível repetiria a linha a cada 1,5 s.
+    if crate::warn_limit::allow(None, code) {
+        tracing::warn!(code, %error, "ocultar da lista: arquivo ilegível ou não gravado");
+    }
     diag.report("rust.session_visibility", "", code, "marcas de oculta ilegiveis ou nao gravadas");
 }
 
@@ -65,7 +64,8 @@ pub async fn fill_rows(home: &Path, mux: &Mux, rows: &mut [SessionRow], diag: &D
         Ok(read) => read,
         Err(error) => return failed(diag, "session_visibility_unreadable", &error),
     };
-    if marks.is_empty() && !cfg.enabled { return; }
+    // Entrada `hidden: false` (deixada pelo "Mostrar") só importa com o automático ligado.
+    if !cfg.enabled && !marks.values().any(|m| m.hidden) { return; }
     let mut keys = Vec::with_capacity(rows.len());
     for row in rows.iter() {
         keys.push(match row.lifecycle_id.as_deref().and_then(|l| l.strip_prefix("k:")) {

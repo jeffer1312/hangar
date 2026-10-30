@@ -20,6 +20,11 @@ export function setHiddenSectionOpen(value: boolean) {
   for (const l of listeners) l();
 }
 
+function subscribe(l: () => void) {
+  listeners.add(l);
+  return () => { listeners.delete(l); };
+}
+
 export function useHiddenSectionOpen(): boolean {
-  return useSyncExternalStore((l) => { listeners.add(l); return () => { listeners.delete(l); }; }, read);
+  return useSyncExternalStore(subscribe, read);
 }

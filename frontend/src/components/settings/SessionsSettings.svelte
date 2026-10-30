@@ -41,10 +41,17 @@
 
   async function save() {
     busy = true;
+    const before = { enabled, hours };
     try {
       const r = await saveAutoHideAll(servers, { enabled, after_minutes: hours * 60 });
       saved = r;
-      results = r;
+      // Nenhuma gravou: os controles voltam ao que as máquinas guardam, e a tela não vira a de erro de leitura.
+      if (r.every((x) => !x.ok)) {
+        enabled = before.enabled;
+        hours = before.hours;
+      } else {
+        results = r;
+      }
     } finally {
       busy = false;
     }

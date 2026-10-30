@@ -661,7 +661,8 @@ impl Hangar {
                 }
             }
         }
-        if self.hidden_open() { order.extend(self.hidden_sessions().into_iter().map(|(key, s)| Target::new(&key, &s.name))); }
+        // O trilho não desenha o grupo "Ocultas": o teclado não anda por linha invisível.
+        if self.hidden_open() && !self.rail() { order.extend(self.hidden_sessions().into_iter().map(|(key, s)| Target::new(&key, &s.name))); }
         order
     }
 

@@ -53,12 +53,15 @@ export default function SessionsSettings() {
 
   const save = (next: AutoHideConfig) => {
     const n = ++seq.current;
+    const before = cfg;
     setCfg(next);
     setSaving(true);
     void saveAutoHideAll(own, next).then((results) => {
       if (n !== seq.current) return;
       setSaving(false);
       setSaved(results);
+      // Nenhuma gravou: o interruptor e o prazo voltam ao que as máquinas guardam.
+      if (results.every((r) => !r.ok)) setCfg(before);
       if (results.every((r) => r.ok)) haptic.success();
       else haptic.error();
     });

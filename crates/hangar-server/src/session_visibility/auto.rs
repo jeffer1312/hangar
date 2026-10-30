@@ -31,7 +31,10 @@ fn path(home: &Path) -> PathBuf { home.join(".hangar").join("session-auto-hide.j
 
 /// Ausente = o padrão; ilegível é erro, para um "desligado" nunca aparecer no lugar do que foi gravado.
 pub fn load(home: &Path) -> io::Result<AutoHide> {
-    match crate::runtime::queue::read_replaced(&path(home)) {
+    let file = path(home);
+    // Lido a cada rodada da lista e quase sempre ausente: a espera do Windows fica para o arquivo que existe.
+    if !file.exists() { return Ok(AutoHide::default()); }
+    match crate::runtime::queue::read_replaced(&file) {
         Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e)),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(AutoHide::default()),
         Err(error) => Err(error),

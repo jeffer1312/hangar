@@ -24,7 +24,10 @@ fn path(home: &Path) -> PathBuf { home.join(".hangar").join("session-visibility.
 
 /// Arquivo ausente = nenhuma marca; ilegível é erro, para uma marca nunca sumir calada.
 pub fn read(home: &Path) -> io::Result<HashMap<String, Mark>> {
-    match crate::runtime::queue::read_replaced(&path(home)) {
+    let file = path(home);
+    // Lido a cada rodada da lista e quase sempre ausente: a espera do Windows fica para o arquivo que existe.
+    if !file.exists() { return Ok(HashMap::new()); }
+    match crate::runtime::queue::read_replaced(&file) {
         Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e)),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(HashMap::new()),
         Err(error) => Err(error),

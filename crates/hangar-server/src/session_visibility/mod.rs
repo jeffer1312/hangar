@@ -4,7 +4,6 @@ pub mod auto;
 pub mod fill;
 pub mod store;
 
-use std::io;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -19,9 +18,7 @@ use crate::session_write::{detail_body, json_response, session_name};
 
 fn refuse(status: StatusCode, code: &str, msg: &str) -> Response { json_response(status, detail_body(code, msg, json!({}))) }
 
-async fn blocking<T: Send + 'static>(job: impl FnOnce() -> io::Result<T> + Send + 'static) -> io::Result<T> {
-    tokio::task::spawn_blocking(job).await.unwrap_or_else(|_| Err(io::Error::other("tarefa interrompida")))
-}
+use crate::groups::link_state::blocking;
 
 /// A casa onde a lista lê as marcas: a mesma pasta que ela usa para os registros.
 fn home(st: &AppState) -> Option<PathBuf> { st.list.env().dirs.as_ref().map(|d| d.home.clone()) }
