@@ -258,7 +258,8 @@ async function storeDiagnostic(report: Report, request: Request, deps: Deps, gro
 	if (!group && !deps.groupSecret) console.error(JSON.stringify({ message: "grupo sem segredo", id }));
 	const text = [`relatório: ${code}`, `chave no KV: ${id}`, `sistema: ${report.os}`, `app: ${report.app} · ${report.commit}`, "",
 		head(report.report, MAIL_REPORT_MAX)].join("\n");
-	sendMail(deps, id, `[Hangar] diagnóstico ${code} · ${report.os}`, text);
+	// As outras máquinas do envio ficam sob o código do primeiro, que é o único que a pessoa passa adiante.
+	if (!group) sendMail(deps, id, `[Hangar] diagnóstico ${code} · ${report.os}`, text);
 	console.log(JSON.stringify({ message: "relatorio", id, kind: report.kind }));
 	return json(201, { id, code, upload, ...(group ? { group } : {}), ...(token ? { group_token: token } : {}) });
 }

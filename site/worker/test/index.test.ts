@@ -441,6 +441,18 @@ describe("POST /api/relatorio with x-hangar-group (one report per machine)", () 
 		expect(members.keys[0].expiration).toBeGreaterThan(Math.floor(Date.now() / 1000) + TTL_SECONDS - 60);
 	});
 
+	it("mails only the first machine of a group", async () => {
+		const leadDeps = deps();
+		const lead = await first(leadDeps.d);
+		await Promise.all(leadDeps.pending);
+		expect(leadDeps.mails).toHaveLength(1);
+		expect(leadDeps.mails[0].subject).toContain(lead.code);
+		const { d, mails, pending } = deps();
+		expect((await handle(member(lead.code, lead.group_token), d)).status).toBe(201);
+		await Promise.all(pending);
+		expect(mails).toHaveLength(0);
+	});
+
 	it("caps a group by its own limiter", async () => {
 		const lead = await first(deps().d);
 		expect((await handle(member(lead.code, lead.group_token), deps().d)).status).toBe(201);
