@@ -39,7 +39,7 @@ def border(monkeypatch, tmp_path, request):
     app.add_middleware(GuestUserGate)
     source = Path(__file__).resolve().parents[1] / "app" / "api.py"
     text = source.read_text()
-    nodes =[node for node in ast.parse(text).body
+    nodes = [node for node in ast.parse(text).body
              if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
              and node.name in {"_repasse_ao_rust", "navegador_da_sessao"}]
     scope = {"app": app, "Depends": Depends, "Request": Request, "JSONResponse": JSONResponse,
