@@ -177,7 +177,7 @@ async fn login_guests_public_gate_denies_owner_routes_before_upstream() {
     let task=tokio::spawn(async move { axum::serve(listener,hangar_server::routes::router(Arc::new(state))
         .into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap(); });
     let client=reqwest::Client::new();
-    for path in ["/api/config", "/api/voice", "/api/peers", "/api/sessions/owner/share"] {
+    for path in ["/api/config", "/api/voice", "/api/peers", "/api/sessions/owner/share", "/api/push/vapid", "/api/push/settings", "/api/push/subscribe", "/api/push/mute", "/api/push/quiet-hours", "/api/push/expo/subscribe"] {
         let response=client.get(format!("http://{address}{path}")).bearer_auth("guest").send().await.unwrap();
         assert_eq!(response.status().as_u16(),403,"GUE-030/032: {path}");
         let body:Value=response.json().await.unwrap();

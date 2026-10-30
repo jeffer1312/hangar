@@ -835,8 +835,6 @@ def _rust_owner_world(monkeypatch):
     monkeypatch.setattr(api_mod.loop_mod, "LoopLink", lambda name: SimpleNamespace(
         get=lambda: {"status": "running"} if name == "c1" else None,
         update=lambda **kw: feitos.append(("pausa", name))))
-    monkeypatch.setattr(api_mod.push, "notify_awaiting", lambda name, body=None: feitos.append(("aguardando", name)))
-    monkeypatch.setattr(api_mod.push, "notify_dead", lambda name: feitos.append(("caiu", name)))
     monkeypatch.setattr(api_mod.settings, "notify_dead", True)
     return feitos
 
@@ -1167,32 +1165,12 @@ from types import SimpleNamespace
 from app.models import AskQuestion, AskQuestionItem, AskOption
 
 
-def test_push_mute_route(api_client, monkeypatch, tmp_path):
-    monkeypatch.setattr(api_mod.push, "_file", lambda: tmp_path / "subs.json")
-    r = api_client.post("/api/push/mute", json={"session": "s1", "muted": True}, headers=_h())
-    assert r.status_code == 200
-    assert api_mod.push.is_muted("s1") is True
 
 
-def test_push_quiet_hours_route(api_client, monkeypatch, tmp_path):
-    monkeypatch.setattr(api_mod.push, "_file", lambda: tmp_path / "subs.json")
-    r = api_client.post("/api/push/quiet-hours", json={"start": "22:00", "end": "07:00"}, headers=_h())
-    assert r.status_code == 200
-    assert api_mod.push.get_push_prefs()["quiet_hours"] == {"start": "22:00", "end": "07:00"}
 
 
-def test_push_quiet_hours_route_rejects_bad_format(api_client, monkeypatch, tmp_path):
-    monkeypatch.setattr(api_mod.push, "_file", lambda: tmp_path / "subs.json")
-    r = api_client.post("/api/push/quiet-hours", json={"start": "25:99", "end": "07:00"}, headers=_h())
-    assert r.status_code == 422
 
 
-def test_push_settings_route(api_client, monkeypatch, tmp_path):
-    monkeypatch.setattr(api_mod.push, "_file", lambda: tmp_path / "subs.json")
-    api_mod.push.set_muted("s1", True)
-    r = api_client.get("/api/push/settings", headers=_h())
-    assert r.status_code == 200
-    assert r.json()["muted"] == ["s1"]
 
 
 # --- POST /api/archive/{project}/{session_id}/resume: "Retomar conversa" do Arquivo ---

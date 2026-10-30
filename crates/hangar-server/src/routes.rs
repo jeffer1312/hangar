@@ -594,10 +594,8 @@ fn terminal_router_with(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> 
         .route("/__hangar_server/accounts/claude", axum::routing::post(crate::accounts::http::private_claude))
         .route("/__hangar_server/accounts/public", axum::routing::any(crate::accounts::http::private_public))
         .route("/__hangar_server/groups", axum::routing::post(crate::groups::bridge::private))
-        .route("/__hangar_server/push/expo", axum::routing::post(crate::push_expo::private))
         .route("/__hangar_server/codex/{*rest}", axum::routing::any(crate::session_write::bridge::codex))
         .route("/__hangar_server/claude/{*rest}", axum::routing::any(crate::session_write::bridge::claude))
-        .route("/__hangar_server/presence", axum::routing::get(crate::presence::private))
         .route("/__hangar_server/mods/{name}/{op}", axum::routing::post(crate::mods::routes::bridge))
         .route("/__hangar_server/jev/aux", axum::routing::any(crate::jev_aux::private))
         .route("/__hangar_server/subagents", get(crate::subagents::private))
@@ -700,11 +698,13 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/config-sync/translate", axum::routing::post(crate::config_sync::http::handle))
         .route("/api/config-sync/apply", axum::routing::any(crate::config_sync::apply_http::handle))
         .route("/api/push/expo/subscribe", axum::routing::post(crate::push_expo::subscribe))
-        .route("/api/push/vapid", get(crate::push::http::route).fallback(pass_any))
-        .route("/api/push/settings", get(crate::push::http::route).fallback(pass_any))
-        .route("/api/push/subscribe", axum::routing::post(crate::push::http::route).fallback(pass_any))
-        .route("/api/push/mute", axum::routing::post(crate::push::http::route).fallback(pass_any))
-        .route("/api/push/quiet-hours", axum::routing::post(crate::push::http::route).fallback(pass_any))
+        .route("/api/push", axum::routing::any(crate::push::http::route))
+        .route("/api/push/{*path}", axum::routing::any(crate::push::http::route))
+        .route("/api/push/vapid", axum::routing::any(crate::push::http::route))
+        .route("/api/push/settings", axum::routing::any(crate::push::http::route))
+        .route("/api/push/subscribe", axum::routing::any(crate::push::http::route))
+        .route("/api/push/mute", axum::routing::any(crate::push::http::route))
+        .route("/api/push/quiet-hours", axum::routing::any(crate::push::http::route))
         .route("/api/presence", get(crate::presence::route).fallback(pass_any))
         // Mesmo caminho: o axum junta o POST à rota de cima (um repasse só, o dela).
         .route("/api/presence", axum::routing::post(crate::presence::route))
@@ -983,6 +983,9 @@ pub(crate) async fn pass_any(
     }
     if crate::machine_peers::owns_http_path(&decoded_path){
         return crate::machine_peers::handle(State(st),ConnectInfo(peer),req).await;
+    }
+    if crate::push::http::owns_path(req.uri().path()) {
+        return crate::push::http::route(State(st),ConnectInfo(peer),req).await;
     }
     if crate::loops::http::owns_path(req.uri().path()) {
         return crate::loops::http::route(State(st),ConnectInfo(peer),req).await;

@@ -111,7 +111,7 @@ impl Watcher {
         }
     }
 }
-async fn session_life(st: &AppState, name: &str) -> Option<String> {
+pub(crate) async fn session_life(st: &AppState, name: &str) -> Option<String> {
     if let Some(share) = &st.share {
         return share.lives.life(name, false).await;
     }

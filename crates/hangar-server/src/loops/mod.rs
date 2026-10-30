@@ -50,7 +50,10 @@ impl std::error::Error for ConfigFailure {}
 
 
 pub fn notify(st: &Arc<AppState>, name: &str, status: &str, reason: &str) {
-    let sender = crate::push::send::Sender::new(st.clone(), crate::push::server_env());
+    let sender=match crate::push::send::Sender::from_state(st.clone()) {
+        Ok(sender)=>sender,
+        Err(code)=>{st.diag.report("rust.push_config_failed",name,code,"configuração inválida impediu o aviso do loop");return;}
+    };
     sender.notify(name, crate::push::send::Notice::Loop { status: status.into(), reason: reason.into() });
 }
 

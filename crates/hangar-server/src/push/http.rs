@@ -1,118 +1,354 @@
-//! `/api/push/vapid|subscribe|settings|mute|quiet-hours` do dono, com os corpos do FastAPI.
-use super::{store, webpush};
-use crate::routes::{gate, pass, AppState};
-use axum::{body::to_bytes, extract::{ConnectInfo, Request, State}, http::{Method, StatusCode}, response::Response};
-use serde::Deserialize;
-use serde_json::{json, Value};
+//! Portas de notificações: contrato FastAPI completo e persistência nativa.
+use super::store;
+use crate::{
+    orchestration::{body, codec},
+    routes::AppState,
+};
+use axum::{
+    body::{Body, to_bytes},
+    extract::{ConnectInfo, Request, State},
+    http::{Method, StatusCode},
+    response::{IntoResponse, Response},
+};
+use serde_json::{Value, json};
 use std::{net::SocketAddr, sync::Arc};
-
-const BODY_LIMIT: usize = 64 * 1024;
-
-pub fn matches(method: &Method, path: &str) -> bool {
-    (*method == Method::GET && matches!(path, "/api/push/vapid" | "/api/push/settings"))
-        || (*method == Method::POST && matches!(path, "/api/push/subscribe" | "/api/push/mute" | "/api/push/quiet-hours"))
+const ROUTES: &[(&str, &str)] = &[
+    ("/api/push/vapid", "GET"),
+    ("/api/push/subscribe", "POST"),
+    ("/api/push/settings", "GET"),
+    ("/api/push/mute", "POST"),
+    ("/api/push/quiet-hours", "POST"),
+];
+pub fn owns_path(raw: &str) -> bool {
+    let path = percent_encoding::percent_decode_str(raw).decode_utf8_lossy();
+    (path == "/api/push" || path.starts_with("/api/push/")) && !path.starts_with("/api/push/expo")
 }
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Subscribe { subscription: serde_json::Map<String, Value>, label: String, #[serde(rename = "serverId")] server_id: String,
-    #[serde(default = "default_locale")] locale: String }
-
-fn default_locale() -> String { "en".into() }
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Mute { session: String, muted: bool }
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct QuietHours { #[serde(default)] start: Option<String>, #[serde(default)] end: Option<String> }
-
-fn reply(status: StatusCode, body: Value) -> Response { crate::session_write::json_response(status, body) }
-
-fn invalid() -> Response { reply(StatusCode::UNPROCESSABLE_ENTITY, json!({"detail": [{"type": "value_error", "msg": "corpo inválido"}]})) }
-
-fn unwritable() -> Response { reply(StatusCode::SERVICE_UNAVAILABLE, json!({"detail": "push_store_unwritable"})) }
-
-pub async fn route(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (fwd, owner) = match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
-    if !owner { return pass(&st, req, &fwd).await; }
-    let (method, path) = (req.method().clone(), req.uri().path().to_owned());
-    let dir = store::dir(&st.accounts.env.claude_base);
-    if method == Method::GET {
-        return if path.ends_with("/vapid") {
-            reply(StatusCode::OK, json!({"key": webpush::public_key(&super::server_env())}))
-        } else {
-            reply(StatusCode::OK, store::settings(&dir))
+pub fn matches(method: &Method, path: &str) -> bool {
+    ROUTES
+        .iter()
+        .any(|(p, m)| *p == path && *m == method.as_str())
+}
+fn reply(status: StatusCode, value: Value) -> Response {
+    if codec::contains_surrogate(&value) || codec::contains_nonfinite(&value) {
+        codec::discard(value);
+        return server_error();
+    }
+    let body = codec::dumps_compact_utf8(&value, false).expect("Unicode conferido");
+    codec::discard(value);
+    (
+        status,
+        [(axum::http::header::CONTENT_TYPE, "application/json")],
+        body,
+    )
+        .into_response()
+}
+fn server_error() -> Response {
+    let mut response = (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response();
+    response
+        .extensions_mut()
+        .insert(crate::http_cors::UnhandledServerError);
+    response
+}
+pub async fn route(
+    State(st): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    req: Request,
+) -> Response {
+    if let Some(response) = crate::http_cors::preflight(req.method(), req.headers()) {
+        return response;
+    }
+    let headers = req.headers().clone();
+    let method = req.method().clone();
+    let mut response = admit(&st, peer, req).await;
+    crate::http_cors::apply(&headers, &mut response);
+    crate::http_route_response::suppress_head(&method, &mut response);
+    response
+}
+async fn admit(st: &Arc<AppState>, peer: SocketAddr, mut req: Request) -> Response {
+    if let Some(response) =
+        crate::http_body_limit::precheck_with_limit(req.headers(), st.login_guests.body_limit)
+    {
+        return response;
+    }
+    let path = percent_encoding::percent_decode_str(req.uri().path())
+        .decode_utf8_lossy()
+        .into_owned();
+    let decision = crate::http_contract::resolve(ROUTES, req.method().as_str(), &path);
+    let (_, https) = st.cfg.trusted.resolve(peer.ip(), req.headers());
+    if let Some(response) = crate::http_route_response::response(
+        &decision,
+        req.method(),
+        req.uri(),
+        req.headers(),
+        https,
+        &st.cfg.listen.to_string(),
+    ) {
+        return response;
+    }
+    let schema = match path.as_str() {
+        "/api/push/subscribe" => Some("PushSubscribeBody"),
+        "/api/push/mute" => Some("PushMuteBody"),
+        "/api/push/quiet-hours" => Some("PushQuietHoursBody"),
+        _ => None,
+    };
+    let is_json = crate::http_body_input::is_json(req.headers());
+    if schema.is_some() && is_json {
+        let (parts, body) = req.into_parts();
+        let raw = match to_bytes(body, st.login_guests.body_limit).await {
+            Ok(raw) => raw,
+            Err(_) => {
+                return reply(
+                    StatusCode::BAD_REQUEST,
+                    json!({"detail":"There was an error parsing the body"}),
+                );
+            }
+        };
+        match body::parse(&raw) {
+            Ok(value) => codec::discard(value),
+            Err((status, value)) => return reply(status, value),
+        }
+        req = Request::from_parts(parts, Body::from(raw));
+    }
+    if let Err(response) = crate::routes::owner_gate(st, peer, &req).await {
+        return response;
+    }
+    let config = match super::config::Frozen::from_state(st) {
+        Ok(config) => config,
+        Err(code) => {
+            return reply(
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({"detail":{"code":code}}),
+            );
+        }
+    };
+    let dir = config.dir;
+    if path == "/api/push/vapid" {
+        return reply(StatusCode::OK, json!({"key":config.env["CP_VAPID_PUBLIC"]}));
+    }
+    if path == "/api/push/settings" {
+        return match tokio::task::spawn_blocking(move || store::settings(&dir)).await {
+            Ok(Ok(value)) => reply(StatusCode::OK, value),
+            _ => server_error(),
         };
     }
-    let Ok(raw) = to_bytes(req.into_body(), BODY_LIMIT).await else { return invalid() };
-    match path.as_str() {
-        "/api/push/subscribe" => {
-            let Some(b) = serde_json::from_slice::<Subscribe>(&raw).ok().filter(|b| !b.label.is_empty() && !b.server_id.is_empty()) else { return invalid() };
-            match tokio::task::spawn_blocking(move || store::add(&dir, Value::Object(b.subscription), &b.label, &b.server_id, &b.locale)).await {
-                Ok(Ok(())) => reply(StatusCode::OK, json!({"ok": true})),
-                Ok(Err(msg)) if msg == "subscription sem endpoint" => reply(StatusCode::BAD_REQUEST, json!({"detail": msg})),
-                _ => unwritable(),
-            }
+    let raw = match to_bytes(req.into_body(), st.login_guests.body_limit).await {
+        Ok(raw) => raw,
+        Err(_) => {
+            return reply(
+                StatusCode::BAD_REQUEST,
+                json!({"detail":"There was an error parsing the body"}),
+            );
         }
-        "/api/push/mute" => {
-            let Some(b) = serde_json::from_slice::<Mute>(&raw).ok().filter(|b| !b.session.is_empty()) else { return invalid() };
-            match tokio::task::spawn_blocking(move || store::set_muted(&dir, &b.session, b.muted)).await {
-                Ok(Ok(())) => reply(StatusCode::OK, json!({"ok": true})),
-                _ => unwritable(),
-            }
+    };
+    let value = if !is_json && !raw.is_empty() {
+        match std::str::from_utf8(&raw) {
+            Ok(text) => json!(text),
+            Err(_) => return server_error(),
         }
-        _ => {
-            let Ok(b) = serde_json::from_slice::<QuietHours>(&raw) else { return invalid() };
-            match tokio::task::spawn_blocking(move || store::set_quiet_hours(&dir, b.start.as_deref(), b.end.as_deref())).await {
-                Ok(Ok(())) => reply(StatusCode::OK, json!({"ok": true})),
-                Ok(Err(msg)) if msg != "push_store_unwritable" => reply(StatusCode::UNPROCESSABLE_ENTITY, json!({"detail": msg})),
-                _ => unwritable(),
-            }
+    } else {
+        match body::parse(&raw) {
+            Ok(value) => value,
+            Err((status, value)) => return reply(status, value),
         }
+    };
+    let checked = crate::login_guests::schema::validate(schema.unwrap(), &value);
+    codec::discard(value);
+    let normalized = match checked {
+        Ok(value) => value,
+        Err(failure) => return reply(StatusCode::from_u16(failure.status).unwrap(), failure.body),
+    };
+    let operation = path.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let result = match operation.as_str() {
+            "/api/push/subscribe" => store::add(
+                &dir,
+                codec::clone_value(&normalized["subscription"]),
+                normalized["label"].as_str().unwrap(),
+                normalized["serverId"].as_str().unwrap(),
+                normalized["locale"].as_str().unwrap_or("en"),
+            ),
+            "/api/push/mute" => store::set_muted(
+                &dir,
+                normalized["session"].as_str().unwrap(),
+                normalized["muted"].as_bool().unwrap(),
+            ),
+            _ => store::set_quiet_hours(
+                &dir,
+                normalized["start"].as_str(),
+                normalized["end"].as_str(),
+            ),
+        };
+        codec::discard(normalized);
+        result
+    })
+    .await
+    .unwrap_or(Err("push_store_unwritable"));
+    match result {
+        Ok(()) => reply(StatusCode::OK, json!({"ok":true})),
+        Err("push_settings_invalid") => {
+            st.diag.report(
+                "rust.push_settings_failed",
+                "push",
+                "push_settings_invalid",
+                "preferências incompatíveis; arquivo preservado",
+            );
+            reply(
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({"detail":{"code":"push_settings_invalid"}}),
+            )
+        }
+        Err("push_store_encoding") if path == "/api/push/subscribe" => reply(
+            StatusCode::BAD_REQUEST,
+            json!({"detail":"push_encoding_invalid"}),
+        ),
+        Err("subscription sem endpoint") => reply(
+            StatusCode::BAD_REQUEST,
+            json!({"detail":"subscription sem endpoint"}),
+        ),
+        Err("horario invalido (use HH:MM)") => reply(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            json!({"detail":"horario invalido (use HH:MM)"}),
+        ),
+        Err(_) => server_error(),
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use crate::{accounts::{environment::AccountEnvironment, AccountService}, auth::TrustedHosts, config::Config, routes::AppState};
-    use serde_json::{json, Value};
+    use crate::{
+        accounts::{AccountService, environment::AccountEnvironment},
+        auth::TrustedHosts,
+        config::Config,
+        routes::AppState,
+    };
+    use serde_json::{Value, json};
     use std::sync::Arc;
 
     #[tokio::test]
     async fn owner_routes_answer_with_the_fastapi_bodies_and_write_where_the_python_reads() {
         let home = tempfile::tempdir().unwrap();
-        let mut state = AppState::new(Config { listen: "127.0.0.1:0".parse().unwrap(), upstream: "127.0.0.1:1".parse().unwrap(),
-            internal_secret: "s".into(), auth_token: "owner".into(), log_path: None, trusted: TrustedHosts::parse("127.0.0.1") });
-        state.accounts = AccountService::new(AccountEnvironment::from_map([
-            ("HOME".into(), home.path().to_string_lossy().into_owned()),
-            ("USERPROFILE".into(), home.path().to_string_lossy().into_owned())].into()));
+        let mut state = AppState::new(Config {
+            listen: "127.0.0.1:0".parse().unwrap(),
+            upstream: "127.0.0.1:1".parse().unwrap(),
+            internal_secret: "s".into(),
+            auth_token: "owner".into(),
+            log_path: None,
+            trusted: TrustedHosts::parse("127.0.0.1"),
+        });
+        state.accounts = AccountService::new(AccountEnvironment::from_map(
+            [
+                ("HOME".into(), home.path().to_string_lossy().into_owned()),
+                (
+                    "USERPROFILE".into(),
+                    home.path().to_string_lossy().into_owned(),
+                ),
+            ]
+            .into(),
+        ));
         let claude = state.accounts.env.claude_base.clone();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
-        let app = crate::routes::router(Arc::new(state)).into_make_service_with_connect_info::<std::net::SocketAddr>();
+        let app = crate::routes::router(Arc::new(state))
+            .into_make_service_with_connect_info::<std::net::SocketAddr>();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let http = reqwest::Client::new();
-        let post = |path: &str, body: Value| http.post(format!("{base}{path}")).bearer_auth("owner").json(&body).send();
-        let answer = |r: reqwest::Response| async move { (r.status().as_u16(), r.json::<Value>().await.unwrap()) };
+        let post = |path: &str, body: Value| {
+            http.post(format!("{base}{path}"))
+                .bearer_auth("owner")
+                .json(&body)
+                .send()
+        };
+        let answer = |r: reqwest::Response| async move {
+            (r.status().as_u16(), r.json::<Value>().await.unwrap())
+        };
 
         let sub = json!({"subscription": {"endpoint": "https://push.example/e1", "keys": {"p256dh": "x", "auth": "y"}}, "label": "Casa", "serverId": "s1"});
-        assert_eq!(answer(post("/api/push/subscribe", sub).await.unwrap()).await, (200, json!({"ok": true})));
-        let saved: Value = serde_json::from_slice(&std::fs::read(claude.join(".hangar-push/subs.json")).unwrap()).unwrap();
-        assert_eq!(saved, json!([{"subscription": {"endpoint": "https://push.example/e1", "keys": {"p256dh": "x", "auth": "y"}},
-            "label": "Casa", "serverId": "s1", "locale": "en"}]));
-        let (status, _) = answer(post("/api/push/subscribe", json!({"subscription": {}, "label": "Casa", "serverId": "s1"})).await.unwrap()).await;
+        assert_eq!(
+            answer(post("/api/push/subscribe", sub).await.unwrap()).await,
+            (200, json!({"ok": true}))
+        );
+        let saved: Value =
+            serde_json::from_slice(&std::fs::read(claude.join(".hangar-push/subs.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            saved,
+            json!([{"subscription": {"endpoint": "https://push.example/e1", "keys": {"p256dh": "x", "auth": "y"}},
+            "label": "Casa", "serverId": "s1", "locale": "en"}])
+        );
+        let (status, _) = answer(
+            post(
+                "/api/push/subscribe",
+                json!({"subscription": {}, "label": "Casa", "serverId": "s1"}),
+            )
+            .await
+            .unwrap(),
+        )
+        .await;
         assert_eq!(status, 400);
-        let (status, _) = answer(post("/api/push/mute", json!({"session": "a", "muted": true, "extra": 1})).await.unwrap()).await;
-        assert_eq!(status, 422, "campo desconhecido é recusado, como o _StrictBody");
-        assert_eq!(answer(post("/api/push/mute", json!({"session": "a", "muted": true})).await.unwrap()).await, (200, json!({"ok": true})));
-        assert_eq!(answer(post("/api/push/quiet-hours", json!({"start": "22:00", "end": "25:00"})).await.unwrap()).await,
-            (422, json!({"detail": "horario invalido (use HH:MM)"})));
-        assert_eq!(answer(post("/api/push/quiet-hours", json!({"start": "22:00", "end": "07:00"})).await.unwrap()).await, (200, json!({"ok": true})));
-        let settings = http.get(format!("{base}/api/push/settings")).bearer_auth("owner").send().await.unwrap();
-        assert_eq!(answer(settings).await, (200, json!({"muted": ["a"], "quiet_hours": {"start": "22:00", "end": "07:00"}})));
-        let vapid = http.get(format!("{base}/api/push/vapid")).bearer_auth("owner").send().await.unwrap();
+        let (status, _) = answer(
+            post(
+                "/api/push/mute",
+                json!({"session": "a", "muted": true, "extra": 1}),
+            )
+            .await
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(
+            status, 422,
+            "campo desconhecido é recusado, como o _StrictBody"
+        );
+        assert_eq!(
+            answer(
+                post("/api/push/mute", json!({"session": "a", "muted": true}))
+                    .await
+                    .unwrap()
+            )
+            .await,
+            (200, json!({"ok": true}))
+        );
+        assert_eq!(
+            answer(
+                post(
+                    "/api/push/quiet-hours",
+                    json!({"start": "22:00", "end": "25:00"})
+                )
+                .await
+                .unwrap()
+            )
+            .await,
+            (422, json!({"detail": "horario invalido (use HH:MM)"}))
+        );
+        assert_eq!(
+            answer(
+                post(
+                    "/api/push/quiet-hours",
+                    json!({"start": "22:00", "end": "07:00"})
+                )
+                .await
+                .unwrap()
+            )
+            .await,
+            (200, json!({"ok": true}))
+        );
+        let settings = http
+            .get(format!("{base}/api/push/settings"))
+            .bearer_auth("owner")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            answer(settings).await,
+            (
+                200,
+                json!({"muted": ["a"], "quiet_hours": {"start": "22:00", "end": "07:00"}})
+            )
+        );
+        let vapid = http
+            .get(format!("{base}/api/push/vapid"))
+            .bearer_auth("owner")
+            .send()
+            .await
+            .unwrap();
         assert_eq!(vapid.status().as_u16(), 200);
         assert!(vapid.json::<Value>().await.unwrap()["key"].is_string());
         server.abort();

@@ -838,8 +838,8 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
 - **A porta privada de loopback do Rust mora no mesmo filho**, anunciada na saúde somente como
   endereço; o segredo vem do Supervisor em memória após conferir o protocolo. Uma captura canônica
   por rodada, sem grade auxiliar: com o Rust de pé, quem captura o pane de Claude com terminal para o
-  estado ao vivo é o `Monitor` (abaixo; modo de permissão e entrega também capturam no Rust, só a
-  captura avulsa do push segue no Python), e a ponte Python do observador (`terminal_observer` →
+  estado ao vivo é o `Monitor` (abaixo; modo de permissão, entrega e captura avulsa do push também
+  são do Rust), e a ponte Python do observador (`terminal_observer` →
   `/__hangar_server/terminal`) ficou sem consumidor, porque o `StateMonitor`/`PreviewBroker` de
   Claude só roda no modo `python`, com a ponte desligada. Pi, omp e Kimi capturam pelo Python e
   guardam lá o estado temporal; Codex conserva estado e prévia nativos. `/clear` ou troca do filho

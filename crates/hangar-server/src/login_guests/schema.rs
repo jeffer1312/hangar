@@ -12,6 +12,8 @@ enum Kind {
     IntegerRange(i64, i64),
     PlainText,
     Dictionary,
+    StrictDictionary,
+    DefaultText,
     Blob,
     Credential(usize),
     User(bool),
@@ -39,6 +41,9 @@ fn optional(name: &'static str, kind: Kind) -> Field {
 fn schema(name: &str) -> (Vec<Field>, bool) {
     use Kind::*;
     match name {
+        "PushSubscribeBody" => (vec![field("subscription", StrictDictionary), field("label", Text(1,usize::MAX)), field("serverId", Text(1,usize::MAX)), optional("locale", DefaultText)], true),
+        "PushMuteBody" => (vec![field("session", Text(1,usize::MAX)), field("muted", Boolean(false))], true),
+        "PushQuietHoursBody" => (vec![optional("start", PlainText),optional("end", PlainText)],true),
         "LoopCreate" => (vec![field("goal", Text(1, usize::MAX)), optional("check_cmd", PlainText), optional("max_iters", IntegerRange(1,100)), optional("require_branch", Boolean(true))], true),
         "LoopResolve" => (vec![field("accept", Boolean(false))], true),
         "LoopRefine" => (vec![field("goal", Text(1,2000)), optional("check_cmd", PlainText)], true),
@@ -180,7 +185,7 @@ fn collect(name: &str, body: &Value, loc: Vec<Value>, errors: &mut Vec<Value>) -
             }
             continue;
         };
-        if f.optional && value.is_null() && !matches!(f.kind, Kind::Boolean(_) | Kind::IntegerRange(..)) {
+        if f.optional && value.is_null() && !matches!(f.kind, Kind::Boolean(_) | Kind::IntegerRange(..) | Kind::DefaultText) {
             output.insert(f.name.into(), Value::Null);
             continue;
         }
@@ -284,12 +289,12 @@ fn collect(name: &str, body: &Value, loc: Vec<Value>, errors: &mut Vec<Value>) -
                         continue;
                     }
                 },
-                Kind::PlainText => match value.as_str() {
+                Kind::PlainText | Kind::DefaultText => match value.as_str() {
                     Some(text) => Value::String(text.to_owned()),
                     None => {errors.push(issue(at,"string_type","Input should be a valid string",value,None));continue;}
                 },
-                Kind::Dictionary if value.is_object() || value.is_null() => crate::orchestration::codec::clone_value(value),
-                Kind::Dictionary => {
+                Kind::Dictionary | Kind::StrictDictionary if value.is_object() || (matches!(f.kind, Kind::Dictionary) && value.is_null()) => crate::orchestration::codec::clone_value(value),
+                Kind::Dictionary | Kind::StrictDictionary => {
                     errors.push(issue(
                         at,
                         "dict_type",

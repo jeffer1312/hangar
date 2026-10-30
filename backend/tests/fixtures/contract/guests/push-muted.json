@@ -1,0 +1,417 @@
+{
+  "source_commit": "15b904c3c953a5e3a353a9f71baadb1700a0ba4b",
+  "command": "cd backend && uv run python tests/fixtures/contract/guests/capture_push_muted.py",
+  "isolation": "is_muted e set_muted originais, arquivo tempor\u00e1rio; sem autentica\u00e7\u00e3o, avisos ou rede.",
+  "rows": [
+    {
+      "muted": null,
+      "requested": false,
+      "decision": {
+        "error": "TypeError"
+      },
+      "write": {
+        "error": "TypeError"
+      },
+      "unchanged": true,
+      "after": "{\"muted\": null, \"extra\": \"preservar\"}"
+    },
+    {
+      "muted": null,
+      "requested": true,
+      "decision": {
+        "error": "TypeError"
+      },
+      "write": {
+        "error": "TypeError"
+      },
+      "unchanged": true,
+      "after": "{\"muted\": null, \"extra\": \"preservar\"}"
+    },
+    {
+      "muted": false,
+      "requested": false,
+      "decision": {
+        "error": "TypeError"
+      },
+      "write": {
+        "error": "TypeError"
+      },
+      "unchanged": true,
+      "after": "{\"muted\": false, \"extra\": \"preservar\"}"
+    },
+    {
+      "muted": false,
+      "requested": true,
+      "decision": {
+        "error": "TypeError"
+      },
+      "write": {
+        "error": "TypeError"
+      },
+      "unchanged": true,
+      "after": "{\"muted\": false, \"extra\": \"preservar\"}"
+    },
+    {
+      "muted": 1,
+      "requested": false,
+      "decision": {
+        "error": "TypeError"
+      },
+      "write": {
+        "error": "TypeError"
+      },
+      "unchanged": true,
+      "after": "{\"muted\": 1, \"extra\": \"preservar\"}"
+    },
+    {
+      "muted": 1,
+      "requested": true,
+      "decision": {
+        "error": "TypeError"
+      },
+      "write": {
+        "error": "TypeError"
+      },
+      "unchanged": true,
+      "after": "{\"muted\": 1, \"extra\": \"preservar\"}"
+    },
+    {
+      "muted": "sessao",
+      "requested": false,
+      "decision": {
+        "value": true
+      },
+      "write": {
+        "ok": true
+      },
+      "unchanged": false,
+      "after": "{\"muted\": [\"a\", \"e\", \"o\"], \"extra\": \"preservar\"}"
+    },
+    {
+      "muted": "sessao",
+      "requested": true,
+      "decision": {
+        "value": true
+      },
+      "write": {
+        "ok": true
+      },
+      "unchanged": false,
+      "after": "{\"muted\": [\"a\", \"e\", \"o\", \"s\"], \"extra\": \"preservar\"}"
+    },
+    {
+      "muted": {},
+      "requested": false,
+      "decision": {
+        "value": false
+      },
+      "write": {
+        "ok": true
+      },
+      "unchanged": false,
+      "after": "{\"muted\": [], \"extra\": \"preservar\"}"
+    },
+    {
+      "muted": {},
+      "requested": true,
+      "decision": {
+        "value": false
+      },
+      "write": {
+        "ok": true
+      },
+      "unchanged": false,
+      "after": "{\"muted\": [\"s\"], \"extra\": \"preservar\"}"
+    },
+    {
+      "muted": {
+        "s": 1
+      },
+      "requested": false,
+      "decision": {
+        "value": true
+      },
+      "write": {
+        "ok": true
+      },
+      "unchanged": false,
+      "after": "{\"muted\": [], \"extra\": \"preservar\"}"
+    },
+    {
+      "muted": {
+        "s": 1
+      },
+      "requested": true,
+      "decision": {
+        "value": true
+      },
+      "write": {
+        "ok": true
+      },
+      "unchanged": false,
+      "after": "{\"muted\": [\"s\"], \"extra\": \"preservar\"}"
+    },
+    {
+      "muted": [],
+      "requested": false,
+      "decision": {
+        "value": false
+      },
+      "write": {
+        "ok": true
+      },
+      "unchanged": true,
+      "after": "{\"muted\": [], \"extra\": \"preservar\"}"
+    },
+    {
+      "muted": [],
+      "requested": true,
+      "decision": {
+        "value": false
+      },
+      "write": {
+        "ok": true
+      },
+      "unchanged": false,
+      "after": "{\"muted\": [\"s\"], \"extra\": \"preservar\"}"
+    },
+    {
+      "muted": [
+        "s",
+        "outra",
+        "s"
+      ],
+      "requested": false,
+      "decision": {
+        "value": true
+      },
+      "write": {
+        "ok": true
+      },
+      "unchanged": false,
+      "after": "{\"muted\": [\"outra\"], \"extra\": \"preservar\"}"
+    },
+    {
+      "muted": [
+        "s",
+        "outra",
+        "s"
+      ],
+      "requested": true,
+      "decision": {
+        "value": true
+      },
+      "write": {
+        "ok": true
+      },
+      "unchanged": false,
+      "after": "{\"muted\": [\"outra\", \"s\"], \"extra\": \"preservar\"}"
+    },
+    {
+      "muted": [
+        1,
+        2
+      ],
+      "requested": false,
+      "decision": {
+        "value": false
+      },
+      "write": {
+        "ok": true
+      },
+      "unchanged": true,
+      "after": "{\"muted\": [1, 2], \"extra\": \"preservar\"}"
+    },
+    {
+      "muted": [
+        1,
+        2
+      ],
+      "requested": true,
+      "decision": {
+        "value": false
+      },
+      "write": {
+        "error": "TypeError"
+      },
+      "unchanged": true,
+      "after": "{\"muted\": [1, 2], \"extra\": \"preservar\"}"
+    },
+    {
+      "muted": [
+        null
+      ],
+      "requested": false,
+      "decision": {
+        "value": false
+      },
+      "write": {
+        "ok": true
+      },
+      "unchanged": true,
+      "after": "{\"muted\": [null], \"extra\": \"preservar\"}"
+    },
+    {
+      "muted": [
+        null
+      ],
+      "requested": true,
+      "decision": {
+        "value": false
+      },
+      "write": {
+        "error": "TypeError"
+      },
+      "unchanged": true,
+      "after": "{\"muted\": [null], \"extra\": \"preservar\"}"
+    },
+    {
+      "muted": [
+        false,
+        1,
+        0
+      ],
+      "requested": false,
+      "decision": {
+        "value": false
+      },
+      "write": {
+        "ok": true
+      },
+      "unchanged": false,
+      "after": "{\"muted\": [false, 1], \"extra\": \"preservar\"}"
+    },
+    {
+      "muted": [
+        false,
+        1,
+        0
+      ],
+      "requested": true,
+      "decision": {
+        "value": false
+      },
+      "write": {
+        "error": "TypeError"
+      },
+      "unchanged": true,
+      "after": "{\"muted\": [false, 1, 0], \"extra\": \"preservar\"}"
+    },
+    {
+      "muted": [
+        100000000000000000001,
+        100000000000000000000
+      ],
+      "requested": false,
+      "decision": {
+        "value": false
+      },
+      "write": {
+        "ok": true
+      },
+      "unchanged": false,
+      "after": "{\"muted\": [100000000000000000000, 100000000000000000001], \"extra\": \"preservar\"}"
+    },
+    {
+      "muted": [
+        100000000000000000001,
+        100000000000000000000
+      ],
+      "requested": true,
+      "decision": {
+        "value": false
+      },
+      "write": {
+        "error": "TypeError"
+      },
+      "unchanged": true,
+      "after": "{\"muted\": [100000000000000000001, 100000000000000000000], \"extra\": \"preservar\"}"
+    },
+    {
+      "muted": [
+        "s",
+        1
+      ],
+      "requested": false,
+      "decision": {
+        "value": true
+      },
+      "write": {
+        "ok": true
+      },
+      "unchanged": false,
+      "after": "{\"muted\": [1], \"extra\": \"preservar\"}"
+    },
+    {
+      "muted": [
+        "s",
+        1
+      ],
+      "requested": true,
+      "decision": {
+        "value": true
+      },
+      "write": {
+        "error": "TypeError"
+      },
+      "unchanged": true,
+      "after": "{\"muted\": [\"s\", 1], \"extra\": \"preservar\"}"
+    },
+    {
+      "muted": [
+        []
+      ],
+      "requested": false,
+      "decision": {
+        "value": false
+      },
+      "write": {
+        "error": "TypeError"
+      },
+      "unchanged": true,
+      "after": "{\"muted\": [[]], \"extra\": \"preservar\"}"
+    },
+    {
+      "muted": [
+        []
+      ],
+      "requested": true,
+      "decision": {
+        "value": false
+      },
+      "write": {
+        "error": "TypeError"
+      },
+      "unchanged": true,
+      "after": "{\"muted\": [[]], \"extra\": \"preservar\"}"
+    },
+    {
+      "muted": [
+        {}
+      ],
+      "requested": false,
+      "decision": {
+        "value": false
+      },
+      "write": {
+        "error": "TypeError"
+      },
+      "unchanged": true,
+      "after": "{\"muted\": [{}], \"extra\": \"preservar\"}"
+    },
+    {
+      "muted": [
+        {}
+      ],
+      "requested": true,
+      "decision": {
+        "value": false
+      },
+      "write": {
+        "error": "TypeError"
+      },
+      "unchanged": true,
+      "after": "{\"muted\": [{}], \"extra\": \"preservar\"}"
+    }
+  ]
+}

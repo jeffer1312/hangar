@@ -543,9 +543,12 @@ pub fn start(st: Arc<AppState>) -> Vec<tokio::task::JoinHandle<()>> {
             return Vec::new();
         }
     };
-    let env = super::server_env();
+    let sender=match Sender::from_state(st.clone()) {
+        Ok(sender)=>sender,
+        Err(code)=>{st.diag.report("rust.push_config_failed","push",code,"configuração inválida impediu o vigia de avisos");return Vec::new();}
+    };
     let memory_path = Memory::path(&st.accounts.env.home);
-    let w = Arc::new(Watch { #[cfg(test)] finish_source: None, sender: Sender::new(st.clone(), env), config, frozen, memory: Mutex::new(Memory::load(&memory_path)),
+    let w = Arc::new(Watch { #[cfg(test)] finish_source: None, sender, config, frozen, memory: Mutex::new(Memory::load(&memory_path)),
         memory_path, hooks: Mutex::new(HookStates::default()), st });
     vec![tokio::spawn(w.clone().transitions()), tokio::spawn(w.sweep())]
 }

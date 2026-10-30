@@ -100,7 +100,6 @@ from app import codex_contas as codex_accounts
 from app.codex_contas_login import CodexContasLogin
 from app.pair import PairLink
 from app.hook_state import hook_state
-from app import push
 from app.sync import sync_admin_router, sync_router
 from app.deploy import deploy_router
 from app import desktop_palette
@@ -673,13 +672,6 @@ async def prewarm_forward(request: Request):
                                   "/__hangar_server/forwarded")
 
 
-@app.post("/api/push/expo/subscribe", dependencies=[Depends(require_auth)])
-async def push_expo_subscribe_forward(request: Request):
-    """O registro é do Rust; pelo Connect o cabeçalho de convidado não chega a ele, então a recusa é aqui."""
-    if _convidado(request):
-        raise HTTPException(403, detail=erro("push_expo_owner_only", "só o dono pode registrar o aviso no celular"))
-    return await _repasse_ao_rust(request, erro("push_expo_unavailable", "o aviso no celular precisa do servidor Rust"),
-                                  "/__hangar_server/forwarded")
 
 
 @app.get("/api/client-api")
@@ -1436,60 +1428,20 @@ class _StrictBody(BaseModel):
 
 
 
-class PushSubscribeBody(_StrictBody):
-    subscription: dict  # PushSubscription do browser: {endpoint, keys:{p256dh, auth}}
-    label: str = Field(min_length=1)    # nome do servidor escolhido no celular (Casa/my-org)
-    serverId: str = Field(min_length=1)  # id local do servidor no celular (pro deep-link da notif)
-    # Idioma da inscricao: o front manda o escolhido na tela Geral; ausente (front velho) cai em
-    # "en", o baseLocale do app — a leitura do registro antigo e que trata o campo ausente como pt.
-    locale: str = "en"
 
 
-@app.get("/api/push/vapid", dependencies=[Depends(require_auth)])
-def push_vapid():
-    # Chave publica VAPID (applicationServerKey) pro browser assinar. Vazia = push desligado no backend.
-    return {"key": settings.vapid_public}
 
 
-@app.post("/api/push/subscribe", dependencies=[Depends(require_auth)])
-def push_subscribe(body: PushSubscribeBody):
-    try:
-        push.add_subscription(body.subscription, body.label, body.serverId, body.locale)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    return {"ok": True}
 
 
-@app.get("/api/push/settings", dependencies=[Depends(require_auth)])
-def push_settings():
-    # Estado atual (mute por sessao + quiet hours global) pro app refletir na UI.
-    return push.get_push_prefs()
 
 
-class PushMuteBody(_StrictBody):
-    session: str = Field(min_length=1)
-    muted: bool
 
 
-@app.post("/api/push/mute", dependencies=[Depends(require_auth)])
-def push_mute(body: PushMuteBody):
-    push.set_muted(body.session, body.muted)
-    return {"ok": True}
 
 
-class PushQuietHoursBody(_StrictBody):
-    # HH:MM. Ambos None desliga a janela; so ha janela com os dois presentes.
-    start: str | None = None
-    end: str | None = None
 
 
-@app.post("/api/push/quiet-hours", dependencies=[Depends(require_auth)])
-def push_quiet_hours(body: PushQuietHoursBody):
-    try:
-        push.set_quiet_hours(body.start, body.end)
-    except ValueError as e:
-        raise HTTPException(422, str(e))
-    return {"ok": True}
 
 
 class InputBody(_StrictBody):

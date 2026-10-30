@@ -1,0 +1,77 @@
+{
+  "source_commit": "15b904c3c953a5e3a353a9f71baadb1700a0ba4b",
+  "command": "cd backend && uv run python tests/fixtures/contract/guests/capture_push_config.py",
+  "isolation": "Settings e _file originais; ambiente tempor\u00e1rio, mkdir substitu\u00eddo por observa\u00e7\u00e3o sem escrita; altera\u00e7\u00e3o posterior do ambiente sem reconstruir Settings.",
+  "rows": [
+    {
+      "raw": "",
+      "projects": ".",
+      "file": ".hangar-push/subs.json"
+    },
+    {
+      "raw": ".",
+      "projects": ".",
+      "file": ".hangar-push/subs.json"
+    },
+    {
+      "raw": "./projects",
+      "projects": "projects",
+      "file": ".hangar-push/subs.json"
+    },
+    {
+      "raw": "projects",
+      "projects": "projects",
+      "file": ".hangar-push/subs.json"
+    },
+    {
+      "raw": "one/projects",
+      "projects": "one/projects",
+      "file": "one/.hangar-push/subs.json"
+    },
+    {
+      "raw": "one/../projects",
+      "projects": "one/../projects",
+      "file": "one/../.hangar-push/subs.json"
+    },
+    {
+      "raw": "~",
+      "projects": "~",
+      "file": ".hangar-push/subs.json"
+    },
+    {
+      "raw": "~/projects",
+      "projects": "~/projects",
+      "file": "~/.hangar-push/subs.json"
+    },
+    {
+      "raw": "/",
+      "projects": "/",
+      "file": "/.hangar-push/subs.json"
+    },
+    {
+      "raw": "/projects",
+      "projects": "/projects",
+      "file": "/.hangar-push/subs.json"
+    },
+    {
+      "raw": "/fixture//projects/./",
+      "projects": "/fixture/projects",
+      "file": "/fixture/.hangar-push/subs.json"
+    },
+    {
+      "raw": " a/projects ",
+      "projects": " a/projects ",
+      "file": " a/.hangar-push/subs.json"
+    }
+  ],
+  "snapshot": {
+    "vapid_public": "original-public",
+    "vapid_private": "original-private",
+    "vapid_subject": "mailto:fixture@example.invalid"
+  },
+  "dotenv_snapshot": {
+    "vapid_public": "original-public",
+    "vapid_private": "original-private",
+    "vapid_subject": "mailto:fixture@example.invalid"
+  }
+}
