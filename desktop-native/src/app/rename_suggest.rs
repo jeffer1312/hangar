@@ -42,8 +42,8 @@ fn sanitize(name: &str) -> String {
 
 impl Hangar {
     pub(super) fn rename_life(&self, target: &Target) -> Life {
-        let life = self.target_session(target).and_then(|s| s.lifecycle_id.clone().or_else(|| s.jsonl.clone()));
-        (target.clone(), life)
+        // Só a conversa: o `lifecycle_id` chega depois do plugin e trocaria a chave no meio da vida.
+        (target.clone(), self.target_session(target).and_then(|s| s.jsonl.clone()))
     }
 
     /// Pede a sugestão da aberta uma vez por sessão nesta vida do app, e a fraca de novo a cada pedido seu. 204 e falha
@@ -56,6 +56,7 @@ impl Hangar {
         let asked = self.chat.events.iter().filter(|event| event.kind == "user_msg" && !event.queued()).count();
         if asked == 0 { return; }
         let life = self.rename_life(&target);
+        if life.1.is_none() { return; }
         if self.rename_suggest.asked.get(&life).is_some_and(|&last| !session.rename_weak || asked <= last) { return; }
         let Some(api) = self.machine_api(&target.server) else { return };
         self.rename_suggest.asked.insert(life, asked);

@@ -1323,8 +1323,7 @@ impl Hangar {
                     }
                     (Write::DismissRename, Ok(_)) => None,
                     (Write::DismissRename, Err(error)) => {
-                        let life = self.rename_life(&target);
-                        self.rename_suggest.dismissed.remove(&life);
+                        self.rename_suggest.dismissed.retain(|(dismissed, _)| *dismissed != target);
                         Some(Notification::error(Self::fetch_failure(&error)))
                     }
                     (Write::Delete, Ok(value)) => {
