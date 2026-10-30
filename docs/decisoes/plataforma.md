@@ -3684,3 +3684,32 @@ As mensagens corrigidas levam acentos, mantendo os códigos usados pelos cliente
 **Limite de medição.** Uma prova HTTP com provedor controlado mede a borda e o cache do Hangar;
 ela não comprova aceleração da inferência de fala ou do modelo externo. Não atribuir ao Rust
 ganho de ponta a ponta que não tenha sido medido.
+
+## Cofre de senhas: uma máquina dona, chave no chaveiro, uso aprovado por senha (30/10/2026)
+
+**Regra.** O Hangar guarda as senhas do dono num **cofre** único, numa máquina dona (hoje
+`notebook-jefferson`); as outras máquinas pedem a ela pelos peers, por qualquer endereço que o
+`peers.json` dá, inclusive o `app.hangar.dev.br`. O arquivo é criptografado e a chave mora no
+chaveiro do sistema da dona. Cada senha é **pedir sempre** (padrão: o uso por agente abre cartão
+e push no celular, espera até 10 min) ou **liberada**. O agente usa por três caminhos: login
+preenchido pelo navegador da sessão (não vê o valor), comando no shell com o valor numa variável
+de ambiente e apagado da saída, e arquivo 0600 que some no fim da sessão ou em 24 h. Entrada pela
+tela dos três clientes e pelo cartão `request_secret`; ver e copiar não pedem confirmação extra.
+Cópia diária criptografada vai à VPS e abre só com a senha de recuperação que o dono guarda fora.
+Tudo no Rust, espera por evento.
+
+**Por quê.** O pedido é parar de colar senha no chat (fica no transcript e vai ao modelo) e de
+guardar senha em site de terceiro, com acesso fácil pelo celular. Alternativas recusadas:
+gerenciador pronto como ponte (Bitwarden/Vaultwarden), senha mestra só na memória do servidor,
+um cofre por máquina, rede só por Tailscale.
+
+**Medição.** O agente roda com o mesmo usuário do sistema: com a coleção `login` aberta,
+`secret-tool lookup` devolve o que estiver nela sem prompt, então ele consegue a chave do cofre.
+A memória do `hangar-server` ele não lê (`kernel.yama.ptrace_scope=1`; o agente é filho do
+servidor, não o contrário). A VPS `srv1633222` não tem chaveiro do sistema (sem
+`gnome-keyring-daemon` nem `secret-tool`).
+
+**Limite.** A aprovação e a saída apagada barram o uso normal, não um agente decidido a burlar: com
+a chave no chaveiro ele abre o cofre, e no shell e no arquivo ele vê o valor se quiser. Senha que
+passa pelo `app.hangar.dev.br` é decifrada no servidor intermediário. Notebook fechado = nenhuma
+outra máquina tem senha. 2FA fica fora da primeira entrega: o login pede o código num cartão.
