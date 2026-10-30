@@ -132,29 +132,14 @@ impl VaultRequests {
         let r = &card.request;
         let id = r.id.clone();
         let off = card.sending;
-        let line = |text: String| div().text_xs().text_color(theme::muted()).whitespace_normal().child(text);
-        let button = |suffix: &str, label: String| Button::new(SharedString::from(format!("vault-request-{suffix}-{id}"))).xsmall().w_full()
-            .label(label).disabled(off);
+        let button = |suffix: &str, label: String| request_button(suffix, &id, label, off);
         let on = |decision: Decision, cx: &mut Context<Self>| answer_on(&id, decision, cx);
         let (title, body) = match r.kind {
             Kind::Approve => {
-                let entry = r.entry_name.clone().unwrap_or_default();
-                let target = r.target.clone().unwrap_or_default();
-                let usage = match r.usage.as_deref() {
-                    Some("fill") => tr("vault_request_use_fill").replace("{target}", &target),
-                    Some("exec") => tr("vault_request_use_exec"),
-                    Some("file") => tr("vault_request_use_file"),
-                    _ => String::new(),
-                };
-                let command = (r.usage.as_deref() == Some("exec") && !target.is_empty()).then(|| div().p_1().rounded(px(4.)).bg(theme::boxed())
-                    .font_family(theme::MONO).text_xs().whitespace_normal().child(target.clone()));
-                let body = div().flex().flex_col().gap_1()
-                    .when(!usage.is_empty(), |el| el.child(line(usage)))
-                    .children(command)
-                    .child(div().flex().gap_1()
-                        .child(button("allow", tr("vault_request_allow")).primary().on_click(on(Decision::Allow, cx)))
-                        .child(button("deny", tr("vault_request_deny")).outline().on_click(on(Decision::Deny, cx))));
-                (tr("vault_request_approve_title").replace("{origin}", &r.origin).replace("{entry}", &entry), body)
+                let allow = button("allow", tr("vault_request_allow")).primary().on_click(on(Decision::Allow, cx));
+                let deny = button("deny", tr("vault_request_deny")).outline().on_click(on(Decision::Deny, cx));
+                (approve_title(&r.origin, r.entry_name.as_deref().unwrap_or_default()),
+                    approve_body(r.usage.as_deref(), r.target.as_deref().unwrap_or_default(), allow, deny))
             }
             Kind::Entry => {
                 let label = r.label.clone().unwrap_or_default();
@@ -183,18 +168,53 @@ impl VaultRequests {
                 (tr("vault_request_entry_title").replace("{origin}", &r.origin).replace("{label}", &label), body)
             }
         };
-        let heading = div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(theme::warning()).whitespace_normal()
-            .child(format!("{} · {}", tr("vault_request_heading"), self.machine));
-        div().id(SharedString::from(format!("vault-request-{id}"))).flex_shrink_0().mx(px(8.)).my(px(4.)).p_2().rounded(px(8.)).bg(theme::inset())
-            .flex().flex_col().gap_1().role(Role::Group).aria_label(title.clone())
-            .child(heading)
-            .child(div().text_xs().text_color(theme::text()).whitespace_normal().child(title))
-            .when(!r.reason.is_empty(), |el| el.child(line(tr("vault_request_reason").replace("{reason}", &r.reason))))
-            .child(body)
-            .children(card.error.clone().map(|error| div().id(SharedString::from(format!("vault-request-error-{id}"))).role(Role::Alert)
-                .text_xs().text_color(theme::danger()).whitespace_normal().child(error)))
-            .into_any_element()
+        request_card(&id, &self.machine, title, &r.reason, body, card.error.clone()).into_any_element()
     }
+}
+
+fn request_line(text: String) -> Div { div().text_xs().text_color(theme::muted()).whitespace_normal().child(text) }
+
+/// Botão de um cartão de pedido, nas larguras do cartão: `suffix` é a ação, `id` o pedido.
+pub(crate) fn request_button(suffix: &str, id: &str, label: String, off: bool) -> Button {
+    Button::new(SharedString::from(format!("vault-request-{suffix}-{id}"))).xsmall().w_full().label(label).disabled(off)
+}
+
+pub(crate) fn approve_title(origin: &str, entry: &str) -> String {
+    tr("vault_request_approve_title").replace("{origin}", origin).replace("{entry}", entry)
+}
+
+/// Bloco do comando num cartão: a linha que o agente quer rodar, em fonte fixa.
+pub(crate) fn request_command(text: String) -> Div {
+    div().p_1().rounded(px(4.)).bg(theme::boxed()).font_family(theme::MONO).text_xs().whitespace_normal().child(text)
+}
+
+/// Corpo do cartão de aprovação: para que a senha vai ser usada, o comando e os dois botões. `usage` é `fill`, `exec` ou `file`.
+pub(crate) fn approve_body(usage: Option<&str>, target: &str, allow: Button, deny: Button) -> Div {
+    let line = match usage {
+        Some("fill") => tr("vault_request_use_fill").replace("{target}", target),
+        Some("exec") => tr("vault_request_use_exec"),
+        Some("file") => tr("vault_request_use_file"),
+        _ => String::new(),
+    };
+    let command = (usage == Some("exec") && !target.is_empty()).then(|| request_command(target.to_owned()));
+    div().flex().flex_col().gap_1()
+        .when(!line.is_empty(), |el| el.child(request_line(line)))
+        .children(command)
+        .child(div().flex().gap_1().child(allow).child(deny))
+}
+
+/// A casca de um cartão de pedido: de que máquina veio, o que pede, o motivo, o corpo e a falha da última resposta.
+pub(crate) fn request_card(id: &str, machine: &str, title: String, reason: &str, body: Div, error: Option<String>) -> Stateful<Div> {
+    let heading = div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(theme::warning()).whitespace_normal()
+        .child(format!("{} · {machine}", tr("vault_request_heading")));
+    div().id(SharedString::from(format!("vault-request-{id}"))).flex_shrink_0().mx(px(8.)).my(px(4.)).p_2().rounded(px(8.)).bg(theme::inset())
+        .flex().flex_col().gap_1().role(Role::Group).aria_label(title.clone())
+        .child(heading)
+        .child(div().text_xs().text_color(theme::text()).whitespace_normal().child(title))
+        .when(!reason.is_empty(), |el| el.child(request_line(tr("vault_request_reason").replace("{reason}", reason))))
+        .child(body)
+        .children(error.map(|error| div().id(SharedString::from(format!("vault-request-error-{id}"))).role(Role::Alert)
+            .text_xs().text_color(theme::danger()).whitespace_normal().child(error)))
 }
 
 impl Render for VaultRequests {

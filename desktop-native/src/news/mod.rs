@@ -3,6 +3,7 @@
 mod account_tags;
 mod codex_activity;
 mod composer_history;
+mod password_vault;
 mod rename_suggestion;
 
 use std::time::Instant;
@@ -18,6 +19,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "codex-atividade" => Some(codex_activity::render),
         "etiquetas-maquina-conta" => Some(account_tags::render),
         "sugestao-de-nome" => Some(rename_suggestion::render),
+        "cofre-de-senhas" => Some(password_vault::render),
         _ => None,
     }
 }
