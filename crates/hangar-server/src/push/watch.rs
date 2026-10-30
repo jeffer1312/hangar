@@ -2,6 +2,7 @@
 //! marcadores e do registro nativo ("aguardando", série de turnos e "terminou") e a varredura da lista
 //! a cada `stall_poll_seconds` ("caiu", "travada", "limite" e o auto-resume). A memória dos avisos
 //! fica em disco por sessão: reiniciar não perde um "terminou" nem repete um "travada".
+mod terminal_notices;
 use super::send::{Notice, Sender};
 use crate::list::facts_files::HookStates;
 use crate::routes::AppState;
@@ -317,6 +318,7 @@ impl Watch {
         for attempt in 0..2 {
             if attempt == 1 { tokio::time::sleep(AWAITING_RETRY).await; }
             let Some(row) = self.row_of(&sid, attempt == 1).await else { return };
+            if terminal_notices::owns(&row.provider) {terminal_notices::awaiting(self.as_ref(),row).await;return;}
             if !turn_notices(&row.provider) { return; }
             let (ask, overlay) = if row.headless { (None, false) } else {
                 let dirs = self.st.list.state_dirs_blocking().map(|(d, _)| d.to_vec()).unwrap_or_default();

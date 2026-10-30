@@ -983,7 +983,6 @@ def _rust_owner_world(monkeypatch):
     monkeypatch.setattr(api_mod.push, "notify_awaiting", lambda name, body=None: feitos.append(("aguardando", name)))
     monkeypatch.setattr(api_mod.push, "notify_dead", lambda name: feitos.append(("caiu", name)))
     monkeypatch.setattr(api_mod.settings, "notify_dead", True)
-    monkeypatch.setattr(api_mod, "_pane_wants_input", lambda name: True)
     return feitos
 
 
@@ -993,7 +992,6 @@ def test_rust_owned_session_transitions_do_nothing_in_python(monkeypatch):
     feitos = _rust_owner_world(monkeypatch)
     for state in ("idle", "awaiting_input", "dead"):
         api_mod._on_hook_transition("claude-sid", state)
-    api_mod._do_notify_awaiting("claude-sid")
     enviados = []
     api_mod._notify_async("claude-sid", enviados.append)
     assert feitos == [] and enviados == []
@@ -1316,149 +1314,24 @@ from types import SimpleNamespace
 from app.models import AskQuestion, AskQuestionItem, AskOption
 
 
-def test_awaiting_body_prefers_askq(monkeypatch):
-    info = SimpleNamespace(name="s1", jsonl="/x/u.jsonl", cwd="/x")
-    monkeypatch.setattr(api_mod, "read_pending_askq", lambda jsonl: AskQuestion(questions=[
-        AskQuestionItem(header="h", question="Qual branch usar?", options=[AskOption(label="a")]),
-    ]))
-    assert api_mod._awaiting_body(info) == "Qual branch usar?"
 
 
-def test_awaiting_body_falls_back_to_classify(monkeypatch):
-    import app.state as state_mod
-    import app.tmux as tmux_mod
-    info = SimpleNamespace(name="s1", jsonl="/x/u.jsonl", cwd="/x")
-    monkeypatch.setattr(api_mod, "read_pending_askq", lambda jsonl: None)  # sem AskUserQuestion nativo
-    monkeypatch.setattr(tmux_mod, "capture_pane", lambda name: "pane cru")
-    monkeypatch.setattr(state_mod, "classify",
-                        lambda pane: ("awaiting_input", None, "Pode sobrescrever o arquivo?", ["a", "b"]))
-    assert api_mod._awaiting_body(info) == "Pode sobrescrever o arquivo?"
 
 
-def test_awaiting_body_fallback_static(monkeypatch):
-    import app.state as state_mod
-    import app.tmux as tmux_mod
-    info = SimpleNamespace(name="s1", jsonl="/x/u.jsonl", cwd="/x")
-    monkeypatch.setattr(api_mod, "read_pending_askq", lambda jsonl: None)
-    monkeypatch.setattr(tmux_mod, "capture_pane", lambda name: "pane cru")
-    monkeypatch.setattr(state_mod, "classify", lambda pane: ("idle", None, None, None))
-    # None = fallback: quem resolve o texto e o push, no idioma da inscricao (nao texto fixo em pt)
-    assert api_mod._awaiting_body(info) is None
 
 
-def test_do_notify_awaiting_resolves_name_and_body(monkeypatch):
-    calls = []
-    info = SimpleNamespace(name="minha-sessao", jsonl="/x/uuid1.jsonl", cwd="/x")
-    monkeypatch.setattr(api_mod.registry, "list", lambda: [info])
-    monkeypatch.setattr(api_mod, "read_pending_askq", lambda jsonl: None)
-    monkeypatch.setattr(api_mod, "_pane_wants_input", lambda name: True)  # menu real no pane
-    monkeypatch.setattr(api_mod, "_awaiting_body", lambda i: "corpo rico")
-    monkeypatch.setattr(api_mod.push, "notify_awaiting", lambda name, body: calls.append((name, body)))
-    api_mod._do_notify_awaiting("uuid1")
-    assert calls == [("minha-sessao", "corpo rico")]
 
 
-def test_do_notify_awaiting_sem_terminal_usa_o_estado_da_lista(monkeypatch):
-    # Claude sem terminal: não há pane pra raspar nem askq no sidecar. A lista vem como o
-    # `registry.list` real devolve (estado padrão idle, sem pergunta): quem sabe é o adapter.
-    from app.adapters import CLAUDE_HEADLESS, get_adapter
-    calls = []
-    info = SimpleNamespace(name="hl", jsonl="/x/uuid1.jsonl", cwd="/x", headless=True,
-                           state="idle", question=None)
-    snap = SimpleNamespace(state="awaiting_input", question="Permitir Bash? ls")
-    monkeypatch.setattr(api_mod.registry, "list", lambda: [info])
-    monkeypatch.setattr(get_adapter(CLAUDE_HEADLESS), "snapshot", lambda name: snap if name == "hl" else None)
-    monkeypatch.setattr(api_mod, "read_pending_askq", lambda jsonl: None)
-    monkeypatch.setattr(api_mod, "_pane_wants_input", lambda name: pytest.fail("raspou pane inexistente"))
-    monkeypatch.setattr(api_mod, "_AWAITING_PUSH_RETRY_S", 0)
-    monkeypatch.setattr(api_mod.push, "notify_awaiting", lambda name, body: calls.append((name, body)))
-    api_mod._do_notify_awaiting("uuid1")
-    assert calls == [("hl", "Permitir Bash? ls")]
-    snap.state = "working"
-    api_mod._do_notify_awaiting("uuid1")
-    assert len(calls) == 1
 
 
-def test_do_notify_awaiting_skips_idle_notification(monkeypatch):
-    # Notification de "idle 60s" (state_hook mapeia pra awaiting): sem askq pendente e sem menu no
-    # pane (nas 2 checagens) -> NENHUM push. Era o push falso "Aguardando sua resposta" em toda
-    # sessao parada >60s.
-    calls = []
-    info = SimpleNamespace(name="parada", jsonl="/x/uuid1.jsonl", cwd="/x")
-    monkeypatch.setattr(api_mod.registry, "list", lambda: [info])
-    monkeypatch.setattr(api_mod, "read_pending_askq", lambda jsonl: None)
-    monkeypatch.setattr(api_mod, "_pane_wants_input", lambda name: False)
-    monkeypatch.setattr(api_mod, "_AWAITING_PUSH_RETRY_S", 0)
-    monkeypatch.setattr(api_mod.push, "notify_awaiting", lambda name, body: calls.append((name, body)))
-    api_mod._do_notify_awaiting("uuid1")
-    assert calls == []
 
 
-def test_do_notify_awaiting_retry_catches_late_menu(monkeypatch):
-    # Corrida de render: 1a checagem sem menu, retry acha o menu -> push sai (permissao legitima).
-    calls = []
-    seen = {"n": 0}
-    info = SimpleNamespace(name="perm", jsonl="/x/uuid1.jsonl", cwd="/x")
-    monkeypatch.setattr(api_mod.registry, "list", lambda: [info])
-    monkeypatch.setattr(api_mod, "read_pending_askq", lambda jsonl: None)
-
-    def _late_menu(name):
-        seen["n"] += 1
-        return seen["n"] >= 2
-
-    monkeypatch.setattr(api_mod, "_pane_wants_input", _late_menu)
-    monkeypatch.setattr(api_mod, "_AWAITING_PUSH_RETRY_S", 0)
-    monkeypatch.setattr(api_mod, "_awaiting_body", lambda i: "Pode rodar X?")
-    monkeypatch.setattr(api_mod.push, "notify_awaiting", lambda name, body: calls.append((name, body)))
-    api_mod._do_notify_awaiting("uuid1")
-    assert calls == [("perm", "Pode rodar X?")]
 
 
-def test_do_notify_awaiting_retry_catches_late_askq(monkeypatch):
-    # Sidecar askq pode ser o que atrasa (nao so o render do pane): 1a leitura None, retry acha a
-    # pergunta -> push sai. O retry re-le askq ALEM do pane.
-    calls = []
-    reads = {"n": 0}
-    info = SimpleNamespace(name="ask", jsonl="/x/uuid1.jsonl", cwd="/x")
-    monkeypatch.setattr(api_mod.registry, "list", lambda: [info])
-
-    def _late_askq(jsonl):
-        reads["n"] += 1
-        if reads["n"] < 2:
-            return None
-        return AskQuestion(questions=[
-            AskQuestionItem(header="h", question="Qual branch?", options=[AskOption(label="a")]),
-        ])
-
-    monkeypatch.setattr(api_mod, "read_pending_askq", _late_askq)
-    monkeypatch.setattr(api_mod, "_pane_wants_input", lambda name: False)
-    monkeypatch.setattr(api_mod, "_AWAITING_PUSH_RETRY_S", 0)
-    monkeypatch.setattr(api_mod.push, "notify_awaiting", lambda name, body: calls.append((name, body)))
-    api_mod._do_notify_awaiting("uuid1")
-    assert calls == [("ask", "Qual branch?")]
 
 
-def test_do_notify_awaiting_askq_pending_pushes_without_pane(monkeypatch):
-    # AskUserQuestion pendente no sidecar = awaiting real por definicao — push sem depender do pane.
-    calls = []
-    info = SimpleNamespace(name="ask", jsonl="/x/uuid1.jsonl", cwd="/x")
-    monkeypatch.setattr(api_mod.registry, "list", lambda: [info])
-    monkeypatch.setattr(api_mod, "read_pending_askq", lambda jsonl: AskQuestion(questions=[
-        AskQuestionItem(header="h", question="Qual branch?", options=[AskOption(label="a")]),
-    ]))
-    monkeypatch.setattr(api_mod, "_pane_wants_input",
-                        lambda name: (_ for _ in ()).throw(AssertionError("nao devia capturar pane")))
-    monkeypatch.setattr(api_mod.push, "notify_awaiting", lambda name, body: calls.append((name, body)))
-    api_mod._do_notify_awaiting("uuid1")
-    assert calls == [("ask", "Qual branch?")]
 
 
-def test_do_notify_awaiting_no_match_is_noop(monkeypatch):
-    calls = []
-    monkeypatch.setattr(api_mod.registry, "list", lambda: [])
-    monkeypatch.setattr(api_mod.push, "notify_awaiting", lambda name, body: calls.append((name, body)))
-    api_mod._do_notify_awaiting("uuid-nenhuma")
-    assert calls == []
 
 
 def test_push_mute_route(api_client, monkeypatch, tmp_path):

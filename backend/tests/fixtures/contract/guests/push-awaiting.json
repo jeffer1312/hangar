@@ -1,0 +1,312 @@
+{
+  "source_commit": "9d7d1a051",
+  "isolation": "AST original de produtor e auxiliares; classificador/pane/sidecar/rel\u00f3gio/entrega controlados. N\u00e3o prova o classificador nem sess\u00e3o real.",
+  "rows": [
+    {
+      "provider": "pi",
+      "scenario": "menu",
+      "notices": [
+        [
+          "fixture",
+          "pergunta do pane"
+        ]
+      ],
+      "sleeps": [],
+      "captures": 2,
+      "question_reads": 2
+    },
+    {
+      "provider": "pi",
+      "scenario": "overlay",
+      "notices": [
+        [
+          "fixture",
+          null
+        ]
+      ],
+      "sleeps": [],
+      "captures": 2,
+      "question_reads": 2
+    },
+    {
+      "provider": "pi",
+      "scenario": "capture_error",
+      "notices": [
+        [
+          "fixture",
+          null
+        ]
+      ],
+      "sleeps": [],
+      "captures": 2,
+      "question_reads": 2
+    },
+    {
+      "provider": "pi",
+      "scenario": "idle",
+      "notices": [],
+      "sleeps": [
+        1.5
+      ],
+      "captures": 2,
+      "question_reads": 2
+    },
+    {
+      "provider": "pi",
+      "scenario": "late_menu",
+      "notices": [
+        [
+          "fixture",
+          "pergunta do pane"
+        ]
+      ],
+      "sleeps": [
+        1.5
+      ],
+      "captures": 3,
+      "question_reads": 3
+    },
+    {
+      "provider": "pi",
+      "scenario": "late_question",
+      "notices": [
+        [
+          "fixture",
+          "pergunta do sidecar"
+        ]
+      ],
+      "sleeps": [
+        1.5
+      ],
+      "captures": 1,
+      "question_reads": 3
+    },
+    {
+      "provider": "pi",
+      "scenario": "question",
+      "notices": [
+        [
+          "fixture",
+          "pergunta do sidecar"
+        ]
+      ],
+      "sleeps": [],
+      "captures": 0,
+      "question_reads": 2
+    },
+    {
+      "provider": "pi",
+      "scenario": "empty_question",
+      "notices": [],
+      "sleeps": [
+        1.5
+      ],
+      "captures": 2,
+      "question_reads": 2
+    },
+    {
+      "provider": "omp",
+      "scenario": "menu",
+      "notices": [
+        [
+          "fixture",
+          "pergunta do pane"
+        ]
+      ],
+      "sleeps": [],
+      "captures": 2,
+      "question_reads": 2
+    },
+    {
+      "provider": "omp",
+      "scenario": "overlay",
+      "notices": [
+        [
+          "fixture",
+          null
+        ]
+      ],
+      "sleeps": [],
+      "captures": 2,
+      "question_reads": 2
+    },
+    {
+      "provider": "omp",
+      "scenario": "capture_error",
+      "notices": [
+        [
+          "fixture",
+          null
+        ]
+      ],
+      "sleeps": [],
+      "captures": 2,
+      "question_reads": 2
+    },
+    {
+      "provider": "omp",
+      "scenario": "idle",
+      "notices": [],
+      "sleeps": [
+        1.5
+      ],
+      "captures": 2,
+      "question_reads": 2
+    },
+    {
+      "provider": "omp",
+      "scenario": "late_menu",
+      "notices": [
+        [
+          "fixture",
+          "pergunta do pane"
+        ]
+      ],
+      "sleeps": [
+        1.5
+      ],
+      "captures": 3,
+      "question_reads": 3
+    },
+    {
+      "provider": "omp",
+      "scenario": "late_question",
+      "notices": [
+        [
+          "fixture",
+          "pergunta do sidecar"
+        ]
+      ],
+      "sleeps": [
+        1.5
+      ],
+      "captures": 1,
+      "question_reads": 3
+    },
+    {
+      "provider": "omp",
+      "scenario": "question",
+      "notices": [
+        [
+          "fixture",
+          "pergunta do sidecar"
+        ]
+      ],
+      "sleeps": [],
+      "captures": 0,
+      "question_reads": 2
+    },
+    {
+      "provider": "omp",
+      "scenario": "empty_question",
+      "notices": [],
+      "sleeps": [
+        1.5
+      ],
+      "captures": 2,
+      "question_reads": 2
+    },
+    {
+      "provider": "kimi",
+      "scenario": "menu",
+      "notices": [
+        [
+          "fixture",
+          "pergunta do pane"
+        ]
+      ],
+      "sleeps": [],
+      "captures": 2,
+      "question_reads": 2
+    },
+    {
+      "provider": "kimi",
+      "scenario": "overlay",
+      "notices": [
+        [
+          "fixture",
+          null
+        ]
+      ],
+      "sleeps": [],
+      "captures": 2,
+      "question_reads": 2
+    },
+    {
+      "provider": "kimi",
+      "scenario": "capture_error",
+      "notices": [
+        [
+          "fixture",
+          null
+        ]
+      ],
+      "sleeps": [],
+      "captures": 2,
+      "question_reads": 2
+    },
+    {
+      "provider": "kimi",
+      "scenario": "idle",
+      "notices": [],
+      "sleeps": [
+        1.5
+      ],
+      "captures": 2,
+      "question_reads": 2
+    },
+    {
+      "provider": "kimi",
+      "scenario": "late_menu",
+      "notices": [
+        [
+          "fixture",
+          "pergunta do pane"
+        ]
+      ],
+      "sleeps": [
+        1.5
+      ],
+      "captures": 3,
+      "question_reads": 3
+    },
+    {
+      "provider": "kimi",
+      "scenario": "late_question",
+      "notices": [
+        [
+          "fixture",
+          "pergunta do sidecar"
+        ]
+      ],
+      "sleeps": [
+        1.5
+      ],
+      "captures": 1,
+      "question_reads": 3
+    },
+    {
+      "provider": "kimi",
+      "scenario": "question",
+      "notices": [
+        [
+          "fixture",
+          "pergunta do sidecar"
+        ]
+      ],
+      "sleeps": [],
+      "captures": 0,
+      "question_reads": 2
+    },
+    {
+      "provider": "kimi",
+      "scenario": "empty_question",
+      "notices": [],
+      "sleeps": [
+        1.5
+      ],
+      "captures": 2,
+      "question_reads": 2
+    }
+  ]
+}

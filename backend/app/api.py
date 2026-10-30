@@ -211,7 +211,6 @@ async def _lifespan(app: FastAPI):
                      exc_info=True)
     await _boot_sessions(runtime)
     _state_dirs =list({Path(c.path) for c in list_config_dirs()} | {_backend_config_base().resolve()})
-    hook_state.on_awaiting = _on_awaiting  # transicao -> awaiting_input dispara web push
     hook_state.on_transition = _on_hook_transition  # drain server-side + confirmacao de entrega
     task = asyncio.create_task(hook_state.watch(_state_dirs))
 
@@ -1047,86 +1046,6 @@ def _notify_async(session_id: str, send_fn) -> None:
     threading.Thread(target=_work, daemon=True).start()
 
 
-def _awaiting_body(info) -> str:
-    """Corpo rico da notif de awaiting (feature #5): 1) a pergunta do AskUserQuestion nativo (sidecar
-    gravado pelo hook PreToolUse); 2) senao a pergunta lida do PANE (classify — cobre pickers/permissao
-    da TUI, que nao passam pelo AskUserQuestion); 3) None se nenhuma deu certo — o push (app.push)
-    resolve o fallback no idioma da inscricao, em vez de mandar texto fixo em pt."""
-    askq = read_pending_askq(info.jsonl) if info.jsonl else None
-    if askq and askq.questions:
-        return askq.questions[0].question
-    if getattr(info, "headless", False):
-        return info.question or None   # sem pane: a pergunta/permissão vem do processo, já na lista
-    if info.name:
-        from app import tmux
-        from app.state import classify
-        try:
-            _, _, question, _ = classify(tmux.capture_pane(info.name))
-        except Exception:
-            question = None
-        if question:
-            return question
-    return None  # fallback resolvido pelo push, no idioma da inscricao
-
-
-_AWAITING_PUSH_RETRY_S = 1.5  # Notification chega junto do pedido; o menu pode atrasar um frame
-
-
-def _pane_wants_input(name: str) -> bool:
-    """Pane mostra menu (classify awaiting) ou overlay de teclas — algo REAL esperando resposta.
-    Falha de captura -> True (erro de leitura nao pode segurar um push legitimo)."""
-    from app import tmux
-    from app.state import classify, is_overlay
-    try:
-        pane = tmux.capture_pane(name)
-    except Exception:
-        _log.warning("_pane_wants_input falhou name=%s", name, exc_info=True)
-        return True
-    return classify(pane)[0] == "awaiting_input" or is_overlay(pane)
-
-
-def _do_notify_awaiting(session_id: str) -> None:
-    """Logica sincrona de _on_awaiting: resolve nome+corpo rico e manda pro push (que decide
-    mute/quiet-hours/coalescing). Extraida da thread pra ficar testavel direto, sem mockar Thread.
-
-    Gate anti-fantasma: o state_hook mapeia QUALQUER Notification pra awaiting — inclusive a de
-    "idle ha 60s" do Claude Code, que chega DEPOIS do Stop com a sessao apenas parada. Sem o gate,
-    toda sessao parada >60s empurrava push falso "Aguardando sua resposta". Push so sai com awaiting
-    REAL: askq pendente no sidecar OU menu/overlay no pane (retry curto cobre o frame de render)."""
-    info = next((s for s in registry.list() if s.jsonl and session_key(s.jsonl) == session_id), None)
-    if info is None or _rust_conduz(info):
-        return
-    def _real() -> bool:
-        if getattr(info, "headless", False):
-            # Sem pane: quem sabe da permissão/pergunta em aberto é o adapter. `registry.list`
-            # não calcula estado (sai sempre idle), então ler dali nunca mandava o push.
-            snap = get_adapter(CLAUDE_HEADLESS).snapshot(info.name)
-            if snap is None:
-                return False
-            info.state, info.question = snap.state, snap.question
-            return snap.state == "awaiting_input"
-        askq = read_pending_askq(info.jsonl) if info.jsonl else None
-        return bool(askq and askq.questions) or _pane_wants_input(info.name)
-
-    real = _real()
-    if not real:
-        time.sleep(_AWAITING_PUSH_RETRY_S)
-        real = _real()  # re-le askq TAMBEM: o sidecar pode ser o que atrasou, nao so o pane
-    if real:
-        push.notify_awaiting(info.name, _awaiting_body(info))
-
-
-def _on_awaiting(session_id: str) -> None:
-    """hook_state -> transicao awaiting_input. Roda numa thread (registry.list mexe no tmux; resolver
-    o corpo toca pane/disco) — nada disso pode bloquear o loop do watch."""
-    def _work() -> None:
-        try:
-            _do_notify_awaiting(session_id)
-        except Exception:
-            _log.warning("push awaiting falhou (%s)", session_id, exc_info=True)
-    threading.Thread(target=_work, daemon=True).start()
-
-
 _CONFIRM_GRACE = 8.0  # s entre o send e a checagem "o transcript gravou o prompt?"
 # Kimi: o mesmo prazo, esticado. Ali nao existe segunda tentativa (redigitar duplicaria a msg), e
 # sem segunda chance o prazo tem que ser generoso — senao ruido de timing carimba `desistiu` numa
@@ -1570,7 +1489,6 @@ def _on_hook_transition(session_id: str, state: str) -> None:
 
     if state == "awaiting_input":
         # Loop runner: awaiting cobre pedido de permissao tb -> pausa o loop (retoma no idle seguinte).
-        # Thread propria (registry.list toca tmux); sem push proprio (o _on_awaiting ja empurra).
         def _pause_loop() -> None:
             try:
                 info = next((s for s in registry.list()

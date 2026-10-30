@@ -1,0 +1,511 @@
+{
+  "source_commit": "9d7d1a05174abcddd1821782674e6c539c5f66ae",
+  "command": "cd backend && uv run python tests/fixtures/contract/guests/capture_push_capture.py",
+  "isolation": "capture_pane e _run originais; resolve_target controlado; subprocesso Python tempor\u00e1rio substitui tmux. Timeout/FileNotFoundError injetados na fronteira subprocess.run; demais sa\u00eddas reais.",
+  "rows": [
+    {
+      "name": "fixture",
+      "target": null,
+      "case": "zero",
+      "stdout_hex": "70657267756e74610a",
+      "exit": 0,
+      "error": null,
+      "result": "pergunta\n",
+      "args": [
+        "tmux",
+        "capture-pane",
+        "-p",
+        "-t",
+        "=fixture:",
+        "-S",
+        "-200"
+      ]
+    },
+    {
+      "name": "fixture",
+      "target": null,
+      "case": "nonzero",
+      "stdout_hex": "70657267756e74610a",
+      "exit": 7,
+      "error": null,
+      "result": "pergunta\n",
+      "args": [
+        "tmux",
+        "capture-pane",
+        "-p",
+        "-t",
+        "=fixture:",
+        "-S",
+        "-200"
+      ]
+    },
+    {
+      "name": "fixture",
+      "target": null,
+      "case": "empty",
+      "stdout_hex": "",
+      "exit": 7,
+      "error": null,
+      "result": "",
+      "args": [
+        "tmux",
+        "capture-pane",
+        "-p",
+        "-t",
+        "=fixture:",
+        "-S",
+        "-200"
+      ]
+    },
+    {
+      "name": "fixture",
+      "target": null,
+      "case": "invalid",
+      "stdout_hex": "61ff620a",
+      "exit": 0,
+      "error": null,
+      "result": "a\ufffdb\n",
+      "args": [
+        "tmux",
+        "capture-pane",
+        "-p",
+        "-t",
+        "=fixture:",
+        "-S",
+        "-200"
+      ]
+    },
+    {
+      "name": "fixture",
+      "target": null,
+      "case": "newlines",
+      "stdout_hex": "610d0a620d630a",
+      "exit": 0,
+      "error": null,
+      "result": "a\nb\nc\n",
+      "args": [
+        "tmux",
+        "capture-pane",
+        "-p",
+        "-t",
+        "=fixture:",
+        "-S",
+        "-200"
+      ]
+    },
+    {
+      "name": "fixture",
+      "target": null,
+      "case": "missing",
+      "stdout_hex": "",
+      "exit": 0,
+      "error": "missing",
+      "result": "",
+      "args": [
+        "tmux",
+        "capture-pane",
+        "-p",
+        "-t",
+        "=fixture:",
+        "-S",
+        "-200"
+      ]
+    },
+    {
+      "name": "fixture",
+      "target": null,
+      "case": "timeout",
+      "stdout_hex": "",
+      "exit": 0,
+      "error": "timeout",
+      "result": "",
+      "args": [
+        "tmux",
+        "capture-pane",
+        "-p",
+        "-t",
+        "=fixture:",
+        "-S",
+        "-200"
+      ]
+    },
+    {
+      "name": "fixture",
+      "target": "%7",
+      "case": "zero",
+      "stdout_hex": "70657267756e74610a",
+      "exit": 0,
+      "error": null,
+      "result": "pergunta\n",
+      "args": [
+        "tmux",
+        "capture-pane",
+        "-p",
+        "-t",
+        "%7",
+        "-S",
+        "-200"
+      ]
+    },
+    {
+      "name": "fixture",
+      "target": "%7",
+      "case": "nonzero",
+      "stdout_hex": "70657267756e74610a",
+      "exit": 7,
+      "error": null,
+      "result": "pergunta\n",
+      "args": [
+        "tmux",
+        "capture-pane",
+        "-p",
+        "-t",
+        "%7",
+        "-S",
+        "-200"
+      ]
+    },
+    {
+      "name": "fixture",
+      "target": "%7",
+      "case": "empty",
+      "stdout_hex": "",
+      "exit": 7,
+      "error": null,
+      "result": "",
+      "args": [
+        "tmux",
+        "capture-pane",
+        "-p",
+        "-t",
+        "%7",
+        "-S",
+        "-200"
+      ]
+    },
+    {
+      "name": "fixture",
+      "target": "%7",
+      "case": "invalid",
+      "stdout_hex": "61ff620a",
+      "exit": 0,
+      "error": null,
+      "result": "a\ufffdb\n",
+      "args": [
+        "tmux",
+        "capture-pane",
+        "-p",
+        "-t",
+        "%7",
+        "-S",
+        "-200"
+      ]
+    },
+    {
+      "name": "fixture",
+      "target": "%7",
+      "case": "newlines",
+      "stdout_hex": "610d0a620d630a",
+      "exit": 0,
+      "error": null,
+      "result": "a\nb\nc\n",
+      "args": [
+        "tmux",
+        "capture-pane",
+        "-p",
+        "-t",
+        "%7",
+        "-S",
+        "-200"
+      ]
+    },
+    {
+      "name": "fixture",
+      "target": "%7",
+      "case": "missing",
+      "stdout_hex": "",
+      "exit": 0,
+      "error": "missing",
+      "result": "",
+      "args": [
+        "tmux",
+        "capture-pane",
+        "-p",
+        "-t",
+        "%7",
+        "-S",
+        "-200"
+      ]
+    },
+    {
+      "name": "fixture",
+      "target": "%7",
+      "case": "timeout",
+      "stdout_hex": "",
+      "exit": 0,
+      "error": "timeout",
+      "result": "",
+      "args": [
+        "tmux",
+        "capture-pane",
+        "-p",
+        "-t",
+        "%7",
+        "-S",
+        "-200"
+      ]
+    },
+    {
+      "name": "0",
+      "target": null,
+      "case": "zero",
+      "stdout_hex": "70657267756e74610a",
+      "exit": 0,
+      "error": null,
+      "result": "pergunta\n",
+      "args": [
+        "tmux",
+        "capture-pane",
+        "-p",
+        "-t",
+        "=0:",
+        "-S",
+        "-200"
+      ]
+    },
+    {
+      "name": "0",
+      "target": null,
+      "case": "nonzero",
+      "stdout_hex": "70657267756e74610a",
+      "exit": 7,
+      "error": null,
+      "result": "pergunta\n",
+      "args": [
+        "tmux",
+        "capture-pane",
+        "-p",
+        "-t",
+        "=0:",
+        "-S",
+        "-200"
+      ]
+    },
+    {
+      "name": "0",
+      "target": null,
+      "case": "empty",
+      "stdout_hex": "",
+      "exit": 7,
+      "error": null,
+      "result": "",
+      "args": [
+        "tmux",
+        "capture-pane",
+        "-p",
+        "-t",
+        "=0:",
+        "-S",
+        "-200"
+      ]
+    },
+    {
+      "name": "0",
+      "target": null,
+      "case": "invalid",
+      "stdout_hex": "61ff620a",
+      "exit": 0,
+      "error": null,
+      "result": "a\ufffdb\n",
+      "args": [
+        "tmux",
+        "capture-pane",
+        "-p",
+        "-t",
+        "=0:",
+        "-S",
+        "-200"
+      ]
+    },
+    {
+      "name": "0",
+      "target": null,
+      "case": "newlines",
+      "stdout_hex": "610d0a620d630a",
+      "exit": 0,
+      "error": null,
+      "result": "a\nb\nc\n",
+      "args": [
+        "tmux",
+        "capture-pane",
+        "-p",
+        "-t",
+        "=0:",
+        "-S",
+        "-200"
+      ]
+    },
+    {
+      "name": "0",
+      "target": null,
+      "case": "missing",
+      "stdout_hex": "",
+      "exit": 0,
+      "error": "missing",
+      "result": "",
+      "args": [
+        "tmux",
+        "capture-pane",
+        "-p",
+        "-t",
+        "=0:",
+        "-S",
+        "-200"
+      ]
+    },
+    {
+      "name": "0",
+      "target": null,
+      "case": "timeout",
+      "stdout_hex": "",
+      "exit": 0,
+      "error": "timeout",
+      "result": "",
+      "args": [
+        "tmux",
+        "capture-pane",
+        "-p",
+        "-t",
+        "=0:",
+        "-S",
+        "-200"
+      ]
+    },
+    {
+      "name": "0",
+      "target": "%7",
+      "case": "zero",
+      "stdout_hex": "70657267756e74610a",
+      "exit": 0,
+      "error": null,
+      "result": "pergunta\n",
+      "args": [
+        "tmux",
+        "capture-pane",
+        "-p",
+        "-t",
+        "%7",
+        "-S",
+        "-200"
+      ]
+    },
+    {
+      "name": "0",
+      "target": "%7",
+      "case": "nonzero",
+      "stdout_hex": "70657267756e74610a",
+      "exit": 7,
+      "error": null,
+      "result": "pergunta\n",
+      "args": [
+        "tmux",
+        "capture-pane",
+        "-p",
+        "-t",
+        "%7",
+        "-S",
+        "-200"
+      ]
+    },
+    {
+      "name": "0",
+      "target": "%7",
+      "case": "empty",
+      "stdout_hex": "",
+      "exit": 7,
+      "error": null,
+      "result": "",
+      "args": [
+        "tmux",
+        "capture-pane",
+        "-p",
+        "-t",
+        "%7",
+        "-S",
+        "-200"
+      ]
+    },
+    {
+      "name": "0",
+      "target": "%7",
+      "case": "invalid",
+      "stdout_hex": "61ff620a",
+      "exit": 0,
+      "error": null,
+      "result": "a\ufffdb\n",
+      "args": [
+        "tmux",
+        "capture-pane",
+        "-p",
+        "-t",
+        "%7",
+        "-S",
+        "-200"
+      ]
+    },
+    {
+      "name": "0",
+      "target": "%7",
+      "case": "newlines",
+      "stdout_hex": "610d0a620d630a",
+      "exit": 0,
+      "error": null,
+      "result": "a\nb\nc\n",
+      "args": [
+        "tmux",
+        "capture-pane",
+        "-p",
+        "-t",
+        "%7",
+        "-S",
+        "-200"
+      ]
+    },
+    {
+      "name": "0",
+      "target": "%7",
+      "case": "missing",
+      "stdout_hex": "",
+      "exit": 0,
+      "error": "missing",
+      "result": "",
+      "args": [
+        "tmux",
+        "capture-pane",
+        "-p",
+        "-t",
+        "%7",
+        "-S",
+        "-200"
+      ]
+    },
+    {
+      "name": "0",
+      "target": "%7",
+      "case": "timeout",
+      "stdout_hex": "",
+      "exit": 0,
+      "error": "timeout",
+      "result": "",
+      "args": [
+        "tmux",
+        "capture-pane",
+        "-p",
+        "-t",
+        "%7",
+        "-S",
+        "-200"
+      ]
+    }
+  ]
+}

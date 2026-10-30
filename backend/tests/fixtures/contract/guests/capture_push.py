@@ -9,7 +9,8 @@ from pathlib import Path
 from types import SimpleNamespace
 HERE=Path(__file__).resolve().parent
 source=HERE.parents[3]/'app/api.py'
-tree=ast.parse(source.read_text())
+SOURCE_COMMIT='1bceae0e60618283d2aeee59cab7aa981b5544f7'
+tree=ast.parse(subprocess.check_output(['git','show',SOURCE_COMMIT+':backend/app/api.py'],text=True))
 names={'_do_notify_awaiting','_terminou_se_parou','_resumo_resposta'}
 selected=[node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name in names]
 code=compile(ast.Module(body=selected,type_ignores=[]),str(source),'exec')
@@ -44,7 +45,7 @@ for provider in ['pi','omp','kimi']:
             '_notify_async':lambda sid,fn:fn('session')}
         exec(code,ns);ns['_terminou_se_parou']('sid',started,idle)
         finished.append({'provider':provider,'scenario':scenario,'notices':notices,'sleeps':sleeps,'series':series})
-result={'source_commit':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),
+result={'source_commit':SOURCE_COMMIT,
         'command':'cd backend && uv run python tests/fixtures/contract/guests/capture_push.py','awaiting':rows,'finished':finished}
 (HERE/'push.json').write_text(json.dumps(result,ensure_ascii=False,indent=2)+'\n')
 print(f'{len(rows)} decisões aguardando e {len(finished)} decisões terminou capturadas')
