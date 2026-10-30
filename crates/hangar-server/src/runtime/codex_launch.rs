@@ -149,6 +149,7 @@ pub fn launch_env(base:&AccountEnvironment,sidecar_dir:&Path,meta:&Value) -> Res
     let mut program = argv(&meta)?;
     program.extend(identity(&env));
     program.extend(context_overrides(Path::new(&env["CODEX_HOME"]),&config).into_iter().flat_map(|value|["-c".to_owned(),value]));
+    program.extend(["-c".to_owned(),crate::vault::exec::CODEX_TOOL_TIMEOUT.to_owned()]);
     Ok(Launch { program,env })
 }
 

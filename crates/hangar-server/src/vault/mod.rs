@@ -2,6 +2,8 @@
 //! da senha nunca entra em log, diário, evento nem mensagem de erro.
 pub mod backup;
 pub mod config;
+pub mod exec;
+pub mod files;
 pub mod http;
 pub mod key;
 pub mod remote;
@@ -15,6 +17,8 @@ mod tests_backup;
 mod tests_remote;
 #[cfg(test)]
 mod tests_requests;
+#[cfg(test)]
+mod tests_tools;
 pub mod wire;
 
 use serde::{Deserialize, Deserializer, Serialize};

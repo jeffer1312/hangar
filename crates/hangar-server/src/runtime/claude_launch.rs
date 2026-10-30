@@ -160,6 +160,7 @@ pub fn plan(spec: &SessionSpec, meta: &Value, ctx: &Context) -> Result<Launch, R
     if let Some(model) = &spec.subagent_model { env.insert("CLAUDE_CODE_SUBAGENT_MODEL".into(), model.clone()); }
     env.extend(crate::session_open::claude::jev_pairs(spec.jev, ctx.runtime_config));
     if hooks { env.insert("CLAUDE_CODE_ENABLE_FUNCTION_HOOKS".into(), "1".into()); }
+    env.insert(crate::vault::exec::CLAUDE_IDLE_VAR.into(), crate::vault::exec::CLAUDE_IDLE_MS.into());
     Ok(Launch { program, env })
 }
 

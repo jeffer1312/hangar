@@ -13,7 +13,7 @@ use axum::extract::{ConnectInfo, Request, State};
 use axum::http::StatusCode;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use rmcp::model::{CacheScope, CallToolRequestParams, CallToolResponse, ListPromptsResult, ListResourceTemplatesResult,
+use rmcp::model::{CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ListPromptsResult, ListResourceTemplatesResult,
     ListResourcesResult, ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool};
 use rmcp::service::RequestContext;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
@@ -29,7 +29,8 @@ html_render, sem esperar pedido; imagem por caminho só para print real de tela.
 Ver ou testar uma página: browser_open e depois browser (um verbo) ou browser_batch (vários já conhecidos); \
 tela desconhecida com várias ações: browser_goal, quando a sessão tem o Jev. \
 Falar com outra sessão: sessions, send, group, pair; abrir ou fechar: new_session, close_session; parar o turno de uma filha ligada: interrupt; \
-ler ou gravar o contrato do grupo: contract.";
+ler ou gravar o contrato do grupo: contract. \
+Senha nunca no chat: request_secret ou vault_* (vault_list, vault_exec, vault_file).";
 
 static CATALOG: LazyLock<Vec<Tool>> = LazyLock::new(|| {
     serde_json::from_str(include_str!("catalog.json")).expect("catalog.json é o catálogo do MCP")
@@ -108,7 +109,15 @@ impl ServerHandler for Handler {
         let headers = context.extensions.get::<axum::http::request::Parts>().map(|p| p.headers.clone()).unwrap_or_default();
         let name = OLD_NAMES.iter().find(|(old, _)| *old == request.name).map_or(&*request.name, |(_, new)| new);
         let args = request.arguments.unwrap_or_default();
-        Ok(CallToolResponse::Complete(self.tools.call(name, args, &headers).await))
+        let call = self.tools.call(name, args, &headers);
+        // O rmcp só cancela o token no `notifications/cancelled`: largar o futuro é o que cancela o pedido na dona do cofre.
+        if name == "request_secret" || name.starts_with("vault_") {
+            return Ok(CallToolResponse::Complete(tokio::select! {
+                result = call => result,
+                () = context.ct.cancelled() => CallToolResult::error(vec![ContentBlock::text("erro_cofre_cancelado: a chamada foi cancelada")]),
+            }));
+        }
+        Ok(CallToolResponse::Complete(call.await))
     }
 }
 

@@ -167,6 +167,8 @@ pub async fn delete(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     if let (true, Some(name), Some(dirs)) = (owner, name.as_deref(), st.list.env().dirs.as_ref()) {
         crate::session_open::restore::forget(&dirs.home, name);
     }
+    // Antes do kill: depois dele o pane não diz mais a chave da sessão.
+    if let (true, Some(name)) = (owner, name.as_deref()) { crate::vault::files::on_close(&st, name).await; }
     if let (true, Some(name)) = (owner, name.as_deref()) {
         crate::diag::record(crate::diag::diary_dir(), vec![close_line(name, req.headers(), peer)], "sessão fechada");
     }

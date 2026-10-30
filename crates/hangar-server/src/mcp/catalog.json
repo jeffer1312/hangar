@@ -837,5 +837,146 @@
    "title": "browser_checkDictOutput",
    "type": "object"
   }
+ },
+ {
+  "name": "request_secret",
+  "description": "Pede ao dono uma senha que ainda não está no cofre, por um cartão no celular dele: o valor digitado nunca passa pelo chat nem por esta sessão. Use sempre que precisar de uma senha, token ou chave que o usuário teria de colar. Espera a resposta (até 10 min). `saved` devolve o nome da `entry` no cofre para usar com vault_exec ou vault_file; `temporary: true` = só para esta sessão, por 24 h. `label`: o que é (\"token do Cloudflare\"); `reason`: para que; `placeholder`: dica do formato.",
+  "inputSchema": {
+   "properties": {
+    "label": {
+     "title": "Label",
+     "type": "string"
+    },
+    "reason": {
+     "title": "Reason",
+     "type": "string"
+    },
+    "placeholder": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Placeholder"
+    }
+   },
+   "required": [
+    "label",
+    "reason"
+   ],
+   "title": "request_secretArguments",
+   "type": "object"
+  },
+  "outputSchema": {
+   "additionalProperties": true,
+   "title": "request_secretDictOutput",
+   "type": "object"
+  }
+ },
+ {
+  "name": "vault_list",
+  "description": "As senhas do cofre do dono (nome, usuário, site e política), sem nenhum valor. `policy: ask` pede aprovação a cada uso; `free` libera na hora.",
+  "inputSchema": {
+   "properties": {},
+   "title": "vault_listArguments",
+   "type": "object"
+  },
+  "outputSchema": {
+   "properties": {
+    "result": {
+     "items": {
+      "additionalProperties": true,
+      "type": "object"
+     },
+     "title": "Result",
+     "type": "array"
+    }
+   },
+   "required": [
+    "result"
+   ],
+   "title": "vault_listOutput",
+   "type": "object"
+  }
+ },
+ {
+  "name": "vault_exec",
+  "description": "Roda `command` no shell da sessão (sh no Linux, PowerShell no Windows), na pasta dela, com a senha `entry` do cofre na variável de ambiente `env`: o comando lê a variável (`$TOKEN`), nunca o valor escrito. Pede aprovação ao dono quando a senha exige; espera até 10 min no total. Devolve `exit` e a saída (últimos 8 KB) com o valor trocado por ••••. `timeout_s`: prazo do comando, padrão 120.",
+  "inputSchema": {
+   "properties": {
+    "entry": {
+     "title": "Entry",
+     "type": "string"
+    },
+    "env": {
+     "title": "Env",
+     "type": "string"
+    },
+    "command": {
+     "title": "Command",
+     "type": "string"
+    },
+    "reason": {
+     "title": "Reason",
+     "type": "string"
+    },
+    "timeout_s": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Timeout S"
+    }
+   },
+   "required": [
+    "entry",
+    "env",
+    "command",
+    "reason"
+   ],
+   "title": "vault_execArguments",
+   "type": "object"
+  },
+  "outputSchema": {
+   "additionalProperties": true,
+   "title": "vault_execDictOutput",
+   "type": "object"
+  }
+ },
+ {
+  "name": "vault_file",
+  "description": "Grava a senha `entry` do cofre num arquivo 0600 numa pasta privada e devolve o caminho em `file`, para programa que lê a senha de arquivo. Pede aprovação ao dono quando a senha exige; espera até 10 min. O arquivo some quando a sessão fecha ou em 24 h. Nunca leia nem mostre o conteúdo dele.",
+  "inputSchema": {
+   "properties": {
+    "entry": {
+     "title": "Entry",
+     "type": "string"
+    },
+    "reason": {
+     "title": "Reason",
+     "type": "string"
+    }
+   },
+   "required": [
+    "entry",
+    "reason"
+   ],
+   "title": "vault_fileArguments",
+   "type": "object"
+  },
+  "outputSchema": {
+   "additionalProperties": true,
+   "title": "vault_fileDictOutput",
+   "type": "object"
+  }
  }
 ]

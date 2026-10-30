@@ -305,6 +305,8 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
     let _worktree_sweep=crate::AbortOnDrop(crate::worktree_policy::spawn(state.clone()));
     let _keyring_watch = crate::AbortOnDrop(crate::keyring::spawn(state.list.keyring.clone()));
     let _vault_backup = crate::AbortOnDrop(crate::vault::backup::spawn(state.clone()));
+    let vault_files = state.clone();
+    let _vault_files = crate::AbortOnDrop(tokio::spawn(async move { crate::vault::files::sweep_live(&vault_files).await }));
     let v6_state = state.clone();
     // Abortada na saída: a tarefa segura o estado do servidor, que sobreviveria a ele.
     // As sessões com terminal que o multiplexador perdeu voltam pelo spec; antes da varredura de grupos, que
