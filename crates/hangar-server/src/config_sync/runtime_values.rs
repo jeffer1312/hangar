@@ -5,7 +5,7 @@ use std::ops::{Deref, DerefMut};
 
 pub(super) struct Values(pub Map<String, Value>);
 
-pub(super) struct ValueGuard(pub Value);
+pub(crate) struct ValueGuard(pub Value);
 impl Deref for ValueGuard {
     type Target = Value;
     fn deref(&self) -> &Value { &self.0 }

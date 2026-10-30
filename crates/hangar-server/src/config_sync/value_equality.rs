@@ -40,7 +40,7 @@ fn numbers_equal(left: Number, right: Number, nested: bool) -> bool {
     }
 }
 
-pub(super) fn equal(left: &Value, right: &Value) -> bool {
+pub(crate) fn equal(left: &Value, right: &Value) -> bool {
     let mut pending = vec![(left, right, false)];
     while let Some((left, right, nested)) = pending.pop() {
         if let (Some(left), Some(right)) = (number(left), number(right)) {
