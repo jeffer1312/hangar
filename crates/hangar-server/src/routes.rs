@@ -35,7 +35,6 @@ const SEND_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct AppState {
     pub config_sync_context: Option<crate::config_sync::export::Context>,
-    pub config_sync_translation: crate::config_sync::translate::Translator,
     pub migration_branch: Arc<crate::migration_branch::Service>,
     settings_snapshot: std::sync::OnceLock<Result<Arc<crate::machine_peers::dotenv::SettingsSnapshot>,String>>,
     pub login_guests: Arc<crate::login_guests::Service>,
@@ -220,7 +219,6 @@ impl AppState {
             remote_browser: Arc::default(),
             transcription: Arc::default(),
             config_sync_context: None,
-            config_sync_translation: Default::default(),
             omp_sync: Arc::default(),
             codex_setup: Arc::default(),
             dictation_models: Arc::default(),
@@ -695,7 +693,6 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/tags", axum::routing::get(crate::tags::handle).put(crate::tags::handle))
         .route("/api/config-sync/manifest", axum::routing::get(crate::config_sync::http::handle))
         .route("/api/config-sync/bundle", axum::routing::get(crate::config_sync::http::handle))
-        .route("/api/config-sync/translate", axum::routing::post(crate::config_sync::http::handle))
         .route("/api/config-sync/apply", axum::routing::any(crate::config_sync::apply_http::handle))
         .route("/api/push/expo/subscribe", axum::routing::post(crate::push_expo::subscribe))
         .route("/api/push", axum::routing::any(crate::push::http::route))

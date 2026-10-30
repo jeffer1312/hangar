@@ -22,5 +22,4 @@ pub mod runtime_http;
 pub mod runtime_error;
 mod runtime_defaults;
 pub(crate) mod runtime_values;
-pub mod translate;
 pub(crate) mod value_equality;

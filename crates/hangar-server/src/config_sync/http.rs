@@ -93,9 +93,7 @@ pub async fn handle(
     let headers = req.headers().clone();
     let path = req.uri().path().to_owned();
     let query = req.uri().query().map(str::to_owned);
-    let mut response = if path.ends_with("/translate") && req.method() == Method::POST {
-        translate_request(&st, req).await
-    } else if req.method() != Method::GET && req.method() != Method::HEAD {
+    let mut response = if req.method() != Method::GET && req.method() != Method::HEAD {
         StatusCode::METHOD_NOT_ALLOWED.into_response()
     } else if path.ends_with("/manifest")
         && crate::auth::query_param(query.as_deref(), "stream")
@@ -251,68 +249,4 @@ fn manifest_stream(st: Arc<AppState>) -> Response {
         axum::body::Body::from_stream(stream),
     )
         .into_response()
-}
-
-async fn translate_request(st: &AppState, req: Request) -> Response {
-    let bytes = match axum::body::to_bytes(req.into_body(), 100 * 1024 * 1024).await {
-        Ok(bytes) => bytes,
-        Err(_) => return StatusCode::PAYLOAD_TOO_LARGE.into_response(),
-    };
-    let data: Value = match crate::orchestration::body::parse(&bytes) {
-        Ok(value) => value,
-        Err((status, detail)) => return json_response(status, detail),
-    };
-    let mut errors = Vec::new();
-    if data.is_null() {
-        errors.push(json!({"type":"missing","loc":["body"],"msg":"Field required","input":null}));
-    } else if !data.is_object() {
-        errors.push(json!({"type":"model_attributes_type","loc":["body"],"msg":"Input should be a valid dictionary or object to extract fields from","input":data}));
-    } else {
-        match data.get("lang") {
-            None => errors.push(json!({"type":"missing","loc":["body","lang"],"msg":"Field required","input":data})),
-            Some(lang) if lang != "pt" && lang != "en" => errors.push(json!({"type":"literal_error","loc":["body","lang"],"msg":"Input should be 'pt' or 'en'","input":lang,"ctx":{"expected":"'pt' or 'en'"}})),
-            _ => {}
-        }
-        match data.get("texts") {
-            None => errors.push(json!({"type":"missing","loc":["body","texts"],"msg":"Field required","input":data})),
-            Some(Value::Array(texts)) => {
-                for (i,text) in texts.iter().enumerate() {
-                    if let Some(text) = text.as_str() {
-                        if text.chars().count() > 2000 { errors.push(json!({"type":"string_too_long","loc":["body","texts",i],"msg":"String should have at most 2000 characters","input":text,"ctx":{"max_length":2000}})); }
-                    } else { errors.push(json!({"type":"string_type","loc":["body","texts",i],"msg":"Input should be a valid string","input":text})); }
-                }
-                if texts.len() > 2000 { errors.push(json!({"type":"too_long","loc":["body","texts"],"msg":format!("List should have at most 2000 items after validation, not {}", texts.len()),"input":texts,"ctx":{"field_type":"List","max_length":2000,"actual_length":texts.len()}})); }
-            }
-            Some(value) => errors.push(json!({"type":"list_type","loc":["body","texts"],"msg":"Input should be a valid list","input":value})),
-        }
-        for (key, value) in data.as_object().unwrap() {
-            if key != "lang" && key != "texts" {
-                errors.push(json!({"type":"extra_forbidden","loc":["body",key],"msg":"Extra inputs are not permitted","input":value}));
-            }
-        }
-    }
-    if !errors.is_empty() {
-        return json_response(StatusCode::UNPROCESSABLE_ENTITY, json!({"detail":errors}));
-    }
-    let texts: Vec<_> = data["texts"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|v| v.as_str().unwrap().to_owned())
-        .collect();
-    let cache = st
-        .accounts
-        .env
-        .home
-        .join(".hangar/config-sync/traducoes.json");
-    let result = st
-        .config_sync_translation
-        .translate(
-            &cache,
-            &texts,
-            data["lang"].as_str().unwrap(),
-            |system, prompt| super::translate::chat(st, system, prompt),
-        )
-        .await;
-    json_response(StatusCode::OK, result)
 }
