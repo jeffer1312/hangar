@@ -40,5 +40,16 @@ mod tests {
             if &actual != row { differences.push((row.clone(),actual)); }
         }
         assert!(differences.is_empty(), "Horários divergentes: {differences:#?}");
+        let windows: serde_json::Value = serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/codex-integration/timestamps-windows.json")).unwrap();
+        for row in windows["cases"].as_array().unwrap() {
+            let input = row["value"].as_str().unwrap();
+            let original = fixture["cases"].as_array().unwrap().iter().find(|case| case["value"] == input).unwrap();
+            if row != original {
+                // D73: calendário UTC nativo, sem a faixa artificial do CRT Windows.
+                assert!(matches!(input, "-62135596800.0" | "-62135596800.00001" | "253402300799.99997" | "253402300800.0"));
+                assert_eq!(row["error"], "OSError");
+                assert_eq!(row["message"], "[Errno 22] Invalid argument");
+            }
+        }
     }
 }
