@@ -23,6 +23,7 @@
     computer: m.computer_control_title,
     jev: m.jev_title,
     migration: m.migration_title,
+    cofre: m.vault_web_title,
   };
 
   export interface EntradaBusca {

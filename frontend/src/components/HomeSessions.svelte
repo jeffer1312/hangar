@@ -4,6 +4,7 @@
   import SessionCard from './SessionCard.svelte';
   import ConfirmSheet from './ConfirmSheet.svelte';
   import KeyringNotice from './KeyringNotice.svelte';
+  import PasswordVaultRequestSheet from './PasswordVaultRequestSheet.svelte';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
   import { noticeClock } from '../lib/noticeClock.svelte';
   import { createSessionListModel } from '../lib/sessionListModel.svelte';
@@ -48,6 +49,10 @@
   {/each}
   {#each sessionsStore.byServer.filter((b) => b.keyringLocked && !b.server.invite) as b (b.server.id)}
     <KeyringNotice server={b.server} />
+  {/each}
+  {#each sessionsStore.byServer.filter((b) => !b.server.invite) as b (b.server.id)}
+    {@const vault = sessionsStore.vaultFor(b.server.id)}
+    {#if vault?.requests.length}<PasswordVaultRequestSheet server={b.server} event={vault} />{/if}
   {/each}
   {#if deleteError}<p class="machine error" role="alert">{deleteError}</p>{/if}
 
