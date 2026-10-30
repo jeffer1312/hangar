@@ -349,7 +349,8 @@ async fn plan(
     )
     .await?;
     let real = std::fs::canonicalize(&cwd).map_err(|_| unavailable())?;
-    if !real.starts_with(&guest.root) {
+    let root = std::fs::canonicalize(&guest.root).map_err(|_| unavailable())?;
+    if !real.starts_with(&root) {
         return Err(error(
             403,
             "erro_fora_da_pasta",

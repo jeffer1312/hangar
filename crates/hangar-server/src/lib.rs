@@ -172,6 +172,7 @@ pub async fn serve_until_with_guest(
     let transcription = state.transcription.clone();
     let omp_sync = state.omp_sync.clone();
     let codex_setup = state.codex_setup.clone();
+    let harness_installer = state.harness_installer.clone();
     let codex_logins=state.accounts.codex_logins.clone();
     let codex_readers=state.accounts.codex_readers.clone();
     let device_logins=state.accounts.device_logins.clone();
@@ -276,6 +277,7 @@ pub async fn serve_until_with_guest(
         let _ = (&mut producer.0).await;
     }
     let cleanup = async {
+        harness_installer.shutdown().await;
         if let Some(service) = omp_sync.get() { service.close().await; }
         let codex_setup_result = match codex_setup.get() {
             Some(Ok(service)) => service.shutdown().await,

@@ -75,3 +75,4 @@ pub mod service;
 mod repair;
 pub mod installer;
 pub mod http;
+pub mod routing;

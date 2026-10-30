@@ -41,6 +41,8 @@ pub struct AppState {
     pub login_guests: Arc<crate::login_guests::Service>,
     pub omp_sync: Arc<std::sync::OnceLock<Arc<crate::omp_sync::Service>>>,
     pub codex_setup: Arc<std::sync::OnceLock<Result<Arc<crate::codex_setup::service::Service>, String>>>,
+    pub harness_installer: Arc<crate::harness_setup::installer::Installer>,
+    pub harness_probe: crate::cli_probe::Probe,
     pub interactions: Arc<crate::interactions::InteractionStore>,
     pub dictation_models: Arc<crate::dictation::catalog::Models>,
     /// Vagas para processos e chamadas de organização do ditado (catálogo sem cache e execução).
@@ -222,6 +224,8 @@ impl AppState {
             config_sync_context: None,
             omp_sync: Arc::default(),
             codex_setup: Arc::default(),
+            harness_installer: Arc::default(),
+            harness_probe: Default::default(),
             dictation_models: Arc::default(),
             dictation_slots: Arc::new(tokio::sync::Semaphore::new(4)),
             transcription_slots: Arc::new(tokio::sync::Semaphore::new(4)),
@@ -992,6 +996,9 @@ pub(crate) async fn pass_any(
         return crate::speech::http::public(st, peer, req).await;
     }
     let decoded_path=percent_encoding::percent_decode_str(req.uri().path()).decode_utf8_lossy();
+    if crate::harness_setup::http::matches(&decoded_path) {
+        return crate::harness_setup::routing::handle(st, peer, req).await;
+    }
     if crate::config_sync::runtime_http::owns_path(req.uri().path()) {
         return crate::config_sync::runtime_http::handle(State(st),ConnectInfo(peer),req).await;
     }

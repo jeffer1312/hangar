@@ -21,6 +21,7 @@ pub fn matches(path: &str) -> bool {
         || path == "/api/harness/"
         || path == "/api/harness/instalar"
         || path.starts_with("/api/harness/instalar/")
+        || path == "/api/harness/conserto"
         || path.starts_with("/api/harness/conserto/")
 }
 fn coded(status: u16, code: &str, message: &str, params: Value) -> Response {

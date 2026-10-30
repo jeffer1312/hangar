@@ -13,6 +13,7 @@ mod json_scrub;
 mod json_numbers;
 mod json_large_input;
 mod login_guests;
+mod harness_routes;
 mod guest_catalog;
 mod groups_text;
 mod session_defaults;
