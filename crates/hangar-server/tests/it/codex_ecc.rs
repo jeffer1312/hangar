@@ -95,7 +95,9 @@ async fn codex_ecc_matches_original_runtime_decisions_and_effects() {
     let mut failures = Vec::new();
     for case in corpus["cases"].as_array().unwrap() {
         let temp = tempfile::tempdir().unwrap();
-        let root = temp.path();
+        // TEMP pode usar um alias 8.3, enquanto o npm é resolvido pelo caminho canônico.
+        let canonical = std::fs::canonicalize(temp.path()).unwrap();
+        let root = canonical.as_path();
         let plugin = root.join("plugin");
         let backups = root.join("backups");
         std::fs::create_dir(&plugin).unwrap();

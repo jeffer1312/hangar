@@ -21,7 +21,11 @@ fn fixture_root(mut value: Value, root: &std::path::Path) -> Value {
             _ => {}
         }
     }
-    replace(&mut value, root);
+    // O Python capturado usa Path.resolve(); TEMP pode vir com um alias 8.3 no Windows.
+    let root = root.canonicalize().unwrap();
+    #[cfg(windows)]
+    let root = std::path::PathBuf::from(root.to_str().unwrap().strip_prefix(r"\\?\").unwrap_or(root.to_str().unwrap()));
+    replace(&mut value, &root);
     value
 }
 
@@ -316,16 +320,28 @@ async fn login_guests_filesystem_uses_only_guest_root() {
     let raw = include_str!("../../../../backend/tests/fixtures/contract/guests/fs-http.json")
         .replace("⟦ROOT⟧",home.path().to_str().unwrap()).replace("⟦URLROOT⟧",&encoded[2..]);
     let fixture:Value=serde_json::from_str(&raw).unwrap();
+    // O contrato repassa o stderr do Git: a frase depende de haver uma montagem no caminho.
+    // Executa os mesmos argumentos do Python original neste filesystem, sem mudar a captura.
+    let missing_repo = std::process::Command::new("git").arg("-C").arg(&root)
+        .args(["branch", "--sort=-committerdate", "--format=%(refname:short)"])
+        .output().unwrap();
+    assert!(!missing_repo.status.success());
+    let missing_repo_message = String::from_utf8(missing_repo.stderr).unwrap().trim().to_owned();
+    assert!(!missing_repo_message.is_empty());
     let mut differences=Vec::new();
     for row in fixture["rows"].as_array().unwrap() {
+        let mut expected = row["response"].clone();
+        if row["path"] == "/api/fs/branches" && expected["detail"]["msg"] == "fatal: not a git repository (or any parent up to mount point /)\nStopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set)." {
+            expected["detail"]["msg"] = missing_repo_message.clone().into();
+        }
         let response=reqwest::Client::new().request(row["method"].as_str().unwrap().parse().unwrap(),
             format!("http://{address}{}?{}",row["path"].as_str().unwrap(),row["query"].as_str().unwrap()))
             .bearer_auth("guest").header("content-type","application/json")
             .body(row["body"].as_str().unwrap().to_owned()).send().await.unwrap();
         let status=response.status().as_u16();let bytes=response.bytes().await.unwrap();
         let body=if bytes.is_empty(){Value::Null}else{serde_json::from_slice(&bytes).unwrap_or_else(|_|serde_json::json!(String::from_utf8_lossy(&bytes)))};
-        if status!=row["status"].as_u64().unwrap() as u16 || body!=row["response"] {
-            differences.push(format!("{} {}?{}: {status} {body}; esperado {} {}",row["method"],row["path"],row["query"],row["status"],row["response"]));
+        if status!=row["status"].as_u64().unwrap() as u16 || body!=expected {
+            differences.push(format!("{} {}?{}: {status} {body}; esperado {} {}",row["method"],row["path"],row["query"],row["status"],expected));
         }
     }
     task.abort();

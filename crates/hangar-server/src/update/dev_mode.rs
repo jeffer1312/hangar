@@ -358,7 +358,9 @@ mod tests {
         let calls = failing.calls.lock().unwrap().clone();
         assert_eq!(calls.len(), 1);
         let (command, cwd, current) = &calls[0];
-        assert!(command.contains("rust-release") && command.contains(&m.checkout.display().to_string()), "{command}");
+        // A troca resolve o checkout antes do download; TEMP pode ter nome curto ou prefixo verbatim.
+        let checkout = real(&m.checkout);
+        assert!(command.contains("rust-release") && command.contains(&checkout.display().to_string()), "{command}");
         assert_eq!(cwd, &real(&m.checkout).join("backend"));
         assert_eq!(current, &package, "roda antes da troca e do reinício");
         let failed = warnings.lock().unwrap().clone();

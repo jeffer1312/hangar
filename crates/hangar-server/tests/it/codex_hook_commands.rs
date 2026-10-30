@@ -90,7 +90,8 @@ fn native_json_command_preserves_shell_arguments_streams_and_exit_status() {
             "[ \"$#\" -eq 3 ] && [ \"$1\" = 'a;b' ] && [ \"$2\" = 'a|b' ] && [ -z \"$3\" ] || exit 99\ncmp - {} || exit 98\ncat {}\nprintf 'aviso\\377\\n' >&2\n{finish}\n",
             quote(&input), quote(&stdout),
         )).unwrap();
-        let command = format!("/bin/sh {} 'a;b' 'a|b' ''", quote(&script));
+        // Sem um shell intermediário, o sinal e os bytes não dependem da otimização do sh.
+        let command = format!("exec /bin/sh {} 'a;b' 'a|b' ''", quote(&script));
         let output = invoke("codex-hook-json", &["--".into(), command.into()], &bytes(&row["input_hex"]));
         assert_eq!(output.status.code().unwrap(), row["code"].as_i64().unwrap() as i32, "{outcome}");
         assert_eq!(output.stdout, bytes(&row["stdout_hex"]), "{outcome}");

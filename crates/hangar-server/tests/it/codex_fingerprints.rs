@@ -66,9 +66,17 @@ fn codex_service_fingerprints_match_python_hash_inputs_and_metadata() {
             .unwrap()
             .iter()
             .map(|part| {
-                part.as_str()
-                    .unwrap()
-                    .replace("$ROOT", &root.to_string_lossy())
+                let chunk = part.as_str().unwrap();
+                // O tamanho de diretório pertence ao filesystem, não ao conteúdo capturado.
+                if let Some((path, metadata)) = chunk.rsplit_once(':')
+                    && let Some((path, _size)) = path.rsplit_once(':')
+                    && let Some(relative) = path.strip_prefix("$ROOT/")
+                    && case["entries"][relative]["directory"] == true
+                {
+                    return format!("{}:{}:{metadata}", root.join(relative).display(),
+                        std::fs::metadata(root.join(relative)).unwrap().len());
+                }
+                chunk.replace("$ROOT", &root.to_string_lossy())
             })
             .collect::<Vec<String>>();
         if case["phase"] == "fragments" && case["sources"] == false {
