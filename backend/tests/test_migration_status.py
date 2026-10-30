@@ -50,17 +50,5 @@ def test_canos_sum_rss_and_swap(monkeypatch):
     assert (total["count"], total["rss_bytes"], total["swap_bytes"]) == (2, 300, 40)
 
 
-def test_installed_package_takes_the_branch_from_the_manifest(monkeypatch, tmp_path):
-    import json
-
-    from app import diag, git_ops
-    (tmp_path / "manifest.json").write_text(json.dumps(
-        {"version": "0.1.0.8207", "commit": "abc", "channel": "beta"}), encoding="utf-8")
-    monkeypatch.setattr(diag, "_ROOT", tmp_path)
-    monkeypatch.setattr(migration_status, "_branch", None)
-    monkeypatch.setattr(migration_status, "_branch_failed_at", 0.0)
-
-    def sem_git(*args, **kwargs):
-        raise AssertionError("pacote instalado não chama git")
-    monkeypatch.setattr(git_ops, "_run", sem_git)
-    assert migration_status._checkout_branch() == "beta"
+# A branch do pacote é conferida no Rust em migration_branch_matches_captured_lifetime_and_retry
+# (caso package, sem git) e migration_status_reads_owned_branch_and_live_source_without_changing_metrics.

@@ -702,7 +702,7 @@ def test_get_bastao_404_quando_nem_viva_nem_arquivada(api_client_bastao):
 
 
 def test_post_bastao_de_sessao_morta_usa_o_cwd_do_transcript(api_client_bastao, monkeypatch, tmp_path):
-    from unittest.mock import AsyncMock, patch
+    from unittest.mock import patch
     import app.api as api_mod
     cfg, proj, sid = _arquivo_morto(tmp_path)
     _conta_conhecida(monkeypatch, cfg)
@@ -711,7 +711,6 @@ def test_post_bastao_de_sessao_morta_usa_o_cwd_do_transcript(api_client_bastao, 
     monkeypatch.setattr(api_mod, "_open_in_rust", _abertura_fingida(criadas))
     monkeypatch.setattr(api_mod, "_drain_session", lambda name: None)
     monkeypatch.setattr(api_mod, "_nome_ocupado", lambda nome: False)
-    monkeypatch.setattr(api_mod, "_default_session_provider", AsyncMock(return_value="claude"))
     # Pasta que EXISTE: sessão nunca nasce em pasta sumida, e o bastão recusa antes de criar.
     origem = tmp_path / "origem"
     origem.mkdir()
