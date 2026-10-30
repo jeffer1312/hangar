@@ -64,7 +64,7 @@ pub(super) fn read(path: &Path) -> Result<Value, Error> {
     parse(&raw)
 }
 
-fn parse(raw: &str) -> Result<Value, Error> {
+pub(super) fn parse(raw: &str) -> Result<Value, Error> {
     let mut salt = 0;
     loop {
         if let Some(value) = parse_attempt(raw, salt)? {

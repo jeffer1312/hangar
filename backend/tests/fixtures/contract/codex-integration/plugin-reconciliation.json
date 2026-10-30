@@ -1,0 +1,2309 @@
+{
+  "source_commit": "8a3ce81c1",
+  "command": "cd backend && uv run python tests/fixtures/contract/codex-integration/generate_plugin_reconciliation.py",
+  "boundary": "Respostas nativas, adaptador de hooks e confirma\u00e7\u00e3o dos edits s\u00e3o controlados; sele\u00e7\u00e3o, retentativa, checkpoint e arquivos s\u00e3o originais. A raiz tempor\u00e1ria \u00e9 normalizada antes do hex. O nome do backup \u00e9 conferido contra SHA256 da origem absoluta e representado pela origem sob $HASH.",
+  "cases": [
+    {
+      "name": "empty",
+      "forced": false,
+      "before": {
+        ".claude/plugins/known_marketplaces.json": "7b226d223a207b22736f75726365223a207b22736f75726365223a2022676974687562222c20227265706f223a20224f72672f5265706f227d7d7d",
+        ".claude/settings.json": "7b22656e61626c6564506c7567696e73223a207b7d7d",
+        ".codex/config.toml": "5b6d61726b6574706c616365732e6d5d0a736f757263655f74797065203d2022676974220a736f75726365203d202268747470733a2f2f6769746875622e636f6d2f4f72672f5265706f220a5b706c7567696e732e2261406d225d0a656e61626c6564203d20747275650a",
+        ".codex/plugin/personal.txt": "506573736f616c0a"
+      },
+      "registry_before": {
+        "plugins": {},
+        "marketplaces_em": 100000.0,
+        "marketplaces_tentativa_em": 100000.0
+      },
+      "result": {
+        "ok": true
+      },
+      "registry": {
+        "plugins": {},
+        "marketplaces_em": 100000.0,
+        "marketplaces_tentativa_em": 100000.0,
+        "plugins_pendentes": []
+      },
+      "state": {
+        "erros": [],
+        "avisos": [],
+        "progresso": {
+          "passo": 3,
+          "total": 9,
+          "sub": null
+        },
+        "etapa": {
+          "codigo": "etapa_lendo_plugins",
+          "params": {},
+          "texto": "Lendo os plugins j\u00e1 instalados no Codex"
+        },
+        "etapa_desde": 100000.0,
+        "plugins": [],
+        "proxima_atualizacao": "1970-01-02T09:46:40+00:00"
+      },
+      "confirmed": [],
+      "calls": [
+        [
+          "list"
+        ]
+      ],
+      "checkpoints": [],
+      "config_edits": [
+        []
+      ],
+      "after": {
+        ".claude/plugins/known_marketplaces.json": "7b226d223a207b22736f75726365223a207b22736f75726365223a2022676974687562222c20227265706f223a20224f72672f5265706f227d7d7d",
+        ".claude/settings.json": "7b22656e61626c6564506c7567696e73223a207b7d7d",
+        ".codex/backups/$HASH/.codex/config.toml": "7b0a20202270617468223a202224524f4f542f2e636f6465782f636f6e6669672e746f6d6c222c0a202022636f6e746575646f5f686578223a202235623664363137323662363537343730366336313633363537333265366435643061373336663735373236333635356637343739373036353230336432303232363736393734323230613733366637353732363336353230336432303232363837343734373037333361326632663637363937343638373536323265363336663664326634663732363732663532363537303666323230613562373036633735363736393665373332653232363134303664323235643061363536653631363236633635363432303364323037343732373536353061222c0a20202273796d6c696e6b223a206e756c6c0a7d0a",
+        ".codex/config.toml": "5b6d61726b6574706c616365732e6d5d0a736f757263655f74797065203d2022676974220a736f75726365203d202268747470733a2f2f6769746875622e636f6d2f4f72672f5265706f220a5b706c7567696e732e2261406d225d0a656e61626c6564203d20747275650a",
+        ".codex/plugin/personal.txt": "506573736f616c0a"
+      }
+    },
+    {
+      "name": "stable",
+      "forced": false,
+      "before": {
+        ".claude/plugins/known_marketplaces.json": "7b226d223a207b22736f75726365223a207b22736f75726365223a2022676974687562222c20227265706f223a20224f72672f5265706f227d7d7d",
+        ".claude/settings.json": "7b22656e61626c6564506c7567696e73223a207b2261406d223a20747275657d7d",
+        ".codex/config.toml": "5b6d61726b6574706c616365732e6d5d0a736f757263655f74797065203d2022676974220a736f75726365203d202268747470733a2f2f6769746875622e636f6d2f4f72672f5265706f220a5b706c7567696e732e2261406d225d0a656e61626c6564203d20747275650a",
+        ".codex/plugin/personal.txt": "506573736f616c0a"
+      },
+      "registry_before": {
+        "plugins": {
+          "a@m": {
+            "path": "$ROOT/.codex/plugin",
+            "versao": "1",
+            "origem": "m",
+            "id_codex": "a@m"
+          }
+        },
+        "marketplaces_em": 100000.0,
+        "marketplaces_tentativa_em": 100000.0
+      },
+      "result": {
+        "ok": true
+      },
+      "registry": {
+        "plugins": {
+          "a@m": {
+            "path": "$ROOT/.codex/plugin",
+            "versao": "1",
+            "origem": "m",
+            "id_codex": "a@m"
+          }
+        },
+        "marketplaces_em": 100000.0,
+        "marketplaces_tentativa_em": 100000.0,
+        "status": {
+          "erros": [],
+          "avisos": [],
+          "progresso": {
+            "passo": 3,
+            "total": 9,
+            "sub": {
+              "atual": 1,
+              "total": 1
+            }
+          },
+          "etapa": {
+            "codigo": "etapa_lendo_plugins",
+            "params": {},
+            "texto": "Lendo os plugins j\u00e1 instalados no Codex"
+          },
+          "etapa_desde": 100000.0
+        },
+        "plugins_pendentes": []
+      },
+      "state": {
+        "erros": [],
+        "avisos": [],
+        "progresso": {
+          "passo": 3,
+          "total": 9,
+          "sub": {
+            "atual": 1,
+            "total": 1
+          }
+        },
+        "etapa": {
+          "codigo": "etapa_lendo_plugins",
+          "params": {},
+          "texto": "Lendo os plugins j\u00e1 instalados no Codex"
+        },
+        "etapa_desde": 100000.0,
+        "plugins": [
+          {
+            "id": "a@m",
+            "versao": "1",
+            "origem": "m"
+          }
+        ],
+        "proxima_atualizacao": "1970-01-02T09:46:40+00:00"
+      },
+      "confirmed": [
+        "a@m"
+      ],
+      "calls": [
+        [
+          "list"
+        ],
+        [
+          "hooks",
+          "$ROOT/.codex/plugin"
+        ]
+      ],
+      "checkpoints": [
+        {
+          "plugins": {
+            "a@m": {
+              "path": "$ROOT/.codex/plugin",
+              "versao": "1",
+              "origem": "m",
+              "id_codex": "a@m"
+            }
+          },
+          "marketplaces_em": 100000.0,
+          "marketplaces_tentativa_em": 100000.0,
+          "status": {
+            "erros": [],
+            "avisos": [],
+            "progresso": {
+              "passo": 3,
+              "total": 9,
+              "sub": {
+                "atual": 1,
+                "total": 1
+              }
+            },
+            "etapa": {
+              "codigo": "etapa_lendo_plugins",
+              "params": {},
+              "texto": "Lendo os plugins j\u00e1 instalados no Codex"
+            },
+            "etapa_desde": 100000.0
+          }
+        }
+      ],
+      "config_edits": [
+        []
+      ],
+      "after": {
+        ".claude/plugins/known_marketplaces.json": "7b226d223a207b22736f75726365223a207b22736f75726365223a2022676974687562222c20227265706f223a20224f72672f5265706f227d7d7d",
+        ".claude/settings.json": "7b22656e61626c6564506c7567696e73223a207b2261406d223a20747275657d7d",
+        ".codex/.hangar-integracao/estado.json": "7b0a202022706c7567696e73223a207b0a202020202261406d223a207b0a2020202020202270617468223a202224524f4f542f2e636f6465782f706c7567696e222c0a2020202020202276657273616f223a202231222c0a202020202020226f726967656d223a20226d222c0a2020202020202269645f636f646578223a202261406d220a202020207d0a20207d2c0a2020226d61726b6574706c616365735f656d223a203130303030302e302c0a2020226d61726b6574706c616365735f74656e7461746976615f656d223a203130303030302e302c0a202022737461747573223a207b0a20202020226572726f73223a205b5d2c0a2020202022617669736f73223a205b5d2c0a202020202270726f67726573736f223a207b0a20202020202022706173736f223a20332c0a20202020202022746f74616c223a20392c0a20202020202022737562223a207b0a202020202020202022617475616c223a20312c0a202020202020202022746f74616c223a20310a2020202020207d0a202020207d2c0a20202020226574617061223a207b0a20202020202022636f6469676f223a202265746170615f6c656e646f5f706c7567696e73222c0a20202020202022706172616d73223a207b7d2c0a20202020202022746578746f223a20224c656e646f206f7320706c7567696e73206ac3a120696e7374616c61646f73206e6f20436f646578220a202020207d2c0a202020202265746170615f6465736465223a203130303030302e300a20207d0a7d0a",
+        ".codex/backups/$HASH/.codex/config.toml": "7b0a20202270617468223a202224524f4f542f2e636f6465782f636f6e6669672e746f6d6c222c0a202022636f6e746575646f5f686578223a202235623664363137323662363537343730366336313633363537333265366435643061373336663735373236333635356637343739373036353230336432303232363736393734323230613733366637353732363336353230336432303232363837343734373037333361326632663637363937343638373536323265363336663664326634663732363732663532363537303666323230613562373036633735363736393665373332653232363134303664323235643061363536653631363236633635363432303364323037343732373536353061222c0a20202273796d6c696e6b223a206e756c6c0a7d0a",
+        ".codex/config.toml": "5b6d61726b6574706c616365732e6d5d0a736f757263655f74797065203d2022676974220a736f75726365203d202268747470733a2f2f6769746875622e636f6d2f4f72672f5265706f220a5b706c7567696e732e2261406d225d0a656e61626c6564203d20747275650a",
+        ".codex/plugin/personal.txt": "506573736f616c0a"
+      }
+    },
+    {
+      "name": "force",
+      "forced": true,
+      "before": {
+        ".claude/plugins/known_marketplaces.json": "7b226d223a207b22736f75726365223a207b22736f75726365223a2022676974687562222c20227265706f223a20224f72672f5265706f227d7d7d",
+        ".claude/settings.json": "7b22656e61626c6564506c7567696e73223a207b2261406d223a20747275657d7d",
+        ".codex/config.toml": "5b6d61726b6574706c616365732e6d5d0a736f757263655f74797065203d2022676974220a736f75726365203d202268747470733a2f2f6769746875622e636f6d2f4f72672f5265706f220a5b706c7567696e732e2261406d225d0a656e61626c6564203d20747275650a",
+        ".codex/plugin/personal.txt": "506573736f616c0a"
+      },
+      "registry_before": {
+        "plugins": {
+          "a@m": {
+            "path": "$ROOT/.codex/plugin",
+            "versao": "1",
+            "origem": "m",
+            "id_codex": "a@m"
+          }
+        },
+        "marketplaces_em": 100000.0,
+        "marketplaces_tentativa_em": 100000.0
+      },
+      "result": {
+        "ok": true
+      },
+      "registry": {
+        "plugins": {
+          "a@m": {
+            "path": "$ROOT/.codex/plugin",
+            "versao": "1",
+            "origem": "m",
+            "id_codex": "a@m"
+          }
+        },
+        "marketplaces_em": 100000.0,
+        "marketplaces_tentativa_em": 100000.0,
+        "marketplaces_pendentes": [],
+        "status": {
+          "erros": [],
+          "avisos": [],
+          "progresso": {
+            "passo": 3,
+            "total": 9,
+            "sub": {
+              "atual": 2,
+              "total": 2
+            }
+          },
+          "etapa": {
+            "codigo": "etapa_plugin",
+            "params": {
+              "id": "a@m"
+            },
+            "texto": "Instalando ou atualizando a@m"
+          },
+          "etapa_desde": 100000.0
+        },
+        "plugins_pendentes": []
+      },
+      "state": {
+        "erros": [],
+        "avisos": [],
+        "progresso": {
+          "passo": 3,
+          "total": 9,
+          "sub": {
+            "atual": 2,
+            "total": 2
+          }
+        },
+        "etapa": {
+          "codigo": "etapa_plugin",
+          "params": {
+            "id": "a@m"
+          },
+          "texto": "Instalando ou atualizando a@m"
+        },
+        "etapa_desde": 100000.0,
+        "plugins": [
+          {
+            "id": "a@m",
+            "versao": "1",
+            "origem": "m"
+          }
+        ],
+        "proxima_atualizacao": "1970-01-02T09:46:40+00:00"
+      },
+      "confirmed": [
+        "a@m"
+      ],
+      "calls": [
+        [
+          "list"
+        ],
+        [
+          "upgrade",
+          "m"
+        ],
+        [
+          "list"
+        ],
+        [
+          "add",
+          "a@m"
+        ],
+        [
+          "hooks",
+          "$ROOT/.codex/plugin"
+        ]
+      ],
+      "checkpoints": [
+        {
+          "plugins": {
+            "a@m": {
+              "path": "$ROOT/.codex/plugin",
+              "versao": "1",
+              "origem": "m",
+              "id_codex": "a@m"
+            }
+          },
+          "marketplaces_em": 100000.0,
+          "marketplaces_tentativa_em": 100000.0,
+          "marketplaces_pendentes": [],
+          "status": {
+            "erros": [],
+            "avisos": [],
+            "progresso": {
+              "passo": 3,
+              "total": 9,
+              "sub": {
+                "atual": 2,
+                "total": 2
+              }
+            },
+            "etapa": {
+              "codigo": "etapa_plugin",
+              "params": {
+                "id": "a@m"
+              },
+              "texto": "Instalando ou atualizando a@m"
+            },
+            "etapa_desde": 100000.0
+          }
+        }
+      ],
+      "config_edits": [
+        []
+      ],
+      "after": {
+        ".claude/plugins/known_marketplaces.json": "7b226d223a207b22736f75726365223a207b22736f75726365223a2022676974687562222c20227265706f223a20224f72672f5265706f227d7d7d",
+        ".claude/settings.json": "7b22656e61626c6564506c7567696e73223a207b2261406d223a20747275657d7d",
+        ".codex/.hangar-integracao/estado.json": "7b0a202022706c7567696e73223a207b0a202020202261406d223a207b0a2020202020202270617468223a202224524f4f542f2e636f6465782f706c7567696e222c0a2020202020202276657273616f223a202231222c0a202020202020226f726967656d223a20226d222c0a2020202020202269645f636f646578223a202261406d220a202020207d0a20207d2c0a2020226d61726b6574706c616365735f656d223a203130303030302e302c0a2020226d61726b6574706c616365735f74656e7461746976615f656d223a203130303030302e302c0a2020226d61726b6574706c616365735f70656e64656e746573223a205b5d2c0a202022737461747573223a207b0a20202020226572726f73223a205b5d2c0a2020202022617669736f73223a205b5d2c0a202020202270726f67726573736f223a207b0a20202020202022706173736f223a20332c0a20202020202022746f74616c223a20392c0a20202020202022737562223a207b0a202020202020202022617475616c223a20322c0a202020202020202022746f74616c223a20320a2020202020207d0a202020207d2c0a20202020226574617061223a207b0a20202020202022636f6469676f223a202265746170615f706c7567696e222c0a20202020202022706172616d73223a207b0a2020202020202020226964223a202261406d220a2020202020207d2c0a20202020202022746578746f223a2022496e7374616c616e646f206f7520617475616c697a616e646f2061406d220a202020207d2c0a202020202265746170615f6465736465223a203130303030302e300a20207d0a7d0a",
+        ".codex/backups/$HASH/.codex/config.toml": "7b0a20202270617468223a202224524f4f542f2e636f6465782f636f6e6669672e746f6d6c222c0a202022636f6e746575646f5f686578223a202235623664363137323662363537343730366336313633363537333265366435643061373336663735373236333635356637343739373036353230336432303232363736393734323230613733366637353732363336353230336432303232363837343734373037333361326632663637363937343638373536323265363336663664326634663732363732663532363537303666323230613562373036633735363736393665373332653232363134303664323235643061363536653631363236633635363432303364323037343732373536353061222c0a20202273796d6c696e6b223a206e756c6c0a7d0a",
+        ".codex/config.toml": "5b6d61726b6574706c616365732e6d5d0a736f757263655f74797065203d2022676974220a736f75726365203d202268747470733a2f2f6769746875622e636f6d2f4f72672f5265706f220a5b706c7567696e732e2261406d225d0a656e61626c6564203d20747275650a",
+        ".codex/plugin/personal.txt": "506573736f616c0a"
+      }
+    },
+    {
+      "name": "missing",
+      "forced": false,
+      "before": {
+        ".claude/plugins/known_marketplaces.json": "7b226d223a207b22736f75726365223a207b22736f75726365223a2022676974687562222c20227265706f223a20224f72672f5265706f227d7d7d",
+        ".claude/settings.json": "7b22656e61626c6564506c7567696e73223a207b2261406d223a20747275657d7d",
+        ".codex/config.toml": "5b6d61726b6574706c616365732e6d5d0a736f757263655f74797065203d2022676974220a736f75726365203d202268747470733a2f2f6769746875622e636f6d2f4f72672f5265706f220a5b706c7567696e732e2261406d225d0a656e61626c6564203d20747275650a",
+        ".codex/plugin/personal.txt": "506573736f616c0a"
+      },
+      "registry_before": {
+        "plugins": {},
+        "marketplaces_em": 100000.0,
+        "marketplaces_tentativa_em": 100000.0
+      },
+      "result": {
+        "ok": true
+      },
+      "registry": {
+        "plugins": {
+          "a@m": {
+            "path": "$ROOT/.codex/plugin",
+            "versao": "1",
+            "origem": "m",
+            "id_codex": "a@m"
+          }
+        },
+        "marketplaces_em": 100000.0,
+        "marketplaces_tentativa_em": 100000.0,
+        "status": {
+          "erros": [],
+          "avisos": [],
+          "progresso": {
+            "passo": 3,
+            "total": 9,
+            "sub": {
+              "atual": 1,
+              "total": 1
+            }
+          },
+          "etapa": {
+            "codigo": "etapa_plugin",
+            "params": {
+              "id": "a@m"
+            },
+            "texto": "Instalando ou atualizando a@m"
+          },
+          "etapa_desde": 100000.0
+        },
+        "plugins_pendentes": []
+      },
+      "state": {
+        "erros": [],
+        "avisos": [],
+        "progresso": {
+          "passo": 3,
+          "total": 9,
+          "sub": {
+            "atual": 1,
+            "total": 1
+          }
+        },
+        "etapa": {
+          "codigo": "etapa_plugin",
+          "params": {
+            "id": "a@m"
+          },
+          "texto": "Instalando ou atualizando a@m"
+        },
+        "etapa_desde": 100000.0,
+        "plugins": [
+          {
+            "id": "a@m",
+            "versao": "1",
+            "origem": "m"
+          }
+        ],
+        "proxima_atualizacao": "1970-01-02T09:46:40+00:00"
+      },
+      "confirmed": [
+        "a@m"
+      ],
+      "calls": [
+        [
+          "list"
+        ],
+        [
+          "detect"
+        ],
+        [
+          "import",
+          [
+            {
+              "itemType": "PLUGINS",
+              "description": "Plugins",
+              "details": {
+                "plugins": [
+                  {
+                    "marketplaceName": "m",
+                    "pluginNames": [
+                      "a"
+                    ],
+                    "extra": "preserved"
+                  }
+                ]
+              }
+            }
+          ]
+        ],
+        [
+          "list"
+        ],
+        [
+          "add",
+          "a@m"
+        ],
+        [
+          "hooks",
+          "$ROOT/.codex/plugin"
+        ]
+      ],
+      "checkpoints": [
+        {
+          "plugins": {
+            "a@m": {
+              "path": "$ROOT/.codex/plugin",
+              "versao": "1",
+              "origem": "m",
+              "id_codex": "a@m"
+            }
+          },
+          "marketplaces_em": 100000.0,
+          "marketplaces_tentativa_em": 100000.0,
+          "status": {
+            "erros": [],
+            "avisos": [],
+            "progresso": {
+              "passo": 3,
+              "total": 9,
+              "sub": {
+                "atual": 1,
+                "total": 1
+              }
+            },
+            "etapa": {
+              "codigo": "etapa_plugin",
+              "params": {
+                "id": "a@m"
+              },
+              "texto": "Instalando ou atualizando a@m"
+            },
+            "etapa_desde": 100000.0
+          }
+        }
+      ],
+      "config_edits": [
+        []
+      ],
+      "after": {
+        ".claude/plugins/known_marketplaces.json": "7b226d223a207b22736f75726365223a207b22736f75726365223a2022676974687562222c20227265706f223a20224f72672f5265706f227d7d7d",
+        ".claude/settings.json": "7b22656e61626c6564506c7567696e73223a207b2261406d223a20747275657d7d",
+        ".codex/.hangar-integracao/estado.json": "7b0a202022706c7567696e73223a207b0a202020202261406d223a207b0a2020202020202270617468223a202224524f4f542f2e636f6465782f706c7567696e222c0a2020202020202276657273616f223a202231222c0a202020202020226f726967656d223a20226d222c0a2020202020202269645f636f646578223a202261406d220a202020207d0a20207d2c0a2020226d61726b6574706c616365735f656d223a203130303030302e302c0a2020226d61726b6574706c616365735f74656e7461746976615f656d223a203130303030302e302c0a202022737461747573223a207b0a20202020226572726f73223a205b5d2c0a2020202022617669736f73223a205b5d2c0a202020202270726f67726573736f223a207b0a20202020202022706173736f223a20332c0a20202020202022746f74616c223a20392c0a20202020202022737562223a207b0a202020202020202022617475616c223a20312c0a202020202020202022746f74616c223a20310a2020202020207d0a202020207d2c0a20202020226574617061223a207b0a20202020202022636f6469676f223a202265746170615f706c7567696e222c0a20202020202022706172616d73223a207b0a2020202020202020226964223a202261406d220a2020202020207d2c0a20202020202022746578746f223a2022496e7374616c616e646f206f7520617475616c697a616e646f2061406d220a202020207d2c0a202020202265746170615f6465736465223a203130303030302e300a20207d0a7d0a",
+        ".codex/backups/$HASH/.codex/config.toml": "7b0a20202270617468223a202224524f4f542f2e636f6465782f636f6e6669672e746f6d6c222c0a202022636f6e746575646f5f686578223a202235623664363137323662363537343730366336313633363537333265366435643061373336663735373236333635356637343739373036353230336432303232363736393734323230613733366637353732363336353230336432303232363837343734373037333361326632663637363937343638373536323265363336663664326634663732363732663532363537303666323230613562373036633735363736393665373332653232363134303664323235643061363536653631363236633635363432303364323037343732373536353061222c0a20202273796d6c696e6b223a206e756c6c0a7d0a",
+        ".codex/config.toml": "5b6d61726b6574706c616365732e6d5d0a736f757263655f74797065203d2022676974220a736f75726365203d202268747470733a2f2f6769746875622e636f6d2f4f72672f5265706f220a5b706c7567696e732e2261406d225d0a656e61626c6564203d20747275650a",
+        ".codex/plugin/personal.txt": "506573736f616c0a"
+      }
+    },
+    {
+      "name": "unknown_market",
+      "forced": false,
+      "before": {
+        ".claude/plugins/known_marketplaces.json": "7b7d",
+        ".claude/settings.json": "7b22656e61626c6564506c7567696e73223a207b2261406d223a20747275657d7d",
+        ".codex/config.toml": "5b6d61726b6574706c616365732e6d5d0a736f757263655f74797065203d2022676974220a736f75726365203d202268747470733a2f2f6769746875622e636f6d2f4f72672f5265706f220a5b706c7567696e732e2261406d225d0a656e61626c6564203d20747275650a",
+        ".codex/plugin/personal.txt": "506573736f616c0a"
+      },
+      "registry_before": {
+        "plugins": {
+          "a@m": {
+            "path": "$ROOT/.codex/plugin",
+            "versao": "1",
+            "origem": "m",
+            "id_codex": "a@m"
+          }
+        },
+        "marketplaces_em": 100000.0,
+        "marketplaces_tentativa_em": 100000.0
+      },
+      "result": {
+        "ok": true
+      },
+      "registry": {
+        "plugins": {
+          "a@m": {
+            "path": "$ROOT/.codex/plugin",
+            "versao": "1",
+            "origem": "m",
+            "id_codex": "a@m"
+          }
+        },
+        "marketplaces_em": 100000.0,
+        "marketplaces_tentativa_em": 100000.0,
+        "plugins_pendentes": []
+      },
+      "state": {
+        "erros": [
+          {
+            "codigo": "erro_marketplace_origem",
+            "params": {
+              "marketplace": "m"
+            },
+            "texto": "Origem do marketplace m n\u00e3o confirmada; instala\u00e7\u00e3o existente preservada"
+          }
+        ],
+        "avisos": [],
+        "progresso": {
+          "passo": 3,
+          "total": 9,
+          "sub": null
+        },
+        "etapa": {
+          "codigo": "etapa_lendo_plugins",
+          "params": {},
+          "texto": "Lendo os plugins j\u00e1 instalados no Codex"
+        },
+        "etapa_desde": 100000.0,
+        "plugins": [
+          {
+            "id": "a@m",
+            "versao": "1",
+            "origem": "m"
+          }
+        ],
+        "proxima_atualizacao": "1970-01-02T09:46:40+00:00"
+      },
+      "confirmed": [],
+      "calls": [
+        [
+          "list"
+        ]
+      ],
+      "checkpoints": [],
+      "config_edits": [
+        []
+      ],
+      "after": {
+        ".claude/plugins/known_marketplaces.json": "7b7d",
+        ".claude/settings.json": "7b22656e61626c6564506c7567696e73223a207b2261406d223a20747275657d7d",
+        ".codex/backups/$HASH/.codex/config.toml": "7b0a20202270617468223a202224524f4f542f2e636f6465782f636f6e6669672e746f6d6c222c0a202022636f6e746575646f5f686578223a202235623664363137323662363537343730366336313633363537333265366435643061373336663735373236333635356637343739373036353230336432303232363736393734323230613733366637353732363336353230336432303232363837343734373037333361326632663637363937343638373536323265363336663664326634663732363732663532363537303666323230613562373036633735363736393665373332653232363134303664323235643061363536653631363236633635363432303364323037343732373536353061222c0a20202273796d6c696e6b223a206e756c6c0a7d0a",
+        ".codex/config.toml": "5b6d61726b6574706c616365732e6d5d0a736f757263655f74797065203d2022676974220a736f75726365203d202268747470733a2f2f6769746875622e636f6d2f4f72672f5265706f220a5b706c7567696e732e2261406d225d0a656e61626c6564203d20747275650a",
+        ".codex/plugin/personal.txt": "506573736f616c0a"
+      }
+    },
+    {
+      "name": "homonym",
+      "forced": false,
+      "before": {
+        ".claude/plugins/known_marketplaces.json": "7b226d223a207b22736f75726365223a207b22736f75726365223a2022676974687562222c20227265706f223a20224f72672f5265706f227d7d7d",
+        ".claude/settings.json": "7b22656e61626c6564506c7567696e73223a207b2261406d223a20747275657d7d",
+        ".codex/config.toml": "5b6d61726b6574706c616365732e6d5d0a736f757263655f74797065203d2022676974220a736f75726365203d202268747470733a2f2f6769746875622e636f6d2f4f746865722f5265706f220a5b706c7567696e732e2261406d225d0a656e61626c6564203d20747275650a",
+        ".codex/plugin/personal.txt": "506573736f616c0a"
+      },
+      "registry_before": {
+        "plugins": {
+          "a@m": {
+            "path": "$ROOT/.codex/plugin",
+            "versao": "1",
+            "origem": "m",
+            "id_codex": "a@m"
+          }
+        },
+        "marketplaces_em": 100000.0,
+        "marketplaces_tentativa_em": 100000.0
+      },
+      "result": {
+        "ok": true
+      },
+      "registry": {
+        "plugins": {
+          "a@m": {
+            "path": "$ROOT/.codex/plugin",
+            "versao": "1",
+            "origem": "m",
+            "id_codex": "a@m"
+          }
+        },
+        "marketplaces_em": 100000.0,
+        "marketplaces_tentativa_em": 100000.0,
+        "plugins_pendentes": []
+      },
+      "state": {
+        "erros": [
+          {
+            "codigo": "erro_marketplace_origem",
+            "params": {
+              "marketplace": "m"
+            },
+            "texto": "Origem do marketplace m n\u00e3o confirmada; instala\u00e7\u00e3o existente preservada"
+          }
+        ],
+        "avisos": [],
+        "progresso": {
+          "passo": 3,
+          "total": 9,
+          "sub": null
+        },
+        "etapa": {
+          "codigo": "etapa_lendo_plugins",
+          "params": {},
+          "texto": "Lendo os plugins j\u00e1 instalados no Codex"
+        },
+        "etapa_desde": 100000.0,
+        "plugins": [
+          {
+            "id": "a@m",
+            "versao": "1",
+            "origem": "m"
+          }
+        ],
+        "proxima_atualizacao": "1970-01-02T09:46:40+00:00"
+      },
+      "confirmed": [],
+      "calls": [
+        [
+          "list"
+        ]
+      ],
+      "checkpoints": [],
+      "config_edits": [
+        []
+      ],
+      "after": {
+        ".claude/plugins/known_marketplaces.json": "7b226d223a207b22736f75726365223a207b22736f75726365223a2022676974687562222c20227265706f223a20224f72672f5265706f227d7d7d",
+        ".claude/settings.json": "7b22656e61626c6564506c7567696e73223a207b2261406d223a20747275657d7d",
+        ".codex/backups/$HASH/.codex/config.toml": "7b0a20202270617468223a202224524f4f542f2e636f6465782f636f6e6669672e746f6d6c222c0a202022636f6e746575646f5f686578223a20223562366436313732366236353734373036633631363336353733326536643564306137333666373537323633363535663734373937303635323033643230323236373639373432323061373336663735373236333635323033643230323236383734373437303733336132663266363736393734363837353632326536333666366432663466373436383635373232663532363537303666323230613562373036633735363736393665373332653232363134303664323235643061363536653631363236633635363432303364323037343732373536353061222c0a20202273796d6c696e6b223a206e756c6c0a7d0a",
+        ".codex/config.toml": "5b6d61726b6574706c616365732e6d5d0a736f757263655f74797065203d2022676974220a736f75726365203d202268747470733a2f2f6769746875622e636f6d2f4f746865722f5265706f220a5b706c7567696e732e2261406d225d0a656e61626c6564203d20747275650a",
+        ".codex/plugin/personal.txt": "506573736f616c0a"
+      }
+    },
+    {
+      "name": "upgrade_failure",
+      "forced": true,
+      "before": {
+        ".claude/plugins/known_marketplaces.json": "7b226d223a207b22736f75726365223a207b22736f75726365223a2022676974687562222c20227265706f223a20224f72672f5265706f227d7d7d",
+        ".claude/settings.json": "7b22656e61626c6564506c7567696e73223a207b2261406d223a20747275657d7d",
+        ".codex/config.toml": "5b6d61726b6574706c616365732e6d5d0a736f757263655f74797065203d2022676974220a736f75726365203d202268747470733a2f2f6769746875622e636f6d2f4f72672f5265706f220a5b706c7567696e732e2261406d225d0a656e61626c6564203d20747275650a",
+        ".codex/plugin/personal.txt": "506573736f616c0a"
+      },
+      "registry_before": {
+        "plugins": {
+          "a@m": {
+            "path": "$ROOT/.codex/plugin",
+            "versao": "1",
+            "origem": "m",
+            "id_codex": "a@m"
+          }
+        },
+        "marketplaces_em": 100000.0,
+        "marketplaces_tentativa_em": 100000.0
+      },
+      "result": {
+        "ok": true
+      },
+      "registry": {
+        "plugins": {
+          "a@m": {
+            "path": "$ROOT/.codex/plugin",
+            "versao": "1",
+            "origem": "m",
+            "id_codex": "a@m"
+          }
+        },
+        "marketplaces_em": 100000.0,
+        "marketplaces_tentativa_em": 100000.0,
+        "marketplaces_pendentes": [
+          "m"
+        ],
+        "status": {
+          "erros": [
+            {
+              "codigo": "erro_marketplace_atualizar",
+              "params": {
+                "marketplace": "m"
+              },
+              "texto": "N\u00e3o foi poss\u00edvel atualizar o marketplace m"
+            }
+          ],
+          "avisos": [],
+          "progresso": {
+            "passo": 3,
+            "total": 9,
+            "sub": {
+              "atual": 2,
+              "total": 2
+            }
+          },
+          "etapa": {
+            "codigo": "etapa_plugin",
+            "params": {
+              "id": "a@m"
+            },
+            "texto": "Instalando ou atualizando a@m"
+          },
+          "etapa_desde": 100000.0
+        },
+        "plugins_pendentes": []
+      },
+      "state": {
+        "erros": [
+          {
+            "codigo": "erro_marketplace_atualizar",
+            "params": {
+              "marketplace": "m"
+            },
+            "texto": "N\u00e3o foi poss\u00edvel atualizar o marketplace m"
+          }
+        ],
+        "avisos": [],
+        "progresso": {
+          "passo": 3,
+          "total": 9,
+          "sub": {
+            "atual": 2,
+            "total": 2
+          }
+        },
+        "etapa": {
+          "codigo": "etapa_plugin",
+          "params": {
+            "id": "a@m"
+          },
+          "texto": "Instalando ou atualizando a@m"
+        },
+        "etapa_desde": 100000.0,
+        "plugins": [
+          {
+            "id": "a@m",
+            "versao": "1",
+            "origem": "m"
+          }
+        ],
+        "proxima_atualizacao": "1970-01-02T03:51:40+00:00"
+      },
+      "confirmed": [
+        "a@m"
+      ],
+      "calls": [
+        [
+          "list"
+        ],
+        [
+          "upgrade",
+          "m"
+        ],
+        [
+          "list"
+        ],
+        [
+          "add",
+          "a@m"
+        ],
+        [
+          "hooks",
+          "$ROOT/.codex/plugin"
+        ]
+      ],
+      "checkpoints": [
+        {
+          "plugins": {
+            "a@m": {
+              "path": "$ROOT/.codex/plugin",
+              "versao": "1",
+              "origem": "m",
+              "id_codex": "a@m"
+            }
+          },
+          "marketplaces_em": 100000.0,
+          "marketplaces_tentativa_em": 100000.0,
+          "marketplaces_pendentes": [
+            "m"
+          ],
+          "status": {
+            "erros": [
+              {
+                "codigo": "erro_marketplace_atualizar",
+                "params": {
+                  "marketplace": "m"
+                },
+                "texto": "N\u00e3o foi poss\u00edvel atualizar o marketplace m"
+              }
+            ],
+            "avisos": [],
+            "progresso": {
+              "passo": 3,
+              "total": 9,
+              "sub": {
+                "atual": 2,
+                "total": 2
+              }
+            },
+            "etapa": {
+              "codigo": "etapa_plugin",
+              "params": {
+                "id": "a@m"
+              },
+              "texto": "Instalando ou atualizando a@m"
+            },
+            "etapa_desde": 100000.0
+          }
+        }
+      ],
+      "config_edits": [
+        []
+      ],
+      "after": {
+        ".claude/plugins/known_marketplaces.json": "7b226d223a207b22736f75726365223a207b22736f75726365223a2022676974687562222c20227265706f223a20224f72672f5265706f227d7d7d",
+        ".claude/settings.json": "7b22656e61626c6564506c7567696e73223a207b2261406d223a20747275657d7d",
+        ".codex/.hangar-integracao/estado.json": "7b0a202022706c7567696e73223a207b0a202020202261406d223a207b0a2020202020202270617468223a202224524f4f542f2e636f6465782f706c7567696e222c0a2020202020202276657273616f223a202231222c0a202020202020226f726967656d223a20226d222c0a2020202020202269645f636f646578223a202261406d220a202020207d0a20207d2c0a2020226d61726b6574706c616365735f656d223a203130303030302e302c0a2020226d61726b6574706c616365735f74656e7461746976615f656d223a203130303030302e302c0a2020226d61726b6574706c616365735f70656e64656e746573223a205b0a20202020226d220a20205d2c0a202022737461747573223a207b0a20202020226572726f73223a205b0a2020202020207b0a202020202020202022636f6469676f223a20226572726f5f6d61726b6574706c6163655f617475616c697a6172222c0a202020202020202022706172616d73223a207b0a20202020202020202020226d61726b6574706c616365223a20226d220a20202020202020207d2c0a202020202020202022746578746f223a20224ec3a36f20666f6920706f7373c3ad76656c20617475616c697a6172206f206d61726b6574706c616365206d220a2020202020207d0a202020205d2c0a2020202022617669736f73223a205b5d2c0a202020202270726f67726573736f223a207b0a20202020202022706173736f223a20332c0a20202020202022746f74616c223a20392c0a20202020202022737562223a207b0a202020202020202022617475616c223a20322c0a202020202020202022746f74616c223a20320a2020202020207d0a202020207d2c0a20202020226574617061223a207b0a20202020202022636f6469676f223a202265746170615f706c7567696e222c0a20202020202022706172616d73223a207b0a2020202020202020226964223a202261406d220a2020202020207d2c0a20202020202022746578746f223a2022496e7374616c616e646f206f7520617475616c697a616e646f2061406d220a202020207d2c0a202020202265746170615f6465736465223a203130303030302e300a20207d0a7d0a",
+        ".codex/backups/$HASH/.codex/config.toml": "7b0a20202270617468223a202224524f4f542f2e636f6465782f636f6e6669672e746f6d6c222c0a202022636f6e746575646f5f686578223a202235623664363137323662363537343730366336313633363537333265366435643061373336663735373236333635356637343739373036353230336432303232363736393734323230613733366637353732363336353230336432303232363837343734373037333361326632663637363937343638373536323265363336663664326634663732363732663532363537303666323230613562373036633735363736393665373332653232363134303664323235643061363536653631363236633635363432303364323037343732373536353061222c0a20202273796d6c696e6b223a206e756c6c0a7d0a",
+        ".codex/config.toml": "5b6d61726b6574706c616365732e6d5d0a736f757263655f74797065203d2022676974220a736f75726365203d202268747470733a2f2f6769746875622e636f6d2f4f72672f5265706f220a5b706c7567696e732e2261406d225d0a656e61626c6564203d20747275650a",
+        ".codex/plugin/personal.txt": "506573736f616c0a"
+      }
+    },
+    {
+      "name": "install_failure",
+      "forced": true,
+      "before": {
+        ".claude/plugins/known_marketplaces.json": "7b226d223a207b22736f75726365223a207b22736f75726365223a2022676974687562222c20227265706f223a20224f72672f5265706f227d7d7d",
+        ".claude/settings.json": "7b22656e61626c6564506c7567696e73223a207b2261406d223a20747275657d7d",
+        ".codex/config.toml": "5b6d61726b6574706c616365732e6d5d0a736f757263655f74797065203d2022676974220a736f75726365203d202268747470733a2f2f6769746875622e636f6d2f4f72672f5265706f220a5b706c7567696e732e2261406d225d0a656e61626c6564203d20747275650a",
+        ".codex/plugin/personal.txt": "506573736f616c0a"
+      },
+      "registry_before": {
+        "plugins": {
+          "a@m": {
+            "path": "$ROOT/.codex/plugin",
+            "versao": "1",
+            "origem": "m",
+            "id_codex": "a@m"
+          }
+        },
+        "marketplaces_em": 100000.0,
+        "marketplaces_tentativa_em": 100000.0
+      },
+      "result": {
+        "ok": true
+      },
+      "registry": {
+        "plugins": {
+          "a@m": {
+            "path": "$ROOT/.codex/plugin",
+            "versao": "1",
+            "origem": "m",
+            "id_codex": "a@m"
+          }
+        },
+        "marketplaces_em": 100000.0,
+        "marketplaces_tentativa_em": 100000.0,
+        "marketplaces_pendentes": [],
+        "plugins_pendentes": [
+          "a@m"
+        ]
+      },
+      "state": {
+        "erros": [
+          {
+            "codigo": "erro_plugin",
+            "params": {
+              "id": "a@m"
+            },
+            "texto": "N\u00e3o foi poss\u00edvel reconciliar o plugin a@m"
+          }
+        ],
+        "avisos": [],
+        "progresso": {
+          "passo": 3,
+          "total": 9,
+          "sub": {
+            "atual": 2,
+            "total": 2
+          }
+        },
+        "etapa": {
+          "codigo": "etapa_plugin",
+          "params": {
+            "id": "a@m"
+          },
+          "texto": "Instalando ou atualizando a@m"
+        },
+        "etapa_desde": 100000.0,
+        "plugins": [
+          {
+            "id": "a@m",
+            "versao": "1",
+            "origem": "m"
+          }
+        ],
+        "proxima_atualizacao": "1970-01-02T09:46:40+00:00"
+      },
+      "confirmed": [
+        "a@m"
+      ],
+      "calls": [
+        [
+          "list"
+        ],
+        [
+          "upgrade",
+          "m"
+        ],
+        [
+          "list"
+        ],
+        [
+          "add",
+          "a@m"
+        ]
+      ],
+      "checkpoints": [],
+      "config_edits": [
+        []
+      ],
+      "after": {
+        ".claude/plugins/known_marketplaces.json": "7b226d223a207b22736f75726365223a207b22736f75726365223a2022676974687562222c20227265706f223a20224f72672f5265706f227d7d7d",
+        ".claude/settings.json": "7b22656e61626c6564506c7567696e73223a207b2261406d223a20747275657d7d",
+        ".codex/backups/$HASH/.codex/config.toml": "7b0a20202270617468223a202224524f4f542f2e636f6465782f636f6e6669672e746f6d6c222c0a202022636f6e746575646f5f686578223a202235623664363137323662363537343730366336313633363537333265366435643061373336663735373236333635356637343739373036353230336432303232363736393734323230613733366637353732363336353230336432303232363837343734373037333361326632663637363937343638373536323265363336663664326634663732363732663532363537303666323230613562373036633735363736393665373332653232363134303664323235643061363536653631363236633635363432303364323037343732373536353061222c0a20202273796d6c696e6b223a206e756c6c0a7d0a",
+        ".codex/config.toml": "5b6d61726b6574706c616365732e6d5d0a736f757263655f74797065203d2022676974220a736f75726365203d202268747470733a2f2f6769746875622e636f6d2f4f72672f5265706f220a5b706c7567696e732e2261406d225d0a656e61626c6564203d20747275650a",
+        ".codex/plugin/personal.txt": "506573736f616c0a"
+      }
+    },
+    {
+      "name": "hook_failure",
+      "forced": false,
+      "before": {
+        ".claude/plugins/known_marketplaces.json": "7b226d223a207b22736f75726365223a207b22736f75726365223a2022676974687562222c20227265706f223a20224f72672f5265706f227d7d7d",
+        ".claude/settings.json": "7b22656e61626c6564506c7567696e73223a207b2261406d223a20747275657d7d",
+        ".codex/config.toml": "5b6d61726b6574706c616365732e6d5d0a736f757263655f74797065203d2022676974220a736f75726365203d202268747470733a2f2f6769746875622e636f6d2f4f72672f5265706f220a5b706c7567696e732e2261406d225d0a656e61626c6564203d20747275650a",
+        ".codex/plugin/personal.txt": "506573736f616c0a"
+      },
+      "registry_before": {
+        "plugins": {
+          "a@m": {
+            "path": "$ROOT/.codex/plugin",
+            "versao": "1",
+            "origem": "m",
+            "id_codex": "a@m"
+          }
+        },
+        "marketplaces_em": 100000.0,
+        "marketplaces_tentativa_em": 100000.0
+      },
+      "result": {
+        "ok": true
+      },
+      "registry": {
+        "plugins": {
+          "a@m": {
+            "path": "$ROOT/.codex/plugin",
+            "versao": "1",
+            "origem": "m",
+            "id_codex": "a@m"
+          }
+        },
+        "marketplaces_em": 100000.0,
+        "marketplaces_tentativa_em": 100000.0,
+        "plugins_pendentes": [
+          "a@m"
+        ]
+      },
+      "state": {
+        "erros": [
+          {
+            "codigo": "erro_plugin",
+            "params": {
+              "id": "a@m"
+            },
+            "texto": "N\u00e3o foi poss\u00edvel reconciliar o plugin a@m"
+          }
+        ],
+        "avisos": [],
+        "progresso": {
+          "passo": 3,
+          "total": 9,
+          "sub": {
+            "atual": 1,
+            "total": 1
+          }
+        },
+        "etapa": {
+          "codigo": "etapa_lendo_plugins",
+          "params": {},
+          "texto": "Lendo os plugins j\u00e1 instalados no Codex"
+        },
+        "etapa_desde": 100000.0,
+        "plugins": [
+          {
+            "id": "a@m",
+            "versao": "1",
+            "origem": "m"
+          }
+        ],
+        "proxima_atualizacao": "1970-01-02T09:46:40+00:00"
+      },
+      "confirmed": [
+        "a@m"
+      ],
+      "calls": [
+        [
+          "list"
+        ],
+        [
+          "hooks",
+          "$ROOT/.codex/plugin"
+        ]
+      ],
+      "checkpoints": [],
+      "config_edits": [
+        []
+      ],
+      "after": {
+        ".claude/plugins/known_marketplaces.json": "7b226d223a207b22736f75726365223a207b22736f75726365223a2022676974687562222c20227265706f223a20224f72672f5265706f227d7d7d",
+        ".claude/settings.json": "7b22656e61626c6564506c7567696e73223a207b2261406d223a20747275657d7d",
+        ".codex/backups/$HASH/.codex/config.toml": "7b0a20202270617468223a202224524f4f542f2e636f6465782f636f6e6669672e746f6d6c222c0a202022636f6e746575646f5f686578223a202235623664363137323662363537343730366336313633363537333265366435643061373336663735373236333635356637343739373036353230336432303232363736393734323230613733366637353732363336353230336432303232363837343734373037333361326632663637363937343638373536323265363336663664326634663732363732663532363537303666323230613562373036633735363736393665373332653232363134303664323235643061363536653631363236633635363432303364323037343732373536353061222c0a20202273796d6c696e6b223a206e756c6c0a7d0a",
+        ".codex/config.toml": "5b6d61726b6574706c616365732e6d5d0a736f757263655f74797065203d2022676974220a736f75726365203d202268747470733a2f2f6769746875622e636f6d2f4f72672f5265706f220a5b706c7567696e732e2261406d225d0a656e61626c6564203d20747275650a",
+        ".codex/plugin/personal.txt": "506573736f616c0a"
+      }
+    },
+    {
+      "name": "pending_market_retry",
+      "forced": false,
+      "before": {
+        ".claude/plugins/known_marketplaces.json": "7b226d223a207b22736f75726365223a207b22736f75726365223a2022676974687562222c20227265706f223a20224f72672f5265706f227d7d7d",
+        ".claude/settings.json": "7b22656e61626c6564506c7567696e73223a207b2261406d223a20747275657d7d",
+        ".codex/config.toml": "5b6d61726b6574706c616365732e6d5d0a736f757263655f74797065203d2022676974220a736f75726365203d202268747470733a2f2f6769746875622e636f6d2f4f72672f5265706f220a5b706c7567696e732e2261406d225d0a656e61626c6564203d20747275650a",
+        ".codex/plugin/personal.txt": "506573736f616c0a"
+      },
+      "registry_before": {
+        "plugins": {
+          "a@m": {
+            "path": "$ROOT/.codex/plugin",
+            "versao": "1",
+            "origem": "m",
+            "id_codex": "a@m"
+          }
+        },
+        "marketplaces_em": 99000.0,
+        "marketplaces_tentativa_em": 99000.0,
+        "marketplaces_pendentes": [
+          "m"
+        ]
+      },
+      "result": {
+        "ok": true
+      },
+      "registry": {
+        "plugins": {
+          "a@m": {
+            "path": "$ROOT/.codex/plugin",
+            "versao": "1",
+            "origem": "m",
+            "id_codex": "a@m"
+          }
+        },
+        "marketplaces_em": 100000.0,
+        "marketplaces_tentativa_em": 100000.0,
+        "marketplaces_pendentes": [],
+        "status": {
+          "erros": [],
+          "avisos": [],
+          "progresso": {
+            "passo": 3,
+            "total": 9,
+            "sub": {
+              "atual": 2,
+              "total": 2
+            }
+          },
+          "etapa": {
+            "codigo": "etapa_plugin",
+            "params": {
+              "id": "a@m"
+            },
+            "texto": "Instalando ou atualizando a@m"
+          },
+          "etapa_desde": 100000.0
+        },
+        "plugins_pendentes": []
+      },
+      "state": {
+        "erros": [],
+        "avisos": [],
+        "progresso": {
+          "passo": 3,
+          "total": 9,
+          "sub": {
+            "atual": 2,
+            "total": 2
+          }
+        },
+        "etapa": {
+          "codigo": "etapa_plugin",
+          "params": {
+            "id": "a@m"
+          },
+          "texto": "Instalando ou atualizando a@m"
+        },
+        "etapa_desde": 100000.0,
+        "plugins": [
+          {
+            "id": "a@m",
+            "versao": "1",
+            "origem": "m"
+          }
+        ],
+        "proxima_atualizacao": "1970-01-02T09:46:40+00:00"
+      },
+      "confirmed": [
+        "a@m"
+      ],
+      "calls": [
+        [
+          "list"
+        ],
+        [
+          "upgrade",
+          "m"
+        ],
+        [
+          "list"
+        ],
+        [
+          "add",
+          "a@m"
+        ],
+        [
+          "hooks",
+          "$ROOT/.codex/plugin"
+        ]
+      ],
+      "checkpoints": [
+        {
+          "plugins": {
+            "a@m": {
+              "path": "$ROOT/.codex/plugin",
+              "versao": "1",
+              "origem": "m",
+              "id_codex": "a@m"
+            }
+          },
+          "marketplaces_em": 100000.0,
+          "marketplaces_tentativa_em": 100000.0,
+          "marketplaces_pendentes": [],
+          "status": {
+            "erros": [],
+            "avisos": [],
+            "progresso": {
+              "passo": 3,
+              "total": 9,
+              "sub": {
+                "atual": 2,
+                "total": 2
+              }
+            },
+            "etapa": {
+              "codigo": "etapa_plugin",
+              "params": {
+                "id": "a@m"
+              },
+              "texto": "Instalando ou atualizando a@m"
+            },
+            "etapa_desde": 100000.0
+          }
+        }
+      ],
+      "config_edits": [
+        []
+      ],
+      "after": {
+        ".claude/plugins/known_marketplaces.json": "7b226d223a207b22736f75726365223a207b22736f75726365223a2022676974687562222c20227265706f223a20224f72672f5265706f227d7d7d",
+        ".claude/settings.json": "7b22656e61626c6564506c7567696e73223a207b2261406d223a20747275657d7d",
+        ".codex/.hangar-integracao/estado.json": "7b0a202022706c7567696e73223a207b0a202020202261406d223a207b0a2020202020202270617468223a202224524f4f542f2e636f6465782f706c7567696e222c0a2020202020202276657273616f223a202231222c0a202020202020226f726967656d223a20226d222c0a2020202020202269645f636f646578223a202261406d220a202020207d0a20207d2c0a2020226d61726b6574706c616365735f656d223a203130303030302e302c0a2020226d61726b6574706c616365735f74656e7461746976615f656d223a203130303030302e302c0a2020226d61726b6574706c616365735f70656e64656e746573223a205b5d2c0a202022737461747573223a207b0a20202020226572726f73223a205b5d2c0a2020202022617669736f73223a205b5d2c0a202020202270726f67726573736f223a207b0a20202020202022706173736f223a20332c0a20202020202022746f74616c223a20392c0a20202020202022737562223a207b0a202020202020202022617475616c223a20322c0a202020202020202022746f74616c223a20320a2020202020207d0a202020207d2c0a20202020226574617061223a207b0a20202020202022636f6469676f223a202265746170615f706c7567696e222c0a20202020202022706172616d73223a207b0a2020202020202020226964223a202261406d220a2020202020207d2c0a20202020202022746578746f223a2022496e7374616c616e646f206f7520617475616c697a616e646f2061406d220a202020207d2c0a202020202265746170615f6465736465223a203130303030302e300a20207d0a7d0a",
+        ".codex/backups/$HASH/.codex/config.toml": "7b0a20202270617468223a202224524f4f542f2e636f6465782f636f6e6669672e746f6d6c222c0a202022636f6e746575646f5f686578223a202235623664363137323662363537343730366336313633363537333265366435643061373336663735373236333635356637343739373036353230336432303232363736393734323230613733366637353732363336353230336432303232363837343734373037333361326632663637363937343638373536323265363336663664326634663732363732663532363537303666323230613562373036633735363736393665373332653232363134303664323235643061363536653631363236633635363432303364323037343732373536353061222c0a20202273796d6c696e6b223a206e756c6c0a7d0a",
+        ".codex/config.toml": "5b6d61726b6574706c616365732e6d5d0a736f757263655f74797065203d2022676974220a736f75726365203d202268747470733a2f2f6769746875622e636f6d2f4f72672f5265706f220a5b706c7567696e732e2261406d225d0a656e61626c6564203d20747275650a",
+        ".codex/plugin/personal.txt": "506573736f616c0a"
+      }
+    },
+    {
+      "name": "pending_market_recent",
+      "forced": false,
+      "before": {
+        ".claude/plugins/known_marketplaces.json": "7b226d223a207b22736f75726365223a207b22736f75726365223a2022676974687562222c20227265706f223a20224f72672f5265706f227d7d7d",
+        ".claude/settings.json": "7b22656e61626c6564506c7567696e73223a207b2261406d223a20747275657d7d",
+        ".codex/config.toml": "5b6d61726b6574706c616365732e6d5d0a736f757263655f74797065203d2022676974220a736f75726365203d202268747470733a2f2f6769746875622e636f6d2f4f72672f5265706f220a5b706c7567696e732e2261406d225d0a656e61626c6564203d20747275650a",
+        ".codex/plugin/personal.txt": "506573736f616c0a"
+      },
+      "registry_before": {
+        "plugins": {
+          "a@m": {
+            "path": "$ROOT/.codex/plugin",
+            "versao": "1",
+            "origem": "m",
+            "id_codex": "a@m"
+          }
+        },
+        "marketplaces_em": 99999.0,
+        "marketplaces_tentativa_em": 99999.0,
+        "marketplaces_pendentes": [
+          "m"
+        ]
+      },
+      "result": {
+        "ok": true
+      },
+      "registry": {
+        "plugins": {
+          "a@m": {
+            "path": "$ROOT/.codex/plugin",
+            "versao": "1",
+            "origem": "m",
+            "id_codex": "a@m"
+          }
+        },
+        "marketplaces_em": 99999.0,
+        "marketplaces_tentativa_em": 99999.0,
+        "marketplaces_pendentes": [
+          "m"
+        ],
+        "status": {
+          "erros": [
+            {
+              "codigo": "erro_marketplace_pendente",
+              "params": {
+                "marketplace": "m"
+              },
+              "texto": "Atualiza\u00e7\u00e3o do marketplace m permanece pendente; nova tentativa agendada"
+            }
+          ],
+          "avisos": [],
+          "progresso": {
+            "passo": 3,
+            "total": 9,
+            "sub": {
+              "atual": 1,
+              "total": 1
+            }
+          },
+          "etapa": {
+            "codigo": "etapa_lendo_plugins",
+            "params": {},
+            "texto": "Lendo os plugins j\u00e1 instalados no Codex"
+          },
+          "etapa_desde": 100000.0
+        },
+        "plugins_pendentes": []
+      },
+      "state": {
+        "erros": [
+          {
+            "codigo": "erro_marketplace_pendente",
+            "params": {
+              "marketplace": "m"
+            },
+            "texto": "Atualiza\u00e7\u00e3o do marketplace m permanece pendente; nova tentativa agendada"
+          }
+        ],
+        "avisos": [],
+        "progresso": {
+          "passo": 3,
+          "total": 9,
+          "sub": {
+            "atual": 1,
+            "total": 1
+          }
+        },
+        "etapa": {
+          "codigo": "etapa_lendo_plugins",
+          "params": {},
+          "texto": "Lendo os plugins j\u00e1 instalados no Codex"
+        },
+        "etapa_desde": 100000.0,
+        "plugins": [
+          {
+            "id": "a@m",
+            "versao": "1",
+            "origem": "m"
+          }
+        ],
+        "proxima_atualizacao": "1970-01-02T03:51:39+00:00"
+      },
+      "confirmed": [
+        "a@m"
+      ],
+      "calls": [
+        [
+          "list"
+        ],
+        [
+          "hooks",
+          "$ROOT/.codex/plugin"
+        ]
+      ],
+      "checkpoints": [
+        {
+          "plugins": {
+            "a@m": {
+              "path": "$ROOT/.codex/plugin",
+              "versao": "1",
+              "origem": "m",
+              "id_codex": "a@m"
+            }
+          },
+          "marketplaces_em": 99999.0,
+          "marketplaces_tentativa_em": 99999.0,
+          "marketplaces_pendentes": [
+            "m"
+          ],
+          "status": {
+            "erros": [
+              {
+                "codigo": "erro_marketplace_pendente",
+                "params": {
+                  "marketplace": "m"
+                },
+                "texto": "Atualiza\u00e7\u00e3o do marketplace m permanece pendente; nova tentativa agendada"
+              }
+            ],
+            "avisos": [],
+            "progresso": {
+              "passo": 3,
+              "total": 9,
+              "sub": {
+                "atual": 1,
+                "total": 1
+              }
+            },
+            "etapa": {
+              "codigo": "etapa_lendo_plugins",
+              "params": {},
+              "texto": "Lendo os plugins j\u00e1 instalados no Codex"
+            },
+            "etapa_desde": 100000.0
+          }
+        }
+      ],
+      "config_edits": [
+        []
+      ],
+      "after": {
+        ".claude/plugins/known_marketplaces.json": "7b226d223a207b22736f75726365223a207b22736f75726365223a2022676974687562222c20227265706f223a20224f72672f5265706f227d7d7d",
+        ".claude/settings.json": "7b22656e61626c6564506c7567696e73223a207b2261406d223a20747275657d7d",
+        ".codex/.hangar-integracao/estado.json": "7b0a202022706c7567696e73223a207b0a202020202261406d223a207b0a2020202020202270617468223a202224524f4f542f2e636f6465782f706c7567696e222c0a2020202020202276657273616f223a202231222c0a202020202020226f726967656d223a20226d222c0a2020202020202269645f636f646578223a202261406d220a202020207d0a20207d2c0a2020226d61726b6574706c616365735f656d223a2039393939392e302c0a2020226d61726b6574706c616365735f74656e7461746976615f656d223a2039393939392e302c0a2020226d61726b6574706c616365735f70656e64656e746573223a205b0a20202020226d220a20205d2c0a202022737461747573223a207b0a20202020226572726f73223a205b0a2020202020207b0a202020202020202022636f6469676f223a20226572726f5f6d61726b6574706c6163655f70656e64656e7465222c0a202020202020202022706172616d73223a207b0a20202020202020202020226d61726b6574706c616365223a20226d220a20202020202020207d2c0a202020202020202022746578746f223a2022417475616c697a61c3a7c3a36f20646f206d61726b6574706c616365206d207065726d616e6563652070656e64656e74653b206e6f76612074656e746174697661206167656e64616461220a2020202020207d0a202020205d2c0a2020202022617669736f73223a205b5d2c0a202020202270726f67726573736f223a207b0a20202020202022706173736f223a20332c0a20202020202022746f74616c223a20392c0a20202020202022737562223a207b0a202020202020202022617475616c223a20312c0a202020202020202022746f74616c223a20310a2020202020207d0a202020207d2c0a20202020226574617061223a207b0a20202020202022636f6469676f223a202265746170615f6c656e646f5f706c7567696e73222c0a20202020202022706172616d73223a207b7d2c0a20202020202022746578746f223a20224c656e646f206f7320706c7567696e73206ac3a120696e7374616c61646f73206e6f20436f646578220a202020207d2c0a202020202265746170615f6465736465223a203130303030302e300a20207d0a7d0a",
+        ".codex/backups/$HASH/.codex/config.toml": "7b0a20202270617468223a202224524f4f542f2e636f6465782f636f6e6669672e746f6d6c222c0a202022636f6e746575646f5f686578223a202235623664363137323662363537343730366336313633363537333265366435643061373336663735373236333635356637343739373036353230336432303232363736393734323230613733366637353732363336353230336432303232363837343734373037333361326632663637363937343638373536323265363336663664326634663732363732663532363537303666323230613562373036633735363736393665373332653232363134303664323235643061363536653631363236633635363432303364323037343732373536353061222c0a20202273796d6c696e6b223a206e756c6c0a7d0a",
+        ".codex/config.toml": "5b6d61726b6574706c616365732e6d5d0a736f757263655f74797065203d2022676974220a736f75726365203d202268747470733a2f2f6769746875622e636f6d2f4f72672f5265706f220a5b706c7567696e732e2261406d225d0a656e61626c6564203d20747275650a",
+        ".codex/plugin/personal.txt": "506573736f616c0a"
+      }
+    },
+    {
+      "name": "pending_plugin",
+      "forced": false,
+      "before": {
+        ".claude/plugins/known_marketplaces.json": "7b226d223a207b22736f75726365223a207b22736f75726365223a2022676974687562222c20227265706f223a20224f72672f5265706f227d7d7d",
+        ".claude/settings.json": "7b22656e61626c6564506c7567696e73223a207b2261406d223a20747275657d7d",
+        ".codex/config.toml": "5b6d61726b6574706c616365732e6d5d0a736f757263655f74797065203d2022676974220a736f75726365203d202268747470733a2f2f6769746875622e636f6d2f4f72672f5265706f220a5b706c7567696e732e2261406d225d0a656e61626c6564203d20747275650a",
+        ".codex/plugin/personal.txt": "506573736f616c0a"
+      },
+      "registry_before": {
+        "plugins": {
+          "a@m": {
+            "path": "$ROOT/.codex/plugin",
+            "versao": "1",
+            "origem": "m",
+            "id_codex": "a@m"
+          }
+        },
+        "marketplaces_em": 100000.0,
+        "marketplaces_tentativa_em": 100000.0,
+        "plugins_pendentes": [
+          "a@m",
+          "removed@m"
+        ]
+      },
+      "result": {
+        "ok": true
+      },
+      "registry": {
+        "plugins": {
+          "a@m": {
+            "path": "$ROOT/.codex/plugin",
+            "versao": "1",
+            "origem": "m",
+            "id_codex": "a@m"
+          }
+        },
+        "marketplaces_em": 100000.0,
+        "marketplaces_tentativa_em": 100000.0,
+        "plugins_pendentes": [],
+        "status": {
+          "erros": [],
+          "avisos": [],
+          "progresso": {
+            "passo": 3,
+            "total": 9,
+            "sub": {
+              "atual": 1,
+              "total": 1
+            }
+          },
+          "etapa": {
+            "codigo": "etapa_plugin",
+            "params": {
+              "id": "a@m"
+            },
+            "texto": "Instalando ou atualizando a@m"
+          },
+          "etapa_desde": 100000.0
+        }
+      },
+      "state": {
+        "erros": [],
+        "avisos": [],
+        "progresso": {
+          "passo": 3,
+          "total": 9,
+          "sub": {
+            "atual": 1,
+            "total": 1
+          }
+        },
+        "etapa": {
+          "codigo": "etapa_plugin",
+          "params": {
+            "id": "a@m"
+          },
+          "texto": "Instalando ou atualizando a@m"
+        },
+        "etapa_desde": 100000.0,
+        "plugins": [
+          {
+            "id": "a@m",
+            "versao": "1",
+            "origem": "m"
+          }
+        ],
+        "proxima_atualizacao": "1970-01-02T09:46:40+00:00"
+      },
+      "confirmed": [
+        "a@m"
+      ],
+      "calls": [
+        [
+          "list"
+        ],
+        [
+          "add",
+          "a@m"
+        ],
+        [
+          "hooks",
+          "$ROOT/.codex/plugin"
+        ]
+      ],
+      "checkpoints": [
+        {
+          "plugins": {
+            "a@m": {
+              "path": "$ROOT/.codex/plugin",
+              "versao": "1",
+              "origem": "m",
+              "id_codex": "a@m"
+            }
+          },
+          "marketplaces_em": 100000.0,
+          "marketplaces_tentativa_em": 100000.0,
+          "plugins_pendentes": [
+            "a@m",
+            "removed@m"
+          ],
+          "status": {
+            "erros": [],
+            "avisos": [],
+            "progresso": {
+              "passo": 3,
+              "total": 9,
+              "sub": {
+                "atual": 1,
+                "total": 1
+              }
+            },
+            "etapa": {
+              "codigo": "etapa_plugin",
+              "params": {
+                "id": "a@m"
+              },
+              "texto": "Instalando ou atualizando a@m"
+            },
+            "etapa_desde": 100000.0
+          }
+        }
+      ],
+      "config_edits": [
+        []
+      ],
+      "after": {
+        ".claude/plugins/known_marketplaces.json": "7b226d223a207b22736f75726365223a207b22736f75726365223a2022676974687562222c20227265706f223a20224f72672f5265706f227d7d7d",
+        ".claude/settings.json": "7b22656e61626c6564506c7567696e73223a207b2261406d223a20747275657d7d",
+        ".codex/.hangar-integracao/estado.json": "7b0a202022706c7567696e73223a207b0a202020202261406d223a207b0a2020202020202270617468223a202224524f4f542f2e636f6465782f706c7567696e222c0a2020202020202276657273616f223a202231222c0a202020202020226f726967656d223a20226d222c0a2020202020202269645f636f646578223a202261406d220a202020207d0a20207d2c0a2020226d61726b6574706c616365735f656d223a203130303030302e302c0a2020226d61726b6574706c616365735f74656e7461746976615f656d223a203130303030302e302c0a202022706c7567696e735f70656e64656e746573223a205b0a202020202261406d222c0a202020202272656d6f766564406d220a20205d2c0a202022737461747573223a207b0a20202020226572726f73223a205b5d2c0a2020202022617669736f73223a205b5d2c0a202020202270726f67726573736f223a207b0a20202020202022706173736f223a20332c0a20202020202022746f74616c223a20392c0a20202020202022737562223a207b0a202020202020202022617475616c223a20312c0a202020202020202022746f74616c223a20310a2020202020207d0a202020207d2c0a20202020226574617061223a207b0a20202020202022636f6469676f223a202265746170615f706c7567696e222c0a20202020202022706172616d73223a207b0a2020202020202020226964223a202261406d220a2020202020207d2c0a20202020202022746578746f223a2022496e7374616c616e646f206f7520617475616c697a616e646f2061406d220a202020207d2c0a202020202265746170615f6465736465223a203130303030302e300a20207d0a7d0a",
+        ".codex/backups/$HASH/.codex/config.toml": "7b0a20202270617468223a202224524f4f542f2e636f6465782f636f6e6669672e746f6d6c222c0a202022636f6e746575646f5f686578223a202235623664363137323662363537343730366336313633363537333265366435643061373336663735373236333635356637343739373036353230336432303232363736393734323230613733366637353732363336353230336432303232363837343734373037333361326632663637363937343638373536323265363336663664326634663732363732663532363537303666323230613562373036633735363736393665373332653232363134303664323235643061363536653631363236633635363432303364323037343732373536353061222c0a20202273796d6c696e6b223a206e756c6c0a7d0a",
+        ".codex/config.toml": "5b6d61726b6574706c616365732e6d5d0a736f757263655f74797065203d2022676974220a736f75726365203d202268747470733a2f2f6769746875622e636f6d2f4f72672f5265706f220a5b706c7567696e732e2261406d225d0a656e61626c6564203d20747275650a",
+        ".codex/plugin/personal.txt": "506573736f616c0a"
+      }
+    },
+    {
+      "name": "removed",
+      "forced": false,
+      "before": {
+        ".claude/plugins/known_marketplaces.json": "7b226d223a207b22736f75726365223a207b22736f75726365223a2022676974687562222c20227265706f223a20224f72672f5265706f227d7d7d",
+        ".claude/settings.json": "7b22656e61626c6564506c7567696e73223a207b7d7d",
+        ".codex/config.toml": "5b6d61726b6574706c616365732e6d5d0a736f757263655f74797065203d2022676974220a736f75726365203d202268747470733a2f2f6769746875622e636f6d2f4f72672f5265706f220a5b706c7567696e732e2261406d225d0a656e61626c6564203d20747275650a",
+        ".codex/plugin/personal.txt": "506573736f616c0a"
+      },
+      "registry_before": {
+        "plugins": {
+          "a@m": {
+            "path": "$ROOT/.codex/plugin",
+            "versao": "1",
+            "origem": "m",
+            "id_codex": "a@m"
+          }
+        },
+        "marketplaces_em": 100000.0,
+        "marketplaces_tentativa_em": 100000.0
+      },
+      "result": {
+        "ok": true
+      },
+      "registry": {
+        "plugins": {},
+        "marketplaces_em": 100000.0,
+        "marketplaces_tentativa_em": 100000.0,
+        "plugins_pendentes": []
+      },
+      "state": {
+        "erros": [],
+        "avisos": [],
+        "progresso": {
+          "passo": 3,
+          "total": 9,
+          "sub": null
+        },
+        "etapa": {
+          "codigo": "etapa_lendo_plugins",
+          "params": {},
+          "texto": "Lendo os plugins j\u00e1 instalados no Codex"
+        },
+        "etapa_desde": 100000.0,
+        "plugins": [],
+        "proxima_atualizacao": "1970-01-02T09:46:40+00:00"
+      },
+      "confirmed": [],
+      "calls": [
+        [
+          "list"
+        ]
+      ],
+      "checkpoints": [],
+      "config_edits": [
+        [
+          {
+            "keyPath": "\"plugins\".\"a@m\".\"enabled\"",
+            "value": false,
+            "mergeStrategy": "replace"
+          }
+        ],
+        []
+      ],
+      "after": {
+        ".claude/plugins/known_marketplaces.json": "7b226d223a207b22736f75726365223a207b22736f75726365223a2022676974687562222c20227265706f223a20224f72672f5265706f227d7d7d",
+        ".claude/settings.json": "7b22656e61626c6564506c7567696e73223a207b7d7d",
+        ".codex/backups/$HASH/.codex/config.toml": "7b0a20202270617468223a202224524f4f542f2e636f6465782f636f6e6669672e746f6d6c222c0a202022636f6e746575646f5f686578223a202235623664363137323662363537343730366336313633363537333265366435643061373336663735373236333635356637343739373036353230336432303232363736393734323230613733366637353732363336353230336432303232363837343734373037333361326632663637363937343638373536323265363336663664326634663732363732663532363537303666323230613562373036633735363736393665373332653232363134303664323235643061363536653631363236633635363432303364323037343732373536353061222c0a20202273796d6c696e6b223a206e756c6c0a7d0a",
+        ".codex/config.toml": "5b6d61726b6574706c616365732e6d5d0a736f757263655f74797065203d2022676974220a736f75726365203d202268747470733a2f2f6769746875622e636f6d2f4f72672f5265706f220a5b706c7567696e732e2261406d225d0a656e61626c6564203d20747275650a",
+        ".codex/plugin/personal.txt": "506573736f616c0a"
+      }
+    },
+    {
+      "name": "source_changed",
+      "forced": false,
+      "before": {
+        ".claude/plugins/known_marketplaces.json": "7b226d223a207b22736f75726365223a207b22736f75726365223a2022676974687562222c20227265706f223a20224f72672f5265706f227d7d7d",
+        ".claude/settings.json": "7b22656e61626c6564506c7567696e73223a207b2261406d223a20747275657d7d",
+        ".codex/config.toml": "5b6d61726b6574706c616365732e6d5d0a736f757263655f74797065203d2022676974220a736f75726365203d202268747470733a2f2f6769746875622e636f6d2f4f72672f5265706f220a5b706c7567696e732e2261406d225d0a656e61626c6564203d20747275650a",
+        ".codex/plugin/personal.txt": "506573736f616c0a"
+      },
+      "registry_before": {
+        "plugins": {
+          "a@m": {
+            "path": "$ROOT/.codex/plugin",
+            "versao": "1",
+            "origem": "m",
+            "id_codex": "a@m"
+          }
+        },
+        "marketplaces_em": 100000.0,
+        "marketplaces_tentativa_em": 100000.0
+      },
+      "result": {
+        "ok": true
+      },
+      "registry": {
+        "plugins": {
+          "a@m": {
+            "path": "$ROOT/.codex/plugin",
+            "versao": "1",
+            "origem": "m",
+            "id_codex": "a@m"
+          }
+        },
+        "marketplaces_em": 100000.0,
+        "marketplaces_tentativa_em": 100000.0,
+        "status": {
+          "erros": [],
+          "avisos": [],
+          "progresso": {
+            "passo": 3,
+            "total": 9,
+            "sub": {
+              "atual": 1,
+              "total": 1
+            }
+          },
+          "etapa": {
+            "codigo": "etapa_lendo_plugins",
+            "params": {},
+            "texto": "Lendo os plugins j\u00e1 instalados no Codex"
+          },
+          "etapa_desde": 100000.0
+        },
+        "plugins_pendentes": []
+      },
+      "state": {
+        "erros": [],
+        "avisos": [],
+        "progresso": {
+          "passo": 3,
+          "total": 9,
+          "sub": {
+            "atual": 1,
+            "total": 1
+          }
+        },
+        "etapa": {
+          "codigo": "etapa_lendo_plugins",
+          "params": {},
+          "texto": "Lendo os plugins j\u00e1 instalados no Codex"
+        },
+        "etapa_desde": 100000.0,
+        "plugins": [
+          {
+            "id": "a@m",
+            "versao": "1",
+            "origem": "m"
+          }
+        ],
+        "proxima_atualizacao": "1970-01-02T09:46:40+00:00"
+      },
+      "confirmed": [
+        "a@m"
+      ],
+      "calls": [
+        [
+          "list"
+        ],
+        [
+          "hooks",
+          "$ROOT/.codex/plugin"
+        ],
+        [
+          "list"
+        ],
+        [
+          "hooks",
+          "$ROOT/.codex/plugin"
+        ]
+      ],
+      "checkpoints": [
+        {
+          "plugins": {
+            "a@m": {
+              "path": "$ROOT/.codex/plugin",
+              "versao": "1",
+              "origem": "m",
+              "id_codex": "a@m"
+            }
+          },
+          "marketplaces_em": 100000.0,
+          "marketplaces_tentativa_em": 100000.0,
+          "status": {
+            "erros": [],
+            "avisos": [],
+            "progresso": {
+              "passo": 3,
+              "total": 9,
+              "sub": {
+                "atual": 1,
+                "total": 1
+              }
+            },
+            "etapa": {
+              "codigo": "etapa_lendo_plugins",
+              "params": {},
+              "texto": "Lendo os plugins j\u00e1 instalados no Codex"
+            },
+            "etapa_desde": 100000.0
+          }
+        },
+        {
+          "plugins": {
+            "a@m": {
+              "path": "$ROOT/.codex/plugin",
+              "versao": "1",
+              "origem": "m",
+              "id_codex": "a@m"
+            }
+          },
+          "marketplaces_em": 100000.0,
+          "marketplaces_tentativa_em": 100000.0,
+          "status": {
+            "erros": [],
+            "avisos": [],
+            "progresso": {
+              "passo": 3,
+              "total": 9,
+              "sub": {
+                "atual": 1,
+                "total": 1
+              }
+            },
+            "etapa": {
+              "codigo": "etapa_lendo_plugins",
+              "params": {},
+              "texto": "Lendo os plugins j\u00e1 instalados no Codex"
+            },
+            "etapa_desde": 100000.0
+          }
+        }
+      ],
+      "config_edits": [
+        []
+      ],
+      "after": {
+        ".claude/plugins/known_marketplaces.json": "7b226d223a207b22736f75726365223a207b22736f75726365223a2022676974687562222c20227265706f223a20224f72672f5265706f227d7d7d",
+        ".claude/settings.json": "7b22656e61626c6564506c7567696e73223a207b2261406d223a20747275657d7d20",
+        ".codex/.hangar-integracao/estado.json": "7b0a202022706c7567696e73223a207b0a202020202261406d223a207b0a2020202020202270617468223a202224524f4f542f2e636f6465782f706c7567696e222c0a2020202020202276657273616f223a202231222c0a202020202020226f726967656d223a20226d222c0a2020202020202269645f636f646578223a202261406d220a202020207d0a20207d2c0a2020226d61726b6574706c616365735f656d223a203130303030302e302c0a2020226d61726b6574706c616365735f74656e7461746976615f656d223a203130303030302e302c0a202022737461747573223a207b0a20202020226572726f73223a205b5d2c0a2020202022617669736f73223a205b5d2c0a202020202270726f67726573736f223a207b0a20202020202022706173736f223a20332c0a20202020202022746f74616c223a20392c0a20202020202022737562223a207b0a202020202020202022617475616c223a20312c0a202020202020202022746f74616c223a20310a2020202020207d0a202020207d2c0a20202020226574617061223a207b0a20202020202022636f6469676f223a202265746170615f6c656e646f5f706c7567696e73222c0a20202020202022706172616d73223a207b7d2c0a20202020202022746578746f223a20224c656e646f206f7320706c7567696e73206ac3a120696e7374616c61646f73206e6f20436f646578220a202020207d2c0a202020202265746170615f6465736465223a203130303030302e300a20207d0a7d0a",
+        ".codex/backups/$HASH/.codex/config.toml": "7b0a20202270617468223a202224524f4f542f2e636f6465782f636f6e6669672e746f6d6c222c0a202022636f6e746575646f5f686578223a202235623664363137323662363537343730366336313633363537333265366435643061373336663735373236333635356637343739373036353230336432303232363736393734323230613733366637353732363336353230336432303232363837343734373037333361326632663637363937343638373536323265363336663664326634663732363732663532363537303666323230613562373036633735363736393665373332653232363134303664323235643061363536653631363236633635363432303364323037343732373536353061222c0a20202273796d6c696e6b223a206e756c6c0a7d0a",
+        ".codex/config.toml": "5b6d61726b6574706c616365732e6d5d0a736f757263655f74797065203d2022676974220a736f75726365203d202268747470733a2f2f6769746875622e636f6d2f4f72672f5265706f220a5b706c7567696e732e2261406d225d0a656e61626c6564203d20747275650a",
+        ".codex/plugin/personal.txt": "506573736f616c0a"
+      }
+    },
+    {
+      "name": "source_changes_forever",
+      "forced": false,
+      "before": {
+        ".claude/plugins/known_marketplaces.json": "7b226d223a207b22736f75726365223a207b22736f75726365223a2022676974687562222c20227265706f223a20224f72672f5265706f227d7d7d",
+        ".claude/settings.json": "7b22656e61626c6564506c7567696e73223a207b2261406d223a20747275657d7d",
+        ".codex/config.toml": "5b6d61726b6574706c616365732e6d5d0a736f757263655f74797065203d2022676974220a736f75726365203d202268747470733a2f2f6769746875622e636f6d2f4f72672f5265706f220a5b706c7567696e732e2261406d225d0a656e61626c6564203d20747275650a",
+        ".codex/plugin/personal.txt": "506573736f616c0a"
+      },
+      "registry_before": {
+        "plugins": {
+          "a@m": {
+            "path": "$ROOT/.codex/plugin",
+            "versao": "1",
+            "origem": "m",
+            "id_codex": "a@m"
+          }
+        },
+        "marketplaces_em": 100000.0,
+        "marketplaces_tentativa_em": 100000.0
+      },
+      "result": {
+        "error": "Plugins do Claude mudaram durante a integra\u00e7\u00e3o",
+        "class": "AlteradoExternamente"
+      },
+      "registry": {
+        "plugins": {
+          "a@m": {
+            "path": "$ROOT/.codex/plugin",
+            "versao": "1",
+            "origem": "m",
+            "id_codex": "a@m"
+          }
+        },
+        "marketplaces_em": 100000.0,
+        "marketplaces_tentativa_em": 100000.0,
+        "status": {
+          "erros": [],
+          "avisos": [],
+          "progresso": {
+            "passo": 3,
+            "total": 9,
+            "sub": {
+              "atual": 1,
+              "total": 1
+            }
+          },
+          "etapa": {
+            "codigo": "etapa_lendo_plugins",
+            "params": {},
+            "texto": "Lendo os plugins j\u00e1 instalados no Codex"
+          },
+          "etapa_desde": 100000.0
+        }
+      },
+      "state": {
+        "erros": [],
+        "avisos": [],
+        "progresso": {
+          "passo": 3,
+          "total": 9,
+          "sub": {
+            "atual": 1,
+            "total": 1
+          }
+        },
+        "etapa": {
+          "codigo": "etapa_lendo_plugins",
+          "params": {},
+          "texto": "Lendo os plugins j\u00e1 instalados no Codex"
+        },
+        "etapa_desde": 100000.0
+      },
+      "confirmed": [],
+      "calls": [
+        [
+          "list"
+        ],
+        [
+          "hooks",
+          "$ROOT/.codex/plugin"
+        ],
+        [
+          "list"
+        ],
+        [
+          "hooks",
+          "$ROOT/.codex/plugin"
+        ],
+        [
+          "list"
+        ],
+        [
+          "hooks",
+          "$ROOT/.codex/plugin"
+        ]
+      ],
+      "checkpoints": [
+        {
+          "plugins": {
+            "a@m": {
+              "path": "$ROOT/.codex/plugin",
+              "versao": "1",
+              "origem": "m",
+              "id_codex": "a@m"
+            }
+          },
+          "marketplaces_em": 100000.0,
+          "marketplaces_tentativa_em": 100000.0,
+          "status": {
+            "erros": [],
+            "avisos": [],
+            "progresso": {
+              "passo": 3,
+              "total": 9,
+              "sub": {
+                "atual": 1,
+                "total": 1
+              }
+            },
+            "etapa": {
+              "codigo": "etapa_lendo_plugins",
+              "params": {},
+              "texto": "Lendo os plugins j\u00e1 instalados no Codex"
+            },
+            "etapa_desde": 100000.0
+          }
+        },
+        {
+          "plugins": {
+            "a@m": {
+              "path": "$ROOT/.codex/plugin",
+              "versao": "1",
+              "origem": "m",
+              "id_codex": "a@m"
+            }
+          },
+          "marketplaces_em": 100000.0,
+          "marketplaces_tentativa_em": 100000.0,
+          "status": {
+            "erros": [],
+            "avisos": [],
+            "progresso": {
+              "passo": 3,
+              "total": 9,
+              "sub": {
+                "atual": 1,
+                "total": 1
+              }
+            },
+            "etapa": {
+              "codigo": "etapa_lendo_plugins",
+              "params": {},
+              "texto": "Lendo os plugins j\u00e1 instalados no Codex"
+            },
+            "etapa_desde": 100000.0
+          }
+        },
+        {
+          "plugins": {
+            "a@m": {
+              "path": "$ROOT/.codex/plugin",
+              "versao": "1",
+              "origem": "m",
+              "id_codex": "a@m"
+            }
+          },
+          "marketplaces_em": 100000.0,
+          "marketplaces_tentativa_em": 100000.0,
+          "status": {
+            "erros": [],
+            "avisos": [],
+            "progresso": {
+              "passo": 3,
+              "total": 9,
+              "sub": {
+                "atual": 1,
+                "total": 1
+              }
+            },
+            "etapa": {
+              "codigo": "etapa_lendo_plugins",
+              "params": {},
+              "texto": "Lendo os plugins j\u00e1 instalados no Codex"
+            },
+            "etapa_desde": 100000.0
+          }
+        }
+      ],
+      "config_edits": [],
+      "after": {
+        ".claude/plugins/known_marketplaces.json": "7b226d223a207b22736f75726365223a207b22736f75726365223a2022676974687562222c20227265706f223a20224f72672f5265706f227d7d7d",
+        ".claude/settings.json": "7b22656e61626c6564506c7567696e73223a207b2261406d223a20747275657d7d202020",
+        ".codex/.hangar-integracao/estado.json": "7b0a202022706c7567696e73223a207b0a202020202261406d223a207b0a2020202020202270617468223a202224524f4f542f2e636f6465782f706c7567696e222c0a2020202020202276657273616f223a202231222c0a202020202020226f726967656d223a20226d222c0a2020202020202269645f636f646578223a202261406d220a202020207d0a20207d2c0a2020226d61726b6574706c616365735f656d223a203130303030302e302c0a2020226d61726b6574706c616365735f74656e7461746976615f656d223a203130303030302e302c0a202022737461747573223a207b0a20202020226572726f73223a205b5d2c0a2020202022617669736f73223a205b5d2c0a202020202270726f67726573736f223a207b0a20202020202022706173736f223a20332c0a20202020202022746f74616c223a20392c0a20202020202022737562223a207b0a202020202020202022617475616c223a20312c0a202020202020202022746f74616c223a20310a2020202020207d0a202020207d2c0a20202020226574617061223a207b0a20202020202022636f6469676f223a202265746170615f6c656e646f5f706c7567696e73222c0a20202020202022706172616d73223a207b7d2c0a20202020202022746578746f223a20224c656e646f206f7320706c7567696e73206ac3a120696e7374616c61646f73206e6f20436f646578220a202020207d2c0a202020202265746170615f6465736465223a203130303030302e300a20207d0a7d0a",
+        ".codex/backups/$HASH/.codex/config.toml": "7b0a20202270617468223a202224524f4f542f2e636f6465782f636f6e6669672e746f6d6c222c0a202022636f6e746575646f5f686578223a202235623664363137323662363537343730366336313633363537333265366435643061373336663735373236333635356637343739373036353230336432303232363736393734323230613733366637353732363336353230336432303232363837343734373037333361326632663637363937343638373536323265363336663664326634663732363732663532363537303666323230613562373036633735363736393665373332653232363134303664323235643061363536653631363236633635363432303364323037343732373536353061222c0a20202273796d6c696e6b223a206e756c6c0a7d0a",
+        ".codex/config.toml": "5b6d61726b6574706c616365732e6d5d0a736f757263655f74797065203d2022676974220a736f75726365203d202268747470733a2f2f6769746875622e636f6d2f4f72672f5265706f220a5b706c7567696e732e2261406d225d0a656e61626c6564203d20747275650a",
+        ".codex/plugin/personal.txt": "506573736f616c0a"
+      }
+    },
+    {
+      "name": "source_missing",
+      "forced": false,
+      "before": {
+        ".claude/plugins/known_marketplaces.json": "7b226d223a207b22736f75726365223a207b22736f75726365223a2022676974687562222c20227265706f223a20224f72672f5265706f227d7d7d",
+        ".codex/config.toml": "5b6d61726b6574706c616365732e6d5d0a736f757263655f74797065203d2022676974220a736f75726365203d202268747470733a2f2f6769746875622e636f6d2f4f72672f5265706f220a5b706c7567696e732e2261406d225d0a656e61626c6564203d20747275650a",
+        ".codex/plugin/personal.txt": "506573736f616c0a"
+      },
+      "registry_before": {
+        "plugins": {
+          "a@m": {
+            "path": "$ROOT/.codex/plugin",
+            "versao": "1",
+            "origem": "m",
+            "id_codex": "a@m"
+          }
+        },
+        "marketplaces_em": 100000.0,
+        "marketplaces_tentativa_em": 100000.0
+      },
+      "result": {
+        "error": "Fonte do Claude desapareceu durante a integra\u00e7\u00e3o",
+        "class": "ValueError"
+      },
+      "registry": {
+        "plugins": {
+          "a@m": {
+            "path": "$ROOT/.codex/plugin",
+            "versao": "1",
+            "origem": "m",
+            "id_codex": "a@m"
+          }
+        },
+        "marketplaces_em": 100000.0,
+        "marketplaces_tentativa_em": 100000.0
+      },
+      "state": {
+        "erros": [],
+        "avisos": [],
+        "progresso": {
+          "passo": 3,
+          "total": 9,
+          "sub": null
+        }
+      },
+      "confirmed": [],
+      "calls": [],
+      "checkpoints": [],
+      "config_edits": [],
+      "after": {
+        ".claude/plugins/known_marketplaces.json": "7b226d223a207b22736f75726365223a207b22736f75726365223a2022676974687562222c20227265706f223a20224f72672f5265706f227d7d7d",
+        ".codex/config.toml": "5b6d61726b6574706c616365732e6d5d0a736f757263655f74797065203d2022676974220a736f75726365203d202268747470733a2f2f6769746875622e636f6d2f4f72672f5265706f220a5b706c7567696e732e2261406d225d0a656e61626c6564203d20747275650a",
+        ".codex/plugin/personal.txt": "506573736f616c0a"
+      }
+    },
+    {
+      "name": "invalid_enabled",
+      "forced": false,
+      "before": {
+        ".claude/plugins/known_marketplaces.json": "7b226d223a207b22736f75726365223a207b22736f75726365223a2022676974687562222c20227265706f223a20224f72672f5265706f227d7d7d",
+        ".claude/settings.json": "7b22656e61626c6564506c7567696e73223a206e756c6c7d",
+        ".codex/config.toml": "5b6d61726b6574706c616365732e6d5d0a736f757263655f74797065203d2022676974220a736f75726365203d202268747470733a2f2f6769746875622e636f6d2f4f72672f5265706f220a5b706c7567696e732e2261406d225d0a656e61626c6564203d20747275650a",
+        ".codex/plugin/personal.txt": "506573736f616c0a"
+      },
+      "registry_before": {
+        "plugins": {
+          "a@m": {
+            "path": "$ROOT/.codex/plugin",
+            "versao": "1",
+            "origem": "m",
+            "id_codex": "a@m"
+          }
+        },
+        "marketplaces_em": 100000.0,
+        "marketplaces_tentativa_em": 100000.0
+      },
+      "result": {
+        "error": "enabledPlugins inv\u00e1lido; instala\u00e7\u00f5es existentes preservadas",
+        "class": "ValueError"
+      },
+      "registry": {
+        "plugins": {
+          "a@m": {
+            "path": "$ROOT/.codex/plugin",
+            "versao": "1",
+            "origem": "m",
+            "id_codex": "a@m"
+          }
+        },
+        "marketplaces_em": 100000.0,
+        "marketplaces_tentativa_em": 100000.0
+      },
+      "state": {
+        "erros": [],
+        "avisos": [],
+        "progresso": {
+          "passo": 3,
+          "total": 9,
+          "sub": null
+        }
+      },
+      "confirmed": [],
+      "calls": [],
+      "checkpoints": [],
+      "config_edits": [],
+      "after": {
+        ".claude/plugins/known_marketplaces.json": "7b226d223a207b22736f75726365223a207b22736f75726365223a2022676974687562222c20227265706f223a20224f72672f5265706f227d7d7d",
+        ".claude/settings.json": "7b22656e61626c6564506c7567696e73223a206e756c6c7d",
+        ".codex/config.toml": "5b6d61726b6574706c616365732e6d5d0a736f757263655f74797065203d2022676974220a736f75726365203d202268747470733a2f2f6769746875622e636f6d2f4f72672f5265706f220a5b706c7567696e732e2261406d225d0a656e61626c6564203d20747275650a",
+        ".codex/plugin/personal.txt": "506573736f616c0a"
+      }
+    },
+    {
+      "name": "import_partial",
+      "forced": false,
+      "before": {
+        ".claude/plugins/known_marketplaces.json": "7b226d223a207b22736f75726365223a207b22736f75726365223a2022676974687562222c20227265706f223a20224f72672f5265706f227d7d7d",
+        ".claude/settings.json": "7b22656e61626c6564506c7567696e73223a207b2261406d223a20747275657d7d",
+        ".codex/config.toml": "5b6d61726b6574706c616365732e6d5d0a736f757263655f74797065203d2022676974220a736f75726365203d202268747470733a2f2f6769746875622e636f6d2f4f72672f5265706f220a5b706c7567696e732e2261406d225d0a656e61626c6564203d20747275650a",
+        ".codex/plugin/personal.txt": "506573736f616c0a"
+      },
+      "registry_before": {
+        "plugins": {},
+        "marketplaces_em": 100000.0,
+        "marketplaces_tentativa_em": 100000.0
+      },
+      "result": {
+        "ok": true
+      },
+      "registry": {
+        "plugins": {
+          "a@m": {
+            "path": "$ROOT/.codex/plugin",
+            "versao": "1",
+            "origem": "m",
+            "id_codex": "a@m"
+          }
+        },
+        "marketplaces_em": 100000.0,
+        "marketplaces_tentativa_em": 100000.0,
+        "status": {
+          "erros": [
+            {
+              "codigo": "erro_plugins_incompletos",
+              "params": {},
+              "texto": "Importa\u00e7\u00e3o nativa de plugins incompleta; confira os plugins pendentes"
+            }
+          ],
+          "avisos": [],
+          "progresso": {
+            "passo": 3,
+            "total": 9,
+            "sub": {
+              "atual": 1,
+              "total": 1
+            }
+          },
+          "etapa": {
+            "codigo": "etapa_plugin",
+            "params": {
+              "id": "a@m"
+            },
+            "texto": "Instalando ou atualizando a@m"
+          },
+          "etapa_desde": 100000.0
+        },
+        "plugins_pendentes": []
+      },
+      "state": {
+        "erros": [
+          {
+            "codigo": "erro_plugins_incompletos",
+            "params": {},
+            "texto": "Importa\u00e7\u00e3o nativa de plugins incompleta; confira os plugins pendentes"
+          }
+        ],
+        "avisos": [],
+        "progresso": {
+          "passo": 3,
+          "total": 9,
+          "sub": {
+            "atual": 1,
+            "total": 1
+          }
+        },
+        "etapa": {
+          "codigo": "etapa_plugin",
+          "params": {
+            "id": "a@m"
+          },
+          "texto": "Instalando ou atualizando a@m"
+        },
+        "etapa_desde": 100000.0,
+        "plugins": [
+          {
+            "id": "a@m",
+            "versao": "1",
+            "origem": "m"
+          }
+        ],
+        "proxima_atualizacao": "1970-01-02T09:46:40+00:00"
+      },
+      "confirmed": [
+        "a@m"
+      ],
+      "calls": [
+        [
+          "list"
+        ],
+        [
+          "detect"
+        ],
+        [
+          "import",
+          [
+            {
+              "itemType": "PLUGINS",
+              "description": "Plugins",
+              "details": {
+                "plugins": [
+                  {
+                    "marketplaceName": "m",
+                    "pluginNames": [
+                      "a"
+                    ],
+                    "extra": "preserved"
+                  }
+                ]
+              }
+            }
+          ]
+        ],
+        [
+          "list"
+        ],
+        [
+          "add",
+          "a@m"
+        ],
+        [
+          "hooks",
+          "$ROOT/.codex/plugin"
+        ]
+      ],
+      "checkpoints": [
+        {
+          "plugins": {
+            "a@m": {
+              "path": "$ROOT/.codex/plugin",
+              "versao": "1",
+              "origem": "m",
+              "id_codex": "a@m"
+            }
+          },
+          "marketplaces_em": 100000.0,
+          "marketplaces_tentativa_em": 100000.0,
+          "status": {
+            "erros": [
+              {
+                "codigo": "erro_plugins_incompletos",
+                "params": {},
+                "texto": "Importa\u00e7\u00e3o nativa de plugins incompleta; confira os plugins pendentes"
+              }
+            ],
+            "avisos": [],
+            "progresso": {
+              "passo": 3,
+              "total": 9,
+              "sub": {
+                "atual": 1,
+                "total": 1
+              }
+            },
+            "etapa": {
+              "codigo": "etapa_plugin",
+              "params": {
+                "id": "a@m"
+              },
+              "texto": "Instalando ou atualizando a@m"
+            },
+            "etapa_desde": 100000.0
+          }
+        }
+      ],
+      "config_edits": [
+        []
+      ],
+      "after": {
+        ".claude/plugins/known_marketplaces.json": "7b226d223a207b22736f75726365223a207b22736f75726365223a2022676974687562222c20227265706f223a20224f72672f5265706f227d7d7d",
+        ".claude/settings.json": "7b22656e61626c6564506c7567696e73223a207b2261406d223a20747275657d7d",
+        ".codex/.hangar-integracao/estado.json": "7b0a202022706c7567696e73223a207b0a202020202261406d223a207b0a2020202020202270617468223a202224524f4f542f2e636f6465782f706c7567696e222c0a2020202020202276657273616f223a202231222c0a202020202020226f726967656d223a20226d222c0a2020202020202269645f636f646578223a202261406d220a202020207d0a20207d2c0a2020226d61726b6574706c616365735f656d223a203130303030302e302c0a2020226d61726b6574706c616365735f74656e7461746976615f656d223a203130303030302e302c0a202022737461747573223a207b0a20202020226572726f73223a205b0a2020202020207b0a202020202020202022636f6469676f223a20226572726f5f706c7567696e735f696e636f6d706c65746f73222c0a202020202020202022706172616d73223a207b7d2c0a202020202020202022746578746f223a2022496d706f727461c3a7c3a36f206e617469766120646520706c7567696e7320696e636f6d706c6574613b20636f6e66697261206f7320706c7567696e732070656e64656e746573220a2020202020207d0a202020205d2c0a2020202022617669736f73223a205b5d2c0a202020202270726f67726573736f223a207b0a20202020202022706173736f223a20332c0a20202020202022746f74616c223a20392c0a20202020202022737562223a207b0a202020202020202022617475616c223a20312c0a202020202020202022746f74616c223a20310a2020202020207d0a202020207d2c0a20202020226574617061223a207b0a20202020202022636f6469676f223a202265746170615f706c7567696e222c0a20202020202022706172616d73223a207b0a2020202020202020226964223a202261406d220a2020202020207d2c0a20202020202022746578746f223a2022496e7374616c616e646f206f7520617475616c697a616e646f2061406d220a202020207d2c0a202020202265746170615f6465736465223a203130303030302e300a20207d0a7d0a",
+        ".codex/backups/$HASH/.codex/config.toml": "7b0a20202270617468223a202224524f4f542f2e636f6465782f636f6e6669672e746f6d6c222c0a202022636f6e746575646f5f686578223a202235623664363137323662363537343730366336313633363537333265366435643061373336663735373236333635356637343739373036353230336432303232363736393734323230613733366637353732363336353230336432303232363837343734373037333361326632663637363937343638373536323265363336663664326634663732363732663532363537303666323230613562373036633735363736393665373332653232363134303664323235643061363536653631363236633635363432303364323037343732373536353061222c0a20202273796d6c696e6b223a206e756c6c0a7d0a",
+        ".codex/config.toml": "5b6d61726b6574706c616365732e6d5d0a736f757263655f74797065203d2022676974220a736f75726365203d202268747470733a2f2f6769746875622e636f6d2f4f72672f5265706f220a5b706c7567696e732e2261406d225d0a656e61626c6564203d20747275650a",
+        ".codex/plugin/personal.txt": "506573736f616c0a"
+      }
+    }
+  ]
+}
