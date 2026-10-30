@@ -5,6 +5,7 @@ pub mod claude_config;
 pub mod credentials;
 pub mod claude_auth;
 pub mod claude_login;
+pub mod claude_window;
 pub mod codex_login;
 pub mod codex_device_login;
 pub mod environment;

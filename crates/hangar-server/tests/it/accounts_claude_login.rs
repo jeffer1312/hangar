@@ -1,4 +1,39 @@
+use futures_util::future::BoxFuture;
+use hangar_server::accounts::{AccountKey, claude_login::WindowClient, claude_window::WindowBackend};
 use hangar_server::{auth::TrustedHosts, config::Config, routes::AppState};
+use serde_json::{Value, json};
+use std::sync::Arc;
+
+/// Janela do processo de prova: a referência Python guarda as janelas falsas e a classificação do código.
+struct ContractWindows { client: reqwest::Client, url: String }
+impl WindowBackend for ContractWindows {
+    fn call<'a>(&'a self, key: &'a AccountKey, operation: &'a str, action: &'a str, code: Option<&'a str>)
+        -> BoxFuture<'a, Result<Value, &'static str>> {
+        Box::pin(async move {
+            let body = json!({"key": key, "operation": operation, "action": action, "code": code});
+            let response = self.client.post(&self.url).json(&body).send().await.map_err(|_| "contract_window_unreachable")?;
+            if !response.status().is_success() { return Err("contract_window_refused"); }
+            response.json().await.map_err(|_| "contract_window_unreadable")
+        })
+    }
+    fn sweep(&self) -> BoxFuture<'_, ()> { Box::pin(async {}) }
+}
+
+/// Janela falsa: registra a ação; `refuse_open` recusa a abertura.
+struct Recorder { actions: tokio::sync::mpsc::UnboundedSender<String>, refuse_open: Arc<std::sync::atomic::AtomicBool> }
+impl WindowBackend for Recorder {
+    fn call<'a>(&'a self, _: &'a AccountKey, _: &'a str, action: &'a str, _: Option<&'a str>) -> BoxFuture<'a, Result<Value, &'static str>> {
+        self.actions.send(action.to_owned()).unwrap();
+        let refused = action == "open" && self.refuse_open.load(std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async move { if refused { Err("window_test_refused") } else { Ok(json!({"ok":true,"url":null})) } })
+    }
+    fn sweep(&self) -> BoxFuture<'_, ()> { Box::pin(async {}) }
+}
+
+fn recorder(refuse_open: Arc<std::sync::atomic::AtomicBool>) -> (WindowClient, tokio::sync::mpsc::UnboundedReceiver<String>) {
+    let (actions, observed) = tokio::sync::mpsc::unbounded_channel();
+    (WindowClient::with(Arc::new(Recorder { actions, refuse_open })), observed)
+}
 
 #[test]
 fn claude_login_routes_are_owned() {
@@ -25,7 +60,7 @@ async fn http_probe_process() {
     };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let state = AppState::new(Config {
+    let mut state = AppState::new(Config {
         listen: addr,
         upstream: upstream.parse().unwrap(),
         internal_secret: "contract-internal".into(),
@@ -33,6 +68,10 @@ async fn http_probe_process() {
         log_path: None,
         trusted: TrustedHosts::parse("127.0.0.1"),
     });
+    state.accounts.claude_windows = WindowClient::with(Arc::new(ContractWindows {
+        client: reqwest::Client::builder().no_proxy().build().unwrap(),
+        url: format!("http://{upstream}/__contract__/window"),
+    }));
     println!("ACCOUNT_HTTP:{addr}");
     use std::io::Write;
     std::io::stdout().flush().unwrap();
@@ -43,12 +82,7 @@ async fn http_probe_process() {
 
 #[tokio::test]
 async fn open_attempt_keeps_its_window_and_guard_after_300_seconds() {
-    use axum::{Router, routing::post};
-    use hangar_server::accounts::{
-        AccountKey, AccountService, GuardMode, Provider, claude_login::WindowClient,
-        environment::AccountEnvironment,
-    };
-    use serde_json::{Value, json};
+    use hangar_server::accounts::{AccountService, GuardMode, Provider, environment::AccountEnvironment};
     let root = tempfile::tempdir().unwrap();
     let home = root.path().to_string_lossy().into_owned();
     let service = AccountService::new(AccountEnvironment::from_map(
@@ -58,25 +92,7 @@ async fn open_attempt_keeps_its_window_and_guard_after_300_seconds() {
         .create(Provider::Claude, "work", |_| Ok(()))
         .unwrap();
     let key = AccountKey::new(Provider::Claude, &account.home).unwrap();
-    let (actions, mut observed) = tokio::sync::mpsc::unbounded_channel();
-    let router = Router::new().route(
-        "/internal/accounts/claude-window",
-        post(move |body: axum::body::Bytes| {
-            let value: Value = serde_json::from_slice(&body).unwrap();
-            actions
-                .send(value["action"].as_str().unwrap().to_owned())
-                .unwrap();
-            async { json!({"ok":true,"url":null}).to_string() }
-        }),
-    );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let client = WindowClient::new(
-        listener.local_addr().unwrap(),
-        "synthetic".into(),
-        "test".into(),
-    )
-    .unwrap();
-    let server = tokio::spawn(async { axum::serve(listener, router).await.unwrap() });
+    let (client, mut observed) = recorder(Default::default());
     service
         .start_claude_login("work", client.clone())
         .await
@@ -124,7 +140,6 @@ async fn open_attempt_keeps_its_window_and_guard_after_300_seconds() {
     );
     service.cancel_claude("work", client).await.unwrap();
     assert_eq!(observed.recv().await.as_deref(), Some("close"));
-    server.abort();
 }
 
 #[tokio::test]
@@ -353,16 +368,8 @@ fn onboarding_waits_for_a_reader_without_delete_sharing() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn failed_window_creation_and_missing_cli_release_the_attempt_guard() {
-    use axum::{Router, http::StatusCode, routing::post};
-    use hangar_server::accounts::{
-        AccountKey, AccountService, GuardMode, Provider, claude_login::WindowClient,
-        environment::AccountEnvironment,
-    };
-    use serde_json::{Value, json};
-    use std::sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    };
+    use hangar_server::accounts::{AccountService, GuardMode, Provider, environment::AccountEnvironment};
+    use std::sync::atomic::{AtomicBool, Ordering};
     let root = tempfile::tempdir().unwrap();
     let home = root.path().to_string_lossy().into_owned();
     let service = AccountService::new(AccountEnvironment::from_map(
@@ -378,35 +385,7 @@ async fn failed_window_creation_and_missing_cli_release_the_attempt_guard() {
         .unwrap();
     let key = AccountKey::new(Provider::Claude, &account.home).unwrap();
     let failing = Arc::new(AtomicBool::new(true));
-    let fail_open = failing.clone();
-    let (actions, mut observed) = tokio::sync::mpsc::unbounded_channel();
-    let router = Router::new().route(
-        "/internal/accounts/claude-window",
-        post(move |body: axum::body::Bytes| {
-            let value: Value = serde_json::from_slice(&body).unwrap();
-            let action = value["action"].as_str().unwrap();
-            actions.send(action.to_owned()).unwrap();
-            let reject = action == "open" && fail_open.load(Ordering::SeqCst);
-            async move {
-                (
-                    if reject {
-                        StatusCode::CONFLICT
-                    } else {
-                        StatusCode::OK
-                    },
-                    json!({"ok": !reject}).to_string(),
-                )
-            }
-        }),
-    );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let client = WindowClient::new(
-        listener.local_addr().unwrap(),
-        "synthetic".into(),
-        "test".into(),
-    )
-    .unwrap();
-    let server = tokio::spawn(async { axum::serve(listener, router).await.unwrap() });
+    let (client, mut observed) = recorder(failing.clone());
     assert!(
         service
             .start_claude_login("work", client.clone())
@@ -449,5 +428,4 @@ async fn failed_window_creation_and_missing_cli_release_the_attempt_guard() {
         service.claude_step("work", client).await.unwrap()["etapa"],
         "idle"
     );
-    server.abort();
 }

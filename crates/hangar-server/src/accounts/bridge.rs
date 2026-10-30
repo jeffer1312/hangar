@@ -12,8 +12,6 @@ pub struct AccountsBridge {
 }
 
 impl AccountsBridge {
-    pub(super) fn upstream(&self) -> std::net::SocketAddr { self.upstream }
-    pub(super) fn secret(&self) -> &str { &self.secret }
     pub fn instance(&self) -> &str {
         &self.instance
     }

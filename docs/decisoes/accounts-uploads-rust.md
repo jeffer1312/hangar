@@ -54,8 +54,7 @@ responde 503 `accounts_need_rust_server`.
 
 Continua no Python, por ser o que o Rust consome ou o que ele não atende:
 
-- as rotas `/internal` de contas: janela escondida do login e da renovação
-  (`ClaudeWindows`, em `claude_window.py`), fatos de uso, preparo das contas Codex e
+- as rotas `/internal` de contas: fatos de uso, preparo das contas Codex e
   invalidação do catálogo de modelos do Codex;
 - os leitores de cota Codex que a transferência de conversa usa;
 - as escritas de credenciais: apelido, cookie do OpenCode, sincronização nos agentes e

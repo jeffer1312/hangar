@@ -674,7 +674,7 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
     e última resposta delas. A associação da credencial Pi/omp/Kimi à cota é do Rust.
   - Outras perguntas do Rust ao Python (`/internal/*`): `accounts/prepare` (só contas Codex; a
     reconciliação das contas Claude é do Rust, `accounts/claude_config.rs`),
-    `accounts/claude-window`, `accounts/codex-invalidate`, `workspace/context`,
+    `accounts/codex-invalidate`, `workspace/context`,
     `worktrees/context`,
     `transcription/config`, `costs/scopes`, `migration/status`, `diag` e `ping`.
   - Partes ainda no Python: transcript, estado e entrada geral de Pi, omp e Kimi; Arquivo;
