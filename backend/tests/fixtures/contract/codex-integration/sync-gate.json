@@ -1,0 +1,238 @@
+{
+  "source_commit": "8a3ce81c1",
+  "command": "cd backend && uv run python tests/fixtures/contract/codex-integration/generate_sync_gate.py",
+  "cases": [
+    {
+      "env": null,
+      "sync": true,
+      "automations": true,
+      "enabled": true,
+      "forced": true
+    },
+    {
+      "env": "0",
+      "sync": true,
+      "automations": true,
+      "enabled": false,
+      "forced": true
+    },
+    {
+      "env": "false",
+      "sync": true,
+      "automations": true,
+      "enabled": false,
+      "forced": true
+    },
+    {
+      "env": "False",
+      "sync": true,
+      "automations": true,
+      "enabled": false,
+      "forced": true
+    },
+    {
+      "env": "NO",
+      "sync": true,
+      "automations": true,
+      "enabled": false,
+      "forced": true
+    },
+    {
+      "env": "no",
+      "sync": true,
+      "automations": true,
+      "enabled": false,
+      "forced": true
+    },
+    {
+      "env": "off",
+      "sync": true,
+      "automations": true,
+      "enabled": true,
+      "forced": true
+    },
+    {
+      "env": "",
+      "sync": true,
+      "automations": true,
+      "enabled": true,
+      "forced": true
+    },
+    {
+      "env": " false ",
+      "sync": true,
+      "automations": true,
+      "enabled": true,
+      "forced": true
+    },
+    {
+      "env": "1",
+      "sync": true,
+      "automations": true,
+      "enabled": true,
+      "forced": true
+    },
+    {
+      "env": null,
+      "sync": true,
+      "automations": true,
+      "enabled": true,
+      "forced": true
+    },
+    {
+      "env": null,
+      "sync": false,
+      "automations": true,
+      "enabled": false,
+      "forced": true
+    },
+    {
+      "env": null,
+      "sync": null,
+      "automations": true,
+      "enabled": false,
+      "forced": true
+    },
+    {
+      "env": null,
+      "sync": 0,
+      "automations": true,
+      "enabled": false,
+      "forced": true
+    },
+    {
+      "env": null,
+      "sync": 1,
+      "automations": true,
+      "enabled": true,
+      "forced": true
+    },
+    {
+      "env": null,
+      "sync": "",
+      "automations": true,
+      "enabled": false,
+      "forced": true
+    },
+    {
+      "env": null,
+      "sync": "false",
+      "automations": true,
+      "enabled": true,
+      "forced": true
+    },
+    {
+      "env": null,
+      "sync": [],
+      "automations": true,
+      "enabled": false,
+      "forced": true
+    },
+    {
+      "env": null,
+      "sync": [
+        1
+      ],
+      "automations": true,
+      "enabled": true,
+      "forced": true
+    },
+    {
+      "env": null,
+      "sync": {},
+      "automations": true,
+      "enabled": false,
+      "forced": true
+    },
+    {
+      "env": null,
+      "sync": {
+        "x": 1
+      },
+      "automations": true,
+      "enabled": true,
+      "forced": true
+    },
+    {
+      "env": null,
+      "sync": true,
+      "automations": true,
+      "enabled": true,
+      "forced": true
+    },
+    {
+      "env": null,
+      "sync": true,
+      "automations": false,
+      "enabled": false,
+      "forced": true
+    },
+    {
+      "env": null,
+      "sync": true,
+      "automations": null,
+      "enabled": false,
+      "forced": true
+    },
+    {
+      "env": null,
+      "sync": true,
+      "automations": 0,
+      "enabled": false,
+      "forced": true
+    },
+    {
+      "env": null,
+      "sync": true,
+      "automations": 1,
+      "enabled": true,
+      "forced": true
+    },
+    {
+      "env": null,
+      "sync": true,
+      "automations": "",
+      "enabled": false,
+      "forced": true
+    },
+    {
+      "env": null,
+      "sync": true,
+      "automations": "false",
+      "enabled": true,
+      "forced": true
+    },
+    {
+      "env": null,
+      "sync": true,
+      "automations": [],
+      "enabled": false,
+      "forced": true
+    },
+    {
+      "env": null,
+      "sync": true,
+      "automations": [
+        1
+      ],
+      "enabled": true,
+      "forced": true
+    },
+    {
+      "env": null,
+      "sync": true,
+      "automations": {},
+      "enabled": false,
+      "forced": true
+    },
+    {
+      "env": null,
+      "sync": true,
+      "automations": {
+        "x": 1
+      },
+      "enabled": true,
+      "forced": true
+    }
+  ]
+}

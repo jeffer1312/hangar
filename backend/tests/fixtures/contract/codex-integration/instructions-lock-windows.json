@@ -1,0 +1,14 @@
+{
+  "source_commit": "8a3ce81c1",
+  "command": "python capture_instructions_lock.py --source original-codex-instrucoes.py",
+  "platform": "win32",
+  "python": "3.14.7",
+  "elapsed_seconds": 9.289220999984536,
+  "contender": {
+    "error": "OSError",
+    "errno": 36,
+    "winerror": null
+  },
+  "locked_bytes": "30",
+  "reacquired": true
+}
