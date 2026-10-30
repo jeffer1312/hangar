@@ -1,6 +1,5 @@
-//! `/api/atualizacao` no Rust: o dono na máquina migrada (pacote ou modo desenvolvedor) recebe a
-//! resposta do Rust, no formato que os clientes leem; máquina não migrada e quem não é dono seguem
-//! ao Python.
+//! `/api/atualizacao` no Rust: pacote, modo desenvolvedor e checkout têm resposta nativa;
+//! quem não é dono é recusado, sem encaminhamento ao Python.
 use hangar_server::{accounts::{AccountService, environment::AccountEnvironment}, auth::TrustedHosts, config::Config, routes::AppState};
 use serde_json::{Value, json};
 use std::path::Path;
@@ -10,6 +9,7 @@ struct Fixture {
     home: tempfile::TempDir,
     base: String,
     tasks: Vec<tokio::task::JoinHandle<()>>,
+    python_calls: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl Drop for Fixture { fn drop(&mut self) { for task in &self.tasks { task.abort(); } } }
@@ -27,7 +27,12 @@ impl Fixture {
     /// `entry` é a entrada deste sistema no índice falso; `None` = o índice responde 503.
     async fn with_entry(entry: Option<Value>) -> Self {
         let home = tempfile::tempdir().unwrap();
-        let (upstream, python) = serve(axum::Router::new().fallback(|| async { "python" })).await;
+        let python_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let calls = python_calls.clone();
+        let (upstream, python) = serve(axum::Router::new().fallback(move || {
+            calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            async { "python" }
+        })).await;
         let index = entry.map(|entry| json!({"platforms": {hangar_server::update::platform(): entry}}).to_string());
         let (release, index_task) = serve(axum::Router::new().fallback(move || {
             let index = index.clone();
@@ -42,13 +47,14 @@ impl Fixture {
         state.accounts = AccountService::new(AccountEnvironment::from_map([
             ("HOME".into(), home.path().to_string_lossy().into_owned()),
             ("USERPROFILE".into(), home.path().to_string_lossy().into_owned()),
+            ("PATH".into(), std::env::var("PATH").unwrap_or_default()),
         ].into()));
         state.update_release_base = format!("http://{release}");
         let router = hangar_server::routes::router(Arc::new(state));
         let server = tokio::spawn(async move {
             axum::serve(listener, router.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap();
         });
-        Self { home, base: format!("http://{address}"), tasks: vec![python, index_task, server] }
+        Self { home, base: format!("http://{address}"), tasks: vec![python, index_task, server], python_calls }
     }
 
     /// `~/.hangar/current` → `target`.
@@ -98,15 +104,39 @@ async fn update_routes_package_mode_is_answered_by_rust_in_the_client_shape() {
 #[tokio::test]
 async fn update_routes_unmigrated_and_unauthorized_never_return_to_python() {
     let fixture=Fixture::start("0.1.0.1").await;
+    let checkout = fixture.home.path().join("checkout");
+    let backend = checkout.join("backend");
+    std::fs::create_dir_all(&backend).unwrap();
+    std::fs::write(backend.join(".env"), "CP_RUST_SERVER=0\n").unwrap();
+    std::fs::create_dir_all(fixture.home.path().join(".hangar")).unwrap();
+    std::fs::write(fixture.home.path().join(".hangar/backend-dir"), backend.to_string_lossy().as_bytes()).unwrap();
+    assert_eq!(hangar_server::install_root::root(fixture.home.path()), Some(checkout));
+    let response = fixture.call(reqwest::Method::GET, "/api/atualizacao", true).await;
+    assert_eq!(response.status(), 200);
+    let status = body(response).await;
+    assert_eq!(status["pre_voo"]["pode"], false);
+    assert_eq!(status["pre_voo"]["erro"], "nao_e_repo");
+    assert!(status["versoes"].is_object() && status["mudancas"].is_array());
+    let refused = fixture.call(reqwest::Method::POST, "/api/atualizacao/iniciar", true).await;
+    assert_eq!(refused.status(), 409);
+    assert_eq!(body(refused).await["detail"]["code"], "erro_atualizacao_dependencia");
+    // Uma posse viva impede lançamento mesmo nas plataformas com reinício automático.
+    let update = fixture.home.path().join(".claude/.hangar-update");
+    std::fs::create_dir_all(&update).unwrap();
+    std::fs::write(update.join("rodando.lock"), std::process::id().to_string()).unwrap();
+    let refused = fixture.call(reqwest::Method::POST, "/api/atualizacao/reiniciar", true).await;
+    assert_eq!(refused.status(), 409);
+    let code = body(refused).await["detail"]["code"].as_str().unwrap().to_owned();
+    assert!(["erro_reinicio_indisponivel", "erro_atualizacao_ja_rodando"].contains(&code.as_str()));
+    assert!(!update.join("estado.json").exists(), "nenhum executor foi lançado");
     for (method,path) in [(reqwest::Method::GET,"/api/atualizacao"),(reqwest::Method::POST,"/api/atualizacao/iniciar"),(reqwest::Method::POST,"/api/atualizacao/reiniciar")] {
-        let response=fixture.call(method.clone(),path,true).await;assert_eq!(response.status(),503);
-        assert_eq!(body(response).await["detail"]["code"],"update_checkout_unavailable");
         assert_eq!(fixture.call(method,path,false).await.status(),401);
     }
     fixture.package("0.1.0.1");
     for (method,path) in [(reqwest::Method::GET,"/api/atualizacao"),(reqwest::Method::POST,"/api/atualizacao/iniciar"),(reqwest::Method::POST,"/api/atualizacao/reiniciar")] {
         assert_eq!(fixture.call(method,path,false).await.status(),401);
     }
+    assert_eq!(fixture.python_calls.load(std::sync::atomic::Ordering::Relaxed), 0);
 }
 
 fn sh(dir: &Path, script: &str) {
