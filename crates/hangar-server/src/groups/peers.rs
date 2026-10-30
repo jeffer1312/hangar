@@ -18,6 +18,9 @@ pub const OWNER_WAIT_TIMEOUT: Duration = Duration::from_secs(20);
 /// Leitura e prazo total da consulta longa do cofre (`/api/vault/requests/{id}/wait`): acima do que
 /// a dona segura (`vault::wire::WAIT_HOLD`), senão quem espera desiste antes do `pending`.
 pub const LONG_POLL_TIMEOUT: Duration = Duration::from_secs(30);
+/// Corpo com senha sem `Content-Length`: cobre a maior senha do cofre (16 KiB) com todo byte
+/// escapado no JSON, para o vetor não crescer.
+const SECRET_RESERVE: usize = 128 * 1024;
 const MAX_BODY: usize = 1 << 20;
 /// Texto do erro de sucesso acima de `MAX_BODY`; quem lê pode pedir menos.
 pub const TOO_LARGE: &str = "resposta maior que 1 MiB";
@@ -118,11 +121,18 @@ impl PeerError {
     }
 }
 
-pub struct PeerClient { book: Arc<PeerBook>, http: OnceLock<reqwest::Client>, waiting: OnceLock<reqwest::Client>, long: OnceLock<reqwest::Client> }
+pub struct PeerClient {
+    book: Arc<PeerBook>,
+    http: OnceLock<reqwest::Client>,
+    waiting: OnceLock<reqwest::Client>,
+    /// `call_secret` e `call_long`: sem redirect.
+    secret: OnceLock<reqwest::Client>,
+    long: OnceLock<reqwest::Client>,
+}
 
 impl PeerClient {
     pub fn new(book: PeerBook) -> Self {
-        Self { book: Arc::new(book), http: OnceLock::new(), waiting: OnceLock::new(), long: OnceLock::new() }
+        Self { book: Arc::new(book), http: OnceLock::new(), waiting: OnceLock::new(), secret: OnceLock::new(), long: OnceLock::new() }
     }
 
     pub fn enabled_ids(&self) -> Vec<String> { self.book.enabled_ids() }
@@ -195,11 +205,13 @@ impl PeerClient {
         let book = self.book.clone();
         let key = server.to_owned();
         let cfg = tokio::task::spawn_blocking(move || book.get(&key)).await.ok().flatten().ok_or(PeerError::Unknown)?;
-        let (slot, read, total) = if long { (&self.long, LONG_POLL_TIMEOUT, LONG_POLL_TIMEOUT) } else { (&self.http, READ_TIMEOUT, TOTAL_TIMEOUT) };
+        let (slot, read, total) = if long { (&self.long, LONG_POLL_TIMEOUT, LONG_POLL_TIMEOUT) } else { (&self.secret, READ_TIMEOUT, TOTAL_TIMEOUT) };
         let http = match slot.get() {
             Some(http) => http,
             None => {
-                let built = crate::http_client().connect_timeout(READ_TIMEOUT).read_timeout(read).timeout(total).build()
+                // Sem redirect: o 3xx volta como recusa, e nada com senha vai a outro endereço.
+                let built = crate::http_client().redirect(reqwest::redirect::Policy::none())
+                    .connect_timeout(READ_TIMEOUT).read_timeout(read).timeout(total).build()
                     .map_err(|e| transport(server, &e))?;
                 slot.get_or_init(|| built)
             }
@@ -210,7 +222,7 @@ impl PeerClient {
         let mut resp = req.send().await.map_err(|e| transport(server, &e))?;
         let status = resp.status();
         // Capacidade reservada antes: o vetor que cresce deixa cópias do corpo sem zerar.
-        let mut raw = Zeroizing::new(Vec::with_capacity(resp.content_length().map_or(0, |n| (n as usize).min(MAX_BODY))));
+        let mut raw = Zeroizing::new(Vec::with_capacity(resp.content_length().map_or(SECRET_RESERVE, |n| (n as usize).min(MAX_BODY))));
         loop {
             match resp.chunk().await {
                 Ok(Some(chunk)) if raw.len() + chunk.len() > MAX_BODY => {

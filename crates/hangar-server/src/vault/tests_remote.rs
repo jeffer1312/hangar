@@ -226,13 +226,14 @@ async fn a_remote_machine_reports_the_owner_state_and_offline_with_the_reason() 
     use reqwest::Method;
     let queries = Arc::new(Mutex::new(Vec::new()));
     let srv = machine(serve_app(fake_owner_app(queries.clone())).await).await;
-    assert_eq!(srv.call(Method::GET, "/api/vault/status", None).await, (200, json!({"role": "none", "state": "absent"})));
+    assert_eq!(srv.call(Method::GET, "/api/vault/status", None).await, (200, json!({"role": "none", "state": "absent", "server_id": "delphi"})));
     let (status, body) = srv.call(Method::PUT, "/api/vault/config", Some(json!({"owner": "lab"}))).await;
     assert_eq!((status, body), (200, json!({"role": "remote", "owner": "lab", "state": "open"})));
     assert_eq!(config::load(&srv.hangar()).unwrap().owner.as_deref(), Some("lab"));
     assert_eq!(srv.call(Method::GET, "/api/vault/status", None).await, (200, json!({"role": "remote", "owner": "lab", "state": "open"})));
     // Pedido de outra máquina não é encaminhado de novo.
-    assert_eq!(srv.call(Method::GET, "/api/vault/status?local=1", None).await, (200, json!({"role": "none", "state": "absent"})));
+    assert_eq!(srv.call(Method::GET, "/api/vault/status?local=1", None).await,
+        (200, json!({"role": "none", "state": "absent", "server_id": "delphi"})));
 
     let (status, list) = srv.call(Method::GET, "/api/vault/entries", None).await;
     assert_eq!((status, list), (200, json!([{"id": "e1", "name": "Banco", "policy": "ask", "updated_at": 1.0}])));
@@ -272,12 +273,44 @@ async fn config_checks_the_peer_and_keeps_the_backup_peer() {
     assert_eq!(config::load(&srv.hangar()).unwrap(), config::Config { owner: None, backup_peer: Some("lab".into()) });
     assert_eq!(srv.call(Method::PUT, "/api/vault/config", Some(json!({"owner": "lab"}))).await.0, 200);
     assert_eq!(srv.call(Method::PUT, "/api/vault/config", Some(json!({"owner": null}))).await,
-        (200, json!({"role": "none", "state": "absent"})));
+        (200, json!({"role": "none", "state": "absent", "server_id": "delphi"})));
     assert_eq!(config::load(&srv.hangar()).unwrap(), config::Config { owner: None, backup_peer: Some("lab".into()) });
     // vault.json torto é erro, nunca "sem dona".
     std::fs::write(config::path(&srv.hangar()), b"{ torto").unwrap();
     let (status, body) = srv.call(Method::GET, "/api/vault/status", None).await;
     assert_eq!((status, body["detail"]["code"].clone()), (500, json!("erro_cofre_config_ilegivel")));
+    let (status, body) = srv.call(Method::PUT, "/api/vault/config", Some(json!({"backup_peer": "lab"}))).await;
+    assert_eq!((status, body["detail"]["code"].clone()), (500, json!("erro_cofre_config_ilegivel")));
+    // Tirar a dona reescreve o arquivo torto.
+    assert_eq!(srv.call(Method::PUT, "/api/vault/config", Some(json!({"owner": null}))).await.0, 200);
+    assert_eq!(config::load(&srv.hangar()).unwrap(), config::Config::default());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn another_machine_at_the_owner_address_guest_port_and_redirect_are_owner_down() {
+    let app = Router::new()
+        .route("/api/vault/status", get(|| async { js(200, json!({"role": "owner", "state": "open", "server_id": "outra"})) }))
+        .route("/api/vault/requests/{id}/wait", get(|UrlPath(id): UrlPath<String>| async move {
+            match id.as_str() {
+                "outra" => js(200, json!({"status": "allowed", "value": VALUE, "server_id": "outra"})),
+                "certa" => js(200, json!({"status": "pending", "server_id": "lab"})),
+                "convidado" => js(403, json!({"detail": {"code": "erro_cofre_so_dono", "msg": "só o dono usa o cofre"}})),
+                _ => Response::builder().status(302).header("location", "http://127.0.0.1:9/").body(Body::empty()).unwrap(),
+            }
+        }));
+    let addr = serve_app(app).await;
+    let dir = tempfile::tempdir().unwrap();
+    let peers = peers_for(dir.path(), addr);
+    let remote = Remote { peers: &peers, owner: "lab" };
+    let error = remote.status().await.err().unwrap();
+    assert!(error.code() == "erro_cofre_dona_fora" && error.reason().contains("outra"), "{}", error.reason());
+    let error = remote.wait("outra").await.err().unwrap();
+    assert!(error.code() == "erro_cofre_dona_fora" && !error.reason().contains(VALUE), "{}", error.reason());
+    assert!(matches!(remote.wait("certa").await, Ok(WaitStatus::Pending)), "server_id igual à dona é aceito");
+    let error = remote.wait("convidado").await.err().unwrap();
+    assert!(error.code() == "erro_cofre_dona_fora" && error.reason().contains("convidado"), "{}", error.reason());
+    let error = remote.wait("redirect").await.err().unwrap();
+    assert!(error.code() == "erro_cofre_dona_fora" && error.reason().contains("redirect"), "o redirect não é seguido: {}", error.reason());
 }
 
 #[test]

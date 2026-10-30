@@ -26,6 +26,10 @@ pub struct UseReq {
     pub target: String,
 }
 
+/// O `server_id` das respostas é o da dona que atendeu: quem pede confere que falou com a máquina
+/// que o `vault.json` nomeia. Ausente (dona sem id configurado) é aceito.
+pub fn own_id(server_id: &str) -> Option<String> { (!server_id.is_empty()).then(|| server_id.to_owned()) }
+
 /// Resposta do `use`: `{request_id}` (pedir sempre) ou `{value}` (liberada).
 #[derive(Default, Serialize, Deserialize)]
 pub struct UseReply {
@@ -33,6 +37,8 @@ pub struct UseReply {
     pub request_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<Zeroizing<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_id: Option<String>,
 }
 
 /// `POST /api/vault/ask-entry`: cadastro pelo cartão.
@@ -49,7 +55,11 @@ pub struct AskReq {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AskReply { pub request_id: String }
+pub struct AskReply {
+    pub request_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_id: Option<String>,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -65,6 +75,8 @@ pub struct WaitReply {
     pub entry: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temporary: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_id: Option<String>,
 }
 
 /// Id de pedido aceito na URL: a dona gera hex; qualquer outra coisa não é pedido dela.

@@ -17,6 +17,8 @@ export interface VaultStatus {
   /** Motivo do `offline` ou do `absent` na dona. */
   detail?: string;
   backup?: VaultBackupStatus;
+  /** Id da máquina que respondeu, quando ela fala do próprio cofre. */
+  server_id?: string;
 }
 
 /** `owner`: id do servidor dono ou `"self"`; `null` apaga o campo. */

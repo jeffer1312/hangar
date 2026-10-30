@@ -127,6 +127,13 @@ impl Outgoing {
     }
 }
 
+/// Binário de teste: o `cargo test` põe todos em `target/<perfil>/deps/`, e o teste de integração
+/// compila a crate sem `cfg(test)`. Nele o pedido do cofre nunca chega ao celular real do dono, que
+/// o `AccountEnvironment` capturado do ambiente aponta.
+fn test_binary() -> bool {
+    cfg!(test) || std::env::current_exe().ok().is_some_and(|exe| exe.parent().and_then(|dir| dir.file_name()).is_some_and(|name| name == "deps"))
+}
+
 /// O que segura um aviso, lido na hora (arquivo de preferências, convidados e presença).
 pub struct Gate { pub muted: bool, pub quiet: bool, pub hidden_guest: bool, pub owner_at_pc: bool }
 
@@ -182,6 +189,7 @@ impl Sender {
     /// Pedido do cofre: só mudo (pela sessão que pediu) e horário de silêncio seguram. Não depende de
     /// app aberto nem do dono no PC: o agente fica parado esperando a resposta.
     pub fn vault_request(self: &Arc<Self>, session: &str, notice: Notice) {
+        if test_binary() { return; }
         let (me, session) = (self.clone(), session.to_owned());
         tokio::spawn(async move {
             let dir = me.dir();
@@ -226,7 +234,8 @@ impl Sender {
     /// podando as mortas.
     pub async fn broadcast(&self, out: Outgoing) {
         let pick = |f: &dyn Fn(&str) -> String| (f("pt"), f("en"));
-        crate::push_expo::send(&self.st, &out.session, pick(&|l| out.title_suffix(l)), pick(&*out.body), out.url.as_deref() == Some("/"));
+        crate::push_expo::send(&self.st, &out.session, pick(&|l| out.title_suffix(l)), pick(&*out.body), out.url.as_deref() == Some("/"),
+            out.vault.as_ref().map(|(_, request_id)| request_id.clone()));
         let Some(vapid) = webpush::vapid(&self.env) else {
             // Sem chave o Web Push está desligado; chave pública presente e par inválido é falha.
             if !webpush::public_key(&self.env).is_empty() {

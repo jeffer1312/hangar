@@ -56,14 +56,20 @@ pub struct Remote<'a> { pub peers: &'a PeerClient, pub owner: &'a str }
 impl Remote<'_> {
     /// O estado do cofre na dona. `?local=1`: a dona responde o dela sem encaminhar a outra (dois
     /// `vault.json` apontando um para o outro dariam volta sem fim).
-    pub async fn status(&self) -> Result<Status, RemoteError> { self.plain(Method::GET, "/api/vault/status?local=1", None).await }
+    pub async fn status(&self) -> Result<Status, RemoteError> {
+        let answer: Value = self.plain(Method::GET, "/api/vault/status?local=1", None).await?;
+        self.same_owner(answer.get("server_id").and_then(Value::as_str))?;
+        serde_json::from_value(answer).map_err(|_| self.unreadable())
+    }
 
     /// A lista da dona; `Summary` não tem senha, e campo a mais que viesse fica de fora.
     pub async fn entries(&self) -> Result<Vec<Summary>, RemoteError> { self.plain(Method::GET, "/api/vault/entries?local=1", None).await }
 
     pub async fn use_(&self, req: &UseReq) -> Result<UseStart, RemoteError> {
         let body = serde_json::to_value(req).map_err(|_| self.unreadable())?;
-        match self.secret::<UseReply>(false, Method::POST, "/api/vault/use", Some(&body)).await? {
+        let reply = self.secret::<UseReply>(false, Method::POST, "/api/vault/use", Some(&body)).await?;
+        self.same_owner(reply.server_id.as_deref())?;
+        match reply {
             UseReply { value: Some(value), .. } => Ok(UseStart::Value(value)),
             UseReply { request_id: Some(id), .. } if request_id_ok(&id) => Ok(UseStart::Request(id)),
             _ => Err(self.unreadable()),
@@ -72,7 +78,8 @@ impl Remote<'_> {
 
     pub async fn ask_entry(&self, req: &AskReq) -> Result<String, RemoteError> {
         let body = serde_json::to_value(req).map_err(|_| self.unreadable())?;
-        let AskReply { request_id } = self.plain::<AskReply>(Method::POST, "/api/vault/ask-entry", Some(&body)).await?;
+        let AskReply { request_id, server_id } = self.plain::<AskReply>(Method::POST, "/api/vault/ask-entry", Some(&body)).await?;
+        self.same_owner(server_id.as_deref())?;
         if request_id_ok(&request_id) { Ok(request_id) } else { Err(self.unreadable()) }
     }
 
@@ -80,6 +87,7 @@ impl Remote<'_> {
     pub async fn wait(&self, id: &str) -> Result<WaitStatus, RemoteError> {
         if !request_id_ok(id) { return Err(RemoteError::Lost); }
         let reply: WaitReply = self.secret(true, Method::GET, &format!("/api/vault/requests/{id}/wait"), None).await?;
+        self.same_owner(reply.server_id.as_deref())?;
         Ok(match (reply.status, reply.value) {
             (WaitState::Pending, _) => WaitStatus::Pending,
             (WaitState::Allowed, Some(value)) => WaitStatus::Allowed(value),
@@ -114,6 +122,16 @@ impl Remote<'_> {
         serde_json::from_slice(&raw).map_err(|_| self.unreadable())
     }
 
+    /// Como o `call_group`: `server_id` ausente é aceito; presente e diferente é outra máquina
+    /// atendendo pelo endereço da dona.
+    fn same_owner(&self, reported: Option<&str>) -> Result<(), RemoteError> {
+        match reported {
+            Some(reported) if reported != self.owner => Err(RemoteError::OwnerDown(format!(
+                "a máquina '{}' do peers.json responde como '{reported}': confira o CP_SERVER_ID dela", self.owner))),
+            _ => Ok(()),
+        }
+    }
+
     fn unreadable(&self) -> RemoteError { RemoteError::OwnerDown(format!("{} respondeu fora do contrato do cofre", self.owner)) }
 
     fn fail(&self, error: PeerError) -> RemoteError {
@@ -125,6 +143,10 @@ impl Remote<'_> {
         match (status, code) {
             (404, Some(code)) if code == "erro_cofre_pedido_perdido" => RemoteError::Lost,
             (401, _) => RemoteError::OwnerDown(format!("{} recusou o token do peers.json", self.owner)),
+            // 403 do cofre só sai na porta do convidado: o endereço no peers.json não é o do dono.
+            (403, _) => RemoteError::OwnerDown(format!("o endereço de {} no peers.json cai na porta do convidado", self.owner)),
+            // Pedido com senha não segue redirect.
+            (300..=399, _) => RemoteError::OwnerDown(format!("o endereço de {} no peers.json responde com redirect (HTTP {status})", self.owner)),
             (_, Some(code)) => {
                 let msg = detail.get("msg").and_then(Value::as_str).unwrap_or(code.as_str()).to_owned();
                 RemoteError::Refused { status, code, msg }

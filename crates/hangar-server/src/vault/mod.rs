@@ -143,12 +143,16 @@ pub struct Vault {
     /// A trava vai junto para o `spawn_blocking`: cliente que desiste não a solta com a gravação
     /// ainda rodando, e o próximo pedido não lê o arquivo velho.
     key: Arc<tokio::sync::Mutex<Option<Key>>>,
+    /// `PUT /api/vault/config` lê, muda e grava o `vault.json`: um por vez.
+    pub(crate) config_lock: tokio::sync::Mutex<()>,
 }
 
 impl Vault {
     pub fn system() -> Self { Self::new(Arc::new(key::SecretService::default())) }
 
-    pub fn new(keys: Arc<dyn KeyStore>) -> Self { Self { keys, key: Arc::new(tokio::sync::Mutex::new(None)) } }
+    pub fn new(keys: Arc<dyn KeyStore>) -> Self {
+        Self { keys, key: Arc::new(tokio::sync::Mutex::new(None)), config_lock: tokio::sync::Mutex::new(()) }
+    }
 
     async fn key_for(&self, slot: &mut Option<Key>, path: &Path) -> Result<Key, VaultError> {
         if let Some(key) = slot.as_ref() { return Ok(key.clone()); }

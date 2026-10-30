@@ -7,7 +7,7 @@ use std::{net::SocketAddr, sync::Arc};
 use zeroize::Zeroizing;
 
 use super::{EntryChange, KeyError, NewEntry, Role, Status, VaultError, config::{self, ConfigError, Placement}, remote::{Remote, RemoteError, UseStart, WaitStatus},
-    requests::{Answer, RequestError}, store, wire::{AskReq, UseReply, UseReq, WAIT_HOLD, WaitReply, WaitState, request_id_ok}};
+    requests::{Answer, RequestError}, store, wire::{AskReq, UseReply, UseReq, WAIT_HOLD, WaitReply, WaitState, own_id, request_id_ok}};
 use crate::{routes::AppState, session_write::detail};
 
 const MAX_BODY: usize = 64 * 1024;
@@ -50,7 +50,8 @@ fn owner(st: &AppState, peer: SocketAddr, req: &Request) -> impl Future<Output =
 }
 
 /// `None` = malformado, sem dizer o quê. O buffer nasce com a capacidade do limite (crescer
-/// deixaria cópias do corpo sem zerar), e cada pedaço recebido é zerado depois de copiado.
+/// deixaria cópias do corpo sem zerar). Zerar cada pedaço recebido é melhor esforço: o `Bytes`
+/// compartilhado com outro dono não se zera daqui.
 async fn body<T: DeserializeOwned>(req: Request) -> Option<T> {
     use http_body_util::BodyExt;
     let mut body = req.into_body();
@@ -131,7 +132,12 @@ pub async fn status(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
 async fn status_body(st: &AppState, local: bool) -> Response {
     let here = st.vault.status(&st.hangar_dir).await;
     // O estado daqui vai para o evento `vault` da lista; o de outra dona, não.
-    let mine = |here: Status| { st.vault_requests.note_state(here.state); ok(json!(here)) };
+    let mine = |here: Status| {
+        st.vault_requests.note_state(here.state);
+        let mut body = json!(here);
+        if let Some(id) = own_id(&st.server_id) { body["server_id"] = json!(id); }
+        ok(body)
+    };
     if local || here.role == Role::Owner { return mine(here); }
     let owner_id = match config::placement(&st.hangar_dir) {
         Ok(Placement::Remote(id)) => id,
@@ -173,10 +179,19 @@ pub async fn config(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         if let Err(resp) = allowed.await { break 'r resp; }
         let Some(change) = body::<ConfigChange>(req).await else { break 'r invalid() };
         if change.owner.is_none() && change.backup_peer.is_none() { break 'r invalid(); }
-        let before = match config::load(&st.hangar_dir) { Ok(cfg) => cfg, Err(error) => break 'r config_failure(&st, error) };
-        let mut cfg = before.clone();
+        let is_self = |id: &str| id == "self" || (!st.server_id.is_empty() && id == st.server_id);
+        // Ler, mudar e gravar o `vault.json` um pedido por vez.
+        let config_guard = st.vault.config_lock.lock().await;
+        // `vault.json` torto só não impede virar dona nem tirar a dona: os dois reescrevem o arquivo.
+        let rewrite = matches!(&change.owner, Some(None)) || matches!(&change.owner, Some(Some(id)) if is_self(id.as_str()));
+        let before = match config::load(&st.hangar_dir) {
+            Ok(cfg) => Some(cfg),
+            Err(ConfigError::Unreadable) if rewrite => None,
+            Err(error) => break 'r config_failure(&st, error),
+        };
+        let mut cfg = before.clone().unwrap_or_default();
         match change.owner {
-            Some(Some(id)) if id == "self" || id == st.server_id => {
+            Some(Some(id)) if is_self(id.as_str()) => {
                 if let Err(error) = st.vault.create(&st.hangar_dir).await { break 'r failure(&st, error); }
                 cfg.owner = None;
             }
@@ -199,7 +214,8 @@ pub async fn config(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
             Some(None) => cfg.backup_peer = None,
             None => {}
         }
-        if cfg != before && let Err(error) = config::save(&st.hangar_dir, &cfg) { break 'r config_failure(&st, error); }
+        if before.as_ref() != Some(&cfg) && let Err(error) = config::save(&st.hangar_dir, &cfg) { break 'r config_failure(&st, error); }
+        drop(config_guard);
         status_body(&st, false).await
     };
     done(&headers, resp)
@@ -303,10 +319,10 @@ pub async fn use_entry(State(st): State<Arc<AppState>>, ConnectInfo(peer): Conne
         if let Err(resp) = allowed.await { break 'r resp; }
         let Some(asked) = body::<UseReq>(req).await else { break 'r invalid() };
         match super::requests::use_entry(&st, asked).await {
-            Ok(UseStart::Request(id)) => ok(json!({"request_id": id})),
+            Ok(UseStart::Request(id)) => ok(json!(UseReply { request_id: Some(id), value: None, server_id: own_id(&st.server_id) })),
             Ok(UseStart::Value(value)) => {
                 let len = value.len();
-                secret_json(&st, &UseReply { request_id: None, value: Some(value) }, len)
+                secret_json(&st, &UseReply { request_id: None, value: Some(value), server_id: own_id(&st.server_id) }, len)
             }
             Err(error) => request_failure(&st, error),
         }
@@ -321,23 +337,23 @@ pub async fn ask_entry(State(st): State<Arc<AppState>>, ConnectInfo(peer): Conne
         if let Err(resp) = allowed.await { break 'r resp; }
         let Some(asked) = body::<AskReq>(req).await else { break 'r invalid() };
         match super::requests::ask_entry(&st, asked) {
-            Ok(id) => ok(json!({"request_id": id})),
+            Ok(id) => ok(json!(super::wire::AskReply { request_id: id, server_id: own_id(&st.server_id) })),
             Err(error) => request_failure(&st, error),
         }
     };
     done(&headers, resp)
 }
 
-fn wait_reply(status: WaitStatus) -> WaitReply {
-    let plain = |status| WaitReply { status, value: None, entry: None, temporary: None };
+fn wait_reply(status: WaitStatus, server_id: &str) -> WaitReply {
+    let reply = |status| WaitReply { status, value: None, entry: None, temporary: None, server_id: own_id(server_id) };
     match status {
-        WaitStatus::Pending => plain(WaitState::Pending),
-        WaitStatus::Allowed(value) => WaitReply { status: WaitState::Allowed, value: Some(value), entry: None, temporary: None },
-        WaitStatus::Saved { entry, temporary } => WaitReply { status: WaitState::Saved, value: None, entry: Some(entry), temporary: Some(temporary) },
-        WaitStatus::Denied => plain(WaitState::Denied),
-        WaitStatus::Declined => plain(WaitState::Declined),
-        WaitStatus::TimedOut => plain(WaitState::TimedOut),
-        WaitStatus::Cancelled => plain(WaitState::Cancelled),
+        WaitStatus::Pending => reply(WaitState::Pending),
+        WaitStatus::Allowed(value) => WaitReply { value: Some(value), ..reply(WaitState::Allowed) },
+        WaitStatus::Saved { entry, temporary } => WaitReply { entry: Some(entry), temporary: Some(temporary), ..reply(WaitState::Saved) },
+        WaitStatus::Denied => reply(WaitState::Denied),
+        WaitStatus::Declined => reply(WaitState::Declined),
+        WaitStatus::TimedOut => reply(WaitState::TimedOut),
+        WaitStatus::Cancelled => reply(WaitState::Cancelled),
     }
 }
 
@@ -352,7 +368,7 @@ pub async fn wait(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInf
         match st.vault_requests.wait(&id, WAIT_HOLD).await {
             Ok(status) => {
                 let len = match &status { WaitStatus::Allowed(value) => value.len(), _ => 0 };
-                secret_json(&st, &wait_reply(status), len)
+                secret_json(&st, &wait_reply(status, &st.server_id), len)
             }
             Err(error) => request_failure(&st, error),
         }
