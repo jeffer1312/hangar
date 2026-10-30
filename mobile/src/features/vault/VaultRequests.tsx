@@ -66,7 +66,7 @@ function RequestSheet({ server, ready, requests, requestId }: {
     {!server ? <Notice text={m.vault_app_request_no_server()} error />
       : !ready ? <InfoNotice text={m.vault_app_loading()} />
       : !request ? <>
-        <InfoNotice text={m.vault_app_err_request_gone()} />
+        <InfoNotice text={m.vault_err_pedido_perdido()} />
         {requests.length ? <MachineGroup><MachineRow title={m.vault_app_request_next()} action onPress={next} /></MachineGroup> : null}
       </>
       : <RequestCard key={request.id} server={server} request={request} onDone={next} />}

@@ -3,6 +3,7 @@
 // A senha só viaja no corpo, nunca na URL.
 import { vaultFetchForServer } from './api';
 import type { Server } from './servers';
+import * as m from './paraglide/messages';
 
 export type VaultRole = 'owner' | 'remote' | 'none';
 export type VaultState = 'open' | 'locked' | 'absent' | 'offline' | 'key_lost';
@@ -130,6 +131,43 @@ export type VaultErrorCode =
   | 'erro_cofre_backup_peer_fora'
   | 'erro_interacao_desatualizada'
   | 'erro_corpo_invalido';
+
+// Os códigos só das tools do agente (negado, sem resposta, domínio, navegador…) não chegam às telas.
+const ERROR_TEXT: Partial<Record<VaultErrorCode, () => string>> = {
+  erro_cofre_trancado: m.vault_err_trancado,
+  erro_cofre_chave_perdida: m.vault_err_chave_perdida,
+  erro_cofre_dona_fora: m.vault_err_dona_fora,
+  erro_cofre_nome_repetido: m.vault_err_nome_repetido,
+  erro_cofre_sem_chaveiro: m.vault_err_sem_chaveiro,
+  erro_cofre_ja_e_dona: m.vault_err_ja_e_dona,
+  erro_interacao_desatualizada: m.vault_err_interacao_desatualizada,
+  erro_cofre_pedido_respondido: m.vault_err_interacao_desatualizada,
+  erro_cofre_pedido_perdido: m.vault_err_pedido_perdido,
+  erro_cofre_recuperacao_errada: m.vault_err_recuperacao_errada,
+  erro_cofre_recuperacao_curta: m.vault_err_recuperacao_curta,
+  erro_cofre_recuperacao_nao_gravada: m.vault_err_recuperacao_nao_gravada,
+  erro_cofre_nao_vazio: m.vault_err_nao_vazio,
+  erro_cofre_backup_ausente: m.vault_err_backup_ausente,
+  erro_cofre_backup_ilegivel: m.vault_err_backup_ilegivel,
+  erro_cofre_backup_peer_fora: m.vault_err_backup_peer_fora,
+  erro_cofre_backup_grande: m.vault_err_backup_grande,
+  erro_cofre_ausente: m.vault_err_ausente,
+  erro_cofre_dona_remota: m.vault_err_dona_remota,
+  erro_cofre_entrada_desconhecida: m.vault_err_entrada_desconhecida,
+  erro_cofre_ilegivel: m.vault_err_ilegivel,
+  erro_cofre_indisponivel: m.vault_err_indisponivel,
+  erro_cofre_chaveiro_indisponivel: m.vault_err_chaveiro_indisponivel,
+  erro_cofre_so_dono: m.vault_err_so_dono,
+  erro_cofre_peer_desconhecido: m.vault_err_peer_desconhecido,
+  erro_cofre_config_ilegivel: m.vault_err_config_ilegivel,
+  erro_cofre_pedidos_demais: m.vault_err_pedidos_demais,
+  erro_corpo_invalido: m.vault_err_corpo_invalido,
+};
+
+/** Frase da recusa do cofre; `undefined` para código sem frase própria (quem chama mostra a do servidor). */
+export function vaultErrorText(code: string): string | undefined {
+  return Object.prototype.hasOwnProperty.call(ERROR_TEXT, code) ? ERROR_TEXT[code as VaultErrorCode]?.() : undefined;
+}
 
 /** Criar o cofre ou gravar nele pode esperar o chaveiro. */
 const KEYRING_MS = 45_000;

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert } from 'react-native';
 import { Stack } from 'expo-router';
-import { getVaultStatus, listVaultEntries, listVaultPeers, putVaultConfig, type Server, type VaultEntry, type VaultState, type VaultStatus } from '@hangar/core';
+import { findOwnerServer, getVaultStatus, listVaultEntries, listVaultPeers, putVaultConfig, type Server, type VaultEntry, type VaultPeer, type VaultState, type VaultStatus } from '@hangar/core';
 import { Pagina } from '../../src/features/config/Pagina';
 import { InfoNotice } from '../../src/features/config/InfoNotice';
 import { MachineGroup, MachineHelp, MachineRow } from '../../src/features/machines/MachineRows';
@@ -10,7 +10,6 @@ import { VaultEntrySheet } from '../../src/features/vault/VaultEntrySheet';
 import { VaultPeerSheet } from '../../src/features/vault/VaultPeerSheet';
 import { VaultRecoverySheet, VaultRestoreSheet } from '../../src/features/vault/VaultBackupSheets';
 import { vaultErrorText } from '../../src/features/vault/errors';
-import { ownerServer } from '../../src/features/vault/owner';
 import { useServers } from '../../src/stores/servers';
 import { toast } from '../../src/ui/Toast';
 import { haptic } from '../../src/ui/haptics';
@@ -50,14 +49,15 @@ export default function Cofre() {
     void (async () => {
       try {
         const next = await getVaultStatus(server);
-        const list = next.state === 'open' && next.role !== 'none' ? await listVaultEntries(server) : null;
-        let owner: Server | null = next.role === 'owner' ? server : null;
-        if (next.role === 'remote' && next.owner) {
-          // Sem a lista de peers a página fica só de leitura, não falha.
-          const peers = await listVaultPeers(server).catch(() => []);
-          const peer = peers.find((p) => p.id === next.owner);
-          owner = peer ? ownerServer(peer, useServers.getState().servers) : null;
-        }
+        // Servidor antigo sem `owner_url`: o endereço sai dos peers. Sem ele a página fica só de leitura, não falha.
+        const needPeers = next.role === 'remote' && !next.owner_url && !!next.owner;
+        const [list, peers] = await Promise.all([
+          next.state === 'open' && next.role !== 'none' ? listVaultEntries(server) : null,
+          needPeers ? listVaultPeers(server).catch((): VaultPeer[] => []) : ([] as VaultPeer[]),
+        ]);
+        const ownerUrl = next.owner_url ?? peers.find((p) => p.id === next.owner)?.base_url;
+        const owner = next.role === 'owner' ? server
+          : next.role === 'remote' && ownerUrl ? findOwnerServer(ownerUrl, useServers.getState().servers) : null;
         if (now !== generation.current) return;
         setStatus(next);
         setEntries(list);
