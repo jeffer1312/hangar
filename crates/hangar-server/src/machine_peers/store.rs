@@ -10,7 +10,6 @@ use std::{
 
 #[derive(Default)]
 pub struct Book(Map<String, Value>);
-impl Book {pub fn into_value(mut self)->Value{Value::Object(std::mem::take(&mut self.0))}}
 impl std::ops::Deref for Book {type Target=Map<String,Value>;fn deref(&self)->&Self::Target{&self.0}}
 impl std::ops::DerefMut for Book {fn deref_mut(&mut self)->&mut Self::Target{&mut self.0}}
 impl Drop for Book {fn drop(&mut self){codec::discard(Value::Object(std::mem::take(&mut self.0)));}}
@@ -105,14 +104,14 @@ impl Store {
                 Some(other)=>{codec::discard(other);Map::new()},
                 None=>Map::new(),
             };
-            entry.insert("base_url".into(), json!(base.trim_end_matches('/')));
-            entry.insert("token".into(), json!(token));
+            replace(&mut entry,"base_url",json!(base.trim_end_matches('/')));
+            replace(&mut entry,"token",json!(token));
             if let Some(web) = web
                 .and_then(Value::as_str)
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
             {
-                entry.insert("web_url".into(), json!(web));
+                replace(&mut entry,"web_url",json!(web));
             }
             if let Some(previous)=data.insert(id.into(), Value::Object(entry)){codec::discard(previous);}
             Ok(list(data))
@@ -126,9 +125,10 @@ impl Store {
                 .filter(|v| is_peer(v))
                 .ok_or_else(|| unknown(id))?;
             if let Some(app) = entry.get("app").filter(|v| v.is_object()) {
-                data.insert(id.into(), json!({"app":app}));
+                let mut retained=Map::new();retained.insert("app".into(),codec::clone_value(app));
+                replace(data,id,Value::Object(retained));
             } else {
-                data.remove(id);
+                if let Some(previous)=data.remove(id){codec::discard(previous);}
             }
             Ok(list(data))
         }).map_err(|e| if e.code == "peers_registro_invalido" { Error::missing(e.msg) } else { e })
@@ -143,7 +143,7 @@ impl Store {
                 .get_mut(id)
                 .filter(|v| is_peer(v))
                 .ok_or_else(|| unknown(id))?;
-            entry["enabled"] = json!(enabled);
+            replace(entry.as_object_mut().unwrap(),"enabled",json!(enabled));
             Ok(list(data))
         }).map_err(|e| if e.code == "peers_registro_invalido" { Error::missing(e.msg) } else { e })
     }
@@ -153,7 +153,8 @@ impl Store {
             .get(id)
             .filter(|v| v.is_object() && truthy(&v["base_url"]) && truthy(&v["token"]))
             .ok_or_else(|| Error::missing(format!("peer '{id}' desconhecido")))?;
-        Ok(json!({"token":entry["token"]}))
+        if text(&entry["base_url"]).is_none(){return Err(Error::failed());}
+        let mut result=Map::new();result.insert("token".into(),codec::clone_value(&entry["token"]));Ok(Value::Object(result))
     }
     pub fn app_list(&self) -> Result<Value, Error> {
         let data = self.read().map_err(|mut e| {
@@ -161,7 +162,7 @@ impl Store {
             e.code = "peers_arquivo_ilegivel";
             e
         })?;
-        Ok(app_response(&data))
+        app_response(&data).map_err(|mut error|{error.status=503;error.code="peers_arquivo_ilegivel";error})
     }
     pub fn app_write(&self, body: &Value) -> Result<Value, Error> {
         let rev = text(&body["rev"])
@@ -178,7 +179,8 @@ impl Store {
             return Err(Error::invalid("id de máquina repetido"));
         }
         self.change(|data| {
-            if app_response(data)["rev"] != rev {
+            let current=super::RequestValue(app_response(data)?);
+            if current["rev"] != rev {
                 return Err(Error {
                     status: 409,
                     code: "peers_lista_mudou",
@@ -188,12 +190,16 @@ impl Store {
             if machines.iter().any(crate::orchestration::codec::contains_surrogate) {
                 return Err(Error::invalid("texto contém Unicode inválido"));
             }
+            for cfg in data.values(){
+                if let Some(app)=cfg.get("app").filter(|app|app.is_object())
+                    && matches!(app.get("id"),Some(Value::Array(_)|Value::Object(_))){return Err(Error::failed());}
+            }
             let mut owners = std::collections::HashMap::new();
             data.retain(|key, cfg| {
                 if let Some(obj) = cfg.as_object_mut() {
                     if let Some(app) = obj.get("app").filter(|v| v.is_object()) {
-                        owners.insert(app["id"].to_string(), key.clone());
-                        obj.remove("app");
+                        if let Some(id)=text(&app["id"]){owners.insert(id.to_owned(),key.clone());}
+                        if let Some(previous)=obj.remove("app"){codec::discard(previous);}
                         return !obj.is_empty();
                     }
                 }
@@ -202,7 +208,7 @@ impl Store {
             let mut used = std::collections::HashSet::new();
             for (pos, mut machine) in machines.into_iter().enumerate() {
                 let mut key = owners
-                    .get(&machine["id"].to_string())
+                    .get(machine["id"].as_str().unwrap())
                     .filter(|k| !used.contains(*k))
                     .cloned();
                 let address = host(machine["address"].as_str().unwrap());
@@ -214,17 +220,18 @@ impl Store {
                                 && cfg.is_object()
                                 && cfg.get("app").is_none()
                                 && ["base_url", "web_url"].iter().any(|field| {
-                                    host(&crate::transcript::py::py_str(&cfg[*field])) == address
+                                    host(&codec::python_string(&cfg[*field])) == address
                                 })
                         })
                         .map(|(k, _)| k.clone());
                 }
                 let key = key.unwrap_or_else(|| free_key(machine["id"].as_str().unwrap(), data));
                 machine["pos"] = json!(pos);
-                data.entry(key.clone()).or_insert_with(|| json!({}))["app"] = machine;
+                let entry=data.entry(key.clone()).or_insert_with(|| json!({})).as_object_mut().unwrap();
+                replace(entry,"app",machine);
                 used.insert(key);
             }
-            Ok(app_response(data))
+            app_response(data)
         })
     }
 }
@@ -245,12 +252,6 @@ pub fn truthy(v: &Value) -> bool {
         Value::Number(n) => n.as_f64() != Some(0.),
     }
 }
-pub fn truthy_field(body: &Value, key: &str) -> Value {
-    body.get(key)
-        .filter(|v| truthy(v))
-        .cloned()
-        .unwrap_or(json!(""))
-}
 pub fn valid_id(v: &Value) -> Result<(), Error> {
     let good = v.as_str().is_some_and(|s| {
         !s.is_empty()
@@ -268,26 +269,27 @@ pub fn valid_id(v: &Value) -> Result<(), Error> {
     }
 }
 pub fn mask(value: &str) -> String {
-    let chars: Vec<_> = value.chars().collect();
-    if chars.len() <= 8 {
-        "•".repeat(chars.len())
-    } else {
-        format!(
-            "{}{}{}",
-            chars[..4].iter().collect::<String>(),
-            "•".repeat(8),
-            chars[chars.len() - 4..].iter().collect::<String>()
-        )
+    let length=codec::string_length(value);
+    if length<=8 {"•".repeat(length)}else{
+        let head=codec::truncate_string(value,4);
+        let tail=&value[codec::truncate_string(value,length-4).len()..];
+        format!("{head}{}{tail}","•".repeat(8))
     }
 }
 pub fn list(data: &Map<String, Value>) -> Value {
-    let mut rows: Vec<_> = data
-        .iter()
-        .filter(|(_, v)| v.is_object() && truthy(&v["base_url"]))
-        .collect();
-    rows.sort_by(|a, b| a.0.cmp(b.0));
-    json!(rows.into_iter().map(|(id,cfg)|{let token=truthy_field(cfg,"token");let mut row=json!({"id":id,"base_url":cfg["base_url"],"token":mask(&crate::transcript::py::py_str(&token))});if truthy(&cfg["web_url"]){row["web_url"]=cfg["web_url"].clone();}if cfg["enabled"].is_boolean(){row["enabled"]=cfg["enabled"].clone();}row}).collect::<Vec<_>>())
+    let mut rows:Vec<_>=data.iter().filter(|(_,value)|value.is_object()&&truthy(&value["base_url"])).collect();
+    rows.sort_by(|left,right|left.0.cmp(right.0));
+    Value::Array(rows.into_iter().map(|(id,cfg)|{
+        let empty=Value::String(String::new());let token=cfg.get("token").filter(|value|truthy(value)).unwrap_or(&empty);
+        let mut row=Map::new();row.insert("id".into(),Value::String(id.clone()));row.insert("base_url".into(),codec::clone_value(&cfg["base_url"]));
+        row.insert("token".into(),Value::String(mask(&codec::python_string(token))));
+        if truthy(&cfg["web_url"]){row.insert("web_url".into(),codec::clone_value(&cfg["web_url"]));}
+        if cfg["enabled"].is_boolean(){row.insert("enabled".into(),cfg["enabled"].clone());}
+        Value::Object(row)
+    }).collect())
 }
+fn replace(data:&mut Map<String,Value>,key:&str,value:Value){if let Some(previous)=data.insert(key.into(),value){codec::discard(previous);}}
+
 fn app_entry(raw: &Value) -> Result<Value, Error> {
     if !raw.is_object() {
         return Err(Error::invalid("máquina precisa ser um objeto"));
@@ -327,47 +329,17 @@ fn app_entry(raw: &Value) -> Result<Value, Error> {
     }
     Ok(out)
 }
-fn app_response(data: &Map<String, Value>) -> Value {
-    let mut apps: Vec<_> = data
-        .values()
-        .filter_map(|v| v.get("app").and_then(Value::as_object))
-        .cloned()
-        .collect();
-    apps.sort_by_key(|a| {
-        a.get("pos")
-            .and_then(|v| v.as_i64().or_else(|| v.as_bool().map(i64::from)))
-            .unwrap_or(0)
-    });
-    for app in &mut apps {
-        app.remove("pos");
-    }
-    let list = json!(apps);
-    let canonical = sort_keys(&list);
-    let digest = ring::digest::digest(
-        &ring::digest::SHA256,
-        serde_json::to_string(&canonical).unwrap().as_bytes(),
-    );
-    let rev = digest.as_ref()[..8]
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<String>();
-    json!({"rev":rev,"servers":list})
+fn app_response(data: &Map<String, Value>) -> Result<Value,Error> {
+    let mut list=super::RequestValue(Value::Array(data.values().filter_map(|value|value.get("app").filter(|app|app.is_object())).map(codec::clone_value).collect()));
+    let apps=list.0.as_array_mut().unwrap();
+    apps.sort_by_key(|app|app.get("pos").and_then(|value|value.as_i64().or_else(||value.as_bool().map(i64::from))).unwrap_or(0));
+    for app in apps {if let Some(previous)=app.as_object_mut().unwrap().remove("pos"){codec::discard(previous);}}
+    let canonical=codec::dumps_compact_utf8(&list,true).map_err(|_|Error::invalid("texto contém Unicode inválido"))?;
+    let digest=ring::digest::digest(&ring::digest::SHA256,canonical.as_bytes());
+    let rev=digest.as_ref()[..8].iter().map(|byte|format!("{byte:02x}")).collect::<String>();
+    let mut result=json!({"rev":rev});result["servers"]=std::mem::take(&mut list.0);Ok(result)
 }
-fn sort_keys(v: &Value) -> Value {
-    match v {
-        Value::Object(m) => {
-            let mut keys: Vec<_> = m.keys().collect();
-            keys.sort();
-            let mut out = Map::new();
-            for k in keys {
-                out.insert(k.clone(), sort_keys(&m[k]));
-            }
-            Value::Object(out)
-        }
-        Value::Array(a) => Value::Array(a.iter().map(sort_keys).collect()),
-        _ => v.clone(),
-    }
-}
+
 fn host(s: &str) -> String {
     reqwest::Url::parse(s)
         .ok()

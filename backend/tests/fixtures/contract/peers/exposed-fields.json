@@ -1,0 +1,790 @@
+{
+  "source_commit": "eb7d18f07533b510815da4ff335185331a1928f6",
+  "command": "uv run --project backend --with httpx python backend/tests/fixtures/contract/peers/generate-exposed-fields.py --reference <checkout-Python> --output backend/tests/fixtures/contract/peers/exposed-fields.json",
+  "cases": [
+    {
+      "name": "base_url-NaN",
+      "method": "GET",
+      "path": "/api/peers",
+      "body": null,
+      "initial": "{\"a\":{\"token\": \"fixture-token\",\"base_url\":NaN}}",
+      "status": 200,
+      "text": "[{\"id\":\"a\",\"base_url\":null,\"token\":\"fixt\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022oken\"}]",
+      "effect_sha256": "32f3cf2249665a08dfd00e111fadd258f1558887e0b996368a576a2bea1ceb02",
+      "effect_len": 47,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "base_url-NaN",
+      "method": "GET",
+      "path": "/api/peers/a/token",
+      "body": null,
+      "initial": "{\"a\":{\"token\": \"fixture-token\",\"base_url\":NaN}}",
+      "status": 500,
+      "text": "Internal Server Error",
+      "effect_sha256": "32f3cf2249665a08dfd00e111fadd258f1558887e0b996368a576a2bea1ceb02",
+      "effect_len": 47,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "base_url-Infinity",
+      "method": "GET",
+      "path": "/api/peers",
+      "body": null,
+      "initial": "{\"a\":{\"token\": \"fixture-token\",\"base_url\":Infinity}}",
+      "status": 200,
+      "text": "[{\"id\":\"a\",\"base_url\":null,\"token\":\"fixt\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022oken\"}]",
+      "effect_sha256": "a04e50893dedffb1a0e12817fc65f0b5702f315dc68362adb2a89240aa6d96c1",
+      "effect_len": 52,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "base_url-Infinity",
+      "method": "GET",
+      "path": "/api/peers/a/token",
+      "body": null,
+      "initial": "{\"a\":{\"token\": \"fixture-token\",\"base_url\":Infinity}}",
+      "status": 500,
+      "text": "Internal Server Error",
+      "effect_sha256": "a04e50893dedffb1a0e12817fc65f0b5702f315dc68362adb2a89240aa6d96c1",
+      "effect_len": 52,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "base_url-123456789012345678901234567890",
+      "method": "GET",
+      "path": "/api/peers",
+      "body": null,
+      "initial": "{\"a\":{\"token\": \"fixture-token\",\"base_url\":123456789012345678901234567890}}",
+      "status": 200,
+      "text": "[{\"id\":\"a\",\"base_url\":123456789012345678901234567890,\"token\":\"fixt\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022oken\"}]",
+      "effect_sha256": "4d8e5b7e87fafa8dc5ef8d7fa923d5e6e9eed2d6f6d6fbd34b492b5fed200e74",
+      "effect_len": 74,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "base_url-123456789012345678901234567890",
+      "method": "GET",
+      "path": "/api/peers/a/token",
+      "body": null,
+      "initial": "{\"a\":{\"token\": \"fixture-token\",\"base_url\":123456789012345678901234567890}}",
+      "status": 500,
+      "text": "Internal Server Error",
+      "effect_sha256": "4d8e5b7e87fafa8dc5ef8d7fa923d5e6e9eed2d6f6d6fbd34b492b5fed200e74",
+      "effect_len": 74,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "base_url-true",
+      "method": "GET",
+      "path": "/api/peers",
+      "body": null,
+      "initial": "{\"a\":{\"token\": \"fixture-token\",\"base_url\":true}}",
+      "status": 200,
+      "text": "[{\"id\":\"a\",\"base_url\":true,\"token\":\"fixt\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022oken\"}]",
+      "effect_sha256": "ad7ebd1879d4deeaca06cf525ea683fbb88870947cbb631323b70b6f1a3ea120",
+      "effect_len": 48,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "base_url-true",
+      "method": "GET",
+      "path": "/api/peers/a/token",
+      "body": null,
+      "initial": "{\"a\":{\"token\": \"fixture-token\",\"base_url\":true}}",
+      "status": 500,
+      "text": "Internal Server Error",
+      "effect_sha256": "ad7ebd1879d4deeaca06cf525ea683fbb88870947cbb631323b70b6f1a3ea120",
+      "effect_len": 48,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "base_url-[1]",
+      "method": "GET",
+      "path": "/api/peers",
+      "body": null,
+      "initial": "{\"a\":{\"token\": \"fixture-token\",\"base_url\":[1]}}",
+      "status": 200,
+      "text": "[{\"id\":\"a\",\"base_url\":[1],\"token\":\"fixt\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022oken\"}]",
+      "effect_sha256": "00c78fea6652b1b5abf7d9a158bdd7de4c571f959d283512f2d2f89568a855d1",
+      "effect_len": 47,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "base_url-[1]",
+      "method": "GET",
+      "path": "/api/peers/a/token",
+      "body": null,
+      "initial": "{\"a\":{\"token\": \"fixture-token\",\"base_url\":[1]}}",
+      "status": 500,
+      "text": "Internal Server Error",
+      "effect_sha256": "00c78fea6652b1b5abf7d9a158bdd7de4c571f959d283512f2d2f89568a855d1",
+      "effect_len": 47,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "base_url-{\"x\":1}",
+      "method": "GET",
+      "path": "/api/peers",
+      "body": null,
+      "initial": "{\"a\":{\"token\": \"fixture-token\",\"base_url\":{\"x\":1}}}",
+      "status": 200,
+      "text": "[{\"id\":\"a\",\"base_url\":{\"x\":1},\"token\":\"fixt\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022oken\"}]",
+      "effect_sha256": "d4704f4177782b9d5f9ca1c8d469d6dc744fd713e3d1a967e95f804065d910b7",
+      "effect_len": 51,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "base_url-{\"x\":1}",
+      "method": "GET",
+      "path": "/api/peers/a/token",
+      "body": null,
+      "initial": "{\"a\":{\"token\": \"fixture-token\",\"base_url\":{\"x\":1}}}",
+      "status": 500,
+      "text": "Internal Server Error",
+      "effect_sha256": "d4704f4177782b9d5f9ca1c8d469d6dc744fd713e3d1a967e95f804065d910b7",
+      "effect_len": 51,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "base_url-\"\\ud800\"",
+      "method": "GET",
+      "path": "/api/peers",
+      "body": null,
+      "initial": "{\"a\":{\"token\": \"fixture-token\",\"base_url\":\"\\ud800\"}}",
+      "status": 500,
+      "text": "Internal Server Error",
+      "effect_sha256": "16e261f0277c353c1aeb497222a1b7e8cd523248c8cda9b3adbdf063b2847f73",
+      "effect_len": 52,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "base_url-\"\\ud800\"",
+      "method": "GET",
+      "path": "/api/peers/a/token",
+      "body": null,
+      "initial": "{\"a\":{\"token\": \"fixture-token\",\"base_url\":\"\\ud800\"}}",
+      "status": 200,
+      "text": "{\"token\":\"fixture-token\"}",
+      "effect_sha256": "16e261f0277c353c1aeb497222a1b7e8cd523248c8cda9b3adbdf063b2847f73",
+      "effect_len": 52,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "base_url-\"a\u00e7\u00facar\"",
+      "method": "GET",
+      "path": "/api/peers",
+      "body": null,
+      "initial": "{\"a\":{\"token\": \"fixture-token\",\"base_url\":\"a\u00e7\u00facar\"}}",
+      "status": 200,
+      "text": "[{\"id\":\"a\",\"base_url\":\"a\u00e7\u00facar\",\"token\":\"fixt\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022oken\"}]",
+      "effect_sha256": "a9e524a0182dae43f361d14228bd273840dfde061b693d6d0046286847760a9e",
+      "effect_len": 54,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "base_url-\"a\u00e7\u00facar\"",
+      "method": "GET",
+      "path": "/api/peers/a/token",
+      "body": null,
+      "initial": "{\"a\":{\"token\": \"fixture-token\",\"base_url\":\"a\u00e7\u00facar\"}}",
+      "status": 200,
+      "text": "{\"token\":\"fixture-token\"}",
+      "effect_sha256": "a9e524a0182dae43f361d14228bd273840dfde061b693d6d0046286847760a9e",
+      "effect_len": 54,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "token-NaN",
+      "method": "GET",
+      "path": "/api/peers",
+      "body": null,
+      "initial": "{\"a\":{\"base_url\": \"https://a.invalid\",\"token\":NaN}}",
+      "status": 200,
+      "text": "[{\"id\":\"a\",\"base_url\":\"https://a.invalid\",\"token\":\"\u2022\u2022\u2022\"}]",
+      "effect_sha256": "460e72e227ed700a5fbf367bdea526744780f582769f28754fd6eab71c0a7cf6",
+      "effect_len": 51,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "token-NaN",
+      "method": "GET",
+      "path": "/api/peers/a/token",
+      "body": null,
+      "initial": "{\"a\":{\"base_url\": \"https://a.invalid\",\"token\":NaN}}",
+      "status": 200,
+      "text": "{\"token\":null}",
+      "effect_sha256": "460e72e227ed700a5fbf367bdea526744780f582769f28754fd6eab71c0a7cf6",
+      "effect_len": 51,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "token-Infinity",
+      "method": "GET",
+      "path": "/api/peers",
+      "body": null,
+      "initial": "{\"a\":{\"base_url\": \"https://a.invalid\",\"token\":Infinity}}",
+      "status": 200,
+      "text": "[{\"id\":\"a\",\"base_url\":\"https://a.invalid\",\"token\":\"\u2022\u2022\u2022\"}]",
+      "effect_sha256": "487cd5a223ca928618206a83f8497867868b4794e9ccc4045e88c82d541121c8",
+      "effect_len": 56,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "token-Infinity",
+      "method": "GET",
+      "path": "/api/peers/a/token",
+      "body": null,
+      "initial": "{\"a\":{\"base_url\": \"https://a.invalid\",\"token\":Infinity}}",
+      "status": 200,
+      "text": "{\"token\":null}",
+      "effect_sha256": "487cd5a223ca928618206a83f8497867868b4794e9ccc4045e88c82d541121c8",
+      "effect_len": 56,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "token-123456789012345678901234567890",
+      "method": "GET",
+      "path": "/api/peers",
+      "body": null,
+      "initial": "{\"a\":{\"base_url\": \"https://a.invalid\",\"token\":123456789012345678901234567890}}",
+      "status": 200,
+      "text": "[{\"id\":\"a\",\"base_url\":\"https://a.invalid\",\"token\":\"1234\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u20227890\"}]",
+      "effect_sha256": "bafbc9e0839c6ffcd2f8e77bdcebbc6a69ad33282ab62f3379952032ab801155",
+      "effect_len": 78,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "token-123456789012345678901234567890",
+      "method": "GET",
+      "path": "/api/peers/a/token",
+      "body": null,
+      "initial": "{\"a\":{\"base_url\": \"https://a.invalid\",\"token\":123456789012345678901234567890}}",
+      "status": 200,
+      "text": "{\"token\":123456789012345678901234567890}",
+      "effect_sha256": "bafbc9e0839c6ffcd2f8e77bdcebbc6a69ad33282ab62f3379952032ab801155",
+      "effect_len": 78,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "token-true",
+      "method": "GET",
+      "path": "/api/peers",
+      "body": null,
+      "initial": "{\"a\":{\"base_url\": \"https://a.invalid\",\"token\":true}}",
+      "status": 200,
+      "text": "[{\"id\":\"a\",\"base_url\":\"https://a.invalid\",\"token\":\"\u2022\u2022\u2022\u2022\"}]",
+      "effect_sha256": "6498786ac40ebb7fd1f31148ce1b8573aa4670cbe2da1d186d8aaf68290a7dac",
+      "effect_len": 52,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "token-true",
+      "method": "GET",
+      "path": "/api/peers/a/token",
+      "body": null,
+      "initial": "{\"a\":{\"base_url\": \"https://a.invalid\",\"token\":true}}",
+      "status": 200,
+      "text": "{\"token\":true}",
+      "effect_sha256": "6498786ac40ebb7fd1f31148ce1b8573aa4670cbe2da1d186d8aaf68290a7dac",
+      "effect_len": 52,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "token-[1]",
+      "method": "GET",
+      "path": "/api/peers",
+      "body": null,
+      "initial": "{\"a\":{\"base_url\": \"https://a.invalid\",\"token\":[1]}}",
+      "status": 200,
+      "text": "[{\"id\":\"a\",\"base_url\":\"https://a.invalid\",\"token\":\"\u2022\u2022\u2022\"}]",
+      "effect_sha256": "571806c2a9d81baa832e20033251f1314986713d912c92afd81e2a6b0c16ed68",
+      "effect_len": 51,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "token-[1]",
+      "method": "GET",
+      "path": "/api/peers/a/token",
+      "body": null,
+      "initial": "{\"a\":{\"base_url\": \"https://a.invalid\",\"token\":[1]}}",
+      "status": 200,
+      "text": "{\"token\":[1]}",
+      "effect_sha256": "571806c2a9d81baa832e20033251f1314986713d912c92afd81e2a6b0c16ed68",
+      "effect_len": 51,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "token-{\"x\":1}",
+      "method": "GET",
+      "path": "/api/peers",
+      "body": null,
+      "initial": "{\"a\":{\"base_url\": \"https://a.invalid\",\"token\":{\"x\":1}}}",
+      "status": 200,
+      "text": "[{\"id\":\"a\",\"base_url\":\"https://a.invalid\",\"token\":\"\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\"}]",
+      "effect_sha256": "65e205d0bcc0ab7d91412de817789211a587db9c881322c03440484610079d6a",
+      "effect_len": 55,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "token-{\"x\":1}",
+      "method": "GET",
+      "path": "/api/peers/a/token",
+      "body": null,
+      "initial": "{\"a\":{\"base_url\": \"https://a.invalid\",\"token\":{\"x\":1}}}",
+      "status": 200,
+      "text": "{\"token\":{\"x\":1}}",
+      "effect_sha256": "65e205d0bcc0ab7d91412de817789211a587db9c881322c03440484610079d6a",
+      "effect_len": 55,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "token-\"\\ud800\"",
+      "method": "GET",
+      "path": "/api/peers",
+      "body": null,
+      "initial": "{\"a\":{\"base_url\": \"https://a.invalid\",\"token\":\"\\ud800\"}}",
+      "status": 200,
+      "text": "[{\"id\":\"a\",\"base_url\":\"https://a.invalid\",\"token\":\"\u2022\"}]",
+      "effect_sha256": "98e1f4e1d2e55daae1c78c9ca8bdf2984395d699b0dc74bbfb457a10eecac95c",
+      "effect_len": 56,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "token-\"\\ud800\"",
+      "method": "GET",
+      "path": "/api/peers/a/token",
+      "body": null,
+      "initial": "{\"a\":{\"base_url\": \"https://a.invalid\",\"token\":\"\\ud800\"}}",
+      "status": 500,
+      "text": "Internal Server Error",
+      "effect_sha256": "98e1f4e1d2e55daae1c78c9ca8bdf2984395d699b0dc74bbfb457a10eecac95c",
+      "effect_len": 56,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "token-\"a\u00e7\u00facar\"",
+      "method": "GET",
+      "path": "/api/peers",
+      "body": null,
+      "initial": "{\"a\":{\"base_url\": \"https://a.invalid\",\"token\":\"a\u00e7\u00facar\"}}",
+      "status": 200,
+      "text": "[{\"id\":\"a\",\"base_url\":\"https://a.invalid\",\"token\":\"\u2022\u2022\u2022\u2022\u2022\u2022\"}]",
+      "effect_sha256": "6e01da1a16d7bcb75acdac1191436b3e50d8e594f7c9f3d954c2e960eb332091",
+      "effect_len": 58,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "token-\"a\u00e7\u00facar\"",
+      "method": "GET",
+      "path": "/api/peers/a/token",
+      "body": null,
+      "initial": "{\"a\":{\"base_url\": \"https://a.invalid\",\"token\":\"a\u00e7\u00facar\"}}",
+      "status": 200,
+      "text": "{\"token\":\"a\u00e7\u00facar\"}",
+      "effect_sha256": "6e01da1a16d7bcb75acdac1191436b3e50d8e594f7c9f3d954c2e960eb332091",
+      "effect_len": 58,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "web_url-NaN",
+      "method": "GET",
+      "path": "/api/peers",
+      "body": null,
+      "initial": "{\"a\":{\"base_url\": \"https://a.invalid\", \"token\": \"fixture-token\",\"web_url\":NaN}}",
+      "status": 200,
+      "text": "[{\"id\":\"a\",\"base_url\":\"https://a.invalid\",\"token\":\"fixt\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022oken\",\"web_url\":null}]",
+      "effect_sha256": "130dcf8a4ca979332549a8ce94f8f74897a9bf598b08584008928368a132189a",
+      "effect_len": 79,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "web_url-NaN",
+      "method": "GET",
+      "path": "/api/peers/a/token",
+      "body": null,
+      "initial": "{\"a\":{\"base_url\": \"https://a.invalid\", \"token\": \"fixture-token\",\"web_url\":NaN}}",
+      "status": 200,
+      "text": "{\"token\":\"fixture-token\"}",
+      "effect_sha256": "130dcf8a4ca979332549a8ce94f8f74897a9bf598b08584008928368a132189a",
+      "effect_len": 79,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "web_url-Infinity",
+      "method": "GET",
+      "path": "/api/peers",
+      "body": null,
+      "initial": "{\"a\":{\"base_url\": \"https://a.invalid\", \"token\": \"fixture-token\",\"web_url\":Infinity}}",
+      "status": 200,
+      "text": "[{\"id\":\"a\",\"base_url\":\"https://a.invalid\",\"token\":\"fixt\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022oken\",\"web_url\":null}]",
+      "effect_sha256": "ba5e092d0805e723461ef2293e10be70f08a0cc95c0a2009bac2f2fefc10e926",
+      "effect_len": 84,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "web_url-Infinity",
+      "method": "GET",
+      "path": "/api/peers/a/token",
+      "body": null,
+      "initial": "{\"a\":{\"base_url\": \"https://a.invalid\", \"token\": \"fixture-token\",\"web_url\":Infinity}}",
+      "status": 200,
+      "text": "{\"token\":\"fixture-token\"}",
+      "effect_sha256": "ba5e092d0805e723461ef2293e10be70f08a0cc95c0a2009bac2f2fefc10e926",
+      "effect_len": 84,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "web_url-123456789012345678901234567890",
+      "method": "GET",
+      "path": "/api/peers",
+      "body": null,
+      "initial": "{\"a\":{\"base_url\": \"https://a.invalid\", \"token\": \"fixture-token\",\"web_url\":123456789012345678901234567890}}",
+      "status": 200,
+      "text": "[{\"id\":\"a\",\"base_url\":\"https://a.invalid\",\"token\":\"fixt\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022oken\",\"web_url\":123456789012345678901234567890}]",
+      "effect_sha256": "80f4af7333298f97f724d47e648a9e8b720ca26ff03d17109eb08bf8a2f81ff1",
+      "effect_len": 106,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "web_url-123456789012345678901234567890",
+      "method": "GET",
+      "path": "/api/peers/a/token",
+      "body": null,
+      "initial": "{\"a\":{\"base_url\": \"https://a.invalid\", \"token\": \"fixture-token\",\"web_url\":123456789012345678901234567890}}",
+      "status": 200,
+      "text": "{\"token\":\"fixture-token\"}",
+      "effect_sha256": "80f4af7333298f97f724d47e648a9e8b720ca26ff03d17109eb08bf8a2f81ff1",
+      "effect_len": 106,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "web_url-true",
+      "method": "GET",
+      "path": "/api/peers",
+      "body": null,
+      "initial": "{\"a\":{\"base_url\": \"https://a.invalid\", \"token\": \"fixture-token\",\"web_url\":true}}",
+      "status": 200,
+      "text": "[{\"id\":\"a\",\"base_url\":\"https://a.invalid\",\"token\":\"fixt\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022oken\",\"web_url\":true}]",
+      "effect_sha256": "1f82a5446d4490012777f0f86c11ccc707a32a9b8f330fe6d52c395bc6d100af",
+      "effect_len": 80,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "web_url-true",
+      "method": "GET",
+      "path": "/api/peers/a/token",
+      "body": null,
+      "initial": "{\"a\":{\"base_url\": \"https://a.invalid\", \"token\": \"fixture-token\",\"web_url\":true}}",
+      "status": 200,
+      "text": "{\"token\":\"fixture-token\"}",
+      "effect_sha256": "1f82a5446d4490012777f0f86c11ccc707a32a9b8f330fe6d52c395bc6d100af",
+      "effect_len": 80,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "web_url-[1]",
+      "method": "GET",
+      "path": "/api/peers",
+      "body": null,
+      "initial": "{\"a\":{\"base_url\": \"https://a.invalid\", \"token\": \"fixture-token\",\"web_url\":[1]}}",
+      "status": 200,
+      "text": "[{\"id\":\"a\",\"base_url\":\"https://a.invalid\",\"token\":\"fixt\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022oken\",\"web_url\":[1]}]",
+      "effect_sha256": "73ff8d7feaa24fec70e3af53b8ab917f96b41f81dd941fa75f8d76522e296b6b",
+      "effect_len": 79,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "web_url-[1]",
+      "method": "GET",
+      "path": "/api/peers/a/token",
+      "body": null,
+      "initial": "{\"a\":{\"base_url\": \"https://a.invalid\", \"token\": \"fixture-token\",\"web_url\":[1]}}",
+      "status": 200,
+      "text": "{\"token\":\"fixture-token\"}",
+      "effect_sha256": "73ff8d7feaa24fec70e3af53b8ab917f96b41f81dd941fa75f8d76522e296b6b",
+      "effect_len": 79,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "web_url-{\"x\":1}",
+      "method": "GET",
+      "path": "/api/peers",
+      "body": null,
+      "initial": "{\"a\":{\"base_url\": \"https://a.invalid\", \"token\": \"fixture-token\",\"web_url\":{\"x\":1}}}",
+      "status": 200,
+      "text": "[{\"id\":\"a\",\"base_url\":\"https://a.invalid\",\"token\":\"fixt\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022oken\",\"web_url\":{\"x\":1}}]",
+      "effect_sha256": "73491bf5ccaa993afa691f784dfe02fa42c81ab92d5428afa760a31d0430712f",
+      "effect_len": 83,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "web_url-{\"x\":1}",
+      "method": "GET",
+      "path": "/api/peers/a/token",
+      "body": null,
+      "initial": "{\"a\":{\"base_url\": \"https://a.invalid\", \"token\": \"fixture-token\",\"web_url\":{\"x\":1}}}",
+      "status": 200,
+      "text": "{\"token\":\"fixture-token\"}",
+      "effect_sha256": "73491bf5ccaa993afa691f784dfe02fa42c81ab92d5428afa760a31d0430712f",
+      "effect_len": 83,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "web_url-\"\\ud800\"",
+      "method": "GET",
+      "path": "/api/peers",
+      "body": null,
+      "initial": "{\"a\":{\"base_url\": \"https://a.invalid\", \"token\": \"fixture-token\",\"web_url\":\"\\ud800\"}}",
+      "status": 500,
+      "text": "Internal Server Error",
+      "effect_sha256": "747f5ea9163a6fad99051fc9f5d220b9d00b269dd955874ec224bff9fc797168",
+      "effect_len": 84,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "web_url-\"\\ud800\"",
+      "method": "GET",
+      "path": "/api/peers/a/token",
+      "body": null,
+      "initial": "{\"a\":{\"base_url\": \"https://a.invalid\", \"token\": \"fixture-token\",\"web_url\":\"\\ud800\"}}",
+      "status": 200,
+      "text": "{\"token\":\"fixture-token\"}",
+      "effect_sha256": "747f5ea9163a6fad99051fc9f5d220b9d00b269dd955874ec224bff9fc797168",
+      "effect_len": 84,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "web_url-\"a\u00e7\u00facar\"",
+      "method": "GET",
+      "path": "/api/peers",
+      "body": null,
+      "initial": "{\"a\":{\"base_url\": \"https://a.invalid\", \"token\": \"fixture-token\",\"web_url\":\"a\u00e7\u00facar\"}}",
+      "status": 200,
+      "text": "[{\"id\":\"a\",\"base_url\":\"https://a.invalid\",\"token\":\"fixt\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022oken\",\"web_url\":\"a\u00e7\u00facar\"}]",
+      "effect_sha256": "71ebb51fe4b8c016390b143cd2996de86b2c0b954c5c6b8862a39ce9b693f67e",
+      "effect_len": 86,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "web_url-\"a\u00e7\u00facar\"",
+      "method": "GET",
+      "path": "/api/peers/a/token",
+      "body": null,
+      "initial": "{\"a\":{\"base_url\": \"https://a.invalid\", \"token\": \"fixture-token\",\"web_url\":\"a\u00e7\u00facar\"}}",
+      "status": 200,
+      "text": "{\"token\":\"fixture-token\"}",
+      "effect_sha256": "71ebb51fe4b8c016390b143cd2996de86b2c0b954c5c6b8862a39ce9b693f67e",
+      "effect_len": 86,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "app-NaN",
+      "method": "GET",
+      "path": "/api/peers/app-list",
+      "body": null,
+      "initial": "{\"a\":{\"app\":{\"id\":\"a\",\"address\":\"https://a.invalid\",\"extra\":NaN}}}",
+      "status": 200,
+      "text": "{\"rev\":\"d1c2e38f210f8bbf\",\"servers\":[{\"id\":\"a\",\"address\":\"https://a.invalid\",\"extra\":null}]}",
+      "effect_sha256": "b2356a1b47f873f322814fbbafd2175ab233f99d368705fd6cbdbb88a2336e41",
+      "effect_len": 66,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "app-Infinity",
+      "method": "GET",
+      "path": "/api/peers/app-list",
+      "body": null,
+      "initial": "{\"a\":{\"app\":{\"id\":\"a\",\"address\":\"https://a.invalid\",\"extra\":Infinity}}}",
+      "status": 200,
+      "text": "{\"rev\":\"52ef940c17b1364d\",\"servers\":[{\"id\":\"a\",\"address\":\"https://a.invalid\",\"extra\":null}]}",
+      "effect_sha256": "4d655ff00b7bd485e5220c5bc797ce4f575a5627399a6339efc49ee33f7208f7",
+      "effect_len": 71,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "app-123456789012345678901234567890",
+      "method": "GET",
+      "path": "/api/peers/app-list",
+      "body": null,
+      "initial": "{\"a\":{\"app\":{\"id\":\"a\",\"address\":\"https://a.invalid\",\"extra\":123456789012345678901234567890}}}",
+      "status": 200,
+      "text": "{\"rev\":\"a2e3d4801b054f22\",\"servers\":[{\"id\":\"a\",\"address\":\"https://a.invalid\",\"extra\":123456789012345678901234567890}]}",
+      "effect_sha256": "6c572a51cf9bd7593797e1ab0804ed2a31f5169679d6e1c35ba152b600f28e05",
+      "effect_len": 93,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "app-true",
+      "method": "GET",
+      "path": "/api/peers/app-list",
+      "body": null,
+      "initial": "{\"a\":{\"app\":{\"id\":\"a\",\"address\":\"https://a.invalid\",\"extra\":true}}}",
+      "status": 200,
+      "text": "{\"rev\":\"db866679c0a5df3a\",\"servers\":[{\"id\":\"a\",\"address\":\"https://a.invalid\",\"extra\":true}]}",
+      "effect_sha256": "ca82f1b470683d2d1db37f7b8671a9451b90d996dc3b970f917ad6850ebe25dc",
+      "effect_len": 67,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "app-[1]",
+      "method": "GET",
+      "path": "/api/peers/app-list",
+      "body": null,
+      "initial": "{\"a\":{\"app\":{\"id\":\"a\",\"address\":\"https://a.invalid\",\"extra\":[1]}}}",
+      "status": 200,
+      "text": "{\"rev\":\"44b1dcdd67fa2912\",\"servers\":[{\"id\":\"a\",\"address\":\"https://a.invalid\",\"extra\":[1]}]}",
+      "effect_sha256": "9595d4a32e845ab6bfcfb618bf6d1ef79243914780ab68c2b1015f021e35aaea",
+      "effect_len": 66,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "app-{\"x\":1}",
+      "method": "GET",
+      "path": "/api/peers/app-list",
+      "body": null,
+      "initial": "{\"a\":{\"app\":{\"id\":\"a\",\"address\":\"https://a.invalid\",\"extra\":{\"x\":1}}}}",
+      "status": 200,
+      "text": "{\"rev\":\"45927755976edce3\",\"servers\":[{\"id\":\"a\",\"address\":\"https://a.invalid\",\"extra\":{\"x\":1}}]}",
+      "effect_sha256": "6afc67097ea7ff43e68da85fd110aadd2943a05eccd60a9ec48ddfc4ca35eae1",
+      "effect_len": 70,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "app-\"\\ud800\"",
+      "method": "GET",
+      "path": "/api/peers/app-list",
+      "body": null,
+      "initial": "{\"a\":{\"app\":{\"id\":\"a\",\"address\":\"https://a.invalid\",\"extra\":\"\\ud800\"}}}",
+      "status": 503,
+      "text": "{\"detail\":{\"code\":\"peers_arquivo_ilegivel\",\"params\":{},\"msg\":\"'utf-8' codec can't encode character '\\\\ud800' in position 41: surrogates not allowed\"}}",
+      "effect_sha256": "267a977c8f90cd97956363fd06a165e6a6655adf2bc883da04561de5d9c8c26d",
+      "effect_len": 71,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    },
+    {
+      "name": "app-\"a\u00e7\u00facar\"",
+      "method": "GET",
+      "path": "/api/peers/app-list",
+      "body": null,
+      "initial": "{\"a\":{\"app\":{\"id\":\"a\",\"address\":\"https://a.invalid\",\"extra\":\"a\u00e7\u00facar\"}}}",
+      "status": 200,
+      "text": "{\"rev\":\"3f02d63dbb83bca8\",\"servers\":[{\"id\":\"a\",\"address\":\"https://a.invalid\",\"extra\":\"a\u00e7\u00facar\"}]}",
+      "effect_sha256": "fc209cab06bb7b888ddd5793ca700136da8311f1dbb1b2e7510986829b21fc4b",
+      "effect_len": 73,
+      "remaining_tmp": [
+        "peers.json.fixture.tmp"
+      ]
+    }
+  ]
+}

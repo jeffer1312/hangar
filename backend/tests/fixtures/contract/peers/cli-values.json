@@ -1,0 +1,1065 @@
+{
+  "source_commit": "a12fa0bd96fc159c80a87bddd179ab1cdfdffe4a",
+  "command": "uv run --project backend python backend/tests/fixtures/contract/peers/generate-cli-values.py --output backend/tests/fixtures/contract/peers/cli-values.json",
+  "cases": [
+    {
+      "field": "token",
+      "value": "NaN",
+      "position": "single",
+      "command": "config",
+      "initial": "{\"a\":{\"base_url\":\"https://a.invalid\",\"token\":NaN}}",
+      "rc": 0,
+      "stdout_hex": "68747470733a2f2f612e696e76616c6964096e616e0a",
+      "stderr": ""
+    },
+    {
+      "field": "token",
+      "value": "NaN",
+      "position": "single",
+      "command": "tsv",
+      "initial": "{\"a\":{\"base_url\":\"https://a.invalid\",\"token\":NaN}}",
+      "rc": 0,
+      "stdout_hex": "610968747470733a2f2f612e696e76616c6964096e616e0a",
+      "stderr": ""
+    },
+    {
+      "field": "token",
+      "value": "NaN",
+      "position": "before",
+      "command": "config",
+      "initial": "{\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"},\"a\":{\"base_url\":\"https://a.invalid\",\"token\":NaN}}",
+      "rc": 0,
+      "stdout_hex": "68747470733a2f2f612e696e76616c6964096e616e0a",
+      "stderr": ""
+    },
+    {
+      "field": "token",
+      "value": "NaN",
+      "position": "before",
+      "command": "tsv",
+      "initial": "{\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"},\"a\":{\"base_url\":\"https://a.invalid\",\"token\":NaN}}",
+      "rc": 0,
+      "stdout_hex": "76616c69640968747470733a2f2f76616c69642e696e76616c696409666978747572652d76616c69640a610968747470733a2f2f612e696e76616c6964096e616e0a",
+      "stderr": ""
+    },
+    {
+      "field": "token",
+      "value": "NaN",
+      "position": "after",
+      "command": "config",
+      "initial": "{\"a\":{\"base_url\":\"https://a.invalid\",\"token\":NaN},\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"}}",
+      "rc": 0,
+      "stdout_hex": "68747470733a2f2f612e696e76616c6964096e616e0a",
+      "stderr": ""
+    },
+    {
+      "field": "token",
+      "value": "NaN",
+      "position": "after",
+      "command": "tsv",
+      "initial": "{\"a\":{\"base_url\":\"https://a.invalid\",\"token\":NaN},\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"}}",
+      "rc": 0,
+      "stdout_hex": "610968747470733a2f2f612e696e76616c6964096e616e0a76616c69640968747470733a2f2f76616c69642e696e76616c696409666978747572652d76616c69640a",
+      "stderr": ""
+    },
+    {
+      "field": "token",
+      "value": "Infinity",
+      "position": "single",
+      "command": "config",
+      "initial": "{\"a\":{\"base_url\":\"https://a.invalid\",\"token\":Infinity}}",
+      "rc": 0,
+      "stdout_hex": "68747470733a2f2f612e696e76616c696409696e660a",
+      "stderr": ""
+    },
+    {
+      "field": "token",
+      "value": "Infinity",
+      "position": "single",
+      "command": "tsv",
+      "initial": "{\"a\":{\"base_url\":\"https://a.invalid\",\"token\":Infinity}}",
+      "rc": 0,
+      "stdout_hex": "610968747470733a2f2f612e696e76616c696409696e660a",
+      "stderr": ""
+    },
+    {
+      "field": "token",
+      "value": "Infinity",
+      "position": "before",
+      "command": "config",
+      "initial": "{\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"},\"a\":{\"base_url\":\"https://a.invalid\",\"token\":Infinity}}",
+      "rc": 0,
+      "stdout_hex": "68747470733a2f2f612e696e76616c696409696e660a",
+      "stderr": ""
+    },
+    {
+      "field": "token",
+      "value": "Infinity",
+      "position": "before",
+      "command": "tsv",
+      "initial": "{\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"},\"a\":{\"base_url\":\"https://a.invalid\",\"token\":Infinity}}",
+      "rc": 0,
+      "stdout_hex": "76616c69640968747470733a2f2f76616c69642e696e76616c696409666978747572652d76616c69640a610968747470733a2f2f612e696e76616c696409696e660a",
+      "stderr": ""
+    },
+    {
+      "field": "token",
+      "value": "Infinity",
+      "position": "after",
+      "command": "config",
+      "initial": "{\"a\":{\"base_url\":\"https://a.invalid\",\"token\":Infinity},\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"}}",
+      "rc": 0,
+      "stdout_hex": "68747470733a2f2f612e696e76616c696409696e660a",
+      "stderr": ""
+    },
+    {
+      "field": "token",
+      "value": "Infinity",
+      "position": "after",
+      "command": "tsv",
+      "initial": "{\"a\":{\"base_url\":\"https://a.invalid\",\"token\":Infinity},\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"}}",
+      "rc": 0,
+      "stdout_hex": "610968747470733a2f2f612e696e76616c696409696e660a76616c69640968747470733a2f2f76616c69642e696e76616c696409666978747572652d76616c69640a",
+      "stderr": ""
+    },
+    {
+      "field": "token",
+      "value": "123456789012345678901234567890",
+      "position": "single",
+      "command": "config",
+      "initial": "{\"a\":{\"base_url\":\"https://a.invalid\",\"token\":123456789012345678901234567890}}",
+      "rc": 0,
+      "stdout_hex": "68747470733a2f2f612e696e76616c6964093132333435363738393031323334353637383930313233343536373839300a",
+      "stderr": ""
+    },
+    {
+      "field": "token",
+      "value": "123456789012345678901234567890",
+      "position": "single",
+      "command": "tsv",
+      "initial": "{\"a\":{\"base_url\":\"https://a.invalid\",\"token\":123456789012345678901234567890}}",
+      "rc": 0,
+      "stdout_hex": "610968747470733a2f2f612e696e76616c6964093132333435363738393031323334353637383930313233343536373839300a",
+      "stderr": ""
+    },
+    {
+      "field": "token",
+      "value": "123456789012345678901234567890",
+      "position": "before",
+      "command": "config",
+      "initial": "{\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"},\"a\":{\"base_url\":\"https://a.invalid\",\"token\":123456789012345678901234567890}}",
+      "rc": 0,
+      "stdout_hex": "68747470733a2f2f612e696e76616c6964093132333435363738393031323334353637383930313233343536373839300a",
+      "stderr": ""
+    },
+    {
+      "field": "token",
+      "value": "123456789012345678901234567890",
+      "position": "before",
+      "command": "tsv",
+      "initial": "{\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"},\"a\":{\"base_url\":\"https://a.invalid\",\"token\":123456789012345678901234567890}}",
+      "rc": 0,
+      "stdout_hex": "76616c69640968747470733a2f2f76616c69642e696e76616c696409666978747572652d76616c69640a610968747470733a2f2f612e696e76616c6964093132333435363738393031323334353637383930313233343536373839300a",
+      "stderr": ""
+    },
+    {
+      "field": "token",
+      "value": "123456789012345678901234567890",
+      "position": "after",
+      "command": "config",
+      "initial": "{\"a\":{\"base_url\":\"https://a.invalid\",\"token\":123456789012345678901234567890},\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"}}",
+      "rc": 0,
+      "stdout_hex": "68747470733a2f2f612e696e76616c6964093132333435363738393031323334353637383930313233343536373839300a",
+      "stderr": ""
+    },
+    {
+      "field": "token",
+      "value": "123456789012345678901234567890",
+      "position": "after",
+      "command": "tsv",
+      "initial": "{\"a\":{\"base_url\":\"https://a.invalid\",\"token\":123456789012345678901234567890},\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"}}",
+      "rc": 0,
+      "stdout_hex": "610968747470733a2f2f612e696e76616c6964093132333435363738393031323334353637383930313233343536373839300a76616c69640968747470733a2f2f76616c69642e696e76616c696409666978747572652d76616c69640a",
+      "stderr": ""
+    },
+    {
+      "field": "token",
+      "value": "true",
+      "position": "single",
+      "command": "config",
+      "initial": "{\"a\":{\"base_url\":\"https://a.invalid\",\"token\":true}}",
+      "rc": 0,
+      "stdout_hex": "68747470733a2f2f612e696e76616c696409547275650a",
+      "stderr": ""
+    },
+    {
+      "field": "token",
+      "value": "true",
+      "position": "single",
+      "command": "tsv",
+      "initial": "{\"a\":{\"base_url\":\"https://a.invalid\",\"token\":true}}",
+      "rc": 0,
+      "stdout_hex": "610968747470733a2f2f612e696e76616c696409547275650a",
+      "stderr": ""
+    },
+    {
+      "field": "token",
+      "value": "true",
+      "position": "before",
+      "command": "config",
+      "initial": "{\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"},\"a\":{\"base_url\":\"https://a.invalid\",\"token\":true}}",
+      "rc": 0,
+      "stdout_hex": "68747470733a2f2f612e696e76616c696409547275650a",
+      "stderr": ""
+    },
+    {
+      "field": "token",
+      "value": "true",
+      "position": "before",
+      "command": "tsv",
+      "initial": "{\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"},\"a\":{\"base_url\":\"https://a.invalid\",\"token\":true}}",
+      "rc": 0,
+      "stdout_hex": "76616c69640968747470733a2f2f76616c69642e696e76616c696409666978747572652d76616c69640a610968747470733a2f2f612e696e76616c696409547275650a",
+      "stderr": ""
+    },
+    {
+      "field": "token",
+      "value": "true",
+      "position": "after",
+      "command": "config",
+      "initial": "{\"a\":{\"base_url\":\"https://a.invalid\",\"token\":true},\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"}}",
+      "rc": 0,
+      "stdout_hex": "68747470733a2f2f612e696e76616c696409547275650a",
+      "stderr": ""
+    },
+    {
+      "field": "token",
+      "value": "true",
+      "position": "after",
+      "command": "tsv",
+      "initial": "{\"a\":{\"base_url\":\"https://a.invalid\",\"token\":true},\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"}}",
+      "rc": 0,
+      "stdout_hex": "610968747470733a2f2f612e696e76616c696409547275650a76616c69640968747470733a2f2f76616c69642e696e76616c696409666978747572652d76616c69640a",
+      "stderr": ""
+    },
+    {
+      "field": "token",
+      "value": "[1]",
+      "position": "single",
+      "command": "config",
+      "initial": "{\"a\":{\"base_url\":\"https://a.invalid\",\"token\":[1]}}",
+      "rc": 0,
+      "stdout_hex": "68747470733a2f2f612e696e76616c6964095b315d0a",
+      "stderr": ""
+    },
+    {
+      "field": "token",
+      "value": "[1]",
+      "position": "single",
+      "command": "tsv",
+      "initial": "{\"a\":{\"base_url\":\"https://a.invalid\",\"token\":[1]}}",
+      "rc": 0,
+      "stdout_hex": "610968747470733a2f2f612e696e76616c6964095b315d0a",
+      "stderr": ""
+    },
+    {
+      "field": "token",
+      "value": "[1]",
+      "position": "before",
+      "command": "config",
+      "initial": "{\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"},\"a\":{\"base_url\":\"https://a.invalid\",\"token\":[1]}}",
+      "rc": 0,
+      "stdout_hex": "68747470733a2f2f612e696e76616c6964095b315d0a",
+      "stderr": ""
+    },
+    {
+      "field": "token",
+      "value": "[1]",
+      "position": "before",
+      "command": "tsv",
+      "initial": "{\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"},\"a\":{\"base_url\":\"https://a.invalid\",\"token\":[1]}}",
+      "rc": 0,
+      "stdout_hex": "76616c69640968747470733a2f2f76616c69642e696e76616c696409666978747572652d76616c69640a610968747470733a2f2f612e696e76616c6964095b315d0a",
+      "stderr": ""
+    },
+    {
+      "field": "token",
+      "value": "[1]",
+      "position": "after",
+      "command": "config",
+      "initial": "{\"a\":{\"base_url\":\"https://a.invalid\",\"token\":[1]},\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"}}",
+      "rc": 0,
+      "stdout_hex": "68747470733a2f2f612e696e76616c6964095b315d0a",
+      "stderr": ""
+    },
+    {
+      "field": "token",
+      "value": "[1]",
+      "position": "after",
+      "command": "tsv",
+      "initial": "{\"a\":{\"base_url\":\"https://a.invalid\",\"token\":[1]},\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"}}",
+      "rc": 0,
+      "stdout_hex": "610968747470733a2f2f612e696e76616c6964095b315d0a76616c69640968747470733a2f2f76616c69642e696e76616c696409666978747572652d76616c69640a",
+      "stderr": ""
+    },
+    {
+      "field": "token",
+      "value": "{\"x\":1}",
+      "position": "single",
+      "command": "config",
+      "initial": "{\"a\":{\"base_url\":\"https://a.invalid\",\"token\":{\"x\":1}}}",
+      "rc": 0,
+      "stdout_hex": "68747470733a2f2f612e696e76616c6964097b2778273a20317d0a",
+      "stderr": ""
+    },
+    {
+      "field": "token",
+      "value": "{\"x\":1}",
+      "position": "single",
+      "command": "tsv",
+      "initial": "{\"a\":{\"base_url\":\"https://a.invalid\",\"token\":{\"x\":1}}}",
+      "rc": 0,
+      "stdout_hex": "610968747470733a2f2f612e696e76616c6964097b2778273a20317d0a",
+      "stderr": ""
+    },
+    {
+      "field": "token",
+      "value": "{\"x\":1}",
+      "position": "before",
+      "command": "config",
+      "initial": "{\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"},\"a\":{\"base_url\":\"https://a.invalid\",\"token\":{\"x\":1}}}",
+      "rc": 0,
+      "stdout_hex": "68747470733a2f2f612e696e76616c6964097b2778273a20317d0a",
+      "stderr": ""
+    },
+    {
+      "field": "token",
+      "value": "{\"x\":1}",
+      "position": "before",
+      "command": "tsv",
+      "initial": "{\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"},\"a\":{\"base_url\":\"https://a.invalid\",\"token\":{\"x\":1}}}",
+      "rc": 0,
+      "stdout_hex": "76616c69640968747470733a2f2f76616c69642e696e76616c696409666978747572652d76616c69640a610968747470733a2f2f612e696e76616c6964097b2778273a20317d0a",
+      "stderr": ""
+    },
+    {
+      "field": "token",
+      "value": "{\"x\":1}",
+      "position": "after",
+      "command": "config",
+      "initial": "{\"a\":{\"base_url\":\"https://a.invalid\",\"token\":{\"x\":1}},\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"}}",
+      "rc": 0,
+      "stdout_hex": "68747470733a2f2f612e696e76616c6964097b2778273a20317d0a",
+      "stderr": ""
+    },
+    {
+      "field": "token",
+      "value": "{\"x\":1}",
+      "position": "after",
+      "command": "tsv",
+      "initial": "{\"a\":{\"base_url\":\"https://a.invalid\",\"token\":{\"x\":1}},\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"}}",
+      "rc": 0,
+      "stdout_hex": "610968747470733a2f2f612e696e76616c6964097b2778273a20317d0a76616c69640968747470733a2f2f76616c69642e696e76616c696409666978747572652d76616c69640a",
+      "stderr": ""
+    },
+    {
+      "field": "token",
+      "value": "\"\\ud800\"",
+      "position": "single",
+      "command": "config",
+      "initial": "{\"a\":{\"base_url\":\"https://a.invalid\",\"token\":\"\\ud800\"}}",
+      "rc": 1,
+      "stdout_hex": "",
+      "stderr": "erro: <FILE> inv\u00e1lido ('utf-8' codec can't encode character '\\ud800' in position 18: surrogates not allowed)\n"
+    },
+    {
+      "field": "token",
+      "value": "\"\\ud800\"",
+      "position": "single",
+      "command": "tsv",
+      "initial": "{\"a\":{\"base_url\":\"https://a.invalid\",\"token\":\"\\ud800\"}}",
+      "rc": 1,
+      "stdout_hex": "",
+      "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 12, in <module>\n    print(\"%s\\t%s\\t%s\" % (k, v[\"base_url\"].rstrip(\"/\"), v[\"token\"]))\n    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nUnicodeEncodeError: 'utf-8' codec can't encode character '\\ud800' in position 20: surrogates not allowed\n"
+    },
+    {
+      "field": "token",
+      "value": "\"\\ud800\"",
+      "position": "before",
+      "command": "config",
+      "initial": "{\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"},\"a\":{\"base_url\":\"https://a.invalid\",\"token\":\"\\ud800\"}}",
+      "rc": 1,
+      "stdout_hex": "",
+      "stderr": "erro: <FILE> inv\u00e1lido ('utf-8' codec can't encode character '\\ud800' in position 18: surrogates not allowed)\n"
+    },
+    {
+      "field": "token",
+      "value": "\"\\ud800\"",
+      "position": "before",
+      "command": "tsv",
+      "initial": "{\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"},\"a\":{\"base_url\":\"https://a.invalid\",\"token\":\"\\ud800\"}}",
+      "rc": 1,
+      "stdout_hex": "76616c69640968747470733a2f2f76616c69642e696e76616c696409666978747572652d76616c69640a",
+      "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 12, in <module>\n    print(\"%s\\t%s\\t%s\" % (k, v[\"base_url\"].rstrip(\"/\"), v[\"token\"]))\n    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nUnicodeEncodeError: 'utf-8' codec can't encode character '\\ud800' in position 20: surrogates not allowed\n"
+    },
+    {
+      "field": "token",
+      "value": "\"\\ud800\"",
+      "position": "after",
+      "command": "config",
+      "initial": "{\"a\":{\"base_url\":\"https://a.invalid\",\"token\":\"\\ud800\"},\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"}}",
+      "rc": 1,
+      "stdout_hex": "",
+      "stderr": "erro: <FILE> inv\u00e1lido ('utf-8' codec can't encode character '\\ud800' in position 18: surrogates not allowed)\n"
+    },
+    {
+      "field": "token",
+      "value": "\"\\ud800\"",
+      "position": "after",
+      "command": "tsv",
+      "initial": "{\"a\":{\"base_url\":\"https://a.invalid\",\"token\":\"\\ud800\"},\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"}}",
+      "rc": 1,
+      "stdout_hex": "",
+      "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 12, in <module>\n    print(\"%s\\t%s\\t%s\" % (k, v[\"base_url\"].rstrip(\"/\"), v[\"token\"]))\n    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nUnicodeEncodeError: 'utf-8' codec can't encode character '\\ud800' in position 20: surrogates not allowed\n"
+    },
+    {
+      "field": "token",
+      "value": "\"a\u00e7\u00facar\"",
+      "position": "single",
+      "command": "config",
+      "initial": "{\"a\":{\"base_url\":\"https://a.invalid\",\"token\":\"a\u00e7\u00facar\"}}",
+      "rc": 0,
+      "stdout_hex": "68747470733a2f2f612e696e76616c69640961c3a7c3ba6361720a",
+      "stderr": ""
+    },
+    {
+      "field": "token",
+      "value": "\"a\u00e7\u00facar\"",
+      "position": "single",
+      "command": "tsv",
+      "initial": "{\"a\":{\"base_url\":\"https://a.invalid\",\"token\":\"a\u00e7\u00facar\"}}",
+      "rc": 0,
+      "stdout_hex": "610968747470733a2f2f612e696e76616c69640961c3a7c3ba6361720a",
+      "stderr": ""
+    },
+    {
+      "field": "token",
+      "value": "\"a\u00e7\u00facar\"",
+      "position": "before",
+      "command": "config",
+      "initial": "{\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"},\"a\":{\"base_url\":\"https://a.invalid\",\"token\":\"a\u00e7\u00facar\"}}",
+      "rc": 0,
+      "stdout_hex": "68747470733a2f2f612e696e76616c69640961c3a7c3ba6361720a",
+      "stderr": ""
+    },
+    {
+      "field": "token",
+      "value": "\"a\u00e7\u00facar\"",
+      "position": "before",
+      "command": "tsv",
+      "initial": "{\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"},\"a\":{\"base_url\":\"https://a.invalid\",\"token\":\"a\u00e7\u00facar\"}}",
+      "rc": 0,
+      "stdout_hex": "76616c69640968747470733a2f2f76616c69642e696e76616c696409666978747572652d76616c69640a610968747470733a2f2f612e696e76616c69640961c3a7c3ba6361720a",
+      "stderr": ""
+    },
+    {
+      "field": "token",
+      "value": "\"a\u00e7\u00facar\"",
+      "position": "after",
+      "command": "config",
+      "initial": "{\"a\":{\"base_url\":\"https://a.invalid\",\"token\":\"a\u00e7\u00facar\"},\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"}}",
+      "rc": 0,
+      "stdout_hex": "68747470733a2f2f612e696e76616c69640961c3a7c3ba6361720a",
+      "stderr": ""
+    },
+    {
+      "field": "token",
+      "value": "\"a\u00e7\u00facar\"",
+      "position": "after",
+      "command": "tsv",
+      "initial": "{\"a\":{\"base_url\":\"https://a.invalid\",\"token\":\"a\u00e7\u00facar\"},\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"}}",
+      "rc": 0,
+      "stdout_hex": "610968747470733a2f2f612e696e76616c69640961c3a7c3ba6361720a76616c69640968747470733a2f2f76616c69642e696e76616c696409666978747572652d76616c69640a",
+      "stderr": ""
+    },
+    {
+      "field": "base_url",
+      "value": "NaN",
+      "position": "single",
+      "command": "config",
+      "initial": "{\"a\":{\"token\":\"fixture\",\"base_url\":NaN}}",
+      "rc": 1,
+      "stdout_hex": "",
+      "stderr": "erro: <FILE> inv\u00e1lido ('float' object has no attribute 'rstrip')\n"
+    },
+    {
+      "field": "base_url",
+      "value": "NaN",
+      "position": "single",
+      "command": "tsv",
+      "initial": "{\"a\":{\"token\":\"fixture\",\"base_url\":NaN}}",
+      "rc": 1,
+      "stdout_hex": "",
+      "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 12, in <module>\n    print(\"%s\\t%s\\t%s\" % (k, v[\"base_url\"].rstrip(\"/\"), v[\"token\"]))\n                             ^^^^^^^^^^^^^^^^^^^^\nAttributeError: 'float' object has no attribute 'rstrip'\n"
+    },
+    {
+      "field": "base_url",
+      "value": "NaN",
+      "position": "before",
+      "command": "config",
+      "initial": "{\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"},\"a\":{\"token\":\"fixture\",\"base_url\":NaN}}",
+      "rc": 1,
+      "stdout_hex": "",
+      "stderr": "erro: <FILE> inv\u00e1lido ('float' object has no attribute 'rstrip')\n"
+    },
+    {
+      "field": "base_url",
+      "value": "NaN",
+      "position": "before",
+      "command": "tsv",
+      "initial": "{\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"},\"a\":{\"token\":\"fixture\",\"base_url\":NaN}}",
+      "rc": 1,
+      "stdout_hex": "76616c69640968747470733a2f2f76616c69642e696e76616c696409666978747572652d76616c69640a",
+      "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 12, in <module>\n    print(\"%s\\t%s\\t%s\" % (k, v[\"base_url\"].rstrip(\"/\"), v[\"token\"]))\n                             ^^^^^^^^^^^^^^^^^^^^\nAttributeError: 'float' object has no attribute 'rstrip'\n"
+    },
+    {
+      "field": "base_url",
+      "value": "NaN",
+      "position": "after",
+      "command": "config",
+      "initial": "{\"a\":{\"token\":\"fixture\",\"base_url\":NaN},\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"}}",
+      "rc": 1,
+      "stdout_hex": "",
+      "stderr": "erro: <FILE> inv\u00e1lido ('float' object has no attribute 'rstrip')\n"
+    },
+    {
+      "field": "base_url",
+      "value": "NaN",
+      "position": "after",
+      "command": "tsv",
+      "initial": "{\"a\":{\"token\":\"fixture\",\"base_url\":NaN},\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"}}",
+      "rc": 1,
+      "stdout_hex": "",
+      "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 12, in <module>\n    print(\"%s\\t%s\\t%s\" % (k, v[\"base_url\"].rstrip(\"/\"), v[\"token\"]))\n                             ^^^^^^^^^^^^^^^^^^^^\nAttributeError: 'float' object has no attribute 'rstrip'\n"
+    },
+    {
+      "field": "base_url",
+      "value": "Infinity",
+      "position": "single",
+      "command": "config",
+      "initial": "{\"a\":{\"token\":\"fixture\",\"base_url\":Infinity}}",
+      "rc": 1,
+      "stdout_hex": "",
+      "stderr": "erro: <FILE> inv\u00e1lido ('float' object has no attribute 'rstrip')\n"
+    },
+    {
+      "field": "base_url",
+      "value": "Infinity",
+      "position": "single",
+      "command": "tsv",
+      "initial": "{\"a\":{\"token\":\"fixture\",\"base_url\":Infinity}}",
+      "rc": 1,
+      "stdout_hex": "",
+      "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 12, in <module>\n    print(\"%s\\t%s\\t%s\" % (k, v[\"base_url\"].rstrip(\"/\"), v[\"token\"]))\n                             ^^^^^^^^^^^^^^^^^^^^\nAttributeError: 'float' object has no attribute 'rstrip'\n"
+    },
+    {
+      "field": "base_url",
+      "value": "Infinity",
+      "position": "before",
+      "command": "config",
+      "initial": "{\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"},\"a\":{\"token\":\"fixture\",\"base_url\":Infinity}}",
+      "rc": 1,
+      "stdout_hex": "",
+      "stderr": "erro: <FILE> inv\u00e1lido ('float' object has no attribute 'rstrip')\n"
+    },
+    {
+      "field": "base_url",
+      "value": "Infinity",
+      "position": "before",
+      "command": "tsv",
+      "initial": "{\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"},\"a\":{\"token\":\"fixture\",\"base_url\":Infinity}}",
+      "rc": 1,
+      "stdout_hex": "76616c69640968747470733a2f2f76616c69642e696e76616c696409666978747572652d76616c69640a",
+      "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 12, in <module>\n    print(\"%s\\t%s\\t%s\" % (k, v[\"base_url\"].rstrip(\"/\"), v[\"token\"]))\n                             ^^^^^^^^^^^^^^^^^^^^\nAttributeError: 'float' object has no attribute 'rstrip'\n"
+    },
+    {
+      "field": "base_url",
+      "value": "Infinity",
+      "position": "after",
+      "command": "config",
+      "initial": "{\"a\":{\"token\":\"fixture\",\"base_url\":Infinity},\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"}}",
+      "rc": 1,
+      "stdout_hex": "",
+      "stderr": "erro: <FILE> inv\u00e1lido ('float' object has no attribute 'rstrip')\n"
+    },
+    {
+      "field": "base_url",
+      "value": "Infinity",
+      "position": "after",
+      "command": "tsv",
+      "initial": "{\"a\":{\"token\":\"fixture\",\"base_url\":Infinity},\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"}}",
+      "rc": 1,
+      "stdout_hex": "",
+      "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 12, in <module>\n    print(\"%s\\t%s\\t%s\" % (k, v[\"base_url\"].rstrip(\"/\"), v[\"token\"]))\n                             ^^^^^^^^^^^^^^^^^^^^\nAttributeError: 'float' object has no attribute 'rstrip'\n"
+    },
+    {
+      "field": "base_url",
+      "value": "123456789012345678901234567890",
+      "position": "single",
+      "command": "config",
+      "initial": "{\"a\":{\"token\":\"fixture\",\"base_url\":123456789012345678901234567890}}",
+      "rc": 1,
+      "stdout_hex": "",
+      "stderr": "erro: <FILE> inv\u00e1lido ('int' object has no attribute 'rstrip')\n"
+    },
+    {
+      "field": "base_url",
+      "value": "123456789012345678901234567890",
+      "position": "single",
+      "command": "tsv",
+      "initial": "{\"a\":{\"token\":\"fixture\",\"base_url\":123456789012345678901234567890}}",
+      "rc": 1,
+      "stdout_hex": "",
+      "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 12, in <module>\n    print(\"%s\\t%s\\t%s\" % (k, v[\"base_url\"].rstrip(\"/\"), v[\"token\"]))\n                             ^^^^^^^^^^^^^^^^^^^^\nAttributeError: 'int' object has no attribute 'rstrip'\n"
+    },
+    {
+      "field": "base_url",
+      "value": "123456789012345678901234567890",
+      "position": "before",
+      "command": "config",
+      "initial": "{\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"},\"a\":{\"token\":\"fixture\",\"base_url\":123456789012345678901234567890}}",
+      "rc": 1,
+      "stdout_hex": "",
+      "stderr": "erro: <FILE> inv\u00e1lido ('int' object has no attribute 'rstrip')\n"
+    },
+    {
+      "field": "base_url",
+      "value": "123456789012345678901234567890",
+      "position": "before",
+      "command": "tsv",
+      "initial": "{\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"},\"a\":{\"token\":\"fixture\",\"base_url\":123456789012345678901234567890}}",
+      "rc": 1,
+      "stdout_hex": "76616c69640968747470733a2f2f76616c69642e696e76616c696409666978747572652d76616c69640a",
+      "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 12, in <module>\n    print(\"%s\\t%s\\t%s\" % (k, v[\"base_url\"].rstrip(\"/\"), v[\"token\"]))\n                             ^^^^^^^^^^^^^^^^^^^^\nAttributeError: 'int' object has no attribute 'rstrip'\n"
+    },
+    {
+      "field": "base_url",
+      "value": "123456789012345678901234567890",
+      "position": "after",
+      "command": "config",
+      "initial": "{\"a\":{\"token\":\"fixture\",\"base_url\":123456789012345678901234567890},\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"}}",
+      "rc": 1,
+      "stdout_hex": "",
+      "stderr": "erro: <FILE> inv\u00e1lido ('int' object has no attribute 'rstrip')\n"
+    },
+    {
+      "field": "base_url",
+      "value": "123456789012345678901234567890",
+      "position": "after",
+      "command": "tsv",
+      "initial": "{\"a\":{\"token\":\"fixture\",\"base_url\":123456789012345678901234567890},\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"}}",
+      "rc": 1,
+      "stdout_hex": "",
+      "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 12, in <module>\n    print(\"%s\\t%s\\t%s\" % (k, v[\"base_url\"].rstrip(\"/\"), v[\"token\"]))\n                             ^^^^^^^^^^^^^^^^^^^^\nAttributeError: 'int' object has no attribute 'rstrip'\n"
+    },
+    {
+      "field": "base_url",
+      "value": "true",
+      "position": "single",
+      "command": "config",
+      "initial": "{\"a\":{\"token\":\"fixture\",\"base_url\":true}}",
+      "rc": 1,
+      "stdout_hex": "",
+      "stderr": "erro: <FILE> inv\u00e1lido ('bool' object has no attribute 'rstrip')\n"
+    },
+    {
+      "field": "base_url",
+      "value": "true",
+      "position": "single",
+      "command": "tsv",
+      "initial": "{\"a\":{\"token\":\"fixture\",\"base_url\":true}}",
+      "rc": 1,
+      "stdout_hex": "",
+      "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 12, in <module>\n    print(\"%s\\t%s\\t%s\" % (k, v[\"base_url\"].rstrip(\"/\"), v[\"token\"]))\n                             ^^^^^^^^^^^^^^^^^^^^\nAttributeError: 'bool' object has no attribute 'rstrip'\n"
+    },
+    {
+      "field": "base_url",
+      "value": "true",
+      "position": "before",
+      "command": "config",
+      "initial": "{\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"},\"a\":{\"token\":\"fixture\",\"base_url\":true}}",
+      "rc": 1,
+      "stdout_hex": "",
+      "stderr": "erro: <FILE> inv\u00e1lido ('bool' object has no attribute 'rstrip')\n"
+    },
+    {
+      "field": "base_url",
+      "value": "true",
+      "position": "before",
+      "command": "tsv",
+      "initial": "{\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"},\"a\":{\"token\":\"fixture\",\"base_url\":true}}",
+      "rc": 1,
+      "stdout_hex": "76616c69640968747470733a2f2f76616c69642e696e76616c696409666978747572652d76616c69640a",
+      "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 12, in <module>\n    print(\"%s\\t%s\\t%s\" % (k, v[\"base_url\"].rstrip(\"/\"), v[\"token\"]))\n                             ^^^^^^^^^^^^^^^^^^^^\nAttributeError: 'bool' object has no attribute 'rstrip'\n"
+    },
+    {
+      "field": "base_url",
+      "value": "true",
+      "position": "after",
+      "command": "config",
+      "initial": "{\"a\":{\"token\":\"fixture\",\"base_url\":true},\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"}}",
+      "rc": 1,
+      "stdout_hex": "",
+      "stderr": "erro: <FILE> inv\u00e1lido ('bool' object has no attribute 'rstrip')\n"
+    },
+    {
+      "field": "base_url",
+      "value": "true",
+      "position": "after",
+      "command": "tsv",
+      "initial": "{\"a\":{\"token\":\"fixture\",\"base_url\":true},\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"}}",
+      "rc": 1,
+      "stdout_hex": "",
+      "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 12, in <module>\n    print(\"%s\\t%s\\t%s\" % (k, v[\"base_url\"].rstrip(\"/\"), v[\"token\"]))\n                             ^^^^^^^^^^^^^^^^^^^^\nAttributeError: 'bool' object has no attribute 'rstrip'\n"
+    },
+    {
+      "field": "base_url",
+      "value": "[1]",
+      "position": "single",
+      "command": "config",
+      "initial": "{\"a\":{\"token\":\"fixture\",\"base_url\":[1]}}",
+      "rc": 1,
+      "stdout_hex": "",
+      "stderr": "erro: <FILE> inv\u00e1lido ('list' object has no attribute 'rstrip')\n"
+    },
+    {
+      "field": "base_url",
+      "value": "[1]",
+      "position": "single",
+      "command": "tsv",
+      "initial": "{\"a\":{\"token\":\"fixture\",\"base_url\":[1]}}",
+      "rc": 1,
+      "stdout_hex": "",
+      "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 12, in <module>\n    print(\"%s\\t%s\\t%s\" % (k, v[\"base_url\"].rstrip(\"/\"), v[\"token\"]))\n                             ^^^^^^^^^^^^^^^^^^^^\nAttributeError: 'list' object has no attribute 'rstrip'\n"
+    },
+    {
+      "field": "base_url",
+      "value": "[1]",
+      "position": "before",
+      "command": "config",
+      "initial": "{\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"},\"a\":{\"token\":\"fixture\",\"base_url\":[1]}}",
+      "rc": 1,
+      "stdout_hex": "",
+      "stderr": "erro: <FILE> inv\u00e1lido ('list' object has no attribute 'rstrip')\n"
+    },
+    {
+      "field": "base_url",
+      "value": "[1]",
+      "position": "before",
+      "command": "tsv",
+      "initial": "{\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"},\"a\":{\"token\":\"fixture\",\"base_url\":[1]}}",
+      "rc": 1,
+      "stdout_hex": "76616c69640968747470733a2f2f76616c69642e696e76616c696409666978747572652d76616c69640a",
+      "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 12, in <module>\n    print(\"%s\\t%s\\t%s\" % (k, v[\"base_url\"].rstrip(\"/\"), v[\"token\"]))\n                             ^^^^^^^^^^^^^^^^^^^^\nAttributeError: 'list' object has no attribute 'rstrip'\n"
+    },
+    {
+      "field": "base_url",
+      "value": "[1]",
+      "position": "after",
+      "command": "config",
+      "initial": "{\"a\":{\"token\":\"fixture\",\"base_url\":[1]},\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"}}",
+      "rc": 1,
+      "stdout_hex": "",
+      "stderr": "erro: <FILE> inv\u00e1lido ('list' object has no attribute 'rstrip')\n"
+    },
+    {
+      "field": "base_url",
+      "value": "[1]",
+      "position": "after",
+      "command": "tsv",
+      "initial": "{\"a\":{\"token\":\"fixture\",\"base_url\":[1]},\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"}}",
+      "rc": 1,
+      "stdout_hex": "",
+      "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 12, in <module>\n    print(\"%s\\t%s\\t%s\" % (k, v[\"base_url\"].rstrip(\"/\"), v[\"token\"]))\n                             ^^^^^^^^^^^^^^^^^^^^\nAttributeError: 'list' object has no attribute 'rstrip'\n"
+    },
+    {
+      "field": "base_url",
+      "value": "{\"x\":1}",
+      "position": "single",
+      "command": "config",
+      "initial": "{\"a\":{\"token\":\"fixture\",\"base_url\":{\"x\":1}}}",
+      "rc": 1,
+      "stdout_hex": "",
+      "stderr": "erro: <FILE> inv\u00e1lido ('dict' object has no attribute 'rstrip')\n"
+    },
+    {
+      "field": "base_url",
+      "value": "{\"x\":1}",
+      "position": "single",
+      "command": "tsv",
+      "initial": "{\"a\":{\"token\":\"fixture\",\"base_url\":{\"x\":1}}}",
+      "rc": 1,
+      "stdout_hex": "",
+      "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 12, in <module>\n    print(\"%s\\t%s\\t%s\" % (k, v[\"base_url\"].rstrip(\"/\"), v[\"token\"]))\n                             ^^^^^^^^^^^^^^^^^^^^\nAttributeError: 'dict' object has no attribute 'rstrip'\n"
+    },
+    {
+      "field": "base_url",
+      "value": "{\"x\":1}",
+      "position": "before",
+      "command": "config",
+      "initial": "{\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"},\"a\":{\"token\":\"fixture\",\"base_url\":{\"x\":1}}}",
+      "rc": 1,
+      "stdout_hex": "",
+      "stderr": "erro: <FILE> inv\u00e1lido ('dict' object has no attribute 'rstrip')\n"
+    },
+    {
+      "field": "base_url",
+      "value": "{\"x\":1}",
+      "position": "before",
+      "command": "tsv",
+      "initial": "{\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"},\"a\":{\"token\":\"fixture\",\"base_url\":{\"x\":1}}}",
+      "rc": 1,
+      "stdout_hex": "76616c69640968747470733a2f2f76616c69642e696e76616c696409666978747572652d76616c69640a",
+      "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 12, in <module>\n    print(\"%s\\t%s\\t%s\" % (k, v[\"base_url\"].rstrip(\"/\"), v[\"token\"]))\n                             ^^^^^^^^^^^^^^^^^^^^\nAttributeError: 'dict' object has no attribute 'rstrip'\n"
+    },
+    {
+      "field": "base_url",
+      "value": "{\"x\":1}",
+      "position": "after",
+      "command": "config",
+      "initial": "{\"a\":{\"token\":\"fixture\",\"base_url\":{\"x\":1}},\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"}}",
+      "rc": 1,
+      "stdout_hex": "",
+      "stderr": "erro: <FILE> inv\u00e1lido ('dict' object has no attribute 'rstrip')\n"
+    },
+    {
+      "field": "base_url",
+      "value": "{\"x\":1}",
+      "position": "after",
+      "command": "tsv",
+      "initial": "{\"a\":{\"token\":\"fixture\",\"base_url\":{\"x\":1}},\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"}}",
+      "rc": 1,
+      "stdout_hex": "",
+      "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 12, in <module>\n    print(\"%s\\t%s\\t%s\" % (k, v[\"base_url\"].rstrip(\"/\"), v[\"token\"]))\n                             ^^^^^^^^^^^^^^^^^^^^\nAttributeError: 'dict' object has no attribute 'rstrip'\n"
+    },
+    {
+      "field": "base_url",
+      "value": "\"\\ud800\"",
+      "position": "single",
+      "command": "config",
+      "initial": "{\"a\":{\"token\":\"fixture\",\"base_url\":\"\\ud800\"}}",
+      "rc": 1,
+      "stdout_hex": "",
+      "stderr": "erro: <FILE> inv\u00e1lido ('utf-8' codec can't encode character '\\ud800' in position 0: surrogates not allowed)\n"
+    },
+    {
+      "field": "base_url",
+      "value": "\"\\ud800\"",
+      "position": "single",
+      "command": "tsv",
+      "initial": "{\"a\":{\"token\":\"fixture\",\"base_url\":\"\\ud800\"}}",
+      "rc": 1,
+      "stdout_hex": "",
+      "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 12, in <module>\n    print(\"%s\\t%s\\t%s\" % (k, v[\"base_url\"].rstrip(\"/\"), v[\"token\"]))\n    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nUnicodeEncodeError: 'utf-8' codec can't encode character '\\ud800' in position 2: surrogates not allowed\n"
+    },
+    {
+      "field": "base_url",
+      "value": "\"\\ud800\"",
+      "position": "before",
+      "command": "config",
+      "initial": "{\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"},\"a\":{\"token\":\"fixture\",\"base_url\":\"\\ud800\"}}",
+      "rc": 1,
+      "stdout_hex": "",
+      "stderr": "erro: <FILE> inv\u00e1lido ('utf-8' codec can't encode character '\\ud800' in position 0: surrogates not allowed)\n"
+    },
+    {
+      "field": "base_url",
+      "value": "\"\\ud800\"",
+      "position": "before",
+      "command": "tsv",
+      "initial": "{\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"},\"a\":{\"token\":\"fixture\",\"base_url\":\"\\ud800\"}}",
+      "rc": 1,
+      "stdout_hex": "76616c69640968747470733a2f2f76616c69642e696e76616c696409666978747572652d76616c69640a",
+      "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 12, in <module>\n    print(\"%s\\t%s\\t%s\" % (k, v[\"base_url\"].rstrip(\"/\"), v[\"token\"]))\n    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nUnicodeEncodeError: 'utf-8' codec can't encode character '\\ud800' in position 2: surrogates not allowed\n"
+    },
+    {
+      "field": "base_url",
+      "value": "\"\\ud800\"",
+      "position": "after",
+      "command": "config",
+      "initial": "{\"a\":{\"token\":\"fixture\",\"base_url\":\"\\ud800\"},\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"}}",
+      "rc": 1,
+      "stdout_hex": "",
+      "stderr": "erro: <FILE> inv\u00e1lido ('utf-8' codec can't encode character '\\ud800' in position 0: surrogates not allowed)\n"
+    },
+    {
+      "field": "base_url",
+      "value": "\"\\ud800\"",
+      "position": "after",
+      "command": "tsv",
+      "initial": "{\"a\":{\"token\":\"fixture\",\"base_url\":\"\\ud800\"},\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"}}",
+      "rc": 1,
+      "stdout_hex": "",
+      "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 12, in <module>\n    print(\"%s\\t%s\\t%s\" % (k, v[\"base_url\"].rstrip(\"/\"), v[\"token\"]))\n    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nUnicodeEncodeError: 'utf-8' codec can't encode character '\\ud800' in position 2: surrogates not allowed\n"
+    },
+    {
+      "field": "base_url",
+      "value": "\"a\u00e7\u00facar\"",
+      "position": "single",
+      "command": "config",
+      "initial": "{\"a\":{\"token\":\"fixture\",\"base_url\":\"a\u00e7\u00facar\"}}",
+      "rc": 0,
+      "stdout_hex": "61c3a7c3ba63617209666978747572650a",
+      "stderr": ""
+    },
+    {
+      "field": "base_url",
+      "value": "\"a\u00e7\u00facar\"",
+      "position": "single",
+      "command": "tsv",
+      "initial": "{\"a\":{\"token\":\"fixture\",\"base_url\":\"a\u00e7\u00facar\"}}",
+      "rc": 0,
+      "stdout_hex": "610961c3a7c3ba63617209666978747572650a",
+      "stderr": ""
+    },
+    {
+      "field": "base_url",
+      "value": "\"a\u00e7\u00facar\"",
+      "position": "before",
+      "command": "config",
+      "initial": "{\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"},\"a\":{\"token\":\"fixture\",\"base_url\":\"a\u00e7\u00facar\"}}",
+      "rc": 0,
+      "stdout_hex": "61c3a7c3ba63617209666978747572650a",
+      "stderr": ""
+    },
+    {
+      "field": "base_url",
+      "value": "\"a\u00e7\u00facar\"",
+      "position": "before",
+      "command": "tsv",
+      "initial": "{\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"},\"a\":{\"token\":\"fixture\",\"base_url\":\"a\u00e7\u00facar\"}}",
+      "rc": 0,
+      "stdout_hex": "76616c69640968747470733a2f2f76616c69642e696e76616c696409666978747572652d76616c69640a610961c3a7c3ba63617209666978747572650a",
+      "stderr": ""
+    },
+    {
+      "field": "base_url",
+      "value": "\"a\u00e7\u00facar\"",
+      "position": "after",
+      "command": "config",
+      "initial": "{\"a\":{\"token\":\"fixture\",\"base_url\":\"a\u00e7\u00facar\"},\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"}}",
+      "rc": 0,
+      "stdout_hex": "61c3a7c3ba63617209666978747572650a",
+      "stderr": ""
+    },
+    {
+      "field": "base_url",
+      "value": "\"a\u00e7\u00facar\"",
+      "position": "after",
+      "command": "tsv",
+      "initial": "{\"a\":{\"token\":\"fixture\",\"base_url\":\"a\u00e7\u00facar\"},\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"}}",
+      "rc": 0,
+      "stdout_hex": "610961c3a7c3ba63617209666978747572650a76616c69640968747470733a2f2f76616c69642e696e76616c696409666978747572652d76616c69640a",
+      "stderr": ""
+    },
+    {
+      "field": "id",
+      "value": "\"\\ud800\"",
+      "kind": "unknown",
+      "position": "single",
+      "command": "config",
+      "initial": "{\"\\ud800\": {\"base_url\": \"https://a.invalid\", \"token\": \"fixture\"}}",
+      "rc": 1,
+      "stdout_hex": "",
+      "stderr": "erro: servidor 'a' n\u00e3o est\u00e1 em <FILE> (conhecidos: \\ud800)\n"
+    },
+    {
+      "field": "id",
+      "value": "\"\\ud800\"",
+      "kind": "unknown",
+      "position": "before",
+      "command": "config",
+      "initial": "{\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"},\"\\ud800\": {\"base_url\": \"https://a.invalid\", \"token\": \"fixture\"}}",
+      "rc": 1,
+      "stdout_hex": "",
+      "stderr": "erro: servidor 'a' n\u00e3o est\u00e1 em <FILE> (conhecidos: valid, \\ud800)\n"
+    },
+    {
+      "field": "id",
+      "value": "\"\\ud800\"",
+      "kind": "unknown",
+      "position": "after",
+      "command": "config",
+      "initial": "{\"\\ud800\": {\"base_url\": \"https://a.invalid\", \"token\": \"fixture\"},\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"}}",
+      "rc": 1,
+      "stdout_hex": "",
+      "stderr": "erro: servidor 'a' n\u00e3o est\u00e1 em <FILE> (conhecidos: \\ud800, valid)\n"
+    },
+    {
+      "field": "id",
+      "value": "\"\\ud800\"",
+      "kind": "active",
+      "position": "single",
+      "command": "tsv",
+      "initial": "{\"\\ud800\": {\"base_url\": \"https://a.invalid\", \"token\": \"fixture\"}}",
+      "rc": 1,
+      "stdout_hex": "",
+      "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 12, in <module>\n    print(\"%s\\t%s\\t%s\" % (k, v[\"base_url\"].rstrip(\"/\"), v[\"token\"]))\n    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nUnicodeEncodeError: 'utf-8' codec can't encode character '\\ud800' in position 0: surrogates not allowed\n"
+    },
+    {
+      "field": "id",
+      "value": "\"\\ud800\"",
+      "kind": "active",
+      "position": "before",
+      "command": "tsv",
+      "initial": "{\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"},\"\\ud800\": {\"base_url\": \"https://a.invalid\", \"token\": \"fixture\"}}",
+      "rc": 1,
+      "stdout_hex": "76616c69640968747470733a2f2f76616c69642e696e76616c696409666978747572652d76616c69640a",
+      "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 12, in <module>\n    print(\"%s\\t%s\\t%s\" % (k, v[\"base_url\"].rstrip(\"/\"), v[\"token\"]))\n    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nUnicodeEncodeError: 'utf-8' codec can't encode character '\\ud800' in position 0: surrogates not allowed\n"
+    },
+    {
+      "field": "id",
+      "value": "\"\\ud800\"",
+      "kind": "active",
+      "position": "after",
+      "command": "tsv",
+      "initial": "{\"\\ud800\": {\"base_url\": \"https://a.invalid\", \"token\": \"fixture\"},\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"}}",
+      "rc": 1,
+      "stdout_hex": "",
+      "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 12, in <module>\n    print(\"%s\\t%s\\t%s\" % (k, v[\"base_url\"].rstrip(\"/\"), v[\"token\"]))\n    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nUnicodeEncodeError: 'utf-8' codec can't encode character '\\ud800' in position 0: surrogates not allowed\n"
+    },
+    {
+      "field": "id",
+      "value": "\"\\ud800\"",
+      "kind": "disabled",
+      "position": "single",
+      "command": "tsv",
+      "initial": "{\"\\ud800\": {\"base_url\": \"https://a.invalid\", \"token\": \"fixture\", \"enabled\": false}}",
+      "rc": 0,
+      "stdout_hex": "",
+      "stderr": "(\\ud800 desativado no peers.json \u2014 enderece direto se precisar)\n"
+    },
+    {
+      "field": "id",
+      "value": "\"\\ud800\"",
+      "kind": "disabled",
+      "position": "before",
+      "command": "tsv",
+      "initial": "{\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"},\"\\ud800\": {\"base_url\": \"https://a.invalid\", \"token\": \"fixture\", \"enabled\": false}}",
+      "rc": 0,
+      "stdout_hex": "76616c69640968747470733a2f2f76616c69642e696e76616c696409666978747572652d76616c69640a",
+      "stderr": "(\\ud800 desativado no peers.json \u2014 enderece direto se precisar)\n"
+    },
+    {
+      "field": "id",
+      "value": "\"\\ud800\"",
+      "kind": "disabled",
+      "position": "after",
+      "command": "tsv",
+      "initial": "{\"\\ud800\": {\"base_url\": \"https://a.invalid\", \"token\": \"fixture\", \"enabled\": false},\"valid\":{\"base_url\":\"https://valid.invalid/\",\"token\":\"fixture-valid\"}}",
+      "rc": 0,
+      "stdout_hex": "76616c69640968747470733a2f2f76616c69642e696e76616c696409666978747572652d76616c69640a",
+      "stderr": "(\\ud800 desativado no peers.json \u2014 enderece direto se precisar)\n"
+    }
+  ]
+}

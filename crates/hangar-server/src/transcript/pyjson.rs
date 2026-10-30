@@ -109,6 +109,12 @@ pub(crate) fn dumps_ordered(v: &Value, compare: &dyn Fn(&str, &str) -> std::cmp:
     out
 }
 
+/// O livro de configuração usa UTF-8 literal e ordenação por pontos de código válidos.
+pub(crate) fn dumps_compact_sorted_unicode(value:&Value,sort_keys:bool)->String {
+    let mut out=String::new();let compare=|left:&str,right:&str|left.cmp(right);
+    super::json_writer::write(&mut out,value,false,None,if sort_keys{Some(&compare)}else{None},true,false);out
+}
+
 /// O codec com marcadores próprios precisa conservar os caracteres Unicode legítimos.
 pub(crate) fn dumps_literal(v: &Value) -> String {
     let mut out = String::new();

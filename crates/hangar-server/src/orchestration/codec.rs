@@ -65,6 +65,12 @@ pub fn dumps_indented_utf8(value: &Value, indent: usize) -> Result<String, &'sta
     Ok(restore_markers(crate::transcript::pyjson::dumps_indent(value, indent, false), false))
 }
 
+/// JSON compacto UTF-8 para revisões; Unicode inválido não pode atravessar a codificação.
+pub fn dumps_compact_utf8(value:&Value,sort_keys:bool)->Result<String,&'static str>{
+    if contains_surrogate(value){return Err("surrogate Unicode isolado");}
+    Ok(restore_markers(crate::transcript::pyjson::dumps_compact_sorted_unicode(value,sort_keys),false))
+}
+
 fn restore_markers(mut raw: String, ascii: bool) -> String {
     let quote = |value: &Value| if ascii { crate::transcript::pyjson::dumps_literal(value) } else { crate::transcript::pyjson::dumps_unicode(value, false) };
     for token in ["NaN", "Infinity", "-Infinity"] {
@@ -203,7 +209,7 @@ pub fn string_length(text: &str) -> usize {
     count
 }
 
-fn replace_surrogate_text(value: &str, prefix: &str, replacement: char) -> String {
+fn replace_surrogate_text(value: &str, prefix: &str, replacement: impl Fn(&str)->String) -> String {
     let mut output = String::with_capacity(value.len());
     let mut rest = value;
     while let Some(at) = rest.find(prefix) {
@@ -213,7 +219,7 @@ fn replace_surrogate_text(value: &str, prefix: &str, replacement: char) -> Strin
             && tail.as_bytes().get(..4).is_some_and(|bytes| bytes.iter().all(u8::is_ascii_hexdigit))
             && u32::from_str_radix(&tail[..4], 16).is_ok_and(|code| (0xd800..=0xdfff).contains(&code))
         {
-            output.push(replacement);
+            output.push_str(&replacement(&tail[..4]));
             rest = &tail[5..];
         } else {
             output.push_str(prefix);
@@ -226,7 +232,12 @@ fn replace_surrogate_text(value: &str, prefix: &str, replacement: char) -> Strin
 
 /// O stdin histórico usa UTF-8 errors=replace, que substitui surrogate por '?'.
 pub fn encode_utf8_replace(value: &str) -> Vec<u8> {
-    replace_surrogate_text(value, &format!("{}surrogate:", *MARK), '?').into_bytes()
+    replace_surrogate_text(value, &format!("{}surrogate:", *MARK), |_|"?".into()).into_bytes()
+}
+
+/// O stderr do Python conserva Unicode válido e escapa os surrogates isolados.
+pub fn encode_utf8_backslashreplace(value:&str)->Vec<u8>{
+    replace_surrogate_text(value,&format!("{}surrogate:",*MARK),|code|format!("\\u{code}")).into_bytes()
 }
 
 /// Normalização dos sidecars que historicamente usam models.dumps_safe.
@@ -235,13 +246,13 @@ pub fn scrub_surrogates(mut value: Value) -> Value {
     let mut pending = vec![&mut value];
     while let Some(value) = pending.pop() {
         match value {
-            Value::String(value) => *value = replace_surrogate_text(value, &prefix, '\u{fffd}'),
+            Value::String(value) => *value = replace_surrogate_text(value, &prefix, |_|"\u{fffd}".into()),
             Value::Array(values) => pending.extend(values.iter_mut()),
             Value::Object(values) => {
                 let original = std::mem::take(values);
                 for (key, value) in original {
                     // A última chave normalizada vence, inclusive quando substitui uma árvore.
-                    if let Some(previous) = values.insert(replace_surrogate_text(&key, &prefix, '\u{fffd}'), value) { discard(previous); }
+                    if let Some(previous) = values.insert(replace_surrogate_text(&key, &prefix, |_|"\u{fffd}".into()), value) { discard(previous); }
                 }
                 pending.extend(values.values_mut());
             }

@@ -343,3 +343,5 @@ mod command_capture;
 mod codex_ecc;
 
 mod peer_file;
+
+mod peer_cli_values;

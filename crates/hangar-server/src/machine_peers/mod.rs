@@ -122,7 +122,9 @@ impl Error {
             msg: "não foi possível ler ou gravar a configuração das máquinas".into(),
         }
     }
+    pub fn failed()->Self{Self{status:500,code:"peers_response_failed",msg:String::new()}}
     pub fn response(self) -> Response {
+        if self.status==500{return body_server_error();}
         json_response(
             StatusCode::from_u16(self.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
             detail_body(self.code, &self.msg, json!({})),
@@ -208,7 +210,8 @@ impl Service {
         self.save_identity_using(value, &crate::runtime::queue::atomic_write)
     }
     fn save_identity_using(&self, value: &Value, write: &dyn Fn(&Path, &[u8]) -> std::io::Result<()>) -> Result<String, Error> {
-        let value = store::truthy_field(value, "identificador");
+        let empty=Value::String(String::new());
+        let value=value.get("identificador").filter(|value|store::truthy(value)).unwrap_or(&empty);
         if store::truthy(&value) {
             store::valid_id(&value).map_err(|mut e| {
                 e.code = "peers_id_invalido";
@@ -412,7 +415,11 @@ async fn handle_inner(
     };
     let result = dispatch(service, &method, &path, &query, std::mem::take(&mut body.0)).await;
     match result {
-        Ok(v) => json_response(StatusCode::OK, v),
+        Ok(value) => {
+            use crate::orchestration::codec;
+            if codec::contains_surrogate(&value){codec::discard(value);body_server_error()}
+            else{codec::response(StatusCode::OK,codec::normalize_response(value))}
+        },
         Err(e) if e.code == "alcance_endereco_desconhecido" => json_response(
             StatusCode::NOT_FOUND,
             detail_body(
