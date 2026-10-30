@@ -79,6 +79,10 @@ impl AdminCli {
                 }
                 let result = match (result,&cleanup) {
                     (Ok(value),Err(error))=>{crate::orchestration::codec::discard(value);Err(error.clone().into())},
+                    (Err(error),Err(_))=>{
+                        tracing::warn!(code="codex_cleanup_deferred","limpeza da pasta temporária do Codex adiada após falha do comando");
+                        Err(error)
+                    },
                     (result,_)=>result,
                 };
                 done.send_replace(Some(cleanup));
@@ -136,3 +140,7 @@ fn inventory(value:Value,key:&str,error:&str)->Result<Vec<Value>,String> {
 #[cfg(all(test,unix))]
 #[path="native_cli_tests.rs"]
 mod tests;
+
+#[cfg(all(test,unix))]
+#[path="native_cleanup_tests.rs"]
+mod cleanup_tests;

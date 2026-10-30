@@ -5,6 +5,10 @@ use serde_json::{Value, json};
 #[cfg(test)]
 #[path="files_config_tests.rs"]
 mod config_tests;
+
+#[cfg(all(test,unix))]
+#[path="files_read_tests.rs"]
+mod read_tests;
 use std::{
     fs,
     io::{self, Write},
@@ -39,7 +43,10 @@ impl std::error::Error for Error {}
 pub fn read(path: &Path) -> Result<Option<Vec<u8>>, Error> {
     match fs::read(path) {
         Ok(b) => Ok(Some(b)),
-        Err(e) if e.kind() == io::ErrorKind::NotFound && !path.is_symlink() => Ok(None),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            if path.is_symlink() {Err(Error::Invalid(format!("Link sem destino: {}",path.display())))}
+            else {Ok(None)}
+        },
         Err(e) => Err(e.into()),
     }
 }

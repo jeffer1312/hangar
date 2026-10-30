@@ -1,0 +1,51 @@
+{
+  "source_commit": "8a3ce81c1",
+  "platform": "posix",
+  "command": "cd backend && uv run python tests/fixtures/contract/codex-integration/generate_native_file_reads.py",
+  "cases": [
+    {
+      "name": "missing",
+      "result": {
+        "ok": null
+      },
+      "symlink": false
+    },
+    {
+      "name": "regular",
+      "result": {
+        "ok": "ff00"
+      },
+      "symlink": false
+    },
+    {
+      "name": "dangling",
+      "result": {
+        "class": "ValueError",
+        "error": "Link sem destino: $ROOT/a\u00e7\u00e3o"
+      },
+      "symlink": true
+    },
+    {
+      "name": "chain",
+      "result": {
+        "class": "ValueError",
+        "error": "Link sem destino: $ROOT/a\u00e7\u00e3o"
+      },
+      "symlink": true
+    },
+    {
+      "name": "valid",
+      "result": {
+        "ok": "ff00"
+      },
+      "symlink": true
+    },
+    {
+      "name": "missing_parent",
+      "result": {
+        "ok": null
+      },
+      "symlink": false
+    }
+  ]
+}
