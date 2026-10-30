@@ -5,8 +5,8 @@
   import { copyText } from '../../lib/clipboard';
   import { listOwnServers } from '../../lib/auth';
   import {
-    addVaultEntry, deleteVaultEntry, getVaultStatus, listVaultEntries, listVaultPeers, putVaultConfig, restoreVault,
-    revealVaultPassword, setVaultRecovery, updateVaultEntry,
+    addVaultEntry, deleteVaultEntry, findOwnerServer, getVaultStatus, listVaultEntries, listVaultPeers, putVaultConfig, restoreVault,
+    revealVaultPassword, setVaultRecovery, updateVaultEntry, vaultErrorText,
     type Server, type VaultEntry, type VaultPeer, type VaultPolicy, type VaultStatus,
   } from '@hangar/core';
 
@@ -21,81 +21,58 @@
   let revealed = $state<Record<string, string>>({});
   let busyId = $state<string | null>(null);
 
-  const codeOf = (err: unknown) => (err as { code?: string })?.code;
   const reason = (err: unknown) => {
-    const code = codeOf(err);
-    if (code === 'erro_cofre_ausente') return m.vault_web_error_absent();
-    if (code === 'erro_cofre_dona_remota') return m.vault_web_error_owner_remote();
-    return err instanceof Error ? err.message : String(err);
+    const code = (err as { code?: string })?.code;
+    return (code && vaultErrorText(code)) || (err instanceof Error ? err.message : String(err));
   };
-
-  // Quem recebe as escritas e a leitura da senha: a dona. Numa máquina que aponta para outra, a
-  // lista vem encaminhada, mas o resto só vai à dona, achada entre os servidores salvos neste aparelho.
-  let writer = $state<Server | null>(null);
-
-  function hostKey(url: string): string {
-    try {
-      const u = new URL(url.trim());
-      return `${u.host}${u.pathname.replace(/\/+$/, '')}`.toLowerCase();
-    } catch {
-      return url.trim().replace(/\/+$/, '').toLowerCase();
-    }
-  }
-
-  let resolving = $state(false);
-  async function resolveWriter(owner: string | undefined) {
-    if (!owner) return;
-    resolving = true;
-    const ok = await loadPeers();
-    resolving = false;
-    const peer = ok ? peers?.find((p) => p.id === owner) : undefined;
-    if (!peer) return;
-    const want = hostKey(peer.base_url);
-    writer = listOwnServers().find((s) => hostKey(s.baseUrl) === want) ?? null;
-  }
 
   async function load() {
     statusError = null;
     entriesError = null;
-    try {
-      status = await getVaultStatus(server);
-    } catch (err) {
+    // Lista das outras máquinas já em paralelo: serve às escolhas e, sem `owner_url`, a achar a dona.
+    void loadPeers();
+    const [st, list] = await Promise.allSettled([getVaultStatus(server), listVaultEntries(server)]);
+    if (st.status === 'rejected') {
       status = null;
-      writer = null;
-      statusError = reason(err);
+      statusError = reason(st.reason);
       return;
     }
-    writer = status.role === 'owner' ? server : null;
-    if (status.role === 'remote') void resolveWriter(status.owner);
+    status = st.value;
     if (status.state !== 'open') { entries = null; return; }
-    try {
-      entries = await listVaultEntries(server);
-    } catch (err) {
-      entries = null;
-      entriesError = reason(err);
-    }
+    if (list.status === 'fulfilled') entries = list.value;
+    else { entries = null; entriesError = reason(list.reason); }
   }
   $effect(() => { void load(); });
+
+  // Quem recebe as escritas e a leitura da senha: a dona. Numa máquina que aponta para outra, a
+  // lista vem encaminhada, mas o resto só vai à dona, achada entre os servidores salvos neste aparelho.
+  const writer = $derived.by((): Server | null => {
+    if (status?.role === 'owner') return server;
+    if (status?.role !== 'remote') return null;
+    const owner = status.owner;
+    const url = status.owner_url ?? peers?.find((p) => p.id === owner)?.base_url;
+    return url ? findOwnerServer(url, listOwnServers()) : null;
+  });
+  // Sem `owner_url` a dona só aparece quando a lista de máquinas chega.
+  const resolving = $derived.by(() => status?.role === 'remote' && !status.owner_url && peersLoading);
 
   // ── Onde fica o cofre ──────────────────────────────────────────────────────────────────────
   let configuring = $state(false);
   let configError = $state<string | null>(null);
-  // Máquinas do `peers.json` desta: candidatas a dona e a guardar a cópia. Lidas só quando pedidas.
+  // Máquinas do `peers.json` desta: candidatas a dona e a guardar a cópia.
   let peers = $state<VaultPeer[] | null>(null);
   let peersFor = $state<'owner' | 'backup' | 'restore' | null>(null);
   let peersLoading = $state(false);
   let peersError = $state<string | null>(null);
 
-  async function loadPeers(): Promise<boolean> {
-    if (peers) return true;
+  async function loadPeers() {
+    if (peers || peersLoading) return;
     peersLoading = true;
     peersError = null;
     try {
       peers = await listVaultPeers(server);
-      return true;
     } catch (err) {
       peersError = m.vault_web_peers_failed({ error: reason(err) });
-      return false;
     } finally {
       peersLoading = false;
     }
@@ -160,14 +137,6 @@
   let restorePassword = $state('');
   let restoring = $state(false);
   let restoreError = $state<string | null>(null);
-  const restoreCodes: Record<string, () => string> = {
-    erro_cofre_recuperacao_errada: m.vault_web_restore_wrong,
-    erro_cofre_nao_vazio: m.vault_web_restore_not_empty,
-    erro_cofre_backup_ausente: m.vault_web_restore_no_copy,
-    erro_cofre_backup_ilegivel: m.vault_web_restore_unreadable,
-    erro_cofre_backup_peer_fora: m.vault_web_restore_peer_down,
-    erro_cofre_recuperacao_nao_gravada: m.vault_web_restore_recovery_not_saved,
-  };
 
   async function restore(e: SubmitEvent) {
     e.preventDefault();
@@ -182,10 +151,9 @@
       restorePeer = null;
       await load();
     } catch (err) {
-      const code = codeOf(err);
-      restoreError = (code && restoreCodes[code]?.()) || reason(err);
+      restoreError = reason(err);
       // O cofre voltou, só a senha de recuperação faltou: a tela mostra o cofre aberto.
-      if (code === 'erro_cofre_recuperacao_nao_gravada') await load();
+      if ((err as { code?: string })?.code === 'erro_cofre_recuperacao_nao_gravada') await load();
     } finally {
       restoring = false;
     }
@@ -287,7 +255,7 @@
       closeForm();
       await load();
     } catch (err) {
-      formError = codeOf(err) === 'erro_cofre_nome_repetido' ? m.vault_web_name_taken() : reason(err);
+      formError = reason(err);
     } finally {
       saving = false;
     }

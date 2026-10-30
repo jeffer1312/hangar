@@ -14,7 +14,7 @@
   import { tick } from 'svelte';
   import BottomSheet from './BottomSheet.svelte';
   import * as m from '../paraglide/messages';
-  import { answerVaultRequest, type Server, type VaultAnswer, type VaultEvent, type VaultPolicy, type VaultRequest } from '@hangar/core';
+  import { answerVaultRequest, vaultErrorText, type Server, type VaultAnswer, type VaultEvent, type VaultPolicy, type VaultRequest } from '@hangar/core';
 
   let { server, event }: { server: Server; event: VaultEvent } = $props();
 
@@ -63,10 +63,8 @@
 
   function failure(err: unknown): string {
     const code = (err as { code?: string })?.code;
-    if (code === 'erro_interacao_desatualizada' || code === 'erro_cofre_pedido_respondido') return m.vault_web_request_stale();
-    if (code === 'erro_cofre_pedido_perdido') return m.vault_web_request_lost();
-    if (code === 'erro_cofre_trancado') return m.vault_web_request_locked();
-    if (code === 'erro_cofre_nome_repetido') return m.vault_web_name_taken();
+    const known = code ? vaultErrorText(code) : undefined;
+    if (known) return known;
     return m.vault_web_request_failed({ error: err instanceof Error ? err.message : String(err) });
   }
 
