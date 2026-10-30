@@ -108,14 +108,14 @@
 
 <div class="lv">
   <div class="lv-barra">
-    <button type="button" class="ct-btn" onclick={() => enviar({ t: 'back' })}>{m.native_accounts_login_view_back()}</button>
+    <button type="button" class="lv-btn" onclick={() => enviar({ t: 'back' })}>{m.native_accounts_login_view_back()}</button>
     <span class="lv-titulo">{titulo}</span>
-    <button type="button" class="ct-btn" onclick={onFechar}>{m.native_accounts_login_view_close()}</button>
+    <button type="button" class="lv-btn" onclick={onFechar}>{m.native_accounts_login_view_close()}</button>
   </div>
   {#if semEntrada}
     <div class="lv-sessao" role="status">
       <p>{m.native_accounts_login_view_no_input({ machine: maquina })} {m.native_accounts_login_view_activate_help()}</p>
-      <button type="button" class="ct-btn" onclick={reativar}>{m.native_accounts_login_view_activate()}</button>
+      <button type="button" class="lv-btn" onclick={reativar}>{m.native_accounts_login_view_activate()}</button>
     </div>
   {/if}
   {#if aviso}<p class="lv-aviso" role="status">{aviso}</p>{/if}
@@ -127,8 +127,8 @@
     <form class="lv-digitar" onsubmit={mandarTexto}>
       <input type="text" autocomplete="off" autocapitalize="none" spellcheck={false} bind:value={texto}
         aria-label={m.native_accounts_login_view_type()} placeholder={m.native_accounts_login_view_type()} />
-      <button type="submit" class="ct-btn" disabled={!texto}>{m.native_accounts_login_view_send()}</button>
-      <button type="button" class="ct-btn" onclick={() => enviar({ t: 'key', key: 'Enter' })}>Enter</button>
+      <button type="submit" class="lv-btn" disabled={!texto}>{m.native_accounts_login_view_send()}</button>
+      <button type="button" class="lv-btn" onclick={() => enviar({ t: 'key', key: 'Enter' })}>Enter</button>
     </form>
   {/if}
 </div>
@@ -138,6 +138,10 @@
   .lv-barra, .lv-digitar, .lv-sessao { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
   .lv-titulo { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--text-muted); font-size: 12px; }
   .lv-sessao p { flex: 1; min-width: 0; margin: 0; font-size: 12px; color: var(--text-muted); }
+  .lv-btn { flex-shrink: 0; height: 36px; padding: 0 var(--space-3); border: 1px solid var(--border-default); border-radius: var(--radius-sm);
+    background: var(--surface-raised); color: inherit; font: inherit; font-size: 13px; cursor: pointer; }
+  .lv-btn:disabled { opacity: 0.5; cursor: default; }
+  .lv-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .lv-aviso { margin: 0; font-size: 12px; color: var(--text-muted); }
   .lv-tela { display: block; width: 100%; max-height: 70dvh; object-fit: contain; border-radius: var(--radius-md, 8px);
     touch-action: none; outline: none; user-select: none; }
