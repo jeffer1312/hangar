@@ -6,3 +6,4 @@ pub mod hooks;
 pub mod trust;
 pub mod ecc;
 pub mod normalize;
+pub mod plugins;
