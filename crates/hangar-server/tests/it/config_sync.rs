@@ -24,7 +24,16 @@ fn config_sync_runtime_jev_publication_matches_python() {
             let body=step["body"].as_object().unwrap();
             let changes=body.iter().filter(|(_,v)|!v.is_null()).map(|(k,v)|(k.clone(),v.clone())).collect();
             let remove=body.iter().filter(|(_,v)|v.is_null()).map(|(k,_)|k.clone()).collect();
-            let result=match service.apply(&changes,&remove) {Ok(value)=>json!({"ok":value}),Err(error)=>json!({"error":error.replace(home.path().to_str().unwrap(),"⟦HOME⟧"),"kind":"ValueError"})};
+            let result=match service.apply(&changes,&remove) {
+                Ok(value)=>json!({"ok":value}),
+                Err(mut error)=>{
+                    // Só os caminhos citados mudam; conservar o restante do diagnóstico.
+                    for relative in [".claude.json", ".hangar/computer-control.json"] {
+                        error=error.replace(home.path().join(relative).to_str().unwrap(),&format!("⟦HOME⟧/{relative}"));
+                    }
+                    json!({"error":error.replace(home.path().to_str().unwrap(),"⟦HOME⟧"),"kind":"ValueError"})
+                }
+            };
             assert_eq!(result,step["result"],"{}",case["name"]);
             fn collect(root:&std::path::Path,path:&std::path::Path,out:&mut serde_json::Map<String,Value>) {
                 for entry in std::fs::read_dir(path).unwrap() {
