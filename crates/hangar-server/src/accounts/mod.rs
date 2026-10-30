@@ -6,6 +6,7 @@ pub mod credentials;
 pub mod claude_auth;
 pub mod claude_login;
 pub mod login_browser;
+pub mod login_view;
 pub mod claude_window;
 pub mod codex_login;
 pub mod codex_device_login;

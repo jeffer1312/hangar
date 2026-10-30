@@ -28,6 +28,7 @@ struct Attempt {
     target: Option<Target>,
     browser: Mutex<Option<Value>>,
     dispatch: Mutex<Option<tokio::task::AbortHandle>>,
+    channel: Option<Arc<dyn BrowserChannel>>,
 }
 /// Prazos da abertura e da consulta; os testes encurtam.
 #[derive(Clone, Copy)]
@@ -347,6 +348,7 @@ impl AccountService {
             target: target.as_ref().map(|login| login.target.clone()),
             browser: Mutex::new(None),
             dispatch: Mutex::new(None),
+            channel: target.as_ref().map(|login| login.channel.clone()),
         });
         self.claude_logins
             .attempts
@@ -385,6 +387,15 @@ impl AccountService {
         }
         Ok(json!({"ok":true}))
     }
+    /// Máquina e operação da tentativa com navegador escolhido; fora da trava da conta, porque a
+    /// transmissão chama a outra máquina várias vezes por segundo.
+    pub async fn login_view_route(&self, label: &str) -> Option<(String, String, Arc<dyn BrowserChannel>)> {
+        let account = self.claude_by_label(label).ok()?;
+        let key = AccountKey::new(Provider::Claude, &account.home).ok()?;
+        let attempts = self.claude_logins.attempts.lock().await;
+        let attempt = attempts.get(&key)?;
+        Some((attempt.target.as_ref()?.machine.clone(), attempt.operation.clone(), attempt.channel.clone()?))
+    }
     async fn current_attempt(&self, attempt: &Arc<Attempt>) -> bool {
         self.claude_logins
             .attempts
@@ -408,6 +419,11 @@ impl AccountService {
         client
             .call(&attempt.key, &attempt.operation, "close", None)
             .await?;
+        // Sem esperar: a outra máquina pode estar fora, e aqui a trava da conta está presa.
+        if let (Some(channel), Some(target)) = (attempt.channel.clone(), attempt.target.clone()) {
+            let operation = attempt.operation.clone();
+            tokio::spawn(async move { channel.close(&target.machine, &operation).await });
+        }
         self.remove_attempt_files(&attempt.key, &attempt.operation);
         fs::remove_file(self.login_record(&attempt.key)?).map_err(|_| AccountError::io())?;
         self.claude_logins

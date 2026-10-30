@@ -1,8 +1,9 @@
 //! Onde abrir a autorização do login Claude: destinos de cada máquina e validação do link.
 use super::catalog::AccountError;
+use super::login_view::{Desk, DeskInput};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::PathBuf,
     sync::{
         Arc, Mutex,
@@ -204,7 +205,8 @@ pub fn browser_command(host: &BrowserHost, target: &Target, url: &str) -> Option
             list_chrome_profiles(host.local_state.as_deref()?).iter().find(|profile| profile.dir == dir)?;
             Some(BrowserCommand {
                 program: host.chrome.clone()?,
-                args: vec![format!("--profile-directory={dir}"), url.to_owned()],
+                // Janela própria: é ela que a transmissão acompanha e que o fim do login fecha.
+                args: vec![format!("--profile-directory={dir}"), "--new-window".to_owned(), url.to_owned()],
             })
         }
         (Platform::Linux, TargetKind::DefaultBrowser) => Some(BrowserCommand {
@@ -305,6 +307,19 @@ pub trait BrowserChannel: Send + Sync {
     fn open(&self, request: OpenRequest) -> futures_util::future::BoxFuture<'_, Result<(), String>>;
     /// Erro = não deu para perguntar agora, e a consulta tenta de novo.
     fn result<'a>(&'a self, machine: &'a str, operation: &'a str) -> futures_util::future::BoxFuture<'a, Result<Option<String>, ()>>;
+    /// A janela do login, pela máquina do navegador.
+    fn view<'a>(&'a self, _machine: &'a str, _operation: &'a str) -> futures_util::future::BoxFuture<'a, Result<serde_json::Value, ()>> {
+        Box::pin(async { Err(()) })
+    }
+    fn input<'a>(&'a self, _machine: &'a str, _operation: &'a str, _input: serde_json::Value) -> futures_util::future::BoxFuture<'a, Result<(), String>> {
+        Box::pin(async { Err("erro_login_machine_unreachable".to_owned()) })
+    }
+    fn activate<'a>(&'a self, _machine: &'a str, _operation: &'a str) -> futures_util::future::BoxFuture<'a, Result<bool, ()>> {
+        Box::pin(async { Err(()) })
+    }
+    fn close<'a>(&'a self, _machine: &'a str, _operation: &'a str) -> futures_util::future::BoxFuture<'a, ()> {
+        Box::pin(async {})
+    }
 }
 
 pub struct AppChannel {
@@ -347,6 +362,60 @@ impl BrowserChannel for AppChannel {
             }
         })
     }
+
+    fn view<'a>(&'a self, machine: &'a str, operation: &'a str) -> futures_util::future::BoxFuture<'a, Result<serde_json::Value, ()>> {
+        Box::pin(async move {
+            if self.is_local(machine) {
+                return Ok(self.browser.view(operation).await);
+            }
+            let path = format!("/api/login-browser/view?operation={operation}");
+            match self.peers.call(machine, reqwest::Method::GET, &path, None).await {
+                Ok(Some(reply)) => Ok(reply),
+                _ => Err(()),
+            }
+        })
+    }
+
+    fn input<'a>(&'a self, machine: &'a str, operation: &'a str, input: serde_json::Value) -> futures_util::future::BoxFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            if self.is_local(machine) {
+                let input = serde_json::from_value(input).map_err(|_| "erro_login_view_input_invalid".to_owned())?;
+                return self.browser.input(operation, input).await.map_err(|error| error.code.to_string());
+            }
+            let path = format!("/api/login-browser/input?operation={operation}");
+            match self.peers.call(machine, reqwest::Method::POST, &path, Some(&input)).await {
+                Ok(_) => Ok(()),
+                Err(crate::groups::peers::PeerError::Refused { detail, .. }) => {
+                    Err(detail["code"].as_str().unwrap_or("erro_login_view_input_invalid").to_owned())
+                }
+                Err(_) => Err("erro_login_machine_unreachable".to_owned()),
+            }
+        })
+    }
+
+    fn activate<'a>(&'a self, machine: &'a str, operation: &'a str) -> futures_util::future::BoxFuture<'a, Result<bool, ()>> {
+        Box::pin(async move {
+            if self.is_local(machine) {
+                return Ok(self.browser.activate(operation).await);
+            }
+            let path = format!("/api/login-browser/activate?operation={operation}");
+            match self.peers.call(machine, reqwest::Method::POST, &path, Some(&serde_json::json!({}))).await {
+                Ok(Some(reply)) => Ok(reply["ok"] == true),
+                _ => Err(()),
+            }
+        })
+    }
+
+    fn close<'a>(&'a self, machine: &'a str, operation: &'a str) -> futures_util::future::BoxFuture<'a, ()> {
+        Box::pin(async move {
+            if self.is_local(machine) {
+                self.browser.close_view(operation).await;
+                return;
+            }
+            let path = format!("/api/login-browser/close?operation={operation}");
+            let _ = self.peers.call(machine, reqwest::Method::POST, &path, Some(&serde_json::json!({}))).await;
+        })
+    }
 }
 
 const LISTEN_CAP: std::time::Duration = std::time::Duration::from_secs(600);
@@ -371,7 +440,40 @@ pub struct LoginBrowser {
     launcher: Launcher,
     probe: HostProbe,
     generation: AtomicU64,
+    views: Views,
+    desk_probe: DeskProbe,
 }
+
+pub type DeskProbe = Arc<dyn Fn() -> Option<Arc<dyn Desk>> + Send + Sync>;
+
+/// A janela que o login abriu: a primeira que não estava na tela antes dele, e nenhuma outra.
+struct View {
+    desk: Arc<dyn Desk>,
+    baseline: HashSet<String>,
+    window: Option<String>,
+}
+
+type Views = Arc<Mutex<HashMap<String, View>>>;
+
+fn locked_views(views: &Views) -> std::sync::MutexGuard<'_, HashMap<String, View>> {
+    views.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Fecha só a janela do login; o resto do Chrome da pessoa continua aberto.
+async fn close_view_in(views: &Views, operation: &str) {
+    let Some(view) = locked_views(views).remove(operation) else { return };
+    let Some(id) = view.window else { return };
+    let _ = tokio::task::spawn_blocking(move || {
+        if let Some(window) = view.desk.windows().into_iter().find(|window| window.id == id) {
+            view.desk.close(&window);
+        }
+    })
+    .await;
+}
+
+const VIEW_CAP: std::time::Duration = std::time::Duration::from_secs(5);
+/// Deixa a pessoa ver a confirmação antes de a janela sumir.
+const CLOSE_DELAY: std::time::Duration = std::time::Duration::from_secs(3);
 
 struct Listen {
     generation: u64,
@@ -391,6 +493,7 @@ struct CallbackState {
     operation: String,
     generation: u64,
     state: String,
+    views: Views,
 }
 
 /// Pedido com `state` errado não é guardado nem fecha a escuta: entregue ao CLI, derrubaria o login.
@@ -421,6 +524,11 @@ async fn callback(
     if !accepted {
         return axum::http::StatusCode::NOT_FOUND.into_response();
     }
+    let (views, operation) = (expected.views.clone(), expected.operation.clone());
+    tokio::spawn(async move {
+        tokio::time::sleep(CLOSE_DELAY).await;
+        close_view_in(&views, &operation).await;
+    });
     ([(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")], CLOSE_PAGE).into_response()
 }
 
@@ -430,11 +538,113 @@ fn refused(status: u16, code: &'static str, message: &str) -> AccountError {
 
 impl LoginBrowser {
     pub fn new() -> Self {
-        Self::with(Arc::new(launch_detached), Arc::new(detect_host))
+        Self::with_desk(Arc::new(launch_detached), Arc::new(detect_host), Arc::new(super::login_view::detect))
     }
 
     pub fn with(launcher: Launcher, probe: HostProbe) -> Self {
-        Self { listens: Arc::default(), launcher, probe, generation: AtomicU64::new(0) }
+        Self::with_desk(launcher, probe, Arc::new(|| None))
+    }
+
+    pub fn with_desk(launcher: Launcher, probe: HostProbe, desk_probe: DeskProbe) -> Self {
+        Self { listens: Arc::default(), launcher, probe, generation: AtomicU64::new(0), views: Arc::default(), desk_probe }
+    }
+
+    /// Antes de lançar: o que já está na tela nunca é transmitido nem fechado.
+    async fn prepare_view(&self, operation: &str) {
+        let probe = self.desk_probe.clone();
+        let prepared = tokio::task::spawn_blocking(move || {
+            let desk = probe()?;
+            let baseline = desk.windows().into_iter().map(|window| window.id).collect();
+            Some(View { desk, baseline, window: None })
+        })
+        .await;
+        if let Ok(Some(view)) = prepared {
+            locked_views(&self.views).insert(operation.to_owned(), view);
+        }
+    }
+
+    /// Um quadro da janela do login, em JSON: é o que o canal entre máquinas leva.
+    pub async fn view(&self, operation: &str) -> serde_json::Value {
+        use base64::Engine;
+        use serde_json::json;
+        let Some((desk, baseline, known)) = locked_views(&self.views)
+            .get(operation)
+            .map(|view| (view.desk.clone(), view.baseline.clone(), view.window.clone()))
+        else {
+            return json!({"available": false});
+        };
+        let looked = known.is_some();
+        let found = tokio::time::timeout(VIEW_CAP, tokio::task::spawn_blocking(move || {
+            let windows = desk.windows();
+            let (window, first) = match &known {
+                Some(id) => (windows.into_iter().find(|window| &window.id == id), false),
+                None => (windows.into_iter().find(|window| !baseline.contains(&window.id)), true),
+            };
+            let Some(mut window) = window else { return (None, None, true) };
+            if first {
+                desk.present(&window);
+                if let Some(moved) = desk.windows().into_iter().find(|other| other.id == window.id) {
+                    window = moved;
+                }
+            }
+            let jpeg = desk.capture(&window);
+            let can_input = desk.can_input();
+            (Some(window), jpeg, can_input)
+        }))
+        .await;
+        let Ok(Ok((window, jpeg, can_input))) = found else {
+            return json!({"available": true, "error": "erro_login_view_capture"});
+        };
+        let Some(window) = window else {
+            return if looked { json!({"available": true, "closed": true}) } else { json!({"available": true, "pending": true}) };
+        };
+        if let Some(view) = locked_views(&self.views).get_mut(operation) {
+            view.window = Some(window.id.clone());
+        }
+        match jpeg {
+            Some(jpeg) => json!({
+                "available": true,
+                "d": base64::engine::general_purpose::STANDARD.encode(jpeg),
+                "w": window.w,
+                "h": window.h,
+                "title": window.title,
+                "input": can_input,
+            }),
+            None => json!({"available": true, "error": "erro_login_view_capture", "input": can_input}),
+        }
+    }
+
+    pub async fn input(&self, operation: &str, input: DeskInput) -> Result<(), AccountError> {
+        if matches!(&input, DeskInput::Text { text } if text.chars().count() > 4096) {
+            return Err(refused(422, "erro_login_view_input_invalid", "texto grande demais"));
+        }
+        let view = locked_views(&self.views).get(operation).and_then(|view| Some((view.desk.clone(), view.window.clone()?)));
+        let Some((desk, id)) = view else {
+            return Err(refused(409, "erro_login_view_missing", "a janela do login não está aberta"));
+        };
+        let delivered = tokio::time::timeout(VIEW_CAP, tokio::task::spawn_blocking(move || {
+            if !desk.can_input() {
+                return Err(refused(409, "erro_login_view_no_input", "a sessão desta máquina está desconectada"));
+            }
+            let window = desk.windows().into_iter().find(|window| window.id == id)
+                .ok_or_else(|| refused(409, "erro_login_view_missing", "a janela do login não está aberta"))?;
+            desk.input(&window, &input);
+            Ok(())
+        }))
+        .await;
+        match delivered {
+            Ok(Ok(result)) => result,
+            _ => Err(refused(504, "erro_login_view_input_timeout", "a máquina não respondeu")),
+        }
+    }
+
+    pub async fn activate(&self, operation: &str) -> bool {
+        let Some(desk) = locked_views(&self.views).get(operation).map(|view| view.desk.clone()) else { return false };
+        tokio::task::spawn_blocking(move || desk.activate()).await.unwrap_or(false)
+    }
+
+    pub async fn close_view(&self, operation: &str) {
+        close_view_in(&self.views, operation).await;
     }
 
     /// Bloqueia só em `spawn_blocking`: a detecção lê arquivos e o lançamento espera o processo.
@@ -455,9 +665,13 @@ impl LoginBrowser {
         if request.remote {
             self.listen(&request.operation, &link).await?;
         }
+        if request.target.kind == TargetKind::ChromeProfile {
+            self.prepare_view(&request.operation).await;
+        }
         let launcher = self.launcher.clone();
         let launched = tokio::task::spawn_blocking(move || launcher(command)).await;
         if !matches!(launched, Ok(Ok(()))) {
+            locked_views(&self.views).remove(&request.operation);
             self.stop(&request.operation);
             return Err(refused(502, "erro_login_browser_failed", "não consegui abrir o navegador"));
         }
@@ -494,6 +708,7 @@ impl LoginBrowser {
                 operation: operation.to_owned(),
                 generation,
                 state: link.state.clone(),
+                views: self.views.clone(),
             });
         let serve = tokio::spawn(async move {
             let _ = axum::serve(listener, router)
@@ -502,14 +717,21 @@ impl LoginBrowser {
                 })
                 .await;
         });
-        let (listens, operation) = (self.listens.clone(), operation.to_owned());
+        let (listens, views, operation) = (self.listens.clone(), self.views.clone(), operation.to_owned());
         tokio::spawn(async move {
             tokio::time::sleep(LISTEN_CAP).await;
             // O navegador pode manter conexão parada, e a espera graciosa não terminaria sozinha.
             serve.abort();
-            let mut listens = locked(&listens);
-            if listens.get(&operation).is_some_and(|listen| listen.generation == generation) {
-                listens.remove(&operation);
+            let expired = {
+                let mut listens = locked(&listens);
+                let current = listens.get(&operation).is_some_and(|listen| listen.generation == generation);
+                if current {
+                    listens.remove(&operation);
+                }
+                current
+            };
+            if expired {
+                close_view_in(&views, &operation).await;
             }
         });
         Ok(())
@@ -598,12 +820,66 @@ fn account_of_targets_path(path: &str) -> Option<&str> {
         .filter(|label| !label.is_empty() && !label.contains('/'))
 }
 
+/// `/api/conta-estado/<conta>/login/view[/input|/activate]`: o cliente só fala com a máquina da conta.
+fn account_view_path(path: &str) -> Option<(&str, &str)> {
+    let (label, action) = path.strip_prefix(LOGIN_TARGETS_PREFIX)?.split_once("/login/view")?;
+    (!label.is_empty() && !label.contains('/') && matches!(action, "" | "/input" | "/activate")).then_some((label, action))
+}
+
 pub(crate) fn matches(method: &axum::http::Method, path: &str) -> bool {
     use axum::http::Method;
     match path {
-        "/api/login-browser/targets" | "/api/login-browser/result" => *method == Method::GET,
-        "/api/login-browser/open" => *method == Method::POST,
-        _ => *method == Method::GET && account_of_targets_path(path).is_some(),
+        "/api/login-browser/targets" | "/api/login-browser/result" | "/api/login-browser/view" => *method == Method::GET,
+        "/api/login-browser/open" | "/api/login-browser/input" | "/api/login-browser/close" | "/api/login-browser/activate" => {
+            *method == Method::POST
+        }
+        _ => {
+            if let Some((_, action)) = account_view_path(path) {
+                return if action.is_empty() { *method == Method::GET } else { *method == Method::POST };
+            }
+            *method == Method::GET && account_of_targets_path(path).is_some()
+        }
+    }
+}
+
+fn operation_of(uri: &axum::http::Uri) -> String {
+    form_urlencoded::parse(uri.query().unwrap_or("").as_bytes())
+        .find(|(key, _)| key == "operation")
+        .map(|(_, value)| value.into_owned())
+        .unwrap_or_default()
+}
+
+async fn account_view(state: Arc<crate::routes::AppState>, request: axum::extract::Request, label: &str, action: &str) -> axum::response::Response {
+    use super::http::Json;
+    use axum::{http::StatusCode, response::IntoResponse};
+    use serde_json::json;
+    let Ok(label) = percent_encoding::percent_decode_str(label).decode_utf8() else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    let Some((machine, operation, channel)) = state.accounts.login_view_route(&label).await else {
+        return Json(json!({"available": false})).into_response();
+    };
+    match action {
+        "" => match channel.view(&machine, &operation).await {
+            Ok(frame) => Json(frame).into_response(),
+            Err(()) => Json(json!({"available": true, "error": "erro_login_machine_unreachable"})).into_response(),
+        },
+        "/input" => {
+            let Ok(bytes) = axum::body::to_bytes(request.into_body(), 16384).await else {
+                return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+            };
+            let Ok(input) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+                return StatusCode::UNPROCESSABLE_ENTITY.into_response();
+            };
+            match channel.input(&machine, &operation, input).await {
+                Ok(()) => Json(json!({"ok": true})).into_response(),
+                Err(code) => (StatusCode::CONFLICT, Json(json!({"code": code}))).into_response(),
+            }
+        }
+        _ => match channel.activate(&machine, &operation).await {
+            Ok(ok) => Json(json!({"ok": ok})).into_response(),
+            Err(()) => (StatusCode::BAD_GATEWAY, Json(json!({"code": "erro_login_machine_unreachable"}))).into_response(),
+        },
     }
 }
 
@@ -640,11 +916,28 @@ pub(crate) async fn public(state: Arc<crate::routes::AppState>, request: axum::e
             Json(json!({"machine": state.server_id, "targets": targets})).into_response()
         }
         "/api/login-browser/result" => {
-            let operation = form_urlencoded::parse(request.uri().query().unwrap_or("").as_bytes())
-                .find(|(key, _)| key == "operation")
-                .map(|(_, value)| value.into_owned())
-                .unwrap_or_default();
-            Json(json!({"query": state.login_browser.result(&operation)})).into_response()
+            Json(json!({"query": state.login_browser.result(&operation_of(request.uri()))})).into_response()
+        }
+        "/api/login-browser/view" => Json(state.login_browser.view(&operation_of(request.uri())).await).into_response(),
+        "/api/login-browser/input" => {
+            let operation = operation_of(request.uri());
+            let Ok(bytes) = axum::body::to_bytes(request.into_body(), 16384).await else {
+                return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+            };
+            let Ok(input) = serde_json::from_slice::<DeskInput>(&bytes) else {
+                return StatusCode::UNPROCESSABLE_ENTITY.into_response();
+            };
+            match state.login_browser.input(&operation, input).await {
+                Ok(()) => Json(json!({"ok": true})).into_response(),
+                Err(error) => super::http::error(error),
+            }
+        }
+        "/api/login-browser/close" => {
+            state.login_browser.close_view(&operation_of(request.uri())).await;
+            Json(json!({"ok": true})).into_response()
+        }
+        "/api/login-browser/activate" => {
+            Json(json!({"ok": state.login_browser.activate(&operation_of(request.uri())).await})).into_response()
         }
         "/api/login-browser/open" => {
             let Ok(bytes) = axum::body::to_bytes(request.into_body(), 16384).await else {
@@ -659,6 +952,9 @@ pub(crate) async fn public(state: Arc<crate::routes::AppState>, request: axum::e
             }
         }
         _ => {
+            if let Some((label, action)) = account_view_path(&path) {
+                return account_view(state, request, label, action).await;
+            }
             let Some(label) = account_of_targets_path(&path) else {
                 return StatusCode::NOT_FOUND.into_response();
             };
@@ -683,6 +979,112 @@ mod tests {
 
     fn with_redirect(redirect: &str) -> String {
         format!("https://claude.com/cai/oauth/authorize?redirect_uri={redirect}&state=s")
+    }
+
+    /// Tela falsa: as janelas mudam pelo teste, e cada ação fica registrada.
+    #[derive(Default)]
+    struct FakeDesk {
+        windows: Mutex<Vec<crate::accounts::login_view::DeskWindow>>,
+        log: Mutex<Vec<String>>,
+        no_input: std::sync::atomic::AtomicBool,
+    }
+    impl Desk for FakeDesk {
+        fn windows(&self) -> Vec<crate::accounts::login_view::DeskWindow> {
+            self.windows.lock().unwrap().clone()
+        }
+        fn present(&self, window: &crate::accounts::login_view::DeskWindow) {
+            self.log.lock().unwrap().push(format!("present {}", window.id));
+        }
+        fn capture(&self, window: &crate::accounts::login_view::DeskWindow) -> Option<Vec<u8>> {
+            Some(window.id.clone().into_bytes())
+        }
+        fn can_input(&self) -> bool {
+            !self.no_input.load(Ordering::Relaxed)
+        }
+        fn input(&self, window: &crate::accounts::login_view::DeskWindow, input: &DeskInput) {
+            self.log.lock().unwrap().push(format!("input {} {input:?}", window.id));
+        }
+        fn close(&self, window: &crate::accounts::login_view::DeskWindow) {
+            self.log.lock().unwrap().push(format!("close {}", window.id));
+        }
+    }
+    fn desk_window(id: &str) -> crate::accounts::login_view::DeskWindow {
+        crate::accounts::login_view::DeskWindow { id: id.into(), title: format!("t-{id}"), x: 0, y: 0, w: 100, h: 50 }
+    }
+    fn viewing(desk: Arc<FakeDesk>) -> LoginBrowser {
+        let probe = desk.clone();
+        LoginBrowser::with_desk(
+            Arc::new(|_| Ok(())),
+            Arc::new(|| host(Platform::Linux, true, true)),
+            Arc::new(move || Some(probe.clone() as Arc<dyn Desk>)),
+        )
+    }
+    fn view_request(kind: TargetKind) -> OpenRequest {
+        OpenRequest {
+            url: LINK.to_owned(),
+            operation: "op".to_owned(),
+            target: Target {
+                machine: "m".into(),
+                kind,
+                profile: (kind == TargetKind::ChromeProfile).then(|| "Default".to_owned()),
+                label: String::new(),
+                email: None,
+            },
+            remote: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn view_follows_only_the_window_the_login_opened() {
+        let desk = Arc::new(FakeDesk::default());
+        desk.windows.lock().unwrap().push(desk_window("old"));
+        let browser = viewing(desk.clone());
+        assert_eq!(browser.view("op").await["available"], false);
+        browser.open(view_request(TargetKind::ChromeProfile)).await.unwrap();
+        assert_eq!(browser.view("op").await["pending"], true, "a janela que já existia não entra");
+        desk.windows.lock().unwrap().push(desk_window("new"));
+        let frame = browser.view("op").await;
+        assert_eq!(frame["title"], "t-new");
+        assert_eq!(frame["input"], true);
+        browser.view("op").await;
+        desk.windows.lock().unwrap().push(desk_window("later"));
+        assert_eq!(browser.view("op").await["title"], "t-new", "janela aberta depois não troca o alvo");
+        assert_eq!(desk.log.lock().unwrap().as_slice(), ["present new"]);
+        browser.close_view("op").await;
+        assert_eq!(desk.log.lock().unwrap().last().unwrap(), "close new");
+        assert_eq!(browser.view("op").await["available"], false);
+    }
+
+    #[tokio::test]
+    async fn default_browser_has_no_view_and_input_needs_a_live_session() {
+        let desk = Arc::new(FakeDesk::default());
+        let browser = viewing(desk.clone());
+        browser.open(view_request(TargetKind::DefaultBrowser)).await.unwrap();
+        assert_eq!(browser.view("op").await["available"], false);
+        browser.open(view_request(TargetKind::ChromeProfile)).await.unwrap();
+        let click = DeskInput::Back;
+        assert_eq!(browser.input("op", click.clone()).await.unwrap_err().code, "erro_login_view_missing");
+        desk.windows.lock().unwrap().push(desk_window("new"));
+        browser.view("op").await;
+        browser.input("op", click.clone()).await.unwrap();
+        desk.no_input.store(true, Ordering::Relaxed);
+        assert_eq!(browser.view("op").await["input"], false);
+        assert_eq!(browser.input("op", click).await.unwrap_err().code, "erro_login_view_no_input");
+        assert_eq!(browser.input("op", DeskInput::Text { text: "x".repeat(4097) }).await.unwrap_err().code, "erro_login_view_input_invalid");
+        desk.windows.lock().unwrap().clear();
+        assert_eq!(browser.view("op").await["closed"], true);
+    }
+
+    #[test]
+    fn view_routes_are_recognized_only_with_the_right_method() {
+        use axum::http::Method;
+        assert!(matches(&Method::GET, "/api/conta-estado/work/login/view"));
+        assert!(!matches(&Method::POST, "/api/conta-estado/work/login/view"));
+        assert!(matches(&Method::POST, "/api/conta-estado/work/login/view/input"));
+        assert!(matches(&Method::POST, "/api/conta-estado/work/login/view/activate"));
+        assert!(!matches(&Method::POST, "/api/conta-estado/work/login/view/other"));
+        assert!(matches(&Method::GET, "/api/login-browser/view"));
+        assert!(matches(&Method::POST, "/api/login-browser/input"));
     }
 
     #[test]
@@ -921,7 +1323,7 @@ mod tests {
             command,
             Some(BrowserCommand {
                 program: PathBuf::from("/bin/chrome"),
-                args: vec!["--profile-directory=Profile 1".to_owned(), LINK.to_owned()],
+                args: vec!["--profile-directory=Profile 1".to_owned(), "--new-window".to_owned(), LINK.to_owned()],
             })
         );
     }
