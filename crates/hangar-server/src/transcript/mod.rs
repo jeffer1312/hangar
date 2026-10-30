@@ -159,20 +159,25 @@ pub(crate) fn finish(ev: &mut ChatEvent) {
 }
 
 #[cfg(test)]
+pub(crate) mod orq_cases;
+
+#[cfg(test)]
 mod orq_contract {
     use super::*;
 
     #[test]
-    fn orq_history_and_live_parser_preserve_the_python_notice_contract() {
+    fn orq_history_and_live_parser_keep_the_notice_contract() {
         let provider = Provider::parse("orq");
         assert!(provider.is_some(), "o histórico do orq precisa ser lido pelo Rust");
-        let fixture: Value = serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/orq-events/events.json")).unwrap();
-        for case in fixture["cases"].as_array().unwrap() {
-            let events = LineParser::new(provider.unwrap()).feed(case["input"].to_string().as_bytes(), 0);
+        assert_eq!(orq_cases::CASES.len(), 13);
+        for (input, expected) in orq_cases::CASES {
+            let input: Value = serde_json::from_str(input).unwrap();
+            let expected: Value = serde_json::from_str(expected).unwrap();
+            let events = LineParser::new(provider.unwrap()).feed(input.to_string().as_bytes(), 0);
             let actual: Vec<Value> = events.iter().map(|event| {
                 serde_json::json!({"kind": event.kind, "id": event.id, "text": event.text, "ts": event.ts, "orq": event.orq})
             }).collect();
-            assert_eq!(serde_json::to_value(actual).unwrap(), case["expected"], "{}", case["input"]);
+            assert_eq!(serde_json::to_value(actual).unwrap(), expected, "{input}");
         }
     }
 }
