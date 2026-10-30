@@ -129,20 +129,10 @@ async fn public_status_deadline_includes_waiting_for_shared_configuration() {
     let response = response
         .expect("o status ultrapassou o teto público de15s esperando configuração")
         .unwrap();
-    let fixture: Value = serde_json::from_str(include_str!(
-        "../../../../backend/tests/fixtures/contract/dictation_public/edges.json"
-    ))
-    .unwrap();
-    let expected = fixture["cases"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|c| c["id"] == "status_timeout")
-        .unwrap();
     assert_eq!(response.status(), 503);
     assert_eq!(
         response.json::<Value>().await.unwrap(),
-        expected["response"]
+        json!({"detail": {"code": "transcription_rust_unavailable", "params": {}, "msg": "Não foi possível confirmar a transcrição no Rust. O áudio foi preservado para tentar novamente."}})
     );
     assert_eq!(state.transcription_slots.available_permits(), 4);
     assert_eq!(

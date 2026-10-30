@@ -297,15 +297,15 @@ Os fatos de configuração continuam no Python, sem chamar o Rust de volta; as p
 catálogo só ficam onde ainda têm consumidores. TTS é outra capacidade: sua migração e a dos
 consumidores de narração estão descritas em [Leitura, narração e traduções no Rust](#leitura-narração-e-traduções-no-rust-29102026).
 
-As referências de equivalência vêm da execução do Python antes da remoção, em
-`backend/tests/fixtures/contract/dictation_public/`. Elas incluem validação da borda HTTP,
+As referências de equivalência vêm da execução do Python antes da remoção e estão escritas em
+`crates/hangar-server/tests/it/dictation_public_cases.rs`. Elas incluem validação da borda HTTP,
 erros acumulados de query, avisos e seleção de provedor; os testes públicos Rust verificam
 também autorização, limites, conta e referência da conversa. A contagem de MCP inclui a
 requisição externa ao serviço, separada das rotas que suas ferramentas chamam.
 
 Diferença aprovada na migração: áudio acima de 100 MiB enviado em blocos, sem
 `Content-Length`, recebe 413 `request body too large`, como o tamanho declarado. O Python
-retornava 500 nesse caso; as capturas originais foram preservadas. Outros erros de leitura
+retornava 500 nesse caso. Outros erros de leitura
 mantêm seu tratamento. Catálogo, status dos provedores e transcrição/teste conservam os tetos
 públicos de 60, 15 e 180 segundos, incluindo espera por configuração e consultas concorrentes.
 
