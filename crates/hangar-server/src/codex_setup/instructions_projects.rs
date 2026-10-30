@@ -2,6 +2,7 @@
 use super::{files, instructions::Links, instructions_alias};
 use crate::accounts::environment::AccountEnvironment;
 use files::Error;
+use serde_json::Value;
 use std::{
     collections::BTreeSet,
     fs,
@@ -45,17 +46,31 @@ pub(super) async fn prepare(
             let config = crate::config_sync::runtime_values::ValueGuard(
                 super::instructions_toml::read(&config)?,
             );
-            if let Some(table) = config
-                .get("projects")
-                .and_then(serde_json::Value::as_object)
-            {
-                projects.extend(table.keys().map(PathBuf::from));
+            if let Some(value) = config.get("projects") {
+                match value {
+                    Value::Object(table) => projects.extend(table.keys().map(PathBuf::from)),
+                    Value::Array(items) => {
+                        for item in items {
+                            projects.insert(project_path(item)?);
+                        }
+                    }
+                    Value::String(text) => {
+                        projects.extend(text.chars().map(|ch| PathBuf::from(ch.to_string())))
+                    }
+                    _ => {
+                        return Err(Error::Invalid(format!(
+                            "'{}' object is not iterable",
+                            type_name(value)
+                        )));
+                    }
+                }
             }
         }
         for path in records(&store)? {
             let record = crate::config_sync::runtime_values::ValueGuard(files::object(&path)?);
-            if let Some(target) = record["alvo"].as_str().filter(|target| !target.is_empty()) {
-                if let Some(parent) = Path::new(target).parent().filter(|parent| *parent != codex) {
+            if crate::config_sync::apply::truthy(&record["alvo"]) {
+                let target = project_path(&record["alvo"])?;
+                if let Some(parent) = target.parent().filter(|parent| *parent != codex) {
                     projects.insert(parent.to_owned());
                 }
             }
@@ -92,6 +107,24 @@ pub(super) async fn prepare(
         }
     }
     Ok(())
+}
+
+fn type_name(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "NoneType",
+        Value::Bool(_) => "bool",
+        Value::Number(number) if number.is_f64() => "float",
+        Value::Number(_) => "int",
+        Value::String(_) => "str",
+        Value::Array(_) => "list",
+        Value::Object(_) => "dict",
+    }
+}
+
+fn project_path(value: &Value) -> Result<PathBuf, Error> {
+    value.as_str().map(PathBuf::from).ok_or_else(|| Error::Invalid(format!(
+        "argument should be a str or an os.PathLike object where __fspath__ returns a str, not '{}'", type_name(value)
+    )))
 }
 
 async fn exclude(env: &AccountEnvironment, directory: &Path) -> Result<(), Error> {

@@ -8,6 +8,7 @@ use std::{fs, sync::Arc};
 
 include!("instructions_project_tests.rs");
 include!("instructions_limit_tests.rs");
+include!("instructions_project_types_tests.rs");
 
 struct FixtureLinks(bool);
 impl Links for FixtureLinks {

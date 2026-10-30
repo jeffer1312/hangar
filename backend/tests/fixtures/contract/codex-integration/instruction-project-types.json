@@ -1,0 +1,222 @@
+{
+  "source_commit": "8a3ce81c1",
+  "command": "cd backend && uv run python tests/fixtures/contract/codex-integration/generate_instruction_project_types.py",
+  "comparison": "Resultado, mensagem da exce\u00e7\u00e3o e efeitos; classe da exce\u00e7\u00e3o Python n\u00e3o faz parte do protocolo p\u00fablico.",
+  "cases": [
+    {
+      "name": "table",
+      "config": "[projects.\"$ROOT/project\"]\n",
+      "record": null,
+      "result": {
+        "ok": true
+      },
+      "global_alias": true,
+      "project_alias": true,
+      "source": "PROJETO\n"
+    },
+    {
+      "name": "array",
+      "config": "projects = [\"$ROOT/project\"]\n",
+      "record": null,
+      "result": {
+        "ok": true
+      },
+      "global_alias": true,
+      "project_alias": true,
+      "source": "PROJETO\n"
+    },
+    {
+      "name": "empty-array",
+      "config": "projects = []\n",
+      "record": null,
+      "result": {
+        "ok": true
+      },
+      "global_alias": true,
+      "project_alias": false,
+      "source": "PROJETO\n"
+    },
+    {
+      "name": "integer",
+      "config": "projects = 1\n",
+      "record": null,
+      "result": {
+        "ok": false,
+        "message": "'int' object is not iterable"
+      },
+      "global_alias": true,
+      "project_alias": false,
+      "source": "PROJETO\n"
+    },
+    {
+      "name": "boolean",
+      "config": "projects = true\n",
+      "record": null,
+      "result": {
+        "ok": false,
+        "message": "'bool' object is not iterable"
+      },
+      "global_alias": true,
+      "project_alias": false,
+      "source": "PROJETO\n"
+    },
+    {
+      "name": "float",
+      "config": "projects = 1.5\n",
+      "record": null,
+      "result": {
+        "ok": false,
+        "message": "'float' object is not iterable"
+      },
+      "global_alias": true,
+      "project_alias": false,
+      "source": "PROJETO\n"
+    },
+    {
+      "name": "string",
+      "config": "projects = \"relative\"\n",
+      "record": null,
+      "result": {
+        "ok": true
+      },
+      "global_alias": true,
+      "project_alias": false,
+      "source": "PROJETO\n"
+    },
+    {
+      "name": "empty-string",
+      "config": "projects = \"\"\n",
+      "record": null,
+      "result": {
+        "ok": true
+      },
+      "global_alias": true,
+      "project_alias": false,
+      "source": "PROJETO\n"
+    },
+    {
+      "name": "array-integer",
+      "config": "projects = [1]\n",
+      "record": null,
+      "result": {
+        "ok": false,
+        "message": "argument should be a str or an os.PathLike object where __fspath__ returns a str, not 'int'"
+      },
+      "global_alias": true,
+      "project_alias": false,
+      "source": "PROJETO\n"
+    },
+    {
+      "name": "record-integer",
+      "config": null,
+      "record": {
+        "alvo": 1
+      },
+      "result": {
+        "ok": false,
+        "message": "argument should be a str or an os.PathLike object where __fspath__ returns a str, not 'int'"
+      },
+      "global_alias": true,
+      "project_alias": false,
+      "source": "PROJETO\n"
+    },
+    {
+      "name": "record-zero",
+      "config": null,
+      "record": {
+        "alvo": 0
+      },
+      "result": {
+        "ok": true
+      },
+      "global_alias": true,
+      "project_alias": false,
+      "source": "PROJETO\n"
+    },
+    {
+      "name": "record-boolean",
+      "config": null,
+      "record": {
+        "alvo": true
+      },
+      "result": {
+        "ok": false,
+        "message": "argument should be a str or an os.PathLike object where __fspath__ returns a str, not 'bool'"
+      },
+      "global_alias": true,
+      "project_alias": false,
+      "source": "PROJETO\n"
+    },
+    {
+      "name": "record-null",
+      "config": null,
+      "record": {
+        "alvo": null
+      },
+      "result": {
+        "ok": true
+      },
+      "global_alias": true,
+      "project_alias": false,
+      "source": "PROJETO\n"
+    },
+    {
+      "name": "record-empty-list",
+      "config": null,
+      "record": {
+        "alvo": []
+      },
+      "result": {
+        "ok": true
+      },
+      "global_alias": true,
+      "project_alias": false,
+      "source": "PROJETO\n"
+    },
+    {
+      "name": "record-list",
+      "config": null,
+      "record": {
+        "alvo": [
+          "relative"
+        ]
+      },
+      "result": {
+        "ok": false,
+        "message": "argument should be a str or an os.PathLike object where __fspath__ returns a str, not 'list'"
+      },
+      "global_alias": true,
+      "project_alias": false,
+      "source": "PROJETO\n"
+    },
+    {
+      "name": "record-empty-object",
+      "config": null,
+      "record": {
+        "alvo": {}
+      },
+      "result": {
+        "ok": true
+      },
+      "global_alias": true,
+      "project_alias": false,
+      "source": "PROJETO\n"
+    },
+    {
+      "name": "record-object",
+      "config": null,
+      "record": {
+        "alvo": {
+          "x": 1
+        }
+      },
+      "result": {
+        "ok": false,
+        "message": "argument should be a str or an os.PathLike object where __fspath__ returns a str, not 'dict'"
+      },
+      "global_alias": true,
+      "project_alias": false,
+      "source": "PROJETO\n"
+    }
+  ]
+}
