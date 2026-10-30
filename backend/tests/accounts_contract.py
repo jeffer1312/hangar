@@ -45,7 +45,7 @@ def rust_integration_binary(build_log: Path | None = None) -> Path:
     return _integration_binary
 
 
-_BRIDGE_OPERATIONS = frozenset({"bridge.prepare", "bridge.claude_window", "bridge.other_quotas"})
+_BRIDGE_OPERATIONS = frozenset({"bridge.prepare", "bridge.other_quotas"})
 # Rotas da ponte secundária Pi/omp retirada: chamada a qualquer uma é escrita/leitura fora do Rust.
 _RETIRED_SECONDARY_ROUTES = frozenset({
     "/internal/accounts/device-propagate", "/internal/accounts/device-propagate/ack",
@@ -452,26 +452,43 @@ def _worker() -> None:
     app.include_router(internal_api.router)
     app.state.codex_contas_login = service
     calls = []
-    from app import claude_window
     windows = {}
+    closed_windows = set()
     window_calls = []
     code_entered = threading.Event()
     @app.get("/__contract__/wait-claude-code")
     async def wait_claude_code():
         return {"entered": await asyncio.to_thread(code_entered.wait, 20)}
-    def window_create(name, cwd, config_dir=None):
-        windows["term-" + name] = True
-        window_calls.append({"action": "open", "name": "term-" + name, "config_dir": config_dir})
-        return "term-" + name
-    def window_send(name, text):
-        window_calls.append({"action": "command", "name": name, "command": text})
-    def window_code(name, text):
-        # A prova guarda somente a classificação da entrada, nunca o código.
+
+    @app.post("/__contract__/window")
+    def contract_window(body: dict):
+        """Janela escondida do processo de prova Rust: abre, mostra o link, recebe o código e fecha
+        sem multiplexador. A prova guarda somente a classificação do código, nunca o valor."""
+        name = "term-login-" + body["operation"]
+        action = body["action"]
+        if action == "close":
+            if name in windows and windows[name] != body["key"]:
+                return JSONResponse({"ok": False}, status_code=409)
+            closed_windows.add(name)
+            windows.pop(name, None)
+            window_calls.append({"action": "close", "name": name})
+            return {"ok": True}
+        if name in closed_windows or action not in {"open", "read", "code"}:
+            return JSONResponse({"ok": False}, status_code=409)
+        if action == "open":
+            if name not in windows:
+                windows[name] = body["key"]
+                window_calls.append({"action": "open", "name": name, "config_dir": body["key"]["canonical_home"]})
+                window_calls.append({"action": "command", "name": name, "command": "claude auth login --claudeai"})
+            return {"ok": True}
+        if name not in windows or windows[name] != body["key"]:
+            return JSONResponse({"ok": False}, status_code=409)
+        if action == "read":
+            return {"ok": True, "url": "https://claude.ai/oauth/authorize?fixture=1"}
         window_calls.append({"action": "code", "name": name, "protected": True})
         code_entered.set()
-    def window_close(name):
-        windows.pop(name, None)
-        window_calls.append({"action": "close", "name": name})
+        return {"ok": True}
+
     @app.get("/__contract__/claude-windows")
     def claude_windows():
         return {"windows": list(windows), "calls": window_calls}
@@ -614,10 +631,6 @@ def _worker() -> None:
             response = await call_next(request)
             entry["status"] = response.status_code
             return response
-        if request.url.path == "/internal/accounts/claude-window":
-            response = await call_next(request)
-            calls.append({"operation": "bridge.claude_window", "status": response.status_code})
-            return response
         if request.url.path.startswith(account_bridge.ACCOUNT_PREFIXES):
             # Conta e cota são do Rust: o pedido que chega aqui fica no diário e é recusado.
             operation = f"account:{request.method} {request.url.path}"
@@ -706,10 +719,7 @@ def _worker() -> None:
                 return original_connection(address, *args, **kwargs)
         return deny_external()
 
-    with patch.multiple(claude_window, spawn=window_create, submit=window_send,
-                        read=lambda name: "https://claude.ai/oauth/authorize?fixture=1\nPaste code here if prompted",
-                        kill=window_close, send_code=window_code), \
-            patch.object(runtime_coordinator, "current", return_value=instance), \
+    with patch.object(runtime_coordinator, "current", return_value=instance), \
             patch.object(api.app.state, "codex_contas_login", service, create=True), \
             patch.object(api, "_codex_require_idle_preparation"), \
             patch.object(api, "_invalidate_lists"), \

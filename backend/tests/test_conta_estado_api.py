@@ -1,7 +1,7 @@
 """Login Claude pelo Rust (`/api/conta-estado/{label}/login…`) contra a referência Python isolada.
 
-O Rust decide e confirma o login; o Python só opera a janela escondida pela ponte
-(`/internal/accounts/claude-window`) e nenhum handler de conta Python atende o pedido.
+O Rust decide e confirma o login; a janela escondida é a falsa da referência
+(`/__contract__/window`) e nenhum handler de conta Python atende o pedido.
 """
 import pytest
 

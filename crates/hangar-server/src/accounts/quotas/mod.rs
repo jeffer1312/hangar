@@ -628,15 +628,13 @@ impl AccountService {
         let value = match provider {
             Provider::Claude => {
                 let value = claude::read(client, &account.home, now()).await;
-                // Sem ponte, quem pede não renova: a renovação ainda passa pela janela de login do Python.
-                if value["estado"] == "expirada"
-                    && let Some(bridge) = bridge
-                {
+                // Só quem lê com a ponte renova a conta expirada.
+                if value["estado"] == "expirada" && bridge.is_some() {
                     drop(guard);
                     if let Err(reason) = self
                         .refresh_claude(
                             account,
-                            bridge.clone(),
+                            self.claude_windows.clone(),
                             self.quotas.runtime.get().cloned(),
                             true,
                         )

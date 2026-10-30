@@ -93,7 +93,7 @@ mod warn_limit;
 
 /// Versão do contrato com o Python (rotas `/internal`, canal privado do estado, ambiente). O
 /// Python (`RUST_SERVER_PROTOCOL`) recusa um binário de outra versão e atende sozinho.
-pub const INTERNAL_PROTOCOL: u32 = 96;
+pub const INTERNAL_PROTOCOL: u32 = 97;
 
 /// Todo cliente HTTP do servidor nasce aqui. Uma dependência liga `gzip`, `http2` e (no Windows)
 /// `native-tls` no reqwest, e o Cargo estende isso a todo cliente: sem estes desligamentos ele
@@ -164,10 +164,8 @@ pub async fn serve_until_with_guest(
         transcription.recover_on_startup(&home).await;
     }
     if let Some(instance) = config::Config::runtime_instance().map_err(std::io::Error::other)? {
-        let windows = accounts::claude_login::WindowClient::new(cfg.upstream, cfg.internal_secret.clone(), instance.clone())
-            .map_err(|error| std::io::Error::other(error.code))?;
         // Sem catálogo legível não há janela a fechar; isso não pode impedir o servidor de subir.
-        if let Err(error) = state.accounts.recover_claude_logins(windows).await {
+        if let Err(error) = state.accounts.recover_claude_logins(state.accounts.claude_windows.clone()).await {
             tracing::warn!(code = "claude_login_recovery_failed", reason = error.code, "catálogo de contas ilegível na subida");
         }
         let private = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -189,9 +187,7 @@ pub async fn serve_until_with_guest(
         let _ = state.side.runtime.set(registry.clone());
         let _ = state.accounts.quotas.runtime.set(registry.clone());
         let _ = state.accounts.quotas.diag.set(state.diag.clone());
-        let quota_bridge=accounts::bridge::AccountsBridge::new(cfg.upstream,cfg.internal_secret.clone(),instance.clone())
-            .map_err(std::io::Error::other)?;
-        refresh_loop=Some(accounts::claude_refresh::start(state.accounts.clone(),quota_bridge,registry.clone()));
+        refresh_loop=Some(accounts::claude_refresh::start(state.accounts.clone(),registry.clone()));
         let _watchdog = std::env::home_dir().map(|home| AbortOnDrop(tokio::spawn(
             watchdog::run(state.http.clone(), cfg.upstream, cfg.internal_secret.clone(), home))));
         // A troca de conta que o Rust anterior deixou no meio, antes de qualquer sessão subir pelo spec.
