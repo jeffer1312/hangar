@@ -532,7 +532,14 @@ async fn frozen_case(name: &str) {
         }
         _ if inputs.get("raw").is_some() => {
             clients[0].send(Message::Text(inputs["raw"].as_str().unwrap().to_owned().into())).await.unwrap();
-            barrier(&mut clients[0], &mut events[0]).await;
+            // O servidor encerra depois do erro: mensagem nossa a partir daí corre com o reset dele.
+            let wanted = case.get("expected_encoded").unwrap_or(&case["expected"]);
+            if wanted["events_by_viewer"][0].as_array().unwrap().last().unwrap()["t"] == "erro" {
+                receive(&mut clients[0], &mut events[0], |event| event["t"] == "erro").await;
+                server_close = Some(receive_close(&mut clients[0], &mut events[0]).await);
+            } else {
+                barrier(&mut clients[0], &mut events[0]).await;
+            }
         }
         _ if inputs.get("raw_metadata").is_some() => {
             let mut frame = desktop.context.measured["frame"].clone();
@@ -541,6 +548,9 @@ async fn frozen_case(name: &str) {
                 .replace("\"__RAW_METADATA__\"", inputs["raw_metadata"].as_str().unwrap());
             desktop.emit_raw(0, raw);
             receive(&mut clients[0], &mut events[0], |event| event["t"] == "q" || event["t"] == "erro").await;
+            if events[0].last().unwrap()["t"] == "erro" {
+                server_close = Some(receive_close(&mut clients[0], &mut events[0]).await);
+            }
         }
         _ if inputs.get("response_bytes").is_some() => {}
         _ if inputs["detach_pending"] == true => {
@@ -601,7 +611,10 @@ async fn frozen_case(name: &str) {
         }
     }
     let mut viewer_closes = vec![json!({"code": 1006, "reason": ""}); events.len()];
-    if let Some(close) = server_close { viewer_closes[0] = close; }
+    if let Some(close) = server_close {
+        viewer_closes[0] = close;
+        clients.clear();
+    }
     for client in &mut clients { close_viewer(client).await; }
     for (peer, client) in clients.iter_mut().enumerate() {
         while let Some(message) = client.next().await {
