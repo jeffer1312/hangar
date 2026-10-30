@@ -156,10 +156,8 @@ def test_login_guest_gate_blocks_before_auth_counter_or_transport(border, rust, 
     _, token = guest_users.create("contract-guest", str(tmp_path), False, True)
     with TestClient(border, client=("198.51.100.9", 1234)) as client:
         response = client.get("/api/sessions/session/navegador", headers={"Authorization": "Bearer " + token})
-    fixture = json.loads((Path(__file__).parent / "fixtures/contract/remote-browser/url-commands.json").read_text())
-    want = next(case for case in fixture["cases"] if case["name"] == "get_login_guest_is_blocked")["expected"]["responses"][0]
-    assert response.status_code == want["status"]
-    assert response.json() == want["body"]
+    assert response.status_code == 403
+    assert response.json() == {"detail": {"code": "erro_fora_do_convidado", "params": {}, "msg": "fora do acesso do convidado"}}
     assert rust == []
     assert auth._fails == {}
 

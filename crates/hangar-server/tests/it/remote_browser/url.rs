@@ -129,6 +129,18 @@ async fn frozen_get_cases_match_status_json_headers_and_files() {
         let dir = scene.nav_dir();
         reset_files(&dir, &input["files"], &case["expected"]["files_before"]);
         assert_eq!(json!(snapshot(&dir)),case["expected"]["files_before"],"{} antes",case["name"]);
+        // Duas chaves servem: vence o primeiro que a enumeração devolve, e ela muda por sistema de arquivos.
+        let first_url = case["name"].as_str().unwrap().starts_with("get_duplicate_suffix_").then(|| {
+            let first = std::fs::read_dir(&dir).unwrap().next().unwrap().unwrap().file_name();
+            input["files"][first.to_str().unwrap()]["content"]["url"].clone()
+        });
+        let responses = corpus["cases"].as_array().unwrap().iter().find(|row| {
+            let body = &row["expected"]["responses"][0]["body"];
+            match &first_url {
+                Some(url) => row["name"].as_str().unwrap().starts_with("get_duplicate_suffix_") && body["url"] == *url,
+                None => row["name"] == case["name"],
+            }
+        }).unwrap()["expected"]["responses"].as_array().unwrap();
         scene.state.auth.clear_failures(input["client_host"].as_str().unwrap());
         let mut headers = HeaderMap::new();
         for (key,value) in input["headers"].as_object().unwrap() {
@@ -136,7 +148,7 @@ async fn frozen_get_cases_match_status_json_headers_and_files() {
         }
         let query = form_urlencoded::Serializer::new(String::new()).extend_pairs(input["query"].as_object().unwrap().iter()
             .map(|(k,v)|(k.clone(),v.as_str().unwrap().replace("contract-owner-token",OWNER)))).finish();
-        for (index,want) in case["expected"]["responses"].as_array().unwrap().iter().enumerate() {
+        for (index,want) in responses.iter().enumerate() {
             if index > 0 && !input["after_files"].is_null() {
                 reset_files(&dir,&input["after_files"],&case["expected"]["files_after"]);
             }

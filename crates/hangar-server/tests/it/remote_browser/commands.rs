@@ -238,7 +238,8 @@ async fn cmd_connection_refused() {
         assert!(!root.join("git.calls").exists());
     }).await { return; }
     let frozen = case("cmd_connection_refused");
-    support::assert_python_platform(&support::contract("url-commands")["sys_platform"]);
+    // O número do errno é o da plataforma (ECONNREFUSED é 61 no macOS).
+    let message = frozen["expected"]["message"].as_str().unwrap().replace("$ECONNREFUSED", &libc::ECONNREFUSED.to_string());
     let scene = Scene::new().await;
     let desktop = Desktop::new(&json!({})).await;
     let (mut client, mut events) = ready(&scene, &desktop).await;
@@ -247,7 +248,7 @@ async fn cmd_connection_refused() {
     write_files(&scene, &frozen["inputs"]["files"], reserved.local_addr().unwrap().port());
     let before = files(&scene.nav_dir());
     send_dimensions(&mut client, &mut events, "erro").await;
-    assert_eq!(events.last().unwrap(), &json!({"t":"erro","m":frozen["expected"]["message"]}));
+    assert_eq!(events.last().unwrap(), &json!({"t":"erro","m":message}));
     barrier(&mut client, &mut events).await;
     assert_eq!(files(&scene.nav_dir()), before);
     assert!(desktop.requests().is_empty());

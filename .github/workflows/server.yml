@@ -137,21 +137,6 @@ jobs:
             crates/target/debug
           key: server-v3-${{ runner.os }}-${{ runner.arch }}-dev-${{ hashFiles('crates/Cargo.lock', 'crates/rust-toolchain.toml') }}
           restore-keys: server-v3-${{ runner.os }}-${{ runner.arch }}-dev-
-      - name: Capturar referências Python do navegador neste sistema
-        if: runner.os != 'Windows'
-        working-directory: ${{ runner.temp }}
-        env:
-          PYTHONDONTWRITEBYTECODE: "1"
-        run: |
-          source_commit=ba2db1021ab7fb801eca50a50f9509dcb825ac7e
-          git -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1 origin "$source_commit"
-          test "$(git -C "$GITHUB_WORKSPACE" rev-parse "$source_commit^{commit}")" = "$source_commit"
-          reference_tmp=$(mktemp -d /tmp/hr-XXXXXX)
-          reference_dir=$(mktemp -d "$RUNNER_TEMP/hangar-browser-contract.XXXXXX")
-          TMPDIR="$reference_tmp" "$GITHUB_WORKSPACE/backend/.venv/bin/python" "$GITHUB_WORKSPACE/backend/tests/fixtures/contract/remote-browser/generate_url_commands.py" --output "$reference_dir/url-commands.json"
-          TMPDIR="$reference_tmp" "$GITHUB_WORKSPACE/backend/.venv/bin/python" "$GITHUB_WORKSPACE/backend/tests/fixtures/contract/remote-browser/generate_url_gaps.py" --output "$reference_dir/url-gaps.json"
-          printf 'HANGAR_REMOTE_BROWSER_CONTRACT_DIR=%s\n' "$reference_dir" >> "$GITHUB_ENV"
-          printf 'HANGAR_REMOTE_BROWSER_TMPDIR=%s\n' "$reference_tmp" >> "$GITHUB_ENV"
       # Os testes do hangar-api leem as amostras de backend/tests/fixtures/, que vêm no mesmo checkout.
       # --no-fail-fast: sem ele o cargo para no primeiro executável que falha e esconde os outros.
       - run: cargo test --locked --workspace --no-fail-fast

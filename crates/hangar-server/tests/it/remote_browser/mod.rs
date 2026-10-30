@@ -6,6 +6,7 @@ mod transport;
 mod transport_cases;
 pub(crate) mod support;
 mod url;
+mod url_cases;
 mod revisions;
 mod url_gaps;
 mod transport_gaps;
