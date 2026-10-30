@@ -67,7 +67,7 @@ fn keys(value: &Value) -> Result<Vec<String>, Error> {
         )),
     }
 }
-fn records(path: &Path) -> Result<Vec<PathBuf>, Error> {
+fn records(path: &Path, windows: bool) -> Result<Vec<PathBuf>, Error> {
     let entries = match std::fs::read_dir(path) {
         Ok(v) => v,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
@@ -76,7 +76,13 @@ fn records(path: &Path) -> Result<Vec<PathBuf>, Error> {
     let mut result = Vec::new();
     for entry in entries {
         let path = entry.map_err(io)?.path();
-        if path.extension().is_some_and(|v| v == "json") {
+        if path.file_name().is_some_and(|name| {
+            let name = name.to_string_lossy();
+            if windows {
+                static PATTERN: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+                PATTERN.get_or_init(|| regex::Regex::new(r"(?i)\.json\z").expect("Padrão constante")).is_match(&name)
+            } else { name.ends_with(".json") }
+        }) {
             result.push(path);
         }
     }
@@ -209,7 +215,7 @@ pub fn compute(
         env.home.join(".claude/CLAUDE.md"),
         env.home.join(".claude/CLAUDE.MD"),
     ]);
-    for path in records(&account.join(".hangar-instrucoes"))? {
+    for path in records(&account.join(".hangar-instrucoes"), cfg!(windows))? {
         let record = ValueGuard(files::object(&path)?);
         let source = record
             .get("fonte")
@@ -235,7 +241,8 @@ pub fn compute(
             if !path.is_file() || !visited.insert(resolved(&path)?) {
                 continue;
             }
-            let text = std::fs::read_to_string(&path).map_err(io)?;
+            let raw = std::fs::read(&path).map_err(io)?;
+            let text = String::from_utf8(raw).map_err(|_| error("UnicodeDecodeError", "Arquivo de instruções não está em UTF-8"))?;
             for line in crate::transcript::py::splitlines(&text) {
                 if let Some(imported) =
                     instructions::imported(line, path.parent().unwrap_or(Path::new(".")), env)
@@ -432,3 +439,7 @@ pub fn compute(
         .map(|b| format!("{b:02x}"))
         .collect())
 }
+
+#[cfg(test)]
+#[path="fingerprints_review_tests.rs"]
+mod review_tests;
