@@ -110,6 +110,20 @@ pub fn git_probe(root: &Path) -> PathBuf {
 }
 
 pub fn contract(name: &str) -> Value {
+    use super::transport_cases as transport;
+    let table = match name {
+        "transport" => transport::CASES,
+        "transport-supplement" => transport::SUPPLEMENT,
+        "transport-review-supplement" => transport::REVIEW,
+        _ => return capture(name),
+    };
+    let chromium = capture("chromium");
+    let mut value: Value = serde_json::from_str(table).unwrap();
+    expand(&mut value, &chromium);
+    value
+}
+
+fn capture(name: &str) -> Value {
     let reference_dir = if matches!(name, "url-commands" | "url-gaps") {
         std::env::var_os("HANGAR_REMOTE_BROWSER_CONTRACT_DIR").map(PathBuf::from)
     } else { None };
@@ -120,6 +134,33 @@ pub fn contract(name: &str) -> Value {
         .join("../../backend/tests/fixtures/contract/remote-browser")).join(format!("{name}.json"));
     let bytes = std::fs::read(&path).unwrap_or_else(|error| panic!("referência Python indisponível em {}: {error}", path.display()));
     serde_json::from_slice(&bytes).unwrap_or_else(|error| panic!("referência Python inválida em {}: {error}", path.display()))
+}
+
+/// As tabelas abreviam o quadro medido e as repetições longas: `⟦FRAME⟧`, `⟦SCREENSHOT⟧`, `⟦n×trecho⟧`.
+fn expand(value: &mut Value, chromium: &Value) {
+    match value {
+        Value::Array(items) => items.iter_mut().for_each(|item| expand(item, chromium)),
+        Value::Object(fields) => fields.values_mut().for_each(|item| expand(item, chromium)),
+        Value::String(text) => *text = match text.as_str() {
+            "⟦FRAME⟧" => chromium["frame"]["data"].as_str().unwrap().to_owned(),
+            "⟦SCREENSHOT⟧" => chromium["screenshot"]["data"].as_str().unwrap().to_owned(),
+            other => expand_runs(other),
+        },
+        _ => {}
+    }
+}
+
+fn expand_runs(mut rest: &str) -> String {
+    let mut text = String::new();
+    while let Some((before, tail)) = rest.split_once('⟦') {
+        let (run, after) = tail.split_once('⟧').unwrap();
+        let (times, chunk) = run.split_once('×').unwrap();
+        text.push_str(before);
+        text.push_str(&chunk.repeat(times.parse().unwrap()));
+        rest = after;
+    }
+    text.push_str(rest);
+    text
 }
 
 pub fn assert_python_platform(platform: &Value) {

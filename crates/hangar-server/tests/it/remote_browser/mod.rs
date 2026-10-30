@@ -3,6 +3,7 @@ mod commands;
 mod guest;
 mod identity;
 mod transport;
+mod transport_cases;
 pub(crate) mod support;
 mod url;
 mod revisions;
