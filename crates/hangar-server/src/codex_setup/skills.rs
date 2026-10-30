@@ -16,10 +16,22 @@ impl artifacts::Storage for Disk{
 fn invalid(text:impl Into<String>)->files::Error{files::Error::Invalid(text.into())}
 fn exists(path:&Path)->bool{fs::symlink_metadata(path).is_ok()}
 fn resolved(path:&Path)->Result<PathBuf,files::Error>{plugins::resolved(path).map_err(invalid)}
+struct TemporaryLink(tempfile::TempPath);
+impl Drop for TemporaryLink {
+ fn drop(&mut self) {
+  #[cfg(windows)] {
+   use std::os::windows::fs::FileTypeExt;
+   // TempPath remove arquivos; um link de diretório exige RemoveDirectory no Windows.
+   if fs::symlink_metadata(&self.0).is_ok_and(|m|m.file_type().is_symlink_dir()) {
+    let _=fs::remove_dir(&self.0);
+   }
+  }
+ }
+}
 impl Storage for Disk{
  fn replace_link(&mut self,destination:&Path,source:&Path,backups:&Path,expected:Option<&Path>)->Result<(),files::Error>{
   let temp=tempfile::Builder::new().prefix(&format!(".{}.hangar-",destination.file_name().unwrap_or_default().to_string_lossy())).tempfile_in(destination.parent().unwrap())?;
-  let path=temp.into_temp_path();fs::remove_file(&path)?;
+  let temporary=TemporaryLink(temp.into_temp_path());let path=&temporary.0;fs::remove_file(path)?;
   #[cfg(unix)] std::os::unix::fs::symlink(source,&path)?;
   #[cfg(windows)] std::os::windows::fs::symlink_dir(source,&path)?;
   if exists(destination){

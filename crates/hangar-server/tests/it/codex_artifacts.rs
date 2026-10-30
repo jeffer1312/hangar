@@ -20,7 +20,9 @@ fn codex_service_artifacts_match_original_files_backups_and_races(){
    #[cfg(unix)] std::os::unix::fs::symlink(&external,&path).unwrap();
    #[cfg(windows)] std::os::windows::fs::symlink_file(&external,&path).unwrap();
   }else{std::fs::write(&path,data).unwrap();}}
-  let previous:Value=serde_json::from_str(&case["previous"].to_string().replace("$ROOT",&root.to_string_lossy().replace('\\',"\\\\"))).unwrap();
+  let previous=hangar_server::config_sync::paths::map_strings(&case["previous"], &|text| {
+   text.replace("$ROOT/account/artifact.md", &path.to_string_lossy()).replace("$ROOT", &root.to_string_lossy())
+  });
   let desired=if case["desired"]==true{BTreeMap::from([(path.clone(),b"source".to_vec())])}else{BTreeMap::new()};let trusted=if case["trusted"]==true{BTreeSet::from([path.clone()])}else{BTreeSet::new()};
   let mut storage=Races{name:name.into(),writes:0,reads:0};let result=artifacts::reconcile(&desired,&previous,&backups,&trusted,&mut storage).unwrap();
   let mut saved:Vec<_>=std::fs::read_dir(&backups).into_iter().flatten().map(|p|serde_json::from_slice::<Value>(&std::fs::read(p.unwrap().path()).unwrap()).unwrap()).collect();saved.sort_by_key(Value::to_string);

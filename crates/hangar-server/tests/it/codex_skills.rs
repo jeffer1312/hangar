@@ -58,8 +58,19 @@ fn codex_service_skills_match_original_provenance_and_files(){
   std::fs::create_dir_all(backups).unwrap();
   for saved in case["initial"]["backups"].as_array().unwrap(){let mut saved=replace(saved,"$ROOT",&root.to_string_lossy());if let Some(raw)=saved["conteudo_hex"].as_str(){saved["conteudo_hex"]=json!(hex(&replace_bytes(&unhex(raw),b"$ROOT",root.to_string_lossy().replace('\\',"/").as_bytes())));}std::fs::write(backups.join(format!("{}.json",files::hash(saved["path"].as_str().unwrap().as_bytes()))),serde_json::to_vec(&saved).unwrap()).unwrap();}
   let home=Path::new(input["home"].as_str().unwrap());let env=AccountEnvironment::from_pairs([("HOME",home.to_string_lossy().into_owned()),("USERPROFILE",home.to_string_lossy().into_owned())]);
+  let account=Path::new(input["codex"].as_str().unwrap());
+  let repo=Path::new(input["repo"].as_str().unwrap());
+  let sources=hangar_server::harness_setup::skills::sources(&env,repo).unwrap();
+  let mut registry=input["registry"].clone();
+  for (name,record) in registry.as_object_mut().unwrap() {
+   let destination=account.join("skills").join(name);
+   if record["path"].as_str().is_some_and(|old|Path::new(old)==destination.as_path()) {record["path"]=json!(destination);}
+   if let Some(source)=sources.get(name) {
+    for field in ["source","origem"] {if record[field].as_str().is_some_and(|old|Path::new(old)==source.as_path()) {record[field]=json!(source);}}
+   }
+  }
   let mut storage=Races{name:case["test"].as_str().unwrap().into(),index:case["index"].as_u64().unwrap(),windows:input["windows"].as_bool().unwrap(),writes:0,root:root.into()};
-  let result=skills::reconcile(&env,Path::new(input["codex"].as_str().unwrap()),Path::new(input["repo"].as_str().unwrap()),&input["plugins"],&input["registry"],backups,storage.windows,&mut storage).unwrap_or_else(|error|panic!("{} [{}]: {error}",case["test"],case["index"]));
+  let result=skills::reconcile(&env,Path::new(input["codex"].as_str().unwrap()),Path::new(input["repo"].as_str().unwrap()),&input["plugins"],&registry,backups,storage.windows,&mut storage).unwrap_or_else(|error|panic!("{} [{}]: {error}",case["test"],case["index"]));
   let actual=replace(&result,&root.to_string_lossy(),"$ROOT");
   let mut expected=case["result"].clone();
   if storage.name=="test_exemplos_e_skill_ilegivel_nao_comprovam_plugin"&&storage.index==1{expected["warnings"][0]["params"]["erro"]=json!("arquivo SKILL.md não está em UTF-8");expected["warnings"][0]["texto"]=json!("Skills do plugin plugin@market não puderam ser confirmadas: arquivo SKILL.md não está em UTF-8");}

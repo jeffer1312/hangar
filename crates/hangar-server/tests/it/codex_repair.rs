@@ -67,7 +67,13 @@ fn codex_service_legacy_matches_original_preserving_personal_commands() {
   }
   let mut hooks=hangar_server::codex_setup::files::remap(&case["before"],Path::new("$ROOT"),root);
   let touched=hangar_server::harness_setup::codex_hooks::repair_legacy(&mut hooks,&repo,&python,windows);
-  let hooks=crate::contract_paths::value(&hooks,root,"$ROOT");
+  let hooks=hangar_server::config_sync::paths::map_strings(&hooks,&|text| {
+   let mut text=text.replace(&*python.to_string_lossy(),"$ROOT/python");
+   for script in ["state_hook.py","nav_hook.py","guard_tmux.py"] {
+    text=text.replace(&*repo.join("backend/hooks").join(script).to_string_lossy(),&format!("$ROOT/repo/backend/hooks/{script}"));
+   }
+   text.replace(&*root.to_string_lossy(),"$ROOT")
+  });
   if hooks!=case["after"] || json!(touched)!=case["result"]["ok"] {
    failures.push(json!({"windows":windows,"current":case["current_exists"],"legacy":case["legacy_exists"],"form":case["form"],"hooks":hooks,"expected":case["after"],"touched":touched,"expected_touched":case["result"]}));
   }

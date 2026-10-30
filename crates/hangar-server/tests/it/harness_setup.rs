@@ -151,7 +151,12 @@ fn kimi_hooks_match_python() {
                 toml::from_str::<Value>(&actual),
                 toml::from_str::<Value>(expected),
             ) {
-                (Ok(a), Ok(b)) => assert_eq!(normalize(a), b),
+                (Ok(a), Ok(b)) => {
+                    let b=hangar_server::config_sync::paths::map_strings(&b,&|text| if cfg!(windows) {
+                        text.replace("/backend/.venv/bin/python","/backend/.venv/Scripts/python.exe")
+                    } else {text.to_owned()});
+                    assert_eq!(normalize(a),b);
+                },
                 _ => assert_eq!(actual, expected),
             }
         }
