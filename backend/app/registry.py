@@ -274,17 +274,6 @@ def cwd_atual(meta: dict) -> str | None:
     return vivo if os.path.isdir(vivo) else cwd
 
 
-def _claude_service_tier(engine: str | None, model: str | None, tier: str | None) -> str | None:
-    if tier is None:
-        return None
-    if tier not in ("default", "priority"):
-        raise ValueError("service_tier: use default ou priority")
-    from app import cliproxy
-    if cliproxy.supports_fast(engine, model):
-        return tier
-    if tier == "priority":
-        raise ValueError("service_tier exige Claude com motor GPT no CLIProxyAPI local")
-    return None
 
 
 def _env_sessao(modelo: str | None, jev: bool, provider: str = "claude",
@@ -476,37 +465,9 @@ _EXEC_PROVIDER = {"pi": "pi", "omp": "omp", "claude": "claude", "kimi": "kimi", 
 _PKG_PROVIDER = {"pi-coding-agent": "pi"}
 
 
-def _exigir_cp_engine() -> None:
-    """Recusa ALTO quando o `hangar-engine` nao esta no PATH. Chamado antes de montar o prefixo.
-
-    O `hangar-engine --exec` vira o COMANDO do pane. Sem o lancador no PATH o pane morre no ato — e o
-    `tmux new-session` devolve 0 do mesmo jeito. Medido nesta VM (psmux 3.3.7): rc=0 na criacao e,
-    tres segundos depois, `has-session` ja responde 1. Sem esta guarda o backend responde "sessao
-    criada" pro celular e a sessao some sem deixar rastro, que e o pior modo de falha que existe
-    aqui — o usuario nao tem nem o que procurar.
-
-    Conferir ANTES em vez de verificar DEPOIS e deliberado: "o pane sobreviveu?" e uma corrida (ele
-    pode morrer a qualquer instante depois da checagem), enquanto "o lancador existe?" e uma
-    pergunta estavel, e a resposta ja diz o que fazer.
-
-    RESSALVA: o PATH consultado e o do BACKEND, e o comando roda no PATH do PANE. Onde os dois
-    divergirem isto pode recusar uma criacao que funcionaria. Recusa visivel e com instrucao e
-    melhor que sessao que evapora calada, e o conserto (instalar o lancador) serve pros dois.
-    """
-    if shutil.which("hangar-engine"):
-        return
-    raise ValueError(
-        "hangar-engine nao esta no PATH deste servidor — sem ele a sessao com motor nasce e morre na "
-        "hora, sem erro. Instale o lancador: no Linux, scripts/install-claude-wrapper.sh; no "
-        "Windows, install.ps1.")
 
 
 def _exigir_lancador_codex() -> None:
-    """Mesma guarda do `_exigir_cp_engine`, pro lancador do Codex — e pelo mesmo motivo exato.
-
-    `hangar-codex-tui` e o COMANDO do pane de toda sessao Codex. Faltando no PATH, o pane morre no
-    ato e o `tmux new-session` devolve 0: o app diria "sessao criada" e a sessao sumiria sem rastro.
-    """
     from app.adapters.codex.lancador import EXECUTAVEL
     if not shutil.which(EXECUTAVEL):
         raise ValueError(
@@ -2003,44 +1964,17 @@ class SessionRegistry:
         uuid.UUID(sid)
         # Modo de permissão vai junto: sem a flag a TUI nasce no defaultMode da conta.
         model = meta.get("model")
-        if model and not meta.get("engine"):
+        if model:
             from app import default_model
             # Na conta Anthropic, id de motor herdado do processo antigo derruba cada turno.
             if not default_model.anthropic(model):
                 model_args.validar("claude", model, None)  # valor malformado continua recusado
                 _log.warning("modelo %r não é da Anthropic; sessão relançada no padrão da conta", model)
                 model = None
-        if meta.get("engine_account"):
-            from app import cliproxy, engines
-            binding = cliproxy.engine_env(meta["engine"], model, meta.get("context_window"), meta["engine_account"],
-                                          home=(meta.get("engine_credential_id") or "").removeprefix("codex:"),
-                                          expected_base=meta.get("engine_account_base_url"))
-            model = binding["ANTHROPIC_MODEL"]
-        service_tier = _claude_service_tier(meta.get("engine"), model, meta.get("service_tier"))
         from app.adapters.claude import terminal_command
         argv = terminal_command(meta.get("cwd"), sid, model, meta.get("effort"),
                                 meta.get("permission_mode"), meta.get("claude_settings"), resume=resume)
         cmd = tmux.join_cmd(argv)
-        if meta.get("engine"):
-            from app import engines
-            if meta["engine"] not in engines.listar():
-                raise ValueError(f"motor '{meta['engine']}' nao existe")
-            _exigir_cp_engine()
-            pre = ["hangar-engine", "--exec", meta["engine"]]
-            if meta.get("engine_account"):
-                pre += ["--account", meta["engine_account"], "--account-home",
-                        binding["CP_ENGINE_CREDENTIAL_ID"].removeprefix("codex:"),
-                        "--account-base-url", binding["CP_ENGINE_ACCOUNT_BASE_URL"]]
-            if model:
-                pre += ["--model", model]
-                if meta.get("context_window"):
-                    pre += ["--context", str(meta["context_window"])]
-            if service_tier is not None:
-                # O lançador e o pré-voo leem as mesmas fontes antes de encerrar a origem.
-                env = {**os.environ, "CLAUDE_CONFIG_DIR": meta.get("config_dir") or str(Path.home() / ".claude")}
-                engines.service_tier_settings(argv, env, service_tier, cwd=meta["cwd"])
-                pre += ["--service-tier", service_tier]
-            cmd = tmux.join_cmd(pre + ["--"]) + " " + cmd
         if meta.get("read_only"):
             from app import providers_bridge
             # Refeita para a conta em que reabre; sem bwrap, recusa em vez de abrir sem a proteção.
@@ -2071,40 +2005,12 @@ class SessionRegistry:
         if claude_settings is None:
             claude_settings = session_customizations.stored_settings(sid)
         cdir = _config_dir_of(ag) if ag else None
-        motor = _engine_of(ag) if ag else None
-        engine_account = procinfo._env_var_of(ag, "CP_ENGINE_ACCOUNT") if ag and motor else None
-        engine_credential_id = procinfo._env_var_of(ag, "CP_ENGINE_CREDENTIAL_ID") if engine_account else None
-        engine_account_base_url = procinfo._env_var_of(ag, "CP_ENGINE_ACCOUNT_BASE_URL") if engine_account else None
-        service_tier = procinfo._env_var_of(ag, "CP_ENGINE_SERVICE_TIER") if ag and motor else None
         modelo, esforco = procinfo._model_of(ag) if ag else (None, None)
         janela = procinfo._env_var_of(ag, "CLAUDE_CODE_MAX_CONTEXT_TOKENS") if ag else None
-        # Com motor a variável é do motor (engines.env_de); sem motor veio do `-e` da criação.
-        subagente = procinfo._env_var_of(ag, "CLAUDE_CODE_SUBAGENT_MODEL") if ag and not motor else None
+        subagente = procinfo._env_var_of(ag, "CLAUDE_CODE_SUBAGENT_MODEL") if ag else None
         jev = _jev_do_processo(ag)
-        if motor:
-            from app import engines
-            if motor not in engines.listar():
-                if engine_account:
-                    raise ValueError("motor da conta ChatGPT fixa indisponível")
-                # Mesmo fallback do resume(): escolha de motor apagado não vale na conta Anthropic.
-                motor = modelo = esforco = janela = service_tier = None
-            else:
-                # /model não altera argv; retomar o modelo do boot desfaria a escolha em uso.
-                live_model, live_effort = _escolhas_status(sid)
-                modelo = live_model or modelo
-                esforco = _esforco_de_abertura(live_effort) or esforco
-        else:
-            # O cmdline só sabe o modelo do boot; `/model` na TUI, ou sessão aberta sem `--model`,
-            # só aparecem no que a statusline recebeu. Com `[1m]` no id, a janela vai junto.
-            vivo_m, vivo_e = _escolhas_status(sid)
-            modelo, esforco = vivo_m or modelo, _esforco_de_abertura(vivo_e) or esforco
-        if engine_account:
-            from app import cliproxy
-            binding = cliproxy.engine_env(motor, modelo, None, engine_account,
-                                          home=(engine_credential_id or "").removeprefix("codex:"),
-                                          expected_base=engine_account_base_url)
-            modelo = binding["ANTHROPIC_MODEL"]
-        service_tier = _claude_service_tier(motor, modelo, service_tier)
+        vivo_m, vivo_e = _escolhas_status(sid)
+        modelo, esforco = vivo_m or modelo, _esforco_de_abertura(vivo_e) or esforco
         model_args.validar("claude", modelo, esforco, permission_mode)
         if (sid != transfer_meta["session_id"] or cwd != transfer_meta["cwd"]
                 or pid != transfer_meta.get("pane_pid")):
@@ -2120,11 +2026,7 @@ class SessionRegistry:
             # A chave é a da transferência: com a outra, `key` ia duas vezes e a chamada nem rodava.
             meta = headless_sessions.save(name, cwd, sid, config_dir=str(cdir) if cdir else None,
                                           key=transfer_meta["key"], transfer_id=transfer_meta["transfer_id"],
-                                          engine=motor, model=modelo, effort=esforco,
-                                          engine_account=engine_account,
-                                          engine_credential_id=engine_credential_id,
-                                          engine_account_base_url=engine_account_base_url,
-                                          service_tier=service_tier,
+                                          model=modelo, effort=esforco,
                                           context_window=int(janela) if janela and janela.isdigit() else None,
                                           permission_mode=permission_mode, subagent_model=subagente,
                                           claude_settings=claude_settings, jev=jev,
@@ -2133,9 +2035,7 @@ class SessionRegistry:
                                               if permission_mode == "plan" else None))
         except OSError as e:
             meta = {"name": name, "cwd": cwd, "session_id": sid, "config_dir": str(cdir) if cdir else None,
-                    "engine": motor, "model": modelo, "effort": esforco, "permission_mode": permission_mode,
-                    "engine_account": engine_account, "engine_credential_id": engine_credential_id,
-                    "engine_account_base_url": engine_account_base_url, "service_tier": service_tier,
+                    "model": modelo, "effort": esforco, "permission_mode": permission_mode,
                     "claude_settings": claude_settings}
             try:
                 cmd = self._comando_terminal(meta, resume=Path(jsonl).exists())
