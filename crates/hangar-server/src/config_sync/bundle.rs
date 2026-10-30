@@ -40,6 +40,7 @@ pub struct Error {
     pub code: &'static str,
     pub message: String,
     pub params: Value,
+    pub os_error: Option<i32>,
 }
 impl Error {
     pub fn new(code: &'static str, message: impl Into<String>, params: Value) -> Self {
@@ -47,6 +48,7 @@ impl Error {
             code,
             message: message.into(),
             params,
+            os_error: None,
         }
     }
     pub fn invalid(message: impl Into<String>) -> Self {
@@ -61,7 +63,9 @@ impl std::fmt::Display for Error {
 impl std::error::Error for Error {}
 impl From<std::io::Error> for Error {
     fn from(e: std::io::Error) -> Self {
-        Self::new("config_sync_io", e.to_string(), json!({}))
+        let mut error = Self::new("config_sync_io", e.to_string(), json!({}));
+        error.os_error = e.raw_os_error();
+        error
     }
 }
 

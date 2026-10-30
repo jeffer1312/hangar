@@ -6,12 +6,16 @@ use std::{collections::{BTreeMap,BTreeSet}, path::PathBuf, sync::{Arc, LazyLock,
 use crate::machine_peers::dotenv::{SettingsEnvironment, SettingsSnapshot};
 use super::runtime_values::{Values, ValueGuard};
 use crate::orchestration::codec;
-use super::runtime_error::RuntimeError;
+use super::runtime_error::{RuntimeError, StorageOperation};
 
 pub const SECRETS: &[&str] = &["groq_api_key","elevenlabs_api_key","llm_api_key","llm_briefing_api_key","jev_api_key","jev_texto_api_key","jev_aux_api_key"];
 type Cache = BTreeMap<PathBuf, (SystemTime,u64,Values)>;
 static CACHE: LazyLock<Mutex<Cache>> = LazyLock::new(||Mutex::new(BTreeMap::new()));
 static WRITES: Mutex<()> = Mutex::new(());
+
+#[cfg(test)]
+#[path = "runtime_sync_tests.rs"]
+mod sync_tests;
 
 #[derive(Clone)]
 pub struct RuntimeConfig {
@@ -34,19 +38,7 @@ impl RuntimeConfig {
         Self::from_snapshot(state.accounts.env.clone(),state.settings_snapshot()?)
     }
     pub fn read(&self) -> Map<String,Value> {
-        let read = || -> Option<Map<String,Value>> {
-            let metadata = self.path.metadata().ok()?;
-            let version = (metadata.modified().ok()?,metadata.len());
-            if let Some((modified,size,data)) = CACHE.lock().unwrap_or_else(|e|e.into_inner()).get(&self.path) {
-                if (*modified,*size) == version {return Some(data.clone().into_map());}
-            }
-            let raw = std::fs::read(&self.path).ok()?;
-            let value = codec::loads(std::str::from_utf8(&raw).ok()?)?;
-            let data = match value {Value::Object(data)=>Values(data),other=>{codec::discard(other);Values(Map::new())}};
-            CACHE.lock().unwrap_or_else(|e|e.into_inner()).insert(self.path.clone(),(version.0,version.1,data.clone()));
-            Some(data.into_map())
-        };
-        read().unwrap_or_default()
+        read_at(&self.path)
     }
     fn environment(&self, key:&str) -> Value {
         self.defaults.get(key).cloned().unwrap_or(Value::Null)
@@ -107,11 +99,7 @@ impl RuntimeConfig {
     }
     pub fn apply_checked(&self, changes:&Map<String,Value>, remove:&BTreeSet<String>)->Result<Map<String,Value>,RuntimeError> {
         let _guard=WRITES.lock().unwrap_or_else(|e|e.into_inner());
-        let mut current=match std::fs::read(&self.path) {
-            Ok(raw)=>Values::read(&raw).ok_or("runtime-config.json ilegível; arquivo preservado")?,
-            Err(error) if error.kind()==std::io::ErrorKind::NotFound=>Values(Map::new()),
-            Err(error)=>return Err(RuntimeError::new("OSError",error.to_string())),
-        };
+        let mut current=read_for_write(&self.path)?;
         let mut requested=Values::copied(changes);
         let proxy = requested.shift_remove("jev_aux_cliproxy").unwrap_or(Value::Null);
         let import_proxy = proxy == Value::Bool(true);
@@ -175,14 +163,7 @@ impl RuntimeConfig {
         if let Some(value)=thinking {
             self.write_thinking(value.as_bool().ok_or("mostrar_pensamento: esperado true/false")?)?;
         }
-        let document = Value::Object(current.clone().into_map());
-        let encoded = codec::dumps_indented_utf8(&document,2);
-        codec::discard(document);
-        let encoded = encoded.map_err(|_|RuntimeError::new("UnicodeEncodeError","runtime-config.json contém surrogate Unicode isolado; arquivo preservado"))?;
-        super::files::write_file(&self.path,&super::bundle::Blob {
-            data:encoded.into_bytes(),mode:0o600,
-        }).map_err(|e|RuntimeError::new("OSError",e.to_string()))?;
-        CACHE.lock().unwrap_or_else(|e|e.into_inner()).remove(&self.path);
+        write_values(&self.path, &current)?;
         if touches_aux||["jev_api_key","jev_endpoint","jev_model"].iter().any(|key|changes.contains_key(*key)||remove.contains(*key)) {
             self.sync_jev().map_err(|error|format!("jev: salvo, mas o Computer Use não recebeu a configuração: {error}"))?;
         }
@@ -201,6 +182,47 @@ impl RuntimeConfig {
             data:format!("{text}\n").into_bytes(),mode,
         }).map_err(|e|RuntimeError::from(format!("mostrar_pensamento: {e}")))
     }
+}
+fn read_at(path: &std::path::Path) -> Map<String, Value> {
+    let read = || -> Option<Map<String,Value>> {
+        let metadata = path.metadata().ok()?;
+        let version = (metadata.modified().ok()?,metadata.len());
+        if let Some((modified,size,data)) = CACHE.lock().unwrap_or_else(|e|e.into_inner()).get(path) {
+            if (*modified,*size) == version {return Some(data.clone().into_map());}
+        }
+        let raw = std::fs::read(path).ok()?;
+        let value = codec::loads(std::str::from_utf8(&raw).ok()?)?;
+        let data = match value {Value::Object(data)=>Values(data),other=>{codec::discard(other);Values(Map::new())}};
+        CACHE.lock().unwrap_or_else(|e|e.into_inner()).insert(path.to_owned(),(version.0,version.1,data.clone()));
+        Some(data.into_map())
+    };
+    read().unwrap_or_default()
+}
+fn read_for_write(path: &std::path::Path) -> Result<Values, RuntimeError> {
+    match std::fs::read(path) {
+        Ok(raw) => Values::read(&raw).ok_or_else(|| RuntimeError::new("ValueError", "runtime-config.json ilegível; arquivo preservado").storage(StorageOperation::Read)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Values(Map::new())),
+        Err(error) => Err(RuntimeError::io(&error, StorageOperation::Read)),
+    }
+}
+fn write_values(path: &std::path::Path, current: &Values) -> Result<(), RuntimeError> {
+    let document = ValueGuard(Value::Object(current.clone().into_map()));
+    let encoded = codec::dumps_indented_utf8(&document, 2).map_err(|_| RuntimeError::new(
+        "UnicodeEncodeError", "runtime-config.json contém surrogate Unicode isolado; arquivo preservado"
+    ).storage(StorageOperation::Write))?;
+    super::files::write_file(path, &super::bundle::Blob { data: encoded.into_bytes(), mode: 0o600 })
+        .map_err(|error| RuntimeError { kind: "OSError", message: error.to_string(), os_error: error.os_error, operation: Some(StorageOperation::Write) })?;
+    CACHE.lock().unwrap_or_else(|e|e.into_inner()).remove(path);
+    Ok(())
+}
+pub(crate) fn set_sync(path: &std::path::Path, enabled: bool) -> Result<(), RuntimeError> {
+    let _guard = WRITES.lock().unwrap_or_else(|e|e.into_inner());
+    let mut current = read_for_write(path)?;
+    current.insert("sync".into(), json!(enabled));
+    write_values(path, &current)
+}
+pub(crate) fn sync_enabled(path: &std::path::Path, fallback: bool) -> bool {
+    Values(read_at(path)).get("sync").map_or(fallback, truthy)
 }
 fn mask_value(value:&Value)->Result<String,RuntimeError> {
     if !truthy(value) {return Ok(String::new());}

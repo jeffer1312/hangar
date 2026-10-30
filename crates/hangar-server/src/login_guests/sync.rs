@@ -40,11 +40,7 @@ impl Sync {
         }
     }
     pub fn enabled(&self) -> bool {
-        store::read(&self.config_path)
-            .ok()
-            .flatten()
-            .and_then(|v| v["sync"].as_bool())
-            .unwrap_or(self.enabled)
+        crate::config_sync::runtime::sync_enabled(&self.config_path, self.enabled)
     }
     fn load(&self) -> Result<Option<super::Tree>> {
         let unreadable = || Failure::code(500, "sync_vault_unreadable", "cofre ilegível");
@@ -65,23 +61,15 @@ impl Sync {
         })
     }
     fn config(&self, on: bool) -> Result<()> {
-        let mut value = store::read(&self.config_path)
-            .map_err(|error| Failure::code(500, "sync_config_unreadable", "configuração ilegível").with_io(&error))?
-            .unwrap_or_else(|| json!({}));
-        if !value.is_object() {
-            return Err(Failure::code(
-                500,
-                "sync_config_unreadable",
-                "configuração ilegível",
-            ));
-        }
-        value["sync"] = json!(on);
-        store::write(&self.config_path, &value).map_err(|error| {
-            Failure::code(
-                500,
-                "sync_config_write_failed",
-                "não foi possível gravar a configuração",
-            ).with_io(&error)
+        crate::config_sync::runtime::set_sync(&self.config_path, on).map_err(|error| {
+            let (code, message) = if error.operation == Some(crate::config_sync::runtime_error::StorageOperation::Read) {
+                ("sync_config_unreadable", "configuração ilegível")
+            } else {
+                ("sync_config_write_failed", "não foi possível gravar a configuração")
+            };
+            let mut failure = Failure::code(500, code, message);
+            failure.os_error = error.os_error;
+            failure
         })
     }
     pub fn cookie(&self, user: &str, generation: Option<&str>, now: u64) -> String {

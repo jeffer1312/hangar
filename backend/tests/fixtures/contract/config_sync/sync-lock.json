@@ -1,0 +1,19 @@
+{
+  "source_commit": "cf5daccf9dd6154704e817f5f8d3e69d5f5fdc9d",
+  "command": "uv run python tests/fixtures/contract/config_sync/generate_sync_lock.py",
+  "injections": [
+    "cofre vazio isolado; di\u00e1rio substitu\u00eddo para n\u00e3o escrever fora da prova"
+  ],
+  "result": {
+    "blocked_by_runtime_writer": true,
+    "response": {
+      "enabled": false,
+      "registered": false,
+      "user": null
+    },
+    "file": {
+      "sync": false,
+      "editor": "vim"
+    }
+  }
+}
