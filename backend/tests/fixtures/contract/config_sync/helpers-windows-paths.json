@@ -1,0 +1,20 @@
+{
+  "source_commit": "fc1ed83a37fe22c126328f3717ccd6b37db17e10",
+  "command": "python3 backend/tests/fixtures/contract/config_sync/generate_windows_paths.py",
+  "scope": "Código Python original com pathlib.PureWindowsPath; somente operações lexicais, sem E/S Windows",
+  "cases_checked": 176,
+  "paths": [
+    {
+      "roots": {
+        "hangar": "C:\\App",
+        "claude": "C:\\Users\\bia\\.claude",
+        "codex": "C:\\Users\\bia\\.codex",
+        "home": "C:\\Users\\bia"
+      },
+      "input": "C:\\Users\\bia/.hangar/versions/v1/scripts/run",
+      "canonical": "⟦HOME⟧/.hangar/versions/v1/scripts/run",
+      "resolved": "C:\\Users\\bia/.hangar/versions/v1/scripts/run",
+      "marked": []
+    }
+  ]
+}

@@ -35,8 +35,9 @@ async fn runtime_http_preserves_captured_responses_and_configuration_files() {
         let status = response.status().as_u16();
         let allow = response.headers().get("allow").map(|v|v.to_str().unwrap().to_owned());
         let bytes = axum::body::to_bytes(response.into_body(),usize::MAX).await.unwrap();
-        let raw = String::from_utf8(bytes.to_vec()).unwrap().replace(home.path().to_str().unwrap(),"⟦HOME⟧");
+        let raw = String::from_utf8(bytes.to_vec()).unwrap();
         let body = serde_json::from_str::<Value>(&raw).unwrap_or(Value::String(raw));
+        let body = crate::config_metadata::normalize_home(&body,home.path());
         let expected = if case["status"] == 400 && case["raw"].as_str().unwrap().contains("\\ud800") {
             json!({"detail":"runtime-config.json contém surrogate Unicode isolado; arquivo preservado"})
         } else {case["body"].clone()};

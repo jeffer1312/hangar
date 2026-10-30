@@ -37,7 +37,7 @@ fn compare(raw: &str) {
         let mut apply=Apply::new(context,bundle,"fixture",Default::default());
         let result=apply.apply_item("hangar_prefs");
         apply.finish_item("hangar_prefs",result);
-        let report=codec::loads(&codec::dumps(&apply.report(),false).replace(&root,"⟦HOME⟧")).unwrap();
+        let report=crate::config_metadata::normalize_home(&apply.report(),home.path());
         let mut expected=row["report"].clone();
         for warning in expected["items"]["hangar_prefs"]["warnings"].as_array_mut().unwrap() {
             if warning["params"]["error"].as_str().is_some_and(|error|error.starts_with("'utf-8' codec can't encode")) {

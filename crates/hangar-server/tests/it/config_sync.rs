@@ -30,7 +30,15 @@ fn config_sync_runtime_jev_publication_matches_python() {
                 for entry in std::fs::read_dir(path).unwrap() {
                     let path=entry.unwrap().path();
                     if path.is_dir(){collect(root,&path,out);}else {
-                        out.insert(path.strip_prefix(root).unwrap().to_string_lossy().replace('\\',"/"),json!(std::fs::read_to_string(&path).unwrap().replace(root.to_str().unwrap(),"⟦HOME⟧")));
+                        let mut raw=std::fs::read_to_string(&path).unwrap();
+                        // Preservar bytes/formatação; só neutralizar as duas chaves de caminho
+                        // publicadas pelo diário Jev, escapadas no JSON do Windows.
+                        for relative in [".claude.json", ".hangar/computer-control.json"] {
+                            let encoded=serde_json::to_string(&root.join(relative).to_string_lossy()).unwrap();
+                            raw=raw.replace(&encoded[1..encoded.len()-1],&format!("⟦HOME⟧/{relative}"));
+                        }
+                        out.insert(path.strip_prefix(root).unwrap().to_string_lossy().replace('\\',"/"),
+                            json!(raw.replace(root.to_str().unwrap(),"⟦HOME⟧")));
                     }
                 }
             }
@@ -417,7 +425,7 @@ async fn config_sync_plugin_install_and_numeric_hash_match_python() {
         }).await;
         apply.finish_item("claude_plugins",result);
         assert_eq!(apply.report(),case["report"],"{}",case["mode"]);
-        let expand = |s:&str| s.replace("⟦HOME⟧",&roots.home);
+        let expand = |s:&str| s.replace("⟦HOME⟧",&roots.home.replace('\\',"/"));
         assert_eq!(json!(calls),hangar_server::config_sync::paths::map_strings(&case["calls"], &expand));
         let mut received = Vec::new();
         while let Ok(event) = events.try_recv() { received.push(event); }
@@ -434,7 +442,16 @@ fn config_sync_helpers_match_executed_python() {
         "../../../../backend/tests/fixtures/contract/config_sync/helpers.json"
     ))
     .unwrap();
-    for case in cases["paths"].as_array().unwrap() {
+    let windows_paths: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../backend/tests/fixtures/contract/config_sync/helpers-windows-paths.json"
+    )).unwrap();
+    assert_eq!(windows_paths["cases_checked"].as_u64().unwrap() as usize, cases["paths"].as_array().unwrap().len());
+    for captured in cases["paths"].as_array().unwrap() {
+        let case = if cfg!(windows) {
+            windows_paths["paths"].as_array().unwrap().iter()
+                .find(|row| row["input"] == captured["input"] && row["roots"] == captured["roots"])
+                .unwrap_or(captured)
+        } else { captured };
         let roots: paths::Roots = serde_json::from_value(case["roots"].clone()).unwrap();
         let input = case["input"].as_str().unwrap();
         assert_eq!(

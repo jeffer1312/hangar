@@ -19,7 +19,20 @@ fn config_metadata_matches_python() {
             continue;
         }
         let actual = result.unwrap_or_else(|error| panic!("{}: {error}", case["env"]));
-        let expected: Value = serde_json::from_str(&case["metadata"].to_string().replace("⟦HOME⟧", &root)).unwrap();
-        assert_eq!(actual, expected);
+        assert_eq!(normalize_home(&actual, home.path()), case["metadata"]);
     }
+}
+
+/// Só caminhos sob o HOME temporário mudam de separador; texto arbitrário permanece intacto.
+pub(crate) fn normalize_home(value: &Value, home: &std::path::Path) -> Value {
+    let root = home.to_string_lossy();
+    hangar_server::config_sync::paths::map_strings(value, &|text| {
+        for prefix in [root.to_string(), root.replace('\\', "/")] {
+            if let Some(tail) = text.strip_prefix(&prefix)
+                .filter(|tail| tail.is_empty() || tail.starts_with(['/', '\\'])) {
+                return format!("⟦HOME⟧{}", tail.replace('\\', "/"));
+            }
+        }
+        text.to_owned()
+    })
 }
