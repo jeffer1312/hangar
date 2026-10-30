@@ -9438,6 +9438,7 @@
   "tags_apply_absent": "Not on this machine",
   "tags_apply_failed": "Refused: {reason}",
   "tags_apply_retry": "Try again",
+  "tags_apply_needs_default": "Check the default above to send it to the other machines.",
   "rename_suggest_title": "Rename to {name}?",
   "rename_suggest_apply": "Rename",
   "rename_suggest_dismiss": "Not now",

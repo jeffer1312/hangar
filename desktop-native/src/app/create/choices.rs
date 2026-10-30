@@ -557,10 +557,14 @@ impl NewSession {
                     .label(tr_shared("tags_apply_retry", &[])).disabled(self.creating)
                     .on_click(cx.listener(move |this, _, _, cx| this.spread(of, Some(key.clone()), cx)))))
         }).collect::<Vec<_>>();
+        // Marcada sem padrão salvo igual à escolha, não há o que enviar; calada, parecia aplicada.
+        let waiting = matches!(of, SpreadOf::Default) && spread.on && spread.write.is_none() && spread.results.is_empty();
         Some(div().flex().flex_col().gap(px(4.))
             .child(Checkbox::new(id).label(tr_shared("tags_apply_all", &[])).checked(spread.on).disabled(self.creating)
                 .on_change(cx.listener(move |this, on: &bool, _, cx| this.set_spread(of, *on, cx))))
-            .children(lines))
+            .children(lines)
+            .when(waiting, |el| el.child(div().id(SharedString::from(format!("{id}-waiting"))).role(Role::Status).pl(px(24.))
+                .text_size(px(12.)).text_color(theme::muted()).whitespace_normal().child(tr_shared("tags_apply_needs_default", &[])))))
     }
 
     pub(super) fn receive_models(&mut self, seq: u64, result: Result<Value, Failure>, remembered: (String, String),

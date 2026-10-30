@@ -9438,6 +9438,7 @@
   "tags_apply_absent": "Não existe nesta máquina",
   "tags_apply_failed": "Recusado: {reason}",
   "tags_apply_retry": "Tentar de novo",
+  "tags_apply_needs_default": "Marque o padrão acima para enviar às outras máquinas.",
   "rename_suggest_title": "Renomear para {name}?",
   "rename_suggest_apply": "Renomear",
   "rename_suggest_dismiss": "Agora não",
