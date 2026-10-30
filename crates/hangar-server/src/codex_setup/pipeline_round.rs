@@ -66,13 +66,18 @@ pub async fn run(context:&Context<'_>,actions:&mut(impl Actions+Send))->Result<V
   context.state.update(|v|v["estado"]=json!(if crate::engines::probe::truthy(&v["erros"]){"parcial"}else{"ok"}));Ok(())
  }.await;
  let interrupted=match result{Ok(())=>None,Err(error) if error.kind=="CancelledError"=>{context.state.update(|v|{v["estado"]=json!("ocioso");v["etapa"]=message("etapa_interrompida",json!({}));});Some(error)},Err(error)=>{
-  context.state.update(|v|{let text=messages::serialize(&v["etapa"]);let expected=matches!(error.kind,"OSError"|"FileNotFoundError"|"PermissionError"|"NotADirectoryError"|"ValueError"|"JSONDecodeError"|"UnicodeDecodeError"|"RuntimeError"|"CodexNativoErro"|"AlteradoExternamente");let item=if expected{message("erro_falha_etapa",json!({"tipo":error.kind,"etapa":text.get("texto").cloned().unwrap_or(json!(""))}))}else{message("erro_falha_inesperada",json!({"tipo":error.kind}))};v["erros"].as_array_mut().expect("Estado inicializado").push(item);v["estado"]=json!("erro");});None
+  let expected=matches!(error.kind,"OSError"|"FileNotFoundError"|"PermissionError"|"NotADirectoryError"|"ValueError"|"JSONDecodeError"|"UnicodeDecodeError"|"RuntimeError"|"CodexNativoErro"|"AlteradoExternamente");
+  let scrubber=crate::diag_report::Scrubber::new(Some(context.home.to_string_lossy().into_owned()),None);let detail=scrubber.scrub(&error.message);
+  if expected{tracing::warn!(code="codex_integration_failed",kind=error.kind,detail=%detail,"Falha da integração");}
+  else{tracing::error!(code="codex_integration_failed",kind=error.kind,detail=%detail,"Falha inesperada da integração");}
+  context.state.update(|v|{let text=messages::serialize(&v["etapa"]);let item=if expected{message("erro_falha_etapa",json!({"tipo":error.kind,"etapa":text.get("texto").cloned().unwrap_or(json!(""))}))}else{message("erro_falha_inesperada",json!({"tipo":error.kind}))};v["erros"].as_array_mut().expect("Estado inicializado").push(item);v["estado"]=json!("erro");});None
  }};
  context.state.update(|v|v["progresso"]=Value::Null);
  if loaded{
   let last=timestamp::iso(actions.now()).map_err(|e|error(e.kind,e.message))?;context.state.update(|v|{v["ultima_execucao"]=json!(last);if v["estado"]!="ocioso"{v["etapa"]=message(if v["estado"]=="ok"{"etapa_concluido"}else{"etapa_pendencias"},json!({}));}});
-  registry["status"]=view(context,actions.now())?;
-  registry["fingerprint"]=match actions.fingerprint(true,None,None){Ok(current) if beginning.as_ref()==Some(&current)=>actions.fingerprint(false,None,None).map(Value::String).unwrap_or(Value::Null),_=>Value::Null};
+  let final_status=view(context,actions.now())?;if let Some(old)=registry.as_object_mut().expect("Registro validado").insert("status".into(),final_status){codec::discard(old);}
+  let fingerprint=match actions.fingerprint(true,None,None){Ok(current) if beginning.as_ref()==Some(&current)=>actions.fingerprint(false,None,None).map(Value::String).unwrap_or(Value::Null),_=>Value::Null};
+  if let Some(old)=registry.as_object_mut().expect("Registro validado").insert("fingerprint".into(),fingerprint){codec::discard(old);}
   let path=context.work.join("estado.json");let saved=(||->Result<(),files::Error>{files::write(&path,&files::bytes(&registry)?,files::read(&path)?.as_deref(),None)?;Ok(())})();if saved.is_err(){tracing::warn!(code="codex_checkpoint_failed","Não foi possível persistir o estado da integração");}
  }
  drop(lock);if let Some(error)=interrupted{return Err(error)}view(context,actions.now())

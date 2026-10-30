@@ -10,7 +10,7 @@ trait RoundRunner:Send+Sync {
  fn run(self:Arc<Self>,service:Arc<Service>,reason:String,force:bool,cancel:watch::Receiver<bool>)->std::pin::Pin<Box<dyn std::future::Future<Output=Result<(),super::phase::Error>>+Send>>;
 }
 #[derive(Clone)]
-struct Round {forced:bool,result:watch::Receiver<Option<Result<(),String>>>,cancel:watch::Sender<bool>,identity:Arc<()>}
+struct Round {forced:bool,result:watch::Receiver<Option<Result<(),String>>>,cancel:watch::Sender<bool>}
 pub struct Service {
     pub(super) accounts:AccountService,
     pub(super) config:RuntimeConfig,
@@ -20,26 +20,30 @@ pub struct Service {
     state:super::phase::State,
     rounds:Mutex<Option<Round>>,
     runner:Option<Arc<dyn RoundRunner>>,
+    #[cfg(test)]
+    before_start:Option<Arc<dyn Fn(&str)+Send+Sync>>,
 }
 impl Service {
     pub fn new(accounts:AccountService,config:RuntimeConfig,repo:PathBuf,runtime:Option<Arc<RuntimeRegistry>>)->Arc<Self>{
-        Arc::new(Self{accounts,config,repo,runtime,mutations:Mutex::new(Mutations::default()),state:super::phase::State::new(status::snapshot()),rounds:Mutex::new(None),runner:None})
+        Arc::new(Self{accounts,config,repo,runtime,mutations:Mutex::new(Mutations::default()),state:super::phase::State::new(status::snapshot()),rounds:Mutex::new(None),runner:None,#[cfg(test)] before_start:None})
     }
     #[cfg(test)]
     fn new_with_runner(accounts:AccountService,config:RuntimeConfig,repo:PathBuf,runtime:Option<Arc<RuntimeRegistry>>,runner:Arc<dyn RoundRunner>)->Arc<Self>{
         let mut service=Self::new(accounts,config,repo,runtime);Arc::get_mut(&mut service).unwrap().runner=Some(runner);service
     }
-    pub async fn start(self:&Arc<Self>,reason:&str,force:bool)->Result<Value,String>{
+    pub async fn start(self:&Arc<Self>,reason:&str,force:bool)->Result<Value,String>{self.start_round(reason,force).map(|(status,_)|status)}
+    fn start_round(self:&Arc<Self>,reason:&str,force:bool)->Result<(Value,Round),String>{
+        #[cfg(test)] if let Some(hook)=&self.before_start{hook(reason);}
         let mut mutations=self.mutations.lock().unwrap_or_else(|e|e.into_inner());
         if mutations.closed{return Err("serviço Codex encerrado".into());}
         let mut rounds=self.rounds.lock().unwrap_or_else(|e|e.into_inner());
-        if rounds.as_ref().is_some_and(|round|round.result.borrow().is_none()){return self.status();}
+        if let Some(round)=rounds.as_ref().filter(|round|round.result.borrow().is_none()){return Ok((self.status()?,round.clone()));}
         match std::fs::remove_file(self.accounts.env.codex_default.join(PREPARED_MARKER)){Ok(())=>{},Err(e) if e.kind()==std::io::ErrorKind::NotFound=>{},Err(e)=>return Err(e.to_string())}
         let mut state=self.status()?;state["estado"]=json!("executando");state["etapa"]=super::messages::message("etapa_aguardando",&serde_json::Map::new()).expect("Mensagem versionada");
         self.state.update(|current|crate::orchestration::codec::discard(std::mem::replace(current,state)));
         let initial=self.status()?;
         let(sender,result)=watch::channel(None);let(cancel,signal)=watch::channel(false);
-        *rounds=Some(Round{forced:force,result,cancel,identity:Arc::new(())});
+        let selected=Round{forced:force,result,cancel};*rounds=Some(selected.clone());
         let service=self.clone();let reason=reason.to_owned();
         mutations.tasks.retain(|task|!task.is_finished());
         mutations.tasks.push(tokio::spawn(async move{
@@ -57,14 +61,19 @@ impl Service {
             }
             sender.send_replace(Some(result.map_err(|error|error.message)));
         }));
-        Ok(initial)
+        Ok((initial,selected))
     }
     pub async fn update_and_wait(self:&Arc<Self>,reason:&str,force:bool)->Result<Value,String>{
-        let previous=self.current_round().filter(|round|round.result.borrow().is_none());
-        if force{self.start(reason,true).await?;}else if super::sync_enabled(&self.config)&&self.needs_reconcile()?{self.start("sessao",false).await?;}
-        let current=self.current_round();if let Some(round)=current.clone().filter(|round|round.result.borrow().is_none()){Self::wait_round(round).await?;}
-        if force&&previous.as_ref().zip(current.as_ref()).is_some_and(|(old,current)|Arc::ptr_eq(&old.identity,&current.identity)&&!old.forced){
-            self.start(reason,true).await?;self.wait_current().await?;
+        if force{
+            loop{
+                // A rodada e seu tipo são escolhidos na mesma trava que agenda o trabalho.
+                let (status,round)=self.start_round(reason,true)?;crate::orchestration::codec::discard(status);
+                let forced=round.forced;Self::wait_round(round).await?;
+                if forced{break;}
+            }
+        }else{
+            if super::sync_enabled(&self.config)&&self.needs_reconcile()?{crate::orchestration::codec::discard(self.start("sessao",false).await?);}
+            if let Some(round)=self.current_round().filter(|round|round.result.borrow().is_none()){Self::wait_round(round).await?;}
         }
         self.status()
     }
