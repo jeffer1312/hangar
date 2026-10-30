@@ -1521,54 +1521,21 @@ def test_broadcast_uses_send_thread(api_client, monkeypatch):
 
 from app import model_picker as mp
 
-_ENGINE_CAT = [
-    {"id": "k3", "context_length": 1048576, "vision": True},
-    {"id": "kimi-for-coding", "context_length": 262144, "vision": True},
-]
 
 
-def _engine_info():
-    return SessionInfo(name="cc", cwd="/p", jsonl="/p/a.jsonl", provider="claude", engine="kimi")
 
 
 @pytest.fixture
 def api_client_limpo(api_client):
     # O cache do catalogo e por processo e vive 5 min: sem limpar, um teste leria o do anterior.
     from app import api as api_mod
-    api_mod._engine_models_cache.clear()
     api_mod._claude_models_cache.clear()
     yield api_client
-    api_mod._engine_models_cache.clear()
     api_mod._claude_models_cache.clear()
 
 
-def test_model_options_engine_vem_do_provedor_nao_do_picker(api_client_limpo):
-    # Numa sessao de motor o picker do CC so lista os 4 aliases (todos o mesmo ANTHROPIC_MODEL):
-    # a lista util e a do /v1/models. O terminal NAO pode ser tocado nesse caminho.
-    with patch("app.api._cached_info", AsyncMock(return_value=_engine_info())), \
-         patch("app.api.engines.listar", return_value={"kimi": {"base_url": "https://x", "api_key": "k"}}), \
-         patch("app.api.engine_probe.listar_modelos", return_value=_ENGINE_CAT) as probe, \
-         patch("app.api.terminal.list_model_options") as picker:
-        r = api_client_limpo.get("/api/sessions/cc/model/options", headers=_h())
-    assert r.status_code == 200
-    body = r.json()
-    assert body["kind"] == "engine" and body["engine"] == "kimi"
-    assert [m["id"] for m in body["models"]] == ["k3", "kimi-for-coding"]
-    picker.assert_not_called()
-    probe.assert_called_once()
 
 
-def test_model_options_engine_ignora_painel_aberto(api_client_limpo, monkeypatch):
-    # O ramo de motor fala com o provedor por HTTP (_engine_models) — nao le o pane, entao o painel
-    # anexado nao pode derrubar esta listagem (achado da revisao da Task 3).
-    from app import termsock
-    monkeypatch.setitem(termsock._ativos, "cc", object())
-    with patch("app.api._cached_info", AsyncMock(return_value=_engine_info())), \
-         patch("app.api.engines.listar", return_value={"kimi": {"base_url": "https://x", "api_key": "k"}}), \
-         patch("app.api.engine_probe.listar_modelos", return_value=_ENGINE_CAT):
-        r = api_client_limpo.get("/api/sessions/cc/model/options", headers=_h())
-    assert r.status_code == 200
-    assert r.json()["kind"] == "engine"
 
 
 def test_model_options_conta_anthropic_recusa_com_painel_aberto(api_client_limpo, monkeypatch):
@@ -1631,96 +1598,16 @@ def test_model_options_sessao_ocupada_propaga_409(api_client_limpo):
     assert "trabalhando" in r.json()["detail"]
 
 
-def test_engine_model_set_restaura_o_default_global(api_client_limpo):
-    # O ponto da rota: `/model <id>` grava o id como default GLOBAL. O valor anterior volta pro
-    # settings.json depois — a troca vale na sessao e em lugar nenhum mais.
-    with patch("app.api._cached_info", AsyncMock(return_value=_engine_info())), \
-         patch("app.api.engines.listar", return_value={"kimi": {"base_url": "https://x", "api_key": "k"}}), \
-         patch("app.api.engine_probe.listar_modelos", return_value=_ENGINE_CAT), \
-         patch("app.api._session_config_dir", return_value=None), \
-         patch("app.api.default_model.snapshot", return_value="claude-opus-5"), \
-         patch("app.api.default_model.restore_quando_aterrissar") as restore, \
-         patch("app.api.terminal.set_engine_model",
-               return_value={"ok": True, "result": "Set model to kimi-for-coding"}) as drv:
-        r = api_client_limpo.post("/api/sessions/cc/engine/model", headers=_h(),
-                            json={"model": "kimi-for-coding"})
-    assert r.status_code == 200
-    drv.assert_called_once_with("cc", "kimi-for-coding")
-    restore.assert_called_once_with(None, "claude-opus-5")
 
 
-def test_engine_model_set_restaura_mesmo_quando_o_driver_falha(api_client_limpo):
-    # O comando pode ter sido digitado ANTES da falha de leitura: deixar o default global vazado
-    # por causa de um erro seria a pior combinacao.
-    with patch("app.api._cached_info", AsyncMock(return_value=_engine_info())), \
-         patch("app.api.engines.listar", return_value={"kimi": {"base_url": "https://x", "api_key": "k"}}), \
-         patch("app.api.engine_probe.listar_modelos", return_value=_ENGINE_CAT), \
-         patch("app.api._session_config_dir", return_value=None), \
-         patch("app.api.default_model.snapshot", return_value="claude-opus-5"), \
-         patch("app.api.default_model.restore_quando_aterrissar") as restore, \
-         patch("app.api.terminal.set_engine_model", side_effect=mp.PickerError(409, "sem confirmacao")):
-        r = api_client_limpo.post("/api/sessions/cc/engine/model", headers=_h(),
-                            json={"model": "kimi-for-coding"})
-    assert r.status_code == 409
-    restore.assert_called_once_with(None, "claude-opus-5")
 
 
-def test_engine_model_set_recusa_modelo_fora_do_catalogo(api_client_limpo):
-    # Digitar o id assim mesmo faria a sessao mandar request pra um modelo inexistente e a falha
-    # apareceria so no proximo turno.
-    with patch("app.api._cached_info", AsyncMock(return_value=_engine_info())), \
-         patch("app.api.engines.listar", return_value={"kimi": {"base_url": "https://x", "api_key": "k"}}), \
-         patch("app.api.engine_probe.listar_modelos", return_value=_ENGINE_CAT), \
-         patch("app.api.terminal.set_engine_model") as drv:
-        r = api_client_limpo.post("/api/sessions/cc/engine/model", headers=_h(),
-                            json={"model": "gpt-5.4"})
-    assert r.status_code == 422
-    drv.assert_not_called()
 
 
-def test_engine_model_set_recusa_sessao_sem_motor(api_client):
-    with patch("app.api._cached_info", AsyncMock(return_value=SessionInfo(
-            name="cc", cwd="/p", jsonl="/p/a.jsonl", provider="claude"))):
-        r = api_client.post("/api/sessions/cc/engine/model", headers=_h(), json={"model": "k3"})
-    assert r.status_code == 400
 
 
-def test_engine_model_set_recusado_antes_de_digitar_nao_espera_a_escrita(api_client_limpo):
-    # Sessao ocupada: o terminal ficou intocado, entao esperar ~3.6s pela escrita do settings.json
-    # so faria o erro demorar a aparecer na tela.
-    from app.terminal_input import TerminalInput
-    with patch("app.api._cached_info", AsyncMock(return_value=_engine_info())), \
-         patch("app.api.engines.listar", return_value={"kimi": {"base_url": "https://x", "api_key": "k"}}), \
-         patch("app.api.engine_probe.listar_modelos", return_value=_ENGINE_CAT), \
-         patch("app.api._session_config_dir", return_value=None), \
-         patch("app.api.default_model.snapshot", return_value="claude-opus-5"), \
-         patch("app.api.default_model.restore_quando_aterrissar") as restore, \
-         patch("app.api.terminal.set_engine_model",
-               side_effect=TerminalInput.NaoDigitou(409, "a sessao esta trabalhando")):
-        r = api_client_limpo.post("/api/sessions/cc/engine/model", headers=_h(),
-                                  json={"model": "k3"})
-    assert r.status_code == 409
-    restore.assert_not_called()
 
 
-def test_engine_model_set_valida_contra_catalogo_FRESCO(api_client_limpo):
-    # O cache de 5 min existe pra folha abrir rapido. Se a validacao da troca usasse ele, um modelo
-    # tirado do plano passaria e a falha apareceria so no proximo turno — exatamente o que o check
-    # promete evitar.
-    with patch("app.api._cached_info", AsyncMock(return_value=_engine_info())), \
-         patch("app.api.engines.listar", return_value={"kimi": {"base_url": "https://x", "api_key": "k"}}), \
-         patch("app.api.engine_probe.listar_modelos", return_value=_ENGINE_CAT) as probe:
-        # 1) esquenta o cache pela rota de listagem
-        assert api_client_limpo.get("/api/sessions/cc/model/options", headers=_h()).status_code == 200
-        assert probe.call_count == 1
-        # 2) o provedor tirou o k3 do plano
-        probe.return_value = [m for m in _ENGINE_CAT if m["id"] != "k3"]
-        with patch("app.api.terminal.set_engine_model") as drv:
-            r = api_client_limpo.post("/api/sessions/cc/engine/model", headers=_h(),
-                                      json={"model": "k3"})
-    assert probe.call_count == 2          # nao reusou o cache
-    assert r.status_code == 422
-    drv.assert_not_called()
 
 
 # 13/08/2026 — o "idle" mentiroso do Kimi no caminho de ACAO

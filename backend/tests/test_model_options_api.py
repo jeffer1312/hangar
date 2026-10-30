@@ -1,12 +1,4 @@
-"""Borda HTTP da lista de modelos sem sessão viva (`GET /api/model-options`).
-
-O que esta suíte trava: a chave compartilhada do cache de modelos da conta (_chave_config cola a
-grafia da sessão viva — derivada do /proc — com a grafia que o cliente manda — caminho livre); os
-cinco ramos da rota; e a invalidação do cache do motor quando o motor é editado ou apagado. Sem
-isto, apagar o `.resolve()` do _chave_config deixava a suíte inteira verde e matava o cache
-compartilhado calado — `reduced: true` é resposta legítima, e a tela de abertura responderia "lista
-reduzida" pra sempre na conta padrão sem ninguém perceber.
-"""
+"""Contratos dos modelos Claude/Codex que ainda têm consumidores Python."""
 import json
 import subprocess
 import time
@@ -24,7 +16,6 @@ def _models_cache_isolado(models_cache_em_tmp):
 
 
 from app import api
-from app import engines as eng
 from app.api import app
 from app.models import SessionInfo
 from app.config import settings
@@ -59,14 +50,10 @@ def test_claude_parser_failure_is_an_explicit_error_without_alias_fallback(cli, 
 
 @pytest.fixture(autouse=True)
 def _isola(tmp_path, monkeypatch):
-    # Convenção da casa (ver tests/test_engines_api.py:18-33): token próprio por arquivo + fixture
-    # de engines.caminho em tmp_path pro teste do PUT/DELETE.
     monkeypatch.setattr(settings, "auth_token", TOKEN)
-    monkeypatch.setattr(eng, "caminho", lambda: tmp_path / "engines.json")
     # Cache vaza de teste pra teste (o TTL é de minutos): limpar antes e depois de cada um, senão
     # a suíte fica dependente de ordem.
     api._claude_models_cache.clear()
-    api._engine_models_cache.clear()
     # Sem isto a rota subiria um `claude` de verdade em todo teste de cache frio: o catálogo
     # efêmero é subprocess. O padrão da suíte é "não veio", que é o ramo do fallback.
     monkeypatch.setattr(api.claude_models, "listar",
@@ -74,7 +61,6 @@ def _isola(tmp_path, monkeypatch):
                             api.claude_models.ClaudeAusente("sem claude no teste")))
     yield
     api._claude_models_cache.clear()
-    api._engine_models_cache.clear()
 
 
 @pytest.fixture
@@ -219,29 +205,3 @@ def test_codex_que_falha_vira_502(cli, monkeypatch):
 
 def test_sem_token_vira_401(cli):
     assert cli.get("/api/model-options").status_code == 401
-
-
-def test_motor_serve_o_catalogo_do_provedor(cli):
-    """Sem rede: o cache curto-circuita o engine_probe."""
-    api._engine_models_cache["kimi"] = (time.monotonic(),
-                                        [{"id": "k3", "context_length": 262144, "vision": True}])
-    r = cli.get("/api/model-options", headers=AUTH,
-                params={"provider": "claude", "engine": "kimi"})
-    assert r.status_code == 200
-    assert r.json()["kind"] == "engine"
-    assert r.json()["reduced"] is False
-    assert r.json()["models"] == [{"id": "k3", "context_length": 262144, "vision": True,
-                                   "supports_fast": False}]
-
-
-def test_put_e_delete_de_motor_esvaziam_o_cache_do_catalogo(cli):
-    """A chave do cache é o NOME do motor: trocar base_url/api_key mantendo o nome serviria a lista
-    do provedor antigo por até 5 minutos sem a invalidação."""
-    motor = {"label": "Kimi", "base_url": "https://api.kimi.com/coding",
-             "api_key": "sk-kimi-abcdefgh1234", "model": "k3"}
-    api._engine_models_cache["kimi"] = (time.monotonic(), [{"id": "k3"}])
-    assert cli.put("/api/engines/kimi", json=motor, headers=AUTH).status_code == 200
-    assert "kimi" not in api._engine_models_cache
-    api._engine_models_cache["kimi"] = (time.monotonic(), [{"id": "k3"}])
-    assert cli.delete("/api/engines/kimi", headers=AUTH).status_code == 200
-    assert "kimi" not in api._engine_models_cache

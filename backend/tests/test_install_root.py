@@ -67,7 +67,6 @@ def test_hook_gravado_aponta_para_o_current(home, tmp_path, monkeypatch):
 @pytest.mark.parametrize("modulo, atributo, relativo", [
     ("app.skill_bridge", "_REPO", ""),
     ("app.plugin_bridge", "PLUGINS_ROOT", "plugins"),
-    ("app.harness_saude", "_REPO", ""),
     ("app.codex_integracao", "_REPO", ""),
     ("app.codex_contas_plugins", "_REPO", ""),
     ("app.codex_compat", "_REPO", ""),

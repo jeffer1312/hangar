@@ -491,12 +491,6 @@ def _worker() -> None:
         return {"ok": True}
 
 
-    @app.post("/__contract__/device-repair")
-    def device_repair(body: dict):
-        from app import harness_saude
-        return {"result": harness_saude.consertar(body["action"])}
-
-
     model_invalidations = []
     original_catalog_request = dictation_bridge.request
     def catalog_transport(operation, payload):
