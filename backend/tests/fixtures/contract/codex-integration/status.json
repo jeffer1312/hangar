@@ -1,0 +1,425 @@
+{
+  "source_commit": "a8362c881805b652bd7ca54eefe649bf93fb6ab1",
+  "command": "python backend/tests/fixtures/contract/codex-integration/generate_status.py",
+  "cases": [
+    {
+      "name": "missing",
+      "disk": null,
+      "memory": null,
+      "expected": {
+        "ok": {
+          "estado": "ocioso",
+          "etapa": {
+            "codigo": null,
+            "params": {},
+            "texto": ""
+          },
+          "ultima_execucao": null,
+          "proxima_atualizacao": null,
+          "plugins": [],
+          "erros": [],
+          "avisos": [],
+          "confianca_pendente": false,
+          "progresso": null,
+          "skills": {
+            "ponte": 0,
+            "nativas": 0
+          },
+          "etapa_segundos": null
+        }
+      }
+    },
+    {
+      "name": "broken",
+      "disk": "{",
+      "memory": null,
+      "expected": {
+        "ok": {
+          "estado": "erro",
+          "etapa": {
+            "codigo": null,
+            "params": {},
+            "texto": ""
+          },
+          "ultima_execucao": null,
+          "proxima_atualizacao": null,
+          "plugins": [],
+          "erros": [
+            {
+              "codigo": "erro_registro_ilegivel",
+              "params": {},
+              "texto": "Registro da integra\u00e7\u00e3o ileg\u00edvel"
+            }
+          ],
+          "avisos": [],
+          "confianca_pendente": false,
+          "progresso": null,
+          "skills": {
+            "ponte": 0,
+            "nativas": 0
+          },
+          "etapa_segundos": null
+        }
+      }
+    },
+    {
+      "name": "nonobject",
+      "disk": "[]",
+      "memory": null,
+      "expected": {
+        "ok": {
+          "estado": "erro",
+          "etapa": {
+            "codigo": null,
+            "params": {},
+            "texto": ""
+          },
+          "ultima_execucao": null,
+          "proxima_atualizacao": null,
+          "plugins": [],
+          "erros": [
+            {
+              "codigo": "erro_registro_ilegivel",
+              "params": {},
+              "texto": "Registro da integra\u00e7\u00e3o ileg\u00edvel"
+            }
+          ],
+          "avisos": [],
+          "confianca_pendente": false,
+          "progresso": null,
+          "skills": {
+            "ponte": 0,
+            "nativas": 0
+          },
+          "etapa_segundos": null
+        }
+      }
+    },
+    {
+      "name": "ready",
+      "disk": {
+        "status": {
+          "estado": "pronto",
+          "etapa": "feito",
+          "ultima_execucao": "2026-01-01"
+        }
+      },
+      "memory": null,
+      "expected": {
+        "ok": {
+          "estado": "pronto",
+          "etapa": {
+            "codigo": null,
+            "params": {},
+            "texto": "feito"
+          },
+          "ultima_execucao": "2026-01-01",
+          "proxima_atualizacao": null,
+          "plugins": [],
+          "erros": [],
+          "avisos": [],
+          "confianca_pendente": false,
+          "progresso": null,
+          "skills": {
+            "ponte": 0,
+            "nativas": 0
+          },
+          "etapa_segundos": null
+        }
+      }
+    },
+    {
+      "name": "restart",
+      "disk": {
+        "status": {
+          "estado": "executando",
+          "etapa": "velha"
+        }
+      },
+      "memory": null,
+      "expected": {
+        "ok": {
+          "estado": "ocioso",
+          "etapa": {
+            "codigo": "etapa_reinicio",
+            "params": {},
+            "texto": "Aguardando reconcilia\u00e7\u00e3o ap\u00f3s rein\u00edcio"
+          },
+          "ultima_execucao": null,
+          "proxima_atualizacao": null,
+          "plugins": [],
+          "erros": [],
+          "avisos": [],
+          "confianca_pendente": false,
+          "progresso": null,
+          "skills": {
+            "ponte": 0,
+            "nativas": 0
+          },
+          "etapa_segundos": null
+        }
+      }
+    },
+    {
+      "name": "skills",
+      "disk": {
+        "skills": {
+          "a": {
+            "mode": "symlink"
+          },
+          "b": {
+            "mode": "copy"
+          },
+          "c": {
+            "mode": "native"
+          },
+          "d": {
+            "mode": "other"
+          },
+          "e": 4
+        }
+      },
+      "memory": null,
+      "expected": {
+        "ok": {
+          "estado": "ocioso",
+          "etapa": {
+            "codigo": null,
+            "params": {},
+            "texto": ""
+          },
+          "ultima_execucao": null,
+          "proxima_atualizacao": null,
+          "plugins": [],
+          "erros": [],
+          "avisos": [],
+          "confianca_pendente": false,
+          "progresso": null,
+          "skills": {
+            "ponte": 2,
+            "nativas": 1
+          },
+          "etapa_segundos": null
+        }
+      }
+    },
+    {
+      "name": "memory-newer",
+      "disk": {
+        "status": {
+          "ultima_execucao": "2026-01-01"
+        }
+      },
+      "memory": {
+        "estado": "pronto",
+        "ultima_execucao": "2026-02-01"
+      },
+      "expected": {
+        "ok": {
+          "estado": "pronto",
+          "etapa": {
+            "codigo": null,
+            "params": {},
+            "texto": ""
+          },
+          "ultima_execucao": "2026-02-01",
+          "proxima_atualizacao": null,
+          "plugins": [],
+          "erros": [],
+          "avisos": [],
+          "confianca_pendente": false,
+          "progresso": null,
+          "skills": {
+            "ponte": 0,
+            "nativas": 0
+          },
+          "etapa_segundos": null
+        }
+      }
+    },
+    {
+      "name": "disk-newer",
+      "disk": {
+        "status": {
+          "ultima_execucao": "2026-02-01"
+        }
+      },
+      "memory": {
+        "estado": "erro",
+        "ultima_execucao": "2026-01-01"
+      },
+      "expected": {
+        "ok": {
+          "estado": "ocioso",
+          "etapa": {
+            "codigo": null,
+            "params": {},
+            "texto": ""
+          },
+          "ultima_execucao": "2026-02-01",
+          "proxima_atualizacao": null,
+          "plugins": [],
+          "erros": [],
+          "avisos": [],
+          "confianca_pendente": false,
+          "progresso": null,
+          "skills": {
+            "ponte": 0,
+            "nativas": 0
+          },
+          "etapa_segundos": null
+        }
+      }
+    },
+    {
+      "name": "running",
+      "disk": null,
+      "memory": {
+        "estado": "executando",
+        "etapa": "trabalhando",
+        "etapa_desde": 990.5
+      },
+      "expected": {
+        "ok": {
+          "estado": "executando",
+          "etapa": {
+            "codigo": null,
+            "params": {},
+            "texto": "trabalhando"
+          },
+          "ultima_execucao": null,
+          "proxima_atualizacao": null,
+          "plugins": [],
+          "erros": [],
+          "avisos": [],
+          "confianca_pendente": false,
+          "progresso": null,
+          "skills": {
+            "ponte": 0,
+            "nativas": 0
+          },
+          "etapa_segundos": 9
+        }
+      }
+    },
+    {
+      "name": "running-clock-back",
+      "disk": null,
+      "memory": {
+        "estado": "executando",
+        "etapa_desde": 1005.0
+      },
+      "expected": {
+        "ok": {
+          "estado": "executando",
+          "etapa": {
+            "codigo": null,
+            "params": {},
+            "texto": ""
+          },
+          "ultima_execucao": null,
+          "proxima_atualizacao": null,
+          "plugins": [],
+          "erros": [],
+          "avisos": [],
+          "confianca_pendente": false,
+          "progresso": null,
+          "skills": {
+            "ponte": 0,
+            "nativas": 0
+          },
+          "etapa_segundos": -5
+        }
+      }
+    },
+    {
+      "name": "invalid-status",
+      "disk": {
+        "status": []
+      },
+      "memory": null,
+      "expected": {
+        "error": "TypeError",
+        "message": "'list' object is not a mapping"
+      }
+    },
+    {
+      "name": "invalid-skills",
+      "disk": {
+        "skills": []
+      },
+      "memory": null,
+      "expected": {
+        "error": "AttributeError",
+        "message": "'list' object has no attribute 'values'"
+      }
+    },
+    {
+      "name": "structured-messages",
+      "disk": {
+        "status": {
+          "etapa": {
+            "codigo": "fixture",
+            "params": {
+              "x": "y"
+            },
+            "texto": "valor"
+          },
+          "avisos": [
+            "aviso",
+            null
+          ],
+          "erros": [
+            {
+              "codigo": "fixture",
+              "params": {},
+              "texto": "erro"
+            }
+          ]
+        }
+      },
+      "memory": null,
+      "expected": {
+        "ok": {
+          "estado": "ocioso",
+          "etapa": {
+            "codigo": "fixture",
+            "params": {
+              "x": "y"
+            },
+            "texto": "valor"
+          },
+          "ultima_execucao": null,
+          "proxima_atualizacao": null,
+          "plugins": [],
+          "erros": [
+            {
+              "codigo": "fixture",
+              "params": {},
+              "texto": "erro"
+            }
+          ],
+          "avisos": [
+            {
+              "codigo": null,
+              "params": {},
+              "texto": "aviso"
+            },
+            {
+              "codigo": null,
+              "params": {},
+              "texto": ""
+            }
+          ],
+          "confianca_pendente": false,
+          "progresso": null,
+          "skills": {
+            "ponte": 0,
+            "nativas": 0
+          },
+          "etapa_segundos": null
+        }
+      }
+    }
+  ]
+}

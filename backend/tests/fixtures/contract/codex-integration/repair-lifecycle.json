@@ -1,0 +1,750 @@
+{
+  "source_commit": "8a3ce81c1",
+  "command": "cd backend && uv run python tests/fixtures/contract/codex-integration/generate_repair_lifecycle.py",
+  "cases": [
+    {
+      "default": false,
+      "ready": false,
+      "adopt": false,
+      "outcome": null,
+      "result": {
+        "ok": null
+      },
+      "calls": [
+        "lock-enter",
+        "resolve",
+        "exclusive-enter",
+        "extra-status",
+        "repair",
+        "exclusive-exit",
+        "lock-exit"
+      ],
+      "marker": null
+    },
+    {
+      "default": false,
+      "ready": false,
+      "adopt": false,
+      "outcome": false,
+      "result": {
+        "ok": false
+      },
+      "calls": [
+        "lock-enter",
+        "resolve",
+        "exclusive-enter",
+        "extra-status",
+        "repair",
+        "exclusive-exit",
+        "lock-exit"
+      ],
+      "marker": null
+    },
+    {
+      "default": false,
+      "ready": false,
+      "adopt": false,
+      "outcome": true,
+      "result": {
+        "ok": true
+      },
+      "calls": [
+        "lock-enter",
+        "resolve",
+        "exclusive-enter",
+        "extra-status",
+        "repair",
+        "exclusive-exit",
+        "lock-exit"
+      ],
+      "marker": null
+    },
+    {
+      "default": false,
+      "ready": false,
+      "adopt": false,
+      "outcome": "error",
+      "result": {
+        "error": "OSError",
+        "message": "fixture repair"
+      },
+      "calls": [
+        "lock-enter",
+        "resolve",
+        "exclusive-enter",
+        "extra-status",
+        "repair",
+        "exclusive-exit",
+        "lock-exit"
+      ],
+      "marker": null
+    },
+    {
+      "default": false,
+      "ready": false,
+      "adopt": false,
+      "outcome": "changed",
+      "result": {
+        "error": "ValueError",
+        "message": "A conta Codex mudou durante o reparo"
+      },
+      "calls": [
+        "lock-enter",
+        "resolve",
+        "lock-exit"
+      ],
+      "marker": null
+    },
+    {
+      "default": false,
+      "ready": false,
+      "adopt": true,
+      "outcome": null,
+      "result": {
+        "ok": null
+      },
+      "calls": [
+        "lock-enter",
+        "resolve",
+        "exclusive-enter",
+        "extra-status",
+        "repair",
+        "exclusive-exit",
+        "lock-exit"
+      ],
+      "marker": null
+    },
+    {
+      "default": false,
+      "ready": false,
+      "adopt": true,
+      "outcome": false,
+      "result": {
+        "ok": false
+      },
+      "calls": [
+        "lock-enter",
+        "resolve",
+        "exclusive-enter",
+        "extra-status",
+        "repair",
+        "exclusive-exit",
+        "lock-exit"
+      ],
+      "marker": null
+    },
+    {
+      "default": false,
+      "ready": false,
+      "adopt": true,
+      "outcome": true,
+      "result": {
+        "ok": true
+      },
+      "calls": [
+        "lock-enter",
+        "resolve",
+        "exclusive-enter",
+        "extra-status",
+        "repair",
+        "exclusive-exit",
+        "lock-exit"
+      ],
+      "marker": null
+    },
+    {
+      "default": false,
+      "ready": false,
+      "adopt": true,
+      "outcome": "error",
+      "result": {
+        "error": "OSError",
+        "message": "fixture repair"
+      },
+      "calls": [
+        "lock-enter",
+        "resolve",
+        "exclusive-enter",
+        "extra-status",
+        "repair",
+        "exclusive-exit",
+        "lock-exit"
+      ],
+      "marker": null
+    },
+    {
+      "default": false,
+      "ready": false,
+      "adopt": true,
+      "outcome": "changed",
+      "result": {
+        "error": "ValueError",
+        "message": "A conta Codex mudou durante o reparo"
+      },
+      "calls": [
+        "lock-enter",
+        "resolve",
+        "lock-exit"
+      ],
+      "marker": null
+    },
+    {
+      "default": false,
+      "ready": true,
+      "adopt": false,
+      "outcome": null,
+      "result": {
+        "ok": null
+      },
+      "calls": [
+        "lock-enter",
+        "resolve",
+        "exclusive-enter",
+        "extra-status",
+        "repair",
+        "exclusive-exit",
+        "lock-exit"
+      ],
+      "marker": null
+    },
+    {
+      "default": false,
+      "ready": true,
+      "adopt": false,
+      "outcome": false,
+      "result": {
+        "ok": false
+      },
+      "calls": [
+        "lock-enter",
+        "resolve",
+        "exclusive-enter",
+        "extra-status",
+        "repair",
+        "exclusive-exit",
+        "lock-exit"
+      ],
+      "marker": null
+    },
+    {
+      "default": false,
+      "ready": true,
+      "adopt": false,
+      "outcome": true,
+      "result": {
+        "ok": true
+      },
+      "calls": [
+        "lock-enter",
+        "resolve",
+        "exclusive-enter",
+        "extra-status",
+        "repair",
+        "exclusive-exit",
+        "lock-exit"
+      ],
+      "marker": null
+    },
+    {
+      "default": false,
+      "ready": true,
+      "adopt": false,
+      "outcome": "error",
+      "result": {
+        "error": "OSError",
+        "message": "fixture repair"
+      },
+      "calls": [
+        "lock-enter",
+        "resolve",
+        "exclusive-enter",
+        "extra-status",
+        "repair",
+        "exclusive-exit",
+        "lock-exit"
+      ],
+      "marker": null
+    },
+    {
+      "default": false,
+      "ready": true,
+      "adopt": false,
+      "outcome": "changed",
+      "result": {
+        "error": "ValueError",
+        "message": "A conta Codex mudou durante o reparo"
+      },
+      "calls": [
+        "lock-enter",
+        "resolve",
+        "lock-exit"
+      ],
+      "marker": null
+    },
+    {
+      "default": false,
+      "ready": true,
+      "adopt": true,
+      "outcome": null,
+      "result": {
+        "ok": null
+      },
+      "calls": [
+        "lock-enter",
+        "resolve",
+        "exclusive-enter",
+        "extra-status",
+        "repair",
+        "exclusive-exit",
+        "lock-exit"
+      ],
+      "marker": null
+    },
+    {
+      "default": false,
+      "ready": true,
+      "adopt": true,
+      "outcome": false,
+      "result": {
+        "ok": false
+      },
+      "calls": [
+        "lock-enter",
+        "resolve",
+        "exclusive-enter",
+        "extra-status",
+        "repair",
+        "exclusive-exit",
+        "lock-exit"
+      ],
+      "marker": "{\n  \"version\": 1\n}\n"
+    },
+    {
+      "default": false,
+      "ready": true,
+      "adopt": true,
+      "outcome": true,
+      "result": {
+        "ok": true
+      },
+      "calls": [
+        "lock-enter",
+        "resolve",
+        "exclusive-enter",
+        "extra-status",
+        "repair",
+        "exclusive-exit",
+        "lock-exit"
+      ],
+      "marker": "{\n  \"version\": 1\n}\n"
+    },
+    {
+      "default": false,
+      "ready": true,
+      "adopt": true,
+      "outcome": "error",
+      "result": {
+        "error": "OSError",
+        "message": "fixture repair"
+      },
+      "calls": [
+        "lock-enter",
+        "resolve",
+        "exclusive-enter",
+        "extra-status",
+        "repair",
+        "exclusive-exit",
+        "lock-exit"
+      ],
+      "marker": null
+    },
+    {
+      "default": false,
+      "ready": true,
+      "adopt": true,
+      "outcome": "changed",
+      "result": {
+        "error": "ValueError",
+        "message": "A conta Codex mudou durante o reparo"
+      },
+      "calls": [
+        "lock-enter",
+        "resolve",
+        "lock-exit"
+      ],
+      "marker": null
+    },
+    {
+      "default": true,
+      "ready": false,
+      "adopt": false,
+      "outcome": null,
+      "result": {
+        "ok": null
+      },
+      "calls": [
+        "lock-enter",
+        "resolve",
+        "exclusive-enter",
+        "default-status",
+        "repair",
+        "exclusive-exit",
+        "lock-exit"
+      ],
+      "marker": null
+    },
+    {
+      "default": true,
+      "ready": false,
+      "adopt": false,
+      "outcome": false,
+      "result": {
+        "ok": false
+      },
+      "calls": [
+        "lock-enter",
+        "resolve",
+        "exclusive-enter",
+        "default-status",
+        "repair",
+        "exclusive-exit",
+        "lock-exit"
+      ],
+      "marker": null
+    },
+    {
+      "default": true,
+      "ready": false,
+      "adopt": false,
+      "outcome": true,
+      "result": {
+        "ok": true
+      },
+      "calls": [
+        "lock-enter",
+        "resolve",
+        "exclusive-enter",
+        "default-status",
+        "repair",
+        "exclusive-exit",
+        "lock-exit"
+      ],
+      "marker": null
+    },
+    {
+      "default": true,
+      "ready": false,
+      "adopt": false,
+      "outcome": "error",
+      "result": {
+        "error": "OSError",
+        "message": "fixture repair"
+      },
+      "calls": [
+        "lock-enter",
+        "resolve",
+        "exclusive-enter",
+        "default-status",
+        "repair",
+        "exclusive-exit",
+        "lock-exit"
+      ],
+      "marker": null
+    },
+    {
+      "default": true,
+      "ready": false,
+      "adopt": false,
+      "outcome": "changed",
+      "result": {
+        "error": "ValueError",
+        "message": "A conta Codex mudou durante o reparo"
+      },
+      "calls": [
+        "lock-enter",
+        "resolve",
+        "lock-exit"
+      ],
+      "marker": null
+    },
+    {
+      "default": true,
+      "ready": false,
+      "adopt": true,
+      "outcome": null,
+      "result": {
+        "ok": null
+      },
+      "calls": [
+        "lock-enter",
+        "resolve",
+        "exclusive-enter",
+        "default-status",
+        "repair",
+        "exclusive-exit",
+        "lock-exit"
+      ],
+      "marker": null
+    },
+    {
+      "default": true,
+      "ready": false,
+      "adopt": true,
+      "outcome": false,
+      "result": {
+        "ok": false
+      },
+      "calls": [
+        "lock-enter",
+        "resolve",
+        "exclusive-enter",
+        "default-status",
+        "repair",
+        "exclusive-exit",
+        "lock-exit"
+      ],
+      "marker": null
+    },
+    {
+      "default": true,
+      "ready": false,
+      "adopt": true,
+      "outcome": true,
+      "result": {
+        "ok": true
+      },
+      "calls": [
+        "lock-enter",
+        "resolve",
+        "exclusive-enter",
+        "default-status",
+        "repair",
+        "exclusive-exit",
+        "lock-exit"
+      ],
+      "marker": null
+    },
+    {
+      "default": true,
+      "ready": false,
+      "adopt": true,
+      "outcome": "error",
+      "result": {
+        "error": "OSError",
+        "message": "fixture repair"
+      },
+      "calls": [
+        "lock-enter",
+        "resolve",
+        "exclusive-enter",
+        "default-status",
+        "repair",
+        "exclusive-exit",
+        "lock-exit"
+      ],
+      "marker": null
+    },
+    {
+      "default": true,
+      "ready": false,
+      "adopt": true,
+      "outcome": "changed",
+      "result": {
+        "error": "ValueError",
+        "message": "A conta Codex mudou durante o reparo"
+      },
+      "calls": [
+        "lock-enter",
+        "resolve",
+        "lock-exit"
+      ],
+      "marker": null
+    },
+    {
+      "default": true,
+      "ready": true,
+      "adopt": false,
+      "outcome": null,
+      "result": {
+        "ok": null
+      },
+      "calls": [
+        "lock-enter",
+        "resolve",
+        "exclusive-enter",
+        "default-status",
+        "repair",
+        "exclusive-exit",
+        "lock-exit"
+      ],
+      "marker": null
+    },
+    {
+      "default": true,
+      "ready": true,
+      "adopt": false,
+      "outcome": false,
+      "result": {
+        "ok": false
+      },
+      "calls": [
+        "lock-enter",
+        "resolve",
+        "exclusive-enter",
+        "default-status",
+        "repair",
+        "exclusive-exit",
+        "lock-exit"
+      ],
+      "marker": null
+    },
+    {
+      "default": true,
+      "ready": true,
+      "adopt": false,
+      "outcome": true,
+      "result": {
+        "ok": true
+      },
+      "calls": [
+        "lock-enter",
+        "resolve",
+        "exclusive-enter",
+        "default-status",
+        "repair",
+        "exclusive-exit",
+        "lock-exit"
+      ],
+      "marker": null
+    },
+    {
+      "default": true,
+      "ready": true,
+      "adopt": false,
+      "outcome": "error",
+      "result": {
+        "error": "OSError",
+        "message": "fixture repair"
+      },
+      "calls": [
+        "lock-enter",
+        "resolve",
+        "exclusive-enter",
+        "default-status",
+        "repair",
+        "exclusive-exit",
+        "lock-exit"
+      ],
+      "marker": null
+    },
+    {
+      "default": true,
+      "ready": true,
+      "adopt": false,
+      "outcome": "changed",
+      "result": {
+        "error": "ValueError",
+        "message": "A conta Codex mudou durante o reparo"
+      },
+      "calls": [
+        "lock-enter",
+        "resolve",
+        "lock-exit"
+      ],
+      "marker": null
+    },
+    {
+      "default": true,
+      "ready": true,
+      "adopt": true,
+      "outcome": null,
+      "result": {
+        "ok": null
+      },
+      "calls": [
+        "lock-enter",
+        "resolve",
+        "exclusive-enter",
+        "default-status",
+        "repair",
+        "exclusive-exit",
+        "lock-exit"
+      ],
+      "marker": null
+    },
+    {
+      "default": true,
+      "ready": true,
+      "adopt": true,
+      "outcome": false,
+      "result": {
+        "ok": false
+      },
+      "calls": [
+        "lock-enter",
+        "resolve",
+        "exclusive-enter",
+        "default-status",
+        "repair",
+        "exclusive-exit",
+        "lock-exit"
+      ],
+      "marker": "{\n  \"version\": 1\n}\n"
+    },
+    {
+      "default": true,
+      "ready": true,
+      "adopt": true,
+      "outcome": true,
+      "result": {
+        "ok": true
+      },
+      "calls": [
+        "lock-enter",
+        "resolve",
+        "exclusive-enter",
+        "default-status",
+        "repair",
+        "exclusive-exit",
+        "lock-exit"
+      ],
+      "marker": "{\n  \"version\": 1\n}\n"
+    },
+    {
+      "default": true,
+      "ready": true,
+      "adopt": true,
+      "outcome": "error",
+      "result": {
+        "error": "OSError",
+        "message": "fixture repair"
+      },
+      "calls": [
+        "lock-enter",
+        "resolve",
+        "exclusive-enter",
+        "default-status",
+        "repair",
+        "exclusive-exit",
+        "lock-exit"
+      ],
+      "marker": null
+    },
+    {
+      "default": true,
+      "ready": true,
+      "adopt": true,
+      "outcome": "changed",
+      "result": {
+        "error": "ValueError",
+        "message": "A conta Codex mudou durante o reparo"
+      },
+      "calls": [
+        "lock-enter",
+        "resolve",
+        "lock-exit"
+      ],
+      "marker": null
+    }
+  ]
+}

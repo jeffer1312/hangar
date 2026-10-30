@@ -351,3 +351,25 @@ mod codex_normalize;
 mod peer_panel;
 mod codex_plugins;
 mod pairing_print;
+
+mod codex_repair;
+
+mod codex_status;
+mod codex_fragments;
+
+mod codex_messages;
+
+mod codex_service;
+
+mod codex_artifacts;
+
+mod codex_batch;
+mod codex_reload;
+
+mod codex_phase;
+
+mod codex_skills;
+
+mod codex_phase_types;
+
+mod codex_config_edits;

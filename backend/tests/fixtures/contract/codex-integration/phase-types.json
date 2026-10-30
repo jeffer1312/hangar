@@ -1,0 +1,2061 @@
+{
+  "source_commit": "8a3ce81c1",
+  "command": "cd backend && uv run python tests/fixtures/contract/codex-integration/generate_phase_types.py",
+  "cases": [
+    {
+      "field": "errors",
+      "value": null,
+      "initial": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": null,
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": "old date"
+          }
+        }
+      },
+      "result": {
+        "error": "TypeError",
+        "message": "'NoneType' object is not iterable"
+      },
+      "registry": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": null,
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": "old date"
+          }
+        }
+      },
+      "state": {
+        "erros": [
+          "existing error"
+        ],
+        "avisos": [
+          "existing warning"
+        ],
+        "plugins": [],
+        "proxima_atualizacao": null
+      },
+      "confirmed": [],
+      "calls": [
+        [
+          "fingerprint",
+          false
+        ]
+      ]
+    },
+    {
+      "field": "errors",
+      "value": false,
+      "initial": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": false,
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": "old date"
+          }
+        }
+      },
+      "result": {
+        "error": "TypeError",
+        "message": "'bool' object is not iterable"
+      },
+      "registry": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": false,
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": "old date"
+          }
+        }
+      },
+      "state": {
+        "erros": [
+          "existing error"
+        ],
+        "avisos": [
+          "existing warning"
+        ],
+        "plugins": [],
+        "proxima_atualizacao": null
+      },
+      "confirmed": [],
+      "calls": [
+        [
+          "fingerprint",
+          false
+        ]
+      ]
+    },
+    {
+      "field": "errors",
+      "value": 7,
+      "initial": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": 7,
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": "old date"
+          }
+        }
+      },
+      "result": {
+        "error": "TypeError",
+        "message": "'int' object is not iterable"
+      },
+      "registry": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": 7,
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": "old date"
+          }
+        }
+      },
+      "state": {
+        "erros": [
+          "existing error"
+        ],
+        "avisos": [
+          "existing warning"
+        ],
+        "plugins": [],
+        "proxima_atualizacao": null
+      },
+      "confirmed": [],
+      "calls": [
+        [
+          "fingerprint",
+          false
+        ]
+      ]
+    },
+    {
+      "field": "errors",
+      "value": "ab",
+      "initial": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": "ab",
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": "old date"
+          }
+        }
+      },
+      "result": {
+        "ok": null
+      },
+      "registry": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": "ab",
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": "old date"
+          }
+        }
+      },
+      "state": {
+        "erros": [
+          "existing error",
+          "a",
+          "b"
+        ],
+        "avisos": [
+          "existing warning",
+          "old warning"
+        ],
+        "plugins": [
+          "old plugin"
+        ],
+        "proxima_atualizacao": "old date"
+      },
+      "confirmed": [
+        "a",
+        "z"
+      ],
+      "calls": [
+        [
+          "fingerprint",
+          false
+        ]
+      ]
+    },
+    {
+      "field": "errors",
+      "value": {
+        "key": 1
+      },
+      "initial": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": {
+              "key": 1
+            },
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": "old date"
+          }
+        }
+      },
+      "result": {
+        "ok": null
+      },
+      "registry": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": {
+              "key": 1
+            },
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": "old date"
+          }
+        }
+      },
+      "state": {
+        "erros": [
+          "existing error",
+          "key"
+        ],
+        "avisos": [
+          "existing warning",
+          "old warning"
+        ],
+        "plugins": [
+          "old plugin"
+        ],
+        "proxima_atualizacao": "old date"
+      },
+      "confirmed": [
+        "a",
+        "z"
+      ],
+      "calls": [
+        [
+          "fingerprint",
+          false
+        ]
+      ]
+    },
+    {
+      "field": "errors",
+      "value": [],
+      "initial": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [],
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": "old date"
+          }
+        }
+      },
+      "result": {
+        "ok": null
+      },
+      "registry": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [],
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": "old date"
+          }
+        }
+      },
+      "state": {
+        "erros": [
+          "existing error"
+        ],
+        "avisos": [
+          "existing warning",
+          "old warning"
+        ],
+        "plugins": [
+          "old plugin"
+        ],
+        "proxima_atualizacao": "old date"
+      },
+      "confirmed": [
+        "a",
+        "z"
+      ],
+      "calls": [
+        [
+          "fingerprint",
+          false
+        ]
+      ]
+    },
+    {
+      "field": "warnings",
+      "value": null,
+      "initial": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": null,
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": "old date"
+          }
+        }
+      },
+      "result": {
+        "error": "TypeError",
+        "message": "'NoneType' object is not iterable"
+      },
+      "registry": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": null,
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": "old date"
+          }
+        }
+      },
+      "state": {
+        "erros": [
+          "existing error",
+          "old error"
+        ],
+        "avisos": [
+          "existing warning"
+        ],
+        "plugins": [],
+        "proxima_atualizacao": null
+      },
+      "confirmed": [],
+      "calls": [
+        [
+          "fingerprint",
+          false
+        ]
+      ]
+    },
+    {
+      "field": "warnings",
+      "value": false,
+      "initial": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": false,
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": "old date"
+          }
+        }
+      },
+      "result": {
+        "error": "TypeError",
+        "message": "'bool' object is not iterable"
+      },
+      "registry": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": false,
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": "old date"
+          }
+        }
+      },
+      "state": {
+        "erros": [
+          "existing error",
+          "old error"
+        ],
+        "avisos": [
+          "existing warning"
+        ],
+        "plugins": [],
+        "proxima_atualizacao": null
+      },
+      "confirmed": [],
+      "calls": [
+        [
+          "fingerprint",
+          false
+        ]
+      ]
+    },
+    {
+      "field": "warnings",
+      "value": 7,
+      "initial": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": 7,
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": "old date"
+          }
+        }
+      },
+      "result": {
+        "error": "TypeError",
+        "message": "'int' object is not iterable"
+      },
+      "registry": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": 7,
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": "old date"
+          }
+        }
+      },
+      "state": {
+        "erros": [
+          "existing error",
+          "old error"
+        ],
+        "avisos": [
+          "existing warning"
+        ],
+        "plugins": [],
+        "proxima_atualizacao": null
+      },
+      "confirmed": [],
+      "calls": [
+        [
+          "fingerprint",
+          false
+        ]
+      ]
+    },
+    {
+      "field": "warnings",
+      "value": "ab",
+      "initial": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": "ab",
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": "old date"
+          }
+        }
+      },
+      "result": {
+        "ok": null
+      },
+      "registry": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": "ab",
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": "old date"
+          }
+        }
+      },
+      "state": {
+        "erros": [
+          "existing error",
+          "old error"
+        ],
+        "avisos": [
+          "existing warning",
+          "a",
+          "b"
+        ],
+        "plugins": [
+          "old plugin"
+        ],
+        "proxima_atualizacao": "old date"
+      },
+      "confirmed": [
+        "a",
+        "z"
+      ],
+      "calls": [
+        [
+          "fingerprint",
+          false
+        ]
+      ]
+    },
+    {
+      "field": "warnings",
+      "value": {
+        "key": 1
+      },
+      "initial": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": {
+              "key": 1
+            },
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": "old date"
+          }
+        }
+      },
+      "result": {
+        "ok": null
+      },
+      "registry": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": {
+              "key": 1
+            },
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": "old date"
+          }
+        }
+      },
+      "state": {
+        "erros": [
+          "existing error",
+          "old error"
+        ],
+        "avisos": [
+          "existing warning",
+          "key"
+        ],
+        "plugins": [
+          "old plugin"
+        ],
+        "proxima_atualizacao": "old date"
+      },
+      "confirmed": [
+        "a",
+        "z"
+      ],
+      "calls": [
+        [
+          "fingerprint",
+          false
+        ]
+      ]
+    },
+    {
+      "field": "warnings",
+      "value": [],
+      "initial": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": [],
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": "old date"
+          }
+        }
+      },
+      "result": {
+        "ok": null
+      },
+      "registry": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": [],
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": "old date"
+          }
+        }
+      },
+      "state": {
+        "erros": [
+          "existing error",
+          "old error"
+        ],
+        "avisos": [
+          "existing warning"
+        ],
+        "plugins": [
+          "old plugin"
+        ],
+        "proxima_atualizacao": "old date"
+      },
+      "confirmed": [
+        "a",
+        "z"
+      ],
+      "calls": [
+        [
+          "fingerprint",
+          false
+        ]
+      ]
+    },
+    {
+      "field": "confirmed",
+      "value": null,
+      "initial": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": null,
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": "old date"
+          }
+        }
+      },
+      "result": {
+        "error": "TypeError",
+        "message": "'NoneType' object is not iterable"
+      },
+      "registry": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": null,
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": "old date"
+          }
+        }
+      },
+      "state": {
+        "erros": [
+          "existing error",
+          "old error"
+        ],
+        "avisos": [
+          "existing warning",
+          "old warning"
+        ],
+        "plugins": [],
+        "proxima_atualizacao": null
+      },
+      "confirmed": [],
+      "calls": [
+        [
+          "fingerprint",
+          false
+        ]
+      ]
+    },
+    {
+      "field": "confirmed",
+      "value": false,
+      "initial": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": false,
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": "old date"
+          }
+        }
+      },
+      "result": {
+        "error": "TypeError",
+        "message": "'bool' object is not iterable"
+      },
+      "registry": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": false,
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": "old date"
+          }
+        }
+      },
+      "state": {
+        "erros": [
+          "existing error",
+          "old error"
+        ],
+        "avisos": [
+          "existing warning",
+          "old warning"
+        ],
+        "plugins": [],
+        "proxima_atualizacao": null
+      },
+      "confirmed": [],
+      "calls": [
+        [
+          "fingerprint",
+          false
+        ]
+      ]
+    },
+    {
+      "field": "confirmed",
+      "value": 7,
+      "initial": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": 7,
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": "old date"
+          }
+        }
+      },
+      "result": {
+        "error": "TypeError",
+        "message": "'int' object is not iterable"
+      },
+      "registry": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": 7,
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": "old date"
+          }
+        }
+      },
+      "state": {
+        "erros": [
+          "existing error",
+          "old error"
+        ],
+        "avisos": [
+          "existing warning",
+          "old warning"
+        ],
+        "plugins": [],
+        "proxima_atualizacao": null
+      },
+      "confirmed": [],
+      "calls": [
+        [
+          "fingerprint",
+          false
+        ]
+      ]
+    },
+    {
+      "field": "confirmed",
+      "value": "ab",
+      "initial": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": "ab",
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": "old date"
+          }
+        }
+      },
+      "result": {
+        "ok": null
+      },
+      "registry": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": "ab",
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": "old date"
+          }
+        }
+      },
+      "state": {
+        "erros": [
+          "existing error",
+          "old error"
+        ],
+        "avisos": [
+          "existing warning",
+          "old warning"
+        ],
+        "plugins": [
+          "old plugin"
+        ],
+        "proxima_atualizacao": "old date"
+      },
+      "confirmed": [
+        "a",
+        "b"
+      ],
+      "calls": [
+        [
+          "fingerprint",
+          false
+        ]
+      ]
+    },
+    {
+      "field": "confirmed",
+      "value": {
+        "key": 1
+      },
+      "initial": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": {
+              "key": 1
+            },
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": "old date"
+          }
+        }
+      },
+      "result": {
+        "ok": null
+      },
+      "registry": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": {
+              "key": 1
+            },
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": "old date"
+          }
+        }
+      },
+      "state": {
+        "erros": [
+          "existing error",
+          "old error"
+        ],
+        "avisos": [
+          "existing warning",
+          "old warning"
+        ],
+        "plugins": [
+          "old plugin"
+        ],
+        "proxima_atualizacao": "old date"
+      },
+      "confirmed": [
+        "key"
+      ],
+      "calls": [
+        [
+          "fingerprint",
+          false
+        ]
+      ]
+    },
+    {
+      "field": "confirmed",
+      "value": [],
+      "initial": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": [],
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": "old date"
+          }
+        }
+      },
+      "result": {
+        "ok": null
+      },
+      "registry": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": [],
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": "old date"
+          }
+        }
+      },
+      "state": {
+        "erros": [
+          "existing error",
+          "old error"
+        ],
+        "avisos": [
+          "existing warning",
+          "old warning"
+        ],
+        "plugins": [
+          "old plugin"
+        ],
+        "proxima_atualizacao": "old date"
+      },
+      "confirmed": [],
+      "calls": [
+        [
+          "fingerprint",
+          false
+        ]
+      ]
+    },
+    {
+      "field": "plugins",
+      "value": null,
+      "initial": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": null,
+            "next_update": "old date"
+          }
+        }
+      },
+      "result": {
+        "ok": null
+      },
+      "registry": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": null,
+            "next_update": "old date"
+          }
+        }
+      },
+      "state": {
+        "erros": [
+          "existing error",
+          "old error"
+        ],
+        "avisos": [
+          "existing warning",
+          "old warning"
+        ],
+        "plugins": null,
+        "proxima_atualizacao": "old date"
+      },
+      "confirmed": [
+        "a",
+        "z"
+      ],
+      "calls": [
+        [
+          "fingerprint",
+          false
+        ]
+      ]
+    },
+    {
+      "field": "plugins",
+      "value": false,
+      "initial": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": false,
+            "next_update": "old date"
+          }
+        }
+      },
+      "result": {
+        "ok": null
+      },
+      "registry": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": false,
+            "next_update": "old date"
+          }
+        }
+      },
+      "state": {
+        "erros": [
+          "existing error",
+          "old error"
+        ],
+        "avisos": [
+          "existing warning",
+          "old warning"
+        ],
+        "plugins": false,
+        "proxima_atualizacao": "old date"
+      },
+      "confirmed": [
+        "a",
+        "z"
+      ],
+      "calls": [
+        [
+          "fingerprint",
+          false
+        ]
+      ]
+    },
+    {
+      "field": "plugins",
+      "value": 7,
+      "initial": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": 7,
+            "next_update": "old date"
+          }
+        }
+      },
+      "result": {
+        "ok": null
+      },
+      "registry": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": 7,
+            "next_update": "old date"
+          }
+        }
+      },
+      "state": {
+        "erros": [
+          "existing error",
+          "old error"
+        ],
+        "avisos": [
+          "existing warning",
+          "old warning"
+        ],
+        "plugins": 7,
+        "proxima_atualizacao": "old date"
+      },
+      "confirmed": [
+        "a",
+        "z"
+      ],
+      "calls": [
+        [
+          "fingerprint",
+          false
+        ]
+      ]
+    },
+    {
+      "field": "plugins",
+      "value": "ab",
+      "initial": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": "ab",
+            "next_update": "old date"
+          }
+        }
+      },
+      "result": {
+        "ok": null
+      },
+      "registry": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": "ab",
+            "next_update": "old date"
+          }
+        }
+      },
+      "state": {
+        "erros": [
+          "existing error",
+          "old error"
+        ],
+        "avisos": [
+          "existing warning",
+          "old warning"
+        ],
+        "plugins": "ab",
+        "proxima_atualizacao": "old date"
+      },
+      "confirmed": [
+        "a",
+        "z"
+      ],
+      "calls": [
+        [
+          "fingerprint",
+          false
+        ]
+      ]
+    },
+    {
+      "field": "plugins",
+      "value": {
+        "key": 1
+      },
+      "initial": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": {
+              "key": 1
+            },
+            "next_update": "old date"
+          }
+        }
+      },
+      "result": {
+        "ok": null
+      },
+      "registry": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": {
+              "key": 1
+            },
+            "next_update": "old date"
+          }
+        }
+      },
+      "state": {
+        "erros": [
+          "existing error",
+          "old error"
+        ],
+        "avisos": [
+          "existing warning",
+          "old warning"
+        ],
+        "plugins": {
+          "key": 1
+        },
+        "proxima_atualizacao": "old date"
+      },
+      "confirmed": [
+        "a",
+        "z"
+      ],
+      "calls": [
+        [
+          "fingerprint",
+          false
+        ]
+      ]
+    },
+    {
+      "field": "plugins",
+      "value": [],
+      "initial": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": [],
+            "next_update": "old date"
+          }
+        }
+      },
+      "result": {
+        "ok": null
+      },
+      "registry": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": [],
+            "next_update": "old date"
+          }
+        }
+      },
+      "state": {
+        "erros": [
+          "existing error",
+          "old error"
+        ],
+        "avisos": [
+          "existing warning",
+          "old warning"
+        ],
+        "plugins": [],
+        "proxima_atualizacao": "old date"
+      },
+      "confirmed": [
+        "a",
+        "z"
+      ],
+      "calls": [
+        [
+          "fingerprint",
+          false
+        ]
+      ]
+    },
+    {
+      "field": "next_update",
+      "value": null,
+      "initial": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": null
+          }
+        }
+      },
+      "result": {
+        "ok": null
+      },
+      "registry": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": null
+          }
+        }
+      },
+      "state": {
+        "erros": [
+          "existing error",
+          "old error"
+        ],
+        "avisos": [
+          "existing warning",
+          "old warning"
+        ],
+        "plugins": [
+          "old plugin"
+        ],
+        "proxima_atualizacao": null
+      },
+      "confirmed": [
+        "a",
+        "z"
+      ],
+      "calls": [
+        [
+          "fingerprint",
+          false
+        ]
+      ]
+    },
+    {
+      "field": "next_update",
+      "value": false,
+      "initial": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": false
+          }
+        }
+      },
+      "result": {
+        "ok": null
+      },
+      "registry": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": false
+          }
+        }
+      },
+      "state": {
+        "erros": [
+          "existing error",
+          "old error"
+        ],
+        "avisos": [
+          "existing warning",
+          "old warning"
+        ],
+        "plugins": [
+          "old plugin"
+        ],
+        "proxima_atualizacao": false
+      },
+      "confirmed": [
+        "a",
+        "z"
+      ],
+      "calls": [
+        [
+          "fingerprint",
+          false
+        ]
+      ]
+    },
+    {
+      "field": "next_update",
+      "value": 7,
+      "initial": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": 7
+          }
+        }
+      },
+      "result": {
+        "ok": null
+      },
+      "registry": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": 7
+          }
+        }
+      },
+      "state": {
+        "erros": [
+          "existing error",
+          "old error"
+        ],
+        "avisos": [
+          "existing warning",
+          "old warning"
+        ],
+        "plugins": [
+          "old plugin"
+        ],
+        "proxima_atualizacao": 7
+      },
+      "confirmed": [
+        "a",
+        "z"
+      ],
+      "calls": [
+        [
+          "fingerprint",
+          false
+        ]
+      ]
+    },
+    {
+      "field": "next_update",
+      "value": "ab",
+      "initial": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": "ab"
+          }
+        }
+      },
+      "result": {
+        "ok": null
+      },
+      "registry": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": "ab"
+          }
+        }
+      },
+      "state": {
+        "erros": [
+          "existing error",
+          "old error"
+        ],
+        "avisos": [
+          "existing warning",
+          "old warning"
+        ],
+        "plugins": [
+          "old plugin"
+        ],
+        "proxima_atualizacao": "ab"
+      },
+      "confirmed": [
+        "a",
+        "z"
+      ],
+      "calls": [
+        [
+          "fingerprint",
+          false
+        ]
+      ]
+    },
+    {
+      "field": "next_update",
+      "value": {
+        "key": 1
+      },
+      "initial": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": {
+              "key": 1
+            }
+          }
+        }
+      },
+      "result": {
+        "ok": null
+      },
+      "registry": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": {
+              "key": 1
+            }
+          }
+        }
+      },
+      "state": {
+        "erros": [
+          "existing error",
+          "old error"
+        ],
+        "avisos": [
+          "existing warning",
+          "old warning"
+        ],
+        "plugins": [
+          "old plugin"
+        ],
+        "proxima_atualizacao": {
+          "key": 1
+        }
+      },
+      "confirmed": [
+        "a",
+        "z"
+      ],
+      "calls": [
+        [
+          "fingerprint",
+          false
+        ]
+      ]
+    },
+    {
+      "field": "next_update",
+      "value": [],
+      "initial": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": []
+          }
+        }
+      },
+      "result": {
+        "ok": null
+      },
+      "registry": {
+        "phases": {
+          "plugins": {
+            "fingerprint": "same",
+            "errors": [
+              "old error"
+            ],
+            "warnings": [
+              "old warning"
+            ],
+            "confirmed": [
+              "z",
+              "a"
+            ],
+            "plugins": [
+              "old plugin"
+            ],
+            "next_update": []
+          }
+        }
+      },
+      "state": {
+        "erros": [
+          "existing error",
+          "old error"
+        ],
+        "avisos": [
+          "existing warning",
+          "old warning"
+        ],
+        "plugins": [
+          "old plugin"
+        ],
+        "proxima_atualizacao": []
+      },
+      "confirmed": [
+        "a",
+        "z"
+      ],
+      "calls": [
+        [
+          "fingerprint",
+          false
+        ]
+      ]
+    }
+  ]
+}

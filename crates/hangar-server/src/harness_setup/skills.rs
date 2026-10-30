@@ -31,7 +31,7 @@ fn children(path: &Path) -> std::io::Result<Vec<PathBuf>> {
     entries.sort();
     Ok(entries)
 }
-fn skills(path: &Path) -> std::io::Result<Vec<PathBuf>> {
+pub(crate) fn skills(path: &Path) -> std::io::Result<Vec<PathBuf>> {
     Ok(children(path)?
         .into_iter()
         .filter(|p| p.join("SKILL.md").is_file())
@@ -48,7 +48,7 @@ fn version(path: &Path) -> (bool, Vec<u64>, String) {
         Err(_) => (false, vec![], name.into_owned()),
     }
 }
-fn roots(env: &AccountEnvironment, repo: &Path) -> Vec<PathBuf> {
+pub(crate) fn roots(env: &AccountEnvironment, repo: &Path) -> Vec<PathBuf> {
     vec![
         env.home.join(".claude/skills"),
         repo.join("skills"),

@@ -103,7 +103,7 @@ impl AccountService {
             Err(_) => Err(AccountError::io()),
         }
     }
-    fn stored_status(&self, account: &Account, key: &AccountKey) -> Value {
+    pub(crate) fn stored_status(&self, account: &Account, key: &AccountKey) -> Value {
         let home = account.home.to_string_lossy();
         let digest: String = ring::digest::digest(&ring::digest::SHA256, home.as_bytes())
             .as_ref()

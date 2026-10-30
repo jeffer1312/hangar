@@ -37,3 +37,18 @@ pub fn sync_enabled(config: &crate::config_sync::runtime::RuntimeConfig) -> bool
 #[cfg(test)]
 #[path = "sync_gate_tests.rs"]
 mod sync_gate_tests;
+
+pub mod repair;
+pub mod status;
+pub mod fragments;
+pub mod messages;
+pub mod service;
+pub mod artifacts;
+pub mod batch;
+pub mod reload;
+
+pub mod phase;
+
+pub mod skills;
+
+pub mod config_edits;

@@ -1,0 +1,455 @@
+{
+  "source_commit": "8a3ce81c1",
+  "command": "cd backend && uv run python tests/fixtures/contract/codex-integration/generate_artifacts.py",
+  "cases": [
+    {
+      "name": "new",
+      "original_hex": null,
+      "desired": true,
+      "previous": {},
+      "trusted": false,
+      "result": {
+        "manifest": {
+          "$ROOT/account/artifact.md": {
+            "hash": "41cf6794ba4200b839c53531555f0f3998df4cbb01a4d5cb0b94e3ca5e23947d"
+          }
+        },
+        "warnings": [],
+        "final_hex": "736f75726365",
+        "link": null,
+        "external_hex": null,
+        "backups": [],
+        "writes": 1
+      }
+    },
+    {
+      "name": "same-unmanaged",
+      "original_hex": "736f75726365",
+      "desired": true,
+      "previous": {},
+      "trusted": false,
+      "result": {
+        "manifest": {
+          "$ROOT/account/artifact.md": {
+            "hash": "41cf6794ba4200b839c53531555f0f3998df4cbb01a4d5cb0b94e3ca5e23947d"
+          }
+        },
+        "warnings": [],
+        "final_hex": "736f75726365",
+        "link": null,
+        "external_hex": null,
+        "backups": [],
+        "writes": 1
+      }
+    },
+    {
+      "name": "different-unmanaged",
+      "original_hex": "706572736f6e616c",
+      "desired": true,
+      "previous": {},
+      "trusted": false,
+      "result": {
+        "manifest": {},
+        "warnings": [
+          {
+            "codigo": "aviso_artefato_sem_proveniencia",
+            "params": {
+              "path": "$ROOT/account/artifact.md"
+            },
+            "texto": "Artefato sem proveni\u00eancia preservado: $ROOT/account/artifact.md"
+          }
+        ],
+        "final_hex": "706572736f6e616c",
+        "link": null,
+        "external_hex": null,
+        "backups": [],
+        "writes": 0
+      }
+    },
+    {
+      "name": "managed-local-change",
+      "original_hex": "706572736f6e616c",
+      "desired": true,
+      "previous": {
+        "$ROOT/account/artifact.md": {
+          "hash": "41cf6794ba4200b839c53531555f0f3998df4cbb01a4d5cb0b94e3ca5e23947d",
+          "extra": {
+            "keep": true
+          }
+        }
+      },
+      "trusted": false,
+      "result": {
+        "manifest": {
+          "$ROOT/account/artifact.md": {
+            "hash": "41cf6794ba4200b839c53531555f0f3998df4cbb01a4d5cb0b94e3ca5e23947d"
+          }
+        },
+        "warnings": [],
+        "final_hex": "736f75726365",
+        "link": null,
+        "external_hex": null,
+        "backups": [
+          {
+            "path": "$ROOT/account/artifact.md",
+            "conteudo_hex": "706572736f6e616c",
+            "symlink": null
+          }
+        ],
+        "writes": 1
+      }
+    },
+    {
+      "name": "trusted-local",
+      "original_hex": "706572736f6e616c",
+      "desired": true,
+      "previous": {},
+      "trusted": true,
+      "result": {
+        "manifest": {
+          "$ROOT/account/artifact.md": {
+            "hash": "41cf6794ba4200b839c53531555f0f3998df4cbb01a4d5cb0b94e3ca5e23947d"
+          }
+        },
+        "warnings": [],
+        "final_hex": "736f75726365",
+        "link": null,
+        "external_hex": null,
+        "backups": [
+          {
+            "path": "$ROOT/account/artifact.md",
+            "conteudo_hex": "706572736f6e616c",
+            "symlink": null
+          }
+        ],
+        "writes": 1
+      }
+    },
+    {
+      "name": "stale-same",
+      "original_hex": "736f75726365",
+      "desired": false,
+      "previous": {
+        "$ROOT/account/artifact.md": {
+          "hash": "41cf6794ba4200b839c53531555f0f3998df4cbb01a4d5cb0b94e3ca5e23947d",
+          "extra": {
+            "keep": true
+          }
+        }
+      },
+      "trusted": false,
+      "result": {
+        "manifest": {},
+        "warnings": [],
+        "final_hex": null,
+        "link": null,
+        "external_hex": null,
+        "backups": [
+          {
+            "path": "$ROOT/account/artifact.md",
+            "conteudo_hex": "736f75726365",
+            "symlink": null
+          }
+        ],
+        "writes": 0
+      }
+    },
+    {
+      "name": "stale-changed",
+      "original_hex": "706572736f6e616c",
+      "desired": false,
+      "previous": {
+        "$ROOT/account/artifact.md": {
+          "hash": "41cf6794ba4200b839c53531555f0f3998df4cbb01a4d5cb0b94e3ca5e23947d",
+          "extra": {
+            "keep": true
+          }
+        }
+      },
+      "trusted": false,
+      "result": {
+        "manifest": {
+          "$ROOT/account/artifact.md": {
+            "hash": "41cf6794ba4200b839c53531555f0f3998df4cbb01a4d5cb0b94e3ca5e23947d",
+            "extra": {
+              "keep": true
+            }
+          }
+        },
+        "warnings": [
+          {
+            "codigo": "aviso_artefato_obsoleto_alterado",
+            "params": {
+              "path": "$ROOT/account/artifact.md"
+            },
+            "texto": "Artefato obsoleto com altera\u00e7\u00e3o local preservado: $ROOT/account/artifact.md"
+          }
+        ],
+        "final_hex": "706572736f6e616c",
+        "link": null,
+        "external_hex": null,
+        "backups": [],
+        "writes": 0
+      }
+    },
+    {
+      "name": "stale-missing",
+      "original_hex": null,
+      "desired": false,
+      "previous": {
+        "$ROOT/account/artifact.md": {
+          "hash": "41cf6794ba4200b839c53531555f0f3998df4cbb01a4d5cb0b94e3ca5e23947d",
+          "extra": {
+            "keep": true
+          }
+        }
+      },
+      "trusted": false,
+      "result": {
+        "manifest": {},
+        "warnings": [],
+        "final_hex": null,
+        "link": null,
+        "external_hex": null,
+        "backups": [],
+        "writes": 0
+      }
+    },
+    {
+      "name": "malformed-record",
+      "original_hex": "706572736f6e616c",
+      "desired": true,
+      "previous": {
+        "$ROOT/account/artifact.md": []
+      },
+      "trusted": false,
+      "result": {
+        "manifest": {},
+        "warnings": [
+          {
+            "codigo": "aviso_artefato_sem_proveniencia",
+            "params": {
+              "path": "$ROOT/account/artifact.md"
+            },
+            "texto": "Artefato sem proveni\u00eancia preservado: $ROOT/account/artifact.md"
+          }
+        ],
+        "final_hex": "706572736f6e616c",
+        "link": null,
+        "external_hex": null,
+        "backups": [],
+        "writes": 0
+      }
+    },
+    {
+      "name": "retry-ok",
+      "original_hex": "706572736f6e616c",
+      "desired": true,
+      "previous": {
+        "$ROOT/account/artifact.md": {
+          "hash": "41cf6794ba4200b839c53531555f0f3998df4cbb01a4d5cb0b94e3ca5e23947d",
+          "extra": {
+            "keep": true
+          }
+        }
+      },
+      "trusted": false,
+      "result": {
+        "manifest": {
+          "$ROOT/account/artifact.md": {
+            "hash": "41cf6794ba4200b839c53531555f0f3998df4cbb01a4d5cb0b94e3ca5e23947d"
+          }
+        },
+        "warnings": [],
+        "final_hex": "736f75726365",
+        "link": null,
+        "external_hex": null,
+        "backups": [
+          {
+            "path": "$ROOT/account/artifact.md",
+            "conteudo_hex": "726163652d32",
+            "symlink": null
+          }
+        ],
+        "writes": 3
+      }
+    },
+    {
+      "name": "retry-exhausted",
+      "original_hex": "706572736f6e616c",
+      "desired": true,
+      "previous": {
+        "$ROOT/account/artifact.md": {
+          "hash": "41cf6794ba4200b839c53531555f0f3998df4cbb01a4d5cb0b94e3ca5e23947d",
+          "extra": {
+            "keep": true
+          }
+        }
+      },
+      "trusted": false,
+      "result": {
+        "manifest": {
+          "$ROOT/account/artifact.md": {
+            "hash": "41cf6794ba4200b839c53531555f0f3998df4cbb01a4d5cb0b94e3ca5e23947d",
+            "extra": {
+              "keep": true
+            }
+          }
+        },
+        "warnings": [
+          {
+            "codigo": "aviso_artefato_falha",
+            "params": {
+              "path": "$ROOT/account/artifact.md",
+              "erro": "fixture conflict"
+            },
+            "texto": "Artefato $ROOT/account/artifact.md preservado ap\u00f3s falha: fixture conflict"
+          }
+        ],
+        "final_hex": "726163652d33",
+        "link": null,
+        "external_hex": null,
+        "backups": [],
+        "writes": 3
+      }
+    },
+    {
+      "name": "stale-race",
+      "original_hex": "736f75726365",
+      "desired": false,
+      "previous": {
+        "$ROOT/account/artifact.md": {
+          "hash": "41cf6794ba4200b839c53531555f0f3998df4cbb01a4d5cb0b94e3ca5e23947d",
+          "extra": {
+            "keep": true
+          }
+        }
+      },
+      "trusted": false,
+      "result": {
+        "manifest": {
+          "$ROOT/account/artifact.md": {
+            "hash": "41cf6794ba4200b839c53531555f0f3998df4cbb01a4d5cb0b94e3ca5e23947d",
+            "extra": {
+              "keep": true
+            }
+          }
+        },
+        "warnings": [
+          {
+            "codigo": "aviso_artefato_obsoleto_falha",
+            "params": {
+              "path": "$ROOT/account/artifact.md",
+              "erro": "Artefato alterado durante a retirada: $ROOT/account/artifact.md"
+            },
+            "texto": "Artefato obsoleto $ROOT/account/artifact.md preservado ap\u00f3s falha: Artefato alterado durante a retirada: $ROOT/account/artifact.md"
+          }
+        ],
+        "final_hex": "72616365",
+        "link": null,
+        "external_hex": null,
+        "backups": [
+          {
+            "path": "$ROOT/account/artifact.md",
+            "conteudo_hex": "736f75726365",
+            "symlink": null
+          }
+        ],
+        "writes": 0
+      }
+    },
+    {
+      "name": "managed-symlink",
+      "original_hex": "706572736f6e616c",
+      "desired": true,
+      "previous": {
+        "$ROOT/account/artifact.md": {
+          "hash": "41cf6794ba4200b839c53531555f0f3998df4cbb01a4d5cb0b94e3ca5e23947d",
+          "extra": {
+            "keep": true
+          }
+        }
+      },
+      "trusted": false,
+      "result": {
+        "manifest": {
+          "$ROOT/account/artifact.md": {
+            "hash": "41cf6794ba4200b839c53531555f0f3998df4cbb01a4d5cb0b94e3ca5e23947d"
+          }
+        },
+        "warnings": [],
+        "final_hex": "736f75726365",
+        "link": null,
+        "external_hex": "706572736f6e616c",
+        "backups": [
+          {
+            "path": "$ROOT/account/artifact.md",
+            "conteudo_hex": "706572736f6e616c",
+            "symlink": "$ROOT/external.md"
+          }
+        ],
+        "writes": 1
+      }
+    },
+    {
+      "name": "stale-symlink",
+      "original_hex": "736f75726365",
+      "desired": false,
+      "previous": {
+        "$ROOT/account/artifact.md": {
+          "hash": "41cf6794ba4200b839c53531555f0f3998df4cbb01a4d5cb0b94e3ca5e23947d",
+          "extra": {
+            "keep": true
+          }
+        }
+      },
+      "trusted": false,
+      "result": {
+        "manifest": {},
+        "warnings": [],
+        "final_hex": null,
+        "link": null,
+        "external_hex": "736f75726365",
+        "backups": [
+          {
+            "path": "$ROOT/account/artifact.md",
+            "conteudo_hex": "736f75726365",
+            "symlink": "$ROOT/external.md"
+          }
+        ],
+        "writes": 0
+      }
+    },
+    {
+      "name": "hash-false",
+      "original_hex": "706572736f6e616c",
+      "desired": true,
+      "previous": {
+        "$ROOT/account/artifact.md": {
+          "hash": false,
+          "extra": "keep"
+        }
+      },
+      "trusted": false,
+      "result": {
+        "manifest": {
+          "$ROOT/account/artifact.md": {
+            "hash": "41cf6794ba4200b839c53531555f0f3998df4cbb01a4d5cb0b94e3ca5e23947d"
+          }
+        },
+        "warnings": [],
+        "final_hex": "736f75726365",
+        "link": null,
+        "external_hex": null,
+        "backups": [
+          {
+            "path": "$ROOT/account/artifact.md",
+            "conteudo_hex": "706572736f6e616c",
+            "symlink": null
+          }
+        ],
+        "writes": 1
+      }
+    }
+  ]
+}
