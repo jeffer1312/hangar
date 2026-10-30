@@ -1,0 +1,18 @@
+{
+  "source_commit": "da6c0f0a2d4f0cea075de127019bc6cfb636f0a1",
+  "command": "uv run python tests/fixtures/contract/config_sync/generate_apply_disconnect.py",
+  "injections": [
+    "trabalho retido por evento; consumidor real do iterator de StreamingResponse"
+  ],
+  "result": {
+    "first": {
+      "type": "progress",
+      "phase": "apply"
+    },
+    "events": [
+      "started",
+      "closed",
+      "finished"
+    ]
+  }
+}

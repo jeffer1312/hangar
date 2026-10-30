@@ -1,5 +1,8 @@
 //! Configuração compartilhada: pacote portável e aplicação com backup no destino.
 pub mod apply;
+pub mod apply_http;
+mod apply_run;
+pub mod after;
 pub mod bundle;
 pub use crate::command_capture as command;
 pub use crate::cli_probe;

@@ -696,6 +696,7 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/config-sync/manifest", axum::routing::get(crate::config_sync::http::handle))
         .route("/api/config-sync/bundle", axum::routing::get(crate::config_sync::http::handle))
         .route("/api/config-sync/translate", axum::routing::post(crate::config_sync::http::handle))
+        .route("/api/config-sync/apply", axum::routing::any(crate::config_sync::apply_http::handle))
         .route("/api/push/expo/subscribe", axum::routing::post(crate::push_expo::subscribe))
         .route("/api/push/vapid", get(crate::push::http::route).fallback(pass_any))
         .route("/api/push/settings", get(crate::push::http::route).fallback(pass_any))

@@ -1,0 +1,16 @@
+{
+  "source_commit": "fd6fa0e6e12345198f6962c485a4c26a795021ff",
+  "command": "cd backend && PYTHONPATH=. uv run python tests/fixtures/contract/config_sync/generate_apply_socket_disconnect.py",
+  "injections": [
+    "aplicador suspenso por eventos; autentica\u00e7\u00e3o aceita; app m\u00ednimo sem lifespan; socket descart\u00e1vel de loopback"
+  ],
+  "result": {
+    "events": [
+      "started",
+      "closed",
+      "finished"
+    ],
+    "locked_after_disconnect": true,
+    "locked_after_finish": false
+  }
+}

@@ -14,6 +14,11 @@ static CACHE: LazyLock<Mutex<Cache>> = LazyLock::new(||Mutex::new(BTreeMap::new(
 static WRITES: Mutex<()> = Mutex::new(());
 
 #[cfg(test)]
+pub(super) fn hold_writes() -> std::sync::MutexGuard<'static, ()> {
+    WRITES.lock().unwrap_or_else(|error|error.into_inner())
+}
+
+#[cfg(test)]
 #[path = "runtime_sync_tests.rs"]
 mod sync_tests;
 
