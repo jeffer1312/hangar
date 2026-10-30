@@ -7,7 +7,8 @@ backend continuam no Python. O protocolo interno muda nos dois lados juntos.
 
 O catálogo, a criação, o preparo, o login, o estado, o cancelamento e o logout são
 decididos pelo Rust. Os auxiliares nativos usam a CLI do provedor e a proteção por
-conta. A ponte fornece fatos de uso e controla as janelas necessárias ao Claude.
+conta. A ponte fornece fatos de uso; as janelas do login e da renovação do Claude
+são do Rust (`accounts/claude_window.rs`).
 Os destinos secundários Pi/omp são escritos diretamente pelo Rust.
 
 O cache de cotas continua no formato existente, com um escritor e publicação

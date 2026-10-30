@@ -59,12 +59,16 @@ fn valid_code(code: &str) -> bool {
 }
 
 /// A CLI quebra o link na margem do pane, e o `capture-pane -J` do psmux não junta. Linha com a
-/// largura exata do pane continua na seguinte; linha mais curta terminou ali.
+/// largura exata do pane continua na seguinte, desde que esta não tenha espaço: continuação de link
+/// nunca tem, e o texto seguinte da tela ("Paste code here…") tem.
 pub fn join_wrapped(screen: &str, width: Option<usize>) -> String {
     let mut out = String::new();
-    for line in screen.lines() {
+    let mut lines = screen.lines().peekable();
+    while let Some(line) = lines.next() {
         out.push_str(line);
-        if width.is_none_or(|width| width == 0 || line.chars().count() != width) {
+        let full = width.is_some_and(|width| width > 0 && line.chars().count() == width);
+        let continues = lines.peek().is_some_and(|next| !next.is_empty() && !next.contains(char::is_whitespace));
+        if !(full && continues) {
             out.push('\n');
         }
     }

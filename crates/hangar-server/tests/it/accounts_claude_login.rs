@@ -19,10 +19,19 @@ impl WindowBackend for ContractWindows {
     fn sweep(&self) -> BoxFuture<'_, ()> { Box::pin(async {}) }
 }
 
-/// Janela falsa: registra a ação; `refuse_open` recusa a abertura.
-struct Recorder { actions: tokio::sync::mpsc::UnboundedSender<String>, refuse_open: Arc<std::sync::atomic::AtomicBool> }
+/// Janela falsa: registra a ação e confere que ler, colar e fechar usam a conta e a operação abertas;
+/// `refuse_open` recusa a abertura.
+struct Recorder {
+    actions: tokio::sync::mpsc::UnboundedSender<String>,
+    refuse_open: Arc<std::sync::atomic::AtomicBool>,
+    opened: std::sync::Mutex<Option<(AccountKey, String)>>,
+}
 impl WindowBackend for Recorder {
-    fn call<'a>(&'a self, _: &'a AccountKey, _: &'a str, action: &'a str, _: Option<&'a str>) -> BoxFuture<'a, Result<Value, &'static str>> {
+    fn call<'a>(&'a self, key: &'a AccountKey, operation: &'a str, action: &'a str, _: Option<&'a str>) -> BoxFuture<'a, Result<Value, &'static str>> {
+        let current = (key.clone(), operation.to_owned());
+        let mut opened = self.opened.lock().unwrap();
+        if action == "open" { *opened = Some(current); } else { assert_eq!(opened.as_ref(), Some(&current), "{action} fora da abertura"); }
+        drop(opened);
         self.actions.send(action.to_owned()).unwrap();
         let refused = action == "open" && self.refuse_open.load(std::sync::atomic::Ordering::SeqCst);
         Box::pin(async move { if refused { Err("window_test_refused") } else { Ok(json!({"ok":true,"url":null})) } })
@@ -32,7 +41,7 @@ impl WindowBackend for Recorder {
 
 fn recorder(refuse_open: Arc<std::sync::atomic::AtomicBool>) -> (WindowClient, tokio::sync::mpsc::UnboundedReceiver<String>) {
     let (actions, observed) = tokio::sync::mpsc::unbounded_channel();
-    (WindowClient::with(Arc::new(Recorder { actions, refuse_open })), observed)
+    (WindowClient::with(Arc::new(Recorder { actions, refuse_open, opened: Default::default() })), observed)
 }
 
 #[test]

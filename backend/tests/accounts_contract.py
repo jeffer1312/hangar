@@ -467,6 +467,8 @@ def _worker() -> None:
         name = "term-login-" + body["operation"]
         action = body["action"]
         if action == "close":
+            if name in windows and windows[name] != body["key"]:
+                return JSONResponse({"ok": False}, status_code=409)
             closed_windows.add(name)
             windows.pop(name, None)
             window_calls.append({"action": "close", "name": name})
@@ -475,11 +477,11 @@ def _worker() -> None:
             return JSONResponse({"ok": False}, status_code=409)
         if action == "open":
             if name not in windows:
-                windows[name] = True
+                windows[name] = body["key"]
                 window_calls.append({"action": "open", "name": name, "config_dir": body["key"]["canonical_home"]})
                 window_calls.append({"action": "command", "name": name, "command": "claude auth login --claudeai"})
             return {"ok": True}
-        if name not in windows:
+        if name not in windows or windows[name] != body["key"]:
             return JSONResponse({"ok": False}, status_code=409)
         if action == "read":
             return {"ok": True, "url": "https://claude.ai/oauth/authorize?fixture=1"}

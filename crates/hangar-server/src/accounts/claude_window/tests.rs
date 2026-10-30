@@ -99,6 +99,14 @@ fn line_shorter_than_the_pane_is_not_glued_to_the_next() {
 }
 
 #[test]
+fn link_ending_exactly_at_the_margin_is_not_glued_to_the_prompt() {
+    let screen = "https://a.example/x?state=1234\nPaste code here if prompted >";
+    let width = "https://a.example/x?state=1234".chars().count();
+    assert_eq!(oauth_url(&join_wrapped(screen, Some(width))).as_deref(), Some("https://a.example/x?state=1234"));
+    assert!(join_wrapped(screen, Some(width)).contains("\nPaste code here"));
+}
+
+#[test]
 fn link_stops_at_the_osc8_escape() {
     let screen = "visit: \u{1b}]8;;https://claude.ai/oauth/authorize?a=1\u{1b}\\https://claude.ai/oauth/authorize?a=1\u{1b}]8;;\u{1b}\\";
     assert_eq!(oauth_url(screen).as_deref(), Some("https://claude.ai/oauth/authorize?a=1"));
@@ -143,8 +151,11 @@ async fn default_account_on_tmux_still_goes_explicit() {
 
 #[tokio::test]
 async fn default_account_on_psmux_goes_without_the_variable_and_named_enter() {
-    let (root, fake, windows, _) = setup(true, ".claude");
+    let (root, fake, _, _) = setup(true, ".claude");
     let key = AccountKey::new(super::super::Provider::Claude, &root.path().join(".claude")).unwrap();
+    // A pasta temporária do CI do Windows vem com nome curto (`RUNNER~1`); a conta padrão é a canônica.
+    let env = TerminalEnv { default_config_dir: key.canonical_home.clone(), ..terminal(true, root.path()) };
+    let windows = ClaudeWindows::new(Box::new(fake.clone()), env, Some("true".into()), None);
     windows.open(&key, OP).await.unwrap();
     let calls = fake.calls();
     let (scope, create, _) = calls.iter().find(|(_, args, _)| args[0] == "new-session").unwrap();

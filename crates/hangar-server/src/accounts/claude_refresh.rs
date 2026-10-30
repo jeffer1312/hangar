@@ -507,6 +507,8 @@ mod tests {
         env.codex_default = temp.path().join(".codex");
         env.claude_fixed = format!("test:{}", account_home.display());
         env.base.insert("PATH".into(), bin.to_string_lossy().into_owned());
+        // Sem o tmux da máquina: leitura que falha sob a suíte em paralelo daria a conta como ocupada.
+        env.terminal_fixture = Some(Arc::new(|| Ok(String::new())));
         let service = AccountService::new(env);
         let account = service.claude_by_label("test").unwrap();
         let windows = WindowClient::with(Arc::new(super::super::claude_window::Refused));
@@ -562,6 +564,8 @@ mod tests {
         env.claude_fixed = format!("test:{}", account_home.display());
         env.base
             .insert("PATH".into(), bin.to_string_lossy().into_owned());
+        // Sem o tmux da máquina: leitura que falha sob a suíte em paralelo daria a conta como ocupada.
+        env.terminal_fixture = Some(Arc::new(|| Ok(String::new())));
         let service = AccountService::new(env);
         let account = service.claude_by_label("test").unwrap();
         let windows = WindowClient::with(Arc::new(super::super::claude_window::Refused));
