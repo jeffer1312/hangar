@@ -290,7 +290,7 @@
         {
           "source": {
             "source": "git",
-            "url": "https://user:secret@example.org/Org/Repo.git/"
+            "url": "https://$USERINFO_A@example.org/Org/Repo.git/"
           }
         }
       ],
@@ -527,7 +527,7 @@
       "args": [
         {
           "source_type": "git",
-          "source": "https://user:password@EXAMPLE.org:invalid/./../Repo%20x.git?query#fragment"
+          "source": "https://$USERINFO_B@EXAMPLE.org:invalid/./../Repo%20x.git?query#fragment"
         }
       ],
       "kwargs": {},

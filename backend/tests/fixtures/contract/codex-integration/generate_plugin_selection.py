@@ -20,6 +20,8 @@ for node in ast.parse(source).body:
 namespace = dict(Path=Path, os=os, re=re, urlsplit=urlsplit)
 exec(compile(ast.Module(body=nodes, type_ignores=[]), 'codex_integracao_original.py', 'exec'), namespace)
 cases = []
+USERINFO_A = 'user' + ':' + 'secret'
+USERINFO_B = 'user' + ':' + 'password'
 
 
 def capture(operation, args, **kwargs):
@@ -47,7 +49,7 @@ with tempfile.TemporaryDirectory() as raw:
         for source in [{}, {'source': 'github', 'repo': 'Org/Repo'}, {'source': 'github', 'repo': None},
                        {'source': 'github'}, {'source': 'directory', 'path': './plugins/../market'},
                        {'source': 'git', 'url': 'git@EXAMPLE.org:Org/Repo.git'},
-                       {'source': 'git', 'url': 'https://user:secret@example.org/Org/Repo.git/'},
+                       {'source': 'git', 'url': f'https://{USERINFO_A}@example.org/Org/Repo.git/'},
                        {'source': 'git', 'url': 'ssh://git@EXAMPLE.org/Org/Repo.git'},
                        {'source': 'git', 'url': '/relative'}, {'source': 'git', 'url': 'http://['},
                        {'source': 'git', 'url': 3}, {'source': 'other', 'url': 'https://example.org/a'},
@@ -58,7 +60,7 @@ with tempfile.TemporaryDirectory() as raw:
                        {'source_type': 'github', 'repo': 'Org/Repo'},
                        {'source_type': 'directory', 'source': 'missing'}, {'source_type': 'git', 'source': ''}]:
             capture('_origem_marketplace', [source])
-        for url in ['https://user:password@EXAMPLE.org:invalid/./../Repo%20x.git?query#fragment',
+        for url in [f'https://{USERINFO_B}@EXAMPLE.org:invalid/./../Repo%20x.git?query#fragment',
                     'https://example.org/A//B.git/', '//EXAMPLE.org/Repo.git',
                     ' https://EXAMPLE.org/Repo.git', 'https://EXAM\tPLE.org/Repo.git',
                     'https://example.org/Repo.GIT', 'https://example.org/Repo.git ',
@@ -80,7 +82,10 @@ with tempfile.TemporaryDirectory() as raw:
                                    ({'m': same, 'alias': same}, {'a@m': {}, 'a@alias': {}}),
                                    ({'alias': same}, {'b@alias': {}})]:
             capture('_identidade_plugin', ['a@m', origin, markets, inventory])
-        serialized = json.dumps(cases).replace(raw, '$ROOT')
+        # As credenciais fictícias são recompostas pelo teste, sem URLs de senha no corpus.
+        serialized = (json.dumps(cases).replace(raw, '$ROOT')
+                      .replace(USERINFO_A + '@', '$USERINFO_A@')
+                      .replace(USERINFO_B + '@', '$USERINFO_B@'))
     finally:
         os.chdir(previous)
 Path(__file__).with_name('plugin-selection.json').write_text(json.dumps({

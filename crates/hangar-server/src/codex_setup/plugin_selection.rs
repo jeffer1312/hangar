@@ -222,10 +222,10 @@ mod tests {
 
     #[test]
     fn plugin_selection_matches_original_sources_and_identities() {
-        let fixture: Value = serde_json::from_str(include_str!(
+        let raw = include_str!(
             "../../../../backend/tests/fixtures/contract/codex-integration/plugin-selection.json"
-        ))
-        .unwrap();
+        ).replace("$USERINFO_A", "user:secret").replace("$USERINFO_B", "user:password");
+        let fixture: Value = serde_json::from_str(&raw).unwrap();
         let base = tempfile::tempdir().unwrap();
         let mut differences = Vec::new();
         for (index, row) in fixture["cases"].as_array().unwrap().iter().enumerate() {
