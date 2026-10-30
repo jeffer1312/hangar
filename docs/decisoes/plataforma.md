@@ -3712,4 +3712,8 @@ servidor, não o contrário). A VPS `srv1633222` não tem chaveiro do sistema (s
 **Limite.** A aprovação e a saída apagada barram o uso normal, não um agente decidido a burlar: com
 a chave no chaveiro ele abre o cofre, e no shell e no arquivo ele vê o valor se quiser. Senha que
 passa pelo `app.hangar.dev.br` é decifrada no servidor intermediário. Notebook fechado = nenhuma
-outra máquina tem senha. 2FA fica fora da primeira entrega: o login pede o código num cartão.
+outra máquina tem senha. 2FA fica fora da primeira entrega: o login pede o código num cartão. O
+token do `peers.json` é o token de dono da outra máquina, então a origem de um pedido entre
+máquinas é declarada por quem pede, não conferida: uma máquina com o token, e o agente dela, chama
+as rotas do cofre direto. Endereço de peer que cai no Connect (8768, Python) não alcança o cofre
+até o Connect migrar para o Rust: nenhum repasse no Python.
