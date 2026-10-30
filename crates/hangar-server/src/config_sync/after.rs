@@ -21,6 +21,38 @@ pub trait Actions {
     fn codex(&self) -> Step<'_>;
 }
 
+pub struct NativeActions {
+    pub state: std::sync::Arc<crate::routes::AppState>,
+    pub repo: std::path::PathBuf,
+}
+
+impl Actions for NativeActions {
+    fn bridge(&self) -> Step<'_, BridgeReport> {
+        let env = self.state.accounts.env.clone();
+        let repo = self.repo.clone();
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || crate::harness_setup::skills::rebuild_report(&env, &repo, false))
+                .await.map_err(|_| "falha ao reconstruir os espelhos de skills".to_owned())
+        })
+    }
+
+    fn hook(&self, name: &'static str) -> Step<'_> {
+        let accounts = self.state.accounts.clone();
+        let repo = self.repo.clone();
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || crate::harness_setup::hooks::sync_installer(&accounts, &repo, name))
+                .await.map_err(|_| "falha ao instalar os hooks do Hangar".to_owned())?
+                .map_err(|errors| errors.join("\n"))
+        })
+    }
+
+    fn codex(&self) -> Step<'_> {
+        Box::pin(async {
+            self.state.codex_setup_service()?.start("config_sync", true).await
+        })
+    }
+}
+
 fn warning(context: &mut Apply, item: &str, step: &str, error: &str) {
     context.warn(item,"config_sync_after_failed",json!({"step":step,
         "error":crate::orchestration::codec::truncate_string(error,200)}));

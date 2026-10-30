@@ -1125,6 +1125,15 @@ a página por sessão em `~/.hangar/paginas` e a conversa mostra o cartão: PWA 
 
 ## Configuração compartilhada: leva o conteúdo, o destino resolve caminho e programa
 
+(30/10/2026.) A migração dos motores inclui os leitores e escritores do pacote de configuração.
+As rotas `/api/config-sync/*` executam no Rust, assim como exportação, tradução, aplicação e
+pós-aplicar. Depois dos itens, o mesmo fluxo reconstrói os espelhos de skills, instala os hooks
+selecionados e agenda a integração Codex no serviço compartilhado. Falha nessas etapas conserva
+os itens já gravados e acrescenta o aviso correspondente ao relatório. Os testes Rust de
+`config_sync`, `config_apply_http` e pós-aplicar usam as capturas da implementação Python
+removida; os utilitários de marcadores ainda usados pela transferência independente de atalhos
+continuam disponíveis para esse consumidor.
+
 (25/09/2026, pedido do usuário.) Levar a configuração de uma máquina para outras, só manual.
 Decisões dele, que o desenho não pode amolecer: quem envia vence; segredos vão (variáveis `env`,
 cabeçalhos de MCP, motores, chaves de voz), porque as máquinas são internas e o pacote viaja pelo

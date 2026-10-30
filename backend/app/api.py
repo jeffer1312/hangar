@@ -95,7 +95,6 @@ from app.archive import (ArchiveEntry, ArchiveFolder, archive_cwd, archive_jsonl
 from app.search import SearchHit, search, extract_terms, search_terms, build_ask_prompt
 from app.askquestion import clear_pending_askq, read_pending_askq
 from app import credenciais
-from app import config_sync_api
 from app import codex_contas as codex_accounts
 from app.codex_contas_login import CodexContasLogin
 from app.pair import PairLink
@@ -740,7 +739,6 @@ app.include_router(deploy_router)
 app.include_router(credenciais.credenciais_router)
 app.include_router(harness_api.harness_router)
 app.include_router(plugin_bridge.plugin_router)
-app.include_router(config_sync_api.config_sync_router)
 # Convites e par externo são do Rust; aqui só o repasse do dono que chega pelo Connect.
 app.include_router(share_bridge.router)
 app.include_router(migration_status.router)

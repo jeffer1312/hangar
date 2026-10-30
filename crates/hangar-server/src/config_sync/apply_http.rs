@@ -106,7 +106,14 @@ async fn work(state: Arc<AppState>, bundle: Bundle, chosen: Vec<String>, progres
         context, bundle, backups, programs, report: Default::default(),
         accounts: state.accounts.clone(), runtime_config: super::runtime::RuntimeConfig::from_state(&state),
     };
-    let result = super::apply_run::run_items(apply,&chosen).await
+    let mut result = super::apply_run::run_items(apply,&chosen).await
         .map_err(|error|(StatusCode::INTERNAL_SERVER_ERROR,error))?;
+    let codex_enabled = result.runtime_config.as_ref()
+        .map(|config| super::apply::truthy(&config.get("codex_sync"))).unwrap_or(true);
+    let actions = super::after::NativeActions {
+        state,
+        repo: result.context.roots.hangar.clone().into(),
+    };
+    super::after::run(&mut result, &chosen, codex_enabled, &actions).await;
     Ok(result.report())
 }

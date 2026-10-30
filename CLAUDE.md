@@ -553,8 +553,10 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   copiada ou salva vem do servidor, sem o que ele injetou; link da página e do chat passam pela
   mesma `links::open_link`. Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#página-da-conversa-mora-no-rust-e-some-com-a-sessão).
-- **Configuração compartilhada leva o conteúdo, e o destino resolve caminho e programa.** Caminho
-  vira marcador `⟦HOME⟧`/`⟦CLAUDE⟧`/`⟦CODEX⟧`/`⟦HANGAR⟧` (nunca `{HOME}`); quem envia vence;
+- **Configuração compartilhada leva o conteúdo, e o destino resolve caminho e programa.**
+  A API, a aplicação e o pós-aplicar são do Rust (`config_sync/`), incluindo espelhos de skills,
+  hooks e o agendamento da integração Codex; não há rota nem executor Python de reserva.
+  Caminho vira marcador `⟦HOME⟧`/`⟦CLAUDE⟧`/`⟦CODEX⟧`/`⟦HANGAR⟧` (nunca `{HOME}`); quem envia vence;
   hooks e skills do Hangar, MCP `hangar`, credenciais e o login do `.claude.json` são sempre do
   destino. Regras e motivo em [plataforma.md](docs/decisoes/plataforma.md#configuração-compartilhada-leva-o-conteúdo-o-destino-resolve-caminho-e-programa).
 - **Compartilhar sessão: só a porta do convidado (8766, Funnel 8443) vai à internet, ela é do
