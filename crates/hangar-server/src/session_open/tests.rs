@@ -1698,7 +1698,9 @@ fn the_codex_open_follows_the_python_fixtures() {
         let (launcher, prompt) = python.split_once(" --prompt ").map_or((python.as_str(), None), |(l, p)| (l, Some(p)));
         let launcher = launcher.rsplit_once("hangar-codex-tui").unwrap().1;
         let command = argv.last().unwrap();
-        let wanted = format!("hangar-codex-tui{launcher} --approval-policy never --sandbox danger-full-access{}",
+        // O config.toml da fixture não fixa a janela: o pane pede o 1M padrão do Hangar.
+        let wanted = format!("hangar-codex-tui{launcher} --approval-policy never --sandbox danger-full-access{} \
+            --config model_context_window=1000000 --config model_auto_compact_token_limit=900000",
             prompt.map(|p| format!(" --prompt {p}")).unwrap_or_default());
         assert!(command.ends_with(&wanted), "{name}: {command}\nesperado no fim: {wanted}");
         let body = &raw["steps"][0]["body"];

@@ -471,7 +471,8 @@ async fn the_relaunch_pane_is_the_creation_launcher_with_the_session_environment
     }
     let command = args.last().unwrap();
     assert!(!command.contains("--session-relaunch"),"sem o auxiliar com IPC: {command}");
-    let launcher = format!("hangar-codex-tui --cwd {} --codex-home {} --codex-account default --resume thread-1 --approval-policy never --sandbox danger-full-access",
+    let launcher = format!("hangar-codex-tui --cwd {} --codex-home {} --codex-account default --resume thread-1 --approval-policy never --sandbox danger-full-access \
+        --config model_context_window=1000000 --config model_auto_compact_token_limit=900000",
         fx.root.display(),fx.home.join(".codex").display());
     assert!(command.starts_with("exec env ") && command.ends_with(&launcher),"{command}");
 }
