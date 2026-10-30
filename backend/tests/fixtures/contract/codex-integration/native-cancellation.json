@@ -1,0 +1,37 @@
+{
+  "source_commit": "8a3ce81c1",
+  "command": "cd backend && uv run python tests/fixtures/contract/codex-integration/generate_native_cancellation.py",
+  "program": "\nimport json,os,sys,time\nfrom pathlib import Path\nfor line in sys.stdin:\n message=json.loads(line)\n method=message.get('method')\n if method==sys.argv[2]:\n  Path(sys.argv[1]).write_text(json.dumps({'pid':os.getpid(),'cwd':os.getcwd()}))\n  time.sleep(30)\n elif 'id' in message:\n  print(json.dumps({'id':message['id'],'result':{}}),flush=True)\n",
+  "cases": [
+    {
+      "method": "initialize",
+      "writer": false,
+      "result": "CancelledError",
+      "alive": false,
+      "cwd_removed": true,
+      "work_empty": true,
+      "config": "model=\"fixture\"\n",
+      "confirmed": []
+    },
+    {
+      "method": "initialize",
+      "writer": true,
+      "result": "CancelledError",
+      "alive": false,
+      "cwd_removed": true,
+      "work_empty": true,
+      "config": "model=\"fixture\"\n",
+      "confirmed": []
+    },
+    {
+      "method": "config/batchWrite",
+      "writer": true,
+      "result": "CancelledError",
+      "alive": false,
+      "cwd_removed": true,
+      "work_empty": true,
+      "config": "model=\"fixture\"\n",
+      "confirmed": []
+    }
+  ]
+}

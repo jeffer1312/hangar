@@ -68,3 +68,5 @@ pub mod plugin_native;
 pub mod stage_history;
 
 pub mod stage_flow;
+
+mod cancellation;

@@ -216,13 +216,15 @@ pub fn remap(value: &Value, old: &Path, new: &Path) -> Value {
     }
 }
 
-pub async fn edit_config(
+async fn edit_config_inner(
     env: &AccountEnvironment,
     path: &Path,
     backups: &Path,
     work_dir: &Path,
     mut prepare: impl FnMut(&Value) -> Result<Vec<Value>, String>,
-) -> Result<(), String> {
+    mut cancel:Option<tokio::sync::watch::Receiver<bool>>,
+) -> Result<(), super::native::OperationError> {
+    super::cancellation::check(&cancel)?;
     restricted_directory(work_dir).map_err(|e| e.to_string())?;
     for _ in 0..3 {
         let raw = read(path).map_err(|e| e.to_string())?;
@@ -245,22 +247,32 @@ pub async fn edit_config(
         fs::create_dir(&codex).map_err(|e| e.to_string())?;
         let copy = codex.join("config.toml");
         write(&copy, raw.as_deref().unwrap_or(b""), None, None).map_err(|e| e.to_string())?;
-        let mut native = super::native::Native::open_isolated(env, home).await?;
-        let result = native
+        let mut native = match &cancel {
+            Some(signal)=>super::native::Native::open_isolated_controlled(env,home,signal.clone()).await?,
+            None=>super::native::Native::open_isolated(env,home).await?,
+        };
+        let result = super::cancellation::run(&mut cancel,native
             .request(
                 "config/batchWrite",
                 json!({"edits":edits,"reloadUserConfig":false}),
                 Duration::from_secs(60),
-            )
-            .await;
-        let updated = result.and_then(|_| fs::read(copy).map_err(|e| e.to_string()));
+            )).await;
+        let updated = result.and_then(|_| fs::read(copy).map_err(|e|super::native::OperationError::Failed(e.to_string())));
         native.close().await?;
         let updated = updated?;
+        super::cancellation::check(&cancel)?;
         match write(path, &updated, raw.as_deref(), Some(backups)) {
             Ok(_) => return Ok(()),
             Err(Error::Changed(_)) => continue,
-            Err(e) => return Err(e.to_string()),
+            Err(e) => return Err(e.to_string().into()),
         }
     }
     Err("config.toml continua mudando; nova leitura necessária".into())
+}
+
+pub async fn edit_config(env:&AccountEnvironment,path:&Path,backups:&Path,work_dir:&Path,prepare:impl FnMut(&Value)->Result<Vec<Value>,String>)->Result<(),String>{
+ edit_config_inner(env,path,backups,work_dir,prepare,None).await.map_err(|error|error.to_string())
+}
+pub async fn edit_config_controlled(env:&AccountEnvironment,path:&Path,backups:&Path,work_dir:&Path,prepare:impl FnMut(&Value)->Result<Vec<Value>,String>,cancel:tokio::sync::watch::Receiver<bool>)->Result<(),super::native::OperationError>{
+ edit_config_inner(env,path,backups,work_dir,prepare,Some(cancel)).await
 }

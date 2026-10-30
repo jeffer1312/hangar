@@ -9,6 +9,8 @@ use std::{
     time::Duration,
 };
 
+pub use super::cancellation::OperationError;
+
 pub struct Native {
     client: Option<Client>,
     cli: super::native_cli::AdminCli,
@@ -18,19 +20,25 @@ pub struct Native {
     pub events: tokio::sync::mpsc::UnboundedReceiver<(String, Value)>,
 }
 impl Native {
+    pub async fn open_controlled(env:&AccountEnvironment,home:&Path,codex:&Path,memory:bool,cancel:tokio::sync::watch::Receiver<bool>)->Result<Self,OperationError>{
+        Self::open_with_directory(env,home,codex,None,memory,Some(cancel)).await
+    }
+    pub async fn open_isolated_controlled(env:&AccountEnvironment,directory:tempfile::TempDir,cancel:tokio::sync::watch::Receiver<bool>)->Result<Self,OperationError>{
+        let home=directory.path().to_owned();Self::open_with_directory(env,&home,&home.join(".codex"),Some(directory),false,Some(cancel)).await
+    }
     pub async fn open_with_memory(env:&AccountEnvironment,home:&Path,codex:&Path,memory:bool)->Result<Self,String> {
-        Self::open_with_directory(env,home,codex,None,memory).await
+        Self::open_with_directory(env,home,codex,None,memory,None).await.map_err(|error|error.to_string())
     }
     pub fn cli(&self)->super::native_cli::AdminCli { self.cli.clone() }
     pub async fn open(env: &AccountEnvironment, home: &Path, codex: &Path) -> Result<Self, String> {
-        Self::open_with_directory(env, home, codex, None,false).await
+        Self::open_with_directory(env, home, codex, None,false,None).await.map_err(|error|error.to_string())
     }
     pub async fn open_isolated(
         env: &AccountEnvironment,
         directory: tempfile::TempDir,
     ) -> Result<Self, String> {
         let home = directory.path().to_owned();
-        Self::open_with_directory(env, &home, &home.join(".codex"), Some(directory),false).await
+        Self::open_with_directory(env, &home, &home.join(".codex"), Some(directory),false,None).await.map_err(|error|error.to_string())
     }
     async fn open_with_directory(
         env: &AccountEnvironment,
@@ -38,7 +46,12 @@ impl Native {
         codex: &Path,
         directory: Option<tempfile::TempDir>,
         memory: bool,
-    ) -> Result<Self, String> {
+        mut cancel:Option<tokio::sync::watch::Receiver<bool>>,
+    ) -> Result<Self, OperationError> {
+        if super::cancellation::check(&cancel).is_err(){
+            if let Some(directory)=directory{directory.close().map_err(|error|OperationError::Failed(error.to_string()))?;}
+            return Err(OperationError::Cancelled);
+        }
         let working_directory = tempfile::Builder::new()
             .prefix("hangar-codex-admin-")
             .tempdir()
@@ -126,21 +139,15 @@ impl Native {
             cleanup: Some(cleanup),
             events: receive,
         };
-        let result=native.request("initialize",json!({"clientInfo":{"name":"hangar","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}}),Duration::from_secs(60)).await;
+        let result=super::cancellation::run(&mut cancel,native.request("initialize",json!({"clientInfo":{"name":"hangar","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}}),Duration::from_secs(60))).await;
         if let Err(error) = result {
             native.close().await?;
             return Err(error);
         }
-        if native
-            .client
-            .as_ref().unwrap()
-            .notify("initialized", json!({}))
-            .await
-            .is_err()
-        {
-            native.close().await?;
-            return Err("Codex encerrou na inicialização".into());
-        }
+        let initialized=super::cancellation::run(&mut cancel,async {
+            native.client.as_ref().unwrap().notify("initialized",json!({})).await.map_err(|_|"Codex encerrou na inicialização".to_owned())
+        }).await;
+        if let Err(error)=initialized{native.close().await?;return Err(error);}
         Ok(native)
     }
     pub async fn request(
@@ -240,3 +247,7 @@ impl Drop for Native {
 #[cfg(all(test,unix))]
 #[path="native_owner_tests.rs"]
 mod owner_tests;
+
+#[cfg(all(test,unix))]
+#[path="native_cancel_tests.rs"]
+mod cancel_tests;
