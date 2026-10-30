@@ -1,0 +1,84 @@
+{
+  "source_commit": "cf16ff6d63af482841889848316b5760ff2369e7",
+  "command": "cd backend && PYTHONPATH=. uv run python tests/fixtures/contract/config_sync/generate_bridge_report.py",
+  "cases": [
+    {
+      "blocked": [],
+      "stats": {
+        "pi": {
+          "criados": 1,
+          "trocados": 0,
+          "removidos": 0,
+          "mantidos": 0,
+          "pulados_reais": 0
+        },
+        "kimi": {
+          "criados": 1,
+          "trocados": 0,
+          "removidos": 0,
+          "mantidos": 0,
+          "pulados_reais": 0
+        }
+      },
+      "failures": []
+    },
+    {
+      "blocked": [
+        "pi"
+      ],
+      "stats": {
+        "pi": {
+          "erro": 1
+        },
+        "kimi": {
+          "criados": 1,
+          "trocados": 0,
+          "removidos": 0,
+          "mantidos": 0,
+          "pulados_reais": 0
+        }
+      },
+      "failures": [
+        "\u26a0 pi: rebuild falhou ([Errno 17] File exists: '/fixture/home/.pi/agent/skills-bridge') \u2014 a ponte dele ficou como estava"
+      ]
+    },
+    {
+      "blocked": [
+        "kimi"
+      ],
+      "stats": {
+        "pi": {
+          "criados": 1,
+          "trocados": 0,
+          "removidos": 0,
+          "mantidos": 0,
+          "pulados_reais": 0
+        },
+        "kimi": {
+          "erro": 1
+        }
+      },
+      "failures": [
+        "\u26a0 kimi: rebuild falhou ([Errno 17] File exists: '/fixture/home/.kimi-code/skills-bridge') \u2014 a ponte dele ficou como estava"
+      ]
+    },
+    {
+      "blocked": [
+        "pi",
+        "kimi"
+      ],
+      "stats": {
+        "pi": {
+          "erro": 1
+        },
+        "kimi": {
+          "erro": 1
+        }
+      },
+      "failures": [
+        "\u26a0 pi: rebuild falhou ([Errno 17] File exists: '/fixture/home/.pi/agent/skills-bridge') \u2014 a ponte dele ficou como estava",
+        "\u26a0 kimi: rebuild falhou ([Errno 17] File exists: '/fixture/home/.kimi-code/skills-bridge') \u2014 a ponte dele ficou como estava"
+      ]
+    }
+  ]
+}

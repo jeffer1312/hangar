@@ -9,6 +9,15 @@ use std::{
 };
 static LOCK: Mutex<()> = Mutex::new(());
 
+pub struct RebuildReport {
+    pub stats: Value,
+    pub errors: BTreeMap<String, String>,
+}
+
+#[cfg(all(test, unix))]
+#[path = "skills_report_tests.rs"]
+mod report_tests;
+
 fn children(path: &Path) -> std::io::Result<Vec<PathBuf>> {
     match fs::metadata(path) {
         Ok(meta) if !meta.is_dir() => return Ok(vec![]),
@@ -196,20 +205,28 @@ fn rebuild_one(
     Ok(result)
 }
 pub fn rebuild(env: &AccountEnvironment, repo: &Path, dry: bool) -> Value {
+    rebuild_report(env, repo, dry).stats
+}
+
+pub fn rebuild_report(env: &AccountEnvironment, repo: &Path, dry: bool) -> RebuildReport {
     let _lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let sources = match sources(env, repo) {
         Ok(sources) => sources,
         Err(error) => {
             tracing::warn!(%error,"Varredura de fontes incompleta; espelhos preservados");
-            return json!({"fontes":{"erro":1}});
+            return RebuildReport {
+                stats: json!({"fontes":{"erro":1}}),
+                errors: BTreeMap::from([("fontes".into(),format!("{}: {error}",env.home.display()))]),
+            };
         }
     };
     if sources.is_empty() {
         tracing::warn!("Nenhuma fonte de skills encontrada; espelhos preservados");
-        return json!({});
+        return RebuildReport { stats: json!({}), errors: BTreeMap::new() };
     }
     let roots = roots(env, repo);
     let mut result = json!({});
+    let mut errors = BTreeMap::new();
     for (target, relative) in [("pi", ".pi/agent"), ("kimi", ".kimi-code")] {
         let parent = env.home.join(relative);
         if !parent.is_dir() {
@@ -218,6 +235,7 @@ pub fn rebuild(env: &AccountEnvironment, repo: &Path, dry: bool) -> Value {
         result[target] = rebuild_one(&parent.join("skills-bridge"), &sources, &roots, dry)
             .unwrap_or_else(|error| {
                 tracing::warn!(target,%error,"Falha ao atualizar skills");
+                errors.insert(target.into(),format!("{}: {error}",parent.join("skills-bridge").display()));
                 json!({"erro":1})
             });
         if result[target].get("erro").is_none() {
@@ -237,7 +255,7 @@ pub fn rebuild(env: &AccountEnvironment, repo: &Path, dry: bool) -> Value {
         }
         tracing::info!(target,stats=%result[target],"Skills conferidas");
     }
-    result
+    RebuildReport { stats: result, errors }
 }
 
 pub fn bridge_configured(env: &AccountEnvironment, target: &str) -> Result<Option<bool>, String> {
