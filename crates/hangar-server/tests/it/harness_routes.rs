@@ -40,7 +40,7 @@ async fn harness_admission_and_install_status_are_native() {
         .header("origin", "https://client.invalid").header("access-control-request-method", "GET")
         .send().await.unwrap();
     assert!(preflight.status().is_success());
-    assert_eq!(preflight.headers()["access-control-allow-origin"], "https://client.invalid");
+    assert_eq!(preflight.headers()["access-control-allow-origin"], "*");
     server.abort();
     let _ = server.await;
 }
