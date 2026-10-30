@@ -1,5 +1,5 @@
 {
-  "source_commit": "46da151459daea46055fd8f88496c15c65726d98",
+  "source_commit": "3ebcf0628431ee8c27a1514a08744c520589f37f",
   "command": "cd backend && uv run python tests/fixtures/contract/config_sync/generate_runtime.py",
   "injections": [
     "ambiente vazio",
@@ -20,6 +20,7 @@
     "automations": true,
     "traduzir_pensamento": true,
     "codex_sync": true,
+    "codex_extended_context": true,
     "codex_memory_import": null,
     "claude_statusline_update": true,
     "claude_function_hooks": true,
@@ -134,6 +135,11 @@
               "origem": "env"
             },
             "codex_sync": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
+            "codex_extended_context": {
               "valor": true,
               "definido": true,
               "origem": "env"
@@ -424,6 +430,11 @@
               "origem": "env"
             },
             "codex_sync": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
+            "codex_extended_context": {
               "valor": true,
               "definido": true,
               "origem": "env"
@@ -730,6 +741,11 @@
               "definido": true,
               "origem": "env"
             },
+            "codex_extended_context": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
             "codex_memory_import": {
               "valor": null,
               "definido": false,
@@ -1016,6 +1032,11 @@
               "origem": "env"
             },
             "codex_sync": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
+            "codex_extended_context": {
               "valor": true,
               "definido": true,
               "origem": "env"
@@ -1321,6 +1342,11 @@
               "definido": true,
               "origem": "env"
             },
+            "codex_extended_context": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
             "codex_memory_import": {
               "valor": null,
               "definido": false,
@@ -1609,6 +1635,11 @@
               "origem": "env"
             },
             "codex_sync": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
+            "codex_extended_context": {
               "valor": true,
               "definido": true,
               "origem": "env"
@@ -1907,6 +1938,11 @@
               "definido": true,
               "origem": "env"
             },
+            "codex_extended_context": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
             "codex_memory_import": {
               "valor": null,
               "definido": false,
@@ -2193,6 +2229,11 @@
               "origem": "env"
             },
             "codex_sync": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
+            "codex_extended_context": {
               "valor": true,
               "definido": true,
               "origem": "env"
@@ -2498,6 +2539,11 @@
               "definido": true,
               "origem": "env"
             },
+            "codex_extended_context": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
             "codex_memory_import": {
               "valor": null,
               "definido": false,
@@ -2786,6 +2832,11 @@
               "origem": "env"
             },
             "codex_sync": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
+            "codex_extended_context": {
               "valor": true,
               "definido": true,
               "origem": "env"
@@ -3084,6 +3135,11 @@
               "definido": true,
               "origem": "env"
             },
+            "codex_extended_context": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
             "codex_memory_import": {
               "valor": null,
               "definido": false,
@@ -3372,6 +3428,11 @@
               "origem": "env"
             },
             "codex_sync": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
+            "codex_extended_context": {
               "valor": true,
               "definido": true,
               "origem": "env"
@@ -3670,6 +3731,11 @@
               "definido": true,
               "origem": "env"
             },
+            "codex_extended_context": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
             "codex_memory_import": {
               "valor": null,
               "definido": false,
@@ -3958,6 +4024,11 @@
               "origem": "env"
             },
             "codex_sync": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
+            "codex_extended_context": {
               "valor": true,
               "definido": true,
               "origem": "env"
@@ -4256,6 +4327,11 @@
               "definido": true,
               "origem": "env"
             },
+            "codex_extended_context": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
             "codex_memory_import": {
               "valor": null,
               "definido": false,
@@ -4542,6 +4618,11 @@
               "origem": "env"
             },
             "codex_sync": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
+            "codex_extended_context": {
               "valor": true,
               "definido": true,
               "origem": "env"
@@ -4847,6 +4928,11 @@
               "definido": true,
               "origem": "env"
             },
+            "codex_extended_context": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
             "codex_memory_import": {
               "valor": null,
               "definido": false,
@@ -5136,6 +5222,11 @@
               "origem": "env"
             },
             "codex_sync": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
+            "codex_extended_context": {
               "valor": true,
               "definido": true,
               "origem": "env"
@@ -5441,6 +5532,11 @@
               "definido": true,
               "origem": "env"
             },
+            "codex_extended_context": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
             "codex_memory_import": {
               "valor": null,
               "definido": false,
@@ -5728,6 +5824,11 @@
               "origem": "env"
             },
             "codex_sync": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
+            "codex_extended_context": {
               "valor": true,
               "definido": true,
               "origem": "env"
@@ -6033,6 +6134,11 @@
               "definido": true,
               "origem": "env"
             },
+            "codex_extended_context": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
             "codex_memory_import": {
               "valor": null,
               "definido": false,
@@ -6319,6 +6425,11 @@
               "origem": "env"
             },
             "codex_sync": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
+            "codex_extended_context": {
               "valor": true,
               "definido": true,
               "origem": "env"
@@ -6617,6 +6728,11 @@
               "definido": true,
               "origem": "env"
             },
+            "codex_extended_context": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
             "codex_memory_import": {
               "valor": null,
               "definido": false,
@@ -6903,6 +7019,11 @@
               "origem": "env"
             },
             "codex_sync": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
+            "codex_extended_context": {
               "valor": true,
               "definido": true,
               "origem": "env"
@@ -7201,6 +7322,11 @@
               "definido": true,
               "origem": "env"
             },
+            "codex_extended_context": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
             "codex_memory_import": {
               "valor": null,
               "definido": false,
@@ -7487,6 +7613,11 @@
               "origem": "env"
             },
             "codex_sync": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
+            "codex_extended_context": {
               "valor": true,
               "definido": true,
               "origem": "env"
@@ -7793,6 +7924,11 @@
               "definido": true,
               "origem": "env"
             },
+            "codex_extended_context": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
             "codex_memory_import": {
               "valor": null,
               "definido": false,
@@ -8080,6 +8216,11 @@
               "origem": "env"
             },
             "codex_sync": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
+            "codex_extended_context": {
               "valor": true,
               "definido": true,
               "origem": "env"
@@ -8386,6 +8527,11 @@
               "definido": true,
               "origem": "env"
             },
+            "codex_extended_context": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
             "codex_memory_import": {
               "valor": null,
               "definido": false,
@@ -8673,6 +8819,11 @@
               "origem": "env"
             },
             "codex_sync": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
+            "codex_extended_context": {
               "valor": true,
               "definido": true,
               "origem": "env"
@@ -8978,6 +9129,11 @@
               "definido": true,
               "origem": "env"
             },
+            "codex_extended_context": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
             "codex_memory_import": {
               "valor": null,
               "definido": false,
@@ -9265,6 +9421,11 @@
               "origem": "env"
             },
             "codex_sync": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
+            "codex_extended_context": {
               "valor": true,
               "definido": true,
               "origem": "env"
@@ -9570,6 +9731,11 @@
               "definido": true,
               "origem": "env"
             },
+            "codex_extended_context": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
             "codex_memory_import": {
               "valor": null,
               "definido": false,
@@ -9856,6 +10022,11 @@
               "origem": "env"
             },
             "codex_sync": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
+            "codex_extended_context": {
               "valor": true,
               "definido": true,
               "origem": "env"
@@ -10161,6 +10332,11 @@
               "definido": true,
               "origem": "env"
             },
+            "codex_extended_context": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
             "codex_memory_import": {
               "valor": null,
               "definido": false,
@@ -10448,6 +10624,11 @@
               "origem": "env"
             },
             "codex_sync": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
+            "codex_extended_context": {
               "valor": true,
               "definido": true,
               "origem": "env"
@@ -10753,6 +10934,11 @@
               "definido": true,
               "origem": "env"
             },
+            "codex_extended_context": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
             "codex_memory_import": {
               "valor": null,
               "definido": false,
@@ -11039,6 +11225,11 @@
               "origem": "env"
             },
             "codex_sync": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
+            "codex_extended_context": {
               "valor": true,
               "definido": true,
               "origem": "env"
@@ -11344,6 +11535,11 @@
               "definido": true,
               "origem": "env"
             },
+            "codex_extended_context": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
             "codex_memory_import": {
               "valor": null,
               "definido": false,
@@ -11632,6 +11828,11 @@
               "origem": "env"
             },
             "codex_sync": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
+            "codex_extended_context": {
               "valor": true,
               "definido": true,
               "origem": "env"
@@ -11937,6 +12138,11 @@
               "definido": true,
               "origem": "env"
             },
+            "codex_extended_context": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
             "codex_memory_import": {
               "valor": null,
               "definido": false,
@@ -12225,6 +12431,11 @@
               "origem": "env"
             },
             "codex_sync": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
+            "codex_extended_context": {
               "valor": true,
               "definido": true,
               "origem": "env"
@@ -12530,6 +12741,11 @@
               "definido": true,
               "origem": "env"
             },
+            "codex_extended_context": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
             "codex_memory_import": {
               "valor": null,
               "definido": false,
@@ -12817,6 +13033,11 @@
               "origem": "env"
             },
             "codex_sync": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
+            "codex_extended_context": {
               "valor": true,
               "definido": true,
               "origem": "env"
@@ -13122,6 +13343,11 @@
               "definido": true,
               "origem": "env"
             },
+            "codex_extended_context": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
             "codex_memory_import": {
               "valor": null,
               "definido": false,
@@ -13410,6 +13636,11 @@
               "origem": "env"
             },
             "codex_sync": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
+            "codex_extended_context": {
               "valor": true,
               "definido": true,
               "origem": "env"
@@ -13716,6 +13947,11 @@
               "definido": true,
               "origem": "env"
             },
+            "codex_extended_context": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
             "codex_memory_import": {
               "valor": null,
               "definido": false,
@@ -14002,6 +14238,11 @@
               "origem": "env"
             },
             "codex_sync": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
+            "codex_extended_context": {
               "valor": true,
               "definido": true,
               "origem": "env"
@@ -14307,6 +14548,11 @@
               "definido": true,
               "origem": "env"
             },
+            "codex_extended_context": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
             "codex_memory_import": {
               "valor": null,
               "definido": false,
@@ -14593,6 +14839,11 @@
               "origem": "env"
             },
             "codex_sync": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
+            "codex_extended_context": {
               "valor": true,
               "definido": true,
               "origem": "env"
@@ -14899,6 +15150,11 @@
               "definido": true,
               "origem": "env"
             },
+            "codex_extended_context": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
             "codex_memory_import": {
               "valor": null,
               "definido": false,
@@ -15187,6 +15443,11 @@
               "origem": "env"
             },
             "codex_sync": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
+            "codex_extended_context": {
               "valor": true,
               "definido": true,
               "origem": "env"
@@ -15493,6 +15754,11 @@
               "definido": true,
               "origem": "env"
             },
+            "codex_extended_context": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
             "codex_memory_import": {
               "valor": null,
               "definido": false,
@@ -15781,6 +16047,11 @@
               "origem": "env"
             },
             "codex_sync": {
+              "valor": true,
+              "definido": true,
+              "origem": "env"
+            },
+            "codex_extended_context": {
               "valor": true,
               "definido": true,
               "origem": "env"

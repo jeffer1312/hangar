@@ -6,6 +6,7 @@ pub const BOOLEAN: &[&str] = &[
     "automations",
     "traduzir_pensamento",
     "codex_sync",
+    "codex_extended_context",
     "codex_memory_import",
     "claude_statusline_update",
     "claude_function_hooks",

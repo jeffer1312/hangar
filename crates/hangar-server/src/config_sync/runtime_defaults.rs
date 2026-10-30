@@ -2,12 +2,17 @@
 use crate::{machine_peers::dotenv::SettingsSnapshot, value_coercion};
 use serde_json::{Map, Value, json};
 
+#[cfg(test)]
+#[path="runtime_context_tests.rs"]
+mod context_tests;
+
 pub(super) fn load(settings: &SettingsSnapshot) -> Result<Map<String, Value>, String> {
     let fields = [
         ("sync", json!(false)), ("dictation_include_recent_messages", json!(false)),
         ("jev_padrao", json!(false)), ("notify_finished", json!(true)),
         ("notify_dead", json!(true)), ("automations", json!(true)),
         ("traduzir_pensamento", json!(true)), ("codex_sync", json!(true)),
+        ("codex_extended_context", json!(true)),
         ("claude_statusline_update", json!(true)), ("claude_function_hooks", json!(true)),
         ("headless_default", json!(true)), ("groq_api_key", json!("")),
         ("dictation_claude_model", json!("")), ("dictation_codex_model", json!("")),

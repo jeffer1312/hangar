@@ -1,5 +1,5 @@
 {
-  "source_commit": "39ff842c6e9c23967830f61e6540ee5e66f2e648",
+  "source_commit": "3ebcf0628431ee8c27a1514a08744c520589f37f",
   "command": "cd backend && uv run python tests/fixtures/contract/config_sync/generate_config_http.py",
   "injections": [
     "autenticação comparada nas provas do porteiro",
@@ -77,6 +77,11 @@
             "origem": "env"
           },
           "codex_sync": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "codex_extended_context": {
             "valor": true,
             "definido": true,
             "origem": "env"
@@ -673,6 +678,11 @@
             "definido": true,
             "origem": "env"
           },
+          "codex_extended_context": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
           "codex_memory_import": {
             "valor": null,
             "definido": false,
@@ -978,6 +988,11 @@
             "origem": "env"
           },
           "codex_sync": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "codex_extended_context": {
             "valor": true,
             "definido": true,
             "origem": "env"
@@ -1360,6 +1375,11 @@
             "definido": true,
             "origem": "env"
           },
+          "codex_extended_context": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
           "codex_memory_import": {
             "valor": null,
             "definido": false,
@@ -1677,6 +1697,11 @@
             "origem": "env"
           },
           "codex_sync": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "codex_extended_context": {
             "valor": true,
             "definido": true,
             "origem": "env"
@@ -1999,6 +2024,11 @@
             "origem": "env"
           },
           "codex_sync": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "codex_extended_context": {
             "valor": true,
             "definido": true,
             "origem": "env"
@@ -2332,6 +2362,11 @@
             "definido": true,
             "origem": "env"
           },
+          "codex_extended_context": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
           "codex_memory_import": {
             "valor": null,
             "definido": false,
@@ -2641,6 +2676,11 @@
             "definido": true,
             "origem": "env"
           },
+          "codex_extended_context": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
           "codex_memory_import": {
             "valor": null,
             "definido": false,
@@ -2946,6 +2986,11 @@
             "origem": "env"
           },
           "codex_sync": {
+            "valor": true,
+            "definido": true,
+            "origem": "env"
+          },
+          "codex_extended_context": {
             "valor": true,
             "definido": true,
             "origem": "env"
