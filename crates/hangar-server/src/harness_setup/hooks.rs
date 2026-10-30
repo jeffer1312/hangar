@@ -9,7 +9,7 @@ use std::{
 };
 static LOCK: Mutex<()> = Mutex::new(());
 
-fn tokens(command: &str, windows: bool) -> Vec<String> {
+pub(super) fn tokens(command: &str, windows: bool) -> Vec<String> {
     let fallback = || command.split_whitespace().map(str::to_owned).collect();
     let mut result = Vec::new();
     let mut current = String::new();
@@ -185,7 +185,39 @@ pub fn sync(service: &AccountService, repo: &Path) -> Value {
     sync_report(service, repo).0
 }
 
+pub fn sync_installer(
+    service: &AccountService,
+    repo: &Path,
+    name: &str,
+) -> Result<Value, Vec<String>> {
+    let script = match name {
+        "ensure_askq_hook_installed" => "askq_capture.py",
+        "ensure_state_hooks_installed" => "state_hook.py",
+        "ensure_preview_hook_installed" => "preview_hook.py",
+        "ensure_subagent_hook_installed" => "subagent_hook.py",
+        "ensure_pair_hook_installed" => "pair-context",
+        "ensure_nav_hook_installed" => "nav_hook.py",
+        "ensure_guard_hooks_installed" => "guard_tmux.py",
+        _ => return Err(vec!["instalador de hook desconhecido".into()]),
+    };
+    let (changes, errors) = sync_report_selected(service, repo, Some(script));
+    if errors.is_empty() {
+        Ok(changes)
+    } else {
+        Err(errors)
+    }
+}
+
 pub(super) fn sync_report(service: &AccountService, repo: &Path) -> (Value, Vec<String>) {
+    sync_report_selected(service, repo, None)
+}
+
+fn sync_report_selected(
+    service: &AccountService,
+    repo: &Path,
+    selected: Option<&str>,
+) -> (Value, Vec<String>) {
+    let enabled = |script: &str| selected.is_none_or(|selected| selected == script);
     let mut errors = Vec::new();
     let _lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let python = crate::install_root::python_exe(repo, cfg!(windows));
@@ -212,6 +244,9 @@ pub(super) fn sync_report(service: &AccountService, repo: &Path) -> (Value, Vec<
         if !seen.insert(path.clone()) {
             continue;
         }
+        // O instalador da trava prepara o link antes de conferir o settings pessoal.
+        let guard_path = (selected == Some("guard_tmux.py"))
+            .then(|| guard(&dir, &repo.join("backend/hooks/guard_tmux.py")));
         let result = (|| -> Result<bool, String> {
             let text = match fs::read_to_string(&path) {
                 Ok(v) => v,
@@ -226,7 +261,7 @@ pub(super) fn sync_report(service: &AccountService, repo: &Path) -> (Value, Vec<
             if !data.is_object()
                 || data
                     .get("hooks")
-                    .is_some_and(|h| !h.is_null() && !h.is_object())
+                    .is_some_and(|h| !h.is_object() && (selected.is_some() || !h.is_null()))
             {
                 return Err("settings.json inválido; hooks preservados".into());
             }
@@ -260,6 +295,9 @@ pub(super) fn sync_report(service: &AccountService, repo: &Path) -> (Value, Vec<
                     Some("AskUserQuestion"),
                 ),
             ] {
+                if !enabled(script) {
+                    continue;
+                }
                 for event in events {
                     let command = safe_command(
                         &python,
@@ -270,21 +308,21 @@ pub(super) fn sync_report(service: &AccountService, repo: &Path) -> (Value, Vec<
                     changed |= sync_hook(&mut data, event, Some(&command), matcher, script);
                 }
             }
-            let command = safe_command(
-                &python,
-                &guard(&dir, &repo.join("backend/hooks/guard_tmux.py")),
-                "PreToolUse",
-                false,
-            );
-            changed |= sync_hook(
-                &mut data,
-                "PreToolUse",
-                Some(&command),
-                Some("Bash"),
-                "guard_tmux.py",
-            );
-            changed |= sync_hook(&mut data, "SessionStart", None, None, "pair_hook.py");
-            if let Ok(exe) = std::env::current_exe() {
+            if enabled("guard_tmux.py") {
+                let guard_path = guard_path
+                    .unwrap_or_else(|| guard(&dir, &repo.join("backend/hooks/guard_tmux.py")));
+                let command = safe_command(&python, &guard_path, "PreToolUse", false);
+                changed |= sync_hook(
+                    &mut data,
+                    "PreToolUse",
+                    Some(&command),
+                    Some("Bash"),
+                    "guard_tmux.py",
+                );
+            }
+            if enabled("pair-context") {
+                changed |= sync_hook(&mut data, "SessionStart", None, None, "pair_hook.py");
+                let exe = std::env::current_exe().map_err(|error| error.to_string())?;
                 let command = format!(
                     "\"{}\" pair-context \"{}\" || exit 0",
                     exe.display(),

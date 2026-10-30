@@ -66,3 +66,6 @@ pub fn sync_hooks_checked(service: &AccountService, repo: &Path) -> Result<Value
 }
 
 pub mod health;
+
+#[cfg(all(test, unix))]
+mod selected_tests;
