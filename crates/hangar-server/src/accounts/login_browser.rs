@@ -1016,7 +1016,7 @@ mod tests {
         }
     }
     fn desk_window(id: &str) -> crate::accounts::login_view::DeskWindow {
-        crate::accounts::login_view::DeskWindow { id: id.into(), title: format!("t-{id}"), x: 0, y: 0, w: 100, h: 50 }
+        crate::accounts::login_view::DeskWindow { id: id.into(), title: format!("t-{id}"), x: 0, y: 0, w: 100, h: 50, capture_id: None }
     }
     fn viewing(desk: Arc<FakeDesk>) -> LoginBrowser {
         let probe = desk.clone();

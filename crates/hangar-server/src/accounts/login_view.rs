@@ -11,7 +11,14 @@ pub struct DeskWindow {
     pub y: i32,
     pub w: i32,
     pub h: i32,
+    /// Identificador para capturar só esta janela, mesmo coberta; sem ele, a captura é por área da tela.
+    pub capture_id: Option<String>,
 }
+
+/// A página de autorização só liga o botão um tempo depois de a janela ganhar foco: clique antes disso
+/// não faz nada, sem aviso.
+#[cfg(any(target_os = "linux", windows))]
+const FOCUS_SETTLE: std::time::Duration = std::time::Duration::from_millis(1500);
 
 /// Só as teclas de navegar e editar: atalho do sistema alcançaria o resto da máquina.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -92,6 +99,14 @@ mod hyprland {
         size: [i32; 2],
         #[serde(default = "mapped_default")]
         mapped: bool,
+        #[serde(default, rename = "stableId")]
+        stable_id: Option<String>,
+    }
+
+    #[derive(Deserialize)]
+    struct Active {
+        #[serde(default)]
+        address: String,
     }
 
     fn mapped_default() -> bool {
@@ -111,6 +126,7 @@ mod hyprland {
                     y: client.at[1],
                     w: client.size[0],
                     h: client.size[1],
+                    capture_id: client.stable_id,
                 })
                 .collect(),
         )
@@ -146,6 +162,12 @@ mod hyprland {
         fn focus(&self, window: &DeskWindow) {
             self.run("hyprctl", &["dispatch", "focuswindow", &format!("address:{}", window.id)]);
         }
+
+        fn focused(&self, window: &DeskWindow) -> bool {
+            self.run("hyprctl", &["activewindow", "-j"])
+                .and_then(|out| serde_json::from_slice::<Active>(&out.stdout).ok())
+                .is_some_and(|active| active.address == window.id)
+        }
     }
 
     impl Desk for HyprDesk {
@@ -153,18 +175,21 @@ mod hyprland {
             chrome_windows(&self.run("hyprctl", &["clients", "-j"])?.stdout)
         }
 
+        // Janela comum do desktop: flutuando, ela ficaria por cima de tudo e bloquearia quem está na máquina.
         fn present(&self, window: &DeskWindow) {
-            let address = format!("address:{}", window.id);
-            let batch = format!(
-                "dispatch focuswindow {address}; dispatch setfloating {address}; dispatch resizewindowpixel exact 1100 700,{address}; dispatch centerwindow 1"
-            );
-            self.run("hyprctl", &["--batch", &batch]);
-            // A captura é por área da tela: durante a animação ela pegaria o que está em volta.
-            std::thread::sleep(std::time::Duration::from_millis(700));
+            self.focus(window);
+            // Na captura por área, a animação de abertura pegaria o que está em volta.
+            if window.capture_id.is_none() {
+                std::thread::sleep(std::time::Duration::from_millis(700));
+            }
         }
 
         fn capture(&self, window: &DeskWindow) -> Option<Vec<u8>> {
-            // Sem trocar o foco: outra janela por cima apareceria na transmissão.
+            // O grim antigo não conhece `-T`: aí a captura cai para a área da tela.
+            if let Some(out) = window.capture_id.as_deref().and_then(|id| self.run("grim", &["-T", id, "-t", "jpeg", "-q", "75", "-"])) {
+                return Some(out.stdout);
+            }
+            // Por área, outra janela por cima apareceria na transmissão.
             self.run("hyprctl", &["dispatch", "alterzorder", &format!("top,address:{}", window.id)]);
             let area = format!("{},{} {}x{}", window.x, window.y, window.w, window.h);
             self.run("grim", &["-g", &area, "-t", "jpeg", "-q", "75", "-"]).map(|out| out.stdout)
@@ -181,7 +206,12 @@ mod hyprland {
             };
             match input {
                 DeskInput::Click { x, y } => {
-                    self.focus(window);
+                    if !self.focused(window) {
+                        self.focus(window);
+                        std::thread::sleep(FOCUS_SETTLE);
+                    }
+                    // O clique é na tela: só agora a janela precisa estar na frente.
+                    self.run("hyprctl", &["dispatch", "alterzorder", &format!("top,address:{}", window.id)]);
                     pointer(*x, *y);
                     self.run("ydotool", &["click", "0xC0"]);
                 }
@@ -247,8 +277,8 @@ mod windows_desk {
                 VK_END, VK_ESCAPE, VK_HOME, VK_LEFT, VK_MENU, VK_RETURN, VK_RIGHT, VK_TAB, VK_UP, mouse_event,
             },
             WindowsAndMessaging::{
-                EnumWindows, GetClassNameW, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
-                SW_MAXIMIZE, SetCursorPos, SetForegroundWindow, ShowWindow, WM_CLOSE,
+                EnumWindows, GetClassNameW, GetForegroundWindow, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
+                PostMessageW, SetCursorPos, SetForegroundWindow, WM_CLOSE,
             },
         },
     };
@@ -315,6 +345,7 @@ mod windows_desk {
                 y: rect.top,
                 w: rect.right - rect.left,
                 h: rect.bottom - rect.top,
+                capture_id: None,
             });
             1
         }
@@ -352,11 +383,8 @@ mod windows_desk {
         }
 
         fn present(&self, window: &DeskWindow) {
-            // SAFETY: operações sobre um handle de janela; handle morto só faz a chamada falhar.
-            unsafe {
-                ShowWindow(handle(window), SW_MAXIMIZE);
-                SetForegroundWindow(handle(window));
-            }
+            // SAFETY: handle morto só faz a chamada falhar.
+            unsafe { SetForegroundWindow(handle(window)) };
         }
 
         fn capture(&self, window: &DeskWindow) -> Option<Vec<u8>> {
@@ -431,7 +459,11 @@ mod windows_desk {
             };
             match input {
                 DeskInput::Click { x, y } => {
-                    front();
+                    // SAFETY: sem ponteiro.
+                    if unsafe { GetForegroundWindow() } != handle(window) {
+                        front();
+                        std::thread::sleep(FOCUS_SETTLE);
+                    }
                     pointer(*x, *y);
                     mouse(MOUSEEVENTF_LEFTDOWN, 0);
                     mouse(MOUSEEVENTF_LEFTUP, 0);
@@ -500,7 +532,7 @@ mod tests {
     use super::*;
 
     fn window() -> DeskWindow {
-        DeskWindow { id: "w".into(), title: "t".into(), x: 100, y: 50, w: 800, h: 600 }
+        DeskWindow { id: "w".into(), title: "t".into(), x: 100, y: 50, w: 800, h: 600, capture_id: None }
     }
 
     #[test]
@@ -522,13 +554,13 @@ mod tests {
     #[test]
     fn hyprland_list_keeps_only_mapped_chrome_windows() {
         let clients = br#"[
-            {"address":"0x1","class":"google-chrome","title":"Claude","at":[1,2],"size":[3,4],"mapped":true},
+            {"address":"0x1","class":"google-chrome","title":"Claude","at":[1,2],"size":[3,4],"mapped":true,"stableId":"18"},
             {"address":"0x2","class":"kitty","title":"t","at":[0,0],"size":[1,1],"mapped":true},
             {"address":"0x3","class":"google-chrome","title":"h","at":[0,0],"size":[1,1],"mapped":false}
         ]"#;
         assert!(hyprland::chrome_windows(b"nao e json").is_none());
         let windows = hyprland::chrome_windows(clients).unwrap();
         assert_eq!(windows.len(), 1);
-        assert_eq!(windows[0], DeskWindow { id: "0x1".into(), title: "Claude".into(), x: 1, y: 2, w: 3, h: 4 });
+        assert_eq!(windows[0], DeskWindow { id: "0x1".into(), title: "Claude".into(), x: 1, y: 2, w: 3, h: 4, capture_id: Some("18".into()) });
     }
 }
