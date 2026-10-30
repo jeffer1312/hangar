@@ -28,30 +28,43 @@ pub(super) enum TileState { #[default] Idle, Running, Asking, Exited }
 #[derive(Debug, Default, PartialEq)]
 pub(super) struct Tile { pub state: TileState, pub line: String, pub tip: Option<String>, pub mark: bool, pub opened_in: Option<String> }
 
-/// Estado do bloco de `shortcut` na sessão `session`: No Hangar vale a cópia do servidor (dono vazio); na sessão, só a
-/// pergunta do terminal mais novo dela.
+/// Terminal que o bloco de `shortcut` representa: No Hangar, a cópia do servidor (dono vazio); na sessão `session`, o
+/// mais novo dela.
+fn tile_term<'a>(live: &'a [LiveTerm], session: &str, key: &str, hangar: bool) -> Option<&'a LiveTerm> {
+    let want = norm_key(key);
+    let mut found = live.iter().filter(|t| norm_key(&t.key) == want && if hangar { t.owner.is_empty() } else { t.owner == session });
+    if hangar { found.next() } else { found.last() }
+}
+
+/// Estado do bloco de `shortcut` na sessão `session`. O da sessão que saiu não acende nem marca "caiu": a saída continua
+/// na aba do painel.
 pub(super) fn tile_of(live: &[LiveTerm], session: &str, shortcut: &Shortcut, now: i64) -> Tile {
     let Shortcut::Shell { key, hangar, label, .. } = shortcut else { return Tile::default() };
-    let want = norm_key(key);
-    let same = |t: &&LiveTerm| norm_key(&t.key) == want;
-    let hangar_term = if *hangar { live.iter().filter(|t| t.owner.is_empty()).find(same) } else { None };
-    let session_term = if *hangar { None } else { live.iter().filter(|t| t.owner == session).filter(same).last() };
-    let state = if session_term.is_some_and(|t| t.term.alive && t.question.is_some()) { TileState::Asking }
-        else { match hangar_term {
-            None => TileState::Idle,
-            Some(t) if !t.term.alive => TileState::Exited,
-            Some(t) if t.question.is_some() => TileState::Asking,
-            Some(_) => TileState::Running,
-        } };
-    let line = match (state, hangar_term) {
+    let term = tile_term(live, session, key, *hangar);
+    let state = match term {
+        None => TileState::Idle,
+        Some(t) if !t.term.alive => if *hangar { TileState::Exited } else { TileState::Idle },
+        Some(t) if t.question.is_some() => TileState::Asking,
+        Some(_) => TileState::Running,
+    };
+    let line = match (state, term) {
         (TileState::Running, Some(t)) if t.created > 0 => tr_shared("hangar_rodando_ha", &[("tempo", &elapsed(t.created, now))]),
         (TileState::Asking, _) => tr_shared("atalho_tile_pergunta", &[]),
         (TileState::Exited, Some(t)) => tr_shared("atalho_tile_caiu", &[("codigo", &t.term.exit_code.map_or_else(|| "?".to_owned(), |c| c.to_string()))]),
         _ => String::new(),
     };
-    let elsewhere = hangar_term.filter(|t| t.term.alive && !t.origin.is_empty() && t.origin != session);
-    let tip = elsewhere.map(|t| tr_shared("atalho_tile_dica_hangar", &[("rotulo", label), ("sessao", &t.origin)]));
+    let elsewhere = term.filter(|t| *hangar && t.term.alive && !t.origin.is_empty() && t.origin != session);
+    let tip = match elsewhere {
+        Some(t) => Some(tr_shared("atalho_tile_dica_hangar", &[("rotulo", label), ("sessao", &t.origin)])),
+        None => (state == TileState::Running).then(|| tr_shared("atalho_tile_parar", &[("rotulo", label)])),
+    };
     Tile { state, line, tip, mark: *hangar, opened_in: elsewhere.map(|t| t.origin.clone()) }
+}
+
+/// Terminal vivo e sem pergunta que o bloco acende; o clique nele encerra o atalho.
+pub(super) fn running_term(live: &[LiveTerm], session: &str, shortcut: &Shortcut) -> Option<LiveTerm> {
+    let Shortcut::Shell { key, hangar, .. } = shortcut else { return None };
+    tile_term(live, session, key, *hangar).filter(|t| t.term.alive && t.question.is_none()).cloned()
 }
 
 /// Ações das linhas do popover do chip.
@@ -91,10 +104,7 @@ impl Hangar {
 
     /// Terminal do atalho com pergunta na tela (a cópia No Hangar, ou o mais novo da sessão `session`).
     pub(super) fn asking_term(&self, server: &str, key: &str, hangar: bool, session: &str) -> Option<LiveTerm> {
-        let want = norm_key(key);
-        let mut found = self.live_for(server).into_iter().filter(|t| norm_key(&t.key) == want && if hangar { t.owner.is_empty() } else { t.owner == session });
-        let term = if hangar { found.next() } else { found.last() }?;
-        (term.term.alive && term.question.is_some()).then_some(term)
+        tile_term(&self.live_for(server), session, key, hangar).filter(|t| t.term.alive && t.question.is_some()).cloned()
     }
 
     pub(super) fn tile_for(&self, server: &str, session: &str, shortcut: &Shortcut) -> Tile {
@@ -577,7 +587,7 @@ impl Render for QuestionCard {
 
 #[cfg(test)]
 mod live_tests {
-    use super::{Shortcut, TileState, elapsed, norm_key, shortcut_key, short_text, signature, tile_of};
+    use super::{Shortcut, TileState, elapsed, norm_key, running_term, shortcut_key, short_text, signature, tile_of};
     use crate::app::terminal::{LiveTerm, ShortcutTerm, TermQuestion};
 
     fn shell(key: &str, hangar: bool) -> Shortcut {
@@ -606,16 +616,21 @@ mod live_tests {
     }
 
     #[test]
-    fn tile_follows_the_server_copy_for_hangar_and_only_the_question_for_session() {
+    fn tile_follows_the_server_copy_for_hangar_and_the_newest_own_terminal_for_session() {
         let live = [term("global:vm", "", true, None, 500), term("global:vm", "pm-2", true, Some("Porta"), 500)];
         let hangar = tile_of(&live, "pm-2", &shell("global:vm", true), 500 + 300);
         assert_eq!((hangar.state, hangar.mark), (TileState::Running, true));
         assert_eq!(hangar.line, "rodando · 5 min");
         assert!(hangar.tip.is_some_and(|tip| tip.contains("pm-1")));
-        // Na sessão: só a pergunta do terminal dela conta, e a cópia No Hangar não interfere.
+        // Na sessão: vale o terminal dela, e a cópia No Hangar não interfere.
         let session = tile_of(&live, "pm-2", &shell("global:vm", false), 0);
         assert_eq!((session.state, session.mark, session.line.is_empty()), (TileState::Asking, false, false));
         assert_eq!(tile_of(&live, "outra", &shell("global:vm", false), 0).state, TileState::Idle);
+        let own = [term("global:vm", "pm-2", false, None, 100), term("global:vm", "pm-2", true, None, 500)];
+        let running = tile_of(&own, "pm-2", &shell("global:vm", false), 500 + 300);
+        assert_eq!((running.state, running.line.as_str()), (TileState::Running, "rodando · 5 min"));
+        // O da sessão que saiu não fica aceso nem marca "caiu": a saída continua na aba do painel.
+        assert_eq!(tile_of(&own[..1], "pm-2", &shell("global:vm", false), 900).state, TileState::Idle);
         // Sem hora de início a linha some; parado mostra o código.
         assert!(tile_of(&[term("k", "", true, None, 0)], "s", &shell("k", true), 100).line.is_empty());
         let dead = tile_of(&[term("k", "", false, None, 9)], "s", &shell("k", true), 100);
@@ -623,6 +638,18 @@ mod live_tests {
         assert!(dead.line.contains('3'));
         // A chave com espaço colapsado casa com a que o backend guardou.
         assert_eq!(tile_of(&[term("global:a b", "", true, None, 1)], "s", &shell("global:a  b", true), 100).state, TileState::Running);
+    }
+
+    #[test]
+    fn a_click_stops_only_the_running_terminal_of_the_tile() {
+        let hangar = [term("k", "", true, None, 1)];
+        assert_eq!(running_term(&hangar, "s", &shell("k", true)).map(|t| t.term.id), Some("id--k".into()));
+        let session = [term("k", "s", true, None, 1)];
+        assert_eq!(running_term(&session, "s", &shell("k", false)).map(|t| t.term.id), Some("id-s-k".into()));
+        // Outra sessão, terminal que saiu e terminal perguntando não param com o clique.
+        assert!(running_term(&session, "outra", &shell("k", false)).is_none());
+        assert!(running_term(&[term("k", "", false, None, 1)], "s", &shell("k", true)).is_none());
+        assert!(running_term(&[term("k", "s", true, Some("Porta"), 1)], "s", &shell("k", false)).is_none());
     }
 
     #[test]

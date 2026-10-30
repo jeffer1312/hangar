@@ -102,7 +102,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   import { hasSeam, mergeHistoryWithLiveRetiring } from '@hangar/core';
   import { especificidade, donoDaLinha } from '@hangar/core';
   import { DELIVERY_STALLED, parseStatusLine, queuedMessages } from '@hangar/core';
-  import { mergeProjectShortcuts, runShortcutShell, runCodeCommand, sendsDirect, shortcutMissingSecret } from '@hangar/core';
+  import { closeHangarTerminal, closeShortcutTerminal, mergeProjectShortcuts, runShortcutShell, runCodeCommand, sendsDirect, shortcutMissingSecret } from '@hangar/core';
   import { runsInHangar, answersInApp, hangarHome, hangarKeyOf, OutdatedServerError } from '@hangar/core';
   import {
     hangarForShortcut, hangarOf, liveTerminals, openQuestion, requestHangarTab, sessionTerminalFor, takeHangarTab,
@@ -3103,6 +3103,11 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   // frente, e fica listada (inclusive a que falhou, com a saída inteira) até alguém fechar.
   const tileHangar = (key: string) => hangarForShortcut(chatServerId, key);
   const tileSessionTerminal = (key: string) => sessionTerminalFor(chatServerId, sessionName, key);
+  function tileServer() {
+    const server = listServers().find((item) => item.id === chatServerId);
+    if (!server) throw new Error(m.servidor_nao_existe());
+    return server;
+  }
 
   // Identidade do atalho clicado: a mesma que os tiles usam (`hangarKeyOf`).
   function shortcutKeyOf(s: ShortcutShell): string {
@@ -3114,9 +3119,15 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
     if (runsInHangar(s)) { await runInHangar(s); return; }
     const shortcutKey = shortcutKeyOf(s);
     // Pergunta pendente do terminal deste atalho: o clique abre a pergunta em vez de rodar outro.
-    const asking = sessionTerminalFor(chatServerId, sessionName, shortcutKey);
-    if (asking?.alive && asking.question) { openQuestion(chatServerId, sessionName, asking.id); return; }
+    // Rodando sem pergunta, o clique para o terminal dele.
+    const current = sessionTerminalFor(chatServerId, sessionName, shortcutKey);
+    if (current?.alive && current.question) { openQuestion(chatServerId, sessionName, current.id); return; }
     const key = atalhoKey;
+    if (current?.alive) {
+      try { await closeShortcutTerminal(tileServer(), sessionName, current.id); }
+      finally { await refreshShortcutTerminals(key).catch(() => null); }
+      return;
+    }
     try {
       const r = await runShortcutShell(sessionName, s.command, s.label, s.pasta, { key: shortcutKey, ask: answersInApp(s) }, sessionServer());
       if (r.terminal) focusShortcutTerminal(key, r.terminal.id);
@@ -3164,12 +3175,12 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
     }
   }
 
-  // Cópia única do servidor: perguntando abre a pergunta; rodando, a janela vem pra frente ou o
-  // painel abre na aba dele; parado, roda.
+  // Cópia única do servidor: perguntando abre a pergunta; rodando, o clique a para; parado, roda.
   async function runInHangar(s: ShortcutShell) {
     const shortcutKey = shortcutKeyOf(s);
     const current = hangarForShortcut(chatServerId, shortcutKey);
     if (current?.alive && current.question) { openQuestion(chatServerId, '', current.id); return; }
+    if (current?.alive) { await closeHangarTerminal(tileServer(), current.id); return; }
     let r;
     try {
       r = await runShortcutShell(sessionName, s.command, s.label, s.pasta,

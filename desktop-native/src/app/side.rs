@@ -441,6 +441,12 @@ impl Hangar {
 
     pub(super) fn run_shortcut(&mut self, shortcut: Shortcut, confirmed: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(key) = self.selected_key() else { return; };
+        // Bloco aceso (terminal vivo, sem pergunta): o clique encerra o atalho, antes de qualquer confirmação de rodar.
+        if let Some(term) = hangar_live::running_term(&self.live_for(&key.server), &key.name, &shortcut) {
+            self.stop_shortcut(key, shortcut.label(), term);
+            cx.notify();
+            return;
+        }
         if let Some(name) = shortcut.missing_secret() {
             self.action_feedback.insert(key, (tr("shortcut_secret_missing").replace("{name}", &name), true));
             cx.notify();
@@ -488,6 +494,21 @@ impl Hangar {
             }
         }
         cx.notify();
+    }
+
+    /// Fecha o terminal do atalho: No Hangar pela cópia do servidor; na sessão, pelo terminal dela.
+    fn stop_shortcut(&mut self, key: SessionKey, label: String, term: super::terminal::LiveTerm) {
+        let Some(api) = self.api_for(&key.server) else { return; };
+        self.action_feedback.insert(key.clone(), (tr("shortcut_stopping").replace("{label}", &label), false));
+        let (connection, tx, id) = (self.connection, self.tx.clone(), term.term.id);
+        self.runtime.spawn(async move {
+            let result = if term.owner.is_empty() {
+                api.server_send(reqwest::Method::POST, &["hangar-terminals", &id, "close"], None, 20).await
+            } else {
+                api.act(&key.name, &["shortcut-terminals", &id, "close"], None, false, 15).await
+            };
+            let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Reply(key, Reply::ShellStopped(label), result) }).await;
+        });
     }
 
     pub(super) fn run_code_command(&mut self, code: String, language: Option<String>, cx: &mut Context<Self>) {
@@ -574,6 +595,13 @@ impl Hangar {
                     Ok(value) => Ok((value.get("diff").and_then(Value::as_str).unwrap_or("").to_owned(), value.get("truncated").and_then(Value::as_bool).unwrap_or(false))),
                     Err(error) => Err(Self::read_failure(&error)),
                 });
+            }
+            Reply::ShellStopped(label) => {
+                self.refresh_shortcut_terms(&key.name);
+                match result {
+                    Ok(_) => { self.action_feedback.remove(&key); }
+                    Err(error) => { self.action_feedback.insert(key, (format!("{label}: {}", Self::failure(&error)), true)); }
+                }
             }
             Reply::Shell(label, hangar) => {
                 // A aba do terminal vai pra frente (sem abrir o painel); a que falhou também, com a saída inteira.
