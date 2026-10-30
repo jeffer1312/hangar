@@ -306,6 +306,7 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
     let _keyring_watch = crate::AbortOnDrop(crate::keyring::spawn(state.list.keyring.clone()));
     let _vault_backup = crate::AbortOnDrop(crate::vault::backup::spawn(state.clone()));
     let _vault_files = crate::AbortOnDrop(tokio::spawn(crate::vault::files::sweep_at_start()));
+    let _auto_report = crate::AbortOnDrop(crate::diag_report::auto::spawn(state.clone()));
     let v6_state = state.clone();
     // Abortada na saída: a tarefa segura o estado do servidor, que sobreviveria a ele.
     // As sessões com terminal que o multiplexador perdeu voltam pelo spec; antes da varredura de grupos, que
@@ -708,6 +709,8 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/device-install/certs", axum::routing::post(crate::device_install::routes::certs))
         // Tela web ligada ou não: só o dono, nunca repassado.
         .route("/api/web-ui", get(crate::ui::setting).put(crate::ui::setting))
+        // Consentimento do relatório automático da atualização: só o dono, nunca repassado.
+        .route("/api/auto-report", get(crate::diag_report::auto::setting).put(crate::diag_report::auto::setting))
         // Atualização: o Rust atende o dono na máquina migrada; o resto segue ao motor `git` do Python.
         .route("/api/atualizacao", get(crate::update::http::status).fallback(pass_any))
         .route("/api/atualizacao/iniciar", axum::routing::post(crate::update::http::start).fallback(pass_any))

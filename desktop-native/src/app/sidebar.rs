@@ -927,7 +927,8 @@ impl Hangar {
 
     /// "Agora não" da sugestão de nome: some na hora; se o servidor não guardar a recusa, volta com o motivo.
     pub(super) fn dismiss_rename_suggestion(&mut self, target: Target, cx: &mut Context<Self>) {
-        self.rename_suggest.dismissed.insert(target.clone());
+        let life = self.rename_life(&target);
+        self.rename_suggest.dismissed.insert(life);
         self.write(target, Write::DismissRename, cx);
     }
 
@@ -1322,7 +1323,7 @@ impl Hangar {
                     }
                     (Write::DismissRename, Ok(_)) => None,
                     (Write::DismissRename, Err(error)) => {
-                        self.rename_suggest.dismissed.remove(&target);
+                        self.rename_suggest.dismissed.retain(|(dismissed, _)| *dismissed != target);
                         Some(Notification::error(Self::fetch_failure(&error)))
                     }
                     (Write::Delete, Ok(value)) => {

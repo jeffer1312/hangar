@@ -601,6 +601,12 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   contagem), e o `scrub` passa em cada parte do texto, antes de qualquer corte, e em cada linha do diário anexo. O diário vai
   completo, compactado, num segundo envio que o worker grava sem abrir. Motivo e invariante em
   [plataforma.md](docs/decisoes/plataforma.md#reportar-problema-o-pacote-de-diagnóstico-vai-ao-dono-27102026).
+  Exceção única ao "só contagem": quando a versão nova não responde depois do reinício, o executor
+  da atualização grava como `update: saída` só o traceback e as linhas ERROR/CRITICAL que ela
+  escreveu, com `scrub`. Atualização que falha manda o relatório sozinha apenas com o consentimento
+  da máquina (`~/.hangar/auto-report.json`, perguntado uma vez pelos clientes; sem resposta, nada
+  sai); o resultado mora em `.hangar-update/relatorio.json`, fora do `estado.json`. Contrato em
+  [plataforma.md](docs/decisoes/plataforma.md#relatório-automático-quando-a-atualização-falha-30102026).
 - **Aviso na tela só para ação que falhou ou bloqueio real.** Falha de acompanhamento, dado velho
   ou condição que some sozinha vai ao diário de uso e ao log, nunca a faixa, anel ou linha. A
   classificação é uma só, `problem_gate::diagnostic`; os dois portões de saída (`gate_problem` da
@@ -681,7 +687,7 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
     e última resposta delas. A associação da credencial Pi/omp/Kimi à cota é do Rust.
   - Outras perguntas do Rust ao Python (`/internal/*`): `accounts/prepare` (só contas Codex; a
     reconciliação das contas Claude é do Rust, `accounts/claude_config.rs`),
-    `accounts/claude-window`, `accounts/codex-invalidate`, `workspace/context`,
+    `accounts/codex-invalidate`, `workspace/context`,
     `worktrees/context`,
     `transcription/config`, `costs/scopes`, `migration/status`, `diag` e `ping`.
   - Partes ainda no Python: transcript, estado e entrada geral de Pi, omp e Kimi; Arquivo;

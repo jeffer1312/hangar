@@ -390,6 +390,19 @@ fn web_ui_value(result: Result<Value, Failure>) -> Result<Option<bool>, String> 
     }
 }
 
+/// `GET`/`PUT /api/auto-report`. Servidor sem a rota: `Ok(None)`, e a linha some. `Ok(Some(None))` = não respondido.
+fn auto_report_value(result: Result<Value, Failure>) -> Result<Option<Option<bool>>, String> {
+    match result {
+        Err(error) if matches!(error.status, Some(404 | 405)) => Ok(None),
+        Err(error) => Err(Hangar::setting_failure(&error)),
+        Ok(value) => match value.get("auto_report") {
+            Some(Value::Bool(on)) => Ok(Some(Some(*on))),
+            Some(Value::Null) => Ok(Some(None)),
+            _ => Err(tr("invalid_response")),
+        },
+    }
+}
+
 /// O modo de uma máquina migrada, do `GET /api/atualizacao`; `checkout` é a pasta que a troca oferece.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct DevMode { developer: bool, channel: String, checkout: String }
@@ -441,6 +454,8 @@ pub(super) enum MachinesReply {
     Paired(u64, Result<Value, Failure>),
     WebUi(u64, Result<Value, Failure>),
     WebUiSaved(u64, Result<Value, Failure>),
+    AutoReport(u64, Result<Value, Failure>),
+    AutoReportSaved(u64, Result<Value, Failure>),
 }
 
 #[derive(Default)]
@@ -529,6 +544,11 @@ pub(in crate::app) struct Machines {
     web_ui_saving: bool,
     web_ui_seq: u64,
     web_ui_error: Option<String>,
+    /// Relatório automático da atualização; `Ok(None)` = servidor sem a rota, `Ok(Some(None))` = não respondido.
+    auto_report: Remote<Option<Option<bool>>>,
+    auto_report_saving: bool,
+    auto_report_seq: u64,
+    auto_report_error: Option<String>,
     /// Pacote ou modo desenvolvedor; `Ok(None)` = servidor sem a troca pela tela (só antes de [`Self::dev_mode_seen`]).
     dev_mode: Remote<Option<DevMode>>,
     /// Já houve uma leitura boa do modo neste servidor: a linha não some mais.
@@ -584,6 +604,15 @@ impl Machines {
             Err(error) => self.web_ui_error = Some(error),
         }
     }
+
+    fn auto_report_saved(&mut self, seq: u64, result: Result<Value, Failure>) {
+        if seq != self.auto_report_seq { return; }
+        self.auto_report_saving = false;
+        match auto_report_value(result) {
+            Ok(saved) => { self.auto_report.set(Ok(saved)); self.auto_report_error = None; }
+            Err(error) => self.auto_report_error = Some(error),
+        }
+    }
 }
 
 impl Hangar {
@@ -612,6 +641,7 @@ impl Hangar {
         m.checks.clear();
         if !m.id_saving { self.load_machine_id(cx); }
         if !self.machines.web_ui_saving { self.load_web_ui(cx); }
+        if !self.machines.auto_report_saving { self.load_auto_report(cx); }
         if !self.machines.dev_switch.busy() { self.load_dev_mode(cx); }
         self.load_reach(cx);
         self.load_saved_ids(cx);
@@ -875,6 +905,71 @@ impl Hangar {
             done(MachinesReply::WebUiSaved(seq, api.server_send(reqwest::Method::PUT, &["web-ui"], Some(json!({"web_ui": on})), 15).await)).await
         });
         cx.notify();
+    }
+
+    fn load_auto_report(&mut self, cx: &mut Context<Self>) {
+        let Some(api) = self.api.clone().filter(|_| !self.active_invite()) else { return };
+        let seq = self.machines.auto_report.start();
+        self.machines.auto_report_error = None;
+        let done = self.machines_send_later();
+        self.runtime.spawn(async move { done(MachinesReply::AutoReport(seq, api.server_read(&["auto-report"], &[], 15).await)).await });
+        cx.notify();
+    }
+
+    fn save_auto_report(&mut self, on: bool, cx: &mut Context<Self>) {
+        let Some(api) = self.api.clone().filter(|_| !self.active_invite()) else { return };
+        let m = &mut self.machines;
+        if m.auto_report_saving || m.auto_report.loading || m.auto_report.ok().copied().flatten().is_none() { return; }
+        m.auto_report_seq += 1;
+        (m.auto_report_saving, m.auto_report_error) = (true, None);
+        let (seq, done) = (m.auto_report_seq, self.machines_send_later());
+        self.runtime.spawn(async move {
+            done(MachinesReply::AutoReportSaved(seq, api.server_send(reqwest::Method::PUT, &["auto-report"], Some(json!({"auto_report": on})), 15).await)).await
+        });
+        cx.notify();
+    }
+
+    /// Uma vez por abertura do app: as máquinas próprias sem resposta ao relatório automático entram numa pergunta só.
+    /// Leitura que falha não pergunta; fica para a próxima abertura.
+    pub(super) fn ask_auto_report(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        static ASKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if ASKED.swap(true, std::sync::atomic::Ordering::SeqCst) { return; }
+        let entries: Vec<_> = self.servers.iter().filter(|s| !s.disabled && !s.invite && !s.ephemeral).cloned().collect();
+        let task = self.runtime.spawn(async move {
+            let mut pending: Vec<(String, Api)> = Vec::new();
+            for entry in entries {
+                let Ok(api) = Api::new(&entry.address, &entry.token) else { continue };
+                if pending.iter().any(|(_, known)| known.identity() == api.identity()) { continue; }
+                if let Ok(value) = api.server_read(&["auto-report"], &[], 10).await && value.get("auto_report") == Some(&Value::Null) {
+                    pending.push((entry.label.clone(), api));
+                }
+            }
+            pending
+        });
+        let runtime = self.runtime.clone();
+        cx.spawn_in(window, async move |_, cx| {
+            let pending = task.await.unwrap_or_default();
+            if pending.is_empty() { return; }
+            let machines = pending.iter().map(|(label, _)| label.as_str()).collect::<Vec<_>>().join(", ");
+            let body = tr_shared("auto_report_question_body", &[("machines", &machines)]);
+            let apis: Vec<Api> = pending.into_iter().map(|(_, api)| api).collect();
+            let answer = move |value: bool| {
+                for api in apis.clone() {
+                    runtime.spawn(async move { let _ = api.server_send(reqwest::Method::PUT, &["auto-report"], Some(json!({"auto_report": value})), 15).await; });
+                }
+            };
+            let _ = cx.update(|window, cx| window.open_dialog(cx, move |dialog, _, _| {
+                let (yes, no) = (answer.clone(), answer.clone());
+                popup::dialog(dialog).w(px(480.)).title(tr_shared("auto_report_question_title", &[]))
+                    .child(div().flex().flex_col().gap(px(14.))
+                        .child(div().whitespace_normal().child(body.clone()))
+                        .child(div().flex().justify_end().gap(px(8.))
+                            .child(Button::new("auto-report-no").outline().label(tr_shared("auto_report_no", &[]))
+                                .on_click(move |_, window, cx| { no(false); window.close_dialog(cx); }))
+                            .child(Button::new("auto-report-yes").primary().label(tr_shared("auto_report_yes", &[]))
+                                .on_click(move |_, window, cx| { yes(true); window.close_dialog(cx); }))))
+            }));
+        }).detach();
     }
 
     pub(super) fn load_dev_mode(&mut self, cx: &mut Context<Self>) {
@@ -1279,6 +1374,8 @@ impl Hangar {
             MachinesReply::Paired(seq, result) => self.paired(seq, result, window),
             MachinesReply::WebUi(seq, result) => { self.machines.web_ui.finish(seq, web_ui_value(result)); }
             MachinesReply::WebUiSaved(seq, result) => self.machines.web_ui_saved(seq, result),
+            MachinesReply::AutoReport(seq, result) => { self.machines.auto_report.finish(seq, auto_report_value(result)); }
+            MachinesReply::AutoReportSaved(seq, result) => self.machines.auto_report_saved(seq, result),
         }
         cx.notify();
     }
@@ -2068,6 +2165,30 @@ impl Hangar {
                 .when_some(m.web_ui_error.clone(), |el, error| el.child(div().px_4().pb_4().child(alert("machines-web-ui-error", error))))
         });
 
+        // Convidado não escolhe; servidor sem a rota não oferece. `Some(None)` = ainda não respondido.
+        let auto_report = (!self.active_invite() && !matches!(m.auto_report.value, Some(Ok(None)))).then(|| {
+            let answer = m.auto_report.ok().copied().flatten();
+            let read_error = m.auto_report.value.as_ref().and_then(|v| v.as_ref().err()).filter(|_| !m.auto_report.loading).cloned();
+            let status = match answer {
+                _ if m.auto_report_saving => tr("server_saving"),
+                Some(Some(on)) => format!("{} · {}", tr_shared(if on { "auto_report_on" } else { "auto_report_off" }, &[]), tr_shared("auto_report_setting_hint", &[])),
+                Some(None) => format!("{} · {}", tr_shared("auto_report_value_unanswered", &[]), tr_shared("auto_report_setting_hint", &[])),
+                None if read_error.is_none() => tr("server_loading"),
+                None => tr_shared("auto_report_setting_hint", &[]),
+            };
+            let toggle = Switch::new("machines-auto-report").checked(answer.flatten().unwrap_or(false)).accessibility_label(tr("auto_report_title"))
+                .disabled(answer.is_none() || m.auto_report.loading || m.auto_report_saving)
+                .on_click(cx.listener(|this, on: &bool, _, cx| this.save_auto_report(*on, cx)));
+            let alert = |id: &'static str, text: String| div().id(id).role(Role::Alert).flex_1().text_size(px(12.5)).text_color(theme::danger())
+                .whitespace_normal().child(text);
+            settings_box().child(self.row_with(IconName::FileText, "auto_report_title", div().whitespace_normal().child(status), answer.is_some(), toggle.into_any_element()))
+                .when_some(read_error, |el, error| el.child(div().flex().items_center().gap(px(10.)).px_4().pb_4()
+                    .child(alert("machines-auto-report-load-error", error))
+                    .child(Button::new("machines-auto-report-retry").outline().small().label(tr("server_retry"))
+                        .on_click(cx.listener(|this, _, _, cx| this.load_auto_report(cx))))))
+                .when_some(m.auto_report_error.clone(), |el, error| el.child(div().px_4().pb_4().child(alert("machines-auto-report-error", error))))
+        });
+
         let dev_mode = self.render_dev_mode(cx);
 
         let this = cx.entity().downgrade();
@@ -2123,6 +2244,7 @@ impl Hangar {
             .child(settings_box().child(section_head(IconName::RotateCw, tr("machines_service"), None, None, px(16.)))
                 .child(div().px_4().pb_4().child(service)))
             .children(web_ui)
+            .children(auto_report)
             .children(dev_mode)
             .child(advanced)
             .child(remove)

@@ -211,6 +211,25 @@ fn updates_keep_the_last_ten_ends() {
     assert!(updates[0].contains("0.1.0.8302") && updates[9].contains("0.1.0.8311"), "{updates:?}");
 }
 
+#[test]
+fn failed_update_carries_the_startup_output_of_its_round() {
+    let dir = tempfile::tempdir().unwrap();
+    let text = concat!(
+        "2026-10-30T11:00:00Z  INFO update: saída line=ERROR de outra rodada\n",
+        "2026-10-30T11:01:00Z  INFO update: fim outcome=Updated { version: \"0.1.0.8699\" }\n",
+        "2026-10-30T11:30:00Z  INFO update: saída line=Traceback (most recent call last):\n",
+        "2026-10-30T11:30:00Z  INFO update: saída line=ModuleNotFoundError: No module named 'x' em /home/fulano/y\n",
+        "2026-10-30T11:30:01Z  WARN update: voltando para a versão anterior: o servidor não voltou\n",
+        "2026-10-30T11:31:00Z  INFO update: fim outcome=Failed { voltou: true, no_ar: true, erro: \"o servidor não voltou\" }\n",
+    );
+    write(&dir.path().join("privado/atualizacao-rust.log"), text);
+    let updates = collect::read_updates(dir.path(), &scrubber());
+    assert_eq!(updates.len(), 2);
+    assert!(!updates[0].contains('|'), "{updates:?}");
+    let failed: Vec<&str> = updates[1].lines().collect();
+    assert_eq!(&failed[1..], ["  | Traceback (most recent call last):", "  | ModuleNotFoundError: No module named 'x' em …/y"]);
+}
+
 // ---------- diário inteiro ----------
 
 fn gunzip(bytes: &[u8]) -> String {
