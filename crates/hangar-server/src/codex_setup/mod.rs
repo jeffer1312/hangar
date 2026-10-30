@@ -13,6 +13,7 @@ mod instructions_projects;
 mod instructions_toml;
 pub mod normalize;
 pub mod plugins;
+pub mod plugin_selection;
 pub mod trust;
 
 pub fn sync_enabled(config: &crate::config_sync::runtime::RuntimeConfig) -> bool {

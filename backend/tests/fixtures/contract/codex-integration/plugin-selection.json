@@ -1,0 +1,1033 @@
+{
+  "source_commit": "8a3ce81c1",
+  "command": "cd backend && uv run python tests/fixtures/contract/codex-integration/generate_plugin_selection.py",
+  "cases": [
+    {
+      "operation": "_plugins_desejados",
+      "args": [
+        {}
+      ],
+      "kwargs": {},
+      "result": {
+        "ok": []
+      }
+    },
+    {
+      "operation": "_plugins_desejados",
+      "args": [
+        {
+          "enabledPlugins": null
+        }
+      ],
+      "kwargs": {},
+      "result": {
+        "error": "enabledPlugins inv\u00e1lido; instala\u00e7\u00f5es existentes preservadas",
+        "class": "ValueError"
+      }
+    },
+    {
+      "operation": "_plugins_desejados",
+      "args": [
+        {
+          "enabledPlugins": []
+        }
+      ],
+      "kwargs": {},
+      "result": {
+        "error": "enabledPlugins inv\u00e1lido; instala\u00e7\u00f5es existentes preservadas",
+        "class": "ValueError"
+      }
+    },
+    {
+      "operation": "_plugins_desejados",
+      "args": [
+        {
+          "enabledPlugins": {}
+        }
+      ],
+      "kwargs": {},
+      "result": {
+        "ok": []
+      }
+    },
+    {
+      "operation": "_plugins_desejados",
+      "args": [
+        {
+          "enabledPlugins": {
+            "a@m": true,
+            "b@m": false
+          }
+        }
+      ],
+      "kwargs": {},
+      "result": {
+        "ok": [
+          "a@m"
+        ]
+      }
+    },
+    {
+      "operation": "_plugins_desejados",
+      "args": [
+        {
+          "enabledPlugins": {
+            "a@m": 1
+          }
+        }
+      ],
+      "kwargs": {},
+      "result": {
+        "error": "enabledPlugins inv\u00e1lido; instala\u00e7\u00f5es existentes preservadas",
+        "class": "ValueError"
+      }
+    },
+    {
+      "operation": "_plugins_desejados",
+      "args": [
+        {
+          "enabledPlugins": {
+            "a@m": "true"
+          }
+        }
+      ],
+      "kwargs": {},
+      "result": {
+        "error": "enabledPlugins inv\u00e1lido; instala\u00e7\u00f5es existentes preservadas",
+        "class": "ValueError"
+      }
+    },
+    {
+      "operation": "_plugins_desejados",
+      "args": [
+        {
+          "enabledPlugins": {
+            "sem-mercado": true
+          }
+        }
+      ],
+      "kwargs": {},
+      "result": {
+        "error": "enabledPlugins inv\u00e1lido; instala\u00e7\u00f5es existentes preservadas",
+        "class": "ValueError"
+      }
+    },
+    {
+      "operation": "_plugins_desejados",
+      "args": [
+        {
+          "enabledPlugins": {
+            "a\u00e7\u00e3o@m": true
+          }
+        }
+      ],
+      "kwargs": {},
+      "result": {
+        "error": "enabledPlugins inv\u00e1lido; instala\u00e7\u00f5es existentes preservadas",
+        "class": "ValueError"
+      }
+    },
+    {
+      "operation": "_plugins_desejados",
+      "args": [
+        {
+          "enabledPlugins": {
+            "a@m\n": true
+          }
+        }
+      ],
+      "kwargs": {},
+      "result": {
+        "error": "enabledPlugins inv\u00e1lido; instala\u00e7\u00f5es existentes preservadas",
+        "class": "ValueError"
+      }
+    },
+    {
+      "operation": "_plugins_desejados",
+      "args": [
+        {
+          "enabledPlugins": {
+            "a-b.c_d@m-n.o_p": true
+          }
+        }
+      ],
+      "kwargs": {},
+      "result": {
+        "ok": [
+          "a-b.c_d@m-n.o_p"
+        ]
+      }
+    },
+    {
+      "operation": "_plugins_desejados",
+      "args": [
+        {
+          "enabledPlugins": {
+            "a@@m": true
+          }
+        }
+      ],
+      "kwargs": {},
+      "result": {
+        "error": "enabledPlugins inv\u00e1lido; instala\u00e7\u00f5es existentes preservadas",
+        "class": "ValueError"
+      }
+    },
+    {
+      "operation": "_origem_marketplace",
+      "args": [
+        {
+          "source": {}
+        }
+      ],
+      "kwargs": {
+        "claude": true
+      },
+      "result": {
+        "ok": null
+      }
+    },
+    {
+      "operation": "_origem_marketplace",
+      "args": [
+        {
+          "source": {
+            "source": "github",
+            "repo": "Org/Repo"
+          }
+        }
+      ],
+      "kwargs": {
+        "claude": true
+      },
+      "result": {
+        "ok": [
+          "git",
+          "github.com/Org/Repo"
+        ]
+      }
+    },
+    {
+      "operation": "_origem_marketplace",
+      "args": [
+        {
+          "source": {
+            "source": "github",
+            "repo": null
+          }
+        }
+      ],
+      "kwargs": {
+        "claude": true
+      },
+      "result": {
+        "error": "can only concatenate str (not \"NoneType\") to str",
+        "class": "TypeError"
+      }
+    },
+    {
+      "operation": "_origem_marketplace",
+      "args": [
+        {
+          "source": {
+            "source": "github"
+          }
+        }
+      ],
+      "kwargs": {
+        "claude": true
+      },
+      "result": {
+        "ok": [
+          "git",
+          "github.com/"
+        ]
+      }
+    },
+    {
+      "operation": "_origem_marketplace",
+      "args": [
+        {
+          "source": {
+            "source": "directory",
+            "path": "./plugins/../market"
+          }
+        }
+      ],
+      "kwargs": {
+        "claude": true
+      },
+      "result": {
+        "ok": [
+          "local",
+          "$ROOT/market"
+        ]
+      }
+    },
+    {
+      "operation": "_origem_marketplace",
+      "args": [
+        {
+          "source": {
+            "source": "git",
+            "url": "git@EXAMPLE.org:Org/Repo.git"
+          }
+        }
+      ],
+      "kwargs": {
+        "claude": true
+      },
+      "result": {
+        "ok": [
+          "git",
+          "example.org/Org/Repo"
+        ]
+      }
+    },
+    {
+      "operation": "_origem_marketplace",
+      "args": [
+        {
+          "source": {
+            "source": "git",
+            "url": "https://user:secret@example.org/Org/Repo.git/"
+          }
+        }
+      ],
+      "kwargs": {
+        "claude": true
+      },
+      "result": {
+        "ok": [
+          "git",
+          "example.org/Org/Repo"
+        ]
+      }
+    },
+    {
+      "operation": "_origem_marketplace",
+      "args": [
+        {
+          "source": {
+            "source": "git",
+            "url": "ssh://git@EXAMPLE.org/Org/Repo.git"
+          }
+        }
+      ],
+      "kwargs": {
+        "claude": true
+      },
+      "result": {
+        "ok": [
+          "git",
+          "example.org/Org/Repo"
+        ]
+      }
+    },
+    {
+      "operation": "_origem_marketplace",
+      "args": [
+        {
+          "source": {
+            "source": "git",
+            "url": "/relative"
+          }
+        }
+      ],
+      "kwargs": {
+        "claude": true
+      },
+      "result": {
+        "ok": null
+      }
+    },
+    {
+      "operation": "_origem_marketplace",
+      "args": [
+        {
+          "source": {
+            "source": "git",
+            "url": "http://["
+          }
+        }
+      ],
+      "kwargs": {
+        "claude": true
+      },
+      "result": {
+        "error": "Invalid IPv6 URL",
+        "class": "ValueError"
+      }
+    },
+    {
+      "operation": "_origem_marketplace",
+      "args": [
+        {
+          "source": {
+            "source": "git",
+            "url": 3
+          }
+        }
+      ],
+      "kwargs": {
+        "claude": true
+      },
+      "result": {
+        "ok": null
+      }
+    },
+    {
+      "operation": "_origem_marketplace",
+      "args": [
+        {
+          "source": {
+            "source": "other",
+            "url": "https://example.org/a"
+          }
+        }
+      ],
+      "kwargs": {
+        "claude": true
+      },
+      "result": {
+        "ok": null
+      }
+    },
+    {
+      "operation": "_origem_marketplace",
+      "args": [
+        {
+          "source": null
+        }
+      ],
+      "kwargs": {
+        "claude": true
+      },
+      "result": {
+        "ok": null
+      }
+    },
+    {
+      "operation": "_origem_marketplace",
+      "args": [
+        {
+          "source": []
+        }
+      ],
+      "kwargs": {
+        "claude": true
+      },
+      "result": {
+        "ok": null
+      }
+    },
+    {
+      "operation": "_origem_marketplace",
+      "args": [
+        {
+          "source": "invalid"
+        }
+      ],
+      "kwargs": {
+        "claude": true
+      },
+      "result": {
+        "ok": null
+      }
+    },
+    {
+      "operation": "_origem_marketplace",
+      "args": [
+        {}
+      ],
+      "kwargs": {},
+      "result": {
+        "ok": null
+      }
+    },
+    {
+      "operation": "_origem_marketplace",
+      "args": [
+        {
+          "source_type": "local",
+          "source": "./market"
+        }
+      ],
+      "kwargs": {},
+      "result": {
+        "ok": [
+          "local",
+          "$ROOT/market"
+        ]
+      }
+    },
+    {
+      "operation": "_origem_marketplace",
+      "args": [
+        {
+          "source_type": "git",
+          "source": "https://example.org/Org/Repo.git"
+        }
+      ],
+      "kwargs": {},
+      "result": {
+        "ok": [
+          "git",
+          "example.org/Org/Repo"
+        ]
+      }
+    },
+    {
+      "operation": "_origem_marketplace",
+      "args": [
+        {
+          "source_type": "github",
+          "repo": "Org/Repo"
+        }
+      ],
+      "kwargs": {},
+      "result": {
+        "ok": [
+          "git",
+          "github.com/Org/Repo"
+        ]
+      }
+    },
+    {
+      "operation": "_origem_marketplace",
+      "args": [
+        {
+          "source_type": "directory",
+          "source": "missing"
+        }
+      ],
+      "kwargs": {},
+      "result": {
+        "ok": [
+          "local",
+          "$ROOT/missing"
+        ]
+      }
+    },
+    {
+      "operation": "_origem_marketplace",
+      "args": [
+        {
+          "source_type": "git",
+          "source": ""
+        }
+      ],
+      "kwargs": {},
+      "result": {
+        "ok": null
+      }
+    },
+    {
+      "operation": "_origem_marketplace",
+      "args": [
+        {
+          "source_type": "git",
+          "source": "https://user:password@EXAMPLE.org:invalid/./../Repo%20x.git?query#fragment"
+        }
+      ],
+      "kwargs": {},
+      "result": {
+        "ok": [
+          "git",
+          "example.org/./../Repo%20x"
+        ]
+      }
+    },
+    {
+      "operation": "_origem_marketplace",
+      "args": [
+        {
+          "source_type": "git",
+          "source": "https://example.org/A//B.git/"
+        }
+      ],
+      "kwargs": {},
+      "result": {
+        "ok": [
+          "git",
+          "example.org/A//B"
+        ]
+      }
+    },
+    {
+      "operation": "_origem_marketplace",
+      "args": [
+        {
+          "source_type": "git",
+          "source": "//EXAMPLE.org/Repo.git"
+        }
+      ],
+      "kwargs": {},
+      "result": {
+        "ok": [
+          "git",
+          "example.org/Repo"
+        ]
+      }
+    },
+    {
+      "operation": "_origem_marketplace",
+      "args": [
+        {
+          "source_type": "git",
+          "source": " https://EXAMPLE.org/Repo.git"
+        }
+      ],
+      "kwargs": {},
+      "result": {
+        "ok": [
+          "git",
+          "example.org/Repo"
+        ]
+      }
+    },
+    {
+      "operation": "_origem_marketplace",
+      "args": [
+        {
+          "source_type": "git",
+          "source": "https://EXAM\tPLE.org/Repo.git"
+        }
+      ],
+      "kwargs": {},
+      "result": {
+        "ok": [
+          "git",
+          "example.org/Repo"
+        ]
+      }
+    },
+    {
+      "operation": "_origem_marketplace",
+      "args": [
+        {
+          "source_type": "git",
+          "source": "https://example.org/Repo.GIT"
+        }
+      ],
+      "kwargs": {},
+      "result": {
+        "ok": [
+          "git",
+          "example.org/Repo.GIT"
+        ]
+      }
+    },
+    {
+      "operation": "_origem_marketplace",
+      "args": [
+        {
+          "source_type": "git",
+          "source": "https://example.org/Repo.git "
+        }
+      ],
+      "kwargs": {},
+      "result": {
+        "ok": [
+          "git",
+          "example.org/Repo.git "
+        ]
+      }
+    },
+    {
+      "operation": "_origem_marketplace",
+      "args": [
+        {
+          "source_type": "git",
+          "source": "http://[::1]/repo"
+        }
+      ],
+      "kwargs": {},
+      "result": {
+        "ok": [
+          "git",
+          "::1/repo"
+        ]
+      }
+    },
+    {
+      "operation": "_origem_marketplace",
+      "args": [
+        {
+          "source_type": "git",
+          "source": "http://[fe80::1%ZoNe]/repo"
+        }
+      ],
+      "kwargs": {},
+      "result": {
+        "ok": [
+          "git",
+          "fe80::1%zone/repo"
+        ]
+      }
+    },
+    {
+      "operation": "_origem_marketplace",
+      "args": [
+        {
+          "source_type": "git",
+          "source": "http://[fe80::1%]/repo"
+        }
+      ],
+      "kwargs": {},
+      "result": {
+        "error": "'fe80::1%' does not appear to be an IPv4 or IPv6 address",
+        "class": "ValueError"
+      }
+    },
+    {
+      "operation": "_origem_marketplace",
+      "args": [
+        {
+          "source_type": "git",
+          "source": "http://[fe80::1%a%b]/repo"
+        }
+      ],
+      "kwargs": {},
+      "result": {
+        "error": "'fe80::1%a%b' does not appear to be an IPv4 or IPv6 address",
+        "class": "ValueError"
+      }
+    },
+    {
+      "operation": "_origem_marketplace",
+      "args": [
+        {
+          "source_type": "git",
+          "source": "http://[127.0.0.1]/repo"
+        }
+      ],
+      "kwargs": {},
+      "result": {
+        "error": "An IPv4 address cannot be in brackets",
+        "class": "ValueError"
+      }
+    },
+    {
+      "operation": "_origem_marketplace",
+      "args": [
+        {
+          "source_type": "git",
+          "source": "http://[invalid]/repo"
+        }
+      ],
+      "kwargs": {},
+      "result": {
+        "error": "'invalid' does not appear to be an IPv4 or IPv6 address",
+        "class": "ValueError"
+      }
+    },
+    {
+      "operation": "_origem_marketplace",
+      "args": [
+        {
+          "source_type": "git",
+          "source": "http://[v1.future]/repo"
+        }
+      ],
+      "kwargs": {},
+      "result": {
+        "ok": [
+          "git",
+          "v1.future/repo"
+        ]
+      }
+    },
+    {
+      "operation": "_origem_marketplace",
+      "args": [
+        {
+          "source_type": "git",
+          "source": "http://[v.future]/repo"
+        }
+      ],
+      "kwargs": {},
+      "result": {
+        "error": "IPvFuture address is invalid",
+        "class": "ValueError"
+      }
+    },
+    {
+      "operation": "_origem_marketplace",
+      "args": [
+        {
+          "source_type": "git",
+          "source": "http://prefix[::1]/repo"
+        }
+      ],
+      "kwargs": {},
+      "result": {
+        "error": "Invalid IPv6 URL",
+        "class": "ValueError"
+      }
+    },
+    {
+      "operation": "_origem_marketplace",
+      "args": [
+        {
+          "source_type": "git",
+          "source": "http://[::1]suffix/repo"
+        }
+      ],
+      "kwargs": {},
+      "result": {
+        "error": "Invalid IPv6 URL",
+        "class": "ValueError"
+      }
+    },
+    {
+      "operation": "_origem_marketplace",
+      "args": [
+        {
+          "source_type": "git",
+          "source": "http://[user]@example.org/repo"
+        }
+      ],
+      "kwargs": {},
+      "result": {
+        "error": "'example.org' does not appear to be an IPv4 or IPv6 address",
+        "class": "ValueError"
+      }
+    },
+    {
+      "operation": "_origem_marketplace",
+      "args": [
+        {
+          "source_type": "git",
+          "source": "http://exa\u2100mple.org/repo"
+        }
+      ],
+      "kwargs": {},
+      "result": {
+        "error": "netloc 'exa\u2100mple.org' contains invalid characters under NFKC normalization",
+        "class": "ValueError"
+      }
+    },
+    {
+      "operation": "_origem_marketplace",
+      "args": [
+        {
+          "source_type": "git",
+          "source": "git@EXAMPLE.org:Org/Repo.git"
+        }
+      ],
+      "kwargs": {},
+      "result": {
+        "ok": [
+          "git",
+          "example.org/Org/Repo"
+        ]
+      }
+    },
+    {
+      "operation": "_origem_marketplace",
+      "args": [
+        {
+          "source_type": "git",
+          "source": "git@[invalid]:Repo.git"
+        }
+      ],
+      "kwargs": {},
+      "result": {
+        "ok": [
+          "git",
+          "[invalid]/Repo"
+        ]
+      }
+    },
+    {
+      "operation": "_identidade_plugin",
+      "args": [
+        "a@m",
+        [
+          "git",
+          "example.org/Org/Repo"
+        ],
+        {},
+        {}
+      ],
+      "kwargs": {},
+      "result": {
+        "ok": "a@m"
+      }
+    },
+    {
+      "operation": "_identidade_plugin",
+      "args": [
+        "a@m",
+        [
+          "git",
+          "example.org/Org/Repo"
+        ],
+        {
+          "m": {
+            "source_type": "git",
+            "source": "https://example.org/Org/Repo.git"
+          }
+        },
+        {
+          "a@m": {}
+        }
+      ],
+      "kwargs": {},
+      "result": {
+        "ok": "a@m"
+      }
+    },
+    {
+      "operation": "_identidade_plugin",
+      "args": [
+        "a@m",
+        [
+          "git",
+          "example.org/Org/Repo"
+        ],
+        {
+          "m": {
+            "source_type": "git",
+            "source": "https://example.org/Other/Repo.git"
+          }
+        },
+        {
+          "a@m": {}
+        }
+      ],
+      "kwargs": {},
+      "result": {
+        "error": "Marketplace hom\u00f4nimo de outra origem",
+        "class": "ValueError"
+      }
+    },
+    {
+      "operation": "_identidade_plugin",
+      "args": [
+        "a@m",
+        [
+          "git",
+          "example.org/Org/Repo"
+        ],
+        {
+          "alias": {
+            "source_type": "git",
+            "source": "https://example.org/Org/Repo.git"
+          }
+        },
+        {
+          "a@alias": {}
+        }
+      ],
+      "kwargs": {},
+      "result": {
+        "ok": "a@alias"
+      }
+    },
+    {
+      "operation": "_identidade_plugin",
+      "args": [
+        "a@m",
+        [
+          "git",
+          "example.org/Org/Repo"
+        ],
+        {
+          "alias": {
+            "source_type": "git",
+            "source": "https://example.org/Org/Repo.git"
+          },
+          "second": {
+            "source_type": "git",
+            "source": "https://example.org/Org/Repo.git"
+          }
+        },
+        {
+          "a@alias": {},
+          "a@second": {}
+        }
+      ],
+      "kwargs": {},
+      "result": {
+        "error": "Mais de uma identidade nativa para o plugin",
+        "class": "ValueError"
+      }
+    },
+    {
+      "operation": "_identidade_plugin",
+      "args": [
+        "a@m",
+        [
+          "git",
+          "example.org/Org/Repo"
+        ],
+        {
+          "alias": {
+            "source_type": "git",
+            "source": "https://example.org/Other/Repo.git"
+          }
+        },
+        {
+          "a@alias": {}
+        }
+      ],
+      "kwargs": {},
+      "result": {
+        "ok": "a@m"
+      }
+    },
+    {
+      "operation": "_identidade_plugin",
+      "args": [
+        "a@m",
+        [
+          "git",
+          "example.org/Org/Repo"
+        ],
+        {
+          "m": {
+            "source_type": "git",
+            "source": "https://example.org/Org/Repo.git"
+          },
+          "alias": {
+            "source_type": "git",
+            "source": "https://example.org/Org/Repo.git"
+          }
+        },
+        {
+          "a@m": {},
+          "a@alias": {}
+        }
+      ],
+      "kwargs": {},
+      "result": {
+        "ok": "a@m"
+      }
+    },
+    {
+      "operation": "_identidade_plugin",
+      "args": [
+        "a@m",
+        [
+          "git",
+          "example.org/Org/Repo"
+        ],
+        {
+          "alias": {
+            "source_type": "git",
+            "source": "https://example.org/Org/Repo.git"
+          }
+        },
+        {
+          "b@alias": {}
+        }
+      ],
+      "kwargs": {},
+      "result": {
+        "ok": "a@m"
+      }
+    }
+  ]
+}
