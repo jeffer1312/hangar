@@ -96,7 +96,7 @@ fn copy_file(source: &Path, target: &Path) -> io::Result<()> {
     fs::copy(source, target)?;
     copy_stat(source, target)
 }
-fn copy_tree(source: &Path, target: &Path) -> io::Result<()> {
+pub(super) fn copy_tree(source: &Path, target: &Path) -> io::Result<()> {
     enum Work {
         Enter(PathBuf, PathBuf, Vec<PathBuf>),
         Finish(PathBuf, PathBuf),

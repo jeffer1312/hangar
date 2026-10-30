@@ -62,3 +62,7 @@ pub mod stage_sources;
 pub mod plugin_edits;
 
 pub mod plugin_native;
+
+pub mod stage_history;
+
+pub mod stage_flow;
