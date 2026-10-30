@@ -1,15 +1,14 @@
 # Contrato de convidados e cofre
 
-`capture.py` executa os roteadores Python com `TestClient`, sem lifespan e com diretórios
-transitórios. Não abre o backend nem acessa sessões reais. `http.json` registra o commit de
+As capturas foram obtidas executando os roteadores Python com `TestClient`, sem lifespan e com
+diretórios transitórios, sem abrir o backend nem acessar sessões reais. `http.json` registra o commit de
 origem, o comando gerador, as entradas, as respostas, os cookies e os arquivos depois de cada
 operação. A única substituição de caminho é a raiz temporária por `⟦ROOT⟧`. Relógio e entropia
 são fixados no Python para tornar verificáveis as assinaturas e o derivador PBKDF2.
 
-```sh
-cd backend
-uv run python tests/fixtures/contract/guests/capture.py
-```
+Os geradores usados durante a migração foram removidos. Os comandos registrados nos JSON são
+metadados históricos da captura; não são comandos disponíveis na árvore atual. Os testes Rust
+consomem diretamente os dados congelados.
 
 A captura contém 36 operações HTTP encadeadas e 168 combinações de método/rota da política.
 A matriz usa uma função de visibilidade isolada: ela prova o recorte de rotas, não a descoberta
@@ -31,7 +30,7 @@ captura; o resultado esperado não é produzido pelo Rust.
 Esta captura inicial não fecha o inventário. Concorrência, falhas de disco, cache, vida de sessão,
 SSE, WebSocket, raiz de arquivos, instalação e Windows exigem provas próprias.
 
-As capturas adicionais executam o Python isolado pelo comando registrado em cada JSON:
+As capturas adicionais foram obtidas com o Python isolado pelo comando registrado em cada JSON:
 
 | Arquivo | Entradas e comparação |
 | --- | --- |
@@ -89,5 +88,5 @@ não o consome. O 413 do middleware isolado para fluxo sem tamanho não comprova
 rota pública.
 
 As capturas por AST executam os corpos originais das funções nomeadas, com dependências e
-entrega isoladas. Depois da remoção do Python, a reprodução exige o commit de origem registrado
-no JSON; as capturas congeladas continuam sendo a referência dos testes Rust.
+entrega isoladas. A reprodução histórica exige recuperar tanto a implementação de origem quanto
+o gerador no histórico Git; as capturas congeladas continuam sendo a referência dos testes Rust.
