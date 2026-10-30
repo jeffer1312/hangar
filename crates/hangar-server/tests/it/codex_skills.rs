@@ -86,3 +86,14 @@ proptest::proptest!{
   proptest::prop_assert_eq!(std::fs::read(external).unwrap(),b"personal");
  }
 }
+#[test]
+fn codex_service_review_skill_aliases_normalize_newlines_without_rewriting_files(){
+ let corpus:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/codex-integration/skill-newlines.json")).unwrap();let mut failures=Vec::new();
+ for case in corpus["cases"].as_array().unwrap(){let temp=tempfile::tempdir().unwrap();let home=temp.path().join("home");let account=home.join(".codex");let source=home.join(".claude/plugins/cache/market/plugin/1/skills/source-name");let native=account.join("plugins/plugin/skills/native-name");std::fs::create_dir_all(&source).unwrap();std::fs::create_dir_all(&native).unwrap();std::fs::write(source.join("SKILL.md"),unhex(case["source_hex"].as_str().unwrap())).unwrap();std::fs::write(native.join("SKILL.md"),unhex(case["native_hex"].as_str().unwrap())).unwrap();
+ let env=AccountEnvironment::from_pairs([("HOME",home.to_string_lossy().into_owned()),("USERPROFILE",home.to_string_lossy().into_owned())]);
+ let result=skills::reconcile(&env,&account,&temp.path().join("repo"),&json!({"plugin@market":{"path":account.join("plugins/plugin")}}),&json!({}),&home.join("backups"),false,&mut skills::Disk).unwrap();
+ let actual=replace(&json!({"manifest":result["manifest"],"warnings":result["warnings"],"bridge_exists":account.join("skills/source-name").exists(),"source_hex":hex(&std::fs::read(source.join("SKILL.md")).unwrap()),"native_hex":hex(&std::fs::read(native.join("SKILL.md")).unwrap())}),&temp.path().to_string_lossy(),"$ROOT");
+ if actual!=case["result"]{failures.push(json!({"actual":actual,"expected":case["result"]}));}
+ }
+ assert!(failures.is_empty(),"{failures:#?}");
+}

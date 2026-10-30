@@ -3,9 +3,9 @@ use crate::{accounts::{AccountService,AccountKey,Provider,GuardMode,LockError,ca
 use super::{repair::{self,Actions,NativeActions},files,status};
 use serde_json::{Value,json};
 use std::{path::PathBuf,sync::{Arc,Mutex},time::{Duration,Instant,SystemTime,UNIX_EPOCH}};
-use tokio::{sync::oneshot,task::JoinHandle};
+use tokio::{sync::{oneshot,watch},task::JoinHandle};
 #[derive(Default)]
-struct Mutations {closed:bool,tasks:Vec<JoinHandle<()>>}
+struct Mutations {closed:bool,tasks:Vec<JoinHandle<()>>,completion:Option<watch::Receiver<Option<Result<(),String>>>>}
 pub struct Service {
     pub(super) accounts:AccountService,
     pub(super) config:RuntimeConfig,
@@ -66,9 +66,27 @@ impl Service {
         Ok(pending)
     }
     pub async fn shutdown(&self)->Result<(),String>{
-        let tasks={let mut mutations=self.mutations.lock().unwrap_or_else(|e|e.into_inner());mutations.closed=true;std::mem::take(&mut mutations.tasks)};
-        let mut interrupted=false;
-        for task in tasks{interrupted|=task.await.is_err();}
-        if interrupted{Err("trabalho de reparo Codex interrompido".into())}else{Ok(())}
+        let mut completion={
+            let mut mutations=self.mutations.lock().unwrap_or_else(|e|e.into_inner());
+            mutations.closed=true;
+            if let Some(completion)=&mutations.completion { completion.clone() }
+            else {
+                let tasks=std::mem::take(&mut mutations.tasks);
+                let(sender,receiver)=watch::channel::<Option<Result<(),String>>>(None);
+                // A conclusão pertence ao serviço; cancelar um aguardante não solta os trabalhadores.
+                tokio::spawn(async move{
+                    let mut interrupted=false;
+                    for task in tasks{interrupted|=task.await.is_err();}
+                    sender.send_replace(Some(if interrupted{Err("trabalho de reparo Codex interrompido".into())}else{Ok(())}));
+                });
+                mutations.completion=Some(receiver.clone());
+                receiver
+            }
+        };
+        loop {
+            let result=completion.borrow().clone();
+            if let Some(result)=result{return result;}
+            completion.changed().await.map_err(|_|"encerramento do serviço Codex interrompido".to_owned())?;
+        }
     }
 }

@@ -109,3 +109,16 @@ async fn codex_service_native_hooks_failures_do_not_publish_original_false_readi
  }
  assert!(failures.is_empty(),"{failures:#?}");
 }
+#[tokio::test]
+async fn codex_service_review_shutdown_survives_concurrent_waiters_and_cancellation(){
+ let temp=tempfile::tempdir().unwrap();let(accounts,service)=service(temp.path());let account=accounts.resolve(Provider::Codex,"default").unwrap();std::fs::create_dir_all(&account.home).unwrap();ready(&accounts,&account,true);
+ let key=AccountKey::new(Provider::Codex,&account.home).unwrap();let entered=Arc::new(Notify::new());let release=Arc::new(Notify::new());let worker=service.clone();let target=account.clone();let signal=entered.clone();let wait=release.clone();
+ let repair=tokio::spawn(async move{worker.repair_with(target,true,ActionsFixture{outcome:json!(false),entered:Some(signal),release:Some(wait),install_failed:false,native_install:None}).await});
+ tokio::time::timeout(Duration::from_secs(2),entered.notified()).await.unwrap();
+ let mut first=Box::pin(service.shutdown());assert!(tokio::time::timeout(Duration::from_millis(30),&mut first).await.is_err());
+ let concurrent_waited=tokio::time::timeout(Duration::from_millis(30),service.shutdown()).await.is_err();drop(first);
+ let later_waited=tokio::time::timeout(Duration::from_millis(30),service.shutdown()).await.is_err();
+ let lifecycle_busy=accounts.locks.try_acquire(&key,GuardMode::Exclusive).is_err();let integration=std::fs::OpenOptions::new().read(true).write(true).open(account.home.join(".hangar-integracao.lock")).unwrap();let integration_busy=integration.try_lock().is_err();
+ release.notify_one();repair.await.unwrap().unwrap();service.shutdown().await.unwrap();
+ assert!(concurrent_waited,"segundo shutdown declarou sucesso com trabalho ativo");assert!(later_waited,"cancelar o primeiro aguardante perdeu a conclusão compartilhada");assert!(lifecycle_busy&&integration_busy);assert!(accounts.locks.try_acquire(&key,GuardMode::Exclusive).is_ok());assert!(integration.try_lock().is_ok());
+}

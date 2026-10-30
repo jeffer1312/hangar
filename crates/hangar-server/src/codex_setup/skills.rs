@@ -54,6 +54,7 @@ fn tree(root:&Path)->Result<BTreeMap<String,Vec<u8>>,files::Error>{
 }
 fn names(path:&Path)->Result<BTreeSet<String>,files::Error>{
  let bytes=fs::read(path.join("SKILL.md"))?;let text=std::str::from_utf8(&bytes).map_err(|_|invalid("arquivo SKILL.md não está em UTF-8"))?;
+ let normalized=text.replace("\r\n","\n").replace('\r',"\n");let text=normalized.as_str();
  if crate::accounts::quotas::other::py_strip(text).is_empty(){return Ok(BTreeSet::new());}
  let mut names=BTreeSet::from([path.file_name().unwrap_or_default().to_string_lossy().into_owned()]);
  if text.starts_with("---\n"){
