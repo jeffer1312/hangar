@@ -1856,20 +1856,23 @@ fn the_guest_claim_writes_guests_json_under_the_shared_lock() {
     assert_eq!(written["sessions"]["s4"], json!({"guest": "g1", "life": null}));
 }
 
-/// A ponte só aceita o id de um convidado que existe, ou nada (o dono); qualquer outra forma,
-/// inclusive o `guest_root` antigo, é recusada em vez de virar o dono.
-#[test]
-fn the_bridge_refuses_a_guest_field_that_is_not_an_id() {
-    let base = tempfile::tempdir().unwrap();
-    std::fs::write(base.path().join("guests.json"), json!({"guests": [{"id": "g1", "name": "Ana", "token_hash": "h", "root": "/casa/ana",
-        "sees_owner": false, "owner_sees": true}], "sessions": {}}).to_string()).unwrap();
-    let guest = |envelope: Value| server::bridge_guest(&envelope, base.path());
-    assert_eq!(guest(json!({"request": {}})).ok(), Some(None));
-    assert_eq!(guest(json!({"guest": null})).ok(), Some(None));
-    assert_eq!(guest(json!({"guest": "g1"})).ok().flatten().map(|g| g.root), Some(PathBuf::from("/casa/ana")));
-    assert_eq!(guest(json!({"guest": "nada"})).err().map(|e| e.status), Some(403));
-    for bad in [json!({"guest": 1}), json!({"guest": {"id": "g1"}}), json!({"guest": ""}), json!({"guest_root": "/casa/ana"})] {
-        assert_eq!(guest(bad.clone()).err().map(|e| e.status), Some(400), "{bad}");
+/// O transporte do dono não converte a identidade de uma ponte de login retirada.
+#[tokio::test]
+async fn the_owner_bridge_refuses_every_guest_identity_without_launching() {
+    use axum::{extract::{State,ConnectInfo},body::{Body,to_bytes},http::Request};
+    let address="127.0.0.1:0".parse().unwrap();
+    let state=std::sync::Arc::new(crate::routes::AppState::new(crate::config::Config {
+        listen:address,upstream:address,internal_secret:"fixture".into(),auth_token:"owner".into(),log_path:None,
+        trusted:crate::auth::TrustedHosts::parse("127.0.0.1"),
+    }));
+    for envelope in [json!({"guest":"g1"}),json!({"guest":""}),json!({"guest":1}),json!({"guest":false}),json!({"guest":{"id":"g1"}}),json!({"guest_root":"/fixture"})] {
+        let request=Request::post("/__hangar_server/claude/s/open").header("x-hangar-internal","fixture").body(Body::from(envelope.to_string())).unwrap();
+        let response=server::bridge(State(state.clone()),ConnectInfo(address),request).await;
+        assert_eq!(response.status(),400,"{envelope}");
+        let bytes=to_bytes(response.into_body(),4096).await.unwrap();
+        let body:Value=serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["detail"]["code"],"erro_corpo_invalido");
+        assert_eq!(body["detail"]["msg"],"a ponte de abertura não aceita identidade de convidado");
     }
 }
 
