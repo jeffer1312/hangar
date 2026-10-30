@@ -315,10 +315,14 @@ async def _worker(binary):
                 for _ in range(7):
                     assert (await request(root, browser, ip=ip)).status_code == 401
                 assert await ws_status(direct, "/api/auth-ws/browser", OWNER, ip) == 1000
+                assert len(hits(ip)) == 7, "browser Python alterou falhas anteriores"
                 assert await ws_status(root, "/api/voice", OWNER, ip) == 101
+                assert len(hits(ip)) == 7, "voz Rust alterou falhas anteriores"
                 assert await ws_status(direct, "/api/auth-ws/terminal", OWNER, ip) == 1000
+                assert len(hits(ip)) == 7, "terminal Python alterou falhas anteriores"
                 before_upgrade = upgrade_calls
                 assert await ws_status(root, "/api/auth-ws/browser", OWNER, ip) == 1000
+                assert len(hits(ip)) == 7, "WebSocket encaminhado alterou falhas anteriores"
                 assert upgrade_calls == before_upgrade + 1
                 assert len(hits(ip)) == 7
                 assert (await request(direct, "/api/me", OWNER, ip)).status_code == 200 and not hits(ip)

@@ -190,15 +190,27 @@ pub async fn guard(
     if crate::remote_browser::url::matches(request.method(), &path) || browser_ws {
         return next.run(request).await;
     }
-    let (forward, owner) = match crate::routes::gate(&st, peer, &request).await { Ok(value)=>value, Err(error)=>return crate::auth::unavailable(error) };
-    if owner {
-        return next.run(request).await;
-    }
+    let https = if crate::share::gate::is_websocket(&request) {
+        // Classificar login não é autenticar o upgrade. O verificador do destino decide
+        // bloqueio e contagem; a sondagem HTTP zeraria falhas no acerto do WebSocket.
+        let (_, https) = st.cfg.trusted.resolve(peer.ip(), request.headers());
+        let token = crate::auth::presented_token(request.headers(), request.uri().query(), request.method(), https);
+        if st.auth.token_matches(token.as_deref()) {
+            return next.run(request).await;
+        }
+        https
+    } else {
+        let (forward, owner) = match crate::routes::gate(&st, peer, &request).await {
+            Ok(value)=>value, Err(error)=>return crate::auth::unavailable(error)
+        };
+        if owner { return next.run(request).await; }
+        forward.https
+    };
     let Some(token) = crate::auth::presented_token(
         request.headers(),
         request.uri().query(),
         request.method(),
-        forward.https,
+        https,
     ) else {
         return next.run(request).await;
     };
