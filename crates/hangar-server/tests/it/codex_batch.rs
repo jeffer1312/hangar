@@ -18,7 +18,7 @@ async fn codex_service_batch_matches_original_selection_and_proof(){
   let sessions=replace(&case["sessions"],"$ROOT",&home.to_string_lossy());let mut actions=Actions{name:name.into(),calls:vec![],sessions:sessions.as_array().unwrap().clone()};
   let result=batch::run(home,&accounts,&mut actions).await;
   let expected=case["result"].get("error").map(|_|Err(case["result"]["message"].as_str().unwrap().to_owned())).unwrap_or(Ok(()));
-  let actual=json!({"calls":actions.calls,"proof":std::fs::read_to_string(home.join(".hangar/codex-prepare-once-v1.json")).ok()});let actual=replace(&actual,&home.to_string_lossy(),"$ROOT");
+  let actual=json!({"calls":actions.calls,"proof":std::fs::read_to_string(home.join(".hangar/codex-prepare-once-v1.json")).ok()});let actual=crate::contract_paths::value(&actual,home,"$ROOT");
   if result!=expected || actual["calls"]!=case["calls"] || actual["proof"]!=case["proof"]{failures.push(json!({"name":name,"result":format!("{result:?}"),"expected":format!("{expected:?}"),"actual":actual,"case":case}));}
  }
  assert!(failures.is_empty(),"{failures:#?}");

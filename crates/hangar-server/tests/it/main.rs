@@ -440,3 +440,4 @@ mod update_state_write_failure;
 mod update_parallel_assets;
 
 mod update_pipeline_errors;
+mod contract_paths;

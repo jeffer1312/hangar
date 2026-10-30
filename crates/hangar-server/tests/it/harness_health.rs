@@ -26,7 +26,7 @@ fn harness_health_configuration_matches_python() {
         for (relative, text) in case["files"].as_object().unwrap() {
             let path = home.path().join(relative);
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            std::fs::write(path, text.as_str().unwrap().replace("$ROOT", &root)).unwrap();
+            std::fs::write(path, text.as_str().unwrap().replace("$ROOT", &root.replace('\\', "/"))).unwrap();
         }
         let cli = case["cli"].as_str().unwrap();
         let result = match kind {
@@ -142,7 +142,7 @@ fn harness_health_files_match_python() {
         for (relative, text) in case["files"].as_object().unwrap() {
             let path = home.path().join(relative);
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            std::fs::write(path, text.as_str().unwrap().replace("$ROOT", &root)).unwrap();
+            std::fs::write(path, text.as_str().unwrap().replace("$ROOT", &root.replace('\\', "/"))).unwrap();
         }
         for (relative, target) in case["links"].as_object().unwrap() {
             let path = home.path().join(relative);
@@ -171,11 +171,12 @@ fn harness_health_files_match_python() {
             "_conf_psmux" => json!(
                 health::psmux_config(&env)
                     .to_string_lossy()
-                    .replace(&root, "$ROOT")
+                    .replace(&root, "$ROOT").replace('\\', "/")
             ),
             "_extensoes" => health::extensions(&env, &home.path().join("repo"), cli).unwrap(),
             _ => health::claude_hooks(&home.path().join(".claude")),
         };
+        let actual = hangar_server::config_sync::paths::map_strings(&actual, &|text| if text.contains("~/") { text.replace('\\', "/") } else { text.to_owned() });
         if actual != case["expected"]["ok"] {
             failures.push(format!(
                 "{}: {} != {}",

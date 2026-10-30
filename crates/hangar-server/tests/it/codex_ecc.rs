@@ -137,12 +137,7 @@ async fn codex_ecc_matches_original_runtime_decisions_and_effects() {
         } else {
             case["result"].clone()
         };
-        let calls: Value = serde_json::from_str(
-            &serde_json::to_string(&*runner.calls.lock().unwrap())
-                .unwrap()
-                .replace(root.to_str().unwrap(), "$ROOT"),
-        )
-        .unwrap();
+        let calls = crate::contract_paths::value(&json!(*runner.calls.lock().unwrap()), root, "$ROOT");
         let diagnostic = hex(&backups.join("ecc-runtime-npm.log"));
         if result != expected || calls != case["calls"] || diagnostic != case["diagnostic_hex"] {
             failures.push(format!(

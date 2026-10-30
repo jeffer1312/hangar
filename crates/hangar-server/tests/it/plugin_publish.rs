@@ -29,7 +29,7 @@ fn plugin_publish_preserves_files_and_independent_updates() {
             let path = entry.unwrap().path();
             if path.is_file() {
                 actual.insert(path.strip_prefix(home.path()).unwrap().to_string_lossy().replace('\\', "/"),
-                    json!(std::fs::read_to_string(path).unwrap().replace(home.path().to_str().unwrap(), "⟦HOME⟧")));
+                    json!(crate::contract_paths::text(&std::fs::read_to_string(path).unwrap(), home.path(), "⟦HOME⟧")));
             }
         }
         let mut expected = case["files"].as_object().unwrap().clone();

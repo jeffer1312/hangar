@@ -521,7 +521,7 @@ pub fn extensions(env: &AccountEnvironment, repo: &Path, cli: &str) -> Result<Va
     let mut other = Vec::new();
     let canonical = |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
     let short = |path: PathBuf| {
-        path.strip_prefix(&env.home)
+        path.strip_prefix(canonical(&env.home))
             .map(|p| format!("~/{}", p.display()))
             .unwrap_or_else(|_| path.display().to_string())
     };

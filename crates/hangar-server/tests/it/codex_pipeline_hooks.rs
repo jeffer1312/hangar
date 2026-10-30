@@ -13,10 +13,10 @@ fn codex_service_pipeline_hooks_preserves_backups_manifest_and_install_order(){
   if let Some(raw)=input["mirror_raw"].as_str(){std::fs::write(account.join(".hangar-hooks.json"),bytes(raw)).unwrap();}
   let state=State::new(status::snapshot());let mut registry=json!({"hooks":input.get("previous").cloned().unwrap_or(json!({}))});let mut events=vec![];
   let wrapper=("python-fixture".into(),root.join("repo/scripts/codex-hook-allow.py").to_string_lossy().into_owned());let context=Context{account:&account,backups:&backups,wrapper:&wrapper,windows:false};
-  let result=if input["legacy"]==true{pipeline_hooks::legacy(&context,&state,&mut|path|{events.push(json!(["install",path.to_string_lossy().replace(root.to_str().unwrap(),"ROOT")]));if input["install_error"]==true{Err(Error{kind:"OSError",message:"fixture".into()})}else{Ok(())}})}else{pipeline_hooks::sync(&context,&input["source"],&mut registry,&state)};
+  let result=if input["legacy"]==true{pipeline_hooks::legacy(&context,&state,&mut|path|{events.push(json!(["install",crate::contract_paths::text(&path.to_string_lossy(),root,"ROOT")]));if input["install_error"]==true{Err(Error{kind:"OSError",message:"fixture".into()})}else{Ok(())}})}else{pipeline_hooks::sync(&context,&input["source"],&mut registry,&state)};
   let mut actual=match result{Ok(())=>json!({"ok":true}),Err(error)=>json!({"error":error.kind,"message":error.message})};
-  let files=paths(&account).into_iter().filter(|p|p.is_file()).map(|p|(p.strip_prefix(&account).unwrap().to_string_lossy().into_owned(),json!(hex(&std::fs::read(p).unwrap())))).collect::<serde_json::Map<_,_>>();
-  let mut backup=paths(&backups).into_iter().filter(|p|p.is_file()).map(|p|hex(std::fs::read_to_string(p).unwrap().replace(root.to_str().unwrap(),"ROOT").as_bytes())).collect::<Vec<_>>();backup.sort();let snapshot=state.snapshot();
+  let files=paths(&account).into_iter().filter(|p|p.is_file()).map(|p|(p.strip_prefix(&account).unwrap().to_string_lossy().replace('\\',"/"),json!(hex(&std::fs::read(p).unwrap())))).collect::<serde_json::Map<_,_>>();
+  let mut backup=paths(&backups).into_iter().filter(|p|p.is_file()).map(|p|hex(crate::contract_paths::text(&std::fs::read_to_string(p).unwrap(),root,"ROOT").as_bytes())).collect::<Vec<_>>();backup.sort();let snapshot=state.snapshot();
   actual["events"]=json!(events);actual["files"]=json!(files);actual["backups"]=json!(backup);actual["registry"]=registry;actual["pending"]=snapshot["confianca_pendente"].clone();actual["warnings"]=snapshot["avisos"].clone();
   if actual!=case["result"]{differences.push(json!({"case":input["name"],"actual":actual,"expected":case["result"]}));}
  }

@@ -25,7 +25,7 @@ fn codex_service_artifacts_match_original_files_backups_and_races(){
   let mut storage=Races{name:name.into(),writes:0,reads:0};let result=artifacts::reconcile(&desired,&previous,&backups,&trusted,&mut storage).unwrap();
   let mut saved:Vec<_>=std::fs::read_dir(&backups).into_iter().flatten().map(|p|serde_json::from_slice::<Value>(&std::fs::read(p.unwrap().path()).unwrap()).unwrap()).collect();saved.sort_by_key(Value::to_string);
   let actual=json!({"manifest":result["manifest"],"warnings":result["warnings"],"backups":saved,"writes":storage.writes,"final_hex":std::fs::read(&path).ok().map(|v|hex(&v)),"link":std::fs::read_link(&path).ok(),"external_hex":std::fs::read(&external).ok().map(|v|hex(&v))});
-  let actual:Value=serde_json::from_str(&actual.to_string().replace(&root.to_string_lossy().replace('\\',"\\\\"),"$ROOT")).unwrap();
+  let actual:Value=crate::contract_paths::value(&actual,root,"$ROOT");
   if actual!=case["result"]{failures.push(json!({"name":name,"actual":actual,"expected":case["result"]}));}
  }
  assert!(failures.is_empty(),"{failures:#?}");

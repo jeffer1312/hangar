@@ -57,6 +57,8 @@ fn codex_service_legacy_matches_original_preserving_personal_commands() {
  for case in corpus["cases"].as_array().unwrap(){
   let temp=tempfile::tempdir().unwrap();let root=temp.path();let repo=root.join("repo");let python=root.join("python");
   let windows=case["windows"].as_bool().unwrap();
+  // O instalador Windows não produz comandos para shlex POSIX.
+  if cfg!(windows)&&!windows{continue;}
   std::fs::create_dir_all(repo.join("backend/hooks")).unwrap();
   if case["current_exists"]==true {std::fs::write(&python,[]).unwrap();}
   if case["legacy_exists"]==true {
@@ -65,7 +67,7 @@ fn codex_service_legacy_matches_original_preserving_personal_commands() {
   }
   let mut hooks=hangar_server::codex_setup::files::remap(&case["before"],Path::new("$ROOT"),root);
   let touched=hangar_server::harness_setup::codex_hooks::repair_legacy(&mut hooks,&repo,&python,windows);
-  let hooks=hangar_server::codex_setup::files::remap(&hooks,root,Path::new("$ROOT"));
+  let hooks=crate::contract_paths::value(&hooks,root,"$ROOT");
   if hooks!=case["after"] || json!(touched)!=case["result"]["ok"] {
    failures.push(json!({"windows":windows,"current":case["current_exists"],"legacy":case["legacy_exists"],"form":case["form"],"hooks":hooks,"expected":case["after"],"touched":touched,"expected_touched":case["result"]}));
   }

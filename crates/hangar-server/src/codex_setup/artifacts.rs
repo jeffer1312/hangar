@@ -13,7 +13,15 @@ impl Storage for Disk {
     fn read(&mut self,path:&Path)->Result<Option<Vec<u8>>,files::Error>{files::read(path)}
     fn write(&mut self,path:&Path,data:&[u8],expected:Option<&[u8]>,backups:&Path)->Result<bool,files::Error>{files::write(path,data,expected,Some(backups))}
     fn backup(&mut self,path:&Path,data:&[u8],backups:&Path)->Result<(),files::Error>{files::backup(path,data,backups)}
-    fn remove(&mut self,path:&Path)->Result<(),files::Error>{std::fs::remove_file(path).map_err(Into::into)}
+    fn remove(&mut self,path:&Path)->Result<(),files::Error>{
+        #[cfg(windows)] {
+            use std::os::windows::fs::FileTypeExt;
+            if std::fs::symlink_metadata(path)?.file_type().is_symlink_dir() {
+                return std::fs::remove_dir(path).map_err(Into::into);
+            }
+        }
+        std::fs::remove_file(path).map_err(Into::into)
+    }
 }
 fn warning(code:&str,path:&Path,error:Option<&files::Error>)->Value {
     let mut params=serde_json::Map::from_iter([("path".into(),json!(path.to_string_lossy()))]);

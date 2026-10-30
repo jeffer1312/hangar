@@ -69,7 +69,7 @@ fn engines_mirrors_match_python() {
         std::fs::create_dir_all(&folder).unwrap();
         if let Some(initial) = case["initial"].as_str() { std::fs::write(folder.join(case["config"].as_str().unwrap()),initial).unwrap(); }
         let targets = vec![case["target"].as_str().unwrap().to_owned()];
-        let normalize = |v: Value| -> Value { serde_json::from_str(&v.to_string().replace(&home.path().to_string_lossy().to_string(),"$ROOT")).unwrap() };
+        let normalize = |v: Value| crate::contract_paths::value(&v,home.path(),"$ROOT");
         let actual = mirrors::sync(&env,"motor",case["base"].as_str().unwrap(),"fixture-key",case["models"].as_array().unwrap(),&targets);
         assert_eq!(normalize(actual),case["expected"],"sincronizar {i}");
         let check = |expected: &Value| {

@@ -3,7 +3,10 @@ use serde_json::{Value,json};
 use std::path::Path;
 fn hex(bytes:&[u8])->String{bytes.iter().map(|b|format!("{b:02x}")).collect()}
 fn unhex(text:&str)->Vec<u8>{(0..text.len()).step_by(2).map(|i|u8::from_str_radix(&text[i..i+2],16).unwrap()).collect()}
-fn replace(value:&Value,from:&str,to:&str)->Value{serde_json::from_str(&value.to_string().replace(from,&to.replace('\\',"\\\\"))).unwrap()}
+fn replace(value:&Value,from:&str,to:&str)->Value{
+ if to=="$ROOT" {crate::contract_paths::value(value,Path::new(from),to)}
+ else {hangar_server::config_sync::paths::map_strings(value,&|s|s.replace(from,to))}
+}
 fn snapshot(root:&Path,backups:&Path)->Value{
  fn walk(root:&Path,path:&Path,backups:&Path,entries:&mut serde_json::Map<String,Value>){
   if !path.is_dir(){return;}
@@ -11,12 +14,12 @@ fn snapshot(root:&Path,backups:&Path)->Value{
    let name=path.strip_prefix(root).unwrap().to_string_lossy().replace('\\',"/");
    if let Ok(link)=std::fs::read_link(&path){entries.insert(name,json!({"link":link}));}
    else if path.is_dir(){entries.insert(name,json!({"directory":true}));walk(root,&path,backups,entries);}
-   else{let data=std::fs::read(&path).unwrap();let prefix=root.to_string_lossy();let data=replace_bytes(&data,prefix.as_bytes(),b"$ROOT");entries.insert(name,json!({"hex":hex(&data)}));}
+   else{let data=std::fs::read(&path).unwrap();let data=String::from_utf8(data.clone()).map(|text|crate::contract_paths::text(&text,root,"$ROOT").into_bytes()).unwrap_or(data);entries.insert(name,json!({"hex":hex(&data)}));}
   }
  }
  let mut entries=serde_json::Map::new();walk(root,root,backups,&mut entries);
  let mut saved:Vec<Value>=std::fs::read_dir(backups).into_iter().flatten().map(|entry|serde_json::from_slice(&std::fs::read(entry.unwrap().path()).unwrap()).unwrap()).collect();
- for item in &mut saved{if let Some(raw)=item["conteudo_hex"].as_str(){item["conteudo_hex"]=json!(hex(&replace_bytes(&unhex(raw),root.to_string_lossy().as_bytes(),b"$ROOT")));}}
+ for item in &mut saved{if let Some(raw)=item["conteudo_hex"].as_str(){item["conteudo_hex"]=json!(hex(&String::from_utf8(unhex(raw)).map(|text|crate::contract_paths::text(&text,root,"$ROOT").into_bytes()).unwrap_or_else(|_|unhex(raw))));}}
  saved.sort_by_key(|value|value["path"].as_str().unwrap().to_owned());
  replace(&json!({"entries":entries,"backups":saved}),&root.to_string_lossy(),"$ROOT")
 }
@@ -32,7 +35,8 @@ impl skills::Storage for Races{
  fn replace_link(&mut self,destination:&Path,source:&Path,backups:&Path,expected:Option<&Path>)->Result<(),files::Error>{
   if self.windows{return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied,if self.name=="test_falha_criando_novo_symlink_mantem_link_anterior"{"Sem permissão"}else{"Symlink indisponível"}).into());}
   if self.name=="test_troca_concorrente_para_link_pessoal_e_preservada"&&self.index==1{
-   std::fs::remove_file(destination)?;
+   #[cfg(unix)] std::fs::remove_file(destination)?;
+   #[cfg(windows)] std::fs::remove_dir(destination)?;
    #[cfg(unix)] std::os::unix::fs::symlink(self.root.join("home/skill-pessoal"),destination)?;
    #[cfg(windows)] std::os::windows::fs::symlink_dir(self.root.join("home/skill-pessoal"),destination)?;
   }
@@ -48,14 +52,14 @@ fn codex_service_skills_match_original_provenance_and_files(){
    else if let Some(link)=entry["link"].as_str(){let link=link.replace("$ROOT",&root.to_string_lossy());
     #[cfg(unix)] std::os::unix::fs::symlink(link,path).unwrap();
     #[cfg(windows)] std::os::windows::fs::symlink_dir(link,path).unwrap();
-   }else{std::fs::write(path,replace_bytes(&unhex(entry["hex"].as_str().unwrap()),b"$ROOT",root.to_string_lossy().as_bytes())).unwrap();}
+   }else{std::fs::write(path,replace_bytes(&unhex(entry["hex"].as_str().unwrap()),b"$ROOT",root.to_string_lossy().replace('\\',"/").as_bytes())).unwrap();}
   }
   let input=replace(&case["inputs"],"$ROOT",&root.to_string_lossy());let backups=Path::new(input["backups"].as_str().unwrap());
   std::fs::create_dir_all(backups).unwrap();
-  for saved in case["initial"]["backups"].as_array().unwrap(){let mut saved=replace(saved,"$ROOT",&root.to_string_lossy());if let Some(raw)=saved["conteudo_hex"].as_str(){saved["conteudo_hex"]=json!(hex(&replace_bytes(&unhex(raw),b"$ROOT",root.to_string_lossy().as_bytes())));}std::fs::write(backups.join(format!("{}.json",files::hash(saved["path"].as_str().unwrap().as_bytes()))),serde_json::to_vec(&saved).unwrap()).unwrap();}
+  for saved in case["initial"]["backups"].as_array().unwrap(){let mut saved=replace(saved,"$ROOT",&root.to_string_lossy());if let Some(raw)=saved["conteudo_hex"].as_str(){saved["conteudo_hex"]=json!(hex(&replace_bytes(&unhex(raw),b"$ROOT",root.to_string_lossy().replace('\\',"/").as_bytes())));}std::fs::write(backups.join(format!("{}.json",files::hash(saved["path"].as_str().unwrap().as_bytes()))),serde_json::to_vec(&saved).unwrap()).unwrap();}
   let home=Path::new(input["home"].as_str().unwrap());let env=AccountEnvironment::from_pairs([("HOME",home.to_string_lossy().into_owned()),("USERPROFILE",home.to_string_lossy().into_owned())]);
   let mut storage=Races{name:case["test"].as_str().unwrap().into(),index:case["index"].as_u64().unwrap(),windows:input["windows"].as_bool().unwrap(),writes:0,root:root.into()};
-  let result=skills::reconcile(&env,Path::new(input["codex"].as_str().unwrap()),Path::new(input["repo"].as_str().unwrap()),&input["plugins"],&input["registry"],backups,storage.windows,&mut storage).unwrap();
+  let result=skills::reconcile(&env,Path::new(input["codex"].as_str().unwrap()),Path::new(input["repo"].as_str().unwrap()),&input["plugins"],&input["registry"],backups,storage.windows,&mut storage).unwrap_or_else(|error|panic!("{} [{}]: {error}",case["test"],case["index"]));
   let actual=replace(&result,&root.to_string_lossy(),"$ROOT");
   let mut expected=case["result"].clone();
   if storage.name=="test_exemplos_e_skill_ilegivel_nao_comprovam_plugin"&&storage.index==1{expected["warnings"][0]["params"]["erro"]=json!("arquivo SKILL.md não está em UTF-8");expected["warnings"][0]["texto"]=json!("Skills do plugin plugin@market não puderam ser confirmadas: arquivo SKILL.md não está em UTF-8");}

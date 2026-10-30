@@ -133,7 +133,7 @@ fn kimi_hooks_match_python() {
         }
         let actual = harness_setup::kimi_hooks::sync(&env, &repo).unwrap_or_default();
         let normalize = |v: Value| -> Value {
-            serde_json::from_str(&v.to_string().replace(home.to_str().unwrap(), "$ROOT")).unwrap()
+            crate::contract_paths::value(&v,home,"$ROOT")
         };
         assert_eq!(normalize(json!(actual)), case["expected"]);
         assert_eq!(
@@ -151,7 +151,7 @@ fn kimi_hooks_match_python() {
                 toml::from_str::<Value>(&actual),
                 toml::from_str::<Value>(expected),
             ) {
-                (Ok(a), Ok(b)) => assert_eq!(a, b),
+                (Ok(a), Ok(b)) => assert_eq!(normalize(a), b),
                 _ => assert_eq!(actual, expected),
             }
         }
@@ -165,6 +165,8 @@ fn codex_hooks_match_python() {
     ))
     .unwrap();
     for (index, case) in fixture["cases"].as_array().unwrap().iter().enumerate() {
+        // Shlex POSIX com caminhos Windows não é um modo usado pelo instalador.
+        if cfg!(windows) && case["windows"] == false { continue; }
         let root = tempfile::tempdir().unwrap();
         let home = root.path();
         let repo = home.join("repo");
@@ -179,18 +181,16 @@ fn codex_hooks_match_python() {
             case["again"],
             "repetição {index}"
         );
-        let actual = std::fs::read_to_string(home.join("hooks.json"))
-            .ok()
-            .map(|s| s.replace(home.to_str().unwrap(), "$ROOT"));
-        match (
-            actual
-                .as_deref()
-                .and_then(|s| serde_json::from_str::<Value>(s).ok()),
-            case["content"]
-                .as_str()
-                .and_then(|s| serde_json::from_str::<Value>(s).ok()),
-        ) {
-            (Some(a), Some(b)) => assert_eq!(a, b, "conteúdo {index}"),
+        let actual = std::fs::read_to_string(home.join("hooks.json")).ok();
+        match (actual.as_deref().and_then(|s| serde_json::from_str::<Value>(s).ok()),
+            case["content"].as_str().and_then(|s| serde_json::from_str::<Value>(s).ok())) {
+            (Some(a), Some(b)) => {
+                let a = crate::contract_paths::value(&a,home,"$ROOT");
+                let b = hangar_server::config_sync::paths::map_strings(&b,&|text| if cfg!(windows) {
+                    text.replace("/backend/.venv/bin/python", "/backend/.venv/Scripts/python.exe")
+                } else {text.to_owned()});
+                assert_eq!(a,b,"conteúdo {index}");
+            },
             _ => assert_eq!(json!(actual), case["content"], "conteúdo {index}"),
         }
     }
