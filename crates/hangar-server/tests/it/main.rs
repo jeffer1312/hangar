@@ -377,3 +377,5 @@ mod config_apply_http;
 
 mod codex_fingerprints;
 mod codex_stage_sources;
+
+mod codex_plugin_edits;

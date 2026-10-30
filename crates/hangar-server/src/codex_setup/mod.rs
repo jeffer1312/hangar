@@ -57,3 +57,7 @@ pub mod config_edits;
 
 pub mod fingerprints;
 pub mod stage_sources;
+
+pub mod plugin_edits;
+
+pub mod plugin_native;
