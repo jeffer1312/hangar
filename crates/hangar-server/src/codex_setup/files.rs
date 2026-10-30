@@ -40,6 +40,16 @@ impl std::fmt::Display for Error {
     }
 }
 impl std::error::Error for Error {}
+
+pub(super) fn matches_json_record(path: &Path, windows: bool) -> bool {
+    path.file_name().is_some_and(|name| {
+        let name = name.to_string_lossy();
+        if windows {
+            static PATTERN: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+            PATTERN.get_or_init(|| regex::Regex::new(r"(?i)\.json\z").expect("Padrão constante")).is_match(&name)
+        } else { name.ends_with(".json") }
+    })
+}
 pub fn read(path: &Path) -> Result<Option<Vec<u8>>, Error> {
     match fs::read(path) {
         Ok(b) => Ok(Some(b)),

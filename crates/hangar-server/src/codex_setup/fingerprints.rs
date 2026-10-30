@@ -76,13 +76,7 @@ fn records(path: &Path, windows: bool) -> Result<Vec<PathBuf>, Error> {
     let mut result = Vec::new();
     for entry in entries {
         let path = entry.map_err(io)?.path();
-        if path.file_name().is_some_and(|name| {
-            let name = name.to_string_lossy();
-            if windows {
-                static PATTERN: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-                PATTERN.get_or_init(|| regex::Regex::new(r"(?i)\.json\z").expect("Padrão constante")).is_match(&name)
-            } else { name.ends_with(".json") }
-        }) {
+        if super::files::matches_json_record(&path, windows) {
             result.push(path);
         }
     }

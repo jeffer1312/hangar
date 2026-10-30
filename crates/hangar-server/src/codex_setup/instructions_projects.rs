@@ -20,14 +20,27 @@ pub(super) fn records(root: &Path) -> Result<Vec<PathBuf>, Error> {
     let mut result = Vec::new();
     for entry in entries {
         let path = entry?.path();
-        if path
-            .extension()
-            .is_some_and(|extension| extension == "json")
-        {
+        if super::files::matches_json_record(&path, cfg!(windows)) {
             result.push(path);
         }
     }
     Ok(result)
+}
+
+#[cfg(test)]
+#[test]
+fn instruction_records_preserve_original_glob_names() {
+    let corpus: serde_json::Value = serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/codex-integration/fingerprint-review.json")).unwrap();
+    let case = corpus["glob_cases"].as_array().unwrap().iter().find(|case| case["windows"] == cfg!(windows)).unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    for name in case["names"].as_array().unwrap() {
+        let name = name.as_str().unwrap();
+        if name.starts_with("directory") { fs::create_dir(temp.path().join(name)).unwrap(); }
+        else { fs::write(temp.path().join(name), "{}").unwrap(); }
+    }
+    let mut actual: Vec<_> = records(temp.path()).unwrap().into_iter().map(|path| path.file_name().unwrap().to_string_lossy().into_owned()).collect();
+    actual.sort();
+    assert_eq!(serde_json::json!(actual), case["found"]);
 }
 
 pub(super) async fn prepare(
