@@ -835,7 +835,6 @@ def _rust_owner_world(monkeypatch):
     monkeypatch.setattr(api_mod.loop_mod, "LoopLink", lambda name: SimpleNamespace(
         get=lambda: {"status": "running"} if name == "c1" else None,
         update=lambda **kw: feitos.append(("pausa", name))))
-    monkeypatch.setattr(api_mod.loop_mod, "schedule_tick", lambda name, ctx: feitos.append(("tick", name)))
     monkeypatch.setattr(api_mod.push, "notify_awaiting", lambda name, body=None: feitos.append(("aguardando", name)))
     monkeypatch.setattr(api_mod.push, "notify_dead", lambda name: feitos.append(("caiu", name)))
     monkeypatch.setattr(api_mod.settings, "notify_dead", True)
@@ -1366,127 +1365,32 @@ def test_answer_validation_error_still_409(api_client):
 from app import loop as loop_mod
 
 
-@pytest.fixture
-def loop_dir(tmp_path, monkeypatch):
-    monkeypatch.setattr(loop_mod.settings, "projects_dir", tmp_path / "projects")
-    return tmp_path
 
 
-def _info(name="cc", cwd="/repo", jsonl="/repo/t.jsonl"):
-    return SessionInfo(name=name, cwd=cwd, jsonl=jsonl)
 
 
-def test_loop_create_404_when_session_missing(api_client, loop_dir):
-    with patch("app.api.registry.list", return_value=[]):
-        r = api_client.post("/api/sessions/cc/loop", json={"goal": "g"}, headers=_h())
-    assert r.status_code == 404
 
 
-def test_loop_create_409_on_codex_session(api_client, loop_dir):
-    # Codex nao e tmux: loop ficaria running mudo pra sempre (sem hook/tick). Recusa cedo.
-    info = SessionInfo(name="cx", cwd="/repo", jsonl="/repo/t.jsonl", provider="codex")
-    with patch("app.api.registry.list", return_value=[info]), \
-         patch("app.api.automations_enabled", return_value=True):
-        r = api_client.post("/api/sessions/cx/loop", json={"goal": "g"}, headers=_h())
-    assert r.status_code == 409
 
 
-def test_loop_create_422_when_max_iters_too_high(api_client, loop_dir):
-    with patch("app.api.registry.list", return_value=[_info()]), \
-         patch("app.api.automations_enabled", return_value=True), \
-         patch("app.api.branch_of", return_value="TICKET-0000"):
-        r = api_client.post("/api/sessions/cc/loop",
-                            json={"goal": "g", "max_iters": 500}, headers=_h())
-    assert r.status_code == 422
 
 
-def test_loop_create_409_on_main_branch(api_client, loop_dir):
-    with patch("app.api.registry.list", return_value=[_info()]), \
-         patch("app.api.automations_enabled", return_value=True), \
-         patch("app.api.branch_of", return_value="main"):
-        r = api_client.post("/api/sessions/cc/loop",
-                            json={"goal": "g", "require_branch": True}, headers=_h())
-    assert r.status_code == 409
 
 
-def test_loop_branch_guard_reads_the_agent_worktree(api_client, loop_dir):
-    # Aberta na main, o agente trabalha numa worktree: a trava olha a branch de onde ele trabalha.
-    info = SessionInfo(name="cc", cwd="/repo", jsonl="/repo/t.jsonl", git_cwd="/repo-feat")
-    with patch("app.api.registry.list", return_value=[info]), \
-         patch("app.api.automations_enabled", return_value=True), \
-         patch("app.api.drain", return_value=1), \
-         patch("app.api.branch_of", side_effect=lambda d: "feat" if d == "/repo-feat" else "main"):
-        r = api_client.post("/api/sessions/cc/loop",
-                            json={"goal": "g", "require_branch": True}, headers=_h())
-    assert r.status_code == 200
 
 
-def test_loop_create_ok(api_client, loop_dir):
-    calls = []
-    with patch("app.api.registry.list", return_value=[_info()]), \
-         patch("app.api.automations_enabled", return_value=True), \
-         patch("app.api.branch_of", return_value="TICKET-0000"), \
-         patch("app.api.drain", side_effect=lambda n, j, p="claude": calls.append((n, j)) or 1):
-        r = api_client.post("/api/sessions/cc/loop",
-                            json={"goal": "criar ok.txt", "check_cmd": "test -f ok.txt"}, headers=_h())
-    assert r.status_code == 200
-    d = r.json()["loop"]
-    assert d["status"] == "running" and d["goal_entry_id"]
-    assert calls  # drain chamado
 
 
-def test_loop_create_409_when_already_running(api_client, loop_dir):
-    loop_mod.LoopLink("cc").set(loop_mod.new_loop("g", None, 10, True))
-    with patch("app.api.registry.list", return_value=[_info()]), \
-         patch("app.api.automations_enabled", return_value=True), \
-         patch("app.api.branch_of", return_value="TICKET-0000"):
-        r = api_client.post("/api/sessions/cc/loop", json={"goal": "g"}, headers=_h())
-    assert r.status_code == 409
 
 
-def test_loop_get_none_returns_suggestions(api_client, loop_dir):
-    with patch("app.api.registry.list", return_value=[_info(cwd=str(loop_dir))]):
-        r = api_client.get("/api/sessions/cc/loop", headers=_h())
-    assert r.status_code == 200
-    body = r.json()
-    assert body["loop"] is None and isinstance(body["suggestions"], list)
 
 
-def test_loop_delete_stops(api_client, loop_dir):
-    loop_mod.LoopLink("cc").set(loop_mod.new_loop("g", None, 10, True))
-    with patch("app.api.registry.list", return_value=[_info()]):
-        r = api_client.delete("/api/sessions/cc/loop", headers=_h())
-    assert r.status_code == 200
-    assert r.json()["loop"]["status"] == "stopped"
 
 
-def test_loop_resolve_accept(api_client, loop_dir):
-    d = loop_mod.new_loop("g", None, 10, True)
-    d["status"] = "done_claimed"
-    loop_mod.LoopLink("cc").set(d)
-    with patch("app.api.registry.list", return_value=[_info()]):
-        r = api_client.post("/api/sessions/cc/loop/resolve", json={"accept": True}, headers=_h())
-    assert r.status_code == 200 and r.json()["loop"]["status"] == "done"
 
 
-def test_loop_resolve_409_when_not_done_claimed(api_client, loop_dir):
-    loop_mod.LoopLink("cc").set(loop_mod.new_loop("g", None, 10, True))  # running
-    with patch("app.api.registry.list", return_value=[_info()]):
-        r = api_client.post("/api/sessions/cc/loop/resolve", json={"accept": True}, headers=_h())
-    assert r.status_code == 409
 
 
-def test_loop_resolve_reject_reprompts(api_client, loop_dir):
-    d = loop_mod.new_loop("g", None, 10, True)
-    d["status"] = "done_claimed"
-    d["goal_delivered_ts"] = 1.0
-    loop_mod.LoopLink("cc").set(d)
-    with patch("app.api.registry.list", return_value=[_info()]), \
-         patch("app.api.drain", return_value=1):
-        r = api_client.post("/api/sessions/cc/loop/resolve", json={"accept": False}, headers=_h())
-    assert r.status_code == 200
-    out = r.json()["loop"]
-    assert out["status"] == "running" and out["iter"] == 1
 
 
 # --- Loop goal refiner (claude -p efemero) -----------------------------------
@@ -1504,83 +1408,24 @@ def _claude_resolvido(monkeypatch):
     monkeypatch.setattr("app.loop._exe_claude", lambda: "claude")
 
 
-def test_loop_refine_ok(api_client):
-    with patch("app.api.automations_enabled", return_value=True), \
-         patch("app.loop.subprocess.run",
-               return_value=_completed(0, stdout="Migre date.ts pra date-fns e mostre o check verde")) as run:
-        r = api_client.post("/api/sessions/cc/loop/refine",
-                            json={"goal": "arruma as datas", "check_cmd": "npm run check"}, headers=_h())
-    assert r.status_code == 200
-    assert "date-fns" in r.json()["goal"]
-    # argv sem shell, modelo sonnet, tools de efeito colateral negadas (prompt injection headless)
-    args = run.call_args[0][0]
-    assert args[:4] == ["claude", "-p", "--model", "sonnet"]
-    assert "--disallowedTools" in args
-    for t in ("Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch"):
-        assert t in args
-    # prompt vai por STDIN (nunca no argv — --disallowedTools e variadico e engoliria o positional)
-    assert "arruma as datas" in run.call_args.kwargs["input"]
-    assert all("arruma as datas" not in a for a in args)
 
 
-def test_loop_refine_409_when_automations_off(api_client):
-    with patch("app.api.automations_enabled", return_value=False):
-        r = api_client.post("/api/sessions/cc/loop/refine", json={"goal": "x"}, headers=_h())
-    assert r.status_code == 409
 
 
-def test_loop_refine_stderr_in_detail(api_client):
-    with patch("app.api.automations_enabled", return_value=True), \
-         patch("app.loop.subprocess.run",
-               return_value=_completed(2, stderr="erro-especifico-do-cli")):
-        r = api_client.post("/api/sessions/cc/loop/refine", json={"goal": "x"}, headers=_h())
-    assert r.status_code == 502
-    assert "erro-especifico-do-cli" in r.json()["detail"]
 
 
-def test_loop_refine_timeout_502(api_client):
-    with patch("app.loop.subprocess.run",
-               side_effect=_subprocess.TimeoutExpired(cmd="claude", timeout=60)):
-        r = api_client.post("/api/sessions/cc/loop/refine", json={"goal": "x"}, headers=_h())
-    assert r.status_code == 502
 
 
-def test_loop_refine_enoent_502(api_client):
-    with patch("app.loop.subprocess.run", side_effect=FileNotFoundError("claude")):
-        r = api_client.post("/api/sessions/cc/loop/refine", json={"goal": "x"}, headers=_h())
-    assert r.status_code == 502
 
 
-def test_loop_refine_nonzero_exit_502(api_client):
-    with patch("app.loop.subprocess.run", return_value=_completed(1, stderr="boom")):
-        r = api_client.post("/api/sessions/cc/loop/refine", json={"goal": "x"}, headers=_h())
-    assert r.status_code == 502
 
 
-def test_loop_refine_empty_output_502(api_client):
-    with patch("app.loop.subprocess.run", return_value=_completed(0, stdout="   ")):
-        r = api_client.post("/api/sessions/cc/loop/refine", json={"goal": "x"}, headers=_h())
-    assert r.status_code == 502
 
 
-def test_loop_refine_422_when_goal_too_long(api_client):
-    r = api_client.post("/api/sessions/cc/loop/refine", json={"goal": "x" * 2001}, headers=_h())
-    assert r.status_code == 422
 
 
-def test_loop_refine_refusal_is_502(api_client):
-    # haiku devolveu pergunta/recusa em vez do objetivo -> guard 502 (nao repassa meta-resposta).
-    with patch("app.loop.subprocess.run",
-               return_value=_completed(0, stdout="Não consigo reescrever sem saber qual arquivo você quer?")):
-        r = api_client.post("/api/sessions/cc/loop/refine", json={"goal": "arruma o haiku"}, headers=_h())
-    assert r.status_code == 502
 
 
-def test_loop_refine_question_ending_is_502(api_client):
-    with patch("app.loop.subprocess.run",
-               return_value=_completed(0, stdout="Qual haiku você quer melhorar?")):
-        r = api_client.post("/api/sessions/cc/loop/refine", json={"goal": "melhora"}, headers=_h())
-    assert r.status_code == 502
 
 
 # --- ask-history (RAG lexical) -----------------------------------------------
@@ -1927,7 +1772,6 @@ def _rodar_transicao_idle(monkeypatch, tmp_path, mtime_do_wire, marcador_ts, lim
     monkeypatch.setattr(api_mod.settings, "notify_finished", False)
     chain, tick, timers = [], [], []
     monkeypatch.setattr(api_mod, "_maybe_chain", lambda n: chain.append(n))
-    monkeypatch.setattr(api_mod.loop_mod, "schedule_tick", lambda n, ctx: tick.append(n))
     monkeypatch.setattr(api_mod.loop_mod, "LoopLink",
                         lambda n: SimpleNamespace(get=lambda: {"status": "running"}))
     monkeypatch.setattr(api_mod.threading, "Timer",
@@ -1954,7 +1798,7 @@ def test_idle_falso_do_kimi_nao_dispara_automacao(monkeypatch, tmp_path):
 def test_idle_de_verdade_do_kimi_segue_disparando(monkeypatch, tmp_path):
     # O contrario, pra a correcao nao matar a feature: wire e marcador no mesmo instante = parada.
     chain, tick, timers = _rodar_transicao_idle(monkeypatch, tmp_path, _AGORA, _AGORA)
-    assert tick == ["k1"]                     # loop ativo + sent == 0 -> tica
+    assert tick == []                         # D59: o Rust recusa loop de outro provedor
     assert chain == []                        # com loop ativo o chain fica suprimido (regra antiga)
     assert not any(a[1] is api_mod._recheca_kimi for a in timers)   # nada a reavaliar
 

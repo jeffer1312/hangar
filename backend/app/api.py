@@ -1353,23 +1353,6 @@ def _recheca_kimi(session_id: str, state: str) -> None:
 
 def _on_hook_transition(session_id: str, state: str) -> None:
     if state == "awaiting_input":
-        # Loop runner: awaiting cobre pedido de permissao tb -> pausa o loop (retoma no idle seguinte).
-        def _pause_loop() -> None:
-            try:
-                info = next((s for s in registry.list()
-                             if s.jsonl and session_key(s.jsonl) == session_id), None)
-                if info and not _rust_conduz(info):
-                    with loop_mod._lock:
-                        link = loop_mod.LoopLink(info.name)
-                        d = link.get()
-                        if d and d["status"] == "running":
-                            link.update(status="paused_awaiting")
-            except Exception as e:
-                # Sem a lista o loop segue rodando com a sessão parada na pergunta: a falha aparece.
-                _log.warning("loop: pausa no awaiting de %s falhou: %s", session_id[:8], type(e).__name__)
-                diag.registrar("loop.pausa_falhou", "aviso", sessao=session_id[:8],
-                               codigo=getattr(e, "code", None) or type(e).__name__)
-        threading.Thread(target=_pause_loop, daemon=True).start()
         return
     def _work() -> None:
         try:
@@ -1388,13 +1371,8 @@ def _on_hook_transition(session_id: str, state: str) -> None:
                 # do backend — sem isto, entrada entregue ficava sem confirmar indefinidamente.
                 if sent or real == "idle":
                     _agendar_confirmacao(info.name, _CONFIRM_GRACE + 0.5)
-                # Loop runner: no idle, se ha loop ativo e o drain NAO acabou de digitar algo
-                # (sent == 0 -> este idle e fim de turno de trabalho, nao o eco do goal/re-prompt),
-                # tica o loop. Loop ativo SUPRIME o chain (senao cada idle entre iteracoes dispararia).
                 loop_d = loop_mod.LoopLink(info.name).get()
                 loop_active = loop_d is not None and loop_d["status"] in loop_mod.ACTIVE
-                if real == "idle" and loop_active and sent == 0:
-                    loop_mod.schedule_tick(info.name, lambda: _loop_ctx(info.name))
                 # Encadeamento (feature #12): so quando NAO ha loop ativo — turno REALMENTE terminado,
                 # reusando o info.name ja resolvido nesta thread — ver _maybe_chain.
                 if real == "idle" and not loop_active:
@@ -2197,139 +2175,6 @@ for _method, _path in (("PATCH", "/api/sessions/{name}/queue/{entry_id}"), ("POS
                        ("POST", "/api/sessions/{name}/queue/{entry_id}/steer")):
     app.add_api_route(_path, _queue_unavailable, methods=[_method],
                       dependencies=[Depends(require_auth), Depends(_transfer_guard), Depends(_codex_rust_port)])
-
-
-# --- Loop runner (harness bloco A) -------------------------------------------
-
-class LoopCreate(_StrictBody):
-    goal: str = Field(min_length=1)
-    check_cmd: str | None = None
-    max_iters: int = Field(default=10, ge=1, le=100)  # teto: loop nao vira gerador infinito de prompts
-    require_branch: bool = True
-
-
-class LoopResolve(_StrictBody):
-    accept: bool
-
-
-class LoopRefine(_StrictBody):
-    goal: str = Field(min_length=1, max_length=2000)
-    check_cmd: str | None = None
-
-
-def _loop_ctx(name: str) -> "loop_mod.TickCtx | None":
-    """Monta o TickCtx real da sessao CORRENTE (nome -> jsonl/cwd via registry, sobrevive /clear).
-    deliver = enfileira delivered=False + drain (caminho unico de entrega; a entrada e duravel, entao
-    o drain server-side reentrega depois) -> retorna True sempre; enqueue nunca dispara o fallback do
-    run_tick (senao duplicaria a entrada). Sessao sumida -> loop failed + notify, return None."""
-    info = next((i for i in registry.list() if i.name == name), None)
-    if info is None or not info.jsonl:
-        loop_mod._end(loop_mod.LoopLink(name), name, "failed", "sessão morta", push.notify_loop)
-        return None
-    jsonl = info.jsonl
-    provider = info.provider
-
-    def deliver(prompt: str) -> bool:
-        PromptQueue(name).append(prompt, delivered=False)
-        _drenar(name, jsonl, provider)
-        return True
-
-    return loop_mod.TickCtx(
-        cwd=info.cwd or "",
-        jsonl=jsonl,
-        deliver=deliver,
-        enqueue=lambda p: PromptQueue(name).append(p, delivered=False),
-        notify=push.notify_loop,
-        automations=automations_enabled,
-        branch=branch_of,
-        last_assistant=last_assistant_text,
-        run_check=loop_mod._run_check,
-        entry_delivered=lambda eid: PromptQueue(name).entry_delivered(eid),
-    )
-
-
-@app.post("/api/sessions/{name}/loop", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
-def loop_create(name: str, body: LoopCreate):
-    info = next((i for i in registry.list() if i.name == name), None)
-    if info is None:
-        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessão não encontrada"))
-    if getattr(info, "provider", "claude") != "claude":
-        # Codex e outros nao sao tmux: sem hook de transicao, o tick nunca dispara -> loop ficaria
-        # running mudo pra sempre. Recusa cedo em vez de criar um loop-zumbi.
-        raise HTTPException(409, detail=erro("erro_loop_provider_invalido", "loop runner só suporta sessões claude"))
-    if not automations_enabled():
-        raise HTTPException(409, detail=erro("erro_automacoes_desligadas", "automações desligadas (kill-switch)"))
-    with loop_mod._lock:
-        link = loop_mod.LoopLink(name)
-        cur = link.get()
-        if cur and cur["status"] in loop_mod.ACTIVE:
-            raise HTTPException(409, detail=erro("erro_loop_ja_ativo", "já existe um loop ativo nesta sessão"))
-        br = branch_of(info.git_dir) if info.git_dir else None
-        if body.require_branch and br in ("main", "master"):
-            raise HTTPException(409, detail=erro("erro_loop_branch_invalida", f"sessão está na branch {br} — crie uma branch ou desligue 'exigir branch'", br=br))
-        d = loop_mod.new_loop(body.goal, body.check_cmd, body.max_iters, body.require_branch)
-        entry = PromptQueue(name).append(body.goal, delivered=False)
-        d["goal_entry_id"] = entry["id"]
-        link.set(d)
-    if info.jsonl:
-        _drenar(name, info.jsonl, info.provider)   # entrega ja se a sessao estiver entregavel; senao o drain server-side entrega depois
-    return {"loop": link.get()}
-
-
-@app.get("/api/sessions/{name}/loop", dependencies=[Depends(require_auth)])
-def loop_get(name: str):
-    info = next((i for i in registry.list() if i.name == name), None)
-    suggestions = loop_mod.suggest_checks(info.cwd) if info and info.cwd else []
-    return {"loop": loop_mod.LoopLink(name).get(), "suggestions": suggestions}
-
-
-@app.delete("/api/sessions/{name}/loop", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
-def loop_stop(name: str):
-    with loop_mod._lock:
-        link = loop_mod.LoopLink(name)
-        if link.get() is None:
-            raise HTTPException(404, detail=erro("erro_loop_inexistente", "nenhum loop nesta sessão"))
-        d = loop_mod._end(link, name, "stopped", "parado pelo usuário", push.notify_loop)
-    return {"loop": d}
-
-
-@app.post("/api/sessions/{name}/loop/refine", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
-def loop_refine(name: str, body: LoopRefine):
-    """Refina o objetivo do loop via claude -p efemero (sonnet). Stateless — nao toca a sessao nem o
-    sidecar; o {name} da rota so mantem a familia de URLs consistente. Falha do CLI -> 502.
-    Sob o kill-switch mestre: refine dispara um agente autonomo, entao respeita automations_enabled."""
-    if not automations_enabled():
-        raise HTTPException(409, detail=erro("erro_automacoes_desligadas", "automações desligadas (kill-switch)"))
-    try:
-        return {"goal": loop_mod.refine_goal(body.goal, body.check_cmd)}
-    except loop_mod.ClaudePError as e:
-        _log.warning("loop/refine falhou (%s): %s", name, e)
-        raise HTTPException(502, str(e))
-
-
-@app.post("/api/sessions/{name}/loop/resolve", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
-def loop_resolve(name: str, body: LoopResolve):
-    with loop_mod._lock:
-        link = loop_mod.LoopLink(name)
-        cur = link.get()
-        if cur is None or cur["status"] != "done_claimed":
-            raise HTTPException(409, detail=erro("erro_loop_estado_errado", "loop não está aguardando confirmação"))
-        if body.accept:
-            d = loop_mod._end(link, name, "done", "confirmado pronto", push.notify_loop)
-            return {"loop": d}
-        # reject: conta iteracao e re-prompta (reusa o MESMO helper do run_tick)
-        cur["status"] = "running"
-        link.set(cur)
-        if cur["iter"] + 1 > cur["max_iters"]:
-            d = loop_mod._end(link, name, "exhausted", f"esgotou {cur['max_iters']} iterações",
-                              push.notify_loop)
-            return {"loop": d}
-        ctx = _loop_ctx(name)
-        if ctx is None:
-            return {"loop": link.get()}
-        loop_mod._reprompt(link, cur, "conclusão rejeitada pelo usuário", None,
-                           ctx.deliver, ctx.enqueue)
-    return {"loop": link.get()}
 
 
 @app.get("/api/sessions/{name}/history", dependencies=[Depends(require_auth)], response_model=list[ChatEvent])
