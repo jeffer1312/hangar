@@ -121,6 +121,12 @@ impl AccountService {
     ) -> Result<(), AccountError> {
         let key =
             AccountKey::new(Provider::Claude, &account.home).map_err(|_| AccountError::io())?;
+        // A recuperação assíncrona disputa a mesma conta com a primeira abertura HTTP.
+        let gate = self.claude_logins.gates.gate(&key);
+        let _gate = gate.lock().await;
+        if self.claude_logins.attempts.lock().await.contains_key(&key) {
+            return Ok(());
+        }
         let record = self.login_record(&key)?;
         if !record.exists() {
             return Ok(());
@@ -503,6 +509,61 @@ mod tests {
     use super::super::environment::AccountEnvironment;
     use super::*;
     use axum::{Router, routing::post};
+
+    #[tokio::test]
+    async fn recovery_serializes_with_new_login_and_preserves_current_attempt() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().to_string_lossy().into_owned();
+        let service = AccountService::new(AccountEnvironment::from_map(
+            [("HOME".into(), home.clone()), ("USERPROFILE".into(), home)].into(),
+        ));
+        let account = service.create(Provider::Claude, "work", |_| Ok(())).unwrap();
+        let key = AccountKey::new(Provider::Claude, &account.home).unwrap();
+        let record = service.login_record(&key).unwrap();
+        fs::write(&record, json!({"key":key,"operation":"a".repeat(32)}).to_string()).unwrap();
+        let release = Arc::new(tokio::sync::Notify::new());
+        let (actions, mut observed) = tokio::sync::mpsc::unbounded_channel();
+        let router = Router::new().route(
+            "/internal/accounts/claude-window",
+            post({
+                let release = release.clone();
+                move |body: axum::body::Bytes| {
+                    let value: Value = serde_json::from_slice(&body).unwrap();
+                    let release = release.clone();
+                    actions.send(value["action"].as_str().unwrap().to_owned()).unwrap();
+                    async move {
+                        if value["action"] == "close" {
+                            release.notified().await;
+                        }
+                        json!({"ok":true,"url":null}).to_string()
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client = WindowClient::new(listener.local_addr().unwrap(), "synthetic".into(), "test".into()).unwrap();
+        let server = tokio::spawn(async { axum::serve(listener, router).await.unwrap() });
+        let recovery = tokio::spawn({
+            let service = service.clone();
+            let account = account.clone();
+            let client = client.clone();
+            async move { service.recover_claude_login(&account, &client).await }
+        });
+        assert_eq!(observed.recv().await.as_deref(), Some("close"));
+        let opening = service.start_claude_login("work", client.clone());
+        tokio::pin!(opening);
+        assert!(tokio::time::timeout(Duration::from_millis(100), &mut opening).await.is_err(),
+            "a abertura espera a recuperação, sem responder conflito");
+        release.notify_one();
+        recovery.await.unwrap().unwrap();
+        opening.await.unwrap();
+        assert_eq!(observed.recv().await.as_deref(), Some("open"));
+        let current = fs::read(&record).unwrap();
+        service.recover_claude_login(&account, &client).await.unwrap();
+        assert_eq!(fs::read(&record).unwrap(), current);
+        assert!(observed.try_recv().is_err(), "a recuperação não fecha a tentativa atual");
+        server.abort();
+    }
 
     #[tokio::test]
     async fn new_login_replaces_abandoned_attempt() {
