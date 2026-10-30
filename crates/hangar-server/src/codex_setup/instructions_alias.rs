@@ -1,5 +1,6 @@
 //! Autoria do alias registrada antes da troca, para permitir retomada após interrupção.
 use super::{files, instructions::Links};
+use crate::accounts::environment::AccountEnvironment;
 use files::Error;
 use serde_json::json;
 use std::{
@@ -47,7 +48,7 @@ fn text(path: &Path) -> Result<String, Error> {
         .replace('\r', "\n"))
 }
 
-fn render(source: &Path, home: &Path) -> Result<Vec<u8>, Error> {
+fn render(source: &Path, env: &AccountEnvironment) -> Result<Vec<u8>, Error> {
     struct Frame {
         path: PathBuf,
         lines: Vec<String>,
@@ -80,23 +81,9 @@ fn render(source: &Path, home: &Path) -> Result<Vec<u8>, Error> {
         }
         let line = current.lines[current.next].clone();
         current.next += 1;
-        let candidate = crate::transcript::py::strip(&line)
-            .strip_prefix('@')
-            .filter(|value| {
-                value
-                    .chars()
-                    .next()
-                    .is_some_and(|ch| !crate::transcript::py::is_space(ch))
-            });
-        let imported = candidate.map(|value| {
-            let path = crate::accounts::environment::expand(value, home);
-            if path.is_absolute() {
-                path
-            } else {
-                current.path.parent().unwrap().join(path)
-            }
-        });
-        if let Some(path) = imported.filter(|path| path.is_file()) {
+        if let Some(path) =
+            super::instructions::imported(&line, current.path.parent().unwrap(), env)
+        {
             let resolved = resolve(&path)?;
             if !seen.contains(&resolved) {
                 let child = frame(&path)?;
@@ -134,7 +121,7 @@ pub(super) fn apply(
     target: &Path,
     source: Option<&Path>,
     records: &Path,
-    home: &Path,
+    env: &AccountEnvironment,
     links: &impl Links,
 ) -> Result<(), Error> {
     let record = records.join(format!(
@@ -190,7 +177,7 @@ pub(super) fn apply(
         }
         return Ok(());
     };
-    let data = render(source, home)?;
+    let data = render(source, env)?;
     let mirror = data == fs::read(source)?;
     if owned && mirror && link.is_some() && resolved == resolve(source)? {
         return Ok(());

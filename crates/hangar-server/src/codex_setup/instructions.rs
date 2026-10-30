@@ -2,6 +2,7 @@
 use super::files::Error;
 use crate::config_sync::runtime::RuntimeConfig;
 use std::{io, path::Path};
+pub use super::instructions_imports::imported;
 
 pub trait Links {
     fn create(&self, source: &Path, target: &Path) -> io::Result<()>;
@@ -99,7 +100,7 @@ async fn prepare_with(
         &codex_home.join("AGENTS.override.md"),
         source.as_deref(),
         &codex_home.join(".hangar-instrucoes"),
-        &config.env.home,
+        &config.env,
         links,
     )?;
     super::instructions_projects::prepare(&config.env, codex_home, cwd, links).await

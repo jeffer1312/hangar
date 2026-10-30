@@ -1,11 +1,13 @@
 //! Reconciliação nativa do Codex e escritas compartilhadas de configuração.
 pub mod files;
 pub mod native;
+pub mod import_api;
 
 pub mod ecc;
 pub mod hooks;
 pub mod instructions;
 mod instructions_alias;
+mod instructions_imports;
 mod instructions_lock;
 mod instructions_projects;
 mod instructions_toml;

@@ -99,7 +99,7 @@ pub(super) async fn prepare(
             &directory.join("AGENTS.override.md"),
             source.as_deref(),
             &store,
-            &env.home,
+            env,
             links,
         )?;
         if source.is_some() {

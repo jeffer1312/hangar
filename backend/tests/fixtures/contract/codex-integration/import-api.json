@@ -1,0 +1,1160 @@
+{
+  "source_commit": "8a3ce81c1",
+  "command": "cd backend && uv run python tests/fixtures/contract/codex-integration/generate_import_api.py",
+  "cases": [
+    {
+      "operation": "detectar",
+      "response": {
+        "items": null
+      },
+      "events": null,
+      "delayed": false,
+      "result": {
+        "error": "O Codex retornou uma detec\u00e7\u00e3o inv\u00e1lida."
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/detect",
+          "params": {
+            "includeHome": true,
+            "cwds": [],
+            "maxSessions": 0
+          }
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "detectar",
+      "response": {
+        "items": []
+      },
+      "events": null,
+      "delayed": false,
+      "result": {
+        "ok": []
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/detect",
+          "params": {
+            "includeHome": true,
+            "cwds": [],
+            "maxSessions": 0
+          }
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "detectar",
+      "response": {
+        "items": [
+          {}
+        ]
+      },
+      "events": null,
+      "delayed": false,
+      "result": {
+        "ok": [
+          {}
+        ]
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/detect",
+          "params": {
+            "includeHome": true,
+            "cwds": [],
+            "maxSessions": 0
+          }
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "detectar",
+      "response": {
+        "items": [
+          1
+        ]
+      },
+      "events": null,
+      "delayed": false,
+      "result": {
+        "error": "O Codex retornou uma detec\u00e7\u00e3o inv\u00e1lida."
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/detect",
+          "params": {
+            "includeHome": true,
+            "cwds": [],
+            "maxSessions": 0
+          }
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "detectar",
+      "response": {
+        "items": {}
+      },
+      "events": null,
+      "delayed": false,
+      "result": {
+        "error": "O Codex retornou uma detec\u00e7\u00e3o inv\u00e1lida."
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/detect",
+          "params": {
+            "includeHome": true,
+            "cwds": [],
+            "maxSessions": 0
+          }
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "detectar",
+      "response": {
+        "items": "x"
+      },
+      "events": null,
+      "delayed": false,
+      "result": {
+        "error": "O Codex retornou uma detec\u00e7\u00e3o inv\u00e1lida."
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/detect",
+          "params": {
+            "includeHome": true,
+            "cwds": [],
+            "maxSessions": 0
+          }
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "detectar",
+      "response": {},
+      "events": null,
+      "delayed": false,
+      "result": {
+        "error": "O Codex retornou uma detec\u00e7\u00e3o inv\u00e1lida."
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/detect",
+          "params": {
+            "includeHome": true,
+            "cwds": [],
+            "maxSessions": 0
+          }
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "historicos_importacao",
+      "response": {
+        "data": null
+      },
+      "events": null,
+      "delayed": false,
+      "result": {
+        "error": "O Codex retornou um hist\u00f3rico de importa\u00e7\u00e3o inv\u00e1lido."
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/import/readHistories",
+          "params": null
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "historicos_importacao",
+      "response": {
+        "data": []
+      },
+      "events": null,
+      "delayed": false,
+      "result": {
+        "ok": []
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/import/readHistories",
+          "params": null
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "historicos_importacao",
+      "response": {
+        "data": [
+          {}
+        ]
+      },
+      "events": null,
+      "delayed": false,
+      "result": {
+        "ok": [
+          {}
+        ]
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/import/readHistories",
+          "params": null
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "historicos_importacao",
+      "response": {
+        "data": [
+          1
+        ]
+      },
+      "events": null,
+      "delayed": false,
+      "result": {
+        "error": "O Codex retornou um hist\u00f3rico de importa\u00e7\u00e3o inv\u00e1lido."
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/import/readHistories",
+          "params": null
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "historicos_importacao",
+      "response": {
+        "data": {}
+      },
+      "events": null,
+      "delayed": false,
+      "result": {
+        "error": "O Codex retornou um hist\u00f3rico de importa\u00e7\u00e3o inv\u00e1lido."
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/import/readHistories",
+          "params": null
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "historicos_importacao",
+      "response": {
+        "data": "x"
+      },
+      "events": null,
+      "delayed": false,
+      "result": {
+        "error": "O Codex retornou um hist\u00f3rico de importa\u00e7\u00e3o inv\u00e1lido."
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/import/readHistories",
+          "params": null
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "historicos_importacao",
+      "response": {},
+      "events": null,
+      "delayed": false,
+      "result": {
+        "error": "O Codex retornou um hist\u00f3rico de importa\u00e7\u00e3o inv\u00e1lido."
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/import/readHistories",
+          "params": null
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "detectar",
+      "response": {
+        "items": [],
+        "sourceErrors": []
+      },
+      "events": null,
+      "delayed": false,
+      "result": {
+        "ok": []
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/detect",
+          "params": {
+            "includeHome": true,
+            "cwds": [],
+            "maxSessions": 0
+          }
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "detectar",
+      "response": {
+        "items": [],
+        "sourceErrors": [
+          "falha"
+        ]
+      },
+      "events": null,
+      "delayed": false,
+      "result": {
+        "error": "O Codex informou falhas ou avisos na detec\u00e7\u00e3o; fontes existentes foram preservadas."
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/detect",
+          "params": {
+            "includeHome": true,
+            "cwds": [],
+            "maxSessions": 0
+          }
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "detectar",
+      "response": {
+        "items": [],
+        "sourceErrors": {}
+      },
+      "events": null,
+      "delayed": false,
+      "result": {
+        "ok": []
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/detect",
+          "params": {
+            "includeHome": true,
+            "cwds": [],
+            "maxSessions": 0
+          }
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "detectar",
+      "response": {
+        "items": [],
+        "sourceErrors": {
+          "x": 1
+        }
+      },
+      "events": null,
+      "delayed": false,
+      "result": {
+        "error": "O Codex informou falhas ou avisos na detec\u00e7\u00e3o; fontes existentes foram preservadas."
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/detect",
+          "params": {
+            "includeHome": true,
+            "cwds": [],
+            "maxSessions": 0
+          }
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "detectar",
+      "response": {
+        "items": [],
+        "sourceErrors": ""
+      },
+      "events": null,
+      "delayed": false,
+      "result": {
+        "ok": []
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/detect",
+          "params": {
+            "includeHome": true,
+            "cwds": [],
+            "maxSessions": 0
+          }
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "detectar",
+      "response": {
+        "items": [],
+        "sourceErrors": "falha"
+      },
+      "events": null,
+      "delayed": false,
+      "result": {
+        "error": "O Codex informou falhas ou avisos na detec\u00e7\u00e3o; fontes existentes foram preservadas."
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/detect",
+          "params": {
+            "includeHome": true,
+            "cwds": [],
+            "maxSessions": 0
+          }
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "detectar",
+      "response": {
+        "items": [],
+        "sourceErrors": false
+      },
+      "events": null,
+      "delayed": false,
+      "result": {
+        "ok": []
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/detect",
+          "params": {
+            "includeHome": true,
+            "cwds": [],
+            "maxSessions": 0
+          }
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "detectar",
+      "response": {
+        "items": [],
+        "sourceErrors": true
+      },
+      "events": null,
+      "delayed": false,
+      "result": {
+        "error": "O Codex informou falhas ou avisos na detec\u00e7\u00e3o; fontes existentes foram preservadas."
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/detect",
+          "params": {
+            "includeHome": true,
+            "cwds": [],
+            "maxSessions": 0
+          }
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "detectar",
+      "response": {
+        "items": [],
+        "errors": []
+      },
+      "events": null,
+      "delayed": false,
+      "result": {
+        "ok": []
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/detect",
+          "params": {
+            "includeHome": true,
+            "cwds": [],
+            "maxSessions": 0
+          }
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "detectar",
+      "response": {
+        "items": [],
+        "errors": [
+          "falha"
+        ]
+      },
+      "events": null,
+      "delayed": false,
+      "result": {
+        "error": "O Codex informou falhas ou avisos na detec\u00e7\u00e3o; fontes existentes foram preservadas."
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/detect",
+          "params": {
+            "includeHome": true,
+            "cwds": [],
+            "maxSessions": 0
+          }
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "detectar",
+      "response": {
+        "items": [],
+        "errors": {}
+      },
+      "events": null,
+      "delayed": false,
+      "result": {
+        "ok": []
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/detect",
+          "params": {
+            "includeHome": true,
+            "cwds": [],
+            "maxSessions": 0
+          }
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "detectar",
+      "response": {
+        "items": [],
+        "errors": {
+          "x": 1
+        }
+      },
+      "events": null,
+      "delayed": false,
+      "result": {
+        "error": "O Codex informou falhas ou avisos na detec\u00e7\u00e3o; fontes existentes foram preservadas."
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/detect",
+          "params": {
+            "includeHome": true,
+            "cwds": [],
+            "maxSessions": 0
+          }
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "detectar",
+      "response": {
+        "items": [],
+        "errors": ""
+      },
+      "events": null,
+      "delayed": false,
+      "result": {
+        "ok": []
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/detect",
+          "params": {
+            "includeHome": true,
+            "cwds": [],
+            "maxSessions": 0
+          }
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "detectar",
+      "response": {
+        "items": [],
+        "errors": "falha"
+      },
+      "events": null,
+      "delayed": false,
+      "result": {
+        "error": "O Codex informou falhas ou avisos na detec\u00e7\u00e3o; fontes existentes foram preservadas."
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/detect",
+          "params": {
+            "includeHome": true,
+            "cwds": [],
+            "maxSessions": 0
+          }
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "detectar",
+      "response": {
+        "items": [],
+        "errors": false
+      },
+      "events": null,
+      "delayed": false,
+      "result": {
+        "ok": []
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/detect",
+          "params": {
+            "includeHome": true,
+            "cwds": [],
+            "maxSessions": 0
+          }
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "detectar",
+      "response": {
+        "items": [],
+        "errors": true
+      },
+      "events": null,
+      "delayed": false,
+      "result": {
+        "error": "O Codex informou falhas ou avisos na detec\u00e7\u00e3o; fontes existentes foram preservadas."
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/detect",
+          "params": {
+            "includeHome": true,
+            "cwds": [],
+            "maxSessions": 0
+          }
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "detectar",
+      "response": {
+        "items": [],
+        "warnings": []
+      },
+      "events": null,
+      "delayed": false,
+      "result": {
+        "ok": []
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/detect",
+          "params": {
+            "includeHome": true,
+            "cwds": [],
+            "maxSessions": 0
+          }
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "detectar",
+      "response": {
+        "items": [],
+        "warnings": [
+          "falha"
+        ]
+      },
+      "events": null,
+      "delayed": false,
+      "result": {
+        "error": "O Codex informou falhas ou avisos na detec\u00e7\u00e3o; fontes existentes foram preservadas."
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/detect",
+          "params": {
+            "includeHome": true,
+            "cwds": [],
+            "maxSessions": 0
+          }
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "detectar",
+      "response": {
+        "items": [],
+        "warnings": {}
+      },
+      "events": null,
+      "delayed": false,
+      "result": {
+        "ok": []
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/detect",
+          "params": {
+            "includeHome": true,
+            "cwds": [],
+            "maxSessions": 0
+          }
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "detectar",
+      "response": {
+        "items": [],
+        "warnings": {
+          "x": 1
+        }
+      },
+      "events": null,
+      "delayed": false,
+      "result": {
+        "error": "O Codex informou falhas ou avisos na detec\u00e7\u00e3o; fontes existentes foram preservadas."
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/detect",
+          "params": {
+            "includeHome": true,
+            "cwds": [],
+            "maxSessions": 0
+          }
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "detectar",
+      "response": {
+        "items": [],
+        "warnings": ""
+      },
+      "events": null,
+      "delayed": false,
+      "result": {
+        "ok": []
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/detect",
+          "params": {
+            "includeHome": true,
+            "cwds": [],
+            "maxSessions": 0
+          }
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "detectar",
+      "response": {
+        "items": [],
+        "warnings": "falha"
+      },
+      "events": null,
+      "delayed": false,
+      "result": {
+        "error": "O Codex informou falhas ou avisos na detec\u00e7\u00e3o; fontes existentes foram preservadas."
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/detect",
+          "params": {
+            "includeHome": true,
+            "cwds": [],
+            "maxSessions": 0
+          }
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "detectar",
+      "response": {
+        "items": [],
+        "warnings": false
+      },
+      "events": null,
+      "delayed": false,
+      "result": {
+        "ok": []
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/detect",
+          "params": {
+            "includeHome": true,
+            "cwds": [],
+            "maxSessions": 0
+          }
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "detectar",
+      "response": {
+        "items": [],
+        "warnings": true
+      },
+      "events": null,
+      "delayed": false,
+      "result": {
+        "error": "O Codex informou falhas ou avisos na detec\u00e7\u00e3o; fontes existentes foram preservadas."
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/detect",
+          "params": {
+            "includeHome": true,
+            "cwds": [],
+            "maxSessions": 0
+          }
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "importar",
+      "response": {
+        "importId": "one"
+      },
+      "events": [
+        {
+          "importId": "other"
+        },
+        {
+          "importId": "one",
+          "itemTypeResults": [
+            {
+              "failures": [
+                {
+                  "message": "Falha parcial"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "delayed": false,
+      "result": {
+        "ok": {
+          "importId": "one",
+          "itemTypeResults": [
+            {
+              "failures": [
+                {
+                  "message": "Falha parcial"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/import",
+          "params": {
+            "migrationItems": [],
+            "source": "hangar"
+          }
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "importar",
+      "response": {
+        "importId": "one"
+      },
+      "events": [
+        {
+          "importId": "other"
+        },
+        {
+          "importId": "one",
+          "itemTypeResults": [
+            {
+              "failures": [
+                {
+                  "message": "Falha parcial"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "delayed": true,
+      "result": {
+        "ok": {
+          "importId": "one",
+          "itemTypeResults": [
+            {
+              "failures": [
+                {
+                  "message": "Falha parcial"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/import",
+          "params": {
+            "migrationItems": [],
+            "source": "hangar"
+          }
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "importar",
+      "response": {},
+      "events": [],
+      "delayed": false,
+      "result": {
+        "error": "O Codex n\u00e3o retornou o identificador da importa\u00e7\u00e3o."
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/import",
+          "params": {
+            "migrationItems": [],
+            "source": "hangar"
+          }
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "importar",
+      "response": {
+        "importId": ""
+      },
+      "events": [],
+      "delayed": false,
+      "result": {
+        "error": "O Codex n\u00e3o retornou o identificador da importa\u00e7\u00e3o."
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/import",
+          "params": {
+            "migrationItems": [],
+            "source": "hangar"
+          }
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "importar",
+      "response": {
+        "importId": 1
+      },
+      "events": [],
+      "delayed": false,
+      "result": {
+        "error": "O Codex n\u00e3o retornou o identificador da importa\u00e7\u00e3o."
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/import",
+          "params": {
+            "migrationItems": [],
+            "source": "hangar"
+          }
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "importar",
+      "response": {
+        "importId": null
+      },
+      "events": [],
+      "delayed": false,
+      "result": {
+        "error": "O Codex n\u00e3o retornou o identificador da importa\u00e7\u00e3o."
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/import",
+          "params": {
+            "migrationItems": [],
+            "source": "hangar"
+          }
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "importar",
+      "response": {
+        "importId": "one"
+      },
+      "events": [],
+      "delayed": false,
+      "result": {
+        "error": "O Codex excedeu o tempo limite para concluir a importa\u00e7\u00e3o."
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/import",
+          "params": {
+            "migrationItems": [],
+            "source": "hangar"
+          }
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "importar",
+      "response": {
+        "importId": "one"
+      },
+      "events": [
+        null
+      ],
+      "delayed": false,
+      "result": {
+        "error": "O Codex encerrou antes de concluir a importa\u00e7\u00e3o."
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/import",
+          "params": {
+            "migrationItems": [],
+            "source": "hangar"
+          }
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "importar",
+      "response": {
+        "importId": "one"
+      },
+      "events": [
+        {
+          "importId": "one"
+        }
+      ],
+      "delayed": false,
+      "result": {
+        "error": "O Codex retornou uma conclus\u00e3o inv\u00e1lida."
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/import",
+          "params": {
+            "migrationItems": [],
+            "source": "hangar"
+          }
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "importar",
+      "response": {
+        "importId": "one"
+      },
+      "events": [
+        {
+          "importId": "one",
+          "itemTypeResults": {}
+        }
+      ],
+      "delayed": false,
+      "result": {
+        "error": "O Codex retornou uma conclus\u00e3o inv\u00e1lida."
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/import",
+          "params": {
+            "migrationItems": [],
+            "source": "hangar"
+          }
+        }
+      ],
+      "completion_cleared": true
+    },
+    {
+      "operation": "importar",
+      "response": {
+        "importId": "one"
+      },
+      "events": [
+        {
+          "importId": "one",
+          "itemTypeResults": []
+        }
+      ],
+      "delayed": false,
+      "result": {
+        "ok": {
+          "importId": "one",
+          "itemTypeResults": []
+        }
+      },
+      "calls": [
+        {
+          "method": "externalAgentConfig/import",
+          "params": {
+            "migrationItems": [],
+            "source": "hangar"
+          }
+        }
+      ],
+      "completion_cleared": true
+    }
+  ]
+}
