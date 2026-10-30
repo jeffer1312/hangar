@@ -31,9 +31,13 @@ impl Service {
     pub async fn repair(&self, id: &str) -> Result<String, Failure> {
         match id {
             "oauth" => {
-                let result = self
-                    .oauth(!details::oauth_saved(&self.accounts.env))
-                    .await?;
+                if !details::oauth_saved(&self.accounts.env) {
+                    let imported = self.oauth(true).await?;
+                    if imported["cofre"] != true {
+                        return Err(invalid("nenhum login do ChatGPT pra espalhar"));
+                    }
+                }
+                let result = self.oauth(false).await?;
                 let line = result
                     .as_object()
                     .ok_or_else(|| failed("resposta de propagação inválida"))?
