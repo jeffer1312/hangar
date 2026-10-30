@@ -590,6 +590,7 @@ impl ListBridge {
         self.project_plugins(&mut changed, &plugins);
         public_problems(&mut changed);
         list_facts::mark_stale(&mut changed, &snap.facts, snap.facts_ok);
+        crate::session_visibility::fill::fill_rows(&self.dirs()?.home, &self.env.mux, &mut changed, &self.facts.diag).await;
         self.gate_problems(&mut changed, false);
         self.demote(effects);
         let mut rows = (*snap.rows).clone();
@@ -702,6 +703,7 @@ impl ListBridge {
         public_problems(&mut rows);
         rows.extend(aside);
         list_facts::mark_stale(&mut rows, &facts, facts_ok);
+        crate::session_visibility::fill::fill_rows(&self.dirs()?.home, &self.env.mux, &mut rows, &self.facts.diag).await;
         self.gate_problems(&mut rows, true);
         self.prune_gone(&rows, Instant::now());
         self.record_live(&rows, facts_fresh && !facts.unknown);

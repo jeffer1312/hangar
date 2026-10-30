@@ -1,6 +1,7 @@
 //! "Ocultar da lista": a sessão segue rodando e só sai da lista principal. A marca é do servidor
 //! (vale em todos os aparelhos) e a lista a aplica a cada rodada (`fill`).
 pub mod auto;
+pub mod fill;
 pub mod store;
 
 use std::io;
