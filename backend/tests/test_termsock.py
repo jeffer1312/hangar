@@ -454,8 +454,16 @@ def test_fechamento_feio_nao_deixa_zumbi_nem_trava_a_listagem(sessao):
             _esperar(lambda: not _anexado(sessao))
     # A regressao do threadpool: se as bombas de bytes tivessem sido to_thread, os workers ficariam
     # parqueados e este GET seria o que trava.
-    r = c.get("/api/sessions", headers={"Authorization": "Bearer secret"})
-    assert r.status_code == 200
+    from app.api import app
+    # A listagem HTTP migrou; a sonda síncrona ainda paga o pool do transporte Python.
+    app.add_api_route("/api/test-terminal-pool", lambda: {"ok": True})
+    try:
+        r = c.get("/api/test-terminal-pool")
+        assert r.status_code == 200
+        assert r.json() == {"ok": True}
+    finally:
+        app.router.routes[:] = [route for route in app.router.routes
+                                if getattr(route, "path", None) != "/api/test-terminal-pool"]
     assert termsock.clientes_ativos() == set()
     assert not _anexado(sessao)
 

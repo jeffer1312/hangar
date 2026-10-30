@@ -814,7 +814,7 @@ def test_select_404_when_session_missing(api_client, monkeypatch):
 
 
 def test_routes_require_auth(api_client):
-    assert api_client.get("/api/sessions").status_code == 401
+    assert api_client.post("/api/sessions/cc/input", json={"text": "oi"}).status_code == 401
 
 
 # ---------------------------------------------------------------------------

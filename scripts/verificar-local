@@ -157,9 +157,31 @@ classificar_rapido() {
 
 # ── passos (cwd = árvore fixa) ────────────────────────────────────────────────────────────────
 
+# A ordem de read_dir faz parte do contrato do navegador: capturar no filesystem da prova,
+# como no CI, sem ordenar a resposta nem trocar a implementação original pelo Rust.
+rust_com_referencia() (
+    local referencia temporario origem=ba2db1021ab7fb801eca50a50f9509dcb825ac7e
+    referencia="$(mktemp -d)" || exit 1
+    temporario="$(mktemp -d)" || { rmdir "$referencia"; exit 1; }
+    trap 'rm -rf "$referencia" "$temporario"' EXIT
+    git cat-file -e "$origem^{commit}" || git fetch --no-tags --depth=1 origin "$origem" || exit 1
+    local gerador
+    for gerador in url_commands url_gaps; do
+        TMPDIR="$temporario" PYTHONDONTWRITEBYTECODE=1 backend/.venv/bin/python \
+            "backend/tests/fixtures/contract/remote-browser/generate_${gerador}.py" \
+            --output "$referencia/${gerador//_/-}.json" || exit 1
+    done
+    export HANGAR_REMOTE_BROWSER_CONTRACT_DIR="$referencia" HANGAR_REMOTE_BROWSER_TMPDIR="$temporario"
+    cd crates && cargo test --locked --workspace --no-fail-fast
+)
+
 # No Linux, o que os passos compilam e instalam vem do passo_preparo, que roda antes deles.
 passo_rust() {
-    (cd crates && cargo test --locked --workspace --no-fail-fast) || return 1
+    if [[ "$SO" == linux ]]; then
+        rust_com_referencia || return 1
+    else
+        (cd crates && cargo test --locked --workspace --no-fail-fast) || return 1
+    fi
     if [[ "$SO" == linux ]]; then
         (cd backend && uv run pytest -q "${RUNTIME_TESTS[@]}") || return 1
         # Sem o binário a suíte pula os casos Rust e sairia verde: aqui a falta é erro, como no CI.
@@ -212,14 +234,12 @@ passo_preparo() {
     if [[ "$plano" == *" rust "* ]]; then
         # O cano é o binário que o passo rust entrega ao pytest do cano.
         (cd crates && cargo build --locked -p hangar-server -p hangar-cano -p hangar-auth && \
-            python3 ../scripts/pin-auth-pair.py --server target/debug/hangar-server --library target/debug/libhangar_auth.so && \
             cargo test --locked --workspace --no-run) || falhou=1
     fi
     if [[ "$plano" == *" backend "* ]]; then
         # Os contratos e as sondas de contas que o pytest executa (ci.yml): as sondas são módulos do
         # executável de testes `it` do hangar-server.
         (cd crates && cargo build --locked -p hangar-server -p hangar-auth && \
-            python3 ../scripts/pin-auth-pair.py --server target/debug/hangar-server --library target/debug/libhangar_auth.so && \
             cargo build --locked -p hangar-server --example orq_contract && \
             cargo build --locked -p hangar-workspace --example workspace_contract && \
             cargo test --locked -p hangar-server --no-run --test it) || falhou=1
@@ -229,6 +249,10 @@ passo_preparo() {
         # A prova das duas portas precisa do mesmo executável e biblioteca desta árvore fixa.
         (cd crates && cargo build --locked -p hangar-server -p hangar-auth && \
             python3 ../scripts/pin-auth-pair.py --server target/debug/hangar-server --library target/debug/libhangar_auth.so) || falhou=1
+    fi
+    # cargo test também pode regravar o servidor: publicar só depois do último build.
+    if [[ "$plano" == *" rust "* || "$plano" == *" backend "* ]]; then
+        (cd crates && python3 ../scripts/pin-auth-pair.py --server target/debug/hangar-server --library target/debug/libhangar_auth.so) || falhou=1
     fi
     for pid in "${pids[@]}"; do wait "$pid" || falhou=1; done
     return $falhou
