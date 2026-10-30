@@ -1,0 +1,726 @@
+{
+  "source_commit": "8a3ce81c1",
+  "command": "cd backend && uv run python tests/fixtures/contract/codex-integration/generate_pipeline_round.py",
+  "boundary": "Coordenador e fases originais; opera\u00e7\u00f5es dos provedores controladas; checkpoint e lock reais.",
+  "cases": [
+    {
+      "input": {
+        "name": "success",
+        "force": false
+      },
+      "result": {
+        "estado": "ok",
+        "etapa": {
+          "codigo": "etapa_concluido",
+          "params": {},
+          "texto": "Conclu\u00eddo"
+        },
+        "ultima_execucao": "1970-01-01T00:01:40+00:00",
+        "proxima_atualizacao": null,
+        "plugins": [],
+        "erros": [],
+        "avisos": [],
+        "confianca_pendente": false,
+        "progresso": null,
+        "skills": {
+          "ponte": 0,
+          "nativas": 0
+        },
+        "etapa_segundos": null
+      },
+      "error": null,
+      "events": [
+        [
+          "instructions",
+          false
+        ],
+        [
+          "legacy"
+        ],
+        [
+          "hooks"
+        ],
+        [
+          "open"
+        ],
+        [
+          "plugins",
+          false
+        ],
+        [
+          "config"
+        ],
+        [
+          "fragments"
+        ],
+        [
+          "files"
+        ],
+        [
+          "skills"
+        ],
+        [
+          "trust"
+        ],
+        [
+          "close"
+        ]
+      ],
+      "record": {
+        "phases": {
+          "instructions": {
+            "fingerprint": "result-instructions",
+            "attempted_at": 100.0,
+            "errors": [],
+            "warnings": []
+          },
+          "plugins": {
+            "fingerprint": "result-plugins",
+            "attempted_at": 100.0,
+            "errors": [],
+            "warnings": [],
+            "confirmed": [],
+            "plugins": [],
+            "next_update": null
+          },
+          "fragments": {
+            "fingerprint": "result-fragments",
+            "attempted_at": 100.0,
+            "errors": [],
+            "warnings": []
+          },
+          "skills": {
+            "fingerprint": "result-skills",
+            "attempted_at": 100.0,
+            "errors": [],
+            "warnings": []
+          }
+        },
+        "status": {
+          "estado": "ok",
+          "etapa": {
+            "codigo": "etapa_concluido",
+            "params": {},
+            "texto": "Conclu\u00eddo"
+          },
+          "ultima_execucao": "1970-01-01T00:01:40+00:00",
+          "proxima_atualizacao": null,
+          "plugins": [],
+          "erros": [],
+          "avisos": [],
+          "confianca_pendente": false,
+          "progresso": null,
+          "skills": {
+            "ponte": 0,
+            "nativas": 0
+          },
+          "etapa_segundos": null
+        },
+        "fingerprint": "9f1f120af73b1560ad8ebb97bcb049d5edb9226cacff275d007adf0208aa28aa"
+      }
+    },
+    {
+      "input": {
+        "name": "missing-source",
+        "force": false
+      },
+      "result": {
+        "estado": "indisponivel",
+        "etapa": {
+          "codigo": "etapa_sem_claude",
+          "params": {},
+          "texto": "Claude Code sem configura\u00e7\u00e3o nesta m\u00e1quina"
+        },
+        "ultima_execucao": null,
+        "proxima_atualizacao": null,
+        "plugins": [],
+        "erros": [],
+        "avisos": [],
+        "confianca_pendente": false,
+        "progresso": null,
+        "skills": {
+          "ponte": 0,
+          "nativas": 0
+        },
+        "etapa_segundos": null
+      },
+      "error": null,
+      "events": [],
+      "record": {}
+    },
+    {
+      "input": {
+        "name": "instructions-error",
+        "force": false
+      },
+      "result": {
+        "estado": "erro",
+        "etapa": {
+          "codigo": "etapa_pendencias",
+          "params": {},
+          "texto": "Confira os itens pendentes"
+        },
+        "ultima_execucao": "1970-01-01T00:01:40+00:00",
+        "proxima_atualizacao": null,
+        "plugins": [],
+        "erros": [
+          {
+            "codigo": "erro_falha_etapa",
+            "params": {
+              "tipo": "ValueError",
+              "etapa": "Preparando instru\u00e7\u00f5es e hooks"
+            },
+            "texto": "Falha em \"Preparando instru\u00e7\u00f5es e hooks\" (ValueError); configura\u00e7\u00e3o anterior preservada nas etapas n\u00e3o conclu\u00eddas"
+          }
+        ],
+        "avisos": [],
+        "confianca_pendente": false,
+        "progresso": null,
+        "skills": {
+          "ponte": 0,
+          "nativas": 0
+        },
+        "etapa_segundos": null
+      },
+      "error": null,
+      "events": [
+        [
+          "instructions",
+          false
+        ]
+      ],
+      "record": {
+        "phases": {},
+        "status": {
+          "estado": "erro",
+          "etapa": {
+            "codigo": "etapa_pendencias",
+            "params": {},
+            "texto": "Confira os itens pendentes"
+          },
+          "ultima_execucao": "1970-01-01T00:01:40+00:00",
+          "proxima_atualizacao": null,
+          "plugins": [],
+          "erros": [
+            {
+              "codigo": "erro_falha_etapa",
+              "params": {
+                "tipo": "ValueError",
+                "etapa": "Preparando instru\u00e7\u00f5es e hooks"
+              },
+              "texto": "Falha em \"Preparando instru\u00e7\u00f5es e hooks\" (ValueError); configura\u00e7\u00e3o anterior preservada nas etapas n\u00e3o conclu\u00eddas"
+            }
+          ],
+          "avisos": [],
+          "confianca_pendente": false,
+          "progresso": null,
+          "skills": {
+            "ponte": 0,
+            "nativas": 0
+          },
+          "etapa_segundos": null
+        },
+        "fingerprint": "9f1f120af73b1560ad8ebb97bcb049d5edb9226cacff275d007adf0208aa28aa"
+      }
+    },
+    {
+      "input": {
+        "name": "plugins-error",
+        "force": false
+      },
+      "result": {
+        "estado": "erro",
+        "etapa": {
+          "codigo": "etapa_pendencias",
+          "params": {},
+          "texto": "Confira os itens pendentes"
+        },
+        "ultima_execucao": "1970-01-01T00:01:40+00:00",
+        "proxima_atualizacao": null,
+        "plugins": [],
+        "erros": [
+          {
+            "codigo": "erro_falha_etapa",
+            "params": {
+              "tipo": "RuntimeError",
+              "etapa": "Importando pelo Codex"
+            },
+            "texto": "Falha em \"Importando pelo Codex\" (RuntimeError); configura\u00e7\u00e3o anterior preservada nas etapas n\u00e3o conclu\u00eddas"
+          }
+        ],
+        "avisos": [],
+        "confianca_pendente": false,
+        "progresso": null,
+        "skills": {
+          "ponte": 0,
+          "nativas": 0
+        },
+        "etapa_segundos": null
+      },
+      "error": null,
+      "events": [
+        [
+          "instructions",
+          false
+        ],
+        [
+          "legacy"
+        ],
+        [
+          "hooks"
+        ],
+        [
+          "open"
+        ],
+        [
+          "plugins",
+          false
+        ],
+        [
+          "close"
+        ]
+      ],
+      "record": {
+        "phases": {
+          "instructions": {
+            "fingerprint": "result-instructions",
+            "attempted_at": 100.0,
+            "errors": [],
+            "warnings": []
+          }
+        },
+        "status": {
+          "estado": "erro",
+          "etapa": {
+            "codigo": "etapa_pendencias",
+            "params": {},
+            "texto": "Confira os itens pendentes"
+          },
+          "ultima_execucao": "1970-01-01T00:01:40+00:00",
+          "proxima_atualizacao": null,
+          "plugins": [],
+          "erros": [
+            {
+              "codigo": "erro_falha_etapa",
+              "params": {
+                "tipo": "RuntimeError",
+                "etapa": "Importando pelo Codex"
+              },
+              "texto": "Falha em \"Importando pelo Codex\" (RuntimeError); configura\u00e7\u00e3o anterior preservada nas etapas n\u00e3o conclu\u00eddas"
+            }
+          ],
+          "avisos": [],
+          "confianca_pendente": false,
+          "progresso": null,
+          "skills": {
+            "ponte": 0,
+            "nativas": 0
+          },
+          "etapa_segundos": null
+        },
+        "fingerprint": "9f1f120af73b1560ad8ebb97bcb049d5edb9226cacff275d007adf0208aa28aa"
+      }
+    },
+    {
+      "input": {
+        "name": "fragments-error",
+        "force": false
+      },
+      "result": {
+        "estado": "erro",
+        "etapa": {
+          "codigo": "etapa_pendencias",
+          "params": {},
+          "texto": "Confira os itens pendentes"
+        },
+        "ultima_execucao": "1970-01-01T00:01:40+00:00",
+        "proxima_atualizacao": null,
+        "plugins": [],
+        "erros": [
+          {
+            "codigo": "erro_falha_etapa",
+            "params": {
+              "tipo": "ValueError",
+              "etapa": "Reconciliando hooks, comandos, agentes e MCPs"
+            },
+            "texto": "Falha em \"Reconciliando hooks, comandos, agentes e MCPs\" (ValueError); configura\u00e7\u00e3o anterior preservada nas etapas n\u00e3o conclu\u00eddas"
+          }
+        ],
+        "avisos": [],
+        "confianca_pendente": false,
+        "progresso": null,
+        "skills": {
+          "ponte": 0,
+          "nativas": 0
+        },
+        "etapa_segundos": null
+      },
+      "error": null,
+      "events": [
+        [
+          "instructions",
+          false
+        ],
+        [
+          "legacy"
+        ],
+        [
+          "hooks"
+        ],
+        [
+          "open"
+        ],
+        [
+          "plugins",
+          false
+        ],
+        [
+          "config"
+        ],
+        [
+          "fragments"
+        ],
+        [
+          "close"
+        ]
+      ],
+      "record": {
+        "phases": {
+          "instructions": {
+            "fingerprint": "result-instructions",
+            "attempted_at": 100.0,
+            "errors": [],
+            "warnings": []
+          },
+          "plugins": {
+            "fingerprint": "result-plugins",
+            "attempted_at": 100.0,
+            "errors": [],
+            "warnings": [],
+            "confirmed": [],
+            "plugins": [],
+            "next_update": null
+          }
+        },
+        "status": {
+          "estado": "erro",
+          "etapa": {
+            "codigo": "etapa_pendencias",
+            "params": {},
+            "texto": "Confira os itens pendentes"
+          },
+          "ultima_execucao": "1970-01-01T00:01:40+00:00",
+          "proxima_atualizacao": null,
+          "plugins": [],
+          "erros": [
+            {
+              "codigo": "erro_falha_etapa",
+              "params": {
+                "tipo": "ValueError",
+                "etapa": "Reconciliando hooks, comandos, agentes e MCPs"
+              },
+              "texto": "Falha em \"Reconciliando hooks, comandos, agentes e MCPs\" (ValueError); configura\u00e7\u00e3o anterior preservada nas etapas n\u00e3o conclu\u00eddas"
+            }
+          ],
+          "avisos": [],
+          "confianca_pendente": false,
+          "progresso": null,
+          "skills": {
+            "ponte": 0,
+            "nativas": 0
+          },
+          "etapa_segundos": null
+        },
+        "fingerprint": "9f1f120af73b1560ad8ebb97bcb049d5edb9226cacff275d007adf0208aa28aa"
+      }
+    },
+    {
+      "input": {
+        "name": "cancelled",
+        "force": false
+      },
+      "result": {
+        "estado": "ocioso",
+        "etapa": {
+          "codigo": "etapa_interrompida",
+          "params": {},
+          "texto": "Reconcilia\u00e7\u00e3o interrompida; ser\u00e1 retomada"
+        },
+        "ultima_execucao": "1970-01-01T00:01:40+00:00",
+        "proxima_atualizacao": null,
+        "plugins": [],
+        "erros": [],
+        "avisos": [],
+        "confianca_pendente": false,
+        "progresso": null,
+        "skills": {
+          "ponte": 0,
+          "nativas": 0
+        },
+        "etapa_segundos": null
+      },
+      "error": "CancelledError",
+      "events": [
+        [
+          "instructions",
+          false
+        ],
+        [
+          "legacy"
+        ],
+        [
+          "hooks"
+        ],
+        [
+          "open"
+        ],
+        [
+          "plugins",
+          false
+        ],
+        [
+          "config"
+        ],
+        [
+          "fragments"
+        ],
+        [
+          "close"
+        ]
+      ],
+      "record": {
+        "phases": {
+          "instructions": {
+            "fingerprint": "result-instructions",
+            "attempted_at": 100.0,
+            "errors": [],
+            "warnings": []
+          },
+          "plugins": {
+            "fingerprint": "result-plugins",
+            "attempted_at": 100.0,
+            "errors": [],
+            "warnings": [],
+            "confirmed": [],
+            "plugins": [],
+            "next_update": null
+          }
+        },
+        "status": {
+          "estado": "ocioso",
+          "etapa": {
+            "codigo": "etapa_interrompida",
+            "params": {},
+            "texto": "Reconcilia\u00e7\u00e3o interrompida; ser\u00e1 retomada"
+          },
+          "ultima_execucao": "1970-01-01T00:01:40+00:00",
+          "proxima_atualizacao": null,
+          "plugins": [],
+          "erros": [],
+          "avisos": [],
+          "confianca_pendente": false,
+          "progresso": null,
+          "skills": {
+            "ponte": 0,
+            "nativas": 0
+          },
+          "etapa_segundos": null
+        },
+        "fingerprint": "9f1f120af73b1560ad8ebb97bcb049d5edb9226cacff275d007adf0208aa28aa"
+      }
+    },
+    {
+      "input": {
+        "name": "cached",
+        "force": false
+      },
+      "result": {
+        "estado": "ok",
+        "etapa": {
+          "codigo": "etapa_concluido",
+          "params": {},
+          "texto": "Conclu\u00eddo"
+        },
+        "ultima_execucao": "1970-01-01T00:01:40+00:00",
+        "proxima_atualizacao": null,
+        "plugins": [],
+        "erros": [],
+        "avisos": [],
+        "confianca_pendente": false,
+        "progresso": null,
+        "skills": {
+          "ponte": 0,
+          "nativas": 0
+        },
+        "etapa_segundos": null
+      },
+      "error": null,
+      "events": [
+        [
+          "open"
+        ],
+        [
+          "trust"
+        ],
+        [
+          "close"
+        ]
+      ],
+      "record": {
+        "phases": {
+          "instructions": {
+            "fingerprint": "result-instructions"
+          },
+          "plugins": {
+            "fingerprint": "result-plugins"
+          },
+          "fragments": {
+            "fingerprint": "result-fragments"
+          },
+          "skills": {
+            "fingerprint": "result-skills"
+          }
+        },
+        "marketplaces_em": 100,
+        "status": {
+          "estado": "ok",
+          "etapa": {
+            "codigo": "etapa_concluido",
+            "params": {},
+            "texto": "Conclu\u00eddo"
+          },
+          "ultima_execucao": "1970-01-01T00:01:40+00:00",
+          "proxima_atualizacao": null,
+          "plugins": [],
+          "erros": [],
+          "avisos": [],
+          "confianca_pendente": false,
+          "progresso": null,
+          "skills": {
+            "ponte": 0,
+            "nativas": 0
+          },
+          "etapa_segundos": null
+        },
+        "fingerprint": "9f1f120af73b1560ad8ebb97bcb049d5edb9226cacff275d007adf0208aa28aa"
+      }
+    },
+    {
+      "input": {
+        "name": "cached",
+        "force": true
+      },
+      "result": {
+        "estado": "ok",
+        "etapa": {
+          "codigo": "etapa_concluido",
+          "params": {},
+          "texto": "Conclu\u00eddo"
+        },
+        "ultima_execucao": "1970-01-01T00:01:40+00:00",
+        "proxima_atualizacao": null,
+        "plugins": [],
+        "erros": [],
+        "avisos": [],
+        "confianca_pendente": false,
+        "progresso": null,
+        "skills": {
+          "ponte": 0,
+          "nativas": 0
+        },
+        "etapa_segundos": null
+      },
+      "error": null,
+      "events": [
+        [
+          "instructions",
+          true
+        ],
+        [
+          "legacy"
+        ],
+        [
+          "hooks"
+        ],
+        [
+          "open"
+        ],
+        [
+          "plugins",
+          true
+        ],
+        [
+          "config"
+        ],
+        [
+          "fragments"
+        ],
+        [
+          "files"
+        ],
+        [
+          "skills"
+        ],
+        [
+          "trust"
+        ],
+        [
+          "close"
+        ]
+      ],
+      "record": {
+        "phases": {
+          "instructions": {
+            "fingerprint": "result-instructions",
+            "attempted_at": 100.0,
+            "errors": [],
+            "warnings": []
+          },
+          "plugins": {
+            "fingerprint": "result-plugins",
+            "attempted_at": 100.0,
+            "errors": [],
+            "warnings": [],
+            "confirmed": [],
+            "plugins": [],
+            "next_update": null
+          },
+          "fragments": {
+            "fingerprint": "result-fragments",
+            "attempted_at": 100.0,
+            "errors": [],
+            "warnings": []
+          },
+          "skills": {
+            "fingerprint": "result-skills",
+            "attempted_at": 100.0,
+            "errors": [],
+            "warnings": []
+          }
+        },
+        "marketplaces_em": 100,
+        "status": {
+          "estado": "ok",
+          "etapa": {
+            "codigo": "etapa_concluido",
+            "params": {},
+            "texto": "Conclu\u00eddo"
+          },
+          "ultima_execucao": "1970-01-01T00:01:40+00:00",
+          "proxima_atualizacao": null,
+          "plugins": [],
+          "erros": [],
+          "avisos": [],
+          "confianca_pendente": false,
+          "progresso": null,
+          "skills": {
+            "ponte": 0,
+            "nativas": 0
+          },
+          "etapa_segundos": null
+        },
+        "fingerprint": "9f1f120af73b1560ad8ebb97bcb049d5edb9226cacff275d007adf0208aa28aa"
+      }
+    }
+  ]
+}

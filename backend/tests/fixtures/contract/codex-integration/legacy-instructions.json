@@ -1,0 +1,95 @@
+{
+  "source_commit": "8a3ce81c1",
+  "command": "cd backend && uv run python tests/fixtures/contract/codex-integration/generate_legacy_instructions.py",
+  "cases": [
+    {
+      "input": "",
+      "result": {
+        "ok": ""
+      }
+    },
+    {
+      "input": "Pessoal\r\n\ud801\udc00",
+      "result": {
+        "ok": "Pessoal\r\n\ud801\udc00"
+      }
+    },
+    {
+      "input": "<!-- hangar:codex-instrucoes:start -->\nmanaged\n<!-- hangar:codex-instrucoes:end -->",
+      "result": {
+        "ok": ""
+      }
+    },
+    {
+      "input": "<!-- hangar:codex-instrucoes:start -->\nmanaged\n<!-- hangar:codex-instrucoes:end -->\n\nPessoal",
+      "result": {
+        "ok": "Pessoal"
+      }
+    },
+    {
+      "input": "<!-- hangar:codex-instrucoes:start -->\nmanaged\n<!-- hangar:codex-instrucoes:end -->\nPessoal",
+      "result": {
+        "ok": "\nPessoal"
+      }
+    },
+    {
+      "input": "<!-- hangar:codex-instrucoes:start -->\nmanaged\n<!-- hangar:codex-instrucoes:end -->\r\n\r\nPessoal",
+      "result": {
+        "ok": "\r\n\r\nPessoal"
+      }
+    },
+    {
+      "input": "A<!-- hangar:codex-instrucoes:start -->\nmanaged\n<!-- hangar:codex-instrucoes:end -->B<!-- hangar:codex-instrucoes:start -->\nmanaged\n<!-- hangar:codex-instrucoes:end -->\n\nC",
+      "result": {
+        "ok": "ABC"
+      }
+    },
+    {
+      "input": "<!-- hangar:codex-instrucoes:start -->",
+      "result": {
+        "error": "ValueError",
+        "message": "Bloco de instru\u00e7\u00f5es do Hangar incompleto ou malformado"
+      }
+    },
+    {
+      "input": "<!-- hangar:codex-instrucoes:end -->",
+      "result": {
+        "error": "ValueError",
+        "message": "Bloco de instru\u00e7\u00f5es do Hangar incompleto ou malformado"
+      }
+    },
+    {
+      "input": "<!-- hangar:codex-instrucoes:end --><!-- hangar:codex-instrucoes:start -->",
+      "result": {
+        "error": "ValueError",
+        "message": "Bloco de instru\u00e7\u00f5es do Hangar incompleto ou malformado"
+      }
+    },
+    {
+      "input": "<!-- hangar:codex-instrucoes:start --><!-- hangar:codex-instrucoes:start --><!-- hangar:codex-instrucoes:end -->",
+      "result": {
+        "error": "ValueError",
+        "message": "Bloco de instru\u00e7\u00f5es do Hangar incompleto ou malformado"
+      }
+    },
+    {
+      "input": "<!-- hangar:codex-instrucoes:start --><!-- hangar:codex-instrucoes:end --><!-- hangar:codex-instrucoes:end -->",
+      "result": {
+        "error": "ValueError",
+        "message": "Bloco de instru\u00e7\u00f5es do Hangar incompleto ou malformado"
+      }
+    },
+    {
+      "input": "<!-- hangar:codex-instrucoes:start -->\ud801\udc00<!-- hangar:codex-instrucoes:end -->",
+      "result": {
+        "ok": ""
+      }
+    },
+    {
+      "input": "Antes\r\n<!-- hangar:codex-instrucoes:start -->\nmanaged\n<!-- hangar:codex-instrucoes:end -->\n\nDepois\r\n",
+      "result": {
+        "ok": "Antes\r\nDepois\r\n"
+      }
+    }
+  ]
+}

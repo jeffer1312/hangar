@@ -1,0 +1,164 @@
+{
+  "source_commit": "8a3ce81c1",
+  "command": "cd backend && uv run python tests/fixtures/contract/codex-integration/generate_service_rounds.py",
+  "cases": [
+    {
+      "name": "start-coalesces",
+      "result": {
+        "events": [
+          [
+            "run",
+            "auto",
+            false
+          ],
+          [
+            "status",
+            "executando",
+            "executando",
+            false
+          ],
+          [
+            "cleanup",
+            0
+          ],
+          [
+            "released",
+            0
+          ]
+        ],
+        "marker_removed": true,
+        "rounds": 1
+      }
+    },
+    {
+      "name": "forced-after-auto",
+      "result": {
+        "events": [
+          [
+            "run",
+            "auto",
+            false
+          ],
+          [
+            "cleanup",
+            0
+          ],
+          [
+            "released",
+            0
+          ],
+          [
+            "run",
+            "manual",
+            true
+          ],
+          [
+            "cleanup",
+            1
+          ],
+          [
+            "released",
+            1
+          ],
+          [
+            "status",
+            "ok"
+          ]
+        ],
+        "marker_removed": true,
+        "rounds": 2
+      }
+    },
+    {
+      "name": "cancel-waiter",
+      "result": {
+        "events": [
+          [
+            "run",
+            "auto",
+            false
+          ],
+          [
+            "waiter-cancelled",
+            true
+          ],
+          [
+            "cleanup",
+            0
+          ],
+          [
+            "released",
+            0
+          ]
+        ],
+        "marker_removed": true,
+        "rounds": 1
+      }
+    },
+    {
+      "name": "close-waits-cleanup",
+      "result": {
+        "events": [
+          [
+            "run",
+            "auto",
+            false
+          ],
+          [
+            "cancel",
+            0
+          ],
+          [
+            "cleanup",
+            0
+          ],
+          [
+            "close-pending",
+            true
+          ],
+          [
+            "released",
+            0
+          ]
+        ],
+        "marker_removed": true,
+        "rounds": 1
+      }
+    },
+    {
+      "name": "finished-starts-again",
+      "result": {
+        "events": [
+          [
+            "run",
+            "auto",
+            false
+          ],
+          [
+            "cleanup",
+            0
+          ],
+          [
+            "released",
+            0
+          ],
+          [
+            "run",
+            "config_sync",
+            true
+          ],
+          [
+            "cleanup",
+            1
+          ],
+          [
+            "released",
+            1
+          ]
+        ],
+        "marker_removed": true,
+        "rounds": 2
+      }
+    }
+  ]
+}

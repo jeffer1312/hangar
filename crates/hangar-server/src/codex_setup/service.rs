@@ -6,20 +6,91 @@ use std::{path::PathBuf,sync::{Arc,Mutex},time::{Duration,Instant,SystemTime,UNI
 use tokio::{sync::{oneshot,watch},task::JoinHandle};
 #[derive(Default)]
 struct Mutations {closed:bool,tasks:Vec<JoinHandle<()>>,completion:Option<watch::Receiver<Option<Result<(),String>>>>}
+trait RoundRunner:Send+Sync {
+ fn run(self:Arc<Self>,service:Arc<Service>,reason:String,force:bool,cancel:watch::Receiver<bool>)->std::pin::Pin<Box<dyn std::future::Future<Output=Result<(),super::phase::Error>>+Send>>;
+}
+#[derive(Clone)]
+struct Round {forced:bool,result:watch::Receiver<Option<Result<(),String>>>,cancel:watch::Sender<bool>,identity:Arc<()>}
 pub struct Service {
     pub(super) accounts:AccountService,
     pub(super) config:RuntimeConfig,
     pub(super) repo:PathBuf,
     pub(super) runtime:Option<Arc<RuntimeRegistry>>,
     mutations:Mutex<Mutations>,
+    state:super::phase::State,
+    rounds:Mutex<Option<Round>>,
+    runner:Option<Arc<dyn RoundRunner>>,
 }
 impl Service {
     pub fn new(accounts:AccountService,config:RuntimeConfig,repo:PathBuf,runtime:Option<Arc<RuntimeRegistry>>)->Arc<Self>{
-        Arc::new(Self{accounts,config,repo,runtime,mutations:Mutex::new(Mutations::default())})
+        Arc::new(Self{accounts,config,repo,runtime,mutations:Mutex::new(Mutations::default()),state:super::phase::State::new(status::snapshot()),rounds:Mutex::new(None),runner:None})
+    }
+    #[cfg(test)]
+    fn new_with_runner(accounts:AccountService,config:RuntimeConfig,repo:PathBuf,runtime:Option<Arc<RuntimeRegistry>>,runner:Arc<dyn RoundRunner>)->Arc<Self>{
+        let mut service=Self::new(accounts,config,repo,runtime);Arc::get_mut(&mut service).unwrap().runner=Some(runner);service
+    }
+    pub async fn start(self:&Arc<Self>,reason:&str,force:bool)->Result<Value,String>{
+        let mut mutations=self.mutations.lock().unwrap_or_else(|e|e.into_inner());
+        if mutations.closed{return Err("serviço Codex encerrado".into());}
+        let mut rounds=self.rounds.lock().unwrap_or_else(|e|e.into_inner());
+        if rounds.as_ref().is_some_and(|round|round.result.borrow().is_none()){return self.status();}
+        match std::fs::remove_file(self.accounts.env.codex_default.join(PREPARED_MARKER)){Ok(())=>{},Err(e) if e.kind()==std::io::ErrorKind::NotFound=>{},Err(e)=>return Err(e.to_string())}
+        let mut state=self.status()?;state["estado"]=json!("executando");state["etapa"]=super::messages::message("etapa_aguardando",&serde_json::Map::new()).expect("Mensagem versionada");
+        self.state.update(|current|crate::orchestration::codec::discard(std::mem::replace(current,state)));
+        let initial=self.status()?;
+        let(sender,result)=watch::channel(None);let(cancel,signal)=watch::channel(false);
+        *rounds=Some(Round{forced:force,result,cancel,identity:Arc::new(())});
+        let service=self.clone();let reason=reason.to_owned();
+        mutations.tasks.retain(|task|!task.is_finished());
+        mutations.tasks.push(tokio::spawn(async move{
+            let result=if let Some(runner)=service.runner.clone(){runner.run(service.clone(),reason,force,signal).await}else{service.round_owned(force,signal).await};
+            if let Err(error)=&result{
+                service.state.update(|state|{
+                    // Falhas da guarda antecedem o pipeline, mas também encerram a rodada publicada.
+                    if state["estado"]!="executando"{return;}
+                    let cancelled=error.kind=="CancelledError";
+                    state["estado"]=json!(if cancelled{"ocioso"}else{"erro"});
+                    state["progresso"]=Value::Null;
+                    state["etapa"]=super::messages::message(if cancelled{"etapa_interrompida"}else{"etapa_pendencias"},&serde_json::Map::new()).expect("Mensagem versionada");
+                    if !cancelled{state["erros"].as_array_mut().expect("Estado inicializado").push(super::messages::message("erro_falha_inesperada",json!({"tipo":error.kind}).as_object().unwrap()).expect("Mensagem versionada"));}
+                });
+            }
+            sender.send_replace(Some(result.map_err(|error|error.message)));
+        }));
+        Ok(initial)
+    }
+    pub async fn update_and_wait(self:&Arc<Self>,reason:&str,force:bool)->Result<Value,String>{
+        let previous=self.current_round().filter(|round|round.result.borrow().is_none());
+        if force{self.start(reason,true).await?;}else if super::sync_enabled(&self.config)&&self.needs_reconcile()?{self.start("sessao",false).await?;}
+        let current=self.current_round();if let Some(round)=current.clone().filter(|round|round.result.borrow().is_none()){Self::wait_round(round).await?;}
+        if force&&previous.as_ref().zip(current.as_ref()).is_some_and(|(old,current)|Arc::ptr_eq(&old.identity,&current.identity)&&!old.forced){
+            self.start(reason,true).await?;self.wait_current().await?;
+        }
+        self.status()
+    }
+    fn current_round(&self)->Option<Round>{self.rounds.lock().unwrap_or_else(|e|e.into_inner()).clone()}
+    async fn wait_round(mut round:Round)->Result<(),String>{loop{if let Some(result)=round.result.borrow().clone(){return result;}round.result.changed().await.map_err(|_|"rodada Codex interrompida".to_owned())?;}}
+    async fn wait_current(&self)->Result<(),String>{if let Some(round)=self.current_round(){Self::wait_round(round).await}else{Ok(())}}
+    fn needs_reconcile(&self)->Result<bool,String>{
+        if self.current_round().is_some_and(|round|round.result.borrow().is_none()){return Ok(false);}
+        let account=&self.accounts.env.codex_default;let work=status::root(&self.accounts.env.home,account).map_err(|e|e.message)?;
+        let record=match files::object(&work.join("estado.json")){Ok(value)=>ValueGuard(value),Err(_)=>return Ok(true)};
+        let now=SystemTime::now().duration_since(UNIX_EPOCH).map_err(|e|e.to_string())?.as_secs_f64();
+        super::reconcile::needed(false,&record,now,||super::pipeline_fingerprint::compute(&self.accounts.env,&self.config,account,&self.repo,None,None,false)).map_err(|e|e.message)
+    }
+    async fn round_owned(&self,force:bool,cancel:watch::Receiver<bool>)->Result<(),super::phase::Error>{
+        use super::phase::Error;
+        let account=&self.accounts.env.codex_default;let key=AccountKey::new(Provider::Codex,account).map_err(|e|Error{kind:"AccountError",message:e.to_string()})?;
+        let mut signal=cancel.clone();
+        let _lifecycle=tokio::select!{biased;_=super::cancellation::stopped(&mut signal)=>return Err(Error{kind:"CancelledError",message:"integração Codex interrompida".into()}),result=self.accounts.locks.acquire(&key,GuardMode::Shared,Instant::now()+Duration::from_secs(5))=>result.map_err(|e|Error{kind:"AccountError",message:match e{LockError::Busy=>"account_busy".into(),LockError::Io(e)=>e.to_string()}})?};
+        let work=status::root(&self.accounts.env.home,account).map_err(|e|Error{kind:e.kind,message:e.message})?;let backups=work.join("backups");
+        let context=super::pipeline_round::Context{home:&self.accounts.env.home,account,work:&work,state:&self.state,force,memory:super::pipeline_fingerprint::memory(&self.config),cancel:cancel.clone()};
+        let mut actions=super::pipeline_native::Actions{accounts:&self.accounts,config:&self.config,repo:&self.repo,account,work:&work,backups:&backups,state:&self.state,runtime:self.runtime.as_ref(),native:None,cancel};
+        let result=super::pipeline_round::run(&context,&mut actions).await?;crate::orchestration::codec::discard(result);Ok(())
     }
     pub fn status(&self)->Result<Value,String>{
         let now=SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_|"relógio do servidor inválido")?.as_secs_f64();
-        status::read(&self.accounts.env.home,&self.accounts.env.codex_default,None,now).map_err(|e|e.message)
+        status::read(&self.accounts.env.home,&self.accounts.env.codex_default,Some(&ValueGuard(self.state.snapshot())),now).map_err(|e|e.message)
     }
     pub async fn repair_account(self:&Arc<Self>,account:Account,adopt:bool)->Result<Option<bool>,String>{
         let actions=NativeActions::new(self.accounts.env.clone(),account.home.clone(),self.repo.clone());
@@ -69,6 +140,7 @@ impl Service {
         let mut completion={
             let mut mutations=self.mutations.lock().unwrap_or_else(|e|e.into_inner());
             mutations.closed=true;
+            if let Some(round)=self.current_round(){round.cancel.send_replace(true);}
             if let Some(completion)=&mutations.completion { completion.clone() }
             else {
                 let tasks=std::mem::take(&mut mutations.tasks);
@@ -90,3 +162,11 @@ impl Service {
         }
     }
 }
+
+#[cfg(test)]
+#[path="service_round_tests.rs"]
+mod round_tests;
+
+#[cfg(test)]
+#[path="service_finished_tests.rs"]
+mod finished_tests;

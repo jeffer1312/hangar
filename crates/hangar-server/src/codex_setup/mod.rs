@@ -73,3 +73,12 @@ mod cancellation;
 pub mod timestamp;
 pub mod pipeline_hooks;
 pub mod hook_files;
+
+pub mod pipeline_round;
+
+mod pipeline_native;
+mod pipeline_fingerprint;
+mod stage_native;
+mod plugin_controlled;
+mod reconcile;
+mod legacy_instructions;
