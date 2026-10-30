@@ -141,17 +141,26 @@ impl Service {
         } else {
             ""
         };
-        releases::NAMES.into_iter().any(|name| {
-            release.manifest["files"][format!("{platform}/{name}")]["sha256"]
-                .as_str()
-                .is_some_and(|sha| {
-                    !releases::matches_file(
-                        &self.home.join(".hangar/bin").join(format!("{name}{ext}")),
-                        &sha.to_lowercase(),
-                    )
-                })
-        })
+        let dest = self.home.join(".hangar/bin");
+        for name in releases::NAMES {
+            let Some(sha) = release.manifest["files"][format!("{platform}/{name}")]["sha256"].as_str() else {
+                continue;
+            };
+            let target = if name == "hangar-auth" {
+                match super::auth_pair::metadata(&release.manifest, platform, &dest) {
+                    Ok((path, _)) => path,
+                    Err(_) => return true,
+                }
+            } else {
+                dest.join(format!("{name}{ext}"))
+            };
+            if !releases::matches_file(&target, &sha.to_lowercase()) {
+                return true;
+            }
+        }
+        super::auth_pair::validate(&dest.join(format!("hangar-server{ext}"))).is_err()
     }
+
     pub fn status(
         &self,
         refresh: bool,

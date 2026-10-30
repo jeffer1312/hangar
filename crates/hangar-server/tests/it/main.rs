@@ -417,3 +417,5 @@ mod peer_diagnostic;
 mod update_native_contract;
 
 mod update_download;
+
+mod update_stale_pair;
