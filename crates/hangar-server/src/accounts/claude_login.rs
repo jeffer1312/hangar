@@ -3,6 +3,7 @@ use super::{
     AccountGuard, AccountKey, GuardMode, Provider,
     catalog::{Account, AccountError, AccountService},
     claude_auth,
+    claude_window::valid_operation,
 };
 use serde_json::{Value, json};
 use std::{
@@ -48,10 +49,18 @@ impl WindowClient {
         action: &str,
         code: Option<&str>,
     ) -> Result<Value, AccountError> {
-        self.0.call(key, operation, action, code).await.map_err(|reason| {
-            tracing::warn!(code = reason, action, "janela de login recusou a operação");
-            bridge_error()
+        // Em tarefa própria: a renovação que cede a conta larga esta chamada, e criar a janela pela
+        // metade a deixaria sem as marcas que a varredura e as listas conferem.
+        let (backend, key, operation, action, code) =
+            (self.0.clone(), key.clone(), operation.to_owned(), action.to_owned(), code.map(str::to_owned));
+        tokio::spawn(async move {
+            backend.call(&key, &operation, &action, code.as_deref()).await.map_err(|reason| {
+                tracing::warn!(code = reason, action, "janela de login recusou a operação");
+                bridge_error()
+            })
         })
+        .await
+        .map_err(|_| bridge_error())?
     }
 }
 fn bridge_error() -> AccountError {
@@ -75,6 +84,9 @@ impl AccountService {
     /// as que ficaram sem registro. Uma conta que não se recupera fica com o registro para a próxima
     /// subida e não impede as outras nem o servidor.
     pub async fn recover_claude_logins(&self, client: WindowClient) -> Result<(), AccountError> {
+        // Fora do caminho da subida: multiplexador lento não pode atrasar a porta nem depender do catálogo.
+        let sweeper = client.0.clone();
+        tokio::spawn(async move { sweeper.sweep().await });
         for (_, account) in self.claude_accounts()? {
             if let Err(error) = self.recover_claude_login(&account, &client).await {
                 tracing::warn!(
@@ -84,7 +96,6 @@ impl AccountService {
                 );
             }
         }
-        client.0.sweep().await;
         Ok(())
     }
     async fn recover_claude_login(
@@ -459,9 +470,6 @@ impl AccountService {
         .map_err(|_| AccountError::io())?
     }
 }
-fn valid_operation(value: &str) -> bool {
-    value.len() == 32 && value.bytes().all(|b| b.is_ascii_hexdigit())
-}
 fn timeout(label: &str) -> AccountError {
     AccountError::new(
         504,
@@ -741,6 +749,36 @@ mod tests {
         let config: Value =
             serde_json::from_slice(&fs::read(account.home.join(".claude.json")).unwrap()).unwrap();
         assert_eq!(config["hasCompletedOnboarding"], true);
+    }
+
+    /// Só anda depois do `Notify`, e registra ao chegar ao fim.
+    struct Gated(Arc<tokio::sync::Notify>, tokio::sync::mpsc::UnboundedSender<String>);
+    impl super::super::claude_window::WindowBackend for Gated {
+        fn call<'a>(&'a self, _: &'a AccountKey, _: &'a str, action: &'a str, _: Option<&'a str>)
+            -> BoxFuture<'a, Result<Value, &'static str>> {
+            Box::pin(async move {
+                self.0.notified().await;
+                self.1.send(action.to_owned()).unwrap();
+                Ok(json!({"ok":true}))
+            })
+        }
+        fn sweep(&self) -> BoxFuture<'_, ()> { Box::pin(async {}) }
+    }
+
+    #[tokio::test]
+    async fn dropping_a_window_call_does_not_stop_it_midway() {
+        let root = tempfile::tempdir().unwrap();
+        let key = AccountKey::new(Provider::Claude, root.path()).unwrap();
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let (sender, mut finished) = tokio::sync::mpsc::unbounded_channel();
+        let client = WindowClient::with(Arc::new(Gated(gate.clone(), sender)));
+        let operation = "a".repeat(32);
+        tokio::select! { biased;
+            _ = client.call(&key, &operation, "open", None) => panic!("a chamada não pode terminar antes do sinal"),
+            _ = tokio::time::sleep(Duration::from_millis(20)) => {}
+        }
+        gate.notify_one();
+        assert_eq!(finished.recv().await.as_deref(), Some("open"));
     }
 
     /// A CLI responde o que está em `auth-reply.json` da conta.

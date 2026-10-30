@@ -107,6 +107,14 @@ fn link_ending_exactly_at_the_margin_is_not_glued_to_the_prompt() {
 }
 
 #[test]
+fn an_earlier_link_on_the_screen_does_not_replace_the_authorization_link() {
+    let screen = "Install the latest PowerShell https://aka.ms/PSWindows\nvisit: https://claude.com/cai/oauth/authorize?code=true\nDocs: https://docs.example/x\n";
+    assert_eq!(oauth_url(screen).as_deref(), Some("https://claude.com/cai/oauth/authorize?code=true"));
+    assert_eq!(oauth_url("https://a.example/first\nhttps://b.example/last\n").as_deref(), Some("https://b.example/last"));
+    assert_eq!(oauth_url("sem link\n"), None);
+}
+
+#[test]
 fn link_stops_at_the_osc8_escape() {
     let screen = "visit: \u{1b}]8;;https://claude.ai/oauth/authorize?a=1\u{1b}\\https://claude.ai/oauth/authorize?a=1\u{1b}]8;;\u{1b}\\";
     assert_eq!(oauth_url(screen).as_deref(), Some("https://claude.ai/oauth/authorize?a=1"));
@@ -238,6 +246,43 @@ async fn unreadable_screen_is_no_link_yet_but_refuses_the_code_with_its_own_caus
 }
 
 #[tokio::test]
+async fn a_window_that_died_is_not_waiting_for_a_link() {
+    let (_root, fake, windows, key) = setup(false, "work");
+    windows.open(&key, OP).await.unwrap();
+    { let mut world = fake.0.lock().unwrap(); world.fail.insert("capture-pane"); world.sessions.remove(&name(OP)); }
+    assert_eq!(windows.read(&key, OP).await, Err("window_gone"));
+}
+
+#[tokio::test]
+async fn on_psmux_the_code_buffer_belongs_to_the_login_session() {
+    let (_root, fake, windows, key) = setup(true, "work");
+    windows.open(&key, OP).await.unwrap();
+    { let mut world = fake.0.lock().unwrap(); world.screen = PSMUX_SCREEN.into(); world.width = "120".into(); }
+    windows.code(&key, OP, "secret").await.unwrap();
+    let commands = fake.commands();
+    let load = commands.iter().find(|args| args[0] == "load-buffer").unwrap();
+    assert_eq!(load[..3], ["load-buffer".to_owned(), "-t".to_owned(), name(OP)]);
+    let delete = commands.last().unwrap();
+    assert_eq!(delete[..3], ["delete-buffer".to_owned(), "-t".to_owned(), name(OP)]);
+}
+
+#[tokio::test]
+async fn default_account_on_psmux_trusts_the_folders_of_the_home_config() {
+    let (root, fake, _, _) = setup(true, ".claude");
+    let key = AccountKey::new(super::super::Provider::Claude, &root.path().join(".claude")).unwrap();
+    let env = TerminalEnv { default_config_dir: key.canonical_home.clone(), ..terminal(true, root.path()) };
+    let windows = ClaudeWindows::new(Box::new(fake.clone()), env, Some("true".into()), None);
+    let trusted = root.path().join("repo");
+    std::fs::create_dir_all(&trusted).unwrap();
+    let user_home = key.canonical_home.parent().unwrap();
+    std::fs::write(user_home.join(".claude.json"),
+        json!({"projects": {trusted.to_string_lossy(): {"hasTrustDialogAccepted": true}}}).to_string()).unwrap();
+    windows.refresh(&key, OP).await.unwrap();
+    let create = fake.commands().into_iter().find(|args| args[0] == "new-session").unwrap();
+    assert_eq!(create[5], trusted.to_string_lossy());
+}
+
+#[tokio::test]
 async fn invalid_code_is_refused_before_any_io() {
     let (_root, fake, windows, key) = setup(false, "work");
     windows.open(&key, OP).await.unwrap();
@@ -331,7 +376,7 @@ async fn a_closed_operation_is_never_refreshed() {
 fn broken_claude_json_has_no_trusted_folder() {
     let root = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join(".claude.json"), b"{quebrado").unwrap();
-    assert_eq!(trusted_folder(root.path()), None);
+    assert_eq!(trusted_folder(&root.path().join(".claude.json")), None);
 }
 
 /// Prova com o multiplexador e a CLI da máquina, numa conta temporária:

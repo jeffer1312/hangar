@@ -103,7 +103,7 @@ pub struct AccountService {
     pub quick_renewals: super::claude_refresh::QuickRenewalBackoff,
     pub claude_auth: super::claude_auth::AuthCache,
     pub claude_logins: super::claude_login::ClaudeLogins,
-    /// Janelas do login e da renovação das contas Claude; o teste troca por uma falsa.
+    /// Janelas do login e da renovação das contas Claude.
     pub claude_windows: super::claude_login::WindowClient,
     pub codex_logins: super::codex_login::CodexLogins,
     pub device_logins: super::codex_device_login::DeviceLogins,
