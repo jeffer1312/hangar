@@ -9,6 +9,9 @@ fn main() -> std::process::ExitCode {
     if args.first().map(String::as_str) == Some("peers") {
         return hangar_server::machine_peers::cli::cli(&args[1..]);
     }
+    if args.first().map(String::as_str) == Some("pairing") {
+        return hangar_server::machine_peers::pairing::cli(&args[1..]);
+    }
     if args.first().map(String::as_str) == Some("doctor") {
         return hangar_server::machine_peers::doctor::cli(&args[1..]);
     }

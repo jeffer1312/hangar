@@ -362,54 +362,44 @@ pub fn pairing_url(service: &Service) -> String {
     };
     format!("{base}/?token={}", service.token)
 }
-pub fn print_qr(service: &Service, tty: bool) -> u8 {
-    let url = pairing_url(service);
+pub fn print_url_qr(url: &str, tty: bool) -> u8 {
     if !tty {
         println!("  Abra no celular: {url}\n");
         return 2;
     }
-    let Ok(qr) = qrcode::QrCode::new(url.as_bytes()) else {
-        return 1;
-    };
-    let width = qr.width();
-    for y in (0..width + 2).step_by(2) {
-        let mut line = String::new();
-        for x in 0..width + 2 {
-            let white = |y: usize| {
-                y == 0
-                    || x == 0
-                    || y > width
-                    || x > width
-                    || qr[(x - 1, y - 1)] != qrcode::Color::Dark
-            };
-            line.push(match (white(y), white(y + 1)) {
-                (true, true) => '█',
-                (true, false) => '▀',
-                (false, true) => '▄',
-                _ => ' ',
-            });
-        }
-        println!("{line}");
-    }
-    println!("\n  Aponte a câmera do celular para o QR acima; ou abra: {url}\n");
+    let text=match super::pairing::qr_text(url) {Ok(text)=>text,Err(error)=>{eprintln!("{error}");return 1;}};
+    println!("{text}");
+    println!("  Aponte a câmera do celular para o QR acima; ou abra: {url}\n");
     0
 }
 pub fn cli(args: &[String]) -> std::process::ExitCode {
-    let env = crate::accounts::environment::AccountEnvironment::capture();
-    let backend = crate::session_open::cli::backend_dir();
-    let get = |key: &str| {
-        super::config_value(&env.home, backend.as_deref(), key)
-            .ok()
-            .flatten()
-            .unwrap_or_default()
+    let home = std::env::home_dir().unwrap_or_default();
+    let backend = if let Some(index)=args.iter().position(|argument|argument=="--backend") {
+        let Some(path)=args.get(index+1) else {eprintln!("doctor: --backend exige uma pasta");return 2.into();};
+        Some(std::path::PathBuf::from(path))
+    } else {crate::session_open::cli::backend_dir()};
+    let snapshot=match super::dotenv::SettingsSnapshot::capture(&home,backend.as_deref(),super::dotenv::SettingsEnvironment::capture()) {
+        Ok(snapshot)=>snapshot,Err(error)=>{eprintln!("pairing_config_unavailable: {error}");return 1.into();}
+    };
+    let settings=match super::pairing::Settings::from_snapshot(&snapshot) {
+        Ok(settings)=>settings,Err(error)=>{eprintln!("{error}");return 1.into();}
+    };
+    if args.iter().any(|argument|argument=="--qr") {
+        return print_url_qr(&settings.urls(&super::network::lan_ip()).0,std::io::stdout().is_terminal()).into();
+    }
+    let port=match settings.port.parse::<u16>() {
+        Ok(port)=>port,Err(_)=>{eprintln!("doctor_config_invalid: CP_PORT fora de 0..65535");return 1.into();}
+    };
+    let server_id=match snapshot.value("CP_SERVER_ID") {
+        Ok(value)=>value.unwrap_or_default(),Err(error)=>{eprintln!("pairing_config_unavailable: {error}");return 1.into();}
     };
     let service = match Service::new(
-        &env.home,
+        &home,
         backend.as_deref(),
-        get("CP_AUTH_TOKEN"),
-        get("CP_PORT").parse().unwrap_or(8765),
-        get("CP_LAN_BIND_IP"),
-        get("CP_SERVER_ID"),
+        settings.token,
+        port,
+        settings.bind,
+        server_id,
     ) {
         Ok(s) => s,
         Err(e) => {
@@ -417,9 +407,6 @@ pub fn cli(args: &[String]) -> std::process::ExitCode {
             return 1.into();
         }
     };
-    if args.iter().any(|a| a == "--qr") {
-        return print_qr(&service, std::io::stdout().is_terminal()).into();
-    }
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

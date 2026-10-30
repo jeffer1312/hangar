@@ -1053,7 +1053,7 @@ if ($script:psmuxConsole -eq 'pular') {
 
 if ($SoChecar) {
     Titulo 'Diagnóstico'
-    & (Join-Path $raiz 'scripts\hangar-server-command.ps1') doctor; $rcDoctor = $LASTEXITCODE
+    & (Join-Path $raiz 'scripts\hangar-server-command.ps1') doctor --backend (Join-Path $raiz 'backend'); $rcDoctor = $LASTEXITCODE
     if ($rcDoctor -ne 0) { $pendencias += 'doctor' }
     if ($pendencias.Count -eq 0) { Mark-Step 'preparar' 'ok'; $script:finalState = 'ok'; Titulo 'Nada faltando.'; Pausa-Log; exit 0 }
     Mark-Step 'preparar' 'pendente'; $script:finalState = 'pendente'
@@ -2550,7 +2550,7 @@ if (-not $bash) {
 
     # O diagnóstico usa o Rust mesmo com o serviço parado, sem depender do venv.
     $lancadorDoctor = Join-Path $binUsuario 'hangar-doctor.cmd'
-    $conteudoDoctor = "@echo off`r`npowershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$raizAtalhos\scripts\hangar-server-command.ps1`" doctor %*`r`n"
+    $conteudoDoctor = "@echo off`r`npowershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$raizAtalhos\scripts\hangar-server-command.ps1`" doctor --backend `"$raizAtalhos\backend`" %*`r`n"
     if (Escrever-Lancador $lancadorDoctor $conteudoDoctor 'cmd') { Ok "lançador hangar-doctor.cmd criado em $binUsuario" }
     else { Ok 'lançador hangar-doctor.cmd já atualizado' }
 
@@ -3005,7 +3005,7 @@ if ($script:Interativo -and -not $Update) {
         $ErrorActionPreference = 'Continue'
         [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false
         $env:PYTHONIOENCODING = 'utf-8'
-        & (Join-Path $raiz 'scripts\hangar-server-command.ps1') doctor --qr
+        & (Join-Path $raiz 'scripts\hangar-server-command.ps1') doctor --backend (Join-Path $raiz 'backend') --qr
         # Exit 0 e a prova: com o preference em 'Continue' um hangar-server doctor que falha nao levanta nada,
         # e a tela final mandaria ler um QR que nunca foi desenhado.
         # 2 = o hangar-server doctor achou que nao ha terminal e so imprimiu a URL: nao ha QR a ler, e nao

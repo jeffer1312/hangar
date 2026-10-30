@@ -1,6 +1,7 @@
 //! Máquinas do dono, lista dos apps e alcance, sem passagem pelo backend Python.
 pub mod cli;
 pub mod doctor;
+pub mod pairing;
 pub mod dotenv;
 pub mod network;
 pub mod live_config;

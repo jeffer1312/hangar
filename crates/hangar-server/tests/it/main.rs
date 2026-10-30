@@ -350,3 +350,4 @@ mod peer_cli_values;
 mod codex_normalize;
 mod peer_panel;
 mod codex_plugins;
+mod pairing_print;

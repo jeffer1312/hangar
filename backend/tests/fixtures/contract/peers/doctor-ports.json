@@ -1,0 +1,73 @@
+{
+  "source_commit": "fd6fa0e6e12345198f6962c485a4c26a795021ff",
+  "command": "python generate-doctor-ports.py --reference <checkout-Python> --output <fixture>",
+  "scope": "Diagnóstico original com todas as sondas substituídas; getaddrinfo real somente para IP numérico local, sem conexão.",
+  "cases": [
+    {
+      "port": -1,
+      "probes": [
+        -1
+      ],
+      "stdout": "  ok  token de acesso definido\n  X   Hangar não responde na porta -1\n        conserto: fixture-repair\n  ok  nenhum reinício automático do backend nos últimos 7 dias\n  X   tmux não encontrado — sem ele nenhuma sessão abre\n        conserto: instale o tmux pelo gerenciador de pacotes\n  X   nenhum agente de código no PATH (Claude Code, Codex, Pi, omp ou Kimi Code)\n        conserto: curl -fsSL https://claude.ai/install.sh | bash  (Windows: irm https://claude.ai/install.ps1 | iex)\n  --  Tailscale não instalado — o celular só entra no mesmo Wi-Fi\n        conserto: quer usar fora de casa? rode o instalador de novo e responda Sim ao Tailscale\n  --  endereço da rede local não responde\n        conserto: firewall? Linux: sudo ./scripts/lan-setup.sh 8765 — Windows: regra 'hangar 8765' no perfil Private\n\n  3 item(ns) para consertar (marcados com X)\n",
+      "rc": 1,
+      "getaddrinfo": {
+        "error": "gaierror",
+        "message": "[Errno -8] Servname not supported for ai_socktype"
+      }
+    },
+    {
+      "port": 0,
+      "probes": [
+        0
+      ],
+      "stdout": "  ok  token de acesso definido\n  X   Hangar não responde na porta 0\n        conserto: fixture-repair\n  ok  nenhum reinício automático do backend nos últimos 7 dias\n  X   tmux não encontrado — sem ele nenhuma sessão abre\n        conserto: instale o tmux pelo gerenciador de pacotes\n  X   nenhum agente de código no PATH (Claude Code, Codex, Pi, omp ou Kimi Code)\n        conserto: curl -fsSL https://claude.ai/install.sh | bash  (Windows: irm https://claude.ai/install.ps1 | iex)\n  --  Tailscale não instalado — o celular só entra no mesmo Wi-Fi\n        conserto: quer usar fora de casa? rode o instalador de novo e responda Sim ao Tailscale\n  --  endereço da rede local não responde\n        conserto: firewall? Linux: sudo ./scripts/lan-setup.sh 8765 — Windows: regra 'hangar 8765' no perfil Private\n\n  3 item(ns) para consertar (marcados com X)\n",
+      "rc": 1,
+      "getaddrinfo": {
+        "address": [
+          "127.0.0.1",
+          0
+        ]
+      }
+    },
+    {
+      "port": 65535,
+      "probes": [
+        65535
+      ],
+      "stdout": "  ok  token de acesso definido\n  X   Hangar não responde na porta 65535\n        conserto: fixture-repair\n  ok  nenhum reinício automático do backend nos últimos 7 dias\n  X   tmux não encontrado — sem ele nenhuma sessão abre\n        conserto: instale o tmux pelo gerenciador de pacotes\n  X   nenhum agente de código no PATH (Claude Code, Codex, Pi, omp ou Kimi Code)\n        conserto: curl -fsSL https://claude.ai/install.sh | bash  (Windows: irm https://claude.ai/install.ps1 | iex)\n  --  Tailscale não instalado — o celular só entra no mesmo Wi-Fi\n        conserto: quer usar fora de casa? rode o instalador de novo e responda Sim ao Tailscale\n  --  endereço da rede local não responde\n        conserto: firewall? Linux: sudo ./scripts/lan-setup.sh 8765 — Windows: regra 'hangar 8765' no perfil Private\n\n  3 item(ns) para consertar (marcados com X)\n",
+      "rc": 1,
+      "getaddrinfo": {
+        "address": [
+          "127.0.0.1",
+          65535
+        ]
+      }
+    },
+    {
+      "port": 65536,
+      "probes": [
+        65536
+      ],
+      "stdout": "  ok  token de acesso definido\n  X   Hangar não responde na porta 65536\n        conserto: fixture-repair\n  ok  nenhum reinício automático do backend nos últimos 7 dias\n  X   tmux não encontrado — sem ele nenhuma sessão abre\n        conserto: instale o tmux pelo gerenciador de pacotes\n  X   nenhum agente de código no PATH (Claude Code, Codex, Pi, omp ou Kimi Code)\n        conserto: curl -fsSL https://claude.ai/install.sh | bash  (Windows: irm https://claude.ai/install.ps1 | iex)\n  --  Tailscale não instalado — o celular só entra no mesmo Wi-Fi\n        conserto: quer usar fora de casa? rode o instalador de novo e responda Sim ao Tailscale\n  --  endereço da rede local não responde\n        conserto: firewall? Linux: sudo ./scripts/lan-setup.sh 8765 — Windows: regra 'hangar 8765' no perfil Private\n\n  3 item(ns) para consertar (marcados com X)\n",
+      "rc": 1,
+      "getaddrinfo": {
+        "address": [
+          "127.0.0.1",
+          0
+        ]
+      }
+    },
+    {
+      "port": 1000000000000000000000000000000,
+      "probes": [
+        1000000000000000000000000000000
+      ],
+      "stdout": "  ok  token de acesso definido\n  X   Hangar não responde na porta 1000000000000000000000000000000\n        conserto: fixture-repair\n  ok  nenhum reinício automático do backend nos últimos 7 dias\n  X   tmux não encontrado — sem ele nenhuma sessão abre\n        conserto: instale o tmux pelo gerenciador de pacotes\n  X   nenhum agente de código no PATH (Claude Code, Codex, Pi, omp ou Kimi Code)\n        conserto: curl -fsSL https://claude.ai/install.sh | bash  (Windows: irm https://claude.ai/install.ps1 | iex)\n  --  Tailscale não instalado — o celular só entra no mesmo Wi-Fi\n        conserto: quer usar fora de casa? rode o instalador de novo e responda Sim ao Tailscale\n  --  endereço da rede local não responde\n        conserto: firewall? Linux: sudo ./scripts/lan-setup.sh 8765 — Windows: regra 'hangar 8765' no perfil Private\n\n  3 item(ns) para consertar (marcados com X)\n",
+      "rc": 1,
+      "getaddrinfo": {
+        "error": "gaierror",
+        "message": "[Errno -8] Servname not supported for ai_socktype"
+      }
+    }
+  ]
+}

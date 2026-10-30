@@ -2,4 +2,4 @@
 # Diagnóstico offline; o serviço não precisa estar de pé.
 set -euo pipefail
 root="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")/.." && pwd)"
-exec "$root/scripts/hangar-server-command" doctor "$@"
+exec "$root/scripts/hangar-server-command" doctor --backend "$root/backend" "$@"

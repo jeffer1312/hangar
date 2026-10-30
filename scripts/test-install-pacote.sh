@@ -25,6 +25,9 @@ pacote_sandbox() {
   mkdir -p "$R/bin"
   printf '#!/bin/sh\necho "$*" >> "%s/log/server"\necho "aviso: passo malformado ignorado: torto.md"\n[ ! -e "%s/mark-fails" ]\n' "$S" "$S" > "$R/bin/hangar-server"
   chmod +x "$R/bin/hangar-server"
+  cp "$REPO/scripts/hangar-doctor" "$REPO/scripts/hangar-server-command" "$R/scripts/"
+  mkdir -p "$S/home/.hangar"
+  ln -s "$R" "$S/home/.hangar/current"
   fake node 'case "$1" in --version) echo v22.0.0 ;; esac; exit 0'
   fake npm 'exit 0'
 }
@@ -199,22 +202,23 @@ else
   echo "pulado: install-native.sh só tem pacote de teste para Linux x86_64"
 fi
 
-# --- hangar-doctor e show-qr.sh pelo Python do pacote, sem uv ---
+# --- Diagnóstico e pareamento pelo binário do pacote, sem serviço ou Python ---
 pacote_sandbox doctor
 cp "$REPO/scripts/hangar-doctor" "$REPO/scripts/show-qr.sh" "$R/scripts/"
 env -i HOME="$S/home" PATH="$S/sys" "$R/scripts/hangar-doctor" --qr > "$S/out" 2>&1
 env -i HOME="$S/home" PATH="$S/sys" "$R/scripts/show-qr.sh" >> "$S/out" 2>&1
-expect_line "doctor: pelo hangar-python" "$S/log/python" "^$R/backend -m app.doctor --qr$"
-expect_line "show-qr: pelo hangar-python" "$S/log/python" "^$R/backend -c from app.config import settings"
+expect_line "doctor: pelo binário" "$S/log/server" "^doctor --backend $R/backend --qr$"
+expect_line "show-qr: pelo binário e backend explícito" "$S/log/server" "^pairing --backend $R/backend$"
+[ -e "$S/log/python" ] && flunk "diagnóstico e QR não chamam Python" || pass "diagnóstico e QR não chamam Python"
 
 # --- Caso: --check no pacote confere sem uv e sem gravar, nem marcar passos (mesmo em instalação nova) ---
 pacote_sandbox check
 mkdir -p "$S/home/.hangar" && : > "$S/home/.hangar/fresh-package"
 TEST_FRESH=1 run_install "$S/out" --check --no-frontend; rc=$?
 expect_eq "check: sai 0" "$rc" 0
-expect_line "check: diagnóstico pelo Python do pacote" "$S/log/python" "^$R/backend -m app.doctor$"
+expect_line "check: diagnóstico nativo" "$S/log/server" "^doctor --backend $R/backend$"
 [ -e "$S/home/.hangar/config" ] && flunk "check: não grava nada" || pass "check: não grava nada"
-[ -e "$S/log/server" ] && flunk "check: nada marcado" "$S/out" || pass "check: nada marcado"
+expect_no "check: nada marcado" "$S/log/server" "install-package"
 [ -e "$S/home/.hangar/fresh-package" ] && pass "check: marcador fica" || flunk "check: marcador fica" "$S/out"
 
 if [ "$fail" = 0 ]; then echo "tudo ok"; else echo "houve falha"; fi
