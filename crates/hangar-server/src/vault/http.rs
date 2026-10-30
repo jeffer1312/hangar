@@ -5,7 +5,7 @@ use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use std::{net::SocketAddr, sync::Arc};
 
-use super::{EntryChange, KeyError, NewEntry, VaultError};
+use super::{EntryChange, KeyError, NewEntry, Role, Status, VaultError, config::{self, ConfigError, Placement}, remote::{Remote, RemoteError}, store};
 use crate::{routes::AppState, session_write::detail};
 
 const MAX_BODY: usize = 64 * 1024;
@@ -70,6 +70,28 @@ fn failure(st: &AppState, error: VaultError) -> Response {
     fail(status, code, msg)
 }
 
+fn config_failure(st: &AppState, error: ConfigError) -> Response {
+    let (status, code, msg) = match error {
+        ConfigError::Unreadable => (StatusCode::INTERNAL_SERVER_ERROR, "erro_cofre_config_ilegivel", "o vault.json desta máquina não lê"),
+        ConfigError::Io => (StatusCode::SERVICE_UNAVAILABLE, "erro_cofre_indisponivel", "não foi possível ler ou gravar o vault.json"),
+    };
+    st.diag.report("rust.vault_failed", "", code, "a configuração do cofre não leu ou não gravou");
+    fail(status, code, msg)
+}
+
+/// A recusa da dona passa adiante com o código dela; dona fora vira 502 com o motivo.
+pub(crate) fn remote_failure(owner: &str, error: RemoteError) -> Response {
+    match error {
+        RemoteError::OwnerDown(reason) => detail(StatusCode::BAD_GATEWAY, "erro_cofre_dona_fora", "a máquina dona do cofre não respondeu",
+            json!({"owner": owner, "reason": reason})),
+        RemoteError::Lost => fail(StatusCode::NOT_FOUND, "erro_cofre_pedido_perdido", "a dona do cofre não conhece mais este pedido"),
+        RemoteError::Refused { status, code, msg } => fail(StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY), &code, &msg),
+    }
+}
+
+/// `?local=1`: o pedido veio de outra máquina e não volta a ser encaminhado.
+fn local_only(req: &Request) -> bool { crate::auth::query_param(req.uri().query(), "local").is_some_and(|v| v == "1") }
+
 fn done(headers: &HeaderMap, mut resp: Response) -> Response {
     crate::routes::cors(headers, resp.headers_mut());
     resp
@@ -81,25 +103,83 @@ pub async fn status(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     let headers = req.headers().clone();
     let resp = match owner(&st, peer, &req).await {
         Err(resp) => resp,
-        Ok(()) => ok(json!(st.vault.status(&st.hangar_dir).await)),
+        Ok(()) => status_body(&st, local_only(&req)).await,
     };
     done(&headers, resp)
 }
 
-/// Só `owner` por enquanto; os outros campos ficam para a configuração entre máquinas.
+/// O estado daqui; na máquina que aponta para uma dona, o da dona (`offline` com o motivo quando
+/// ela não responde). `local`: nunca encaminha.
+async fn status_body(st: &AppState, local: bool) -> Response {
+    let here = st.vault.status(&st.hangar_dir).await;
+    if local || here.role == Role::Owner { return ok(json!(here)); }
+    let owner_id = match config::placement(&st.hangar_dir) {
+        Ok(Placement::Remote(id)) => id,
+        Ok(_) => return ok(json!(here)),
+        Err(error) => return config_failure(st, error),
+    };
+    let body = match (Remote { peers: &st.peers, owner: &owner_id }).status().await {
+        Ok(Status { role: Role::Owner, state }) => json!({"role": "remote", "owner": owner_id, "state": state}),
+        Ok(_) => json!({"role": "remote", "owner": owner_id, "state": "absent", "detail": format!("{owner_id} não guarda cofre")}),
+        Err(error) => json!({"role": "remote", "owner": owner_id, "state": "offline", "detail": error.reason()}),
+    };
+    ok(body)
+}
+
+/// `owner`: `"self"` (ou o id desta máquina) cria o cofre aqui; outro id grava a dona no
+/// `vault.json`. `backup_peer` fica para a cópia diária. `null` apaga o campo.
 #[derive(Deserialize)]
-struct Config { owner: Option<String> }
+#[serde(deny_unknown_fields)]
+struct ConfigChange {
+    #[serde(default, deserialize_with = "super::present")]
+    owner: Option<Option<String>>,
+    #[serde(default, deserialize_with = "super::present")]
+    backup_peer: Option<Option<String>>,
+}
+
+/// Máquina que o `peers.json` alcança: sem isso a dona ou a cópia não teriam para onde ir.
+fn known_peer(st: &AppState, id: &str) -> Result<(), Response> {
+    if !config::valid_server_id(id) { return Err(invalid()); }
+    if st.peers.base_url(id).is_none() {
+        return Err(fail(StatusCode::CONFLICT, "erro_cofre_peer_desconhecido", "a máquina não está no peers.json (ou sem base_url/token)"));
+    }
+    Ok(())
+}
 
 pub async fn config(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let headers = req.headers().clone();
     let resp = 'r: {
         if let Err(resp) = owner(&st, peer, &req).await { break 'r resp; }
-        let Some(Config { owner: Some(chosen) }) = body::<Config>(req).await else { break 'r invalid() };
-        if chosen != "self" { break 'r invalid(); }
-        match st.vault.create(&st.hangar_dir).await {
-            Ok(()) => ok(json!(st.vault.status(&st.hangar_dir).await)),
-            Err(error) => failure(&st, error),
+        let Some(change) = body::<ConfigChange>(req).await else { break 'r invalid() };
+        if change.owner.is_none() && change.backup_peer.is_none() { break 'r invalid(); }
+        let before = match config::load(&st.hangar_dir) { Ok(cfg) => cfg, Err(error) => break 'r config_failure(&st, error) };
+        let mut cfg = before.clone();
+        match change.owner {
+            Some(Some(id)) if id == "self" || id == st.server_id => {
+                if let Err(error) = st.vault.create(&st.hangar_dir).await { break 'r failure(&st, error); }
+                cfg.owner = None;
+            }
+            Some(Some(id)) => {
+                // Apontar para outra dona deixaria as senhas daqui inalcançáveis pelas tools.
+                if store::exists(&store::path(&st.hangar_dir)) {
+                    break 'r fail(StatusCode::CONFLICT, "erro_cofre_ja_e_dona", "esta máquina já guarda um cofre; outra não pode ser a dona");
+                }
+                if let Err(resp) = known_peer(&st, &id) { break 'r resp; }
+                cfg.owner = Some(id);
+            }
+            Some(None) => cfg.owner = None,
+            None => {}
         }
+        match change.backup_peer {
+            Some(Some(id)) => {
+                if let Err(resp) = known_peer(&st, &id) { break 'r resp; }
+                cfg.backup_peer = Some(id);
+            }
+            Some(None) => cfg.backup_peer = None,
+            None => {}
+        }
+        if cfg != before && let Err(error) = config::save(&st.hangar_dir, &cfg) { break 'r config_failure(&st, error); }
+        status_body(&st, false).await
     };
     done(&headers, resp)
 }
@@ -109,6 +189,16 @@ pub async fn entries(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
     let resp = 'r: {
         if let Err(resp) = owner(&st, peer, &req).await { break 'r resp; }
         if req.method() == axum::http::Method::GET {
+            if !local_only(&req) {
+                match config::placement(&st.hangar_dir) {
+                    Ok(Placement::Remote(id)) => break 'r match (Remote { peers: &st.peers, owner: &id }).entries().await {
+                        Ok(list) => ok(json!(list)),
+                        Err(error) => remote_failure(&id, error),
+                    },
+                    Ok(_) => {}
+                    Err(error) => break 'r config_failure(&st, error),
+                }
+            }
             break 'r match st.vault.list(&st.hangar_dir).await {
                 Ok(list) => ok(json!(list)),
                 Err(error) => failure(&st, error),

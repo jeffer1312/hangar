@@ -1,10 +1,15 @@
 //! Cofre de senhas do dono, nesta máquina: `vault.bin` cifrado com a chave do chaveiro. O valor
 //! da senha nunca entra em log, diário, evento nem mensagem de erro.
+pub mod config;
 pub mod http;
 pub mod key;
+pub mod remote;
 pub mod store;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_remote;
+pub mod wire;
 
 use serde::{Deserialize, Deserializer, Serialize};
 use std::{path::Path, sync::Arc};
@@ -17,15 +22,16 @@ const MAX_NAME: usize = 200;
 const MAX_FIELD: usize = 2048;
 const MAX_SECRET: usize = 16 * 1024;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+/// `Remote` e `Offline` só saem da rota de estado (`http::status`), nunca de `Vault::status`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Role { Owner, None }
+pub enum Role { Owner, Remote, None }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum State { Open, Locked, Absent, KeyLost }
+pub enum State { Open, Locked, Absent, KeyLost, Offline }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Status { pub role: Role, pub state: State }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,7 +57,7 @@ impl From<store::StoreError> for VaultError {
 }
 
 /// O que `GET /api/vault/entries` mostra: tudo menos a senha.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Summary {
     pub id: String,
     pub name: String,
