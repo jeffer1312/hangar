@@ -48,5 +48,5 @@ export function AutoReportAnimation({ width }: { width: number }) {
 
 const styles = StyleSheet.create(theme => ({
   stage: { gap: theme.base.space[2] },
-  status: { minHeight: 104 },
+  status: { minHeight: 126 },
 }));

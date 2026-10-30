@@ -81,11 +81,12 @@ pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &
         .bg(linear_gradient(180., linear_color_stop(theme::chrome(), 0.), linear_color_stop(theme::background(), 1.)))
         .flex().flex_col().gap(px(12.)).text_color(theme::text());
     if compact { return stage.child(status).into_any_element(); }
-    // Miniatura só leitura: o interruptor fica sem clique e fora do Tab.
+    // Miniatura só leitura: o interruptor fica fora do Tab, e a tampa por cima não deixa o mouse levar o foco para ele.
     let toggle = Switch::new("news-auto-report-switch").checked(on).tab_stop(false).accessibility_label(tr_shared("native_auto_report_title", &[]));
     let hint = tr_shared(if on { "auto_report_on" } else { "auto_report_off" }, &[]);
-    stage.child(app::settings_box().child(app::setting_row(false, IconName::FileText, tr_shared("native_auto_report_title", &[]),
-            div().whitespace_normal().child(hint), true, toggle.into_any_element())))
+    stage.child(div().relative().child(app::settings_box().child(app::setting_row(false, IconName::FileText, tr_shared("native_auto_report_title", &[]),
+                div().whitespace_normal().child(hint), true, toggle.into_any_element())))
+            .child(div().absolute().top_0().left_0().size_full().occlude()))
         .child(status)
         .into_any_element()
 }
