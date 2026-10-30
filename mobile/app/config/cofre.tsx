@@ -7,7 +7,8 @@ import { InfoNotice } from '../../src/features/config/InfoNotice';
 import { MachineGroup, MachineHelp, MachineRow } from '../../src/features/machines/MachineRows';
 import { Notice } from '../../src/features/machines/parts';
 import { VaultEntrySheet } from '../../src/features/vault/VaultEntrySheet';
-import { VaultOwnerSheet } from '../../src/features/vault/VaultOwnerSheet';
+import { VaultPeerSheet } from '../../src/features/vault/VaultPeerSheet';
+import { VaultRecoverySheet, VaultRestoreSheet } from '../../src/features/vault/VaultBackupSheets';
 import { vaultErrorText } from '../../src/features/vault/errors';
 import { useServers } from '../../src/stores/servers';
 import { toast } from '../../src/ui/Toast';
@@ -35,8 +36,7 @@ export default function Cofre() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState<VaultEntry | 'new' | null>(null);
-  const [choosing, setChoosing] = useState(false);
-  const generation = useRef(0);
+  const [sheet, setSheet] = useState<'owner' | 'backup' | 'recovery' | 'restore' | null>(null);  const generation = useRef(0);
 
   const load = useCallback(() => {
     const now = ++generation.current;
@@ -81,6 +81,10 @@ export default function Cofre() {
   };
 
   const state = status?.state;
+  const backup = status?.backup;
+  // Restaurar só entra em cofre vazio: sem cofre ainda, ou dona aberta sem nenhuma senha.
+  const canRestore = !!status && (status.role === 'none' || state === 'absent'
+    || (status.role === 'owner' && state === 'open' && entries?.length === 0));
   return (
     <Pagina>
       <Stack.Screen options={{ title: m.vault_app_title() }} />
@@ -98,11 +102,11 @@ export default function Cofre() {
               : status.role === 'remote' ? <>
                 <MachineRow title={m.vault_app_owner_is({ owner: status.owner ?? '?' })} value={state ? STATE[state]() : undefined}
                   valueTone={state === 'open' ? 'success' : 'error'} />
-                <MachineRow title={m.vault_app_owner_change()} disabled={busy} onPress={() => setChoosing(true)} />
+                <MachineRow title={m.vault_app_owner_change()} disabled={busy} onPress={() => setSheet('owner')} />
               </>
               : <>
                 <MachineRow title={m.vault_app_owner_self()} description={m.vault_app_owner_self_help()} action disabled={busy} onPress={becomeOwner} />
-                <MachineRow title={m.vault_app_owner_other()} disabled={busy} onPress={() => setChoosing(true)} />
+                <MachineRow title={m.vault_app_owner_other()} disabled={busy} onPress={() => setSheet('owner')} />
               </>}
           </MachineGroup>
           {status.role === 'none' ? <InfoNotice text={m.vault_app_none_help()} />
@@ -126,11 +130,35 @@ export default function Cofre() {
               <MachineRow title={m.vault_app_retry()} disabled={loading} onPress={load} />
             </MachineGroup>
           </> : <MachineGroup><MachineRow title={m.vault_app_retry()} disabled={loading} onPress={load} /></MachineGroup>}
+          {status.role === 'owner' ? <>
+            <MachineHelp>{m.vault_app_backup()}</MachineHelp>
+            <MachineGroup>
+              <MachineRow title={m.vault_app_backup_peer()} value={backup?.peer ?? m.vault_app_backup_none()}
+                disabled={busy} onPress={() => setSheet('backup')} />
+              <MachineRow title={m.vault_app_recovery_title()} description={m.vault_app_recovery_help()}
+                disabled={busy} onPress={() => setSheet('recovery')} />
+              {backup ? <MachineRow title={m.vault_app_backup_last()}
+                value={backup.last_ok_at ? new Date(backup.last_ok_at * 1000).toLocaleString() : m.vault_app_backup_never()}
+                valueTone={backup.last_error ? 'error' : backup.last_ok_at ? 'success' : undefined} /> : null}
+            </MachineGroup>
+            {backup?.last_error ? <Notice text={m.vault_app_backup_error({ error: backup.last_error })} error /> : null}
+          </> : null}
+          {canRestore ? <MachineGroup>
+            <MachineRow title={m.vault_app_restore()} description={m.vault_app_restore_row_help()} disabled={busy} onPress={() => setSheet('restore')} />
+          </MachineGroup> : null}
         </> : null}
       {server && editing ? <VaultEntrySheet server={server} entry={editing === 'new' ? null : editing}
         onClose={() => setEditing(null)} onChanged={load} /> : null}
-      {server && choosing ? <VaultOwnerSheet server={server} current={status?.owner}
-        onClose={() => setChoosing(false)} onChanged={load} /> : null}
+      {server && sheet === 'owner' ? <VaultPeerSheet server={server} title={m.vault_app_owner_choose()}
+        help={m.vault_app_owner_choose_help({ server: server.label })} current={status?.owner}
+        onPick={async (id) => { if (id) { await putVaultConfig(server, { owner: id }); toast.ok(m.vault_app_owner_saved()); load(); } }}
+        onClose={() => setSheet(null)} /> : null}
+      {server && sheet === 'backup' ? <VaultPeerSheet server={server} title={m.vault_app_backup_peer()}
+        help={m.vault_app_backup_peer_help()} current={backup?.peer ?? null} noneLabel={m.vault_app_backup_none()}
+        onPick={async (id) => { await putVaultConfig(server, { backup_peer: id }); toast.ok(m.vault_app_backup_saved()); load(); }}
+        onClose={() => setSheet(null)} /> : null}
+      {server && sheet === 'recovery' ? <VaultRecoverySheet server={server} onClose={() => setSheet(null)} onChanged={load} /> : null}
+      {server && sheet === 'restore' ? <VaultRestoreSheet server={server} onClose={() => setSheet(null)} onChanged={load} /> : null}
     </Pagina>
   );
 }
