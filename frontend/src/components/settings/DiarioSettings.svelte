@@ -5,7 +5,7 @@
   //
   // O que o arquivo contém e o que NÃO contém está em backend/app/diag.py e em lib/diag.ts. O texto
   // aqui repete a parte que importa pra quem vai enviar: fica na máquina, e não guarda conversa.
-  import { getDiagSummaryForServer, baixarDiag, type ResumoDiag, type LinhaDiag, type Server } from '@hangar/core';
+  import { getDiagSummaryForServer, baixarDiag, getAutoReportEm, putAutoReportEm, type ResumoDiag, type LinhaDiag, type Server } from '@hangar/core';
   import { fmtBytes, sendDiagReportAll, resendDiagReportMissed, diagReportMachines, diagReportNext, diagReportTargets, DIAG_REPORT_TEXT_MAX,
     type DiagReportAllResult, type DiagReportResult, type DiagReportScope } from '@hangar/core';
   import { listServers, onServersChanged } from '../../lib/auth';
@@ -63,6 +63,23 @@
   const act = () => (next === 'resend' ? resendMissed() : reportar());
   // Quantas máquinas o envio teve, não a escolha de agora: trocar a escolha depois não muda o texto do erro.
   const several = $derived((resultado?.results.length ?? 0) > 1);
+
+  // Relatório automático da atualização, por máquina: `null` = não respondido; `undefined` = lendo ou servidor sem o recurso.
+  let autoReport = $state<boolean | null | undefined>(undefined);
+  let autoReportSaving = $state(false);
+  let autoReportError = $state('');
+  $effect(() => {
+    const alvo = servidor;
+    autoReport = undefined; autoReportError = '';
+    getAutoReportEm(alvo).then((v) => { if (alvo === servidor) autoReport = v; },
+      (e) => { if (alvo === servidor) autoReportError = e instanceof Error ? e.message : String(e); });
+  });
+  async function setAutoReport(value: boolean) {
+    autoReportSaving = true; autoReportError = '';
+    try { autoReport = await putAutoReportEm(servidor, value); }
+    catch (e) { autoReportError = e instanceof Error ? e.message : String(e); }
+    finally { autoReportSaving = false; }
+  }
 
   async function copiar(code: string) {
     if (!(await copyText(code))) return;
@@ -217,6 +234,17 @@
           </ul>
         </div>
       {/if}
+      {#if autoReport !== undefined}
+        <label class="rep-auto">
+          <span class="rep-auto-txt">
+            <b>{m.auto_report_setting()}</b>
+            <span class="rep-aviso" id="auto-report-ajuda">{autoReport === null ? m.auto_report_unanswered() : m.auto_report_setting_hint()}</span>
+          </span>
+          <input type="checkbox" class="switch" aria-label={m.auto_report_setting()} aria-describedby="auto-report-ajuda"
+            checked={autoReport === true} disabled={autoReportSaving} onchange={(e) => setAutoReport(e.currentTarget.checked)} />
+        </label>
+      {/if}
+      {#if autoReportError}<p class="erro" role="alert">{autoReportError}</p>{/if}
     </section>
   {/if}
 
@@ -274,6 +302,8 @@
   .reportar { display: flex; flex-direction: column; gap: var(--space-2); margin-top: var(--space-5); }
   .rep-servidor, .rep-aviso, .rep-msg { margin: 0; font-size: var(--text-sm); color: var(--text-secondary); }
   .rep-aviso { font-size: var(--text-xs); color: var(--text-muted); }
+  .rep-auto { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 8px; }
+  .rep-auto-txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
   .rep-msg.aviso { color: var(--warning); }
   .rep-label { font-size: var(--text-sm); color: var(--text-secondary); }
   .rep-escopo { display: flex; flex-direction: column; gap: var(--space-1); margin: 0; padding: 0; border: 0; font-size: var(--text-sm); }

@@ -1,7 +1,7 @@
 import 'react-native-url-polyfill/auto';
 import '../src/theme/unistyles';
 import { useEffect, useMemo, useRef } from 'react';
-import { AppState, Dimensions, Platform, type AppStateStatus } from 'react-native';
+import { Alert, AppState, Dimensions, Platform, type AppStateStatus } from 'react-native';
 import { DarkTheme, DefaultTheme, Stack, ThemeProvider, useGlobalSearchParams, usePathname, useRouter, useSegments } from 'expo-router';
 import { useUnistyles } from 'react-native-unistyles';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -24,7 +24,7 @@ import { setFatalErrorRoute, takeFatalErrorNotice } from '../src/net/fatalErrors
 import * as m from '../src/paraglide/messages';
 import { installNotificationHandler, pushRegistrationKey, registerExpoPush, retryExpoPushIfDenied, useNotificationNavigation } from '../src/features/push/expoPush';
 import { getLocale } from '../src/paraglide/runtime';
-import { getAtualizacaoEm, registrarDiag } from '@hangar/core';
+import { autoReportUnanswered, getAtualizacaoEm, putAutoReportEm, registrarDiag } from '@hangar/core';
 import { clearPendingNews, firstPendingServer, pendingFrom, whatsNewHref } from '../src/features/updates/pending';
 
 configureCore();
@@ -130,6 +130,28 @@ export default function Layout() {
       if (v.backend === from) clearPendingNews(id);
       else if (alive) router.push(whatsNewHref(id));
     }).catch(() => { /* servidor fora: confere na próxima abertura */ });
+    return () => { alive = false; };
+  }, [ready, withoutServer]);
+
+  // Relatório automático da atualização: uma pergunta só, na abertura, para as máquinas próprias sem resposta.
+  const autoReportAsked = useRef(false);
+  useEffect(() => {
+    if (!ready || withoutServer || autoReportAsked.current) return;
+    autoReportAsked.current = true;
+    let alive = true;
+    autoReportUnanswered(servers).then((pending) => {
+      if (!alive || !pending.length) return;
+      const answer = (value: boolean) => {
+        void Promise.allSettled(pending.map((server) => putAutoReportEm(server, value))).then((results) => {
+          const failed = pending.filter((_, i) => results[i].status === 'rejected');
+          if (failed.length) toast.erro(m.update_all_failed({ erro: failed.map((s) => s.label).join(', ') }));
+        });
+      };
+      Alert.alert(m.auto_report_question_title(), m.auto_report_question_body({ machines: pending.map((s) => s.label).join(', ') }), [
+        { text: m.auto_report_no(), style: 'cancel', onPress: () => answer(false) },
+        { text: m.auto_report_yes(), onPress: () => answer(true) },
+      ]);
+    });
     return () => { alive = false; };
   }, [ready, withoutServer]);
 

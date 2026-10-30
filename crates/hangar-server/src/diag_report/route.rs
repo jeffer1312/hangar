@@ -43,7 +43,7 @@ fn token_ok(token: &str) -> bool {
 }
 
 /// O que o worker devolveu: o código, a senha do diário e o grupo (confirmado, ou a assinatura de um novo).
-struct Sent { code: String, upload: Option<String>, group: Option<String>, group_token: Option<String> }
+pub(crate) struct Sent { pub(crate) code: String, upload: Option<String>, group: Option<String>, group_token: Option<String> }
 
 fn stamp() -> String {
     let version = crate::update::running_package().map_or(env!("CARGO_PKG_VERSION"), |p| p.version.as_str());
@@ -51,7 +51,7 @@ fn stamp() -> String {
 }
 
 /// Falha do envio: o código do C1 e o que vai nos `params`.
-struct Failed { status: StatusCode, code: &'static str, msg: &'static str, params: Value }
+pub(crate) struct Failed { status: StatusCode, pub(crate) code: &'static str, msg: &'static str, params: Value }
 
 impl Failed {
     fn unreachable() -> Self {
@@ -99,6 +99,20 @@ async fn send_diary(base: &str, stamp: &str, code: &str, upload: &str, gz: Vec<u
     }
 }
 
+/// Monta o pacote, manda o relatório e, com a senha da resposta, o diário. Devolve também se o
+/// diário chegou.
+pub(crate) async fn send(st: &crate::routes::AppState, input: ClientInput) -> Result<(Sent, bool), Failed> {
+    let group = input.group.clone().zip(input.group_token.clone());
+    let bundle = build(st, input).await;
+    let stamp = stamp();
+    let sent = send_report(&st.diag_report_base, &stamp, group.as_ref().map(|(g, t)| (g.as_str(), t.as_str())), bundle.body).await?;
+    let diary = match &sent.upload {
+        Some(upload) if !bundle.diary_gz.is_empty() => send_diary(&st.diag_report_base, &stamp, &sent.code, upload, bundle.diary_gz).await,
+        _ => false,
+    };
+    Ok((sent, diary))
+}
+
 pub async fn report_route(
     axum::extract::State(st): axum::extract::State<Arc<crate::routes::AppState>>,
     axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
@@ -122,14 +136,8 @@ pub async fn report_route(
             break 'r detail(StatusCode::UNPROCESSABLE_ENTITY, "diag_report_bad_request", "corpo do relatório inválido", Value::Null);
         };
         let group = input.group.clone().zip(input.group_token.clone());
-        let bundle = build(&st, input).await;
-        let stamp = stamp();
-        match send_report(&st.diag_report_base, &stamp, group.as_ref().map(|(g, t)| (g.as_str(), t.as_str())), bundle.body).await {
-            Ok(sent) => {
-                let diary = match sent.upload {
-                    Some(upload) if !bundle.diary_gz.is_empty() => send_diary(&st.diag_report_base, &stamp, &sent.code, &upload, bundle.diary_gz).await,
-                    _ => false,
-                };
+        match send(&st, input).await {
+            Ok((sent, diary)) => {
                 // O cliente confere `group`: worker antigo grava a máquina avulsa e não o devolve. Sem a assinatura
                 // (segredo do worker ausente, worker antigo) as outras máquinas não entram: o motivo vai ao diário.
                 let unjoined = match &group { Some((group, _)) => sent.group.as_deref() != Some(group.as_str()), None => sent.group_token.is_none() };

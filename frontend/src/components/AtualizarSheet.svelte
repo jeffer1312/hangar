@@ -14,7 +14,7 @@
   import * as m from '../paraglide/messages';
   import BottomSheet from './BottomSheet.svelte';
   import { getAtualizacao, iniciarAtualizacao, reiniciarServidor, matchesRestartResult,
-           ownUpdatableServers, updateAll } from '@hangar/core';
+           ownUpdatableServers, updateAll, updateReportLine } from '@hangar/core';
   import { listOwnServers, onServersChanged, servidorDaOrigem } from '../lib/auth';
   import * as diag from '../lib/diag';
   import { aguardarSwNovo, esvaziarCaches } from '../lib/swNovo';
@@ -74,9 +74,13 @@
           case 'rodando': return m.update_all_held_running();
           default: return m.update_all_held_missing();
         }
-      case 'falhou': return m.update_all_failed({ erro: value.errorCode === 'silent'
-        ? m.update_all_silent() : value.errorCode === 'timeout'
-          ? m.update_all_timeout() : value.error ?? value.state?.erro ?? '?' });
+      case 'falhou': {
+        const failed = m.update_all_failed({ erro: value.errorCode === 'silent'
+          ? m.update_all_silent() : value.errorCode === 'timeout'
+            ? m.update_all_timeout() : value.error ?? value.state?.erro ?? '?' });
+        const report = updateReportLine(value.state);
+        return report ? `${failed} · ${report}` : failed;
+      }
     }
   }
 
@@ -118,6 +122,7 @@
 
   const INTERVALO = 2000;
   let timer: ReturnType<typeof setInterval> | null = null;
+  let relatorioDesde: number | null = null;
   /** Esta tela mandou começar. Verdade a partir do POST, não do próximo fetch que der certo. */
   let lancamos = $state(false);
   /** Último estado já registrado no diário — evita dezenas de linhas idênticas por atualização. */
@@ -182,6 +187,8 @@
           diag.registrar({ evento: 'atualizacao.tique', detalhe: marca });
         }
         if (!open || estado.fase !== 'pronto') return;
+        // Falha com o relatório automático saindo: segue lendo até o código chegar (o servidor tenta por até ~11 min).
+        if (estado.ok === false && estado.relatorio === 'pendente' && Date.now() - (relatorioDesde ??= Date.now()) < 12 * 60 * 1000) return;
         diag.registrar({
           evento: 'atualizacao.pronto',
           detalhe: `ok=${estado.ok === true} recarrega=${!faltaReiniciar}`,
@@ -553,6 +560,7 @@
         <!-- Erro do servidor é DADO, não chave de idioma: vai como veio. -->
         <p class="erro-log">{estado.erro}</p>
       </div>
+      {#if updateReportLine(estado)}<p class="estado-final">{updateReportLine(estado)}</p>{/if}
       <!-- Três desfechos, não dois: "revertido e no ar", "revertido mas o servidor não subiu" e
            "parou antes de mexer em nada". Com duas frases só, o caso do meio era descrito por uma
            das outras duas — e as duas mentiam. -->

@@ -193,6 +193,10 @@ pub trait Spawner: Sync {
     fn spawn(&self, args: &[String]) -> std::io::Result<u32>;
 }
 
+/// Avisado quando um executor lançado por este servidor sai: quem envia o relatório automático
+/// confere a falha sem ler o estado de tempos em tempos.
+pub static EXITED: std::sync::LazyLock<tokio::sync::Notify> = std::sync::LazyLock::new(tokio::sync::Notify::new);
+
 /// O executor destacado, pelo binário real deste servidor.
 pub struct Detached {
     pub exe: PathBuf,
@@ -248,6 +252,7 @@ impl Spawner for Detached {
             if let Ok(status) = child.wait() && !status.success() {
                 conclude_early_exit(&state_dir, pid, status.code(), log.as_deref());
             }
+            EXITED.notify_one();
         });
         Ok(pid)
     }
@@ -589,7 +594,7 @@ async fn execute(env: &AccountEnvironment, args: &Args) -> bool {
             };
             let platform = super::platform();
             let job = super::Job { client: &client, release: &parts.release, platform: &platform, layout: &parts.layout, home: &parts.home,
-                state_dir: &parts.state_dir, diary_dir: parts.diary_dir.clone(), ui: Some(&super::ReleaseUi), notes: parts.notes.clone(), settings };
+                state_dir: &parts.state_dir, diary_dir: parts.diary_dir.clone(), ui: Some(&super::ReleaseUi), notes: parts.notes.clone(), settings, startup_output: true };
             let outcome = super::run(&job, runner, &restarter, &health, Arc::new(super::ProcInUse)).await;
             tracing::info!(?outcome, "update: fim");
             matches!(outcome, Outcome::Updated { .. } | Outcome::UpdatedManual { .. } | Outcome::UpToDate)

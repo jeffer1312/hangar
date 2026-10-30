@@ -2500,6 +2500,23 @@ export async function acceptUpdateWarningsEm(s: Server | null, ids: string[], mo
   return response.started === true ? { ok: true, started: true, pid: confirmUpdateStarted(response).pid } : { ok: true, started: false };
 }
 
+/** Consentimento do relatório automático da atualização: `null` = não respondido; `undefined` = servidor sem o recurso. */
+export async function getAutoReportEm(s: Server, fetcher?: typeof fetch): Promise<boolean | null | undefined> {
+  try {
+    const res = await apiFetchForServer<{ auto_report?: unknown }>(s, '/api/auto-report', undefined, 8000, false, fetcher);
+    return typeof res?.auto_report === 'boolean' || res?.auto_report === null ? res.auto_report : undefined;
+  } catch (error) {
+    if ((error as { status?: unknown })?.status === 404) return undefined;
+    throw error;
+  }
+}
+
+export async function putAutoReportEm(s: Server, value: boolean, fetcher?: typeof fetch): Promise<boolean> {
+  const res = await apiFetchForServer<{ auto_report?: unknown }>(s, '/api/auto-report',
+    { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ auto_report: value }) }, 8000, false, fetcher);
+  return res?.auto_report === true;
+}
+
 export function getIdentificadorEm(s: Server, fetcher?: typeof fetch): Promise<{ identificador: string; lan_url?: string }> {
   return apiFetchForServer(s, '/api/peers/identificador', undefined, 8000, true, fetcher);
 }

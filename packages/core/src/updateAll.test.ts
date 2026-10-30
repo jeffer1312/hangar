@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fixtures from './updateAll.fixtures.json';
-import { afterAccept, classify, follow, hasRealUpdate, ownUpdatableServers, prepareUpdateAll, updateAll } from './updateAll';
+import { afterAccept, autoReportUnanswered, classify, follow, hasRealUpdate, ownUpdatableServers, prepareUpdateAll, updateAll } from './updateAll';
 import * as m from './paraglide/messages';
 import type { UpdateAllOptions, UpdateAllState } from './updateAll';
 import { getAtualizacaoEm, getIdentificadorEm } from './api';
@@ -286,6 +286,37 @@ describe('API e execução por máquina', () => {
       state: expect.objectContaining({ passo: 3, total: 8, texto: 'fixture-step' }) }));
     expect(final('restart')).toMatchObject({ status: 'atualizado', warnings: ['fixture-native-warning'] });
     expect(sleep.mock.calls.every(([ms]) => ms === 2000)).toBe(true);
+  });
+
+  it('pergunta do relatório automático: só máquinas próprias sem resposta; sem o recurso ou com erro ficam de fora', async () => {
+    const answers: Record<string, () => Response> = {
+      unanswered: () => json({ auto_report: null }),
+      yes: () => json({ auto_report: true }),
+      old: () => json({ detail: 'Not Found' }, 404),
+      broken: () => json({ detail: 'x' }, 503),
+    };
+    fetchMock.mockImplementation(async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname !== '/api/auto-report') throw new Error(`unexpected-route: ${url.pathname}`);
+      return answers[url.hostname.split('.')[0]]();
+    });
+    const asked = await autoReportUnanswered(['unanswered', 'yes', 'old', 'broken'].map((id) => server(id)), fetchMock);
+    expect(asked.map((s) => s.id)).toEqual(['unanswered']);
+  });
+
+  it('falha com relatório pendente segue lendo até o código, e desiste no teto do relatório', async () => {
+    const failed = (relatorio: string) => json(done({ ok: false, erro: 'fixture-down', relatorio }));
+    read = (_id, count) => count === 1 ? json(ready()) : failed(count < 4 ? 'pendente' : 'abcd2345');
+    await updateAll([server('sent')], onChange, options);
+    expect(updates.get('sent')).toContainEqual(expect.objectContaining({ status: 'falhou',
+      state: expect.objectContaining({ relatorio: 'pendente' }) }));
+    expect(final('sent')).toMatchObject({ status: 'falhou', error: 'fixture-down', state: expect.objectContaining({ relatorio: 'abcd2345' }) });
+    expect(reads.get('sent')).toBe(4);
+
+    read = (_id, count) => count === 1 ? json(ready()) : failed('pendente');
+    await updateAll([server('stuck')], onChange, options);
+    expect(final('stuck')).toMatchObject({ status: 'falhou', state: expect.objectContaining({ relatorio: 'pendente' }) });
+    expect(reads.get('stuck')).toBeLessThanOrEqual(2 + (12 * 60 * 1000) / 2000);
   });
 
   it('encerra após 300 leituras seguidas sem resposta', async () => {
