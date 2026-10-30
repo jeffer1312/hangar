@@ -108,6 +108,9 @@ pub(super) async fn prepare(
     }
     for directory in scopes {
         let source = instructions_alias::source(&directory)?;
+        if source.is_some() {
+            exclude(env, &directory).await?;
+        }
         instructions_alias::apply(
             &directory.join("AGENTS.override.md"),
             source.as_deref(),
@@ -115,9 +118,6 @@ pub(super) async fn prepare(
             env,
             links,
         )?;
-        if source.is_some() {
-            exclude(env, &directory).await?;
-        }
     }
     Ok(())
 }
@@ -190,10 +190,16 @@ async fn exclude(env: &AccountEnvironment, directory: &Path) -> Result<(), Error
         }
         file.write_all(b"AGENTS.override.md\n")
     };
-    if let Err(error) = write() {
-        if error.kind() == std::io::ErrorKind::InvalidData {
-            return Err(error.into());
-        }
-    }
+    write()?;
     Ok(())
+}
+
+#[cfg(all(test,unix))]
+#[tokio::test]
+async fn exclude_write_failure_is_visible_before_alias_publication() {
+ use std::os::unix::fs::PermissionsExt;
+ let dir=tempfile::tempdir().unwrap();let bin=dir.path().join("bin");fs::create_dir(&bin).unwrap();let script=bin.join("git");
+ fs::write(&script,"#!/bin/sh\nprintf '.'\n").unwrap();fs::set_permissions(script,fs::Permissions::from_mode(0o700)).unwrap();
+ let env=AccountEnvironment::from_pairs([("HOME",dir.path().to_string_lossy().into_owned()),("PATH",bin.to_string_lossy().into_owned())]);
+ assert!(exclude(&env,dir.path()).await.is_err());assert!(!dir.path().join("AGENTS.override.md").exists());
 }

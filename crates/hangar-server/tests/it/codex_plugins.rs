@@ -52,7 +52,7 @@ async fn codex_plugins_match_original_files_backups_and_partial_failures() {
     .unwrap();
     let mut failures = Vec::new();
     for case in corpus["cases"].as_array().unwrap() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = crate::physical_tempdir();
         let root = temp.path();
         let account = root.join("account");
         let plugin = account.join("plugins/cache/fixture/v1");
@@ -156,7 +156,7 @@ proptest::proptest! {
     #![proptest_config(proptest::test_runner::Config::with_cases(48))]
     #[test]
     fn codex_plugins_reject_outside_cache_before_mutation(name in "[a-zA-Z0-9_-]{1,60}") {
-        let root=tempfile::tempdir().unwrap();let account=root.path().join("account");let outside=root.path().join(format!("outside-{name}"));
+        let root=crate::physical_tempdir();let account=root.path().join("account");let outside=root.path().join(format!("outside-{name}"));
         std::fs::create_dir_all(account.join("plugins/cache")).unwrap();std::fs::create_dir(&outside).unwrap();
         let rt=tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         let runner=Fixture{name:"ecc-ok".into(),calls:Mutex::new(vec![])};

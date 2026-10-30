@@ -105,7 +105,7 @@ async fn import_stage(paths:&Paths<'_>,registry:&mut Value,state:&State,memory:b
   }
  }
  let previous=get(registry,"artefatos",&empty)?.as_object().ok_or_else(||error("AttributeError","Manifesto de artefatos precisa ser um objeto"))?;
- let (mut saved,mut selected)=(Map::new(),Map::new());for(name,value)in previous{let keep=Path::new(name).file_stem().is_some_and(|v|frozen.contains(v.to_string_lossy().as_ref()));if keep{saved.insert(name.clone(),codec::clone_value(value));}else{selected.insert(name.clone(),codec::clone_value(value));}}
+ let (mut saved,mut selected)=(Map::new(),Map::new());for(name,value)in previous{let keep=frozen_artifact(Path::new(name),paths.account,paths.home,&frozen);if keep{saved.insert(name.clone(),codec::clone_value(value));}else{selected.insert(name.clone(),codec::clone_value(value));}}
  let selected=ValueGuard(Value::Object(selected));let mut reconciled=ValueGuard(artifacts::reconcile(&desired,&selected,paths.backups,&trusted,&mut artifacts::Disk)?);
  let mut manifest=reconciled["manifest"].take();manifest.as_object_mut().unwrap().extend(saved);replace(registry,"artefatos",manifest)?;
  let warnings=reconciled["warnings"].take();if let Value::Array(warnings)=warnings{state.update(|v|v["avisos"].as_array_mut().unwrap().extend(warnings));}
@@ -114,7 +114,7 @@ async fn import_stage(paths:&Paths<'_>,registry:&mut Value,state:&State,memory:b
  let agents=ValueGuard(Value::Object(agents.iter().filter(|(_,v)|!v.is_object()||!crate::engines::probe::truthy(&v["config_file"])||registry["artefatos"].get(v["config_file"].as_str().unwrap_or("")).is_some()).map(|(name,value)|(name.clone(),codec::clone_value(value))).collect()));
  actions.configure(Configuration{mcp:get(&native,"mcp_servers",&empty)?,agents:&agents,hooks:get(get(&native,"features",&empty)?,"hooks",&Value::Null)?==&Value::Bool(true),memory,history,env:native_env},registry).await
 }
-async fn import_items(actions:&mut impl Actions,state:&State,cc:&Path,memory:bool)->Result<BTreeSet<String>,Error>{
+async fn import_items(actions:&mut impl Actions,state:&State,cc:&Path,memory:bool)->Result<BTreeSet<(String,PathBuf)>,Error>{
  let detected=ValueGuard(Value::Array(actions.detect().await?));let mut items=Vec::new();
  for item in detected.as_array().unwrap(){if item_type(item)?.is_some_and(|kind|matches!(kind,"CONFIG"|"HOOKS"|"MCP_SERVER_CONFIG"|"COMMANDS"|"SUBAGENTS")||memory&&kind=="MEMORY"){items.push(codec::clone_value(item));}}
  let items=ValueGuard(Value::Array(items));let empty=json!({});let empty_list=json!([]);let mut frozen=BTreeSet::new();
@@ -125,7 +125,7 @@ async fn import_items(actions:&mut impl Actions,state:&State,cc:&Path,memory:boo
   }
   let root=cc.join(folder);let ignored=descendants(&root).into_iter().filter(|path|path.file_name().is_some_and(|name|name.to_string_lossy().ends_with(".md")))
    .filter(|path|{let stem=path.file_stem().unwrap().to_string_lossy();!names.iter().any(|name|name.as_str()==stem.as_ref()||name.contains(stem.as_ref()))}).collect::<Vec<_>>();
-  if !ignored.is_empty(){for path in &ignored{frozen.insert(path.file_stem().unwrap().to_string_lossy().into_owned());}
+  if !ignored.is_empty(){for path in &ignored{frozen.insert((folder.to_owned(),path.strip_prefix(&root).unwrap().to_owned()));}
    warning(state,"aviso_ignorados",json!({"pasta":folder,"arquivos":ignored.iter().map(|path|path.strip_prefix(&root).unwrap().to_string_lossy().into_owned()).collect::<Vec<_>>().join(", ")}));}
  }
  let essential=items.as_array().unwrap().iter().filter(|item|item.get("itemType").and_then(Value::as_str)!=Some("MEMORY")).map(codec::clone_value).collect::<Vec<_>>();
@@ -151,4 +151,20 @@ async fn import_items(actions:&mut impl Actions,state:&State,cc:&Path,memory:boo
   if failures>0{warning(state,"aviso_memoria_incompleta",json!({"n":failures}));}
  }
  Ok(frozen)
+}
+
+fn frozen_artifact(path:&Path,account:&Path,home:&Path,frozen:&BTreeSet<(String,PathBuf)>)->bool {
+ frozen.iter().any(|(section,relative)| {
+  if section=="agents" {path==account.join("agents").join(relative).with_extension("toml")}
+  else {path.starts_with(home.join(".agents/skills").join(relative.with_extension("")))}
+ })
+}
+#[cfg(test)]
+#[test]
+fn ignored_artifacts_preserve_only_their_section_and_relative_path() {
+ let home=Path::new("home");let account=Path::new("account");
+ let frozen=BTreeSet::from([("agents".into(),PathBuf::from("sub/duplicate.md"))]);
+ assert!(frozen_artifact(&account.join("agents/sub/duplicate.toml"),account,home,&frozen));
+ assert!(!frozen_artifact(&account.join("agents/duplicate.toml"),account,home,&frozen));
+ assert!(!frozen_artifact(&home.join(".agents/skills/sub/duplicate/SKILL.md"),account,home,&frozen));
 }

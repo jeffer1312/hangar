@@ -26,7 +26,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import ClientDisconnect
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sse_starlette.sse import EventSourceResponse
-from app import (atomico, closed_names, diag, harness_api,
+from app import (atomico, closed_names, diag,
                  loop_monitor, permission_mode, plugin_bridge, procinfo, quem_chama, tmux,
                  uds_messaging)
 from app import groups_bridge, internal_api, list_bridge, migration_status, share_bridge
@@ -245,10 +245,7 @@ async def _lifespan(app: FastAPI):
     if runtime.mode == "python":
         _start_transfer_recovery()
     codex_warm_task = asyncio.create_task(get_adapter("codex").watch_sessions())
-    from app.codex_integracao import SERVICO as integracao_codex
-    codex_contas_login = CodexContasLogin(
-        atualizar_principal=integracao_codex.atualizar_e_aguardar,
-    )
+    codex_contas_login = CodexContasLogin()
     app.state.codex_contas_login = codex_contas_login
     # Referência guardada: task sem dono pode ser coletada no meio.
     app.state.codex_auth_aquecer = asyncio.create_task(codex_contas_login.aquecer())
@@ -266,10 +263,6 @@ async def _lifespan(app: FastAPI):
         codex_warm_task.cancel()
         app.state.codex_auth_aquecer.cancel()
         await asyncio.gather(codex_warm_task, app.state.codex_auth_aquecer, return_exceptions=True)
-        try:
-            await integracao_codex.fechar()
-        except Exception:
-            _log.exception("Falha ao encerrar a integração Codex")
         task.cancel()
         loop_monitor_task.cancel()
         prune_task.cancel()
@@ -729,7 +722,6 @@ app.include_router(deploy_router)
 # Roteadores por assunto (Task 1 do plano descoberta-e-configuracao): cada Task do lote escreve
 # só no módulo dela. Última edição de api.py deste plano.
 app.include_router(credenciais.credenciais_router)
-app.include_router(harness_api.harness_router)
 app.include_router(plugin_bridge.plugin_router)
 # Convites e par externo são do Rust; aqui só o repasse do dono que chega pelo Connect.
 app.include_router(share_bridge.router)

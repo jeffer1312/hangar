@@ -25,8 +25,14 @@ fn env_of(entry: &Map<String, Value>, path: &Path) -> Result<Map<String, Value>,
         _ => Err(format!("env em {} não é um objeto JSON", path.display())),
     }
 }
-fn write(path: &Path, data: Map<String, Value>, private: bool) -> Result<(), String> {
-    super::files::write_file(
+fn write(
+    path: &Path,
+    data: Map<String, Value>,
+    private: bool,
+    expected: Option<&[u8]>,
+    link: Option<&Path>,
+) -> Result<(), String> {
+    super::files::write_file_checked(
         path,
         &super::bundle::Blob {
             data: crate::transcript::pyjson::dumps_indent(&json!(data), 2, true).into_bytes(),
@@ -36,6 +42,8 @@ fn write(path: &Path, data: Map<String, Value>, private: bool) -> Result<(), Str
                 super::files::mode(path).unwrap_or(0o644)
             },
         },
+        expected,
+        link,
     )
     .map_err(|e| e.to_string())
 }
@@ -100,13 +108,15 @@ impl RuntimeConfig {
             return Ok(());
         }
         let backup = self.env.home.join(".hangar/computer-use-llm-antigo.json");
+        let link = std::fs::read_link(&backup).ok();
+        let raw = crate::codex_setup::files::read(&backup).map_err(|error| error.to_string())?;
         let mut previous = read_object(&backup)?;
         let source = path.to_string_lossy().into_owned();
         if previous.contains_key(&source) {
             return Ok(());
         }
         previous.insert(source, json!(old));
-        write(&backup, previous, true)
+        write(&backup, previous, true, raw.as_deref(), link.as_deref())
     }
     pub fn sync_jev(&self) -> Result<(), String> {
         let jev = self.jev_env();
@@ -176,6 +186,7 @@ impl RuntimeConfig {
                 Err(error) => Err(error.to_string()),
             };
             for _ in 0..3 {
+                let link = std::fs::read_link(path).ok();
                 let raw = read_raw()?;
                 let mut data = read_object(path)?;
                 let entry = if active {
@@ -214,7 +225,7 @@ impl RuntimeConfig {
                 if read_raw()? != raw {
                     continue;
                 }
-                return write(path, data, !active);
+                return write(path, data, !active, raw.as_deref(), link.as_deref());
             }
             Err(format!(
                 "Arquivo continua mudando: {}; tentar novamente",

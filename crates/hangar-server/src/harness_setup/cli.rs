@@ -3,6 +3,7 @@ use crate::accounts::{AccountService, environment::AccountEnvironment};
 use std::{path::PathBuf, process::ExitCode};
 
 pub fn run(args: &[String]) -> ExitCode {
+    if args == ["repair-codex"] { return repair_codex(); }
     if args.first().map(String::as_str) == Some("install") {
         return install(&args[1..]);
     }
@@ -102,4 +103,16 @@ fn install(args: &[String]) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+fn repair_codex()->ExitCode {
+    let result=(||->Result<(),String>{
+        let env=AccountEnvironment::capture();
+        let repo=crate::install_root::root(&env.home).ok_or("raiz da instalação do Hangar não encontrada")?;
+        let config=crate::config_sync::runtime::RuntimeConfig::new(env.clone())?;
+        let service=crate::codex_setup::service::Service::new(AccountService::new(env),config,repo,None);
+        let runtime=tokio::runtime::Builder::new_multi_thread().enable_all().build().map_err(|error|error.to_string())?;
+        runtime.block_on(async{let result=service.repair_all().await;let closed=service.shutdown().await;result.and(closed)})
+    })();
+    match result {Ok(())=>ExitCode::SUCCESS,Err(error)=>{eprintln!("Reparo das contas Codex falhou: {error}");ExitCode::FAILURE}}
 }

@@ -21,7 +21,7 @@ fn administrative_file_reads_preserve_missing_and_broken_link_distinctions() {
         }
         let actual=match read(&path){
             Ok(raw)=>json!({"ok":raw.map(|bytes|bytes.iter().map(|byte|format!("{byte:02x}")).collect::<String>())}),
-            Err(error)=>json!({"class":match &error{Error::Io(_)=>"OSError",Error::Invalid(_)=>"ValueError",Error::Changed(_)=>"AlteradoExternamente"},"error":error.to_string().replace(root.path().to_str().unwrap(),"$ROOT")}),
+            Err(error)=>json!({"class":match &error{Error::Io(_)=>"OSError",Error::Invalid(_)=>"ValueError",Error::Changed(_)|Error::Displaced(_)=>"AlteradoExternamente"},"error":error.to_string().replace(root.path().to_str().unwrap(),"$ROOT")}),
         };
         assert_eq!(path.is_symlink(),case["symlink"].as_bool().unwrap());
         if actual!=case["result"]{differences.push((case["name"].clone(),actual,case["result"].clone()));}

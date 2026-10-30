@@ -31,7 +31,7 @@ fn git(root: &Path, args: &[&str]) -> String {
 }
 #[tokio::test]
 async fn unmigrated_git_update_is_owned_without_python() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::physical_tempdir();
     let home = temp.path().join("home");
     let repo = temp.path().join("repo");
     std::fs::create_dir_all(repo.join("backend")).unwrap();
@@ -97,7 +97,7 @@ fn git_preflight_matches_captured_python_on_real_repositories() {
     .unwrap();
     for case in fixtures["preflight"].as_array().unwrap() {
         let name = case["name"].as_str().unwrap();
-        let temp = tempfile::tempdir().unwrap();
+        let temp = crate::physical_tempdir();
         let root = temp.path().join("repo");
         std::fs::create_dir(&root).unwrap();
         git(&root, &["init", "-b", "main"]);
@@ -266,7 +266,7 @@ fn checkout_release_download_matches_python_and_restores_held_binaries() {
     .unwrap();
     for row in golden["cases"].as_array().unwrap() {
         let name = row["name"].as_str().unwrap();
-        let temp = tempfile::tempdir().unwrap();
+        let temp = crate::physical_tempdir();
         let dest = temp.path();
         let mut files = serde_json::Map::new();
         for binary in releases::NAMES {
@@ -342,7 +342,7 @@ fn channel_live_publication_survives_stale_parent_and_preserves_new_override() {
 fn channel_live_publication_child() {
     use hangar_server::update::git_engine::Service;
     use serde_json::json;
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::physical_tempdir();
     let root = temp.path().join("repo");
     let origin = temp.path().join("origin");
     let home = temp.path().join("home");
@@ -440,7 +440,7 @@ fn checkout_pinning_matches_python_on_real_git_trees() {
     .unwrap();
     for row in golden["cases"].as_array().unwrap() {
         let name = row["name"].as_str().unwrap();
-        let temp = tempfile::tempdir().unwrap();
+        let temp = crate::physical_tempdir();
         let root = temp.path().join("repo");
         let home = temp.path().join("home");
         std::fs::create_dir_all(&root).unwrap();
@@ -529,7 +529,7 @@ fn checkout_dist_regular_publication_and_unsafe_archives_preserve_previous_scree
     .unwrap();
     for row in golden["cases"].as_array().unwrap() {
         let name = row["name"].as_str().unwrap();
-        let temp = tempfile::tempdir().unwrap();
+        let temp = crate::physical_tempdir();
         let root = temp.path().join("repo");
         let home = temp.path().join("home");
         let dist = root.join("frontend/dist");
@@ -629,17 +629,22 @@ fn checkout_pipeline_success_and_prepare_rollback_match_python() {
  use serde_json::{Value,json};use std::{io::{Read,Write},os::unix::fs::PermissionsExt,sync::atomic::{AtomicBool,Ordering}};
  struct NoNetwork;impl Source for NoNetwork{fn get(&self,_:&str,_:std::time::Duration)->Result<Vec<u8>,DownloadError>{panic!("a preparação local não pede rede");}}
  let golden:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/update-git/pipeline-cases.json")).unwrap();
- for row in golden["cases"].as_array().unwrap(){let scenario=row["name"].as_str().unwrap();let temp=tempfile::tempdir().unwrap();let root=temp.path().join("repo");let origin=temp.path().join("origin");let home=temp.path().join("home");let bin=temp.path().join("bin");for dir in [&root,&origin,&bin]{std::fs::create_dir_all(dir).unwrap();}
+ for row in golden["cases"].as_array().unwrap(){let scenario=row["name"].as_str().unwrap();let temp=crate::physical_tempdir();let root=temp.path().join("repo");let origin=temp.path().join("origin");let home=temp.path().join("home");let bin=temp.path().join("bin");for dir in [&root,&origin,&bin]{std::fs::create_dir_all(dir).unwrap();}
  std::fs::create_dir_all(root.join("backend")).unwrap();std::fs::write(root.join("backend/.keep"),"fixture").unwrap();std::fs::write(root.join("content"),"old").unwrap();git(&root,&["init","-b","main"]);git(&root,&["add","."]);git(&root,&["commit","-m","old"]);let old=git(&root,&["rev-parse","HEAD"]);git(&origin,&["init","--bare"]);git(&root,&["remote","add","origin",origin.to_str().unwrap()]);git(&root,&["push","-u","origin","main"]);std::fs::write(root.join("content"),"new").unwrap();git(&root,&["add","."]);git(&root,&["commit","-m","new"]);git(&root,&["push","origin","main"]);git(&root,&["reset","--hard",&old]);std::fs::create_dir_all(root.join("frontend/dist")).unwrap();std::fs::write(root.join("frontend/dist/index.html"),"old-screen").unwrap();
  let write=|name:&str,body:&str|{let path=bin.join(name);std::fs::write(&path,format!("#!/bin/sh\n{body}\n")).unwrap();std::fs::set_permissions(path,std::fs::Permissions::from_mode(0o755)).unwrap();};
  write("systemctl",match scenario {
  "restart-failure" => "if [ \"$2\" = restart ] && [ \"$(cat content)\" = new ]; then echo fixture-restart-failed; exit 1; fi\nexit 0",
  "same-pid" => "if [ \"$2\" = show ]; then echo 4242; fi\nexit 0",
  _ => "exit 1"
+ });
+ write("launchctl",match scenario {
+ "restart-failure" => "if [ \"$1\" = kickstart ] && [ \"$(cat content)\" = new ]; then echo fixture-restart-failed; exit 1; fi\nexit 0",
+ "same-pid" => "if [ \"$1\" = print ]; then echo 'pid = 4242'; fi\nexit 0",
+ _ => "exit 1"
  });write("node","exit 0");write("npm","mkdir -p frontend/dist\nprintf new-screen > frontend/dist/index.html");write("uv",if scenario=="rollback-prepare-failure"{"echo fixture-uv-failed; exit 1"}else if scenario=="prepare-failure"{"if [ \"$(cat ../content)\" = new ]; then echo fixture-uv-failed; exit 1; fi\nexit 0"}else{"exit 0"});
  if scenario=="work-branch" {git(&root,&["checkout","-b","feature"]);}
  let path=format!("{}:{}",bin.display(),std::env::var("PATH").unwrap());let environment=[("PATH".into(),path),("HOME".into(),home.display().to_string()),("USERPROFILE".into(),home.display().to_string()),("CP_RUST_SERVER".into(),"0".into()),("CP_UPDATE_BRANCH".into(),if scenario=="missing-target"{"missing"}else{""}.into()),("GIT_CONFIG_NOSYSTEM".into(),"1".into()),("GIT_CONFIG_GLOBAL".into(),"/dev/null".into())].into();let service=Service::new(home.clone(),root.clone(),home.join(".claude"),environment);
- let listener=std::net::TcpListener::bind("127.0.0.1:0").unwrap();let port=listener.local_addr().unwrap().port();listener.set_nonblocking(true).unwrap();let stop=Arc::new(AtomicBool::new(false));let ended=stop.clone();let server=std::thread::spawn(move||{while !ended.load(Ordering::Relaxed){if let Ok((mut stream,_))=listener.accept(){let mut bytes=[0;2048];let _=stream.read(&mut bytes);let _=stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok");}else{std::thread::sleep(std::time::Duration::from_millis(5));}}});
+ let listener=std::net::TcpListener::bind("127.0.0.1:0").unwrap();let port=listener.local_addr().unwrap().port();listener.set_nonblocking(true).unwrap();let stop=Arc::new(AtomicBool::new(false));let ended=stop.clone();let server=std::thread::spawn(move||{while !ended.load(Ordering::Relaxed){if let Ok((mut stream,_))=listener.accept(){stream.set_nonblocking(false).unwrap();stream.set_read_timeout(Some(std::time::Duration::from_secs(2))).unwrap();let mut bytes=[0;2048];let _=stream.read(&mut bytes);let _=stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok");}else{std::thread::sleep(std::time::Duration::from_millis(5));}}});
  let state=service.execute(port,&NoNetwork,None);stop.store(true,Ordering::Relaxed);server.join().unwrap();let expected=row["state"].as_object().unwrap();for (key,value) in expected{assert_eq!(state.get(key).unwrap_or(&Value::Null),value,"{scenario}: {key}; {state:?}");}
  assert_eq!(if git(&root,&["rev-parse","HEAD"])==old{"old"}else{"new"},row["head"].as_str().unwrap());assert_eq!(std::fs::read_to_string(root.join("frontend/dist/index.html")).unwrap(),row["screen"].as_str().unwrap());assert_eq!(json!(root.join("frontend/.dist-velho").exists()),row["previous_exists"]);
  }
@@ -651,7 +656,7 @@ fn checkout_shell_change_warning_matches_python() {
     let fixture: serde_json::Value = serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/update-git/shell-cases.json")).unwrap();
     for case in fixture["cases"].as_array().unwrap() {
         let name=case["name"].as_str().unwrap();
-        let temp=tempfile::tempdir().unwrap(); let root=temp.path().join("repo"); let home=temp.path().join("home");
+        let temp=crate::physical_tempdir(); let root=temp.path().join("repo"); let home=temp.path().join("home");
         std::fs::create_dir_all(root.join("shell")).unwrap(); std::fs::create_dir_all(&home).unwrap();
         git(&root,&["init","-q"]); std::fs::write(root.join("shell/main.cjs"),"old").unwrap(); git(&root,&["add","."]);git(&root,&["commit","-qm","base"]);let mut before=git(&root,&["rev-parse","HEAD"]);
         std::fs::write(root.join(if name=="test-only" {"shell/main.test.cjs"} else {"shell/main.cjs"}),"new").unwrap();git(&root,&["add","."]);git(&root,&["commit","-qm","next"]);let after=git(&root,&["rev-parse","HEAD"]);
@@ -693,7 +698,7 @@ fn authentication_pair_matches_python_publication_and_restore() {
     let fixture:Value=serde_json::from_str(if cfg!(windows) {include_str!("../../../../backend/tests/fixtures/contract/update-git/auth-release-windows.json")} else {include_str!("../../../../backend/tests/fixtures/contract/update-git/auth-release.json")}).unwrap();
     for row in fixture["cases"].as_array().unwrap(){
         let name=row["name"].as_str().unwrap();
-        let temp=tempfile::tempdir().unwrap();let dest=temp.path();
+        let temp=crate::physical_tempdir();let dest=temp.path();
         for (file,data) in row["initial"].as_object().unwrap(){let path=dest.join(file);std::fs::create_dir_all(path.parent().unwrap()).unwrap();std::fs::write(path,data.as_str().unwrap()).unwrap();}
         let source=Captured{platform,name:name.into(),urls:Mutex::new(vec![])};let mut held=vec![];
         let failed=std::cell::Cell::new(false);
@@ -726,7 +731,7 @@ async fn migration_contract_native_fetch_has_no_python_prerequisite() {
             hangar_server::update::StepRun{code:Some(0),output:String::new()}
         }
     }
-    let temp=tempfile::tempdir().unwrap();std::fs::create_dir(temp.path().join("backend")).unwrap();
+    let temp=crate::physical_tempdir();std::fs::create_dir(temp.path().join("backend")).unwrap();
     let runner=std::sync::Arc::new(Recorder(std::sync::Mutex::new(vec![])));
     assert_eq!(hangar_server::update::dev_mode::fetch_rust(runner.clone(),temp.path()).await,None);
     let calls=runner.0.lock().unwrap();assert_eq!(calls.len(),1);assert!(calls[0].contains("rust-release"));assert!(!calls[0].contains("app.rust_release"));
@@ -737,7 +742,7 @@ fn updater_settings_and_live_channel_use_captured_dotenv_semantics() {
     let fixture:serde_json::Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/update-git/dotenv-read.json")).unwrap();
     let mut differences=vec![];
     for case in fixture["cases"].as_array().unwrap() {
-        let root=tempfile::tempdir().unwrap();let home=root.path().join("home");let repo=root.path().join("repo");
+        let root=crate::physical_tempdir();let home=root.path().join("home");let repo=root.path().join("repo");
         std::fs::create_dir_all(repo.join("backend")).unwrap();std::fs::create_dir_all(&home).unwrap();
         std::fs::write(repo.join("backend/.env"),case["raw"].as_str().unwrap()).unwrap();
         let environment=case["environment"].as_object().unwrap().iter().map(|(key,value)|(key.clone(),value.as_str().unwrap().to_owned())).collect();
@@ -752,7 +757,7 @@ fn updater_settings_and_live_channel_use_captured_dotenv_semantics() {
 #[test]
 fn startup_step_failure_finishes_preparation_without_aborting_startup() {
     use hangar_server::update::git_engine::Service;
-    let root=tempfile::tempdir().unwrap();
+    let root=crate::physical_tempdir();
     let repo=root.path().join("repo");let home=root.path().join("home");
     std::fs::create_dir_all(repo.join("docs/atualizacoes")).unwrap();
     std::fs::create_dir_all(repo.join("backend")).unwrap();
@@ -828,7 +833,7 @@ fn checkout_prepare_contract_child() {
  struct NoNetwork;impl Source for NoNetwork{fn get(&self,_:&str,_:std::time::Duration)->Result<Vec<u8>,DownloadError>{panic!("preparação local não usa rede");}}
  let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/update-git/prepare.json")).unwrap();
  for row in fixture["cases"].as_array().unwrap(){
-  let name=row["name"].as_str().unwrap();let temp=tempfile::tempdir().unwrap();let root=temp.path().join("repo");let home=temp.path().join("home");let bin=temp.path().join("bin");let calls=temp.path().join("calls");
+  let name=row["name"].as_str().unwrap();let temp=crate::physical_tempdir();let root=temp.path().join("repo");let home=temp.path().join("home");let bin=temp.path().join("bin");let calls=temp.path().join("calls");
   std::fs::create_dir_all(root.join("backend")).unwrap();std::fs::create_dir_all(&bin).unwrap();
   let service=Service::new(home.clone(),root.clone(),home.join(".claude"),[("PATH".into(),bin.display().to_string()),("HOME".into(),home.display().to_string()),("FIXTURE_CALLS".into(),calls.display().to_string())].into());
   std::fs::create_dir_all(&service.state_dir).unwrap();let marker=service.state_dir.join("package-lock.sha");

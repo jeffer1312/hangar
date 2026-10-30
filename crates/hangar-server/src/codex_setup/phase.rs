@@ -26,7 +26,7 @@ impl State {
 #[derive(Debug)]
 pub struct Error {pub kind:&'static str,pub message:String}
 impl From<super::files::Error> for Error {
- fn from(error:super::files::Error)->Self{let kind=match &error{super::files::Error::Io(_)=>"OSError",super::files::Error::Invalid(_)=>"ValueError",super::files::Error::Changed(_)=>"AlteradoExternamente"};Self{kind,message:error.to_string()}}
+ fn from(error:super::files::Error)->Self{let kind=match &error{super::files::Error::Io(_)=>"OSError",super::files::Error::Invalid(_)=>"ValueError",super::files::Error::Changed(_)|super::files::Error::Displaced(_)=>"AlteradoExternamente"};Self{kind,message:error.to_string()}}
 }
 pub trait Actions {
     fn fingerprint(&mut self,source:bool,registry:&Value)->impl Future<Output=Result<String,Error>>+Send;

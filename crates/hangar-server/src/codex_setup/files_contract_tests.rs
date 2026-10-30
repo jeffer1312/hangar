@@ -51,3 +51,13 @@ fn backup_preserves_existing_directory_permissions() {
         assert_eq!(fs::metadata(file).unwrap().permissions().mode() & 0o777,case["file_mode"].as_u64().unwrap() as u32);
     }
 }
+
+#[test]
+fn unchanged_write_revalidates_the_destination() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    std::fs::write(&path, b"external").unwrap();
+    assert!(matches!(super::write(&path,b"old",Some(b"old"),None),Err(super::Error::Changed(_))));
+    assert_eq!(std::fs::read(&path).unwrap(),b"external");
+    assert!(!super::write(&path,b"external",Some(b"external"),None).unwrap());
+}

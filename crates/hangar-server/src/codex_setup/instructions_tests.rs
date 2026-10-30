@@ -80,7 +80,7 @@ async fn global_instructions_match_original_aliases_imports_backups_and_removal(
     .unwrap();
     let mut differences = Vec::new();
     for row in fixture["cases"].as_array().unwrap() {
-        let home = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir_in(crate::list::links::without_verbatim(std::env::temp_dir().canonicalize().unwrap())).unwrap();
         let claude = home.path().join(".claude");
         let codex = home.path().join(".codex");
         fs::create_dir_all(&claude).unwrap();
@@ -140,7 +140,7 @@ async fn global_instructions_match_original_aliases_imports_backups_and_removal(
             }
             results.push(match prepare_with(&config,&codex,None,true,&FixtureLinks(name=="copy-fallback")).await {
                 Ok(())=>json!({"ok":true}),
-                Err(error)=>json!({"error":match error {Error::Invalid(_)=>"ValueError",Error::Changed(_)=>"AlteradoExternamente",Error::Io(_)=>"OSError"},"message":error.to_string()}),
+                Err(error)=>json!({"error":match error {Error::Invalid(_)=>"ValueError",Error::Changed(_)|Error::Displaced(_)=>"AlteradoExternamente",Error::Io(_)=>"OSError"},"message":error.to_string()}),
             });
         }
         let mut files = serde_json::Map::new();
@@ -160,7 +160,12 @@ async fn global_instructions_match_original_aliases_imports_backups_and_removal(
                 .replace(home.path().to_str().unwrap(), "$ROOT"),
         )
         .unwrap();
-        let expected = json!({"results":row["results"],"files":row["files"],"records":row["records"],"backups":row["backups"]});
+        let mut expected = json!({"results":row["results"],"files":row["files"],"records":row["records"],"backups":row["backups"]});
+        if name == "uppercase" && source.exists() {
+            // A captura usa filesystem sensível à caixa; aqui os dois nomes são o mesmo arquivo.
+            assert_eq!(source.canonicalize().unwrap(), claude.join("CLAUDE.MD").canonicalize().unwrap());
+            expected["files"][".codex/AGENTS.override.md"]["link"] = json!("../.claude/CLAUDE.md");
+        }
         if actual != expected {
             differences.push((name.to_owned(), actual, expected));
         }

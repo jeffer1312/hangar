@@ -31,6 +31,13 @@ impl Service {
     fn new_with_runner(accounts:AccountService,config:RuntimeConfig,repo:PathBuf,runtime:Option<Arc<RuntimeRegistry>>,runner:Arc<dyn RoundRunner>)->Arc<Self>{
         let mut service=Self::new(accounts,config,repo,runtime);Arc::get_mut(&mut service).unwrap().runner=Some(runner);service
     }
+    pub async fn session(self:&Arc<Self>)->Result<Value,String>{
+        if super::sync_enabled(&self.config)&&self.needs_reconcile()?{self.start("sessao",false).await}else{self.status()}
+    }
+    pub fn switches(&self,mut status:Value)->Value{
+        status["automatica"]=json!(crate::engines::probe::truthy(&self.config.get("codex_sync")));
+        status["memoria"]=json!(crate::engines::probe::truthy(&self.config.get("codex_memory_import")));status
+    }
     pub async fn start(self:&Arc<Self>,reason:&str,force:bool)->Result<Value,String>{self.start_round(reason,force).map(|(status,_)|status)}
     fn start_round(self:&Arc<Self>,reason:&str,force:bool)->Result<(Value,Round),String>{
         #[cfg(test)] if let Some(hook)=&self.before_start{hook(reason);}

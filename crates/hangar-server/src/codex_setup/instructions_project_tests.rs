@@ -23,7 +23,7 @@ async fn project_instructions_match_original_scopes_records_git_and_disable() {
     .unwrap();
     let mut differences = Vec::new();
     for row in fixture["cases"].as_array().unwrap() {
-        let home = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir_in(crate::list::links::without_verbatim(std::env::temp_dir().canonicalize().unwrap())).unwrap();
         let codex = home.path().join(".codex");
         let project = home.path().join("project");
         let name = row["name"].as_str().unwrap();
@@ -103,7 +103,7 @@ async fn project_instructions_match_original_scopes_records_git_and_disable() {
             };
             results.push(match result {
                 Ok(()) => json!({"ok":true}),
-                Err(error) => json!({"error":match error {Error::Invalid(_)=>"ValueError",Error::Changed(_)=>"AlteradoExternamente",Error::Io(_)=>"OSError"},"message":error.to_string()}),
+                Err(error) => json!({"error":match error {Error::Invalid(_)=>"ValueError",Error::Changed(_)|Error::Displaced(_)=>"AlteradoExternamente",Error::Io(_)=>"OSError"},"message":error.to_string()}),
             });
         }
         let mut files = serde_json::Map::new();

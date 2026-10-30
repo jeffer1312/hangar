@@ -78,7 +78,7 @@ pub async fn run(context:&Context<'_>,actions:&mut(impl Actions+Send))->Result<V
   let final_status=view(context,actions.now())?;if let Some(old)=registry.as_object_mut().expect("Registro validado").insert("status".into(),final_status){codec::discard(old);}
   let fingerprint=match actions.fingerprint(true,None,None){Ok(current) if beginning.as_ref()==Some(&current)=>actions.fingerprint(false,None,None).map(Value::String).unwrap_or(Value::Null),_=>Value::Null};
   if let Some(old)=registry.as_object_mut().expect("Registro validado").insert("fingerprint".into(),fingerprint){codec::discard(old);}
-  let path=context.work.join("estado.json");let saved=(||->Result<(),files::Error>{files::write(&path,&files::bytes(&registry)?,files::read(&path)?.as_deref(),None)?;Ok(())})();if saved.is_err(){tracing::warn!(code="codex_checkpoint_failed","Não foi possível persistir o estado da integração");}
+  let path=context.work.join("estado.json");let saved=(||->Result<(),files::Error>{files::write(&path,&files::bytes(&registry)?,files::read(&path)?.as_deref(),None)?;Ok(())})();if let Err(failure)=saved{tracing::warn!(code="codex_checkpoint_failed","Não foi possível persistir o estado da integração");context.state.update(|v|v["estado"]=json!("erro"));return Err(failure.into());}
  }
  drop(lock);if let Some(error)=interrupted{return Err(error)}view(context,actions.now())
 }

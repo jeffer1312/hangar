@@ -812,7 +812,7 @@ async fn terminal_life(host: &dyn OpenHost, spec: &mut SessionSpec, read_only: O
         let mut launch = super::codex::creation(spec, home, initial_prompt);
         launch.resume = resume.map(str::to_owned);
         // O rollout só nasce com a TUI, num caminho que não se deriva do cwd: nada a semear.
-        (super::codex::pane(&spec.name, &spec.key, &launch, spec.jev, runtime, read_only, host.terminal().windows)?, None, None)
+        (super::codex::pane(&spec.name, &spec.key, &launch, spec.jev, runtime, read_only, host.terminal().windows, host.env())?, None, None)
     } else {
         let ctx = agents::AgentContext { home: host.home(), server_env: host.env(), runtime_config: runtime, read_only,
             windows: host.terminal().windows };

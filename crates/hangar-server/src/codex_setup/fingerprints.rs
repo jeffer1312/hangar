@@ -422,6 +422,20 @@ pub fn compute(
             Err(e) => return Err(io(e)),
         };
         digest.update(text.as_bytes());
+        // O executável usa metadata; fontes e artefatos precisam detectar edições do mesmo tamanho.
+        if path.is_file() && path != std::env::current_exe().map_err(io)? {
+            use std::io::Read;
+            let mut file=std::fs::File::open(&path).map_err(io)?;let mut content=ring::digest::Context::new(&ring::digest::SHA256);let mut buffer=[0u8;8192];
+            loop {let count=file.read(&mut buffer).map_err(io)?;if count==0{break;}content.update(&buffer[..count]);}
+            let hash=content.finish().as_ref().iter().map(|byte|format!("{byte:02x}")).collect::<String>();
+            digest.update(b":sha256:");digest.update(hash.as_bytes());
+        }
+    }
+    if phase=="skills" {
+        let enabled=super::plugin_selection::desired(&settings).map_err(|e|error(e.kind,e.message))?;
+        let mut selection=json!({"enabled":enabled});
+        if !sources {selection["plugins"]=take(&config.value,"plugins",json!({}));selection["marketplaces"]=take(&config.value,"marketplaces",json!({}));}
+        digest.update(&files::bytes(&selection)?);
     }
     Ok(digest
         .finish()

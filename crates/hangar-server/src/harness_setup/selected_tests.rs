@@ -9,7 +9,7 @@ fn selected_hook_installers_match_original_files_and_idempotence() {
     .unwrap();
     let mut differences = Vec::new();
     for (index, case) in fixture["cases"].as_array().unwrap().iter().enumerate() {
-        let home = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir_in(crate::list::links::without_verbatim(std::env::temp_dir().canonicalize().unwrap())).unwrap();
         let repo = home.path().join("repo");
         let account = home.path().join(".claude");
         std::fs::create_dir_all(&account).unwrap();

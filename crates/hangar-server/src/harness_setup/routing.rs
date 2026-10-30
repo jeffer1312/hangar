@@ -26,12 +26,14 @@ async fn inner(state: Arc<AppState>, peer: SocketAddr, request: Request) -> Resp
     ) {
         return response;
     }
+    if path == "/api/harness/codex/opcoes" { return crate::codex_setup::options_http::handle(state,peer,request).await; }
     if let Err(response) = crate::routes::owner_gate(&state, peer, &request).await {
         return response;
     }
     if state.settings_snapshot().is_err() {
         return crate::engines::body::internal_error();
     }
+    if http::integration_path(&path) { return http::integration(&state,request).await; }
     let device = crate::accounts::http::bridge(&state).ok().and_then(|bridge| {
         crate::accounts::codex_device_login::DeviceBridge::new(
             state.cfg.upstream, state.cfg.internal_secret.clone(), bridge.instance().into(),

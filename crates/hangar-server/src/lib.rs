@@ -98,7 +98,7 @@ mod warn_limit;
 
 /// Versão do contrato com o Python (rotas `/internal`, canal privado do estado, ambiente). O
 /// Python (`RUST_SERVER_PROTOCOL`) recusa um binário de outra versão e atende sozinho.
-pub const INTERNAL_PROTOCOL: u32 = 98;
+pub const INTERNAL_PROTOCOL: u32 = 99;
 
 /// Todo cliente HTTP do servidor nasce aqui. Uma dependência liga `gzip`, `http2` e (no Windows)
 /// `native-tls` no reqwest, e o Cargo estende isso a todo cliente: sem estes desligamentos ele
@@ -205,6 +205,7 @@ pub async fn serve_until_with_guest(
         // O hub do chat pergunta ao registro quem é dono do Codex com terminal, e o registro o avisa na troca.
         registry.bind_hubs(state.side.hubs.downgrade());
         let _ = state.side.runtime.set(registry.clone());
+        state.initialize_codex_setup();
         let _ = state.accounts.quotas.runtime.set(registry.clone());
         let _ = state.accounts.quotas.diag.set(state.diag.clone());
         let quota_bridge=accounts::bridge::AccountsBridge::new(cfg.upstream,cfg.internal_secret.clone(),instance.clone())

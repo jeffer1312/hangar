@@ -1,16 +1,13 @@
-"""Gatilhos: o lançador aguarda o primeiro preparo; o lifespan não reconcilia sozinho."""
-import asyncio
+"""O lançador aguarda a confirmação do preparo nativo antes do app-server."""
 import importlib.util
 import sys
 import time
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
 
 import pytest
 
-from app import api, codex_integracao
 
 
 def _lancador():
@@ -95,37 +92,3 @@ def test_lancador_espera_o_preparo_em_andamento_sem_iniciar_outro(tmp_path, monk
         lancador.main()
     assert chamadas == ["GET", "espera", "GET", "servidor"]
     assert "Instalando" in capsys.readouterr().err
-
-
-async def test_lifespan_nao_reconcilia_sozinho_e_fecha_a_integracao(tmp_path, monkeypatch):
-    ordem = []
-
-    async def fechar():
-        ordem.append("fechado")
-
-    async def nada(*args):
-        pass
-
-    # `atualizar_e_aguardar` entra aqui porque o lifespan LÊ o atributo pra passar ao
-    # CodexContasLogin (api.py). Ler não é chamar, e o side_effect prova isso: se a subida
-    # reconciliar sozinha, o teste quebra dizendo por quê — mesma receita do `iniciar`.
-    servico = SimpleNamespace(
-        fechar=fechar,
-        iniciar=Mock(side_effect=AssertionError("não devia iniciar")),
-        atualizar_e_aguardar=Mock(side_effect=AssertionError("não devia reconciliar")),
-    )
-    monkeypatch.setattr(codex_integracao, "SERVICO", servico)
-    monkeypatch.setattr(api, "list_config_dirs", lambda: [])
-    monkeypatch.setattr(api, "_backend_config_base", lambda: tmp_path)
-    monkeypatch.setattr(api.registry, "list", lambda: [])
-    monkeypatch.setattr(api.loop_mod, "_loop_dir", lambda: tmp_path)
-    monkeypatch.setattr(api.hook_state, "watch", nada)
-    for nome in ("_prune_loop",):
-        monkeypatch.setattr(api, nome, nada)
-    monkeypatch.setattr(api.pricing, "atualizar_em_background", lambda: None)
-    monkeypatch.setattr(api, "threading", SimpleNamespace(Thread=Mock(return_value=SimpleNamespace(start=lambda: None))))
-    monkeypatch.setattr(api, "_loop_servidor", None)
-    async with api._lifespan(api.app):
-        await asyncio.sleep(0.05)
-        assert ordem == []
-    assert ordem == ["fechado"]

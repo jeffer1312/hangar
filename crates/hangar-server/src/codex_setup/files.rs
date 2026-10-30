@@ -1,5 +1,8 @@
 //! Escritas comparadas e backups restritos; uma colisão conserva o arquivo externo.
 use crate::accounts::environment::AccountEnvironment;
+#[path="files_replace.rs"]
+mod replacement;
+pub(crate) fn replace_preserving(source:&std::path::Path,target:&std::path::Path,expected:Option<&[u8]>,link:Option<&std::path::Path>)->Result<(),Error>{replacement::replace(source,target,expected,link)}
 use serde_json::{Value, json};
 
 #[cfg(test)]
@@ -25,6 +28,7 @@ pub enum Error {
     Io(io::Error),
     Invalid(String),
     Changed(String),
+    Displaced(String),
 }
 impl From<io::Error> for Error {
     fn from(e: io::Error) -> Self {
@@ -35,7 +39,7 @@ impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Io(e) => write!(f, "{e}"),
-            Self::Invalid(e) | Self::Changed(e) => write!(f, "{e}"),
+            Self::Invalid(e) | Self::Changed(e) | Self::Displaced(e) => write!(f, "{e}"),
         }
     }
 }
@@ -121,6 +125,9 @@ pub fn write(
     backups: Option<&Path>,
 ) -> Result<bool, Error> {
     if expected == Some(raw) {
+        if read(path)?.as_deref() != expected {
+            return Err(Error::Changed(format!("Arquivo alterado durante a integração: {}", path.file_name().unwrap_or_default().to_string_lossy())));
+        }
         return Ok(false);
     }
     let parent = path
@@ -150,7 +157,9 @@ pub fn write(
         backup(path, previous, backups)?;
     }
     check()?;
-    crate::runtime::queue::replace(temporary.path(), path)?;
+    let link=fs::read_link(path).ok();
+    let temporary=temporary.into_temp_path();
+    replace_preserving(&temporary, path, expected, link.as_deref())?;
     Ok(true)
 }
 pub fn transform(

@@ -13,6 +13,34 @@ use std::{
     time::Duration,
 };
 
+/// As etapas nativas compartilham o serviço do servidor; a herança continua no callback.
+pub trait CodexSetup: Send + Sync {
+    fn update(self: Arc<Self>, force: bool) -> futures_util::future::BoxFuture<'static, Result<Value, String>>;
+    fn repair(self: Arc<Self>, account: Account) -> futures_util::future::BoxFuture<'static, Result<Option<bool>, String>>;
+    fn project(self: Arc<Self>, account: Account, cwd: String) -> futures_util::future::BoxFuture<'static, Result<(), String>>;
+    fn status(&self) -> Result<Value, String>;
+}
+impl CodexSetup for crate::codex_setup::service::Service {
+    fn update(self: Arc<Self>, force: bool) -> futures_util::future::BoxFuture<'static, Result<Value, String>> {
+        Box::pin(async move {
+            match self.update_and_wait("account_prepare", force).await {
+                Ok(source) => Ok(source),
+                Err(error) => match self.status() {
+                    Ok(source) if matches!(source["estado"].as_str(), Some("erro" | "parcial" | "indisponivel")) => Ok(source),
+                    _ => Err(error),
+                },
+            }
+        })
+    }
+    fn repair(self: Arc<Self>, account: Account) -> futures_util::future::BoxFuture<'static, Result<Option<bool>, String>> {
+        Box::pin(async move { self.repair_account(account, false).await })
+    }
+    fn project(self: Arc<Self>, account: Account, cwd: String) -> futures_util::future::BoxFuture<'static, Result<(), String>> {
+        Box::pin(async move { self.prepare_project(&account.home, Path::new(&cwd)).await })
+    }
+    fn status(&self) -> Result<Value, String> { crate::codex_setup::service::Service::status(self) }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PrepareRequest {
@@ -49,6 +77,39 @@ fn complete(value: &Value) -> bool {
 }
 
 impl AccountService {
+    fn codex_preparation_service(&self) -> Result<Arc<dyn CodexSetup>, AccountError> {
+        self.codex_setup.lock().unwrap_or_else(|error| error.into_inner()).as_ref().and_then(std::sync::Weak::upgrade)
+            .ok_or_else(|| AccountError::new(503, "codex_setup_unavailable", "o serviço de integração Codex não está disponível", json!({})))
+    }
+
+    async fn finish_codex_preparation(&self, account: &Account, source: &Value, mut result: Value) -> Value {
+        merge_source_status(source, &mut result);
+        if result["status"] == "ready" {
+            let pending = match self.codex_preparation_service() {
+                Ok(service) => service.repair(account.clone()).await,
+                Err(_) => return failed("codex_setup_unavailable"),
+            };
+            match pending {
+                Ok(Some(pending)) => result["trust_pending"] = json!(pending),
+                Ok(None) => return failed("codex_cli_missing"),
+                Err(_) => return failed("codex_account_prepare_failed"),
+            }
+        }
+        result
+    }
+    async fn finish_project_preparation(&self, account: &Account, cwd: &str, result: Value) -> Value {
+        if matches!(result["status"].as_str(), Some("ready" | "partial")) {
+            let setup = match self.codex_preparation_service() {
+                Ok(setup) => setup,
+                Err(_) => return failed("codex_setup_unavailable"),
+            };
+            if setup.project(account.clone(), cwd.to_owned()).await.is_err() {
+                tracing::warn!(code="codex_project_instructions_failed", "instruções do projeto não foram preparadas");
+            }
+        }
+        result
+    }
+
     pub async fn prepare_for_session(
         &self, account: &Account, bridge: AccountsBridge, deadline: tokio::time::Instant,
     ) -> Result<Value, AccountError> {
@@ -193,7 +254,15 @@ impl AccountService {
                 let (service, bridge, account) = (self.clone(), bridge.clone(), account.clone());
                 tokio::spawn(async move {
                     let _guard = guard;
-                    let result = service.finish_callback(&previous, &bridge).await;
+                    let mut result = service.finish_callback(&previous, &bridge).await;
+                    if previous.cwd.is_none() {
+                        result = match service.codex_preparation_service().and_then(|setup| setup.status().map_err(|_| AccountError::io())) {
+                            Ok(source) => service.finish_codex_preparation(&account, &source, result).await,
+                            Err(_) => failed("codex_setup_unavailable"),
+                        };
+                    } else if let Some(cwd) = &previous.cwd {
+                        result = service.finish_project_preparation(&account, cwd, result).await;
+                    }
                     let result =
                         if std::fs::remove_file(service.preparation_path(&key).unwrap()).is_err() {
                             failed("account_prepare_state_failed")
@@ -391,6 +460,13 @@ impl AccountService {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(_) => return Err(AccountError::io()),
         }
+        let source = if cwd.is_none() {
+            if let Some(state) = self.preparations.lock().unwrap().get_mut(&key) {
+                state.result["etapa"] = json!("principal");
+            }
+            Some(self.codex_preparation_service()?.update(force).await
+                .map_err(|_| AccountError::io())?)
+        } else { None };
         let request = PrepareRequest {
             operation: super::claude_login::nonce().map_err(|_| AccountError::io())?,
             instance: bridge.instance().into(),
@@ -412,6 +488,12 @@ impl AccountService {
             Ok(result) if complete(&result) => result,
             _ => self.finish_callback(&request, bridge).await,
         };
+        let result = if let Some(source) = source {
+            self.finish_codex_preparation(account, &source, result).await
+        } else { result };
+        let result = if let Some(cwd) = &request.cwd {
+            self.finish_project_preparation(account, cwd, result).await
+        } else { result };
         // Revogar antes de liberar a guarda impede uma entrega HTTP atrasada de começar.
         std::fs::remove_file(&path).map_err(|_| AccountError::io())?;
         Ok(result)
@@ -436,5 +518,38 @@ impl AccountService {
                 }
             }
         }
+    }
+}
+
+fn merge_source_status(source: &Value, result: &mut Value) {
+    let optional = source["estado"] == "indisponivel" && source["etapa"]["codigo"] == "etapa_sem_claude";
+    if source.is_object() && !optional && !matches!(source["estado"].as_str(), None | Some("ok" | "ocioso")) {
+        if result["status"] == "ready" { result["status"] = json!("partial"); }
+        if result.get("issues").is_none() { result["issues"] = json!([]); }
+        if let Some(issues) = result["issues"].as_array_mut() {
+            issues.insert(0, json!({"code":"codex_account_source_sync_incomplete","params":{"status":source["estado"]}}));
+        }
+    }
+}
+
+#[cfg(test)]
+mod source_tests {
+    use super::*;
+    #[test]
+    fn incomplete_source_preserves_account_issues_and_blocks_ready() {
+        let mut result = json!({"status":"ready","issues":[{"code":"existing"}]});
+        merge_source_status(&json!({"estado":"erro"}), &mut result);
+        assert_eq!(result["status"], "partial");
+        assert_eq!(result["issues"][0], json!({"code":"codex_account_source_sync_incomplete","params":{"status":"erro"}}));
+        assert_eq!(result["issues"][1]["code"], "existing");
+    }
+    #[test]
+    fn absent_claude_is_optional_but_other_unavailability_is_not() {
+        let ready = json!({"status":"ready","issues":[]});
+        let mut result = ready.clone();
+        merge_source_status(&json!({"estado":"indisponivel","etapa":{"codigo":"etapa_sem_claude"}}), &mut result);
+        assert_eq!(result, ready);
+        merge_source_status(&json!({"estado":"indisponivel","etapa":{"codigo":"other"}}), &mut result);
+        assert_eq!(result["status"], "partial");
     }
 }

@@ -40,7 +40,7 @@ mod posix {
             "../../../../backend/tests/fixtures/contract/command-capture/bytes.json"
         ))
         .unwrap();
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::physical_tempdir();
         let cwd = root.path().join("work");
         std::fs::create_dir(&cwd).unwrap();
         let mut failures = Vec::new();
@@ -99,7 +99,7 @@ mod posix {
     #[tokio::test]
     async fn command_capture_timeout_and_cancel_keep_other_processes_alive() {
         for cancel in [false, true] {
-            let root = tempfile::tempdir().unwrap();
+            let root = crate::physical_tempdir();
             let mut outside = Sentinel(
                 std::process::Command::new("/bin/sleep")
                     .arg("60")
@@ -173,8 +173,13 @@ mod relative {
         ))
         .unwrap();
         let mut failures = Vec::new();
+        let interpreter = std::process::Command::new("python3")
+            .args(["-c", "import sys; print(sys.executable)"])
+            .output().unwrap();
+        assert!(interpreter.status.success());
+        let interpreter = std::path::PathBuf::from(String::from_utf8(interpreter.stdout).unwrap().trim()).canonicalize().unwrap();
         for case in corpus["cases"].as_array().unwrap() {
-            let temp = tempfile::tempdir().unwrap();
+            let temp = crate::physical_tempdir();
             let root = temp.path();
             std::fs::create_dir(root.join("bin")).unwrap();
             std::fs::create_dir_all(root.join("plugin/bin")).unwrap();
@@ -186,7 +191,7 @@ mod relative {
             ] {
                 let path = root.join(path);
                 if case["mode"] == "binary-name" {
-                    std::os::unix::fs::symlink("/usr/bin/python3", path).unwrap();
+                    std::os::unix::fs::symlink(&interpreter, path).unwrap();
                 } else {
                     let body = if case["mode"] == "script-name" {
                         "printf %s \"$0\"".to_owned()

@@ -214,7 +214,7 @@ mod tests {
         #![proptest_config(proptest::test_runner::Config::with_cases(64))]
         #[test]
         fn arbitrary_plugin_identifier_and_origin_do_not_panic(value in ".{0,256}") {
-            let base = tempfile::tempdir().unwrap();
+            let base = tempfile::tempdir_in(crate::list::links::without_verbatim(std::env::temp_dir().canonicalize().unwrap())).unwrap();
             let _ = desired(&json!({"enabledPlugins":{value.clone():true}}));
             let _ = origin(&json!({"source_type":"git","source":value}),false,base.path());
         }
@@ -226,7 +226,7 @@ mod tests {
             "../../../../backend/tests/fixtures/contract/codex-integration/plugin-selection.json"
         ).replace("$USERINFO_A", "user:secret").replace("$USERINFO_B", "user:password");
         let fixture: Value = serde_json::from_str(&raw).unwrap();
-        let base = tempfile::tempdir().unwrap();
+        let base = tempfile::tempdir_in(crate::list::links::without_verbatim(std::env::temp_dir().canonicalize().unwrap())).unwrap();
         let mut differences = Vec::new();
         for (index, row) in fixture["cases"].as_array().unwrap().iter().enumerate() {
             let args = row["args"].as_array().unwrap();

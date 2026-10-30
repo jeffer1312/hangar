@@ -441,3 +441,17 @@ mod update_parallel_assets;
 
 mod update_pipeline_errors;
 mod contract_paths;
+
+fn physical_tempdir() -> tempfile::TempDir {
+    let parent = std::env::temp_dir().canonicalize().unwrap();
+    #[cfg(windows)]
+    let parent = {
+        let text = parent.to_str().unwrap();
+        if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+            std::path::PathBuf::from(format!(r"\\{rest}"))
+        } else {
+            std::path::PathBuf::from(text.strip_prefix(r"\\?\").unwrap_or(text))
+        }
+    };
+    tempfile::tempdir_in(parent).unwrap()
+}

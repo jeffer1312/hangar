@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 #[test]
 fn codex_service_native_wrapper_fingerprint_ignores_obsolete_python_copies() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::physical_tempdir();
     let home = temp.path().join("home");
     let repo = temp.path().join("repo");
     let account = home.join(".codex");
@@ -32,7 +32,7 @@ fn codex_service_fingerprints_match_python_hash_inputs_and_metadata() {
     .unwrap();
     let mut failures = Vec::new();
     for case in corpus["cases"].as_array().unwrap() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = crate::physical_tempdir();
         let root = temp.path();
         for (name, entry) in case["entries"].as_object().unwrap() {
             let path = root.join(name);
@@ -96,6 +96,19 @@ fn codex_service_fingerprints_match_python_hash_inputs_and_metadata() {
             chunks.insert(at, format!("{}:{}:{nanos}", executable.display(), metadata.len()));
             chunks.insert(0, prefix);
         }
+        // A assinatura revisada acrescenta conteúdo às mesmas entradas capturadas.
+        for chunk in chunks.iter_mut().skip(1) {
+            if let Some((prefix,_))=chunk.rsplit_once(':') && let Some((path,_))=prefix.rsplit_once(':') {
+                let path=std::path::Path::new(path);
+                if path.is_file() && path!=std::env::current_exe().unwrap() {
+                    let bytes=std::fs::read(path).unwrap();chunk.push_str(":sha256:");chunk.push_str(&files::hash(&bytes));
+                }
+            }
+        }
+        if case["phase"]=="skills" {
+            // Estes casos capturados não habilitam plugins nem possuem marketplaces no TOML.
+            chunks.push(if case["sources"]==true {"{\n  \"enabled\": []\n}\n"}else{"{\n  \"enabled\": [],\n  \"plugins\": {},\n  \"marketplaces\": {}\n}\n"}.into());
+        }
         let expected_bytes = chunks.concat();
         let expected = files::hash(expected_bytes.as_bytes());
         let actual = fingerprints::compute(
@@ -122,7 +135,7 @@ fn codex_service_fingerprint_types_only_reject_fields_used_by_original() {
     .unwrap();
     let mut failures = Vec::new();
     for case in corpus["cases"].as_array().unwrap() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = crate::physical_tempdir();
         let home = temp.path().join("home");
         let account = home.join(".codex");
         let repo = temp.path().join("repo");
@@ -160,7 +173,7 @@ fn codex_service_fingerprint_path_failures_preserve_python_error_class() {
     .unwrap();
     let mut failures = Vec::new();
     for case in corpus["cases"].as_array().unwrap() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = crate::physical_tempdir();
         let root = temp.path();
         let home = root.join("home");
         let account = home.join(".codex");
@@ -213,7 +226,7 @@ fn codex_service_fingerprint_registry_validates_common_dependencies() {
     .unwrap();
     let mut failures = Vec::new();
     for case in corpus["cases"].as_array().unwrap() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::physical_tempdir();
         let home = dir.path().join("home");
         let account = home.join(".codex");
         let repo = dir.path().join("repo");
@@ -245,7 +258,18 @@ proptest::proptest! {
  #![proptest_config(proptest::test_runner::Config::with_cases(64))]
  #[test]
  fn codex_service_fingerprint_ignores_unselected_external_text(text in ".{0,1024}"){
-  let dir=tempfile::tempdir().unwrap();let home=dir.path().join("home");let account=home.join(".codex");let repo=dir.path().join("repo");std::fs::create_dir_all(&account).unwrap();std::fs::create_dir_all(&repo).unwrap();let env=AccountEnvironment::from_pairs([("HOME",home.to_string_lossy().into_owned()),("USERPROFILE",home.to_string_lossy().into_owned())]);
+  let dir=crate::physical_tempdir();let home=dir.path().join("home");let account=home.join(".codex");let repo=dir.path().join("repo");std::fs::create_dir_all(&account).unwrap();std::fs::create_dir_all(&repo).unwrap();let env=AccountEnvironment::from_pairs([("HOME",home.to_string_lossy().into_owned()),("USERPROFILE",home.to_string_lossy().into_owned())]);
   let before=fingerprints::compute(&env,&account,&repo,&json!({}),false,"fragments",false).unwrap();std::fs::write(account.join("config.toml"),format!("extra = {}\n",serde_json::to_string(&text).unwrap().replace('\u{7f}',"\\u007f"))).unwrap();let after=fingerprints::compute(&env,&account,&repo,&json!({}),false,"fragments",false).unwrap();proptest::prop_assert_eq!(before,after);
  }
+}
+
+#[test]
+fn codex_service_fingerprint_detects_same_metadata_edits_and_plugin_selection() {
+ let dir=crate::physical_tempdir();let home=dir.path().join("home");let account=home.join(".codex");let repo=dir.path().join("repo");
+ std::fs::create_dir_all(&account).unwrap();std::fs::create_dir_all(home.join(".claude/skills/a")).unwrap();
+ let env=AccountEnvironment::from_pairs([("HOME",home.to_string_lossy().into_owned()),("USERPROFILE",home.to_string_lossy().into_owned())]);
+ let path=home.join(".claude/skills/a/SKILL.md");std::fs::write(&path,"first").unwrap();let modified=std::fs::metadata(&path).unwrap().modified().unwrap();
+ let signature=||fingerprints::compute(&env,&account,&repo,&json!({}),false,"skills",false).unwrap();let before=signature();
+ std::fs::write(&path,"other").unwrap();std::fs::File::open(&path).unwrap().set_times(std::fs::FileTimes::new().set_modified(modified)).unwrap();assert_ne!(before,signature());
+ let before=signature();std::fs::write(account.join("config.toml"),"[plugins.'a@m']\nenabled=true\n").unwrap();assert_ne!(before,signature());
 }

@@ -57,6 +57,7 @@ pub(super) async fn run(
     let read_output=output.await;let read_errors=errors.await;
     if timed_out {return Err("O comando do Codex excedeu o tempo limite.".to_owned().into());}
     if was_cancelled {return Err("Operação administrativa do Codex cancelada.".to_owned().into());}
+    if matches!(&read_output,Ok(Err(error)) if error.kind()==std::io::ErrorKind::InvalidData) || matches!(&read_errors,Ok(Err(error)) if error.kind()==std::io::ErrorKind::InvalidData) {return Err("Saída do Codex excedeu o limite de captura.".to_owned().into());}
     if exited.is_err() || !matches!(read_output,Ok(Ok(()))) || !matches!(read_errors,Ok(Ok(()))) {
         return Err("Não foi possível ler a saída do Codex.".to_owned().into());
     }
@@ -85,8 +86,12 @@ fn read(mut pipe:impl tokio::io::AsyncRead+Unpin+Send+'static,buffer:Arc<Mutex<V
     let task=tokio::spawn(async move {
         let result=async {
             let mut chunk=[0u8;8192];
-            loop {let count=pipe.read(&mut chunk).await?;if count==0 {return Ok(());}
-                buffer.lock().unwrap_or_else(|e|e.into_inner()).extend_from_slice(&chunk[..count]);}
+            let mut exceeded=false;
+            loop {let count=pipe.read(&mut chunk).await?;if count==0 {return if exceeded {Err(std::io::Error::new(std::io::ErrorKind::InvalidData,"Saída do Codex excedeu o limite de captura"))}else{Ok(())};}
+                let mut buffer=buffer.lock().unwrap_or_else(|e|e.into_inner());
+                let keep=count.min(crate::command_capture::MAX_CAPTURE_BYTES.saturating_sub(buffer.len()));
+                buffer.extend_from_slice(&chunk[..keep]);exceeded|=keep<count;
+            }
         }.await;
         let _=sender.send(());
         result
@@ -121,4 +126,16 @@ fn diagnose(env:&crate::accounts::environment::AccountEnvironment,codex:&std::pa
         Ok(())=>tracing::warn!(code="codex_cli_failed",exit_code=code,"Diagnóstico da CLI gravado no log privado"),
         Err(error)=>tracing::warn!(code="codex_cli_diagnostic_failed",exit_code=code,kind=?error.kind(),"Não foi possível gravar o diagnóstico da CLI"),
     }
+}
+
+#[cfg(test)]
+#[tokio::test]
+async fn administrative_capture_preserves_json_and_drains_overflow() {
+ use tokio::io::AsyncWriteExt;
+ for size in [8193,crate::command_capture::MAX_CAPTURE_BYTES+17] {
+  let (mut writer,reader)=tokio::io::duplex(8192);let buffer=Arc::new(Mutex::new(Vec::new()));let (task,done)=read(reader,buffer.clone());
+  let data=vec![b'x';size];writer.write_all(&data).await.unwrap();drop(writer);done.await.unwrap();let result=task.await.unwrap();
+  assert_eq!(buffer.lock().unwrap().len(),size.min(crate::command_capture::MAX_CAPTURE_BYTES));
+  assert_eq!(result.is_err(),size>crate::command_capture::MAX_CAPTURE_BYTES);
+ }
 }

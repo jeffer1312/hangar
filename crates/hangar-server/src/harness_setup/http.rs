@@ -12,12 +12,17 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 pub const TABLE: &[(&str, &str)] = &[
     ("/api/harness", "GET"),
+    ("/api/harness/codex/opcoes", "GET"),
+    ("/api/harness/codex/opcoes", "POST"),
+    ("/api/harness/codex/integracao", "GET"),
+    ("/api/harness/codex/integracao", "POST"),
+    ("/api/harness/codex/integracao/sessao", "POST"),
     ("/api/harness/instalar", "GET"),
     ("/api/harness/instalar/{cli}", "POST"),
     ("/api/harness/conserto/{id_:path}", "POST"),
 ];
 pub fn matches(path: &str) -> bool {
-    path == "/api/harness"
+    path.trim_end_matches('/') == "/api/harness/codex/opcoes" || integration_path(path) || path == "/api/harness"
         || path == "/api/harness/"
         || path == "/api/harness/instalar"
         || path.starts_with("/api/harness/instalar/")
@@ -84,4 +89,14 @@ pub async fn serve(service: Service, installer: Arc<Installer>, request: Request
         }
     }
     crate::session_write::json_response(StatusCode::NOT_FOUND, json!({"detail":"Not Found"}))
+}
+
+pub fn integration_path(path:&str)->bool{
+    path=="/api/harness/codex/integracao"||path.starts_with("/api/harness/codex/integracao/")
+}
+pub async fn integration(state:&crate::routes::AppState,request:Request)->Response{
+    let service=match state.codex_setup_service(){Ok(service)=>service,Err(_)=>return crate::engines::body::internal_error()};
+    let path=percent_encoding::percent_decode_str(request.uri().path()).decode_utf8_lossy();
+    let result=if request.method()==Method::GET{service.status()}else if path.ends_with("/sessao"){service.session().await}else{service.start("manual",true).await};
+    match result{Ok(value)=>crate::orchestration::codec::response(if request.method()==Method::GET{StatusCode::OK}else{StatusCode::ACCEPTED},service.switches(value)),Err(_)=>crate::engines::body::internal_error()}
 }

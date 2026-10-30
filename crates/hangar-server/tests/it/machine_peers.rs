@@ -567,9 +567,14 @@ async fn child_identity(home: &std::path::Path, inherited: Option<&str>) -> Valu
     impl Drop for Child { fn drop(&mut self) { let _=self.0.kill(); let _=self.0.wait(); } }
     let _child=Child(command.spawn().unwrap());
     let client=reqwest::Client::new();
-    for _ in 0..100 {
+    let deadline=std::time::Instant::now()+std::time::Duration::from_secs(15);
+    while std::time::Instant::now()<deadline {
         if let Ok(response)=client.get(format!("http://{address}/api/peers/identificador")).bearer_auth("proof").send().await {
-            return response.json().await.unwrap();
+            let status=response.status();
+            let body:Value=response.json().await.unwrap();
+            if status.is_success() {return body;}
+            assert_eq!(status,503,"resposta inesperada: {body}");
+            assert_eq!(body,json!({"detail":"server_starting"}));
         }
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }

@@ -50,6 +50,7 @@ pub mod hook_wrappers;
 pub mod hook_command;
 pub mod artifacts;
 pub mod batch;
+mod batch_native;
 pub mod reload;
 
 pub mod phase;
@@ -82,3 +83,6 @@ mod stage_native;
 mod plugin_controlled;
 mod reconcile;
 mod legacy_instructions;
+
+pub mod options;
+pub mod options_http;

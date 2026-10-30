@@ -85,7 +85,7 @@ async fn login_guests_python_http_contract_and_disk_effects() {
         "../../../../backend/tests/fixtures/contract/guests/http.json"
     ))
     .unwrap();
-    let home = tempfile::tempdir().unwrap();
+    let home = crate::physical_tempdir();
     std::fs::create_dir(home.path().join("projects")).unwrap();
     let settings = Settings {
         guests: home.path().join("guests.json"),
@@ -184,7 +184,7 @@ fn login_guests_gate_matches_python_matrix() {
 #[tokio::test]
 async fn login_guests_public_gate_denies_owner_routes_before_upstream() {
     use hangar_server::login_guests::{Service, Settings};
-    let home = tempfile::tempdir().unwrap();
+    let home = crate::physical_tempdir();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let mut state = AppState::new(Config { listen:address, upstream:crate::refused_address(),
@@ -211,7 +211,7 @@ async fn login_guests_public_gate_denies_owner_routes_before_upstream() {
 #[tokio::test]
 async fn login_guests_body_limit_precedes_authentication() {
     use hangar_server::login_guests::{Service,Settings};
-    let home=tempfile::tempdir().unwrap();
+    let home=crate::physical_tempdir();
     let service=Arc::new(Service::new(Settings {guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),runtime_config:home.path().join("config.json"),sync_enabled:true,bootstrap:String::new(),secret:b"fixture".to_vec(),secure:false,rate_max:10.into(),rate_window:300.into()}));
     let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/limits.json")).unwrap();
     let expected=&fixture["rows"][0];
@@ -238,7 +238,7 @@ async fn login_guests_list_visibility_uses_python_matrix_without_forwarding() {
     use hangar_server::login_guests::{Service,Settings};
     use serde_json::json;
     use std::time::Duration;
-    let root=tempfile::tempdir().unwrap();
+    let root=crate::physical_tempdir();
     let program=crate::list_support::sessions(root.path(),3);
     let home=root.path().join("home");let claude=home.join(".claude");
     let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/store.json")).unwrap();
@@ -268,7 +268,7 @@ async fn login_guests_list_visibility_uses_python_matrix_without_forwarding() {
 #[tokio::test]
 async fn login_guests_invalid_forms_match_all_python_errors() {
     use hangar_server::login_guests::{Service,Settings};
-    let home=tempfile::tempdir().unwrap();
+    let home=crate::physical_tempdir();
     let http:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/http.json")).unwrap();
     let registered=http["rows"].as_array().unwrap().iter().find(|r|r["name"]=="registrar").unwrap();
     std::fs::write(home.path().join("vault.json"),registered["vault"].to_string()).unwrap();
@@ -291,7 +291,7 @@ async fn login_guests_invalid_forms_match_all_python_errors() {
 #[tokio::test]
 async fn login_guests_filesystem_uses_only_guest_root() {
     use hangar_server::login_guests::{Service,Settings};
-    let home=tempfile::tempdir().unwrap();let root=home.path().join("allowed");
+    let home=crate::physical_tempdir();let root=home.path().join("allowed");
     std::fs::create_dir_all(root.join("project")).unwrap();std::fs::create_dir(home.path().join("outside")).unwrap();
     std::fs::write(root.join("file"),"fixture").unwrap();std::os::unix::fs::symlink(home.path().join("outside"),root.join("escape")).unwrap();
     std::fs::File::open(root.join("project")).unwrap().set_times(std::fs::FileTimes::new().set_modified(std::time::UNIX_EPOCH+std::time::Duration::from_secs(2000000000))).unwrap();
@@ -351,7 +351,7 @@ async fn login_guests_filesystem_uses_only_guest_root() {
 #[tokio::test]
 async fn login_guests_vault_revisions_keep_python_integer_range() {
     use hangar_server::login_guests::{Service,Settings};
-    let home=tempfile::tempdir().unwrap();
+    let home=crate::physical_tempdir();
     let cases:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/revision.json")).unwrap();
     let mut service=Service::new(Settings{guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),runtime_config:home.path().join("config.json"),sync_enabled:true,bootstrap:"bootstrap".into(),secret:b"fixture-secret".to_vec(),secure:false,rate_max:10.into(),rate_window:300.into()});
     service.now=||2000000000;let service=Arc::new(service);
@@ -370,7 +370,7 @@ async fn login_guests_vault_revisions_keep_python_integer_range() {
 #[tokio::test]
 async fn login_guests_storage_normalizes_legacy_documents_before_writing() {
     use hangar_server::login_guests::{Service,Settings};
-    let home=tempfile::tempdir().unwrap();
+    let home=crate::physical_tempdir();
     let cases=fixture_root(serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/storage.json")).unwrap(), home.path());
     for (index,row) in cases["rows"].as_array().unwrap().iter().enumerate() {
         std::fs::write(home.path().join("guests.json"),row["initial"].to_string()).unwrap();
@@ -392,7 +392,7 @@ async fn login_guests_sse_filters_and_ends_when_token_is_revoked() {
     use hangar_server::login_guests::{Service,Settings};
     use serde_json::json;
     use std::time::Duration;
-    let root=tempfile::tempdir().unwrap();
+    let root=crate::physical_tempdir();
     let program=crate::list_support::sessions(root.path(),3);
     let home=root.path().join("home");let claude=home.join(".claude");
     let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/store.json")).unwrap();
@@ -440,7 +440,7 @@ mod arbitrary_inputs {
         #[test]
         fn login_guests_external_payloads_and_sidecars_do_not_panic(value in document(), raw in proptest::collection::vec(any::<u8>(),0..256)) {
             use hangar_server::login_guests::{Service,Settings};
-            let home=tempfile::tempdir().unwrap();
+            let home=crate::physical_tempdir();
             let service=Arc::new(Service::new(Settings{guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),runtime_config:home.path().join("config.json"),sync_enabled:true,bootstrap:String::new(),secret:vec![1],secure:false,rate_max:10.into(),rate_window:300.into()}));
             let rt=tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
             rt.block_on(async {
@@ -464,7 +464,7 @@ async fn login_guests_setup_preserves_vault_and_changes_enabled_state() {
     use hangar_server::login_guests::{Service,Settings};
     let cases:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/setup.json")).unwrap();
     for row in cases["rows"].as_array().unwrap() {
-        let home=tempfile::tempdir().unwrap();
+        let home=crate::physical_tempdir();
         for (key,file) in [("vault","vault.json"),("config","config.json")] {
             if let Some(raw)=row["initial"][key].as_str(){std::fs::write(home.path().join(file),raw).unwrap();}
         }
@@ -497,7 +497,7 @@ async fn login_guests_setup_preserves_vault_and_changes_enabled_state() {
 #[test]
 fn login_guests_store_preserves_session_life_and_failed_adoption() {
     use hangar_server::login_guests::store::Store;
-    let home=tempfile::tempdir().unwrap();
+    let home=crate::physical_tempdir();
     let fixture=fixture_root(serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/store.json")).unwrap(), home.path());
     for row in fixture["rows"].as_array().unwrap() {
         let path=home.path().join("guests.json");
@@ -519,7 +519,7 @@ fn login_guests_store_preserves_session_life_and_failed_adoption() {
 #[tokio::test]
 async fn login_guests_rejects_structural_identity_types_without_overwriting() {
     use hangar_server::login_guests::{Service,Settings};
-    let home=tempfile::tempdir().unwrap();
+    let home=crate::physical_tempdir();
     let cases=fixture_root(serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/identity-types.json")).unwrap(), home.path());
     for row in cases["rows"].as_array().unwrap() {
         let path=home.path().join("guests.json");std::fs::write(&path,row["initial"].to_string()).unwrap();
@@ -537,7 +537,7 @@ async fn login_guests_rejects_structural_identity_types_without_overwriting() {
 #[tokio::test]
 async fn login_guests_public_credentials_match_python_precedence() {
     use hangar_server::login_guests::{Service,Settings};
-    let home=tempfile::tempdir().unwrap();
+    let home=crate::physical_tempdir();
     let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();
     let mut state=AppState::new(Config{listen:address,upstream:crate::refused_address(),internal_secret:"fixture".into(),auth_token:"owner".into(),log_path:None,trusted:TrustedHosts::parse("127.0.0.1")});
     let service=Service::new(Settings{guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),runtime_config:home.path().join("config.json"),sync_enabled:false,bootstrap:String::new(),secret:vec![1],secure:false,rate_max:10.into(),rate_window:300.into()});
@@ -561,7 +561,7 @@ async fn login_guests_terminal_origin_matches_python_without_owner_restriction()
     use serde_json::json;
     use std::time::Duration;
     use tokio_tungstenite::tungstenite::{client::IntoClientRequest,Error};
-    let root=tempfile::tempdir().unwrap();let program=crate::list_support::sessions(root.path(),1);
+    let root=crate::physical_tempdir();let program=crate::list_support::sessions(root.path(),1);
     let home=root.path().join("home");let claude=home.join(".claude");
     std::fs::create_dir_all(home.join(".hangar/current")).unwrap();std::fs::create_dir_all(home.join(".hangar/config")).unwrap();
     std::fs::write(home.join(".hangar/config/.env"),"CP_PUBLIC_URL=https://public.example:8443\nCP_TERM_ORIGINS=https://extra.example\n").unwrap();
@@ -624,7 +624,7 @@ async fn login_guests_terminal_closes_after_login_revocation() {
     use std::time::Duration;
     use futures_util::{SinkExt,StreamExt};
     use tokio_tungstenite::tungstenite::{Message};
-    let root=tempfile::tempdir().unwrap();let program=crate::list_support::sessions(root.path(),1);
+    let root=crate::physical_tempdir();let program=crate::list_support::sessions(root.path(),1);
     let script=std::fs::read_to_string(&program).unwrap().replace("[ \"$1\" = list-panes ]", "[ \"$1\" = attach ] && exec cat\n[ \"$1\" = list-panes ]");
     std::fs::write(&program,script).unwrap();
     let home=root.path().join("home");let claude=home.join(".claude");
@@ -666,7 +666,7 @@ async fn login_guests_owner_list_preserves_legacy_truthiness() {
     use std::time::Duration;
     let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/visibility.json")).unwrap();
     for (index,row) in fixture["rows"].as_array().unwrap().iter().enumerate() {
-    let root=tempfile::tempdir().unwrap();
+    let root=crate::physical_tempdir();
     let program=crate::list_support::sessions(root.path(),2);
     let home=root.path().join("home");let claude=home.join(".claude");
     let (python,upstream)=crate::fake::spawn_fake().await;
@@ -696,7 +696,7 @@ async fn login_guests_routes_without_body_ignore_malformed_json() {
     use hangar_server::login_guests::{Service,Settings};
     let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/ignored-body.json")).unwrap();
     for row in fixture["rows"].as_array().unwrap() {
-        let root=tempfile::tempdir().unwrap();
+        let root=crate::physical_tempdir();
         let service=Arc::new(Service::new(Settings{guests:root.path().join("guests.json"),vault:root.path().join("vault.json"),runtime_config:root.path().join("runtime-config.json"),sync_enabled:true,bootstrap:String::new(),secret:b"fixture-secret".to_vec(),secure:false,rate_max:10.into(),rate_window:300.into()}));
         let request=axum::http::Request::builder().method(row["method"].as_str().unwrap()).uri(row["path"].as_str().unwrap())
             .header("content-type","application/json").body(axum::body::Body::from(row["raw"].as_str().unwrap().to_owned())).unwrap();
@@ -713,7 +713,7 @@ async fn login_guests_base64_rules_preserve_each_python_model() {
     let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/base64.json")).unwrap();
     let blobs:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/blobs.json")).unwrap();
     for row in fixture["rows"].as_array().unwrap().iter().chain(blobs["rows"].as_array().unwrap()) {
-        let root=tempfile::tempdir().unwrap();
+        let root=crate::physical_tempdir();
         let mut service=Service::new(Settings{guests:root.path().join("guests.json"),vault:root.path().join("vault.json"),runtime_config:root.path().join("runtime-config.json"),sync_enabled:true,bootstrap:"bootstrap".into(),secret:b"fixture-secret".to_vec(),secure:false,rate_max:10.into(),rate_window:300.into()});
         service.entropy=|n|vec![b'x';n];service.now=||2000000000;
         let service=Arc::new(service);
@@ -734,7 +734,7 @@ async fn login_guests_public_body_limits_preserve_consumption_and_priority() {
     use tower_service::Service as TowerService;
     let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/limit-routes.json")).unwrap();
     for row in fixture["rows"].as_array().unwrap() {
-        let root=tempfile::tempdir().unwrap();
+        let root=crate::physical_tempdir();
         let mut service=Service::new(Settings{guests:root.path().join("guests.json"),vault:root.path().join("vault.json"),runtime_config:root.path().join("runtime-config.json"),sync_enabled:false,bootstrap:String::new(),secret:b"fixture".to_vec(),secure:false,rate_max:10.into(),rate_window:300.into()});
         service.body_limit=row["limit"].as_u64().unwrap() as usize;
         service.store.create("Ana",root.path().to_str().unwrap(),false,true,"ana".into(),"guest-token".into()).unwrap();
@@ -760,7 +760,7 @@ async fn login_guests_sync_cookies_preserve_expiration_and_origin() {
     use hangar_server::login_guests::{Service, Settings};
     let fixture: Value = serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/cookies.json")).unwrap();
     for row in fixture["rows"].as_array().unwrap() {
-        let home = tempfile::tempdir().unwrap();
+        let home = crate::physical_tempdir();
         let mut service = Service::new(Settings {
             guests: home.path().join("guests.json"), vault: home.path().join("vault.json"),
             runtime_config: home.path().join("config.json"), sync_enabled: true,
@@ -796,7 +796,7 @@ fn login_guests_sync_settings_preserve_dotenv_coercion() {
     use hangar_server::login_guests::Settings;
     let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/settings.json")).unwrap();
     for row in fixture["rows"].as_array().unwrap() {
-        let home=tempfile::tempdir().unwrap();
+        let home=crate::physical_tempdir();
         let backend=home.path().join("backend");std::fs::create_dir(&backend).unwrap();
         std::fs::write(backend.join(".env"),format!("CP_{}={}\n",row["field"].as_str().unwrap().to_uppercase(),row["input"])).unwrap();
         let result=Settings::from_config(home.path(),&home.path().join("claude"),Some(&backend));
@@ -823,7 +823,7 @@ async fn login_guests_sync_rate_preserves_fractional_clock_and_signed_limits() {
     let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/rate.json")).unwrap();
     let mut mismatches=Vec::new();
     for row in fixture["rows"].as_array().unwrap() {
-        let home=tempfile::tempdir().unwrap();
+        let home=crate::physical_tempdir();
         let mut service=Service::new(Settings { guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),
             runtime_config:home.path().join("config.json"),sync_enabled:true,bootstrap:String::new(),secret:b"fixture".to_vec(),secure:false,
             rate_max:row["maximum"].to_string().parse().unwrap(),rate_window:row["window"].to_string().parse().unwrap() });
@@ -846,7 +846,7 @@ async fn login_guests_sync_invalid_config_does_not_disable_local_guests() {
     use hangar_server::login_guests::Service;
     let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/settings.json")).unwrap();
     for row in fixture["rows"].as_array().unwrap().iter().filter(|r|r["accepted"]==false) {
-        let home=tempfile::tempdir().unwrap();
+        let home=crate::physical_tempdir();
         let backend=home.path().join("backend");std::fs::create_dir(&backend).unwrap();
         std::fs::write(backend.join(".env"),format!("CP_{}={}\n",row["field"].as_str().unwrap().to_uppercase(),row["input"])).unwrap();
         let service=Arc::new(Service::from_config(home.path(),&home.path().join("claude"),Some(&backend)));
@@ -881,7 +881,7 @@ async fn login_guests_body_encoding_preserves_fastapi_response() {
     let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/request-body.json")).unwrap();
     let mut differences=Vec::new();
     for (index,row) in fixture["rows"].as_array().unwrap().iter().enumerate() {
-        let home=tempfile::tempdir().unwrap();
+        let home=crate::physical_tempdir();
         let service=Arc::new(Service::new(Settings { guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),
             runtime_config:home.path().join("config.json"),sync_enabled:false,bootstrap:String::new(),secret:b"fixture".to_vec(),secure:false,
             rate_max:10.into(),rate_window:300.into() }));
@@ -917,7 +917,7 @@ async fn login_guests_vault_unicode_preserves_write_and_serialization_effects() 
     let fixture = codec::loads(include_str!("../../../../backend/tests/fixtures/contract/guests/vault-unicode.json")).unwrap();
     let mut differences = Vec::new();
     for (index, row) in fixture["rows"].as_array().unwrap().iter().enumerate() {
-        let home = tempfile::tempdir().unwrap();
+        let home = crate::physical_tempdir();
         let mut service = Service::new(Settings { guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),
             runtime_config:home.path().join("config.json"),sync_enabled:true,bootstrap:"fixture-bootstrap".into(),secret:b"fixture-secret".to_vec(),secure:false,
             rate_max:10.into(),rate_window:300.into() });
@@ -945,7 +945,7 @@ async fn login_guests_admin_counter_preserves_parser_priority_and_shared_bucket(
     let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/admin-rate.json")).unwrap();
     let mut differences=Vec::new();
     for row in fixture["rows"].as_array().unwrap() {
-        let home=tempfile::tempdir().unwrap();
+        let home=crate::physical_tempdir();
         let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();
         let mut state=AppState::new(Config{listen:address,upstream:crate::refused_address(),internal_secret:"fixture".into(),auth_token:"owner".into(),log_path:None,trusted:TrustedHosts::parse("127.0.0.1")});
         state.auth=hangar_server::auth::Auth::new("owner");state.share=None;
@@ -973,7 +973,7 @@ async fn login_guests_stored_base64_preserves_permissive_decode() {
     let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/stored-base64.json")).unwrap();
     let mut differences=Vec::new();
     for (index,row) in fixture["rows"].as_array().unwrap().iter().enumerate() {
-        let home=tempfile::tempdir().unwrap();
+        let home=crate::physical_tempdir();
         let vault=home.path().join("vault.json");let original=row["vault"].to_string();std::fs::write(&vault,&original).unwrap();
         let mut service=Service::new(Settings{guests:home.path().join("guests.json"),vault:vault.clone(),runtime_config:home.path().join("config.json"),sync_enabled:true,bootstrap:String::new(),secret:b"fixture-secret".to_vec(),secure:false,rate_max:10.into(),rate_window:300.into()});
         service.now=||2000000000;let service=Arc::new(service);
@@ -993,7 +993,7 @@ async fn login_guests_stored_base64_preserves_permissive_decode() {
 async fn login_guests_public_methods_preserve_routing_and_head() {
     use hangar_server::login_guests::{Service,Settings};
     let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/methods.json")).unwrap();
-    let home=tempfile::tempdir().unwrap();
+    let home=crate::physical_tempdir();
     let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();
     let mut state=AppState::new(Config{listen:address,upstream:crate::refused_address(),internal_secret:"fixture".into(),auth_token:"owner".into(),log_path:None,trusted:TrustedHosts::parse("127.0.0.1")});
     state.auth=hangar_server::auth::Auth::new("owner");state.share=None;
@@ -1026,7 +1026,7 @@ async fn login_guests_vault_shapes_preserve_each_operation() {
     let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/vault-shapes.json")).unwrap();
     let mut differences=Vec::new();
     for (index,row) in fixture["rows"].as_array().unwrap().iter().enumerate() {
-        let home=tempfile::tempdir().unwrap();let vault=home.path().join("vault.json");
+        let home=crate::physical_tempdir();let vault=home.path().join("vault.json");
         let mut service=Service::new(Settings{guests:home.path().join("guests.json"),vault:vault.clone(),runtime_config:home.path().join("config.json"),sync_enabled:true,bootstrap:"bootstrap".into(),secret:b"fixture-secret".to_vec(),secure:false,rate_max:10.into(),rate_window:300.into()});
         service.now=||2000000000;service.entropy=|n|vec![b'x';n];let service=Arc::new(service);
         for (case_index,case) in row["cases"].as_array().unwrap().iter().enumerate() {
@@ -1048,7 +1048,7 @@ async fn login_guests_cookie_escaping_matches_original_login_and_renewal() {
     let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/login-cookies.json")).unwrap();
     let mut differences=Vec::new();
     for (index,row) in fixture["rows"].as_array().unwrap().iter().enumerate() {
-        let home=tempfile::tempdir().unwrap();
+        let home=crate::physical_tempdir();
         let mut service=Service::new(Settings{guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),runtime_config:home.path().join("config.json"),sync_enabled:true,bootstrap:"bootstrap".into(),secret:b"fixture-secret".to_vec(),secure:false,rate_max:10.into(),rate_window:300.into()});
         service.now=||2000000000;service.entropy=|n|vec![b'x';n];let service=Arc::new(service);
         let register=json!({"user":row["user"],"auth_hash":"fixture","salt":"fixture","bootstrap":"bootstrap"}).to_string();
@@ -1110,7 +1110,7 @@ async fn cookie_context_child_helper() {
 #[tokio::test]
 async fn login_guests_cookie_survives_child_relaunch_and_follows_parent_context() {
     use serde_json::json;
-    let root=tempfile::tempdir().unwrap();std::fs::create_dir(root.path().join("claude")).unwrap();
+    let root=crate::physical_tempdir();std::fs::create_dir(root.path().join("claude")).unwrap();
     fn context(root:&std::path::Path,file:&str,epoch:&str,key:&str)->Value {
         let mut config=json!({"abi":hangar_auth::AUTH_ABI,"store_version":hangar_auth::AUTH_STORE,"mode":"create","state_path":root.join(file),"parent_epoch":epoch.repeat(16),"expected_token":"owner-fake","receipt_key":key.repeat(32)});
         hangar_auth::SharedLimiter::open(serde_json::from_value(config.clone()).unwrap()).unwrap();
@@ -1152,7 +1152,7 @@ async fn login_guests_unhandled_failures_preserve_cors_boundary() {
     use hangar_server::login_guests::{Service,Settings};
     use hangar_server::orchestration::codec;
     let fixture=codec::loads(include_str!("../../../../backend/tests/fixtures/contract/guests/failure-cors.json")).unwrap();
-    let home=tempfile::tempdir().unwrap();let vault=home.path().join("vault.json");
+    let home=crate::physical_tempdir();let vault=home.path().join("vault.json");
     let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();
     let mut state=AppState::new(Config{listen:address,upstream:crate::refused_address(),internal_secret:"fixture".into(),auth_token:"owner".into(),log_path:None,trusted:TrustedHosts::parse("127.0.0.1")});
     state.auth=hangar_server::auth::Auth::new("owner");state.share=None;
@@ -1178,7 +1178,7 @@ async fn login_guests_vault_guest_shapes_preserve_list_write_delete() {
     let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/vault-guest-shapes.json")).unwrap();
     let mut differences=Vec::new();
     for (index,row) in fixture["rows"].as_array().unwrap().iter().enumerate() {
-        let home=tempfile::tempdir().unwrap();let vault=home.path().join("vault.json");
+        let home=crate::physical_tempdir();let vault=home.path().join("vault.json");
         let mut service=Service::new(Settings{guests:home.path().join("guests.json"),vault:vault.clone(),runtime_config:home.path().join("config.json"),sync_enabled:true,bootstrap:"bootstrap".into(),secret:b"fixture-secret".to_vec(),secure:false,rate_max:10.into(),rate_window:300.into()});
         service.now=||2000000000;service.entropy=|n|vec![b'x';n];let service=Arc::new(service);
         for (case_index,case) in row["cases"].as_array().unwrap().iter().enumerate() {
@@ -1201,7 +1201,7 @@ async fn login_guests_settings_paths_preserve_http_status() {
     use hangar_server::machine_peers::dotenv::{SettingsEnvironment,SettingsSnapshot};
     let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/settings-paths.json")).unwrap();
     for row in fixture["rows"].as_array().unwrap() {
-        let home=tempfile::tempdir().unwrap();let backend=home.path().join("backend");std::fs::create_dir(&backend).unwrap();
+        let home=crate::physical_tempdir();let backend=home.path().join("backend");std::fs::create_dir(&backend).unwrap();
         let snapshot=SettingsSnapshot::capture(home.path(),Some(&backend),SettingsEnvironment::from_pairs([
             ("CP_SYNC","1"),("CP_SYNC_DATA",row["input"].as_str().unwrap()),("CP_SYNC_SESSION_SECRET","fixture")])).unwrap();
         let mut settings=Settings::from_snapshot(home.path(),home.path(),&snapshot).unwrap();
@@ -1217,7 +1217,7 @@ async fn login_guests_settings_paths_preserve_http_status() {
 #[tokio::test]
 async fn login_guests_scalar_errors_match_public_http_models() {
     use hangar_server::login_guests::{Service,Settings};
-    let home=tempfile::tempdir().unwrap();
+    let home=crate::physical_tempdir();
     let http:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/http.json")).unwrap();
     let registered=http["rows"].as_array().unwrap().iter().find(|r|r["name"]=="registrar").unwrap();
     std::fs::write(home.path().join("vault.json"),registered["vault"].to_string()).unwrap();
@@ -1247,7 +1247,7 @@ async fn deep_routes_child_helper() {
     use hangar_server::login_guests::{Service,Settings};
     let fixture:Value=serde_json::from_str(if std::env::var_os("HANGAR_GUEST_DEEP_ERRORS").is_some() { include_str!("../../../../backend/tests/fixtures/contract/guests/deep-errors.json") } else { include_str!("../../../../backend/tests/fixtures/contract/guests/deep-routes.json") }).unwrap();
     let row=&fixture["rows"][index.parse::<usize>().unwrap()];
-    let home=tempfile::tempdir().unwrap();let vault=home.path().join("vault.json");
+    let home=crate::physical_tempdir();let vault=home.path().join("vault.json");
     let (open,close)=if row["shape"]=="array" {("[","]")}else{("{\"x\":","}")};let depth=row["depth"].as_u64().unwrap() as usize;
     let nested=format!("{}0{}",open.repeat(depth),close.repeat(depth));
     let operation=row["operation"].as_str().unwrap();
@@ -1281,7 +1281,7 @@ async fn login_guests_deep_errors_preserve_complete_validation() {
 async fn deep_cases(fixture:Value, errors:bool) {
     let mut failures=Vec::new();
     for (index,row) in fixture["rows"].as_array().unwrap().iter().enumerate(){
-        let home=tempfile::tempdir().unwrap();
+        let home=crate::physical_tempdir();
         let mut command=tokio::process::Command::new(std::env::current_exe().unwrap());
         command.args(["--exact","login_guests::deep_routes_child_helper","--nocapture"]).env_clear()
             .env("HOME",home.path()).env("USERPROFILE",home.path()).env("CLAUDE_CONFIG_DIR",home.path())
@@ -1320,7 +1320,7 @@ async fn login_guests_diary_matches_original_operations_and_access() {
     use hangar_server::login_guests::{Service,Settings};
     static NOW:std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(2000000000);
     let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/diary.json")).unwrap();
-    let home=tempfile::tempdir().unwrap();let diary=home.path().join("diary");std::fs::create_dir(&diary).unwrap();
+    let home=crate::physical_tempdir();let diary=home.path().join("diary");std::fs::create_dir(&diary).unwrap();
     let mut service=Service::new(Settings{guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),runtime_config:home.path().join("config.json"),sync_enabled:true,bootstrap:"bootstrap".into(),secret:b"fixture-secret".to_vec(),secure:false,rate_max:10.into(),rate_window:300.into()});
     service.set_diary_directory(diary.clone());service.now=||NOW.load(std::sync::atomic::Ordering::Relaxed);service.rate_now=||NOW.load(std::sync::atomic::Ordering::Relaxed) as f64;service.entropy=|n|vec![b'x';n];
     let service=Arc::new(service);let mut count=0;
@@ -1344,7 +1344,7 @@ async fn login_guests_diary_matches_original_operations_and_access() {
 async fn login_guests_diary_deduplicates_and_bounds_cookie_origins() {
     use hangar_server::login_guests::{Service,Settings};
     let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/access-diary.json")).unwrap();
-    let home=tempfile::tempdir().unwrap();let diary=home.path().join("diary");std::fs::create_dir(&diary).unwrap();
+    let home=crate::physical_tempdir();let diary=home.path().join("diary");std::fs::create_dir(&diary).unwrap();
     let mut service=Service::new(Settings{guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),runtime_config:home.path().join("config.json"),sync_enabled:true,bootstrap:String::new(),secret:b"fixture-secret".to_vec(),secure:false,rate_max:10.into(),rate_window:300.into()});
     service.set_diary_directory(diary.clone());service.now=||2000000000;let service=Arc::new(service);
     let deep:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/deep-routes.json")).unwrap();
@@ -1366,7 +1366,7 @@ async fn login_guests_shortcut_authorization_freezes_folder_before_generic_trans
     use hangar_server::{accounts::{AccountService,environment::AccountEnvironment},list::{bridge::{ListBridge,ListEnv,parse_dirs},facts::FactsClient,mux::Mux},login_guests::{Service,Settings}};
     use serde_json::json;
     use std::time::Duration;
-    let root=tempfile::tempdir().unwrap();let program=crate::list_support::sessions(root.path(),1);
+    let root=crate::physical_tempdir();let program=crate::list_support::sessions(root.path(),1);
     let home=root.path().join("home");let claude=home.join(".claude");let cwd=root.path().join("w0");
     let script=std::fs::read_to_string(&program).unwrap();
     std::fs::write(&program,script.replace("#!/bin/sh\n",&format!("#!/bin/sh\nprintf '%s\\n' \"$@\" >> '{}'\n",root.path().join("arguments").display()))).unwrap();

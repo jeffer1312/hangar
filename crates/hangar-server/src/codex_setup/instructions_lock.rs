@@ -26,15 +26,16 @@ pub async fn acquire<F: Future<Output = ()>>(
             writer.flush()?;
         }
     }
-    #[cfg(windows)]
     let mut attempts = 0;
     loop {
         match file.try_lock() {
             Ok(()) => return Ok(file),
             Err(TryLockError::WouldBlock) => {
+                attempts += 1;
+                #[cfg(not(windows))]
+                if attempts == 100 { return Err(io::Error::new(io::ErrorKind::WouldBlock,"codex_instructions_busy: outra preparação mantém a trava da conta")); }
                 #[cfg(windows)]
                 {
-                    attempts += 1;
                     if attempts == 10 {
                         return Err(io::Error::new(
                             io::ErrorKind::WouldBlock,
@@ -79,4 +80,12 @@ async fn windows_contention_matches_original_deadline_and_reacquisition() {
     );
     let again = acquire(home.path(), tokio::time::sleep).await;
     assert_eq!(again.is_ok(), fixture["reacquired"].as_bool().unwrap());
+}
+
+#[cfg(all(test,unix))]
+#[tokio::test]
+async fn unix_contention_is_bounded_and_releases_the_handle() {
+    let home=tempfile::tempdir().unwrap();let held=acquire(home.path(), |_|async{}).await.unwrap();
+    let error=acquire(home.path(), |_|async{}).await.unwrap_err();assert_eq!(error.kind(),io::ErrorKind::WouldBlock);
+    drop(held);assert!(acquire(home.path(), |_|async{}).await.is_ok());
 }

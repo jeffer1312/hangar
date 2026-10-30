@@ -382,6 +382,7 @@ pub async fn public(state: Arc<crate::routes::AppState>, request: Request) -> Re
 }
 
 pub(crate) fn bridge(state: &crate::routes::AppState) -> Result<AccountsBridge, AccountError> {
+    state.codex_setup_service().map_err(|_| AccountError::io())?;
     let instance = crate::config::Config::runtime_instance()
         .ok()
         .flatten()

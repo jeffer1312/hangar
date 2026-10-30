@@ -17,7 +17,7 @@ impl Actions for Fake{
  }
  async fn open(&mut self)->Result<(),Error>{self.events.push(json!(["open"]));Ok(())}
  async fn close(&mut self)->Result<(),Error>{self.events.push(json!(["close"]));Ok(())}
- async fn trust(&mut self,_:&State)->Result<(),Error>{self.events.push(json!(["trust"]));Ok(())}
+ async fn trust(&mut self,_:&State)->Result<(),Error>{self.events.push(json!(["trust"]));if let Some(path)=self.scenario.strip_prefix("checkpoint-failure:"){std::fs::remove_file(path).unwrap();std::fs::create_dir(path).unwrap();}Ok(())}
 }
 #[tokio::test]
 async fn codex_service_pipeline_round_matches_original_phase_order_errors_and_checkpoints(){
@@ -61,4 +61,14 @@ async fn codex_service_review_failure_keeps_private_diagnostic_without_secret(){
   let response=pipeline_round::run(&context,&mut actions).with_subscriber(subscriber).await.unwrap();assert_eq!(response["estado"],"erro");assert!(!response.to_string().contains("causa técnica"));
   let logs=String::from_utf8(capture.0.lock().unwrap().clone()).unwrap();assert!(logs.contains("causa técnica")&&logs.contains(kind),"Diagnóstico ausente: {logs}");assert!(!logs.contains("segredo-sintetico"),"Credencial vazou no diagnóstico");assert!(logs.contains(expected["message"].as_str().unwrap()));assert!(logs.contains(if expected["level"]=="warning"{"WARN"}else{"ERROR"}));
  }
+}
+
+#[tokio::test]
+async fn codex_service_final_checkpoint_failure_never_reports_success() {
+ let temp=tempfile::tempdir().unwrap();let home=temp.path();let account=home.join(".codex");std::fs::create_dir_all(&account).unwrap();std::fs::create_dir(home.join(".claude")).unwrap();std::fs::write(home.join(".claude/settings.json"),"{}").unwrap();
+ let work=status::root(home,&account).unwrap();let state=State::new(status::snapshot());let(_,cancel)=tokio::sync::watch::channel(false);
+ let context=Context{home,account:&account,work:&work,state:&state,force:true,memory:false,cancel};
+ let mut actions=Fake{scenario:format!("checkpoint-failure:{}",work.join("estado.json").display()),events:vec![]};
+ assert!(pipeline_round::run(&context,&mut actions).await.is_err());assert_eq!(state.snapshot()["estado"],"erro");assert!(work.join("estado.json").is_dir());
+ assert!(actions.events.iter().any(|event|event==&json!(["close"])));
 }

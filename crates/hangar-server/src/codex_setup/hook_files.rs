@@ -26,10 +26,42 @@ pub fn materialize(account:&Path,home:&Path,document:Option<&Value>,windows:bool
  }
  let mut created=vec![];let mut orphans=vec![];
  for target in stale.into_iter().chain(missing){let relative=target.strip_prefix(&root).expect("Caminho conferido");let name=relative.to_string_lossy().replace('\\',"/");let source=source_root.join(relative);if !source.exists(){orphans.push(name);continue}let real=resolve(&source)?;
-  let result=(||->std::io::Result<()>{fs::create_dir_all(target.parent().expect("Caminho absoluto"))?;if target.is_symlink(){fs::remove_file(&target)?;}if windows{fs::write(&target,fs::read(&real)?)?;}else{
+  let result=(||->std::io::Result<()>{fs::create_dir_all(target.parent().expect("Caminho absoluto"))?;if !windows&&target.is_symlink(){fs::remove_file(&target)?;}if windows{refresh_copy(account,&target,&fs::read(&real)?).map_err(|e|std::io::Error::other(e.to_string()))?;}else{
    #[cfg(unix)]std::os::unix::fs::symlink(&real,&target)?;
    #[cfg(windows)]std::os::windows::fs::symlink_file(&real,&target)?;
   }Ok(())})();if result.is_ok(){created.push(name)}else{orphans.push(name)}
  }
  Ok((created,orphans))
+}
+
+#[cfg(test)]
+#[test]
+fn copied_hook_preserves_the_previous_bytes_before_refresh() {
+ let dir=tempfile::tempdir().unwrap();let home=dir.path().join("home");let account=home.join(".codex");let target=account.join("hooks/tool.py");
+ fs::create_dir_all(target.parent().unwrap()).unwrap();fs::create_dir_all(home.join(".claude/hooks")).unwrap();fs::write(&target,b"personal edit").unwrap();fs::write(home.join(".claude/hooks/tool.py"),b"updated").unwrap();
+ let document=serde_json::json!({"hooks":{"Stop":[{"hooks":[{"command":format!("python '{}'",target.display())}]}]}});
+ let (created,orphans)=materialize(&account,&home,Some(&document),true).unwrap();assert_eq!(created,vec!["tool.py"]);assert!(orphans.is_empty());assert_eq!(fs::read(&target).unwrap(),b"updated");
+ let backup=account.join(".hangar-hook-backups").join(super::files::hash(b"personal edit"));let file=fs::read_dir(backup).unwrap().next().unwrap().unwrap().path();let saved:Value=serde_json::from_slice(&fs::read(file).unwrap()).unwrap();assert_eq!(saved["conteudo_hex"],"706572736f6e616c2065646974");
+}
+
+fn refresh_copy(account:&Path,target:&Path,data:&[u8])->Result<(),super::files::Error>{
+ let broken=target.is_symlink()&&!target.exists();
+ let previous=if broken{None}else{super::files::read(target)?};
+ let backups=account.join(".hangar-hook-backups").join(super::files::hash(previous.as_deref().unwrap_or_default()));
+ if broken{
+  use std::io::Write;
+  let link=fs::read_link(target)?;super::files::backup(target,b"",&backups)?;
+  let mut temporary=tempfile::NamedTempFile::new_in(target.parent().unwrap())?;temporary.write_all(data)?;temporary.as_file().sync_all()?;
+  let temporary=temporary.into_temp_path();super::files::replace_preserving(&temporary,target,None,Some(&link))?;
+ }else{super::files::write(target,data,previous.as_deref(),Some(&backups))?;}
+ Ok(())
+}
+#[cfg(test)]
+#[test]
+fn copied_hook_repairs_a_broken_link_and_preserves_its_destination(){
+ let dir=tempfile::tempdir().unwrap();let account=dir.path().join("account");fs::create_dir(&account).unwrap();let target=account.join("tool.py");let missing=Path::new("missing.py");
+ #[cfg(unix)] std::os::unix::fs::symlink(missing,&target).unwrap();
+ #[cfg(windows)] std::os::windows::fs::symlink_file(missing,&target).unwrap();
+ refresh_copy(&account,&target,b"updated").unwrap();assert!(!target.is_symlink());assert_eq!(fs::read(&target).unwrap(),b"updated");
+ let backup=account.join(".hangar-hook-backups").join(super::files::hash(b""));let file=fs::read_dir(backup).unwrap().next().unwrap().unwrap().path();let saved:Value=serde_json::from_slice(&fs::read(file).unwrap()).unwrap();assert_eq!(saved["symlink"],"missing.py");
 }

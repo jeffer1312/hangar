@@ -141,6 +141,8 @@ fn jev_reads_after_the_participating_writer_releases_its_lock() {
         .into(),
     );
     let config = super::runtime::RuntimeConfig::new(env).unwrap();
+    std::fs::create_dir_all(config.path.parent().unwrap()).unwrap();
+    std::fs::write(&config.path, br#"{"jev_api_key":"fixture-key"}"#).unwrap();
     let guard = crate::session_open::claude::lock_config(&path).unwrap();
     let (started, observed) = std::sync::mpsc::channel();
     let worker = std::thread::spawn(move || {
@@ -181,5 +183,114 @@ fn failed_skill_listing_is_excluded_instead_of_exported_empty() {
     assert_eq!(
         bundle.warnings["claude_skills"][0]["code"],
         "config_sync_item_failed"
+    );
+}
+
+fn retained_version(folder: &std::path::Path, error: &str, expected: &[u8]) -> std::path::PathBuf {
+    let saved = std::fs::read_dir(folder)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| {
+            path.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(".hangar-recovery-")
+        })
+        .expect("versão deslocada retida");
+    assert!(error.contains(saved.to_str().unwrap()), "{error}");
+    assert_eq!(std::fs::read(&saved).unwrap(), expected);
+    saved
+}
+
+#[test]
+fn json_application_reports_and_retains_the_external_last_window_write() {
+    let home = tempfile::tempdir().unwrap();
+    let target = home.path().join("settings.json");
+    std::fs::write(&target, br#"{"original":true}"#).unwrap();
+    let outside = target.clone();
+    let error = files::with_publication_race(
+        &target,
+        move || {
+            std::fs::write(&outside, br#"{"external":true}"#).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&outside, std::fs::Permissions::from_mode(0o640)).unwrap();
+            }
+        },
+        || {
+            files::edit_json(&target, &home.path().join("backups"), |value| {
+                value["generated"] = json!(true);
+                Ok(())
+            })
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error.code, "config_sync_changed");
+    let saved = retained_version(home.path(), &error.message, br#"{"external":true}"#);
+    #[cfg(unix)]
+    assert_eq!(files::mode(&saved).unwrap(), 0o640);
+    std::fs::write(&target, b"third writer").unwrap();
+    assert_eq!(std::fs::read(&target).unwrap(), b"third writer");
+    assert_eq!(std::fs::read(saved).unwrap(), br#"{"external":true}"#);
+}
+
+#[test]
+fn json_application_does_not_replace_a_concurrently_created_file() {
+    let home = tempfile::tempdir().unwrap();
+    let target = home.path().join("settings.json");
+    let outside = target.clone();
+    let error = files::with_publication_race(
+        &target,
+        move || std::fs::write(outside, b"external creation").unwrap(),
+        || {
+            files::edit_json(&target, &home.path().join("backups"), |value| {
+                value["generated"] = json!(true);
+                Ok(())
+            })
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error.code, "config_sync_changed");
+    assert_eq!(std::fs::read(target).unwrap(), b"external creation");
+}
+
+#[test]
+fn jev_validates_before_publication_and_retains_external_replacement() {
+    use crate::accounts::environment::AccountEnvironment;
+    let home = tempfile::tempdir().unwrap();
+    let env = AccountEnvironment::from_map(
+        [
+            ("HOME".into(), home.path().display().to_string()),
+            ("USERPROFILE".into(), home.path().display().to_string()),
+        ]
+        .into(),
+    );
+    let config = super::runtime::RuntimeConfig::new(env).unwrap();
+    std::fs::create_dir_all(config.path.parent().unwrap()).unwrap();
+    std::fs::write(&config.path, br#"{"jev_api_key":"fixture-key"}"#).unwrap();
+    let target = home.path().join(".claude.json");
+    let original =
+        br#"{"mcpServers":{"hangar-computer-control":{"command":"tool","env":{"LOCAL":"kept"}}}}"#;
+    std::fs::write(&target, original).unwrap();
+    let parked = home.path().join(".hangar/computer-control.json");
+    std::fs::create_dir_all(parked.parent().unwrap()).unwrap();
+    std::fs::write(&parked, br#"{"env":"invalid"}"#).unwrap();
+    assert!(config.sync_jev().is_err());
+    assert_eq!(std::fs::read(&target).unwrap(), original);
+    std::fs::remove_file(parked).unwrap();
+    let outside = target.clone();
+    let error = files::with_publication_race(
+        &target,
+        move || std::fs::write(outside, br#"{"external":"preserved"}"#).unwrap(),
+        || config.sync_jev(),
+    )
+    .unwrap_err();
+    let saved = retained_version(home.path(), &error, br#"{"external":"preserved"}"#);
+    std::fs::write(&target, b"third writer").unwrap();
+    assert_eq!(std::fs::read(target).unwrap(), b"third writer");
+    assert_eq!(
+        std::fs::read(saved).unwrap(),
+        br#"{"external":"preserved"}"#
     );
 }

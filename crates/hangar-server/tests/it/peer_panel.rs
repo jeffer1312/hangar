@@ -38,7 +38,7 @@ fn panel(root: &std::path::Path) -> Panel {
 }
 #[test]
 fn panel_projections_match_python() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::physical_tempdir();
     let panel = panel(root.path());
     for row in fixture()["cases"].as_array().unwrap() {
         match row["kind"].as_str().unwrap() {
@@ -67,7 +67,7 @@ fn panel_projections_match_python() {
                 assert_eq!(result, expected, "{row}");
             }
             "detect_command" => {
-                let project = tempfile::tempdir().unwrap();
+                let project = crate::physical_tempdir();
                 std::fs::write(
                     project.path().join("package.json"),
                     row["package"].to_string(),
@@ -143,7 +143,7 @@ async fn panel_actions_match_python_requests_and_results() {
         .iter()
         .filter(|row| matches!(row["kind"].as_str(), Some("action_api" | "dispatch")))
     {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::physical_tempdir();
         let mut panel = panel(root.path());
         let transport = Arc::new(Mock::default());
         *transport.responses.lock().unwrap() = row["responses"]
@@ -221,7 +221,7 @@ async fn panel_snapshot_matches_python_peer_visibility_order_and_projects() {
         .iter()
         .filter(|row| row["kind"] == "snapshot")
     {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::physical_tempdir();
         let mut panel = panel(root.path());
         panel.transport = Arc::new(SnapshotTransport);
         std::fs::write(
@@ -253,7 +253,7 @@ proptest::proptest! {
 async fn panel_scan_preserves_candidates_and_backend_failure_notice() {
     let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/update-git/panel-scan.json")).unwrap();
     for row in fixture["cases"].as_array().unwrap() {
-        let root=tempfile::tempdir().unwrap();let projects=root.path().join("projects");std::fs::create_dir(&projects).unwrap();
+        let root=crate::physical_tempdir();let projects=root.path().join("projects");std::fs::create_dir(&projects).unwrap();
         for name in ["zeta","Alpha",".hidden"] {std::fs::create_dir(projects.join(name)).unwrap();}
         std::fs::write(projects.join("Alpha/package.json"),r#"{"scripts":{"dev":"vite"}}"#).unwrap();
         std::fs::write(projects.join("loose-file"),"ignored").unwrap();

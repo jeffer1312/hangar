@@ -6,7 +6,7 @@ use std::{future::Future,path::Path};
 pub trait Actions {
     fn repair(&mut self,account:&Account)->impl Future<Output=Result<(),String>>+Send;
     fn sessions(&mut self)->Result<Vec<Value>,String>;
-    fn alive(&self,pid:&Value)->bool;
+    fn alive(&self,pid:&Value)->Result<bool,String>;
     fn reload(&mut self,endpoint:&str,cwd:&str,account:&Account)->impl Future<Output=Result<bool,String>>+Send;
 }
 pub async fn run(home:&Path,accounts:&[Account],actions:&mut impl Actions)->Result<(),String>{
@@ -15,7 +15,7 @@ pub async fn run(home:&Path,accounts:&[Account],actions:&mut impl Actions)->Resu
     for session in actions.sessions()? {
         let session=crate::config_sync::runtime_values::ValueGuard(session);
         let (Some(endpoint),Some(account_home),Some(pid))=(session.get("endpoint").and_then(Value::as_str),session.get("codex_home").and_then(Value::as_str),session.get("app_pid")) else{continue;};
-        if !(pid.is_i64()||pid.is_u64()||pid.is_boolean())||!actions.alive(pid){continue;}
+        if !(pid.is_i64()||pid.is_u64()||pid.is_boolean())||!actions.alive(pid)?{continue;}
         let resolved=super::plugins::resolved(Path::new(account_home))?;
         let mut account=None;
         for candidate in &accounts{if super::plugins::resolved(&candidate.home)?==resolved{account=Some(*candidate);break;}}

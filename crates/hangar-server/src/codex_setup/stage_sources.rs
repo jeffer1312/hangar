@@ -119,6 +119,7 @@ pub(super) fn copy_tree(source: &Path, target: &Path) -> io::Result<()> {
                 pending.push(Work::Finish(source.clone(), target.clone()));
                 for entry in fs::read_dir(source)? {
                     let entry = entry?;
+                    if entry.file_type()?.is_symlink() { continue; }
                     let name = entry.file_name();
                     let text = name.to_string_lossy();
                     if ["__pycache__", ".git"].contains(&text.as_ref()) || text.ends_with(".pyc") {
@@ -141,15 +142,15 @@ fn conversation(path: &Path) -> io::Result<bool> {
     let input = io::BufReader::new(fs::File::open(path)?);
     for line in input.split(b'\n') {
         let line = line?;
-        let text = String::from_utf8_lossy(&line);
-        if text.contains("\"type\":\"user\"") || text.contains("\"type\": \"user\"") {
-            return Ok(true);
+        if let Ok(value) = crate::orchestration::body::parse(&line) {
+            let value = crate::config_sync::runtime_values::ValueGuard(value);
+            if value.get("type").and_then(Value::as_str) == Some("user") { return Ok(true); }
         }
     }
     Ok(false)
 }
 pub fn copy_memory(source: &Path, target: &Path) -> Vec<String> {
-    if !source.is_dir() {
+    if source.is_symlink() || !source.is_dir() {
         return vec![];
     }
     let mut errors = Vec::new();
@@ -163,7 +164,7 @@ pub fn copy_memory(source: &Path, target: &Path) -> Vec<String> {
     projects.sort();
     for project in projects {
         let memory = project.join("memory");
-        if !memory.is_dir() {
+        if project.is_symlink() || memory.is_symlink() || !memory.is_dir() {
             continue;
         }
         let Some(name) = project.file_name() else {
@@ -185,7 +186,7 @@ pub fn copy_memory(source: &Path, target: &Path) -> Vec<String> {
             };
             for entry in entries.filter_map(Result::ok) {
                 let path = entry.path();
-                if path.extension().is_some_and(|v| {
+                if !path.is_symlink() && path.extension().is_some_and(|v| {
                     if cfg!(windows) {
                         v.to_string_lossy().eq_ignore_ascii_case("jsonl")
                     } else {
@@ -274,4 +275,27 @@ pub fn without_app_hooks(value: &Value) -> Value {
         }
     }
     Value::Object(out)
+}
+
+#[cfg(test)]
+mod review_tests {
+    use super::*;
+    #[test]
+    fn transcript_requires_a_top_level_user_message() {
+        let dir=tempfile::tempdir().unwrap();let path=dir.path().join("transcript.jsonl");
+        for raw in [r#"{"type":"assistant","nested":{"type":"user"}}"#,r#"{"type":"assistant","text":"user"}"#,"not JSON"] {
+            fs::write(&path,raw).unwrap();assert!(!conversation(&path).unwrap());
+        }
+        fs::write(&path,"{\"type\" : \"user\"}\n").unwrap();assert!(conversation(&path).unwrap());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn memory_copy_skips_links_without_touching_their_targets() {
+        let dir=tempfile::tempdir().unwrap();let source=dir.path().join("source");let target=dir.path().join("target");
+        fs::create_dir(&source).unwrap();let outside=dir.path().join("private.md");fs::write(&outside,"private").unwrap();
+        fs::write(source.join("public.md"),"public").unwrap();std::os::unix::fs::symlink(&outside,source.join("linked.md")).unwrap();
+        std::os::unix::fs::symlink(dir.path(),source.join("linked-directory")).unwrap();
+        copy_tree(&source,&target).unwrap();assert_eq!(fs::read(target.join("public.md")).unwrap(),b"public");
+        assert!(!target.join("linked.md").exists());assert!(!target.join("linked-directory").exists());assert_eq!(fs::read(outside).unwrap(),b"private");
+    }
 }

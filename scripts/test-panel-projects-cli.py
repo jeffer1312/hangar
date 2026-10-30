@@ -15,7 +15,7 @@ try:
  for row in fixture['cases']:
   if row.get('failure'):continue
   with tempfile.TemporaryDirectory() as tmp:
-   root=Path(tmp);config=root/'.hangar/config';config.mkdir(parents=True)
+   root=Path(tmp).resolve();tmp=str(root);config=root/'.hangar/config';config.mkdir(parents=True)
    (config/'.env').write_text(f'CP_PORT={server.server_port}\nCP_AUTH_TOKEN=fixture-token\nCP_SCAN_ROOTS={root}/first,{root}/second\n')
    (config/'peers.json').write_text('{}')
    for directory in ['first/unique','first/collision','second/collision']:(root/directory).mkdir(parents=True)

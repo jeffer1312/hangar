@@ -518,14 +518,15 @@ impl Watcher {
         let codex_home = match text("codex_home") { Some(home)=>home, None=>codex::home(&base.base,&account).map_err(refused)? };
         let launch = codex::Launch { cwd:cwd.clone(),codex_home,account,service_tier:text("service_tier"),resume:text("thread_id"),
             model:text("model"),effort:text("effort"),mode:super::codex_launch::stored_mode(&Value::Object(meta.clone()))?.into(),
-            tool_output_token_limit:meta.get("tool_output_token_limit").and_then(Value::as_u64),prompt:None };
+            tool_output_token_limit:meta.get("tool_output_token_limit").and_then(Value::as_u64),prompt:None,
+            imported_resume: meta.get("transfer_id").is_some_and(truthy) };
         let read_only = if self.read_only(key).await? {
             let run = |argv:Vec<String>,timeout:Duration|->futures_util::future::BoxFuture<'_,crate::session_open::terminal::MuxOutput> {
                 Box::pin(crate::session_open::server::run_program(&base.base,argv,timeout)) };
             Some(crate::session_open::open::read_only_envelope(&base.base,&base.home,&cwd,Some(&launch.codex_home),&run).await.map_err(refused)?)
         } else { None };
         let config = super::codex_launch::runtime_config(&base);
-        codex::pane(name,key,&launch,meta.get("jev").is_some_and(truthy),&config,read_only.as_deref(),cfg!(windows)).map_err(refused)
+        codex::pane(name,key,&launch,meta.get("jev").is_some_and(truthy),&config,read_only.as_deref(),cfg!(windows),&base.base).map_err(refused)
     }
 
     /// Só leitura pelo registro da sessão; ilegível não prova que não é, e recusa.

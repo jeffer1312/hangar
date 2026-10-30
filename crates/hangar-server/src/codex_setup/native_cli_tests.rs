@@ -37,7 +37,7 @@ async fn native_cli_preserves_python_json_values_and_encodings() {
 async fn assert_fixture(fixture:Value) {
     let mut differences = Vec::new();
     for row in fixture["cases"].as_array().unwrap() {
-        let root = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir_in(crate::list::links::without_verbatim(std::env::temp_dir().canonicalize().unwrap())).unwrap();
         let base = root.path().join("base");
         let home = root.path().join("home");
         let codex = home.join(".codex");
@@ -58,8 +58,8 @@ async fn assert_fixture(fixture:Value) {
         if row["name"] == "closed" { cli.close().await.unwrap(); }
         let worker = cli.clone();
         let operation = row["operation"].as_str().unwrap().to_owned();
+        let timeout = Duration::from_millis(if scenario.contains("timeout") { 150 } else { 5000 });
         let task = tokio::spawn(async move {
-            let timeout = Duration::from_millis(150);
             match operation.as_str() {
                 "add"=>worker.add("a@m",timeout).await,
                 "list"=>worker.plugins(timeout).await.map(Value::Array),
@@ -88,7 +88,10 @@ async fn assert_fixture(fixture:Value) {
             "directories_removed":directories.iter().all(|path|!path.exists()),
             "directories_outside_home":directories.iter().all(|path|path!=&home)});
         let mut encoded = crate::orchestration::codec::dumps(&actual,false).replace(root.path().to_str().unwrap(),"$ROOT");
-        for directory in &directories {encoded=encoded.replace(directory.to_str().unwrap(),"$ADMIN");}
+        for directory in &directories {
+            let physical = directory.parent().unwrap().canonicalize().unwrap().join(directory.file_name().unwrap());
+            encoded=encoded.replace(physical.to_str().unwrap(),"$ADMIN").replace(directory.to_str().unwrap(),"$ADMIN");
+        }
         let actual = crate::orchestration::codec::loads(&encoded).unwrap();
         let expected = json!({"result":row["result"],"logs":row["logs"],"operations_empty":row["operations_empty"],"directories_removed":row["directories_removed"],"directories_outside_home":row["directories_outside_home"]});
         if actual != expected {differences.push((row["name"].clone(),actual,expected));}

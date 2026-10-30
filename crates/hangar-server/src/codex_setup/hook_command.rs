@@ -59,7 +59,7 @@ mod path_tests {
     #[cfg(unix)]
     #[test]
     fn recorded_checkout_hook_keeps_the_current_link_unresolved() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = tempfile::tempdir_in(crate::list::links::without_verbatim(std::env::temp_dir().canonicalize().unwrap())).unwrap();
         let home = temp.path().join("home");
         let checkout = temp.path().join("checkout");
         std::fs::create_dir_all(&checkout).unwrap();

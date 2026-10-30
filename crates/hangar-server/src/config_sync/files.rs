@@ -268,6 +268,7 @@ pub fn edit_json(
     let _guard = crate::session_open::claude::lock_config(path)
         .map_err(|message| Error::new("config_sync_changed", message, json!({})))?;
     for _ in 0..3 {
+        let link = std::fs::read_link(path).ok();
         let raw = optional_read(path)?;
         let mut current = match &raw {
             Some(raw) if !raw.is_empty() => serde_json::from_slice(raw)
@@ -310,7 +311,8 @@ pub fn edit_json(
         if optional_read(path)? != raw {
             continue;
         }
-        crate::runtime::queue::replace(file.path(), path)?;
+        let file = file.into_temp_path();
+        replace_checked(&file, path, raw.as_deref(), link.as_deref())?;
         return Ok(true);
     }
     Err(Error::new(
@@ -321,4 +323,77 @@ pub fn edit_json(
         ),
         json!({}),
     ))
+}
+
+// O arquivo deslocado é retido se um escritor externo mudar o destino na janela final.
+fn replace_checked(
+    source: &Path,
+    target: &Path,
+    expected: Option<&[u8]>,
+    link: Option<&Path>,
+) -> Result<(), Error> {
+    #[cfg(test)]
+    PUBLICATION_RACE.with(|race| {
+        let callback = {
+            let mut race = race.borrow_mut();
+            if race.as_ref().is_some_and(|(path, _)| path == target) {
+                race.take().map(|(_, callback)| callback)
+            } else {
+                None
+            }
+        };
+        if let Some(callback) = callback {
+            callback();
+        }
+    });
+    crate::codex_setup::files::replace_preserving(source, target, expected, link).map_err(|error| {
+        match error {
+            crate::codex_setup::files::Error::Io(error) => error.into(),
+            error => Error::new("config_sync_changed", error.to_string(), json!({})),
+        }
+    })
+}
+pub(super) fn write_file_checked(
+    path: &Path,
+    blob: &Blob,
+    expected: Option<&[u8]>,
+    link: Option<&Path>,
+) -> Result<(), Error> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| Error::invalid("arquivo sem pasta"))?;
+    std::fs::create_dir_all(parent)?;
+    let mut file = tempfile::Builder::new()
+        .prefix(".hangar-config-")
+        .tempfile_in(parent)?;
+    file.write_all(&blob.data)?;
+    file.as_file().sync_all()?;
+    chmod(file.path(), blob.mode)?;
+    let file = file.into_temp_path();
+    replace_checked(&file, path, expected, link)
+}
+#[cfg(test)]
+thread_local! {
+    static PUBLICATION_RACE: std::cell::RefCell<Option<(PathBuf, Box<dyn FnOnce()>)>> = const {std::cell::RefCell::new(None)};
+}
+#[cfg(test)]
+pub(super) fn with_publication_race<R>(
+    path: &Path,
+    callback: impl FnOnce() + 'static,
+    action: impl FnOnce() -> R,
+) -> R {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            PUBLICATION_RACE.with(|race| {
+                race.borrow_mut().take();
+            });
+        }
+    }
+    PUBLICATION_RACE.with(|race| {
+        assert!(race.borrow().is_none());
+        *race.borrow_mut() = Some((path.to_owned(), Box::new(callback)));
+    });
+    let _reset = Reset;
+    action()
 }

@@ -28,6 +28,7 @@ pub struct Launch {
     pub mode: String,
     pub tool_output_token_limit: Option<u64>,
     pub prompt: Option<String>,
+    pub imported_resume: bool,
 }
 
 /// Pasta absoluta da conta Codex pelo id (`resolve_account`), a mesma que a resolução conferiu.
@@ -75,16 +76,23 @@ pub fn creation(spec: &SessionSpec, codex_home: &str, prompt: Option<&str>) -> L
         service_tier: spec.service_tier.map(|t| t.name().to_owned()), resume: None,
         model: spec.model.clone(), effort: spec.effort.clone(),
         mode: spec.permission_mode.unwrap_or(PermissionMode::FullAccess).name().into(),
-        tool_output_token_limit: None, prompt: prompt.map(str::to_owned),
+        tool_output_token_limit: None, prompt: prompt.map(str::to_owned), imported_resume: false,
     }
 }
 
 /// O pane do Codex: o lançador (no envelope do só leitura, se houver) e o `-e` da sessão.
-pub fn pane(name: &str, key: &str, launch: &Launch, jev: bool, runtime_config: &Value, read_only: Option<&[String]>, windows: bool)
+pub fn pane(name: &str, key: &str, launch: &Launch, jev: bool, runtime_config: &Value, read_only: Option<&[String]>, windows: bool, server_env: &BTreeMap<String,String>)
     -> Result<PaneSpec, OpenError> {
     let mut command = launcher_argv(launch)?;
     let context = crate::runtime::codex_launch::context_overrides(Path::new(&launch.codex_home), runtime_config);
     command.extend(context.into_iter().flat_map(|value| ["--config".to_owned(), value]));
+    // Sem sincronização a TUI pula o preparo; o limite temporário continua sendo da abertura.
+    if !launch.imported_resume && launch.account == "default" && server_env.get("CP_CODEX_SYNC_ENABLED")
+        .is_some_and(|value| matches!(value.to_lowercase().as_str(), "0" | "false" | "no")) {
+        let limit = crate::codex_setup::instructions::limit(Path::new(&launch.codex_home))
+            .unwrap_or_else(|error| { tracing::warn!(%error, "limite das instruções do Codex não pôde ser lido"); json!(1048576) });
+        command.extend(["--config".into(), format!("project_doc_max_bytes={limit}")]);
+    }
     if let Some(prefix) = read_only {
         command = super::terminal::sandboxed(prefix, &command, windows);
     }
@@ -204,7 +212,7 @@ mod tests {
 
     #[test]
     fn the_pane_carries_jev_and_the_read_only_envelope() {
-        let pane = pane("cx", "k", &launch(), false, &json!({}), Some(&["bwrap".into(), "--".into()]), false).unwrap();
+        let pane = pane("cx", "k", &launch(), false, &json!({}), Some(&["bwrap".into(), "--".into()]), false, &BTreeMap::new()).unwrap();
         assert_eq!(pane.command[..4], ["bwrap", "--", "/bin/sh", "-c"].map(str::to_owned));
         assert!(pane.command[4].starts_with("exec hangar-codex-tui --cwd /w"), "{:?}", pane.command);
         assert_eq!(pane.env, [("HANGAR_JEV".to_owned(), "off".to_owned()), ("HANGAR_CLAUDE_SETTINGS".to_owned(), String::new())]);
@@ -216,11 +224,34 @@ mod tests {
     fn the_pane_asks_the_launcher_for_one_million_unless_turned_off() {
         let home = tempfile::tempdir().unwrap();
         let launch = Launch { codex_home: home.path().to_string_lossy().into_owned(), ..launch() };
-        let command = pane("cx", "k", &launch, false, &json!({}), None, false).unwrap().command;
+        let command = pane("cx", "k", &launch, false, &json!({}), None, false, &BTreeMap::new()).unwrap().command;
         assert!(command.windows(2).any(|w| w == ["--config", "model_context_window=1000000"]), "{command:?}");
         assert!(command.windows(2).any(|w| w == ["--config", "model_auto_compact_token_limit=900000"]), "{command:?}");
-        let off = pane("cx", "k", &launch, false, &json!({"codex_extended_context": false}), None, false).unwrap().command;
+        let off = pane("cx", "k", &launch, false, &json!({"codex_extended_context": false}), None, false, &BTreeMap::new()).unwrap().command;
         assert!(!off.iter().any(|a| a == "--config"), "{off:?}");
+    }
+
+    #[test]
+    fn disabled_sync_keeps_the_instruction_limit_without_preparing_the_account() {
+        let home = tempfile::tempdir().unwrap();
+        let mut launch = Launch { codex_home: home.path().to_string_lossy().into_owned(), ..launch() };
+        let config = json!({"codex_extended_context":false});
+        for flag in ["0", "FALSE", "no"] {
+            let env = BTreeMap::from([("CP_CODEX_SYNC_ENABLED".into(), flag.into())]);
+            let command = pane("cx", "k", &launch, false, &config, None, false, &env).unwrap().command;
+            assert!(command.windows(2).any(|pair|pair == ["--config", "project_doc_max_bytes=1048576"]));
+            assert!(!home.path().join("config.toml").exists());
+        }
+        let env = BTreeMap::from([("CP_CODEX_SYNC_ENABLED".into(), "0".into())]);
+        let path = home.path().join("config.toml");
+        let original = b"project_doc_max_bytes = 2097152\n";
+        std::fs::write(&path, original).unwrap();
+        let command = pane("cx", "k", &launch, false, &config, None, false, &env).unwrap().command;
+        assert!(command.iter().any(|arg|arg == "project_doc_max_bytes=2097152"));
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        launch.imported_resume = true;
+        let command = pane("cx", "k", &launch, false, &config, None, false, &env).unwrap().command;
+        assert!(!command.iter().any(|arg|arg.starts_with("project_doc_max_bytes=")));
     }
 
     #[cfg(unix)]

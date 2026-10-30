@@ -228,7 +228,7 @@ pub(super) fn apply(
             target.display()
         )));
     }
-    crate::runtime::queue::replace(&temporary, target)?;
+    files::replace_preserving(&temporary, target, raw.as_deref(), link.as_deref())?;
     files::write(&record, &files::bytes(&new)?, Some(&transition), None)?;
     Ok(())
 }

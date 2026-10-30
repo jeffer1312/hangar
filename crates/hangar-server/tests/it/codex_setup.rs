@@ -16,7 +16,7 @@ fn codex_hook_merge_matches_python() {
 }
 #[test]
 fn codex_compared_write_preserves_external_changes_and_first_backup() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::physical_tempdir();
     let path = root.path().join("config");
     let backup = root.path().join("backups");
     std::fs::write(&path, b"externo").unwrap();
@@ -52,7 +52,7 @@ fn codex_compared_write_preserves_external_changes_and_first_backup() {
 }
 #[test]
 fn codex_transformation_retries_current_snapshot() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::physical_tempdir();
     let path = root.path().join("config");
     std::fs::write(&path, b"a").unwrap();
     let mut seen = Vec::new();
@@ -70,7 +70,7 @@ fn codex_transformation_retries_current_snapshot() {
 }
 #[tokio::test]
 async fn codex_file_lock_cancel_releases() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::physical_tempdir();
     let path = root.path().join("lock");
     let first = files::exclusive(&path).await.unwrap();
     let target = path.clone();
@@ -93,7 +93,7 @@ async fn codex_file_lock_cancel_releases() {
 async fn codex_native_edit_uses_isolated_copy_and_retries_races() {
     use hangar_server::accounts::environment::AccountEnvironment;
     use std::os::unix::fs::PermissionsExt;
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::physical_tempdir();
     let binary = root.path().join("bin");
     std::fs::create_dir(&binary).unwrap();
     let script = binary.join("codex");
@@ -170,7 +170,7 @@ done
 async fn codex_native_cleanup_failure_blocks_config_write() {
     use hangar_server::accounts::environment::AccountEnvironment;
     use std::os::unix::fs::PermissionsExt;
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::physical_tempdir();
     let bin = root.path().join("bin");
     std::fs::create_dir(&bin).unwrap();
     let script = bin.join("codex");
@@ -182,7 +182,8 @@ while IFS= read -r message; do
  case "$message" in
  *'"method":"config/batchWrite"'*)
    printf 'model = "novo"\n' > "$CODEX_HOME/config.toml"
-   /usr/bin/chmod 500 "$FIXTURE_WORK"
+   /bin/mv "$FIXTURE_WORK" "$FIXTURE_WORK.saved"
+   printf blocked > "$FIXTURE_WORK"
    printf '{"id":%s,"result":{}}\n' "$id";;
  *'"method":"initialize"'*) printf '{"id":%s,"result":{}}\n' "$id";;
  esac
@@ -225,7 +226,7 @@ async fn codex_native_uses_separate_cwd_and_retries_directory_cleanup() {
         "../../../../backend/tests/fixtures/contract/codex-integration/native-cleanup.json"
     ))
     .unwrap();
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::physical_tempdir();
     let bin = root.path().join("bin");
     std::fs::create_dir(&bin).unwrap();
     let script = bin.join("codex");

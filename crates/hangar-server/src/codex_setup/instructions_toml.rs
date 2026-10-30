@@ -65,13 +65,12 @@ pub(super) fn read(path: &Path) -> Result<Value, Error> {
 }
 
 pub(super) fn parse(raw: &str) -> Result<Value, Error> {
-    let mut salt = 0;
-    loop {
+    for salt in 0..32 {
         if let Some(value) = parse_attempt(raw, salt)? {
             return Ok(value);
         }
-        salt += 1;
     }
+    Err(Error::Invalid("Configuração TOML contém muitas colisões de marcadores de inteiro".into()))
 }
 
 fn parse_attempt(raw: &str, salt: u64) -> Result<Option<Value>, Error> {
@@ -287,4 +286,13 @@ mod typed_tests {
         }
         assert!(failures.is_empty(), "{failures:#?}");
     }
+}
+
+#[cfg(test)]
+#[test]
+fn integer_marker_collisions_have_a_finite_budget() {
+    let mut raw = String::from("wide = 9999999999999999999999999999999999999999999999999999999\n");
+    for salt in 0..32 { raw.push_str(&format!("collision{salt} = \"\\u0068angar_toml_integer_{salt}_1\"\n")); }
+    assert!(matches!(parse(&raw), Err(Error::Invalid(message)) if message.contains("colisões")));
+    assert!(parse("wide = 9999999999999999999999999999999999999999999999999999999").is_ok());
 }

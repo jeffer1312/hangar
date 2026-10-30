@@ -115,6 +115,7 @@ pub struct AccountService {
     pub locks: AccountLocks,
     pub preparations: super::preparation::Preparations,
     pub preparation_gates: super::preparation::PreparationGates,
+    pub codex_setup: std::sync::Arc<std::sync::Mutex<Option<std::sync::Weak<dyn super::preparation::CodexSetup>>>>,
 }
 impl AccountService {
     pub fn new(env: AccountEnvironment) -> Self {
@@ -134,6 +135,7 @@ impl AccountService {
             locks: AccountLocks::new(env.home.join(".hangar/account-locks")),
             preparations: Default::default(),
             preparation_gates: Default::default(),
+            codex_setup: Default::default(),
             env,
         }
     }
