@@ -134,7 +134,9 @@ pub fn mask_forms(value: &str) -> Vec<String> {
     let percent = |keep: &[u8]| value.bytes()
         .map(|b| if b.is_ascii_alphanumeric() || keep.contains(&b) { char::from(b).to_string() } else { format!("%{b:02X}") }).collect::<String>();
     let json = serde_json::to_string(value).unwrap_or_default();
-    let mut forms = vec![value.to_owned(), json.trim_matches('"').to_owned(), percent(b""), percent(b"-_.!~*'()"),
+    // Só as aspas das pontas: a senha pode terminar em `"`, que no JSON vira `\"`.
+    let inner = json.strip_prefix('"').and_then(|j| j.strip_suffix('"')).unwrap_or_default();
+    let mut forms = vec![value.to_owned(), inner.to_owned(), percent(b""), percent(b"-_.!~*'()"),
         url::form_urlencoded::byte_serialize(value.as_bytes()).collect()];
     for engine in [STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD] { forms.push(engine.encode(value)); }
     forms.retain(|f| !f.is_empty());
