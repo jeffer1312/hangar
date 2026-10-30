@@ -11,7 +11,7 @@ import * as m from '../../paraglide/messages';
 // O servidor recusa abaixo disso (`erro_cofre_recuperacao_curta`); conferir aqui poupa a ida.
 const RECOVERY_MIN = 12;
 
-function useSubmit(onDone: () => void) {
+function useSubmit(onDone: () => void, onChanged: () => void) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const run = async (work: () => Promise<unknown>, done: string) => {
@@ -19,7 +19,12 @@ function useSubmit(onDone: () => void) {
     setBusy(true);
     setError('');
     try { await work(); toast.ok(done); onDone(); }
-    catch (e) { setError(vaultErrorText(e)); haptic.error(); }
+    catch (e) {
+      // As senhas voltaram e só a senha de recuperação faltou: a página relê o cofre restaurado.
+      if ((e as { code?: unknown } | null)?.code === 'erro_cofre_recuperacao_nao_gravada') onChanged();
+      setError(vaultErrorText(e));
+      haptic.error();
+    }
     finally { setBusy(false); }
   };
   return { busy, error, run };
@@ -29,10 +34,12 @@ function useSubmit(onDone: () => void) {
 export function VaultRecoverySheet({ server, onClose, onChanged }: { server: Server; onClose: () => void; onChanged: () => void }) {
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
-  const { busy, error, run } = useSubmit(() => { onChanged(); onClose(); });
-  const short = password.length > 0 && password.length < RECOVERY_MIN;
+  const { busy, error, run } = useSubmit(() => { onChanged(); onClose(); }, onChanged);
+  // O servidor conta caracteres, não unidades UTF-16: emoji e acento composto valem um.
+  const size = [...password].length;
+  const short = size > 0 && size < RECOVERY_MIN;
   const mismatch = confirm.length > 0 && confirm !== password;
-  const ok = !busy && password.length >= RECOVERY_MIN && confirm === password;
+  const ok = !busy && size >= RECOVERY_MIN && confirm === password;
 
   return <MachineSheet title={m.vault_app_recovery_title()} onClose={onClose}>
     <InfoNotice text={m.vault_app_recovery_warning()} />
@@ -57,7 +64,7 @@ export function VaultRestoreSheet({ server, onClose, onChanged }: { server: Serv
   const [peer, setPeer] = useState<string | null>(null);
   const [ownerId, setOwnerId] = useState('');
   const [password, setPassword] = useState('');
-  const { busy, error, run } = useSubmit(() => { onChanged(); onClose(); });
+  const { busy, error, run } = useSubmit(() => { onChanged(); onClose(); }, onChanged);
 
   useEffect(() => {
     let alive = true;

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert } from 'react-native';
 import { Stack } from 'expo-router';
-import { getVaultStatus, listVaultEntries, putVaultConfig, type VaultEntry, type VaultState, type VaultStatus } from '@hangar/core';
+import { getVaultStatus, listVaultEntries, listVaultPeers, putVaultConfig, type Server, type VaultEntry, type VaultState, type VaultStatus } from '@hangar/core';
 import { Pagina } from '../../src/features/config/Pagina';
 import { InfoNotice } from '../../src/features/config/InfoNotice';
 import { MachineGroup, MachineHelp, MachineRow } from '../../src/features/machines/MachineRows';
@@ -10,6 +10,7 @@ import { VaultEntrySheet } from '../../src/features/vault/VaultEntrySheet';
 import { VaultPeerSheet } from '../../src/features/vault/VaultPeerSheet';
 import { VaultRecoverySheet, VaultRestoreSheet } from '../../src/features/vault/VaultBackupSheets';
 import { vaultErrorText } from '../../src/features/vault/errors';
+import { ownerServer } from '../../src/features/vault/owner';
 import { useServers } from '../../src/stores/servers';
 import { toast } from '../../src/ui/Toast';
 import { haptic } from '../../src/ui/haptics';
@@ -36,7 +37,10 @@ export default function Cofre() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState<VaultEntry | 'new' | null>(null);
-  const [sheet, setSheet] = useState<'owner' | 'backup' | 'recovery' | 'restore' | null>(null);  const generation = useRef(0);
+  const [sheet, setSheet] = useState<'owner' | 'backup' | 'recovery' | 'restore' | null>(null);
+  // Quem recebe gravar, revelar e apagar: a própria máquina na dona, o servidor salvo da dona na remota.
+  const [writer, setWriter] = useState<Server | null>(null);
+  const generation = useRef(0);
 
   const load = useCallback(() => {
     const now = ++generation.current;
@@ -47,9 +51,17 @@ export default function Cofre() {
       try {
         const next = await getVaultStatus(server);
         const list = next.state === 'open' && next.role !== 'none' ? await listVaultEntries(server) : null;
+        let owner: Server | null = next.role === 'owner' ? server : null;
+        if (next.role === 'remote' && next.owner) {
+          // Sem a lista de peers a página fica só de leitura, não falha.
+          const peers = await listVaultPeers(server).catch(() => []);
+          const peer = peers.find((p) => p.id === next.owner);
+          owner = peer ? ownerServer(peer, useServers.getState().servers) : null;
+        }
         if (now !== generation.current) return;
         setStatus(next);
         setEntries(list);
+        setWriter(owner);
       } catch (e) {
         if (now === generation.current) setError(vaultErrorText(e));
       } finally {
@@ -61,6 +73,7 @@ export default function Cofre() {
   useEffect(() => {
     setStatus(null);
     setEntries(null);
+    setWriter(null);
     load();
     return () => { generation.current++; };
   }, [load, server?.id, server?.baseUrl, server?.token]);
@@ -82,8 +95,8 @@ export default function Cofre() {
 
   const state = status?.state;
   const backup = status?.backup;
-  // Restaurar só entra em cofre vazio: sem cofre ainda, ou dona aberta sem nenhuma senha.
-  const canRestore = !!status && (status.role === 'none' || state === 'absent'
+  // Restaurar só entra em cofre vazio desta máquina: sem cofre ainda, ou dona aberta sem nenhuma senha.
+  const canRestore = !!status && (status.role === 'none'
     || (status.role === 'owner' && state === 'open' && entries?.length === 0));
   return (
     <Pagina>
@@ -123,10 +136,11 @@ export default function Cofre() {
               {entries.map((e) => <MachineRow key={e.id} title={e.name}
                 description={[e.username, host(e.url)].filter(Boolean).join(' · ') || undefined}
                 value={e.policy === 'free' ? m.vault_app_policy_free() : m.vault_app_policy_ask()}
-                onPress={() => setEditing(e)} />)}
+                onPress={writer ? () => setEditing(e) : undefined} />)}
             </MachineGroup> : null}
+            {!writer ? <InfoNotice text={m.vault_app_read_only({ owner: status.owner ?? '?' })} /> : null}
             <MachineGroup>
-              <MachineRow title={m.vault_app_add()} action onPress={() => setEditing('new')} />
+              {writer ? <MachineRow title={m.vault_app_add()} action onPress={() => setEditing('new')} /> : null}
               <MachineRow title={m.vault_app_retry()} disabled={loading} onPress={load} />
             </MachineGroup>
           </> : <MachineGroup><MachineRow title={m.vault_app_retry()} disabled={loading} onPress={load} /></MachineGroup>}
@@ -147,7 +161,7 @@ export default function Cofre() {
             <MachineRow title={m.vault_app_restore()} description={m.vault_app_restore_row_help()} disabled={busy} onPress={() => setSheet('restore')} />
           </MachineGroup> : null}
         </> : null}
-      {server && editing ? <VaultEntrySheet server={server} entry={editing === 'new' ? null : editing}
+      {writer && editing ? <VaultEntrySheet server={writer} entry={editing === 'new' ? null : editing}
         onClose={() => setEditing(null)} onChanged={load} /> : null}
       {server && sheet === 'owner' ? <VaultPeerSheet server={server} title={m.vault_app_owner_choose()}
         help={m.vault_app_owner_choose_help({ server: server.label })} current={status?.owner}

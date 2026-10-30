@@ -1,8 +1,20 @@
 import type { VaultErrorCode } from '@hangar/core';
 import * as m from '../../paraglide/messages';
 
-// `erro_cofre_recuperacao_curta` vem do servidor e ainda não está na união do core.
-const TEXT: Partial<Record<VaultErrorCode | 'erro_cofre_recuperacao_curta', () => string>> = {
+// Os códigos só das tools do agente (negado, sem resposta, domínio, navegador…) não chegam a esta tela.
+const TEXT: Partial<Record<VaultErrorCode, () => string>> = {
+  erro_cofre_ausente: m.vault_app_err_absent,
+  erro_cofre_dona_remota: m.vault_app_err_remote_owner,
+  erro_cofre_entrada_desconhecida: m.vault_app_err_unknown_entry,
+  erro_cofre_ilegivel: m.vault_app_err_unreadable,
+  erro_cofre_indisponivel: m.vault_app_err_unavailable,
+  erro_cofre_chaveiro_indisponivel: m.vault_app_err_keyring_unavailable,
+  erro_cofre_so_dono: m.vault_app_err_owner_only,
+  erro_cofre_peer_desconhecido: m.vault_app_err_unknown_peer,
+  erro_cofre_config_ilegivel: m.vault_app_err_config_unreadable,
+  erro_cofre_pedidos_demais: m.vault_app_err_too_many_requests,
+  erro_cofre_backup_grande: m.vault_app_err_backup_too_big,
+  erro_corpo_invalido: m.vault_app_err_invalid_body,
   erro_cofre_recuperacao_errada: m.vault_app_err_recovery_wrong,
   erro_cofre_recuperacao_curta: m.vault_app_err_recovery_short,
   erro_cofre_recuperacao_nao_gravada: m.vault_app_err_recovery_not_saved,
