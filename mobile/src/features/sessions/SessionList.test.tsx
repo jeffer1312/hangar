@@ -83,6 +83,7 @@ vi.mock('../pair/leaveExternal', () => ({ leaveExternal: vi.fn() }));
 vi.mock('./ConversationList', () => ({ ConversationList: () => null }));
 vi.mock('./RenameSheet', () => ({ RenameSheet: () => null }));
 vi.mock('../worktrees/WorktreeSheet', () => ({ WorktreeSheet: () => null }));
+vi.mock('../vault/VaultRequests', () => ({ VaultRequests: () => null }));
 vi.mock('../../paraglide/messages', () => ({ ...Object.fromEntries((
   'lista_agrupar_nenhum lista_agrupar_servidor lista_agrupar_projeto lista_agrupar ' +
   'native_brand lista_buscar lista_filtrar lista_filtro_limpar native_connected config_modal_titulo switcher_buscar_conversas nav_custos ' +
