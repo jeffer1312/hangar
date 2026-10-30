@@ -185,21 +185,25 @@ impl RuntimeConfig {
 }
 fn read_at(path: &std::path::Path) -> Map<String, Value> {
     let read = || -> Option<Map<String,Value>> {
-        let metadata = path.metadata().ok()?;
-        let version = (metadata.modified().ok()?,metadata.len());
-        if let Some((modified,size,data)) = CACHE.lock().unwrap_or_else(|e|e.into_inner()).get(path) {
-            if (*modified,*size) == version {return Some(data.clone().into_map());}
+        let version = path.metadata().ok().and_then(|metadata|metadata.modified().ok().map(|modified|(modified,metadata.len())));
+        if let Some(version) = version {
+            if let Some((modified,size,data)) = CACHE.lock().unwrap_or_else(|e|e.into_inner()).get(path) {
+                if (*modified,*size) == version {return Some(data.clone().into_map());}
+            }
         }
-        let raw = std::fs::read(path).ok()?;
+        // A troca no Windows pode esconder o caminho antes mesmo de obter metadata.
+        let raw = crate::runtime::queue::read_replaced(path).ok()?;
         let value = codec::loads(std::str::from_utf8(&raw).ok()?)?;
         let data = match value {Value::Object(data)=>Values(data),other=>{codec::discard(other);Values(Map::new())}};
-        CACHE.lock().unwrap_or_else(|e|e.into_inner()).insert(path.to_owned(),(version.0,version.1,data.clone()));
+        if let Some(version) = version {
+            CACHE.lock().unwrap_or_else(|e|e.into_inner()).insert(path.to_owned(),(version.0,version.1,data.clone()));
+        }
         Some(data.into_map())
     };
     read().unwrap_or_default()
 }
 fn read_for_write(path: &std::path::Path) -> Result<Values, RuntimeError> {
-    match std::fs::read(path) {
+    match crate::runtime::queue::read_replaced(path) {
         Ok(raw) => Values::read(&raw).ok_or_else(|| RuntimeError::new("ValueError", "runtime-config.json ilegível; arquivo preservado").storage(StorageOperation::Read)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Values(Map::new())),
         Err(error) => Err(RuntimeError::io(&error, StorageOperation::Read)),
