@@ -34,6 +34,7 @@ const COMMENT_EVERY: Duration = Duration::from_secs(15);
 const SEND_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct AppState {
+    pub startup: crate::startup::Readiness,
     pub config_sync_context: Option<crate::config_sync::export::Context>,
     pub migration_branch: Arc<crate::migration_branch::Service>,
     settings_snapshot: std::sync::OnceLock<Result<Arc<crate::machine_peers::dotenv::SettingsSnapshot>,String>>,
@@ -212,7 +213,7 @@ impl AppState {
                     list.env().dirs.as_ref().map(|d| d.claude.join(".hangar-pair")).unwrap_or_default())
                 .with_mux(list.env().capture_program.to_string_lossy().into_owned())), list.clone(), diag.clone());
         let accounts=crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture());
-        AppState { settings_snapshot: std::sync::OnceLock::new(), login_guests: Arc::new(crate::login_guests::Service::uninitialized(&accounts.env.home,&accounts.env.claude_base)), accounts, command_catalog: Arc::default(), groups, server_id, machine_identity: std::sync::RwLock::new(None), peer_network: Arc::new(crate::machine_peers::network::SystemNetwork), peers: Arc::new(crate::groups::peers_from_env()), auth: Auth::configured(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, public_v6: None, front: None, diag,
+        AppState { startup: Default::default(), settings_snapshot: std::sync::OnceLock::new(), login_guests: Arc::new(crate::login_guests::Service::uninitialized(&accounts.env.home,&accounts.env.claude_base)), accounts, command_catalog: Arc::default(), groups, server_id, machine_identity: std::sync::RwLock::new(None), peer_network: Arc::new(crate::machine_peers::network::SystemNetwork), peers: Arc::new(crate::groups::peers_from_env()), auth: Auth::configured(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, public_v6: None, front: None, diag,
             migration_branch: Arc::default(),
             workspace_slots: Arc::new(tokio::sync::Semaphore::new(4)),
             interactions, plugin,
@@ -313,9 +314,15 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
     state.voice.set_self(listener.local_addr()?, &state.cfg.auth_token);
     let public_v6 = state.public_v6.take();
     let state = Arc::new(state);
+    let main_startup = state.startup.prepares();
+    let mut producers = crate::AbortOnDrop(tokio::spawn({
+        let state = state.clone();
+        async move {
+            state.startup.wait().await;
+            let _maintenance = main_startup.then(|| crate::AbortOnDrop(tokio::spawn(crate::startup::maintenance(state.clone()))));
     // Ligado com o estado final: o evento lê as mesmas contas que a rota `/api/tags`.
     state.list.tags.bind(state.accounts.clone(), state.server_id.clone());
-    if crate::config::Config::runtime_instance().map_err(std::io::Error::other)?.is_some() {
+    if crate::config::Config::runtime_instance().ok().flatten().is_some() {
         let omp_sync = crate::omp_sync::Service::start(state.clone());
         let _ = state.omp_sync.set(omp_sync.clone());
         omp_sync.ready().await;
@@ -324,11 +331,10 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
         let policy_home = state.accounts.env.home.clone();
         let policy_claude = state.accounts.env.claude_base.clone();
         tokio::task::spawn_blocking(move || crate::orchestration::policy::migrate(&policy_home, &policy_claude)).await
-            .map_err(|_| std::io::Error::other("orq_policy_migrate_interrupted"))?;
+            .unwrap_or_else(|error| { tracing::warn!(%error, "migração de política interrompida"); false });
     }
     let _worktree_sweep=crate::AbortOnDrop(crate::worktree_policy::spawn(state.clone()));
     let _keyring_watch = crate::AbortOnDrop(crate::keyring::spawn(state.list.keyring.clone()));
-    let v6_state = state.clone();
     // Abortada na saída: a tarefa segura o estado do servidor, que sobreviveria a ele.
     // As sessões com terminal que o multiplexador perdeu voltam pelo spec; antes da varredura de grupos, que
     // conta como vivos os nomes à espera dele.
@@ -344,6 +350,10 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
     // Sem a fotografia do Python a varredura não revoga nada (ver `life::sweep`); o túnel religa já.
     let _share_sweep = state.share.clone().map(|share| crate::AbortOnDrop(tokio::spawn(
         crate::share::owner_routes::sweep_loop(share, crate::share::owner_routes::SWEEP_EVERY))));
+            std::future::pending::<()>().await;
+        }
+    }));
+    let v6_state = state.clone();
     let plugin_state = state.clone();
     let guest_state = state.clone();
     let (front_state, front) = (state.clone(), state.front);
@@ -351,7 +361,7 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
     let pair = pair_state(&state);
     let guest_pair = pair.clone();
     let front_pair = pair.clone();
-    tokio::select! {
+    let result = tokio::select! {
         // Nunca termina: a porta do front é extra, e cair nela não derruba o servidor.
         () = async {
             let Some(addr) = front else { return std::future::pending().await };
@@ -384,7 +394,10 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
                 None => std::future::pending::<std::io::Result<()>>().await,
             }
         } => result,
-    }
+    };
+    producers.0.abort();
+    let _ = (&mut producers.0).await;
+    result
 }
 
 /// A porta do front (`CP_FRONT_PORT`) de quem servia a tela pelo `vite preview`: na máquina migrada
@@ -472,10 +485,11 @@ fn guest_router_with(state: Arc<AppState>, pair: Option<Arc<PairState>>) -> Rout
     };
     let share = pair.owner.share.clone();
     // Os handlers do dono que também servem o convidado; o resto vai ao Python assinado.
-    session_routes(pass_any).fallback(pass_any).with_state(state)
+    session_routes(pass_any).fallback(pass_any).with_state(state.clone())
         .merge(crate::share::guest_routes::guest_router(share.clone(), crate::share::guest_routes::owner_name()))
         .merge(crate::share::pair_routes::guest_pair_router(pair))
         .layer(axum::middleware::from_fn_with_state(Arc::new(crate::share::gate::Gate::new(share)), crate::share::gate::guard))
+        .layer(axum::middleware::from_fn_with_state(state, crate::startup::guard))
 }
 
 /// Lojas, porta do dono e conferência pela internet que convite e par compartilham; `None` sem
@@ -604,8 +618,9 @@ fn terminal_router_with(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> 
     router.route("/__hangar_server/term", get(crate::term::private_ws))
         .route("/__hangar_server/state/{name}/events", get(crate::side::private_events))
         .route("/__hangar_server/remote-browser", get(crate::remote_browser::ws::private))
-        .with_state(state)
+        .with_state(state.clone())
         .merge(share)
+        .layer(axum::middleware::from_fn_with_state(state, crate::startup::guard))
 }
 
 pub fn router(state: Arc<AppState>) -> Router {
@@ -618,9 +633,10 @@ fn router_with(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router {
     // O MCP chama as tools pelas mesmas rotas que o `hangar-send` chama: o roteador público inteiro.
     api.clone().merge(crate::mcp::router(state.clone(), api))
         .layer(axum::middleware::from_fn_with_state(state.clone(), crate::login_guests::gate::guard))
-        .layer(axum::middleware::from_fn_with_state(state, crate::login_guests::body_limit))
+        .layer(axum::middleware::from_fn_with_state(state.clone(), crate::login_guests::body_limit))
         .layer(axum::middleware::from_fn(crate::login_guests::public_contract))
         .layer(axum::middleware::from_fn(crate::config_sync::runtime_http::cors_layer))
+        .layer(axum::middleware::from_fn_with_state(state, crate::startup::guard))
 }
 
 fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router {
@@ -770,6 +786,7 @@ fn plugin_router(state: Arc<AppState>) -> Router {
     plugin_routes(&state).fallback(|| async { StatusCode::NOT_FOUND })
         .layer(axum::middleware::from_fn(crate::migration_status::count_public))
         .layer(axum::middleware::from_fn(request_auth))
+        .layer(axum::middleware::from_fn_with_state(state.clone(), crate::startup::guard))
         .with_state(state)
 }
 

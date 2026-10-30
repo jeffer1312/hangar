@@ -92,3 +92,60 @@ fn probe(hold_version:bool) {
     let output=command.output().unwrap();
     assert!(output.status.success(),"{}\n{}",String::from_utf8_lossy(&output.stdout),String::from_utf8_lossy(&output.stderr));
 }
+
+#[tokio::test]
+#[ignore]
+async fn startup_barrier_child() {
+    use hangar_server::{startup::Readiness, runtime::gateway::{self, RuntimeRegistry}};
+    use std::{sync::Arc, time::Duration};
+    let home = std::path::PathBuf::from(std::env::var_os("HOME").unwrap());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let mut config = crate::fake::config(crate::refused_address(), "");
+    config.listen = address;
+    let mut state = AppState::new(config);
+    state.accounts = AccountService::new(AccountEnvironment::from_map([
+        ("HOME".into(),home.to_string_lossy().into_owned()),
+        ("USERPROFILE".into(),home.to_string_lossy().into_owned()),
+        ("PATH".into(),String::new()),
+    ].into()));
+    state.share = None;
+    let readiness = Readiness::pending();
+    state.startup = readiness.clone();
+    let private = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let private_address = private.local_addr().unwrap();
+    let registry = Arc::new(RuntimeRegistry::new(crate::refused_address(), "fixture".into(), "fixture".into()).with_startup(readiness.clone()));
+    let adoption = tokio::spawn(registry.clone().register_claude_headless());
+    let gateway = tokio::spawn(gateway::serve(private, registry, "fixture".into(), "fixture".into(), hangar_server::INTERNAL_PROTOCOL));
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(hangar_server::serve_until_with_state(listener,state,async {let _=stopped.await;}));
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(2)).build().unwrap();
+    let health = client.get(format!("http://{address}/__hangar_server/health")).send().await.unwrap();
+    assert_eq!(health.status(),200,"saúde disponível durante preparação bloqueada");
+    let health: Value = health.json().await.unwrap();
+    let terminal = health["terminal_address"].as_str().unwrap();
+    for url in [format!("http://{address}/api/config"), format!("http://{terminal}/__hangar_server/accounts"), format!("http://{private_address}/runtime/op")] {
+        let response = client.post(url).header("x-hangar-internal","fixture").header("x-hangar-runtime-instance","fixture").send().await.unwrap();
+        assert_eq!(response.status(),503);
+        assert_eq!(response.json::<Value>().await.unwrap(),serde_json::json!({"detail":"server_starting"}));
+    }
+    assert!(!adoption.is_finished(),"não adota atores nem drena a fila antes da preparação");
+    readiness.finish();
+    tokio::time::timeout(Duration::from_secs(2),adoption).await.unwrap().unwrap();
+    let response = client.post(format!("http://{private_address}/runtime/op")).header("x-hangar-internal","fixture").header("x-hangar-runtime-instance","fixture").send().await.unwrap();
+    assert_eq!(response.status(),400,"depois da preparação o gateway valida a operação");
+    let _ = stop.send(());
+    server.await.unwrap().unwrap();
+    gateway.abort();
+}
+
+#[test]
+fn startup_barrier_serves_health_but_holds_http_and_actor_adoption() {
+    let home = tempfile::tempdir().unwrap();
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact","runtime_boot::startup_barrier_child","--ignored","--nocapture"])
+        .env_clear().env("HOME",home.path()).env("USERPROFILE",home.path())
+        .env("PATH","").env("CP_RUST_NO_ORPHAN_SWEEP","1").current_dir(home.path())
+        .output().unwrap();
+    assert!(output.status.success(),"{}\n{}",String::from_utf8_lossy(&output.stdout),String::from_utf8_lossy(&output.stderr));
+}

@@ -1,4 +1,5 @@
 //! Servidor do Hangar: lê conversas e custos das sessões e repassa o restante ao backend Python.
+pub mod startup;
 pub mod accounts;
 pub mod artifacts;
 pub mod auth;
@@ -175,22 +176,20 @@ pub async fn serve_until_with_guest(
     let codex_readers=state.accounts.codex_readers.clone();
     let device_logins=state.accounts.device_logins.clone();
     let mut runtime_registry=None;
-    let mut refresh_loop=None;
+    let mut runtime_producers=None;
+    let refresh_loop = std::sync::Arc::new(std::sync::Mutex::new(None));
     let result=async {
-    if let Some(home) = std::env::home_dir() {
-        transcription.recover_on_startup(&home).await;
-    }
+    let _recovery = AbortOnDrop(tokio::spawn({
+        let (readiness, transcription) = (state.startup.clone(), transcription.clone());
+        async move { readiness.wait().await; if let Some(home) = std::env::home_dir() { transcription.recover_on_startup(&home).await; } }
+    }));
     if let Some(instance) = config::Config::runtime_instance().map_err(std::io::Error::other)? {
         let windows = accounts::claude_login::WindowClient::new(cfg.upstream, cfg.internal_secret.clone(), instance.clone())
             .map_err(|error| std::io::Error::other(error.code))?;
-        // Sem catálogo legível não há janela a fechar; isso não pode impedir o servidor de subir.
-        if let Err(error) = state.accounts.recover_claude_logins(windows).await {
-            tracing::warn!(code = "claude_login_recovery_failed", reason = error.code, "catálogo de contas ilegível na subida");
-        }
         let private = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let port = private.local_addr()?.port();
         let registry = std::sync::Arc::new(runtime::gateway::RuntimeRegistry::new(cfg.upstream,
-            cfg.internal_secret.clone(),instance.clone()).with_mods(state.mods.clone()).with_accounts(state.accounts.clone())
+            cfg.internal_secret.clone(),instance.clone()).with_startup(state.startup.clone()).with_mods(state.mods.clone()).with_accounts(state.accounts.clone())
             .with_interactions(state.interactions.clone()).with_plugin(state.plugin.clone())
             .with_terminal_states(state.list.published.clone()).with_terms(state.term.clone())
             .with_permissions(state.state.permissions.clone())
@@ -208,20 +207,38 @@ pub async fn serve_until_with_guest(
         let _ = state.accounts.quotas.diag.set(state.diag.clone());
         let quota_bridge=accounts::bridge::AccountsBridge::new(cfg.upstream,cfg.internal_secret.clone(),instance.clone())
             .map_err(std::io::Error::other)?;
-        refresh_loop=Some(accounts::claude_refresh::start(state.accounts.clone(),quota_bridge,registry.clone()));
+        runtime_producers = Some(AbortOnDrop(tokio::spawn({
+            let registry = registry.clone();
+            let readiness = state.startup.clone();
+            let refresh_loop = refresh_loop.clone();
+            let accounts = state.accounts.clone();
+            let http = state.http.clone();
+            let runtime_cfg = cfg.clone();
+            let dirs = state.list.env().dirs.clone();
+            let capture_program = state.list.env().capture_program.clone();
+            async move {
+                readiness.wait().await;
+        // Sem catálogo legível não há janela a fechar; isso não pode impedir o servidor de subir.
+        if let Err(error) = accounts.recover_claude_logins(windows).await {
+            tracing::warn!(code = "claude_login_recovery_failed", reason = error.code, "catálogo de contas ilegível na subida");
+        }
+        *refresh_loop.lock().unwrap() = Some(accounts::claude_refresh::start(accounts, quota_bridge, registry.clone()));
         let _watchdog = std::env::home_dir().map(|home| AbortOnDrop(tokio::spawn(
-            watchdog::run(state.http.clone(), cfg.upstream, cfg.internal_secret.clone(), home))));
+            watchdog::run(http.clone(), runtime_cfg.upstream, runtime_cfg.internal_secret.clone(), home))));
+
+        if !readiness.prepares() {
         // A troca de conta que o Rust anterior deixou no meio, antes de qualquer sessão subir pelo spec.
         { let env=registry.codex_environment();
           if tokio::task::spawn_blocking(move||runtime::claude_reopen::settle_switches(&env)).await.is_err() {
               tracing::warn!("trocas de conta interrompidas não foram conferidas");
           } }
+        }
         // A vigia do Codex com terminal precisa das pastas da lista (sidecars e fila).
-        let _codex_watch = match state.list.env().dirs.clone() {
+        let _codex_watch = match dirs {
             Some(dirs) => {
                 let watcher = std::sync::Arc::new(runtime::codex_terminal::Watcher::new(runtime::codex_terminal::WatchConfig {
                     home: dirs.home.clone(), queue_dir: dirs.claude.join(".hangar-queue"),
-                    mux: list::mux::Mux::default(), mux_program: state.list.env().capture_program.clone() }));
+                    mux: list::mux::Mux::default(), mux_program: capture_program }));
                 registry.bind_watcher(watcher.clone());
                 // Presas ao desligamento: uma adoção tardia abriria sessão depois do `registry.shutdown()`.
                 // Os Claude com terminal que já tinham fila aqui: o Rust os adota, sem esperar o Python.
@@ -237,6 +254,9 @@ pub async fn serve_until_with_guest(
         // As sessões Claude sem terminal que já existem: o Rust as reconhece sozinho, sem esperar o Python.
         let _claude_boot = AbortOnDrop(tokio::spawn(registry.clone().register_claude_headless()));
         let _claude_park = AbortOnDrop(tokio::spawn(registry.clone().watch_idle_claude()));
+                std::future::pending::<()>().await;
+            }
+        })));
         println!("{}",runtime::gateway::startup_line(INTERNAL_PROTOCOL,&instance,port));
         let gateway = runtime::gateway::serve(private,registry.clone(),cfg.internal_secret.clone(),instance,INTERNAL_PROTOCOL);
         let result = tokio::select! {
@@ -251,6 +271,10 @@ pub async fn serve_until_with_guest(
         () = stop => Ok(()),
     }
     }.await;
+    if let Some(mut producer) = runtime_producers {
+        producer.0.abort();
+        let _ = (&mut producer.0).await;
+    }
     let cleanup = async {
         if let Some(service) = omp_sync.get() { service.close().await; }
         let codex_setup_result = match codex_setup.get() {
@@ -258,10 +282,8 @@ pub async fn serve_until_with_guest(
             Some(Err(_)) | None => Ok(()),
         };
         transcription.shutdown().await;
-        if let Some((stop,task))=refresh_loop {
-            let _=stop.send(true);
-            let _=task.await;
-        }
+        let refresh = refresh_loop.lock().unwrap().take();
+        if let Some((stop, task)) = refresh { let _ = stop.send(true); let _ = task.await; }
         tokio::join!(codex_readers.close(),codex_logins.close(),device_logins.close());
         if let Some(registry)=runtime_registry {
             registry.shutdown().await.map_err(|error|std::io::Error::other(error.code))?;
