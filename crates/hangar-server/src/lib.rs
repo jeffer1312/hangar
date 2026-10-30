@@ -98,7 +98,7 @@ mod warn_limit;
 
 /// Versão do contrato com o Python (rotas `/internal`, canal privado do estado, ambiente). O
 /// Python (`RUST_SERVER_PROTOCOL`) recusa um binário de outra versão e atende sozinho.
-pub const INTERNAL_PROTOCOL: u32 = 99;
+pub const INTERNAL_PROTOCOL: u32 = 100;
 
 /// Todo cliente HTTP do servidor nasce aqui. Uma dependência liga `gzip`, `http2` e (no Windows)
 /// `native-tls` no reqwest, e o Cargo estende isso a todo cliente: sem estes desligamentos ele
@@ -186,8 +186,6 @@ pub async fn serve_until_with_guest(
         async move { readiness.wait().await; if let Some(home) = std::env::home_dir() { transcription.recover_on_startup(&home).await; } }
     }));
     if let Some(instance) = config::Config::runtime_instance().map_err(std::io::Error::other)? {
-        let windows = accounts::claude_login::WindowClient::new(cfg.upstream, cfg.internal_secret.clone(), instance.clone())
-            .map_err(|error| std::io::Error::other(error.code))?;
         let private = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let port = private.local_addr()?.port();
         let registry = std::sync::Arc::new(runtime::gateway::RuntimeRegistry::new(cfg.upstream,
@@ -208,8 +206,6 @@ pub async fn serve_until_with_guest(
         state.initialize_codex_setup();
         let _ = state.accounts.quotas.runtime.set(registry.clone());
         let _ = state.accounts.quotas.diag.set(state.diag.clone());
-        let quota_bridge=accounts::bridge::AccountsBridge::new(cfg.upstream,cfg.internal_secret.clone(),instance.clone())
-            .map_err(std::io::Error::other)?;
         runtime_producers = Some(AbortOnDrop(tokio::spawn({
             let registry = registry.clone();
             let readiness = state.startup.clone();
@@ -222,10 +218,10 @@ pub async fn serve_until_with_guest(
             async move {
                 readiness.wait().await;
         // Sem catálogo legível não há janela a fechar; isso não pode impedir o servidor de subir.
-        if let Err(error) = accounts.recover_claude_logins(windows).await {
+        if let Err(error) = accounts.recover_claude_logins(accounts.claude_windows.clone()).await {
             tracing::warn!(code = "claude_login_recovery_failed", reason = error.code, "catálogo de contas ilegível na subida");
         }
-        *refresh_loop.lock().unwrap() = Some(accounts::claude_refresh::start(accounts, quota_bridge, registry.clone()));
+        *refresh_loop.lock().unwrap() = Some(accounts::claude_refresh::start(accounts, registry.clone()));
         let _watchdog = std::env::home_dir().map(|home| AbortOnDrop(tokio::spawn(
             watchdog::run(http.clone(), runtime_cfg.upstream, runtime_cfg.internal_secret.clone(), home))));
 

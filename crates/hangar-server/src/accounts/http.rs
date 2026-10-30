@@ -630,25 +630,13 @@ fn claude_matches(method: &Method, path: &str) -> bool {
     }
     false
 }
-fn window_client(
-    state: &crate::routes::AppState,
-) -> Result<super::claude_login::WindowClient, AccountError> {
-    super::claude_login::WindowClient::new(
-        state.cfg.upstream,
-        state.cfg.internal_secret.clone(),
-        crate::config::Config::runtime_instance()
-            .ok()
-            .flatten()
-            .ok_or_else(AccountError::io)?,
-    )
-}
 async fn claude_operation(
     state: &crate::routes::AppState,
     action: &str,
     label: &str,
     code: String,
 ) -> Result<Value, AccountError> {
-    let client = window_client(state)?;
+    let client = state.accounts.claude_windows.clone();
     match action {
         "open" => state.accounts.start_claude_login(label, client).await,
         "step" => state.accounts.claude_step(label, client).await,

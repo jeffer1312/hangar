@@ -102,7 +102,7 @@ Dados temporais novos deverão declarar sua normalização na Task consumidora.
 `PythonReference` recusa operações de conta com 503 e
 `contract_python_handler_blocked`, guardando um diário separado. Uma resposta
 200 entregue por proxy Python falha em `assert_rust_ownership`. Só
-`bridge.prepare`, `bridge.claude_window` e `bridge.other_quotas` são
+`bridge.prepare` e `bridge.other_quotas` são
 permitidas nessa conferência. As quatro rotas da ponte Pi/omp aposentada
 (`device-propagate`, `/ack`, `/close` e `device-propagate-state`) entram no diário
 como `bridge.propagate_device_login` e reprovam a conferência;

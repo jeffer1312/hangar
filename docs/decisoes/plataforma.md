@@ -2728,8 +2728,19 @@ Python. Regras como ficaram, cada uma conferida por teste:
 
 Medição antes/depois na DELPHI-02: pendente. Pendências com dono a definir: o login Claude da lista
 não tem prazo total (10 s por chamada do CLI, 4 em paralelo: com 5 ou mais contas e cache frio a
-lista passa dos 8 s do cliente), e a renovação do token Claude vencido ainda volta ao Python pela
-janela de login (`/internal/accounts/claude-window`), em todo chamador da cota.
+lista passa dos 8 s do cliente). A janela de login e da renovação passou ao Rust em 30/10/2026
+(`accounts/claude_window.rs`, protocolo 97), sem volta ao Python.
+
+### Janela de login do Claude no Rust (30/10/2026)
+
+No Windows o link de autorização chegava cortado no meio do `client_id`, sem `redirect_uri`
+("Solicitação OAuth inválida"). Medido na DELPHI-02 com psmux 3.3.8: `capture-pane -J` sai igual
+a sem `-J`; a CLI quebra o link em linhas de exatamente `#{pane_width}` colunas, sem espaço no fim.
+O Rust lê a largura e junta só a linha que ocupa a largura inteira (fixture real em
+`accounts/fixtures/claude-login-psmux-120.txt`). A janela nasce com `BROWSER` que não abre nada
+(o link e o botão estão na tela do Hangar) e com `@cp_login_owner` = `~/.claude` do servidor: a
+varredura de janelas esquecidas, que agora roda também na subida, só derruba as marcadas
+`@cp_hidden` deste servidor.
 
 ## A conversa da sessão é escolhida pelo Rust, e a troca espera duas leituras
 
