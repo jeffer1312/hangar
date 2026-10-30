@@ -115,6 +115,7 @@ pub fn contract(name: &str) -> Value {
         "transport" => transport::CASES,
         "transport-supplement" => transport::SUPPLEMENT,
         "transport-review-supplement" => transport::REVIEW,
+        "transport-gaps" => super::transport_gaps_cases::CASES,
         _ => return capture(name),
     };
     let chromium = capture("chromium");

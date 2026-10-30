@@ -400,6 +400,21 @@ fn encoded(value: &Value) -> Value {
     }
 }
 
+/// Volta o JSON comum da tabela à árvore de `encoded`, sem passar pelo decodificador testado.
+fn typed(value: &Value) -> Value {
+    match value {
+        Value::Object(fields) if fields.contains_key("kind") => value.clone(),
+        Value::Object(fields) => {
+            let mut keys: Vec<_> = fields.keys().collect();
+            keys.sort();
+            json!({"kind": "object", "entries": keys.into_iter().map(|key| vec![typed(&json!(key)), typed(&fields[key.as_str()])]).collect::<Vec<_>>()})
+        }
+        Value::Array(items) => json!({"kind": "array", "items": items.iter().map(typed).collect::<Vec<_>>()}),
+        Value::String(text) => json!({"kind": "string", "points": text.chars().map(|point| point as u32).collect::<Vec<_>>()}),
+        other => encoded(other),
+    }
+}
+
 async fn frozen_case(name: &str) {
     if support::isolated_with_timeout(&format!("remote_browser::transport_gaps::{name}"), Duration::from_secs(90),
         |root| assert!(!root.join("git.calls").exists(), "a descoberta iniciou Git")).await { return; }
@@ -413,12 +428,7 @@ async fn frozen_case(name: &str) {
         | "layout_order_huge_width_before_infinite_height"
         | "layout_order_modifier_list" | "layout_order_modifier_object"
         | "layout_order_wheel_list" | "layout_order_wheel_object");
-    let reader_codec = matches!(name,
-        "reader_codec_ignored_surrogate_sidecar" | "reader_codec_ignored_nonfinite_sidecar"
-        | "reader_codec_ignored_surrogate_server" | "reader_codec_ignored_nonfinite_server");
-    let reference = support::contract(if layout_validation_order { "layout-validation-order" }
-        else if reader_codec { "reader-codec" } else { "transport-gaps" });
-    assert_eq!(reference["source_commit"], "ba2db1021ab7fb801eca50a50f9509dcb825ac7e");
+    let reference = support::contract("transport-gaps");
     let case = reference["public"].as_array().unwrap().iter().find(|case| case["name"] == name).unwrap();
     let inputs = &case["inputs"];
     let scene = Scene::new().await;
@@ -460,8 +470,7 @@ async fn frozen_case(name: &str) {
             receive(&mut clients[0], &mut events[0], |event| event["t"] == "q" && event.get("lento").is_none()).await;
             let began = Instant::now();
             receive(&mut clients[0], &mut events[0], |event| event["lento"] == true).await;
-            let limits = &reference["comparison"]["after_screencast_seconds"];
-            assert!((limits[0].as_f64().unwrap()..=limits[1].as_f64().unwrap()).contains(&began.elapsed().as_secs_f64()), "frame não repôs a espera do screencast");
+            assert!((1.4..=2.5).contains(&began.elapsed().as_secs_f64()), "frame não repôs a espera do screencast");
         }
         "serialized_viewers_apply_and_restore" | "pending_capture_and_rust_layout_keep_other_viewer_input_independent" => {
             let serialized = name == "serialized_viewers_apply_and_restore";
@@ -629,7 +638,7 @@ async fn frozen_case(name: &str) {
     desktop.wait(|seen| seen.closed == events.len() && seen.commands_done == expected_commands).await;
     scene.state.remote_browser.shutdown(&scene.nav_dir(), &scene.state.list).await;
     let mut actual = desktop.result(&events, &logs, &viewer_closes);
-    if inputs["encoded"] == true { assert_eq!(encoded(&actual), case["expected_encoded"], "{name}: efeitos integrais divergentes do Python original"); }
+    if inputs["encoded"] == true { assert_eq!(encoded(&actual), typed(&case["expected_encoded"]), "{name}: efeitos integrais divergentes"); }
     else {
         let mut expected = case["expected"].clone();
         for result in [&mut actual, &mut expected] {
@@ -642,14 +651,12 @@ async fn frozen_case(name: &str) {
                 }
             }
         }
-        assert_eq!(actual, expected, "{name}: efeitos integrais divergentes do Python original");
+        assert_eq!(actual, expected, "{name}: efeitos integrais divergentes");
     }
-    let mut expected_observations = case["observations"].clone();
     if inputs["encoded"] == true {
-        assert_eq!(encoded(&observations), expected_observations, "{name}: observação integral divergente");
+        assert_eq!(encoded(&observations), typed(&case["observations"]), "{name}: observação integral divergente");
     } else {
-        for measured in ["burst_seconds", "after_screencast_seconds", "before_rate_boundary_seconds", "after_rate_boundary_seconds"] { expected_observations.as_object_mut().unwrap().remove(measured); }
-        assert_eq!(observations, expected_observations, "{name}: houve efeito enquanto a borda ainda estava pendente");
+        assert_eq!(observations, case["observations"], "{name}: houve efeito enquanto a borda ainda estava pendente");
     }
     scene.upstream.assert_no_browser_or_discovery_calls();
     desktop.close().await;
@@ -703,7 +710,6 @@ cases! {
 async fn slow_mux_discovery_does_not_block_another_connection() {
     let exact = "remote_browser::transport_gaps::slow_mux_discovery_does_not_block_another_connection";
     if support::isolated(exact, |root| assert!(!root.join("git.calls").exists())).await { return; }
-    let reference = support::contract("transport-gaps");
     let scene = Scene::new().await;
     let program = std::path::PathBuf::from(scene.state.list.env().capture_program.clone());
     let original = std::fs::read(&program).unwrap();
@@ -726,12 +732,11 @@ async fn slow_mux_discovery_does_not_block_another_connection() {
     let expected = &urls["cases"].as_array().unwrap().iter().find(|case| case["name"] == "get_empty_directory").unwrap()["expected"]["responses"][0];
     assert_eq!(response.status().as_u16(), expected["status"].as_u64().unwrap() as u16);
     assert_eq!(response.json::<Value>().await.unwrap(), expected["body"]);
-    assert_eq!(reference["slow_discovery"]["other_connection_before_release"], json!({"alive": true}));
-    assert_eq!(json!(!pending.is_finished()), reference["slow_discovery"]["opening_still_pending"]);
+    assert!(!pending.is_finished(), "a abertura deveria seguir esperando a descoberta");
     std::fs::write(&release, "release").unwrap();
     let result = pending.await.unwrap();
     let Err(tokio_tungstenite::tungstenite::Error::Http(response)) = result else { panic!("sessão ausente abriu") };
-    assert_eq!(response.status().as_u16(), reference["slow_discovery"]["opening_status"].as_u64().unwrap() as u16);
+    assert_eq!(response.status().as_u16(), 403);
     std::fs::write(&program, original).unwrap();
     scene.upstream.assert_no_browser_or_discovery_calls();
     scene.close().await;
