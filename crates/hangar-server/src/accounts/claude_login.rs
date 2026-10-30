@@ -743,6 +743,172 @@ mod tests {
         assert_eq!(config["hasCompletedOnboarding"], true);
     }
 
+    /// A CLI responde o que está em `auth-reply.json` da conta.
+    const REPLY_CLI: &str = "const fs=require('fs'),p=require('path'),d=process.env.CLAUDE_CONFIG_DIR;let r;try{r=fs.readFileSync(p.join(d,'auth-reply.json'),'utf8')}catch{r=JSON.stringify({loggedIn:false})}process.stdout.write(r);process.exit(r.includes('false')?1:0);";
+
+    fn service_with_cli(root: &std::path::Path, source: &str) -> AccountService {
+        let fixture = root.join("native");
+        let script = fixture.join("node_modules/@anthropic-ai/claude-code/cli.js");
+        fs::create_dir_all(script.parent().unwrap()).unwrap();
+        fs::write(script, source).unwrap();
+        #[cfg(unix)]
+        crate::write_test_executable(&fixture.join("claude"), format!("#!/usr/bin/env node\n{source}"));
+        let separator = if cfg!(windows) { ";" } else { ":" };
+        let path = format!("{}{separator}{}", fixture.display(), std::env::var("PATH").unwrap());
+        let home = root.to_string_lossy().into_owned();
+        let mut service = AccountService::new(AccountEnvironment::from_map(
+            [("HOME".into(), home.clone()), ("USERPROFILE".into(), home), ("PATH".into(), path)]
+                .into_iter()
+                .chain(std::env::vars().filter(|(key, _)| cfg!(windows) && key.eq_ignore_ascii_case("SystemRoot")))
+                .collect(),
+        ));
+        service.claude_auth.cli_timeout = Some(Duration::from_secs(3600));
+        service
+    }
+
+    fn write_token(home: &std::path::Path, token: &str) {
+        fs::write(home.join(".credentials.json"), json!({"claudeAiOauth":{"accessToken":token}}).to_string()).unwrap();
+    }
+
+    #[tokio::test]
+    async fn login_needs_a_new_token_and_an_authenticated_identity() {
+        let root = tempfile::tempdir().unwrap();
+        let service = service_with_cli(root.path(), REPLY_CLI);
+        let account = service.create(Provider::Claude, "work", |_| Ok(())).unwrap();
+        let (client, _observed) = recorder();
+        let signed_in = r#"{"loggedIn":true,"email":"fixture@example.test","subscriptionType":"pro"}"#;
+        write_token(&account.home, "synthetic-old");
+        fs::write(account.home.join("auth-reply.json"), signed_in).unwrap();
+        service.start_claude_login("work", client.clone()).await.unwrap();
+        assert_eq!(service.claude_step("work", client.clone()).await.unwrap()["etapa"], "aguardando");
+        write_token(&account.home, "synthetic-new");
+        fs::write(account.home.join("auth-reply.json"), r#"{"loggedIn":false}"#).unwrap();
+        assert_eq!(service.claude_step("work", client.clone()).await.unwrap()["etapa"], "aguardando");
+        fs::write(account.home.join("auth-reply.json"), signed_in).unwrap();
+        assert_eq!(
+            service.claude_step("work", client).await.unwrap(),
+            json!({"etapa":"concluido","url":null,"email":"fixture@example.test","plano":"pro"})
+        );
+        let config: Value = serde_json::from_slice(&fs::read(account.home.join(".claude.json")).unwrap()).unwrap();
+        assert_eq!(config["hasCompletedOnboarding"], true);
+    }
+
+    #[tokio::test]
+    async fn a_new_server_closes_only_the_abandoned_window() {
+        let root = tempfile::tempdir().unwrap();
+        let service = service_with_cli(root.path(), REPLY_CLI);
+        service.create(Provider::Claude, "work", |_| Ok(())).unwrap();
+        let (client, mut observed) = recorder();
+        service.start_claude_login("work", client.clone()).await.unwrap();
+        let (_, abandoned) = observed.recv().await.unwrap();
+        drop(service);
+        let service = service_with_cli(root.path(), REPLY_CLI);
+        service.recover_claude_logins(client.clone()).await.unwrap();
+        assert_eq!(observed.recv().await.unwrap(), ("close".to_owned(), abandoned.clone()));
+        assert_eq!(service.claude_step("work", client.clone()).await.unwrap()["etapa"], "idle");
+        service.start_claude_login("work", client.clone()).await.unwrap();
+        let (action, new) = observed.recv().await.unwrap();
+        assert_eq!(action, "open");
+        assert_ne!(new, abandoned);
+        service.cancel_claude("work", client.clone()).await.unwrap();
+        assert_eq!(observed.recv().await.unwrap(), ("close".to_owned(), new));
+        service.cancel_claude("work", client).await.unwrap();
+        assert!(observed.try_recv().is_err(), "cancelar de novo não toca em janela nenhuma");
+    }
+
+    #[tokio::test]
+    async fn an_old_confirmation_cannot_clean_or_complete_the_new_attempt() {
+        let root = tempfile::tempdir().unwrap();
+        let service = service_with_cli(root.path(), REPLY_CLI);
+        let account = service.create(Provider::Claude, "work", |_| Ok(())).unwrap();
+        let (client, mut observed) = recorder();
+        write_token(&account.home, "synthetic-old");
+        fs::write(account.home.join("auth-reply.json"), r#"{"loggedIn":true}"#).unwrap();
+        service.start_claude_login("work", client.clone()).await.unwrap();
+        assert_eq!(action(&mut observed).await.as_deref(), Some("open"));
+        let confirming = tokio::spawn({
+            let (service, client) = (service.clone(), client.clone());
+            async move { service.confirm_claude("work", "synthetic-code".into(), client).await }
+        });
+        assert_eq!(action(&mut observed).await.as_deref(), Some("code"));
+        service.cancel_claude("work", client.clone()).await.unwrap();
+        assert_eq!(action(&mut observed).await.as_deref(), Some("close"));
+        service.start_claude_login("work", client.clone()).await.unwrap();
+        let (opened, new) = observed.recv().await.unwrap();
+        assert_eq!(opened, "open");
+        write_token(&account.home, "synthetic-new");
+        let error = confirming.await.unwrap().unwrap_err();
+        assert_eq!((error.status, error.code), (409, "erro_login_sem_tentativa"));
+        assert!(observed.try_recv().is_err(), "a confirmação antiga não fecha a janela nova");
+        assert_eq!(service.claude_step("work", client).await.unwrap()["etapa"], "concluido");
+        assert_eq!(observed.recv().await.unwrap(), ("read".to_owned(), new.clone()));
+        assert_eq!(observed.recv().await.unwrap(), ("close".to_owned(), new));
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_identity_cleans_the_attempt_without_onboarding() {
+        for reply in [r#"{"loggedIn":"true"}"#, "invalid-json"] {
+            let root = tempfile::tempdir().unwrap();
+            let service = service_with_cli(root.path(), REPLY_CLI);
+            let account = service.create(Provider::Claude, "work", |_| Ok(())).unwrap();
+            let (client, mut observed) = recorder();
+            service.start_claude_login("work", client.clone()).await.unwrap();
+            assert_eq!(action(&mut observed).await.as_deref(), Some("open"));
+            write_token(&account.home, "synthetic-new");
+            fs::write(account.home.join("auth-reply.json"), reply).unwrap();
+            let error = service.claude_step("work", client.clone()).await.unwrap_err();
+            assert_eq!(error.status, 409, "{reply}");
+            assert!(!account.home.join(".claude.json").exists(), "{reply}");
+            assert_eq!(action(&mut observed).await.as_deref(), Some("read"));
+            assert_eq!(action(&mut observed).await.as_deref(), Some("close"));
+            assert_eq!(service.claude_step("work", client).await.unwrap()["etapa"], "idle");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_step_does_not_conclude_when_the_credential_changes_during_the_identity_read() {
+        let root = tempfile::tempdir().unwrap();
+        let source = "const fs=require('fs'),p=require('path'),d=process.env.CLAUDE_CONFIG_DIR;const m=p.join(d,'probe-raced');if(!fs.existsSync(m)){fs.writeFileSync(p.join(d,'.credentials.json'),JSON.stringify({claudeAiOauth:{accessToken:'synthetic-after-probe'}}));fs.writeFileSync(m,'1');process.stdout.write(JSON.stringify({loggedIn:true,email:'old@example.test'}));}else{process.stdout.write(JSON.stringify({loggedIn:false}));}";
+        let service = service_with_cli(root.path(), source);
+        let account = service.create(Provider::Claude, "work", |_| Ok(())).unwrap();
+        let (client, mut observed) = recorder();
+        write_token(&account.home, "synthetic-initial");
+        service.start_claude_login("work", client.clone()).await.unwrap();
+        write_token(&account.home, "synthetic-before-probe");
+        assert_eq!(service.claude_step("work", client).await.unwrap()["etapa"], "aguardando");
+        assert!(account.home.join("probe-raced").exists());
+        assert!(!account.home.join(".claude.json").exists());
+        assert_eq!(action(&mut observed).await.as_deref(), Some("open"));
+        assert_eq!(action(&mut observed).await.as_deref(), Some("read"));
+        assert!(observed.try_recv().is_err(), "a janela segue aberta");
+    }
+
+    #[tokio::test]
+    async fn a_confirmation_does_not_accept_an_identity_read_before_the_token_changed() {
+        let root = tempfile::tempdir().unwrap();
+        let source = "const fs=require('fs'),p=require('path'),d=process.env.CLAUDE_CONFIG_DIR;const m=p.join(d,'probe-count');const c=fs.existsSync(m)?Number(fs.readFileSync(m,'utf8'))+1:1;if(c===1){fs.writeFileSync(p.join(d,'.credentials.json'),JSON.stringify({claudeAiOauth:{accessToken:'synthetic-new'}}));process.stdout.write(JSON.stringify({loggedIn:true,email:'old@example.test'}));}else{process.stdout.write(JSON.stringify({loggedIn:false}));}fs.writeFileSync(m,String(c));";
+        let service = service_with_cli(root.path(), source);
+        let account = service.create(Provider::Claude, "work", |_| Ok(())).unwrap();
+        let (client, _observed) = recorder();
+        write_token(&account.home, "synthetic-old");
+        service.start_claude_login("work", client.clone()).await.unwrap();
+        let confirming = tokio::spawn({
+            let (service, client) = (service.clone(), client.clone());
+            async move { service.confirm_claude("work", "synthetic-code".into(), client).await }
+        });
+        let marker = account.home.join("probe-count");
+        // Teto só contra travamento: no Windows do CI o node da CLI falsa passou de 10 s para subir.
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        while !fs::read_to_string(&marker).is_ok_and(|count| !count.is_empty() && count != "1") {
+            assert!(!confirming.is_finished(), "a confirmação terminou antes da releitura");
+            assert!(std::time::Instant::now() < deadline, "a releitura nativa não avançou");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        service.cancel_claude("work", client).await.unwrap();
+        assert_eq!(confirming.await.unwrap().unwrap_err().status, 409);
+        assert!(!account.home.join(".claude.json").exists());
+    }
+
     #[tokio::test]
     async fn one_unrecoverable_login_does_not_block_the_others() {
         let root = tempfile::tempdir().unwrap();
