@@ -136,7 +136,7 @@ async def _worker(binary):
         async def me():
             return {"owner": True}
 
-        @app.get("/api/update-channel")
+        @app.get("/api/auth-delayed")
         async def delayed(request: Request):
             captured["receipt"] = request.headers.get(shared_auth.RECEIPT)
             captured["empty_query"] = request.headers.get(shared_auth.EMPTY_QUERY)
@@ -339,8 +339,17 @@ async def _worker(binary):
                 assert len(hits(ip)) == 7
                 assert (await request(root, browser, ip=ip)).status_code == 401
                 assert (await request(root, browser, guest_token, ip)).status_code == 403
-                assert (await request(direct, "/api/me", guest_token, ip)).status_code == 401
-                assert len(hits(ip)) == 9
+                # Sem a identidade assinada do Rust, a porta Python aplica o bloqueio do dono.
+                # O oitavo palpite já bloqueou esta origem; uma recusa não cria a nona entrada.
+                response = await request(direct, "/api/me", guest_token, ip)
+                assert response.status_code == 429, (response.status_code, response.text)
+                assert response.headers["retry-after"] == "30"
+                assert response.json()["detail"]["code"] == "erro_muitas_tentativas"
+                assert len(hits(ip)) == 8
+                fresh_ip = "198.51.100.16"
+                response = await request(direct, "/api/me", guest_token, fresh_ip)
+                assert response.status_code == 401, (response.status_code, response.text)
+                assert len(hits(fresh_ip)) == 1
 
                 ip = "192.0.2.1"
                 for _ in range(9):
@@ -354,18 +363,18 @@ async def _worker(binary):
 
                 # Um gate do Rust admite; uma falha intercalada não pode sumir no Python.
                 ip = "198.51.100.13"
-                delayed_call = asyncio.create_task(request(root, "/api/update-channel", OWNER, ip, headers={"x-test-delay": "1"}))
+                delayed_call = asyncio.create_task(request(root, "/api/auth-delayed", OWNER, ip, headers={"x-test-delay": "1"}))
                 await asyncio.wait_for(admitted.wait(), 5)
                 assert captured["receipt"]
                 receipt = captured["receipt"]
                 assert (await request(root, browser, ip=ip)).status_code == 401
                 release.set()
                 assert (await delayed_call).status_code == 200 and len(hits(ip)) == 1
-                assert (await request(public, "/api/update-channel", OWNER, ip, headers={shared_auth.RECEIPT: receipt})).status_code == 200
+                assert (await request(public, "/api/auth-delayed", OWNER, ip, headers={shared_auth.RECEIPT: receipt})).status_code == 200
                 assert not hits(ip), "porta pública deve executar a transação, não reutilizar o recibo"
 
                 receipts = []
-                for index, target in enumerate(("/api/update-channel", "/api/update-channel?", "/api/update-channel?view=1")):
+                for index, target in enumerate(("/api/auth-delayed", "/api/auth-delayed?", "/api/auth-delayed?view=1")):
                     ip = f"198.51.100.{30 + index}"
                     admitted.clear()
                     release.clear()
@@ -450,6 +459,7 @@ async def _worker(binary):
                         "empty_query_kept_one_admission": True,
                         "corrupt_store_statuses": broken}
             finally:
+                release.set()
                 sse_release.set()
                 if child is not None:
                     await stop(child)

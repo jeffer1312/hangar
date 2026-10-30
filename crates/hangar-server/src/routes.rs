@@ -637,6 +637,7 @@ fn router_with(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router {
     // O MCP chama as tools pelas mesmas rotas que o `hangar-send` chama: o roteador público inteiro.
     api.clone().merge(crate::mcp::router(state.clone(), api))
         .layer(axum::middleware::from_fn_with_state(state.clone(), crate::login_guests::gate::guard))
+        .layer(axum::middleware::from_fn(request_auth))
         .layer(axum::middleware::from_fn_with_state(state.clone(), crate::login_guests::body_limit))
         .layer(axum::middleware::from_fn(crate::login_guests::public_contract))
         .layer(axum::middleware::from_fn(crate::config_sync::runtime_http::cors_layer))
@@ -835,7 +836,10 @@ pub(crate) fn client_api_reply() -> Response {
 struct RequestAuth(Arc<tokio::sync::Mutex<Option<(auth::ReceiptContext, Option<String>)>>>);
 
 async fn request_auth(mut req: Request, next: axum::middleware::Next) -> Response {
-    req.extensions_mut().insert(RequestAuth::default());
+    // O porteiro externo e o roteador interno compartilham a mesma admissão.
+    if req.extensions().get::<RequestAuth>().is_none() {
+        req.extensions_mut().insert(RequestAuth::default());
+    }
     // Cliente nenhum escolhe uma admissão anterior.
     req.headers_mut().remove("x-hangar-auth-receipt");
     req.headers_mut().remove(crate::proxy::AUTH_EMPTY_QUERY);
