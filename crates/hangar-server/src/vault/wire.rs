@@ -63,7 +63,7 @@ pub struct AskReply {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum WaitState { Pending, Allowed, Saved, Denied, Declined, TimedOut, Cancelled }
+pub enum WaitState { Pending, Allowed, Saved, Denied, Declined, TimedOut }
 
 /// `GET /api/vault/requests/{id}/wait`: `value` só em `allowed`; `entry` e `temporary` só em `saved`.
 #[derive(Serialize, Deserialize)]

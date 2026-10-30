@@ -30,7 +30,7 @@ Quatro palavras deste domínio se confundem entre si. Use-as como definidas aqui
 | **peer** | outra máquina que **este backend** alcança, para recado `servidor::sessao` | `backend/peers.json`, 0600, no disco do servidor |
 | **conta** (ou perfil) | um config dir do Claude Code — `~/.claude-<nome>`, com credencial e histórico próprios | disco, marcador `.hangar-conta` |
 | **motor** (engine) | um provedor não-Anthropic para uma sessão; só troca variáveis de ambiente | `~/.claude/engines.json` |
-| **cofre** | as senhas do dono guardadas pelo Hangar, uma lista só, numa **máquina dona**; as outras máquinas pedem a ela pelos peers. Cada senha é **pedir sempre** (o uso por agente abre cartão de aprovação) ou **liberada**. Não é o chaveiro do sistema: a chave do cofre mora nele, e por isso um processo do mesmo usuário, o agente inclusive, consegue abrir o cofre; a aprovação barra o uso normal, não um agente decidido a burlá-la | máquina dona: hoje `notebook-jefferson` (em desenho) |
+| **cofre** | as senhas do dono guardadas pelo Hangar, uma lista só, numa **máquina dona**; as outras máquinas pedem a ela pelos peers. Cada senha é **pedir sempre** (o uso por agente abre cartão de aprovação) ou **liberada**. Não é o chaveiro do sistema: a chave do cofre mora nele, e por isso um processo do mesmo usuário, o agente inclusive, consegue abrir o cofre; a aprovação barra o uso normal, não um agente decidido a burlá-la | máquina dona: a que tem o `vault.bin`, escolhida na tela Cofre |
 
 Sessão, pane e transcript também têm sentido fixo: **sessão** é a linha na lista do app,
 **pane** é o retângulo do tmux, **transcript** é o `.jsonl` de onde vem o chat.

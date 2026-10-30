@@ -82,7 +82,8 @@ mod linux {
         async fn connection(&self) -> Result<zbus::Connection, KeyError> {
             let mut slot = self.conn.lock().await;
             if let Some(conn) = slot.as_ref() { return Ok(conn.clone()); }
-            let conn = zbus::Connection::session().await.map_err(|_| KeyError::Bus)?;
+            // Barramento travado não segura o estado do cofre (e a trava da conexão) para sempre.
+            let conn = tokio::time::timeout(LIMIT, zbus::Connection::session()).await.map_err(|_| KeyError::Bus)?.map_err(|_| KeyError::Bus)?;
             *slot = Some(conn.clone());
             Ok(conn)
         }

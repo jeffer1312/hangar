@@ -358,9 +358,7 @@ fn wait_reply(status: WaitStatus, server_id: &str) -> WaitReply {
         WaitStatus::Saved { entry, temporary } => WaitReply { entry: Some(entry), temporary: Some(temporary), ..reply(WaitState::Saved) },
         WaitStatus::Denied => reply(WaitState::Denied),
         WaitStatus::Declined => reply(WaitState::Declined),
-        WaitStatus::TimedOut => reply(WaitState::TimedOut),
-        WaitStatus::Cancelled => reply(WaitState::Cancelled),
-    }
+        WaitStatus::TimedOut => reply(WaitState::TimedOut),    }
 }
 
 /// `GET /api/vault/requests/{id}/wait`: segura até `WAIT_HOLD` e responde `pending` sem novidade.
@@ -442,6 +440,8 @@ struct RestoreReq {
 
 fn restore_failure(st: &AppState, from_peer: &str, error: RestoreError) -> Response {
     match error {
+        RestoreError::RemoteOwner => fail(StatusCode::CONFLICT, "erro_cofre_dona_remota",
+            "esta máquina usa o cofre de outra dona; a restauração só entra na máquina que vai ser a dona"),
         RestoreError::NotEmpty => fail(StatusCode::CONFLICT, "erro_cofre_nao_vazio", "o cofre desta máquina já tem senhas; a restauração só entra num cofre vazio"),
         // 401 o cliente lê como token do dono perdido.
         RestoreError::WrongPassword => fail(StatusCode::UNPROCESSABLE_ENTITY, "erro_cofre_recuperacao_errada", "senha de recuperação errada (ou cópia adulterada)"),

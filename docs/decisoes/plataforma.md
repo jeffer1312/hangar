@@ -3749,6 +3749,11 @@ mcp_servers.hangar.tool_timeout_sec=660` cria o servidor sem transporte e o Code
 largar a espera cancela o pedido na dona. **Medição pendente:** a sessão de teste com uma tool que
 espera 6 min, com e sem a variável, ainda não foi feita (prova da Task 4).
 
+**O que sai da máquina e quando a cópia tenta de novo.** O aviso de pedido do cofre leva o nome da
+senha (ou o rótulo do cadastro) e o `servidor::sessao` de quem pede aos provedores de push (Expo e
+Web Push); o valor nunca. A cópia diária que falha (máquina da cópia fora, chaveiro trancado) tenta
+de novo em 1 h, não no dia seguinte.
+
 **`vault_fill`: o que a árvore de acessibilidade mostra. Medição (30/10/2026, Chromium 149.0.7827.55
 do Playwright, sem janela, perfil temporário):** página com um `input type=text` e dois
 `type=password` (um vazio, um com `value` no HTML); `Input.insertText` em cada um com o foco nele;

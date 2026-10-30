@@ -24,6 +24,8 @@ pub const KEEP: usize = 7;
 const MAX_PASSWORD: usize = 1024;
 const FIRST: Duration = Duration::from_secs(5 * 60);
 const INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+/// Cópia que falhou (máquina da cópia fora, chaveiro trancado) tenta de novo antes do dia seguinte.
+const RETRY: Duration = Duration::from_secs(60 * 60);
 const EMPTY_SUFFIX: &str = ".empty.bin";
 const COPY_SUFFIX: &str = ".bin";
 
@@ -298,8 +300,8 @@ pub fn spawn(st: Arc<AppState>) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         tokio::time::sleep(FIRST).await;
         loop {
-            run(&st).await;
-            tokio::time::sleep(INTERVAL).await;
+            let failed = matches!(run(&st).await, Sent::Failed(_));
+            tokio::time::sleep(if failed { RETRY } else { INTERVAL }).await;
         }
     })
 }
@@ -320,6 +322,8 @@ pub async fn set_recovery(vault: &Vault, hangar_dir: &Path, password: Zeroizing<
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RestoreError {
     NotEmpty,
+    /// `erro_cofre_dona_remota`: o `vault.json` daqui aponta outra dona.
+    RemoteOwner,
     Vault(VaultError),
     NoCopy,
     PeerDown(String),
@@ -330,19 +334,33 @@ pub enum RestoreError {
 }
 
 impl Vault {
+    /// Vazio, ausente, ou com a chave sumida do chaveiro: esse arquivo não abre mais, e a cópia é o que resta.
     async fn restorable(&self, hangar_dir: &Path) -> Result<bool, VaultError> {
         if !store::exists(&store::path(hangar_dir)) { return Ok(true); }
-        self.read(hangar_dir, |doc| Ok(doc.entries.is_empty())).await
+        match self.read(hangar_dir, |doc| Ok(doc.entries.is_empty())).await {
+            Err(VaultError::Key(KeyError::Lost | KeyError::Absent)) => Ok(true),
+            other => other,
+        }
     }
 
     /// Grava `doc` só num cofre vazio ou ausente, conferido de novo sob a trava de gravação.
-    /// Ausente: a chave sai do `key::create` (nova, ou a que sobrou sem arquivo).
+    /// Ausente: a chave sai do `key::create` (nova, ou a que sobrou sem arquivo). Arquivo cuja chave
+    /// sumiu vai para o lado (`vault.bin.perdido-<data>`), nunca apagado, e o cofre nasce como ausente.
     async fn restore_doc(&self, hangar_dir: &Path, mut doc: Doc) -> Result<(), RestoreError> {
         let path = store::path(hangar_dir);
         let mut slot = self.key.clone().lock_owned().await;
-        let existed = store::exists(&path);
-        let key = if existed { self.key_for(&mut slot, &path).await.map_err(RestoreError::Vault)? }
-            else { key::create(&*self.keys).await.map_err(|e| RestoreError::Vault(VaultError::Key(e)))? };
+        let mut existed = store::exists(&path);
+        let opened = if existed { Some(self.key_for(&mut slot, &path).await) } else { None };
+        let key = match opened {
+            Some(Ok(key)) => key,
+            Some(Err(VaultError::Key(KeyError::Lost | KeyError::Absent))) => {
+                set_aside(&path).map_err(|_| RestoreError::Vault(VaultError::Io))?;
+                existed = false;
+                key::create(&*self.keys).await.map_err(|e| RestoreError::Vault(VaultError::Key(e)))?
+            }
+            Some(Err(error)) => return Err(RestoreError::Vault(error)),
+            None => key::create(&*self.keys).await.map_err(|e| RestoreError::Vault(VaultError::Key(e)))?,
+        };
         tokio::task::spawn_blocking(move || {
             if existed {
                 let current = store::load(&path, &key).map_err(|e| RestoreError::Vault(e.into()))?;
@@ -357,10 +375,23 @@ impl Vault {
     }
 }
 
+/// O arquivo sem chave sai do caminho com a hora UTC no nome; um que já esteja lá não é sobrescrito.
+fn set_aside(path: &Path) -> io::Result<()> {
+    let aside = path.with_file_name(format!("vault.bin.perdido-{}", chrono::Utc::now().format("%Y%m%dT%H%M%SZ")));
+    if aside.exists() { return Err(io::ErrorKind::AlreadyExists.into()); }
+    std::fs::rename(path, aside)
+}
+
 /// `POST /api/vault/restore`: busca a cópia de `server_id` em `from_peer`, abre com a senha e grava
-/// num cofre vazio. Senha errada não toca em nada.
+/// num cofre vazio. Senha errada não toca em nada. Máquina que aponta para outra dona não ganha um
+/// cofre próprio ao lado.
 pub async fn restore(vault: &Vault, peers: &PeerClient, hangar_dir: &Path, from_peer: &str, server_id: &str,
                      password: Zeroizing<String>) -> Result<(), RestoreError> {
+    match config::placement(hangar_dir) {
+        Ok(config::Placement::Remote(_)) => return Err(RestoreError::RemoteOwner),
+        Err(_) => return Err(RestoreError::Vault(VaultError::Io)),
+        Ok(_) => {}
+    }
     if !vault.restorable(hangar_dir).await.map_err(RestoreError::Vault)? { return Err(RestoreError::NotEmpty); }
     let raw = match peers.call_bytes(from_peer, reqwest::Method::GET, &format!("/api/vault/backup/{server_id}"), None, MAX_COPY).await {
         Ok((_, raw)) => raw,

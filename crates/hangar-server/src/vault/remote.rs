@@ -48,7 +48,6 @@ pub enum WaitStatus {
     Denied,
     Declined,
     TimedOut,
-    Cancelled,
 }
 
 pub struct Remote<'a> { pub peers: &'a PeerClient, pub owner: &'a str }
@@ -98,9 +97,7 @@ impl Remote<'_> {
             },
             (WaitState::Denied, _) => WaitStatus::Denied,
             (WaitState::Declined, _) => WaitStatus::Declined,
-            (WaitState::TimedOut, _) => WaitStatus::TimedOut,
-            (WaitState::Cancelled, _) => WaitStatus::Cancelled,
-        })
+            (WaitState::TimedOut, _) => WaitStatus::TimedOut,        })
     }
 
     /// Quem pediu desistiu. Pedido já fechado na dona volta `Lost`.

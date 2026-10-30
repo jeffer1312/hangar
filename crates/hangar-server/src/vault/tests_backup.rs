@@ -212,6 +212,41 @@ async fn restore_needs_an_empty_vault_and_the_right_password() {
     assert!(keys.key.lock().unwrap().is_some(), "chave do cofre própria desta máquina");
 }
 
+/// O desastre que a cópia cobre: o `vault.bin` ficou e a chave sumiu do chaveiro. O arquivo vai para o
+/// lado, nunca apagado, e o cofre volta da cópia com chave nova.
+#[tokio::test(flavor = "multi_thread")]
+async fn restore_covers_a_vault_whose_key_is_gone_and_keeps_the_old_file() {
+    let (addr, _keeper_dir) = keeper().await;
+    let dir = tempfile::tempdir().unwrap();
+    let peers = peers_for(dir.path(), addr);
+    let (vault, _) = owner_vault(dir.path()).await;
+    assert_eq!(backup::send_once(&vault, &peers, dir.path(), OWNER_ID).await, Sent::Sent);
+    let orphan = std::fs::read(store::path(dir.path())).unwrap();
+
+    // Servidor reiniciado com o item da chave apagado: o cofre de pé, sem chave.
+    let keys = Arc::new(Keys::default());
+    let after = Vault::new(keys.clone());
+    assert!(matches!(after.list(dir.path()).await, Err(VaultError::Key(KeyError::Lost))));
+    backup::restore(&after, &peers, dir.path(), "lab", OWNER_ID, Zeroizing::new(RECOVERY.into())).await.unwrap();
+    assert_eq!(after.list(dir.path()).await.unwrap().iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["banco"]);
+    let aside: Vec<_> = std::fs::read_dir(store::path(dir.path()).parent().unwrap()).unwrap().flatten()
+        .filter(|e| e.file_name().to_string_lossy().starts_with("vault.bin.perdido-")).collect();
+    assert_eq!(aside.len(), 1, "o arquivo sem chave fica guardado ao lado");
+    assert_eq!(std::fs::read(aside[0].path()).unwrap(), orphan);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_machine_that_uses_another_owner_does_not_restore_a_vault_of_its_own() {
+    let (addr, _keeper_dir) = keeper().await;
+    let dir = tempfile::tempdir().unwrap();
+    let peers = peers_for(dir.path(), addr);
+    config::save(dir.path(), &config::Config { owner: Some("outra".into()), backup_peer: None }).unwrap();
+    let vault = Vault::new(Arc::new(Keys::default()));
+    let refused = backup::restore(&vault, &peers, dir.path(), "lab", OWNER_ID, Zeroizing::new(RECOVERY.into())).await;
+    assert_eq!(refused.err(), Some(RestoreError::RemoteOwner));
+    assert!(!store::exists(&store::path(dir.path())));
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn the_keeper_route_limits_the_body_and_validates_the_request() {
     let (addr, _dir) = keeper().await;

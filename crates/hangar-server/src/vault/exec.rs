@@ -34,8 +34,6 @@ pub const DENIED: &str = "erro_cofre_negado: o dono negou o uso desta senha";
 pub const NO_ANSWER: &str = "erro_cofre_sem_resposta: o dono não respondeu dentro de 10 minutos";
 pub const NO_DEADLINE: &str = "erro_cofre_sessao_sem_prazo: esta sessão nasceu sem o prazo longo das tools do cofre e a chamada \
 cairia antes da resposta do dono; reabra a sessão (recarregar) e tente de novo";
-const CANCELLED: &str = "erro_cofre_cancelado: o pedido foi cancelado antes da resposta";
-
 /// Onde mora o cofre visto desta máquina.
 #[derive(Clone)]
 pub enum Owner { Local(Arc<AppState>), Remote { peers: Arc<PeerClient>, id: String } }
@@ -174,9 +172,7 @@ pub async fn secret(owner: &Owner, req: UseReq, deadline: Instant) -> Result<Zer
     match Pending::new(owner.clone(), id).settle(deadline).await? {
         WaitStatus::Allowed(value) => Ok(value),
         WaitStatus::Denied => Err(DENIED.into()),
-        WaitStatus::TimedOut => Err(NO_ANSWER.into()),
-        WaitStatus::Cancelled => Err(CANCELLED.into()),
-        _ => Err(off_contract()),
+        WaitStatus::TimedOut => Err(NO_ANSWER.into()),        _ => Err(off_contract()),
     }
 }
 

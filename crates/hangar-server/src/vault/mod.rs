@@ -131,7 +131,7 @@ fn name_ok(name: &str) -> bool { !name.trim().is_empty() && name.chars().count()
 
 fn secret_ok(password: &str) -> bool { !password.is_empty() && password.len() <= MAX_SECRET }
 
-fn same_name(a: &str, b: &str) -> bool { a.trim().to_lowercase() == b.trim().to_lowercase() }
+pub(crate) fn same_name(a: &str, b: &str) -> bool { a.trim().to_lowercase() == b.trim().to_lowercase() }
 
 fn now() -> f64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or_default()

@@ -32,12 +32,16 @@ fn private_dir(dir: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// Grava e devolve o caminho. A ficha vai antes do arquivo: a varredura apaga arquivo sem ficha.
+/// Gravação em andamento (temporário, ficha antes do arquivo) não é sobra para a varredura.
+const YOUNG: Duration = Duration::from_secs(10);
+
+/// Grava e devolve o caminho. A ficha vai antes do arquivo, inteira de uma vez (tmp + rename): a
+/// varredura apaga arquivo sem ficha e nunca lê uma ficha pela metade.
 pub fn write(dir: &Path, session_key: &str, session: &str, value: &[u8]) -> io::Result<PathBuf> {
     private_dir(dir)?;
     let id = super::new_id().map_err(|_| io::Error::other("sem aleatório"))?;
     let meta = Meta { session_key: session_key.to_owned(), session: session.to_owned(), created: super::now() };
-    private_file(&dir.join(format!("{id}.json")))?.write_all(&serde_json::to_vec(&meta).map_err(io::Error::other)?)?;
+    crate::runtime::queue::atomic_write(&dir.join(format!("{id}.json")), &serde_json::to_vec(&meta).map_err(io::Error::other)?)?;
     let path = dir.join(&id);
     let written = private_file(&path).and_then(|mut f| { f.write_all(value)?; f.sync_all() });
     if let Err(error) = written {
@@ -52,11 +56,17 @@ fn remove(dir: &Path, id: &str) {
     let _ = std::fs::remove_file(dir.join(format!("{id}.json")));
 }
 
-/// Apaga tudo o que `keep` não guarda; arquivo sem ficha e ficha ilegível também saem.
-pub fn retain(dir: &Path, keep: impl Fn(&Meta) -> bool) {
+fn young(path: &Path) -> bool {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age < YOUNG)
+}
+
+/// Apaga tudo o que `keep` não guarda; arquivo sem ficha e ficha ilegível também saem. `spare_young`
+/// (varredura): o que mudou há menos de 10 s pode ser uma gravação em andamento e fica.
+pub fn retain(dir: &Path, keep: impl Fn(&Meta) -> bool, spare_young: bool) {
     let Ok(read) = std::fs::read_dir(dir) else { return };
     let names: Vec<String> = read.flatten().filter_map(|e| e.file_name().into_string().ok()).collect();
     for name in &names {
+        if spare_young && young(&dir.join(name)) { continue; }
         match name.strip_suffix(".json") {
             Some(id) => {
                 let meta = std::fs::read(dir.join(name)).ok().and_then(|raw| serde_json::from_slice::<Meta>(&raw).ok());
@@ -70,7 +80,7 @@ pub fn retain(dir: &Path, keep: impl Fn(&Meta) -> bool) {
 
 /// Mais velho que 24 h, ou (com a lista em mãos) de sessão que não está nela.
 pub fn sweep(dir: &Path, now: f64, alive: Option<&dyn Fn(&Meta) -> bool>) {
-    retain(dir, |m| now - m.created < LIFE.as_secs_f64() && alive.is_none_or(|alive| alive(m)));
+    retain(dir, |m| now - m.created < LIFE.as_secs_f64() && alive.is_none_or(|alive| alive(m)), true);
 }
 
 /// O fechamento de uma sessão que ainda vai acontecer: a chave do pane é lida antes do kill.
@@ -98,7 +108,7 @@ pub async fn sweep_at_start() {
 }
 
 pub fn close(dir: &Path, name: &str, key: Option<&str>) {
-    retain(dir, |m| m.session != name && key != Some(m.session_key.as_str()));
+    retain(dir, |m| m.session != name && key != Some(m.session_key.as_str()), false);
 }
 
 /// A varredura contra a lista de sessões; lista que não responde ou sem fatos só apaga pelo prazo.

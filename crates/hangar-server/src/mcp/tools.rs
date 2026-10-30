@@ -727,9 +727,7 @@ impl Tools {
         let status = match exec::Pending::new(owner, id).settle(deadline).await? {
             WaitStatus::Saved { entry, temporary } => return Ok(dict(json!({"status": "saved", "entry": entry, "temporary": temporary}))),
             WaitStatus::Declined => "declined",
-            WaitStatus::TimedOut => "timed_out",
-            WaitStatus::Cancelled => "cancelled",
-            _ => return Err(exec::off_contract()),
+            WaitStatus::TimedOut => "timed_out",            _ => return Err(exec::off_contract()),
         };
         Ok(dict(json!({"status": status})))
     }
@@ -813,7 +811,7 @@ impl Tools {
         let home = self.home();
         let host = self.fill_host(&home, &name).await?;
         let entries = owner.entries().await?;
-        let entry = entries.iter().find(|e| e.name == a.entry).ok_or_else(|| exec::vault_text(VaultError::UnknownEntry))?;
+        let entry = entries.iter().find(|e| crate::vault::same_name(&e.name, &a.entry)).ok_or_else(|| exec::vault_text(VaultError::UnknownEntry))?;
         if let Some(url) = entry.url.as_deref().filter(|u| !u.trim().is_empty()) && !exec::same_site(url, &host) {
             return Err(format!("erro_cofre_dominio_diferente: a página é de {host} e a senha é de {url}"));
         }

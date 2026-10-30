@@ -130,6 +130,14 @@ async fn exec_runs_with_the_value_in_the_env_and_masks_the_output() {
     assert_eq!((code, out.as_str()), (124, "timeout 0s"));
 }
 
+/// Tudo na pasta como gravado há um minuto: fora da janela em que a varredura poupa.
+fn backdate(dir: &std::path::Path) {
+    let old = std::time::SystemTime::now() - Duration::from_secs(60);
+    for e in std::fs::read_dir(dir).unwrap().flatten() {
+        std::fs::File::options().write(true).open(e.path()).unwrap().set_modified(old).unwrap();
+    }
+}
+
 #[test]
 fn a_file_goes_at_close_and_in_the_sweep() {
     let dir = tempfile::tempdir().unwrap();
@@ -146,16 +154,23 @@ fn a_file_goes_at_close_and_in_the_sweep() {
     files::close(&base, "renomeada", Some("k1"));
     assert!(!mine.exists(), "a chave da sessão fecha o arquivo dela mesmo com outro nome");
     assert!(other.exists());
-    // Viva na lista: fica; fora dela ou com mais de 24 h: sai.
+    // Gravação recém-feita (temporário da ficha, arquivo sem ficha ainda) fica para a próxima varredura.
     let alive: &dyn Fn(&files::Meta) -> bool = &|m| m.session == "s2";
+    let young = files::write(&base, "k9", "s9", VALUE.as_bytes()).unwrap();
     files::sweep(&base, now(), Some(alive));
-    assert!(other.exists());
+    assert!(young.exists(), "gravação de agora não sai");
+    backdate(&base);
+    // Viva na lista: fica; fora dela ou com mais de 24 h: sai.
+    files::sweep(&base, now(), Some(alive));
+    assert!(other.exists() && !young.exists());
     files::sweep(&base, now() + files::LIFE.as_secs_f64() + 1.0, Some(alive));
     assert!(!other.exists(), "24 h");
     let third = files::write(&base, "k3", "s3", VALUE.as_bytes()).unwrap();
+    backdate(&base);
     files::sweep(&base, now(), Some(alive));
     assert!(!third.exists(), "sessão fora da lista");
     std::fs::write(base.join("0123"), VALUE).unwrap();
+    backdate(&base);
     files::sweep(&base, now(), None);
     assert!(!base.join("0123").exists(), "arquivo sem ficha sai");
     assert_eq!(std::fs::read_dir(&base).unwrap().count(), 0, "nenhuma ficha sobra");
