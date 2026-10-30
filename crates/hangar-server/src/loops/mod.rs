@@ -22,9 +22,21 @@ fn claude_dir(st: &AppState) -> std::path::PathBuf {
 pub fn store(st: &AppState) -> store::Store { store::Store::new(&claude_dir(st)) }
 
 /// A chave mestra das automações (`automations_enabled` do Python).
-pub fn automations(st: &AppState) -> bool {
-    crate::push::watch::Settings::read(&claude_dir(st), &crate::push::server_env()).automations
+pub fn automations(st: &AppState) -> Result<bool, &'static str> {
+    let config = crate::config_sync::runtime::RuntimeConfig::from_state(st).map_err(|_| "loop_config_invalid")?;
+    let value = config.get("automations");
+    let enabled = crate::config_sync::apply::truthy(&value);
+    crate::orchestration::codec::discard(value);
+    Ok(enabled)
 }
+
+#[derive(Debug)]
+pub(crate) struct ConfigFailure(pub &'static str);
+impl std::fmt::Display for ConfigFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { formatter.write_str(self.0) }
+}
+impl std::error::Error for ConfigFailure {}
+
 
 pub fn notify(st: &Arc<AppState>, name: &str, status: &str, reason: &str) {
     let sender = crate::push::send::Sender::new(st.clone(), crate::push::server_env());
@@ -77,7 +89,7 @@ pub struct Live { pub st: Arc<AppState>, pub row: SessionRow }
 
 impl tick::Env for Live {
     fn now(&self) -> f64 { crate::nav_requests::now() }
-    fn automations(&self) -> bool { automations(&self.st) }
+    fn automations(&self) -> Result<bool, &'static str> { automations(&self.st) }
     fn branch(&self) -> Option<String> { branch(&self.row) }
     fn entry_delivered(&self, entry_id: Option<String>) -> BoxFuture<'_, Option<bool>> {
         Box::pin(async move {
@@ -112,6 +124,24 @@ impl tick::Env for Live {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    pub(crate) fn invalid_config_state(home: &std::path::Path) -> std::sync::Arc<crate::routes::AppState> {
+        let mut state = crate::routes::AppState::new(crate::config::Config {
+            listen: "127.0.0.1:0".parse().unwrap(), upstream: "127.0.0.1:1".parse().unwrap(),
+            internal_secret: "fixture-secret".into(), auth_token: "fixture-owner".into(),
+            log_path: None, trusted: crate::auth::TrustedHosts::parse("127.0.0.1"),
+        });
+        let mut list_env = crate::list::bridge::ListEnv::from_env();
+        list_env.dirs = None;
+        state.list = std::sync::Arc::new(crate::list::bridge::ListBridge::new(list_env,
+            crate::list::facts::FactsClient::new("127.0.0.1:1".parse().unwrap(), "fixture-secret".into())));
+        state.accounts.env = crate::accounts::environment::AccountEnvironment::from_map([
+            ("HOME".into(), home.to_string_lossy().into_owned()),
+            ("USERPROFILE".into(), home.to_string_lossy().into_owned()),
+            ("CP_AUTOMATIONS".into(), "inválido".into()),
+        ].into());
+        std::sync::Arc::new(state)
+    }
+
     pub(crate) fn golden() -> serde_json::Value {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../backend/tests/fixtures/contract/loop/cases.json");
         serde_json::from_slice(&std::fs::read(path).expect("golden do Python (gen_loop.py)")).unwrap()

@@ -15,7 +15,7 @@ pub(super) trait FinishSources: Sources {
     fn failure(&self, sid: &str, code: &str);
 }
 
-fn permitted(enabled: &Value, threshold: &Value, elapsed: f64) -> Result<bool, &'static str> {
+pub(super) fn permitted(enabled: &Value, threshold: &Value, elapsed: f64) -> Result<bool, &'static str> {
     if !crate::config_sync::apply::truthy(enabled) { return Ok(false); }
     let minimum = match threshold {
         Value::Bool(value) => f64::from(u8::from(*value)),
@@ -111,8 +111,7 @@ impl FinishSources for super::Watch {
         crate::provider_models::kimi_working(&dirs, row.jsonl.as_deref())
     }
     fn settings(&self) -> Result<(Value, Value), String> {
-        let config = crate::config_sync::runtime::RuntimeConfig::from_state(&self.st)?;
-        Ok((config.get("notify_finished"), config.get("finish_min_seconds")))
+        Ok((self.config.get("notify_finished"), self.config.get("finish_min_seconds")))
     }
     fn notify_finished(&self, name: &str) { self.sender.notify(name, super::Notice::Finished(None)); }
     fn failure(&self, sid: &str, code: &str) {
@@ -168,7 +167,9 @@ mod tests {
             let source = std::sync::Arc::new(Fake {provider:provider.into(),scenario:"appeared_before_send".into(),reads:Mutex::default(),failed_read:0,failures:Mutex::default(),rechecks:0,advance_marker:false,series:Mutex::new([("sid".into(),1000.0)].into()),sleeps:Mutex::default(),notices:Mutex::default()});
             let watch = std::sync::Arc::new(super::super::Watch {
                 finish_source: Some(source.clone()), sender: super::super::Sender::new(state.clone(), Default::default()),
-                st: state, env: Default::default(), hooks: Mutex::default(),
+                config: crate::config_sync::runtime::RuntimeConfig::from_state(&state).unwrap(),
+                frozen: super::super::settings::Frozen::load(&state.settings_snapshot().unwrap()).unwrap(),
+                st: state, hooks: Mutex::default(),
                 memory: Mutex::new(super::super::Memory {started:[("sid".into(),1000.0)].into(),..Default::default()}),
                 memory_path: home.path().join("push.json"),
             });

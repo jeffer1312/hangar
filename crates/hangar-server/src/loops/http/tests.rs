@@ -6,6 +6,7 @@ struct Fake {
     store: Store,
     rows: Vec<SessionRow>,
     automations: bool,
+    config: Option<Arc<AppState>>,
     branch: Option<String>,
     queued: Mutex<BTreeMap<String, Vec<Value>>>,
     pushed: Mutex<Vec<Value>>,
@@ -14,7 +15,7 @@ struct Fake {
 impl Backend for Fake {
     fn store(&self) -> Store { self.store.clone() }
     fn now(&self) -> f64 { 1000.0 }
-    fn automations(&self) -> bool { self.automations }
+    fn automations(&self) -> Result<bool, &'static str> { self.config.as_ref().map_or(Ok(self.automations), |state| super::super::automations(state)) }
     fn row<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<Option<SessionRow>, Reply>> {
         Box::pin(async move { Ok(self.rows.iter().find(|r| r.name == name).cloned()) })
     }
@@ -51,7 +52,7 @@ async fn routes_match_the_python() {
                 row(json!({"name": "cx", "cwd": "/repo", "jsonl": "/repo/x.jsonl", "provider": "codex"})),
                 row(json!({"name": "b", "cwd": "/b", "jsonl": "/b/t.jsonl", "provider": "claude"})),
             ],
-            automations: c["automations"].as_bool().unwrap(),
+            automations: c["automations"].as_bool().unwrap(), config: None,
             branch: c["branch"].as_str().map(str::to_owned),
             queued: Mutex::default(), pushed: Mutex::default(),
         };
@@ -117,7 +118,7 @@ proptest::proptest! {
         let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let fake = Fake { store: Store::new(dir.path()), rows: vec![row(json!({"name": "s", "jsonl": "/t", "provider": "claude"}))],
-            automations: true, branch: None, queued: Mutex::default(), pushed: Mutex::default() };
+            automations: true, config: None, branch: None, queued: Mutex::default(), pushed: Mutex::default() };
         for op in [Op::ThenSet, Op::Create, Op::Resolve, Op::Refine] {
             let _ = rt.block_on(handle(&fake, "s", op, &raw));
         }
@@ -131,7 +132,7 @@ async fn guest_loop_validation_preserves_original_errors() {
     for (index, case) in fixtures["rows"].as_array().unwrap().iter().enumerate() {
         if case["status"]!=422 {continue;}
         let dir=tempfile::tempdir().unwrap();
-        let fake=Fake {store:Store::new(dir.path()),rows:vec![],automations:true,branch:None,queued:Mutex::default(),pushed:Mutex::default()};
+        let fake=Fake {store:Store::new(dir.path()),rows:vec![],automations:true,config:None,branch:None,queued:Mutex::default(),pushed:Mutex::default()};
         let operation=match case["model"].as_str().unwrap() {"LoopCreate"=>Op::Create,"LoopResolve"=>Op::Resolve,"LoopRefine"=>Op::Refine,"ThenLinkBody"=>Op::ThenSet,other=>panic!("modelo {other}")};
         let body=serde_json::to_vec(&case["body"]).unwrap();
         let (status, response)=handle(&fake,"cc",operation,&body).await;
@@ -146,7 +147,7 @@ async fn guest_loop_checkcmd_preserves_original_file_normalization() {
     let fixtures:Value=crate::orchestration::codec::loads(include_str!("../../../../../backend/tests/fixtures/contract/guests/loop-checkcmd.json")).unwrap();
     for case in fixtures["rows"].as_array().unwrap() {
         let dir=tempfile::tempdir().unwrap();
-        let fake=Fake {store:Store::new(dir.path()),rows:vec![row(json!({"name":"cc","provider":"claude"}))],automations:true,branch:None,queued:Mutex::default(),pushed:Mutex::default()};
+        let fake=Fake {store:Store::new(dir.path()),rows:vec![row(json!({"name":"cc","provider":"claude"}))],automations:true,config:None,branch:None,queued:Mutex::default(),pushed:Mutex::default()};
         let body=crate::orchestration::codec::dumps(&json!({"goal":"fixture","check_cmd":case["check_cmd"]}),false);
         let (status,mut response)=handle(&fake,"cc",Op::Create,body.as_bytes()).await;
         assert_eq!(status.as_u16(),case["status"].as_u64().unwrap() as u16,"GUE-083: {body}");
@@ -168,7 +169,7 @@ async fn guest_loop_io_preserves_previous_record_and_effects() {
     let mut failures=Vec::new();
     for case in fixture["rows"].as_array().unwrap() {
         let dir=tempfile::tempdir().unwrap();
-        let fake=Fake {store:Store::new(dir.path()),rows:vec![row(json!({"name":"s","provider":"claude"}))],automations:true,branch:None,queued:Mutex::default(),pushed:Mutex::default()};
+        let fake=Fake {store:Store::new(dir.path()),rows:vec![row(json!({"name":"s","provider":"claude"}))],automations:true,config:None,branch:None,queued:Mutex::default(),pushed:Mutex::default()};
         fake.store.set("s",case["initial"].as_object().unwrap()).unwrap();
         let path=fake.store.loop_dir().join("s.json");
         let before=std::fs::read(&path).unwrap();
@@ -193,4 +194,19 @@ async fn guest_loop_io_preserves_previous_record_and_effects() {
         if cors!=case["cors"].as_str(){failures.push(format!("{} {}: {cors:?}",method,case["tail"]));}
     }
     assert!(failures.is_empty(),"CORS de exceção externa: {failures:?}");
+}
+
+#[tokio::test]
+async fn guest_loop_invalid_config_refuses_create_and_refine_without_effects() {
+    for op in [Op::Create, Op::Refine] {
+        let home = tempfile::tempdir().unwrap();
+        let fake = Fake {store:Store::new(home.path()),rows:vec![row(json!({"name":"s","provider":"claude"}))],automations:true,
+            config:Some(crate::loops::tests::invalid_config_state(home.path())),branch:None,queued:Mutex::default(),pushed:Mutex::default()};
+        let (status, body) = handle(&fake,"s",op,br#"{"goal":"g"}"#).await;
+        assert_eq!(status,StatusCode::SERVICE_UNAVAILABLE,"D52 {op:?}: {body}");
+        assert_eq!(body["detail"]["code"],"loop_config_invalid");
+        assert!(fake.queued.lock().unwrap().is_empty());
+        assert!(fake.pushed.lock().unwrap().is_empty());
+        assert!(fake.store.get("s").is_none());
+    }
 }

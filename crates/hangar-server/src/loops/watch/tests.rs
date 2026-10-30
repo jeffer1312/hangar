@@ -7,6 +7,7 @@ struct Fake {
     rows: Mutex<Option<Vec<SessionRow>>>,
     sent: bool,
     automations: bool,
+    config: Option<Arc<AppState>>,
     deliver_fails: bool,
     ticks: Arc<Mutex<Vec<String>>>,
     delivered: Mutex<Vec<(String, String)>>,
@@ -25,7 +26,7 @@ impl Host for Fake {
         let ticks = self.ticks.clone();
         Box::pin(async move { lock(&ticks).push(row.name); })
     }
-    fn automations(&self) -> bool { self.automations }
+    fn automations(&self) -> Result<bool, &'static str> { self.config.as_ref().map_or(Ok(self.automations), |state| super::super::automations(state)) }
     fn deliver<'a>(&'a self, target: &'a str, text: &'a str) -> BoxFuture<'a, Result<(), String>> {
         Box::pin(async move {
             if self.deliver_fails { return Err("erro_sessao_inexistente".into()); }
@@ -186,4 +187,16 @@ async fn boot_without_the_list_kills_nothing() {
     w.boot(2, Duration::ZERO).await;
     assert_eq!(status(&w.host.store().get("s").unwrap()), "running");
     assert_eq!(*lock(&w.host.diags), ["loop.boot_resume_falhou:list_unavailable"]);
+}
+
+#[tokio::test]
+async fn guest_loop_invalid_config_preserves_chain_and_reports() {
+    let home = tempfile::tempdir().unwrap();
+    let source = Fake {config:Some(crate::loops::tests::invalid_config_state(home.path())),..host(&home,vec![])};
+    source.store().set_chain("s","target","text").unwrap();
+    let before = source.store().chain("s");
+    assert_eq!(fire_chain(&source,"s").await,Chain::Failed("loop_config_invalid".into()));
+    assert_eq!(source.store().chain("s"),before);
+    assert!(lock(&source.delivered).is_empty());
+    assert_eq!(*lock(&source.diags),["loop.chain_failed:loop_config_invalid"]);
 }

@@ -237,3 +237,13 @@ proptest::proptest! {
         let _ = reset_delay(&reset, chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap().and_hms_opt(0, 0, 0).unwrap());
     }
 }
+
+#[test]
+fn guest_watch_poll_zero_matches_original_sleep() {
+    let fixture: Value = serde_json::from_str(include_str!("../../../../../backend/tests/fixtures/contract/guests/watch-settings.json")).unwrap();
+    let case = fixture["rows"].as_array().unwrap().iter().find(|row| row["field"] == "stall_poll_seconds" && row["input"] == "0").unwrap();
+    assert_eq!(case["sleep"], "completed");
+    let snapshot = crate::machine_peers::dotenv::SettingsSnapshot::from_parts(
+        crate::machine_peers::dotenv::SettingsEnvironment::from_pairs([("CP_STALL_POLL_SECONDS", "0")]), String::new());
+    assert_eq!(settings::Frozen::load(&snapshot).unwrap().poll, settings::Poll::Seconds(0.0), "GUE-082: zero não recebe intervalo de reserva");
+}

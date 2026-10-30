@@ -26,7 +26,7 @@ pub trait Host: Send + Sync + 'static {
     /// A fila entregou algo neste fim de turno (o turno que vem é do texto, não do trabalho).
     fn just_sent<'a>(&'a self, name: &'a str, since: f64) -> BoxFuture<'a, bool>;
     fn tick(&self, row: SessionRow) -> BoxFuture<'static, ()>;
-    fn automations(&self) -> bool;
+    fn automations(&self) -> Result<bool, &'static str>;
     fn deliver<'a>(&'a self, target: &'a str, text: &'a str) -> BoxFuture<'a, Result<(), String>>;
     fn notify(&self, name: &str, status: &str, reason: &str);
     fn now(&self) -> f64;
@@ -38,7 +38,14 @@ pub enum Chain { Off, Absent, Sent, Dropped, Failed(String) }
 
 /// Um salto só: entregue, o vínculo sai; falha de entrega o mantém para o próximo fim de turno.
 pub async fn fire_chain(host: &dyn Host, name: &str) -> Chain {
-    if !host.automations() { return Chain::Off; }
+    match host.automations() {
+        Ok(false) => return Chain::Off,
+        Ok(true) => {},
+        Err(code) => {
+            host.diag("loop.chain_failed", name, code, "configuração inválida; vínculo preservado sem entregar");
+            return Chain::Failed(code.into());
+        }
+    }
     let store = host.store();
     let Some(link) = store.chain(name) else { return Chain::Absent };
     let field = |k: &str| link.get(k).and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_owned);
@@ -165,7 +172,7 @@ struct HostEnv<'a> { host: &'a dyn Host, name: &'a str }
 
 impl super::tick::Env for HostEnv<'_> {
     fn now(&self) -> f64 { self.host.now() }
-    fn automations(&self) -> bool { self.host.automations() }
+    fn automations(&self) -> Result<bool, &'static str> { self.host.automations() }
     fn branch(&self) -> Option<String> { None }
     fn entry_delivered(&self, _id: Option<String>) -> BoxFuture<'_, Option<bool>> { Box::pin(async { None }) }
     fn run_check(&self, _cmd: String) -> BoxFuture<'_, (i64, String)> { Box::pin(async { (super::check::UNRUNNABLE, String::new()) }) }
@@ -218,11 +225,13 @@ impl Host for Live {
             let name = row.name.clone();
             let env = super::Live { st: st.clone(), row };
             if let Err(e) = super::tick::run_tick(&super::store(&st), &name, &env).await {
-                st.diag.report("loop.tick_failed", &name, &format!("{:?}", e.kind()), "volta do loop não gravou; o loop ficou como estava");
+                let code = e.get_ref().and_then(|error| error.downcast_ref::<super::ConfigFailure>())
+                    .map_or_else(|| format!("{:?}", e.kind()), |error| error.0.into());
+                st.diag.report("loop.tick_failed", &name, &code, "volta do loop interrompida; trabalho preservado");
             }
         })
     }
-    fn automations(&self) -> bool { super::automations(&self.st) }
+    fn automations(&self) -> Result<bool, &'static str> { super::automations(&self.st) }
     fn deliver<'a>(&'a self, target: &'a str, text: &'a str) -> BoxFuture<'a, Result<(), String>> {
         Box::pin(async move {
             crate::session_write::input::deliver_text(&self.st, target, text).await

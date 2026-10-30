@@ -63,7 +63,7 @@ pub(crate) fn matches(method: &Method, path: &str) -> bool { op(method, path).is
 pub trait Backend: Send + Sync {
     fn store(&self) -> Store;
     fn now(&self) -> f64;
-    fn automations(&self) -> bool;
+    fn automations(&self) -> Result<bool, &'static str>;
     /// A linha da sessão; `Err` é a resposta da lista indisponível.
     fn row<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<Option<SessionRow>, (StatusCode, Value)>>;
     fn exists<'a>(&'a self, name: &'a str) -> BoxFuture<'a, bool>;
@@ -81,7 +81,7 @@ struct RouteEnv<'a> { b: &'a dyn Backend, name: &'a str }
 
 impl tick::Env for RouteEnv<'_> {
     fn now(&self) -> f64 { self.b.now() }
-    fn automations(&self) -> bool { self.b.automations() }
+    fn automations(&self) -> Result<bool, &'static str> { self.b.automations() }
     fn branch(&self) -> Option<String> { None }
     fn entry_delivered(&self, _id: Option<String>) -> BoxFuture<'_, Option<bool>> { Box::pin(async { None }) }
     fn run_check(&self, _cmd: String) -> BoxFuture<'_, (i64, String)> { Box::pin(async { (super::check::UNRUNNABLE, String::new()) }) }
@@ -104,7 +104,14 @@ fn unprocessable(msg: &str) -> Reply {
     (StatusCode::UNPROCESSABLE_ENTITY, json!({"detail": [{"type": "value_error", "loc": ["body"], "msg": msg, "input": null}]}))
 }
 
+fn config_failed(code: &'static str) -> Reply {
+    refused(StatusCode::SERVICE_UNAVAILABLE, code, "a configuração das automações está inválida", json!({}))
+}
+
 fn unwritable(e: std::io::Error) -> Reply {
+    if let Some(error) = e.get_ref().and_then(|error| error.downcast_ref::<super::ConfigFailure>()) {
+        return config_failed(error.0);
+    }
     tracing::error!(code = "loop_store_unwritable", kind = ?e.kind(), "loop: sidecar não gravou");
     refused(StatusCode::INTERNAL_SERVER_ERROR, "loop_store_unwritable", "o estado do loop não pôde ser gravado", json!({}))
 }
@@ -214,7 +221,7 @@ async fn create(b: &dyn Backend, name: &str, body: &[u8]) -> Result<Reply, Reply
     if row.provider != "claude" {
         return Err(refused(StatusCode::CONFLICT, "erro_loop_provider_invalido", "loop runner só suporta sessões claude", json!({})));
     }
-    if !b.automations() {
+    if !b.automations().map_err(config_failed)? {
         return Err(refused(StatusCode::CONFLICT, "erro_automacoes_desligadas", "automações desligadas (kill-switch)", json!({})));
     }
     let store = b.store();
@@ -273,7 +280,7 @@ async fn refine(b: &dyn Backend, body: &[u8]) -> Result<Reply, Reply> {
     let m = object(body, &["goal", "check_cmd"])?;
     let goal = text(&m, "goal", Some(super::refine::GOAL_MAX))?;
     let check_cmd = optional_text(&m, "check_cmd")?;
-    if !b.automations() {
+    if !b.automations().map_err(config_failed)? {
         return Err(refused(StatusCode::CONFLICT, "erro_automacoes_desligadas", "automações desligadas (kill-switch)", json!({})));
     }
     match b.refine(&goal, check_cmd.as_deref()).await {
@@ -312,7 +319,7 @@ pub struct Live { pub st: Arc<AppState> }
 impl Backend for Live {
     fn store(&self) -> Store { super::store(&self.st) }
     fn now(&self) -> f64 { crate::nav_requests::now() }
-    fn automations(&self) -> bool { super::automations(&self.st) }
+    fn automations(&self) -> Result<bool, &'static str> { super::automations(&self.st) }
     fn row<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<Option<SessionRow>, Reply>> {
         Box::pin(async move {
             match tokio::time::timeout(crate::locate::LOCATE_TIMEOUT, self.st.list.find_row(name)).await {
