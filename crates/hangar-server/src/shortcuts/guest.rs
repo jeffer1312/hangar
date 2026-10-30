@@ -348,16 +348,7 @@ async fn plan(
         },
     )
     .await?;
-    let real = std::fs::canonicalize(&cwd).map_err(|_| unavailable())?;
-    let root = std::fs::canonicalize(&guest.root).map_err(|_| unavailable())?;
-    if !real.starts_with(&root) {
-        return Err(error(
-            403,
-            "erro_fora_da_pasta",
-            "o convidado só abre sessão dentro da pasta dele",
-            json!({}),
-        ));
-    }
+    let real = confined_folder(&cwd, Path::new(&guest.root))?;
     if !run_code {
         value["pasta"] = json!(real.to_string_lossy());
         return Ok(None);
@@ -455,6 +446,31 @@ async fn plan(
         &msg,
         json!({"codigo":code,"saida":tail,"terminal":public}),
     ))
+}
+
+fn confined_folder(cwd: &Path, root: &Path) -> Result<PathBuf, Response> {
+    let real = std::fs::canonicalize(cwd).map_err(|_| unavailable())?;
+    let root = std::fs::canonicalize(root).map_err(|_| unavailable())?;
+    if !real.starts_with(&root) {
+        return Err(error(403, "erro_fora_da_pasta",
+            "o convidado só abre sessão dentro da pasta dele", json!({})));
+    }
+    Ok(real)
+}
+
+#[cfg(test)]
+mod root_tests {
+    #[test]
+    fn registered_root_and_canonical_path_share_the_same_physical_boundary() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().join("convidado");
+        let child = root.join("projeto");
+        std::fs::create_dir_all(&child).unwrap();
+        let registered = crate::login_guests::store::valid_root(root.to_str().unwrap()).unwrap();
+        let real = std::fs::canonicalize(&child).unwrap();
+        assert_eq!(super::confined_folder(&real, std::path::Path::new(&registered)).unwrap(), real);
+        assert_eq!(super::confined_folder(home.path(), std::path::Path::new(&registered)).unwrap_err().status(), 403);
+    }
 }
 
 fn find_shell(name: &str, env: &BTreeMap<String, String>) -> Option<String> {

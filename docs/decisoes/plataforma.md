@@ -1123,6 +1123,34 @@ a página por sessão em `~/.hangar/paginas` e a conversa mostra o cartão: PWA 
     do esquema.
   - O app do celular passa as fontes que usa: a do sistema e a mono do tema dele.
 
+## Motores, convidados e peers no Rust
+
+(30/10/2026.) As três áreas passam a executar no servidor nativo, incluindo os consumidores
+dos seus dados: configurações compartilhadas, instalação e saúde de agentes, login e cofre de
+sincronização, autorização e visibilidade de sessões, descoberta das máquinas e atualização do
+checkout. Os handlers e módulos Python de domínio foram removidos; nenhuma dessas rotas ganhou
+uma ponte de reserva. O painel passou a mostrar `POST /api/guests`, pois a listagem administrativa
+já pertence a `/api/me`.
+
+Na falha de leitura de `guests.json`, permanece a última leitura válida, conforme decisão do
+usuário. O porteiro decide a identidade no Rust; consumidores independentes ainda atendidos pelo
+Python recebem apenas o transporte assinado já existente. A ponte privada de abertura do dono
+recusa uma identidade de convidado no envelope. Atalhos do convidado conferem a pasta física nos
+dois lados da comparação, inclusive os prefixos de caminho do Windows.
+
+O serviço anuncia a saúde antes dos passos demorados de atualização. Ações e adoção aguardam a
+barreira da preparação; a parada aguarda os produtores antes de fechar os serviços que eles
+publicam. No instalador, o binário Rust chega antes dos agentes que usam seu comando de instalação.
+
+Ficam no Python quatro utilitários genéricos: leitura de JSON de `--settings`, resolução da pasta
+Codex e duas operações de escrita atômica, ainda usadas por personalizações, OAuth e confiança de
+pasta independentes. Os ramos antigos de motor na transferência foram apagados: a transferência
+pública já recusava motores antes dos efeitos, inclusive ao reconferir a origem.
+
+As provas de contrato estão em `tests/it/engines*`, `login_guests`, `machine_peers`, `update_*`,
+`harness_routes` e nos módulos `harness_setup`, `codex_setup` e `startup` do servidor. A revisão
+de integração também conferiu os imports Python após as exclusões.
+
 ## Configuração compartilhada: leva o conteúdo, o destino resolve caminho e programa
 
 (30/10/2026.) A migração dos motores inclui os leitores e escritores do pacote de configuração.

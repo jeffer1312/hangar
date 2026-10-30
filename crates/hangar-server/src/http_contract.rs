@@ -32,6 +32,7 @@ fn matches_path(pattern: &str, path: &str) -> bool {
             (None, None) => return true,
             (Some(pattern), Some(component)) => {
                 if pattern.starts_with('{') && pattern.ends_with('}') && pattern.len() > 2 {
+                    if pattern.ends_with(":path}") { return expected.next().is_none(); }
                     if component.is_empty() { return false; }
                 } else if pattern != component { return false; }
             }

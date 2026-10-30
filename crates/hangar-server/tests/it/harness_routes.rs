@@ -32,6 +32,10 @@ async fn harness_admission_and_install_status_are_native() {
     assert_eq!(wrong.status(), 405);
     let redirect = client.post(format!("http://{address}/api/harness/conserto")).send().await.unwrap();
     assert_eq!(redirect.status(), 307);
+    let nested = client.post(format!("http://{address}/api/harness/conserto/sem/atalho"))
+        .bearer_auth(crate::fake::OWNER).send().await.unwrap();
+    assert_eq!(nested.status(), 400);
+    assert_eq!(nested.json::<Value>().await.unwrap()["detail"]["code"], "erro_harness_conserto");
     let preflight = client.request(reqwest::Method::OPTIONS, &url)
         .header("origin", "https://client.invalid").header("access-control-request-method", "GET")
         .send().await.unwrap();
