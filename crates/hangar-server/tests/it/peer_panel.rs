@@ -14,6 +14,9 @@ fn fixture() -> Value {
     ))
     .unwrap()
 }
+fn fixture_path(root: &std::path::Path, suffix: &str) -> String {
+    suffix.split('/').fold(root.to_path_buf(), |path, part| path.join(part)).to_string_lossy().into_owned()
+}
 fn panel(root: &std::path::Path) -> Panel {
     let config = root.join(".hangar/config");
     std::fs::create_dir_all(&config).unwrap();
@@ -57,13 +60,11 @@ fn panel_projections_match_python() {
                         &std::collections::BTreeSet::from(["one".into()]),
                     )
                     .unwrap();
-                let result: Value = serde_json::from_str(
-                    &result
-                        .to_string()
-                        .replace(&root.path().display().to_string(), "<ROOT>"),
-                )
-                .unwrap();
-                assert_eq!(result, row["result"], "{row}");
+                let mut expected = row["result"].clone();
+                if let Some(suffix) = expected["cwd_real"].as_str().and_then(|path| path.strip_prefix("<ROOT>/")) {
+                    expected["cwd_real"] = json!(fixture_path(root.path(), suffix));
+                }
+                assert_eq!(result, expected, "{row}");
             }
             "detect_command" => {
                 let project = tempfile::tempdir().unwrap();
@@ -259,7 +260,20 @@ async fn panel_scan_preserves_candidates_and_backend_failure_notice() {
         let mut panel=panel(root.path());
         let mock=Arc::new(Mock::default());
         let escaped=serde_json::to_string(&root.path().display().to_string()).unwrap();
-        let normalized=|value:&Value|serde_json::from_str::<Value>(&value.to_string().replace("<ROOT>",&escaped[1..escaped.len()-1])).unwrap();
+        let normalized=|value:&Value| {
+            let mut result=serde_json::from_str::<Value>(&value.to_string().replace("<ROOT>",&escaped[1..escaped.len()-1])).unwrap();
+            // Só os caminhos derivados do sistema mudam de separador; a mensagem conserva a entrada.
+            let source_rows=value.as_array().or_else(||value["entries"].as_array());
+            let result_rows=if result.is_array(){result.as_array_mut()}else{result.get_mut("entries").and_then(Value::as_array_mut)};
+            if let (Some(sources),Some(rows))=(source_rows,result_rows) {
+                for (source,target) in sources.iter().zip(rows) {
+                    if let Some(suffix)=source["cwd"].as_str().and_then(|path|path.strip_prefix("<ROOT>/")) {
+                        target["cwd"]=json!(fixture_path(root.path(),suffix));
+                    }
+                }
+            }
+            result
+        };
         let result=if row["response"].is_null(){json!({"error":"fixture refusal"})}else{normalized(&row["response"])};
         mock.responses.lock().unwrap().push_back(result);panel.transport=mock.clone();
         let path=row["path"].as_str().unwrap().replace("<ROOT>",&root.path().display().to_string());
