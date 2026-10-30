@@ -520,7 +520,7 @@ while True:
     env['CLAUDE_CONFIG_DIR']=str(config)
     command=shlex.join(['env','CLAUDE_CONFIG_DIR='+str(config),sys.executable,str(cli),'--session-id',sid,str(transcript)])
     subprocess.run(['tmux','-L',label,'-f','/dev/null','new-session','-d','-s','session','-x','100','-y','40','-c',str(tmp_path),
-        shlex.join(['bash','-c',command])],env=env,check=True)
+        shlex.join(['bash','-c',command])],env=env,cwd=tmp_path,check=True)
     raw_run=subprocess.run
     def mux_run(args,**kwargs):
         return raw_run(args[:1]+['-L',label]+args[1:] if args[0]=='tmux' else args,**kwargs)
@@ -536,8 +536,10 @@ while True:
         deadline=time.monotonic()+3
         binding=None
         while time.monotonic()<deadline:
-            binding=terminal.resolve_binding('session')
-            if binding and '❯' in tmux.capture_pane('session'): break
+            # O vínculo só é observado depois de a CLI concluir a partida no diretório da prova.
+            if '❯' in tmux.capture_pane('session'):
+                binding=terminal.resolve_binding('session')
+                if binding: break
             time.sleep(.01)
         pane=tmux.list_panes_all()['session'][0]
         agent=registry_module.agente_do_pane(pane['pid'])[1]
