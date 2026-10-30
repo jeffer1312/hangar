@@ -240,7 +240,7 @@ async fn guest_loop_http_rechecks_provider_after_transfer_before_any_effect() {
 #[tokio::test]
 async fn guest_loop_http_discovery_failure_preserves_waiting_confirmation() {
     use hangar_server::list::{bridge::{ListBridge,ListEnv,parse_dirs},facts::FactsClient,mux::Mux};
-    for resolve in [true] {
+    for maximum in [0, 10] {
         let root=tempfile::tempdir().unwrap();
         let home=root.path().join("home");
         let program=crate::list_support::sessions(root.path(),1);
@@ -255,18 +255,18 @@ async fn guest_loop_http_discovery_failure_preserves_waiting_confirmation() {
         assert_eq!(st.list.refresh().await.unwrap().rows.iter().find(|r|r.name=="s0").unwrap().provider,"claude");
         std::fs::write(root.path().join("fail"), "fixture").unwrap();
         let store=hangar_server::loops::store(&st);
-        let mut initial=hangar_server::loops::store::new_loop("objetivo",None,10,false,1.0);
-        initial.insert("status".into(),serde_json::json!(if resolve {"done_claimed"} else {"done"}));
+        let mut initial=hangar_server::loops::store::new_loop("objetivo",None,maximum,false,1.0);
+        initial.insert("status".into(),serde_json::json!("done_claimed"));
         store.set("s0",&initial).unwrap();
         let path=store.loop_dir().join("s0.json");
         let before=std::fs::read(&path).unwrap();
-        let (url,body)=if resolve {("/api/sessions/s0/loop/resolve",serde_json::json!({"accept":false}))} else {("/api/sessions/s0/loop",serde_json::json!({"goal":"novo","require_branch":false}))};
+        let (url,body)=("/api/sessions/s0/loop/resolve",serde_json::json!({"accept":false}));
         let mut request=Request::post(url).header("authorization","Bearer owner").header("content-type","application/json").body(Body::from(serde_json::to_vec(&body).unwrap())).unwrap();
         request.extensions_mut().insert(ConnectInfo("192.0.2.1:1234".parse::<SocketAddr>().unwrap()));
         let response=hangar_server::routes::router(st).oneshot(request).await.unwrap();
         let status=response.status().as_u16();
         let body:Value=serde_json::from_slice(&to_bytes(response.into_body(),1048576).await.unwrap()).unwrap();
-        assert_eq!((status,body["detail"]["code"].clone()),(503,serde_json::json!("mux_unavailable")),"D59 resolve={resolve}: {body}");
+        assert_eq!((status,body["detail"]["code"].clone()),(503,serde_json::json!("mux_unavailable")),"D59 max_iters={maximum}: {body}");
         assert_eq!(std::fs::read(path).unwrap(),before,"D59: decisão usa o provedor atual sem alterar o vínculo");
     }
 }
