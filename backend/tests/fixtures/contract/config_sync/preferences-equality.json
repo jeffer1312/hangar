@@ -1,0 +1,436 @@
+{
+  "source_commit": "572f6bd70e4bf295128410cc5d9cd34ca9d06863",
+  "command": "uv run python tests/fixtures/contract/config_sync/generate_preferences_equality.py",
+  "injections": [
+    "p\u00f3s-aplicar isolado; pacote real passa por pack/unpack",
+    "backup fixture"
+  ],
+  "cases": [
+    {
+      "initial": {
+        "notify_finished": 1
+      },
+      "incoming": {
+        "notify_finished": true
+      },
+      "report": {
+        "items": {
+          "hangar_prefs": {
+            "status": "same",
+            "changed": [],
+            "warnings": []
+          }
+        },
+        "backup": ""
+      },
+      "files": {
+        ".claude/runtime-config.json": "{\"notify_finished\": 1}"
+      }
+    },
+    {
+      "initial": {
+        "notify_finished": 0
+      },
+      "incoming": {
+        "notify_finished": false
+      },
+      "report": {
+        "items": {
+          "hangar_prefs": {
+            "status": "same",
+            "changed": [],
+            "warnings": []
+          }
+        },
+        "backup": ""
+      },
+      "files": {
+        ".claude/runtime-config.json": "{\"notify_finished\": 0}"
+      }
+    },
+    {
+      "initial": {
+        "notify_finished": true
+      },
+      "incoming": {
+        "notify_finished": 1
+      },
+      "report": {
+        "items": {
+          "hangar_prefs": {
+            "status": "same",
+            "changed": [],
+            "warnings": []
+          }
+        },
+        "backup": ""
+      },
+      "files": {
+        ".claude/runtime-config.json": "{\"notify_finished\": true}"
+      }
+    },
+    {
+      "initial": {
+        "notify_finished": false
+      },
+      "incoming": {
+        "notify_finished": 0
+      },
+      "report": {
+        "items": {
+          "hangar_prefs": {
+            "status": "same",
+            "changed": [],
+            "warnings": []
+          }
+        },
+        "backup": ""
+      },
+      "files": {
+        ".claude/runtime-config.json": "{\"notify_finished\": false}"
+      }
+    },
+    {
+      "initial": {
+        "upload_retention_days": 1
+      },
+      "incoming": {
+        "upload_retention_days": 1.0
+      },
+      "report": {
+        "items": {
+          "hangar_prefs": {
+            "status": "same",
+            "changed": [],
+            "warnings": []
+          }
+        },
+        "backup": ""
+      },
+      "files": {
+        ".claude/runtime-config.json": "{\"upload_retention_days\": 1}"
+      }
+    },
+    {
+      "initial": {
+        "upload_retention_days": 1.0
+      },
+      "incoming": {
+        "upload_retention_days": 1
+      },
+      "report": {
+        "items": {
+          "hangar_prefs": {
+            "status": "same",
+            "changed": [],
+            "warnings": []
+          }
+        },
+        "backup": ""
+      },
+      "files": {
+        ".claude/runtime-config.json": "{\"upload_retention_days\": 1.0}"
+      }
+    },
+    {
+      "initial": {
+        "editor": 0
+      },
+      "incoming": {
+        "editor": false
+      },
+      "report": {
+        "items": {
+          "hangar_prefs": {
+            "status": "same",
+            "changed": [],
+            "warnings": []
+          }
+        },
+        "backup": ""
+      },
+      "files": {
+        ".claude/runtime-config.json": "{\"editor\": 0}"
+      }
+    },
+    {
+      "initial": {
+        "editor": NaN
+      },
+      "incoming": {
+        "editor": NaN
+      },
+      "report": {
+        "items": {
+          "hangar_prefs": {
+            "status": "same",
+            "changed": [],
+            "warnings": [
+              {
+                "code": "config_sync_pref_rejected",
+                "params": {
+                  "key": "editor",
+                  "error": "editor: esperado texto"
+                }
+              }
+            ]
+          }
+        },
+        "backup": "\u27e6HOME\u27e7/.hangar/config-sync/backups/fixture"
+      },
+      "files": {
+        ".claude/runtime-config.json": "{\"editor\": NaN}",
+        ".hangar/config-sync/backups/fixture/files/.claude/runtime-config.json": "{\"editor\": NaN}"
+      }
+    },
+    {
+      "initial": {
+        "editor": Infinity
+      },
+      "incoming": {
+        "editor": Infinity
+      },
+      "report": {
+        "items": {
+          "hangar_prefs": {
+            "status": "same",
+            "changed": [],
+            "warnings": []
+          }
+        },
+        "backup": ""
+      },
+      "files": {
+        ".claude/runtime-config.json": "{\"editor\": Infinity}"
+      }
+    },
+    {
+      "initial": {
+        "editor": -Infinity
+      },
+      "incoming": {
+        "editor": Infinity
+      },
+      "report": {
+        "items": {
+          "hangar_prefs": {
+            "status": "same",
+            "changed": [],
+            "warnings": [
+              {
+                "code": "config_sync_pref_rejected",
+                "params": {
+                  "key": "editor",
+                  "error": "editor: esperado texto"
+                }
+              }
+            ]
+          }
+        },
+        "backup": "\u27e6HOME\u27e7/.hangar/config-sync/backups/fixture"
+      },
+      "files": {
+        ".claude/runtime-config.json": "{\"editor\": -Infinity}",
+        ".hangar/config-sync/backups/fixture/files/.claude/runtime-config.json": "{\"editor\": -Infinity}"
+      }
+    },
+    {
+      "initial": {
+        "editor": [
+          NaN
+        ]
+      },
+      "incoming": {
+        "editor": [
+          NaN
+        ]
+      },
+      "report": {
+        "items": {
+          "hangar_prefs": {
+            "status": "same",
+            "changed": [],
+            "warnings": []
+          }
+        },
+        "backup": ""
+      },
+      "files": {
+        ".claude/runtime-config.json": "{\"editor\": [NaN]}"
+      }
+    },
+    {
+      "initial": {
+        "editor": {
+          "x": 1
+        }
+      },
+      "incoming": {
+        "editor": {
+          "x": true
+        }
+      },
+      "report": {
+        "items": {
+          "hangar_prefs": {
+            "status": "same",
+            "changed": [],
+            "warnings": []
+          }
+        },
+        "backup": ""
+      },
+      "files": {
+        ".claude/runtime-config.json": "{\"editor\": {\"x\": 1}}"
+      }
+    },
+    {
+      "initial": {
+        "upload_retention_days": 9007199254740993
+      },
+      "incoming": {
+        "upload_retention_days": 9007199254740992.0
+      },
+      "report": {
+        "items": {
+          "hangar_prefs": {
+            "status": "applied",
+            "changed": [
+              "upload_retention_days"
+            ],
+            "warnings": []
+          }
+        },
+        "backup": "\u27e6HOME\u27e7/.hangar/config-sync/backups/fixture"
+      },
+      "files": {
+        ".claude/runtime-config.json": "{\n  \"upload_retention_days\": 9007199254740992\n}",
+        ".hangar/config-sync/backups/fixture/files/.claude/runtime-config.json": "{\"upload_retention_days\": 9007199254740993}"
+      }
+    },
+    {
+      "initial": {
+        "upload_retention_days": 9007199254740992.0
+      },
+      "incoming": {
+        "upload_retention_days": 9007199254740993
+      },
+      "report": {
+        "items": {
+          "hangar_prefs": {
+            "status": "applied",
+            "changed": [
+              "upload_retention_days"
+            ],
+            "warnings": []
+          }
+        },
+        "backup": "\u27e6HOME\u27e7/.hangar/config-sync/backups/fixture"
+      },
+      "files": {
+        ".claude/runtime-config.json": "{\n  \"upload_retention_days\": 9007199254740993\n}",
+        ".hangar/config-sync/backups/fixture/files/.claude/runtime-config.json": "{\"upload_retention_days\": 9007199254740992.0}"
+      }
+    },
+    {
+      "initial": {
+        "upload_retention_days": 1267650600228229401496703205376
+      },
+      "incoming": {
+        "upload_retention_days": 1.2676506002282294e+30
+      },
+      "report": {
+        "items": {
+          "hangar_prefs": {
+            "status": "same",
+            "changed": [],
+            "warnings": []
+          }
+        },
+        "backup": ""
+      },
+      "files": {
+        ".claude/runtime-config.json": "{\"upload_retention_days\": 1267650600228229401496703205376}"
+      }
+    },
+    {
+      "initial": {
+        "upload_retention_days": 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+      },
+      "incoming": {
+        "upload_retention_days": 1e+100
+      },
+      "report": {
+        "items": {
+          "hangar_prefs": {
+            "status": "applied",
+            "changed": [
+              "upload_retention_days"
+            ],
+            "warnings": []
+          }
+        },
+        "backup": "\u27e6HOME\u27e7/.hangar/config-sync/backups/fixture"
+      },
+      "files": {
+        ".claude/runtime-config.json": "{\n  \"upload_retention_days\": 10000000000000000159028911097599180468360808563945281389781327557747838772170381060813469985856815104\n}",
+        ".hangar/config-sync/backups/fixture/files/.claude/runtime-config.json": "{\"upload_retention_days\": 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000}"
+      }
+    },
+    {
+      "initial": {
+        "editor": Infinity
+      },
+      "incoming": {
+        "editor": 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+      },
+      "report": {
+        "items": {
+          "hangar_prefs": {
+            "status": "same",
+            "changed": [],
+            "warnings": [
+              {
+                "code": "config_sync_pref_rejected",
+                "params": {
+                  "key": "editor",
+                  "error": "editor: esperado texto"
+                }
+              }
+            ]
+          }
+        },
+        "backup": "\u27e6HOME\u27e7/.hangar/config-sync/backups/fixture"
+      },
+      "files": {
+        ".claude/runtime-config.json": "{\"editor\": Infinity}",
+        ".hangar/config-sync/backups/fixture/files/.claude/runtime-config.json": "{\"editor\": Infinity}"
+      }
+    },
+    {
+      "initial": {
+        "editor": {
+          "x": NaN
+        }
+      },
+      "incoming": {
+        "editor": {
+          "x": NaN
+        }
+      },
+      "report": {
+        "items": {
+          "hangar_prefs": {
+            "status": "same",
+            "changed": [],
+            "warnings": []
+          }
+        },
+        "backup": ""
+      },
+      "files": {
+        ".claude/runtime-config.json": "{\"editor\": {\"x\": NaN}}"
+      }
+    }
+  ]
+}

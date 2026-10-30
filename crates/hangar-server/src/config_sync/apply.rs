@@ -561,7 +561,7 @@ impl Apply {
             .filter(|(k, v)| {
                 super::preferences::editable(k)
                     && !["sync", "term_origins", "scan_roots"].contains(&k.as_str())
-                    && current.get(*k) != Some(*v)
+                    && !current.get(*k).is_some_and(|old| super::value_equality::equal(old, v))
             })
             .map(|(k, _)| k.clone())
             .collect();

@@ -13,7 +13,16 @@ fn files(root:&Path,folder:&Path,output:&mut BTreeMap<String,String>) {
 
 #[test]
 fn preferences_import_uses_runtime_validation_secrets_and_effects() {
-    let fixture=codec::loads(include_str!("../../../../backend/tests/fixtures/contract/config_sync/preferences-import.json")).unwrap();
+    compare(include_str!("../../../../backend/tests/fixtures/contract/config_sync/preferences-import.json"));
+}
+
+#[test]
+fn preferences_import_preserves_python_equality_before_validation() {
+    compare(include_str!("../../../../backend/tests/fixtures/contract/config_sync/preferences-equality.json"));
+}
+
+fn compare(raw: &str) {
+    let fixture=codec::loads(raw).unwrap();
     let mut differences=Vec::new();
     for (index,row) in fixture["cases"].as_array().unwrap().iter().enumerate() {
         let home=tempfile::tempdir().unwrap();

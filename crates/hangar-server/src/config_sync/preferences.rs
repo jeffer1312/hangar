@@ -172,8 +172,8 @@ pub fn coerce(key: &str, value: &Value) -> Result<Value, String> {
                     std::sync::LazyLock::new(|| {
                         regex::Regex::new(r"\A[+-]?[0-9](?:_?[0-9])*\z").unwrap()
                     });
-                let text = s.trim();
-                if INTEGER_TEXT.is_match(text) {
+                let text = crate::costs::py::normalized_number(s).unwrap_or_default();
+                if INTEGER_TEXT.is_match(&text) && text.bytes().filter(u8::is_ascii_digit).count() <= 4300 {
                     let text = text.replace('_', "");
                     let negative = text.starts_with('-');
                     let digits = text.trim_start_matches(['+', '-']).trim_start_matches('0');

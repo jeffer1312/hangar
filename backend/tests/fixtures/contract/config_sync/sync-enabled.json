@@ -1,0 +1,348 @@
+{
+  "source_commit": "572f6bd70e4bf295128410cc5d9cd34ca9d06863",
+  "command": "uv run python tests/fixtures/contract/config_sync/generate_sync_enabled.py",
+  "cases": [
+    {
+      "default": false,
+      "document": "{\"sync\": false}",
+      "response": {
+        "enabled": false,
+        "registered": false,
+        "user": null
+      }
+    },
+    {
+      "default": false,
+      "document": "{\"sync\": true}",
+      "response": {
+        "enabled": true,
+        "registered": false,
+        "user": null
+      }
+    },
+    {
+      "default": false,
+      "document": "{\"sync\": 0}",
+      "response": {
+        "enabled": false,
+        "registered": false,
+        "user": null
+      }
+    },
+    {
+      "default": false,
+      "document": "{\"sync\": 1}",
+      "response": {
+        "enabled": true,
+        "registered": false,
+        "user": null
+      }
+    },
+    {
+      "default": false,
+      "document": "{\"sync\": -1}",
+      "response": {
+        "enabled": true,
+        "registered": false,
+        "user": null
+      }
+    },
+    {
+      "default": false,
+      "document": "{\"sync\": \"\"}",
+      "response": {
+        "enabled": false,
+        "registered": false,
+        "user": null
+      }
+    },
+    {
+      "default": false,
+      "document": "{\"sync\": \"false\"}",
+      "response": {
+        "enabled": true,
+        "registered": false,
+        "user": null
+      }
+    },
+    {
+      "default": false,
+      "document": "{\"sync\": []}",
+      "response": {
+        "enabled": false,
+        "registered": false,
+        "user": null
+      }
+    },
+    {
+      "default": false,
+      "document": "{\"sync\": [1]}",
+      "response": {
+        "enabled": true,
+        "registered": false,
+        "user": null
+      }
+    },
+    {
+      "default": false,
+      "document": "{\"sync\": {}}",
+      "response": {
+        "enabled": false,
+        "registered": false,
+        "user": null
+      }
+    },
+    {
+      "default": false,
+      "document": "{\"sync\": {\"x\": 1}}",
+      "response": {
+        "enabled": true,
+        "registered": false,
+        "user": null
+      }
+    },
+    {
+      "default": false,
+      "document": "{\"sync\": null}",
+      "response": {
+        "enabled": false,
+        "registered": false,
+        "user": null
+      }
+    },
+    {
+      "default": false,
+      "document": "{\"sync\": NaN}",
+      "response": {
+        "enabled": true,
+        "registered": false,
+        "user": null
+      }
+    },
+    {
+      "default": false,
+      "document": "{\"sync\": Infinity}",
+      "response": {
+        "enabled": true,
+        "registered": false,
+        "user": null
+      }
+    },
+    {
+      "default": false,
+      "document": "{}",
+      "response": {
+        "enabled": false,
+        "registered": false,
+        "user": null
+      }
+    },
+    {
+      "default": false,
+      "document": "null",
+      "response": {
+        "enabled": false,
+        "registered": false,
+        "user": null
+      }
+    },
+    {
+      "default": false,
+      "document": "[]",
+      "response": {
+        "enabled": false,
+        "registered": false,
+        "user": null
+      }
+    },
+    {
+      "default": false,
+      "document": "{",
+      "response": {
+        "enabled": false,
+        "registered": false,
+        "user": null
+      }
+    },
+    {
+      "default": false,
+      "document": "{\"sync\": true, \"extra\": NaN}",
+      "response": {
+        "enabled": true,
+        "registered": false,
+        "user": null
+      }
+    },
+    {
+      "default": true,
+      "document": "{\"sync\": false}",
+      "response": {
+        "enabled": false,
+        "registered": false,
+        "user": null
+      }
+    },
+    {
+      "default": true,
+      "document": "{\"sync\": true}",
+      "response": {
+        "enabled": true,
+        "registered": false,
+        "user": null
+      }
+    },
+    {
+      "default": true,
+      "document": "{\"sync\": 0}",
+      "response": {
+        "enabled": false,
+        "registered": false,
+        "user": null
+      }
+    },
+    {
+      "default": true,
+      "document": "{\"sync\": 1}",
+      "response": {
+        "enabled": true,
+        "registered": false,
+        "user": null
+      }
+    },
+    {
+      "default": true,
+      "document": "{\"sync\": -1}",
+      "response": {
+        "enabled": true,
+        "registered": false,
+        "user": null
+      }
+    },
+    {
+      "default": true,
+      "document": "{\"sync\": \"\"}",
+      "response": {
+        "enabled": false,
+        "registered": false,
+        "user": null
+      }
+    },
+    {
+      "default": true,
+      "document": "{\"sync\": \"false\"}",
+      "response": {
+        "enabled": true,
+        "registered": false,
+        "user": null
+      }
+    },
+    {
+      "default": true,
+      "document": "{\"sync\": []}",
+      "response": {
+        "enabled": false,
+        "registered": false,
+        "user": null
+      }
+    },
+    {
+      "default": true,
+      "document": "{\"sync\": [1]}",
+      "response": {
+        "enabled": true,
+        "registered": false,
+        "user": null
+      }
+    },
+    {
+      "default": true,
+      "document": "{\"sync\": {}}",
+      "response": {
+        "enabled": false,
+        "registered": false,
+        "user": null
+      }
+    },
+    {
+      "default": true,
+      "document": "{\"sync\": {\"x\": 1}}",
+      "response": {
+        "enabled": true,
+        "registered": false,
+        "user": null
+      }
+    },
+    {
+      "default": true,
+      "document": "{\"sync\": null}",
+      "response": {
+        "enabled": false,
+        "registered": false,
+        "user": null
+      }
+    },
+    {
+      "default": true,
+      "document": "{\"sync\": NaN}",
+      "response": {
+        "enabled": true,
+        "registered": false,
+        "user": null
+      }
+    },
+    {
+      "default": true,
+      "document": "{\"sync\": Infinity}",
+      "response": {
+        "enabled": true,
+        "registered": false,
+        "user": null
+      }
+    },
+    {
+      "default": true,
+      "document": "{}",
+      "response": {
+        "enabled": true,
+        "registered": false,
+        "user": null
+      }
+    },
+    {
+      "default": true,
+      "document": "null",
+      "response": {
+        "enabled": true,
+        "registered": false,
+        "user": null
+      }
+    },
+    {
+      "default": true,
+      "document": "[]",
+      "response": {
+        "enabled": true,
+        "registered": false,
+        "user": null
+      }
+    },
+    {
+      "default": true,
+      "document": "{",
+      "response": {
+        "enabled": true,
+        "registered": false,
+        "user": null
+      }
+    },
+    {
+      "default": true,
+      "document": "{\"sync\": true, \"extra\": NaN}",
+      "response": {
+        "enabled": true,
+        "registered": false,
+        "user": null
+      }
+    }
+  ]
+}
