@@ -145,7 +145,8 @@ async fn status_body(st: &AppState, local: bool) -> Response {
         Err(error) => json!({"role": "remote", "owner": owner_id, "state": "offline", "detail": error.reason()}),
     };
     // O cliente acha entre os servidores dele qual é a dona, para abrir o cofre lá.
-    if let Some(url) = st.peers.base_url(&owner_id) { body["owner_url"] = json!(url); }
+    let (peers, id) = (st.peers.clone(), owner_id.clone());
+    if let Ok(Some(url)) = tokio::task::spawn_blocking(move || peers.base_url(&id)).await { body["owner_url"] = json!(url); }
     ok(body)
 }
 
@@ -354,7 +355,8 @@ fn wait_reply(status: WaitStatus, server_id: &str) -> WaitReply {
         WaitStatus::Saved { entry, temporary } => WaitReply { entry: Some(entry), temporary: Some(temporary), ..reply(WaitState::Saved) },
         WaitStatus::Denied => reply(WaitState::Denied),
         WaitStatus::Declined => reply(WaitState::Declined),
-        WaitStatus::TimedOut => reply(WaitState::TimedOut),    }
+        WaitStatus::TimedOut => reply(WaitState::TimedOut),
+    }
 }
 
 /// `GET /api/vault/requests/{id}/wait`: segura até `WAIT_HOLD` e responde `pending` sem novidade.

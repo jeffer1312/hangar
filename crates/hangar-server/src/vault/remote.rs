@@ -97,7 +97,8 @@ impl Remote<'_> {
             },
             (WaitState::Denied, _) => WaitStatus::Denied,
             (WaitState::Declined, _) => WaitStatus::Declined,
-            (WaitState::TimedOut, _) => WaitStatus::TimedOut,        })
+            (WaitState::TimedOut, _) => WaitStatus::TimedOut,
+        })
     }
 
     /// Quem pediu desistiu. Pedido já fechado na dona volta `Lost`.

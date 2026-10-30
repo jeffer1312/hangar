@@ -161,7 +161,8 @@ pub async fn secret(owner: &Owner, req: UseReq, deadline: Instant) -> Result<Zer
     match Pending::new(owner.clone(), id).settle(deadline).await? {
         WaitStatus::Allowed(value) => Ok(value),
         WaitStatus::Denied => Err(DENIED.into()),
-        WaitStatus::TimedOut => Err(NO_ANSWER.into()),        _ => Err(off_contract()),
+        WaitStatus::TimedOut => Err(NO_ANSWER.into()),
+        _ => Err(off_contract()),
     }
 }
 

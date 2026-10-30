@@ -171,7 +171,8 @@ fn copy(status: &WaitStatus) -> WaitStatus {
         WaitStatus::Saved { entry, temporary } => WaitStatus::Saved { entry: entry.clone(), temporary: *temporary },
         WaitStatus::Denied => WaitStatus::Denied,
         WaitStatus::Declined => WaitStatus::Declined,
-        WaitStatus::TimedOut => WaitStatus::TimedOut,    }
+        WaitStatus::TimedOut => WaitStatus::TimedOut,
+    }
 }
 
 fn prune(inner: &mut Inner, now: Instant) {
