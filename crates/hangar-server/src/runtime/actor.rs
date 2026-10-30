@@ -24,6 +24,7 @@ const MODS_CALL_LIMIT:Duration=Duration::from_secs(crate::mods::surface::APP_CAL
 pub struct PolicyClient {
     /// Dono das cotas; sem ele a linha de status sai sem janelas.
     accounts:Option<crate::accounts::AccountService>,
+    preparation:Option<crate::accounts::bridge::AccountsBridge>,
     diag:crate::diag::DiagClient,
     /// Só testes: ambiente-base da subida do Codex por registro. `None` = o do processo, lido a cada subida.
     codex_env:Option<Arc<crate::accounts::environment::AccountEnvironment>>,
@@ -33,7 +34,19 @@ pub struct PolicyClient {
 
 impl PolicyClient {
     pub fn new(upstream:std::net::SocketAddr,secret:String) -> Self {
-        Self { diag:crate::diag::DiagClient::new(upstream,secret),accounts:None,codex_env:None,plugin_bridge:None }
+        Self { diag:crate::diag::DiagClient::new(upstream,secret),accounts:None,preparation:None,codex_env:None,plugin_bridge:None }
+    }
+    pub(super) fn with_preparation(mut self,bridge:Option<crate::accounts::bridge::AccountsBridge>) -> Self { self.preparation=bridge; self }
+    pub(super) async fn prepare_codex(&self,home:&str) -> Result<(),RuntimeError> {
+        let Some(accounts) = &self.accounts else { return Ok(()) };
+        let key = crate::accounts::AccountKey::new(crate::accounts::Provider::Codex,std::path::Path::new(home))
+            .map_err(|_|failure("codex_account_invalid"))?;
+        let account = accounts.snapshot(crate::accounts::Provider::Codex).map_err(|_|failure("codex_account_invalid"))?
+            .into_iter().find(|account|crate::accounts::AccountKey::new(crate::accounts::Provider::Codex,&account.home).is_ok_and(|candidate|candidate==key))
+            .ok_or_else(||failure("codex_account_invalid"))?;
+        let bridge = self.preparation.clone().ok_or_else(||failure("account_prepare_bridge_unavailable"))?;
+        accounts.prepare_for_session(&account,bridge,tokio::time::Instant::now()+Duration::from_secs(60)).await
+            .map(|_|()).map_err(|error|RuntimeError::new(error.code,&error.message))
     }
     pub fn with_plugin_bridge(mut self,bridge:crate::session_open::claude::PluginBridge) -> Self { self.plugin_bridge = Some(bridge); self }
     pub(super) fn plugin_bridge(&self) -> Option<crate::session_open::claude::PluginBridge> { self.plugin_bridge.clone() }

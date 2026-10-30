@@ -4,10 +4,13 @@ use super::sidebar::Target;
 
 #[derive(Default)]
 pub(super) struct RenameSuggest {
-    /// Já pedida nesta vida do app: a sugestão fica no servidor e volta pela linha da lista.
-    asked: HashSet<Target>,
+    /// Quantos pedidos seus a conversa tinha no último pedido desta vida do app: a sugestão fica no servidor e volta pela
+    /// linha da lista, e só a fraca é pedida de novo, quando chega pedido seu depois dela.
+    asked: HashMap<Target, usize>,
     /// "Agora não" clicado: some na hora, antes de a lista refletir a recusa.
     pub(super) dismissed: HashSet<Target>,
+    /// "Outra" esperando o servidor.
+    pub(super) again: HashSet<Target>,
 }
 
 /// Mesmo teto de nome do servidor (`session_open/resolve.rs`).
@@ -35,16 +38,18 @@ fn sanitize(name: &str) -> String {
 }
 
 impl Hangar {
-    /// Pede a sugestão da aberta uma vez por sessão nesta vida do app. 204 e falha ficam calados: ninguém pediu nada.
+    /// Pede a sugestão da aberta uma vez por sessão nesta vida do app, e a fraca de novo a cada pedido seu. 204 e falha
+    /// ficam calados: ninguém pediu nada.
     pub(super) fn request_rename_suggestion(&mut self) {
         let Some(target) = self.selected_target() else { return };
-        if self.rename_suggest.asked.contains(&target) { return; }
         let Some(session) = self.target_session(&target) else { return };
-        if session.read_only() || session.rename_suggestion.is_some()
+        if session.read_only() || (session.rename_suggestion.is_some() && !session.rename_weak)
             || !looks_generic(&session.name, session.cwd.as_deref().unwrap_or_default()) { return; }
-        if !self.chat.events.iter().any(|event| event.kind == "user_msg" && !event.queued()) { return; }
+        let asked = self.chat.events.iter().filter(|event| event.kind == "user_msg" && !event.queued()).count();
+        if asked == 0 { return; }
+        if self.rename_suggest.asked.get(&target).is_some_and(|&last| !session.rename_weak || asked <= last) { return; }
         let Some(api) = self.machine_api(&target.server) else { return };
-        self.rename_suggest.asked.insert(target.clone());
+        self.rename_suggest.asked.insert(target.clone(), asked);
         self.runtime.spawn(async move {
             // O executor do ditado gera o nome; o prazo cobre a fila dele.
             let _ = api.server_send(reqwest::Method::POST, &["sessions", target.name.as_str(), "rename-suggestion"], None, 120).await;
@@ -57,27 +62,36 @@ impl Hangar {
         if self.rename_suggest.dismissed.contains(&target) { return None; }
         let session = self.target_session(&target)?;
         let suggestion = session.rename_suggestion.clone().filter(|s| *s != session.name && !session.read_only())?;
-        let renaming = self.is_renaming(&target);
-        let (dismiss, apply) = (target.clone(), target);
+        let state = Strip { weak: session.rename_weak, renaming: self.is_renaming(&target), again: self.rename_suggest.again.contains(&target) };
+        let (dismiss, again, apply) = (target.clone(), target.clone(), target);
         let name = suggestion.clone();
-        Some(rename_strip(&suggestion, renaming,
+        Some(rename_strip(&suggestion, state,
             |button| button.on_click(cx.listener(move |this, _, _, cx| this.dismiss_rename_suggestion(dismiss.clone(), cx))),
+            |button| button.on_click(cx.listener(move |this, _, _, cx| this.another_rename_suggestion(again.clone(), cx))),
             |button| button.on_click(cx.listener(move |this, _, _, cx| this.rename_session_to(apply.clone(), name.clone(), cx))))
             .into_any_element())
     }
 }
 
-/// A faixa por dado simples: a aberta liga o clique nos botões (`dismiss` e `apply` recebem cada um), a miniatura das
-/// novidades (`crate::news`) usa a mesma sem clique.
-pub(crate) fn rename_strip(suggestion: &str, renaming: bool, dismiss: impl FnOnce(Button) -> Button, apply: impl FnOnce(Button) -> Button)
-    -> Stateful<Div> {
+/// O que a faixa mostra além do nome: o aviso de pouco contexto e quem está esperando o servidor.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Strip { pub weak: bool, pub renaming: bool, pub again: bool }
+
+/// A faixa por dado simples: a aberta liga o clique nos botões (`dismiss`, `again` e `apply` recebem cada um), a
+/// miniatura das novidades (`crate::news`) usa a mesma sem clique.
+pub(crate) fn rename_strip(suggestion: &str, state: Strip, dismiss: impl FnOnce(Button) -> Button,
+    again: impl FnOnce(Button) -> Button, apply: impl FnOnce(Button) -> Button) -> Stateful<Div> {
     let title = tr_shared("rename_suggest_title", &[("name", suggestion)]);
+    let busy = state.renaming || state.again;
     div().id("rename-suggest").py_2().flex().items_center().gap_2().border_t_1().border_color(theme::border())
         .role(Role::Group).aria_label(title.clone())
-        .child(div().flex_1().min_w_0().text_sm().truncate().child(title))
-        .child(dismiss(Button::new("rename-suggest-dismiss").small().ghost().label(tr_shared("rename_suggest_dismiss", &[])).disabled(renaming)))
+        .child(div().flex_1().min_w_0().flex().flex_col().child(div().text_sm().truncate().child(title))
+            .when(state.weak, |el| el.child(div().text_xs().text_color(theme::muted()).truncate().child(tr_shared("rename_suggest_weak", &[])))))
+        .child(again(Button::new("rename-suggest-again").small().ghost().label(tr_shared("rename_suggest_again", &[]))
+            .loading(state.again).disabled(busy)))
+        .child(dismiss(Button::new("rename-suggest-dismiss").small().ghost().label(tr_shared("rename_suggest_dismiss", &[])).disabled(busy)))
         .child(apply(Button::new("rename-suggest-apply").small().primary().label(tr_shared("rename_suggest_apply", &[]))
-            .loading(renaming).disabled(renaming)))
+            .loading(state.renaming).disabled(busy)))
 }
 
 #[cfg(test)]

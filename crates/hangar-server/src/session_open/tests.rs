@@ -126,7 +126,7 @@ fn reopen_keeps_what_the_change_does_not_name() {
         model: Some("opus".into()), effort: Some("high".into()), service_tier: None,
         permission_mode: Some(PermissionMode::Manual), subagent_model: None, customizations: None, jev: true,
         read_only: false, worktree: None, creator: None, created_at: 1.0, conversation: None,
-        name_auto: None, rename_suggestion: None, rename_dismissed: false,
+        name_auto: None, rename_suggestion: None, rename_weak_at: None, rename_dismissed: false,
     };
     let change = SessionChange { reason: ChangeReason::Bypass, surface: None, account: None,
         permission_mode: Some(PermissionMode::BypassPermissions), model: None, effort: None, service_tier: None };

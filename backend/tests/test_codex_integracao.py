@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import shutil
+import sys
 import time
 import tomllib
 from pathlib import Path
@@ -316,6 +317,94 @@ async def test_nativo_reconcilia_instalacao_existente_e_repete_sem_reescrever(tm
 
 @pytest.mark.integration
 @real_codex
+@pytest.mark.parametrize("approval_required", [False, True])
+async def test_reconciliacao_recarrega_hooks_nas_sessoes_abertas(tmp_path, monkeypatch, approval_required):
+    from app import account_bridge
+
+    home = _home(tmp_path)
+    calls = []
+
+    def native_bridge(action, account):
+        calls.append((action, account.id, account.home))
+        return {"ok": True, "approval_required": approval_required}
+
+    monkeypatch.setattr(account_bridge, "request_codex", native_bridge)
+    service = IntegracaoCodex(home, home / ".codex")
+    result = await service.reconciliar()
+    assert result["estado"] == "ok", result
+    assert calls == [("refresh_hooks", "default", home / ".codex")]
+    assert result["confianca_pendente"] is approval_required
+
+
+@pytest.mark.integration
+@real_codex
+async def test_reconciliacao_nao_oculta_recarga_de_hooks_recusada(tmp_path, monkeypatch):
+    from app import account_bridge
+
+    home = _home(tmp_path)
+    monkeypatch.setattr(account_bridge, "request_codex", lambda *args: {"ok": False})
+    result = await IntegracaoCodex(home, home / ".codex").reconciliar()
+    assert result["estado"] == "parcial"
+    assert result["confianca_pendente"] is True
+    assert any(error["codigo"] == "erro_recarregar_hooks" for error in result["erros"])
+
+
+@pytest.mark.integration
+@real_codex
+async def test_reconciliacao_identifica_codex_home_personalizado_como_conta_padrao(tmp_path):
+    home = _home(tmp_path)
+    profile = home / "custom-profile"
+    profile.mkdir()
+    env = {**os.environ, "HOME":str(home), "USERPROFILE":str(home), "CODEX_HOME":str(profile),
+           "PYTHONPATH":str(Path(__file__).resolve().parents[1]), "GIT_CONFIG_GLOBAL":os.devnull,
+           "GIT_CONFIG_NOSYSTEM":"1"}
+    source = """
+import asyncio,json
+from app import account_bridge
+from app.codex_integracao import IntegracaoCodex
+accounts=[]
+def native(action,account):
+    accounts.append(account.id)
+    return {'ok':True,'approval_required':False}
+account_bridge.request_codex=native
+result=asyncio.run(IntegracaoCodex().reconciliar())
+print(json.dumps({'accounts':accounts,'state':result['estado']}))
+"""
+    process = await asyncio.create_subprocess_exec(sys.executable,"-c",source,env=env,cwd=home,
+        stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE)
+    try:
+        stdout,stderr = await asyncio.wait_for(process.communicate(),60)
+    finally:
+        if process.returncode is None:
+            process.kill()
+            await process.wait()
+    assert process.returncode == 0, stderr.decode()
+    result = json.loads(stdout)
+    assert result["state"] == "ok"
+    assert result["accounts"] == ["default"]
+
+
+@pytest.mark.integration
+@real_codex
+async def test_reconciliacao_nao_confirma_descoberta_incompleta_de_hooks(tmp_path, monkeypatch):
+    from app import account_bridge
+    from app.codex_importador import CodexNativo
+
+    class PartialNative(CodexNativo):
+        async def request(self, method, params):
+            if method == "hooks/list":
+                return {"data":[{"hooks":[],"errors":["failed to fingerprint plugin contents"]}]}
+            return await super().request(method, params)
+
+    home = _home(tmp_path)
+    monkeypatch.setattr(account_bridge, "request_codex", lambda *args: {"ok":True,"approval_required":False})
+    result = await IntegracaoCodex(home, home / ".codex", nativo=PartialNative).reconciliar()
+    assert result["estado"] == "parcial"
+    assert result["confianca_pendente"] is True
+
+
+@pytest.mark.integration
+@real_codex
 async def test_nativo_reaplica_mcp_e_agente_sem_alterar_exclusivos(tmp_path):
     home = _home(tmp_path)
     (home / ".claude.json").write_text(json.dumps({"mcpServers": {"local-probe": {"command": "echo", "args": ["primeiro"]}}}))
@@ -394,24 +483,23 @@ async def test_adota_importacao_nativa_anterior_remove_gerenciados_preserva_coli
 @pytest.mark.integration
 @real_codex
 async def test_config_rele_snapshot_apos_importacao_externa(tmp_path, monkeypatch):
-    from app import codex_integracao as modulo
+    from app.codex_importador import CodexNativo
     home = _home(tmp_path)
     cfg = home / '.codex/config.toml'
     cfg.write_text('# particular\n')
     service = IntegracaoCodex(home, home / '.codex')
-    service.raiz.mkdir(parents=True)
-    service._estado = service.status()
-    original = modulo.gravar
+    original = CodexNativo.request
     alteracoes = []
 
-    def troca(path, data, esperado, backups=None):
-        if path == cfg and not alteracoes:
+    async def troca(native, method, params):
+        if method == "config/batchWrite" and not alteracoes:
             alteracoes.append(True)
             cfg.write_text('# alterado pelo Desktop\nmodel="externo"\n')
-        return original(path, data, esperado, backups)
+        return await original(native, method, params)
 
-    monkeypatch.setattr(modulo, 'gravar', troca)
-    await service._config(None, {}, {})
+    monkeypatch.setattr(CodexNativo, "request", troca)
+    result = await service.reconciliar()
+    assert result["estado"] == "ok", result
     assert alteracoes == [True]
     data = tomllib.loads(cfg.read_text())
     assert data['model'] == 'externo'

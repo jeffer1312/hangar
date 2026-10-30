@@ -212,3 +212,95 @@ async fn newer_python_preparation_survives_return_to_rust() {
         "o erro posterior do coordenador foi escondido pelo estado Python"
     );
 }
+
+#[tokio::test]
+async fn ready_preparation_is_reused_after_restart_until_explicit_force() {
+    use axum::{Router, routing::post};
+    use hangar_server::accounts::{AccountService, Provider, bridge::AccountsBridge,
+        environment::AccountEnvironment};
+    use serde_json::json;
+    use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().to_string_lossy().into_owned();
+    let environment = AccountEnvironment::from_map([
+        ("HOME".into(), home.clone()), ("USERPROFILE".into(), home),
+    ].into());
+    let first_service = AccountService::new(environment.clone());
+    let account = first_service.create(Provider::Codex, "extra", |_|Ok(())).unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let seen = calls.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let bridge = AccountsBridge::new(listener.local_addr().unwrap(),"synthetic".into(),"instance".into()).unwrap();
+    let router = Router::new().route("/internal/accounts/prepare",post(move || {
+        seen.fetch_add(1,Ordering::SeqCst);
+        async { json!({"status":"ready","trust_pending":false,"issues":[]}).to_string() }
+    }));
+    let server = tokio::spawn(async move { axum::serve(listener,router).await.unwrap(); });
+    let first = first_service.prepare(&account,bridge.clone(),false,None).await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(15),async {
+        while first_service.preparation_status(&account,&bridge).await["status"] == "running" {
+            tokio::task::yield_now().await;
+        }
+    }).await.unwrap();
+    let service = AccountService::new(environment);
+    let cached = service.prepare(&account,bridge.clone(),false,None).await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(15),async {
+        while service.preparation_status(&account,&bridge).await["status"] == "running" {
+            tokio::task::yield_now().await;
+        }
+    }).await.unwrap();
+    let forced = service.prepare(&account,bridge.clone(),true,None).await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(15),async {
+        while service.preparation_status(&account,&bridge).await["status"] == "running" {
+            tokio::task::yield_now().await;
+        }
+    }).await.unwrap();
+    server.abort();
+    assert!(server.await.unwrap_err().is_cancelled());
+    assert_eq!(first["status"],"running");
+    assert_eq!(cached["status"],"ready","abrir a conta pronta não pode criar outro worker");
+    assert_eq!(forced["status"],"running");
+    assert_eq!(calls.load(Ordering::SeqCst),2,"primeiro preparo e sincronização explícita");
+}
+
+#[tokio::test]
+async fn first_open_waits_for_preparation_and_expired_birth_budget_refuses_open() {
+    use axum::{Router, routing::post};
+    use hangar_server::accounts::{AccountService, Provider, bridge::AccountsBridge,
+        environment::AccountEnvironment};
+    use serde_json::json;
+    use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+    for id in ["default","extra"] {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().to_string_lossy().into_owned();
+        let service = AccountService::new(AccountEnvironment::from_map([
+            ("HOME".into(),home.clone()),("USERPROFILE".into(),home),
+        ].into()));
+        let account = if id == "default" { service.resolve(Provider::Codex,id).unwrap() }
+            else { service.create(Provider::Codex,id,|_|Ok(())).unwrap() };
+        let calls = Arc::new(AtomicUsize::new(0));
+        let seen = calls.clone();
+        let prepared_home = account.home.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let bridge = AccountsBridge::new(listener.local_addr().unwrap(),"synthetic".into(),"instance".into()).unwrap();
+        let router = Router::new().route("/internal/accounts/prepare",post(move || {
+            std::fs::create_dir_all(&prepared_home).unwrap();
+            seen.fetch_add(1,Ordering::SeqCst);
+            async { json!({"status":"ready","trust_pending":false,"issues":[]}).to_string() }
+        }));
+        let server = tokio::spawn(async move { axum::serve(listener,router).await.unwrap(); });
+        let ready = service.prepare_for_session(&account,bridge.clone(),
+            tokio::time::Instant::now()+std::time::Duration::from_secs(15)).await;
+        tokio::time::timeout(std::time::Duration::from_secs(15),async {
+            while service.preparation_status(&account,&bridge).await["status"] == "running" {
+                tokio::task::yield_now().await;
+            }
+        }).await.unwrap();
+        let expired = service.prepare_for_session(&account,bridge.clone(),tokio::time::Instant::now()).await;
+        server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
+        assert_eq!(ready.unwrap()["status"],"ready","primeira abertura precisa esperar a confirmação");
+        assert_eq!(calls.load(Ordering::SeqCst),1,"conta padrão também precisa do primeiro preparo");
+        assert_eq!(expired.unwrap_err().code,"codex_account_preparing");
+    }
+}

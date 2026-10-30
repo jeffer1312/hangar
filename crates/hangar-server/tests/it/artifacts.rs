@@ -555,7 +555,7 @@ async fn artifacts_preflight_uses_the_existing_cors_upstream_without_bypassing_g
 }
 
 #[tokio::test]
-async fn artifacts_missing_file_and_invalid_complete_json_are_errors_not_empty_catalogs() {
+async fn artifacts_missing_file_is_an_error_and_an_invalid_line_is_skipped() {
     let scene = Scene::new(&[frame("a", "Antigo")]).await;
     assert_eq!(scene.items().await[0]["id"], "a");
     std::fs::remove_file(&scene.path).unwrap();
@@ -566,10 +566,11 @@ async fn artifacts_missing_file_and_invalid_complete_json_are_errors_not_empty_c
     }
     write_lines(&scene.path, &[frame("b", "Novo")]);
     assert_eq!(scene.items().await[0]["id"], "b");
+    // Dois registros colados e o primeiro cortado, como o Claude Code grava às vezes: a linha sai, o resto vale.
     append_raw(&scene.path, "{json quebrado}\n");
-    let (status, body) = scene.get("s").await;
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(body["error_code"], "artifacts_io");
+    append_raw(&scene.path, &format!("{}\n", frame("d", "Depois")));
+    let ids: Vec<_> = scene.items().await.as_array().unwrap().iter().map(|i| i["id"].clone()).collect();
+    assert_eq!(ids, [json!("b"), json!("d")]);
 }
 
 /// Vida nova (sessão recém-aberta, depois do `/clear`): o Claude só cria o transcript na primeira mensagem.

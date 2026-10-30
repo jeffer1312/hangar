@@ -2647,8 +2647,45 @@ fn plugin_hook_refused_after_update_is_trusted_again_through_the_session_connect
     assert!(frames(&line(&mut engine,json!({"id":write[0]["id"],"result":{}}),11.3)).is_empty());
 }
 
+#[test]
+fn synced_hooks_refresh_waits_for_native_approval_before_confirming() {
+    for headless in [true,false] {
+        let mut engine = Engine::new(json!({"name":"session","thread_id":"thread-1","headless":headless,
+            "initialized":true,"ready":true,"cwd":"/home/u","codex_home":"/home/u/.codex"}),1,clock(10.0));
+        let result = engine.command(command(OperationKind::RefreshHooks,json!({})),clock(11.0));
+        assert!(result.is_ok(),"a sessão precisa aceitar a recarga de hooks: {:?}",result.as_ref().err());
+        let effects = result.unwrap();
+        assert!(!effects.iter().any(|effect|matches!(effect,Effect::Reply {..})),"não confirma antes do Codex");
+        let list = frames(&effects);
+        assert_eq!(list[0]["method"],"hooks/list");
+        let write = frames(&line(&mut engine,json!({"id":list[0]["id"],"result":{"data":[{"hooks":[
+            {"key":"p@m:hooks/hooks.json:stop:0:0","currentHash":"sha256:decl/sha256:content","source":"plugin","trustStatus":"trusted","enabled":true},
+            {"key":"new@m:hooks/hooks.json:stop:0:0","currentHash":"sha256:new","source":"plugin","trustStatus":"untrusted","enabled":true}
+        ]}]}}),11.1));
+        assert_eq!(write[0]["method"],"config/batchWrite");
+        assert_eq!(write[0]["params"]["reloadUserConfig"],true);
+        assert_eq!(write[0]["params"]["edits"][0]["value"],"sha256:decl/sha256:content");
+        let done = line(&mut engine,json!({"id":write[0]["id"],"result":{}}),11.2);
+        assert!(done.iter().any(|effect|matches!(effect,Effect::Reply { disposition:Disposition::Accepted,payload,.. }
+            if payload["refreshed"] == true && payload["approval_required"] == true)));
+    }
+}
+
 fn hook_notices(effects:&[Effect]) -> Vec<String> {
     effects.iter().filter_map(|e|match e { Effect::Policy { kind,payload,.. } if kind == "local_output" => payload["hook_error"].as_str().map(str::to_owned),_=>None }).collect()
+}
+
+#[test]
+fn synced_hooks_refresh_rejects_partial_discovery() {
+    for field in ["errors","warnings"] {
+        let mut engine = engine();
+        let list = frames(&engine.command(command(OperationKind::RefreshHooks,json!({})),clock(11.0)).unwrap());
+        let mut entry = json!({"hooks":[]});
+        entry[field] = json!(["failed to fingerprint plugin contents"]);
+        let effects = line(&mut engine,json!({"id":list[0]["id"],"result":{"data":[entry]}}),11.1);
+        assert!(effects.iter().any(|effect|matches!(effect,Effect::Reply { disposition:Disposition::Rejected,payload,.. }
+            if payload["approval_required"] == true)),"não pode confirmar um hook que o Codex não conseguiu carregar");
+    }
 }
 
 #[test]

@@ -98,6 +98,35 @@ fn isolated_service(home: &std::path::Path) -> hangar_server::accounts::AccountS
     ))
 }
 
+#[tokio::test]
+async fn synced_hooks_refresh_reaches_the_account_runtime_through_the_private_bridge() {
+    let root = tempfile::tempdir().unwrap();
+    let private = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = private.local_addr().unwrap();
+    let mut state = AppState::new(Config {
+        listen:addr,upstream:"127.0.0.1:9".parse().unwrap(),internal_secret:"contract-internal".into(),
+        auth_token:"contract-only".into(),log_path:None,trusted:TrustedHosts::parse("127.0.0.1"),
+    });
+    state.accounts = isolated_service(root.path());
+    assert!(state.state.runtime.set(Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new(
+        "127.0.0.1:9".parse().unwrap(),"contract-internal".into(),"fixture".into()))).is_ok());
+    let app = hangar_server::routes::terminal_router(Arc::new(state));
+    let server = tokio::spawn(async move {
+        axum::serve(private,app.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap();
+    });
+    let response = reqwest::Client::new().post(format!("http://{addr}/__hangar_server/accounts"))
+        .header("x-hangar-internal","contract-internal")
+        .json(&serde_json::json!({"action":"refresh_hooks","account_id":"default","attempt_id":null,"refresh":false}))
+        .send().await.unwrap();
+    let status = response.status();
+    let body:serde_json::Value = response.json().await.unwrap();
+    server.abort();
+    assert!(server.await.unwrap_err().is_cancelled());
+    assert_eq!(status,StatusCode::OK,"{body}");
+    assert_eq!(body["ok"],true);
+    assert_eq!(body["approval_required"],false);
+}
+
 #[test]
 fn marker_is_published_only_after_seed_and_rollback_owns_its_directory() {
     use hangar_server::accounts::{Provider, catalog::AccountError};

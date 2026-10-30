@@ -352,6 +352,10 @@ pub struct SessionSpec {
     pub name_auto: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rename_suggestion: Option<String>,
+    /// A sugestão saiu com pouco contexto, de uma conversa com este número de pedidos: um pedido a
+    /// mais a refaz.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rename_weak_at: Option<u32>,
     /// "Agora não" do dono: a sugestão não volta nesta sessão.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub rename_dismissed: bool,

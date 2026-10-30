@@ -171,6 +171,9 @@ impl Ctx {
     async fn apply(&self, kind: Kind, old: &str, new: &str, done: &mut Vec<Done>, detached: &mut Option<Detached>) -> Result<(), (&'static str, String)> {
         self.group(old, new).await.map_err(|code| ("group", code))?;
         done.push(Done::Group);
+        // O Codex com terminal segue vivo e com a trava da fila: a vigia o readota no nome novo e grava o
+        // nome na fila ela mesma. Pegar a trava aqui esperaria o ator e desfaria o rename (`runtime_lease`).
+        let codex_live = kind == Kind::Terminal && self.runtime.owns_codex_terminal(old);
         *detached = self.runtime.detach_for_rename(old).await.map_err(|e| ("runtime_close", e.code))?;
         if kind == Kind::Terminal {
             if !self.mux_rename(old, new).await { return Err(("mux", "sessao_falha_renomear".into())); }
@@ -180,7 +183,7 @@ impl Ctx {
             let (d, o, n) = (dir.clone(), old.to_owned(), new.to_owned());
             if blocking(move || files::move_sidecar(&d, &o, &n)).await.map_err(|e| ("sidecar", io_code(&e)))? { done.push(Done::Sidecar(dir)); }
         }
-        if detached.is_none() {
+        if detached.is_none() && !codex_live {
             let parked = match self.parked_queue_key(new).await {
                 Some(key) => self.runtime.rename_parked_queue(&key, new).await.map_err(|e| ("queue", e.code))?.then_some(key),
                 None => None,

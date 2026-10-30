@@ -74,7 +74,8 @@ pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &
     let message = app::user_bubble(app::conversation_text(div().flex().flex_col().gap_2(), true).child(tr_shared("news_rename_sample_message", &[])));
     // Miniatura só leitura: os botões da faixa ficam sem clique e fora do Tab.
     let strip = strip.map(|step| div().relative().top(px(((SLIDE_STEPS - step) * 4) as f32)).opacity(0.25 + 0.25 * step as f32)
-        .child(app::rename_strip(&suggestion, renaming, |button| button.tab_stop(false), |button| button.tab_stop(false))));
+        .child(app::rename_strip(&suggestion, app::RenameStrip { renaming, ..Default::default() },
+            |button| button.tab_stop(false), |button| button.tab_stop(false), |button| button.tab_stop(false))));
     stage.child(div().h(px(CONVERSATION_HEIGHT)).overflow_hidden().flex().flex_col().justify_end()
             .when(bubble, |el| el.child(div().flex().justify_end().child(message))))
         .child(div().h(px(STRIP_HEIGHT)).overflow_hidden().children(strip))

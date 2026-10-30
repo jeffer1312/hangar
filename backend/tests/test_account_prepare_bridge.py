@@ -144,8 +144,12 @@ def test_http_pretrust_only_on_explicit_valid_cwd(tmp_path):
         project.mkdir()
         target = tmp_path / ".codex"
         before = set(target.iterdir())
-        assert rust.request("GET", "/api/codex-contas/default/prepare").json()["status"] == "ready"
+        assert rust.request("GET", "/api/codex-contas/default/prepare").json()["status"] == "idle"
+        assert rust.request("GET", "/api/codex-contas/default/prepare?cwd=" + urllib.parse.quote(str(project))).json()["status"] == "idle"
         assert set(target.iterdir()) == before
+        # A confiança da pasta só vale depois do primeiro preparo da conta.
+        from app.codex_contas import PREPARED_MARKER
+        (target / PREPARED_MARKER).write_text('{"version":1}', encoding="utf-8")
         result = rust.request("GET", "/api/codex-contas/default/prepare?cwd=" + urllib.parse.quote(str(project)))
         assert result.status_code == 200, result.text
         assert result.json()["status"] == "ready", result.json()
@@ -184,6 +188,7 @@ def test_http_codex_catalog_reads_native_identity_with_real_preparation_status(t
     from tests.test_accounts_catalog import RustCatalog
     expected = json.loads((FIXTURES / "python-reference.json").read_text(encoding="utf-8"))[
         "codex_catalog_with_shared_settings"]
+    next(account for account in expected["body"] if account["id"] == "default")["sync"]["status"] = "idle"
     root = tmp_path / "rust"
     system = root / ".codex/skills/.system"
     system.mkdir(parents=True)
@@ -209,6 +214,7 @@ def test_http_codex_catalog_matches_empty_settings_with_equivalent_native_transp
     rust = RustCatalog(reference, native_fixture=True)
     try:
         expected = json.loads((FIXTURES / "python-reference.json").read_text(encoding="utf-8"))["codex_catalog"]
+        next(account for account in expected["body"] if account["id"] == "default")["sync"]["status"] = "idle"
         response = rust.request("GET", "/api/codex-contas")
         assert response.status_code == expected["status"], response.text
         assert normalize(response.json(), root=tmp_path) == expected["body"]

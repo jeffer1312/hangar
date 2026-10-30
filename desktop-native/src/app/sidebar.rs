@@ -111,7 +111,7 @@ struct MenuRead { target: Target, seq: u64, mute: Mute, branches: Option<Branche
 
 #[derive(Clone, Debug)]
 /// O renomear leva o número do pedido: resposta de um diálogo cancelado não fecha a tentativa seguinte na mesma sessão.
-pub(super) enum Write { Rename(String, u64), Mute(bool), Editor, Delete, Mode(bool), Reload, Account { path: String, label: String, engine_account: Option<String> }, DismissRename }
+pub(super) enum Write { Rename(String, u64), Mute(bool), Editor, Delete, Mode(bool), Reload, Account { path: String, label: String, engine_account: Option<String> }, DismissRename, AnotherRename }
 
 /// Gravações de git e o remover vínculo: o resultado é a notificação da sessão, já em texto.
 enum GitWrite { Pull, Checkout(String), StashCheckout(String), Unlink }
@@ -931,6 +931,12 @@ impl Hangar {
         self.write(target, Write::DismissRename, cx);
     }
 
+    /// "Outra": o servidor gera um nome novo agora; ele chega pela linha da lista.
+    pub(super) fn another_rename_suggestion(&mut self, target: Target, cx: &mut Context<Self>) {
+        self.rename_suggest.again.insert(target.clone());
+        self.write(target, Write::AnotherRename, cx);
+    }
+
     /// Grava na máquina da linha; sem a conexão dela a falha volta pelo mesmo caminho da resposta, nunca calada.
     /// Fechar: a linha some na hora e volta se o servidor recusar (`Wrote`).
     pub(super) fn delete_target(&mut self, target: Target, cx: &mut Context<Self>) {
@@ -955,6 +961,9 @@ impl Hangar {
                 Write::Rename(new, _) => api.act(name, &["rename"], Some(json!({"new": new})), false, 30).await,
                 // 204 sem corpo: o `act` tentaria ler JSON.
                 Write::DismissRename => api.server_send(reqwest::Method::DELETE, &["sessions", name.as_str(), "rename-suggestion"], None, 15).await,
+                // O executor do ditado gera o nome; o prazo cobre a fila dele.
+                Write::AnotherRename => api.server_send_query(reqwest::Method::POST, &["sessions", name.as_str(), "rename-suggestion"],
+                    &[("again", "1")], None, 120).await,
                 Write::Mode(terminal) => api.act(name, &["modo-execucao"], Some(json!({"terminal": terminal})), false, crate::api::REOPEN_SECONDS).await,
                 Write::Reload => api.act(name, &["recarregar"], None, false, crate::api::REOPEN_SECONDS).await,
                 Write::Account { path, engine_account, .. } => api.act(name, &["conta"], Some(account_body(path, engine_account.as_deref())), false, crate::api::REOPEN_SECONDS).await,
@@ -1307,6 +1316,10 @@ impl Hangar {
                     (Write::Reload, Err(error)) => Some(Notification::error(failed("sidebar_reload_failed", &error))),
                     (Write::Account { label, .. }, Ok(_)) => Some(Notification::success(tr("sidebar_same_moved").replace("{n}", label))),
                     (Write::Account { .. }, Err(error)) => Some(Notification::error(failed("sidebar_same_failed", &error))),
+                    (Write::AnotherRename, result) => {
+                        self.rename_suggest.again.remove(&target);
+                        result.err().map(|error| Notification::error(Self::fetch_failure(&error)))
+                    }
                     (Write::DismissRename, Ok(_)) => None,
                     (Write::DismissRename, Err(error)) => {
                         self.rename_suggest.dismissed.remove(&target);

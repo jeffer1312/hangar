@@ -35,6 +35,45 @@ static CATALOG: LazyLock<Vec<Tool>> = LazyLock::new(|| {
     serde_json::from_str(include_str!("catalog.json")).expect("catalog.json é o catálogo do MCP")
 });
 
+/// O cliente pode adiar o schema e mostrar só o nome da tool; as instruções sempre chegam, então
+/// levam os campos obrigatórios para o modelo não chutar `to`/`message`.
+static FULL_INSTRUCTIONS: LazyLock<String> = LazyLock::new(|| {
+    let signatures: Vec<String> = CATALOG.iter().map(|tool| {
+        let (required, optional) = split_fields(tool);
+        let mut names: Vec<&str> = required.iter().map(|(name, _)| *name).collect();
+        if !optional.is_empty() { names.push("…"); }
+        format!("{}({})", tool.name, names.join(", "))
+    }).collect();
+    format!("{INSTRUCTIONS} Campos obrigatórios (… = há opcionais, no schema da tool): {}.", signatures.join(", "))
+});
+
+/// Campos da tool como estão no catálogo: obrigatórios na ordem de `required`, depois os opcionais.
+fn split_fields(tool: &Tool) -> (Vec<(&str, Option<&str>)>, Vec<(&str, Option<&str>)>) {
+    let schema = &*tool.input_schema;
+    let required: Vec<&str> = schema.get("required").and_then(serde_json::Value::as_array)
+        .map(|r| r.iter().filter_map(serde_json::Value::as_str).collect()).unwrap_or_default();
+    let props = schema.get("properties").and_then(serde_json::Value::as_object);
+    let kind = |name: &str| props.and_then(|p| p.get(name)).and_then(|p| p["type"].as_str()
+        .or_else(|| p["anyOf"].as_array()?.iter().filter_map(|v| v["type"].as_str()).find(|t| *t != "null")));
+    let optional = props.map(|p| p.keys().map(String::as_str).filter(|k| !required.contains(k)).collect::<Vec<_>>()).unwrap_or_default();
+    (required.iter().map(|n| (*n, kind(n))).collect(), optional.into_iter().map(|n| (n, kind(n))).collect())
+}
+
+/// `alvo (string), texto (string), tmux (boolean, opcional)`: o que o erro de argumento mostra.
+pub(crate) fn expected_fields(tool: &str) -> Option<String> {
+    let tool = CATALOG.iter().find(|t| t.name == tool)?;
+    let (required, optional) = split_fields(tool);
+    let describe = |(name, kind): (&str, Option<&str>), extra: &str| match (kind, extra) {
+        (Some(k), "") => format!("{name} ({k})"),
+        (Some(k), e) => format!("{name} ({k}, {e})"),
+        (None, "") => name.to_owned(),
+        (None, e) => format!("{name} ({e})"),
+    };
+    let all: Vec<String> = required.into_iter().map(|f| describe(f, ""))
+        .chain(optional.into_iter().map(|f| describe(f, "opcional"))).collect();
+    (!all.is_empty()).then(|| all.join(", "))
+}
+
 /// Nomes antigos (português) que sessões abertas antes do rename ainda chamam: chamáveis, fora do
 /// catálogo. Ponte, não API: sai quando não houver sessão viva de antes.
 const OLD_NAMES: [(&str, &str); 10] = [("quem_sou", "who_am_i"), ("sessoes", "sessions"), ("enviar", "send"),
@@ -46,7 +85,7 @@ struct Handler { tools: Arc<tools::Tools> }
 
 impl ServerHandler for Handler {
     fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(INSTRUCTIONS)
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(FULL_INSTRUCTIONS.as_str())
     }
 
     async fn list_tools(&self, _: Option<PaginatedRequestParams>, _: RequestContext<RoleServer>) -> Result<ListToolsResult, ErrorData> {
@@ -146,6 +185,15 @@ mod tests {
         assert!(body.contains("pronto"), "a resposta da tool lenta se perdeu: {body}");
         let (_, again) = post(&mut svc, Some(&session), json!({"jsonrpc": "2.0", "id": 3, "method": "tools/list"})).await;
         assert!(again.contains("\"id\":3"), "a sessão fechou depois da tool lenta: {again}");
+    }
+
+    /// Com o schema adiado pelo cliente, as instruções são o único lugar onde o modelo vê os campos.
+    #[test]
+    fn the_instructions_name_the_required_fields_of_each_tool() {
+        let text = FULL_INSTRUCTIONS.as_str();
+        for signature in ["who_am_i()", "send(alvo, texto, …)", "close_session(alvo)", "new_session(nome, cwd, …)", "pair(…)"] {
+            assert!(text.contains(signature), "faltou {signature} em: {text}");
+        }
     }
 }
 

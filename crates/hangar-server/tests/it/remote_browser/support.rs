@@ -28,6 +28,11 @@ pub const SECRET: &str = "remote-browser-test-internal";
 
 static ELECTRON_PORT: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+/// A pré-condição do ensaio de taxa (`transport_gaps`), conferida antes de medir: a rajada não coube no
+/// tempo real porque a máquina estava lenta. As conferências depois dela medem o servidor e não se repetem.
+pub const SLOW_RUN: &str = "rajada saiu da janela real de observação";
+const SLOW_RUN_ATTEMPTS: u32 = 5;
+
 #[cfg(unix)]
 pub async fn isolated(test: &str, inspect: impl FnOnce(&Path)) -> bool {
     isolated_with_timeout(test, Duration::from_secs(20), inspect).await
@@ -49,6 +54,10 @@ pub async fn isolated_with_timeout(test: &str, deadline: Duration, inspect: impl
     if let Some(path) = &reference_tmp {
         assert!(path.is_absolute() && path.is_dir(), "HANGAR_REMOTE_BROWSER_TMPDIR precisa ser uma pasta absoluta existente: {}", path.display());
     }
+    // Ensaio de taxa que a máquina não executou a tempo não prova nada: só ele é refeito, numa pasta nova.
+    let mut attempts = 0;
+    let (root, output) = loop {
+    attempts += 1;
     let root = match &reference_tmp {
         Some(path) => tempfile::tempdir_in(path),
         None => tempfile::tempdir(),
@@ -73,6 +82,12 @@ pub async fn isolated_with_timeout(test: &str, deadline: Duration, inspect: impl
     }
     let output = tokio::time::timeout(deadline, command.output()).await
         .expect("processo de ensaio não encerrou").unwrap();
+    let slow = !output.status.success() && [&output.stdout, &output.stderr].iter()
+        .any(|bytes| String::from_utf8_lossy(bytes).contains(SLOW_RUN));
+    if !slow || attempts == SLOW_RUN_ATTEMPTS { break (root, output); }
+    eprintln!("{test}: ensaio lento demais para medir (tentativa {attempts} de {SLOW_RUN_ATTEMPTS}), refazendo: {}",
+        String::from_utf8_lossy(&output.stderr).lines().find(|l| l.contains(SLOW_RUN)).unwrap_or_default());
+    };
     crate::assert_ran_one(&output.stdout);
     assert!(output.status.success(), "ensaio isolado falhou: {} {}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
     // O filho já saiu: nenhuma tarefa dele pode escrever depois desta conferência.

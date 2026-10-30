@@ -316,13 +316,16 @@ impl Entry {
                 break;
             }
             if !line.iter().all(u8::is_ascii_whitespace) {
-                let value: Value = serde_json::from_slice(&line).map_err(|_| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "registro de transcript inválido",
-                    )
-                })?;
-                self.fold.line(value);
+                // O Claude Code às vezes grava dois registros colados numa linha e o primeiro cortado; a conversa
+                // segue legível, então a linha estragada fica de fora e o resto do catálogo vale.
+                match serde_json::from_slice::<Value>(&line) {
+                    Ok(value) => self.fold.line(value),
+                    Err(_) => {
+                        if crate::warn_limit::allow(None, "artifacts_invalid_line") {
+                            tracing::warn!(path=%self.binding.jsonl.display(), offset=self.offset, "artefatos: linha de transcript inválida ignorada");
+                        }
+                    }
+                }
             }
             self.prefix_hash.update(&line);
             self.offset += line.len() as u64;

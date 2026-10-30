@@ -302,7 +302,7 @@ async fn not_now_is_kept_and_hides_the_suggestion() {
     let key = "b".repeat(32);
     let cwd = srv.root.join("hangar").display().to_string();
     srv.headless("hangar", &key, naming_spec(&key, "hangar", &cwd, json!({"name_auto": true, "rename_suggestion": "etiquetas"})));
-    assert_eq!(srv.suggestion(reqwest::Method::POST, "hangar", OWNER).await, (200, json!({"suggestion": "etiquetas"})), "a guardada volta sem rodar o executor");
+    assert_eq!(srv.suggestion(reqwest::Method::POST, "hangar", OWNER).await, (200, json!({"suggestion": "etiquetas", "weak": false})), "a guardada volta sem rodar o executor");
     assert_eq!(srv.suggestion(reqwest::Method::DELETE, "hangar", OWNER).await.0, 204);
     let spec = srv.read(srv.home.join(format!(".hangar/session-specs/{key}.json"))).unwrap();
     assert_eq!((spec["rename_dismissed"].clone(), spec.get("rename_suggestion")), (json!(true), None));

@@ -151,12 +151,12 @@ fn merged_history_impl(req: &HistoryRequest, max_window: u64, truncate: bool) ->
     Ok(evs)
 }
 
-/// O primeiro evento que `want` aceita, lido do começo do transcript e parando nele: quem só quer o
-/// início da conversa não relê o arquivo inteiro. Transcript ausente = `None`.
-pub(crate) fn first_event(provider: Provider, jsonl: &Path, want: impl Fn(&ChatEvent) -> bool) -> io::Result<Option<ChatEvent>> {
+/// Cada evento do transcript em ordem, até `visit` devolver `false`: quem só quer o início da conversa
+/// não relê o arquivo inteiro. Transcript ausente = nenhum evento.
+pub(crate) fn each_event(provider: Provider, jsonl: &Path, mut visit: impl FnMut(ChatEvent) -> bool) -> io::Result<()> {
     let file = match File::open(jsonl) {
         Ok(f) => f,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(e) => return Err(e),
     };
     for raw in BufReader::new(file).split(b'\n') {
@@ -167,13 +167,13 @@ pub(crate) fn first_event(provider: Provider, jsonl: &Path, want: impl Fn(&ChatE
         let events = match provider {
             Provider::Claude | Provider::ClaudeHeadless => claude::parse_obj(obj, peer::name_of_pid),
             Provider::Codex => codex::parse_rollout_obj(&value),
-            Provider::Orq => return Ok(None),
+            Provider::Orq => return Ok(()),
         };
-        if let Some(event) = events.into_iter().find(|e| want(e)) {
-            return Ok(Some(event));
+        for event in events {
+            if !visit(event) { return Ok(()); }
         }
     }
-    Ok(None)
+    Ok(())
 }
 
 /// `_tail_offset` (pqueue.py:961): primeira linha completa dentro dos últimos `window` bytes.

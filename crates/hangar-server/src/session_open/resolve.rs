@@ -391,7 +391,7 @@ fn resolve_with(request: &SessionOpenRequest, caller: &OpenCaller, facts: &dyn O
         jev: request.jev.unwrap_or_else(|| facts.defaults().jev), read_only: request.read_only,
         worktree: request.branch.clone().map(|branch| WorktreeSpec { branch, new_branch: request.new_branch, base: request.base.clone(), path: None }),
         creator: request.creator.clone(), created_at: facts.now(), conversation: None,
-        name_auto: Some(name_auto), rename_suggestion: None, rename_dismissed: false,
+        name_auto: Some(name_auto), rename_suggestion: None, rename_weak_at: None, rename_dismissed: false,
     };
     // Nascer já no plano sem terminal deixaria a sessão sem modo de base. O ilegível vale bypass, como o
     // `modo_da_conta` do Python: o modo pedido já está escolhido, só a volta do plano depende dele.

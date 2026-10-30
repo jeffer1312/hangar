@@ -128,7 +128,7 @@ export function ChatBody({ serverId, name, askFallback, onBack, deepStack, onOpe
 
   const { events, eventsRevision } = chat.use(useShallow((s) => ({ events: s.events, eventsRevision: s.eventsRevision })));
   const projectEvents = useMemo(() => createEventProjection(), [chat]);
-  const hasUserMessage = useMemo(() => events.some((e) => e.kind === 'user_msg' && !e.id.startsWith('queued-')), [events]);
+  const userMessages = useMemo(() => events.filter((e) => e.kind === 'user_msg' && !e.id.startsWith('queued-')).length, [events]);
   const stateEvent = chat.use((s) => s.stateEvent);
   const bufferingAnnounced = useRef(false);
   useEffect(() => {
@@ -522,7 +522,7 @@ export function ChatBody({ serverId, name, askFallback, onBack, deepStack, onOpe
         onTogglePanel={onTogglePanel}
         panelOpen={panelOpen}
       />
-      <RenameSuggestion serverId={serverId} name={name} hasUserMessage={hasUserMessage} />
+      <RenameSuggestion serverId={serverId} name={name} userMessages={userMessages} />
       <MoreSheet open={moreOpen} onClose={() => setMoreOpen(false)} serverId={serverId} name={name} orq={orq}
                  provider={provider} semTerminal={semTerminal} temPergunta={!!askPayload}
                  recarregar={recarregavel ? { bloqueado: recarregarBloqueado, onPress: recarregar } : undefined} />

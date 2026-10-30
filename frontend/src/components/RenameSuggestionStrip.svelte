@@ -1,13 +1,15 @@
 <script lang="ts">
   import * as m from '../paraglide/messages';
-  import { dismissRenameSuggestion, renameSession, type Server } from '@hangar/core';
+  import { dismissRenameSuggestion, renameSession, requestRenameSuggestion, type RenameSuggestionResult, type Server } from '@hangar/core';
 
-  let { server, sessionName, suggestion, onRenamed, onDismissed }: {
+  let { server, sessionName, suggestion, weak = false, onRenamed, onDismissed, onSuggested }: {
     server: Server;
     sessionName: string;
     suggestion: string;
+    weak?: boolean;
     onRenamed: (name: string) => void;
     onDismissed: () => void;
+    onSuggested: (s: RenameSuggestionResult) => void;
   } = $props();
 
   let busy = $state(false);
@@ -24,14 +26,21 @@
 
   const apply = () => act(async () => onRenamed((await renameSession(sessionName, suggestion, server)).name));
   const dismiss = () => act(async () => { await dismissRenameSuggestion(server, sessionName); onDismissed(); });
+  const again = () => act(async () => { const s = await requestRenameSuggestion(server, sessionName, true); if (s) onSuggested(s); });
 </script>
 
 <div class="rename-suggestion" role="group" aria-label={m.rename_suggest_title({ name: suggestion })}>
-  <p class="rename-title">{m.rename_suggest_title({ name: suggestion })}</p>
+  <div class="rename-head">
+    <p class="rename-title">{m.rename_suggest_title({ name: suggestion })}</p>
+    {#if weak}
+      <p class="rename-weak">{m.rename_suggest_weak()}</p>
+    {/if}
+  </div>
   {#if error}
     <p class="rename-error" role="alert">{error}</p>
   {/if}
   <div class="rename-actions">
+    <button type="button" class="rename-dismiss" onclick={again} disabled={busy}>{m.rename_suggest_again()}</button>
     <button type="button" class="rename-dismiss" onclick={dismiss} disabled={busy}>{m.rename_suggest_dismiss()}</button>
     <button type="button" class="rename-apply" onclick={apply} disabled={busy}>{m.rename_suggest_apply()}</button>
   </div>
@@ -51,9 +60,9 @@
     align-items: center;
     gap: var(--space-2);
   }
+  .rename-head { flex: 1 1 12rem; min-width: 0; }
+  .rename-weak { margin: 0; font-size: var(--text-xs); color: var(--text-muted); }
   .rename-title {
-    flex: 1 1 12rem;
-    min-width: 0;
     margin: 0;
     font-size: var(--text-sm);
     font-weight: 600;

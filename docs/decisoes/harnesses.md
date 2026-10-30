@@ -328,10 +328,14 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   antes dessa identidade comum.
 - **Contas Codex adicionais têm `CODEX_HOME` próprio**; a identidade é `credential_id=codex:<home>`,
   nunca a chave. Sem migração, rotação ou troca automática por cota.
-- **Abrir Codex nunca espera a sincronização**, nem no modal nem no pane: o lançador dispara o
-  preparo da conta adicional (ou a reconciliação da padrão) no backend e sobe a TUI na hora, com a
-  config que a conta já tem; o resultado vale a partir da próxima sessão. Preparo em andamento →
-  o lançador confia a pasta ele mesmo; falha ao pedir vira aviso no pane, nunca sessão fechada.
+- **O primeiro preparo do Codex termina antes da abertura**, com e sem terminal. A conta pronta
+  fica registrada e é reutilizada; relógio, nova abertura e mudança na fonte não mandam reinstalar
+  recursos. Atualizações posteriores entram pela sincronização manual. A confiança do novo `cwd`
+  continua separada do preparo da conta. Falha ou prazo vencido recusam a abertura antes de criar a
+  sessão; o trabalho de preparo continua e pode ser consultado. O runtime do ECC é conferido antes
+  de registrar a conta pronta, com dependências de produção sem scripts de instalação ou links de
+  binários. O passo de máquina `2026-10-29-codex-preparo-unico` repara as instalações anteriores uma
+  vez, preservando hooks pessoais e comandos próprios que já funcionam.
 - **A memória do Claude só é vista pelo Codex com uma CONVERSA ao lado dela** — e não basta o
   `.jsonl` existir: sessão que abriu e nunca conversou é descartada igual. Copiar só a `memory/`
   faz a reconciliação terminar `ok` sem trazer nada. Como o critério do detector não é documentado,

@@ -1179,7 +1179,9 @@ impl TerminalDriver {
                 _ => return DeliveryResult::new(Disposition::Unknown, DeliveryStage::Plugin, "plugin_uncertain"),
             }
         }
-        let use_clipboard = self.binding.windows && (text.contains('\n') || text.contains('\\'));
+        // `?` sozinho, digitado com o campo vazio, abre a ajuda de atalhos do Claude e não vira texto; colado, entra.
+        let pasted = text.contains('\n') || text == "?";
+        let use_clipboard = self.binding.windows && (pasted || text.contains('\\'));
         let clipboard = if use_clipboard { match self.clipboard_lock().await { Ok(lock) => lock, Err(e) => return Self::failed(e, DeliveryStage::Write) } } else { None };
         if refresh_guard || use_clipboard {
             before = match self.refresh_input_guard().await { Ok(b) => b, Err(e) => return Self::failed(e, DeliveryStage::Composer) };
@@ -1187,7 +1189,7 @@ impl TerminalDriver {
         if self.services.writing().await.is_err() { return DeliveryResult::new(Disposition::Deferred, DeliveryStage::Write, "write_journal"); }
         let guard = expected.map(|expected| GuardedText { expected,closed:true,pane:None,input:Some((text,&before)),allow_owned:false });
         let write = if use_clipboard { self.clipboard_guarded(text, guard).await }
-            else if text.contains('\n') { self.paste_guarded(text, id, guard).await } else { self.literal_guarded(text, guard).await };
+            else if pasted { self.paste_guarded(text, id, guard).await } else { self.literal_guarded(text, guard).await };
         if let Err(e) = write {
             if !e.may_have_written { return Self::failed(e, DeliveryStage::Write); }
             if expected.is_some() { return DeliveryResult::new(Disposition::Unknown, DeliveryStage::Write, "erro_sem_confirmacao_resposta"); }

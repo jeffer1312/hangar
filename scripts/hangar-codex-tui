@@ -51,7 +51,7 @@ def _api_backend(method: str, path: str) -> dict:
     token = os.environ.get("CP_AUTH_TOKEN") or env.get("CP_AUTH_TOKEN")
     port = os.environ.get("CP_PORT") or env.get("CP_PORT") or "8765"
     if not token:
-        raise RuntimeError("CP_AUTH_TOKEN ausente")
+        raise ConnectionError("CP_AUTH_TOKEN ausente")
     req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", method=method,
                                  headers={"Authorization": f"Bearer {token}"})
     with urllib.request.urlopen(req, timeout=5) as response:
@@ -63,22 +63,51 @@ def _texto(msg) -> str:
     return msg.get("texto", "") if isinstance(msg, dict) else str(msg or "")
 
 
-def _integracao_codex() -> dict:
-    """Dispara a reconciliação e não espera: ela termina no backend e vale a partir da próxima sessão."""
-    return _api_backend("POST", "/api/harness/codex/integracao/sessao")
+def _aguardar_preparo(result: dict, consultar) -> dict:
+    deadline = time.monotonic()+90
+    previous = None
+    while True:
+        state = result.get("status",result.get("estado"))
+        if state in ("ready","ok"):
+            return result
+        if state not in ("running","executando"):
+            for issue in result.get("issues",[]):
+                code = issue.get("code") if isinstance(issue,dict) else None
+                if isinstance(code,str) and re.fullmatch(r"[a-z0-9_]+",code):
+                    print(f"hangar-codex-tui: pendência do preparo: {code}",file=sys.stderr)
+            raise RuntimeError("o preparo não terminou; confira as pendências da sincronização antes de abrir")
+        remaining = deadline-time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("a conta continua em preparo; aguarde a conclusão e tente abrir novamente")
+        stage = _texto(result.get("etapa")) or "preparando a conta"
+        if stage != previous:
+            print(f"hangar-codex-tui: {stage}…",file=sys.stderr)
+            previous = stage
+        # A API de preparo não tem stream; os GETs só consultam o trabalho já iniciado.
+        time.sleep(min(0.25,remaining))
+        result = consultar()
 
 
-def _preparar_conta_codex(account_id: str, cwd: str) -> dict:
-    """Dispara o preparo da conta e não espera; a TUI abre com a config que a conta já tem.
-
-    Preparo já concluído (cache) passa pelo GET, que grava a confiança da pasta depois das escritas.
-    """
+def _preparar_conta_codex(account_id: str, cwd: str, codex_home: Path | None = None) -> dict:
+    """O GET reutiliza a conta pronta e confia o novo cwd sem reinstalar recursos."""
     path = (f"/api/codex-contas/{urllib.parse.quote(account_id, safe='')}/prepare"
             f"?cwd={urllib.parse.quote(cwd, safe='')}")
-    resultado = _api_backend("POST", path)
-    if resultado.get("status") != "running":
-        resultado = _api_backend("GET", path)
-    return resultado
+    try:
+        result = _api_backend("GET",path)
+    except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
+        from app.codex_contas import PREPARED_MARKER
+        home = codex_home or Path(os.environ.get("CODEX_HOME",Path.home()/".codex"))
+        if isinstance(exc,urllib.error.HTTPError) or not (home/PREPARED_MARKER).is_file():
+            raise
+        from app.adapters.codex.sessions import pretrust_cwd
+        pretrust_cwd(cwd,home)
+        print("hangar-codex-tui: serviço indisponível; reutilizando a conta já preparada",file=sys.stderr)
+        return {"status":"ready"}
+    if result.get("status") == "ready":
+        return result
+    if result.get("status") != "running":
+        result = _api_backend("POST",path)
+    return _aguardar_preparo(result,lambda:_api_backend("GET",path))
 # Quanto esperamos a TUI abrir a thread. Estourar NAO e fatal: o pane segue sendo um Codex
 # utilizavel; o que se perde e o vinculo com o app ate a proxima abertura.
 _ESPERA_THREAD = 60.0
@@ -481,7 +510,7 @@ def _sincronizado_pelo_hangar(hook: dict) -> bool:
     return any(hook["key"].startswith(f"{arquivo}:") for arquivo in arquivos)
 
 
-def _confiar_hooks(endpoint: str, cwd: str) -> None:
+def _confiar_hooks(endpoint: str, cwd: str, *, recarregar: bool = False, codex_home: Path | None = None) -> bool:
     """Confia nos hooks pendentes sincronizados pelo Hangar antes da TUI subir.
 
     Os hooks chegam ao Codex pela sincronização do próprio Hangar; sem isto a TUI para em "Hooks
@@ -493,6 +522,7 @@ def _confiar_hooks(endpoint: str, cwd: str) -> None:
     try:
         from websockets.sync.client import connect
         from app.adapters.codex.lancador import CLIENT_INFO
+        from app.codex_compat import edicoes_confianca_hooks
 
         limite = time.monotonic() + _HOOKS_DEADLINE_S
 
@@ -513,21 +543,14 @@ def _confiar_hooks(endpoint: str, cwd: str) -> None:
         with connect(endpoint, open_timeout=5, close_timeout=1, max_size=None) as ws:
             pedir(ws, 1, "initialize", {"clientInfo": CLIENT_INFO, "capabilities": None})
             dados = pedir(ws, 2, "hooks/list", {"cwds": [cwd]})
-            pendentes = [h for entrada in dados.get("data") or [] for h in entrada.get("hooks") or []
-                         if h.get("enabled") and h.get("trustStatus") in ("untrusted", "modified")
-                         and isinstance(h.get("key"), str) and isinstance(h.get("currentHash"), str)]
-            aceitos = {h["key"]: h["currentHash"] for h in pendentes if _sincronizado_pelo_hangar(h)}
-            restantes = len(pendentes) - len(aceitos)
-            if aceitos:
-                edicoes = [{"keyPath": ".".join(json.dumps(p) for p in ("hooks", "state", chave, "trusted_hash")),
-                            "value": hash_atual, "mergeStrategy": "replace"}
-                           for chave, hash_atual in aceitos.items()]
+            edicoes, restantes = edicoes_confianca_hooks(dados, codex_home or Path(os.environ.get("CODEX_HOME") or Path.home()/".codex"), recarregar=recarregar)
+            if edicoes:
                 pedir(ws, 3, "config/batchWrite", {"edits": edicoes, "reloadUserConfig": True})
-                print(f"{_PREFIXO} {len(aceitos)} hooks sincronizados pelo Hangar foram aceitos: "
-                      + ", ".join(_screen_key(chave) for chave in aceitos), file=sys.stderr)
+                print(f"{_PREFIXO} {len(edicoes)} hooks sincronizados pelo Hangar foram aceitos", file=sys.stderr)
             if restantes:
                 print(f"{_PREFIXO} {restantes} hooks de outra origem ficam para o Codex perguntar "
                       "no terminal", file=sys.stderr)
+        return True
     except Exception as exc:
         if isinstance(exc, _RpcError):
             detalhe = f"código {exc.code}" if exc.code is not None else "recusado"
@@ -535,6 +558,7 @@ def _confiar_hooks(endpoint: str, cwd: str) -> None:
             detalhe = type(exc).__name__
         print(f"{_PREFIXO} não deu para aceitar os hooks ({etapa}, {detalhe}); "
               "o Codex vai perguntar no terminal", file=sys.stderr)
+        return False
 
 
 def _espera_thread(endpoint: str, cwd: str, servidor, erros, salvar) -> None:
@@ -707,33 +731,22 @@ def main() -> int:
     os.environ.clear()
     os.environ.update(ambiente)
 
-    if not account.is_default and not imported_resume:
+    account_prepared = False
+    if not imported_resume and (not account.is_default or os.environ.get("CP_CODEX_SYNC_ENABLED","1").lower() not in ("0","false","no")):
         try:
-            resultado = _preparar_conta_codex(account.id, cwd)
-            status = resultado.get("status")
-            if status == "running":
-                # O GET só confia a pasta depois das escritas do preparo; aqui a TUI sobe antes dele.
-                from app.adapters.codex import sessions
-                sessions.pretrust_cwd(cwd, codex_home=account.home)
-                print("hangar-codex-tui: sincronização da conta segue em segundo plano; "
-                      "vale a partir da próxima sessão", file=sys.stderr)
-            elif status != "ready":
-                print(f"hangar-codex-tui: última sincronização da conta: {status or 'desconhecida'}",
-                      file=sys.stderr)
-                for issue in resultado.get("issues", []):
-                    print(f"hangar-codex-tui: {_texto(issue) or issue.get('code', 'aviso da sincronização')}",
-                          file=sys.stderr)
+            _preparar_conta_codex(account.id, cwd, selected_home)
+            account_prepared = True
         except Exception as exc:                          # noqa: BLE001
-            print(f"hangar-codex-tui: sincronização da conta não pôde ser pedida ({exc}); "
-                  "o Codex abre com a config atual da conta", file=sys.stderr)
+            print(f"hangar-codex-tui: a conta não abriu porque o preparo não foi confirmado ({exc})",file=sys.stderr)
+            return 1
 
     # O cwd novo ainda pode não estar no config do Codex. O alias precisa existir antes do app-server.
     # Falha (override pessoal, config.toml ilegível) não impede a TUI: fica sem alias e sem limite maior.
     codex_home = selected_home
     limite = LIMITE_INSTRUCOES
-    if not imported_resume:
+    if not imported_resume and not account_prepared:
         print("hangar-codex-tui: preparando as instruções do Codex…", file=sys.stderr)
-    if account.is_default and not imported_resume:
+    if account.is_default and not imported_resume and not account_prepared:
         try:
             preparar_instrucoes(Path.home(), codex_home, Path(cwd))
             limite = limite_instrucoes(codex_home)
@@ -746,26 +759,6 @@ def main() -> int:
             limite = limite_instrucoes(codex_home)
         except Exception as exc:                          # noqa: BLE001
             print(f"hangar-codex-tui: limite de instruções da conta não pôde ser lido ({exc})",
-                  file=sys.stderr)
-
-    # Quem reconcilia é o BACKEND (um executor só, e uma instalação longa termina lá); a abertura
-    # não espera, e a sessão lê a config que já existe. Falha não impede a TUI.
-    if account.is_default and not imported_resume:
-        try:
-            resultado = _integracao_codex()
-            if resultado.get("estado") == "executando":
-                print("hangar-codex-tui: integração do Codex segue em segundo plano; "
-                      "vale a partir da próxima sessão", file=sys.stderr)
-            elif resultado.get("estado") not in (None, "ocioso", "ok") or resultado.get("erros"):
-                print(f"hangar-codex-tui: integração Codex: {resultado['estado']} — {_texto(resultado.get('etapa'))}",
-                      file=sys.stderr)
-            for aviso in [*resultado.get("avisos", []), *resultado.get("erros", [])]:
-                print(f"hangar-codex-tui: {_texto(aviso)}", file=sys.stderr)
-            if resultado.get("confianca_pendente"):
-                print("hangar-codex-tui: há itens aguardando sua confirmação de confiança no Codex",
-                      file=sys.stderr)
-        except Exception as exc:                          # noqa: BLE001
-            print(f"hangar-codex-tui: integração Codex falhou ({exc}); a sessão abre assim mesmo",
                   file=sys.stderr)
 
     endpoint = _porta_livre()

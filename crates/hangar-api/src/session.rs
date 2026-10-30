@@ -175,6 +175,9 @@ pub struct SessionRow {
     /// Nome sugerido para a sessão de nome genérico, sem "agora não" do dono; só existe no Rust.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rename_suggestion: Option<String>,
+    /// A sugestão saiu com pouco contexto e se refaz no próximo pedido.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub rename_weak: bool,
 }
 
 fn default_provider() -> String {

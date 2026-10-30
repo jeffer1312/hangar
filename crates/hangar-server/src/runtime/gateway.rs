@@ -225,6 +225,9 @@ pub(super) async fn launch_if_needed(policy:&PolicyClient,target:&mut RuntimeTar
     } else {
         super::codex_launch::launch_env(&base,&dir,&meta).map(|launch|(launch.program,launch.env,None))
     }).await.map_err(|_|failure("launch_job"))??;
+    if target.provider == "codex" {
+        policy.prepare_codex(env.get("CODEX_HOME").ok_or_else(||failure("codex_account_invalid"))?).await?;
+    }
     let cwd = target.metadata["cwd"].as_str().filter(|cwd|!cwd.is_empty()).ok_or_else(||failure("launch_cwd"))?;
     let spec = process::LaunchSpec { provider:process::Provider::from_str(&target.provider).ok_or_else(||failure("runtime_provider"))?,
         key:target.key.clone(),cwd:cwd.into(),program,env:env.into_iter().collect(),sidecar_dir:sidecar_dir.to_owned() };
@@ -330,8 +333,9 @@ async fn attach_terminal_mods(mods:&crate::mods::state::Mods,target:&super::term
 
 impl RuntimeRegistry {
     pub fn new(upstream:SocketAddr,secret:String,instance:String) -> Self {
+        let preparation = crate::accounts::bridge::AccountsBridge::new(upstream,secret.clone(),instance.clone()).ok();
         Self { diag:crate::diag::DiagClient::new(upstream,secret.clone()),reopening:Default::default(),terminal_problems:Default::default(),terminal_status:Default::default(),heal_attempts:Default::default(),interactions:None,entries:Arc::new(Mutex::new(BTreeMap::new())),terminal_states:None,terms:None,events:broadcast::channel(1024).0,
-            policy:PolicyClient::new(upstream,secret),instance,lifecycle:Mutex::new(BTreeMap::new()),revisions:Mutex::new(BTreeMap::new()),mods:None,plugin:None,ingress:Default::default(),
+            policy:PolicyClient::new(upstream,secret).with_preparation(preparation),instance,lifecycle:Mutex::new(BTreeMap::new()),revisions:Mutex::new(BTreeMap::new()),mods:None,plugin:None,ingress:Default::default(),
             respawn_base:Duration::from_secs(5),reconnect_waits:Default::default(),permissions:None,processes:Arc::new(crate::list::procs::SystemProcs::default()),live:Default::default(),codex_owned:Default::default(),hubs:std::sync::OnceLock::new(),self_ref:std::sync::OnceLock::new(),
             watcher:std::sync::OnceLock::new(),codex_wake:Arc::new(tokio::sync::Notify::new()),native:Default::default(),limits:std::sync::OnceLock::new(),limit_holds:Default::default() }
     }
@@ -2584,6 +2588,31 @@ impl RuntimeRegistry {
         let sessions = entries.values().filter(|entry| entry.account_key.as_ref().is_some_and(|account| account == key))
             .map(|entry| entry.name.clone()).collect();
         crate::accounts::UsageFacts { complete: true, sessions, ..Default::default() }
+    }
+
+    pub async fn refresh_hooks(&self,key:&crate::accounts::AccountKey) -> Value {
+        static CALLS:AtomicU64 = AtomicU64::new(0);
+        let sessions:Vec<_> = self.entries.lock().await.values()
+            .filter(|entry|entry.provider == "codex" && entry.account_key.as_ref() == Some(key))
+            .map(|entry|(entry.name.clone(),entry.handle.clone())).collect();
+        let results = futures_util::future::join_all(sessions.into_iter().map(|(name,handle)|async move {
+            let command = RuntimeCommand { operation_id:format!("refresh-hooks:{}:{}",std::process::id(),CALLS.fetch_add(1,std::sync::atomic::Ordering::Relaxed)),
+                kind:OperationKind::RefreshHooks,payload:json!({}) };
+            match tokio::time::timeout(Duration::from_secs(35),handle.command(command)).await {
+                Ok(Ok(reply)) => json!({"session":name,"ok":reply.disposition == Disposition::Accepted,
+                    "approval_required":reply.payload["approval_required"] == true}),
+                Ok(Err(error)) => {
+                    tracing::warn!(session=%name,code=%error.code,"não foi possível recarregar a aprovação dos hooks");
+                    json!({"session":name,"ok":false,"approval_required":true,"error":error.code})
+                }
+                Err(_) => {
+                    tracing::warn!(session=%name,"o Codex não confirmou a recarga dos hooks no prazo");
+                    json!({"session":name,"ok":false,"approval_required":true,"error":"hook_trust_timeout"})
+                }
+            }
+        })).await;
+        json!({"ok":results.iter().all(|result|result["ok"] == true),
+            "approval_required":results.iter().any(|result|result["approval_required"] == true),"sessions":results})
     }
 
     pub async fn snapshots(&self) -> Result<Vec<RuntimeEvent>,RuntimeError> {

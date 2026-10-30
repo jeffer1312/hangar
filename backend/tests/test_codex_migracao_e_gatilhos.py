@@ -1,6 +1,9 @@
 """Primeira rodada numa máquina com a ponte antiga, hook de estado próprio, interruptor e gatilho de sessão."""
 import json
+import os
+import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -121,7 +124,7 @@ def test_filtered_hooks_remove_only_previously_imported_entries(tmp_path):
     assert service._estado["confianca_pendente"] is False
 
 
-def test_hook_import_policy_change_invalidates_reconciliation_cache(tmp_path, monkeypatch):
+def test_hook_import_policy_change_aguarda_sincronizacao_manual(tmp_path, monkeypatch):
     home = _home(tmp_path)
     monkeypatch.setattr(codex_integracao, "_REPO", tmp_path / "repo")
     service = IntegracaoCodex(home, home / ".codex")
@@ -130,7 +133,7 @@ def test_hook_import_policy_change_invalidates_reconciliation_cache(tmp_path, mo
     _registro(service, fingerprint=service.fingerprint())
     assert service.precisa_reconciliar() is False
     monkeypatch.setattr(codex_integracao, "_HOOK_IMPORT_POLICY", policy)
-    assert service.precisa_reconciliar() is True
+    assert service.precisa_reconciliar() is False
     _registro(service, fingerprint=service.fingerprint())
     assert service.precisa_reconciliar() is False
 
@@ -150,6 +153,51 @@ def test_instalador_acrescenta_uma_vez_e_nao_reescreve_entrada_existente(tmp_pat
         codex_hook_installer._STATE_COMMAND, codex_hook_installer.comando_navegador(False)]
     assert codex_hook_installer.ensure_codex_state_hook_installed(codex, windows=False) == []
     assert json.loads((codex / "hooks.json").read_text()) == data
+
+
+@pytest.mark.parametrize("legacy_exists", [False, True])
+def test_instalador_repara_so_python_legado_ausente_do_pacote(tmp_path, legacy_exists):
+    root = tmp_path / ".hangar/current"
+    python = root / ("python/python.exe" if os.name == "nt" else "python/bin/python3")
+    legacy = root / ("backend/.venv/Scripts/python.exe" if os.name == "nt" else "backend/.venv/bin/python")
+    python.parent.mkdir(parents=True)
+    python.write_text("")
+    if legacy_exists:
+        legacy.parent.mkdir(parents=True)
+        legacy.write_text("")
+    scripts = root / "backend/hooks"
+    scripts.mkdir(parents=True, exist_ok=True)
+    for name in ("state_hook.py", "nav_hook.py", "guard_tmux.py"):
+        (scripts / name).write_text("")
+    codex = tmp_path / ".codex"
+    codex.mkdir()
+    old = f'"{legacy}" "{scripts / "guard_tmux.py"}"'
+    if os.name == "nt":
+        old = f"& {old} ; exit $LASTEXITCODE"
+    path = codex / "hooks.json"
+    path.write_text(json.dumps({"hooks":{"PreToolUse":[_grupo(old, matcher="Bash")]}}))
+    source = """
+import json
+from pathlib import Path
+from app.codex_hook_installer import ensure_codex_state_hook_installed
+home=Path.home()/'.codex'
+ensure_codex_state_hook_installed(home)
+before=(home/'hooks.json').stat().st_mtime_ns
+second=ensure_codex_state_hook_installed(home)
+print(json.dumps({'second':second,'unchanged':before==(home/'hooks.json').stat().st_mtime_ns}))
+"""
+    env = {**os.environ,"HOME":str(tmp_path),"USERPROFILE":str(tmp_path),
+           "CODEX_HOME":str(codex),"PYTHONPATH":str(Path(__file__).resolve().parents[1])}
+    result = subprocess.run([sys.executable,"-c",source],env=env,cwd=tmp_path,
+                            text=True,capture_output=True,timeout=15)
+    assert result.returncode == 0, result.stderr
+    guards = [h["command"] for g in json.loads(path.read_text())["hooks"]["PreToolUse"]
+              for h in g["hooks"] if "guard_tmux.py" in h.get("command", "")]
+    expected = old if legacy_exists else f'"{python}" "{scripts / "guard_tmux.py"}"'
+    if os.name == "nt" and not legacy_exists:
+        expected = f"& {expected} ; exit $LASTEXITCODE"
+    assert guards == [expected]
+    assert json.loads(result.stdout) == {"second":[],"unchanged":True}
 
 
 def test_no_windows_o_hook_de_estado_vai_em_powershell_e_o_formato_cmd_e_reescrito(tmp_path):
@@ -302,9 +350,9 @@ def test_abrir_sessao_so_reconcilia_quando_algo_mudou(tmp_path, monkeypatch):
     _registro(service, fingerprint="fp-1")
     assert service.precisa_reconciliar() is False, "fonte igual, marketplace no prazo, última ok"
     _registro(service, fingerprint="fp-0")
-    assert service.precisa_reconciliar() is True, "fonte mudou"
+    assert service.precisa_reconciliar() is False, "fonte mudou: atualização só pela sincronização manual"
     _registro(service, fingerprint="fp-1", proxima_em=-1)
-    assert service.precisa_reconciliar() is True, "marketplace venceu"
+    assert service.precisa_reconciliar() is False, "o relógio não invalida um preparo concluído"
     _registro(service, fingerprint="fp-1", estado="parcial", ha_segundos=10)
     assert service.precisa_reconciliar() is False, "falha recente espera a retentativa"
     _registro(service, fingerprint="fp-1", estado="parcial", ha_segundos=301)
@@ -332,8 +380,25 @@ async def test_gatilho_de_sessao_respeita_interruptor_e_cache(rc, tmp_path, monk
     await service.sessao()
     assert chamadas == [], "nada mudou: não chama o Codex"
     _registro(service, fingerprint="fp-0")
-    assert (await service.sessao())["estado"] == "executando"
-    assert chamadas == [("sessao", False)]
+    assert (await service.sessao())["estado"] == "ok"
+    assert chamadas == [], "abrir não atualiza uma conta já preparada"
+
+
+@pytest.mark.parametrize("changed_source", [False, True])
+async def test_abertura_reutiliza_preparo_concluido_sem_reconciliar(rc, tmp_path, changed_source):
+    home = _home(tmp_path)
+    service = IntegracaoCodex(home, home / ".codex", binario="codex-unused-in-ready-account")
+    rc.aplicar({"codex_sync": True})
+    fingerprint = "changed-source" if changed_source else service.fingerprint()
+    _registro(service, fingerprint=fingerprint, proxima_em=-86400)
+    path = service.raiz / "estado.json"
+    before = (path.read_bytes(), path.stat().st_mtime_ns)
+    try:
+        result = await service.sessao()
+    finally:
+        await service.fechar()
+    assert result["estado"] == "ok"
+    assert (path.read_bytes(), path.stat().st_mtime_ns) == before
 
 
 async def test_erro_inesperado_nao_deixa_o_estado_preso_em_executando(tmp_path, monkeypatch):
@@ -366,6 +431,7 @@ async def test_hooks_list_em_formato_desconhecido_vira_aviso(tmp_path, resposta)
     codex = type("C", (), {"request": AsyncMock(return_value=resposta)})()
     await service._conferir_confianca(codex)
     assert any("não informou a confiança" in a for a in service._estado["avisos"])
+    assert service._estado["erros"], "resposta inválida não confirma preparo completo"
 
 
 async def test_md_solto_em_agents_e_ignorado_com_aviso_sem_derrubar_a_etapa(tmp_path, monkeypatch):

@@ -9,6 +9,7 @@ vi.mock('@hangar/core', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@hangar/core')>()),
   renameSession: vi.fn(async (_old: string, nv: string) => ({ ok: true, name: nv })),
   dismissRenameSuggestion: vi.fn(async () => {}),
+  requestRenameSuggestion: vi.fn(async () => ({ suggestion: 'etiquetas-por-maquina', weak: false })),
 }));
 
 const server = { id: 's1', label: 's1', baseUrl: 'http://s1', token: 't' } as unknown as Server;
@@ -18,16 +19,17 @@ async function flush() {
   for (let i = 0; i < 5; i++) { await Promise.resolve(); await tick(); }
 }
 
-function render() {
-  const calls = { renamed: [] as string[], dismissed: 0 };
+function render(weak = false) {
+  const calls = { renamed: [] as string[], dismissed: 0, suggested: [] as core.RenameSuggestionResult[] };
   const target = document.createElement('div');
   document.body.appendChild(target);
   app = mount(RenameSuggestionStrip, { target, props: {
-    server, sessionName: 'hangar-2', suggestion: 'etiquetas-de-conta',
+    server, sessionName: 'hangar-2', suggestion: 'etiquetas-de-conta', weak,
     onRenamed: (n: string) => calls.renamed.push(n), onDismissed: () => { calls.dismissed++; },
+    onSuggested: (s: core.RenameSuggestionResult) => calls.suggested.push(s),
   } });
-  const [dismiss, apply] = target.querySelectorAll('button');
-  return { target, calls, dismiss, apply };
+  const [again, dismiss, apply] = target.querySelectorAll('button');
+  return { target, calls, again, dismiss, apply };
 }
 
 afterEach(() => { if (app) unmount(app); app = null; document.body.innerHTML = ''; vi.clearAllMocks(); });
@@ -57,5 +59,21 @@ describe('RenameSuggestionStrip', () => {
     await flush();
     expect(target.querySelector('[role="alert"]')?.textContent).toBe('nome em uso');
     expect(calls.renamed).toEqual([]);
+  });
+
+  it('Outra força uma sugestão nova e a devolve', async () => {
+    const { calls, again } = render();
+    again.click();
+    await flush();
+    expect(core.requestRenameSuggestion).toHaveBeenCalledWith(server, 'hangar-2', true);
+    expect(calls.suggested).toEqual([{ suggestion: 'etiquetas-por-maquina', weak: false }]);
+  });
+
+  it('só a sugestão fraca mostra o aviso de pouco contexto', () => {
+    expect(render(true).target.querySelector('.rename-weak')).not.toBeNull();
+  });
+
+  it('sugestão firme não mostra o aviso', () => {
+    expect(render().target.querySelector('.rename-weak')).toBeNull();
   });
 });
