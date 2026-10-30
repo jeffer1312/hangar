@@ -348,14 +348,5 @@ async fn panel_native_transport_matches_real_python_http_capture() {
 
 
 #[cfg(unix)]
-#[test]
-fn panel_public_cli_contracts_are_isolated_and_complete() {
-    let root=std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
-    let python=std::env::var_os("HANGAR_TEST_PYTHON").unwrap_or_else(||"python3".into());
-    let binary=std::env::var_os("HANGAR_TEST_SERVER_BIN").unwrap_or_else(||env!("CARGO_BIN_EXE_hangar-server").into());
-    for name in ["cli","projects-cli","process-cli","depth-cli","snapshot-depth-cli","paths-cli","write-cli","stdout-cli","env-cli","user-environment-cli"] {
-        let script=if name=="cli"{"test-panel-cli.py".to_owned()}else{format!("test-panel-{name}.py")};
-        let output=std::process::Command::new(&python).arg(root.join("scripts").join(&script)).arg(&binary).current_dir(root).output().unwrap();
-        assert!(output.status.success(),"{script}: {}\n{}",String::from_utf8_lossy(&output.stdout),String::from_utf8_lossy(&output.stderr));
-    }
-}
+#[path = "peer_panel_cli.rs"]
+mod cli;

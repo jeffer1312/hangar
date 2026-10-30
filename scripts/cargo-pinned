@@ -47,7 +47,7 @@ if [[ "$alvo" == "$proprio" ]]; then
         export CARGO_TARGET_DIR="$alvo"
     fi
 fi
-python3 "$raiz/scripts/cargo-freshness.py" --metadata "$metadata" --target-dir "$alvo"
+bash "$raiz/scripts/cargo-freshness.sh" "$metadata" "$alvo"
 set +e
 nice -n 19 ionice -c 3 cargo "${args[@]}" -j "${CARGO_BUILD_JOBS:-2}" --message-format=json-render-diagnostics |
     # No `cargo test` a saída dos testes vem misturada às mensagens do cargo: ela passa adiante.

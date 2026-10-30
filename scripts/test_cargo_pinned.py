@@ -67,7 +67,7 @@ def checkout(tmp_path):
     root = tmp_path / "checkout"
     scripts = root / "scripts"
     scripts.mkdir(parents=True)
-    for name in ("cargo-pinned", "pin-auth-pair.py", "cargo-freshness.py"):
+    for name in ("cargo-pinned", "pin-auth-pair.py", "cargo-freshness.sh"):
         shutil.copyfile(ROOT / "scripts" / name, scripts / name)
     for name in ("hangar-auth", "hangar-server"):
         manifest = root / "crates" / name / "Cargo.toml"

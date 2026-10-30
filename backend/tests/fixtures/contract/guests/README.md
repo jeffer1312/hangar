@@ -56,8 +56,6 @@ As capturas adicionais foram obtidas com o Python isolado pelo comando registrad
 | `rate.json` | Dez sequências do limitador, com relógio fracionário, retrocesso e limites extremos |
 | `request-body.json` | 38 corpos e tipos de conteúdo; inclui UTF-16/32, surrogates, parser e falha posterior da resposta |
 | `loop-validation.json` | 80 modelos de loop pela borda FastAPI, antes da implementação dos consumidores |
-| `loop-unicode.json` | Seis entradas Unicode; resposta HTTP, fila, sidecar e escrita direta são comparados separadamente |
-| `auth-lifetime.json` | Duração real do Context enviado aos filhos; FFI isolada, sem gravar chaves |
 | `settings.json` | 30 opções no dotenv, incluindo inteiros grandes, entradas inválidas e binds do cookie |
 
 Diferenças deliberadas autorizadas para esta migração:

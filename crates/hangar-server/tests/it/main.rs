@@ -455,3 +455,5 @@ fn physical_tempdir() -> tempfile::TempDir {
     };
     tempfile::tempdir_in(parent).unwrap()
 }
+
+mod native_setup_cli;
