@@ -95,6 +95,35 @@ mod tests {
             assert_eq!(json!(*source.questions.lock().unwrap()),row["question_reads"],"GUE-082 {row}");
         }
     }
+    #[tokio::test]
+    async fn guest_push_first_question_refreshes_missing_snapshot() {
+        for provider in ["pi", "omp", "kimi"] {
+            let source = Fake {provider:provider.into(),scenario:"question".into(),sleeps:Mutex::default(),captures:Mutex::default(),questions:Mutex::default(),notices:Mutex::default()};
+            let calls = Mutex::new(Vec::new());
+            let row = super::super::resolve_row(|fresh| {
+                calls.lock().unwrap().push(fresh);
+                std::future::ready(fresh.then(|| serde_json::from_value(json!({"name":"fixture","provider":provider,"jsonl":"fixture.jsonl"})).unwrap()))
+            }, false).await;
+            // Uma única transição: o marcador não muda enquanto a descoberta alcança a sessão.
+            if let Some(row) = row {awaiting(&source, row).await;}
+            assert_eq!(*source.notices.lock().unwrap(), vec![json!(["fixture","pergunta do sidecar"])], "GUE-082 {provider}");
+            assert_eq!(*calls.lock().unwrap(), vec![false,true]);
+        }
+    }
+
+    #[tokio::test]
+    async fn guest_push_discovery_does_not_repeat_a_fresh_read() {
+        for (fresh, present, expected) in [(false,true,vec![false]),(false,false,vec![false,true]),(true,false,vec![true])] {
+            let calls = Mutex::new(Vec::new());
+            let row = super::super::resolve_row(|refresh| {
+                calls.lock().unwrap().push(refresh);
+                std::future::ready(present.then(|| serde_json::from_value(json!({"name":"fixture","provider":"pi"})).unwrap()))
+            }, fresh).await;
+            assert_eq!(row.is_some(),present);
+            assert_eq!(*calls.lock().unwrap(),expected);
+        }
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn guest_push_capture_preserves_python_output_and_exact_target() {

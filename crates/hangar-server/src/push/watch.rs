@@ -285,6 +285,16 @@ struct Watch {
     memory_path: PathBuf,
 }
 
+async fn resolve_row<F, Fut>(mut lookup: F, fresh: bool) -> Option<hangar_api::session::SessionRow>
+where
+    F: FnMut(bool) -> Fut,
+    Fut: std::future::Future<Output = Option<hangar_api::session::SessionRow>>,
+{
+    let row = lookup(fresh).await;
+    // O marcador pode chegar antes de a sessão entrar no retrato compartilhado.
+    if row.is_none() && !fresh { lookup(true).await } else { row }
+}
+
 impl Watch {
     fn settings(&self) -> Settings { Settings::read(&self.st.accounts.env.claude_base, &self.env) }
 
@@ -299,6 +309,10 @@ impl Watch {
     }
 
     async fn row_of(&self, sid: &str, fresh: bool) -> Option<hangar_api::session::SessionRow> {
+        resolve_row(|refresh| self.lookup_row(sid, refresh), fresh).await
+    }
+
+    async fn lookup_row(&self, sid: &str, fresh: bool) -> Option<hangar_api::session::SessionRow> {
         let produced = match if fresh { self.st.list.refresh().await } else { self.st.list.snapshot().await } {
             Ok(produced) => produced,
             Err(e) => {
