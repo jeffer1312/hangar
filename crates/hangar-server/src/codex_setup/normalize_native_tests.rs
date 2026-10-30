@@ -41,3 +41,15 @@ fn native_json_replaces_the_python_wrapper_and_preserves_the_original_shell_expr
         }
     }
 }
+
+#[test]
+fn installed_windows_hooks_select_package_or_developer_binary_without_nesting() {
+    let executable = "C:/Users/D'Ávila/.hangar/current/bin/hangar-server.exe";
+    let allow = hooks(&config("rtk hook claude --extra"), executable, "codex-hook-allow", true);
+    assert!(text(&allow).starts_with("& $(if (Test-Path"));
+    assert_eq!(hooks(&allow, executable, "codex-hook-allow", true), allow);
+    assert_eq!(installed(&allow, true), Some((executable.into(), "codex-hook-allow".into())));
+    let json = security(&config("echo fixture && echo done"), executable, "codex-hook-json", true).unwrap();
+    assert_eq!(security(&json, executable, "codex-hook-json", true).unwrap(), json);
+    assert_eq!(split(text(&json), true).unwrap()[3], "echo fixture && echo done");
+}

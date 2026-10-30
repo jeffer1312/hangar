@@ -1,10 +1,21 @@
 //! Normalização dos comandos de hooks importados, sem executar expressões de shell.
 use crate::{accounts::quotas::other::py_strip, orchestration::codec};
 use serde_json::{Value, json};
+#[path="hook_launch.rs"]
+mod hook_launch;
+
+fn executable_command(text: &str, windows: bool) -> std::borrow::Cow<'_, str> {
+    if windows && let Some((path, args)) = hook_launch::parse(text) {
+        return format!("& \"{path}\" {args}").into();
+    }
+    text.into()
+}
 fn basename(text: &str) -> String {
     text.rsplit(['/', '\\']).next().unwrap_or("").to_lowercase()
 }
 fn split(command: &str, windows: bool) -> Result<Vec<String>, String> {
+    let normalized = executable_command(command, windows);
+    let command = normalized.as_ref();
     if !windows {
         return crate::loops::check::split(command, true).map_err(str::to_owned);
     }
@@ -59,6 +70,8 @@ fn split(command: &str, windows: bool) -> Result<Vec<String>, String> {
     Ok(out)
 }
 fn parts(command: &str, windows: bool) -> Option<Vec<String>> {
+    let normalized = executable_command(command, windows);
+    let command = normalized.as_ref();
     let chars: Vec<_> = command.chars().collect();
     let (mut out, mut start, mut quote, mut i) = (Vec::new(), 0, None, 0);
     while i < chars.len() {
@@ -149,8 +162,10 @@ fn command(args: &[String], windows: bool) -> String {
             .collect::<Vec<_>>()
             .join(" ");
     }
-    let mut out = vec!["&".to_owned()];
-    for arg in args {
+    let expression = args.first().and_then(|path| hook_launch::expression(path));
+    let skip = usize::from(expression.is_some());
+    let mut out = vec![expression.unwrap_or_else(|| "&".to_owned())];
+    for arg in &args[skip..] {
         let mut token = String::from("\"");
         let mut slashes = 0;
         for c in arg.chars() {

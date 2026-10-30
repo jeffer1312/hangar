@@ -1,11 +1,73 @@
 //! O wrapper conserva os três fluxos e o resultado do processo do hook.
 use std::{ffi::{OsStr, OsString}, io::{self, Read, Write}, process::{Command, Output, Stdio}};
+use std::path::{Component, Path, PathBuf};
 
 pub fn allow_wrapper() -> Result<(String, String), String> {
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+    let executable = persistent_executable(&executable, std::env::home_dir().as_deref());
     let executable = executable.into_os_string().into_string()
         .map_err(|_| "O caminho do servidor não está em UTF-8".to_owned())?;
     Ok((executable, "codex-hook-allow".into()))
+}
+
+fn persistent_executable(executable: &Path, home: Option<&Path>) -> PathBuf {
+    let Some(home) = home else { return executable.to_owned(); };
+    let executable = crate::list::links::without_verbatim(executable.canonicalize().unwrap_or_else(|_| executable.to_owned()));
+    let home = crate::list::links::without_verbatim(home.canonicalize().unwrap_or_else(|_| home.to_owned()));
+    let current = crate::install_root::current(&home);
+    let stable = || if cfg!(windows) { current.join("bin/hangar-server.exe") }
+        else { current.join("scripts/hangar-server-command") };
+    let versions = home.join(".hangar/versions");
+    if let Ok(relative) = executable.strip_prefix(&versions) {
+        let mut components = relative.components();
+        if matches!(components.next(), Some(Component::Normal(_))) {
+            let binary = components.as_path();
+            if binary.parent() == Some(Path::new("bin"))
+                && binary.file_name().is_some_and(|name| name == "hangar-server" || name == "hangar-server.exe")
+            {
+                return stable();
+            }
+        }
+    }
+    if let Ok(real) = current.canonicalize().map(crate::list::links::without_verbatim)
+        && let Ok(relative) = executable.strip_prefix(real)
+    { let _ = relative; return stable(); }
+    if executable.parent() == Some(home.join(".hangar/bin").as_path()) && current.exists() {
+        return stable();
+    }
+    executable.to_owned()
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+
+    #[test]
+    fn recorded_hooks_follow_current_even_while_the_link_is_absent() {
+        let home = Path::new("fixture-home");
+        for name in ["hangar-server", "hangar-server.exe"] {
+            let executable = home.join(".hangar/versions/v1/bin").join(name);
+            let expected = if cfg!(windows) { home.join(".hangar/current/bin/hangar-server.exe") }
+                else { home.join(".hangar/current/scripts/hangar-server-command") };
+            assert_eq!(persistent_executable(&executable, Some(home)), expected);
+        }
+        for executable in [home.join(".hangar/bin/hangar-server"), home.join(".hangar/current/bin/hangar-server"), PathBuf::from("other-checkout/crates/target/debug/hangar-server")] {
+            assert_eq!(persistent_executable(&executable, Some(home)), executable);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recorded_checkout_hook_keeps_the_current_link_unresolved() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let checkout = temp.path().join("checkout");
+        std::fs::create_dir_all(&checkout).unwrap();
+        std::fs::create_dir_all(home.join(".hangar")).unwrap();
+        std::os::unix::fs::symlink(&checkout, crate::install_root::current(&home)).unwrap();
+        let binary = Path::new("crates/target/release/hangar-server");
+        assert_eq!(persistent_executable(&checkout.join(binary), Some(&home)), crate::install_root::current(&home).join("scripts/hangar-server-command"));
+    }
 }
 
 pub fn run(mode: &str, args: &[OsString]) -> i32 {
