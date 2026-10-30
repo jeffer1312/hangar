@@ -774,7 +774,9 @@ impl Hangar {
                 view.last_move = Some(Instant::now());
                 this.view_mouse("move", e.position);
             }))
-            .on_scroll_wheel(cx.listener(|this, e: &ScrollWheelEvent, _, _| {
+            .on_scroll_wheel(cx.listener(|this, e: &ScrollWheelEvent, _, cx| {
+                // Rola a página da outra máquina, não a de configurações em volta.
+                cx.stop_propagation();
                 let Some((x, y)) = this.view_point(e.position, false) else { return };
                 let delta = e.delta.pixel_delta(px(17.78));
                 if f32::from(delta.y) != 0. { this.view_input(json!({"t": "wheel", "x": x, "y": y, "down": f32::from(delta.y) < 0.})); }
