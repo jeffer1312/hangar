@@ -9,7 +9,8 @@ fn codex_service_pipeline_hooks_preserves_backups_manifest_and_install_order(){
  let corpus:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/codex-integration/pipeline-hooks.json")).unwrap();let mut differences=vec![];
  for case in corpus["cases"].as_array().unwrap(){
   let temp=tempfile::tempdir().unwrap();let root=temp.path();let home=root.join("home");let account=home.join(".codex");std::fs::create_dir_all(&account).unwrap();let backups=status::root(&home,&account).unwrap().join("backups");
-  let input=&case["input"];for(key,name)in [("current","hooks.json"),("mirror",".hangar-hooks.json")]{if let Some(value)=input.get(key){std::fs::write(account.join(name),hangar_server::transcript::pyjson::dumps_indent(value,1,true)).unwrap();}}
+  let input=&case["input"];if input["rtk"]==true{continue;}for(key,name)in [("current","hooks.json"),("mirror",".hangar-hooks.json")]{if let Some(value)=input.get(key){std::fs::write(account.join(name),hangar_server::transcript::pyjson::dumps_indent(value,1,true)).unwrap();}}
+  if let Some(raw)=input["mirror_raw"].as_str(){std::fs::write(account.join(".hangar-hooks.json"),bytes(raw)).unwrap();}
   let state=State::new(status::snapshot());let mut registry=json!({"hooks":input.get("previous").cloned().unwrap_or(json!({}))});let mut events=vec![];
   let wrapper=("python-fixture".into(),root.join("repo/scripts/codex-hook-allow.py").to_string_lossy().into_owned());let context=Context{account:&account,backups:&backups,wrapper:&wrapper,windows:false};
   let result=if input["legacy"]==true{pipeline_hooks::legacy(&context,&state,&mut|path|{events.push(json!(["install",path.to_string_lossy().replace(root.to_str().unwrap(),"ROOT")]));if input["install_error"]==true{Err(Error{kind:"OSError",message:"fixture".into()})}else{Ok(())}})}else{pipeline_hooks::sync(&context,&input["source"],&mut registry,&state)};
@@ -39,4 +40,18 @@ fn codex_service_pipeline_hook_files_match_original_links_copies_and_invalid_rea
   let actual=json!({"created":created,"orphans":orphans,"files":files});if actual!=case["result"]{differences.push(json!({"case":input["name"],"windows":case["windows"],"actual":actual,"expected":case["result"]}));}
  }
  assert!(differences.is_empty(),"{differences:#?}");
+}
+
+#[test]
+fn codex_service_pipeline_rewrites_existing_rtk_once_and_is_idempotent(){
+ let corpus:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/codex-integration/pipeline-hooks.json")).unwrap();
+ for case in corpus["cases"].as_array().unwrap().iter().filter(|case|case["input"]["rtk"]==true){
+  let input=&case["input"];let original:Value=serde_json::from_slice(&bytes(case["result"]["files"]["hooks.json"].as_str().unwrap())).unwrap();
+  assert_eq!(original["hooks"]["PreToolUse"].as_array().unwrap().iter().map(|g|g["hooks"].as_array().unwrap().len()).sum::<usize>(),if input.get("previous").is_some(){1}else{2});
+  for windows in [false,true]{ for personal in [false,true]{
+   let root=tempfile::tempdir().unwrap();let account=root.path().join("account");std::fs::create_dir(&account).unwrap();let path=account.join("hooks.json");let mut current=input["current"].clone();if personal{current["hooks"]["PreToolUse"].as_array_mut().unwrap().push(json!({"hooks":[{"type":"command","command":"personal-hook --keep"}]}));}std::fs::write(&path,serde_json::to_vec(&current).unwrap()).unwrap();let backup=root.path().join("backups");let wrapper=("/fixture/hangar-server".into(),"codex-hook-allow".into());let context=Context{account:&account,backups:&backup,wrapper:&wrapper,windows};let mut registry=json!({"hooks":input.get("previous").cloned().unwrap_or(json!({}))});
+   let first=State::new(status::snapshot());pipeline_hooks::sync(&context,&input["source"],&mut registry,&first).unwrap();let raw=std::fs::read(&path).unwrap();let document:Value=serde_json::from_slice(&raw).unwrap();let hooks=document["hooks"]["PreToolUse"].as_array().unwrap().iter().flat_map(|g|g["hooks"].as_array().unwrap()).collect::<Vec<_>>();assert_eq!(hooks.len(),if personal{2}else{1},"{input}, windows={windows}");if personal{assert!(hooks.iter().any(|hook|hook["command"]=="personal-hook --keep"));}let command=hooks.iter().find_map(|hook|hook["command"].as_str().filter(|command|command.contains("codex-hook-allow"))).unwrap();assert!(command.contains("codex-hook-allow"));assert!(!command.contains("python"));assert!(!command.contains(".py"));assert_eq!(command.matches("codex-hook-allow").count(),1);let source=input["source"]["hooks"]["PreToolUse"][0]["hooks"][0]["command"].as_str().unwrap();let suffix=if windows{source.split_whitespace().map(|v|format!("\"{v}\"")).collect::<Vec<_>>().join(" ")}else{source.into()};assert!(command.ends_with(&suffix),"{command:?}");assert_eq!(first.snapshot()["confianca_pendente"],true);
+   let second=State::new(status::snapshot());pipeline_hooks::sync(&context,&input["source"],&mut registry,&second).unwrap();assert_eq!(std::fs::read(&path).unwrap(),raw);assert_eq!(second.snapshot()["confianca_pendente"],false);assert_eq!(second.snapshot()["avisos"],json!([]));
+  }}
+ }
 }

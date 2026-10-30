@@ -11,11 +11,18 @@ scenarios=[
  dict(name='merge',current=document('old','personal'),source=document('new'),previous=document('old')),
  dict(name='no-source',current=document('old'),source={}),
  dict(name='remove-managed',current=document('old','personal'),source={'hooks':{}},previous=document('old')),
+ dict(name='legacy-zero-bytes',legacy=True,mirror_raw=''),
  dict(name='legacy-missing',legacy=True),dict(name='legacy-no-target',legacy=True,mirror=document('old')),
  dict(name='legacy-remove',legacy=True,mirror=document('old'),current=document('old','personal')),
  dict(name='legacy-empty',legacy=True,mirror={},current=document('personal')),
  dict(name='legacy-install-failure',legacy=True,mirror=document('old'),current=document('old','personal'),install_error=True),
 ]
+old_rtk='"/old/pythonA" "/old/codex-hook-allow.py" -- rtk hook claude --extra'
+for known in [False,True]:
+ scenario=dict(name='rtk-known' if known else 'rtk-unknown',current=document(old_rtk),source=document('rtk hook claude --extra'),rtk=True)
+ if known:scenario['previous']=document(old_rtk)
+ scenarios.append(scenario)
+scenarios.append(dict(name='rtk-known-changed',current=document(old_rtk),previous=document(old_rtk),source=document('rtk hook claude --changed'),rtk=True))
 with tempfile.TemporaryDirectory() as raw:
  archive=Path(raw)/'archive';archive.mkdir()
  with tarfile.open(fileobj=io.BytesIO(subprocess.check_output(['git','archive',COMMIT,'backend/app'],cwd=ROOT))) as tar:tar.extractall(archive,filter='data')
@@ -28,6 +35,7 @@ with tempfile.TemporaryDirectory() as raw:
    service=original.IntegracaoCodex(home=home,codex_home=account);service._estado=original._snapshot();events=[]
    for key,name in [('current','hooks.json'),('mirror','.hangar-hooks.json')]:
     if key in scenario:(account/name).write_text(json.dumps(scenario[key],indent=1))
+   if 'mirror_raw' in scenario:(account/'.hangar-hooks.json').write_bytes(bytes.fromhex(scenario['mirror_raw']))
    registry={'hooks':scenario.get('previous',{})}
    def install(path):
     events.append(['install',str(path).replace(str(root),'ROOT')])
