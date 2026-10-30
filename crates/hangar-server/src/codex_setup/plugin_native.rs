@@ -25,20 +25,22 @@ impl plugin_sync::Actions for Actions<'_>{
  async fn add(&mut self,id:&str)->Result<Value,Error>{self.native.cli().add(id,TIMEOUT).await.map_err(native_error)}
  async fn edit(&mut self,choices:Vec<(String,bool)>)->Result<(),Error>{plugin_edits::apply(self.env,self.account,self.backups,self.work,&choices).await}
  async fn hooks(&mut self,path:&Path)->Result<(),Error>{
-  let python=crate::install_root::python_exe(self.repo,cfg!(windows));let python=python.to_string_lossy();
-  let wrapper=self.repo.join("scripts/codex-hook-allow.py");let wrapper=wrapper.to_string_lossy();
-  let context=plugins::Context{account:self.account,backups:self.backups,repo:self.repo,python:&python,windows:cfg!(windows)};
-  plugins::adapt(path,&context,|data|Ok(normalize::hooks(data,&python,&wrapper,cfg!(windows))),||mark_changed(self.state),&plugins::NativeRuntime(self.env.clone())).await.map_err(runtime_error)
+  let (server,wrapper)=super::hook_command::allow_wrapper().map_err(runtime_error)?;
+  let context=plugins::Context{account:self.account,backups:self.backups,server:&server,windows:cfg!(windows)};
+  plugins::adapt(path,&context,|data|Ok(normalize::hooks(data,&server,&wrapper,cfg!(windows))),||mark_changed(self.state),&plugins::NativeRuntime(self.env.clone())).await.map_err(runtime_error)
  }
  fn checkpoint(&mut self,registry:&mut Value,state:&State)->Result<(),Error>{
-  let snapshot=ValueGuard(state.snapshot());
-  let view=status::read(self.home,self.account,Some(&snapshot),self.now()).map_err(|error|Error{kind:error.kind,message:error.message})?;
-  let map=registry.as_object_mut().ok_or_else(||Error{kind:"TypeError",message:"Registro da integração precisa ser um objeto".into()})?;
-  if let Some(old)=map.insert("status".into(),view){codec::discard(old);}
-  let path=self.work.join("estado.json");let previous=files::read(&path)?;
-  files::write(&path,&files::bytes(registry)?,previous.as_deref(),None)?;Ok(())
+  checkpoint(self.home,self.account,self.work,registry,state,self.now())
  }
  fn now(&self)->f64{SystemTime::now().duration_since(UNIX_EPOCH).map(|duration|duration.as_secs_f64()).unwrap_or_else(|error|-error.duration().as_secs_f64())}
+}
+pub(crate) fn checkpoint(home:&Path,account:&Path,work:&Path,registry:&mut Value,state:&State,now:f64)->Result<(),Error>{
+ let snapshot=ValueGuard(state.snapshot());
+ let view=status::read(home,account,Some(&snapshot),now).map_err(|error|Error{kind:error.kind,message:error.message})?;
+ let map=registry.as_object_mut().ok_or_else(||Error{kind:"TypeError",message:"Registro da integração precisa ser um objeto".into()})?;
+ if let Some(old)=map.insert("status".into(),view){codec::discard(old);}
+ let path=work.join("estado.json");let previous=files::read(&path)?;
+ files::write(&path,&files::bytes(registry)?,previous.as_deref(),None)?;Ok(())
 }
 fn mark_changed(state:&State){
  state.update(|value|{

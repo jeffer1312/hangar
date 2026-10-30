@@ -359,11 +359,8 @@ pub fn compute(
                     "fallbacks".into(),
                     take(&config.value, "project_doc_fallback_filenames", Value::Null),
                 );
-                paths.extend([
-                    account.join("hooks.json"),
-                    repo.join("scripts/codex-hook-json.py"),
-                    account.join(".hangar-hooks/codex-hook-json.py"),
-                ]);
+                paths.insert(account.join("hooks.json"));
+                paths.insert(std::env::current_exe().map_err(io)?);
                 paths.extend(artifact_paths.into_iter().map(PathBuf::from));
             }
             "skills" => {

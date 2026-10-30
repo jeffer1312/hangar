@@ -57,10 +57,7 @@ async fn codex_plugins_match_original_files_backups_and_partial_failures() {
         let account = root.join("account");
         let plugin = account.join("plugins/cache/fixture/v1");
         let backups = root.join("backups");
-        let repo = root.join("repo");
         std::fs::create_dir_all(&plugin).unwrap();
-        std::fs::create_dir_all(repo.join("scripts")).unwrap();
-        std::fs::write(repo.join("scripts/codex-hook-json.py"), b"fixture wrapper").unwrap();
         let external = root.join("outside.json");
         std::fs::write(&external, b"original outside").unwrap();
         for (name, content) in case["source"].as_object().unwrap() {
@@ -91,8 +88,7 @@ async fn codex_plugins_match_original_files_backups_and_partial_failures() {
             &Context {
                 account: &account,
                 backups: &backups,
-                repo: &repo,
-                python: "/fixture/python",
+                server: "/fixture/hangar-server",
                 windows: false,
             },
             |data| {
@@ -141,7 +137,15 @@ async fn codex_plugins_match_original_files_backups_and_partial_failures() {
             .ok()
             .map(|raw| hex(&raw));
         let actual = json!({"result":result,"changed":changed,"calls":*runtime.calls.lock().unwrap(),"files":files,"backups":saved,"wrapper_hex":wrapper,"outside_hex":hex(&std::fs::read(external).unwrap())});
-        let expected = json!({"result":expected,"changed":case["changed"],"calls":case["calls"],"files":case["files"],"backups":case["backups"],"wrapper_hex":case["wrapper_hex"],"outside_hex":case["outside_hex"]});
+        let mut expected = json!({"result":expected,"changed":case["changed"],"calls":case["calls"],"files":case["files"],"backups":case["backups"],"wrapper_hex":case["wrapper_hex"],"outside_hex":case["outside_hex"]});
+        if case["name"] == "security" {
+            // D70: só o comando do wrapper e sua cópia Python deixam de existir.
+            let original = String::from_utf8(decode(expected["files"]["hooks.json"].as_str().unwrap())).unwrap();
+            let prefix = "/fixture/python $ROOT/account/.hangar-hooks/codex-hook-json.py";
+            assert_eq!(original.matches(prefix).count(), 1);
+            expected["files"]["hooks.json"] = json!(hex(original.replace(prefix, "/fixture/hangar-server codex-hook-json").as_bytes()));
+            expected["wrapper_hex"] = Value::Null;
+        }
         if actual != expected {
             failures.push(format!("{}: {actual}", case["name"]));
         }
@@ -156,7 +160,7 @@ proptest::proptest! {
         std::fs::create_dir_all(account.join("plugins/cache")).unwrap();std::fs::create_dir(&outside).unwrap();
         let rt=tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         let runner=Fixture{name:"ecc-ok".into(),calls:Mutex::new(vec![])};
-        let result=rt.block_on(plugins::adapt(&outside,&Context{account:&account,backups:&root.path().join("backups"),repo:root.path(),python:"/fixture/python",windows:false},|_|panic!("normalização fora do cache"),||panic!("alteração fora do cache"),&runner));
+        let result=rt.block_on(plugins::adapt(&outside,&Context{account:&account,backups:&root.path().join("backups"),server:"/fixture/hangar-server",windows:false},|_|panic!("normalização fora do cache"),||panic!("alteração fora do cache"),&runner));
         proptest::prop_assert_eq!(result,Err("Plugin fora do cache do Codex".into()));
         proptest::prop_assert!(runner.calls.lock().unwrap().is_empty());
         proptest::prop_assert!(!root.path().join("backups").exists());

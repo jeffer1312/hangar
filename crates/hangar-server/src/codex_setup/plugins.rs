@@ -13,8 +13,7 @@ use std::{
 pub struct Context<'a> {
     pub account: &'a Path,
     pub backups: &'a Path,
-    pub repo: &'a Path,
-    pub python: &'a str,
+    pub server: &'a str,
     pub windows: bool,
 }
 pub trait Runtime {
@@ -117,14 +116,6 @@ pub async fn adapt(
             }
         }
     }
-    let wrapper = context.account.join(".hangar-hooks/codex-hook-json.py");
-    if security {
-        let raw = std::fs::read(context.repo.join("scripts/codex-hook-json.py"))
-            .map_err(|error| error.to_string())?;
-        let prior = files::read(&wrapper).map_err(|error| error.to_string())?;
-        files::write(&wrapper, &raw, prior.as_deref(), Some(context.backups))
-            .map_err(|error| error.to_string())?;
-    }
     for path in paths {
         if !path.is_file() {
             continue;
@@ -141,8 +132,8 @@ pub async fn adapt(
             if security {
                 result = normalize::security(
                     &result,
-                    context.python,
-                    &wrapper.to_string_lossy(),
+                    context.server,
+                    "codex-hook-json",
                     context.windows,
                 )
                 .map_err(files::Error::Invalid)?;

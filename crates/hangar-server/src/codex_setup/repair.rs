@@ -79,10 +79,9 @@ impl Actions for NativeActions {
     }
     fn available(&self)->bool {crate::cli_probe::resolve_program("codex",&self.env).is_some()}
     async fn plugin(&mut self,root:&Path,backups:&Path)->Result<(),String> {
-        let python=crate::install_root::python_exe(&self.repo,cfg!(windows));
-        let python=python.to_string_lossy();
-        let context=plugins::Context{account:&self.account,backups,repo:&self.repo,python:&python,windows:cfg!(windows)};
-        plugins::adapt(root,&context,|v|Ok(crate::orchestration::codec::clone_value(v)),||{},&plugins::NativeRuntime(self.env.clone())).await
+        let (server,wrapper)=super::hook_command::allow_wrapper()?;
+        let context=plugins::Context{account:&self.account,backups,server:&server,windows:cfg!(windows)};
+        plugins::adapt(root,&context,|v|Ok(super::normalize::hooks(v,&server,&wrapper,cfg!(windows))),||{},&plugins::NativeRuntime(self.env.clone())).await
     }
     async fn open(&mut self)->Result<(),String> {
         self.native=Some(Native::open(&self.env,&self.env.home,&self.account).await?);Ok(())

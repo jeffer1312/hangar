@@ -3,6 +3,26 @@ use hangar_server::{
     codex_setup::{files, fingerprints},
 };
 use serde_json::{Value, json};
+
+#[test]
+fn codex_service_native_wrapper_fingerprint_ignores_obsolete_python_copies() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let repo = temp.path().join("repo");
+    let account = home.join(".codex");
+    let env = AccountEnvironment::from_pairs([
+        ("HOME", home.to_string_lossy().into_owned()),
+        ("USERPROFILE", home.to_string_lossy().into_owned()),
+    ]);
+    let before = fingerprints::compute(&env, &account, &repo, &json!({}), false, "fragments", false).unwrap();
+    for path in [repo.join("scripts/codex-hook-json.py"), account.join(".hangar-hooks/codex-hook-json.py")] {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "cópia antiga sem consumidor").unwrap();
+    }
+    let after = fingerprints::compute(&env, &account, &repo, &json!({}), false, "fragments", false).unwrap();
+    assert_eq!(before, after);
+}
+
 #[cfg(unix)]
 #[test]
 fn codex_service_fingerprints_match_python_hash_inputs_and_metadata() {
@@ -41,7 +61,7 @@ fn codex_service_fingerprints_match_python_hash_inputs_and_metadata() {
             ("HOME", home.to_string_lossy().into_owned()),
             ("USERPROFILE", home.to_string_lossy().into_owned()),
         ]);
-        let expected_bytes = case["chunks"]
+        let mut chunks = case["chunks"]
             .as_array()
             .unwrap()
             .iter()
@@ -50,7 +70,25 @@ fn codex_service_fingerprints_match_python_hash_inputs_and_metadata() {
                     .unwrap()
                     .replace("$ROOT", &root.to_string_lossy())
             })
-            .collect::<String>();
+            .collect::<Vec<String>>();
+        if case["phase"] == "fragments" && case["sources"] == false {
+            // D70: a assinatura acompanha o executável que agora implementa o wrapper.
+            let old_source = format!("{}/repo/scripts/codex-hook-json.py:", root.display());
+            let old_copy = format!("{}/home/.codex/.hangar-hooks/codex-hook-json.py:", root.display());
+            let prefix = chunks.remove(0);
+            chunks.retain(|chunk| !chunk.starts_with(&old_source) && !chunk.starts_with(&old_copy));
+            let executable = std::env::current_exe().unwrap();
+            let metadata = std::fs::metadata(&executable).unwrap();
+            let nanos = metadata.modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+            let at = chunks.iter().position(|chunk| {
+                let path = if let Some(path) = chunk.strip_suffix(":ausente") { path }
+                else { chunk.rsplit_once(':').unwrap().0.rsplit_once(':').unwrap().0 };
+                std::path::Path::new(path) > executable.as_path()
+            }).unwrap_or(chunks.len());
+            chunks.insert(at, format!("{}:{}:{nanos}", executable.display(), metadata.len()));
+            chunks.insert(0, prefix);
+        }
+        let expected_bytes = chunks.concat();
         let expected = files::hash(expected_bytes.as_bytes());
         let actual = fingerprints::compute(
             &env,

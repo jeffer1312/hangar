@@ -112,12 +112,15 @@ fn parts(command: &str, windows: bool) -> Option<Vec<String>> {
     out.push(py_strip(&chars[start..].iter().collect::<String>()).to_owned());
     Some(out)
 }
-fn rtk(command: &str, windows: bool) -> Option<Vec<String>> {
+fn rtk(command: &str, windows: bool, native: bool) -> Option<Vec<String>> {
     let parts = parts(command, windows)?;
     if parts.len() > 2 {
         return None;
     }
-    let args = split(&parts[0], windows).ok()?;
+    let mut args = split(&parts[0], windows).ok()?;
+    if native && args.len() >= 6 && args[2] == "--"
+        && matches!(basename(&args[1]).as_str(), "codex-hook-allow.py" | "codex-hook-allow")
+    { args.drain(..3); }
     if args.len() < 3
         || !matches!(basename(&args[0]).as_str(), "rtk" | "rtk.exe")
         || args[1] != "hook"
@@ -127,12 +130,12 @@ fn rtk(command: &str, windows: bool) -> Option<Vec<String>> {
     }
     if parts.len() == 2 {
         let filter = split(&parts[1], windows).ok()?;
-        if filter.len() != 2
+        let native_filter = native && filter.len() == 2 && filter[1] == "codex-hook-allow";
+        if !native_filter && (filter.len() != 2
             || !regex::Regex::new(r"\Apython(?:\d+(?:\.\d+)*)?(?:\.exe)?\z")
                 .unwrap()
                 .is_match(&basename(&filter[0]))
-            || basename(&filter[1]) != "codex-hook-allow.py"
-        {
+            || basename(&filter[1]) != "codex-hook-allow.py") {
             return None;
         }
     }
@@ -168,7 +171,7 @@ fn command(args: &[String], windows: bool) -> String {
     }
     out.join(" ")
 }
-pub fn hooks(config: &Value, python: &str, wrapper: &str, windows: bool) -> Value {
+pub fn hooks(config: &Value, executable: &str, wrapper: &str, windows: bool) -> Value {
     let mut result = codec::clone_value(config);
     let Some(events) = result.get_mut("hooks").and_then(Value::as_object_mut) else {
         return result;
@@ -196,9 +199,9 @@ pub fn hooks(config: &Value, python: &str, wrapper: &str, windows: bool) -> Valu
                     if let Some(args) = hook
                         .get("command")
                         .and_then(Value::as_str)
-                        .and_then(|text| rtk(text, windows))
+                        .and_then(|text| rtk(text, windows, wrapper == "codex-hook-allow"))
                     {
-                        let mut next = vec![python.to_owned(), wrapper.to_owned(), "--".into()];
+                        let mut next = vec![executable.to_owned(), wrapper.to_owned(), "--".into()];
                         next.extend(args);
                         hook["command"] = json!(command(&next, windows));
                     }
@@ -210,7 +213,7 @@ pub fn hooks(config: &Value, python: &str, wrapper: &str, windows: bool) -> Valu
 }
 pub fn security(
     config: &Value,
-    python: &str,
+    executable: &str,
     wrapper: &str,
     windows: bool,
 ) -> Result<Value, String> {
@@ -233,11 +236,15 @@ pub fn security(
                     continue;
                 }
                 let args = split(text, windows).unwrap_or_default();
-                if args.len() == 4 && basename(&args[1]) == basename(wrapper) && args[2] == "--" {
+                let previous_wrapper = args.len() == 4 && args[2] == "--";
+                if wrapper != "codex-hook-json" && previous_wrapper && basename(&args[1]) == basename(wrapper) {
                     continue;
                 }
+                let source = if wrapper == "codex-hook-json" && previous_wrapper
+                    && matches!(basename(&args[1]).as_str(), "codex-hook-json.py" | "codex-hook-json")
+                { &args[3] } else { text };
                 hook["command"] = json!(command(
-                    &[python.into(), wrapper.into(), "--".into(), text.into()],
+                    &[executable.into(), wrapper.into(), "--".into(), source.into()],
                     windows
                 ));
             }
@@ -261,7 +268,7 @@ pub fn installed(config: &Value, windows: bool) -> Option<(String, String)> {
             };
             if args.len() >= 6
                 && args[2..6] == ["--", "rtk", "hook", "claude"]
-                && basename(&args[1]) == "codex-hook-allow.py"
+                && matches!(basename(&args[1]).as_str(), "codex-hook-allow.py" | "codex-hook-allow")
             {
                 return Some((args[0].clone(), args[1].clone()));
             }
@@ -269,3 +276,7 @@ pub fn installed(config: &Value, windows: bool) -> Option<(String, String)> {
     }
     None
 }
+
+#[cfg(test)]
+#[path="normalize_native_tests.rs"]
+mod native_tests;
