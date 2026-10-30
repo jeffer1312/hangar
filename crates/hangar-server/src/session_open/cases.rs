@@ -296,6 +296,15 @@ const CASES: &str = r###"[
 
 /// `(nome, {scenario, result})` de cada cenário, em ordem de nome.
 pub(crate) fn all() -> Vec<(String, Value)> {
+    ALL.clone()
+}
+
+pub(crate) fn named(name: &str) -> Value {
+    ALL.iter().find(|(n, _)| n == name).unwrap_or_else(|| panic!("cenário {name}")).1.clone()
+}
+
+// Dezenas de testes consultam a tabela: ela é lida uma vez só.
+static ALL: std::sync::LazyLock<Vec<(String, Value)>> = std::sync::LazyLock::new(|| {
     let states: Vec<Value> = serde_json::from_str(STATES).unwrap();
     let rows: Vec<Value> = serde_json::from_str(CASES).unwrap();
     assert_eq!(rows.len(), 88);
@@ -306,8 +315,4 @@ pub(crate) fn all() -> Vec<(String, Value)> {
             "result": row["result"].take()});
         (name, case)
     }).collect()
-}
-
-pub(crate) fn named(name: &str) -> Value {
-    all().into_iter().find(|(n, _)| n == name).unwrap_or_else(|| panic!("cenário {name}")).1
-}
+});

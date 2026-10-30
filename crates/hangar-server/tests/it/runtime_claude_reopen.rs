@@ -971,9 +971,13 @@ done
     let registry = crate::runtime_open::registry_with(|registry|registry.with_codex_environment(env)
         .with_terms(Arc::new(hangar_server::term::Terms::default()))
         .with_processes(Arc::new(hangar_server::list::procs::SystemProcs::default()))).await;
-    registry.bind_watcher(Arc::new(Watcher::new(WatchConfig { home:fx.home.clone(),queue_dir:fx.queue.clone(),
-        mux:Mux::with_program(&fx.tmux,Duration::from_secs(5)),mux_program:fx.tmux.clone().into_os_string() }).with_scope_probe(Vec::new)));
+    registry.bind_watcher(fx_watcher(fx));
     registry
+}
+
+fn fx_watcher(fx:&Fixture) -> Arc<Watcher> {
+    Arc::new(Watcher::new(WatchConfig { home:fx.home.clone(),queue_dir:fx.queue.clone(),
+        mux:Mux::with_program(&fx.tmux,Duration::from_secs(5)),mux_program:fx.tmux.clone().into_os_string() }).with_scope_probe(Vec::new))
 }
 
 /// Com o painel de terminal: sem ele a guarda da reabertura de um terminal não abre.
@@ -981,8 +985,7 @@ async fn terminal_registry(fx:&Fixture) -> Arc<RuntimeRegistry> {
     let registry = crate::runtime_open::registry_with(|registry|registry
         .with_codex_environment(AccountEnvironment::from_map([("HOME".to_owned(),fx.home.to_string_lossy().into_owned()),("PATH".to_owned(),std::env::var("PATH").unwrap())].into()))
         .with_terms(Arc::new(hangar_server::term::Terms::default()))).await;
-    registry.bind_watcher(Arc::new(Watcher::new(WatchConfig { home:fx.home.clone(),queue_dir:fx.queue.clone(),
-        mux:Mux::with_program(&fx.tmux,Duration::from_secs(5)),mux_program:fx.tmux.clone().into_os_string() }).with_scope_probe(Vec::new)));
+    registry.bind_watcher(fx_watcher(fx));
     registry
 }
 

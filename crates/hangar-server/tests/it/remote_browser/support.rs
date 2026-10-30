@@ -98,8 +98,7 @@ pub fn git_probe(root: &Path) -> PathBuf {
 
 pub fn contract(name: &str) -> Value {
     use super::{transport_cases as transport, url_cases as url};
-    let chromium: Value = serde_json::from_slice(&std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../backend/tests/fixtures/contract/remote-browser/chromium.json")).unwrap()).unwrap();
+    let chromium: Value = serde_json::from_slice(&std::fs::read(crate::common::contract().join("remote-browser/chromium.json")).unwrap()).unwrap();
     let table = match name {
         "chromium" => return chromium,
         "transport" => transport::CASES,
