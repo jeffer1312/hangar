@@ -533,6 +533,19 @@ async fn login_guests_terminal_origin_matches_python_without_owner_restriction()
         }
     }
     let snapshot:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/origin-snapshot.json")).unwrap();
+    let overrides:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/origin-runtime.json")).unwrap();
+    for (index,row) in overrides["rows"].as_array().unwrap().iter().enumerate() {
+        std::fs::write(claude.join("runtime-config.json"),row["raw"].as_str().unwrap()).unwrap();
+        let mut request=format!("ws://{address}/api/sessions/s0/term?token=guest-token").into_client_request().unwrap();
+        request.headers_mut().insert("host","fixture".parse().unwrap());
+        request.headers_mut().insert("origin",row["origin"].as_str().unwrap().parse().unwrap());
+        match tokio_tungstenite::connect_async(request).await {
+            Ok((mut socket,_))=>{assert_eq!(row["accepted"],true,"GUE-038 runtime {index}");let _=socket.close(None).await;},
+            Err(Error::Http(response))=>{assert_eq!(row["accepted"],false,"GUE-038 runtime {index}: {}",response.status());assert_eq!(response.status(),403);},
+            Err(error)=>panic!("GUE-038 runtime: {error}"),
+        }
+    }
+    std::fs::remove_file(claude.join("runtime-config.json")).unwrap();
     for row in snapshot["rows"].as_array().unwrap() {
         if row["phase"]=="after" {std::fs::write(home.join(".hangar/config/.env"),"CP_PUBLIC_URL=https://changed.example\nCP_TERM_ORIGINS=https://new-extra.example\n").unwrap();}
         let mut request=format!("ws://{address}/api/sessions/s0/term?token=guest-token").into_client_request().unwrap();

@@ -1,0 +1,161 @@
+{
+  "source_commit": "a6ae99d451925b05e4852989801fa7afb7d71db6",
+  "command": "uv run python tests/fixtures/contract/guests/capture_origin_runtime.py",
+  "injections": [
+    "settings congelado",
+    "peers vazio",
+    "runtime-config em diret\u00f3rio tempor\u00e1rio"
+  ],
+  "rows": [
+    {
+      "raw": "{}",
+      "origin": "https://extra.example",
+      "accepted": true
+    },
+    {
+      "raw": "{}",
+      "origin": "https://saved.example",
+      "accepted": false
+    },
+    {
+      "raw": "{}",
+      "origin": "https://other.example",
+      "accepted": false
+    },
+    {
+      "raw": "{\"term_origins\":\"https://saved.example\"}",
+      "origin": "https://extra.example",
+      "accepted": true
+    },
+    {
+      "raw": "{\"term_origins\":\"https://saved.example\"}",
+      "origin": "https://saved.example",
+      "accepted": true
+    },
+    {
+      "raw": "{\"term_origins\":\"https://saved.example\"}",
+      "origin": "https://other.example",
+      "accepted": false
+    },
+    {
+      "raw": "{\"term_origins\":\"https://saved.example\",\"extra\":NaN}",
+      "origin": "https://extra.example",
+      "accepted": true
+    },
+    {
+      "raw": "{\"term_origins\":\"https://saved.example\",\"extra\":NaN}",
+      "origin": "https://saved.example",
+      "accepted": true
+    },
+    {
+      "raw": "{\"term_origins\":\"https://saved.example\",\"extra\":NaN}",
+      "origin": "https://other.example",
+      "accepted": false
+    },
+    {
+      "raw": "{\"term_origins\":\"https://saved.example\",\"extra\":Infinity}",
+      "origin": "https://extra.example",
+      "accepted": true
+    },
+    {
+      "raw": "{\"term_origins\":\"https://saved.example\",\"extra\":Infinity}",
+      "origin": "https://saved.example",
+      "accepted": true
+    },
+    {
+      "raw": "{\"term_origins\":\"https://saved.example\",\"extra\":Infinity}",
+      "origin": "https://other.example",
+      "accepted": false
+    },
+    {
+      "raw": "{\"term_origins\":\"https://saved.example\",\"extra\":\"\\ud800\"}",
+      "origin": "https://extra.example",
+      "accepted": true
+    },
+    {
+      "raw": "{\"term_origins\":\"https://saved.example\",\"extra\":\"\\ud800\"}",
+      "origin": "https://saved.example",
+      "accepted": true
+    },
+    {
+      "raw": "{\"term_origins\":\"https://saved.example\",\"extra\":\"\\ud800\"}",
+      "origin": "https://other.example",
+      "accepted": false
+    },
+    {
+      "raw": "{\"term_origins\":null}",
+      "origin": "https://extra.example",
+      "accepted": true
+    },
+    {
+      "raw": "{\"term_origins\":null}",
+      "origin": "https://saved.example",
+      "accepted": false
+    },
+    {
+      "raw": "{\"term_origins\":null}",
+      "origin": "https://other.example",
+      "accepted": false
+    },
+    {
+      "raw": "{\"term_origins\":false}",
+      "origin": "https://extra.example",
+      "accepted": true
+    },
+    {
+      "raw": "{\"term_origins\":false}",
+      "origin": "https://saved.example",
+      "accepted": false
+    },
+    {
+      "raw": "{\"term_origins\":false}",
+      "origin": "https://other.example",
+      "accepted": false
+    },
+    {
+      "raw": "{\"term_origins\":42}",
+      "origin": "https://extra.example",
+      "accepted": true
+    },
+    {
+      "raw": "{\"term_origins\":42}",
+      "origin": "https://saved.example",
+      "accepted": false
+    },
+    {
+      "raw": "{\"term_origins\":42}",
+      "origin": "https://other.example",
+      "accepted": false
+    },
+    {
+      "raw": "{\"term_origins\":[\"https://saved.example\"]}",
+      "origin": "https://extra.example",
+      "accepted": true
+    },
+    {
+      "raw": "{\"term_origins\":[\"https://saved.example\"]}",
+      "origin": "https://saved.example",
+      "accepted": false
+    },
+    {
+      "raw": "{\"term_origins\":[\"https://saved.example\"]}",
+      "origin": "https://other.example",
+      "accepted": false
+    },
+    {
+      "raw": "invalid",
+      "origin": "https://extra.example",
+      "accepted": true
+    },
+    {
+      "raw": "invalid",
+      "origin": "https://saved.example",
+      "accepted": false
+    },
+    {
+      "raw": "invalid",
+      "origin": "https://other.example",
+      "accepted": false
+    }
+  ]
+}

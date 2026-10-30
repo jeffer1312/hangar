@@ -250,15 +250,18 @@ pub(crate) async fn terminal_origin_allowed(st: &Arc<AppState>, headers: &axum::
     let host = headers.get("host").and_then(|v|v.to_str().ok()).map(str::to_owned);
     let home = st.accounts.env.home.clone();
     let Ok(snapshot) = st.settings_snapshot() else { return false };
-    let runtime = st.accounts.env.claude_base.join("runtime-config.json");
+    let Ok(runtime) = crate::config_sync::runtime::RuntimeConfig::from_state(st) else { return false };
     tokio::task::spawn_blocking(move || {
         let backend = crate::session_open::cli::backend_dir_for_home(&home);
         let Ok(public) = snapshot.value("CP_PUBLIC_URL") else { return false };
         let Ok(configured) = snapshot.value("CP_TERM_ORIGINS") else { return false };
         let public = public.unwrap_or_default();
         let configured = configured.unwrap_or_default();
-        let runtime = super::store::read(&runtime).ok().flatten();
-        let saved = runtime.as_ref().and_then(|v|v["term_origins"].as_str()).unwrap_or_default();
+        let value = runtime.get("term_origins");
+        let saved = if crate::config_sync::apply::truthy(&value) {
+            crate::orchestration::codec::python_string(&value)
+        } else { String::new() };
+        crate::orchestration::codec::discard(value);
         let extras:Vec<String> = configured.split(',').chain(saved.split(',')).map(str::trim).filter(|v|!v.is_empty()).map(str::to_owned).collect();
         crate::machine_peers::origin_allowed(&home, backend.as_deref(), &origin, host.as_deref(), &public, &extras)
     }).await.unwrap_or(false)
