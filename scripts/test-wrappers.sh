@@ -261,7 +261,7 @@ posix_case() {
     local sh="$1" engine="$2" out="$TMP/out.$RANDOM.$RANDOM"
     shift 2
     env -i PATH="$PATH_WITH_FAKES" ZDOTDIR="$EMPTY_ZDOTDIR" HOME="${CASE_HOME:-$HOME}" CP_TEST_OUT="$out" CP_ENGINE="$engine" \
-        CP_ENGINES_FILE="$CP_ENGINES_FILE" \
+        CP_ENGINES_FILE="$CP_ENGINES_FILE" CP_RUST_SERVER_BIN="${CP_RUST_SERVER_BIN:-$REPO/crates/target/debug/hangar-server}" \
         "$sh" -c '
             source "'"$REPO"'/scripts/shell/claude.posix.sh"
             claude "$@"
@@ -275,7 +275,7 @@ fish_case() {
     # `--` separa os args do próprio `claude` dos flags do binário fish — sem isto "fish -c '...' --print"
     # tenta interpretar --print como opção do fish (erro "unknown option").
     env -i PATH="$PATH_WITH_FAKES" ZDOTDIR="$EMPTY_ZDOTDIR" HOME="${CASE_HOME:-$HOME}" CP_TEST_OUT="$out" CP_ENGINE="$engine" \
-        CP_ENGINES_FILE="$CP_ENGINES_FILE" \
+        CP_ENGINES_FILE="$CP_ENGINES_FILE" CP_RUST_SERVER_BIN="${CP_RUST_SERVER_BIN:-$REPO/crates/target/debug/hangar-server}" \
         fish --no-config -c '
             source "'"$REPO"'/scripts/shell/claude.fish"
             claude $argv

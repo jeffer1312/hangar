@@ -360,7 +360,7 @@ def test_health_import_and_propagation_are_owned_by_rust(managed_device):
     (root / ".codex/auth.json").write_bytes(original)
     fixture.reference.request("POST", "/__contract__/claude-owner", {
         "address": fixture.server.request("GET", "/__hangar_server/health").json()["terminal_address"], "mode": "rust"})
-    response = fixture.reference.request("POST", "/__contract__/device-repair", {"action": "oauth"})
+    response = fixture.server.request("POST", "/api/harness/conserto/oauth")
     assert response.status_code == 200, response.json()
     assert json.loads((root / ".hangar/auth/openai-codex.json").read_text())["refresh"] == "fixture-existing"
     assert json.loads((root / ".pi/agent/auth.json").read_text())["openai-codex"]["refresh"] == "fixture-existing"
@@ -368,8 +368,8 @@ def test_health_import_and_propagation_are_owned_by_rust(managed_device):
         assert json.loads(con.execute("select data from auth_credentials").fetchone()[0])["refresh"] == "fixture-existing"
     assert (root / ".codex/auth.json").read_bytes() == original
     fixture.reference.request("POST", "/__contract__/claude-owner", {"address": "127.0.0.1:1", "mode": "pending"})
-    pending = fixture.reference.request("POST", "/__contract__/device-repair", {"action": "oauth"})
-    assert pending.status_code == 503
+    pending = fixture.reference.request("POST", "/api/harness/conserto/oauth")
+    assert pending.status_code == 404
     assert (root / ".codex/auth.json").read_bytes() == original
 
 

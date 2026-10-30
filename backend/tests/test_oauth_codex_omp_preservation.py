@@ -112,9 +112,9 @@ def test_legacy_omp_oauth_preservation(flow, has_previous_oauth, managed_device)
     address = fixture.server.request("GET", "/__hangar_server/health").json()["terminal_address"]
     assert fixture.reference.request("POST", "/__contract__/claude-owner",
                                      {"address": address, "mode": "rust"}).status_code == 200
-    repair = fixture.reference.request("POST", "/__contract__/device-repair", {"action": "oauth"})
+    repair = fixture.server.request("POST", "/api/harness/conserto/oauth")
     assert repair.status_code == 200
-    parts = repair.json()["result"].split("; ")
+    parts = repair.json()["feito"].split("; ")
     assert len(parts) == 3
     assert dict(part.split(": ", 1) for part in parts) == {
         "codex": "ja-logado", "pi": "ja-logado", "omp": "ja-logado",
