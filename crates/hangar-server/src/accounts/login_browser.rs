@@ -464,7 +464,7 @@ async fn close_view_in(views: &Views, operation: &str) {
     let Some(view) = locked_views(views).remove(operation) else { return };
     let Some(id) = view.window else { return };
     let _ = tokio::task::spawn_blocking(move || {
-        if let Some(window) = view.desk.windows().into_iter().find(|window| window.id == id) {
+        if let Some(window) = view.desk.windows().into_iter().flatten().find(|window| window.id == id) {
             view.desk.close(&window);
         }
     })
@@ -554,7 +554,8 @@ impl LoginBrowser {
         let probe = self.desk_probe.clone();
         let prepared = tokio::task::spawn_blocking(move || {
             let desk = probe()?;
-            let baseline = desk.windows().into_iter().map(|window| window.id).collect();
+            // Sem saber o que já estava na tela, qualquer janela poderia virar a do login.
+            let baseline = desk.windows()?.into_iter().map(|window| window.id).collect();
             Some(View { desk, baseline, window: None })
         })
         .await;
@@ -575,25 +576,25 @@ impl LoginBrowser {
         };
         let looked = known.is_some();
         let found = tokio::time::timeout(VIEW_CAP, tokio::task::spawn_blocking(move || {
-            let windows = desk.windows();
+            let Some(windows) = desk.windows() else { return None };
             let (window, first) = match &known {
                 Some(id) => (windows.into_iter().find(|window| &window.id == id), false),
                 None => (windows.into_iter().find(|window| !baseline.contains(&window.id)), true),
             };
-            let Some(mut window) = window else { return (None, None, true) };
+            let Some(mut window) = window else { return Some((None, None, true)) };
             if first {
                 desk.present(&window);
-                if let Some(moved) = desk.windows().into_iter().find(|other| other.id == window.id) {
+                if let Some(moved) = desk.windows().into_iter().flatten().find(|other| other.id == window.id) {
                     window = moved;
                 }
             }
             let jpeg = desk.capture(&window);
             let can_input = desk.can_input();
-            (Some(window), jpeg, can_input)
+            Some((Some(window), jpeg, can_input))
         }))
         .await;
-        let Ok(Ok((window, jpeg, can_input))) = found else {
-            return json!({"available": true, "error": "erro_login_view_capture"});
+        let Ok(Ok(Some((window, jpeg, can_input)))) = found else {
+            return json!({"available": true, "retry": true});
         };
         let Some(window) = window else {
             return if looked { json!({"available": true, "closed": true}) } else { json!({"available": true, "pending": true}) };
@@ -626,7 +627,7 @@ impl LoginBrowser {
             if !desk.can_input() {
                 return Err(refused(409, "erro_login_view_no_input", "a sessão desta máquina está desconectada"));
             }
-            let window = desk.windows().into_iter().find(|window| window.id == id)
+            let window = desk.windows().into_iter().flatten().find(|window| window.id == id)
                 .ok_or_else(|| refused(409, "erro_login_view_missing", "a janela do login não está aberta"))?;
             desk.input(&window, &input);
             Ok(())
@@ -963,8 +964,13 @@ pub(crate) async fn public(state: Arc<crate::routes::AppState>, request: axum::e
             };
             let local = state.login_browser.targets(&state.server_id).await;
             let last = state.accounts.last_login_target(&label);
-            let (targets, last) = merge_targets(local, peer_targets(&state).await, last);
-            Json(json!({"targets": targets, "last": last})).into_response()
+            let peers = peer_targets(&state).await;
+            // Quem não respondeu continua na lista: a pessoa precisa ver a máquina e saber por que não dá.
+            let machines: Vec<_> = std::iter::once(json!({"id": state.server_id, "answered": true}))
+                .chain(peers.iter().map(|(id, offered)| json!({"id": id, "answered": offered.is_some()})))
+                .collect();
+            let (targets, last) = merge_targets(local, peers, last);
+            Json(json!({"targets": targets, "last": last, "machines": machines})).into_response()
         }
     }
 }
@@ -987,10 +993,11 @@ mod tests {
         windows: Mutex<Vec<crate::accounts::login_view::DeskWindow>>,
         log: Mutex<Vec<String>>,
         no_input: std::sync::atomic::AtomicBool,
+        unreadable: std::sync::atomic::AtomicBool,
     }
     impl Desk for FakeDesk {
-        fn windows(&self) -> Vec<crate::accounts::login_view::DeskWindow> {
-            self.windows.lock().unwrap().clone()
+        fn windows(&self) -> Option<Vec<crate::accounts::login_view::DeskWindow>> {
+            (!self.unreadable.load(Ordering::Relaxed)).then(|| self.windows.lock().unwrap().clone())
         }
         fn present(&self, window: &crate::accounts::login_view::DeskWindow) {
             self.log.lock().unwrap().push(format!("present {}", window.id));
@@ -1071,6 +1078,11 @@ mod tests {
         assert_eq!(browser.view("op").await["input"], false);
         assert_eq!(browser.input("op", click).await.unwrap_err().code, "erro_login_view_no_input");
         assert_eq!(browser.input("op", DeskInput::Text { text: "x".repeat(4097) }).await.unwrap_err().code, "erro_login_view_input_invalid");
+        desk.unreadable.store(true, Ordering::Relaxed);
+        let frame = browser.view("op").await;
+        assert_eq!(frame["retry"], true, "lista que não veio não é janela fechada");
+        assert!(frame["closed"].is_null());
+        desk.unreadable.store(false, Ordering::Relaxed);
         desk.windows.lock().unwrap().clear();
         assert_eq!(browser.view("op").await["closed"], true);
     }

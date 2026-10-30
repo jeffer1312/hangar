@@ -39,11 +39,19 @@ pub(super) struct SignIn {
     browser: Option<Value>,
     view: Option<LoginView>,
     view_focus: FocusHandle,
+    /// Com o navegador aberto o link e o código ficam guardados, até a pessoa pedir.
+    manual: bool,
 }
 
 enum Choosing {
     Loading,
-    Ready { targets: Vec<Value>, last: Option<Value> },
+    /// `machine`: a máquina já escolhida, e só então os perfis dela.
+    Ready { machines: Vec<LoginMachine>, targets: Vec<Value>, last: Option<Value>, machine: Option<String> },
+}
+
+struct LoginMachine {
+    id: String,
+    answered: bool,
 }
 
 /// A janela do login transmitida da máquina do navegador.
@@ -54,7 +62,6 @@ struct LoginView {
     can_input: bool,
     notice: Option<&'static str>,
     bounds: Rc<Cell<Bounds<Pixels>>>,
-    last_move: Option<Instant>,
     input: tokio::sync::mpsc::UnboundedSender<Value>,
     frames: JoinHandle<()>,
     sender: JoinHandle<()>,
@@ -72,10 +79,11 @@ pub(in crate::app) enum ViewReply {
     Frame { image: Arc<RenderImage>, size: (f64, f64), title: String, can_input: bool },
     Notice(&'static str),
     Lost,
+    /// A lista de janelas não veio neste quadro: a imagem anterior continua valendo.
+    Retry,
 }
 
 const VIEW_EVERY: Duration = Duration::from_millis(350);
-const VIEW_MOVE_EVERY: Duration = Duration::from_millis(80);
 
 impl Drop for SignIn {
     // Tarefa do tokio não morre com o handle: sem isto a leitura do passo seguiria no servidor anterior.
@@ -296,13 +304,20 @@ impl Hangar {
         let attempt = self.accounts.login_attempt;
         self.accounts.sign_in = Some(SignIn { label: label.clone(), name, attempt, open: false, starting: false, sending: false, stopping: false,
             failed: false, url: None, copied: false, step_failed: false, error: None, done: None, code, has_code: false, poll: None,
-            _subscription: subscription, choosing: Some(Choosing::Loading), target: None, browser: None, view: None, view_focus: cx.focus_handle() });
+            _subscription: subscription, choosing: Some(Choosing::Loading), target: None, browser: None, view: None, view_focus: cx.focus_handle(), manual: false });
         let Some(api) = self.api.clone() else { return };
         let done = self.accounts_send_later();
         self.runtime.spawn(async move {
             let result = api.server_read(&["conta-estado", &label, "login", "targets"], &[], 8).await;
             done(AccountsReply::Action(ActionReply::Targets(attempt, result))).await;
         });
+        cx.notify();
+    }
+
+    fn choose_machine(&mut self, chosen: Option<String>, cx: &mut Context<Self>) {
+        if let Some(Choosing::Ready { machine, .. }) = self.accounts.sign_in.as_mut().and_then(|s| s.choosing.as_mut()) {
+            *machine = chosen;
+        }
         cx.notify();
     }
 
@@ -319,8 +334,8 @@ impl Hangar {
         let attempt = self.accounts.login_attempt;
         let Some(s) = self.accounts.sign_in.as_mut() else { return };
         if let Some(poll) = s.poll.take() { poll.abort(); }
-        (s.attempt, s.starting, s.failed, s.url, s.copied, s.step_failed, s.error, s.done, s.has_code, s.browser, s.view) =
-            (attempt, true, false, None, false, false, None, None, false, None, None);
+        (s.attempt, s.starting, s.failed, s.url, s.copied, s.step_failed, s.error, s.done, s.has_code, s.browser, s.view, s.manual) =
+            (attempt, true, false, None, false, false, None, None, false, None, None, false);
         s.code.update(cx, |input, cx| input.set_value("", window, cx));
         let (label, target) = (s.label.clone(), s.target.clone());
         let (done, turn) = (self.accounts_send_later(), login_turn(&api, &label));
@@ -405,7 +420,7 @@ impl Hangar {
     /// Só enquanto a tela está aberta: cada quadro passa por duas máquinas.
     fn open_login_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(api) = self.api.clone() else { return };
-        let (frames_done, input_done) = (self.accounts_send_later(), self.accounts_send_later());
+        let frames_done = self.accounts_send_later();
         let runtime = self.runtime.clone();
         let Some(s) = self.accounts.sign_in.as_mut() else { return };
         let (attempt, label) = (s.attempt, s.label.clone());
@@ -424,16 +439,21 @@ impl Hangar {
         // Fila única: clique e tecla têm que chegar na ordem em que foram feitos.
         let sender = runtime.spawn(async move {
             while let Some(event) = queue.recv().await {
-                let sent = api.server_send(reqwest::Method::POST, &["conta-estado", &label, "login", "view", "input"], Some(event), 10).await;
-                if let Err(error) = sent && error.status == Some(409) {
-                    input_done(AccountsReply::Action(ActionReply::View(attempt, ViewReply::Notice("accounts_login_view_no_input")))).await;
+                // O estado da sessão vem no quadro seguinte: uma entrada recusada não diz o motivo sozinha.
+                if let Err(error) = api.server_send(reqwest::Method::POST, &["conta-estado", &label, "login", "view", "input"], Some(event), 10).await {
+                    eprintln!("[contas] entrada na janela do login recusada: {:?}", error.status);
                 }
             }
         });
         s.view = Some(LoginView { frame: None, size: (1., 1.), title: String::new(), can_input: true, notice: None, bounds: Rc::default(),
-            last_move: None, input, frames, sender });
+            input, frames, sender });
         s.view_focus.focus(window, cx);
         cx.notify();
+    }
+
+    /// Com a transmissão aberta, a página inteira é dela: o cabeçalho das contas só tiraria espaço.
+    pub(super) fn login_view_open(&self) -> bool {
+        self.accounts.sign_in.as_ref().is_some_and(|s| s.view.is_some())
     }
 
     fn close_login_view(&mut self, cx: &mut Context<Self>) {
@@ -459,9 +479,9 @@ impl Hangar {
         Some((f64::from(x) * view.size.0, f64::from(y) * view.size.1))
     }
 
-    fn view_mouse(&self, action: &str, point: Point<Pixels>) {
-        if let Some((x, y)) = self.view_point(point, action == "up") {
-            self.view_input(json!({"t": "mouse", "action": action, "x": x, "y": y}));
+    fn view_click(&self, point: Point<Pixels>) {
+        if let Some((x, y)) = self.view_point(point, false) {
+            self.view_input(json!({"t": "click", "x": x, "y": y}));
         }
     }
 
@@ -593,13 +613,18 @@ impl Hangar {
             ActionReply::Targets(attempt, result) => {
                 let Some(s) = self.accounts.sign_in.as_mut().filter(|s| s.attempt == attempt && s.choosing.is_some()) else { return };
                 let targets = result.as_ref().ok().and_then(|reply| reply["targets"].as_array().cloned()).unwrap_or_default();
+                let machines: Vec<LoginMachine> = result.as_ref().ok().and_then(|reply| reply["machines"].as_array())
+                    .map(|rows| rows.iter().filter_map(|row| Some(LoginMachine {
+                        id: row["id"].as_str()?.to_owned(),
+                        answered: row["answered"].as_bool().unwrap_or(false),
+                    })).collect()).unwrap_or_default();
                 // Nada para escolher, ou a lista não veio: segue o caminho de sempre, com o link.
-                if targets.is_empty() {
+                if targets.is_empty() && machines.len() <= 1 {
                     self.choose_target(None, window, cx);
                     return;
                 }
                 let last = result.ok().map(|reply| reply["last"].clone()).filter(|last| !last.is_null());
-                s.choosing = Some(Choosing::Ready { targets, last });
+                s.choosing = Some(Choosing::Ready { machines, targets, last, machine: None });
             }
             ActionReply::View(attempt, reply) => {
                 let Some(view) = self.accounts.sign_in.as_mut().filter(|s| s.attempt == attempt).and_then(|s| s.view.as_mut()) else {
@@ -613,6 +638,7 @@ impl Hangar {
                     }
                     ViewReply::Notice(notice) => view.notice = Some(notice),
                     ViewReply::Lost => view.notice = Some("accounts_login_view_lost"),
+                    ViewReply::Retry => {}
                 }
             }
             ActionReply::Started(attempt, result, owner) => {
@@ -749,12 +775,12 @@ impl Hangar {
         }
     }
 
-    fn render_login_view(&self, view: &LoginView, machine: &str, cx: &mut Context<Self>) -> Div {
+    fn render_login_view(&self, view: &LoginView, machine: &str, height: Pixels, cx: &mut Context<Self>) -> Div {
         let Some(s) = self.accounts.sign_in.as_ref() else { return div() };
         let note = |text: String, color: Hsla| div().size_full().flex().items_center().justify_center().p_4()
             .text_size(px(12.)).text_color(color).text_center().whitespace_normal().child(text);
         let bounds = view.bounds.clone();
-        let page = div().id("accounts-login-view").relative().w_full().h(px(460.)).overflow_hidden().rounded(px(8.)).bg(theme::background())
+        let page = div().id("accounts-login-view").relative().w_full().h(height).overflow_hidden().rounded(px(8.)).bg(theme::background())
             .border_1().border_color(theme::border())
             .track_focus(&s.view_focus).role(Role::Application).aria_label(tr("accounts_login_view_open"))
             .child(canvas(|_, _, _| {}, move |b, _, _, _| bounds.set(b)).absolute().inset_0())
@@ -762,18 +788,11 @@ impl Hangar {
                 Some(image) => el.child(img(image.clone()).absolute().inset_0().size_full().object_fit(ObjectFit::Contain)),
                 None => el.child(note(tr(view.notice.unwrap_or("accounts_login_view_waiting")), theme::muted())),
             })
-            .on_mouse_down(MouseButton::Left, cx.listener(|this, e: &MouseDownEvent, window, cx| {
+            .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, window, cx| {
                 if let Some(s) = this.accounts.sign_in.as_ref() { s.view_focus.focus(window, cx); }
-                this.view_mouse("down", e.position);
             }))
-            .on_mouse_up(MouseButton::Left, cx.listener(|this, e: &MouseUpEvent, _, _| this.view_mouse("up", e.position)))
-            .on_mouse_up_out(MouseButton::Left, cx.listener(|this, e: &MouseUpEvent, _, _| this.view_mouse("up", e.position)))
-            .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _, _| {
-                let Some(view) = this.accounts.sign_in.as_mut().and_then(|s| s.view.as_mut()) else { return };
-                if view.last_move.is_some_and(|at| at.elapsed() < VIEW_MOVE_EVERY) { return; }
-                view.last_move = Some(Instant::now());
-                this.view_mouse("move", e.position);
-            }))
+            // Ao soltar: com o botão físico ainda apertado, o clique na mesma máquina não vale.
+            .on_mouse_up(MouseButton::Left, cx.listener(|this, e: &MouseUpEvent, _, _| this.view_click(e.position)))
             .on_scroll_wheel(cx.listener(|this, e: &ScrollWheelEvent, _, cx| {
                 // Rola a página da outra máquina, não a de configurações em volta.
                 cx.stop_propagation();
@@ -796,7 +815,17 @@ impl Hangar {
                     this.view_input(json!({"t": "text", "text": text}));
                 }
             }));
-        let session_down = !view.can_input || view.notice == Some("accounts_login_view_no_input");
+        // Linha de altura fixa: aviso que vem e vai não pode empurrar a imagem onde a pessoa está clicando.
+        let status = div().h(px(32.)).flex_shrink_0().flex().items_center().gap(px(8.)).text_size(px(12.)).overflow_hidden();
+        let status = if !view.can_input {
+            status.child(div().flex_1().min_w_0().text_color(theme::warning()).child(tr("accounts_login_view_no_input").replace("{machine}", machine)))
+                .child(Button::new("accounts-login-view-activate").outline().xsmall().label(tr("accounts_login_view_activate"))
+                    .on_click(cx.listener(|this, _, _, cx| this.activate_login_view(cx))))
+        } else if let Some(notice) = view.notice.filter(|_| view.frame.is_some()) {
+            status.child(div().flex_1().min_w_0().truncate().text_color(theme::warning()).child(tr(notice)))
+        } else {
+            status.child(div().flex_1().min_w_0().truncate().text_color(theme::muted()).child(tr("accounts_login_view_hint")))
+        };
         div().flex().flex_col().gap(px(8.))
             .child(div().flex().items_center().gap(px(8.))
                 .child(Button::new("accounts-login-view-back").outline().xsmall().icon(IconName::ArrowLeft).label(tr("accounts_login_view_back"))
@@ -804,18 +833,12 @@ impl Hangar {
                 .child(div().flex_1().min_w_0().truncate().text_size(px(12.)).text_color(theme::muted()).child(view.title.clone()))
                 .child(Button::new("accounts-login-view-close").ghost().xsmall().label(tr("accounts_login_view_close"))
                     .on_click(cx.listener(|this, _, _, cx| this.close_login_view(cx)))))
-            .when(session_down, |el| el.child(div().flex().items_center().gap(px(8.))
-                .child(div().flex_1().min_w_0().flex().flex_col().gap(px(2.)).text_size(px(12.)).whitespace_normal()
-                    .child(div().text_color(theme::warning()).child(tr("accounts_login_view_no_input").replace("{machine}", machine)))
-                    .child(div().text_color(theme::muted()).child(tr("accounts_login_view_activate_help"))))
-                .child(Button::new("accounts-login-view-activate").outline().xsmall().label(tr("accounts_login_view_activate"))
-                    .on_click(cx.listener(|this, _, _, cx| this.activate_login_view(cx))))))
-            .when(!session_down && view.frame.is_some(), |el| el.children(view.notice.map(|notice| div().text_size(px(12.)).text_color(theme::warning()).child(tr(notice)))))
+            .child(status)
             .child(page)
     }
 
     /// A página no lugar da lista enquanto há uma tentativa de login: os passos do web, um por vez.
-    pub(super) fn render_sign_in(&self, cx: &mut Context<Self>) -> Option<Div> {
+    pub(super) fn render_sign_in(&self, window: &Window, cx: &mut Context<Self>) -> Option<Div> {
         let s = self.accounts.sign_in.as_ref()?;
         let (color, _) = theme::provider("claude");
         let avatar = div().size(px(36.)).flex_shrink_0().rounded(px(10.)).bg(color.opacity(0.16)).flex().items_center().justify_center()
@@ -829,27 +852,49 @@ impl Hangar {
         let footer = || div().mt(px(4.)).flex().justify_end().gap(px(8.));
         let mut panel = settings_box().mt(px(24.)).p(px(20.)).gap(px(16.)).child(head);
         if let Some(choosing) = &s.choosing {
-            panel = panel.child(div().flex().flex_col().gap(px(4.))
-                .child(div().font_weight(FontWeight::MEDIUM).text_size(px(13.)).child(tr("accounts_login_where_title")))
-                .child(div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(tr("accounts_login_where_help"))));
+            let heading = |title: String, help: String| div().flex().flex_col().gap(px(4.))
+                .child(div().font_weight(FontWeight::MEDIUM).text_size(px(13.)).child(title))
+                .child(div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(help));
+            let mut list = div().flex().flex_col().gap(px(2.));
+            let mut in_machine = false;
             match choosing {
-                Choosing::Loading => panel = panel.child(line(tr("accounts_login_where_loading"), theme::muted())),
-                Choosing::Ready { targets, last } => {
+                Choosing::Loading => {
+                    panel = panel.child(heading(tr("accounts_login_where_title"), tr("accounts_login_where_help")))
+                        .child(line(tr("accounts_login_where_loading"), theme::muted()));
+                }
+                Choosing::Ready { machines, targets, last, machine: None } => {
+                    panel = panel.child(heading(tr("accounts_login_where_title"), tr("accounts_login_where_help")));
+                    for (index, machine) in machines.iter().enumerate() {
+                        let offered: Vec<&Value> = targets.iter().filter(|target| target["machine"] == machine.id.as_str()).collect();
+                        let is_last = last.as_ref().is_some_and(|last| last["machine"] == machine.id.as_str());
+                        let detail = machine_detail(machine.answered, &offered);
+                        let id = machine.id.clone();
+                        list = list.child(target_row(("accounts-login-machine", index), machine.id.clone(), detail, is_last)
+                            .disabled(offered.is_empty())
+                            .on_click(cx.listener(move |this, _, _, cx| this.choose_machine(Some(id.clone()), cx))));
+                    }
+                }
+                Choosing::Ready { targets, last, machine: Some(machine), .. } => {
+                    in_machine = true;
+                    panel = panel.child(heading(tr("accounts_login_where_profile_title").replace("{machine}", machine), tr("accounts_login_where_profile_help")));
                     let same = |a: &Value, b: &Value| a["machine"] == b["machine"] && a["kind"] == b["kind"] && a["profile"] == b["profile"];
-                    let mut list = div().flex().flex_col().gap(px(6.));
-                    for (index, target) in targets.iter().enumerate() {
+                    for (index, target) in targets.iter().enumerate().filter(|(_, target)| target["machine"] == machine.as_str()) {
                         let is_last = last.as_ref().is_some_and(|last| same(last, target));
+                        let (name, email) = target_names(target);
                         let chosen = target.clone();
-                        list = list.child(Button::new(("accounts-login-target", index)).w_full().small().label(target_label(target, is_last))
-                            .map(|button| if is_last { button.primary() } else { button.outline() })
+                        list = list.child(target_row(("accounts-login-target", index), name, email, is_last)
                             .on_click(cx.listener(move |this, _, window, cx| this.choose_target(Some(chosen.clone()), window, cx))));
                     }
-                    panel = panel.child(list.child(Button::new("accounts-login-link-only").ghost().w_full().small().label(tr("accounts_login_where_link"))
-                        .on_click(cx.listener(|this, _, window, cx| this.choose_target(None, window, cx)))));
                 }
             }
-            return Some(panel.child(footer().child(Button::new("accounts-login-where-back").outline().small().label(tr("settings_back"))
-                .on_click(cx.listener(|this, _, window, cx| this.close_sign_in(window, cx))))));
+            if matches!(choosing, Choosing::Ready { .. }) { panel = panel.child(list); }
+            return Some(panel.child(footer().justify_between()
+                .child(Button::new("accounts-login-link-only").ghost().small().label(tr("accounts_login_where_link")).disabled(matches!(choosing, Choosing::Loading))
+                    .on_click(cx.listener(|this, _, window, cx| this.choose_target(None, window, cx))))
+                .child(Button::new("accounts-login-where-back").outline().small().label(tr("settings_back"))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if in_machine { this.choose_machine(None, cx); } else { this.close_sign_in(window, cx); }
+                    })))));
         }
         if let Some((email, plan)) = &s.done {
             let fact = |label: &'static str, value: &Option<String>| value.clone().map(|value| div().flex().gap(px(12.)).text_size(px(13.))
@@ -867,25 +912,40 @@ impl Hangar {
             .when(s.step_failed, |el| el.child(line(tr("accounts_login_step_failed"), theme::danger())));
         let waiting = s.open && !s.failed;
         let locked = s.sending || s.stopping;
-        if waiting && let Some(browser) = &s.browser {
-            let machine = browser["machine"].as_str().unwrap_or_default();
-            let viewable = s.target.as_ref().is_some_and(|target| target["kind"] == "chrome_profile");
-            match browser["state"].as_str() {
-                Some("error") => panel = panel.child(line(
-                    tr("accounts_login_browser_error").replace("{machine}", machine).replace("{reason}", &tr(browser_reason(browser["reason"].as_str()))),
-                    theme::danger(),
-                )),
-                Some("open") => {
-                    panel = panel.child(line(tr("accounts_login_browser_open").replace("{machine}", machine), theme::text()));
-                    if let Some(view) = &s.view {
-                        panel = panel.child(self.render_login_view(view, machine, cx));
-                    } else if viewable {
-                        panel = panel.child(div().flex().child(Button::new("accounts-login-view-open").outline().small().icon(IconName::Monitor)
-                            .label(tr("accounts_login_view_open"))
-                            .on_click(cx.listener(|this, _, window, cx| this.open_login_view(window, cx)))));
-                    }
+        // Do clique no perfil em diante a tela já nasce completa: nada aparece depois empurrando o resto.
+        if let Some(target) = s.target.as_ref().filter(|_| s.starting || waiting) {
+            let machine = target["machine"].as_str().unwrap_or_default();
+            let viewable = target["kind"] == "chrome_profile";
+            let state = s.browser.as_ref().and_then(|browser| browser["state"].as_str()).unwrap_or("opening");
+            if state == "error" {
+                let reason = s.browser.as_ref().and_then(|browser| browser["reason"].as_str());
+                panel = panel.child(line(tr("accounts_login_browser_error").replace("{machine}", machine).replace("{reason}", &tr(browser_reason(reason))), theme::danger()));
+            } else {
+                let open = state == "open";
+                panel = panel.child(line(
+                    tr(if open { "accounts_login_browser_open" } else { "accounts_login_browser_opening" }).replace("{machine}", machine),
+                    if open { theme::text() } else { theme::muted() },
+                ));
+                if let Some(view) = &s.view {
+                    let height = (window.viewport_size().height - px(340.)).max(px(320.));
+                    return Some(panel.child(self.render_login_view(view, machine, height, cx))
+                        .child(footer().child(Button::new("accounts-login-cancel").outline().small().label(tr("cancel")).disabled(locked)
+                            .on_click(cx.listener(|this, _, window, cx| this.stop_sign_in(false, window, cx))))));
                 }
-                _ => panel = panel.child(line(tr("accounts_login_browser_opening").replace("{machine}", machine), theme::muted())),
+                if !s.manual {
+                    return Some(panel
+                        .when(viewable, |el| el.child(div().flex().child(Button::new("accounts-login-view-open").primary().small().icon(IconName::Monitor)
+                            .label(tr("accounts_login_view_open")).disabled(!open)
+                            .on_click(cx.listener(|this, _, window, cx| this.open_login_view(window, cx))))))
+                        .child(footer().justify_between()
+                            .child(Button::new("accounts-login-manual").ghost().small().label(tr("accounts_login_manual")).disabled(s.url.is_none())
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    if let Some(s) = this.accounts.sign_in.as_mut() { s.manual = true; }
+                                    cx.notify();
+                                })))
+                            .child(Button::new("accounts-login-cancel").outline().small().label(tr("cancel")).disabled(locked || s.starting)
+                                .on_click(cx.listener(|this, _, window, cx| this.stop_sign_in(false, window, cx))))));
+                }
             }
         }
         if s.starting || (waiting && s.url.is_none()) {
@@ -934,16 +994,28 @@ impl Hangar {
     }
 }
 
-fn target_label(target: &Value, is_last: bool) -> String {
-    let machine = target["machine"].as_str().unwrap_or_default();
-    let name = match target["kind"].as_str() {
-        Some("chrome_profile") => {
-            let label = target["label"].as_str().unwrap_or_default();
-            target["email"].as_str().map_or_else(|| label.to_owned(), |email| format!("{label} ({email})"))
-        }
-        _ => tr("accounts_login_where_default"),
-    };
-    if is_last { tr("accounts_login_where_last").replace("{machine}", machine).replace("{name}", &name) } else { format!("{machine}: {name}") }
+/// Nome e detalhe de um navegador: o do perfil e o email dele, ou "Navegador padrão".
+fn target_names(target: &Value) -> (String, String) {
+    match target["kind"].as_str() {
+        Some("chrome_profile") => (target["label"].as_str().unwrap_or_default().to_owned(), target["email"].as_str().unwrap_or_default().to_owned()),
+        _ => (tr("accounts_login_where_default"), String::new()),
+    }
+}
+
+/// O que a máquina oferece, para decidir antes de abrir; a máquina que não respondeu aparece e diz isso.
+fn machine_detail(answered: bool, offered: &[&Value]) -> String {
+    if !answered { return tr("accounts_login_where_no_answer"); }
+    if offered.is_empty() { return tr("accounts_login_where_no_browser"); }
+    offered.iter().map(|target| target_names(target).0).collect::<Vec<_>>().join(", ")
+}
+
+fn target_row(id: impl Into<ElementId>, name: String, detail: String, is_last: bool) -> Button {
+    crate::app::popup::row(id, false).accessibility_label(name.clone()).child(div().w_full().flex().items_center().gap_2()
+        .child(div().flex_1().min_w_0().flex().flex_col().gap(px(2.))
+            .child(div().truncate().text_sm().font_weight(FontWeight::MEDIUM).child(name))
+            .when(!detail.is_empty(), |el| el.child(div().truncate().text_xs().text_color(theme::muted()).child(detail))))
+        .when(is_last, |el| el.child(div().flex_shrink_0().text_xs().text_color(theme::muted()).child(tr("accounts_login_where_last"))))
+        .child(chrome::small_icon(IconName::ChevronRight, 14., theme::faint())))
 }
 
 fn browser_reason(reason: Option<&str>) -> &'static str {
@@ -974,6 +1046,7 @@ fn view_key(key: &str) -> Option<&'static str> {
 
 fn view_reply(frame: &Value) -> ViewReply {
     if frame["available"] != true { return ViewReply::Notice("accounts_login_view_unavailable"); }
+    if frame["retry"] == true { return ViewReply::Retry; }
     if frame["closed"] == true { return ViewReply::Notice("accounts_login_view_closed"); }
     if frame["pending"] == true { return ViewReply::Notice("accounts_login_view_waiting"); }
     let image = frame["d"].as_str()

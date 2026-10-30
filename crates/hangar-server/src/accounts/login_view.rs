@@ -13,14 +13,6 @@ pub struct DeskWindow {
     pub h: i32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MouseAction {
-    Move,
-    Down,
-    Up,
-}
-
 /// Só as teclas de navegar e editar: atalho do sistema alcançaria o resto da máquina.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub enum DeskKey {
@@ -40,7 +32,8 @@ pub enum DeskKey {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum DeskInput {
-    Mouse { action: MouseAction, x: f64, y: f64 },
+    /// Apertar e soltar juntos: soltar depois deixaria o botão preso se o fim não chegasse.
+    Click { x: f64, y: f64 },
     Wheel { x: f64, y: f64, down: bool },
     Key { key: DeskKey },
     Text { text: String },
@@ -49,7 +42,8 @@ pub enum DeskInput {
 
 /// Bloqueia: quem chama faz fora da thread do runtime.
 pub trait Desk: Send + Sync {
-    fn windows(&self) -> Vec<DeskWindow>;
+    /// `None` = a lista não veio agora, o que não quer dizer que a janela fechou.
+    fn windows(&self) -> Option<Vec<DeskWindow>>;
     fn present(&self, window: &DeskWindow);
     fn capture(&self, window: &DeskWindow) -> Option<Vec<u8>>;
     /// Falso quando o sistema não entrega entrada: sessão desconectada do Windows.
@@ -104,20 +98,22 @@ mod hyprland {
         true
     }
 
-    pub fn chrome_windows(clients: &[u8]) -> Vec<DeskWindow> {
-        let clients: Vec<Client> = serde_json::from_slice(clients).unwrap_or_default();
-        clients
-            .into_iter()
-            .filter(|client| client.mapped && client.class.to_lowercase().contains("chrome"))
-            .map(|client| DeskWindow {
-                id: client.address,
-                title: client.title,
-                x: client.at[0],
-                y: client.at[1],
-                w: client.size[0],
-                h: client.size[1],
-            })
-            .collect()
+    pub fn chrome_windows(clients: &[u8]) -> Option<Vec<DeskWindow>> {
+        let clients: Vec<Client> = serde_json::from_slice(clients).ok()?;
+        Some(
+            clients
+                .into_iter()
+                .filter(|client| client.mapped && client.class.to_lowercase().contains("chrome"))
+                .map(|client| DeskWindow {
+                    id: client.address,
+                    title: client.title,
+                    x: client.at[0],
+                    y: client.at[1],
+                    w: client.size[0],
+                    h: client.size[1],
+                })
+                .collect(),
+        )
     }
 
     fn on_path(name: &str) -> bool {
@@ -153,8 +149,8 @@ mod hyprland {
     }
 
     impl Desk for HyprDesk {
-        fn windows(&self) -> Vec<DeskWindow> {
-            self.run("hyprctl", &["clients", "-j"]).map(|out| chrome_windows(&out.stdout)).unwrap_or_default()
+        fn windows(&self) -> Option<Vec<DeskWindow>> {
+            chrome_windows(&self.run("hyprctl", &["clients", "-j"])?.stdout)
         }
 
         fn present(&self, window: &DeskWindow) {
@@ -184,18 +180,10 @@ mod hyprland {
                 self.run("hyprctl", &["dispatch", "movecursor", &x.to_string(), &y.to_string()]);
             };
             match input {
-                DeskInput::Mouse { action, x, y } => {
+                DeskInput::Click { x, y } => {
+                    self.focus(window);
                     pointer(*x, *y);
-                    match action {
-                        MouseAction::Move => {}
-                        MouseAction::Down => {
-                            self.focus(window);
-                            self.run("ydotool", &["click", "0x40"]);
-                        }
-                        MouseAction::Up => {
-                            self.run("ydotool", &["click", "0x80"]);
-                        }
-                    }
+                    self.run("ydotool", &["click", "0xC0"]);
                 }
                 DeskInput::Wheel { x, y, down } => {
                     pointer(*x, *y);
@@ -356,12 +344,11 @@ mod windows_desk {
     }
 
     impl Desk for WindowsDesk {
-        fn windows(&self) -> Vec<DeskWindow> {
+        fn windows(&self) -> Option<Vec<DeskWindow>> {
             aware();
             let mut found = Vec::new();
             // SAFETY: `collect` só usa o `Vec` enquanto esta chamada durar.
-            unsafe { EnumWindows(Some(collect), &mut found as *mut Vec<DeskWindow> as LPARAM) };
-            found
+            (unsafe { EnumWindows(Some(collect), &mut found as *mut Vec<DeskWindow> as LPARAM) } != 0).then_some(found)
         }
 
         fn present(&self, window: &DeskWindow) {
@@ -443,16 +430,11 @@ mod windows_desk {
                 unsafe { SetForegroundWindow(handle(window)) };
             };
             match input {
-                DeskInput::Mouse { action, x, y } => {
+                DeskInput::Click { x, y } => {
+                    front();
                     pointer(*x, *y);
-                    match action {
-                        MouseAction::Move => {}
-                        MouseAction::Down => {
-                            front();
-                            mouse(MOUSEEVENTF_LEFTDOWN, 0);
-                        }
-                        MouseAction::Up => mouse(MOUSEEVENTF_LEFTUP, 0),
-                    }
+                    mouse(MOUSEEVENTF_LEFTDOWN, 0);
+                    mouse(MOUSEEVENTF_LEFTUP, 0);
                 }
                 DeskInput::Wheel { x, y, down } => {
                     pointer(*x, *y);
@@ -544,7 +526,8 @@ mod tests {
             {"address":"0x2","class":"kitty","title":"t","at":[0,0],"size":[1,1],"mapped":true},
             {"address":"0x3","class":"google-chrome","title":"h","at":[0,0],"size":[1,1],"mapped":false}
         ]"#;
-        let windows = hyprland::chrome_windows(clients);
+        assert!(hyprland::chrome_windows(b"nao e json").is_none());
+        let windows = hyprland::chrome_windows(clients).unwrap();
         assert_eq!(windows.len(), 1);
         assert_eq!(windows[0], DeskWindow { id: "0x1".into(), title: "Claude".into(), x: 1, y: 2, w: 3, h: 4 });
     }
