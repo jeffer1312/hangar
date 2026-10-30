@@ -48,7 +48,7 @@ fn schedule_repaint(t: f32, window: &mut Window, cx: &mut App) {
 /// Abaixo desta largura (o cartão deitado do "Atualizar?") o cartão inteiro não cabe legível: ficam o título e os botões.
 const COMPACT_BELOW: f32 = 240.;
 /// Alturas fixas do palco: nada pula quando o cartão troca pelo resultado.
-const STAGE_HEIGHT: f32 = 150.;
+const STAGE_HEIGHT: f32 = 250.;
 const COMPACT_HEIGHT: f32 = 58.;
 
 pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &mut App) -> AnyElement {
@@ -70,7 +70,7 @@ pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &
         let content = if compact {
             div().flex().flex_col().gap_1()
                 .child(div().truncate().text_xs().text_color(theme::text()).child(title))
-                .child(div().flex().gap_1().child(allow).child(deny))
+                .child(app::request_pair(allow, deny))
                 .into_any_element()
         } else {
             let body = app::approve_body(Some("exec"), &tr("vault_news_command"), allow, deny);

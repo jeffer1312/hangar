@@ -79,7 +79,7 @@ pub(crate) use rows::{agent_card, agent_clock};
 pub(crate) use session_tabs::{PlateMark, PlateSegment, plate, tab_frame, tab_title, with_context_ring};
 pub(crate) use tags::{account_icon, machine_icon};
 pub(crate) use rename_suggest::{Strip as RenameStrip, rename_strip};
-pub(crate) use vault_requests::{approve_body, approve_title, request_button, request_card, request_command};
+pub(crate) use vault_requests::{approve_body, approve_title, request_button, request_card, request_command, request_pair};
 mod shortcuts;
 mod shortcut_transfer;
 mod keyboard;

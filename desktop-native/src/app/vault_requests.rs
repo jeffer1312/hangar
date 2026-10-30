@@ -188,6 +188,12 @@ pub(crate) fn request_command(text: String) -> Div {
     div().p_1().rounded(px(4.)).bg(theme::boxed()).font_family(theme::MONO).text_xs().whitespace_normal().child(text)
 }
 
+/// Permitir e Negar lado a lado, cada um com metade: o botão ocupa a largura toda e não encolhe.
+pub(crate) fn request_pair(allow: Button, deny: Button) -> Div {
+    let half = || div().flex_1().min_w_0();
+    div().flex().gap_1().child(half().child(allow)).child(half().child(deny))
+}
+
 /// Corpo do cartão de aprovação: para que a senha vai ser usada, o comando e os dois botões. `usage` é `fill`, `exec` ou `file`.
 pub(crate) fn approve_body(usage: Option<&str>, target: &str, allow: Button, deny: Button) -> Div {
     let line = match usage {
@@ -200,7 +206,7 @@ pub(crate) fn approve_body(usage: Option<&str>, target: &str, allow: Button, den
     div().flex().flex_col().gap_1()
         .when(!line.is_empty(), |el| el.child(request_line(line)))
         .children(command)
-        .child(div().flex().gap_1().child(allow).child(deny))
+        .child(request_pair(allow, deny))
 }
 
 /// A casca de um cartão de pedido: de que máquina veio, o que pede, o motivo, o corpo e a falha da última resposta.
