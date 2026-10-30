@@ -108,17 +108,6 @@ async def account_prepare(request: Request):
     except (KeyError, TypeError, ValueError, OSError):
         raise HTTPException(409, detail={"code": "account_prepare_rejected"}) from None
 
-@router.post("/accounts/claude-window")
-async def claude_window(request: Request):
-    from app import account_bridge
-    _, _, raw = await _instance_body(request, 16 * 1024)
-    try:
-        body = json.loads(raw)
-        return await internal_thread(account_bridge.claude_windows.run, body)
-    except (KeyError, TypeError, ValueError, OSError, RuntimeError):
-        raise HTTPException(409, detail={"code": "account_claude_window_rejected"}) from None
-
-
 _LIST_FACTS_MAX = 8 << 20
 _list_facts_invalid_at = 0.0
 # Os do envio e os da opção levam o nome que o Python já usava, para o diário não ter dois nomes por falha.
