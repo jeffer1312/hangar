@@ -312,6 +312,7 @@ fn request_failure(st: &AppState, error: RequestError) -> Response {
         RequestError::Stale => fail(StatusCode::CONFLICT, "erro_interacao_desatualizada", "o pedido mudou; abra o cartão de novo"),
         RequestError::Answered => fail(StatusCode::CONFLICT, "erro_cofre_pedido_respondido", "este pedido já foi respondido"),
         RequestError::TooMany => fail(StatusCode::TOO_MANY_REQUESTS, "erro_cofre_pedidos_demais", "pedidos demais esperando resposta no cofre"),
+        RequestError::Cooldown => fail(StatusCode::TOO_MANY_REQUESTS, "erro_cofre_pedidos_demais", "o dono acabou de recusar um pedido desta sessão; espere 30 s"),
     }
 }
 
@@ -407,6 +408,9 @@ pub async fn request(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
 #[serde(deny_unknown_fields)]
 struct RecoveryReq { password: Zeroizing<String> }
 
+/// A senha de recuperação protege a cópia que mora em outra máquina: curta cai por força bruta.
+const MIN_RECOVERY: usize = 12;
+
 /// `POST /api/vault/recovery`: define (ou troca) a senha de recuperação e manda uma cópia já.
 pub async fn recovery(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let headers = req.headers().clone();
@@ -415,6 +419,9 @@ pub async fn recovery(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connec
         if let Err(resp) = allowed.await { break 'r resp; }
         let Some(asked) = body::<RecoveryReq>(req).await else { break 'r invalid() };
         if !backup::password_ok(&asked.password) { break 'r invalid(); }
+        if asked.password.chars().count() < MIN_RECOVERY {
+            break 'r fail(StatusCode::UNPROCESSABLE_ENTITY, "erro_cofre_recuperacao_curta", "a senha de recuperação precisa de 12 caracteres ou mais");
+        }
         if let Err(error) = backup::set_recovery(&st.vault, &st.hangar_dir, asked.password).await { break 'r failure(&st, error); }
         let later = st.clone();
         tokio::spawn(async move { backup::run(&later).await; });
@@ -436,7 +443,8 @@ struct RestoreReq {
 fn restore_failure(st: &AppState, from_peer: &str, error: RestoreError) -> Response {
     match error {
         RestoreError::NotEmpty => fail(StatusCode::CONFLICT, "erro_cofre_nao_vazio", "o cofre desta máquina já tem senhas; a restauração só entra num cofre vazio"),
-        RestoreError::WrongPassword => fail(StatusCode::UNAUTHORIZED, "erro_cofre_recuperacao_errada", "senha de recuperação errada (ou cópia adulterada)"),
+        // 401 o cliente lê como token do dono perdido.
+        RestoreError::WrongPassword => fail(StatusCode::UNPROCESSABLE_ENTITY, "erro_cofre_recuperacao_errada", "senha de recuperação errada (ou cópia adulterada)"),
         RestoreError::NoCopy => fail(StatusCode::NOT_FOUND, "erro_cofre_backup_ausente", "a máquina não guarda cópia deste cofre"),
         RestoreError::PeerDown(reason) => detail(StatusCode::BAD_GATEWAY, "erro_cofre_backup_peer_fora", "a máquina da cópia não respondeu",
             json!({"peer": from_peer, "reason": reason})),

@@ -3,7 +3,7 @@
 use super::*;
 use crate::{auth::TrustedHosts, config::Config, routes::AppState};
 use base64::Engine;
-use exec::{Agent, MASK, Owner, Pending, WaitFail, settle};
+use exec::{MASK, Owner, Pending, WaitFail, settle};
 use futures_util::future::BoxFuture;
 use remote::WaitStatus;
 use requests::{Answer, Decision, RequestError};
@@ -60,6 +60,59 @@ fn the_value_is_masked_literal_in_base64_and_url_encoded() {
         assert_eq!(out.as_str(), format!("antes {MASK} depois"), "forma {form}");
     }
     assert_eq!(exec::mask("nada aqui", VALUE).as_str(), "nada aqui");
+    // Formulário com `+`, hex minúsculo e JSON (com e sem `\u` no não-ASCII).
+    for form in ["s3nh%40+Fo%2B%2Fx%3F%3D%C3%A9", "s3nh%40%20Fo%2b%2fx%3f%3d%c3%a9", "s3nh@ Fo+/x?=\\u00e9"] {
+        assert_eq!(exec::mask(&format!("[{form}]"), VALUE).as_str(), format!("[{MASK}]"), "forma {form}");
+    }
+    assert_eq!(exec::mask("{\"k\":\"a\\\"b\\\\c\"}", "a\"b\\c").as_str(), format!("{{\"k\":\"{MASK}\"}}"));
+}
+
+/// Basic auth: o base64 de `usuario:senha` não começa com a senha, e o miolo dela é achado em
+/// qualquer alinhamento.
+#[test]
+fn base64_of_the_value_inside_other_content_is_masked() {
+    use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+    let value = "token-secreto-9Qz";
+    for prefix in ["u:", "us:", "usr:", "joao.silva:"] {
+        for encoded in [STANDARD.encode(format!("{prefix}{value}")), URL_SAFE_NO_PAD.encode(format!("{prefix}{value}xyz"))] {
+            let out = exec::mask(&format!("Basic {encoded}"), value);
+            let (before, after) = out.strip_prefix("Basic ").and_then(|o| o.split_once(MASK)).expect("mascarado");
+            // Antes do miolo, só o prefixo (e um caractere misto); depois, o resto do bloco e o sufixo.
+            assert!(before.len() <= prefix.len() * 4 / 3 + 2 && after.len() <= 6, "{prefix}: {before} | {after}");
+        }
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn the_command_never_inherits_session_or_server_secrets() {
+    let dir = tempfile::tempdir().unwrap();
+    let value = Zeroizing::new(VALUE.to_owned());
+    let env = vec![("PATH".into(), std::env::var_os("PATH").unwrap_or_default()), ("TYPESAFE_API_KEY".into(), "jev".into()),
+        ("HANGAR_CANO_KEY".into(), "cano".into()), ("HANGAR_INTERNAL_SECRET".into(), "srv".into()), ("FICA".into(), "sim".into())];
+    let (_, out) = exec::run("printf '%s|%s|%s|%s' \"${TYPESAFE_API_KEY:-x}\" \"${HANGAR_CANO_KEY:-x}\" \"${HANGAR_INTERNAL_SECRET:-x}\" \"$FICA\"",
+        dir.path(), env, "TOKEN", &value, Duration::from_secs(20)).await;
+    assert_eq!(out, "x|x|x|sim");
+}
+
+/// Chamada largada no meio: o neto que segura o valor morre junto.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_dropped_exec_kills_the_whole_process_group() {
+    let dir = tempfile::tempdir().unwrap();
+    let pidfile = dir.path().join("neto.pid");
+    let value = Zeroizing::new(VALUE.to_owned());
+    let env = vec![("PATH".into(), std::env::var_os("PATH").unwrap_or_default())];
+    let command = format!("sleep 300 & echo $! > {}; wait", pidfile.display());
+    let run = exec::run(&command, dir.path(), env, "TOKEN", &value, Duration::from_secs(300));
+    assert!(tokio::time::timeout(Duration::from_millis(500), run).await.is_err());
+    let pid = std::fs::read_to_string(&pidfile).unwrap().trim().to_owned();
+    for _ in 0..50 {
+        let state = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+        if state.is_empty() || state.contains(") Z") { return; }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("o neto {pid} sobreviveu à chamada largada");
 }
 
 #[cfg(unix)]
@@ -124,6 +177,18 @@ async fn a_denied_use_is_erro_cofre_negado() {
     assert!(!text.contains(VALUE));
 }
 
+#[tokio::test]
+async fn one_session_opens_at_most_three_cards_and_waits_after_a_refusal() {
+    let (st, _dir) = owner_state().await;
+    let ids: Vec<String> = (0..3).map(|_| requests::ask_entry(&st, ask_req()).unwrap()).collect();
+    assert_eq!(requests::ask_entry(&st, ask_req()).err(), Some(RequestError::TooMany));
+    assert!(requests::ask_entry(&st, AskReq { session_key: "k2".into(), ..ask_req() }).is_ok(), "outra sessão abre");
+    let card = st.vault_requests.feed().borrow().requests.iter().find(|c| c.id == ids[0]).unwrap().clone();
+    let decline = Answer { interaction_id: card.interaction_id, decision: Decision::Decline, password: None, keep: None, name: None, policy: None };
+    st.vault_requests.answer(&st.vault, &st.hangar_dir, &card.id, decline).await.unwrap();
+    assert_eq!(requests::ask_entry(&st, ask_req()).err(), Some(RequestError::Cooldown), "recusada há pouco");
+}
+
 #[tokio::test(start_paused = true)]
 async fn the_budget_ends_the_wait_as_timed_out() {
     let started = Instant::now();
@@ -173,13 +238,16 @@ async fn a_dropped_wait_cancels_the_request_at_the_owner() {
 
 #[test]
 fn a_session_born_without_the_long_deadline_is_detected_where_readable() {
-    let agent = |provider: &str, env: Option<Vec<(&str, &str)>>, argv: &[&str]| Agent { provider: provider.into(), cwd: None,
-        env: env.map(|e| e.into_iter().map(|(k, v)| (k.into(), v.into())).collect()), argv: argv.iter().map(|a| (*a).into()).collect() };
-    assert!(exec::lacks_deadline(&agent("claude", Some(vec![("PATH", "/bin")]), &[])));
-    assert!(!exec::lacks_deadline(&agent("claude", Some(vec![(exec::CLAUDE_IDLE_VAR, exec::CLAUDE_IDLE_MS)]), &[])));
-    assert!(!exec::lacks_deadline(&agent("claude", None, &[])), "ambiente ilegível segue");
-    assert!(exec::lacks_deadline(&agent("codex", None, &["codex", "app-server", "--stdio"])));
-    assert!(!exec::lacks_deadline(&agent("codex", None, &["codex", "app-server", "-c", exec::CODEX_TOOL_TIMEOUT])));
-    assert!(!exec::lacks_deadline(&agent("codex", None, &["codex", "--remote", "ws://x"])), "TUI não diz");
+    let env = |pairs: &[(&str, &str)]| -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
+        pairs.iter().map(|(k, v)| ((*k).into(), (*v).into())).collect()
+    };
+    assert!(exec::lacks_deadline("claude", Some(&env(&[("PATH", "/bin")])), None));
+    assert!(!exec::lacks_deadline("claude", Some(&env(&[(exec::CLAUDE_IDLE_VAR, exec::CLAUDE_IDLE_MS)])), None));
+    assert!(!exec::lacks_deadline("claude", None, None), "ambiente não lido do processo segue");
+    let registered = "[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\ntool_timeout_sec = 660\n";
+    assert!(!exec::lacks_deadline("codex", None, Some(registered)));
+    assert!(exec::lacks_deadline("codex", None, Some("[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\n")));
+    assert!(exec::lacks_deadline("codex", None, Some("[mcp_servers.hangar]\ntool_timeout_sec = 60\n")), "o padrão do Codex");
+    assert!(!exec::lacks_deadline("codex", None, None), "config.toml não lido segue");
     assert!(exec::env_name_ok("CF_TOKEN") && !exec::env_name_ok("1X") && !exec::env_name_ok("A-B") && !exec::env_name_ok("CP_AUTH_TOKEN"));
 }

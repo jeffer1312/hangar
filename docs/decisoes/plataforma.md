@@ -3728,7 +3728,11 @@ outra máquina tem senha. 2FA fica fora da primeira entrega: o login pede o cód
 token do `peers.json` é o token de dono da outra máquina, então a origem de um pedido entre
 máquinas é declarada por quem pede, não conferida: uma máquina com o token, e o agente dela, chama
 as rotas do cofre direto. Endereço de peer que cai no Connect (8768, Python) não alcança o cofre
-até o Connect migrar para o Rust: nenhum repasse no Python.
+até o Connect migrar para o Rust: nenhum repasse no Python. A `X-Hangar-Key` (a `CP_SESSION_KEY`)
+é lida por outro processo do mesmo usuário (`tmux show-environment`): a entrada temporária e a
+liberação do "guardar" presas à sessão evitam engano entre sessões, não um agente hostil. A
+`CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT` que toda sessão Claude recebe vale para todas as tools MCP por
+HTTP dela, não só as do cofre.
 
 **Prazo das tools que esperam o dono. Fonte:** documentação do Claude Code
 (code.claude.com/docs/en/mcp, "Time limits on MCP tool calls", lida em 30/10/2026): tool de servidor
@@ -3736,8 +3740,11 @@ MCP por HTTP sem resposta nem notificação de progresso por 5 min é abortada p
 `CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT` (em ms, `0` desliga) muda essa janela, e o `MCP_TOOL_TIMEOUT`
 sem valor deixa o teto de relógio em ~28 h. Toda sessão Claude nasce com
 `CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT=660000` (com e sem terminal; fora da herança do pane). O Codex
-corta a tool em 60 s (`tool_timeout_sec` padrão): a sessão Codex sem terminal sobe com
-`-c mcp_servers.hangar.tool_timeout_sec=660`. O rmcp não larga o futuro da tool no
+corta a tool em 60 s (`tool_timeout_sec` padrão): o `scripts/registrar-mcp.py` grava
+`tool_timeout_sec = 660` no `[mcp_servers.hangar]` de cada conta, e vale com e sem terminal. Não
+vai por `-c`: com o `config.toml` da conta sem `[mcp_servers.hangar]`, `-c
+mcp_servers.hangar.tool_timeout_sec=660` cria o servidor sem transporte e o Codex recusa subir
+("invalid transport in mcp_servers.hangar"). O rmcp não larga o futuro da tool no
 `notifications/cancelled`, só cancela o token: o `call_tool` das tools do cofre corre contra ele, e
 largar a espera cancela o pedido na dona. **Medição pendente:** a sessão de teste com uma tool que
 espera 6 min, com e sem a variável, ainda não foi feita (prova da Task 4).

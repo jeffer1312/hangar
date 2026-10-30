@@ -197,7 +197,8 @@ impl Sender {
                 tracing::warn!(code = "push_gate_read_failed", "aviso do cofre: preferências não leram; aviso segurado");
                 return;
             };
-            if store::is_muted(&prefs, &session) || store::in_quiet_hours(&prefs, chrono::Local::now().time()) { return; }
+            // O mudo da sessão que pede não cala o cofre: quem decide se avisa é o dono, não ela.
+            if store::in_quiet_hours(&prefs, chrono::Local::now().time()) { return; }
             me.broadcast(Outgoing::vault_request(&session, notice)).await
         });
     }

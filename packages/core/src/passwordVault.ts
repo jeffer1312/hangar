@@ -108,6 +108,7 @@ export type VaultErrorCode =
   | 'erro_cofre_pedido_respondido'
   | 'erro_cofre_pedidos_demais'
   | 'erro_cofre_recuperacao_errada'
+  | 'erro_cofre_recuperacao_curta'
   | 'erro_cofre_recuperacao_nao_gravada'
   | 'erro_cofre_nao_vazio'
   | 'erro_cofre_backup_ausente'

@@ -130,6 +130,7 @@ def codex(url: str, token: str) -> None:
         INICIO,
         "[mcp_servers.hangar]",
         f'url = "{url}"',
+        "tool_timeout_sec = 660",
         f'http_headers = {{ "Authorization" = "Bearer {token}" }}',
         'env_http_headers = { "X-Hangar-Key" = "CP_SESSION_KEY", "X-Hangar-Pane" = "TMUX_PANE", '
         '"X-Hangar-Session" = "CP_SESSION_NAME", "X-Hangar-Jev" = "HANGAR_JEV" }',

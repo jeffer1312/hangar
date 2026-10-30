@@ -73,14 +73,28 @@ pub fn sweep(dir: &Path, now: f64, alive: Option<&dyn Fn(&Meta) -> bool>) {
     retain(dir, |m| now - m.created < LIFE.as_secs_f64() && alive.is_none_or(|alive| alive(m)));
 }
 
-/// Fechamento da sessão: os arquivos dela, pelo nome e pela chave do pane.
-pub async fn on_close(st: &AppState, name: &str) {
-    let Some(dir) = base() else { return };
-    let empty = std::fs::read_dir(&dir).map_or(true, |mut d| d.next().is_none());
-    if empty { return; }
+/// O fechamento de uma sessão que ainda vai acontecer: a chave do pane é lida antes do kill.
+pub struct Closing { dir: PathBuf, name: String, key: Option<String> }
+
+/// `None` sem arquivo nenhum: o fechamento não paga a pergunta ao multiplexador.
+pub async fn before_close(st: &AppState, name: &str) -> Option<Closing> {
+    let dir = base()?;
+    if std::fs::read_dir(&dir).map_or(true, |mut d| d.next().is_none()) { return None; }
     let key = st.list.env().mux.session_env(name, "CP_SESSION_KEY").await;
-    let name = name.to_owned();
-    let _ = tokio::task::spawn_blocking(move || close(&dir, &name, key.as_deref())).await;
+    Some(Closing { dir, name: name.to_owned(), key })
+}
+
+impl Closing {
+    /// Só depois do fechamento que deu certo: recusado, a sessão segue viva e o arquivo é dela.
+    pub fn done(self) {
+        tokio::task::spawn_blocking(move || close(&self.dir, &self.name, self.key.as_deref()));
+    }
+}
+
+/// Na subida a lista ainda não tem as sessões que voltam pelo spec: só o prazo de 24 h apaga.
+pub async fn sweep_at_start() {
+    let Some(dir) = base() else { return };
+    let _ = tokio::task::spawn_blocking(move || sweep(&dir, super::now(), None)).await;
 }
 
 pub fn close(dir: &Path, name: &str, key: Option<&str>) {

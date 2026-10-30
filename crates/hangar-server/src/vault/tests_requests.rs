@@ -113,7 +113,10 @@ async fn ten_minutes_without_an_answer_close_as_timed_out_while_the_origin_waits
     assert!(timed_out);
     assert!(start.elapsed() >= requests::EXPIRES - Duration::from_secs(1), "não fechou antes dos 10 min");
     assert!(reqs.feed().borrow().requests.is_empty());
-    assert_eq!(reqs.wait(&card.id, Duration::ZERO).await.err(), Some(RequestError::Lost), "o desfecho sai uma vez");
+    // A espera nova (quem pediu tentou de novo depois de uma falha de rede) ainda lê o desfecho.
+    assert!(matches!(reqs.wait(&card.id, Duration::ZERO).await, Ok(WaitStatus::TimedOut)));
+    tokio::time::sleep(IDLE + Duration::from_secs(1)).await;
+    assert_eq!(reqs.wait(&card.id, Duration::ZERO).await.err(), Some(RequestError::Lost), "60 s depois da última espera, some");
 }
 
 #[tokio::test]
@@ -221,7 +224,7 @@ async fn call(srv: &Server, method: reqwest::Method, path: &str, headers: &[(&st
 fn code(text: &str) -> Value { serde_json::from_str::<Value>(text).unwrap_or(Value::Null)["detail"]["code"].clone() }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn an_approval_over_the_routes_refuses_stale_guest_and_echo_then_hands_the_value_once() {
+async fn an_approval_over_the_routes_refuses_stale_guest_and_echo_then_hands_the_value_until_closed() {
     use reqwest::Method;
     let srv = serve().await;
     assert_eq!(call(&srv, Method::PUT, "/api/vault/config", &[], Some(json!({"owner": "self"}))).await.0, 200);
@@ -250,6 +253,10 @@ async fn an_approval_over_the_routes_refuses_stale_guest_and_echo_then_hands_the
     let waited = call(&srv, Method::GET, &format!("{path}/wait"), &[], None).await;
     assert_eq!(waited.0, 200);
     assert_eq!(serde_json::from_str::<Value>(&waited.1).unwrap(), json!({"status": "allowed", "value": VALUE}));
+    // A espera mais nova (quem pediu tentou de novo) ainda lê o desfecho, até o pedido fechar.
+    let again = call(&srv, Method::GET, &format!("{path}/wait"), &[], None).await;
+    assert_eq!(serde_json::from_str::<Value>(&again.1).unwrap()["status"], json!("allowed"));
+    assert_eq!(call(&srv, Method::DELETE, &path, &[], None).await.0, 204);
     let gone = call(&srv, Method::GET, &format!("{path}/wait"), &[], None).await;
     assert_eq!((gone.0, code(&gone.1)), (404, json!("erro_cofre_pedido_perdido")));
     assert_eq!(call(&srv, Method::DELETE, &path, &[], None).await.0, 404);

@@ -16,8 +16,10 @@ use crate::{groups::peers::PeerClient, routes::AppState};
 /// espera o dono responder precisa de mais que o orçamento de 10 min.
 pub const CLAUDE_IDLE_VAR: &str = "CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT";
 pub const CLAUDE_IDLE_MS: &str = "660000";
-/// O Codex corta a tool em 60 s sem isso.
-pub const CODEX_TOOL_TIMEOUT: &str = "mcp_servers.hangar.tool_timeout_sec=660";
+/// O Codex corta a tool em 60 s sem isso; o `scripts/registrar-mcp.py` o grava no `config.toml` da conta.
+const CODEX_TOOL_TIMEOUT_MIN: i64 = 600;
+/// Saída lida do comando: só o fim, antes da máscara e da cauda de 8 KB.
+const READ_CAP: usize = 1 << 20;
 /// Aprovação mais execução, por chamada.
 pub const BUDGET: Duration = Duration::from_secs(600);
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
@@ -63,7 +65,8 @@ fn request_text(error: RequestError) -> String {
     match error {
         RequestError::Vault(error) => vault_text(error),
         RequestError::Lost => "erro_cofre_pedido_perdido: a dona do cofre não conhece mais este pedido".into(),
-        RequestError::TooMany => "erro_cofre_pedidos_demais: pedidos demais esperando resposta no cofre".into(),
+        RequestError::TooMany => "erro_cofre_pedidos_demais: pedidos demais desta sessão esperando resposta no cofre".into(),
+        RequestError::Cooldown => "erro_cofre_pedidos_demais: o dono acabou de recusar um pedido desta sessão; espere 30 s".into(),
         RequestError::Stale | RequestError::Answered => "erro_cofre_pedido_perdido: o pedido mudou na dona".into(),
     }
 }
@@ -177,20 +180,57 @@ pub async fn secret(owner: &Owner, req: UseReq, deadline: Instant) -> Result<Zer
     }
 }
 
-/// O agente da sessão como a lista o vê: pasta de trabalho e, onde dá para ler, ambiente e argv.
-pub struct Agent { pub provider: String, pub cwd: Option<PathBuf>, pub env: Option<Vec<(OsString, OsString)>>, pub argv: Vec<String> }
+pub const NO_ENV: &str = "erro_cofre_sem_ambiente: o ambiente desta sessão não foi lido nem refeito pelo lançador; \
+o comando não roda com o ambiente do servidor";
 
-pub async fn agent(st: &AppState, name: &str) -> Result<Agent, String> {
+type Env = Vec<(OsString, OsString)>;
+
+/// O agente da sessão: pasta de trabalho, o ambiente dele (lido do processo ou refeito pelo lançador)
+/// e se a sessão nasceu sem o prazo longo das tools que esperam o dono.
+pub struct Agent { pub cwd: Option<PathBuf>, pub env: Option<Env>, pub lacks_deadline: bool }
+
+pub async fn agent(st: &Arc<AppState>, name: &str) -> Result<Agent, String> {
     let found = st.list.fresh_session(name).await
         .map_err(|_| "erro_cofre_sessao_indisponivel: a lista de sessões não respondeu".to_owned())?;
     let Some((row, pid)) = found else { return Err(format!("sessao_desconhecida: '{name}' não está na lista de sessões")) };
     let text = |v: Option<String>| v.filter(|v| !v.is_empty());
     let cwd = text(row.git_cwd).or(text(row.cwd)).map(PathBuf::from);
-    let (env, argv) = match pid {
-        Some(pid) => tokio::task::spawn_blocking(move || (environ(pid), argv(pid))).await.unwrap_or_default(),
-        None => (None, Vec::new()),
+    let key = row.lifecycle_id.as_deref().and_then(|l| l.strip_prefix("k:")).map(str::to_owned);
+    let codex_home = text(row.codex_home).map(PathBuf::from);
+    let (st, name, provider, headless) = (st.clone(), name.to_owned(), row.provider, row.headless);
+    tokio::task::spawn_blocking(move || {
+        let (env, read) = session_env(&st, &name, &provider, headless, pid, key.as_deref());
+        let config = codex_home.filter(|_| provider == "codex").and_then(|home| std::fs::read_to_string(home.join("config.toml")).ok());
+        let lacks_deadline = lacks_deadline(&provider, read.then_some(env.as_deref()).flatten(), config.as_deref());
+        Agent { cwd, env, lacks_deadline }
+    }).await.map_err(|_| "erro_cofre_sessao_indisponivel: a leitura da sessão foi interrompida".to_owned())
+}
+
+/// `(ambiente, lido do processo)`. Com terminal, o do agente pelo `/proc`; sem terminal, o do cano
+/// (que nasceu com o ambiente da subida) com a chave conferida, senão o que o lançador monta agora.
+fn session_env(st: &AppState, name: &str, provider: &str, headless: bool, pid: Option<u32>, key: Option<&str>) -> (Option<Env>, bool) {
+    if !headless { return (pid.and_then(environ), true); }
+    let base = &st.accounts.env;
+    let dir = base.home.join(".hangar").join(if provider == "codex" { "codex-sessions" } else { "claude-headless" });
+    let Some(meta) = crate::runtime::codex_sidecar::load(&crate::runtime::codex_sidecar::path(&dir, name)) else { return (None, false) };
+    let cano = meta.get("cano").and_then(|c| c.get("pid")).and_then(serde_json::Value::as_u64).and_then(|p| u32::try_from(p).ok());
+    let mine = |env: &Env| key.is_some_and(|key| env.iter().any(|(k, v)| k == "CP_SESSION_KEY" && v == key));
+    if let Some(env) = cano.and_then(environ).filter(mine) { return (Some(env), true); }
+    (launch_env(base, provider, name, &serde_json::Value::Object(meta)), false)
+}
+
+/// O ambiente que o lançador daria a esta sessão sem terminal agora (Windows, cano ilegível).
+fn launch_env(base: &crate::accounts::environment::AccountEnvironment, provider: &str, name: &str, meta: &serde_json::Value) -> Option<Env> {
+    let map = match provider {
+        "codex" => crate::runtime::codex_launch::launch_env(base, &crate::runtime::codex_sidecar::dir(&base.home), meta).ok()?.env,
+        "claude" => {
+            let spec = crate::session_open::record::claude_live(&base.home, meta, name).ok()?;
+            let facts = crate::session_open::facts::LocalFacts::new(base.clone(), tokio::runtime::Handle::try_current().ok()?);
+            crate::runtime::claude_launch::plan_for(base, None, &spec, meta, &facts).ok()?.env
+        }
+        _ => return None,
     };
-    Ok(Agent { provider: row.provider, cwd, env, argv })
+    Some(map.into_iter().map(|(k, v)| (k.into(), v.into())).collect())
 }
 
 #[cfg(target_os = "linux")]
@@ -207,23 +247,23 @@ fn environ(pid: u32) -> Option<Vec<(OsString, OsString)>> {
 #[cfg(not(target_os = "linux"))]
 fn environ(_pid: u32) -> Option<Vec<(OsString, OsString)>> { None }
 
-#[cfg(target_os = "linux")]
-fn argv(pid: u32) -> Vec<String> {
-    std::fs::read(format!("/proc/{pid}/cmdline")).map(|raw| raw.split(|b| *b == 0).filter(|a| !a.is_empty())
-        .map(|a| String::from_utf8_lossy(a).into_owned()).collect()).unwrap_or_default()
-}
-
-#[cfg(not(target_os = "linux"))]
-fn argv(_pid: u32) -> Vec<String> { Vec::new() }
-
-/// A sessão nasceu sem o prazo longo, quando dá para saber: Claude pelo ambiente do agente, Codex pelo
-/// argv do app-server. Sem leitura (Windows, processo de outro jeito) a chamada segue.
-pub fn lacks_deadline(agent: &Agent) -> bool {
-    match agent.provider.as_str() {
-        "claude" => agent.env.as_ref().is_some_and(|env| !env.iter().any(|(k, _)| k == CLAUDE_IDLE_VAR)),
-        "codex" => agent.argv.iter().any(|a| a == "app-server") && !agent.argv.iter().any(|a| a.contains("mcp_servers.hangar.tool_timeout_sec")),
+/// A sessão nasceu sem o prazo longo, quando dá para saber: Claude pelo ambiente lido do processo,
+/// Codex pelo `[mcp_servers.hangar] tool_timeout_sec` do `config.toml` da conta. Sem leitura a chamada segue.
+// shortcut: o Codex lê o config.toml ao subir; conta atualizada depois de a sessão abrir passa aqui e cai em 60 s.
+pub fn lacks_deadline(provider: &str, proc_env: Option<&[(OsString, OsString)]>, codex_config: Option<&str>) -> bool {
+    match provider {
+        "claude" => proc_env.is_some_and(|env| !env.iter().any(|(k, _)| k == CLAUDE_IDLE_VAR)),
+        "codex" => codex_config.and_then(|raw| toml::from_str::<toml::Table>(raw).ok()).is_some_and(|config| {
+            let timeout = config.get("mcp_servers").and_then(|m| m.get("hangar")).and_then(|h| h.get("tool_timeout_sec"));
+            !timeout.and_then(|t| t.as_integer().or_else(|| t.as_float().map(|f| f as i64))).is_some_and(|t| t >= CODEX_TOOL_TIMEOUT_MIN)
+        }),
         _ => false,
     }
+}
+
+/// O que o comando nunca herda: o que é só da sessão ou do motor (`NOT_INHERITED`) e os segredos do servidor.
+fn stripped(name: &OsString) -> bool {
+    crate::session_open::terminal::NOT_INHERITED.iter().chain(crate::terminal_process::PRIVATE_ENV_KEYS.iter()).any(|k| name == k)
 }
 
 /// Nome que um shell aceita como variável e que não é segredo do servidor.
@@ -237,13 +277,71 @@ pub fn env_name_ok(name: &str) -> bool {
 const COMPONENT: &AsciiSet = &NON_ALPHANUMERIC.remove(b'-').remove(b'_').remove(b'.').remove(b'!').remove(b'~').remove(b'*')
     .remove(b'\'').remove(b'(').remove(b')');
 
-/// O valor trocado por `••••` em texto, base64 (padrão e de URL, com e sem `=`) e percent-encoded.
-// shortcut: base64 só alinhado no começo do valor; dentro de outro blob (Basic auth "user:senha") passa.
+/// `application/x-www-form-urlencoded`: deixa `*-._`, e o espaço vira `+`.
+const FORM: &AsciiSet = &NON_ALPHANUMERIC.remove(b'*').remove(b'-').remove(b'.').remove(b'_');
+/// Abaixo disso o pedaço de base64 do meio casaria com texto comum.
+const MIN_CORE: usize = 6;
+
+/// `%2F` → `%2f`.
+fn lower_hex(encoded: &str) -> String {
+    let mut out = String::with_capacity(encoded.len());
+    let mut left = 0;
+    for c in encoded.chars() {
+        if c == '%' { left = 2; out.push(c); continue; }
+        out.push(if left > 0 { left -= 1; c.to_ascii_lowercase() } else { c });
+    }
+    out
+}
+
+/// O valor como string JSON, sem as aspas; `ascii` escapa todo não-ASCII em `\uXXXX`.
+fn json_escaped(value: &str, ascii: bool) -> String {
+    let mut out = String::new();
+    for c in value.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 || (ascii && !c.is_ascii()) => {
+                let mut units = [0u16; 2];
+                for unit in c.encode_utf16(&mut units) { out.push_str(&format!("\\u{unit:04x}")); }
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// O miolo do base64 do valor quando ele começa a `skip` bytes de um bloco (0, 1 ou 2): só os
+/// caracteres que dependem apenas dele, para achá-lo dentro de outro conteúdo (`user:senha` do Basic auth).
+fn base64_core(engine: &impl Engine, value: &[u8], skip: usize) -> Option<String> {
+    let mut padded = vec![0u8; skip];
+    padded.extend_from_slice(value);
+    let encoded = Zeroizing::new(engine.encode(&padded));
+    let (start, end) = ((skip * 8).div_ceil(6), padded.len() * 8 / 6);
+    let core: String = encoded.get(start..end)?.to_owned();
+    (core.len() >= MIN_CORE).then_some(core)
+}
+
+/// O valor trocado por `••••` em texto, base64 (padrão e de URL, com e sem `=`, também no meio de
+/// outro conteúdo), percent-encoded (maiúsculo e minúsculo, de URL e de formulário) e escapado em JSON.
 pub fn mask(text: &str, value: &str) -> Zeroizing<String> {
     use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD};
     let mut forms: Vec<Zeroizing<String>> = vec![Zeroizing::new(value.to_owned())];
     for engine in [STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD] { forms.push(Zeroizing::new(engine.encode(value))); }
-    for set in [NON_ALPHANUMERIC, COMPONENT] { forms.push(Zeroizing::new(utf8_percent_encode(value, set).to_string())); }
+    for engine in [STANDARD, URL_SAFE] {
+        for skip in 0..3 { forms.extend(base64_core(&engine, value.as_bytes(), skip).map(Zeroizing::new)); }
+    }
+    for set in [NON_ALPHANUMERIC, COMPONENT] {
+        let encoded = Zeroizing::new(utf8_percent_encode(value, set).to_string());
+        forms.push(Zeroizing::new(lower_hex(&encoded)));
+        forms.push(encoded);
+    }
+    let form = Zeroizing::new(utf8_percent_encode(value, FORM).to_string().replace("%20", "+"));
+    forms.push(Zeroizing::new(lower_hex(&form)));
+    forms.push(form);
+    for ascii in [false, true] { forms.push(Zeroizing::new(json_escaped(value, ascii))); }
     forms.retain(|f| !f.is_empty());
     // O mais longo antes: o base64 sem `=` é prefixo do com `=`.
     forms.sort_by_key(|f| std::cmp::Reverse(f.len()));
@@ -303,17 +401,42 @@ fn shell(command: &str) -> tokio::process::Command {
     }
 }
 
-/// `(código, cauda mascarada)`. O ambiente é o do agente (ou o do servidor) sem os segredos do
-/// servidor, mais `name=valor`. No prazo o grupo inteiro morre e volta `(124, "timeout Ns")`.
-pub async fn run(command: &str, cwd: &Path, base_env: Vec<(OsString, OsString)>, name: &str, value: &Zeroizing<String>, timeout: Duration)
+/// Os processos do comando morrem junto com a chamada largada (cancelada no meio): os netos levam o valor.
+struct KillTree(Option<crate::terminal_process::CommandTree>);
+
+impl Drop for KillTree {
+    fn drop(&mut self) {
+        use crate::terminal_process::OwnedTree;
+        if let Some(tree) = self.0.as_mut() { let _ = tree.terminate(); }
+    }
+}
+
+/// Só os últimos `READ_CAP` bytes: um comando que despeja gigabytes não enche a memória.
+async fn read_tail(mut pipe: impl tokio::io::AsyncRead + Unpin) -> std::io::Result<Zeroizing<Vec<u8>>> {
+    let (mut kept, mut chunk) = (Zeroizing::new(Vec::new()), Zeroizing::new(vec![0u8; 64 * 1024]));
+    loop {
+        let n = pipe.read(&mut chunk).await?;
+        if n == 0 { return Ok(kept); }
+        kept.extend_from_slice(&chunk[..n]);
+        if kept.len() > 2 * READ_CAP {
+            let cut = kept.len() - READ_CAP;
+            let rest = Zeroizing::new(kept[cut..].to_vec());
+            kept = rest;
+        }
+    }
+}
+
+/// `(código, cauda mascarada)`. O ambiente é o da sessão sem o que ela nunca passa adiante, mais
+/// `name=valor`. No prazo o grupo inteiro morre e volta `(124, "timeout Ns")`.
+pub async fn run(command: &str, cwd: &Path, base_env: Env, name: &str, value: &Zeroizing<String>, timeout: Duration)
     -> (i64, String) {
     if !cwd.is_dir() { return (-1, format!("a pasta da sessão não existe: {}", cwd.display())); }
     let mut child_cmd = shell(command);
     child_cmd.current_dir(cwd).env_clear()
-        .envs(base_env.into_iter().filter(|(k, _)| !crate::terminal_process::PRIVATE_ENV_KEYS.iter().any(|p| k == p)))
+        .envs(base_env.into_iter().filter(|(k, _)| !stripped(k)))
         .env(name, value.as_str())
         .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).kill_on_drop(true);
-    let mut tree = match crate::terminal_process::CommandTree::configure(&mut child_cmd) {
+    let tree = match crate::terminal_process::CommandTree::configure(&mut child_cmd) {
         Ok(tree) => tree,
         Err(e) => return (-1, format!("o comando não rodou: {e}")),
     };
@@ -322,30 +445,36 @@ pub async fn run(command: &str, cwd: &Path, base_env: Vec<(OsString, OsString)>,
         Err(e) => return (-1, format!("o shell não rodou: {e}")),
     };
     drop(child_cmd);
+    let mut guard = KillTree(Some(tree));
+    let tree = guard.0.as_mut().expect("árvore recém-posta");
     if let Err(e) = tree.attach(&child) {
-        crate::terminal_process::finish(&mut tree).await;
+        crate::terminal_process::finish(tree).await;
         let _ = child.wait().await;
+        guard.0 = None;
         return (-1, format!("o comando não rodou: {e}"));
     }
-    let (mut out, mut err) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
+    let (out, err) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
     let done = tokio::time::timeout(timeout, async {
-        let (mut o, mut e) = (Zeroizing::new(Vec::new()), Zeroizing::new(Vec::new()));
-        let (ro, re) = tokio::join!(out.read_to_end(&mut o), err.read_to_end(&mut e));
+        let (o, e) = tokio::join!(read_tail(out), read_tail(err));
         let status = child.wait().await;
-        (ro.and(re).and(status), o, e)
+        match (o, e, status) {
+            (Ok(o), Ok(e), Ok(status)) => Ok((status, o, e)),
+            (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => Err(error),
+        }
     }).await;
-    crate::terminal_process::finish(&mut tree).await;
+    crate::terminal_process::finish(tree).await;
+    guard.0 = None;
     match done {
         Err(_) => {
             let _ = child.wait().await;
             (124, format!("timeout {}s", timeout.as_secs()))
         }
-        Ok((Ok(status), o, e)) => {
+        Ok(Ok((status, o, e))) => {
             let text = Zeroizing::new(format!("{}\n{}", String::from_utf8_lossy(&o), String::from_utf8_lossy(&e)));
             let masked = mask(text.trim(), value);
             (exit_code(status), tail(&masked))
         }
-        Ok((Err(e), _, _)) => (-1, format!("a saída do comando não leu: {e}")),
+        Ok(Err(e)) => (-1, format!("a saída do comando não leu: {e}")),
     }
 }
 

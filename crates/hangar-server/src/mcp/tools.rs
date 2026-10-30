@@ -709,7 +709,7 @@ impl Tools {
     /// Para a tool que espera o dono: sessão sem o prazo longo cairia antes da resposta.
     async fn vault_agent(&self, name: &str) -> Result<exec::Agent, String> {
         let agent = exec::agent(&self.st, name).await?;
-        if exec::lacks_deadline(&agent) { return Err(exec::NO_DEADLINE.into()); }
+        if agent.lacks_deadline { return Err(exec::NO_DEADLINE.into()); }
         Ok(agent)
     }
 
@@ -754,19 +754,21 @@ impl Tools {
             return Err("erro_cofre_argumento_invalido: `env` é o nome da variável (letras, números e _, sem começar por número)".into());
         }
         if a.command.trim().is_empty() { return Err("erro_cofre_argumento_invalido: `command` vazio".into()); }
+        // O dono aprova o comando que vê no cartão: o que não cabe nele não roda.
+        if a.command.chars().count() > TARGET_CHARS {
+            return Err(format!("erro_cofre_argumento_invalido: `command` com mais de {TARGET_CHARS} caracteres; ponha o resto num script"));
+        }
         let (name, key) = self.vault_caller(headers).await?;
         let agent = self.vault_agent(&name).await?;
         let cwd = agent.cwd.clone().ok_or("erro_cofre_sem_pasta: a pasta de trabalho da sessão é desconhecida")?;
+        let env = agent.env.ok_or(exec::NO_ENV)?;
         let owner = exec::Owner::of(&self.st)?;
-        let mut target: String = a.command.chars().take(TARGET_CHARS).collect();
-        if target.len() < a.command.len() { target.push('…'); }
         let req = UseReq { origin_server: self.vault_origin(), session_key: key, session: name, entry: a.entry, kind: UseKind::Exec,
-            reason: a.reason, target };
+            reason: a.reason, target: a.command.clone() };
         let value = exec::secret(&owner, req, deadline).await?;
         let asked = a.timeout_s.map_or(exec::DEFAULT_TIMEOUT, |s| Duration::from_secs(s.max(1)));
         let left = deadline.saturating_duration_since(tokio::time::Instant::now());
         if left.is_zero() { return Err(exec::NO_ANSWER.into()); }
-        let env = agent.env.unwrap_or_else(|| std::env::vars_os().collect());
         let (exit, output) = exec::run(&a.command, &cwd, env, &a.env, &value, asked.min(left)).await;
         Ok(dict(json!({"exit": exit, "output": output})))
     }

@@ -17,6 +17,9 @@ pub const IDLE: Duration = Duration::from_secs(60);
 pub const TEMPORARY: Duration = Duration::from_secs(24 * 60 * 60);
 /// Um peer com o token não enche a memória nem a tela do dono.
 const MAX_OPEN: usize = 32;
+/// Uma sessão sozinha não enche a tela do dono de cartões.
+const MAX_OPEN_PER_SESSION: usize = 3;
+pub const COOLDOWN: Duration = Duration::from_secs(30);
 const MAX_TEXT: usize = 2048;
 const MAX_KEY: usize = 256;
 
@@ -62,6 +65,8 @@ pub enum RequestError {
     Answered,
     /// `erro_cofre_pedidos_demais`
     TooMany,
+    /// `erro_cofre_pedidos_demais` também: o dono recusou esta sessão há menos de `COOLDOWN`.
+    Cooldown,
 }
 
 impl From<VaultError> for RequestError {
@@ -110,7 +115,9 @@ struct Temporary { session_key: String, name: String, value: Zeroizing<String>, 
 struct Grant { session_key: String, name: String, until: Instant }
 
 #[derive(Default)]
-struct Inner { requests: HashMap<String, Request>, temporary: Vec<Temporary>, grants: Vec<Grant>, state: Option<State>, seq: u64 }
+struct Inner { requests: HashMap<String, Request>, temporary: Vec<Temporary>, grants: Vec<Grant>, state: Option<State>, seq: u64,
+    /// Sessão que o dono acabou de recusar não abre outro cartão antes disso.
+    cooldown: HashMap<String, Instant> }
 
 /// Um por servidor (`AppState.vault_requests`); o `ListHub` assina o `feed`.
 pub struct Requests { inner: Mutex<Inner>, feed: watch::Sender<Arc<Feed>> }
@@ -154,6 +161,18 @@ fn seen(result: Result<(), VaultError>) -> Option<State> {
         Err(VaultError::Key(KeyError::Lost | KeyError::Absent)) => Some(State::KeyLost),
         Err(VaultError::Absent | VaultError::Key(KeyError::Unsupported)) => Some(State::Absent),
         Err(VaultError::Unreadable | VaultError::Io | VaultError::Invalid) => None,
+    }
+}
+
+fn copy(status: &WaitStatus) -> WaitStatus {
+    match status {
+        WaitStatus::Pending => WaitStatus::Pending,
+        WaitStatus::Allowed(value) => WaitStatus::Allowed(value.clone()),
+        WaitStatus::Saved { entry, temporary } => WaitStatus::Saved { entry: entry.clone(), temporary: *temporary },
+        WaitStatus::Denied => WaitStatus::Denied,
+        WaitStatus::Declined => WaitStatus::Declined,
+        WaitStatus::TimedOut => WaitStatus::TimedOut,
+        WaitStatus::Cancelled => WaitStatus::Cancelled,
     }
 }
 
@@ -203,6 +222,10 @@ impl Requests {
         let now = Instant::now();
         let mut inner = lock(&self.inner);
         if inner.requests.len() >= MAX_OPEN { return Err(RequestError::TooMany); }
+        let mine = inner.requests.values().filter(|r| r.outcome.is_none() && r.session_key == session_key).count();
+        if mine >= MAX_OPEN_PER_SESSION { return Err(RequestError::TooMany); }
+        inner.cooldown.retain(|_, until| *until > now);
+        if inner.cooldown.contains_key(&session_key) { return Err(RequestError::Cooldown); }
         card.id = id.clone();
         card.interaction_id = interaction_id;
         card.expires_at = super::now() + EXPIRES.as_secs_f64();
@@ -257,8 +280,8 @@ impl Requests {
         self.open(card, req.session_key)
     }
 
-    /// Consulta longa: o desfecho assim que houver, ou `Pending` depois de `hold`. O desfecho sai uma
-    /// vez só (o pedido fecha) e depois o id é `Lost`. Cada chamada renova os 60 s.
+    /// Consulta longa: o desfecho assim que houver, ou `Pending` depois de `hold`. O desfecho
+    /// vale para toda espera até 60 s depois da última; aí o id é `Lost`. Cada chamada renova os 60 s.
     pub async fn wait(&self, id: &str, hold: Duration) -> Result<WaitStatus, RequestError> {
         let until = Instant::now() + hold;
         loop {
@@ -266,12 +289,11 @@ impl Requests {
                 let mut inner = lock(&self.inner);
                 let request = inner.requests.get_mut(id).ok_or(RequestError::Lost)?;
                 request.idle = request.idle.max(Instant::now() + IDLE);
-                if request.outcome.is_none() {
-                    request.changed.subscribe()
-                } else {
-                    let outcome = inner.requests.remove(id).and_then(|r| r.outcome);
-                    self.publish(&inner);
-                    return outcome.ok_or(RequestError::Lost);
+                // O desfecho fica até 60 s depois da última espera: a espera antiga que ainda segurava a
+                // consulta não o tira da nova, que quem pediu abriu depois de uma falha de rede.
+                match &request.outcome {
+                    None => request.changed.subscribe(),
+                    Some(outcome) => return Ok(copy(outcome)),
                 }
             };
             if tokio::time::timeout_at(until, rx.changed()).await.is_err() {
@@ -279,7 +301,10 @@ impl Requests {
                 let request = inner.requests.get_mut(id).ok_or(RequestError::Lost)?;
                 // Os 60 s contam do fim desta espera, não do começo.
                 request.idle = request.idle.max(Instant::now() + IDLE);
-                if request.outcome.is_none() { return Ok(WaitStatus::Pending); }
+                match &request.outcome {
+                    None => return Ok(WaitStatus::Pending),
+                    Some(outcome) => return Ok(copy(outcome)),
+                }
             }
         }
     }
@@ -352,6 +377,7 @@ impl Requests {
                     inner.temporary.push(Temporary { session_key, name: entry.clone(), value, until: now + TEMPORARY });
                 }
             }
+            WaitStatus::Denied | WaitStatus::Declined => { inner.cooldown.insert(session_key, now + COOLDOWN); }
             _ => {}
         }
         request.outcome = Some(outcome);
