@@ -11,10 +11,10 @@ pub(super) fn replace(source: &Path, target: &Path, expected: Option<&[u8]>, lin
     let recovery = tempfile::Builder::new().prefix(".hangar-recovery-").tempfile_in(target.parent().ok_or_else(||io::Error::other("Destino sem diretório"))?)?.into_temp_path();
     let recovery = recovery.keep().map_err(|e|e.error)?;
     #[cfg(windows)]
-    if expected.is_none() && link.is_some() {
-        // ReplaceFileW segue o destino do link; movê-lo conserva o link quebrado.
+    if link.is_some() {
+        // ReplaceFileW recusa links; mover o próprio link conserva também o alvo externo.
         fs::rename(target, &recovery)?;
-        if fs::read_link(&recovery).ok().as_deref() != link || fs::read(&recovery).is_ok() {
+        if fs::read_link(&recovery).ok().as_deref() != link || fs::read(&recovery).as_deref().ok() != expected {
             return Err(Error::Displaced(format!("Link alterado; versão deslocada preservada em {}", recovery.display())));
         }
         if let Err(error) = move_new(source, target) {
@@ -98,5 +98,39 @@ mod tests {
         let dir=tempfile::tempdir().unwrap();let target=dir.path().join("config");let source=dir.path().join("new");
         fs::write(&source,b"generated").unwrap();fs::write(&target,b"external").unwrap();
         assert!(replace(&source,&target,None,None).is_err());assert_eq!(fs::read(target).unwrap(),b"external");
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_link_tests {
+    use super::*;
+    #[test]
+    fn publication_replaces_a_valid_link_without_changing_its_external_target() {
+        let dir=tempfile::tempdir().unwrap();
+        let external=dir.path().join("external");let target=dir.path().join("target");let source=dir.path().join("new");
+        fs::write(&external,b"personal").unwrap();fs::write(&source,b"generated").unwrap();
+        std::os::windows::fs::symlink_file(&external,&target).unwrap();
+        replace(&source,&target,Some(b"personal"),Some(&external)).unwrap();
+        assert_eq!(fs::read(&external).unwrap(),b"personal");
+        assert_eq!(fs::read(&target).unwrap(),b"generated");assert!(!target.is_symlink());
+        assert!(!fs::read_dir(dir.path()).unwrap().any(|entry|entry.unwrap().file_name().to_string_lossy().starts_with(".hangar-recovery-")));
+    }
+    #[test]
+    fn publication_retains_an_unexpected_link_and_does_not_overwrite_its_contents() {
+        let dir=tempfile::tempdir().unwrap();
+        let original=dir.path().join("original");let external=dir.path().join("external");let target=dir.path().join("target");let source=dir.path().join("new");
+        fs::write(&original,b"expected").unwrap();fs::write(&external,b"external edit").unwrap();fs::write(&source,b"generated").unwrap();
+        std::os::windows::fs::symlink_file(&external,&target).unwrap();
+        let error=replace(&source,&target,Some(b"expected"),Some(&original)).unwrap_err();
+        assert!(matches!(error,Error::Displaced(_)));
+        let saved=fs::read_dir(dir.path()).unwrap().map(|entry|entry.unwrap().path()).find(|path|path.file_name().unwrap().to_string_lossy().starts_with(".hangar-recovery-")).unwrap();
+        assert!(error.to_string().contains(saved.to_str().unwrap()));
+        assert_eq!(fs::read_link(&saved).unwrap(),external);
+        assert_eq!(fs::read(&saved).unwrap(),b"external edit");
+        assert_eq!(fs::read(&source).unwrap(),b"generated");
+        fs::write(&target,b"third writer").unwrap();
+        assert_eq!(fs::read(&target).unwrap(),b"third writer");
+        assert_eq!(fs::read(&external).unwrap(),b"external edit");
+        assert_eq!(fs::read(&original).unwrap(),b"expected");
     }
 }

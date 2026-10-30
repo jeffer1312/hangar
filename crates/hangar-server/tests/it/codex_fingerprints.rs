@@ -270,6 +270,6 @@ fn codex_service_fingerprint_detects_same_metadata_edits_and_plugin_selection() 
  let env=AccountEnvironment::from_pairs([("HOME",home.to_string_lossy().into_owned()),("USERPROFILE",home.to_string_lossy().into_owned())]);
  let path=home.join(".claude/skills/a/SKILL.md");std::fs::write(&path,"first").unwrap();let modified=std::fs::metadata(&path).unwrap().modified().unwrap();
  let signature=||fingerprints::compute(&env,&account,&repo,&json!({}),false,"skills",false).unwrap();let before=signature();
- std::fs::write(&path,"other").unwrap();std::fs::File::open(&path).unwrap().set_times(std::fs::FileTimes::new().set_modified(modified)).unwrap();assert_ne!(before,signature());
+ std::fs::write(&path,"other").unwrap();std::fs::OpenOptions::new().read(true).write(true).open(&path).unwrap().set_times(std::fs::FileTimes::new().set_modified(modified)).unwrap();assert_ne!(before,signature());
  let before=signature();std::fs::write(account.join("config.toml"),"[plugins.'a@m']\nenabled=true\n").unwrap();assert_ne!(before,signature());
 }
