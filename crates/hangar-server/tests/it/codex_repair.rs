@@ -70,7 +70,7 @@ fn codex_service_legacy_matches_original_preserving_personal_commands() {
   let hooks=hangar_server::config_sync::paths::map_strings(&hooks,&|text| {
    let mut text=text.replace(&*python.to_string_lossy(),"$ROOT/python");
    for script in ["state_hook.py","nav_hook.py","guard_tmux.py"] {
-    text=text.replace(&*repo.join("backend/hooks").join(script).to_string_lossy(),&format!("$ROOT/repo/backend/hooks/{script}"));
+    text=text.replace(&*repo.join(format!("backend/hooks/{script}")).to_string_lossy(),&format!("$ROOT/repo/backend/hooks/{script}"));
    }
    text.replace(&*root.to_string_lossy(),"$ROOT")
   });

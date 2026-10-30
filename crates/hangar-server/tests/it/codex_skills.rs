@@ -63,8 +63,9 @@ fn codex_service_skills_match_original_provenance_and_files(){
   let sources=hangar_server::harness_setup::skills::sources(&env,repo).unwrap();
   let mut registry=input["registry"].clone();
   for (name,record) in registry.as_object_mut().unwrap() {
-   let destination=account.join("skills").join(name);
-   if record["path"].as_str().is_some_and(|old|Path::new(old)==destination.as_path()) {record["path"]=json!(destination);}
+   for destination in [account.join("skills").join(name),home.join(".agents/skills").join(name)] {
+    if record["path"].as_str().is_some_and(|old|Path::new(old)==destination.as_path()) {record["path"]=json!(destination);}
+   }
    if let Some(source)=sources.get(name) {
     for field in ["source","origem"] {if record[field].as_str().is_some_and(|old|Path::new(old)==source.as_path()) {record[field]=json!(source);}}
    }
