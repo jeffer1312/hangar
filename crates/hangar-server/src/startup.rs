@@ -15,6 +15,30 @@ impl Readiness {
         let _ = receiver.wait_for(|ready| *ready).await;
     }
 }
+/// O cancelamento da porta pede a parada; o cleanup externo conserva o handle para aguardá-la.
+#[derive(Default)]
+pub struct Producers(std::sync::Mutex<Option<crate::AbortOnDrop>>);
+impl Producers {
+    pub(crate) fn register(self: &Arc<Self>, task: tokio::task::JoinHandle<()>) -> ProducerScope {
+        let mut slot = self.0.lock().unwrap();
+        assert!(slot.is_none(), "produtores da porta já registrados");
+        *slot = Some(crate::AbortOnDrop(task));
+        ProducerScope(self.clone())
+    }
+    fn cancel(&self) {
+        if let Some(task) = self.0.lock().unwrap().as_ref() { task.0.abort(); }
+    }
+    pub(crate) async fn shutdown(&self) {
+        let task = self.0.lock().unwrap().take();
+        if let Some(mut task) = task {
+            task.0.abort();
+            let _ = (&mut task.0).await;
+        }
+    }
+}
+pub(crate) struct ProducerScope(Arc<Producers>);
+impl Drop for ProducerScope { fn drop(&mut self) { self.0.cancel(); } }
+
 pub fn unavailable() -> Response {
     (axum::http::StatusCode::SERVICE_UNAVAILABLE, [(axum::http::header::CONTENT_TYPE, "application/json")], "{\"detail\":\"server_starting\"}").into_response()
 }
@@ -96,4 +120,40 @@ pub async fn prepare_sessions(env: crate::accounts::environment::AccountEnvironm
     let _ = tokio::task::spawn_blocking(move || crate::runtime::claude_reopen::settle_switches(&env)).await;
     }
 
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+    use std::sync::{OnceLock, atomic::{AtomicBool, Ordering}};
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn startup_cleanup_waits_for_publication_after_the_http_future_is_cancelled() {
+        let producers = Arc::new(Producers::default());
+        let published = Arc::new(OnceLock::<Arc<AtomicBool>>::new());
+        let (entered, entering) = tokio::sync::oneshot::channel();
+        let (release, blocked) = std::sync::mpsc::channel();
+        let destination = published.clone();
+        let scope = producers.register(tokio::spawn(async move {
+            entered.send(()).unwrap();
+            // Representa o trecho síncrono de criação/publicação: abort não o interrompe.
+            blocked.recv().unwrap();
+            destination.set(Arc::new(AtomicBool::new(false))).unwrap();
+            std::future::pending::<()>().await;
+        }));
+        entering.await.unwrap();
+        drop(scope); // O select de lib descarta a futura HTTP antes de entrar no cleanup.
+        assert!(published.get().is_none());
+        let destination = published.clone();
+        let mut cleanup = tokio::spawn(async move {
+            producers.shutdown().await;
+            // A mesma ordem de omp_sync/codex_setup: só ler a célula depois do join.
+            destination.get().expect("serviço publicado antes do cleanup").store(true, Ordering::Release);
+        });
+        let waiting = tokio::time::timeout(std::time::Duration::from_millis(30), &mut cleanup).await.is_err();
+        release.send(()).unwrap();
+        assert!(waiting, "cleanup não pode ler serviços enquanto a publicação está executando");
+        tokio::time::timeout(std::time::Duration::from_secs(2), cleanup).await.unwrap().unwrap();
+        assert!(published.get().unwrap().load(Ordering::Acquire), "serviço tardio também foi fechado");
+    }
 }

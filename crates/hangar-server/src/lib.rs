@@ -170,6 +170,7 @@ pub async fn serve_until_with_guest(
     let browser_dir = state.hangar_dir.join("nav");
     let browser_list = state.list.clone();
     let transcription = state.transcription.clone();
+    let startup_producers = state.startup_producers.clone();
     let omp_sync = state.omp_sync.clone();
     let codex_setup = state.codex_setup.clone();
     let harness_installer = state.harness_installer.clone();
@@ -277,6 +278,7 @@ pub async fn serve_until_with_guest(
         let _ = (&mut producer.0).await;
     }
     let cleanup = async {
+        startup_producers.shutdown().await;
         harness_installer.shutdown().await;
         if let Some(service) = omp_sync.get() { service.close().await; }
         let codex_setup_result = match codex_setup.get() {
