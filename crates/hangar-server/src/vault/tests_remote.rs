@@ -228,9 +228,12 @@ async fn a_remote_machine_reports_the_owner_state_and_offline_with_the_reason() 
     let srv = machine(serve_app(fake_owner_app(queries.clone())).await).await;
     assert_eq!(srv.call(Method::GET, "/api/vault/status", None).await, (200, json!({"role": "none", "state": "absent", "server_id": "delphi"})));
     let (status, body) = srv.call(Method::PUT, "/api/vault/config", Some(json!({"owner": "lab"}))).await;
-    assert_eq!((status, body), (200, json!({"role": "remote", "owner": "lab", "state": "open"})));
+    let owner_url = body["owner_url"].as_str().expect("o status leva o endereço da dona").to_owned();
+    assert!(owner_url.starts_with("http://127.0.0.1:"), "{owner_url}");
+    let expected = json!({"role": "remote", "owner": "lab", "state": "open", "owner_url": owner_url});
+    assert_eq!((status, body), (200, expected.clone()));
     assert_eq!(config::load(&srv.hangar()).unwrap().owner.as_deref(), Some("lab"));
-    assert_eq!(srv.call(Method::GET, "/api/vault/status", None).await, (200, json!({"role": "remote", "owner": "lab", "state": "open"})));
+    assert_eq!(srv.call(Method::GET, "/api/vault/status", None).await, (200, expected));
     // Pedido de outra máquina não é encaminhado de novo.
     assert_eq!(srv.call(Method::GET, "/api/vault/status?local=1", None).await,
         (200, json!({"role": "none", "state": "absent", "server_id": "delphi"})));
