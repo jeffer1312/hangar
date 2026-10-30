@@ -2,6 +2,7 @@
 pub mod files;
 pub mod native;
 pub mod native_cli;
+mod native_shutdown;
 pub mod import_api;
 
 pub mod ecc;

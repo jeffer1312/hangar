@@ -24,7 +24,6 @@ struct Operation {
     done: tokio::sync::watch::Receiver<Option<Result<(),String>>>,
     directory: Mutex<Option<PathBuf>>,
 }
-struct CancelOnDrop(tokio::sync::oneshot::Sender<()>);
 #[derive(Debug)]
 struct Failure { message:String, stderr:String }
 impl From<String> for Failure {
@@ -64,7 +63,7 @@ impl AdminCli {
         let operation = Arc::new(Operation {stop,done:completion,directory:Mutex::new(None)});
         let (reply, result) = tokio::sync::oneshot::channel();
         let (cancel, cancelled) = tokio::sync::oneshot::channel();
-        let _cancel = CancelOnDrop(cancel);
+        let _cancel = cancel;
         let expected = expected.to_owned();
         {
             let mut state = self.inner.state.lock().unwrap_or_else(|e|e.into_inner());
@@ -92,6 +91,9 @@ impl AdminCli {
         let mut state = self.inner.state.lock().unwrap_or_else(|e|e.into_inner());
         state.closed = true;
         for operation in &state.operations { operation.stop.send_replace(true); }
+    }
+    pub(super) fn stop_admission(&self) {
+        self.inner.state.lock().unwrap_or_else(|e|e.into_inner()).closed=true;
     }
     pub fn active_operations(&self)->usize { self.inner.state.lock().unwrap_or_else(|e|e.into_inner()).operations.len() }
     pub async fn close(&self)->Result<(),String> {

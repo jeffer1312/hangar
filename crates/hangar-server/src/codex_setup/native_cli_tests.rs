@@ -19,6 +19,16 @@ fn logs(path:&Path)->Vec<Value> {
 #[tokio::test]
 async fn native_cli_matches_original_process_results_and_cleanup() {
     let fixture: Value = serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/codex-integration/native-cli.json")).unwrap();
+    assert_fixture(fixture).await;
+}
+
+#[tokio::test]
+async fn native_cli_waits_for_output_owned_by_descendants() {
+    let fixture: Value = serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/codex-integration/native-cli-descendants.json")).unwrap();
+    assert_fixture(fixture).await;
+}
+
+async fn assert_fixture(fixture:Value) {
     let mut differences = Vec::new();
     for row in fixture["cases"].as_array().unwrap() {
         let root = tempfile::tempdir().unwrap();

@@ -31,14 +31,20 @@ pub(super) async fn run(
         return Err("Não foi possível colocar o Codex na contenção própria.".to_owned().into());
     }
     let stdout=Arc::new(Mutex::new(Vec::new()));let stderr=Arc::new(Mutex::new(Vec::new()));
-    let output=read(child.stdout.take().unwrap(),stdout.clone());
-    let errors=read(child.stderr.take().unwrap(),stderr.clone());
+    let (output,output_done)=read(child.stdout.take().unwrap(),stdout.clone());
+    let (errors,errors_done)=read(child.stderr.take().unwrap(),stderr.clone());
     #[cfg(test)]
     if let Some(observer)=inner.observer.lock().unwrap_or_else(|e|e.into_inner()).as_ref() {let _=observer.send(directory);}
     let deadline=tokio::time::sleep(timeout);tokio::pin!(deadline);
     let mut timed_out=false;let mut was_cancelled=false;
     let exited = {
-        let wait=terminal_process::leader_exited(&mut child);tokio::pin!(wait);
+        // O líder pode sair antes do filho que ainda escreve nos mesmos pipes.
+        let wait=async {
+            let exited=terminal_process::leader_exited(&mut child).await;
+            let _=output_done.await;
+            let _=errors_done.await;
+            exited
+        };tokio::pin!(wait);
         tokio::select! {
             result=&mut wait=>result,
             _=&mut deadline=>{timed_out=true;Ok(())},
@@ -47,19 +53,14 @@ pub(super) async fn run(
         }
     };
     // O líder continua sem recolher até a árvore estar vazia, para não reutilizar seu grupo.
-    if !timed_out && !was_cancelled && *stopped.borrow() {
-        terminate_leader(&mut child);
-        let _=tokio::time::timeout(Duration::from_secs(3),terminal_process::leader_exited(&mut child)).await;
-    }
-    terminal_process::finish(&mut tree).await;
-    let status=child.wait().await;
+    let status=super::super::native_shutdown::finish(&mut child,&mut tree).await;
     let read_output=output.await;let read_errors=errors.await;
     if timed_out {return Err("O comando do Codex excedeu o tempo limite.".to_owned().into());}
     if was_cancelled {return Err("Operação administrativa do Codex cancelada.".to_owned().into());}
     if exited.is_err() || !matches!(read_output,Ok(Ok(()))) || !matches!(read_errors,Ok(Ok(()))) {
         return Err("Não foi possível ler a saída do Codex.".to_owned().into());
     }
-    let status=status.map_err(|_|Failure::from("Não foi possível aguardar o Codex.".to_owned()))?;
+    let status=status.map_err(Failure::from)?;
     let code=exit_code(status);
     let stdout=std::mem::take(&mut *stdout.lock().unwrap_or_else(|e|e.into_inner()));
     let stderr=std::mem::take(&mut *stderr.lock().unwrap_or_else(|e|e.into_inner()));
@@ -78,26 +79,25 @@ pub(super) async fn run(
     Ok(value)
 }
 
-fn read(mut pipe:impl tokio::io::AsyncRead+Unpin+Send+'static,buffer:Arc<Mutex<Vec<u8>>>)->tokio::task::JoinHandle<std::io::Result<()>> {
-    tokio::spawn(async move {
-        let mut chunk=[0u8;8192];
-        loop {let count=pipe.read(&mut chunk).await?;if count==0 {return Ok(());}
-            buffer.lock().unwrap_or_else(|e|e.into_inner()).extend_from_slice(&chunk[..count]);}
-    })
+fn read(mut pipe:impl tokio::io::AsyncRead+Unpin+Send+'static,buffer:Arc<Mutex<Vec<u8>>>)->(tokio::task::JoinHandle<std::io::Result<()>>,oneshot::Receiver<()>) {
+    let (sender,done)=oneshot::channel();
+    let task=tokio::spawn(async move {
+        let result=async {
+            let mut chunk=[0u8;8192];
+            loop {let count=pipe.read(&mut chunk).await?;if count==0 {return Ok(());}
+                buffer.lock().unwrap_or_else(|e|e.into_inner()).extend_from_slice(&chunk[..count]);}
+        }.await;
+        let _=sender.send(());
+        result
+    });
+    (task,done)
 }
-#[cfg(unix)]
-fn terminate_leader(child:&mut tokio::process::Child) {
-    unsafe extern "C" {fn kill(pid:i32,signal:i32)->i32;}
-    if let Some(pid)=child.id(){unsafe {kill(pid as i32,15);}}
-}
-#[cfg(not(unix))]
-fn terminate_leader(child:&mut tokio::process::Child) {let _=child.start_kill();}
 fn exit_code(status:std::process::ExitStatus)->i64 {
     #[cfg(unix)] {use std::os::unix::process::ExitStatusExt;if let Some(signal)=status.signal(){return -i64::from(signal);}}
     status.code().map(i64::from).unwrap_or(-1)
 }
 fn diagnose(env:&crate::accounts::environment::AccountEnvironment,codex:&std::path::Path,args:&[String],code:i64,stdout:&[u8],stderr:&[u8]) {
-    let hash=|raw:&[u8]|ring::digest::digest(&ring::digest::SHA256,raw).as_ref().iter().map(|byte|format!("{byte:02x}")).collect::<String>();
+    use super::super::files::hash;
     let write=||->std::io::Result<()> {
         let base=crate::runtime::local_policy::log_base_in(env).ok_or_else(||std::io::Error::other("diretório de logs indisponível"))?;
         let account=hash(codex.to_string_lossy().as_bytes());

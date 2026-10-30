@@ -10,28 +10,34 @@ use std::{
 };
 
 pub struct Native {
-    client: Client,
+    client: Option<Client>,
+    cli: super::native_cli::AdminCli,
     close: Option<tokio::sync::oneshot::Sender<()>>,
     pending_directories: Arc<Mutex<Vec<PathBuf>>>,
     cleanup: Option<tokio::task::JoinHandle<Result<(), String>>>,
     pub events: tokio::sync::mpsc::UnboundedReceiver<(String, Value)>,
 }
 impl Native {
+    pub async fn open_with_memory(env:&AccountEnvironment,home:&Path,codex:&Path,memory:bool)->Result<Self,String> {
+        Self::open_with_directory(env,home,codex,None,memory).await
+    }
+    pub fn cli(&self)->super::native_cli::AdminCli { self.cli.clone() }
     pub async fn open(env: &AccountEnvironment, home: &Path, codex: &Path) -> Result<Self, String> {
-        Self::open_with_directory(env, home, codex, None).await
+        Self::open_with_directory(env, home, codex, None,false).await
     }
     pub async fn open_isolated(
         env: &AccountEnvironment,
         directory: tempfile::TempDir,
     ) -> Result<Self, String> {
         let home = directory.path().to_owned();
-        Self::open_with_directory(env, &home, &home.join(".codex"), Some(directory)).await
+        Self::open_with_directory(env, &home, &home.join(".codex"), Some(directory),false).await
     }
     async fn open_with_directory(
         env: &AccountEnvironment,
         home: &Path,
         codex: &Path,
         directory: Option<tempfile::TempDir>,
+        memory: bool,
     ) -> Result<Self, String> {
         let working_directory = tempfile::Builder::new()
             .prefix("hangar-codex-admin-")
@@ -39,8 +45,10 @@ impl Native {
             .map_err(|_| "não foi possível criar o diretório administrativo do Codex")?;
         let service = AccountService::new(env.clone());
         let mut command = service.codex_command().ok_or("Codex não encontrado")?;
+        command.args(["-c", "project_root_markers=[]"]);
+        if memory {command.args(["-c","features.external_agent_memory_import=true"]);}
         command
-            .args(["-c", "project_root_markers=[]", "app-server", "--stdio"])
+            .args(["app-server", "--stdio"])
             .env_clear()
             .envs(&env.base)
             .env("HOME", home)
@@ -51,6 +59,7 @@ impl Native {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .kill_on_drop(true);
+        for key in crate::terminal_process::PRIVATE_ENV_KEYS {command.env_remove(key);}
         if home != env.home {
             for (key, relative) in [
                 ("XDG_CONFIG_HOME", ".config"),
@@ -67,6 +76,7 @@ impl Native {
             Client::spawn_stdio(command).map_err(|_| "não foi possível iniciar o Codex")?;
         if tree.attach(&child).is_err() {
             let _ = child.start_kill();
+            crate::terminal_process::finish(&mut tree).await;
             let _ = child.wait().await;
             return Err("não foi possível conter o Codex".into());
         }
@@ -95,16 +105,22 @@ impl Native {
         }
         let pending_directories = Arc::new(Mutex::new(directories));
         let pending = pending_directories.clone();
+        let cli=super::native_cli::AdminCli::new(env.clone(),home,codex);
+        let cleanup_cli=cli.clone();
         let (close, done) = tokio::sync::oneshot::channel();
         let cleanup = tokio::spawn(async move {
             let _ = done.await;
             drain.abort();
-            crate::terminal_process::finish(&mut tree).await;
-            let _ = child.wait().await;
+            let _ = drain.await;
+            let stopped=super::native_shutdown::finish(&mut child,&mut tree).await;
+            let commands=cleanup_cli.close().await;
+            stopped?;
+            commands?;
             remove_directories(pending).await
         });
         let mut native = Self {
-            client,
+            client:Some(client),
+            cli,
             close: Some(close),
             pending_directories,
             cleanup: Some(cleanup),
@@ -117,6 +133,7 @@ impl Native {
         }
         if native
             .client
+            .as_ref().unwrap()
             .notify("initialized", json!({}))
             .await
             .is_err()
@@ -132,7 +149,7 @@ impl Native {
         params: Value,
         timeout: Duration,
     ) -> Result<Value, String> {
-        self.client
+        self.client.as_ref().ok_or_else(||format!("Codex indisponível em {method}"))?
             .request_method(method, params, timeout)
             .await
             .map_err(|error| {
@@ -145,6 +162,8 @@ impl Native {
             })
     }
     pub async fn close(&mut self) -> Result<(), String> {
+        self.cli.stop_admission();
+        drop(self.client.take());
         if let Some(close) = self.close.take() {
             let _ = close.send(());
         }
@@ -155,9 +174,8 @@ impl Native {
                 .unwrap_or_else(|e| e.into_inner())
                 .is_empty()
         {
-            self.cleanup = Some(tokio::spawn(remove_directories(
-                self.pending_directories.clone(),
-            )));
+            let cli=self.cli.clone();let pending=self.pending_directories.clone();
+            self.cleanup = Some(tokio::spawn(async move {cli.close().await?;remove_directories(pending).await}));
         }
         if let Some(task) = self.cleanup.as_mut() {
             // Cancelar o aguardante não perde a tarefa nem os diretórios que ainda precisam sair.
@@ -190,6 +208,8 @@ fn remove_pending(pending: &Mutex<Vec<PathBuf>>) -> Result<(), String> {
 }
 impl Drop for Native {
     fn drop(&mut self) {
+        self.cli.stop_admission();
+        drop(self.client.take());
         if let Some(close) = self.close.take() {
             let _ = close.send(());
         } else if self.cleanup.is_none()
@@ -200,11 +220,23 @@ impl Drop for Native {
                 .is_empty()
         {
             let pending = self.pending_directories.clone();
+            let cli=self.cli.clone();
+            if let Ok(runtime)=tokio::runtime::Handle::try_current() {
+                runtime.spawn(async move {
+                    if cli.close().await.is_ok() {let _=remove_directories(pending).await;}
+                });
+                return;
+            }
             let _ = std::thread::Builder::new()
                 .name("codex-cleanup".into())
                 .spawn(move || {
-                    let _ = remove_pending(&pending);
+                    if cli.active_operations()==0 {let _ = remove_pending(&pending);}
+                    else {tracing::warn!(code="codex_cleanup_pending","Diretórios administrativos conservados sem runtime para concluir a limpeza");}
                 });
         }
     }
 }
+
+#[cfg(all(test,unix))]
+#[path="native_owner_tests.rs"]
+mod owner_tests;
