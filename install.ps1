@@ -890,7 +890,7 @@ if (-not $Agentes -and $Avancado -and $script:Interativo -and -not $Update -and 
     }
 }
 # Escolhidos que faltam e nao sao o Claude: o comando oficial deles roda no 2/8, com o backend
-# pronto, pela mesma tabela do painel de Harnesses (backend\app\harness_commands.py).
+# pronto, pela mesma tabela do painel de Harnesses (harness_setup::commands).
 $script:agentesNovos = @()
 if ($listaAgentes.Count) {
     foreach ($a in $listaAgentes) {
@@ -1089,12 +1089,39 @@ Ok 'dependencias instaladas'
 Nota 'psutil entra aqui: no Windows nao ha /proc pra ler informacao de processo'
 }
 Mark-Item 'backend' 'ok' 'servidor do Hangar'
-$pyVenvAgentes = $pyBackend
+# -- Binarios Rust (hangar-server e hangar-cano, release server-latest) -------
+# Sem eles o Python atende a API, mas a tela web e o ditado nao: a falta fica como pendencia.
+if (-not $SoChecar) {
+    Titulo 'Binarios Rust'
+    if ($pacote) {
+        $rcRust = 'pacote'
+    } else {
+        $rcRust = Nativo 'powershell' -NoProfile -ExecutionPolicy Bypass -File (Join-Path $raiz 'scripts\install-server-binaries.ps1')
+    }
+    if ("$rcRust" -eq 'pacote') {
+        Ok 'hangar-server e hangar-cano: vieram no pacote'
+        Mark-Item 'rust' 'ok' 'servidor rapido'
+    } elseif ($rcRust -eq 0) {
+        Ok 'hangar-server e hangar-cano em ~\.hangar\bin'
+        Mark-Item 'rust' 'ok' 'servidor rapido'
+    } elseif ($rcRust -eq 2) {
+        Falta 'sem binarios Rust para esta maquina - sem eles a tela web e o ditado nao funcionam'
+        Mark-Item 'rust' 'pendente' 'servidor rapido (nao ha para esta maquina)'
+        $script:pendencias += 'binarios Rust'
+    } else {
+        $motivo = 'download ou conferência falhou'
+        Falta "binarios Rust nao baixaram ($motivo) - o backend em Python atende sozinho"
+        Mark-Item 'rust' 'pendente' 'servidor rapido'
+        $script:pendencias += 'binarios Rust'
+        Write-Host '##HANGAR-AVISO## binarios Rust nao baixaram; o backend em Python atende sozinho'
+    }
+}
+
 foreach ($a in $script:agentesNovos) {
     $nome = $nomesAgentes[$a]
     Write-Host "  .. instalando $nome"
     Mark-Item $a 'fazendo' $nome
-    $rcAgente = Nativo $pyVenvAgentes -m app.harness_commands $a
+    $rcAgente = Nativo $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $raiz 'scripts\hangar-server-command.ps1') harness-setup install $a
     Atualiza-Path
     if ($rcAgente -eq 0 -and (Tem $a)) { Ok "$nome instalado"; Mark-Item $a 'ok' $nome; continue }
     if ($rcAgente -eq 0) { Falta "$nome instalou, mas o comando $a nao aparece no PATH - abra outro terminal e rode o instalador de novo" }
@@ -1615,34 +1642,6 @@ if ($SemNativo -and -not $SoChecar) {
         Mark-Item 'nativo' 'pendente' 'app do Hangar'
         $script:pendencias += 'app nativo'
         Write-Host '##HANGAR-AVISO## o app nativo nao instalou; use o Hangar pelo navegador'
-    }
-}
-
-# -- Binarios Rust (hangar-server e hangar-cano, release server-latest) -------
-# Sem eles o Python atende a API, mas a tela web e o ditado nao: a falta fica como pendencia.
-if (-not $SoChecar) {
-    Titulo 'Binarios Rust'
-    if ($pacote) {
-        $rcRust = 'pacote'
-    } else {
-        $rcRust = Nativo 'powershell' -NoProfile -ExecutionPolicy Bypass -File (Join-Path $raiz 'scripts\install-server-binaries.ps1')
-    }
-    if ("$rcRust" -eq 'pacote') {
-        Ok 'hangar-server e hangar-cano: vieram no pacote'
-        Mark-Item 'rust' 'ok' 'servidor rapido'
-    } elseif ($rcRust -eq 0) {
-        Ok 'hangar-server e hangar-cano em ~\.hangar\bin'
-        Mark-Item 'rust' 'ok' 'servidor rapido'
-    } elseif ($rcRust -eq 2) {
-        Falta 'sem binarios Rust para esta maquina - sem eles a tela web e o ditado nao funcionam'
-        Mark-Item 'rust' 'pendente' 'servidor rapido (nao ha para esta maquina)'
-        $script:pendencias += 'binarios Rust'
-    } else {
-        $motivo = 'download ou conferência falhou'
-        Falta "binarios Rust nao baixaram ($motivo) - o backend em Python atende sozinho"
-        Mark-Item 'rust' 'pendente' 'servidor rapido'
-        $script:pendencias += 'binarios Rust'
-        Write-Host '##HANGAR-AVISO## binarios Rust nao baixaram; o backend em Python atende sozinho'
     }
 }
 

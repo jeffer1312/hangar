@@ -3,6 +3,9 @@ use crate::accounts::{AccountService, environment::AccountEnvironment};
 use std::{path::PathBuf, process::ExitCode};
 
 pub fn run(args: &[String]) -> ExitCode {
+    if args.first().map(String::as_str) == Some("install") {
+        return install(&args[1..]);
+    }
     let Some(mode) = args
         .first()
         .map(String::as_str)
@@ -62,5 +65,41 @@ pub fn run(args: &[String]) -> ExitCode {
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS
+    }
+}
+
+fn install(args: &[String]) -> ExitCode {
+    let [cli] = args else {
+        eprintln!("uso: hangar-server harness-setup install codex|pi|omp|kimi");
+        return ExitCode::from(64);
+    };
+    if !super::commands::NAMES.contains(&cli.as_str()) {
+        eprintln!("uso: hangar-server harness-setup install codex|pi|omp|kimi");
+        return ExitCode::from(64);
+    }
+    let Some(argv) = super::commands::command(cli, cfg!(windows)) else {
+        eprintln!(
+            "{cli}: sem instalador conferido para este sistema; veja {}",
+            super::commands::manual()[cli].as_str().unwrap_or("")
+        );
+        return ExitCode::from(2);
+    };
+    let full = match super::commands::resolve(argv.clone(), &AccountEnvironment::capture()) {
+        Ok(full) => full,
+        Err(error) => {
+            eprintln!("{cli}: {error}");
+            return ExitCode::from(3);
+        }
+    };
+    println!("$ {}", super::commands::display(&argv));
+    match std::process::Command::new(&full[0])
+        .args(&full[1..])
+        .status()
+    {
+        Ok(status) => ExitCode::from(status.code().unwrap_or(1) as u8),
+        Err(error) => {
+            eprintln!("{cli}: {error}");
+            ExitCode::FAILURE
+        }
     }
 }

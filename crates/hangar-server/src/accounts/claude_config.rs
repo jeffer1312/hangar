@@ -925,7 +925,7 @@ fn mirror_claude_json(home: &Path, dir: &Path) -> Result<Option<String>> {
 
 /// Plugin ligado no `settings.json` da conta sem instalação no compartilhado: avisa, nunca instala
 /// (instalar escreveria no compartilhado a partir de uma conta).
-fn check_plugins(home: &Path, dir: &Path) -> Result<Vec<String>> {
+pub(crate) fn check_plugins(home: &Path, dir: &Path) -> Result<Vec<String>> {
     let Some(settings) = read_json(&dir.join("settings.json"))
         .map_err(|e| refused(format!("não consegui ler o settings.json da conta: {e}")))? else { return Ok(vec![]) };
     let Value::Object(settings) = settings else {

@@ -1,0 +1,888 @@
+{
+  "source_commit": "9e5e5d4e3fc280f43e17d10da99db662fafe0877",
+  "command": "python backend/tests/fixtures/contract/harness-health/generate_tmux.py",
+  "cases": [
+    {
+      "name": "missing",
+      "input": {
+        "version": null
+      },
+      "expected": {
+        "card": {
+          "id": "tmux",
+          "nome": "tmux",
+          "instalado": false,
+          "versao": null,
+          "itens": []
+        },
+        "calls": []
+      }
+    },
+    {
+      "name": "version-error",
+      "input": {
+        "version": ""
+      },
+      "expected": {
+        "card": {
+          "id": "tmux",
+          "nome": "tmux",
+          "instalado": true,
+          "versao": "",
+          "itens": [
+            {
+              "id": "bloco",
+              "ok": false,
+              "codigo": "tmux_bloco_ausente",
+              "params": {},
+              "conserto": "tmux",
+              "info": false
+            },
+            {
+              "id": "default_terminal",
+              "ok": false,
+              "codigo": "tmux_term_ruim",
+              "params": {
+                "valor": "?"
+              },
+              "conserto": "tmux",
+              "info": false
+            },
+            {
+              "id": "truecolor",
+              "ok": false,
+              "codigo": "tmux_truecolor_ruim",
+              "params": {},
+              "conserto": "tmux",
+              "info": false
+            },
+            {
+              "id": "titulo",
+              "ok": false,
+              "codigo": "tmux_titulo_ruim",
+              "params": {
+                "valor": "?"
+              },
+              "conserto": "tmux",
+              "info": false
+            },
+            {
+              "id": "mouse",
+              "ok": true,
+              "codigo": "tmux_mouse_off",
+              "params": {},
+              "conserto": null,
+              "info": true
+            },
+            {
+              "id": "persistencia",
+              "ok": true,
+              "codigo": "tmux_persist_off",
+              "params": {},
+              "conserto": null,
+              "info": true
+            }
+          ]
+        },
+        "calls": [
+          [
+            "show",
+            "-gv",
+            "default-terminal"
+          ],
+          [
+            "show-environment",
+            "-g"
+          ],
+          [
+            "show",
+            "-gv",
+            "set-titles-string"
+          ],
+          [
+            "show",
+            "-gv",
+            "mouse"
+          ]
+        ]
+      }
+    },
+    {
+      "name": "missing-options",
+      "input": {},
+      "expected": {
+        "card": {
+          "id": "tmux",
+          "nome": "tmux",
+          "instalado": true,
+          "versao": "tmux-fixture",
+          "itens": [
+            {
+              "id": "bloco",
+              "ok": false,
+              "codigo": "tmux_bloco_ausente",
+              "params": {},
+              "conserto": "tmux",
+              "info": false
+            },
+            {
+              "id": "default_terminal",
+              "ok": false,
+              "codigo": "tmux_term_ruim",
+              "params": {
+                "valor": "?"
+              },
+              "conserto": "tmux",
+              "info": false
+            },
+            {
+              "id": "truecolor",
+              "ok": false,
+              "codigo": "tmux_truecolor_ruim",
+              "params": {},
+              "conserto": "tmux",
+              "info": false
+            },
+            {
+              "id": "titulo",
+              "ok": false,
+              "codigo": "tmux_titulo_ruim",
+              "params": {
+                "valor": "?"
+              },
+              "conserto": "tmux",
+              "info": false
+            },
+            {
+              "id": "mouse",
+              "ok": true,
+              "codigo": "tmux_mouse_off",
+              "params": {},
+              "conserto": null,
+              "info": true
+            },
+            {
+              "id": "persistencia",
+              "ok": true,
+              "codigo": "tmux_persist_off",
+              "params": {},
+              "conserto": null,
+              "info": true
+            }
+          ]
+        },
+        "calls": [
+          [
+            "show",
+            "-gv",
+            "default-terminal"
+          ],
+          [
+            "show-environment",
+            "-g"
+          ],
+          [
+            "show",
+            "-gv",
+            "set-titles-string"
+          ],
+          [
+            "show",
+            "-gv",
+            "mouse"
+          ]
+        ]
+      }
+    },
+    {
+      "name": "correct",
+      "input": {
+        "config": "# >>> hangar >>>",
+        "terminal": "xterm-256color",
+        "environment": "COLORTERM=truecolor\nCLAUDE_CODE_TMUX_TRUECOLOR=1",
+        "title": "#S",
+        "mouse": "on",
+        "persist": true
+      },
+      "expected": {
+        "card": {
+          "id": "tmux",
+          "nome": "tmux",
+          "instalado": true,
+          "versao": "tmux-fixture",
+          "itens": [
+            {
+              "id": "bloco",
+              "ok": true,
+              "codigo": "tmux_bloco_ok",
+              "params": {},
+              "conserto": null,
+              "info": false
+            },
+            {
+              "id": "default_terminal",
+              "ok": true,
+              "codigo": "tmux_term_ok",
+              "params": {
+                "valor": "xterm-256color"
+              },
+              "conserto": null,
+              "info": false
+            },
+            {
+              "id": "truecolor",
+              "ok": true,
+              "codigo": "tmux_truecolor_ok",
+              "params": {},
+              "conserto": null,
+              "info": false
+            },
+            {
+              "id": "titulo",
+              "ok": true,
+              "codigo": "tmux_titulo_ok",
+              "params": {
+                "valor": "#S"
+              },
+              "conserto": null,
+              "info": false
+            },
+            {
+              "id": "mouse",
+              "ok": true,
+              "codigo": "tmux_mouse_on",
+              "params": {},
+              "conserto": null,
+              "info": true
+            },
+            {
+              "id": "persistencia",
+              "ok": true,
+              "codigo": "tmux_persist_on",
+              "params": {},
+              "conserto": null,
+              "info": true
+            }
+          ]
+        },
+        "calls": [
+          [
+            "show",
+            "-gv",
+            "default-terminal"
+          ],
+          [
+            "show-environment",
+            "-g"
+          ],
+          [
+            "show",
+            "-gv",
+            "set-titles-string"
+          ],
+          [
+            "show",
+            "-gv",
+            "mouse"
+          ]
+        ]
+      }
+    },
+    {
+      "name": "screen-terminal",
+      "input": {
+        "terminal": "screen-256color"
+      },
+      "expected": {
+        "card": {
+          "id": "tmux",
+          "nome": "tmux",
+          "instalado": true,
+          "versao": "tmux-fixture",
+          "itens": [
+            {
+              "id": "bloco",
+              "ok": false,
+              "codigo": "tmux_bloco_ausente",
+              "params": {},
+              "conserto": "tmux",
+              "info": false
+            },
+            {
+              "id": "default_terminal",
+              "ok": false,
+              "codigo": "tmux_term_ruim",
+              "params": {
+                "valor": "screen-256color"
+              },
+              "conserto": "tmux",
+              "info": false
+            },
+            {
+              "id": "truecolor",
+              "ok": false,
+              "codigo": "tmux_truecolor_ruim",
+              "params": {},
+              "conserto": "tmux",
+              "info": false
+            },
+            {
+              "id": "titulo",
+              "ok": false,
+              "codigo": "tmux_titulo_ruim",
+              "params": {
+                "valor": "?"
+              },
+              "conserto": "tmux",
+              "info": false
+            },
+            {
+              "id": "mouse",
+              "ok": true,
+              "codigo": "tmux_mouse_off",
+              "params": {},
+              "conserto": null,
+              "info": true
+            },
+            {
+              "id": "persistencia",
+              "ok": true,
+              "codigo": "tmux_persist_off",
+              "params": {},
+              "conserto": null,
+              "info": true
+            }
+          ]
+        },
+        "calls": [
+          [
+            "show",
+            "-gv",
+            "default-terminal"
+          ],
+          [
+            "show-environment",
+            "-g"
+          ],
+          [
+            "show",
+            "-gv",
+            "set-titles-string"
+          ],
+          [
+            "show",
+            "-gv",
+            "mouse"
+          ]
+        ]
+      }
+    },
+    {
+      "name": "tmux-terminal",
+      "input": {
+        "terminal": "tmux-256color"
+      },
+      "expected": {
+        "card": {
+          "id": "tmux",
+          "nome": "tmux",
+          "instalado": true,
+          "versao": "tmux-fixture",
+          "itens": [
+            {
+              "id": "bloco",
+              "ok": false,
+              "codigo": "tmux_bloco_ausente",
+              "params": {},
+              "conserto": "tmux",
+              "info": false
+            },
+            {
+              "id": "default_terminal",
+              "ok": false,
+              "codigo": "tmux_term_ruim",
+              "params": {
+                "valor": "tmux-256color"
+              },
+              "conserto": "tmux",
+              "info": false
+            },
+            {
+              "id": "truecolor",
+              "ok": false,
+              "codigo": "tmux_truecolor_ruim",
+              "params": {},
+              "conserto": "tmux",
+              "info": false
+            },
+            {
+              "id": "titulo",
+              "ok": false,
+              "codigo": "tmux_titulo_ruim",
+              "params": {
+                "valor": "?"
+              },
+              "conserto": "tmux",
+              "info": false
+            },
+            {
+              "id": "mouse",
+              "ok": true,
+              "codigo": "tmux_mouse_off",
+              "params": {},
+              "conserto": null,
+              "info": true
+            },
+            {
+              "id": "persistencia",
+              "ok": true,
+              "codigo": "tmux_persist_off",
+              "params": {},
+              "conserto": null,
+              "info": true
+            }
+          ]
+        },
+        "calls": [
+          [
+            "show",
+            "-gv",
+            "default-terminal"
+          ],
+          [
+            "show-environment",
+            "-g"
+          ],
+          [
+            "show",
+            "-gv",
+            "set-titles-string"
+          ],
+          [
+            "show",
+            "-gv",
+            "mouse"
+          ]
+        ]
+      }
+    },
+    {
+      "name": "one-truecolor",
+      "input": {
+        "environment": "COLORTERM=truecolor"
+      },
+      "expected": {
+        "card": {
+          "id": "tmux",
+          "nome": "tmux",
+          "instalado": true,
+          "versao": "tmux-fixture",
+          "itens": [
+            {
+              "id": "bloco",
+              "ok": false,
+              "codigo": "tmux_bloco_ausente",
+              "params": {},
+              "conserto": "tmux",
+              "info": false
+            },
+            {
+              "id": "default_terminal",
+              "ok": false,
+              "codigo": "tmux_term_ruim",
+              "params": {
+                "valor": "?"
+              },
+              "conserto": "tmux",
+              "info": false
+            },
+            {
+              "id": "truecolor",
+              "ok": false,
+              "codigo": "tmux_truecolor_ruim",
+              "params": {},
+              "conserto": "tmux",
+              "info": false
+            },
+            {
+              "id": "titulo",
+              "ok": false,
+              "codigo": "tmux_titulo_ruim",
+              "params": {
+                "valor": "?"
+              },
+              "conserto": "tmux",
+              "info": false
+            },
+            {
+              "id": "mouse",
+              "ok": true,
+              "codigo": "tmux_mouse_off",
+              "params": {},
+              "conserto": null,
+              "info": true
+            },
+            {
+              "id": "persistencia",
+              "ok": true,
+              "codigo": "tmux_persist_off",
+              "params": {},
+              "conserto": null,
+              "info": true
+            }
+          ]
+        },
+        "calls": [
+          [
+            "show",
+            "-gv",
+            "default-terminal"
+          ],
+          [
+            "show-environment",
+            "-g"
+          ],
+          [
+            "show",
+            "-gv",
+            "set-titles-string"
+          ],
+          [
+            "show",
+            "-gv",
+            "mouse"
+          ]
+        ]
+      }
+    },
+    {
+      "name": "wrong-title",
+      "input": {
+        "title": "#H"
+      },
+      "expected": {
+        "card": {
+          "id": "tmux",
+          "nome": "tmux",
+          "instalado": true,
+          "versao": "tmux-fixture",
+          "itens": [
+            {
+              "id": "bloco",
+              "ok": false,
+              "codigo": "tmux_bloco_ausente",
+              "params": {},
+              "conserto": "tmux",
+              "info": false
+            },
+            {
+              "id": "default_terminal",
+              "ok": false,
+              "codigo": "tmux_term_ruim",
+              "params": {
+                "valor": "?"
+              },
+              "conserto": "tmux",
+              "info": false
+            },
+            {
+              "id": "truecolor",
+              "ok": false,
+              "codigo": "tmux_truecolor_ruim",
+              "params": {},
+              "conserto": "tmux",
+              "info": false
+            },
+            {
+              "id": "titulo",
+              "ok": false,
+              "codigo": "tmux_titulo_ruim",
+              "params": {
+                "valor": "#H"
+              },
+              "conserto": "tmux",
+              "info": false
+            },
+            {
+              "id": "mouse",
+              "ok": true,
+              "codigo": "tmux_mouse_off",
+              "params": {},
+              "conserto": null,
+              "info": true
+            },
+            {
+              "id": "persistencia",
+              "ok": true,
+              "codigo": "tmux_persist_off",
+              "params": {},
+              "conserto": null,
+              "info": true
+            }
+          ]
+        },
+        "calls": [
+          [
+            "show",
+            "-gv",
+            "default-terminal"
+          ],
+          [
+            "show-environment",
+            "-g"
+          ],
+          [
+            "show",
+            "-gv",
+            "set-titles-string"
+          ],
+          [
+            "show",
+            "-gv",
+            "mouse"
+          ]
+        ]
+      }
+    },
+    {
+      "name": "windows",
+      "input": {
+        "windows": true,
+        "config": "# >>> hangar windows-tmux >>>",
+        "terminal": "xterm-256color"
+      },
+      "expected": {
+        "card": {
+          "id": "tmux",
+          "nome": "tmux",
+          "instalado": true,
+          "versao": "tmux-fixture",
+          "itens": [
+            {
+              "id": "bloco",
+              "ok": true,
+              "codigo": "tmux_bloco_ok",
+              "params": {},
+              "conserto": null,
+              "info": false
+            },
+            {
+              "id": "default_terminal",
+              "ok": true,
+              "codigo": "tmux_term_ok",
+              "params": {
+                "valor": "xterm-256color"
+              },
+              "conserto": null,
+              "info": false
+            },
+            {
+              "id": "truecolor",
+              "ok": false,
+              "codigo": "tmux_truecolor_ruim",
+              "params": {},
+              "conserto": "tmux",
+              "info": false
+            },
+            {
+              "id": "mouse",
+              "ok": true,
+              "codigo": "tmux_mouse_off",
+              "params": {},
+              "conserto": null,
+              "info": true
+            },
+            {
+              "id": "persistencia",
+              "ok": true,
+              "codigo": "tmux_persist_off",
+              "params": {},
+              "conserto": null,
+              "info": true
+            }
+          ]
+        },
+        "calls": [
+          [
+            "show",
+            "-gv",
+            "default-terminal"
+          ],
+          [
+            "show-environment",
+            "-g"
+          ],
+          [
+            "show",
+            "-gv",
+            "mouse"
+          ]
+        ]
+      }
+    },
+    {
+      "name": "windows-old-marker",
+      "input": {
+        "windows": true,
+        "config": "# >>> hangar >>>"
+      },
+      "expected": {
+        "card": {
+          "id": "tmux",
+          "nome": "tmux",
+          "instalado": true,
+          "versao": "tmux-fixture",
+          "itens": [
+            {
+              "id": "bloco",
+              "ok": false,
+              "codigo": "tmux_bloco_ausente",
+              "params": {},
+              "conserto": "tmux",
+              "info": false
+            },
+            {
+              "id": "default_terminal",
+              "ok": false,
+              "codigo": "tmux_term_ruim",
+              "params": {
+                "valor": "?"
+              },
+              "conserto": "tmux",
+              "info": false
+            },
+            {
+              "id": "truecolor",
+              "ok": false,
+              "codigo": "tmux_truecolor_ruim",
+              "params": {},
+              "conserto": "tmux",
+              "info": false
+            },
+            {
+              "id": "mouse",
+              "ok": true,
+              "codigo": "tmux_mouse_off",
+              "params": {},
+              "conserto": null,
+              "info": true
+            },
+            {
+              "id": "persistencia",
+              "ok": true,
+              "codigo": "tmux_persist_off",
+              "params": {},
+              "conserto": null,
+              "info": true
+            }
+          ]
+        },
+        "calls": [
+          [
+            "show",
+            "-gv",
+            "default-terminal"
+          ],
+          [
+            "show-environment",
+            "-g"
+          ],
+          [
+            "show",
+            "-gv",
+            "mouse"
+          ]
+        ]
+      }
+    },
+    {
+      "name": "bom",
+      "input": {
+        "config": "\ufeff# >>> hangar >>>"
+      },
+      "expected": {
+        "card": {
+          "id": "tmux",
+          "nome": "tmux",
+          "instalado": true,
+          "versao": "tmux-fixture",
+          "itens": [
+            {
+              "id": "bloco",
+              "ok": true,
+              "codigo": "tmux_bloco_ok",
+              "params": {},
+              "conserto": null,
+              "info": false
+            },
+            {
+              "id": "default_terminal",
+              "ok": false,
+              "codigo": "tmux_term_ruim",
+              "params": {
+                "valor": "?"
+              },
+              "conserto": "tmux",
+              "info": false
+            },
+            {
+              "id": "truecolor",
+              "ok": false,
+              "codigo": "tmux_truecolor_ruim",
+              "params": {},
+              "conserto": "tmux",
+              "info": false
+            },
+            {
+              "id": "titulo",
+              "ok": false,
+              "codigo": "tmux_titulo_ruim",
+              "params": {
+                "valor": "?"
+              },
+              "conserto": "tmux",
+              "info": false
+            },
+            {
+              "id": "mouse",
+              "ok": true,
+              "codigo": "tmux_mouse_off",
+              "params": {},
+              "conserto": null,
+              "info": true
+            },
+            {
+              "id": "persistencia",
+              "ok": true,
+              "codigo": "tmux_persist_off",
+              "params": {},
+              "conserto": null,
+              "info": true
+            }
+          ]
+        },
+        "calls": [
+          [
+            "show",
+            "-gv",
+            "default-terminal"
+          ],
+          [
+            "show-environment",
+            "-g"
+          ],
+          [
+            "show",
+            "-gv",
+            "set-titles-string"
+          ],
+          [
+            "show",
+            "-gv",
+            "mouse"
+          ]
+        ]
+      }
+    }
+  ]
+}

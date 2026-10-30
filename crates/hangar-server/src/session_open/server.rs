@@ -525,6 +525,26 @@ pub(super) fn baton_step(asked: &Value) -> &'static str {
 
 /// `POST /api/sessions/{name}/bastao` do dono: o Python monta e grava o dossiê (é dele) e devolve o
 /// pedido de abertura da sucessora em vez de abrir; o Rust a abre com o kick-off como primeira mensagem.
+async fn prepare_baton_engine(st:&AppState,asked:&mut Value)->Result<(),OpenError>{
+    if asked.get("provider").is_none(){
+        let provider=if !asked["config_dir"].is_null()||asked["engine"].as_str().is_some_and(|v|!v.is_empty()){"claude".to_owned()}
+        else if !asked["codex_account"].is_null(){"codex".to_owned()}
+        else if asked["omp_profile"].as_str().is_some_and(|v|!v.is_empty()){"omp".to_owned()}
+        else{crate::session_open::resolve::choose_provider(&crate::engines::providers::read(&st.accounts).await?.selection).name().to_owned()};
+        asked["provider"]=json!(provider);
+    }
+    let Some(account)=asked["engine_account"].as_str()else{return Ok(());};
+    let engine=asked["engine"].as_str().unwrap_or("");
+    if asked["provider"]!="claude"||engine.is_empty(){return Err(OpenError::new(400,"erro_cliproxy_conta","conta ChatGPT exige Claude com motor CLIProxyAPI local"));}
+    let (engine,account,model)=(engine.to_owned(),account.to_owned(),asked["model"].as_str().map(str::to_owned));
+    let accounts=st.accounts.clone();let runtime=tokio::runtime::Handle::current();
+    tokio::task::spawn_blocking(move||{
+        use super::OpenFacts;
+        let facts=super::facts::LocalFacts::shared(accounts.env.clone(),&accounts,runtime);
+        facts.fixed_engine_model(&engine,&account,model.as_deref()).map(|_|())
+    }).await.map_err(|_|OpenError::new(500,"erro_cliproxy_conta","a validação da conta do motor foi interrompida"))?
+}
+
 pub async fn bastao(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let (fwd, owner) = match crate::routes::gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     let (mut parts, body) = req.into_parts();
@@ -534,7 +554,11 @@ pub async fn bastao(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     };
     let headers = parts.headers.clone();
     if owner { parts.headers.insert(DECLINED, axum::http::HeaderValue::from_static("rust")); }
-    let asked = serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null);
+    let mut asked = serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null);
+    if owner && asked.is_object() {
+        if let Err(error)=prepare_baton_engine(&st,&mut asked).await {return reply(&error);}
+    }
+    let bytes=if owner && asked.is_object(){serde_json::to_vec(&asked).expect("Pedido JSON já lido").into()}else{bytes};
     let successor = asked["name"].as_str().unwrap_or_default().to_owned();
     let _progress = super::open::Progress::track(&successor);
     super::open::progress_step(&successor, baton_step(&asked), json!({}));

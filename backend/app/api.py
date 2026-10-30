@@ -26,7 +26,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import ClientDisconnect
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sse_starlette.sse import EventSourceResponse
-from app import (agentes_sync, atomico, closed_names, diag, harness_api,
+from app import (atomico, closed_names, diag, harness_api,
                  loop_monitor, permission_mode, plugin_bridge, procinfo, quem_chama, tmux,
                  uds_messaging)
 from app import groups_bridge, internal_api, list_bridge, migration_status, share_bridge
@@ -39,7 +39,6 @@ from app.model_picker import PickerError
 from app.mensagens import erro
 from app import claude_models
 from app import claude_customizations
-from app import cliproxy
 from app import codex_models
 from app import model_args
 from app import filesearch, filetree, git_ops, worktrees
@@ -76,7 +75,7 @@ from app.connect_port import CONNECT_PORT, ConnectPortGate
 from app import guest_users, guest_users_api
 from app.guest_header import guest_of, guest_safe
 from app.share_life import session_life
-from app import contas, default_model, engine_probe, engines, procinfo
+from app import contas, default_model, procinfo
 from app.costs import report as costs_report, usd_brl as _usd_brl, PERIODOS as _COST_PERIODOS
 from app import costs_sources, pricing
 from app.git_ops import (
@@ -2020,29 +2019,6 @@ async def trocar_conta(name: str, body: AccountMoveBody):
         raise HTTPException(exc.status, detail=public_error(exc)) from None
 
 
-def _engine_fast_selection(name: str) -> tuple[str | None, str]:
-    meta = headless_sessions.load(name)
-    if meta is not None:
-        from app import runtime_coordinator
-        coordinator = runtime_coordinator.current()
-        try:
-            view = coordinator.source_view(name) if coordinator is not None else None
-        except RuntimeError:
-            raise HTTPException(409, detail=erro("erro_sessao_iniciando", "estado da sessão indisponível; aguarde a reposição")) from None
-        model = (view or {}).get("model")
-        if model is None:
-            model = get_adapter(CLAUDE_HEADLESS).escolhas(name)[0]
-        return model or meta.get("model"), meta.get("service_tier") or "default"
-    pane = registry._pane_of(name)
-    agent = registry_mod._pid_do_agente((pane or {}).get("pid"))
-    if not agent or pane is None:
-        return None, "default"
-    model = procinfo._model_of(agent)[0]
-    jsonl, tracked = registry.resolve_tracked(name, pane["cwd"])
-    if jsonl and tracked:
-        current = registry_mod._escolhas_status(Path(jsonl).stem)[0]
-        model = current or model
-    return model, procinfo._env_var_of(agent, "CP_ENGINE_SERVICE_TIER") or "default"
 
 
 @app.post("/api/sessions/{name}/rename")
@@ -2344,9 +2320,6 @@ def _bastao_preparar(info: SessionInfo, origem: str, destino: str,
 
 @app.post("/api/sessions/{name}/bastao", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
 async def bastao_passar(name: str, body: BastaoBody, request: Request):
-    if "provider" not in body.model_fields_set:
-        provider = await _default_session_provider(body.config_dir, body.engine, body.codex_account, body.omp_profile)
-        body = body.model_copy(update={"provider": provider})
     return await _passar_bastao(name, body, request)
 
 
@@ -2428,16 +2401,6 @@ async def _passar_bastao(name: str, body: BastaoBody, request: Request):
         raise HTTPException(400, detail=erro("erro_bastao_cwd_inexistente",
                                              f"a pasta {cwd} não existe mais; se ela foi renomeada "
                                              f"ou movida, escolha a pasta nova", cwd=cwd))
-    if body.engine_account is not None:
-        if body.provider != "claude" or not body.engine:
-            raise HTTPException(400, detail=erro("erro_cliproxy_conta", "conta ChatGPT exige Claude com motor CLIProxyAPI local"))
-        account = await asyncio.to_thread(_fixed_engine_account, body.engine, body.engine_account)
-        cfg = engines.listar()[body.engine]
-        account_models = await _engine_models(body.engine, fresco=True)
-        try:
-            cliproxy.validate_models(cfg, body.model or cfg["model"], account, account_models)
-        except ValueError as exc:
-            raise HTTPException(400, detail=erro("erro_cliproxy_conta", str(exc))) from None
     try:
         texto, alvo, kick, aviso_resumo = await asyncio.to_thread(
             _bastao_preparar, info, name, destino, body.resumo_por_modelo)
@@ -4231,287 +4194,32 @@ def term_input(name: str, body: TermInputBody):
     return {"ok": True}
 
 
-def _motores_para_cliente() -> dict[str, dict]:
-    """Motores com a api_key MASCARADA: dá para conferir QUAL chave está lá sem copiá-la de volta
-    (mesma regra do groq_api_key no runtime_config)."""
-    out = {}
-    for nome, e in engines.listar().items():
-        visivel = dict(e)
-        chave = visivel.pop("api_key", "")
-        visivel["api_key"] = runtime_config.mascarar(chave)
-        visivel["api_key_definida"] = bool(chave)
-        try:
-            if cliproxy.is_local_engine(e):
-                from app.cliproxy_accounts import list_accounts
-                visivel["cliproxy_accounts"] = []
-                visivel["cliproxy_accounts"] = list_accounts()
-                if not visivel["cliproxy_accounts"]:
-                    visivel["cliproxy_error"] = "nenhuma conta ChatGPT do proxy corresponde às contas cadastradas no Hangar"
-        except ValueError as exc:
-            visivel["cliproxy_error"] = str(exc)
-        out[nome] = visivel
-    return out
 
 
-@app.get("/api/providers", dependencies=[Depends(require_auth)])
-async def get_providers():
-    return await _session_provider_catalog()
 
 
-async def _session_provider_catalog() -> dict[str, dict]:
-    from app import conta_estado, session_defaults
-
-    probes = {provider: dict(probe) for provider, probe in
-              (await asyncio.to_thread(cli_probe.sondar_providers)).items()}
-    connected: set[str] = set()
-    disconnected: set[str] = set()
-    if probes.get("claude", {}).get("disponivel"):
-        configs = await asyncio.to_thread(list_config_dirs, False)
-        try:
-            logins = await asyncio.to_thread(conta_estado.logins, configs)
-        except Exception:  # noqa: BLE001 — sem o login a escolha só deixa de preferir quem está conectado
-            _log.warning("catálogo de provedores: login Claude ilegível", exc_info=True)
-            logins = []
-        if any(login.loggedIn is True for login in logins) or engines.listar():
-            connected.add("claude")
-        elif logins and all(login.loggedIn is False for login in logins):
-            disconnected.add("claude")
-    if probes.get("codex", {}).get("disponivel"):
-        auth = [login for _account, login in await _codex_auth_states()]
-        if any(item.get("status") == "connected" for item in auth):
-            connected.add("codex")
-        elif auth and all(item.get("status") == "disconnected" for item in auth):
-            disconnected.add("codex")
-    default = session_defaults.choose_provider(probes, runtime_config.get("last_session_provider"),
-                                               connected, disconnected)
-    return {provider: {**probe, "default": provider == default} for provider, probe in probes.items()}
 
 
-async def _codex_auth_states() -> list[tuple]:
-    service = _codex_service()
-    if service is None:
-        return []
-    accounts = await asyncio.to_thread(codex_accounts.list_visible_accounts)
-    results = await asyncio.gather(*(service.read_auth_rapido(account) for account in accounts),
-                                   return_exceptions=True)
-    states = []
-    for account, result in zip(accounts, results):
-        if isinstance(result, BaseException):
-            _log.warning("login Codex de %s ilegível: %s", account.id, result)
-            result = {"status": "unavailable"}
-        states.append((account, result))
-    return states
 
 
-async def _default_session_provider(config_dir=None, engine=None, codex_account=None, omp_profile=None,
-                                    subagent_model=None) -> str:
-    # Opções exclusivas de um provedor continuam identificando o destino dos clientes antigos.
-    if config_dir is not None or engine or subagent_model is not None:
-        return "claude"
-    if codex_account is not None:
-        return "codex"
-    if omp_profile:
-        return "omp"
-    probes = await _session_provider_catalog()
-    return next((provider for provider, probe in probes.items() if probe["default"]), "claude")
 
 
-@app.get("/api/engines", dependencies=[Depends(require_auth)])
-def get_engines():
-    # arquivo_corrompido: distingue "ninguém configurou motor" de "engines.json existe mas não
-    # pôde ser lido" — as duas batem em {} no listar() de propósito (não pode derrubar sessão nem
-    # o tick do SSE por um hand-edit ruim), mas a tela precisa saber a diferença (item 1 do
-    # review): sem isto o usuário vê "nenhum motor ainda" com um arquivo quebrado escondendo
-    # motores reais, re-adiciona um, e a próxima gravação apaga os outros.
-    return {
-        "motores": _motores_para_cliente(),
-        "arquivo_corrompido": engines.arquivo_corrompido(),
-        "arquivo_caminho": str(engines.caminho()),
-    }
 
 
-@app.put("/api/engines/{nome}", dependencies=[Depends(require_auth)])
-async def put_engine(nome: str, request: Request):
-    """Cria/atualiza um motor.
-
-    api_key ausente, vazia, ou IGUAL à máscara que o cliente recebeu = preserva a atual. Sem isso,
-    salvar o formulário só para trocar o modelo apagava a chave, sem volta — o bug pago em 22ae599.
-
-    Campo AUSENTE do corpo herda o valor do disco; campo presente vale, inclusive `""`, que é como
-    se LIMPA (_normalizar descarta vazio, então o campo sai do registro — texto ou numérico). `0`
-    NÃO limpa: num campo numérico é valor inválido, e volta 400 "deve ser maior que zero".
-    engines.salvar() substitui o registro inteiro, e sem a herança um cliente que só conhece parte
-    do schema — um PUT de script, uma versão antiga do front — apagava o resto calado. Medido: o
-    probe de modelos devolve `context_length: null` para provedor que não informa (opencode), o PUT
-    seguinte vinha sem `context_window` e o motor perdia a janela de 1M, voltando a compactar em
-    200k sem avisar.
-
-    `null` conta como AUSENTE de propósito (é o que o probe manda quando não sabe). Quem quer limpar
-    manda `""` — a tela de Motores faz isso nos campos opcionais."""
-    body = await request.json()
-    if not isinstance(body, dict):
-        raise HTTPException(400, detail=erro("erro_corpo_deve_ser_objeto", "corpo deve ser um objeto"))
-    if body.pop("use_cliproxy_key", None) is True:
-        try:
-            inst = await asyncio.to_thread(cliproxy.local)
-        except ValueError as e:
-            raise HTTPException(400, str(e))
-        if not inst:
-            raise HTTPException(400, detail=erro("erro_cliproxy_ausente", "CLIProxyAPI local sem config ou sem api-keys"))
-        # A chave do config só vai para a instância dele, nunca para um endereço escolhido pelo cliente.
-        if cliproxy.normalize_base(str(body.get("base_url") or "")) != inst["base_url"]:
-            raise HTTPException(400, detail=erro("erro_cliproxy_endereco", "endereço diferente do CLIProxyAPI local"))
-        body["api_key"] = inst["api_key"]
-    # I/O de disco no threadpool, igual ao resto deste handler (ver comentário acima de create_session).
-    atual = (await asyncio.to_thread(engines.listar)).get(nome, {})
-    chave_atual = atual.get("api_key", "")
-    enviada = body.get("api_key")
-    if chave_atual and (
-        not isinstance(enviada, str)
-        or not enviada.strip()
-        or enviada.strip() == runtime_config.mascarar(chave_atual)
-    ):
-        body["api_key"] = chave_atual
-    # `campo not in body` (não `body.get(campo) is None`): a segunda forma tratava `""` como ausente
-    # e reinjetava o valor do disco, então LIMPAR um campo opcional na tela virava no-op com HTTP 200
-    # — o usuário escolhia "mesmo que o principal" em subagent_model, salvava, e o modelo antigo
-    # voltava sem aviso. `null` segue herdando (é o que o probe manda quando não sabe o valor).
-    for campo, valor_atual in atual.items():
-        if campo not in body or body[campo] is None:
-            body[campo] = valor_atual
-    try:
-        await asyncio.to_thread(engines.salvar, nome, body)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    # A chave do cache é o NOME do motor: trocar base_url ou api_key mantendo o nome serviria a
-    # lista do provedor ANTIGO por até 5 minutos.
-    _engine_models_cache.pop(nome, None)
-    return {"motores": await asyncio.to_thread(_motores_para_cliente)}
 
 
-@app.delete("/api/engines/{nome}", dependencies=[Depends(require_auth)])
-async def delete_engine(nome: str):
-    try:
-        if not await asyncio.to_thread(engines.remover, nome):
-            raise HTTPException(404, detail=erro("erro_motor_nao_encontrado", "motor nao encontrado"))
-    except ValueError as e:
-        # engines.json corrompido: remover() recusa escrever por cima (item 1 do review) em vez de
-        # apagar os outros motores. Vira 400 com a mensagem em vez de 500 cru.
-        raise HTTPException(400, str(e))
-    # Mesma invalidação do PUT: a chave do cache é o NOME do motor.
-    _engine_models_cache.pop(nome, None)
-    # O espelho nos outros agentes sai junto; sem isso o Kimi seguia listando um provedor cuja
-    # chave o app já não conhece.
-    espelhos = await asyncio.to_thread(agentes_sync.remover, nome)
-    for alvo, r in espelhos.items():
-        if not r["ok"] and r["motivo"] not in ("nao-gerenciado", "nao-instalado"):
-            _log.warning("motor %r apagado, mas o espelho no %s ficou: %s", nome, alvo, r["motivo"])
-    return {"ok": True}
 
 
-class EngineProbeBody(_StrictBody):
-    # `nome` de um motor já salvo (reusa a key do disco, que o cliente não tem inteira) OU
-    # base_url+api_key de um motor sendo criado. Os dois modos são MUTUAMENTE EXCLUSIVOS — ver
-    # o guard em engine_modelos: misturar `nome` com um `base_url` do cliente mandaria a api_key
-    # REAL do motor salvo, no header Authorization, para qualquer host que o cliente escolher.
-    nome: str | None = None
-    base_url: str | None = None
-    api_key: str | None = None
 
 
-@app.post("/api/engines/modelos", dependencies=[Depends(require_auth)])
-async def engine_modelos(body: EngineProbeBody):
-    """Modelos que a key pode usar, direto do provedor. É também o 'Testar' da tela: 200 = key boa,
-    502 = a mensagem do provedor (401, host errado, endpoint ausente).
-
-    `nome` e `base_url`/`api_key` não se combinam: com `nome`, SÓ o base_url e a key salvos valem
-    — um base_url do cliente junto seria exfiltração da key real para host arbitrário, não SSRF
-    comum (o app já aceita SSRF cego por trás do token; isto seria mais forte, key sai de propósito).
-    Recusa em vez de ignorar em silêncio: um ignore silencioso deixaria o cliente achando que testou
-    o host que mandou."""
-    if body.nome:
-        if body.base_url or body.api_key:
-            raise HTTPException(400, detail=erro("erro_motor_nome_com_dados", "nome já usa o motor salvo; não envie base_url/api_key junto"))
-        # I/O de disco no threadpool, igual ao resto deste handler (ver comentário acima de create_session).
-        salvo = (await asyncio.to_thread(engines.listar)).get(body.nome)
-        if not salvo:
-            raise HTTPException(404, detail=erro("erro_motor_nao_encontrado", "motor nao encontrado"))
-        base_url, api_key = salvo["base_url"], salvo["api_key"]
-    else:
-        base_url, api_key = body.base_url, body.api_key
-        if not base_url or not api_key:
-            raise HTTPException(400, detail=erro("erro_motor_nome_ou_dados", "informe nome de um motor salvo, ou base_url + api_key"))
-    try:
-        # Mesma guarda do salvar: a key vai no header, http para host público a expõe na rede.
-        base_url = engines.validar_base_url(base_url)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    try:
-        modelos = await asyncio.to_thread(engine_probe.listar_modelos, base_url, api_key)
-    except RuntimeError as e:
-        raise HTTPException(502, str(e))
-    except ValueError as e:
-        # \r/\n na key ou no base_url (item 3 do review): engine_probe recusa ANTES de montar o
-        # Request — sem isto o urllib levantaria com a key crua na mensagem, e a rota abaixo relança
-        # RuntimeError pro uvicorn logar (traceback com a key no journal). 400 sem ecoar o valor.
-        raise HTTPException(400, str(e))
-    # Diz à tela que é o CLIProxyAPI desta máquina, que aceita os campos beta (ver MotorForm).
-    try:
-        local = await asyncio.to_thread(cliproxy.is_local_engine, {"base_url": base_url})
-    except ValueError as e:
-        # Config do proxy quebrada não derruba o teste; a tela de CLIProxyAPI mostra o motivo.
-        _log.warning("CLIProxyAPI local ilegível ao testar motor: %s", e)
-        local = False
-    return {"modelos": modelos, "gateway": "cliproxyapi" if local else None}
 
 
-@app.get("/api/engines/cliproxy", dependencies=[Depends(require_auth)])
-async def engine_cliproxy():
-    """CLIProxyAPI desta máquina: endereço e modelos, sem a chave."""
-    try:
-        inst = await asyncio.to_thread(cliproxy.local)
-    except ValueError as e:
-        return {"found": False, "base_url": None, "models": [], "error": str(e)}
-    if not inst:
-        return {"found": False, "base_url": None, "models": [], "error": None}
-    try:
-        modelos = await asyncio.to_thread(engine_probe.listar_modelos, inst["base_url"], inst["api_key"])
-    except (RuntimeError, ValueError) as e:
-        return {"found": True, "base_url": inst["base_url"], "models": [],
-                "error": cliproxy.redact(str(e), inst["api_key"])}
-    return {"found": True, "base_url": inst["base_url"], "error": None,
-            "models": [m for m in modelos if cliproxy.is_engine_model(m["id"])],
-            **await asyncio.to_thread(_cliproxy_naming)}
 
 
-def _cliproxy_naming() -> dict:
-    """Nomeia as contas que der e diz quantas ficaram sem nome — a tela pede a senha só aí."""
-    erro_nome = None
-    try:
-        cliproxy.name_accounts()
-    except ValueError as e:
-        erro_nome = str(e)
-    try:
-        faltam: int | None = len(cliproxy.unnamed_accounts())
-    except ValueError as e:
-        # Credencial ilegível: a senha não resolve, então a tela mostra só o motivo.
-        faltam, erro_nome = None, erro_nome or str(e)
-    return {"unnamed_accounts": faltam, "management_key_set": cliproxy.management_key() is not None,
-            "naming_error": erro_nome}
 
 
-class CliproxyManagementBody(_StrictBody):
-    management_key: str = Field(default="", max_length=512)
 
 
-@app.put("/api/engines/cliproxy/management-key", dependencies=[Depends(require_auth)])
-async def engine_cliproxy_management_key(body: CliproxyManagementBody):
-    """Guarda a senha de gerenciamento do CLIProxyAPI e já nomeia as contas; o valor nunca volta."""
-    try:
-        await asyncio.to_thread(cliproxy.set_management_key, body.management_key)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    return await asyncio.to_thread(_cliproxy_naming)
 
 
 
@@ -6415,15 +6123,10 @@ def _bypass_no_ciclo(name: str) -> bool:
 #     a versao do CC (o Fable entrou e a lista chumbada no front nao soube), entao ela nao pode
 #     morar no codigo.
 
-class EngineModelBody(_StrictBody):
-    model: str
-    effort: str | None = None
 
 
 # Catalogo por motor: e uma chamada de REDE ao provedor, e abrir a folha nao pode pagar isso toda
 # vez. TTL curto porque a lista muda com o plano do usuario, nao a cada minuto.
-_ENGINE_MODELS_TTL = 300.0
-_engine_models_cache: dict[str, tuple[float, list[dict]]] = {}
 
 # Catalogo da conta Anthropic: ler o picker DIRIGE O TERMINAL, e isso deixa RASTRO — o `❯ /model` e
 # o `⎿ Kept model as …` (o Esc de saida) ficam no scrollback do tmux pra sempre. Nao aparece no chat
@@ -6504,50 +6207,12 @@ def _chave_config(p) -> str:
     return str(Path(s).expanduser().resolve())
 
 
-def _fixed_engine_account(engine: str, account: str) -> dict:
-    cfg = engines.listar().get(engine)
-    if not cfg:
-        raise HTTPException(400, detail=erro("erro_motor_invalido", "motor inválido"))
-    try:
-        return cliproxy.account_for_engine(cfg, account)
-    except ValueError as exc:
-        raise HTTPException(400, detail=erro("erro_cliproxy_conta", str(exc))) from None
 
 
-async def _fixed_engine_models(engine: str, account: str, *, fresco: bool = False) -> list[dict]:
-    from app.cliproxy_accounts import models_for
-    selected = await asyncio.to_thread(_fixed_engine_account, engine, account)
-    return models_for(await _engine_models(engine, fresco=fresco), selected["prefix"])
 
 
-async def _engine_models(nome: str, fresco: bool = False) -> list[dict]:
-    """Catalogo do provedor. `fresco=True` ignora o cache.
-
-    Quem VALIDA uma troca pede fresco: o cache existe pra folha abrir rapido, mas a promessa do
-    check ("recusa aqui em vez de deixar a falha aparecer so no proximo turno") nao sobrevive a 5
-    minutos de lista velha — modelo tirado do plano passaria pela validacao e falharia depois. Uma
-    chamada de rede numa acao deliberada do usuario e barata; num tick de tela, nao.
-    """
-    hit = _engine_models_cache.get(nome)
-    if hit and not fresco and time.monotonic() - hit[0] < _ENGINE_MODELS_TTL:
-        return hit[1]
-    cfg = engines.listar().get(nome)
-    if not cfg:
-        raise HTTPException(409, detail=erro("erro_motor_ausente", f"motor {nome!r} nao esta mais no engines.json", nome=nome))
-    try:
-        modelos = await asyncio.to_thread(engine_probe.listar_modelos, cfg["base_url"], cfg["api_key"])
-    except RuntimeError as e:
-        # O proxy pode repetir a chave no erro; ela não vai para o cliente.
-        message = cliproxy.redact(str(e), cfg["api_key"])
-        raise HTTPException(502, detail=erro("erro_provedor_offline", f"o provedor do motor {nome!r} nao respondeu: {message}", nome=nome, erro=message))
-    _engine_models_cache[nome] = (time.monotonic(), modelos)
-    return modelos
 
 
-def _engine_picker_models(engine: str, models: list[dict]) -> list[dict]:
-    return [{"id": model["id"], "context_length": model.get("context_length"),
-             "vision": model.get("vision"), "supports_fast": cliproxy.supports_fast(engine, model["id"])}
-            for model in models]
 
 
 @app.get("/api/sessions/{name}/model/options", dependencies=[Depends(require_auth)])
@@ -6558,19 +6223,6 @@ async def model_options(name: str):
         raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
     if info.provider not in (None, "claude"):
         raise HTTPException(400, detail=erro("erro_rota_so_claude", "esta rota so existe pra sessoes Claude Code"))
-    if info.engine:
-        # Motor: catalogo vem do /v1/models do provedor (HTTP), nao do pane -- nao conta linha,
-        # nao depende do tamanho da janela. A guarda so vale pro ramo abaixo (le o picker).
-        modelos = await (_fixed_engine_models(info.engine, info.engine_account)
-                         if info.engine_account else _engine_models(info.engine))
-        models = await asyncio.to_thread(_engine_picker_models, info.engine, modelos)
-        result = {"kind": "engine", "engine": info.engine, "models": models}
-        if any(model["supports_fast"] for model in models):
-            model, tier = await asyncio.to_thread(_engine_fast_selection, name)
-            model = model or engines.listar()[info.engine].get("model")
-            result.update(supports_fast=True,
-                          current={"model": model.rsplit("/", 1)[-1] if model else None, "service_tier": tier})
-        return result
     if _headless(name):
         # Sem terminal: a lista vem do `control_request list_models` do próprio processo — sem
         # picker, sem rastro no scrollback e sem cache de 1h.
@@ -6641,12 +6293,6 @@ async def model_options_sem_sessao(provider: str = "claude", engine: str = "",
             raise HTTPException(502, detail=erro("erro_codex_model_list", f"codex app-server model/list falhou: {e}", erro=str(e)))
     if provider != "claude":
         raise HTTPException(400, detail=erro("erro_provider_invalido", "provider deve ser 'claude', 'pi', 'omp', 'kimi' ou 'codex'"))
-    if engine:
-        modelos = await (_fixed_engine_models(engine, engine_account)
-                         if engine_account is not None else _engine_models(engine))
-        models = await asyncio.to_thread(_engine_picker_models, engine, modelos)
-        return {"kind": "engine", "reduced": False, "models": models,
-                "supports_fast": any(model["supports_fast"] for model in models)}
     chave = _chave_config(config_dir)
     cacheado = _models_cache_get(chave)
     if cacheado is not None:
@@ -6672,80 +6318,6 @@ async def model_options_sem_sessao(provider: str = "claude", engine: str = "",
             "models": [{"id": a} for a in ("opus", "fable", "sonnet", "haiku")]}
 
 
-@app.post("/api/sessions/{name}/engine/model", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
-async def engine_model_set(name: str, body: EngineModelBody):
-    """Troca o modelo (e opcionalmente o esforco) de uma sessao que roda num motor.
-
-    O `/model <id>` do Claude Code aplica na sessao E grava o id como default GLOBAL pra sessoes
-    novas — inclusive as da conta Anthropic, que nao conhecem esse id. Por isso o valor anterior do
-    settings.json e capturado antes e reposto depois: a troca vale onde foi pedida e em lugar nenhum
-    mais. Ver app/default_model.py.
-    """
-    await asyncio.to_thread(_recusa_se_painel_aberto, name)
-    info = await _cached_info(name)
-    if not info:
-        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
-    if not info.engine:
-        raise HTTPException(400, detail=erro("erro_rota_so_motor", "esta rota so existe pra sessoes que rodam num motor"))
-    if info.engine_account:
-        # A conta ChatGPT fixa troca o modelo reabrindo a sessão: é do Rust.
-        raise registry_mod.SessionOpenNeedsRust()
-    # fresco=True: a validacao promete "recusa aqui em vez de deixar a falha aparecer so no proximo
-    # turno", e essa promessa nao sobrevive ao cache de 5 min (ver _engine_models).
-    modelos = await _engine_models(info.engine, fresco=True)
-    catalog_id = await asyncio.to_thread(engines.catalog_model, body.model)
-    if not any(m["id"] == catalog_id for m in modelos):
-        # Recusar aqui em vez de digitar: o CC aceitaria o id, a sessao passaria a mandar request
-        # pra um modelo que o provedor nao tem, e a falha apareceria so no proximo turno.
-        raise HTTPException(422, detail=erro("erro_modelo_fora_catalogo", f"modelo fora do catalogo do motor {info.engine!r}: {body.model}", motor=info.engine, modelo=body.model))
-
-    _, tier = await asyncio.to_thread(_engine_fast_selection, name)
-    if tier == "priority" and not await asyncio.to_thread(cliproxy.supports_fast, info.engine, body.model):
-        raise HTTPException(409, detail=erro("erro_fast_indisponivel", "Desligue Fast antes de escolher um modelo que não o suporta"))
-
-    if _headless(name):
-        # Sem pane: `set_model` por control_request, que (medido) NÃO grava o default global —
-        # nada a repor no settings.json. O esforço vai como `/effort <x>` pelo stdin.
-        try:
-            esforco_ja_vale = await get_adapter(CLAUDE_HEADLESS).set_model(name, body.model, body.effort)
-        except Exception as e:
-            _log.exception("claude headless: troca de modelo falhou name=%s", name)
-            raise HTTPException(409, detail=erro("erro_headless_modelo", f"troca de modelo falhou: {e}", erro=str(e)))
-        res = {"ok": True, "model": body.model}
-        if body.effort and not esforco_ja_vale:
-            res["effort_error"] = "esforço entra no fim do turno em andamento"
-        return res
-
-    cfg_dir = _session_config_dir(name)  # mesma leitura de /proc que resolve o config dir das outras rotas
-    antes = await asyncio.to_thread(default_model.snapshot, cfg_dir)
-    digitou = True
-    try:
-        res = await asyncio.to_thread(terminal.set_engine_model, name, body.model)
-    except TerminalInput.NaoDigitou as e:
-        # Recusado antes de qualquer tecla (sessao ocupada/morta, menu aberto): o settings.json esta
-        # intocado, entao esperar a escrita aterrissar so faria o erro demorar ~3.6s a aparecer.
-        digitou = False
-        raise HTTPException(e.status, e.detail)
-    except PickerError as e:
-        raise HTTPException(e.status, e.detail)
-    except ValueError as e:
-        raise HTTPException(422, str(e))
-    finally:
-        # No finally de proposito: se o comando foi digitado mas a confirmacao nao pode ser lida, o
-        # settings.json PODE ja ter sido reescrito — deixar o default global vazado por causa de um
-        # erro de leitura seria a pior combinacao.
-        if digitou:
-            await asyncio.to_thread(default_model.restore_quando_aterrissar, cfg_dir, antes)
-
-    if body.effort:
-        # Esforco continua saindo do picker (Left/Right): medido que ele funciona igual em sessao de
-        # motor — o chip `(high✦)` e real, nao maquiagem. Falha aqui nao desfaz o modelo, que ja
-        # pegou; reporta junto pra tela nao dizer que tudo deu certo.
-        try:
-            await asyncio.to_thread(terminal.set_model_effort, name, None, body.effort, "session")
-        except (PickerError, ValueError) as e:
-            return {**res, "model": body.model, "effort_error": str(e)}
-    return {**res, "model": body.model}
 
 
 def _session_config_dir(name: str) -> Path | None:

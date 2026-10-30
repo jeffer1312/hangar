@@ -585,7 +585,7 @@ if [ -z "$AGENTES" ] && [ "$AVANCADO" = 1 ] && [ "$TEM_TTY" = 1 ] && [ "$UPDATE"
   done
 fi
 # Escolhidos que faltam e não são o Claude: o comando oficial deles roda no 2/8, com o backend
-# pronto, pela mesma tabela do painel de Harnesses (backend/app/harness_commands.py).
+# pronto, pela mesma tabela do painel de Harnesses (harness_setup::commands).
 AGENTES_NOVOS=''
 if [ -n "$AGENTES" ]; then
   for a in ${AGENTES//,/ }; do
@@ -746,9 +746,22 @@ py_backend -m app.vapid_setup \
   || anota_problema "chaves do push para o celular não geradas — rode: cd backend && uv run python -m app.vapid_setup" push
 nota "psutil NÃO entra aqui: no Linux existe /proc e ele é mais rápido (ver app/procinfo.py)"
 
+# ── Binários Rust (hangar-server e hangar-cano, release server-latest) ───────
+# Sem eles o Python atende a API, mas a tela web e o ditado não: a falta fica como pendência.
+say "Binários Rust"
+RUST_RC=0
+if [ "$PACOTE" = 1 ]; then RUST_RC=pacote
+else ./scripts/install-server-binaries.sh || RUST_RC=$?; fi
+case "$RUST_RC" in
+  pacote) ok "hangar-server e hangar-cano: vieram no pacote"; mark_item rust ok "servidor rápido" ;;
+  0) ok "hangar-server e hangar-cano em ~/.hangar/bin"; mark_item rust ok "servidor rápido" ;;
+  2) anota_problema "sem binários Rust para esta máquina — sem eles a tela web e o ditado não funcionam"; mark_item rust pendente "servidor rápido (não há para esta máquina)" ;;
+  *) anota_problema "binários Rust não baixaram — o backend em Python atende sozinho (tente: ./scripts/install-server-binaries.sh)"; mark_item rust pendente "servidor rápido" ;;
+esac
+
 for a in $AGENTES_NOVOS; do
   mark_item "$a" fazendo "$(nome_agente "$a")"
-  if gira "instalando $(nome_agente "$a")" py_backend -m app.harness_commands "$a"; then
+  if gira "instalando $(nome_agente "$a")" ./scripts/hangar-server-command harness-setup install "$a"; then
     export PATH="$HOME/.local/bin:$PATH"; hash -r 2>/dev/null || true
     if command -v "$a" >/dev/null; then ok "$(nome_agente "$a") instalado"; mark_item "$a" ok "$(nome_agente "$a")"
     else
@@ -900,19 +913,6 @@ else
   mark_item nativo pendente "app do Hangar"
 fi
 fi
-
-# ── Binários Rust (hangar-server e hangar-cano, release server-latest) ───────
-# Sem eles o Python atende a API, mas a tela web e o ditado não: a falta fica como pendência.
-say "Binários Rust"
-RUST_RC=0
-if [ "$PACOTE" = 1 ]; then RUST_RC=pacote
-else ./scripts/install-server-binaries.sh || RUST_RC=$?; fi
-case "$RUST_RC" in
-  pacote) ok "hangar-server e hangar-cano: vieram no pacote"; mark_item rust ok "servidor rápido" ;;
-  0) ok "hangar-server e hangar-cano em ~/.hangar/bin"; mark_item rust ok "servidor rápido" ;;
-  2) anota_problema "sem binários Rust para esta máquina — sem eles a tela web e o ditado não funcionam"; mark_item rust pendente "servidor rápido (não há para esta máquina)" ;;
-  *) anota_problema "binários Rust não baixaram — o backend em Python atende sozinho (tente: ./scripts/install-server-binaries.sh)"; mark_item rust pendente "servidor rápido" ;;
-esac
 
 # ── 5/8 Wrappers do claude e do codex ────────────────────────────────────────
 # Sem eles um `claude` que VOCÊ abre no terminal é invisível pro app: sem --session-id o backend

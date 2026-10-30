@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 assert os.name=="posix", "A captura de permissões usa POSIX"
 ROOT=Path(__file__).resolve().parents[5]
-source=ast.parse((ROOT/"backend/app/harness_saude.py").read_text())
+source=ast.parse(subprocess.check_output(["git", "show", "9e5e5d4e3fc280f43e17d10da99db662fafe0877:backend/app/harness_saude.py"], cwd=ROOT, text=True))
 ns=dict(Path=Path,os=os,shutil=shutil,_E_WINDOWS=False)
 exec(compile(ast.Module(body=[n for n in source.body if isinstance(n,ast.FunctionDef) and n.name in {"_item","_wrapper","_perfis_powershell"}],type_ignores=[]),"original-wrapper-executable","exec"),ns)
 cases=[]
@@ -25,6 +25,6 @@ for name,modes in [("missing",[]),("not-executable",[0o600]),("executable",[0o70
             program=shutil.which("bash")
         cases.append(dict(name=name,modes=modes,expected=result,program=program.replace(raw,"$ROOT") if program else None))
 Path(__file__).with_name("wrapper-executable.json").write_text(json.dumps(dict(
-    source_commit=subprocess.check_output(["git","rev-parse","HEAD"],cwd=ROOT,text=True).strip(),
+    source_commit='9e5e5d4e3fc280f43e17d10da99db662fafe0877',
     platform="posix",command="python backend/tests/fixtures/contract/harness-health/generate_wrapper_executable.py",cases=cases),ensure_ascii=True,indent=2)+"\n")
 print(f"{len(cases)} condições de executável capturadas")

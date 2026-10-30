@@ -1382,29 +1382,6 @@ fn pi_omp_and_kimi_resume_with_their_own_verb() {
     assert_eq!(command(&kimi, agents::Conversation::Resume(ID)).unwrap_err().msg, "session_id invalido");
 }
 
-/// A ponte de skills roda o `skill_bridge.py` do backend com o Python da venv dele, nas duas
-/// plataformas (o `hangar-skills-sync` é sh, e o `python` solto do Windows pode ser o atalho da Store).
-#[test]
-fn the_skill_bridge_runs_with_the_backend_python() {
-    let root = tempfile::tempdir().unwrap();
-    let b = &root.path().join("backend");
-    assert_eq!(agents::skill_bridge_argv(b, false), None, "sem venv não roda");
-    for (windows, python) in [(false, ".venv/bin/python"), (true, ".venv/Scripts/python.exe")] {
-        std::fs::create_dir_all(b.join(python).parent().unwrap()).unwrap();
-        std::fs::write(b.join(python), "").unwrap();
-        std::fs::create_dir_all(b.join("app")).unwrap();
-        std::fs::write(b.join("app/skill_bridge.py"), "").unwrap();
-        let python = python.split('/').fold(b.to_path_buf(), |path, part| path.join(part));
-        assert_eq!(agents::skill_bridge_argv(b, windows), Some(vec![python.to_string_lossy().into_owned(),
-            b.join("app").join("skill_bridge.py").to_string_lossy().into_owned(), "--quiet".into()]), "windows={windows}");
-    }
-    // Pacote: o Python embutido na raiz vence o venv.
-    let embedded = root.path().join("python").join("bin").join("python3");
-    std::fs::create_dir_all(embedded.parent().unwrap()).unwrap();
-    std::fs::write(&embedded, "").unwrap();
-    assert_eq!(agents::skill_bridge_argv(b, false).unwrap()[0], embedded.to_string_lossy());
-}
-
 /// `kimi_sessions.pretrust_cwd` (test_kimi_sessions::test_pretrust_writes_workspace_trust_once): grava
 /// `{root, trustedAt}` na chave do CLI uma vez; já confiada não reescreve.
 #[test]
@@ -2310,16 +2287,24 @@ fn the_initial_prompt_of_pi_omp_and_kimi_waits_in_the_durable_queue() {
     assert!(!root.join("home/.claude/.hangar-queue/p1.jsonl").exists(), "pane que não nasceu deixou a fila");
 }
 
-/// A ponte de skills roda antes de abrir Pi e Kimi, como no Python; o omp não a usa.
+/// A abertura refaz os links antes de Pi/Kimi sem precisar de Python instalado.
 #[cfg(target_os = "linux")]
 #[test]
-fn the_skill_bridge_runs_for_pi_and_kimi_only() {
+fn skills_are_ready_without_python_for_pi_and_kimi_only() {
     for (name, runs) in [("create_pi_terminal", true), ("create_kimi_terminal", true), ("create_omp_terminal", false)] {
-        let (raw, _dir, _root) = run_contract(name, |_| {});
+        let (raw, _dir, root) = run_contract_with(name, |_| {}, |root| {
+            for path in ["home/.claude/skills/fixture", "home/.pi/agent", "home/.kimi-code"] {
+                std::fs::create_dir_all(root.join(path)).unwrap();
+            }
+            std::fs::write(root.join("home/.claude/skills/fixture/SKILL.md"), "fixture").unwrap();
+            std::fs::remove_dir_all(root.join(".harness/backend/.venv")).unwrap();
+        });
         assert_eq!(raw["steps"][0]["status"], 200, "{name}: {}", raw["steps"][0]["body"]);
-        let bridged = raw["subprocesses"].as_array().unwrap().iter()
-            .any(|p| p["argv"].as_array().is_some_and(|a| a.iter().any(|x| x.as_str().is_some_and(|x| x.ends_with("skill_bridge.py")))));
-        assert_eq!(bridged, runs, "{name}");
+        assert_eq!(root.join("home/.pi/agent/skills-bridge/fixture/SKILL.md").is_file(), runs, "{name}");
+        assert_eq!(root.join("home/.kimi-code/skills-bridge/fixture/SKILL.md").is_file(), runs, "{name}");
+        assert!(!raw["subprocesses"].as_array().unwrap().iter().any(|p|
+            p["argv"].as_array().is_some_and(|a| a.iter().any(|x|
+                x.as_str().is_some_and(|x| x.ends_with("skill_bridge.py"))))));
     }
 }
 

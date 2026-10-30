@@ -54,7 +54,6 @@ pub fn prepare(scenario: &Value, root: &Path, repo: &Path) -> std::io::Result<()
         if session["environ_unreadable"] == true { std::fs::set_permissions(proc.join("environ"), std::fs::Permissions::from_mode(0o000))?; }
     }
     write(&fake_backend(root).join(".venv/bin/python"), b"")?;
-    write(&fake_backend(root).join("app/skill_bridge.py"), b"")?;
     write(&bin.join("panes.txt"), panes.as_bytes())?;
     crate::write_test_executable(&bin.join("tmux"), b"#!/bin/sh\n[ \"$1\" = list-panes ] || exit 1\ncat \"$(dirname \"$0\")/panes.txt\"\n");
     let roots: String = ["hangar", "github-actions"].iter().map(|m| format!("{}\n", repo.join("plugins").join(m).display())).collect();

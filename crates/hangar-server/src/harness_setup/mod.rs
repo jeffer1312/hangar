@@ -69,3 +69,9 @@ pub mod health;
 
 #[cfg(all(test, unix))]
 mod selected_tests;
+pub mod commands;
+mod health_details;
+pub mod service;
+mod repair;
+pub mod installer;
+pub mod http;

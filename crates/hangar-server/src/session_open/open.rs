@@ -601,16 +601,17 @@ async fn claude_plan(host: &dyn OpenHost, spec: &SessionSpec, sid: &str, read_on
     Ok((pane, jsonl, route))
 }
 
-/// A ponte de skills (`skill_bridge.py`): a skill instalada no Claude vale já nesta sessão de Pi ou
-/// Kimi. Nunca impede a abertura.
+/// A abertura usa o mesmo espelhamento da instalação, sem depender de outro processo.
 async fn sync_skills(host: &dyn OpenHost) {
-    let Some(argv) = host.backend_dir().and_then(|dir| agents::skill_bridge_argv(&dir, host.terminal().windows)) else {
-        tracing::warn!(backend = ?host.backend_dir(), "ponte de skills sem a venv do backend; não refeita antes de abrir a sessão");
+    let Some(repo) = host.backend_dir().and_then(|dir| dir.parent().map(Path::to_path_buf)) else {
+        tracing::warn!("raiz da instalação ausente; skills não conferidas antes da abertura");
         return;
     };
-    let out = host.run(argv, Duration::from_secs(30)).await;
-    if out.code != Some(0) {
-        tracing::warn!(code = ?out.code, stderr = %out.stderr.trim(), "ponte de skills não refeita antes de abrir a sessão");
+    let mut env = crate::accounts::environment::AccountEnvironment::from_map(host.env().clone());
+    env.home = host.home().to_path_buf();
+    match tokio::task::spawn_blocking(move || crate::harness_setup::skills::rebuild_report(&env, &repo, false)).await {
+        Ok(report) => for (source,error) in report.errors { tracing::warn!(%source,%error,"skills não conferidas antes da abertura"); },
+        Err(error) => tracing::warn!(%error, "skills não conferidas antes da abertura"),
     }
 }
 

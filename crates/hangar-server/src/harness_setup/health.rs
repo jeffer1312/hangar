@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
 // Configurações podem conter extras profundamente aninhados que a checagem não consulta.
-struct Document(Value);
+pub(super) struct Document(pub(super) Value);
 impl std::ops::Deref for Document {
     type Target = Value;
     fn deref(&self) -> &Value {
@@ -18,7 +18,7 @@ impl Drop for Document {
         codec::discard(std::mem::take(&mut self.0));
     }
 }
-fn read_json(path: &Path) -> Option<Document> {
+pub(super) fn read_json(path: &Path) -> Option<Document> {
     let text = std::fs::read_to_string(path).ok()?;
     codec::loads(&text).map(Document)
 }
@@ -44,7 +44,7 @@ fn toml_value(value: toml::Value) -> Value {
     }
 }
 
-fn read_toml(path: &Path) -> Result<toml::Value, String> {
+pub(super) fn read_toml(path: &Path) -> Result<toml::Value, String> {
     let empty = || toml::Value::Table(Default::default());
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
@@ -79,7 +79,7 @@ fn read_toml(path: &Path) -> Result<toml::Value, String> {
     }
     Ok(value)
 }
-fn read(path: &Path) -> Document {
+pub(super) fn read(path: &Path) -> Document {
     let value = read_json(path).unwrap_or_else(|| Document(json!({})));
     if value.is_object() {
         value
@@ -194,7 +194,7 @@ fn toml_text(value: &toml::Value, nested: bool) -> String {
         }
     }
 }
-fn item(
+pub(super) fn item(
     id: &str,
     ok: Option<bool>,
     code: &str,
@@ -208,7 +208,7 @@ fn item(
         .collect();
     json!({"id":id,"ok":ok,"codigo":code,"params":params,"conserto":repair,"info":info})
 }
-fn agent_dir(env: &AccountEnvironment, cli: &str) -> Result<PathBuf, String> {
+pub(super) fn agent_dir(env: &AccountEnvironment, cli: &str) -> Result<PathBuf, String> {
     if cli == "omp" {
         env.omp_directories()
             .map(|v| v.agent_dir)

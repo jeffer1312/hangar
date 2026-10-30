@@ -17,7 +17,7 @@ functions = {"_item", "_ler_json", "_ler_toml", "_mcp", "_modelo_padrao", "_hook
              "_conf_psmux", "_perfis_powershell", "_wrapper", "_raiz_agente", "_extensoes",
              "_abreviar_home", "_fullscreen", "_fullscreen_claude", "_hooks_claude", "_executavel_existe"}
 constants = {"_EXTENSOES_PI", "_EXTENSOES_POR_CLI", "_HOOKS_CLAUDE"}
-source = ast.parse((ROOT / "backend/app/harness_saude.py").read_text())
+source = ast.parse(subprocess.check_output(["git", "show", "d290182f567812c92b75709a5cd814a089b4ea98:backend/app/harness_saude.py"], cwd=ROOT, text=True))
 nodes = [node for node in source.body if
          (isinstance(node, ast.FunctionDef) and node.name in functions) or
          (isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id in constants for target in node.targets))]
@@ -110,7 +110,7 @@ for name,binary in [("missing",False),("present",True)]:
     if binary:files["bin/server"]="fixture"
     run("claude-hooks-binary-"+name,"_hooks_claude",files=files)
 Path(__file__).with_name("checks.json").write_text(json.dumps({
-    "source_commit":subprocess.check_output(["git","rev-parse","HEAD"],cwd=ROOT,text=True).strip(),
+    "source_commit":'d290182f567812c92b75709a5cd814a089b4ea98',
     "command":"python backend/tests/fixtures/contract/harness-health/generate_checks.py",
     "cases":cases,
 },ensure_ascii=True,indent=2)+"\n")
