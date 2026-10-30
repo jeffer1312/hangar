@@ -66,6 +66,8 @@ struct BackupFields {
 
 /// Frase de uma recusa do cofre pelo código; código que esta versão não conhece fica com a frase do servidor.
 pub(super) fn vault_failure(error: &Failure) -> String {
+    // Servidor de antes do cofre: a rota não existe e o 404 vem sem código.
+    if error.status == Some(404) && error.code.is_none() { return tr("vault_error_sem_cofre"); }
     if let Some(code) = error.code.as_deref() {
         let key = format!("vault_error_{}", code.trim_start_matches("erro_cofre_").trim_start_matches("erro_"));
         let text = tr(&key);
@@ -641,6 +643,7 @@ impl Render for VaultForm {
             .child(field(tr("vault_field_username"), input(&self.username, "vault_field_username")))
             .child(field(tr("vault_field_password"), Input::new(&self.password).small().mask_toggle().disabled(off)
                 .aria_label(tr("vault_field_password")).into_any_element()))
+            .child(muted(tr("vault_token_hint")).text_size(px(12.5)))
             .child(field(tr("vault_field_url"), input(&self.url, "vault_field_url")))
             .child(field(tr("vault_field_notes"), Textarea::new(&self.notes).disabled(off).aria_label(tr("vault_field_notes")).into_any_element()))
             .child(div().id("vault-form-policy").role(Role::RadioGroup).aria_label(tr("vault_field_policy")).flex().flex_col().gap(px(6.))
@@ -692,6 +695,8 @@ mod tests {
         assert_eq!(vault_failure(&failure("erro_cofre_trancado")), tr("vault_error_trancado"));
         assert_eq!(vault_failure(&failure("erro_interacao_desatualizada")), tr("vault_error_interacao_desatualizada"));
         assert_eq!(vault_failure(&failure("erro_cofre_novo_codigo")), "frase do servidor");
+        let old_server = Failure { status: Some(404), detail: "Not Found".into(), retry_after: None, uncertain: false, code: None };
+        assert_eq!(vault_failure(&old_server), tr("vault_error_sem_cofre"));
     }
 
     #[test]
