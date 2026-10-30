@@ -194,8 +194,13 @@ pub async fn status(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     let running = super::running_package().map(|p| p.version.clone());
     let layout = Layout::new(&home);
     let estado = {
-        let (layout, running) = (layout.clone(), running.clone());
-        tokio::task::spawn_blocking(move || super::for_screen(&super::state_dir(&claude), &layout, running.as_deref())).await.unwrap_or_default()
+        let (layout, running, home, claude) = (layout.clone(), running.clone(), home.clone(), claude.clone());
+        tokio::task::spawn_blocking(move || {
+            let state_dir = super::state_dir(&claude);
+            let mut estado = super::for_screen(&state_dir, &layout, running.as_deref());
+            crate::diag_report::auto::merge(&mut estado, &home, &state_dir);
+            estado
+        }).await.unwrap_or_default()
     };
     let suggested = {
         let home = home.clone();

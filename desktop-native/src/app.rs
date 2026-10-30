@@ -1349,6 +1349,7 @@ impl Hangar {
         }
         self.start_remote_lists();
         self.sync_updater(cx);
+        if !self.active_invite() { self.ask_auto_report(window, cx); }
         self.connection_dialog = false;
         // Conectado por qualquer caminho: reabrir o cartão mostra endereço + token, não a entrada da primeira abertura.
         self.entry = None;

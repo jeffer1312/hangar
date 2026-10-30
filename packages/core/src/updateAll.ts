@@ -1,4 +1,4 @@
-import { acceptUpdateWarningsEm, getAtualizacaoEm, getIdentificadorEm, getUpdateNotesEm, iniciarAtualizacaoEm, type UpdateAcceptResult } from './api';
+import { acceptUpdateWarningsEm, getAtualizacaoEm, getAutoReportEm, getIdentificadorEm, getUpdateNotesEm, iniciarAtualizacaoEm, type UpdateAcceptResult } from './api';
 import { isOwnMachine } from './machineImport';
 import { registrar as registerDiagnostic } from './diag';
 import type { Server } from './servers';
@@ -65,8 +65,27 @@ export function follow(state: AtualizacaoEstado, baseTs?: string | null): Update
   return state.reiniciar_manual === true ? 'atualizado_manual' : 'atualizado';
 }
 
+/** A linha do relatório automático de uma falha, pelo que o servidor juntou ao estado. */
+export function updateReportLine(state: AtualizacaoEstado | undefined): string | undefined {
+  if (state?.relatorio === 'pendente') return m.update_report_pending();
+  if (state?.relatorio) return m.update_report_sent({ code: state.relatorio });
+  if (state?.relatorio_erro) return m.update_report_failed({ reason: state.relatorio_erro });
+  return undefined;
+}
+
 export function ownUpdatableServers(list: readonly Server[]): Server[] {
   return list.filter((server) => isOwnMachine(server) && !server.disabled);
+}
+
+/** As máquinas próprias que ainda não responderam ao relatório automático: uma pergunta só cobre todas.
+ *  Servidor sem o recurso fica de fora; falha de leitura vai ao diário e a pergunta fica para a próxima abertura. */
+export async function autoReportUnanswered(list: readonly Server[], fetcher?: typeof fetch): Promise<Server[]> {
+  const own = ownUpdatableServers(list);
+  const answers = await Promise.all(own.map((server) => getAutoReportEm(server, fetcher).catch((error: unknown) => {
+    registerDiagnostic({ evento: 'auto_report.read_failed', nivel: 'aviso', codigo: error instanceof Error ? error.name : 'erro' }, server.baseUrl);
+    return undefined;
+  })));
+  return own.filter((_, index) => answers[index] === null);
 }
 
 /** O que a pessoa aceitou na folha para uma máquina: os ids lidos e, com o aviso da migração, o modo. */
@@ -180,6 +199,8 @@ export interface UpdateAllResult { server: Server; state: UpdateAllState }
 const POLL_MS = 2000;
 const SILENT_READS = 300;
 const FOLLOW_CEILING_MS = 30 * 60 * 1000;
+/** O servidor tenta o relatório automático por até ~11 min quando o worker limita. */
+const REPORT_WAIT_MS = 12 * 60 * 1000;
 const errorMessage = (error: unknown): string => error instanceof Error ? error.message : String(error);
 const httpStatus = (error: unknown): unknown =>
   typeof error === 'object' && error !== null && 'status' in error ? error.status : undefined;
@@ -227,8 +248,11 @@ export async function updateAll(
       return finish({ status: 'falhou', error: errorMessage(error), warnings: [] });
     }
     let silent = 0;
+    let failedAt: number | undefined;
+    let failure: UpdateAllState | undefined;
     let latest: UpdateAllState = { status: 'esperando', warnings: [] };
     for (;;) {
+      let waitReport = false;
       await sleep(POLL_MS);
       let value: UpdateAllState;
       try {
@@ -237,7 +261,10 @@ export async function updateAll(
         const status = follow(state, baseTs);
         value = { status, state, warnings: state.avisos ?? [] };
         if (status === 'falhou') value.error = state.erro?.replace(/\.+$/, '') || '?';
-        if (status === 'atualizado' || status === 'atualizado_manual' || status === 'falhou') return finish(value);
+        const reportPending = status === 'falhou' && state.relatorio === 'pendente';
+        if (reportPending) { failedAt ??= now(); failure = value; }
+        waitReport = reportPending && now() - failedAt! < REPORT_WAIT_MS;
+        if ((status === 'atualizado' || status === 'atualizado_manual' || status === 'falhou') && !waitReport) return finish(value);
       } catch (error) {
         const status = httpStatus(error);
         if (status === 401 || status === 403) {
@@ -246,7 +273,9 @@ export async function updateAll(
         silent++;
         value = { ...latest, status: 'esperando', error: errorMessage(error) };
       }
-      if (silent >= SILENT_READS || now() - startedAt >= FOLLOW_CEILING_MS) {
+      if (silent >= SILENT_READS || (now() - startedAt >= FOLLOW_CEILING_MS && !waitReport)) {
+        // Já falhou e só esperava o relatório: o motivo da falha vale mais que o limite da espera.
+        if (failure) return finish(failure);
         return finish({ status: 'falhou', errorCode: silent >= SILENT_READS ? 'silent' : 'timeout',
           state: value.state, warnings: value.warnings });
       }

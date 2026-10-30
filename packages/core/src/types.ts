@@ -1061,6 +1061,10 @@ export interface AtualizacaoEstado {
   reiniciar_manual?: boolean;
   /** O último reinício pedido pela tela falhou. Escrito pelo processo destacado, único canal dele. */
   reinicio_erro?: string | null;
+  /** Relatório automático da falha: `pendente` enquanto sai, depois o código do worker. */
+  relatorio?: string;
+  /** Código do erro quando o relatório automático não saiu. */
+  relatorio_erro?: string;
   /** Arquivos de `docs/atualizacoes/` que o app ignorou por estarem malformados. */
   passos_invalidos?: string[];
   /** Comandos e saída, pra tela poder mostrar o que está rodando agora. */

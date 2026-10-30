@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Alert, View } from 'react-native';
-import { acceptUpdateWarningsEm, afterAccept, getAtualizacaoEm, iniciarAtualizacaoEm, refuseUnseenWarnings, reiniciarServidorEm, matchesRestartResult,type AtualizacaoEstado, type Server } from '@hangar/core';
+import { acceptUpdateWarningsEm, afterAccept, getAtualizacaoEm, iniciarAtualizacaoEm, refuseUnseenWarnings, reiniciarServidorEm, matchesRestartResult, updateReportLine, type AtualizacaoEstado, type Server } from '@hangar/core';
 import { MachineGroup, MachineRow } from './MachineRows';
 import { ensureActive, reason } from './api';
 import { Notice, styles, useMachineAction } from './parts';
@@ -119,11 +119,23 @@ function OperationControls({ server }: { server: Server }) {
           // Aceite gravado e nada a instalar: as novidades guardadas pela folha não vão chegar.
           if (started === null) { clearPendingNews(server.id); return null; }
           if (started?.ok !== true || !Number.isSafeInteger(started.pid) || started.pid <= 0) throw new Error(m.mobile_machines_invalid_response());
-          const state = await followOperation(server,
+          let state = await followOperation(server,
             (state) => operation === 'restart' ? matchesRestartResult(state, started) : state.pid === started.pid,
             operation === 'restart' ? 120_000 : 600_000, signal, setResult);
+          // Falha com o relatório automático saindo: segue lendo até o código chegar (o servidor tenta por até ~11 min).
+          const reportSince = Date.now();
+          while (state.ok === false && state.relatorio === 'pendente' && Date.now() - reportSince < 12 * 60_000) {
+            setResult(state);
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+            ensureActive(signal);
+            // Leitura que falha aqui não troca o motivo da falha por um erro de rede: tenta na próxima volta.
+            try { state = (await bounded(getAtualizacaoEm(server), signal, 20_000)).estado; }
+            catch { ensureActive(signal); }
+          }
           if (state.ok !== true || state.reinicio_erro || state.erro) {
-            throw new Error(m.mobile_machines_operation_failed({ reason: state.reinicio_erro || state.erro || m.mobile_machines_unconfirmed_reason() }));
+            const reason = state.reinicio_erro || state.erro || m.mobile_machines_unconfirmed_reason();
+            const report = updateReportLine(state);
+            throw new Error(m.mobile_machines_operation_failed({ reason: report ? `${reason} · ${report}` : reason }));
           }
           updated = operation === 'update';
           return state;

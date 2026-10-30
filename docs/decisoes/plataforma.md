@@ -3523,9 +3523,41 @@ quase simultâneos com a mesma senha podem gravar os dois). O teto diário do KV
 (o diagnóstico custa 2, o diário mais 2) e, passado o teto, o diagnóstico recebe 503 em vez de um
 código que não abre.
 
-**Passo futuro (não feito): envio automático de erros.** Falha relevante iria sozinha ao dono,
-sem clique. Exige consentimento explícito na instalação, controle de volume no worker e os mesmos
-limites de privacidade acima. Fica para quando o botão manual não bastar.
+**Envio automático:** feito para a falha de atualização, na entrada seguinte.
+
+## Relatório automático quando a atualização falha (30/10/2026)
+
+**Decisão.** Atualização por pacote que falha manda o "Reportar problema" sozinha, pelo próprio
+`hangar-server` da máquina, só com o consentimento dela: `~/.hangar/auto-report.json`
+(`{"auto_report": bool}`, rota `GET`/`PUT /api/auto-report` só do dono). Sem o arquivo, a resposta
+é `null` e nada sai. Os três clientes perguntam uma vez, na abertura, para as máquinas próprias
+sem resposta (uma pergunta cobre todas), e a escolha muda na tela da máquina (nativo e Expo) ou em
+Diário de uso (PWA). O servidor confere a falha na subida, a cada gravação do `estado.json` (vigia
+de arquivo: quem grava é o executor, outro processo, e depois da volta o servidor de pé não o lançou)
+e quando a pessoa responde "sim", sem ler o estado de tempos em tempos; manda uma vez por falha (chave
+`ts|versao_para|erro`, falhas de até 24 h) e grava o código ou o erro em
+`.hangar-update/relatorio.json`. Sem rede ou com o worker limitando, a falha volta a ser tentada na
+próxima subida, dentro das 24 h; recusa do worker não se repete. `GET /api/atualizacao` junta ao `estado` `relatorio` (`pendente`
+ou o código) e `relatorio_erro`; as telas de atualização mostram a linha e seguem lendo enquanto
+está `pendente`, até 12 min. 429 do worker tenta de novo depois de 1, 3 e 7 min.
+
+Quando a versão nova não responde depois do reinício, o executor lê a saída dela desde antes do
+reinício (Windows: o `hangar-backend*.log` mais novo e o tamanho dele; Linux: o journal da unit,
+que roda sem `--log`) e grava como `update: saída` só o traceback e as linhas ERROR/CRITICAL, até
+40 linhas de até 300 caracteres, com `scrub`. Linhas no formato do `hangar-server` ficam de fora
+(já saem pela lista fixa de campos). O relatório as mostra embaixo da linha da falha, nas 3 falhas
+mais recentes. É a única exceção ao "do log do Python, só a contagem".
+
+**Por quê.** O relatório `5z4vw3l3` (Mayron, 30/10): toda atualização acima da `0.1.0.8589`
+falhava com "o servidor não voltou depois de reiniciar", a máquina voltava sozinha, e o relatório
+não tinha o motivo; só o `hangar-backend.log` daquela máquina, pedido à mão, o diria. E cada falha
+dependia de alguém lembrar de apertar o botão.
+
+**Limites.** O executor é o binário da versão de onde se atualiza, e depois da volta quem fica de
+pé é a anterior: o recurso só vale quando a versão de origem já o tem. A linha de exceção do
+Python pode trazer texto da conversa que o `scrub` não reconhece; ela sai porque é o motivo da
+falha, e só sai com o consentimento. O consentimento é por máquina: duas telas abertas ao mesmo
+tempo podem perguntar duas vezes.
 
 ## Navegador remoto e contador compartilhado de autenticação (28/10/2026)
 

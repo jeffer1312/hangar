@@ -321,13 +321,14 @@ async fn run_machine(machine: Machine, acceptance: Acceptance, mut publish: impl
         // Só o aviso estava pendente: aceito, não há versão a puxar.
         Launch::Nothing => { publish(Status::Current, Vec::new()); return; }
     }
-    let (mut silent, mut latest_warnings) = (0, Vec::new());
+    let (mut silent, mut latest_warnings, mut pending, mut failed_at) = (0, Vec::new(), false, None);
     loop {
         tokio::time::sleep(Duration::from_secs(2)).await;
         let status = match api.server_read(&["atualizacao"], &[], 10).await {
             Ok(value) => {
                 silent = 0;
                 latest_warnings = warnings(&value["estado"]);
+                pending = super::report_pending(&value["estado"]);
                 Some(follow_status(&value["estado"], baseline))
             }
             Err(error) if matches!(error.status, Some(401 | 403)) => Some(Status::Failed(failure_text(&error))),
@@ -335,7 +336,9 @@ async fn run_machine(machine: Machine, acceptance: Acceptance, mut publish: impl
         };
         let limit = limit_status(status.as_ref(), silent, started.elapsed());
         let status = limit.or(status).unwrap_or(Status::Waiting);
-        let done = !status.busy();
+        let report_wait = matches!(status, Status::Failed(_)) && pending
+            && failed_at.get_or_insert_with(std::time::Instant::now).elapsed() < super::REPORT_WAIT;
+        let done = !status.busy() && !report_wait;
         publish(status, latest_warnings.clone());
         if done { return; }
     }

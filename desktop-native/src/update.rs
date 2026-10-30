@@ -521,6 +521,22 @@ enum Outcome { Updated, UpdatedManual, Failed(String) }
 #[derive(Debug, PartialEq)]
 enum Follow { Running { step: u64, total: u64, text: String }, Waiting, NotStarted, Done(Outcome) }
 
+/// O servidor tenta o relatório automático por até ~11 min quando o worker limita.
+pub(crate) const REPORT_WAIT: Duration = Duration::from_secs(12 * 60);
+
+/// O relatório automático da falha, pelo que o servidor juntou ao estado.
+pub(crate) fn report_line(state: &Value) -> Option<String> {
+    match (state["relatorio"].as_str(), state["relatorio_erro"].as_str()) {
+        (Some("pendente"), _) => Some(tr_shared("update_report_pending", &[])),
+        (Some(code), _) => Some(tr_shared("update_report_sent", &[("code", code)])),
+        (None, Some(error)) => Some(tr_shared("update_report_failed", &[("reason", error)])),
+        (None, None) => None,
+    }
+}
+
+/// A falha ainda espera o relatório: a tela segue lendo até o código chegar.
+pub(crate) fn report_pending(state: &Value) -> bool { state["relatorio"].as_str() == Some("pendente") }
+
 /// Uma leitura do estado durante a atualização do servidor. `baseline` é o `ts` do desfecho anterior: "pronto" com ele, sem
 /// ter visto "rodando", é o desfecho velho, não o desta vez.
 fn follow(state: &Value, saw_running: bool, baseline: Option<&str>) -> Follow {
@@ -530,7 +546,7 @@ fn follow(state: &Value, saw_running: bool, baseline: Option<&str>) -> Follow {
         Some("pronto") if !saw_running && !after_baseline(state["ts"].as_str(), baseline) => Follow::NotStarted,
         Some("pronto") if state["ok"].as_bool() != Some(true) => {
             let reason = Some(text("erro").trim_end_matches('.').to_owned()).filter(|e| !e.is_empty()).unwrap_or_else(|| "?".into());
-            Follow::Done(Outcome::Failed(reason))
+            Follow::Done(Outcome::Failed(match report_line(state) { Some(line) => format!("{reason} · {line}"), None => reason }))
         }
         Some("pronto") if state["reiniciar_manual"].as_bool() == Some(true) => Follow::Done(Outcome::UpdatedManual),
         Some("pronto") => Follow::Done(Outcome::Updated),
@@ -1038,6 +1054,7 @@ impl Updater {
         let handle = window.window_handle();
         cx.spawn(async move |this, cx| {
             let (mut saw, mut silent, started) = (saw_running, 0, std::time::Instant::now());
+            let mut failed_at: Option<std::time::Instant> = None;
             loop {
                 let Ok(task) = this.update(cx, |this, _| read_state(&this.runtime, &api, &[], 10)) else { return };
                 let read = task.await.unwrap_or_else(|e| Err(Failure::local(e.to_string())));
@@ -1058,9 +1075,16 @@ impl Updater {
                     return;
                 }
                 if matches!(step, Some(Follow::Running { .. })) { saw = true; }
+                let report_wait = matches!(step, Some(Follow::Done(Outcome::Failed(_))))
+                    && read.as_ref().is_ok_and(|value| report_pending(&value["estado"]))
+                    && failed_at.get_or_insert_with(std::time::Instant::now).elapsed() < REPORT_WAIT;
                 let finished = handle.update(cx, |_, window, cx| this.update(cx, |this, cx| {
                     if let Ok(value) = &read { this.receive_server(Some(value.clone()), cx); }
                     match step {
+                        Some(Follow::Done(Outcome::Failed(reason))) if report_wait => {
+                            this.fail(tr("update_failed").replace("{reason}", &reason), cx);
+                            false
+                        }
                         Some(Follow::Running { step, total, text }) => { this.run = Run::Server { step, total, text }; cx.notify(); false }
                         None if saw => { this.run = Run::Restarting; cx.notify(); false }
                         None | Some(Follow::Waiting) => false,
@@ -1618,6 +1642,11 @@ mod tests {
             Follow::Done(Outcome::UpdatedManual));
         assert_eq!(follow(&state(serde_json::json!({"fase": "pronto", "ok": false, "erro": "npm ci falhou.", "ts": "t1"})), true, Some("t0")),
             Follow::Done(Outcome::Failed("npm ci falhou".into())));
+        let failed = |extra: Value| { let mut s = serde_json::json!({"fase": "pronto", "ok": false, "erro": "caiu.", "ts": "t1"}); s.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone()); follow(&state(s), true, Some("t0")) };
+        assert_eq!(failed(serde_json::json!({"relatorio": "abcd2345"})), Follow::Done(Outcome::Failed("caiu · Relatório enviado: abcd2345".into())));
+        assert_eq!(failed(serde_json::json!({"relatorio": "pendente"})), Follow::Done(Outcome::Failed("caiu · Enviando relatório…".into())));
+        assert_eq!(failed(serde_json::json!({"relatorio_erro": "diag_report_refused"})),
+            Follow::Done(Outcome::Failed("caiu · Relatório não enviado (diag_report_refused)".into())));
         assert_eq!(follow(&Value::Null, true, Some("t0")), Follow::Waiting);
     }
 

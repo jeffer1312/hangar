@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { InteractionManager, Pressable, Text, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
-import { ownUpdatableServers, prepareUpdateAll, updateAll } from '@hangar/core';
+import { ownUpdatableServers, prepareUpdateAll, updateAll, updateReportLine } from '@hangar/core';
 import type { Server, UpdateAllResult, UpdateAllState } from '@hangar/core';
 import { SectionCard } from '../config/SectionCard';
 import { SettingsRow } from '../config/SettingsRow';
@@ -31,8 +31,12 @@ function statusText(value: UpdateAllState): string {
     case 'fora_do_ar': return m.update_all_offline();
     case 'atualizado': return m.update_all_updated();
     case 'atualizado_manual': return m.update_all_updated_manual();
-    case 'falhou': return m.update_all_failed({ erro: value.errorCode === 'silent' ? m.update_all_silent()
-      : value.errorCode === 'timeout' ? m.update_all_timeout() : value.error || m.erro_desconhecido() });
+    case 'falhou': {
+      const failed = m.update_all_failed({ erro: value.errorCode === 'silent' ? m.update_all_silent()
+        : value.errorCode === 'timeout' ? m.update_all_timeout() : value.error || m.erro_desconhecido() });
+      const report = updateReportLine(value.state);
+      return report ? `${failed} · ${report}` : failed;
+    }
   }
 }
 

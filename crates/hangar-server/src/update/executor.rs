@@ -592,7 +592,7 @@ async fn execute(env: &AccountEnvironment, args: &Args) -> bool {
             };
             let platform = super::platform();
             let job = super::Job { client: &client, release: &parts.release, platform: &platform, layout: &parts.layout, home: &parts.home,
-                state_dir: &parts.state_dir, diary_dir: parts.diary_dir.clone(), ui: Some(&super::ReleaseUi), notes: parts.notes.clone(), settings };
+                state_dir: &parts.state_dir, diary_dir: parts.diary_dir.clone(), ui: Some(&super::ReleaseUi), notes: parts.notes.clone(), settings, startup_output: true };
             let outcome = super::run(&job, runner, &restarter, &health, Arc::new(super::ProcInUse)).await;
             tracing::info!(?outcome, "update: fim");
             matches!(outcome, Outcome::Updated { .. } | Outcome::UpdatedManual { .. } | Outcome::UpToDate)

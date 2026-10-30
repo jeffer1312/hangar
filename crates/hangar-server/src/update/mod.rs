@@ -23,6 +23,7 @@ pub mod migrate;
 pub mod periodic;
 pub mod process;
 pub mod restart;
+pub mod startup_output;
 pub mod state;
 pub mod steps;
 
@@ -623,6 +624,8 @@ pub struct Job<'a> {
     /// Avisos do lançamento, gravados depois que a rodada zera os avisos.
     pub notes: Vec<String>,
     pub settings: Settings,
+    /// Lê a saída da versão nova que não respondeu (`startup_output`); os testes não leem o journal da máquina.
+    pub startup_output: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -780,6 +783,16 @@ async fn roll_back<R: Restarter, H: HealthProbe>(job: &Job<'_>, state: &StateFil
     }
     state.write(json!({"fase": "pronto", "ok": false, "erro": why, "voltou": true, "no_ar": true}));
     Outcome::Failed { voltou: true, no_ar: true, erro: why }
+}
+
+/// As linhas de erro da versão nova que não respondeu, uma `update: saída` cada, antes do `update: fim`.
+async fn log_startup_output(mark: startup_output::Mark, home: &Path) {
+    let scrubber = crate::diag_report::Scrubber::new(Some(home.to_string_lossy().into_owned()), std::env::var("LOCALAPPDATA").ok());
+    let lines = tokio::task::spawn_blocking(move || match mark.read() {
+        Ok(text) => startup_output::errors(&text, &scrubber),
+        Err(why) => vec![format!("saída da versão nova não lida: {why}")],
+    }).await.unwrap_or_else(|e| vec![format!("saída da versão nova não lida: {e}")]);
+    for line in lines { tracing::info!(line = %line, "update: saída"); }
 }
 
 /// Extração, passos, troca e poda bloqueiam por segundos ou minutos: fora dos fios do runtime.
@@ -964,11 +977,13 @@ pub async fn run<R: Restarter, H: HealthProbe>(job: &Job<'_>, steps: std::sync::
     }
 
     state.step("reiniciar");
+    let mark = job.startup_output.then(|| startup_output::Mark::take(false));
     let proved = match restarter.restart().await {
         Err(e) => Err(format!("o servidor não reiniciou: {e}")),
         Ok(()) => wait_rust(health, &manifest, pid_before, &job.settings).await,
     };
     if let Err(why) = proved {
+        if let Some(mark) = mark { log_startup_output(mark, job.home).await; }
         return roll_back(job, &state, previous, before.as_ref(), &applied_now, why, restarter, health).await;
     }
     keep_swap(job.layout, &state);
