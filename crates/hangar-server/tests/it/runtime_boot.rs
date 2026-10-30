@@ -88,6 +88,7 @@ fn probe(hold_version:bool) {
     command.args(["--exact","runtime_boot::runtime_boot_child","--ignored","--nocapture"])
         .env_clear().env("HOME",home.path()).env("USERPROFILE",home.path())
         .env("PATH","").current_dir(home.path());
+    preserve_windows_socket_environment(&mut command);
     if hold_version {command.env("HANGAR_BOOT_HOLD_VERSION","1");}
     let output=command.output().unwrap();
     assert!(output.status.success(),"{}\n{}",String::from_utf8_lossy(&output.stdout),String::from_utf8_lossy(&output.stderr));
@@ -142,10 +143,20 @@ async fn startup_barrier_child() {
 #[test]
 fn startup_barrier_serves_health_but_holds_http_and_actor_adoption() {
     let home = tempfile::tempdir().unwrap();
-    let output = std::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--exact","runtime_boot::startup_barrier_child","--ignored","--nocapture"])
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    command.args(["--exact","runtime_boot::startup_barrier_child","--ignored","--nocapture"])
         .env_clear().env("HOME",home.path()).env("USERPROFILE",home.path())
-        .env("PATH","").env("CP_RUST_NO_ORPHAN_SWEEP","1").current_dir(home.path())
-        .output().unwrap();
+        .env("PATH","").env("CP_RUST_NO_ORPHAN_SWEEP","1").current_dir(home.path());
+    preserve_windows_socket_environment(&mut command);
+    let output = command.output().unwrap();
     assert!(output.status.success(),"{}\n{}",String::from_utf8_lossy(&output.stdout),String::from_utf8_lossy(&output.stderr));
+}
+
+fn preserve_windows_socket_environment(command: &mut std::process::Command) {
+    if cfg!(windows) {
+        // O Winsock precisa localizar os provedores do sistema mesmo com HOME isolado.
+        for key in ["SystemRoot", "WINDIR"] {
+            if let Some(value) = std::env::var_os(key) { command.env(key, value); }
+        }
+    }
 }

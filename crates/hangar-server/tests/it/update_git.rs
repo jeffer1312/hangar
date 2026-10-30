@@ -260,9 +260,9 @@ fn checkout_release_download_matches_python_and_restores_held_binaries() {
             })
         }
     }
-    let golden: Value = serde_json::from_str(include_str!(
-        "../../../../backend/tests/fixtures/contract/update-git/release-cases.json"
-    ))
+    let platform = if cfg!(windows) { "windows-x86_64" } else { "linux-x86_64" };
+    let ext = if cfg!(windows) { ".exe" } else { "" };
+    let golden: Value = serde_json::from_str(if cfg!(windows) {include_str!("../../../../backend/tests/fixtures/contract/update-git/release-cases-windows.json")} else {include_str!("../../../../backend/tests/fixtures/contract/update-git/release-cases.json")})
     .unwrap();
     for row in golden["cases"].as_array().unwrap() {
         let name = row["name"].as_str().unwrap();
@@ -270,17 +270,17 @@ fn checkout_release_download_matches_python_and_restores_held_binaries() {
         let dest = temp.path();
         let mut files = serde_json::Map::new();
         for binary in releases::NAMES {
-            files.insert(format!("linux-x86_64/{binary}"),json!({"name":binary,"sha256":releases::digest(format!("new-{binary}").as_bytes())}));
+            files.insert(format!("{platform}/{binary}"),json!({"name":binary,"sha256":releases::digest(format!("new-{binary}").as_bytes())}));
             if matches!(name, "same" | "replace" | "hold" | "branch-404-keeps") {
                 std::fs::write(
-                    dest.join(binary),
+                    dest.join(format!("{binary}{ext}")),
                     format!("{}-{binary}", if name == "same" { "new" } else { "old" }),
                 )
                 .unwrap();
             }
         }
         if name == "missing-entry" {
-            files.remove("linux-x86_64/hangar-cano");
+            files.remove(&format!("{platform}/hangar-cano"));
         }
         let fixture = Fixture {
             name,
@@ -299,7 +299,7 @@ fn checkout_release_download_matches_python_and_restores_held_binaries() {
             if name == "unsupported" {
                 None
             } else {
-                Some("linux-x86_64")
+                Some(platform)
             },
             dest,
             None,
@@ -322,7 +322,7 @@ fn checkout_release_download_matches_python_and_restores_held_binaries() {
             assert_eq!(json!(releases::publish(&held)), row["install_warnings"]);
             assert_eq!(disk(), row["after_publish"]);
             assert_eq!(
-                json!(releases::restore(dest, "linux-x86_64")),
+                json!(releases::restore(dest, platform)),
                 row["restore_warnings"]
             );
         }
@@ -668,7 +668,7 @@ fn authentication_pair_matches_python_publication_and_restore() {
     use serde_json::{Value,json};
     use hangar_server::update::git_engine::releases::{self,Source,DownloadError};
     use std::{path::Path,time::Duration,sync::Mutex};
-    struct Captured {name:String,urls:Mutex<Vec<String>>}
+    struct Captured {platform:&'static str,name:String,urls:Mutex<Vec<String>>}
     impl Source for Captured {
         fn get(&self,url:&str,_:Duration)->Result<Vec<u8>,DownloadError>{
             self.urls.lock().unwrap().push(url.into());
@@ -676,9 +676,9 @@ fn authentication_pair_matches_python_publication_and_restore() {
             if binary=="server-latest.json" {
                 if self.name.starts_with("branch-")&&self.name!="branch-missing-auth"&&url.contains("/server-beta/"){return Err(DownloadError { kind: "URLError",status:Some(404),message:"missing".into()});}
                 let mut files=serde_json::Map::new();
-                for n in ["hangar-auth","hangar-cano","hangar-server"] {files.insert(format!("linux-x86_64/{n}"),json!({"name":n,"sha256":releases::digest(format!("new-{n}").as_bytes())}));}
-                if self.name=="missing-auth"||(self.name=="branch-missing-auth"&&url.contains("/server-beta/")){files.remove("linux-x86_64/hangar-auth");}
-                if self.name=="invalid-auth-sha"{files.get_mut("linux-x86_64/hangar-auth").unwrap()["sha256"]=json!("invalid");}
+                for n in ["hangar-auth","hangar-cano","hangar-server"] {files.insert(format!("{}/{n}",self.platform),json!({"name":n,"sha256":releases::digest(format!("new-{n}").as_bytes())}));}
+                if self.name=="missing-auth"||(self.name=="branch-missing-auth"&&url.contains("/server-beta/")){files.remove(&format!("{}/hangar-auth",self.platform));}
+                if self.name=="invalid-auth-sha"{files.get_mut(&format!("{}/hangar-auth",self.platform)).unwrap()["sha256"]=json!("invalid");}
                 return Ok(serde_json::to_vec(&json!({"files":files})).unwrap());
             }
             let kind=binary.trim_start_matches("hangar-");
@@ -689,28 +689,29 @@ fn authentication_pair_matches_python_publication_and_restore() {
     fn snapshot(root:&Path,at:&Path,files:&mut serde_json::Map<String,Value>){
         for entry in std::fs::read_dir(at).unwrap(){let path=entry.unwrap().path();if path.is_dir(){snapshot(root,&path,files)}else{files.insert(path.strip_prefix(root).unwrap().to_string_lossy().replace('\\',"/"),json!(std::fs::read_to_string(path).unwrap()));}}
     }
-    let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/update-git/auth-release.json")).unwrap();
+    let platform = if cfg!(windows) { "windows-x86_64" } else { "linux-x86_64" };
+    let fixture:Value=serde_json::from_str(if cfg!(windows) {include_str!("../../../../backend/tests/fixtures/contract/update-git/auth-release-windows.json")} else {include_str!("../../../../backend/tests/fixtures/contract/update-git/auth-release.json")}).unwrap();
     for row in fixture["cases"].as_array().unwrap(){
         let name=row["name"].as_str().unwrap();
         let temp=tempfile::tempdir().unwrap();let dest=temp.path();
         for (file,data) in row["initial"].as_object().unwrap(){let path=dest.join(file);std::fs::create_dir_all(path.parent().unwrap()).unwrap();std::fs::write(path,data.as_str().unwrap()).unwrap();}
-        let source=Captured{name:name.into(),urls:Mutex::new(vec![])};let mut held=vec![];
+        let source=Captured{platform,name:name.into(),urls:Mutex::new(vec![])};let mut held=vec![];
         let failed=std::cell::Cell::new(false);
         let install=|data:&[u8],target:&Path| {
             let filename=target.file_name().unwrap().to_string_lossy();
-            let selected=(name.ends_with("server-publish-failure")&&filename=="hangar-server") || (name.ends_with("metadata-publish-failure")&&filename=="hangar-server.auth.json");
+            let selected=(name.ends_with("server-publish-failure")&&filename==if cfg!(windows) {"hangar-server.exe"} else {"hangar-server"}) || (name.ends_with("metadata-publish-failure")&&filename=="hangar-server.auth.json");
             if selected&&!failed.replace(true){return Err(std::io::Error::other("fixture-publication-failed"));}
             releases::install(data,target)
         };
-        let result=releases::fetch_with_installer(&source,"https://release.invalid",Some(if name.starts_with("branch-"){ "server-beta" }else{"server-latest"}),Some("linux-x86_64"),dest,None,if name.starts_with("hold-"){Some(&mut held)}else{None},&install).unwrap();
-        let normalize=|warnings:Vec<String>|json!(warnings.iter().map(|v|v.replace(dest.to_str().unwrap(),"<DEST>")).collect::<Vec<_>>());
+        let result=releases::fetch_with_installer(&source,"https://release.invalid",Some(if name.starts_with("branch-"){ "server-beta" }else{"server-latest"}),Some(platform),dest,None,if name.starts_with("hold-"){Some(&mut held)}else{None},&install).unwrap();
+        let normalize=|warnings:Vec<String>|json!(warnings.iter().map(|v|v.replace(dest.to_str().unwrap(),"<DEST>").replace("<DEST>\\auth\\", "<DEST>/auth/").replace("<DEST>\\auth/", "<DEST>/auth/")).collect::<Vec<_>>());
         assert_eq!(normalize(result),row["result"],"{name}: avisos");
         assert_eq!(json!(*source.urls.lock().unwrap()),row["urls"],"{name}: URLs");
         let mut files=serde_json::Map::new();snapshot(dest,dest,&mut files);assert_eq!(json!(files),row["before_publish"],"{name}: antes");
         if name.starts_with("hold-"){
             assert_eq!(normalize(releases::publish(&held)),row["publish_warnings"],"{name}");
             let mut files=serde_json::Map::new();snapshot(dest,dest,&mut files);assert_eq!(json!(files),row["after_publish"],"{name}: publicado");
-            assert_eq!(normalize(releases::restore(dest,"linux-x86_64")),row["restore_warnings"],"{name}");
+            assert_eq!(normalize(releases::restore(dest,platform)),row["restore_warnings"],"{name}");
             let mut files=serde_json::Map::new();snapshot(dest,dest,&mut files);assert_eq!(json!(files),row["after_restore"],"{name}: restaurado");
         }
     }
