@@ -3,6 +3,28 @@ use hangar_server::{auth::TrustedHosts, config::Config, routes::AppState};
 use serde_json::Value;
 use std::sync::Arc;
 
+// Materializar valores, não bytes JSON: caminhos Windows contêm contrabarras.
+fn fixture_root(mut value: Value, root: &std::path::Path) -> Value {
+    fn replace(value: &mut Value, root: &std::path::Path) {
+        match value {
+            Value::String(text) => {
+                if let Some(suffix) = text.strip_prefix("⟦ROOT⟧") {
+                    let mut path = root.to_path_buf();
+                    for part in suffix.split('/').filter(|part| !part.is_empty()) {
+                        path.push(part);
+                    }
+                    *text = path.to_str().unwrap().to_owned();
+                }
+            }
+            Value::Array(values) => values.iter_mut().for_each(|value| replace(value, root)),
+            Value::Object(values) => values.values_mut().for_each(|value| replace(value, root)),
+            _ => {}
+        }
+    }
+    replace(&mut value, root);
+    value
+}
+
 #[tokio::test]
 async fn login_guests_owner_identity_is_served_without_python() {
     let fixture: Value = serde_json::from_str(include_str!(
@@ -98,11 +120,7 @@ async fn login_guests_python_http_contract_and_disk_effects() {
     let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     let client = reqwest::Client::new();
     for row in fixture["rows"].as_array().unwrap() {
-        let expected: Value = serde_json::from_str(
-            &row.to_string()
-                .replace("⟦ROOT⟧", &home.path().to_string_lossy()),
-        )
-        .unwrap();
+        let expected = fixture_root(row.clone(), home.path());
         let method =
             reqwest::Method::from_bytes(expected["method"].as_str().unwrap().as_bytes()).unwrap();
         let mut request = client.request(
@@ -337,7 +355,7 @@ async fn login_guests_vault_revisions_keep_python_integer_range() {
 async fn login_guests_storage_normalizes_legacy_documents_before_writing() {
     use hangar_server::login_guests::{Service,Settings};
     let home=tempfile::tempdir().unwrap();
-    let cases:Value=serde_json::from_str(&include_str!("../../../../backend/tests/fixtures/contract/guests/storage.json").replace("⟦ROOT⟧",home.path().to_str().unwrap())).unwrap();
+    let cases=fixture_root(serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/storage.json")).unwrap(), home.path());
     for (index,row) in cases["rows"].as_array().unwrap().iter().enumerate() {
         std::fs::write(home.path().join("guests.json"),row["initial"].to_string()).unwrap();
         let mut service=Service::new(Settings{guests:home.path().join("guests.json"),vault:home.path().join("vault.json"),runtime_config:home.path().join("config.json"),sync_enabled:false,bootstrap:String::new(),secret:vec![1],secure:false,rate_max:10.into(),rate_window:300.into()});
@@ -464,7 +482,7 @@ async fn login_guests_setup_preserves_vault_and_changes_enabled_state() {
 fn login_guests_store_preserves_session_life_and_failed_adoption() {
     use hangar_server::login_guests::store::Store;
     let home=tempfile::tempdir().unwrap();
-    let fixture:Value=serde_json::from_str(&include_str!("../../../../backend/tests/fixtures/contract/guests/store.json").replace("⟦ROOT⟧",home.path().to_str().unwrap())).unwrap();
+    let fixture=fixture_root(serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/store.json")).unwrap(), home.path());
     for row in fixture["rows"].as_array().unwrap() {
         let path=home.path().join("guests.json");
         std::fs::write(&path,row["before"].to_string()).unwrap();
@@ -486,7 +504,7 @@ fn login_guests_store_preserves_session_life_and_failed_adoption() {
 async fn login_guests_rejects_structural_identity_types_without_overwriting() {
     use hangar_server::login_guests::{Service,Settings};
     let home=tempfile::tempdir().unwrap();
-    let cases:Value=serde_json::from_str(&include_str!("../../../../backend/tests/fixtures/contract/guests/identity-types.json").replace("⟦ROOT⟧",home.path().to_str().unwrap())).unwrap();
+    let cases=fixture_root(serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/identity-types.json")).unwrap(), home.path());
     for row in cases["rows"].as_array().unwrap() {
         let path=home.path().join("guests.json");std::fs::write(&path,row["initial"].to_string()).unwrap();
         let service=Arc::new(Service::new(Settings{guests:path.clone(),vault:home.path().join("vault.json"),runtime_config:home.path().join("config.json"),sync_enabled:false,bootstrap:String::new(),secret:vec![1],secure:false,rate_max:10.into(),rate_window:300.into()}));
@@ -1089,10 +1107,13 @@ async fn login_guests_cookie_survives_child_relaunch_and_follows_parent_context(
             .env("CP_AUTH_TOKEN","owner-fake").env("CP_SYNC","true").env("CP_SYNC_BOOTSTRAP","bootstrap")
             .env("CP_SYNC_DATA",root.join("vault.json")).env("CP_LAN_BIND_IP","127.0.0.1")
             .env("HANGAR_GUEST_COOKIE_PROBE",mode).kill_on_drop(true);
+        // O runtime de rede do Windows precisa localizar as bibliotecas do sistema.
+        #[cfg(windows)]
+        if let Some(system_root)=std::env::var_os("SystemRoot") { command.env("SystemRoot",system_root); }
         if let Some(config)=config{command.env("HANGAR_AUTH_CONTEXT",config.to_string());}
         if let Some(secret)=secret{command.env("CP_SYNC_SESSION_SECRET",secret);}
         let output=tokio::time::timeout(std::time::Duration::from_secs(20),command.output()).await.expect("prazo do processo isolado").unwrap();
-        assert!(output.status.success(),"processo de prova: {}",String::from_utf8_lossy(&output.stdout));
+        assert!(output.status.success(),"processo de prova {}: stdout={} stderr={}",output.status,String::from_utf8_lossy(&output.stdout),String::from_utf8_lossy(&output.stderr));
         serde_json::from_slice(&std::fs::read(root.join("result.json")).unwrap()).unwrap()
     }
     let first=context(root.path(),"first.json","01","ab");
