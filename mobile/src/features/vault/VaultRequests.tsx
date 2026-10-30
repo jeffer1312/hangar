@@ -6,6 +6,7 @@ import { MachineField, MachineGroup, MachineRow } from '../machines/MachineRows'
 import { MachineSheet, Notice } from '../machines/parts';
 import { InfoNotice } from '../config/InfoNotice';
 import { PolicyRows } from './VaultEntrySheet';
+import { VaultApprovalRows } from './VaultApprovalRows';
 import { openVaultRequest, useVaultTarget } from './target';
 import { vaultErrorText } from './errors';
 import { useSessions } from '../../stores/sessions';
@@ -73,8 +74,6 @@ function RequestSheet({ server, ready, requests, requestId }: {
   </MachineSheet>;
 }
 
-const USE: Record<string, () => string> = { fill: m.vault_app_use_fill, exec: m.vault_app_use_exec, file: m.vault_app_use_file };
-
 function RequestCard({ server, request, onDone }: { server: Server; request: VaultRequest; onDone: () => void }) {
   const [password, setPassword] = useState('');
   const [name, setName] = useState(request.label ?? '');
@@ -102,20 +101,9 @@ function RequestCard({ server, request, onDone }: { server: Server; request: Vau
   };
   const iid = request.interaction_id;
 
-  if (request.kind === 'approve') return <>
-    <MachineGroup>
-      <MachineRow title={m.vault_app_request_entry()} value={request.entry_name ?? '?'} />
-      <MachineRow title={m.vault_app_request_origin()} value={request.origin} />
-      {request.use ? <MachineRow title={m.vault_app_request_use()} value={USE[request.use]?.() ?? request.use} /> : null}
-      {request.target ? <MachineRow title={m.vault_app_request_target()} description={request.target} /> : null}
-      <MachineRow title={m.vault_app_request_reason()} description={request.reason} />
-    </MachineGroup>
-    <Notice text={error} error />
-    <MachineGroup>
-      <MachineRow title={m.vault_app_allow()} action disabled={busy} onPress={() => void send({ interaction_id: iid, decision: 'allow' }, m.vault_app_allowed())} />
-      <MachineRow title={m.vault_app_deny()} danger disabled={busy} onPress={() => void send({ interaction_id: iid, decision: 'deny' }, m.vault_app_denied())} />
-    </MachineGroup>
-  </>;
+  if (request.kind === 'approve') return <VaultApprovalRows request={request} busy={busy} notice={<Notice text={error} error />}
+    onAllow={() => void send({ interaction_id: iid, decision: 'allow' }, m.vault_app_allowed())}
+    onDeny={() => void send({ interaction_id: iid, decision: 'deny' }, m.vault_app_denied())} />;
 
   const save = (keep: boolean) => {
     if (!password) return;
