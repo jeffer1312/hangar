@@ -77,8 +77,8 @@ const HIDDEN_VIEWPORT: (u32, u32) = (1280, 800);
 const MOBILE_UA: &str = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1";
 /// Dois quadros: só o segundo garante que o que a ação mudou já está pintado. O timer cobre página escondida.
 const FRAME: &str = "new Promise(r=>{requestAnimationFrame(()=>requestAnimationFrame(r));setTimeout(r,100)})";
-/// '' = dá para digitar; senão, o que está com foco.
-const FOCUS: &str = "(()=>{const a=document.activeElement;if(!a||a===document.body)return 'nada';const t=a.tagName.toLowerCase();const ok=a.isContentEditable||t==='textarea'||(t==='input'&&!/^(button|submit|reset|checkbox|radio|file|image|range|color)$/i.test(a.type||''));return ok?'':t+(a.type?'['+a.type+']':'')})()";
+/// '' = dá para digitar; senão, o que está com foco. Desce o shadow DOM: lá o foco do documento é só o invólucro.
+const FOCUS: &str = "(()=>{let a=document.activeElement;while(a&&a.shadowRoot&&a.shadowRoot.activeElement)a=a.shadowRoot.activeElement;if(!a||a===document.body)return 'nada';const t=a.tagName.toLowerCase();const ok=a.isContentEditable||t==='textarea'||(t==='input'&&!/^(button|submit|reset|checkbox|radio|file|image|range|color)$/i.test(a.type||''));return ok?'':t+(a.type?'['+a.type+']':'')})()";
 const PROBE_READ: &str = "(typeof window.__hangarSonda===\"undefined\"?2:window.__hangarSonda)";
 /// Lista nativa do `<select>` aberta: ela consome a tecla e o documento não vê o keydown.
 const OPEN_LIST: &str = "(()=>{const a=document.activeElement;try{return !!a&&a.tagName==='SELECT'&&a.matches(':open')}catch(e){return false}})()";
@@ -1104,7 +1104,7 @@ mod tests {
             "Runtime.callFunctionOn" => json!({"result": {"value": focus}}),
             "Runtime.evaluate" => match p["expression"].as_str().unwrap_or("") {
                 e if e.starts_with("(typeof window.__hangarSonda") => json!({"result": {"value": 1}}),
-                e if e.contains("document.activeElement;if(!a") => json!({"result": {"value": ""}}),
+                e if e.contains("a.shadowRoot.activeElement;if(!a") => json!({"result": {"value": ""}}),
                 // O `eval` e o `text` leem o campo e devolvem o valor como a página o tem.
                 e if e.contains("querySelector('input').value") || e == "document.body.innerText" => json!({"result": {"value": SECRET}}),
                 _ => json!({"result": {}}),
