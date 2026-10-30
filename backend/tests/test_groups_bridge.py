@@ -396,7 +396,7 @@ def test_child_gets_group_env(monkeypatch, tmp_path):
     assert "HANGAR_SERVER_ID" not in env
     assert "HANGAR_PEERS_FILE" not in env
     assert env["HANGAR_PAIR_ARCHIVE"] == str(pair._arquivo_dir())
-    assert rust_server.RUST_SERVER_PROTOCOL == 97
+    assert rust_server.RUST_SERVER_PROTOCOL == 98
 
 
 @pytest.mark.parametrize("mode", ["python", None])
