@@ -12,11 +12,9 @@ use super::{Summary, VaultError, config::{self, Placement},
     remote::{Remote, RemoteError, UseStart, WaitStatus}, requests::{self, RequestError}, wire::{AskReq, UseReq, WAIT_HOLD}};
 use crate::{groups::peers::PeerClient, routes::AppState};
 
-/// A ociosidade do MCP por HTTP no Claude Code é de 5 min sem resposta nem progresso: a tool que
-/// espera o dono responder precisa de mais que o orçamento de 10 min.
-pub const CLAUDE_IDLE_VAR: &str = "CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT";
-pub const CLAUDE_IDLE_MS: &str = "660000";
-/// O Codex corta a tool em 60 s sem isso; o `scripts/registrar-mcp.py` o grava no `config.toml` da conta.
+/// Claude e Codex cortam a tool em 60 s sem o prazo do servidor `hangar`, que o `scripts/registrar-mcp.py`
+/// grava na configuração da conta (`timeout` no `.claude.json`, `tool_timeout_sec` no `config.toml`).
+const CLAUDE_TIMEOUT_MIN_MS: f64 = 600_000.0;
 const CODEX_TOOL_TIMEOUT_MIN: i64 = 600;
 /// Saída lida do comando: só o fim, antes da máscara e da cauda de 8 KB.
 const READ_CAP: usize = 1 << 20;
@@ -32,8 +30,8 @@ pub const MASK: &str = "••••";
 
 pub const DENIED: &str = "erro_cofre_negado: o dono negou o uso desta senha";
 pub const NO_ANSWER: &str = "erro_cofre_sem_resposta: o dono não respondeu dentro de 10 minutos";
-pub const NO_DEADLINE: &str = "erro_cofre_sessao_sem_prazo: esta sessão nasceu sem o prazo longo das tools do cofre e a chamada \
-cairia antes da resposta do dono; reabra a sessão (recarregar) e tente de novo";
+pub const NO_DEADLINE: &str = "erro_cofre_sessao_sem_prazo: a conta desta sessão não tem o prazo longo do MCP hangar e a chamada \
+cairia antes da resposta do dono; atualize o Hangar (ou rode scripts/registrar-mcp.py), reabra a sessão e tente de novo";
 /// Onde mora o cofre visto desta máquina.
 #[derive(Clone)]
 pub enum Owner { Local(Arc<AppState>), Remote { peers: Arc<PeerClient>, id: String } }
@@ -185,24 +183,34 @@ pub async fn agent(st: &Arc<AppState>, name: &str) -> Result<Agent, String> {
     let codex_home = text(row.codex_home).map(PathBuf::from);
     let (st, name, provider, headless) = (st.clone(), name.to_owned(), row.provider, row.headless);
     tokio::task::spawn_blocking(move || {
-        let (env, read) = session_env(&st, &name, &provider, headless, pid, key.as_deref());
-        let config = codex_home.filter(|_| provider == "codex").and_then(|home| std::fs::read_to_string(home.join("config.toml")).ok());
-        let lacks_deadline = lacks_deadline(&provider, read.then_some(env.as_deref()).flatten(), config.as_deref());
+        let env = session_env(&st, &name, &provider, headless, pid, key.as_deref());
+        let config = match provider.as_str() {
+            "codex" => codex_home.map(|home| home.join("config.toml")),
+            "claude" => env.as_deref().map(|env| claude_config(env, &st.accounts.env.home)),
+            _ => None,
+        };
+        let config = config.and_then(|path| std::fs::read_to_string(path).ok());
+        let lacks_deadline = lacks_deadline(&provider, config.as_deref());
         Agent { cwd, env, lacks_deadline }
     }).await.map_err(|_| "erro_cofre_sessao_indisponivel: a leitura da sessão foi interrompida".to_owned())
 }
 
-/// `(ambiente, lido do processo)`. Com terminal, o do agente pelo `/proc`; sem terminal, o do cano
-/// (que nasceu com o ambiente da subida) com a chave conferida, senão o que o lançador monta agora.
-fn session_env(st: &AppState, name: &str, provider: &str, headless: bool, pid: Option<u32>, key: Option<&str>) -> (Option<Env>, bool) {
-    if !headless { return (pid.and_then(environ), true); }
+/// O `.claude.json` que a sessão leu ao nascer: o da conta dela (`CLAUDE_CONFIG_DIR`), senão o do usuário.
+fn claude_config(env: &[(OsString, OsString)], home: &Path) -> PathBuf {
+    let dir = env.iter().find(|(k, v)| k == "CLAUDE_CONFIG_DIR" && !v.is_empty()).map(|(_, v)| PathBuf::from(v));
+    dir.as_deref().unwrap_or(home).join(".claude.json")
+}
+
+/// Com terminal, o ambiente do agente pelo `/proc`; sem terminal, o do cano (que nasceu com o ambiente
+/// da subida) com a chave conferida, senão o que o lançador monta agora.
+fn session_env(st: &AppState, name: &str, provider: &str, headless: bool, pid: Option<u32>, key: Option<&str>) -> Option<Env> {
+    if !headless { return pid.and_then(environ); }
     let base = &st.accounts.env;
     let dir = base.home.join(".hangar").join(if provider == "codex" { "codex-sessions" } else { "claude-headless" });
-    let Some(meta) = crate::runtime::codex_sidecar::load(&crate::runtime::codex_sidecar::path(&dir, name)) else { return (None, false) };
+    let meta = crate::runtime::codex_sidecar::load(&crate::runtime::codex_sidecar::path(&dir, name))?;
     let cano = meta.get("cano").and_then(|c| c.get("pid")).and_then(serde_json::Value::as_u64).and_then(|p| u32::try_from(p).ok());
     let mine = |env: &Env| key.is_some_and(|key| env.iter().any(|(k, v)| k == "CP_SESSION_KEY" && v == key));
-    if let Some(env) = cano.and_then(environ).filter(mine) { return (Some(env), true); }
-    (launch_env(base, provider, name, &serde_json::Value::Object(meta)), false)
+    cano.and_then(environ).filter(mine).or_else(|| launch_env(base, provider, name, &serde_json::Value::Object(meta)))
 }
 
 /// O ambiente que o lançador daria a esta sessão sem terminal agora (Windows, cano ilegível).
@@ -233,13 +241,15 @@ fn environ(pid: u32) -> Option<Vec<(OsString, OsString)>> {
 #[cfg(not(target_os = "linux"))]
 fn environ(_pid: u32) -> Option<Vec<(OsString, OsString)>> { None }
 
-/// A sessão nasceu sem o prazo longo, quando dá para saber: Claude pelo ambiente lido do processo,
-/// Codex pelo `[mcp_servers.hangar] tool_timeout_sec` do `config.toml` da conta. Sem leitura a chamada segue.
-// shortcut: o Codex lê o config.toml ao subir; conta atualizada depois de a sessão abrir passa aqui e cai em 60 s.
-pub fn lacks_deadline(provider: &str, proc_env: Option<&[(OsString, OsString)]>, codex_config: Option<&str>) -> bool {
+/// A conta da sessão não tem o prazo longo do servidor `hangar`: `config` é o `.claude.json` (Claude) ou o
+/// `config.toml` (Codex) dela. Sem leitura a chamada segue.
+// shortcut: o agente lê a configuração ao subir; sessão aberta antes de a conta ser atualizada passa aqui e cai em 60 s.
+pub fn lacks_deadline(provider: &str, config: Option<&str>) -> bool {
     match provider {
-        "claude" => proc_env.is_some_and(|env| !env.iter().any(|(k, _)| k == CLAUDE_IDLE_VAR)),
-        "codex" => codex_config.and_then(|raw| toml::from_str::<toml::Table>(raw).ok()).is_some_and(|config| {
+        "claude" => config.and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok()).is_some_and(|config| {
+            !config["mcpServers"]["hangar"]["timeout"].as_f64().is_some_and(|t| t >= CLAUDE_TIMEOUT_MIN_MS)
+        }),
+        "codex" => config.and_then(|raw| toml::from_str::<toml::Table>(raw).ok()).is_some_and(|config| {
             let timeout = config.get("mcp_servers").and_then(|m| m.get("hangar")).and_then(|h| h.get("tool_timeout_sec"));
             !timeout.and_then(|t| t.as_integer().or_else(|| t.as_float().map(|f| f as i64))).is_some_and(|t| t >= CODEX_TOOL_TIMEOUT_MIN)
         }),

@@ -19,6 +19,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 HOME = Path.home()
 INICIO, FIM = "# >>> hangar: mcp", "# <<< hangar: mcp"
+# A tool do cofre espera o dono por até 10 min; sem isso o Claude corta a chamada em 60 s e o Codex também.
+TOOL_TIMEOUT_S = 660
 
 
 def env_backend() -> dict[str, str]:
@@ -43,7 +45,7 @@ def claude(url: str, helper: str) -> None:
             print(f"aviso: {arq} não é JSON válido — pulado", file=sys.stderr)
             continue
         servidores = dados.setdefault("mcpServers", {})
-        novo = {"type": "http", "url": url, "headersHelper": helper}
+        novo = {"type": "http", "url": url, "headersHelper": helper, "timeout": TOOL_TIMEOUT_S * 1000}
         if servidores.get("hangar") == novo:
             continue
         servidores["hangar"] = novo
@@ -130,7 +132,7 @@ def codex(url: str, token: str) -> None:
         INICIO,
         "[mcp_servers.hangar]",
         f'url = "{url}"',
-        "tool_timeout_sec = 660",
+        f"tool_timeout_sec = {TOOL_TIMEOUT_S}",
         f'http_headers = {{ "Authorization" = "Bearer {token}" }}',
         'env_http_headers = { "X-Hangar-Key" = "CP_SESSION_KEY", "X-Hangar-Pane" = "TMUX_PANE", '
         '"X-Hangar-Session" = "CP_SESSION_NAME", "X-Hangar-Jev" = "HANGAR_JEV" }',

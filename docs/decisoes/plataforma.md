@@ -3730,24 +3730,27 @@ máquinas é declarada por quem pede, não conferida: uma máquina com o token, 
 as rotas do cofre direto. Endereço de peer que cai no Connect (8768, Python) não alcança o cofre
 até o Connect migrar para o Rust: nenhum repasse no Python. A `X-Hangar-Key` (a `CP_SESSION_KEY`)
 é lida por outro processo do mesmo usuário (`tmux show-environment`): a entrada temporária e a
-liberação do "guardar" presas à sessão evitam engano entre sessões, não um agente hostil. A
-`CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT` que toda sessão Claude recebe vale para todas as tools MCP por
-HTTP dela, não só as do cofre.
+liberação do "guardar" presas à sessão evitam engano entre sessões, não um agente hostil. Sessão
+aberta antes de a conta receber o prazo longo passa na conferência (a configuração já está certa no
+disco) e a tool cai em 60 s, porque o agente só lê a configuração ao subir: reabrir resolve.
 
-**Prazo das tools que esperam o dono. Fonte:** documentação do Claude Code
-(code.claude.com/docs/en/mcp, "Time limits on MCP tool calls", lida em 30/10/2026): tool de servidor
-MCP por HTTP sem resposta nem notificação de progresso por 5 min é abortada por ociosidade;
-`CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT` (em ms, `0` desliga) muda essa janela, e o `MCP_TOOL_TIMEOUT`
-sem valor deixa o teto de relógio em ~28 h. Toda sessão Claude nasce com
-`CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT=660000` (com e sem terminal; fora da herança do pane). O Codex
-corta a tool em 60 s (`tool_timeout_sec` padrão): o `scripts/registrar-mcp.py` grava
-`tool_timeout_sec = 660` no `[mcp_servers.hangar]` de cada conta, e vale com e sem terminal. Não
-vai por `-c`: com o `config.toml` da conta sem `[mcp_servers.hangar]`, `-c
+**Prazo das tools que esperam o dono. Medição (30/10/2026, Claude Code 2.1.314, servidor MCP por
+HTTP, aprovação segurada):** cada POST ao MCP tem um temporizador próprio, o `timeout` do servidor
+ou o `MCP_TOOL_TIMEOUT`, senão 60 s, sem relação com a janela de ociosidade. Três resultados: só com
+`CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT=660000`, o `vault_exec` morreu em 60,5 s com "The operation timed
+out." (o servidor mandou os cabeçalhos do SSE em 1 ms e manteve o fluxo aberto por 90 s, então a falha
+não é dele); com `MCP_TOOL_TIMEOUT=660000`, aprovação em 370 s deu certo; só com `"timeout": 660000`
+na entrada `hangar` (`--strict-mcp-config`, sem variável), aprovação em 370 s deu certo, 389 s no
+total. A variável global foi recusada: baixaria o teto de relógio de todos os outros servidores MCP de
+~28 h para 11 min. O campo por servidor cobre o temporizador de 60 s e a ociosidade (o Claude Code usa
+o maior entre os dois). Por isso o `scripts/registrar-mcp.py` grava `timeout` no `mcpServers.hangar`
+do `.claude.json` de cada conta e `tool_timeout_sec = 660` no `[mcp_servers.hangar]` do `config.toml`
+(o padrão do Codex também é 60 s), e `erro_cofre_sessao_sem_prazo` confere essa configuração da conta
+da sessão. No Codex não vai por `-c`: com o `config.toml` da conta sem `[mcp_servers.hangar]`, `-c
 mcp_servers.hangar.tool_timeout_sec=660` cria o servidor sem transporte e o Codex recusa subir
 ("invalid transport in mcp_servers.hangar"). O rmcp não larga o futuro da tool no
 `notifications/cancelled`, só cancela o token: o `call_tool` das tools do cofre corre contra ele, e
-largar a espera cancela o pedido na dona. **Medição pendente:** a sessão de teste com uma tool que
-espera 6 min, com e sem a variável, ainda não foi feita (prova da Task 4).
+largar a espera cancela o pedido na dona.
 
 **O que sai da máquina e quando a cópia tenta de novo.** O aviso de pedido do cofre leva o nome da
 senha (ou o rótulo do cadastro) e o `servidor::sessao` de quem pede aos provedores de push (Expo e

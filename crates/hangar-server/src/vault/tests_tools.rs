@@ -253,16 +253,15 @@ async fn a_dropped_wait_cancels_the_request_at_the_owner() {
 
 #[test]
 fn a_session_born_without_the_long_deadline_is_detected_where_readable() {
-    let env = |pairs: &[(&str, &str)]| -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
-        pairs.iter().map(|(k, v)| ((*k).into(), (*v).into())).collect()
-    };
-    assert!(exec::lacks_deadline("claude", Some(&env(&[("PATH", "/bin")])), None));
-    assert!(!exec::lacks_deadline("claude", Some(&env(&[(exec::CLAUDE_IDLE_VAR, exec::CLAUDE_IDLE_MS)])), None));
-    assert!(!exec::lacks_deadline("claude", None, None), "ambiente não lido do processo segue");
+    assert!(!exec::lacks_deadline("claude", Some(r#"{"mcpServers": {"hangar": {"type": "http", "timeout": 660000}}}"#)));
+    assert!(exec::lacks_deadline("claude", Some(r#"{"mcpServers": {"hangar": {"type": "http"}}}"#)), "registrado antes do prazo");
+    assert!(exec::lacks_deadline("claude", Some(r#"{"mcpServers": {"hangar": {"timeout": 60000}}}"#)), "curto demais");
+    assert!(!exec::lacks_deadline("claude", None), ".claude.json não lido segue");
+    assert!(!exec::lacks_deadline("claude", Some("{ meio gravado")), ".claude.json ilegível segue");
     let registered = "[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\ntool_timeout_sec = 660\n";
-    assert!(!exec::lacks_deadline("codex", None, Some(registered)));
-    assert!(exec::lacks_deadline("codex", None, Some("[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\n")));
-    assert!(exec::lacks_deadline("codex", None, Some("[mcp_servers.hangar]\ntool_timeout_sec = 60\n")), "o padrão do Codex");
-    assert!(!exec::lacks_deadline("codex", None, None), "config.toml não lido segue");
+    assert!(!exec::lacks_deadline("codex", Some(registered)));
+    assert!(exec::lacks_deadline("codex", Some("[mcp_servers.hangar]\nurl = \"http://127.0.0.1:8765/mcp/\"\n")));
+    assert!(exec::lacks_deadline("codex", Some("[mcp_servers.hangar]\ntool_timeout_sec = 60\n")), "o padrão do Codex");
+    assert!(!exec::lacks_deadline("codex", None), "config.toml não lido segue");
     assert!(exec::env_name_ok("CF_TOKEN") && !exec::env_name_ok("1X") && !exec::env_name_ok("A-B") && !exec::env_name_ok("CP_AUTH_TOKEN"));
 }

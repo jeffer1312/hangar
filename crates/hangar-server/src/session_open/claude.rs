@@ -158,7 +158,6 @@ pub fn pane(spec: &SessionSpec, sid: &str, ctx: &ClaudeContext) -> PaneSpec {
     if hooks { env.push(("CLAUDE_CODE_ENABLE_FUNCTION_HOOKS".into(), "1".into())); }
     // Tela cheia sempre: só nela o Claude Code liga o mouse, por onde o app aperta os botões dos mods.
     env.push(("CLAUDE_CODE_NO_FLICKER".into(), "1".into()));
-    env.push((crate::vault::exec::CLAUDE_IDLE_VAR.into(), crate::vault::exec::CLAUDE_IDLE_MS.into()));
     if let Some(bridge) = ctx.bridge.filter(|_| hooks && !ctx.plugin_roots.is_empty()) {
         env.push(("HANGAR_PLUGIN_URL".into(), format!("http://127.0.0.1:{}/api/plugin", bridge.port)));
         env.push(("HANGAR_PLUGIN_TOKEN".into(), crate::mods::bridge::mint_keyed(&bridge.secret, &spec.name, ctx.bridge_key)));
