@@ -30,20 +30,31 @@ fn line_keys(text: &str) -> Vec<String> {
         ])
         .collect();
     let (mut root, mut access) = (None, None);
-    let mut section = "";
+    let mut ancestors: Vec<(usize, &str)> = Vec::new();
     for (index, line) in lines.iter().enumerate() {
-        if line
+        let stripped = py_strip(line);
+        if stripped.is_empty() || stripped.starts_with('#') {
+            continue;
+        }
+        let indentation = line
             .chars()
-            .next()
-            .is_some_and(|c| c != '#' && !c.is_whitespace() && !('\u{1c}'..='\u{1f}').contains(&c))
+            .take_while(|c| c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(c))
+            .count();
+        while ancestors
+            .last()
+            .is_some_and(|(indent, _)| *indent >= indentation)
         {
-            section = py_strip(line.split(':').next().unwrap_or(""));
+            ancestors.pop();
+        }
+        let direct_access = ancestors.len() == 1 && ancestors[0].1 == "access";
+        if let Some((key, _)) = stripped.split_once(':') {
+            ancestors.push((indentation, py_strip(key)));
         }
         let Some(head) = HEAD.captures(line) else {
             continue;
         };
         let indent = head[1].chars().count();
-        if indent > 0 && section != "access" {
+        if indent > 0 && !direct_access {
             continue;
         }
         let mut keys = Vec::new();
@@ -74,4 +85,27 @@ fn line_keys(text: &str) -> Vec<String> {
         }
     }
     access.or(root).unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::line_keys;
+
+    #[test]
+    fn client_keys_only_accept_root_or_direct_access_children() {
+        for text in [
+            "access:\n  other:\n    api-keys:\n      - wrong\napi-keys:\n  - root\n",
+            "other:\n  access:\n    api-keys:\n      - wrong\napi-keys:\n  - root\n",
+            "access:\n  other:\n    nested:\n      api-keys:\n        - wrong\napi-keys:\n  - root\n",
+        ] {
+            assert_eq!(line_keys(text), vec!["root"]);
+        }
+        assert_eq!(
+            line_keys(
+                "access:\n  other:\n    api-keys:\n      - wrong\n  api-keys:\n    - direct\napi-keys:\n  - root\n"
+            ),
+            vec!["direct"]
+        );
+        assert!(line_keys("access:\n  other:\n    api-keys:\n      - wrong\n").is_empty());
+    }
 }

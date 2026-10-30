@@ -82,7 +82,13 @@ async fn cli_probe_matches_python_and_shares_capture() {
             .count();
         assert_eq!(
             count,
-            if case["present"] == true { 2 } else { 0 },
+            if case["failure"] == true {
+                3
+            } else if case["present"] == true {
+                2
+            } else {
+                0
+            },
             "captura única {}",
             case["name"]
         );
@@ -93,7 +99,13 @@ async fn cli_probe_matches_python_and_shares_capture() {
                 .unwrap_or_default()
                 .lines()
                 .count(),
-            if case["present"] == true { 3 } else { 0 }
+            if case["failure"] == true {
+                4
+            } else if case["present"] == true {
+                3
+            } else {
+                0
+            }
         );
     }
 }
@@ -187,4 +199,42 @@ async fn cli_probe_account_capture_preserves_account_and_filters_private_keys() 
         "/fixture/account|"
     );
     assert_eq!(capture(args, env, budget).await.unwrap().stdout, "|");
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn cli_probe_retries_failed_capture_and_nonzero_exit_without_invalidation() {
+    use hangar_server::cli_probe::Probe;
+    use std::os::unix::fs::PermissionsExt;
+    let home = tempfile::tempdir().unwrap();
+    let script = home.path().join("claude");
+    let env = AccountEnvironment::from_pairs([
+        ("HOME", home.path().to_string_lossy().into_owned()),
+        ("PATH", home.path().to_string_lossy().into_owned()),
+    ]);
+    let mut probe = Probe::default();
+    probe.timeout = std::time::Duration::from_millis(100);
+    std::fs::write(&script, "#!/bin/sh\n/bin/sleep 2\n").unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(
+        probe.version_text(&env, "claude").await.as_deref(),
+        Some("")
+    );
+    std::fs::write(
+        &script,
+        "#!/bin/sh\nprintf '2.1.999 --plugin-dir'\nprintf 'falha de configuração' >&2\nexit 1\n",
+    )
+    .unwrap();
+    assert_eq!(
+        probe.version_text(&env, "claude").await.as_deref(),
+        Some("")
+    );
+    assert_eq!(probe.version(&env).await, None);
+    assert!(!probe.supports_plugin_dir(&env).await);
+    std::fs::write(&script, "#!/bin/sh\nprintf '2.1.999 --plugin-dir'\n").unwrap();
+    assert_eq!(
+        probe.version_text(&env, "claude").await.as_deref(),
+        Some("2.1.999 --plugin-dir")
+    );
+    assert!(probe.mods_enabled(&env).await);
 }

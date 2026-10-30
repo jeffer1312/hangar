@@ -66,18 +66,27 @@ impl Probe {
             .await
             .map(Some),
         };
-        *slot = Some((Instant::now(), result.clone()));
+        // Falha transitória não pode esconder a recuperação da CLI por todo o TTL.
+        if matches!(&result, Ok(None) | Ok(Some(Output { success: true, .. }))) {
+            *slot = Some((Instant::now(), result.clone()));
+        } else {
+            *slot = None;
+        }
         result
     }
     pub async fn version(&self, env: &AccountEnvironment) -> Option<Vec<BigInt>> {
-        parse_version(&self.raw(env, "claude", "--version").await.ok()??.stdout)
+        let output = self.raw(env, "claude", "--version").await.ok()??;
+        output
+            .success
+            .then(|| parse_version(&output.stdout))
+            .flatten()
     }
     pub async fn supports_plugin_dir(&self, env: &AccountEnvironment) -> bool {
         self.raw(env, "claude", "--help")
             .await
             .ok()
             .flatten()
-            .is_some_and(|out| out.stdout.contains("--plugin-dir"))
+            .is_some_and(|out| out.success && out.stdout.contains("--plugin-dir"))
     }
     pub async fn mods_enabled(&self, env: &AccountEnvironment) -> bool {
         self.version(env)
@@ -95,6 +104,7 @@ impl Probe {
                 tracing::warn!(cli,%error,"Sonda de versão falhou");
                 Some(String::new())
             }
+            Ok(Some(out)) if !out.success => Some(String::new()),
             Ok(Some(out)) => {
                 let raw = if out.stdout.is_empty() {
                     out.stderr

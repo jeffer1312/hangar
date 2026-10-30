@@ -32,6 +32,15 @@ fn engine_aliases_match_original_read_write_and_unicode_failures() {
             ));
         }
         let result = aliases::set(&env, case["id"].as_str().unwrap(), case["value"].as_str());
+        // Correção de perda de dados: a captura antiga sobrescrevia estes documentos inválidos.
+        if matches!(case["name"].as_str(), Some("broken" | "list")) {
+            assert!(result.is_err(), "{}", case["name"]);
+            assert_eq!(
+                std::fs::read_to_string(&path).unwrap(),
+                case["before"].as_str().unwrap()
+            );
+            continue;
+        }
         match (result, case["result"].get("error")) {
             (Ok(value), None) if Value::Object(value.clone()) == case["result"]["map"] => {}
             (Err(_), Some(_)) => {}
@@ -83,4 +92,27 @@ proptest::proptest! {
             proptest::prop_assert!(value.as_str().unwrap().chars().count() <= 40);
         }
     }
+}
+
+#[test]
+fn engine_aliases_preserve_unreadable_bytes_and_existing_entries() {
+    let home = tempfile::tempdir().unwrap();
+    let env =
+        AccountEnvironment::from_pairs([("HOME", home.path().to_string_lossy().into_owned())]);
+    let path = aliases::path(&env);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    for raw in [b"{".as_slice(), b"[]", b"null", &[255]] {
+        std::fs::write(&path, raw).unwrap();
+        assert!(aliases::set(&env, "new", Some("Novo")).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), raw);
+    }
+    std::fs::remove_file(&path).unwrap();
+    std::fs::create_dir(&path).unwrap();
+    assert!(aliases::set(&env, "new", Some("Novo")).is_err());
+    assert!(path.is_dir());
+    std::fs::remove_dir(&path).unwrap();
+    aliases::set(&env, "first", Some("Primeiro")).unwrap();
+    let saved = aliases::set(&env, "second", Some("Segundo")).unwrap();
+    assert_eq!(saved["first"], "Primeiro");
+    assert_eq!(saved["second"], "Segundo");
 }

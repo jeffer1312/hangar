@@ -13,6 +13,7 @@ fn error_name(error: &io::Error) -> String {
         io::ErrorKind::AlreadyExists => "FileExistsError",
         io::ErrorKind::NotADirectory => "NotADirectoryError",
         io::ErrorKind::IsADirectory => "IsADirectoryError",
+        io::ErrorKind::FileTooLarge => "OutputLimitExceeded",
         _ => "OSError",
     }
     .into()
@@ -69,6 +70,26 @@ async fn capture_inner(
         stdout: decode(&output.stdout),
         stderr: decode(&output.stderr),
     })
+}
+
+/// Limite por canal; a captura continua drenando para o filho conseguir encerrar.
+pub const MAX_CAPTURE_BYTES: usize = 4 * 1024 * 1024;
+async fn drain_bounded(
+    reader: &mut (impl tokio::io::AsyncRead + Unpin),
+    output: &mut Vec<u8>,
+    limit: usize,
+) -> io::Result<bool> {
+    let mut buffer = [0; 8192];
+    let mut overflow = false;
+    loop {
+        let count = reader.read(&mut buffer).await?;
+        if count == 0 {
+            return Ok(overflow);
+        }
+        let keep = count.min(limit.saturating_sub(output.len()));
+        output.extend_from_slice(&buffer[..keep]);
+        overflow |= keep != count;
+    }
 }
 
 pub async fn capture_bytes(
@@ -140,13 +161,15 @@ pub async fn capture_bytes(
         let outcome = {
             let collect = async {
                 let (a, b, c) = tokio::join!(
-                    stdout.read_to_end(&mut out),
-                    stderr.read_to_end(&mut err),
+                    drain_bounded(&mut stdout, &mut out, MAX_CAPTURE_BYTES),
+                    drain_bounded(&mut stderr, &mut err, MAX_CAPTURE_BYTES),
                     terminal_process::leader_exited(&mut child)
                 );
-                a?;
-                b?;
+                let (out_overflow, err_overflow) = (a?, b?);
                 c?;
+                if out_overflow || err_overflow {
+                    return Err(io::Error::from(io::ErrorKind::FileTooLarge));
+                }
                 Ok::<(), io::Error>(())
             };
             tokio::select! {
@@ -309,5 +332,62 @@ impl StrictExec {
             }
         }
         Err(io::Error::from_raw_os_error(saved.unwrap_or(last)))
+    }
+}
+
+#[cfg(test)]
+mod bounded_tests {
+    use super::*;
+    use tokio::io::AsyncWriteExt;
+
+    #[tokio::test]
+    async fn bounded_reader_drains_every_byte_after_retention_limit() {
+        let (mut writer, mut reader) = tokio::io::duplex(64);
+        let write = tokio::spawn(async move {
+            writer.write_all(&vec![b'x'; 128 * 1024]).await.unwrap();
+        });
+        let mut kept = Vec::new();
+        let overflow = tokio::time::timeout(
+            Duration::from_secs(5),
+            drain_bounded(&mut reader, &mut kept, 100),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        write.await.unwrap();
+        assert!(overflow);
+        assert_eq!(kept, vec![b'x'; 100]);
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn bounded_capture_drains_both_pipes_and_reports_overflow_after_child_finishes() {
+        let home = tempfile::tempdir().unwrap();
+        let done = home.path().join("done");
+        let env =
+            AccountEnvironment::from_pairs([("HOME", home.path().to_string_lossy().into_owned())]);
+        let script = format!(
+            "head -c {} /dev/zero; head -c {} /dev/zero >&2; printf done > \"$1\"",
+            MAX_CAPTURE_BYTES + 1,
+            MAX_CAPTURE_BYTES + 1
+        );
+        let failure = capture_bytes(
+            vec![
+                "/bin/sh".into(),
+                "-c".into(),
+                script,
+                "capture-test".into(),
+                done.to_string_lossy().into_owned(),
+            ],
+            env,
+            Duration::from_secs(10),
+            CaptureOptions::default(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(failure.kind, "OutputLimitExceeded");
+        assert_eq!(failure.stdout.len(), MAX_CAPTURE_BYTES);
+        assert_eq!(failure.stderr.len(), MAX_CAPTURE_BYTES);
+        assert_eq!(std::fs::read_to_string(done).unwrap(), "done");
     }
 }
