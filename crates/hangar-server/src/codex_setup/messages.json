@@ -17,7 +17,6 @@
   "etapa_marketplace": "Atualizando marketplace {marketplace}",
   "etapa_plugin": "Instalando ou atualizando {id}",
   "erro_registro_ilegivel": "Registro da integração ilegível",
-  "erro_falha": "Falha na integração ({tipo}); configuração anterior preservada nas etapas não concluídas",
   "erro_falha_etapa": "Falha em \"{etapa}\" ({tipo}); configuração anterior preservada nas etapas não concluídas",
   "erro_falha_inesperada": "Falha inesperada na integração ({tipo}); configuração anterior preservada nas etapas não concluídas",
   "erro_marketplace_origem": "Origem do marketplace {marketplace} não confirmada; instalação existente preservada",

@@ -8,7 +8,7 @@ pub(super) fn toggle(panel:&Panel,id:&str,on:bool)->Result<(),String>{
     store::clean_temporary(&path).map_err(|error|error.msg)?;
     let raw=std::fs::read(&path).map_err(|error|format!("peers.json ilegível: {}",spawn_error(&error,&path.to_string_lossy())))?;
     let text=std::str::from_utf8(&raw).map_err(|error|format!("peers.json ilegível: {error}"))?;
-    let mut data=RequestValue(codec::loads(text).ok_or_else(||format!("peers.json ilegível: {}",json_diagnostic(text)))?);
+    let mut data=ValueGuard(codec::loads(text).ok_or_else(||format!("peers.json ilegível: {}",json_diagnostic(text)))?);
     let entry=data.0.as_object_mut().and_then(|book|book.get_mut(id)).and_then(Value::as_object_mut)
         .ok_or_else(||format!("servidor '{id}' não está no peers.json"))?;
     if let Some(previous)=entry.insert("enabled".into(),json!(on)){codec::discard(previous);}
@@ -26,7 +26,7 @@ pub(super) fn toggle(panel:&Panel,id:&str,on:bool)->Result<(),String>{
 }
 fn json_diagnostic(text:&str)->String{
     let Err((_,detail))=crate::orchestration::body::parse(text.as_bytes()) else{return "JSON inválido".into()};
-    let detail=RequestValue(detail);let error=&detail["detail"][0];
+    let detail=ValueGuard(detail);let error=&detail["detail"][0];
     let Some(position)=error["loc"][1].as_u64() else{return "JSON inválido".into()};
     let position=position as usize;let before=text.chars().take(position).collect::<String>();
     let line=before.chars().filter(|character|*character=='\n').count()+1;

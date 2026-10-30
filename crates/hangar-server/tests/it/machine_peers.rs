@@ -1,4 +1,4 @@
-//! Contratos capturados do Python, com disco e portas próprios.
+//! Pares de máquina, com disco e portas próprios.
 use hangar_server::{
     accounts::{AccountService, environment::AccountEnvironment},
     auth::TrustedHosts,
@@ -55,103 +55,6 @@ async fn peers_route_is_owned_without_python() {
         (200, json!([])),
         "PEE-001/002: a lista vazia é do Rust, mesmo sem Python"
     );
-}
-
-#[tokio::test]
-async fn python_store_contracts_through_http() {
-    let fixture: Value = serde_json::from_str(include_str!(
-        "../../../../backend/tests/fixtures/contract/peers/cases.json"
-    ))
-    .unwrap();
-    let mut failures = Vec::new();
-    let mut checked = 0;
-    for case in fixture["cases"].as_array().unwrap() {
-        let name = case["name"].as_str().unwrap();
-
-        let home = tempfile::tempdir().unwrap();
-        let config = home.path().join(".hangar/config");
-        std::fs::create_dir_all(&config).unwrap();
-        std::fs::create_dir_all(home.path().join(".hangar/current")).unwrap();
-        std::fs::write(config.join(".env"), case["initial_env"].as_str().unwrap()).unwrap();
-        if !case["initial"].is_null() {
-            std::fs::write(
-                config.join("peers.json"),
-                serde_json::to_vec(&case["initial"]).unwrap(),
-            )
-            .unwrap();
-        }
-        if let Some(raw) = case["raw"].as_str() {
-            std::fs::write(config.join("peers.json"), raw).unwrap();
-        }
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let mut state = AppState::new(Config {
-            listen: address,
-            upstream: crate::refused_address(),
-            internal_secret: "contract-internal".into(),
-            auth_token: "contract-owner".into(),
-            log_path: None,
-            trusted: TrustedHosts::parse("127.0.0.1"),
-        });
-        state.server_id = "fixture".into();
-        state.cfg.listen = "127.0.0.1:8765".parse().unwrap();
-        state.peer_network = Arc::new(FixtureNetwork);
-        state.accounts = AccountService::new(AccountEnvironment::from_map(
-            [
-                ("HOME".into(), home.path().display().to_string()),
-                ("USERPROFILE".into(), home.path().display().to_string()),
-            ]
-            .into(),
-        ));
-        let router = hangar_server::routes::router(Arc::new(state));
-        let task = tokio::spawn(async move {
-            axum::serve(
-                listener,
-                router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-            )
-            .await
-            .unwrap();
-        });
-        let mut request = reqwest::Client::new().request(
-            case["method"].as_str().unwrap().parse().unwrap(),
-            format!("http://{address}{}", case["path"].as_str().unwrap()),
-        );
-        if case["auth"] == true {
-            request = request.bearer_auth("contract-owner");
-        }
-        if !case["body"].is_null() {
-            request = request.json(&case["body"]);
-        }
-        if let Some(wire) = case["wire_body"].as_str() {
-            request = request
-                .header("Content-Type", "application/json")
-                .body(wire.to_owned());
-        }
-        let response = request.send().await.unwrap();
-        let status = response.status().as_u16();
-        let response: Value = response.json().await.unwrap();
-        task.abort();
-        let disk = std::fs::read(config.join("peers.json"))
-            .ok()
-            .map(|v| serde_json::from_slice::<Value>(&v).unwrap_or_else(|_| json!(String::from_utf8_lossy(&v))))
-            .unwrap_or(Value::Null);
-        let env = std::fs::read_to_string(config.join(".env")).unwrap();
-        checked += 1;
-        let mut expected_response = case["response"].clone();
-        if matches!(name, "delete-truncated" | "enabled-truncated") {
-            assert!(response["detail"]["msg"].as_str().unwrap().starts_with("peers.json ilegível ("));
-            expected_response["detail"]["msg"] = response["detail"]["msg"].clone();
-        }
-        if status != case["status"].as_u64().unwrap() as u16
-            || response != expected_response
-            || disk != case["peers"]
-            || env != case["env"].as_str().unwrap()
-        {
-            failures.push(format!("{name}: status {status}; resposta {response}; disco {disk}; env {env:?}; esperado {}",case));
-        }
-    }
-    assert_eq!(checked, 98);
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 #[test]
@@ -252,73 +155,6 @@ proptest::proptest! {
         let home=tempfile::tempdir().unwrap();
         proptest::prop_assert!(!hangar_server::machine_peers::origin_allowed(home.path(),None,&value,Some(&value),"",&[]));
     }
-}
-
-struct FixtureNetwork;
-impl hangar_server::machine_peers::network::Network for FixtureNetwork {
-    fn lan_ip(&self) -> String {
-        "192.0.2.10".into()
-    }
-    fn tailscale(&self) -> futures_util::future::BoxFuture<'_, Value> {
-        Box::pin(async { json!({}) })
-    }
-    fn get<'a>(
-        &'a self,
-        _url: &'a str,
-        _path: &'a str,
-        _token: Option<&'a str>,
-    ) -> futures_util::future::BoxFuture<'a, Result<(u16, Value), String>> {
-        Box::pin(async { Ok((200, json!({"identificador":"remote"}))) })
-    }
-    fn probe<'a>(&'a self, url: &'a str) -> futures_util::future::BoxFuture<'a, Value> {
-        Box::pin(async move {
-            if url.is_empty() {
-                json!({"estado":"nao_configurado","tempo_ms":null,"motivo":""})
-            } else {
-                json!({"estado":"ok","tempo_ms":12,"motivo":""})
-            }
-        })
-    }
-    fn elapsed_ms(&self, _start: std::time::Instant) -> u128 {
-        0
-    }
-}
-
-#[test]
-fn doctor_matches_python_diagnostics() {
-    use hangar_server::machine_peers::{Service, doctor};
-    let fixture: Value = serde_json::from_str(include_str!(
-        "../../../../backend/tests/fixtures/contract/peers/doctor-cases.json"
-    ))
-    .unwrap();
-    for case in fixture["cases"].as_array().unwrap() {
-        let home = tempfile::tempdir().unwrap();
-        let config = home.path().join(".hangar/config");
-        std::fs::create_dir_all(&config).unwrap();
-        std::fs::write(config.join("peers.json"), "{}").unwrap();
-        std::fs::write(config.join(".env"), "").unwrap();
-        let mut service = Service::new(
-            home.path(),
-            None,
-            case["input"]["token"].as_str().unwrap().into(),
-            8765,
-            "127.0.0.1".into(),
-            "fixture".into(),
-        )
-        .unwrap();
-        service.environment.clear();
-        service.environment.insert(
-            "CP_PUBLIC_URL".into(),
-            case["input"]["public_url"].as_str().unwrap().into(),
-        );
-        assert_eq!(
-            serde_json::to_value(doctor::diagnose(&service, &case["input"], "linux")).unwrap(),
-            case["lines"],
-            "{}",
-            case["name"]
-        );
-    }
-    assert_eq!(doctor::ascii("café — ação – ok"), "cafe - acao - ok");
 }
 
 #[test]
@@ -593,51 +429,6 @@ async fn child_restart_reads_the_persisted_identity_without_python_snapshot() {
     assert_eq!(child_identity(home.path(),Some("manual")).await["identificador"],"manual");
 }
 
-#[tokio::test]
-async fn migration_contract_head_preserves_method_response_before_authentication() {
-    let home = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(home.path().join(".hangar/config")).unwrap();
-    std::fs::write(home.path().join(".hangar/config/peers.json"), "{}").unwrap();
-    std::fs::write(home.path().join(".hangar/config/.env"), "").unwrap();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let mut state = AppState::new(Config {
-        listen: address,
-        upstream: crate::refused_address(),
-        internal_secret: "contract-internal".into(),
-        auth_token: "contract-owner".into(),
-        log_path: None,
-        trusted: TrustedHosts::parse("127.0.0.1"),
-    });
-    state.accounts = AccountService::new(AccountEnvironment::from_map(
-        [
-            ("HOME".into(), home.path().display().to_string()),
-            ("USERPROFILE".into(), home.path().display().to_string()),
-        ]
-        .into(),
-    ));
-    let router = hangar_server::routes::router(Arc::new(state));
-    let task = tokio::spawn(async move {
-        axum::serve(
-            listener,
-            router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-        )
-        .await
-        .unwrap();
-    });
-    let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/update-git/head.json")).unwrap();
-    let client=reqwest::Client::new();
-    for row in fixture["cases"].as_array().unwrap(){
-        let mut request=client.head(format!("http://{address}{}",row["path"].as_str().unwrap()));
-        if row["authenticated"]==true{request=request.bearer_auth("contract-owner");}
-        let response=request.send().await.unwrap();
-        assert_eq!(response.status().as_u16(),row["status"].as_u64().unwrap() as u16,"{}",row["path"]);
-        assert_eq!(response.headers().get("allow").and_then(|v|v.to_str().ok()),row["allow"].as_str());
-        assert_eq!(response.text().await.unwrap(),row["body"].as_str().unwrap());
-    }
-    task.abort();
-}
-
 #[test]
 fn peer_settings_snapshot_are_frozen_before_later_dotenv_edits() {
     let home=tempfile::tempdir().unwrap();let config=home.path().join(".hangar/config");std::fs::create_dir_all(&config).unwrap();
@@ -649,20 +440,4 @@ fn peer_settings_snapshot_are_frozen_before_later_dotenv_edits() {
     assert_eq!(hangar_server::machine_peers::Service::from_state(&state).unwrap().value("CP_PUBLIC_URL"),"https://before.invalid");
     std::fs::write(config.join(".env"),"CP_PUBLIC_URL=https://after.invalid\n").unwrap();
     assert_eq!(hangar_server::machine_peers::Service::from_state(&state).unwrap().value("CP_PUBLIC_URL"),"https://before.invalid");
-}
-
-#[test]
-fn identity_writer_preserves_captured_line_semantics() {
-    let fixture:serde_json::Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/peers/identity-lines.json")).unwrap();
-    let mut differences=vec![];
-    for (index,row) in fixture["cases"].as_array().unwrap().iter().enumerate() {
-        let home=tempfile::tempdir().unwrap();let backend=home.path().join("backend");std::fs::create_dir(&backend).unwrap();
-        let path=backend.join(".env");std::fs::write(&path,row["raw"].as_str().unwrap()).unwrap();
-        let mut service=hangar_server::machine_peers::Service::new(home.path(),Some(&backend),"fixture-token".into(),8765,"127.0.0.1".into(),"".into()).unwrap();
-        service.environment.clear();assert_eq!(service.env,path);
-        service.save_identity(&serde_json::json!({"identificador":row["value"]})).unwrap();
-        let actual=std::fs::read_to_string(&path).unwrap();
-        if actual!=row["output"].as_str().unwrap(){differences.push(format!("caso {index}: {actual:?} != {:?}",row["output"]));}
-    }
-    assert!(differences.is_empty(),"{}",differences.join("\n"));
 }

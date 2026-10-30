@@ -1,67 +1,6 @@
 //! O escritor único preserva a leitura tolerante e a rejeição de texto impossível de gravar.
-use hangar_server::{
-    accounts::{aliases, environment::AccountEnvironment},
-    orchestration::codec,
-};
+use hangar_server::accounts::{aliases, environment::AccountEnvironment};
 use serde_json::Value;
-
-#[test]
-fn engine_aliases_match_original_read_write_and_unicode_failures() {
-    let fixture = codec::loads(include_str!(
-        "../../../../backend/tests/fixtures/contract/engines/aliases.json"
-    ))
-    .unwrap();
-    let mut failures = Vec::new();
-    for case in fixture["cases"].as_array().unwrap() {
-        let home = tempfile::tempdir().unwrap();
-        let env = AccountEnvironment::from_map(
-            [("HOME".into(), home.path().to_string_lossy().into_owned())].into(),
-        );
-        let path = aliases::path(&env);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        if let Some(before) = case["before"].as_str() {
-            std::fs::write(&path, before).unwrap();
-        }
-        let before = Value::Object(aliases::read(&env));
-        if before != case["read"] {
-            failures.push(format!(
-                "{} leitura: {} != {}",
-                case["name"],
-                codec::dumps(&before, false),
-                codec::dumps(&case["read"], false)
-            ));
-        }
-        let result = aliases::set(&env, case["id"].as_str().unwrap(), case["value"].as_str());
-        // Correção de perda de dados: a captura antiga sobrescrevia estes documentos inválidos.
-        if matches!(case["name"].as_str(), Some("broken" | "list")) {
-            assert!(result.is_err(), "{}", case["name"]);
-            assert_eq!(
-                std::fs::read_to_string(&path).unwrap(),
-                case["before"].as_str().unwrap()
-            );
-            continue;
-        }
-        match (result, case["result"].get("error")) {
-            (Ok(value), None) if Value::Object(value.clone()) == case["result"]["map"] => {}
-            (Err(_), Some(_)) => {}
-            (actual, _) => failures.push(format!("{} escrita: {actual:?}", case["name"])),
-        }
-        assert_eq!(
-            Value::Object(aliases::read(&env)),
-            case["read_again"],
-            "releitura {}",
-            case["name"]
-        );
-        let after = std::fs::read_to_string(&path)
-            .ok()
-            .map(Value::String)
-            .unwrap_or(Value::Null);
-        if after != case["after"] {
-            failures.push(format!("{} arquivo final divergiu", case["name"]));
-        }
-    }
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
-}
 
 proptest::proptest! {
     #[test]

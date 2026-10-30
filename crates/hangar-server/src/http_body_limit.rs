@@ -1,5 +1,5 @@
 //! Limite do corpo nas rotas migradas, sem consumir pedidos recusados pela autenticação.
-use axum::{body::{Body,Bytes},extract::Request,http::{HeaderMap,StatusCode},middleware::Next,response::Response};
+use axum::{body::{Body,Bytes},http::{HeaderMap,StatusCode},response::Response};
 pub const MAX_BYTES:usize=100*1024*1024;
 pub fn rejected()->Response{
     Response::builder().status(StatusCode::PAYLOAD_TOO_LARGE).header("content-type","text/plain; charset=utf-8").body(Body::from_stream(futures_util::stream::once(async{Ok::<_,std::convert::Infallible>(Bytes::from_static(b"request body too large"))}))).unwrap()
@@ -14,8 +14,4 @@ pub fn is_limit(error:&axum::Error)->bool{
     let mut current:Option<&(dyn std::error::Error+'static)>=Some(error);
     while let Some(error)=current{if error.is::<http_body_util::LengthLimitError>(){return true;}current=error.source();}
     false
-}
-pub async fn layer(request:Request,next:Next)->Response{
-    if let Some(response)=precheck(request.headers()){return response;}
-    next.run(request).await
 }

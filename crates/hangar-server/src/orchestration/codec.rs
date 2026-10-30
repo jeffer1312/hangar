@@ -107,6 +107,19 @@ fn restore_markers(mut raw: String, ascii: bool) -> String {
     out.push_str(rest);
     out
 }
+/// Árvore externa pode exceder a pilha: descarta sem recursão ao sair de escopo.
+pub(crate) struct ValueGuard(pub Value);
+impl std::ops::Deref for ValueGuard {
+    type Target = Value;
+    fn deref(&self) -> &Value { &self.0 }
+}
+impl std::ops::DerefMut for ValueGuard {
+    fn deref_mut(&mut self) -> &mut Value { &mut self.0 }
+}
+impl Drop for ValueGuard {
+    fn drop(&mut self) { discard(std::mem::take(&mut self.0)); }
+}
+
 pub fn response(status: axum::http::StatusCode, value: Value) -> axum::response::Response {
     use axum::response::IntoResponse;
     let body = dumps(&value, false);

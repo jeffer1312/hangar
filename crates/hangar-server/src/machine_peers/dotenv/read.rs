@@ -24,7 +24,7 @@ fn consume(regex: &Regex, raw: &str, at: &mut usize) {
         *at += m.end();
     }
 }
-fn end_line(raw: &str, mut at: usize) -> usize {
+pub(super) fn end_line(raw: &str, mut at: usize) -> usize {
     while at < raw.len() && !matches!(raw.as_bytes()[at], b'\r' | b'\n') {
         at += 1;
     }

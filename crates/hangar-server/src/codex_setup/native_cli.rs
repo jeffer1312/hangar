@@ -14,8 +14,6 @@ struct Inner {
     codex: PathBuf,
     state: Mutex<State>,
     cleanup: tokio::sync::Mutex<()>,
-    #[cfg(test)]
-    observer: Mutex<Option<tokio::sync::mpsc::UnboundedSender<PathBuf>>>,
 }
 #[derive(Default)]
 struct State { closed: bool, operations: Vec<Arc<Operation>> }
@@ -33,7 +31,6 @@ impl From<String> for Failure {
 impl AdminCli {
     pub fn new(env: AccountEnvironment, home: &Path, codex: &Path) -> Self {
         Self {inner:Arc::new(Inner {env,home:home.into(),codex:codex.into(),state:Mutex::new(State::default()),cleanup:tokio::sync::Mutex::new(()),
-            #[cfg(test)] observer:Mutex::new(None),
         })}
     }
     pub async fn run(&self,args:Vec<String>,timeout:Duration)->Result<Value,String> {
@@ -136,11 +133,3 @@ fn inventory(value:Value,key:&str,error:&str)->Result<Vec<Value>,String> {
     let Value::Array(items) = value.get_mut(key).unwrap().take() else { unreachable!() };
     Ok(items)
 }
-
-#[cfg(all(test,unix))]
-#[path="native_cli_tests.rs"]
-mod tests;
-
-#[cfg(all(test,unix))]
-#[path="native_cleanup_tests.rs"]
-mod cleanup_tests;

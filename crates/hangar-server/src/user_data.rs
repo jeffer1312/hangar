@@ -37,6 +37,21 @@ pub fn env_value(home: &Path, backend: Option<&Path>, key: &str) -> Result<Optio
         .map(|v| v.split(" #").next().unwrap_or(v).trim().trim_matches(['"', '\'']).to_owned()).last())
 }
 
+/// O `.env` cru dos dados do usuário; ausente vale vazio e `None` é a falta da pasta de dados.
+pub fn read_env_raw(home: &Path, backend: Option<&Path>) -> Result<Option<String>, String> {
+    let Some(env) = path(home, backend, ".env").map_err(|e| e.to_string())? else { return Ok(None) };
+    read_env_at(&env).map(Some)
+}
+
+/// O `.env` cru de um caminho já resolvido, lido como numa troca atômica em andamento.
+pub fn read_env_at(env: &Path) -> Result<String, String> {
+    match crate::runtime::queue::read_replaced_to_string(env) {
+        Ok(raw) => Ok(raw),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 /// Uma porta (`CP_PORT`, `CP_FRONT_PORT`) do `.env`; vazia é ausente, e valor que não é porta é erro.
 pub fn env_port(home: &Path, backend: Option<&Path>, key: &str) -> Result<Option<u16>, String> {
     env_value(home, backend, key)?.filter(|v| !v.is_empty())

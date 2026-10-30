@@ -2,18 +2,8 @@
 use super::{Service,releases::Source,switches};
 use serde_json::Value;
 use std::time::Duration;
-pub const DIST_SHA_URL:&str="https://github.com/jeffer1312/hangar/releases/download/dist-latest/frontend-dist.sha";
-pub trait AutomaticSource {
-    fn target(&self)->Result<String,String>;
-    fn preflight(&self)->Result<Value,String>;
-    fn switches(&self,pre:&Value)->bool;
-    fn state(&self)->Value;
-    fn pinned(&self)->Option<String>;
-    fn download(&self)->Result<Vec<u8>,String>;
-    fn target_head(&self)->Result<(i32,String),String>;
-    fn invalid_timestamp(&self,value:&Value);
-}
-pub fn reason(source:&impl AutomaticSource,now:chrono::DateTime<chrono::FixedOffset>)->Result<Option<String>,String>{
+const DIST_SHA_URL:&str="https://github.com/jeffer1312/hangar/releases/download/dist-latest/frontend-dist.sha";
+pub fn reason(source:&Checkout<'_>,now:chrono::DateTime<chrono::FixedOffset>)->Result<Option<String>,String>{
     let skip=|why:&str|Ok(Some(why.to_owned()));
     if source.target()?!="main"{return skip("branch de teste configurada (CP_UPDATE_BRANCH)");}
     let pre=source.preflight()?;
@@ -25,7 +15,7 @@ pub fn reason(source:&impl AutomaticSource,now:chrono::DateTime<chrono::FixedOff
     if pre["ahead_incerto"]==true{return skip("nao deu pra contar os commits locais");}
     if pre["behind"].as_u64().unwrap_or(0)==0{return skip("em dia");}
     if pre["sujo"].as_u64().unwrap_or(0)>0{return skip("arvore suja (trabalho nao commitado)");}
-    let owned=OwnedState(source.state());
+    let owned=crate::orchestration::codec::ValueGuard(source.state());
     let state=&owned.0;
     if state["fase"]=="rodando"{return skip("atualizacao ja rodando");}
     if state["ok"]==false {
@@ -42,7 +32,7 @@ pub fn reason(source:&impl AutomaticSource,now:chrono::DateTime<chrono::FixedOff
     Ok(None)
 }
 pub struct Checkout<'a>{pub service:&'a Service,pub source:&'a dyn Source,pub platform:Option<&'a str>}
-impl AutomaticSource for Checkout<'_>{
+impl Checkout<'_>{
     fn target(&self)->Result<String,String>{self.service.target()}
     fn preflight(&self)->Result<Value,String>{self.service.preflight()}
     fn switches(&self,pre:&Value)->bool{switches(pre["branch"].as_str().unwrap_or(""),pre["alvo"].as_str().unwrap_or("main"))}
@@ -77,5 +67,3 @@ pub fn invalid_timestamp_notice(value:&Value)->String{
     format!("auto-update: ts invalido no estado da atualizacao ({})",timestamp_repr(value))
 }
 
-struct OwnedState(Value);
-impl Drop for OwnedState {fn drop(&mut self){crate::orchestration::codec::discard(std::mem::take(&mut self.0));}}

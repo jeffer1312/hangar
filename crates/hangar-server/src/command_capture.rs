@@ -74,7 +74,7 @@ async fn capture_inner(
 
 /// Limite por canal; a captura continua drenando para o filho conseguir encerrar.
 pub const MAX_CAPTURE_BYTES: usize = 4 * 1024 * 1024;
-async fn drain_bounded(
+pub(crate) async fn drain_bounded(
     reader: &mut (impl tokio::io::AsyncRead + Unpin),
     output: &mut Vec<u8>,
     limit: usize,

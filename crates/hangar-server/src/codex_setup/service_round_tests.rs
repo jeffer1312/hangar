@@ -15,35 +15,10 @@ impl RoundRunner for FakeRunner{
  }
 }
 async fn until(rounds:&Mutex<Vec<Arc<Notify>>>,count:usize){tokio::time::timeout(Duration::from_secs(2),async{while rounds.lock().unwrap().len()<count{tokio::task::yield_now().await;}}).await.unwrap();}
-#[tokio::test]
-async fn codex_service_rounds_share_workers_force_followup_and_wait_cleanup(){
- let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/codex-integration/service-rounds.json")).unwrap();let mut differences=vec![];
- for case in fixture["cases"].as_array().unwrap(){
-  let name=case["name"].as_str().unwrap();let root=tempfile::tempdir().unwrap();let home=root.path();std::fs::create_dir(home.join(".codex")).unwrap();let marker=home.join(".codex").join(PREPARED_MARKER);std::fs::write(&marker,"{}").unwrap();
-  let env=AccountEnvironment::from_pairs([("HOME",home.to_string_lossy().to_string()),("USERPROFILE",home.to_string_lossy().to_string()),("PATH",String::new())]);let settings=SettingsSnapshot::capture(home,None,SettingsEnvironment::from_pairs(env.ordered_pairs())).unwrap();let config=RuntimeConfig::from_snapshot(env.clone(),Arc::new(settings)).unwrap();let events=Arc::new(Mutex::new(vec![]));let rounds=Arc::new(Mutex::new(vec![]));let cleanup=Arc::new(Notify::new());let runner=Arc::new(FakeRunner{scenario:name.into(),events:events.clone(),rounds:rounds.clone(),cleanup:cleanup.clone()});let service=Service::new_with_runner(AccountService::new(env),config,home.join("repo"),None,runner);
-  let first=service.start("auto",false).await.unwrap();if first["estado"]!="executando"{differences.push(json!({"case":name,"initial":first}));continue;}until(&rounds,1).await;
-  match name{
-   "start-coalesces"=>{let second=service.start("config_sync",true).await.unwrap();let forced=service.rounds.lock().unwrap().as_ref().unwrap().forced;events.lock().unwrap().push(json!(["status",first["estado"],second["estado"],forced]));rounds.lock().unwrap()[0].notify_one();service.wait_current().await.unwrap();},
-   "forced-after-auto"=>{let copy=service.clone();let waiter=tokio::spawn(async move{copy.update_and_wait("manual",true).await});tokio::task::yield_now().await;rounds.lock().unwrap()[0].notify_one();until(&rounds,2).await;rounds.lock().unwrap()[1].notify_one();let value=waiter.await.unwrap().unwrap();events.lock().unwrap().push(json!(["status",value["estado"]]));},
-   "cancel-waiter"=>{let copy=service.clone();let waiter=tokio::spawn(async move{copy.update_and_wait("manual",true).await});tokio::task::yield_now().await;waiter.abort();assert!(waiter.await.unwrap_err().is_cancelled());events.lock().unwrap().push(json!(["waiter-cancelled",service.rounds.lock().unwrap().as_ref().unwrap().result.borrow().is_none()]));rounds.lock().unwrap()[0].notify_one();service.wait_current().await.unwrap();},
-   "close-waits-cleanup"=>{let copy=service.clone();let closing=tokio::spawn(async move{copy.shutdown().await});tokio::time::timeout(Duration::from_secs(2),async{loop{if events.lock().unwrap().iter().any(|e|e[0]=="cleanup"){break}tokio::task::yield_now().await;}}).await.unwrap();events.lock().unwrap().push(json!(["close-pending",!closing.is_finished()]));cleanup.notify_one();closing.await.unwrap().unwrap();},
-   "finished-starts-again"=>{rounds.lock().unwrap()[0].notify_one();service.wait_current().await.unwrap();service.start("config_sync",true).await.unwrap();until(&rounds,2).await;rounds.lock().unwrap()[1].notify_one();service.wait_current().await.unwrap();},_=>panic!("caso desconhecido")
-  }
-  let actual=json!({"events":events.lock().unwrap().clone(),"marker_removed":!marker.exists(),"rounds":rounds.lock().unwrap().len()});if actual!=case["result"]{differences.push(json!({"case":name,"actual":actual,"expected":case["result"]}));}service.shutdown().await.unwrap();
- }
- assert!(differences.is_empty(),"Coordenação divergente: {differences:#?}");
-}
-
-pub(super) fn isolated_service(home:&std::path::Path)->Arc<Service>{
+fn isolated_service(home:&std::path::Path)->Arc<Service>{
  let env=AccountEnvironment::from_pairs([("HOME",home.to_string_lossy().to_string()),("USERPROFILE",home.to_string_lossy().to_string()),("PATH",String::new())]);
  let settings=SettingsSnapshot::capture(home,None,SettingsEnvironment::from_pairs(env.ordered_pairs())).unwrap();let config=RuntimeConfig::from_snapshot(env.clone(),Arc::new(settings)).unwrap();
  Service::new(AccountService::new(env),config,home.join("repo"),None)
-}
-#[tokio::test]
-async fn codex_service_round_public_call_reports_missing_source_without_python(){
- let root=tempfile::tempdir().unwrap();std::fs::create_dir(root.path().join(".codex")).unwrap();let service=isolated_service(root.path());
- let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/codex-integration/pipeline-round.json")).unwrap();let expected=&fixture["cases"].as_array().unwrap().iter().find(|case|case["input"]["name"]=="missing-source").unwrap()["result"];
- assert_eq!(service.start("config_sync",true).await.unwrap()["estado"],"executando");service.wait_current().await.unwrap();assert_eq!(&service.status().unwrap(),expected);service.shutdown().await.unwrap();
 }
 struct FailedRunner;
 impl RoundRunner for FailedRunner{

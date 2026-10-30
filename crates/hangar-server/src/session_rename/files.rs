@@ -11,7 +11,8 @@ use crate::runtime::queue::{atomic_write, read_replaced, replace};
 
 fn exists(path: &Path) -> io::Result<bool> { path.try_exists() }
 
-fn lock_file(path: &Path) -> io::Result<File> {
+/// Trava bloqueante de arquivo, criando a pasta dela.
+pub(crate) fn lock_file(path: &Path) -> io::Result<File> {
     if let Some(dir) = path.parent() { std::fs::create_dir_all(dir)?; }
     let file = std::fs::OpenOptions::new().read(true).append(true).create(true).open(path)?;
     file.lock()?;

@@ -1,6 +1,6 @@
 //! Catálogo do motor: cache para leitura, consulta nova antes de uma troca.
 use super::{probe, proxy, store};
-use crate::{accounts::AccountService, provider_models::ModelError};
+use crate::{accounts::AccountService, orchestration::truthy, provider_models::ModelError};
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
@@ -12,21 +12,37 @@ type Cache = HashMap<(std::path::PathBuf, String), (Instant, Vec<Value>)>;
 static CACHE: LazyLock<Mutex<Cache>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 pub fn supports_fast(service: &AccountService, engine: &str, model: Option<&str>) -> bool {
-    let entries = store::state(&service.env).0;
-    let Some(saved) = entries.get(engine) else {
+    allows_fast(FastSupport::read(service, engine).as_ref(), model)
+}
+/// O motor salvo e o "CLIProxy local" valem para todos os modelos: lidos uma vez por consulta.
+struct FastSupport {
+    saved_model: String,
+    local: bool,
+}
+impl FastSupport {
+    fn read(service: &AccountService, engine: &str) -> Option<Self> {
+        let entries = store::state(&service.env).0;
+        let saved = entries.get(engine)?;
+        Some(Self {
+            saved_model: saved["model"].as_str().unwrap_or("").to_owned(),
+            local: proxy::is_local(&service.env, saved["base_url"].as_str().unwrap_or("")).unwrap_or(false),
+        })
+    }
+}
+fn allows_fast(support: Option<&FastSupport>, model: Option<&str>) -> bool {
+    let Some(support) = support else {
         return false;
     };
     let model = model
         .filter(|s| !s.is_empty())
-        .or_else(|| saved["model"].as_str())
-        .unwrap_or("")
+        .unwrap_or(&support.saved_model)
         .rsplit('/')
         .next()
         .unwrap_or("");
     model
         .strip_prefix("gpt-")
         .is_some_and(|s| s.starts_with(|c: char| c.is_ascii_digit()))
-        && proxy::is_local(&service.env, saved["base_url"].as_str().unwrap_or("")).unwrap_or(false)
+        && support.local
 }
 pub fn invalidate(env: &crate::accounts::environment::AccountEnvironment, engine: &str) {
     CACHE
@@ -45,7 +61,7 @@ pub async fn models(
         let entries = store::state(&service.env).0;
         let saved = entries
             .get(engine)
-            .filter(|v| probe::truthy(v))
+            .filter(|v| truthy(v))
             .ok_or_else(|| {
                 ModelError::coded(400, "erro_motor_invalido", "motor inválido", json!({}))
             })?;
@@ -79,7 +95,7 @@ pub async fn models(
         let entries = store::state(&service.env).0;
         let saved = entries
             .get(engine)
-            .filter(|v| probe::truthy(v))
+            .filter(|v| truthy(v))
             .ok_or_else(|| {
                 ModelError::coded(
                     409,
@@ -138,5 +154,6 @@ pub async fn models(
         .collect())
 }
 pub fn picker(service: &AccountService, engine: &str, models: Vec<Value>) -> Vec<Value> {
-    models.into_iter().map(|model|json!({"id":model["id"],"context_length":model["context_length"],"vision":model["vision"],"supports_fast":supports_fast(service,engine,model["id"].as_str())})).collect()
+    let fast = FastSupport::read(service, engine);
+    models.into_iter().map(|model|json!({"id":model["id"],"context_length":model["context_length"],"vision":model["vision"],"supports_fast":allows_fast(fast.as_ref(),model["id"].as_str())})).collect()
 }

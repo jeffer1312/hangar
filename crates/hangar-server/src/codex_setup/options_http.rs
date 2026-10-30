@@ -8,7 +8,7 @@ use axum::{
 use serde_json::{Value, json};
 use std::{net::SocketAddr, sync::Arc};
 fn invalid(errors: Vec<Value>) -> Response {
-    crate::engines::body::json_error(StatusCode::UNPROCESSABLE_ENTITY, json!({"detail":errors}))
+    crate::http_cors::json_guarded(StatusCode::UNPROCESSABLE_ENTITY, json!({"detail":errors}))
 }
 fn validate(value: &Value) -> Result<bool, Response> {
     let issue = |kind: &str, field: Option<&str>, input: &Value, message: &str| {
@@ -90,18 +90,18 @@ pub async fn handle(state: Arc<AppState>, peer: SocketAddr, mut request: Request
             Err(error) if crate::http_body_limit::is_limit(&error) => {
                 return crate::http_body_limit::rejected();
             }
-            Err(_) => return crate::engines::body::internal_error(),
+            Err(_) => return crate::http_cors::internal_error(),
         };
         if !bytes.is_empty() {
             value = ValueGuard(if crate::http_body_input::is_json(request.headers()) {
                 match crate::orchestration::body::parse(&bytes) {
                     Ok(value) => value,
-                    Err((status, value)) => return crate::engines::body::json_error(status, value),
+                    Err((status, value)) => return crate::http_cors::json_guarded(status, value),
                 }
             } else {
                 match std::str::from_utf8(&bytes) {
                     Ok(value) => json!(value),
-                    Err(_) => return crate::engines::body::internal_error(),
+                    Err(_) => return crate::http_cors::internal_error(),
                 }
             });
         }
@@ -126,7 +126,7 @@ pub async fn handle(state: Arc<AppState>, peer: SocketAddr, mut request: Request
     };
     let config = match crate::config_sync::runtime::RuntimeConfig::from_state(&state) {
         Ok(config) => config,
-        Err(_) => return crate::engines::body::internal_error(),
+        Err(_) => return crate::http_cors::internal_error(),
     };
     let result = if let Some(enabled) = enabled {
         super::options::save(config, enabled).await
@@ -145,7 +145,7 @@ pub async fn handle(state: Arc<AppState>, peer: SocketAddr, mut request: Request
             json!({}),
         )
         .response(),
-        Err(_) => crate::engines::body::internal_error(),
+        Err(_) => crate::http_cors::internal_error(),
     }
 }
 #[cfg(test)]

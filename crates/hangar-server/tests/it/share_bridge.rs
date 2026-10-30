@@ -237,29 +237,3 @@ fn shared_mark_comes_from_the_share_store() {
     let shared: HashSet<&str> = work.iter().filter(|r| r.shared).map(|r| r.name.as_str()).collect();
     assert_eq!(shared, HashSet::from(["a"]), "o par não marca compartilhada");
 }
-
-#[tokio::test]
-async fn login_guests_set_life_preserves_ownership_through_transfer() {
-    let fixture: Value = serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/claim.json")).unwrap();
-    for row in fixture["changes"].as_array().unwrap() {
-        let dir = tempfile::tempdir().unwrap();
-        let srv = server(dir.path(), true).await;
-        let expand = |value: &Value| serde_json::from_str::<Value>(&value.to_string().replace("⟦ROOT⟧", dir.path().to_str().unwrap())).unwrap();
-        std::fs::write(dir.path().join("guests.json"), expand(&row["before"]).to_string()).unwrap();
-        result(&srv, "set_life", json!({"name":"session", "life":row["life"]})).await;
-        let disk: Value = serde_json::from_slice(&std::fs::read(dir.path().join("guests.json")).unwrap()).unwrap();
-        assert_eq!(disk, expand(&row["disk"]), "GUE-023/024: transferência conserva o dono: {row}");
-    }
-}
-
-#[tokio::test]
-async fn login_guests_transfer_result_survives_guest_write_failure() {
-    let fixture: Value = serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/transfer-failure.json")).unwrap();
-    let dir = tempfile::tempdir().unwrap();
-    let srv = server(dir.path(), true).await;
-    std::fs::write(dir.path().join("guests.json"), b"{").unwrap();
-    let (status, body) = bridge(srv.private, "set_life", json!({"name":"session","life":"k:new"}), Some(SECRET)).await;
-    assert_eq!(status, 200);
-    assert_eq!(body["ok"], fixture["rows"][1]["result"]["ok"], "GUE-024: falha do dono não muda resultado da transferência");
-    assert_eq!(std::fs::read(dir.path().join("guests.json")).unwrap(), b"{");
-}

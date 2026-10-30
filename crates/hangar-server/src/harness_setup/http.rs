@@ -66,7 +66,7 @@ pub async fn serve(service: Service, installer: Arc<Installer>, request: Request
     if method == Method::GET && path == "/api/harness" {
         return match service.diagnose().await {
             Ok(value) => crate::session_write::json_response(StatusCode::OK, value),
-            Err(_) => crate::engines::body::internal_error(),
+            Err(_) => crate::http_cors::internal_error(),
         };
     }
     if method == Method::POST {
@@ -77,7 +77,7 @@ pub async fn serve(service: Service, installer: Arc<Installer>, request: Request
                         StatusCode::OK,
                         json!({"feito":done,"harnesses":cards}),
                     ),
-                    Err(_) => crate::engines::body::internal_error(),
+                    Err(_) => crate::http_cors::internal_error(),
                 },
                 Err(error) => coded(
                     error.status,
@@ -95,8 +95,8 @@ pub fn integration_path(path:&str)->bool{
     path=="/api/harness/codex/integracao"||path.starts_with("/api/harness/codex/integracao/")
 }
 pub async fn integration(state:&crate::routes::AppState,request:Request)->Response{
-    let service=match state.codex_setup_service(){Ok(service)=>service,Err(_)=>return crate::engines::body::internal_error()};
+    let service=match state.codex_setup_service(){Ok(service)=>service,Err(_)=>return crate::http_cors::internal_error()};
     let path=percent_encoding::percent_decode_str(request.uri().path()).decode_utf8_lossy();
     let result=if request.method()==Method::GET{service.status()}else if path.ends_with("/sessao"){service.session().await}else{service.start("manual",true).await};
-    match result{Ok(value)=>crate::orchestration::codec::response(if request.method()==Method::GET{StatusCode::OK}else{StatusCode::ACCEPTED},service.switches(value)),Err(_)=>crate::engines::body::internal_error()}
+    match result{Ok(value)=>crate::orchestration::codec::response(if request.method()==Method::GET{StatusCode::OK}else{StatusCode::ACCEPTED},service.switches(value)),Err(_)=>crate::http_cors::internal_error()}
 }

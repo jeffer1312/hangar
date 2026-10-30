@@ -23,18 +23,7 @@ use super::restart::Topology;
 use super::{Layout, Release};
 use crate::routes::{cors, gate, AppState};
 use crate::session_write::detail;
-pub(crate) fn json_response(status: StatusCode, body: Value) -> Response {
-    use crate::orchestration::codec;
-    if codec::contains_nonfinite(&body) || codec::contains_surrogate(&body) {
-        codec::discard(body);
-        let mut response = Response::builder().status(500)
-            .header("content-type", "text/plain; charset=utf-8")
-            .body(axum::body::Body::from("Internal Server Error")).unwrap();
-        response.extensions_mut().insert(crate::http_cors::UnhandledServerError);
-        return response;
-    }
-    codec::response(status, body)
-}
+use crate::http_cors::json_guarded_ascii;
 
 /// Como esta máquina roda o Hangar.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -247,7 +236,7 @@ pub async fn status(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     }.into();
     body["checkout"] = suggested.map(|p| p.display().to_string()).into();
     mark_pending_warning(&mut body, &home);
-    with_cors(req.headers(), json_response(StatusCode::OK, body))
+    with_cors(req.headers(), json_guarded_ascii(StatusCode::OK, body))
 }
 
 /// Aviso importante que a pessoa ainda não aceitou (a migração pendente, ou feita sem o aviso): a
@@ -273,8 +262,8 @@ async fn launch(st: &AppState, task: Task) -> Result<Started, StartError> {
 
 fn started(started: Result<Started, StartError>) -> Response {
     match started {
-        Ok(Started { pid, request_id: None }) => json_response(StatusCode::OK, json!({"ok": true, "pid": pid})),
-        Ok(Started { pid, request_id: Some(id) }) => json_response(StatusCode::OK, json!({"ok": true, "pid": pid, "request_id": id})),
+        Ok(Started { pid, request_id: None }) => json_guarded_ascii(StatusCode::OK, json!({"ok": true, "pid": pid})),
+        Ok(Started { pid, request_id: Some(id) }) => json_guarded_ascii(StatusCode::OK, json!({"ok": true, "pid": pid, "request_id": id})),
         Err(StartError::Busy) => busy(),
         Err(StartError::Launch(why)) => detail(StatusCode::INTERNAL_SERVER_ERROR, "erro_atualizacao_lancamento", &why, json!({})),
     }
@@ -338,7 +327,7 @@ fn channel_snapshot(layout: &Layout) -> Value {
 pub async fn channel_read(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     if !matches!(mode(&st.accounts.env.home), Mode::Package(_)) { return super::git_engine::http::serve(st, peer, req).await; }
     if let Err(response)=crate::routes::owner_gate(&st,peer,&req).await{return response;}
-    with_cors(req.headers(), json_response(StatusCode::OK, channel_snapshot(&Layout::new(&st.accounts.env.home))))
+    with_cors(req.headers(), json_guarded_ascii(StatusCode::OK, channel_snapshot(&Layout::new(&st.accounts.env.home))))
 }
 
 #[derive(serde::Deserialize)]
@@ -373,7 +362,7 @@ pub async fn channel_write(State(st): State<Arc<AppState>>, ConnectInfo(peer): C
         Ok(channel_snapshot(&layout))
     }).await.unwrap_or_else(|e| Err(Some(e.to_string())));
     let response = match written {
-        Ok(snapshot) => json_response(StatusCode::OK, snapshot),
+        Ok(snapshot) => json_guarded_ascii(StatusCode::OK, snapshot),
         Err(None) => detail(StatusCode::CONFLICT, "update_channel_busy", "Aguarde a atualização terminar antes de mudar o canal.", json!({})),
         Err(Some(why)) => detail(StatusCode::INTERNAL_SERVER_ERROR, "update_channel_write",
             "Não foi possível gravar o canal. O canal anterior continua valendo.", json!({"motivo": why})),
@@ -412,7 +401,7 @@ pub async fn accept(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     let migration = ids.iter().any(|id| id == super::migrate::STEP_ID);
     if !migration {
         return match super::accept(&layout, &ids) {
-            Ok(()) => with_cors(&headers, json_response(StatusCode::OK, json!({"ok": true, "started": false}))),
+            Ok(()) => with_cors(&headers, json_guarded_ascii(StatusCode::OK, json!({"ok": true, "started": false}))),
             Err(e) => write_failed("o aceite não foi gravado", e),
         };
     }
@@ -442,9 +431,9 @@ pub async fn accept(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     };
     if let Err(e) = super::accept(&layout, &ids) { return write_failed("o aceite não foi gravado", e); }
     let response = match task {
-        None => json_response(StatusCode::OK, json!({"ok": true, "started": false})),
+        None => json_guarded_ascii(StatusCode::OK, json!({"ok": true, "started": false})),
         Some(task) => match launch(&st, task).await {
-            Ok(Started { pid, .. }) => json_response(StatusCode::OK, json!({"ok": true, "started": true, "pid": pid})),
+            Ok(Started { pid, .. }) => json_guarded_ascii(StatusCode::OK, json!({"ok": true, "started": true, "pid": pid})),
             // Não subiu: o aviso volta, senão a escolha se perderia sem tela que a ofereça de novo.
             other => {
                 if let Err(e) = super::unaccept(&layout, &ids) { tracing::warn!("update: aceite não desfeito depois do lançamento que falhou: {e}"); }
@@ -488,7 +477,7 @@ pub async fn switch_dev_mode(State(st): State<Arc<AppState>>, ConnectInfo(peer):
     let response = match checked {
         Err(e) => detail(StatusCode::INTERNAL_SERVER_ERROR, "erro_dev_mode_falhou", &e.to_string(), json!({})),
         Ok(Err(failure)) => detail(StatusCode::CONFLICT, failure.code, &failure.message, json!({})),
-        Ok(Ok(super::dev_mode::Checked::Already(text))) => json_response(StatusCode::OK, json!({"ok": true, "nada_a_fazer": true, "detalhe": text})),
+        Ok(Ok(super::dev_mode::Checked::Already(text))) => json_guarded_ascii(StatusCode::OK, json!({"ok": true, "nada_a_fazer": true, "detalhe": text})),
         Ok(Ok(super::dev_mode::Checked::Switch { .. } | super::dev_mode::Checked::Download)) => started(launch(&st, Task::DevMode(request)).await),
     };
     with_cors(&headers, response)

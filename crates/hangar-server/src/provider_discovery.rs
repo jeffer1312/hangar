@@ -20,9 +20,6 @@ pub struct Discovery {
     probes: Mutex<BTreeMap<[u8; 32], Slot<(Instant, Providers)>>>,
 }
 static SHARED: LazyLock<Discovery> = LazyLock::new(Discovery::default);
-pub async fn login_path(env: &AccountEnvironment) -> String {
-    SHARED.login_path(env).await
-}
 pub async fn providers(env: &AccountEnvironment) -> Result<Providers, String> {
     SHARED.providers(env).await
 }
@@ -108,8 +105,7 @@ impl Discovery {
 }
 
 /// O parâmetro de plataforma permite conferir os candidatos Windows sem executar um CLI.
-#[doc(hidden)]
-pub fn scan(env: &AccountEnvironment, path: &str, windows: bool) -> Providers {
+fn scan(env: &AccountEnvironment, path: &str, windows: bool) -> Providers {
     let directories: Vec<_> = path
         .split(if windows { ';' } else { ':' })
         .filter(|dir| !dir.is_empty())

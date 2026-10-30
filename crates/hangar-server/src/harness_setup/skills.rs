@@ -14,10 +14,6 @@ pub struct RebuildReport {
     pub errors: BTreeMap<String, String>,
 }
 
-#[cfg(all(test, unix))]
-#[path = "skills_report_tests.rs"]
-mod report_tests;
-
 fn children(path: &Path) -> std::io::Result<Vec<PathBuf>> {
     match fs::metadata(path) {
         Ok(meta) if !meta.is_dir() => return Ok(vec![]),

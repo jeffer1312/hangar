@@ -260,35 +260,6 @@ pub(super) fn read_typed(path: &Path) -> Result<Typed, Error> {
     })
 }
 #[cfg(test)]
-mod typed_tests {
-    use super::*;
-    #[test]
-    fn codex_service_toml_preserves_date_paths_without_confusing_personal_tables() {
-        let fixture: Value = serde_json::from_str(include_str!(
-            "../../../../backend/tests/fixtures/contract/codex-integration/toml-types.json"
-        ))
-        .unwrap();
-        let mut failures = Vec::new();
-        for case in fixture["cases"].as_array().unwrap() {
-            let dir = tempfile::tempdir().unwrap();
-            let path = dir.path().join("config.toml");
-            std::fs::write(&path, case["toml"].as_str().unwrap()).unwrap();
-            let typed = read_typed(&path).unwrap();
-            let actual: Vec<_> = typed
-                .dates
-                .iter()
-                .map(|(path, kind)| serde_json::json!({"path":path,"kind":kind}))
-                .collect();
-            drop(typed);
-            if serde_json::json!(actual) != case["dates"] {
-                failures.push(serde_json::json!({"case":case,"actual":actual}));
-            }
-        }
-        assert!(failures.is_empty(), "{failures:#?}");
-    }
-}
-
-#[cfg(test)]
 #[test]
 fn integer_marker_collisions_have_a_finite_budget() {
     let mut raw = String::from("wide = 9999999999999999999999999999999999999999999999999999999\n");

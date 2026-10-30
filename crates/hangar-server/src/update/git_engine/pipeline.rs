@@ -1,11 +1,10 @@
 //! Sequência do checkout e compensação antes de publicar sucesso.
 use super::{
     Service,
-    releases::{self, Release, Source},
+    releases::{self, Source},
     tail,
 };
 use serde_json::{Value, json};
-pub type Preparer<'a> = dyn Fn(&Service, &str, bool, Option<&Release>, &(dyn Source + Sync), Option<&str>) -> Result<(), String> + 'a;
 fn panic_cause(payload: &(dyn std::any::Any + Send)) -> String {
     payload.downcast_ref::<String>().cloned()
         .or_else(|| payload.downcast_ref::<&str>().map(|text| (*text).to_owned()))
@@ -35,19 +34,7 @@ impl Service {
         if let Err(error)=self.state().try_write(json!({"fase":"pronto","ok":false,"erro":message,"voltou":false,"no_ar":up.unwrap_or_else(||self.up(port,5))})) {return super::super::StateSnapshot::failure(error);}
         self.state().read()
     }
-    pub fn rollback(
-        &self,
-        commit: &str,
-        message: &str,
-        topology: &str,
-        port: u16,
-        branch: &str,
-        source: &(dyn Source + Sync),
-        platform: Option<&str>,
-    ) -> super::super::StateSnapshot {
-        self.rollback_with_preparer(commit, message, topology, port, branch, source, platform, &|service, topology, dist, release, source, platform| service.prepare(topology, dist, release, source, platform))
-    }
-    fn rollback_with_preparer(&self, commit: &str, message: &str, topology: &str, port: u16, branch: &str, source: &(dyn Source + Sync), platform: Option<&str>, preparer: &Preparer<'_>) -> super::super::StateSnapshot {
+    fn rollback(&self, commit: &str, message: &str, topology: &str, port: u16, branch: &str, source: &(dyn Source + Sync), platform: Option<&str>) -> super::super::StateSnapshot {
         if let Err(error)=self.state().try_write(json!({"fase":"rodando","texto":"Voltando para a versão anterior"})) {return super::super::StateSnapshot::failure(error);}
         let result = (|| -> Result<(), String> {
             if !branch.is_empty()
@@ -85,7 +72,7 @@ impl Service {
         }
         if let Err(error) = self
             .restore_dist()
-            .and_then(|_| preparer(self, topology, false, None, source, platform))
+            .and_then(|_| self.prepare(topology, false, None, source, platform))
             .and_then(|_| self.restart_service(topology, port))
         {
             return self.failed(
@@ -103,13 +90,10 @@ impl Service {
         source: &(dyn Source + Sync),
         platform: Option<&str>,
     ) -> super::super::StateSnapshot {
-        self.execute_with_preparer(port, source, platform, &|service, topology, dist, release, source, platform| service.prepare(topology, dist, release, source, platform))
-    }
-    pub fn execute_with_preparer(&self, port: u16, source: &(dyn Source + Sync), platform: Option<&str>, preparer: &Preparer<'_>) -> super::super::StateSnapshot {
         let mut engine = self.clone();
         engine.writing = true;
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            engine.execute_inner(port, source, platform, preparer)
+            engine.execute_inner(port, source, platform)
         }));
         if let Err(error)=self.release_turn(){tracing::warn!(code="update_lock_unavailable",%error,"trava da atualização não removida");}
         match outcome {
@@ -126,7 +110,6 @@ impl Service {
         port: u16,
         source: &(dyn Source + Sync),
         platform: Option<&str>,
-        preparer: &Preparer<'_>,
     ) -> super::super::StateSnapshot {
         let backend = self
             .environment
@@ -236,7 +219,7 @@ impl Service {
             )
             .map_err(|e| e.to_string())?;
             self.step("instalar")?;
-            preparer(self, topology, true, release.as_ref(), source, platform)
+            self.prepare(topology, true, release.as_ref(), source, platform)
         })).unwrap_or_else(|payload| Err(panic_cause(payload.as_ref())));
         if let Err(mut error) = prepared {
             if !from.is_empty()
@@ -244,7 +227,7 @@ impl Service {
                     .git(&["rev-parse", "HEAD"], 30)
                     .is_ok_and(|v| v.stdout.trim() != from)
             {
-                return self.rollback_with_preparer(from, &error, topology, port, branch, source, platform, preparer);
+                return self.rollback(from, &error, topology, port, branch, source, platform);
             }
             let current = self
                 .git(&["rev-parse", "--abbrev-ref", "HEAD"], 30)
@@ -258,7 +241,7 @@ impl Service {
         let before = self.server_pid(topology, port);
         if let Err(error)=self.step("reiniciar") {return super::super::StateSnapshot::failure(error);}
         if let Err(error) = self.restart_service(topology, port) {
-            return self.rollback_with_preparer(
+            return self.rollback(
                 from,
                 &format!("o servidor nao reiniciou: {error}"),
                 topology,
@@ -266,12 +249,11 @@ impl Service {
                 branch,
                 source,
                 platform,
-                preparer,
             );
         }
         if self.state().read().get("reiniciar_manual") != Some(&Value::Bool(true)) {
             if !self.up(port, 30) {
-                return self.rollback_with_preparer(
+                return self.rollback(
                     from,
                     "o servidor nao respondeu depois de reiniciar",
                     topology,
@@ -279,12 +261,11 @@ impl Service {
                     branch,
                     source,
                     platform,
-                    preparer,
                 );
             }
             if let Some(before) = before {
                 if self.server_pid(topology, port) == Some(before) {
-                    return self.rollback_with_preparer(from,&format!("o servidor nao reiniciou: o processo na porta e o mesmo de antes (pid {before})"),topology,port,branch,source,platform,preparer);
+                    return self.rollback(from,&format!("o servidor nao reiniciou: o processo na porta e o mesmo de antes (pid {before})"),topology,port,branch,source,platform);
                 }
             }
         }

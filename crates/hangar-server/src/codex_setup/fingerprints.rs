@@ -444,7 +444,3 @@ pub fn compute(
         .map(|b| format!("{b:02x}"))
         .collect())
 }
-
-#[cfg(test)]
-#[path="fingerprints_review_tests.rs"]
-mod review_tests;

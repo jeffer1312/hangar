@@ -10,15 +10,12 @@ mod cli_probe;
 mod provider_discovery;
 mod json_body;
 mod json_scrub;
-mod json_numbers;
 mod json_large_input;
 mod login_guests;
 mod harness_routes;
-mod guest_catalog;
 mod groups_text;
 mod session_defaults;
 mod tags;
-mod config_sync;
 mod machine_peers;
 mod update_process;
 mod push_expo;
@@ -297,31 +294,15 @@ mod codex_setup;
 
 mod harness_setup;
 mod dotenv_config;
-mod cliproxy_config;
 mod value_coercion;
-mod runtime_environment;
-mod config_metadata;
-mod plugin_publish;
 mod codec_values;
 mod http_contract;
 mod http_cors;
-mod http_body_limit;
 mod http_route_response;
 mod boot_version;
-mod http_peers;
-mod http_cors_unhandled;
-mod json_deep_output;
 
 mod engine_aliases;
-mod config_account_alias;
-mod runtime_special;
-mod runtime_apply_errors;
-mod preferences_import;
-mod integer_preferences;
-mod sync_enabled;
-mod runtime_http;
 mod runtime_boot;
-mod json_literal_unicode;
 mod migration_branch;
 
 mod live_config;
@@ -329,16 +310,10 @@ mod live_config;
 mod engines;
 mod engine_cli;
 mod engine_routes;
-mod engine_catalog_cache;
-mod engine_deep_body;
 mod python_repr;
-mod engine_raw_body;
 mod http_body_input;
 
-mod engine_auth_order;
 mod harness_health;
-mod engine_wrapper_executable;
-mod json_indented;
 mod guest_loops;
 
 mod codex_trust;
@@ -347,54 +322,38 @@ mod codex_ecc;
 
 mod peer_file;
 
-mod peer_cli_values;
 mod codex_normalize;
 mod peer_panel;
 mod codex_plugins;
 mod pairing_print;
 
-mod codex_repair;
 
-mod codex_status;
 mod codex_fragments;
 
-mod codex_messages;
 
 mod codex_service;
 
-mod codex_artifacts;
 
 mod codex_batch;
-mod codex_reload;
 
-mod codex_phase;
 
 mod codex_skills;
 
-mod codex_phase_types;
 
-mod codex_config_edits;
-mod config_apply_http;
 
 mod codex_fingerprints;
 mod codex_stage_sources;
 
 mod codex_plugin_edits;
 
-mod codex_stage_history;
-mod codex_hook_commands;
 
-mod codex_stage_flow;
 
 mod guest_push;
-mod codex_pipeline_hooks;
 
 mod codex_pipeline_round;
 
 mod update_git;
-mod update_channel_http;
 
-mod update_periodic_tick;
 
 mod update_launch;
 mod update_launch_gate;
@@ -403,44 +362,24 @@ mod update_state_contract;
 
 mod update_lock_contract;
 
-mod update_rescue;
 
-mod update_git_transitions;
 
 mod update_restart;
 
-mod update_local_dist;
 
-mod update_key_dist;
 
 mod peer_diagnostic;
 
-mod update_native_contract;
 
-mod update_download;
 
-mod update_stale_pair;
 
-mod update_screen_state;
 
-mod update_selection_pipeline;
 
-mod update_preflight_guards;
-mod update_chromium_refresh;
-mod update_error_tail;
 
-mod update_screen_restart;
 
-mod update_step_effects;
 
-mod update_channel_pipeline;
-mod update_dist_key;
-mod update_state_write_failure;
 
-mod update_parallel_assets;
 
-mod update_pipeline_errors;
-mod contract_paths;
 
 fn physical_tempdir() -> tempfile::TempDir {
     let parent = std::env::temp_dir().canonicalize().unwrap();

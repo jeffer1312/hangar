@@ -4,7 +4,6 @@ use crate::{
     list::local_shortcuts::{FORMAT, Row},
     session_open::terminal::Mux,
 };
-use serde_json::{Value, json};
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc, time::Duration};
 
 #[derive(Clone)]
@@ -24,11 +23,6 @@ pub struct Terminal {
     pub id: String,
     pub label: String,
     pub tmux: String,
-}
-impl Terminal {
-    pub fn value(&self) -> Value {
-        json!({"id":self.id,"label":self.label,"tmux":self.tmux})
-    }
 }
 #[derive(Debug)]
 pub enum Error {

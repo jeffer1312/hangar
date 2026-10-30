@@ -246,7 +246,7 @@ export function createComputerControlTarget(target: Server | null, request: {
   return em(target, '/api/computer-control/targets', { method: 'POST', body: JSON.stringify(request) });
 }
 
-// Código + parâmetros vêm do backend (`codex_msgs.CATALOGO`); o front traduz por `harness_codex_m_<codigo>`.
+// Código + parâmetros vêm do backend (`crates/hangar-server/src/codex_setup/messages.json`); o front traduz por `harness_codex_m_<codigo>`.
 // `texto` é o fallback em pt para código que este app ainda não conhece. String crua = backend antigo.
 export type MensagemCodex = { codigo: string | null; params: Record<string, string>; texto: string } | string;
 

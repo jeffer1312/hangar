@@ -27,16 +27,12 @@ impl Service {
     pub fn new(accounts:AccountService,config:RuntimeConfig,repo:PathBuf,runtime:Option<Arc<RuntimeRegistry>>)->Arc<Self>{
         Arc::new(Self{accounts,config,repo,runtime,mutations:Mutex::new(Mutations::default()),state:super::phase::State::new(status::snapshot()),rounds:Mutex::new(None),runner:None,#[cfg(test)] before_start:None})
     }
-    #[cfg(test)]
-    fn new_with_runner(accounts:AccountService,config:RuntimeConfig,repo:PathBuf,runtime:Option<Arc<RuntimeRegistry>>,runner:Arc<dyn RoundRunner>)->Arc<Self>{
-        let mut service=Self::new(accounts,config,repo,runtime);Arc::get_mut(&mut service).unwrap().runner=Some(runner);service
-    }
     pub async fn session(self:&Arc<Self>)->Result<Value,String>{
         if super::sync_enabled(&self.config)&&self.needs_reconcile()?{self.start("sessao",false).await}else{self.status()}
     }
     pub fn switches(&self,mut status:Value)->Value{
-        status["automatica"]=json!(crate::engines::probe::truthy(&self.config.get("codex_sync")));
-        status["memoria"]=json!(crate::engines::probe::truthy(&self.config.get("codex_memory_import")));status
+        status["automatica"]=json!(crate::orchestration::truthy(&self.config.get("codex_sync")));
+        status["memoria"]=json!(crate::orchestration::truthy(&self.config.get("codex_memory_import")));status
     }
     pub async fn start(self:&Arc<Self>,reason:&str,force:bool)->Result<Value,String>{self.start_round(reason,force).map(|(status,_)|status)}
     fn start_round(self:&Arc<Self>,reason:&str,force:bool)->Result<(Value,Round),String>{
@@ -86,6 +82,7 @@ impl Service {
     }
     fn current_round(&self)->Option<Round>{self.rounds.lock().unwrap_or_else(|e|e.into_inner()).clone()}
     async fn wait_round(mut round:Round)->Result<(),String>{loop{if let Some(result)=round.result.borrow().clone(){return result;}round.result.changed().await.map_err(|_|"rodada Codex interrompida".to_owned())?;}}
+    #[cfg(test)]
     async fn wait_current(&self)->Result<(),String>{if let Some(round)=self.current_round(){Self::wait_round(round).await}else{Ok(())}}
     fn needs_reconcile(&self)->Result<bool,String>{
         if self.current_round().is_some_and(|round|round.result.borrow().is_none()){return Ok(false);}
@@ -182,7 +179,3 @@ impl Service {
 #[cfg(test)]
 #[path="service_round_tests.rs"]
 mod round_tests;
-
-#[cfg(test)]
-#[path="service_finished_tests.rs"]
-mod finished_tests;

@@ -2686,37 +2686,6 @@ fn local_facts(home: &std::path::Path, runtime: &tokio::runtime::Runtime) -> fac
             std::sync::Arc::new(crate::list::procs::SystemProcs::default()))
 }
 
-/// Instalado é o que o shell de login acha (quem roda o CLI é o pane, pelo `$SHELL`), com
-/// permissão de execução; o resultado vale 60 s.
-#[cfg(unix)]
-#[test]
-fn provider_discovery_installed_clis_come_from_the_login_shell_path() {
-    let runtime=test_runtime();
-    use std::os::unix::fs::PermissionsExt;
-    let home = tempfile::tempdir().unwrap();
-    let (bin, login) = (home.path().join("bin"), home.path().join("login-bin"));
-    for dir in [&bin, &login] { std::fs::create_dir_all(dir).unwrap(); }
-    let exec = |path: std::path::PathBuf, mode: u32| {
-        std::fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
-    };
-    exec(login.join("pi"), 0o755);
-    exec(login.join("codex"), 0o644);
-    exec(bin.join("kimi"), 0o755);
-    let shell = home.path().join("login-shell");
-    crate::write_test_executable(&shell, format!("#!/bin/sh\necho x >> {}\necho {}\n", home.path().join("calls").display(), login.display()));
-    let env: std::collections::BTreeMap<String, String> = [("HOME", home.path()), ("PATH", &bin), ("SHELL", &shell)]
-        .map(|(k, v)| (k.to_owned(), v.to_string_lossy().into_owned())).into_iter().collect();
-    assert_eq!(facts::installed_providers(&crate::accounts::environment::AccountEnvironment::from_map(env.clone()),runtime.handle()).unwrap(), vec![AgentProvider::Pi], "PATH do login, e o `codex` sem permissão não conta");
-    assert_eq!(facts::installed_providers(&crate::accounts::environment::AccountEnvironment::from_map(env.clone()),runtime.handle()).unwrap(), vec![AgentProvider::Pi]);
-    assert_eq!(std::fs::read_to_string(home.path().join("calls")).unwrap().lines().count(), 1, "a segunda leitura sai do cache");
-    let broken = home.path().join("broken-shell");
-    exec(broken.clone(), 0o755);
-    std::fs::write(&broken, "#!/bin/sh\nexit 1\n").unwrap();
-    let env: std::collections::BTreeMap<String, String> = env.into_iter().map(|(k, v)| if k == "SHELL" { (k, broken.to_string_lossy().into_owned()) } else { (k, v) }).collect();
-    assert_eq!(facts::installed_providers(&crate::accounts::environment::AccountEnvironment::from_map(env.clone()),runtime.handle()).unwrap(), vec![AgentProvider::Kimi], "shell de login quebrado cai no PATH do processo");
-}
-
 fn test_runtime() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap()
 }

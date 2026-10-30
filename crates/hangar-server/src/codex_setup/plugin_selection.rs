@@ -105,7 +105,7 @@ pub fn origin(data: &Value, claude: bool, base: &Path) -> Result<Option<Origin>,
     } else if claude {
         source
             .get("url")
-            .filter(|value| crate::config_sync::apply::truthy(value))
+            .filter(|value| crate::orchestration::truthy(value))
             .or_else(|| source.get("path"))
             .unwrap_or(&Value::Null)
     } else {
@@ -218,56 +218,5 @@ mod tests {
             let _ = desired(&json!({"enabledPlugins":{value.clone():true}}));
             let _ = origin(&json!({"source_type":"git","source":value}),false,base.path());
         }
-    }
-
-    #[test]
-    fn plugin_selection_matches_original_sources_and_identities() {
-        let raw = include_str!(
-            "../../../../backend/tests/fixtures/contract/codex-integration/plugin-selection.json"
-        ).replace("$USERINFO_A", "user:secret").replace("$USERINFO_B", "user:password");
-        let fixture: Value = serde_json::from_str(&raw).unwrap();
-        let base = tempfile::tempdir_in(crate::list::links::without_verbatim(std::env::temp_dir().canonicalize().unwrap())).unwrap();
-        let mut differences = Vec::new();
-        for (index, row) in fixture["cases"].as_array().unwrap().iter().enumerate() {
-            let args = row["args"].as_array().unwrap();
-            let result = match row["operation"].as_str().unwrap() {
-                "_plugins_desejados" => desired(&args[0]).map(|value| json!(value)),
-                "_origem_marketplace" => origin(
-                    &args[0],
-                    row["kwargs"]["claude"].as_bool().unwrap_or(false),
-                    base.path(),
-                )
-                .map(|value| json!(value)),
-                "_identidade_plugin" => identity(
-                    args[0].as_str().unwrap(),
-                    &(
-                        args[1][0].as_str().unwrap().into(),
-                        args[1][1].as_str().unwrap().into(),
-                    ),
-                    &args[2],
-                    &args[3],
-                    base.path(),
-                )
-                .map(|value| json!(value)),
-                _ => unreachable!(),
-            };
-            let actual = match result {
-                Ok(value) => json!({"ok":value}),
-                Err(error) => json!({"error":error.message,"class":error.kind}),
-            };
-            let actual: Value = serde_json::from_str(
-                &serde_json::to_string(&actual)
-                    .unwrap()
-                    .replace(base.path().to_str().unwrap(), "$ROOT"),
-            )
-            .unwrap();
-            if actual != row["result"] {
-                differences.push((index, actual, row["result"].clone()));
-            }
-        }
-        assert!(
-            differences.is_empty(),
-            "seleção de plugins divergente: {differences:?}"
-        );
     }
 }

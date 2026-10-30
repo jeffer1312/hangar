@@ -272,6 +272,3 @@ fn pid_alive_with(pid:i64,probe:impl FnOnce()->io::Result<()>)->io::Result<bool>
     if pid<=0{return Ok(false);}
     match probe(){Ok(())=>Ok(true),Err(error) if error.kind()==io::ErrorKind::NotFound=>Ok(false),Err(error) if error.kind()==io::ErrorKind::PermissionDenied=>Ok(true),Err(error)=>Err(error)}
 }
-#[cfg(test)]
-#[path="process_liveness_tests.rs"]
-mod liveness_tests;

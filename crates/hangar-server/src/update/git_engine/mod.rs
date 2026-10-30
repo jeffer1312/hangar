@@ -450,7 +450,7 @@ impl Service {
                 Ok(bytes) => serde_json::from_slice::<Value>(&bytes)
                     .ok()
                     .filter(Value::is_object)
-                    .map(|v| !crate::machine_peers::store::truthy(&v["sem_build"]))
+                    .map(|v| !crate::orchestration::truthy(&v["sem_build"]))
                     .unwrap_or(true),
                 Err(error) => error.kind() != std::io::ErrorKind::NotFound,
             };

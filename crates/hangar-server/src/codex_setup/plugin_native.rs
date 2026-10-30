@@ -32,8 +32,10 @@ impl plugin_sync::Actions for Actions<'_>{
  fn checkpoint(&mut self,registry:&mut Value,state:&State)->Result<(),Error>{
   checkpoint(self.home,self.account,self.work,registry,state,self.now())
  }
- fn now(&self)->f64{SystemTime::now().duration_since(UNIX_EPOCH).map(|duration|duration.as_secs_f64()).unwrap_or_else(|error|-error.duration().as_secs_f64())}
+ fn now(&self)->f64{unix_now()}
 }
+/// Segundos desde a época como `time.time()`: relógio anterior a ela fica negativo.
+pub(crate) fn unix_now()->f64{SystemTime::now().duration_since(UNIX_EPOCH).map(|duration|duration.as_secs_f64()).unwrap_or_else(|error|-error.duration().as_secs_f64())}
 pub(crate) fn checkpoint(home:&Path,account:&Path,work:&Path,registry:&mut Value,state:&State,now:f64)->Result<(),Error>{
  let snapshot=ValueGuard(state.snapshot());
  let view=status::read(home,account,Some(&snapshot),now).map_err(|error|Error{kind:error.kind,message:error.message})?;

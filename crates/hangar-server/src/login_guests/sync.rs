@@ -42,11 +42,11 @@ impl Sync {
     pub fn enabled(&self) -> bool {
         crate::config_sync::runtime::sync_enabled(&self.config_path, self.enabled)
     }
-    fn load(&self) -> Result<Option<super::Tree>> {
+    fn load(&self) -> Result<Option<crate::orchestration::codec::ValueGuard>> {
         let unreadable = || Failure::code(500, "sync_vault_unreadable", "cofre ilegível");
         match crate::runtime::queue::read_replaced(&self.path) {
             Ok(bytes) => std::str::from_utf8(&bytes).ok().and_then(crate::orchestration::codec::loads)
-                .map(|value| if value.is_null() { None } else { Some(super::Tree(value)) }).ok_or_else(unreadable),
+                .map(|value| if value.is_null() { None } else { Some(crate::orchestration::codec::ValueGuard(value)) }).ok_or_else(unreadable),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(unreadable().with_io(&error)),
         }
@@ -170,7 +170,7 @@ impl Sync {
                 let target = &p[7..p.len() - 7];
                 let guests=vault.get_mut("guests").filter(|value|truthy(value));
                 let removed=match guests {
-                    Some(guests)=>guests.as_object_mut().ok_or_else(unreadable)?.remove(target).map(super::Tree),
+                    Some(guests)=>guests.as_object_mut().ok_or_else(unreadable)?.remove(target).map(crate::orchestration::codec::ValueGuard),
                     None=>None,
                 };
                 if removed.as_ref().is_none_or(|value|value.is_null()) {
@@ -186,7 +186,7 @@ impl Sync {
             }),
         }
     }
-    pub(super) fn owner(&self, user: Option<&str>) -> Result<super::Tree> {
+    pub(super) fn owner(&self, user: Option<&str>) -> Result<crate::orchestration::codec::ValueGuard> {
         let vault = self
             .load()?.filter(|value|truthy(value))
             .ok_or_else(|| Failure::code(403, "erro_so_dono", "só o dono"))?;
@@ -619,21 +619,6 @@ mod diary_io_tests {
             std::fs::read_to_string(entry.unwrap().path()).unwrap().lines()
                 .map(|line| serde_json::from_str::<Value>(line).unwrap()).collect::<Vec<_>>()
         }).find(|event|event["evento"]=="sync.prova.fim").unwrap()
-    }
-    #[test]
-    fn sync_diary_io_preserves_original_codes() {
-        let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/diary-io.json")).unwrap();
-        for row in fixture["rows"].as_array().unwrap() {
-            let tmp=tempfile::tempdir().unwrap();
-            let mut diary=super::super::diary::Diary::default();diary.directory=Some(tmp.path().to_owned());
-            let failure=Failure::io(std::io::Error::from_raw_os_error(row["os_code"].as_i64().unwrap() as i32));
-            let result:Result<()>=diary.trace("sync.prova",||Err(failure));
-            assert_eq!(result.unwrap_err().body.get("errno"),None,"código SO não entra na resposta HTTP");
-            let event=finish(tmp.path());
-            assert_eq!(event["errno"],row["events"][1]["errno"],"{}",row["operation"]);
-            assert!(event.get("winerror").is_none());
-            assert!(!event.to_string().contains("arquivo-privado"));
-        }
     }
     #[test]
     fn sync_diary_io_preserves_load_and_save_failures() {

@@ -2,8 +2,8 @@
 use super::{Failure, Inner, Operation};
 use crate::{accounts::AccountService, terminal_process};
 use serde_json::{Value,json};
-use std::{io::Write,process::Stdio,sync::{Arc,Mutex},time::Duration};
-use tokio::{io::AsyncReadExt,sync::{oneshot,watch}};
+use std::{io::Write,process::Stdio,time::Duration};
+use tokio::sync::{oneshot,watch};
 
 pub(super) async fn run(
     inner:&Inner, operation:&Operation,args:Vec<String>,timeout:Duration,expected:&str,
@@ -30,11 +30,8 @@ pub(super) async fn run(
         let _=child.start_kill(); let _=child.wait().await;
         return Err("Não foi possível colocar o Codex na contenção própria.".to_owned().into());
     }
-    let stdout=Arc::new(Mutex::new(Vec::new()));let stderr=Arc::new(Mutex::new(Vec::new()));
-    let (output,output_done)=read(child.stdout.take().unwrap(),stdout.clone());
-    let (errors,errors_done)=read(child.stderr.take().unwrap(),stderr.clone());
-    #[cfg(test)]
-    if let Some(observer)=inner.observer.lock().unwrap_or_else(|e|e.into_inner()).as_ref() {let _=observer.send(directory);}
+    let (output,output_done)=read(child.stdout.take().unwrap());
+    let (errors,errors_done)=read(child.stderr.take().unwrap());
     let deadline=tokio::time::sleep(timeout);tokio::pin!(deadline);
     let mut timed_out=false;let mut was_cancelled=false;
     let exited = {
@@ -58,18 +55,16 @@ pub(super) async fn run(
     if timed_out {return Err("O comando do Codex excedeu o tempo limite.".to_owned().into());}
     if was_cancelled {return Err("Operação administrativa do Codex cancelada.".to_owned().into());}
     if matches!(&read_output,Ok(Err(error)) if error.kind()==std::io::ErrorKind::InvalidData) || matches!(&read_errors,Ok(Err(error)) if error.kind()==std::io::ErrorKind::InvalidData) {return Err("Saída do Codex excedeu o limite de captura.".to_owned().into());}
-    if exited.is_err() || !matches!(read_output,Ok(Ok(()))) || !matches!(read_errors,Ok(Ok(()))) {
+    let (Ok(()),Ok(Ok(stdout)),Ok(Ok(stderr)))=(exited,read_output,read_errors) else {
         return Err("Não foi possível ler a saída do Codex.".to_owned().into());
-    }
+    };
     let status=status.map_err(Failure::from)?;
-    let code=exit_code(status);
-    let stdout=std::mem::take(&mut *stdout.lock().unwrap_or_else(|e|e.into_inner()));
-    let stderr=std::mem::take(&mut *stderr.lock().unwrap_or_else(|e|e.into_inner()));
+    let code=crate::loops::check::exit_code(status);
     let tail=String::from_utf8_lossy(&stderr).chars().rev().take(500).collect::<Vec<_>>().into_iter().rev().collect::<String>().trim().to_owned();
     let parsed=if stdout.is_empty(){Err(())}else{crate::orchestration::body::parse(&stdout).map_err(|_|())}
         .map(crate::config_sync::runtime_values::ValueGuard);
     let diagnostic=!status.success() && (expected.is_empty() || !tail.contains(expected))
-        || status.success() && parsed.as_ref().map_or(true,|value|!value.is_object() || crate::config_sync::apply::truthy(&value["errors"]));
+        || status.success() && parsed.as_ref().map_or(true,|value|!value.is_object() || crate::orchestration::truthy(&value["errors"]));
     if diagnostic {
         let env=inner.env.clone();let codex=inner.codex.clone();let args=args.clone();
         let raw_out=stdout.clone();let raw_err=stderr.clone();
@@ -81,26 +76,19 @@ pub(super) async fn run(
     Ok(value.take())
 }
 
-fn read(mut pipe:impl tokio::io::AsyncRead+Unpin+Send+'static,buffer:Arc<Mutex<Vec<u8>>>)->(tokio::task::JoinHandle<std::io::Result<()>>,oneshot::Receiver<()>) {
+fn read(mut pipe:impl tokio::io::AsyncRead+Unpin+Send+'static)->(tokio::task::JoinHandle<std::io::Result<Vec<u8>>>,oneshot::Receiver<()>) {
     let (sender,done)=oneshot::channel();
     let task=tokio::spawn(async move {
-        let result=async {
-            let mut chunk=[0u8;8192];
-            let mut exceeded=false;
-            loop {let count=pipe.read(&mut chunk).await?;if count==0 {return if exceeded {Err(std::io::Error::new(std::io::ErrorKind::InvalidData,"Saída do Codex excedeu o limite de captura"))}else{Ok(())};}
-                let mut buffer=buffer.lock().unwrap_or_else(|e|e.into_inner());
-                let keep=count.min(crate::command_capture::MAX_CAPTURE_BYTES.saturating_sub(buffer.len()));
-                buffer.extend_from_slice(&chunk[..keep]);exceeded|=keep<count;
-            }
-        }.await;
+        let mut buffer=Vec::new();
+        let result=crate::command_capture::drain_bounded(&mut pipe,&mut buffer,crate::command_capture::MAX_CAPTURE_BYTES).await;
         let _=sender.send(());
-        result
+        match result {
+            Ok(false)=>Ok(buffer),
+            Ok(true)=>Err(std::io::Error::new(std::io::ErrorKind::InvalidData,"Saída do Codex excedeu o limite de captura")),
+            Err(error)=>Err(error),
+        }
     });
     (task,done)
-}
-fn exit_code(status:std::process::ExitStatus)->i64 {
-    #[cfg(unix)] {use std::os::unix::process::ExitStatusExt;if let Some(signal)=status.signal(){return -i64::from(signal);}}
-    status.code().map(i64::from).unwrap_or(-1)
 }
 fn diagnose(env:&crate::accounts::environment::AccountEnvironment,codex:&std::path::Path,args:&[String],code:i64,stdout:&[u8],stderr:&[u8]) {
     use super::super::files::hash;
@@ -133,9 +121,12 @@ fn diagnose(env:&crate::accounts::environment::AccountEnvironment,codex:&std::pa
 async fn administrative_capture_preserves_json_and_drains_overflow() {
  use tokio::io::AsyncWriteExt;
  for size in [8193,crate::command_capture::MAX_CAPTURE_BYTES+17] {
-  let (mut writer,reader)=tokio::io::duplex(8192);let buffer=Arc::new(Mutex::new(Vec::new()));let (task,done)=read(reader,buffer.clone());
+  let (mut writer,reader)=tokio::io::duplex(8192);let (task,done)=read(reader);
   let data=vec![b'x';size];writer.write_all(&data).await.unwrap();drop(writer);done.await.unwrap();let result=task.await.unwrap();
-  assert_eq!(buffer.lock().unwrap().len(),size.min(crate::command_capture::MAX_CAPTURE_BYTES));
+  match &result {
+   Ok(buffer)=>assert_eq!(buffer.len(),size),
+   Err(error)=>assert_eq!(error.kind(),std::io::ErrorKind::InvalidData),
+  }
   assert_eq!(result.is_err(),size>crate::command_capture::MAX_CAPTURE_BYTES);
  }
 }

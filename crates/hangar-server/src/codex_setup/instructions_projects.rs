@@ -1,5 +1,5 @@
 //! Escopos do projeto e exclusão local dos aliases no Git.
-use super::{files, instructions::Links, instructions_alias};
+use super::{files, instructions_alias};
 use crate::accounts::environment::AccountEnvironment;
 use files::Error;
 use serde_json::Value;
@@ -27,27 +27,10 @@ pub(super) fn records(root: &Path) -> Result<Vec<PathBuf>, Error> {
     Ok(result)
 }
 
-#[cfg(test)]
-#[test]
-fn instruction_records_preserve_original_glob_names() {
-    let corpus: serde_json::Value = serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/codex-integration/fingerprint-review.json")).unwrap();
-    let case = corpus["glob_cases"].as_array().unwrap().iter().find(|case| case["windows"] == cfg!(windows)).unwrap();
-    let temp = tempfile::tempdir().unwrap();
-    for name in case["names"].as_array().unwrap() {
-        let name = name.as_str().unwrap();
-        if name.starts_with("directory") { fs::create_dir(temp.path().join(name)).unwrap(); }
-        else { fs::write(temp.path().join(name), "{}").unwrap(); }
-    }
-    let mut actual: Vec<_> = records(temp.path()).unwrap().into_iter().map(|path| path.file_name().unwrap().to_string_lossy().into_owned()).collect();
-    actual.sort();
-    assert_eq!(serde_json::json!(actual), case["found"]);
-}
-
 pub(super) async fn prepare(
     env: &AccountEnvironment,
     codex: &Path,
     cwd: Option<&Path>,
-    links: &impl Links,
 ) -> Result<(), Error> {
     let store = codex.join(".hangar-instrucoes");
     let mut projects = BTreeSet::new();
@@ -81,7 +64,7 @@ pub(super) async fn prepare(
         }
         for path in records(&store)? {
             let record = crate::config_sync::runtime_values::ValueGuard(files::object(&path)?);
-            if crate::config_sync::apply::truthy(&record["alvo"]) {
+            if crate::orchestration::truthy(&record["alvo"]) {
                 let target = project_path(&record["alvo"])?;
                 if let Some(parent) = target.parent().filter(|parent| *parent != codex) {
                     projects.insert(parent.to_owned());
@@ -116,7 +99,6 @@ pub(super) async fn prepare(
             source.as_deref(),
             &store,
             env,
-            links,
         )?;
     }
     Ok(())

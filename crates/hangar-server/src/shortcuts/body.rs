@@ -1,5 +1,5 @@
 //! Modelos originais dos terminais; os campos ignorados nunca são copiados recursivamente.
-use crate::engines::body::{internal_error, json_error};
+use crate::http_cors::{internal_error, json_guarded};
 use crate::orchestration::codec;
 use axum::{
     http::{HeaderMap, StatusCode},
@@ -37,7 +37,7 @@ pub fn parse(schema: Schema, bytes: &[u8], headers: &HeaderMap) -> Result<Value,
         Value::Null
     } else if crate::http_body_input::is_json(headers) {
         crate::orchestration::body::parse(bytes)
-            .map_err(|(status, value)| json_error(status, value))?
+            .map_err(|(status, value)| json_guarded(status, value))?
     } else {
         Value::String(
             std::str::from_utf8(bytes)
@@ -62,7 +62,7 @@ pub fn parse(schema: Schema, bytes: &[u8], headers: &HeaderMap) -> Result<Value,
             None,
         );
         codec::discard(value);
-        return Err(json_error(
+        return Err(json_guarded(
             StatusCode::UNPROCESSABLE_ENTITY,
             json!({"detail":[error]}),
         ));
@@ -180,7 +180,7 @@ pub fn parse(schema: Schema, bytes: &[u8], headers: &HeaderMap) -> Result<Value,
         Ok(Value::Object(result))
     } else {
         codec::discard(Value::Object(result));
-        Err(json_error(
+        Err(json_guarded(
             StatusCode::UNPROCESSABLE_ENTITY,
             json!({"detail":errors}),
         ))

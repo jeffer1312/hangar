@@ -33,12 +33,7 @@ impl StartupOutcome {
   Self::Failed(error)=>Some(format!("[hangar] AVISO: passo de atualizacao falhou ({error}); o app segue subindo")),
  }}
 }
-pub trait StartupSource {
- fn package(&self)->Result<bool,String>;
- fn pending_commands(&self)->Result<Vec<String>,String>;
- fn apply(&self)->Result<Vec<String>,String>;
-}
-pub fn prepare_startup(source:&dyn StartupSource,windows:bool)->StartupOutcome{
+fn prepare_startup(source:&CheckoutStartup<'_>,windows:bool)->StartupOutcome{
  let run=||->Result<StartupOutcome,String>{
   if source.package()?{return Ok(StartupOutcome::Package);}
   if windows&&source.pending_commands()?.iter().any(|command|command.contains("install.ps1")){return Ok(StartupOutcome::Deferred);}
@@ -47,7 +42,7 @@ pub fn prepare_startup(source:&dyn StartupSource,windows:bool)->StartupOutcome{
  run().unwrap_or_else(StartupOutcome::Failed)
 }
 struct CheckoutStartup<'a>(&'a Service);
-impl StartupSource for CheckoutStartup<'_>{
+impl CheckoutStartup<'_>{
  fn package(&self)->Result<bool,String>{Ok(matches!(crate::update::http::mode(&self.0.home),crate::update::http::Mode::Package(_)))}
  fn pending_commands(&self)->Result<Vec<String>,String>{
   let service=self.0;let (steps,_)=crate::update::steps::read_steps(&service.root.join("docs/atualizacoes"),cfg!(windows));

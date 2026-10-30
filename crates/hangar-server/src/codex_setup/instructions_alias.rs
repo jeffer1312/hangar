@@ -1,5 +1,5 @@
 //! Autoria do alias registrada antes da troca, para permitir retomada após interrupção.
-use super::{files, instructions::Links};
+use super::files;
 use crate::accounts::environment::AccountEnvironment;
 use files::Error;
 use serde_json::json;
@@ -8,6 +8,17 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
+
+fn symlink(source: &Path, target: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(source, target)
+    }
+    #[cfg(windows)]
+    {
+        std::os::windows::fs::symlink_file(source, target)
+    }
+}
 
 fn resolve(path: &Path) -> Result<PathBuf, Error> {
     super::plugins::resolved(path).map_err(Error::Invalid)
@@ -122,7 +133,6 @@ pub(super) fn apply(
     source: Option<&Path>,
     records: &Path,
     env: &AccountEnvironment,
-    links: &impl Links,
 ) -> Result<(), Error> {
     let record = records.join(format!(
         "{}.json",
@@ -193,7 +203,7 @@ pub(super) fn apply(
         .tempfile_in(parent)?
         .into_temp_path();
     fs::remove_file(&temporary)?;
-    if !mirror || links.create(&relative(source, parent), &temporary).is_err() {
+    if !mirror || symlink(&relative(source, parent), &temporary).is_err() {
         fs::write(&temporary, &data)?;
     }
     if exists && !owned {

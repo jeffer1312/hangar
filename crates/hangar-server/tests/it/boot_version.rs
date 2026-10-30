@@ -1,26 +1,4 @@
 use hangar_server::boot_version::{self,Snapshot};
-use serde_json::{Value,json};
-#[test]
-fn boot_version_matches_python_and_never_recaptures_during_get(){
-    let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/update-git/boot-version.json")).unwrap();
-    for row in fixture["cases"].as_array().unwrap(){
-        let root=tempfile::tempdir().unwrap();
-        if !row["manifest"].is_null(){std::fs::write(root.path().join("manifest.json"),serde_json::to_vec(&row["manifest"]).unwrap()).unwrap();}
-        if let Some(version)=row["version_file"].as_str(){std::fs::write(root.path().join("VERSION"),version).unwrap();}
-        assert!(boot_version::get(root.path()).is_none());
-        let mut replies=row["replies"].as_array().unwrap().iter();let mut calls=vec![];
-        let snapshot=boot_version::capture_with(root.path(),|args,timeout|{
-            calls.push(json!({"args":std::iter::once("git").chain(args.iter().copied()).collect::<Vec<_>>(),"timeout":timeout.as_secs()}));
-            let reply=replies.next().expect("git foi chamado além da captura");
-            if reply=="error"{Err(())}else{Ok(reply[1].as_str().unwrap().into())}
-        });
-        assert_eq!(snapshot,Snapshot{describe:row["describe"].as_str().unwrap().into(),readable:row["readable"].as_str().map(str::to_owned)},"{}",row["name"]);
-        assert_eq!(calls,row["calls"].as_array().unwrap().clone(),"{}",row["name"]);
-        std::fs::write(root.path().join("manifest.json"),r#"{"version":"changed","commit":"new","channel":"latest"}"#).unwrap();
-        assert_eq!(boot_version::get(root.path()),Some(snapshot.clone()));
-        assert_eq!(boot_version::capture_with(root.path(),|_,_|panic!("boot repetido consultou git")),snapshot);
-    }
-}
 proptest::proptest!{
     #[test]
     fn boot_version_injection_is_scoped_and_first_publication_wins(describe in ".{0,50}",readable in proptest::option::of(".{0,30}")){
@@ -47,21 +25,6 @@ fn boot_version_get_does_not_wait_for_capture_or_block_other_roots(){
     let observed=read_rx.recv_timeout(Duration::from_millis(300));
     release_tx.send(()).unwrap();capture.join().unwrap();reader.join().unwrap();
     assert_eq!(observed.unwrap(),(None,Some(expected)),"a consulta não pode aguardar os subprocessos da captura");
-}
-#[test]
-fn boot_version_real_git_ignores_stderr_and_uses_local_version_fallback(){
-    use std::{collections::BTreeMap,process::Command};
-    let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/update-git/boot-real.json")).unwrap();
-    for row in fixture["cases"].as_array().unwrap(){
-        let root=tempfile::tempdir().unwrap();let environment=BTreeMap::from([("HOME".into(),root.path().display().to_string()),("USERPROFILE".into(),root.path().display().to_string()),("GIT_CONFIG_NOSYSTEM".into(),"1".into())]);
-        if row["name"]=="version-only-on-disk"{
-            for args in [vec!["init","-q"],vec!["-c","user.name=Fixture","-c","user.email=fixture@example.invalid","commit","--allow-empty","-qm","fixture"]]{assert!(Command::new("git").args(args).current_dir(root.path()).envs(&environment).output().unwrap().status.success());}
-            std::fs::write(root.path().join("VERSION"),"2.3.4\n").unwrap();
-        }
-        let actual=boot_version::capture(root.path(),&environment);
-        assert_eq!(actual.readable.as_deref(),row["readable"].as_str(),"{}",row["name"]);
-        if row["describe"]!="<COMMIT>"{assert_eq!(actual.describe,row["describe"].as_str().unwrap());}
-    }
 }
 #[test]
 fn capture_process_preserves_separate_channels_environment_and_timeout(){

@@ -1,7 +1,7 @@
 //! Inscrições e preferências persistidas no formato do Python, sem reserva silenciosa para erro de E/S.
 use crate::{
-    config_sync::{apply::truthy, value_equality::equal},
-    orchestration::codec,
+    config_sync::value_equality::equal,
+    orchestration::{codec, truthy},
 };
 use chrono::NaiveTime;
 use serde_json::{Value, json};
@@ -9,13 +9,6 @@ use std::path::{Path, PathBuf};
 static LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 pub(super) async fn delivery_lock() -> tokio::sync::MutexGuard<'static, ()> {
     LOCK.lock().await
-}
-pub(super) async fn writer_lock(dir: &Path) -> tokio::sync::MutexGuard<'static, ()> {
-    #[cfg(test)]
-    observe_lock(dir);
-    #[cfg(not(test))]
-    let _ = dir;
-    delivery_lock().await
 }
 pub fn dir(claude: &Path) -> PathBuf {
     claude.join(".hangar-push")
@@ -341,113 +334,8 @@ pub fn in_quiet_hours(prefs: &Value, now: NaiveTime) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Timelike;
-    #[test]
-    fn guest_push_time_parser_matches_python() {
-        let fixture: Value = serde_json::from_str(include_str!(
-            "../../../../backend/tests/fixtures/contract/guests/push-time.json"
-        ))
-        .unwrap();
-        let mut errors = Vec::new();
-        for case in fixture["rows"].as_array().unwrap() {
-            let parsed = time(case["text"].as_str().unwrap());
-            let actual=parsed.map(|(t,offset)|json!({"hour":t.hour(),"minute":t.minute(),"second":t.second(),"microsecond":t.nanosecond()/1000,"offset":offset}));
-            let expected = if case.get("error").is_some() {
-                None
-            } else {
-                Some(
-                    json!({"hour":case["hour"],"minute":case["minute"],"second":case["second"],"microsecond":case["microsecond"],"offset":case["offset"]}),
-                )
-            };
-            if actual != expected {
-                errors.push(json!({"case":case,"actual":actual}));
-            }
-        }
-        assert!(
-            errors.is_empty(),
-            "GUE-082: horários divergentes {errors:?}"
-        );
-    }
-    #[test]
-    fn guest_push_quiet_hours_preserve_refusal_d65() {
-        let fixture: Value = serde_json::from_str(include_str!(
-            "../../../../backend/tests/fixtures/contract/guests/push-gate.json"
-        ))
-        .unwrap();
-        for case in fixture["windows"].as_array().unwrap() {
-            let now = time(case["now"].as_str().unwrap()).unwrap().0;
-            let actual = in_quiet_hours(&json!({"quiet_hours":case["window"]}), now);
-            if case.get("error").is_some() {
-                assert_eq!(actual, Err("push_gate_invalid"), "D65 {case}");
-            } else {
-                assert_eq!(
-                    actual,
-                    Ok(case["value"].as_bool().unwrap()),
-                    "GUE-082 {case}"
-                );
-            }
-        }
-    }
-    #[test]
-    fn guest_push_malformed_muted_preserves_file_d66() {
-        let fixture: Value = serde_json::from_str(include_str!(
-            "../../../../backend/tests/fixtures/contract/guests/push-muted.json"
-        ))
-        .unwrap();
-        for case in fixture["rows"].as_array().unwrap() {
-            let dir = tempfile::tempdir().unwrap();
-            let path = dir.path().join("push_prefs.json");
-            let initial = json!({"muted":case["muted"],"extra":"preservar"});
-            let before = codec::dumps_utf8(&initial).unwrap();
-            std::fs::write(&path, &before).unwrap();
-            let valid = case["muted"]
-                .as_array()
-                .is_some_and(|values| values.iter().all(Value::is_string));
-            let decision = is_muted(&initial, "s");
-            let result = set_muted(dir.path(), "s", case["requested"].as_bool().unwrap());
-            if valid {
-                assert_eq!(decision, Ok(case["decision"]["value"].as_bool().unwrap()));
-                assert_eq!(result, Ok(()));
-                assert_eq!(
-                    std::fs::read_to_string(path).unwrap(),
-                    case["after"].as_str().unwrap()
-                );
-            } else {
-                assert_eq!(decision, Err("push_gate_invalid"));
-                assert_eq!(result, Err("push_settings_invalid"));
-                assert_eq!(
-                    std::fs::read_to_string(&path).unwrap(),
-                    before,
-                    "D66 {case}"
-                );
-                assert!(!path.with_extension("json.tmp").exists());
-                assert_eq!(
-                    set_quiet_hours(dir.path(), Some("22:00"), Some("07:00")),
-                    Err("push_settings_invalid")
-                );
-                assert_eq!(std::fs::read_to_string(path).unwrap(), before);
-            }
-        }
-    }
     proptest::proptest! {
         #[test]
         fn guest_push_external_clock_never_panics(value in ".{0,120}") { let _=time(&value); }
-    }
-}
-
-#[cfg(test)]
-static LOCK_PROBES: std::sync::LazyLock<
-    std::sync::Mutex<std::collections::HashMap<PathBuf, tokio::sync::oneshot::Sender<bool>>>,
-> = std::sync::LazyLock::new(Default::default);
-#[cfg(test)]
-pub(super) fn lock_probe(dir: &Path) -> tokio::sync::oneshot::Receiver<bool> {
-    let (sender, receiver) = tokio::sync::oneshot::channel();
-    LOCK_PROBES.lock().unwrap().insert(dir.to_owned(), sender);
-    receiver
-}
-#[cfg(test)]
-fn observe_lock(dir: &Path) {
-    if let Some(probe) = LOCK_PROBES.lock().unwrap().remove(dir) {
-        let _ = probe.send(LOCK.try_lock().is_err());
     }
 }

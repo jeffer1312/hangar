@@ -16,7 +16,7 @@ use super::{BODY_LIMIT,detail_body,session_name,too_large};
 fn reply(headers:Option<&axum::http::HeaderMap>,status:StatusCode,body:Value)->Response {
     use crate::orchestration::codec;
     if codec::contains_surrogate(&body) || (!status.is_success() && codec::contains_nonfinite(&body)) {
-        let mut response=crate::engines::body::internal_error();
+        let mut response=crate::http_cors::internal_error();
         if let Some(headers)=headers {crate::http_cors::apply(headers,&mut response);}
         response
     } else {crate::mods::http::reply(headers,status,codec::normalize_response(body))}
@@ -99,7 +99,7 @@ async fn claude_engine(st:&Arc<AppState>,peer:SocketAddr,req:Request) -> Result<
     let bytes=match crate::http_body_limit::read(body).await {
         Ok(bytes)=>bytes,
         Err(error) if crate::http_body_limit::is_limit(&error)=>return Err(crate::http_body_limit::rejected()),
-        Err(_)=>return Err(crate::engines::body::internal_error()),
+        Err(_)=>return Err(crate::http_cors::internal_error()),
     };
     let body=parse_model_body(&bytes,&parts.headers)?;
     if st.term.is_active(&name) {

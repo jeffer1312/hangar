@@ -144,11 +144,7 @@ impl Service {
             .map_err(|e| e.to_string())?
             .ok_or(".env indisponível")?;
         let _lock = store::lock(&path).map_err(|e| e.msg)?;
-        let raw = match std::fs::read_to_string(&path) {
-            Ok(raw) => raw,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-            Err(e) => return Err(e.to_string()),
-        };
+        let raw = crate::user_data::read_env_at(&path)?;
         let raw = raw
             .split_inclusive('\n')
             .filter(|line| !line.starts_with(PUBLICATION))

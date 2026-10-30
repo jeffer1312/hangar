@@ -84,7 +84,7 @@ impl Actions for NativeActions {
         plugins::adapt(root,&context,|v|Ok(super::normalize::hooks(v,&server,&wrapper,cfg!(windows))),||{},&plugins::NativeRuntime(self.env.clone())).await
     }
     async fn open(&mut self)->Result<(),String> {
-        self.native=Some(Native::open(&self.env,&self.env.home,&self.account).await?);Ok(())
+        self.native=Some(Native::open(&self.env,&self.env.home,&self.account,false,None).await.map_err(|error|error.to_string())?);Ok(())
     }
     async fn request(&mut self,method:&str,params:Value)->Result<Value,String> {
         self.native.as_ref().ok_or("Codex administrativo não está aberto")?.request(method,params,Duration::from_secs(120)).await

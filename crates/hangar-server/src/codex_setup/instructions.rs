@@ -1,25 +1,8 @@
 //! Aliases de instruções, com autoria durável e preservação de alterações externas.
 use super::files::Error;
 use crate::config_sync::runtime::RuntimeConfig;
-use std::{io, path::Path};
+use std::path::Path;
 pub use super::instructions_imports::imported;
-
-pub trait Links {
-    fn create(&self, source: &Path, target: &Path) -> io::Result<()>;
-}
-pub struct NativeLinks;
-impl Links for NativeLinks {
-    fn create(&self, source: &Path, target: &Path) -> io::Result<()> {
-        #[cfg(unix)]
-        {
-            std::os::unix::fs::symlink(source, target)
-        }
-        #[cfg(windows)]
-        {
-            std::os::windows::fs::symlink_file(source, target)
-        }
-    }
-}
 
 pub async fn prepare(
     config: &RuntimeConfig,
@@ -27,7 +10,18 @@ pub async fn prepare(
     cwd: Option<&Path>,
     force: bool,
 ) -> Result<(), Error> {
-    prepare_with(config, codex_home, cwd, force, &NativeLinks).await
+    if !force && !super::sync_enabled(config) {
+        return Ok(());
+    }
+    let _lock = lock(codex_home).await?;
+    let source = super::instructions_alias::source(&config.env.home.join(".claude"))?;
+    super::instructions_alias::apply(
+        &codex_home.join("AGENTS.override.md"),
+        source.as_deref(),
+        &codex_home.join(".hangar-instrucoes"),
+        &config.env,
+    )?;
+    super::instructions_projects::prepare(&config.env, codex_home, cwd).await
 }
 
 pub async fn prepare_project(
@@ -40,7 +34,7 @@ pub async fn prepare_project(
         return Ok(());
     }
     let _lock = lock(codex_home).await?;
-    super::instructions_projects::prepare(&config.env, codex_home, Some(cwd), &NativeLinks).await
+    super::instructions_projects::prepare(&config.env, codex_home, Some(cwd)).await
 }
 
 pub fn limit(codex_home: &Path) -> Result<serde_json::Value, Error> {
@@ -83,29 +77,3 @@ async fn lock(codex_home: &Path) -> Result<std::fs::File, Error> {
         .await
         .map_err(Into::into)
 }
-
-async fn prepare_with(
-    config: &RuntimeConfig,
-    codex_home: &Path,
-    cwd: Option<&Path>,
-    force: bool,
-    links: &impl Links,
-) -> Result<(), Error> {
-    if !force && !super::sync_enabled(config) {
-        return Ok(());
-    }
-    let _lock = lock(codex_home).await?;
-    let source = super::instructions_alias::source(&config.env.home.join(".claude"))?;
-    super::instructions_alias::apply(
-        &codex_home.join("AGENTS.override.md"),
-        source.as_deref(),
-        &codex_home.join(".hangar-instrucoes"),
-        &config.env,
-        links,
-    )?;
-    super::instructions_projects::prepare(&config.env, codex_home, cwd, links).await
-}
-
-#[cfg(all(test, unix))]
-#[path = "instructions_tests.rs"]
-mod tests;

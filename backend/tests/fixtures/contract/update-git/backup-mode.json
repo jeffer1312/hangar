@@ -1,8 +1,0 @@
-{
-  "source_commit": "5f76a3eafa5e909eaa3ac33e8c1d266e65548d82",
-  "command": "python generate-backup-mode.py <checkout-Python> <fixture>",
-  "source_mode": 488,
-  "umask": 18,
-  "previous_mode": 420,
-  "warning": null
-}

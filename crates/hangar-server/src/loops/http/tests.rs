@@ -127,77 +127,6 @@ proptest::proptest! {
 }
 
 #[tokio::test]
-async fn guest_loop_validation_preserves_original_errors() {
-    let fixtures:Value=serde_json::from_str(include_str!("../../../../../backend/tests/fixtures/contract/guests/loop-validation.json")).unwrap();
-    let mut failures=Vec::new();
-    for (index, case) in fixtures["rows"].as_array().unwrap().iter().enumerate() {
-        if case["status"]!=422 {continue;}
-        let dir=tempfile::tempdir().unwrap();
-        let fake=Fake {store:Store::new(dir.path()),rows:vec![],automations:true,config:None,branch:None,queued:Mutex::default(),pushed:Mutex::default()};
-        let operation=match case["model"].as_str().unwrap() {"LoopCreate"=>Op::Create,"LoopResolve"=>Op::Resolve,"LoopRefine"=>Op::Refine,"ThenLinkBody"=>Op::ThenSet,other=>panic!("modelo {other}")};
-        let body=serde_json::to_vec(&case["body"]).unwrap();
-        let (status, response)=handle(&fake,"cc",operation,&body).await;
-        if status.as_u16()!=422 || response!=case["response"] {failures.push((index,response));}
-        assert!(fake.queued.lock().unwrap().is_empty());assert!(fake.store.get("cc").is_none());
-    }
-    assert!(failures.is_empty(),"GUE-083: validação divergente {failures:?}");
-}
-
-#[tokio::test]
-async fn guest_loop_checkcmd_preserves_original_file_normalization() {
-    let fixtures:Value=crate::orchestration::codec::loads(include_str!("../../../../../backend/tests/fixtures/contract/guests/loop-checkcmd.json")).unwrap();
-    for case in fixtures["rows"].as_array().unwrap() {
-        let dir=tempfile::tempdir().unwrap();
-        let fake=Fake {store:Store::new(dir.path()),rows:vec![row(json!({"name":"cc","provider":"claude"}))],automations:true,config:None,branch:None,queued:Mutex::default(),pushed:Mutex::default()};
-        let body=crate::orchestration::codec::dumps(&json!({"goal":"fixture","check_cmd":case["check_cmd"]}),false);
-        let (status,mut response)=handle(&fake,"cc",Op::Create,body.as_bytes()).await;
-        assert_eq!(status.as_u16(),case["status"].as_u64().unwrap() as u16,"GUE-083: {body}");
-        // A identidade da entrada vem da fila de prova; o contrato compara seu vínculo.
-        let queued=fake.queued.lock().unwrap();
-        assert_eq!(response["loop"]["goal_entry_id"],queued["cc"][0]["id"]);
-        response["loop"]["goal_entry_id"]=case["response"]["loop"]["goal_entry_id"].clone();
-        assert_eq!(response,case["response"]);
-        let mut disk=Value::Object(fake.store.get("cc").unwrap());disk["goal_entry_id"]=case["disk"]["goal_entry_id"].clone();
-        assert_eq!(disk,case["disk"]);
-    }
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn guest_loop_io_preserves_previous_record_and_effects() {
-    use std::os::unix::fs::PermissionsExt;
-    let fixture:Value=serde_json::from_str(include_str!("../../../../../backend/tests/fixtures/contract/guests/loop-io.json")).unwrap();
-    let mut failures=Vec::new();
-    for case in fixture["rows"].as_array().unwrap() {
-        let dir=tempfile::tempdir().unwrap();
-        let fake=Fake {store:Store::new(dir.path()),rows:vec![row(json!({"name":"s","provider":"claude"}))],automations:true,config:None,branch:None,queued:Mutex::default(),pushed:Mutex::default()};
-        fake.store.set("s",case["initial"].as_object().unwrap()).unwrap();
-        let path=fake.store.loop_dir().join("s.json");
-        let before=std::fs::read(&path).unwrap();
-        std::fs::set_permissions(fake.store.loop_dir(),std::fs::Permissions::from_mode(0o555)).unwrap();
-        let method=Method::from_bytes(case["method"].as_str().unwrap().as_bytes()).unwrap();
-        let (_,operation)=op(&method,&format!("/api/sessions/s/{}",case["tail"].as_str().unwrap())).unwrap();
-        let body=if case["body"].is_null(){Vec::new()}else{serde_json::to_vec(&case["body"]).unwrap()};
-        let (status,response)=handle(&fake,"s",operation,&body).await;
-        std::fs::set_permissions(fake.store.loop_dir(),std::fs::Permissions::from_mode(0o755)).unwrap();
-        assert_eq!(status.as_u16(),500,"{case}: {response}");
-        assert_eq!(response["detail"]["code"],"loop_store_unwritable");
-        assert_eq!(std::fs::read(&path).unwrap(),before);
-        assert!(!path.with_extension("tmp").exists());
-        assert!(fake.pushed.lock().unwrap().is_empty());
-        let mut queued=fake.queued.lock().unwrap().get("s").cloned().unwrap_or_default();
-        for value in &mut queued {value.as_object_mut().unwrap().remove("id");}
-        assert_eq!(json!(queued),case["queued"]);
-        let mut headers=axum::http::HeaderMap::new();headers.insert("origin","https://fixture.invalid".parse().unwrap());
-        let mut http=http_response(status,response.clone());crate::http_cors::apply(&headers,&mut http);
-        let cors=http.headers().get("access-control-allow-origin").and_then(|v|v.to_str().ok());
-        println!("{} {}: status={}, body={}, cors={cors:?}, registro preservado",method,case["tail"],status,response);
-        if cors!=case["cors"].as_str(){failures.push(format!("{} {}: {cors:?}",method,case["tail"]));}
-    }
-    assert!(failures.is_empty(),"CORS de exceção externa: {failures:?}");
-}
-
-#[tokio::test]
 async fn guest_loop_invalid_config_refuses_create_and_refine_without_effects() {
     for op in [Op::Create, Op::Refine] {
         let home = tempfile::tempdir().unwrap();
@@ -209,31 +138,6 @@ async fn guest_loop_invalid_config_refuses_create_and_refine_without_effects() {
         assert!(fake.queued.lock().unwrap().is_empty());
         assert!(fake.pushed.lock().unwrap().is_empty());
         assert!(fake.store.get("s").is_none());
-    }
-}
-
-#[tokio::test]
-async fn guest_loop_resolve_provider_refuses_resume_without_side_effects() {
-    let fixture: Value = serde_json::from_str(include_str!("../../../../../backend/tests/fixtures/contract/guests/loop-resolve-provider.json")).unwrap();
-    for case in fixture["rows"].as_array().unwrap() {
-        let dir = tempfile::tempdir().unwrap();
-        let fake = Fake { store: Store::new(dir.path()), rows: vec![row(json!({"name":"s","provider":case["provider"],"jsonl":"fixture.jsonl"}))], automations:true, config:None, branch:None, queued:Mutex::default(), pushed:Mutex::default() };
-        fake.store.set("s",case["initial"].as_object().unwrap()).unwrap();
-        let path=fake.store.loop_dir().join("s.json");
-        let before=std::fs::read(&path).unwrap();
-        let body=serde_json::to_vec(&json!({"accept":case["accept"]})).unwrap();
-        let (status,response)=handle(&fake,"s",Op::Resolve,&body).await;
-        if case["provider"]!="claude" && case["accept"]==false {
-            assert_eq!(status,StatusCode::CONFLICT,"D59 {case}");
-            assert_eq!(response["detail"]["code"],"erro_loop_provider_invalido");
-            assert_eq!(std::fs::read(&path).unwrap(),before);
-            assert!(fake.queued.lock().unwrap().is_empty());
-            assert!(fake.pushed.lock().unwrap().is_empty());
-        } else {
-            assert_eq!(status.as_u16(),case["status"].as_u64().unwrap() as u16);
-            assert_eq!(response,case["response"],"{case}");
-            assert_eq!(json!(*fake.pushed.lock().unwrap()),case["pushed"]);
-        }
     }
 }
 

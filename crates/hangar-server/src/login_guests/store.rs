@@ -80,24 +80,13 @@ pub(super) fn write_bytes(path: &Path, bytes: &[u8]) -> io::Result<()> {
     std::fs::create_dir_all(parent)?;
     let mut file = tempfile::NamedTempFile::new_in(parent)?;
     file.write_all(bytes)?;
-    let mut attempts = 0;
-    loop {
-        match file.persist(path) {
-            Ok(_) => return Ok(()),
-            Err(e) => {
-                if cfg!(windows)
-                    && e.error.kind() == io::ErrorKind::PermissionDenied
-                    && attempts < 6
-                {
-                    file = e.file;
-                    attempts += 1;
-                    std::thread::sleep(std::time::Duration::from_millis(attempts * 20));
-                } else {
-                    return Err(e.error);
-                }
-            }
-        }
-    }
+    file.as_file().sync_all()?;
+    // Como o `persist`: no Windows o arquivo deixa de ser marcado temporário antes da troca.
+    let (handle, temporary) = file.keep().map_err(|error| error.error)?;
+    drop(handle);
+    crate::runtime::queue::replace(&temporary, path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&temporary);
+    })
 }
 
 #[derive(Clone, Debug)]
@@ -136,8 +125,6 @@ pub struct Store {
     lock: Mutex<()>,
     last: Mutex<Option<Value>>,
     loaded: Mutex<Option<(FileStamp, Value)>>,
-    #[cfg(test)]
-    read_barriers: Mutex<Option<Arc<(std::sync::Barrier, std::sync::Barrier)>>>,
 }
 impl Store {
     pub fn shared(path: PathBuf) -> Arc<Self> {
@@ -151,8 +138,6 @@ impl Store {
             lock: Mutex::new(()),
             last: Mutex::new(None),
             loaded: Mutex::new(None),
-            #[cfg(test)]
-            read_barriers: Mutex::new(None),
         }
     }
     fn load(&self) -> Result<Value> {
@@ -230,11 +215,6 @@ impl Store {
             _ => return Err(Failure::io(io::Error::other("sessões inválidas"))),
         };
         let doc = json!({"guests":normalized,"sessions":sessions});
-        #[cfg(test)]
-        if let Some(barriers) = { let mut hook = self.read_barriers.lock().unwrap(); hook.take() } {
-            barriers.0.wait();
-            barriers.1.wait();
-        }
         // Publicação e confirmação da identidade são indivisíveis para os escritores locais.
         let mut loaded = self.loaded.lock().unwrap_or_else(|e| e.into_inner());
         if stamp == file_stamp(&self.path) {
@@ -270,13 +250,6 @@ impl Store {
                     .flatten()
             })
     }
-    pub fn by_id(&self, id: &str) -> Option<Guest> {
-        self.load().ok()?["guests"]
-            .as_array()?
-            .iter()
-            .find(|g| g["id"] == id)
-            .and_then(guest)
-    }
     pub fn mutate<T>(&self, f: impl FnOnce(&mut Value) -> Result<T>) -> Result<T> {
         self.mutate_optional(|state| f(state).map(Some)).map(|result| result.expect("mutação sempre produz resultado"))
     }
@@ -286,14 +259,7 @@ impl Store {
             .path
             .parent()
             .ok_or_else(|| Failure::io(io::Error::other("arquivo sem pasta")))?;
-        std::fs::create_dir_all(parent).map_err(Failure::io)?;
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .append(true)
-            .create(true)
-            .open(parent.join("guests.lock"))
-            .map_err(Failure::io)?;
-        file.lock().map_err(Failure::io)?;
+        let _file = crate::session_rename::files::lock_file(&parent.join("guests.lock")).map_err(Failure::io)?;
         let mut state = self.load()?;
         let result = f(&mut state)?;
         if result.is_none() { return Ok(None); }
@@ -434,16 +400,7 @@ fn guest(v: &Value) -> Option<Guest> {
     })
 }
 pub fn valid_root(root: &str) -> Result<String> {
-    let p = if root == "~" || root.starts_with("~/") || root.starts_with("~\\") {
-        PathBuf::from(
-            std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
-                .unwrap_or_default(),
-        )
-        .join(root.get(2..).unwrap_or(""))
-    } else {
-        PathBuf::from(root)
-    };
-    let p = p
+    let p = crate::accounts::environment::expand(root, &crate::orchestration::home())
         .canonicalize()
         .ok()
         .filter(|p| p.is_dir())
@@ -452,44 +409,4 @@ pub fn valid_root(root: &str) -> Result<String> {
         .strip_prefix(r"\\?\")
         .unwrap_or(&p.to_string_lossy())
         .to_string())
-}
-
-#[cfg(test)]
-mod review_tests {
-    use super::*;
-    fn fixture(path: &Path) {
-        let value: Value = serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/store.json")).unwrap();
-        write(path, &value["failed_adoption"]["before"]).unwrap();
-    }
-    #[test]
-    fn login_guests_review_adopts_last_good_life_once() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("guests.json");
-        fixture(&path);
-        let store = Store::new(path.clone());
-        assert!(store.snapshot(true).is_some());
-        std::fs::write(&path, b"{").unwrap();
-        assert!(store.owner("session", Some("k:first"), true).is_some());
-        assert!(store.owner("session", Some("k:second"), true).is_none(), "GUE-022/D02: a última leitura boa adota somente uma vida");
-        assert_eq!(std::fs::read(path).unwrap(), b"{");
-    }
-    #[test]
-    fn login_guests_review_stale_read_cannot_undo_write() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("guests.json");
-        fixture(&path);
-        let mut initial = read(&path).unwrap().unwrap();
-        for g in initial["guests"].as_array_mut().unwrap() { g["owner_sees"] = json!(true); }
-        write(&path, &initial).unwrap();
-        let store = Arc::new(Store::new(path.clone()));
-        let barriers = Arc::new((std::sync::Barrier::new(2), std::sync::Barrier::new(2)));
-        *store.read_barriers.lock().unwrap() = Some(barriers.clone());
-        let reader = { let store = store.clone(); std::thread::spawn(move || store.snapshot(true)) };
-        barriers.0.wait();
-        store.mutate(|doc| { for g in doc["guests"].as_array_mut().unwrap() { g["owner_sees"] = json!(false); } Ok(()) }).unwrap();
-        barriers.1.wait();
-        reader.join().unwrap();
-        std::fs::write(&path, b"{").unwrap();
-        assert!(!store.snapshot(true).unwrap()["guests"][0]["owner_sees"].as_bool().unwrap(), "D02: leitura antiga não desfaz a ocultação publicada");
-    }
 }

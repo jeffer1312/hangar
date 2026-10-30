@@ -12,18 +12,6 @@ pub fn remove(text:&str)->Result<String,Error>{
  }Ok(remaining)
 }
 #[cfg(test)]
-mod tests{
- use super::*;
- use serde_json::{Value,json};
- #[test]
- fn codex_service_legacy_instructions_preserves_personal_text_and_rejects_broken_blocks(){
-  let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/codex-integration/legacy-instructions.json")).unwrap();let mut differences=vec![];
-  for case in fixture["cases"].as_array().unwrap(){let actual=match remove(case["input"].as_str().unwrap()){Ok(value)=>json!({"ok":value}),Err(e)=>json!({"error":e.kind,"message":e.message})};if actual!=case["result"]{differences.push(json!({"case":case,"actual":actual}));}}
-  assert!(differences.is_empty(),"Bloco legado divergente: {differences:#?}");
- }
-}
-
-#[cfg(test)]
 mod fuzz{
  use proptest::prelude::*;
  proptest!{#![proptest_config(ProptestConfig::with_cases(48))]

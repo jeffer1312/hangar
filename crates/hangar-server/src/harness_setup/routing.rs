@@ -31,7 +31,7 @@ async fn inner(state: Arc<AppState>, peer: SocketAddr, request: Request) -> Resp
         return response;
     }
     if state.settings_snapshot().is_err() {
-        return crate::engines::body::internal_error();
+        return crate::http_cors::internal_error();
     }
     if http::integration_path(&path) { return http::integration(&state,request).await; }
     let device = crate::accounts::http::bridge(&state).ok().and_then(|bridge| {

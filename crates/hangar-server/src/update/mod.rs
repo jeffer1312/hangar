@@ -152,10 +152,11 @@ fn read_manifest(dir: &Path) -> Option<Manifest> { Manifest::parse(&std::fs::rea
 /// É pacote pelo mesmo critério do `diag.install_manifest()` do Python: `version`, `commit` e
 /// `channel` presentes e não vazios. O resto não decide o modo: os dois lados têm que concordar,
 /// senão um manifesto aceito por um e recusado pelo outro deixa a máquina sem quem a atualize.
-pub fn is_package(dir: &Path) -> bool {
-    let Some(value) = std::fs::read(dir.join(MANIFEST_FILE)).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()) else { return false };
-    ["version", "commit", "channel"].iter().all(|k| value.get(k).and_then(Value::as_str).is_some_and(|s| !s.is_empty()))
+pub fn package_manifest(dir: &Path) -> Option<Value> {
+    let value = std::fs::read(dir.join(MANIFEST_FILE)).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok())?;
+    ["version", "commit", "channel"].iter().all(|k| value.get(k).and_then(Value::as_str).is_some_and(|s| !s.is_empty())).then_some(value)
 }
+pub fn is_package(dir: &Path) -> bool { package_manifest(dir).is_some() }
 
 /// O manifesto em uso marca pacote mas não serve ao atualizador: o motivo, para o estado e a tela.
 pub fn broken_manifest(layout: &Layout) -> Option<String> {

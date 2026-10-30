@@ -20,7 +20,7 @@ impl stage_flow::Actions for Actions<'_>{
  }
  fn fingerprint(&mut self)->Result<String,Error>{super::pipeline_fingerprint::compute(self.env,self.config,self.account,self.repo,None,None,true)}
  async fn open(&mut self,home:&Path,account:&Path,memory:bool)->Result<(),Error>{
-  self.stage=Some(Native::open_controlled(self.env,home,account,memory,self.cancel.clone()).await.map_err(operation)?);Ok(())
+  self.stage=Some(Native::open(self.env,home,account,memory,Some(self.cancel.clone())).await.map_err(operation)?);Ok(())
  }
  async fn detect(&mut self)->Result<Vec<Value>,Error>{
   let native=self.stage.as_ref().ok_or_else(||Error{kind:"RuntimeError",message:"Importador temporário não foi aberto".into()})?;

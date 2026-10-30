@@ -1,5 +1,6 @@
 //! Leitura do livro pelo shell, sem servidor e sem interpretar Python.
-use super::store::{Store, truthy};
+use super::store::Store;
+use crate::orchestration::truthy;
 use serde_json::Value;
 use std::io::Write;
 use std::path::Path;

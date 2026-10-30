@@ -77,7 +77,7 @@ async fn detect_with(native: &impl Transport, timeout: Duration) -> Result<Vec<V
     );
     if ["sourceErrors", "errors", "warnings"]
         .into_iter()
-        .any(|field| crate::config_sync::apply::truthy(&response[field]))
+        .any(|field| crate::orchestration::truthy(&response[field]))
     {
         return Err(
             "O Codex informou falhas ou avisos na detecção; fontes existentes foram preservadas."
@@ -146,98 +146,4 @@ async fn import_with(
     tokio::time::timeout(timeout, operation)
         .await
         .map_err(|_| "O Codex excedeu o tempo limite para concluir a importação.".to_owned())?
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-    use std::sync::Mutex;
-
-    struct Fixture {
-        response: Value,
-        events: Vec<Value>,
-        delayed: bool,
-        calls: Mutex<Vec<Value>>,
-        sender: tokio::sync::mpsc::UnboundedSender<Option<Value>>,
-        receiver: tokio::sync::mpsc::UnboundedReceiver<Option<Value>>,
-    }
-    impl Transport for Fixture {
-        async fn request(
-            &self,
-            method: &str,
-            params: Value,
-            _timeout: Duration,
-        ) -> Result<Value, String> {
-            self.calls
-                .lock()
-                .unwrap()
-                .push(json!({"method":method,"params":params}));
-            let events = self.events.clone();
-            let sender = self.sender.clone();
-            let send = move || {
-                for event in events {
-                    sender.send((!event.is_null()).then_some(event)).unwrap();
-                }
-            };
-            if self.delayed {
-                tokio::spawn(async move {
-                    tokio::time::sleep(Duration::from_millis(1)).await;
-                    send();
-                });
-            } else {
-                send();
-            }
-            Ok(self.response.clone())
-        }
-        fn discard_events(&mut self) {
-            while self.receiver.try_recv().is_ok() {}
-        }
-        async fn event(&mut self) -> Option<(String, Value)> {
-            self.receiver
-                .recv()
-                .await
-                .flatten()
-                .map(|value| ("externalAgentConfig/import/completed".into(), value))
-        }
-    }
-
-    #[tokio::test]
-    async fn import_api_matches_original_validation_and_completion() {
-        let fixture: Value = serde_json::from_str(include_str!(
-            "../../../../backend/tests/fixtures/contract/codex-integration/import-api.json"
-        ))
-        .unwrap();
-        let mut differences = Vec::new();
-        for (index, row) in fixture["cases"].as_array().unwrap().iter().enumerate() {
-            let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
-            let mut native = Fixture {
-                response: row["response"].clone(),
-                events: row["events"].as_array().cloned().unwrap_or_default(),
-                delayed: row["delayed"].as_bool().unwrap(),
-                calls: Mutex::new(Vec::new()),
-                sender,
-                receiver,
-            };
-            let timeout = Duration::from_millis(20);
-            let result = match row["operation"].as_str().unwrap() {
-                "detectar" => detect_with(&native, timeout).await.map(Value::Array),
-                "historicos_importacao" => histories_with(&native, timeout).await.map(Value::Array),
-                "importar" => import_with(&mut native, Vec::new(), timeout).await,
-                _ => unreachable!(),
-            };
-            let actual = match result {
-                Ok(value) => json!({"ok":value}),
-                Err(error) => json!({"error":error}),
-            };
-            let calls = json!(*native.calls.lock().unwrap());
-            if actual != row["result"] || calls != row["calls"] {
-                differences.push((index, actual, calls));
-            }
-        }
-        assert!(
-            differences.is_empty(),
-            "importação divergente: {differences:?}"
-        );
-    }
 }

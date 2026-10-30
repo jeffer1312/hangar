@@ -30,9 +30,7 @@ impl Branch {
 pub struct Service { branch:Mutex<Branch> }
 impl Service {
     pub fn get(&self,root:&Path,environment:&BTreeMap<String,String>,now:Duration)->Option<String> {
-        let manifest=std::fs::read(root.join("manifest.json")).ok()
-            .and_then(|bytes|serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-            .filter(|value|["version","commit","channel"].iter().all(|key|value.get(key).and_then(serde_json::Value::as_str).is_some_and(|text|!text.is_empty())));
+        let manifest=crate::update::package_manifest(root);
         self.branch.lock().unwrap_or_else(std::sync::PoisonError::into_inner).resolve_with(now,manifest.as_ref().and_then(|value|value["channel"].as_str()),|args,timeout|{
             let mut command=vec!["git".to_owned()];command.extend(args.iter().map(|value|(*value).to_owned()));
             crate::update::process::run_capture_with_env(&command,root,timeout,environment)

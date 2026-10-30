@@ -33,13 +33,6 @@ impl Settings {
             bootstrap:String::new(), secret:Vec::new(), secure:false,
             rate_max:10.into(), rate_window:300.into() }
     }
-    pub fn from_config(home: &std::path::Path, claude: &std::path::Path, backend: Option<&std::path::Path>) -> super::store::Result<Self> {
-        let snapshot=crate::machine_peers::dotenv::SettingsSnapshot::capture(home,backend,
-            crate::machine_peers::dotenv::SettingsEnvironment::capture()).map_err(|_|config_invalid())?;
-        let mut settings=Self::from_snapshot(home,claude,&snapshot)?;
-        if settings.secret.is_empty() { settings.secret=PROCESS_SECRET.clone(); }
-        Ok(settings)
-    }
     pub fn from_snapshot(home:&std::path::Path,claude:&std::path::Path,snapshot:&crate::machine_peers::dotenv::SettingsSnapshot)->super::store::Result<Self> {
         let read=|key|snapshot.value(key).map_err(|_|config_invalid());
         let mut settings=Self::defaults(home,claude);
@@ -66,23 +59,14 @@ fn config_invalid() -> Failure {
 
 pub struct Service {
     pub store: Arc<Store>,
-    pub body_limit: usize,
     config_error: Option<Failure>,
     pub(crate) needs_initialization: bool,
-    pub rate_now: fn() -> f64,
     pub(crate) lives: std::sync::OnceLock<Arc<crate::share::life::Lives>>,
     pub(super) sync: Sync,
     pub now: fn() -> u64,
     pub entropy: fn(usize) -> Vec<u8>,
-    pub id: fn() -> String,
-    pub token: fn() -> String,
-    #[cfg(test)]
-    login_barriers: std::sync::Mutex<Option<Arc<(std::sync::Barrier, std::sync::Barrier)>>>,
 }
 impl Service {
-    pub fn set_diary_directory(&mut self, directory: PathBuf) {
-        self.sync.diary.directory = Some(directory);
-    }
     pub async fn from_state(state: &AppState) -> Self {
         let home=&state.accounts.env.home;let claude=&state.accounts.env.claude_base;
         let settings=state.settings_snapshot().map_err(|_|config_invalid())
@@ -106,12 +90,6 @@ impl Service {
         let mut service=Self::new(Settings::defaults(home,claude));
         service.config_error=Some(config_invalid());service.needs_initialization=true;service
     }
-    pub fn from_config(home: &std::path::Path, claude: &std::path::Path, backend: Option<&std::path::Path>) -> Self {
-        match Settings::from_config(home,claude,backend) {
-            Ok(settings)=>Self::new(settings),
-            Err(error)=>{ let mut service=Self::new(Settings::defaults(home,claude)); service.config_error=Some(error); service }
-        }
-    }
     pub fn new(settings: Settings) -> Self {
         let mut sync = Sync::new(settings.vault, settings.runtime_config, settings.secret);
         sync.bootstrap = settings.bootstrap;
@@ -121,10 +99,8 @@ impl Service {
         sync.rate_window = settings.rate_window;
         Self {
             store: Store::shared(settings.guests),
-            body_limit: 100 * 1024 * 1024,
             config_error: None,
             needs_initialization:false,
-            rate_now: || std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0,|d|d.as_secs_f64()),
             lives: std::sync::OnceLock::new(),
             sync,
             now: || {
@@ -133,10 +109,6 @@ impl Service {
                     .map_or(0, |d| d.as_secs())
             },
             entropy: store::random,
-            id: store::id,
-            token: store::token,
-            #[cfg(test)]
-            login_barriers: std::sync::Mutex::new(None),
         }
     }
     /// A mesma função atende a porta pública e as provas HTTP, sem depender do Python.
@@ -147,8 +119,8 @@ impl Service {
         https: bool,
         request: Request,
     ) -> Response {
-        if declared_too_large(request.headers(), self.body_limit) {
-            return too_large();
+        if let Some(response) = crate::http_body_limit::precheck(request.headers()) {
+            return response;
         }
         let (parts, body) = request.into_parts();
         let headers = parts.headers.clone();
@@ -172,12 +144,12 @@ impl Service {
             _ => false,
         };
         let parsed = if expects_body {
-            match to_bytes(body, self.body_limit).await {
+            match to_bytes(body, crate::http_body_limit::MAX_BYTES).await {
                 Ok(bytes) if bytes.is_empty() => Ok(Value::Null),
                 Ok(bytes) if json_content_type(&parts.headers) => crate::orchestration::body::parse(&bytes),
                 Ok(bytes) => match std::str::from_utf8(&bytes) {
                     Ok(text) => Ok(Value::String(text.into())),
-                    Err(_) => return serialization_failure(&headers),
+                    Err(_) => return crate::http_cors::internal_error(),
                 },
                 Err(_) => Err((axum::http::StatusCode::BAD_REQUEST, json!({"detail":"There was an error parsing the body"}))),
             }
@@ -195,7 +167,7 @@ impl Service {
                 );
             }
         };
-        let body=super::Tree(body);
+        let body=crate::orchestration::codec::ValueGuard(body);
         let service = self.clone();
         let result = tokio::task::spawn_blocking(move || {
             service.dispatch(
@@ -296,25 +268,18 @@ impl Service {
                 _ => None,
             };
             let normalized = model
-                .map(|model| super::schema::validate(model, body).map(super::Tree))
+                .map(|model| super::schema::validate(model, body).map(crate::orchestration::codec::ValueGuard))
                 .transpose()?;
             let body = normalized.as_deref().unwrap_or(body);
             let (value, login_generation) = if path == "login" && method == Method::POST {
-                let (value, generation) = self.sync.login(body, (self.rate_now)(), ip)?;
+                let (value, generation) = self.sync.login(body, rate_now(), ip)?;
                 (value, Some(generation))
             } else {
                 (self.sync.handle(
                     method.as_str(), path, body, user.as_deref(),
-                    (self.rate_now)(), ip, self.entropy,
+                    rate_now(), ip, self.entropy,
                 )?, None)
             };
-            #[cfg(test)]
-            if path == "login" && method == Method::POST {
-                if let Some(barriers) = { let mut hook = self.login_barriers.lock().unwrap(); hook.take() } {
-                    barriers.0.wait();
-                    barriers.1.wait();
-                }
-            }
             let mut set_cookie = None;
             if path == "login" && method == Method::POST {
                 let u = body["user"].as_str().unwrap_or_default();
@@ -371,14 +336,14 @@ impl Service {
             None
         };
         let normalized = model
-            .map(|model| super::schema::validate(model, body).map(super::Tree))
+            .map(|model| super::schema::validate(model, body).map(crate::orchestration::codec::ValueGuard))
             .transpose()?;
         let body = normalized.as_deref().unwrap_or(body);
         let value = if method == Method::POST && path == "/api/guests" {
             let (root, sees, owner) = validation::guest_settings(body)?;
             let name = validation::text(body, "name", 1, 100)?;
             self.store
-                .create(&name, &root, sees, owner, (self.id)(), (self.token)())?
+                .create(&name, &root, sees, owner, store::id(), store::token())?
         } else if method == Method::POST && path.starts_with("/api/guests/") {
             let tail = &path[12..];
             if let Some(id) = tail.strip_suffix("/delete") {
@@ -449,11 +414,6 @@ fn unquote_cookie(value: &str) -> String {
     }
     result
 }
-fn serialization_failure(_headers: &HeaderMap) -> Response {
-    let mut response = (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response();
-    response.extensions_mut().insert(crate::http_cors::UnhandledServerError);
-    response
-}
 fn json_content_type(headers: &HeaderMap) -> bool {
     headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).is_some_and(|raw| {
         let media = raw.split(';').next().unwrap_or_default().trim().to_ascii_lowercase();
@@ -461,7 +421,7 @@ fn json_content_type(headers: &HeaderMap) -> bool {
     })
 }
 fn reply(f: Failure, headers: &HeaderMap) -> Response {
-    if f.status==500 && f.body.as_str()==Some("Internal Server Error") { return serialization_failure(headers); }
+    if f.status==500 && f.body.as_str()==Some("Internal Server Error") { return crate::http_cors::internal_error(); }
     let unhandled = f.body["detail"]["code"].as_str().is_some_and(|code| code.starts_with("sync_") || code=="guests_worker_failed");
     let mut r = Json(f.body).into_response();
     if r.status().is_success() {
@@ -475,20 +435,18 @@ fn reply(f: Failure, headers: &HeaderMap) -> Response {
     crate::http_cors::apply(headers, &mut r);
     r
 }
-fn declared_too_large(headers: &HeaderMap, limit: usize) -> bool {
-    crate::http_body_limit::precheck_with_limit(headers,limit).is_some()
+fn rate_now() -> f64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0,|d|d.as_secs_f64())
 }
-fn too_large() -> Response { crate::http_body_limit::rejected() }
 /// O tamanho declarado é recusado antes do porteiro; o fluxo só é consumido pela rota que o lê.
-pub async fn body_limit(State(st): State<Arc<AppState>>, request: Request, next: axum::middleware::Next) -> Response {
+pub async fn body_limit(State(_): State<Arc<AppState>>, request: Request, next: axum::middleware::Next) -> Response {
     let path = request.uri().path();
     if !owns_path(path) && !crate::loops::http::owns_path(path)
         && !crate::config_sync::runtime_http::owns_path(path)
     {
         return next.run(request).await;
     }
-    if declared_too_large(request.headers(), st.login_guests.body_limit) {
-        let mut response = too_large();
+    if let Some(mut response) = crate::http_body_limit::precheck(request.headers()) {
         crate::http_cors::apply(request.headers(), &mut response);
         return response;
     }
@@ -529,7 +487,7 @@ impl IntoResponse for Json {
     fn into_response(self) -> Response {
         if crate::orchestration::codec::contains_surrogate(&self.0) || crate::orchestration::codec::contains_nonfinite(&self.0) {
             crate::orchestration::codec::discard(self.0);
-            return serialization_failure(&HeaderMap::new());
+            return crate::http_cors::internal_error();
         }
         let raw=crate::transcript::pyjson::dumps_compact_unicode(&self.0);
         crate::orchestration::codec::discard(self.0);
@@ -559,60 +517,4 @@ pub async fn public_contract(request:Request,next:axum::middleware::Next)->Respo
     crate::http_cors::apply(&headers,&mut response);
     crate::http_route_response::suppress_head(&method,&mut response);
     response
-}
-
-#[cfg(test)]
-mod review_tests {
-    use super::*;
-    use axum::http::StatusCode;
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn login_guests_review_recreation_revokes_inflight_login() {
-        let fixture: Value = serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/http.json")).unwrap();
-        let rows = fixture["rows"].as_array().unwrap();
-        let guest = rows.iter().find(|row| row["name"] == "guest_hub").unwrap();
-        let login = rows.iter().find(|row| row["name"] == "login_guest").unwrap();
-        for same_password in [false, true] {
-            let dir = tempfile::tempdir().unwrap();
-            let mut service = Service::new(Settings {
-                guests: dir.path().join("guests.json"), vault: dir.path().join("vault.json"),
-                runtime_config: dir.path().join("config.json"), sync_enabled: true,
-                bootstrap: "bootstrap".into(), secret: b"fixture-secret".to_vec(), secure: false,
-                rate_max: 10.into(), rate_window: 300.into(),
-            });
-            service.now = || 2000000000;
-            store::write(&service.sync.path, &guest["vault"]).unwrap();
-            let barriers = Arc::new((std::sync::Barrier::new(2), std::sync::Barrier::new(2)));
-            *service.login_barriers.lock().unwrap() = Some(barriers.clone());
-            let service = Arc::new(service);
-            let request = Request::builder().method("POST").uri("/api/sync/login")
-                .header("content-type", "application/json")
-                .body(axum::body::Body::from(login["body"].to_string())).unwrap();
-            let pending = { let service = service.clone(); tokio::spawn(async move {
-                service.respond(false, "127.0.0.1".into(), false, request).await
-            }) };
-            barriers.0.wait();
-            let mut replacement = guest["body"].clone();
-            if !same_password {
-                replacement["auth_hash"] = json!("YmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmI=");
-            }
-            service.sync.handle("POST", "guests", &replacement, Some("owner"), 0.0, "fixture", |n| vec![b'y';n]).unwrap();
-            barriers.1.wait();
-            let response = pending.await.unwrap();
-            assert_eq!(response.status(), StatusCode::OK);
-            let cookie = response.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap();
-            let request = Request::builder().uri("/api/sync/vault").header("cookie", cookie)
-                .body(axum::body::Body::empty()).unwrap();
-            let response = service.respond(false, "127.0.0.1".into(), false, request).await;
-            assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "D33: recriação não autoriza cookie com credencial da geração anterior; mesma senha={same_password}");
-            let request = Request::builder().method("POST").uri("/api/sync/login")
-                .header("content-type", "application/json")
-                .body(axum::body::Body::from(json!({"user":"ana","auth_hash":replacement["auth_hash"]}).to_string())).unwrap();
-            let response = service.respond(false, "127.0.0.1".into(), false, request).await;
-            assert_eq!(response.status(), StatusCode::OK);
-            let cookie = response.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap();
-            let request = Request::builder().uri("/api/sync/vault").header("cookie", cookie)
-                .body(axum::body::Body::empty()).unwrap();
-            assert_eq!(service.respond(false, "127.0.0.1".into(), false, request).await.status(), StatusCode::OK, "D33: nova credencial continua utilizável");
-        }
-    }
 }

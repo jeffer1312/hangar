@@ -2,7 +2,7 @@ use super::{
     body::{self, Schema},
     mirrors, probe, proxy, store,
 };
-use crate::{routes::AppState, session_write::json_response};
+use crate::{orchestration::truthy, routes::AppState, session_write::json_response};
 use axum::{
     extract::Request,
     http::{Method, StatusCode},
@@ -12,12 +12,15 @@ use serde_json::{Value, json};
 
 fn visible(st: &crate::accounts::AccountService) -> Value {
     let mut entries = store::visible(&st.env);
+    // A configuração do CLIProxy e as contas dele são as mesmas para todos os motores: uma leitura só.
+    let local = proxy::local(&st.env);
+    let mut accounts = None;
     for (_, item) in &mut entries {
-        let result = proxy::is_local(&st.env, item["base_url"].as_str().unwrap_or(""));
+        let result = local.as_ref().map(|local| proxy::serves(local.as_ref(), item["base_url"].as_str().unwrap_or("")));
         match result {
             Ok(true) => {
                 item["cliproxy_accounts"] = json!([]);
-                match proxy::list_accounts(st) {
+                match accounts.get_or_insert_with(|| proxy::list_accounts(st)) {
                     Ok(accounts) if accounts.is_empty() => {
                         item["cliproxy_error"] = json!(
                             "nenhuma conta ChatGPT do proxy corresponde às contas cadastradas no Hangar"
@@ -62,7 +65,7 @@ pub async fn serve(st: &AppState, req: Request) -> Response {
             Err(error) if crate::http_body_limit::is_limit(&error) => {
                 return crate::http_body_limit::rejected();
             }
-            Err(_) => return body::internal_error(),
+            Err(_) => return crate::http_cors::internal_error(),
         }
     } else {
         axum::body::Bytes::new()
@@ -70,7 +73,7 @@ pub async fn serve(st: &AppState, req: Request) -> Response {
     if path == "/api/providers" && method == Method::GET {
         return match super::providers::read(&st.accounts).await {
             Ok(snapshot) => json_response(StatusCode::OK, snapshot.response()),
-            Err(error) => body::json_error(
+            Err(error) => crate::http_cors::json_guarded(
                 StatusCode::from_u16(error.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
                 error.body(),
             ),
@@ -92,7 +95,7 @@ pub async fn serve(st: &AppState, req: Request) -> Response {
         .await
         {
             Ok(Ok(value)) => json_response(StatusCode::OK, value),
-            _ => body::internal_error(),
+            _ => crate::http_cors::internal_error(),
         };
     }
     if path == "/api/credenciais/sincronizar" && method == Method::POST {
@@ -109,7 +112,7 @@ pub async fn serve(st: &AppState, req: Request) -> Response {
             );
         };
         let catalog = store::state(&env).0;
-        let Some(saved) = catalog.get(name).filter(|v| probe::truthy(v)) else {
+        let Some(saved) = catalog.get(name).filter(|v| truthy(v)) else {
             return crate::provider_models::ModelError::coded(
                 404,
                 "erro_credencial_inexistente",
@@ -204,7 +207,7 @@ pub async fn serve(st: &AppState, req: Request) -> Response {
             Err(response) => return response,
         };
         let (base, key) = if let Some(name) = body["nome"].as_str().filter(|s| !s.is_empty()) {
-            if probe::truthy(&body["base_url"]) || probe::truthy(&body["api_key"]) {
+            if truthy(&body["base_url"]) || truthy(&body["api_key"]) {
                 return coded(
                     400,
                     "erro_motor_nome_com_dados",
@@ -212,7 +215,7 @@ pub async fn serve(st: &AppState, req: Request) -> Response {
                 );
             }
             let catalog = store::state(&env).0;
-            let Some(saved) = catalog.get(name).filter(|v| probe::truthy(v)) else {
+            let Some(saved) = catalog.get(name).filter(|v| truthy(v)) else {
                 return coded(404, "erro_motor_nao_encontrado", "motor nao encontrado");
             };
             (
@@ -382,12 +385,12 @@ async fn syntax_before_auth(request: Request, path: &str) -> Result<Request, Res
         if crate::http_body_limit::is_limit(&error) {
             crate::http_body_limit::rejected()
         } else {
-            body::internal_error()
+            crate::http_cors::internal_error()
         }
     })?;
     if !bytes.is_empty() {
         let value = crate::orchestration::body::parse(&bytes)
-            .map_err(|(status, error)| body::json_error(status, error))?;
+            .map_err(|(status, error)| crate::http_cors::json_guarded(status, error))?;
         crate::orchestration::codec::discard(value);
     }
     Ok(Request::from_parts(parts, axum::body::Body::from(bytes)))

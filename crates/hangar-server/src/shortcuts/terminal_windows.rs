@@ -59,24 +59,6 @@ pub fn escape(command: &str, env: &BTreeMap<String, String>) -> String {
     }
     result
 }
-pub fn unescape(text: &str) -> String {
-    let mut result = String::new();
-    let mut rest = text;
-    while !rest.is_empty() {
-        if let Some(next) = rest.strip_prefix("%%") {
-            result.push('%');
-            rest = next;
-        } else if let Some(found) = variable().find(rest) {
-            result.push_str(found.as_str());
-            rest = &rest[found.end()..];
-        } else {
-            let c = rest.chars().next().unwrap();
-            result.push(c);
-            rest = &rest[c.len_utf8()..];
-        }
-    }
-    result
-}
 pub fn forget(dir: &Path, id: &str) -> std::io::Result<()> {
     for suffix in SUFFIXES {
         match std::fs::remove_file(dir.join(format!("{id}{suffix}"))) {

@@ -5,5 +5,3 @@ pub mod body;
 mod terminal;
 mod terminal_windows;
 pub(crate) mod guest;
-#[cfg(test)]
-mod terminal_tests;

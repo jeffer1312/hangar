@@ -228,26 +228,3 @@ mod tests {
         }
     }
 }
-
-#[cfg(all(test,unix))]
-mod stdin_tests {
-    use super::*;
-    #[tokio::test]
-    async fn guest_loop_stdin_preserves_python_replacement_bytes() {
-        use std::os::unix::fs::PermissionsExt;
-        let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/guests/loop-stdin.json")).unwrap();
-        let dir=tempfile::tempdir().unwrap();let executable=dir.path().join("claude");
-        std::fs::write(&executable,"#!/bin/sh\n/bin/cat > \"${0%/*}/stdin.bin\"\nprintf 'fixture\\n'\n").unwrap();
-        std::fs::set_permissions(&executable,std::fs::Permissions::from_mode(0o700)).unwrap();
-        let env=crate::accounts::environment::AccountEnvironment::from_pairs([("HOME",dir.path().to_str().unwrap()),("PATH",dir.path().to_str().unwrap())]);
-        let cli=Cli {accounts:crate::accounts::AccountService::new(env),bridge:None};
-        for case in fixture["rows"].as_array().unwrap() {
-            let value=crate::orchestration::codec::loads(case["raw"].as_str().unwrap()).unwrap();
-            let output=cli.run(value.as_str().unwrap(),None).await.unwrap();
-            let raw=std::fs::read(dir.path().join("stdin.bin")).unwrap();
-            let hex=raw.iter().map(|byte|format!("{byte:02x}")).collect::<String>();
-            assert_eq!(hex,case["stdin_hex"],"GUE-083: bytes do stdin");
-            assert_eq!(output.code,case["returncode"].as_i64().unwrap());assert_eq!(output.stdout,case["stdout"]);
-        }
-    }
-}

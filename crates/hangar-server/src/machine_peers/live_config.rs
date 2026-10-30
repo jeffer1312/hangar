@@ -7,11 +7,7 @@ pub fn update_channel(home:&Path,backend:Option<&Path>,environment:&SettingsEnvi
     let inherited=environment.value("",key)?;
     let Some(path)=crate::user_data::path(home,backend,".env").map_err(|error|error.to_string())? else {return Ok(inherited.unwrap_or_default());};
     let _lock=store::lock(&path).map_err(|error|error.msg)?;
-    let raw=match crate::runtime::queue::read_replaced_to_string(&path) {
-        Ok(raw)=>raw,
-        Err(error) if error.kind()==std::io::ErrorKind::NotFound=>String::new(),
-        Err(error)=>return Err(error.to_string()),
-    };
+    let raw=crate::user_data::read_env_at(&path)?;
     let disk=environment.file_value(&raw,key).unwrap_or_default();
     let marker=std::fs::read(path.with_extension("env.update-channel.json")).ok().and_then(|bytes|serde_json::from_slice::<serde_json::Value>(&bytes).ok());
     if let Some(marker)=marker {

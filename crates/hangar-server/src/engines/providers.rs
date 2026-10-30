@@ -35,9 +35,8 @@ pub async fn read(service: &AccountService) -> Result<Snapshot,OpenError> {
     if available("claude") {
         match service.claude_accounts() {
             Ok(accounts) => {
-                for (_,account) in accounts {
-                    logins.push(service.read_claude_auth(&account).await["loggedIn"].as_bool());
-                }
+                logins = futures_util::future::join_all(accounts.iter().map(|(_,account)|service.read_claude_auth(account))).await
+                    .into_iter().map(|state|state["loggedIn"].as_bool()).collect();
             }
             Err(error) => tracing::warn!(code=error.code,"catálogo de provedores: login Claude ilegível"),
         }

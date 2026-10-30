@@ -25,9 +25,9 @@ fn get<'a>(value:&'a Value,key:&str,default:&'a Value)->Result<&'a Value,Error>{
 fn number(value:&Value)->Result<f64,Error>{value.as_bool().map(|v|f64::from(u8::from(v))).or_else(||value.as_f64()).ok_or_else(||error("TypeError","Data de atualização inválida"))}
 fn plugins_due(registry:&Value,now:f64)->Result<bool,Error>{
  let empty=json!({});let zero=json!(0);let a=number(get(registry,"marketplaces_em",&zero)?)?;let b=number(get(registry,"marketplaces_tentativa_em",&zero)?)?;let mut attempted=if a>=b{a}else{b};
- let mut retry=crate::engines::probe::truthy(get(registry,"marketplaces_pendentes",&Value::Null)?)||crate::engines::probe::truthy(get(registry,"plugins_pendentes",&Value::Null)?);
+ let mut retry=crate::orchestration::truthy(get(registry,"marketplaces_pendentes",&Value::Null)?)||crate::orchestration::truthy(get(registry,"plugins_pendentes",&Value::Null)?);
  let previous=get(get(registry,"phases",&empty)?,"plugins",&empty)?;
- if crate::engines::probe::truthy(get(previous,"errors",&Value::Null)?){retry=true;attempted=number(get(previous,"attempted_at",&json!(attempted))?)?;}
+ if crate::orchestration::truthy(get(previous,"errors",&Value::Null)?){retry=true;attempted=number(get(previous,"attempted_at",&json!(attempted))?)?;}
  Ok(now<attempted||now-attempted>=if retry{300.0}else{21600.0})
 }
 struct Phase<'a,A>{name:&'a str,force:bool,actions:&'a mut A}
@@ -63,7 +63,7 @@ pub async fn run(context:&Context<'_>,actions:&mut(impl Actions+Send))->Result<V
   step(context.state,2,"etapa_instrucoes",actions.now());phase(context,actions,"instructions",&mut registry,context.force).await?;
   check(&context.cancel)?;actions.open().await?;
   let result=native_phases(context,actions,&mut registry).await;actions.close().await?;result?;
-  context.state.update(|v|v["estado"]=json!(if crate::engines::probe::truthy(&v["erros"]){"parcial"}else{"ok"}));Ok(())
+  context.state.update(|v|v["estado"]=json!(if crate::orchestration::truthy(&v["erros"]){"parcial"}else{"ok"}));Ok(())
  }.await;
  let interrupted=match result{Ok(())=>None,Err(error) if error.kind=="CancelledError"=>{context.state.update(|v|{v["estado"]=json!("ocioso");v["etapa"]=message("etapa_interrompida",json!({}));});Some(error)},Err(error)=>{
   let expected=matches!(error.kind,"OSError"|"FileNotFoundError"|"PermissionError"|"NotADirectoryError"|"ValueError"|"JSONDecodeError"|"UnicodeDecodeError"|"RuntimeError"|"CodexNativoErro"|"AlteradoExternamente");

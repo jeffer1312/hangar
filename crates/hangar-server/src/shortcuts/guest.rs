@@ -19,7 +19,7 @@ use std::{
 };
 
 fn error(status: u16, code: &str, msg: &str, params: Value) -> Response {
-    crate::engines::body::json_error(
+    crate::http_cors::json_guarded(
         StatusCode::from_u16(status).unwrap(),
         json!({"detail":{"code":code,"msg":msg,"params":params}}),
     )
@@ -186,7 +186,7 @@ pub async fn intercept(
     })?;
     if crate::http_body_input::is_json(&parts.headers) && !bytes.is_empty() {
         let syntax = crate::orchestration::body::parse(&bytes)
-            .map_err(|(status, value)| crate::engines::body::json_error(status, value))?;
+            .map_err(|(status, value)| crate::http_cors::json_guarded(status, value))?;
         codec::discard(syntax);
     }
     let _pass = match st.state.runtime.get() {
@@ -390,7 +390,7 @@ async fn plan(
             shell,
         })
         .await
-        .map_err(|_| crate::engines::body::internal_error())?
+        .map_err(|_| crate::http_cors::internal_error())?
         .ok_or_else(|| {
             error(
                 500,
@@ -409,7 +409,7 @@ async fn plan(
     };
     let public = json!({"id":terminal.id,"label":terminal.label,"alive":alive,"exit_code":code});
     if alive || code == Some(0) {
-        return Ok(Some(crate::engines::body::json_error(
+        return Ok(Some(crate::http_cors::json_guarded(
             StatusCode::ACCEPTED,
             json!({"ok":true,"terminal":public}),
         )));

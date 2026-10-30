@@ -1,26 +1,15 @@
 //! Um tique do checkout: os efeitos e avisos seguem a mesma ordem do botão automático.
 use serde_json::Value;
-use std::future::Future;
 #[derive(Debug)]
 pub enum Event { FetchFailed(i32,String), Launch, Refused(String), Skipped(String), Failed(String) }
-pub trait Source {
-    fn package(&self)->bool;
-    fn sleep(&self)->impl Future<Output=Result<(),()>>+Send;
-    fn enabled(&self)->bool;
-    fn fetch(&self)->impl Future<Output=Result<(i32,String),String>>+Send;
-    fn reason(&self)->impl Future<Output=Result<Option<String>,String>>+Send;
-    fn working(&self)->impl Future<Output=Result<bool,String>>+Send;
-    fn launch(&self)->impl Future<Output=Result<Value,String>>+Send;
-    fn report(&self,event:Event);
-}
-pub async fn run(source:&impl Source) {
+pub async fn run(source:&Live) {
     if source.package(){return;}
     while source.sleep().await.is_ok(){tick(source).await;}
 }
-pub async fn tick(source:&impl Source) {
+async fn tick(source:&Live) {
     if let Err(error)=attempt(source).await { source.report(Event::Failed(error)); }
 }
-async fn attempt(source:&impl Source)->Result<(),String> {
+async fn attempt(source:&Live)->Result<(),String> {
     if !source.enabled(){return Ok(());}
     let (code,tail)=source.fetch().await?;
     if code!=0 {source.report(Event::FetchFailed(code,tail));}
@@ -30,7 +19,7 @@ async fn attempt(source:&impl Source)->Result<(),String> {
         None=>{
             source.report(Event::Launch);
             let result=source.launch().await?;
-            if !crate::config_sync::apply::truthy(&result["ok"]) {
+            if !crate::orchestration::truthy(&result["ok"]) {
                 source.report(Event::Refused(crate::orchestration::codec::python_string(&result["erro"])));
             }
             crate::orchestration::codec::discard(result);
@@ -46,11 +35,11 @@ pub struct Live {
     pub list:std::sync::Arc<crate::list::bridge::ListBridge>,
     pub port:u16,
 }
-impl Source for Live {
+impl Live {
     fn package(&self)->bool {matches!(crate::update::http::mode(&self.service.home),crate::update::http::Mode::Package(_))}
     async fn sleep(&self)->Result<(),()>{tokio::time::sleep(std::time::Duration::from_secs(3600)).await;Ok(())}
     fn enabled(&self)->bool {
-        let value=self.runtime.get("automations");let enabled=crate::config_sync::apply::truthy(&value);
+        let value=self.runtime.get("automations");let enabled=crate::orchestration::truthy(&value);
         crate::orchestration::codec::discard(value);enabled
     }
     async fn fetch(&self)->Result<(i32,String),String>{

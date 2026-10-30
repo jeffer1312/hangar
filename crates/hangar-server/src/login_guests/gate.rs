@@ -283,7 +283,7 @@ pub(crate) async fn terminal_origin_allowed(st: &Arc<AppState>, headers: &axum::
         let public = public.unwrap_or_default();
         let configured = configured.unwrap_or_default();
         let value = runtime.get("term_origins");
-        let saved = if crate::config_sync::apply::truthy(&value) {
+        let saved = if crate::orchestration::truthy(&value) {
             crate::orchestration::codec::python_string(&value)
         } else { String::new() };
         crate::orchestration::codec::discard(value);

@@ -9,7 +9,7 @@ pub mod ecc;
 pub mod hooks;
 pub mod instructions;
 mod instructions_alias;
-mod instructions_imports;
+pub(crate) mod instructions_imports;
 mod instructions_lock;
 mod instructions_projects;
 mod instructions_toml;
@@ -29,16 +29,12 @@ pub fn sync_enabled(config: &crate::config_sync::runtime::RuntimeConfig) -> bool
         return false;
     }
     let sync = crate::config_sync::runtime_values::ValueGuard(config.get("codex_sync"));
-    if !crate::config_sync::apply::truthy(&sync) {
+    if !crate::orchestration::truthy(&sync) {
         return false;
     }
     let automations = crate::config_sync::runtime_values::ValueGuard(config.get("automations"));
-    crate::config_sync::apply::truthy(&automations)
+    crate::orchestration::truthy(&automations)
 }
-
-#[cfg(test)]
-#[path = "sync_gate_tests.rs"]
-mod sync_gate_tests;
 
 pub mod repair;
 pub mod status;

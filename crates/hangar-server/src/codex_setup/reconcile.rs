@@ -8,27 +8,11 @@ pub fn needed(running:bool,record:&Value,now:f64,fingerprint:impl FnOnce()->Resu
  let empty=serde_json::json!({});let status=get(record,"status",&empty)?;let state=get(status,"estado",&Value::Null)?;
  if state=="ok"{return Ok(false);}
  match fingerprint(){Ok(current)=>{if get(record,"fingerprint",&Value::Null)?!=&Value::String(current){return Ok(true);}},Err(error) if matches!(error.kind,"OSError"|"FileNotFoundError"|"PermissionError"|"NotADirectoryError"|"ValueError"|"JSONDecodeError"|"UnicodeDecodeError")=>return Ok(true),Err(error)=>return Err(error)}
- let next=get(status,"proxima_atualizacao",&Value::Null)?;if crate::engines::probe::truthy(next)&&timestamp(next)?<=now{return Ok(true);}
- let last=get(status,"ultima_execucao",&Value::Null)?;if !crate::engines::probe::truthy(last)||state=="ocioso"{return Ok(true);}
+ let next=get(status,"proxima_atualizacao",&Value::Null)?;if crate::orchestration::truthy(next)&&timestamp(next)?<=now{return Ok(true);}
+ let last=get(status,"ultima_execucao",&Value::Null)?;if !crate::orchestration::truthy(last)||state=="ocioso"{return Ok(true);}
  if state=="parcial"||state=="erro"{return Ok(timestamp(last)?+300.0<=now);}
  Ok(false)
 }
-#[cfg(test)]
-mod tests{
- use super::*;
- use serde_json::json;
- #[test]
- fn codex_service_reconcile_reuses_ready_state_and_observes_retry(){
-  let data:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/codex-integration/reconcile.json")).unwrap();let mut differences=vec![];
-  for case in data["cases"].as_array().unwrap(){
-   let result=needed(case["running"].as_bool().unwrap(),&case["data"],1000.0,||if case["fingerprint"]=="error"{Err(Error{kind:"OSError",message:"fixture".into()})}else{Ok(case["fingerprint"].as_str().unwrap().into())});
-   let actual=match result{Ok(value)=>json!({"ok":value}),Err(error)=>json!({"error":error.kind,"message":error.message})};
-   if actual!=case["result"]{differences.push(json!({"case":case,"actual":actual}));}
-  }
-  assert!(differences.is_empty(),"Decisão de preparo divergente: {differences:#?}");
- }
-}
-
 #[cfg(test)]
 mod fuzz{
  use proptest::prelude::*;

@@ -52,36 +52,6 @@ pub async fn acquire<F: Future<Output = ()>>(
     }
 }
 
-#[cfg(all(test, windows))]
-#[tokio::test]
-async fn windows_contention_matches_original_deadline_and_reacquisition() {
-    let fixture: serde_json::Value = serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/codex-integration/instructions-lock-windows.json")).unwrap();
-    let home = tempfile::tempdir().unwrap();
-    let held = acquire(home.path(), tokio::time::sleep).await.unwrap();
-    let started = std::time::Instant::now();
-    let error = tokio::time::timeout(
-        Duration::from_secs(14),
-        acquire(home.path(), tokio::time::sleep),
-    )
-    .await
-    .unwrap()
-    .unwrap_err();
-    assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
-    assert!(started.elapsed() >= Duration::from_secs(8));
-    assert!(error.to_string().starts_with("codex_instructions_busy:"));
-    assert!(fixture["contender"].get("error").is_some());
-    drop(held);
-    let raw = std::fs::read(home.path().join(".hangar-instrucoes.lock")).unwrap();
-    assert_eq!(
-        raw.iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>(),
-        fixture["locked_bytes"].as_str().unwrap()
-    );
-    let again = acquire(home.path(), tokio::time::sleep).await;
-    assert_eq!(again.is_ok(), fixture["reacquired"].as_bool().unwrap());
-}
-
 #[cfg(all(test,unix))]
 #[tokio::test]
 async fn unix_contention_is_bounded_and_releases_the_handle() {

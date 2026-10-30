@@ -59,14 +59,7 @@ impl SettingsSnapshot {
         Self{environment,file}
     }
     pub fn capture(home:&std::path::Path,backend:Option<&std::path::Path>,environment:SettingsEnvironment)->Result<Self,String>{
-        let raw=match crate::user_data::path(home,backend,".env").map_err(|e|e.to_string())? {
-            Some(path)=>match crate::runtime::queue::read_replaced_to_string(&path){
-                Ok(raw)=>raw,
-                Err(error) if error.kind()==std::io::ErrorKind::NotFound=>String::new(),
-                Err(error)=>return Err(error.to_string()),
-            },
-            None=>String::new(),
-        };
+        let raw=crate::user_data::read_env_raw(home,backend)?.unwrap_or_default();
         Ok(Self::from_parts(environment,raw))
     }
     pub fn environment(&self)->&SettingsEnvironment { &self.environment }

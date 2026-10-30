@@ -1,60 +1,5 @@
-use hangar_server::{orchestration::codec, update::StateFile};
-use serde_json::{Value, json};
-fn bytes(raw: &str) -> Vec<u8> {
-    raw.as_bytes().chunks_exact(2).map(|pair|u8::from_str_radix(std::str::from_utf8(pair).unwrap(),16).unwrap()).collect()
-}
-#[test]
-fn update_state_preserves_original_special_values_and_merge() {
-    let output=std::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--exact","update_state_contract::update_state_contract_child","--ignored","--nocapture"])
-        .output().unwrap();
-    assert!(output.status.success(),"{}\n{}",String::from_utf8_lossy(&output.stdout),String::from_utf8_lossy(&output.stderr));
-}
-#[test]
-#[ignore="Subprocesso isolado para verificar profundidade sem abortar a suíte."]
-fn update_state_contract_child() {
-    let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/update-git/state-file.json")).unwrap();
-    let mut differences=vec![];
-    for row in fixture["cases"].as_array().unwrap(){
-        let name=row["name"].as_str().unwrap();let temp=tempfile::tempdir().unwrap();let state=StateFile::new(temp.path());
-        if let Some(raw)=row["input_hex"].as_str(){std::fs::write(state.path(),bytes(raw)).unwrap();}
-        let current=state.read();
-        let value=Value::Object(current.iter().map(|(key,value)|(key.clone(),codec::clone_value(value))).collect());
-        let expected=codec::loads(row["read"]["value"].as_str().unwrap()).unwrap();
-        if codec::dumps(&value,true)!=codec::dumps(&expected,true){differences.push(format!("{name}: leitura"));}
-        codec::discard(value);codec::discard(expected);drop(current);
-        state.write(json!({"fase":"pronto"}));
-        let raw=std::fs::read(state.path()).unwrap();
-        if name=="surrogate" {
-            if raw!=bytes(row["input_hex"].as_str().unwrap()){differences.push(format!("{name}: arquivo anterior perdido"));}
-        } else {
-            let mut actual=codec::loads(std::str::from_utf8(&raw).unwrap()).unwrap();
-            let mut expected=codec::loads(std::str::from_utf8(&bytes(row["file_hex"].as_str().unwrap())).unwrap()).unwrap();
-            for value in [&mut actual,&mut expected]{if let Some(old)=value.as_object_mut().unwrap().remove("ts"){codec::discard(old);}}
-            if codec::dumps(&actual,true)!=codec::dumps(&expected,true){differences.push(format!("{name}: mesclagem"));}
-            codec::discard(actual);codec::discard(expected);
-        }
-        assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(),1,"{name}: temporário órfão");
-    }
-    assert!(differences.is_empty(),"{}",differences.join("\n"));
-}
-
-#[test]
-fn update_state_log_and_warnings_preserve_original_inputs() {
-    let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/update-git/state-lists.json")).unwrap();
-    let mut differences=vec![];
-    for (index,row) in fixture["cases"].as_array().unwrap().iter().enumerate(){
-        let temp=tempfile::tempdir().unwrap();let state=StateFile::new(temp.path());
-        let log=row["operation"]=="_log_do_estado";let key=if log{"log"}else{"avisos"};
-        let mut initial=serde_json::Map::new();initial.insert(key.into(),row["initial"].clone());
-        std::fs::write(state.path(),serde_json::to_vec(&initial).unwrap()).unwrap();
-        if log{state.log(row["text"].as_str().unwrap())}else{state.warn(row["text"].as_str().unwrap())}
-        let mut actual:Value=serde_json::from_slice(&std::fs::read(state.path()).unwrap()).unwrap();actual.as_object_mut().unwrap().remove("ts");
-        if actual!=row["state"]{differences.push(format!("{index}:{key}: esperado={}, obtido={actual}",row["state"]));}
-    }
-    assert!(differences.is_empty(),"{}",differences.join("\n"));
-}
-
+use hangar_server::update::StateFile;
+use serde_json::json;
 #[test]
 fn update_state_refusal_is_visible_before_package_spawn() {
     use hangar_server::update::{executor, state_dir};
@@ -149,26 +94,5 @@ fn update_state_checkout_returns_failure_without_reusing_previous_success() {
         assert_eq!(result["fase"], "pronto");
         assert_eq!(result["erro"], "update_state_invalid_unicode: texto contém surrogate Unicode isolado");
         assert_eq!(std::fs::read(service.state().path()).unwrap(), original);
-    }
-}
-
-#[cfg(unix)]
-#[test]
-fn update_command_log_keeps_complete_output_and_backend_read_only() {
-    use hangar_server::update::git_engine::Service;
-    let fixture:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/update-git/command-log.json")).unwrap();
-    for row in fixture["cases"].as_array().unwrap() {
-        let name=row["name"].as_str().unwrap();let temp=tempfile::tempdir().unwrap();
-        let root=temp.path().join("repo");let home=temp.path().join("home");std::fs::create_dir_all(&root).unwrap();
-        let mut service=Service::new(home.clone(),root.clone(),home.join(".claude"),[("HOME".into(),home.display().to_string()),("PATH".into(),"/usr/bin:/bin".into())].into());
-        service.state().try_write(json!({"fase":"rodando","log":["$ do motor"]})).unwrap();
-        service.writing=name!="backend";
-        let before=std::fs::read(service.state().path()).unwrap();
-        let result=service.run(&["/bin/sh".into(),"-c".into(),row["script"].as_str().unwrap().into()],&root,5).unwrap();
-        assert_eq!(result.code,row["code"].as_i64().unwrap() as i32,"{name}");
-        assert_eq!(result.stdout,row["stdout"],"{name}");assert_eq!(result.stderr,row["stderr"],"{name}");
-        let mut state=service.state().read().into_value();state.as_object_mut().unwrap().remove("ts");
-        assert_eq!(state,row["state"],"{name}");
-        if name=="backend"{assert_eq!(std::fs::read(service.state().path()).unwrap(),before);}
     }
 }

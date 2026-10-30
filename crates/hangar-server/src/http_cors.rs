@@ -1,5 +1,5 @@
 //! Contrato CORS das rotas migradas, aplicado antes de autenticação e limite de corpo.
-use axum::{body::Body,extract::Request,http::{HeaderMap,HeaderValue,Method,StatusCode},middleware::Next,response::Response};
+use axum::{body::Body,http::{HeaderMap,HeaderValue,Method,StatusCode},response::Response};
 
 #[derive(Clone, Copy, Debug)]
 pub struct UnhandledServerError;
@@ -28,10 +28,33 @@ pub fn apply(headers:&HeaderMap,response:&mut Response){
     response.headers_mut().insert("access-control-expose-headers",HeaderValue::from_static(EXPOSE));
 }
 
-pub async fn layer(request:Request,next:Next)->Response{
-    if let Some(response)=preflight(request.method(),request.headers()){return response;}
-    let headers=request.headers().clone();
-    let mut response=next.run(request).await;
-    apply(&headers,&mut response);
+/// 500 em texto puro, como a exceção que o Python levantava fora do CORSMiddleware.
+pub fn internal_error()->Response{
+    use axum::response::IntoResponse;
+    let mut response=(StatusCode::INTERNAL_SERVER_ERROR,"Internal Server Error").into_response();
+    response.extensions_mut().insert(UnhandledServerError);
     response
+}
+
+/// JSON compacto em UTF-8 do `JSONResponse`; surrogate solto ou não finito não serializa e vira 500.
+pub fn json_guarded(status:StatusCode,value:serde_json::Value)->Response{
+    use crate::orchestration::codec;
+    if codec::contains_surrogate(&value)||codec::contains_nonfinite(&value){
+        codec::discard(value);
+        return internal_error();
+    }
+    let text=crate::transcript::pyjson::dumps_compact_unicode(&value);
+    codec::discard(value);
+    use axum::response::IntoResponse;
+    (status,[(axum::http::header::CONTENT_TYPE,"application/json")],text).into_response()
+}
+
+/// O mesmo contrato com o JSON ASCII de `codec::response`.
+pub fn json_guarded_ascii(status:StatusCode,value:serde_json::Value)->Response{
+    use crate::orchestration::codec;
+    if codec::contains_surrogate(&value)||codec::contains_nonfinite(&value){
+        codec::discard(value);
+        return internal_error();
+    }
+    codec::response(status,value)
 }

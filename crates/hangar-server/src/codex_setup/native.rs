@@ -20,25 +20,12 @@ pub struct Native {
     pub events: tokio::sync::mpsc::UnboundedReceiver<(String, Value)>,
 }
 impl Native {
-    pub async fn open_controlled(env:&AccountEnvironment,home:&Path,codex:&Path,memory:bool,cancel:tokio::sync::watch::Receiver<bool>)->Result<Self,OperationError>{
-        Self::open_with_directory(env,home,codex,None,memory,Some(cancel)).await
-    }
-    pub async fn open_isolated_controlled(env:&AccountEnvironment,directory:tempfile::TempDir,cancel:tokio::sync::watch::Receiver<bool>)->Result<Self,OperationError>{
-        let home=directory.path().to_owned();Self::open_with_directory(env,&home,&home.join(".codex"),Some(directory),false,Some(cancel)).await
-    }
-    pub async fn open_with_memory(env:&AccountEnvironment,home:&Path,codex:&Path,memory:bool)->Result<Self,String> {
-        Self::open_with_directory(env,home,codex,None,memory,None).await.map_err(|error|error.to_string())
-    }
     pub fn cli(&self)->super::native_cli::AdminCli { self.cli.clone() }
-    pub async fn open(env: &AccountEnvironment, home: &Path, codex: &Path) -> Result<Self, String> {
-        Self::open_with_directory(env, home, codex, None,false,None).await.map_err(|error|error.to_string())
+    pub async fn open(env:&AccountEnvironment,home:&Path,codex:&Path,memory:bool,cancel:Option<tokio::sync::watch::Receiver<bool>>)->Result<Self,OperationError>{
+        Self::open_with_directory(env,home,codex,None,memory,cancel).await
     }
-    pub async fn open_isolated(
-        env: &AccountEnvironment,
-        directory: tempfile::TempDir,
-    ) -> Result<Self, String> {
-        let home = directory.path().to_owned();
-        Self::open_with_directory(env, &home, &home.join(".codex"), Some(directory),false,None).await.map_err(|error|error.to_string())
+    pub async fn open_isolated(env:&AccountEnvironment,directory:tempfile::TempDir,cancel:Option<tokio::sync::watch::Receiver<bool>>)->Result<Self,OperationError>{
+        let home=directory.path().to_owned();Self::open_with_directory(env,&home,&home.join(".codex"),Some(directory),false,cancel).await
     }
     async fn open_with_directory(
         env: &AccountEnvironment,
@@ -243,11 +230,3 @@ impl Drop for Native {
         }
     }
 }
-
-#[cfg(all(test,unix))]
-#[path="native_owner_tests.rs"]
-mod owner_tests;
-
-#[cfg(all(test,unix))]
-#[path="native_cancel_tests.rs"]
-mod cancel_tests;

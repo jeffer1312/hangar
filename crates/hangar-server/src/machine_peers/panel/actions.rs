@@ -21,7 +21,7 @@ impl Panel {
             .action_result(&args[0], &args[1], &args[2..])
             .await
             .unwrap_or_else(|e| result(false, e));
-        (if store::truthy(&output["ok"]) { 0 } else { 1 }, output)
+        (if truthy(&output["ok"]) { 0 } else { 1 }, output)
     }
     async fn action_result(
         &self,
@@ -83,7 +83,7 @@ impl Panel {
                     .lines()
                     .filter(|line| !crate::transcript::py::strip(line).is_empty())
                     .collect::<Vec<_>>();
-                let ok = store::truthy(&value["ok"]);
+                let ok = truthy(&value["ok"]);
                 let mut message = lines.first().copied().unwrap_or(action).to_owned();
                 if ok && action == "status" && lines.len() > 1 {
                     message.push_str(&format!(" · {} arquivo(s)", lines.len() - 1));
@@ -97,7 +97,7 @@ impl Panel {
                     .iter()
                     .find(|row| row["name"] == name)
                     .map(|row| codec::clone_value(&row["branch"]))
-                    .filter(store::truthy)
+                    .filter(truthy)
                     .unwrap_or(json!("?"));
                 match self
                     .api(address, "GET", "/api/sessions/{name}/git/files", None, 8)
@@ -194,7 +194,7 @@ impl Panel {
             Ok(peers) => peers,
             Err(error) => {
                 errors.push(json!(error));
-                RequestValue(json!({}))
+                ValueGuard(json!({}))
             }
         };
         let mut targets = vec![(
@@ -205,7 +205,7 @@ impl Panel {
         )];
         let mut servers = vec![];
         for (id, entry) in peers.as_object().unwrap() {
-            if entry.is_object() && entry.get("app").is_some() && !store::truthy(&entry["base_url"])
+            if entry.is_object() && entry.get("app").is_some() && !truthy(&entry["base_url"])
             {
                 continue;
             }
@@ -249,7 +249,7 @@ impl Panel {
                 .transport
                 .request(base, token, "GET", "/api/sessions", None, 4)
                 .await;
-            let rows = response.map(RequestValue).and_then(|value| {
+            let rows = response.map(ValueGuard).and_then(|value| {
                 value
                     .as_array()
                     .ok_or_else(|| "resposta de sessões não é uma lista".into())

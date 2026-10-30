@@ -88,7 +88,7 @@ impl Machine for Live {
 
     fn automations(&self) -> bool {
         let value=self.runtime.get("automations");
-        let enabled=crate::config_sync::apply::truthy(&value);
+        let enabled=crate::orchestration::truthy(&value);
         crate::orchestration::codec::discard(value);
         enabled
     }

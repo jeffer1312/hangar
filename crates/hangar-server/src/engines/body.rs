@@ -1,8 +1,9 @@
 //! Validação da borda tipada original; erros mantêm ordem, localização e entrada recebida.
+use crate::http_cors::{internal_error, json_guarded};
 use crate::orchestration::{body, codec};
 use axum::{
     http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
+    response::Response,
 };
 use serde_json::{Map, Value, json};
 
@@ -75,28 +76,6 @@ impl Schema {
     }
 }
 
-pub fn internal_error() -> Response {
-    let mut response = (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response();
-    response
-        .extensions_mut()
-        .insert(crate::http_cors::UnhandledServerError);
-    response
-}
-pub fn json_error(status: StatusCode, value: Value) -> Response {
-    if codec::contains_surrogate(&value) || codec::contains_nonfinite(&value) {
-        codec::discard(value);
-        internal_error()
-    } else {
-        let text = crate::transcript::pyjson::dumps_compact_unicode(&value);
-        codec::discard(value);
-        (
-            status,
-            [(axum::http::header::CONTENT_TYPE, "application/json")],
-            text,
-        )
-            .into_response()
-    }
-}
 fn detail(errors: Vec<Value>) -> Value {
     let mut object = Map::new();
     object.insert("detail".into(), Value::Array(errors));
@@ -165,7 +144,7 @@ pub fn typed(schema: Schema, bytes: &[u8], headers: &HeaderMap) -> Result<Value,
     let value = if bytes.is_empty() {
         Value::Null
     } else if crate::http_body_input::is_json(headers) {
-        body::parse(bytes).map_err(|(status, error)| json_error(status, error))?
+        body::parse(bytes).map_err(|(status, error)| json_guarded(status, error))?
     } else {
         Value::String(
             std::str::from_utf8(bytes)
@@ -185,7 +164,7 @@ pub fn typed(schema: Schema, bytes: &[u8], headers: &HeaderMap) -> Result<Value,
             None,
         );
         codec::discard(value);
-        return Err(json_error(
+        return Err(json_guarded(
             StatusCode::UNPROCESSABLE_ENTITY,
             detail(vec![error]),
         ));
@@ -254,7 +233,7 @@ pub fn typed(schema: Schema, bytes: &[u8], headers: &HeaderMap) -> Result<Value,
         Ok(Value::Object(result))
     } else {
         codec::discard(Value::Object(result));
-        Err(json_error(StatusCode::UNPROCESSABLE_ENTITY, detail(errors)))
+        Err(json_guarded(StatusCode::UNPROCESSABLE_ENTITY, detail(errors)))
     }
 }
 

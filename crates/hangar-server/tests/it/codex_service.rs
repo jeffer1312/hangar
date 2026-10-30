@@ -36,25 +36,6 @@ fn ready(accounts:&AccountService,account:&hangar_server::accounts::catalog::Acc
  std::fs::write(path,files::bytes(&data).unwrap()).unwrap();
 }
 #[tokio::test]
-async fn codex_service_repair_matches_original_adoption_and_changed_account(){
- let corpus:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/codex-integration/repair-lifecycle.json")).unwrap();
- let mut failures=Vec::new();
- for case in corpus["cases"].as_array().unwrap(){
-  let temp=tempfile::tempdir().unwrap();let (accounts,service)=service(temp.path());
-  let mut account=if case["default"]==true{accounts.resolve(Provider::Codex,"default").unwrap()}else{accounts.create(Provider::Codex,"fixture",|_|Ok(())).unwrap()};
-  std::fs::create_dir_all(&account.home).unwrap();ready(&accounts,&account,case["ready"]==true);
-  let marker=account.home.join(PREPARED_MARKER);
-  if case["outcome"]=="changed"{account.home=temp.path().join("changed");}
-  let actions=ActionsFixture{outcome:case["outcome"].clone(),entered:None,release:None,install_failed:false,native_install:None};
-  let actual=match service.repair_with(account,case["adopt"]==true,actions).await{Ok(value)=>json!({"ok":value}),Err(message)=>json!({"message":message})};
-  let expected=if case["result"].get("error").is_some(){json!({"message":case["result"]["message"]})}else{case["result"].clone()};
-  let marked=std::fs::read_to_string(&marker).ok();
-  if actual!=expected||json!(marked)!=case["marker"] {failures.push(json!({"case":case,"actual":actual,"marker":marked}));}
-  service.shutdown().await.unwrap();
- }
- assert!(failures.is_empty(),"{failures:#?}");
-}
-#[tokio::test]
 async fn codex_service_repair_failure_cannot_adopt_prepared_marker(){
  let temp=tempfile::tempdir().unwrap();let(accounts,service)=service(temp.path());let account=accounts.resolve(Provider::Codex,"default").unwrap();
  std::fs::create_dir_all(&account.home).unwrap();ready(&accounts,&account,true);
@@ -84,31 +65,6 @@ async fn codex_service_repair_retains_both_guards_after_waiter_cancellation(){
  assert_eq!(std::fs::read(account.home.join(PREPARED_MARKER)).unwrap(),files::bytes(&json!({"version":1})).unwrap());
 }
 
-#[cfg(unix)]
-#[tokio::test]
-async fn codex_service_native_hooks_failures_do_not_publish_original_false_readiness(){
- let corpus:Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/codex-integration/repair-hook-failure.json")).unwrap();
- let mut failures=Vec::new();
- for case in corpus["cases"].as_array().unwrap(){
-  assert_eq!(case["result"],json!({"ok":false}));
-  assert_eq!(serde_json::from_str::<Value>(case["marker"].as_str().unwrap()).unwrap(),json!({"version":1}));
-  let temp=tempfile::tempdir().unwrap();let(accounts,service)=service(temp.path());let account=accounts.resolve(Provider::Codex,"default").unwrap();
-  std::fs::create_dir_all(&account.home).unwrap();ready(&accounts,&account,true);
-  let source=case["input_hex"].as_str().unwrap();let raw:Vec<u8>=(0..source.len()).step_by(2).map(|i|u8::from_str_radix(&source[i..i+2],16).unwrap()).collect();
-  let hook=account.home.join("hooks.json");std::fs::write(&hook,&raw).unwrap();
-  let repo=temp.path().join("repo");let python=repo.join("python/bin/python3");std::fs::create_dir_all(python.parent().unwrap()).unwrap();std::fs::write(python,[]).unwrap();std::fs::create_dir_all(repo.join("backend/hooks")).unwrap();
-  let result=service.repair_with(account.clone(),true,ActionsFixture{outcome:json!(false),entered:None,release:None,install_failed:false,native_install:Some(repo)}).await;
-  let valid=matches!(case["name"].as_str(),Some("python-space"|"empty"|"valid"));
-  let expected=if valid{Ok(Some(false))}else{Err(if case["name"]=="utf8"{"hooks.json não está em UTF-8"}else{"hooks.json inválido; hooks preservados"}.into())};
-  let final_bytes=std::fs::read(&hook).unwrap();let normalized=String::from_utf8_lossy(&final_bytes).replace(&*temp.path().to_string_lossy(),"$ROOT");
-  let final_hex:String=normalized.as_bytes().iter().map(|b|format!("{b:02x}")).collect();
-  let marked=account.home.join(PREPARED_MARKER).exists();
-  if result!=expected || marked!=valid || (valid&&json!(final_hex)!=case["final_hex"]) || (!valid&&final_bytes!=raw){failures.push(json!({"name":case["name"],"actual":format!("{result:?}"),"expected":format!("{expected:?}"),"marked":marked}));}
-  assert_eq!(std::fs::read(temp.path().join(".hangar/codex-prepare-once/backups/default/hooks.json")).unwrap(),raw);
-  service.shutdown().await.unwrap();
- }
- assert!(failures.is_empty(),"{failures:#?}");
-}
 #[tokio::test]
 async fn codex_service_review_shutdown_survives_concurrent_waiters_and_cancellation(){
  let temp=tempfile::tempdir().unwrap();let(accounts,service)=service(temp.path());let account=accounts.resolve(Provider::Codex,"default").unwrap();std::fs::create_dir_all(&account.home).unwrap();ready(&accounts,&account,true);

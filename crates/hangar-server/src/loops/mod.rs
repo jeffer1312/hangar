@@ -36,7 +36,7 @@ async fn fresh_row(st: &AppState, name: &str) -> Result<Option<SessionRow>, crat
 pub fn automations(st: &AppState) -> Result<bool, &'static str> {
     let config = crate::config_sync::runtime::RuntimeConfig::from_state(st).map_err(|_| "loop_config_invalid")?;
     let value = config.get("automations");
-    let enabled = crate::config_sync::apply::truthy(&value);
+    let enabled = crate::orchestration::truthy(&value);
     crate::orchestration::codec::discard(value);
     Ok(enabled)
 }

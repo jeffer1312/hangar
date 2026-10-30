@@ -111,7 +111,7 @@ async fn import_stage(paths:&Paths<'_>,registry:&mut Value,state:&State,memory:b
  let warnings=reconciled["warnings"].take();if let Value::Array(warnings)=warnings{state.update(|v|v["avisos"].as_array_mut().unwrap().extend(warnings));}
  actions.checkpoint(registry)?;actions.hooks(&normalized_hooks,registry)?;
  let agents=get(&native,"agents",&empty)?.as_object().ok_or_else(||error("AttributeError","Configuração de agentes precisa ser um objeto"))?;
- let agents=ValueGuard(Value::Object(agents.iter().filter(|(_,v)|!v.is_object()||!crate::engines::probe::truthy(&v["config_file"])||registry["artefatos"].get(v["config_file"].as_str().unwrap_or("")).is_some()).map(|(name,value)|(name.clone(),codec::clone_value(value))).collect()));
+ let agents=ValueGuard(Value::Object(agents.iter().filter(|(_,v)|!v.is_object()||!crate::orchestration::truthy(&v["config_file"])||registry["artefatos"].get(v["config_file"].as_str().unwrap_or("")).is_some()).map(|(name,value)|(name.clone(),codec::clone_value(value))).collect()));
  actions.configure(Configuration{mcp:get(&native,"mcp_servers",&empty)?,agents:&agents,hooks:get(get(&native,"features",&empty)?,"hooks",&Value::Null)?==&Value::Bool(true),memory,history,env:native_env},registry).await
 }
 async fn import_items(actions:&mut impl Actions,state:&State,cc:&Path,memory:bool)->Result<BTreeSet<(String,PathBuf)>,Error>{
@@ -140,13 +140,13 @@ async fn import_items(actions:&mut impl Actions,state:&State,cc:&Path,memory:boo
  }
  if !essential.is_empty(){
   let result=ValueGuard(actions.import(essential).await?);let results=get(&result,"itemTypeResults",&empty_list)?.as_array().ok_or_else(||error("TypeError","Resultado de importação precisa ser uma lista"))?;
-  for item in results{if crate::engines::probe::truthy(get(item,"failures",&Value::Null)?){return Err(error("CodexNativoErro","Importação de fragmentos incompleta"));}}
+  for item in results{if crate::orchestration::truthy(get(item,"failures",&Value::Null)?){return Err(error("CodexNativoErro","Importação de fragmentos incompleta"));}}
  }
  if !memories.is_empty(){
   let failures=match actions.import(memories).await{
    Err(error) if error.kind=="CodexNativoErro"=>1,
    Err(error)=>return Err(error),
-   Ok(result)=>{let result=ValueGuard(result);let results=get(&result,"itemTypeResults",&empty_list)?.as_array().ok_or_else(||error("TypeError","Resultado de memória precisa ser uma lista"))?;let mut count=0;for item in results{let value=get(item,"failures",&Value::Null)?;if crate::engines::probe::truthy(value){count+=match value{Value::Array(items)=>items.len(),Value::Object(items)=>items.len(),Value::String(text)=>text.chars().count(),_=>return Err(error("TypeError","Falhas de memória precisam ser iteráveis"))};}}count},
+   Ok(result)=>{let result=ValueGuard(result);let results=get(&result,"itemTypeResults",&empty_list)?.as_array().ok_or_else(||error("TypeError","Resultado de memória precisa ser uma lista"))?;let mut count=0;for item in results{let value=get(item,"failures",&Value::Null)?;if crate::orchestration::truthy(value){count+=match value{Value::Array(items)=>items.len(),Value::Object(items)=>items.len(),Value::String(text)=>text.chars().count(),_=>return Err(error("TypeError","Falhas de memória precisam ser iteráveis"))};}}count},
   };
   if failures>0{warning(state,"aviso_memoria_incompleta",json!({"n":failures}));}
  }

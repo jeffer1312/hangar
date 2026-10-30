@@ -1,6 +1,5 @@
 //! Versão do código carregado, congelada antes de servir pedidos.
 use std::{collections::{BTreeMap,HashMap},path::{Path,PathBuf},sync::{Arc,LazyLock,Mutex,OnceLock},time::Duration};
-use serde_json::Value;
 
 #[derive(Clone,Debug,PartialEq,Eq)]
 pub struct Snapshot{pub describe:String,pub readable:Option<String>}
@@ -29,7 +28,7 @@ pub fn capture(root:&Path,environment:&BTreeMap<String,String>)->Snapshot{
 #[doc(hidden)]
 pub fn capture_with(root:&Path,mut git:impl FnMut(&[&str],Duration)->Result<String,()>)->Snapshot{
     slot(root).get_or_init(||{
-        let manifest=std::fs::read(root.join("manifest.json")).ok().and_then(|b|serde_json::from_slice::<Value>(&b).ok()).filter(|v|["version","commit","channel"].iter().all(|k|v.get(k).and_then(Value::as_str).is_some_and(|s|!s.is_empty())));
+        let manifest=crate::update::package_manifest(root);
         if let Some(manifest)=manifest{return Snapshot{describe:format!("{}-g{}",manifest["version"].as_str().unwrap(),manifest["commit"].as_str().unwrap().chars().take(12).collect::<String>()),readable:Some(manifest["version"].as_str().unwrap().into())};}
         let describe=git(&["describe","--tags","--match","dist-latest","--long","--always","--dirty"],Duration::from_secs(5)).ok().map(|s|crate::transcript::py::strip(&s).to_owned()).filter(|s|!s.is_empty()).unwrap_or_else(||"indisponivel".into());
         let readable=(||{

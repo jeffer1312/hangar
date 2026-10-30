@@ -84,7 +84,7 @@ impl StateFile {
         let previous=current.remove("log").unwrap_or(Value::Null);
         let mut lines=match previous {
             Value::Array(lines)=>lines,
-            other if !crate::machine_peers::store::truthy(&other)=>{codec::discard(other);vec![]},
+            other if !crate::orchestration::truthy(&other)=>{codec::discard(other);vec![]},
             other=>{codec::discard(other);return Err("update_state_invalid_log".into());}
         };
         let split=crate::transcript::py::splitlines(text);
@@ -103,7 +103,7 @@ impl StateFile {
                 let mut remaining=value.as_str();let mut result=vec![];
                 while !remaining.is_empty(){let item=codec::truncate_string(remaining,1);result.push(Value::String(item.into()));remaining=&remaining[item.len()..];}result
             },
-            other if !crate::machine_peers::store::truthy(&other)=>{codec::discard(other);vec![]},
+            other if !crate::orchestration::truthy(&other)=>{codec::discard(other);vec![]},
             other=>{codec::discard(other);return Err("update_state_invalid_warnings".into());}
         };
         warnings.push(Value::String(text.into()));let mut fields=Map::new();fields.insert("avisos".into(),Value::Array(warnings));self.try_write(Value::Object(fields))

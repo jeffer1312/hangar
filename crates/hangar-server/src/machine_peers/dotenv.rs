@@ -10,18 +10,6 @@ struct Binding<'a> {
     key: Option<&'a str>,
     value: Option<(usize, usize)>,
 }
-fn line_end(bytes: &[u8], mut at: usize) -> usize {
-    while at < bytes.len() && !matches!(bytes[at], b'\n' | b'\r') {
-        at += 1;
-    }
-    if bytes.get(at) == Some(&b'\r') {
-        at += 1;
-    }
-    if bytes.get(at) == Some(&b'\n') {
-        at += 1;
-    }
-    at
-}
 fn whitespace(c: char) -> bool {
     c.is_whitespace() || ('\x1c'..='\x1f').contains(&c)
 }
@@ -62,7 +50,7 @@ fn binding(raw: &str) -> Binding<'_> {
         return fallback(at);
     }
     if bytes[at] == b'#' {
-        return fallback(line_end(bytes, at));
+        return fallback(read::end_line(raw, at));
     }
     if raw[at..].starts_with("export") && horizontal(raw, at + 6) > 0 {
         at += 6;
@@ -77,7 +65,7 @@ fn binding(raw: &str) -> Binding<'_> {
             .position(|byte| *byte == b'\'')
             .map(|n| at + n + 2)
         else {
-            return fallback(line_end(bytes, at));
+            return fallback(read::end_line(raw, at));
         };
         at = end;
         &raw[key_start + 1..end - 1]
@@ -91,7 +79,7 @@ fn binding(raw: &str) -> Binding<'_> {
         &raw[key_start..at]
     };
     if key.is_empty() {
-        return fallback(line_end(bytes, at));
+        return fallback(read::end_line(raw, at));
     }
     while horizontal(raw, at) > 0 {
         at += horizontal(raw, at);
@@ -99,12 +87,12 @@ fn binding(raw: &str) -> Binding<'_> {
     if bytes.get(at) != Some(&b'=') {
         if at == bytes.len() || matches!(bytes[at], b'#' | b'\n' | b'\r') {
             return Binding {
-                raw: &raw[..line_end(bytes, at)],
+                raw: &raw[..read::end_line(raw, at)],
                 key: Some(key),
                 value: None,
             };
         }
-        return fallback(line_end(bytes, at));
+        return fallback(read::end_line(raw, at));
     }
     at += 1;
     while horizontal(raw, at) > 0 {
@@ -113,7 +101,7 @@ fn binding(raw: &str) -> Binding<'_> {
     let start = at;
     let end = if bytes.get(at).is_some_and(|b| matches!(b, b'\'' | b'"')) {
         let Some(end) = quoted_end(bytes, at) else {
-            return fallback(line_end(bytes, at));
+            return fallback(read::end_line(raw, at));
         };
         end
     } else {
@@ -137,10 +125,10 @@ fn binding(raw: &str) -> Binding<'_> {
         after += horizontal(raw, after);
     }
     if after < bytes.len() && !matches!(bytes[after], b'#' | b'\n' | b'\r') {
-        return fallback(line_end(bytes, after));
+        return fallback(read::end_line(raw, after));
     }
     Binding {
-        raw: &raw[..line_end(bytes, after)],
+        raw: &raw[..read::end_line(raw, after)],
         key: Some(key),
         value: Some((start, end)),
     }

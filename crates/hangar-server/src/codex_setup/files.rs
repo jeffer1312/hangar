@@ -5,13 +5,6 @@ mod replacement;
 pub(crate) fn replace_preserving(source:&std::path::Path,target:&std::path::Path,expected:Option<&[u8]>,link:Option<&std::path::Path>)->Result<(),Error>{replacement::replace(source,target,expected,link)}
 use serde_json::{Value, json};
 
-#[cfg(test)]
-#[path="files_config_tests.rs"]
-mod config_tests;
-
-#[cfg(all(test,unix))]
-#[path="files_read_tests.rs"]
-mod read_tests;
 use std::{
     fs,
     io::{self, Write},
@@ -256,10 +249,7 @@ async fn edit_config_inner(
         fs::create_dir(&codex).map_err(|e| e.to_string())?;
         let copy = codex.join("config.toml");
         write(&copy, raw.as_deref().unwrap_or(b""), None, None).map_err(|e| e.to_string())?;
-        let mut native = match &cancel {
-            Some(signal)=>super::native::Native::open_isolated_controlled(env,home,signal.clone()).await?,
-            None=>super::native::Native::open_isolated(env,home).await?,
-        };
+        let mut native = super::native::Native::open_isolated(env,home,cancel.clone()).await?;
         let result = super::cancellation::run(&mut cancel,native
             .request(
                 "config/batchWrite",

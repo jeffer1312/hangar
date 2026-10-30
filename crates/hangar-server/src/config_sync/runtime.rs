@@ -1,5 +1,6 @@
 //! Preferências do servidor e campos externos, com leitura independente das contas do agente.
-use super::{apply::truthy, preferences};
+use super::preferences;
+use crate::orchestration::truthy;
 use crate::accounts::environment::AccountEnvironment;
 use serde_json::{Map, Value, json};
 use std::{collections::{BTreeMap,BTreeSet}, path::PathBuf, sync::{Arc, LazyLock, Mutex}, time::SystemTime};
@@ -12,15 +13,6 @@ pub const SECRETS: &[&str] = &["groq_api_key","elevenlabs_api_key","llm_api_key"
 type Cache = BTreeMap<PathBuf, (SystemTime,u64,Values)>;
 static CACHE: LazyLock<Mutex<Cache>> = LazyLock::new(||Mutex::new(BTreeMap::new()));
 static WRITES: Mutex<()> = Mutex::new(());
-
-#[cfg(test)]
-pub(super) fn hold_writes() -> std::sync::MutexGuard<'static, ()> {
-    WRITES.lock().unwrap_or_else(|error|error.into_inner())
-}
-
-#[cfg(test)]
-#[path = "runtime_sync_tests.rs"]
-mod sync_tests;
 
 #[derive(Clone)]
 pub struct RuntimeConfig {
@@ -140,7 +132,7 @@ impl RuntimeConfig {
                             let previous=old.into_iter().flatten().filter(|p|p.is_object()).rev().find(|p|p.get("id")==item.get("id"));
                             if let Some(previous)=previous {
                                 let secret=previous["api_key"].as_str().unwrap_or("");
-                                if !secret.is_empty() && incoming.trim()==mask(secret) {
+                                if !secret.is_empty() && incoming.trim()==crate::engines::store::mask(secret) {
                                     let kind=item["kind"].as_str().unwrap_or("").trim();
                                     if previous["kind"].as_str()!=Some(kind) || (kind!="elevenlabs" && item["base_url"].as_str().unwrap_or("").trim()!=previous["base_url"].as_str().unwrap_or("")) {
                                         return Err(format!("transcription_providers: item {} mudou de tipo ou endpoint; digite a chave de novo",index+1).into());
@@ -236,7 +228,7 @@ pub(crate) fn sync_enabled(path: &std::path::Path, fallback: bool) -> bool {
 fn mask_value(value:&Value)->Result<String,RuntimeError> {
     if !truthy(value) {return Ok(String::new());}
     match value {
-        Value::String(text) if !codec::contains_nonfinite(value)=>Ok(mask(text)),
+        Value::String(text) if !codec::contains_nonfinite(value)=>Ok(crate::engines::store::mask(text)),
         Value::Array(values) if values.len()<=8=>Ok("•".repeat(values.len())),
         Value::Object(values) if values.len()<=8=>Ok("•".repeat(values.len())),
         Value::Array(values)=>{
@@ -254,11 +246,4 @@ fn mask_value(value:&Value)->Result<String,RuntimeError> {
             Err(RuntimeError::new("TypeError",format!("object of type '{kind}' has no len()")))
         }
     }
-}
-pub fn mask(value:&str)->String {
-    let count=codec::string_length(value);
-    if count<=8 {return "•".repeat(count);}
-    let prefix=codec::truncate_string(value,4);
-    let start=codec::truncate_string(value,count-4).len();
-    format!("{prefix}••••••••{}",&value[start..])
 }

@@ -1,43 +1,9 @@
 //! Sondas assíncronas com prazos e sem ocupar o pool Python.
-use super::{Error, Service, store::truthy};
+use super::{Error, Service};
+use crate::orchestration::truthy;
 use futures_util::{StreamExt, stream};
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
-
-pub trait Network: Send + Sync {
-    fn lan_ip(&self) -> String;
-    fn tailscale(&self) -> futures_util::future::BoxFuture<'_, Value>;
-    fn get<'a>(
-        &'a self,
-        url: &'a str,
-        path: &'a str,
-        token: Option<&'a str>,
-    ) -> futures_util::future::BoxFuture<'a, Result<(u16, Value), String>>;
-    fn probe<'a>(&'a self, url: &'a str) -> futures_util::future::BoxFuture<'a, Value>;
-    fn elapsed_ms(&self, start: Instant) -> u128 {
-        (start.elapsed().as_secs_f64() * 1000.0).round_ties_even() as u128
-    }
-}
-pub struct SystemNetwork;
-impl Network for SystemNetwork {
-    fn lan_ip(&self) -> String {
-        lan_ip()
-    }
-    fn tailscale(&self) -> futures_util::future::BoxFuture<'_, Value> {
-        Box::pin(tailscale())
-    }
-    fn get<'a>(
-        &'a self,
-        url: &'a str,
-        path: &'a str,
-        token: Option<&'a str>,
-    ) -> futures_util::future::BoxFuture<'a, Result<(u16, Value), String>> {
-        Box::pin(async move { get(url, path, token).await.map_err(|e| reason(&e).into()) })
-    }
-    fn probe<'a>(&'a self, url: &'a str) -> futures_util::future::BoxFuture<'a, Value> {
-        Box::pin(probe(url))
-    }
-}
 
 pub fn lan_ip() -> String {
     std::net::UdpSocket::bind("0.0.0.0:0")
@@ -59,7 +25,7 @@ pub fn lan_url(s: &Service) -> String {
         return String::new();
     }
     let host = if ["0.0.0.0", "::", "auto"].contains(&bind) {
-        s.network.lan_ip()
+        lan_ip()
     } else {
         bind.into()
     };
@@ -87,15 +53,24 @@ fn dns(status: &Value) -> String {
         .trim_end_matches('.')
         .into()
 }
+/// Um cliente por política de redirect, montado uma vez; sem conexão reaproveitada, cada sonda
+/// prova o alcance com uma conexão nova.
 fn client(redirect: bool) -> Result<reqwest::Client, reqwest::Error> {
-    crate::http_client()
+    static CLIENTS: [std::sync::OnceLock<reqwest::Client>; 2] = [std::sync::OnceLock::new(), std::sync::OnceLock::new()];
+    let slot = &CLIENTS[usize::from(redirect)];
+    if let Some(client) = slot.get() {
+        return Ok(client.clone());
+    }
+    let built = crate::http_client()
         .timeout(Duration::from_secs(3))
+        .pool_max_idle_per_host(0)
         .redirect(if redirect {
             reqwest::redirect::Policy::limited(10)
         } else {
             reqwest::redirect::Policy::none()
         })
-        .build()
+        .build()?;
+    Ok(slot.get_or_init(|| built).clone())
 }
 fn reason(error: &reqwest::Error) -> &'static str {
     if error.is_timeout() {
@@ -153,8 +128,8 @@ pub async fn check(s: &Service, url: &str, id: &str) -> Value {
         .get(id)
         .filter(|v| truthy(&v["base_url"]) && truthy(&v["token"]))
         .and_then(|v| v["token"].as_str());
-    let result = s.network.get(url, "/api/peers/identificador", token).await;
-    let ms = s.network.elapsed_ms(start);
+    let result = get(url, "/api/peers/identificador", token).await.map_err(|e| reason(&e));
+    let ms = (start.elapsed().as_secs_f64() * 1000.0).round_ties_even() as u128;
     match result {
         Err(e) => json!({"estado":"falhou","identificador":"","motivo":e,"tempo_ms":ms}),
         Ok((401, _)) => {
@@ -168,7 +143,7 @@ pub async fn check(s: &Service, url: &str, id: &str) -> Value {
     }
 }
 pub async fn discover(s: &Service) -> Result<Value, Error> {
-    let status = s.network.tailscale().await;
+    let status = tailscale().await;
     if !truthy(&status) {
         return Err(Error {
             status: 503,
@@ -186,7 +161,7 @@ pub async fn discover(s: &Service) -> Result<Value, Error> {
         })
         .unwrap_or_default();
     let port = s.port;
-    let results=stream::iter(peers).map(|peer|async move{let ips:Vec<String>=peer["TailscaleIPs"].as_array().into_iter().flatten().filter_map(Value::as_str).filter(|s|!s.contains(':')).map(str::to_owned).collect();let dns=peer["DNSName"].as_str().unwrap_or("").trim_end_matches('.');let mut urls:Vec<_>=ips.iter().map(|ip|format!("http://{ip}:{port}")).collect();let mut hosts=ips;if !dns.is_empty(){urls.push(format!("https://{dns}"));hosts.push(dns.into());}for url in urls{let recognized=match s.network.get(&url,"/api/peers/ping",None).await{Ok((200,b))=>b["hangar"]==true,Ok((404,_))=>matches!(s.network.get(&url,"/api/peers/identificador",None).await,Ok((401,ref b)) if b["detail"]["code"]=="erro_nao_autorizado"),_=>false};if recognized{return Some(json!({"nome":peer["HostName"].as_str().unwrap_or(""),"base_url":url,"hosts":hosts}))}}None}).buffer_unordered(8).collect::<Vec<_>>().await;
+    let results=stream::iter(peers).map(|peer|async move{let ips:Vec<String>=peer["TailscaleIPs"].as_array().into_iter().flatten().filter_map(Value::as_str).filter(|s|!s.contains(':')).map(str::to_owned).collect();let dns=peer["DNSName"].as_str().unwrap_or("").trim_end_matches('.');let mut urls:Vec<_>=ips.iter().map(|ip|format!("http://{ip}:{port}")).collect();let mut hosts=ips;if !dns.is_empty(){urls.push(format!("https://{dns}"));hosts.push(dns.into());}for url in urls{let recognized=match get(&url,"/api/peers/ping",None).await{Ok((200,b))=>b["hangar"]==true,Ok((404,_))=>matches!(get(&url,"/api/peers/identificador",None).await,Ok((401,ref b)) if b["detail"]["code"]=="erro_nao_autorizado"),_=>false};if recognized{return Some(json!({"nome":peer["HostName"].as_str().unwrap_or(""),"base_url":url,"hosts":hosts}))}}None}).buffer_unordered(8).collect::<Vec<_>>().await;
     let mut rows: Vec<Value> = results.into_iter().flatten().collect();
     rows.sort_by(|a, b| a["nome"].as_str().cmp(&b["nome"].as_str()));
     Ok(json!(rows))
@@ -196,7 +171,7 @@ pub async fn reach(s: &Service) -> Value {
     let bind = if configured.is_empty() {
         s.bind.clone()
     } else if configured == "auto" {
-        s.network.lan_ip()
+        lan_ip()
     } else {
         configured
     };
@@ -218,12 +193,12 @@ pub async fn reach(s: &Service) -> Value {
             ports.iter().map(|p| format!("http://{bind}:{p}")).collect(),
         ))
     }
-    let lan = s.network.lan_ip();
+    let lan = lan_ip();
     rows.push((
         "rede_local",
         ports.iter().map(|p| format!("http://{lan}:{p}")).collect(),
     ));
-    let name = dns(&s.network.tailscale().await);
+    let name = dns(&tailscale().await);
     if !name.is_empty() {
         rows.push(("tailscale", vec![format!("https://{name}")]))
     }
@@ -232,7 +207,7 @@ pub async fn reach(s: &Service) -> Value {
         vec![s.value("CP_PUBLIC_URL").trim_end_matches('/').into()],
     ));
     let output = futures_util::future::join_all(rows.into_iter().map(|(kind, urls)| async move {
-        let results = futures_util::future::join_all(urls.iter().map(|u| s.network.probe(u))).await;
+        let results = futures_util::future::join_all(urls.iter().map(|u| probe(u))).await;
         let index = results
             .iter()
             .position(|v| v["estado"] == "ok")
@@ -255,7 +230,7 @@ pub async fn announce(s: &Service, old: &str) -> Value {
     if ids.is_empty() {
         return json!([]);
     }
-    let name = dns(&s.network.tailscale().await);
+    let name = dns(&tailscale().await);
     let base = if name.is_empty() {
         lan_url(s)
     } else {

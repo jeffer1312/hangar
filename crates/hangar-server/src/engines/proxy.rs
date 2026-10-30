@@ -1,7 +1,8 @@
 use crate::accounts::{AccountService, environment::AccountEnvironment};
 use serde_json::{Value, json};
 use std::{fs, path::PathBuf, sync::{LazyLock, Mutex}};
-use super::{store, probe};
+use super::store;
+use crate::orchestration::truthy;
 
 static PREFIX: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"\A[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\z").unwrap());
 static LEGACY: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"\Ahangar-[0-9a-f]{24}\z").unwrap());
@@ -18,20 +19,21 @@ pub fn local(env: &AccountEnvironment) -> Result<Option<Local>, String> {
     };
     let data: Value = serde_saphyr::from_str(&text).map_err(|_| format!("{}: YAML inválido", path.display()))?;
     if !data.is_object() { return Ok(None); }
-    let keys = if probe::truthy(&data["access"]["api-keys"]) { &data["access"]["api-keys"] } else { &data["api-keys"] };
+    let keys = if truthy(&data["access"]["api-keys"]) { &data["access"]["api-keys"] } else { &data["api-keys"] };
     if !keys.is_null() && !keys.is_array() { return Err(format!("{}: api-keys deve ser uma lista", path.display())); }
     let key = keys.as_array().into_iter().flatten().filter_map(Value::as_str).map(str::trim).find(|s| !s.is_empty())
         .ok_or_else(|| format!("{}: sem api-keys", path.display()))?;
     let mut host = data["host"].as_str().unwrap_or("").trim().to_owned();
     if matches!(host.as_str(), ""|"0.0.0.0"|"::") { host = "127.0.0.1".into(); }
     if host.contains(':') && !host.starts_with('[') { host = format!("[{host}]"); }
-    let port = if !probe::truthy(&data["port"]) { 8317 } else if data["port"] == true { 1 }
+    let port = if !truthy(&data["port"]) { 8317 } else if data["port"] == true { 1 }
         else { store::positive("port", &data["port"]).ok().and_then(|v| v.as_u64()).unwrap_or(0) };
     if !(1..65536).contains(&port) { return Err(format!("{}: port inválida", path.display())); }
     Ok(Some(Local { base_url: format!("{}://{host}:{port}", if data["tls"]["enable"] == true { "https" } else { "http" }), api_key:key.into() }))
 }
 
-pub fn is_local(env: &AccountEnvironment, base: &str) -> Result<bool, String> { Ok(local(env)?.is_some_and(|l| store::normalize_base(base.trim()) == l.base_url)) }
+pub fn is_local(env: &AccountEnvironment, base: &str) -> Result<bool, String> { Ok(serves(local(env)?.as_ref(), base)) }
+pub fn serves(local: Option<&Local>, base: &str) -> bool { local.is_some_and(|l| store::normalize_base(base.trim()) == l.base_url) }
 
 pub fn credentials(env: &AccountEnvironment) -> Result<Vec<(PathBuf, Value)>, String> {
     let error = || "CLIProxyAPI: não consegui ler as credenciais locais".to_string();
@@ -68,7 +70,7 @@ fn associate(visible: Vec<(String,PathBuf)>, records: &[(PathBuf,Value)]) -> Res
         let Some(&(i, (_, record))) = matches.first() else { continue };
         if result.iter().any(|(_, previous)| *previous == i) { return Err("CLIProxyAPI: a mesma credencial corresponde a mais de uma conta Hangar".into()); }
         let email = record["email"].as_str().unwrap_or("");
-        let prefix = if probe::truthy(&record["prefix"]) { record["prefix"].clone() } else { Value::Null };
+        let prefix = if truthy(&record["prefix"]) { record["prefix"].clone() } else { Value::Null };
         let home = crate::accounts::catalog::resolved(&account_home);
         result.push((json!({"account":account_id,"credential_id":format!("codex:{}",home.display()),"email":email,"label":if email.is_empty() { &account_id } else { email },"prefix":prefix}), i));
     }
@@ -76,8 +78,7 @@ fn associate(visible: Vec<(String,PathBuf)>, records: &[(PathBuf,Value)]) -> Res
 }
 
 pub fn resolve(accounts: &AccountService, account: &str, home: Option<&str>) -> Result<Value,String> {
-    static ID: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"\A[a-z0-9][a-z0-9_-]{0,31}\z").unwrap());
-    if !ID.is_match(account) { return Err("CLIProxyAPI: identificador de conta inválido".into()); }
+    if !crate::accounts::catalog::valid_name(account) { return Err("CLIProxyAPI: identificador de conta inválido".into()); }
     let entries = if let Some(home) = home {
         let path = PathBuf::from(home);
         if home.contains(['\n','\r','\0']) || !path.is_absolute() { return Err("CLIProxyAPI: raiz Codex inválida".into()); }
@@ -90,7 +91,7 @@ pub fn resolve(accounts: &AccountService, account: &str, home: Option<&str>) -> 
         entries.into_iter().map(|(e,_)|e).collect()
     } else { list_accounts(accounts)? };
     let entry = entries.into_iter().find(|e|e["account"] == account).ok_or_else(||format!("CLIProxyAPI: conta {account} desconhecida, desconectada ou desativada"))?;
-    if !probe::truthy(&entry["prefix"]) { return Err("CLIProxyAPI: conta sem prefixo; prepare as contas primeiro".into()); }
+    if !truthy(&entry["prefix"]) { return Err("CLIProxyAPI: conta sem prefixo; prepare as contas primeiro".into()); }
     Ok(entry)
 }
 
@@ -125,7 +126,7 @@ pub fn set_management_key(env: &AccountEnvironment, key: &str) -> Result<(), Str
 
 fn unnamed(accounts: &AccountService) -> Result<Vec<(Value, PathBuf)>, String> {
     let records = credentials(&accounts.env)?;
-    Ok(associated(accounts, &records)?.into_iter().filter(|(e,_)| !probe::truthy(&e["prefix"]) || e["prefix"].as_str().is_some_and(|s| LEGACY.is_match(s)))
+    Ok(associated(accounts, &records)?.into_iter().filter(|(e,_)| !truthy(&e["prefix"]) || e["prefix"].as_str().is_some_and(|s| LEGACY.is_match(s)))
         .map(|(e,i)| (e,records[i].0.clone())).collect())
 }
 

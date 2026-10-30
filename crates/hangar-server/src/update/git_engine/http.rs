@@ -5,29 +5,15 @@ use axum::{extract::Request, http::StatusCode, response::Response};
 use serde_json::{Value, json};
 use std::{net::SocketAddr, sync::Arc};
 fn response(status:u16,body:Value)->Response {
-    if status==500 && body.is_null() {
-        let mut result=Response::builder().status(500).header("content-type","text/plain; charset=utf-8").body(axum::body::Body::from("Internal Server Error")).unwrap();
-        result.extensions_mut().insert(crate::http_cors::UnhandledServerError);
-        return result;
-    }
-    crate::update::http::json_response(StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),body)
+    if status==500 && body.is_null() {return crate::http_cors::internal_error();}
+    crate::http_cors::json_guarded_ascii(StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),body)
 }
-struct RequestValue(Value);
-impl Drop for RequestValue {
-    fn drop(&mut self) { crate::orchestration::codec::discard(std::mem::take(&mut self.0)); }
-}
-pub fn parse_channel(bytes: &[u8]) -> Result<String, Value> {
-    parse_channel_request(bytes).map_err(|(_, body)|body)
-}
-fn parse_channel_request(bytes:&[u8])->Result<String,(u16,Value)> {
-    let value=RequestValue(crate::orchestration::body::parse(bytes).map_err(|(status,value)|(status.as_u16(),value))?);
-    validate_channel(&value.0)
-}
-enum ChannelInput {Json(RequestValue),Raw(Vec<u8>)}
+use crate::orchestration::codec::ValueGuard;
+enum ChannelInput {Json(ValueGuard),Raw(Vec<u8>)}
 impl ChannelInput {
     fn parse(bytes:&[u8],headers:&axum::http::HeaderMap)->Result<Self,(u16,Value)> {
         if bytes.is_empty() || crate::http_body_input::is_json(headers) {
-            crate::orchestration::body::parse(bytes).map(|value|Self::Json(RequestValue(value))).map_err(|(status,value)|(status.as_u16(),value))
+            crate::orchestration::body::parse(bytes).map(|value|Self::Json(ValueGuard(value))).map_err(|(status,value)|(status.as_u16(),value))
         } else {Ok(Self::Raw(bytes.to_vec()))}
     }
     fn validate(self)->Result<String,(u16,Value)> {

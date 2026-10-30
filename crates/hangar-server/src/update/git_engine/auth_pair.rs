@@ -29,14 +29,13 @@ fn remove(path: &Path) -> io::Result<()> {
         other => other,
     }
 }
-fn restore_snapshot(before: &Snapshot) -> Vec<String> { restore_snapshot_with(before, &releases::install) }
-fn restore_snapshot_with(before: &Snapshot, install:&dyn Fn(&[u8], &Path)->io::Result<()>) -> Vec<String> {
+fn restore_snapshot(before: &Snapshot) -> Vec<String> {
     let mut errors = vec![];
     for (target, data) in before {
         let result = match data {
             None => remove(target),
             Some(data) if !target.is_file() || fs::read(target).ok().as_ref() != Some(data) => {
-                install(data, target)
+                releases::install(data, target)
             }
             _ => Ok(()),
         };
@@ -144,12 +143,11 @@ pub fn validate(server: &Path) -> Result<(), String> {
     }
     Ok(())
 }
-pub fn install_one(item: &Held) -> Option<String> {install_one_with(item,&releases::install)}
-fn install_one_with(item: &Held, install:&dyn Fn(&[u8], &Path)->io::Result<()>) -> Option<String> {
+fn install_one(item: &Held) -> Option<String> {
     let result = (|| -> io::Result<()> {
         fs::create_dir_all(item.target.parent().unwrap())?;
         if item.name != "hangar-auth" {
-            return install(&item.data, &item.target);
+            return releases::install(&item.data, &item.target);
         }
         let matches = || releases::matches_file(&item.target, &releases::digest(&item.data));
         if item.target.exists() {
@@ -233,8 +231,7 @@ fn paths(items: &[&Held]) -> (PathBuf, PathBuf) {
     let metadata = server.with_extension("auth.json");
     (server, metadata)
 }
-pub fn publish(held: &[Held], preserve: bool) -> Vec<String> {publish_with(held,preserve,&releases::install)}
-pub fn publish_with(held: &[Held], preserve: bool, install:&dyn Fn(&[u8], &Path)->io::Result<()>) -> Vec<String> {
+pub fn publish(held: &[Held], preserve: bool) -> Vec<String> {
     let mut warnings = vec![];
     for item in held.iter().filter(|i| i.name == "hangar-cano") {
         if preserve {
@@ -242,7 +239,7 @@ pub fn publish_with(held: &[Held], preserve: bool, install:&dyn Fn(&[u8], &Path)
                 warnings.push(e);
             }
         }
-        if let Some(e) = install_one_with(item,install) {
+        if let Some(e) = install_one(item) {
             warnings.push(e);
             let _ = remove(&previous(&item.target));
         }
@@ -272,7 +269,7 @@ pub fn publish_with(held: &[Held], preserve: bool, install:&dyn Fn(&[u8], &Path)
         for (p, n) in [(&server, "hangar-server"), (&metadata, "hangar-auth-pair")] {
             if let Some(e) = keep_previous(p, n) {
                 warnings.push(e);
-                warnings.extend(restore_snapshot_with(&erased,install));
+                warnings.extend(restore_snapshot(&erased));
                 return warnings;
             }
         }
@@ -282,21 +279,21 @@ pub fn publish_with(held: &[Held], preserve: bool, install:&dyn Fn(&[u8], &Path)
         "hangar-server" => 1,
         _ => 2,
     });
-    let failure = pair.iter().find_map(|i| install_one_with(i,install)).or_else(|| {
+    let failure = pair.iter().find_map(|i| install_one(i)).or_else(|| {
         validate(&server)
             .err()
             .map(|e| format!("hangar-auth-pair: o par publicado não confere ({e})"))
     });
     if let Some(e) = failure {
         warnings.push(e);
-        let undo = restore_snapshot_with(&before,install);
+        let undo = restore_snapshot(&before);
         if undo.is_empty() {
-            warnings.extend(restore_snapshot_with(&erased,install));
+            warnings.extend(restore_snapshot(&erased));
         } else {
             warnings.extend(undo);
         }
     } else if !preserve {
-        warnings.extend(restore_snapshot_with(&prev,install));
+        warnings.extend(restore_snapshot(&prev));
     }
     warnings
 }

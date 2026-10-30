@@ -8,6 +8,7 @@ pub mod live_config;
 pub mod panel;
 pub mod store;
 use crate::{
+    orchestration::{codec::ValueGuard, truthy},
     routes::{AppState, owner_gate},
     session_write::{detail_body, json_response},
 };
@@ -37,12 +38,7 @@ pub fn config_value_with_settings_environment(
     home:&Path,backend:Option<&Path>,key:&str,environment:&dotenv::SettingsEnvironment,
 )->Result<Option<String>,String>{
     if let Some(value)=environment.value("",key)? {return Ok(Some(value));}
-    let Some(path)=crate::user_data::path(home,backend,".env").map_err(|e|e.to_string())? else{return Ok(None);};
-    let raw=match crate::runtime::queue::read_replaced_to_string(&path){
-        Ok(raw)=>raw,
-        Err(error) if error.kind()==std::io::ErrorKind::NotFound=>return Ok(None),
-        Err(error)=>return Err(error.to_string()),
-    };
+    let Some(raw)=crate::user_data::read_env_raw(home,backend)? else{return Ok(None);};
     environment.value(&raw,key)
 }
 
@@ -51,16 +47,7 @@ pub fn config_value_with_environment(
     home: &Path, backend: Option<&Path>, key: &str,
     environment: &std::collections::BTreeMap<String, String>,
 ) -> Result<Option<String>, String> {
-    if let Some((_, value)) = environment.iter().rev().find(|(name, _)| name.to_lowercase() == key.to_lowercase()) {
-        return Ok(Some(value.clone()));
-    }
-    let Some(path) = crate::user_data::path(home, backend, ".env").map_err(|e|e.to_string())? else { return Ok(None); };
-    let raw = match crate::runtime::queue::read_replaced_to_string(&path) {
-        Ok(raw) => raw,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.to_string()),
-    };
-    Ok(dotenv::file_settings(&raw, environment).remove(&key.to_lowercase()).flatten())
+    config_value_with_settings_environment(home, backend, key, &dotenv::SettingsEnvironment::from_pairs(environment.clone()))
 }
 
 const ID_PUBLICATION: &str = "# hangar-server-id-publication=";
@@ -79,11 +66,7 @@ pub fn resolve_identity(home: &Path, backend: Option<&Path>, inherited: Option<&
     let marker = std::fs::read(path.with_extension("env.server-id.json")).ok()
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
     if let Some(marker) = marker {
-        let raw = match crate::runtime::queue::read_replaced_to_string(&path) {
-            Ok(raw) => raw,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
-            Err(error) => return Err(error.to_string()),
-        };
+        let raw = crate::user_data::read_env_at(&path)?;
         let published = marker["published"].as_str();
         let nonce = marker["nonce"].as_str().unwrap_or("");
         if !nonce.is_empty() && published.is_some()
@@ -126,7 +109,7 @@ impl Error {
     }
     pub fn failed()->Self{Self{status:500,code:"peers_response_failed",msg:String::new()}}
     pub fn response(self) -> Response {
-        if self.status==500{return body_server_error();}
+        if self.status==500{return crate::http_cors::internal_error();}
         json_response(
             StatusCode::from_u16(self.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
             detail_body(self.code, &self.msg, json!({})),
@@ -144,7 +127,6 @@ pub struct Service {
     pub bind: String,
     pub initial_id: String,
     pub request_id: String,
-    pub network: Arc<dyn network::Network>,
     pub environment: std::collections::BTreeMap<String, String>,
     settings: Option<Arc<dotenv::SettingsSnapshot>>,
     pub on_identity: Option<Arc<dyn Fn(String) + Send + Sync>>,
@@ -176,7 +158,6 @@ impl Service {
             bind,
             initial_id,
             request_id: String::new(),
-            network: Arc::new(network::SystemNetwork),
             environment,
             settings: None,
             on_identity: None,
@@ -192,7 +173,6 @@ impl Service {
             st.current_server_id(),
             st.accounts.env.base.clone(),
         )?;
-        service.network = st.peer_network.clone();
         service.settings=Some(st.settings_snapshot().map_err(|_|Error::unavailable())?);
         let state = Arc::downgrade(st);
         service.on_identity = Some(Arc::new(move |id| {
@@ -215,8 +195,8 @@ impl Service {
     }
     fn save_identity_using(&self, value: &Value, write: &dyn Fn(&Path, &[u8]) -> std::io::Result<()>) -> Result<String, Error> {
         let empty=Value::String(String::new());
-        let value=value.get("identificador").filter(|value|store::truthy(value)).unwrap_or(&empty);
-        if store::truthy(&value) {
+        let value=value.get("identificador").filter(|value|truthy(value)).unwrap_or(&empty);
+        if truthy(&value) {
             store::valid_id(&value).map_err(|mut e| {
                 e.code = "peers_id_invalido";
                 e
@@ -224,11 +204,8 @@ impl Service {
         }
         let value = value.as_str().unwrap_or("");
         let _lock = store::lock(&self.env)?;
-        let old = match crate::runtime::queue::read_replaced_to_string(&self.env) {
-            Ok(s) => s.replace("\r\n", "\n").replace('\r', "\n"),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-            Err(_) => return Err(Error::unavailable()),
-        };
+        let old = crate::user_data::read_env_at(&self.env).map_err(|_| Error::unavailable())?
+            .replace("\r\n", "\n").replace('\r', "\n");
         let mut seen = false;
         let mut output = String::new();
         for line in old.split_inclusive(['\n','\x0b','\x0c','\x1c','\x1d','\x1e','\u{85}','\u{2028}','\u{2029}']) {
@@ -375,7 +352,7 @@ async fn handle_inner(
         };
         if bytes.is_empty() || crate::http_body_input::is_json(request.headers()) {
             match crate::orchestration::body::parse(&bytes) {
-                Ok(value)=>Some(PeerInput::Json(RequestValue(value))),
+                Ok(value)=>Some(PeerInput::Json(ValueGuard(value))),
                 Err((status,body))=>return json_response(status,body),
             }
         }else{Some(PeerInput::Raw(bytes.to_vec()))}
@@ -409,10 +386,10 @@ async fn handle_inner(
         }
         Some(PeerInput::Raw(bytes))=>return match String::from_utf8(bytes){
             Ok(input)=>body_validation_error("dict_type",Value::String(input)),
-            Err(_)=>body_server_error(),
+            Err(_)=>crate::http_cors::internal_error(),
         },
     };
-    let mut body = RequestValue(body);
+    let mut body = ValueGuard(body);
     let mut service = match Service::from_state(&st) {
         Ok(s) => s,
         Err(e) => return e.response(),
@@ -422,7 +399,7 @@ async fn handle_inner(
     match result {
         Ok(value) => {
             use crate::orchestration::codec;
-            if codec::contains_surrogate(&value){codec::discard(value);body_server_error()}
+            if codec::contains_surrogate(&value){codec::discard(value);crate::http_cors::internal_error()}
             else{codec::response(StatusCode::OK,codec::normalize_response(value))}
         },
         Err(e) if e.code == "alcance_endereco_desconhecido" => json_response(
@@ -436,28 +413,15 @@ async fn handle_inner(
         Err(e) => e.response(),
     }
 }
-fn body_server_error()->Response {
-    let mut response=Response::builder().status(500).header("content-type","text/plain; charset=utf-8").body(axum::body::Body::from("Internal Server Error")).unwrap();
-    response.extensions_mut().insert(crate::http_cors::UnhandledServerError);
-    response
-}
 fn body_validation_error(kind:&str,input:Value)->Response {
-    use crate::orchestration::codec;
-    if codec::contains_nonfinite(&input)||codec::contains_surrogate(&input){
-        codec::discard(input);
-        return body_server_error();
-    }
     let msg=if kind=="missing"{"Field required"}else{"Input should be a valid dictionary"};
     let mut error=json!({"type":kind,"loc":["body"],"msg":msg});
     error["input"]=input;
     let mut body=serde_json::Map::new();
     body.insert("detail".into(),Value::Array(vec![error]));
-    codec::response(StatusCode::UNPROCESSABLE_ENTITY,Value::Object(body))
+    crate::http_cors::json_guarded_ascii(StatusCode::UNPROCESSABLE_ENTITY,Value::Object(body))
 }
-enum PeerInput {Json(RequestValue),Raw(Vec<u8>)}
-struct RequestValue(Value);
-impl std::ops::Deref for RequestValue{type Target=Value;fn deref(&self)->&Value{&self.0}}
-impl Drop for RequestValue{fn drop(&mut self){crate::orchestration::codec::discard(std::mem::take(&mut self.0));}}
+enum PeerInput {Json(ValueGuard),Raw(Vec<u8>)}
 pub async fn dispatch(
     service: Service,
     method: &Method,
@@ -465,7 +429,7 @@ pub async fn dispatch(
     query: &std::collections::HashMap<String, String>,
     body: Value,
 ) -> Result<Value, Error> {
-    let body=RequestValue(body);
+    let body=ValueGuard(body);
     let q = |key: &str| query.get(key).map(String::as_str).unwrap_or("");
     match (method.as_str(), path) {
         ("GET", "/api/peers/prova") => service.proof(q("desafio")),

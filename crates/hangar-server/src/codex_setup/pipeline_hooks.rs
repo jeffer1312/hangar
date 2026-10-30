@@ -13,17 +13,17 @@ fn merged_bytes(raw:Option<&[u8]>,current:&Value,merged:&Value)->Result<Vec<u8>,
 pub fn sync(context:&Context<'_>,source:&Value,registry:&mut Value,state:&State)->Result<(),Error>{
  let previous=ValueGuard(normalize::hooks(registry.get("hooks").unwrap_or(&json!({})),&context.wrapper.0,&context.wrapper.1,context.windows));
  let path=context.account.join("hooks.json");let mut normalized=ValueGuard(codec::clone_value(source));
- if files::read(&path)?.is_some()||crate::engines::probe::truthy(&source["hooks"]){
+ if files::read(&path)?.is_some()||crate::orchestration::truthy(&source["hooks"]){
   let changed=files::transform(&path,context.backups,|raw|{
    let current=ValueGuard(parse(raw)?);
    let normalized_current=ValueGuard(normalize::hooks(&current,&context.wrapper.0,&context.wrapper.1,context.windows));
    normalized=ValueGuard(normalize::hooks(source,&context.wrapper.0,&context.wrapper.1,context.windows));
-   let merged=ValueGuard(if crate::engines::probe::truthy(&normalized){hooks::merge(&normalized_current,&normalized,&previous).map_err(files::Error::Invalid)?}else{codec::clone_value(&normalized_current)});
+   let merged=ValueGuard(if crate::orchestration::truthy(&normalized){hooks::merge(&normalized_current,&normalized,&previous).map_err(files::Error::Invalid)?}else{codec::clone_value(&normalized_current)});
    merged_bytes(raw,&current,&merged)
   })?;
   if changed{state.hooks_changed();}
  }
- if crate::engines::probe::truthy(source){if let Some(old)=registry.as_object_mut().ok_or_else(||Error{kind:"TypeError",message:"Registro precisa ser um objeto".into()})?.insert("hooks".into(),codec::clone_value(&normalized)){codec::discard(old);}}
+ if crate::orchestration::truthy(source){if let Some(old)=registry.as_object_mut().ok_or_else(||Error{kind:"TypeError",message:"Registro precisa ser um objeto".into()})?.insert("hooks".into(),codec::clone_value(&normalized)){codec::discard(old);}}
  Ok(())
 }
 pub fn legacy(context:&Context<'_>,state:&State,install:&mut impl FnMut(&Path)->Result<(),Error>)->Result<(),Error>{

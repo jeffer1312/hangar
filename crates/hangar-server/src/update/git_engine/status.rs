@@ -19,7 +19,6 @@ struct Published {
 }
 static PUBLISHED: LazyLock<Mutex<HashMap<String, Published>>> = LazyLock::new(Default::default);
 impl Service {
-    pub fn capture_boot(&self) {crate::boot_version::capture(&self.root,&self.environment);}
     pub fn boot_version(&self) -> (String,Option<String>) {
         crate::boot_version::get(&self.root).map(|v|(v.describe,v.readable)).unwrap_or_else(||("indisponivel".into(),None))
     }

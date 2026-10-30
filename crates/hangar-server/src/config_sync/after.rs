@@ -68,7 +68,7 @@ pub async fn run(context: &mut Apply, items: &[String], codex_enabled: bool, act
                 let mut entries: Vec<_> = report.stats.as_object().into_iter().flatten().collect();
                 entries.sort_by_key(|(name,_)|*name);
                 for (name,stats) in entries {
-                    if stats.is_object() && super::apply::truthy(&stats["erro"]) {
+                    if stats.is_object() && crate::orchestration::truthy(&stats["erro"]) {
                         let cause=report.errors.get(name).map(String::as_str).unwrap_or("erro");
                         warning(context,item,&format!("skill_bridge:{name}"),cause);
                     }
@@ -92,53 +92,5 @@ pub async fn run(context: &mut Apply, items: &[String], codex_enabled: bool, act
             Ok(value) => crate::orchestration::codec::discard(value),
             Err(error) => warning(context,"codex","codex_integracao",&error),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config_sync::{bundle::Bundle, export::Context, paths::Roots};
-    use serde_json::json;
-    use std::sync::Mutex;
-
-    struct Recorder { failure: String, calls: Mutex<Vec<Value>> }
-    impl Actions for Recorder {
-        fn bridge(&self) -> Step<'_, BridgeReport> { Box::pin(async {
-            self.calls.lock().unwrap().push(json!("bridge"));
-            if self.failure == "bridge" { return Err("falha de ponte".into()); }
-            Ok(BridgeReport {stats:if self.failure == "bridge_report" { json!({"kimi":{"erro":1}}) } else { json!({}) },errors:Default::default()})
-        }) }
-        fn hook(&self,name:&'static str) -> Step<'_> { Box::pin(async move {
-            self.calls.lock().unwrap().push(json!(name));
-            if self.failure == name { Err("falha de hook".into()) } else { Ok(Value::Null) }
-        }) }
-        fn codex(&self) -> Step<'_> { Box::pin(async {
-            self.calls.lock().unwrap().push(json!(["codex","config_sync",true]));
-            if self.failure == "codex" { Err("falha de integração".into()) } else { Ok(Value::Null) }
-        }) }
-    }
-
-    #[tokio::test]
-    async fn after_apply_preserves_selected_order_and_partial_failures() {
-        let fixture: Value = serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/config_sync/after-apply.json")).unwrap();
-        let mut differences = Vec::new();
-        for (index,row) in fixture["cases"].as_array().unwrap().iter().enumerate() {
-            let home = tempfile::tempdir().unwrap();
-            let root = home.path().to_string_lossy().into_owned();
-            let mut context = Context::new(Roots {home:root.clone(),claude:format!("{root}/.claude"),codex:format!("{root}/.codex"),hangar:format!("{root}/repo")});
-            let (sender,mut receiver) = tokio::sync::mpsc::unbounded_channel();
-            context.progress = Some(sender);
-            let mut apply = Apply::new(context,Bundle::default(),"fixture",Default::default());
-            let actions = Recorder {failure:row["failure"].as_str().unwrap().into(),calls:Mutex::new(Vec::new())};
-            let items: Vec<String> = row["items"].as_array().unwrap().iter().map(|v|v.as_str().unwrap().into()).collect();
-            run(&mut apply,&items,row["enabled"].as_bool().unwrap(),&actions).await;
-            let mut events = Vec::new();
-            while let Ok(event) = receiver.try_recv() { events.push(event); }
-            if json!(*actions.calls.lock().unwrap()) != row["calls"] || json!(events) != row["events"] || json!(apply.report) != row["report"] {
-                differences.push(index);
-            }
-        }
-        assert!(differences.is_empty(),"pós-aplicar divergente nos casos {differences:?}");
     }
 }

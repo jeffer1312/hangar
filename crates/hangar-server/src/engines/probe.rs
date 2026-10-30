@@ -1,9 +1,6 @@
 use serde_json::{Value, json};
-use crate::provider_models::ModelError;
+use crate::{orchestration::truthy, provider_models::ModelError};
 
-pub fn truthy(v: &Value) -> bool {
-    match v { Value::Null => false, Value::Bool(b) => *b, Value::Number(n) => n.as_f64() != Some(0.), Value::String(s) => !s.is_empty(), Value::Array(a) => !a.is_empty(), Value::Object(o) => !o.is_empty() }
-}
 
 pub fn models(data: &Value) -> Result<Vec<Value>, String> {
     let data = data.as_array().ok_or("resposta inesperada do provedor (sem lista 'data')")?;
@@ -17,8 +14,15 @@ pub async fn fetch(base: &str, key: &str) -> Result<Vec<Value>, ModelError> {
     for (field, value) in [("base_url", base), ("api_key", key)] {
         if value.contains(['\r','\n','\0']) { return Err(ModelError::text(400, format!("{field}: sem quebra de linha nem caractere nulo"))); }
     }
-    let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(15)).build()
-        .map_err(|_| ModelError::text(502, "não foi possível falar com o provedor"))?;
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    let client = match CLIENT.get() {
+        Some(client) => client.clone(),
+        None => {
+            let built = crate::http_client().timeout(std::time::Duration::from_secs(15)).build()
+                .map_err(|_| ModelError::text(502, "não foi possível falar com o provedor"))?;
+            CLIENT.get_or_init(|| built).clone()
+        }
+    };
     let response = client.get(format!("{}/v1/models", super::store::normalize_base(base))).bearer_auth(key).header("User-Agent", "hangar/1.0")
         .send().await.map_err(|_| ModelError::text(502, "não foi possível falar com o provedor"))?;
     let status = response.status();

@@ -1,21 +1,10 @@
 //! Arquivos e corpos externos podem guardar subárvores ignoradas pelas preferências.
 use crate::orchestration::codec;
 use serde_json::{Map, Value};
+pub(crate) use crate::orchestration::codec::ValueGuard;
 use std::ops::{Deref, DerefMut};
 
 pub(super) struct Values(pub Map<String, Value>);
-
-pub(crate) struct ValueGuard(pub Value);
-impl Deref for ValueGuard {
-    type Target = Value;
-    fn deref(&self) -> &Value { &self.0 }
-}
-impl DerefMut for ValueGuard {
-    fn deref_mut(&mut self) -> &mut Value { &mut self.0 }
-}
-impl Drop for ValueGuard {
-    fn drop(&mut self) { codec::discard(std::mem::replace(&mut self.0, Value::Null)); }
-}
 
 impl Values {
     pub fn read(bytes: &[u8]) -> Option<Self> {

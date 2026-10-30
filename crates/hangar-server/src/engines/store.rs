@@ -1,15 +1,13 @@
-use crate::accounts::environment::AccountEnvironment;
+use crate::accounts::{catalog::valid_name, environment::AccountEnvironment};
 use serde_json::{Map, Value};
 use std::{
     fs,
     net::IpAddr,
     path::PathBuf,
-    sync::{LazyLock, Mutex},
+    sync::Mutex,
 };
 
 static WRITE: Mutex<()> = Mutex::new(());
-static NAME: LazyLock<regex::Regex> =
-    LazyLock::new(|| regex::Regex::new(r"\A[a-z0-9][a-z0-9_-]{0,31}\z").unwrap());
 pub const FIELDS: &[(&str, char)] = &[
     ("label", 's'),
     ("base_url", 's'),
@@ -43,7 +41,7 @@ pub fn state(env: &AccountEnvironment) -> (Map<String, Value>, bool) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => (Map::new(), false),
         Ok(bytes) => match serde_json::from_slice::<Value>(&bytes) {
             Ok(Value::Object(mut map)) => {
-                map.retain(|name, _| NAME.is_match(name));
+                map.retain(|name, _| valid_name(name));
                 (map, false)
             }
             _ => (Map::new(), true),
@@ -156,7 +154,7 @@ pub fn positive(field: &str, value: &Value) -> Result<Value, String> {
 }
 
 pub fn normalize(name: &str, data: &Map<String, Value>) -> Result<Map<String, Value>, String> {
-    if !NAME.is_match(name) {
+    if !valid_name(name) {
         return Err("nome: use minúsculas, números, '-' ou '_' (até 32 caracteres)".into());
     }
     let mut out = Map::new();
@@ -206,17 +204,16 @@ pub fn normalize(name: &str, data: &Map<String, Value>) -> Result<Map<String, Va
     Ok(out)
 }
 
+/// Conta pontos de código como o Python: o surrogate guardado pelo codec vale um só.
 pub fn mask(value: &str) -> String {
-    let chars: Vec<_> = value.chars().collect();
-    if chars.len() <= 8 {
-        "•".repeat(chars.len())
+    use crate::orchestration::codec;
+    let length = codec::string_length(value);
+    if length <= 8 {
+        "•".repeat(length)
     } else {
-        format!(
-            "{}{}{}",
-            chars[..4].iter().collect::<String>(),
-            "•".repeat(8),
-            chars[chars.len() - 4..].iter().collect::<String>()
-        )
+        let head = codec::truncate_string(value, 4);
+        let tail = &value[codec::truncate_string(value, length - 4).len()..];
+        format!("{head}{}{tail}", "•".repeat(8))
     }
 }
 
@@ -241,15 +238,9 @@ fn change(
 ) -> Result<bool, String> {
     let _guard = WRITE.lock().unwrap_or_else(|e| e.into_inner());
     let target = path(env);
-    let parent = target.parent().ok_or("arquivo sem diretório")?;
-    fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    let lock = fs::OpenOptions::new()
-        .read(true)
-        .append(true)
-        .create(true)
-        .open(target.with_extension("lock"))
+    target.parent().ok_or("arquivo sem diretório")?;
+    let _lock = crate::session_rename::files::lock_file(&target.with_extension("lock"))
         .map_err(|e| e.to_string())?;
-    lock.lock().map_err(|e| e.to_string())?;
     let (mut map, corrupt) = state(env);
     if corrupt {
         return Err(format!(

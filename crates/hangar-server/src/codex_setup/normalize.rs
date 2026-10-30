@@ -267,30 +267,6 @@ pub fn security(
     }
     Ok(result)
 }
-pub fn installed(config: &Value, windows: bool) -> Option<(String, String)> {
-    for group in config.get("hooks")?.get("PreToolUse")?.as_array()? {
-        for hook in group
-            .get("hooks")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-        {
-            let Some(text) = hook.get("command").and_then(Value::as_str) else {
-                continue;
-            };
-            let Ok(args) = split(text, windows) else {
-                continue;
-            };
-            if args.len() >= 6
-                && args[2..6] == ["--", "rtk", "hook", "claude"]
-                && matches!(basename(&args[1]).as_str(), "codex-hook-allow.py" | "codex-hook-allow")
-            {
-                return Some((args[0].clone(), args[1].clone()));
-            }
-        }
-    }
-    None
-}
 
 #[cfg(test)]
 #[path="normalize_native_tests.rs"]

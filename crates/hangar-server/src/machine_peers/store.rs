@@ -1,9 +1,9 @@
 //! Um arquivo para os peers e a lista dos apps; a trava cobre leitura e publicação.
 use super::Error;
-use crate::orchestration::codec;
+use crate::orchestration::{codec, truthy};
 use serde_json::{Map, Value, json};
 use std::{
-    fs::{File, OpenOptions},
+    fs::File,
     io,
     path::{Path, PathBuf},
 };
@@ -60,7 +60,7 @@ impl Store {
     ) -> Result<Value, Error> {
         let _lock = lock(&self.path)?;
         let mut data = self.read()?;
-        let mut result = super::RequestValue(apply(&mut data)?);
+        let mut result = crate::orchestration::codec::ValueGuard(apply(&mut data)?);
         clean_temporary(&self.path)?;
         let document=Value::Object(std::mem::take(&mut data.0));
         let serialized=codec::dumps_indented_utf8(&document,2);
@@ -179,7 +179,7 @@ impl Store {
             return Err(Error::invalid("id de máquina repetido"));
         }
         self.change(|data| {
-            let current=super::RequestValue(app_response(data)?);
+            let current=crate::orchestration::codec::ValueGuard(app_response(data)?);
             if current["rev"] != rev {
                 return Err(Error {
                     status: 409,
@@ -242,38 +242,13 @@ fn is_peer(v: &Value) -> bool {
     v.is_object() && (v.get("base_url").is_some() || v.get("app").is_none())
 }
 fn text(value:&Value)->Option<&str>{value.as_str().filter(|_|!crate::orchestration::codec::contains_nonfinite(value))}
-pub fn truthy(v: &Value) -> bool {
-    match v {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::String(s) => !s.is_empty(),
-        Value::Array(a) => !a.is_empty(),
-        Value::Object(o) => !o.is_empty(),
-        Value::Number(n) => n.as_f64() != Some(0.),
-    }
-}
 pub fn valid_id(v: &Value) -> Result<(), Error> {
-    let good = v.as_str().is_some_and(|s| {
-        !s.is_empty()
-            && s.len() <= 32
-            && s.as_bytes()[0].is_ascii_alphanumeric()
-            && s.bytes()
-                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
-    });
-    if good {
+    if v.as_str().is_some_and(crate::accounts::catalog::valid_name) {
         Ok(())
     } else {
         Err(Error::invalid(
             "identificador: use minúsculas, números, '-' ou '_' (até 32 caracteres)",
         ))
-    }
-}
-pub fn mask(value: &str) -> String {
-    let length=codec::string_length(value);
-    if length<=8 {"•".repeat(length)}else{
-        let head=codec::truncate_string(value,4);
-        let tail=&value[codec::truncate_string(value,length-4).len()..];
-        format!("{head}{}{tail}","•".repeat(8))
     }
 }
 pub fn list(data: &Map<String, Value>) -> Value {
@@ -282,7 +257,7 @@ pub fn list(data: &Map<String, Value>) -> Value {
     Value::Array(rows.into_iter().map(|(id,cfg)|{
         let empty=Value::String(String::new());let token=cfg.get("token").filter(|value|truthy(value)).unwrap_or(&empty);
         let mut row=Map::new();row.insert("id".into(),Value::String(id.clone()));row.insert("base_url".into(),codec::clone_value(&cfg["base_url"]));
-        row.insert("token".into(),Value::String(mask(&codec::python_string(token))));
+        row.insert("token".into(),Value::String(crate::engines::store::mask(&codec::python_string(token))));
         if truthy(&cfg["web_url"]){row.insert("web_url".into(),codec::clone_value(&cfg["web_url"]));}
         if cfg["enabled"].is_boolean(){row.insert("enabled".into(),cfg["enabled"].clone());}
         Value::Object(row)
@@ -330,7 +305,7 @@ fn app_entry(raw: &Value) -> Result<Value, Error> {
     Ok(out)
 }
 fn app_response(data: &Map<String, Value>) -> Result<Value,Error> {
-    let mut list=super::RequestValue(Value::Array(data.values().filter_map(|value|value.get("app").filter(|app|app.is_object())).map(codec::clone_value).collect()));
+    let mut list=crate::orchestration::codec::ValueGuard(Value::Array(data.values().filter_map(|value|value.get("app").filter(|app|app.is_object())).map(codec::clone_value).collect()));
     let apps=list.0.as_array_mut().unwrap();
     apps.sort_by_key(|app|app.get("pos").and_then(|value|value.as_i64().or_else(||value.as_bool().map(i64::from))).unwrap_or(0));
     for app in apps {if let Some(previous)=app.as_object_mut().unwrap().remove("pos"){codec::discard(previous);}}
@@ -380,19 +355,12 @@ fn free_key(id: &str, data: &Map<String, Value>) -> String {
     key
 }
 pub fn lock(path: &Path) -> Result<File, Error> {
-    let parent = path.parent().ok_or_else(Error::unavailable)?;
-    std::fs::create_dir_all(parent).map_err(|_| Error::unavailable())?;
-    let lock = OpenOptions::new()
-        .read(true)
-        .append(true)
-        .create(true)
-        .open(path.with_file_name(format!(
-            "{}.lock",
-            path.file_name().unwrap_or_default().to_string_lossy()
-        )))
-        .map_err(|_| Error::unavailable())?;
-    lock.lock().map_err(|_| Error::unavailable())?;
-    Ok(lock)
+    path.parent().ok_or_else(Error::unavailable)?;
+    crate::session_rename::files::lock_file(&path.with_file_name(format!(
+        "{}.lock",
+        path.file_name().unwrap_or_default().to_string_lossy()
+    )))
+    .map_err(|_| Error::unavailable())
 }
 pub fn clean_temporary(path: &Path) -> Result<(), Error> {
     let prefix = format!(

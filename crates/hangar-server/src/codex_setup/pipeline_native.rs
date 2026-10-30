@@ -2,7 +2,7 @@
 use super::{cancellation::{self,OperationError},config_edits,files,instructions,native::Native,phase::{Error,State},pipeline_round,plugin_controlled,plugin_native,plugin_sync,stage_flow,stage_native};
 use crate::{accounts::{AccountService,AccountKey,Provider},config_sync::{runtime::RuntimeConfig,runtime_values::ValueGuard},orchestration::codec,runtime::gateway::RuntimeRegistry};
 use serde_json::{Value,json};
-use std::{path::Path,sync::Arc,time::{Duration,SystemTime,UNIX_EPOCH}};
+use std::{path::Path,sync::Arc,time::Duration};
 use tokio::sync::watch;
 pub(super) struct Actions<'a>{pub accounts:&'a AccountService,pub config:&'a RuntimeConfig,pub repo:&'a Path,pub account:&'a Path,pub work:&'a Path,pub backups:&'a Path,pub state:&'a State,pub runtime:Option<&'a Arc<RuntimeRegistry>>,pub native:Option<Native>,pub cancel:watch::Receiver<bool>}
 fn error(kind:&'static str,message:impl Into<String>)->Error{Error{kind,message:message.into()}}
@@ -36,10 +36,10 @@ impl Actions<'_>{
  }
 }
 impl pipeline_round::Actions for Actions<'_>{
- fn now(&self)->f64{SystemTime::now().duration_since(UNIX_EPOCH).map(|v|v.as_secs_f64()).unwrap_or_else(|e|-e.duration().as_secs_f64())}
+ fn now(&self)->f64{plugin_native::unix_now()}
  fn available(&self)->bool{self.accounts.codex_command().is_some()}
  fn fingerprint(&mut self,sources:bool,phase:Option<&str>,registry:Option<&Value>)->Result<String,Error>{super::pipeline_fingerprint::compute(&self.accounts.env,self.config,self.account,self.repo,registry,phase,sources)}
- async fn open(&mut self)->Result<(),Error>{self.native=Some(Native::open_controlled(&self.accounts.env,&self.accounts.env.home,self.account,false,self.cancel.clone()).await.map_err(operation)?);Ok(())}
+ async fn open(&mut self)->Result<(),Error>{self.native=Some(Native::open(&self.accounts.env,&self.accounts.env.home,self.account,false,Some(self.cancel.clone())).await.map_err(operation)?);Ok(())}
  async fn close(&mut self)->Result<(),Error>{if let Some(mut native)=self.native.take(){native.close().await.map_err(|message|error("CodexNativoErro",message))?;}Ok(())}
  async fn execute(&mut self,phase:&str,registry:&mut Value,state:&State,force:bool)->Result<(),Error>{
   self.check()?;
@@ -79,7 +79,7 @@ impl pipeline_round::Actions for Actions<'_>{
    if !edits.is_empty(){let result=self.request("config/batchWrite",json!({"edits":edits,"reloadUserConfig":true})).await?;codec::discard(result);}
    let result=if let Some(runtime)=self.runtime{let key=AccountKey::new(Provider::Codex,self.account).map_err(|e|error("AccountError",e.to_string()))?;ValueGuard(runtime.refresh_hooks(&key).await)}else{ValueGuard(Value::Null)};
    if !result.is_null()&&result["ok"]!=true{return Err(error("CodexNativoErro","O Codex não confirmou a recarga dos hooks nas sessões abertas"));}
-   if crate::engines::probe::truthy(&result["approval_required"])||manual>0{state.hooks_changed();}else{state.update(|v|{v["confianca_pendente"]=json!(false);v["avisos"].as_array_mut().unwrap().retain(|item|ValueGuard(super::messages::serialize(item))["codigo"]!="aviso_hooks_alterados");});}Ok(())
+   if crate::orchestration::truthy(&result["approval_required"])||manual>0{state.hooks_changed();}else{state.update(|v|{v["confianca_pendente"]=json!(false);v["avisos"].as_array_mut().unwrap().retain(|item|ValueGuard(super::messages::serialize(item))["codigo"]!="aviso_hooks_alterados");});}Ok(())
   }.await;
   match result{Err(e) if matches!(e.kind,"CodexNativoErro"|"AccountError"|"HTTPException"|"ValueError")=>{if e.kind=="ValueError"{warning(state,"aviso_confianca_indisponivel",json!({}));}state.hooks_changed();state.update(|v|v["erros"].as_array_mut().unwrap().push(super::messages::message("erro_recarregar_hooks",&serde_json::Map::new()).unwrap()));Ok(())},other=>other}
  }

@@ -8,9 +8,10 @@ use axum::{
     body::{Body, to_bytes},
     extract::{ConnectInfo, Request, State},
     http::{Method, StatusCode},
-    response::{IntoResponse, Response},
+    response::Response,
 };
-use serde_json::{Value, json};
+use serde_json::json;
+use crate::http_cors::{internal_error, json_guarded};
 use std::{net::SocketAddr, sync::Arc};
 const ROUTES: &[(&str, &str)] = &[
     ("/api/push/vapid", "GET"),
@@ -28,27 +29,6 @@ pub fn matches(method: &Method, path: &str) -> bool {
         .iter()
         .any(|(p, m)| *p == path && *m == method.as_str())
 }
-fn reply(status: StatusCode, value: Value) -> Response {
-    if codec::contains_surrogate(&value) || codec::contains_nonfinite(&value) {
-        codec::discard(value);
-        return server_error();
-    }
-    let body = codec::dumps_compact_utf8(&value, false).expect("Unicode conferido");
-    codec::discard(value);
-    (
-        status,
-        [(axum::http::header::CONTENT_TYPE, "application/json")],
-        body,
-    )
-        .into_response()
-}
-fn server_error() -> Response {
-    let mut response = (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response();
-    response
-        .extensions_mut()
-        .insert(crate::http_cors::UnhandledServerError);
-    response
-}
 pub async fn route(
     State(st): State<Arc<AppState>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -65,9 +45,7 @@ pub async fn route(
     response
 }
 async fn admit(st: &Arc<AppState>, peer: SocketAddr, mut req: Request) -> Response {
-    if let Some(response) =
-        crate::http_body_limit::precheck_with_limit(req.headers(), st.login_guests.body_limit)
-    {
+    if let Some(response) = crate::http_body_limit::precheck(req.headers()) {
         return response;
     }
     let path = percent_encoding::percent_decode_str(req.uri().path())
@@ -94,10 +72,10 @@ async fn admit(st: &Arc<AppState>, peer: SocketAddr, mut req: Request) -> Respon
     let is_json = crate::http_body_input::is_json(req.headers());
     if schema.is_some() && is_json {
         let (parts, body) = req.into_parts();
-        let raw = match to_bytes(body, st.login_guests.body_limit).await {
+        let raw = match to_bytes(body, crate::http_body_limit::MAX_BYTES).await {
             Ok(raw) => raw,
             Err(_) => {
-                return reply(
+                return json_guarded(
                     StatusCode::BAD_REQUEST,
                     json!({"detail":"There was an error parsing the body"}),
                 );
@@ -105,7 +83,7 @@ async fn admit(st: &Arc<AppState>, peer: SocketAddr, mut req: Request) -> Respon
         };
         match body::parse(&raw) {
             Ok(value) => codec::discard(value),
-            Err((status, value)) => return reply(status, value),
+            Err((status, value)) => return json_guarded(status, value),
         }
         req = Request::from_parts(parts, Body::from(raw));
     }
@@ -115,7 +93,7 @@ async fn admit(st: &Arc<AppState>, peer: SocketAddr, mut req: Request) -> Respon
     let config = match super::config::Frozen::from_state(st) {
         Ok(config) => config,
         Err(code) => {
-            return reply(
+            return json_guarded(
                 StatusCode::SERVICE_UNAVAILABLE,
                 json!({"detail":{"code":code}}),
             );
@@ -123,18 +101,18 @@ async fn admit(st: &Arc<AppState>, peer: SocketAddr, mut req: Request) -> Respon
     };
     let dir = config.dir;
     if path == "/api/push/vapid" {
-        return reply(StatusCode::OK, json!({"key":config.env["CP_VAPID_PUBLIC"]}));
+        return json_guarded(StatusCode::OK, json!({"key":config.env["CP_VAPID_PUBLIC"]}));
     }
     if path == "/api/push/settings" {
         return match tokio::task::spawn_blocking(move || store::settings(&dir)).await {
-            Ok(Ok(value)) => reply(StatusCode::OK, value),
-            _ => server_error(),
+            Ok(Ok(value)) => json_guarded(StatusCode::OK, value),
+            _ => internal_error(),
         };
     }
-    let raw = match to_bytes(req.into_body(), st.login_guests.body_limit).await {
+    let raw = match to_bytes(req.into_body(), crate::http_body_limit::MAX_BYTES).await {
         Ok(raw) => raw,
         Err(_) => {
-            return reply(
+            return json_guarded(
                 StatusCode::BAD_REQUEST,
                 json!({"detail":"There was an error parsing the body"}),
             );
@@ -143,29 +121,29 @@ async fn admit(st: &Arc<AppState>, peer: SocketAddr, mut req: Request) -> Respon
     let value = if !is_json && !raw.is_empty() {
         match std::str::from_utf8(&raw) {
             Ok(text) => json!(text),
-            Err(_) => return server_error(),
+            Err(_) => return internal_error(),
         }
     } else {
         match body::parse(&raw) {
             Ok(value) => value,
-            Err((status, value)) => return reply(status, value),
+            Err((status, value)) => return json_guarded(status, value),
         }
     };
     let checked = crate::login_guests::schema::validate(schema.unwrap(), &value);
     codec::discard(value);
     let normalized = match checked {
         Ok(value) => value,
-        Err(failure) => return reply(StatusCode::from_u16(failure.status).unwrap(), failure.body),
+        Err(failure) => return json_guarded(StatusCode::from_u16(failure.status).unwrap(), failure.body),
     };
     if path == "/api/push/subscribe"
         && let Err(detail) = store::validate_subscription(&normalized["subscription"])
     {
         codec::discard(normalized);
-        return reply(StatusCode::BAD_REQUEST, json!({"detail":detail}));
+        return json_guarded(StatusCode::BAD_REQUEST, json!({"detail":detail}));
     }
     let operation = path.clone();
     // A espera da trava não pode ocupar o pool usado pelo envio para ler e podar.
-    let guard = store::writer_lock(&dir).await;
+    let guard = store::delivery_lock().await;
     let result = tokio::task::spawn_blocking(move || {
         let result = match operation.as_str() {
             "/api/push/subscribe" => store::add_locked(
@@ -195,7 +173,7 @@ async fn admit(st: &Arc<AppState>, peer: SocketAddr, mut req: Request) -> Respon
     .await
     .unwrap_or(Err("push_store_unwritable"));
     match result {
-        Ok(()) => reply(StatusCode::OK, json!({"ok":true})),
+        Ok(()) => json_guarded(StatusCode::OK, json!({"ok":true})),
         Err("push_settings_invalid") => {
             st.diag.report(
                 "rust.push_settings_failed",
@@ -203,24 +181,24 @@ async fn admit(st: &Arc<AppState>, peer: SocketAddr, mut req: Request) -> Respon
                 "push_settings_invalid",
                 "preferências incompatíveis; arquivo preservado",
             );
-            reply(
+            json_guarded(
                 StatusCode::SERVICE_UNAVAILABLE,
                 json!({"detail":{"code":"push_settings_invalid"}}),
             )
         }
-        Err("push_store_encoding") if path == "/api/push/subscribe" => reply(
+        Err("push_store_encoding") if path == "/api/push/subscribe" => json_guarded(
             StatusCode::BAD_REQUEST,
             json!({"detail":"push_encoding_invalid"}),
         ),
-        Err("subscription sem endpoint") => reply(
+        Err("subscription sem endpoint") => json_guarded(
             StatusCode::BAD_REQUEST,
             json!({"detail":"subscription sem endpoint"}),
         ),
-        Err("horario invalido (use HH:MM)") => reply(
+        Err("horario invalido (use HH:MM)") => json_guarded(
             StatusCode::UNPROCESSABLE_ENTITY,
             json!({"detail":"horario invalido (use HH:MM)"}),
         ),
-        Err(_) => server_error(),
+        Err(_) => internal_error(),
     }
 }
 #[cfg(test)]

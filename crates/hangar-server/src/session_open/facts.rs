@@ -16,8 +16,6 @@ use crate::accounts::{AccountService, Provider};
 use crate::list::bridge::expand_home;
 use crate::list::procs::{ProcessView, SystemProcs};
 
-/// `engines._NOME_OK`: o nome entra num `$SHELL -c`.
-static ENGINE_NAME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\A[a-z0-9][a-z0-9_-]{0,31}\z").unwrap());
 static GPT_MODEL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\Agpt-\d[^/]*\z").unwrap());
 
 pub struct LocalFacts {
@@ -140,7 +138,6 @@ impl LocalFacts {
     }
 }
 
-static SAFE_ACCOUNT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\A[a-z0-9][a-z0-9_-]{0,31}\z").unwrap());
 static SAFE_PREFIX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\A[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\z").unwrap());
 static SAFE_MODEL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\A[A-Za-z0-9][A-Za-z0-9_.:\[\]-]*\z").unwrap());
 
@@ -153,7 +150,8 @@ pub(crate) fn engine_names(env: &AccountEnvironment) -> Result<Vec<String>, Stri
         .unwrap_or_else(|| env.home.join(".claude").join("engines.json"));
     match read_json(&path)? {
         None => Ok(Vec::new()),
-        Some(Value::Object(map)) => Ok(map.keys().filter(|name| ENGINE_NAME.is_match(name)).cloned().collect()),
+        // `engines._NOME_OK`: o nome entra num `$SHELL -c`.
+        Some(Value::Object(map)) => Ok(map.keys().filter(|name| crate::accounts::catalog::valid_name(name)).cloned().collect()),
         Some(_) => Err(format!("{}: não é um objeto", path.display())),
     }
 }
@@ -191,9 +189,9 @@ fn credentials(home: &Path) -> Result<Vec<(PathBuf, Value)>, OpenError> {
 pub fn fixed_account(accounts: &AccountService, engine: &str, account: &str) -> Result<super::claude::EngineRoute, OpenError> {
     let env = &accounts.env;
     let cfg = &engines_of(env)[engine];
-    let local = cliproxy_base(&env.home).filter(|local| normalize_base(cfg["base_url"].as_str().unwrap_or("")) == *local)
+    let local = cliproxy_base(&env.home).filter(|local| crate::engines::store::normalize_base(cfg["base_url"].as_str().unwrap_or("").trim()) == *local)
         .ok_or_else(|| cliproxy("a conta ChatGPT só pode ser fixada no CLIProxyAPI local"))?;
-    if !SAFE_ACCOUNT.is_match(account) { return Err(cliproxy("CLIProxyAPI: identificador de conta inválido")); }
+    if !crate::accounts::catalog::valid_name(account) { return Err(cliproxy("CLIProxyAPI: identificador de conta inválido")); }
     let creds = credentials(&env.home)?;
     let visible = accounts.visible_codex_accounts().map_err(|e| OpenError::new(e.status, e.code, e.message))?;
     let mut entries: Vec<(String, String, Option<String>, usize)> = Vec::new();
@@ -320,7 +318,7 @@ fn codex_error(error: AccountError) -> OpenError {
 /// `cliproxy.is_local_engine`: o motor aponta para o CLIProxyAPI desta máquina.
 pub(crate) fn local_engine(env: &AccountEnvironment, engine: &str) -> bool {
     let cfg = &engines_of(env)[engine];
-    cliproxy_base(&env.home).is_some_and(|local| normalize_base(cfg["base_url"].as_str().unwrap_or("")) == local)
+    cliproxy_base(&env.home).is_some_and(|local| crate::engines::store::normalize_base(cfg["base_url"].as_str().unwrap_or("").trim()) == local)
 }
 
 fn cliproxy_base(home: &Path) -> Option<String> {
@@ -339,17 +337,6 @@ fn cliproxy_base(home: &Path) -> Option<String> {
     (1..65536).contains(&port).then_some(())?;
     let scheme = if config["tls"]["enable"] == true { "https" } else { "http" };
     Some(format!("{scheme}://{host}:{port}"))
-}
-
-fn normalize_base(url: &str) -> String {
-    let url = url.trim().trim_end_matches('/');
-    url.strip_suffix("/v1").map_or(url, |u| u.trim_end_matches('/')).to_owned()
-}
-
-/// A abertura usa a mesma descoberta e o mesmo PATH do catálogo HTTP e dos atalhos.
-pub(crate) fn installed_providers(env: &AccountEnvironment, runtime: &tokio::runtime::Handle) -> Result<Vec<AgentProvider>,OpenError> {
-    let found=runtime.block_on(crate::provider_discovery::providers(env)).map_err(|error|OpenError::new(503,"erro_provedores_indisponiveis",error))?;
-    Ok(AgentProvider::ALL.into_iter().filter(|provider|found.get(provider.name()).is_some_and(|entry|entry.available)).collect())
 }
 
 impl OpenFacts for LocalFacts {
@@ -445,7 +432,7 @@ impl OpenFacts for LocalFacts {
 
     fn engines(&self) -> Vec<String> {
         self.engines_file().as_object().into_iter().flatten().map(|(name, _)| name.clone())
-            .filter(|name| ENGINE_NAME.is_match(name)).collect()
+            .filter(|name| crate::accounts::catalog::valid_name(name)).collect()
     }
 
     fn supports_fast(&self, engine: Option<&str>, model: Option<&str>) -> bool {
@@ -454,7 +441,7 @@ impl OpenFacts for LocalFacts {
         // `model or cfg.model`: texto vazio também cai no modelo do motor.
         let base = model.filter(|m| !m.is_empty()).or_else(|| cfg["model"].as_str()).unwrap_or("").rsplit('/').next().unwrap_or("");
         GPT_MODEL.is_match(base)
-            && cliproxy_base(&self.env().home).is_some_and(|local| normalize_base(cfg["base_url"].as_str().unwrap_or("")) == local)
+            && cliproxy_base(&self.env().home).is_some_and(|local| crate::engines::store::normalize_base(cfg["base_url"].as_str().unwrap_or("").trim()) == local)
     }
 
     /// `create_session` com `engine_account`: a credencial da conta, o catálogo dela (o do motor só com

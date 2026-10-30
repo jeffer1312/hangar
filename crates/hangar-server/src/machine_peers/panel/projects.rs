@@ -312,18 +312,7 @@ fn expand_user(value:&str,home:&Path)->PathBuf {
 }
 #[cfg(unix)]
 fn user_home(name:&str)->Option<PathBuf>{
-    use std::{ffi::{CString,CStr},os::unix::ffi::OsStrExt};
-    let name=CString::new(name).ok()?;
-    let mut size=1024usize;
-    loop {
-        let mut buffer=vec![0u8;size];let mut entry=std::mem::MaybeUninit::<libc::passwd>::uninit();let mut result=std::ptr::null_mut();
-        // O buffer pertence à chamada e mantém pw_dir válido até a cópia abaixo.
-        let code=unsafe{libc::getpwnam_r(name.as_ptr(),entry.as_mut_ptr(),buffer.as_mut_ptr().cast(),buffer.len(),&mut result)};
-        if code==libc::ERANGE{size=size.checked_mul(2)?;continue;}
-        if code!=0||result.is_null(){return None;}
-        let directory=unsafe{CStr::from_ptr((*result).pw_dir)};
-        return Some(PathBuf::from(std::ffi::OsStr::from_bytes(directory.to_bytes())));
-    }
+    crate::codex_setup::instructions_imports::user_record(Some(name)).map(|(_,home)|home)
 }
 #[cfg(not(unix))]
 fn user_home(_name:&str)->Option<PathBuf>{None}

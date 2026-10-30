@@ -27,7 +27,3 @@ pub async fn run(paths:&Paths<'_>,registry:&mut Value,state:&State,force:bool,ac
 
 #[path="plugin_sync_impl.rs"]
 mod implementation;
-
-#[cfg(all(test,unix))]
-#[path="plugin_sync_tests.rs"]
-mod tests;

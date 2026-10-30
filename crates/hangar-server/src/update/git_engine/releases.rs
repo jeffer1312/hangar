@@ -260,19 +260,7 @@ pub fn fetch(
     platform: Option<&str>,
     dest: &Path,
     release: Option<&Release>,
-    hold: Option<&mut Vec<Held>>,
-) -> Option<Vec<String>> {
-    fetch_with_installer(source,base,tag,platform,dest,release,hold,&install)
-}
-pub fn fetch_with_installer(
-    source: &dyn Source,
-    base: &str,
-    tag: Option<&str>,
-    platform: Option<&str>,
-    dest: &Path,
-    release: Option<&Release>,
     mut hold: Option<&mut Vec<Held>>,
-    install_pair:&dyn Fn(&[u8],&Path)->std::io::Result<()>,
 ) -> Option<Vec<String>> {
     let platform = platform?;
     let mut url = release.map(|r| r.url.clone()).unwrap_or_else(|| {
@@ -432,7 +420,7 @@ pub fn fetch_with_installer(
         if let Some(held) = hold.as_deref_mut() {
             held.extend(pending);
         } else {
-            warnings.extend(super::auth_pair::publish_with(&pending, false,install_pair));
+            warnings.extend(super::auth_pair::publish(&pending, false));
         }
     } else if let Some(held) = hold.as_deref_mut() {
         held.extend(

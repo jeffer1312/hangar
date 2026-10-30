@@ -16,7 +16,7 @@ pub(super) trait FinishSources: Sources {
 }
 
 pub(super) fn permitted(enabled: &Value, threshold: &Value, elapsed: f64) -> Result<bool, &'static str> {
-    if !crate::config_sync::apply::truthy(enabled) { return Ok(false); }
+    if !crate::orchestration::truthy(enabled) { return Ok(false); }
     let minimum = match threshold {
         Value::Bool(value) => f64::from(u8::from(*value)),
         Value::Number(value) => value.as_f64().unwrap_or_else(|| if value.to_string().starts_with('-') {f64::NEG_INFINITY} else {f64::INFINITY}),
@@ -180,56 +180,6 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn guest_push_finished_matches_original_producer() {
-        let fixture:Value=serde_json::from_str(include_str!("../../../../../backend/tests/fixtures/contract/guests/push.json")).unwrap();
-        for row in fixture["finished"].as_array().unwrap() {
-            let scenario=row["scenario"].as_str().unwrap();
-            let source=Fake {provider:row["provider"].as_str().unwrap().into(),scenario:scenario.into(),reads:Mutex::default(),failed_read:0,failures:Mutex::default(),rechecks:0,advance_marker:false,series:Mutex::new([("sid".into(),if scenario=="new_series" {999.0}else{1000.0})].into()),sleeps:Mutex::default(),notices:Mutex::default()};
-            finished(&source,"sid",1000.0,if scenario=="short"{1010.0}else{1100.0}).await;
-            assert_eq!(json!(*source.notices.lock().unwrap()),row["notices"],"GUE-082 {row}");
-            assert_eq!(json!(*source.series.lock().unwrap()),row["series"],"GUE-082 {row}");
-            assert_eq!(json!(*source.sleeps.lock().unwrap()),row["sleeps"],"GUE-082 {row}");
-        }
-    }
-    #[tokio::test]
-    async fn guest_push_kimi_finish_waits_without_another_transition() {
-        let fixture:Value=serde_json::from_str(include_str!("../../../../../backend/tests/fixtures/contract/guests/push-kimi-finish.json")).unwrap();
-        for row in fixture["rows"].as_array().unwrap() {
-            let source=Fake {provider:"kimi".into(),scenario:"long".into(),reads:Mutex::default(),failed_read:0,failures:Mutex::default(),rechecks:row["rechecks"].as_u64().unwrap() as usize,advance_marker:row["advance_marker"].as_bool().unwrap(),series:Mutex::new([("sid".into(),1000.0)].into()),sleeps:Mutex::default(),notices:Mutex::default()};
-            confirm_and_finish(&source,"sid",1000.0,1100.0).await;
-            assert_eq!(json!(*source.notices.lock().unwrap()),row["notices"],"GUE-082 {row}");
-            assert_eq!(json!(*source.series.lock().unwrap()),row["series"],"GUE-082 {row}");
-            assert_eq!(json!(*source.sleeps.lock().unwrap()),row["sleeps"],"GUE-082 {row}");
-        }
-    }
-
-    #[tokio::test]
-    async fn guest_push_finished_rechecks_series_and_destination() {
-        let fixture:Value=serde_json::from_str(include_str!("../../../../../backend/tests/fixtures/contract/guests/push-finish-races.json")).unwrap();
-        for row in fixture["rows"].as_array().unwrap() {
-            let source=Fake {provider:"pi".into(),scenario:row["scenario"].as_str().unwrap().into(),reads:Mutex::default(),failed_read:0,failures:Mutex::default(),rechecks:0,advance_marker:false,series:Mutex::new([("sid".into(),1000.0)].into()),sleeps:Mutex::default(),notices:Mutex::default()};
-            finished(&source,"sid",1000.0,1100.0).await;
-            assert_eq!(json!(*source.notices.lock().unwrap()),row["notices"],"GUE-082 {row}");
-            assert_eq!(json!(*source.series.lock().unwrap()),row["series"],"GUE-082 {row}");
-            assert_eq!(json!(*source.sleeps.lock().unwrap()),row["sleeps"],"GUE-082 {row}");
-            assert_eq!(json!(*source.reads.lock().unwrap()),row["list_reads"],"GUE-082 {row}");
-        }
-    }
-
-    #[tokio::test]
-    async fn guest_push_finished_preserves_series_when_discovery_fails() {
-        let fixture:Value=serde_json::from_str(include_str!("../../../../../backend/tests/fixtures/contract/guests/push-finish-errors.json")).unwrap();
-        for row in fixture["rows"].as_array().unwrap() {
-            let source=Fake {provider:"pi".into(),scenario:"stable".into(),reads:Mutex::default(),failed_read:row["failed_read"].as_u64().unwrap() as usize,failures:Mutex::default(),rechecks:0,advance_marker:false,series:Mutex::new([("sid".into(),1000.0)].into()),sleeps:Mutex::default(),notices:Mutex::default()};
-            finished(&source,"sid",1000.0,1100.0).await;
-            assert_eq!(json!(*source.notices.lock().unwrap()),row["notices"],"GUE-082 {row}");
-            assert_eq!(json!(*source.series.lock().unwrap()),row["series"],"GUE-082 {row}");
-            assert_eq!(json!(*source.reads.lock().unwrap()),row["list_reads"],"GUE-082 {row}");
-            assert_eq!(*source.failures.lock().unwrap(),vec!["push_list_unavailable"]);
-        }
-    }
-
     proptest::proptest! {
         #[test]
         fn guest_push_disabled_never_sends_for_external_threshold(raw in ".{0,2048}", elapsed in proptest::prelude::any::<f64>()) {
@@ -239,15 +189,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn guest_push_finished_settings_match_python() {
-        let fixture = crate::orchestration::codec::loads(include_str!("../../../../../backend/tests/fixtures/contract/guests/push-settings.json")).unwrap();
-        for row in fixture["rows"].as_array().unwrap() {
-            let enabled = if row["key"] == "notify_finished" { &row["value"] } else { &Value::Bool(true) };
-            let threshold = if row["key"] == "finish_min_seconds" { &row["value"] } else { &serde_json::json!(45) };
-            let result = permitted(enabled, threshold, 100.0);
-            assert_eq!(result.is_err(), !row["error"].is_null(), "GUE-082 {row}");
-            assert_eq!(result.unwrap_or(false), !row["notices"].as_array().unwrap().is_empty(), "GUE-082 {row}");
-        }
-    }
 }

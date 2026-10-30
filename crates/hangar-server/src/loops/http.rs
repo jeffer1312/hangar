@@ -379,17 +379,12 @@ impl Backend for Live<'_> {
 }
 
 fn http_response(status:StatusCode, body:Value)->Response {
-    let external_error=status==StatusCode::INTERNAL_SERVER_ERROR && body.as_str()==Some("Internal Server Error");
-    if external_error || crate::orchestration::codec::contains_surrogate(&body) || crate::orchestration::codec::contains_nonfinite(&body) {
+    if status==StatusCode::INTERNAL_SERVER_ERROR && body.as_str()==Some("Internal Server Error") {
         crate::orchestration::codec::discard(body);
-        let mut response=(StatusCode::INTERNAL_SERVER_ERROR,"Internal Server Error").into_response();
-        response.extensions_mut().insert(crate::http_cors::UnhandledServerError);
-        return response;
+        return crate::http_cors::internal_error();
     }
     let persistence_error=status==StatusCode::INTERNAL_SERVER_ERROR && body["detail"]["code"]=="loop_store_unwritable";
-    let raw=crate::transcript::pyjson::dumps_compact_unicode(&body);
-    crate::orchestration::codec::discard(body);
-    let mut response=(status,[(axum::http::header::CONTENT_TYPE,"application/json")],raw).into_response();
+    let mut response=crate::http_cors::json_guarded(status,body);
     // A falha de disco saía pelo middleware externo do Python, sem cabeçalhos CORS.
     if persistence_error {response.extensions_mut().insert(crate::http_cors::UnhandledServerError);}
     response
@@ -408,7 +403,7 @@ pub async fn route(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
     response
 }
 async fn admit(st:&Arc<AppState>,peer:SocketAddr,mut req:Request)->Response {
-    if let Some(response)=crate::http_body_limit::precheck_with_limit(req.headers(),st.login_guests.body_limit){return response;}
+    if let Some(response)=crate::http_body_limit::precheck(req.headers()){return response;}
     let decoded=percent_decode_str(req.uri().path()).decode_utf8_lossy();
     let decision=crate::http_contract::resolve(ROUTES,req.method().as_str(),&decoded);
     let (_,https)=st.cfg.trusted.resolve(peer.ip(),req.headers());
@@ -417,7 +412,7 @@ async fn admit(st:&Arc<AppState>,peer:SocketAddr,mut req:Request)->Response {
     // FastAPI lê a sintaxe JSON antes das dependências; o schema vem depois delas.
     if schema_name(operation).is_some() && crate::http_body_input::is_json(req.headers()) {
         let (parts,body)=req.into_parts();
-        let bytes=match to_bytes(body,st.login_guests.body_limit).await {Ok(bytes)=>bytes,Err(_)=>return parsing_failed()};
+        let bytes=match to_bytes(body,crate::http_body_limit::MAX_BYTES).await {Ok(bytes)=>bytes,Err(_)=>return parsing_failed()};
         match crate::orchestration::body::parse(&bytes) {
             Ok(value)=>crate::orchestration::codec::discard(value),
             Err((status,body))=>return http_response(status,body),
@@ -442,7 +437,7 @@ async fn serve(st: &Arc<AppState>, req: Request) -> Response {
     let schema=schema_name(operation);
     let json_body=crate::http_body_input::is_json(req.headers());
     let bytes=if schema.is_some() {
-        match to_bytes(req.into_body(),st.login_guests.body_limit).await {Ok(bytes)=>bytes,Err(_)=>return parsing_failed()}
+        match to_bytes(req.into_body(),crate::http_body_limit::MAX_BYTES).await {Ok(bytes)=>bytes,Err(_)=>return parsing_failed()}
     } else {axum::body::Bytes::new()};
     if let Some(schema)=schema && !json_body && !bytes.is_empty() {
         let Ok(text)=std::str::from_utf8(&bytes) else{return http_response(StatusCode::INTERNAL_SERVER_ERROR,Value::String("Internal Server Error".into()));};

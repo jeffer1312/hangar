@@ -290,7 +290,7 @@ impl Service {
         let bytes=std::fs::read(&marker).map_err(|error|native_io_error(&error))?;
         let installed=native_document(&bytes,false)?;
         if !installed.is_object(){return Err(native_error("ValueError"));}
-        if crate::machine_peers::store::truthy(&installed["sem_build"]){return Ok(None);}
+        if crate::orchestration::truthy(&installed["sem_build"]){return Ok(None);}
         let release=self.environment.get("HANGAR_NATIVE_UPDATE_URL").filter(|value|!value.is_empty()).cloned()
             .unwrap_or_else(||format!("{}/native-latest",super::releases::BASE));
         let bytes=source.get_release(&format!("{}/native-latest.json",release.trim_end_matches('/')),std::time::Duration::from_secs(30))
@@ -336,16 +336,13 @@ impl Service {
     }
 }
 
-struct NativeDocument(serde_json::Value);
-impl std::ops::Deref for NativeDocument {type Target=serde_json::Value;fn deref(&self)->&Self::Target{&self.0}}
-impl Drop for NativeDocument {fn drop(&mut self){crate::orchestration::codec::discard(std::mem::take(&mut self.0));}}
-fn native_document(bytes:&[u8],binary:bool)->Result<NativeDocument,serde_json::Value> {
+fn native_document(bytes:&[u8],binary:bool)->Result<crate::orchestration::codec::ValueGuard,serde_json::Value> {
     let decoded;
     let text=if binary {
         decoded=crate::orchestration::body_encoding::decode(bytes).map_err(|_|native_error("UnicodeDecodeError"))?;
         decoded.text.as_ref()
     }else{std::str::from_utf8(bytes).map_err(|_|native_error("UnicodeDecodeError"))?};
-    if let Some(value)=crate::orchestration::codec::loads(text){return Ok(NativeDocument(value));}
+    if let Some(value)=crate::orchestration::codec::loads(text){return Ok(crate::orchestration::codec::ValueGuard(value));}
     // O marcador já foi decodificado como texto; o prefixo impede uma segunda detecção de encoding.
     let text_input=(!binary).then(||format!("    {text}"));
     let diagnostic=text_input.as_ref().map_or(bytes,|text|text.as_bytes());

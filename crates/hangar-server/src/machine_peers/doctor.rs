@@ -352,7 +352,7 @@ pub fn pairing_url(service: &Service) -> String {
         let host = if ["", "127.0.0.1", "localhost", "::1", "0.0.0.0", "::", "auto"]
             .contains(&bind.as_str())
         {
-            service.network.lan_ip()
+            network::lan_ip()
         } else {
             bind
         };

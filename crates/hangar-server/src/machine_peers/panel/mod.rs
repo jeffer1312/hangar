@@ -3,8 +3,8 @@ mod actions;
 mod book_write;
 pub mod projection;
 mod projects;
-use super::{store, RequestValue};
-use crate::{accounts::environment::AccountEnvironment, orchestration::codec};
+use super::store;
+use crate::{accounts::environment::AccountEnvironment, orchestration::{codec::{self, ValueGuard}, truthy}};
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use std::{
@@ -78,7 +78,7 @@ pub fn decode_response(
 ) -> Result<Value, String> {
     if !(200..300).contains(&status) {
         let parsed=std::str::from_utf8(bytes).ok().and_then(codec::loads);
-        let detail=parsed.as_ref().and_then(|value|value.get("detail")).filter(|value|store::truthy(value))
+        let detail=parsed.as_ref().and_then(|value|value.get("detail")).filter(|value|truthy(value))
             .map(codec::python_string).unwrap_or_else(||reason.into());
         if let Some(value)=parsed{codec::discard(value);}
         return Err(format!("{status}: {detail}"));
@@ -120,16 +120,16 @@ impl Panel {
         let port = self.env("CP_PORT")?;
         Ok(format!("http://127.0.0.1:{}",if port.is_empty(){"8765"}else{&port}))
     }
-    fn peers(&self) -> Result<RequestValue, String> {
+    fn peers(&self) -> Result<ValueGuard, String> {
         let path = self.path("peers.json")?;
         let raw = match std::fs::read_to_string(path) {
             Ok(raw) => raw,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(RequestValue(json!({}))),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(ValueGuard(json!({}))),
             Err(e) => return Err(format!("peers.json inválido: {e}")),
         };
         let value = codec::loads(&raw).ok_or("peers.json inválido: JSON inválido")?;
         match value {
-            Value::Object(map) => Ok(RequestValue(Value::Object(map))),
+            Value::Object(map) => Ok(ValueGuard(Value::Object(map))),
             value => {codec::discard(value);Err("peers.json inválido: raiz deve ser um objeto {id: {...}}".into())},
         }
     }
@@ -140,7 +140,7 @@ impl Panel {
         let peers = self.peers()?;
         let cfg = peers
             .get(server)
-            .filter(|v| store::truthy(v))
+            .filter(|v| truthy(v))
             .ok_or_else(|| {
                 format!(
                     "servidor '{server}' desconhecido (conhecidos: {})",
@@ -166,7 +166,7 @@ impl Panel {
         path: &str,
         body: Option<Value>,
         timeout: u64,
-    ) -> Result<RequestValue, String> {
+    ) -> Result<ValueGuard, String> {
         let (base, token, name) = self.resolve(address)?;
         const COMPONENT:&percent_encoding::AsciiSet=&percent_encoding::NON_ALPHANUMERIC.remove(b'-').remove(b'_').remove(b'.').remove(b'~');
         let encoded=percent_encoding::utf8_percent_encode(&name,COMPONENT).to_string();
@@ -179,7 +179,7 @@ impl Panel {
                 body,
                 timeout,
             )
-            .await.map(RequestValue)
+            .await.map(ValueGuard)
     }
     fn binary(&self, name: &str) -> Option<PathBuf> {
         self.environment

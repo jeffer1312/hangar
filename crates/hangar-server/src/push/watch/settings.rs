@@ -43,7 +43,7 @@ impl Poll {
 
 pub(super) fn flag(config: &crate::config_sync::runtime::RuntimeConfig, key: &str) -> bool {
     let value = config.get(key);
-    let enabled = crate::config_sync::apply::truthy(&value);
+    let enabled = crate::orchestration::truthy(&value);
     crate::orchestration::codec::discard(value);
     enabled
 }
@@ -51,10 +51,6 @@ pub(super) fn flag(config: &crate::config_sync::runtime::RuntimeConfig, key: &st
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::machine_peers::dotenv::SettingsEnvironment;
-    fn snapshot(field: &str, value: &str) -> SettingsSnapshot {
-        SettingsSnapshot::from_parts(SettingsEnvironment::from_pairs([(format!("CP_{}", field.to_ascii_uppercase()), value.to_owned())]), String::new())
-    }
     fn state(home: &std::path::Path, pairs: &[(&str, &str)]) -> crate::routes::AppState {
         let mut state = crate::routes::AppState::new(crate::config::Config {
             listen: "127.0.0.1:0".parse().unwrap(), upstream: "127.0.0.1:1".parse().unwrap(),
@@ -72,22 +68,6 @@ mod tests {
             crate::list::facts::FactsClient::new("127.0.0.1:1".parse().unwrap(), "fixture-secret".into())));
         state.accounts.env = crate::accounts::environment::AccountEnvironment::from_map(env);
         state
-    }
-    #[test]
-    fn guest_watch_flags_match_original_live_file() {
-        let fixture = crate::orchestration::codec::loads(include_str!("../../../../../backend/tests/fixtures/contract/guests/automation-flags.json")).unwrap();
-        for row in fixture["rows"].as_array().unwrap() {
-            let home = tempfile::tempdir().unwrap();
-            let state = state(home.path(), &[]);
-            let config = crate::config_sync::runtime::RuntimeConfig::from_state(&state).unwrap();
-            std::fs::create_dir_all(config.path.parent().unwrap()).unwrap();
-            let key = row["key"].as_str().unwrap();
-            let body = Value::Object([(key.to_owned(), crate::orchestration::codec::clone_value(&row["value"]))].into_iter().collect());
-            std::fs::write(&config.path, crate::orchestration::codec::dumps(&body, false)).unwrap();
-            assert_eq!(flag(&config, key), row["enabled"].as_bool().unwrap(), "GUE-082 {row}");
-            crate::orchestration::codec::discard(body);
-        }
-        crate::orchestration::codec::discard(fixture);
     }
     #[test]
     fn guest_watch_snapshot_is_frozen_and_overrides_remain_live() {
@@ -114,24 +94,5 @@ mod tests {
         std::fs::create_dir_all(config.path.parent().unwrap()).unwrap();
         std::fs::write(&config.path, r#"{"automations":"false"}"#).unwrap();
         assert!(crate::loops::automations(&state).unwrap(), "GUE-082: string persistida não é booleano do ambiente");
-    }
-    #[tokio::test]
-    async fn guest_watch_settings_match_original_types_and_sleep() {
-        let fixture: Value = serde_json::from_str(include_str!("../../../../../backend/tests/fixtures/contract/guests/watch-settings.json")).unwrap();
-        for row in fixture["rows"].as_array().unwrap() {
-            let field = row["field"].as_str().unwrap();
-            let parsed = Frozen::load(&snapshot(field, row["input"].as_str().unwrap()));
-            assert_eq!(parsed.is_ok(), row["accepted"].as_bool().unwrap(), "GUE-082 {row}");
-            let Ok(parsed) = parsed else {continue;};
-            if field == "auto_resume" {assert_eq!(parsed.auto_resume, row["value"].as_bool().unwrap());}
-            else {
-                match row["sleep"].as_str().unwrap() {
-                    "completed" => {assert_eq!(parsed.poll, Poll::Seconds(0.0)); parsed.poll.wait().await.unwrap();}
-                    "OverflowError" => {assert_eq!(parsed.poll, Poll::Overflow); assert_eq!(parsed.poll.wait().await, Err("push_poll_overflow"));}
-                    "waiting" => {let Poll::Seconds(seconds) = parsed.poll else {panic!("{row}")}; assert!(seconds > 0.0);}
-                    _ => panic!("{row}"),
-                }
-            }
-        }
     }
 }

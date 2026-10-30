@@ -1,5 +1,6 @@
 //! Escolha indivisível do modelo auxiliar anterior à configuração compartilhada.
-use super::{apply::truthy, runtime::RuntimeConfig};
+use super::runtime::RuntimeConfig;
+use crate::orchestration::truthy;
 use serde_json::{Map, Value, json};
 use std::path::Path;
 

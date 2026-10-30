@@ -4,6 +4,7 @@ use super::{
     export::{self, Context, MACHINE_MCP, OWNED_SETTINGS},
     files, paths,
 };
+use crate::orchestration::truthy;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -694,16 +695,6 @@ pub fn escapes(path: &str) -> bool {
         || path.starts_with('/')
         || path.split('/').any(|p| p == "..")
         || path.as_bytes().get(1) == Some(&b':')
-}
-pub fn truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::String(s) => !s.is_empty(),
-        Value::Array(a) => !a.is_empty(),
-        Value::Object(o) => !o.is_empty(),
-        Value::Number(n) => n.as_f64() != Some(0.0),
-    }
 }
 fn merge(current: &mut Value, incoming: &Value, prefix: &str, changed: &mut Vec<String>) {
     for (key, value) in incoming.as_object().into_iter().flatten() {

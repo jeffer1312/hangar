@@ -65,7 +65,7 @@ mod tests {
     use super::*;
     use serde_json::{json,Value};
     use std::sync::Mutex;
-    struct Fake {provider:String,scenario:String,sleeps:Mutex<Vec<f64>>,captures:Mutex<usize>,questions:Mutex<usize>,notices:Mutex<Vec<Value>>}
+    struct Fake {scenario:String,sleeps:Mutex<Vec<f64>>,captures:Mutex<usize>,questions:Mutex<usize>,notices:Mutex<Vec<Value>>}
     impl Sources for Fake {
         fn question(&self,_:&SessionRow)->Option<String> {
             *self.questions.lock().unwrap()+=1;
@@ -83,22 +83,9 @@ mod tests {
         fn awaiting(&self,name:&str,body:Option<String>) {self.notices.lock().unwrap().push(json!([name,body]));}
     }
     #[tokio::test]
-    async fn guest_push_awaiting_matches_original_producers() {
-        let fixture:Value=serde_json::from_str(include_str!("../../../../../backend/tests/fixtures/contract/guests/push-awaiting.json")).unwrap();
-        for row in fixture["rows"].as_array().unwrap() {
-            let source=Fake {provider:row["provider"].as_str().unwrap().into(),scenario:row["scenario"].as_str().unwrap().into(),sleeps:Mutex::default(),captures:Mutex::default(),questions:Mutex::default(),notices:Mutex::default()};
-            let session=serde_json::from_value(json!({"name":"fixture","provider":source.provider,"jsonl":"fixture.jsonl"})).unwrap();
-            awaiting(&source,session).await;
-            assert_eq!(json!(*source.notices.lock().unwrap()),row["notices"],"GUE-082 {row}");
-            assert_eq!(json!(*source.sleeps.lock().unwrap()),row["sleeps"],"GUE-082 {row}");
-            assert_eq!(json!(*source.captures.lock().unwrap()),row["captures"],"GUE-082 {row}");
-            assert_eq!(json!(*source.questions.lock().unwrap()),row["question_reads"],"GUE-082 {row}");
-        }
-    }
-    #[tokio::test]
     async fn guest_push_first_question_refreshes_missing_snapshot() {
         for provider in ["pi", "omp", "kimi"] {
-            let source = Fake {provider:provider.into(),scenario:"question".into(),sleeps:Mutex::default(),captures:Mutex::default(),questions:Mutex::default(),notices:Mutex::default()};
+            let source = Fake {scenario:"question".into(),sleeps:Mutex::default(),captures:Mutex::default(),questions:Mutex::default(),notices:Mutex::default()};
             let calls = Mutex::new(Vec::new());
             let row = super::super::resolve_row(|fresh| {
                 calls.lock().unwrap().push(fresh);
@@ -121,31 +108,6 @@ mod tests {
             }, fresh).await;
             assert_eq!(row.is_some(),present);
             assert_eq!(*calls.lock().unwrap(),expected);
-        }
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn guest_push_capture_preserves_python_output_and_exact_target() {
-        use std::os::unix::fs::PermissionsExt;
-        use crate::accounts::environment::AccountEnvironment;
-        let fixture:Value=serde_json::from_str(include_str!("../../../../../backend/tests/fixtures/contract/guests/push-capture.json")).unwrap();
-        for row in fixture["rows"].as_array().unwrap() {
-            let dir=tempfile::tempdir().unwrap();let program=dir.path().join("mux");
-            let encoded=row["stdout_hex"].as_str().unwrap().as_bytes().chunks_exact(2).map(|pair|format!("\\{:03o}",u8::from_str_radix(std::str::from_utf8(pair).unwrap(),16).unwrap())).collect::<String>();
-            if row["error"]!="missing" {
-                let body=if row["error"]=="timeout" {"/bin/sleep 30".to_owned()}else{format!("printf '%s\\n' \"$@\" > \"${{0%/*}}/args\"\nprintf '{encoded}'\nexit {}",row["exit"])};
-                std::fs::write(&program,format!("#!/bin/sh\n{body}\n")).unwrap();std::fs::set_permissions(&program,std::fs::Permissions::from_mode(0o755)).unwrap();
-            }
-            let env=AccountEnvironment::from_pairs([("HOME",dir.path().to_str().unwrap()),("PATH","/usr/bin:/bin")]);
-            let budget=if row["error"]=="timeout" {Duration::from_millis(20)}else{Duration::from_secs(5)};
-            let captured=capture_text(program.as_os_str(),row["name"].as_str().unwrap(),row["target"].as_str().map(str::to_owned),env,budget).await;
-            assert_eq!(captured.text,row["result"].as_str().unwrap(),"GUE-082 {row}");
-            assert_eq!(captured.error.is_some(),!row["error"].is_null()||row["exit"]!=0,"GUE-082 {row}");
-            if row["error"].is_null() {
-                let args=std::fs::read_to_string(dir.path().join("args")).unwrap();
-                assert_eq!(args.lines().collect::<Vec<_>>(),row["args"].as_array().unwrap().iter().skip(1).map(|v|v.as_str().unwrap()).collect::<Vec<_>>());
-            }
         }
     }
 

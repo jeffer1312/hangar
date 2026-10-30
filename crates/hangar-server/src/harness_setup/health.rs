@@ -1,26 +1,14 @@
 //! Diagnóstico de configuração dos harnesses, sem executar o Python.
 use crate::{
-    accounts::environment::AccountEnvironment, engines::probe::truthy, orchestration::codec,
+    accounts::environment::AccountEnvironment,
+    orchestration::{codec::{self, ValueGuard}, truthy},
 };
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
-// Configurações podem conter extras profundamente aninhados que a checagem não consulta.
-pub(super) struct Document(pub(super) Value);
-impl std::ops::Deref for Document {
-    type Target = Value;
-    fn deref(&self) -> &Value {
-        &self.0
-    }
-}
-impl Drop for Document {
-    fn drop(&mut self) {
-        codec::discard(std::mem::take(&mut self.0));
-    }
-}
-pub(super) fn read_json(path: &Path) -> Option<Document> {
+pub(super) fn read_json(path: &Path) -> Option<ValueGuard> {
     let text = std::fs::read_to_string(path).ok()?;
-    codec::loads(&text).map(Document)
+    codec::loads(&text).map(ValueGuard)
 }
 fn toml_value(value: toml::Value) -> Value {
     match value {
@@ -79,12 +67,12 @@ pub(super) fn read_toml(path: &Path) -> Result<toml::Value, String> {
     }
     Ok(value)
 }
-pub(super) fn read(path: &Path) -> Document {
-    let value = read_json(path).unwrap_or_else(|| Document(json!({})));
+pub(super) fn read(path: &Path) -> ValueGuard {
+    let value = read_json(path).unwrap_or_else(|| ValueGuard(json!({})));
     if value.is_object() {
         value
     } else {
-        Document(json!({}))
+        ValueGuard(json!({}))
     }
 }
 fn temporal_text(datetime: &toml::value::Datetime, nested: bool) -> String {
@@ -217,10 +205,10 @@ pub(super) fn agent_dir(env: &AccountEnvironment, cli: &str) -> Result<PathBuf, 
         Ok(super::files::directory(env, cli))
     }
 }
-fn config(env: &AccountEnvironment, cli: &str, json_name: &str) -> Result<Document, String> {
+fn config(env: &AccountEnvironment, cli: &str, json_name: &str) -> Result<ValueGuard, String> {
     let dir = agent_dir(env, cli)?;
     if matches!(cli, "codex" | "kimi") {
-        Ok(Document(toml_value(read_toml(&dir.join("config.toml"))?)))
+        Ok(ValueGuard(toml_value(read_toml(&dir.join("config.toml"))?)))
     } else {
         Ok(read(&dir.join(json_name)))
     }

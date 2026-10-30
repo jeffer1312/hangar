@@ -2,10 +2,9 @@
 use std::{collections::{BTreeMap,HashSet},fs,io::Write,path::Path,sync::{LazyLock,Mutex}};
 use serde_json::{Value,json};
 use crate::accounts::environment::AccountEnvironment;
-use super::probe::truthy;
+use crate::orchestration::truthy;
 
 static LOCK: Mutex<()> = Mutex::new(());
-static NAME: LazyLock<regex::Regex> = LazyLock::new(||regex::Regex::new(r"\A[a-z0-9][a-z0-9_-]{0,31}\z").unwrap());
 static TABLE: LazyLock<regex::Regex> = LazyLock::new(||regex::Regex::new(r"^\s*\[\[?([^\]]+)\]\]?\s*$").unwrap());
 
 pub use crate::harness_setup::files::{directory, write_preserving};
@@ -88,7 +87,7 @@ fn pi_model(model: &Value, catalog: &BTreeMap<String,Value>) -> Value {
 }
 
 fn apply_one(env: &AccountEnvironment,target: &str,name: &str,url: &str,key: &str,models: &[Value]) -> Result<String,String> {
-    if !NAME.is_match(name) { return Err("nome-invalido".into()); }
+    if !crate::accounts::catalog::valid_name(name) { return Err("nome-invalido".into()); }
     if url.is_empty() || key.is_empty() { return Err("faltando-base-url-ou-chave".into()); }
     let dir = directory(env,target); if !dir.is_dir() { return Err("nao-instalado".into()); }
     if target == "pi" {

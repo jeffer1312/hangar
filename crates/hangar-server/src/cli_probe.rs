@@ -1,7 +1,6 @@
 //! Uma captura de capacidade por CLI, compartilhada entre instalação e diagnóstico.
 use crate::accounts::{environment::AccountEnvironment, quotas::other::py_strip};
 use crate::command_capture::{Output, capture};
-use num_bigint::BigInt;
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
@@ -74,26 +73,6 @@ impl Probe {
         }
         result
     }
-    pub async fn version(&self, env: &AccountEnvironment) -> Option<Vec<BigInt>> {
-        let output = self.raw(env, "claude", "--version").await.ok()??;
-        output
-            .success
-            .then(|| parse_version(&output.stdout))
-            .flatten()
-    }
-    pub async fn supports_plugin_dir(&self, env: &AccountEnvironment) -> bool {
-        self.raw(env, "claude", "--help")
-            .await
-            .ok()
-            .flatten()
-            .is_some_and(|out| out.success && out.stdout.contains("--plugin-dir"))
-    }
-    pub async fn mods_enabled(&self, env: &AccountEnvironment) -> bool {
-        self.version(env)
-            .await
-            .is_some_and(|version| version >= vec![2.into(), 1.into(), 287.into()])
-            || self.supports_plugin_dir(env).await
-    }
     pub async fn version_text(&self, env: &AccountEnvironment, cli: &str) -> Option<String> {
         match self
             .raw(env, cli, if cli == "tmux" { "-V" } else { "--version" })
@@ -156,21 +135,6 @@ pub fn resolve_program(cli: &str, env: &AccountEnvironment) -> Option<std::path:
         .find(|path| executable(path))
     }
 }
-pub fn parse_version(raw: &str) -> Option<Vec<BigInt>> {
-    static VERSION: std::sync::LazyLock<regex::Regex> =
-        std::sync::LazyLock::new(|| regex::Regex::new(r"^\s*(\d+)\.(\d+)\.(\d+)").unwrap());
-    let parts = VERSION.captures(py_strip(raw))?;
-    (1..=3)
-        .map(|index| {
-            let ascii: String = parts[index]
-                .chars()
-                .map(|c| crate::orq_conductor::decimal(c).map(|n| char::from(b'0' + n)))
-                .collect::<Option<_>>()?;
-            ascii.parse().ok()
-        })
-        .collect()
-}
-
 pub(crate) fn environment_key(env: &AccountEnvironment) -> [u8; 32] {
     let mut digest = ring::digest::Context::new(&ring::digest::SHA256);
     // O cache distingue todo o contexto sem conservar outra cópia das credenciais.

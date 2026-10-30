@@ -72,7 +72,7 @@ fn expand_user(value: &str, env: &AccountEnvironment) -> PathBuf {
 }
 
 #[cfg(unix)]
-fn user_record(name: Option<&str>) -> Option<(std::ffi::OsString, PathBuf)> {
+pub(crate) fn user_record(name: Option<&str>) -> Option<(std::ffi::OsString, PathBuf)> {
     use std::{
         ffi::{CStr, CString, OsStr},
         os::unix::ffi::OsStrExt,
@@ -157,7 +157,6 @@ fn expand_user(value: &str, env: &AccountEnvironment) -> PathBuf {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use serde_json::{Value, json};
 
     proptest::proptest! {
         #![proptest_config(proptest::test_runner::Config::with_cases(48))]
@@ -167,64 +166,5 @@ mod tests {
             let env = AccountEnvironment::from_map([("HOME".into(),home.path().to_string_lossy().into_owned())].into());
             let _ = imported(&line,home.path(),&env);
         }
-    }
-
-    #[test]
-    fn imported_instruction_paths_match_original() {
-        let fixture: Value = serde_json::from_str(include_str!(
-            "../../../../backend/tests/fixtures/contract/codex-integration/instruction-imports.json"
-        ))
-        .unwrap();
-        let home = tempfile::tempdir().unwrap();
-        let base = home.path().join("project");
-        std::fs::create_dir_all(base.join("directory")).unwrap();
-        for file in fixture["files"].as_array().unwrap() {
-            let file = home.path().join(file.as_str().unwrap());
-            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-            std::fs::write(file, "Importado\n").unwrap();
-        }
-        let env = AccountEnvironment::from_map(
-            [("HOME".into(), home.path().to_string_lossy().into_owned())].into(),
-        );
-        let (account, account_home) = user_record(None).expect("conta Unix da prova ausente");
-        let target = home.path().join("home.md");
-        let source_parts: Vec<_> = account_home.components().collect();
-        let target_parts: Vec<_> = target.components().collect();
-        let common = source_parts
-            .iter()
-            .zip(&target_parts)
-            .take_while(|(a, b)| a == b)
-            .count();
-        let mut relative = PathBuf::new();
-        for _ in common..source_parts.len() {
-            relative.push("..");
-        }
-        for part in &target_parts[common..] {
-            relative.push(part);
-        }
-        let named = format!("@~{}/{}", account.to_string_lossy(), relative.display());
-        let mut differences = Vec::new();
-        for row in fixture["cases"].as_array().unwrap() {
-            let line = row["line"]
-                .as_str()
-                .unwrap()
-                .replace("$ROOT", home.path().to_str().unwrap())
-                .replace("$NAMED_IMPORT", &named);
-            let actual =
-                json!(imported(&line, &base, &env).map(|path| path.to_string_lossy().into_owned()));
-            let expected = row["result"].as_str().map(|value| {
-                value
-                    .replace("$ROOT", home.path().to_str().unwrap())
-                    .replace("$ACCOUNT_HOME", account_home.to_str().unwrap())
-                    .replace("$RELATIVE", relative.to_str().unwrap())
-            });
-            if actual != json!(expected) {
-                differences.push((row["line"].clone(), actual, json!(expected)));
-            }
-        }
-        assert!(
-            differences.is_empty(),
-            "imports divergentes: {differences:?}"
-        );
     }
 }

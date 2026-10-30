@@ -67,7 +67,7 @@ fn report(state: &State, code: &str, params: Value) {
 }
 fn progress(state: &State, at: usize, total: usize) {
     state.update(|s| {
-        if crate::config_sync::apply::truthy(&s["progresso"]) {
+        if crate::orchestration::truthy(&s["progresso"]) {
             s["progresso"]["sub"] = json!({"atual":at,"total":total});
         }
     });
@@ -263,7 +263,7 @@ async fn reconcile(
                 .as_array()
                 .ok_or_else(|| error("TypeError", "Resultados de importação inválidos"))?
             {
-                if crate::config_sync::apply::truthy(&kind["failures"]) {
+                if crate::orchestration::truthy(&kind["failures"]) {
                     report(state, "erro_plugins_incompletos", json!({}));
                 }
             }
@@ -325,7 +325,7 @@ async fn reconcile(
                 json!({"marketplace":name}),
             );
             match a.upgrade(name).await {
-                Ok(v) if !crate::config_sync::apply::truthy(&v["errors"]) => {}
+                Ok(v) if !crate::orchestration::truthy(&v["errors"]) => {}
                 Err(e) if !caught(&e, false) => return Err(e),
                 _ => {
                     report(
@@ -366,7 +366,7 @@ async fn reconcile(
         progress(state, targets.len() + i + 1, total);
         let result=async {
             let native=&identities[id];let old=previous.get(id);let live=installed.get(native);
-            let reinstall=update||pending.contains(id)||old.is_none_or(|v|!crate::config_sync::apply::truthy(v))||live.is_none_or(|v|!crate::config_sync::apply::truthy(v))||old.unwrap().get("id_codex").and_then(Value::as_str).unwrap_or(id)!=native||live.unwrap().get("version")!=old.unwrap().get("versao")||!Path::new(old.unwrap().get("path").and_then(Value::as_str).unwrap_or("")).is_dir();
+            let reinstall=update||pending.contains(id)||old.is_none_or(|v|!crate::orchestration::truthy(v))||live.is_none_or(|v|!crate::orchestration::truthy(v))||old.unwrap().get("id_codex").and_then(Value::as_str).unwrap_or(id)!=native||live.unwrap().get("version")!=old.unwrap().get("versao")||!Path::new(old.unwrap().get("path").and_then(Value::as_str).unwrap_or("")).is_dir();
             let value=if reinstall{stage(state,a.now(),"etapa_plugin",json!({"id":id}));let data=a.add(native).await?;json!({"path":field(&data,"installedPath")?,"versao":data.get("version").unwrap_or(&json!("")),"origem":native.rsplit_once('@').unwrap().1,"id_codex":native})}else{clone_value(old.unwrap())};
             plugins.insert(id.clone(),clone_value(&value));
             if reg.get("plugins").is_none(){reg["plugins"]=json!({});}reg["plugins"][id]=clone_value(&value);
@@ -450,7 +450,7 @@ async fn reconcile(
         reg,
         "marketplaces_tentativa_em",
         now,
-    )?) + if crate::config_sync::apply::truthy(&reg["marketplaces_pendentes"]) {
+    )?) + if crate::orchestration::truthy(&reg["marketplaces_pendentes"]) {
         300.0
     } else {
         21600.0

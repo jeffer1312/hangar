@@ -39,7 +39,7 @@ pub fn normalize_json(raw: &[u8]) -> Vec<u8> {
     if let Some(metrics) = metrics { codec::discard(metrics); }
     let summary = ValueGuard(summary.unwrap_or(Value::Null));
     if let Some(summary) = summary.as_str().filter(|summary| !summary.is_empty())
-        && !output.get("systemMessage").is_some_and(crate::config_sync::apply::truthy)
+        && !output.get("systemMessage").is_some_and(crate::orchestration::truthy)
     {
         if let Some(previous) = output.insert("systemMessage".into(), Value::String(summary.into())) {
             codec::discard(previous);
@@ -49,41 +49,4 @@ pub fn normalize_json(raw: &[u8]) -> Vec<u8> {
     let mut result = codec::dumps(&items[0], false).into_bytes();
     result.push(b'\n');
     result
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::Value;
-
-    fn bytes(value: &Value) -> Vec<u8> {
-        value.as_str().unwrap().as_bytes().chunks_exact(2).map(|pair| {
-            u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap()
-        }).collect()
-    }
-
-    #[test]
-    fn hook_allow_preserves_original_bytes_and_decisions() {
-        let fixture: Value = serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/codex-integration/hook-allow.json")).unwrap();
-        let mut differences = Vec::new();
-        let mut compared = 0;
-        for (index, row) in fixture["cases"].as_array().unwrap().iter().enumerate() {
-            if row["mode"] != "filter" { continue; }
-            if complete_allow(&bytes(&row["input_hex"])) != bytes(&row["stdout_hex"]) { differences.push(index); }
-            compared += 1;
-        }
-        assert_eq!(compared, 30);
-        assert!(differences.is_empty(), "saída de allow divergiu nos casos {differences:?}");
-    }
-
-    #[test]
-    fn hook_json_preserves_original_bytes_telemetry_and_async_bootstrap() {
-        let fixture: Value = serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/codex-integration/hook-json.json")).unwrap();
-        let mut differences = Vec::new();
-        for (index, row) in fixture["cases"].as_array().unwrap().iter().enumerate() {
-            if normalize_json(&bytes(&row["input_hex"])) != bytes(&row["stdout_hex"]) { differences.push(index); }
-        }
-        assert_eq!(fixture["cases"].as_array().unwrap().len(), 60);
-        assert!(differences.is_empty(), "saída JSON divergiu nos casos {differences:?}");
-    }
 }

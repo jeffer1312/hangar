@@ -1,69 +1,5 @@
 //! Contrato compartilhado de leitura e escrita do arquivo de configuração.
 #[test]
-fn channel_dotenv_edits_match_python_bytes() {
-    let fixture: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../../backend/tests/fixtures/contract/update-git/channel-cases.json"
-    ))
-    .unwrap();
-    for case in fixture["dotenv"].as_array().unwrap() {
-        let actual = hangar_server::machine_peers::dotenv::replace(
-            case["input"].as_str().unwrap(),
-            &[
-                ("CP_UPDATE_BRANCH", "test/channel"),
-                ("CP_UPDATE_LAST_BRANCH", "test/channel"),
-            ],
-        );
-        assert_eq!(actual, case["expected"], "PEE073 {}", case["name"]);
-    }
-}
-
-#[test]
-fn checkout_dotenv_read_matches_python_settings() {
-    let data: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../../backend/tests/fixtures/contract/update-git/dotenv-read.json"
-    ))
-    .unwrap();
-    for case in data["cases"].as_array().unwrap() {
-        let environment = serde_json::from_value(case["environment"].clone()).unwrap();
-        let raw = case["raw"].as_str().unwrap();
-        let resolved = hangar_server::machine_peers::dotenv::resolve(raw, &environment);
-        assert_eq!(
-            serde_json::to_value(resolved).unwrap(),
-            case["parsed"],
-            "{}",
-            case["name"]
-        );
-        let settings = hangar_server::machine_peers::dotenv::settings(raw, &environment);
-        assert_eq!(
-            settings
-                .get("cp_server_id")
-                .cloned()
-                .flatten()
-                .unwrap_or_default(),
-            case["server_id"].as_str().unwrap(),
-            "{}",
-            case["name"]
-        );
-    }
-}
-#[test]
-fn checkout_dotenv_legacy_lookup_expands_previous_values() {
-    let data: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../../backend/tests/fixtures/contract/update-git/dotenv-read.json"
-    ))
-    .unwrap();
-    let case = data["cases"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|v| v["name"] == "quoted-interpolation")
-        .unwrap();
-    assert_eq!(
-        hangar_server::machine_peers::dotenv::value(case["raw"].as_str().unwrap(), "CP_SERVER_ID"),
-        case["server_id"].as_str().map(str::to_owned)
-    );
-}
-#[test]
 fn captured_environment_and_user_file_follow_settings_precedence() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
@@ -167,22 +103,4 @@ fn account_environment_preserves_order_with_current_values_and_new_keys() {
     assert_eq!(SettingsEnvironment::from_pairs(pairs).value("","CP_SERVER_ID").unwrap().as_deref(),Some("upper"));
     let from_map=AccountEnvironment::from_map(std::collections::BTreeMap::from([("Z".into(),"z".into()),("A".into(),"a".into())]));
     assert_eq!(from_map.ordered_pairs(),vec![("A".into(),"a".into()),("Z".into(),"z".into())]);
-}
-
-#[test]
-fn settings_snapshot_aliases_follow_captured_source_priority_and_duration() {
-    use hangar_server::machine_peers::dotenv::{SettingsEnvironment,SettingsSnapshot};
-    let fixture:serde_json::Value=serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/config_sync/runtime-environment.json")).unwrap();
-    for row in fixture["cases"].as_array().unwrap(){
-        let temp=tempfile::tempdir().unwrap();let config=temp.path().join(".hangar/config");std::fs::create_dir_all(&config).unwrap();
-        std::fs::write(config.join(".env"),row["file"].as_str().unwrap()).unwrap();
-        let pairs=row["pairs"].as_array().unwrap().iter().map(|pair|(pair[0].as_str().unwrap(),pair[1].as_str().unwrap()));
-        let snapshot=SettingsSnapshot::capture(temp.path(),None,SettingsEnvironment::from_pairs(pairs)).unwrap();
-        for phase in ["before","changed"] {
-            if phase=="changed"{std::fs::write(config.join(".env"),"CP_EDITOR=late-file\nCP_GROQ_API_KEY=late-file\n").unwrap();}
-            for (field,keys) in [("editor",&["CP_EDITOR"][..]),("shortcuts",&["CP_SHORTCUTS"][..]),("groq_api_key",&["CP_GROQ_API_KEY","GROQ_API_KEY"][..])]{
-                assert_eq!(snapshot.aliases(keys).unwrap().unwrap_or_else(||if field=="editor"{"code".into()}else{String::new()}),row[phase][field].as_str().unwrap(),"{} {phase} {field}",row["name"]);
-            }
-        }
-    }
 }

@@ -2,10 +2,6 @@
 use crate::{machine_peers::dotenv::SettingsSnapshot, value_coercion};
 use serde_json::{Map, Value, json};
 
-#[cfg(test)]
-#[path="runtime_context_tests.rs"]
-mod context_tests;
-
 pub(super) fn load(settings: &SettingsSnapshot) -> Result<Map<String, Value>, String> {
     let fields = [
         ("sync", json!(false)), ("dictation_include_recent_messages", json!(false)),

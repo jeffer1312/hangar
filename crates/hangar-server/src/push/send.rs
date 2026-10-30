@@ -192,7 +192,7 @@ impl Outgoing {
 
     /// O JSON que o service worker lê.
     pub fn payload(&self, entry: &Value) -> Result<Value, &'static str> {
-        use crate::{config_sync::apply::truthy, orchestration::codec::python_string};
+        use crate::orchestration::{codec::python_string, truthy};
         let object = entry.as_object().ok_or("push_subscription_invalid")?;
         let locale_value = object.get("locale").filter(|value| truthy(value));
         if locale_value.is_some_and(|value| value.is_array() || value.is_object()) {

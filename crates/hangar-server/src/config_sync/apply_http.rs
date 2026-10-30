@@ -208,7 +208,7 @@ async fn work(
     let codex_enabled = result
         .runtime_config
         .as_ref()
-        .map(|config| super::apply::truthy(&config.get("codex_sync")))
+        .map(|config| crate::orchestration::truthy(&config.get("codex_sync")))
         .unwrap_or(true);
     let actions = super::after::NativeActions {
         state,
