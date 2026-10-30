@@ -1056,10 +1056,6 @@ def write_session_write(out: Path | None = None) -> None:
         (out / name).write_text(json.dumps(rows, ensure_ascii=True, indent=1) + "\n", encoding="utf-8")
 
 
-# Congelados no commit 9f126fe4b: `golden/pair_sidecars/`, `golden/group_routes.json` e
-# `golden/group_cross_routes.json` saíam do Python dos grupos, que saiu. Nunca editar à mão.
-
-
 def write_transcript_golden() -> None:
     claude = TRANSCRIPTS / "claude.jsonl"
     rewrite = TRANSCRIPTS / "claude_rewrite_surrogate.jsonl"
