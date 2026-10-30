@@ -133,6 +133,9 @@ pub fn resolve_program(cli: &str, env: &AccountEnvironment) -> Option<std::path:
         if path.components().count() > 1 {
             return executable(path).then(|| path.to_path_buf());
         }
+        if env.base.get("PATH").is_some_and(String::is_empty) {
+            return None;
+        }
         std::env::split_paths(
             env.base
                 .get("PATH")

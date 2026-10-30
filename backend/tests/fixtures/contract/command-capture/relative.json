@@ -1,0 +1,474 @@
+{
+  "source_commit": "db0777df2893c199a2d31feff00eee35020cc3e1",
+  "command": "cd backend && uv run python tests/fixtures/contract/command-capture/generate_relative.py",
+  "cases": [
+    {
+      "search": "bin",
+      "mode": "text",
+      "shebang": true,
+      "args": [],
+      "program": "bin/node",
+      "result": {
+        "success": true,
+        "stdout": "inner",
+        "stderr": ""
+      }
+    },
+    {
+      "search": "bin",
+      "mode": "text",
+      "shebang": false,
+      "args": [],
+      "program": "bin/node",
+      "result": {
+        "error": "OSError"
+      }
+    },
+    {
+      "search": "bin",
+      "mode": "script-name",
+      "shebang": true,
+      "args": [],
+      "program": "bin/node",
+      "result": {
+        "success": true,
+        "stdout": "bin/node",
+        "stderr": ""
+      }
+    },
+    {
+      "search": "bin",
+      "mode": "script-name",
+      "shebang": false,
+      "args": [],
+      "program": "bin/node",
+      "result": {
+        "error": "OSError"
+      }
+    },
+    {
+      "search": "bin",
+      "mode": "binary-name",
+      "shebang": true,
+      "args": [
+        "-c",
+        "import sys;print(sys.orig_argv[0],end='')"
+      ],
+      "program": "bin/node",
+      "result": {
+        "success": true,
+        "stdout": "bin/node",
+        "stderr": ""
+      }
+    },
+    {
+      "search": ".",
+      "mode": "text",
+      "shebang": true,
+      "args": [],
+      "program": "./node",
+      "result": {
+        "success": true,
+        "stdout": "inner",
+        "stderr": ""
+      }
+    },
+    {
+      "search": ".",
+      "mode": "text",
+      "shebang": false,
+      "args": [],
+      "program": "./node",
+      "result": {
+        "error": "OSError"
+      }
+    },
+    {
+      "search": ".",
+      "mode": "script-name",
+      "shebang": true,
+      "args": [],
+      "program": "./node",
+      "result": {
+        "success": true,
+        "stdout": "./node",
+        "stderr": ""
+      }
+    },
+    {
+      "search": ".",
+      "mode": "script-name",
+      "shebang": false,
+      "args": [],
+      "program": "./node",
+      "result": {
+        "error": "OSError"
+      }
+    },
+    {
+      "search": ".",
+      "mode": "binary-name",
+      "shebang": true,
+      "args": [
+        "-c",
+        "import sys;print(sys.orig_argv[0],end='')"
+      ],
+      "program": "./node",
+      "result": {
+        "success": true,
+        "stdout": "./node",
+        "stderr": ""
+      }
+    },
+    {
+      "search": "",
+      "mode": "text",
+      "shebang": true,
+      "args": [],
+      "program": null,
+      "result": {
+        "absent": true
+      }
+    },
+    {
+      "search": "",
+      "mode": "text",
+      "shebang": false,
+      "args": [],
+      "program": null,
+      "result": {
+        "absent": true
+      }
+    },
+    {
+      "search": "",
+      "mode": "script-name",
+      "shebang": true,
+      "args": [],
+      "program": null,
+      "result": {
+        "absent": true
+      }
+    },
+    {
+      "search": "",
+      "mode": "script-name",
+      "shebang": false,
+      "args": [],
+      "program": null,
+      "result": {
+        "absent": true
+      }
+    },
+    {
+      "search": "",
+      "mode": "binary-name",
+      "shebang": true,
+      "args": [
+        "-c",
+        "import sys;print(sys.orig_argv[0],end='')"
+      ],
+      "program": null,
+      "result": {
+        "absent": true
+      }
+    },
+    {
+      "search": ":",
+      "mode": "text",
+      "shebang": true,
+      "args": [],
+      "program": "node",
+      "result": {
+        "success": true,
+        "stdout": "inner",
+        "stderr": ""
+      }
+    },
+    {
+      "search": ":",
+      "mode": "text",
+      "shebang": false,
+      "args": [],
+      "program": "node",
+      "result": {
+        "error": "OSError"
+      }
+    },
+    {
+      "search": ":",
+      "mode": "script-name",
+      "shebang": true,
+      "args": [],
+      "program": "node",
+      "result": {
+        "success": true,
+        "stdout": "node",
+        "stderr": ""
+      }
+    },
+    {
+      "search": ":",
+      "mode": "script-name",
+      "shebang": false,
+      "args": [],
+      "program": "node",
+      "result": {
+        "error": "OSError"
+      }
+    },
+    {
+      "search": ":",
+      "mode": "binary-name",
+      "shebang": true,
+      "args": [
+        "-c",
+        "import sys;print(sys.orig_argv[0],end='')"
+      ],
+      "program": "node",
+      "result": {
+        "success": true,
+        "stdout": "node",
+        "stderr": ""
+      }
+    },
+    {
+      "search": "bin:",
+      "mode": "text",
+      "shebang": true,
+      "args": [],
+      "program": "bin/node",
+      "result": {
+        "success": true,
+        "stdout": "inner",
+        "stderr": ""
+      }
+    },
+    {
+      "search": "bin:",
+      "mode": "text",
+      "shebang": false,
+      "args": [],
+      "program": "bin/node",
+      "result": {
+        "error": "OSError"
+      }
+    },
+    {
+      "search": "bin:",
+      "mode": "script-name",
+      "shebang": true,
+      "args": [],
+      "program": "bin/node",
+      "result": {
+        "success": true,
+        "stdout": "bin/node",
+        "stderr": ""
+      }
+    },
+    {
+      "search": "bin:",
+      "mode": "script-name",
+      "shebang": false,
+      "args": [],
+      "program": "bin/node",
+      "result": {
+        "error": "OSError"
+      }
+    },
+    {
+      "search": "bin:",
+      "mode": "binary-name",
+      "shebang": true,
+      "args": [
+        "-c",
+        "import sys;print(sys.orig_argv[0],end='')"
+      ],
+      "program": "bin/node",
+      "result": {
+        "success": true,
+        "stdout": "bin/node",
+        "stderr": ""
+      }
+    },
+    {
+      "search": "absolute",
+      "mode": "text",
+      "shebang": true,
+      "args": [],
+      "program": "$ROOT/bin/node",
+      "result": {
+        "success": true,
+        "stdout": "outer",
+        "stderr": ""
+      }
+    },
+    {
+      "search": "absolute",
+      "mode": "text",
+      "shebang": false,
+      "args": [],
+      "program": "$ROOT/bin/node",
+      "result": {
+        "error": "OSError"
+      }
+    },
+    {
+      "search": "absolute",
+      "mode": "script-name",
+      "shebang": true,
+      "args": [],
+      "program": "$ROOT/bin/node",
+      "result": {
+        "success": true,
+        "stdout": "$ROOT/bin/node",
+        "stderr": ""
+      }
+    },
+    {
+      "search": "absolute",
+      "mode": "script-name",
+      "shebang": false,
+      "args": [],
+      "program": "$ROOT/bin/node",
+      "result": {
+        "error": "OSError"
+      }
+    },
+    {
+      "search": "absolute",
+      "mode": "binary-name",
+      "shebang": true,
+      "args": [
+        "-c",
+        "import sys;print(sys.orig_argv[0],end='')"
+      ],
+      "program": "$ROOT/bin/node",
+      "result": {
+        "success": true,
+        "stdout": "$ROOT/bin/node",
+        "stderr": ""
+      }
+    },
+    {
+      "search": ":bin",
+      "mode": "errno",
+      "shebang": true,
+      "args": [],
+      "direct": true,
+      "layout": {},
+      "program": "node",
+      "result": {
+        "error": "FileNotFoundError"
+      }
+    },
+    {
+      "search": ":bin",
+      "mode": "errno",
+      "shebang": true,
+      "args": [],
+      "direct": true,
+      "layout": {
+        "node": "denied"
+      },
+      "program": "node",
+      "result": {
+        "error": "PermissionError"
+      }
+    },
+    {
+      "search": ":bin",
+      "mode": "errno",
+      "shebang": true,
+      "args": [],
+      "direct": true,
+      "layout": {
+        "node": "invalid"
+      },
+      "program": "node",
+      "result": {
+        "error": "OSError"
+      }
+    },
+    {
+      "search": ":bin",
+      "mode": "errno",
+      "shebang": true,
+      "args": [],
+      "direct": true,
+      "layout": {
+        "node": "denied",
+        "bin/node": "valid"
+      },
+      "program": "node",
+      "result": {
+        "success": true,
+        "stdout": "allowed",
+        "stderr": ""
+      }
+    },
+    {
+      "search": ":bin",
+      "mode": "errno",
+      "shebang": true,
+      "args": [],
+      "direct": true,
+      "layout": {
+        "node": "invalid",
+        "bin/node": "valid"
+      },
+      "program": "node",
+      "result": {
+        "success": true,
+        "stdout": "allowed",
+        "stderr": ""
+      }
+    },
+    {
+      "search": ":bin",
+      "mode": "errno",
+      "shebang": true,
+      "args": [],
+      "direct": true,
+      "layout": {
+        "bin/node": "invalid"
+      },
+      "program": "node",
+      "result": {
+        "error": "OSError"
+      }
+    },
+    {
+      "search": ":bin",
+      "mode": "errno",
+      "shebang": true,
+      "args": [],
+      "direct": true,
+      "layout": {
+        "node": "directory",
+        "bin/node": "valid"
+      },
+      "program": "node",
+      "result": {
+        "success": true,
+        "stdout": "allowed",
+        "stderr": ""
+      }
+    },
+    {
+      "search": ":bin",
+      "mode": "errno",
+      "shebang": true,
+      "args": [],
+      "direct": true,
+      "layout": {
+        "node": "invalid",
+        "bin/node": "denied"
+      },
+      "program": "node",
+      "result": {
+        "error": "OSError"
+      }
+    }
+  ]
+}

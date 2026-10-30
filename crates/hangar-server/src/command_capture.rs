@@ -81,6 +81,11 @@ pub async fn capture_bytes(
         return Err(CaptureFailure::empty("FileNotFoundError"));
     };
     let mut command = Command::new(program);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.as_std_mut().arg0(program);
+    }
     command
         .args(&args[1..])
         .env_clear()
@@ -104,6 +109,17 @@ pub async fn capture_bytes(
         Ok(tree) => tree,
         Err(error) => return Err(CaptureFailure::empty(error_name(&error))),
     };
+    #[cfg(unix)]
+    {
+        let exec = match StrictExec::new(program, &command, &env) {
+            Ok(exec) => exec,
+            Err(error) => return Err(CaptureFailure::empty(error_name(&error))),
+        };
+        // O filho já recebeu cwd, pipes e grupo; aqui só usa buffers preparados antes do fork.
+        unsafe {
+            command.pre_exec(move || exec.execute());
+        }
+    }
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => return Err(CaptureFailure::empty(error_name(&error))),
@@ -208,5 +224,90 @@ impl CaptureFailure {
             stdout: vec![],
             stderr: vec![],
         }
+    }
+}
+
+#[cfg(unix)]
+struct StrictExec {
+    paths: Vec<std::ffi::CString>,
+    _args: Vec<std::ffi::CString>,
+    _env: Vec<std::ffi::CString>,
+    argv: Vec<*const libc::c_char>,
+    envp: Vec<*const libc::c_char>,
+}
+// Os ponteiros só leem os buffers CString possuídos e imutáveis desta estrutura.
+#[cfg(unix)]
+unsafe impl Send for StrictExec {}
+#[cfg(unix)]
+unsafe impl Sync for StrictExec {}
+#[cfg(unix)]
+impl StrictExec {
+    fn new(program: &str, command: &Command, env: &AccountEnvironment) -> io::Result<Self> {
+        use std::{ffi::CString, os::unix::ffi::OsStrExt, path::PathBuf};
+        let string = |bytes: &[u8]| {
+            CString::new(bytes).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))
+        };
+        let paths = if program.contains('/') {
+            vec![PathBuf::from(program)]
+        } else {
+            std::env::split_paths(
+                env.base
+                    .get("PATH")
+                    .map(String::as_str)
+                    .unwrap_or("/bin:/usr/bin"),
+            )
+            .map(|directory| directory.join(program))
+            .collect()
+        }
+        .iter()
+        .map(|path| string(path.as_os_str().as_bytes()))
+        .collect::<io::Result<Vec<_>>>()?;
+        let args = std::iter::once(std::ffi::OsStr::new(program))
+            .chain(command.as_std().get_args())
+            .map(|arg| string(arg.as_bytes()))
+            .collect::<io::Result<Vec<_>>>()?;
+        let environment = command
+            .as_std()
+            .get_envs()
+            .filter_map(|(key, value)| value.map(|value| (key, value)))
+            .map(|(key, value)| {
+                let mut bytes = key.as_bytes().to_vec();
+                bytes.push(b'=');
+                bytes.extend_from_slice(value.as_bytes());
+                string(&bytes)
+            })
+            .collect::<io::Result<Vec<_>>>()?;
+        let pointers = |strings: &Vec<CString>| {
+            strings
+                .iter()
+                .map(|value| value.as_ptr())
+                .chain(std::iter::once(std::ptr::null()))
+                .collect()
+        };
+        let argv = pointers(&args);
+        let envp = pointers(&environment);
+        Ok(Self {
+            paths,
+            _args: args,
+            _env: environment,
+            argv,
+            envp,
+        })
+    }
+    fn execute(&self) -> io::Result<()> {
+        let mut saved = None;
+        let mut last = libc::ENOENT;
+        for path in &self.paths {
+            unsafe {
+                libc::execve(path.as_ptr(), self.argv.as_ptr(), self.envp.as_ptr());
+            }
+            last = io::Error::last_os_error()
+                .raw_os_error()
+                .unwrap_or(libc::EIO);
+            if saved.is_none() && last != libc::ENOENT && last != libc::ENOTDIR {
+                saved = Some(last);
+            }
+        }
+        Err(io::Error::from_raw_os_error(saved.unwrap_or(last)))
     }
 }
