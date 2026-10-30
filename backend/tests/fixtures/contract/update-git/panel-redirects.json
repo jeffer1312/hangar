@@ -1,0 +1,543 @@
+{
+  "source_commit": "97f7f72f2f3683a04c99928876b39cdeb67020d2",
+  "command": "python generate-panel-redirects.py <checkout-Python> <fixture>",
+  "cases": [
+    {
+      "path": "/r/300",
+      "method": "GET",
+      "body": null,
+      "timeout": 3,
+      "calls": [
+        {
+          "path": "/r/300",
+          "method": "GET",
+          "authorization": "Bearer fixture-token",
+          "content_type": "application/json",
+          "body": ""
+        }
+      ],
+      "result": {
+        "error": "300: Synthetic reason"
+      }
+    },
+    {
+      "path": "/r/300",
+      "method": "POST",
+      "body": {
+        "message": "a\u00e7\u00e3o"
+      },
+      "timeout": 3,
+      "calls": [
+        {
+          "path": "/r/300",
+          "method": "POST",
+          "authorization": "Bearer fixture-token",
+          "content_type": "application/json",
+          "body": "{\"message\": \"a\\u00e7\\u00e3o\"}"
+        }
+      ],
+      "result": {
+        "error": "300: Synthetic reason"
+      }
+    },
+    {
+      "path": "/r/301",
+      "method": "GET",
+      "body": null,
+      "timeout": 3,
+      "calls": [
+        {
+          "path": "/r/301",
+          "method": "GET",
+          "authorization": "Bearer fixture-token",
+          "content_type": "application/json",
+          "body": ""
+        },
+        {
+          "path": "/ok",
+          "method": "GET",
+          "authorization": "Bearer fixture-token",
+          "content_type": null,
+          "body": ""
+        }
+      ],
+      "result": {
+        "value": {
+          "ok": true
+        }
+      }
+    },
+    {
+      "path": "/r/301",
+      "method": "POST",
+      "body": {
+        "message": "a\u00e7\u00e3o"
+      },
+      "timeout": 3,
+      "calls": [
+        {
+          "path": "/r/301",
+          "method": "POST",
+          "authorization": "Bearer fixture-token",
+          "content_type": "application/json",
+          "body": "{\"message\": \"a\\u00e7\\u00e3o\"}"
+        },
+        {
+          "path": "/ok",
+          "method": "GET",
+          "authorization": "Bearer fixture-token",
+          "content_type": null,
+          "body": ""
+        }
+      ],
+      "result": {
+        "value": {
+          "ok": true
+        }
+      }
+    },
+    {
+      "path": "/r/302",
+      "method": "GET",
+      "body": null,
+      "timeout": 3,
+      "calls": [
+        {
+          "path": "/r/302",
+          "method": "GET",
+          "authorization": "Bearer fixture-token",
+          "content_type": "application/json",
+          "body": ""
+        },
+        {
+          "path": "/ok",
+          "method": "GET",
+          "authorization": "Bearer fixture-token",
+          "content_type": null,
+          "body": ""
+        }
+      ],
+      "result": {
+        "value": {
+          "ok": true
+        }
+      }
+    },
+    {
+      "path": "/r/302",
+      "method": "POST",
+      "body": {
+        "message": "a\u00e7\u00e3o"
+      },
+      "timeout": 3,
+      "calls": [
+        {
+          "path": "/r/302",
+          "method": "POST",
+          "authorization": "Bearer fixture-token",
+          "content_type": "application/json",
+          "body": "{\"message\": \"a\\u00e7\\u00e3o\"}"
+        },
+        {
+          "path": "/ok",
+          "method": "GET",
+          "authorization": "Bearer fixture-token",
+          "content_type": null,
+          "body": ""
+        }
+      ],
+      "result": {
+        "value": {
+          "ok": true
+        }
+      }
+    },
+    {
+      "path": "/r/303",
+      "method": "GET",
+      "body": null,
+      "timeout": 3,
+      "calls": [
+        {
+          "path": "/r/303",
+          "method": "GET",
+          "authorization": "Bearer fixture-token",
+          "content_type": "application/json",
+          "body": ""
+        },
+        {
+          "path": "/ok",
+          "method": "GET",
+          "authorization": "Bearer fixture-token",
+          "content_type": null,
+          "body": ""
+        }
+      ],
+      "result": {
+        "value": {
+          "ok": true
+        }
+      }
+    },
+    {
+      "path": "/r/303",
+      "method": "POST",
+      "body": {
+        "message": "a\u00e7\u00e3o"
+      },
+      "timeout": 3,
+      "calls": [
+        {
+          "path": "/r/303",
+          "method": "POST",
+          "authorization": "Bearer fixture-token",
+          "content_type": "application/json",
+          "body": "{\"message\": \"a\\u00e7\\u00e3o\"}"
+        },
+        {
+          "path": "/ok",
+          "method": "GET",
+          "authorization": "Bearer fixture-token",
+          "content_type": null,
+          "body": ""
+        }
+      ],
+      "result": {
+        "value": {
+          "ok": true
+        }
+      }
+    },
+    {
+      "path": "/r/304",
+      "method": "GET",
+      "body": null,
+      "timeout": 3,
+      "calls": [
+        {
+          "path": "/r/304",
+          "method": "GET",
+          "authorization": "Bearer fixture-token",
+          "content_type": "application/json",
+          "body": ""
+        }
+      ],
+      "result": {
+        "error": "304: Synthetic reason"
+      }
+    },
+    {
+      "path": "/r/304",
+      "method": "POST",
+      "body": {
+        "message": "a\u00e7\u00e3o"
+      },
+      "timeout": 3,
+      "calls": [
+        {
+          "path": "/r/304",
+          "method": "POST",
+          "authorization": "Bearer fixture-token",
+          "content_type": "application/json",
+          "body": "{\"message\": \"a\\u00e7\\u00e3o\"}"
+        }
+      ],
+      "result": {
+        "error": "304: Synthetic reason"
+      }
+    },
+    {
+      "path": "/r/305",
+      "method": "GET",
+      "body": null,
+      "timeout": 3,
+      "calls": [
+        {
+          "path": "/r/305",
+          "method": "GET",
+          "authorization": "Bearer fixture-token",
+          "content_type": "application/json",
+          "body": ""
+        }
+      ],
+      "result": {
+        "error": "305: Synthetic reason"
+      }
+    },
+    {
+      "path": "/r/305",
+      "method": "POST",
+      "body": {
+        "message": "a\u00e7\u00e3o"
+      },
+      "timeout": 3,
+      "calls": [
+        {
+          "path": "/r/305",
+          "method": "POST",
+          "authorization": "Bearer fixture-token",
+          "content_type": "application/json",
+          "body": "{\"message\": \"a\\u00e7\\u00e3o\"}"
+        }
+      ],
+      "result": {
+        "error": "305: Synthetic reason"
+      }
+    },
+    {
+      "path": "/r/307",
+      "method": "GET",
+      "body": null,
+      "timeout": 3,
+      "calls": [
+        {
+          "path": "/r/307",
+          "method": "GET",
+          "authorization": "Bearer fixture-token",
+          "content_type": "application/json",
+          "body": ""
+        },
+        {
+          "path": "/ok",
+          "method": "GET",
+          "authorization": "Bearer fixture-token",
+          "content_type": null,
+          "body": ""
+        }
+      ],
+      "result": {
+        "value": {
+          "ok": true
+        }
+      }
+    },
+    {
+      "path": "/r/307",
+      "method": "POST",
+      "body": {
+        "message": "a\u00e7\u00e3o"
+      },
+      "timeout": 3,
+      "calls": [
+        {
+          "path": "/r/307",
+          "method": "POST",
+          "authorization": "Bearer fixture-token",
+          "content_type": "application/json",
+          "body": "{\"message\": \"a\\u00e7\\u00e3o\"}"
+        }
+      ],
+      "result": {
+        "error": "307: Synthetic reason"
+      }
+    },
+    {
+      "path": "/r/308",
+      "method": "GET",
+      "body": null,
+      "timeout": 3,
+      "calls": [
+        {
+          "path": "/r/308",
+          "method": "GET",
+          "authorization": "Bearer fixture-token",
+          "content_type": "application/json",
+          "body": ""
+        },
+        {
+          "path": "/ok",
+          "method": "GET",
+          "authorization": "Bearer fixture-token",
+          "content_type": null,
+          "body": ""
+        }
+      ],
+      "result": {
+        "value": {
+          "ok": true
+        }
+      }
+    },
+    {
+      "path": "/r/308",
+      "method": "POST",
+      "body": {
+        "message": "a\u00e7\u00e3o"
+      },
+      "timeout": 3,
+      "calls": [
+        {
+          "path": "/r/308",
+          "method": "POST",
+          "authorization": "Bearer fixture-token",
+          "content_type": "application/json",
+          "body": "{\"message\": \"a\\u00e7\\u00e3o\"}"
+        }
+      ],
+      "result": {
+        "error": "308: Synthetic reason"
+      }
+    },
+    {
+      "path": "/loop",
+      "method": "GET",
+      "body": null,
+      "timeout": 3,
+      "calls": [
+        {
+          "path": "/loop",
+          "method": "GET",
+          "authorization": "Bearer fixture-token",
+          "content_type": "application/json",
+          "body": ""
+        },
+        {
+          "path": "/loop",
+          "method": "GET",
+          "authorization": "Bearer fixture-token",
+          "content_type": null,
+          "body": ""
+        },
+        {
+          "path": "/loop",
+          "method": "GET",
+          "authorization": "Bearer fixture-token",
+          "content_type": null,
+          "body": ""
+        },
+        {
+          "path": "/loop",
+          "method": "GET",
+          "authorization": "Bearer fixture-token",
+          "content_type": null,
+          "body": ""
+        },
+        {
+          "path": "/loop",
+          "method": "GET",
+          "authorization": "Bearer fixture-token",
+          "content_type": null,
+          "body": ""
+        }
+      ],
+      "result": {
+        "error": "302: The HTTP server returned a redirect error that would lead to an infinite loop.\nThe last 30x error message was:\nSynthetic reason"
+      }
+    },
+    {
+      "path": "/chain/0",
+      "method": "GET",
+      "body": null,
+      "timeout": 3,
+      "calls": [
+        {
+          "path": "/chain/0",
+          "method": "GET",
+          "authorization": "Bearer fixture-token",
+          "content_type": "application/json",
+          "body": ""
+        },
+        {
+          "path": "/chain/1",
+          "method": "GET",
+          "authorization": "Bearer fixture-token",
+          "content_type": null,
+          "body": ""
+        },
+        {
+          "path": "/chain/2",
+          "method": "GET",
+          "authorization": "Bearer fixture-token",
+          "content_type": null,
+          "body": ""
+        },
+        {
+          "path": "/chain/3",
+          "method": "GET",
+          "authorization": "Bearer fixture-token",
+          "content_type": null,
+          "body": ""
+        },
+        {
+          "path": "/chain/4",
+          "method": "GET",
+          "authorization": "Bearer fixture-token",
+          "content_type": null,
+          "body": ""
+        },
+        {
+          "path": "/chain/5",
+          "method": "GET",
+          "authorization": "Bearer fixture-token",
+          "content_type": null,
+          "body": ""
+        },
+        {
+          "path": "/chain/6",
+          "method": "GET",
+          "authorization": "Bearer fixture-token",
+          "content_type": null,
+          "body": ""
+        },
+        {
+          "path": "/chain/7",
+          "method": "GET",
+          "authorization": "Bearer fixture-token",
+          "content_type": null,
+          "body": ""
+        },
+        {
+          "path": "/chain/8",
+          "method": "GET",
+          "authorization": "Bearer fixture-token",
+          "content_type": null,
+          "body": ""
+        },
+        {
+          "path": "/chain/9",
+          "method": "GET",
+          "authorization": "Bearer fixture-token",
+          "content_type": null,
+          "body": ""
+        },
+        {
+          "path": "/chain/10",
+          "method": "GET",
+          "authorization": "Bearer fixture-token",
+          "content_type": null,
+          "body": ""
+        }
+      ],
+      "result": {
+        "error": "302: The HTTP server returned a redirect error that would lead to an infinite loop.\nThe last 30x error message was:\nSynthetic reason"
+      }
+    },
+    {
+      "path": "/slow-chain",
+      "method": "GET",
+      "body": null,
+      "timeout": 1,
+      "calls": [
+        {
+          "path": "/slow-chain",
+          "method": "GET",
+          "authorization": "Bearer fixture-token",
+          "content_type": "application/json",
+          "body": ""
+        },
+        {
+          "path": "/slow-end",
+          "method": "GET",
+          "authorization": "Bearer fixture-token",
+          "content_type": null,
+          "body": ""
+        }
+      ],
+      "result": {
+        "value": {
+          "ok": true
+        }
+      }
+    }
+  ]
+}

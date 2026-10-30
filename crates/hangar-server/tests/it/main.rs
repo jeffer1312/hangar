@@ -348,3 +348,4 @@ mod peer_file;
 
 mod peer_cli_values;
 mod codex_normalize;
+mod peer_panel;

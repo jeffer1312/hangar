@@ -1,0 +1,118 @@
+{
+  "source_commit": "d700d310a3767ee312e046f11693af4df17a458e",
+  "command": "python generate-panel-network.py <checkout-Python> <fixture>",
+  "cases": [
+    {
+      "path": "/ok",
+      "method": "POST",
+      "body": {
+        "message": "a\u00e7\u00e3o"
+      },
+      "timeout": 3,
+      "calls": [
+        {
+          "path": "/ok",
+          "method": "POST",
+          "authorization": "Bearer fixture-token",
+          "content_type": "application/json",
+          "body": "{\"message\": \"a\\u00e7\\u00e3o\"}"
+        }
+      ],
+      "result": {
+        "value": {
+          "ok": true
+        }
+      }
+    },
+    {
+      "path": "/same",
+      "method": "GET",
+      "body": null,
+      "timeout": 3,
+      "calls": [
+        {
+          "path": "/same",
+          "method": "GET",
+          "authorization": "Bearer fixture-token",
+          "content_type": "application/json",
+          "body": ""
+        },
+        {
+          "path": "/ok",
+          "method": "GET",
+          "authorization": "Bearer fixture-token",
+          "content_type": null,
+          "body": ""
+        }
+      ],
+      "result": {
+        "value": {
+          "ok": true
+        }
+      }
+    },
+    {
+      "path": "/cross",
+      "method": "GET",
+      "body": null,
+      "timeout": 3,
+      "calls": [
+        {
+          "path": "/cross",
+          "method": "GET",
+          "authorization": "Bearer fixture-token",
+          "content_type": "application/json",
+          "body": ""
+        },
+        {
+          "path": "/ok",
+          "method": "GET",
+          "authorization": "Bearer fixture-token",
+          "content_type": null,
+          "body": ""
+        }
+      ],
+      "result": {
+        "value": {
+          "ok": true
+        }
+      }
+    },
+    {
+      "path": "/error",
+      "method": "GET",
+      "body": null,
+      "timeout": 3,
+      "calls": [
+        {
+          "path": "/error",
+          "method": "GET",
+          "authorization": "Bearer fixture-token",
+          "content_type": "application/json",
+          "body": ""
+        }
+      ],
+      "result": {
+        "error": "503: Synthetic reason"
+      }
+    },
+    {
+      "path": "/slow",
+      "method": "GET",
+      "body": null,
+      "timeout": 1,
+      "calls": [
+        {
+          "path": "/slow",
+          "method": "GET",
+          "authorization": "Bearer fixture-token",
+          "content_type": "application/json",
+          "body": ""
+        }
+      ],
+      "result": {
+        "error": "servidor inacess\u00edvel: timed out"
+      }
+    }
+  ]
+}

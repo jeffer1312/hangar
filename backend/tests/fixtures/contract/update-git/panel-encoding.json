@@ -1,0 +1,43 @@
+{
+  "source_commit": "97f7f72f2f3683a04c99928876b39cdeb67020d2",
+  "command": "python generate-panel-encoding.py <checkout-Python> <fixture>",
+  "cases": [
+    {
+      "path": "/error-bytes",
+      "method": "GET",
+      "body": null,
+      "timeout": 3,
+      "calls": [
+        {
+          "path": "/error-bytes",
+          "method": "GET",
+          "authorization": "Bearer fixture-token",
+          "content_type": "application/json",
+          "body": ""
+        }
+      ],
+      "result": {
+        "error": "503: Synthetic reason"
+      }
+    },
+    {
+      "path": "/invalid-bytes",
+      "method": "GET",
+      "body": null,
+      "timeout": 3,
+      "calls": [
+        {
+          "path": "/invalid-bytes",
+          "method": "GET",
+          "authorization": "Bearer fixture-token",
+          "content_type": "application/json",
+          "body": ""
+        }
+      ],
+      "result": {
+        "exception": "UnicodeDecodeError",
+        "message": "'utf-8' codec can't decode byte 0xff in position 0: invalid start byte"
+      }
+    }
+  ]
+}

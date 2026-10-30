@@ -65,6 +65,12 @@ pub fn dumps_indented_utf8(value: &Value, indent: usize) -> Result<String, &'sta
     Ok(restore_markers(crate::transcript::pyjson::dumps_indent(value, indent, false), false))
 }
 
+/// JSON UTF-8 com os separadores padrão do Python, sem copiar a árvore.
+pub fn dumps_utf8(value:&Value)->Result<String,&'static str>{
+    if contains_surrogate(value){return Err("surrogate Unicode isolado");}
+    Ok(restore_markers(crate::transcript::pyjson::dumps_unicode(value,false),false))
+}
+
 /// JSON compacto UTF-8 para revisões; Unicode inválido não pode atravessar a codificação.
 pub fn dumps_compact_utf8(value:&Value,sort_keys:bool)->Result<String,&'static str>{
     if contains_surrogate(value){return Err("surrogate Unicode isolado");}

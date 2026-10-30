@@ -1,0 +1,96 @@
+{
+  "source_commit": "3a7d2e883887cae2f20d525e9b766a3160f48ef8",
+  "command": "python generate-panel-scan.py <checkout-Python> <fixture>",
+  "cases": [
+    {
+      "name": "missing",
+      "path": "",
+      "response": [],
+      "calls": [],
+      "result": {
+        "ok": false,
+        "message": "pasta inv\u00e1lida"
+      }
+    },
+    {
+      "name": "not-directory",
+      "path": "<ROOT>/projects/loose-file",
+      "response": [],
+      "calls": [],
+      "result": {
+        "ok": false,
+        "message": "pasta inv\u00e1lida"
+      }
+    },
+    {
+      "name": "existing",
+      "path": "<ROOT>/projects",
+      "response": [
+        {
+          "cwd": "<ROOT>/projects/zeta"
+        }
+      ],
+      "calls": [
+        {
+          "args": [
+            "x",
+            "GET",
+            "/api/projects"
+          ],
+          "kwargs": {}
+        }
+      ],
+      "result": {
+        "ok": true,
+        "entries": [
+          {
+            "name": "Alpha",
+            "cwd": "<ROOT>/projects/Alpha",
+            "command": "npm run dev",
+            "already": false
+          },
+          {
+            "name": "zeta",
+            "cwd": "<ROOT>/projects/zeta",
+            "command": "",
+            "already": true
+          }
+        ],
+        "message": "2 subpastas em <ROOT>/projects"
+      }
+    },
+    {
+      "name": "backend-failed",
+      "path": "<ROOT>/projects",
+      "response": null,
+      "calls": [
+        {
+          "args": [
+            "x",
+            "GET",
+            "/api/projects"
+          ],
+          "kwargs": {}
+        }
+      ],
+      "result": {
+        "ok": true,
+        "entries": [
+          {
+            "name": "Alpha",
+            "cwd": "<ROOT>/projects/Alpha",
+            "command": "npm run dev",
+            "already": false
+          },
+          {
+            "name": "zeta",
+            "cwd": "<ROOT>/projects/zeta",
+            "command": "",
+            "already": false
+          }
+        ],
+        "message": "2 subpastas em <ROOT>/projects \u2014 \u26a0 n\u00e3o checei duplicados (backend fora?)"
+      }
+    }
+  ]
+}

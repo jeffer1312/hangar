@@ -1,0 +1,190 @@
+{
+  "source_commit": "da6c0f0a2d4f0cea075de127019bc6cfb636f0a1",
+  "cases": [
+    {
+      "name": "missing",
+      "input_hex": null,
+      "args": [
+        "fixture",
+        "pick-folder"
+      ],
+      "result": {
+        "rc": 0,
+        "stdout": "{\"ok\": true, \"path\": \"<ROOT>\"}\n",
+        "book": "{\"peer\":{}}"
+      }
+    },
+    {
+      "name": "invalid-read",
+      "input_hex": "ff",
+      "args": [
+        "fixture",
+        "pick-folder"
+      ],
+      "result": {
+        "rc": 1,
+        "exception": "UnicodeDecodeError",
+        "message": "'utf-8' codec can't decode byte 0xff in position 0: invalid start byte",
+        "stdout": "",
+        "book": "{\"peer\":{}}"
+      }
+    },
+    {
+      "name": "invalid-independent",
+      "input_hex": "ff",
+      "args": [
+        "peer",
+        "peer",
+        "on"
+      ],
+      "result": {
+        "rc": 0,
+        "stdout": "{\"ok\": true, \"message\": \"peer ligado\"}\n",
+        "book": "{\n  \"peer\": {\n    \"enabled\": true\n  }\n}\n"
+      }
+    },
+    {
+      "name": "invalid-empty-rename",
+      "input_hex": "ff",
+      "args": [
+        "fixture",
+        "rename"
+      ],
+      "result": {
+        "rc": 1,
+        "stdout": "{\"ok\": false, \"message\": \"nome vazio\"}\n",
+        "book": "{\"peer\":{}}"
+      }
+    },
+    {
+      "name": "separator-10",
+      "input_hex": "69676e6f7265640a43505f5343414e5f524f4f54533d3c524f4f543e2f63686f73656e0a43505f5343414e5f524f4f54533d3c524f4f543e2f6f746865720a",
+      "args": [
+        "fixture",
+        "pick-folder"
+      ],
+      "result": {
+        "rc": 0,
+        "stdout": "{\"ok\": true, \"path\": \"<ROOT>/chosen\"}\n",
+        "book": "{\"peer\":{}}"
+      }
+    },
+    {
+      "name": "separator-13",
+      "input_hex": "69676e6f7265640d43505f5343414e5f524f4f54533d3c524f4f543e2f63686f73656e0a43505f5343414e5f524f4f54533d3c524f4f543e2f6f746865720a",
+      "args": [
+        "fixture",
+        "pick-folder"
+      ],
+      "result": {
+        "rc": 0,
+        "stdout": "{\"ok\": true, \"path\": \"<ROOT>/chosen\"}\n",
+        "book": "{\"peer\":{}}"
+      }
+    },
+    {
+      "name": "separator-11",
+      "input_hex": "69676e6f7265640b43505f5343414e5f524f4f54533d3c524f4f543e2f63686f73656e0a43505f5343414e5f524f4f54533d3c524f4f543e2f6f746865720a",
+      "args": [
+        "fixture",
+        "pick-folder"
+      ],
+      "result": {
+        "rc": 0,
+        "stdout": "{\"ok\": true, \"path\": \"<ROOT>/chosen\"}\n",
+        "book": "{\"peer\":{}}"
+      }
+    },
+    {
+      "name": "separator-12",
+      "input_hex": "69676e6f7265640c43505f5343414e5f524f4f54533d3c524f4f543e2f63686f73656e0a43505f5343414e5f524f4f54533d3c524f4f543e2f6f746865720a",
+      "args": [
+        "fixture",
+        "pick-folder"
+      ],
+      "result": {
+        "rc": 0,
+        "stdout": "{\"ok\": true, \"path\": \"<ROOT>/chosen\"}\n",
+        "book": "{\"peer\":{}}"
+      }
+    },
+    {
+      "name": "separator-28",
+      "input_hex": "69676e6f7265641c43505f5343414e5f524f4f54533d3c524f4f543e2f63686f73656e0a43505f5343414e5f524f4f54533d3c524f4f543e2f6f746865720a",
+      "args": [
+        "fixture",
+        "pick-folder"
+      ],
+      "result": {
+        "rc": 0,
+        "stdout": "{\"ok\": true, \"path\": \"<ROOT>/chosen\"}\n",
+        "book": "{\"peer\":{}}"
+      }
+    },
+    {
+      "name": "separator-29",
+      "input_hex": "69676e6f7265641d43505f5343414e5f524f4f54533d3c524f4f543e2f63686f73656e0a43505f5343414e5f524f4f54533d3c524f4f543e2f6f746865720a",
+      "args": [
+        "fixture",
+        "pick-folder"
+      ],
+      "result": {
+        "rc": 0,
+        "stdout": "{\"ok\": true, \"path\": \"<ROOT>/chosen\"}\n",
+        "book": "{\"peer\":{}}"
+      }
+    },
+    {
+      "name": "separator-30",
+      "input_hex": "69676e6f7265641e43505f5343414e5f524f4f54533d3c524f4f543e2f63686f73656e0a43505f5343414e5f524f4f54533d3c524f4f543e2f6f746865720a",
+      "args": [
+        "fixture",
+        "pick-folder"
+      ],
+      "result": {
+        "rc": 0,
+        "stdout": "{\"ok\": true, \"path\": \"<ROOT>/chosen\"}\n",
+        "book": "{\"peer\":{}}"
+      }
+    },
+    {
+      "name": "separator-133",
+      "input_hex": "69676e6f726564c28543505f5343414e5f524f4f54533d3c524f4f543e2f63686f73656e0a43505f5343414e5f524f4f54533d3c524f4f543e2f6f746865720a",
+      "args": [
+        "fixture",
+        "pick-folder"
+      ],
+      "result": {
+        "rc": 0,
+        "stdout": "{\"ok\": true, \"path\": \"<ROOT>/chosen\"}\n",
+        "book": "{\"peer\":{}}"
+      }
+    },
+    {
+      "name": "separator-8232",
+      "input_hex": "69676e6f726564e280a843505f5343414e5f524f4f54533d3c524f4f543e2f63686f73656e0a43505f5343414e5f524f4f54533d3c524f4f543e2f6f746865720a",
+      "args": [
+        "fixture",
+        "pick-folder"
+      ],
+      "result": {
+        "rc": 0,
+        "stdout": "{\"ok\": true, \"path\": \"<ROOT>/chosen\"}\n",
+        "book": "{\"peer\":{}}"
+      }
+    },
+    {
+      "name": "separator-8233",
+      "input_hex": "69676e6f726564e280a943505f5343414e5f524f4f54533d3c524f4f543e2f63686f73656e0a43505f5343414e5f524f4f54533d3c524f4f543e2f6f746865720a",
+      "args": [
+        "fixture",
+        "pick-folder"
+      ],
+      "result": {
+        "rc": 0,
+        "stdout": "{\"ok\": true, \"path\": \"<ROOT>/chosen\"}\n",
+        "book": "{\"peer\":{}}"
+      }
+    }
+  ]
+}

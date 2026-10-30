@@ -1,0 +1,86 @@
+{
+  "source_commit": "efcd400cbc4c21a7c8bc5f96f700c3b075f48bf0",
+  "command": "python generate-panel-stdout.py <checkout-Python> <fixture>",
+  "cases": [
+    {
+      "name": "unicode",
+      "command": "action",
+      "value_json": "\"\\u00e9\"",
+      "result": {
+        "rc": 0,
+        "stdout_hex": "7b226f6b223a20747275652c20226d657373616765223a2022222c202270616e65223a2022c3a9227d0a"
+      }
+    },
+    {
+      "name": "unicode",
+      "command": "data",
+      "value_json": "\"\\u00e9\"",
+      "result": {
+        "rc": 0,
+        "stdout_hex": "7b2273657373696f6e73223a205b5d2c20226572726f7273223a205b5d2c202273657276657273223a205b5d2c202270726f6a65637473223a205b7b226e616d65223a202266697874757265222c20226578747261223a2022c3a9222c20226377645f7265616c223a2022227d5d7d0a"
+      }
+    },
+    {
+      "name": "literal",
+      "command": "action",
+      "value_json": "\"\\udbff\\udfff\"",
+      "result": {
+        "rc": 0,
+        "stdout_hex": "7b226f6b223a20747275652c20226d657373616765223a2022222c202270616e65223a2022f48fbfbf227d0a"
+      }
+    },
+    {
+      "name": "literal",
+      "command": "data",
+      "value_json": "\"\\udbff\\udfff\"",
+      "result": {
+        "rc": 0,
+        "stdout_hex": "7b2273657373696f6e73223a205b5d2c20226572726f7273223a205b5d2c202273657276657273223a205b5d2c202270726f6a65637473223a205b7b226e616d65223a202266697874757265222c20226578747261223a2022f48fbfbf222c20226377645f7265616c223a2022227d5d7d0a"
+      }
+    },
+    {
+      "name": "surrogate",
+      "command": "action",
+      "value_json": "\"\\ud800\"",
+      "result": {
+        "rc": 1,
+        "exception": "UnicodeEncodeError",
+        "message": "'utf-8' codec can't encode character '\\ud800' in position 37: surrogates not allowed",
+        "stdout_hex": ""
+      }
+    },
+    {
+      "name": "surrogate",
+      "command": "data",
+      "value_json": "\"\\ud800\"",
+      "result": {
+        "rc": 1,
+        "exception": "UnicodeEncodeError",
+        "message": "'utf-8' codec can't encode character '\\ud800' in position 1: surrogates not allowed",
+        "stdout_hex": "7b2273657373696f6e73223a205b5d2c20226572726f7273223a205b5d2c202273657276657273223a205b5d2c202270726f6a65637473223a205b7b226e616d65223a202266697874757265222c20226578747261223a20"
+      }
+    },
+    {
+      "name": "surrogate-nested",
+      "command": "action",
+      "value_json": "[\"\\ud800\"]",
+      "result": {
+        "rc": 1,
+        "exception": "UnicodeEncodeError",
+        "message": "'utf-8' codec can't encode character '\\ud800' in position 38: surrogates not allowed",
+        "stdout_hex": ""
+      }
+    },
+    {
+      "name": "surrogate-nested",
+      "command": "data",
+      "value_json": "[\"\\ud800\"]",
+      "result": {
+        "rc": 1,
+        "exception": "UnicodeEncodeError",
+        "message": "'utf-8' codec can't encode character '\\ud800' in position 2: surrogates not allowed",
+        "stdout_hex": "7b2273657373696f6e73223a205b5d2c20226572726f7273223a205b5d2c202273657276657273223a205b5d2c202270726f6a65637473223a205b7b226e616d65223a202266697874757265222c20226578747261223a20"
+      }
+    }
+  ]
+}
