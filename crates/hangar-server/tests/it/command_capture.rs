@@ -174,7 +174,9 @@ mod relative {
         .unwrap();
         let mut failures = Vec::new();
         let interpreter = std::process::Command::new("python3")
-            .args(["-c", "import sys; print(sys.executable)"])
+            // O launcher do framework macOS reexecuta Python.app e troca argv[0].
+            // A prova precisa do interpretador real para observar o argv entregue pelo Hangar.
+            .args(["-c", "import pathlib,sys; app=pathlib.Path(sys.base_prefix)/'Resources/Python.app/Contents/MacOS/Python'; print(app if sys.platform == 'darwin' and app.is_file() else sys.executable)"])
             .output().unwrap();
         assert!(interpreter.status.success());
         let interpreter = std::path::PathBuf::from(String::from_utf8(interpreter.stdout).unwrap().trim()).canonicalize().unwrap();

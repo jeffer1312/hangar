@@ -60,6 +60,7 @@ async fn project_instructions_match_original_scopes_records_git_and_disable() {
                     "CP_CODEX_SYNC_ENABLED".into(),
                     if name == "disabled" { "0" } else { "1" }.into(),
                 ),
+                ("PATH".into(), std::env::var("PATH").unwrap_or_default()),
                 ("GIT_CONFIG_GLOBAL".into(), "/dev/null".into()),
                 ("GIT_CONFIG_NOSYSTEM".into(), "1".into()),
             ]
@@ -149,7 +150,12 @@ async fn project_instructions_match_original_scopes_records_git_and_disable() {
                 .replace(home.path().to_str().unwrap(), "$ROOT"),
         )
         .unwrap();
-        let expected = json!({"results":row["results"],"files":row["files"],"records":row["records"],"backups":row["backups"],"exclude":row["exclude"],"git_status":row["git_status"]});
+        let mut expected = json!({"results":row["results"],"files":row["files"],"records":row["records"],"backups":row["backups"],"exclude":row["exclude"],"git_status":row["git_status"]});
+        if name == "uppercase" && project.join("CLAUDE.md").is_file() {
+            // Num volume sem distinção de caixa, o primeiro nome consultado pelo Python existe.
+            assert_eq!(project.join("CLAUDE.md").canonicalize().unwrap(), project.join("CLAUDE.MD").canonicalize().unwrap());
+            expected["files"]["project/AGENTS.override.md"]["link"] = json!("CLAUDE.md");
+        }
         if actual != expected {
             differences.push((name.to_owned(), actual, expected));
         }

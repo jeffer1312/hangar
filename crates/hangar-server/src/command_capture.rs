@@ -131,15 +131,8 @@ pub async fn capture_bytes(
         Err(error) => return Err(CaptureFailure::empty(error_name(&error))),
     };
     #[cfg(unix)]
-    {
-        let exec = match StrictExec::new(program, &command, &env) {
-            Ok(exec) => exec,
-            Err(error) => return Err(CaptureFailure::empty(error_name(&error))),
-        };
-        // O filho já recebeu cwd, pipes e grupo; aqui só usa buffers preparados antes do fork.
-        unsafe {
-            command.pre_exec(move || exec.execute());
-        }
+    if let Err(error) = configure_strict_exec(command.as_std_mut(), false) {
+        return Err(CaptureFailure::empty(error_name(&error)));
     }
     let mut child = match command.spawn() {
         Ok(child) => child,
@@ -250,6 +243,16 @@ impl CaptureFailure {
     }
 }
 
+/// Recusa ENOEXEC sem reserva de shell. O chamador informa se usou `env_clear`.
+#[cfg(unix)]
+pub(crate) fn configure_strict_exec(command: &mut std::process::Command, inherit_environment: bool) -> io::Result<()> {
+    use std::os::unix::process::CommandExt;
+    let exec = StrictExec::new(command, inherit_environment)?;
+    // Cwd, pipes e grupo já estão configurados; o filho só usa buffers anteriores ao fork.
+    unsafe { command.pre_exec(move || exec.execute()); }
+    Ok(())
+}
+
 #[cfg(unix)]
 struct StrictExec {
     paths: Vec<std::ffi::CString>,
@@ -265,41 +268,31 @@ unsafe impl Send for StrictExec {}
 unsafe impl Sync for StrictExec {}
 #[cfg(unix)]
 impl StrictExec {
-    fn new(program: &str, command: &Command, env: &AccountEnvironment) -> io::Result<Self> {
-        use std::{ffi::CString, os::unix::ffi::OsStrExt, path::PathBuf};
+    fn new(command: &std::process::Command, inherit_environment: bool) -> io::Result<Self> {
+        use std::{ffi::{CString, OsStr, OsString}, os::unix::ffi::OsStrExt, path::PathBuf};
         let string = |bytes: &[u8]| {
             CString::new(bytes).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))
         };
-        let paths = if program.contains('/') {
+        let mut effective: std::collections::BTreeMap<OsString, OsString> = if inherit_environment {
+            std::env::vars_os().collect()
+        } else { Default::default() };
+        for (key, value) in command.get_envs() {
+            if let Some(value) = value { effective.insert(key.to_owned(), value.to_owned()); }
+            else { effective.remove(key); }
+        }
+        let program = command.get_program();
+        let paths = if program.as_bytes().contains(&b'/') {
             vec![PathBuf::from(program)]
         } else {
-            std::env::split_paths(
-                env.base
-                    .get("PATH")
-                    .map(String::as_str)
-                    .unwrap_or("/bin:/usr/bin"),
-            )
-            .map(|directory| directory.join(program))
-            .collect()
-        }
-        .iter()
-        .map(|path| string(path.as_os_str().as_bytes()))
-        .collect::<io::Result<Vec<_>>>()?;
-        let args = std::iter::once(std::ffi::OsStr::new(program))
-            .chain(command.as_std().get_args())
-            .map(|arg| string(arg.as_bytes()))
-            .collect::<io::Result<Vec<_>>>()?;
-        let environment = command
-            .as_std()
-            .get_envs()
-            .filter_map(|(key, value)| value.map(|value| (key, value)))
-            .map(|(key, value)| {
-                let mut bytes = key.as_bytes().to_vec();
-                bytes.push(b'=');
-                bytes.extend_from_slice(value.as_bytes());
-                string(&bytes)
-            })
-            .collect::<io::Result<Vec<_>>>()?;
+            std::env::split_paths(effective.get(OsStr::new("PATH")).map(OsString::as_os_str).unwrap_or(OsStr::new("/bin:/usr/bin")))
+                .map(|directory| directory.join(program)).collect()
+        }.iter().map(|path| string(path.as_os_str().as_bytes())).collect::<io::Result<Vec<_>>>()?;
+        let args = std::iter::once(program).chain(command.get_args())
+            .map(|arg| string(arg.as_bytes())).collect::<io::Result<Vec<_>>>()?;
+        let environment = effective.iter().map(|(key, value)| {
+            let mut bytes = key.as_bytes().to_vec(); bytes.push(b'='); bytes.extend_from_slice(value.as_bytes());
+            string(&bytes)
+        }).collect::<io::Result<Vec<_>>>()?;
         let pointers = |strings: &Vec<CString>| {
             strings
                 .iter()
@@ -389,5 +382,43 @@ mod bounded_tests {
         assert_eq!(failure.stdout.len(), MAX_CAPTURE_BYTES);
         assert_eq!(failure.stderr.len(), MAX_CAPTURE_BYTES);
         assert_eq!(std::fs::read_to_string(done).unwrap(), "done");
+    }
+}
+
+#[cfg(all(test, unix))]
+mod strict_std_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn std_capture_rejects_executable_text_without_a_shebang() {
+        let home = tempfile::tempdir().unwrap();
+        let program = home.path().join("program");
+        std::fs::write(&program, "printf shell-fallback").unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut command = std::process::Command::new(&program);
+        configure_strict_exec(&mut command, true).unwrap();
+        assert_eq!(command.output().unwrap_err().raw_os_error(), Some(libc::ENOEXEC));
+    }
+
+    #[test]
+    fn std_capture_preserves_inheritance_overrides_and_removals() {
+        for inherit in [false, true] {
+            let mut command = std::process::Command::new("/bin/sh");
+            if !inherit { command.env_clear(); }
+            command.args(["-c", "printf '%s|%s|%s' \"${HOME-unset}\" \"$CAPTURE_FIXTURE\" \"${PATH-unset}\""])
+                .env("CAPTURE_FIXTURE", "override").env_remove("PATH");
+            configure_strict_exec(&mut command, inherit).unwrap();
+            let output = command.output().unwrap();
+            assert!(output.status.success());
+            let expected_home = if inherit { std::env::var("HOME").unwrap_or_else(|_| "unset".into()) } else { "unset".into() };
+            assert!(String::from_utf8(output.stdout).unwrap().starts_with(&format!("{expected_home}|override|")));
+        }
+        let mut command = std::process::Command::new("/usr/bin/env");
+        command.env_clear().env("CAPTURE_FIXTURE", "override").env("HOME", "temporary").env_remove("HOME");
+        configure_strict_exec(&mut command, false).unwrap();
+        let output = command.output().unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"CAPTURE_FIXTURE=override\n");
     }
 }

@@ -103,6 +103,7 @@ fn execute(
     {
         use std::os::unix::process::CommandExt;
         command.process_group(0);
+        crate::command_capture::configure_strict_exec(&mut command, !user_environment)?;
     }
     #[cfg(windows)]
     let mut tree = crate::terminal_process::CommandTree::configure_std(&mut command)?;

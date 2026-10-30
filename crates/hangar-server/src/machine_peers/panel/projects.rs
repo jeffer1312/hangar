@@ -110,13 +110,17 @@ impl Panel {
                 "hangar-panel-action: a sessao de log de '{name}' ({target}) nao existe mais — o projeto provavelmente nao esta rodando."
             ),
         );
-        std::process::Command::new(self.binary(&args[0]).unwrap_or_else(||args[0].clone().into()))
+        let mut command = std::process::Command::new(self.binary(&args[0]).unwrap_or_else(||args[0].clone().into()));
+        command
             .args(&args[1..])
             .envs(&self.environment.base)
             .current_dir(&self.cwd)
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
+            .stderr(std::process::Stdio::null());
+        #[cfg(unix)]
+        crate::command_capture::configure_strict_exec(&mut command, true)
+            .map_err(|error| format!("nao consegui abrir {term}: {}",spawn_error(&error,term)))?;
+        command.spawn()
             .map_err(|error| format!("nao consegui abrir {term}: {}",spawn_error(&error,term)))?;
         Ok(reply(true, "log aberto no terminal"))
     }

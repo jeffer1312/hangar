@@ -67,6 +67,15 @@ fn codex_service_fingerprints_match_python_hash_inputs_and_metadata() {
             .iter()
             .map(|part| {
                 let chunk = part.as_str().unwrap();
+                if let Some(relative) = chunk.strip_prefix("$ROOT/").and_then(|part| part.strip_suffix(":ausente"))
+                    && relative == "home/.claude/CLAUDE.MD"
+                    && root.join(relative).is_file()
+                {
+                    // A captura Linux distingue caixa; no APFS os dois nomes apontam para a mesma fonte.
+                    let captured = &case["entries"]["home/.claude/CLAUDE.md"];
+                    assert_eq!(root.join(relative).canonicalize().unwrap(), root.join("home/.claude/CLAUDE.md").canonicalize().unwrap());
+                    return format!("{}:{}:{}", root.join(relative).display(), captured["hex"].as_str().unwrap().len()/2, captured["mtime_ns"].as_u64().unwrap());
+                }
                 // O tamanho de diretório pertence ao filesystem, não ao conteúdo capturado.
                 if let Some((path, metadata)) = chunk.rsplit_once(':')
                     && let Some((path, _size)) = path.rsplit_once(':')

@@ -645,7 +645,12 @@ fn checkout_pipeline_success_and_prepare_rollback_match_python() {
  if scenario=="work-branch" {git(&root,&["checkout","-b","feature"]);}
  let path=format!("{}:{}",bin.display(),std::env::var("PATH").unwrap());let environment=[("PATH".into(),path),("HOME".into(),home.display().to_string()),("USERPROFILE".into(),home.display().to_string()),("CP_RUST_SERVER".into(),"0".into()),("CP_UPDATE_BRANCH".into(),if scenario=="missing-target"{"missing"}else{""}.into()),("GIT_CONFIG_NOSYSTEM".into(),"1".into()),("GIT_CONFIG_GLOBAL".into(),"/dev/null".into())].into();let service=Service::new(home.clone(),root.clone(),home.join(".claude"),environment);
  let listener=std::net::TcpListener::bind("127.0.0.1:0").unwrap();let port=listener.local_addr().unwrap().port();listener.set_nonblocking(true).unwrap();let stop=Arc::new(AtomicBool::new(false));let ended=stop.clone();let server=std::thread::spawn(move||{while !ended.load(Ordering::Relaxed){if let Ok((mut stream,_))=listener.accept(){stream.set_nonblocking(false).unwrap();stream.set_read_timeout(Some(std::time::Duration::from_secs(2))).unwrap();let mut bytes=[0;2048];let _=stream.read(&mut bytes);let _=stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok");}else{std::thread::sleep(std::time::Duration::from_millis(5));}}});
- let state=service.execute(port,&NoNetwork,None);stop.store(true,Ordering::Relaxed);server.join().unwrap();let expected=row["state"].as_object().unwrap();for (key,value) in expected{assert_eq!(state.get(key).unwrap_or(&Value::Null),value,"{scenario}: {key}; {state:?}");}
+ let state=service.execute(port,&NoNetwork,None);stop.store(true,Ordering::Relaxed);server.join().unwrap();let mut expected=row["state"].as_object().unwrap().clone();
+ // O Python distingue o diagnóstico do launchd daquele do systemd capturado no corpus.
+ if cfg!(target_os="macos") && scenario=="restart-failure" {
+ expected.insert("erro".into(),json!("o servidor nao reiniciou: nao consegui reiniciar o servico: fixture-restart-failed"));
+ }
+ for (key,value) in &expected{assert_eq!(state.get(key).unwrap_or(&Value::Null),value,"{scenario}: {key}; {state:?}");}
  assert_eq!(if git(&root,&["rev-parse","HEAD"])==old{"old"}else{"new"},row["head"].as_str().unwrap());assert_eq!(std::fs::read_to_string(root.join("frontend/dist/index.html")).unwrap(),row["screen"].as_str().unwrap());assert_eq!(json!(root.join("frontend/.dist-velho").exists()),row["previous_exists"]);
  }
 }

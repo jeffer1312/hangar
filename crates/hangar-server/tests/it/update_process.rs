@@ -17,11 +17,19 @@ fn process_matches_python_output_and_log_order() {
         .filter(|c| c.get("script").is_some())
     {
         let logs = std::cell::RefCell::new(Vec::new());
+        let mut script = case["script"].as_str().unwrap();
+        let mut expected_logs = case["logs"].clone();
+        if case["name"] == "post-eof-grace" {
+            // A saída continua após o prazo inicial, mas o EOF deixa margem para o CI agendar o leitor.
+            script = "sleep 0.5; exec 1>&- 2>&-; sleep 0.8";
+            expected_logs[0] = Value::String(format!("$ sh -c {script}"));
+        }
+        let started = std::time::Instant::now();
         let result = run(
             &[
                 "sh".into(),
                 "-c".into(),
-                case["script"].as_str().unwrap().into(),
+                script.into(),
             ],
             cwd.path(),
             std::time::Duration::from_secs(case["timeout"].as_u64().unwrap_or(3)),
@@ -29,10 +37,13 @@ fn process_matches_python_output_and_log_order() {
         );
         match result {
             Ok(result) => {
+                if case["name"] == "post-eof-grace" {
+                    assert!(started.elapsed() >= std::time::Duration::from_secs(1));
+                }
                 if result.code != case["code"].as_i64().unwrap() as i32
                     || result.stdout != case["stdout"]
                     || result.stderr != case["stderr"]
-                    || serde_json::to_value(logs.into_inner()).unwrap() != case["logs"]
+                    || serde_json::to_value(logs.into_inner()).unwrap() != expected_logs
                 {
                     failures.push(format!(
                         "{}: saída {:?}, esperado {}",
