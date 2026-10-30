@@ -83,9 +83,8 @@ semeadura do `.claude.json` sem `oauthAccount` na criação) é do Rust:
   comando (`contas.reconciliar`/`contas.criar`).
 - Travas: guarda da conta (`~/.hangar/account-locks`), `~/.hangar-contas.lock` e o marcador da
   conta (`.hangar-account-pending` na semeadura), nessa ordem, inclusive no Windows.
-- Paridade provada contra o Python de origem (b2832ee04) por fixtures geradas rodando o
-  `scripts/hangar-conta` antigo (`backend/tests/fixtures/contract/accounts-reconcile/`, gerador
-  `accounts_reconcile::generate_fixtures` com `HANGAR_FIXTURE_PY_ROOT` num checkout de b2832ee04).
+- Paridade provada contra o Python de origem (b2832ee04) rodando o `scripts/hangar-conta` antigo; o
+  esperado medido fica em `crates/hangar-server/tests/it/accounts_reconcile_cases.rs`.
 - Corrigido depois da paridade: `.claude.json.lock` e `mcp-needs-auth-cache.json` entram no
   runtime por conta (iam para a gaveta ou subiam para o `~/.claude`); a poda da gaveta nunca apaga
   a versão que acabou de guardar; erro de disco na criação Claude diz o motivo e o caminho (antes
