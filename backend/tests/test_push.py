@@ -4,7 +4,6 @@ from datetime import time as dtime
 import pytest
 
 from app import push
-from app.hook_state import HookState
 
 
 @pytest.fixture(autouse=True)
@@ -38,23 +37,6 @@ def test_notify_no_vapid_is_noop(tmp_path, monkeypatch):
     push.notify_awaiting("sessao")  # sem chaves: nao levanta, nao tenta enviar
 
 
-def test_hookstate_fires_only_on_transition(tmp_path):
-    hs = HookState()
-    fired: list[str] = []
-    hs.on_awaiting = fired.append
-    p = tmp_path / "uuid1.json"
-
-    p.write_text(json.dumps({"state": "working", "ts": 1.0}))
-    hs._apply(p, notify=True)
-    assert fired == []  # working nao dispara
-
-    p.write_text(json.dumps({"state": "awaiting_input", "ts": 2.0}))
-    hs._apply(p, notify=True)
-    assert fired == ["uuid1"]  # working -> awaiting dispara
-
-    p.write_text(json.dumps({"state": "awaiting_input", "ts": 3.0}))
-    hs._apply(p, notify=True)
-    assert fired == ["uuid1"]  # awaiting -> awaiting (so ts) nao re-dispara
 
 
 def _mock_webpush(monkeypatch, tmp_path):
@@ -88,14 +70,6 @@ def test_notify_dead_payload(tmp_path, monkeypatch):
     assert sent["data"]["session"] == "minha-sessao"
 
 
-def test_hookstate_load_existing_does_not_fire(tmp_path):
-    hs = HookState()
-    fired: list[str] = []
-    hs.on_awaiting = fired.append
-    p = tmp_path / "u.json"
-    p.write_text(json.dumps({"state": "awaiting_input", "ts": 1.0}))
-    hs._apply(p, notify=False)  # caminho do load_existing (boot) — nao deve notificar
-    assert fired == []
 
 
 # ---------------------------------------------------------------------------

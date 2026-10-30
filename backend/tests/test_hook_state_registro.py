@@ -135,19 +135,17 @@ def test_registro_removido_volta_ao_marcador(tmp_path):
     assert hs.get_state("aaa")[0] == "idle"
 
 
-def test_registro_dispara_transicao_e_awaiting(tmp_path):
+def test_registro_dispara_transicao(tmp_path):
     hs = hook_state.HookState()
     hs.load_existing([tmp_path])
-    vistos, awaiting = [], []
+    vistos = []
     hs.on_transition = lambda sid, st: vistos.append((sid, st))
-    hs.on_awaiting = awaiting.append
     f = _registro(tmp_path, os.getpid(), "aaa", "busy")
     hs._apply_registro(f, notify=True)
     _registro(tmp_path, os.getpid(), "aaa", "waiting")
     hs._apply_registro(f, notify=True)
     hs._apply_registro(f, notify=True)  # mesmo status regravado: nao re-dispara
     assert vistos == [("aaa", "working"), ("aaa", "awaiting_input")]
-    assert awaiting == ["aaa"]
 
 
 def test_marcador_nao_gera_transicao_enquanto_registro_manda(tmp_path):
