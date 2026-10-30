@@ -42,6 +42,14 @@ impl Roots {
 fn boundary(c: char) -> bool {
     c.is_whitespace() || "\\/'\"`;|&)".contains(c)
 }
+fn starts_path(prefix: &str) -> bool {
+    prefix
+        .chars()
+        .next_back()
+        .is_none_or(|c| c.is_whitespace() || "'\"`=:(;|&".contains(c))
+        || prefix.ends_with("file://")
+        || prefix.ends_with("file:///")
+}
 fn rest_end(c: char) -> bool {
     c.is_whitespace() || "'\"`;|&)⟦".contains(c)
 }
@@ -59,7 +67,9 @@ pub fn canonicalize(text: &str, roots: &Roots) -> String {
         result = regex
             .replace_all(&result, |capture: &regex::Captures| {
                 let found = capture.get(0).unwrap();
-                if result[found.end()..].chars().next().is_none_or(boundary) {
+                if starts_path(&result[..found.start()])
+                    && result[found.end()..].chars().next().is_none_or(boundary)
+                {
                     "⟦HANGAR⟧".to_string()
                 } else {
                     found.as_str().to_string()
@@ -87,7 +97,7 @@ pub fn canonicalize(text: &str, roots: &Roots) -> String {
         let mut previous = 0;
         for (at, found) in result.match_indices(&form) {
             let end = at + found.len();
-            if result[end..].chars().next().is_none_or(boundary) {
+            if starts_path(&result[..at]) && result[end..].chars().next().is_none_or(boundary) {
                 out.push_str(&result[previous..at]);
                 out.push_str(&format!("⟦{marker}⟧"));
                 previous = end;

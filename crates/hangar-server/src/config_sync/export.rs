@@ -106,6 +106,19 @@ fn pick(value: &Value, keep: Option<&Vec<String>>, prefix: &str) -> Value {
             .collect(),
     )
 }
+fn read_names(path: &Path) -> std::io::Result<Vec<PathBuf>> {
+    let mut paths = std::fs::read_dir(path)?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<Result<Vec<_>, _>>()?;
+    paths.sort();
+    Ok(paths)
+}
+fn optional_names(path: &Path) -> std::io::Result<Vec<PathBuf>> {
+    match read_names(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        result => result,
+    }
+}
 fn names(path: &Path) -> Vec<PathBuf> {
     let mut paths: Vec<_> = std::fs::read_dir(path)
         .into_iter()
@@ -233,7 +246,7 @@ fn walk(
             continue;
         }
         let mut dirs = Vec::new();
-        for path in names(&current) {
+        for path in read_names(&current)? {
             let name = path
                 .file_name()
                 .unwrap_or_default()
@@ -297,7 +310,7 @@ fn directory(
     let claude = Path::new(&roots.claude);
     let mut entries = BTreeMap::new();
     if item == "claude_instructions" {
-        for p in names(claude) {
+        for p in optional_names(claude)? {
             if p.extension().is_some_and(|x| x == "md")
                 && p.file_name().unwrap() != "CLAUDE.local.md"
             {
@@ -315,7 +328,7 @@ fn directory(
     let skills = own_skills(roots);
     let hooks = own_hooks(roots);
     for dir in dirs {
-        for path in names(&claude.join(dir)) {
+        for path in optional_names(&claude.join(dir))? {
             let name = path.file_name().unwrap().to_string_lossy().into_owned();
             if name.starts_with('.')
                 || HEAVY_DIRS.contains(&name.as_str())
@@ -422,7 +435,11 @@ fn refs(
             let name = normal.rsplit('/').next().unwrap_or("");
             let name = name.strip_suffix(".exe").unwrap_or(name).to_lowercase();
             let local = PathBuf::from(paths::resolve(&marked, roots));
-            if PROGRAMS.contains(&name.as_str()) || !local.is_file() || never_ref(&marked) {
+            if PROGRAMS.contains(&name.as_str())
+                || !local.is_file()
+                || local.is_symlink()
+                || never_ref(&marked)
+            {
                 continue;
             }
             let mut candidates = BTreeMap::new();
@@ -436,7 +453,7 @@ fn refs(
                 let mut total = 0u64;
                 while let Some(dir) = pending.pop() {
                     let mut dirs = Vec::new();
-                    for p in names(&dir) {
+                    for p in read_names(&dir)? {
                         if p.is_dir() {
                             if !p.is_symlink()
                                 && !HEAVY_DIRS
@@ -444,7 +461,7 @@ fn refs(
                             {
                                 dirs.push(p);
                             }
-                        } else if p.is_file() {
+                        } else if p.is_file() && !p.is_symlink() {
                             total += p.metadata()?.len();
                             candidates.insert(
                                 paths::canonicalize(&p.to_string_lossy(), roots).replace('\\', "/"),
@@ -984,4 +1001,53 @@ fn appearance(
         );
     }
     Ok(data)
+}
+
+#[cfg(test)]
+mod review_tests {
+    use super::*;
+    #[test]
+    fn listing_failure_is_not_an_empty_directory() {
+        let home = tempfile::tempdir().unwrap();
+        let file = home.path().join("not-a-directory");
+        std::fs::write(&file, b"content").unwrap();
+        assert!(read_names(&file).is_err());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn referenced_parent_does_not_export_secret_file_symlinks() {
+        let home = tempfile::tempdir().unwrap();
+        let scripts = home.path().join("scripts/package");
+        std::fs::create_dir_all(&scripts).unwrap();
+        std::fs::write(scripts.join("tool.sh"), b"echo safe").unwrap();
+        std::fs::write(home.path().join("credentials.json"), b"fixture-secret").unwrap();
+        std::os::unix::fs::symlink(
+            home.path().join("credentials.json"),
+            scripts.join("innocent.txt"),
+        )
+        .unwrap();
+        let roots = Roots {
+            home: home.path().display().to_string(),
+            claude: home.path().join(".claude").display().to_string(),
+            codex: home.path().join(".codex").display().to_string(),
+            hangar: home.path().join("checkout").display().to_string(),
+        };
+        let context = Context::new(roots);
+        let mut bundle = Bundle::default();
+        let refs = refs(
+            &context,
+            &["sh ⟦HOME⟧/scripts/package/tool.sh".into()],
+            &mut bundle,
+            |_| true,
+        )
+        .unwrap();
+        assert!(refs.get("⟦HOME⟧/scripts/package/tool.sh").is_some());
+        assert!(refs.get("⟦HOME⟧/scripts/package/innocent.txt").is_none());
+        assert!(
+            bundle
+                .files
+                .values()
+                .all(|blob| blob.data != b"fixture-secret")
+        );
+    }
 }

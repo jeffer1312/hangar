@@ -38,7 +38,7 @@ impl Apply {
                 .into(),
             ),
         );
-        let runtime_config=super::runtime::RuntimeConfig::new(accounts.env.clone());
+        let runtime_config = super::runtime::RuntimeConfig::new(accounts.env.clone());
         Self {
             accounts,
             runtime_config,
@@ -507,7 +507,11 @@ impl Apply {
                 json!({"account":name}),
             );
         }
-        if let Some(alias) = entry["alias"].as_str().map(crate::transcript::py::strip).filter(|s| !s.is_empty()) {
+        if let Some(alias) = entry["alias"]
+            .as_str()
+            .map(crate::transcript::py::strip)
+            .filter(|s| !s.is_empty())
+        {
             let id = format!("claude:{}", catalog::resolved(&path).display());
             let clean = crate::orchestration::codec::truncate_string(alias, 40);
             if aliases::read(&self.accounts.env)
@@ -546,14 +550,20 @@ impl Apply {
         Ok(())
     }
     fn preferences(&mut self) -> Result<(), Error> {
-        use super::runtime_values::{ValueGuard,Values};
+        use super::runtime_values::{ValueGuard, Values};
         use crate::orchestration::codec;
         let item = "hangar_prefs";
-        let incoming = ValueGuard(export::uncanon(&self.bundle.items[item]["prefs"], &self.context.roots));
+        let incoming = ValueGuard(export::uncanon(
+            &self.bundle.items[item]["prefs"],
+            &self.context.roots,
+        ));
         let path = self.context.preferences.clone();
-        let mut runtime=self.runtime_config.clone().map_err(|message|Error::new("config_sync_runtime_invalid",message,json!({})))?;
-        runtime.path=path.clone();
-        let current=Values(runtime.read());
+        let mut runtime = self
+            .runtime_config
+            .clone()
+            .map_err(|message| Error::new("config_sync_runtime_invalid", message, json!({})))?;
+        runtime.path = path.clone();
+        let current = Values(runtime.read());
         let pending: Vec<_> = incoming
             .as_object()
             .into_iter()
@@ -561,11 +571,13 @@ impl Apply {
             .filter(|(k, v)| {
                 super::preferences::editable(k)
                     && !["sync", "term_origins", "scan_roots"].contains(&k.as_str())
-                    && !current.get(*k).is_some_and(|old| super::value_equality::equal(old, v))
+                    && !current
+                        .get(*k)
+                        .is_some_and(|old| super::value_equality::equal(old, v))
             })
             .map(|(k, _)| k.clone())
             .collect();
-        let mut pending=pending;
+        let mut pending = pending;
         pending.sort();
         if !pending.is_empty() && path.exists() {
             std::fs::copy(
@@ -574,8 +586,12 @@ impl Apply {
             )?;
         }
         for key in pending {
-            let changes=Values([(key.clone(),codec::clone_value(&incoming[&key]))].into_iter().collect());
-            match runtime.apply_checked(&changes,&Default::default()) {
+            let changes = Values(
+                [(key.clone(), codec::clone_value(&incoming[&key]))]
+                    .into_iter()
+                    .collect(),
+            );
+            match runtime.apply_checked(&changes, &Default::default()) {
                 Ok(value) => {
                     codec::discard(Value::Object(value));
                     self.changed(item, key);
@@ -585,7 +601,13 @@ impl Apply {
                     "config_sync_pref_rejected",
                     json!({"key":key,"error":error.message.chars().take(200).collect::<String>()}),
                 ),
-                Err(error)=>return Err(Error::new("config_sync_runtime_failed",error.message,json!({}))),
+                Err(error) => {
+                    return Err(Error::new(
+                        "config_sync_runtime_failed",
+                        error.message,
+                        json!({}),
+                    ));
+                }
             }
         }
         Ok(())
@@ -597,12 +619,8 @@ impl Apply {
         let target = folder.join("appearance.json");
         let mut image_changed = false;
         if data["background"].is_object() {
-            if let Some(blob) = self
-                .bundle
-                .files
-                .get("files/hangar_appearance/background-image")
-                .cloned()
             {
+                let blob = self.blob("files/hangar_appearance/background-image", false)?;
                 let name =
                     export::background_name(data["background"]["name"].as_str().unwrap_or(""));
                 for (name, blob) in [

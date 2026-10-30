@@ -94,16 +94,13 @@ pub fn move_path(src: &Path, dst: &Path) -> Result<(), Error> {
         Err(e) => Err(e.into()),
     }
 }
-fn current(path: &Path) -> Result<Option<BTreeMap<String, (Vec<u8>, bool)>>, Error> {
+fn current(path: &Path) -> Result<Option<BTreeMap<String, (Vec<u8>, u32)>>, Error> {
     if !path.exists() {
         return Ok(None);
     }
     let mut found = BTreeMap::new();
     if path.is_file() {
-        found.insert(
-            String::new(),
-            (std::fs::read(path)?, mode(path)? & 0o111 != 0),
-        );
+        found.insert(String::new(), (std::fs::read(path)?, mode(path)?));
         return Ok(Some(found));
     }
     let mut pending = vec![path.to_owned()];
@@ -125,7 +122,7 @@ fn current(path: &Path) -> Result<Option<BTreeMap<String, (Vec<u8>, bool)>>, Err
                         .unwrap()
                         .to_string_lossy()
                         .replace('\\', "/"),
-                    (std::fs::read(&p)?, mode(&p)? & 0o111 != 0),
+                    (std::fs::read(&p)?, mode(&p)?),
                 );
             }
         }
@@ -142,8 +139,8 @@ pub fn write_entry(
     if let Some(current) = current(dest)? {
         if current.len() == files.len()
             && files.iter().all(|(rel, b)| {
-                current.get(rel).is_some_and(|(bytes, exec)| {
-                    bytes == &b.data && (cfg!(windows) || *exec == (b.mode & 0o111 != 0))
+                current.get(rel).is_some_and(|(bytes, permissions)| {
+                    bytes == &b.data && (cfg!(windows) || *permissions == (b.mode & 0o777))
                 })
             })
         {
@@ -264,6 +261,12 @@ pub fn edit_json(
     backups: &Path,
     mut change: impl FnMut(&mut Value) -> Result<(), Error>,
 ) -> Result<bool, Error> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    // A trava coordena os escritores participantes; rename não é CAS contra editores externos.
+    let _guard = crate::session_open::claude::lock_config(path)
+        .map_err(|message| Error::new("config_sync_changed", message, json!({})))?;
     for _ in 0..3 {
         let raw = optional_read(path)?;
         let mut current = match &raw {

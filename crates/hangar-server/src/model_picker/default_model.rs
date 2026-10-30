@@ -93,17 +93,20 @@ pub async fn restore_after_write(config: &Path, before: &Snapshot) -> Result<boo
         }
         tokio::time::sleep(Duration::from_millis(150)).await;
     }
-    let first = restore_async(config, before).await?;
-    // O CLI pode gravar de novo depois da primeira restauração.
-    tokio::time::sleep(Duration::from_millis(600)).await;
-    Ok(restore_async(config, before).await? || first)
-}
-
-async fn restore_async(config: &Path, before: &Snapshot) -> Result<bool, String> {
-    let (config, before) = (config.to_owned(), before.clone());
-    tokio::task::spawn_blocking(move || restore(&config, &before))
+    async fn restore_locked(config: &Path, before: &Snapshot) -> Result<bool, String> {
+        let (config, before) = (config.to_owned(), before.clone());
+        tokio::task::spawn_blocking(move || {
+            std::fs::create_dir_all(&config).map_err(|error| error.to_string())?;
+            let _guard = crate::session_open::claude::lock_config(&config.join("settings.json"))?;
+            restore(&config, &before)
+        })
         .await
         .map_err(|error| error.to_string())?
+    }
+    let first = restore_locked(config, before).await?;
+    // O CLI pode gravar de novo depois da primeira restauração.
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    Ok(restore_locked(config, before).await? || first)
 }
 
 impl PartialEq for Snapshot {

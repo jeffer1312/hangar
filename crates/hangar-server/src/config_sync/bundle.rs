@@ -189,10 +189,14 @@ impl Bundle {
         Ok(archive.into_inner()?.finish()?)
     }
     pub fn unpack(raw: &[u8]) -> Result<Self, Error> {
+        Self::unpack_with_entry_limit(raw, 100_000)
+    }
+    fn unpack_with_entry_limit(raw: &[u8], entry_limit: usize) -> Result<Self, Error> {
         let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(Cursor::new(raw)));
         let mut result = Self::default();
         let mut meta = Value::Null;
         let mut total = 0u64;
+        let mut count = 0usize;
         static MEMBER: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
             regex::Regex::new(r"\A(?:manifest\.json|files/[a-z_]+/.+|refs/[0-9a-f]{40})\z").unwrap()
         });
@@ -200,6 +204,10 @@ impl Bundle {
             .entries()
             .map_err(|_| Error::invalid("pacote ilegível"))?
         {
+            count += 1;
+            if count > entry_limit {
+                return Err(Error::invalid("pacote com entradas demais"));
+            }
             let mut entry = entry.map_err(|_| Error::invalid("pacote ilegível"))?;
             let name = String::from_utf8_lossy(&entry.path_bytes()).into_owned();
             if !entry.header().entry_type().is_file()
@@ -256,7 +264,37 @@ impl Bundle {
             ));
         }
         result.items = meta["items"].as_object().cloned().unwrap_or_default();
-        result.warnings = meta["warnings"].as_object().cloned().unwrap_or_default();
+        result.warnings = meta["warnings"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter(|(_, value)| value.is_array())
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod review_tests {
+    use super::*;
+    #[test]
+    fn empty_entries_also_count_toward_the_archive_limit() {
+        let mut bundle = Bundle::default();
+        bundle.files.insert(
+            "files/engines/a".into(),
+            Blob {
+                data: vec![],
+                mode: 0o600,
+            },
+        );
+        let raw = bundle.pack().unwrap();
+        assert!(Bundle::unpack_with_entry_limit(&raw, 2).is_ok());
+        assert_eq!(
+            Bundle::unpack_with_entry_limit(&raw, 1)
+                .unwrap_err()
+                .message,
+            "pacote com entradas demais"
+        );
     }
 }
