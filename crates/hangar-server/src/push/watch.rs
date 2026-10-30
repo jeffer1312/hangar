@@ -278,6 +278,8 @@ pub fn seed_resumes_finish(memory: &Memory, sid: &str, state: &str) -> bool { st
 fn now_epoch() -> f64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64()) }
 
 struct Watch {
+    #[cfg(test)]
+    finish_source: Option<Arc<dyn finished::FinishSources>>,
     st: Arc<AppState>,
     env: BTreeMap<String, String>,
     sender: Arc<Sender>,
@@ -297,6 +299,11 @@ where
 }
 
 impl Watch {
+    fn finish_source(&self) -> &dyn finished::FinishSources {
+        #[cfg(test)]
+        if let Some(source) = &self.finish_source { return source.as_ref(); }
+        self
+    }
     fn settings(&self) -> Settings { Settings::read(&self.st.accounts.env.claude_base, &self.env) }
 
     fn persist(&self) {
@@ -356,19 +363,28 @@ impl Watch {
 
     /// "Terminou" depois de a sessão sossegar, sem trabalho de fundo aberto e com a série longa.
     async fn finished(self: Arc<Self>, sid: String, started: f64, idle_ts: f64) {
-        let initial = match finished::FinishSources::row(self.as_ref(), &sid).await {
+        let source = self.finish_source();
+        let initial = match source.row(&sid).await {
             Ok(row) => row,
             Err(code) => { finished::FinishSources::failure(self.as_ref(), &sid, &code); return; }
         };
         if initial.is_some_and(|row| terminal_notices::owns(&row.provider)) {
-            finished::confirm_and_finish(self.as_ref(), &sid, started, idle_ts).await;
+            finished::confirm_and_finish(source, &sid, started, idle_ts).await;
             return;
         }
-        tokio::time::sleep(FINISH_SETTLE).await;
-        if !self.state_of(&sid).is_some_and(|m| m.state == "idle" && m.ts == idle_ts) { return; }
+        source.sleep(FINISH_SETTLE).await;
+        if !source.marker(&sid).is_some_and(|(state, ts)| state == "idle" && ts == idle_ts) { return; }
         let same = |me: &Self| me.memory.lock().unwrap_or_else(|e| e.into_inner()).started.get(&sid) == Some(&started);
         if !same(&self) { return; }
-        let row = self.row_of(&sid, false).await;
+        let row = match source.row(&sid).await {
+            Ok(row) => row,
+            Err(code) => { source.failure(&sid, &code); return; }
+        };
+        // A sessão pode entrar na lista durante a espera, sem outro marcador idle.
+        if row.as_ref().is_some_and(|row| terminal_notices::owns(&row.provider)) {
+            finished::settled(source, &sid, started, idle_ts).await;
+            return;
+        }
         let mut reply = None;
         if let Some(jsonl) = row.as_ref().filter(|r| r.provider == "claude").and_then(|r| r.jsonl.clone()) {
             match tokio::task::spawn_blocking(move || scan(Path::new(&jsonl), now_epoch())).await {
@@ -500,7 +516,7 @@ pub fn start(st: Arc<AppState>) -> Vec<tokio::task::JoinHandle<()>> {
     if st.state.runtime.get().is_none() { return Vec::new(); }
     let env = super::server_env();
     let memory_path = Memory::path(&st.accounts.env.home);
-    let w = Arc::new(Watch { sender: Sender::new(st.clone(), env.clone()), env, memory: Mutex::new(Memory::load(&memory_path)),
+    let w = Arc::new(Watch { #[cfg(test)] finish_source: None, sender: Sender::new(st.clone(), env.clone()), env, memory: Mutex::new(Memory::load(&memory_path)),
         memory_path, hooks: Mutex::new(HookStates::default()), st });
     vec![tokio::spawn(w.clone().transitions()), tokio::spawn(w.sweep())]
 }

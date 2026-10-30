@@ -63,6 +63,10 @@ pub(super) async fn confirm_and_finish(source: &dyn FinishSources, sid: &str, st
 
 pub(super) async fn finished(source: &dyn FinishSources, sid: &str, started: f64, idle_ts: f64) {
     source.sleep(super::FINISH_SETTLE).await;
+    settled(source, sid, started, idle_ts).await;
+}
+
+pub(super) async fn settled(source: &dyn FinishSources, sid: &str, started: f64, idle_ts: f64) {
     let Some((state, timestamp)) = source.marker(sid) else { return; };
     if state != "idle" || timestamp != idle_ts || !source.same_series(sid, started) { return; }
     if let Err(code) = source.row(sid).await { source.failure(sid, &code); return; }
@@ -147,6 +151,34 @@ mod tests {
         fn notify_finished(&self,name:&str){self.notices.lock().unwrap().push(json!([name]));}
         fn failure(&self,_:&str,code:&str){self.failures.lock().unwrap().push(code.into());}
     }
+    #[tokio::test]
+    async fn guest_push_watch_finished_discovers_terminal_after_settle() {
+        for provider in ["pi", "omp", "kimi"] {
+            let home = tempfile::tempdir().unwrap();
+            let mut state = crate::routes::AppState::new(crate::config::Config {
+                listen: "127.0.0.1:0".parse().unwrap(), upstream: "127.0.0.1:1".parse().unwrap(),
+                internal_secret: "fixture-secret".into(), auth_token: "fixture-owner".into(),
+                log_path: None, trusted: crate::auth::TrustedHosts::parse("127.0.0.1"),
+            });
+            state.accounts.env = crate::accounts::environment::AccountEnvironment::from_map([
+                ("HOME".into(), home.path().to_string_lossy().into_owned()),
+                ("USERPROFILE".into(), home.path().to_string_lossy().into_owned()),
+            ].into());
+            let state = std::sync::Arc::new(state);
+            let source = std::sync::Arc::new(Fake {provider:provider.into(),scenario:"appeared_before_send".into(),reads:Mutex::default(),failed_read:0,failures:Mutex::default(),rechecks:0,advance_marker:false,series:Mutex::new([("sid".into(),1000.0)].into()),sleeps:Mutex::default(),notices:Mutex::default()});
+            let watch = std::sync::Arc::new(super::super::Watch {
+                finish_source: Some(source.clone()), sender: super::super::Sender::new(state.clone(), Default::default()),
+                st: state, env: Default::default(), hooks: Mutex::default(),
+                memory: Mutex::new(super::super::Memory {started:[("sid".into(),1000.0)].into(),..Default::default()}),
+                memory_path: home.path().join("push.json"),
+            });
+            watch.finished("sid".into(),1000.0,1100.0).await;
+            assert_eq!(*source.notices.lock().unwrap(), vec![serde_json::json!(["session"])], "GUE-082 {provider}");
+            assert!(source.series.lock().unwrap().is_empty());
+            assert_eq!(*source.sleeps.lock().unwrap(), vec![20.0]);
+        }
+    }
+
     #[tokio::test]
     async fn guest_push_finished_matches_original_producer() {
         let fixture:Value=serde_json::from_str(include_str!("../../../../../backend/tests/fixtures/contract/guests/push.json")).unwrap();
