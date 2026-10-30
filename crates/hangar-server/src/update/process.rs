@@ -63,10 +63,14 @@ pub fn run_with_env(
 
 /// Captura os dois canais sem misturar diagnósticos ao valor retornado pelo programa.
 pub fn run_capture_with_env(args:&[String],cwd:&Path,timeout:Duration,env:&BTreeMap<String,String>)->Result<ProcessOutput,ProcessError>{
-    execute(args,cwd,timeout,env,&|_|{},|reader|Box::new(reader),true)
+    execute(args,cwd,timeout,env,&|_|{},|reader|Box::new(reader),true,false)
+}
+/// Executa com o retrato completo do ambiente do usuário, sem impor idioma de diagnóstico.
+pub fn run_capture_user_environment(args:&[String],cwd:&Path,timeout:Duration,env:&BTreeMap<String,String>)->Result<ProcessOutput,ProcessError>{
+    execute(args,cwd,timeout,env,&|_|{},|reader|Box::new(reader),true,true)
 }
 fn run_with_reader(args:&[String],cwd:&Path,timeout:Duration,env:&BTreeMap<String,String>,log:&dyn Fn(&str),reader:impl FnOnce(std::io::PipeReader)->Box<dyn Read+Send>)->Result<ProcessOutput,ProcessError>{
-    execute(args,cwd,timeout,env,log,reader,false)
+    execute(args,cwd,timeout,env,log,reader,false,false)
 }
 fn execute(
     args: &[String],
@@ -76,6 +80,7 @@ fn execute(
     log: &dyn Fn(&str),
     reader: impl FnOnce(std::io::PipeReader) -> Box<dyn Read + Send>,
     capture: bool,
+    user_environment: bool,
 ) -> Result<ProcessOutput, ProcessError> {
     let Some(program) = args.first() else {
         return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "comando vazio").into());
@@ -85,11 +90,10 @@ fn execute(
     let reader = reader(pipe_reader);
     let (error_reader,error_writer)=if capture{let (reader,writer)=std::io::pipe()?;(Some(reader),writer)}else{(None,writer.try_clone()?)};
     let mut command = Command::new(program);
+    if user_environment { command.env_clear(); } else { command.env("LC_ALL", "C").env("LANGUAGE", "C"); }
     command
         .args(&args[1..])
         .current_dir(cwd)
-        .env("LC_ALL", "C")
-        .env("LANGUAGE", "C")
         .envs(env)
         .stdin(Stdio::null())
         .stdout(writer.try_clone()?)

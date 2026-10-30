@@ -44,13 +44,7 @@ impl Panel {
             .map(crate::transcript::py::strip)
             .filter(|s| !s.is_empty())
         {
-            let expanded = if entry == "~" {
-                self.environment.home.clone()
-            } else if let Some(rest) = entry.strip_prefix("~/") {
-                self.environment.home.join(rest)
-            } else {
-                PathBuf::from(entry)
-            };
+            let expanded = expand_user(entry,&self.environment.home);
             let path = self.realpath(&expanded.to_string_lossy());
             if Path::new(&path).is_dir() && !roots.contains(&path) {
                 roots.push(path);
@@ -305,3 +299,27 @@ impl Panel {
         })
     }
 }
+
+fn expand_user(value:&str,home:&Path)->PathBuf {
+    let Some(tail)=value.strip_prefix('~') else{return value.into()};
+    let (name,suffix)=tail.split_once('/').unwrap_or((tail,""));
+    let base=if name.is_empty(){Some(home.to_owned())}else{user_home(name)};
+    base.map(|base|if suffix.is_empty(){base}else{base.join(suffix.trim_start_matches('/'))}).unwrap_or_else(||value.into())
+}
+#[cfg(unix)]
+fn user_home(name:&str)->Option<PathBuf>{
+    use std::{ffi::{CString,CStr},os::unix::ffi::OsStrExt};
+    let name=CString::new(name).ok()?;
+    let mut size=1024usize;
+    loop {
+        let mut buffer=vec![0u8;size];let mut entry=std::mem::MaybeUninit::<libc::passwd>::uninit();let mut result=std::ptr::null_mut();
+        // O buffer pertence à chamada e mantém pw_dir válido até a cópia abaixo.
+        let code=unsafe{libc::getpwnam_r(name.as_ptr(),entry.as_mut_ptr(),buffer.as_mut_ptr().cast(),buffer.len(),&mut result)};
+        if code==libc::ERANGE{size=size.checked_mul(2)?;continue;}
+        if code!=0||result.is_null(){return None;}
+        let directory=unsafe{CStr::from_ptr((*result).pw_dir)};
+        return Some(PathBuf::from(std::ffi::OsStr::from_bytes(directory.to_bytes())));
+    }
+}
+#[cfg(not(unix))]
+fn user_home(_name:&str)->Option<PathBuf>{None}

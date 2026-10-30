@@ -211,7 +211,7 @@ impl Panel {
     ) -> Result<crate::update::process::ProcessOutput, String> {
         let mut resolved=args.to_vec();
         if let Some(program)=args.first().and_then(|name|self.binary(name)){resolved[0]=program.to_string_lossy().into_owned();}
-        crate::update::process::run_capture_with_env(
+        crate::update::process::run_capture_user_environment(
             &resolved,&self.cwd,Duration::from_secs(seconds),&self.environment.base,
         ).map_err(|error|match error{
             crate::update::process::ProcessError::Spawn(error)=>spawn_error(&error,args.first().map(String::as_str).unwrap_or("")),
