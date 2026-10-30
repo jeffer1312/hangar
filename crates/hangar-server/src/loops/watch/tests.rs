@@ -4,6 +4,8 @@ use crate::loops::store::new_loop;
 #[derive(Default)]
 struct Fake {
     claude: std::path::PathBuf,
+    gates: crate::runtime::ingress::IngressGates,
+    guard_error: Option<&'static str>,
     rows: Mutex<Option<Vec<SessionRow>>>,
     sent: bool,
     automations: bool,
@@ -17,6 +19,12 @@ struct Fake {
 
 impl Host for Fake {
     fn store(&self) -> Store { Store::new(&self.claude) }
+    fn guard<'a>(&'a self, expected: &'a SessionRow) -> BoxFuture<'a, Result<(crate::runtime::ingress::IngressPass, SessionRow), &'static str>> {
+        Box::pin(async move {
+            if let Some(code) = self.guard_error { return Err(code); }
+            enter_tick(&self.gates, expected, async { Ok(lock(&self.rows).as_ref().and_then(|rows| rows.iter().find(|row| row.name == expected.name).cloned())) }).await
+        })
+    }
     fn row_by_sid<'a>(&'a self, sid: &'a str) -> BoxFuture<'a, Option<SessionRow>> {
         Box::pin(async move { lock(&self.rows).as_ref()?.iter().find(|r| key_of(r).as_deref() == Some(sid)).cloned() })
     }
@@ -41,7 +49,7 @@ impl Host for Fake {
 
 fn row(name: &str, provider: &str, headless: bool, state: &str) -> SessionRow {
     serde_json::from_value(json!({"name": name, "provider": provider, "headless": headless, "state": state,
-        "jsonl": format!("/p/{name}-0000.jsonl"), "cwd": "/w"})).unwrap()
+        "jsonl": format!("/p/{name}-0000.jsonl"), "lifecycle_id": format!("k:{name}"), "cwd": "/w"})).unwrap()
 }
 
 fn host(dir: &tempfile::TempDir, rows: Vec<SessionRow>) -> Fake {
@@ -199,4 +207,160 @@ async fn guest_loop_invalid_config_preserves_chain_and_reports() {
     assert_eq!(source.store().chain("s"),before);
     assert!(lock(&source.delivered).is_empty());
     assert_eq!(*lock(&source.diags),["loop.chain_failed:loop_config_invalid"]);
+}
+
+/// D59: sidecar herdado de outra vida não autoriza comandos no provedor novo.
+#[tokio::test]
+async fn guest_loop_unsupported_provider_preserves_sidecar_at_every_entry() {
+    for provider in ["pi", "omp", "kimi", "codex"] {
+        for trigger in ["pause", "idle", "boot"] {
+            let dir = tempfile::tempdir().unwrap();
+            let w = Watcher::new(Arc::new(host(&dir, vec![row("s", provider, false, "idle")])), Duration::ZERO);
+            running(&w.host.store(), "s");
+            let path = w.host.store().loop_dir().join("s.json");
+            let before = std::fs::read(&path).unwrap();
+            match trigger {
+                "pause" => w.pause("s-0000").await,
+                "idle" => w.idle(idle("s")).await,
+                _ => w.boot(1, Duration::ZERO).await,
+            }
+            tokio::task::yield_now().await;
+            assert_eq!(std::fs::read(&path).unwrap(), before, "D59 {provider}/{trigger}");
+            assert!(lock(&w.host.ticks).is_empty(), "D59 {provider}/{trigger}");
+            assert!(lock(&w.host.delivered).is_empty());
+            assert!(lock(&w.host.pushed).is_empty());
+            assert_eq!(*lock(&w.host.diags), ["loop.provider_refused:loop_provider_unsupported"], "D59 {provider}/{trigger}");
+        }
+    }
+}
+
+fn selected_life() -> SessionRow {
+    let mut selected = row("s", "claude", false, "idle");
+    selected.lifecycle_id = Some("k:original".into());
+    selected
+}
+
+#[tokio::test]
+async fn guest_loop_life_guard_rejects_changed_snapshots_and_releases_ingress() {
+    use crate::runtime::ingress::IngressGates;
+    let expected = selected_life();
+    let mut variants = Vec::new();
+    for provider in ["pi", "omp", "kimi", "codex"] {
+        let mut changed = expected.clone(); changed.provider = provider.into();
+        variants.push((Some(changed), "loop_provider_unsupported"));
+    }
+    let mut changed = expected.clone(); changed.lifecycle_id = Some("k:nova".into());
+    variants.push((Some(changed), "loop_life_changed"));
+    let mut changed = expected.clone(); changed.jsonl = Some("outra.jsonl".into());
+    variants.push((Some(changed), "loop_life_changed"));
+    let mut changed = expected.clone(); changed.lifecycle_id = None;
+    variants.push((Some(changed), "loop_life_unavailable"));
+    variants.push((None, "loop_life_changed"));
+    for (current, code) in variants {
+        let gates = IngressGates::default();
+        assert_eq!(enter_tick(&gates, &expected, async { Ok(current) }).await.err(), Some(code));
+        gates.hold("s", Duration::from_secs(1)).await.unwrap();
+        gates.release("s");
+    }
+    let gates = IngressGates::default();
+    assert_eq!(enter_tick(&gates, &expected, async { Err("loop_list_unavailable") }).await.err(), Some("loop_list_unavailable"));
+    gates.hold("s", Duration::from_secs(1)).await.unwrap();
+    let read = std::sync::atomic::AtomicBool::new(false);
+    let result = enter_tick(&gates, &expected, async { read.store(true, std::sync::atomic::Ordering::SeqCst); Ok(Some(expected.clone())) }).await;
+    assert_eq!(result.err(), Some("session_transfer_busy"));
+    assert!(!read.load(std::sync::atomic::Ordering::SeqCst), "porta retida recusa antes da releitura");
+    gates.release("s");
+}
+
+#[tokio::test]
+async fn guest_loop_life_guard_checks_the_snapshot_after_acquiring_ingress_and_cancels_cleanly() {
+    use crate::runtime::ingress::IngressGates;
+    for cancel in [false, true] {
+        let gates = IngressGates::default();
+        let current = Arc::new(Mutex::new(selected_life()));
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (resume_tx, resume_rx) = tokio::sync::oneshot::channel();
+        let (task_gates, task_current) = (gates.clone(), current.clone());
+        let task = tokio::spawn(async move {
+            enter_tick(&task_gates, &selected_life(), async {
+                entered_tx.send(()).unwrap();
+                let _ = resume_rx.await;
+                Ok(Some(lock(&task_current).clone()))
+            }).await.err()
+        });
+        entered_rx.await.unwrap();
+        assert!(gates.hold("s", Duration::from_millis(20)).await.is_err(), "releitura já segura a vida");
+        lock(&current).lifecycle_id = Some("k:substituida".into());
+        if cancel {
+            task.abort();
+            assert!(task.await.unwrap_err().is_cancelled());
+        } else {
+            resume_tx.send(()).unwrap();
+            assert_eq!(task.await.unwrap(), Some("loop_life_changed"));
+        }
+        gates.hold("s", Duration::from_secs(1)).await.unwrap();
+        gates.release("s");
+    }
+}
+
+#[tokio::test]
+async fn guest_loop_runtime_uses_the_existing_pass_while_close_waits() {
+    use crate::runtime::{gateway::RuntimeRegistry, ingress::IngressGates};
+    let runtime = Arc::new(RuntimeRegistry::new("127.0.0.1:1".parse().unwrap(), "fixture".into(), "fixture".into()));
+    let gates = runtime.ingress().clone();
+    let expected = selected_life();
+    let mut fresh = expected.clone(); fresh.cwd = Some("pasta-atual".into());
+    let (pass, current) = enter_tick(&gates, &expected, async { Ok(Some(fresh)) }).await.unwrap();
+    assert_eq!(current.cwd.as_deref(), Some("pasta-atual"));
+    let wrong = IngressGates::default().enter("s", Duration::ZERO).await.unwrap();
+    assert_eq!(runtime.adopt_claude_terminal_entered("s", &wrong).await.unwrap_err().code, "runtime_ingress_mismatch");
+    assert_eq!(runtime.adopt_claude_terminal_entered("outra", &pass).await.unwrap_err().code, "runtime_ingress_mismatch");
+    let close_gates = gates.clone();
+    let closing = tokio::spawn(async move { close_gates.close("s", Duration::from_secs(2)).await });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if gates.enter("s", Duration::ZERO).await.is_err() { break; }
+            tokio::task::yield_now().await;
+        }
+    }).await.unwrap();
+    assert!(!closing.is_finished());
+    tokio::time::timeout(Duration::from_secs(1), runtime.adopt_claude_terminal_entered("s", &pass)).await.unwrap().unwrap();
+    let error = tokio::time::timeout(Duration::from_secs(1), runtime.drain_entered("s", &pass)).await.unwrap().unwrap_err();
+    assert_eq!(error.code, "runtime_binding", "sem ator é erro de vínculo, não reentrada na porta fechando");
+    drop(pass);
+    closing.await.unwrap().unwrap();
+    gates.open("s");
+}
+
+#[tokio::test]
+async fn guest_loop_pause_preserves_sidecar_when_the_life_guard_refuses() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = Fake { guard_error: Some("loop_life_changed"), ..host(&dir, vec![row("s", "claude", false, "awaiting_input")]) };
+    let w = Watcher::new(Arc::new(host), Duration::ZERO);
+    running(&w.host.store(), "s");
+    let path = w.host.store().loop_dir().join("s.json");
+    let before = std::fs::read(&path).unwrap();
+    w.pause("s-0000").await;
+    assert_eq!(std::fs::read(path).unwrap(), before, "D59: pergunta antiga não pausa outra vida");
+    assert_eq!(*lock(&w.host.diags), ["loop.pause_refused:loop_life_changed"]);
+}
+
+#[tokio::test]
+async fn guest_loop_life_pass_is_released_when_the_cycle_is_cancelled() {
+    let gates = crate::runtime::ingress::IngressGates::default();
+    let task_gates = gates.clone();
+    let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(async move {
+        let expected = selected_life();
+        let (pass, _) = enter_tick(&task_gates, &expected, async { Ok(Some(expected.clone())) }).await.unwrap();
+        entered_tx.send(()).unwrap();
+        std::future::pending::<()>().await;
+        drop(pass);
+    });
+    entered_rx.await.unwrap();
+    assert!(gates.hold("s", Duration::from_millis(20)).await.is_err());
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    gates.hold("s", Duration::from_secs(1)).await.unwrap();
+    gates.release("s");
 }

@@ -1,0 +1,174 @@
+{
+  "source_commit": "ba2c46e99dd157c0fe691c0990928ba98dc47ed4",
+  "command": "cd backend && uv run python tests/fixtures/contract/guests/capture_loop_resolve_failure.py",
+  "isolation": "Handler e _loop_ctx originais por AST; LoopLink real em tempor\u00e1rio; registro, fila, drain e push simulados; sem autentica\u00e7\u00e3o ou sess\u00e3o real.",
+  "rows": [
+    {
+      "provider": "claude",
+      "accept": false,
+      "initial": {
+        "goal": "objetivo",
+        "check_cmd": null,
+        "max_iters": 0,
+        "require_branch": false,
+        "status": "done_claimed",
+        "iter": 0,
+        "goal_entry_id": null,
+        "goal_delivered_ts": null,
+        "history": [],
+        "started_ts": 1000.0,
+        "ended_ts": null,
+        "ended_reason": null
+      },
+      "status": 200,
+      "response": "{\"loop\":{\"goal\":\"objetivo\",\"check_cmd\":null,\"max_iters\":0,\"require_branch\":false,\"status\":\"exhausted\",\"iter\":0,\"goal_entry_id\":null,\"goal_delivered_ts\":null,\"history\":[],\"started_ts\":1000.0,\"ended_ts\":1000.0,\"ended_reason\":\"esgotou 0 itera\u00e7\u00f5es\"}}",
+      "after": {
+        "goal": "objetivo",
+        "check_cmd": null,
+        "max_iters": 0,
+        "require_branch": false,
+        "status": "exhausted",
+        "iter": 0,
+        "goal_entry_id": null,
+        "goal_delivered_ts": null,
+        "history": [],
+        "started_ts": 1000.0,
+        "ended_ts": 1000.0,
+        "ended_reason": "esgotou 0 itera\u00e7\u00f5es"
+      },
+      "unchanged": false,
+      "queued": [],
+      "drained": [],
+      "pushed": [
+        [
+          "s",
+          "loop esgotou as itera\u00e7\u00f5es: esgotou 0 itera\u00e7\u00f5es"
+        ]
+      ]
+    },
+    {
+      "provider": "claude",
+      "accept": false,
+      "initial": {
+        "goal": "objetivo",
+        "check_cmd": null,
+        "max_iters": 10,
+        "require_branch": false,
+        "status": "done_claimed",
+        "iter": 0,
+        "goal_entry_id": null,
+        "goal_delivered_ts": null,
+        "history": [],
+        "started_ts": 1000.0,
+        "ended_ts": null,
+        "ended_reason": null
+      },
+      "status": 500,
+      "response": "Internal Server Error",
+      "after": {
+        "goal": "objetivo",
+        "check_cmd": null,
+        "max_iters": 10,
+        "require_branch": false,
+        "status": "running",
+        "iter": 0,
+        "goal_entry_id": null,
+        "goal_delivered_ts": null,
+        "history": [],
+        "started_ts": 1000.0,
+        "ended_ts": null,
+        "ended_reason": null
+      },
+      "unchanged": false,
+      "queued": [],
+      "drained": [],
+      "pushed": []
+    },
+    {
+      "provider": "claude",
+      "accept": true,
+      "initial": {
+        "goal": "objetivo",
+        "check_cmd": null,
+        "max_iters": 0,
+        "require_branch": false,
+        "status": "done_claimed",
+        "iter": 0,
+        "goal_entry_id": null,
+        "goal_delivered_ts": null,
+        "history": [],
+        "started_ts": 1000.0,
+        "ended_ts": null,
+        "ended_reason": null
+      },
+      "status": 200,
+      "response": "{\"loop\":{\"goal\":\"objetivo\",\"check_cmd\":null,\"max_iters\":0,\"require_branch\":false,\"status\":\"done\",\"iter\":0,\"goal_entry_id\":null,\"goal_delivered_ts\":null,\"history\":[],\"started_ts\":1000.0,\"ended_ts\":1000.0,\"ended_reason\":\"confirmado pronto\"}}",
+      "after": {
+        "goal": "objetivo",
+        "check_cmd": null,
+        "max_iters": 0,
+        "require_branch": false,
+        "status": "done",
+        "iter": 0,
+        "goal_entry_id": null,
+        "goal_delivered_ts": null,
+        "history": [],
+        "started_ts": 1000.0,
+        "ended_ts": 1000.0,
+        "ended_reason": "confirmado pronto"
+      },
+      "unchanged": false,
+      "queued": [],
+      "drained": [],
+      "pushed": [
+        [
+          "s",
+          "loop conclu\u00eddo: confirmado pronto"
+        ]
+      ]
+    },
+    {
+      "provider": "claude",
+      "accept": true,
+      "initial": {
+        "goal": "objetivo",
+        "check_cmd": null,
+        "max_iters": 10,
+        "require_branch": false,
+        "status": "done_claimed",
+        "iter": 0,
+        "goal_entry_id": null,
+        "goal_delivered_ts": null,
+        "history": [],
+        "started_ts": 1000.0,
+        "ended_ts": null,
+        "ended_reason": null
+      },
+      "status": 200,
+      "response": "{\"loop\":{\"goal\":\"objetivo\",\"check_cmd\":null,\"max_iters\":10,\"require_branch\":false,\"status\":\"done\",\"iter\":0,\"goal_entry_id\":null,\"goal_delivered_ts\":null,\"history\":[],\"started_ts\":1000.0,\"ended_ts\":1000.0,\"ended_reason\":\"confirmado pronto\"}}",
+      "after": {
+        "goal": "objetivo",
+        "check_cmd": null,
+        "max_iters": 10,
+        "require_branch": false,
+        "status": "done",
+        "iter": 0,
+        "goal_entry_id": null,
+        "goal_delivered_ts": null,
+        "history": [],
+        "started_ts": 1000.0,
+        "ended_ts": 1000.0,
+        "ended_reason": "confirmado pronto"
+      },
+      "unchanged": false,
+      "queued": [],
+      "drained": [],
+      "pushed": [
+        [
+          "s",
+          "loop conclu\u00eddo: confirmado pronto"
+        ]
+      ]
+    }
+  ]
+}

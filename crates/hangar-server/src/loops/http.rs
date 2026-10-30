@@ -66,6 +66,7 @@ pub trait Backend: Send + Sync {
     fn automations(&self) -> Result<bool, &'static str>;
     /// A linha da sessão; `Err` é a resposta da lista indisponível.
     fn row<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<Option<SessionRow>, (StatusCode, Value)>>;
+    fn current_row<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<Option<SessionRow>, Reply>>;
     fn exists<'a>(&'a self, name: &'a str) -> BoxFuture<'a, bool>;
     /// Branch da worktree onde o agente da sessão trabalha.
     fn branch(&self, row: &SessionRow) -> Option<String>;
@@ -214,7 +215,7 @@ async fn create(b: &dyn Backend, name: &str, body: &[u8]) -> Result<Reply, Reply
     };
     if !(1..=100).contains(&max_iters) { return Err(unprocessable("max_iters: Input should be between 1 and 100")); }
     let require_branch = boolean(&m, "require_branch", Some(true))?;
-    let Some(row) = b.row(name).await? else {
+    let Some(row) = b.current_row(name).await? else {
         return Err(refused(StatusCode::NOT_FOUND, "erro_sessao_inexistente", "sessão não encontrada", json!({})));
     };
     // Sem fim de turno o tique nunca dispara: o loop ficaria rodando mudo.
@@ -262,13 +263,17 @@ async fn resolve(b: &dyn Backend, name: &str, body: &[u8]) -> Result<Reply, Repl
         return Err(refused(StatusCode::CONFLICT, "erro_loop_estado_errado", "loop não está aguardando confirmação", json!({})));
     };
     if accept { return Ok(loop_reply(tick::end(&store, name, "done", "confirmado pronto", &env).map_err(unwritable)?)); }
+    let row = b.current_row(name).await?;
+    if row.as_ref().is_some_and(|r| r.provider != "claude") {
+        return Err(refused(StatusCode::CONFLICT, "erro_loop_provider_invalido", "loop runner só suporta sessões claude", json!({})));
+    }
     d.insert("status".into(), json!("running"));
     store.set(name, &d).map_err(unwritable)?;
     let max = store::int(&d, "max_iters");
     if store::int(&d, "iter") + 1 > max {
         return Ok(loop_reply(tick::end(&store, name, "exhausted", &format!("esgotou {max} iterações"), &env).map_err(unwritable)?));
     }
-    if !b.row(name).await?.is_some_and(|r| r.jsonl.is_some()) {
+    if !row.is_some_and(|r| r.jsonl.is_some()) {
         tick::end(&store, name, "failed", "sessão morta", &env).map_err(unwritable)?;
         return Ok(loop_reply(store.get(name)));
     }
@@ -314,15 +319,24 @@ pub fn suggest_checks(cwd: &std::path::Path) -> Vec<String> {
 }
 
 /// O servidor de verdade.
-pub struct Live { pub st: Arc<AppState> }
+pub struct Live<'a> { pub st: Arc<AppState>, pass: Option<&'a crate::runtime::ingress::IngressPass> }
 
-impl Backend for Live {
+impl Backend for Live<'_> {
     fn store(&self) -> Store { super::store(&self.st) }
     fn now(&self) -> f64 { crate::nav_requests::now() }
     fn automations(&self) -> Result<bool, &'static str> { super::automations(&self.st) }
     fn row<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<Option<SessionRow>, Reply>> {
         Box::pin(async move {
             match tokio::time::timeout(crate::locate::LOCATE_TIMEOUT, self.st.list.find_row(name)).await {
+                Ok(Ok(row)) => Ok(row),
+                Ok(Err(e)) => Err(refused(StatusCode::SERVICE_UNAVAILABLE, e.code, e.detail, json!({}))),
+                Err(_) => Err(refused(StatusCode::SERVICE_UNAVAILABLE, "locate_timeout", "a lista de sessões não respondeu a tempo", json!({}))),
+            }
+        })
+    }
+    fn current_row<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<Option<SessionRow>, Reply>> {
+        Box::pin(async move {
+            match tokio::time::timeout(crate::locate::LOCATE_TIMEOUT, super::fresh_row(&self.st, name)).await {
                 Ok(Ok(row)) => Ok(row),
                 Ok(Err(e)) => Err(refused(StatusCode::SERVICE_UNAVAILABLE, e.code, e.detail, json!({}))),
                 Err(_) => Err(refused(StatusCode::SERVICE_UNAVAILABLE, "locate_timeout", "a lista de sessões não respondeu a tempo", json!({}))),
@@ -337,9 +351,23 @@ impl Backend for Live {
     }
     fn branch(&self, row: &SessionRow) -> Option<String> { super::branch(row) }
     fn append<'a>(&'a self, name: &'a str, text: &'a str) -> BoxFuture<'a, Result<String, (String, String)>> {
-        Box::pin(async move { super::append(&self.st, name, text).await.map_err(|e| (e.code, e.message)) })
+        Box::pin(async move {
+            let result = match self.pass {
+                Some(pass) => super::append_entered(&self.st, name, text, pass).await,
+                None => super::append(&self.st, name, text).await,
+            };
+            result.map_err(|e| (e.code, e.message))
+        })
     }
-    fn drain<'a>(&'a self, name: &'a str) -> BoxFuture<'a, ()> { Box::pin(super::drain(&self.st, name)) }
+    fn drain<'a>(&'a self, name: &'a str) -> BoxFuture<'a, ()> {
+        Box::pin(async move {
+            if let Some(pass) = self.pass {
+                if let Some(runtime) = self.st.state.runtime.get() && let Err(error) = runtime.drain_entered(name, pass).await {
+                    tracing::warn!(session = name, code = %error.code, "loop: drain falhou; a entrada fica na fila");
+                }
+            } else { super::drain(&self.st, name).await; }
+        })
+    }
     fn notify(&self, name: &str, status: &str, reason: &str) { super::notify(&self.st, name, status, reason); }
     fn refine<'a>(&'a self, goal: &'a str, check_cmd: Option<&'a str>) -> BoxFuture<'a, Result<String, String>> {
         Box::pin(async move {
@@ -408,7 +436,7 @@ async fn serve(st: &Arc<AppState>, req: Request) -> Response {
     let Some((name, operation)) = op(req.method(), req.uri().path()) else {
         return http_response(StatusCode::NOT_FOUND, json!({"detail": "Not Found"}));
     };
-    let _pass = if operation == Op::Get { None } else {
+    let pass = if operation == Op::Get { None } else {
         match crate::plans::routes::enter(st, &name).await { Ok(p) => p, Err(r) => return r }
     };
     let schema=schema_name(operation);
@@ -421,7 +449,7 @@ async fn serve(st: &Arc<AppState>, req: Request) -> Response {
         let error=crate::login_guests::schema::validate(schema,&Value::String(text.into())).unwrap_err();
         return http_response(StatusCode::from_u16(error.status).unwrap(),error.body);
     }
-    let (status, body) = handle(&Live { st: st.clone() }, &name, operation, &bytes).await;
+    let (status, body) = handle(&Live { st: st.clone(), pass: pass.as_ref() }, &name, operation, &bytes).await;
     http_response(status, body)
 }
 

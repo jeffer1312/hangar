@@ -21,6 +21,17 @@ fn claude_dir(st: &AppState) -> std::path::PathBuf {
 
 pub fn store(st: &AppState) -> store::Store { store::Store::new(&claude_dir(st)) }
 
+/// A produção nova mantém cache de descoberta; uma escrita precisa conferir o provedor atual.
+async fn fresh_row(st: &AppState, name: &str) -> Result<Option<SessionRow>, crate::list::bridge::ListError> {
+    st.list.fresh_session(name).await?;
+    let produced = st.list.refresh().await?;
+    match produced.rows.iter().find(|row| row.name == name).cloned() {
+        Some(row) => Ok(Some(row)),
+        None if produced.facts.unknown => Err(crate::list::bridge::ListError { code: "list_facts_unknown", detail: "fatos da lista indisponíveis" }),
+        None => Ok(None),
+    }
+}
+
 /// A chave mestra das automações (`automations_enabled` do Python).
 pub fn automations(st: &AppState) -> Result<bool, &'static str> {
     let config = crate::config_sync::runtime::RuntimeConfig::from_state(st).map_err(|_| "loop_config_invalid")?;
@@ -48,6 +59,16 @@ pub async fn append(st: &AppState, name: &str, text: &str) -> Result<String, cra
     let runtime = st.state.runtime.get()
         .ok_or_else(|| crate::runtime::protocol::RuntimeError { code: "runtime_unavailable".into(), message: "runtime indisponível".into() })?;
     runtime.adopt_claude_terminal(name).await?;
+    append_ready(runtime, name, text).await
+}
+
+async fn append_entered(st: &AppState, name: &str, text: &str, pass: &crate::runtime::ingress::IngressPass) -> Result<String, crate::runtime::protocol::RuntimeError> {
+    let runtime = st.state.runtime.get().ok_or_else(|| crate::runtime::protocol::RuntimeError::new("runtime_unavailable", "runtime indisponível"))?;
+    runtime.adopt_claude_terminal_entered(name, pass).await?;
+    append_ready(runtime, name, text).await
+}
+
+async fn append_ready(runtime: &crate::runtime::gateway::RuntimeRegistry, name: &str, text: &str) -> Result<String, crate::runtime::protocol::RuntimeError> {
     let id = crate::mods::state::random_hex(16);
     runtime.queue_action(name, format!("loop-append:{id}"), crate::runtime::queue::Action::Append {
         text: text.into(), delivered: false, ts: None, pre_transcript: false, entry_id: Some(id.clone()) }).await?;
@@ -84,8 +105,8 @@ pub fn last_assistant(jsonl: &Path) -> Option<String> {
     last
 }
 
-/// O tique de verdade de uma sessão, com a linha resolvida na hora em que foi agendado.
-pub struct Live { pub st: Arc<AppState>, pub row: SessionRow }
+/// O passe impede trocar a vida durante a conferência ou o re-prompt.
+pub struct Live { pub st: Arc<AppState>, pub row: SessionRow, pub(crate) pass: crate::runtime::ingress::IngressPass }
 
 impl tick::Env for Live {
     fn now(&self) -> f64 { crate::nav_requests::now() }
@@ -114,8 +135,10 @@ impl tick::Env for Live {
     }
     fn enqueue(&self, text: String) -> BoxFuture<'_, Result<(), String>> {
         Box::pin(async move {
-            append(&self.st, &self.row.name, &text).await.map_err(|e| e.code)?;
-            drain(&self.st, &self.row.name).await;
+            append_entered(&self.st, &self.row.name, &text, &self.pass).await.map_err(|e| e.code)?;
+            if let Some(runtime) = self.st.state.runtime.get() && let Err(error) = runtime.drain_entered(&self.row.name, &self.pass).await {
+                tracing::warn!(session = %self.row.name, code = %error.code, "loop: drain falhou; a entrada fica na fila");
+            }
             Ok(())
         })
     }

@@ -20,6 +20,7 @@ const BOOT_RETRY: Duration = Duration::from_secs(2);
 
 pub trait Host: Send + Sync + 'static {
     fn store(&self) -> Store;
+    fn guard<'a>(&'a self, row: &'a SessionRow) -> BoxFuture<'a, Result<(crate::runtime::ingress::IngressPass, SessionRow), &'static str>>;
     fn row_by_sid<'a>(&'a self, sid: &'a str) -> BoxFuture<'a, Option<SessionRow>>;
     /// A lista inteira; `None` enquanto ela não sabe quem está vivo.
     fn rows(&self) -> BoxFuture<'_, Option<Vec<SessionRow>>>;
@@ -102,9 +103,24 @@ impl<H: Host> Watcher<H> {
         }
     }
 
+    fn supports_loop(&self, row: &SessionRow) -> bool {
+        if row.provider == "claude" { return true; }
+        self.host.diag("loop.provider_refused", &row.name, "loop_provider_unsupported", "loop preservado: provedor incompatível com o vínculo");
+        false
+    }
+
     async fn pause(&self, sid: &str) {
         let Some(row) = self.host.row_by_sid(sid).await else { return };
         let store = self.host.store();
+        if !store.get(&row.name).is_some_and(|d| status(&d) == "running") { return; }
+        if !self.supports_loop(&row) { return; }
+        let (_pass, row) = match self.host.guard(&row).await {
+            Ok(guarded) => guarded,
+            Err(code) => {
+                self.host.diag("loop.pause_refused", &row.name, code, "pausa recusada; vínculo preservado");
+                return;
+            }
+        };
         let _one = loop_lock(&row.name).await;
         if !store.get(&row.name).is_some_and(|d| status(&d) == "running") { return; }
         let mut fields = serde_json::Map::new();
@@ -116,8 +132,9 @@ impl<H: Host> Watcher<H> {
 
     async fn idle(&self, ev: TurnEvent) {
         let Some(row) = self.host.row_by_sid(&ev.sid).await else { return };
-        if !crate::push::watch::turn_notices(&row.provider) { return; }
         let active = self.host.store().get(&row.name).is_some_and(|d| is_active(&d));
+        if active && !self.supports_loop(&row) { return; }
+        if !crate::push::watch::turn_notices(&row.provider) { return; }
         if !active {
             fire_chain(&*self.host, &row.name).await;
             return;
@@ -127,6 +144,7 @@ impl<H: Host> Watcher<H> {
 
     /// Uma volta em voo por sessão.
     pub fn schedule(&self, row: SessionRow) {
+        if !self.supports_loop(&row) { return; }
         if !lock(&self.inflight).insert(row.name.clone()) { return; }
         let (inflight, name, work) = (self.inflight.clone(), row.name.clone(), self.host.tick(row));
         tokio::spawn(async move {
@@ -181,6 +199,22 @@ impl super::tick::Env for HostEnv<'_> {
     fn notify(&self, status: &str, reason: &str) { self.host.notify(self.name, status, reason); }
 }
 
+/// Revalida a seleção sob o mesmo ingresso que impede troca de vida durante a conferência.
+async fn enter_tick<F>(gates: &crate::runtime::ingress::IngressGates, expected: &SessionRow, current: F)
+    -> Result<(crate::runtime::ingress::IngressPass, SessionRow), &'static str>
+where F: std::future::Future<Output = Result<Option<SessionRow>, &'static str>> {
+    let pass = gates.enter(&expected.name, Duration::ZERO).await.map_err(|_| "session_transfer_busy")?;
+    let row = current.await?.ok_or("loop_life_changed")?;
+    if row.provider != "claude" { return Err("loop_provider_unsupported"); }
+    if expected.lifecycle_id.as_deref().is_none_or(str::is_empty) || row.lifecycle_id.as_deref().is_none_or(str::is_empty) {
+        return Err("loop_life_unavailable");
+    }
+    if row.name != expected.name || row.lifecycle_id != expected.lifecycle_id || row.jsonl != expected.jsonl {
+        return Err("loop_life_changed");
+    }
+    Ok((pass, row))
+}
+
 /// O servidor de verdade.
 pub struct Live { pub st: Arc<AppState> }
 
@@ -188,6 +222,13 @@ fn key_of(row: &SessionRow) -> Option<String> { row.jsonl.as_deref().map(crate::
 
 impl Host for Live {
     fn store(&self) -> Store { super::store(&self.st) }
+    fn guard<'a>(&'a self, row: &'a SessionRow) -> BoxFuture<'a, Result<(crate::runtime::ingress::IngressPass, SessionRow), &'static str>> {
+        Box::pin(async move {
+            let runtime = self.st.state.runtime.get().ok_or("runtime_unavailable")?;
+            let current = async { super::fresh_row(&self.st, &row.name).await.map_err(|_| "loop_list_unavailable") };
+            enter_tick(runtime.ingress(), row, current).await
+        })
+    }
     fn row_by_sid<'a>(&'a self, sid: &'a str) -> BoxFuture<'a, Option<SessionRow>> {
         Box::pin(async move {
             for fresh in [false, true] {
@@ -223,7 +264,15 @@ impl Host for Live {
         let st = self.st.clone();
         Box::pin(async move {
             let name = row.name.clone();
-            let env = super::Live { st: st.clone(), row };
+            let host = Live { st: st.clone() };
+            let (pass, row) = match host.guard(&row).await {
+                Ok(guarded) => guarded,
+                Err(code) => {
+                    st.diag.report("loop.tick_refused", &name, code, "tique recusado; vínculo preservado");
+                    return;
+                }
+            };
+            let env = super::Live { st: st.clone(), row, pass };
             if let Err(e) = super::tick::run_tick(&super::store(&st), &name, &env).await {
                 let code = e.get_ref().and_then(|error| error.downcast_ref::<super::ConfigFailure>())
                     .map_or_else(|| format!("{:?}", e.kind()), |error| error.0.into());

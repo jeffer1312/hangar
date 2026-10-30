@@ -97,6 +97,12 @@ impl IngressGates {
     }
 }
 
+impl IngressPass {
+    pub(crate) fn protects(&self, gates: &IngressGates, name: &str) -> bool {
+        self.name == name && Arc::ptr_eq(&self.gates.inner, &gates.inner)
+    }
+}
+
 impl Drop for IngressPass {
     fn drop(&mut self) {
         let mut map = self.gates.inner.lock().unwrap();

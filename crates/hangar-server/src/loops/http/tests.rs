@@ -19,6 +19,7 @@ impl Backend for Fake {
     fn row<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<Option<SessionRow>, Reply>> {
         Box::pin(async move { Ok(self.rows.iter().find(|r| r.name == name).cloned()) })
     }
+    fn current_row<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<Option<SessionRow>, Reply>> { self.row(name) }
     fn exists<'a>(&'a self, name: &'a str) -> BoxFuture<'a, bool> { Box::pin(async move { self.rows.iter().any(|r| r.name == name) }) }
     fn branch(&self, _row: &SessionRow) -> Option<String> { self.branch.clone() }
     fn append<'a>(&'a self, name: &'a str, text: &'a str) -> BoxFuture<'a, Result<String, (String, String)>> {
@@ -209,4 +210,68 @@ async fn guest_loop_invalid_config_refuses_create_and_refine_without_effects() {
         assert!(fake.pushed.lock().unwrap().is_empty());
         assert!(fake.store.get("s").is_none());
     }
+}
+
+#[tokio::test]
+async fn guest_loop_resolve_provider_refuses_resume_without_side_effects() {
+    let fixture: Value = serde_json::from_str(include_str!("../../../../../backend/tests/fixtures/contract/guests/loop-resolve-provider.json")).unwrap();
+    for case in fixture["rows"].as_array().unwrap() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = Fake { store: Store::new(dir.path()), rows: vec![row(json!({"name":"s","provider":case["provider"],"jsonl":"fixture.jsonl"}))], automations:true, config:None, branch:None, queued:Mutex::default(), pushed:Mutex::default() };
+        fake.store.set("s",case["initial"].as_object().unwrap()).unwrap();
+        let path=fake.store.loop_dir().join("s.json");
+        let before=std::fs::read(&path).unwrap();
+        let body=serde_json::to_vec(&json!({"accept":case["accept"]})).unwrap();
+        let (status,response)=handle(&fake,"s",Op::Resolve,&body).await;
+        if case["provider"]!="claude" && case["accept"]==false {
+            assert_eq!(status,StatusCode::CONFLICT,"D59 {case}");
+            assert_eq!(response["detail"]["code"],"erro_loop_provider_invalido");
+            assert_eq!(std::fs::read(&path).unwrap(),before);
+            assert!(fake.queued.lock().unwrap().is_empty());
+            assert!(fake.pushed.lock().unwrap().is_empty());
+        } else {
+            assert_eq!(status.as_u16(),case["status"].as_u64().unwrap() as u16);
+            assert_eq!(response,case["response"],"{case}");
+            assert_eq!(json!(*fake.pushed.lock().unwrap()),case["pushed"]);
+        }
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn guest_loop_http_reuses_the_pass_while_rename_waits() {
+    use crate::runtime::gateway::RuntimeRegistry;
+    use std::time::Duration;
+    let home = tempfile::tempdir().unwrap();
+    let st = super::super::tests::invalid_config_state(home.path());
+    let runtime = Arc::new(RuntimeRegistry::new("127.0.0.1:1".parse().unwrap(), "fixture".into(), "fixture".into()));
+    let program = home.path().join("mux");
+    std::fs::write(&program, "#!/bin/sh\nexit 0\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+    runtime.bind_watcher(Arc::new(crate::runtime::codex_terminal::Watcher::new(crate::runtime::codex_terminal::WatchConfig {
+        home: home.path().to_owned(), queue_dir: home.path().join("queue"),
+        mux: crate::list::mux::Mux::with_program(&program, Duration::from_secs(1)), mux_program: program.into_os_string(),
+    }).with_scope_probe(Vec::new)));
+    let gates = runtime.ingress().clone();
+    assert!(st.state.runtime.set(runtime).is_ok());
+    let pass = gates.enter("s", Duration::ZERO).await.unwrap();
+    let live = Live { st, pass: Some(&pass) };
+    let close_gates = gates.clone();
+    let closing = tokio::spawn(async move { close_gates.close("s", Duration::from_secs(3)).await });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if gates.enter("s", Duration::ZERO).await.is_err() { break; }
+            tokio::task::yield_now().await;
+        }
+    }).await.unwrap();
+    assert!(!closing.is_finished());
+    let result = tokio::time::timeout(Duration::from_secs(1), live.append("s", "objetivo")).await;
+    assert!(result.is_ok(), "D59: envio HTTP não pode adquirir novamente o ingresso enquanto o rename espera");
+    assert_eq!(result.unwrap().unwrap_err().0, "runtime_binding");
+    tokio::time::timeout(Duration::from_secs(1), live.drain("s")).await.unwrap();
+    drop(live);
+    drop(pass);
+    closing.await.unwrap().unwrap();
+    gates.open("s");
 }

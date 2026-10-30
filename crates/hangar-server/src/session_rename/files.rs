@@ -319,3 +319,23 @@ mod tests {
         assert!(!transfer_busy(home.path(), "b").unwrap());
     }
 }
+
+/// O rollback precisa preservar bytes e tipo do arquivo, sem seguir um vínculo para fora da pasta.
+pub(super) fn regular_or_absent(path: &Path) -> io::Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.is_file() => Ok(()),
+        Ok(_) => Err(Error::new(ErrorKind::InvalidData, "loop não é arquivo regular")),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+/// Não apaga o temporário: um desfazer devolve somente os arquivos que esta transação moveu.
+pub(super) fn move_loop_file(src: &Path, dst: &Path) -> io::Result<bool> {
+    regular_or_absent(src)?;
+    regular_or_absent(dst)?;
+    if !src.try_exists()? { return Ok(false); }
+    if dst.try_exists()? { return Err(Error::new(ErrorKind::AlreadyExists, "loop de destino já existe")); }
+    replace(src, dst)?;
+    Ok(true)
+}
