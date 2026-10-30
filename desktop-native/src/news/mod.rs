@@ -1,6 +1,7 @@
 //! Animações das novidades da atualização: cada uma é desenhada com as mesmas partes do app que ela mostra.
 
 mod account_tags;
+mod auto_report;
 mod codex_activity;
 mod composer_history;
 mod rename_suggestion;
@@ -18,6 +19,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "codex-atividade" => Some(codex_activity::render),
         "etiquetas-maquina-conta" => Some(account_tags::render),
         "sugestao-de-nome" => Some(rename_suggestion::render),
+        "relatorio-automatico" => Some(auto_report::render),
         _ => None,
     }
 }
