@@ -42,7 +42,8 @@ struct Placed { left: f32, top: Option<f32>, bottom: Option<f32>, arrow_x: f32 }
 fn place(target: Bounds<Pixels>, viewport: Size<Pixels>) -> Placed {
     let (vw, vh) = (f32::from(viewport.width), f32::from(viewport.height));
     let (top, bottom) = (f32::from(target.top()), f32::from(target.bottom()));
-    let below = vh - bottom >= EST_HEIGHT + GAP + MARGIN || vh - bottom >= top;
+    // Acima sempre que couber: abaixo das peças do meio fica o compositor, que o balão cobriria.
+    let below = !(top >= EST_HEIGHT + GAP + MARGIN || top > vh - bottom);
     let center = f32::from(target.center().x);
     let left = (center - WIDTH / 2.).min(vw - WIDTH - MARGIN).max(MARGIN);
     let arrow_x = (center - left - ARROW_W / 2.).clamp(16., WIDTH - 16. - ARROW_W);
@@ -289,12 +290,15 @@ mod tests {
     fn at(x: f32, y: f32, w: f32, h: f32) -> Bounds<gpui_kit::Pixels> { Bounds::new(point(px(x), px(y)), size(px(w), px(h))) }
 
     #[test]
-    fn balloon_goes_below_with_room_and_above_near_the_bottom() {
+    fn balloon_goes_above_when_it_fits_and_below_near_the_top() {
         let viewport = size(px(1200.), px(800.));
         let top_piece = place(at(500., 40., 100., 30.), viewport);
         assert_eq!(top_piece.top, Some(70. + GAP));
         let composer = place(at(300., 700., 600., 80.), viewport);
         assert_eq!((composer.top, composer.bottom), (None, Some(800. - 700. + GAP)));
+        // O painel "Na fila" fica logo acima do compositor: o balão vai para cima dele, não sobre o campo.
+        let queue = place(at(30., 450., 400., 40.), viewport);
+        assert_eq!((queue.top, queue.bottom), (None, Some(800. - 450. + GAP)));
     }
 
     #[test]

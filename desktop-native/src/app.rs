@@ -7448,6 +7448,11 @@ impl Hangar {
     /// A peça que depende da tela: a linha de sessão.
     fn tour_anchor(&self, anchor: &str, celebrating: bool) -> Option<String> {
         use crate::tour::anchors;
+        // O contador de filhas mora numa aba: rolada para fora da faixa, ainda tem posição.
+        if anchor == anchors::TAB_KIDS {
+            let view = self.tabs_scroll.bounds();
+            return popup::anchor_bounds(anchor).filter(|b| view.contains(&b.center())).map(|_| anchor.to_owned());
+        }
         if anchor != anchors::SESSION_ROW { return Some(anchor.to_owned()); }
         // À vista = desenhada e com o meio dentro da faixa rolável da lista (linha rolada para fora ainda tem posição).
         let view = if appearance::get().navigation.tabs() { self.tabs_scroll.bounds() } else { self.rows_scroll.bounds() };
