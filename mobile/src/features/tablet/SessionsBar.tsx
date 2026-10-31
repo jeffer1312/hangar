@@ -35,8 +35,11 @@ export function SessionsBar({ placement, selected, onPick, onNew }: Props) {
   const horizontal = placement === 'bottom' || placement === 'top';
   const tabsWorkingFirst = useTabletPrefs(s => s.tabsWorkingFirst);
   const tabsRecentFirst = useTabletPrefs(s => s.tabsRecentFirst);
-  const items = useMemo(() => barRows(rows, identities, horizontal, { tabsWorkingFirst, tabsRecentFirst }),
-    [rows, identities, horizontal, tabsWorkingFirst, tabsRecentFirst]);
+  const currentServer = selected?.serverId;
+  const currentName = selected?.name;
+  const items = useMemo(() => barRows(rows, identities, horizontal, { tabsWorkingFirst, tabsRecentFirst },
+    currentServer && currentName ? { serverId: currentServer, name: currentName } : undefined),
+    [rows, identities, horizontal, tabsWorkingFirst, tabsRecentFirst, currentServer, currentName]);
   const tabsDetail = useTabletPrefs(s => s.tabsDetail);
   const collapsed = useTabletPrefs(s => s.collapsed);
   const toggleCollapsed = useTabletPrefs(s => s.toggleCollapsed);

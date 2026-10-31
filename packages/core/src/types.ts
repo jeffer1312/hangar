@@ -65,6 +65,8 @@ export interface SessionInfo {
   rename_suggestion?: string | null;
   /** A sugestão saiu com pouco contexto: o servidor gera outra na próxima mensagem da pessoa. */
   rename_weak?: boolean;
+  /** Fora da lista principal (oculta à mão ou parada além do prazo); o servidor só manda quando é `true`. */
+  hidden_from_list?: boolean;
   /** Servidores MCP criados por plugin (`$.tool.register`); a pele 'terminal' deixa as chamadas deles fora da dobra. */
   plugin_tool_servers?: string[] | null;
   // Linhas adicionadas/removidas no working tree vs HEAD (git diff --numstat, staged+unstaged;

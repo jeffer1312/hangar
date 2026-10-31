@@ -67,6 +67,7 @@ mod settings;
 mod mention;
 mod server_config;
 mod worktree_settings;
+mod auto_hide;
 mod invite;
 mod pair_accept;
 mod external;
@@ -78,6 +79,7 @@ pub(crate) use session_tabs::{PlateMark, PlateSegment, plate, tab_frame, tab_tit
 pub(crate) use tags::{account_icon, machine_icon};
 pub(crate) use rename_suggest::{Strip as RenameStrip, rename_strip};
 pub(crate) use settings::{setting_row, settings_box};
+pub(crate) use sidebar::{Sub as RowSub, group_header_look, menu_item_height, menu_item_look, menu_label, menu_list_look, menu_surface_look};
 mod shortcuts;
 mod shortcut_transfer;
 mod keyboard;
@@ -777,6 +779,7 @@ pub struct Hangar {
     harness: harness::Harnesses,
     server_config: server_config::ServerConfig,
     worktree_settings: worktree_settings::WorktreeSettings,
+    auto_hide: auto_hide::AutoHidePage,
     sync: sync::Sync,
     connect: connect::Connect,
     devices: devices::Devices,
@@ -1100,7 +1103,7 @@ impl Hangar {
             desktop_note: None,
             palette_seq: 0, backdrop_seq: 0, backdrop_pending: false, backdrop: None, backdrop_note: None, backdrop_busy: None, grain: crate::media::grain(),
             device: device::Device::new(window, cx), accounts: accounts::Accounts::default(), orchestration: orchestration::Orchestration::default(), orq_history: None, orq_history_serial: 0, home_usage: Default::default(), recents: Default::default(), reopen: None, shortcuts: shortcuts::Shortcuts::default(),
-            worktree_settings: worktree_settings::WorktreeSettings::default(),
+            worktree_settings: worktree_settings::WorktreeSettings::default(), auto_hide: Default::default(),
             server_config: server_config::ServerConfig::default(), harness: harness::Harnesses::default(), sync: sync::Sync::default(), connect: connect::Connect::default(), devices: devices::Devices::default(), shared: shared_config::SharedConfig::default(), machines: machines::Machines::default(),
             costs: Default::default(), worktrees: Default::default(), artifacts: Default::default(), usage_stats: Default::default(), search: Default::default(), topbar: Default::default(), computer: computer::Computer::default(), new_session: None, sidebar, machines_tray,
             terminal: None, terminal_serial: 0,
@@ -5792,6 +5795,21 @@ impl Hangar {
                 }
             }
         }
+        // As ocultas de todas as máquinas no fim, recolhidas por padrão; cada linha diz de qual máquina é.
+        let hidden_rows = self.hidden_sessions(cx);
+        if !hidden_rows.is_empty() {
+            children.push(("hidden/head".into(), "hidden", self.render_hidden_header(hidden_rows.len(), window, cx)));
+            if self.hidden_open() {
+                for (key, session) in hidden_rows {
+                    let remote = remote_of(&key);
+                    let selected = selected_name == Some(session.name.as_str()) && self.open_key() == remote;
+                    let row_key = format!("hidden/row:{}::{}", remote.as_deref().unwrap_or(""), session.name);
+                    let row = if conversations { self.render_conversation_row(session.clone(), selected, remote, multi, None, window, cx) }
+                        else { self.render_session_row(session.clone(), selected, remote, multi, None, window, cx) };
+                    children.push((row_key, "hidden", row));
+                }
+            }
+        }
         children.extend(self.render_recents(window, cx).into_iter().enumerate().map(|(i, el)| (format!("recent/{i}"), "recent", el)));
         let children: Vec<AnyElement> = if by_machine {
             let mut book = self.sidebar.flip.borrow_mut();
@@ -6152,7 +6170,7 @@ impl Hangar {
                 .on_action(cx.listener(|this, _: &Escape, window, cx| this.cancel_session_rename(window, cx)))
                 .child(Input::new(&input).xsmall().aria_label(tr("sidebar_new_name"))).into_any_element(),
             None => div().flex_1().min_w_0().flex().items_center().gap_2()
-                .child(div().min_w_0().truncate().font_weight(FontWeight::MEDIUM).child(name.clone()))
+                .child(session_row_name(name.clone()))
                 .when(session.headless, |el| el.child(div().id(SharedString::from(format!("row-headless-{row_key}"))).flex_shrink_0().flex().opacity(0.72)
                     .tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new(tr("create_mode_headless")).build(window, cx))
                     .child(chrome::no_terminal_mark(12., theme::muted()))))
@@ -6172,10 +6190,9 @@ impl Hangar {
         if let Some(label) = &agent_label { spoken.push(label.clone()); }
         spoken.push(state_label);
         if session.headless { spoken.push(tr("create_mode_headless")); }
-        div().id(SharedString::from(row_id)).relative().flex_shrink_0().flex().items_center().gap(px(10.)).px(px(8.)).py(px(7.)).rounded(px(10.))
+        session_row_frame(SharedString::from(row_id), selected)
             .when_some(focus.as_ref(), |el, focus| el.track_focus(focus))
             .when(focus.as_ref().is_some_and(|f| f.is_focused(window)), |el| el.focus_ring_style(window, cx))
-            .when(selected, |el| el.bg(theme::selected_row()))
             .when(!selected, |el| el.hover(|el| el.bg(theme::hover())))
             .on_hover(cx.listener(move |this, hovered: &bool, _, cx| this.row_hover(hover_target.clone(), *hovered, cx)))
             .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, window, cx| this.row_press(press_target.clone(), window, cx)))
@@ -6191,7 +6208,7 @@ impl Hangar {
             .aria_label(self.session_number_label(&target, spoken.join(" · ")))
             .child(div().id(SharedString::from(format!("row-agent-{row_key}"))).flex().child(avatar)
                 .when_some(agent_label, |el, label| el.tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(label.clone()).build(window, cx))))
-            .child(div().flex_1().min_w_0().flex().flex_col().gap(px(1.))
+            .child(session_row_text()
             // O ⋯ fica por cima do fim da linha do nome: ela cede o espaço dele.
             .child(div().flex().items_center().gap(px(8.)).when(show_menu, |el| el.pr(px(22.)))
                 .children(self.session_number_badge(&target))
@@ -6202,10 +6219,7 @@ impl Hangar {
                     .child(div().size(px(5.)).flex_shrink_0().rounded_full().bg(color))
                     .child(div().min_w_0().truncate().child(label))))
                 .when_some(when, |el, w| el.child(div().flex_shrink_0().text_size(px(10.)).text_color(theme::faint()).child(w))))
-            .when_some(sub, |el, (text, kind)| el.child(div().flex().items_center()
-                .child(div().flex_1().min_w_0().flex().items_center().gap(px(4.)).text_xs().text_color(sub_color)
-                    .when(kind == sidebar::Sub::Reply, |el| el.child(div().flex_shrink_0().text_size(px(8.)).text_color(theme::faint()).child("◆")))
-                    .child(div().min_w_0().truncate().when(kind == sidebar::Sub::Working && working, |el| el.italic()).child(text)))))
+            .when_some(sub, |el, (text, kind)| el.child(session_row_sub(text, kind, sub_color, kind == sidebar::Sub::Working && working)))
             .when(server.is_some() || engine_label.is_some() || folder.is_some() || branch.is_some() || added.is_some() || removed.is_some() || ahead.is_some() || behind.is_some(), |el| el.child(div().flex().items_center().gap(px(8.))
                 .text_size(px(11.5)).text_color(theme::faint())
                 .child(div().flex_1().min_w_0().flex().items_center().gap(px(6.))
@@ -6288,6 +6302,29 @@ fn account_chip(conta: Option<&str>) -> Option<(String, Hsla)> {
 /// "pasta @ servidor"; sem pasta legível, só o servidor.
 fn place(session: &SessionInfo, host: &str) -> String {
     folder_name(session).map(|folder| format!("{folder} @ {host}")).unwrap_or_else(|| host.to_owned())
+}
+
+/// Caixa da linha da sessão na barra; a miniatura da novidade "ocultar da lista" desenha a mesma.
+pub(crate) fn session_row_frame(id: impl Into<ElementId>, selected: bool) -> Stateful<Div> {
+    div().id(id).relative().flex_shrink_0().flex().items_center().gap(px(10.)).px(px(8.)).py(px(7.)).rounded(px(10.))
+        .when(selected, |el| el.bg(theme::selected_row()))
+}
+
+/// A coluna de texto da linha, ao lado da marca do agente.
+pub(crate) fn session_row_text() -> Div {
+    div().flex_1().min_w_0().flex().flex_col().gap(px(1.))
+}
+
+pub(crate) fn session_row_name(name: String) -> Div {
+    div().min_w_0().truncate().font_weight(FontWeight::MEDIUM).child(name)
+}
+
+/// A segunda linha: a resposta com ◆, a pergunta ou o que está fazendo (em itálico enquanto trabalha).
+pub(crate) fn session_row_sub(text: String, kind: sidebar::Sub, color: Hsla, italic: bool) -> Div {
+    div().flex().items_center()
+        .child(div().flex_1().min_w_0().flex().items_center().gap(px(4.)).text_xs().text_color(color)
+            .when(kind == sidebar::Sub::Reply, |el| el.child(div().flex_shrink_0().text_size(px(8.)).text_color(theme::faint()).child("◆")))
+            .child(div().min_w_0().truncate().when(italic, |el| el.italic()).child(text)))
 }
 
 fn badge(text: String, color: Hsla) -> Div {

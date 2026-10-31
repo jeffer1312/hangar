@@ -64,17 +64,24 @@ interface Props {
   onWorktree?: (s: AggSession, path: string) => void;
   // Ausente em servidor de convite: lá a pessoa é convidada, não dona do par.
   onPair?: (s: AggSession, action: PairAction) => void;
+  // Ocultar (true) ou mostrar (false) na lista; ausente onde a pessoa não é dona da sessão.
+  onHidden?: (s: AggSession, hide: boolean) => void;
+  // Marca "Oculta" na linha, para quem mostra as ocultas no meio das outras (seletor).
+  hiddenBadge?: boolean;
   // Selo do grupo entre máquinas pelo modelo global (`groupBadges` da lista), em valores soltos para o memo; ausente =
   // grupo de uma máquina só.
   crossBadgeText?: string | null;
   crossBadgeMachines?: number;
 }
 
+// `id` obrigatório: só com campos opcionais o TS recusa os itens sem `attributes` (tipo fraco).
+const isDisabled = (a: { id: string; attributes?: { disabled?: boolean; destructive?: boolean } }) => !!a.attributes?.disabled;
+
 // O iOS já vibra ao abrir o menu de contexto; o PopupMenu do Android não.
 const vibrarAoAbrir =
   Platform.OS === 'android' ? () => void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {}) : undefined;
 
-export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor, compact = false, selected, onPress, onGit, onExcluir, onRenomear, onResume, onWorktree, onPair, crossBadgeText, crossBadgeMachines }: Props) {
+export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor, compact = false, selected, onPress, onGit, onExcluir, onRenomear, onResume, onWorktree, onPair, onHidden, hiddenBadge, crossBadgeText, crossBadgeMachines }: Props) {
   const { theme } = useUnistyles();
   // O orquestrador não se renomeia nem se fecha: o backend recusa, então a linha nem oferece.
   const orq = isOrq(s);
@@ -87,6 +94,8 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
   const wtAcao = onWorktree && !fora && !s.worktree_gone && wtNome && wtPath ? wtPath : null;
   // Vários pares: o dono sozinho não diz qual desfazer.
   const donoDo = (p: PairExternal) => (pares.length > 1 ? `${p.owner} · ${p.session}` : p.owner);
+  // Esperando você, a oculta voltaria na rodada seguinte da lista: ocultar fica desabilitado, com o motivo no título.
+  const waiting = s.state === 'awaiting_input' || (s.pending_questions ?? 0) > 0;
   // Sem o arrasto, o menu é o único caminho visível pro Git: o orquestrador fica só com ele.
   // A sessão de fora é de outra pessoa: nem renomear, nem fechar, só sair do par.
   const acoesMenu = useMemo(
@@ -99,6 +108,14 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
         { id: 'pair-accept', title: m.native_par_menu(), image: Platform.select({ ios: 'link.badge.plus' }) },
         ...pares.map((p, i) => ({ id: `undo:${i}`, title: m.pair_undo_own({ dono: donoDo(p) }) })),
       ] : []),
+      ...(!onHidden ? [] : s.hidden_from_list
+        ? [{ id: 'show', title: m.session_show_in_list(), image: Platform.select({ ios: 'eye' }) }]
+        : [{
+          id: 'hide',
+          title: waiting ? `${m.session_hide_from_list()} · ${m.session_hide_waiting()}` : m.session_hide_from_list(),
+          image: Platform.select({ ios: 'eye.slash' }),
+          ...(waiting ? { attributes: { disabled: true } } : {}),
+        }]),
       ...(orq || !onExcluir ? [] : [{
         id: s.serverInvite ? 'stop-following' : 'delete',
         title: s.serverInvite ? m.convite_parar() : m.sessao_excluir_curto(),
@@ -106,10 +123,12 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
         attributes: { destructive: true },
       }]),
     ],
-    [s.cwd, s.serverInvite, orq, fora, parAtivo, pares, wtAcao, onPair, onRenomear, onGit, onExcluir],
+    [s.cwd, s.serverInvite, s.hidden_from_list, waiting, orq, fora, parAtivo, pares, wtAcao, onPair, onRenomear, onGit, onExcluir, onHidden],
   );
   const acao = (nome: string) => {
     if (nome === 'rename') onRenomear?.(s);
+    else if (nome === 'hide' && !waiting) onHidden?.(s, true);
+    else if (nome === 'show') onHidden?.(s, false);
     else if (nome === 'git') onGit?.(s);
     else if (nome === 'worktree' && wtAcao) onWorktree?.(s, wtAcao);
     else if (nome === 'delete' || nome === 'stop-following') onExcluir?.(s);
@@ -127,8 +146,9 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
   const badgeText = badge ? (badge.text ?? m.grupo_selo_maquinas({ n: badge.machines })) : null;
   // O selo abre o painel do grupo; no leitor de tela vira ação da linha.
   const groupTitle = badge && onPair && !fora ? m.par_grupo_titulo({ n: (s.pair_peers?.length ?? 0) + 1 }) : null;
+  // O desabilitado não vira ação do leitor de tela: o rótulo da linha já diz que ela espera você.
   const acoesA11y = useMemo(
-    () => [...acoesMenu.map((a) => ({ name: a.id, label: a.title })), ...(groupTitle ? [{ name: 'group', label: groupTitle }] : [])],
+    () => [...acoesMenu.filter((a) => !isDisabled(a)).map((a) => ({ name: a.id, label: a.title })), ...(groupTitle ? [{ name: 'group', label: groupTitle }] : [])],
     [acoesMenu, groupTitle],
   );
   const pendentes = pares.filter((p) => p.pending);
@@ -176,6 +196,7 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
         options: [...acoesMenu.map((a) => a.title), m.comum_cancelar()],
         cancelButtonIndex: acoesMenu.length,
         destructiveButtonIndex: destructive >= 0 ? destructive : undefined,
+        disabledButtonIndices: acoesMenu.flatMap((a, i) => (isDisabled(a) ? [i] : [])),
       },
       (i) => { if (i < acoesMenu.length) acao(acoesMenu[i].id); },
     );
@@ -208,7 +229,7 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
       // estado e a pergunta sumiriam do leitor de tela.
       // Máquina e projeto entram mesmo quando a tela os esconde (lista agrupada, pasta = nome):
       // é o que distingue duas conversas de mesmo nome no leitor de tela.
-      accessibilityLabel={`${s.name}${s.headless === true ? `, ${m.criar_modo_exec_headless()}` : ''}${fora ? `, ${m.pair_from_owner({ dono: fora.owner })}${s.guest_kind === 'share' ? '' : `, ${m.pair_level_view()}`}` : ''}, ${rotuloEstado(s.state)}${s.limited ? `, ${s.limit_reset ? m.sessao_limite_volta({ n: s.limit_reset }) : m.sessao_limite()}` : ''}${pendingQuestions > 0 ? `, ${m.ask_perguntas()}: ${pendingQuestions}` : ''}${sub ? `, ${sub}` : ''}${badgeText ? `, ${badgeText}` : ''}${providerLabel ? `, ${providerLabel}` : ''}${account ? `, ${m.sessao_conta({ n: account.name })}` : ''}${ctxPct !== null ? `, ${m.tags_context_ring({ pct: Math.round(ctxPct) })}` : ''}, ${s.serverLabel}${s.cwd ? `, ${cwd.base}` : ''}${s.branch ? `, ${s.branch}` : ''}${gitAhead || gitBehind ? `, ${m.git_sync_titulo({ ahead: gitAhead, behind: gitBehind })}` : ''}${selected ? `, ${m.switcher_atual()}` : ''}`}
+      accessibilityLabel={`${s.name}${hiddenBadge && s.hidden_from_list ? `, ${m.session_hidden_badge()}` : ''}${s.headless === true ? `, ${m.criar_modo_exec_headless()}` : ''}${fora ? `, ${m.pair_from_owner({ dono: fora.owner })}${s.guest_kind === 'share' ? '' : `, ${m.pair_level_view()}`}` : ''}, ${rotuloEstado(s.state)}${s.limited ? `, ${s.limit_reset ? m.sessao_limite_volta({ n: s.limit_reset }) : m.sessao_limite()}` : ''}${pendingQuestions > 0 ? `, ${m.ask_perguntas()}: ${pendingQuestions}` : ''}${sub ? `, ${sub}` : ''}${badgeText ? `, ${badgeText}` : ''}${providerLabel ? `, ${providerLabel}` : ''}${account ? `, ${m.sessao_conta({ n: account.name })}` : ''}${ctxPct !== null ? `, ${m.tags_context_ring({ pct: Math.round(ctxPct) })}` : ''}, ${s.serverLabel}${s.cwd ? `, ${cwd.base}` : ''}${s.branch ? `, ${s.branch}` : ''}${gitAhead || gitBehind ? `, ${m.git_sync_titulo({ ahead: gitAhead, behind: gitBehind })}` : ''}${selected ? `, ${m.switcher_atual()}` : ''}`}
       accessibilityActions={acoesA11y}
       onAccessibilityAction={({ nativeEvent }) => {
         acao(nativeEvent.actionName);
@@ -224,6 +245,7 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
           {s.headless === true ? <HeadlessSignal /> : null}
           {pendingQuestions > 0 ? <Chip tone="warning">{`? ${pendingQuestions}`}</Chip> : null}
           {orq ? <Chip>{m.orq_row_badge()}</Chip> : null}
+          {hiddenBadge && s.hidden_from_list ? <Chip icon="EyeOff">{m.session_hidden_badge()}</Chip> : null}
           {untracked ? <Chip tone="warning">{m.sessao_sem_id()}</Chip> : null}
           {fora ? <Chip tone="accent" icon={s.guest_kind === 'share' ? 'Link' : 'Eye'}>{m.pair_from_owner({ dono: fora.owner })}</Chip> : null}
           <Text style={[styles.tempo, { color: muted }]} numberOfLines={1}>{relativeTime(s.last_activity)}</Text>

@@ -45,6 +45,7 @@ pub mod runtime;
 pub mod session_open;
 pub mod session_rename;
 pub mod session_defaults;
+pub mod session_visibility;
 pub mod tags;
 pub mod push;
 pub mod push_expo;

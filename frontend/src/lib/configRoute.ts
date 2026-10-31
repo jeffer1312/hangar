@@ -3,9 +3,9 @@
 // escolhendo a tela de tras (chat, quadro, lista), e a query diz qual tela do painel esta por cima.
 // Assim o painel abre sobre QUALQUER rota sem que nenhuma delas precise saber que ele existe.
 
-export type TelaConfig = 'root' | 'geral' | 'aparencia' | 'notificacoes' | 'anexos' | 'atalhos' | 'avancado' | 'sobre' | 'diario' | 'maquinas' | 'contas' | 'orquestracao' | 'voz' | 'harnesses' | 'sincronizacao' | 'shared-config' | 'jev' | 'computer' | 'migration';
+export type TelaConfig = 'root' | 'geral' | 'aparencia' | 'notificacoes' | 'anexos' | 'atalhos' | 'avancado' | 'sobre' | 'diario' | 'maquinas' | 'contas' | 'orquestracao' | 'voz' | 'harnesses' | 'sincronizacao' | 'shared-config' | 'jev' | 'computer' | 'migration' | 'sessoes';
 
-export const TELAS_CONFIG: readonly TelaConfig[] = ['root', 'geral', 'aparencia', 'notificacoes', 'anexos', 'atalhos', 'avancado', 'sobre', 'diario', 'maquinas', 'contas', 'orquestracao', 'voz', 'harnesses', 'sincronizacao', 'shared-config', 'jev', 'computer', 'migration'];
+export const TELAS_CONFIG: readonly TelaConfig[] = ['root', 'geral', 'aparencia', 'notificacoes', 'anexos', 'atalhos', 'avancado', 'sobre', 'diario', 'maquinas', 'contas', 'orquestracao', 'voz', 'harnesses', 'sincronizacao', 'shared-config', 'jev', 'computer', 'migration', 'sessoes'];
 
 // Rotas de tela que mudaram de nome: um link guardado por alguém não pode virar tela em branco.
 const RENOMEADAS: Record<string, TelaConfig> = { ditado: 'voz', servidores: 'maquinas', acesso: 'maquinas', motores: 'contas' };

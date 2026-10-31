@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Slot } from './sessions';
 import type { Server } from './servers';
 import type { SessionInfo } from './types';
-import { aggregateSessions, epocasDeRecriacao, machineNoticeVisible, machinesAllDown, nextNoticeEnd, OFFLINE_NOTICE_MS, patchSlot, sweepHidden } from './sessions';
+import { aggregateSessions, epocasDeRecriacao, machineNoticeVisible, machinesAllDown, nextNoticeEnd, OFFLINE_NOTICE_MS, patchSlot, splitHidden, sweepHidden } from './sessions';
 
 const srv = (id: string): Server => ({ id, label: `srv-${id}`, baseUrl: `http://${id}`, token: 't' });
 const sess = (name: string, extra: Partial<SessionInfo> = {}): SessionInfo =>
@@ -252,5 +252,14 @@ describe('aviso de máquina fora do ar', () => {
     expect(nextNoticeEnd(b, 0)).toBe(1_000 + OFFLINE_NOTICE_MS);
     expect(nextNoticeEnd(b, 1_000 + OFFLINE_NOTICE_MS)).toBe(10_000 + OFFLINE_NOTICE_MS);
     expect(nextNoticeEnd(b, 10_000 + OFFLINE_NOTICE_MS)).toBeNull();
+  });
+});
+
+describe('splitHidden', () => {
+  it('separa pelas linhas marcadas, preservando a ordem de cada grupo', () => {
+    const rows = [sess('a'), sess('b', { hidden_from_list: true }), sess('c', { hidden_from_list: false }), sess('d', { hidden_from_list: true })];
+    const { shown, hidden } = splitHidden(rows);
+    expect(shown.map((s) => s.name)).toEqual(['a', 'c']);
+    expect(hidden.map((s) => s.name)).toEqual(['b', 'd']);
   });
 });
