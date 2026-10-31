@@ -1154,3 +1154,18 @@ fn scan_reports_skipped_files_and_folders_once_each() {
         assert_eq!(env.reported(code), 1, "{code}: {:?}", env.reports.lock().unwrap());
     }
 }
+
+#[test]
+fn scan_and_index_give_the_header_cwd() {
+    // SRCH-42: conversa que trocou de pasta. O índice guarda o cwd do cabeçalho; a varredura de antes
+    // do índice pronto usa a mesma regra, então os dois caminhos dão o mesmo trecho.
+    let env = Env::small(quiet());
+    let moved = format!("{}\n", json!({"type": "user", "uuid": "u2", "cwd": "/home/u/outra",
+        "message": {"role": "user", "content": "zebra mudou"}}));
+    env.write(SID, &[line("começo", "u1", "user"), moved], false);
+    let cwd = || super::hits::search(&env.index, "zebra", &std::collections::HashMap::new(), 50).unwrap()
+        .into_iter().map(|h| h.cwd).collect::<Vec<_>>();
+    let scanned = cwd();
+    env.index.update().unwrap();
+    assert_eq!((scanned, cwd()), (vec![Some("/home/u/proj".to_owned())], vec![Some("/home/u/proj".to_owned())]));
+}

@@ -9,7 +9,6 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 
 use serde::Serialize;
-use serde_json::Value;
 
 use super::{Account, Index, Row, fold, ingest};
 use crate::session_open::AgentProvider;
@@ -195,8 +194,6 @@ fn scan_file(path: &str, agent: Option<AgentProvider>, cwd: Option<String>, term
     let mut messages: Vec<ingest::Message> = Vec::new();
     let mut held = HashSet::new();
     let mut matched_lines = 0;
-    // cwd da 1ª linha casada; sem ele, o do cabeçalho (como o Python).
-    let mut line_cwd: Option<String> = None;
     let mut raw = Vec::new();
     loop {
         raw.clear();
@@ -214,29 +211,23 @@ fn scan_file(path: &str, agent: Option<AgentProvider>, cwd: Option<String>, term
             if (msg.0.starts_with("held:") || msg.0.starts_with("delivery:")) && !held.insert(msg.0.clone()) { continue; }
             if open && messages.len() < PER_FILE {
                 let text = fold(&msg.3);
-                if terms.iter().all(|t| text.contains(t.as_str())) {
-                    if messages.is_empty() && agent.is_none() { line_cwd = cwd_of(&raw); }
-                    messages.push(msg);
-                }
+                if terms.iter().all(|t| text.contains(t.as_str())) { messages.push(msg); }
             }
         }
         let collected = messages.len() >= PER_FILE || matched_lines >= MAX_MATCHED_LINES;
-        if collected && (messages.is_empty() || (st.internal.is_some() && (line_cwd.is_some() || st.head_done))) { break; }
+        // O cwd é o do cabeçalho, como o índice guarda: a leitura segue até ele fechar.
+        if collected && (messages.is_empty() || (st.internal.is_some() && st.head_done)) { break; }
     }
     if messages.is_empty() || st.internal == Some(true) {
         return Ok(None);
     }
-    Ok(Some(Scanned { messages, cwd: line_cwd.or(st.cwd), model: st.model }))
-}
-
-fn cwd_of(raw: &[u8]) -> Option<String> {
-    let value: Value = serde_json::from_slice(raw).ok()?;
-    value.get("cwd")?.as_str().filter(|c| !c.is_empty()).map(str::to_owned)
+    Ok(Some(Scanned { messages, cwd: st.cwd, model: st.model }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
 
     fn capture(name: &str) -> serde_json::Map<String, Value> {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/search/contract/search/{name}.json"));
