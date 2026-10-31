@@ -14,6 +14,8 @@ const BODY_MAX: usize = 128 * 1024;
 const REPLY_SECS: u64 = 45;
 /// Abaixo dos 120 s em que o Bash do Claude Code mata um comando.
 const LOGIN_SECS: u64 = 110;
+/// Quanto um `_srv.json` órfão pode durar com este app aberto.
+const RECLAIM_EVERY: Duration = Duration::from_secs(3);
 
 pub enum Request {
     /// Verbo do `/cmd`, o do hangar-preview.
@@ -50,21 +52,40 @@ fn nav_dir() -> Option<PathBuf> { std::env::home_dir().map(|h| h.join(".hangar")
 
 /// Escrita em tmp + rename: o CLI nunca lê um arquivo pela metade.
 fn write_json(name: &str, value: &Value) -> std::io::Result<()> {
-    let dir = nav_dir().ok_or_else(|| std::io::Error::other("sem pasta do usuario"))?;
+    write_json_in(&nav_dir().ok_or_else(|| std::io::Error::other("sem pasta do usuario"))?, name, value)
+}
+
+fn write_json_in(dir: &std::path::Path, name: &str, value: &Value) -> std::io::Result<()> {
     let tmp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
     // O `_srv.json` leva o token: só o dono lê, como no shell Electron.
     #[cfg(unix)]
     {
         use std::{io::Write, os::unix::fs::{DirBuilderExt, OpenOptionsExt}};
-        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&dir)?;
+        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
         std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&tmp)?.write_all(value.to_string().as_bytes())?;
     }
     #[cfg(not(unix))]
     {
-        std::fs::create_dir_all(&dir)?;
+        std::fs::create_dir_all(dir)?;
         std::fs::write(&tmp, value.to_string())?;
     }
     std::fs::rename(tmp, dir.join(format!("{name}.json")))
+}
+
+/// Outra execução do app com outra pasta de configuração (teste, prova de tela) escapa da trava de janela única,
+/// publica o servidor dela neste arquivo e, ao morrer, deixa o CLI e o MCP numa porta sem dono. `true` = retomado.
+async fn reclaim(dir: &std::path::Path, own: &Value) -> std::io::Result<bool> {
+    let current = std::fs::read(dir.join("_srv.json")).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok());
+    if current.as_ref() == Some(own) { return Ok(false); }
+    // ponytail: porta que atende = dono vivo; porta reciclada por outro programa fica sem retomada até o app reabrir.
+    let other = current.as_ref().and_then(|v| v["porta"].as_u64()).filter(|p| Some(*p) != own["porta"].as_u64())
+        .and_then(|p| u16::try_from(p).ok());
+    if let Some(port) = other
+        && matches!(tokio::time::timeout(Duration::from_secs(1), TcpStream::connect(("127.0.0.1", port))).await, Ok(Ok(_))) {
+        return Ok(false);
+    }
+    write_json_in(dir, "_srv", own)?;
+    Ok(true)
 }
 
 fn now_ms() -> u128 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis()) }
@@ -223,8 +244,21 @@ pub fn start(runtime: &Runtime, requests: async_channel::Sender<Request>) -> std
     // Converte antes de publicar a porta: servidor que não sobe nunca aparece no `_srv.json`.
     let listener = { let _guard = runtime.enter(); tokio::net::TcpListener::from_std(listener)? };
     drop_stale_sidecars();
-    write_json("_srv", &json!({"porta": port, "token": token, "pid": std::process::id(), "ts": now_ms()}))?;
+    let own = json!({"porta": port, "token": token, "pid": std::process::id(), "ts": now_ms()});
+    write_json("_srv", &own)?;
     let _ = PORT.set(port);
+    if let Some(dir) = nav_dir() {
+        runtime.spawn(async move {
+            loop {
+                tokio::time::sleep(RECLAIM_EVERY).await;
+                match reclaim(&dir, &own).await {
+                    Ok(true) => crate::log_line("nav: _srv.json apontava um servidor que não atende; retomado por este app"),
+                    Ok(false) => {}
+                    Err(e) => crate::log_line(&format!("nav: _srv.json não retomado: {e}")),
+                }
+            }
+        });
+    }
     let token: Arc<str> = token.into();
     runtime.spawn(async move {
         loop {
@@ -584,6 +618,30 @@ mod tests {
         assert!(!std::fs::read_dir(&dir).unwrap().flatten().any(|e| e.path().extension().is_some_and(|ext| ext == "tmp")));
         runtime.shutdown_timeout(Duration::from_secs(2));
         std::fs::write(root.join("completed"), std::fs::read(root.join("proof-owner")).unwrap()).unwrap();
+    }
+
+    #[tokio::test]
+    async fn srv_file_is_taken_back_only_from_an_owner_that_no_longer_answers() {
+        let dir = std::env::temp_dir().join(format!("hangar-srv-reclaim-{}-{}", std::process::id(), now_ms()));
+        let live = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let dead = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
+        let own = json!({"porta": live.local_addr().unwrap().port(), "token": "meu", "pid": std::process::id(), "ts": 1});
+        let read = || serde_json::from_slice::<Value>(&std::fs::read(dir.join("_srv.json")).unwrap()).unwrap();
+
+        assert!(reclaim(&dir, &own).await.unwrap(), "sem arquivo, o dono publica");
+        assert_eq!(read(), own);
+        assert!(!reclaim(&dir, &own).await.unwrap(), "arquivo já é deste processo");
+
+        let other = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let alive = json!({"porta": other.local_addr().unwrap().port(), "token": "outro", "pid": 1, "ts": 2});
+        write_json_in(&dir, "_srv", &alive).unwrap();
+        assert!(!reclaim(&dir, &own).await.unwrap(), "outra instância viva não é desalojada");
+        assert_eq!(read(), alive);
+
+        write_json_in(&dir, "_srv", &json!({"porta": dead, "token": "morto", "pid": 3401912, "ts": 3})).unwrap();
+        assert!(reclaim(&dir, &own).await.unwrap(), "porta sem dono é retomada");
+        assert_eq!(read(), own);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
