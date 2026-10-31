@@ -1,0 +1,36 @@
+# hangar-server e hangar-cano no macOS (Apple Silicon e Intel), à parte do server.yml: o runner de Mac é lento e
+# falha de forma intermitente, e nada depende deste run. Roda quando o Server da main ou do canal `beta` termina,
+# sobre o mesmo commit, e publica só as entradas de macOS na mesma release (server-latest ou server-<branch>);
+# Linux e Windows já publicaram sem esperar. O Package não escuta este workflow.
+# `workflow_run` só vale com este arquivo na branch padrão (main), também para os runs da `beta`.
+name: Server macOS
+
+on:
+  workflow_run:
+    workflows: [Server]
+    types: [completed]
+    branches: [main, beta]
+
+jobs:
+  server:
+    # Run de fork nunca: o código do commit roda aqui. Run cancelado foi substituído por um push mais novo.
+    if: github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.conclusion != 'cancelled'
+    uses: ./.github/workflows/server-jobs.yml
+    permissions:
+      contents: write
+      actions: write
+    with:
+      branch: ${{ github.event.workflow_run.head_branch }}
+      ref: ${{ github.event.workflow_run.head_sha }}
+      # Mac Intel em runner Intel: os testes rodam na arquitetura que vai usar o binário.
+      sistemas: >-
+        [
+          {"os": "macos-latest", "platform": "macos-aarch64", "exe": "", "target": "", "zigbuild": false,
+           "dir": "target", "experimental": false},
+          {"os": "macos-15-intel", "platform": "macos-x86_64", "exe": "", "target": "", "zigbuild": false,
+           "dir": "target", "experimental": false}
+        ]
+      cache_release: >-
+        [
+          {"os": "macos-latest", "target": "", "zigbuild": false}
+        ]

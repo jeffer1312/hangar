@@ -1,0 +1,103 @@
+# App desktop nativo no macOS (Apple Silicon e Intel), à parte do native.yml: o runner de Mac é lento e falha de
+# forma intermitente, e nada depende deste run. Roda quando o Native da main ou do canal `beta` termina verde (o
+# Linux já publicou a versão), compila o mesmo commit e acrescenta os arquivos de macOS à release e ao
+# `native-latest.json` dessa versão. Se outra versão já foi publicada nesse meio tempo, não mexe em nada: o macOS
+# fica fora do manifesto até o run da versão nova, e o app do Mac só não vê atualização (update.rs, arquivo ausente).
+# `workflow_run` só vale com este arquivo na branch padrão (main), também para os runs da `beta`.
+name: Native macOS
+
+on:
+  workflow_run:
+    workflows: [Native]
+    types: [completed]
+    branches: [main, beta]
+
+jobs:
+  build:
+    # Run de fork nunca: o código do commit roda aqui. Só depois do Native verde, que é o que publicou a versão.
+    if: github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.conclusion == 'success'
+    uses: ./.github/workflows/native-build.yml
+    permissions:
+      contents: read
+      actions: write
+    with:
+      branch: ${{ github.event.workflow_run.head_branch }}
+      ref: ${{ github.event.workflow_run.head_sha }}
+      sistemas: >-
+        [
+          {"os": "macos-latest", "platform": "macos-aarch64", "exe": "", "experimental": false},
+          {"os": "macos-15-intel", "platform": "macos-x86_64", "exe": "", "experimental": false}
+        ]
+
+  # Publica o que compilou: um sistema que falhou não impede o outro.
+  publish:
+    needs: build
+    if: ${{ !cancelled() && needs.build.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    concurrency:
+      group: native-macos-publish-${{ github.event.workflow_run.head_branch }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BRANCH: ${{ github.event.workflow_run.head_branch }}
+      SHA: ${{ github.event.workflow_run.head_sha }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: native-macos-*
+          path: out
+          merge-multiple: true
+      - name: Publicar na release
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          # Mesma limpeza do release_tag() do desktop-native/src/update.rs e do native.yml.
+          if [ "$BRANCH" = main ]; then tag=native-latest; else tag="native-${BRANCH//[^A-Za-z0-9._-]/-}"; fi
+          mkdir -p out && cd out
+          arquivos=(Hangar-macos-*)
+          if [ "${#arquivos[@]}" -eq 0 ]; then
+            # Artefato que existe e não baixou é falha de transporte: vermelho, nunca a release velha calada.
+            nomes=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" --paginate --jq '.artifacts[].name')
+            if grep -q '^native-macos-' <<<"$nomes"; then echo "::error::artefato do macOS existe e não baixou"; exit 1; fi
+            echo "::notice::nenhum build de macOS deste run; a release segue sem ele."
+            exit 0
+          fi
+          manifesto() { gh release download "$tag" --repo "$GITHUB_REPOSITORY" -p native-latest.json -O - | jq -r .commit; }
+          de=$(manifesto)
+          if [ "$de" != "$SHA" ]; then
+            echo "::notice::o manifesto de $tag é de $de, não de $SHA; o macOS desta versão não é publicado."
+            exit 0
+          fi
+          for f in "${arquivos[@]}"; do sha256sum "$f" > "$f.sha256"; done
+          gh release upload "$tag" Hangar-macos-* --repo "$GITHUB_REPOSITORY" --clobber
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" -p native-latest.json -O atual.json
+          jq --argjson novos "$(jq -nR '[inputs | capture("^(?<sha>[0-9a-f]{64})  (?<name>.+)$") | {(.name): .sha}] | add' "${arquivos[@]/%/.sha256}")" \
+            '.files += $novos' atual.json > native-latest.json
+          # shortcut: ler e regravar não é atômico; versão nova publicada nesses segundos volta o manifesto a esta
+          # (o app recusa o binário de sha diferente) até a próxima publicação. Trocar por fontes por sistema, como o server.
+          [ "$(jq -r .commit atual.json)" = "$SHA" ] || { echo "::notice::outra versão publicou agora; macOS não entra."; exit 0; }
+          gh release upload "$tag" native-latest.json --repo "$GITHUB_REPOSITORY" --clobber
+          cat native-latest.json
+          # As notas da versão dizem que o macOS ainda não saiu: troca a linha de cada sistema publicado.
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json body --jq .body > notas.md
+          for f in "${arquivos[@]}"; do
+            case "$f" in
+              Hangar-macos-aarch64) rotulo='macOS' ;;
+              Hangar-macos-x86_64) rotulo='macOS Intel' ;;
+              *) continue ;;
+            esac
+            ROTULO="$rotulo" python3 -c '
+          import os, re, sys
+          p = "notas.md"
+          r = os.environ["ROTULO"]
+          t = open(p).read()
+          open(p, "w").write(re.sub(rf"^{re.escape(r)}: .*$", f"{r}: arquivo desta versão.", t, flags=re.M))'
+          done
+          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --notes-file notas.md

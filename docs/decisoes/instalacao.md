@@ -112,6 +112,15 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   tem grupo próprio sem cancelamento e nunca é cortado no meio do upload. Cache só a main grava, e quem
   grava apaga as cópias antigas do mesmo prefixo. O LTO completo do `dist` fica. Evidência em
   [CI paralelo e cancelamento](#ci-testes-em-paralelo-e-cancelamento-do-run-substituído-19102026).
+- **macOS no CI roda à parte e nada espera por ele.** `server.yml` e `native.yml` compilam só Linux e
+  Windows; os jobs estão em `server-jobs.yml` e `native-build.yml` (`workflow_call`). O `server-macos.yml`
+  e o `native-macos.yml` disparam por `workflow_run` quando o Server ou o Native da main ou do `beta`
+  termina, sobre o mesmo commit (`branch`/`ref` passados aos jobs: no `workflow_run` o `github.ref_name`
+  e o `github.sha` são os da main). O Server macOS publica as entradas dele no `server-latest.json` pelas
+  fontes por sistema; o Native macOS acrescenta os arquivos ao `native-latest.json` só se o manifesto
+  ainda é do mesmo commit, e troca a linha dele nas notas. O Package escuta só Server e CI. Outras
+  branches não testam macOS. Antes, o run inteiro esperava o Mac (cerca de 1 h a 1,5 h contra 20 min do
+  Linux) e o Package e as publicações de Linux e Windows ficavam presas nele.
 - **O app nativo segue o canal do servidor desta máquina.** `pre_voo.alvo` fora da main → release
   `native-<branch>`, que o `native.yml` publica a cada push no canal `beta` (mesma limpeza de nome no
   workflow e no `update.rs`); a `native-latest` continua só da main. Branch sem release, ou sem o
