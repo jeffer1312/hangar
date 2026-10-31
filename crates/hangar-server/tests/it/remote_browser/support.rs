@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
 use axum::Router;
@@ -96,22 +96,35 @@ pub fn git_probe(root: &Path) -> PathBuf {
     bin
 }
 
+static CHROMIUM: LazyLock<Value> = LazyLock::new(|| {
+    serde_json::from_slice(&std::fs::read(crate::common::contract().join("remote-browser/chromium.json")).unwrap()).unwrap()
+});
+
+/// Uma tabela por vez: cada teste isolado roda em processo próprio e só paga pela que usa.
 pub fn contract(name: &str) -> Value {
     use super::{transport_cases as transport, url_cases as url};
-    let chromium: Value = serde_json::from_slice(&std::fs::read(crate::common::contract().join("remote-browser/chromium.json")).unwrap()).unwrap();
-    let table = match name {
-        "chromium" => return chromium,
-        "transport" => transport::CASES,
-        "transport-supplement" => transport::SUPPLEMENT,
-        "transport-review-supplement" => transport::REVIEW,
-        "transport-gaps" => super::transport_gaps_cases::CASES,
-        "url-commands" => url::COMMANDS,
-        "url-gaps" => url::GAPS,
+    fn expanded(table: &str) -> Value {
+        let mut value: Value = serde_json::from_str(table).unwrap();
+        expand(&mut value, &CHROMIUM);
+        value
+    }
+    static TRANSPORT: LazyLock<Value> = LazyLock::new(|| expanded(transport::CASES));
+    static SUPPLEMENT: LazyLock<Value> = LazyLock::new(|| expanded(transport::SUPPLEMENT));
+    static REVIEW: LazyLock<Value> = LazyLock::new(|| expanded(transport::REVIEW));
+    static GAPS: LazyLock<Value> = LazyLock::new(|| expanded(super::transport_gaps_cases::CASES));
+    static URL_COMMANDS: LazyLock<Value> = LazyLock::new(|| expanded(url::COMMANDS));
+    static URL_GAPS: LazyLock<Value> = LazyLock::new(|| expanded(url::GAPS));
+    let table: &Value = match name {
+        "chromium" => &CHROMIUM,
+        "transport" => &TRANSPORT,
+        "transport-supplement" => &SUPPLEMENT,
+        "transport-review-supplement" => &REVIEW,
+        "transport-gaps" => &GAPS,
+        "url-commands" => &URL_COMMANDS,
+        "url-gaps" => &URL_GAPS,
         other => panic!("tabela desconhecida: {other}"),
     };
-    let mut value: Value = serde_json::from_str(table).unwrap();
-    expand(&mut value, &chromium);
-    value
+    table.clone()
 }
 
 /// As tabelas abreviam o quadro medido e as repetições longas: `⟦FRAME⟧`, `⟦SCREENSHOT⟧`, `⟦n×trecho⟧`.
