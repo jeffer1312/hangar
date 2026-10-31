@@ -205,7 +205,14 @@ passo_backend() {   # só Linux: no Windows fica o passo_runtime
     (( PROCESSOS > 1 )) && pytest+=(-n "$PROCESSOS" --dist loadfile)
     # basetemp em disco: o omp extrai centenas de MB por caso (7 GB na suíte), e o /tmp pode ser tmpfs.
     mkdir -p "/var/tmp/hangar-verificacao-$USER"
-    (cd backend && OMP_TEST_BIN="$omp" uv run "${pytest[@]}" --basetemp="/var/tmp/hangar-verificacao-$USER/pytest")
+    (cd backend && HANGAR_SHARED_AUTH_TEST_BIN="$PWD/../crates/target/par-auth/hangar-server" OMP_TEST_BIN="$omp" uv run "${pytest[@]}" --basetemp="/var/tmp/hangar-verificacao-$USER/pytest")
+}
+
+# Numa cópia: outro `cargo` com outros pacotes religa target/debug para a variante dele e o par fixado
+# ali deixa de conferir. cwd = crates/.
+fixar_par_auth() {
+    mkdir -p target/par-auth && cp -f target/debug/hangar-server target/debug/libhangar_auth.so target/par-auth/ && \
+        python3 ../scripts/pin-auth-pair.py --server target/par-auth/hangar-server --library target/par-auth/libhangar_auth.so
 }
 
 # Só Linux, antes dos outros: o único que compila e instala. Depois dele os passos só executam,
@@ -243,15 +250,15 @@ passo_preparo() {
         # executável de testes `it` do hangar-server.
         (cd crates && cargo build --locked -p hangar-server -p hangar-auth && \
             python3 ../scripts/pin-auth-pair.py --server target/debug/hangar-server --library target/debug/libhangar_auth.so && \
+            fixar_par_auth && \
             cargo build --locked -p hangar-server --example orq_contract && \
             cargo build --locked -p hangar-workspace --example workspace_contract && \
             cargo test --locked -p hangar-server --no-run --test it) || falhou=1
     fi
-    if [[ "$plano" == *" backend_rapido "* && "$plano" != *" backend "* && "$plano" != *" rust "* ]]; then
+    if [[ "$plano" == *" backend_rapido "* ]]; then
         # A prova das duas portas precisa do mesmo executável e biblioteca desta árvore fixa. Sempre:
         # teste ou dependência mudada puxa a suíte inteira, e quem usa o par não dá para listar pelo diff.
-        (cd crates && cargo build --locked -p hangar-server -p hangar-auth && \
-            python3 ../scripts/pin-auth-pair.py --server target/debug/hangar-server --library target/debug/libhangar_auth.so) || falhou=1
+        (cd crates && cargo build --locked -p hangar-server -p hangar-auth && fixar_par_auth) || falhou=1
     fi
     for pid in "${pids[@]}"; do wait "$pid" || falhou=1; done
     return $falhou
@@ -368,7 +375,7 @@ passo_backend_rapido() {
     local pytest=(pytest -q)
     (( PROCESSOS > 1 )) && pytest+=(-n "$PROCESSOS" --dist loadfile)
     mkdir -p "/var/tmp/hangar-verificacao-$USER"
-    (cd backend && OMP_TEST_BIN="$omp" uv run "${pytest[@]}" --basetemp="/var/tmp/hangar-verificacao-$USER/pytest-rapido" "${testes[@]}")
+    (cd backend && HANGAR_SHARED_AUTH_TEST_BIN="$PWD/../crates/target/par-auth/hangar-server" OMP_TEST_BIN="$omp" uv run "${pytest[@]}" --basetemp="/var/tmp/hangar-verificacao-$USER/pytest-rapido" "${testes[@]}")
 }
 
 # Tipos só com .ts/.svelte ou mensagens no diff (chave removida quebra o m.<chave>()); testes, os
