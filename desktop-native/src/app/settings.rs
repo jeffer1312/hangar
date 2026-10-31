@@ -13,14 +13,15 @@ mod appearance_page;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Page {
-    General, Appearance, Diary, About, Migration,
-    Servers, Sync, Connect, Devices, SharedConfig, Accounts, Orchestration, Harnesses, Voice, Jev, Windows, Notifications, Shortcuts, Attachments, Worktrees, Advanced,
+    General, Appearance, Sessions, Diary, About, Migration,
+    Servers, Sync, Connect, Devices, SharedConfig, Accounts, Vault, Orchestration, Harnesses, Voice, Jev, Windows, Notifications, Shortcuts, Attachments, Worktrees, Advanced,
 }
 
 impl Page {
-    const DEVICE: [Page; 3] = [Page::General, Page::Appearance, Page::About];
+    // Sessões fica no geral: a configuração vale para todas as máquinas, sem seletor.
+    const DEVICE: [Page; 4] = [Page::General, Page::Appearance, Page::Sessions, Page::About];
     // O diário é do servidor escolhido no seletor ("O registro de uso de <servidor>"), não do aparelho.
-    const SERVER: [Page; 17] = [Page::Diary, Page::Servers, Page::Sync, Page::Connect, Page::Devices, Page::SharedConfig, Page::Accounts, Page::Orchestration, Page::Harnesses,
+    const SERVER: [Page; 18] = [Page::Diary, Page::Servers, Page::Sync, Page::Connect, Page::Devices, Page::SharedConfig, Page::Accounts, Page::Vault, Page::Orchestration, Page::Harnesses,
         Page::Voice, Page::Jev, Page::Windows, Page::Notifications, Page::Shortcuts, Page::Attachments, Page::Worktrees, Page::Advanced];
 
     /// As seções da navegação, na ordem dela; a voz abre uma pelo `key`.
@@ -34,8 +35,8 @@ impl Page {
 
     pub(super) fn key(self) -> &'static str {
         match self {
-            Page::General => "general", Page::Appearance => "appearance", Page::Diary => "diary", Page::About => "about", Page::Migration => "migration",
-            Page::Servers => "servers", Page::Sync => "sync", Page::Connect => "connect", Page::Devices => "devices", Page::SharedConfig => "shared_config", Page::Accounts => "accounts", Page::Orchestration => "orchestration",
+            Page::General => "general", Page::Appearance => "appearance", Page::Sessions => "sessions", Page::Diary => "diary", Page::About => "about", Page::Migration => "migration",
+            Page::Servers => "servers", Page::Sync => "sync", Page::Connect => "connect", Page::Devices => "devices", Page::SharedConfig => "shared_config", Page::Accounts => "accounts", Page::Vault => "vault", Page::Orchestration => "orchestration",
             Page::Harnesses => "harnesses", Page::Voice => "voice", Page::Jev => "jev", Page::Windows => "windows", Page::Notifications => "notifications",
             Page::Shortcuts => "shortcuts", Page::Attachments => "attachments", Page::Worktrees => "worktrees", Page::Advanced => "advanced",
         }
@@ -43,9 +44,9 @@ impl Page {
 
     fn icon(self) -> IconName {
         match self {
-            Page::General => IconName::Globe, Page::Appearance => IconName::Palette, Page::Diary => IconName::FileText,
+            Page::General => IconName::Globe, Page::Appearance => IconName::Palette, Page::Sessions => IconName::EyeOff, Page::Diary => IconName::FileText,
             Page::About => IconName::Info, Page::Migration => IconName::Activity, Page::Servers => IconName::Server, Page::Sync => IconName::RefreshCw, Page::Connect => IconName::Globe, Page::Devices => IconName::Smartphone, Page::SharedConfig => IconName::Layers,
-            Page::Accounts => IconName::User, Page::Orchestration => IconName::Users, Page::Harnesses => IconName::Activity,
+            Page::Accounts => IconName::User, Page::Vault => IconName::KeyRound, Page::Orchestration => IconName::Users, Page::Harnesses => IconName::Activity,
             Page::Voice => IconName::Mic, Page::Jev => IconName::Zap, Page::Windows => IconName::Monitor, Page::Notifications => IconName::Bell,
             Page::Shortcuts => IconName::Keyboard, Page::Attachments => IconName::Paperclip, Page::Worktrees => IconName::GitBranch, Page::Advanced => IconName::SlidersHorizontal,
         }
@@ -95,12 +96,15 @@ const PAGE_ROWS: &[(Page, &[(&str, Option<&str>)])] = &[
     (Page::General, &[("settings_language", Some("settings_language_desc")), ("settings_currency", Some("settings_currency_search")),
         ("settings_tray", Some("settings_tray_desc")), ("settings_chrome_autofill", Some("settings_chrome_autofill_desc")),
         ("settings_full_chrome", Some("settings_full_chrome_desc"))]),
+    (Page::Sessions, &[("settings_auto_hide_label", None)]),
     (Page::Diary, &[("settings_diary_rules", Some("settings_diary_rule_private")), ("settings_diary_download", Some("settings_diary_rule_local")),
         ("settings_diary_recent", None)]),
     (Page::About, &[("settings_about_app", None), ("settings_about_server", None), ("settings_about_update", Some("settings_about_update_desc")),
         ("settings_channel_title", Some("settings_channel_help"))]),
     (Page::Accounts, &[("accounts_subscriptions", Some("accounts_menu_note")), ("accounts_models", None),
         ("accounts_others", Some("accounts_others_empty")), ("accounts_density", None), ("accounts_refresh", None)]),
+    (Page::Vault, &[("vault_entries", Some("vault_entries_hint")), ("vault_add", Some("vault_token_hint")),
+        ("vault_backup", Some("vault_backup_hint")), ("vault_recovery", None)]),
     (Page::Orchestration, &[("orchestration_intro", None), ("orchestration_unrestricted", None)]),
     (Page::Shortcuts, &[("shortcuts_add", Some("shortcuts_lead")), ("shortcuts_restore", Some("shortcuts_restore_help")),
         ("keyboard_title", Some("keyboard_lead")), ("keyboard_hold_title", Some("keyboard_hold_help"))]),
@@ -484,6 +488,8 @@ impl Hangar {
         self.costs.view = None;
         (self.worktrees.view, self.worktrees.open) = (None, None);
         self.settings = Some(page);
+        // O Cofre relê a cada abertura, e a senha revelada não passa para a próxima.
+        self.vault_page = None;
         self.settings_ui.live = false;
         self.settings_ui.hit = None;
         // Toda página abre do topo; a rolagem é uma só para todas as páginas.
@@ -510,6 +516,7 @@ impl Hangar {
     pub(super) fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.settings.take().is_some() {
             self.keyboard.cancel_edit();
+            self.vault_page = None;
             self.accounts_page_left();
             self.sync_page_left();
             self.connect_page_left();
@@ -551,7 +558,11 @@ impl Hangar {
             None => { ui.reveal.set(false); ui.scroll.set_offset(point(px(0.), px(0.))); }
         }
         self.settings = Some(found.page);
-        if opened { self.settings_opened(found.page, cx); }
+        if opened {
+            // Como no `open_settings`: a senha revelada não sobrevive à saída da página.
+            self.vault_page = None;
+            self.settings_opened(found.page, cx);
+        }
         cx.notify();
     }
 
@@ -847,10 +858,12 @@ impl Hangar {
         let body = match page {
             Page::Appearance => self.render_appearance(wide, cx),
             Page::General => self.render_general(cx),
+            Page::Sessions => self.render_sessions_settings(window, cx),
             Page::Diary => self.render_diary(cx),
             Page::About => self.render_about(cx),
             Page::Migration => self.render_migration(cx),
             Page::Accounts => self.render_accounts(accounts_wide, window, cx),
+            Page::Vault => self.render_vault(window, cx),
             Page::Orchestration => self.render_orchestration(cx),
             Page::Shortcuts => self.render_shortcuts_page(cx),
             Page::Worktrees => self.render_worktree_settings(window, cx),

@@ -15,6 +15,8 @@
   import SyncSettings from './SyncSettings.svelte';
   import SharedConfigSettings from './SharedConfigSettings.svelte';
   import ComputerControlSettings from './ComputerControlSettings.svelte';
+  import PasswordVaultSettings from './PasswordVaultSettings.svelte';
+  import SessionsSettings from './SessionsSettings.svelte';
   import ServidorSeletor from './ServidorSeletor.svelte';
   import ConfigIcone from './ConfigIcone.svelte';
   import BuscaConfig, { TITULO_TELA } from './BuscaConfig.svelte';
@@ -108,6 +110,9 @@
   const LINHAS = [
     { id: 'geral', secao: 'app', rotulo: m.config_geral_linha(), icone: 'globo', servidor: false },
     { id: 'aparencia', secao: 'app', rotulo: m.config_modal_aparencia(), icone: 'pincel', servidor: false },
+    // Grava em todas as máquinas próprias (nunca nas de convite), por isso fica fora do grupo do
+    // servidor do seletor.
+    { id: 'sessoes', secao: 'app', rotulo: m.settings_sessions_title(), icone: 'sliders', servidor: false },
     { id: 'sobre', secao: 'app', rotulo: m.config_modal_sobre(), icone: 'info', servidor: false },
     // O diário é do servidor do seletor, não do aparelho; o convidado continua vendo (`servidor: false`).
     { id: 'diario', secao: 'servidor', rotulo: m.config_diag_titulo(), icone: 'recibo', servidor: false },
@@ -115,6 +120,7 @@
     { id: 'sincronizacao', secao: 'servidor', rotulo: m.sync_config_titulo(), icone: 'globo', servidor: true },
     { id: 'shared-config', secao: 'servidor', rotulo: m.shared_config_title(), icone: 'sinal', servidor: true },
     { id: 'contas', secao: 'servidor', rotulo: m.contas_modelos_titulo(), icone: 'pessoa', servidor: true },
+    { id: 'cofre', secao: 'servidor', rotulo: m.vault_web_title(), icone: 'chave', servidor: true },
     { id: 'harnesses', secao: 'servidor', rotulo: m.harness_titulo(), icone: 'pulso', servidor: true },
     { id: 'voz', secao: 'servidor', rotulo: m.voz_titulo(), icone: 'mic', servidor: true },
     { id: 'jev', secao: 'servidor', rotulo: m.jev_title(), icone: 'raio', servidor: true },
@@ -177,7 +183,9 @@
   // No desktop a raiz (a lista de linhas) so existe no celular: as duas colunas ja mostram a
   // navegacao inteira, entao 'root' cai na Aparencia. Resolvido NO RENDER, nunca por navegacao —
   // um redirect disparado no resize seria um push a mais no historico, que a rota ja acerta sozinha.
-  const telaAtual = $derived(isDesktop && tela === 'root' ? ('aparencia' as TelaConfig) : tela);
+  // O cofre é só da vista do celular: o desktop web não ganha tela nova (evolui no nativo).
+  const telaAtual = $derived(isDesktop && (tela === 'root' || tela === 'cofre') ? ('aparencia' as TelaConfig) : tela);
+  const linhasDaVista = $derived(isDesktop ? linhasVisiveis.filter((l) => l.id !== 'cofre') : linhasVisiveis);
 
   // VOLTAR e FECHAR sao coisas diferentes, e o BottomSheet so conhece "fechar": ele chama onClose no
   // Esc, no toque no backdrop E no swipe pra baixo. Passar `voltar` como onClose faria o swipe — o
@@ -301,7 +309,7 @@
           {:else}
             <p class="st-secao">{secao === 'servidor' && nomeAlvo ? m.config_modal_servidor_de({ nome: nomeAlvo }) : secao === 'servidor' ? m.lista_agrupar_servidor() : m.config_aparencia_app()}</p>
           {/if}
-          {#each linhasVisiveis.filter((l) => l.secao === secao) as l (l.id)}
+          {#each linhasDaVista.filter((l) => l.secao === secao) as l (l.id)}
             <button class="st-nav-item" class:sel={telaAtual === l.id}
                     aria-current={telaAtual === l.id ? 'page' : undefined}
                     disabled={l.servidor && semServidor}
@@ -357,6 +365,8 @@
     <p class="st-sem-etiqueta">{m.config_escopo_mista({ etiqueta: m.config_escopo_servidor() })}</p>
   {:else if TELAS_DE_SERVIDOR.includes(telaAtual)}
     <p class="st-valem">{m.config_server_valem({ etiqueta: m.config_escopo_servidor() })}</p>
+  {:else if telaAtual === 'sessoes'}
+    <!-- Grava em todas as máquinas: "vale só neste aparelho" seria falso; o resultado por máquina diz onde. -->
   {:else}
     <p class="st-sem-etiqueta">{m.config_escopo_sem_etiqueta()}</p>
   {/if}
@@ -372,7 +382,7 @@
         <p class="st-secao">{secao === 'servidor' && nomeAlvo ? m.config_modal_servidor_de({ nome: nomeAlvo }) : secao === 'servidor' ? m.lista_agrupar_servidor() : m.config_aparencia_app()}</p>
       {/if}
       <div class="st-cartao">
-        {#each linhasVisiveis.filter((l) => l.secao === secao) as l (l.id)}
+        {#each linhasDaVista.filter((l) => l.secao === secao) as l (l.id)}
           <SettingsRow icone={l.icone} rotulo={l.rotulo}
             desabilitada={l.servidor && semServidor}
             motivo={m.config_modal_escolha_servidor()}
@@ -382,6 +392,8 @@
     {/each}
   {:else if telaAtual === 'geral'}
     <GeneralSettings />
+  {:else if telaAtual === 'sessoes'}
+    <SessionsSettings />
   {:else if telaAtual === 'aparencia'}
     <AppearanceSettings podeAoVivo={isDesktop} onVerAoVivo={() => (aoVivo = true)} />
   {:else if telaAtual === 'orquestracao'}
@@ -404,6 +416,12 @@
       onLogout={onLogout ?? (() => {})} />
   {:else if telaAtual === 'contas'}
     <ContasSettings apiTarget={alvo} desktop={isDesktop} />
+  {:else if telaAtual === 'cofre'}
+    {#if resolvedServer}
+      {#key identidade}<PasswordVaultSettings server={resolvedServer} />{/key}
+    {:else}
+      <p>{m.config_modal_escolha_servidor()}</p>
+    {/if}
   {:else if telaAtual === 'shared-config'}
     {#if resolvedServer}
       {#key identidade}<SharedConfigSettings server={resolvedServer} />{/key}

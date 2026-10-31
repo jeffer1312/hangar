@@ -22,6 +22,8 @@ const DEVICE: Page[] = [
   { route: '/config/aparencia', icon: 'Palette', title: m.native_settings_page_appearance,
     rows: [m.config_tema_curto, m.native_settings_accent, m.config_fundo_curto, m.config_fundo_escolher,
       m.config_fundo_transparencia, m.config_fundo_solidez, m.config_aparencia_pensamento_tools] },
+  // Vale para todas as máquinas próprias de uma vez: por isso fica fora do grupo do servidor escolhido.
+  { route: '/config/sessions', icon: 'EyeOff', title: m.settings_sessions_title, rows: [m.session_auto_hide_label] },
   { route: '/config/sobre', icon: 'Info', title: m.native_settings_page_about,
     rows: [m.atualizar_versao, m.config_sobre_servidor, m.atualizar_versao_servidor] },
 ];
@@ -34,6 +36,7 @@ const SERVER: Page[] = [
   { route: '/config/shared-config', icon: 'Layers', title: m.shared_config_title, rows: [] },
   { route: '/config/contas', icon: 'User', title: m.native_settings_page_accounts,
     rows: [m.contas_atualizar, m.contas_secao_claude, m.contas_secao_modelos, m.contas_secao_outros] },
+  { route: '/config/cofre', icon: 'KeyRound', title: m.vault_app_title, rows: [m.vault_app_where, m.vault_app_add] },
   { route: '/config/orchestration', icon: 'Users', title: m.native_settings_page_orchestration, rows: [] },
   { route: '/config/orchestration-history', icon: 'History', title: m.orq_history_title, rows: [] },
   { route: '/config/harnesses', icon: 'Activity', title: m.native_settings_page_harnesses, rows: [] },

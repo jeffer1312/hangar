@@ -5,6 +5,8 @@ mod auto_report;
 mod codex_activity;
 mod composer_history;
 mod login_browser;
+mod password_vault;
+mod hide_from_list;
 mod rename_suggestion;
 
 use std::time::Instant;
@@ -20,8 +22,10 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "codex-atividade" => Some(codex_activity::render),
         "etiquetas-maquina-conta" => Some(account_tags::render),
         "sugestao-de-nome" => Some(rename_suggestion::render),
+        "cofre-de-senhas" => Some(password_vault::render),
         "relatorio-automatico" => Some(auto_report::render),
         "login-navegador" => Some(login_browser::render),
+        "ocultar-da-lista" => Some(hide_from_list::render),
         _ => None,
     }
 }

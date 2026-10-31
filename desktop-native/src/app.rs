@@ -36,6 +36,8 @@ mod group_sheet;
 mod hangar_live;
 mod harness;
 mod keyring;
+mod vault;
+mod vault_requests;
 mod rename_suggest;
 mod tags;
 mod viewer;
@@ -67,6 +69,7 @@ mod settings;
 mod mention;
 mod server_config;
 mod worktree_settings;
+mod auto_hide;
 mod invite;
 mod pair_accept;
 mod external;
@@ -77,8 +80,10 @@ pub(crate) use rows::{agent_card, agent_clock};
 pub(crate) use session_tabs::{PlateMark, PlateSegment, plate, tab_frame, tab_title, with_context_ring};
 pub(crate) use tags::{account_icon, machine_icon};
 pub(crate) use rename_suggest::{Strip as RenameStrip, rename_strip};
+pub(crate) use vault_requests::{approve_body, approve_title, request_button, request_card, request_command, request_pair};
 pub(crate) use settings::{setting_row, settings_box};
 pub(crate) use accounts::{login_heading, target_row};
+pub(crate) use sidebar::{Sub as RowSub, group_header_look, menu_item_height, menu_item_look, menu_label, menu_list_look, menu_surface_look};
 mod shortcuts;
 mod shortcut_transfer;
 mod keyboard;
@@ -598,6 +603,10 @@ pub struct Hangar {
     /// Máquinas (chave `servers::norm`, ativa e outras) com o chaveiro trancado, pelo evento `keyring` da lista de cada uma.
     /// Só a queda do stream dela limpa: o servidor reenvia o estado ao reconectar.
     keyring: HashMap<String, keyring::Prompt>,
+    /// Pedidos do cofre esperando resposta, pelo evento `vault` da lista de cada máquina dona (chave `servers::norm`).
+    vault: HashMap<String, Entity<vault_requests::VaultRequests>>,
+    /// Página Cofre aberta, com a conexão em que nasceu.
+    vault_page: Option<(u64, Entity<vault::VaultPage>)>,
     rename_suggest: rename_suggest::RenameSuggest,
     /// Último evento `tags` da lista de cada máquina (chave `servers::norm`); máquina sem ele é servidor antigo.
     /// Fica na queda do stream: a etiqueta não muda por a máquina estar fora.
@@ -778,6 +787,7 @@ pub struct Hangar {
     harness: harness::Harnesses,
     server_config: server_config::ServerConfig,
     worktree_settings: worktree_settings::WorktreeSettings,
+    auto_hide: auto_hide::AutoHidePage,
     sync: sync::Sync,
     connect: connect::Connect,
     devices: devices::Devices,
@@ -1080,7 +1090,7 @@ impl Hangar {
             history_installed: false, pending_chat: Vec::new(),
             history_limit: 400, has_older: false, etag: None, error: None, list_error: None,
             delivery: DeliveryTracker::default(), stopping: HashSet::new(), stop_feedback: HashMap::new(), drafts: HashMap::new(), input_history: HashMap::new(),
-            flight: InFlight::default(), action_feedback: HashMap::new(), file_cards: HashMap::new(), queue: Default::default(), live_terms: Vec::new(), keyring: HashMap::new(), rename_suggest: Default::default(), tags: HashMap::new(), question_open: None, question_card: None,
+            flight: InFlight::default(), action_feedback: HashMap::new(), file_cards: HashMap::new(), queue: Default::default(), live_terms: Vec::new(), keyring: HashMap::new(), vault: HashMap::new(), vault_page: None, rename_suggest: Default::default(), tags: HashMap::new(), question_open: None, question_card: None,
             hangar_open: false, hangar_focus: cx.focus_handle(), hangar_error: None, live_clock: None, ask_form: AskForm::default(), ask_drafts: HashMap::new(), plans_dismissed: HashSet::new(), answered_tools: HashSet::new(), answering: HashMap::new(), ask_scroll: Default::default(), plan_scroll: Default::default(), plan_view: None,
             plan_review: Default::default(),
             list_state, rail_hover: None, follow: Default::default(), row_ids: Vec::new(), row_signatures: Vec::new(), conversation: Default::default(), row_assets: Vec::new(), expanded: HashSet::new(), kept_expanded: HashMap::new(), orq_days: HashSet::new(),
@@ -1101,7 +1111,7 @@ impl Hangar {
             desktop_note: None,
             palette_seq: 0, backdrop_seq: 0, backdrop_pending: false, backdrop: None, backdrop_note: None, backdrop_busy: None, grain: crate::media::grain(),
             device: device::Device::new(window, cx), accounts: accounts::Accounts::default(), orchestration: orchestration::Orchestration::default(), orq_history: None, orq_history_serial: 0, home_usage: Default::default(), recents: Default::default(), reopen: None, shortcuts: shortcuts::Shortcuts::default(),
-            worktree_settings: worktree_settings::WorktreeSettings::default(),
+            worktree_settings: worktree_settings::WorktreeSettings::default(), auto_hide: Default::default(),
             server_config: server_config::ServerConfig::default(), harness: harness::Harnesses::default(), sync: sync::Sync::default(), connect: connect::Connect::default(), devices: devices::Devices::default(), shared: shared_config::SharedConfig::default(), machines: machines::Machines::default(),
             costs: Default::default(), worktrees: Default::default(), artifacts: Default::default(), usage_stats: Default::default(), search: Default::default(), topbar: Default::default(), computer: computer::Computer::default(), new_session: None, sidebar, machines_tray,
             terminal: None, terminal_serial: 0,
@@ -1429,6 +1439,8 @@ impl Hangar {
 
     /// O que é da conexão atual sai da tela e os pedidos em voo passam a ser descartados. Serve à troca de servidor e ao Sair.
     fn drop_connection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // O cartão responde pela conexão que guarda; a lista nova traz os pedidos de volta.
+        self.vault.remove(&self.active_key());
         self.close_terminal(false, window, cx);
         // As respostas da conexão velha são descartadas: a prévia ficaria esperando para sempre.
         self.close_tab_preview(cx);
@@ -1783,11 +1795,21 @@ impl Hangar {
                         servers::RemoteUpdate::Stream(Update::Frame(frame)) if frame.event == "keyring" => keyring::locked(&frame.data),
                         _ => None,
                     };
+                    // Pedidos do cofre dela, com a mesma regra da queda.
+                    let vault = match &update {
+                        servers::RemoteUpdate::Stream(Update::Offline(_)) => Some(None),
+                        servers::RemoteUpdate::Stream(Update::Frame(frame)) if frame.event == "vault" => Some(Some(frame.data.clone())),
+                        _ => None,
+                    };
                     // Menu, renomear, fechar e grupo das linhas desta máquina acompanham a lista dela como os da ativa.
                     if self.receive_remote(generation, key.clone(), update, cx) { self.sidebar_sessions_changed(window, cx); }
                     self.remote_changed(&key, window, cx);
                     if live { self.live_changed(&key, window, cx); }
                     if let Some(locked) = keyring && self.set_keyring(&key, locked, window, cx) {
+                        self.redraw(panes::Area::Nav, cx);
+                        cx.notify();
+                    }
+                    if let Some(data) = vault && self.set_vault_requests(&key, data.as_ref(), window, cx) {
                         self.redraw(panes::Area::Nav, cx);
                         cx.notify();
                     }
@@ -1860,6 +1882,7 @@ impl Hangar {
                     self.list_error = Some(self.active_failure(&error));
                     let server = self.active_key();
                     if self.set_keyring(&server, false, window, cx) { self.redraw(panes::Area::Nav, cx); }
+                    if self.set_vault_requests(&server, None, window, cx) { self.redraw(panes::Area::Nav, cx); }
                     // Stream da lista caído: o chip e os blocos não mostram terminal velho dele.
                     if !std::mem::take(&mut self.live_terms).is_empty() {
                         let server = self.active_key();
@@ -1895,6 +1918,12 @@ impl Hangar {
                     visible = state.is_some_and(|locked| self.set_keyring(&server, locked, window, cx));
                     if visible { self.redraw(panes::Area::Nav, cx); }
                     state.is_some()
+                }
+                else if frame.event == "vault" {
+                    let server = self.active_key();
+                    visible = self.set_vault_requests(&server, Some(&frame.data), window, cx);
+                    if visible { self.redraw(panes::Area::Nav, cx); }
+                    vault_requests::parse(&frame.data).is_some()
                 }
                 else if frame.event == "tags" {
                     let server = self.active_key();
@@ -5773,6 +5802,7 @@ impl Hangar {
                     children.push((key, at, self.render_server_header(&id, &m.key, &label, count, invite, error, cx)));
                     // Num servidor só, o aviso do chaveiro aparece embaixo da lista, junto da falha dela.
                     if multi && let Some(notice) = self.render_keyring_notice(&m.key, false, cx) { children.push((String::new(), at, notice)); }
+                    if multi && let Some(cards) = self.render_vault_requests(&m.key, cx) { children.push((String::new(), at, cards)); }
                     hidden = self.sidebar.is_collapsed(&format!("server:{}", m.key));
                     if !hidden { rows(list, m.remote.as_deref(), at, &mut children, window, cx); }
                 }
@@ -5790,6 +5820,21 @@ impl Hangar {
                         children.push((String::new(), "", section(group.label.clone(), None).into_any_element()));
                     }
                     rows(list, None, "", &mut children, window, cx);
+                }
+            }
+        }
+        // As ocultas de todas as máquinas no fim, recolhidas por padrão; cada linha diz de qual máquina é.
+        let hidden_rows = self.hidden_sessions(cx);
+        if !hidden_rows.is_empty() {
+            children.push(("hidden/head".into(), "hidden", self.render_hidden_header(hidden_rows.len(), window, cx)));
+            if self.hidden_open() {
+                for (key, session) in hidden_rows {
+                    let remote = remote_of(&key);
+                    let selected = selected_name == Some(session.name.as_str()) && self.open_key() == remote;
+                    let row_key = format!("hidden/row:{}::{}", remote.as_deref().unwrap_or(""), session.name);
+                    let row = if conversations { self.render_conversation_row(session.clone(), selected, remote, multi, None, window, cx) }
+                        else { self.render_session_row(session.clone(), selected, remote, multi, None, window, cx) };
+                    children.push((row_key, "hidden", row));
                 }
             }
         }
@@ -5866,6 +5911,7 @@ impl Hangar {
                 .child(div().flex_1().min_w_0().child(text))
                 .child(Button::new("reconnect").xsmall().ghost().label(tr("retry")).on_click(cx.listener(|this, _, window, cx| this.connect(window, cx))))))
             .children((!multi).then(|| self.render_keyring_notice(&self.active_key(), false, cx)).flatten())
+            .children((!multi).then(|| self.render_vault_requests(&self.active_key(), cx)).flatten())
             // O CTA do rodapé da barra do web, com o recolher ao lado.
             .child(div().flex_shrink_0().px(px(8.)).pt(px(8.)).pb(px(8.)).flex().items_center().gap_2()
                 .child(self.new_session_button(false, cx))
@@ -5958,7 +6004,8 @@ impl Hangar {
             .when_some(self.list_error.clone(), |el, text| el.child(div().flex_shrink_0().max_w(px(260.)).flex().items_center().gap_1()
                 .child(div().min_w_0().truncate().text_xs().text_color(theme::warning()).child(text))
                 .child(Button::new("reconnect").xsmall().ghost().label(tr("retry")).on_click(cx.listener(|this, _, window, cx| this.connect(window, cx))))))
-            .children(self.keyring_keys().iter().filter_map(|key| self.render_keyring_notice(key, true, cx)).collect::<Vec<_>>()),
+            .children(self.keyring_keys().iter().filter_map(|key| self.render_keyring_notice(key, true, cx)).collect::<Vec<_>>())
+            .children(self.render_vault_chips(false, cx)),
             px(if floating { theme::PANEL_RADIUS } else { 0. }))
     }
 
@@ -6153,7 +6200,7 @@ impl Hangar {
                 .on_action(cx.listener(|this, _: &Escape, window, cx| this.cancel_session_rename(window, cx)))
                 .child(Input::new(&input).xsmall().aria_label(tr("sidebar_new_name"))).into_any_element(),
             None => div().flex_1().min_w_0().flex().items_center().gap_2()
-                .child(div().min_w_0().truncate().font_weight(FontWeight::MEDIUM).child(name.clone()))
+                .child(session_row_name(name.clone()))
                 .when(session.headless, |el| el.child(div().id(SharedString::from(format!("row-headless-{row_key}"))).flex_shrink_0().flex().opacity(0.72)
                     .tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new(tr("create_mode_headless")).build(window, cx))
                     .child(chrome::no_terminal_mark(12., theme::muted()))))
@@ -6173,10 +6220,9 @@ impl Hangar {
         if let Some(label) = &agent_label { spoken.push(label.clone()); }
         spoken.push(state_label);
         if session.headless { spoken.push(tr("create_mode_headless")); }
-        div().id(SharedString::from(row_id)).relative().flex_shrink_0().flex().items_center().gap(px(10.)).px(px(8.)).py(px(7.)).rounded(px(10.))
+        session_row_frame(SharedString::from(row_id), selected)
             .when_some(focus.as_ref(), |el, focus| el.track_focus(focus))
             .when(focus.as_ref().is_some_and(|f| f.is_focused(window)), |el| el.focus_ring_style(window, cx))
-            .when(selected, |el| el.bg(theme::selected_row()))
             .when(!selected, |el| el.hover(|el| el.bg(theme::hover())))
             .on_hover(cx.listener(move |this, hovered: &bool, _, cx| this.row_hover(hover_target.clone(), *hovered, cx)))
             .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, window, cx| this.row_press(press_target.clone(), window, cx)))
@@ -6192,7 +6238,7 @@ impl Hangar {
             .aria_label(self.session_number_label(&target, spoken.join(" · ")))
             .child(div().id(SharedString::from(format!("row-agent-{row_key}"))).flex().child(avatar)
                 .when_some(agent_label, |el, label| el.tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(label.clone()).build(window, cx))))
-            .child(div().flex_1().min_w_0().flex().flex_col().gap(px(1.))
+            .child(session_row_text()
             // O ⋯ fica por cima do fim da linha do nome: ela cede o espaço dele.
             .child(div().flex().items_center().gap(px(8.)).when(show_menu, |el| el.pr(px(22.)))
                 .children(self.session_number_badge(&target))
@@ -6203,10 +6249,7 @@ impl Hangar {
                     .child(div().size(px(5.)).flex_shrink_0().rounded_full().bg(color))
                     .child(div().min_w_0().truncate().child(label))))
                 .when_some(when, |el, w| el.child(div().flex_shrink_0().text_size(px(10.)).text_color(theme::faint()).child(w))))
-            .when_some(sub, |el, (text, kind)| el.child(div().flex().items_center()
-                .child(div().flex_1().min_w_0().flex().items_center().gap(px(4.)).text_xs().text_color(sub_color)
-                    .when(kind == sidebar::Sub::Reply, |el| el.child(div().flex_shrink_0().text_size(px(8.)).text_color(theme::faint()).child("◆")))
-                    .child(div().min_w_0().truncate().when(kind == sidebar::Sub::Working && working, |el| el.italic()).child(text)))))
+            .when_some(sub, |el, (text, kind)| el.child(session_row_sub(text, kind, sub_color, kind == sidebar::Sub::Working && working)))
             .when(server.is_some() || engine_label.is_some() || folder.is_some() || branch.is_some() || added.is_some() || removed.is_some() || ahead.is_some() || behind.is_some(), |el| el.child(div().flex().items_center().gap(px(8.))
                 .text_size(px(11.5)).text_color(theme::faint())
                 .child(div().flex_1().min_w_0().flex().items_center().gap(px(6.))
@@ -6289,6 +6332,29 @@ fn account_chip(conta: Option<&str>) -> Option<(String, Hsla)> {
 /// "pasta @ servidor"; sem pasta legível, só o servidor.
 fn place(session: &SessionInfo, host: &str) -> String {
     folder_name(session).map(|folder| format!("{folder} @ {host}")).unwrap_or_else(|| host.to_owned())
+}
+
+/// Caixa da linha da sessão na barra; a miniatura da novidade "ocultar da lista" desenha a mesma.
+pub(crate) fn session_row_frame(id: impl Into<ElementId>, selected: bool) -> Stateful<Div> {
+    div().id(id).relative().flex_shrink_0().flex().items_center().gap(px(10.)).px(px(8.)).py(px(7.)).rounded(px(10.))
+        .when(selected, |el| el.bg(theme::selected_row()))
+}
+
+/// A coluna de texto da linha, ao lado da marca do agente.
+pub(crate) fn session_row_text() -> Div {
+    div().flex_1().min_w_0().flex().flex_col().gap(px(1.))
+}
+
+pub(crate) fn session_row_name(name: String) -> Div {
+    div().min_w_0().truncate().font_weight(FontWeight::MEDIUM).child(name)
+}
+
+/// A segunda linha: a resposta com ◆, a pergunta ou o que está fazendo (em itálico enquanto trabalha).
+pub(crate) fn session_row_sub(text: String, kind: sidebar::Sub, color: Hsla, italic: bool) -> Div {
+    div().flex().items_center()
+        .child(div().flex_1().min_w_0().flex().items_center().gap(px(4.)).text_xs().text_color(color)
+            .when(kind == sidebar::Sub::Reply, |el| el.child(div().flex_shrink_0().text_size(px(8.)).text_color(theme::faint()).child("◆")))
+            .child(div().min_w_0().truncate().when(italic, |el| el.italic()).child(text)))
 }
 
 fn badge(text: String, color: Hsla) -> Div {

@@ -63,6 +63,7 @@ vi.mock('@react-native-menu/menu', () => ({
       React.createElement('button', { key: action.id, 'data-action': action.id, 'data-state': action.state,
         onClick: () => onPressAction({ nativeEvent: { event: action.id } }) }, action.title)) : [])),
 }));
+vi.mock('../../stores/prefs', () => ({ prefs: { getBoolean: () => undefined, set: () => {} } }));
 vi.mock('../../ui/HangarMark', () => ({ HangarMark: () => null }));
 vi.mock('../../ui/Icon', () => ({ Icon: () => null }));
 vi.mock('../../ui/Toast', () => ({ toast: { erro: calls.error, ok: calls.ok } }));
@@ -83,14 +84,20 @@ vi.mock('../pair/leaveExternal', () => ({ leaveExternal: vi.fn() }));
 vi.mock('./ConversationList', () => ({ ConversationList: () => null }));
 vi.mock('./RenameSheet', () => ({ RenameSheet: () => null }));
 vi.mock('../worktrees/WorktreeSheet', () => ({ WorktreeSheet: () => null }));
+vi.mock('../vault/VaultRequests', () => ({ VaultRequests: ({ byServer }: { byServer: { server: { id: string } }[] }) =>
+  React.createElement('div', { 'data-vault-servers': byServer.map((bucket) => bucket.server.id).join(',') }) }));
 vi.mock('../../paraglide/messages', () => ({ ...Object.fromEntries((
   'lista_agrupar_nenhum lista_agrupar_servidor lista_agrupar_projeto lista_agrupar ' +
   'native_brand lista_buscar lista_filtrar lista_filtro_limpar native_connected config_modal_titulo switcher_buscar_conversas nav_custos ' +
   'native_new_chat_title native_sidebar_all_sessions lista_sessoes_plural sessao_expandir sessao_recolher ' +
   'lista_carregando lista_vazia_filtro lista_nenhuma_ativa comum_cancelar sessao_excluir sessao_excluir_curto servidor_nao_existe ' +
   'comum_carregando lista_nenhum_servidor lista_pareie_qr native_sidebar_awaiting home_sessions_awaiting home_sessions_working home_sessions_ready home_machines_offline sessao_recolher ' +
-  'sessao_renomear sessao_git convite_parar orq_row_badge native_par_convidar native_par_menu sessao_worktree_abrir'
+  'sessao_renomear sessao_git convite_parar orq_row_badge native_par_convidar native_par_menu sessao_worktree_abrir ' +
+  'session_hide_from_list session_show_in_list session_hide_waiting'
 ).split(' ').map((key) => [key, () => key])),
+  session_hidden_group: ({ n }: { n: number }) => `session_hidden_group:${n}`,
+  session_hide_failed: ({ error }: { error: string }) => `session_hide_failed:${error}`,
+  session_show_failed: ({ error }: { error: string }) => `session_show_failed:${error}`,
   home_sessions_more_ready: ({ n }: { n: number }) => `home_sessions_more_ready:${n}`,
   lista_buscar_dentro: ({ q }: { q: string }) => `lista_buscar_dentro:${q}`,
   lista_servidor_offline: ({ label }: { label: string }) => `${label}:offline`,
@@ -598,6 +605,12 @@ describe('SessionList', () => {
     expect(group.getAttribute('aria-label')).toBe('fixture-server, 4 lista_sessoes_plural');
     await act(async () => group.click());
     expect(names()).toEqual(['ready-a', 'ready-a-outside', 'ready-b', 'ready-b-outside']);
+  });
+
+  it('os pedidos do cofre recebem os servidores da lista', async () => {
+    await mount({ variant: 'home' });
+    await act(async () => useSessions.setState({ byServer: [{ server, sessions: [], loaded: true, error: null }] }));
+    expect(container.querySelector('[data-vault-servers]')?.getAttribute('data-vault-servers')).toBe(server.id);
   });
 
   it('home mostra carregamento, vazio e falha identificada por máquina', async () => {

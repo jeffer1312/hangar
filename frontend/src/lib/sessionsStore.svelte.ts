@@ -6,7 +6,7 @@
 // fica montada o tempo todo segurando 1 retain — não há fecha-e-reabre de streams. Se um dia nenhum
 // consumidor ficar permanentemente montado, considerar um keep-alive com delay no release.
 import * as m from '../paraglide/messages';
-import type { EventSourceLike, SessionInfo } from '@hangar/core';
+import type { EventSourceLike, SessionInfo, VaultEvent } from '@hangar/core';
 import { GROUP_IDENTITY_RETRY_MS, readGroupIdentity, openSessionsStream, registrarDiag, novoReqDiag, checkInviteForServer, decidirRota, esquecerRota, rotaDecidida } from '@hangar/core';
 import { getActiveId, listServers, onServersChanged, setEphemeralServers, type Server } from './auth';
 import { attachGuest, createExternalPairSync, listExternalPairs, reconcilePairEntries, type ExternalPair } from '@hangar/core';
@@ -43,6 +43,14 @@ function createSessionsStore() {
   // aggregateSessions preserva (rows de servidor que não emitiu = mesmo objeto -> keyed each das
   // views não re-renderiza os cards dos outros servidores).
   let agg = $state.raw<Aggregate>({ rows: [], byServer: [], loading: false });
+  // Evento `vault` por servidor (cofre de senhas da máquina dona): estado e pedidos abertos.
+  let vaultEvents = $state.raw<ReadonlyMap<string, VaultEvent>>(new Map());
+  const setVault = (id: string, ev: VaultEvent | null) => {
+    if (!ev && !vaultEvents.has(id)) return;
+    const next = new Map(vaultEvents);
+    if (ev) next.set(id, ev); else next.delete(id);
+    vaultEvents = next;
+  };
   const slots = new Map<string, Slot>();
   const streams = new Map<string, EventSourceLike>();
   let leavingPage = false;
@@ -178,6 +186,7 @@ function createSessionsStore() {
     for (const [id, es] of streams) {
       if (!list.some((s) => s.id === id)) {
         es.close(); streams.delete(id); slots.delete(id); slotsNeedingIdentity.delete(id); identityLoaders.delete(id); ultimoSinal.delete(id); forgetServer(id);
+        setVault(id, null);
         clearTimeout(watchdogs.get(id)); watchdogs.delete(id);
         clearTimeout(primeiros.get(id)); primeiros.delete(id);
         clearTimeout(retryTimers.get(id)); retryTimers.delete(id);
@@ -220,6 +229,8 @@ function createSessionsStore() {
       const req = novoReqDiag();
       const es = openSessionsStream(s, req);
       streams.set(s.id, es);
+      // A lista chega antes do quadro `vault`: o pedido da conexão velha não pode reaparecer nesse intervalo.
+      setVault(s.id, null);
       const isCurrent = () => !leavingPage && refs > 0 && streams.get(s.id) === es;
       let identityRequested = false;
       let identityRetryAt = 0;
@@ -393,6 +404,23 @@ function createSessionsStore() {
         slots.set(s.id, patchSlot(slots, s.id, { keyring: state }));
         recompute();
       });
+      // Cofre de senhas: vem na conexão e a cada troca, só na lista do dono. Dado torto é ignorado.
+      es.addEventListener('vault', (e) => {
+        if (!isCurrent()) return;
+        arm();
+        let ev: VaultEvent | null = null;
+        try { ev = JSON.parse((e as MessageEvent).data); } catch { return; }
+        if (!ev || !Array.isArray(ev.requests)) return;
+        // Elemento torto ou repetido sai sozinho: os outros pedidos continuam valendo.
+        const seen = new Set<string>();
+        const requests = ev.requests.filter((r) => {
+          const ok = !!r && typeof r.id === 'string' && typeof r.interaction_id === 'string'
+            && typeof r.kind === 'string' && typeof r.expires_at === 'number' && !seen.has(r.id);
+          if (ok) seen.add(r.id);
+          return ok;
+        });
+        setVault(s.id, { ...ev, requests });
+      });
       // Etiquetas da máquina e das contas: vêm na conexão e a cada troca. Repetido ou torto mantém a anterior.
       es.addEventListener('tags', (e) => {
         if (!isCurrent()) return;
@@ -550,6 +578,8 @@ function createSessionsStore() {
     identities = new Map();
     identitiesWanted = false;
     identityLoaders.clear();
+    // Pedido que expirou com a lista parada não pode voltar aberto antes do quadro novo.
+    vaultEvents = new Map();
     // As entradas temporárias ficam no auth: o chat de uma sessão de fora segue com a lista fechada.
     pairSync.reset();
     pairLeft = null;
@@ -566,6 +596,12 @@ function createSessionsStore() {
     sessionsForServer(serverId: string) {
       void agg; // A publicação da lista também invalida a leitura do slot original.
       return slots.get(serverId)?.sessions ?? [];
+    },
+    /** Cofre da máquina pela lista; some enquanto ela está fora do ar ou com o convite encerrado. */
+    vaultFor(serverId: string): VaultEvent | null {
+      void agg; // a queda muda o slot e republica a lista
+      const ev = vaultEvents.get(serverId);
+      return ev && !slots.get(serverId)?.error ? ev : null;
     },
     get rows() { return agg.rows; },
     get byServer() { return agg.byServer; },

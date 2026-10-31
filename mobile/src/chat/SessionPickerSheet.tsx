@@ -65,7 +65,8 @@ function PickerList({ onClose, atual, serverId }: { onClose: () => void; atual: 
   const groups = useMemo(() => {
     const current = liveRows.find((s) => s.name === atual && s.serverId === serverId);
     const currentServer = current?.outside?.localServerId ?? serverId;
-    return buildSessionSections(liveRows, 'server', search, collapsedGroups, currentServer, pairGroups);
+    // Trocar para uma oculta continua possível; a linha leva a marca "Oculta".
+    return buildSessionSections(liveRows, 'include', 'server', search, collapsedGroups, currentServer, pairGroups);
   }, [liveRows, atual, serverId, search, collapsedGroups, pairGroups]);
   const multipleServers = useMemo(() => new Set(liveRows.map((s) => s.serverId)).size > 1, [liveRows]);
   const toggleGroup = useCallback((id: string) => setCollapsedGroups((current) => {
@@ -117,6 +118,7 @@ function PickerList({ onClose, atual, serverId }: { onClose: () => void; atual: 
             {head ? <GroupBlockHeader head={head} onToggle={toggleGroup} /> : null}
             {head?.collapsed ? null : <SessionRow session={session} compact
               selected={session.name === atual && session.serverId === serverId}
+              hiddenBadge
               mostrarServidor={!!session.outside || (multipleServers && (group.id.startsWith('state:') || session.serverId !== group.id))}
               onPress={selectSession} />}
           </SessionSectionCard>;

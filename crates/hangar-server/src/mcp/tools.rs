@@ -1,4 +1,4 @@
-//! As 16 tools. Cada uma chama a rota pública que o `hangar-send`/`hangar-preview` chama, pelo
+//! As 21 tools. Cada uma chama a rota pública que o `hangar-send`/`hangar-preview` chama, pelo
 //! roteador deste processo e como o dono; o `html_render` publica direto na loja de páginas e os
 //! verbos do navegador vão ao app desktop, como no CLI.
 use std::collections::HashMap;
@@ -25,6 +25,8 @@ use crate::groups::model::Sidecar;
 use crate::groups::peers::PeerClient;
 use crate::routes::AppState;
 use crate::transcript::pyjson::dumps_unicode;
+use crate::vault::{VaultError, exec, files, remote::WaitStatus, wire::{AskReq, UseKind, UseReq}};
+use zeroize::Zeroizing;
 
 const VOICE_CLOSE_REFUSED: &str = "recusado: a voz fecha sessão pela própria ferramenta close_session, que pede o sim \
 falado do usuário";
@@ -113,6 +115,23 @@ struct Contract { conteudo: Option<String>, #[serde(default)] mtime: Option<Stri
 
 #[derive(Deserialize)]
 struct Close { alvo: String }
+
+#[derive(Deserialize)]
+struct RequestSecret { label: String, reason: String, #[serde(default)] placeholder: Option<String> }
+
+#[derive(Deserialize)]
+struct VaultExec { entry: String, env: String, command: String, reason: String, #[serde(default)] timeout_s: Option<u64> }
+
+#[derive(Deserialize)]
+struct VaultFile { entry: String, reason: String }
+
+#[derive(Deserialize)]
+struct VaultFill { entry: String, field: String, #[serde(rename = "ref")] target: String, reason: String }
+
+const VAULT_NO_KEY: &str = "erro_cofre_sem_chave_sessao: o cofre só atende uma sessão identificada pela chave dela (X-Hangar-Key, \
+a CP_SESSION_KEY); registre o MCP de novo (scripts/registrar-mcp.py) e reabra a sessão";
+/// O alvo que o cartão mostra cabe no limite da dona.
+const TARGET_CHARS: usize = 2000;
 
 #[derive(Deserialize)]
 struct NewSession {
@@ -261,6 +280,12 @@ fn verb_args(raw: Option<&[Value]>) -> Result<Vec<String>, String> {
     }).collect()
 }
 
+/// O verbo que `browser`/`browser_batch` não mandam. `fill-secret` sai só do `vault_fill`, com o valor fora dos args.
+fn verb_refusal(verb: &str) -> Option<String> {
+    if verb == "fill-secret" { return Some("erro_cofre_so_vault_fill: fill-secret só pela tool vault_fill".into()); }
+    (!NAV_VERBS.contains(&verb)).then(|| format!("verbo desconhecido: {verb} (aceitos: {})", NAV_VERBS.join(", ")))
+}
+
 /// `interrupt`: a voz não abre filha ligada (nasce sem `creator`), e Esc na própria sessão mataria o turno de quem chama.
 fn interrupt_caller_refusal(me: &str, voice: bool, alvo: &str) -> Option<String> {
     if voice { return Some("recusado: a voz não interrompe sessão; só quem abriu a filha com `link` interrompe".into()); }
@@ -298,6 +323,11 @@ impl Tools {
             "browser_batch" => match args(name, raw) { Ok(a) => self.browser_batch(headers, a).await, Err(e) => Err(e) },
             "browser_goal" => match args(name, raw) { Ok(a) => self.browser_goal(headers, a).await, Err(e) => Err(e) },
             "browser_check" => match args(name, raw) { Ok(a) => self.browser_check(headers, a).await, Err(e) => Err(e) },
+            "request_secret" => match args(name, raw) { Ok(a) => self.request_secret(headers, a).await, Err(e) => Err(e) },
+            "vault_list" => self.vault_list(headers).await,
+            "vault_exec" => match args(name, raw) { Ok(a) => self.vault_exec(headers, a).await, Err(e) => Err(e) },
+            "vault_file" => match args(name, raw) { Ok(a) => self.vault_file(headers, a).await, Err(e) => Err(e) },
+            "vault_fill" => match args(name, raw) { Ok(a) => self.vault_fill(headers, a).await, Err(e) => Err(e) },
             _ => Err(format!("Unknown tool: {name}")),
         };
         outcome.unwrap_or_else(|msg| CallToolResult::error(vec![ContentBlock::text(msg)]))
@@ -539,7 +569,7 @@ impl Tools {
     }
 
     async fn nav_verb(&self, name: &str, verb: &str, mut args: Vec<String>, tab: Option<i64>) -> Result<String, String> {
-        if !NAV_VERBS.contains(&verb) { return Err(format!("verbo desconhecido: {verb} (aceitos: {})", NAV_VERBS.join(", "))); }
+        if let Some(refusal) = verb_refusal(verb) { return Err(refusal); }
         if verb == "eval" && args.is_empty() { return Err("eval precisa de um trecho JS".into()); }
         let home = self.home();
         if verb == "shot" {
@@ -664,6 +694,151 @@ impl Tools {
     }
 }
 
+/// O cofre (`vault/exec.rs`): o valor nunca entra no resultado nem no erro.
+impl Tools {
+    /// A sessão pela chave dela, nunca pelo pane nem pelo nome: é a chave que a dona prende à
+    /// entrada temporária e à liberação.
+    async fn vault_caller(&self, headers: &HeaderMap) -> Result<(String, String), String> {
+        let (name, origin) = self.resolve(headers).await?;
+        match (origin, header(headers, "x-hangar-key").filter(|k| !k.is_empty())) {
+            (Origin::Key, Some(key)) => Ok((name, key)),
+            _ => Err(VAULT_NO_KEY.into()),
+        }
+    }
+
+    /// Para a tool que espera o dono: sessão sem o prazo longo cairia antes da resposta.
+    async fn vault_agent(&self, name: &str) -> Result<exec::Agent, String> {
+        let agent = exec::agent(&self.st, name).await?;
+        if agent.lacks_deadline { return Err(exec::NO_DEADLINE.into()); }
+        Ok(agent)
+    }
+
+    /// A origem do cartão; sem `CP_SERVER_ID` a máquina é a única e o nome não decide nada.
+    fn vault_origin(&self) -> String { if self.server_id.is_empty() { "local".into() } else { self.server_id.clone() } }
+
+    async fn request_secret(&self, headers: &HeaderMap, a: RequestSecret) -> Outcome {
+        let deadline = tokio::time::Instant::now() + exec::BUDGET;
+        let (name, key) = self.vault_caller(headers).await?;
+        self.vault_agent(&name).await?;
+        let owner = exec::Owner::of(&self.st)?;
+        let req = AskReq { origin_server: self.vault_origin(), session_key: key, session: name, label: a.label, reason: a.reason,
+            placeholder: a.placeholder };
+        let id = owner.start_ask(req).await?;
+        let status = match exec::Pending::new(owner, id).settle(deadline).await? {
+            WaitStatus::Saved { entry, temporary } => return Ok(dict(json!({"status": "saved", "entry": entry, "temporary": temporary}))),
+            WaitStatus::Declined => "declined",
+            WaitStatus::TimedOut => "timed_out",
+            _ => return Err(exec::off_contract()),
+        };
+        Ok(dict(json!({"status": status})))
+    }
+
+    async fn vault_list(&self, headers: &HeaderMap) -> Outcome {
+        self.caller(headers).await?;
+        let entries = exec::Owner::of(&self.st)?.entries().await?;
+        let rows: Vec<Value> = entries.iter().map(|e| {
+            let mut row = json!({"name": e.name, "policy": e.policy});
+            if let Some(username) = &e.username { row["username"] = json!(username); }
+            if let Some(url) = &e.url { row["url"] = json!(url); }
+            row
+        }).collect();
+        let mut result = text(serde_json::to_string_pretty(&rows).unwrap_or_default());
+        result.structured_content = Some(json!({"result": rows}));
+        Ok(result)
+    }
+
+    async fn vault_exec(&self, headers: &HeaderMap, a: VaultExec) -> Outcome {
+        let deadline = tokio::time::Instant::now() + exec::BUDGET;
+        if !exec::env_name_ok(&a.env) {
+            return Err("erro_cofre_argumento_invalido: `env` é o nome da variável (letras, números e _, sem começar por número)".into());
+        }
+        if a.command.trim().is_empty() { return Err("erro_cofre_argumento_invalido: `command` vazio".into()); }
+        // O dono aprova o comando que vê no cartão: o que não cabe nele não roda.
+        if a.command.chars().count() > TARGET_CHARS {
+            return Err(format!("erro_cofre_argumento_invalido: `command` com mais de {TARGET_CHARS} caracteres; ponha o resto num script"));
+        }
+        let (name, key) = self.vault_caller(headers).await?;
+        let agent = self.vault_agent(&name).await?;
+        let cwd = agent.cwd.clone().ok_or("erro_cofre_sem_pasta: a pasta de trabalho da sessão é desconhecida")?;
+        let env = agent.env.ok_or(exec::NO_ENV)?;
+        let owner = exec::Owner::of(&self.st)?;
+        let req = UseReq { origin_server: self.vault_origin(), session_key: key, session: name, entry: a.entry, kind: UseKind::Exec,
+            reason: a.reason, target: a.command.clone() };
+        let value = exec::secret(&owner, req, deadline).await?;
+        let asked = a.timeout_s.map_or(exec::DEFAULT_TIMEOUT, |s| Duration::from_secs(s.max(1)));
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if left.is_zero() { return Err(exec::NO_ANSWER.into()); }
+        let (exit, output) = exec::run(&a.command, &cwd, env, &a.env, &value, asked.min(left)).await;
+        Ok(dict(json!({"exit": exit, "output": output})))
+    }
+
+    async fn vault_file(&self, headers: &HeaderMap, a: VaultFile) -> Outcome {
+        let deadline = tokio::time::Instant::now() + exec::BUDGET;
+        let (name, key) = self.vault_caller(headers).await?;
+        self.vault_agent(&name).await?;
+        let dir = files::base().ok_or("erro_cofre_sem_pasta_privada: o servidor não tem XDG_RUNTIME_DIR (Linux) nem LOCALAPPDATA (Windows)")?;
+        let owner = exec::Owner::of(&self.st)?;
+        let req = UseReq { origin_server: self.vault_origin(), session_key: key.clone(), session: name.clone(), entry: a.entry,
+            kind: UseKind::File, reason: a.reason, target: "arquivo".into() };
+        let value = exec::secret(&owner, req, deadline).await?;
+        files::sweep_live(&self.st).await;
+        // Tarefa própria: quem desiste da chamada não tira o prazo de um arquivo já gravado.
+        let written = tokio::spawn(async move {
+            let path = tokio::task::spawn_blocking(move || files::write(&dir, &key, &name, value.as_bytes())).await
+                .map_err(|_| "erro_cofre_arquivo: a gravação foi interrompida".to_owned())?
+                .map_err(|e| format!("erro_cofre_arquivo: o arquivo não foi gravado: {e}"))?;
+            files::expire_later(path.clone());
+            Ok::<_, String>(path)
+        });
+        let path = written.await.map_err(|_| "erro_cofre_arquivo: a gravação foi interrompida".to_owned())??;
+        Ok(dict(json!({"file": path})))
+    }
+
+    /// O host da página do navegador da sessão; só http(s) tem domínio para comparar com a entrada.
+    async fn fill_host(&self, home: &Path, name: &str) -> Result<String, String> {
+        let url = nav::page_url(&self.http, home, name).await.map_err(|e| format!("erro_cofre_sem_navegador: {}", e.0))?;
+        exec::host_of(&url).filter(|_| url.starts_with("https://") || url.starts_with("http://"))
+            .ok_or_else(|| format!("erro_cofre_dominio_diferente: a página ({url}) não tem domínio"))
+    }
+
+    /// O usuário sai do resumo da entrada (o `vault_list` já o mostra); a senha, pelo pedido de uso
+    /// `fill` com o domínio da página como alvo.
+    async fn vault_fill(&self, headers: &HeaderMap, a: VaultFill) -> Outcome {
+        let deadline = tokio::time::Instant::now() + exec::BUDGET;
+        let password = match a.field.as_str() {
+            "password" => true,
+            "username" => false,
+            _ => return Err("erro_cofre_argumento_invalido: `field` é \"username\" ou \"password\"".into()),
+        };
+        if !exec::ref_ok(&a.target) { return Err("erro_cofre_argumento_invalido: `ref` é a ref @eN de um snapshot".into()); }
+        let (name, key) = self.vault_caller(headers).await?;
+        let owner = exec::Owner::of(&self.st)?;
+        let home = self.home();
+        let long_enough = async { if password { self.vault_agent(&name).await.map(drop) } else { Ok(()) } };
+        let ((), host, entries) = tokio::try_join!(long_enough, self.fill_host(&home, &name), owner.entries())?;
+        let entry = entries.iter().find(|e| crate::vault::same_name(&e.name, &a.entry)).ok_or_else(|| exec::vault_text(VaultError::UnknownEntry))?;
+        if let Some(refusal) = exec::fill_refusal(entry.url.as_deref(), &host) { return Err(refusal); }
+        let value = if password {
+            let req = UseReq { origin_server: self.vault_origin(), session_key: key, session: name.clone(), entry: a.entry, kind: UseKind::Fill,
+                reason: a.reason, target: host.clone() };
+            exec::secret(&owner, req, deadline).await?
+        } else {
+            Zeroizing::new(entry.username.clone().ok_or("erro_cofre_sem_usuario: esta senha não tem usuário cadastrado")?)
+        };
+        let lock = self.nav_lock(&name);
+        let _held = lock.lock().await;
+        // A página pode ter navegado durante a aprovação: o valor só entra no domínio aprovado.
+        let now = self.fill_host(&home, &name).await?;
+        if now != host { return Err(format!("erro_cofre_dominio_diferente: a página saiu de {host} para {now} durante a aprovação")); }
+        let answer = nav::fill_secret(&self.http, &home, &name, &[a.target, a.field], &value).await
+            .map_err(|e| format!("erro_cofre_sem_navegador: {}", e.0))?;
+        let answer = exec::mask(&answer, &value);
+        if answer.starts_with("ok:") { return Ok(text("preenchido")); }
+        let detail = answer.strip_prefix("erro:").map_or(answer.as_str(), str::trim);
+        Err(if detail.starts_with("erro_cofre_") { detail.to_owned() } else { format!("erro_cofre_preenchimento: {detail}") })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -687,6 +862,13 @@ mod tests {
         assert!(refused(Some(&child(None, &["pai"]))), "par comum, sem vínculo");
         assert!(refused(Some(&child(Some("pai"), &["outra"]))), "pai saiu do grupo");
         assert!(refused(None), "sem arquivo de grupo");
+    }
+
+    #[test]
+    fn the_browser_tool_cannot_send_fill_secret() {
+        assert!(verb_refusal("fill-secret").is_some_and(|e| e.starts_with("erro_cofre_so_vault_fill:")));
+        assert!(verb_refusal("fill").is_none());
+        assert!(verb_refusal("inventado").is_some_and(|e| e.starts_with("verbo desconhecido")));
     }
 
     #[test]

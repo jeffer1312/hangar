@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { openSessionsStream, aggregateSessions, jsonlDaSessao, sweepHidden, registrarDiag, decidirRota, discoverRemoteRoute, esquecerRota, rotaDecidida, baseOf, UNCONFIRMED_BASE, probeServerResponse, comTeto, parseTagsEvent, patchSlot, placeExternalRows, listExternalPairs, attachGuest, createExternalPairSync } from '@hangar/core';
-import type { SessionInfo, Server, AggSession, ExternalPair } from '@hangar/core';
+import type { SessionInfo, Server, AggSession, ExternalPair, VaultEvent, VaultRequest } from '@hangar/core';
 import { sortSessions, definirArmazem, definirProtegido, definirSemPrazo, registrarFalha, registrarSucesso, retryAfterMs, estaDesligado, startOutage, endOutage, respondeuRecentemente, retentarAgora, esquecerServidor, onServerRecovered, _limparEsfriamentoParaTestes } from '@hangar/core';
 import type { Slot, ServerBucket, Aggregate } from '@hangar/core';
 import { useServers } from './servers';
@@ -21,6 +21,8 @@ export interface SessionsState {
   byServer: ServerBucket[];
   // conveniência para o que a Task descreve como Record<serverId, SessionInfo[]>
   byServerRecord: Record<string, AggSession[]>;
+  /** Último evento `vault` de cada servidor; vale só enquanto o balde dele está sem erro. */
+  vault: Record<string, VaultEvent>;
   loading: boolean;
   servers: Server[];
   retain: () => () => void;
@@ -39,6 +41,22 @@ const slots = new Map<string, Slot>();
 // O início gravado da queda vale depois de reabrir: só uma lista boa (`endOutage`) o encerra.
 const failedSlot = (id: string, error: string) => patchSlot(slots, id, { error, keyring: undefined, offlineSince: startOutage(id) });
 const streams = new Map<string, ReturnType<typeof openSessionsStream>>();
+const vaultRaw = new Map<string, string>();
+const VAULT_STATES = new Set(['open', 'locked', 'absent', 'offline', 'key_lost']);
+
+/** Evento `vault` torto devolve `null`; cartão sem id, interação ou tipo conhecido sai da lista. */
+export function parseVaultEvent(data: string): VaultEvent | null {
+  let raw: unknown;
+  try { raw = JSON.parse(data); } catch { return null; }
+  if (!raw || typeof raw !== 'object') return null;
+  const { state, requests } = raw as { state?: unknown; requests?: unknown };
+  if (state !== null && !VAULT_STATES.has(state as string)) return null;
+  if (!Array.isArray(requests)) return null;
+  const ok = requests.filter((r): r is VaultRequest => !!r && typeof r === 'object'
+    && typeof (r as VaultRequest).id === 'string' && typeof (r as VaultRequest).interaction_id === 'string'
+    && ((r as VaultRequest).kind === 'approve' || (r as VaultRequest).kind === 'entry'));
+  return { state: state as VaultEvent['state'], requests: ok };
+}
 type ConnectionAttempt = { server: Server; generation: number; abort: AbortController; routing: boolean };
 const connecting = new Map<string, ConnectionAttempt>();
 const routeDeadlines = new WeakMap<Promise<void>, number>();
@@ -432,6 +450,17 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
       slots.set(s.id, patchSlot(slots, s.id, { keyring: state }));
       recompute(set);
     });
+    // Cofre: estado e pedidos abertos, na conexão e a cada troca. Repetido ou torto mantém o último.
+    es.addEventListener('vault', (e) => {
+      if (!active()) return;
+      answered();
+      const data: string = e.data;
+      if (vaultRaw.get(s.id) === data) return;
+      const event = parseVaultEvent(data);
+      if (!event) return;
+      vaultRaw.set(s.id, data);
+      set({ vault: { ...get().vault, [s.id]: event } });
+    });
     // Etiquetas da máquina e das contas: chegam na conexão e a cada troca. Repetido ou torto mantém as últimas.
     es.addEventListener('tags', (e) => {
       if (!active()) return;
@@ -505,6 +534,10 @@ function refresh(get: () => SessionsState, set: (p: Partial<SessionsState>) => v
       lastFailureHttp.delete(s.id);
       refused.delete(s.id);
       slots.delete(s.id);
+      // Mesmo id com outro token ou endereço: o pedido antigo não é desta conexão.
+      vaultRaw.delete(s.id);
+      const { [s.id]: _dropped, ...vault } = get().vault;
+      set({ vault });
     } else if (serversCache.find((next) => next.id === s.id)?.inviteEnded) {
       disconnect(s.id);
       slots.delete(s.id);
@@ -550,6 +583,8 @@ function stop(set: (p: Partial<SessionsState>) => void) {
   unsubRecovered = null;
   pause();
   slots.clear();
+  vaultRaw.clear();
+  set({ vault: {} });
   for (const [id, status] of refused) slots.set(id, { sessions: null, error: refusedError(status) });
   // hidden mantém? Não — limpa ao parar para próximo retain começar limpo
   hidden = new Map<string, string | null>();
@@ -560,6 +595,7 @@ export const useSessions = create<SessionsState>((set, get) => ({
   rows: [],
   byServer: [],
   byServerRecord: {},
+  vault: {},
   loading: false,
   servers: [],
   retain() {
@@ -631,6 +667,7 @@ export function _resetSessionsForTests() {
   refused.clear();
   streams.clear();
   slots.clear();
+  vaultRaw.clear();
   hidden = new Map<string, string | null>();
   serversCache = [];
   aggCache = { rows: [], byServer: [], loading: false };
@@ -649,5 +686,5 @@ export function _resetSessionsForTests() {
   _limparEsfriamentoParaTestes();
   definirArmazem(null);
   configureCooldown();
-  useSessions.setState({ rows: [], byServer: [], byServerRecord: {}, loading: false, servers: [] });
+  useSessions.setState({ rows: [], byServer: [], byServerRecord: {}, vault: {}, loading: false, servers: [] });
 }
