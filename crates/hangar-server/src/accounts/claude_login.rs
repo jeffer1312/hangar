@@ -554,7 +554,10 @@ impl AccountService {
                     return Ok(json!({"etapa":"concluido","url":null,"email":done["email"],"plano":done["plano"]}));
                 }
                 let browser = attempt.browser.lock().unwrap().clone();
-                Ok(json!({"etapa":"aguardando","url":pane["url"],"email":null,"plano":null,"browser":browser}))
+                let mut step = json!({"etapa":"aguardando","url":pane["url"],"email":null,"plano":null});
+                // Só com destino escolhido: quem não escolheu, como o PWA e o Expo, recebe o passo de sempre.
+                if let Some(browser) = browser { step["browser"] = json!(browser); }
+                Ok(step)
             }.await;
             if result.is_err() { service.close_attempt(&attempt, &client).await?; }
             result
