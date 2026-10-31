@@ -243,7 +243,7 @@ pub(crate) fn open(window: &mut Window, cx: &mut App, title: String, description
                             let value = understood.clone();
                             move |checked: &bool, window, _| { value.set(*checked); window.refresh(); }
                         })))))
-            .child(sections(tr_shared("update_notes_news", &[]), &primary.news, true, &fixes_open, None, started, window, cx))
+            .child(sections(tr_shared("update_notes_news", &[]), &primary.news, None, &fixes_open, None, started, window, cx))
             .when_some(all.clone(), |el, (label, value)| el.child(div().px(px(10.)).py(px(9.)).rounded(px(9.)).border_1()
                 .border_color(palette::edge()).bg(palette::fill(0.04)).text_size(px(13.)).child(check("confirm-check", label, value))))
             .into_any_element()
@@ -297,16 +297,16 @@ fn check(id: &'static str, label: String, value: Rc<Cell<bool>>) -> impl IntoEle
 }
 
 /// Rótulo em caixa alta, os cartões (novo e melhoria) e as correções recolhidas: o mesmo bloco nos dois modais.
-/// `compact`: cartão deitado, animação à esquerda (o "Atualizar?"); sem ele, em pé com o "Experimente".
-/// `show`: o "Mostrar no app" dos cartões com âncora; só depois de atualizar, quando a peça já existe.
-fn sections(label: String, news: &[News], compact: bool, fixes_open: &Rc<Cell<bool>>, show: Option<&ShowInApp>, started: Instant,
+/// `stage`: largura da animação no cartão em pé, com o "Experimente"; sem ela, cartão deitado com a animação à esquerda
+/// (o "Atualizar?"). `show`: o "Mostrar no app" dos cartões com âncora; só depois de atualizar, quando a peça já existe.
+fn sections(label: String, news: &[News], stage: Option<Pixels>, fixes_open: &Rc<Cell<bool>>, show: Option<&ShowInApp>, started: Instant,
     window: &mut Window, cx: &mut App) -> Div {
     let (fixes, cards): (Vec<&News>, Vec<&News>) = news.iter().partition(|n| n.kind == "fix");
     let open = fixes_open.get();
     let toggle = fixes_open.clone();
     div().flex().flex_col().gap(px(12.))
         .when(!cards.is_empty(), |el| el.child(div().mt(px(2.)).text_size(px(10.5)).text_color(theme::faint()).child(label.to_uppercase())))
-        .children(cards.into_iter().map(|item| card(item, compact, show, started, window, cx)))
+        .children(cards.into_iter().map(|item| card(item, stage, show, started, window, cx)))
         .when(!fixes.is_empty(), |el| el.child(div().flex().flex_col().gap(px(6.))
             .child(div().flex().child(Button::new("update-fixes").ghost().xsmall().ml(px(-6.)).text_size(px(12.)).text_color(theme::muted())
                 .icon(if open { IconName::ChevronDown } else { IconName::ChevronRight })
@@ -317,7 +317,7 @@ fn sections(label: String, news: &[News], compact: bool, fixes_open: &Rc<Cell<bo
                     .child(div().flex_1().min_w_0().whitespace_normal().child(item.title.clone()))))))))
 }
 
-fn card(item: &News, compact: bool, show: Option<&ShowInApp>, started: Instant, window: &mut Window, cx: &mut App) -> Div {
+fn card(item: &News, stage: Option<Pixels>, show: Option<&ShowInApp>, started: Instant, window: &mut Window, cx: &mut App) -> Div {
     let animation = item.animation.as_deref().and_then(crate::news::animation);
     let point = show.zip(item.in_app()).map(|(show, note)| {
         let show = show.clone();
@@ -334,13 +334,14 @@ fn card(item: &News, compact: bool, show: Option<&ShowInApp>, started: Instant, 
     let text = (!item.text.is_empty()).then(|| div().text_size(px(11.8)).line_height(px(16.5)).text_color(theme::muted())
         .child(TextView::markdown(SharedString::from(format!("update-news-{}", item.id)), item.text.clone()).selectable(true).scrollable(false)));
     let base = div().rounded(px(10.)).border_1().border_color(palette::edge()).bg(palette::fill(0.035));
-    if compact {
+    let Some(stage) = stage else {
         return base.flex().items_center().gap(px(12.)).p(px(10.))
-            .when_some(animation, |el, draw| el.child(div().flex_shrink_0().w(px(160.)).child(draw(started, px(160.), window, cx))))
+            .when_some(animation, |el, draw| el.child(div().flex_shrink_0().w(px(160.))
+                .child(stage_slot(&item.id, px(160.), draw, started, window, cx))))
             .child(div().flex_1().min_w_0().flex().flex_col().gap(px(3.)).child(heading).children(text));
-    }
+    };
     base.flex().flex_col().gap(px(10.)).p(px(12.))
-        .when_some(animation, |el, draw| el.child(draw(started, px(500.), window, cx)))
+        .when_some(animation, |el, draw| el.child(stage_slot(&item.id, stage, draw, started, window, cx)))
         .child(div().flex().flex_col().gap(px(3.)).child(heading).children(text))
         .when_some(item.try_it.clone(), |el, text| el.child(div().text_size(px(11.5)).text_color(badge_text).whitespace_normal()
             .child(tr_shared("update_notes_try_it", &[("text", &text)]))))
@@ -356,6 +357,27 @@ impl News {
     }
 }
 
+/// O lugar da animação no cartão, medido a cada quadro para o seguinte: a largura real (o Dialog encolhe em janela
+/// pequena) substitui `guess`, e fora da área visível do modal a animação não é montada — fica só a altura dela, sem
+/// marcar redesenho da janela.
+fn stage_slot(id: &str, guess: Pixels, draw: crate::news::NewsAnimation, started: Instant, window: &mut Window, cx: &mut App) -> Div {
+    let measured = window.use_keyed_state(SharedString::from(format!("news-stage-{id}")), cx,
+        |_, _| Rc::new(Cell::new(None::<(bool, Size<Pixels>)>))).read(cx).clone();
+    let slot = div().relative().w_full();
+    let slot = match measured.get() {
+        Some((false, size)) => slot.h(size.height),
+        last => slot.child(draw(started, last.map_or(guess, |(_, size)| size.width), window, cx)),
+    };
+    slot.child(canvas(move |bounds, window, _| {
+        let visible = window.content_mask().bounds.intersects(&bounds);        // Voltou à vista ou mudou de largura: o quadro seguinte desenha com o que acabou de ser medido.
+        if measured.get().is_none_or(|(was, size)| (visible && !was) || size.width != bounds.size.width) {
+            window.request_animation_frame();
+        }
+        measured.set(Some((visible, bounds.size)));
+    // Sem `top_0`/`left_0` o absoluto fica depois da animação, e a medida sai deslocada pela altura dela.
+    }, |_, _, _, _| {}).absolute().top_0().left_0().size_full())
+}
+
 /// "O que chegou para você": uma vez, com o que o "Atualizar?" guardou.
 fn open_whats_new(items: Vec<News>, show: Option<ShowInApp>, window: &mut Window, cx: &mut App) {
     let fixes_open = Rc::new(Cell::new(false));
@@ -363,9 +385,12 @@ fn open_whats_new(items: Vec<News>, show: Option<ShowInApp>, window: &mut Window
     window.open_dialog(cx, move |dialog, window, cx| {
         let max = window.viewport_size().height * 0.8 - px(110.);
         let top = (window.viewport_size().height * 0.1).max(px(24.));
-        crate::app::popup::dialog(dialog).w(px(560.)).p(px(18.)).rounded(px(14.)).close_button(false).margin_top(top)
+        let width = px(780.).min(window.viewport_size().width * 0.92);
+        // Largura do primeiro quadro da animação (modal menos borda e respiros dele e do cartão); depois vale a medida.
+        let stage = width - px(64.);
+        crate::app::popup::dialog(dialog).w(width).p(px(18.)).rounded(px(14.)).close_button(false).margin_top(top)
             .child(div().id("whats-new-body").max_h(max).overflow_y_scroll()
-                .child(sections(tr_shared("update_whats_new_title", &[]), &items, false, &fixes_open, show.as_ref(), started, window, cx)))
+                .child(sections(tr_shared("update_whats_new_title", &[]), &items, Some(stage), &fixes_open, show.as_ref(), started, window, cx)))
             .footer(DialogFooter::new().child(chrome::light_button("whats-new-close", true, cx).label(tr("close"))
                 .on_click(|_, window, cx| window.close_dialog(cx))))
     });
@@ -429,10 +454,14 @@ pub(crate) fn open_preview(whats_new: bool, window: &mut Window, cx: &mut App) {
         news("windows-passo", "O backend no Windows não cai mais ao subir com passo pendente", "fix", "", None, None),
         news("worktrees", "A limpeza de worktrees reconhece as já mescladas", "fix", "", None, None),
     ];
-    // O "Mostrar no app" aparece para a foto; aqui ele só fecha o modal.
     if whats_new {
+        // O "Mostrar no app" aparece para a foto; aqui ele só fecha o modal.
         let close_only: ShowInApp = Rc::new(|_: crate::tour::Note, _: &mut Window, _: &mut App| {});
-        return open_whats_new(items, Some(close_only), window, cx);
+        // Um cartão por animação: a rolagem e o redesenho são provados com o modal cheio, como numa versão de verdade.
+        let more = ["codex-atividade", "etiquetas-maquina-conta", "sugestao-de-nome", "cofre-de-senhas", "relatorio-automatico", "ocultar-da-lista", "tour-nativo"]
+            .map(|name| news(name, name, "new", "Texto de amostra da novidade, com duas linhas para o cartão ter a altura de um real.",
+                Some("abra e teste"), Some(name)));
+        return open_whats_new(items.into_iter().chain(more).collect(), Some(close_only), window, cx);
     }
     let notes = Notes { version: Some("0.1.0.8242 → 0.1.0.8311".into()), news: items, server: "preview".into(), failed: false,
         incomplete: false, label: None,

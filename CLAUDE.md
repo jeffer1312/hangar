@@ -221,18 +221,17 @@ registrado, fora do caminho de leitura, para não competir com o que vale hoje.
   Lógica (API, formatação, parser, tipos) entra em `packages/core` e serve as duas. Tela é por
   interface, escrita duas vezes. O check completo, quando pedido, é `npm run check` **na raiz**,
   que cobre as três.
-- **Melhoria visual ou recurso que o usuário vê entra nos três clientes quando faz sentido nos
-  três: app Expo (`mobile/`), desktop nativo (`desktop-native/`) e PWA (`frontend/`, vista
-  celular).** O nativo costuma estar à frente e é a referência de comportamento. Quem implementa
-  num cliente leva aos outros no mesmo trabalho ou deixa a pendência dita no relato.
-- **Desktop evolui no Rust (`desktop-native/`); web (`frontend/`) evolui para PWA/mobile.**
-  Mudanças desktop entram só no nativo. No Svelte entra apenas o que serve ao PWA/celular; a
-  tela desktop web e o Electron ficam parados onde estão, sem recurso novo. Recursos usados no
-  celular continuam entrando na web/PWA e no app `mobile/`, conforme o escopo. O Electron e o
-  desktop web estão em descontinuação: preserve o que existe; remoção exige pedido explícito.
-  A paridade desktop entre web e Rust deixou de ser requisito.
+- **Melhoria visual ou recurso que o usuário vê entra no desktop nativo (`desktop-native/`) e no
+  app Expo (`mobile/`), quando faz sentido nos dois.** O nativo costuma estar à frente e é a
+  referência de comportamento. Quem implementa num cliente leva ao outro no mesmo trabalho ou deixa
+  a pendência dita no relato.
+- **A web (`frontend/`, PWA incluído) não recebe recurso novo: fica com o que já tem.** Desktop
+  evolui no Rust (`desktop-native/`) e celular no app `mobile/`. No Svelte entra só conserto do que
+  já existe e o necessário para ele continuar funcionando com o servidor. O Electron e o desktop
+  web estão em descontinuação: preserve o que existe; remoção exige pedido explícito. A paridade
+  entre a web e os outros clientes deixou de ser requisito.
   O nativo não importa `packages/core`; compartilha a API do backend e `messages/*.json`.
-  Decisão e alcance em [frontend.md](docs/decisoes/frontend.md#desktop-no-rust-web-para-pwamobile).
+  Decisão e alcance em [frontend.md](docs/decisoes/frontend.md#a-web-fica-com-o-que-já-tem-30102026).
   O nativo é o único app de desktop do instalador: ele o baixa da release `native-latest` no
   pacote da máquina (`scripts/install-native.sh`/`.ps1`); sem o nativo, a reserva é o navegador.
   O instalador não instala mais o Electron. No Windows e no Linux o nativo atende o
@@ -241,8 +240,8 @@ registrado, fora do caminho de leitura, para não competir com o que vale hoje.
   com CDP por pipe, pintado no painel pelo screencast. Os passos `2026-10-02-electron-removido-*`
   tiram o Electron de quem ainda o tem. No macOS, quem já o tinha fica com ele.
 - **A web existente tem duas vistas (820px):** `Sidebar` (desktop legado) e `SessionList`
-  (mobile). Trabalho novo na web é só para PWA/mobile; a vista desktop não ganha recurso.
-  Preserve o desktop existente ao tocar código compartilhado. Lógica da lista vai
+  (mobile). Nenhuma das duas ganha recurso novo.
+  Preserve as duas ao tocar código compartilhado. Lógica da lista vai
   no `lib/sessionListModel.svelte.ts`, e a agregação SSE no `lib/sessionsStore.svelte.ts` — uma
   por servidor, nunca uma por card.
 - **Todo texto de interface vem de `m.<chave>()`** (Paraglide). `pt.json` e `en.json` no mesmo

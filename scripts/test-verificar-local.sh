@@ -90,6 +90,23 @@ falta="$(faltando_em "$novo")"
 rm -rf "$reg" "$hist"
 "$V" --plano --tudo --passos rust_rapido >/dev/null 2>&1 && { echo "FALHOU --tudo aceitou passo rápido"; falhou=1; }
 
+# Com a main juntada à branch, o que veio dela não entra no plano: só o que a branch mudou.
+hist="$(mktemp -d)"
+(cd "$hist" && export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 && git init -q -b main && \
+    g() { git -c user.name=t -c user.email=t@t "$@"; } && \
+    g commit -q --allow-empty -m base && git checkout -q -b tarefa && \
+    mkdir -p crates/hangar-server mobile && touch crates/hangar-server/a.rs && git add . && g commit -q -m tarefa && \
+    git checkout -q main && touch mobile/b.tsx && git add . && g commit -q -m main-andou && \
+    git update-ref refs/remotes/origin/main main && git checkout -q tarefa && g merge -q --no-edit main)
+plano="$(cd "$hist" && GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 "$Vabs" --plano 2>&1)"
+grep -q rust_rapido <<< "$plano" && ! grep -q mobile_rapido <<< "$plano" || { echo "FALHOU main juntada entrou no plano: $plano"; falhou=1; }
+# Arquivo que veio da main e a branch mudou depois é dela: entra no plano.
+(cd "$hist" && export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 && echo x > mobile/b.tsx && git add . && \
+    git -c user.name=t -c user.email=t@t commit -q -m tarefa-mexe)
+plano="$(cd "$hist" && GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 "$Vabs" --plano 2>&1)"
+grep -q mobile_rapido <<< "$plano" || { echo "FALHOU mudança da branch em arquivo da main ficou fora do plano: $plano"; falhou=1; }
+rm -rf "$hist"
+
 # Erro no cálculo do plano nunca vira "nada a verificar".
 "$V" --plano --base ref-que-nao-existe >/dev/null 2>&1 && { echo "FALHOU --plano com base inválida saiu 0"; falhou=1; }
 "$V" --exigir 0000000000000000000000000000000000000000 >/dev/null 2>&1 && { echo "FALHOU --exigir com commit inválido saiu 0"; falhou=1; }

@@ -86,7 +86,7 @@ pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &
     let hint = tr_shared(if on { "auto_report_on" } else { "auto_report_off" }, &[]);
     stage.child(div().relative().child(app::settings_box().child(app::setting_row(false, IconName::FileText, tr_shared("native_auto_report_title", &[]),
                 div().whitespace_normal().child(hint), true, toggle.into_any_element())))
-            .child(div().absolute().top_0().left_0().size_full().occlude()))
+            .child(div().absolute().top_0().left_0().size_full().block_mouse_except_scroll()))
         .child(status)
         .into_any_element()
 }

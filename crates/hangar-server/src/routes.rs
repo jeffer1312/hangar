@@ -95,6 +95,8 @@ pub struct AppState {
     pub groups: Option<Arc<crate::groups::service::GroupService>>,
     /// Outras máquinas do dono (`peers.json`), para os grupos entre máquinas.
     pub peers: Arc<crate::groups::peers::PeerClient>,
+    /// Abertura do navegador do login Claude e escuta do retorno nesta máquina.
+    pub login_browser: Arc<crate::accounts::login_browser::LoginBrowser>,
     /// Id desta máquina entre as do dono (`CP_SERVER_ID`); vazio = sem id.
     pub server_id: String,
     /// Voz ao vivo; o teste troca por um hub com pastas temporárias.
@@ -193,6 +195,7 @@ impl AppState {
         let vault_requests = Arc::new(crate::vault::requests::Requests::default());
         AppState { accounts: crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture()), command_catalog: Arc::default(), groups, server_id, peers: Arc::new(crate::groups::peers_from_env()), auth: Auth::configured(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, public_v6: None, front: None, diag,
             workspace_slots: Arc::new(tokio::sync::Semaphore::new(4)),
+            login_browser: Arc::default(),
             interactions, plugin,
             remote_browser: Arc::default(),
             transcription: Arc::default(),
