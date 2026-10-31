@@ -54,12 +54,10 @@ async fn set(st: &AppState, name: &str, hidden: bool) -> Response {
     let Some(home) = home(st) else {
         return refuse(StatusCode::SERVICE_UNAVAILABLE, "list_dirs_missing", "as pastas das sessões não foram configuradas");
     };
-    let rows = match st.list.discover(Some(crate::state::monitor::wall_now())).await {
-        Ok(rows) => rows,
+    let row = match st.list.find_row(name).await {
+        Ok(Some(row)) => row,
+        Ok(None) => return refuse(StatusCode::NOT_FOUND, "erro_sessao_inexistente", "a sessão não existe"),
         Err(e) => return refuse(StatusCode::SERVICE_UNAVAILABLE, e.code, e.detail),
-    };
-    let Some(row) = rows.iter().find(|r| r.name == name) else {
-        return refuse(StatusCode::NOT_FOUND, "erro_sessao_inexistente", "a sessão não existe");
     };
     let key = crate::dictation::rename_suggestion::key_of(st, name, row.lifecycle_id.as_deref()).await;
     let now = crate::state::monitor::wall_now();
@@ -69,6 +67,7 @@ async fn set(st: &AppState, name: &str, hidden: bool) -> Response {
     }).await;
     match written {
         Ok(true) => {
+            fill::forget(name);
             st.list.invalidate();
             StatusCode::NO_CONTENT.into_response()
         }

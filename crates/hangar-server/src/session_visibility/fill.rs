@@ -34,8 +34,14 @@ const ABSENT_RETRY: Duration = Duration::from_secs(60);
 /// A chave do pane por nome e vida `t:`, guardando também a ausência (o cache da sugestão de nome não guarda).
 static PANE_KEYS: LazyLock<Mutex<HashMap<(String, String), (Option<String>, Instant)>>> = LazyLock::new(Mutex::default);
 
+/// Depois de a rota gravar: uma ausência guardada não pode deixar a marca sem efeito por 60 s.
+pub(super) fn forget(name: &str) {
+    PANE_KEYS.lock().unwrap_or_else(PoisonError::into_inner).retain(|(n, _), _| n != name);
+}
+
 async fn pane_key(mux: &Mux, row: &SessionRow) -> Option<String> {
-    let id = (row.name.clone(), row.lifecycle_id.clone()?);
+    // Sem vida conhecida ainda se pergunta: a rota (`key_of`) pergunta ao multiplexador do mesmo jeito.
+    let id = (row.name.clone(), row.lifecycle_id.clone().unwrap_or_default());
     if let Some((key, at)) = PANE_KEYS.lock().unwrap_or_else(PoisonError::into_inner).get(&id)
         && (key.is_some() || at.elapsed() < ABSENT_RETRY) {
         return key.clone();
@@ -66,14 +72,14 @@ pub async fn fill_rows(home: &Path, mux: &Mux, rows: &mut [SessionRow], diag: &D
     };
     // Entrada `hidden: false` (deixada pelo "Mostrar") só importa com o automático ligado.
     if !cfg.enabled && !marks.values().any(|m| m.hidden) { return; }
-    let mut keys = Vec::with_capacity(rows.len());
-    for row in rows.iter() {
-        keys.push(match row.lifecycle_id.as_deref().and_then(|l| l.strip_prefix("k:")) {
+    // Em paralelo: cada falta no cache é um processo do multiplexador.
+    let keys = futures_util::future::join_all(rows.iter().map(|row| async move {
+        match row.lifecycle_id.as_deref().and_then(|l| l.strip_prefix("k:")) {
             Some(key) => Some(key.to_owned()),
             None if !row.headless => pane_key(mux, row).await,
             None => None,
-        });
-    }
+        }
+    })).await;
     // Sem registro a sessão não volta pelo "Mostrar" (a rota recusa): nem a marca nem o automático a escondem.
     let (at, asked) = (home.to_owned(), keys.iter().flatten().chain(marks.keys()).cloned().collect::<HashSet<_>>());
     let known = match blocking(move || {
@@ -186,6 +192,26 @@ mod tests {
         let marks = store::read(home.path()).unwrap();
         assert!(!marks[&live].hidden && marks[&live].shown_at.is_some(), "a marca caiu: {marks:?}");
         assert!(!marks.contains_key(&gone), "sem registro sai do arquivo");
+    }
+}
+
+#[cfg(all(test, unix))]
+mod pane_keys {
+    use super::*;
+    use crate::session_visibility::fixture::{KEY, state};
+
+    #[tokio::test]
+    async fn a_row_without_life_is_asked_and_forget_drops_the_cached_absence() {
+        let root = tempfile::tempdir().unwrap();
+        let st = state(root.path());
+        let mux = &st.list.env().mux;
+        let row: SessionRow = serde_json::from_value(serde_json::json!({"name": "fill-forget", "state": "idle"})).unwrap();
+        std::fs::write(root.path().join("no-key"), "").unwrap();
+        assert_eq!(pane_key(mux, &row).await, None);
+        std::fs::remove_file(root.path().join("no-key")).unwrap();
+        assert_eq!(pane_key(mux, &row).await, None, "a ausência fica guardada");
+        forget("fill-forget");
+        assert_eq!(pane_key(mux, &row).await.as_deref(), Some(KEY));
     }
 }
 
