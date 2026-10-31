@@ -491,7 +491,12 @@ pub async fn restore(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
         if let Err(resp) = known_peer(&st, &from_peer) { break 'r resp; }
         let server_id = server_id.unwrap_or_else(|| st.server_id.clone());
         if !config::valid_server_id(&server_id) || !backup::password_ok(&password) { break 'r invalid(); }
-        match backup::restore(&st.vault, &st.peers, &st.hangar_dir, &from_peer, &server_id, password).await {
+        // Tarefa própria: conexão que cai entre as duas gravações deixaria o cofre novo com a chave de recuperação velha.
+        let (worker, source) = (st.clone(), from_peer.clone());
+        let restored = tokio::spawn(async move {
+            backup::restore(&worker.vault, &worker.peers, &worker.hangar_dir, &source, &server_id, password).await
+        }).await.unwrap_or_else(|error| Err(super::join_cause("vault_restore_interrupted", RestoreError::Vault(VaultError::Io))(error)));
+        match restored {
             Ok(()) => status_body(&st, true).await,
             Err(error) => restore_failure(&st, &from_peer, error),
         }
