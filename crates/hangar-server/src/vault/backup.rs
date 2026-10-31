@@ -249,8 +249,14 @@ fn record_now(hangar_dir: &Path, peer: &str, result: Result<u64, String>) -> Sen
 
 /// Só a resposta "não tenho" reenvia: máquina fora do ar não é cópia perdida.
 async fn copy_is_gone(peers: &PeerClient, peer: &str, server_id: &str) -> bool {
-    matches!(peers.send_secret(false, peer, reqwest::Method::GET, &format!("/api/vault/backup/{server_id}"), None, MAX_COPY).await,
-        Err(PeerError::Refused { status: 404, detail }) if detail.get("code").and_then(Value::as_str) == Some("erro_cofre_backup_ausente"))
+    match peers.send_secret(false, peer, reqwest::Method::GET, &format!("/api/vault/backup/{server_id}"), None, MAX_COPY).await {
+        Ok(_) => false,
+        Err(PeerError::Refused { status: 404, detail }) if detail.get("code").and_then(Value::as_str) == Some("erro_cofre_backup_ausente") => true,
+        Err(error) => {
+            tracing::warn!(code = "vault_backup_check_failed", peer, "a cópia na outra máquina não foi conferida: {}", error.text(peer));
+            false
+        }
+    }
 }
 
 /// Uma rodada: só na dona com `backup_peer` e senha de recuperação, e só quando a revisão mudou
@@ -421,7 +427,7 @@ pub async fn restore(vault: &Vault, peers: &PeerClient, hangar_dir: &Path, from_
     let _config = vault.config_lock.lock().await;
     match config::placement(hangar_dir) {
         Ok(config::Placement::Remote(_)) => return Err(RestoreError::RemoteOwner),
-        Err(_) => return Err(RestoreError::Vault(VaultError::Io)),
+        Err(error) => return Err(super::plain_cause("vault_restore_placement", RestoreError::Vault(VaultError::Io))(error)),
         Ok(_) => {}
     }
     if !vault.restorable(hangar_dir).await.map_err(RestoreError::Vault)? { return Err(RestoreError::NotEmpty); }

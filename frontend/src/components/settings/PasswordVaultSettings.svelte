@@ -45,8 +45,9 @@
     if (list.status === 'rejected') { entries = null; entriesError = reason(list.reason); }
     else if (!Array.isArray(list.value)) { entries = null; entriesError = m.vault_web_bad_answer(); }
     else {
-      // A senha pode ter mudado em outro aparelho: a revelada aqui ficaria velha.
-      clearRevealed();
+      // Só sai a senha que mudou em outro aparelho: recarregar não cancela o toque em Revelar de outra linha.
+      const fresh = new Map(list.value.map((e) => [e.id, e.updated_at]));
+      for (const e of entries ?? []) if (fresh.get(e.id) !== e.updated_at) forget(e.id);
       entries = list.value;
     }
   }

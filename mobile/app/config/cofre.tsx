@@ -41,6 +41,7 @@ export default function Cofre() {
   // Quem recebe gravar, revelar e apagar: a própria máquina na dona, o servidor salvo da dona na remota.
   const [writer, setWriter] = useState<Server | null>(null);
   const [ownerLookupError, setOwnerLookupError] = useState('');
+  const writerOwner = useRef<string | undefined>(undefined);
   const generation = useRef(0);
   // A lista republica o objeto do servidor sem mudar nada; recarregar por isso fecharia o formulário aberto.
   const serverRef = useRef(server);
@@ -68,8 +69,10 @@ export default function Cofre() {
         if (now !== generation.current) return;
         setStatus(next);
         setEntries(list);
-        // Falha ao reler os peers não fecha o formulário aberto: quem grava continua conhecido.
-        setWriter((known) => owner ?? (lookupError ? known : null));
+        // Falha ao reler os peers não fecha o formulário aberto, desde que a dona seja a mesma.
+        const sameOwner = writerOwner.current === next.owner;
+        writerOwner.current = next.owner ?? undefined;
+        setWriter((known) => owner ?? (lookupError && sameOwner ? known : null));
         setOwnerLookupError(lookupError);
       } catch (e) {
         if (now === generation.current) setError(vaultErrorText(e));
