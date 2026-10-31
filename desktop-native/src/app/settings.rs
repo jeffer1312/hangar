@@ -973,26 +973,29 @@ impl Hangar {
 
     /// Linha cuja descrição carrega um controle (o "Copiar do claro" do Destaque).
     pub(super) fn row_with(&self, icon: IconName, title: &'static str, description: Div, enabled: bool, control: AnyElement) -> Div {
-        // Na caixa ao vivo (360px) o controle desce para baixo do título, senão espreme o texto.
-        let live = self.settings_ui.live;
-        let head = div().flex_1().min_w_0().flex().items_center().gap(px(if live { 10. } else { 14. }))
-            .child(div().size(px(if live { 28. } else { 36. })).flex_shrink_0().rounded(px(if live { 8. } else { 10. })).border_1()
-                .border_color(theme::border()).bg(theme::inset()).flex().items_center().justify_center().child(chrome::small_icon(icon, 16., theme::muted())))
-            .child(div().flex_1().min_w_0().flex().flex_col().gap(px(2.))
-                .child(div().font_weight(FontWeight::MEDIUM).text_color(if enabled { theme::text() } else { theme::muted() }).child(tr(title)))
-                .child(description.text_size(px(13.)).text_color(theme::muted())));
-        // Divisória em cima de toda linha; a da primeira sobe 1px e some sob a borda da caixa.
-        let row = div().mt(px(-1.)).border_t_1().border_color(theme::border()).flex()
-            .map(|el| if live { el.flex_col().gap(px(10.)).px_3().py(px(12.)) } else { el.items_center().gap(px(14.)).px_4().py(px(14.)) })
-            .child(head)
-            // Desligado, quem esmaece é o próprio controle; esmaecer a linha também somava as duas e sumia o texto.
-            // `flex` no invólucro: embaixo do título o controle fica do tamanho dele, sem esticar a borda.
-            .child(div().flex_shrink_0().when(live, |el| el.flex().pl(px(38.))).child(control));
-        self.mark(row, title)
+        self.mark(setting_row(self.settings_ui.live, icon, tr(title), description, enabled, control), title)
     }
 }
 
-pub(super) fn settings_box() -> Div {
+/// A vista da linha de configuração, sem o destaque da busca.
+pub(crate) fn setting_row(live: bool, icon: IconName, title: String, description: Div, enabled: bool, control: AnyElement) -> Div {
+    // Na caixa ao vivo (360px) o controle desce para baixo do título, senão espreme o texto.
+    let head = div().flex_1().min_w_0().flex().items_center().gap(px(if live { 10. } else { 14. }))
+        .child(div().size(px(if live { 28. } else { 36. })).flex_shrink_0().rounded(px(if live { 8. } else { 10. })).border_1()
+            .border_color(theme::border()).bg(theme::inset()).flex().items_center().justify_center().child(chrome::small_icon(icon, 16., theme::muted())))
+        .child(div().flex_1().min_w_0().flex().flex_col().gap(px(2.))
+            .child(div().font_weight(FontWeight::MEDIUM).text_color(if enabled { theme::text() } else { theme::muted() }).child(title))
+            .child(description.text_size(px(13.)).text_color(theme::muted())));
+    // Divisória em cima de toda linha; a da primeira sobe 1px e some sob a borda da caixa.
+    div().mt(px(-1.)).border_t_1().border_color(theme::border()).flex()
+        .map(|el| if live { el.flex_col().gap(px(10.)).px_3().py(px(12.)) } else { el.items_center().gap(px(14.)).px_4().py(px(14.)) })
+        .child(head)
+        // Desligado, quem esmaece é o próprio controle; esmaecer a linha também somava as duas e sumia o texto.
+        // `flex` no invólucro: embaixo do título o controle fica do tamanho dele, sem esticar a borda.
+        .child(div().flex_shrink_0().when(live, |el| el.flex().pl(px(38.))).child(control))
+}
+
+pub(crate) fn settings_box() -> Div {
     div().flex().flex_col().rounded(px(14.)).border_1().border_color(theme::border()).bg(theme::boxed()).overflow_hidden()
 }
 

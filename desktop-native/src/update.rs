@@ -13,6 +13,7 @@ use std::{collections::HashMap, ffi::OsString, path::{Path, PathBuf}, sync::Arc,
 use tokio::runtime::Runtime;
 
 mod all;
+pub(crate) use all::status_line;
 pub(crate) mod confirm;
 
 const RELEASES: &str = "https://github.com/jeffer1312/hangar/releases/download";
