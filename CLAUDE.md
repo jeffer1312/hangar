@@ -225,6 +225,11 @@ registrado, fora do caminho de leitura, para não competir com o que vale hoje.
   três: app Expo (`mobile/`), desktop nativo (`desktop-native/`) e PWA (`frontend/`, vista
   celular).** O nativo costuma estar à frente e é a referência de comportamento. Quem implementa
   num cliente leva aos outros no mesmo trabalho ou deixa a pendência dita no relato.
+- **Mudança numa lista ou barra de sessões é conferida em todas as outras.** Nativo: barra
+  lateral (cheia e trilho), abas em cima ou embaixo, que não têm barra lateral, com a bandeja
+  "Máquinas e convidados", seletor de sessões e busca. PWA: `SessionList`. Expo: lista, barra do
+  tablet e seletor. Cada uma recebe a mudança ou fica fora com o motivo dito no plano.
+  [Motivo](docs/decisoes/frontend.md#mudança-numa-lista-de-sessões-vale-para-todas-31102026).
 - **Desktop evolui no Rust (`desktop-native/`); web (`frontend/`) evolui para PWA/mobile.**
   Mudanças desktop entram só no nativo. No Svelte entra apenas o que serve ao PWA/celular; a
   tela desktop web e o Electron ficam parados onde estão, sem recurso novo. Recursos usados no

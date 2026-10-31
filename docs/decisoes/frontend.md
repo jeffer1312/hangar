@@ -1272,3 +1272,14 @@ com os círculos virados elipses.
   monitor de escala fracionária o quadro é ampliado pela GPU) e o site da conversa (modo `url`),
   que precisa do login do perfil do painel e por isso abre no Chromium dele.
 
+
+## Mudança numa lista de sessões vale para todas (31/10/2026)
+
+O recurso "Ocultar da lista" (#294) levou a seção "Ocultas (N)" à barra lateral do nativo, à
+`SessionList` do PWA e à lista do Expo, mas não à navegação por abas do nativo. Com as abas em cima
+ou embaixo não há barra lateral; a faixa de abas e a bandeja "Máquinas e convidados" tiravam as
+ocultas, e o atalho "Ver sessões ocultas" só abria a busca. Depois de ocultar, a sessão só voltava
+buscando pelo nome. O plano listava os clientes, não as superfícies de cada um, e a revisão
+conferiu o que o plano listava. Por isso a regra pede a lista das superfícies no plano: barra
+lateral (cheia e trilho), abas com a bandeja, seletor e busca no nativo; `SessionList` no PWA;
+lista, barra do tablet e seletor no Expo.
