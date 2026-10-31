@@ -292,7 +292,7 @@ async fn partial_preparation_opens_and_error_refuses() {
         let server = tokio::spawn(async move { axum::serve(listener,router).await.unwrap(); });
         let result = service.prepare_for_session(&account,bridge.clone(),
             tokio::time::Instant::now()+std::time::Duration::from_secs(15)).await;
-        // Outro serviço (servidor reiniciado) reaproveita o parcial registrado, sem novo preparo.
+        // Parcial não fica registrada: a próxima abertura (aqui, servidor reiniciado) prepara de novo.
         let reopened = if opens { Some(AccountService::new(env()).prepare_for_session(&account,bridge.clone(),
             tokio::time::Instant::now()+std::time::Duration::from_secs(15)).await) } else { None };
         server.abort();
@@ -302,9 +302,8 @@ async fn partial_preparation_opens_and_error_refuses() {
             assert_eq!(ready["status"],"partial");
             assert_eq!(ready["issues"][0]["code"],"codex_account_source_sync_incomplete");
             assert_eq!(reopened.unwrap().unwrap()["status"],"partial");
-            assert_eq!(calls.load(Ordering::SeqCst),1,"o parcial registrado não prepara de novo");
-            let marker = std::fs::read_to_string(account.home.join(".hangar-prepared-v1")).unwrap();
-            assert_eq!(serde_json::from_str::<serde_json::Value>(&marker).unwrap()["status"],"partial");
+            assert_eq!(calls.load(Ordering::SeqCst),2,"o parcial tenta de novo na abertura seguinte");
+            assert!(!account.home.join(".hangar-prepared-v1").exists(),"parcial não é conta pronta");
         } else {
             assert_eq!(result.unwrap_err().code,"codex_account_prepare_incomplete");
         }

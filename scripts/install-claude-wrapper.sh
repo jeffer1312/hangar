@@ -26,10 +26,16 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # Máquina no pacote: links, bloco do shell e extensões apontam para o `current`, nunca para a
 # pasta da versão (a poda a apaga) nem para o checkout de antes da migração, de onde o motor git
-# ainda roda os passos seguintes da mesma rodada.
-if [ -d "$HOME/.hangar/current" ] && { [ "$(realpath "$HOME/.hangar/current")" = "$(realpath "$SCRIPT_DIR/..")" ] \
-        || grep -q '"mode": "package"' "$HOME/.hangar/migration.json" 2>/dev/null; }; then
-    SCRIPT_DIR="$HOME/.hangar/current/scripts"
+# ainda roda os passos seguintes da mesma rodada. Rodando de outra pasta, quem instala é o
+# instalador do `current`, para código e arquivos serem da mesma versão.
+if [ -d "$HOME/.hangar/current" ]; then
+    if [ "$(realpath "$HOME/.hangar/current")" = "$(realpath "$SCRIPT_DIR/..")" ]; then
+        SCRIPT_DIR="$HOME/.hangar/current/scripts"
+    elif grep -q '"mode": "package"' "$HOME/.hangar/migration.json" 2>/dev/null \
+            && [ -f "$HOME/.hangar/current/scripts/install-claude-wrapper.sh" ]; then
+        echo "máquina no pacote: quem instala é o $HOME/.hangar/current/scripts/install-claude-wrapper.sh" >&2
+        exec bash "$HOME/.hangar/current/scripts/install-claude-wrapper.sh" "$@"
+    fi
 fi
 SHELL_DIR="$SCRIPT_DIR/shell"
 BEGIN_MARK="# >>> hangar >>>"

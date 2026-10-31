@@ -83,7 +83,9 @@ Passos marcados:
 Ficam sem o campo, mesmo com comando: os que rodam `install-hangar-send.sh`,
 `install-claude-wrapper.sh`/`setup-windows-wrappers.ps1` ou `registrar-mcp.py` (conteúdo e
 atalhos), `2026-10-02-hangar-server-binarios` (o binário vem no pacote) e
-`2026-10-19-trava-do-client-api` (hook do git do checkout, só no modo desenvolvedor).
+`2026-10-19-trava-do-client-api` (hook do git do checkout, só no modo desenvolvedor). A exceção
+é o `2026-10-31-links-do-pacote`: ele roda o `install-claude-wrapper.sh` para levar ao `current`
+os atalhos que ficaram fora da pasta da versão, apontando para o checkout.
 
 ## O que o botão faz sozinho, e o que só um passo faz
 

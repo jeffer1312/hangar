@@ -476,8 +476,9 @@ async fn codex_preparation(st: &AppState, account_id: &str) -> Result<Option<Str
 fn partial_preparation_warning(status: &Value) -> Option<String> {
     if status["status"] != "partial" { return None; }
     let codes: Vec<&str> = status["issues"].as_array().into_iter().flatten().filter_map(|issue| issue["code"].as_str()).collect();
-    Some(format!("a sincronização da conta Codex terminou com pendências ({}); a sessão abriu assim mesmo. \
-        Confira a sincronização da conta", codes.join(", ")))
+    let codes = if codes.is_empty() { String::new() } else { format!(" ({})", codes.join(", ")) };
+    Some(format!("a sincronização da conta Codex terminou com pendências{codes}; a sessão abriu assim mesmo. \
+        Confira a sincronização da conta"))
 }
 
 /// A linha `api.servidor` do middleware de acesso do Python, para o pedido que o Rust atendeu
@@ -702,5 +703,7 @@ mod tests {
         let warning = super::partial_preparation_warning(&partial).unwrap();
         assert!(warning.contains("codex_account_source_sync_incomplete"), "{warning}");
         assert_eq!(super::partial_preparation_warning(&serde_json::json!({"status": "ready", "issues": []})), None);
+        let bare = super::partial_preparation_warning(&serde_json::json!({"status": "partial", "issues": []})).unwrap();
+        assert!(!bare.contains("()"), "{bare}");
     }
 }
