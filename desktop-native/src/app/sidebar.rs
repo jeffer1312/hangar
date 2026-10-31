@@ -25,7 +25,7 @@ pub(super) struct Target { pub(super) server: String, pub(super) name: String }
 
 /// O que a segunda linha da sessão diz: a última resposta, a pergunta em aberto ou o que o agente está fazendo.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Sub { Reply, Question, Working }
+pub(crate) enum Sub { Reply, Question, Working }
 
 type LastSubs = HashMap<Target, (Option<String>, (String, Sub))>;
 
@@ -1416,14 +1416,9 @@ impl Hangar {
         let id = SharedString::from(format!("group-{key}"));
         let focus = window.use_keyed_state(SharedString::from(format!("{id}-focus")), cx, |_, cx| cx.focus_handle().tab_stop(true)).read(cx).clone();
         let (key, weak) = (key.to_owned(), cx.entity().downgrade());
-        AccordionTrigger::new(id).open(open).track_focus(&focus).aria_label(count.map_or_else(|| label.clone(), |n| format!("{label} · {n}")))
-            .flex_shrink_0().mt(px(8.)).h(px(28.)).px(px(8.)).rounded(px(8.)).border_1().border_color(transparent_black())
-            .flex().items_center().gap(px(6.)).cursor_pointer().hover(|el| el.bg(theme::hover())).focus_visible(|el| el.border_color(theme::accent_focus()))
-            .child(chrome::small_icon(if open { IconName::ChevronDown } else { IconName::ChevronRight }, 14., theme::faint()))
-            .child(div().min_w_0().truncate().text_xs().font_weight(FontWeight::MEDIUM).text_color(theme::muted()).child(label))
-            .when_some(count, |el, n| el.child(div().flex_shrink_0().font_family(theme::MONO).text_size(px(11.)).text_color(theme::faint()).child(n.to_string())))
-            .when(awaiting > 0, |el| el.child(div().flex_shrink_0().font_family(theme::MONO).text_size(px(11.)).text_color(theme::warning())
-                .child(format!("{awaiting} {}", tr("sidebar_awaiting_short")))))
+        let trigger = AccordionTrigger::new(id).open(open).track_focus(&focus).aria_label(count.map_or_else(|| label.clone(), |n| format!("{label} · {n}")));
+        group_header_look(trigger, label, open, count, awaiting)
+            .cursor_pointer().hover(|el| el.bg(theme::hover())).focus_visible(|el| el.border_color(theme::accent_focus()))
             .on_change(move |_, _, _, cx| { let _ = weak.update(cx, |this, cx| this.toggle_group(key.clone(), cx)); })
             .into_any_element()
     }
@@ -1453,14 +1448,41 @@ impl Hangar {
 pub(super) fn menu_style(menu: PopupMenu) -> PopupMenu {
     use gpui_kit::component::menu::PopupMenuAppearance;
     menu.appearance(PopupMenuAppearance::default()
-        .surface_style(StyleRefinement::default().rounded(px(12.)).border_1().border_color(theme::glass_border())
-            .bg(theme::raised()).text_color(theme::text()).shadow(theme::popover_shadow()))
-        .list_style(StyleRefinement::default().p(px(popup::INSET)).gap(px(2.)))
-        .item_height(px(28.25))
-        .item_style(StyleRefinement::default().px(px(8.)).rounded(px(7.)).text_size(px(13.)).line_height(relative(1.25)))
+        .surface_style(menu_surface_look())
+        .list_style(menu_list_look())
+        .item_height(menu_item_height())
+        .item_style(menu_item_look())
         .separator_style(StyleRefinement::default().border_b_0().h(px(1.)).mx(px(-popup::INSET)).my(px(2.)).bg(theme::border()))
-        .label_renderer(|label, _, _| popup::title(label.to_string(), Some("esc")).w_full())
+        .label_renderer(|label, _, _| menu_label(label.to_string()))
         .key_renderer(|key, _, _| popup::key_hint("").child(key.appearance(false))))
+}
+
+// As partes do `menu_style` em separado: a miniatura da novidade "ocultar da lista" monta o menu com as mesmas.
+pub(crate) fn menu_surface_look() -> StyleRefinement {
+    StyleRefinement::default().rounded(px(12.)).border_1().border_color(theme::glass_border())
+        .bg(theme::raised()).text_color(theme::text()).shadow(theme::popover_shadow())
+}
+
+pub(crate) fn menu_list_look() -> StyleRefinement { StyleRefinement::default().p(px(popup::INSET)).gap(px(2.)) }
+
+pub(crate) fn menu_item_look() -> StyleRefinement {
+    StyleRefinement::default().px(px(8.)).rounded(px(7.)).text_size(px(13.)).line_height(relative(1.25))
+}
+
+pub(crate) fn menu_item_height() -> Pixels { px(28.25) }
+
+pub(crate) fn menu_label(label: String) -> Div { popup::title(label, Some("esc")).w_full() }
+
+/// O cabeçalho de grupo da barra sem foco nem clique: ▾, rótulo, contagem e quantos aguardam. A tela o veste num
+/// `AccordionTrigger`; a miniatura da novidade, num `div`.
+pub(crate) fn group_header_look<E: Styled + ParentElement + IntoElement>(el: E, label: String, open: bool, count: Option<usize>, awaiting: usize) -> E {
+    el.flex_shrink_0().mt(px(8.)).h(px(28.)).px(px(8.)).rounded(px(8.)).border_1().border_color(transparent_black())
+        .flex().items_center().gap(px(6.))
+        .child(chrome::small_icon(if open { IconName::ChevronDown } else { IconName::ChevronRight }, 14., theme::faint()))
+        .child(div().min_w_0().truncate().text_xs().font_weight(FontWeight::MEDIUM).text_color(theme::muted()).child(label))
+        .when_some(count, |el, n| el.child(div().flex_shrink_0().font_family(theme::MONO).text_size(px(11.)).text_color(theme::faint()).child(n.to_string())))
+        .when(awaiting > 0, |el| el.child(div().flex_shrink_0().font_family(theme::MONO).text_size(px(11.)).text_color(theme::warning())
+            .child(format!("{awaiting} {}", tr("sidebar_awaiting_short")))))
 }
 
 /// O mesmo menu no clique direito da linha, no ⋯ e na aba, para a sessão de qualquer máquina (`server` é a chave dela).
