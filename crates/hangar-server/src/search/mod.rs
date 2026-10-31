@@ -5,6 +5,7 @@
 //! Também guarda por arquivo o que o Arquivo precisa (cabeçalho, conta, se tem usuário, última
 //! mensagem), para listar sem reabrir os transcripts.
 
+pub mod ask;
 mod db;
 pub(crate) mod hits;
 pub mod http;

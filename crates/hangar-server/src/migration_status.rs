@@ -127,6 +127,7 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     if *method == Method::GET && matches!(path, "/api/device-install/devices" | "/api/device-install/progress") { return true; }
     if *method == Method::POST && matches!(path, "/api/device-install/trust" | "/api/device-install/start" | "/api/device-install/code" | "/api/device-install/certs") { return true; }
     if *method == Method::POST && path == "/api/update/accept" { return true; }
+    if *method == Method::POST && path == "/api/ask-history" { return true; }
     if *method == Method::GET {
         if matches!(path, "/api/sessions" | "/api/sessions/events" | "/api/sessions/creation-progress" | "/api/costs" | "/api/cotacao" | "/api/uso" | "/api/migration/status" | "/api/presence" | "/api/update/notes"
             | "/api/voice" | "/api/voice/settings" | "/api/voice/memory" | "/api/jev/aux/cliproxy" | "/api/jev/delivery" | "/api/client-api"
@@ -271,6 +272,7 @@ const PROBES: &[(&str, &str)] = &[
     ("GET", "/api/config"),
     ("GET", "/api/search"),
     ("GET", "/api/search/context"),
+    ("POST", "/api/ask-history"),
 ];
 
 struct Bucket {

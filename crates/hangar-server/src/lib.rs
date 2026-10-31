@@ -12,6 +12,7 @@ pub mod claude_customizations;
 pub mod jev_aux;
 pub mod keyring;
 pub mod claude_defaults;
+pub mod claude_p;
 pub mod presence;
 pub mod watchdog;
 pub mod costs;
