@@ -146,9 +146,12 @@ fn is_stale_native_sidecar(value: &Value, pid: u32) -> bool {
     value.get("pid").is_some_and(|p| p.as_u64() != Some(u64::from(pid)) && p.as_u64().and_then(pid_alive) != Some(true))
 }
 
-/// `None` onde não há como saber sem custo (fora do Linux).
+/// Outro app nativo vivo nesse pid: o processo existe e tem o nome deste (pid de antes do reboot costuma ser de outro
+/// programa). `None` onde não há como saber sem custo (fora do Linux).
 fn pid_alive(pid: u64) -> Option<bool> {
-    cfg!(target_os = "linux").then(|| std::path::Path::new(&format!("/proc/{pid}")).exists())
+    if !cfg!(target_os = "linux") { return None; }
+    let comm = |p: &str| std::fs::read_to_string(format!("/proc/{p}/comm")).ok();
+    Some(comm(&pid.to_string()).is_some_and(|c| Some(c) == comm("self")))
 }
 
 /// O app não apaga os sidecars ao sair; sem isto, cada reinício deixa navegadores fantasmas para o CLI e o backend.
@@ -646,7 +649,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("hangar-srv-reclaim-{}-{}", std::process::id(), now_ms()));
         let live = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let dead = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
-        let own = json!({"porta": live.local_addr().unwrap().port(), "token": "meu", "pid": std::process::id(), "ts": 1});
+        // Este processo faz o papel do outro app vivo (mesmo nome); o dono do teste é um pid qualquer.
+        let own = json!({"porta": live.local_addr().unwrap().port(), "token": "meu", "pid": dead_pid(), "ts": 1});
         let read = || serde_json::from_slice::<Value>(&std::fs::read(dir.join("_srv.json")).unwrap()).unwrap();
 
         assert!(reclaim(&dir, &own).await.unwrap(), "sem arquivo, o dono publica");
@@ -654,7 +658,7 @@ mod tests {
         assert!(!reclaim(&dir, &own).await.unwrap(), "arquivo já é deste processo");
 
         let other = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        let alive = json!({"porta": other.local_addr().unwrap().port(), "token": "outro", "pid": 1, "ts": 2});
+        let alive = json!({"porta": other.local_addr().unwrap().port(), "token": "outro", "pid": std::process::id(), "ts": 2});
         write_json_in(&dir, "_srv", &alive).unwrap();
         assert!(!reclaim(&dir, &own).await.unwrap(), "outra instância viva não é desalojada");
         assert_eq!(read(), alive);
@@ -667,6 +671,8 @@ mod tests {
             let recycled = json!({"porta": other.local_addr().unwrap().port(), "token": "morto", "pid": dead_pid(), "ts": 4});
             write_json_in(&dir, "_srv", &recycled).unwrap();
             assert!(reclaim(&dir, &own).await.unwrap(), "pid morto vence a porta reaproveitada por outro programa");
+            write_json_in(&dir, "_srv", &json!({"porta": dead, "token": "antigo", "pid": 1, "ts": 5})).unwrap();
+            assert!(reclaim(&dir, &own).await.unwrap(), "pid reaproveitado por outro programa não é dono");
         }
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -819,6 +825,7 @@ mod tests {
         if cfg!(target_os = "linux") {
             let other_live_app = u64::from(std::process::id());
             assert!(!is_stale_native_sidecar(&json!({"chave": "s::a", "pid": other_live_app}), 20), "app vivo ao lado guarda os seus");
+            assert!(is_stale_native_sidecar(&json!({"chave": "s::a", "pid": 1}), 20), "pid de antes do reboot, agora de outro programa");
         }
         assert!(!is_stale_native_sidecar(&json!({"chave": "s::a", "pid": 20}), 20));
         assert!(!is_stale_native_sidecar(&json!({"chave": "s::a", "url": "http://x/"}), 20));
