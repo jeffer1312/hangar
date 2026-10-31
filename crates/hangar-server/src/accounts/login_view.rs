@@ -221,6 +221,8 @@ mod hyprland {
                     self.run("ydotool", &["click", "0xC0"]).is_some()
                 }
                 DeskInput::Wheel { x, y, down } => {
+                    if !self.ensure_focus(window) { return false; }
+                    self.run("hyprctl", &["dispatch", "alterzorder", &format!("top,address:{}", window.id)]);
                     pointer(*x, *y);
                     self.run("ydotool", &["mousemove", "--wheel", "-x", "0", "-y", if *down { "-1" } else { "1" }]).is_some()
                 }
@@ -472,6 +474,7 @@ mod windows_desk {
                     true
                 }
                 DeskInput::Wheel { x, y, down } => {
+                    if !front() { return false; }
                     pointer(*x, *y);
                     mouse(MOUSEEVENTF_WHEEL, if *down { -120 } else { 120 });
                     true

@@ -458,6 +458,8 @@ struct View {
     desk: Arc<dyn Desk>,
     baseline: HashSet<String>,
     window: Option<String>,
+    /// Quem a janela era quando foi vista: o endereço de uma janela fechada pode já ser de outra.
+    capture_id: Option<String>,
 }
 
 type Views = Arc<Mutex<HashMap<String, View>>>;
@@ -471,14 +473,15 @@ async fn close_view_in(views: &Views, operation: &str) {
     let Some(view) = locked_views(views).remove(operation) else { return };
     let _ = tokio::task::spawn_blocking(move || {
         let windows = view.desk.windows().into_iter().flatten();
-        // Quem não abriu a transmissão ainda tem a janela aberta. O título confere de novo: o endereço de
-        // uma janela fechada pode já ser de outra.
+        // Quem não abriu a transmissão ainda tem a janela aberta, e ela é achada pelo título. Já vista,
+        // vale quem ela era: no login do Google o título muda e a janela continua sendo a do login.
         let found = match &view.window {
-            Some(id) => windows.into_iter().find(|window| &window.id == id),
+            Some(id) => windows.into_iter().find(|window| &window.id == id && window.capture_id == view.capture_id),
             None => windows.into_iter().find(|window| !view.baseline.contains(&window.id) && is_login_window(window)),
         };
-        if let Some(window) = found.filter(is_login_window) {
-            view.desk.close(&window);
+        match found {
+            Some(window) => view.desk.close(&window),
+            None => tracing::info!(code = "login_view_nothing_to_close", "nenhuma janela do login para fechar"),
         }
     })
     .await;
@@ -569,7 +572,7 @@ impl LoginBrowser {
             let desk = probe()?;
             // Sem saber o que já estava na tela, qualquer janela poderia virar a do login.
             let baseline = desk.windows()?.into_iter().map(|window| window.id).collect();
-            Some(View { desk, baseline, window: None })
+            Some(View { desk, baseline, window: None, capture_id: None })
         })
         .await;
         if let Ok(Some(view)) = prepared {
@@ -614,6 +617,7 @@ impl LoginBrowser {
         };
         if let Some(view) = locked_views(&self.views).get_mut(operation) {
             view.window = Some(window.id.clone());
+            view.capture_id = window.capture_id.clone();
         }
         match jpeg {
             Some(jpeg) => json!({
@@ -660,6 +664,7 @@ impl LoginBrowser {
     }
 
     pub async fn close_view(&self, operation: &str) {
+        self.stop(operation);
         close_view_in(&self.views, operation).await;
     }
 
@@ -687,6 +692,7 @@ impl LoginBrowser {
         let launcher = self.launcher.clone();
         let launched = tokio::task::spawn_blocking(move || launcher(command)).await;
         if !matches!(launched, Ok(Ok(()))) {
+            tracing::warn!(code = "login_browser_launch_failed", detail = ?launched, "o navegador do login não abriu");
             locked_views(&self.views).remove(&request.operation);
             self.stop(&request.operation);
             return Err(refused(502, "erro_login_browser_failed", "não consegui abrir o navegador"));
@@ -694,11 +700,9 @@ impl LoginBrowser {
         Ok(())
     }
 
-    /// A query sai uma vez só: quem a recebe é o único que pode entregá-la ao CLI.
+    /// Fica guardada até o login fechar: se a resposta se perde na rede, a consulta seguinte ainda a recebe.
     pub fn result(&self, operation: &str) -> Option<String> {
-        let mut listens = locked(&self.listens);
-        listens.get(operation)?.query.as_ref()?;
-        listens.remove(operation)?.query
+        locked(&self.listens).get(operation)?.query.clone()
     }
 
     fn stop(&self, operation: &str) {
@@ -1118,11 +1122,25 @@ mod tests {
         let desk = Arc::new(FakeDesk::default());
         let browser = viewing(desk.clone());
         browser.open(view_request(TargetKind::ChromeProfile)).await.unwrap();
-        desk.windows.lock().unwrap().push(desk_window("same"));
+        let login = crate::accounts::login_view::DeskWindow { capture_id: Some("stable-1".into()), ..desk_window("same") };
+        desk.windows.lock().unwrap().push(login);
         browser.view("op").await;
-        *desk.windows.lock().unwrap() = vec![someone_elses_window("same")];
+        let other = crate::accounts::login_view::DeskWindow { capture_id: Some("stable-2".into()), ..desk_window("same") };
+        *desk.windows.lock().unwrap() = vec![other];
         browser.close_view("op").await;
         assert!(!desk.log.lock().unwrap().iter().any(|line| line.starts_with("close")));
+    }
+
+    #[tokio::test]
+    async fn the_login_window_closes_even_after_leaving_the_claude_pages() {
+        let desk = Arc::new(FakeDesk::default());
+        let browser = viewing(desk.clone());
+        browser.open(view_request(TargetKind::ChromeProfile)).await.unwrap();
+        desk.windows.lock().unwrap().push(desk_window("login"));
+        browser.view("op").await;
+        desk.windows.lock().unwrap()[0].title = "Sign in - Google Accounts".into();
+        browser.close_view("op").await;
+        assert_eq!(desk.log.lock().unwrap().last().unwrap(), "close login");
     }
 
     #[tokio::test]
@@ -1571,6 +1589,8 @@ mod tests {
 
         assert_eq!(rig.service.result("other"), None);
         assert_eq!(rig.service.result("op1").as_deref(), Some("code=abc&state=st4te"));
+        assert_eq!(rig.service.result("op1").as_deref(), Some("code=abc&state=st4te"));
+        rig.service.stop("op1");
         assert_eq!(rig.service.result("op1"), None);
     }
 

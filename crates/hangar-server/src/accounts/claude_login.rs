@@ -282,12 +282,19 @@ impl AccountService {
             return;
         }
         let started = tokio::time::Instant::now();
+        let mut unreachable = false;
         let query = loop {
             if !self.current_attempt(&attempt).await {
                 return;
             }
-            if let Ok(Some(query)) = channel.result(&target.machine, &attempt.operation).await {
-                break query;
+            match channel.result(&target.machine, &attempt.operation).await {
+                Ok(Some(query)) => break query,
+                Ok(None) => unreachable = false,
+                // Queda curta passa na consulta seguinte; o log marca o começo dela, não cada consulta.
+                Err(_) => {
+                    if !unreachable { tracing::warn!(code = "login_result_unreachable", machine = %target.machine, "a máquina do navegador não respondeu ao pedir o retorno do login"); }
+                    unreachable = true;
+                }
             }
             if started.elapsed() >= pacing.result_cap {
                 set("error", Some("erro_login_result_timeout"));

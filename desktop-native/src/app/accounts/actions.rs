@@ -65,6 +65,7 @@ struct LoginView {
     notice: Option<&'static str>,
     bounds: Rc<Cell<Bounds<Pixels>>>,
     notice_until: Option<std::time::Instant>,
+    retries: u32,
     input: tokio::sync::mpsc::UnboundedSender<Value>,
     frames: JoinHandle<()>,
     sender: JoinHandle<()>,
@@ -85,9 +86,11 @@ pub(in crate::app) enum ViewReply {
     /// A lista de janelas não veio neste quadro: a imagem anterior continua valendo.
     Retry,
     InputFailed,
+    ActivateFailed,
 }
 
 const VIEW_EVERY: Duration = Duration::from_millis(350);
+const VIEW_RETRIES_SILENT: u32 = 10;
 
 impl Drop for SignIn {
     // Tarefa do tokio não morre com o handle: sem isto a leitura do passo seguiria no servidor anterior.
@@ -450,7 +453,7 @@ impl Hangar {
             }
         });
         s.view = Some(LoginView { frame: None, size: (1., 1.), title: String::new(), can_input: true, notice: None, bounds: Rc::default(),
-            notice_until: None, input, frames, sender });
+            notice_until: None, retries: 0, input, frames, sender });
         s.view_focus.focus(window, cx);
         cx.notify();
     }
@@ -492,11 +495,14 @@ impl Hangar {
     fn activate_login_view(&mut self, cx: &mut Context<Self>) {
         let Some(api) = self.api.clone() else { return };
         let Some(s) = self.accounts.sign_in.as_mut() else { return };
-        let label = s.label.clone();
+        let (label, attempt) = (s.label.clone(), s.attempt);
         if let Some(view) = s.view.as_mut() { view.notice = None; }
+        let done = self.accounts_send_later();
         self.runtime.spawn(async move {
-            if let Err(error) = api.server_post(&["conta-estado", &label, "login", "view", "activate"], 15).await {
-                eprintln!("[contas] reativar a sessão falhou: {:?}", error.status);
+            // O tscon pode recusar com o servidor respondendo 200: vale o `ok` da resposta.
+            let reply = api.server_post(&["conta-estado", &label, "login", "view", "activate"], 15).await;
+            if !reply.as_ref().is_ok_and(|reply| reply["ok"] == true) {
+                done(AccountsReply::Action(ActionReply::View(attempt, ViewReply::ActivateFailed))).await;
             }
         });
         cx.notify();
@@ -639,13 +645,21 @@ impl Hangar {
                 match reply {
                     ViewReply::Frame { image, size, title, can_input } => {
                         if let Some(old) = view.frame.replace(image) { cx.drop_image(old, None); }
-                        (view.size, view.title, view.can_input) = (size, title, can_input);
+                        (view.size, view.title, view.can_input, view.retries) = (size, title, can_input, 0);
                         // O aviso de entrada perdida dura o bastante para ser lido: quadro chega a cada instante.
                         if view.notice_until.is_none_or(|until| until <= std::time::Instant::now()) { view.notice = None; }
                     }
                     ViewReply::Notice(notice) => view.notice = Some(notice),
                     ViewReply::Lost => view.notice = Some("accounts_login_view_lost"),
-                    ViewReply::Retry => {}
+                    // Uma leitura perdida passa sozinha; seguidas, a pessoa precisa saber que a imagem parou.
+                    ViewReply::Retry => {
+                        view.retries += 1;
+                        if view.retries >= VIEW_RETRIES_SILENT { view.notice = Some("accounts_login_view_lost"); }
+                    }
+                    ViewReply::ActivateFailed => {
+                        view.notice = Some("accounts_login_view_activate_failed");
+                        view.notice_until = Some(std::time::Instant::now() + Duration::from_secs(6));
+                    }
                     ViewReply::InputFailed => {
                         view.notice = Some("accounts_login_view_input_failed");
                         view.notice_until = Some(std::time::Instant::now() + Duration::from_secs(4));
