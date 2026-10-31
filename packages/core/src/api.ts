@@ -2125,7 +2125,7 @@ export interface ArchiveEntry {
   name?: string | null;        // nome que a sessão tinha no Hangar ao ser fechada
 }
 
-export function getArchive():Promise<ArchiveFolder[]> {
+export function getArchive(): Promise<ArchiveFolder[]> {
   return apiFetch<ArchiveFolder[]>('/api/archive');
 }
 

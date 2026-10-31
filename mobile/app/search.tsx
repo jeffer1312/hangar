@@ -50,7 +50,7 @@ function Result({ item, query }: { item: Hit; query: string }) {
     if (!hit.event_id) { setError(m.busca_contexto_indisponivel()); return; }
     const g = ++generation.current;
     setLoading(true); setError('');
-    void getSearchContextForServer(server, hit.project, hit.session_id, hit.event_id)
+    void getSearchContextForServer(server, hit.project, hit.session_id, hit.event_id, hit.provider, hit.codex_account)
       .then((events) => { if (g === generation.current) setContext(events); })
       .catch((e: unknown) => { if (g === generation.current) setError(`${m.busca_contexto_indisponivel()}: ${message(e)}`); })
       .finally(() => { if (g === generation.current) setLoading(false); });
@@ -80,7 +80,8 @@ function Result({ item, query }: { item: Hit; query: string }) {
     </View> : null}
     {hit.event_id ? <Pressable style={styles.open} hitSlop={4} accessibilityRole="button" accessibilityLabel={m.busca_abrir_ponto()}
       onPress={() => router.push({ pathname: '/search-point', params: { server: server.id, project: hit.project, sid: hit.session_id,
-        eventId: hit.event_id!, name: hit.live ? hit.session_name ?? '' : '', conversationTitle: hit.session_name || hit.session_id.slice(0, 8) } } as never)}>
+        eventId: hit.event_id!, name: hit.live ? hit.session_name ?? '' : '', conversationTitle: hit.session_name || hit.session_id.slice(0, 8),
+        ...(hit.provider ? { provider: hit.provider } : {}), ...(hit.codex_account ? { codexAccount: hit.codex_account } : {}) } } as never)}>
       <Icon name="ArrowUpRight" size={16} color={theme.tokens.accent.base} />
       <Text style={styles.action}>{m.busca_abrir_ponto()}</Text>
     </Pressable> : <Text style={styles.meta}>{m.busca_contexto_indisponivel()}</Text>}
