@@ -6004,7 +6004,7 @@ impl Hangar {
                 .child(div().min_w_0().truncate().text_xs().text_color(theme::warning()).child(text))
                 .child(Button::new("reconnect").xsmall().ghost().label(tr("retry")).on_click(cx.listener(|this, _, window, cx| this.connect(window, cx))))))
             .children(self.keyring_keys().iter().filter_map(|key| self.render_keyring_notice(key, true, cx)).collect::<Vec<_>>())
-            .children(self.render_vault_chips(cx)),
+            .children(self.render_vault_chips(false, cx)),
             px(if floating { theme::PANEL_RADIUS } else { 0. }))
     }
 

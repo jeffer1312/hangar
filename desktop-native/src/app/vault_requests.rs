@@ -267,8 +267,9 @@ impl Hangar {
         self.vault.get(key).filter(|e| e.read(cx).count() > 0).map(|e| e.clone().into_any_element())
     }
 
-    /// Na barra das abas não cabe o cartão: uma linha por máquina que abre os cartões num diálogo.
-    pub(super) fn render_vault_chips(&self, cx: &App) -> Vec<AnyElement> {
+    /// Na barra das abas e no trilho não cabe o cartão: um botão por máquina que abre os cartões num diálogo.
+    /// No trilho, só a contagem: o resto vai na dica.
+    pub(super) fn render_vault_chips(&self, rail: bool, cx: &App) -> Vec<AnyElement> {
         let active = self.active_key();
         let mut keys: Vec<&String> = self.vault.keys().collect();
         keys.sort_by_key(|key| (**key != active, (*key).clone()));
@@ -279,8 +280,9 @@ impl Hangar {
             let machine = self.vault_machine_label(key, cx);
             let label = tr("vault_request_chip").replace("{n}", &count.to_string()).replace("{machine}", &machine);
             let title = format!("{} · {machine}", tr("vault_request_heading"));
-            Some(Button::new(SharedString::from(format!("vault-chip-{key}"))).xsmall().outline().flex_shrink_0().icon(IconName::KeyRound)
-                .label(label)
+            let button = Button::new(SharedString::from(format!("vault-chip-{key}"))).xsmall().outline().flex_shrink_0().icon(IconName::KeyRound);
+            let button = if rail { button.label(count.to_string()).tooltip(label.clone()).accessibility_label(label) } else { button.label(label) };
+            Some(button
                 .on_click(move |_, window, cx| {
                     let (entity, title) = (entity.clone(), title.clone());
                     window.open_dialog(cx, move |dialog, _, _| popup::dialog(dialog).w(px(420.)).title(title.clone()).child(entity.clone()));
