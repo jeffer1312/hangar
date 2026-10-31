@@ -3048,6 +3048,7 @@ impl Hangar {
         let attachment_key = self.delivery.current(key.clone());
         let mut problems = Vec::new();
         let mut audio_problems = Vec::new();
+        let mut attached = false;
         for file in files {
             match file {
                 Ok(picked) if composer::is_audio(&picked.name) => {
@@ -3057,13 +3058,13 @@ impl Hangar {
                     } else { self.transcribe_file(&key, picked.name, picked.bytes, cx) };
                     if let Err(problem) = result { audio_problems.push(problem); }
                 }
-                file => {
-                    if let Err(problem) = file.and_then(|picked| self.add_attachment(&attachment_key, picked.name, picked.bytes)) {
-                        problems.push(problem);
-                    }
-                }
+                file => match file.and_then(|picked| self.add_attachment(&attachment_key, picked.name, picked.bytes)) {
+                    Ok(_) => attached = true,
+                    Err(problem) => problems.push(problem),
+                },
             }
         }
+        if attached { self.tour_event(crate::tour::TourEvent::ContextAdded, cx); }
         if key == attachment_key { problems.extend(audio_problems); }
         else if !audio_problems.is_empty() { self.action_feedback.insert(key, (audio_problems.join(" "), true)); }
         if problems.is_empty() { self.action_feedback.remove(&attachment_key); }
@@ -3074,7 +3075,6 @@ impl Hangar {
     fn read_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
         let Some(key) = self.composer_key() else { return; };
         if paths.is_empty() || self.uploading.contains_key(&key) { return; }
-        self.tour_event(crate::tour::TourEvent::ContextAdded, cx);
         let generation = self.check_dictation_owner(cx);
         let owner = self.dictation_owner(cx);
         let (connection, tx) = (self.connection, self.tx.clone());
@@ -3110,6 +3110,7 @@ impl Hangar {
         let Some(key) = self.composer_key() else { return false; };
         let mut paths = Vec::new();
         let mut took = false;
+        let mut attached = false;
         let mut problems = Vec::new();
         for entry in item.entries() {
             match entry {
@@ -3117,7 +3118,10 @@ impl Hangar {
                     took = true;
                     let ext = image.format.mime_type().rsplit('/').next().unwrap_or("png").replace("svg+xml", "svg").replace("jpeg", "jpg");
                     let name = format!("colado-{}.{ext}", self.attach_seq + 1);
-                    if let Err(problem) = self.add_attachment(&key, name, image.bytes.clone()) { problems.push(problem); }
+                    match self.add_attachment(&key, name, image.bytes.clone()) {
+                        Ok(()) => attached = true,
+                        Err(problem) => problems.push(problem),
+                    }
                 }
                 ClipboardEntry::ExternalPaths(list) => { took = true; paths.extend(list.paths().iter().cloned()); }
                 _ => {}
@@ -3125,8 +3129,8 @@ impl Hangar {
         }
         if !problems.is_empty() { self.action_feedback.insert(key, (problems.join(" "), true)); }
         if !paths.is_empty() { self.read_paths(paths, cx); }
-        // A imagem colada não passa pelo `read_paths`.
-        if took { self.tour_event(crate::tour::TourEvent::ContextAdded, cx); }
+        // A imagem colada não passa pelo `receive_files`.
+        if attached { self.tour_event(crate::tour::TourEvent::ContextAdded, cx); }
         took
     }
 
@@ -7394,8 +7398,13 @@ impl Hangar {
     fn receive_tour_progress(&mut self, result: Result<Option<crate::tour::state::Seen>, Failure>, cx: &mut Context<Self>) {
         self.tour.server_read = true;
         match result {
-            // A união já subiu na sincronização: aqui só o arquivo local.
-            Ok(Some(server)) => if self.tour.absorb(server) { self.save_tour_local(); },
+            Ok(Some(server)) => {
+                let changed = self.tour.absorb(server.clone());
+                // O que mudou aqui durante a leitura não estava na união que subiu: vai agora. Sem isso, a união já subiu
+                // e basta o arquivo local.
+                if self.tour.seen.for_server() != server.for_server() { self.save_tour(); }
+                else if changed { self.save_tour_local(); }
+            }
             Ok(None) => crate::log_line("tour: servidor sem /api/tour-progress, vale o local"),
             Err(error) => crate::log_line(&format!("tour: o visto do servidor não foi lido: {} {}", error.status.unwrap_or(0), error.detail)),
         }

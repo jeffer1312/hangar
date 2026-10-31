@@ -42,6 +42,8 @@ async fn guest_connect_port_and_invalid_devices_record_nothing() {
     for query in ["device=desktop%3Babc", long.as_str(), "device=ios%3Ba_b", "device=ios"] {
         let _es = open_device(srv.addr, query, None).await;
     }
+    // Token que o Rust não conhece segue ao Python; o convidado com concessão, na porta dele, está em
+    // `share_guest_serving::guest_list_with_a_device_records_nothing`.
     let resp = client().get(format!("http://{}/api/sessions/events?token=convidado&device=ios%3Bg-1", srv.addr)).send().await.unwrap();
     assert_eq!(resp.text().await.unwrap(), "from-python", "convidado segue ao Python");
     let _connect = open_device(srv.addr, "device=ios%3Bc-1", Some("192.0.2.1")).await;

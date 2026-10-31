@@ -710,10 +710,10 @@ describe('openSessionsStream — parâmetro do aparelho', () => {
     expect(new URL(urlOf({ deviceIdentity: () => null })).searchParams.has('device')).toBe(false);
   });
 
-  it('servidor de convite não manda o aparelho', () => {
+  it('servidor de convite não manda o aparelho; o do dono manda mesmo com um convite ativo', () => {
     const deviceIdentity = () => ({ kind: 'pwa' as const, id: 'abc-1' });
-    expect(new URL(urlOf({ deviceIdentity, isInvite: () => true })).searchParams.has('device')).toBe(false);
     expect(new URL(urlOf({ deviceIdentity }, { ...target, invite: true })).searchParams.has('device')).toBe(false);
+    expect(new URL(urlOf({ deviceIdentity, isInvite: () => true })).searchParams.get('device')).toBe('pwa;abc-1');
   });
 });
 

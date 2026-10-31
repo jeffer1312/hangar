@@ -2,7 +2,7 @@
 //! sólido com a seta, e a comemoração do passo feito. O escurecido não tem área de clique: o clique, o arrasto e a tecla
 //! chegam à peça real. Os botões do balão não tiram o foco do campo de mensagem (o Shift+Tab só vale com ele).
 use std::{cell::{Cell, RefCell}, rc::Rc, sync::OnceLock, time::{Duration, Instant}};
-use gpui_kit::{prelude::FluentBuilder, *};
+use gpui_kit::{component::text::TextView, prelude::FluentBuilder, *};
 use crate::{i18n::tr, motion, theme};
 use super::{CELEBRATION, Choice, Kind, Surface};
 
@@ -34,21 +34,23 @@ pub(crate) fn muted_color() -> Hsla { hsla(0., 0., 1., 0.66) }
 fn faint_color() -> Hsla { hsla(0., 0., 1., 0.22) }
 pub(crate) fn green() -> Hsla { rgb(0x34c759).into() }
 
-/// Onde o balão fica: à esquerda `left`, abaixo da peça (`top`) ou acima (`bottom`, contado do pé da janela), e a seta a
-/// `arrow_x` da borda esquerda do balão.
+/// Onde o balão fica: à esquerda `left`, com `width`, abaixo da peça (`top`) ou acima (`bottom`, contado do pé da
+/// janela), e a seta a `arrow_x` da borda esquerda do balão.
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct Placed { left: f32, top: Option<f32>, bottom: Option<f32>, arrow_x: f32 }
+struct Placed { left: f32, width: f32, top: Option<f32>, bottom: Option<f32>, arrow_x: f32 }
 
 fn place(target: Bounds<Pixels>, viewport: Size<Pixels>) -> Placed {
     let (vw, vh) = (f32::from(viewport.width), f32::from(viewport.height));
     let (top, bottom) = (f32::from(target.top()), f32::from(target.bottom()));
     // Acima sempre que couber: abaixo das peças do meio fica o compositor, que o balão cobriria.
     let below = !(top >= EST_HEIGHT + GAP + MARGIN || top > vh - bottom);
+    // Janela estreita: o balão encolhe para os botões do rodapé não saírem pela direita.
+    let width = WIDTH.min(vw - 2. * MARGIN).max(ARROW_W + 32.);
     let center = f32::from(target.center().x);
-    let left = (center - WIDTH / 2.).min(vw - WIDTH - MARGIN).max(MARGIN);
-    let arrow_x = (center - left - ARROW_W / 2.).clamp(16., WIDTH - 16. - ARROW_W);
-    if below { Placed { left, top: Some(bottom + GAP), bottom: None, arrow_x } }
-    else { Placed { left, top: None, bottom: Some(vh - top + GAP), arrow_x } }
+    let left = (center - width / 2.).min(vw - width - MARGIN).max(MARGIN);
+    let arrow_x = (center - left - ARROW_W / 2.).clamp(16., width - 16. - ARROW_W);
+    if below { Placed { left, width, top: Some(bottom + GAP), bottom: None, arrow_x } }
+    else { Placed { left, width, top: None, bottom: Some(vh - top + GAP), arrow_x } }
 }
 
 thread_local! {
@@ -114,11 +116,15 @@ pub fn render(surface: &Surface, target: Bounds<Pixels>, on_choice: OnChoice, wi
         .map(|el| match celebrating {
             Some(progress) => el.child(celebration(progress, still)),
             None => el.child(div().text_size(px(14.)).font_weight(FontWeight::SEMIBOLD).text_color(text_color()).child(surface.title.clone()))
-                .child(div().text_size(px(13.)).line_height(relative(1.45)).text_color(muted_color()).whitespace_normal().child(surface.body.clone()))
+                .child(div().text_size(px(13.)).line_height(relative(1.45)).text_color(muted_color()).whitespace_normal()
+                    // A novidade traz o texto do cartão, escrito em Markdown; tour e dicas são texto simples.
+                    .map(|el| if surface.kind == Kind::News {
+                        el.child(TextView::markdown(SharedString::from(format!("tour-news-body-{}", surface.id)), surface.body.clone()).scrollable(false))
+                    } else { el.child(surface.body.clone()) }))
                 .when(surface.kind == Kind::Tour, |el| el.child(waiting(wave)))
                 .child(footer(surface.kind, on_choice)),
         });
-    let balloon = div().id("tour-balloon").absolute().left(px(placed.left)).w(px(WIDTH))
+    let balloon = div().id("tour-balloon").absolute().left(px(placed.left)).w(px(placed.width))
         .map(|el| match (placed.top, placed.bottom) { (Some(top), _) => el.top(px(top)), (_, Some(bottom)) => el.bottom(px(bottom)), _ => el })
         .p(px(16.)).rounded(px(14.)).bg(fill_color()).border_1().border_color(border_color())
         .shadow(vec![BoxShadow { color: hsla(0., 0., 0., 0.45), offset: point(px(0.), px(12.)), blur_radius: px(36.), spread_radius: px(0.), inset: false }])
@@ -314,5 +320,13 @@ mod tests {
         assert_eq!(right_edge.arrow_x, WIDTH - 16. - ARROW_W);
         let middle = place(at(590., 100., 20., 20.), viewport);
         assert_eq!(middle.left + middle.arrow_x + ARROW_W / 2., 600.);
+        assert_eq!(middle.width, WIDTH);
+    }
+
+    #[test]
+    fn a_narrow_window_shrinks_the_balloon_inside_it() {
+        let narrow = place(at(200., 100., 24., 24.), size(px(300.), px(800.)));
+        assert_eq!((narrow.left, narrow.width), (MARGIN, 300. - 2. * MARGIN));
+        assert!(narrow.arrow_x >= 16. && narrow.arrow_x <= narrow.width - 16. - ARROW_W);
     }
 }

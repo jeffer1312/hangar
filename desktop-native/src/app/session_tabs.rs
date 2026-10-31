@@ -466,8 +466,14 @@ impl Hangar {
             cx.on_next_frame(window, move |this, window, cx| this.follow_open_tab(seq, new, from, start, None, window, cx));
         }
         let machines = self.plate_machines(&bands);
-        // Só uma aba-mãe leva a âncora da dica das filhas: duas com o mesmo id brigariam pela posição.
-        let kids_tip = self.tour.tip_pending("kids").then(|| bands.iter().position(|g| g.mother && g.label.is_some())).flatten();
+        // Só uma aba-mãe leva a âncora da dica das filhas: duas com o mesmo id brigariam pela posição. Vai na primeira à
+        // vista na faixa (posição do quadro anterior), senão a dica esperaria por uma aba rolada para fora.
+        let kids_tip = self.tour.tip_pending("kids").then(|| {
+            let view = self.tabs_scroll.bounds();
+            let mut mothers = bands.iter().enumerate().filter(|(_, g)| g.mother && g.label.is_some()).map(|(ix, _)| ix).peekable();
+            let first = mothers.peek().copied();
+            mothers.find(|ix| self.tabs_scroll.bounds_for_item(*ix).is_some_and(|b| view.contains(&b.center()))).or(first)
+        }).flatten();
         bands.iter().zip(keys).enumerate().map(|(ix, (group, key))| {
             let first = order;
             order += group.members.len();

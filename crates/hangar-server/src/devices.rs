@@ -38,11 +38,22 @@ pub fn parse(query: Option<&str>) -> Option<(Kind, String)> {
     valid_id(id).then(|| (kind, id.to_owned()))
 }
 
+/// Tira os de primeira vez mais antiga até sobrar `keep`.
+fn trim(devices: &mut Vec<Device>, keep: usize) {
+    while devices.len() > keep {
+        let Some(oldest) = devices.iter().enumerate().min_by_key(|(_, d)| instant(d)).map(|(i, _)| i) else { break };
+        devices.remove(oldest);
+    }
+}
+
 fn read(path: &Path) -> io::Result<Vec<Device>> {
     match crate::runtime::queue::read_replaced(path) {
         Ok(bytes) => {
-            let devices: Vec<Device> = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
-            if devices.iter().all(|d| valid_id(&d.id) && instant(d).is_some()) { Ok(devices) } else { Err(io::Error::other("aparelho inválido")) }
+            let mut devices: Vec<Device> = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+            if !devices.iter().all(|d| valid_id(&d.id) && instant(d).is_some()) { return Err(io::Error::other("aparelho inválido")); }
+            // Arquivo editado à mão também respeita o teto que a gravação aplica.
+            trim(&mut devices, MAX);
+            Ok(devices)
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
         Err(error) => Err(error),
@@ -136,10 +147,7 @@ impl Registry {
         let mut changed = inner.devices.is_none() && self.load(&mut inner, diag);
         if let Some(known) = inner.devices.as_ref().filter(|known| !known.iter().any(|d| d.id == id)) {
             let mut next = known.clone();
-            while next.len() >= MAX {
-                let Some(oldest) = next.iter().enumerate().min_by_key(|(_, d)| instant(d)).map(|(i, _)| i) else { break };
-                next.remove(oldest);
-            }
+            trim(&mut next, MAX - 1);
             next.push(Device { id: id.to_owned(), kind, first_seen: now.to_rfc3339_opts(SecondsFormat::Millis, true) });
             match write(&self.path, &next) {
                 Ok(()) => {
@@ -202,6 +210,31 @@ mod tests {
         let file: Vec<Device> = serde_json::from_slice(&std::fs::read(dir.path().join(".hangar/devices.json")).unwrap()).unwrap();
         assert_eq!(file.len(), 20);
         assert_eq!(file.last().unwrap(), &Device { id: "new".into(), kind: Kind::Pwa, first_seen: "2026-10-30T12:00:59.000Z".into() });
+    }
+
+    #[tokio::test]
+    async fn only_a_new_device_wakes_the_list() {
+        use futures_util::FutureExt;
+        let dir = tempfile::tempdir().unwrap();
+        let registry = Registry::new(dir.path().join("devices.json"));
+        registry.record_at(Kind::Ios, "abc-1", at(1), &diag());
+        // O `notify_one` sem ninguém esperando guarda a vez: o produtor que chegar depois acorda na hora.
+        assert!(registry.changed.notified().now_or_never().is_some(), "aparelho novo avisa a lista");
+        registry.record_at(Kind::Ios, "abc-1", at(2), &diag());
+        assert!(registry.changed.notified().now_or_never().is_none(), "aparelho conhecido não avisa");
+    }
+
+    #[tokio::test]
+    async fn a_file_with_more_than_20_loads_only_the_newest_20() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("devices.json");
+        let many: Vec<Device> = (0..25).rev()
+            .map(|i| Device { id: format!("d{i}"), kind: Kind::Ios, first_seen: at(i).to_rfc3339_opts(SecondsFormat::Millis, true) })
+            .collect();
+        std::fs::write(&path, serde_json::to_vec(&many).unwrap()).unwrap();
+        let now = ids(&Registry::new(path));
+        assert_eq!(now.len(), 20);
+        assert!((0..5).all(|i| !now.contains(&format!("d{i}"))) && now.contains(&"d24".to_owned()));
     }
 
     #[tokio::test]

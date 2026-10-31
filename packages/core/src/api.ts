@@ -3741,8 +3741,8 @@ export function openSessionsStream(s: Server, req = novoReq()): EventSourceLike 
   const params = new URLSearchParams();
   if (!isSameOrigin) params.set('token', s.token);
   if (req) params.set('diag_req', req);
-  // Só o dono registra aparelho: token de convidado não conta.
-  const device = s.invite || apiEnv().isInvite?.() ? null : apiEnv().deviceIdentity?.();
+  // Só o dono registra aparelho: token de convidado não conta. Vale o alvo, não o servidor ativo.
+  const device = s.invite ? null : apiEnv().deviceIdentity?.();
   if (device) params.set('device', `${device.kind};${device.id}`);
   const qs = params.toString();
   const url = `${base}/api/sessions/events${qs ? `?${qs}` : ''}`;

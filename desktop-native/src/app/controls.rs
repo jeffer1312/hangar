@@ -460,7 +460,6 @@ impl Hangar {
             return;
         }
         if self.controls.cycle_after_read.is_some() || self.mode_blocked(&key) { return; }
-        self.tour_event(crate::tour::TourEvent::PermissionCycled, cx);
         let known = self.controls.known.get(&(key.clone(), Ctl::Mode)).cloned();
         if known.as_ref().is_some_and(|v| v.get("modes").and_then(Value::as_array).is_some_and(|m| !m.is_empty())) {
             self.apply_next_mode(key, 1, cx);
@@ -502,7 +501,6 @@ impl Hangar {
         if self.provider().0 != "codex" { return; }
         let Some(key) = self.selected_key() else { return; };
         if self.mode_blocked(&key) { return; }
-        self.tour_event(crate::tour::TourEvent::PermissionCycled, cx);
         self.step_mode(key, &["plan".into(), "default".into()], 1, cx);
     }
 
@@ -750,7 +748,12 @@ impl Hangar {
                                 (true, true) => { self.send_mode(key, cx); cx.notify(); return; }
                                 (true, false) => { self.controls.mode_target.remove(&key); }
                                 // Chegou ao alvo, ou o backend recusou: a pílula assenta no modo que ficou.
-                                (false, _) => self.settle_mode_target(key.clone(), label.clone(), cx),
+                                (false, _) => {
+                                    // Só o Shift+Tab cria o alvo, e o passo do tour conta só com o modo novo confirmado.
+                                    let reached = self.controls.mode_target.get(&key).is_some_and(|target| target.mode == label);
+                                    self.settle_mode_target(key.clone(), label.clone(), cx);
+                                    if reached { self.tour_event(crate::tour::TourEvent::PermissionCycled, cx); }
+                                }
                             }
                         }
                         let pending = value.get("pending_confirm").is_some_and(|v| !v.is_null());

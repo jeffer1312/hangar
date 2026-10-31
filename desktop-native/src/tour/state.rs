@@ -62,11 +62,12 @@ fn load_at(path: &std::path::Path) -> Result<Seen, String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Seen::default()),
         Err(e) => return Err(format!("arquivo ilegível em {}: {e}", path.display())),
     };
-    // Corrompido não se conserta sozinho e travaria toda gravação: fica ao lado e o tour recomeça limpo.
+    // Corrompido não se conserta sozinho e travaria toda gravação: fica ao lado e o tour recomeça limpo. Sem conseguir
+    // tirá-lo do caminho, vale como ilegível: a próxima gravação o apagaria.
     serde_json::from_slice(&bytes).or_else(|e| {
         let bad = path.with_extension("json.bad");
-        let moved = std::fs::rename(path, &bad).map(|_| bad.display().to_string()).unwrap_or_else(|e| format!("não movido: {e}"));
-        crate::log_line(&format!("tour: tour.json inválido ({e}); {moved}"));
+        std::fs::rename(path, &bad).map_err(|moved| format!("tour.json inválido ({e}) e não movido: {moved}"))?;
+        crate::log_line(&format!("tour: tour.json inválido ({e}); {}", bad.display()));
         Ok(Seen::default())
     })
 }

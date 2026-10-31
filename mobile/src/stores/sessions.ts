@@ -397,7 +397,14 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
         return;
       }
     }
-    await deviceIdentityReady();
+    // O aparelho só alimenta a dica do celular no desktop: cofre que não responde não segura a lista ao vivo. Aberta
+    // sem ele, o primeiro acesso fica para a próxima reabertura da lista.
+    let identityTimer: ReturnType<typeof setTimeout> | undefined;
+    const identityLate = await Promise.race([
+      deviceIdentityReady().then(() => false),
+      new Promise<boolean>((resolve) => { identityTimer = setTimeout(() => resolve(true), 3000); }),
+    ]).finally(() => clearTimeout(identityTimer));
+    if (identityLate) registrarDiag({ evento: 'aparelho.atrasou', nivel: 'aviso', tela: 'lista', codigo: 'device_identity_timeout' }, s.baseUrl);
     if (!isCurrent(attempt)) return;
     const es = openSessionsStream(s);
     const active = () => isCurrent(attempt) && streams.get(s.id) === es;

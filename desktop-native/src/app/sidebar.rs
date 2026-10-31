@@ -1054,7 +1054,6 @@ impl Hangar {
         let returning = engine_account.is_none() && session.engine.as_deref().is_some_and(|e| !e.is_empty());
         let life = session.lifecycle_id.clone();
         let jsonl = session.jsonl.clone();
-        self.tour_event(crate::tour::TourEvent::AccountMoved, cx);
         self.focus_origin(&target, window, cx);
         let this = cx.entity().downgrade();
         let title = tr(if returning { "sidebar_return_claude_title" } else if engine_account.is_some() { "sidebar_proxy_title" } else { "sidebar_same_title" }).replace("{n}", &label);
@@ -1358,7 +1357,10 @@ impl Hangar {
                     (Write::Mode(_), Err(error)) => Some(Notification::error(failed("sidebar_mode_failed", &error))),
                     (Write::Reload, Ok(_)) => Some(Notification::success(tr("reload_sent"))),
                     (Write::Reload, Err(error)) => Some(Notification::error(failed("sidebar_reload_failed", &error))),
-                    (Write::Account { label, .. }, Ok(_)) => Some(Notification::success(tr("sidebar_same_moved").replace("{n}", label))),
+                    (Write::Account { label, .. }, Ok(_)) => {
+                        self.tour_event(crate::tour::TourEvent::AccountMoved, cx);
+                        Some(Notification::success(tr("sidebar_same_moved").replace("{n}", label)))
+                    }
                     (Write::Account { .. }, Err(error)) => Some(Notification::error(failed("sidebar_same_failed", &error))),
                     (Write::AnotherRename, result) => {
                         self.rename_suggest.again.remove(&target);
@@ -2299,6 +2301,15 @@ mod tests {
         let read: HashSet<String> = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(read, both, "a gravação do 1º clique terminou por último e não voltou o arquivo");
         assert!(!path.with_extension("tmp").exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            // Um tmp largo que sobrou de antes não passa o modo dele ao arquivo.
+            std::fs::write(path.with_extension("tmp"), b"").unwrap();
+            std::fs::set_permissions(path.with_extension("tmp"), std::fs::Permissions::from_mode(0o644)).unwrap();
+            save_json(Some(path.clone()), 3, &written, &one).unwrap();
+            assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        }
         let _ = std::fs::remove_dir_all(dir);
     }
 

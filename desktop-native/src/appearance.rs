@@ -405,7 +405,16 @@ pub(crate) fn save_json<T: serde::Serialize>(path: Option<PathBuf>, generation: 
     let path = path.ok_or_else(|| std::io::Error::other("sem pasta de configuração"))?;
     std::fs::create_dir_all(path.parent().expect("arquivo dentro de hangar-native"))?;
     let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, serde_json::to_vec(saved).map_err(std::io::Error::other)?)?;
+    let bytes = serde_json::to_vec(saved).map_err(std::io::Error::other)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    // Só do usuário: o `tour.json` guarda os ids dos celulares.
+    #[cfg(unix)] { use std::os::unix::fs::OpenOptionsExt; options.mode(0o600); }
+    let mut file = options.open(&tmp)?;
+    // O `mode` só vale na criação: um tmp que sobrou levaria o modo antigo ao arquivo no `rename`.
+    #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; file.set_permissions(std::fs::Permissions::from_mode(0o600))?; }
+    std::io::Write::write_all(&mut file, &bytes)?;
+    drop(file);
     std::fs::rename(&tmp, &path)?;
     *written = generation;
     Ok(())

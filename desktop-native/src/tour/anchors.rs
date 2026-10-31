@@ -47,9 +47,14 @@ mod tests {
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) != Some("md") { continue; }
             let text = std::fs::read_to_string(&path).unwrap();
-            let Some(front) = text.strip_prefix("---").and_then(|rest| rest.split_once("\n---")).map(|(front, _)| front) else { continue };
-            for line in front.lines() {
-                let Some(value) = line.strip_prefix("ancora:") else { continue };
+            // As mesmas regras do `frontmatter` de `crates/hangar-server/src/update_notes`: abertura aparada, fechamento
+            // exato e chave aparada.
+            let lines: Vec<&str> = text.lines().collect();
+            if lines.first().map(|l| l.trim()) != Some("---") { continue; }
+            let Some(end) = lines.iter().skip(1).position(|l| *l == "---") else { continue };
+            for line in &lines[1..end + 1] {
+                let Some((key, value)) = line.split_once(':') else { continue };
+                if key.trim() != "ancora" { continue; }
                 let value = value.trim().trim_matches(|c| c == '"' || c == '\'');
                 if !ALL.contains(&value) { unknown.push(format!("{}: {value}", path.display())); }
             }

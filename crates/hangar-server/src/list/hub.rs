@@ -173,12 +173,19 @@ async fn produce(hub: Arc<ListHub>, list: Arc<ListBridge>, devices: Arc<Registry
     let mut last = Last::default();
     let mut files = FileWake::new();
     let mut keyring = list.keyring.subscribe();
-    // A única leitura do arquivo, fora do runtime; depois o retrato sai da memória.
+    // A única leitura do arquivo, fora do runtime e sem segurar o laço: disco travado não para a lista
+    // das sessões. Terminada, o `changed` publica o retrato sem esperar o tique.
     let (d, g) = (devices.clone(), diag.clone());
-    if let Err(error) = tokio::task::spawn_blocking(move || d.snapshot(&g)).await {
-        tracing::warn!(code = "devices_task_failed", %error, "leitura de devices.json caiu");
-        diag.report("rust.devices", "", "devices_task_failed", "leitura de devices.json caiu");
-    }
+    tokio::spawn(async move {
+        let (r, rg) = (d.clone(), g.clone());
+        match tokio::task::spawn_blocking(move || r.snapshot(&rg)).await {
+            Ok(_) => d.changed.notify_one(),
+            Err(error) => {
+                tracing::warn!(code = "devices_task_failed", %error, "leitura de devices.json caiu");
+                g.report("rust.devices", "", "devices_task_failed", "leitura de devices.json caiu");
+            }
+        }
+    });
     let mut vault = hub.vault.clone();
     loop {
         let clients = {

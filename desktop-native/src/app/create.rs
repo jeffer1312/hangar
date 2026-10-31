@@ -2596,7 +2596,6 @@ impl Hangar {
             window.push_notification(Notification::error(self.machine_error(&target.server)), cx);
             return;
         };
-        self.tour_event(crate::tour::TourEvent::AccountMoved, cx);
         self.focus_origin(&target, window, cx);
         let link = Link { api, runtime: self.runtime.clone(), tx: self.tx.clone(), connection: self.connection,
             servers: Vec::new(), servers_rev: self.servers_rev };
@@ -2678,6 +2677,7 @@ impl Hangar {
                 });
                 match result {
                     Ok(session) => {
+                        self.tour_event(crate::tour::TourEvent::AccountMoved, cx);
                         if self.is_active_key(&request.target.server) {
                             if let Some(row) = self.sessions.iter_mut().find(|s| s.name == request.target.name) { *row = session.clone(); }
                         } else if let Some(list) = self.remote.get_mut(&request.target.server) {
