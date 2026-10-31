@@ -874,6 +874,8 @@ pub struct Hangar {
     /// O tour de primeiro uso, as dicas e o que já foi visto (`tour.json`).
     tour: crate::tour::Tour,
     tour_planner: crate::tour::steps::Planner,
+    /// Lista, contas, ditado ou sessão aberta mudaram: o retrato do tour é refeito no próximo desenho, não a cada quadro.
+    tour_dirty: bool,
     /// Rolagem da lista de sessões (barra e trilho): o passo do tour só aponta linha que está dentro dela.
     rows_scroll: ScrollHandle,
 }
@@ -1128,6 +1130,7 @@ impl Hangar {
             entry: probe.then_some(setup::Entry::Probing),
             tour: Self::load_tour(),
             tour_planner: Default::default(),
+            tour_dirty: true,
             rows_scroll: ScrollHandle::new(),
         }
     }
@@ -1595,6 +1598,7 @@ impl Hangar {
         self.controls.on_select();
         self.reset_subagent_count();
         self.selected = Some(session.clone());
+        self.tour_dirty = true;
         self.sync_artifacts_owner(cx);
         self.voice_session_opened();
         if !same_server || session.engine.as_deref().is_some_and(|e| !e.is_empty()) || session.uses_engine_account() {
@@ -1647,6 +1651,7 @@ impl Hangar {
         if let Some(task) = self.history_task.take() { task.abort(); }
         let remote = self.open_api.is_some();
         (self.selected, self.open_api) = (None, None);
+        self.tour_dirty = true;
         self.artifacts.set_owner(None);
         if remote { self.load_notification_preferences(); }
         self.opening = None;
@@ -1795,7 +1800,10 @@ impl Hangar {
                         _ => None,
                     };
                     // Menu, renomear, fechar e grupo das linhas desta máquina acompanham a lista dela como os da ativa.
-                    if self.receive_remote(generation, key.clone(), update, cx) { self.sidebar_sessions_changed(window, cx); }
+                    if self.receive_remote(generation, key.clone(), update, cx) {
+                        self.tour_dirty = true;
+                        self.sidebar_sessions_changed(window, cx);
+                    }
                     self.remote_changed(&key, window, cx);
                     if live { self.live_changed(&key, window, cx); }
                     if let Some(locked) = keyring && self.set_keyring(&key, locked, window, cx) {
@@ -2233,6 +2241,7 @@ impl Hangar {
         }
         self.sidebar_sessions_changed(window, cx);
         self.tour_planner.list_read();
+        self.tour_dirty = true;
     }
 
     /// Transcript trocado na mesma sessão (`/clear`): envio em voo, espera, campo, anexos e "mandar pro grupo" seguem para a
@@ -7317,22 +7326,30 @@ impl Hangar {
 
     /// Servidor sem a rota, fora do ar ou ilegível: vale o local, a falha só vai ao diário.
     fn receive_tour_progress(&mut self, result: Result<Option<crate::tour::state::Seen>, Failure>, cx: &mut Context<Self>) {
+        self.tour.server_read = true;
         match result {
-            Ok(Some(server)) => if self.tour.absorb(server) { self.save_tour(); },
-            Ok(None) => { self.tour.server_read = true; crate::log_line("tour: servidor sem /api/tour-progress, vale o local"); }
-            Err(error) => {
-                self.tour.server_read = true;
-                crate::log_line(&format!("tour: o visto do servidor não foi lido: {} {}", error.status.unwrap_or(0), error.detail));
-            }
+            // A união já subiu na sincronização: aqui só o arquivo local.
+            Ok(Some(server)) => if self.tour.absorb(server) { self.save_tour_local(); },
+            Ok(None) => crate::log_line("tour: servidor sem /api/tour-progress, vale o local"),
+            Err(error) => crate::log_line(&format!("tour: o visto do servidor não foi lido: {} {}", error.status.unwrap_or(0), error.detail)),
         }
         cx.notify();
     }
 
+    /// Grava só `tour.json` e devolve o que gravou; nada com a leitura falha.
+    fn save_tour_local(&mut self) -> Option<crate::tour::state::Seen> {
+        let (seen, generation) = self.tour.to_save()?;
+        let saved = seen.clone();
+        self.runtime.spawn_blocking(move || if let Err(error) = crate::tour::state::save(&saved, generation) {
+            crate::log_line(&format!("tour: o que já foi visto não gravou: {error}"));
+        });
+        Some(seen)
+    }
+
     fn save_tour(&mut self) {
-        let Some((seen, generation)) = self.tour.to_save() else { return };
+        let Some(seen) = self.save_tour_local() else { return };
         // Na hora, não só na próxima conexão: outro computador do mesmo servidor aberto antes repetiria o tour.
         if let Some(api) = self.api.clone().filter(|_| !self.active_invite() && self.tour.server_read) {
-            let seen = seen.clone();
             self.runtime.spawn(async move {
                 // Servidor antigo (404) ou fora do ar: a próxima conexão junta de novo.
                 if let Err(error) = api.save_tour_progress(&seen).await {
@@ -7340,13 +7357,9 @@ impl Hangar {
                 }
             });
         }
-        self.runtime.spawn_blocking(move || if let Err(error) = crate::tour::state::save(&seen, generation) {
-            crate::log_line(&format!("tour: o que já foi visto não gravou: {error}"));
-        });
     }
 
     /// A ação real de um passo aconteceu (chamado de onde ela acontece).
-    #[allow(dead_code)]
     pub(super) fn tour_event(&mut self, event: crate::tour::TourEvent, cx: &mut Context<Self>) {
         if self.tour.tour_event(event) { self.save_tour(); }
         cx.notify();
@@ -7374,28 +7387,28 @@ impl Hangar {
     fn tour_snapshot(&self, cx: &App) -> crate::tour::steps::Snapshot {
         let kinds = self.account_kinds();
         crate::tour::steps::Snapshot {
-            sessions: self.sessions.len() + self.remote.values().map(|list| list.sessions.len()).sum::<usize>(),
+            sessions: self.session_count(),
             accounts: kinds.map(|(claude, _)| claude), codex: kinds.is_some_and(|(_, codex)| codex),
             transcription: self.transcription_known(cx),
             open: self.selected.as_ref().filter(|s| s.readable()).map(|s| crate::tour::steps::Agent::of(&s.provider)),
         }
     }
 
-    /// Com a primeira lista lida, só então se sabe se o tour começa pela primeira sessão. Chamado do desenho seguinte, depois
-    /// de a sessão de antes reabrir (`pending_open`), para os passos da sessão aberta entrarem.
-    fn plan_tour(&mut self, cx: &App) {
-        if !self.tour_planner.due() { return; }
-        let snapshot = self.tour_snapshot(cx);
-        // Contas e ditado ainda em leitura: planejar já faria dos passos deles dica para quem os tem.
-        if !snapshot.known() { return; }
-        let steps = self.tour_planner.plan(&snapshot, &self.tour.seen.tips);
-        self.tour.set_steps(steps);
-    }
+    /// Sessões na lista, de todas as máquinas.
+    fn session_count(&self) -> usize { self.sessions.len() + self.remote.values().map(|list| list.sessions.len()).sum::<usize>() }
 
-    /// Passo que virou dica entra na fila quando a condição dele chega.
-    fn offer_ready_tour_tips(&mut self, cx: &App) {
-        if !self.tour_planner.waiting() { return; }
+    /// Com a primeira lista lida, só então se sabe se o tour começa pela primeira sessão; e passo que virou dica entra na
+    /// fila quando a condição dele chega. Só quando algo do retrato mudou (`tour_dirty`): a sessão de antes reabre
+    /// (`pending_open`) num desenho seguinte e marca de novo, para os passos da sessão aberta entrarem.
+    fn plan_tour(&mut self, cx: &App) {
+        if !std::mem::take(&mut self.tour_dirty) || !(self.tour_planner.due() || self.tour_planner.waiting()) { return; }
         let snapshot = self.tour_snapshot(cx);
+        if self.tour_planner.due() {
+            // Contas e ditado ainda em leitura: planejar já faria dos passos deles dica para quem os tem.
+            if !snapshot.known() { return; }
+            let steps = self.tour_planner.plan(&snapshot, &self.tour.seen.tips);
+            self.tour.set_steps(steps);
+        }
         for step in self.tour_planner.ready(&snapshot) {
             self.tour.offer_tip(crate::tour::Note { id: crate::tour::steps::tip_id(&step), anchor: step.anchor.to_owned(),
                 title: tr(step.title_key), body: tr(step.body_key) });
@@ -7404,7 +7417,11 @@ impl Hangar {
 
     /// Dica própria (`steps::TIPS`) na fila, chamada de onde a condição dela passa a valer. Diz se entrou.
     pub(super) fn offer_tip(&mut self, id: &str) -> bool {
-        let Some(tip) = crate::tour::steps::tip(id).filter(|_| self.tour.may_offer(id)) else { return false };
+        crate::tour::steps::tip(id).is_some_and(|tip| self.offer_step_tip(tip))
+    }
+
+    fn offer_step_tip(&mut self, tip: crate::tour::Step) -> bool {
+        if !self.tour.may_offer(tip.id) { return false; }
         self.tour.offer_tip(crate::tour::Note { id: tip.id.to_owned(), anchor: tip.anchor.to_owned(), title: tr(tip.title_key),
             body: tr(tip.body_key) });
         true
@@ -7413,17 +7430,13 @@ impl Hangar {
     /// As dicas conferidas no desenho da raiz: as que valem quando a peça aparece (a âncora só existe com a condição) e a da
     /// prévia da aba, que depende de uma opção desligada.
     fn offer_root_tips(&mut self) {
-        for id in crate::tour::steps::ON_SIGHT {
-            if !self.tour.may_offer(id) { continue; }
+        for tip in crate::tour::steps::TIPS.iter().filter(|tip| tip.on_sight).map(|tip| tip.step) {
             // O painel "Na fila" aparece também com o Mandar direto ligado; aí não há o que ensinar.
-            if id == "queue-direct" && (appearance::get().steer_while_working || !matches!(self.provider().0, "claude" | "codex")) { continue; }
-            if crate::tour::steps::tip(id).is_some_and(|tip| popup::anchor_bounds(tip.anchor).is_some()) { self.offer_tip(id); }
+            if tip.id == "queue-direct" && (appearance::get().steer_while_working || !matches!(self.provider().0, "claude" | "codex")) { continue; }
+            if popup::anchor_bounds(tip.anchor).is_some() { self.offer_step_tip(tip); }
         }
         let a = appearance::get();
-        if a.navigation.tabs() && !a.tab_preview && self.tour.may_offer("tab-preview")
-            && self.sessions.len() + self.remote.values().map(|list| list.sessions.len()).sum::<usize>() >= 2 {
-            self.offer_tip("tab-preview");
-        }
+        if a.navigation.tabs() && !a.tab_preview && self.session_count() >= 2 { self.offer_tip("tab-preview"); }
     }
 
     /// O "Mostrar dicas" das Configurações.
@@ -7473,7 +7486,6 @@ impl Hangar {
             server_read: self.tour.server_read && self.api.is_some(),
         };
         self.plan_tour(cx);
-        self.offer_ready_tour_tips(cx);
         self.offer_root_tips();
         // Dica cuja peça não está na tela vai para o fim da fila: uma volta por quadro, no máximo.
         let mut tries = self.tour.queued_tips();

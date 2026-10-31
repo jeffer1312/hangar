@@ -1,11 +1,7 @@
+import { novaChaveIdempotente } from './credenciais';
+
 const KEY = 'cp_device_id';
 const VALID = /^[A-Za-z0-9-]{1,64}$/;
-
-function newId(): string {
-  // randomUUID só existe em contexto seguro; o PWA também abre por http na rede local.
-  if (typeof crypto.randomUUID === 'function' && isSecureContext) return crypto.randomUUID();
-  return Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
-}
 
 export function deviceIdentity(): { kind: 'pwa'; id: string } | null {
   // No PC o navegador não é celular: o aviso do nativo é de celular conectado.
@@ -13,7 +9,8 @@ export function deviceIdentity(): { kind: 'pwa'; id: string } | null {
   try {
     const saved = localStorage.getItem(KEY);
     if (saved && VALID.test(saved)) return { kind: 'pwa', id: saved };
-    const id = newId();
+    // Fora de contexto seguro (http na rede local) ela cai no getRandomValues.
+    const id = novaChaveIdempotente();
     localStorage.setItem(KEY, id);
     return { kind: 'pwa', id };
   } catch {

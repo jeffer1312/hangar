@@ -58,6 +58,8 @@ fn snapshot_json(devices: &[Device]) -> Arc<str> {
     serde_json::to_string(devices).unwrap_or_else(|_| "[]".into()).into()
 }
 
+fn known(inner: &Inner, id: &str) -> bool { inner.devices.as_ref().is_some_and(|known| known.iter().any(|d| d.id == id)) }
+
 struct Inner {
     /// `None` até uma leitura boa do arquivo: sem ela nada é gravado (ilegível não é sobrescrito).
     devices: Option<Vec<Device>>,
@@ -89,8 +91,9 @@ impl Registry {
             Ok(devices) => {
                 let json = snapshot_json(&devices);
                 inner.devices = Some(devices);
+                // Mesmo texto mantém o `Arc`: a lista compara pelo ponteiro.
                 let changed = json != inner.json;
-                inner.json = json;
+                if changed { inner.json = json; }
                 changed
             }
             Err(_) => {
@@ -107,12 +110,18 @@ impl Registry {
         inner.json.clone()
     }
 
+    /// O retrato em memória, sem tocar o disco.
+    pub fn current(&self) -> Arc<str> { self.lock().json.clone() }
+
+    /// Já gravado na memória: a conexão não precisa ir ao pool bloqueante.
+    pub fn is_known(&self, id: &str) -> bool { known(&self.lock(), id) }
+
     pub fn record(&self, kind: Kind, id: &str, diag: &DiagClient) { self.record_at(kind, id, Utc::now(), diag) }
 
     /// Primeiro acesso do aparelho: grava e avisa a lista. Já conhecido na memória, não toca o disco.
     pub fn record_at(&self, kind: Kind, id: &str, now: DateTime<Utc>, diag: &DiagClient) {
         let mut inner = self.lock();
-        if inner.devices.as_ref().is_some_and(|known| known.iter().any(|d| d.id == id)) { return; }
+        if known(&inner, id) { return; }
         let mut changed = inner.devices.is_none() && self.load(&mut inner, diag);
         if let Some(known) = inner.devices.as_ref().filter(|known| !known.iter().any(|d| d.id == id)) {
             let mut next = known.clone();

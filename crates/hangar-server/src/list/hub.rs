@@ -166,6 +166,9 @@ async fn produce(hub: Arc<ListHub>, list: Arc<ListBridge>, devices: Arc<Registry
     let mut last = Last::default();
     let mut files = FileWake::new();
     let mut keyring = list.keyring.subscribe();
+    // A única leitura do arquivo, fora do runtime; depois o retrato sai da memória.
+    let (d, g) = (devices.clone(), diag.clone());
+    let _ = tokio::task::spawn_blocking(move || d.snapshot(&g)).await;
     loop {
         let clients = {
             let mut r = lock(&hub.refs);
@@ -199,7 +202,8 @@ async fn produce(hub: Arc<ListHub>, list: Arc<ListBridge>, devices: Arc<Registry
         // Só a lista do dono recebe: sem ela (convidado, assinatura interna) nada é lido.
         if clients > 0 {
             publish_tags(&hub.tx, &mut last, list.tags.read().await, &diag);
-            publish_devices(&hub.tx, &mut last, read_devices(&devices, &diag).await);
+            // Aparelho novo acorda pelo `changed`; aqui só a primeira publicação para o dono.
+            if last.devices.is_none() { publish_devices(&hub.tx, &mut last, devices.current()); }
         }
         let tick = tokio::time::Instant::now() + TICK;
         // Até o tique, escrita numa pasta de estado reclassifica só a sessão dela.
@@ -219,7 +223,7 @@ async fn produce(hub: Arc<ListHub>, list: Arc<ListBridge>, devices: Arc<Registry
                     continue;
                 }
                 () = devices.changed.notified(), if clients > 0 => {
-                    publish_devices(&hub.tx, &mut last, read_devices(&devices, &diag).await);
+                    publish_devices(&hub.tx, &mut last, devices.current());
                     continue;
                 }
                 w = files.recv() => w,
@@ -497,16 +501,9 @@ fn publish_tags(tx: &watch::Sender<Arc<Published>>, last: &mut Last, read: Optio
     }
 }
 
-/// O retrato vem da memória do registro; só a primeira leitura toca o arquivo, fora do runtime.
-async fn read_devices(devices: &Arc<Registry>, diag: &DiagClient) -> Option<Arc<str>> {
-    let (devices, diag) = (devices.clone(), diag.clone());
-    tokio::task::spawn_blocking(move || devices.snapshot(&diag)).await.ok()
-}
-
-/// Fora da rodada, como `tags`: sai só quando um aparelho entra.
-fn publish_devices(tx: &watch::Sender<Arc<Published>>, last: &mut Last, json: Option<Arc<str>>) {
-    let Some(json) = json else { return };
-    if last.devices.as_ref() == Some(&json) { return; }
+/// Fora da rodada, como `tags`: sai só quando um aparelho entra (o registro troca o `Arc`).
+fn publish_devices(tx: &watch::Sender<Arc<Published>>, last: &mut Last, json: Arc<str>) {
+    if last.devices.as_ref().is_some_and(|prev| Arc::ptr_eq(prev, &json)) { return; }
     let mut next = (**tx.borrow()).clone();
     next.devices = Some(sse_frame("devices", &json, None));
     next.devices_seq += 1;
@@ -674,7 +671,8 @@ pub async fn events(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     match (grant, st.share.clone()) {
         (None, _) => {
             // Só o dono e nunca pela porta do Connect; aparelho ilegível é ignorado sem afetar a lista.
-            if fwd.client_ip != crate::devices::CONNECT_PEER && let Some((kind, id)) = crate::devices::parse(req.uri().query()) {
+            if fwd.client_ip != crate::devices::CONNECT_PEER && let Some((kind, id)) = crate::devices::parse(req.uri().query())
+                && !st.devices.is_known(&id) {
                 let (devices, diag) = (st.devices.clone(), st.diag.clone());
                 // Antes de assinar: a primeira lista desta conexão já traz o aparelho.
                 let _ = tokio::task::spawn_blocking(move || devices.record(kind, &id, &diag)).await;

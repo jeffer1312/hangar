@@ -1,7 +1,5 @@
 //! Tour de primeiro uso: balões presos às peças reais da tela, lidas pelo registro de âncoras (`app::popup`).
 //! Aqui fica a fila (qual balão aparece agora) e o passo atual, sem janela; o desenho é o `balloon`.
-// Dica, novidade e parte dos eventos só ganham chamador com as dicas, a sincronização e as novidades.
-#![allow(dead_code)]
 pub mod anchors;
 pub mod balloon;
 pub mod state;
@@ -103,10 +101,9 @@ pub struct Tour {
     /// O primeiro servidor respondeu ou falhou na leitura do visto: antes disso o tour abriria sem saber que outro
     /// aparelho já o mostrou.
     pub server_read: bool,
-    /// Um passo desta volta já apareceu: o visto que chega do servidor não o tira da tela.
-    started: bool,
-    /// "Ver o tour de novo" nesta execução: o `feito` do servidor não cancela o que a pessoa pediu.
-    requested: bool,
+    /// Um passo desta volta já apareceu, ou a pessoa pediu "Ver o tour de novo": o visto que chega do servidor não o tira
+    /// da tela.
+    keep_open: bool,
     /// Onde o balão apareceu por último: a comemoração continua ali quando a peça some com a própria ação.
     pub last_target: Option<(String, Bounds<Pixels>)>,
     generation: u64,
@@ -115,12 +112,16 @@ pub struct Tour {
 }
 
 impl Tour {
-    pub fn new(seen: Seen) -> Self { Self::with_steps(seen, Vec::new()) }
+    pub fn new(seen: Seen) -> Self {
+        Self { seen, steps: Vec::new(), current: None, done_any: false, celebrated: None, tips: VecDeque::new(), news: None,
+            server_read: false, keep_open: false, last_target: None, generation: 0, read_failed: false }
+    }
 
+    #[cfg(test)]
     pub fn with_steps(seen: Seen, steps: Vec<Step>) -> Self {
-        let current = (seen.tour.is_none() && !steps.is_empty()).then_some(0);
-        Self { seen, steps, current, done_any: false, celebrated: None, tips: VecDeque::new(), news: None, server_read: false,
-            started: false, requested: false, last_target: None, generation: 0, read_failed: false }
+        let mut tour = Self::new(seen);
+        tour.set_steps(steps);
+        tour
     }
 
     /// Os passos dependem da lista de sessões: entram quando ela é lida, e de novo no "Ver o tour de novo".
@@ -153,8 +154,6 @@ impl Tour {
         Surface { kind: Kind::Tour, id: step.id.to_owned(), anchor: step.anchor.to_owned(), title: crate::i18n::tr(step.title_key),
             body: crate::i18n::tr(step.body_key), progress: Some((index + 1, self.steps.len())), celebrating }
     }
-
-    pub fn running(&self) -> bool { self.current.is_some() }
 
     /// O balão a que o botão pertence: o passo, a dica da frente ou a novidade.
     fn owner(&self, choice: Choice) -> Option<&str> {
@@ -215,22 +214,19 @@ impl Tour {
 
     /// O visto de um servidor chegou. Tour que ainda não apareceu e que o servidor diz visto não abre. Diz se o visto mudou.
     pub fn absorb(&mut self, server: Seen) -> bool {
-        self.server_read = true;
         let before = self.seen.clone();
         // `devices` é só deste app.
         self.seen.merge(server.for_server());
-        if self.seen.tour.is_some() && !self.started && !self.requested { self.current = None; }
+        if self.seen.tour.is_some() && !self.keep_open { self.current = None; }
         self.seen != before
     }
 
     /// O balão deste quadro foi desenhado.
-    pub fn showing(&mut self, kind: Kind) { if kind == Kind::Tour { self.started = true; } }
+    pub fn showing(&mut self, kind: Kind) { if kind == Kind::Tour { self.keep_open = true; } }
 
-    /// "Ver o tour de novo": zera só o tour, as dicas ficam. Diz se o visto mudou.
+    /// "Ver o tour de novo": zera só o tour, as dicas ficam; quem chama refaz os passos (`set_steps`). Diz se o visto mudou.
     pub fn restart(&mut self) -> bool {
-        self.requested = true;
-        self.current = (!self.steps.is_empty()).then_some(0);
-        (self.done_any, self.celebrated) = (false, None);
+        self.keep_open = true;
         self.seen.tour.take().is_some()
     }
 
@@ -366,6 +362,7 @@ mod tests {
         let seen = Seen { tour: Some(Outcome::Done), tips: ["fila".to_owned()].into(), ..Default::default() };
         let mut tour = Tour::with_steps(seen, steps());
         assert!(tour.restart());
+        tour.set_steps(steps());
         assert_eq!(tour.seen.tour, None);
         assert!(tour.seen.tips.contains("fila"));
         assert_eq!(tour.next_surface(&FREE).unwrap().id, "new");
@@ -421,13 +418,13 @@ mod tests {
 
         let mut asked = Tour::with_steps(Seen { tour: Some(Outcome::Done), ..Default::default() }, steps());
         asked.restart();
+        asked.set_steps(steps());
         assert!(asked.absorb(done()));
         assert_eq!(asked.seen.tour, Some(Outcome::Done));
         assert_eq!(asked.next_surface(&FREE).unwrap().id, "new", "o tour pedido pela pessoa continua");
 
         let mut nothing_new = Tour::new(Seen::default());
         assert!(!nothing_new.absorb(Seen::default()));
-        assert!(nothing_new.server_read);
     }
 
     #[test]

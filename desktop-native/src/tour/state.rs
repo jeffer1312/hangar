@@ -53,25 +53,13 @@ fn path() -> Option<std::path::PathBuf> { crate::appearance::tour_path() }
 /// Bloqueante. Sem arquivo, nada visto; ilegível também, com o motivo de volta para o diário.
 pub fn load() -> Result<Seen, String> {
     let Some(path) = path() else { return Ok(Seen::default()) };
-    match std::fs::read(&path) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Seen::default()),
-        Err(e) => Err(format!("{}: {e}", path.display())),
-        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| format!("{}: {e}", path.display())),
-    }
+    Ok(crate::appearance::read_json(&path)?.unwrap_or_default())
 }
 
 /// Bloqueante. Só a geração mais nova grava: gravações que terminam fora de ordem deixam no arquivo a última.
 pub fn save(seen: &Seen, generation: u64) -> std::io::Result<()> {
     static WRITTEN: Mutex<u64> = Mutex::new(0);
-    let mut written = WRITTEN.lock().unwrap_or_else(|e| e.into_inner());
-    if generation <= *written { return Ok(()); }
-    let path = path().ok_or_else(|| std::io::Error::other("sem pasta de configuração"))?;
-    std::fs::create_dir_all(path.parent().ok_or_else(|| std::io::Error::other("caminho sem pasta"))?)?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, serde_json::to_vec_pretty(seen).map_err(std::io::Error::other)?)?;
-    std::fs::rename(&tmp, &path)?;
-    *written = generation;
-    Ok(())
+    crate::appearance::save_json(path(), generation, &WRITTEN, seen)
 }
 
 #[cfg(test)]

@@ -1,7 +1,5 @@
 //! Ids das âncoras que o tour, as dicas e o "Mostrar no app" das novidades apontam. O `ancora:` de `docs/novidades/*.md`
 //! tem de estar em `ALL` (teste abaixo).
-// Parte dos ids só é lida pelos passos do tour e pelas dicas.
-#![allow(dead_code)]
 
 /// Os dois botões de nova sessão (lista e barra de abas): só um aparece por vez.
 pub const NEW_SESSION: &str = "new-session";
@@ -12,7 +10,6 @@ pub const COMPOSER_ACCOUNT: &str = "composer-account";
 /// O microfone do compositor; o da animação de novidade não registra.
 pub const DICTATION_TOGGLE: &str = "dictation-toggle";
 pub const CTL_MODE: &str = "ctl-mode";
-pub const CTL_PERMISSION: &str = "ctl-permission";
 pub const QUEUE_PANEL: &str = "queue-panel";
 /// Família das linhas e abas de sessão; a âncora de cada uma é `session_row`.
 pub const SESSION_ROW: &str = "session-row";
@@ -27,7 +24,7 @@ pub const COMPOSER_GIT: &str = "composer-git";
 pub const PICK_ELEMENT: &str = "browser-pick";
 
 pub const ALL: &[&str] = &[NEW_SESSION, TOPBAR_SEARCH, TOPBAR_PRESENCE, COMPOSER, COMPOSER_ACCOUNT, DICTATION_TOGGLE, CTL_MODE,
-    CTL_PERMISSION, QUEUE_PANEL, SESSION_ROW, CITE, TAB_KIDS, RENAME_APPLY, RAIL, COMPOSER_GIT, PICK_ELEMENT];
+    QUEUE_PANEL, SESSION_ROW, CITE, TAB_KIDS, RENAME_APPLY, RAIL, COMPOSER_GIT, PICK_ELEMENT];
 
 /// A linha (ou aba) da sessão `name` da máquina `server`, em qualquer modo de navegação.
 pub fn session_row(server: &str, name: &str) -> String { format!("{SESSION_ROW}:{server}::{name}") }

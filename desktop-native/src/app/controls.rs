@@ -1379,11 +1379,10 @@ mod tests {
     // Sem glob: o `test` da gpui colide com o atributo padrão.
     use super::{Choice, Ctl, ModeTarget, claude_effort_current, claude_model_current, codex_fast_state, keep, mode_ahead, only_match, prethread_problem, reopen_warnings, spaced, step_free};
 
-    /// As pílulas gravam a âncora por `format!("ctl-{}")`; o tour aponta pelas constantes.
+    /// As pílulas gravam a âncora por `format!("ctl-{}")`; o tour aponta pela constante.
     #[test]
     fn pill_anchors_match_the_tour_ids() {
         assert_eq!(format!("ctl-{}", Ctl::Mode.key()), crate::tour::anchors::CTL_MODE);
-        assert_eq!(format!("ctl-{}", Ctl::Permission.key()), crate::tour::anchors::CTL_PERMISSION);
     }
 
     #[test]

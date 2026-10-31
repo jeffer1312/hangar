@@ -694,6 +694,8 @@ impl Hangar {
                 if this.dictation_target(cx).is_none_or(|(api,_)|api.identity()!=identity){return;}
                 // Gravação de estilo no meio: a leitura pode estar velha; a tarefa sai e o observador relê.
                 if this.dictation.style_writes != writes { this.dictation.style_task = None; cx.notify(); return; }
+                // Lida ou falha, a transcrição decide o passo do ditado no tour (`transcription_known`).
+                this.tour_dirty = true;
                 let failed = tr("dictation_config_failed");
                 let unknown = tr("dictation_organization_unknown");
                 let error = match result.map_err(|error| Self::failure(&error))

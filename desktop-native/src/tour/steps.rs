@@ -82,25 +82,31 @@ fn split(s: &Snapshot) -> (Vec<Step>, Vec<(Step, Need)>) {
 /// A dica do celular: volta uma vez para cada aparelho novo (`Tour::devices_seen`).
 pub const PRESENCE: &str = "presence";
 
+/// Dica própria. `on_sight`: a condição é a peça estar na tela, e a âncora só é desenhada enquanto ela vale; as outras
+/// entram na fila chamadas de onde a condição passa a valer.
+#[derive(Clone, Copy, Debug)]
+pub struct Tip { pub step: Step, pub on_sight: bool }
+
+const fn sighted(step: Step) -> Tip { Tip { step, on_sight: true } }
+
+const fn called(step: Step) -> Tip { Tip { step, on_sight: false } }
+
 /// As dicas próprias, fora do tour: cada uma aparece uma vez, presa à peça dela.
-const TIPS: [Step; 11] = [
-    step("queue-direct", anchors::QUEUE_PANEL, "tour_tip_queue_title", "tour_tip_queue_body"),
-    step("cite", anchors::CITE, "tour_tip_cite_title", "tour_tip_cite_body"),
-    step("history", anchors::COMPOSER, "tour_tip_history_title", "tour_tip_history_body"),
-    step("tab-preview", anchors::SESSION_ROW, "tour_tip_tab_preview_title", "tour_tip_tab_preview_body"),
-    step("kids", anchors::TAB_KIDS, "tour_tip_kids_title", "tour_tip_kids_body"),
-    step("rename", anchors::RENAME_APPLY, "tour_tip_rename_title", "tour_tip_rename_body"),
-    step("rail", anchors::RAIL, "tour_tip_rail_title", "tour_tip_rail_body"),
-    step("git", anchors::COMPOSER_GIT, "tour_tip_git_title", "tour_tip_git_body"),
-    step("pick-element", anchors::PICK_ELEMENT, "tour_tip_pick_title", "tour_tip_pick_body"),
-    step(PRESENCE, anchors::TOPBAR_PRESENCE, "tour_tip_presence_title", "tour_tip_presence_body"),
-    step("slash", anchors::COMPOSER, "tour_tip_slash_title", "tour_tip_slash_body"),
+pub const TIPS: [Tip; 11] = [
+    sighted(step("queue-direct", anchors::QUEUE_PANEL, "tour_tip_queue_title", "tour_tip_queue_body")),
+    sighted(step("cite", anchors::CITE, "tour_tip_cite_title", "tour_tip_cite_body")),
+    called(step("history", anchors::COMPOSER, "tour_tip_history_title", "tour_tip_history_body")),
+    called(step("tab-preview", anchors::SESSION_ROW, "tour_tip_tab_preview_title", "tour_tip_tab_preview_body")),
+    sighted(step("kids", anchors::TAB_KIDS, "tour_tip_kids_title", "tour_tip_kids_body")),
+    sighted(step("rename", anchors::RENAME_APPLY, "tour_tip_rename_title", "tour_tip_rename_body")),
+    sighted(step("rail", anchors::RAIL, "tour_tip_rail_title", "tour_tip_rail_body")),
+    sighted(step("git", anchors::COMPOSER_GIT, "tour_tip_git_title", "tour_tip_git_body")),
+    sighted(step("pick-element", anchors::PICK_ELEMENT, "tour_tip_pick_title", "tour_tip_pick_body")),
+    called(step(PRESENCE, anchors::TOPBAR_PRESENCE, "tour_tip_presence_title", "tour_tip_presence_body")),
+    called(step("slash", anchors::COMPOSER, "tour_tip_slash_title", "tour_tip_slash_body")),
 ];
 
-/// Dicas cuja condição é a peça estar na tela: a âncora delas só é desenhada enquanto a condição vale.
-pub const ON_SIGHT: [&str; 7] = ["queue-direct", "cite", "kids", "rename", "rail", "git", "pick-element"];
-
-pub fn tip(id: &str) -> Option<Step> { TIPS.into_iter().find(|tip| tip.id == id) }
+pub fn tip(id: &str) -> Option<Step> { TIPS.into_iter().find(|tip| tip.step.id == id).map(|tip| tip.step) }
 
 /// Id da dica nascida de um passo, para não se confundir com as dicas próprias no visto.
 pub fn tip_id(step: &Step) -> String { format!("tour-{}", step.id) }
@@ -244,18 +250,17 @@ mod tests {
         for language in ["pt.json", "en.json"] {
             let text = std::fs::read_to_string(dir.join(language)).unwrap();
             let dict: serde_json::Map<String, serde_json::Value> = serde_json::from_str(&text).unwrap();
-            let missing: Vec<_> = TOUR.iter().map(|(step, _)| step).chain(TIPS.iter()).flat_map(|step| [step.title_key, step.body_key])
+            let missing: Vec<_> = TOUR.iter().map(|(step, _)| step).chain(TIPS.iter().map(|tip| &tip.step)).flat_map(|step| [step.title_key, step.body_key])
                 .filter(|key| !dict.contains_key(&format!("native_{key}"))).collect();
             assert!(missing.is_empty(), "{language} sem native_*: {missing:?}");
         }
     }
 
     #[test]
-    fn tip_ids_are_unique_and_every_sighted_tip_exists() {
-        let ids: BTreeSet<_> = TIPS.iter().map(|tip| tip.id).collect();
+    fn tip_ids_are_unique_and_anchored() {
+        let ids: BTreeSet<_> = TIPS.iter().map(|tip| tip.step.id).collect();
         assert_eq!(ids.len(), TIPS.len());
-        assert!(ON_SIGHT.iter().all(|id| tip(id).is_some()));
-        assert!(TIPS.iter().all(|tip| anchors::ALL.contains(&tip.anchor)));
+        assert!(TIPS.iter().all(|tip| anchors::ALL.contains(&tip.step.anchor)));
         assert_eq!(tip("presence").map(|t| t.anchor), Some(anchors::TOPBAR_PRESENCE));
     }
 }

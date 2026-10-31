@@ -7,6 +7,7 @@ use gpui_kit::base::AccordionTrigger;
 use gpui_kit::component::{WindowExt, dialog, menu::{DropdownMenu, PopupMenu}, notification::NotificationType};
 use super::machines::enter_to_focused;
 use super::activity::web;
+use crate::appearance::{load_json, save_json};
 use std::{cell::RefCell, rc::Rc};
 
 /// O filtro aparece com mais de 6 sessões, contadas antes de filtrar (`FILTER_FROM` do web).
@@ -494,33 +495,8 @@ fn group_leads_path() -> Option<PathBuf> {
     Some(crate::appearance::dir()?.join("group-leads.json"))
 }
 
-/// Arquivo ausente é a primeira abertura; ilegível vai ao log em vez de voltar ao padrão sem explicação.
-fn load_json<T: serde::de::DeserializeOwned + Default>(path: Option<PathBuf>) -> T {
-    let Some(path) = path else { return T::default() };
-    let bytes = match std::fs::read(&path) {
-        Ok(bytes) => bytes,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return T::default(),
-        Err(e) => { eprintln!("arquivo ilegível em {}: {e}", path.display()); return T::default(); }
-    };
-    serde_json::from_slice(&bytes).unwrap_or_else(|e| { eprintln!("arquivo inválido em {}: {e}", path.display()); T::default() })
-}
-
 static COLLAPSED_WRITTEN: std::sync::Mutex<u64> = std::sync::Mutex::new(0);
 static LEADS_WRITTEN: std::sync::Mutex<u64> = std::sync::Mutex::new(0);
-
-/// Bloqueante. Só a geração mais nova de cada arquivo grava, trocando o arquivo inteiro (tmp + rename), como
-/// `appearance::save`.
-fn save_json<T: serde::Serialize>(path: Option<PathBuf>, generation: u64, written: &std::sync::Mutex<u64>, saved: &T) -> std::io::Result<()> {
-    let mut written = written.lock().unwrap_or_else(|e| e.into_inner());
-    if generation <= *written { return Ok(()); }
-    let path = path.ok_or_else(|| std::io::Error::other("sem pasta de configuração"))?;
-    std::fs::create_dir_all(path.parent().expect("arquivo dentro de hangar-native"))?;
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, serde_json::to_vec(saved).map_err(std::io::Error::other)?)?;
-    std::fs::rename(&tmp, &path)?;
-    *written = generation;
-    Ok(())
-}
 
 impl Hangar {
     pub(super) fn sidebar_tell(&self) -> Tell { Tell(self.tx.clone(), self.connection) }

@@ -22,12 +22,13 @@ impl Api {
         parse(self.server_send(reqwest::Method::PUT, &["tour-progress"], Some(body), 10).await?)
     }
 
-    /// Lê o servidor, junta com o local e manda a união de volta. O `PUT` que falha só vai ao diário: a leitura já
-    /// trouxe o que o servidor sabia.
+    /// Lê o servidor, junta com o local e manda a união de volta só se ela traz algo que ele não tem. O `PUT` que falha
+    /// só vai ao diário: a leitura já trouxe o que o servidor sabia.
     pub async fn sync_tour_progress(&self, local: Seen) -> Result<Option<Seen>, Failure> {
         let Some(server) = self.read_tour_progress().await? else { return Ok(None) };
         let mut union = local;
-        union.merge(server);
+        union.merge(server.clone());
+        if union.for_server() == server.for_server() { return Ok(Some(union)); }
         match self.save_tour_progress(&union).await {
             Ok(joined) => union.merge(joined),
             Err(error) => crate::log_line(&format!("tour: o visto não foi enviado ao servidor: {} {}",
@@ -96,12 +97,25 @@ mod tests {
 
         // O local passa a `feito` e o tour que ainda não apareceu não abre.
         let step = crate::tour::Step { id: "new", anchor: crate::tour::anchors::COMPOSER, title_key: "tour_later", body_key: "tour_later" };
+        let free = crate::tour::Gate { dialogs_open: false, window_visible: true, server_read: true };
         let mut tour = crate::tour::Tour::with_steps(Seen::default(), vec![step]);
-        assert!(tour.running());
+        assert!(tour.next_surface(&free).is_some());
         assert!(tour.absorb(joined));
         assert_eq!(tour.seen.tour, Some(Outcome::Done));
-        assert!(!tour.running());
-        assert!(tour.server_read);
+        assert_eq!(tour.next_surface(&free), None);
+    }
+
+    #[tokio::test]
+    async fn nothing_new_for_the_server_is_not_sent_back() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = fake_server(listener, vec![("200 OK", json!({"tour": "feito", "dicas": ["fila"], "dicas_desligadas": null}))]);
+        let api = Api::new(&format!("http://{address}"), "fixture-owner").unwrap();
+        // Só o aparelho, que é deste app, difere: nada a subir.
+        let local = Seen { tour: Some(Outcome::Skipped), tips: ["fila".to_owned()].into(), devices: ["ios:abc".to_owned()].into(), ..Default::default() };
+        let joined = api.sync_tour_progress(local).await.unwrap().unwrap();
+        assert_eq!(joined.tour, Some(Outcome::Done));
+        assert_eq!(server.await.unwrap().len(), 1, "só o GET");
     }
 
     #[tokio::test]

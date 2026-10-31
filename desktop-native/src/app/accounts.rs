@@ -845,6 +845,8 @@ impl Hangar {
     }
 
     pub(super) fn receive_accounts(&mut self, reply: AccountsReply, window: &mut Window, cx: &mut Context<Self>) {
+        // As contas decidem passos do tour (`account_kinds`).
+        self.tour_dirty = true;
         let accounts = &mut self.accounts;
         match reply {
             AccountsReply::List(seq, result) => {

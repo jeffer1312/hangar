@@ -800,8 +800,7 @@ impl Hangar {
             let variant = if v.join { ButtonVariant::Primary } else { ButtonVariant::Danger };
             // Fechar o diálogo, confirmado ou cancelado, é o gesto do passo do tour.
             let learned = |weak: WeakEntity<Hangar>| move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
-                window.close_dialog(cx);
-                let _ = weak.update(cx, |this, cx| this.tour_event(crate::tour::TourEvent::GroupClosed, cx));
+                let _ = weak.update(cx, |this, cx| this.close_group_ask(window, cx));
             };
             let footer = div().flex().justify_end().gap_2().map(|el| if v.done {
                 el.child(Button::new("group-close").label(web("sessao_fechar")).with_variant(variant).on_click(learned(weak.clone())))
@@ -947,12 +946,15 @@ impl Hangar {
                 GroupReply::Suggested(Err(error)) => (v.suggesting, v.error) = (false, Some(failed(&error, "grupo_drop_falhou"))),
             }
         }
-        if close {
-            self.sidebar.grouping.ask = None;
-            window.close_dialog(cx);
-            self.tour_event(crate::tour::TourEvent::GroupClosed, cx);
-        }
+        if close { self.close_group_ask(window, cx); }
         cx.notify();
+    }
+
+    /// Fecha o diálogo por código. `close_dialog` não chama o `on_close` dele: o passo do tour sai daqui, uma vez.
+    fn close_group_ask(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.sidebar.grouping.ask = None;
+        window.close_dialog(cx);
+        self.tour_event(crate::tour::TourEvent::GroupClosed, cx);
     }
 }
 
