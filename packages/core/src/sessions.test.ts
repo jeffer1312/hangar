@@ -285,6 +285,8 @@ describe('groupHideTargets', () => {
       row('pc', 'esperando', { state: 'awaiting_input' }),
       row('pc', 'pergunta', { pending_questions: 1 }),
       row('pc', 'outro-grupo', { pair_gid: 'g2' }),
+      row('convite', 'de-convite', { serverInvite: true }),
+      row('pc', 'par-so-ver', { guest_kind: 'pair' }),
     ];
     expect(groupHideTargets(me, rows).map((r) => `${r.serverId}::${r.name}`)).toEqual(['pc::a', 'pc::b', 'nb::c']);
   });
