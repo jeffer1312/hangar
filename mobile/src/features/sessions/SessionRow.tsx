@@ -74,7 +74,8 @@ interface Props {
   crossBadgeMachines?: number;
 }
 
-const desabilitada = (a: { attributes?: { disabled?: boolean; destructive?: boolean } }) => !!a.attributes?.disabled;
+// `id` obrigatório: só com campos opcionais o TS recusa os itens sem `attributes` (tipo fraco).
+const desabilitada = (a: { id: string; attributes?: { disabled?: boolean; destructive?: boolean } }) => !!a.attributes?.disabled;
 
 // O iOS já vibra ao abrir o menu de contexto; o PopupMenu do Android não.
 const vibrarAoAbrir =
