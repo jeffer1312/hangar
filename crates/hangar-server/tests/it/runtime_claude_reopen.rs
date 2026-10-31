@@ -1143,7 +1143,7 @@ async fn a_full_destination_account_is_refused_before_anything_stops() {
     terminal_with_spec(&fx,&"e1".repeat(16));
     let (agent,before) = (fx.agent().unwrap(),fx.args());
     seed_quota(&fx,&b,99.5);
-    let server = serve_with_accounts(&fx,fx.registry().await).await;
+    let server = serve_with_accounts(&fx,terminal_registry(&fx).await).await;
     let (status,body) = post(server,"conta",json!({"config_dir":b})).await;
     assert_eq!((status,&body["detail"]),(409,&json!({"code":"erro_conta_cheia","params":{"conta":"b","pct":99.5},"msg":"a conta b está em 100% da cota"})),"{body}");
     assert!(!gone(agent),"o Claude do terminal segue vivo");
@@ -1158,7 +1158,7 @@ async fn an_unknown_account_folder_is_refused() {
     fx.transcript();
     terminal_with_spec(&fx,&"e2".repeat(16));
     let (agent,before) = (fx.agent().unwrap(),fx.args());
-    let server = serve_with_accounts(&fx,fx.registry().await).await;
+    let server = serve_with_accounts(&fx,terminal_registry(&fx).await).await;
     let (status,body) = post(server,"conta",json!({"config_dir":fx.home.join(".claude-x")})).await;
     assert_eq!((status,body["detail"]["code"].as_str(),body["detail"]["msg"].as_str()),(400,Some("erro_config_dir_invalido"),Some("config_dir invalido")),"{body}");
     assert!(!gone(agent),"o Claude do terminal segue vivo");
