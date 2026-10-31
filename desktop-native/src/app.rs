@@ -378,6 +378,8 @@ enum Payload {
     Presence(String, bool, Result<Value, Failure>),
     // Diagrama pedido ao servidor da sessão; vale mesmo com a seleção trocada (o cache é por servidor).
     Mermaid(mermaid::Job, api::MermaidReply),
+    // O visto do tour lido do servidor e já juntado lá; `None` = servidor sem a rota.
+    TourProgress(Result<Option<crate::tour::state::Seen>, Failure>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1373,6 +1375,7 @@ impl Hangar {
             forward_stream(api, None, connection, None, tx).await;
         }));
         self.reset_device(window, cx);
+        self.sync_tour_progress();
         // Convite só enxerga a própria sessão: custos, contas, busca, configuração e avisos do servidor responderiam 403.
         if !self.active_invite() {
             // Importa na conexão, sem depender de abrir novamente a tela onde o padrão foi marcado.
@@ -1712,6 +1715,8 @@ impl Hangar {
             Payload::VoiceGate(server, body, accounts) => { self.receive_voice_gate(server, body, accounts, window, cx); return; }
             Payload::VoiceMemory(server, seq, list) => { self.receive_voice_memory(server, seq, list, cx); return; }
             Payload::VoiceModels(seq, result) => { self.receive_organizer_models(seq, result, window, cx); return; }
+            // A junção só soma: a resposta de um servidor que já saiu também vale.
+            Payload::TourProgress(result) => { self.receive_tour_progress(result, cx); return; }
             Payload::Files(key, owner, generation, files) => { self.receive_files(key, owner, generation, files, cx); cx.notify(); return; }
             Payload::UploadStep(key, id, result) => { let key = self.delivery.current(key); self.receive_upload(key, id, result); cx.notify(); return; }
             Payload::UploadsDone(key, draft, field, refs, steer, known, group) => {
@@ -1909,6 +1914,15 @@ impl Hangar {
                     if visible { self.redraw(panes::Area::Nav, cx); }
                     stored.is_some()
                 }
+                // Celular que ainda não tinha aparecido: a dica do "No PC / Fora", uma vez por aparelho.
+                else if frame.event == "devices" {
+                    visible = self.tour.devices_seen(&frame.data);
+                    if visible {
+                        self.save_tour();
+                        self.offer_tip(crate::tour::steps::PRESENCE);
+                    }
+                    true
+                }
                 else if frame.event == "shortcut_terminals" {
                     let list = terminal::parse_live_terms(&frame.data);
                     // Lista igual à de antes não redesenha; o tempo de "rodando" anda pelo relógio próprio.
@@ -2090,7 +2104,7 @@ impl Hangar {
                 | Payload::UploadsDone(..) | Payload::Saved(..) | Payload::ConnectionNotSaved(..) | Payload::Reply(..) | Payload::HeadlessPlan(..)
                 | Payload::AppearanceSaved(..) | Payload::Backdrop(..) | Payload::BackdropPicked(..) | Payload::BackdropRemoved(..)
                 | Payload::Remote(..) | Payload::Lan(..) | Payload::Keyring(..) | Payload::Presence(..) | Payload::Voice(..) | Payload::VoiceGate(..) | Payload::VoiceMemory(..) | Payload::VoiceModels(..) | Payload::QueueJev(..)
-                | Payload::Mermaid(..) => unreachable!(),
+                | Payload::Mermaid(..) | Payload::TourProgress(..) => unreachable!(),
         }
         // Lista que trocou ou tirou a sessão aberta refaz a conversa.
         if rows || self.selection != selection { self.sync_rows(cx); }
@@ -2128,7 +2142,10 @@ impl Hangar {
             };
             self.action_feedback.insert(key.clone(), (tr(message), warning));
         }
-        if result.is_ok() { self.bridge_sending(key.clone(), cx); }
+        if result.is_ok() {
+            self.bridge_sending(key.clone(), cx);
+            self.offer_tip("history");
+        }
         self.sync_working_row(cx);
         let current = self.selected_key().as_ref() == Some(&key);
         let confirmed = self.delivery.outcome(&key).is_none();
@@ -2584,6 +2601,9 @@ impl Hangar {
                 self.slash_open = open;
                 // A prévia é desenhada na raiz, fora da área de baixo.
                 if self.in_tab_preview { cx.notify(); } else { self.redraw(panes::Area::Bottom, cx); }
+            }
+            InputEvent::Focus if !self.in_tab_preview && self.provider().0 == "claude" => {
+                if self.offer_tip("slash") { cx.notify(); }
             }
             _ => {}
         }
@@ -4946,10 +4966,11 @@ impl Hangar {
                 .when_some(behind, |el, n| el.child(div().text_color(theme::warning()).child(format!("↓{n}"))));
             // Com repositório, a faixa abre o git da sessão (o `repo-chip` do web); o recuo negativo mantém o texto no lugar.
             let place = if has_git {
-                Button::new("composer-git").custom(ButtonCustomVariant::new(cx).color(transparent_black()).foreground(theme::faint())
+                popup::anchor(div().min_w_0(), crate::tour::anchors::COMPOSER_GIT).child(Button::new("composer-git")
+                    .custom(ButtonCustomVariant::new(cx).color(transparent_black()).foreground(theme::faint())
                     .hover(theme::hover()).active(theme::hover())).h(px(22.)).ml(px(-4.)).px(px(4.)).rounded(px(6.))
                     .tooltip(tr("git_open")).accessibility_label(tr("git_open")).child(place)
-                    .on_click(cx.listener(|this, _, window, cx| this.open_git_panel(window, cx))).into_any_element()
+                    .on_click(cx.listener(|this, _, window, cx| this.open_git_panel(window, cx)))).into_any_element()
             } else { place.into_any_element() };
             // O recuo negativo põe o texto do último item na mesma borda da faixa da pasta, do outro lado.
             let usage = div().flex_shrink_0().ml_auto().mr(px(-6.)).flex().items_center().gap(px(2.))
@@ -5250,6 +5271,10 @@ impl Hangar {
         // Só o retrato do `sync_tables`, e só com a mesma fonte que está sendo desenhada; a prévia nunca tem gráfico.
         let charted = (plain && id != PREVIEW && appearance::get().table_chart).then(|| self.tables.get(&id)).flatten()
             .filter(|(source, tables)| *source == markdown && !tables.is_empty()).map(|(_, tables)| tables.clone());
+        // A dica de citar aponta para a última mensagem quando ela é uma resposta longa: uma linha só leva a âncora.
+        let cite_anchor = plain && id != PREVIEW && !self.in_tab_preview && self.tour.tip_pending("cite")
+            && matches!(self.conversation.items.get(index), Some(Item::Event(i)) if Some(*i) == self.last_message)
+            && markdown.chars().count() >= 400;
         let refs = match self.conversation.items.get(index) {
             Some(Item::Event(i)) if id != PREVIEW => self.chat.events.get(*i).map(attachment_refs).unwrap_or_default(),
             _ => Vec::new(),
@@ -5292,6 +5317,7 @@ impl Hangar {
             let (view, copy_id) = (cx.weak_entity(), id.clone());
             // Com o ponto da pele Terminal, a hora alinha com o texto, como na PWA.
             div().h(px(24.)).flex().items_center().gap_1().when(dotted, |el| el.pl(px(15.))).opacity(0.).group_hover(ROW_GROUP, |s| s.opacity(1.))
+                .when(cite_anchor, |el| popup::anchor(el, crate::tour::anchors::CITE))
                 .when_some(stamp(ts), |el, at| el.child(div().text_xs().text_color(theme::faint()).child(at)))
                 .child(CopyButton {
                     id: SharedString::from(format!("copy-{id}")).into(),
@@ -7272,14 +7298,48 @@ impl Hangar {
                 (Default::default(), true)
             }
         };
+        // `server_read` espera a primeira resposta do servidor (`receive_tour_progress`); sem conexão o tour já não abre.
         let mut tour = crate::tour::Tour::new(seen);
-        tour.server_read = true;
         tour.read_failed = read_failed;
         tour
     }
 
+    /// A cada conexão: lê o visto do servidor, junta com o local e devolve a união a ele.
+    fn sync_tour_progress(&mut self) {
+        // O convidado não alcança a rota (só o dono): vale o local.
+        let Some(api) = self.api.clone().filter(|_| !self.active_invite()) else { self.tour.server_read = true; return };
+        let (local, tx, connection) = (self.tour.seen.clone(), self.tx.clone(), self.connection);
+        self.runtime.spawn(async move {
+            let result = api.sync_tour_progress(local).await;
+            let _ = tx.send(Envelope { connection, selection: None, payload: Payload::TourProgress(result) }).await;
+        });
+    }
+
+    /// Servidor sem a rota, fora do ar ou ilegível: vale o local, a falha só vai ao diário.
+    fn receive_tour_progress(&mut self, result: Result<Option<crate::tour::state::Seen>, Failure>, cx: &mut Context<Self>) {
+        match result {
+            Ok(Some(server)) => if self.tour.absorb(server) { self.save_tour(); },
+            Ok(None) => { self.tour.server_read = true; crate::log_line("tour: servidor sem /api/tour-progress, vale o local"); }
+            Err(error) => {
+                self.tour.server_read = true;
+                crate::log_line(&format!("tour: o visto do servidor não foi lido: {} {}", error.status.unwrap_or(0), error.detail));
+            }
+        }
+        cx.notify();
+    }
+
     fn save_tour(&mut self) {
         let Some((seen, generation)) = self.tour.to_save() else { return };
+        // Na hora, não só na próxima conexão: outro computador do mesmo servidor aberto antes repetiria o tour.
+        if let Some(api) = self.api.clone().filter(|_| !self.active_invite() && self.tour.server_read) {
+            let seen = seen.clone();
+            self.runtime.spawn(async move {
+                // Servidor antigo (404) ou fora do ar: a próxima conexão junta de novo.
+                if let Err(error) = api.save_tour_progress(&seen).await {
+                    crate::log_line(&format!("tour: o visto não subiu ao servidor: {} {}", error.status.unwrap_or(0), error.detail));
+                }
+            });
+        }
         self.runtime.spawn_blocking(move || if let Err(error) = crate::tour::state::save(&seen, generation) {
             crate::log_line(&format!("tour: o que já foi visto não gravou: {error}"));
         });
@@ -7331,6 +7391,36 @@ impl Hangar {
         }
     }
 
+    /// Dica própria (`steps::TIPS`) na fila, chamada de onde a condição dela passa a valer. Diz se entrou.
+    pub(super) fn offer_tip(&mut self, id: &str) -> bool {
+        let Some(tip) = crate::tour::steps::tip(id).filter(|_| self.tour.may_offer(id)) else { return false };
+        self.tour.offer_tip(crate::tour::Note { id: tip.id.to_owned(), anchor: tip.anchor.to_owned(), title: tr(tip.title_key),
+            body: tr(tip.body_key) });
+        true
+    }
+
+    /// As dicas conferidas no desenho da raiz: as que valem quando a peça aparece (a âncora só existe com a condição) e a da
+    /// prévia da aba, que depende de uma opção desligada.
+    fn offer_root_tips(&mut self) {
+        for id in crate::tour::steps::ON_SIGHT {
+            if !self.tour.may_offer(id) { continue; }
+            // O painel "Na fila" aparece também com o Mandar direto ligado; aí não há o que ensinar.
+            if id == "queue-direct" && (appearance::get().steer_while_working || !matches!(self.provider().0, "claude" | "codex")) { continue; }
+            if crate::tour::steps::tip(id).is_some_and(|tip| popup::anchor_bounds(tip.anchor).is_some()) { self.offer_tip(id); }
+        }
+        let a = appearance::get();
+        if a.navigation.tabs() && !a.tab_preview && self.tour.may_offer("tab-preview")
+            && self.sessions.len() + self.remote.values().map(|list| list.sessions.len()).sum::<usize>() >= 2 {
+            self.offer_tip("tab-preview");
+        }
+    }
+
+    /// O "Mostrar dicas" das Configurações.
+    pub(super) fn set_tips_shown(&mut self, on: bool, cx: &mut Context<Self>) {
+        if self.tour.set_tips(on) { self.save_tour(); }
+        cx.notify();
+    }
+
     /// A peça que depende da tela: a linha de sessão.
     fn tour_anchor(&self, anchor: &str, celebrating: bool) -> Option<String> {
         use crate::tour::anchors;
@@ -7373,15 +7463,25 @@ impl Hangar {
         };
         self.plan_tour(cx);
         self.offer_ready_tour_tips(cx);
-        let mut surface = self.tour.next_surface(&gate)?;
-        surface.anchor = self.tour_anchor(&surface.anchor, surface.celebrating.is_some())?;
-        let target = match popup::anchor_bounds(&surface.anchor) {
-            Some(bounds) => bounds,
-            None if surface.celebrating.is_some() =>
-                self.tour.last_target.as_ref().filter(|(id, _)| *id == surface.anchor).map(|(_, bounds)| *bounds)?,
-            None => return None,
+        self.offer_root_tips();
+        // Dica cuja peça não está na tela vai para o fim da fila: uma volta por quadro, no máximo.
+        let mut tries = self.tour.queued_tips();
+        let (surface, target) = loop {
+            let mut surface = self.tour.next_surface(&gate)?;
+            let celebrating = surface.celebrating.is_some();
+            let placed = self.tour_anchor(&surface.anchor, celebrating).and_then(|anchor| {
+                let bounds = popup::anchor_bounds(&anchor).or_else(|| celebrating.then(|| self.tour.last_target.as_ref()
+                    .filter(|(id, _)| *id == anchor).map(|(_, bounds)| *bounds)).flatten())?;
+                Some((anchor, bounds))
+            });
+            match placed {
+                Some((anchor, bounds)) => { surface.anchor = anchor; break (surface, bounds); }
+                None if surface.kind == crate::tour::Kind::Tip && tries > 1 => { self.tour.defer_tip(); tries -= 1; }
+                None => return None,
+            }
         };
         self.tour.last_target = Some((surface.anchor.clone(), target));
+        self.tour.showing(surface.kind);
         let id = surface.id.clone();
         let choose = cx.listener(move |this, choice: &crate::tour::Choice, window, cx| this.tour_choice(&id, *choice, window, cx));
         let on_choice: crate::tour::balloon::OnChoice = std::rc::Rc::new(move |choice, window, cx| choose(&choice, window, cx));

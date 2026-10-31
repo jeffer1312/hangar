@@ -86,8 +86,13 @@ pub struct Tour {
     celebrated: Option<(usize, Instant)>,
     tips: VecDeque<Note>,
     news: Option<Note>,
-    /// O local já foi lido (e, com a sincronização, o primeiro servidor respondeu ou falhou).
+    /// O primeiro servidor respondeu ou falhou na leitura do visto: antes disso o tour abriria sem saber que outro
+    /// aparelho já o mostrou.
     pub server_read: bool,
+    /// Um passo desta volta já apareceu: o visto que chega do servidor não o tira da tela.
+    started: bool,
+    /// "Ver o tour de novo" nesta execução: o `feito` do servidor não cancela o que a pessoa pediu.
+    requested: bool,
     /// Onde o balão apareceu por último: a comemoração continua ali quando a peça some com a própria ação.
     pub last_target: Option<(String, Bounds<Pixels>)>,
     generation: u64,
@@ -101,7 +106,7 @@ impl Tour {
     pub fn with_steps(seen: Seen, steps: Vec<Step>) -> Self {
         let current = (seen.tour.is_none() && !steps.is_empty()).then_some(0);
         Self { seen, steps, current, done_any: false, celebrated: None, tips: VecDeque::new(), news: None, server_read: false,
-            last_target: None, generation: 0, read_failed: false }
+            started: false, requested: false, last_target: None, generation: 0, read_failed: false }
     }
 
     /// Os passos dependem da lista de sessões: entram quando ela é lida, e de novo no "Ver o tour de novo".
@@ -123,7 +128,8 @@ impl Tour {
         if let Some(news) = &self.news { return Some(note(Kind::News, news)); }
         if let Some((step, at)) = self.celebrated.filter(|(_, at)| at.elapsed() < CELEBRATION) { return Some(self.step_surface(step, Some(at))); }
         if let Some(step) = self.current { return Some(self.step_surface(step, None)); }
-        self.tips.front().map(|tip| note(Kind::Tip, tip))
+        // Desligadas noutro aparelho depois de entrar na fila: não aparecem.
+        self.tips.front().filter(|_| !self.seen.tips_off()).map(|tip| note(Kind::Tip, tip))
     }
 
     fn step_surface(&self, index: usize, celebrating: Option<Instant>) -> Surface {
@@ -189,8 +195,22 @@ impl Tour {
         true
     }
 
+    /// O visto de um servidor chegou. Tour que ainda não apareceu e que o servidor diz visto não abre. Diz se o visto mudou.
+    pub fn absorb(&mut self, server: Seen) -> bool {
+        self.server_read = true;
+        let before = self.seen.clone();
+        // `aparelhos` é só deste app.
+        self.seen.merge(server.for_server());
+        if self.seen.tour.is_some() && !self.started && !self.requested { self.current = None; }
+        self.seen != before
+    }
+
+    /// O balão deste quadro foi desenhado.
+    pub fn showing(&mut self, kind: Kind) { if kind == Kind::Tour { self.started = true; } }
+
     /// "Ver o tour de novo": zera só o tour, as dicas ficam. Diz se o visto mudou.
     pub fn restart(&mut self) -> bool {
+        self.requested = true;
         self.current = (!self.steps.is_empty()).then_some(0);
         (self.done_any, self.celebrated) = (false, None);
         self.seen.tour.take().is_some()
@@ -198,8 +218,40 @@ impl Tour {
 
     /// Dica que ainda não foi vista entra na fila; espera o tour acabar.
     pub fn offer_tip(&mut self, tip: Note) {
-        if self.seen.tips_off() || self.seen.dicas.contains(&tip.id) || self.tips.iter().any(|t| t.id == tip.id) { return; }
+        if !self.may_offer(&tip.id) { return; }
         self.tips.push_back(tip);
+    }
+
+    /// A dica ainda pode aparecer (pode já estar na fila): é o que decide desenhar a âncora dela.
+    pub fn tip_pending(&self, id: &str) -> bool { !self.seen.tips_off() && !self.seen.dicas.contains(id) }
+
+    /// A dica entraria agora na fila.
+    pub fn may_offer(&self, id: &str) -> bool { self.tip_pending(id) && !self.tips.iter().any(|t| t.id == id) }
+
+    pub fn queued_tips(&self) -> usize { self.tips.len() }
+
+    /// A dica da frente cuja peça não está na tela vai para o fim, para não segurar as outras.
+    pub fn defer_tip(&mut self) {
+        if let Some(tip) = self.tips.pop_front() { self.tips.push_back(tip); }
+    }
+
+    /// O "Mostrar dicas" das Configurações. Diz se o visto mudou.
+    pub fn set_tips(&mut self, on: bool) -> bool {
+        if self.seen.tips_off() != on { return false; }
+        if !on { self.tips.clear(); }
+        self.seen.dicas_desligadas = Some(Switch::now(!on));
+        true
+    }
+
+    /// Ids novos no retrato de aparelhos da lista do dono ficam guardados; algum novo traz a dica do celular de volta,
+    /// uma vez por aparelho. Diz se o visto mudou.
+    pub fn devices_seen(&mut self, devices: &serde_json::Value) -> bool {
+        let ids = devices.as_array().into_iter().flatten().filter_map(|device| device.get("id")?.as_str());
+        let mut fresh = false;
+        for id in ids { fresh |= self.seen.aparelhos.insert(id.to_owned()); }
+        // A junção com o servidor devolve o id depois; até lá a dica já entrou na fila.
+        if fresh { self.seen.dicas.remove(steps::PRESENCE); }
+        fresh
     }
 
     /// "Mostrar no app" de uma novidade: aparece na hora, por cima do tour.
@@ -334,6 +386,81 @@ mod tests {
         assert!(tour.to_save().is_some());
         tour.read_failed = true;
         assert_eq!(tour.to_save(), None);
+    }
+
+    #[test]
+    fn seen_on_the_server_cancels_only_a_tour_not_yet_shown_nor_asked_for() {
+        let done = || Seen { tour: Some(Outcome::Feito), aparelhos: ["ios:x".to_owned()].into(), ..Default::default() };
+        let mut waiting = Tour::with_steps(Seen::default(), steps());
+        assert!(waiting.absorb(done()));
+        assert_eq!(waiting.next_surface(&FREE), None);
+        assert!(waiting.seen.aparelhos.is_empty(), "aparelhos nunca vêm do servidor");
+
+        let mut on_screen = Tour::with_steps(Seen::default(), steps());
+        on_screen.showing(on_screen.next_surface(&FREE).unwrap().kind);
+        on_screen.absorb(done());
+        assert_eq!(on_screen.next_surface(&FREE).unwrap().id, "new");
+
+        let mut asked = Tour::with_steps(Seen { tour: Some(Outcome::Feito), ..Default::default() }, steps());
+        asked.restart();
+        assert!(asked.absorb(done()));
+        assert_eq!(asked.seen.tour, Some(Outcome::Feito));
+        assert_eq!(asked.next_surface(&FREE).unwrap().id, "new", "o tour pedido pela pessoa continua");
+
+        let mut nothing_new = Tour::new(Seen::default());
+        assert!(!nothing_new.absorb(Seen::default()));
+        assert!(nothing_new.server_read);
+    }
+
+    #[test]
+    fn hidden_tip_goes_to_the_back_and_the_next_one_shows() {
+        let mut tour = Tour::new(Seen::default());
+        tour.offer_tip(tip("fila"));
+        tour.offer_tip(tip("citar"));
+        tour.defer_tip();
+        assert_eq!(tour.next_surface(&FREE).unwrap().id, "citar");
+        assert!(pick(&mut tour, Choice::TipOk), "o Entendi vale para a que está na tela");
+        assert_eq!(tour.next_surface(&FREE).unwrap().id, "fila");
+        assert!(!tour.may_offer("citar") && !tour.may_offer("fila"), "vista e na fila não entram de novo");
+        assert!(tour.tip_pending("fila"), "a da fila ainda desenha a âncora");
+    }
+
+    #[test]
+    fn tips_switch_turns_them_off_and_back_on() {
+        let mut tour = Tour::new(Seen::default());
+        tour.offer_tip(tip("fila"));
+        assert!(tour.set_tips(false));
+        assert!(!tour.set_tips(false), "já desligadas");
+        assert_eq!(tour.next_surface(&FREE), None);
+        assert!(!tour.tip_pending("citar"));
+        assert!(tour.set_tips(true));
+        assert_eq!(tour.seen.dicas_desligadas.as_ref().map(|s| s.valor), Some(false));
+        tour.offer_tip(tip("citar"));
+        assert_eq!(tour.next_surface(&FREE).unwrap().id, "citar");
+    }
+
+    #[test]
+    fn tips_turned_off_elsewhere_drop_the_queued_one() {
+        let mut tour = Tour::new(Seen::default());
+        tour.offer_tip(tip("fila"));
+        tour.seen.dicas_desligadas = Some(Switch::now(true));
+        assert_eq!(tour.next_surface(&FREE), None);
+    }
+
+    #[test]
+    fn a_new_device_brings_the_phone_tip_back_once() {
+        let devices = |ids: &[&str]| serde_json::Value::Array(ids.iter()
+            .map(|id| serde_json::json!({"id": id, "kind": "ios", "first_seen": "2026-10-30T12:00:00Z"})).collect());
+        let mut tour = Tour::new(Seen::default());
+        assert!(!tour.devices_seen(&devices(&[])), "retrato vazio não dispara");
+        assert!(!tour.devices_seen(&serde_json::json!({"id": "x"})), "formato estranho não dispara");
+        assert!(tour.devices_seen(&devices(&["a"])), "o primeiro celular também dispara");
+        tour.seen.dicas.insert(steps::PRESENCE.to_owned());
+        assert!(!tour.devices_seen(&devices(&["a"])), "o mesmo retrato de novo não");
+        assert!(tour.seen.dicas.contains(steps::PRESENCE));
+        assert!(tour.devices_seen(&devices(&["a", "b"])));
+        assert!(tour.may_offer(steps::PRESENCE), "aparelho novo traz a dica de volta");
+        assert_eq!(tour.seen.aparelhos, ["a".to_owned(), "b".to_owned()].into());
     }
 
     #[test]

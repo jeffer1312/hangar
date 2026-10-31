@@ -16,9 +16,18 @@ pub const CTL_PERMISSION: &str = "ctl-permission";
 pub const QUEUE_PANEL: &str = "queue-panel";
 /// Família das linhas e abas de sessão; a âncora de cada uma é `session_row`.
 pub const SESSION_ROW: &str = "session-row";
+/// A faixa de hora e copiar sob a última resposta do agente, quando ela é longa.
+pub const CITE: &str = "message-cite";
+/// O contador de filhas da primeira aba-mãe.
+pub const TAB_KIDS: &str = "tab-kids";
+pub const RENAME_APPLY: &str = "rename-apply";
+/// A primeira risca do marcador de mensagens, com três perguntas ou mais.
+pub const RAIL: &str = "message-rail";
+pub const COMPOSER_GIT: &str = "composer-git";
+pub const PICK_ELEMENT: &str = "browser-pick";
 
 pub const ALL: &[&str] = &[NEW_SESSION, TOPBAR_SEARCH, TOPBAR_PRESENCE, COMPOSER, COMPOSER_ACCOUNT, DICTATION_TOGGLE, CTL_MODE,
-    CTL_PERMISSION, QUEUE_PANEL, SESSION_ROW];
+    CTL_PERMISSION, QUEUE_PANEL, SESSION_ROW, CITE, TAB_KIDS, RENAME_APPLY, RAIL, COMPOSER_GIT, PICK_ELEMENT];
 
 /// A linha (ou aba) da sessão `name` da máquina `server`, em qualquer modo de navegação.
 pub fn session_row(server: &str, name: &str) -> String { format!("{SESSION_ROW}:{server}::{name}") }

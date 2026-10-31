@@ -58,6 +58,8 @@ impl Hangar {
         let usable = (if height > 0. { height } else { 600. } - 2. * MARGIN).max(SLOT);
         let capacity = (((usable + GAP) / (SLOT + GAP)).floor() as usize).min(MAX_TICKS);
         let hover = self.rail_hover;
+        // Com três perguntas o marcador vira atalho de verdade: a primeira risca leva a âncora da dica.
+        let anchored_tip = rows.len() >= 3 && self.tour.tip_pending("rail");
         let ticks = buckets(rows.len(), capacity).into_iter().enumerate().map(|(ix, (start, end))| {
             let lit = (start..end).contains(&active);
             let hovered = hover == Some(ix);
@@ -89,6 +91,7 @@ impl Hangar {
                 .child(div().h(px(2.)).w(px(if hovered { 20. } else { 12. })).rounded(px(1.))
                     .bg(if lit || hovered { theme::text().opacity(0.8) } else { theme::faint().opacity(0.5) }))
                 .children(card)
+                .when(ix == 0 && anchored_tip, |el| super::popup::anchor(el, crate::tour::anchors::RAIL))
         });
         Some(div().absolute().left(px(16.)).top_0().bottom_0().w(px(26.)).flex().flex_col().items_start().justify_center()
             .gap(px(GAP)).children(ticks).into_any_element())

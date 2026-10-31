@@ -466,12 +466,14 @@ impl Hangar {
             cx.on_next_frame(window, move |this, window, cx| this.follow_open_tab(seq, new, from, start, None, window, cx));
         }
         let machines = self.plate_machines(&bands);
-        bands.iter().zip(keys).map(|(group, key)| {
+        // Só uma aba-mãe leva a âncora da dica das filhas: duas com o mesmo id brigariam pela posição.
+        let kids_tip = self.tour.tip_pending("kids").then(|| bands.iter().position(|g| g.mother && g.label.is_some())).flatten();
+        bands.iter().zip(keys).enumerate().map(|(ix, (group, key))| {
             let first = order;
             order += group.members.len();
             let tab = match group.label.as_deref() {
                 None => div().flex_shrink_0().children(self.render_session_tab(&group.members[0], None, None, first, &machines, window, cx)).into_any_element(),
-                Some(label) => match group.mother.then(|| self.render_mother_tab(group, label, first, &machines, window, cx)).flatten() {
+                Some(label) => match group.mother.then(|| self.render_mother_tab(group, label, first, kids_tip == Some(ix), &machines, window, cx)).flatten() {
                     Some(tab) => tab,
                     None => {
                         let (last, size) = group.slot(group.members.len() - 1).expect("grupo com membro");
@@ -491,7 +493,7 @@ impl Hangar {
 
     /// Grupo com mãe: uma aba só, a dela. As filhas viram etiquetas pequenas sobre o nome (o clique abre a filha); o clique no
     /// resto abre a mãe e a janela com as abas inteiras das filhas, para cima quando a faixa fica embaixo.
-    fn render_mother_tab(&self, group: &TabGroup, label: &str, tab_index: usize, machines: &PlateMachines, window: &mut Window,
+    fn render_mother_tab(&self, group: &TabGroup, label: &str, tab_index: usize, kids_anchor: bool, machines: &PlateMachines, window: &mut Window,
         cx: &mut Context<Self>) -> Option<AnyElement> {
         let mother = &group.members[0];
         let session = self.target_session(mother)?;
@@ -597,6 +599,7 @@ impl Hangar {
             // A janela das filhas abre só pelo contador; o resto da aba abre a sessão-mãe. Alterna descendo, no mesmo
             // despacho do "clique fora" da janela (que já fechou): `was_open` ainda é o do quadro com ela aberta.
             .child(div().id(SharedString::from(format!("tab-kids-{}", mother.id()))).flex_shrink_0().h(px(22.)).px(px(5.))
+                .when(kids_anchor, |el| popup::anchor(el, crate::tour::anchors::TAB_KIDS))
                 // Borda e fundo no hover: o contador é um botão dentro da aba, e precisa parecer um.
                 .flex().items_center().gap(px(3.)).rounded(px(6.)).cursor_pointer().border_1().border_color(transparent_black())
                 .when(was_open, |el| el.bg(theme::accent_dim()).border_color(theme::accent()))
