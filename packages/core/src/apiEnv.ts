@@ -20,6 +20,8 @@ export interface ApiEnv {
   onInviteEnded?(serverId: string | null): void;
   /** Guarda o endereço da rede local aprendido para um servidor. Ausente = só em memória. */
   rememberLan?(serverId: string, lan: import('./servers').LanInfo, source?: import('./servers').Server): void;
+  /** Aparelho que abre a lista ao vivo; o servidor registra o primeiro acesso. Ausente ou null = não manda. */
+  deviceIdentity?(): { kind: 'ios' | 'android' | 'pwa'; id: string } | null;
 }
 let _env: ApiEnv | null = null;
 export function configureApi(env: ApiEnv): void { _env = env; }
