@@ -4990,6 +4990,8 @@ impl Hangar {
         let recent_btn = popup::anchor(div(), "attach-recent").child(recent
             .disabled(!readable || uploading.is_some()).selected(self.recent.is_some()).on_click(cx.listener(|this, _, _, cx| this.open_recent(cx))));
         let (microphone, dictation_style, dictation_strip) = self.render_dictation(attachable, cx);
+        // Âncora aqui, não no `composer_mic`: a miniatura das novidades usa o mesmo botão e não é a peça da tela.
+        let microphone = popup::anchor(div(), crate::tour::anchors::DICTATION_TOGGLE).child(microphone);
         let steer_pill = steer_text.then(|| chrome::pill_button("steer-text", cx).label(tr("steer_text")).disabled(blocked)
             .on_click(cx.listener(|this, _, window, cx| this.submit(true, false, window, cx))).into_any_element());
         let control_row = composer_control_row(
@@ -5866,7 +5868,7 @@ impl Hangar {
             .children((!multi).then(|| self.render_keyring_notice(&self.active_key(), false, cx)).flatten())
             // O CTA do rodapé da barra do web, com o recolher ao lado.
             .child(div().flex_shrink_0().px(px(8.)).pt(px(8.)).pb(px(8.)).flex().items_center().gap_2()
-                .child(self.new_session_button(false, cx))
+                .child(popup::anchor(div().flex_shrink_0(), crate::tour::anchors::NEW_SESSION).child(self.new_session_button(false, cx)))
                 .child(self.fold_button("sidebar-fold", cx)))
             // A engrenagem mora na barra do app, acima de tudo; o rodapé fica com a conexão.
             .child(div().h(px(48.)).flex_shrink_0().px(px(8.)).flex().items_center().gap_1().border_t_1().border_color(theme::border())
@@ -5952,7 +5954,7 @@ impl Hangar {
                     .on_click(cx.listener(|this, _, _, cx| this.scroll_tabs(1., cx)))))
                 .child(chrome::icon_button("tabs-new-chat", IconName::SquarePen, tr("new_chat_title"), cx).flex_shrink_0().selected(self.new_chat_screen() && self.reopen.is_none())
                     .disabled(self.api.is_none()).on_click(cx.listener(|this, _, window, cx| this.go_home(window, cx))))
-                .child(self.new_session_button(true, cx)))
+                .child(popup::anchor(div().flex_shrink_0(), crate::tour::anchors::NEW_SESSION).child(self.new_session_button(true, cx))))
             .when_some(self.list_error.clone(), |el, text| el.child(div().flex_shrink_0().max_w(px(260.)).flex().items_center().gap_1()
                 .child(div().min_w_0().truncate().text_xs().text_color(theme::warning()).child(text))
                 .child(Button::new("reconnect").xsmall().ghost().label(tr("retry")).on_click(cx.listener(|this, _, window, cx| this.connect(window, cx))))))
@@ -6078,6 +6080,7 @@ impl Hangar {
                 this.open_target(&click_target, window, cx);
                 this.sidebar.hover = hover;
             }))
+            .map(|el| popup::anchor(el, crate::tour::anchors::session_row(&target.server, &target.name)))
             .context_menu(sidebar::session_menu(cx.entity().downgrade(), target.server, session)).into_any_element()
     }
 
@@ -6233,6 +6236,7 @@ impl Hangar {
                 // Foco só no gesto sobre a lista; troca automática de transcript não tira o foco de ninguém.
                 this.open_target(&click_target, window, cx);
             }))
+            .map(|el| popup::anchor(el, crate::tour::anchors::session_row(&target.server, &target.name)))
             .context_menu(sidebar::session_menu(weak, target.server, session))
             .into_any_element()
     }
@@ -7248,6 +7252,8 @@ impl Hangar {
 
 impl Render for Hangar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Vive até o fim do desenho: as âncoras da raiz deste quadro valem a partir dele (`popup::RootFrame`).
+        let _anchors = popup::root_frame();
         self.leave_tab_preview_event();
         self.sync_a11y_retain(window, cx);
         // O assistente ocupa a janela: nada da conversa por baixo recebe tecla nem clique.

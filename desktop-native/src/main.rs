@@ -30,6 +30,7 @@ mod status;
 mod tables;
 mod ws;
 mod theme;
+mod tour;
 mod tray;
 mod ui_map;
 mod update;

@@ -630,7 +630,8 @@ impl Hangar {
         // dela: o GPUI pinta a borda por cima do conteúdo do próprio elemento, e aqui é a legenda que tem de cobrir a linha.
         let legend = div().absolute().bottom(px(-KID_CHIP / 2.)).left(px(8.)).right(px(8.)).flex().gap(px(4.)).children(chips);
         Some(div().relative().flex_shrink_0()
-            .child(tab.context_menu(sidebar::session_menu(weak, mother.server.clone(), session.clone())))
+            .child(popup::anchor(tab, crate::tour::anchors::session_row(&mother.server, &mother.name))
+                .context_menu(sidebar::session_menu(weak, mother.server.clone(), session.clone())))
             .child(legend)
             .children(plate.map(|(plate, _)| plate)).into_any_element())
     }
@@ -687,7 +688,8 @@ impl Hangar {
             .when(!self.invite_target(target) && !session.read_only(), |el| {
                 self.group_row(el, session, remote.then_some(target.server.as_str()), 6., cx).ml(px(0.))
             });
-        let tab = tab.context_menu(sidebar::session_menu(weak, target.server.clone(), session.clone()));
+        let tab = popup::anchor(tab, crate::tour::anchors::session_row(&target.server, &target.name))
+            .context_menu(sidebar::session_menu(weak, target.server.clone(), session.clone()));
         let Some((plate, _)) = plate else { return Some(tab.into_any_element()) };
         Some(div().relative().flex_shrink_0().child(tab).child(plate).into_any_element())
     }

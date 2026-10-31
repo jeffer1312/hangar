@@ -1935,6 +1935,7 @@ impl Hangar {
         let (weak, menu_target, open) = (cx.entity().downgrade(), target.clone(), target.clone());
         el.on_mouse_down(MouseButton::Right, cx.listener(move |this, _, _, cx| this.start_menu(menu_target.clone(), cx)))
             .on_click(cx.listener(move |this, _, window, cx| this.open_target(&open, window, cx)))
+            .map(|el| popup::anchor(el, crate::tour::anchors::session_row(&target.server, &target.name)))
             .context_menu(session_menu(weak, target.server, session))
             .into_any_element()
     }
