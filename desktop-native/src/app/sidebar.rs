@@ -777,6 +777,7 @@ impl Hangar {
 
     /// Abrir o menu lê o silenciar daquela sessão; resposta de um menu anterior é descartada pelo número.
     pub(super) fn start_menu(&mut self, target: Target, cx: &mut Context<Self>) {
+        self.tour_event(crate::tour::TourEvent::MenuOpened, cx);
         self.clear_hover();
         self.sidebar.press_seq += 1;
         self.sidebar.menu_seq += 1;
@@ -1018,6 +1019,7 @@ impl Hangar {
         let returning = engine_account.is_none() && session.engine.as_deref().is_some_and(|e| !e.is_empty());
         let life = session.lifecycle_id.clone();
         let jsonl = session.jsonl.clone();
+        self.tour_event(crate::tour::TourEvent::AccountMoved, cx);
         self.focus_origin(&target, window, cx);
         let this = cx.entity().downgrade();
         let title = tr(if returning { "sidebar_return_claude_title" } else if engine_account.is_some() { "sidebar_proxy_title" } else { "sidebar_same_title" }).replace("{n}", &label);
@@ -1886,7 +1888,7 @@ impl Hangar {
                 .tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new(tr("new_chat_title")).build(window, cx))
                 .child(chrome::small_icon(IconName::SquarePen, 16., theme::muted()))
                 .when(enabled, |el| el.on_click(cx.listener(|this, _, window, cx| this.go_home(window, cx)))))
-            .child(div().id("session-list").min_h_0().w_full().overflow_y_scroll().px(px(3.)).flex().flex_col().gap(px(4.))
+            .child(div().id("session-list").min_h_0().w_full().overflow_y_scroll().track_scroll(&self.rows_scroll).px(px(3.)).flex().flex_col().gap(px(4.))
                 .when(!fit_content, |el| el.flex_1())
                 .children(rows))
             .child(div().w_full().flex_shrink_0().pt(px(8.)).pb(px(8.)).mt(px(4.)).border_t_1().border_color(theme::border())

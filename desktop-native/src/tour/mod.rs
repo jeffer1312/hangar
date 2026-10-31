@@ -5,6 +5,7 @@
 pub mod anchors;
 pub mod balloon;
 pub mod state;
+pub mod steps;
 
 use std::{collections::VecDeque, time::{Duration, Instant}};
 use gpui_kit::{Bounds, Pixels};
@@ -31,11 +32,25 @@ pub struct Step { pub id: &'static str, pub anchor: &'static str, pub title_key:
 
 /// A ação real que faz um passo avançar, avisada de onde ela acontece.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TourEvent { SearchOpened }
+pub enum TourEvent {
+    SessionCreated, MenuOpened, GroupClosed, AccountMoved, SearchOpened, NumberedSession, ContextAdded, DictationStarted,
+    PermissionCycled,
+}
 
 impl TourEvent {
+    /// O id do passo em `steps`.
     fn step(self) -> &'static str {
-        match self { TourEvent::SearchOpened => "search" }
+        match self {
+            TourEvent::SessionCreated => "new",
+            TourEvent::MenuOpened => "menu",
+            TourEvent::GroupClosed => "group",
+            TourEvent::AccountMoved => "account",
+            TourEvent::SearchOpened => "search",
+            TourEvent::NumberedSession => "number",
+            TourEvent::ContextAdded => "attach",
+            TourEvent::DictationStarted => "dictation",
+            TourEvent::PermissionCycled => steps::PERMISSION,
+        }
     }
 }
 
@@ -85,6 +100,12 @@ impl Tour {
         let current = (seen.tour.is_none() && !steps.is_empty()).then_some(0);
         Self { seen, steps, current, done_any: false, celebrated: None, tips: VecDeque::new(), news: None, server_read: false,
             last_target: None, generation: 0 }
+    }
+
+    /// Os passos dependem da lista de sessões: entram quando ela é lida, e de novo no "Ver o tour de novo".
+    pub fn set_steps(&mut self, steps: Vec<Step>) {
+        self.current = (self.seen.tour.is_none() && !steps.is_empty()).then_some(0);
+        (self.steps, self.done_any, self.celebrated) = (steps, false, None);
     }
 
     /// O que gravar: o estado e a geração desta gravação (`state::save`).

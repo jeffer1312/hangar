@@ -871,6 +871,9 @@ pub struct Hangar {
     entry: Option<setup::Entry>,
     /// O tour de primeiro uso, as dicas e o que já foi visto (`tour.json`).
     tour: crate::tour::Tour,
+    tour_planner: crate::tour::steps::Planner,
+    /// Rolagem da lista de sessões (barra e trilho): o passo do tour só aponta linha que está dentro dela.
+    rows_scroll: ScrollHandle,
 }
 
 impl Drop for Hangar {
@@ -1122,6 +1125,8 @@ impl Hangar {
             setup_hidden: None,
             entry: probe.then_some(setup::Entry::Probing),
             tour: Self::load_tour(),
+            tour_planner: Default::default(),
+            rows_scroll: ScrollHandle::new(),
         }
     }
 
@@ -2210,6 +2215,7 @@ impl Hangar {
             self.follow_open(&list, window, cx);
         }
         self.sidebar_sessions_changed(window, cx);
+        self.tour_planner.list_read();
     }
 
     /// Transcript trocado na mesma sessão (`/clear`): envio em voo, espera, campo, anexos e "mandar pro grupo" seguem para a
@@ -3010,6 +3016,7 @@ impl Hangar {
     fn read_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
         let Some(key) = self.composer_key() else { return; };
         if paths.is_empty() || self.uploading.contains_key(&key) { return; }
+        self.tour_event(crate::tour::TourEvent::ContextAdded, cx);
         let generation = self.check_dictation_owner(cx);
         let owner = self.dictation_owner(cx);
         let (connection, tx) = (self.connection, self.tx.clone());
@@ -3060,7 +3067,8 @@ impl Hangar {
         }
         if !problems.is_empty() { self.action_feedback.insert(key, (problems.join(" "), true)); }
         if !paths.is_empty() { self.read_paths(paths, cx); }
-        if took { cx.notify(); }
+        // A imagem colada não passa pelo `read_paths`.
+        if took { self.tour_event(crate::tour::TourEvent::ContextAdded, cx); }
         took
     }
 
@@ -4948,7 +4956,7 @@ impl Hangar {
                 .when_some(cache, |el, cache| el.child(cache_chip(cache)))
                 .child(popup::anchor(div(), "composer-ctx").child(ring("composer-ctx", tr("ring_context"), ctx_pct, self.context_card)
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_context_card(cx)))))
-                .child(popup::anchor(div(), "composer-account").child(ring("composer-account", self.focused_account().map(|(_, name, _)| name).unwrap_or_else(|| tr("ring_account")), account, self.accounts.card)
+                .child(popup::anchor(div(), crate::tour::anchors::COMPOSER_ACCOUNT).child(ring("composer-account", self.focused_account().map(|(_, name, _)| name).unwrap_or_else(|| tr("ring_account")), account, self.accounts.card)
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_usage_card(cx)))))
                 .when_some(cost, |el, cost| el.child(div().text_color(theme::faint()).opacity(0.6).child("·"))
                     .child(div().h(px(22.)).px(px(6.)).flex().items_center().text_color(theme::muted()).child(cost)));
@@ -5015,7 +5023,7 @@ impl Hangar {
         div().id("composer").relative().flex_shrink_0().w_full().px(px(if landing { 36. } else { 12. })).pb(px(10.)).flex().justify_center()
             .when(attachable, |el| el.drag_over::<ExternalPaths>(|style, _, _, _| style.bg(theme::accent_dim()))
                 .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| this.read_paths(paths.paths().to_vec(), cx))))
-            .child(popup::anchor(frame.relative().flex().flex_col(), "composer")
+            .child(popup::anchor(frame.relative().flex().flex_col(), crate::tour::anchors::COMPOSER)
                 .when(!floating.is_empty(), |el| el.child(div().absolute().left_0().right_0().bottom(relative(1.)).pb_2().flex().flex_col().gap_2()
                     .occlude().children(floating)))
                 .children(queue_panel)
@@ -5816,7 +5824,7 @@ impl Hangar {
         } else { children.into_iter().map(|(_, _, el)| el).collect() };
         let active = self.active_key();
         let empty = remote_rows == 0 && self.sessions.iter().all(|s| self.sidebar.is_hidden(&active, &s.name));
-        let list = div().id("session-list").min_h_0().overflow_y_scroll().px(px(8.)).flex().flex_col().gap(px(2.))
+        let list = div().id("session-list").min_h_0().overflow_y_scroll().track_scroll(&self.rows_scroll).px(px(8.)).flex().flex_col().gap(px(2.))
             // A borda do painel já ocupa parte do recuo externo de oito pixels.
             .when(conversations, |el| el.pl(px(if floating { 7. } else { 8. })).pr(px(7.)))
             .when(!fit_content, |el| el.flex_1())
@@ -7279,10 +7287,70 @@ impl Hangar {
         cx.notify();
     }
 
-    /// "Ver o tour de novo": zera só o tour, as dicas ficam.
+    /// "Ver o tour de novo": zera só o tour, as dicas ficam. Os passos saem da tela de agora.
     pub(super) fn restart_tour(&mut self, cx: &mut Context<Self>) {
         if self.tour.restart() { self.save_tour(); }
+        let snapshot = self.tour_snapshot(cx);
+        let steps = self.tour_planner.plan(&snapshot, true);
+        self.tour.set_steps(steps);
         cx.notify();
+    }
+
+    /// O que decide os passos: lista, contas, transcrição e a sessão aberta.
+    fn tour_snapshot(&self, cx: &App) -> crate::tour::steps::Snapshot {
+        let (accounts, codex) = self.account_kinds();
+        crate::tour::steps::Snapshot {
+            sessions: self.sessions.len() + self.remote.values().map(|list| list.sessions.len()).sum::<usize>(),
+            accounts, codex,
+            transcription: self.transcription_configured(cx),
+            open: self.selected.as_ref().filter(|s| s.readable()).map(|s| crate::tour::steps::Agent::of(&s.provider)),
+        }
+    }
+
+    /// Com a primeira lista lida, só então se sabe se o tour começa pela primeira sessão. Chamado do desenho seguinte, depois
+    /// de a sessão de antes reabrir (`pending_open`), para os passos da sessão aberta entrarem.
+    fn plan_tour(&mut self, cx: &App) {
+        if !self.tour_planner.due() { return; }
+        let snapshot = self.tour_snapshot(cx);
+        let steps = self.tour_planner.plan(&snapshot, self.tour.seen.tour.is_none());
+        self.tour.set_steps(steps);
+    }
+
+    /// Passo que virou dica entra na fila quando a condição dele chega.
+    fn offer_ready_tour_tips(&mut self, cx: &App) {
+        if !self.tour_planner.waiting() { return; }
+        let snapshot = self.tour_snapshot(cx);
+        for step in self.tour_planner.ready(&snapshot) {
+            self.tour.offer_tip(crate::tour::Note { id: crate::tour::steps::tip_id(&step), anchor: step.anchor.to_owned(),
+                title: tr(step.title_key), body: tr(step.body_key) });
+        }
+    }
+
+    /// A peça que depende da tela: a linha de sessão e, no passo de Shift+Tab, o controle do agente aberto.
+    fn tour_anchor(&self, id: &str, anchor: &str, celebrating: bool) -> Option<String> {
+        use crate::tour::{anchors, steps};
+        if id == steps::PERMISSION || id == format!("tour-{}", steps::PERMISSION) {
+            return Some(steps::permission_anchor(self.selected.as_ref().map(|s| steps::Agent::of(&s.provider))).to_owned());
+        }
+        if anchor != anchors::SESSION_ROW { return Some(anchor.to_owned()); }
+        // À vista = desenhada e com o meio dentro da faixa rolável da lista (linha rolada para fora ainda tem posição).
+        let view = if appearance::get().navigation.tabs() { self.tabs_scroll.bounds() } else { self.rows_scroll.bounds() };
+        let shown = |row: &str| popup::anchor_bounds(row).filter(|b| view.contains(&b.center()));
+        // Fica na mesma linha enquanto ela seguir à vista; senão a aberta; senão a de cima. Na comemoração, a última
+        // vale mesmo sumida: ela continua onde o balão estava.
+        let last = self.tour.last_target.as_ref().map(|(row, _)| row).filter(|row| row.starts_with(anchors::SESSION_ROW));
+        if let Some(row) = last && shown(row).is_some() { return Some(row.clone()); }
+        if let Some(target) = self.selected_target() {
+            let row = anchors::session_row(&target.server, &target.name);
+            if shown(&row).is_some() { return Some(row); }
+        }
+        let active = self.active_key();
+        let local = self.sessions.iter().map(|s| anchors::session_row(&active, &s.name));
+        let remote = self.remote.iter().flat_map(|(server, list)| list.sessions.iter().map(move |s| anchors::session_row(server, &s.name)));
+        local.chain(remote).filter_map(|row| shown(&row).map(|b| (row, b)))
+            .min_by(|(_, a), (_, b)| (a.top(), a.left()).partial_cmp(&(b.top(), b.left())).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(row, _)| row)
+            .or_else(|| last.filter(|_| celebrating).cloned())
     }
 
     fn tour_choice(&mut self, choice: crate::tour::Choice, cx: &mut Context<Self>) {
@@ -7298,7 +7366,10 @@ impl Hangar {
             window_visible: !self.window_tray.hidden,
             server_read: self.tour.server_read && self.api.is_some(),
         };
-        let surface = self.tour.next_surface(&gate)?;
+        self.plan_tour(cx);
+        self.offer_ready_tour_tips(cx);
+        let mut surface = self.tour.next_surface(&gate)?;
+        surface.anchor = self.tour_anchor(&surface.id, &surface.anchor, surface.celebrating.is_some())?;
         let target = match popup::anchor_bounds(&surface.anchor) {
             Some(bounds) => bounds,
             None if surface.celebrating.is_some() =>

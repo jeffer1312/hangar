@@ -2596,6 +2596,7 @@ impl Hangar {
             window.push_notification(Notification::error(self.machine_error(&target.server)), cx);
             return;
         };
+        self.tour_event(crate::tour::TourEvent::AccountMoved, cx);
         self.focus_origin(&target, window, cx);
         let link = Link { api, runtime: self.runtime.clone(), tx: self.tx.clone(), connection: self.connection,
             servers: Vec::new(), servers_rev: self.servers_rev };
@@ -2831,6 +2832,7 @@ impl Hangar {
             if compact && finished && !entity.read(cx).creating { self.fail_opening(window, cx); cx.notify(); }
             return;
         };
+        self.tour_event(crate::tour::TourEvent::SessionCreated, cx);
         // A mensagem enviada da tela sem sessão segue na conversa da sessão nova; a chegada já começou no Enviar.
         let opening = if compact { self.opening.take() } else { None };
         // Criar não desfaz a escolha de outra conversa feita enquanto o pedido estava em voo.

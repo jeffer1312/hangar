@@ -798,13 +798,18 @@ impl Hangar {
                 v.block.clone().filter(|_| v.error.is_none() && v.conflict.is_none() && !v.busy).map(|t| alert("group-block", t)),
             ];
             let variant = if v.join { ButtonVariant::Primary } else { ButtonVariant::Danger };
+            // Fechar o diálogo, confirmado ou cancelado, é o gesto do passo do tour.
+            let learned = |weak: WeakEntity<Hangar>| move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                window.close_dialog(cx);
+                let _ = weak.update(cx, |this, cx| this.tour_event(crate::tour::TourEvent::GroupClosed, cx));
+            };
             let footer = div().flex().justify_end().gap_2().map(|el| if v.done {
-                el.child(Button::new("group-close").label(web("sessao_fechar")).with_variant(variant).on_click(|_, window, cx| window.close_dialog(cx)))
+                el.child(Button::new("group-close").label(web("sessao_fechar")).with_variant(variant).on_click(learned(weak.clone())))
             } else {
                 let replace = v.join && v.conflict.is_some();
                 let label = web(if replace { "grupo_drop_substituir_tarefa" } else if v.join { "grupo_drop_confirmar" } else { "grupo_drop_sair_confirmar" });
                 let confirm = weak.clone();
-                el.child(Button::new("group-cancel").label(tr("cancel")).disabled(v.busy).on_click(|_, window, cx| window.close_dialog(cx)))
+                el.child(Button::new("group-cancel").label(tr("cancel")).disabled(v.busy).on_click(learned(weak.clone())))
                     .child(Button::new("group-ok").label(label).with_variant(variant).loading(v.busy).disabled(v.busy || v.suggesting || v.block.is_some())
                         .on_click(move |_, window, cx| { let _ = confirm.update(cx, |this, cx| this.confirm_group(replace, window, cx)); }))
             });
@@ -814,8 +819,9 @@ impl Hangar {
                 .child(div().flex().flex_col().gap(px(12.)).children(affected).children(notices).children(task_row).children(alerts.into_iter().flatten()))
                 .footer(footer)
                 .on_ok(super::machines::enter_to_focused)
-                .on_close(move |_, _, cx| { let _ = close.update(cx, |this, _| {
+                .on_close(move |_, _, cx| { let _ = close.update(cx, |this, cx| {
                     if this.sidebar.grouping.ask.as_ref().is_some_and(|a| a.seq == seq) { this.sidebar.grouping.ask = None; }
+                    this.tour_event(crate::tour::TourEvent::GroupClosed, cx);
                 }); })
         });
         cx.notify();
@@ -944,6 +950,7 @@ impl Hangar {
         if close {
             self.sidebar.grouping.ask = None;
             window.close_dialog(cx);
+            self.tour_event(crate::tour::TourEvent::GroupClosed, cx);
         }
         cx.notify();
     }

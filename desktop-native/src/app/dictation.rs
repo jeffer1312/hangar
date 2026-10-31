@@ -24,6 +24,8 @@ struct OrganizationSelection {
     supported: bool,
     include_recent_messages: bool,
     max_seconds: u64,
+    /// Há quem transcreva: a lista de serviços ou a chave do serviço único (a regra de `transcribe_status`).
+    transcription: bool,
 }
 impl OrganizationSelection {
     /// Modo desconhecido volta como `Err(modo)`: tratá-lo como "none" mandaria o ditado sem organizar calado.
@@ -35,7 +37,9 @@ impl OrganizationSelection {
             claude_model:field("dictation_claude_model"),codex_model:field("dictation_codex_model"),
             include_recent_messages:value["campos"]["dictation_include_recent_messages"]["valor"].as_bool().unwrap_or(false),
             supported:value["campos"].get("dictation_organization_mode").is_some(),
-            max_seconds:Self::max_minutes(&value["campos"]["dictation_max_minutes"]["valor"])*60})
+            max_seconds:Self::max_minutes(&value["campos"]["dictation_max_minutes"]["valor"])*60,
+            transcription:value["campos"]["transcription_providers"]["valor"].as_array().is_some_and(|list|!list.is_empty())
+                ||value["campos"]["groq_api_key"]["definido"].as_bool()==Some(true)})
     }
     /// 0, ausente ou ilegível vale 5 min, como no servidor; acima de 30 o servidor não aceita.
     fn max_minutes(value:&Value)->u64 {
@@ -752,6 +756,11 @@ impl Hangar {
         self.dictation_selection(cx).map(|selection|selection.options(self.selected.as_ref()))
     }
 
+    /// Lido da configuração da máquina do ditado; antes da leitura, falso.
+    pub(super) fn transcription_configured(&self, cx: &App) -> bool {
+        self.dictation_selection(cx).is_some_and(|selection| selection.transcription)
+    }
+
     fn dictation_selection(&self, cx: &App)->Option<&OrganizationSelection> {
         let identity=self.dictation_target(cx).map(|(api,_)|api.identity());
         self.dictation.organization.as_ref().filter(|(owner,_)|Some(owner)==identity.as_ref()).map(|(_,selection)|selection)
@@ -790,6 +799,7 @@ impl Hangar {
                 self.dictation.recorder = Some(recorder);
                 self.dictation.started = Some(Instant::now());
                 self.dictation.max_seconds = max_seconds;
+                self.tour_event(crate::tour::TourEvent::DictationStarted, cx);
                 let seq = self.dictation.seq;
                 cx.spawn_in(window, async move |this, cx| {
                     loop {

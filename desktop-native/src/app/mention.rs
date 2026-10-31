@@ -93,6 +93,7 @@ impl Hangar {
         self.mention.snapshot = Some(self.mention_snapshot(cx));
         self.mention.close();
         self.redraw(panes::Area::Bottom, cx);
+        self.tour_event(crate::tour::TourEvent::ContextAdded, cx);
     }
 
     pub(super) fn render_mentions(&self, cx: &mut Context<Self>) -> Option<AnyElement> {

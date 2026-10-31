@@ -460,6 +460,7 @@ impl Hangar {
             return;
         }
         if self.controls.cycle_after_read.is_some() || self.mode_blocked(&key) { return; }
+        self.tour_event(crate::tour::TourEvent::PermissionCycled, cx);
         let known = self.controls.known.get(&(key.clone(), Ctl::Mode)).cloned();
         if known.as_ref().is_some_and(|v| v.get("modes").and_then(Value::as_array).is_some_and(|m| !m.is_empty())) {
             self.apply_next_mode(key, 1, cx);
@@ -501,6 +502,7 @@ impl Hangar {
         if self.provider().0 != "codex" { return; }
         let Some(key) = self.selected_key() else { return; };
         if self.mode_blocked(&key) { return; }
+        self.tour_event(crate::tour::TourEvent::PermissionCycled, cx);
         self.step_mode(key, &["plan".into(), "default".into()], 1, cx);
     }
 
@@ -1375,7 +1377,14 @@ impl Hangar {
 #[cfg(test)]
 mod tests {
     // Sem glob: o `test` da gpui colide com o atributo padrão.
-    use super::{Choice, ModeTarget, claude_effort_current, claude_model_current, codex_fast_state, keep, mode_ahead, only_match, prethread_problem, reopen_warnings, spaced, step_free};
+    use super::{Choice, Ctl, ModeTarget, claude_effort_current, claude_model_current, codex_fast_state, keep, mode_ahead, only_match, prethread_problem, reopen_warnings, spaced, step_free};
+
+    /// As pílulas gravam a âncora por `format!("ctl-{}")`; o tour aponta pelas constantes.
+    #[test]
+    fn pill_anchors_match_the_tour_ids() {
+        assert_eq!(format!("ctl-{}", Ctl::Mode.key()), crate::tour::anchors::CTL_MODE);
+        assert_eq!(format!("ctl-{}", Ctl::Permission.key()), crate::tour::anchors::CTL_PERMISSION);
+    }
 
     #[test]
     fn prethread_problem_shows_the_phrase_never_the_raw_code() {

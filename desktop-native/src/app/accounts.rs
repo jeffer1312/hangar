@@ -743,6 +743,12 @@ impl Hangar {
         if self.open_api.is_some() { &self.accounts.session_list } else { &self.accounts.list }
     }
 
+    /// Contas Claude e se há uma Codex, na lista do anel: o que o anel oferece para levar a conversa.
+    pub(super) fn account_kinds(&self) -> (usize, bool) {
+        let list = self.session_accounts().ok().map(Vec::as_slice).unwrap_or_default();
+        (list.iter().filter(|c| c.kind == "claude").count(), list.iter().any(|c| c.kind == "codex"))
+    }
+
     fn load_session_engines(&mut self, cx: &mut Context<Self>) {
         let Some(api) = self.open_api.clone().or_else(|| self.api.clone()) else { return; };
         let server = self.open_server();
