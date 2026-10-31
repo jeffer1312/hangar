@@ -497,3 +497,61 @@ async fn archive_history_failures_keep_the_status_and_write_the_cause_once() {
     assert_eq!(causes.len(), 2, "uma por fonte, não por pedido: {causes:?}");
     assert!(causes.iter().all(|c| c.len() > TRANSFER.len()), "{causes:?}");
 }
+
+/// ARQ-38: `tail` acima de 200 corta em 200, as últimas, em ordem.
+#[tokio::test]
+async fn arq38_tail_is_capped_at_200() {
+    let h = Harness::new().await;
+    let sid = "11111111-2222-4333-8444-666666666666";
+    let dir = h.home.join(".claude-a/projects/-tmp-teto");
+    std::fs::create_dir_all(&dir).unwrap();
+    let body: String = (0..250).map(|i| json!({"type": "user", "uuid": format!("u{i}"), "timestamp": format!("2026-10-01T12:{:02}:{:02}Z", i / 60, i % 60),
+        "message": {"role": "user", "content": format!("mensagem {i}")}}).to_string() + "\n").collect();
+    std::fs::write(dir.join(format!("{sid}.jsonl")), body).unwrap();
+    let (status, body) = h.get(&history("-tmp-teto", sid, "?tail=500")).await;
+    assert_eq!(status, 200, "{body}");
+    let ids: Vec<String> = body.as_array().unwrap().iter().map(|e| e["id"].as_str().unwrap().to_owned()).collect();
+    assert_eq!(ids, (50..250).map(|i| format!("u{i}")).collect::<Vec<_>>());
+}
+
+fn pi_session(dir: &Path, sid: &str, text: &str, mtime: u64) {
+    std::fs::create_dir_all(dir).unwrap();
+    let path = dir.join(format!("2026-10-01T10-00-00-000Z_{sid}.jsonl"));
+    let lines = [json!({"type": "session", "version": 3, "id": sid, "timestamp": "2026-10-01T10:00:00.000Z", "cwd": "/repo"}),
+        json!({"type": "message", "id": "m1", "parentId": null, "timestamp": "2026-10-01T10:00:01.000Z",
+            "message": {"role": "user", "content": [{"type": "text", "text": text}], "timestamp": 1_790_000_000_000u64}})];
+    std::fs::write(&path, lines.iter().map(|l| format!("{l}\n")).collect::<String>()).unwrap();
+    std::fs::File::options().write(true).open(&path).unwrap()
+        .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(mtime)).unwrap();
+}
+
+/// PRV-09: o mesmo sid do Pi em duas pastas: o mais novo vence; sid que não é UUID é 400.
+#[tokio::test]
+async fn prv09_pi_newest_wins_and_non_uuid_is_refused() {
+    let h = Harness::new().await;
+    let sid = "aaaaaaaa-1111-4222-8333-444444444444";
+    let root = h.home.join(".pi/agent/sessions");
+    pi_session(&root.join("--repo-velho--"), sid, "texto velho", 1_790_000_000);
+    pi_session(&root.join("--repo-novo--"), sid, "texto novo", 1_790_000_500);
+    let (status, body) = h.get(&history("x", sid, "?provider=pi")).await;
+    assert_eq!(status, 200, "{body}");
+    let texts: Vec<&str> = body.as_array().unwrap().iter().filter_map(|e| e["text"].as_str()).collect();
+    assert_eq!(texts, ["texto novo"]);
+    let (status, body) = h.get(&history("x", "nao-uuid", "?provider=pi")).await;
+    assert_eq!((status, &body["detail"]["code"]), (400, &json!("erro_path_invalido")), "{body}");
+}
+
+/// PRV-19 (`test_codex_id_duplicado_exige_conta`): o mesmo sid em duas contas Codex sem conta pedida é
+/// 409; com a conta, o rollout dela.
+#[tokio::test]
+async fn prv19_same_codex_sid_in_two_accounts_needs_the_account() {
+    let h = Harness::new().await;
+    let from = std::fs::read_dir(h.home.join(".codex/sessions/2026/08/30")).unwrap().flatten().next().unwrap().path();
+    let to = h.home.join(".codex-b/sessions/2026/08/30");
+    std::fs::create_dir_all(&to).unwrap();
+    std::fs::copy(&from, to.join(from.file_name().unwrap())).unwrap();
+    let (status, body) = h.get(&history("x", CODEX_A, "?provider=codex")).await;
+    assert_eq!((status, &body["detail"]["code"]), (409, &json!("codex_account_ambiguous_rollout")), "{body}");
+    let (status, body) = h.get(&history("x", CODEX_A, "?provider=codex&codex_account=b")).await;
+    assert_eq!(status, 200, "{body}");
+}

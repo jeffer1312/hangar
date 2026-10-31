@@ -618,3 +618,68 @@ pub async fn by_cwd(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         }))
     }).await
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn project_of_keeps_the_drive_root_and_drops_an_empty_cwd() {
+        // ARQ-04 e ARQ-05 (`sanitize_cwd` + `_projeto_de`): a raiz do drive mantém a barra; cwd nulo
+        // ou vazio não dá pasta.
+        for (cwd, want) in [(Some("C:\\"), Some("C--")), (Some("C:\\x\\"), Some("C--x")), (Some("/"), Some("-")),
+            (Some("/a/b/"), Some("-a-b")), (Some(""), None), (None, None)] {
+            assert_eq!(project_of(cwd).as_deref(), want, "{cwd:?}");
+        }
+    }
+
+    #[test]
+    fn preview_text_drops_markdown_like_the_python() {
+        // ARQ-18 (`test_previa_sai_sem_marcacao_de_markdown` e saídas do `_texto_simples`).
+        for (text, want) in [
+            ("**O backend responde certo** — veja `app.py`", "O backend responde certo — veja app.py"),
+            ("## Titulo\n- item um\n- item dois", "Titulo item um item dois"),
+            ("veja [o guia](http://x/y) agora", "veja o guia agora"),
+            ("> citado\n> mais", "citado mais"),
+            ("1. um\n2. dois", "um dois"),
+            ("* a\n+ b", "a b"),
+            ("_ênfase_ e ~~riscado~~", "ênfase e riscado"),
+        ] {
+            assert_eq!(crate::list::reply::plain_text(text), want, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn preview_cut_like_the_python() {
+        // ARQ-19 (`_cortar`): corte na palavra só com espaço depois do 60º caractere, pontuação final
+        // aparada, reticências.
+        let a = |n| "a".repeat(n);
+        let b = |n| "b".repeat(n);
+        for (text, want) in [
+            (a(130), format!("{}…", a(120))),
+            (format!("{} {}", a(61), b(70)), format!("{}…", a(61))),
+            (format!("{} {}", a(60), b(100)), format!("{} {}…", a(60), b(59))),
+            (format!("{} {}", a(50), b(100)), format!("{} {}…", a(50), b(69))),
+            ("fim, ".repeat(30), format!("{}…", "fim, ".repeat(24).trim_end_matches([' ', ',']))),
+            (format!("{}.", "z".repeat(119)), format!("{}.", "z".repeat(119))),
+        ] {
+            assert_eq!(crate::search::cut(&text), want, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn mtime_of_a_missing_file_is_zero() {
+        // PRV-06 (`_mtime`).
+        assert_eq!(mtime_of(Path::new("/nao/existe/arquivo.jsonl")), 0.0);
+    }
+
+    #[test]
+    fn last_message_of_a_file_shorter_than_the_window_keeps_the_first_line() {
+        // `test_ultima_msg_com_arquivo_menor_que_o_span`: o começo do arquivo cai na janela e a 1ª
+        // linha não é parcial.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("11111111-1111-1111-1111-111111111111.jsonl");
+        std::fs::write(&path, format!("{}\n", json!({"type": "user", "uuid": "u1", "message": {"role": "user", "content": "unica msg"}}))).unwrap();
+        assert_eq!(tail_text(&path, AgentProvider::Claude), "unica msg");
+    }
+}

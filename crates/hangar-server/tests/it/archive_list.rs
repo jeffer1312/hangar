@@ -70,6 +70,7 @@ struct Harness {
     search: hangar_server::search::Index,
     /// O diário do índice: (código, detalhe).
     reports: Arc<Mutex<Vec<(&'static str, String)>>>,
+    list: Arc<hangar_server::list::bridge::ListBridge>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 
@@ -96,7 +97,10 @@ impl Harness {
     async fn new(mode: Mode) -> Self { Self::with(mode, |_| {}).await }
 
     /// `edit` mexe no HOME antes do índice ser montado.
-    async fn with(mode: Mode, edit: impl FnOnce(&Path)) -> Self {
+    async fn with(mode: Mode, edit: impl FnOnce(&Path)) -> Self { Self::build(mode, edit, &[]).await }
+
+    /// `extra`: variáveis a mais no ambiente das contas, com `{HOME}` trocado pelo HOME do teste.
+    async fn build(mode: Mode, edit: impl FnOnce(&Path), extra: &[(&str, &str)]) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().canonicalize().unwrap().join("home");
         prepare_home(&home);
@@ -125,8 +129,9 @@ impl Harness {
         let claude = home.join(".claude-a");
         let env = [("HOME", home.to_string_lossy().into_owned()), ("USERPROFILE", home.to_string_lossy().into_owned()),
             ("CLAUDE_CONFIG_DIR", claude.to_string_lossy().into_owned())];
+        let extra = extra.iter().map(|(k, v)| (*k, v.replace("{HOME}", &home.to_string_lossy())));
         state.accounts = hangar_server::accounts::AccountService::new(hangar_server::accounts::environment::AccountEnvironment::from_map(
-            env.into_iter().map(|(k, v)| (k.to_owned(), v)).collect()));
+            env.into_iter().chain(extra).map(|(k, v)| (k.to_owned(), v)).collect()));
         // O índice numa pasta própria, com as duas contas da captura.
         let dirs = vec![claude.to_string_lossy().into_owned(), home.join(".claude-b").to_string_lossy().into_owned()];
         let server_dir = claude.clone();
@@ -138,10 +143,11 @@ impl Harness {
             .with_agents(state.accounts.env.clone());
         if mode == Mode::Index { search.update().unwrap(); }
         state.search = search.clone();
-        state.list = Arc::new(live_list(dir.path(), &home, upstream));
+        let list = Arc::new(live_list(dir.path(), &home, upstream));
+        state.list = list.clone();
         let app = router(Arc::new(state));
         let server = tokio::spawn(async move { axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await.unwrap() });
-        Self { _dir: dir, home, address, hits, client: reqwest::Client::new(), search, reports, tasks: vec![up_task, server] }
+        Self { _dir: dir, home, address, hits, client: reqwest::Client::new(), search, reports, list, tasks: vec![up_task, server] }
     }
 
     fn reported(&self, code: &str) -> usize { self.reports.lock().unwrap().iter().filter(|(c, _)| *c == code).count() }
@@ -375,10 +381,10 @@ async fn f8_folders_without_index_open_only_what_the_python_opened() {
     assert!(extra.is_empty(), "abriu além do Python: {extra:?}");
 }
 
-/// Os arquivos `.jsonl` abertos dentro de `roots` enquanto `during` roda (o inotify avisa cada abertura).
+/// Cada abertura de `.jsonl`/`.json` dentro de `roots` enquanto `during` roda (o inotify avisa cada uma).
 #[cfg(target_os = "linux")]
-async fn opened_during<F: std::future::Future<Output = ()>>(roots: &[PathBuf], during: F) -> std::collections::HashSet<PathBuf> {
-    let opened = Arc::new(Mutex::new(std::collections::HashSet::new()));
+async fn opened_during<F: std::future::Future<Output = ()>>(roots: &[PathBuf], during: F) -> Vec<PathBuf> {
+    let opened = Arc::new(Mutex::new(Vec::new()));
     let seen = opened.clone();
     let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
         if let Ok(event) = event && matches!(event.kind, notify::EventKind::Access(notify::event::AccessKind::Open(_))) {
@@ -617,4 +623,327 @@ async fn unreadable_project_folder_is_skipped_with_one_diary_line() {
     assert!(projects.contains(&HANGAR) && !projects.contains(&"-tmp-cx-probe-work"), "{projects:?}");
     assert_eq!(body, again);
     assert_eq!(h.reported("arquivo.pasta_ilegivel"), 1, "uma linha por pasta, não por pedido");
+}
+
+fn at(secs: u64) -> SystemTime { UNIX_EPOCH + Duration::from_secs(secs) }
+
+fn write_lines(path: &Path, lines: &[Value], mtime: SystemTime) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, lines.iter().map(line).collect::<String>()).unwrap();
+    set_mtime(path, mtime);
+}
+
+fn user(uuid: &str, text: &str, cwd: &str) -> Value {
+    json!({"type": "user", "uuid": uuid, "cwd": cwd, "message": {"role": "user", "content": text}})
+}
+
+/// O que o Claude Code grava antes da 1ª mensagem: só `attachment`, com `"user"` citado no texto.
+fn attachments(cwd: &str) -> Vec<Value> {
+    (0..3).map(|i| json!({"parentUuid": null, "isSidechain": false, "type": "attachment", "uuid": format!("a{i}"), "cwd": cwd,
+        "timestamp": "2026-01-01T00:00:00Z", "attachment": {"type": "hook_success", "hookName": "SessionStart:startup",
+        "content": "contexto do hook: \"user\" e \"type\""}})).collect()
+}
+
+const HANGAR_CWD: &str = "/home/jefferson/Projetos/hangar";
+
+/// ARQ-09, 11 (`test_linha_de_usuario_sem_previa_continua_listada`, `test_pasta_so_com_reserva_nao_aparece`):
+/// linha `user` com `isMeta`, sem prévia, mantém a conversa; `"user"` dentro de `attachment` não conta,
+/// e a pasta só com essa reserva não aparece.
+#[tokio::test]
+async fn arq11_meta_user_line_lists_and_a_reserve_only_folder_does_not() {
+    fn edit(home: &Path) {
+        let projects = home.join(".claude-a/projects");
+        let recent = SystemTime::now() - Duration::from_secs(60);
+        write_lines(&projects.join("-home-u-proj/55555555-5555-4555-8555-555555555555.jsonl"), &attachments("/home/u/proj"), recent);
+        let mut lines = attachments("/home/u/meta");
+        lines.push(json!({"type": "user", "uuid": "m1", "isMeta": true, "cwd": "/home/u/meta",
+            "message": {"role": "user", "content": "Caveat: meta"}}));
+        write_lines(&projects.join("-home-u-meta/66666666-6666-4666-8666-666666666666.jsonl"), &lines, recent);
+    }
+    for mode in [Mode::Index, Mode::NoIndex] {
+        let h = Harness::with(mode, edit).await;
+        let (_, folders) = h.get("/api/archive").await;
+        let count = |p: &str| folders.as_array().unwrap().iter().find(|f| f["project"] == p).map(|f| f["count"].clone());
+        assert_eq!((count("-home-u-meta"), count("-home-u-proj")), (Some(json!(1)), None));
+        assert_eq!(h.get("/api/archive/-home-u-proj").await, (200, json!([])));
+        let (_, body) = h.get("/api/archive/-home-u-meta").await;
+        assert_eq!(sids(&body), ["66666666"]);
+    }
+}
+
+/// ARQ-13: transcript que o stat não alcança (link quebrado) sai; conta com `projects` ilegível sai com
+/// uma linha no diário e as outras seguem.
+#[cfg(unix)]
+#[tokio::test]
+async fn arq13_dangling_transcript_and_unreadable_account_are_skipped() {
+    use std::os::unix::fs::PermissionsExt;
+    for mode in [Mode::Index, Mode::NoIndex] {
+        let h = Harness::with(mode, |home: &Path| std::os::unix::fs::symlink("/nao/existe.jsonl",
+            home.join(".claude-a/projects").join(HANGAR).join("77777777-7777-4777-8777-777777777777.jsonl")).unwrap()).await;
+        let (status, body) = h.get(&format!("/api/archive/{HANGAR}")).await;
+        assert_eq!(status, 200, "{body}");
+        assert!(!sids(&body).contains(&"77777777"), "{body}");
+    }
+    let h = Harness::new(Mode::NoIndex).await;
+    let projects = h.home.join(".claude-b/projects");
+    std::fs::set_permissions(&projects, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let readable = std::fs::read_dir(&projects).is_ok(); // root lê mesmo assim
+    let (status, body) = h.get("/api/archive").await;
+    std::fs::set_permissions(&projects, std::fs::Permissions::from_mode(0o755)).unwrap();
+    if readable { return; }
+    assert_eq!(status, 200, "{body}");
+    let folders: Vec<&str> = body.as_array().unwrap().iter().map(|f| f["project"].as_str().unwrap()).collect();
+    assert!(folders.contains(&HANGAR) && !folders.contains(&"-tmp-cx-probe-work"), "{folders:?}");
+    assert_eq!(h.reported("arquivo.pasta_ilegivel"), 1);
+}
+
+/// ARQ-17: o cabeçalho é lido nas 60 primeiras linhas (prévia e cwd depois delas ficam de fora, com e sem
+/// índice); arquivo que não abre sai com prévia e cwd vazios.
+#[tokio::test]
+async fn arq17_header_is_read_in_60_lines_and_an_unreadable_file_is_empty() {
+    fn edit(home: &Path) {
+        let mut lines: Vec<Value> = (0..60).map(|i| json!({"type": "progress", "uuid": format!("p{i}")})).collect();
+        lines.push(user("u1", "tarde demais", "/home/u/longo"));
+        write_lines(&home.join(".claude-a/projects/-home-u-longo/88888888-8888-4888-8888-888888888888.jsonl"), &lines, at(T0 + 5));
+        write_lines(&home.join(".claude-a/projects/-home-u-fechado/99999999-9999-4999-8999-999999999999.jsonl"),
+            &[user("u1", "segredo", "/home/u/fechado")], at(T0 + 6));
+    }
+    for mode in [Mode::Index, Mode::NoIndex] {
+        let h = Harness::with(mode, edit).await;
+        let (_, body) = h.get("/api/archive/-home-u-longo").await;
+        assert_eq!((sids(&body), &body[0]["preview"], &body[0]["cwd"], &body[0]["ultima"]),
+            (vec!["88888888"], &json!(""), &Value::Null, &json!("tarde demais")), "{body}");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let h = Harness::with(Mode::NoIndex, edit).await;
+        let path = h.home.join(".claude-a/projects/-home-u-fechado/99999999-9999-4999-8999-999999999999.jsonl");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let readable = std::fs::File::open(&path).is_ok();
+        let (status, body) = h.get("/api/archive/-home-u-fechado").await;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        if readable { return; }
+        assert_eq!(status, 200, "{body}");
+        assert_eq!((sids(&body), &body[0]["preview"], &body[0]["cwd"], &body[0]["ultima"]),
+            (vec!["99999999"], &json!(""), &Value::Null, &json!("")), "{body}");
+    }
+}
+
+/// ARQ-24, 34 (`test_teto_corta_as_mais_VELHAS_dos_outros_providers`): o teto 100 vale sobre o total de
+/// todos os agentes, mais novas primeiro; corta o Codex mais velho e mantém o Kimi mais novo. Os
+/// recentes também param em 100.
+#[tokio::test]
+async fn arq24_cap_100_cuts_the_oldest_of_any_agent() {
+    fn edit(home: &Path) {
+        for i in 0..100u64 {
+            let sid = format!("{:08x}-0000-4000-8000-{i:012x}", 0xc000_0000u64 + i);
+            write_lines(&home.join(".claude-a/projects").join(HANGAR).join(format!("{sid}.jsonl")),
+                &[user("u1", &format!("conversa {i}"), HANGAR_CWD)], at(T0 + 150 + i));
+        }
+    }
+    for (mode, oldest) in [(Mode::Index, T0 + 153), (Mode::NoIndex, T0 + 154)] {
+        let h = Harness::with(mode, edit).await;
+        let (_, body) = h.get(&format!("/api/archive/{HANGAR}")).await;
+        let list = body.as_array().unwrap();
+        assert_eq!(list.len(), 100);
+        assert!(!sids(&body).contains(&"01a05511"), "o Codex mais velho fica fora");
+        assert!(sids(&body).contains(&"session_"), "o Kimi mais novo fica");
+        assert_eq!(list.last().unwrap()["mtime"].as_f64(), Some(oldest as f64));
+        let (_, recent) = h.get("/api/archive/recent?cap=500").await;
+        assert_eq!(recent.as_array().unwrap().len(), 100);
+    }
+}
+
+/// ARQ-26: `live` pelo caminho real: transcript que é link simbólico continua vivo quando a lista dá
+/// o caminho do arquivo de verdade.
+#[cfg(unix)]
+#[tokio::test]
+async fn arq26_symlinked_transcript_is_live_by_its_real_path() {
+    let real = |home: &Path| home.join("real/0cc60e6c-eafc-4915-9936-f0c7b81191d9.jsonl");
+    for mode in [Mode::Index, Mode::NoIndex] {
+        let h = Harness::with(mode, |home: &Path| {
+            let path = home.join(MTIMES[13]);
+            std::fs::create_dir_all(home.join("real")).unwrap();
+            std::fs::rename(&path, real(home)).unwrap();
+            std::os::unix::fs::symlink(real(home), &path).unwrap();
+        }).await;
+        h.list.seed("sessao-viva", &real(&h.home).to_string_lossy());
+        let (_, body) = h.get("/api/archive/-home-jefferson-Projetos-hangar-computer-control-9c0b634f-t1").await;
+        let entry = body.as_array().unwrap().iter().find(|e| e["session_id"] == "0cc60e6c-eafc-4915-9936-f0c7b81191d9").unwrap();
+        assert_eq!(entry["live"], true, "{body}");
+    }
+}
+
+/// ARQ-27 (`test_list_recent_le_os_nomes_uma_vez`): os nomes das sessões fechadas são lidos uma vez por
+/// pedido.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn arq27_closed_names_are_read_once_per_request() {
+    let h = Harness::new(Mode::NoIndex).await;
+    let names = h.home.join(".claude-a/closed-sessions.json");
+    for path in ["/api/archive/recent".to_owned(), format!("/api/archive/{HANGAR}")] {
+        let opened = opened_during(&[h.home.join(".claude-a")], async { assert_eq!(h.get(&path).await.0, 200); }).await;
+        assert_eq!(opened.iter().filter(|p| **p == names).count(), 1, "{path}");
+    }
+}
+
+/// ARQ-29, 32, D11 (`test_archive_codex_filtra_a_conta_antes_do_limite`,
+/// `test_archive_por_cwd_filtra_provider_antes_do_limite`): conta e agente filtram antes do teto; teto
+/// negativo é 0; marcador de conta Codex inválido é 409.
+#[tokio::test]
+async fn arq29_account_and_agent_filter_before_the_cap() {
+    let h = Harness::with(Mode::Index, |home: &Path| {
+        let to = home.join(".codex-b/sessions/2026/10/01/rollout-2026-10-01T10-00-00-0b0b0b0b-1111-4222-8333-444444444444.jsonl");
+        std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+        std::fs::copy(home.join(MTIMES[0]), &to).unwrap();
+        set_mtime(&to, at(T0 + 2000));
+    }).await;
+    let by_cwd = |query: &str| format!("/api/archive-por-cwd?cwd={}&{query}", enc(HANGAR_CWD));
+    for (query, want) in [("provider=codex&cap=1", vec!["0b0b0b0b"]), ("provider=codex&codex_account=default&cap=1", vec!["01a05511"]),
+        ("provider=kimi&cap=1", vec!["session_"]), ("cap=-3", vec![])] {
+        let (status, body) = h.get(&by_cwd(query)).await;
+        assert_eq!(status, 200, "{query}: {body}");
+        assert_eq!(sids(&body), want, "{query}");
+    }
+    std::fs::write(h.home.join(".codex-b/.hangar-codex-conta"), r#"{"version": 1, "id": "outra"}"#).unwrap();
+    let (status, body) = h.get(&format!("/api/archive/{HANGAR}?codex_account=b")).await;
+    assert_eq!((status, &body["detail"]["code"]), (409, &json!("codex_account_invalid_marker")), "{body}");
+}
+
+/// ARQ-33: pedido só do Claude não lê rollout; o do Codex lê (sem índice).
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn arq33_claude_only_request_reads_no_rollout() {
+    let h = Harness::new(Mode::NoIndex).await;
+    let roots = [h.home.join(".codex/sessions"), h.home.join(".codex-b/sessions")];
+    let rollout = h.home.join(MTIMES[0]);
+    let path = |provider: &str| format!("/api/archive-por-cwd?cwd={}&provider={provider}", enc(HANGAR_CWD));
+    let claude = opened_during(&roots, async { assert_eq!(h.get(&path("claude")).await.0, 200); }).await;
+    assert!(claude.is_empty(), "{claude:?}");
+    let codex = opened_during(&roots, async { assert_eq!(h.get(&path("codex")).await.0, 200); }).await;
+    assert!(codex.contains(&rollout), "{codex:?}");
+}
+
+/// ARQ-35 (`test_list_recent_cap_1_le_so_a_pasta_mais_nova`): `cap=1` sem índice abre só o que vem antes
+/// da primeira conversa: a reserva recente (sem usuário) e a mais nova.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn arq35_recent_cap_1_without_index_opens_only_the_newest() {
+    let h = Harness::new(Mode::NoIndex).await;
+    let roots = [h.home.join(".claude-a/projects"), h.home.join(".claude-b/projects")];
+    let opened = opened_during(&roots, async {
+        let (_, body) = h.get("/api/archive/recent?cap=1").await;
+        assert_eq!(sids(&body), ["0cc60e6c"]);
+    }).await;
+    let opened: std::collections::HashSet<PathBuf> = opened.into_iter().collect();
+    assert_eq!(opened, [RESERVE, MTIMES[13]].iter().map(|rel| h.home.join(rel)).collect());
+}
+
+/// ARQ-06: a conta do processo fora do catálogo entra por último, sem pasta de conta nem rótulo.
+#[tokio::test]
+async fn arq06_server_account_outside_the_catalog_has_no_label() {
+    let h = Harness::build(Mode::NoIndex, |_| {}, &[("CP_CLAUDE_CONFIG_DIRS", "B:{HOME}/.claude-b")]).await;
+    let (status, body) = h.get(&format!("/api/archive/{HANGAR}")).await;
+    assert_eq!(status, 200, "{body}");
+    let entry = |sid: &str| body.as_array().unwrap().iter().find(|e| e["session_id"].as_str().unwrap().starts_with(sid)).unwrap().clone();
+    let (a, b) = (entry("75fea57d"), entry("db401d8f"));
+    assert_eq!((&a["config_dir"], &a["conta"]), (&Value::Null, &json!("")));
+    assert_eq!((&b["config_dir"], &b["conta"]), (&json!("{HOME}/.claude-b"), &json!("B")));
+}
+
+fn pi_lines(junk: usize, cwd: &str, sid: &str) -> Vec<Value> {
+    let mut lines: Vec<Value> = (0..junk).map(|i| json!({"type": "thinking_level_change", "id": format!("t{i}")})).collect();
+    lines.push(json!({"type": "session", "version": 3, "id": sid, "timestamp": "2026-10-01T10:00:00.000Z", "cwd": cwd}));
+    lines.push(json!({"type": "message", "id": "m1", "parentId": null, "timestamp": "2026-10-01T10:00:01.000Z",
+        "message": {"role": "user", "content": [{"type": "text", "text": "oi"}], "timestamp": 1_790_000_000_000u64}}));
+    lines
+}
+
+/// PRV-04: o cwd do Pi vem das 5 primeiras linhas (depois delas a conversa sai); arquivo que não abre sai.
+#[tokio::test]
+async fn prv04_agent_cwd_comes_from_the_first_5_lines() {
+    const SIX: &str = "aaaaaaaa-0000-4000-8000-000000000006";
+    const FIVE: &str = "aaaaaaaa-0000-4000-8000-000000000005";
+    fn edit(home: &Path) {
+        let root = home.join(".pi/agent/sessions");
+        write_lines(&root.join(format!("--repo-seis--/2026-10-01T10-00-00-000Z_{SIX}.jsonl")), &pi_lines(5, "/repo-seis", SIX), at(T0 + 7));
+        write_lines(&root.join(format!("--repo-cinco--/2026-10-01T10-00-00-000Z_{FIVE}.jsonl")), &pi_lines(4, "/repo-cinco", FIVE), at(T0 + 8));
+    }
+    let pi = |cwd: &str| format!("/api/archive-por-cwd?cwd={cwd}&provider=pi");
+    for mode in [Mode::Index, Mode::NoIndex] {
+        let h = Harness::with(mode, edit).await;
+        assert_eq!(h.get(&pi("/repo-seis")).await, (200, json!([])));
+        let (_, body) = h.get(&pi("/repo-cinco")).await;
+        assert_eq!(sids(&body), ["aaaaaaaa"]);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let h = Harness::with(Mode::NoIndex, edit).await;
+        let path = h.home.join(format!(".pi/agent/sessions/--repo-cinco--/2026-10-01T10-00-00-000Z_{FIVE}.jsonl"));
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let readable = std::fs::File::open(&path).is_ok();
+        let got = h.get(&pi("/repo-cinco")).await;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        if !readable { assert_eq!(got, (200, json!([]))); }
+    }
+}
+
+/// PRV-11: sessão repetida no índice do Kimi: a entrada mais recente (a última) vence.
+#[tokio::test]
+async fn prv11_kimi_repeated_session_takes_the_last_entry() {
+    fn edit(home: &Path) {
+        let sid = "session_ab697d05-66da-4b2a-8e80-3d769951e752";
+        let index = home.join(".kimi-code/session_index.jsonl");
+        let mut text = std::fs::read_to_string(&index).unwrap();
+        text.push_str(&line(&json!({"sessionId": sid, "sessionDir": home.join(".kimi-code/sessions/wd_hangar_5112ff7a84e0").join(sid),
+            "workDir": "/repo-kimi-novo"})));
+        std::fs::write(&index, text).unwrap();
+    }
+    for mode in [Mode::Index, Mode::NoIndex] {
+        let h = Harness::with(mode, edit).await;
+        let (_, body) = h.get("/api/archive-por-cwd?cwd=/repo-kimi-novo&provider=kimi").await;
+        assert_eq!(sids(&body), ["session_"]);
+        assert_eq!(h.get(&format!("/api/archive-por-cwd?cwd={}&provider=kimi", enc(HANGAR_CWD))).await, (200, json!([])));
+    }
+}
+
+/// PRV-13: rollout em `archived_sessions` entra; o mesmo arquivo pelas duas pastas (link) entra uma vez.
+#[cfg(unix)]
+#[tokio::test]
+async fn prv13_archived_rollouts_enter_once() {
+    fn edit(home: &Path) {
+        let moved = home.join(MTIMES[4]);
+        let archived = home.join(".codex-b/archived_sessions").join(moved.file_name().unwrap());
+        std::fs::create_dir_all(archived.parent().unwrap()).unwrap();
+        std::fs::rename(&moved, &archived).unwrap();
+        let original = home.join(MTIMES[0]);
+        let link = home.join(".codex/archived_sessions").join(original.file_name().unwrap());
+        std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&original, link).unwrap();
+    }
+    for mode in [Mode::Index, Mode::NoIndex] {
+        let h = Harness::with(mode, edit).await;
+        let (_, body) = h.get("/api/archive-por-cwd?cwd=/tmp/hangar-native-task4-fixture-jf&provider=codex").await;
+        assert_eq!(sids(&body), ["01a0d000"]);
+        let (_, body) = h.get(&format!("/api/archive-por-cwd?cwd={}&provider=codex", enc(HANGAR_CWD))).await;
+        assert_eq!(sids(&body), ["01a05511"]);
+    }
+}
+
+/// PRV-10 (limitação reproduzida): sessão do omp num perfil (`~/.omp/profiles/<p>/agent`) não entra no
+/// Arquivo; só a raiz sem perfil é lida.
+#[tokio::test]
+async fn prv10_omp_profile_sessions_stay_out() {
+    let h = Harness::with(Mode::NoIndex, |home: &Path| {
+        let from = home.join(MTIMES[2]);
+        let to = home.join(".omp/profiles/x/agent/sessions").join(from.parent().unwrap().file_name().unwrap())
+            .join("2026-10-01T10-00-00-000Z_bbbbbbbb-0000-4000-8000-000000000001.jsonl");
+        std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+        std::fs::copy(&from, &to).unwrap();
+    }).await;
+    let cwd = "/tmp/claude-1000/-home-jefferson-Projetos-hangar/ac1a7b0f-d0a7-4e66-8f05-f53ea5d4b4da/scratchpad/omp-teste";
+    let (_, body) = h.get(&format!("/api/archive-por-cwd?cwd={}&provider=omp", enc(cwd))).await;
+    assert_eq!(sids(&body), ["01a06932"]);
 }
