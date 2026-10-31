@@ -7352,6 +7352,12 @@ impl Hangar {
         cx.notify();
     }
 
+    /// "Mostrar no app" do modal de novidades: o balão aponta a peça por cima do tour.
+    pub(crate) fn show_news(&mut self, note: crate::tour::Note, cx: &mut Context<Self>) {
+        self.tour.show_news(note);
+        cx.notify();
+    }
+
     /// "Ver o tour de novo": zera só o tour, as dicas ficam. Os passos saem da tela de agora.
     pub(super) fn restart_tour(&mut self, cx: &mut Context<Self>) {
         if self.tour.restart() { self.save_tour(); }

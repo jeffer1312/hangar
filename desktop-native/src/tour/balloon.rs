@@ -14,8 +14,8 @@ const EST_HEIGHT: f32 = 200.;
 /// Distância entre a peça e o balão; a seta ocupa ela.
 const GAP: f32 = 14.;
 const MARGIN: f32 = 12.;
-const ARROW_W: f32 = 18.;
-const ARROW_H: f32 = 9.;
+pub(crate) const ARROW_W: f32 = 18.;
+pub(crate) const ARROW_H: f32 = 9.;
 /// Folga do recorte em volta da peça.
 const HOLE_PAD: f32 = 6.;
 /// Ritmo do pulso enquanto espera: o suficiente para o anel respirar, sem desenhar a raiz a cada quadro.
@@ -26,13 +26,13 @@ const PULSE_FOR: Duration = Duration::from_secs(6);
 const CHECK_DRAW: f32 = 0.3;
 
 // Escuro e sólido em qualquer tema, como no mock aprovado: o balão fica sobre a conversa e não pode deixar ler o que
-// passa atrás.
-fn fill_color() -> Hsla { rgb(0x1e1e24).into() }
-fn border_color() -> Hsla { hsla(0., 0., 1., 0.12) }
-fn text_color() -> Hsla { hsla(0., 0., 1., 0.95) }
-fn muted_color() -> Hsla { hsla(0., 0., 1., 0.66) }
+// passa atrás. As partes `pub(crate)` também desenham a animação da novidade do tour (`news::tour`).
+pub(crate) fn fill_color() -> Hsla { rgb(0x1e1e24).into() }
+pub(crate) fn border_color() -> Hsla { hsla(0., 0., 1., 0.12) }
+pub(crate) fn text_color() -> Hsla { hsla(0., 0., 1., 0.95) }
+pub(crate) fn muted_color() -> Hsla { hsla(0., 0., 1., 0.66) }
 fn faint_color() -> Hsla { hsla(0., 0., 1., 0.22) }
-fn green() -> Hsla { rgb(0x34c759).into() }
+pub(crate) fn green() -> Hsla { rgb(0x34c759).into() }
 
 /// Onde o balão fica: à esquerda `left`, abaixo da peça (`top`) ou acima (`bottom`, contado do pé da janela), e a seta a
 /// `arrow_x` da borda esquerda do balão.
@@ -132,7 +132,7 @@ pub fn render(surface: &Surface, target: Bounds<Pixels>, on_choice: OnChoice, wi
 
 /// Escurecido em quatro faixas em volta do recorte (a GPUI não tem máscara) e o anel na borda dele, com uma segunda
 /// volta que cresce e some no pulso.
-fn paint_spotlight(window_bounds: Bounds<Pixels>, target: Bounds<Pixels>, dim: f32, ring: Hsla, wave: Option<f32>, window: &mut Window) {
+pub(crate) fn paint_spotlight(window_bounds: Bounds<Pixels>, target: Bounds<Pixels>, dim: f32, ring: Hsla, wave: Option<f32>, window: &mut Window) {
     let hole = target.dilate(px(HOLE_PAD));
     if dim > 0. {
         let veil = hsla(0., 0., 0., dim);
@@ -150,7 +150,7 @@ fn paint_spotlight(window_bounds: Bounds<Pixels>, target: Bounds<Pixels>, dim: f
 }
 
 /// Triângulo da seta na cor do balão, com a borda dele; a base entra 1 px no balão e cobre a borda ali.
-fn arrow(up: bool) -> Canvas<()> {
+pub(crate) fn arrow(up: bool) -> Canvas<()> {
     canvas(|_, _, _| (), move |b, _, window, _| {
         let (l, r, cx) = (b.left(), b.right(), b.center().x);
         for (color, inset) in [(border_color(), 0.), (fill_color(), 1.4)] {
@@ -172,7 +172,7 @@ fn arrow(up: bool) -> Canvas<()> {
 }
 
 /// Pontos do progresso e "2 de 9" no tour; etiqueta amarela na dica, roxa na novidade.
-fn header(surface: &Surface) -> Div {
+pub(crate) fn header(surface: &Surface) -> Div {
     let row = div().flex().items_center().gap(px(6.));
     match (surface.kind, surface.progress) {
         (Kind::Tour, Some((at, total))) => row
@@ -192,7 +192,7 @@ fn tag(text: String, bg: Hsla, color: Hsla) -> Div {
 }
 
 /// "Esperando você…" com o ponto pulsando.
-fn waiting(wave: Option<f32>) -> Div {
+pub(crate) fn waiting(wave: Option<f32>) -> Div {
     let alpha = wave.map_or(1., |w| 0.35 + 0.65 * w);
     div().flex().items_center().gap(px(8.)).text_size(px(12.)).text_color(muted_color())
         .child(div().size(px(7.)).rounded_full().bg(theme::accent().opacity(alpha)))
@@ -206,7 +206,7 @@ fn footer(kind: Kind, on_choice: OnChoice) -> Div {
             .child(button("tour-skip", tr("tour_skip"), true, Choice::Skip, on_choice)),
         Kind::Tip => row.child(button("tour-tips-off", tr("tour_tips_off"), false, Choice::TipsOff, on_choice.clone()))
             .child(button("tour-tip-ok", tr("tour_tip_ok"), true, Choice::TipOk, on_choice)),
-        Kind::News => row.child(button("tour-news-close", tr("tour_tip_ok"), true, Choice::Close, on_choice)),
+        Kind::News => row.child(button("tour-news-close", tr("tour_news_close"), true, Choice::Close, on_choice)),
     }
 }
 
@@ -224,7 +224,7 @@ fn button(id: &'static str, label: String, primary: bool, choice: Choice, on_cho
 }
 
 /// O check se desenhando num círculo verde e o confete em volta; `progress` vai de 0 a 1 na comemoração.
-fn celebration(progress: f32, still: bool) -> Div {
+pub(crate) fn celebration(progress: f32, still: bool) -> Div {
     let check = if still { 1. } else { (progress / CHECK_DRAW).min(1.) };
     let confetti = (!still).then_some(progress);
     let size = 36.;

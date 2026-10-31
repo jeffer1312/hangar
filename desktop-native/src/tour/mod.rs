@@ -52,6 +52,19 @@ impl TourEvent {
             TourEvent::PermissionCycled => steps::PERMISSION,
         }
     }
+
+    /// A peça do passo: a novidade presa a ela também é aprendida pela ação.
+    fn anchor(self) -> &'static str {
+        match self {
+            TourEvent::SessionCreated => anchors::NEW_SESSION,
+            TourEvent::MenuOpened | TourEvent::GroupClosed | TourEvent::NumberedSession => anchors::SESSION_ROW,
+            TourEvent::AccountMoved => anchors::COMPOSER_ACCOUNT,
+            TourEvent::SearchOpened => anchors::TOPBAR_SEARCH,
+            TourEvent::ContextAdded => anchors::COMPOSER,
+            TourEvent::DictationStarted => anchors::DICTATION_TOGGLE,
+            TourEvent::PermissionCycled => anchors::CTL_MODE,
+        }
+    }
 }
 
 /// Dica ou novidade esperando a vez, com a âncora e os textos já prontos.
@@ -85,7 +98,8 @@ pub struct Tour {
     done_any: bool,
     celebrated: Option<(usize, Instant)>,
     tips: VecDeque<Note>,
-    news: Option<Note>,
+    /// A novidade do "Mostrar no app" e, feita a ação da peça dela, desde quando comemora.
+    news: Option<(Note, Option<Instant>)>,
     /// O primeiro servidor respondeu ou falhou na leitura do visto: antes disso o tour abriria sem saber que outro
     /// aparelho já o mostrou.
     pub server_read: bool,
@@ -125,7 +139,9 @@ impl Tour {
     /// Um balão por vez: a novidade que a pessoa pediu, a comemoração, o passo do tour, e só depois a dica.
     pub fn next_surface(&self, gate: &Gate) -> Option<Surface> {
         if !gate.free() { return None; }
-        if let Some(news) = &self.news { return Some(note(Kind::News, news)); }
+        if let Some((news, done)) = &self.news && done.is_none_or(|at| at.elapsed() < CELEBRATION) {
+            return Some(Surface { celebrating: *done, ..note(Kind::News, news) });
+        }
         if let Some((step, at)) = self.celebrated.filter(|(_, at)| at.elapsed() < CELEBRATION) { return Some(self.step_surface(step, Some(at))); }
         if let Some(step) = self.current { return Some(self.step_surface(step, None)); }
         // Desligadas noutro aparelho depois de entrar na fila: não aparecem.
@@ -145,7 +161,7 @@ impl Tour {
         match choice {
             Choice::Skip | Choice::Later => self.current.map(|index| self.steps[index].id),
             Choice::TipOk | Choice::TipsOff => self.tips.front().map(|tip| tip.id.as_str()),
-            Choice::Close => self.news.as_ref().map(|news| news.id.as_str()),
+            Choice::Close => self.news.as_ref().filter(|(_, done)| done.is_none()).map(|(news, _)| news.id.as_str()),
         }
     }
 
@@ -172,6 +188,8 @@ impl Tour {
 
     /// A ação real aconteceu: avança só se é a do passo na tela. Diz se o visto mudou.
     pub fn tour_event(&mut self, event: TourEvent) -> bool {
+        // A novidade não grava nada: só comemora e sai.
+        if let Some((news, done)) = &mut self.news && done.is_none() && news.anchor == event.anchor() { *done = Some(Instant::now()); }
         match self.current {
             Some(index) if self.steps[index].id == event.step() => self.advance(true),
             _ => false,
@@ -255,7 +273,7 @@ impl Tour {
     }
 
     /// "Mostrar no app" de uma novidade: aparece na hora, por cima do tour.
-    pub fn show_news(&mut self, news: Note) { self.news = Some(news); }
+    pub fn show_news(&mut self, news: Note) { self.news = Some((news, None)); }
 }
 
 fn note(kind: Kind, note: &Note) -> Surface {
@@ -470,5 +488,35 @@ mod tests {
         assert_eq!(tour.next_surface(&FREE).unwrap().kind, Kind::News);
         assert!(!pick(&mut tour, Choice::Close));
         assert_eq!(tour.next_surface(&FREE).unwrap().kind, Kind::Tour);
+    }
+
+    #[test]
+    fn news_learned_by_the_action_on_its_piece_celebrates_and_leaves() {
+        let mut tour = Tour::new(Seen::default());
+        tour.show_news(Note { anchor: anchors::TOPBAR_SEARCH.to_owned(), ..tip("novidade") });
+        assert!(!tour.tour_event(TourEvent::DictationStarted));
+        assert!(tour.next_surface(&FREE).unwrap().celebrating.is_none(), "a ação de outra peça não conta");
+        assert!(!tour.tour_event(TourEvent::SearchOpened), "a novidade não grava nada");
+        let shown = tour.next_surface(&FREE).unwrap();
+        assert_eq!(shown.kind, Kind::News);
+        assert!(shown.celebrating.is_some());
+        assert!(!tour.choose("novidade", Choice::Close), "comemorando, o Fechar já não vale");
+        tour.news = Some((tip("novidade"), Instant::now().checked_sub(CELEBRATION)));
+        assert_eq!(tour.next_surface(&FREE), None, "acabada a comemoração, o balão sai");
+    }
+
+    /// A peça de cada evento é a do passo dele: a novidade presa a ela avança com a mesma ação.
+    #[test]
+    fn every_event_points_at_the_piece_of_its_step() {
+        use steps::{Agent, Planner, Snapshot};
+        let full = Snapshot { sessions: 2, accounts: 2, codex: true, transcription: true, open: Some(Agent::Claude) };
+        let empty = Snapshot { sessions: 0, ..full };
+        let all: Vec<Step> = [full, empty].iter().flat_map(|s| Planner::default().plan(s, &Default::default())).collect();
+        for event in [TourEvent::SessionCreated, TourEvent::MenuOpened, TourEvent::GroupClosed, TourEvent::AccountMoved,
+            TourEvent::SearchOpened, TourEvent::NumberedSession, TourEvent::ContextAdded, TourEvent::DictationStarted,
+            TourEvent::PermissionCycled] {
+            let step = all.iter().find(|step| step.id == event.step()).unwrap_or_else(|| panic!("{event:?} sem passo"));
+            assert_eq!(event.anchor(), step.anchor, "{event:?}");
+        }
     }
 }
