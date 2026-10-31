@@ -849,6 +849,16 @@ fn diary(home: &Path, accounts: &std::collections::BTreeSet<String>) -> (Vec<Val
     (kept, raw)
 }
 
+/// Toda linha da tabela é de um cenário testado; sem isto, linha órfã nunca rodaria.
+#[test]
+fn every_table_row_has_a_scenario() {
+    const MEMORY: [&str; 3] = ["memory_cases", "prep_memory_local_drawer", "prep_every_warning_kind"];
+    let rows: Vec<Value> = serde_json::from_str(cases::CASES).unwrap();
+    let names: std::collections::BTreeSet<&str> = rows.iter().map(|row| row["name"].as_str().unwrap()).collect();
+    let tested: std::collections::BTreeSet<&str> = NAMES.iter().chain(&MEMORY).copied().collect();
+    assert_eq!(names, tested);
+}
+
 // ── comparação ──────────────────────────────────────────────────────────────────────────────
 
 /// O cenário por extenso: `BASE_TREE` mais a diferença dele, e os eventos do diário pela posição.
