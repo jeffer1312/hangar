@@ -12,6 +12,7 @@ mod tags;
 mod push_expo;
 mod artifacts;
 mod session_media;
+mod search_context;
 mod commands;
 mod device_install;
 mod diag_report;

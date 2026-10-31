@@ -52,7 +52,7 @@ static KIMI_ID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\Asession_[0-9a-
 
 /// Como os `ValueError`/`FileNotFoundError` do Python viram resposta na rota.
 #[derive(Debug)]
-enum Miss { Invalid, Absent, Coded(OpenError) }
+pub(crate) enum Miss { Invalid, Absent, Coded(OpenError) }
 
 impl From<Miss> for OpenError {
     fn from(miss: Miss) -> Self {
@@ -101,7 +101,7 @@ fn claude_owner(w: &Where, project: &str, sid: &str) -> Result<Option<String>, M
 }
 
 /// `archive_jsonl` do Claude: sem conta, a primeira que tiver o arquivo.
-fn claude_jsonl(w: &Where, project: &str, sid: &str, config_dir: Option<&str>) -> Result<PathBuf, Miss> {
+pub(crate) fn claude_jsonl(w: &Where, project: &str, sid: &str, config_dir: Option<&str>) -> Result<PathBuf, Miss> {
     if !PROJECT.is_match(project) || !UUID.is_match(sid) { return Err(Miss::Invalid); }
     claude_accounts(w, config_dir).into_iter().map(|(_, base)| base.join(project).join(format!("{sid}.jsonl")))
         .find(|p| p.is_file()).ok_or(Miss::Absent)
