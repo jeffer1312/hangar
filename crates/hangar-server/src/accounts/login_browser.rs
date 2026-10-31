@@ -1,6 +1,6 @@
 //! Onde abrir a autorização do login Claude: destinos de cada máquina e validação do link.
 use super::catalog::AccountError;
-use super::login_view::{Desk, DeskInput};
+use super::login_view::{Desk, DeskInput, DeskWindow};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
@@ -446,7 +446,14 @@ pub struct LoginBrowser {
 
 pub type DeskProbe = Arc<dyn Fn() -> Option<Arc<dyn Desk>> + Send + Sync>;
 
-/// A janela que o login abriu: a primeira que não estava na tela antes dele, e nenhuma outra.
+/// Título da página de autorização, do login dela ou da volta para o CLI. Janela nova com outro título é
+/// da pessoa: o Chrome frio restaura as dela junto, e a do login nunca pode ser confundida com elas.
+fn is_login_window(window: &DeskWindow) -> bool {
+    let title = window.title.to_lowercase();
+    ["claude", "anthropic", "hangar"].iter().any(|name| title.contains(name))
+}
+
+/// A janela que o login abriu: a primeira nova com título de login, e nenhuma outra.
 struct View {
     desk: Arc<dyn Desk>,
     baseline: HashSet<String>,
@@ -462,9 +469,15 @@ fn locked_views(views: &Views) -> std::sync::MutexGuard<'_, HashMap<String, View
 /// Fecha só a janela do login; o resto do Chrome da pessoa continua aberto.
 async fn close_view_in(views: &Views, operation: &str) {
     let Some(view) = locked_views(views).remove(operation) else { return };
-    let Some(id) = view.window else { return };
     let _ = tokio::task::spawn_blocking(move || {
-        if let Some(window) = view.desk.windows().into_iter().flatten().find(|window| window.id == id) {
+        let windows = view.desk.windows().into_iter().flatten();
+        // Quem não abriu a transmissão ainda tem a janela aberta. O título confere de novo: o endereço de
+        // uma janela fechada pode já ser de outra.
+        let found = match &view.window {
+            Some(id) => windows.into_iter().find(|window| &window.id == id),
+            None => windows.into_iter().find(|window| !view.baseline.contains(&window.id) && is_login_window(window)),
+        };
+        if let Some(window) = found.filter(is_login_window) {
             view.desk.close(&window);
         }
     })
@@ -579,7 +592,7 @@ impl LoginBrowser {
             let Some(windows) = desk.windows() else { return None };
             let (window, first) = match &known {
                 Some(id) => (windows.into_iter().find(|window| &window.id == id), false),
-                None => (windows.into_iter().find(|window| !baseline.contains(&window.id)), true),
+                None => (windows.into_iter().find(|window| !baseline.contains(&window.id) && is_login_window(window)), true),
             };
             let Some(mut window) = window else { return Some((None, None, true)) };
             if first {
@@ -629,8 +642,9 @@ impl LoginBrowser {
             }
             let window = desk.windows().into_iter().flatten().find(|window| window.id == id)
                 .ok_or_else(|| refused(409, "erro_login_view_missing", "a janela do login não está aberta"))?;
-            desk.input(&window, &input);
-            Ok(())
+            if desk.input(&window, &input) { Ok(()) } else {
+                Err(refused(409, "erro_login_view_input_failed", "a entrada não chegou à janela do login"))
+            }
         }))
         .await;
         match delivered {
@@ -641,7 +655,8 @@ impl LoginBrowser {
 
     pub async fn activate(&self, operation: &str) -> bool {
         let Some(desk) = locked_views(&self.views).get(operation).map(|view| view.desk.clone()) else { return false };
-        tokio::task::spawn_blocking(move || desk.activate()).await.unwrap_or(false)
+        // Sessão ativa não se reativa: tomaria a conexão de quem está nela.
+        matches!(tokio::time::timeout(VIEW_CAP * 3, tokio::task::spawn_blocking(move || desk.can_input() || desk.activate())).await, Ok(Ok(true)))
     }
 
     pub async fn close_view(&self, operation: &str) {
@@ -994,6 +1009,7 @@ mod tests {
         log: Mutex<Vec<String>>,
         no_input: std::sync::atomic::AtomicBool,
         unreadable: std::sync::atomic::AtomicBool,
+        input_fails: std::sync::atomic::AtomicBool,
     }
     impl Desk for FakeDesk {
         fn windows(&self) -> Option<Vec<crate::accounts::login_view::DeskWindow>> {
@@ -1008,15 +1024,23 @@ mod tests {
         fn can_input(&self) -> bool {
             !self.no_input.load(Ordering::Relaxed)
         }
-        fn input(&self, window: &crate::accounts::login_view::DeskWindow, input: &DeskInput) {
+        fn input(&self, window: &crate::accounts::login_view::DeskWindow, input: &DeskInput) -> bool {
             self.log.lock().unwrap().push(format!("input {} {input:?}", window.id));
+            !self.input_fails.load(Ordering::Relaxed)
+        }
+        fn activate(&self) -> bool {
+            self.log.lock().unwrap().push("activate".to_owned());
+            true
         }
         fn close(&self, window: &crate::accounts::login_view::DeskWindow) {
             self.log.lock().unwrap().push(format!("close {}", window.id));
         }
     }
     fn desk_window(id: &str) -> crate::accounts::login_view::DeskWindow {
-        crate::accounts::login_view::DeskWindow { id: id.into(), title: format!("t-{id}"), x: 0, y: 0, w: 100, h: 50, capture_id: None }
+        crate::accounts::login_view::DeskWindow { id: id.into(), title: format!("Claude {id}"), x: 0, y: 0, w: 100, h: 50, capture_id: None }
+    }
+    fn someone_elses_window(id: &str) -> crate::accounts::login_view::DeskWindow {
+        crate::accounts::login_view::DeskWindow { title: "Nova guia - Google Chrome".into(), ..desk_window(id) }
     }
     fn viewing(desk: Arc<FakeDesk>) -> LoginBrowser {
         let probe = desk.clone();
@@ -1051,15 +1075,70 @@ mod tests {
         assert_eq!(browser.view("op").await["pending"], true, "a janela que já existia não entra");
         desk.windows.lock().unwrap().push(desk_window("new"));
         let frame = browser.view("op").await;
-        assert_eq!(frame["title"], "t-new");
+        assert_eq!(frame["title"], "Claude new");
         assert_eq!(frame["input"], true);
         browser.view("op").await;
         desk.windows.lock().unwrap().push(desk_window("later"));
-        assert_eq!(browser.view("op").await["title"], "t-new", "janela aberta depois não troca o alvo");
+        assert_eq!(browser.view("op").await["title"], "Claude new", "janela aberta depois não troca o alvo");
         assert_eq!(desk.log.lock().unwrap().as_slice(), ["present new"]);
         browser.close_view("op").await;
         assert_eq!(desk.log.lock().unwrap().last().unwrap(), "close new");
         assert_eq!(browser.view("op").await["available"], false);
+    }
+
+    #[tokio::test]
+    async fn a_new_window_of_the_person_is_never_taken_for_the_login() {
+        let desk = Arc::new(FakeDesk::default());
+        let browser = viewing(desk.clone());
+        browser.open(view_request(TargetKind::ChromeProfile)).await.unwrap();
+        desk.windows.lock().unwrap().push(someone_elses_window("restored"));
+        assert_eq!(browser.view("op").await["pending"], true, "janela restaurada pelo Chrome frio não é a do login");
+        desk.windows.lock().unwrap().push(desk_window("login"));
+        assert_eq!(browser.view("op").await["title"], "Claude login");
+        browser.close_view("op").await;
+        assert_eq!(desk.log.lock().unwrap().last().unwrap(), "close login");
+    }
+
+    #[tokio::test]
+    async fn closing_finds_the_login_window_even_if_nobody_watched_it() {
+        let desk = Arc::new(FakeDesk::default());
+        let browser = viewing(desk.clone());
+        browser.open(view_request(TargetKind::ChromeProfile)).await.unwrap();
+        {
+            let mut windows = desk.windows.lock().unwrap();
+            windows.push(someone_elses_window("restored"));
+            windows.push(desk_window("login"));
+        }
+        browser.close_view("op").await;
+        assert_eq!(desk.log.lock().unwrap().as_slice(), ["close login"]);
+    }
+
+    #[tokio::test]
+    async fn a_reused_window_address_is_not_closed() {
+        let desk = Arc::new(FakeDesk::default());
+        let browser = viewing(desk.clone());
+        browser.open(view_request(TargetKind::ChromeProfile)).await.unwrap();
+        desk.windows.lock().unwrap().push(desk_window("same"));
+        browser.view("op").await;
+        *desk.windows.lock().unwrap() = vec![someone_elses_window("same")];
+        browser.close_view("op").await;
+        assert!(!desk.log.lock().unwrap().iter().any(|line| line.starts_with("close")));
+    }
+
+    #[tokio::test]
+    async fn input_that_did_not_arrive_is_an_error_and_a_live_session_is_not_taken_over() {
+        let desk = Arc::new(FakeDesk::default());
+        let browser = viewing(desk.clone());
+        browser.open(view_request(TargetKind::ChromeProfile)).await.unwrap();
+        desk.windows.lock().unwrap().push(desk_window("login"));
+        browser.view("op").await;
+        desk.input_fails.store(true, Ordering::Relaxed);
+        assert_eq!(browser.input("op", DeskInput::Back).await.unwrap_err().code, "erro_login_view_input_failed");
+        assert!(browser.activate("op").await);
+        assert!(!desk.log.lock().unwrap().iter().any(|line| line == "activate"), "sessão ativa não usa tscon");
+        desk.no_input.store(true, Ordering::Relaxed);
+        assert!(browser.activate("op").await);
+        assert!(desk.log.lock().unwrap().iter().any(|line| line == "activate"));
     }
 
     #[tokio::test]

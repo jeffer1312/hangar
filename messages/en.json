@@ -6344,6 +6344,7 @@
   "native_accounts_login_view_unavailable": "That machine cannot stream the window.",
   "native_accounts_login_view_closed": "The sign-in window was closed.",
   "native_accounts_login_view_capture": "Could not capture the window.",
+  "native_accounts_login_view_input_failed": "The click or typing did not reach the login window. Try again.",
   "native_accounts_login_view_lost": "The machine stopped answering; trying again.",
   "native_accounts_login_view_no_input": "The session on {machine} is disconnected. Reactivating leaves the desktop open on its screen.",
   "native_accounts_login_view_activate": "Reactivate the session",

@@ -64,6 +64,7 @@ struct LoginView {
     can_input: bool,
     notice: Option<&'static str>,
     bounds: Rc<Cell<Bounds<Pixels>>>,
+    notice_until: Option<std::time::Instant>,
     input: tokio::sync::mpsc::UnboundedSender<Value>,
     frames: JoinHandle<()>,
     sender: JoinHandle<()>,
@@ -83,6 +84,7 @@ pub(in crate::app) enum ViewReply {
     Lost,
     /// A lista de janelas não veio neste quadro: a imagem anterior continua valendo.
     Retry,
+    InputFailed,
 }
 
 const VIEW_EVERY: Duration = Duration::from_millis(350);
@@ -422,7 +424,7 @@ impl Hangar {
     /// Só enquanto a tela está aberta: cada quadro passa por duas máquinas.
     fn open_login_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(api) = self.api.clone() else { return };
-        let frames_done = self.accounts_send_later();
+        let (frames_done, input_done) = (self.accounts_send_later(), self.accounts_send_later());
         let runtime = self.runtime.clone();
         let Some(s) = self.accounts.sign_in.as_mut() else { return };
         let (attempt, label) = (s.attempt, s.label.clone());
@@ -441,14 +443,14 @@ impl Hangar {
         // Fila única: clique e tecla têm que chegar na ordem em que foram feitos.
         let sender = runtime.spawn(async move {
             while let Some(event) = queue.recv().await {
-                // O estado da sessão vem no quadro seguinte: uma entrada recusada não diz o motivo sozinha.
                 if let Err(error) = api.server_send(reqwest::Method::POST, &["conta-estado", &label, "login", "view", "input"], Some(event), 10).await {
                     eprintln!("[contas] entrada na janela do login recusada: {:?}", error.status);
+                    input_done(AccountsReply::Action(ActionReply::View(attempt, ViewReply::InputFailed))).await;
                 }
             }
         });
         s.view = Some(LoginView { frame: None, size: (1., 1.), title: String::new(), can_input: true, notice: None, bounds: Rc::default(),
-            input, frames, sender });
+            notice_until: None, input, frames, sender });
         s.view_focus.focus(window, cx);
         cx.notify();
     }
@@ -637,11 +639,17 @@ impl Hangar {
                 match reply {
                     ViewReply::Frame { image, size, title, can_input } => {
                         if let Some(old) = view.frame.replace(image) { cx.drop_image(old, None); }
-                        (view.size, view.title, view.can_input, view.notice) = (size, title, can_input, None);
+                        (view.size, view.title, view.can_input) = (size, title, can_input);
+                        // O aviso de entrada perdida dura o bastante para ser lido: quadro chega a cada instante.
+                        if view.notice_until.is_none_or(|until| until <= std::time::Instant::now()) { view.notice = None; }
                     }
                     ViewReply::Notice(notice) => view.notice = Some(notice),
                     ViewReply::Lost => view.notice = Some("accounts_login_view_lost"),
                     ViewReply::Retry => {}
+                    ViewReply::InputFailed => {
+                        view.notice = Some("accounts_login_view_input_failed");
+                        view.notice_until = Some(std::time::Instant::now() + Duration::from_secs(4));
+                    }
                 }
             }
             ActionReply::Started(attempt, result, owner) => {

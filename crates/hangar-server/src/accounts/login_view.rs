@@ -55,7 +55,8 @@ pub trait Desk: Send + Sync {
     fn capture(&self, window: &DeskWindow) -> Option<Vec<u8>>;
     /// Falso quando o sistema não entrega entrada: sessão desconectada do Windows.
     fn can_input(&self) -> bool;
-    fn input(&self, window: &DeskWindow, input: &DeskInput);
+    /// Falso quando a entrada não chegou: sem foco, nunca vai para a janela que está na frente.
+    fn input(&self, window: &DeskWindow, input: &DeskInput) -> bool;
     fn close(&self, window: &DeskWindow);
     /// Reativa a sessão desconectada. Deixa o desktop aberto na tela física, por isso só a pedido.
     fn activate(&self) -> bool {
@@ -168,6 +169,13 @@ mod hyprland {
                 .and_then(|out| serde_json::from_slice::<Active>(&out.stdout).ok())
                 .is_some_and(|active| active.address == window.id)
         }
+
+        fn ensure_focus(&self, window: &DeskWindow) -> bool {
+            if self.focused(window) { return true; }
+            self.focus(window);
+            std::thread::sleep(FOCUS_SETTLE);
+            self.focused(window)
+        }
     }
 
     impl Desk for HyprDesk {
@@ -199,28 +207,25 @@ mod hyprland {
             true
         }
 
-        fn input(&self, window: &DeskWindow, input: &DeskInput) {
+        fn input(&self, window: &DeskWindow, input: &DeskInput) -> bool {
             let pointer = |x: f64, y: f64| {
                 let (x, y) = window_point(window, x, y);
                 self.run("hyprctl", &["dispatch", "movecursor", &x.to_string(), &y.to_string()]);
             };
             match input {
                 DeskInput::Click { x, y } => {
-                    if !self.focused(window) {
-                        self.focus(window);
-                        std::thread::sleep(FOCUS_SETTLE);
-                    }
+                    if !self.ensure_focus(window) { return false; }
                     // O clique é na tela: só agora a janela precisa estar na frente.
                     self.run("hyprctl", &["dispatch", "alterzorder", &format!("top,address:{}", window.id)]);
                     pointer(*x, *y);
-                    self.run("ydotool", &["click", "0xC0"]);
+                    self.run("ydotool", &["click", "0xC0"]).is_some()
                 }
                 DeskInput::Wheel { x, y, down } => {
                     pointer(*x, *y);
-                    self.run("ydotool", &["mousemove", "--wheel", "-x", "0", "-y", if *down { "-1" } else { "1" }]);
+                    self.run("ydotool", &["mousemove", "--wheel", "-x", "0", "-y", if *down { "-1" } else { "1" }]).is_some()
                 }
                 DeskInput::Key { key } => {
-                    self.focus(window);
+                    if !self.ensure_focus(window) { return false; }
                     let name = match key {
                         DeskKey::Enter => "Return",
                         DeskKey::Tab => "Tab",
@@ -234,16 +239,10 @@ mod hyprland {
                         DeskKey::Home => "Home",
                         DeskKey::End => "End",
                     };
-                    self.run("wtype", &["-k", name]);
+                    self.run("wtype", &["-k", name]).is_some()
                 }
-                DeskInput::Text { text } => {
-                    self.focus(window);
-                    self.run("wtype", &["--", text]);
-                }
-                DeskInput::Back => {
-                    self.focus(window);
-                    self.run("wtype", &["-M", "alt", "-k", "Left", "-m", "alt"]);
-                }
+                DeskInput::Text { text } => self.ensure_focus(window) && self.run("wtype", &["--", text]).is_some(),
+                DeskInput::Back => self.ensure_focus(window) && self.run("wtype", &["-M", "alt", "-k", "Left", "-m", "alt"]).is_some(),
             }
         }
 
@@ -277,8 +276,8 @@ mod windows_desk {
                 VK_END, VK_ESCAPE, VK_HOME, VK_LEFT, VK_MENU, VK_RETURN, VK_RIGHT, VK_TAB, VK_UP, mouse_event,
             },
             WindowsAndMessaging::{
-                EnumWindows, GetClassNameW, GetForegroundWindow, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
-                PostMessageW, SetCursorPos, SetForegroundWindow, WM_CLOSE,
+                EnumWindows, GetClassNameW, GetForegroundWindow, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
+                PostMessageW, SW_RESTORE, SetCursorPos, SetForegroundWindow, ShowWindow, WM_CLOSE,
             },
         },
     };
@@ -358,9 +357,9 @@ mod windows_desk {
         }
     }
 
-    fn send(inputs: &[INPUT]) {
+    fn send(inputs: &[INPUT]) -> bool {
         // SAFETY: a lista vive durante a chamada, e o tamanho é o do tipo passado.
-        unsafe { SendInput(inputs.len() as u32, inputs.as_ptr(), size_of::<INPUT>() as i32) };
+        unsafe { SendInput(inputs.len() as u32, inputs.as_ptr(), size_of::<INPUT>() as i32) as usize == inputs.len() }
     }
 
     fn mouse(flags: MOUSE_EVENT_FLAGS, data: i32) {
@@ -446,34 +445,39 @@ mod windows_desk {
             }
         }
 
-        fn input(&self, window: &DeskWindow, input: &DeskInput) {
+        fn input(&self, window: &DeskWindow, input: &DeskInput) -> bool {
             aware();
             let pointer = |x: f64, y: f64| {
                 let (x, y) = window_point(window, x, y);
                 // SAFETY: sem ponteiro.
                 unsafe { SetCursorPos(x, y) };
             };
+            // O Windows pode recusar o primeiro plano: aí nada é enviado, ou iria para o app da frente.
             let front = || {
-                // SAFETY: handle morto só faz a chamada falhar.
-                unsafe { SetForegroundWindow(handle(window)) };
+                // SAFETY: sem ponteiro; handle morto só faz a chamada falhar.
+                unsafe {
+                    if GetForegroundWindow() == handle(window) { return true; }
+                    if IsIconic(handle(window)) != 0 { ShowWindow(handle(window), SW_RESTORE); }
+                    SetForegroundWindow(handle(window));
+                    std::thread::sleep(FOCUS_SETTLE);
+                    GetForegroundWindow() == handle(window)
+                }
             };
             match input {
                 DeskInput::Click { x, y } => {
-                    // SAFETY: sem ponteiro.
-                    if unsafe { GetForegroundWindow() } != handle(window) {
-                        front();
-                        std::thread::sleep(FOCUS_SETTLE);
-                    }
+                    if !front() { return false; }
                     pointer(*x, *y);
                     mouse(MOUSEEVENTF_LEFTDOWN, 0);
                     mouse(MOUSEEVENTF_LEFTUP, 0);
+                    true
                 }
                 DeskInput::Wheel { x, y, down } => {
                     pointer(*x, *y);
                     mouse(MOUSEEVENTF_WHEEL, if *down { -120 } else { 120 });
+                    true
                 }
                 DeskInput::Key { key } => {
-                    front();
+                    if !front() { return false; }
                     let vk = match key {
                         DeskKey::Enter => VK_RETURN,
                         DeskKey::Tab => VK_TAB,
@@ -487,26 +491,26 @@ mod windows_desk {
                         DeskKey::Home => VK_HOME,
                         DeskKey::End => VK_END,
                     };
-                    send(&[keyboard(vk, 0, 0), keyboard(vk, 0, KEYEVENTF_KEYUP)]);
+                    send(&[keyboard(vk, 0, 0), keyboard(vk, 0, KEYEVENTF_KEYUP)])
                 }
                 DeskInput::Text { text } => {
-                    front();
+                    if !front() { return false; }
                     let inputs: Vec<INPUT> = text
                         .encode_utf16()
                         .flat_map(|unit| {
                             [keyboard(0, unit, KEYEVENTF_UNICODE), keyboard(0, unit, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP)]
                         })
                         .collect();
-                    send(&inputs);
+                    send(&inputs)
                 }
                 DeskInput::Back => {
-                    front();
+                    if !front() { return false; }
                     send(&[
                         keyboard(VK_MENU, 0, 0),
                         keyboard(VK_LEFT, 0, 0),
                         keyboard(VK_LEFT, 0, KEYEVENTF_KEYUP),
                         keyboard(VK_MENU, 0, KEYEVENTF_KEYUP),
-                    ]);
+                    ])
                 }
             }
         }

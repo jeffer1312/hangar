@@ -6344,6 +6344,7 @@
   "native_accounts_login_view_unavailable": "Essa máquina não consegue transmitir a janela.",
   "native_accounts_login_view_closed": "A janela do login foi fechada.",
   "native_accounts_login_view_capture": "Não consegui capturar a janela.",
+  "native_accounts_login_view_input_failed": "O clique ou a digitação não chegou à janela do login. Tente de novo.",
   "native_accounts_login_view_lost": "A máquina parou de responder; tentando de novo.",
   "native_accounts_login_view_no_input": "A sessão de {machine} está desconectada. Reativar deixa a área de trabalho aberta na tela dela.",
   "native_accounts_login_view_activate": "Reativar a sessão",
