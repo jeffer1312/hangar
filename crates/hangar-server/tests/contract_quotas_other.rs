@@ -201,14 +201,6 @@ fn sources_load_each_case() {
                 }).collect::<Vec<_>>(),
                 "aliases": config.aliases,
             });
-        // O motor que não é objeto sai sozinho; os outros continuam fontes.
-        if name == "motor_nao_objeto_derruba" {
-            let ids: Vec<&Value> = got["sources"].as_array().into_iter().flatten().map(|s| &s["id"]).collect();
-            if ids != [&json!("chave:a")] {
-                failures.push(format!("{name}: esperava só chave:a, rust {got}"));
-            }
-            continue;
-        }
         let want = &case["expected"];
         if got.to_string() != want.to_string() {
             failures.push(format!("{name}:\n  esperado {want}\n  rust   {got}"));

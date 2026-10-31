@@ -188,13 +188,7 @@ async fn credentials_answer_each_case() {
         if connect != (status, kind.clone(), body.clone()) {
             failures.push(format!("{name}: a ponte do Connect respondeu diferente do dono: {connect:?}"));
         }
-        let Some(expected) = &case.expected else {
-            let ids: Vec<&Value> = body.as_array().into_iter().flatten().map(|row| &row["id"]).collect();
-            if status != 200 || ids != [&json!(format!("claude:{HOME}/.claude"))] {
-                failures.push(format!("{name}: esperava 200 só com a conta Claude, rust {status} {body}"));
-            }
-            continue;
-        };
+        let expected = &case.expected;
         if status != expected.status {
             failures.push(format!("{name}: status {status} != {}: {body}", expected.status));
             continue;

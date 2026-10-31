@@ -24,8 +24,7 @@ pub struct Case {
     pub files: &'static [(&'static str, &'static str)],
     pub files_hex: &'static [(&'static str, &'static str)],
     pub quotas: Option<&'static str>,
-    /// `None`: a parte com problema sai sozinha e só a conta Claude fica na lista.
-    pub expected: Option<Expected>,
+    pub expected: Expected,
 }
 
 pub const CASES: &[Case] = &[
@@ -82,7 +81,7 @@ base_url = "https://api.kimi.com"
 {"estado":"indisponivel","janelas":[],"ts":null,"motivo":"http-404","reset_credits":null,"id":"codex:⟦HOME⟧/.codex-off","label":"off","provedor":"codex","ativa":false,"idade_s":null,"refresh_expires_at":null},
 {"estado":"indisponivel","janelas":[],"ts":null,"motivo":"http-404","reset_credits":null,"id":"chave:oc2","label":"oc2","provedor":"kimi","ativa":false,"idade_s":null,"refresh_expires_at":null}
 ]"#),
-        expected: Some(Expected { status: 200, content_type: Some("application/json"), body: r#"[
+        expected: Expected { status: 200, content_type: Some("application/json"), body: r#"[
 {"id":"claude:⟦HOME⟧/.claude","tipo":"claude","auth_method":"oauth","codex_account":null,"codex_sync":null,"nome":"default","nome_natural":"default","apelido":null,"ativa":true,"path":"⟦HOME⟧/.claude","login":{"estado":"ok","loggedIn":true,"email":"a@b","plano":"max","motivo":null,"refreshExpiresAt":null},"base_url":null,"chave_mascarada":null,"usos":[],"cota":{"estado":"lida","janelas":[{"rotulo":"5h","pct":13.0,"reset_ts":1800000000.0,"por_modelo":false},{"rotulo":"Fable","pct":2.5,"reset_ts":null,"por_modelo":true}],"ts":null,"idade_s":null,"motivo":null,"label":"default","reset_credits":null},"aceita_cookie":false,"cookie_definido":false,"gerenciada":true},
 {"id":"claude:⟦HOME⟧/.claude-semcli","tipo":"claude","auth_method":"oauth","codex_account":null,"codex_sync":null,"nome":"semcli","nome_natural":"semcli","apelido":null,"ativa":false,"path":"⟦HOME⟧/.claude-semcli","login":{"estado":"indisponivel","loggedIn":null,"email":null,"plano":null,"motivo":"cli-indisponivel","refreshExpiresAt":null},"base_url":null,"chave_mascarada":null,"usos":[],"cota":{"estado":"indisponivel","janelas":[],"ts":null,"idade_s":null,"motivo":"http-404","label":"semcli","reset_credits":null},"aceita_cookie":false,"cookie_definido":false,"gerenciada":true},
 {"id":"claude:⟦HOME⟧/.claude-work","tipo":"claude","auth_method":"oauth","codex_account":null,"codex_sync":null,"nome":"Firma","nome_natural":"Firma","apelido":"Firma","ativa":false,"path":"⟦HOME⟧/.claude-work","login":{"estado":"ok","loggedIn":false,"email":null,"plano":null,"motivo":null,"refreshExpiresAt":null},"base_url":null,"chave_mascarada":null,"usos":[],"cota":{"estado":"indisponivel","janelas":[],"ts":null,"idade_s":null,"motivo":"http-404","label":"Firma","reset_credits":null},"aceita_cookie":false,"cookie_definido":false,"gerenciada":true},
@@ -98,7 +97,7 @@ base_url = "https://api.kimi.com"
 {"id":"codex:⟦HOME⟧/.codex-work","tipo":"codex","auth_method":"api_key","codex_account":"work","codex_sync":"idle","nome":"Trabalho","nome_natural":"work","apelido":"Trabalho","ativa":false,"path":"⟦HOME⟧/.codex-work","login":{"estado":"ok","loggedIn":true,"email":null,"plano":null,"motivo":null,"refreshExpiresAt":null},"base_url":null,"chave_mascarada":null,"usos":["codex_cli"],"cota":{"estado":"indisponivel","janelas":[],"ts":null,"idade_s":null,"motivo":"http-404","label":"Trabalho","reset_credits":null},"aceita_cookie":false,"cookie_definido":false,"gerenciada":true},
 {"id":"kimi:apikey","tipo":"chave","auth_method":"api_key","codex_account":null,"codex_sync":null,"nome":"apikey","nome_natural":"apikey","apelido":null,"ativa":false,"path":null,"login":null,"base_url":null,"chave_mascarada":null,"usos":["kimi_cli"],"cota":{"estado":"indisponivel","janelas":[],"ts":null,"idade_s":null,"motivo":"formato-desconhecido","label":"apikey","reset_credits":null},"aceita_cookie":false,"cookie_definido":false,"gerenciada":false},
 {"id":"kimi:gen","tipo":"chave","auth_method":"api_key","codex_account":null,"codex_sync":null,"nome":"Gerado","nome_natural":"Gerado","apelido":"Gerado","ativa":false,"path":null,"login":null,"base_url":null,"chave_mascarada":null,"usos":["kimi_cli"],"cota":{"estado":"lida","janelas":[{"rotulo":"5h","pct":13.0,"reset_ts":1800000000.0,"por_modelo":false},{"rotulo":"Fable","pct":2.5,"reset_ts":null,"por_modelo":true}],"ts":null,"idade_s":null,"motivo":null,"label":"Gerado","reset_credits":null},"aceita_cookie":false,"cookie_definido":false,"gerenciada":true}
-]"# }),
+]"# },
     },
     Case {
         name: "forcar_rele_cota",
@@ -109,9 +108,9 @@ base_url = "https://api.kimi.com"
         ],
         files_hex: &[],
         quotas: Some(r"[]"),
-        expected: Some(Expected { status: 200, content_type: Some("application/json"), body: r#"[
+        expected: Expected { status: 200, content_type: Some("application/json"), body: r#"[
 {"id":"claude:⟦HOME⟧/.claude","tipo":"claude","auth_method":"oauth","codex_account":null,"codex_sync":null,"nome":"default","nome_natural":"default","apelido":null,"ativa":true,"path":"⟦HOME⟧/.claude","login":{"estado":"ok","loggedIn":false,"email":null,"plano":null,"motivo":null,"refreshExpiresAt":null},"base_url":null,"chave_mascarada":null,"usos":[],"cota":{"estado":"sem_credencial","janelas":[],"ts":null,"idade_s":null,"motivo":"credencial-ilegivel","label":"default","reset_credits":null},"aceita_cookie":false,"cookie_definido":false,"gerenciada":true}
-]"# }),
+]"# },
     },
     Case {
         name: "codex_estoura_prazo",
@@ -124,10 +123,10 @@ base_url = "https://api.kimi.com"
         ],
         files_hex: &[],
         quotas: Some(QUOTAS_1),
-        expected: Some(Expected { status: 200, content_type: Some("application/json"), body: r#"[
+        expected: Expected { status: 200, content_type: Some("application/json"), body: r#"[
 {"id":"claude:⟦HOME⟧/.claude","tipo":"claude","auth_method":"oauth","codex_account":null,"codex_sync":null,"nome":"default","nome_natural":"default","apelido":null,"ativa":true,"path":"⟦HOME⟧/.claude","login":{"estado":"ok","loggedIn":true,"email":null,"plano":null,"motivo":null,"refreshExpiresAt":null},"base_url":null,"chave_mascarada":null,"usos":[],"cota":{"estado":"indisponivel","janelas":[],"ts":null,"idade_s":null,"motivo":"http-404","label":"default","reset_credits":null},"aceita_cookie":false,"cookie_definido":false,"gerenciada":true},
 {"id":"codex:⟦HOME⟧/.codex","tipo":"codex","auth_method":"unknown","codex_account":"default","codex_sync":null,"nome":"default","nome_natural":"default","apelido":null,"ativa":true,"path":"⟦HOME⟧/.codex","login":{"estado":"indisponivel","loggedIn":null,"email":null,"plano":null,"motivo":"prazo","refreshExpiresAt":null},"base_url":null,"chave_mascarada":null,"usos":["codex_cli"],"cota":{"estado":"indisponivel","janelas":[],"ts":null,"idade_s":null,"motivo":"http-404","label":"Codex","reset_credits":null},"aceita_cookie":false,"cookie_definido":false,"gerenciada":true}
-]"# }),
+]"# },
     },
     Case {
         name: "codex_sem_cli",
@@ -139,10 +138,10 @@ base_url = "https://api.kimi.com"
         ],
         files_hex: &[],
         quotas: Some(QUOTAS_1),
-        expected: Some(Expected { status: 200, content_type: Some("application/json"), body: r#"[
+        expected: Expected { status: 200, content_type: Some("application/json"), body: r#"[
 {"id":"claude:⟦HOME⟧/.claude","tipo":"claude","auth_method":"oauth","codex_account":null,"codex_sync":null,"nome":"default","nome_natural":"default","apelido":null,"ativa":true,"path":"⟦HOME⟧/.claude","login":{"estado":"ok","loggedIn":true,"email":null,"plano":null,"motivo":null,"refreshExpiresAt":null},"base_url":null,"chave_mascarada":null,"usos":[],"cota":{"estado":"indisponivel","janelas":[],"ts":null,"idade_s":null,"motivo":"http-404","label":"default","reset_credits":null},"aceita_cookie":false,"cookie_definido":false,"gerenciada":true},
 {"id":"codex:⟦HOME⟧/.codex","tipo":"codex","auth_method":"unknown","codex_account":"default","codex_sync":null,"nome":"default","nome_natural":"default","apelido":null,"ativa":true,"path":"⟦HOME⟧/.codex","login":{"estado":"indisponivel","loggedIn":null,"email":null,"plano":null,"motivo":"cli-ausente","refreshExpiresAt":null},"base_url":null,"chave_mascarada":null,"usos":["codex_cli"],"cota":{"estado":"indisponivel","janelas":[],"ts":null,"idade_s":null,"motivo":"http-404","label":"Codex","reset_credits":null},"aceita_cookie":false,"cookie_definido":false,"gerenciada":true}
-]"# }),
+]"# },
     },
     Case {
         name: "engines_fora_do_utf8",
@@ -153,8 +152,8 @@ base_url = "https://api.kimi.com"
             (".claude/engines.json", ""),
         ],
         files_hex: &[(".claude/engines.json", "7b2261223aff7d")],
-        quotas: None,
-        expected: None,
+        quotas: Some(QUOTAS_2),
+        expected: Expected { status: 200, content_type: Some("application/json"), body: BODY_1 },
     },
     Case {
         name: "motor_nao_objeto",
@@ -165,8 +164,8 @@ base_url = "https://api.kimi.com"
             (".claude/engines.json", r#"{"a": "texto"}"#),
         ],
         files_hex: &[],
-        quotas: None,
-        expected: None,
+        quotas: Some(QUOTAS_2),
+        expected: Expected { status: 200, content_type: Some("application/json"), body: BODY_1 },
     },
     Case {
         name: "motor_label_numero",
@@ -181,7 +180,7 @@ base_url = "https://api.kimi.com"
 {"estado":"indisponivel","janelas":[],"ts":null,"motivo":"http-404","reset_credits":null,"id":"claude:⟦HOME⟧/.claude","label":"default","provedor":"claude","ativa":true,"idade_s":null,"refresh_expires_at":null},
 {"estado":"indisponivel","janelas":[],"ts":null,"motivo":"http-404","reset_credits":null,"id":"chave:a","label":5,"provedor":"kimi","ativa":false,"idade_s":null,"refresh_expires_at":null}
 ]"#),
-        expected: None,
+        expected: Expected { status: 200, content_type: Some("application/json"), body: BODY_1 },
     },
     Case {
         name: "motor_base_url_lista",
@@ -193,7 +192,7 @@ base_url = "https://api.kimi.com"
         ],
         files_hex: &[],
         quotas: Some(QUOTAS_2),
-        expected: None,
+        expected: Expected { status: 200, content_type: Some("application/json"), body: BODY_1 },
     },
     Case {
         name: "engines_quebrado",
@@ -205,7 +204,7 @@ base_url = "https://api.kimi.com"
         ],
         files_hex: &[],
         quotas: Some(QUOTAS_2),
-        expected: Some(Expected { status: 200, content_type: Some("application/json"), body: BODY_1 }),
+        expected: Expected { status: 200, content_type: Some("application/json"), body: BODY_1 },
     },
     Case {
         name: "engines_com_bom",
@@ -217,7 +216,7 @@ base_url = "https://api.kimi.com"
         ],
         files_hex: &[],
         quotas: Some(QUOTAS_2),
-        expected: Some(Expected { status: 200, content_type: Some("application/json"), body: BODY_1 }),
+        expected: Expected { status: 200, content_type: Some("application/json"), body: BODY_1 },
     },
     Case {
         name: "vazio",
@@ -229,7 +228,7 @@ base_url = "https://api.kimi.com"
         ],
         files_hex: &[],
         quotas: Some(QUOTAS_2),
-        expected: Some(Expected { status: 200, content_type: Some("application/json"), body: BODY_1 }),
+        expected: Expected { status: 200, content_type: Some("application/json"), body: BODY_1 },
     },
     Case {
         name: "query_invalida",
@@ -241,6 +240,6 @@ base_url = "https://api.kimi.com"
         ],
         files_hex: &[],
         quotas: Some(QUOTAS_2),
-        expected: Some(Expected { status: 422, content_type: Some("application/json"), body: r#"{"detail":[{"type":"bool_parsing","loc":["query","forcar"],"msg":"Input should be a valid boolean, unable to interpret input","input":"talvez"}]}"# }),
+        expected: Expected { status: 422, content_type: Some("application/json"), body: r#"{"detail":[{"type":"bool_parsing","loc":["query","forcar"],"msg":"Input should be a valid boolean, unable to interpret input","input":"talvez"}]}"# },
     },
 ];
