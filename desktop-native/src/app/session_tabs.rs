@@ -632,7 +632,7 @@ impl Hangar {
             }))
             .on_mouse_down(MouseButton::Right, cx.listener(move |this, _, _, cx| this.start_menu(menu_target.clone(), cx)))
             .when(!self.invite_target(mother) && !session.read_only(), |el| {
-                self.group_row(el, session, remote.then_some(mother.server.as_str()), 6., cx).ml(px(0.))
+                self.group_row(el, session, remote.then_some(mother.server.as_str()), 6., false, cx).ml(px(0.))
             })
             .children(window_tabs);
         // As filhas montadas na borda de baixo, a partir do canto esquerdo, e a máquina na de cima. Fora da aba e depois
@@ -695,7 +695,7 @@ impl Hangar {
             }))
             .on_mouse_down(MouseButton::Right, cx.listener(move |this, _, _, cx| this.start_menu(menu_target.clone(), cx)))
             .when(!self.invite_target(target) && !session.read_only(), |el| {
-                self.group_row(el, session, remote.then_some(target.server.as_str()), 6., cx).ml(px(0.))
+                self.group_row(el, session, remote.then_some(target.server.as_str()), 6., false, cx).ml(px(0.))
             });
         let tab = popup::anchor(tab, crate::tour::anchors::session_row(&target.server, &target.name))
             .context_menu(sidebar::session_menu(weak, target.server.clone(), session.clone()));
