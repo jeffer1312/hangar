@@ -39,6 +39,16 @@ def test_statusline_sh():
     assert r.returncode == 0, r.stdout + r.stderr
 
 
+def test_install_links_follow_the_package():
+    # Os instaladores rodados da versão do pacote ou do checkout de antes da migração gravam os links
+    # no `current`; o link que ficou no checkout fez o servidor chamar um lançador de outra versão.
+    if os.name != "posix":
+        pytest.skip("script com shebang: o Windows nao executa .sh direto")
+    r = subprocess.run(["bash", str(REPO / "scripts" / "test-install-hangar-send.sh")],
+                        cwd=REPO, capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
 def test_tmux_wrapper_updates_kimi_environment():
     installer = (REPO / "scripts" / "install-claude-wrapper.sh").read_text()
     assert 'set -ga update-environment "KIMI_API_KEY_2"' in installer

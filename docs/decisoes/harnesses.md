@@ -331,8 +331,12 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 - **O primeiro preparo do Codex termina antes da abertura**, com e sem terminal. A conta pronta
   fica registrada e é reutilizada; relógio, nova abertura e mudança na fonte não mandam reinstalar
   recursos. Atualizações posteriores entram pela sincronização manual. A confiança do novo `cwd`
-  continua separada do preparo da conta. Falha ou prazo vencido recusam a abertura antes de criar a
-  sessão; o trabalho de preparo continua e pode ser consultado. O runtime do ECC é conferido antes
+  continua separada do preparo da conta. Falha (`error`) ou prazo vencido recusam a abertura antes
+  de criar a sessão; o trabalho de preparo continua e pode ser consultado. Preparo parcial
+  (`partial`, um recurso que não sincronizou) abre a sessão: o servidor devolve as pendências em
+  `avisos` e o `hangar-codex-tui` as escreve no pane. O parcial fica registrado e é reaproveitado
+  por 5 minutos; a primeira abertura depois disso prepara de novo e, sem pendência, a conta passa
+  a pronta. Ver [a entrada](#preparo-parcial-abre-a-sessão-31102026). O runtime do ECC é conferido antes
   de registrar a conta pronta, com dependências de produção sem scripts de instalação ou links de
   binários. O passo de máquina `2026-10-29-codex-preparo-unico` repara as instalações anteriores uma
   vez, preservando hooks pessoais e comandos próprios que já funcionam.
@@ -1658,6 +1662,19 @@ Sem a ponte, cada um mantinha uma fazenda de symlinks à mão apontando pro
   does not exist", e o backend as recriava no restart seguinte: 67 criados, todo dia). Hoje esse
   script cuida da persona do Pi/Kimi e dos pacotes do Pi, e chama a ponte no fim. Ele não escreve
   mais no Codex: nem hooks, nem persona, nem symlinks de skills.
+
+## Preparo parcial abre a sessão (31/10/2026)
+
+Motivo: um único plugin cujo marketplace sumiu da configuração do Codex deixava o preparo
+`partial` e recusava qualquer sessão Codex. O parcial passou a abrir, com as pendências no aviso.
+Refazer o preparo a cada abertura custava o preparo inteiro (só os plugins, minutos medidos, contra
+um prazo de 60 s), duas vezes na sessão sem terminal (`server.rs` e o `prepare_codex` da subida do
+motor). Registrar o parcial para sempre impedia a cura: o preparo começa pela integração Claude →
+Codex padrão, que pode recolocar o marketplace, e o `reparar_conta` só roda com a conta pronta. O
+meio-termo é o mesmo intervalo de 300 s da integração nativa (`_RETENTATIVA`): a marca
+`.hangar-prepared-v1` guarda `status: partial`, aberturas dentro do intervalo a reaproveitam, e o
+lançador sem servidor abre a conta parcial com o aviso. O lançador sempre pede o preparo (`POST`)
+quando o GET diz `partial`, e quem decide entre reaproveitar e tentar de novo é o servidor.
 
 ## Integração nativa do Codex
 

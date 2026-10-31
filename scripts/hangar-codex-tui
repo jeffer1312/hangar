@@ -75,6 +75,10 @@ def _aguardar_preparo(result: dict, consultar) -> dict:
                 code = issue.get("code") if isinstance(issue,dict) else None
                 if isinstance(code,str) and re.fullmatch(r"[a-z0-9_]+",code):
                     print(f"hangar-codex-tui: pendência do preparo: {code}",file=sys.stderr)
+            # Parcial = um recurso não sincronizou (plugin fora do marketplace, por exemplo): abre e avisa.
+            if state == "partial":
+                print("hangar-codex-tui: a sessão abre com pendências; confira a sincronização da conta",file=sys.stderr)
+                return result
             raise RuntimeError("o preparo não terminou; confira as pendências da sincronização antes de abrir")
         remaining = deadline-time.monotonic()
         if remaining <= 0:
@@ -102,10 +106,15 @@ def _preparar_conta_codex(account_id: str, cwd: str, codex_home: Path | None = N
         from app.adapters.codex.sessions import pretrust_cwd
         pretrust_cwd(cwd,home)
         print("hangar-codex-tui: serviço indisponível; reutilizando a conta já preparada",file=sys.stderr)
+        try:
+            parcial = json.loads((home/PREPARED_MARKER).read_text()).get("status") == "partial"
+        except (OSError, ValueError, AttributeError):
+            parcial = False
+        if parcial:
+            print("hangar-codex-tui: a conta foi preparada com pendências; confira a sincronização da conta",file=sys.stderr)
         return {"status":"ready"}
-    if result.get("status") == "ready":
-        return result
-    if result.get("status") != "running":
+    # Parcial também pede o preparo: o servidor reaproveita o recente e tenta de novo o antigo.
+    if result.get("status") not in ("ready","running"):
         result = _api_backend("POST",path)
     return _aguardar_preparo(result,lambda:_api_backend("GET",path))
 # Quanto esperamos a TUI abrir a thread. Estourar NAO e fatal: o pane segue sendo um Codex

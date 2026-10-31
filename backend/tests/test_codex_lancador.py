@@ -129,10 +129,12 @@ def _ambiente(tmp_path, cwd):
 
 
 @contextlib.contextmanager
-def _backend_conta_pronta(env, status="ready", issues=None):
+def _backend_conta_pronta(env, status="ready", issues=None, methods=None):
     """Conta secundária só abre depois do preparo no backend; aqui ele responde pronto na hora."""
     class _Pronto(http.server.BaseHTTPRequestHandler):
         def _responder(self):
+            if methods is not None and "/prepare" in self.path:
+                methods.append(self.command)
             corpo = json.dumps({"status": status, "issues": issues or []}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -247,14 +249,16 @@ def test_conta_ja_preparada_ainda_confirma_trust_da_pasta(monkeypatch):
 
 
 @pytest.mark.skipif(os.name != "posix", reason="binário falso POSIX")
-def test_conta_preparada_abre_com_backend_desligado(tmp_path):
+@pytest.mark.parametrize("marker,warning", [('{"version":1}', False),
+                                             ('{"version":1,"status":"partial"}', True)])
+def test_conta_preparada_abre_com_backend_desligado(tmp_path, marker, warning):
     cwd = tmp_path/"project"
     cwd.mkdir()
     env = _ambiente(tmp_path,cwd)
     env["FAKE_SERVER_OUT"] = str(tmp_path/"server-started.json")
     home = tmp_path/"profile"
     home.mkdir()
-    (home/".hangar-prepared-v1").write_text('{"version":1}')
+    (home/".hangar-prepared-v1").write_text(marker)
     control = Path(env["HOME"])/".hangar/codex-atualizacao.json"
     control.parent.mkdir()
     control.write_text(json.dumps({"proxima_em":time.time()+3600}))
@@ -271,12 +275,14 @@ def test_conta_preparada_abre_com_backend_desligado(tmp_path):
     assert process.returncode == 0,stdout+stderr
     assert Path(env["FAKE_SERVER_OUT"]).exists()
     assert Path(env["FAKE_TUI_OUT"]).exists()
+    assert ("pendências" in stderr) is warning, stderr
     import tomllib
     assert tomllib.loads((home/"config.toml").read_text())["projects"][str(cwd)]["trust_level"] == "trusted"
 
 
 @pytest.mark.skipif(os.name != "posix", reason="binário falso POSIX")
-def test_preparo_incompleto_nao_sobe_appserver_nem_tui(tmp_path):
+@pytest.mark.parametrize("status,opens", [("partial", True), ("error", False)])
+def test_preparo_parcial_abre_com_pendencias_e_erro_nao_sobe(tmp_path, status, opens):
     cwd = tmp_path/"project"
     cwd.mkdir()
     env = _ambiente(tmp_path,cwd)
@@ -284,8 +290,9 @@ def test_preparo_incompleto_nao_sobe_appserver_nem_tui(tmp_path):
     control = Path(env["HOME"])/".hangar/codex-atualizacao.json"
     control.parent.mkdir()
     control.write_text(json.dumps({"proxima_em":time.time()+3600}))
-    with _backend_conta_pronta(env,status="partial",issues=[
-        {"code":"codex_account_plugin_hooks_failed","params":{"error":"private detail"}}]):
+    methods = []
+    with _backend_conta_pronta(env,status=status,issues=[
+        {"code":"codex_account_plugin_hooks_failed","params":{"error":"private detail"}}],methods=methods):
         process = subprocess.Popen([sys.executable,str(_LANCADOR),"--name","prep-test","--cwd",str(cwd),
             "--codex-home",str(tmp_path/"profile"),"--codex-account","work"],env=env,
             stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
@@ -296,11 +303,14 @@ def test_preparo_incompleto_nao_sobe_appserver_nem_tui(tmp_path):
                 process.terminate()
                 try:process.wait(timeout=5)
                 except subprocess.TimeoutExpired:process.kill();process.wait(timeout=5)
-    assert process.returncode != 0,stdout+stderr
+    assert (process.returncode == 0) is opens,stdout+stderr
+    if opens:
+        # O servidor decide se o parcial é recente (reaproveita) ou antigo (tenta de novo).
+        assert methods[:2] == ["GET", "POST"], methods
     assert "codex_account_plugin_hooks_failed" in stderr
     assert "private detail" not in stderr
-    assert not Path(env["FAKE_SERVER_OUT"]).exists()
-    assert not Path(env["FAKE_TUI_OUT"]).exists()
+    assert Path(env["FAKE_SERVER_OUT"]).exists() is opens
+    assert Path(env["FAKE_TUI_OUT"]).exists() is opens
 
 
 @pytest.mark.skipif(os.name != "posix", reason="o lancador so e usado em pane POSIX por ora")

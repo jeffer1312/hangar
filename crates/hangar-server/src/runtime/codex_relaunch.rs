@@ -506,7 +506,8 @@ impl Watcher {
         let base = registry.codex_environment();
         let refused = |error:crate::session_open::OpenError|refuse(&error.msg);
         // `_exigir_lancador_codex`: o pane morreria na hora com o `new-session` devolvendo sucesso.
-        if super::process::resolve_program(codex::LAUNCHER,&base.base).is_none() {
+        let launcher = codex::launcher_program(&base.home,cfg!(windows));
+        if super::process::resolve_program(launcher.as_deref().unwrap_or(codex::LAUNCHER),&base.base).is_none() {
             return Err(RuntimeError::new("codex_launcher_missing","hangar-codex-tui não está no PATH deste servidor; instale o lançador"));
         }
         if super::process::resolve_program("codex",&base.base).is_none() {
@@ -518,7 +519,8 @@ impl Watcher {
         let codex_home = match text("codex_home") { Some(home)=>home, None=>codex::home(&base.base,&account).map_err(refused)? };
         let launch = codex::Launch { cwd:cwd.clone(),codex_home,account,service_tier:text("service_tier"),resume:text("thread_id"),
             model:text("model"),effort:text("effort"),mode:super::codex_launch::stored_mode(&Value::Object(meta.clone()))?.into(),
-            tool_output_token_limit:meta.get("tool_output_token_limit").and_then(Value::as_u64),prompt:None };
+            tool_output_token_limit:meta.get("tool_output_token_limit").and_then(Value::as_u64),prompt:None,
+            launcher };
         let read_only = if self.read_only(key).await? {
             let run = |argv:Vec<String>,timeout:Duration|->futures_util::future::BoxFuture<'_,crate::session_open::terminal::MuxOutput> {
                 Box::pin(crate::session_open::server::run_program(&base.base,argv,timeout)) };
