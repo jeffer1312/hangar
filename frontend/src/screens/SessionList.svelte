@@ -242,6 +242,8 @@ import * as m from '../paraglide/messages';
   // Ocultas saem dos grupos e da lista plana e vão para a seção do fim. O modelo é compartilhado com
   // a Sidebar do desktop web, que continua mostrando as ocultas misturadas (desktop web congelado).
   const flatSplit = $derived(splitHidden(model.flatRows));
+  // Buscando, a seção abre como os grupos, sem mexer na preferência gravada.
+  const hiddenOpen = $derived(hiddenSection.open || model.filterText.trim() !== '');
   const shownGroups = $derived(model.groups
     .map((g) => ({ ...g, sessions: splitHidden(g.sessions).shown }))
     .filter((g) => g.sessions.length > 0));
@@ -761,11 +763,11 @@ import * as m from '../paraglide/messages';
         {/if}
         {#if flatSplit.hidden.length > 0}
           <div class="group hidden-section">
-            <button class="group-head" onclick={() => (hiddenSection.open = !hiddenSection.open)} aria-expanded={hiddenSection.open}>
-              <span class="group-chevron" class:collapsed={!hiddenSection.open} aria-hidden="true">▾</span>
+            <button class="group-head" onclick={() => (hiddenSection.open = !hiddenSection.open)} aria-expanded={hiddenOpen}>
+              <span class="group-chevron" class:collapsed={!hiddenOpen} aria-hidden="true">▾</span>
               <span class="group-label">{m.session_hidden_group({ n: flatSplit.hidden.length })}</span>
             </button>
-            {#if hiddenSection.open}
+            {#if hiddenOpen}
               {#each flatSplit.hidden as session (`${session.serverId}:${session.name}`)}
                 <SessionCard
                   {session}

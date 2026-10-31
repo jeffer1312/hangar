@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { mount, tick, unmount } from 'svelte';
 import * as m from '../paraglide/messages';
 
-const state = vi.hoisted(() => ({ rows: [] as Record<string, unknown>[] }));
+const state = vi.hoisted(() => ({ rows: [] as Record<string, unknown>[], filterText: '' }));
 
 vi.mock('../lib/sessionsStore.svelte', () => {
   const server = { id: 'a', label: 'Casa', baseUrl: 'http://a.test', token: 't' };
@@ -24,7 +24,7 @@ vi.mock('../lib/sessionListModel.svelte', () => ({
     get groups() { return [{ id: 'all', label: '', color: null, sessions: state.rows }]; },
     cluster: (rows: unknown[]) => rows.map((session) => ({ kind: 'row', session, gid: null })),
     groupMode: 'none', groupBy: 'none', collapsed: new Set(), selected: new Set(), selectMode: false,
-    showFilter: false, filterText: '', awaitingTotal: 0, confirmDel: null, gitSheet: null,
+    showFilter: false, get filterText() { return state.filterText; }, awaitingTotal: 0, confirmDel: null, gitSheet: null,
     resumeCandidates: null, resumeError: '', resumeBusy: false,
     broadcastBusy: false, broadcastDisabled: true, broadcastIsSlash: false, broadcastMsg: '', broadcastText: '',
     compareDisabled: true,
@@ -88,6 +88,7 @@ const sectionHead = () => document.querySelector<HTMLButtonElement>('.hidden-sec
 beforeEach(() => {
   localStorage.clear();
   hiddenSection.open = false;
+  state.filterText = '';
 });
 afterEach(() => {
   if (component) unmount(component);
@@ -117,6 +118,17 @@ it('aberta antes (atalho de Configurações) já monta aberta', async () => {
   state.rows = [row('oculta', true)];
   await render();
   expect(cards()).toEqual(['oculta']);
+});
+
+it('buscando, a seção abre sem mudar a preferência gravada', async () => {
+  // A busca casou só a oculta: o modelo já devolve só ela.
+  state.filterText = 'ocu';
+  state.rows = [row('oculta', true)];
+  await render();
+  expect(cards()).toEqual(['oculta']);
+  expect(sectionHead()?.getAttribute('aria-expanded')).toBe('true');
+  expect(hiddenSection.open).toBe(false);
+  expect(localStorage.getItem('cp_hidden_section_open')).not.toBe('1');
 });
 
 it('sem oculta não há seção', async () => {

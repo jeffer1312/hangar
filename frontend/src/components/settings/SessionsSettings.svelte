@@ -22,7 +22,7 @@
 
   const HOURS = Array.from({ length: 168 }, (_, i) => ({ value: String(i + 1), label: m.session_auto_hide_hours({ n: i + 1 }) }));
   const allFailed = $derived(results !== null && results.every((r) => !r.ok));
-  const differs = $derived(results && !allFailed ? autoHideDiverges(results) : []);
+  const differs = $derived(results ? autoHideDiverges(results) : []);
   const hiddenCount = $derived(sessionsStore.rows.filter((r) => r.hidden_from_list).length);
 
   async function load() {

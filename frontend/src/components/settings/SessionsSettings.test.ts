@@ -79,6 +79,16 @@ it('iguais em todas: mostra a configuração sem aviso de diferença', async () 
   expect(button(m.session_auto_hide_apply_all())).toBeUndefined();
 });
 
+it('máquina fora do ar aparece só como erro, não como configuração diferente', async () => {
+  vi.mocked(readAutoHideAll).mockResolvedValue([
+    { serverId: 'casa', ok: true, config: on3 }, { serverId: 'vps', ok: false, error: 'fora do ar' },
+  ]);
+  await render();
+  expect(text()).toContain('fora do ar');
+  expect(text()).not.toContain(m.session_auto_hide_differs({ servers: 'VPS' }));
+  expect(button(m.session_auto_hide_apply_all())).toBeUndefined();
+});
+
 it('máquina diferente aparece e "Aplicar em todas" grava a da maioria em todas, com resultado por máquina', async () => {
   state.all.push({ id: 'note', label: 'Note', baseUrl: 'http://note.test', token: 'c' });
   try {

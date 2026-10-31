@@ -1569,7 +1569,7 @@ describe('ocultar da lista e ocultação automática', () => {
     ]);
   });
 
-  it('aponta quem diverge da configuração mais comum e quem falhou', async () => {
+  it('aponta só quem respondeu com configuração diferente da mais comum', async () => {
     const { autoHideDiverges } = await import('./api');
     const on3 = { enabled: true, after_minutes: 180 };
     expect(autoHideDiverges([
@@ -1577,7 +1577,13 @@ describe('ocultar da lista e ocultação automática', () => {
       { serverId: 'b', ok: true, config: on3 },
       { serverId: 'c', ok: true, config: on3 },
       { serverId: 'd', ok: false, error: 'x' },
-    ])).toEqual(['a', 'd']);
+    ])).toEqual(['a']);
+    // Máquina fora do ar é erro de leitura, não "diferente".
+    expect(autoHideDiverges([
+      { serverId: 'a', ok: false, error: 'x' },
+      { serverId: 'b', ok: true, config: on3 },
+    ])).toEqual([]);
+    expect(autoHideDiverges([{ serverId: 'a', ok: false, error: 'x' }])).toEqual([]);
     // Empate: vale a primeira resposta boa.
     expect(autoHideDiverges([
       { serverId: 'a', ok: true, config: on3 },

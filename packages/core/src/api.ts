@@ -1118,15 +1118,16 @@ export function saveAutoHideAll(servers: readonly Server[], cfg: AutoHideConfig)
   return autoHidePerServer(servers, (server) => saveAutoHide(server, cfg));
 }
 
-/** Servidores fora da configuração mais comum entre as respostas boas (empate: a que veio primeiro),
- *  mais os que falharam. Sem nenhuma resposta boa, todos. */
+/** Servidores que responderam com configuração diferente da mais comum entre as respostas boas
+ *  (empate: a que veio primeiro). Falha de leitura não entra: as telas a mostram como erro.
+ *  Sem nenhuma resposta boa, lista vazia. */
 export function autoHideDiverges(results: readonly AutoHideResult[]): string[] {
   const keyOf = (c: AutoHideConfig) => `${c.enabled}:${c.after_minutes}`;
   const counts = new Map<string, number>();
   for (const r of results) if (r.ok && r.config) counts.set(keyOf(r.config), (counts.get(keyOf(r.config)) ?? 0) + 1);
   let majority: string | null = null;
   for (const [key, n] of counts) if (majority === null || n > counts.get(majority)!) majority = key;
-  return results.filter((r) => !r.ok || !r.config || keyOf(r.config) !== majority).map((r) => r.serverId);
+  return results.filter((r) => r.ok && r.config && keyOf(r.config) !== majority).map((r) => r.serverId);
 }
 
 // Abrir ou retomar sessão leva bem mais que o prazo padrão: estourar antes faz a tela acusar erro
