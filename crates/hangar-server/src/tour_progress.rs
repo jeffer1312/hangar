@@ -6,26 +6,25 @@ use serde_json::json;
 use std::{collections::BTreeSet, io, net::SocketAddr, path::{Path, PathBuf}, sync::Arc};
 use crate::{routes::{AppState, gate}, session_write::{detail_body, json_response}};
 
-// A ordem das variantes é a da junção: `feito` vence `pulado` (e `None` perde para os dois).
+// A ordem das variantes é a da junção: `done` vence `skipped` (e `None` perde para os dois).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
-enum Tour { #[serde(rename = "pulado")] Skipped, #[serde(rename = "feito")] Done }
+#[serde(rename_all = "lowercase")]
+enum Tour { Skipped, Done }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct Switch { #[serde(rename = "valor")] on: bool, #[serde(rename = "em")] at: String }
+struct Switch { on: bool, at: String }
 
 impl Switch {
     fn instant(&self) -> Option<chrono::DateTime<chrono::FixedOffset>> { chrono::DateTime::parse_from_rfc3339(&self.at).ok() }
 }
 
-/// Mesmo formato no arquivo e no corpo do `PUT`; no corpo, campo ausente não acrescenta nada. Os nomes no JSON são os
-/// já gravados e os que o nativo manda: mudam só com os dois lados.
+/// Mesmo formato no arquivo e no corpo do `PUT`; no corpo, campo ausente não acrescenta nada, e campo que só uma versão
+/// mais nova conhece é ignorado. Os nomes no JSON são os que o nativo manda: mudam só com os dois lados.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
 struct Progress {
     #[serde(default)] tour: Option<Tour>,
-    #[serde(default, rename = "dicas")] tips: BTreeSet<String>,
-    #[serde(default, rename = "dicas_desligadas")] tips_switch: Option<Switch>,
+    #[serde(default)] tips: BTreeSet<String>,
+    #[serde(default, rename = "tips_off")] tips_switch: Option<Switch>,
 }
 
 impl Progress {
@@ -83,7 +82,7 @@ pub async fn handle(State(state): State<Arc<AppState>>, ConnectInfo(peer): Conne
         }.and_then(|p| if p.valid() { Ok(p) } else { Err("data inválida".to_owned()) });
         let patch = match parsed {
             Ok(patch) => patch,
-            // App mais novo com campo que este servidor não conhece cai aqui: o motivo fica no log.
+            // Tipo errado ou data inválida: o motivo fica no log.
             Err(cause) => {
                 tracing::warn!(code = "erro_corpo_invalido", %cause, "tour-progress recusou o corpo");
                 return failure(StatusCode::UNPROCESSABLE_ENTITY, "erro_corpo_invalido", "corpo inválido");
@@ -124,11 +123,20 @@ mod tests {
     }
 
     #[test]
-    fn json_keeps_the_stored_names() {
+    fn json_keeps_the_contract_names() {
         let progress = Progress { tour: Some(Tour::Skipped), tips: set(&["a"]), tips_switch: switch(true, "2026-10-30T12:00:00Z") };
-        let json = json!({"tour": "pulado", "dicas": ["a"], "dicas_desligadas": {"valor": true, "em": "2026-10-30T12:00:00Z"}});
+        let json = json!({"tour": "skipped", "tips": ["a"], "tips_off": {"on": true, "at": "2026-10-30T12:00:00Z"}});
         assert_eq!(serde_json::to_value(&progress).unwrap(), json);
         assert_eq!(serde_json::from_value::<Progress>(json).unwrap(), progress);
-        assert_eq!(serde_json::to_value(Tour::Done).unwrap(), "feito");
+        assert_eq!(serde_json::to_value(Tour::Done).unwrap(), "done");
+    }
+
+    #[test]
+    fn a_field_from_a_newer_version_is_ignored() {
+        let json = json!({"tour": "done", "tips": [], "tips_off": {"on": false, "at": "2026-10-30T12:00:00Z", "by": "x"}, "extra": 1});
+        let progress = serde_json::from_value::<Progress>(json).unwrap();
+        assert_eq!(progress.tour, Some(Tour::Done));
+        assert_eq!(progress.tips_switch, switch(false, "2026-10-30T12:00:00Z"));
+        assert!(serde_json::from_value::<Progress>(json!({"tips": "a"})).is_err(), "tipo errado continua recusado");
     }
 }

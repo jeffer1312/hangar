@@ -4,12 +4,13 @@
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, sync::Mutex};
 
-/// A ordem das variantes é a da junção: `feito` vence `pulado`, e `None` perde para os dois.
+/// A ordem das variantes é a da junção: `done` vence `skipped`, e `None` perde para os dois.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
-pub enum Outcome { #[serde(rename = "pulado")] Skipped, #[serde(rename = "feito")] Done }
+#[serde(rename_all = "lowercase")]
+pub enum Outcome { Skipped, Done }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
-pub struct Switch { #[serde(rename = "valor")] pub on: bool, #[serde(rename = "em")] pub at: String }
+pub struct Switch { pub on: bool, pub at: String }
 
 impl Switch {
     /// Agora, com o fuso local: a comparação é pelo instante, não pelo texto.
@@ -18,14 +19,14 @@ impl Switch {
     fn instant(&self) -> Option<chrono::DateTime<chrono::FixedOffset>> { chrono::DateTime::parse_from_rfc3339(&self.at).ok() }
 }
 
-/// Os nomes no JSON são os do arquivo e do `/api/tour-progress`, já gravados: mudam só com os dois lados.
+/// Os nomes no JSON são os do arquivo e do `/api/tour-progress`: mudam só com os dois lados.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub struct Seen {
     #[serde(default)] pub tour: Option<Outcome>,
-    #[serde(default, rename = "dicas")] pub tips: BTreeSet<String>,
-    #[serde(default, rename = "dicas_desligadas")] pub tips_switch: Option<Switch>,
-    /// Só do app: os celulares que já dispararam a dica deles. O servidor recusa campo a mais: `for_server` o tira.
-    #[serde(default, rename = "aparelhos", skip_serializing_if = "BTreeSet::is_empty")] pub devices: BTreeSet<String>,
+    #[serde(default)] pub tips: BTreeSet<String>,
+    #[serde(default, rename = "tips_off")] pub tips_switch: Option<Switch>,
+    /// Só do app: os celulares cuja dica já foi respondida. Não é do servidor: `for_server` o tira.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")] pub devices: BTreeSet<String>,
 }
 
 impl Seen {
@@ -137,20 +138,20 @@ mod tests {
     fn json_keeps_the_file_and_server_names() {
         let seen = Seen { tour: Some(Outcome::Skipped), tips: ["fila".to_owned()].into(), tips_switch: switch(true, "2026-10-30T12:00:00Z"),
             devices: ["ios:abc".to_owned()].into() };
-        let json = serde_json::json!({"tour": "pulado", "dicas": ["fila"], "dicas_desligadas": {"valor": true, "em": "2026-10-30T12:00:00Z"},
-            "aparelhos": ["ios:abc"]});
+        let json = serde_json::json!({"tour": "skipped", "tips": ["fila"], "tips_off": {"on": true, "at": "2026-10-30T12:00:00Z"},
+            "devices": ["ios:abc"]});
         assert_eq!(serde_json::to_value(&seen).unwrap(), json);
         assert_eq!(serde_json::from_value::<Seen>(json).unwrap(), seen);
-        assert_eq!(serde_json::to_value(Outcome::Done).unwrap(), "feito");
+        assert_eq!(serde_json::to_value(Outcome::Done).unwrap(), "done");
     }
 
     #[test]
     fn server_copy_drops_the_local_devices_and_parses_back() {
         let local = Seen { tour: Some(Outcome::Done), devices: ["ios:abc".to_owned()].into(), ..Default::default() };
         let body = serde_json::to_value(local.for_server()).unwrap();
-        assert!(body.get("aparelhos").is_none());
-        assert_eq!(body["tour"], "feito");
-        let back: Seen = serde_json::from_value(serde_json::json!({"tour": null, "dicas": [], "dicas_desligadas": null})).unwrap();
+        assert!(body.get("devices").is_none());
+        assert_eq!(body["tour"], "done");
+        let back: Seen = serde_json::from_value(serde_json::json!({"tour": null, "tips": [], "tips_off": null})).unwrap();
         assert_eq!(back, Seen::default());
     }
 }

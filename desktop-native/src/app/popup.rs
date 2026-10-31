@@ -58,6 +58,12 @@ impl Anchors {
         changed && self.read.contains(&id)
     }
 
+    /// Tira as marcas que quem as desenhou já redesenhou sem elas; as de área reusada do cache continuam valendo.
+    fn prune(&mut self) {
+        let generations = &self.generations;
+        self.marks.retain(|_, mark| mark.generation >= generations.get(&mark.scope).copied().unwrap_or(0));
+    }
+
     fn valid(&self, id: &str) -> Option<Bounds<Pixels>> {
         let mark = self.marks.get(id)?;
         let on_screen = mark.scope.is_none_or(|area| self.shown.get(&area) == Some(&self.generation(None)));
@@ -90,9 +96,16 @@ pub(crate) fn anchor_bounds(id: &str) -> Option<Bounds<Pixels>> {
     })
 }
 
+/// A mesma posição, sem virar leitor: para varrer candidatas (as linhas da lista) sem que mexer em cada uma redesenhe
+/// a janela. A escolhida passa depois por `anchor_bounds`.
+pub(crate) fn anchor_peek(id: &str) -> Option<Bounds<Pixels>> { ANCHORS.with(|a| a.borrow().valid(id)) }
+
 /// Um quadro da raiz: as leituras do quadro anterior saem na entrada; a geração da raiz sobe na saída, depois de a
 /// raiz ler as posições do quadro anterior e antes de as âncoras dela gravarem as deste.
 pub(super) struct RootFrame(());
+
+/// De quantos em quantos quadros da raiz as marcas velhas saem.
+const PRUNE_EVERY: u64 = 600;
 
 pub(super) fn root_frame() -> RootFrame {
     ANCHORS.with(|a| a.borrow_mut().read.clear());
@@ -100,7 +113,14 @@ pub(super) fn root_frame() -> RootFrame {
 }
 
 impl Drop for RootFrame {
-    fn drop(&mut self) { ANCHORS.with(|a| a.borrow_mut().advance(None)); }
+    fn drop(&mut self) {
+        ANCHORS.with(|a| {
+            let mut a = a.borrow_mut();
+            a.advance(None);
+            // Linhas de sessão fechada e peças que sumiram não ficam para sempre no mapa.
+            if a.generation(None) % PRUNE_EVERY == 0 { a.prune(); }
+        });
+    }
 }
 
 /// A área acabou de redesenhar: o que ela gravou antes deixa de valer até ela gravar de novo.
@@ -391,7 +411,7 @@ pub(super) fn skeleton(id: &str, rows: usize) -> Div {
 #[cfg(test)]
 mod tests {
     // Sem glob: o `test` da gpui colide com o atributo padrão.
-    use super::{Anchors, Area, Presence, centered_top, px};
+    use super::{ANCHORS, Anchors, Area, Presence, anchor_bounds, anchor_peek, centered_top, px};
     use crate::motion;
     use gpui_kit::{Bounds, Pixels, point, size};
 
@@ -482,6 +502,34 @@ mod tests {
         frame(&mut anchors, top);
         anchors.advance(top);
         assert!(anchors.record("search".into(), at(1.), top, anchors.generation(top)), "a área voltou");
+    }
+
+    #[test]
+    fn prune_drops_only_marks_whose_drawer_redrew_without_them() {
+        let mut anchors = Anchors::default();
+        let (nav, side) = (Some(Area::Nav), Some(Area::Side));
+        frame(&mut anchors, nav);
+        anchors.advance(nav);
+        anchors.advance(side);
+        anchors.record("closed-row".into(), at(1.), nav, anchors.generation(nav));
+        anchors.record("panel".into(), at(1.), side, anchors.generation(side));
+        anchors.record("dialog".into(), at(1.), None, anchors.generation(None));
+        // A lista redesenhou sem a linha; o painel segue do cache; a raiz passou de quadro.
+        anchors.advance(nav);
+        frame(&mut anchors, side);
+        anchors.prune();
+        assert!(!anchors.marks.contains_key("closed-row"));
+        assert!(!anchors.marks.contains_key("dialog"));
+        assert_eq!(anchors.valid("panel"), Some(at(1.)), "área em cache continua valendo");
+    }
+
+    #[test]
+    fn peek_reads_without_becoming_a_reader() {
+        ANCHORS.with(|a| a.borrow_mut().record("row".into(), at(1.), None, 0));
+        assert_eq!(anchor_peek("row"), Some(at(1.)));
+        assert!(ANCHORS.with(|a| !a.borrow().read.contains("row")), "a varredura não pede outro quadro");
+        assert_eq!(anchor_bounds("row"), Some(at(1.)));
+        assert!(ANCHORS.with(|a| a.borrow().read.contains("row")));
     }
 
     #[test]

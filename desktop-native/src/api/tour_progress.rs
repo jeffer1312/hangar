@@ -77,10 +77,10 @@ mod tests {
     async fn server_done_wins_over_local_nothing_and_the_union_goes_back_without_devices() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        let done = json!({"tour": "feito", "dicas": ["fila"], "dicas_desligadas": null});
+        let done = json!({"tour": "done", "tips": ["fila"], "tips_off": null});
         let server = fake_server(listener, vec![
             ("200 OK", done),
-            ("200 OK", json!({"tour": "feito", "dicas": ["citar", "fila"], "dicas_desligadas": null})),
+            ("200 OK", json!({"tour": "done", "tips": ["citar", "fila"], "tips_off": null})),
         ]);
         let api = Api::new(&format!("http://{address}"), "fixture-owner").unwrap();
         let local = Seen { tips: ["citar".to_owned()].into(), devices: ["ios:abc".to_owned()].into(), ..Default::default() };
@@ -92,10 +92,10 @@ mod tests {
         assert_eq!(requests.iter().map(|(head, _)| head.split_whitespace().take(2).collect::<Vec<_>>().join(" ")).collect::<Vec<_>>(),
             ["GET /api/tour-progress", "PUT /api/tour-progress"]);
         let body = requests[1].1.as_ref().unwrap();
-        assert_eq!(body["tour"], "feito");
-        assert!(body.get("aparelhos").is_none(), "o servidor recusa campo a mais");
+        assert_eq!(body["tour"], "done");
+        assert!(body.get("devices").is_none(), "os aparelhos são só deste app");
 
-        // O local passa a `feito` e o tour que ainda não apareceu não abre.
+        // O local passa a `done` e o tour que ainda não apareceu não abre.
         let step = crate::tour::Step { id: "new", anchor: crate::tour::anchors::COMPOSER, title_key: "tour_later", body_key: "tour_later" };
         let free = crate::tour::Gate { dialogs_open: false, window_visible: true, server_read: true };
         let mut tour = crate::tour::Tour::with_steps(Seen::default(), vec![step]);
@@ -109,7 +109,7 @@ mod tests {
     async fn nothing_new_for_the_server_is_not_sent_back() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        let server = fake_server(listener, vec![("200 OK", json!({"tour": "feito", "dicas": ["fila"], "dicas_desligadas": null}))]);
+        let server = fake_server(listener, vec![("200 OK", json!({"tour": "done", "tips": ["fila"], "tips_off": null}))]);
         let api = Api::new(&format!("http://{address}"), "fixture-owner").unwrap();
         // Só o aparelho, que é deste app, difere: nada a subir.
         let local = Seen { tour: Some(Outcome::Skipped), tips: ["fila".to_owned()].into(), devices: ["ios:abc".to_owned()].into(), ..Default::default() };

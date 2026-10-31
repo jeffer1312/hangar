@@ -57,7 +57,7 @@ impl Drop for Fixture { fn drop(&mut self) { self.task.abort(); } }
 #[tokio::test]
 async fn empty_server_answers_nothing_seen() {
     let mut fixture = Fixture::start().await;
-    assert_eq!(fixture.get().await, json!({"tour": null, "dicas": [], "dicas_desligadas": null}));
+    assert_eq!(fixture.get().await, json!({"tour": null, "tips": [], "tips_off": null}));
     assert!(!fixture.file().exists(), "GET não cria o arquivo");
     fixture.stop().await;
 }
@@ -65,13 +65,13 @@ async fn empty_server_answers_nothing_seen() {
 #[tokio::test]
 async fn tour_state_never_downgrades() {
     let mut fixture = Fixture::start().await;
-    assert_eq!(fixture.put(json!({"tour": "pulado"})).await["tour"], "pulado");
-    assert_eq!(fixture.put(json!({"tour": null})).await["tour"], "pulado");
-    assert_eq!(fixture.put(json!({})).await["tour"], "pulado");
-    assert_eq!(fixture.get().await["tour"], "pulado");
-    assert_eq!(fixture.put(json!({"tour": "feito"})).await["tour"], "feito");
-    assert_eq!(fixture.put(json!({"tour": "pulado"})).await["tour"], "feito");
-    assert_eq!(fixture.get().await["tour"], "feito");
+    assert_eq!(fixture.put(json!({"tour": "skipped"})).await["tour"], "skipped");
+    assert_eq!(fixture.put(json!({"tour": null})).await["tour"], "skipped");
+    assert_eq!(fixture.put(json!({})).await["tour"], "skipped");
+    assert_eq!(fixture.get().await["tour"], "skipped");
+    assert_eq!(fixture.put(json!({"tour": "done"})).await["tour"], "done");
+    assert_eq!(fixture.put(json!({"tour": "skipped"})).await["tour"], "done");
+    assert_eq!(fixture.get().await["tour"], "done");
     #[cfg(unix)] {
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(std::fs::metadata(fixture.file()).unwrap().permissions().mode() & 0o777, 0o600);
@@ -82,13 +82,13 @@ async fn tour_state_never_downgrades() {
 #[tokio::test]
 async fn tips_are_united_and_the_newest_switch_wins() {
     let mut fixture = Fixture::start().await;
-    fixture.put(json!({"dicas": ["composer", "board"], "dicas_desligadas": {"valor": true, "em": "2026-10-30T12:00:00Z"}})).await;
-    let merged = fixture.put(json!({"dicas": ["board", "archive"], "dicas_desligadas": {"valor": false, "em": "2026-10-30T11:00:00Z"}})).await;
-    assert_eq!(merged["dicas"], json!(["archive", "board", "composer"]));
-    assert_eq!(merged["dicas_desligadas"], json!({"valor": true, "em": "2026-10-30T12:00:00Z"}));
-    let newer = fixture.put(json!({"dicas_desligadas": {"valor": false, "em": "2026-10-30T13:00:00Z"}})).await;
-    assert_eq!(newer["dicas_desligadas"], json!({"valor": false, "em": "2026-10-30T13:00:00Z"}));
-    assert_eq!(newer["dicas"], json!(["archive", "board", "composer"]));
+    fixture.put(json!({"tips": ["composer", "board"], "tips_off": {"on": true, "at": "2026-10-30T12:00:00Z"}})).await;
+    let merged = fixture.put(json!({"tips": ["board", "archive"], "tips_off": {"on": false, "at": "2026-10-30T11:00:00Z"}})).await;
+    assert_eq!(merged["tips"], json!(["archive", "board", "composer"]));
+    assert_eq!(merged["tips_off"], json!({"on": true, "at": "2026-10-30T12:00:00Z"}));
+    let newer = fixture.put(json!({"tips_off": {"on": false, "at": "2026-10-30T13:00:00Z"}})).await;
+    assert_eq!(newer["tips_off"], json!({"on": false, "at": "2026-10-30T13:00:00Z"}));
+    assert_eq!(newer["tips"], json!(["archive", "board", "composer"]));
     assert_eq!(fixture.get().await, newer);
     fixture.stop().await;
 }
@@ -98,9 +98,9 @@ async fn unreadable_file_is_503_and_stays_untouched() {
     let mut fixture = Fixture::start().await;
     let path = fixture.file();
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    for broken in [b"broken".as_slice(), br#"{"tour":null,"dicas":[],"dicas_desligadas":{"valor":true,"em":"ontem"}}"#.as_slice()] {
+    for broken in [b"broken".as_slice(), br#"{"tour":null,"tips":[],"tips_off":{"on":true,"at":"ontem"}}"#.as_slice()] {
         std::fs::write(&path, broken).unwrap();
-        for response in [fixture.send(reqwest::Method::GET, None).await, fixture.send(reqwest::Method::PUT, Some(r#"{"tour":"feito"}"#)).await] {
+        for response in [fixture.send(reqwest::Method::GET, None).await, fixture.send(reqwest::Method::PUT, Some(r#"{"tour":"done"}"#)).await] {
             assert_eq!(response.status(), 503);
             let body: Value = serde_json::from_slice(&response.bytes().await.unwrap()).unwrap();
             assert_eq!(body["detail"]["code"], "tour_progress_unreadable");
@@ -113,8 +113,8 @@ async fn unreadable_file_is_503_and_stays_untouched() {
 #[tokio::test]
 async fn malformed_body_is_422_and_saves_nothing() {
     let mut fixture = Fixture::start().await;
-    for body in ["not json", r#"{"tour":"visto"}"#, r#"{"extra":1}"#, r#"{"dicas":"composer"}"#,
-        r#"{"dicas_desligadas":{"valor":true,"em":"ontem"}}"#, r#"{"dicas_desligadas":{"valor":true}}"#] {
+    for body in ["not json", r#"{"tour":"visto"}"#, r#"{"tips":"composer"}"#,
+        r#"{"tips_off":{"on":true,"at":"ontem"}}"#, r#"{"tips_off":{"on":true}}"#] {
         let response = fixture.send(reqwest::Method::PUT, Some(body)).await;
         assert_eq!(response.status(), 422, "{body}");
         let value: Value = serde_json::from_slice(&response.bytes().await.unwrap()).unwrap();
@@ -125,12 +125,21 @@ async fn malformed_body_is_422_and_saves_nothing() {
 }
 
 #[tokio::test]
+async fn a_field_from_a_newer_app_is_ignored() {
+    let mut fixture = Fixture::start().await;
+    let merged = fixture.put(json!({"tour": "done", "extra": 1, "tips_off": {"on": true, "at": "2026-10-30T12:00:00Z", "by": "x"}})).await;
+    assert_eq!(merged, json!({"tour": "done", "tips": [], "tips_off": {"on": true, "at": "2026-10-30T12:00:00Z"}}));
+    assert_eq!(fixture.get().await, merged);
+    fixture.stop().await;
+}
+
+#[tokio::test]
 async fn tour_progress_requires_owner_credentials() {
     let mut fixture = Fixture::start().await;
     let client = reqwest::Client::new();
     for method in [reqwest::Method::GET, reqwest::Method::PUT] {
         let response = client.request(method, &fixture.base)
-            .header("content-type", "application/json").body(r#"{"tour":"feito"}"#).send().await.unwrap();
+            .header("content-type", "application/json").body(r#"{"tour":"done"}"#).send().await.unwrap();
         assert_eq!(response.status(), 403);
     }
     assert!(!fixture.file().exists());

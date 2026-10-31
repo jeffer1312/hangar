@@ -5,7 +5,7 @@ pub mod balloon;
 pub mod state;
 pub mod steps;
 
-use std::{collections::VecDeque, time::{Duration, Instant}};
+use std::{collections::{BTreeSet, VecDeque}, time::{Duration, Instant}};
 use gpui_kit::{Bounds, Pixels};
 use state::{Outcome, Seen, Switch};
 
@@ -92,7 +92,7 @@ pub struct Tour {
     steps: Vec<Step>,
     /// Passo na tela; `None` com o tour encerrado, adiado ("Ver depois") ou já visto.
     current: Option<usize>,
-    /// Algum passo desta volta foi feito pela ação, não pulado: o fim grava `feito`.
+    /// Algum passo desta volta foi feito pela ação, não pulado: o fim grava `done`.
     done_any: bool,
     celebrated: Option<(usize, Instant)>,
     tips: VecDeque<Note>,
@@ -109,12 +109,20 @@ pub struct Tour {
     generation: u64,
     /// `tour.json` existe mas não foi lido: gravar agora apagaria o que já foi visto.
     pub read_failed: bool,
+    /// Celulares novos cuja dica ainda não foi respondida: só vão ao visto com a resposta, senão a dica que não chegou
+    /// à tela (peça fora, app fechado) se perderia para eles.
+    pending_devices: BTreeSet<String>,
 }
 
 impl Tour {
     pub fn new(seen: Seen) -> Self {
         Self { seen, steps: Vec::new(), current: None, done_any: false, celebrated: None, tips: VecDeque::new(), news: None,
-            server_read: false, keep_open: false, last_target: None, generation: 0, read_failed: false }
+            server_read: false, keep_open: false, last_target: None, generation: 0, read_failed: false, pending_devices: BTreeSet::new() }
+    }
+
+    /// O que muda o balão na tela: quem chama compara antes e depois para não redesenhar à toa.
+    pub fn visible_state(&self) -> (Option<usize>, Option<usize>, Option<(String, bool)>) {
+        (self.current, self.celebrated.map(|c| c.0), self.news.as_ref().map(|(n, d)| (n.id.clone(), d.is_some())))
     }
 
     #[cfg(test)]
@@ -183,10 +191,14 @@ impl Tour {
             // Não grava: o tour volta na próxima abertura.
             Choice::Later => { self.current = None; self.celebrated = None; false }
             Choice::TipOk => match self.tips.pop_front() {
-                Some(tip) => self.seen.tips.insert(tip.id),
+                Some(tip) => {
+                    let devices = tip.id == steps::PRESENCE && self.devices_answered();
+                    self.seen.tips.insert(tip.id) | devices
+                }
                 None => false,
             },
             Choice::TipsOff => {
+                if self.tips.front().is_some_and(|tip| tip.id == steps::PRESENCE) { self.devices_answered(); }
                 self.tips.clear();
                 self.seen.tips_switch = Some(Switch::now(true));
                 true
@@ -247,7 +259,10 @@ impl Tour {
     }
 
     /// A dica ainda pode aparecer (pode já estar na fila): é o que decide desenhar a âncora dela.
-    pub fn tip_pending(&self, id: &str) -> bool { !self.seen.tips_off() && !self.seen.tips.contains(id) }
+    /// A do celular volta com aparelho novo pendente, mesmo já vista: a junção com o servidor a devolveria ao visto.
+    pub fn tip_pending(&self, id: &str) -> bool {
+        !self.seen.tips_off() && (!self.seen.tips.contains(id) || (id == steps::PRESENCE && !self.pending_devices.is_empty()))
+    }
 
     /// A dica entraria agora na fila.
     pub fn may_offer(&self, id: &str) -> bool { self.tip_pending(id) && !self.tips.iter().any(|t| t.id == id) }
@@ -267,15 +282,22 @@ impl Tour {
         true
     }
 
-    /// Ids novos no retrato de aparelhos da lista do dono ficam guardados; algum novo traz a dica do celular de volta,
-    /// uma vez por aparelho. Diz se o visto mudou.
+    /// Ids novos no retrato de aparelhos da lista do dono ficam pendentes e trazem a dica do celular de volta, uma vez por
+    /// aparelho: só a resposta à dica os grava. Diz se chegou aparelho novo; o visto não muda.
     pub fn devices_seen(&mut self, devices: &serde_json::Value) -> bool {
         let ids = devices.as_array().into_iter().flatten().filter_map(|device| device.get("id")?.as_str());
         let mut fresh = false;
-        for id in ids { fresh |= self.seen.devices.insert(id.to_owned()); }
-        // A junção com o servidor devolve o id depois; até lá a dica já entrou na fila.
-        if fresh { self.seen.tips.remove(steps::PRESENCE); }
+        for id in ids {
+            if !self.seen.devices.contains(id) { fresh |= self.pending_devices.insert(id.to_owned()); }
+        }
         fresh
+    }
+
+    /// A dica do celular foi respondida: os aparelhos pendentes passam ao visto. Diz se ele mudou.
+    fn devices_answered(&mut self) -> bool {
+        let before = self.seen.devices.len();
+        self.seen.devices.append(&mut self.pending_devices);
+        self.seen.devices.len() != before
     }
 
     /// "Mostrar no app" de uma novidade: aparece na hora, por cima do tour.
@@ -497,16 +519,34 @@ mod tests {
     fn a_new_device_brings_the_phone_tip_back_once() {
         let devices = |ids: &[&str]| serde_json::Value::Array(ids.iter()
             .map(|id| serde_json::json!({"id": id, "kind": "ios", "first_seen": "2026-10-30T12:00:00Z"})).collect());
+        let presence = || Note { id: steps::PRESENCE.to_owned(), ..tip("x") };
         let mut tour = Tour::new(Seen::default());
         assert!(!tour.devices_seen(&devices(&[])), "retrato vazio não dispara");
         assert!(!tour.devices_seen(&serde_json::json!({"id": "x"})), "formato estranho não dispara");
         assert!(tour.devices_seen(&devices(&["a"])), "o primeiro celular também dispara");
-        tour.seen.tips.insert(steps::PRESENCE.to_owned());
+        assert!(tour.seen.devices.is_empty(), "só a resposta grava o aparelho");
+        tour.offer_tip(presence());
+        assert!(pick(&mut tour, Choice::TipOk));
+        assert_eq!(tour.seen.devices, ["a".to_owned()].into());
         assert!(!tour.devices_seen(&devices(&["a"])), "o mesmo retrato de novo não");
-        assert!(tour.seen.tips.contains(steps::PRESENCE));
+        assert!(!tour.may_offer(steps::PRESENCE));
         assert!(tour.devices_seen(&devices(&["a", "b"])));
-        assert!(tour.may_offer(steps::PRESENCE), "aparelho novo traz a dica de volta");
+        assert!(tour.may_offer(steps::PRESENCE), "aparelho novo traz a dica de volta, mesmo já vista");
+        tour.offer_tip(presence());
+        assert!(pick(&mut tour, Choice::TipsOff), "Não mostrar dicas também responde");
         assert_eq!(tour.seen.devices, ["a".to_owned(), "b".to_owned()].into());
+    }
+
+    #[test]
+    fn a_phone_tip_that_never_showed_comes_back_on_the_next_opening() {
+        let devices = serde_json::json!([{"id": "a", "kind": "ios", "first_seen": "2026-10-30T12:00:00Z"}]);
+        let mut tour = Tour::new(Seen { tips: [steps::PRESENCE.to_owned()].into(), ..Default::default() });
+        assert!(tour.devices_seen(&devices));
+        assert!(tour.may_offer(steps::PRESENCE));
+        // O app fecha com a dica na fila, sem aparecer: o visto gravado não leva o aparelho.
+        let mut reopened = Tour::new(tour.seen.clone());
+        assert!(reopened.devices_seen(&devices), "o aparelho ainda é novo");
+        assert!(reopened.may_offer(steps::PRESENCE));
     }
 
     #[test]

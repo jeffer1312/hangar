@@ -111,11 +111,21 @@ impl Registry {
         inner.json.clone()
     }
 
-    /// O retrato em memória, sem tocar o disco.
-    pub fn current(&self) -> Arc<str> { self.lock().json.clone() }
+    /// Para o código async: sem esperar a trava, que uma gravação segura durante o disco.
+    fn try_inner(&self) -> Option<std::sync::MutexGuard<'_, Inner>> {
+        match self.inner.try_lock() {
+            Ok(inner) => Some(inner),
+            Err(std::sync::TryLockError::Poisoned(e)) => Some(e.into_inner()),
+            Err(std::sync::TryLockError::WouldBlock) => None,
+        }
+    }
 
-    /// Já gravado na memória: a conexão não precisa ir ao pool bloqueante.
-    pub fn is_known(&self, id: &str) -> bool { known(&self.lock(), id) }
+    /// O retrato em memória, sem tocar o disco; `None` com uma gravação em curso, que avisa pelo `changed` ao terminar.
+    pub fn current(&self) -> Option<Arc<str>> { self.try_inner().map(|inner| inner.json.clone()) }
+
+    /// Já gravado na memória: a conexão não precisa ir ao pool bloqueante. Trava ocupada responde `false`, e o
+    /// `record` confere de novo sob a trava.
+    pub fn is_known(&self, id: &str) -> bool { self.try_inner().is_some_and(|inner| known(&inner, id)) }
 
     pub fn record(&self, kind: Kind, id: &str, diag: &DiagClient) { self.record_at(kind, id, Utc::now(), diag) }
 
@@ -143,6 +153,8 @@ impl Registry {
                 }
             }
         }
+        // Solta antes de avisar: quem acorda lê sem esperar a trava.
+        drop(inner);
         if changed { self.changed.notify_one(); }
     }
 }
@@ -207,6 +219,16 @@ mod tests {
             registry.record_at(Kind::Ios, "abc-2", at(3), &diag());
             assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
         }
+    }
+
+    #[test]
+    fn a_busy_lock_answers_without_waiting() {
+        let registry = Registry::new(std::env::temp_dir().join("hangar-devices-busy/devices.json"));
+        let held = registry.lock();
+        assert_eq!(registry.current(), None);
+        assert!(!registry.is_known("abc-1"), "ocupada: o registro confere de novo sob a trava");
+        drop(held);
+        assert_eq!(registry.current().as_deref(), Some("[]"));
     }
 
     #[tokio::test]

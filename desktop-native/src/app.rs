@@ -1954,11 +1954,9 @@ impl Hangar {
                 }
                 // Celular que ainda não tinha aparecido: a dica do "No PC / Fora", uma vez por aparelho.
                 else if frame.event == "devices" {
+                    // O aparelho só vai ao visto quando a dica é respondida (`Tour::choose`).
                     visible = self.tour.devices_seen(&frame.data);
-                    if visible {
-                        self.save_tour();
-                        self.offer_tip(crate::tour::steps::PRESENCE);
-                    }
+                    if visible { self.offer_tip(crate::tour::steps::PRESENCE); }
                     true
                 }
                 else if frame.event == "shortcut_terminals" {
@@ -7428,8 +7426,11 @@ impl Hangar {
 
     /// A ação real de um passo aconteceu (chamado de onde ela acontece).
     pub(super) fn tour_event(&mut self, event: crate::tour::TourEvent, cx: &mut Context<Self>) {
-        if self.tour.tour_event(event) { self.save_tour(); }
-        cx.notify();
+        // Ação comum (mandar mensagem, abrir menu) sem tour na tela não redesenha a janela.
+        let before = self.tour.visible_state();
+        let changed = self.tour.tour_event(event);
+        if changed { self.save_tour(); }
+        if changed || self.tour.visible_state() != before { cx.notify(); }
     }
 
     /// A entidade do app para quem não a tem no contexto (o `Updater`, ao terminar uma atualização).
@@ -7444,9 +7445,11 @@ impl Hangar {
     /// "Ver o tour de novo": zera só o tour, as dicas ficam. Os passos saem da tela de agora.
     pub(super) fn restart_tour(&mut self, cx: &mut Context<Self>) {
         if self.tour.restart() { self.save_tour(); }
-        let snapshot = self.tour_snapshot(cx);
-        let steps = self.tour_planner.plan(&snapshot, &self.tour.seen.tips);
-        self.tour.set_steps(steps);
+        // Quem planeja é o `plan_tour`: com contas ou ditado ainda em leitura ele espera, senão os passos deles virariam
+        // dica para quem os tem.
+        self.tour_planner.replan();
+        self.tour_dirty = true;
+        self.plan_tour(cx);
         cx.notify();
     }
 
@@ -7500,7 +7503,8 @@ impl Hangar {
         for tip in crate::tour::steps::TIPS.iter().filter(|tip| tip.on_sight).map(|tip| tip.step) {
             // O painel "Na fila" aparece também com o Mandar direto ligado; aí não há o que ensinar.
             if tip.id == "queue-direct" && (appearance::get().steer_while_working || !matches!(self.provider().0, "claude" | "codex")) { continue; }
-            if popup::anchor_bounds(tip.anchor).is_some() { self.offer_step_tip(tip); }
+            // Antes da âncora: lida, ela pediria outro quadro a cada movimento, mesmo de dica já vista.
+            if self.tour.may_offer(tip.id) && popup::anchor_bounds(tip.anchor).is_some() { self.offer_step_tip(tip); }
         }
         let a = appearance::get();
         if a.navigation.tabs() && !a.tab_preview && self.session_count() >= 2 { self.offer_tip("tab-preview"); }
@@ -7523,7 +7527,8 @@ impl Hangar {
         if anchor != anchors::SESSION_ROW { return Some(anchor.to_owned()); }
         // À vista = desenhada e com o meio dentro da faixa rolável da lista (linha rolada para fora ainda tem posição).
         let view = if appearance::get().navigation.tabs() { self.tabs_scroll.bounds() } else { self.rows_scroll.bounds() };
-        let shown = |row: &str| popup::anchor_bounds(row).filter(|b| view.contains(&b.center()));
+        // Sem virar leitor: rolar a lista não redesenha a janela por linha; a escolhida é lida no `render_tour`.
+        let shown = |row: &str| popup::anchor_peek(row).filter(|b| view.contains(&b.center()));
         // Fica na mesma linha enquanto ela seguir à vista; senão a aberta; senão a de cima. Na comemoração, a última
         // vale mesmo sumida: ela continua onde o balão estava.
         let last = self.tour.last_target.as_ref().map(|(row, _)| row).filter(|row| row.starts_with(anchors::SESSION_ROW));

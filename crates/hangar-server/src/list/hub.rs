@@ -214,8 +214,9 @@ async fn produce(hub: Arc<ListHub>, list: Arc<ListBridge>, devices: Arc<Registry
         // Só a lista do dono recebe: sem ela (convidado, assinatura interna) nada é lido.
         if clients > 0 {
             publish_tags(&hub.tx, &mut last, list.tags.read().await, &diag);
-            // Aparelho novo acorda pelo `changed`; aqui só a primeira publicação para o dono.
-            if last.devices.is_none() { publish_devices(&hub.tx, &mut last, devices.current()); }
+            // Aparelho novo acorda pelo `changed`; aqui a primeira publicação e o aviso lido com a trava ocupada (o
+            // retrato igual não sai de novo).
+            if let Some(json) = devices.current() { publish_devices(&hub.tx, &mut last, json); }
         }
         let tick = tokio::time::Instant::now() + TICK;
         // Até o tique, escrita numa pasta de estado reclassifica só a sessão dela.
@@ -239,7 +240,7 @@ async fn produce(hub: Arc<ListHub>, list: Arc<ListBridge>, devices: Arc<Registry
                     continue;
                 }
                 () = devices.changed.notified(), if clients > 0 => {
-                    publish_devices(&hub.tx, &mut last, devices.current());
+                    if let Some(json) = devices.current() { publish_devices(&hub.tx, &mut last, json); }
                     continue;
                 }
                 w = files.recv() => w,

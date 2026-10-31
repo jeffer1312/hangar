@@ -122,6 +122,9 @@ impl Planner {
     /// A lista já chegou e o tour ainda não foi planejado.
     pub fn due(&self) -> bool { self.list_read && !self.planned }
 
+    /// "Ver o tour de novo": planeja outra vez assim que o retrato for conhecido.
+    pub fn replan(&mut self) { self.planned = false; }
+
     /// Os passos do tour. Os que ficaram de fora esperam como dica, salvo a dica já vista (`tips`): com o tour já visto,
     /// é ela que sobrevive a reabrir o app.
     pub fn plan(&mut self, s: &Snapshot, tips: &BTreeSet<String>) -> Vec<Step> {
