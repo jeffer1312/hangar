@@ -237,6 +237,15 @@ pub(super) fn group_hide_targets(origin: Row, rows: &[Row]) -> Vec<Target> {
     std::iter::once(me).chain(others).collect()
 }
 
+/// Mensagem numa oculta (`groupShowTargets` do core): as outras ocultas do mesmo `pair_gid`, de todas as máquinas, sem a de
+/// outra pessoa.
+pub(super) fn group_show_targets(origin: Row, rows: &[Row]) -> Vec<Target> {
+    let Some(gid) = origin.session.pair_gid.as_deref().filter(|g| !g.is_empty()) else { return Vec::new() };
+    rows.iter().filter(|r| r.session.pair_gid.as_deref() == Some(gid) && !(r.server == origin.server && r.session.name == origin.session.name)
+        && !r.invite && r.session.outside.is_none() && !r.session.read_only() && r.session.hidden_from_list)
+        .map(|r| Target::new(r.server, &r.session.name)).collect()
+}
+
 pub(super) fn can_pair(origin: Row, target: Row, ids: &HashMap<String, String>) -> Result<(), Refusal> {
     let (o, t) = (origin.session, target.session);
     let same_server = origin.server == target.server;
@@ -1004,7 +1013,7 @@ pub(super) fn fill_group(menu: PopupMenu, hangar: &WeakEntity<Hangar>, origin: &
 mod tests {
     // Sem glob: o `test` do gpui_kit, que o `super::*` traz, esconderia o `#[test]` da linguagem.
     use super::{GlobalGroup, Grant, IdSlot, ListRow, Member, Refusal, Row, SessionInfo, can_leave, can_pair, candidates, cluster, existing_group, full_grants,
-        global_groups, group_hide_targets, id_slot, identity_settled, memo, pair_header_label, qualified, seal_text, split_code};
+        global_groups, group_hide_targets, group_show_targets, id_slot, identity_settled, memo, pair_header_label, qualified, seal_text, split_code};
     use crate::api::dto::{OutsideMark, PairExternal, PairExternalEntry, PairResult};
     use serde_json::Value;
     use std::{cell::RefCell, collections::HashMap, rc::Rc, time::Instant};
@@ -1086,6 +1095,22 @@ mod tests {
         let rows = [row("pc", &b), row("pc", &me), row("pc", &other_group), row("pc", &hidden), row("pc", &waiting), row("nb", &asking),
             row("nb", &c), row("nb", &foreign), Row { server: "guest", session: &b, invite: true }];
         assert_eq!(names(row("pc", &me), &rows), ["pc::a", "pc::b", "nb::c"], "a própria primeiro, depois as do mesmo grupo nas máquinas");
+    }
+
+    /// Os mesmos casos do `groupShowTargets` em `packages/core/src/sessions.test.ts`.
+    #[test]
+    fn showing_a_group_takes_the_other_hidden_members_of_every_machine() {
+        let hid = |name: &str, gid: Option<&str>| SessionInfo { hidden_from_list: true, ..s(name, gid, &[]) };
+        let names = |origin: Row, rows: &[Row]| group_show_targets(origin, rows).into_iter().map(|t| t.id()).collect::<Vec<_>>();
+        let solo = hid("solo", None);
+        let row = |server, session| Row { server, session, invite: false };
+        assert!(names(row("pc", &solo), &[row("pc", &solo)]).is_empty(), "fora de grupo, ninguém");
+        let (me, b, c, other_group) = (hid("a", Some("g")), hid("b", Some("g")), hid("c", Some("g")), hid("x", Some("h")));
+        let shown = s("shown", Some("g"), &[]);
+        let foreign = SessionInfo { outside: Some(OutsideMark { own: "pc".into(), alias: "ana".into(), owner: "Ana".into() }), ..hid("ext", Some("g")) };
+        let rows = [row("pc", &me), row("pc", &b), row("nb", &c), row("pc", &shown), row("pc", &other_group), row("nb", &foreign),
+            Row { server: "guest", session: &b, invite: true }];
+        assert_eq!(names(row("pc", &me), &rows), ["pc::b", "nb::c"], "só as outras ocultas do grupo, nas máquinas do dono");
     }
 
     #[test]

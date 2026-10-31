@@ -2862,6 +2862,7 @@ impl Hangar {
             cx.notify();
             return;
         }
+        self.reveal_on_send(&key.server, &key.name, window, cx);
         let field = text.clone();
         let text = if surface_btw { composer::surface_side_question(&text) } else { text };
         // Enter com um envio em voo não se perde: o texto sai do campo e vai na vez dele.
