@@ -5,6 +5,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
+use zeroize::Zeroizing;
 
 /// O app espera até 45 s pela resposta do navegador.
 pub const VERB_TIMEOUT: Duration = Duration::from_secs(45);
@@ -34,12 +35,25 @@ pub fn url_before(home: &Path, name: &str) -> Option<String> {
 
 pub async fn verb(http: &reqwest::Client, home: &Path, name: &str, verb: &str, args: &[String], tab: Option<i64>, timeout: Duration)
     -> Result<String, Unavailable> {
-    verb_on(http, home, sidecar(home, name).as_ref(), verb, args, tab, timeout).await
+    verb_on(http, home, sidecar(home, name).as_ref(), verb, args, tab, timeout, None).await
+}
+
+/// A URL da página do navegador da sessão. `erro:` do app (sessão sem navegador, página caída) também é `Unavailable`.
+pub async fn page_url(http: &reqwest::Client, home: &Path, name: &str) -> Result<String, Unavailable> {
+    let text = verb(http, home, name, "url", &[], None, VERB_TIMEOUT).await?;
+    let Some(value) = text.strip_prefix("ok:").map(str::trim) else { return Err(Unavailable(text)) };
+    Ok(serde_json::from_str::<String>(value).unwrap_or_else(|_| value.to_owned()))
+}
+
+/// `fill-secret [ref, campo]` com o valor no campo `valor` do corpo, nunca nos `args`.
+pub async fn fill_secret(http: &reqwest::Client, home: &Path, name: &str, args: &[String], value: &str) -> Result<String, Unavailable> {
+    verb_on(http, home, sidecar(home, name).as_ref(), "fill-secret", args, None, VERB_TIMEOUT, Some(value)).await
 }
 
 /// `verb` com o sidecar já lido.
-async fn verb_on(http: &reqwest::Client, home: &Path, sc: Option<&Value>, verb: &str, args: &[String], tab: Option<i64>, timeout: Duration)
-    -> Result<String, Unavailable> {
+#[allow(clippy::too_many_arguments)]
+async fn verb_on(http: &reqwest::Client, home: &Path, sc: Option<&Value>, verb: &str, args: &[String], tab: Option<i64>, timeout: Duration,
+    secret: Option<&str>) -> Result<String, Unavailable> {
     let srv: Value = std::fs::read(nav_dir(home).join("_srv.json")).ok()
         .and_then(|raw| serde_json::from_slice(&raw).ok()).ok_or_else(|| Unavailable(NOT_OPEN.into()))?;
     let port = srv["porta"].as_u64().or_else(|| srv["porta"].as_str().and_then(|p| p.parse().ok())).filter(|p| *p > 0);
@@ -51,8 +65,17 @@ async fn verb_on(http: &reqwest::Client, home: &Path, sc: Option<&Value>, verb: 
     };
     let mut body = json!({"chave": key, "verbo": verb, "args": args});
     if let Some(tab) = tab { body["aba"] = json!(tab); }
+    let mut body = Zeroizing::new(body.to_string());
+    if let Some(secret) = secret {
+        // Fora do `Value`, que não zera o que guarda.
+        body.pop();
+        body.push_str(",\"valor\":");
+        body.push_str(&Zeroizing::new(serde_json::to_string(secret).unwrap_or_default()));
+        body.push('}');
+    }
+    // shortcut: a cópia que o reqwest leva do corpo não é zerada; trocar se o corpo passar a ficar vivo além do pedido.
     let answer = http.post(format!("http://127.0.0.1:{port}/cmd")).bearer_auth(token)
-        .header("content-type", "application/json").body(body.to_string()).timeout(timeout).send().await
+        .header("content-type", "application/json").body(body.as_bytes().to_vec()).timeout(timeout).send().await
         .map_err(|e| Unavailable(format!("o app desktop não respondeu: {e}")))?;
     // Resposta fora de 2xx também é a frase do app (`erro: …`), como no `hangar-preview`.
     answer.text().await.map_err(|e| Unavailable(format!("o app desktop não respondeu: {e}")))
@@ -79,12 +102,12 @@ pub async fn wait_ready(http: &reqwest::Client, home: &Path, name: &str, since_m
         // Pausado pelo usuário o app não navega: dizer na hora em vez de esgotar o prazo.
         if sc.is_some() && !pause_checked {
             pause_checked = true;
-            if verb_on(http, home, sc.as_ref(), "estado", &[], None, left()).await.is_ok_and(|t| t.trim() == "pausado") {
+            if verb_on(http, home, sc.as_ref(), "estado", &[], None, left(), None).await.is_ok_and(|t| t.trim() == "pausado") {
                 return Err(Unavailable(PAUSED.into()));
             }
         }
         if let Some(sc) = &sc && sc["ts"].as_f64().unwrap_or(0.0) as u64 >= since_ms && navigated(sc["url"].as_str().unwrap_or_default(), before, asked) {
-            let text = verb_on(http, home, Some(sc), "url", &[], None, left()).await.unwrap_or_else(|e| e.0);
+            let text = verb_on(http, home, Some(sc), "url", &[], None, left(), None).await.unwrap_or_else(|e| e.0);
             if let Some(value) = text.strip_prefix("ok:") {
                 let value = value.trim();
                 return Ok(match serde_json::from_str::<Value>(value) {

@@ -15,6 +15,7 @@
   import SyncSettings from './SyncSettings.svelte';
   import SharedConfigSettings from './SharedConfigSettings.svelte';
   import ComputerControlSettings from './ComputerControlSettings.svelte';
+  import PasswordVaultSettings from './PasswordVaultSettings.svelte';
   import SessionsSettings from './SessionsSettings.svelte';
   import ServidorSeletor from './ServidorSeletor.svelte';
   import ConfigIcone from './ConfigIcone.svelte';
@@ -119,6 +120,7 @@
     { id: 'sincronizacao', secao: 'servidor', rotulo: m.sync_config_titulo(), icone: 'globo', servidor: true },
     { id: 'shared-config', secao: 'servidor', rotulo: m.shared_config_title(), icone: 'sinal', servidor: true },
     { id: 'contas', secao: 'servidor', rotulo: m.contas_modelos_titulo(), icone: 'pessoa', servidor: true },
+    { id: 'cofre', secao: 'servidor', rotulo: m.vault_web_title(), icone: 'chave', servidor: true },
     { id: 'harnesses', secao: 'servidor', rotulo: m.harness_titulo(), icone: 'pulso', servidor: true },
     { id: 'voz', secao: 'servidor', rotulo: m.voz_titulo(), icone: 'mic', servidor: true },
     { id: 'jev', secao: 'servidor', rotulo: m.jev_title(), icone: 'raio', servidor: true },
@@ -181,7 +183,9 @@
   // No desktop a raiz (a lista de linhas) so existe no celular: as duas colunas ja mostram a
   // navegacao inteira, entao 'root' cai na Aparencia. Resolvido NO RENDER, nunca por navegacao —
   // um redirect disparado no resize seria um push a mais no historico, que a rota ja acerta sozinha.
-  const telaAtual = $derived(isDesktop && tela === 'root' ? ('aparencia' as TelaConfig) : tela);
+  // O cofre é só da vista do celular: o desktop web não ganha tela nova (evolui no nativo).
+  const telaAtual = $derived(isDesktop && (tela === 'root' || tela === 'cofre') ? ('aparencia' as TelaConfig) : tela);
+  const linhasDaVista = $derived(isDesktop ? linhasVisiveis.filter((l) => l.id !== 'cofre') : linhasVisiveis);
 
   // VOLTAR e FECHAR sao coisas diferentes, e o BottomSheet so conhece "fechar": ele chama onClose no
   // Esc, no toque no backdrop E no swipe pra baixo. Passar `voltar` como onClose faria o swipe — o
@@ -305,7 +309,7 @@
           {:else}
             <p class="st-secao">{secao === 'servidor' && nomeAlvo ? m.config_modal_servidor_de({ nome: nomeAlvo }) : secao === 'servidor' ? m.lista_agrupar_servidor() : m.config_aparencia_app()}</p>
           {/if}
-          {#each linhasVisiveis.filter((l) => l.secao === secao) as l (l.id)}
+          {#each linhasDaVista.filter((l) => l.secao === secao) as l (l.id)}
             <button class="st-nav-item" class:sel={telaAtual === l.id}
                     aria-current={telaAtual === l.id ? 'page' : undefined}
                     disabled={l.servidor && semServidor}
@@ -378,7 +382,7 @@
         <p class="st-secao">{secao === 'servidor' && nomeAlvo ? m.config_modal_servidor_de({ nome: nomeAlvo }) : secao === 'servidor' ? m.lista_agrupar_servidor() : m.config_aparencia_app()}</p>
       {/if}
       <div class="st-cartao">
-        {#each linhasVisiveis.filter((l) => l.secao === secao) as l (l.id)}
+        {#each linhasDaVista.filter((l) => l.secao === secao) as l (l.id)}
           <SettingsRow icone={l.icone} rotulo={l.rotulo}
             desabilitada={l.servidor && semServidor}
             motivo={m.config_modal_escolha_servidor()}
@@ -412,6 +416,12 @@
       onLogout={onLogout ?? (() => {})} />
   {:else if telaAtual === 'contas'}
     <ContasSettings apiTarget={alvo} desktop={isDesktop} />
+  {:else if telaAtual === 'cofre'}
+    {#if resolvedServer}
+      {#key identidade}<PasswordVaultSettings server={resolvedServer} />{/key}
+    {:else}
+      <p>{m.config_modal_escolha_servidor()}</p>
+    {/if}
   {:else if telaAtual === 'shared-config'}
     {#if resolvedServer}
       {#key identidade}<SharedConfigSettings server={resolvedServer} />{/key}

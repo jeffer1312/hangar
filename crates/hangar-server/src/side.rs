@@ -1106,9 +1106,10 @@ fn private_frame(frame: &[u8], events: &[&str], guest: bool) -> bool {
         || (!guest && state_frame(frame, &["plugin_toast"]))
 }
 
-/// Quadro que só o dono recebe: aviso de mod (texto dele) e pedido de navegador (url com o token).
+/// Quadro que só o dono recebe: aviso de mod (texto dele), pedido de navegador (url com o token) e
+/// pedido do cofre.
 pub(crate) fn owner_only(frame: &[u8]) -> bool {
-    state_frame(frame, &["plugin_toast", "nav"])
+    state_frame(frame, &["plugin_toast", "nav", "vault"])
 }
 
 /// Quadro de um dos eventos do estado dados.

@@ -3727,3 +3727,91 @@ As mensagens corrigidas levam acentos, mantendo os códigos usados pelos cliente
 **Limite de medição.** Uma prova HTTP com provedor controlado mede a borda e o cache do Hangar;
 ela não comprova aceleração da inferência de fala ou do modelo externo. Não atribuir ao Rust
 ganho de ponta a ponta que não tenha sido medido.
+
+## Cofre de senhas: uma máquina dona, chave no chaveiro, uso aprovado por senha (30/10/2026)
+
+**Regra.** O Hangar guarda as senhas do dono num **cofre** único, numa máquina dona; as outras máquinas pedem a ela pelos peers, por qualquer endereço que o
+`peers.json` dá, inclusive o `app.hangar.dev.br`. O arquivo é criptografado e a chave mora no
+chaveiro do sistema da dona. Cada senha é **pedir sempre** (padrão: o uso por agente abre cartão
+e push no celular, espera até 10 min) ou **liberada**. O agente usa por três caminhos: login
+preenchido pelo navegador da sessão (não vê o valor), comando no shell com o valor numa variável
+de ambiente e apagado da saída, e arquivo 0600 que some no fim da sessão ou em 24 h. Entrada pela
+tela dos três clientes e pelo cartão `request_secret`; ver e copiar não pedem confirmação extra.
+O login só é preenchido em entrada com site cadastrado e na página desse site; token sem site
+serve ao shell e ao arquivo. Cópia diária criptografada vai à máquina escolhida em `backup_peer`
+(nesta implantação, a VPS) e abre só com a senha de recuperação que o dono guarda fora.
+Tudo no Rust, espera por evento.
+
+**Por quê.** O pedido é parar de colar senha no chat (fica no transcript e vai ao modelo) e de
+guardar senha em site de terceiro, com acesso fácil pelo celular. Alternativas recusadas:
+gerenciador pronto como ponte (Bitwarden/Vaultwarden), senha mestra só na memória do servidor,
+um cofre por máquina, rede só por Tailscale.
+
+**Medição.** O agente roda com o mesmo usuário do sistema: com a coleção `login` aberta,
+`secret-tool lookup` devolve o que estiver nela sem prompt, então ele consegue a chave do cofre.
+A memória do `hangar-server` ele não lê (`kernel.yama.ptrace_scope=1`; o agente é filho do
+servidor, não o contrário). A VPS medida não tem chaveiro do sistema (sem
+`gnome-keyring-daemon` nem `secret-tool`).
+
+**Medição do item da chave (daemon isolado, HOME/XDG_RUNTIME_DIR/barramento temporários,
+gnome-keyring 51.1, componentes `secrets` e `pkcs11,secrets,ssh`).** `CreateItem` na coleção
+`login` aberta, com sessão `plain`, volta prompt `/` e o valor de 32 bytes lido de volta por
+`GetSecrets` na mesma conexão é igual. Com o `login` trancado, `SearchItems` põe o item na lista
+`locked` e `GetSecret` responde `org.freedesktop.Secret.Error.IsLocked`. O defeito de
+`keyring.rs` (`Get` de cliente que já saiu derruba o daemon) não se reproduziu: 30 `secret-tool
+lookup`, 30 `busctl get-property` com o `login` aberto e trancado, 30 `Get`/`GetAll`/`OpenSession`
+com `--expect-reply=no` (o cliente sai antes da resposta) e `GetSecret` com a sessão de um processo
+que já saiu (`NoSession`) deixaram o daemon de pé. Mesmo assim o cofre abre uma conexão só, que vive
+com o servidor, abre e fecha a sessão `plain` nela e nunca pergunta sem dono do nome
+(`NoAutoStart`): o caso que derrubou o daemon de verdade não foi isolado.
+
+**Limite.** A aprovação e a saída apagada barram o uso normal, não um agente decidido a burlar: com
+a chave no chaveiro ele abre o cofre, e no shell e no arquivo ele vê o valor se quiser. Entre a
+conferência do domínio e o `Input.insertText` há uma janela de milissegundos em que uma navegação
+pode trocar o documento, porque o CDP não amarra a inserção ao documento. Senha que
+passa pelo `app.hangar.dev.br` é decifrada no servidor intermediário. Notebook fechado = nenhuma
+outra máquina tem senha. 2FA fica fora da primeira entrega: o login pede o código num cartão. O
+token do `peers.json` é o token de dono da outra máquina, então a origem de um pedido entre
+máquinas é declarada por quem pede, não conferida: uma máquina com o token, e o agente dela, chama
+as rotas do cofre direto. Endereço de peer que cai no Connect (8768, Python) não alcança o cofre
+até o Connect migrar para o Rust: nenhum repasse no Python. A `X-Hangar-Key` (a `CP_SESSION_KEY`)
+é lida por outro processo do mesmo usuário (`tmux show-environment`): a entrada temporária e a
+liberação do "guardar" presas à sessão evitam engano entre sessões, não um agente hostil. Sessão
+aberta antes de a conta receber o prazo longo passa na conferência (a configuração já está certa no
+disco) e a tool cai em 60 s, porque o agente só lê a configuração ao subir: reabrir resolve.
+
+**Prazo das tools que esperam o dono. Medição (30/10/2026, Claude Code 2.1.314, servidor MCP por
+HTTP, aprovação segurada):** cada POST ao MCP tem um temporizador próprio, o `timeout` do servidor
+ou o `MCP_TOOL_TIMEOUT`, senão 60 s, sem relação com a janela de ociosidade. Três resultados: só com
+`CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT=660000`, o `vault_exec` morreu em 60,5 s com "The operation timed
+out." (o servidor mandou os cabeçalhos do SSE em 1 ms e manteve o fluxo aberto por 90 s, então a falha
+não é dele); com `MCP_TOOL_TIMEOUT=660000`, aprovação em 370 s deu certo; só com `"timeout": 660000`
+na entrada `hangar` (`--strict-mcp-config`, sem variável), aprovação em 370 s deu certo, 389 s no
+total. A variável global foi recusada: baixaria o teto de relógio de todos os outros servidores MCP de
+~28 h para 11 min. O campo por servidor cobre o temporizador de 60 s e a ociosidade (o Claude Code usa
+o maior entre os dois). Por isso o `scripts/registrar-mcp.py` grava `timeout` no `mcpServers.hangar`
+do `.claude.json` de cada conta e `tool_timeout_sec = 660` no `[mcp_servers.hangar]` do `config.toml`
+(o padrão do Codex também é 60 s), e `erro_cofre_sessao_sem_prazo` confere essa configuração da conta
+da sessão. No Codex não vai por `-c`: com o `config.toml` da conta sem `[mcp_servers.hangar]`, `-c
+mcp_servers.hangar.tool_timeout_sec=660` cria o servidor sem transporte e o Codex recusa subir
+("invalid transport in mcp_servers.hangar"). O rmcp não larga o futuro da tool no
+`notifications/cancelled`, só cancela o token: o `call_tool` das tools do cofre corre contra ele, e
+largar a espera cancela o pedido na dona.
+
+**O que sai da máquina e quando a cópia tenta de novo.** O aviso de pedido do cofre leva o nome da
+senha (ou o rótulo do cadastro) e o `servidor::sessao` de quem pede aos provedores de push (Expo e
+Web Push); o valor nunca. A cópia diária que falha (máquina da cópia fora, chaveiro trancado) tenta
+de novo em 1 h, não no dia seguinte.
+
+**`vault_fill`: o que a árvore de acessibilidade mostra. Medição (30/10/2026, Chromium 149.0.7827.55
+do Playwright, sem janela, perfil temporário):** página com um `input type=text` e dois
+`type=password` (um vazio, um com `value` no HTML); `Input.insertText` em cada um com o foco nele;
+`Accessibility.getFullAXTree`. O campo de texto vem com `value` cru (`"meuusuario"`); o de senha vem
+com um `•` por caractere (`"••••••••••••"` para 12), tanto o digitado quanto o do HTML. Nenhuma
+propriedade do nó diz que é senha: os dois são `textbox` com as mesmas `properties`. Por isso o
+snapshot esconde o valor de três jeitos: valor só de `•` nunca sai (nem o tamanho), o nó que o
+`fill-secret` preencheu sai sem `value` mesmo que a acessibilidade exponha senhas, e toda resposta
+de texto do controlador troca a senha preenchida por `••••` (literal, JSON, base64 e percent-encoded)
+enquanto o navegador viver, inclusive depois de a página navegar (a marca do nó some; a máscara não).
+**Limite:** o `eval` continua sendo um oráculo para um agente decidido (`value.length`,
+`value.split('')`, trocar o `type` e tirar `shot`); a máscara barra a leitura comum, não essa.

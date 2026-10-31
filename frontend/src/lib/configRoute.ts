@@ -3,15 +3,15 @@
 // escolhendo a tela de tras (chat, quadro, lista), e a query diz qual tela do painel esta por cima.
 // Assim o painel abre sobre QUALQUER rota sem que nenhuma delas precise saber que ele existe.
 
-export type TelaConfig = 'root' | 'geral' | 'aparencia' | 'notificacoes' | 'anexos' | 'atalhos' | 'avancado' | 'sobre' | 'diario' | 'maquinas' | 'contas' | 'orquestracao' | 'voz' | 'harnesses' | 'sincronizacao' | 'shared-config' | 'jev' | 'computer' | 'migration' | 'sessoes';
+export type TelaConfig = 'root' | 'geral' | 'aparencia' | 'notificacoes' | 'anexos' | 'atalhos' | 'avancado' | 'sobre' | 'diario' | 'maquinas' | 'contas' | 'orquestracao' | 'voz' | 'harnesses' | 'sincronizacao' | 'shared-config' | 'jev' | 'computer' | 'migration' | 'cofre' | 'sessoes';
 
-export const TELAS_CONFIG: readonly TelaConfig[] = ['root', 'geral', 'aparencia', 'notificacoes', 'anexos', 'atalhos', 'avancado', 'sobre', 'diario', 'maquinas', 'contas', 'orquestracao', 'voz', 'harnesses', 'sincronizacao', 'shared-config', 'jev', 'computer', 'migration', 'sessoes'];
+export const TELAS_CONFIG: readonly TelaConfig[] = ['root', 'geral', 'aparencia', 'notificacoes', 'anexos', 'atalhos', 'avancado', 'sobre', 'diario', 'maquinas', 'contas', 'orquestracao', 'voz', 'harnesses', 'sincronizacao', 'shared-config', 'jev', 'computer', 'migration', 'cofre', 'sessoes'];
 
 // Rotas de tela que mudaram de nome: um link guardado por alguém não pode virar tela em branco.
 const RENOMEADAS: Record<string, TelaConfig> = { ditado: 'voz', servidores: 'maquinas', acesso: 'maquinas', motores: 'contas' };
 
 /** Telas que mexem NUM servidor — sem alvo resolvido elas nao podem abrir (ver App.svelte). */
-export const TELAS_DE_SERVIDOR: readonly TelaConfig[] = ['contas', 'notificacoes', 'anexos', 'atalhos', 'avancado', 'orquestracao', 'voz', 'harnesses', 'sincronizacao', 'shared-config', 'jev', 'computer', 'diario'];
+export const TELAS_DE_SERVIDOR: readonly TelaConfig[] = ['contas', 'notificacoes', 'anexos', 'atalhos', 'avancado', 'orquestracao', 'voz', 'harnesses', 'sincronizacao', 'shared-config', 'jev', 'computer', 'diario', 'cofre'];
 
 /** Do servidor, mas o convidado continua lendo: o diário dele não muda nada no servidor. */
 export const convidadoLe = (tela: TelaConfig): boolean => tela === 'diario';

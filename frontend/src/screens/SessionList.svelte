@@ -18,6 +18,7 @@ import * as m from '../paraglide/messages';
   import ConfirmSheet from '../components/ConfirmSheet.svelte';
   import Git from '../components/Git.svelte';
   import KeyringNotice from '../components/KeyringNotice.svelte';
+  import PasswordVaultRequestSheet from '../components/PasswordVaultRequestSheet.svelte';
   import AttentionFeed from '../components/AttentionFeed.svelte';
   import AccountMenu from '../components/AccountMenu.svelte';
   import LiveVoiceButton from '../components/LiveVoiceButton.svelte';
@@ -566,6 +567,10 @@ import * as m from '../paraglide/messages';
     <!-- Fora da top-strip: ela só existe com 2+ servidores ou falha, e o chaveiro trancado vale com um só. -->
     {#each ownBuckets.filter((b) => b.keyringLocked) as b (b.server.id)}
       <KeyringNotice server={b.server} />
+    {/each}
+    {#each ownBuckets as b (b.server.id)}
+      {@const vault = sessionsStore.vaultFor(b.server.id)}
+      {#if vault}<PasswordVaultRequestSheet server={b.server} event={vault} />{/if}
     {/each}
     {#if loading && sessions.length === 0}
       <div class="empty-state">

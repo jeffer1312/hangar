@@ -25,7 +25,16 @@ impl Localized {
 }
 
 #[derive(Deserialize)]
-struct Notify { session: String, title: Localized, body: Localized, #[serde(default)] list: bool }
+struct Notify {
+    session: String,
+    title: Localized,
+    body: Localized,
+    #[serde(default)]
+    list: bool,
+    /// `request_id` do pedido do cofre: o app abre a folha dele. Só o Rust preenche.
+    #[serde(skip)]
+    vault_request: Option<String>,
+}
 
 // O Expo guarda recibos por 24 h e lê até 1000 por chamada; ticket sem recibo não fica para sempre.
 const MAX_PENDING: usize = 1000;
@@ -101,11 +110,12 @@ pub async fn private(State(state): State<Arc<AppState>>, ConnectInfo(peer): Conn
 }
 
 /// O aviso que o próprio Rust decidiu (`push::send`): mesmo envio do `private`, sem a volta HTTP.
-pub(crate) fn send(state: &AppState, session: &str, title: (String, String), body: (String, String), list: bool) {
+pub(crate) fn send(state: &AppState, session: &str, title: (String, String), body: (String, String), list: bool,
+                   vault_request: Option<String>) {
     let base = state.accounts.env.base.get("HANGAR_EXPO_PUSH_URL").filter(|v| !v.is_empty())
         .map_or("https://exp.host", String::as_str).trim_end_matches('/').to_owned();
     let notify = Notify { session: session.to_owned(), title: Localized { pt: title.0, en: title.1 },
-        body: Localized { pt: body.0, en: body.1 }, list };
+        body: Localized { pt: body.0, en: body.1 }, list, vault_request };
     tokio::spawn(deliver(path(&state.accounts.env.home), base, state.diag.clone(), notify));
 }
 
@@ -147,7 +157,12 @@ async fn deliver(path: PathBuf, base: String, diag: DiagClient, notify: Notify) 
     let mut tickets = Vec::new();
     for targets in all.chunks(MAX_MESSAGES) {
         let messages: Vec<Value> = targets.iter().map(|e| {
-            let data = if notify.list { json!({"server": e.server_id}) } else { json!({"server": e.server_id, "session": notify.session}) };
+            let mut data = if notify.list { json!({"server": e.server_id}) } else { json!({"server": e.server_id, "session": notify.session}) };
+            // Como no Web Push: o id da máquina é o que o aparelho registrou para ela.
+            if let Some(request_id) = &notify.vault_request {
+                data["server_id"] = json!(e.server_id);
+                data["request_id"] = json!(request_id);
+            }
             json!({"to": e.token, "title": format!("{} · {}", e.label, notify.title.pick(&e.locale)),
                 "body": notify.body.pick(&e.locale), "data": data, "channelId": "default", "priority": "high"})
         }).collect();

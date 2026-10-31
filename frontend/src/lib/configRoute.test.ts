@@ -63,6 +63,6 @@ describe('comConfig', () => {
     expect(parseConfig(h)).toEqual({ tela, srv: 'srv-1' });
   });
   it('as telas de servidor sao as que exigem alvo', () => {
-    expect(TELAS_DE_SERVIDOR).toEqual(['contas', 'notificacoes', 'anexos', 'atalhos', 'avancado', 'orquestracao', 'voz', 'harnesses', 'sincronizacao', 'shared-config', 'jev', 'computer', 'diario']);
+    expect(TELAS_DE_SERVIDOR).toEqual(['contas', 'notificacoes', 'anexos', 'atalhos', 'avancado', 'orquestracao', 'voz', 'harnesses', 'sincronizacao', 'shared-config', 'jev', 'computer', 'diario', 'cofre']);
   });
 });

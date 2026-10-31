@@ -12,7 +12,7 @@ vi.mock('../lib/sessionsStore.svelte', () => {
   return { sessionsStore: {
     get rows() { return state.rows; },
     byServer: [{ server, sessions: [], error: null, loaded: true }],
-    servers: [server], loading: false, identities: new Map(),
+    servers: [server], loading: false, identities: new Map(), vaultFor: () => null,
     retain: vi.fn(), release: vi.fn(), buscarAgora: vi.fn(), refreshServers: vi.fn(), reconnect: vi.fn(),
     takePairLeft: () => null, markDeleting: vi.fn(), unmarkDeleting: vi.fn(),
   } };

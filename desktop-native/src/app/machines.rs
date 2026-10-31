@@ -206,7 +206,7 @@ impl Line {
 }
 
 /// Host e caminho, sem esquema (`hostDe` do web): atrás de um proxy por caminho, máquinas diferentes dividem o host.
-fn host_key(url: &str) -> String {
+pub(super) fn host_key(url: &str) -> String {
     match url::Url::parse(url.trim()) {
         Ok(u) => format!("{}{}{}", u.host_str().unwrap_or_default(), u.port().map(|p| format!(":{p}")).unwrap_or_default(),
             u.path().trim_end_matches('/')).to_lowercase(),

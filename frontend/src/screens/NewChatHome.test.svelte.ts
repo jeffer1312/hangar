@@ -31,6 +31,7 @@ vi.mock('../lib/sessionsStore.svelte', () => ({ sessionsStore: {
   get rows() { return rows; },
   get byServer() { return servers.map((server) => ({ server, loaded: true, error: null })); },
   loading: false,
+  vaultFor: () => null,
 } }));
 vi.mock('../lib/sessionListModel.svelte', () => ({ createSessionListModel: (options: { onOpen: (name: string) => void }) => ({
   mount: () => () => {}, confirmDel: null,
