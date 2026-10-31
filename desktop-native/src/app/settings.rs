@@ -103,6 +103,8 @@ const PAGE_ROWS: &[(Page, &[(&str, Option<&str>)])] = &[
         ("settings_channel_title", Some("settings_channel_help"))]),
     (Page::Accounts, &[("accounts_subscriptions", Some("accounts_menu_note")), ("accounts_models", None),
         ("accounts_others", Some("accounts_others_empty")), ("accounts_density", None), ("accounts_refresh", None)]),
+    (Page::Vault, &[("vault_entries", Some("vault_entries_hint")), ("vault_add", Some("vault_token_hint")),
+        ("vault_backup", Some("vault_backup_hint")), ("vault_recovery", None)]),
     (Page::Orchestration, &[("orchestration_intro", None), ("orchestration_unrestricted", None)]),
     (Page::Shortcuts, &[("shortcuts_add", Some("shortcuts_lead")), ("shortcuts_restore", Some("shortcuts_restore_help")),
         ("keyboard_title", Some("keyboard_lead")), ("keyboard_hold_title", Some("keyboard_hold_help"))]),
