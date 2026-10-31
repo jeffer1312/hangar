@@ -11,6 +11,7 @@ mod session_defaults;
 mod tags;
 mod push_expo;
 mod artifacts;
+mod archive_history;
 mod session_media;
 mod search_context;
 mod commands;
