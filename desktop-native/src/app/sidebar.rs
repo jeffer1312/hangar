@@ -608,9 +608,9 @@ impl Hangar {
     /// "Ver sessões ocultas": fecha as Configurações e mostra a barra cheia com o grupo aberto.
     pub(super) fn show_hidden_group(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_settings(window, cx);
-        // Com abas não há barra; a busca acha as ocultas com a marca.
-        if appearance::get().navigation.tabs() { self.open_search(window, cx); return; }
-        if self.rail() { self.toggle_rail(cx); }
+        // Com abas não há barra; as ocultas moram no fim de cada coluna da bandeja das máquinas.
+        if appearance::get().navigation.tabs() { self.open_machines_tray(window, cx); }
+        else if self.rail() { self.toggle_rail(cx); }
         if !self.hidden_open() { self.toggle_group(HIDDEN_GROUP.into(), cx); }
     }
 
