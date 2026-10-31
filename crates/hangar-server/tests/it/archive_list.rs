@@ -340,6 +340,8 @@ async fn m4_index_listing_does_not_read_the_transcript() {
 /// F8 sem custo de leitura: com o índice não pronto, a lista de pastas abre só os transcripts que o
 /// Python abria (o cabeçalho do mais novo de cada pasta por conta e a varredura da reserva recente).
 /// A cópia de `db401d8f` em `-home-jefferson-Projetos-hangar` não é a mais nova da pasta: não abre.
+// Só o inotify avisa abertura de arquivo; nos outros sistemas o contador ficaria sempre vazio.
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn f8_folders_without_index_open_only_what_the_python_opened() {
     let h = Harness::new(Mode::NoIndex).await;
