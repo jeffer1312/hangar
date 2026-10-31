@@ -14,6 +14,7 @@ mod watch;
 mod tests;
 
 pub use watch::Producer;
+pub(crate) use ingest::{FileState, absorb_line, cut, internal_prefixes};
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -106,6 +107,27 @@ pub struct FileFacts {
     pub account: String,
     pub config_dir: Option<String>,
     pub provider: String,
+}
+
+/// Um transcript indexado como o Arquivo o lê, com o tamanho e o relógio da leitura: arquivo que
+/// mudou depois dela é lido do disco.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ArchiveRow {
+    pub size: i64,
+    pub mtime_ns: i64,
+    pub preview: String,
+    pub cwd: Option<String>,
+    pub has_user: bool,
+    pub internal: bool,
+    pub last_text: String,
+}
+
+impl ArchiveRow {
+    /// O arquivo está como o índice o leu (tamanho e relógio do stat de agora).
+    pub fn fresh(&self, md: &std::fs::Metadata) -> bool {
+        let stat = ingest::Stat::of(md);
+        (self.size, self.mtime_ns) == (stat.size, stat.mtime_ns)
+    }
 }
 
 #[derive(Clone)]
@@ -339,6 +361,27 @@ impl Index {
             |r| Ok(FileFacts { has_user: r.get::<_, i64>(0)? != 0, last_text: r.get(1)?,
                 account: r.get::<_, Option<String>>(2)?.unwrap_or_default(), config_dir: r.get(3)?, provider: r.get(4)? }),
         ).optional()?)
+    }
+
+    /// Todos os transcripts indexados numa leitura só (o Arquivo lista milhares); erro dá vazio e o
+    /// Arquivo lê do disco, como o `_heads` do Python.
+    pub fn archive_rows(&self) -> HashMap<String, ArchiveRow> {
+        let read = || -> rusqlite::Result<HashMap<String, ArchiveRow>> {
+            let conn = self.reader()?;
+            let mut stmt = conn.prepare(
+                "SELECT path, size, mtime_ns, preview, cwd, has_user, COALESCE(internal, 0), last_text FROM files")?;
+            let rows = stmt.query_map([], |r| Ok((r.get(0)?, ArchiveRow { size: r.get(1)?, mtime_ns: r.get(2)?, preview: r.get(3)?,
+                cwd: r.get(4)?, has_user: r.get::<_, i64>(5)? != 0, internal: r.get::<_, i64>(6)? != 0, last_text: r.get(7)? })))?.collect();
+            rows
+        };
+        if !self.inner.path.exists() {
+            return HashMap::new();
+        }
+        self.notice_catalog();
+        read().unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "arquivo: índice ilegível, lendo do disco");
+            HashMap::new()
+        })
     }
 
     /// Liga o produtor uma vez por processo (só a subida real chama).

@@ -270,6 +270,11 @@ fn for_thread(reader: &mut Reader, codex_home: &str, thread: &str) -> Result<Opt
     Ok(None)
 }
 
+/// A fase da transferência que tem a thread Codex como destino (`transfer_for_thread`).
+pub(crate) fn thread_phase(home: &Path, codex_home: &str, thread: &str) -> Result<Option<String>, String> {
+    Ok(for_thread(&mut Reader::new(home), codex_home, thread)?.map(|r| r.phase))
+}
+
 /// As linhas que a transferência marca, substitui ou cria, e as em curso (fora de classificação
 /// e decoração), como `list_facts._transfers`.
 pub fn transfers(rows: &[SessionRow], dirs: &Dirs) -> Result<(Vec<SessionRow>, HashSet<String>), String> {

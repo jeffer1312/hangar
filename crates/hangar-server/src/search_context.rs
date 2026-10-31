@@ -21,7 +21,7 @@ use crate::transcript::{HistoryRequest, Provider, TAIL_WINDOW, merged_history};
 const DEFAULT_AROUND: usize = 3;
 const MAX_AROUND: f64 = 10.0;
 // O `int` do FastAPI aceita espaço em volta, `_` entre dígitos e `3.0`.
-static PY_INT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\A[+-]?[0-9](?:_?[0-9])*(?:\.0*)?\z").unwrap());
+pub(crate) static PY_INT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\A[+-]?[0-9](?:_?[0-9])*(?:\.0*)?\z").unwrap());
 
 struct Params { project: String, session_id: String, event_id: String, around: usize }
 

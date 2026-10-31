@@ -33,7 +33,7 @@ static SID: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 /// Os 60 primeiros caracteres de cada pedido interno do Hangar: conversa que começa assim fica fora.
-pub(super) fn internal_prefixes() -> Vec<String> {
+pub(crate) fn internal_prefixes() -> Vec<String> {
     [ASK_PREFIX, crate::loops::refine::SYSTEM, HANDOFF_PREFIX].iter()
         .map(|p| p.chars().take(PREFIX_CHARS).collect()).collect()
 }
@@ -47,7 +47,7 @@ pub(super) fn masked_ino(raw: u64) -> i64 {
 pub(super) struct Stat { pub size: i64, pub mtime_ns: i64, pub ino: Option<i64> }
 
 impl Stat {
-    fn of(md: &Metadata) -> Self {
+    pub(super) fn of(md: &Metadata) -> Self {
         #[cfg(unix)]
         let (ino, mtime_ns) = {
             use std::os::unix::fs::MetadataExt;
@@ -208,7 +208,7 @@ pub(super) fn pass(conn: &mut Connection, accounts: &[Account], report: Report) 
 
 /// O que o arquivo já tem no índice e o que a leitura acrescenta.
 #[derive(Default)]
-pub(super) struct FileState {
+pub(crate) struct FileState {
     pub offset: i64,
     pub lines: i64,
     pub cwd: Option<String>,
@@ -222,10 +222,10 @@ pub(super) struct FileState {
 }
 
 /// Mensagem a indexar: (event_id, role, ts, texto).
-pub(super) type Message = (String, &'static str, Option<f64>, String);
+pub(crate) type Message = (String, &'static str, Option<f64>, String);
 
 /// Uma linha completa (com o `\n`). Devolve as mensagens a indexar.
-pub(super) fn absorb_line(st: &mut FileState, raw: &[u8], prefixes: &[String]) -> Vec<Message> {
+pub(crate) fn absorb_line(st: &mut FileState, raw: &[u8], prefixes: &[String]) -> Vec<Message> {
     st.offset += raw.len() as i64;
     st.lines += 1;
     // O Python lê em modo texto: "\r\n" chega como "\n".
@@ -283,7 +283,7 @@ pub(super) fn absorb_line(st: &mut FileState, raw: &[u8], prefixes: &[String]) -
 }
 
 /// `archive._cortar`: corte na palavra e com reticências.
-pub(super) fn cut(text: &str) -> String {
+pub(crate) fn cut(text: &str) -> String {
     const LIMIT: usize = 120;
     if text.chars().count() <= LIMIT { return text.to_owned(); }
     let mut short: String = text.chars().take(LIMIT).collect();

@@ -46,7 +46,7 @@ fn int_parsing(loc: [&str; 2], input: &str) -> Response {
         "msg": "Input should be a valid integer, unable to parse string as an integer", "input": input}]}))
 }
 
-fn reply(error: OpenError) -> Response {
+pub(crate) fn reply(error: OpenError) -> Response {
     let message = match error.code {
         Some("codex_account_ambiguous_rollout") => Some("a conversa Codex existe em mais de uma conta; escolha a conta"),
         Some("codex_account_archive_mismatch") => Some("a conta escolhida não é a origem desta conversa Codex"),
@@ -202,7 +202,7 @@ fn read_history(st: &AppState, path: &Path, provider: AgentProvider, tail: Optio
     }
 }
 
-fn is_message(ev: &ChatEvent) -> bool {
+pub(crate) fn is_message(ev: &ChatEvent) -> bool {
     matches!(ev.kind, ChatKind::UserMsg | ChatKind::AssistantMsg) && ev.text.as_deref().is_some_and(|t| !t.is_empty())
 }
 
@@ -227,7 +227,7 @@ fn agent_tail(path: &Path, provider: AgentProvider, n: usize) -> io::Result<Vec<
     }
 }
 
-fn agent_line(provider: AgentProvider, raw: &[u8]) -> Vec<ChatEvent> {
+pub(crate) fn agent_line(provider: AgentProvider, raw: &[u8]) -> Vec<ChatEvent> {
     if provider == AgentProvider::Codex {
         return crate::transcript::LineParser::new(Provider::Codex).feed(raw, 0);
     }

@@ -46,8 +46,8 @@ impl ArchiveBody {
     }
 }
 
-static PROJECT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\A[A-Za-z0-9-]+\z").unwrap());
-static UUID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\z").unwrap());
+pub(crate) static PROJECT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\A[A-Za-z0-9-]+\z").unwrap());
+pub(crate) static UUID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\z").unwrap());
 static KIMI_ID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\Asession_[0-9a-fA-F-]{36}\z").unwrap());
 
 /// Como os `ValueError`/`FileNotFoundError` do Python viram resposta na rota.
@@ -108,7 +108,7 @@ pub(crate) fn claude_jsonl(w: &Where, project: &str, sid: &str, config_dir: Opti
 }
 
 /// O primeiro valor que `field` acha nas `lines` primeiras linhas JSON do arquivo.
-fn header(path: &Path, lines: usize, field: impl Fn(&Value) -> Option<String>) -> Option<String> {
+pub(crate) fn header(path: &Path, lines: usize, field: impl Fn(&Value) -> Option<String>) -> Option<String> {
     let file = std::fs::File::open(path).ok()?;
     std::io::BufReader::new(file).split(b'\n').take(lines).flatten()
         .filter_map(|line| serde_json::from_slice::<Value>(&line).ok()).find_map(|obj| field(&obj))
@@ -213,7 +213,7 @@ fn from_transfer(home: &Path, codex_home: &Path, thread: &str) -> bool {
 }
 
 /// A raiz das conversas do Pi ou do omp.
-fn agent_root(w: &Where, provider: AgentProvider) -> PathBuf {
+pub(crate) fn agent_root(w: &Where, provider: AgentProvider) -> PathBuf {
     match provider {
         AgentProvider::Pi => w.env.get("PI_CODING_AGENT_SESSION_DIR").filter(|v| !v.is_empty()).map(PathBuf::from)
             .unwrap_or_else(|| w.home.join(".pi").join("agent").join("sessions")),

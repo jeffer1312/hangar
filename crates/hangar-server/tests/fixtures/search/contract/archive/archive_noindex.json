@@ -1,0 +1,1645 @@
+{
+ "origin_commit": "0894896ce10992950253c6ab4e0e02b137c809df",
+ "command": "cd backend && uv run python ../.superpowers/sdd/2026-10-31-busca-rust/contract/capture.py",
+ "data": {
+  "list_config_dirs": [
+   {
+    "path": "{HOME}/.claude-a",
+    "label": "a",
+    "active": true
+   },
+   {
+    "path": "{HOME}/.claude-b",
+    "label": "b",
+    "active": false
+   }
+  ],
+  "contas": [
+   [
+    "{HOME}/.claude-a",
+    "a",
+    "{HOME}/.claude-a/projects"
+   ],
+   [
+    "{HOME}/.claude-b",
+    "b",
+    "{HOME}/.claude-b/projects"
+   ]
+  ],
+  "folders": [
+   {
+    "project": "-home-jefferson-Projetos-hangar-computer-control-9c0b634f-t1",
+    "cwd": "/home/jefferson/Projetos/hangar-computer-control-9c0b634f-t1",
+    "count": 1,
+    "mtime": 1793001400.0
+   },
+   {
+    "project": "-home-jefferson-Projetos-hangar",
+    "cwd": "/home/jefferson/Projetos/hangar-Hangar-rust",
+    "count": 5,
+    "mtime": 1793001200.0
+   },
+   {
+    "project": "-home-jefferson-Projetos-hangar-mobile-deliveries-cad3e6fe-t32",
+    "cwd": "/home/jefferson/Projetos/hangar-mobile-deliveries-cad3e6fe-t32",
+    "count": 1,
+    "mtime": 1793000800.0
+   },
+   {
+    "project": "-home-jefferson",
+    "cwd": "/home/jefferson",
+    "count": 1,
+    "mtime": 1793000700.0
+   },
+   {
+    "project": "-tmp-cx-probe-work",
+    "cwd": "/tmp/cx-probe-work",
+    "count": 1,
+    "mtime": 1793000600.0
+   },
+   {
+    "project": "-tmp-hangar-native-task4-fixture-jf",
+    "cwd": "/tmp/hangar-native-task4-fixture-jf",
+    "count": 1,
+    "mtime": 1793000500.0
+   },
+   {
+    "project": "-tmp-claude-1000--home-jefferson-Projetos-hangar-ac1a7b0f-d0a7-4e66-8f05-f53ea5d4b4da-scratchpad-omp-teste",
+    "cwd": "/tmp/claude-1000/-home-jefferson-Projetos-hangar/ac1a7b0f-d0a7-4e66-8f05-f53ea5d4b4da/scratchpad/omp-teste",
+    "count": 1,
+    "mtime": 1793000300.0
+   },
+   {
+    "project": "-home-jefferson-Projetos-hangar--worktrees-contas-modelos",
+    "cwd": "/home/jefferson/Projetos/hangar/.worktrees/contas-modelos",
+    "count": 1,
+    "mtime": 1793000200.0
+   }
+  ],
+  "folders_a": [
+   {
+    "project": "-home-jefferson-Projetos-hangar-computer-control-9c0b634f-t1",
+    "cwd": "/home/jefferson/Projetos/hangar-computer-control-9c0b634f-t1",
+    "count": 1,
+    "mtime": 1793001400.0
+   },
+   {
+    "project": "-home-jefferson-Projetos-hangar",
+    "cwd": "/home/jefferson/Projetos/hangar-Hangar-rust",
+    "count": 1,
+    "mtime": 1793001200.0
+   },
+   {
+    "project": "-home-jefferson",
+    "cwd": "/home/jefferson",
+    "count": 1,
+    "mtime": 1793000700.0
+   }
+  ],
+  "folders_b": [
+   {
+    "project": "-home-jefferson-Projetos-hangar",
+    "cwd": "/home/jefferson/Projetos/hangar-mobile-deliveries-cad3e6fe-t32",
+    "count": 2,
+    "mtime": 1793001100.0
+   },
+   {
+    "project": "-home-jefferson-Projetos-hangar-mobile-deliveries-cad3e6fe-t32",
+    "cwd": "/home/jefferson/Projetos/hangar-mobile-deliveries-cad3e6fe-t32",
+    "count": 1,
+    "mtime": 1793000800.0
+   },
+   {
+    "project": "-tmp-cx-probe-work",
+    "cwd": "/tmp/cx-probe-work",
+    "count": 1,
+    "mtime": 1793000600.0
+   }
+  ],
+  "providers": [
+   [
+    "codex",
+    "/home/jefferson/Projetos/hangar",
+    "01a05511-e980-71b3-93a9-befda5704b20",
+    "{HOME}/.codex/sessions/2026/08/30/rollout-2026-08-30T20-47-12-01a05511-e980-71b3-93a9-befda5704b20.jsonl",
+    1793000100.0,
+    "{HOME}/.codex"
+   ],
+   [
+    "codex",
+    "/tmp/hangar-native-task4-fixture-jf",
+    "01a0d000-f6ac-74e3-b19b-98d42af1a712",
+    "{HOME}/.codex-b/sessions/2026/09/23/rollout-2026-09-23T17-41-59-01a0d000-f6ac-74e3-b19b-98d42af1a712.jsonl",
+    1793000500.0,
+    "{HOME}/.codex-b"
+   ],
+   [
+    "kimi",
+    "/home/jefferson/Projetos/hangar",
+    "session_ab697d05-66da-4b2a-8e80-3d769951e752",
+    "{HOME}/.kimi-code/sessions/wd_hangar_5112ff7a84e0/session_ab697d05-66da-4b2a-8e80-3d769951e752/agents/main/wire.jsonl",
+    1793000400.0,
+    null
+   ],
+   [
+    "omp",
+    "/tmp/claude-1000/-home-jefferson-Projetos-hangar/ac1a7b0f-d0a7-4e66-8f05-f53ea5d4b4da/scratchpad/omp-teste",
+    "01a06932-79ae-77e9-b95a-286b6e2e9288",
+    "{HOME}/.omp/agent/sessions/-tmp-claude-1000--home-jefferson-Projetos-hangar-ac1a7b0f-d0a7-4e66-8f05-f53ea5d4b4da-scratchpad-omp-teste/2026-09-03T21-35-10-766Z_01a06932-79ae-77e9-b95a-286b6e2e9288.jsonl",
+    1793000300.0,
+    null
+   ],
+   [
+    "pi",
+    "/home/jefferson/Projetos/hangar/.worktrees/contas-modelos",
+    "d337d6b8-0b3c-4bbe-8034-939d7c48f246",
+    "{HOME}/.pi/agent/sessions/--home-jefferson-Projetos-hangar-.worktrees-contas-modelos--/2026-08-11T09-37-57-248Z_d337d6b8-0b3c-4bbe-8034-939d7c48f246.jsonl",
+    1793000200.0,
+    null
+   ]
+  ],
+  "folder": {
+   "-home-jefferson-Projetos-hangar-computer-control-9c0b634f-t1": {
+    "status": 200,
+    "body": [
+     {
+      "project": "-home-jefferson-Projetos-hangar-computer-control-9c0b634f-t1",
+      "cwd": "/home/jefferson/Projetos/hangar-computer-control-9c0b634f-t1",
+      "session_id": "0cc60e6c-eafc-4915-9936-f0c7b81191d9",
+      "mtime": 1793001400.0,
+      "preview": "[painel: orquestrador 9c0b634f] Read /.claude/skills/orquestrar/references/executor.md — your role's page, plus the…",
+      "ultima": "O árbitro aceitou a correção do scripts/windows-test.sh e mandou incluir components = [\"clippy\"] no rust-toolchain.toml…",
+      "live": true,
+      "config_dir": "{HOME}/.claude-a",
+      "conta": "a",
+      "provider": "claude",
+      "codex_home": null,
+      "codex_account": null,
+      "name": null
+     }
+    ]
+   },
+   "-home-jefferson-Projetos-hangar": {
+    "status": 200,
+    "body": [
+     {
+      "project": "-home-jefferson-Projetos-hangar",
+      "cwd": "/home/jefferson/Projetos/hangar-Hangar-rust",
+      "session_id": "75fea57d-2237-43fe-a669-bb1ed97c6eae",
+      "mtime": 1793001200.0,
+      "preview": "[de: cli] Merge da origin/main commitado: c6965144d (pais b31fe2c + 675ccf0), protocolo interno 63, não está no GitHub…",
+      "ultima": "O ator do Rust chama POST /internal/runtime/policy no Python ao abrir e recebe 503. Vou ver por quê.",
+      "live": false,
+      "config_dir": "{HOME}/.claude-a",
+      "conta": "a",
+      "provider": "claude",
+      "codex_home": null,
+      "codex_account": null,
+      "name": null
+     },
+     {
+      "project": "-home-jefferson-Projetos-hangar",
+      "cwd": "/home/jefferson/Projetos/hangar-mobile-deliveries-cad3e6fe-t32",
+      "session_id": "a5a5a5a5-0000-4000-8000-000000000001",
+      "mtime": 1793001100.0,
+      "preview": "Você responde onde um assunto apareceu nas conversas do usuário, a partir de TRECHOS de transcripts. Responda curto em…",
+      "ultima": "Revisor da Task 32 pronto: proteção de escrita comprovada (EROFS no código, escrita aceita em pareceres/). Aguardando a…",
+      "live": false,
+      "config_dir": "{HOME}/.claude-b",
+      "conta": "b",
+      "provider": "claude",
+      "codex_home": null,
+      "codex_account": null,
+      "name": null
+     },
+     {
+      "project": "-home-jefferson-Projetos-hangar",
+      "cwd": "/home/jefferson/Projetos/hangar-mobile-deliveries-cad3e6fe-t32",
+      "session_id": "db401d8f-fc08-463c-a3cc-4734fc5dc634",
+      "mtime": 1793000900.0,
+      "preview": "[painel: orquestrador cad3e6fe] Read /.claude/skills/orquestrar/references/revisor.md — your role's page, plus the…",
+      "ultima": "Aprovei a rodada 1 da T32, mas só na revisão do código: o lote fecha com pendências e a entrega 3 não está aceita no…",
+      "live": false,
+      "config_dir": "{HOME}/.claude-b",
+      "conta": "b",
+      "provider": "claude",
+      "codex_home": null,
+      "codex_account": null,
+      "name": "nome-fechado"
+     },
+     {
+      "project": "-home-jefferson-Projetos-hangar",
+      "cwd": "/home/jefferson/Projetos/hangar",
+      "session_id": "session_ab697d05-66da-4b2a-8e80-3d769951e752",
+      "mtime": 1793000400.0,
+      "preview": "",
+      "ultima": "Olá! Posso ajudar com algo no projeto Hangar — código, bugs, features, documentação? É só dizer.",
+      "live": false,
+      "config_dir": null,
+      "conta": "",
+      "provider": "kimi",
+      "codex_home": null,
+      "codex_account": null,
+      "name": null
+     },
+     {
+      "project": "-home-jefferson-Projetos-hangar",
+      "cwd": "/home/jefferson/Projetos/hangar",
+      "session_id": "01a05511-e980-71b3-93a9-befda5704b20",
+      "mtime": 1793000100.0,
+      "preview": "",
+      "ultima": "entregue -> lider2",
+      "live": false,
+      "config_dir": null,
+      "conta": "",
+      "provider": "codex",
+      "codex_home": "{HOME}/.codex",
+      "codex_account": "default",
+      "name": null
+     }
+    ]
+   },
+   "-home-jefferson-Projetos-hangar-mobile-deliveries-cad3e6fe-t32": {
+    "status": 200,
+    "body": [
+     {
+      "project": "-home-jefferson-Projetos-hangar-mobile-deliveries-cad3e6fe-t32",
+      "cwd": "/home/jefferson/Projetos/hangar-mobile-deliveries-cad3e6fe-t32",
+      "session_id": "db401d8f-fc08-463c-a3cc-4734fc5dc634",
+      "mtime": 1793000800.0,
+      "preview": "[painel: orquestrador cad3e6fe] Read /.claude/skills/orquestrar/references/revisor.md — your role's page, plus the…",
+      "ultima": "Aprovei a rodada 1 da T32, mas só na revisão do código: o lote fecha com pendências e a entrega 3 não está aceita no…",
+      "live": false,
+      "config_dir": "{HOME}/.claude-b",
+      "conta": "b",
+      "provider": "claude",
+      "codex_home": null,
+      "codex_account": null,
+      "name": null
+     }
+    ]
+   },
+   "-home-jefferson": {
+    "status": 200,
+    "body": [
+     {
+      "project": "-home-jefferson",
+      "cwd": "/home/jefferson",
+      "session_id": "42a7c450-7f7e-4fd7-84ed-ee699d11098d",
+      "mtime": 1793000700.0,
+      "preview": "tem como dedesativar esse mod do ponytail? eu nao queria isso ativo nao querof icar vendo esse botao ai",
+      "ultima": "tem como dedesativar esse mod do ponytail? eu nao queria isso ativo nao querof icar vendo esse botao ai",
+      "live": false,
+      "config_dir": "{HOME}/.claude-a",
+      "conta": "a",
+      "provider": "claude",
+      "codex_home": null,
+      "codex_account": null,
+      "name": null
+     }
+    ]
+   },
+   "-tmp-cx-probe-work": {
+    "status": 200,
+    "body": [
+     {
+      "project": "-tmp-cx-probe-work",
+      "cwd": "/tmp/cx-probe-work",
+      "session_id": "f8f12de6-7941-4bd0-8f0c-02bc0b4b7f53",
+      "mtime": 1793000600.0,
+      "preview": "BLOQUEIA isto",
+      "ultima": "BLOQUEIA isto",
+      "live": false,
+      "config_dir": "{HOME}/.claude-b",
+      "conta": "b",
+      "provider": "claude",
+      "codex_home": null,
+      "codex_account": null,
+      "name": null
+     }
+    ]
+   },
+   "-tmp-hangar-native-task4-fixture-jf": {
+    "status": 200,
+    "body": [
+     {
+      "project": "-tmp-hangar-native-task4-fixture-jf",
+      "cwd": "/tmp/hangar-native-task4-fixture-jf",
+      "session_id": "01a0d000-f6ac-74e3-b19b-98d42af1a712",
+      "mtime": 1793000500.0,
+      "preview": "",
+      "ultima": "marker two.",
+      "live": false,
+      "config_dir": null,
+      "conta": "",
+      "provider": "codex",
+      "codex_home": "{HOME}/.codex-b",
+      "codex_account": "b",
+      "name": null
+     }
+    ]
+   },
+   "-tmp-claude-1000--home-jefferson-Projetos-hangar-ac1a7b0f-d0a7-4e66-8f05-f53ea5d4b4da-scratchpad-omp-teste": {
+    "status": 200,
+    "body": [
+     {
+      "project": "-tmp-claude-1000--home-jefferson-Projetos-hangar-ac1a7b0f-d0a7-4e66-8f05-f53ea5d4b4da-scratchpad-omp-teste",
+      "cwd": "/tmp/claude-1000/-home-jefferson-Projetos-hangar/ac1a7b0f-d0a7-4e66-8f05-f53ea5d4b4da/scratchpad/omp-teste",
+      "session_id": "01a06932-79ae-77e9-b95a-286b6e2e9288",
+      "mtime": 1793000300.0,
+      "preview": "",
+      "ultima": "OK",
+      "live": false,
+      "config_dir": null,
+      "conta": "",
+      "provider": "omp",
+      "codex_home": null,
+      "codex_account": null,
+      "name": null
+     }
+    ]
+   },
+   "-home-jefferson-Projetos-hangar--worktrees-contas-modelos": {
+    "status": 200,
+    "body": [
+     {
+      "project": "-home-jefferson-Projetos-hangar--worktrees-contas-modelos",
+      "cwd": "/home/jefferson/Projetos/hangar/.worktrees/contas-modelos",
+      "session_id": "d337d6b8-0b3c-4bbe-8034-939d7c48f246",
+      "mtime": 1793000200.0,
+      "preview": "",
+      "ultima": "FIM ✻ Turn took 6s (Total time 5m 15s · 2 turns)",
+      "live": false,
+      "config_dir": null,
+      "conta": "",
+      "provider": "pi",
+      "codex_home": null,
+      "codex_account": null,
+      "name": null
+     }
+    ]
+   },
+   "../x": {
+    "status": 400,
+    "body": {
+     "detail": {
+      "code": "erro_path_invalido",
+      "params": {},
+      "msg": "invalid path"
+     }
+    }
+   },
+   "-nao-existe": {
+    "status": 404,
+    "body": {
+     "detail": {
+      "code": "erro_projeto_nao_encontrado",
+      "params": {},
+      "msg": "project not found"
+     }
+    }
+   },
+   "a.b": {
+    "status": 400,
+    "body": {
+     "detail": {
+      "code": "erro_path_invalido",
+      "params": {},
+      "msg": "invalid path"
+     }
+    }
+   }
+  },
+  "folder_codex_account": {
+   "-home-jefferson-Projetos-hangar|default": {
+    "status": 200,
+    "body": [
+     {
+      "project": "-home-jefferson-Projetos-hangar",
+      "cwd": "/home/jefferson/Projetos/hangar-Hangar-rust",
+      "session_id": "75fea57d-2237-43fe-a669-bb1ed97c6eae",
+      "mtime": 1793001200.0,
+      "preview": "[de: cli] Merge da origin/main commitado: c6965144d (pais b31fe2c + 675ccf0), protocolo interno 63, não está no GitHub…",
+      "ultima": "O ator do Rust chama POST /internal/runtime/policy no Python ao abrir e recebe 503. Vou ver por quê.",
+      "live": false,
+      "config_dir": "{HOME}/.claude-a",
+      "conta": "a",
+      "provider": "claude",
+      "codex_home": null,
+      "codex_account": null,
+      "name": null
+     },
+     {
+      "project": "-home-jefferson-Projetos-hangar",
+      "cwd": "/home/jefferson/Projetos/hangar-mobile-deliveries-cad3e6fe-t32",
+      "session_id": "a5a5a5a5-0000-4000-8000-000000000001",
+      "mtime": 1793001100.0,
+      "preview": "Você responde onde um assunto apareceu nas conversas do usuário, a partir de TRECHOS de transcripts. Responda curto em…",
+      "ultima": "Revisor da Task 32 pronto: proteção de escrita comprovada (EROFS no código, escrita aceita em pareceres/). Aguardando a…",
+      "live": false,
+      "config_dir": "{HOME}/.claude-b",
+      "conta": "b",
+      "provider": "claude",
+      "codex_home": null,
+      "codex_account": null,
+      "name": null
+     },
+     {
+      "project": "-home-jefferson-Projetos-hangar",
+      "cwd": "/home/jefferson/Projetos/hangar-mobile-deliveries-cad3e6fe-t32",
+      "session_id": "db401d8f-fc08-463c-a3cc-4734fc5dc634",
+      "mtime": 1793000900.0,
+      "preview": "[painel: orquestrador cad3e6fe] Read /.claude/skills/orquestrar/references/revisor.md — your role's page, plus the…",
+      "ultima": "Aprovei a rodada 1 da T32, mas só na revisão do código: o lote fecha com pendências e a entrega 3 não está aceita no…",
+      "live": false,
+      "config_dir": "{HOME}/.claude-b",
+      "conta": "b",
+      "provider": "claude",
+      "codex_home": null,
+      "codex_account": null,
+      "name": "nome-fechado"
+     },
+     {
+      "project": "-home-jefferson-Projetos-hangar",
+      "cwd": "/home/jefferson/Projetos/hangar",
+      "session_id": "session_ab697d05-66da-4b2a-8e80-3d769951e752",
+      "mtime": 1793000400.0,
+      "preview": "",
+      "ultima": "Olá! Posso ajudar com algo no projeto Hangar — código, bugs, features, documentação? É só dizer.",
+      "live": false,
+      "config_dir": null,
+      "conta": "",
+      "provider": "kimi",
+      "codex_home": null,
+      "codex_account": null,
+      "name": null
+     },
+     {
+      "project": "-home-jefferson-Projetos-hangar",
+      "cwd": "/home/jefferson/Projetos/hangar",
+      "session_id": "01a05511-e980-71b3-93a9-befda5704b20",
+      "mtime": 1793000100.0,
+      "preview": "",
+      "ultima": "entregue -> lider2",
+      "live": false,
+      "config_dir": null,
+      "conta": "",
+      "provider": "codex",
+      "codex_home": "{HOME}/.codex",
+      "codex_account": "default",
+      "name": null
+     }
+    ]
+   },
+   "-home-jefferson-Projetos-hangar|b": {
+    "status": 200,
+    "body": [
+     {
+      "project": "-home-jefferson-Projetos-hangar",
+      "cwd": "/home/jefferson/Projetos/hangar-Hangar-rust",
+      "session_id": "75fea57d-2237-43fe-a669-bb1ed97c6eae",
+      "mtime": 1793001200.0,
+      "preview": "[de: cli] Merge da origin/main commitado: c6965144d (pais b31fe2c + 675ccf0), protocolo interno 63, não está no GitHub…",
+      "ultima": "O ator do Rust chama POST /internal/runtime/policy no Python ao abrir e recebe 503. Vou ver por quê.",
+      "live": false,
+      "config_dir": "{HOME}/.claude-a",
+      "conta": "a",
+      "provider": "claude",
+      "codex_home": null,
+      "codex_account": null,
+      "name": null
+     },
+     {
+      "project": "-home-jefferson-Projetos-hangar",
+      "cwd": "/home/jefferson/Projetos/hangar-mobile-deliveries-cad3e6fe-t32",
+      "session_id": "a5a5a5a5-0000-4000-8000-000000000001",
+      "mtime": 1793001100.0,
+      "preview": "Você responde onde um assunto apareceu nas conversas do usuário, a partir de TRECHOS de transcripts. Responda curto em…",
+      "ultima": "Revisor da Task 32 pronto: proteção de escrita comprovada (EROFS no código, escrita aceita em pareceres/). Aguardando a…",
+      "live": false,
+      "config_dir": "{HOME}/.claude-b",
+      "conta": "b",
+      "provider": "claude",
+      "codex_home": null,
+      "codex_account": null,
+      "name": null
+     },
+     {
+      "project": "-home-jefferson-Projetos-hangar",
+      "cwd": "/home/jefferson/Projetos/hangar-mobile-deliveries-cad3e6fe-t32",
+      "session_id": "db401d8f-fc08-463c-a3cc-4734fc5dc634",
+      "mtime": 1793000900.0,
+      "preview": "[painel: orquestrador cad3e6fe] Read /.claude/skills/orquestrar/references/revisor.md — your role's page, plus the…",
+      "ultima": "Aprovei a rodada 1 da T32, mas só na revisão do código: o lote fecha com pendências e a entrega 3 não está aceita no…",
+      "live": false,
+      "config_dir": "{HOME}/.claude-b",
+      "conta": "b",
+      "provider": "claude",
+      "codex_home": null,
+      "codex_account": null,
+      "name": "nome-fechado"
+     },
+     {
+      "project": "-home-jefferson-Projetos-hangar",
+      "cwd": "/home/jefferson/Projetos/hangar",
+      "session_id": "session_ab697d05-66da-4b2a-8e80-3d769951e752",
+      "mtime": 1793000400.0,
+      "preview": "",
+      "ultima": "Olá! Posso ajudar com algo no projeto Hangar — código, bugs, features, documentação? É só dizer.",
+      "live": false,
+      "config_dir": null,
+      "conta": "",
+      "provider": "kimi",
+      "codex_home": null,
+      "codex_account": null,
+      "name": null
+     }
+    ]
+   },
+   "-home-jefferson-Projetos-hangar|zz": {
+    "status": 404,
+    "body": {
+     "detail": {
+      "code": "codex_account_not_found",
+      "params": {
+       "account_id": "zz"
+      },
+      "msg": "conta"
+     }
+    }
+   },
+   "-home-jefferson-Projetos-hangar|BAD NAME": {
+    "status": 400,
+    "body": {
+     "detail": {
+      "code": "codex_account_invalid_name",
+      "params": {},
+      "msg": "conta"
+     }
+    }
+   },
+   "-tmp-hangar-native-task4-fixture-jf|default": {
+    "status": 200,
+    "body": []
+   },
+   "-tmp-hangar-native-task4-fixture-jf|b": {
+    "status": 200,
+    "body": [
+     {
+      "project": "-tmp-hangar-native-task4-fixture-jf",
+      "cwd": "/tmp/hangar-native-task4-fixture-jf",
+      "session_id": "01a0d000-f6ac-74e3-b19b-98d42af1a712",
+      "mtime": 1793000500.0,
+      "preview": "",
+      "ultima": "marker two.",
+      "live": false,
+      "config_dir": null,
+      "conta": "",
+      "provider": "codex",
+      "codex_home": "{HOME}/.codex-b",
+      "codex_account": "b",
+      "name": null
+     }
+    ]
+   },
+   "-tmp-hangar-native-task4-fixture-jf|zz": {
+    "status": 404,
+    "body": {
+     "detail": {
+      "code": "codex_account_not_found",
+      "params": {
+       "account_id": "zz"
+      },
+      "msg": "conta"
+     }
+    }
+   },
+   "-tmp-hangar-native-task4-fixture-jf|BAD NAME": {
+    "status": 400,
+    "body": {
+     "detail": {
+      "code": "codex_account_invalid_name",
+      "params": {},
+      "msg": "conta"
+     }
+    }
+   }
+  },
+  "recent": {
+   "1": [
+    {
+     "project": "-home-jefferson",
+     "cwd": "/home/jefferson",
+     "session_id": "42a7c450-7f7e-4fd7-84ed-ee699d11098d",
+     "mtime": 1793000700.0,
+     "preview": "tem como dedesativar esse mod do ponytail? eu nao queria isso ativo nao querof icar vendo esse botao ai",
+     "ultima": "tem como dedesativar esse mod do ponytail? eu nao queria isso ativo nao querof icar vendo esse botao ai",
+     "live": false,
+     "config_dir": "{HOME}/.claude-a",
+     "conta": "a",
+     "provider": "claude",
+     "codex_home": null,
+     "codex_account": null,
+     "name": null
+    }
+   ],
+   "3": [
+    {
+     "project": "-home-jefferson-Projetos-hangar-computer-control-9c0b634f-t1",
+     "cwd": "/home/jefferson/Projetos/hangar-computer-control-9c0b634f-t1",
+     "session_id": "0cc60e6c-eafc-4915-9936-f0c7b81191d9",
+     "mtime": 1793001400.0,
+     "preview": "[painel: orquestrador 9c0b634f] Read /.claude/skills/orquestrar/references/executor.md — your role's page, plus the…",
+     "ultima": "O árbitro aceitou a correção do scripts/windows-test.sh e mandou incluir components = [\"clippy\"] no rust-toolchain.toml…",
+     "live": true,
+     "config_dir": "{HOME}/.claude-a",
+     "conta": "a",
+     "provider": "claude",
+     "codex_home": null,
+     "codex_account": null,
+     "name": null
+    },
+    {
+     "project": "-home-jefferson-Projetos-hangar",
+     "cwd": "/home/jefferson/Projetos/hangar-Hangar-rust",
+     "session_id": "75fea57d-2237-43fe-a669-bb1ed97c6eae",
+     "mtime": 1793001200.0,
+     "preview": "[de: cli] Merge da origin/main commitado: c6965144d (pais b31fe2c + 675ccf0), protocolo interno 63, não está no GitHub…",
+     "ultima": "O ator do Rust chama POST /internal/runtime/policy no Python ao abrir e recebe 503. Vou ver por quê.",
+     "live": false,
+     "config_dir": "{HOME}/.claude-a",
+     "conta": "a",
+     "provider": "claude",
+     "codex_home": null,
+     "codex_account": null,
+     "name": null
+    },
+    {
+     "project": "-home-jefferson",
+     "cwd": "/home/jefferson",
+     "session_id": "42a7c450-7f7e-4fd7-84ed-ee699d11098d",
+     "mtime": 1793000700.0,
+     "preview": "tem como dedesativar esse mod do ponytail? eu nao queria isso ativo nao querof icar vendo esse botao ai",
+     "ultima": "tem como dedesativar esse mod do ponytail? eu nao queria isso ativo nao querof icar vendo esse botao ai",
+     "live": false,
+     "config_dir": "{HOME}/.claude-a",
+     "conta": "a",
+     "provider": "claude",
+     "codex_home": null,
+     "codex_account": null,
+     "name": null
+    }
+   ],
+   "40": [
+    {
+     "project": "-home-jefferson-Projetos-hangar-computer-control-9c0b634f-t1",
+     "cwd": "/home/jefferson/Projetos/hangar-computer-control-9c0b634f-t1",
+     "session_id": "0cc60e6c-eafc-4915-9936-f0c7b81191d9",
+     "mtime": 1793001400.0,
+     "preview": "[painel: orquestrador 9c0b634f] Read /.claude/skills/orquestrar/references/executor.md — your role's page, plus the…",
+     "ultima": "O árbitro aceitou a correção do scripts/windows-test.sh e mandou incluir components = [\"clippy\"] no rust-toolchain.toml…",
+     "live": true,
+     "config_dir": "{HOME}/.claude-a",
+     "conta": "a",
+     "provider": "claude",
+     "codex_home": null,
+     "codex_account": null,
+     "name": null
+    },
+    {
+     "project": "-home-jefferson-Projetos-hangar",
+     "cwd": "/home/jefferson/Projetos/hangar-Hangar-rust",
+     "session_id": "75fea57d-2237-43fe-a669-bb1ed97c6eae",
+     "mtime": 1793001200.0,
+     "preview": "[de: cli] Merge da origin/main commitado: c6965144d (pais b31fe2c + 675ccf0), protocolo interno 63, não está no GitHub…",
+     "ultima": "O ator do Rust chama POST /internal/runtime/policy no Python ao abrir e recebe 503. Vou ver por quê.",
+     "live": false,
+     "config_dir": "{HOME}/.claude-a",
+     "conta": "a",
+     "provider": "claude",
+     "codex_home": null,
+     "codex_account": null,
+     "name": null
+    },
+    {
+     "project": "-home-jefferson-Projetos-hangar",
+     "cwd": "/home/jefferson/Projetos/hangar-mobile-deliveries-cad3e6fe-t32",
+     "session_id": "a5a5a5a5-0000-4000-8000-000000000001",
+     "mtime": 1793001100.0,
+     "preview": "Você responde onde um assunto apareceu nas conversas do usuário, a partir de TRECHOS de transcripts. Responda curto em…",
+     "ultima": "Revisor da Task 32 pronto: proteção de escrita comprovada (EROFS no código, escrita aceita em pareceres/). Aguardando a…",
+     "live": false,
+     "config_dir": "{HOME}/.claude-b",
+     "conta": "b",
+     "provider": "claude",
+     "codex_home": null,
+     "codex_account": null,
+     "name": null
+    },
+    {
+     "project": "-home-jefferson-Projetos-hangar",
+     "cwd": "/home/jefferson/Projetos/hangar-mobile-deliveries-cad3e6fe-t32",
+     "session_id": "db401d8f-fc08-463c-a3cc-4734fc5dc634",
+     "mtime": 1793000900.0,
+     "preview": "[painel: orquestrador cad3e6fe] Read /.claude/skills/orquestrar/references/revisor.md — your role's page, plus the…",
+     "ultima": "Aprovei a rodada 1 da T32, mas só na revisão do código: o lote fecha com pendências e a entrega 3 não está aceita no…",
+     "live": false,
+     "config_dir": "{HOME}/.claude-b",
+     "conta": "b",
+     "provider": "claude",
+     "codex_home": null,
+     "codex_account": null,
+     "name": "nome-fechado"
+    },
+    {
+     "project": "-home-jefferson-Projetos-hangar-mobile-deliveries-cad3e6fe-t32",
+     "cwd": "/home/jefferson/Projetos/hangar-mobile-deliveries-cad3e6fe-t32",
+     "session_id": "db401d8f-fc08-463c-a3cc-4734fc5dc634",
+     "mtime": 1793000800.0,
+     "preview": "[painel: orquestrador cad3e6fe] Read /.claude/skills/orquestrar/references/revisor.md — your role's page, plus the…",
+     "ultima": "Aprovei a rodada 1 da T32, mas só na revisão do código: o lote fecha com pendências e a entrega 3 não está aceita no…",
+     "live": false,
+     "config_dir": "{HOME}/.claude-b",
+     "conta": "b",
+     "provider": "claude",
+     "codex_home": null,
+     "codex_account": null,
+     "name": null
+    },
+    {
+     "project": "-home-jefferson",
+     "cwd": "/home/jefferson",
+     "session_id": "42a7c450-7f7e-4fd7-84ed-ee699d11098d",
+     "mtime": 1793000700.0,
+     "preview": "tem como dedesativar esse mod do ponytail? eu nao queria isso ativo nao querof icar vendo esse botao ai",
+     "ultima": "tem como dedesativar esse mod do ponytail? eu nao queria isso ativo nao querof icar vendo esse botao ai",
+     "live": false,
+     "config_dir": "{HOME}/.claude-a",
+     "conta": "a",
+     "provider": "claude",
+     "codex_home": null,
+     "codex_account": null,
+     "name": null
+    },
+    {
+     "project": "-tmp-cx-probe-work",
+     "cwd": "/tmp/cx-probe-work",
+     "session_id": "f8f12de6-7941-4bd0-8f0c-02bc0b4b7f53",
+     "mtime": 1793000600.0,
+     "preview": "BLOQUEIA isto",
+     "ultima": "BLOQUEIA isto",
+     "live": false,
+     "config_dir": "{HOME}/.claude-b",
+     "conta": "b",
+     "provider": "claude",
+     "codex_home": null,
+     "codex_account": null,
+     "name": null
+    },
+    {
+     "project": "-tmp-hangar-native-task4-fixture-jf",
+     "cwd": "/tmp/hangar-native-task4-fixture-jf",
+     "session_id": "01a0d000-f6ac-74e3-b19b-98d42af1a712",
+     "mtime": 1793000500.0,
+     "preview": "",
+     "ultima": "marker two.",
+     "live": false,
+     "config_dir": null,
+     "conta": "",
+     "provider": "codex",
+     "codex_home": "{HOME}/.codex-b",
+     "codex_account": "b",
+     "name": null
+    },
+    {
+     "project": "-home-jefferson-Projetos-hangar",
+     "cwd": "/home/jefferson/Projetos/hangar",
+     "session_id": "session_ab697d05-66da-4b2a-8e80-3d769951e752",
+     "mtime": 1793000400.0,
+     "preview": "",
+     "ultima": "Olá! Posso ajudar com algo no projeto Hangar — código, bugs, features, documentação? É só dizer.",
+     "live": false,
+     "config_dir": null,
+     "conta": "",
+     "provider": "kimi",
+     "codex_home": null,
+     "codex_account": null,
+     "name": null
+    },
+    {
+     "project": "-tmp-claude-1000--home-jefferson-Projetos-hangar-ac1a7b0f-d0a7-4e66-8f05-f53ea5d4b4da-scratchpad-omp-teste",
+     "cwd": "/tmp/claude-1000/-home-jefferson-Projetos-hangar/ac1a7b0f-d0a7-4e66-8f05-f53ea5d4b4da/scratchpad/omp-teste",
+     "session_id": "01a06932-79ae-77e9-b95a-286b6e2e9288",
+     "mtime": 1793000300.0,
+     "preview": "",
+     "ultima": "OK",
+     "live": false,
+     "config_dir": null,
+     "conta": "",
+     "provider": "omp",
+     "codex_home": null,
+     "codex_account": null,
+     "name": null
+    },
+    {
+     "project": "-home-jefferson-Projetos-hangar--worktrees-contas-modelos",
+     "cwd": "/home/jefferson/Projetos/hangar/.worktrees/contas-modelos",
+     "session_id": "d337d6b8-0b3c-4bbe-8034-939d7c48f246",
+     "mtime": 1793000200.0,
+     "preview": "",
+     "ultima": "FIM ✻ Turn took 6s (Total time 5m 15s · 2 turns)",
+     "live": false,
+     "config_dir": null,
+     "conta": "",
+     "provider": "pi",
+     "codex_home": null,
+     "codex_account": null,
+     "name": null
+    },
+    {
+     "project": "-home-jefferson-Projetos-hangar",
+     "cwd": "/home/jefferson/Projetos/hangar",
+     "session_id": "01a05511-e980-71b3-93a9-befda5704b20",
+     "mtime": 1793000100.0,
+     "preview": "",
+     "ultima": "entregue -> lider2",
+     "live": false,
+     "config_dir": null,
+     "conta": "",
+     "provider": "codex",
+     "codex_home": "{HOME}/.codex",
+     "codex_account": "default",
+     "name": null
+    }
+   ],
+   "0": [
+    {
+     "project": "-home-jefferson",
+     "cwd": "/home/jefferson",
+     "session_id": "42a7c450-7f7e-4fd7-84ed-ee699d11098d",
+     "mtime": 1793000700.0,
+     "preview": "tem como dedesativar esse mod do ponytail? eu nao queria isso ativo nao querof icar vendo esse botao ai",
+     "ultima": "tem como dedesativar esse mod do ponytail? eu nao queria isso ativo nao querof icar vendo esse botao ai",
+     "live": false,
+     "config_dir": "{HOME}/.claude-a",
+     "conta": "a",
+     "provider": "claude",
+     "codex_home": null,
+     "codex_account": null,
+     "name": null
+    }
+   ],
+   "500": [
+    {
+     "project": "-home-jefferson-Projetos-hangar-computer-control-9c0b634f-t1",
+     "cwd": "/home/jefferson/Projetos/hangar-computer-control-9c0b634f-t1",
+     "session_id": "0cc60e6c-eafc-4915-9936-f0c7b81191d9",
+     "mtime": 1793001400.0,
+     "preview": "[painel: orquestrador 9c0b634f] Read /.claude/skills/orquestrar/references/executor.md — your role's page, plus the…",
+     "ultima": "O árbitro aceitou a correção do scripts/windows-test.sh e mandou incluir components = [\"clippy\"] no rust-toolchain.toml…",
+     "live": true,
+     "config_dir": "{HOME}/.claude-a",
+     "conta": "a",
+     "provider": "claude",
+     "codex_home": null,
+     "codex_account": null,
+     "name": null
+    },
+    {
+     "project": "-home-jefferson-Projetos-hangar",
+     "cwd": "/home/jefferson/Projetos/hangar-Hangar-rust",
+     "session_id": "75fea57d-2237-43fe-a669-bb1ed97c6eae",
+     "mtime": 1793001200.0,
+     "preview": "[de: cli] Merge da origin/main commitado: c6965144d (pais b31fe2c + 675ccf0), protocolo interno 63, não está no GitHub…",
+     "ultima": "O ator do Rust chama POST /internal/runtime/policy no Python ao abrir e recebe 503. Vou ver por quê.",
+     "live": false,
+     "config_dir": "{HOME}/.claude-a",
+     "conta": "a",
+     "provider": "claude",
+     "codex_home": null,
+     "codex_account": null,
+     "name": null
+    },
+    {
+     "project": "-home-jefferson-Projetos-hangar",
+     "cwd": "/home/jefferson/Projetos/hangar-mobile-deliveries-cad3e6fe-t32",
+     "session_id": "a5a5a5a5-0000-4000-8000-000000000001",
+     "mtime": 1793001100.0,
+     "preview": "Você responde onde um assunto apareceu nas conversas do usuário, a partir de TRECHOS de transcripts. Responda curto em…",
+     "ultima": "Revisor da Task 32 pronto: proteção de escrita comprovada (EROFS no código, escrita aceita em pareceres/). Aguardando a…",
+     "live": false,
+     "config_dir": "{HOME}/.claude-b",
+     "conta": "b",
+     "provider": "claude",
+     "codex_home": null,
+     "codex_account": null,
+     "name": null
+    },
+    {
+     "project": "-home-jefferson-Projetos-hangar",
+     "cwd": "/home/jefferson/Projetos/hangar-mobile-deliveries-cad3e6fe-t32",
+     "session_id": "db401d8f-fc08-463c-a3cc-4734fc5dc634",
+     "mtime": 1793000900.0,
+     "preview": "[painel: orquestrador cad3e6fe] Read /.claude/skills/orquestrar/references/revisor.md — your role's page, plus the…",
+     "ultima": "Aprovei a rodada 1 da T32, mas só na revisão do código: o lote fecha com pendências e a entrega 3 não está aceita no…",
+     "live": false,
+     "config_dir": "{HOME}/.claude-b",
+     "conta": "b",
+     "provider": "claude",
+     "codex_home": null,
+     "codex_account": null,
+     "name": "nome-fechado"
+    },
+    {
+     "project": "-home-jefferson-Projetos-hangar-mobile-deliveries-cad3e6fe-t32",
+     "cwd": "/home/jefferson/Projetos/hangar-mobile-deliveries-cad3e6fe-t32",
+     "session_id": "db401d8f-fc08-463c-a3cc-4734fc5dc634",
+     "mtime": 1793000800.0,
+     "preview": "[painel: orquestrador cad3e6fe] Read /.claude/skills/orquestrar/references/revisor.md — your role's page, plus the…",
+     "ultima": "Aprovei a rodada 1 da T32, mas só na revisão do código: o lote fecha com pendências e a entrega 3 não está aceita no…",
+     "live": false,
+     "config_dir": "{HOME}/.claude-b",
+     "conta": "b",
+     "provider": "claude",
+     "codex_home": null,
+     "codex_account": null,
+     "name": null
+    },
+    {
+     "project": "-home-jefferson",
+     "cwd": "/home/jefferson",
+     "session_id": "42a7c450-7f7e-4fd7-84ed-ee699d11098d",
+     "mtime": 1793000700.0,
+     "preview": "tem como dedesativar esse mod do ponytail? eu nao queria isso ativo nao querof icar vendo esse botao ai",
+     "ultima": "tem como dedesativar esse mod do ponytail? eu nao queria isso ativo nao querof icar vendo esse botao ai",
+     "live": false,
+     "config_dir": "{HOME}/.claude-a",
+     "conta": "a",
+     "provider": "claude",
+     "codex_home": null,
+     "codex_account": null,
+     "name": null
+    },
+    {
+     "project": "-tmp-cx-probe-work",
+     "cwd": "/tmp/cx-probe-work",
+     "session_id": "f8f12de6-7941-4bd0-8f0c-02bc0b4b7f53",
+     "mtime": 1793000600.0,
+     "preview": "BLOQUEIA isto",
+     "ultima": "BLOQUEIA isto",
+     "live": false,
+     "config_dir": "{HOME}/.claude-b",
+     "conta": "b",
+     "provider": "claude",
+     "codex_home": null,
+     "codex_account": null,
+     "name": null
+    },
+    {
+     "project": "-tmp-hangar-native-task4-fixture-jf",
+     "cwd": "/tmp/hangar-native-task4-fixture-jf",
+     "session_id": "01a0d000-f6ac-74e3-b19b-98d42af1a712",
+     "mtime": 1793000500.0,
+     "preview": "",
+     "ultima": "marker two.",
+     "live": false,
+     "config_dir": null,
+     "conta": "",
+     "provider": "codex",
+     "codex_home": "{HOME}/.codex-b",
+     "codex_account": "b",
+     "name": null
+    },
+    {
+     "project": "-home-jefferson-Projetos-hangar",
+     "cwd": "/home/jefferson/Projetos/hangar",
+     "session_id": "session_ab697d05-66da-4b2a-8e80-3d769951e752",
+     "mtime": 1793000400.0,
+     "preview": "",
+     "ultima": "Olá! Posso ajudar com algo no projeto Hangar — código, bugs, features, documentação? É só dizer.",
+     "live": false,
+     "config_dir": null,
+     "conta": "",
+     "provider": "kimi",
+     "codex_home": null,
+     "codex_account": null,
+     "name": null
+    },
+    {
+     "project": "-tmp-claude-1000--home-jefferson-Projetos-hangar-ac1a7b0f-d0a7-4e66-8f05-f53ea5d4b4da-scratchpad-omp-teste",
+     "cwd": "/tmp/claude-1000/-home-jefferson-Projetos-hangar/ac1a7b0f-d0a7-4e66-8f05-f53ea5d4b4da/scratchpad/omp-teste",
+     "session_id": "01a06932-79ae-77e9-b95a-286b6e2e9288",
+     "mtime": 1793000300.0,
+     "preview": "",
+     "ultima": "OK",
+     "live": false,
+     "config_dir": null,
+     "conta": "",
+     "provider": "omp",
+     "codex_home": null,
+     "codex_account": null,
+     "name": null
+    },
+    {
+     "project": "-home-jefferson-Projetos-hangar--worktrees-contas-modelos",
+     "cwd": "/home/jefferson/Projetos/hangar/.worktrees/contas-modelos",
+     "session_id": "d337d6b8-0b3c-4bbe-8034-939d7c48f246",
+     "mtime": 1793000200.0,
+     "preview": "",
+     "ultima": "FIM ✻ Turn took 6s (Total time 5m 15s · 2 turns)",
+     "live": false,
+     "config_dir": null,
+     "conta": "",
+     "provider": "pi",
+     "codex_home": null,
+     "codex_account": null,
+     "name": null
+    },
+    {
+     "project": "-home-jefferson-Projetos-hangar",
+     "cwd": "/home/jefferson/Projetos/hangar",
+     "session_id": "01a05511-e980-71b3-93a9-befda5704b20",
+     "mtime": 1793000100.0,
+     "preview": "",
+     "ultima": "entregue -> lider2",
+     "live": false,
+     "config_dir": null,
+     "conta": "",
+     "provider": "codex",
+     "codex_home": "{HOME}/.codex",
+     "codex_account": "default",
+     "name": null
+    }
+   ]
+  },
+  "por_cwd": {
+   "/home/jefferson/Projetos/hangar|claude": {
+    "status": 200,
+    "body": [
+     {
+      "project": "-home-jefferson-Projetos-hangar",
+      "cwd": "/home/jefferson/Projetos/hangar-Hangar-rust",
+      "session_id": "75fea57d-2237-43fe-a669-bb1ed97c6eae",
+      "mtime": 1793001200.0,
+      "preview": "[de: cli] Merge da origin/main commitado: c6965144d (pais b31fe2c + 675ccf0), protocolo interno 63, não está no GitHub…",
+      "ultima": "O ator do Rust chama POST /internal/runtime/policy no Python ao abrir e recebe 503. Vou ver por quê.",
+      "live": false,
+      "config_dir": "{HOME}/.claude-a",
+      "conta": "a",
+      "provider": "claude",
+      "codex_home": null,
+      "codex_account": null,
+      "name": null
+     },
+     {
+      "project": "-home-jefferson-Projetos-hangar",
+      "cwd": "/home/jefferson/Projetos/hangar-mobile-deliveries-cad3e6fe-t32",
+      "session_id": "a5a5a5a5-0000-4000-8000-000000000001",
+      "mtime": 1793001100.0,
+      "preview": "Você responde onde um assunto apareceu nas conversas do usuário, a partir de TRECHOS de transcripts. Responda curto em…",
+      "ultima": "Revisor da Task 32 pronto: proteção de escrita comprovada (EROFS no código, escrita aceita em pareceres/). Aguardando a…",
+      "live": false,
+      "config_dir": "{HOME}/.claude-b",
+      "conta": "b",
+      "provider": "claude",
+      "codex_home": null,
+      "codex_account": null,
+      "name": null
+     },
+     {
+      "project": "-home-jefferson-Projetos-hangar",
+      "cwd": "/home/jefferson/Projetos/hangar-mobile-deliveries-cad3e6fe-t32",
+      "session_id": "db401d8f-fc08-463c-a3cc-4734fc5dc634",
+      "mtime": 1793000900.0,
+      "preview": "[painel: orquestrador cad3e6fe] Read /.claude/skills/orquestrar/references/revisor.md — your role's page, plus the…",
+      "ultima": "Aprovei a rodada 1 da T32, mas só na revisão do código: o lote fecha com pendências e a entrega 3 não está aceita no…",
+      "live": false,
+      "config_dir": "{HOME}/.claude-b",
+      "conta": "b",
+      "provider": "claude",
+      "codex_home": null,
+      "codex_account": null,
+      "name": "nome-fechado"
+     }
+    ]
+   },
+   "/home/jefferson/Projetos/hangar|codex": {
+    "status": 200,
+    "body": [
+     {
+      "project": "-home-jefferson-Projetos-hangar",
+      "cwd": "/home/jefferson/Projetos/hangar",
+      "session_id": "01a05511-e980-71b3-93a9-befda5704b20",
+      "mtime": 1793000100.0,
+      "preview": "",
+      "ultima": "entregue -> lider2",
+      "live": false,
+      "config_dir": null,
+      "conta": "",
+      "provider": "codex",
+      "codex_home": "{HOME}/.codex",
+      "codex_account": "default",
+      "name": null
+     }
+    ]
+   },
+   "/home/jefferson/Projetos/hangar|pi": {
+    "status": 200,
+    "body": []
+   },
+   "/home/jefferson/Projetos/hangar|omp": {
+    "status": 200,
+    "body": []
+   },
+   "/home/jefferson/Projetos/hangar|kimi": {
+    "status": 200,
+    "body": [
+     {
+      "project": "-home-jefferson-Projetos-hangar",
+      "cwd": "/home/jefferson/Projetos/hangar",
+      "session_id": "session_ab697d05-66da-4b2a-8e80-3d769951e752",
+      "mtime": 1793000400.0,
+      "preview": "",
+      "ultima": "Olá! Posso ajudar com algo no projeto Hangar — código, bugs, features, documentação? É só dizer.",
+      "live": false,
+      "config_dir": null,
+      "conta": "",
+      "provider": "kimi",
+      "codex_home": null,
+      "codex_account": null,
+      "name": null
+     }
+    ]
+   },
+   "/home/jefferson/Projetos/hangar/|claude": {
+    "status": 200,
+    "body": [
+     {
+      "project": "-home-jefferson-Projetos-hangar",
+      "cwd": "/home/jefferson/Projetos/hangar-Hangar-rust",
+      "session_id": "75fea57d-2237-43fe-a669-bb1ed97c6eae",
+      "mtime": 1793001200.0,
+      "preview": "[de: cli] Merge da origin/main commitado: c6965144d (pais b31fe2c + 675ccf0), protocolo interno 63, não está no GitHub…",
+      "ultima": "O ator do Rust chama POST /internal/runtime/policy no Python ao abrir e recebe 503. Vou ver por quê.",
+      "live": false,
+      "config_dir": "{HOME}/.claude-a",
+      "conta": "a",
+      "provider": "claude",
+      "codex_home": null,
+      "codex_account": null,
+      "name": null
+     },
+     {
+      "project": "-home-jefferson-Projetos-hangar",
+      "cwd": "/home/jefferson/Projetos/hangar-mobile-deliveries-cad3e6fe-t32",
+      "session_id": "a5a5a5a5-0000-4000-8000-000000000001",
+      "mtime": 1793001100.0,
+      "preview": "Você responde onde um assunto apareceu nas conversas do usuário, a partir de TRECHOS de transcripts. Responda curto em…",
+      "ultima": "Revisor da Task 32 pronto: proteção de escrita comprovada (EROFS no código, escrita aceita em pareceres/). Aguardando a…",
+      "live": false,
+      "config_dir": "{HOME}/.claude-b",
+      "conta": "b",
+      "provider": "claude",
+      "codex_home": null,
+      "codex_account": null,
+      "name": null
+     },
+     {
+      "project": "-home-jefferson-Projetos-hangar",
+      "cwd": "/home/jefferson/Projetos/hangar-mobile-deliveries-cad3e6fe-t32",
+      "session_id": "db401d8f-fc08-463c-a3cc-4734fc5dc634",
+      "mtime": 1793000900.0,
+      "preview": "[painel: orquestrador cad3e6fe] Read /.claude/skills/orquestrar/references/revisor.md — your role's page, plus the…",
+      "ultima": "Aprovei a rodada 1 da T32, mas só na revisão do código: o lote fecha com pendências e a entrega 3 não está aceita no…",
+      "live": false,
+      "config_dir": "{HOME}/.claude-b",
+      "conta": "b",
+      "provider": "claude",
+      "codex_home": null,
+      "codex_account": null,
+      "name": "nome-fechado"
+     }
+    ]
+   },
+   "/home/jefferson/Projetos/hangar/|codex": {
+    "status": 200,
+    "body": [
+     {
+      "project": "-home-jefferson-Projetos-hangar",
+      "cwd": "/home/jefferson/Projetos/hangar",
+      "session_id": "01a05511-e980-71b3-93a9-befda5704b20",
+      "mtime": 1793000100.0,
+      "preview": "",
+      "ultima": "entregue -> lider2",
+      "live": false,
+      "config_dir": null,
+      "conta": "",
+      "provider": "codex",
+      "codex_home": "{HOME}/.codex",
+      "codex_account": "default",
+      "name": null
+     }
+    ]
+   },
+   "/home/jefferson/Projetos/hangar/|pi": {
+    "status": 200,
+    "body": []
+   },
+   "/home/jefferson/Projetos/hangar/|omp": {
+    "status": 200,
+    "body": []
+   },
+   "/home/jefferson/Projetos/hangar/|kimi": {
+    "status": 200,
+    "body": [
+     {
+      "project": "-home-jefferson-Projetos-hangar",
+      "cwd": "/home/jefferson/Projetos/hangar",
+      "session_id": "session_ab697d05-66da-4b2a-8e80-3d769951e752",
+      "mtime": 1793000400.0,
+      "preview": "",
+      "ultima": "Olá! Posso ajudar com algo no projeto Hangar — código, bugs, features, documentação? É só dizer.",
+      "live": false,
+      "config_dir": null,
+      "conta": "",
+      "provider": "kimi",
+      "codex_home": null,
+      "codex_account": null,
+      "name": null
+     }
+    ]
+   },
+   "/home/jefferson/Projetos/hangar-computer-control-9c0b634f-t1|claude": {
+    "status": 200,
+    "body": [
+     {
+      "project": "-home-jefferson-Projetos-hangar-computer-control-9c0b634f-t1",
+      "cwd": "/home/jefferson/Projetos/hangar-computer-control-9c0b634f-t1",
+      "session_id": "0cc60e6c-eafc-4915-9936-f0c7b81191d9",
+      "mtime": 1793001400.0,
+      "preview": "[painel: orquestrador 9c0b634f] Read /.claude/skills/orquestrar/references/executor.md — your role's page, plus the…",
+      "ultima": "O árbitro aceitou a correção do scripts/windows-test.sh e mandou incluir components = [\"clippy\"] no rust-toolchain.toml…",
+      "live": true,
+      "config_dir": "{HOME}/.claude-a",
+      "conta": "a",
+      "provider": "claude",
+      "codex_home": null,
+      "codex_account": null,
+      "name": null
+     }
+    ]
+   },
+   "/home/jefferson/Projetos/hangar-computer-control-9c0b634f-t1|codex": {
+    "status": 200,
+    "body": []
+   },
+   "/home/jefferson/Projetos/hangar-computer-control-9c0b634f-t1|pi": {
+    "status": 200,
+    "body": []
+   },
+   "/home/jefferson/Projetos/hangar-computer-control-9c0b634f-t1|omp": {
+    "status": 200,
+    "body": []
+   },
+   "/home/jefferson/Projetos/hangar-computer-control-9c0b634f-t1|kimi": {
+    "status": 200,
+    "body": []
+   },
+   "/home/jefferson|claude": {
+    "status": 200,
+    "body": [
+     {
+      "project": "-home-jefferson",
+      "cwd": "/home/jefferson",
+      "session_id": "42a7c450-7f7e-4fd7-84ed-ee699d11098d",
+      "mtime": 1793000700.0,
+      "preview": "tem como dedesativar esse mod do ponytail? eu nao queria isso ativo nao querof icar vendo esse botao ai",
+      "ultima": "tem como dedesativar esse mod do ponytail? eu nao queria isso ativo nao querof icar vendo esse botao ai",
+      "live": false,
+      "config_dir": "{HOME}/.claude-a",
+      "conta": "a",
+      "provider": "claude",
+      "codex_home": null,
+      "codex_account": null,
+      "name": null
+     }
+    ]
+   },
+   "/home/jefferson|codex": {
+    "status": 200,
+    "body": []
+   },
+   "/home/jefferson|pi": {
+    "status": 200,
+    "body": []
+   },
+   "/home/jefferson|omp": {
+    "status": 200,
+    "body": []
+   },
+   "/home/jefferson|kimi": {
+    "status": 200,
+    "body": []
+   },
+   "/tmp/cx-probe-work|claude": {
+    "status": 200,
+    "body": [
+     {
+      "project": "-tmp-cx-probe-work",
+      "cwd": "/tmp/cx-probe-work",
+      "session_id": "f8f12de6-7941-4bd0-8f0c-02bc0b4b7f53",
+      "mtime": 1793000600.0,
+      "preview": "BLOQUEIA isto",
+      "ultima": "BLOQUEIA isto",
+      "live": false,
+      "config_dir": "{HOME}/.claude-b",
+      "conta": "b",
+      "provider": "claude",
+      "codex_home": null,
+      "codex_account": null,
+      "name": null
+     }
+    ]
+   },
+   "/tmp/cx-probe-work|codex": {
+    "status": 200,
+    "body": []
+   },
+   "/tmp/cx-probe-work|pi": {
+    "status": 200,
+    "body": []
+   },
+   "/tmp/cx-probe-work|omp": {
+    "status": 200,
+    "body": []
+   },
+   "/tmp/cx-probe-work|kimi": {
+    "status": 200,
+    "body": []
+   },
+   "/tmp/hangar-native-task4-fixture-jf|claude": {
+    "status": 200,
+    "body": []
+   },
+   "/tmp/hangar-native-task4-fixture-jf|codex": {
+    "status": 200,
+    "body": [
+     {
+      "project": "-tmp-hangar-native-task4-fixture-jf",
+      "cwd": "/tmp/hangar-native-task4-fixture-jf",
+      "session_id": "01a0d000-f6ac-74e3-b19b-98d42af1a712",
+      "mtime": 1793000500.0,
+      "preview": "",
+      "ultima": "marker two.",
+      "live": false,
+      "config_dir": null,
+      "conta": "",
+      "provider": "codex",
+      "codex_home": "{HOME}/.codex-b",
+      "codex_account": "b",
+      "name": null
+     }
+    ]
+   },
+   "/tmp/hangar-native-task4-fixture-jf|pi": {
+    "status": 200,
+    "body": []
+   },
+   "/tmp/hangar-native-task4-fixture-jf|omp": {
+    "status": 200,
+    "body": []
+   },
+   "/tmp/hangar-native-task4-fixture-jf|kimi": {
+    "status": 200,
+    "body": []
+   },
+   "/home/jefferson/Projetos/hangar/.worktrees/contas-modelos|claude": {
+    "status": 200,
+    "body": []
+   },
+   "/home/jefferson/Projetos/hangar/.worktrees/contas-modelos|codex": {
+    "status": 200,
+    "body": []
+   },
+   "/home/jefferson/Projetos/hangar/.worktrees/contas-modelos|pi": {
+    "status": 200,
+    "body": [
+     {
+      "project": "-home-jefferson-Projetos-hangar--worktrees-contas-modelos",
+      "cwd": "/home/jefferson/Projetos/hangar/.worktrees/contas-modelos",
+      "session_id": "d337d6b8-0b3c-4bbe-8034-939d7c48f246",
+      "mtime": 1793000200.0,
+      "preview": "",
+      "ultima": "FIM ✻ Turn took 6s (Total time 5m 15s · 2 turns)",
+      "live": false,
+      "config_dir": null,
+      "conta": "",
+      "provider": "pi",
+      "codex_home": null,
+      "codex_account": null,
+      "name": null
+     }
+    ]
+   },
+   "/home/jefferson/Projetos/hangar/.worktrees/contas-modelos|omp": {
+    "status": 200,
+    "body": []
+   },
+   "/home/jefferson/Projetos/hangar/.worktrees/contas-modelos|kimi": {
+    "status": 200,
+    "body": []
+   },
+   "/tmp/claude-1000/-home-jefferson-Projetos-hangar/ac1a7b0f-d0a7-4e66-8f05-f53ea5d4b4da/scratchpad/omp-teste|claude": {
+    "status": 200,
+    "body": []
+   },
+   "/tmp/claude-1000/-home-jefferson-Projetos-hangar/ac1a7b0f-d0a7-4e66-8f05-f53ea5d4b4da/scratchpad/omp-teste|codex": {
+    "status": 200,
+    "body": []
+   },
+   "/tmp/claude-1000/-home-jefferson-Projetos-hangar/ac1a7b0f-d0a7-4e66-8f05-f53ea5d4b4da/scratchpad/omp-teste|pi": {
+    "status": 200,
+    "body": []
+   },
+   "/tmp/claude-1000/-home-jefferson-Projetos-hangar/ac1a7b0f-d0a7-4e66-8f05-f53ea5d4b4da/scratchpad/omp-teste|omp": {
+    "status": 200,
+    "body": [
+     {
+      "project": "-tmp-claude-1000--home-jefferson-Projetos-hangar-ac1a7b0f-d0a7-4e66-8f05-f53ea5d4b4da-scratchpad-omp-teste",
+      "cwd": "/tmp/claude-1000/-home-jefferson-Projetos-hangar/ac1a7b0f-d0a7-4e66-8f05-f53ea5d4b4da/scratchpad/omp-teste",
+      "session_id": "01a06932-79ae-77e9-b95a-286b6e2e9288",
+      "mtime": 1793000300.0,
+      "preview": "",
+      "ultima": "OK",
+      "live": false,
+      "config_dir": null,
+      "conta": "",
+      "provider": "omp",
+      "codex_home": null,
+      "codex_account": null,
+      "name": null
+     }
+    ]
+   },
+   "/tmp/claude-1000/-home-jefferson-Projetos-hangar/ac1a7b0f-d0a7-4e66-8f05-f53ea5d4b4da/scratchpad/omp-teste|kimi": {
+    "status": 200,
+    "body": []
+   },
+   "/nao/existe|claude": {
+    "status": 200,
+    "body": []
+   },
+   "/nao/existe|codex": {
+    "status": 200,
+    "body": []
+   },
+   "/nao/existe|pi": {
+    "status": 200,
+    "body": []
+   },
+   "/nao/existe|omp": {
+    "status": 200,
+    "body": []
+   },
+   "/nao/existe|kimi": {
+    "status": 200,
+    "body": []
+   },
+   "hangar|claude|a": {
+    "status": 200,
+    "body": [
+     {
+      "project": "-home-jefferson-Projetos-hangar",
+      "cwd": "/home/jefferson/Projetos/hangar-Hangar-rust",
+      "session_id": "75fea57d-2237-43fe-a669-bb1ed97c6eae",
+      "mtime": 1793001200.0,
+      "preview": "[de: cli] Merge da origin/main commitado: c6965144d (pais b31fe2c + 675ccf0), protocolo interno 63, não está no GitHub…",
+      "ultima": "O ator do Rust chama POST /internal/runtime/policy no Python ao abrir e recebe 503. Vou ver por quê.",
+      "live": false,
+      "config_dir": "{HOME}/.claude-a",
+      "conta": "a",
+      "provider": "claude",
+      "codex_home": null,
+      "codex_account": null,
+      "name": null
+     }
+    ]
+   },
+   "hangar|claude|b": {
+    "status": 200,
+    "body": [
+     {
+      "project": "-home-jefferson-Projetos-hangar",
+      "cwd": "/home/jefferson/Projetos/hangar-mobile-deliveries-cad3e6fe-t32",
+      "session_id": "a5a5a5a5-0000-4000-8000-000000000001",
+      "mtime": 1793001100.0,
+      "preview": "Você responde onde um assunto apareceu nas conversas do usuário, a partir de TRECHOS de transcripts. Responda curto em…",
+      "ultima": "Revisor da Task 32 pronto: proteção de escrita comprovada (EROFS no código, escrita aceita em pareceres/). Aguardando a…",
+      "live": false,
+      "config_dir": "{HOME}/.claude-b",
+      "conta": "b",
+      "provider": "claude",
+      "codex_home": null,
+      "codex_account": null,
+      "name": null
+     },
+     {
+      "project": "-home-jefferson-Projetos-hangar",
+      "cwd": "/home/jefferson/Projetos/hangar-mobile-deliveries-cad3e6fe-t32",
+      "session_id": "db401d8f-fc08-463c-a3cc-4734fc5dc634",
+      "mtime": 1793000900.0,
+      "preview": "[painel: orquestrador cad3e6fe] Read /.claude/skills/orquestrar/references/revisor.md — your role's page, plus the…",
+      "ultima": "Aprovei a rodada 1 da T32, mas só na revisão do código: o lote fecha com pendências e a entrega 3 não está aceita no…",
+      "live": false,
+      "config_dir": "{HOME}/.claude-b",
+      "conta": "b",
+      "provider": "claude",
+      "codex_home": null,
+      "codex_account": null,
+      "name": "nome-fechado"
+     }
+    ]
+   },
+   "hangar|claude|bad_dir": {
+    "status": 400,
+    "body": {
+     "detail": {
+      "code": "erro_config_dir_invalido",
+      "params": {},
+      "msg": "config_dir invalido"
+     }
+    }
+   },
+   "hangar|bad_provider": {
+    "status": 400,
+    "body": {
+     "detail": {
+      "code": "erro_provider_invalido",
+      "params": {},
+      "msg": "provider invalido"
+     }
+    }
+   },
+   "hangar|claude|cap1": {
+    "status": 200,
+    "body": [
+     {
+      "project": "-home-jefferson-Projetos-hangar",
+      "cwd": "/home/jefferson/Projetos/hangar-Hangar-rust",
+      "session_id": "75fea57d-2237-43fe-a669-bb1ed97c6eae",
+      "mtime": 1793001200.0,
+      "preview": "[de: cli] Merge da origin/main commitado: c6965144d (pais b31fe2c + 675ccf0), protocolo interno 63, não está no GitHub…",
+      "ultima": "O ator do Rust chama POST /internal/runtime/policy no Python ao abrir e recebe 503. Vou ver por quê.",
+      "live": false,
+      "config_dir": "{HOME}/.claude-a",
+      "conta": "a",
+      "provider": "claude",
+      "codex_home": null,
+      "codex_account": null,
+      "name": null
+     }
+    ]
+   },
+   "hangar|codex|b": {
+    "status": 200,
+    "body": []
+   },
+   "fixture-jf|codex|b": {
+    "status": 200,
+    "body": [
+     {
+      "project": "-tmp-hangar-native-task4-fixture-jf",
+      "cwd": "/tmp/hangar-native-task4-fixture-jf",
+      "session_id": "01a0d000-f6ac-74e3-b19b-98d42af1a712",
+      "mtime": 1793000500.0,
+      "preview": "",
+      "ultima": "marker two.",
+      "live": false,
+      "config_dir": null,
+      "conta": "",
+      "provider": "codex",
+      "codex_home": "{HOME}/.codex-b",
+      "codex_account": "b",
+      "name": null
+     }
+    ]
+   },
+   "fixture-jf|codex|default": {
+    "status": 200,
+    "body": []
+   },
+   "fixture-jf|codex|zz": {
+    "status": 404,
+    "body": {
+     "detail": {
+      "code": "codex_account_not_found",
+      "params": {
+       "account_id": "zz"
+      },
+      "msg": "conta"
+     }
+    }
+   }
+  }
+ }
+}

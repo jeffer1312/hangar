@@ -640,6 +640,11 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         // Retomar do Arquivo e o `/resume` ao vivo: a abertura e a reabertura do Rust, com a conversa que já existe.
         .route("/api/archive/{project}/{session_id}/resume", axum::routing::post(crate::session_open::server::archive_resume).fallback(pass_any))
         // Ler a conversa do Arquivo e a imagem dela: só o dono; o resto segue ao Python, que recusa.
+        // O Arquivo (pastas, recentes, uma pasta, um cwd): só o dono; `recent` antes da pasta.
+        .route("/api/archive", get(crate::archive_list::folders).fallback(pass_any))
+        .route("/api/archive/recent", get(crate::archive_list::recent).fallback(pass_any))
+        .route("/api/archive/{project}", get(crate::archive_list::folder).fallback(pass_any))
+        .route("/api/archive-por-cwd", get(crate::archive_list::by_cwd).fallback(pass_any))
         .route("/api/archive/{project}/{session_id}/history", get(crate::archive_history::history).fallback(pass_any))
         .route("/api/archive/{project}/{session_id}/transcript-image/{uuid}/{idx}", get(crate::archive_history::image).fallback(pass_any))
         .route("/api/sessions/{name}/resume", axum::routing::post(crate::session_write::resume::route).fallback(pass_any))

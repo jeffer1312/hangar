@@ -2122,9 +2122,10 @@ export interface ArchiveEntry {
   config_dir: string | null;   // conta dona do transcript (null = a do backend)
   conta: string;               // rotulo dela, pra mostrar na lista
   provider: Provider;          // cada agente guarda transcript num lugar proprio
+  name?: string | null;        // nome que a sessão tinha no Hangar ao ser fechada
 }
 
-export function getArchive(): Promise<ArchiveFolder[]> {
+export function getArchive():Promise<ArchiveFolder[]> {
   return apiFetch<ArchiveFolder[]>('/api/archive');
 }
 
