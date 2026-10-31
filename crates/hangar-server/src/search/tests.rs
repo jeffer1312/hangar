@@ -39,21 +39,37 @@ struct Env {
     _tmp: tempfile::TempDir,
     root: PathBuf,
     accounts: Arc<Mutex<Vec<Account>>>,
+    /// O que o catálogo responde: `Ok`, `Err` (ilegível) ou pânico.
+    catalog: Arc<Mutex<Catalog>>,
     reports: Arc<Mutex<Vec<(&'static str, String)>>>,
     index: Index,
 }
+
+#[derive(Clone, Copy, PartialEq)]
+enum Catalog { Ok, Err, Panic }
 
 impl Env {
     fn new(accounts: impl FnOnce(&Path) -> Vec<Account>, timing: Timing) -> Self {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().canonicalize().unwrap();
         let accounts = Arc::new(Mutex::new(accounts(&root)));
+        let catalog = Arc::new(Mutex::new(Catalog::Ok));
         let reports = Arc::new(Mutex::new(Vec::new()));
-        let (a, r) = (accounts.clone(), reports.clone());
-        let index = Index::new(&root.join("idx"), Arc::new(move || a.lock().unwrap().clone()),
+        let (a, c, r) = (accounts.clone(), catalog.clone(), reports.clone());
+        let index = Index::new(&root.join("idx"), Arc::new(move || match *c.lock().unwrap() {
+                Catalog::Ok => Ok(a.lock().unwrap().clone()),
+                Catalog::Err => Err("catálogo ilegível".into()),
+                Catalog::Panic => panic!("catálogo em pânico"),
+            }),
             Arc::new(move |code, detail| r.lock().unwrap().push((code, detail))), timing);
-        Self { _tmp: tmp, root, accounts, reports, index }
+        Self { _tmp: tmp, root, accounts, catalog, reports, index }
     }
+
+    fn reported(&self, code: &str) -> usize {
+        self.reports.lock().unwrap().iter().filter(|(c, _)| *c == code).count()
+    }
+
+    fn watching(&self) -> bool { self.index.inner.watch_ok.load(std::sync::atomic::Ordering::Acquire) }
 
     /// O HOME das fixtures com as duas contas Claude; `.claude-a` é a do servidor.
     fn fixtures(timing: Timing) -> Self {
@@ -568,6 +584,8 @@ fn server_accounts_skip_repeats_and_add_the_server_last() {
     assert_eq!(got, vec![
         Account { config_dir: Some(s("a")), dir: root.join("a"), projects: root.join("a/projects") },
         Account { config_dir: Some(s("b")), dir: root.join("b"), projects: root.join("b/projects") },
+        // Conta ainda sem `projects` fica: a pasta nasce com a 1ª conversa.
+        Account { config_dir: Some(s("missing")), dir: root.join("missing"), projects: root.join("missing/projects") },
         Account { config_dir: None, dir: root.join("srv"), projects: root.join("srv/projects") },
     ]);
     assert_eq!(server_accounts(&[s("a")], &root.join("a")).len(), 1);
@@ -593,7 +611,8 @@ fn producer_waits_first_pass_then_follows_writes() {
     // M1 (no lugar de IDX-05..07), IDX-01 e IDX-06 com prazo curto.
     let env = Env::small(Timing { first_pass: Duration::from_millis(400), ..quiet() });
     let f = env.write(SID, &[line("agulha um", "u1", "user")], false);
-    assert!(env.index.start().is_some());
+    let producer = env.index.start();
+    assert!(producer.is_some());
     assert!(env.index.start().is_none(), "uma vez por processo");
     std::thread::sleep(Duration::from_millis(150));
     assert!(!env.index.ready(), "a 1ª passada espera o prazo");
@@ -612,7 +631,7 @@ fn producer_rereads_the_catalog() {
     // Conta removida do catálogo sai; conta que volta entra e passa a ser vigiada.
     let env = Env::fixtures(Timing { first_pass: Duration::ZERO, ..quiet() });
     let home = env.home();
-    env.index.start().unwrap();
+    let _producer = env.index.start().unwrap();
     wait_for("1ª passada", || env.index.ready());
     let b_files = || env.count("SELECT count(*) FROM files WHERE config_dir LIKE '%.claude-b'");
     assert_eq!(b_files(), 4);
@@ -638,20 +657,26 @@ fn watcher_that_fails_is_reported_and_search_takes_over() {
     fs::set_permissions(blocked.join("projects"), fs::Permissions::from_mode(0o000)).unwrap();
     env.accounts.lock().unwrap().push(Account { config_dir: Some(blocked.to_string_lossy().into_owned()), dir: blocked.clone(), projects: blocked.join("projects") });
     let f = env.write(SID, &[line("agulha um", "u1", "user")], false);
-    env.index.start().unwrap();
+    let _producer = env.index.start().unwrap();
     wait_for("1ª passada", || env.index.ready());
-    wait_for("falha no diário", || env.reports.lock().unwrap().iter().any(|(c, _)| *c == "busca.observador_falhou"));
-    assert!(!env.index.inner.watch_ok.load(std::sync::atomic::Ordering::Acquire));
+    wait_for("falha no diário", || env.reported("busca.observador_falhou") > 0);
+    assert!(!env.watching());
     append(&f, line("agulha dois", "u2", "user").as_bytes());
     wait_for("busca dispara a passada", || env.ids("agulha") == ["u1", "u2"]);
+    // Cada passada tenta de novo; o diário só recebe a mudança de estado.
+    for _ in 0..5 {
+        env.ids("agulha");
+        std::thread::sleep(Duration::from_millis(150));
+    }
+    assert_eq!(env.reported("busca.observador_falhou"), 1);
     fs::set_permissions(blocked.join("projects"), fs::Permissions::from_mode(0o755)).unwrap();
 }
 
 #[test]
 fn watcher_that_falls_is_reported() {
     let env = Env::small(Timing { first_pass: Duration::ZERO, ..quiet() });
-    env.index.start().unwrap();
-    wait_for("observador de pé", || env.index.inner.watch_ok.load(std::sync::atomic::Ordering::Acquire));
+    let _producer = env.index.start().unwrap();
+    wait_for("observador de pé", || env.watching());
     env.index.wake_producer(watch::Wake::Failed("fila do inotify cheia".into()));
     wait_for("queda no diário", || env.reports.lock().unwrap().iter().any(|(c, d)| *c == "busca.observador_falhou" && d.contains("inotify")));
     assert!(!env.index.inner.watch_ok.load(std::sync::atomic::Ordering::Acquire));
@@ -662,9 +687,171 @@ fn index_that_cannot_open_is_reported() {
     // IDX-04: banco que não abre vai ao diário (`busca.indice_indisponivel`); a busca segue sem ele.
     let env = Env::small(quiet());
     fs::write(env.root.join("idx"), b"arquivo no lugar da pasta").unwrap();
-    env.index.start().unwrap().join().unwrap();
+    env.index.start().unwrap().join();
     assert_eq!(env.reports.lock().unwrap()[0].0, "busca.indice_indisponivel");
     assert_eq!(env.index.search(&terms("agulha"), 50).unwrap(), None);
+}
+
+#[test]
+fn account_without_projects_is_watched_until_projects_appears() {
+    // Instalação nova: a conta do servidor ainda sem `projects` entra e é vigiada até a pasta nascer.
+    let env = Env::new(|root| {
+        fs::create_dir_all(root.join("acct")).unwrap();
+        server_accounts(&[], &root.join("acct"))
+    }, Timing { first_pass: Duration::ZERO, ..quiet() });
+    let _producer = env.index.start().unwrap();
+    wait_for("1ª passada", || env.index.ready());
+    wait_for("pasta da conta vigiada", || env.watching());
+    env.write(SID, &[line("agulha nascida", "u1", "user")], false);
+    wait_for("conversa da pasta nova indexada", || env.ids("nascida") == ["u1"]);
+}
+
+#[test]
+fn nothing_to_watch_is_not_a_watcher() {
+    // Sem alvo vigiado, a busca continua disparando passada (observador não está de pé).
+    let env = Env::new(|root| vec![Account { config_dir: None, dir: root.join("nada"), projects: root.join("nada/projects") }],
+        Timing { first_pass: Duration::ZERO, ..quiet() });
+    let _producer = env.index.start().unwrap();
+    wait_for("1ª passada", || env.index.ready());
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!env.watching());
+}
+
+#[test]
+fn new_catalog_account_is_noticed_when_read() {
+    // Conta nova no catálogo não gera evento nas pastas vigiadas: a leitura percebe e pede a passada.
+    let env = Env::small(Timing { first_pass: Duration::ZERO, ..quiet() });
+    let _producer = env.index.start().unwrap();
+    wait_for("observador de pé", || env.watching());
+    let other = env.root.join("acct2");
+    fs::create_dir_all(other.join("projects/-p")).unwrap();
+    fs::write(other.join(format!("projects/-p/{SID2}.jsonl")), line("agulha conta nova", "n1", "user")).unwrap();
+    env.accounts.lock().unwrap().push(Account { config_dir: Some(other.to_string_lossy().into_owned()), dir: other.clone(), projects: other.join("projects") });
+    wait_for("conta nova indexada", || env.ids("nova") == ["n1"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn listing_error_keeps_the_account_files() {
+    // Falha momentânea ao listar a conta não apaga as conversas dela do índice.
+    use std::os::unix::fs::PermissionsExt;
+    let env = Env::fixtures(quiet());
+    env.index.update().unwrap();
+    let projects = env.home().join(".claude-b/projects");
+    fs::set_permissions(&projects, fs::Permissions::from_mode(0o000)).unwrap();
+    env.index.update().unwrap();
+    let kept = env.count("SELECT count(*) FROM files WHERE config_dir LIKE '%.claude-b'");
+    fs::set_permissions(&projects, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(kept, 4);
+}
+
+#[test]
+fn unreadable_catalog_keeps_the_index() {
+    let env = Env::fixtures(quiet());
+    env.index.update().unwrap();
+    *env.catalog.lock().unwrap() = Catalog::Err;
+    assert!(env.index.update().is_err());
+    assert_eq!(env.count("SELECT count(*) FROM files"), 8);
+}
+
+#[test]
+fn pending_account_keeps_its_files() {
+    // Conta em migração (`.hangar-account-pending`) some do catálogo por um tempo, não do índice.
+    let env = Env::fixtures(quiet());
+    env.index.update().unwrap();
+    let b = env.home().join(".claude-b");
+    let b_files = || env.count("SELECT count(*) FROM files WHERE config_dir LIKE '%.claude-b'");
+    env.accounts.lock().unwrap().retain(|a| !a.dir.ends_with(".claude-b"));
+    fs::write(b.join(crate::accounts::storage::PENDING), b"").unwrap();
+    env.index.update().unwrap();
+    assert_eq!(b_files(), 4);
+    fs::remove_file(b.join(crate::accounts::storage::PENDING)).unwrap();
+    env.index.update().unwrap();
+    assert_eq!(b_files(), 0, "conta removida de verdade sai");
+}
+
+#[test]
+fn watcher_is_up_before_the_first_pass() {
+    // Escrita feita durante a 1ª passada precisa de um observador que já exista.
+    let env = Env::small(Timing { first_pass: Duration::from_millis(500), ..quiet() });
+    let _producer = env.index.start().unwrap();
+    wait_for("banco aberto", || env.index.path().exists());
+    let held = env.index.inner.writer.lock().unwrap();
+    wait_for("observador de pé com a passada esperando", || env.watching());
+    drop(held);
+}
+
+#[test]
+fn same_size_and_mtime_skip_without_asking_the_file_id() {
+    // Windows: o file ID só sai abrindo o arquivo; sem mudança de tamanho e relógio nem se pergunta.
+    let windows = ingest::Stat { size: 10, mtime_ns: 5, ino: None };
+    assert!(ingest::unchanged((10, 5, 77), &windows));
+    assert!(!ingest::unchanged((11, 5, 77), &windows));
+    assert!(!ingest::unchanged((10, 6, 77), &windows));
+    assert!(!ingest::unchanged((10, 5, 77), &ingest::Stat { ino: Some(78), ..windows }));
+    assert!(ingest::unchanged((10, 5, 77), &ingest::Stat { ino: Some(77), ..windows }));
+}
+
+#[test]
+fn rescan_and_new_project_folder_wake_the_producer() {
+    use notify::event::{CreateKind, EventKind, Flag};
+    let tmp = tempfile::tempdir().unwrap();
+    let folder = tmp.path().join("-home-u-novo");
+    fs::create_dir(&folder).unwrap();
+    let rescan = Ok(notify::Event::new(EventKind::Other).set_flag(Flag::Rescan));
+    assert!(matches!(watch::wakes(&rescan), Some(watch::Wake::Changed)), "estouro da fila de eventos");
+    let created = Ok(notify::Event::new(EventKind::Create(CreateKind::Folder)).add_path(folder));
+    assert!(matches!(watch::wakes(&created), Some(watch::Wake::Changed)), "pasta de projeto nova");
+    let other = Ok(notify::Event::new(EventKind::Create(CreateKind::File)).add_path(tmp.path().join("x.txt")));
+    assert!(watch::wakes(&other).is_none());
+}
+
+#[test]
+fn same_inode_rewritten_from_the_start_is_reread() {
+    // `cp` por cima: mesmo inode, tamanho maior que o lido, conteúdo novo desde o 1º byte.
+    let env = Env::small(quiet());
+    let f = env.write(SID, &[line("velho conteúdo", "u1", "user")], false);
+    env.index.update().unwrap();
+    let fresh = [line("novo primeiro", "n1", "user"), line("novo segundo", "n2", "user")].concat();
+    let file = fs::OpenOptions::new().write(true).open(&f).unwrap();
+    file.set_len(0).unwrap();
+    std::io::Write::write_all(&mut &file, fresh.as_bytes()).unwrap();
+    drop(file);
+    env.index.update().unwrap();
+    assert!(env.ids("velho").is_empty());
+    assert_eq!(env.ids("novo"), ["n1", "n2"]);
+}
+
+#[test]
+fn dropping_the_producer_stops_it() {
+    let env = Env::small(Timing { first_pass: Duration::ZERO, ..quiet() });
+    let producer = env.index.start().unwrap();
+    wait_for("observador de pé", || env.watching());
+    drop(producer);
+    assert!(!env.watching(), "parado, a busca volta a disparar passada");
+}
+
+#[test]
+fn producer_panic_is_reported() {
+    let env = Env::small(Timing { first_pass: Duration::ZERO, ..quiet() });
+    let _producer = env.index.start().unwrap();
+    wait_for("observador de pé", || env.watching());
+    *env.catalog.lock().unwrap() = Catalog::Panic;
+    env.write(SID, &[line("agulha", "u1", "user")], false);
+    wait_for("queda do produtor no diário", || env.reported("busca.produtor_caiu") == 1);
+    assert!(!env.watching());
+}
+
+#[test]
+fn corrupt_rewrite_state_is_reported() {
+    let env = Env::small(quiet());
+    let f = env.write(SID, &[line("agulha um", "u1", "user")], false);
+    env.index.update().unwrap();
+    env.db().execute_batch("UPDATE files SET rewrite = 'lixo'").unwrap();
+    append(&f, line("agulha dois", "u2", "user").as_bytes());
+    env.index.update().unwrap();
+    assert_eq!(env.reported("busca.filtro_ilegivel"), 1);
+    assert_eq!(env.ids("agulha"), ["u1", "u2"]);
 }
 
 proptest! {

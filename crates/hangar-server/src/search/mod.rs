@@ -11,6 +11,8 @@ mod watch;
 #[cfg(test)]
 mod tests;
 
+pub use watch::Producer;
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -34,7 +36,8 @@ pub struct Account {
     pub projects: PathBuf,
 }
 
-pub type AccountSource = Arc<dyn Fn() -> Vec<Account> + Send + Sync>;
+/// Erro = catálogo ilegível agora; a passada não tira nada do índice por causa dele.
+pub type AccountSource = Arc<dyn Fn() -> Result<Vec<Account>, String> + Send + Sync>;
 /// Linha do diário: código e detalhe. Nunca texto de conversa.
 pub type Reporter = Arc<dyn Fn(&'static str, String) + Send + Sync>;
 
@@ -58,6 +61,8 @@ impl Default for Timing {
 pub enum IndexError {
     Sqlite(rusqlite::Error),
     Io(std::io::Error),
+    /// Catálogo de contas ilegível: a passada não roda, o índice fica como estava.
+    Catalog(String),
 }
 
 impl std::fmt::Display for IndexError {
@@ -65,6 +70,7 @@ impl std::fmt::Display for IndexError {
         match self {
             Self::Sqlite(e) => write!(f, "sqlite: {e}"),
             Self::Io(e) => write!(f, "io: {e}"),
+            Self::Catalog(code) => write!(f, "catálogo de contas: {code}"),
         }
     }
 }
@@ -117,6 +123,8 @@ struct Inner {
     started: AtomicBool,
     /// Acorda o produtor depois de uma passada que ele não fez (refazer o observador).
     wake: Mutex<Option<std::sync::mpsc::Sender<watch::Wake>>>,
+    /// Pastas que o produtor vigia agora; `None` = produtor parado ou observador fora.
+    watched: Mutex<Option<watch::Targets>>,
 }
 
 impl Index {
@@ -126,6 +134,7 @@ impl Index {
             path: dir.join(FILE_NAME), accounts, report, timing,
             writer: Mutex::new(None), ready: AtomicBool::new(false), last_pass: Mutex::new(None),
             watch_ok: AtomicBool::new(false), started: AtomicBool::new(false), wake: Mutex::new(None),
+            watched: Mutex::new(None),
         }) }
     }
 
@@ -133,15 +142,10 @@ impl Index {
     pub fn server(service: crate::accounts::AccountService) -> Self {
         let server_dir = service.env.claude_base.clone();
         let accounts: AccountSource = Arc::new(move || {
-            let dirs: Vec<String> = match service.claude_catalog() {
-                Ok(rows) => rows.as_array().into_iter().flatten()
-                    .filter_map(|r| r["path"].as_str().filter(|p| !p.is_empty()).map(str::to_owned)).collect(),
-                Err(e) => {
-                    tracing::warn!(code = e.code, "busca: catálogo de contas ilegível; só a conta do servidor");
-                    Vec::new()
-                }
-            };
-            server_accounts(&dirs, &server_dir)
+            let rows = service.claude_catalog().map_err(|e| e.code.to_string())?;
+            let dirs: Vec<String> = rows.as_array().into_iter().flatten()
+                .filter_map(|r| r["path"].as_str().filter(|p| !p.is_empty()).map(str::to_owned)).collect();
+            Ok(server_accounts(&dirs, &server_dir))
         });
         let report: Reporter = Arc::new(|code, detail| {
             crate::diag::record_blocking(crate::diag::diary_dir().as_deref(),
@@ -167,7 +171,8 @@ impl Index {
         }
         let conn = writer.as_mut().unwrap();
         let started = Instant::now();
-        ingest::pass(conn, &(self.inner.accounts)())?;
+        let accounts = (self.inner.accounts)().map_err(IndexError::Catalog)?;
+        ingest::pass(conn, &accounts, &*self.inner.report)?;
         if !self.ready() {
             conn.execute("INSERT OR REPLACE INTO meta(k, v) VALUES ('built', ?)", [now_text()])?;
             self.inner.ready.store(true, Ordering::Release);
@@ -212,7 +217,12 @@ impl Index {
         }
         let me = self.clone();
         let spawned = std::thread::Builder::new().name("busca-indice-busca".into()).spawn(move || {
-            let Ok(mut writer) = me.inner.writer.try_lock() else { return };
+            let mut writer = match me.inner.writer.try_lock() {
+                Ok(writer) => writer,
+                // Pânico de uma passada antiga não pode travar as próximas.
+                Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner(),
+                Err(std::sync::TryLockError::WouldBlock) => return,
+            };
             if let Err(e) = me.pass(&mut writer) {
                 tracing::warn!(error = %e, "passada do índice na busca falhou");
             }
@@ -225,8 +235,18 @@ impl Index {
     }
 
     fn wake_producer(&self, wake: watch::Wake) {
-        if let Some(tx) = self.inner.wake.lock().unwrap().as_ref() {
+        if let Some(tx) = self.inner.wake.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref() {
             let _ = tx.send(wake);
+        }
+    }
+
+    /// Conta nova ou removida do catálogo não escreve nas pastas vigiadas: quem lê confere as pastas
+    /// que o catálogo pede agora e, mudou, acorda o produtor (a resposta desta leitura não espera).
+    fn notice_catalog(&self) {
+        let watched = self.inner.watched.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+        let Some(watched) = watched else { return };
+        if watch::targets(self).is_some_and(|now| now != watched) {
+            self.wake_producer(watch::Wake::Changed);
         }
     }
 
@@ -243,6 +263,7 @@ impl Index {
             return Ok(None);
         }
         self.update_if_stale();
+        self.notice_catalog();
         let (long, short): (Vec<&String>, Vec<&String>) = terms.iter().partition(|t| t.chars().count() >= 3);
         let short: Vec<String> = short.into_iter().map(|t| fold(t)).collect();
         let matches = |text: &str| short.is_empty() || { let f = fold(text); short.iter().all(|t| f.contains(t.as_str())) };
@@ -287,6 +308,7 @@ impl Index {
         if !self.inner.path.exists() {
             return HashMap::new();
         }
+        self.notice_catalog();
         read().unwrap_or_else(|e| {
             tracing::warn!(error = %e, "busca: cabeçalhos do índice ilegíveis");
             HashMap::new()
@@ -307,7 +329,7 @@ impl Index {
     }
 
     /// Liga o produtor uma vez por processo (só a subida real chama).
-    pub fn start(&self) -> Option<std::thread::JoinHandle<()>> {
+    pub fn start(&self) -> Option<watch::Producer> {
         if self.inner.started.swap(true, Ordering::AcqRel) {
             return None;
         }
@@ -315,13 +337,20 @@ impl Index {
     }
 }
 
-/// As contas do servidor: as do catálogo e a do processo por último, como `archive._contas`.
+/// As contas do servidor: as do catálogo e a do processo por último, sem repetir pelo caminho
+/// resolvido, como `archive._contas`. Conta ainda sem `projects` fica: a pasta nasce com a 1ª conversa.
 pub fn server_accounts(config_dirs: &[String], server_dir: &Path) -> Vec<Account> {
-    crate::session_open::archive::claude_projects(config_dirs, &server_dir.join("projects")).into_iter()
-        .map(|(config_dir, projects)| {
-            let dir = config_dir.as_deref().map_or_else(|| server_dir.to_owned(), PathBuf::from);
-            Account { config_dir, dir, projects }
-        }).collect()
+    let mut out = Vec::new();
+    let mut seen = Vec::new();
+    let dirs = config_dirs.iter().map(|d| (Some(d.clone()), PathBuf::from(d))).chain([(None, server_dir.to_owned())]);
+    for (config_dir, dir) in dirs {
+        let projects = dir.join("projects");
+        let key = crate::list::links::resolve_lenient(&projects);
+        if seen.contains(&key) { continue; }
+        seen.push(key);
+        out.push(Account { config_dir, dir, projects });
+    }
+    out
 }
 
 const CANDIDATE_COLUMNS: &str = "m.id, m.file_id, f.mtime_ns, f.path, f.project, f.session_id, f.cwd, m.text, \

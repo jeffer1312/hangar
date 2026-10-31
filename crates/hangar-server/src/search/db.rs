@@ -8,7 +8,7 @@ use rusqlite::{Connection, ErrorCode};
 
 use super::IndexError;
 
-pub(super) const SCHEMA_VERSION: i64 = 1;
+pub(super) const SCHEMA_VERSION: i64 = 2;
 
 // O `_SCHEMA` do Python mais conta, agente e o que o Arquivo lê do arquivo.
 const SCHEMA: &str = "
@@ -31,7 +31,9 @@ CREATE TABLE files(
     account TEXT,
     has_user INTEGER NOT NULL DEFAULT 0,
     last_text TEXT NOT NULL DEFAULT '',
-    rewrite TEXT
+    rewrite TEXT,
+    head_len INTEGER NOT NULL DEFAULT 0,
+    head_hash TEXT
 );
 CREATE TABLE msg(
     id INTEGER PRIMARY KEY,

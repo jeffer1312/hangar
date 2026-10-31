@@ -79,23 +79,17 @@ pub struct Where<'a> {
 /// `_contas`: (conta, `projects`) das contas Claude a varrer; a do servidor por último, se ainda não veio.
 fn claude_accounts(w: &Where, only: Option<&str>) -> Vec<(Option<String>, PathBuf)> {
     if let Some(dir) = only { return vec![(Some(dir.to_owned()), Path::new(dir).join("projects"))]; }
-    claude_projects(w.config_dirs, w.server_projects)
-}
-
-/// `_contas` sem filtro: o `projects` de cada conta do catálogo, sem repetir pelo caminho real, e o da
-/// conta do servidor por último se ainda não veio.
-pub(crate) fn claude_projects(config_dirs: &[String], server_projects: &Path) -> Vec<(Option<String>, PathBuf)> {
     let real = |p: &Path| p.canonicalize().ok();
     let mut out: Vec<(Option<String>, PathBuf)> = Vec::new();
     let mut seen = Vec::new();
-    for dir in config_dirs {
+    for dir in w.config_dirs {
         let projects = Path::new(dir).join("projects");
         let Some(r) = real(&projects) else { continue };
         if seen.contains(&r) { continue; }
         seen.push(r);
         out.push((Some(dir.clone()), projects));
     }
-    if real(server_projects).is_some_and(|r| !seen.contains(&r)) { out.push((None, server_projects.to_owned())); }
+    if real(w.server_projects).is_some_and(|r| !seen.contains(&r)) { out.push((None, w.server_projects.to_owned())); }
     out
 }
 

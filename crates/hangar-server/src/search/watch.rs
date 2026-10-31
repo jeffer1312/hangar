@@ -4,85 +4,158 @@
 //! não sobe ou cai vai ao diário, e a busca volta a disparar passada quando o índice está velho.
 
 use std::path::PathBuf;
+use std::sync::PoisonError;
 use std::sync::atomic::Ordering;
-use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::time::Instant;
 
-use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
 use super::Index;
 
 pub(super) enum Wake {
-    /// Escrita num transcript (ou a pasta `projects` de uma conta nasceu).
+    /// Escrita num transcript, pasta nova, fila de eventos estourada ou catálogo mudado.
     Changed,
     /// Uma passada que o produtor não fez terminou: refazer o observador se as contas mudaram.
     Rewatch,
     Failed(String),
+    Stop,
 }
 
-pub(super) fn spawn(index: Index) -> std::thread::JoinHandle<()> {
-    std::thread::Builder::new().name("busca-indice".into()).spawn(move || run(index))
-        .expect("thread do índice da busca")
+pub(super) type Targets = Vec<(PathBuf, RecursiveMode)>;
+
+/// O produtor ligado; soltá-lo para a thread e o observador.
+pub struct Producer {
+    tx: Sender<Wake>,
+    thread: Option<std::thread::JoinHandle<()>>,
 }
 
-type Targets = Vec<(PathBuf, RecursiveMode)>;
+impl Producer {
+    /// Espera a thread acabar (sozinha ela só acaba quando o banco não abre).
+    pub fn join(mut self) {
+        if let Some(thread) = self.thread.take() { let _ = thread.join(); }
+    }
+}
 
-fn run(index: Index) {
+impl Drop for Producer {
+    fn drop(&mut self) {
+        let _ = self.tx.send(Wake::Stop);
+        if let Some(thread) = self.thread.take() { let _ = thread.join(); }
+    }
+}
+
+pub(super) fn spawn(index: Index) -> Producer {
     let (tx, rx) = mpsc::channel();
-    *index.inner.wake.lock().unwrap() = Some(tx.clone());
+    *index.inner.wake.lock().unwrap_or_else(PoisonError::into_inner) = Some(tx.clone());
+    let events = tx.clone();
+    let thread = std::thread::Builder::new().name("busca-indice".into()).spawn(move || run(index, events, rx))
+        .expect("thread do índice da busca");
+    Producer { tx, thread: Some(thread) }
+}
+
+/// Saída da thread, normal ou por pânico: sem produtor, a busca volta a disparar passada.
+struct Alive(Index);
+
+impl Drop for Alive {
+    fn drop(&mut self) {
+        let inner = &self.0.inner;
+        inner.watch_ok.store(false, Ordering::Release);
+        *inner.watched.lock().unwrap_or_else(PoisonError::into_inner) = None;
+        *inner.wake.lock().unwrap_or_else(PoisonError::into_inner) = None;
+        if std::thread::panicking() {
+            tracing::error!("produtor do índice da busca caiu");
+            (inner.report)("busca.produtor_caiu", "a thread do índice parou com pânico".into());
+        }
+    }
+}
+
+/// Estado do observador, só da thread do produtor.
+#[derive(Default)]
+struct Watch {
+    watcher: Option<RecommendedWatcher>,
+    /// Pastas para as quais o estado atual foi montado; `None` = refazer na próxima chance.
+    built_for: Option<Targets>,
+    /// A queda já foi ao diário: só a mudança de estado é registrada.
+    reported: bool,
+}
+
+fn run(index: Index, tx: Sender<Wake>, rx: Receiver<Wake>) {
+    let _alive = Alive(index.clone());
     if let Err(e) = index.open_now() {
         // Sem índice a busca varre o disco a cada pedido: fica no diário exportável, não só no log.
         tracing::warn!(error = %e, "índice da busca indisponível");
         (index.inner.report)("busca.indice_indisponivel", e.to_string());
         return;
     }
-    std::thread::sleep(index.inner.timing.first_pass);
-    let mut watcher: Option<(RecommendedWatcher, Targets)> = None;
+    let deadline = Instant::now() + index.inner.timing.first_pass;
+    while let Some(left) = deadline.checked_duration_since(Instant::now()).filter(|d| !d.is_zero()) {
+        match rx.recv_timeout(left) {
+            Ok(Wake::Stop) | Err(RecvTimeoutError::Disconnected) => return,
+            Ok(_) => {}
+            Err(RecvTimeoutError::Timeout) => break,
+        }
+    }
+    let mut watch = Watch::default();
     let mut need_pass = true;
     loop {
+        // O observador nasce antes da passada: escrita feita durante ela não se perde.
+        rewatch(&index, &tx, &mut watch);
         if need_pass {
             if let Err(e) = index.update() {
                 tracing::warn!(error = %e, "passada do índice da busca falhou");
             }
+            rewatch(&index, &tx, &mut watch);
         }
-        rewatch(&index, &tx, &mut watcher);
         need_pass = loop {
             match rx.recv() {
-                Ok(Wake::Changed) => break settle(&index, &rx, &mut watcher),
+                Ok(Wake::Changed) => match settle(&index, &rx, &mut watch) {
+                    Some(pass) => break pass,
+                    None => return,
+                },
                 Ok(Wake::Rewatch) => break false,
-                Ok(Wake::Failed(detail)) => down(&index, &mut watcher, detail),
-                Err(_) => return,
+                Ok(Wake::Failed(detail)) => down(&index, &mut watch, detail),
+                Ok(Wake::Stop) | Err(_) => return,
             }
         };
     }
 }
 
 /// Espera a calma depois do último evento; rajada sem fim passa mesmo assim depois de dez esperas.
-fn settle(index: &Index, rx: &mpsc::Receiver<Wake>, watcher: &mut Option<(RecommendedWatcher, Targets)>) -> bool {
+/// `None` = pediram para parar.
+fn settle(index: &Index, rx: &Receiver<Wake>, watch: &mut Watch) -> Option<bool> {
     let debounce = index.inner.timing.debounce;
     let deadline = Instant::now() + debounce * 10;
     loop {
         match rx.recv_timeout(debounce) {
-            Ok(Wake::Failed(detail)) => down(index, watcher, detail),
+            Ok(Wake::Stop) | Err(RecvTimeoutError::Disconnected) => return None,
+            Ok(Wake::Failed(detail)) => down(index, watch, detail),
             Ok(_) if Instant::now() < deadline => {}
-            Ok(_) | Err(RecvTimeoutError::Timeout) => return true,
-            Err(RecvTimeoutError::Disconnected) => return true,
+            Ok(_) | Err(RecvTimeoutError::Timeout) => return Some(true),
         }
     }
 }
 
-fn down(index: &Index, watcher: &mut Option<(RecommendedWatcher, Targets)>, detail: String) {
-    if watcher.take().is_some() || index.inner.watch_ok.load(Ordering::Acquire) {
-        index.inner.watch_ok.store(false, Ordering::Release);
-        tracing::warn!(detail = %detail, "busca: observador de arquivos caiu");
+fn mark_down(index: &Index, watch: &mut Watch, detail: String, what: &'static str) {
+    watch.watcher = None;
+    watch.built_for = None;
+    index.inner.watch_ok.store(false, Ordering::Release);
+    *index.inner.watched.lock().unwrap_or_else(PoisonError::into_inner) = None;
+    if !watch.reported {
+        watch.reported = true;
+        tracing::warn!(detail = %detail, "{what}");
         (index.inner.report)("busca.observador_falhou", detail);
     }
 }
 
+fn down(index: &Index, watch: &mut Watch, detail: String) {
+    mark_down(index, watch, detail, "busca: observador de arquivos caiu");
+}
+
 /// `projects` de cada conta, recursivo; conta ainda sem `projects` vigia a própria pasta até ele nascer.
-fn targets(index: &Index) -> Targets {
+/// `None`: catálogo ilegível agora.
+pub(super) fn targets(index: &Index) -> Option<Targets> {
     let mut out: Targets = Vec::new();
-    for account in (index.inner.accounts)() {
+    for account in (index.inner.accounts)().ok()? {
         let target = if account.projects.is_dir() {
             (account.projects, RecursiveMode::Recursive)
         } else if account.dir.is_dir() {
@@ -92,25 +165,38 @@ fn targets(index: &Index) -> Targets {
         };
         if !out.contains(&target) { out.push(target); }
     }
-    out
+    Some(out)
 }
 
-fn rewatch(index: &Index, tx: &mpsc::Sender<Wake>, watcher: &mut Option<(RecommendedWatcher, Targets)>) {
-    let wanted = targets(index);
-    if watcher.as_ref().is_some_and(|(_, current)| *current == wanted) {
+/// O que um evento do observador pede ao produtor.
+pub(super) fn wakes(event: &notify::Result<notify::Event>) -> Option<Wake> {
+    let e = match event {
+        Ok(e) => e,
+        Err(e) => return Some(Wake::Failed(e.to_string())),
+    };
+    // Fila de eventos estourada: o que mudou se perdeu, só uma passada sabe.
+    if e.need_rescan() {
+        return Some(Wake::Changed);
+    }
+    // O notify assina abrir e fechar: a leitura do próprio índice acordaria sem fim.
+    if e.kind.is_access() {
+        return None;
+    }
+    let transcript = e.paths.iter().any(|p| p.extension().is_some_and(|x| x == "jsonl") || p.file_name().is_some_and(|n| n == "projects"));
+    // Pasta nova (de projeto): o arquivo criado logo dentro dela pode chegar antes do observador dela.
+    let folder = matches!(e.kind, EventKind::Create(_)) && e.paths.iter().any(|p| p.is_dir());
+    (transcript || folder).then_some(Wake::Changed)
+}
+
+fn rewatch(index: &Index, tx: &Sender<Wake>, watch: &mut Watch) {
+    let Some(wanted) = targets(index) else { return };
+    if watch.built_for.as_ref() == Some(&wanted) {
         return;
     }
-    *watcher = None;
+    watch.watcher = None;
     let events = tx.clone();
     let built = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-        let wake = match event {
-            // O notify assina abrir e fechar: a leitura do próprio índice acordaria sem fim.
-            Ok(e) if e.kind.is_access() => return,
-            Ok(e) if e.paths.iter().any(|p| p.extension().is_some_and(|x| x == "jsonl") || p.file_name().is_some_and(|n| n == "projects")) => Wake::Changed,
-            Ok(_) => return,
-            Err(e) => Wake::Failed(e.to_string()),
-        };
-        let _ = events.send(wake);
+        if let Some(wake) = wakes(&event) { let _ = events.send(wake); }
     });
     let result = built.and_then(|mut w| {
         for (path, mode) in &wanted {
@@ -120,13 +206,14 @@ fn rewatch(index: &Index, tx: &mpsc::Sender<Wake>, watcher: &mut Option<(Recomme
     });
     match result {
         Ok(w) => {
-            *watcher = Some((w, wanted));
-            index.inner.watch_ok.store(true, Ordering::Release);
+            // Sem pasta vigiada não há observador: a busca segue disparando passada.
+            let up = !wanted.is_empty();
+            watch.watcher = up.then_some(w);
+            watch.built_for = Some(wanted.clone());
+            *index.inner.watched.lock().unwrap_or_else(PoisonError::into_inner) = Some(wanted);
+            index.inner.watch_ok.store(up, Ordering::Release);
+            if up { watch.reported = false; }
         }
-        Err(e) => {
-            index.inner.watch_ok.store(false, Ordering::Release);
-            tracing::warn!(error = %e, "busca: observador de arquivos não subiu");
-            (index.inner.report)("busca.observador_falhou", e.to_string());
-        }
+        Err(e) => mark_down(index, watch, e.to_string(), "busca: observador de arquivos não subiu"),
     }
 }
