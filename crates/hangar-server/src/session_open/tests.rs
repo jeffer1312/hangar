@@ -22,14 +22,12 @@ fn the_bodies_refused_as_shape_are_refused_with_a_code() {
         let parsed = SessionOpenRequest::parse(&request_body(&fixture));
         // A lista de erros no cenário marca a forma recusada; o Rust a recusa com `erro_corpo_invalido`.
         let refused_shape = expected_status(&fixture) == 422 && fixture["result"]["steps"][0]["body"]["detail"].is_array();
-        // `inherit` é campo novo: a recusa escrita neste cenário não vale mais.
-        let expected_refused = refused_shape && name != "create_inherit_flag_not_supported";
         match parsed {
             Err(error) => {
-                assert!(expected_refused, "{name}: o cenário aceita o corpo e o Rust recusou: {error}");
+                assert!(refused_shape, "{name}: o cenário aceita o corpo e o Rust recusou: {error}");
                 assert_eq!((error.status, error.code), (422, Some("erro_corpo_invalido")), "{name}");
             }
-            Ok(_) => assert!(!expected_refused, "{name}: o cenário recusa o corpo e o Rust aceitou"),
+            Ok(_) => assert!(!refused_shape, "{name}: o cenário recusa o corpo e o Rust aceitou"),
         }
     }
 }
@@ -354,14 +352,6 @@ fn launched(fixture: &Value) -> Option<Launched> {
 /// as deixa passar.
 const LAUNCH_REFUSALS: [&str; 3] = ["create_claude_terminal_tmux_fails", "create_worktree_outside_roots", "create_worktree_rollback_on_tmux_failure"];
 
-/// Recusas escritas no cenário que o Rust já nasce sem, com o que vale no lugar.
-const FIXED: [&str; 2] = [
-    // O prompt inicial é entregue em todo provedor, também sem terminal.
-    "create_claude_headless_initial_prompt_refused",
-    // `inherit: false` é aceito.
-    "create_inherit_flag_not_supported",
-];
-
 fn resolve_fixture(fixture: &Value) -> Result<resolve::Resolved, OpenError> {
     let request = SessionOpenRequest::parse(&request_body(fixture)).unwrap();
     resolve::resolve_open(&request, &OWNER, &FixtureFacts::of(fixture))
@@ -376,22 +366,18 @@ fn expected(name: &str, fixture: &Value, local: bool) -> Expected {
     let detail = &fixture["result"]["steps"][0]["body"]["detail"];
     match name {
         // A forma do corpo é do `SessionOpenRequest::parse` (teste próprio).
-        _ if detail.is_array() && !FIXED.contains(&name) => Expected::Skip,
-        _ if LAUNCH_REFUSALS.contains(&name) || FIXED.contains(&name) => Expected::Resolves,
+        _ if detail.is_array() => Expected::Skip,
+        _ if LAUNCH_REFUSALS.contains(&name) || fixture["result"]["resolves_only"] == true => Expected::Resolves,
         // O catálogo do Codex vem do app-server falso do cenário: a frase da recusa é a do Rust, não
         // a escrita para a ponte.
         "create_codex_catalog_refuses_choice" if local => refused(422, "erro_codex_escolha_invalida"),
         // Fast sem modelo: com a ponte fora a recusa escrita é 502; o `LocalFacts` valida aqui mesmo e
         // recusa porque o Fast exige modelo explícito.
         "create_codex_priority_catalog_unavailable" if local => refused(422, "erro_codex_escolha_invalida"),
-        // A conta mandada pela tela a 97% troca pela de mais folga. Tem teste próprio.
-        "create_quota_explicit_account_kept" => Expected::Skip,
         _ if status == 200 => Expected::Created,
         _ => Expected::Refused {
             status, code: detail["code"].as_str().map(str::to_owned),
-            // Sem o prompt inicial na regra, a frase da recusa do só leitura sem terminal perde o "nem prompt inicial".
-            msg: Some(detail["msg"].as_str().or(detail.as_str()).unwrap()
-                .replace("sessao sem terminal nao aceita read_only nem prompt inicial", "sessao sem terminal nao aceita read_only")),
+            msg: Some(detail["msg"].as_str().or(detail.as_str()).unwrap().to_owned()),
             params: Some(if detail.is_object() { detail["params"].clone() } else { json!({}) }),
         },
     }
@@ -460,8 +446,7 @@ fn every_creation_case_resolves() {
         .filter(|(name, fixture)| !matches!(expected(name, fixture, false), Expected::Skip))
         .map(|(name, fixture)| check(name, fixture, resolve_fixture(fixture), false)).fold((0, 0, 0), sum);
     // Todo 200 tem o que foi lançado (argv do pane ou o sidecar); recusas antes do lançamento.
-    // A conta escolhida a 97% nasce em outra conta e tem teste próprio.
-    assert_eq!(total, (42, 42, 29));
+    assert_eq!(total, (43, 43, 29));
 }
 
 /// As mesmas 81 pelo `LocalFacts` de produção, lendo um cenário montado em disco.
@@ -484,7 +469,7 @@ fn every_creation_case_resolves_with_the_real_facts() {
         total = sum(total, check(&name, &fixture, unroot(resolve::resolve_open(&request, &OWNER, &facts), &root), true));
     }
     // As mesmas contas da `FixtureFacts`: o Fast sem modelo recusa com outro status, mas recusa.
-    assert_eq!(total, (42, 42, 29));
+    assert_eq!(total, (43, 43, 29));
 }
 
 /// O POST que o Rust atende deixa a linha do middleware de acesso do Python.
@@ -625,14 +610,16 @@ fn materialize(fixture: &Value, root: &std::path::Path) {
 }
 
 #[test]
-fn launch_refusals_and_fixed_refusals_resolve() {
-    for name in LAUNCH_REFUSALS.iter().chain(FIXED.iter()) {
-        let (_, fixture) = create_fixtures().into_iter().find(|(n, _)| n == name).unwrap();
+fn launch_refusals_and_resolve_only_cases_resolve() {
+    let cases: Vec<_> = create_fixtures().into_iter()
+        .filter(|(name, fixture)| LAUNCH_REFUSALS.contains(&name.as_str()) || fixture["result"]["resolves_only"] == true).collect();
+    assert_eq!(cases.len(), 5);
+    for (name, fixture) in cases {
         let resolved = resolve_fixture(&fixture).unwrap_or_else(|e| panic!("{name}: {e}"));
         assert!(resolved.warnings.is_empty(), "{name}");
     }
     // O prompt inicial viaja até o lançamento em todo provedor, também sem terminal.
-    let (_, fixture) = create_fixtures().into_iter().find(|(n, _)| n == "create_claude_headless_initial_prompt_refused").unwrap();
+    let (_, fixture) = create_fixtures().into_iter().find(|(n, _)| n == "create_claude_headless_initial_prompt").unwrap();
     assert_eq!(resolve_fixture(&fixture).unwrap().initial_prompt.as_deref(), Some("olá"));
 }
 
@@ -683,8 +670,8 @@ fn claude_permission_mode_default_opens_in_manual() {
 fn inherit_false_resolves_like_no_creator() {
     let fixtures = create_fixtures();
     let get = |name: &str| fixtures.iter().find(|(n, _)| n == name).unwrap().1.clone();
-    let opted_out = resolve_fixture(&get("create_inherit_flag_not_supported")).unwrap().spec;
-    let mut alone = get("create_inherit_flag_not_supported");
+    let opted_out = resolve_fixture(&get("create_inherit_false_accepted")).unwrap().spec;
+    let mut alone = get("create_inherit_false_accepted");
     alone["scenario"]["steps"][0]["json"].as_object_mut().unwrap().retain(|k, _| k != "creator" && k != "inherit");
     let alone = resolve_fixture(&alone).unwrap().spec;
     assert_eq!(SessionSpec { creator: None, ..opted_out.clone() }, alone);
@@ -1237,8 +1224,6 @@ fn the_claude_pane_is_the_expected_one() {
             .find(|p| p["prog"] == "tmux" && p["argv"][0] == "new-session") else { continue };
         let python: Vec<String> = tmux["argv"].as_array().unwrap().iter().map(|a| a.as_str().unwrap().to_owned()).collect();
         if !python.iter().any(|a| a == "CP_PROVIDER=claude") { continue; }
-        // A conta escolhida a 97% nasce em outra pasta de conta: o pane escrito no cenário não vale.
-        if name == "create_quota_explicit_account_kept" { continue; }
         let mut spec = resolve_fixture(&fixture).unwrap_or_else(|e| panic!("{name}: {e}")).spec;
         spec.cwd = python[python.iter().position(|a| a == "-c").unwrap() + 1].clone();
         let state = &fixture["scenario"]["state"]["files"];
@@ -1269,8 +1254,7 @@ fn the_claude_pane_is_the_expected_one() {
         assert_eq!(our_words, words, "{name}: comando");
         compared += 1;
     }
-    // 26 panes nos cenários, menos `create_quota_explicit_account_kept`, que nasce em outra conta.
-    assert_eq!(compared, 25);
+    assert_eq!(compared, 26);
 }
 
 /// Pi, omp e Kimi dos cenários: o pane do `agents::pane` sobre o spec dá o mesmo `-e` e o
@@ -3117,7 +3101,7 @@ fn an_unknown_quota_on_an_unchosen_account_is_born_on_a_known_one() {
         assert!(facts.unknown_quota.lock().unwrap().is_empty(), "{name}");
     }
 
-    let mut fixture = fixture_named("create_quota_explicit_account_kept");
+    let mut fixture = fixture_named("create_quota_explicit_account_moves");
     fixture["scenario"]["fakes"]["quotas"] = rows.clone();
     let facts = FixtureFacts::of(&fixture);
     let resolved = open_with(&fixture, &facts).unwrap();
@@ -3208,7 +3192,7 @@ fn an_exhausted_default_codex_account_is_switched_to_the_one_with_room() {
 /// folga, abre nela; sem outra abaixo dos 95%, segue nela.
 #[test]
 fn an_explicit_exhausted_account_is_born_on_the_one_with_room() {
-    let fixture = fixture_named("create_quota_explicit_account_kept");
+    let fixture = fixture_named("create_quota_explicit_account_moves");
     let resolved = resolve_fixture(&fixture).unwrap();
     assert_eq!((resolved.spec.account, resolved.spec.account_source), (Account::Claude { config_dir: "<ROOT>/home/.claude-b".into() }, AccountSource::Quota));
     assert_eq!(resolved.warnings, ["conta default com 97% de uso; a sessão nasceu em b"]);
