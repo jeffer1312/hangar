@@ -13,6 +13,7 @@ use std::time::Duration;
 
 const SID:&str = "11111111-1111-4111-8111-111111111111";
 const FOOTER:&str = "\n❯ \n  ⏵⏵ accept edits on (shift+tab to cycle)\n";
+const UNREADABLE_FOOTER:&str = "\n❯ \n";
 
 struct Fixture { _dir:tempfile::TempDir, home:PathBuf, queue:PathBuf, state:PathBuf, tmux:PathBuf, cwd:PathBuf }
 
@@ -34,6 +35,8 @@ case "$1" in
   new-session)
     printf '%s\n' "$@" > "$S.args"
     [ -f "$S.nospawn" ] && exit 1
+    # `$S.next-screen`: a tela do pane que nasce agora; a do pane antigo fica até aqui.
+    [ -f "$S.next-screen" ] && mv "$S.next-screen" "$S.screen"
     : > "$S.env"; prev=""; for a in "$@"; do [ "$prev" = "-e" ] && echo "$a" >> "$S.env"; prev="$a"; done
     # O processo leva o ambiente do `-e` e o que o `hangar-engine` poria; `$S.forge` sobrepõe (outra identidade).
     E=(); while IFS= read -r l; do E+=("$l"); done < "$S.env"
@@ -1019,6 +1022,50 @@ async fn a_terminal_session_goes_headless_on_the_same_conversation_and_mode() {
     registry.close_with_kill(&key,generation(&fx,&key)).await.unwrap();
 }
 
+/// Rodapé sem o modo na hora de ir ao sem terminal: o modo sai do spec.
+#[tokio::test]
+async fn an_unreadable_footer_does_not_change_the_mode_of_the_switch_to_headless() {
+    let fx = fixture();
+    fx.transcript();
+    let key = "35".repeat(16);
+    terminal_with_spec(&fx,&key);
+    std::fs::write(fx.state.with_extension("screen"),UNREADABLE_FOOTER).unwrap();
+    let old_agent = fx.agent().unwrap();
+    let registry = headless_registry(&fx).await;
+    let reopened = registry.reopen_claude_session("s1",mode_switch(false),None).await.expect("é sessão Claude daqui");
+    assert!(reopened.map_err(|f|(f.error.code,f.error.message,f.stopped)).unwrap().changed);
+    assert!(gone(old_agent),"o pane fechou");
+    let meta:Value = serde_json::from_slice(&std::fs::read(fx.sidecar_path("s1")).unwrap()).unwrap();
+    assert_eq!((meta["headless"].as_bool(),meta["permission_mode"].as_str()),(Some(true),Some("acceptEdits")));
+    let args = std::fs::read_to_string(fx.home.join("claude.args")).unwrap();
+    assert!(args.contains(&format!("--resume {SID}")) && args.contains("--permission-mode acceptEdits"),"{args}");
+    registry.close_with_kill(&key,generation(&fx,&key)).await.unwrap();
+}
+
+/// Rodapé sem o modo na hora de recarregar: o pane novo abre no modo do spec. Quem confirma a volta é o
+/// rodapé do pane novo.
+#[tokio::test]
+async fn an_unreadable_footer_does_not_change_the_mode_of_a_reload() {
+    let fx = fixture();
+    fx.transcript();
+    let key = "57".repeat(16);
+    terminal_with_spec(&fx,&key);
+    std::fs::write(fx.state.with_extension("screen"),UNREADABLE_FOOTER).unwrap();
+    std::fs::write(fx.state.with_extension("next-screen"),FOOTER).unwrap();
+    let old_agent = fx.agent().unwrap();
+    let registry = terminal_registry(&fx).await;
+    let change = SessionChange { reason:ChangeReason::Reload,surface:None,account:None,permission_mode:None,model:None,effort:None,service_tier:None };
+    let reopened = registry.reopen_claude_session("s1",change,None).await.expect("é sessão Claude daqui");
+    reopened.map_err(|f|(f.error.code,f.error.message,f.stopped)).unwrap();
+    assert!(gone(old_agent),"o Claude antigo saiu");
+    let args = fx.args();
+    let command = args.last().unwrap();
+    assert!(command.contains(&format!("claude --resume {SID}")) && command.contains("--permission-mode acceptEdits"),"{command}");
+    let (found,_) = registry.terminal_view("s1").await.unwrap();
+    registry.close(&found,2).await.unwrap();
+    fx.finish();
+}
+
 #[tokio::test]
 async fn bypass_reopens_a_terminal_on_the_same_conversation() {
     let fx = fixture();
@@ -1092,20 +1139,31 @@ async fn a_full_destination_account_is_refused_before_anything_stops() {
     let fx = fixture();
     let b = account_b(&fx);
     logged_in_default(&fx);
+    fx.transcript();
+    terminal_with_spec(&fx,&"e1".repeat(16));
+    let (agent,before) = (fx.agent().unwrap(),fx.args());
     seed_quota(&fx,&b,99.5);
     let server = serve_with_accounts(&fx,fx.registry().await).await;
     let (status,body) = post(server,"conta",json!({"config_dir":b})).await;
     assert_eq!((status,&body["detail"]),(409,&json!({"code":"erro_conta_cheia","params":{"conta":"b","pct":99.5},"msg":"a conta b está em 100% da cota"})),"{body}");
-    assert!(fx.args().is_empty(),"nenhum terminal pedido");
+    assert!(!gone(agent),"o Claude do terminal segue vivo");
+    assert_eq!(fx.args(),before,"nenhum terminal novo");
+    fx.finish();
 }
 
 #[tokio::test]
 async fn an_unknown_account_folder_is_refused() {
     let fx = fixture();
     logged_in_default(&fx);
+    fx.transcript();
+    terminal_with_spec(&fx,&"e2".repeat(16));
+    let (agent,before) = (fx.agent().unwrap(),fx.args());
     let server = serve_with_accounts(&fx,fx.registry().await).await;
     let (status,body) = post(server,"conta",json!({"config_dir":fx.home.join(".claude-x")})).await;
     assert_eq!((status,body["detail"]["code"].as_str(),body["detail"]["msg"].as_str()),(400,Some("erro_config_dir_invalido"),Some("config_dir invalido")),"{body}");
+    assert!(!gone(agent),"o Claude do terminal segue vivo");
+    assert_eq!(fx.args(),before,"nenhum terminal novo");
+    fx.finish();
 }
 
 #[tokio::test]
