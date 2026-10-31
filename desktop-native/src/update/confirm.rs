@@ -351,8 +351,8 @@ fn open_whats_new(items: Vec<News>, window: &mut Window, cx: &mut App) {
         let max = window.viewport_size().height * 0.8 - px(110.);
         let top = (window.viewport_size().height * 0.1).max(px(24.));
         let width = px(780.).min(window.viewport_size().width * 0.92);
-        // A animação ocupa o cartão: largura do modal menos o respiro dele (18) e o do cartão (12 e a borda), dos dois lados.
-        let stage = width - px(62.);
+        // A animação ocupa o cartão: largura do modal menos a borda e o respiro dele (18) e os do cartão (12), dos dois lados.
+        let stage = width - px(64.);
         crate::app::popup::dialog(dialog).w(width).p(px(18.)).rounded(px(14.)).close_button(false).margin_top(top)
             .child(div().id("whats-new-body").max_h(max).overflow_y_scroll()
                 .child(sections(tr_shared("update_whats_new_title", &[]), &items, Some(stage), &fixes_open, started, window, cx)))
