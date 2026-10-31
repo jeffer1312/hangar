@@ -64,44 +64,13 @@ fn context(stdout: &str) -> String {
     v["hookSpecificOutput"]["additionalContext"].as_str().unwrap().to_owned()
 }
 
-/// Variantes com par de fora em que o texto de grupo vem antes do bloco externo.
-const MIXED: [&str; 2] = ["external_registry_unreadable", "external_via_other_member"];
-/// Sidecar sem `gid` (ou vazio): `stdout` da tabela não tem a linha do contrato.
-const GID_DERIVED: [&str; 2] = ["gid_empty", "gid_missing"];
-
 #[test]
 fn pair_context_output_per_arrangement() {
     assert_eq!(CASES.len(), 32);
-    let mut checked = 0;
     for c in CASES {
-        if MIXED.contains(&c.name) { continue; }
         let got = run_case(c);
         assert_eq!(got.rc, Some(0), "{}", c.name);
-        if GID_DERIVED.contains(&c.name) {
-            // Sem `gid`, o contrato é o do gid derivado (a+b), o mesmo da tool `contract`.
-            let gid = &sha1_smol::Sha1::from("a\nb").digest().to_string()[..8];
-            let line = format!("- Decisões que o grupo consulta vão em <pair>/grupo-{gid}.md (criar se não existir, curto).\n");
-            let ours = context(&got.stdout);
-            assert!(ours.contains(&line), "{}: {ours}", c.name);
-            assert_eq!(ours.replace(&line, ""), context(c.stdout), "{}", c.name);
-        } else {
-            assert_eq!(got.stdout, c.stdout, "{}", c.name);
-        }
-        checked += 1;
-    }
-    assert_eq!(checked, 30);
-}
-
-/// Membro local de grupo com par de fora recebe o texto de grupo (o mesmo de um grupo `a`+`b` sem
-/// tarefa) seguido do bloco externo. Registro ilegível: só o stdout.
-#[test]
-fn mixed_group_reinjects_group_and_external_text() {
-    let group = context(case("headless_key_unknown_falls_to_pane").stdout);
-    for name in MIXED {
-        let got = run_case(case(name));
-        assert_eq!(got.rc, Some(0), "{name}");
-        let external = context(case(name).stdout);
-        assert_eq!(context(&got.stdout), format!("{group}\n{external}"), "{name}");
+        assert_eq!(got.stdout, c.stdout, "{}", c.name);
     }
 }
 
