@@ -266,6 +266,25 @@ async fn restore_covers_a_vault_whose_key_is_gone_and_keeps_the_old_file() {
     assert_eq!(std::fs::read(aside[0].path()).unwrap(), orphan);
 }
 
+#[tokio::test]
+async fn restore_covers_an_unreadable_vault_and_keeps_the_old_file() {
+    let (addr, _keeper_dir) = keeper().await;
+    let dir = tempfile::tempdir().unwrap();
+    let peers = peers_for(dir.path(), addr);
+    let (vault, _) = owner_vault(dir.path()).await;
+    assert_eq!(backup::send_once(&vault, &peers, dir.path(), OWNER_ID).await, Sent::Sent);
+    let torn = b"arquivo estragado".to_vec();
+    std::fs::write(store::path(dir.path()), &torn).unwrap();
+    assert_eq!(vault.list(dir.path()).await.err(), Some(VaultError::Unreadable));
+
+    backup::restore(&vault, &peers, dir.path(), "lab", OWNER_ID, Zeroizing::new(RECOVERY.into())).await.unwrap();
+    assert_eq!(vault.list(dir.path()).await.unwrap().iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["banco"]);
+    let aside: Vec<_> = std::fs::read_dir(store::path(dir.path()).parent().unwrap()).unwrap().flatten()
+        .filter(|e| e.file_name().to_string_lossy().starts_with("vault.bin.perdido-")).collect();
+    assert_eq!(aside.len(), 1, "o arquivo ilegível fica guardado ao lado");
+    assert_eq!(std::fs::read(aside[0].path()).unwrap(), torn);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_machine_that_uses_another_owner_does_not_restore_a_vault_of_its_own() {
     let (addr, _keeper_dir) = keeper().await;

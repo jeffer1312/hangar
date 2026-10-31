@@ -577,7 +577,7 @@ impl Render for VaultPage {
         let empty = matches!(&self.entries, Some(Ok(list)) if list.is_empty());
         let backup = (status.role == "owner" && status.state == "open").then(|| self.render_backup(&status, cx));
         // Chave perdida também restaura: o servidor guarda o arquivo velho de lado e cria uma chave nova.
-        let restore = (status.role == "none" || (status.role == "owner" && (empty || status.state == "key_lost"))).then(|| self.render_restore(cx));
+        let restore = (status.role == "none" || (status.role == "owner" && (empty || status.state == "key_lost" || status.state == "unavailable"))).then(|| self.render_restore(cx));
         page.child(body).children(backup).children(restore).child(self.render_where(&status, cx))
     }
 }

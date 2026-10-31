@@ -39,6 +39,7 @@ beforeEach(() => {
 afterEach(() => {
   target.querySelector<HTMLButtonElement>('.more[aria-expanded="true"]')?.click();
   component?.$destroy(); component = null; target.remove();
+  store.vaultFor = () => null;
 });
 
 it('carregando enquanto nenhuma máquina respondeu', async () => {
@@ -154,6 +155,24 @@ it('chaveiro trancado aparece na tela inicial, por máquina e com campo de senha
   expect(text).toContain('a: chaveiro trancado');
   expect(text).not.toContain('b: chaveiro trancado');
   expect(target.querySelectorAll('input[type="password"]')).toHaveLength(1);
+});
+
+it('pedido do cofre aparece só na máquina dele, e nunca em servidor de convite', async () => {
+  const event = { state: 'open', requests: [{ id: 'r1', interaction_id: 'i1', kind: 'approve', origin: 'a::sessao', entry_name: 'github', reason: 'login', expires_at: 1 }] };
+  Object.assign(store, {
+    loading: false, rows: [row('s1', 'idle')],
+    byServer: [
+      { server: server('a'), sessions: [], error: null, loaded: true },
+      { server: server('b'), sessions: [], error: null, loaded: true },
+      { server: { ...server('c'), invite: true }, sessions: [], error: null, loaded: true },
+    ],
+    vaultFor: (id: string) => (id === 'b' ? null : event),
+  });
+  await mount();
+  const rows = [...target.querySelectorAll('.vault-row')];
+  expect(rows).toHaveLength(1);
+  expect(rows[0].textContent).toContain('github');
+  expect(rows[0].textContent).toContain('a::sessao');
 });
 
 it('sucesso agrupa e "mais N prontas" expande', async () => {

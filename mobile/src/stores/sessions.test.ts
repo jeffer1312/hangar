@@ -130,6 +130,8 @@ test('token novo apaga o cofre do servidor; evento igual ao antigo volta a valer
   useSessions.getState().refreshServers();
   expect(useSessions.getState().vault.srv1).toBeUndefined();
   await settle();
+  created[0].trigger('vault', event);
+  expect(useSessions.getState().vault.srv1).toBeUndefined();
   created.at(-1)!.trigger('vault', event);
   expect(useSessions.getState().vault.srv1?.requests[0]?.id).toBe('r1');
   release();

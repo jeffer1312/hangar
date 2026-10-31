@@ -72,7 +72,9 @@ export default function Cofre() {
         // Falha ao reler os peers não fecha o formulário aberto, desde que a dona seja a mesma.
         const sameOwner = writerOwner.current === next.owner;
         writerOwner.current = next.owner ?? undefined;
-        setWriter((known) => owner ?? (lookupError && sameOwner ? known : null));
+        // Relida da lista: token ou endereço trocados não ficam presos no objeto antigo.
+        setWriter((known) => owner ?? (lookupError && sameOwner && known
+          ? useServers.getState().servers.find((s) => s.id === known.id && !s.invite && !s.disabled) ?? null : null));
         setOwnerLookupError(lookupError);
       } catch (e) {
         if (now === generation.current) setError(vaultErrorText(e));
@@ -119,7 +121,7 @@ export default function Cofre() {
   // Restaurar só nesta máquina: sem cofre ainda, dona aberta sem nenhuma senha, ou dona com a chave perdida
   // (o servidor põe o arquivo velho de lado e cria chave nova).
   const canRestore = !!status && (status.role === 'none'
-    || (status.role === 'owner' && (state === 'key_lost' || (state === 'open' && entries?.length === 0))));
+    || (status.role === 'owner' && (state === 'key_lost' || state === 'unavailable' || (state === 'open' && entries?.length === 0))));
   return (
     <Pagina>
       <Stack.Screen options={{ title: m.vault_app_title() }} />

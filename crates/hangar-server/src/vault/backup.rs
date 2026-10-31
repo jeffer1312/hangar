@@ -374,7 +374,7 @@ impl Vault {
     async fn restorable(&self, hangar_dir: &Path) -> Result<bool, VaultError> {
         if !store::exists(&store::path(hangar_dir)) { return Ok(true); }
         match self.read(hangar_dir, |doc| Ok(doc.entries.is_empty())).await {
-            Err(VaultError::Key(KeyError::Lost | KeyError::Absent)) => Ok(true),
+            Err(VaultError::Key(KeyError::Lost | KeyError::Absent) | VaultError::Unreadable) => Ok(true),
             other => other,
         }
     }
@@ -399,9 +399,16 @@ impl Vault {
         };
         tokio::task::spawn_blocking(move || {
             if existed {
-                let current = store::load(&path, &key).map_err(|e| RestoreError::Vault(e.into()))?;
-                if !current.entries.is_empty() { return Err(RestoreError::NotEmpty); }
-                doc.revision = doc.revision.max(current.revision);
+                match store::load(&path, &key) {
+                    Ok(current) => {
+                        if !current.entries.is_empty() { return Err(RestoreError::NotEmpty); }
+                        doc.revision = doc.revision.max(current.revision);
+                    }
+                    // A chave abre, o arquivo não: a cópia é o que resta, e ele fica guardado ao lado.
+                    Err(store::StoreError::Unreadable) =>
+                        set_aside(&path).map_err(super::io_cause("vault_restore_set_aside", RestoreError::Vault(VaultError::Io)))?,
+                    Err(error) => return Err(RestoreError::Vault(error.into())),
+                }
             }
             doc.revision += 1;
             store::save(&path, &key, &doc).map_err(|e| RestoreError::Vault(e.into()))?;
@@ -443,6 +450,8 @@ pub async fn restore(vault: &Vault, peers: &PeerClient, hangar_dir: &Path, from_
         CopyError::Unreadable => RestoreError::Unreadable,
         CopyError::WrongPassword => RestoreError::WrongPassword,
     })?;
+    // Uma rodada entre as duas gravações mandaria o cofre restaurado com a chave de recuperação velha.
+    let _one = ONE.lock().await;
     vault.restore_doc(hangar_dir, doc).await?;
     // A mesma senha continua abrindo as próximas cópias.
     vault.keys.write_recovery(recovery.to_item()).await.map_err(RestoreError::RecoveryNotSaved)
