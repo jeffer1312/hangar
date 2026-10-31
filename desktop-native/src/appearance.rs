@@ -379,6 +379,9 @@ pub(crate) fn dir() -> Option<PathBuf> {
 
 fn path() -> Option<PathBuf> { Some(dir()?.join("appearance.json")) }
 
+/// O que já foi visto do tour e das dicas (`tour::state`).
+pub(crate) fn tour_path() -> Option<PathBuf> { Some(dir()?.join("tour.json")) }
+
 /// Cópia da imagem de fundo escolhida: o original pode sumir ou mudar depois.
 pub fn image_path() -> Option<PathBuf> { Some(dir()?.join("background-image")) }
 

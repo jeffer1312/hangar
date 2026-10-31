@@ -1105,6 +1105,13 @@ impl Hangar {
             (_, None, false) => div(),
         };
         let server_row = self.row_with(IconName::Server, "settings_about_server", server_desc, self.api.is_some(), div().into_any_element());
+        // A página cobre as peças que o tour aponta: fecha para ele aparecer.
+        let tour_row = self.row(IconName::Sparkles, "tour_replay", Some(tr("tour_replay_desc")), true,
+            Button::new("tour-replay").outline().small().icon(IconName::RotateCcw).label(tr("tour_replay_start"))
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.restart_tour(cx);
+                    this.close_settings(window, cx);
+                })).into_any_element());
 
         let run = self.device.run.clone();
         let active = self.device.run_active();
@@ -1152,7 +1159,7 @@ impl Hangar {
         let server = self.server_label(cx);
         div().flex().flex_col()
             .child(self.page_top("settings_page_about", tr("settings_about_lead").replace("{server}", &server)))
-            .child(self.heading("settings_about_app_group")).child(settings_box().child(app_row))
+            .child(self.heading("settings_about_app_group")).child(settings_box().child(app_row).child(tour_row))
             .child(self.heading("settings_about_server_group"))
             .child(settings_box().child(server_row).child(update_row).children(progress))
             .children(self.render_dev_mode(cx).map(|row| row.mt(px(12.))))

@@ -869,6 +869,8 @@ pub struct Hangar {
     setup_hidden: Option<Entity<setup::SetupWizard>>,
     /// O cartão da entrada sem conexão salva: procurando ou o que achou neste computador.
     entry: Option<setup::Entry>,
+    /// O tour de primeiro uso, as dicas e o que já foi visto (`tour.json`).
+    tour: crate::tour::Tour,
 }
 
 impl Drop for Hangar {
@@ -1119,6 +1121,7 @@ impl Hangar {
             setup: None,
             setup_hidden: None,
             entry: probe.then_some(setup::Entry::Probing),
+            tour: Self::load_tour(),
         }
     }
 
@@ -7250,6 +7253,65 @@ impl Hangar {
     pub(super) fn side_closing(&self) -> bool { self.side_slide.is_some_and(|(_, opening, _)| !opening) }
 }
 
+impl Hangar {
+    /// Bloqueante, mas o arquivo é pequeno e lido uma vez na abertura. Ilegível vale como nada visto, e fica no log.
+    fn load_tour() -> crate::tour::Tour {
+        let seen = crate::tour::state::load().unwrap_or_else(|reason| {
+            crate::log_line(&format!("tour: o que já foi visto não foi lido: {reason}"));
+            Default::default()
+        });
+        let mut tour = crate::tour::Tour::new(seen);
+        tour.server_read = true;
+        tour
+    }
+
+    fn save_tour(&mut self) {
+        let (seen, generation) = self.tour.to_save();
+        self.runtime.spawn_blocking(move || if let Err(error) = crate::tour::state::save(&seen, generation) {
+            crate::log_line(&format!("tour: o que já foi visto não gravou: {error}"));
+        });
+    }
+
+    /// A ação real de um passo aconteceu (chamado de onde ela acontece).
+    #[allow(dead_code)]
+    pub(super) fn tour_event(&mut self, event: crate::tour::TourEvent, cx: &mut Context<Self>) {
+        if self.tour.tour_event(event) { self.save_tour(); }
+        cx.notify();
+    }
+
+    /// "Ver o tour de novo": zera só o tour, as dicas ficam.
+    pub(super) fn restart_tour(&mut self, cx: &mut Context<Self>) {
+        if self.tour.restart() { self.save_tour(); }
+        cx.notify();
+    }
+
+    fn tour_choice(&mut self, choice: crate::tour::Choice, cx: &mut Context<Self>) {
+        if self.tour.choose(choice) { self.save_tour(); }
+        cx.notify();
+    }
+
+    /// O balão da vez, preso à peça. Lido aqui, no desenho da raiz, a cada quadro: a âncora lida pede outro quadro quando
+    /// a peça se move. Peça fora da tela: o balão espera, salvo a comemoração, que fica onde o balão estava.
+    fn render_tour(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let gate = crate::tour::Gate {
+            dialogs_open: self.connection_dialog || self.setup.is_some() || window.has_active_dialog(cx),
+            window_visible: !self.window_tray.hidden,
+            server_read: self.tour.server_read && self.api.is_some(),
+        };
+        let surface = self.tour.next_surface(&gate)?;
+        let target = match popup::anchor_bounds(&surface.anchor) {
+            Some(bounds) => bounds,
+            None if surface.celebrating.is_some() =>
+                self.tour.last_target.as_ref().filter(|(id, _)| *id == surface.anchor).map(|(_, bounds)| *bounds)?,
+            None => return None,
+        };
+        self.tour.last_target = Some((surface.anchor.clone(), target));
+        let choose = cx.listener(|this, choice: &crate::tour::Choice, _, cx| this.tour_choice(*choice, cx));
+        let on_choice: crate::tour::balloon::OnChoice = std::rc::Rc::new(move |choice, window, cx| choose(&choice, window, cx));
+        Some(crate::tour::balloon::render(&surface, target, on_choice, window, cx))
+    }
+}
+
 impl Render for Hangar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Vive até o fim do desenho: as âncoras da raiz deste quadro valem a partir dele (`popup::RootFrame`).
@@ -7641,6 +7703,7 @@ impl Render for Hangar {
             .children(if preview_popup { self.render_tab_preview_popup(window, cx) } else { None })
             .children(self.render_search(window, cx))
             .children(self.render_plan_review_overlay(window, cx))
+            .children(self.render_tour(window, cx))
             .child(ticker)
             // Uma autenticação recusada pode abrir a conexão sobre um formulário já aberto: adiada, fica acima dos diálogos do kit.
             .when_some(dialog, |el, dialog| el.child(deferred(div().absolute().inset_0().bg(cx.theme().overlay).occlude().opacity(dialog_in)
