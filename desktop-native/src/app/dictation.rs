@@ -756,9 +756,11 @@ impl Hangar {
         self.dictation_selection(cx).map(|selection|selection.options(self.selected.as_ref()))
     }
 
-    /// Lido da configuração da máquina do ditado; antes da leitura, falso.
-    pub(super) fn transcription_configured(&self, cx: &App) -> bool {
-        self.dictation_selection(cx).is_some_and(|selection| selection.transcription)
+    /// Lido da configuração da máquina do ditado; `None` antes da leitura. Leitura que falhou ou sem máquina para ler
+    /// resolve como falso, para quem espera por ela não ficar preso.
+    pub(super) fn transcription_known(&self, cx: &App) -> Option<bool> {
+        if let Some(selection) = self.dictation_selection(cx) { return Some(selection.transcription); }
+        (self.dictation_target(cx).is_none() || self.dictation.config_error.is_some()).then_some(false)
     }
 
     fn dictation_selection(&self, cx: &App)->Option<&OrganizationSelection> {

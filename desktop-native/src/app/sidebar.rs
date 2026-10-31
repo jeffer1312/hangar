@@ -1893,12 +1893,14 @@ impl Hangar {
                 .children(rows))
             .child(div().w_full().flex_shrink_0().pt(px(8.)).pb(px(8.)).mt(px(4.)).border_t_1().border_color(theme::border())
                 .flex().flex_col().items_center().gap(px(4.))
-                // O CTA do web no trilho: o botão cheio de destaque, só com o +.
-                .child(Button::new("rail-new-session").custom(ButtonCustomVariant::new(cx).color(theme::accent()).foreground(theme::on_accent())
+                // O CTA do web no trilho: o botão cheio de destaque, só com o +. Com a barra recolhida, o primeiro passo do
+                // tour aponta para ele.
+                .child(popup::anchor(div().flex_shrink_0(), crate::tour::anchors::NEW_SESSION).child(Button::new("rail-new-session")
+                        .custom(ButtonCustomVariant::new(cx).color(theme::accent()).foreground(theme::on_accent())
                         .hover(theme::accent().opacity(0.85)).active(theme::accent().opacity(0.75)))
                     .icon(chrome::small_icon(IconName::Plus, 16., theme::on_accent())).w(px(44.)).h(px(36.)).rounded(px(8.))
                     .tooltip(tr("create_title")).accessibility_label(tr("create_title")).disabled(self.api.is_none())
-                    .on_click(cx.listener(|this, _, window, cx| this.open_new_session(None, window, cx))))
+                    .on_click(cx.listener(|this, _, window, cx| this.open_new_session(None, window, cx)))))
                 .child(self.fold_button("rail-fold", cx))
                 .child(Button::new("rail-connection").ghost().size(px(36.)).rounded(px(8.)).tooltip(host).accessibility_label(tr("connection"))
                     .child(div().size(px(7.)).rounded_full().bg(if self.list_online { theme::success() } else { theme::warning() }))

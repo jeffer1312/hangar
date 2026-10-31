@@ -82,10 +82,10 @@ mod tests {
             ("200 OK", json!({"tour": "feito", "dicas": ["citar", "fila"], "dicas_desligadas": null})),
         ]);
         let api = Api::new(&format!("http://{address}"), "fixture-owner").unwrap();
-        let local = Seen { dicas: ["citar".to_owned()].into(), aparelhos: ["ios:abc".to_owned()].into(), ..Default::default() };
+        let local = Seen { tips: ["citar".to_owned()].into(), devices: ["ios:abc".to_owned()].into(), ..Default::default() };
         let joined = api.sync_tour_progress(local).await.unwrap().unwrap();
-        assert_eq!(joined.tour, Some(Outcome::Feito));
-        assert_eq!(joined.dicas, ["citar".to_owned(), "fila".to_owned()].into());
+        assert_eq!(joined.tour, Some(Outcome::Done));
+        assert_eq!(joined.tips, ["citar".to_owned(), "fila".to_owned()].into());
 
         let requests = server.await.unwrap();
         assert_eq!(requests.iter().map(|(head, _)| head.split_whitespace().take(2).collect::<Vec<_>>().join(" ")).collect::<Vec<_>>(),
@@ -99,7 +99,7 @@ mod tests {
         let mut tour = crate::tour::Tour::with_steps(Seen::default(), vec![step]);
         assert!(tour.running());
         assert!(tour.absorb(joined));
-        assert_eq!(tour.seen.tour, Some(Outcome::Feito));
+        assert_eq!(tour.seen.tour, Some(Outcome::Done));
         assert!(!tour.running());
         assert!(tour.server_read);
     }

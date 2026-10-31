@@ -8,38 +8,38 @@ use crate::{routes::{AppState, gate}, session_write::{detail_body, json_response
 
 // A ordem das variantes é a da junção: `feito` vence `pulado` (e `None` perde para os dois).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-enum Tour { Pulado, Feito }
+enum Tour { #[serde(rename = "pulado")] Skipped, #[serde(rename = "feito")] Done }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct Switch { valor: bool, em: String }
+struct Switch { #[serde(rename = "valor")] on: bool, #[serde(rename = "em")] at: String }
 
 impl Switch {
-    fn instant(&self) -> Option<chrono::DateTime<chrono::FixedOffset>> { chrono::DateTime::parse_from_rfc3339(&self.em).ok() }
+    fn instant(&self) -> Option<chrono::DateTime<chrono::FixedOffset>> { chrono::DateTime::parse_from_rfc3339(&self.at).ok() }
 }
 
-/// Mesmo formato no arquivo e no corpo do `PUT`; no corpo, campo ausente não acrescenta nada.
+/// Mesmo formato no arquivo e no corpo do `PUT`; no corpo, campo ausente não acrescenta nada. Os nomes no JSON são os
+/// já gravados e os que o nativo manda: mudam só com os dois lados.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Progress {
     #[serde(default)] tour: Option<Tour>,
-    #[serde(default)] dicas: BTreeSet<String>,
-    #[serde(default)] dicas_desligadas: Option<Switch>,
+    #[serde(default, rename = "dicas")] tips: BTreeSet<String>,
+    #[serde(default, rename = "dicas_desligadas")] tips_switch: Option<Switch>,
 }
 
 impl Progress {
-    fn valid(&self) -> bool { self.dicas_desligadas.as_ref().is_none_or(|value| value.instant().is_some()) }
+    fn valid(&self) -> bool { self.tips_switch.as_ref().is_none_or(|value| value.instant().is_some()) }
 
     fn merge(&mut self, other: Progress) {
         self.tour = self.tour.max(other.tour);
-        self.dicas.extend(other.dicas);
-        if let Some(theirs) = other.dicas_desligadas {
-            let newer = match &self.dicas_desligadas {
+        self.tips.extend(other.tips);
+        if let Some(theirs) = other.tips_switch {
+            let newer = match &self.tips_switch {
                 Some(ours) => theirs.instant() > ours.instant(),
                 None => true,
             };
-            if newer { self.dicas_desligadas = Some(theirs); }
+            if newer { self.tips_switch = Some(theirs); }
         }
     }
 }
@@ -102,18 +102,27 @@ fn unreadable(cause: &str) -> Response {
 mod tests {
     use super::*;
 
-    fn switch(valor: bool, em: &str) -> Option<Switch> { Some(Switch { valor, em: em.into() }) }
+    fn switch(on: bool, at: &str) -> Option<Switch> { Some(Switch { on, at: at.into() }) }
     fn set(items: &[&str]) -> BTreeSet<String> { items.iter().map(|item| item.to_string()).collect() }
 
     #[test]
     fn merge_never_downgrades_and_keeps_the_newest_switch() {
-        let mut ours = Progress { tour: Some(Tour::Feito), dicas: set(&["b"]), dicas_desligadas: switch(true, "2026-10-30T12:00:00Z") };
-        ours.merge(Progress { tour: Some(Tour::Pulado), dicas: set(&["a", "b"]), dicas_desligadas: switch(false, "2026-10-30T11:00:00Z") });
-        assert_eq!(ours.tour, Some(Tour::Feito));
-        assert_eq!(ours.dicas.iter().map(String::as_str).collect::<Vec<_>>(), ["a", "b"]);
-        assert_eq!(ours.dicas_desligadas, switch(true, "2026-10-30T12:00:00Z"));
+        let mut ours = Progress { tour: Some(Tour::Done), tips: set(&["b"]), tips_switch: switch(true, "2026-10-30T12:00:00Z") };
+        ours.merge(Progress { tour: Some(Tour::Skipped), tips: set(&["a", "b"]), tips_switch: switch(false, "2026-10-30T11:00:00Z") });
+        assert_eq!(ours.tour, Some(Tour::Done));
+        assert_eq!(ours.tips.iter().map(String::as_str).collect::<Vec<_>>(), ["a", "b"]);
+        assert_eq!(ours.tips_switch, switch(true, "2026-10-30T12:00:00Z"));
         // Fuso diferente: vale o instante, não o texto.
-        ours.merge(Progress { dicas_desligadas: switch(false, "2026-10-30T10:00:01-02:00"), ..Progress::default() });
-        assert_eq!(ours.dicas_desligadas, switch(false, "2026-10-30T10:00:01-02:00"));
+        ours.merge(Progress { tips_switch: switch(false, "2026-10-30T10:00:01-02:00"), ..Progress::default() });
+        assert_eq!(ours.tips_switch, switch(false, "2026-10-30T10:00:01-02:00"));
+    }
+
+    #[test]
+    fn json_keeps_the_stored_names() {
+        let progress = Progress { tour: Some(Tour::Skipped), tips: set(&["a"]), tips_switch: switch(true, "2026-10-30T12:00:00Z") };
+        let json = json!({"tour": "pulado", "dicas": ["a"], "dicas_desligadas": {"valor": true, "em": "2026-10-30T12:00:00Z"}});
+        assert_eq!(serde_json::to_value(&progress).unwrap(), json);
+        assert_eq!(serde_json::from_value::<Progress>(json).unwrap(), progress);
+        assert_eq!(serde_json::to_value(Tour::Done).unwrap(), "feito");
     }
 }

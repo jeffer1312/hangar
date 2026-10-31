@@ -8,13 +8,20 @@ use super::{anchors, Step};
 pub struct Snapshot {
     /// Sessões na lista, de todas as máquinas.
     pub sessions: usize,
-    /// Contas Claude da máquina da sessão aberta.
-    pub accounts: usize,
+    /// Contas Claude da máquina da sessão aberta; `None` enquanto a lista não chegou nem falhou.
+    pub accounts: Option<usize>,
     /// Uma conta Codex na mesma lista: o anel leva a conversa para ela.
     pub codex: bool,
-    pub transcription: bool,
+    /// `None` enquanto a configuração do ditado não foi lida nem falhou.
+    pub transcription: Option<bool>,
     /// Agente da sessão aberta e legível.
     pub open: Option<Agent>,
+}
+
+impl Snapshot {
+    /// Contas e transcrição resolvidas, lidas ou com a leitura falhada. Antes disso os passos delas virariam dica para quem
+    /// as tem.
+    pub fn known(&self) -> bool { self.accounts.is_some() && self.transcription.is_some() }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,10 +41,10 @@ impl Need {
         match self {
             Need::EmptyList => s.sessions == 0,
             Need::Sessions(n) => s.sessions >= n,
-            Need::Accounts => s.accounts >= 2 || s.codex,
+            Need::Accounts => s.accounts.is_some_and(|n| n >= 2) || s.codex,
             Need::Nothing => true,
             Need::OpenSession => s.open.is_some(),
-            Need::Transcription => s.transcription,
+            Need::Transcription => s.transcription == Some(true),
             Need::ClaudeOrCodex => matches!(s.open, Some(Agent::Claude | Agent::Codex)),
         }
     }
@@ -108,11 +115,11 @@ impl Planner {
     /// A lista já chegou e o tour ainda não foi planejado.
     pub fn due(&self) -> bool { self.list_read && !self.planned }
 
-    /// Os passos do tour. Os que ficaram de fora esperam como dica, salvo a dica já vista (`dicas`): com o tour já visto,
+    /// Os passos do tour. Os que ficaram de fora esperam como dica, salvo a dica já vista (`tips`): com o tour já visto,
     /// é ela que sobrevive a reabrir o app.
-    pub fn plan(&mut self, s: &Snapshot, dicas: &BTreeSet<String>) -> Vec<Step> {
+    pub fn plan(&mut self, s: &Snapshot, tips: &BTreeSet<String>) -> Vec<Step> {
         let (steps, mut waiting) = split(s);
-        waiting.retain(|(step, _)| !dicas.contains(&tip_id(step)));
+        waiting.retain(|(step, _)| !tips.contains(&tip_id(step)));
         self.planned = true;
         self.waiting = waiting;
         steps
@@ -137,7 +144,28 @@ mod tests {
 
     fn tip_ids(s: &Snapshot) -> Vec<&'static str> { split(s).1.iter().map(|(step, _)| step.id).collect() }
 
-    const FULL: Snapshot = Snapshot { sessions: 2, accounts: 2, codex: false, transcription: true, open: Some(Agent::Claude) };
+    const FULL: Snapshot = Snapshot { sessions: 2, accounts: Some(2), codex: false, transcription: Some(true), open: Some(Agent::Claude) };
+
+    #[test]
+    fn unknown_accounts_or_transcription_do_not_plan() {
+        assert!(!Snapshot { accounts: None, ..FULL }.known(), "contas ainda não lidas");
+        assert!(!Snapshot { transcription: None, ..FULL }.known(), "ditado ainda não lido");
+        assert!(FULL.known());
+    }
+
+    #[test]
+    fn resolved_with_two_accounts_keeps_the_ring_in_the_tour() {
+        assert!(ids(&split(&FULL).0).contains(&"account"));
+        assert!(ids(&split(&FULL).0).contains(&"dictation"));
+    }
+
+    #[test]
+    fn failed_read_resolves_and_turns_the_steps_into_tips() {
+        // Leitura que falhou chega como lista vazia e transcrição desligada: resolve, e a condição falsa faz a dica.
+        let failed = Snapshot { accounts: Some(0), codex: false, transcription: Some(false), ..FULL };
+        assert!(failed.known());
+        assert_eq!(tip_ids(&failed), ["account", "dictation"]);
+    }
 
     #[test]
     fn one_session_turns_drag_and_number_into_tips() {
@@ -149,9 +177,9 @@ mod tests {
 
     #[test]
     fn one_account_without_codex_turns_the_ring_into_a_tip() {
-        let s = Snapshot { accounts: 1, codex: false, ..FULL };
+        let s = Snapshot { accounts: Some(1), codex: false, ..FULL };
         assert_eq!(tip_ids(&s), ["account"]);
-        assert!(!tip_ids(&Snapshot { accounts: 1, codex: true, ..FULL }).contains(&"account"), "o Codex basta");
+        assert!(!tip_ids(&Snapshot { accounts: Some(1), codex: true, ..FULL }).contains(&"account"), "o Codex basta");
     }
 
     #[test]

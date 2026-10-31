@@ -402,14 +402,14 @@ fn shows_at_startup(pending: &Pending, current: &str) -> bool { pending.from_nat
 
 /// Mostra o que o "Atualizar?" guardou. `require_new_binary` na abertura do app; sem ele, o fluxo terminou neste
 /// processo sem trocar o binário.
-pub(crate) fn show_pending(require_new_binary: bool, window: &mut Window, cx: &mut Context<crate::app::Hangar>) {
+pub(crate) fn show_pending(require_new_binary: bool, window: &mut Window, cx: &mut App) {
     let shows = |p: &Pending| if require_new_binary { shows_at_startup(p, super::CURRENT) } else { !p.items.is_empty() };
     let Some(pending) = take_pending().filter(shows) else { return };
-    let hangar = cx.entity().downgrade();
-    let show: ShowInApp = Rc::new(move |note: crate::tour::Note, _: &mut Window, cx: &mut App| {
-        let _ = hangar.update(cx, |this, cx| this.show_news(note, cx));
+    // Também chamado do `Updater`, que não tem a entidade do app no contexto: ela vem do global.
+    let show = crate::app::Hangar::weak(cx).map(|hangar| -> ShowInApp {
+        Rc::new(move |note: crate::tour::Note, _: &mut Window, cx: &mut App| { let _ = hangar.update(cx, |this, cx| this.show_news(note, cx)); })
     });
-    open_whats_new(pending.items, Some(show), window, cx);
+    open_whats_new(pending.items, show, window, cx);
 }
 
 /// `HANGAR_NATIVE_PREVIEW=update-confirm` e `=whats-new` (build de debug): os dois modais com uma amostra fixa.

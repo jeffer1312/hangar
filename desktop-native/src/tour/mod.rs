@@ -174,12 +174,12 @@ impl Tour {
             // Não grava: o tour volta na próxima abertura.
             Choice::Later => { self.current = None; self.celebrated = None; false }
             Choice::TipOk => match self.tips.pop_front() {
-                Some(tip) => self.seen.dicas.insert(tip.id),
+                Some(tip) => self.seen.tips.insert(tip.id),
                 None => false,
             },
             Choice::TipsOff => {
                 self.tips.clear();
-                self.seen.dicas_desligadas = Some(Switch::now(true));
+                self.seen.tips_switch = Some(Switch::now(true));
                 true
             }
             Choice::Close => { self.news = None; false }
@@ -203,13 +203,13 @@ impl Tour {
             self.celebrated = Some((index, Instant::now()));
         }
         // Passo que já passou pelo tour não volta como dica quando a condição dele some e reaparece.
-        let marked = self.seen.dicas.insert(steps::tip_id(&self.steps[index]));
+        let marked = self.seen.tips.insert(steps::tip_id(&self.steps[index]));
         if index + 1 < self.steps.len() {
             self.current = Some(index + 1);
             return marked;
         }
         self.current = None;
-        self.seen.tour = self.seen.tour.max(Some(if self.done_any { Outcome::Feito } else { Outcome::Pulado }));
+        self.seen.tour = self.seen.tour.max(Some(if self.done_any { Outcome::Done } else { Outcome::Skipped }));
         true
     }
 
@@ -217,7 +217,7 @@ impl Tour {
     pub fn absorb(&mut self, server: Seen) -> bool {
         self.server_read = true;
         let before = self.seen.clone();
-        // `aparelhos` é só deste app.
+        // `devices` é só deste app.
         self.seen.merge(server.for_server());
         if self.seen.tour.is_some() && !self.started && !self.requested { self.current = None; }
         self.seen != before
@@ -241,7 +241,7 @@ impl Tour {
     }
 
     /// A dica ainda pode aparecer (pode já estar na fila): é o que decide desenhar a âncora dela.
-    pub fn tip_pending(&self, id: &str) -> bool { !self.seen.tips_off() && !self.seen.dicas.contains(id) }
+    pub fn tip_pending(&self, id: &str) -> bool { !self.seen.tips_off() && !self.seen.tips.contains(id) }
 
     /// A dica entraria agora na fila.
     pub fn may_offer(&self, id: &str) -> bool { self.tip_pending(id) && !self.tips.iter().any(|t| t.id == id) }
@@ -257,7 +257,7 @@ impl Tour {
     pub fn set_tips(&mut self, on: bool) -> bool {
         if self.seen.tips_off() != on { return false; }
         if !on { self.tips.clear(); }
-        self.seen.dicas_desligadas = Some(Switch::now(!on));
+        self.seen.tips_switch = Some(Switch::now(!on));
         true
     }
 
@@ -266,9 +266,9 @@ impl Tour {
     pub fn devices_seen(&mut self, devices: &serde_json::Value) -> bool {
         let ids = devices.as_array().into_iter().flatten().filter_map(|device| device.get("id")?.as_str());
         let mut fresh = false;
-        for id in ids { fresh |= self.seen.aparelhos.insert(id.to_owned()); }
+        for id in ids { fresh |= self.seen.devices.insert(id.to_owned()); }
         // A junção com o servidor devolve o id depois; até lá a dica já entrou na fila.
-        if fresh { self.seen.dicas.remove(steps::PRESENCE); }
+        if fresh { self.seen.tips.remove(steps::PRESENCE); }
         fresh
     }
 
@@ -332,8 +332,8 @@ mod tests {
         assert_eq!(tour.next_surface(&FREE).unwrap().id, "search");
         assert!(pick(&mut tour, Choice::Skip));
         assert!(pick(&mut tour, Choice::Skip), "o fim grava");
-        assert_eq!(tour.seen.tour, Some(Outcome::Pulado));
-        assert!(tour.seen.dicas.contains("tour-search"));
+        assert_eq!(tour.seen.tour, Some(Outcome::Skipped));
+        assert!(tour.seen.tips.contains("tour-search"));
         assert_eq!(tour.next_surface(&FREE), None);
     }
 
@@ -348,7 +348,7 @@ mod tests {
         assert_eq!(shown.id, "search", "a comemoração fica no passo feito");
         assert!(shown.celebrating.is_some());
         assert!(pick(&mut tour, Choice::Skip));
-        assert_eq!(tour.seen.tour, Some(Outcome::Feito));
+        assert_eq!(tour.seen.tour, Some(Outcome::Done));
     }
 
     #[test]
@@ -357,23 +357,23 @@ mod tests {
         assert!(!pick(&mut tour, Choice::Later));
         assert_eq!(tour.seen, Seen::default());
         assert_eq!(tour.next_surface(&FREE), None);
-        let done = Tour::with_steps(Seen { tour: Some(Outcome::Pulado), ..Default::default() }, steps());
+        let done = Tour::with_steps(Seen { tour: Some(Outcome::Skipped), ..Default::default() }, steps());
         assert_eq!(done.next_surface(&FREE), None);
     }
 
     #[test]
     fn restart_resets_the_tour_but_keeps_the_tips() {
-        let seen = Seen { tour: Some(Outcome::Feito), dicas: ["fila".to_owned()].into(), ..Default::default() };
+        let seen = Seen { tour: Some(Outcome::Done), tips: ["fila".to_owned()].into(), ..Default::default() };
         let mut tour = Tour::with_steps(seen, steps());
         assert!(tour.restart());
         assert_eq!(tour.seen.tour, None);
-        assert!(tour.seen.dicas.contains("fila"));
+        assert!(tour.seen.tips.contains("fila"));
         assert_eq!(tour.next_surface(&FREE).unwrap().id, "new");
     }
 
     #[test]
     fn seen_tip_or_tips_off_never_queue() {
-        let mut tour = Tour::new(Seen { dicas: ["fila".to_owned()].into(), ..Default::default() });
+        let mut tour = Tour::new(Seen { tips: ["fila".to_owned()].into(), ..Default::default() });
         tour.offer_tip(tip("fila"));
         assert_eq!(tour.next_surface(&FREE), None);
         tour.offer_tip(tip("citar"));
@@ -408,21 +408,21 @@ mod tests {
 
     #[test]
     fn seen_on_the_server_cancels_only_a_tour_not_yet_shown_nor_asked_for() {
-        let done = || Seen { tour: Some(Outcome::Feito), aparelhos: ["ios:x".to_owned()].into(), ..Default::default() };
+        let done = || Seen { tour: Some(Outcome::Done), devices: ["ios:x".to_owned()].into(), ..Default::default() };
         let mut waiting = Tour::with_steps(Seen::default(), steps());
         assert!(waiting.absorb(done()));
         assert_eq!(waiting.next_surface(&FREE), None);
-        assert!(waiting.seen.aparelhos.is_empty(), "aparelhos nunca vêm do servidor");
+        assert!(waiting.seen.devices.is_empty(), "aparelhos nunca vêm do servidor");
 
         let mut on_screen = Tour::with_steps(Seen::default(), steps());
         on_screen.showing(on_screen.next_surface(&FREE).unwrap().kind);
         on_screen.absorb(done());
         assert_eq!(on_screen.next_surface(&FREE).unwrap().id, "new");
 
-        let mut asked = Tour::with_steps(Seen { tour: Some(Outcome::Feito), ..Default::default() }, steps());
+        let mut asked = Tour::with_steps(Seen { tour: Some(Outcome::Done), ..Default::default() }, steps());
         asked.restart();
         assert!(asked.absorb(done()));
-        assert_eq!(asked.seen.tour, Some(Outcome::Feito));
+        assert_eq!(asked.seen.tour, Some(Outcome::Done));
         assert_eq!(asked.next_surface(&FREE).unwrap().id, "new", "o tour pedido pela pessoa continua");
 
         let mut nothing_new = Tour::new(Seen::default());
@@ -452,7 +452,7 @@ mod tests {
         assert_eq!(tour.next_surface(&FREE), None);
         assert!(!tour.tip_pending("citar"));
         assert!(tour.set_tips(true));
-        assert_eq!(tour.seen.dicas_desligadas.as_ref().map(|s| s.valor), Some(false));
+        assert_eq!(tour.seen.tips_switch.as_ref().map(|s| s.on), Some(false));
         tour.offer_tip(tip("citar"));
         assert_eq!(tour.next_surface(&FREE).unwrap().id, "citar");
     }
@@ -461,7 +461,7 @@ mod tests {
     fn tips_turned_off_elsewhere_drop_the_queued_one() {
         let mut tour = Tour::new(Seen::default());
         tour.offer_tip(tip("fila"));
-        tour.seen.dicas_desligadas = Some(Switch::now(true));
+        tour.seen.tips_switch = Some(Switch::now(true));
         assert_eq!(tour.next_surface(&FREE), None);
     }
 
@@ -473,12 +473,12 @@ mod tests {
         assert!(!tour.devices_seen(&devices(&[])), "retrato vazio não dispara");
         assert!(!tour.devices_seen(&serde_json::json!({"id": "x"})), "formato estranho não dispara");
         assert!(tour.devices_seen(&devices(&["a"])), "o primeiro celular também dispara");
-        tour.seen.dicas.insert(steps::PRESENCE.to_owned());
+        tour.seen.tips.insert(steps::PRESENCE.to_owned());
         assert!(!tour.devices_seen(&devices(&["a"])), "o mesmo retrato de novo não");
-        assert!(tour.seen.dicas.contains(steps::PRESENCE));
+        assert!(tour.seen.tips.contains(steps::PRESENCE));
         assert!(tour.devices_seen(&devices(&["a", "b"])));
         assert!(tour.may_offer(steps::PRESENCE), "aparelho novo traz a dica de volta");
-        assert_eq!(tour.seen.aparelhos, ["a".to_owned(), "b".to_owned()].into());
+        assert_eq!(tour.seen.devices, ["a".to_owned(), "b".to_owned()].into());
     }
 
     #[test]
@@ -509,7 +509,7 @@ mod tests {
     #[test]
     fn every_event_points_at_the_piece_of_its_step() {
         use steps::{Agent, Planner, Snapshot};
-        let full = Snapshot { sessions: 2, accounts: 2, codex: true, transcription: true, open: Some(Agent::Claude) };
+        let full = Snapshot { sessions: 2, accounts: Some(2), codex: true, transcription: Some(true), open: Some(Agent::Claude) };
         let empty = Snapshot { sessions: 0, ..full };
         let all: Vec<Step> = [full, empty].iter().flat_map(|s| Planner::default().plan(s, &Default::default())).collect();
         for event in [TourEvent::SessionCreated, TourEvent::MenuOpened, TourEvent::GroupClosed, TourEvent::AccountMoved,

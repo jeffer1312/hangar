@@ -7352,6 +7352,9 @@ impl Hangar {
         cx.notify();
     }
 
+    /// A entidade do app para quem não a tem no contexto (o `Updater`, ao terminar uma atualização).
+    pub(crate) fn weak(cx: &App) -> Option<WeakEntity<Hangar>> { cx.try_global::<links::Owner>().map(|owner| owner.0.clone()) }
+
     /// "Mostrar no app" do modal de novidades: o balão aponta a peça por cima do tour.
     pub(crate) fn show_news(&mut self, note: crate::tour::Note, cx: &mut Context<Self>) {
         self.tour.show_news(note);
@@ -7362,18 +7365,18 @@ impl Hangar {
     pub(super) fn restart_tour(&mut self, cx: &mut Context<Self>) {
         if self.tour.restart() { self.save_tour(); }
         let snapshot = self.tour_snapshot(cx);
-        let steps = self.tour_planner.plan(&snapshot, &self.tour.seen.dicas);
+        let steps = self.tour_planner.plan(&snapshot, &self.tour.seen.tips);
         self.tour.set_steps(steps);
         cx.notify();
     }
 
     /// O que decide os passos: lista, contas, transcrição e a sessão aberta.
     fn tour_snapshot(&self, cx: &App) -> crate::tour::steps::Snapshot {
-        let (accounts, codex) = self.account_kinds();
+        let kinds = self.account_kinds();
         crate::tour::steps::Snapshot {
             sessions: self.sessions.len() + self.remote.values().map(|list| list.sessions.len()).sum::<usize>(),
-            accounts, codex,
-            transcription: self.transcription_configured(cx),
+            accounts: kinds.map(|(claude, _)| claude), codex: kinds.is_some_and(|(_, codex)| codex),
+            transcription: self.transcription_known(cx),
             open: self.selected.as_ref().filter(|s| s.readable()).map(|s| crate::tour::steps::Agent::of(&s.provider)),
         }
     }
@@ -7383,7 +7386,9 @@ impl Hangar {
     fn plan_tour(&mut self, cx: &App) {
         if !self.tour_planner.due() { return; }
         let snapshot = self.tour_snapshot(cx);
-        let steps = self.tour_planner.plan(&snapshot, &self.tour.seen.dicas);
+        // Contas e ditado ainda em leitura: planejar já faria dos passos deles dica para quem os tem.
+        if !snapshot.known() { return; }
+        let steps = self.tour_planner.plan(&snapshot, &self.tour.seen.tips);
         self.tour.set_steps(steps);
     }
 
