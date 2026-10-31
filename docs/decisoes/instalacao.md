@@ -909,6 +909,13 @@ comprova o defeito do lançamento, sem atribuir a ele aqueles cliques sem a resp
 
 ## Verificação local antes do push (06/10/2026)
 
+**Três desencontros com o CI (30/10/2026).** Numa branch de login, a rodada falhou em testes que ela
+não tocava. (1) As referências do navegador passaram a ser geradas na máquina dos testes (`4e5743dad`)
+só no CI: `url_gaps` falhava em toda branch, com a ordem de `.json` de outro sistema de arquivos; os
+passos de Rust agora as geram. (2) O par do porteiro só era fixado com arquivo de autenticação no diff,
+e teste mudado no backend puxa a suíte inteira: agora é fixado sempre que o passo roda. (3) Com a main
+juntada, a base do plano continuava antes da junção e o diff trazia tudo que veio dela.
+
 **Rápido por padrão (14/10/2026).** A rodada da bateria do CI virou espera de mais de 40 min por push.
 Numa rodada real de outra sessão (commit `a2c14ee7a6`): preparo 441 s, rust 327 s, backend 813 s,
 nativo 738 s, front 1337 s (vitest do frontend 296 s, do core 54 s), mobile 184 s, com o Linux

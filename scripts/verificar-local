@@ -57,7 +57,12 @@ base_padrao() {
     velho="$(git rev-list --first-parent "$c" --not --remotes)" || erro "não consegui listar os commits de $c"
     velho="${velho##*$'\n'}"
     if [[ -z "$velho" ]]; then echo "$c"; return; fi
-    git rev-parse -q --verify "$velho^" 2>/dev/null || git hash-object -t tree /dev/null
+    local antes tronco
+    antes="$(git rev-parse -q --verify "$velho^" 2>/dev/null)" || { git hash-object -t tree /dev/null; return; }
+    # Com a main já juntada à branch, o que veio dela não é mudança desta branch.
+    tronco="$(git merge-base "$c" origin/main 2>/dev/null)" || tronco=""
+    if [[ -n "$tronco" ]] && git merge-base --is-ancestor "$antes" "$tronco"; then echo "$tronco"; return; fi
+    echo "$antes"
 }
 
 # Imprime "linux: p1 p2" e "windows: p1" a partir da lista de arquivos no stdin.
@@ -159,7 +164,7 @@ classificar_rapido() {
 
 # No Linux, o que os passos compilam e instalam vem do passo_preparo, que roda antes deles.
 passo_rust() {
-    (cd crates && cargo test --locked --workspace --no-fail-fast) || return 1
+    (cd crates && com_referencias_navegador cargo test --locked --workspace --no-fail-fast) || return 1
     if [[ "$SO" == linux ]]; then
         (cd backend && uv run pytest -q "${RUNTIME_TESTS[@]}") || return 1
         # Sem o binário a suíte pula os casos Rust e sairia verde: aqui a falta é erro, como no CI.
@@ -169,6 +174,23 @@ passo_rust() {
     else
         passo_runtime
     fi
+}
+
+# Como o CI (server.yml): a ordem de uma pasta muda com o sistema de arquivos, então a referência
+# Python do navegador é capturada na mesma máquina dos testes. cwd = crates/; o Windows usa as guardadas.
+com_referencias_navegador() {
+    [[ "$SO" == linux ]] || { "$@"; return; }
+    local raiz="$PWD/.." fonte=ba2db1021ab7fb801eca50a50f9509dcb825ac7e tmp dir status=0 gerador
+    local geradores="$raiz/backend/tests/fixtures/contract/remote-browser"
+    git rev-parse -q --verify "$fonte^{commit}" > /dev/null || git fetch -q --no-tags --depth=1 origin "$fonte" || return 1
+    tmp="$(mktemp -d /tmp/hr-XXXXXX)" && dir="$(mktemp -d)" || return 1
+    for gerador in url_commands:url-commands url_gaps:url-gaps; do
+        (cd "$dir" && TMPDIR="$tmp" PYTHONDONTWRITEBYTECODE=1 "$raiz/backend/.venv/bin/python" \
+            "$geradores/generate_${gerador%%:*}.py" --output "$dir/${gerador##*:}.json") || status=1
+    done
+    (( status )) || HANGAR_REMOTE_BROWSER_CONTRACT_DIR="$dir" HANGAR_REMOTE_BROWSER_TMPDIR="$tmp" "$@" || status=1
+    rm -rf "$tmp" "$dir"
+    return $status
 }
 
 # No Windows o CI só roda estes do pytest. A suíte inteira lá nem coleta (fcntl, os.geteuid), e
@@ -206,7 +228,8 @@ passo_preparo() {
         pids+=($!)
     fi
     # Os rápidos compilam só o que usam, no próprio passo.
-    if [[ "$plano" == *" rust "* || "$plano" == *" backend "* || "$plano" == *" backend_rapido "* ]]; then
+    # O rápido do Rust também: os geradores das referências do navegador rodam no Python do backend.
+    if [[ "$plano" == *" rust "* || "$plano" == *" rust_rapido "* || "$plano" == *" backend "* || "$plano" == *" backend_rapido "* ]]; then
         (cd backend && uv sync) || falhou=1
     fi
     if [[ "$plano" == *" rust "* ]]; then
@@ -224,9 +247,9 @@ passo_preparo() {
             cargo build --locked -p hangar-workspace --example workspace_contract && \
             cargo test --locked -p hangar-server --no-run --test it) || falhou=1
     fi
-    if [[ "$plano" == *" backend_rapido "* && "$plano" != *" backend "* && "$plano" != *" rust "* ]] && \
-        grep -Eq '^backend/(app/(auth|shared_auth|rust_bins|rust_server|navsock|voicesock|termsock)\.py|tests/test_shared_auth\.py)$' <<< "$ARQUIVOS"; then
-        # A prova das duas portas precisa do mesmo executável e biblioteca desta árvore fixa.
+    if [[ "$plano" == *" backend_rapido "* && "$plano" != *" backend "* && "$plano" != *" rust "* ]]; then
+        # A prova das duas portas precisa do mesmo executável e biblioteca desta árvore fixa. Sempre:
+        # teste ou dependência mudada puxa a suíte inteira, e quem usa o par não dá para listar pelo diff.
         (cd crates && cargo build --locked -p hangar-server -p hangar-auth && \
             python3 ../scripts/pin-auth-pair.py --server target/debug/hangar-server --library target/debug/libhangar_auth.so) || falhou=1
     fi
@@ -312,7 +335,7 @@ passo_rust_rapido() {
     for nome in "${args[@]}"; do [[ "$nome" == -p || "$nome" == hangar-server ]] || todos=1; done
     (( todos )) && args=(--workspace)
     (( ${#args[@]} )) || { echo "nenhum crate mudou"; return 0; }
-    (cd crates && cargo test --locked --no-fail-fast "${args[@]}")
+    (cd crates && com_referencias_navegador cargo test --locked --no-fail-fast "${args[@]}")
 }
 
 # Os testes que mudaram e os que importam um módulo do app que mudou.
