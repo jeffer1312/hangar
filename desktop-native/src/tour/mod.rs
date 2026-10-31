@@ -283,14 +283,14 @@ impl Tour {
     }
 
     /// Ids novos no retrato de aparelhos da lista do dono ficam pendentes e trazem a dica do celular de volta, uma vez por
-    /// aparelho: só a resposta à dica os grava. Diz se chegou aparelho novo; o visto não muda.
+    /// aparelho: só a resposta à dica os grava. Diz se há aparelho esperando a dica (a fila esvaziada por desligar as
+    /// dicas a recebe de volta no próximo retrato); o visto não muda.
     pub fn devices_seen(&mut self, devices: &serde_json::Value) -> bool {
         let ids = devices.as_array().into_iter().flatten().filter_map(|device| device.get("id")?.as_str());
-        let mut fresh = false;
         for id in ids {
-            if !self.seen.devices.contains(id) { fresh |= self.pending_devices.insert(id.to_owned()); }
+            if !self.seen.devices.contains(id) { self.pending_devices.insert(id.to_owned()); }
         }
-        fresh
+        !self.pending_devices.is_empty()
     }
 
     /// A dica do celular foi respondida: os aparelhos pendentes passam ao visto. Diz se ele mudou.
