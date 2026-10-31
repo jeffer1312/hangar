@@ -1,7 +1,7 @@
 //! Desenho do balão preso à peça: o resto da janela escurecido com recorte, anel pulsando em volta da peça, o balão
 //! sólido com a seta, e a comemoração do passo feito. O escurecido não tem área de clique: o clique, o arrasto e a tecla
 //! chegam à peça real. Os botões do balão não tiram o foco do campo de mensagem (o Shift+Tab só vale com ele).
-use std::{cell::Cell, rc::Rc, sync::OnceLock, time::{Duration, Instant}};
+use std::{cell::{Cell, RefCell}, rc::Rc, sync::OnceLock, time::{Duration, Instant}};
 use gpui_kit::{prelude::FluentBuilder, *};
 use crate::{i18n::tr, motion, theme};
 use super::{CELEBRATION, Choice, Kind, Surface};
@@ -20,6 +20,8 @@ const ARROW_H: f32 = 9.;
 const HOLE_PAD: f32 = 6.;
 /// Ritmo do pulso enquanto espera: o suficiente para o anel respirar, sem desenhar a raiz a cada quadro.
 const PULSE_STEP: Duration = Duration::from_millis(50);
+/// Quanto o pulso dura sem resposta; depois o anel fica parado até a pessoa mexer, voltar à janela ou o passo mudar.
+const PULSE_FOR: Duration = Duration::from_secs(6);
 /// O check se desenha nesta fração da comemoração; o resto é confete.
 const CHECK_DRAW: f32 = 0.3;
 
@@ -51,6 +53,22 @@ fn place(target: Bounds<Pixels>, viewport: Size<Pixels>) -> Placed {
 thread_local! {
     /// O redesenho já marcado: cada quadro só marca outro se o dele cair antes.
     static NEXT_REPAINT: Cell<Option<Instant>> = const { Cell::new(None) };
+    /// Balão, posição do mouse e janela ativa do último quadro, e desde quando o pulso corre.
+    static PULSE_SINCE: RefCell<Option<(String, Point<Pixels>, bool, Instant)>> = const { RefCell::new(None) };
+}
+
+/// Pulsa só com a janela ativa e por `PULSE_FOR` desde a última mudança: outro balão, o mouse mexeu ou a janela voltou.
+/// Sem isso, balão aberto com a pessoa longe redesenhava a raiz para sempre.
+fn pulsing(id: &str, window: &Window) -> bool {
+    let (mouse, active) = (window.mouse_position(), window.is_window_active());
+    PULSE_SINCE.with_borrow_mut(|last| {
+        let since = match last.take() {
+            Some((seen, at, was_active, since)) if seen == id && at == mouse && (was_active || !active) => since,
+            _ => Instant::now(),
+        };
+        *last = Some((id.to_owned(), mouse, active, since));
+        active && since.elapsed() < PULSE_FOR
+    })
 }
 
 /// Redesenha só a raiz daqui a `delay`. Só é marcado enquanto o balão é desenhado: sumiu, para.
@@ -75,14 +93,15 @@ pub fn render(surface: &Surface, target: Bounds<Pixels>, on_choice: OnChoice, wi
     let still = cx.reduce_motion();
     let entered = motion::enter(SharedString::from(format!("tour-balloon-{}", surface.id)), motion::FADE_IN, window, cx);
     let celebrating = surface.celebrating.map(|at| (at.elapsed().as_secs_f32() / CELEBRATION.as_secs_f32()).min(1.));
+    let pulse = !still && celebrating.is_none() && pulsing(&surface.id, window);
     match (celebrating, still) {
         (Some(_), false) => motion::request_frame(window, cx),
         // Parado, a comemoração só precisa de um quadro no fim dela.
         (Some(_), true) => repaint_in(surface.celebrating.map_or(Duration::ZERO, |at| CELEBRATION.saturating_sub(at.elapsed())), window, cx),
-        (None, false) => repaint_in(PULSE_STEP, window, cx),
-        (None, true) => {}
+        (None, _) if pulse => repaint_in(PULSE_STEP, window, cx),
+        (None, _) => {}
     }
-    let wave = (!still && celebrating.is_none()).then(|| motion::pulse_wave(pulse_phase()));
+    let wave = pulse.then(|| motion::pulse_wave(pulse_phase()));
     let dim = if surface.kind == Kind::Tip { 0. } else { 0.5 * entered };
     let ring = if celebrating.is_some() { green() } else { theme::accent() };
     let spotlight = canvas(|_, _, _| (), move |bounds, _, window, _| paint_spotlight(bounds, target, dim, ring, wave, window))
@@ -103,7 +122,7 @@ pub fn render(surface: &Surface, target: Bounds<Pixels>, on_choice: OnChoice, wi
         .p(px(16.)).rounded(px(14.)).bg(fill_color()).border_1().border_color(border_color())
         .shadow(vec![BoxShadow { color: hsla(0., 0., 0., 0.45), offset: point(px(0.), px(12.)), blur_radius: px(36.), spread_radius: px(0.), inset: false }])
         .opacity(entered).occlude()
-        .role(Role::Dialog).aria_label(surface.title.clone())
+        .role(Role::Dialog).aria_label(surface.title.clone()).aria_description(surface.body.clone())
         // O clique em qualquer parte do balão deixa o foco onde está.
         .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
         .child(content)

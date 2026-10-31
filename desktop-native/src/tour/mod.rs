@@ -91,6 +91,8 @@ pub struct Tour {
     /// Onde o balão apareceu por último: a comemoração continua ali quando a peça some com a própria ação.
     pub last_target: Option<(String, Bounds<Pixels>)>,
     generation: u64,
+    /// `tour.json` existe mas não foi lido: gravar agora apagaria o que já foi visto.
+    pub read_failed: bool,
 }
 
 impl Tour {
@@ -99,7 +101,7 @@ impl Tour {
     pub fn with_steps(seen: Seen, steps: Vec<Step>) -> Self {
         let current = (seen.tour.is_none() && !steps.is_empty()).then_some(0);
         Self { seen, steps, current, done_any: false, celebrated: None, tips: VecDeque::new(), news: None, server_read: false,
-            last_target: None, generation: 0 }
+            last_target: None, generation: 0, read_failed: false }
     }
 
     /// Os passos dependem da lista de sessões: entram quando ela é lida, e de novo no "Ver o tour de novo".
@@ -108,10 +110,11 @@ impl Tour {
         (self.steps, self.done_any, self.celebrated) = (steps, false, None);
     }
 
-    /// O que gravar: o estado e a geração desta gravação (`state::save`).
-    pub fn to_save(&mut self) -> (Seen, u64) {
+    /// O que gravar: o estado e a geração desta gravação (`state::save`); nada com a leitura falha.
+    pub fn to_save(&mut self) -> Option<(Seen, u64)> {
+        if self.read_failed { return None; }
         self.generation += 1;
-        (self.seen.clone(), self.generation)
+        Some((self.seen.clone(), self.generation))
     }
 
     /// Um balão por vez: a novidade que a pessoa pediu, a comemoração, o passo do tour, e só depois a dica.
@@ -131,8 +134,19 @@ impl Tour {
 
     pub fn running(&self) -> bool { self.current.is_some() }
 
-    /// Diz se o visto mudou e precisa ser gravado.
-    pub fn choose(&mut self, choice: Choice) -> bool {
+    /// O balão a que o botão pertence: o passo, a dica da frente ou a novidade.
+    fn owner(&self, choice: Choice) -> Option<&str> {
+        match choice {
+            Choice::Skip | Choice::Later => self.current.map(|index| self.steps[index].id),
+            Choice::TipOk | Choice::TipsOff => self.tips.front().map(|tip| tip.id.as_str()),
+            Choice::Close => self.news.as_ref().map(|news| news.id.as_str()),
+        }
+    }
+
+    /// `id` é o do balão clicado: clique que chega depois de o balão mudar (duplo clique, ação que avançou o passo) não
+    /// vale para o seguinte. Diz se o visto mudou e precisa ser gravado.
+    pub fn choose(&mut self, id: &str, choice: Choice) -> bool {
+        if self.owner(choice) != Some(id) { return false; }
         match choice {
             Choice::Skip => self.advance(false),
             // Não grava: o tour volta na próxima abertura.
@@ -164,9 +178,11 @@ impl Tour {
             self.done_any = true;
             self.celebrated = Some((index, Instant::now()));
         }
+        // Passo que já passou pelo tour não volta como dica quando a condição dele some e reaparece.
+        let marked = self.seen.dicas.insert(steps::tip_id(&self.steps[index]));
         if index + 1 < self.steps.len() {
             self.current = Some(index + 1);
-            return false;
+            return marked;
         }
         self.current = None;
         self.seen.tour = self.seen.tour.max(Some(if self.done_any { Outcome::Feito } else { Outcome::Pulado }));
@@ -207,6 +223,12 @@ mod tests {
 
     fn tip(id: &str) -> Note { Note { id: id.to_owned(), anchor: anchors::QUEUE_PANEL.to_owned(), title: "t".into(), body: "b".into() } }
 
+    /// Clique no balão que está na vez.
+    pub(crate) fn pick(tour: &mut Tour, choice: Choice) -> bool {
+        let id = tour.owner(choice).unwrap_or_default().to_owned();
+        tour.choose(&id, choice)
+    }
+
     #[test]
     fn open_dialog_holds_the_tour() {
         let tour = Tour::with_steps(Seen::default(), steps());
@@ -228,7 +250,7 @@ mod tests {
         tour.offer_tip(tip("fila"));
         let shown = tour.next_surface(&FREE).unwrap();
         assert_eq!((shown.kind, shown.id.as_str(), shown.progress), (Kind::Tour, "new", Some((1, 3))));
-        tour.choose(Choice::Later);
+        pick(&mut tour, Choice::Later);
         let shown = tour.next_surface(&FREE).unwrap();
         assert_eq!((shown.kind, shown.id.as_str()), (Kind::Tip, "fila"));
     }
@@ -236,11 +258,12 @@ mod tests {
     #[test]
     fn skipping_every_step_records_skipped() {
         let mut tour = Tour::with_steps(Seen::default(), steps());
-        assert!(!tour.choose(Choice::Skip));
+        assert!(pick(&mut tour, Choice::Skip), "o passo pulado não volta como dica");
         assert_eq!(tour.next_surface(&FREE).unwrap().id, "search");
-        assert!(!tour.choose(Choice::Skip));
-        assert!(tour.choose(Choice::Skip), "o fim grava");
+        assert!(pick(&mut tour, Choice::Skip));
+        assert!(pick(&mut tour, Choice::Skip), "o fim grava");
         assert_eq!(tour.seen.tour, Some(Outcome::Pulado));
+        assert!(tour.seen.dicas.contains("tour-search"));
         assert_eq!(tour.next_surface(&FREE), None);
     }
 
@@ -249,19 +272,19 @@ mod tests {
         let mut tour = Tour::with_steps(Seen::default(), steps());
         assert!(!tour.tour_event(TourEvent::SearchOpened), "o passo na tela é outro");
         assert_eq!(tour.next_surface(&FREE).unwrap().id, "new");
-        tour.choose(Choice::Skip);
-        assert!(!tour.tour_event(TourEvent::SearchOpened));
+        pick(&mut tour, Choice::Skip);
+        assert!(tour.tour_event(TourEvent::SearchOpened), "o passo feito não volta como dica");
         let shown = tour.next_surface(&FREE).unwrap();
         assert_eq!(shown.id, "search", "a comemoração fica no passo feito");
         assert!(shown.celebrating.is_some());
-        assert!(tour.choose(Choice::Skip));
+        assert!(pick(&mut tour, Choice::Skip));
         assert_eq!(tour.seen.tour, Some(Outcome::Feito));
     }
 
     #[test]
     fn later_closes_without_recording_and_seen_tour_does_not_start() {
         let mut tour = Tour::with_steps(Seen::default(), steps());
-        assert!(!tour.choose(Choice::Later));
+        assert!(!pick(&mut tour, Choice::Later));
         assert_eq!(tour.seen, Seen::default());
         assert_eq!(tour.next_surface(&FREE), None);
         let done = Tour::with_steps(Seen { tour: Some(Outcome::Pulado), ..Default::default() }, steps());
@@ -284,9 +307,33 @@ mod tests {
         tour.offer_tip(tip("fila"));
         assert_eq!(tour.next_surface(&FREE), None);
         tour.offer_tip(tip("citar"));
-        assert!(tour.choose(Choice::TipsOff));
+        assert!(pick(&mut tour, Choice::TipsOff));
         tour.offer_tip(tip("abas"));
         assert_eq!(tour.next_surface(&FREE), None);
+    }
+
+    #[test]
+    fn click_from_a_balloon_that_already_left_is_ignored() {
+        let mut tour = Tour::with_steps(Seen::default(), steps());
+        tour.offer_tip(tip("fila"));
+        tour.offer_tip(tip("citar"));
+        tour.choose("new", Choice::Later);
+        assert!(tour.choose("fila", Choice::TipOk));
+        assert!(!tour.choose("fila", Choice::TipOk), "o segundo clique era da dica que já saiu");
+        assert_eq!(tour.next_surface(&FREE).unwrap().id, "citar");
+
+        let mut tour = Tour::with_steps(Seen::default(), steps());
+        tour.tour_event(TourEvent::SessionCreated);
+        assert!(!tour.choose("new", Choice::Skip), "o Pular era do passo que a ação já fez");
+        assert_eq!(tour.steps[tour.current.unwrap()].id, "search");
+    }
+
+    #[test]
+    fn unreadable_state_is_never_saved() {
+        let mut tour = Tour::new(Seen::default());
+        assert!(tour.to_save().is_some());
+        tour.read_failed = true;
+        assert_eq!(tour.to_save(), None);
     }
 
     #[test]
@@ -294,7 +341,7 @@ mod tests {
         let mut tour = Tour::with_steps(Seen::default(), steps());
         tour.show_news(tip("novidade"));
         assert_eq!(tour.next_surface(&FREE).unwrap().kind, Kind::News);
-        assert!(!tour.choose(Choice::Close));
+        assert!(!pick(&mut tour, Choice::Close));
         assert_eq!(tour.next_surface(&FREE).unwrap().kind, Kind::Tour);
     }
 }

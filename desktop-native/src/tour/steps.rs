@@ -1,5 +1,6 @@
 //! Os 9 passos do tour, na ordem, cada um com a condição de que a ação dele possa acontecer agora. Passo sem condição
 //! sai do tour e vira dica, oferecida quando a condição surgir; o primeiro, sem ela, só some.
+use std::collections::BTreeSet;
 use super::{anchors, Step};
 
 /// O que o app tem agora e decide quais passos cabem.
@@ -42,7 +43,7 @@ impl Need {
     }
 }
 
-/// Id do passo de Shift+Tab: a peça dele depende do agente aberto (`permission_anchor`).
+/// Id do passo de Shift+Tab: no Claude e no Codex ele troca o modo (`ctl-mode`).
 pub const PERMISSION: &str = "permission";
 
 const fn step(id: &'static str, anchor: &'static str, title_key: &'static str, body_key: &'static str) -> Step {
@@ -71,11 +72,6 @@ fn split(s: &Snapshot) -> (Vec<Step>, Vec<(Step, Need)>) {
     (steps, tips)
 }
 
-/// A peça do passo de Shift+Tab: o modo no Claude, a permissão no Codex.
-pub fn permission_anchor(agent: Option<Agent>) -> &'static str {
-    if agent == Some(Agent::Codex) { anchors::CTL_PERMISSION } else { anchors::CTL_MODE }
-}
-
 /// Id da dica nascida de um passo, para não se confundir com as dicas próprias no visto.
 pub fn tip_id(step: &Step) -> String { format!("tour-{}", step.id) }
 
@@ -89,12 +85,13 @@ impl Planner {
     /// A lista já chegou e o tour ainda não foi planejado.
     pub fn due(&self) -> bool { self.list_read && !self.planned }
 
-    /// Os passos do tour. `tips`: guardar os que ficaram de fora como dica; tour já visto não guarda, senão um passo
-    /// feito numa abertura anterior voltaria como dica.
-    pub fn plan(&mut self, s: &Snapshot, tips: bool) -> Vec<Step> {
-        let (steps, waiting) = split(s);
+    /// Os passos do tour. Os que ficaram de fora esperam como dica, salvo a dica já vista (`dicas`): com o tour já visto,
+    /// é ela que sobrevive a reabrir o app.
+    pub fn plan(&mut self, s: &Snapshot, dicas: &BTreeSet<String>) -> Vec<Step> {
+        let (steps, mut waiting) = split(s);
+        waiting.retain(|(step, _)| !dicas.contains(&tip_id(step)));
         self.planned = true;
-        self.waiting = if tips { waiting } else { Vec::new() };
+        self.waiting = waiting;
         steps
     }
 
@@ -146,23 +143,28 @@ mod tests {
     #[test]
     fn tip_waits_for_its_condition() {
         let mut planner = Planner::default();
-        planner.plan(&Snapshot { sessions: 1, ..FULL }, true);
+        planner.plan(&Snapshot { sessions: 1, ..FULL }, &BTreeSet::new());
         assert!(planner.ready(&Snapshot { sessions: 1, ..FULL }).is_empty());
         assert_eq!(ids(&planner.ready(&FULL)), ["group", "number"]);
         assert!(!planner.waiting());
     }
 
     #[test]
-    fn tour_already_seen_keeps_no_tips() {
+    fn reopening_keeps_waiting_only_for_missing_and_unseen_tips() {
+        // Tour já visto noutra abertura: "number" já foi vista como dica; "menu" tem a condição e não vira dica.
         let mut planner = Planner::default();
-        planner.plan(&Snapshot { sessions: 1, ..FULL }, false);
+        planner.plan(&Snapshot { sessions: 1, ..FULL }, &[tip_id(&TOUR[5].0)].into());
+        assert!(planner.waiting());
+        assert_eq!(ids(&planner.ready(&FULL)), ["group"]);
+        let mut planner = Planner::default();
+        planner.plan(&FULL, &BTreeSet::new());
         assert!(!planner.waiting());
     }
 
     #[test]
-    fn shift_tab_points_at_mode_on_claude_and_permission_on_codex() {
-        assert_eq!(permission_anchor(Some(Agent::Claude)), anchors::CTL_MODE);
-        assert_eq!(permission_anchor(Some(Agent::Codex)), anchors::CTL_PERMISSION);
+    fn shift_tab_points_at_mode_on_any_agent() {
+        let (step, _) = TOUR.iter().find(|(step, _)| step.id == PERMISSION).unwrap();
+        assert_eq!(step.anchor, anchors::CTL_MODE);
     }
 
     #[test]
@@ -171,7 +173,7 @@ mod tests {
         let current = |tour: &Tour| tour.steps[tour.current.unwrap()].id;
         assert!(!tour.tour_event(TourEvent::SearchOpened));
         assert_eq!(current(&tour), "menu", "outro passo ativo: nada muda");
-        while current(&tour) != "search" { tour.choose(Choice::Skip); }
+        while current(&tour) != "search" { crate::tour::tests::pick(&mut tour, Choice::Skip); }
         tour.tour_event(TourEvent::SearchOpened);
         assert_eq!(current(&tour), "number");
     }

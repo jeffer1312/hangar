@@ -7262,19 +7262,24 @@ impl Hangar {
 }
 
 impl Hangar {
-    /// Bloqueante, mas o arquivo é pequeno e lido uma vez na abertura. Ilegível vale como nada visto, e fica no log.
+    /// Bloqueante, mas o arquivo é pequeno e lido uma vez na abertura. Ilegível vale como nada visto, fica no log, e esta
+    /// execução não grava por cima: a falha pode ser passageira (antivírus segurando o arquivo).
     fn load_tour() -> crate::tour::Tour {
-        let seen = crate::tour::state::load().unwrap_or_else(|reason| {
-            crate::log_line(&format!("tour: o que já foi visto não foi lido: {reason}"));
-            Default::default()
-        });
+        let (seen, read_failed) = match crate::tour::state::load() {
+            Ok(seen) => (seen, false),
+            Err(reason) => {
+                crate::log_line(&format!("tour: o que já foi visto não foi lido, nada será gravado até reabrir: {reason}"));
+                (Default::default(), true)
+            }
+        };
         let mut tour = crate::tour::Tour::new(seen);
         tour.server_read = true;
+        tour.read_failed = read_failed;
         tour
     }
 
     fn save_tour(&mut self) {
-        let (seen, generation) = self.tour.to_save();
+        let Some((seen, generation)) = self.tour.to_save() else { return };
         self.runtime.spawn_blocking(move || if let Err(error) = crate::tour::state::save(&seen, generation) {
             crate::log_line(&format!("tour: o que já foi visto não gravou: {error}"));
         });
@@ -7291,7 +7296,7 @@ impl Hangar {
     pub(super) fn restart_tour(&mut self, cx: &mut Context<Self>) {
         if self.tour.restart() { self.save_tour(); }
         let snapshot = self.tour_snapshot(cx);
-        let steps = self.tour_planner.plan(&snapshot, true);
+        let steps = self.tour_planner.plan(&snapshot, &self.tour.seen.dicas);
         self.tour.set_steps(steps);
         cx.notify();
     }
@@ -7312,7 +7317,7 @@ impl Hangar {
     fn plan_tour(&mut self, cx: &App) {
         if !self.tour_planner.due() { return; }
         let snapshot = self.tour_snapshot(cx);
-        let steps = self.tour_planner.plan(&snapshot, self.tour.seen.tour.is_none());
+        let steps = self.tour_planner.plan(&snapshot, &self.tour.seen.dicas);
         self.tour.set_steps(steps);
     }
 
@@ -7326,12 +7331,9 @@ impl Hangar {
         }
     }
 
-    /// A peça que depende da tela: a linha de sessão e, no passo de Shift+Tab, o controle do agente aberto.
-    fn tour_anchor(&self, id: &str, anchor: &str, celebrating: bool) -> Option<String> {
-        use crate::tour::{anchors, steps};
-        if id == steps::PERMISSION || id == format!("tour-{}", steps::PERMISSION) {
-            return Some(steps::permission_anchor(self.selected.as_ref().map(|s| steps::Agent::of(&s.provider))).to_owned());
-        }
+    /// A peça que depende da tela: a linha de sessão.
+    fn tour_anchor(&self, anchor: &str, celebrating: bool) -> Option<String> {
+        use crate::tour::anchors;
         if anchor != anchors::SESSION_ROW { return Some(anchor.to_owned()); }
         // À vista = desenhada e com o meio dentro da faixa rolável da lista (linha rolada para fora ainda tem posição).
         let view = if appearance::get().navigation.tabs() { self.tabs_scroll.bounds() } else { self.rows_scroll.bounds() };
@@ -7353,8 +7355,10 @@ impl Hangar {
             .or_else(|| last.filter(|_| celebrating).cloned())
     }
 
-    fn tour_choice(&mut self, choice: crate::tour::Choice, cx: &mut Context<Self>) {
-        if self.tour.choose(choice) { self.save_tour(); }
+    fn tour_choice(&mut self, id: &str, choice: crate::tour::Choice, window: &mut Window, cx: &mut Context<Self>) {
+        // O botão não toma o foco; sem foco nenhum, o atalho do próximo passo (Ctrl+K) não chegaria.
+        if window.focused(cx).is_none() { self.root_focus.focus(window, cx); }
+        if self.tour.choose(id, choice) { self.save_tour(); }
         cx.notify();
     }
 
@@ -7362,14 +7366,15 @@ impl Hangar {
     /// a peça se move. Peça fora da tela: o balão espera, salvo a comemoração, que fica onde o balão estava.
     fn render_tour(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let gate = crate::tour::Gate {
-            dialogs_open: self.connection_dialog || self.setup.is_some() || window.has_active_dialog(cx),
+            // O painel do compositor fica abaixo do balão: com ele aberto, o balão o cobriria e roubaria o clique.
+            dialogs_open: self.connection_dialog || self.setup.is_some() || window.has_active_dialog(cx) || self.popup_open(),
             window_visible: !self.window_tray.hidden,
             server_read: self.tour.server_read && self.api.is_some(),
         };
         self.plan_tour(cx);
         self.offer_ready_tour_tips(cx);
         let mut surface = self.tour.next_surface(&gate)?;
-        surface.anchor = self.tour_anchor(&surface.id, &surface.anchor, surface.celebrating.is_some())?;
+        surface.anchor = self.tour_anchor(&surface.anchor, surface.celebrating.is_some())?;
         let target = match popup::anchor_bounds(&surface.anchor) {
             Some(bounds) => bounds,
             None if surface.celebrating.is_some() =>
@@ -7377,7 +7382,8 @@ impl Hangar {
             None => return None,
         };
         self.tour.last_target = Some((surface.anchor.clone(), target));
-        let choose = cx.listener(|this, choice: &crate::tour::Choice, _, cx| this.tour_choice(*choice, cx));
+        let id = surface.id.clone();
+        let choose = cx.listener(move |this, choice: &crate::tour::Choice, window, cx| this.tour_choice(&id, *choice, window, cx));
         let on_choice: crate::tour::balloon::OnChoice = std::rc::Rc::new(move |choice, window, cx| choose(&choice, window, cx));
         Some(crate::tour::balloon::render(&surface, target, on_choice, window, cx))
     }
