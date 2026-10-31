@@ -1120,3 +1120,37 @@ fn codex_rollout_with_an_unreadable_transfer_record_stays_and_the_others_go_on()
     assert_eq!(env.index.search(&terms("zebracodex"), 50).unwrap().unwrap().len(), 1, "o outro rollout segue");
     assert_eq!(env.reported("busca.agente_ilegivel"), 1);
 }
+
+#[cfg(unix)]
+#[test]
+fn scan_reports_skipped_files_and_folders_once_each() {
+    // A varredura de antes do índice pronto pula arquivo grande, pasta sem permissão e transcript que
+    // não abre; cada um vai ao diário uma vez, não a cada busca. Os tetos continuam.
+    use std::os::unix::fs::PermissionsExt;
+    let env = Env::small(quiet());
+    let ok = env.write(SID, &[line("zebra boa", "u1", "user")], false);
+    let projects = ok.parent().unwrap().parent().unwrap().to_owned();
+    let big = projects.join("-home-u-grande").join(format!("{SID2}.jsonl"));
+    fs::create_dir_all(big.parent().unwrap()).unwrap();
+    fs::write(&big, line("zebra grande", "g1", "user")).unwrap();
+    fs::File::options().write(true).open(&big).unwrap().set_len(65 * 1024 * 1024).unwrap();
+    let locked_dir = projects.join("-home-u-trancada");
+    fs::create_dir_all(&locked_dir).unwrap();
+    fs::write(locked_dir.join("33333333-3333-3333-3333-333333333333.jsonl"), line("zebra trancada", "t1", "user")).unwrap();
+    let locked_file = projects.join("-home-u-proj").join("44444444-4444-4444-4444-444444444444.jsonl");
+    fs::write(&locked_file, line("zebra fechada", "f1", "user")).unwrap();
+    let mode = |p: &Path, m: u32| fs::set_permissions(p, fs::Permissions::from_mode(m)).unwrap();
+    mode(&locked_dir, 0o000);
+    mode(&locked_file, 0o000);
+    let readable = fs::read_dir(&locked_dir).is_ok(); // root lê mesmo assim
+    let found = |q: &str| super::hits::search(&env.index, q, &std::collections::HashMap::new(), 50).unwrap()
+        .into_iter().map(|h| h.event_id.unwrap()).collect::<Vec<_>>();
+    let (first, second) = (found("zebra"), found("zebra"));
+    mode(&locked_dir, 0o755);
+    mode(&locked_file, 0o644);
+    if readable { return; }
+    assert_eq!((first, second), (vec!["u1".to_owned()], vec!["u1".to_owned()]));
+    for code in ["busca.arquivo_grande", "busca.pasta_ilegivel", "busca.transcript_ilegivel"] {
+        assert_eq!(env.reported(code), 1, "{code}: {:?}", env.reports.lock().unwrap());
+    }
+}

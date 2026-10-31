@@ -58,8 +58,11 @@ pub(crate) fn snippet(text: &str, terms: &[String]) -> String {
     let joined = text.split(py::is_space).filter(|w| !w.is_empty()).collect::<Vec<_>>().join(" ");
     let chars: Vec<char> = joined.chars().collect();
     if chars.len() <= SNIPPET_CHARS { return joined; }
-    // Como o Python: posição achada no texto em minúsculas, aplicada ao original.
-    let i = terms.first().and_then(|t| find(&joined.to_lowercase().chars().collect::<Vec<_>>(), t)).unwrap_or(0);
+    // Posição achada no texto em minúsculas, levada ao caractere do original: minúscula que alarga
+    // (`İ` vira dois) deixaria o índice além do fim.
+    let origin: Vec<usize> = chars.iter().enumerate().flat_map(|(k, c)| std::iter::repeat_n(k, c.to_lowercase().count())).collect();
+    let i = terms.first().and_then(|t| find(&joined.to_lowercase().chars().collect::<Vec<_>>(), t))
+        .and_then(|at| origin.get(at).copied()).unwrap_or(0);
     let mut start = i.saturating_sub(60);
     if start > 0 {
         if let Some(space) = (start..chars.len()).find(|&k| chars[k] == ' ').filter(|&s| s < i) { start = space + 1; }
@@ -144,10 +147,12 @@ fn from_rows(rows: Vec<Row>, terms: &[String], live: &HashMap<String, String>) -
 
 /// A varredura de antes do índice pronto: arquivo mais novo primeiro, até 3 por arquivo e `limit` no total.
 fn scan(index: &Index, accounts: &[Account], terms: &[String], live: &HashMap<String, String>, limit: usize) -> Vec<Hit> {
-    let (mut files, _) = ingest::conversations(accounts);
     let agents = index.agents();
-    files.extend(agents.map(|env| super::agents::discover(env).0).unwrap_or_default());
-    let mut order: Vec<_> = files.iter().filter(|(_, f)| f.stat.size <= MAX_FILE_BYTES).collect();
+    let (files, _, _) = ingest::discover(accounts, agents, index);
+    let mut order: Vec<_> = files.iter().filter(|(path, f)| f.stat.size <= MAX_FILE_BYTES || {
+        index.report_once("busca.arquivo_grande", path, || format!("{path}: {} bytes, fora da varredura", f.stat.size));
+        false
+    }).collect();
     order.sort_by(|a, b| b.1.stat.mtime_ns.cmp(&a.1.stat.mtime_ns).then(a.0.cmp(b.0)));
     let folded: Vec<String> = terms.iter().map(|t| fold(t)).collect();
     // O primeiro dos mais longos, como o `max(t, key=len)` que escolhia o termo do `rg`.
@@ -161,7 +166,7 @@ fn scan(index: &Index, accounts: &[Account], terms: &[String], live: &HashMap<St
         let scanned = match scan_file(path, agent, found.cwd.clone(), &folded, longest, &prefixes) {
             Ok(Some(scanned)) => scanned,
             Ok(None) => continue,
-            Err(e) => { tracing::debug!(path = %path, error = %e, "busca: transcript ilegível na varredura"); continue }
+            Err(e) => { index.report_once("busca.transcript_ilegivel", path, || format!("{path}: {e}")); continue }
         };
         let Some(mtime) = mtime_of(path) else { continue };
         // Pi e omp: a credencial do modelo lido até aqui, como a passada do índice faz.
@@ -255,5 +260,20 @@ mod tests {
             assert_eq!(snippet(&text, &["meio".to_owned()]), want.as_str().unwrap(), "texto={text:?}");
         }
         assert_eq!(snippet(&"x ".repeat(200), &["ausente".to_owned()]).chars().next(), Some('x'), "termo não achado começa em 0");
+    }
+
+    #[test]
+    fn snippet_of_text_that_grows_in_lowercase_keeps_the_term() {
+        // `İ` vira dois caracteres em minúsculas: a posição achada passa do fim do texto original.
+        let text = format!("{} meio {}", "İ".repeat(300), "x".repeat(10));
+        assert_eq!(snippet(&text, &["meio".to_owned()]), "…meio xxxxxxxxxx");
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn snippet_never_panics(text in "\\PC{0,400}", grown in 0usize..300, term in "\\PC{1,8}") {
+            let text = format!("{}{text}", "İ".repeat(grown));
+            let _ = snippet(&text, &[term.to_lowercase()]);
+        }
     }
 }

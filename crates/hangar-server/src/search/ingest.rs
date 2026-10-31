@@ -106,15 +106,14 @@ struct Known {
 const HEAD_BYTES: i64 = 4096;
 
 /// Filhos diretos `<uuid>.jsonl` de cada pasta de projeto; a cópia `.from-<conta>` e `subagents/`
-/// ficam fora. Devolve também o que não deu para ler agora (pasta ou arquivo): o que o índice já
-/// tem lá dentro fica como está.
-pub(super) fn conversations(accounts: &[Account]) -> (BTreeMap<String, Found>, Vec<PathBuf>) {
+/// ficam fora. Devolve também o que não deu para ler agora (pasta ou arquivo, com o erro): o que o
+/// índice já tem lá dentro fica como está.
+pub(super) fn conversations(accounts: &[Account]) -> (BTreeMap<String, Found>, Vec<(PathBuf, String)>) {
     let mut out = BTreeMap::new();
     let mut unreadable = Vec::new();
     let mut failed = |path: PathBuf, e: &std::io::Error| {
         if e.kind() != std::io::ErrorKind::NotFound {
-            tracing::debug!(path = %path.display(), error = %e, "busca: pasta ilegível agora; índice dela mantido");
-            unreadable.push(path);
+            unreadable.push((path, e.to_string()));
         }
     };
     for account in accounts {
@@ -163,13 +162,23 @@ pub(super) fn account_key(account: &Account) -> String {
 
 pub(super) type Report<'a> = &'a dyn Fn(&'static str, String);
 
-/// Erro do banco num arquivo não para os outros, mas volta no fim: índice que não gravou não fica pronto.
-pub(super) fn pass(conn: &mut Connection, accounts: &[Account], agents: Option<&AccountEnvironment>, index: &super::Index) -> Result<(), IndexError> {
-    let report = |code, detail| index.report(code, detail);
+/// Os transcripts de todas as contas e agentes, com o que não pôde ser lido agora; pasta e agente
+/// ilegíveis vão ao diário quando passam a falhar (a passada e a varredura veem o mesmo conjunto).
+pub(super) fn discover(accounts: &[Account], agents: Option<&AccountEnvironment>, index: &super::Index)
+    -> (BTreeMap<String, Found>, Vec<(PathBuf, String)>, Vec<crate::archive_list::Unread>) {
     let (mut current, unreadable) = conversations(accounts);
+    index.failing("busca.pasta_ilegivel", unreadable.iter()
+        .map(|(path, e)| (path.to_string_lossy().into_owned(), format!("{}: {e}", path.display()))).collect());
     let (others, failed) = agents.map(super::agents::discover).unwrap_or_default();
     index.failing("busca.agente_ilegivel", failed.iter().map(|u| (u.key(), u.error.clone())).collect());
     current.extend(others);
+    (current, unreadable, failed)
+}
+
+/// Erro do banco num arquivo não para os outros, mas volta no fim: índice que não gravou não fica pronto.
+pub(super) fn pass(conn: &mut Connection, accounts: &[Account], agents: Option<&AccountEnvironment>, index: &super::Index) -> Result<(), IndexError> {
+    let report = |code, detail| index.report(code, detail);
+    let (current, unreadable, failed) = discover(accounts, agents, index);
     let pi_account = |provider: &str| agents.and_then(|env| crate::provider_accounts::pi_account(env, Some(provider))).unwrap_or_default();
     let known: BTreeMap<String, Known> = conn.prepare("SELECT path, id, size, mtime_ns, ino, offset, config_dir, head_len, head_hash, provider FROM files")?
         .query_map([], |r| Ok((r.get(0)?, Known { id: r.get(1)?, size: r.get(2)?, mtime_ns: r.get(3)?, ino: r.get(4)?,
@@ -179,7 +188,7 @@ pub(super) fn pass(conn: &mut Connection, accounts: &[Account], agents: Option<&
     let tx = conn.transaction()?;
     for (path, k) in &known {
         // Agente, pasta ou rollout que não pôde ser varrido agora mantém o que o índice tem lá.
-        if current.contains_key(path) || unreadable.iter().any(|d| Path::new(path).starts_with(d)) || failed.iter().any(|u| u.covers(&k.provider, path)) {
+        if current.contains_key(path) || unreadable.iter().any(|(d, _)| Path::new(path).starts_with(d)) || failed.iter().any(|u| u.covers(&k.provider, path)) {
             continue;
         }
         // Conta em migração sai do catálogo por um tempo: as conversas dela ficam.
