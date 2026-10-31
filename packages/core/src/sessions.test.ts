@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Slot } from './sessions';
 import type { Server } from './servers';
 import type { SessionInfo } from './types';
-import { aggregateSessions, epocasDeRecriacao, machineNoticeVisible, machinesAllDown, nextNoticeEnd, OFFLINE_NOTICE_MS, patchSlot, splitHidden, sweepHidden } from './sessions';
+import { aggregateSessions, epocasDeRecriacao, machineNoticeVisible, machinesAllDown, nextNoticeEnd, OFFLINE_NOTICE_MS, patchSlot, splitHidden, sweepHidden, groupHideTargets } from './sessions';
 
 const srv = (id: string): Server => ({ id, label: `srv-${id}`, baseUrl: `http://${id}`, token: 't' });
 const sess = (name: string, extra: Partial<SessionInfo> = {}): SessionInfo =>
@@ -261,5 +261,31 @@ describe('splitHidden', () => {
     const { shown, hidden } = splitHidden(rows);
     expect(shown.map((s) => s.name)).toEqual(['a', 'c']);
     expect(hidden.map((s) => s.name)).toEqual(['b', 'd']);
+  });
+});
+
+describe('groupHideTargets', () => {
+  type Row = Parameters<typeof groupHideTargets>[0];
+  const row = (serverId: string, name: string, extra: Partial<Row> = {}): Row =>
+    ({ serverId, name, pair_gid: 'g1', state: 'idle', ...extra }) as Row;
+
+  it('fora de grupo devolve só a própria', () => {
+    const solo = row('pc', 'solo', { pair_gid: null });
+    expect(groupHideTargets(solo, [solo, row('pc', 'x')])).toEqual([solo]);
+  });
+
+  it('junta o grupo de todas as máquinas, a própria primeiro, sem as de fora, ocultas ou esperando', () => {
+    const me = row('pc', 'a');
+    const rows = [
+      row('pc', 'b'),
+      me,
+      row('nb', 'c'),
+      row('pc', 'outra-pessoa', { outside: { alias: 'x', owner: 'y', localServerId: 'pc', localSession: 'a' } }),
+      row('pc', 'ja-oculta', { hidden_from_list: true }),
+      row('pc', 'esperando', { state: 'awaiting_input' }),
+      row('pc', 'pergunta', { pending_questions: 1 }),
+      row('pc', 'outro-grupo', { pair_gid: 'g2' }),
+    ];
+    expect(groupHideTargets(me, rows).map((r) => `${r.serverId}::${r.name}`)).toEqual(['pc::a', 'pc::b', 'nb::c']);
   });
 });

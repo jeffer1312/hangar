@@ -196,6 +196,19 @@ export function sweepHidden(hidden: ReadonlyMap<string, string | null>,
   return kept;
 }
 
+type GroupRow = Pick<AggSession, 'serverId' | 'name' | 'pair_gid' | 'outside' | 'hidden_from_list' | 'state' | 'pending_questions'>;
+
+/** "Ocultar o grupo inteiro": as sessões do mesmo `pair_gid`, de todas as máquinas, a própria primeiro.
+ *  Ficam de fora a sessão de outra pessoa (não é nossa), a já oculta e a que espera resposta
+ *  (o servidor tiraria a marca na rodada seguinte). Fora de grupo, só a própria. */
+export function groupHideTargets<T extends GroupRow>(row: T, rows: readonly T[]): T[] {
+  if (!row.pair_gid) return [row];
+  const waiting = (r: T) => r.state === 'awaiting_input' || (r.pending_questions ?? 0) > 0;
+  const others = rows.filter((r) => r.pair_gid === row.pair_gid && !(r.serverId === row.serverId && r.name === row.name)
+    && !r.outside && !r.hidden_from_list && !waiting(r));
+  return [row, ...others];
+}
+
 /** Linhas visíveis e ocultas (`hidden_from_list`), cada grupo na ordem em que chegou. */
 export function splitHidden<T extends Pick<SessionInfo, 'hidden_from_list'>>(rows: readonly T[]): { shown: T[]; hidden: T[] } {
   const shown: T[] = [];
