@@ -30,7 +30,7 @@ pelo catálogo, nunca concatenando esse rótulo ao caminho de conta.
 | `/api/cotas/sugestao` GET | `cotas.sugerir_conta` | Core e `scripts/hangar-send --conta auto` | Rust |
 | `/api/credenciais/codex` GET | `credenciais.codex_estado` | `frontend/src/lib/credenciais.ts`; fluxo legado de dispositivo | Rust |
 | `/api/credenciais/codex/login` GET/POST/DELETE | `codex_login_passo`, `codex_login_iniciar`, `codex_login_cancelar` | Cliente de credenciais PWA | Rust, inclusive os destinos Pi/omp |
-| `/api/credenciais` GET | `credenciais.listar_credenciais` | `packages/core/src/credenciais.ts`, PWA/mobile e nativo | Rust (golden `contract/golden/credenciais.json`); apelido, cookie e sincronizar seguem no Python |
+| `/api/credenciais` GET | `credenciais.listar_credenciais` | `packages/core/src/credenciais.ts`, PWA/mobile e nativo | Rust; apelido, cookie e sincronizar seguem no Python |
 | `/api/sessions/{name}/conta` GET/POST | `api.py`, transferência e política de sessão | Core, seleção e troca da conta da sessão | Frente de sessões; não migra na #115 |
 
 Cadastro Codex responde 201; preparo POST responde 202. Exclusão responde

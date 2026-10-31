@@ -22,6 +22,8 @@ mod update_routes;
 mod update_install;
 mod dictation_routes;
 mod dictation_public;
+mod dictation_public_cases;
+mod session_open_cases;
 mod dictation_catalog;
 mod dictation_harness;
 mod dictation_process;

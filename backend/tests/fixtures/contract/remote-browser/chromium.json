@@ -1,6 +1,5 @@
 {
   "source_commit": "ba2db1021ab7fb801eca50a50f9509dcb825ac7e",
-  "generator": "backend/.venv/bin/python backend/tests/fixtures/contract/remote-browser/capture_chromium.py --browser <chrome-headless-shell>",
   "python_version": "3.14.8",
   "platform": "linux",
   "browser_version": "Google Chrome for Testing 156.0.8078.47",

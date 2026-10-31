@@ -1015,6 +1015,27 @@ async fn to_headless_brings_up_the_headless_with_the_read_mode_restores_plan_and
 }
 
 #[tokio::test]
+async fn switching_a_headless_codex_to_headless_changes_nothing() {
+    crate::use_cano_bin();
+    let fx = fixture();
+    let registry = relaunch_registry(&fx).await;
+    let log = fx.root.join("codex-methods.jsonl");
+    fake_headless_codex(&fx.root.join("bin"),&log);
+    let rollout = fx.root.join("rollout.jsonl");
+    std::fs::write(&rollout,"{}\n").unwrap();
+    fx.put_sidecar("cx-h",json!({"name":"cx-h","provider":"codex","headless":true,"key":"k-same","thread_id":"thread-1",
+        "rollout_path":rollout,"cwd":fx.root,"codex_home":fx.home.join(".codex"),"permission_mode":"Full Access","model":"gpt-test"}));
+    let watcher = fx.watcher();
+    registry.bind_watcher(watcher.clone());
+    let same = || watcher.switch_mode(&registry,"cx-h",false,PermissionRead::Known("Full Access".into()));
+    assert_eq!(same().await.expect("Codex do Rust").map_err(|e|e.code),Ok(json!({"ok":true,"terminal":false})));
+    let generation = fx.queue_json("k-same")["generation"].as_u64().unwrap();
+    assert_eq!(same().await.expect("Codex do Rust").map_err(|e|e.code),Ok(json!({"ok":true,"terminal":false})));
+    assert_eq!(fx.queue_json("k-same")["generation"].as_u64(),Some(generation),"a mesma vida");
+    registry.close_with_kill("k-same",generation).await.unwrap();
+}
+
+#[tokio::test]
 async fn a_parked_headless_codex_is_opened_here_instead_of_going_to_python() {
     // Depois de reiniciar a máquina (cano morto, fila vazia) o Python recusa o próprio cliente: o Rust abre
     // a sessão na hora, como o `ensure_running` do Python, e atende o Recarregar e os controles.

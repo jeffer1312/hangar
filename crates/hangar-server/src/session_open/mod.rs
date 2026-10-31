@@ -4,12 +4,13 @@
 pub mod adopt;
 pub mod agents;
 pub mod archive;
+#[cfg(test)]
+pub(crate) mod cases;
 pub mod claude;
 pub mod cli;
 pub mod codex;
-#[cfg(target_os = "linux")]
-#[doc(hidden)]
-pub mod contract;
+#[cfg(all(test, target_os = "linux"))]
+mod contract;
 pub mod facts;
 pub mod legacy_restore;
 pub mod local;
