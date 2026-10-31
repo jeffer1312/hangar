@@ -46,6 +46,7 @@ pub mod session_open;
 pub mod session_rename;
 pub mod session_defaults;
 pub mod tags;
+pub mod tour_progress;
 pub mod push;
 pub mod push_expo;
 pub mod session_media;

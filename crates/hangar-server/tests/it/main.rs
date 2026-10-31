@@ -9,6 +9,7 @@ mod remote_browser;
 mod groups_text;
 mod session_defaults;
 mod tags;
+mod tour_progress;
 mod push_expo;
 mod artifacts;
 mod session_media;
