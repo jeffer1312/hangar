@@ -38,6 +38,18 @@ impl Hangar {
         tray_columns(self.sessions_of(key), key, self.selected_target().as_ref(), |name| self.sidebar.is_hidden(key, name))
     }
 
+    /// As máquinas da bandeja, uma coluna cada: as ligadas; sem nenhuma, a ativa.
+    fn tray_keys(&self) -> Vec<String> {
+        let keys: Vec<String> = self.servers.iter().filter(|s| !s.disabled).map(|s| servers::norm(&s.address)).collect();
+        if keys.is_empty() { vec![self.active_key()] } else { keys }
+    }
+
+    /// O que as colunas mostram somado: (todas as linhas, só as do grupo "Ocultas").
+    pub(super) fn tray_counts(&self) -> (usize, usize) {
+        self.tray_keys().iter().map(|key| self.tray_sessions(key))
+            .fold((0, 0), |(all, hidden), (s, h)| (all + s.len() + h.len(), hidden + h.len()))
+    }
+
     /// Abre a bandeja com o foco nela.
     pub(super) fn open_machines_tray(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_popups();
@@ -67,8 +79,8 @@ impl Hangar {
                 .min_w(px(13.)).h(px(13.)).px(px(2.)).rounded_full().bg(theme::warning()).text_color(theme::chrome())
                 .text_size(px(9.)).font_weight(FontWeight::BOLD).flex().items_center().justify_center()
                 .child(if attention > 99 { "99+".to_owned() } else { attention.to_string() })));
-        // O total de sessões de todas as máquinas, o mesmo do "Todas as sessões" da barra lateral.
-        let total: usize = self.machine_lists(cx).iter().map(|m| m.layout.total).sum();
+        // O total que as colunas da bandeja mostram, ocultas incluídas.
+        let total = self.tray_counts().0;
         let button = Button::new("machines-tray-toggle").ghost().h(px(28.)).px(px(6.)).rounded(px(6.))
             .child(div().flex().items_center().gap(px(6.)).child(icon)
                 .child(div().font_family(theme::MONO).text_size(px(11.)).text_color(theme::faint()).child(total.to_string())))
@@ -170,7 +182,7 @@ impl Hangar {
             match row {
                 grouping::ListRow::Header { key: block, gid, label, members } => rows.push(self.render_pair_header(&block, &gid, &label, &members, window, cx)),
                 grouping::ListRow::Session { block: Some(b), .. } | grouping::ListRow::External { block: b, .. } if self.sidebar.is_collapsed(&b) => {}
-                grouping::ListRow::Session { row, .. } => rows.push(self.render_machine_session(row.session, key, invite, window, cx)),
+                grouping::ListRow::Session { row, .. } => rows.push(self.render_machine_session(row.session, key, invite, false, window, cx)),
                 grouping::ListRow::External { gid, pair, .. } =>
                     rows.push(self.render_external_pair_row(&gid, &pair.owner, &pair.session, &pair.alias, remote, window, cx)),
             }
@@ -178,12 +190,12 @@ impl Hangar {
         // As ocultas no fim da coluna, recolhidas pelo mesmo interruptor do grupo da barra lateral.
         if !hidden.is_empty() {
             rows.push(self.render_hidden_header(key, hidden.len(), window, cx));
-            if self.hidden_open() { rows.extend(hidden.iter().map(|s| self.render_machine_session(s, key, invite, window, cx))); }
+            if self.hidden_open() { rows.extend(hidden.iter().map(|s| self.render_machine_session(s, key, invite, true, window, cx))); }
         }
         let empty = sessions.is_empty() && hidden.is_empty();
-        // Quantas trabalham e quantas esperam a pessoa, ao lado do nome; zero não aparece.
-        let working = sessions.iter().filter(|s| s.display_state() == "working").count();
-        let waiting = sessions.iter().filter(|s| s.display_state() == "awaiting_input").count();
+        // Quantas trabalham e quantas esperam a pessoa, ao lado do nome, ocultas incluídas; zero não aparece.
+        let working = sessions.iter().chain(&hidden).filter(|s| s.display_state() == "working").count();
+        let waiting = sessions.iter().chain(&hidden).filter(|s| s.display_state() == "awaiting_input").count();
         let tally = |n: usize, key: &str, color: Hsla| (n > 0).then(|| div().flex_shrink_0().text_size(px(10.5)).text_color(color)
             .child(tr_shared(key, &[("n", &n.to_string())])));
         div().id(SharedString::from(format!("machines-tray-machine-{key}"))).w(px(228.)).flex_shrink_0().flex().flex_col().gap_2()
@@ -207,7 +219,8 @@ impl Hangar {
             .into_any_element()
     }
 
-    fn render_machine_session(&self, session: &SessionInfo, key: &str, invite: bool, window: &mut Window,
+    /// `outside_block`: a linha do grupo "Ocultas", sem a faixa do bloco do par.
+    fn render_machine_session(&self, session: &SessionInfo, key: &str, invite: bool, outside_block: bool, window: &mut Window,
         cx: &mut Context<Self>) -> AnyElement {
         let target = Target::new(key, &session.name);
         let on = self.selected_target().as_ref() == Some(&target);
@@ -257,7 +270,7 @@ impl Hangar {
                 cx.notify();
             }))
             .on_mouse_down(MouseButton::Right, cx.listener(move |this, _, _, cx| this.start_menu(target.clone(), cx)))
-            .when(!invite && !readonly, |row| self.group_row(row, session, (!self.is_active_key(key)).then_some(key), 7., cx));
+            .when(!invite && !readonly, |row| self.group_row(row, session, (!self.is_active_key(key)).then_some(key), 7., outside_block, cx));
         row.context_menu(session_menu).into_any_element()
     }
 }
@@ -267,7 +280,7 @@ impl Hangar {
 fn tray_columns<'a>(sessions: &'a [SessionInfo], key: &str, open: Option<&Target>, closing: impl Fn(&str) -> bool)
     -> (Vec<&'a SessionInfo>, Vec<&'a SessionInfo>) {
     let mut sorted: Vec<&SessionInfo> = sessions.iter().filter(|s| !closing(&s.name)).collect();
-    sorted.sort_by(|a, b| a.name.cmp(&b.name));
+    sorted.sort_by_cached_key(|s| sidebar::text_key(&s.name));
     sorted.into_iter().partition(|s| sidebar::listed_on(s, &Target::new(key, &s.name), open))
 }
 
@@ -278,14 +291,15 @@ mod tests {
     #[test]
     fn tray_column_keeps_hidden_sessions_apart_and_the_open_one_listed() {
         let session = |name: &str, hidden: bool| SessionInfo { name: name.into(), hidden_from_list: hidden, ..Default::default() };
-        let list = vec![session("zeta", true), session("api", false), session("beta", true), session("gone", true)];
+        let list = vec![session("zeta", true), session("api", false), session("Gama", true), session("beta", true), session("gone", true)];
         let names = |v: Vec<&SessionInfo>| v.into_iter().map(|s| s.name.clone()).collect::<Vec<_>>();
         let (shown, hidden) = tray_columns(&list, "nb", None, |name| name == "gone");
-        assert_eq!((names(shown), names(hidden)), (vec!["api".to_owned()], vec!["beta".to_owned(), "zeta".to_owned()]));
+        assert_eq!(names(shown), ["api"]);
+        assert_eq!(names(hidden), ["beta", "Gama", "zeta"], "a mesma ordem da barra lateral, sem caixa");
         let open = Target::new("nb", "zeta");
         let (shown, hidden) = tray_columns(&list, "nb", Some(&open), |_| false);
         assert_eq!(names(shown), ["api", "zeta"], "a oculta aberta fica na lista");
-        assert_eq!(names(hidden), ["beta", "gone"]);
+        assert_eq!(names(hidden), ["beta", "Gama", "gone"]);
         let only_hidden = vec![session("x", true)];
         assert_eq!(names(tray_columns(&only_hidden, "dp", None, |_| false).1), ["x"], "máquina só com ocultas ainda tem o que mostrar");
     }

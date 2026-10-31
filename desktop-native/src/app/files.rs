@@ -570,6 +570,9 @@ impl Hangar {
 
     pub(super) fn files_expanded(&self) -> bool { self.files.expanded && self.files_visible() }
 
+    /// O arquivo volta ao painel e a lista de sessões reaparece.
+    pub(super) fn restore_files(&mut self) { self.files.expanded = false; }
+
     /// O "+" do Zeron abre outro arquivo: aqui, a busca da aba Arquivos do painel.
     pub(super) fn file_add(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.files.expanded = false;

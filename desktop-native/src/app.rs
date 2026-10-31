@@ -5727,8 +5727,8 @@ impl Hangar {
                             let selected = selected_name == Some(session.name.as_str()) && self.open_key() == at_server;
                             let key = format!("{at}/row:{}::{}", at_server.as_deref().unwrap_or(""), session.name);
                             let show_server = sidebar::row_server_visible(conversations, by_machine, at == "machine" && at_server.as_deref() == home);
-                            children.push((key, at, if conversations { self.render_conversation_row(session, selected, at_server, show_server, None, window, cx) }
-                                else { self.render_session_row(session, selected, at_server, show_server, None, window, cx) }));
+                            children.push((key, at, if conversations { self.render_conversation_row(session, selected, at_server, show_server, None, false, window, cx) }
+                                else { self.render_session_row(session, selected, at_server, show_server, None, false, window, cx) }));
                         }
                         None => children.push((format!("{at}/ext:{}:{gid}", remote.as_deref().unwrap_or("")), at,
                             self.render_external_pair_row(gid, &pair.owner, &pair.session, &pair.alias, remote.as_deref(), window, cx))),
@@ -5745,8 +5745,8 @@ impl Hangar {
             let show_server = sidebar::row_server_visible(conversations, by_machine, at == "machine" && remote.as_deref() == home);
             // O selo vai em qualquer seção: também na linha que o agrupar por máquina puxou para "Aguardando" ou "Trabalhando".
             let seal = seals.get(&sidebar::Target::new(&remote.clone().unwrap_or_else(|| self.active_key()), &session.name)).cloned();
-            let row = if conversations { self.render_conversation_row(session, selected, remote, show_server, seal, window, cx) }
-                else { self.render_session_row(session, selected, remote, show_server, seal, window, cx) };
+            let row = if conversations { self.render_conversation_row(session, selected, remote, show_server, seal, false, window, cx) }
+                else { self.render_session_row(session, selected, remote, show_server, seal, false, window, cx) };
             self.sidebar.still_avatar.set(false);
             children.push((key, at, row));
         };
@@ -5831,8 +5831,8 @@ impl Hangar {
                     let remote = remote_of(&key);
                     let selected = selected_name == Some(session.name.as_str()) && self.open_key() == remote;
                     let row_key = format!("hidden/row:{}::{}", remote.as_deref().unwrap_or(""), session.name);
-                    let row = if conversations { self.render_conversation_row(session.clone(), selected, remote, multi, None, window, cx) }
-                        else { self.render_session_row(session.clone(), selected, remote, multi, None, window, cx) };
+                    let row = if conversations { self.render_conversation_row(session.clone(), selected, remote, multi, None, true, window, cx) }
+                        else { self.render_session_row(session.clone(), selected, remote, multi, None, true, window, cx) };
                     children.push((row_key, "hidden", row));
                 }
             }
@@ -6010,9 +6010,10 @@ impl Hangar {
 
     /// Linha do Zeron: estado, glifo, nome e hora numa linha só; no Normal, a branch fora de main/master embaixo.
     /// `remote` é a chave da máquina de uma linha que não é do servidor ativo: menu, foco e gestos são os mesmos, cada um
-    /// na máquina da linha.
+    /// na máquina da linha. `outside_block`: a linha do grupo "Ocultas", sem a faixa do bloco do par.
+    #[allow(clippy::too_many_arguments)]
     fn render_conversation_row(&self, session: SessionInfo, selected: bool, remote: Option<String>, show_server: bool, seal: Option<(String, String)>,
-        window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        outside_block: bool, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let compact = appearance::get().sidebar_compact;
         let (_, selection, hover, _) = theme::conversation_sidebar();
         let name = session.name.clone();
@@ -6114,7 +6115,7 @@ impl Hangar {
                 this.select_target(&open, window, cx);
                 cx.stop_propagation();
             }))
-            .map(|el| self.group_row(el, &session, remote.as_deref(), 8., cx))
+            .map(|el| self.group_row(el, &session, remote.as_deref(), 8., outside_block, cx))
             .on_mouse_down(MouseButton::Right, cx.listener(move |this, _, _, cx| {
                 let hover = this.sidebar.hover.take();
                 this.start_menu(menu_target.clone(), cx);
@@ -6134,8 +6135,9 @@ impl Hangar {
     /// worktree), a branch fora de main/master, o ↑/↓ do upstream e o diff.
     /// Mais, como o web: "? N" das perguntas, o ⋯ e o clique direito com o menu da sessão, pressionar 500 ms para renomear
     /// na própria linha e a prévia da última resposta ao parar o mouse. A linha entra no Tab (Enter abre) e o ⋯ vem depois dela.
+    #[allow(clippy::too_many_arguments)]
     fn render_session_row(&self, session: SessionInfo, selected: bool, remote: Option<String>, show_server: bool, seal: Option<(String, String)>,
-        window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        outside_block: bool, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         // O logo já identifica o agente; o nome do motor ainda distingue a configuração usada.
         let engine_label = session.engine.as_deref().filter(|e| !e.is_empty() && session.provider == "claude" && !session.orq())
             .map(|e| format!("⚙ {e}"));
@@ -6270,7 +6272,7 @@ impl Hangar {
                     .when_some(added, |el, a| el.child(div().flex_shrink_0().text_color(theme::success()).child(format!("+{a}"))))
                     .when_some(removed, |el, r| el.child(div().flex_shrink_0().text_color(theme::removed()).child(format!("−{r}"))))))))
             .children(menu_button)
-            .map(|el| self.group_row(el, &session, remote.as_deref(), 10., cx))
+            .map(|el| self.group_row(el, &session, remote.as_deref(), 10., outside_block, cx))
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.clear_hover();
                 if this.take_long_press() { return; }

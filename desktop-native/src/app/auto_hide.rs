@@ -152,7 +152,7 @@ impl Hangar {
         // Reconectou com a página aberta: as respostas da conexão anterior não chegam mais.
         if self.auto_hide.connection != self.connection { self.auto_hide_opened(cx); }
         let mut page = div().flex().flex_col().gap_4().child(div().text_xl().font_weight(FontWeight::SEMIBOLD).child(Page::Sessions.title()));
-        let hidden = self.hidden_sessions(cx).len();
+        let hidden = self.hidden_count(cx);
         let see_hidden = (hidden > 0).then(|| div().flex().child(Button::new("auto-hide-see-hidden").outline().small()
             .label(tr("sidebar_see_hidden").replace("{n}", &hidden.to_string()))
             .on_click(cx.listener(|this, _, window, cx| this.show_hidden_group(window, cx)))));

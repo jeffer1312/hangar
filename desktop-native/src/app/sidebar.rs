@@ -121,6 +121,8 @@ pub(super) enum SidebarReply {
     BranchRead(u64, Result<Value, Failure>),
     AccountsRead(u64, Result<(Vec<AccountTarget>, Option<String>), Failure>),
     Wrote(Target, Write, Result<Value, Failure>),
+    /// "Ocultar o grupo inteiro": as sessões que não ocultaram, com o motivo de cada uma.
+    HidGroup(Vec<(Target, Failure)>),
     /// Resultado de uma gravação de git: nível e texto da notificação daquela sessão.
     Note(Target, NotificationType, String),
     Chained(Target, u64, String, Result<Value, Failure>),
@@ -374,7 +376,7 @@ pub(super) fn project_label(cwd: Option<&str>) -> String {
 
 // ponytail: `localeCompare` sem tabela de colação — minúsculas com os acentos do português dobrados na letra-base, empate pelo
 // texto cru. Outras escritas ordenam por ponto de código; uma tabela (icu_collator) resolveria se isso importar.
-fn text_key(text: &str) -> (String, String) { (sort_key(text), text.to_owned()) }
+pub(super) fn text_key(text: &str) -> (String, String) { (sort_key(text), text.to_owned()) }
 
 fn sort_key(text: &str) -> String {
     text.to_lowercase().chars().map(|c| match c {
@@ -605,9 +607,18 @@ impl Hangar {
 
     pub(super) fn hidden_open(&self) -> bool { self.sidebar.is_collapsed(HIDDEN_GROUP) }
 
+    /// O "N" do "Ver sessões ocultas": o que o grupo "Ocultas" mostra onde o botão leva (a barra, ou a bandeja com abas).
+    pub(super) fn hidden_count(&self, cx: &App) -> usize {
+        if appearance::get().navigation.tabs() { self.tray_counts().1 } else { self.hidden_sessions(cx).len() }
+    }
+
     /// "Ver sessões ocultas": fecha as Configurações e mostra a barra cheia com o grupo aberto.
     pub(super) fn show_hidden_group(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_settings(window, cx);
+        // Custos, worktrees e o arquivo expandido tomam o lugar da barra e escondem a bandeja.
+        self.close_costs(window, cx);
+        self.close_worktrees(window, cx);
+        self.restore_files();
         // Com abas não há barra; as ocultas moram no fim de cada coluna da bandeja das máquinas.
         if appearance::get().navigation.tabs() { self.open_machines_tray(window, cx); }
         else if self.rail() { self.toggle_rail(cx); }
@@ -1033,6 +1044,59 @@ impl Hangar {
         cx.notify();
     }
 
+    /// "Ocultar da lista": num grupo com mais alguém a ocultar, pergunta antes se vai só esta ou o grupo inteiro.
+    pub(super) fn hide_session(&mut self, target: Target, window: &mut Window, cx: &mut Context<Self>) {
+        use super::grouping::{Row, group_hide_targets};
+        let machines = self.group_machines();
+        let targets = match self.target_session(&target).filter(|_| machines.contains(&target.server)) {
+            Some(session) => {
+                let rows: Vec<Row> = machines.iter().flat_map(|key| self.sessions_of(key).iter()
+                    .filter(|s| !self.sidebar.is_hidden(key, &s.name)).map(move |s| Row { server: key, session: s, invite: false })).collect();
+                group_hide_targets(Row { server: &target.server, session, invite: false }, &rows)
+            }
+            None => Vec::new(),
+        };
+        if targets.len() < 2 { self.write(target, Write::Hide, cx); return; }
+        let names: Vec<String> = targets.iter().map(|t| if t.server == target.server { t.name.clone() }
+            else { format!("{} · {}", t.name, self.machine_label(&t.server, cx)) }).collect();
+        self.focus_origin(&target, window, cx);
+        let weak = cx.entity().downgrade();
+        window.open_dialog(cx, move |dialog, _, _| {
+            let run = |id: &'static str, label: String, all: bool| {
+                let (weak, targets) = (weak.clone(), targets.clone());
+                Button::new(id).label(label).when(all, |b| b.primary()).on_click(move |_, window, cx| {
+                    window.close_dialog(cx);
+                    let _ = weak.update(cx, |this, cx| if all { this.hide_group(targets.clone()) } else { this.write(targets[0].clone(), Write::Hide, cx) });
+                })
+            };
+            popup::dialog(dialog).w(px(420.)).title(tr("sidebar_hide_group_title"))
+                .child(div().flex().flex_col().gap(px(2.)).text_sm()
+                    .children(names.iter().map(|name| div().min_w_0().truncate().font_family(theme::MONO).child(name.clone()))))
+                .footer(div().flex().justify_end().gap_2()
+                    .child(Button::new("hide-group-cancel").label(tr("cancel")).on_click(|_, window, cx| window.close_dialog(cx)))
+                    .child(run("hide-group-one", tr("sidebar_hide_only_this"), false))
+                    .child(run("hide-group-all", tr("sidebar_hide_whole_group").replace("{n}", &names.len().to_string()), true)))
+                .on_ok(enter_to_focused)
+        });
+    }
+
+    /// Cada membro na máquina dele, todos juntos; os que falham voltam numa notificação só, com o motivo de cada um.
+    fn hide_group(&mut self, targets: Vec<Target>) {
+        let calls: Vec<(Target, Result<Api, String>)> = targets.into_iter()
+            .map(|t| { let api = self.machine_api(&t.server).ok_or_else(|| self.machine_error(&t.server)); (t, api) }).collect();
+        let tell = self.sidebar_tell();
+        self.runtime.spawn(async move {
+            let results = futures::future::join_all(calls.into_iter().map(|(target, api)| async move {
+                let result = match api {
+                    Ok(api) => api.server_send(reqwest::Method::PUT, &["sessions", target.name.as_str(), "hidden"], None, 15).await.map(|_| ()),
+                    Err(reason) => Err(Failure::local(reason)),
+                };
+                result.err().map(|error| (target, error))
+            })).await;
+            tell.send(SidebarReply::HidGroup(results.into_iter().flatten().collect())).await;
+        });
+    }
+
     // ── Git e encadear ──
 
     /// "Git": a aba Git do painel da direita (o diálogo quando o painel não cabe), o mesmo caminho da faixa do compositor.
@@ -1279,6 +1343,11 @@ impl Hangar {
                 cx.notify();
             }
             SidebarReply::Note(target, kind, text) => window.push_notification(git_note(&target.name, kind, text), cx),
+            SidebarReply::HidGroup(skipped) => {
+                if skipped.is_empty() { return; }
+                let names: Vec<String> = skipped.iter().map(|(t, error)| format!("{} ({})", t.name, Self::visibility_failure(error))).collect();
+                window.push_notification(Notification::error(tr("sidebar_hide_group_skipped").replace("{names}", &names.join(", "))), cx);
+            }
             SidebarReply::Group(seq, reply) => self.receive_group(seq, reply, window, cx),
             SidebarReply::Sheet(reply) => self.receive_sheet(reply, window, cx),
             SidebarReply::Identity(key, result) => self.receive_identity(key, result, window, cx),
@@ -1582,9 +1651,8 @@ fn hide_item(hangar: &WeakEntity<Hangar>, target: &Target, session: &SessionInfo
     let label = tr(if hidden { "sidebar_show" } else { "sidebar_hide" });
     let label = if waiting { format!("{label} · {}", tr("sidebar_hide_waiting")) } else { label };
     let (hangar, target) = (hangar.clone(), target.clone());
-    PopupMenuItem::new(label).disabled(waiting).on_click(move |_, _, cx| {
-        let what = if hidden { Write::Show } else { Write::Hide };
-        let _ = hangar.update(cx, |this, cx| this.write(target.clone(), what, cx));
+    PopupMenuItem::new(label).disabled(waiting).on_click(move |_, window, cx| {
+        let _ = hangar.update(cx, |this, cx| if hidden { this.write(target.clone(), Write::Show, cx) } else { this.hide_session(target.clone(), window, cx) });
     })
 }
 
