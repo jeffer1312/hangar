@@ -1,9 +1,8 @@
-"""Ponte de contas com o Rust: preparo, janela do Claude e pedidos privados. Os fatos de uso
+"""Ponte de contas com o Rust: preparo e pedidos privados. Os fatos de uso
 (processos, nascimentos, sidecars) são lidos no Rust, em `accounts/usage.rs`."""
 from __future__ import annotations
 
 from pathlib import Path
-import contextlib
 import json
 import os
 import re
@@ -256,127 +255,6 @@ def request_process_uses(key: AccountKey, pid: int) -> bool | None:
         return uses if isinstance(uses, bool) else None
     except (OSError, ValueError):
         return None
-
-
-class ClaudeWindows:
-    """Transporte auxiliar: só a janela nativa, sem decidir autenticação."""
-    def __init__(self):
-        import threading
-        self.lock = threading.RLock()
-        self.active = {}
-        self.closed = set()
-
-    def _close_orphans(self):
-        """As janelas só são lembradas em memória: as de um backend anterior ficavam abertas para
-        sempre, segurando a conta. Chamar sob `self.lock`."""
-        from app import claude_window, diag
-        try:
-            sessions = claude_window.tmux.list_sessions()
-        except Exception as error:
-            # A varredura é limpeza: falhar nela não impede a janela nova de abrir.
-            diag.registrar("conta.janela_orfa", "aviso", codigo="lista_indisponivel", detalhe=type(error).__name__)
-            return
-        for session in sessions:
-            name = session["name"]
-            operation = name.removeprefix("term-login-")
-            if operation != name and re.fullmatch("[a-f0-9]{32}", operation) and operation not in self.active:
-                try:
-                    claude_window.kill(name)
-                except RuntimeError as error:
-                    diag.registrar("conta.janela_orfa", "aviso", codigo="nao_fechou", detalhe=type(error).__name__)
-
-    def run(self, body):
-        from app import claude_window, runtime_coordinator
-        if not isinstance(body, dict) or set(body) != {"instance", "key", "operation", "action", "code"}:
-            raise ValueError("pedido inválido")
-        coordinator = runtime_coordinator.current()
-        if coordinator is None or body["instance"] != coordinator.instance:
-            raise ValueError("instância inválida")
-        operation, action, code = body["operation"], body["action"], body["code"]
-        if not isinstance(operation, str) or not re.fullmatch("[a-f0-9]{32}", operation):
-            raise ValueError("operação inválida")
-        if action not in {"open", "read", "code", "close", "refresh"}:
-            raise ValueError("ação inválida")
-        if action == "code":
-            if not isinstance(code, str) or not code or len(code) > 4096 or any(c in code for c in ("\n", "\r", "\x00")):
-                raise ValueError("código inválido")
-        elif code is not None:
-            raise ValueError("entrada inesperada")
-        raw_key = body["key"]
-        if not isinstance(raw_key, dict) or set(raw_key) != {"provider", "canonical_home"} or raw_key["provider"] != "claude":
-            raise ValueError("conta inválida")
-        if not isinstance(raw_key["canonical_home"], str):
-            raise ValueError("caminho inválido")
-        key = AccountKey.new("claude", Path(raw_key["canonical_home"]))
-        from app.config import list_config_dirs
-        if not any(AccountKey.new("claude", Path(c.path)) == key for c in list_config_dirs()):
-            raise ValueError("conta ausente")
-        name = "login-" + operation
-        target = "term-" + name
-        with self.lock:
-            current = runtime_coordinator.current()
-            if current is None or current.instance != body["instance"]:
-                raise ValueError("instância inválida")
-            if action != "close" and operation in self.closed:
-                raise ValueError("operação encerrada")
-            previous = self.active.get(operation)
-            if previous is not None and (previous[0] != key or (action != "close" and previous[1] != body["instance"])):
-                raise ValueError("operação divergente")
-            # A identidade é da operação: limpar uma tentativa antiga não toca na nova.
-            if action == "close":
-                self.closed.add(operation)
-                claude_window.kill(target)
-                self.active.pop(operation, None)
-            elif action == "open":
-                previous = self.active.get(operation)
-                if previous is not None and previous != (key, body["instance"]):
-                    raise ValueError("operação divergente")
-                if previous is None:
-                    self._close_orphans()
-                    created = claude_window.spawn(name, str(key.canonical_home), str(key.canonical_home))
-                    if created != target:
-                        claude_window.kill(target)
-                        raise RuntimeError("não consegui abrir a janela escondida")
-                    self.active[operation] = (key, body["instance"])
-                    try:
-                        claude_window.submit(target, "claude auth login --claudeai")
-                    except Exception:
-                        claude_window.kill(target)
-                        self.active.pop(operation, None)
-                        raise
-            elif action == "refresh":
-                cwd = claude_window.trusted_folder(key.canonical_home)
-                if cwd is None:
-                    return {"ok": False, "motivo": "sem-pasta-confiada"}
-                if previous is None:
-                    self._close_orphans()
-                    created = claude_window.spawn(name, str(cwd), str(key.canonical_home))
-                    if created != target:
-                        if created is not None:
-                            # A recusa já é a resposta; a limpeza da janela estranha é tentativa.
-                            with contextlib.suppress(RuntimeError):
-                                claude_window.kill(created)
-                        return {"ok": False, "motivo": "tmux-recusou"}
-                    self.active[operation] = (key, body["instance"])
-                    try:
-                        claude_window.submit(target, "claude")
-                    except Exception:
-                        claude_window.kill(target)
-                        self.active.pop(operation, None)
-                        raise
-            else:
-                if self.active.get(operation) != (key, body["instance"]):
-                    raise ValueError("operação ausente")
-                if action == "read":
-                    match = claude_window.URL_RE.search(claude_window.read(target))
-                    return {"ok": True, "url": match.group(1) if match else None}
-                if not claude_window.PROMPT_RE.search(claude_window.read(target)):
-                    raise RuntimeError("a CLI não está aguardando o código de autorização")
-                claude_window.send_code(target, code)
-        return {"ok": True}
-
-
-claude_windows = ClaudeWindows()
 
 
 def request_claude(action, *, path):

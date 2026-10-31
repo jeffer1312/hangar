@@ -1,6 +1,5 @@
 use super::{
     AccountKey, GuardMode, Provider,
-    bridge::AccountsBridge,
     catalog::{Account, AccountService},
     claude_login::WindowClient,
     quotas::now,
@@ -136,7 +135,7 @@ impl AccountService {
     pub async fn refresh_claude(
         &self,
         account: &Account,
-        bridge: AccountsBridge,
+        windows: WindowClient,
         runtime: Option<Arc<crate::runtime::gateway::RuntimeRegistry>>,
         quick: bool,
     ) -> Result<(), &'static str> {
@@ -144,7 +143,7 @@ impl AccountService {
         let account = account.clone();
         tokio::spawn(async move {
             service
-                .refresh_claude_owned(account, bridge, runtime, quick)
+                .refresh_claude_owned(account, windows, runtime, quick)
                 .await
         })
         .await
@@ -154,7 +153,7 @@ impl AccountService {
     async fn refresh_claude_owned(
         &self,
         account: Account,
-        bridge: AccountsBridge,
+        client: WindowClient,
         runtime: Option<Arc<crate::runtime::gateway::RuntimeRegistry>>,
         quick: bool,
     ) -> Result<(), &'static str> {
@@ -176,12 +175,6 @@ impl AccountService {
         if quick && self.quick_renewals.pending(&key, &before, now()) {
             return Err("renovacao-falhou");
         }
-        let client = WindowClient::new(
-            bridge.upstream(),
-            bridge.secret().to_owned(),
-            bridge.instance().to_owned(),
-        )
-        .map_err(|_| "renovacao-falhou")?;
         // Limpeza incerta conserva a guarda; a próxima tentativa só prossegue após o ACK.
         {
             let mut pending = self.refresh_cleanup.0.lock().await;
@@ -380,7 +373,6 @@ impl AccountService {
 
 pub fn start(
     service: AccountService,
-    bridge: AccountsBridge,
     runtime: Arc<crate::runtime::gateway::RuntimeRegistry>,
 ) -> (
     tokio::sync::watch::Sender<bool>,
@@ -388,8 +380,7 @@ pub fn start(
 ) {
     let (stop, mut stopped) = tokio::sync::watch::channel(false);
     let task = tokio::spawn(async move {
-        // ponytail: espera fixa; na subida o Python fica ~30 s sem atender e a renovação falhava.
-        // Trocar por um sinal de prontidão do Python se a subida passar disso.
+        // ponytail: espera fixa de 2 min depois da subida.
         let mut interval = tokio::time::interval_at(
             tokio::time::Instant::now() + Duration::from_secs(120),
             Duration::from_secs(6 * 3600),
@@ -419,7 +410,7 @@ pub fn start(
                     continue;
                 }
                 if let Err(reason) = service
-                    .refresh_claude(&account, bridge.clone(), Some(runtime.clone()), false)
+                    .refresh_claude(&account, service.claude_windows.clone(), Some(runtime.clone()), false)
                     .await
                 {
                     tracing::info!(code = reason, "renovação de conta não concluída");
@@ -506,7 +497,8 @@ mod tests {
         fs::create_dir(&bin).unwrap();
         fs::write(account_home.join(".credentials.json"),
             json!({"claudeAiOauth":{"accessToken":"before","refreshToken":"refresh","expiresAt":1000}}).to_string()).unwrap();
-        crate::write_test_executable(&bin.join("claude"), b"#!/bin/sh\nexec sleep 30\n");
+        // Caminho absoluto: o `PATH` da CLI é só esta pasta, e sem o `sleep` ela sairia antes de a sessão pedir a conta.
+        crate::write_test_executable(&bin.join("claude"), b"#!/bin/sh\nexec /bin/sleep 30\n");
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, axum::Router::new()).await.unwrap(); });
@@ -516,15 +508,17 @@ mod tests {
         env.codex_default = temp.path().join(".codex");
         env.claude_fixed = format!("test:{}", account_home.display());
         env.base.insert("PATH".into(), bin.to_string_lossy().into_owned());
+        // Sem o tmux da máquina: o resultado não pode depender do que roda nela.
+        env.terminal_fixture = Some(Arc::new(|| Ok(String::new())));
         let service = AccountService::new(env);
         let account = service.claude_by_label("test").unwrap();
-        let bridge = AccountsBridge::new(address, "synthetic".into(), "synthetic".into()).unwrap();
+        let windows = WindowClient::with(Arc::new(super::super::claude_window::Refused));
         let runtime = Arc::new(crate::runtime::gateway::RuntimeRegistry::new(address, "synthetic".into(), "synthetic".into()));
         let key = AccountKey::new(Provider::Claude, &account_home).unwrap();
         let locks = service.locks.clone();
         let renewing = {
             let service = service.clone();
-            tokio::spawn(async move { service.refresh_claude(&account, bridge, Some(runtime), true).await })
+            tokio::spawn(async move { service.refresh_claude(&account, windows, Some(runtime), true).await })
         };
         while !RENEWALS.lock().unwrap().contains_key(&key) {
             assert!(!renewing.is_finished(), "a renovação acabou sem segurar a conta");
@@ -571,9 +565,11 @@ mod tests {
         env.claude_fixed = format!("test:{}", account_home.display());
         env.base
             .insert("PATH".into(), bin.to_string_lossy().into_owned());
+        // Sem o tmux da máquina: o resultado não pode depender do que roda nela.
+        env.terminal_fixture = Some(Arc::new(|| Ok(String::new())));
         let service = AccountService::new(env);
         let account = service.claude_by_label("test").unwrap();
-        let bridge = AccountsBridge::new(address, "synthetic".into(), "synthetic".into()).unwrap();
+        let windows = WindowClient::with(Arc::new(super::super::claude_window::Refused));
         let runtime = Arc::new(crate::runtime::gateway::RuntimeRegistry::new(
             address,
             "synthetic".into(),
@@ -581,7 +577,7 @@ mod tests {
         ));
         assert_eq!(
             service
-                .refresh_claude(&account, bridge.clone(), Some(runtime.clone()), true)
+                .refresh_claude(&account, windows.clone(), Some(runtime.clone()), true)
                 .await,
             Err("sessao-viva")
         );
@@ -595,7 +591,7 @@ mod tests {
         fs::remove_file(sidecars.join("busy.json")).unwrap();
         assert_eq!(
             service
-                .refresh_claude(&account, bridge, Some(runtime), true)
+                .refresh_claude(&account, windows, Some(runtime), true)
                 .await,
             Ok(())
         );

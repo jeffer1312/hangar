@@ -101,7 +101,7 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
         || crate::speech::http::matches(method, path) { return true; }
     // O serviço MCP responde também aos métodos recusados, sem repasse ao Python.
     if matches!(path, "/mcp" | "/mcp/") { return true; }
-    if matches!(*method, Method::GET | Method::PUT) && matches!(path, "/api/session-defaults" | "/api/tags" | "/api/web-ui" | "/api/session-auto-hide") { return true; }
+    if matches!(*method, Method::GET | Method::PUT) && matches!(path, "/api/auto-report" | "/api/session-defaults" | "/api/tags" | "/api/web-ui" | "/api/session-auto-hide") { return true; }
     if (matches!(*method, Method::GET | Method::PUT) && path == "/api/update-channel") { return true; }
     if (*method == Method::GET && path == "/api/atualizacao")
         || (*method == Method::POST && matches!(path, "/api/atualizacao/iniciar" | "/api/atualizacao/reiniciar" | "/api/atualizacao/dev-mode")) { return true; }
