@@ -245,17 +245,34 @@ pub(crate) fn python_counts(base: &Path, now: DateTime<Local>, s: &Scrubber) -> 
 
 static UPDATE_LINE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(\S+Z)\s+\w+\s+update: fim\b\s*(.*)$").unwrap());
 
-/// As 10 últimas `update: fim` de `privado/atualizacao-rust.log`, com data local.
+static STARTUP_LINE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\S+Z\s+\w+\s+update: saída\s+line=(.*)$").unwrap());
+const STARTUP_FAILURES: usize = 3;
+
+/// As 10 últimas `update: fim` de `privado/atualizacao-rust.log`, com data local. Nas 3 falhas mais
+/// recentes, embaixo, as linhas `update: saída` da rodada (o erro da versão nova que não subiu).
 pub(crate) fn read_updates(base: &Path, s: &Scrubber) -> Vec<String> {
     let mut found = std::collections::VecDeque::new();
+    let mut output = Vec::new();
     each_line(&base.join("privado").join("atualizacao-rust.log"), |line| {
+        if let Some(c) = STARTUP_LINE.captures(line) {
+            output.push(shorten_paths(&clean(s, &c[1], usize::MAX)));
+            return;
+        }
         let Some(c) = UPDATE_LINE.captures(line) else { return };
-        let Some(at) = DateTime::parse_from_rfc3339(&c[1]).ok() else { return };
+        let Some(at) = DateTime::parse_from_rfc3339(&c[1]).ok() else { output.clear(); return };
         let rest: String = shorten_paths(&clean(s, &c[2], usize::MAX)).chars().take(200).collect();
-        found.push_back(format!("{} {rest}", at.with_timezone(&Local).format("%m-%d %H:%M")));
+        let failed = rest.contains("Failed");
+        found.push_back((format!("{} {rest}", at.with_timezone(&Local).format("%m-%d %H:%M")), failed, std::mem::take(&mut output)));
         if found.len() > 10 { found.pop_front(); }
     });
-    found.into()
+    let mut shown = 0;
+    let mut lines: Vec<String> = found.into_iter().rev().map(|(line, failed, output)| {
+        if !failed || output.is_empty() || shown == STARTUP_FAILURES { return line; }
+        shown += 1;
+        output.iter().fold(line, |text, out| format!("{text}\n  | {out}"))
+    }).collect();
+    lines.reverse();
+    lines
 }
 
 // ---------- diário inteiro compactado ----------

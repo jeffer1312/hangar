@@ -77,6 +77,7 @@ pub(crate) use rows::{agent_card, agent_clock};
 pub(crate) use session_tabs::{PlateMark, PlateSegment, plate, tab_frame, tab_title, with_context_ring};
 pub(crate) use tags::{account_icon, machine_icon};
 pub(crate) use rename_suggest::{Strip as RenameStrip, rename_strip};
+pub(crate) use settings::{setting_row, settings_box};
 mod shortcuts;
 mod shortcut_transfer;
 mod keyboard;
@@ -1349,6 +1350,7 @@ impl Hangar {
         }
         self.start_remote_lists();
         self.sync_updater(cx);
+        if !self.active_invite() { self.ask_auto_report(window, cx); }
         self.connection_dialog = false;
         // Conectado por qualquer caminho: reabrir o cartão mostra endereço + token, não a entrada da primeira abertura.
         self.entry = None;

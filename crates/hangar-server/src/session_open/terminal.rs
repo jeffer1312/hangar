@@ -454,7 +454,7 @@ fn command_line(argv: &[String], out: &MuxOutput, failure: Option<(&str, Option<
         else { argv.get(1).filter(|c| mux && DIARY_COMMANDS.contains(&c.as_str())).map_or("outro", String::as_str) };
     let failed = out.code.is_some_and(|code| code != 0);
     let stderr = out.stderr.as_str();
-    let absent = ["no server", "no sessions", "can't find session", "no such session", "invalid option: @cp_hidden"].iter().any(|p| stderr.starts_with(p))
+    let absent = ["no server", "no sessions", "can't find session", "no such session", "invalid option: @cp_hidden", "invalid option: @cp_login_owner"].iter().any(|p| stderr.starts_with(p))
         || (stderr.starts_with("error connecting to ") && stderr.trim_end().ends_with("(No such file or directory)"));
     let expected = failure.is_none() && out.code == Some(1) && ABSENCE_OK.contains(&command) && absent;
     let ms = elapsed.as_millis() as u64;

@@ -1,5 +1,6 @@
 //! Pacote de diagnóstico do "Reportar problema": o texto do relatório (C2/C3) e o diário inteiro
 //! compactado (C2b). Quem envia é a rota; aqui só se coleta, limpa e monta.
+pub mod auto;
 mod collect;
 mod route;
 mod scrub;

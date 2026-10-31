@@ -1033,7 +1033,8 @@ const renameSuggestionAsked = new Map<string, number>();
 /** Gatilho da faixa "Renomear para X?" ao abrir a conversa e, com sugestão fraca, a cada mensagem
  *  da pessoa (`userMessages` conta as dela); `null` = não pediu. */
 export function requestRenameSuggestionOnce(server: Server, row: SessionInfo, userMessages: number): Promise<RenameSuggestionResult | null> | null {
-  const key = `${server.id}::${row.name}`;
+  // A conversa entra na chave: outra sessão aberta depois com o mesmo nome não herda o pedido.
+  const key = `${server.id}::${row.name}::${row.jsonl ?? ''}`;
   const last = renameSuggestionAsked.get(key);
   if (server.invite || userMessages === 0 || (row.rename_suggestion && !row.rename_weak) || !looksGenericName(row.name, row.cwd)) return null;
   if (last !== undefined && (!row.rename_weak || userMessages <= last)) return null;
@@ -2497,6 +2498,23 @@ export async function acceptUpdateWarningsEm(s: Server | null, ids: string[], mo
   }
   if (response?.ok !== true) throw new Error(m.update_accept_failed({ reason: m.atualizar_resposta_invalida() }));
   return response.started === true ? { ok: true, started: true, pid: confirmUpdateStarted(response).pid } : { ok: true, started: false };
+}
+
+/** Consentimento do relatório automático da atualização: `null` = não respondido; `undefined` = servidor sem o recurso. */
+export async function getAutoReportEm(s: Server, fetcher?: typeof fetch): Promise<boolean | null | undefined> {
+  try {
+    const res = await apiFetchForServer<{ auto_report?: unknown }>(s, '/api/auto-report', undefined, 8000, false, fetcher);
+    return typeof res?.auto_report === 'boolean' || res?.auto_report === null ? res.auto_report : undefined;
+  } catch (error) {
+    if ((error as { status?: unknown })?.status === 404) return undefined;
+    throw error;
+  }
+}
+
+export async function putAutoReportEm(s: Server, value: boolean, fetcher?: typeof fetch): Promise<boolean> {
+  const res = await apiFetchForServer<{ auto_report?: unknown }>(s, '/api/auto-report',
+    { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ auto_report: value }) }, 8000, false, fetcher);
+  return res?.auto_report === true;
 }
 
 export function getIdentificadorEm(s: Server, fetcher?: typeof fetch): Promise<{ identificador: string; lan_url?: string }> {

@@ -452,47 +452,6 @@ def _worker() -> None:
     app.include_router(internal_api.router)
     app.state.codex_contas_login = service
     calls = []
-    windows = {}
-    closed_windows = set()
-    window_calls = []
-    code_entered = threading.Event()
-    @app.get("/__contract__/wait-claude-code")
-    async def wait_claude_code():
-        return {"entered": await asyncio.to_thread(code_entered.wait, 20)}
-
-    @app.post("/__contract__/window")
-    def contract_window(body: dict):
-        """Janela escondida do processo de prova Rust: abre, mostra o link, recebe o código e fecha
-        sem multiplexador. A prova guarda somente a classificação do código, nunca o valor."""
-        name = "term-login-" + body["operation"]
-        action = body["action"]
-        if action == "close":
-            if name in windows and windows[name] != body["key"]:
-                return JSONResponse({"ok": False}, status_code=409)
-            closed_windows.add(name)
-            windows.pop(name, None)
-            window_calls.append({"action": "close", "name": name})
-            return {"ok": True}
-        if name in closed_windows or action not in {"open", "read", "code"}:
-            return JSONResponse({"ok": False}, status_code=409)
-        if action == "open":
-            if name not in windows:
-                windows[name] = body["key"]
-                window_calls.append({"action": "open", "name": name, "config_dir": body["key"]["canonical_home"]})
-                window_calls.append({"action": "command", "name": name, "command": "claude auth login --claudeai"})
-            return {"ok": True}
-        if name not in windows or windows[name] != body["key"]:
-            return JSONResponse({"ok": False}, status_code=409)
-        if action == "read":
-            return {"ok": True, "url": "https://claude.ai/oauth/authorize?fixture=1"}
-        window_calls.append({"action": "code", "name": name, "protected": True})
-        code_entered.set()
-        return {"ok": True}
-
-    @app.get("/__contract__/claude-windows")
-    def claude_windows():
-        return {"windows": list(windows), "calls": window_calls}
-
 
     @app.post("/__contract__/claude-owner")
     def claude_owner(body: dict):

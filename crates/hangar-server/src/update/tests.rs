@@ -176,7 +176,8 @@ impl Machine {
 
     fn job<'a>(&'a self, release: &'a Release) -> Job<'a> {
         Job { client: &self.client, release, platform: PLATFORM, layout: &self.layout, home: self.home.path(), state_dir: &self.state_dir, diary_dir: None, ui: None, notes: vec![],
-            settings: Settings { download_deadline: Duration::from_secs(30), health_deadline: Duration::from_millis(200), health_interval: Duration::from_millis(5) } }
+            settings: Settings { download_deadline: Duration::from_secs(30), health_deadline: Duration::from_millis(200), health_interval: Duration::from_millis(5) },
+            startup_output: false }
     }
 
     fn current(&self) -> PathBuf { real(&self.layout.current()) }

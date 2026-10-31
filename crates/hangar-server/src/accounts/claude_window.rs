@@ -80,16 +80,18 @@ pub fn join_wrapped(screen: &str, width: Option<usize>) -> String {
     out
 }
 
-/// O primeiro link `http(s)` da tela; para em espaço e no `ESC` do hiperlink OSC 8.
+/// O link de autorização da tela; sem ele, o último link, porque o que vem antes (saudação do shell,
+/// aviso de versão) é anterior ao login. Para em espaço e no `ESC` do hiperlink OSC 8.
 pub fn oauth_url(screen: &str) -> Option<String> {
     static URL: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"https?://[^\s\x1b]+").unwrap());
-    URL.find(screen).map(|found| found.as_str().to_owned())
+    let links: Vec<&str> = URL.find_iter(screen).map(|found| found.as_str()).collect();
+    links.iter().find(|link| link.contains("/oauth/authorize")).or(links.last()).map(|link| (*link).to_owned())
 }
 
 /// Primeira pasta confiada e ainda existente da conta: abrir o `claude` noutra trava na pergunta de
 /// confiança. O `true` é literal, como a CLI grava.
-pub fn trusted_folder(home: &Path) -> Option<PathBuf> {
-    let config: Value = serde_json::from_slice(&std::fs::read(home.join(".claude.json")).ok()?).ok()?;
+pub fn trusted_folder(config_file: &Path) -> Option<PathBuf> {
+    let config: Value = serde_json::from_slice(&std::fs::read(config_file).ok()?).ok()?;
     config.get("projects")?.as_object()?.iter().find_map(|(path, entry)| {
         let path = PathBuf::from(path);
         (entry.get("hasTrustDialogAccepted") == Some(&Value::Bool(true)) && path.is_dir()).then_some(path)
@@ -124,7 +126,13 @@ impl ClaudeWindows {
     }
 
     pub async fn refresh(&self, key: &AccountKey, operation: &str) -> Result<(), &'static str> {
-        let folder = trusted_folder(&key.canonical_home).ok_or("window_no_trusted_folder")?;
+        // A conta padrão no psmux nasce sem a variável, e aí a CLI lê o `.claude.json` da HOME.
+        let home = key.canonical_home.to_string_lossy();
+        let config_file = match self.env.default_config_dir.parent() {
+            Some(user_home) if self.env.windows && exports_config_dir(&self.env, Some(&home)).is_none() => user_home.join(".claude.json"),
+            _ => key.canonical_home.join(".claude.json"),
+        };
+        let folder = trusted_folder(&config_file).ok_or("window_no_trusted_folder")?;
         self.start(key, operation, Some(folder), "claude", self.browser.as_deref()).await
     }
 
@@ -232,8 +240,14 @@ impl ClaudeWindows {
     pub async fn read(&self, key: &AccountKey, operation: &str) -> Result<Option<String>, &'static str> {
         let table = self.table.lock().await;
         Self::require(&table, key, operation)?;
-        // Tela que não se lê é "ainda sem link", como o passo sempre tratou.
-        Ok(self.screen(&format!("{PREFIX}{operation}")).await.ok().and_then(|screen| oauth_url(&screen)))
+        let name = format!("{PREFIX}{operation}");
+        match self.screen(&name).await {
+            Ok(screen) => Ok(oauth_url(&screen)),
+            // Janela que sumiu não terá link: o passo fecha a tentativa e solta a conta.
+            Err(_) if self.run(&["has-session", "-t", &format!("={name}")]).await.code == Some(1) => Err("window_gone"),
+            // Tela que não se lê com a janela de pé é "ainda sem link".
+            Err(_) => Ok(None),
+        }
     }
 
     /// O código entra por stdin num buffer nomeado, nunca no argv; o buffer sai mesmo na falha.
@@ -244,7 +258,12 @@ impl ClaudeWindows {
         let name = format!("{PREFIX}{operation}");
         if !self.screen(&name).await?.to_lowercase().contains(PROMPT) { return Err("window_cli_not_waiting"); }
         let buffer = format!("hangar-login-{}", crate::mods::state::random_hex(16));
-        let loaded = self.mux.run(Vec::new(), ["load-buffer", "-b", &buffer, "-"].map(str::to_owned).into(), code.as_bytes().to_vec()).await;
+        // O buffer do psmux é da sessão: sem `-t` ele iria para a última criada. O tmux recusa o `-t`.
+        let of_session = |verb: &str, tail: &[&str]| -> Vec<String> {
+            let session: &[&str] = if self.env.windows { &["-t", &name] } else { &[] };
+            std::iter::once(verb).chain(session.iter().copied()).chain(tail.iter().copied()).map(str::to_owned).collect()
+        };
+        let loaded = self.mux.run(Vec::new(), of_session("load-buffer", &["-b", &buffer, "-"]), code.as_bytes().to_vec()).await;
         let result = if loaded.code != Some(0) {
             Err("window_buffer_failed")
         } else if self.run(&["paste-buffer", "-t", &Self::pane(&name), "-b", &buffer, "-d"]).await.code != Some(0) || !self.enter(&name).await {
@@ -252,7 +271,7 @@ impl ClaudeWindows {
         } else {
             Ok(())
         };
-        let _ = self.run(&["delete-buffer", "-b", &buffer]).await;
+        let _ = self.mux.run(Vec::new(), of_session("delete-buffer", &["-b", &buffer]), Vec::new()).await;
         result
     }
 
@@ -271,8 +290,7 @@ impl ClaudeWindows {
     /// Só a releitura prova: o psmux responde 0 ao `kill-session` com a sessão viva. No psmux o `=`
     /// não vale no `kill-session` e o nome cru já é exato.
     async fn kill(&self, name: &str) -> Result<(), &'static str> {
-        let target = if self.env.windows { name.to_owned() } else { format!("={name}") };
-        let _ = self.run(&["kill-session", "-t", &target]).await;
+        let _ = self.run(&["kill-session", "-t", &crate::session_open::terminal::target(self.env.windows, name)]).await;
         match self.run(&["has-session", "-t", &format!("={name}")]).await.code {
             Some(0) => Err("window_still_open"),
             Some(1) => Ok(()),

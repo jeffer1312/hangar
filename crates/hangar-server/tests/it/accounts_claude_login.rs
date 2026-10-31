@@ -4,21 +4,6 @@ use hangar_server::{auth::TrustedHosts, config::Config, routes::AppState};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
-/// Janela do processo de prova: a referência Python guarda as janelas falsas e a classificação do código.
-struct ContractWindows { client: reqwest::Client, url: String }
-impl WindowBackend for ContractWindows {
-    fn call<'a>(&'a self, key: &'a AccountKey, operation: &'a str, action: &'a str, code: Option<&'a str>)
-        -> BoxFuture<'a, Result<Value, &'static str>> {
-        Box::pin(async move {
-            let body = json!({"key": key, "operation": operation, "action": action, "code": code});
-            let response = self.client.post(&self.url).json(&body).send().await.map_err(|_| "contract_window_unreachable")?;
-            if !response.status().is_success() { return Err("contract_window_refused"); }
-            response.json().await.map_err(|_| "contract_window_unreadable")
-        })
-    }
-    fn sweep(&self) -> BoxFuture<'_, ()> { Box::pin(async {}) }
-}
-
 /// Janela falsa: registra a ação, marcada quando ler, colar ou fechar não usam a conta e a operação
 /// abertas (roda em tarefa solta, onde um `assert` só travaria o teste); `refuse_open` recusa a abertura.
 struct Recorder {
@@ -64,13 +49,63 @@ fn claude_login_routes_are_owned() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn login_routes_reach_the_window_with_the_decoded_label() {
+    use hangar_server::accounts::{AccountService, Provider, environment::AccountEnvironment};
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().to_string_lossy().into_owned();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let mut state = AppState::new(Config {
+        listen: addr,
+        upstream: "127.0.0.1:9".parse().unwrap(),
+        internal_secret: "contract-internal".into(),
+        auth_token: "contract-only".into(),
+        log_path: None,
+        trusted: TrustedHosts::parse("127.0.0.1"),
+    });
+    state.accounts = AccountService::new(AccountEnvironment::from_map(
+        [("HOME".into(), home.clone()), ("USERPROFILE".into(), home), ("PATH".into(), String::new())].into(),
+    ));
+    state.accounts.create(Provider::Claude, "work", |_| Ok(())).unwrap();
+    let (client, mut observed) = recorder(Default::default());
+    state.accounts.claude_windows = client;
+    let server = tokio::spawn(hangar_server::serve_until_with_state(listener, state, std::future::pending::<()>()));
+    let http = reqwest::Client::builder().no_proxy().build().unwrap();
+    // `%77` é o `w`: o rótulo só acha a conta depois de decodificado.
+    let url = format!("http://{addr}/api/conta-estado/%77ork/login");
+    let post = |path: String| http.post(path).bearer_auth("contract-only");
+
+    let opened = post(url.clone()).send().await.unwrap();
+    assert_eq!(opened.status(), 200);
+    assert_eq!(opened.json::<Value>().await.unwrap(), json!({"ok":true}));
+    assert_eq!(observed.recv().await.as_deref(), Some("open"));
+
+    let step = http.get(format!("{url}/passo")).bearer_auth("contract-only").send().await.unwrap();
+    assert_eq!(step.json::<Value>().await.unwrap(), json!({"etapa":"aguardando","url":null,"email":null,"plano":null}));
+    assert_eq!(observed.recv().await.as_deref(), Some("read"));
+
+    // Sem a CLI no `PATH` a identidade não se lê: a confirmação recusa e fecha a tentativa.
+    let confirmed = post(format!("{url}/codigo")).json(&json!({"codigo":"synthetic-code"})).send().await.unwrap();
+    assert_eq!(confirmed.status(), 409);
+    assert_eq!(observed.recv().await.as_deref(), Some("code"));
+    assert_eq!(observed.recv().await.as_deref(), Some("close"));
+
+    assert_eq!(post(url.clone()).send().await.unwrap().status(), 200);
+    assert_eq!(observed.recv().await.as_deref(), Some("open"));
+    let cancelled = post(format!("{url}/cancelar")).send().await.unwrap();
+    assert_eq!(cancelled.json::<Value>().await.unwrap(), json!({"ok":true}));
+    assert_eq!(observed.recv().await.as_deref(), Some("close"));
+    server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn http_probe_process() {
     let Ok(upstream) = std::env::var("ACCOUNT_HTTP_UPSTREAM") else {
         return;
     };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let mut state = AppState::new(Config {
+    let state = AppState::new(Config {
         listen: addr,
         upstream: upstream.parse().unwrap(),
         internal_secret: "contract-internal".into(),
@@ -78,10 +113,6 @@ async fn http_probe_process() {
         log_path: None,
         trusted: TrustedHosts::parse("127.0.0.1"),
     });
-    state.accounts.claude_windows = WindowClient::with(Arc::new(ContractWindows {
-        client: reqwest::Client::builder().no_proxy().build().unwrap(),
-        url: format!("http://{upstream}/__contract__/window"),
-    }));
     println!("ACCOUNT_HTTP:{addr}");
     use std::io::Write;
     std::io::stdout().flush().unwrap();
