@@ -9,6 +9,7 @@ import { OFFLINE_NOTICE_MS, type AggSession, type GroupBy, type Server, type Ses
 const calls = vi.hoisted(() => ({
   alert: vi.fn(),
   deleteSession: vi.fn(),
+  hideSession: vi.fn(),
   error: vi.fn(),
   ok: vi.fn(),
   push: vi.fn(),
@@ -27,6 +28,7 @@ const calls = vi.hoisted(() => ({
 vi.mock('@hangar/core', async (original) => ({
   ...await original<typeof import('@hangar/core')>(),
   deleteSession: calls.deleteSession,
+  hideSession: calls.hideSession,
   rotaDecidida: () => true,
   probeServerResponse: async (server: Server) => ({ ok: true, status: 200,
     json: async () => calls.sessions.map((s) => ({ ...s,
@@ -93,8 +95,12 @@ vi.mock('../../paraglide/messages', () => ({ ...Object.fromEntries((
   'lista_carregando lista_vazia_filtro lista_nenhuma_ativa comum_cancelar sessao_excluir sessao_excluir_curto servidor_nao_existe ' +
   'comum_carregando lista_nenhum_servidor lista_pareie_qr native_sidebar_awaiting home_sessions_awaiting home_sessions_working home_sessions_ready home_machines_offline sessao_recolher ' +
   'sessao_renomear sessao_git convite_parar orq_row_badge native_par_convidar native_par_menu sessao_worktree_abrir ' +
-  'session_hide_from_list session_show_in_list session_hide_waiting'
+  'session_hide_from_list session_show_in_list session_hide_waiting session_hide_group_title session_hide_only_this estado_aguardando'
 ).split(' ').map((key) => [key, () => key])),
+  grupo_selo_maquinas: ({ n }: { n: number }) => `grupo_selo_maquinas:${n}`,
+  par_grupo_titulo: ({ n }: { n: number }) => `par_grupo_titulo:${n}`,
+  session_hide_whole_group: ({ n }: { n: number }) => `session_hide_whole_group:${n}`,
+  session_hide_group_skipped: ({ names }: { names: string }) => `session_hide_group_skipped:${names}`,
   session_hidden_group: ({ n }: { n: number }) => `session_hidden_group:${n}`,
   session_hide_failed: ({ error }: { error: string }) => `session_hide_failed:${error}`,
   session_show_failed: ({ error }: { error: string }) => `session_show_failed:${error}`,
@@ -808,6 +814,55 @@ describe('SessionList', () => {
     expect(container.querySelector('[data-row]')).toBeNull();
     expect(container.textContent).toContain('lista_vazia_filtro');
     expect(container.textContent).not.toContain('lista_nenhuma_ativa');
+  });
+
+  describe('ocultar sessão em grupo', () => {
+    async function mountGroup() {
+      calls.realRow = true;
+      calls.hideSession.mockImplementation(async (_server: Server, name: string) => {
+        if (name === 'beta') throw new Error('boom');
+      });
+      useServers.setState({ servers: [server, { ...server, id: 'srv2', label: 'another-server', baseUrl: 'https://another.test' }] });
+      await mount();
+      const row = useSessions.getState().rows[0];
+      await act(async () => useSessions.setState({ loading: false, rows: [
+        { ...row, name: 'alpha', pair_gid: 'g1', state: 'idle' },
+        { ...row, name: 'beta', pair_gid: 'g1', state: 'idle' },
+        { ...row, name: 'gamma', pair_gid: 'g1', state: 'idle', serverId: 'srv2' },
+        { ...row, name: 'waiting', pair_gid: 'g1', state: 'awaiting_input' },
+        { ...row, name: 'solo', state: 'idle' },
+      ] }));
+    }
+    const hideOf = (name: string) => [...container.querySelectorAll<HTMLButtonElement>('[data-action="hide"]')]
+      .find((b) => b.parentElement!.querySelector(`button[aria-label^="${name},"]`))!;
+    const choice = (text: string) => calls.alert.mock.calls[0][2].find((b: { text: string }) => b.text === text);
+
+    it('fora de grupo oculta direto, sem perguntar', async () => {
+      await mountGroup();
+      await act(async () => hideOf('solo').click());
+      expect(calls.alert).not.toHaveBeenCalled();
+      expect(calls.hideSession).toHaveBeenCalledExactlyOnceWith(server, 'solo');
+    });
+
+    it('pergunta e "só esta" oculta apenas a clicada', async () => {
+      await mountGroup();
+      await act(async () => hideOf('alpha').click());
+      expect(calls.alert.mock.calls[0][0]).toBe('session_hide_group_title');
+      expect(calls.alert.mock.calls[0][2].map((b: { text: string }) => b.text))
+        .toEqual(['comum_cancelar', 'session_hide_only_this', 'session_hide_whole_group:3']);
+      expect(calls.hideSession).not.toHaveBeenCalled();
+      await act(async () => choice('session_hide_only_this').onPress());
+      expect(calls.hideSession).toHaveBeenCalledExactlyOnceWith(server, 'alpha');
+    });
+
+    it('"grupo inteiro" oculta cada uma no próprio servidor e junta as falhas num aviso', async () => {
+      await mountGroup();
+      await act(async () => hideOf('alpha').click());
+      await act(async () => choice('session_hide_whole_group:3').onPress());
+      expect(calls.hideSession.mock.calls.map(([s, name]) => `${(s as Server).id}::${name as string}`))
+        .toEqual(['srv1::alpha', 'srv1::beta', 'srv2::gamma']);
+      expect(calls.error).toHaveBeenCalledExactlyOnceWith('session_hide_group_skipped:beta\nboom');
+    });
   });
 
   it('grupo recolhido não mostra aviso de lista vazia', async () => {

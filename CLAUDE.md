@@ -239,6 +239,12 @@ registrado, fora do caminho de leitura, para não competir com o que vale hoje.
   repasse em `/cdp`): no Windows por CDP dentro do WebView2; no Linux por um Chromium sem janela
   com CDP por pipe, pintado no painel pelo screencast. Os passos `2026-10-02-electron-removido-*`
   tiram o Electron de quem ainda o tem. No macOS, quem já o tinha fica com ele.
+- **Mudança numa lista ou barra de sessões é conferida em todas as outras.** Nativo: barra
+  lateral (cheia e trilho), abas em cima ou embaixo, que não têm barra lateral, com a bandeja
+  "Máquinas e convidados", seletor de sessões e busca. Expo: lista, barra do tablet e seletor. A
+  `SessionList` do PWA entra só para conserto, pela regra acima. Cada uma recebe a mudança ou
+  fica fora com o motivo dito no plano.
+  [Motivo](docs/decisoes/frontend.md#mudança-numa-lista-de-sessões-vale-para-todas-31102026).
 - **A web existente tem duas vistas (820px):** `Sidebar` (desktop legado) e `SessionList`
   (mobile). Nenhuma das duas ganha recurso novo.
   Preserve as duas ao tocar código compartilhado. Lógica da lista vai

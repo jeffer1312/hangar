@@ -225,6 +225,18 @@ pub(super) fn candidates<'a>(origin: Row, mut machines: Vec<String>, sessions: i
     }).collect()
 }
 
+/// "Ocultar o grupo inteiro" (`groupHideTargets` do core): as sessões do mesmo `pair_gid` de todas as máquinas, a própria
+/// primeiro. Ficam de fora a de outra pessoa, a já oculta e a que espera resposta (o servidor tiraria a marca).
+pub(super) fn group_hide_targets(origin: Row, rows: &[Row]) -> Vec<Target> {
+    let me = Target::new(origin.server, &origin.session.name);
+    let Some(gid) = origin.session.pair_gid.as_deref().filter(|g| !g.is_empty()) else { return vec![me] };
+    let waiting = |s: &SessionInfo| s.state == "awaiting_input" || s.pending_questions > 0;
+    let others = rows.iter().filter(|r| r.session.pair_gid.as_deref() == Some(gid) && !(r.server == origin.server && r.session.name == origin.session.name)
+        && !r.invite && r.session.outside.is_none() && !r.session.read_only() && !r.session.hidden_from_list && !waiting(r.session))
+        .map(|r| Target::new(r.server, &r.session.name));
+    std::iter::once(me).chain(others).collect()
+}
+
 pub(super) fn can_pair(origin: Row, target: Row, ids: &HashMap<String, String>) -> Result<(), Refusal> {
     let (o, t) = (origin.session, target.session);
     let same_server = origin.server == target.server;
@@ -670,10 +682,12 @@ impl Hangar {
     }
 
     /// Linha da lista, de qualquer máquina: arrastável, alvo de soltar e, no bloco, recuada com a faixa do grupo (âmbar
-    /// quando espera resposta, como o web). `remote` é a chave da máquina quando ela não é a ativa.
-    pub(super) fn group_row(&self, el: Stateful<Div>, session: &SessionInfo, remote: Option<&str>, radius: f32, cx: &mut Context<Self>) -> Stateful<Div> {
+    /// quando espera resposta, como o web). `remote` é a chave da máquina quando ela não é a ativa; `outside_block`, a linha
+    /// desenhada fora do bloco do par (o grupo "Ocultas"), que não leva a faixa.
+    pub(super) fn group_row(&self, el: Stateful<Div>, session: &SessionInfo, remote: Option<&str>, radius: f32, outside_block: bool,
+        cx: &mut Context<Self>) -> Stateful<Div> {
         let target = Target::new(&remote.map(str::to_owned).unwrap_or_else(|| self.active_key()), &session.name);
-        let member = session.pair_gid.is_some();
+        let member = session.pair_gid.is_some() && !outside_block;
         let lifted = self.dragging(cx) == Some(&target);
         let bar = if session.state == "awaiting_input" { theme::warning() } else { theme::accent() };
         let el = el.when(member, |el| el.ml(px(8.)).child(div().absolute().left_0().top(px(6.)).bottom(px(6.)).w(px(2.)).rounded_full().bg(bar)))
@@ -981,8 +995,8 @@ pub(super) fn fill_group(menu: PopupMenu, hangar: &WeakEntity<Hangar>, origin: &
 mod tests {
     // Sem glob: o `test` do gpui_kit, que o `super::*` traz, esconderia o `#[test]` da linguagem.
     use super::{GlobalGroup, Grant, IdSlot, ListRow, Member, Refusal, Row, SessionInfo, can_leave, can_pair, candidates, cluster, existing_group, full_grants,
-        global_groups, id_slot, identity_settled, memo, pair_header_label, qualified, seal_text, split_code};
-    use crate::api::dto::{PairExternal, PairExternalEntry, PairResult};
+        global_groups, group_hide_targets, id_slot, identity_settled, memo, pair_header_label, qualified, seal_text, split_code};
+    use crate::api::dto::{OutsideMark, PairExternal, PairExternalEntry, PairResult};
     use serde_json::Value;
     use std::{cell::RefCell, collections::HashMap, rc::Rc, time::Instant};
 
@@ -1043,6 +1057,26 @@ mod tests {
             .into_iter().map(|(t, _)| t.name).collect::<Vec<_>>();
         assert_eq!(names(Row { server: "h", session: me, invite: false }), ["b"], "a que está sendo apagada não entra");
         assert!(names(Row { server: "h", session: me, invite: true }).is_empty(), "sessão de servidor de convite não agrupa");
+    }
+
+    /// Os mesmos casos do `groupHideTargets` em `packages/core/src/sessions.test.ts`.
+    #[test]
+    fn hiding_a_group_takes_every_machine_but_skips_foreign_hidden_and_waiting() {
+        let solo = s("solo", None, &[]);
+        let names = |origin: Row, rows: &[Row]| group_hide_targets(origin, rows).into_iter().map(|t| t.id()).collect::<Vec<_>>();
+        assert_eq!(names(Row { server: "pc", session: &solo, invite: false }, &[]), ["pc::solo"], "fora de grupo, só a própria");
+        let me = s("a", Some("g"), &[]);
+        let b = s("b", Some("g"), &[]);
+        let c = s("c", Some("g"), &[]);
+        let other_group = s("x", Some("h"), &[]);
+        let hidden = SessionInfo { hidden_from_list: true, ..s("hid", Some("g"), &[]) };
+        let waiting = SessionInfo { state: "awaiting_input".into(), ..s("wait", Some("g"), &[]) };
+        let asking = SessionInfo { pending_questions: 1, ..s("ask", Some("g"), &[]) };
+        let foreign = SessionInfo { outside: Some(OutsideMark { own: "pc".into(), alias: "ana".into(), owner: "Ana".into() }), ..s("ext", Some("g"), &[]) };
+        let row = |server, session| Row { server, session, invite: false };
+        let rows = [row("pc", &b), row("pc", &me), row("pc", &other_group), row("pc", &hidden), row("pc", &waiting), row("nb", &asking),
+            row("nb", &c), row("nb", &foreign), Row { server: "guest", session: &b, invite: true }];
+        assert_eq!(names(row("pc", &me), &rows), ["pc::a", "pc::b", "nb::c"], "a própria primeiro, depois as do mesmo grupo nas máquinas");
     }
 
     #[test]
