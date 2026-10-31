@@ -103,12 +103,15 @@ fn navigated(current: &str, before: Option<&str>, asked: &str) -> bool {
 pub async fn wait_ready(http: &reqwest::Client, home: &Path, name: &str, since_ms: u64, before: Option<&str>, asked: &str)
     -> Result<String, Unavailable> {
     const LIMIT: Duration = Duration::from_secs(20);
-    let deadline = Instant::now() + LIMIT;
+    // O app aberto retoma um registro órfão a cada 3 s; passado isso, o pid morto não volta sozinho.
+    const DEAD_GRACE: Duration = Duration::from_secs(5);
+    let started = Instant::now();
+    let deadline = started + LIMIT;
     let left = || deadline.saturating_duration_since(Instant::now()).clamp(Duration::from_millis(500), VERB_TIMEOUT);
     let (mut last, mut pause_checked) = (String::new(), false);
     while Instant::now() < deadline {
-        // Sem arquivo (app subindo) ou lido pela metade, a espera segue; pid morto não volta sozinho a tempo.
-        server(home)?;
+        // Sem arquivo (app subindo) ou lido pela metade, a espera segue.
+        if let Err(dead) = server(home) && started.elapsed() >= DEAD_GRACE { return Err(dead); }
         let sc = sidecar(home, name);
         // Pausado pelo usuário o app não navega: dizer na hora em vez de esgotar o prazo.
         if sc.is_some() && !pause_checked {

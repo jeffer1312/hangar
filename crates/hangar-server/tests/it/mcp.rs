@@ -540,7 +540,7 @@ async fn browser_open_with_a_dead_desktop_server_fails_at_once() {
     let result = mcp.call("browser_open", json!({"url": "http://x"})).await;
     let text = first_text(&result);
     assert!(failed(&result) && text.contains(&format!("pid {dead}")) && text.contains("abra o app desktop do Hangar"), "{text}");
-    assert!(started.elapsed() < std::time::Duration::from_secs(5), "esperou {:?}", started.elapsed());
+    assert!(started.elapsed() < std::time::Duration::from_secs(10), "esperou {:?}", started.elapsed());
     let verb = mcp.call("browser", json!({"verbo": "snapshot"})).await;
     assert!(failed(&verb) && first_text(&verb).contains(&format!("pid {dead}")), "{verb}");
 }
