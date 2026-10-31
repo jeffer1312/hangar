@@ -106,6 +106,12 @@ def _preparar_conta_codex(account_id: str, cwd: str, codex_home: Path | None = N
         from app.adapters.codex.sessions import pretrust_cwd
         pretrust_cwd(cwd,home)
         print("hangar-codex-tui: serviço indisponível; reutilizando a conta já preparada",file=sys.stderr)
+        try:
+            parcial = json.loads((home/PREPARED_MARKER).read_text()).get("status") == "partial"
+        except (OSError, ValueError, AttributeError):
+            parcial = False
+        if parcial:
+            print("hangar-codex-tui: a conta foi preparada com pendências; confira a sincronização da conta",file=sys.stderr)
         return {"status":"ready"}
     if result.get("status") not in ("ready","running","partial"):
         result = _api_backend("POST",path)

@@ -304,7 +304,7 @@ impl AccountService {
                         result = failed("account_prepare_state_failed");
                     }
                     // Parcial também fica registrada: o que faltou volta pela sincronização manual.
-                    if matches!(result["status"].as_str(), Some("ready" | "partial")) && Self::persist(&account.home.join(PREPARED_MARKER),&json!({"version":1})).is_err() {
+                    if matches!(result["status"].as_str(), Some("ready" | "partial")) && Self::persist(&account.home.join(PREPARED_MARKER),&json!({"version":1,"status":result["status"]})).is_err() {
                         result = failed("account_prepare_state_failed");
                     }
                     if self
