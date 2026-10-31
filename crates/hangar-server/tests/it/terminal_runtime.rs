@@ -1059,17 +1059,26 @@ async fn terminal_runtime_a_starting_life_runs_a_first_slash_command_once_its_co
     let native=f.target.metadata.config_dir.join("sessions").join(format!("{}.json",f.target.metadata.agent_pid));
     let saved=f.io.native_record.lock().unwrap().take();std::fs::remove_file(&native).unwrap();
     let h=f.start_grace(Duration::from_secs(24*3600));
-    let io=f.io.clone();
-    let opens=tokio::spawn(async move {tokio::time::sleep(Duration::from_millis(300)).await;let before=io.calls.lock().unwrap().len();*io.native_record.lock().unwrap()=saved;io.refresh_record();before});
-    let result=h.command(f.command("primeira","/pr-review-auto 299")).await.unwrap();
-    let before=opens.await.unwrap();
-    assert_eq!(result.disposition,hangar_server::runtime::protocol::Disposition::Accepted,"{result:?}");
-    assert_eq!(typed_at(&f,"/pr-review-auto 299").len(),1);
-    assert!(typed_at(&f,"/pr-review-auto 299").iter().all(|&i|i>=before),"comando digitado antes da conversa abrir");
+    // `join!` sonda na ordem: os dois envios entram na caixa do ator antes do terceiro braço rodar.
+    let (slash,after,before)=tokio::join!(h.command(f.command("primeira","/pr-review-auto 299")),h.command(f.command("depois","oi depois")),async {
+        tokio::task::yield_now().await;
+        let snapshot=tokio::time::timeout(Duration::from_secs(1),h.snapshot()).await;
+        assert!(snapshot.is_ok_and(|s|s.is_ok()),"o ator responde enquanto o comando espera a conversa");
+        assert!(typed_at(&f,"/pr-review-auto 299").is_empty(),"nada digitado antes da conversa abrir");
+        let before=f.io.calls.lock().unwrap().len();*f.io.native_record.lock().unwrap()=saved;f.io.refresh_record();before
+    });
+    let slash=slash.unwrap();
+    assert_eq!(slash.disposition,hangar_server::runtime::protocol::Disposition::Accepted,"{slash:?}");
+    after.unwrap();
+    let typed=typed_at(&f,"/pr-review-auto 299");
+    assert_eq!(typed.len(),1);assert!(typed[0]>=before);
+    f.wait_for("a mensagem de depois sai",||!typed_at(&f,"oi depois").is_empty()).await;
+    assert!(typed_at(&f,"oi depois")[0]>typed[0],"a mensagem enviada depois sai depois do comando");
     // Conversa já provada: se ela some depois, o comando não espera a subida de novo.
     f.io.native_record.lock().unwrap().take();std::fs::remove_file(&native).unwrap();
     let since=std::time::Instant::now();
-    assert_eq!(h.command(f.command("segunda","/help")).await.unwrap().disposition,hangar_server::runtime::protocol::Disposition::Deferred);
+    let refused=h.command(f.command("segunda","/help")).await.unwrap();
+    assert_eq!((refused.disposition,refused.payload["code"].as_str()),(hangar_server::runtime::protocol::Disposition::Deferred,Some("terminal_facts")));
     assert!(since.elapsed()<Duration::from_secs(5),"esperou {:?}",since.elapsed());
     h.stop().await.unwrap();
 }
