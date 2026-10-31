@@ -1065,6 +1065,11 @@ async fn terminal_runtime_a_starting_life_runs_a_first_slash_command_once_its_co
     opens.await.unwrap();
     assert_eq!(result.disposition,hangar_server::runtime::protocol::Disposition::Accepted,"{result:?}");
     assert_eq!(typed_at(&f,"/pr-review-auto 299").len(),1);
+    // Conversa já provada: se ela some depois, o comando não espera a subida de novo.
+    f.io.native_record.lock().unwrap().take();std::fs::remove_file(&native).unwrap();
+    let since=std::time::Instant::now();
+    assert_eq!(h.command(f.command("segunda","/help")).await.unwrap().disposition,hangar_server::runtime::protocol::Disposition::Deferred);
+    assert!(since.elapsed()<Duration::from_secs(5),"esperou {:?}",since.elapsed());
     h.stop().await.unwrap();
 }
 #[tokio::test]
