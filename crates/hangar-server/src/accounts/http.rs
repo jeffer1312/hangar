@@ -694,16 +694,14 @@ async fn claude_public(state: Arc<crate::routes::AppState>, request: Request) ->
             return StatusCode::BAD_REQUEST.into_response();
         };
         let mut code = String::new();
-        let mut target = None;
         if action == "code" || action == "open" {
             let Ok(bytes) = axum::body::to_bytes(request.into_body(), 16384).await else {
                 return StatusCode::PAYLOAD_TOO_LARGE.into_response();
             };
             if action == "open" {
-                let Ok(parsed) = super::login_browser::target_from_body(&bytes) else {
+                let Ok(target) = super::login_browser::target_from_body(&bytes) else {
                     return StatusCode::UNPROCESSABLE_ENTITY.into_response();
                 };
-                target = parsed;
                 return match claude_operation(&state, action, &label, code, target).await {
                     Ok(value) => Json(value).into_response(),
                     Err(err) => error(err),
@@ -720,7 +718,7 @@ async fn claude_public(state: Arc<crate::routes::AppState>, request: Request) ->
             };
             code = value.to_owned();
         }
-        claude_operation(&state, action, &label, code, target).await
+        claude_operation(&state, action, &label, code, None).await
     };
     match result {
         Ok(value) => Json(value).into_response(),

@@ -85,7 +85,8 @@ pub fn detect() -> Option<Arc<dyn Desk>> {
 #[cfg(target_os = "linux")]
 mod hyprland {
     use super::*;
-    use std::process::{Command, Output};
+    use std::io::Write;
+    use std::process::{Command, Output, Stdio};
 
     pub struct HyprDesk {
         env: Vec<(String, String)>,
@@ -160,6 +161,15 @@ mod hyprland {
         output.status.success().then_some(output)
     }
 
+    /// Pela entrada, não pelo argumento: senha na linha de comando fica à vista de todo processo da máquina.
+    pub fn run_with_input(env: &[(String, String)], limit: &str, program: &str, args: &[&str], input: &str) -> bool {
+        let spawned = Command::new("timeout").arg(limit).arg(program).args(args).envs(env.iter().map(|(key, value)| (key, value)))
+            .stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
+        let Ok(mut child) = spawned else { return false };
+        let wrote = child.stdin.take().is_some_and(|mut stdin| stdin.write_all(input.as_bytes()).is_ok());
+        child.wait().is_ok_and(|status| status.success()) && wrote
+    }
+
     impl HyprDesk {
         fn run(&self, program: &str, args: &[&str]) -> Option<Output> {
             run_limited(&self.env, "5", program, args)
@@ -191,21 +201,12 @@ mod hyprland {
         // Janela comum do desktop: flutuando, ela ficaria por cima de tudo e bloquearia quem está na máquina.
         fn present(&self, window: &DeskWindow) {
             self.focus(window);
-            // Na captura por área, a animação de abertura pegaria o que está em volta.
-            if window.capture_id.is_none() {
-                std::thread::sleep(std::time::Duration::from_millis(700));
-            }
         }
 
+        // Só a própria janela: capturar por área mandaria o que estivesse na tela naquele retângulo.
         fn capture(&self, window: &DeskWindow) -> Option<Vec<u8>> {
-            // O grim antigo não conhece `-T`: aí a captura cai para a área da tela.
-            if let Some(out) = window.capture_id.as_deref().and_then(|id| self.run("grim", &["-T", id, "-t", "jpeg", "-q", "75", "-"])) {
-                return Some(out.stdout);
-            }
-            // Por área, outra janela por cima apareceria na transmissão.
-            self.run("hyprctl", &["dispatch", "alterzorder", &format!("top,address:{}", window.id)])?;
-            let area = format!("{},{} {}x{}", window.x, window.y, window.w, window.h);
-            self.run("grim", &["-g", &area, "-t", "jpeg", "-q", "75", "-"]).map(|out| out.stdout)
+            let id = window.capture_id.as_deref()?;
+            self.run("grim", &["-T", id, "-t", "jpeg", "-q", "75", "-"]).map(|out| out.stdout)
         }
 
         fn can_input(&self) -> bool {
@@ -241,7 +242,7 @@ mod hyprland {
                     };
                     self.run("wtype", &["-k", name]).is_some()
                 }
-                DeskInput::Text { text } => self.ensure_focus(window) && self.run("wtype", &["--", text]).is_some(),
+                DeskInput::Text { text } => self.ensure_focus(window) && run_with_input(&self.env, "5", "wtype", &["-"], text),
                 DeskInput::Back => self.ensure_focus(window) && self.run("wtype", &["-M", "alt", "-k", "Left", "-m", "alt"]).is_some(),
             }
         }
@@ -578,5 +579,13 @@ mod tests {
         assert!(hyprland::run_limited(&[], "0.1", "sleep", &["7"]).is_none());
         assert!(started.elapsed() < std::time::Duration::from_secs(5));
         assert!(hyprland::run_limited(&[], "5", "true", &[]).is_some());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn typed_text_goes_through_stdin() {
+        let expect = ["-c", r#"test "$(cat)" = segredo"#];
+        assert!(hyprland::run_with_input(&[], "5", "sh", &expect, "segredo"));
+        assert!(!hyprland::run_with_input(&[], "5", "sh", &expect, "outro"));
     }
 }

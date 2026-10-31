@@ -57,12 +57,12 @@ base_padrao() {
     velho="$(git rev-list --first-parent "$c" --not --remotes)" || erro "não consegui listar os commits de $c"
     velho="${velho##*$'\n'}"
     if [[ -z "$velho" ]]; then echo "$c"; return; fi
-    local antes tronco
-    antes="$(git rev-parse -q --verify "$velho^" 2>/dev/null)" || { git hash-object -t tree /dev/null; return; }
+    local before trunk
+    before="$(git rev-parse -q --verify "$velho^" 2>/dev/null)" || { git hash-object -t tree /dev/null; return; }
     # Com a main já juntada à branch, o que veio dela não é mudança desta branch.
-    tronco="$(git merge-base "$c" origin/main 2>/dev/null)" || tronco=""
-    if [[ -n "$tronco" ]] && git merge-base --is-ancestor "$antes" "$tronco"; then echo "$tronco"; return; fi
-    echo "$antes"
+    trunk="$(git merge-base "$c" origin/main 2>/dev/null)" || trunk=""
+    if [[ -n "$trunk" ]] && git merge-base --is-ancestor "$before" "$trunk"; then echo "$trunk"; return; fi
+    echo "$before"
 }
 
 # Imprime "linux: p1 p2" e "windows: p1" a partir da lista de arquivos no stdin.
@@ -191,9 +191,10 @@ passo_backend() {   # só Linux: no Windows fica o passo_runtime
     (cd backend && HANGAR_SHARED_AUTH_TEST_BIN="$PWD/../crates/target/par-auth/hangar-server" OMP_TEST_BIN="$omp" uv run "${pytest[@]}" --basetemp="/var/tmp/hangar-verificacao-$USER/pytest")
 }
 
-# Numa cópia: outro `cargo` com outros pacotes religa target/debug para a variante dele e o par fixado
-# ali deixa de conferir. cwd = crates/.
-fixar_par_auth() {
+# Em target/debug, que o `hangar-server conta` dos testes usa, e numa cópia: outro `cargo` com outros
+# pacotes religa target/debug para a variante dele e o par fixado ali deixa de conferir. cwd = crates/.
+pin_auth_pair() {
+    python3 ../scripts/pin-auth-pair.py --server target/debug/hangar-server --library target/debug/libhangar_auth.so && \
     mkdir -p target/par-auth && cp -f target/debug/hangar-server target/debug/libhangar_auth.so target/par-auth/ && \
         python3 ../scripts/pin-auth-pair.py --server target/par-auth/hangar-server --library target/par-auth/libhangar_auth.so
 }
@@ -231,8 +232,7 @@ passo_preparo() {
         # Os contratos e as sondas de contas que o pytest executa (ci.yml): as sondas são módulos do
         # executável de testes `it` do hangar-server.
         (cd crates && cargo build --locked -p hangar-server -p hangar-auth && \
-            python3 ../scripts/pin-auth-pair.py --server target/debug/hangar-server --library target/debug/libhangar_auth.so && \
-            fixar_par_auth && \
+            pin_auth_pair && \
             cargo build --locked -p hangar-server --example orq_contract && \
             cargo build --locked -p hangar-workspace --example workspace_contract && \
             cargo test --locked -p hangar-server --no-run --test it) || falhou=1
@@ -240,7 +240,7 @@ passo_preparo() {
     if [[ "$plano" == *" backend_rapido "* ]]; then
         # A prova das duas portas precisa do mesmo executável e biblioteca desta árvore fixa. Sempre:
         # teste ou dependência mudada puxa a suíte inteira, e quem usa o par não dá para listar pelo diff.
-        (cd crates && cargo build --locked -p hangar-server -p hangar-auth && fixar_par_auth) || falhou=1
+        (cd crates && cargo build --locked -p hangar-server -p hangar-auth && pin_auth_pair) || falhou=1
     fi
     for pid in "${pids[@]}"; do wait "$pid" || falhou=1; done
     return $falhou

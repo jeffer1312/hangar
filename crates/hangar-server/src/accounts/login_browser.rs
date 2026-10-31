@@ -369,9 +369,10 @@ impl BrowserChannel for AppChannel {
                 return Ok(self.browser.view(operation).await);
             }
             let path = format!("/api/login-browser/view?operation={operation}");
-            match self.peers.call(machine, reqwest::Method::GET, &path, None).await {
-                Ok(Some(reply)) => Ok(reply),
-                _ => Err(()),
+            // O `call` para em 1 MiB, e o quadro de uma janela grande passa disso.
+            match self.peers.send_secret(false, machine, reqwest::Method::GET, &path, None, VIEW_REPLY_LIMIT).await {
+                Ok((_, reply)) => serde_json::from_slice(&reply).map_err(|_| ()),
+                Err(_) => Err(()),
             }
         })
     }
@@ -420,6 +421,7 @@ impl BrowserChannel for AppChannel {
     }
 }
 
+const VIEW_REPLY_LIMIT: usize = 16 << 20;
 const LISTEN_CAP: std::time::Duration = std::time::Duration::from_secs(600);
 const CLOSE_PAGE: &str = "<!doctype html><meta charset=\"utf-8\"><title>Hangar</title>\
     <p>Pode fechar esta aba. / You can close this tab.</p>";

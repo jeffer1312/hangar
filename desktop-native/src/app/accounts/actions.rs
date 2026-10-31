@@ -82,6 +82,8 @@ impl Drop for LoginView {
 pub(in crate::app) enum ViewReply {
     Frame { image: Arc<RenderImage>, size: (f64, f64), title: String, can_input: bool },
     Notice(&'static str),
+    /// A captura falhou agora: a imagem anterior continua, e a sessão pode ter desconectado.
+    CaptureFailed { can_input: bool },
     Lost,
     /// A lista de janelas não veio neste quadro: a imagem anterior continua valendo.
     Retry,
@@ -340,10 +342,11 @@ impl Hangar {
         let Some(api) = self.api.clone() else { return };
         self.accounts.login_attempt += 1;
         let attempt = self.accounts.login_attempt;
+        self.close_login_view(window, cx);
         let Some(s) = self.accounts.sign_in.as_mut() else { return };
         if let Some(poll) = s.poll.take() { poll.abort(); }
-        (s.attempt, s.starting, s.failed, s.url, s.copied, s.step_failed, s.error, s.done, s.has_code, s.browser, s.view, s.manual) =
-            (attempt, true, false, None, false, false, None, None, false, None, None, false);
+        (s.attempt, s.starting, s.failed, s.url, s.copied, s.step_failed, s.error, s.done, s.has_code, s.browser, s.manual) =
+            (attempt, true, false, None, false, false, None, None, false, None, false);
         s.code.update(cx, |input, cx| input.set_value("", window, cx));
         let (label, target) = (s.label.clone(), s.target.clone());
         let (done, turn) = (self.accounts_send_later(), login_turn(&api, &label));
@@ -420,6 +423,7 @@ impl Hangar {
     }
 
     fn close_sign_in(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_login_view(window, cx);
         self.accounts.sign_in = None;
         self.root_focus.focus(window, cx);
         cx.notify();
@@ -464,12 +468,12 @@ impl Hangar {
         self.accounts.sign_in.as_ref().is_some_and(|s| s.view.is_some())
     }
 
-    fn close_login_view(&mut self, cx: &mut Context<Self>) {
+    fn close_login_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(s) = self.accounts.sign_in.as_mut()
             && let Some(mut view) = s.view.take()
-            && let Some(frame) = view.frame.take()
         {
-            cx.drop_image(frame, None);
+            if let Some(frame) = view.frame.take() { cx.drop_image(frame, None); }
+            self.root_focus.focus(window, cx);
         }
         cx.notify();
     }
@@ -516,10 +520,10 @@ impl Hangar {
         cx.notify();
     }
 
-    fn finish_login(&mut self, email: Option<String>, plan: Option<String>, cx: &mut Context<Self>) {
+    fn finish_login(&mut self, email: Option<String>, plan: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_login_view(window, cx);
         let Some(s) = self.accounts.sign_in.as_mut() else { return };
         if let Some(poll) = s.poll.take() { poll.abort(); }
-        s.view = None;
         (s.open, s.sending, s.failed, s.error, s.step_failed, s.done) = (false, false, false, None, false, Some((email, plan)));
         // A cota nova só vem com a leitura forçada; a falha dela aparece na tela de conectada.
         self.accounts.notice = None;
@@ -659,13 +663,13 @@ impl Hangar {
                         if view.notice_until.is_none_or(|until| until <= std::time::Instant::now()) { view.notice = None; }
                     }
                     ViewReply::Notice(notice) => {
-                        // A janela acabou: o último quadro pareceria clicável. Falha de captura passa sozinha e o mantém.
-                        if notice != "accounts_login_view_capture"
-                            && let Some(old) = view.frame.take()
-                        {
-                            cx.drop_image(old, None);
-                        }
+                        // A janela acabou: o último quadro pareceria clicável.
+                        if let Some(old) = view.frame.take() { cx.drop_image(old, None); }
                         view.notice = Some(notice);
+                    }
+                    ViewReply::CaptureFailed { can_input } => {
+                        view.can_input = can_input;
+                        view.notice = Some("accounts_login_view_capture");
                     }
                     ViewReply::Lost => view.notice = Some("accounts_login_view_lost"),
                     // Uma leitura perdida passa sozinha; seguidas, a pessoa precisa saber que a imagem parou.
@@ -700,7 +704,7 @@ impl Hangar {
                 match result {
                     Ok(step) if step.get("etapa").and_then(Value::as_str) == Some("concluido") => {
                         let field = |key: &str| step.get(key).and_then(Value::as_str).map(str::to_owned);
-                        self.finish_login(field("email"), field("plano"), cx);
+                        self.finish_login(field("email"), field("plano"), window, cx);
                     }
                     Ok(step) => {
                         s.step_failed = false;
@@ -708,11 +712,14 @@ impl Hangar {
                         if let Some(url) = step.get("url").and_then(Value::as_str).filter(|u| u.starts_with("https://") || u.starts_with("http://")) {
                             s.url = Some(url.to_owned());
                         }
+                        // Com erro a transmissão não é desenhada: sem fechar, os quadros seguiriam sendo pedidos.
+                        if s.browser.as_ref().is_some_and(|browser| browser["state"] == "error") { self.close_login_view(window, cx); }
                     }
                     // O servidor desistiu da tentativa: perguntar de novo só mostraria "aguardando".
                     Err(error) if error.status == Some(409) => {
                         if let Some(poll) = s.poll.take() { poll.abort(); }
                         (s.failed, s.error) = (true, Some(Self::failure(&error)));
+                        self.close_login_view(window, cx);
                     }
                     Err(_) => s.step_failed = true,
                 }
@@ -729,7 +736,7 @@ impl Hangar {
                 match result {
                     Ok(value) if value.get("ok").and_then(Value::as_bool) == Some(true) => {
                         let field = |key: &str| value.get(key).and_then(Value::as_str).map(str::to_owned);
-                        self.finish_login(field("email"), field("plano"), cx);
+                        self.finish_login(field("email"), field("plano"), window, cx);
                     }
                     other => {
                         if let Some(poll) = s.poll.take() { poll.abort(); }
@@ -739,6 +746,7 @@ impl Hangar {
                             Err(error) => Self::failure(&error),
                             Ok(_) => tr("accounts_login_not_confirmed"),
                         });
+                        self.close_login_view(window, cx);
                         // A recusa não prova que a conta ficou de fora: a lista relida mostra como o servidor a vê.
                         self.load_accounts(false, cx);
                     }
@@ -849,8 +857,10 @@ impl Hangar {
                     if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) { this.view_input(json!({"t": "text", "text": text})); }
                     return;
                 }
+                // No Windows o AltGr chega como Ctrl+Alt com o caractere pronto: é digitação, não atalho.
+                let alt_gr = keystroke.modifiers.control && keystroke.modifiers.alt && keystroke.key_char.as_ref().is_some_and(|text| !text.is_empty());
                 // Sem atalhos: só digitação e as teclas de navegar.
-                if keystroke.modifiers.control || keystroke.modifiers.alt || keystroke.modifiers.platform { return; }
+                if !alt_gr && (keystroke.modifiers.control || keystroke.modifiers.alt || keystroke.modifiers.platform) { return; }
                 if let Some(key) = view_key(&keystroke.key) {
                     this.view_input(json!({"t": "key", "key": key}));
                 } else if let Some(text) = keystroke.key_char.clone().filter(|text| !text.is_empty()) {
@@ -860,7 +870,7 @@ impl Hangar {
         // Linha de altura fixa: aviso que vem e vai não pode empurrar a imagem onde a pessoa está clicando.
         let status = div().h(px(32.)).flex_shrink_0().flex().items_center().gap(px(8.)).text_size(px(12.)).overflow_hidden();
         let status = if !view.can_input {
-            let text = view.notice.filter(|_| view.frame.is_some()).map(tr)
+            let text = view.notice.filter(|notice| *notice == "accounts_login_view_activate_failed").map(tr)
                 .unwrap_or_else(|| tr("accounts_login_view_no_input").replace("{machine}", machine));
             status.child(div().flex_1().min_w_0().text_color(theme::warning()).child(text))
                 .child(Button::new("accounts-login-view-activate").outline().xsmall().label(tr("accounts_login_view_activate"))
@@ -876,7 +886,7 @@ impl Hangar {
                     .on_click(cx.listener(|this, _, _, _| this.view_input(json!({"t": "back"})))))
                 .child(div().flex_1().min_w_0().truncate().text_size(px(12.)).text_color(theme::muted()).child(view.title.clone()))
                 .child(Button::new("accounts-login-view-close").ghost().xsmall().label(tr("accounts_login_view_close"))
-                    .on_click(cx.listener(|this, _, _, cx| this.close_login_view(cx)))))
+                    .on_click(cx.listener(|this, _, window, cx| this.close_login_view(window, cx)))))
             .child(status)
             .child(page)
     }
@@ -959,7 +969,7 @@ impl Hangar {
             let machine = target["machine"].as_str().unwrap_or_default();
             let address = self.api.as_ref().map(|api| api.server_address()).unwrap_or_default();
             let viewable = target["kind"] == "chrome_profile"
-                && !browser_is_here(machine, s.server_machine.as_deref(), &address, this_computer().as_deref());
+                && !browser_is_here(machine, s.server_machine.as_deref(), &address, this_computer());
             let state = s.browser.as_ref().and_then(|browser| browser["state"].as_str()).unwrap_or("opening");
             if state == "error" {
                 let reason = s.browser.as_ref().and_then(|browser| browser["reason"].as_str());
@@ -1038,9 +1048,13 @@ impl Hangar {
     }
 }
 
-fn this_computer() -> Option<String> {
-    let name = if cfg!(windows) { std::env::var("COMPUTERNAME").ok()? } else { std::fs::read_to_string("/etc/hostname").ok()? };
-    Some(name.trim().to_owned()).filter(|name| !name.is_empty())
+/// Lido uma vez: a tela pergunta a cada quadro, e isso roda na thread da interface.
+fn this_computer() -> Option<&'static str> {
+    static NAME: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    NAME.get_or_init(|| {
+        let name = if cfg!(windows) { std::env::var("COMPUTERNAME").ok()? } else { std::fs::read_to_string("/etc/hostname").ok()? };
+        Some(name.trim().to_owned()).filter(|name| !name.is_empty())
+    }).as_deref()
 }
 
 /// O navegador está na frente da pessoa: transmitir a janela para a própria tela não serve para nada.
@@ -1116,7 +1130,7 @@ fn view_reply(frame: &Value) -> ViewReply {
     let image = frame["d"].as_str()
         .and_then(|data| base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data).ok())
         .and_then(|bytes| crate::media::decode(&bytes, 4096, 4096, None));
-    let Some(image) = image else { return ViewReply::Notice("accounts_login_view_capture") };
+    let Some(image) = image else { return ViewReply::CaptureFailed { can_input: frame["input"].as_bool().unwrap_or(true) } };
     ViewReply::Frame {
         image,
         size: (frame["w"].as_f64().unwrap_or(1.), frame["h"].as_f64().unwrap_or(1.)),
@@ -1147,7 +1161,7 @@ mod tests {
         assert_eq!(notice(json!({"available": false})), "accounts_login_view_unavailable");
         assert_eq!(notice(json!({"available": true, "closed": true})), "accounts_login_view_closed");
         assert_eq!(notice(json!({"available": true, "pending": true})), "accounts_login_view_waiting");
-        assert_eq!(notice(json!({"available": true, "error": "x"})), "accounts_login_view_capture");
+        assert!(matches!(view_reply(&json!({"available": true, "error": "x", "input": false})), ViewReply::CaptureFailed { can_input: false }));
         assert!(matches!(view_reply(&json!({"available": true, "error": "erro_login_machine_unreachable"})), ViewReply::Lost));
     }
 
