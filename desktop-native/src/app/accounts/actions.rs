@@ -712,8 +712,10 @@ impl Hangar {
                     // Com o código em voo é a própria confirmação que a encerra, e a resposta dela decide.
                     Ok(step) if step.get("etapa").and_then(Value::as_str) == Some("idle") && !s.sending => {
                         if let Some(poll) = s.poll.take() { poll.abort(); }
-                        (s.open, s.url, s.browser) = (false, None, None);
+                        (s.failed, s.error) = (true, Some(tr("accounts_login_not_confirmed")));
                         self.close_login_view(window, cx);
+                        // A tentativa pode ter terminado com a conta dentro: a lista relida mostra.
+                        self.load_accounts(false, cx);
                     }
                     Ok(step) => {
                         s.step_failed = false;
