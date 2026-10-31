@@ -645,6 +645,7 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
     const mode = pair ? undefined : timing ?? undefined;
     // O aviso descreve um envio que aconteceu: os caminhos que não chamam o send não o mostram.
     const send = async () => {
+      revealOnSend(serverId, name);
       await (mode ? chat.send(value, revision, mode) : chat.send(value, revision));
       if (notice && !pair) chat.showDeliveryFeedback(notice);
     };
@@ -1343,6 +1344,7 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
     setError('');
     limparUndo();
     cancelarAuto();
+    revealOnSend(origin.serverId, origin.name);
     try {
       await chat.send(value, revision, 'steer');
       setBar(null);

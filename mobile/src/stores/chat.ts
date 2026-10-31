@@ -45,7 +45,6 @@ import { reconcilePending, sameMessage, type PendingMsg } from '../chat/pending'
 import { useServers } from './servers';
 import { readDraft, writeDraft, type ConversationDraft } from './drafts';
 import { sendWithDelivery, type DeliveryFeedback, type QueueSendMode } from '../chat/queueDelivery';
-import { revealOnSend } from '../features/sessions/revealOnSend';
 
 // Store vivo do chat de UMA sessão — porte do núcleo de frontend/src/screens/Chat.svelte
 // para zustand. Histórico janelado (cauda primeiro), merge SSE com dedup por id, preview ao
@@ -1017,7 +1016,6 @@ function criarChatStore(serverId: string, name: string): ChatApi {
       // Destino desta conversa, nunca o servidor ativo: trocar de servidor no meio não desvia o envio.
       const target = useServers.getState().servers.find((s) => s.id === serverId);
       if (!target) throw new Error(m.chat_servidor_removido());
-      revealOnSend(serverId, name);
       const wasUnknown = readDraft(serverId, name)?.submission?.status === 'unknown';
       let delivering = false;
       return submitConversationDraft(serverId, name, trimmed, async () => {

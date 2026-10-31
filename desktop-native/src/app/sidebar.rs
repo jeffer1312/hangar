@@ -1061,7 +1061,7 @@ impl Hangar {
     /// não muda: só a marca de oculta sai.
     pub(super) fn reveal_on_send(&mut self, server: &str, name: &str, window: &mut Window, cx: &mut Context<Self>) {
         use super::grouping::{Row, group_show_targets};
-        let target = Target::new(server, name);
+        let target = Target::new(&servers::norm(server), name);
         let Some(session) = self.target_session(&target).filter(|s| s.hidden_from_list) else { return };
         let machines = self.group_machines();
         let others = if machines.contains(&target.server) {
@@ -1069,9 +1069,9 @@ impl Hangar {
                 .filter(|s| !self.sidebar.is_hidden(key, &s.name)).map(move |s| Row { server: key, session: s, invite: false })).collect();
             group_show_targets(Row { server: &target.server, session, invite: false }, &rows)
         } else { Vec::new() };
-        self.write(target, Write::Show, cx);
+        self.write(target.clone(), Write::Show, cx);
         if others.is_empty() { return; }
-        let names: Vec<String> = others.iter().map(|t| if t.server == server { t.name.clone() }
+        let names: Vec<String> = others.iter().map(|t| if t.server == target.server { t.name.clone() }
             else { format!("{} · {}", t.name, self.machine_label(&t.server, cx)) }).collect();
         let weak = cx.entity().downgrade();
         window.open_dialog(cx, move |dialog, _, _| {
