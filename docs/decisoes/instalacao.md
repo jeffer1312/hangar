@@ -118,7 +118,9 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   termina, sobre o mesmo commit (`branch`/`ref` passados aos jobs: no `workflow_run` o `github.ref_name`
   e o `github.sha` são os da main). O Server macOS publica as entradas dele no `server-latest.json` pelas
   fontes por sistema; o Native macOS acrescenta os arquivos ao `native-latest.json` só se o manifesto
-  ainda é do mesmo commit, e troca a linha dele nas notas. O Package escuta só Server e CI. Outras
+  ainda é do mesmo commit, e troca a linha dele nas notas, no mesmo grupo de concorrência do publish do
+  Native (a release não tem gravação condicional). O topo do `server-latest.json` e a tag ficam no commit
+  mais novo entre as fontes, para o Mac atrasado não voltá-los. O Package escuta só Server e CI. Outras
   branches não testam macOS. Antes, o run inteiro esperava o Mac (cerca de 1 h a 1,5 h contra 20 min do
   Linux) e o Package e as publicações de Linux e Windows ficavam presas nele.
 - **O app nativo segue o canal do servidor desta máquina.** `pre_voo.alvo` fora da main → release

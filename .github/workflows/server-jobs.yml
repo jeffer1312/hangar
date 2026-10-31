@@ -393,6 +393,17 @@ jobs:
                   apis[commit] = int(m.group(1)) if m else 1
               return apis[commit]
 
+          afterwards = {}
+          def comes_after(base, commit):
+              # `compare/A...B` = "ahead": B vem depois de A. 404 = commit sumiu (force-push).
+              if (base, commit) not in afterwards:
+                  r = subprocess.run(["gh", "api", f"repos/{repo}/compare/{base}...{commit}", "--jq", ".status"],
+                                     capture_output=True, text=True)
+                  if r.returncode and "HTTP 404" not in r.stderr:
+                      sys.exit(f"não consegui comparar {base} com {commit}: {r.stderr.strip()}")
+                  afterwards[(base, commit)] = not r.returncode and r.stdout.strip() == "ahead"
+              return afterwards[(base, commit)]
+
           def read():
               d = pathlib.Path("lido")
               shutil.rmtree(d, ignore_errors=True)
@@ -437,7 +448,13 @@ jobs:
                       pass   # outro sistema gravando a mesma semente; a releitura confere
               if seeds:
                   continue
-              merged = {"commit": sha, "files": {}, "platforms": {}}
+              # Os sistemas publicam em runs diferentes (o macOS depois): o topo é o commit mais novo entre as
+              # fontes, para um run atrasado não voltar o manifesto e a tag a uma versão anterior.
+              top = sha
+              for s in sources:
+                  if s["commit"] and s["commit"] != top and comes_after(top, s["commit"]):
+                      top = s["commit"]
+              merged = {"commit": top, "files": {}, "platforms": {}}
               for s in sources:
                   merged["files"].update(s["files"])
                   entry = {"commit": s["commit"]}
@@ -454,11 +471,16 @@ jobs:
               again = read()
               if again is not None and again[1] == raw:
                   print(out.read_text())
+                  pathlib.Path("topo").write_text(top)
                   break
           else:
               sys.exit(f"{LATEST} não estabilizou")
           EOF
-          gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$tag" -f sha="$SHA" -F force=true >/dev/null
+          if [ "$(cat topo)" = "$SHA" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$tag" -f sha="$SHA" -F force=true >/dev/null
+          else
+            echo "::notice::a release já tem commit mais novo ($(cat topo)); a tag $tag fica nele."
+          fi
 
   # O cache de release que a pré-release de branch lê. Só a main grava, e só quando as dependências ou o
   # toolchain mudam (a chave não existe ainda); nos outros pushes o job termina na consulta.
