@@ -186,7 +186,7 @@ pub async fn history(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
 }
 
 /// O histórico inteiro ou as últimas `tail` mensagens com texto.
-fn read_history(st: &AppState, path: &Path, provider: AgentProvider, tail: Option<usize>) -> io::Result<Vec<ChatEvent>> {
+pub(crate) fn read_history(st: &AppState, path: &Path, provider: AgentProvider, tail: Option<usize>) -> io::Result<Vec<ChatEvent>> {
     if provider == AgentProvider::Claude {
         // Nome de fila que não existe: só o transcript, como o `merged_history("__archive__")`.
         let req = HistoryRequest { provider: Provider::Claude, jsonl: path.to_owned(),

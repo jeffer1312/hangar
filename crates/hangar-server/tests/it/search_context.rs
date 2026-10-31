@@ -51,6 +51,8 @@ impl Scene {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join("home");
         copy_tree(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/search/home"), &home);
+        let kimi = home.join(".kimi-code/session_index.jsonl");
+        std::fs::write(&kimi, std::fs::read_to_string(&kimi).unwrap().replace("{HOME}", &home.to_string_lossy())).unwrap();
         let (python, upstream) = spawn_fake().await;
         let cfg = Config {
             listen: "127.0.0.1:0".parse().unwrap(),
@@ -183,11 +185,16 @@ async fn search_context_searches_every_account_and_the_first_with_the_file_wins(
 }
 
 #[tokio::test]
-async fn search_context_reads_only_claude_and_ignores_a_provider_parameter() {
-    // CTX-08
+async fn search_context_reads_claude_without_provider_and_the_named_agent_with_it() {
+    // CTX-08 com a R5 (N2): sem `provider` é Claude; com ele, o agente pedido — o Python ignorava o
+    // parâmetro e lia a conversa Claude.
     let scene = Scene::new(None).await;
-    let (status, body) = scene.get(&format!("project={NORMAL_P}&session_id={NORMAL_S}&event_id={MID}&around=0&provider=codex")).await;
+    let (status, body) = scene.get(&format!("project={NORMAL_P}&session_id={NORMAL_S}&event_id={MID}&around=0")).await;
     assert_eq!((status, ids(&body)), (StatusCode::OK, vec![MID.to_owned()]));
+    let (status, body) = scene.get(&format!("project={NORMAL_P}&session_id={NORMAL_S}&event_id={MID}&around=0&provider=claude")).await;
+    assert_eq!((status, ids(&body)), (StatusCode::OK, vec![MID.to_owned()]));
+    let (status, body) = scene.get(&format!("project={NORMAL_P}&session_id={NORMAL_S}&event_id={MID}&around=0&provider=codex")).await;
+    assert_eq!((status, body["detail"]["code"].as_str()), (StatusCode::NOT_FOUND, Some("erro_transcript_nao_encontrado")), "{body}");
 }
 
 #[tokio::test]
@@ -289,4 +296,45 @@ async fn search_context_is_answered_by_rust_only_for_the_owner() {
     scene.ctx(NORMAL_P, NORMAL_S, MID, None).await;
     assert_eq!(scene.python.hits_to("/api/search/context"), 1);
     assert!(hangar_server::migration_status::rust_route(&axum::http::Method::GET, "/api/search/context"));
+}
+
+#[tokio::test]
+async fn search_context_opens_agent_conversations_at_the_event() {
+    // R5: `provider` (e `codex_account` no Codex) lê pelo parser do agente, o mesmo do histórico do
+    // Arquivo: o trecho é o pedaço dele em volta do evento achado.
+    let scene = Scene::new(None).await;
+    let ctx = |project: &str, sid: &str, event: &str, around: u8, extra: &str| {
+        format!("project={project}&session_id={sid}&event_id={event}&around={around}{extra}")
+    };
+    let pi = ctx("-home-jefferson-Projetos-hangar--worktrees-contas-modelos", "d337d6b8-0b3c-4bbe-8034-939d7c48f246", "793d327e:1", 1, "&provider=pi");
+    let (status, body) = scene.get(&pi).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(ids(&body), ["de39cff4", "793d327e:1", "a7fdff5e"]);
+    let omp = ctx("-tmp-claude-1000--home-jefferson-Projetos-hangar-ac1a7b0f-d0a7-4e66-8f05-f53ea5d4b4da-scratchpad-omp-teste",
+        "01a06932-79ae-77e9-b95a-286b6e2e9288", "41c65634", 3, "&provider=omp");
+    assert_eq!(ids(&scene.get(&omp).await.1), ["41c65634", "a8e46a50"]);
+    let kimi = ctx("-home-jefferson-Projetos-hangar", "session_ab697d05-66da-4b2a-8e80-3d769951e752", "24f7ca2b-aa6e-43e0-baf7-bb65bf16cd2e", 1, "&provider=kimi");
+    assert_eq!(ids(&scene.get(&kimi).await.1),
+        ["msg_01KZRN34VM46DB40TA297VD8DK", "24f7ca2b-aa6e-43e0-baf7-bb65bf16cd2e", "msg_01KZRN3DFF88A2YVMSSNBTXY5Y"]);
+    // Codex da conta `b`: as mensagens do histórico do Arquivo da mesma conversa.
+    let (project, sid) = ("-tmp-hangar-native-task4-fixture-jf", "01a0d000-f6ac-74e3-b19b-98d42af1a712");
+    let history = client().get(format!("http://{}/api/archive/{project}/{sid}/history?provider=codex&codex_account=b", scene.address))
+        .bearer_auth(OWNER).send().await.unwrap().json::<Value>().await.unwrap();
+    let msgs: Vec<String> = history.as_array().unwrap().iter()
+        .filter(|e| ["user_msg", "assistant_msg"].contains(&e["kind"].as_str().unwrap()) && e["text"].as_str().is_some_and(|t| !t.is_empty()))
+        .map(|e| e["id"].as_str().unwrap().to_owned()).collect();
+    assert!(msgs.len() >= 3, "{history}");
+    let (status, body) = scene.get(&ctx(project, sid, &msgs[1], 1, "&provider=codex&codex_account=b")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(ids(&body), msgs[..3]);
+    assert_eq!(ids(&scene.get(&ctx(project, sid, &msgs[1], 1, "&provider=codex")).await.1), msgs[..3], "sem conta, a dona");
+    // Conta errada e agente desconhecido: os códigos do Arquivo.
+    let (status, body) = scene.get(&ctx(project, sid, &msgs[1], 1, "&provider=codex&codex_account=default")).await;
+    assert_eq!((status, body["detail"]["code"].as_str()), (StatusCode::CONFLICT, Some("codex_account_archive_mismatch")));
+    let (status, body) = scene.get(&ctx(project, sid, &msgs[1], 1, "&provider=gemini")).await;
+    assert_eq!((status, body), (StatusCode::BAD_REQUEST, detail("erro_provider_invalido", "provider invalido")));
+    // Sem `provider` continua Claude (CTX-08): a conversa Pi não é achada como Claude.
+    let (status, body) = scene.get(&pi.replace("&provider=pi", "")).await;
+    assert_eq!((status, body["detail"]["code"].as_str()), (StatusCode::NOT_FOUND, Some("erro_transcript_nao_encontrado")));
+    assert_eq!(scene.python.hits_to("/api/search/context"), 0);
 }

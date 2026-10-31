@@ -875,3 +875,140 @@ proptest! {
         prop_assert!(msgs.len() <= 1);
     }
 }
+
+// R5: conversas de Codex (duas contas), Pi, omp e Kimi.
+
+/// Chave de mentira que casa o provedor do Pi (`openai-codex`), o do omp (`opencode-go`) e o modelo
+/// padrão do Kimi com a mesma conta, como as credenciais reais fazem.
+const KIMI_CONFIG: &str = "default_model=\"apikey/k3\"\n[providers.apikey]\ntype=\"kimi\"\napi_key=\"sk-teste\"\nbase_url=\"https://example.invalid\"\n";
+const PI_AUTH: &str = r#"{"openai-codex":{"key":"sk-teste"},"opencode-go":{"key":"sk-teste"}}"#;
+const CODEX_A: &str = ".codex/sessions/2026/08/30/rollout-2026-08-30T20-47-12-01a05511-e980-71b3-93a9-befda5704b20.jsonl";
+const CODEX_B: &str = ".codex-b/sessions/2026/09/23/rollout-2026-09-23T17-41-59-01a0d000-f6ac-74e3-b19b-98d42af1a712.jsonl";
+const PI: &str = ".pi/agent/sessions/--home-jefferson-Projetos-hangar-.worktrees-contas-modelos--/2026-08-11T09-37-57-248Z_d337d6b8-0b3c-4bbe-8034-939d7c48f246.jsonl";
+
+impl Env {
+    /// As fixtures com os outros agentes ligados ao índice: o `{HOME}` do índice do Kimi trocado e as
+    /// credenciais de mentira no lugar.
+    fn agents(timing: Timing) -> Self {
+        let env = Self::fixtures(timing);
+        let home = env.home();
+        let kimi_index = home.join(".kimi-code/session_index.jsonl");
+        let text = fs::read_to_string(&kimi_index).unwrap().replace("{HOME}", &home.to_string_lossy());
+        fs::write(&kimi_index, text).unwrap();
+        fs::write(home.join(".kimi-code/config.toml"), KIMI_CONFIG).unwrap();
+        fs::write(home.join(".pi/agent/auth.json"), PI_AUTH).unwrap();
+        let path = |p: PathBuf| p.to_string_lossy().into_owned();
+        let accounts = crate::accounts::environment::AccountEnvironment::from_map(std::collections::BTreeMap::from([
+            ("HOME".to_owned(), path(home.clone())), ("USERPROFILE".to_owned(), path(home.clone())),
+            ("CLAUDE_CONFIG_DIR".to_owned(), path(home.join(".claude-a"))), ("PATH".to_owned(), String::new()),
+        ]));
+        let index = env.index.clone().with_agents(accounts);
+        Self { index, ..env }
+    }
+
+    /// Os ids que o histórico do Arquivo devolve para o arquivo (mensagens com texto, em ordem).
+    fn history_ids(&self, rel: &str, provider: crate::session_open::AgentProvider) -> Vec<String> {
+        fs::read(self.home().join(rel)).unwrap().split(|b| *b == b'\n')
+            .flat_map(|line| crate::archive_history::agent_line(provider, line))
+            .filter(crate::archive_history::is_message).map(|e| e.id).collect()
+    }
+
+    fn indexed_ids(&self, rel: &str) -> Vec<String> {
+        let path = self.home().join(rel).to_string_lossy().into_owned();
+        self.db().prepare("SELECT m.event_id FROM msg m JOIN files f ON f.id = m.file_id WHERE f.path = ? ORDER BY m.id").unwrap()
+            .query_map([path], |r| r.get(0)).unwrap().map(Result::unwrap).collect()
+    }
+}
+
+#[test]
+fn agents_enter_the_index_with_provider_and_account() {
+    // R5: rollouts Codex das duas contas, Pi, omp e o wire do Kimi entram com agente, conta, conta Codex
+    // dona e a pasta do Claude do cwd; `config_dir` nulo.
+    let env = Env::agents(quiet());
+    env.index.update().unwrap();
+    let home = env.home().to_string_lossy().into_owned();
+    let rows: Vec<Value> = env.db().prepare("SELECT path, provider, project, session_id, cwd, config_dir, account, codex_account \
+            FROM files WHERE provider <> 'claude' ORDER BY path").unwrap()
+        .query_map([], |r| Ok(json!({"path": r.get::<_, String>(0)?.replace(&home, "{HOME}"), "provider": r.get::<_, String>(1)?,
+            "project": r.get::<_, String>(2)?, "session_id": r.get::<_, String>(3)?, "cwd": r.get::<_, Option<String>>(4)?,
+            "config_dir": r.get::<_, Option<String>>(5)?, "account": r.get::<_, Option<String>>(6)?.map(|a| a.replace(&home, "{HOME}")),
+            "codex_account": r.get::<_, Option<String>>(7)?}))).unwrap().map(Result::unwrap).collect();
+    // Ordem de bytes do caminho: `.codex-b/` vem antes de `.codex/`.
+    assert_eq!(Value::Array(rows), json!([
+        {"path": format!("{{HOME}}/{CODEX_B}"), "provider": "codex", "project": "-tmp-hangar-native-task4-fixture-jf",
+         "session_id": "01a0d000-f6ac-74e3-b19b-98d42af1a712", "cwd": "/tmp/hangar-native-task4-fixture-jf", "config_dir": null,
+         "account": "codex:{HOME}/.codex-b", "codex_account": "b"},
+        {"path": format!("{{HOME}}/{CODEX_A}"), "provider": "codex", "project": "-home-jefferson-Projetos-hangar",
+         "session_id": "01a05511-e980-71b3-93a9-befda5704b20", "cwd": "/home/jefferson/Projetos/hangar", "config_dir": null,
+         "account": "codex:{HOME}/.codex", "codex_account": "default"},
+        {"path": "{HOME}/.kimi-code/sessions/wd_hangar_5112ff7a84e0/session_ab697d05-66da-4b2a-8e80-3d769951e752/agents/main/wire.jsonl",
+         "provider": "kimi", "project": "-home-jefferson-Projetos-hangar", "session_id": "session_ab697d05-66da-4b2a-8e80-3d769951e752",
+         "cwd": "/home/jefferson/Projetos/hangar", "config_dir": null, "account": "kimi:apikey", "codex_account": null},
+        {"path": format!("{{HOME}}/{}", MTIMES[2]), "provider": "omp",
+         "project": "-tmp-claude-1000--home-jefferson-Projetos-hangar-ac1a7b0f-d0a7-4e66-8f05-f53ea5d4b4da-scratchpad-omp-teste",
+         "session_id": "01a06932-79ae-77e9-b95a-286b6e2e9288",
+         "cwd": "/tmp/claude-1000/-home-jefferson-Projetos-hangar/ac1a7b0f-d0a7-4e66-8f05-f53ea5d4b4da/scratchpad/omp-teste",
+         "config_dir": null, "account": "kimi:apikey", "codex_account": null},
+        {"path": format!("{{HOME}}/{PI}"), "provider": "pi", "project": "-home-jefferson-Projetos-hangar--worktrees-contas-modelos",
+         "session_id": "d337d6b8-0b3c-4bbe-8034-939d7c48f246", "cwd": "/home/jefferson/Projetos/hangar/.worktrees/contas-modelos",
+         "config_dir": null, "account": "kimi:apikey", "codex_account": null},
+    ]));
+    // As do Claude continuam como estavam.
+    assert_eq!(env.count("SELECT count(*) FROM files WHERE provider = 'claude'"), 8);
+}
+
+#[test]
+fn agent_ids_are_the_archive_history_ids() {
+    // R5: cada trecho abre no ponto — o id indexado é o que o histórico do Arquivo devolve.
+    use crate::session_open::AgentProvider;
+    let env = Env::agents(quiet());
+    env.index.update().unwrap();
+    assert_eq!(env.ids("ancora"), ["de39cff4", "793d327e:1"]);
+    assert_eq!(env.ids("responda apenas"), ["41c65634"]);
+    assert_eq!(env.ids("posso ajudar"), ["24f7ca2b-aa6e-43e0-baf7-bb65bf16cd2e", "4ec91fcf-a1c1-432d-bf11-b89b275ab393"]);
+    for (rel, provider) in [(CODEX_A, AgentProvider::Codex), (CODEX_B, AgentProvider::Codex), (PI, AgentProvider::Pi)] {
+        let want = env.history_ids(rel, provider);
+        assert!(!want.is_empty(), "{rel}");
+        assert_eq!(env.indexed_ids(rel), want, "{rel}");
+    }
+    let rows = env.index.search(&terms("continued"), 50).unwrap().unwrap();
+    assert_eq!(rows.iter().map(|r| (r.provider.as_str(), r.account.ends_with("/.codex-b"), r.codex_account.as_deref())).collect::<Vec<_>>(),
+        [("codex", true, Some("b")), ("codex", true, Some("b"))]);
+}
+
+#[test]
+fn agent_appended_line_enters_on_the_next_pass() {
+    // R5: o rollout Codex lido do offset, como o transcript do Claude.
+    let env = Env::agents(quiet());
+    env.index.update().unwrap();
+    let before = env.indexed_ids(CODEX_B).len();
+    append(&env.home().join(CODEX_B), format!("{}\n", json!({"timestamp": "2026-09-23T21:05:00.000Z", "type": "response_item",
+        "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "zebracodex nova"}]}})).as_bytes());
+    env.index.update().unwrap();
+    assert_eq!(env.indexed_ids(CODEX_B).len(), before + 1);
+    assert_eq!(env.indexed_ids(CODEX_B), env.history_ids(CODEX_B, crate::session_open::AgentProvider::Codex));
+    assert_eq!(env.index.search(&terms("zebracodex"), 50).unwrap().unwrap().len(), 1);
+}
+
+#[test]
+fn producer_follows_agent_roots_and_codex_accounts() {
+    // R5: as raízes dos agentes entram no observador; conta Codex nova entra pela leitura do catálogo.
+    let env = Env::agents(Timing { first_pass: Duration::ZERO, ..quiet() });
+    let _producer = env.index.start().unwrap();
+    wait_for("1ª passada", || env.index.ready());
+    wait_for("observador de pé", || env.watching());
+    let pi_line = json!({"type": "message", "id": "zz000001", "parentId": "ee91a905", "timestamp": "2026-08-11T09:50:00.000Z",
+        "message": {"role": "user", "content": [{"type": "text", "text": "zebrapi chegou"}], "timestamp": 1786441800000_i64}});
+    append(&env.home().join(PI), format!("{pi_line}\n").as_bytes());
+    wait_for("linha do Pi indexada sem passada manual", || env.ids("zebrapi") == ["zz000001"]);
+    let home = env.home().join(".codex-c");
+    fs::create_dir_all(home.join("sessions/2026/10/31")).unwrap();
+    let meta = json!({"timestamp": "2026-10-31T10:00:00.000Z", "type": "session_meta", "payload": {"id": "01a0f000-0000-7000-8000-000000000001", "cwd": "/tmp/conta-c"}});
+    let user = json!({"timestamp": "2026-10-31T10:00:01.000Z", "type": "response_item",
+        "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "zebracontac"}]}});
+    fs::write(home.join("sessions/2026/10/31/rollout-2026-10-31T10-00-00-01a0f000-0000-7000-8000-000000000001.jsonl"), format!("{meta}\n{user}\n")).unwrap();
+    fs::write(home.join(".hangar-codex-conta"), r#"{"version": 1, "id": "c"}"#).unwrap();
+    wait_for("conta Codex nova indexada", || env.index.search(&terms("zebracontac"), 50).unwrap().unwrap()
+        .iter().any(|r| r.codex_account.as_deref() == Some("c")));
+    assert!(env.reports.lock().unwrap().is_empty());
+}

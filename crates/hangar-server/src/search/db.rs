@@ -8,9 +8,9 @@ use rusqlite::{Connection, ErrorCode};
 
 use super::IndexError;
 
-pub(super) const SCHEMA_VERSION: i64 = 2;
+pub(super) const SCHEMA_VERSION: i64 = 3;
 
-// O `_SCHEMA` do Python mais conta, agente e o que o Arquivo lê do arquivo.
+// O `_SCHEMA` do Python mais conta, agente, conta Codex e o que o Arquivo lê do arquivo.
 const SCHEMA: &str = "
 CREATE TABLE files(
     id INTEGER PRIMARY KEY,
@@ -33,7 +33,8 @@ CREATE TABLE files(
     last_text TEXT NOT NULL DEFAULT '',
     rewrite TEXT,
     head_len INTEGER NOT NULL DEFAULT 0,
-    head_hash TEXT
+    head_hash TEXT,
+    codex_account TEXT
 );
 CREATE TABLE msg(
     id INTEGER PRIMARY KEY,

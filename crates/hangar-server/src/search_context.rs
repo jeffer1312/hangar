@@ -1,6 +1,7 @@
 //! `GET /api/search/context`: a mensagem achada pela busca e as vizinhas dela, só as do usuário e as do
 //! assistente com texto. Port de `search_context` (api.py) com `archive_jsonl` e
-//! `merged_history("__archive__", …)`. Só o dono; o resto segue ao Python, que recusa.
+//! `merged_history("__archive__", …)`; `provider` (e `codex_account`) leem Codex, Pi, omp e Kimi pela
+//! leitura do histórico do Arquivo. Só o dono; o resto segue ao Python, que recusa.
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, LazyLock};
@@ -8,7 +9,7 @@ use std::sync::{Arc, LazyLock};
 use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{Method, StatusCode};
 use axum::response::Response;
-use hangar_api::chat::{ChatEvent, ChatKind};
+use hangar_api::chat::ChatEvent;
 use regex::Regex;
 use serde_json::{Value, json};
 
@@ -16,14 +17,13 @@ use crate::routes::{AppState, cors, gate, pass, route_failed};
 use crate::session_open::AgentProvider;
 use crate::session_open::archive::{Where, locate};
 use crate::session_write::{detail_body, json_response};
-use crate::transcript::{HistoryRequest, Provider, TAIL_WINDOW, merged_history};
 
 const DEFAULT_AROUND: usize = 3;
 const MAX_AROUND: f64 = 10.0;
 // O `int` do FastAPI aceita espaço em volta, `_` entre dígitos e `3.0`.
 pub(crate) static PY_INT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\A[+-]?[0-9](?:_?[0-9])*(?:\.0*)?\z").unwrap());
 
-struct Params { project: String, session_id: String, event_id: String, around: usize }
+struct Params { project: String, session_id: String, event_id: String, around: usize, provider: Option<String>, codex_account: Option<String> }
 
 pub async fn route(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let (forward, owner) = match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
@@ -68,7 +68,8 @@ fn parse(query: &HashMap<String, String>) -> Result<Params, Value> {
         }
     };
     match (project, session_id, event_id, around) {
-        (Some(project), Some(session_id), Some(event_id), Some(around)) if errors.is_empty() => Ok(Params { project, session_id, event_id, around }),
+        (Some(project), Some(session_id), Some(event_id), Some(around)) if errors.is_empty() => Ok(Params { project, session_id, event_id, around,
+            provider: query.get("provider").cloned(), codex_account: query.get("codex_account").cloned() }),
         _ => Err(json!({"detail": errors})),
     }
 }
@@ -83,18 +84,18 @@ fn excerpt(st: &AppState, p: &Params) -> Response {
         Ok(catalog) => catalog.as_array().into_iter().flatten().filter_map(|row| row["path"].as_str().map(str::to_owned)).collect(),
         Err(e) => return refused(e.status, e.code, &e.message, e.params),
     };
+    // Sem `provider` é Claude (CTX-08); os outros agentes leem pelo parser do histórico do Arquivo.
+    let Some(provider) = AgentProvider::parse(p.provider.as_deref().unwrap_or("claude")) else {
+        return refused(400, "erro_provider_invalido", "provider invalido", json!({}));
+    };
     let server_projects = env.claude_base.join("projects");
     let w = Where { home: &env.home, env: &env.base, server_projects: &server_projects, config_dirs: &config_dirs, live: &[] };
-    let jsonl = match locate(&w, &p.project, &p.session_id, None, AgentProvider::Claude, None) {
+    let jsonl = match locate(&w, &p.project, &p.session_id, None, provider, p.codex_account.as_deref()) {
         Ok((path, _)) => path,
         Err(e) => return refused(e.status, e.code.unwrap_or("erro_path_invalido"), &e.msg, e.params),
     };
-    let req = HistoryRequest { provider: Provider::Claude, jsonl, limit: None, tail_window: TAIL_WINDOW,
-        queue: Some(crate::locate::queue_path(&env.claude_base, "__archive__")) };
-    let msgs: Vec<ChatEvent> = match merged_history(&req) {
-        Ok(evs) => evs.into_iter()
-            .filter(|ev| matches!(ev.kind, ChatKind::UserMsg | ChatKind::AssistantMsg) && ev.text.as_deref().is_some_and(|t| !t.is_empty()))
-            .collect(),
+    let msgs: Vec<ChatEvent> = match crate::archive_history::read_history(st, &jsonl, provider, None) {
+        Ok(evs) => evs.into_iter().filter(crate::archive_history::is_message).collect(),
         // Como o Python: transcript que não abre é conversa vazia, e o trecho não está mais nela.
         Err(_) => {
             st.diag.report("rust.search_context_unreadable", &p.session_id, "search_context_io", "o transcript não pôde ser lido");
