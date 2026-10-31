@@ -413,7 +413,9 @@ impl BrowserChannel for AppChannel {
                 return;
             }
             let path = format!("/api/login-browser/close?operation={operation}");
-            let _ = self.peers.call(machine, reqwest::Method::POST, &path, Some(&serde_json::json!({}))).await;
+            if self.peers.call(machine, reqwest::Method::POST, &path, Some(&serde_json::json!({}))).await.is_err() {
+                tracing::warn!(code = "login_view_close_unreachable", machine, "a janela do login pode ter ficado aberta na outra máquina");
+            }
         })
     }
 }
@@ -468,11 +470,25 @@ fn locked_views(views: &Views) -> std::sync::MutexGuard<'_, HashMap<String, View
     views.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+/// A lista falha de passagem (compositor ocupado); desistir de primeira deixaria a janela do login aberta.
+fn list_windows(desk: &dyn Desk) -> Option<Vec<DeskWindow>> {
+    for attempt in 0..3 {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+        if let Some(windows) = desk.windows() {
+            return Some(windows);
+        }
+    }
+    tracing::warn!(code = "login_view_windows_unlisted", "não consegui listar as janelas desta máquina");
+    None
+}
+
 /// Fecha só a janela do login; o resto do Chrome da pessoa continua aberto.
 async fn close_view_in(views: &Views, operation: &str) {
     let Some(view) = locked_views(views).remove(operation) else { return };
     let _ = tokio::task::spawn_blocking(move || {
-        let windows = view.desk.windows().into_iter().flatten();
+        let Some(windows) = list_windows(view.desk.as_ref()) else { return };
         // Quem não abriu a transmissão ainda tem a janela aberta, e ela é achada pelo título. Já vista,
         // vale quem ela era: no login do Google o título muda e a janela continua sendo a do login.
         let found = match &view.window {
@@ -569,9 +585,12 @@ impl LoginBrowser {
     async fn prepare_view(&self, operation: &str) {
         let probe = self.desk_probe.clone();
         let prepared = tokio::task::spawn_blocking(move || {
-            let desk = probe()?;
+            let Some(desk) = probe() else {
+                tracing::info!(code = "login_view_no_desk", "esta máquina não transmite a janela do login");
+                return None;
+            };
             // Sem saber o que já estava na tela, qualquer janela poderia virar a do login.
-            let baseline = desk.windows()?.into_iter().map(|window| window.id).collect();
+            let baseline = list_windows(desk.as_ref())?.into_iter().map(|window| window.id).collect();
             Some(View { desk, baseline, window: None, capture_id: None })
         })
         .await;
@@ -1013,10 +1032,12 @@ mod tests {
         log: Mutex<Vec<String>>,
         no_input: std::sync::atomic::AtomicBool,
         unreadable: std::sync::atomic::AtomicBool,
+        unreadable_once: std::sync::atomic::AtomicBool,
         input_fails: std::sync::atomic::AtomicBool,
     }
     impl Desk for FakeDesk {
         fn windows(&self) -> Option<Vec<crate::accounts::login_view::DeskWindow>> {
+            if self.unreadable_once.swap(false, Ordering::Relaxed) { return None; }
             (!self.unreadable.load(Ordering::Relaxed)).then(|| self.windows.lock().unwrap().clone())
         }
         fn present(&self, window: &crate::accounts::login_view::DeskWindow) {
@@ -1129,6 +1150,18 @@ mod tests {
         *desk.windows.lock().unwrap() = vec![other];
         browser.close_view("op").await;
         assert!(!desk.log.lock().unwrap().iter().any(|line| line.starts_with("close")));
+    }
+
+    #[tokio::test]
+    async fn a_failed_window_listing_does_not_leave_the_login_window_open() {
+        let desk = Arc::new(FakeDesk::default());
+        let browser = viewing(desk.clone());
+        browser.open(view_request(TargetKind::ChromeProfile)).await.unwrap();
+        desk.windows.lock().unwrap().push(desk_window("login"));
+        browser.view("op").await;
+        desk.unreadable_once.store(true, Ordering::Relaxed);
+        browser.close_view("op").await;
+        assert_eq!(desk.log.lock().unwrap().last().unwrap(), "close login");
     }
 
     #[tokio::test]

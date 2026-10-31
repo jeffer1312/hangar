@@ -358,6 +358,11 @@ impl AccountService {
         let script = target
             .as_ref()
             .and_then(|_| login_browser::browser_script(login_browser::current_platform(), &operation, &url_name));
+        // A tela já mostra o destino escolhido: sem este aviso ficaria em "Abrindo o navegador" para sempre.
+        let no_script = target.as_ref().filter(|_| script.is_none()).map(|login| {
+            tracing::warn!(code = "claude_login_no_browser_script", "este sistema não abre o navegador escolhido");
+            json!({"state":"error","reason":"erro_login_script_failed","machine":login.target.machine})
+        });
         let target = target.filter(|_| script.is_some());
         crate::runtime::queue::atomic_write(
             &record,
@@ -373,7 +378,7 @@ impl AccountService {
             old_token,
             guard: Mutex::new(Some(guard)),
             target: target.as_ref().map(|login| login.target.clone()),
-            browser: Mutex::new(None),
+            browser: Mutex::new(no_script),
             dispatch: Mutex::new(None),
             channel: target.as_ref().map(|login| login.channel.clone()),
         });

@@ -843,7 +843,9 @@ impl Hangar {
         // Linha de altura fixa: aviso que vem e vai não pode empurrar a imagem onde a pessoa está clicando.
         let status = div().h(px(32.)).flex_shrink_0().flex().items_center().gap(px(8.)).text_size(px(12.)).overflow_hidden();
         let status = if !view.can_input {
-            status.child(div().flex_1().min_w_0().text_color(theme::warning()).child(tr("accounts_login_view_no_input").replace("{machine}", machine)))
+            let text = view.notice.filter(|_| view.frame.is_some()).map(tr)
+                .unwrap_or_else(|| tr("accounts_login_view_no_input").replace("{machine}", machine));
+            status.child(div().flex_1().min_w_0().text_color(theme::warning()).child(text))
                 .child(Button::new("accounts-login-view-activate").outline().xsmall().label(tr("accounts_login_view_activate"))
                     .on_click(cx.listener(|this, _, _, cx| this.activate_login_view(cx))))
         } else if let Some(notice) = view.notice.filter(|_| view.frame.is_some()) {
@@ -1090,6 +1092,7 @@ fn view_key(key: &str) -> Option<&'static str> {
 
 fn view_reply(frame: &Value) -> ViewReply {
     if frame["available"] != true { return ViewReply::Notice("accounts_login_view_unavailable"); }
+    if frame["error"] == "erro_login_machine_unreachable" { return ViewReply::Lost; }
     if frame["retry"] == true { return ViewReply::Retry; }
     if frame["closed"] == true { return ViewReply::Notice("accounts_login_view_closed"); }
     if frame["pending"] == true { return ViewReply::Notice("accounts_login_view_waiting"); }
@@ -1128,6 +1131,7 @@ mod tests {
         assert_eq!(notice(json!({"available": true, "closed": true})), "accounts_login_view_closed");
         assert_eq!(notice(json!({"available": true, "pending": true})), "accounts_login_view_waiting");
         assert_eq!(notice(json!({"available": true, "error": "x"})), "accounts_login_view_capture");
+        assert!(matches!(view_reply(&json!({"available": true, "error": "erro_login_machine_unreachable"})), ViewReply::Lost));
     }
 
     #[test]

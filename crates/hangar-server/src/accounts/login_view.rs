@@ -249,7 +249,9 @@ mod hyprland {
         }
 
         fn close(&self, window: &DeskWindow) {
-            self.run("hyprctl", &["dispatch", "closewindow", &format!("address:{}", window.id)]);
+            if self.run("hyprctl", &["dispatch", "closewindow", &format!("address:{}", window.id)]).is_none() {
+                tracing::warn!(code = "login_view_close_failed", "a janela do login não fechou");
+            }
         }
     }
 }
@@ -520,7 +522,9 @@ mod windows_desk {
 
         fn close(&self, window: &DeskWindow) {
             // SAFETY: handle morto só faz a chamada falhar.
-            unsafe { PostMessageW(handle(window), WM_CLOSE, 0, 0) };
+            if unsafe { PostMessageW(handle(window), WM_CLOSE, 0, 0) } == 0 {
+                tracing::warn!(code = "login_view_close_failed", "a janela do login não fechou");
+            }
         }
 
         fn activate(&self) -> bool {
