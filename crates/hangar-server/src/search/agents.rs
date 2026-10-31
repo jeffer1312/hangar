@@ -15,8 +15,9 @@ use crate::archive_list::Unread;
 /// Os transcripts dos outros agentes e o que não pôde ser varrido agora (o índice mantém o que já
 /// tem lá).
 pub(super) fn discover(env: &AccountEnvironment) -> (BTreeMap<String, Found>, Vec<Unread>) {
-    let (mut others, mut unread) = crate::archive_list::agent_conversations(env);
-    match crate::archive_list::codex_conversations(env) {
+    // O índice é a fonte do que ele mesmo guarda: o cabeçalho sai sempre do disco.
+    let (mut others, mut unread) = crate::archive_list::agent_conversations(env, &|_| None);
+    match crate::archive_list::codex_conversations(env, &|_| None) {
         Ok((codex, bad)) => {
             unread.extend(bad);
             for c in codex {

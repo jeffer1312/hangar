@@ -134,7 +134,8 @@ impl Harness {
         let reports = Arc::new(Mutex::new(Vec::new()));
         let diary = reports.clone();
         let search = hangar_server::search::Index::new(&dir.path().join("idx"), accounts,
-            Arc::new(move |code, detail| diary.lock().unwrap().push((code, detail))), Default::default());
+            Arc::new(move |code, detail| diary.lock().unwrap().push((code, detail))), Default::default())
+            .with_agents(state.accounts.env.clone());
         if mode == Mode::Index { search.update().unwrap(); }
         state.search = search.clone();
         state.list = Arc::new(live_list(dir.path(), &home, upstream));
@@ -372,6 +373,49 @@ async fn f8_folders_without_index_open_only_what_the_python_opened() {
     assert!(!opened.is_empty(), "o observador não viu nenhuma abertura");
     let extra: Vec<_> = opened.difference(&python).collect();
     assert!(extra.is_empty(), "abriu além do Python: {extra:?}");
+}
+
+/// Os arquivos `.jsonl` abertos dentro de `roots` enquanto `during` roda (o inotify avisa cada abertura).
+#[cfg(target_os = "linux")]
+async fn opened_during<F: std::future::Future<Output = ()>>(roots: &[PathBuf], during: F) -> std::collections::HashSet<PathBuf> {
+    let opened = Arc::new(Mutex::new(std::collections::HashSet::new()));
+    let seen = opened.clone();
+    let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+        if let Ok(event) = event && matches!(event.kind, notify::EventKind::Access(notify::event::AccessKind::Open(_))) {
+            seen.lock().unwrap().extend(event.paths.into_iter().filter(|p| p.extension().is_some_and(|e| e == "jsonl" || e == "json")));
+        }
+    }).unwrap();
+    for root in roots { notify::Watcher::watch(&mut watcher, root, notify::RecursiveMode::Recursive).unwrap(); }
+    during.await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    drop(watcher);
+    opened.lock().unwrap().clone()
+}
+
+/// M4 nos outros agentes: com o índice pronto, pastas, conversas e recentes não abrem o transcript de
+/// Codex, Pi, omp nem Kimi (cabeçalho e última mensagem vêm do índice); fora do índice, o disco.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn m4_agents_listing_with_the_index_opens_no_agent_transcript() {
+    let agents: Vec<PathBuf> = [".codex/sessions", ".codex-b/sessions", ".pi/agent/sessions", ".omp/agent/sessions", ".kimi-code/sessions"]
+        .iter().map(PathBuf::from).collect();
+    for mode in [Mode::Index, Mode::NoIndex] {
+        let h = Harness::new(mode).await;
+        let roots: Vec<PathBuf> = agents.iter().map(|r| h.home.join(r)).collect();
+        let opened = opened_during(&roots, async {
+            for path in ["/api/archive".to_owned(), format!("/api/archive/{HANGAR}"), "/api/archive/recent".to_owned()] {
+                let (status, body) = h.get(&path).await;
+                assert_eq!(status, 200, "{path}: {body}");
+            }
+        }).await;
+        let transcripts: Vec<PathBuf> = MTIMES[..5].iter().map(|rel| h.home.join(rel)).collect();
+        let read: Vec<&PathBuf> = transcripts.iter().filter(|p| opened.contains(*p)).collect();
+        match mode {
+            Mode::Index => assert!(read.is_empty(), "abriu transcript de agente com o índice pronto: {read:?}"),
+            Mode::NoIndex => assert_eq!(read.len(), 5, "sem índice o disco é lido: {opened:?}"),
+        }
+        h.assert_not_forwarded();
+    }
 }
 
 /// ARQ-15: índice ilegível cai no disco; a resposta é a mesma.

@@ -48,6 +48,9 @@ pub(crate) struct Other {
     pub(crate) mtime: f64, pub(crate) codex: Option<Account>,
 }
 
+/// O cwd que o índice já leu de um transcript que não mudou depois da leitura; `None` = ler do disco.
+pub(crate) type KnownCwd<'a> = &'a dyn Fn(&Path) -> Option<Option<String>>;
+
 /// O que o Arquivo sabe de um transcript Claude.
 struct Facts { preview: String, cwd: Option<String>, listed: bool, last: Option<String> }
 
@@ -139,6 +142,12 @@ impl<'a> Ctx<'a> {
     /// A linha do índice, se o arquivo não mudou depois da leitura dela.
     fn row(&self, f: &Claude) -> Option<&ArchiveRow> { self.index.get(&*f.path.to_string_lossy()).filter(|r| r.fresh(&f.md)) }
 
+    /// A linha do índice de um transcript de outro agente, se ele não mudou depois da leitura dela.
+    fn agent_row(&self, path: &Path) -> Option<&ArchiveRow> {
+        let row = self.index.get(&*path.to_string_lossy())?;
+        std::fs::metadata(path).ok().filter(|md| row.fresh(md)).map(|_| row)
+    }
+
     /// Prévia ou arquivo parado há mais de 15 min basta (`_tem_usuario`): há conversa com prévia e sem
     /// linha `user`.
     fn settled(&self, f: &Claude, preview: &str) -> bool { !preview.is_empty() || self.now - f.mtime > RESERVE_WINDOW }
@@ -200,14 +209,18 @@ impl<'a> Ctx<'a> {
                 }
             }
         }
-        tail_text(&c.path, provider)
+        match self.agent_row(&c.path) {
+            Some(row) => row.last_text.clone(),
+            None => tail_text(&c.path, provider),
+        }
     }
 
     /// `archive_providers.conversas`: o que falha sai da lista com linha no diário, sem derrubar o resto.
     fn others(&self) -> Vec<Other> {
         let env = &self.st.accounts.env;
-        let (mut out, mut unread) = agent_conversations(env);
-        match codex_conversations(env) {
+        let known = |path: &Path| self.agent_row(path).map(|row| row.cwd.clone());
+        let (mut out, mut unread) = agent_conversations(env, &known);
+        match codex_conversations(env, &known) {
             Ok((codex, bad)) => { out.extend(codex); unread.extend(bad); }
             Err(e) => unread.push(Unread::new("codex", None, e)),
         }
@@ -335,18 +348,18 @@ impl Unread {
 }
 
 /// As conversas de Pi, omp e Kimi (o índice da busca lê as mesmas) e o que não pôde ser lido.
-pub(crate) fn agent_conversations(env: &crate::accounts::environment::AccountEnvironment) -> (Vec<Other>, Vec<Unread>) {
+pub(crate) fn agent_conversations(env: &crate::accounts::environment::AccountEnvironment, known: KnownCwd) -> (Vec<Other>, Vec<Unread>) {
     let w = Where { home: &env.home, env: &env.base, server_projects: Path::new(""), config_dirs: &[], live: &[] };
     let mut unread = Vec::new();
-    let mut out = pi_conversations(&archive::agent_root(&w, AgentProvider::Pi), "pi", &mut unread);
-    out.extend(pi_conversations(&archive::agent_root(&w, AgentProvider::Omp), "omp", &mut unread));
+    let mut out = pi_conversations(&archive::agent_root(&w, AgentProvider::Pi), "pi", known, &mut unread);
+    out.extend(pi_conversations(&archive::agent_root(&w, AgentProvider::Omp), "omp", known, &mut unread));
     out.extend(kimi_conversations(&crate::session_open::agents::kimi_home(&env.home, &env.base), &mut unread));
     (out, unread)
 }
 
 /// `_codex_conversas`: rollouts de cada conta só na conta dona, sem transferência em andamento.
 /// Erro = catálogo de contas ilegível; rollout ambíguo ou com transferência ilegível sai sozinho.
-pub(crate) fn codex_conversations(env: &crate::accounts::environment::AccountEnvironment) -> Result<(Vec<Other>, Vec<Unread>), String> {
+pub(crate) fn codex_conversations(env: &crate::accounts::environment::AccountEnvironment, known: KnownCwd) -> Result<(Vec<Other>, Vec<Unread>), String> {
     let service = crate::accounts::AccountService::new(env.clone());
     let accounts = service.snapshot(AccountProvider::Codex).map_err(|e| e.code.to_string())?;
     let (mut out, mut unread) = (Vec::new(), Vec::new());
@@ -365,7 +378,8 @@ pub(crate) fn codex_conversations(env: &crate::accounts::environment::AccountEnv
                 Err(e) => { unread.push(Unread::new("codex", Some(&path), e)); continue }
             };
             if phase.is_some_and(|p| p != "complete") { continue; }
-            let cwd = archive::header(&path, 5, |o| (o["type"] == "session_meta").then(|| o["payload"]["cwd"].as_str().filter(|c| !c.is_empty()).map(str::to_owned)).flatten());
+            let cwd = known(&path).unwrap_or_else(|| archive::header(&path, 5,
+                |o| (o["type"] == "session_meta").then(|| o["payload"]["cwd"].as_str().filter(|c| !c.is_empty()).map(str::to_owned)).flatten()));
             out.push(Other { provider: "codex", cwd, sid, mtime: mtime_of(&path), path, codex: Some(owner.clone()) });
         }
     }
@@ -373,7 +387,7 @@ pub(crate) fn codex_conversations(env: &crate::accounts::environment::AccountEnv
 }
 
 /// `_pi_conversas`: o transcript mora direto no slug do cwd; subagente (`<stem>/…`) fica fora.
-fn pi_conversations(root: &Path, provider: &'static str, unread: &mut Vec<Unread>) -> Vec<Other> {
+fn pi_conversations(root: &Path, provider: &'static str, known: KnownCwd, unread: &mut Vec<Unread>) -> Vec<Other> {
     let mut out = Vec::new();
     let dirs = match std::fs::read_dir(root) {
         Ok(dirs) => dirs,
@@ -389,7 +403,8 @@ fn pi_conversations(root: &Path, provider: &'static str, unread: &mut Vec<Unread
             let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
             let sid = stem.split_once('_').map_or(stem.as_str(), |(_, s)| s).to_owned();
             if !UUID.is_match(&sid) { continue; }
-            let cwd = archive::header(&path, 5, |o| (o["type"] == "session").then(|| o["cwd"].as_str().filter(|c| !c.is_empty()).map(str::to_owned)).flatten());
+            let cwd = known(&path).unwrap_or_else(|| archive::header(&path, 5,
+                |o| (o["type"] == "session").then(|| o["cwd"].as_str().filter(|c| !c.is_empty()).map(str::to_owned)).flatten()));
             out.push(Other { provider, cwd, sid, mtime: mtime_of(&path), path, codex: None });
         }
     }
