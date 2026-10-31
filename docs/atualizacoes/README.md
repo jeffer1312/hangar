@@ -78,6 +78,7 @@ Passos marcados:
 | `2026-10-21-orq-durable-cleanup` | dados em `~/.hangar` |
 | `2026-10-22-python-install-manager-windows` | interpretador Python e atalhos no `PATH` do Windows |
 | `2026-10-24-pacote-por-versao` | migra a máquina para o pacote: dados em `~/.hangar/config`, `current`, unit/tarefa no lançador, hooks e atalhos |
+| `2026-10-31-links-do-pacote` | atalhos, skills, agentes e bloco do shell que ficaram no checkout voltam ao `current` |
 
 Ficam sem o campo, mesmo com comando: os que rodam `install-hangar-send.sh`,
 `install-claude-wrapper.sh`/`setup-windows-wrappers.ps1` ou `registrar-mcp.py` (conteúdo e

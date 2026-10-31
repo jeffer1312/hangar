@@ -28,6 +28,16 @@ pub struct Launch {
     pub mode: String,
     pub tool_output_token_limit: Option<u64>,
     pub prompt: Option<String>,
+    /// Caminho do lançador da instalação (`launcher_program`); `None` = o nome no PATH.
+    pub launcher: Option<String>,
+}
+
+/// O lançador da instalação que roda este servidor. O do PATH pode ser de outra versão (link que
+/// ficou no checkout) e recusar os argumentos de agora, e o pane morre ao nascer. No Windows o
+/// PATH tem o `.cmd` que o `install.ps1` escreve.
+pub fn launcher_program(home: &Path, windows: bool) -> Option<String> {
+    let path = crate::install_root::current(home).join("scripts").join(LAUNCHER);
+    (!windows && path.is_file()).then(|| path.to_string_lossy().into_owned())
 }
 
 /// Pasta absoluta da conta Codex pelo id (`resolve_account`), a mesma que a resolução conferiu.
@@ -47,7 +57,8 @@ pub fn policy(mode: &str) -> Result<(&'static str, &'static str), OpenError> {
 /// `comando_do_lancador`, na ordem dele, com a política sempre explícita (matriz, item 17).
 pub fn launcher_argv(launch: &Launch) -> Result<Vec<String>, OpenError> {
     let (approval, sandbox) = policy(&launch.mode)?;
-    let mut argv: Vec<String> = vec![LAUNCHER.into(), "--cwd".into(), launch.cwd.clone()];
+    let program = launch.launcher.clone().unwrap_or_else(|| LAUNCHER.into());
+    let mut argv: Vec<String> = vec![program, "--cwd".into(), launch.cwd.clone()];
     let mut flag = |name: &str, value: Option<&String>| if let Some(value) = value.filter(|v| !v.is_empty()) {
         argv.extend([name.to_owned(), value.clone()]);
     };
@@ -75,7 +86,7 @@ pub fn creation(spec: &SessionSpec, codex_home: &str, prompt: Option<&str>) -> L
         service_tier: spec.service_tier.map(|t| t.name().to_owned()), resume: None,
         model: spec.model.clone(), effort: spec.effort.clone(),
         mode: spec.permission_mode.unwrap_or(PermissionMode::FullAccess).name().into(),
-        tool_output_token_limit: None, prompt: prompt.map(str::to_owned),
+        tool_output_token_limit: None, prompt: prompt.map(str::to_owned), launcher: None,
     }
 }
 
@@ -95,9 +106,9 @@ pub fn pane(name: &str, key: &str, launch: &Launch, jev: bool, runtime_config: &
 
 /// `_exigir_lancador_codex`: sem o lançador ou o `codex` no PATH o pane morre ao nascer e o
 /// `new-session` devolve sucesso. Recusa antes de criar nada.
-pub fn require_launcher(server_env: &BTreeMap<String, String>) -> Result<(), OpenError> {
+pub fn require_launcher(server_env: &BTreeMap<String, String>, launcher: Option<&str>) -> Result<(), OpenError> {
     let missing = |program: &str| crate::runtime::process::resolve_program(program, server_env).is_none();
-    if missing(LAUNCHER) {
+    if missing(launcher.unwrap_or(LAUNCHER)) {
         return Err(OpenError::new(409, "erro_criacao_sessao", format!("{LAUNCHER} nao esta no PATH deste servidor — sem ele a sessao \
             Codex nasce e morre na hora, sem erro. Instale o lancador: no Linux, scripts/install-claude-wrapper.sh; no Windows, install.ps1.")));
     }
@@ -192,6 +203,22 @@ mod tests {
             "--codex-account", "b", "--resume", "t-1", "--model", "gpt-5.5", "--effort", "high", "--approval-policy", "on-request",
             "--sandbox", "read-only", "--tool-output-token-limit", "9000", "--prompt", "começa"]);
         assert_eq!(policy("Approve for me").unwrap(), ("on-request", "workspace-write"));
+    }
+
+    /// O lançador do `current` vence o do PATH, que pode ser de outra versão; no Windows e sem o
+    /// arquivo no `current`, o nome no PATH.
+    #[test]
+    fn the_launcher_comes_from_the_install_root_when_it_has_one() {
+        let home = tempfile::tempdir().unwrap();
+        assert_eq!(launcher_program(home.path(), false), None);
+        let scripts = home.path().join(".hangar/current/scripts");
+        std::fs::create_dir_all(&scripts).unwrap();
+        std::fs::write(scripts.join(LAUNCHER), "#!/bin/sh\n").unwrap();
+        let own = scripts.join(LAUNCHER).to_string_lossy().into_owned();
+        assert_eq!(launcher_program(home.path(), false), Some(own.clone()));
+        assert_eq!(launcher_program(home.path(), true), None);
+        let argv = launcher_argv(&Launch { launcher: Some(own.clone()), ..launch() }).unwrap();
+        assert_eq!(argv[..3], [own, "--cwd".into(), "/w".into()]);
     }
 
     /// Modo fora da lista nunca vira Full Access.

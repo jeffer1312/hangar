@@ -332,6 +332,28 @@ desenvolvedor e para a máquina ainda não migrada. Evidência em
   não usa a espera por substituição da fila: ela acrescentava cerca de 50 ms a cada arquivo.
   O caminho HTTP relê a opção sob a mesma trava do escritor, sem cache e sem confundir uma
   gravação concorrente com a configuração padrão ligada.
+- **Máquina no pacote: o que os instaladores gravam fora do Hangar aponta para o `current`.**
+  `install-claude-wrapper.sh` e `install-hangar-send.sh` trocam a própria raiz pelo
+  `~/.hangar/current` quando ele é a pasta de onde rodam ou quando `~/.hangar/migration.json` diz
+  `"mode": "package"`, também rodando de um checkout. No Linux e no macOS o servidor abre o Codex
+  pelo `current/scripts/hangar-codex-tui`, e não pelo nome no PATH. Ver
+  [a entrada](#links-que-voltaram-ao-checkout-depois-da-migração-31102026).
+
+## Links que voltaram ao checkout depois da migração (31/10/2026)
+
+Motivo: numa máquina migrada em 27/10, o Codex parou de abrir depois da atualização de 31/10 com
+`o terminal fechou logo depois de abrir`. Na mesma rodada do motor `git`, o passo
+`2026-10-24-pacote-por-versao` apontou os links para o `current` e, 300 ms depois, o
+`2026-10-26-instalacao-no-macos` rodou `./scripts/install-claude-wrapper.sh` de dentro do checkout
+e devolveu ao checkout os links de `~/.local/bin`, as skills, os agentes e o bloco do shell. O
+checkout parou ali, e o servidor novo passou `--config` a um `hangar-codex-tui` que não conhecia o
+argumento: o lançador saiu com erro de uso e o pane morreu ao nascer. A causa é o motor `git`
+(`backend/app/atualizacoes.py`) continuar a rodada do checkout depois do passo de migração; a
+correção dele é no Python e ficou para quando for autorizada. Os instaladores se defendem por
+conta própria, e o servidor deixa de depender do PATH. O passo
+`2026-10-31-links-do-pacote` repara as máquinas nesse estado. A prova é
+`scripts/test-install-hangar-send.sh`, que roda os dois instaladores a partir de um checkout numa
+máquina migrada.
 
 ## Pacote por versão em vez de `git pull` (24/10/2026)
 

@@ -276,7 +276,8 @@ def test_conta_preparada_abre_com_backend_desligado(tmp_path):
 
 
 @pytest.mark.skipif(os.name != "posix", reason="binário falso POSIX")
-def test_preparo_incompleto_nao_sobe_appserver_nem_tui(tmp_path):
+@pytest.mark.parametrize("status,abre", [("partial", True), ("error", False)])
+def test_preparo_parcial_abre_com_pendencias_e_erro_nao_sobe(tmp_path, status, abre):
     cwd = tmp_path/"project"
     cwd.mkdir()
     env = _ambiente(tmp_path,cwd)
@@ -284,7 +285,7 @@ def test_preparo_incompleto_nao_sobe_appserver_nem_tui(tmp_path):
     control = Path(env["HOME"])/".hangar/codex-atualizacao.json"
     control.parent.mkdir()
     control.write_text(json.dumps({"proxima_em":time.time()+3600}))
-    with _backend_conta_pronta(env,status="partial",issues=[
+    with _backend_conta_pronta(env,status=status,issues=[
         {"code":"codex_account_plugin_hooks_failed","params":{"error":"private detail"}}]):
         process = subprocess.Popen([sys.executable,str(_LANCADOR),"--name","prep-test","--cwd",str(cwd),
             "--codex-home",str(tmp_path/"profile"),"--codex-account","work"],env=env,
@@ -296,11 +297,11 @@ def test_preparo_incompleto_nao_sobe_appserver_nem_tui(tmp_path):
                 process.terminate()
                 try:process.wait(timeout=5)
                 except subprocess.TimeoutExpired:process.kill();process.wait(timeout=5)
-    assert process.returncode != 0,stdout+stderr
+    assert (process.returncode == 0) is abre,stdout+stderr
     assert "codex_account_plugin_hooks_failed" in stderr
     assert "private detail" not in stderr
-    assert not Path(env["FAKE_SERVER_OUT"]).exists()
-    assert not Path(env["FAKE_TUI_OUT"]).exists()
+    assert Path(env["FAKE_SERVER_OUT"]).exists() is abre
+    assert Path(env["FAKE_TUI_OUT"]).exists() is abre
 
 
 @pytest.mark.skipif(os.name != "posix", reason="o lancador so e usado em pane POSIX por ora")

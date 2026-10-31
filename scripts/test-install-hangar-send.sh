@@ -36,5 +36,26 @@ expect_eq "hangar-python pelo current" "$(readlink "$H/.local/bin/hangar-python"
 expect_eq "skill pelo current" "$(readlink "$H/.claude/skills/teste")" "$C/skills/teste"
 expect_eq "agente pelo current" "$(readlink "$H/.claude/agents/agente-teste.md")" "$C/skills/teste/agents/agente-teste.md" "$ROOT/out"
 
+# Máquina já migrada e os instaladores rodando do checkout de antes, como o motor git faz com os
+# passos que vêm depois da migração na mesma rodada: os links continuam no `current`.
+K="$ROOT/checkout"
+mkdir -p "$K"
+cp -r "$REPO/scripts" "$K/scripts"
+cp -r "$V/skills" "$K/skills"
+cp -r "$REPO/scripts/." "$V/scripts/"
+printf '{\n  "mode": "package",\n  "checkout": "%s"\n}\n' "$K" > "$H/.hangar/migration.json"
+( env -i HOME="$H" PATH="$(dirname "$(command -v python3)"):/usr/bin:/bin" \
+    bash "$K/scripts/install-hangar-send.sh" > "$ROOT/out" 2>&1 ); rc=$?
+expect_eq "checkout: sai 0" "$rc" 0 "$ROOT/out"
+expect_eq "checkout: hangar-send pelo current" "$(readlink "$H/.local/bin/hangar-send")" "$C/scripts/hangar-send" "$ROOT/out"
+expect_eq "checkout: skill pelo current" "$(readlink "$H/.claude/skills/teste")" "$C/skills/teste"
+( env -i HOME="$H" SHELL=/bin/bash PATH="$(dirname "$(command -v python3)"):/usr/bin:/bin" \
+    bash "$K/scripts/install-claude-wrapper.sh" bash --no-tmux --no-statusline > "$ROOT/out" 2>&1 ); rc=$?
+expect_eq "checkout: wrapper sai 0" "$rc" 0 "$ROOT/out"
+expect_eq "checkout: lançador do Codex pelo current" "$(readlink "$H/.local/bin/hangar-codex-tui")" "$C/scripts/hangar-codex-tui" "$ROOT/out"
+expect_eq "checkout: hangar-open pelo current" "$(readlink "$H/.local/bin/hangar-open")" "$C/scripts/hangar-open"
+grep -q "source \"$C/scripts/shell/" "$H/.bashrc" 2>/dev/null && pass "checkout: bloco do shell pelo current" \
+    || flunk "checkout: bloco do shell pelo current" "$H/.bashrc"
+
 if [ "$fail" = 0 ]; then echo "tudo ok"; else echo "houve falha"; fi
 exit "$fail"

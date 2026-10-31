@@ -59,7 +59,8 @@ impl AccountService {
                     "a conta continua em preparo; aguarde a conclusão e tente abrir novamente",json!({"account_id":account.id})));
             }
             match status["status"].as_str() {
-                Some("ready")=>return Ok(status),
+                // Parcial = um recurso não sincronizou; a conta abre e as pendências vão no aviso.
+                Some("ready" | "partial")=>return Ok(status),
                 Some("running")=>{},
                 _=>return Err(AccountError::new(503,"codex_account_prepare_incomplete",
                     "o preparo da conta não terminou; confira as pendências na sincronização",json!({"account_id":account.id,"issues":status["issues"]}))),
@@ -253,7 +254,7 @@ impl AccountService {
                 }
                 return Ok(state.result.clone());
             }
-            if prepared["status"] == "ready" {
+            if matches!(prepared["status"].as_str(), Some("ready" | "partial")) {
                 return Ok(prepared);
             }
             match std::fs::remove_file(&marker) {
@@ -302,7 +303,8 @@ impl AccountService {
                     if forced && self.clear_force(key).is_err() {
                         result = failed("account_prepare_state_failed");
                     }
-                    if result["status"] == "ready" && Self::persist(&account.home.join(PREPARED_MARKER),&json!({"version":1})).is_err() {
+                    // Parcial também fica registrada: o que faltou volta pela sincronização manual.
+                    if matches!(result["status"].as_str(), Some("ready" | "partial")) && Self::persist(&account.home.join(PREPARED_MARKER),&json!({"version":1})).is_err() {
                         result = failed("account_prepare_state_failed");
                     }
                     if self

@@ -263,6 +263,44 @@ async fn ready_preparation_is_reused_after_restart_until_explicit_force() {
     assert_eq!(calls.load(Ordering::SeqCst),2,"primeiro preparo e sincronização explícita");
 }
 
+/// Preparo parcial (um recurso que não sincronizou) abre a sessão e devolve as pendências; só o
+/// preparo com erro recusa.
+#[tokio::test]
+async fn partial_preparation_opens_and_error_refuses() {
+    use axum::{Router, routing::post};
+    use hangar_server::accounts::{AccountService, Provider, bridge::AccountsBridge,
+        environment::AccountEnvironment};
+    use serde_json::json;
+    for (status, opens) in [("partial", true), ("error", false)] {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().to_string_lossy().into_owned();
+        let service = AccountService::new(AccountEnvironment::from_map([
+            ("HOME".into(),home.clone()),("USERPROFILE".into(),home),
+        ].into()));
+        let account = service.resolve(Provider::Codex,"default").unwrap();
+        let prepared_home = account.home.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let bridge = AccountsBridge::new(listener.local_addr().unwrap(),"synthetic".into(),"instance".into()).unwrap();
+        let router = Router::new().route("/internal/accounts/prepare",post(move || {
+            std::fs::create_dir_all(&prepared_home).unwrap();
+            async move { json!({"status":status,"trust_pending":false,
+                "issues":[{"code":"codex_account_source_sync_incomplete","params":{"status":"parcial"}}]}).to_string() }
+        }));
+        let server = tokio::spawn(async move { axum::serve(listener,router).await.unwrap(); });
+        let result = service.prepare_for_session(&account,bridge.clone(),
+            tokio::time::Instant::now()+std::time::Duration::from_secs(15)).await;
+        server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
+        if opens {
+            let ready = result.unwrap();
+            assert_eq!(ready["status"],"partial");
+            assert_eq!(ready["issues"][0]["code"],"codex_account_source_sync_incomplete");
+        } else {
+            assert_eq!(result.unwrap_err().code,"codex_account_prepare_incomplete");
+        }
+    }
+}
+
 #[tokio::test]
 async fn first_open_waits_for_preparation_and_expired_birth_budget_refuses_open() {
     use axum::{Router, routing::post};

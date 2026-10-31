@@ -440,7 +440,7 @@ async fn decide_adopting(st: &Arc<AppState>, host: &ServerHost, request: &Sessio
         let facts = super::facts::LocalFacts::shared(facts_env, &accounts, runtime);
         super::resolve_open(&request_for_facts, &caller_for_facts, &facts)
     }).await;
-    let resolved = match resolved.unwrap_or_else(|_| Err(OpenError::new(500, "erro_criacao_sessao", "a resolução da abertura não terminou"))) {
+    let mut resolved = match resolved.unwrap_or_else(|_| Err(OpenError::new(500, "erro_criacao_sessao", "a resolução da abertura não terminou"))) {
         Ok(resolved) => resolved,
         Err(error) => {
             if let Some(events) = super::open::refusal_diary(crate::mods::state::random_hex(8), request.name.as_deref().unwrap_or(""), super::open::requested_provider(request), &error) { host.diary(events); }
@@ -451,7 +451,10 @@ async fn decide_adopting(st: &Arc<AppState>, host: &ServerHost, request: &Sessio
     if let Some(adopting) = adopting.as_deref_mut() { adopting.compare(&resolved).await; }
     if !super::open::opens_here(&resolved.spec) { return Decision::NotOurs; }
     if let super::Account::Codex { account_id } = &resolved.spec.account {
-        if let Err(error) = codex_preparation(st,account_id).await { return Decision::Refused(error); }
+        match codex_preparation(st,account_id).await {
+            Ok(warning) => resolved.warnings.extend(warning),
+            Err(error) => return Decision::Refused(error),
+        }
     }
     match super::open::open_adopting(host, resolved, caller, adopting).await {
         Ok(opened) => Decision::Opened(opened),
@@ -459,13 +462,22 @@ async fn decide_adopting(st: &Arc<AppState>, host: &ServerHost, request: &Sessio
     }
 }
 
-async fn codex_preparation(st: &AppState, account_id: &str) -> Result<(),OpenError> {
+/// O preparo da conta Codex antes de abrir; o parcial abre e volta como aviso com as pendências.
+async fn codex_preparation(st: &AppState, account_id: &str) -> Result<Option<String>,OpenError> {
     let account = st.accounts.resolve(crate::accounts::Provider::Codex,account_id)
         .map_err(|error|OpenError::new(error.status,error.code,error.message))?;
     let bridge = crate::accounts::http::bridge(st)
         .map_err(|error|OpenError::new(error.status,error.code,error.message))?;
-    st.accounts.prepare_for_session(&account,bridge,tokio::time::Instant::now()+std::time::Duration::from_secs(60)).await
-        .map(|_|()).map_err(|error|OpenError::new(error.status,error.code,error.message).with_params(error.params))
+    let status = st.accounts.prepare_for_session(&account,bridge,tokio::time::Instant::now()+std::time::Duration::from_secs(60)).await
+        .map_err(|error|OpenError::new(error.status,error.code,error.message).with_params(error.params))?;
+    Ok(partial_preparation_warning(&status))
+}
+
+fn partial_preparation_warning(status: &Value) -> Option<String> {
+    if status["status"] != "partial" { return None; }
+    let codes: Vec<&str> = status["issues"].as_array().into_iter().flatten().filter_map(|issue| issue["code"].as_str()).collect();
+    Some(format!("a sincronização da conta Codex terminou com pendências ({}); a sessão abriu assim mesmo. \
+        Confira a sincronização da conta", codes.join(", ")))
 }
 
 /// A linha `api.servidor` do middleware de acesso do Python, para o pedido que o Rust atendeu
@@ -681,5 +693,14 @@ mod tests {
         let warnings = super::exit_warnings(&errs);
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("par"), "{warnings:?}");
+    }
+
+    /// O preparo parcial vira aviso com o código de cada pendência; o pronto não avisa.
+    #[test]
+    fn a_partial_preparation_warns_with_its_issue_codes() {
+        let partial = serde_json::json!({"status": "partial", "issues": [{"code": "codex_account_source_sync_incomplete", "params": {}}]});
+        let warning = super::partial_preparation_warning(&partial).unwrap();
+        assert!(warning.contains("codex_account_source_sync_incomplete"), "{warning}");
+        assert_eq!(super::partial_preparation_warning(&serde_json::json!({"status": "ready", "issues": []})), None);
     }
 }

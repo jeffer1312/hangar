@@ -331,8 +331,11 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 - **O primeiro preparo do Codex termina antes da abertura**, com e sem terminal. A conta pronta
   fica registrada e é reutilizada; relógio, nova abertura e mudança na fonte não mandam reinstalar
   recursos. Atualizações posteriores entram pela sincronização manual. A confiança do novo `cwd`
-  continua separada do preparo da conta. Falha ou prazo vencido recusam a abertura antes de criar a
-  sessão; o trabalho de preparo continua e pode ser consultado. O runtime do ECC é conferido antes
+  continua separada do preparo da conta. Falha (`error`) ou prazo vencido recusam a abertura antes
+  de criar a sessão; o trabalho de preparo continua e pode ser consultado. Preparo parcial
+  (`partial`, um recurso que não sincronizou) abre a sessão: o servidor devolve as pendências em
+  `avisos` e o `hangar-codex-tui` as escreve no pane. Em 31/10/2026 um único plugin cujo
+  marketplace sumiu da configuração do Codex impedia de abrir qualquer sessão Codex. O runtime do ECC é conferido antes
   de registrar a conta pronta, com dependências de produção sem scripts de instalação ou links de
   binários. O passo de máquina `2026-10-29-codex-preparo-unico` repara as instalações anteriores uma
   vez, preservando hooks pessoais e comandos próprios que já funcionam.
