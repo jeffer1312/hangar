@@ -108,5 +108,8 @@ fn excerpt(st: &AppState, p: &Params) -> Response {
         return refused(404, "erro_trecho_nao_encontrado", "a mensagem não está mais nessa conversa", json!({}));
     };
     let window = &msgs[i.saturating_sub(p.around)..(i + p.around + 1).min(msgs.len())];
-    json_response(StatusCode::OK, serde_json::to_value(window).unwrap_or(Value::Null))
+    match serde_json::to_value(window) {
+        Ok(body) => json_response(StatusCode::OK, body),
+        Err(_) => refused(500, "search_context_json", "o trecho não pôde ser montado", json!({})),
+    }
 }
