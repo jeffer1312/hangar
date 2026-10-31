@@ -229,6 +229,8 @@ function createSessionsStore() {
       const req = novoReqDiag();
       const es = openSessionsStream(s, req);
       streams.set(s.id, es);
+      // A lista chega antes do quadro `vault`: o pedido da conexão velha não pode reaparecer nesse intervalo.
+      setVault(s.id, null);
       const isCurrent = () => !leavingPage && refs > 0 && streams.get(s.id) === es;
       let identityRequested = false;
       let identityRetryAt = 0;
@@ -464,8 +466,6 @@ function createSessionsStore() {
       es.onerror = () => {
         if (!isCurrent()) return;
         falhou(es.readyState === 2 ? 'stream_fechado' : 'stream_interrompido');
-        // A lista volta antes do quadro `vault`: o pedido velho não pode reaparecer nesse intervalo.
-        setVault(s.id, null);
         slots.set(s.id, patchSlot(slots, s.id, offline(s.id)));
         forgetServer(s.id);
         recompute();
