@@ -211,7 +211,7 @@ mod tests {
     fn the_launcher_comes_from_the_install_root_when_it_has_one() {
         let home = tempfile::tempdir().unwrap();
         assert_eq!(launcher_program(home.path(), false), None);
-        let scripts = home.path().join(".hangar/current/scripts");
+        let scripts = home.path().join(".hangar").join("current").join("scripts");
         std::fs::create_dir_all(&scripts).unwrap();
         std::fs::write(scripts.join(LAUNCHER), "#!/bin/sh\n").unwrap();
         let own = scripts.join(LAUNCHER).to_string_lossy().into_owned();
