@@ -1282,6 +1282,38 @@ com os círculos virados elipses.
   que precisa do login do perfil do painel e por isso abre no Chromium dele.
 
 
+## Tour de primeiro uso do nativo (30/10/2026)
+
+O app nativo mostra os recursos escondidos (arrastar sessão para agrupar, botão direito, Ctrl+K,
+mover a conversa de conta) com balões presos às peças reais da tela. O tour tem 9 passos, abre
+na primeira conexão (e uma vez para quem já usava) e cada passo avança quando a pessoa faz a ação.
+O que não cabe no tour vira dica, que aparece uma vez quando a pessoa chega na peça. As novidades
+com `ancora:` ganham "Mostrar no app", com o mesmo balão. Decidido com o usuário sobre um mock
+interativo; ele escolheu balões no app real em vez de telas próprias, para servir também às
+novidades.
+
+- **Âncora com geração da área, não do quadro.** O registro antigo (`popup::anchor`) guardava a
+  última posição para sempre, e as áreas do app são views em cache: uma área que não redesenha
+  reaproveita o prepaint e não regrava a âncora. Uma marca por quadro global faria a âncora
+  sumir sem a peça ter saído. A posição vale enquanto a geração gravada é a atual da área e a
+  área esteve na tela no último quadro.
+- **Mais um quadro só para âncora lida que voltou de verdade.** Pedir `refresh` a cada âncora que
+  se move redesenharia a janela inteira ao rolar a lista de sessões; contar como "voltou" toda
+  área reaproveitada do cache e depois redesenhada redesenharia a janela inteira a cada
+  atualização da conversa com um balão aberto.
+- **O balão some com painel flutuante aberto e só pulsa por alguns segundos com a janela ativa.**
+  Por cima do painel, o balão (que bloqueia o clique na área dele) impedia escolher a conta no
+  passo do anel; o pulso sem fim redesenhava a raiz a 20 quadros por segundo com a pessoa longe.
+- **O visto é junção que nunca desfaz** (`feito` > `pulado` > nada; dicas por união; o interruptor
+  das dicas vale o de data mais recente), no app (`tour.json`) e em cada servidor
+  (`/api/tour-progress`, só o Rust; pelo Connect a rota não existe e vale o local). O tour espera
+  o primeiro servidor responder para não abrir antes de o "feito" de outro computador chegar.
+- **Celular conectado pelo parâmetro da lista ao vivo, não por cabeçalho.** A lista que abre com
+  o app é o SSE `/api/sessions/events`, e o `EventSource` do PWA não manda cabeçalho próprio. O
+  Expo e o PWA (só com tela de toque: o navegador do PC não é celular) mandam `device=<tipo>;<id>`;
+  o Rust grava o primeiro acesso de cada id em `~/.hangar/devices.json` (no máximo 20) e publica o
+  retrato `devices` na lista do dono. Nada além da dica aparece na tela.
+
 ## Mudança numa lista de sessões vale para todas (31/10/2026)
 
 O recurso "Ocultar da lista" (#294) levou a seção "Ocultas (N)" à barra lateral do nativo, à

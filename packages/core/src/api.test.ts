@@ -15,7 +15,7 @@ import { getConfig, getConfigForServer, patchConfig, patchConfigForServer, creat
 import { createSessionForServer, getSessionDefaultsForServer, getFolderGitForServer, folderGitActionForServer, defaultBase, resumeArchivedConversation } from './api';
 import { mensagemDeErro, formataErro } from './errosApi';
 import { passarBastao, getSyncSetupForServer, setupSyncForServer, disableSyncForServer } from './api';
-import { fetchSessionsForServer, getSessions, probeServerResponse } from './api';
+import { fetchSessionsForServer, getSessions, openSessionsStream, probeServerResponse } from './api';
 import { scanDir, scanDirForServer, listClaudeConfigs, listClaudeConfigsForServer } from './api';
 import { answerQuestions, closePluginPane, inputPluginField, interrupt, openEventStreamForServer, pressPluginButton, selectOption, selectOptionForServer, sendInputForServer, showPluginPane, skipQuestion, submitSelected, submitSelectedForServer } from './api';
 import type { AskQuestionPayload, StateEvent } from './types';
@@ -685,6 +685,35 @@ describe('contratos de conversa com servidor explícito', () => {
     expect(create.mock.calls[0][1]).toEqual({ withCredentials: credentials });
     openEventStreamForServer(target, 'sessao', 'req-legado');
     expect(new URL(create.mock.calls[1][0]).searchParams.has('last_event_id')).toBe(false);
+  });
+});
+
+describe('openSessionsStream — parâmetro do aparelho', () => {
+  const target = { id: 'b', label: 'Servidor B', baseUrl: 'https://b.test', token: 'token-b' };
+  function urlOf(env: Partial<import('./apiEnv').ApiEnv>, s: Server = target): string {
+    const create = vi.fn<import('./apiEnv').ApiEnv['createEventSource']>(() => stubEventSource());
+    configureApi({ getBaseUrl: () => 'https://a.test', getToken: () => 'token-a', onUnauthorized: onUnauthorizedSpy,
+      origin: 'https://app.test', createEventSource: create, ...env });
+    openSessionsStream(s, 'diag-x');
+    return create.mock.calls[0][0];
+  }
+
+  it('com identidade, a URL leva device=<tipo>;<id> codificado junto do token', () => {
+    const url = urlOf({ deviceIdentity: () => ({ kind: 'ios', id: 'abc-1' }) });
+    expect(url).toContain('device=ios%3Babc-1');
+    expect(new URL(url).searchParams.get('device')).toBe('ios;abc-1');
+    expect(new URL(url).searchParams.get('token')).toBe('token-b');
+  });
+
+  it('sem deviceIdentity, ou com null, a URL não leva device', () => {
+    expect(new URL(urlOf({})).searchParams.has('device')).toBe(false);
+    expect(new URL(urlOf({ deviceIdentity: () => null })).searchParams.has('device')).toBe(false);
+  });
+
+  it('servidor de convite não manda o aparelho; o do dono manda mesmo com um convite ativo', () => {
+    const deviceIdentity = () => ({ kind: 'pwa' as const, id: 'abc-1' });
+    expect(new URL(urlOf({ deviceIdentity }, { ...target, invite: true })).searchParams.has('device')).toBe(false);
+    expect(new URL(urlOf({ deviceIdentity, isInvite: () => true })).searchParams.get('device')).toBe('pwa;abc-1');
   });
 });
 

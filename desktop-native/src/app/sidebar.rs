@@ -7,6 +7,7 @@ use gpui_kit::base::AccordionTrigger;
 use gpui_kit::component::{WindowExt, dialog, menu::{DropdownMenu, PopupMenu}, notification::NotificationType};
 use super::machines::enter_to_focused;
 use super::activity::web;
+use crate::appearance::{load_json, save_json};
 use std::{cell::RefCell, rc::Rc};
 
 /// O filtro aparece com mais de 6 sessões, contadas antes de filtrar (`FILTER_FROM` do web).
@@ -525,33 +526,8 @@ fn group_leads_path() -> Option<PathBuf> {
     Some(crate::appearance::dir()?.join("group-leads.json"))
 }
 
-/// Arquivo ausente é a primeira abertura; ilegível vai ao log em vez de voltar ao padrão sem explicação.
-fn load_json<T: serde::de::DeserializeOwned + Default>(path: Option<PathBuf>) -> T {
-    let Some(path) = path else { return T::default() };
-    let bytes = match std::fs::read(&path) {
-        Ok(bytes) => bytes,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return T::default(),
-        Err(e) => { eprintln!("arquivo ilegível em {}: {e}", path.display()); return T::default(); }
-    };
-    serde_json::from_slice(&bytes).unwrap_or_else(|e| { eprintln!("arquivo inválido em {}: {e}", path.display()); T::default() })
-}
-
 static COLLAPSED_WRITTEN: std::sync::Mutex<u64> = std::sync::Mutex::new(0);
 static LEADS_WRITTEN: std::sync::Mutex<u64> = std::sync::Mutex::new(0);
-
-/// Bloqueante. Só a geração mais nova de cada arquivo grava, trocando o arquivo inteiro (tmp + rename), como
-/// `appearance::save`.
-fn save_json<T: serde::Serialize>(path: Option<PathBuf>, generation: u64, written: &std::sync::Mutex<u64>, saved: &T) -> std::io::Result<()> {
-    let mut written = written.lock().unwrap_or_else(|e| e.into_inner());
-    if generation <= *written { return Ok(()); }
-    let path = path.ok_or_else(|| std::io::Error::other("sem pasta de configuração"))?;
-    std::fs::create_dir_all(path.parent().expect("arquivo dentro de hangar-native"))?;
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, serde_json::to_vec(saved).map_err(std::io::Error::other)?)?;
-    std::fs::rename(&tmp, &path)?;
-    *written = generation;
-    Ok(())
-}
 
 impl Hangar {
     pub(super) fn sidebar_tell(&self) -> Tell { Tell(self.tx.clone(), self.connection) }
@@ -844,6 +820,7 @@ impl Hangar {
 
     /// Abrir o menu lê o silenciar daquela sessão; resposta de um menu anterior é descartada pelo número.
     pub(super) fn start_menu(&mut self, target: Target, cx: &mut Context<Self>) {
+        self.tour_event(crate::tour::TourEvent::MenuOpened, cx);
         self.clear_hover();
         self.sidebar.press_seq += 1;
         self.sidebar.menu_seq += 1;
@@ -1449,7 +1426,10 @@ impl Hangar {
                     (Write::Mode(_), Err(error)) => Some(Notification::error(failed("sidebar_mode_failed", &error))),
                     (Write::Reload, Ok(_)) => Some(Notification::success(tr("reload_sent"))),
                     (Write::Reload, Err(error)) => Some(Notification::error(failed("sidebar_reload_failed", &error))),
-                    (Write::Account { label, .. }, Ok(_)) => Some(Notification::success(tr("sidebar_same_moved").replace("{n}", label))),
+                    (Write::Account { label, .. }, Ok(_)) => {
+                        self.tour_event(crate::tour::TourEvent::AccountMoved, cx);
+                        Some(Notification::success(tr("sidebar_same_moved").replace("{n}", label)))
+                    }
                     (Write::Account { .. }, Err(error)) => Some(Notification::error(failed("sidebar_same_failed", &error))),
                     (Write::AnotherRename, result) => {
                         self.rename_suggest.again.remove(&target);
@@ -2081,17 +2061,21 @@ impl Hangar {
             // da rolagem da lista, com teto para várias máquinas em janela curta não tomarem a altura das sessões.
             .when(!vault_chips.is_empty(), |el| el.child(div().id("rail-vault").flex_shrink_0().w_full().max_h(px(84.)).mb(px(4.))
                 .overflow_y_scroll().flex().flex_col().items_center().gap(px(4.)).children(vault_chips)))
-            .child(div().id("session-list").min_h_0().w_full().overflow_y_scroll().px(px(3.)).flex().flex_col().gap(px(4.))
+            .child(div().id("session-list").min_h_0().w_full().overflow_y_scroll().track_scroll(&self.rows_scroll).px(px(3.)).flex().flex_col().gap(px(4.))
                 .when(!fit_content, |el| el.flex_1())
                 .children(rows))
             .child(div().w_full().flex_shrink_0().pt(px(8.)).pb(px(8.)).mt(px(4.)).border_t_1().border_color(theme::border())
                 .flex().flex_col().items_center().gap(px(4.))
-                // O CTA do web no trilho: o botão cheio de destaque, só com o +.
-                .child(Button::new("rail-new-session").custom(ButtonCustomVariant::new(cx).color(theme::accent()).foreground(theme::on_accent())
+                // O CTA do web no trilho: o botão cheio de destaque, só com o +. Com a barra recolhida, o primeiro passo do
+                // tour aponta para ele. Na troca de forma só a camada que está à vista marca a âncora (o corte de
+                // `render_sidebar`): a do trilho, desenhada por último, tomaria a posição do botão da lista cheia.
+                .child(div().flex_shrink_0().map(|el| if self.rail_progress().is_none_or(|p| p >= 0.5) { popup::anchor(el, crate::tour::anchors::NEW_SESSION) } else { el })
+                    .child(Button::new("rail-new-session")
+                        .custom(ButtonCustomVariant::new(cx).color(theme::accent()).foreground(theme::on_accent())
                         .hover(theme::accent().opacity(0.85)).active(theme::accent().opacity(0.75)))
                     .icon(chrome::small_icon(IconName::Plus, 16., theme::on_accent())).w(px(44.)).h(px(36.)).rounded(px(8.))
                     .tooltip(tr("create_title")).accessibility_label(tr("create_title")).disabled(self.api.is_none())
-                    .on_click(cx.listener(|this, _, window, cx| this.open_new_session(None, window, cx))))
+                    .on_click(cx.listener(|this, _, window, cx| this.open_new_session(None, window, cx)))))
                 .child(self.fold_button("rail-fold", cx))
                 .child(Button::new("rail-connection").ghost().size(px(36.)).rounded(px(8.)).tooltip(host).accessibility_label(tr("connection"))
                     .child(div().size(px(7.)).rounded_full().bg(if self.list_online { theme::success() } else { theme::warning() }))
@@ -2130,6 +2114,7 @@ impl Hangar {
         let (weak, menu_target, open) = (cx.entity().downgrade(), target.clone(), target.clone());
         el.on_mouse_down(MouseButton::Right, cx.listener(move |this, _, _, cx| this.start_menu(menu_target.clone(), cx)))
             .on_click(cx.listener(move |this, _, window, cx| this.open_target(&open, window, cx)))
+            .map(|el| popup::anchor(el, crate::tour::anchors::session_row(&target.server, &target.name)))
             .context_menu(session_menu(weak, target.server, session))
             .into_any_element()
     }
@@ -2388,6 +2373,15 @@ mod tests {
         let read: HashSet<String> = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(read, both, "a gravação do 1º clique terminou por último e não voltou o arquivo");
         assert!(!path.with_extension("tmp").exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            // Um tmp largo que sobrou de antes não passa o modo dele ao arquivo.
+            std::fs::write(path.with_extension("tmp"), b"").unwrap();
+            std::fs::set_permissions(path.with_extension("tmp"), std::fs::Permissions::from_mode(0o644)).unwrap();
+            save_json(Some(path.clone()), 3, &written, &one).unwrap();
+            assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        }
         let _ = std::fs::remove_dir_all(dir);
     }
 

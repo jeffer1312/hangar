@@ -155,7 +155,8 @@ fn ago(ts: f64) -> String { side::ago(chrono::Local::now().timestamp() as f64 - 
 impl Hangar {
     /// Abre a busca de conversas (Ctrl+K e, depois, o botão da barra do topo); aberta, fecha.
     pub(super) fn toggle_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.search.open { self.close_search(window, cx) } else { self.open_search(window, cx) }
+        if self.search.open { return self.close_search(window, cx); }
+        self.open_search(window, cx);
     }
 
     pub(super) fn open_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -174,6 +175,8 @@ impl Hangar {
         let previous = window.focused(cx);
         self.search.reopen(previous);
         input.update(cx, |input, cx| input.focus(window, cx));
+        // Aqui, não em quem chama: a busca aberta pelo grupo de ocultas também conclui o passo.
+        if self.search.open { self.tour_event(crate::tour::TourEvent::SearchOpened, cx); }
         cx.notify();
     }
 

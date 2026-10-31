@@ -8,6 +8,7 @@ mod login_browser;
 mod password_vault;
 mod hide_from_list;
 mod rename_suggestion;
+mod tour;
 
 use std::time::Instant;
 use gpui_kit::*;
@@ -22,6 +23,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "codex-atividade" => Some(codex_activity::render),
         "etiquetas-maquina-conta" => Some(account_tags::render),
         "sugestao-de-nome" => Some(rename_suggestion::render),
+        "tour-nativo" => Some(tour::render),
         "cofre-de-senhas" => Some(password_vault::render),
         "relatorio-automatico" => Some(auto_report::render),
         "login-navegador" => Some(login_browser::render),

@@ -87,6 +87,7 @@ impl Hangar {
                 .child(div().flex_1().min_w_0().truncate().text_left().text_size(px(13.)).text_color(theme::faint()).child(format!("{}…", web("lista_buscar"))))
                 .child(chrome::kbd("Ctrl K")))
             .on_click(cx.listener(|this, _, window, cx| this.toggle_search(window, cx)));
+        let search = popup::anchor(shrinking(search), crate::tour::anchors::TOPBAR_SEARCH);
         let pill = Button::new("topbar-cost").custom(ButtonCustomVariant::new(cx).color(transparent_black()).foreground(theme::muted())
                 .hover(theme::hover()).active(theme::hover()))
             .icon(chrome::small_icon(IconName::ChartColumn, 16., theme::muted())).size(px(28.)).rounded(px(6.))
@@ -180,7 +181,7 @@ impl Hangar {
                 let controls = div().flex().justify_end().gap(px(6.))
                     .children(cleanup.map(control))
                     .children(account.map(|account| shrinking(popup::anchor(div().min_w_0(), "topbar-account").child(account))))
-                    .children(presence.map(control))
+                    .children(presence.map(|presence| popup::anchor(control(presence), crate::tour::anchors::TOPBAR_PRESENCE)))
                     .child(control(Button::new("topbar-orq-history").ghost().icon(IconName::Clock).size(px(28.)).disabled(!online)
                         .tooltip(tr_shared("orq_history_title", &[])).accessibility_label(tr_shared("orq_history_title", &[]))
                         .on_click(cx.listener(|this, _, window, cx| this.open_orq_history(window, cx)))))
@@ -193,9 +194,9 @@ impl Hangar {
                 match beside {
                     // Com o painel direito aberto, a busca centra no chat e os controles ficam sobre o painel; mais largos que
                     // ele, invadem o vazio do chat sem empurrar a busca.
-                    Some(side) if side > 0. => el.child(div().flex_1().min_w_0().flex().child(div().flex_1()).child(shrinking(search).min_w(px(140.))).child(div().flex_1()))
+                    Some(side) if side > 0. => el.child(div().flex_1().min_w_0().flex().child(div().flex_1()).child(search.min_w(px(140.))).child(div().flex_1()))
                         .child(if cleaning { controls.flex_shrink_0().min_w(px(side)) } else { controls.flex_shrink_0().w(px(side)) }),
-                    _ => el.child(div().flex_1()).child(shrinking(search).min_w(px(140.)))
+                    _ => el.child(div().flex_1()).child(search.min_w(px(140.)))
                         .child(if cleaning { controls.flex_shrink_0() } else { controls.flex_1().min_w_0() }),
                 }
             })

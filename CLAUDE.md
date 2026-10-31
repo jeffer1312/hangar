@@ -287,6 +287,13 @@ registrado, fora do caminho de leitura, para não competir com o que vale hoje.
 - **Mods no nativo começam minimizados e têm altura estável entre abas; Minimizar é local.**
   Perguntas ocupam o mesmo espaço do mod e só devolvem o painel quando a interação termina. Minimização manual, aba e
   rolagem pertencem à sessão. Evidência em [frontend.md](docs/decisoes/frontend.md#mods-altura-estável-e-pergunta-no-mesmo-espaço-16102026).
+- **Tour, dicas e "Mostrar no app" do nativo são balões presos a peças reais, pelo módulo `tour/`.**
+  A peça se registra com `popup::anchor` e um id de `tour/anchors.rs`; a posição vale só enquanto a
+  área que a desenhou não redesenhou sem ela, e é lida no render da raiz. O balão avança pela ação
+  real no ponto do código onde ela acontece, nunca por polling. O que foi visto fica em `tour.json`
+  e em `/api/tour-progress` de cada servidor (junção que nunca desfaz). O primeiro acesso de um
+  celular chega pelo parâmetro `device` da lista ao vivo do dono, lido só no ramo do dono e nunca
+  pela porta do Connect. Evidência em [frontend.md](docs/decisoes/frontend.md#tour-de-primeiro-uso-do-nativo-30102026).
 - **Mensagem esperando na fila do Hangar aparece no painel "Na fila", não como bolha.** A lista e a
   ordem vêm do evento `queue`; o modelo é `packages/core/src/queuePanel.ts` (o nativo repete em
   `desktop-native/src/queue_panel.rs`).

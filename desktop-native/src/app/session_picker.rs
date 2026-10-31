@@ -131,7 +131,10 @@ impl Hangar {
         let alive = self.target_session(&chosen.target).is_some_and(|session| {
             chosen.incarnation.as_deref().is_none_or(|captured| incarnation(session) == Some(captured))
         });
-        if alive { self.open_target(&chosen.target, window, cx); }
+        if alive {
+            self.open_target(&chosen.target, window, cx);
+            self.tour_event(crate::tour::TourEvent::NumberedSession, cx);
+        }
         else { window.push_notification(Notification::warning(tr("keyboard_number_unavailable").replace("{number}", input)), cx); }
         self.redraw(panes::Area::Nav, cx);
     }

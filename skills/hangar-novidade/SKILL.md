@@ -68,6 +68,8 @@ A seta ↑ na caixa de mensagem traz de volta as mensagens que você já mandou 
 - `experimente`: uma ação concreta, onde clicar ou o que apertar. Sem ação possível, omita.
 - `animacao`: obrigatório em `novo`, com o nome registrado no passo 4; em `melhoria`, só quando houver
   animação; `correcao` nunca leva.
+- `ancora`: quando a novidade mora numa peça da tela do nativo, o id dela (`desktop-native/src/tour/anchors.rs`);
+  o modal ganha "Mostrar no app". Peça sem id lá: acrescente o id e registre a peça com `popup::anchor`.
 
 ## 4. Animação (obrigatória em `novo`)
 

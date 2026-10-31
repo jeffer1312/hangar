@@ -466,12 +466,21 @@ impl Hangar {
             cx.on_next_frame(window, move |this, window, cx| this.follow_open_tab(seq, new, from, start, None, window, cx));
         }
         let machines = self.plate_machines(&bands);
-        bands.iter().zip(keys).map(|(group, key)| {
+        // Só uma aba-mãe leva a âncora da dica das filhas: duas com o mesmo id brigariam pela posição. Vai na primeira à
+        // vista na faixa (posição do quadro anterior), senão a dica esperaria por uma aba rolada para fora.
+        let kids_tip = self.tour.tip_pending("kids").then(|| {
+            let view = self.tabs_scroll.bounds();
+            let mothers: Vec<usize> = bands.iter().enumerate().filter(|(_, g)| g.mother && g.label.is_some()).map(|(ix, _)| ix).collect();
+            let shown = |test: &dyn Fn(Bounds<Pixels>) -> bool| mothers.iter().copied().find(|ix| self.tabs_scroll.bounds_for_item(*ix).is_some_and(|b| test(b)));
+            // Nenhuma com o centro à vista: a que aparece em parte ainda pode ter o contador na faixa.
+            shown(&|b| view.contains(&b.center())).or_else(|| shown(&|b| view.intersects(&b))).or(mothers.first().copied())
+        }).flatten();
+        bands.iter().zip(keys).enumerate().map(|(ix, (group, key))| {
             let first = order;
             order += group.members.len();
             let tab = match group.label.as_deref() {
                 None => div().flex_shrink_0().children(self.render_session_tab(&group.members[0], None, None, first, &machines, window, cx)).into_any_element(),
-                Some(label) => match group.mother.then(|| self.render_mother_tab(group, label, first, &machines, window, cx)).flatten() {
+                Some(label) => match group.mother.then(|| self.render_mother_tab(group, label, first, kids_tip == Some(ix), &machines, window, cx)).flatten() {
                     Some(tab) => tab,
                     None => {
                         let (last, size) = group.slot(group.members.len() - 1).expect("grupo com membro");
@@ -491,7 +500,7 @@ impl Hangar {
 
     /// Grupo com mãe: uma aba só, a dela. As filhas viram etiquetas pequenas sobre o nome (o clique abre a filha); o clique no
     /// resto abre a mãe e a janela com as abas inteiras das filhas, para cima quando a faixa fica embaixo.
-    fn render_mother_tab(&self, group: &TabGroup, label: &str, tab_index: usize, machines: &PlateMachines, window: &mut Window,
+    fn render_mother_tab(&self, group: &TabGroup, label: &str, tab_index: usize, kids_anchor: bool, machines: &PlateMachines, window: &mut Window,
         cx: &mut Context<Self>) -> Option<AnyElement> {
         let mother = &group.members[0];
         let session = self.target_session(mother)?;
@@ -597,6 +606,7 @@ impl Hangar {
             // A janela das filhas abre só pelo contador; o resto da aba abre a sessão-mãe. Alterna descendo, no mesmo
             // despacho do "clique fora" da janela (que já fechou): `was_open` ainda é o do quadro com ela aberta.
             .child(div().id(SharedString::from(format!("tab-kids-{}", mother.id()))).flex_shrink_0().h(px(22.)).px(px(5.))
+                .when(kids_anchor, |el| popup::anchor(el, crate::tour::anchors::TAB_KIDS))
                 // Borda e fundo no hover: o contador é um botão dentro da aba, e precisa parecer um.
                 .flex().items_center().gap(px(3.)).rounded(px(6.)).cursor_pointer().border_1().border_color(transparent_black())
                 .when(was_open, |el| el.bg(theme::accent_dim()).border_color(theme::accent()))
@@ -630,7 +640,8 @@ impl Hangar {
         // dela: o GPUI pinta a borda por cima do conteúdo do próprio elemento, e aqui é a legenda que tem de cobrir a linha.
         let legend = div().absolute().bottom(px(-KID_CHIP / 2.)).left(px(8.)).right(px(8.)).flex().gap(px(4.)).children(chips);
         Some(div().relative().flex_shrink_0()
-            .child(tab.context_menu(sidebar::session_menu(weak, mother.server.clone(), session.clone())))
+            .child(popup::anchor(tab, crate::tour::anchors::session_row(&mother.server, &mother.name))
+                .context_menu(sidebar::session_menu(weak, mother.server.clone(), session.clone())))
             .child(legend)
             .children(plate.map(|(plate, _)| plate)).into_any_element())
     }
@@ -687,7 +698,8 @@ impl Hangar {
             .when(!self.invite_target(target) && !session.read_only(), |el| {
                 self.group_row(el, session, remote.then_some(target.server.as_str()), 6., false, cx).ml(px(0.))
             });
-        let tab = tab.context_menu(sidebar::session_menu(weak, target.server.clone(), session.clone()));
+        let tab = popup::anchor(tab, crate::tour::anchors::session_row(&target.server, &target.name))
+            .context_menu(sidebar::session_menu(weak, target.server.clone(), session.clone()));
         let Some((plate, _)) = plate else { return Some(tab.into_any_element()) };
         Some(div().relative().flex_shrink_0().child(tab).child(plate).into_any_element())
     }

@@ -109,6 +109,7 @@ async fn list_srv(root: &Path, n: usize) -> Srv {
         "omp_agent": home.join(".omp/agent"), "kimi_home": home.join(".kimi-code")}).to_string());
     let (python, upstream) = spawn_fake().await;
     let mut state = AppState::new(config(upstream, ""));
+    state.devices = Arc::new(hangar_server::devices::Registry::new(home.join(".hangar/devices.json")));
     state.list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&script, Duration::from_secs(5)),
         capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
         FactsClient::new(upstream, SECRET.into())));
@@ -223,6 +224,17 @@ async fn stream_da_lista_filtrado_e_sem_contar_app() {
         assert!(ev.event == "sessions", "o convidado não recebe {}", ev.event);
         if ev.data.contains("working") { break; }
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn guest_list_with_a_device_records_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let srv = list_srv(dir.path(), 2).await;
+    let t = srv.g.token("s0", Kind::Share);
+    let mut es = open_sse(format!("http://{}/api/sessions/events?token={t}&device=ios%3Bg-1", srv.guest)).await;
+    // O dono grava antes de assinar: com a primeira lista na mão, um registro já estaria no disco.
+    assert_eq!(names(&serde_json::from_str(&next_named(&mut es, "sessions").await.data).unwrap()), ["s0"]);
+    assert!(!dir.path().join("home/.hangar/devices.json").exists(), "convidado com concessão não registra aparelho");
 }
 
 #[tokio::test(flavor = "multi_thread")]

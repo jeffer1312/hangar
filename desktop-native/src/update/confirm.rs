@@ -19,7 +19,13 @@ pub(crate) struct News {
     try_it: Option<String>,
     #[serde(default)]
     animation: Option<String>,
+    /// A peça da tela onde a novidade mora (`tour::anchors`). A lista guardada pelo binário anterior não tem o campo.
+    #[serde(default)]
+    anchor: Option<String>,
 }
+
+/// "Mostrar no app": aponta a peça da novidade com o balão do tour, já com o modal fechado.
+type ShowInApp = Rc<dyn Fn(crate::tour::Note, &mut Window, &mut App)>;
 
 #[derive(Clone, Deserialize)]
 struct Warning {
@@ -237,7 +243,7 @@ pub(crate) fn open(window: &mut Window, cx: &mut App, title: String, description
                             let value = understood.clone();
                             move |checked: &bool, window, _| { value.set(*checked); window.refresh(); }
                         })))))
-            .child(sections(tr_shared("update_notes_news", &[]), &primary.news, None, &fixes_open, started, window, cx))
+            .child(sections(tr_shared("update_notes_news", &[]), &primary.news, None, &fixes_open, None, started, window, cx))
             .when_some(all.clone(), |el, (label, value)| el.child(div().px(px(10.)).py(px(9.)).rounded(px(9.)).border_1()
                 .border_color(palette::edge()).bg(palette::fill(0.04)).text_size(px(13.)).child(check("confirm-check", label, value))))
             .into_any_element()
@@ -292,14 +298,15 @@ fn check(id: &'static str, label: String, value: Rc<Cell<bool>>) -> impl IntoEle
 
 /// Rótulo em caixa alta, os cartões (novo e melhoria) e as correções recolhidas: o mesmo bloco nos dois modais.
 /// `stage`: largura da animação no cartão em pé, com o "Experimente"; sem ela, cartão deitado com a animação à esquerda
-/// (o "Atualizar?").
-fn sections(label: String, news: &[News], stage: Option<Pixels>, fixes_open: &Rc<Cell<bool>>, started: Instant, window: &mut Window, cx: &mut App) -> Div {
+/// (o "Atualizar?"). `show`: o "Mostrar no app" dos cartões com âncora; só depois de atualizar, quando a peça já existe.
+fn sections(label: String, news: &[News], stage: Option<Pixels>, fixes_open: &Rc<Cell<bool>>, show: Option<&ShowInApp>, started: Instant,
+    window: &mut Window, cx: &mut App) -> Div {
     let (fixes, cards): (Vec<&News>, Vec<&News>) = news.iter().partition(|n| n.kind == "fix");
     let open = fixes_open.get();
     let toggle = fixes_open.clone();
     div().flex().flex_col().gap(px(12.))
         .when(!cards.is_empty(), |el| el.child(div().mt(px(2.)).text_size(px(10.5)).text_color(theme::faint()).child(label.to_uppercase())))
-        .children(cards.into_iter().map(|item| card(item, stage, started, window, cx)))
+        .children(cards.into_iter().map(|item| card(item, stage, show, started, window, cx)))
         .when(!fixes.is_empty(), |el| el.child(div().flex().flex_col().gap(px(6.))
             .child(div().flex().child(Button::new("update-fixes").ghost().xsmall().ml(px(-6.)).text_size(px(12.)).text_color(theme::muted())
                 .icon(if open { IconName::ChevronDown } else { IconName::ChevronRight })
@@ -310,8 +317,14 @@ fn sections(label: String, news: &[News], stage: Option<Pixels>, fixes_open: &Rc
                     .child(div().flex_1().min_w_0().whitespace_normal().child(item.title.clone()))))))))
 }
 
-fn card(item: &News, stage: Option<Pixels>, started: Instant, window: &mut Window, cx: &mut App) -> Div {
+fn card(item: &News, stage: Option<Pixels>, show: Option<&ShowInApp>, started: Instant, window: &mut Window, cx: &mut App) -> Div {
     let animation = item.animation.as_deref().and_then(crate::news::animation);
+    let point = show.zip(item.in_app()).map(|(show, note)| {
+        let show = show.clone();
+        div().flex().child(Button::new(SharedString::from(format!("update-news-show-{}", item.id))).outline().xsmall()
+            .icon(IconName::Sparkles).label(tr("news_show_in_app"))
+            .on_click(move |_, window, cx| { window.close_dialog(cx); show(note.clone(), window, cx); }))
+    });
     let (badge_hue, badge_text) = palette::badge();
     let kind = match item.kind.as_str() { "new" => Some("update_news_kind_new"), "improvement" => Some("update_news_kind_improvement"), _ => None };
     let heading = div().flex().flex_wrap().items_center().gap_x(px(5.)).gap_y(px(2.))
@@ -332,6 +345,16 @@ fn card(item: &News, stage: Option<Pixels>, started: Instant, window: &mut Windo
         .child(div().flex().flex_col().gap(px(3.)).child(heading).children(text))
         .when_some(item.try_it.clone(), |el, text| el.child(div().text_size(px(11.5)).text_color(badge_text).whitespace_normal()
             .child(tr_shared("update_notes_try_it", &[("text", &text)]))))
+        .children(point)
+}
+
+impl News {
+    /// O balão do "Mostrar no app": só com âncora que o app desenha; o texto é o "Experimente", senão o do cartão.
+    fn in_app(&self) -> Option<crate::tour::Note> {
+        let anchor = self.anchor.as_deref().filter(|anchor| crate::tour::anchors::ALL.contains(anchor))?;
+        Some(crate::tour::Note { id: self.id.clone(), anchor: anchor.to_owned(), title: self.title.clone(),
+            body: self.try_it.clone().unwrap_or_else(|| self.text.clone()) })
+    }
 }
 
 /// O lugar da animação no cartão, medido a cada quadro para o seguinte: a largura real (o Dialog encolhe em janela
@@ -356,7 +379,7 @@ fn stage_slot(id: &str, guess: Pixels, draw: crate::news::NewsAnimation, started
 }
 
 /// "O que chegou para você": uma vez, com o que o "Atualizar?" guardou.
-fn open_whats_new(items: Vec<News>, window: &mut Window, cx: &mut App) {
+fn open_whats_new(items: Vec<News>, show: Option<ShowInApp>, window: &mut Window, cx: &mut App) {
     let fixes_open = Rc::new(Cell::new(false));
     let started = Instant::now();
     window.open_dialog(cx, move |dialog, window, cx| {
@@ -367,7 +390,7 @@ fn open_whats_new(items: Vec<News>, window: &mut Window, cx: &mut App) {
         let stage = width - px(64.);
         crate::app::popup::dialog(dialog).w(width).p(px(18.)).rounded(px(14.)).close_button(false).margin_top(top)
             .child(div().id("whats-new-body").max_h(max).overflow_y_scroll()
-                .child(sections(tr_shared("update_whats_new_title", &[]), &items, Some(stage), &fixes_open, started, window, cx)))
+                .child(sections(tr_shared("update_whats_new_title", &[]), &items, Some(stage), &fixes_open, show.as_ref(), started, window, cx)))
             .footer(DialogFooter::new().child(chrome::light_button("whats-new-close", true, cx).label(tr("close"))
                 .on_click(|_, window, cx| window.close_dialog(cx))))
     });
@@ -406,7 +429,12 @@ fn shows_at_startup(pending: &Pending, current: &str) -> bool { pending.from_nat
 /// processo sem trocar o binário.
 pub(crate) fn show_pending(require_new_binary: bool, window: &mut Window, cx: &mut App) {
     let shows = |p: &Pending| if require_new_binary { shows_at_startup(p, super::CURRENT) } else { !p.items.is_empty() };
-    if let Some(pending) = take_pending().filter(shows) { open_whats_new(pending.items, window, cx); }
+    let Some(pending) = take_pending().filter(shows) else { return };
+    // Também chamado do `Updater`, que não tem a entidade do app no contexto: ela vem do global.
+    let show = crate::app::Hangar::weak(cx).map(|hangar| -> ShowInApp {
+        Rc::new(move |note: crate::tour::Note, _: &mut Window, cx: &mut App| { let _ = hangar.update(cx, |this, cx| this.show_news(note, cx)); })
+    });
+    open_whats_new(pending.items, show, window, cx);
 }
 
 /// `HANGAR_NATIVE_PREVIEW=update-confirm` e `=whats-new` (build de debug): os dois modais com uma amostra fixa.
@@ -414,21 +442,26 @@ pub(crate) fn show_pending(require_new_binary: bool, window: &mut Window, cx: &m
 pub(crate) fn open_preview(whats_new: bool, window: &mut Window, cx: &mut App) {
     let news = |id: &str, title: &str, kind: &str, text: &str, try_it: Option<&str>, animation: Option<&str>| News { id: id.into(),
         title: title.into(), kind: kind.into(), text: text.into(), platforms: "desktop".into(), try_it: try_it.map(Into::into),
-        animation: animation.map(Into::into) };
+        animation: animation.map(Into::into), anchor: None };
     let items = vec![
         news("historico", "Histórico do que você digitou", "new",
             "A seta para cima no compositor traz de volta o que você já mandou nesta conversa, do mais recente para o mais antigo.",
             Some("↑ em qualquer conversa"), Some("historico-compositor")),
+        News { anchor: Some(crate::tour::anchors::COMPOSER.into()), ..news("tour", "Os recursos escondidos, mostrados na tela", "new",
+            "Balões em cima das peças de verdade mostram o que estava escondido.", Some("Configurações → Sobre → Ver o tour de novo."),
+            Some("tour-nativo")) },
         news("colar-windows", "Texto colado com várias linhas no Windows chega ao Claude", "fix", "", None, None),
         news("windows-passo", "O backend no Windows não cai mais ao subir com passo pendente", "fix", "", None, None),
         news("worktrees", "A limpeza de worktrees reconhece as já mescladas", "fix", "", None, None),
     ];
     if whats_new {
+        // O "Mostrar no app" aparece para a foto; aqui ele só fecha o modal.
+        let close_only: ShowInApp = Rc::new(|_: crate::tour::Note, _: &mut Window, _: &mut App| {});
         // Um cartão por animação: a rolagem e o redesenho são provados com o modal cheio, como numa versão de verdade.
-        let more = ["codex-atividade", "etiquetas-maquina-conta", "sugestao-de-nome", "cofre-de-senhas", "relatorio-automatico", "ocultar-da-lista"]
+        let more = ["codex-atividade", "etiquetas-maquina-conta", "sugestao-de-nome", "cofre-de-senhas", "relatorio-automatico", "ocultar-da-lista", "tour-nativo"]
             .map(|name| news(name, name, "new", "Texto de amostra da novidade, com duas linhas para o cartão ter a altura de um real.",
                 Some("abra e teste"), Some(name)));
-        return open_whats_new(items.into_iter().chain(more).collect(), window, cx);
+        return open_whats_new(items.into_iter().chain(more).collect(), Some(close_only), window, cx);
     }
     let notes = Notes { version: Some("0.1.0.8242 → 0.1.0.8311".into()), news: items, server: "preview".into(), failed: false,
         incomplete: false, label: None,
@@ -449,10 +482,25 @@ mod tests {
     #[test]
     fn startup_shows_only_after_the_binary_changed() {
         let pending = |from: &str, items: usize| Pending { from_native: from.into(), server: "s".into(), items: (0..items).map(|i| News {
-            id: i.to_string(), title: "t".into(), kind: "new".into(), text: String::new(), platforms: "all".into(), try_it: None, animation: None }).collect() };
+            id: i.to_string(), title: "t".into(), kind: "new".into(), text: String::new(), platforms: "all".into(), try_it: None, animation: None, anchor: None }).collect() };
         assert!(shows_at_startup(&pending("1", 1), "2"));
         assert!(!shows_at_startup(&pending("2", 1), "2"));
         assert!(!shows_at_startup(&pending("1", 0), "2"));
+    }
+
+    #[test]
+    fn pending_from_the_previous_binary_reads_without_anchor_and_only_known_anchors_point() {
+        let old = serde_json::json!({"from_native": "1", "server": "s", "items": [{"id": "a", "title": "t", "kind": "new", "text": "x"}]});
+        let pending: Pending = serde_json::from_value(old).unwrap();
+        assert_eq!(pending.items[0].anchor, None);
+        assert!(pending.items[0].in_app().is_none(), "sem âncora, sem Mostrar no app");
+
+        let item = |anchor: &str, try_it: Option<&str>| serde_json::from_value::<News>(serde_json::json!({"id": "b", "title": "t",
+            "kind": "new", "text": "corpo", "try_it": try_it, "anchor": anchor})).unwrap();
+        let note = item("composer", Some("aperte ↑")).in_app().unwrap();
+        assert_eq!((note.id.as_str(), note.anchor.as_str(), note.body.as_str()), ("b", "composer", "aperte ↑"));
+        assert_eq!(item("composer", None).in_app().unwrap().body, "corpo", "sem Experimente, o texto do cartão");
+        assert!(item("peca-que-nao-existe", None).in_app().is_none());
     }
 
     fn refused(status: Option<u16>, detail: &str) -> Failure {

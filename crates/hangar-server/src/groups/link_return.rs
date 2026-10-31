@@ -97,7 +97,7 @@ async fn run(st: Arc<AppState>, groups: Arc<GroupService>) {
             Idle::UntilWake => { WAKE.notified().await; continue }
             Idle::Retry(after) => { let _ = tokio::time::timeout(after, WAKE.notified()).await; continue }
         }
-        let sub = st.hub.subscribe_internal(&st.list, &st.diag);
+        let sub = st.hub.subscribe_internal(&st.list, &st.devices, &st.diag);
         let mut watcher = Watcher::default();
         let mut scanned = Instant::now();
         loop {

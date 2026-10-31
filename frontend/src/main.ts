@@ -6,6 +6,7 @@ import { buscarPaleta, aplicarPaleta, ligarAtualizacaoAoFocar } from './lib/desk
 import { applyBg, applyAppearance, applyLiquid } from './lib/background';
 import { ensureCookie, getRouteBaseUrl, getToken, handleUnauthorized, isActiveInvite, markInviteEnded, getActiveId, rememberLan } from './lib/auth';
 import { localeAtual } from './lib/locale';
+import { deviceIdentity } from './lib/deviceIdentity';
 import { configureApi, configureLocale, configureDiag } from '@hangar/core';
 import { registrar as registrarDiag, novoReq } from './lib/diag';
 
@@ -24,6 +25,7 @@ configureApi({
     new EventSource(url, { withCredentials }) as unknown as import('@hangar/core').EventSourceLike,
   isInvite: isActiveInvite,
   onInviteEnded: (id) => markInviteEnded(id ?? getActiveId()),
+  deviceIdentity,
 });
 
 // Pedaco que nao existe mais no servidor -> recarrega. A aba aberta ANTES de um deploy guarda um

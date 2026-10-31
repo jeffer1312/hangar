@@ -744,6 +744,13 @@ impl Hangar {
         if self.open_api.is_some() { &self.accounts.session_list } else { &self.accounts.list }
     }
 
+    /// Contas Claude e se há uma Codex, na lista do anel: o que o anel oferece para levar a conversa. `None` enquanto a lista
+    /// não chegou; a leitura que falhou conta como lista vazia, para quem espera por ela não ficar preso.
+    pub(super) fn account_kinds(&self) -> Option<(usize, bool)> {
+        let list = match self.session_accounts().value.as_ref()? { Ok(list) => list.as_slice(), Err(_) => &[][..] };
+        Some((list.iter().filter(|c| c.kind == "claude").count(), list.iter().any(|c| c.kind == "codex")))
+    }
+
     fn load_session_engines(&mut self, cx: &mut Context<Self>) {
         let Some(api) = self.open_api.clone().or_else(|| self.api.clone()) else { return; };
         let server = self.open_server();
@@ -839,6 +846,8 @@ impl Hangar {
     }
 
     pub(super) fn receive_accounts(&mut self, reply: AccountsReply, window: &mut Window, cx: &mut Context<Self>) {
+        // As contas decidem passos do tour (`account_kinds`).
+        self.tour_dirty = true;
         let accounts = &mut self.accounts;
         match reply {
             AccountsReply::List(seq, result) => {
