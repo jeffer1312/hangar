@@ -305,7 +305,7 @@ impl Backend for Live {
     fn refine<'a>(&'a self, goal: &'a str, check_cmd: Option<&'a str>) -> BoxFuture<'a, Result<String, String>> {
         Box::pin(async move {
             let bridge = crate::accounts::http::bridge(&self.st).ok();
-            let cli = super::refine::Cli { accounts: self.st.accounts.clone(), bridge };
+            let cli = crate::claude_p::Cli { accounts: self.st.accounts.clone(), bridge };
             super::refine::refine(goal, check_cmd, &cli).await
         })
     }

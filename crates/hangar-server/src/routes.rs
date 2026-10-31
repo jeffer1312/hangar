@@ -61,6 +61,8 @@ pub struct AppState {
     pub costs: Arc<crate::costs::collect::Collector>,
     /// Índice de conversas da busca e do Arquivo; o produtor liga só na subida real (`main.rs`).
     pub search: crate::search::Index,
+    /// O `claude -p` do Perguntar; `None` = o CLI do PATH (o teste troca por um falso).
+    pub claude_p: Option<Arc<dyn crate::claude_p::Runner>>,
     pub fx:Arc<crate::costs::fx::Fx>,
     pub reports: Arc<crate::costs::ReportCache>,
     pub origins_home: std::path::PathBuf,
@@ -193,7 +195,7 @@ impl AppState {
         let vault_requests = Arc::new(crate::vault::requests::Requests::default());
         let accounts = crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture());
         let search = crate::search::Index::server(accounts.clone());
-        AppState { accounts, search, command_catalog: Arc::default(), groups, server_id, peers: Arc::new(crate::groups::peers_from_env()), auth: Auth::configured(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, public_v6: None, front: None, diag,
+        AppState { accounts, search, claude_p: None, command_catalog: Arc::default(), groups, server_id, peers: Arc::new(crate::groups::peers_from_env()), auth: Auth::configured(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, public_v6: None, front: None, diag,
             workspace_slots: Arc::new(tokio::sync::Semaphore::new(4)),
             interactions, plugin,
             remote_browser: Arc::default(),
@@ -665,6 +667,7 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/cotacao", get(crate::costs_routes::cotacao).fallback(pass_any))
         .route("/api/uso", get(crate::costs_routes::usage).fallback(pass_any))
         .route("/api/search", get(crate::search::http::route).fallback(pass_any))
+        .route("/api/ask-history", axum::routing::post(crate::search::ask::route).fallback(pass_any))
         .route("/api/search/context", get(crate::search_context::route).fallback(pass_any))
         .route("/api/migration/status", get(crate::migration_status::status).fallback(pass_any))
         // Novidades e avisos da próxima atualização: só o dono, nunca repassado (o Python não tem a rota).

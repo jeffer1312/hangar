@@ -7,6 +7,7 @@ use axum::http::StatusCode;
 use hangar_server::{
     accounts::{AccountService, environment::AccountEnvironment},
     auth::TrustedHosts,
+    claude_p::Runner,
     config::Config,
     list::{bridge::{ListBridge, ListEnv, parse_dirs}, facts::FactsClient, mux::Mux},
     routes::{AppState, router},
@@ -37,28 +38,28 @@ const MTIMES: [&str; 14] = [
 ];
 const RESERVE: &str = ".claude-a/projects/-home-jefferson/f2afaa93-d2aa-45db-9d68-b430c22deab2.jsonl";
 /// mtime da cópia `.from-a` na captura (índice 9 de `MTIMES`): só o `rg` a lia (F4).
-const FROM_COPY_MTIME: f64 = 1_793_001_000.0;
+pub(super) const FROM_COPY_MTIME: f64 = 1_793_001_000.0;
 /// O `/compact` que o `--resume` regravou: o índice do Python o tinha, o histórico não (M8, F5).
-const REWRITTEN: &str = "1c3fcd4c-a0d5-5f03-978c-2be4a25ee107";
+pub(super) const REWRITTEN: &str = "1c3fcd4c-a0d5-5f03-978c-2be4a25ee107";
 
 fn capture() -> Value {
     let text = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/search/contract/search/search_index.json")).unwrap();
     serde_json::from_str::<Value>(&text).unwrap()["data"]["results"].clone()
 }
 
-struct Opts { ready: bool, live: Option<PathBuf>, fixtures: bool }
+pub(super) struct Opts { pub(super) ready: bool, pub(super) live: Option<PathBuf>, pub(super) fixtures: bool, pub(super) claude_p: Option<Arc<dyn Runner>> }
 
 impl Default for Opts {
-    fn default() -> Self { Self { ready: true, live: Some(PathBuf::from(NORMAL)), fixtures: true } }
+    fn default() -> Self { Self { ready: true, live: Some(PathBuf::from(NORMAL)), fixtures: true, claude_p: None } }
 }
 
-struct Scene {
+pub(super) struct Scene {
     _dir: tempfile::TempDir,
-    home: PathBuf,
-    python: Arc<Fake>,
+    pub(super) home: PathBuf,
+    pub(super) python: Arc<Fake>,
     index: Index,
     reports: Arc<Mutex<Vec<(String, String)>>>,
-    address: SocketAddr,
+    pub(super) address: SocketAddr,
     task: tokio::task::JoinHandle<()>,
 }
 impl Drop for Scene {
@@ -78,7 +79,7 @@ fn set_mtime(path: &Path, secs: u64) {
 }
 
 impl Scene {
-    async fn new(opts: Opts) -> Self {
+    pub(super) async fn new(opts: Opts) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().canonicalize().unwrap().join("home");
         if opts.fixtures {
@@ -115,6 +116,7 @@ impl Scene {
         let index = Index::for_accounts(state.accounts.clone(), &dir.path().join("idx"), report, timing);
         if opts.ready { index.update().unwrap(); }
         state.search = index.clone();
+        state.claude_p = opts.claude_p.clone();
         // Multiplexador de mentira: uma sessão (`sessao-viva`) quando o teste pede um transcript vivo.
         let script = dir.path().join("tmux");
         let pane = if opts.live.is_some() { format!("{LIVE_NAME}\\t1\\t\\t{}\\t%%0\\t\\t\\t\\t0\\t0\\n", home.display()) } else { String::new() };
@@ -163,7 +165,7 @@ impl Scene {
         Value::Array(out)
     }
 
-    fn with_account(&self, hit: &Value) -> Value {
+    pub(super) fn with_account(&self, hit: &Value) -> Value {
         let in_b = ["f8f12de6-7941-4bd0-8f0c-02bc0b4b7f53", "db401d8f-fc08-463c-a3cc-4734fc5dc634", "a5a5a5a5-0000-4000-8000-000000000001"]
             .contains(&hit["session_id"].as_str().unwrap());
         let dir = self.account(if in_b { 'b' } else { 'a' });
@@ -294,7 +296,7 @@ async fn search_route_caps_at_fifty_hits_newest_conversation_first() {
     // SRCH-08, 09, 11 e 32: 20 conversas com 4 achados cada; ficam 3 por conversa, da mais nova para a
     // mais velha, até 50 (a 17ª entra com 2). SRCH-10: o teto é exato também na varredura.
     for ready in [true, false] {
-        let scene = Scene::new(Opts { ready: false, live: None, fixtures: false }).await;
+        let scene = Scene::new(Opts { ready: false, live: None, fixtures: false, ..Opts::default() }).await;
         many(&scene.home, 20, 4);
         std::fs::create_dir_all(scene.home.join(".claude-a")).unwrap();
         std::fs::write(scene.home.join(".claude-a/.credentials.json"), "{}").unwrap();
@@ -309,7 +311,7 @@ async fn search_route_caps_at_fifty_hits_newest_conversation_first() {
 #[tokio::test]
 async fn search_route_scan_reads_at_most_200_matching_lines_and_skips_files_over_64_mb() {
     // SRCH-34 e SRCH-35 (só a varredura; o índice não tem esses tetos).
-    let scene = Scene::new(Opts { ready: false, live: None, fixtures: false }).await;
+    let scene = Scene::new(Opts { ready: false, live: None, fixtures: false, ..Opts::default() }).await;
     std::fs::create_dir_all(scene.home.join(".claude-a/projects/-p")).unwrap();
     std::fs::write(scene.home.join(".claude-a/.credentials.json"), "{}").unwrap();
     let noise = |i: usize| format!("{}\n", json!({"type": "user", "uuid": format!("r{i}"), "message": {"role": "user", "content": [
@@ -334,7 +336,7 @@ async fn search_route_scan_reads_at_most_200_matching_lines_and_skips_files_over
 async fn search_route_without_any_account_is_empty() {
     // SRCH-07: nenhuma pasta de conversas, nas duas formas.
     for ready in [true, false] {
-        let scene = Scene::new(Opts { ready, live: None, fixtures: false }).await;
+        let scene = Scene::new(Opts { ready, live: None, fixtures: false, ..Opts::default() }).await;
         assert_eq!(scene.search("clippy").await, json!([]), "ready={ready}");
     }
 }

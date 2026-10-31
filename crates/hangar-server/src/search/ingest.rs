@@ -23,9 +23,7 @@ pub(super) const MAX_LINE_BYTES: usize = 40_000;
 const HEAD_LINES: i64 = 60;
 const INTERNAL_LINES: i64 = 30;
 const PREFIX_CHARS: usize = 60;
-// O pedido do bastão só existe no Python (`bastao._REESCRITA_PEDIDO`); o do Perguntar
-// (`search._ASK_SYSTEM`) ainda não chegou ao Rust.
-const ASK_PREFIX: &str = "Você responde onde um assunto apareceu nas conversas do usuá";
+// O pedido do bastão só existe no Python (`bastao._REESCRITA_PEDIDO`).
 const HANDOFF_PREFIX: &str = "Você recebeu abaixo um resumo automático de uma sessão de tr";
 
 static SID: LazyLock<Regex> = LazyLock::new(|| {
@@ -34,7 +32,7 @@ static SID: LazyLock<Regex> = LazyLock::new(|| {
 
 /// Os 60 primeiros caracteres de cada pedido interno do Hangar: conversa que começa assim fica fora.
 pub(crate) fn internal_prefixes() -> Vec<String> {
-    [ASK_PREFIX, crate::loops::refine::SYSTEM, HANDOFF_PREFIX].iter()
+    [super::ask::SYSTEM, crate::loops::refine::SYSTEM, HANDOFF_PREFIX].iter()
         .map(|p| p.chars().take(PREFIX_CHARS).collect()).collect()
 }
 
