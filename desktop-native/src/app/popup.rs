@@ -18,7 +18,7 @@ thread_local! {
 type Scope = Option<Area>;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct Mark { bounds: Bounds<Pixels>, scope: Scope, generation: u64, frame: u64 }
+struct Mark { bounds: Bounds<Pixels>, scope: Scope, generation: u64 }
 
 /// Onde cada âncora foi desenhada e em que desenho de quem a desenhou. A área guardada reusada não regrava as suas: a
 /// posição vale enquanto a área não redesenhar e seguir na tela; redesenhada sem a peça, a peça saiu.
@@ -29,6 +29,8 @@ struct Anchors {
     generations: HashMap<Scope, u64>,
     /// O quadro da raiz em que cada área esteve na tela pela última vez, redesenhada ou reusada.
     shown: HashMap<Area, u64>,
+    /// Áreas que voltaram à tela neste quadro depois de ficar fora.
+    returned: HashSet<Area>,
     drawing: Scope,
     /// Lidas desde o começo do quadro: só quem tem leitor pede outro quadro ao mudar, senão rolar a lista de sessões
     /// redesenharia a janela inteira.
@@ -40,13 +42,19 @@ impl Anchors {
 
     fn advance(&mut self, scope: Scope) { *self.generations.entry(scope).or_default() += 1; }
 
-    fn show(&mut self, area: Area) { let frame = self.generation(None); self.shown.insert(area, frame); }
+    fn show(&mut self, area: Area) {
+        let frame = self.generation(None);
+        if self.shown.insert(area, frame).is_some_and(|last| last + 1 < frame) { self.returned.insert(area); }
+        else { self.returned.remove(&area); }
+    }
 
     /// Grava a posição desenhada; diz se um leitor dela precisa de outro quadro (mudou de lugar ou voltou à tela).
+    /// Voltar é quem a desenhou ter desenhado sem ela, ou a área ter saído da tela: área reusada do cache por muitos
+    /// quadros não conta, senão cada redesenho dela com leitor aberto redesenharia a janela inteira.
     fn record(&mut self, id: SharedString, bounds: Bounds<Pixels>, scope: Scope, generation: u64) -> bool {
-        let frame = self.generation(None);
-        let changed = self.marks.insert(id.clone(), Mark { bounds, scope, generation, frame })
-            .is_none_or(|prev| prev.bounds != bounds || prev.frame + 1 < frame);
+        let back = scope.is_some_and(|area| self.returned.contains(&area));
+        let changed = self.marks.insert(id.clone(), Mark { bounds, scope, generation })
+            .is_none_or(|prev| prev.bounds != bounds || prev.scope != scope || prev.generation + 1 < generation || back);
         changed && self.read.contains(&id)
     }
 
@@ -452,6 +460,28 @@ mod tests {
         frame(&mut anchors, None);
         frame(&mut anchors, None);
         assert!(anchors.record("x".into(), at(2.), None, anchors.generation(None)), "voltou depois de sumir");
+    }
+
+    #[test]
+    fn area_reused_for_many_frames_does_not_ask_for_another_frame() {
+        let mut anchors = Anchors::default();
+        let top = Some(Area::Top);
+        anchors.read.insert("search".into());
+        frame(&mut anchors, top);
+        anchors.advance(top);
+        anchors.record("search".into(), at(1.), top, anchors.generation(top));
+        for _ in 0..5 { frame(&mut anchors, top); }
+        anchors.advance(top);
+        assert!(!anchors.record("search".into(), at(1.), top, anchors.generation(top)), "reusada e redesenhada no mesmo lugar");
+        // Redesenhada sem a peça e depois com ela.
+        anchors.advance(top);
+        anchors.advance(top);
+        assert!(anchors.record("search".into(), at(1.), top, anchors.generation(top)), "a peça voltou");
+        // A área saiu da tela e voltou.
+        frame(&mut anchors, None);
+        frame(&mut anchors, top);
+        anchors.advance(top);
+        assert!(anchors.record("search".into(), at(1.), top, anchors.generation(top)), "a área voltou");
     }
 
     #[test]
