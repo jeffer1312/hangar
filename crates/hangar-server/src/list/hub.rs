@@ -175,7 +175,10 @@ async fn produce(hub: Arc<ListHub>, list: Arc<ListBridge>, devices: Arc<Registry
     let mut keyring = list.keyring.subscribe();
     // A única leitura do arquivo, fora do runtime; depois o retrato sai da memória.
     let (d, g) = (devices.clone(), diag.clone());
-    let _ = tokio::task::spawn_blocking(move || d.snapshot(&g)).await;
+    if let Err(error) = tokio::task::spawn_blocking(move || d.snapshot(&g)).await {
+        tracing::warn!(code = "devices_task_failed", %error, "leitura de devices.json caiu");
+        diag.report("rust.devices", "", "devices_task_failed", "leitura de devices.json caiu");
+    }
     let mut vault = hub.vault.clone();
     loop {
         let clients = {
@@ -705,7 +708,10 @@ pub async fn events(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
                 && !st.devices.is_known(&id) {
                 let (devices, diag) = (st.devices.clone(), st.diag.clone());
                 // Antes de assinar: a primeira lista desta conexão já traz o aparelho.
-                let _ = tokio::task::spawn_blocking(move || devices.record(kind, &id, &diag)).await;
+                if let Err(error) = tokio::task::spawn_blocking({ let diag = diag.clone(); move || devices.record(kind, &id, &diag) }).await {
+                    tracing::warn!(code = "devices_task_failed", %error, "registro do aparelho caiu");
+                    diag.report("rust.devices", "", "devices_task_failed", "registro do aparelho caiu");
+                }
             }
             tokio::spawn(client_loop(st.hub.subscribe(&st.list, &st.devices, &st.diag, true), tx));
         }

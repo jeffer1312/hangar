@@ -96,7 +96,8 @@ impl Registry {
                 if changed { inner.json = json; }
                 changed
             }
-            Err(_) => {
+            Err(error) => {
+                tracing::warn!(code = "devices_unreadable", %error, "devices.json ilegível");
                 diag.report("rust.devices", "", "devices_unreadable", "devices.json ilegível; não é gravado e vale o último retrato");
                 false
             }
@@ -136,7 +137,10 @@ impl Registry {
                     inner.devices = Some(next);
                     changed = true;
                 }
-                Err(_) => diag.report("rust.devices", "", "devices_write_failed", "aparelho novo sem gravar em devices.json; vale o último retrato"),
+                Err(error) => {
+                    tracing::warn!(code = "devices_write_failed", %error, "devices.json sem gravar");
+                    diag.report("rust.devices", "", "devices_write_failed", "aparelho novo sem gravar em devices.json; vale o último retrato");
+                }
             }
         }
         if changed { self.changed.notify_one(); }

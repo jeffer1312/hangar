@@ -12,18 +12,22 @@ function newId(): string {
   return Array.from({ length: 32 }, () => Math.floor(Math.random() * 16).toString(16)).join('');
 }
 
-// O cofre é assíncrono e o core pede a identidade na hora: até carregar, a lista abre sem o
-// parâmetro e o próximo stream manda. Id só entra em uso depois de gravado, senão cada abertura
-// do app pareceria um aparelho novo.
+let ready: Promise<void> = Promise.resolve();
+
+/** A lista espera esta leitura antes de abrir (`deviceIdentityReady` no core). */
+export function deviceReady(): Promise<void> { return ready; }
+
+// Id só entra em uso depois de gravado, senão cada abertura do app pareceria um aparelho novo.
 export function loadDeviceId(): Promise<void> {
-  return SecureStore.getItemAsync(KEY).then(async (saved) => {
+  ready = SecureStore.getItemAsync(KEY).then(async (saved) => {
     if (saved && VALID.test(saved)) { deviceId = saved; return; }
     const id = newId();
     await SecureStore.setItemAsync(KEY, id);
     deviceId = id;
-  }).catch(() => {
-    console.warn('device_identity_unavailable');
+  }).catch((error: unknown) => {
+    console.warn('device_identity_unavailable', String(error));
   });
+  return ready;
 }
 
 export function deviceIdentity(): { kind: 'ios' | 'android'; id: string } | null {

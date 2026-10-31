@@ -77,11 +77,17 @@ pub async fn handle(State(state): State<Arc<AppState>>, ConnectInfo(peer): Conne
         return failure(StatusCode::FORBIDDEN, "tour_progress_owner_only", "só o dono pode ler ou alterar o que já foi visto do tour");
     }
     let patch = if request.method() == Method::PUT {
-        let parsed = to_bytes(request.into_body(), 64 * 1024).await.ok()
-            .and_then(|raw| serde_json::from_slice::<Progress>(&raw).ok())
-            .filter(Progress::valid);
-        let Some(patch) = parsed else {
-            return failure(StatusCode::UNPROCESSABLE_ENTITY, "erro_corpo_invalido", "corpo inválido");
+        let parsed = match to_bytes(request.into_body(), 64 * 1024).await {
+            Ok(raw) => serde_json::from_slice::<Progress>(&raw).map_err(|e| e.to_string()),
+            Err(e) => Err(e.to_string()),
+        }.and_then(|p| if p.valid() { Ok(p) } else { Err("data inválida".to_owned()) });
+        let patch = match parsed {
+            Ok(patch) => patch,
+            // App mais novo com campo que este servidor não conhece cai aqui: o motivo fica no log.
+            Err(cause) => {
+                tracing::warn!(code = "erro_corpo_invalido", %cause, "tour-progress recusou o corpo");
+                return failure(StatusCode::UNPROCESSABLE_ENTITY, "erro_corpo_invalido", "corpo inválido");
+            }
         };
         Some(patch)
     } else { None };

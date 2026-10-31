@@ -5,7 +5,7 @@ const VALID = /^[A-Za-z0-9-]{1,64}$/;
 
 export function deviceIdentity(): { kind: 'pwa'; id: string } | null {
   // No PC o navegador não é celular: o aviso do nativo é de celular conectado.
-  if (!matchMedia('(pointer: coarse)').matches) return null;
+  if (typeof matchMedia !== 'function' || !matchMedia('(pointer: coarse)').matches) return null;
   try {
     const saved = localStorage.getItem(KEY);
     if (saved && VALID.test(saved)) return { kind: 'pwa', id: saved };
