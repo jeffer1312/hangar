@@ -130,19 +130,34 @@ impl<'a> Ctx<'a> {
         out
     }
 
-    /// Prévia, cwd, se entra no Arquivo (`_tem_usuario` e não é conversa interna, F8) e a última
-    /// mensagem do índice; arquivo fora dele ou mudado é lido do disco (`_head_info`).
+    /// A linha do índice, se o arquivo não mudou depois da leitura dela.
+    fn row(&self, f: &Claude) -> Option<&ArchiveRow> { self.index.get(&*f.path.to_string_lossy()).filter(|r| r.fresh(&f.md)) }
+
+    /// Prévia ou arquivo parado há mais de 15 min basta (`_tem_usuario`): há conversa com prévia e sem
+    /// linha `user`.
+    fn settled(&self, f: &Claude, preview: &str) -> bool { !preview.is_empty() || self.now - f.mtime > RESERVE_WINDOW }
+
+    /// Entra no Arquivo. A conversa interna sai só quando o índice já a marcou (F8): fora dele,
+    /// descobrir custaria ler o começo de cada transcript, o que o Python não fazia.
+    fn row_listed(&self, f: &Claude, row: &ArchiveRow) -> bool { (row.has_user || self.settled(f, &row.preview)) && !row.internal }
+
+    /// Se entra no Arquivo sem ler o cabeçalho (lista de pastas): o índice, ou o `_tem_usuario` sem prévia.
+    fn listed(&self, f: &Claude) -> bool {
+        match self.row(f) { Some(row) => self.row_listed(f, row), None => self.settled(f, "") || has_user_line(&f.path) }
+    }
+
+    /// O cwd do índice; fora dele, o do cabeçalho.
+    fn cwd(&self, f: &Claude) -> Option<String> { self.row(f).map_or_else(|| read_head(&f.path).cwd, |row| row.cwd.clone()) }
+
+    /// Prévia, cwd, se entra no Arquivo e a última mensagem do índice; arquivo fora dele ou mudado é
+    /// lido do disco (`_head_info`).
     fn facts(&self, f: &Claude) -> Facts {
-        // Prévia ou arquivo parado há mais de 15 min basta: há conversa com prévia e sem linha `user`.
-        let settled = |preview: &str| !preview.is_empty() || self.now - f.mtime > RESERVE_WINDOW;
-        let row = self.index.get(&*f.path.to_string_lossy());
-        if let Some(row) = row.filter(|r| r.fresh(&f.md)) {
-            let listed = (row.has_user || settled(&row.preview)) && !row.internal;
-            return Facts { preview: row.preview.clone(), cwd: row.cwd.clone(), listed, last: Some(row.last_text.clone()) };
+        if let Some(row) = self.row(f) {
+            return Facts { preview: row.preview.clone(), cwd: row.cwd.clone(), listed: self.row_listed(f, row), last: Some(row.last_text.clone()) };
         }
         let head = read_head(&f.path);
-        let has_user = settled(&head.preview) || head.has_user || has_user_line(&f.path);
-        Facts { listed: has_user && !head.internal.unwrap_or(false), preview: head.preview, cwd: head.cwd, last: None }
+        let listed = self.settled(f, &head.preview) || head.has_user || has_user_line(&f.path);
+        Facts { listed, preview: head.preview, cwd: head.cwd, last: None }
     }
 
     fn name(&self, path: &Path) -> Value { self.closed.get(&*real(path).to_string_lossy()).map_or(Value::Null, |n| json!(n)) }
@@ -232,13 +247,12 @@ impl<'a> Ctx<'a> {
         let mut groups: Vec<(usize, String, usize, f64, Option<String>)> = Vec::new();
         let mut at: HashMap<(usize, String), usize> = HashMap::new();
         for f in &files {
-            let facts = self.facts(f);
-            if !facts.listed { continue; }
+            if !self.listed(f) { continue; }
             match at.get(&(f.account, f.project.clone())) {
                 Some(&i) => groups[i].2 += 1,
                 None => {
                     at.insert((f.account, f.project.clone()), groups.len());
-                    groups.push((f.account, f.project.clone(), 1, f.mtime, facts.cwd));
+                    groups.push((f.account, f.project.clone(), 1, f.mtime, self.cwd(f)));
                 }
             }
         }
@@ -380,7 +394,7 @@ fn closed_names(claude_base: &Path) -> HashMap<String, String> {
     map.into_iter().filter_map(|(k, v)| Some((k, v.get("name")?.as_str()?.to_owned()))).collect()
 }
 
-/// `_head_info` com a marca de conversa interna: as primeiras linhas pelo mesmo leitor do índice.
+/// `_head_info`: as primeiras linhas pelo mesmo leitor do índice, até achar prévia e cwd.
 fn read_head(path: &Path) -> crate::search::FileState {
     let mut st = crate::search::FileState::default();
     let Ok(file) = std::fs::File::open(path) else { return st };
@@ -391,7 +405,7 @@ fn read_head(path: &Path) -> crate::search::FileState {
         line.clear();
         if !matches!(reader.read_until(b'\n', &mut line), Ok(n) if n > 0) { break; }
         crate::search::absorb_line(&mut st, &line, &prefixes);
-        if st.head_done && st.internal.is_some() { break; }
+        if st.head_done { break; }
     }
     st
 }

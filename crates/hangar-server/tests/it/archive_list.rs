@@ -2,8 +2,8 @@
 //! `/api/archive-por-cwd`) no Rust, comparado com a captura do Python
 //! (`tests/fixtures/search/contract/archive/archive_{index,noindex}.json`) sobre o HOME de
 //! `tests/fixtures/search/home/`, com o índice pronto e sem ele. O esperado é a captura com as
-//! diferenças aceitas aplicadas: F7 (reserva sem usuário não ocupa vaga), F8 (conversa interna fora) e
-//! F9 (conversa que mudou de pasta só na pasta do caminho mais novo).
+//! diferenças aceitas aplicadas: F7 (reserva sem usuário não ocupa vaga), F8 (conversa interna fora,
+//! só a que o índice já marcou) e F9 (conversa que mudou de pasta só na pasta do caminho mais novo).
 use axum::{Router, extract::Request, http::StatusCode, response::IntoResponse};
 use hangar_server::{auth::TrustedHosts, config::Config, routes::{AppState, router}};
 use serde_json::{Value, json};
@@ -170,10 +170,11 @@ fn live_list(root: &Path, home: &Path, upstream: SocketAddr) -> hangar_server::l
         hangar_server::list::facts::FactsClient::new(upstream, SECRET.into()))
 }
 
-/// F8 e F9 numa lista de conversas da captura.
-fn accepted(entries: &Value) -> Value {
+/// F8 (só com o índice: fora dele a conversa interna entra, como no Python) e F9 numa lista de
+/// conversas da captura.
+fn accepted(entries: &Value, mode: Mode) -> Value {
     Value::Array(entries.as_array().unwrap().iter().filter(|e| {
-        e["session_id"] != INTERNAL && !(e["session_id"] == MOVED && e["project"] == MOVED_OLD_PROJECT)
+        !(mode == Mode::Index && e["session_id"] == INTERNAL) && !(e["session_id"] == MOVED && e["project"] == MOVED_OLD_PROJECT)
     }).cloned().collect())
 }
 
@@ -203,12 +204,13 @@ async fn arq01_owner_only() {
     h.assert_not_forwarded();
 }
 
-/// O esperado da lista de pastas: F8 tira `a5a5a5a5` da contagem e F9 tira a pasta que só tinha a
-/// cópia velha de `db401d8f`.
+/// O esperado da lista de pastas: F8 (com o índice) tira `a5a5a5a5` da contagem e F9 tira a pasta
+/// que só tinha a cópia velha de `db401d8f`.
 fn folders_expected(mode: Mode) -> Value {
     let mut folders = capture(mode)["folders"].as_array().unwrap().clone();
     folders.retain(|f| f["project"] != MOVED_OLD_PROJECT);
-    for f in folders.iter_mut().filter(|f| f["project"] == HANGAR) { f["count"] = json!(f["count"].as_u64().unwrap() - 1); }
+    let internal = u64::from(mode == Mode::Index);
+    for f in folders.iter_mut().filter(|f| f["project"] == HANGAR) { f["count"] = json!(f["count"].as_u64().unwrap() - internal); }
     Value::Array(folders)
 }
 
@@ -234,7 +236,7 @@ async fn arq22_folder_conversations_match_the_python() {
         for (project, want) in capture(mode)["folder"].as_object().unwrap() {
             let (status, body) = h.get(&format!("/api/archive/{}", enc(project))).await;
             assert_eq!(status, want["status"].as_u64().unwrap() as u16, "{project}: {body}");
-            let want = if want["body"].is_array() { accepted(&want["body"]) } else { want["body"].clone() };
+            let want = if want["body"].is_array() { accepted(&want["body"], mode) } else { want["body"].clone() };
             assert_eq!(body, want, "{project}");
         }
         h.assert_not_forwarded();
@@ -250,7 +252,7 @@ async fn arq29_folder_codex_account() {
         let (project, account) = case.split_once('|').unwrap();
         let (status, body) = h.get(&format!("/api/archive/{project}?codex_account={}", enc(account))).await;
         assert_eq!(status, want["status"].as_u64().unwrap() as u16, "{case}: {body}");
-        let want = if want["body"].is_array() { accepted(&want["body"]) } else { account_msg(&want["body"]) };
+        let want = if want["body"].is_array() { accepted(&want["body"], Mode::Index) } else { account_msg(&want["body"]) };
         assert_eq!(account_msg(&body), want, "{case}");
     }
     let (_, body) = h.get(&format!("/api/archive/{HANGAR}?codex_account=zz")).await;
@@ -266,7 +268,7 @@ async fn arq29_folder_codex_account() {
 async fn arq34_recent() {
     for mode in [Mode::Index, Mode::NoIndex] {
         let h = Harness::new(mode).await;
-        let all = accepted(&capture(mode)["recent"]["500"]);
+        let all = accepted(&capture(mode)["recent"]["500"], mode);
         let first = |n: usize| Value::Array(all.as_array().unwrap()[..n].to_vec());
         for (query, want) in [("?cap=1", first(1)), ("?cap=3", first(3)), ("", all.clone()), ("?cap=0", first(1)),
             ("?cap=500", all.clone()), ("?cap=-4", first(1))] {
@@ -274,7 +276,8 @@ async fn arq34_recent() {
             assert_eq!(status, 200, "{query}: {body}");
             assert_eq!(body, want, "{query}");
         }
-        assert_eq!(sids(&first(3)), ["0cc60e6c", "75fea57d", "db401d8f"]);
+        let third = if mode == Mode::Index { "db401d8f" } else { "a5a5a5a5" };
+        assert_eq!(sids(&first(3)), ["0cc60e6c", "75fea57d", third]);
         assert_eq!(capture(mode)["recent"]["40"], capture(mode)["recent"]["500"]);
         let (status, body) = h.get("/api/archive/recent?cap=abc").await;
         assert_eq!(status, 422, "{body}");
@@ -310,7 +313,7 @@ async fn arq31_by_cwd() {
             };
             let (status, body) = h.get(&format!("/api/archive-por-cwd?{query}")).await;
             assert_eq!(status, want["status"].as_u64().unwrap() as u16, "{case}: {body}");
-            let want = if want["body"].is_array() { accepted(&want["body"]) } else { account_msg(&want["body"]) };
+            let want = if want["body"].is_array() { accepted(&want["body"], mode) } else { account_msg(&want["body"]) };
             assert_eq!(account_msg(&body), want, "{case}");
         }
         let (status, body) = h.get("/api/archive-por-cwd").await;
@@ -331,7 +334,35 @@ async fn m4_index_listing_does_not_read_the_transcript() {
     set_mtime(&path, modified);
     let (status, body) = h.get(&format!("/api/archive/{HANGAR}")).await;
     assert_eq!(status, 200, "{body}");
-    assert_eq!(body, accepted(&capture(Mode::Index)["folder"][HANGAR]["body"]));
+    assert_eq!(body, accepted(&capture(Mode::Index)["folder"][HANGAR]["body"], Mode::Index));
+}
+
+/// F8 sem custo de leitura: com o índice não pronto, a lista de pastas abre só os transcripts que o
+/// Python abria (o cabeçalho do mais novo de cada pasta por conta e a varredura da reserva recente).
+/// A cópia de `db401d8f` em `-home-jefferson-Projetos-hangar` não é a mais nova da pasta: não abre.
+#[tokio::test]
+async fn f8_folders_without_index_open_only_what_the_python_opened() {
+    let h = Harness::new(Mode::NoIndex).await;
+    let opened = Arc::new(Mutex::new(std::collections::HashSet::new()));
+    let seen = opened.clone();
+    let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+        if let Ok(event) = event && matches!(event.kind, notify::EventKind::Access(notify::event::AccessKind::Open(_))) {
+            seen.lock().unwrap().extend(event.paths.into_iter().filter(|p| p.extension().is_some_and(|e| e == "jsonl")));
+        }
+    }).unwrap();
+    for projects in [".claude-a/projects", ".claude-b/projects"] {
+        notify::Watcher::watch(&mut watcher, &h.home.join(projects), notify::RecursiveMode::Recursive).unwrap();
+    }
+    let (status, body) = h.get("/api/archive").await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body, folders_expected(Mode::NoIndex));
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let python: std::collections::HashSet<PathBuf> = [MTIMES[13], MTIMES[11], RESERVE, MTIMES[6], MTIMES[5], MTIMES[10], MTIMES[7]]
+        .iter().map(|rel| h.home.join(rel)).collect();
+    let opened = opened.lock().unwrap().clone();
+    assert!(!opened.is_empty(), "o observador não viu nenhuma abertura");
+    let extra: Vec<_> = opened.difference(&python).collect();
+    assert!(extra.is_empty(), "abriu além do Python: {extra:?}");
 }
 
 /// ARQ-15: índice ilegível cai no disco; a resposta é a mesma.
@@ -344,7 +375,7 @@ async fn arq15_unreadable_index_falls_back_to_disk() {
     assert_eq!(status, 200, "{body}");
     assert_eq!(body, folders_expected(Mode::NoIndex));
     let (_, body) = h.get(&format!("/api/archive/{HANGAR}")).await;
-    assert_eq!(body, accepted(&capture(Mode::NoIndex)["folder"][HANGAR]["body"]));
+    assert_eq!(body, accepted(&capture(Mode::NoIndex)["folder"][HANGAR]["body"], Mode::NoIndex));
 }
 
 /// ARQ-10, 11: arquivo parado há mais de 15 min conta como conversa (a reserva velha aparece, como no
