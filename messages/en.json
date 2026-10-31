@@ -1296,6 +1296,7 @@
   "vault_err_backup_grande": "The vault copy is over the size limit.",
   "vault_err_corpo_invalido": "The server refused the request as malformed.",
   "vault_err_sem_cofre": "This server doesn't have the vault yet. Update Hangar on it.",
+  "vault_app_read_only_failed": "Read-only: couldn't find the owner machine's address. {error}",
   "vault_app_read_only": "The passwords live on {owner}, and that machine isn't saved in this app. To add, edit, show or copy, add it in Servers.",
   "vault_app_owner_saved": "Vault machine saved",
   "vault_app_state_open": "Open",

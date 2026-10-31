@@ -39,41 +39,51 @@ export default function Cofre() {
   const [sheet, setSheet] = useState<'owner' | 'backup' | 'recovery' | 'restore' | null>(null);
   // Quem recebe gravar, revelar e apagar: a própria máquina na dona, o servidor salvo da dona na remota.
   const [writer, setWriter] = useState<Server | null>(null);
+  const [ownerLookupError, setOwnerLookupError] = useState('');
   const generation = useRef(0);
+  // A lista republica o objeto do servidor sem mudar nada; recarregar por isso fecharia o formulário aberto.
+  const serverRef = useRef(server);
+  serverRef.current = server;
 
   const load = useCallback(() => {
     const now = ++generation.current;
-    if (!server) return;
+    const current = serverRef.current;
+    if (!current) return;
     setLoading(true);
     setError('');
     void (async () => {
       try {
-        const next = await getVaultStatus(server);
-        // Servidor antigo sem `owner_url`: o endereço sai dos peers. Sem ele a página fica só de leitura, não falha.
+        const next = await getVaultStatus(current);
+        // Servidor antigo sem `owner_url`: o endereço sai dos peers. Falha aqui deixa a página só de leitura, dizendo por quê.
         const needPeers = next.role === 'remote' && !next.owner_url && !!next.owner;
+        let lookupError = '';
         const [list, peers] = await Promise.all([
-          next.state === 'open' && next.role !== 'none' ? listVaultEntries(server) : null,
-          needPeers ? listVaultPeers(server).catch((): VaultPeer[] => []) : ([] as VaultPeer[]),
+          next.state === 'open' && next.role !== 'none' ? listVaultEntries(current) : null,
+          needPeers ? listVaultPeers(current).catch((e: unknown): VaultPeer[] => { lookupError = vaultErrorText(e); return []; }) : ([] as VaultPeer[]),
         ]);
         const ownerUrl = next.owner_url ?? peers.find((p) => p.id === next.owner)?.base_url;
-        const owner = next.role === 'owner' ? server
+        const owner = next.role === 'owner' ? current
           : next.role === 'remote' && ownerUrl ? findOwnerServer(ownerUrl, useServers.getState().servers) : null;
         if (now !== generation.current) return;
         setStatus(next);
         setEntries(list);
         setWriter(owner);
+        setOwnerLookupError(lookupError);
       } catch (e) {
         if (now === generation.current) setError(vaultErrorText(e));
       } finally {
         if (now === generation.current) setLoading(false);
       }
     })();
-  }, [server]);
+  }, []);
 
   useEffect(() => {
     setStatus(null);
     setEntries(null);
     setWriter(null);
+    setOwnerLookupError('');
+    setEditing(null);
+    setSheet(null);
     load();
     return () => { generation.current++; };
   }, [load, server?.id, server?.baseUrl, server?.token]);
@@ -139,7 +149,8 @@ export default function Cofre() {
                 value={e.policy === 'free' ? m.vault_app_policy_free() : m.vault_app_policy_ask()}
                 onPress={writer ? () => setEditing(e) : undefined} />)}
             </MachineGroup> : null}
-            {!writer ? <InfoNotice text={m.vault_app_read_only({ owner: status.owner ?? '?' })} /> : null}
+            {!writer ? ownerLookupError ? <Notice text={m.vault_app_read_only_failed({ error: ownerLookupError })} error />
+              : <InfoNotice text={m.vault_app_read_only({ owner: status.owner ?? '?' })} /> : null}
             <MachineGroup>
               {writer ? <MachineRow title={m.vault_app_add()} action onPress={() => setEditing('new')} /> : null}
               <MachineRow title={m.vault_app_retry()} disabled={loading} onPress={load} />

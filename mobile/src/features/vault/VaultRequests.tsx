@@ -93,8 +93,13 @@ function RequestCard({ server, request, onDone }: { server: Server; request: Vau
       onDone();
     } catch (e) {
       const code = (e as { code?: unknown } | null)?.code;
-      // Pedido que outra tela respondeu ou que expirou não volta: sai daqui também.
-      if (code === 'erro_interacao_desatualizada' || code === 'erro_cofre_pedido_respondido' || code === 'erro_cofre_pedido_perdido') answered.add(request.id);
+      // Pedido que outra tela respondeu ou que expirou não volta: o cartão sai e o motivo vai no aviso.
+      if (code === 'erro_interacao_desatualizada' || code === 'erro_cofre_pedido_respondido' || code === 'erro_cofre_pedido_perdido') {
+        answered.add(request.id);
+        toast.erro(vaultErrorText(e));
+        onDone();
+        return;
+      }
       setError(vaultErrorText(e));
       haptic.error();
     } finally { setBusy(false); }

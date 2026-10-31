@@ -1296,6 +1296,7 @@
   "vault_err_backup_grande": "A cópia do cofre passou do tamanho máximo.",
   "vault_err_corpo_invalido": "O servidor recusou o pedido como malformado.",
   "vault_err_sem_cofre": "Este servidor ainda não tem o cofre. Atualize o Hangar nele.",
+  "vault_app_read_only_failed": "Só leitura: não deu para achar o endereço da máquina dona. {error}",
   "vault_app_read_only": "As senhas ficam em {owner}, e essa máquina não está salva neste app. Para adicionar, editar, mostrar ou copiar, adicione-a em Servidores.",
   "vault_app_owner_saved": "Máquina do cofre gravada",
   "vault_app_state_open": "Aberto",
