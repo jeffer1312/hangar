@@ -45,11 +45,11 @@ fn schedule_repaint(t: f32, window: &mut Window, cx: &mut App) {
 /// Abaixo desta largura (o cartão deitado do "Atualizar?") a barra do compositor não cabe legível: fica só o campo.
 const COMPACT_BELOW: f32 = 240.;
 
-pub(super) fn render(started: Instant, width: Pixels, animate: bool, window: &mut Window, cx: &mut App) -> AnyElement {
+pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &mut App) -> AnyElement {
     // Movimento reduzido: quadro parado na primeira mensagem, com a tecla à vista.
     let (shown, lit, caret) = if cx.reduce_motion() { (Some(0), false, true) } else {
         let t = started.elapsed().as_secs_f32() % CYCLE;
-        if animate { schedule_repaint(t, window, cx); }
+        schedule_repaint(t, window, cx);
         frame(t)
     };
     let compact = width < px(COMPACT_BELOW);

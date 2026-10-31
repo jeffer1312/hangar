@@ -65,8 +65,8 @@ fn schedule_repaint(t: f32, window: &mut Window, cx: &mut App) {
     }).detach();
 }
 
-/// Abaixo desta largura (o cartão deitado do "Atualizar?") o menu cobre a lista em vez de ficar ao lado.
-const COMPACT_BELOW: f32 = 240.;
+/// Abaixo desta largura o menu cobre a lista em vez de ficar ao lado: lado a lado, ele termina a 384 px, mais respiro e borda.
+const COMPACT_BELOW: f32 = 400.;
 /// Altura do palco com o grupo aberto: o cartão não pula quando a linha muda de lugar.
 const STAGE_HEIGHT: f32 = 268.;
 /// Onde o menu nasce, medido do topo do palco: logo abaixo do nome da linha clicada.
@@ -109,11 +109,11 @@ fn menu(name: String, picked: bool, cx: &App) -> Div {
         .child(div().flex().flex_col().refine_style(&app::menu_list_look()).child(app::menu_label(name)).children(items))
 }
 
-pub(super) fn render(started: Instant, width: Pixels, animate: bool, window: &mut Window, cx: &mut App) -> AnyElement {
+pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &mut App) -> AnyElement {
     // Movimento reduzido: quadro parado com a linha já dentro de "Ocultas (1)".
     let f = if cx.reduce_motion() { Frame { menu: false, picked: false, fading: None, hidden: true, open: true } } else {
         let t = started.elapsed().as_secs_f32() % CYCLE;
-        if animate { schedule_repaint(t, window, cx); }
+        schedule_repaint(t, window, cx);
         frame(t)
     };
     let compact = width < px(COMPACT_BELOW);

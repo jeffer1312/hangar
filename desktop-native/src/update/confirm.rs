@@ -312,15 +312,6 @@ fn sections(label: String, news: &[News], stage: Option<Pixels>, fixes_open: &Rc
 
 fn card(item: &News, stage: Option<Pixels>, started: Instant, window: &mut Window, cx: &mut App) -> Div {
     let animation = item.animation.as_deref().and_then(crate::news::animation);
-    // Cartão fora da área visível do modal (o quadro anterior diz) para de redesenhar a janela; ao voltar, pede um quadro.
-    let seen = window.use_keyed_state(SharedString::from(format!("news-seen-{}", item.id)), cx, |_, _| Rc::new(Cell::new(true)))
-        .read(cx).clone();
-    let animate = seen.get();
-    let probe = canvas(move |bounds, window, _| {
-        let now = window.content_mask().bounds.intersects(&bounds);
-        if now && !seen.get() { window.request_animation_frame(); }
-        seen.set(now);
-    }, |_, _, _, _| {}).absolute().size_full();
     let (badge_hue, badge_text) = palette::badge();
     let kind = match item.kind.as_str() { "new" => Some("update_news_kind_new"), "improvement" => Some("update_news_kind_improvement"), _ => None };
     let heading = div().flex().flex_wrap().items_center().gap_x(px(5.)).gap_y(px(2.))
@@ -329,18 +320,39 @@ fn card(item: &News, stage: Option<Pixels>, started: Instant, window: &mut Windo
             .text_size(px(9.5)).font_weight(FontWeight::SEMIBOLD).text_color(badge_text).child(tr_shared(key, &[]))));
     let text = (!item.text.is_empty()).then(|| div().text_size(px(11.8)).line_height(px(16.5)).text_color(theme::muted())
         .child(TextView::markdown(SharedString::from(format!("update-news-{}", item.id)), item.text.clone()).selectable(true).scrollable(false)));
-    let base = div().relative().rounded(px(10.)).border_1().border_color(palette::edge()).bg(palette::fill(0.035))
-        .when(animation.is_some(), |el| el.child(probe));
+    let base = div().rounded(px(10.)).border_1().border_color(palette::edge()).bg(palette::fill(0.035));
     let Some(stage) = stage else {
         return base.flex().items_center().gap(px(12.)).p(px(10.))
-            .when_some(animation, |el, draw| el.child(div().flex_shrink_0().w(px(160.)).child(draw(started, px(160.), animate, window, cx))))
+            .when_some(animation, |el, draw| el.child(div().flex_shrink_0().w(px(160.))
+                .child(stage_slot(&item.id, px(160.), draw, started, window, cx))))
             .child(div().flex_1().min_w_0().flex().flex_col().gap(px(3.)).child(heading).children(text));
     };
     base.flex().flex_col().gap(px(10.)).p(px(12.))
-        .when_some(animation, |el, draw| el.child(draw(started, stage, animate, window, cx)))
+        .when_some(animation, |el, draw| el.child(stage_slot(&item.id, stage, draw, started, window, cx)))
         .child(div().flex().flex_col().gap(px(3.)).child(heading).children(text))
         .when_some(item.try_it.clone(), |el, text| el.child(div().text_size(px(11.5)).text_color(badge_text).whitespace_normal()
             .child(tr_shared("update_notes_try_it", &[("text", &text)]))))
+}
+
+/// O lugar da animação no cartão, medido a cada quadro para o seguinte: a largura real (o Dialog encolhe em janela
+/// pequena) substitui `guess`, e fora da área visível do modal a animação não é montada — fica só a altura dela, sem
+/// marcar redesenho da janela.
+fn stage_slot(id: &str, guess: Pixels, draw: crate::news::NewsAnimation, started: Instant, window: &mut Window, cx: &mut App) -> Div {
+    let measured = window.use_keyed_state(SharedString::from(format!("news-stage-{id}")), cx,
+        |_, _| Rc::new(Cell::new(None::<(bool, Size<Pixels>)>))).read(cx).clone();
+    let slot = div().relative().w_full();
+    let slot = match measured.get() {
+        Some((false, size)) => slot.h(size.height),
+        last => slot.child(draw(started, last.map_or(guess, |(_, size)| size.width), window, cx)),
+    };
+    slot.child(canvas(move |bounds, window, _| {
+        let visible = window.content_mask().bounds.intersects(&bounds);        // Voltou à vista ou mudou de largura: o quadro seguinte desenha com o que acabou de ser medido.
+        if measured.get().is_none_or(|(was, size)| (visible && !was) || size.width != bounds.size.width) {
+            window.request_animation_frame();
+        }
+        measured.set(Some((visible, bounds.size)));
+    // Sem `top_0`/`left_0` o absoluto fica depois da animação, e a medida sai deslocada pela altura dela.
+    }, |_, _, _, _| {}).absolute().top_0().left_0().size_full())
 }
 
 /// "O que chegou para você": uma vez, com o que o "Atualizar?" guardou.
@@ -351,7 +363,7 @@ fn open_whats_new(items: Vec<News>, window: &mut Window, cx: &mut App) {
         let max = window.viewport_size().height * 0.8 - px(110.);
         let top = (window.viewport_size().height * 0.1).max(px(24.));
         let width = px(780.).min(window.viewport_size().width * 0.92);
-        // A animação ocupa o cartão: largura do modal menos a borda e o respiro dele (18) e os do cartão (12), dos dois lados.
+        // Largura do primeiro quadro da animação (modal menos borda e respiros dele e do cartão); depois vale a medida.
         let stage = width - px(64.);
         crate::app::popup::dialog(dialog).w(width).p(px(18.)).rounded(px(14.)).close_button(false).margin_top(top)
             .child(div().id("whats-new-body").max_h(max).overflow_y_scroll()

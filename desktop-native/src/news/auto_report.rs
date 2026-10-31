@@ -66,11 +66,11 @@ const COMPACT_BELOW: f32 = 240.;
 const STATUS_HEIGHT: f32 = 62.;
 const COMPACT_STATUS_HEIGHT: f32 = 86.;
 
-pub(super) fn render(started: Instant, width: Pixels, animate: bool, window: &mut Window, cx: &mut App) -> AnyElement {
+pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &mut App) -> AnyElement {
     // Movimento reduzido: quadro parado no resultado.
     let (on, line) = if cx.reduce_motion() { (true, Line::Sent) } else {
         let t = started.elapsed().as_secs_f32() % CYCLE;
-        if animate { schedule_repaint(t, window, cx); }
+        schedule_repaint(t, window, cx);
         frame(t)
     };
     let compact = width < px(COMPACT_BELOW);
