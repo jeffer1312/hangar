@@ -203,7 +203,9 @@ pub(crate) fn waiting(wave: Option<f32>) -> Div {
 fn footer(kind: Kind, on_choice: OnChoice) -> Div {
     let row = div().flex().items_center().justify_end().gap(px(6.)).pt(px(2.));
     match kind {
-        Kind::Tour => row.child(button("tour-later", tr("tour_later"), false, Choice::Later, on_choice.clone()))
+        Kind::Tour => row.child(button("tour-skip-all", tr("tour_skip_all"), false, Choice::SkipTour, on_choice.clone()))
+            .child(div().flex_1())
+            .child(button("tour-later", tr("tour_later"), false, Choice::Later, on_choice.clone()))
             .child(button("tour-skip", tr("tour_skip"), true, Choice::Skip, on_choice)),
         Kind::Tip => row.child(button("tour-tips-off", tr("tour_tips_off"), false, Choice::TipsOff, on_choice.clone()))
             .child(button("tour-tip-ok", tr("tour_tip_ok"), true, Choice::TipOk, on_choice)),

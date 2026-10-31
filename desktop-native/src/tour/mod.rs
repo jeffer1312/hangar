@@ -85,7 +85,7 @@ pub struct Surface {
 
 /// Botão do balão.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Choice { Skip, Later, TipOk, TipsOff, Close }
+pub enum Choice { Skip, SkipTour, Later, TipOk, TipsOff, Close }
 
 pub struct Tour {
     pub seen: Seen,
@@ -162,7 +162,7 @@ impl Tour {
     /// O balão a que o botão pertence: o passo, a dica da frente ou a novidade.
     fn owner(&self, choice: Choice) -> Option<&str> {
         match choice {
-            Choice::Skip | Choice::Later => self.current.map(|index| self.steps[index].id),
+            Choice::Skip | Choice::SkipTour | Choice::Later => self.current.map(|index| self.steps[index].id),
             Choice::TipOk | Choice::TipsOff => self.tips.front().map(|tip| tip.id.as_str()),
             Choice::Close => self.news.as_ref().filter(|(_, done)| done.is_none()).map(|(news, _)| news.id.as_str()),
         }
@@ -174,6 +174,12 @@ impl Tour {
         if self.owner(choice) != Some(id) { return false; }
         match choice {
             Choice::Skip => self.advance(false),
+            // Quem já conhece o app encerra de uma vez: não volta sozinho, só por "Ver o tour de novo".
+            Choice::SkipTour => {
+                (self.current, self.celebrated) = (None, None);
+                self.seen.tour = self.seen.tour.max(Some(if self.done_any { Outcome::Done } else { Outcome::Skipped }));
+                true
+            }
             // Não grava: o tour volta na próxima abertura.
             Choice::Later => { self.current = None; self.celebrated = None; false }
             Choice::TipOk => match self.tips.pop_front() {
@@ -323,6 +329,20 @@ mod tests {
         pick(&mut tour, Choice::Later);
         let shown = tour.next_surface(&FREE).unwrap();
         assert_eq!((shown.kind, shown.id.as_str()), (Kind::Tip, "fila"));
+    }
+
+    #[test]
+    fn skipping_the_tour_ends_it_for_good_until_asked_again() {
+        let mut tour = Tour::with_steps(Seen::default(), steps());
+        assert!(pick(&mut tour, Choice::SkipTour), "grava");
+        assert_eq!(tour.seen.tour, Some(Outcome::Skipped));
+        assert_eq!(tour.next_surface(&FREE), None);
+        let reopened = Tour::with_steps(tour.seen.clone(), steps());
+        assert_eq!(reopened.next_surface(&FREE), None, "não volta sozinho na próxima abertura");
+        let mut asked = Tour::with_steps(tour.seen.clone(), steps());
+        assert!(asked.restart());
+        asked.set_steps(steps());
+        assert_eq!(asked.next_surface(&FREE).unwrap().id, "new", "\"Ver o tour de novo\" traz de volta");
     }
 
     #[test]
