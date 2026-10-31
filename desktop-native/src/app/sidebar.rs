@@ -1992,6 +1992,7 @@ impl Hangar {
         }
         let host = self.server_label(cx);
         let (on, enabled) = (self.new_chat_screen() && self.reopen.is_none(), self.api.is_some());
+        let vault_chips = self.render_vault_chips(true, cx);
         div().w_full().min_h_0().flex().flex_col().items_center().when(!fit_content, |el| el.h_full())
             // O ponto do chip "N no Hangar" fica no canto da marca.
             .child(div().relative().h(px(44.)).w_full().flex_shrink_0().flex().items_center().justify_center()
@@ -2006,11 +2007,12 @@ impl Hangar {
                 .tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new(tr("new_chat_title")).build(window, cx))
                 .child(chrome::small_icon(IconName::SquarePen, 16., theme::muted()))
                 .when(enabled, |el| el.on_click(cx.listener(|this, _, window, cx| this.go_home(window, cx)))))
+            // A barra recolhida não mostra os cartões, e o agente fica esperando a resposta: fica à vista, fora
+            // da rolagem da lista, com teto para várias máquinas em janela curta não tomarem a altura das sessões.
+            .when(!vault_chips.is_empty(), |el| el.child(div().id("rail-vault").flex_shrink_0().w_full().max_h(px(84.)).mb(px(4.))
+                .overflow_y_scroll().flex().flex_col().items_center().gap(px(4.)).children(vault_chips)))
             .child(div().id("session-list").min_h_0().w_full().overflow_y_scroll().px(px(3.)).flex().flex_col().gap(px(4.))
                 .when(!fit_content, |el| el.flex_1())
-                // A barra recolhida não mostra os cartões, e o agente fica esperando a resposta. Rola junto:
-                // com janela curta e várias máquinas, não pode tomar a altura das sessões.
-                .children(self.render_vault_chips(true, cx))
                 .children(rows))
             .child(div().w_full().flex_shrink_0().pt(px(8.)).pb(px(8.)).mt(px(4.)).border_t_1().border_color(theme::border())
                 .flex().flex_col().items_center().gap(px(4.))
