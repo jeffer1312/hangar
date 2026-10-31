@@ -188,15 +188,6 @@ fn read_once(
         }
     }
     let (mut old, previous, start) = source_events(source, id, limit)?;
-    let imported: HashSet<_> = boundary["imported_item_ids"]
-        .as_array()
-        .ok_or_else(|| invalid("A fronteira perdeu os identificadores importados."))?
-        .iter()
-        .map(|v| {
-            v.as_str()
-                .ok_or_else(|| invalid("A fronteira possui um identificador inválido."))
-        })
-        .collect::<Result<_, _>>()?;
     let queue_keys: HashSet<String> = info
         .history
         .get("queue")
@@ -214,21 +205,58 @@ fn read_once(
             ]
         })
         .collect();
-    let (mut items, committed, previous) = stable_read(path, |reader, length| {
-        let offset = boundary["min_offset"]
-            .as_u64()
-            .filter(|n| *n > 0 && *n <= length)
-            .ok_or_else(|| invalid("A fronteira da transferência está inválida."))?;
-        let header = prefix(reader, offset, required(boundary, "prefix_digest")?)?;
-        if header["type"] != "session_meta"
-            || header["payload"]
-                .get("id")
-                .or_else(|| header["payload"].get("session_id"))
-                .and_then(Value::as_str)
-                != Some(thread)
-        {
-            return Err(invalid("A thread do rollout diverge da transferência."));
-        }
+    let (mut items, committed, previous) =
+        active_events(path, boundary, id, previous, limit, &queue_keys)?;
+    super::merge_queue(info, &mut items, &committed, previous, start)?;
+    retain_latest(&mut items, limit);
+    old.extend(items.into_iter().map(|(_, _, event)| event));
+    if old.len() > limit {
+        old.drain(..old.len() - limit);
+    }
+    Ok(Some(old))
+}
+
+/// A fronteira conferida no rollout: o prefixo importado intacto e a thread do cabeçalho; devolve
+/// onde os turnos novos começam.
+fn check_prefix(reader: &mut BufReader<File>, length: u64, boundary: &Value) -> io::Result<u64> {
+    let thread = required(boundary, "thread_id")?;
+    let offset = boundary["min_offset"]
+        .as_u64()
+        .filter(|n| *n > 0 && *n <= length)
+        .ok_or_else(|| invalid("A fronteira da transferência está inválida."))?;
+    let header = prefix(reader, offset, required(boundary, "prefix_digest")?)?;
+    if header["type"] != "session_meta"
+        || header["payload"]
+            .get("id")
+            .or_else(|| header["payload"].get("session_id"))
+            .and_then(Value::as_str)
+            != Some(thread)
+    {
+        return Err(invalid("A thread do rollout diverge da transferência."));
+    }
+    Ok(offset)
+}
+
+/// Os turnos novos do rollout depois da fronteira, sem as linhas importadas da origem.
+fn active_events(
+    path: &Path,
+    boundary: &Value,
+    id: &str,
+    previous: f64,
+    limit: usize,
+    queue_keys: &HashSet<String>,
+) -> io::Result<(Vec<super::Item>, HashMap<String, f64>, f64)> {
+    let imported: HashSet<_> = boundary["imported_item_ids"]
+        .as_array()
+        .ok_or_else(|| invalid("A fronteira perdeu os identificadores importados."))?
+        .iter()
+        .map(|v| {
+            v.as_str()
+                .ok_or_else(|| invalid("A fronteira possui um identificador inválido."))
+        })
+        .collect::<Result<_, _>>()?;
+    stable_read(path, |reader, length| {
+        let offset = check_prefix(reader, length, boundary)?;
         let mut items = Vec::new();
         let mut committed = HashMap::new();
         let mut previous = previous;
@@ -265,14 +293,7 @@ fn read_once(
             retain_latest(&mut items, limit);
         }
         Ok((items, committed, previous))
-    })?;
-    super::merge_queue(info, &mut items, &committed, previous, start)?;
-    retain_latest(&mut items, limit);
-    old.extend(items.into_iter().map(|(_, _, event)| event));
-    if old.len() > limit {
-        old.drain(..old.len() - limit);
-    }
-    Ok(Some(old))
+    })
 }
 
 fn prefix_event(event: &mut ChatEvent, id: &str, provider: &str) {
@@ -362,30 +383,40 @@ fn source_index(
     Ok((metadata, offsets))
 }
 
+/// O ramo selecionado do snapshot conferido: a topologia, onde cada linha começa e os índices do ramo.
+fn selected_chain(
+    reader: &mut BufReader<File>,
+    length: u64,
+    source: &Value,
+) -> io::Result<(Vec<Value>, Vec<u64>, Vec<usize>)> {
+    let (metadata, offsets) = source_index(reader, length, required(source, "digest")?)?;
+    let selected = chain(&metadata)?;
+    let selected_ids: HashSet<_> = selected
+        .iter()
+        .filter_map(|index| metadata[*index]["uuid"].as_str())
+        .collect();
+    let expected_ids: HashSet<_> = source["selected_uuids"]
+        .as_array()
+        .ok_or_else(|| invalid("O ramo da origem está inválido."))?
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .ok_or_else(|| invalid("O ramo da origem está inválido."))
+        })
+        .collect::<Result<_, _>>()?;
+    if selected_ids != expected_ids {
+        return Err(invalid(
+            "O ramo da origem diverge do snapshot da transferência.",
+        ));
+    }
+    Ok((metadata, offsets, selected))
+}
+
 fn source_events(source: &Value, id: &str, limit: usize) -> io::Result<(Vec<ChatEvent>, f64, f64)> {
     stable_read(Path::new(required(source, "path")?), |reader, length| {
-        let (metadata, offsets) = source_index(reader, length, required(source, "digest")?)?;
+        let (_, offsets, selected) = selected_chain(reader, length, source)?;
         let mut line = Vec::new();
-        let selected = chain(&metadata)?;
-        let selected_ids: HashSet<_> = selected
-            .iter()
-            .filter_map(|index| metadata[*index]["uuid"].as_str())
-            .collect();
-        let expected_ids: HashSet<_> = source["selected_uuids"]
-            .as_array()
-            .ok_or_else(|| invalid("O ramo da origem está inválido."))?
-            .iter()
-            .map(|value| {
-                value
-                    .as_str()
-                    .ok_or_else(|| invalid("O ramo da origem está inválido."))
-            })
-            .collect::<Result<_, _>>()?;
-        if selected_ids != expected_ids {
-            return Err(invalid(
-                "O ramo da origem diverge do snapshot da transferência.",
-            ));
-        }
         let mut old = VecDeque::new();
         let mut seen = HashSet::new();
         let mut previous = 0.;
@@ -509,6 +540,135 @@ fn chain(rows: &[Value]) -> io::Result<Vec<usize>> {
         return Err(invalid("A origem não possui conversa."));
     }
     Ok(selected)
+}
+
+fn store(home: &Path) -> std::path::PathBuf {
+    home.join(".hangar").join("conversation-transfers")
+}
+
+/// `load_transfer`: ausência é `None`; registro ilegível ou de outro id é erro.
+pub(crate) fn load_record(home: &Path, id: &str) -> io::Result<Option<Value>> {
+    let raw = match crate::runtime::queue::read_replaced(&store(home).join(format!("{id}.json"))) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        other => other?,
+    };
+    let record: Value = serde_json::from_slice(&raw)
+        .map_err(|_| invalid("O registro da transferência está ilegível."))?;
+    if record["id"].as_str() != Some(id) || !record["phase"].is_string() {
+        return Err(invalid("O registro da transferência está ilegível."));
+    }
+    Ok(Some(record))
+}
+
+/// `_thread_key`: a conta resolvida e a thread, no `json.dumps` do Python.
+fn thread_key(codex_home: &Path, thread: &str) -> String {
+    let home = codex_home.canonicalize().unwrap_or_else(|_| codex_home.to_owned());
+    format!(
+        "[{}, {}]",
+        serde_json::to_string(&home.to_string_lossy()).unwrap_or_default(),
+        serde_json::to_string(thread).unwrap_or_default()
+    )
+}
+
+/// `_destination`: a conta e a thread de destino gravadas no registro.
+fn destination(record: &Value) -> Option<(&str, &str)> {
+    fn text(v: &Value) -> Option<&str> { v.as_str().filter(|s| !s.is_empty()) }
+    let home = text(&record["destination_meta"]["codex_home"])?;
+    let thread = text(&record["destination_meta"]["thread_id"])
+        .or_else(|| text(&record["boundary"]["thread_id"]))?;
+    Some((home, thread))
+}
+
+/// `archive_transfer`: o registro mais novo desta conta e thread, pelo índice; registro achado que não
+/// está concluído é erro.
+pub(crate) fn archive_record(home: &Path, codex_home: &Path, thread: &str) -> io::Result<Option<Value>> {
+    let key = thread_key(codex_home, thread);
+    let name = format!(
+        "thread-{}.json",
+        hex_digest(ring::digest::digest(&ring::digest::SHA256, key.as_bytes()))
+    );
+    let raw = match crate::runtime::queue::read_replaced(&store(home).join("indexes").join(name)) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        other => other?,
+    };
+    let ids: Vec<String> = serde_json::from_slice(&raw)
+        .map_err(|_| invalid("O índice de transferência está inválido."))?;
+    for id in ids.iter().rev() {
+        let Some(record) = load_record(home, id)? else { continue };
+        if destination(&record).is_some_and(|(h, t)| thread_key(Path::new(h), t) == key) {
+            if record["phase"] != "complete" {
+                return Err(invalid("A preparação da thread não é uma conversa concluída."));
+            }
+            return Ok(Some(record));
+        }
+    }
+    Ok(None)
+}
+
+fn same(a: &Path, b: &Path) -> bool {
+    a.canonicalize()
+        .ok()
+        .zip(b.canonicalize().ok())
+        .is_some_and(|(a, b)| a == b)
+}
+
+/// `_matches_rollout` e o início de `verify_boundary`: registro concluído, com origem Claude, e o
+/// rollout é o da fronteira ou o mesmo movido dentro da conta de destino.
+fn check_record(record: &Value, path: &Path, owner_home: &Path) -> io::Result<()> {
+    let boundary = &record["boundary"];
+    if record["phase"] != "complete" || !record["source"].is_object() || !boundary.is_object() {
+        return Err(invalid("A transferência não possui história concluída."));
+    }
+    if record["source"]["provider"] != "claude" {
+        return Err(invalid("A fonte da transferência não é uma conversa Claude."));
+    }
+    let matches = boundary["rollout_path"].as_str().is_some_and(|r| same(path, Path::new(r)))
+        || (record["destination_meta"]["codex_home"].as_str().is_some_and(|h| same(owner_home, Path::new(h)))
+            && boundary["thread_id"].as_str() == Some(crate::locate::session_key(&path.to_string_lossy()).as_str()));
+    if !matches {
+        return Err(invalid("O rollout não pertence à transferência."));
+    }
+    Ok(())
+}
+
+/// `verify_boundary`: o rollout ainda tem o prefixo importado e a thread da transferência.
+pub(crate) fn verify_boundary(record: &Value, path: &Path, owner_home: &Path) -> io::Result<()> {
+    check_record(record, path, owner_home)?;
+    stable_read(path, |reader, length| check_prefix(reader, length, &record["boundary"]).map(|_| ()))
+}
+
+/// `composed_history(..., include_queue=False)` do Arquivo: a origem congelada e só os turnos novos.
+pub(crate) fn archived_history(record: &Value, path: &Path, owner_home: &Path) -> io::Result<Vec<ChatEvent>> {
+    check_record(record, path, owner_home)?;
+    let id = required(record, "id")?;
+    let (mut old, previous, _) = source_events(&record["source"], id, usize::MAX)?;
+    let (items, _, _) = active_events(path, &record["boundary"], id, previous, usize::MAX, &HashSet::new())?;
+    old.extend(items.into_iter().map(|(_, _, event)| event));
+    Ok(old)
+}
+
+/// `historical_image`: a `index`-ésima imagem base64 da mensagem da origem congelada que o id aponta.
+pub(crate) fn historical_image(record: &Value, event_id: &str, index: i64) -> io::Result<Option<(Vec<u8>, String)>> {
+    let id = required(record, "id")?;
+    let Some(uuid) = event_id.strip_prefix(&format!("transfer:{id}:claude:")) else { return Ok(None) };
+    let source = &record["source"];
+    let row = stable_read(Path::new(required(source, "path")?), |reader, length| {
+        let (metadata, offsets, selected) = selected_chain(reader, length, source)?;
+        let Some(&index) = selected.iter().find(|i| metadata[**i]["uuid"] == uuid) else { return Ok(None) };
+        reader.seek(SeekFrom::Start(offsets[index]))?;
+        let end = offsets.get(index + 1).copied().unwrap_or(length);
+        let mut line = Vec::new();
+        (&mut *reader).take(end - offsets[index]).read_until(b'\n', &mut line)?;
+        object(&line, "O snapshot possui uma linha inválida.").map(Some)
+    })?;
+    let Some(row) = row else { return Ok(None) };
+    let images: Vec<&Value> = row["message"]["content"].as_array().into_iter().flatten()
+        .filter(|block| block["type"] == "image").collect();
+    let Some(image) = usize::try_from(index).ok().and_then(|i| images.get(i)) else { return Ok(None) };
+    let source = &image["source"];
+    let Some(data) = source["data"].as_str().filter(|_| source["type"] == "base64") else { return Ok(None) };
+    let Ok(raw) = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data) else { return Ok(None) };
+    Ok(Some((raw, source["media_type"].as_str().unwrap_or("image/png").to_owned())))
 }
 
 #[cfg(test)]

@@ -147,7 +147,7 @@ fn under(path: &Path, root: &Path) -> bool {
 }
 
 /// `account_for_rollout`: a conta Codex cuja `sessions`/`archived_sessions` guarda o rollout.
-fn codex_owner<'a>(accounts: &'a [crate::accounts::catalog::Account], rollout: &Path) -> Result<Option<&'a crate::accounts::catalog::Account>, Miss> {
+pub(crate) fn codex_owner<'a>(accounts: &'a [crate::accounts::catalog::Account], rollout: &Path) -> Result<Option<&'a crate::accounts::catalog::Account>, Miss> {
     let found: Vec<&crate::accounts::catalog::Account> = accounts.iter()
         .filter(|a| under(rollout, &a.home.join("sessions")) || under(rollout, &a.home.join("archived_sessions"))).collect();
     if found.len() > 1 {
@@ -201,7 +201,7 @@ fn codex_jsonl(accounts: &[crate::accounts::catalog::Account], sid: &str, asked:
 
 /// O rollout que veio de uma transferência Claude→Codex: retomá-lo exige conferir a fronteira dela, que
 /// é da transferência (no Python). Índice ilegível também recusa: não se sabe se é dela.
-pub(crate) fn from_transfer(home: &Path, codex_home: &Path, thread: &str) -> bool {
+fn from_transfer(home: &Path, codex_home: &Path, thread: &str) -> bool {
     let home_text = codex_home.canonicalize().unwrap_or_else(|_| codex_home.to_owned()).to_string_lossy().into_owned();
     let key = format!("[{}, {}]", serde_json::to_string(&home_text).unwrap_or_default(), serde_json::to_string(thread).unwrap_or_default());
     let digest: String = ring::digest::digest(&ring::digest::SHA256, key.as_bytes()).as_ref().iter().map(|b| format!("{b:02x}")).collect();

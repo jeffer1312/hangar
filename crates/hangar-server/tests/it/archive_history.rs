@@ -267,42 +267,185 @@ async fn arq46_image_bytes_and_errors() {
     assert_eq!(body["detail"][0]["loc"], json!(["path", "idx"]));
 }
 
-/// ARQ-44: imagem `transfer:` pelo registro da transferência: id inválido 404, registro ausente 404 de
-/// imagem; com o registro, a leitura da origem congelada segue ao Python.
+// A transferência Claude→Codex não tem caso real: o caso é o `joined` de
+// backend/tests/test_conversation_history.py, com o registro gravado como `save_transfer` grava.
+const THREAD: &str = "019f99de-9572-7221-89c0-80c62f883d44";
+const TRANSFER: &str = "a563a017-af37-42e8-a8e5-2bd837584f8e";
+const FROZEN_IMAGE: &[u8] = b"frozen-image";
+
+fn sha(bytes: &[u8]) -> String { ring::digest::digest(&ring::digest::SHA256, bytes).as_ref().iter().map(|b| format!("{b:02x}")).collect() }
+
+fn line(row: &Value) -> String { format!("{row}\n") }
+
+fn codex_message(text: &str, item_id: &str, day: u32) -> Value {
+    json!({"timestamp": format!("2026-02-{day:02}T00:00:00Z"), "type": "response_item",
+        "payload": {"type": "message", "id": item_id, "role": "user", "content": [{"type": "input_text", "text": text}]}})
+}
+
+struct Joined { collision: String, rollout: PathBuf, prefix: String, record: PathBuf }
+
+/// O `joined`: origem com ramo compactado, fork e resumo; rollout com o "ok" importado e o "novo".
+fn joined(h: &Harness) -> Joined {
+    let base = h.home.join("transfer");
+    std::fs::create_dir_all(&base).unwrap();
+    let new = codex_message("novo", "new", 2);
+    let collision = hangar_server::transcript::LineParser::new(hangar_server::transcript::Provider::Codex)
+        .feed(line(&new).as_bytes(), 0)[0].id.clone();
+    let image = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, FROZEN_IMAGE);
+    let rows = [
+        json!({"type": "user", "uuid": collision, "parentUuid": null, "timestamp": "2026-01-01T00:00:00Z",
+            "message": {"role": "user", "content": [{"type": "text", "text": "ok"},
+                {"type": "image", "source": {"type": "base64", "media_type": "image/webp", "data": image}}]}}),
+        json!({"type": "assistant", "uuid": "tool", "parentUuid": collision, "timestamp": "2026-01-01T00:01:00Z",
+            "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "call", "name": "Read", "input": {"file_path": "/original/report.md"}}]}}),
+        json!({"type": "user", "uuid": "result", "parentUuid": "tool", "timestamp": "2026-01-01T00:02:00Z",
+            "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call", "content": "resultado original"}]}}),
+        json!({"type": "system", "subtype": "compact_boundary", "uuid": "compact", "parentUuid": null, "logicalParentUuid": "result"}),
+        json!({"type": "user", "uuid": "summary", "parentUuid": "compact", "isCompactSummary": true,
+            "message": {"role": "user", "content": "RESUMO NÃO DEVE ENTRAR"}}),
+        json!({"type": "assistant", "uuid": "after", "parentUuid": "summary", "timestamp": "2026-01-01T00:03:00Z",
+            "message": {"role": "assistant", "content": "antigo"}}),
+        json!({"type": "assistant", "uuid": "fork", "parentUuid": collision, "isSidechain": true,
+            "message": {"role": "assistant", "content": "FORK NÃO DEVE ENTRAR"}}),
+        json!({"type": "last-prompt", "leafUuid": "after"}),
+    ];
+    let snapshot = base.join("snapshot.jsonl");
+    let snapshot_bytes: String = rows.iter().map(line).collect();
+    std::fs::write(&snapshot, &snapshot_bytes).unwrap();
+    let selected = [collision.as_str(), "tool", "result", "compact", "after"];
+    let prefix = line(&json!({"type": "session_meta", "payload": {"id": THREAD, "cwd": base}})) + &line(&codex_message("ok", "imported", 1));
+    let codex_home = h.home.join(".codex");
+    let rollout = codex_home.join("sessions/2026/02/02").join(format!("rollout-fixture-{THREAD}.jsonl"));
+    std::fs::create_dir_all(rollout.parent().unwrap()).unwrap();
+    std::fs::write(&rollout, prefix.clone() + &line(&new)).unwrap();
+    let record = json!({"id": TRANSFER, "name": "s", "source_life": "k:original", "phase": "complete",
+        "source": {"path": snapshot, "provider": "claude", "digest": sha(snapshot_bytes.as_bytes()), "selected_uuids": selected},
+        "origin_meta": {"provider": "claude", "jsonl": base.join("original.jsonl"), "cwd": base, "key": "original"},
+        "destination_meta": {"provider": "codex", "thread_id": THREAD, "codex_home": codex_home, "lifecycle_id": "k:original", "transfer_id": TRANSFER},
+        "boundary": {"thread_id": THREAD, "rollout_path": rollout, "min_offset": prefix.len(), "imported_item_ids": ["imported"], "prefix_digest": sha(prefix.as_bytes())},
+        "error_code": null});
+    let store = h.home.join(".hangar/conversation-transfers");
+    std::fs::create_dir_all(store.join("indexes")).unwrap();
+    let path = store.join(format!("{TRANSFER}.json"));
+    std::fs::write(&path, record.to_string()).unwrap();
+    // `_thread_key`: json.dumps([home resolvido, thread], ensure_ascii=False).
+    let key = format!("[{}, {}]", serde_json::to_string(&codex_home.canonicalize().unwrap()).unwrap(), serde_json::to_string(THREAD).unwrap());
+    std::fs::write(store.join("indexes").join(format!("thread-{}.json", sha(key.as_bytes()))), json!([TRANSFER]).to_string()).unwrap();
+    Joined { collision, rollout, prefix, record: path }
+}
+
+fn set_phase(j: &Joined, phase: &str) {
+    let mut record: Value = serde_json::from_str(&std::fs::read_to_string(&j.record).unwrap()).unwrap();
+    record["phase"] = json!(phase);
+    std::fs::write(&j.record, record.to_string()).unwrap();
+}
+
+fn rewrite_prefix(path: &Path) {
+    let raw = std::fs::read_to_string(path).unwrap();
+    std::fs::write(path, raw.replacen(r#""text":"ok""#, r#""text":"no""#, 1)).unwrap();
+}
+
+/// ARQ-40 (`test_join_excludes_import_fork_summary_and_preserves_tool_pairs` e
+/// `test_archive_uses_account_thread_after_name_sidecar_closed`): o histórico do rollout transferido é a
+/// origem congelada (sem fork, sem resumo do compact) mais só os turnos novos, com ids da transferência.
+#[tokio::test]
+async fn arq40_transferred_rollout_history_is_the_composition() {
+    let h = Harness::new().await;
+    let j = joined(&h);
+    let (status, body) = h.get(&history("x", THREAD, "?provider=codex")).await;
+    assert_eq!(status, 200, "{body}");
+    let events = body.as_array().unwrap();
+    let texts: Vec<Value> = events.iter().map(|e| if e["text"].is_null() { e["result"].clone() } else { e["text"].clone() }).collect();
+    assert_eq!(texts, vec![json!("ok"), Value::Null, json!("resultado original"), json!("antigo"), json!("novo")]);
+    assert_eq!(events[0]["id"], json!(format!("transfer:{TRANSFER}:claude:{}", j.collision)));
+    assert_eq!(events[4]["id"], json!(format!("transfer:{TRANSFER}:codex:{}", j.collision)));
+    assert_eq!(events[1]["tool_use_id"], events[2]["tool_use_id"]);
+    assert_eq!(events[1]["tool_use_id"], json!(format!("transfer:{TRANSFER}:claude:call")));
+    let ids: std::collections::HashSet<_> = events.iter().map(|e| e["id"].as_str().unwrap()).collect();
+    assert_eq!(ids.len(), events.len());
+    // `tail` sobre o composto: só as mensagens com texto.
+    let (status, tail) = h.get(&history("x", THREAD, "?provider=codex&tail=2")).await;
+    assert_eq!(status, 200);
+    assert_eq!(tail, Value::Array(vec![events[3].clone(), events[4].clone()]));
+    assert!(h.hits.lock().unwrap().is_empty(), "foi repassado ao Python");
+}
+
+/// PRV-21 (`test_archive_uses_account_thread...` e `test_invalid_boundary_is_never_reinterpreted...`):
+/// registro não concluído, prefixo regravado, rollout truncado ou origem sumida é 409, nunca histórico cru.
+#[tokio::test]
+async fn prv21_invalid_transfer_history_is_409() {
+    let invalid = json!({"detail": {"code": "session_transfer_history_invalid", "params": {}, "msg": "histórico da transferência indisponível"}});
+    let h = Harness::new().await;
+    let j = joined(&h);
+    set_phase(&j, "imported");
+    assert_eq!(h.get(&history("x", THREAD, "?provider=codex")).await, (409, invalid.clone()));
+    set_phase(&j, "complete");
+    rewrite_prefix(&j.rollout);
+    assert_eq!(h.get(&history("x", THREAD, "?provider=codex")).await, (409, invalid.clone()));
+    std::fs::write(&j.rollout, &j.prefix[..j.prefix.len() - 1]).unwrap();
+    assert_eq!(h.get(&history("x", THREAD, "?provider=codex&tail=2")).await, (409, invalid.clone()));
+    let h = Harness::new().await;
+    joined(&h);
+    std::fs::remove_file(h.home.join("transfer/snapshot.jsonl")).unwrap();
+    assert_eq!(h.get(&history("x", THREAD, "?provider=codex")).await, (409, invalid));
+    // A outra conversa Codex, sem transferência, segue lida do rollout.
+    assert_case(&h, &format!("codex|{CODEX_B}"), &history("x", CODEX_B, "?provider=codex")).await;
+}
+
+/// ARQ-45 (`historical_image`): no rollout transferido a imagem vem da origem congelada pelo id da
+/// transferência; outro id não procura no rollout.
+#[tokio::test]
+async fn arq45_transferred_rollout_image_comes_from_the_frozen_source() {
+    let h = Harness::new().await;
+    let j = joined(&h);
+    let id = format!("transfer:{TRANSFER}:claude:{}", j.collision);
+    let response = h.client.get(h.url(&image("x", THREAD, &id, "0", "?provider=codex"))).bearer_auth(OWNER).send().await.unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.headers()["content-type"], "image/webp");
+    assert_eq!(response.headers()["cache-control"], "max-age=31536000, immutable");
+    assert_eq!(&response.bytes().await.unwrap()[..], FROZEN_IMAGE);
+    for (uuid, idx) in [(id.as_str(), "1"), ("nao", "0")] {
+        let (status, body) = h.get(&image("x", THREAD, uuid, idx, "?provider=codex")).await;
+        assert_eq!((status, body["detail"]["code"].clone()), (404, json!("erro_imagem_nao_encontrada")), "{uuid}");
+    }
+    assert!(h.hits.lock().unwrap().is_empty());
+}
+
+/// ARQ-44 (`archived_image` e os três `test_archive_image_legacy_url_*`): a imagem `transfer:` vai pelo
+/// registro e pela thread exata, na conta registrada, segue o rollout movido para `archived_sessions` da
+/// mesma conta e recusa prefixo alterado.
 #[tokio::test]
 async fn arq44_transfer_image_by_record() {
     let h = Harness::new().await;
     assert_image(&h, "transfer_prefix", &image(LONG.0, LONG.1, "transfer:abc:claude:x", "0", "")).await;
-    let id = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
-    let (status, body) = h.get(&image("x", CODEX_A, &format!("transfer:{id}:claude:u1"), "0", "?provider=codex")).await;
-    assert_eq!((status, body["detail"]["code"].clone()), (404, json!("erro_imagem_nao_encontrada")));
-    let (status, _) = h.get(&image("x", CODEX_A, &format!("transfer:{id}:codex:u1"), "0", "?provider=codex")).await;
-    assert_eq!(status, 404);
-    assert!(h.hits.lock().unwrap().is_empty());
-    let records = h.home.join(".hangar/conversation-transfers");
-    std::fs::create_dir_all(&records).unwrap();
-    std::fs::write(records.join(format!("{id}.json")), "{}").unwrap();
-    let (status, body) = h.get(&image("x", CODEX_A, &format!("transfer:{id}:claude:u1"), "0", "?provider=codex")).await;
-    assert_eq!((status, body), (200, json!({"from_python": true})));
-}
-
-/// ARQ-40, ARQ-45 e PRV-21: rollout Codex que veio de uma transferência (índice da thread gravado)
-/// tem o histórico composto e a imagem lidos pelo Python; sem índice, o Rust lê o rollout.
-#[tokio::test]
-async fn arq40_arq45_prv21_transferred_rollout_goes_to_the_composition() {
-    let h = Harness::new().await;
-    let codex_home = h.home.join(".codex").canonicalize().unwrap().to_string_lossy().into_owned();
-    let key = format!("[{}, {}]", serde_json::to_string(&codex_home).unwrap(), serde_json::to_string(CODEX_A).unwrap());
-    let digest: String = ring::digest::digest(&ring::digest::SHA256, key.as_bytes()).as_ref().iter().map(|b| format!("{b:02x}")).collect();
-    let indexes = h.home.join(".hangar/conversation-transfers/indexes");
-    std::fs::create_dir_all(&indexes).unwrap();
-    std::fs::write(indexes.join(format!("thread-{digest}.json")), r#"["aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"]"#).unwrap();
-    for path in [history("x", CODEX_A, "?provider=codex"), history("x", CODEX_A, "?provider=codex&tail=2"),
-        image("x", CODEX_A, "nao", "0", "?provider=codex")] {
-        let (status, body) = h.get(&path).await;
-        assert_eq!((status, body), (200, json!({"from_python": true})), "{path}");
+    let absent = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    for uuid in [format!("transfer:{absent}:claude:u1"), format!("transfer:{absent}:codex:u1")] {
+        let (status, body) = h.get(&image("x", CODEX_A, &uuid, "0", "?provider=codex")).await;
+        assert_eq!((status, body["detail"]["code"].clone()), (404, json!("erro_imagem_nao_encontrada")), "{uuid}");
     }
-    // A outra conversa Codex, sem transferência, continua no Rust.
-    h.hits.lock().unwrap().clear();
-    assert_case(&h, &format!("codex|{CODEX_B}"), &history("x", CODEX_B, "?provider=codex")).await;
+    let j = joined(&h);
+    let id = format!("transfer:{TRANSFER}:claude:{}", j.collision);
+    let url = image("project", THREAD, &id, "0", "");
+    let response = h.client.get(h.url(&url)).bearer_auth(OWNER).send().await.unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.headers()["content-type"], "image/webp");
+    assert_eq!(&response.bytes().await.unwrap()[..], FROZEN_IMAGE);
+    let (status, body) = h.get(&image("project", "different-thread", &id, "0", "")).await;
+    assert_eq!((status, body["detail"]["code"].clone()), (404, json!("erro_imagem_nao_encontrada")));
+    let (status, body) = h.get(&format!("{url}?codex_account=other")).await;
+    assert_eq!((status, body["detail"]["code"].clone(), body["detail"]["params"].clone()),
+        (409, json!("codex_account_archive_mismatch"), json!({"account_id": "other", "origin_account": "default"})));
+    // O movimento nativo para `archived_sessions` da mesma conta.
+    let moved = h.home.join(".codex/archived_sessions").join(j.rollout.file_name().unwrap());
+    std::fs::create_dir_all(moved.parent().unwrap()).unwrap();
+    std::fs::rename(&j.rollout, &moved).unwrap();
+    assert_eq!(h.client.get(h.url(&url)).bearer_auth(OWNER).send().await.unwrap().status(), 200);
+    rewrite_prefix(&moved);
+    let (status, body) = h.get(&url).await;
+    assert_eq!((status, body["detail"]["code"].clone()), (409, json!("session_transfer_history_invalid")));
+    // Registro ilegível é o 404 de conversa, como o `ValueError` do `load_transfer`.
+    std::fs::write(&j.record, "{}").unwrap();
+    let (status, body) = h.get(&url).await;
+    assert_eq!((status, body["detail"]["code"].clone()), (404, json!("erro_nao_encontrado")));
+    assert!(h.hits.lock().unwrap().is_empty());
 }

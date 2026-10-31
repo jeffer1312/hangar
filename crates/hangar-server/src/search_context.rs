@@ -13,8 +13,8 @@ use regex::Regex;
 use serde_json::{Value, json};
 
 use crate::routes::{AppState, cors, gate, pass, route_failed};
-use crate::session_open::OpenError;
-use crate::session_open::archive::{Where, claude_jsonl};
+use crate::session_open::AgentProvider;
+use crate::session_open::archive::{Where, locate};
 use crate::session_write::{detail_body, json_response};
 use crate::transcript::{HistoryRequest, Provider, TAIL_WINDOW, merged_history};
 
@@ -85,12 +85,9 @@ fn excerpt(st: &AppState, p: &Params) -> Response {
     };
     let server_projects = env.claude_base.join("projects");
     let w = Where { home: &env.home, env: &env.base, server_projects: &server_projects, config_dirs: &config_dirs, live: &[] };
-    let jsonl = match claude_jsonl(&w, &p.project, &p.session_id, None) {
-        Ok(path) => path,
-        Err(miss) => {
-            let e = OpenError::from(miss);
-            return refused(e.status, e.code.unwrap_or("erro_path_invalido"), &e.msg, e.params);
-        }
+    let jsonl = match locate(&w, &p.project, &p.session_id, None, AgentProvider::Claude, None) {
+        Ok((path, _)) => path,
+        Err(e) => return refused(e.status, e.code.unwrap_or("erro_path_invalido"), &e.msg, e.params),
     };
     let req = HistoryRequest { provider: Provider::Claude, jsonl, limit: None, tail_window: TAIL_WINDOW,
         queue: Some(crate::locate::queue_path(&env.claude_base, "__archive__")) };

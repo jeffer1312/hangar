@@ -21,6 +21,7 @@ use serde_json::{Map, Value, json};
 use crate::{
     routes::{AppState, gate, pass, route_failed},
     session_open::{AgentProvider, OpenError, archive},
+    speech::history::transfer_history as transfer,
     session_write::{detail_body, json_response},
     transcript::{HistoryRequest, Provider, TAIL_WINDOW, event, history, py},
 };
@@ -37,8 +38,8 @@ pub fn matches(method: &Method, path: &str) -> bool {
         || matches!(parts.as_slice(), [p, s, "transcript-image", u, i] if ![p, s, u, i].iter().any(|x| x.is_empty()))
 }
 
-/// O que a leitura decidiu: resposta pronta ou o repasse da conversa que veio de uma transferência.
-enum Outcome { Done(Response), Python, Unreadable }
+/// O que a leitura decidiu: a resposta pronta ou o transcript que não abriu.
+enum Outcome { Done(Response), Unreadable }
 
 fn int_parsing(loc: [&str; 2], input: &str) -> Response {
     json_response(StatusCode::UNPROCESSABLE_ENTITY, json!({"detail": [{"type": "int_parsing", "loc": loc,
@@ -74,17 +75,73 @@ fn asked(st: &AppState, query: Option<&str>) -> Result<Asked, OpenError> {
     Ok(Asked { config_dir, provider, codex_account: crate::auth::query_param(query, "codex_account") })
 }
 
-/// A conversa pedida; no Codex vem junto se ela é de uma transferência Claude→Codex.
-fn find(st: &AppState, project: &str, sid: &str, a: &Asked) -> Result<(PathBuf, bool), OpenError> {
+/// A conversa pedida; no Codex vêm junto o registro da transferência Claude→Codex de onde ela veio e
+/// a casa da conta dona.
+fn find(st: &AppState, project: &str, sid: &str, a: &Asked) -> Result<(PathBuf, Option<(Value, PathBuf)>), OpenError> {
     let env = &st.accounts.env;
     let server_projects = env.claude_base.join("projects");
     let config_dirs: Vec<String> = st.accounts.claude_catalog().map_err(|e| OpenError::new(e.status, e.code, e.message))?
         .as_array().into_iter().flatten().filter_map(|row| row["path"].as_str().map(str::to_owned)).collect();
     let w = archive::Where { home: &env.home, env: &env.base, server_projects: &server_projects, config_dirs: &config_dirs, live: &[] };
     let (path, codex_home) = archive::locate(&w, project, sid, a.config_dir.as_deref(), a.provider, a.codex_account.as_deref())?;
-    // A composição da transferência (origem congelada + turnos novos) ainda é do Python.
-    let transfer = codex_home.is_some_and(|home| archive::from_transfer(&env.home, &home, sid));
-    Ok((path, transfer))
+    let Some(codex_home) = codex_home else { return Ok((path, None)) };
+    let record = transfer::archive_record(&env.home, &codex_home, &crate::locate::session_key(&path.to_string_lossy()))
+        .map_err(|_| history_invalid())?;
+    Ok((path, record.map(|r| (r, codex_home))))
+}
+
+/// Uma fonte inválida da transferência nunca vira conversa vazia nem o rollout cru.
+fn history_invalid() -> OpenError {
+    OpenError::new(409, "session_transfer_history_invalid", "histórico da transferência indisponível")
+}
+
+/// `archived_image`: a imagem `transfer:` pelo registro e pela thread exata, na conta registrada, sem
+/// procurar noutras contas; o rollout movido para `archived_sessions` da mesma conta ainda vale.
+fn archived_image(st: &AppState, sid: &str, event_id: &str, idx: i64, asked: Option<&str>) -> Result<Option<(Vec<u8>, String)>, OpenError> {
+    let parts: Vec<&str> = event_id.splitn(4, ':').collect();
+    if parts.len() != 4 || parts[2] != "claude" { return Ok(None); }
+    let id = canonical_uuid(parts[1]).ok_or_else(not_found)?;
+    let home = &st.accounts.env.home;
+    let record = match transfer::load_record(home, &id) {
+        Ok(Some(record)) => record,
+        Ok(None) => return Ok(None),
+        Err(_) => return Err(not_found()),
+    };
+    let boundary = &record["boundary"];
+    if record["phase"] != "complete" || !boundary.is_object() || !record["source"].is_object() { return Err(history_invalid()); }
+    if boundary["thread_id"].as_str() != Some(sid) { return Ok(None); }
+    if boundary["prefix_digest"].as_str().is_none_or(str::is_empty) { return Err(history_invalid()); }
+    let rollout = PathBuf::from(boundary["rollout_path"].as_str().unwrap_or_default());
+    let service = crate::accounts::AccountService::new(st.accounts.env.clone());
+    let accounts = service.snapshot(crate::accounts::Provider::Codex).map_err(|e| OpenError::new(e.status, e.code, e.message))?;
+    let owner = archive::codex_owner(&accounts, &rollout).map_err(OpenError::from)?;
+    let same = |a: &Path, b: &Path| a.canonicalize().ok().zip(b.canonicalize().ok()).is_some_and(|(a, b)| a == b);
+    let registered = record["destination_meta"]["codex_home"].as_str().filter(|h| !h.is_empty());
+    let Some(owner) = owner.filter(|o| registered.is_some_and(|h| same(&o.home, Path::new(h)))) else { return Err(history_invalid()) };
+    if let Some(asked) = asked && asked != owner.id {
+        return Err(OpenError::new(409, "codex_account_archive_mismatch", "conta")
+            .with_params(json!({"account_id": asked, "origin_account": owner.id})));
+    }
+    let rollout = if rollout.is_file() { rollout } else {
+        let name = rollout.file_name().map(|n| n.to_owned()).unwrap_or_default();
+        let mut found = Vec::new();
+        walk(&owner.home.join("archived_sessions"), &name, &mut found);
+        found.retain(|c| archive::codex_owner(&accounts, c).ok().flatten().is_some_and(|o| same(&o.home, &owner.home)));
+        found.sort_by_key(|c| c.canonicalize().unwrap_or_else(|_| c.clone()));
+        found.dedup_by_key(|c| c.canonicalize().unwrap_or_else(|_| c.clone()));
+        let [only] = found.as_slice() else { return Err(history_invalid()) };
+        only.clone()
+    };
+    transfer::verify_boundary(&record, &rollout, &owner.home).map_err(|_| history_invalid())?;
+    transfer::historical_image(&record, event_id, idx).map_err(|_| history_invalid())
+}
+
+/// Os arquivos de nome `name` sob `dir`, em qualquer profundidade.
+fn walk(dir: &Path, name: &std::ffi::OsStr, out: &mut Vec<PathBuf>) {
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.is_dir() { walk(&path, name, out); } else if path.file_name() == Some(name) && path.is_file() { out.push(path); }
+    }
 }
 
 pub async fn history(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -100,8 +157,18 @@ pub async fn history(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
     let done = tokio::task::spawn_blocking(move || -> Result<Outcome, OpenError> {
         let a = asked(&worker, query.as_deref())?;
         let (path, transfer) = find(&worker, &project, &sid, &a)?;
-        if transfer { return Ok(Outcome::Python); }
-        let read = read_history(&worker, &path, a.provider, (tail > 0).then(|| tail.min(TAIL_MAX) as usize));
+        let tail = (tail > 0).then(|| tail.min(TAIL_MAX) as usize);
+        let read = match transfer {
+            Some((record, owner_home)) => {
+                let mut evs = transfer::archived_history(&record, &path, &owner_home).map_err(|_| history_invalid())?;
+                if let Some(n) = tail {
+                    evs.retain(is_message);
+                    evs.drain(..evs.len().saturating_sub(n));
+                }
+                Ok(evs)
+            }
+            None => read_history(&worker, &path, a.provider, tail),
+        };
         Ok(match read {
             Ok(evs) => match serde_json::to_vec(&evs) {
                 Ok(body) => Outcome::Done(([(header::CONTENT_TYPE, "application/json")], body).into_response()),
@@ -112,7 +179,6 @@ pub async fn history(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
     }).await;
     match done {
         Ok(Ok(Outcome::Done(response))) => response,
-        Ok(Ok(Outcome::Python)) => pass(&st, req, &fwd).await,
         Ok(Ok(Outcome::Unreadable)) => route_failed(&st, req.headers(), "rust.archive_history_failed", "archive", "archive_history_io", "o transcript não pôde ser lido"),
         Ok(Err(error)) => reply(error),
         Err(_) => route_failed(&st, req.headers(), "rust.archive_history_failed", "archive", "archive_history_panic", "a leitura da conversa caiu no servidor"),
@@ -316,35 +382,31 @@ pub async fn image(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
     let worker = st.clone();
     let done = tokio::task::spawn_blocking(move || -> Result<Outcome, OpenError> {
         let a = asked(&worker, query.as_deref())?;
-        if uuid.starts_with("transfer:") {
-            // `archived_image`: o registro da transferência decide; achado, a leitura é do Python.
-            let parts: Vec<&str> = uuid.splitn(4, ':').collect();
-            if parts.len() != 4 || parts[2] != "claude" { return Ok(Outcome::Done(no_image())); }
-            let id = canonical_uuid(parts[1]).ok_or_else(not_found)?;
-            let record = worker.accounts.env.home.join(".hangar").join("conversation-transfers").join(format!("{id}.json"));
-            return Ok(if record.exists() { Outcome::Python } else { Outcome::Done(no_image()) });
-        }
-        let (path, transfer) = find(&worker, &project, &sid, &a).map_err(|e| match e.code {
-            Some("erro_path_invalido" | "erro_transcript_nao_encontrado") => not_found(),
-            _ => e,
-        })?;
-        if transfer { return Ok(Outcome::Python); }
-        Ok(Outcome::Done(match crate::session_media::find_image(&path, &uuid, idx) {
-            Ok(Some((raw, media))) => {
-                let mut response = Response::new(Body::from(raw));
-                let headers = response.headers_mut();
-                headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(media));
-                headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("max-age=31536000, immutable"));
-                headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
-                response
+        let found = if uuid.starts_with("transfer:") {
+            archived_image(&worker, &sid, &uuid, idx, a.codex_account.as_deref())?
+        } else {
+            let (path, transfer) = find(&worker, &project, &sid, &a).map_err(|e| match e.code {
+                Some("erro_path_invalido" | "erro_transcript_nao_encontrado") => not_found(),
+                _ => e,
+            })?;
+            match transfer {
+                Some((record, _)) => transfer::historical_image(&record, &uuid, idx).map_err(|_| history_invalid())?,
+                None => match crate::session_media::find_image(&path, &uuid, idx) {
+                    Ok(found) => found.map(|(raw, media)| (raw, media.to_owned())),
+                    Err(_) => return Ok(Outcome::Unreadable),
+                },
             }
-            Ok(None) => no_image(),
-            Err(_) => return Ok(Outcome::Unreadable),
-        }))
+        };
+        let Some((raw, media)) = found else { return Ok(Outcome::Done(no_image())) };
+        let mut response = Response::new(Body::from(raw));
+        let headers = response.headers_mut();
+        headers.insert(header::CONTENT_TYPE, HeaderValue::from_str(&media).unwrap_or(HeaderValue::from_static("image/png")));
+        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("max-age=31536000, immutable"));
+        headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+        Ok(Outcome::Done(response))
     }).await;
     match done {
         Ok(Ok(Outcome::Done(response))) => response,
-        Ok(Ok(Outcome::Python)) => pass(&st, req, &fwd).await,
         Ok(Ok(Outcome::Unreadable)) => route_failed(&st, req.headers(), "rust.archive_image_failed", "archive", "archive_image_io", "o transcript não pôde ser lido"),
         Ok(Err(error)) => reply(error),
         Err(_) => route_failed(&st, req.headers(), "rust.archive_image_failed", "archive", "archive_image_panic", "a leitura da imagem caiu no servidor"),
