@@ -404,8 +404,8 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
       deviceIdentityReady().then(() => false),
       new Promise<boolean>((resolve) => { identityTimer = setTimeout(() => resolve(true), 3000); }),
     ]).finally(() => clearTimeout(identityTimer));
-    if (identityLate) registrarDiag({ evento: 'aparelho.atrasou', nivel: 'aviso', tela: 'lista', codigo: 'device_identity_timeout' }, s.baseUrl);
     if (!isCurrent(attempt)) return;
+    if (identityLate) registrarDiag({ evento: 'aparelho.atrasou', nivel: 'aviso', tela: 'lista', codigo: 'device_identity_timeout' }, s.baseUrl);
     const es = openSessionsStream(s);
     const active = () => isCurrent(attempt) && streams.get(s.id) === es;
     let falhaDados = false;
