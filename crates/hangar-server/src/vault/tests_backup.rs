@@ -178,6 +178,12 @@ async fn without_a_recovery_password_or_a_peer_nothing_is_sent() {
     config::save(dir.path(), &config::Config { owner: None, backup_peer: Some("lab".into()) }).unwrap();
     assert_eq!(backup::send_once(&vault, &peers, dir.path(), OWNER_ID).await, Sent::Skipped("sem senha de recuperação"));
     assert!(copies(keeper_dir.path(), OWNER_ID).is_empty());
+    let status = backup::status(dir.path(), "lab");
+    assert!(status["last_error"].as_str().is_some_and(|e| e.contains("recuperação")), "a tela diz por que nada sai: {status}");
+    // `vault.json` torto: a tela diz isso, em vez de parecer sem máquina da cópia.
+    std::fs::write(config::path(dir.path()), b"{torto").unwrap();
+    let status = backup::status_without_config(dir.path());
+    assert!(status["last_error"].as_str().is_some_and(|e| e.contains("vault.json")) && status["peer"] == "lab", "{status}");
 }
 
 #[tokio::test(flavor = "multi_thread")]

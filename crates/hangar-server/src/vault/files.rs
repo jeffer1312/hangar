@@ -46,15 +46,34 @@ pub fn write(dir: &Path, session_key: &str, session: &str, value: &[u8]) -> io::
     let path = dir.join(&id);
     let written = private_file(&path).and_then(|mut f| { f.write_all(value)?; f.sync_all() });
     if let Err(error) = written {
-        remove(dir, &id);
+        remove_logged(dir, &id);
         return Err(error);
     }
     Ok(path)
 }
 
-fn remove(dir: &Path, id: &str) {
-    let _ = std::fs::remove_file(dir.join(id));
-    let _ = std::fs::remove_file(dir.join(format!("{id}.json")));
+/// Os dois arquivos, mesmo com o primeiro falhando; arquivo que já sumiu não é falha.
+pub(super) fn remove(dir: &Path, id: &str) -> io::Result<()> {
+    let gone = |path: PathBuf| match std::fs::remove_file(path) {
+        Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
+        _ => Ok(()),
+    };
+    let (secret, meta) = (gone(dir.join(id)), gone(dir.join(format!("{id}.json"))));
+    secret.and(meta)
+}
+
+/// Falha aqui é senha em claro que ficou no disco: precisa aparecer.
+fn remove_logged(dir: &Path, id: &str) {
+    if let Err(error) = remove(dir, id) {
+        tracing::warn!(code = "vault_file_remove_failed", id, kind = ?error.kind(), "o arquivo de senha do cofre não saiu do disco");
+    }
+}
+
+/// Espera a tarefa para a queda dela não passar calada.
+async fn blocking(what: &'static str, job: impl FnOnce() + Send + 'static) {
+    if let Err(error) = tokio::task::spawn_blocking(job).await {
+        tracing::warn!(code = "vault_file_task_failed", what, panicked = error.is_panic(), "a limpeza de arquivos do cofre não terminou");
+    }
 }
 
 fn young(path: &Path) -> bool {
@@ -64,16 +83,25 @@ fn young(path: &Path) -> bool {
 /// Apaga tudo o que `keep` não guarda; arquivo sem ficha e ficha ilegível também saem. `spare_young`
 /// (varredura): o que mudou há menos de 10 s pode ser uma gravação em andamento e fica.
 pub fn retain(dir: &Path, keep: impl Fn(&Meta) -> bool, spare_young: bool) {
-    let Ok(read) = std::fs::read_dir(dir) else { return };
+    let read = match std::fs::read_dir(dir) {
+        Ok(read) => read,
+        Err(error) => {
+            // Pasta que ainda não existe é só nenhum `vault_file` até agora.
+            if error.kind() != io::ErrorKind::NotFound {
+                tracing::warn!(code = "vault_file_dir_unreadable", kind = ?error.kind(), "a pasta de arquivos do cofre não leu; nada foi apagado");
+            }
+            return;
+        }
+    };
     let names: Vec<String> = read.flatten().filter_map(|e| e.file_name().into_string().ok()).collect();
     for name in &names {
         if spare_young && young(&dir.join(name)) { continue; }
         match name.strip_suffix(".json") {
             Some(id) => {
                 let meta = std::fs::read(dir.join(name)).ok().and_then(|raw| serde_json::from_slice::<Meta>(&raw).ok());
-                if !meta.is_some_and(|m| keep(&m)) { remove(dir, id); }
+                if !meta.is_some_and(|m| keep(&m)) { remove_logged(dir, id); }
             }
-            None if !names.contains(&format!("{name}.json")) => remove(dir, name),
+            None if !names.contains(&format!("{name}.json")) => remove_logged(dir, name),
             None => {}
         }
     }
@@ -98,14 +126,14 @@ pub async fn before_close(st: &AppState, name: &str) -> Option<Closing> {
 impl Closing {
     /// Só depois do fechamento que deu certo: recusado, a sessão segue viva e o arquivo é dela.
     pub fn done(self) {
-        tokio::task::spawn_blocking(move || close(&self.dir, &self.name, self.key.as_deref()));
+        tokio::spawn(blocking("close", move || close(&self.dir, &self.name, self.key.as_deref())));
     }
 }
 
 /// Na subida a lista ainda não tem as sessões que voltam pelo spec: só o prazo de 24 h apaga.
 pub async fn sweep_at_start() {
     let Some(dir) = base() else { return };
-    let _ = tokio::task::spawn_blocking(move || sweep(&dir, super::now(), None)).await;
+    blocking("sweep_at_start", move || sweep(&dir, super::now(), None)).await;
 }
 
 pub fn close(dir: &Path, name: &str, key: Option<&str>) {
@@ -117,7 +145,7 @@ pub fn close(dir: &Path, name: &str, key: Option<&str>) {
 pub async fn sweep_live(st: &AppState) {
     let Some(dir) = base() else { return };
     let rows = st.list.snapshot().await.ok().filter(|p| !p.facts.unknown).map(|p| p.rows);
-    let _ = tokio::task::spawn_blocking(move || {
+    blocking("sweep_live", move || {
         let alive = rows.as_ref().map(|rows| move |m: &Meta| rows.iter().any(|r| r.name == m.session
             || r.lifecycle_id.as_deref().and_then(|l| l.strip_prefix("k:")) == Some(m.session_key.as_str())));
         sweep(&dir, super::now(), alive.as_ref().map(|f| f as &dyn Fn(&Meta) -> bool));
@@ -128,6 +156,6 @@ pub async fn sweep_live(st: &AppState) {
 pub fn expire_later(path: PathBuf) {
     tokio::spawn(async move {
         tokio::time::sleep(LIFE).await;
-        if let (Some(dir), Some(id)) = (path.parent(), path.file_name().and_then(|n| n.to_str())) { remove(dir, id); }
+        if let (Some(dir), Some(id)) = (path.parent(), path.file_name().and_then(|n| n.to_str())) { remove_logged(dir, id); }
     });
 }

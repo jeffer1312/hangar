@@ -100,6 +100,20 @@ async fn a_leftover_wrong_size_item_without_a_vault_is_replaced_on_create() {
     assert_eq!(Vault::new(keys).status(dir.path()).await.state, State::Open, "outra vida do servidor lê a chave nova");
 }
 
+/// Chaveiro que não responde não é trancado: destrancar não resolveria.
+#[tokio::test]
+async fn a_keyring_without_answer_is_unavailable_not_locked() {
+    struct NoAnswer;
+    impl KeyStore for NoAnswer {
+        fn read(&self) -> futures_util::future::BoxFuture<'_, Result<Option<Key>, KeyError>> { Box::pin(async { Err(KeyError::Bus) }) }
+        fn write(&self, _: Key) -> futures_util::future::BoxFuture<'_, Result<(), KeyError>> { Box::pin(async { Err(KeyError::Bus) }) }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    Vault::new(Arc::new(FakeKeys::default())).create(dir.path()).await.unwrap();
+    let vault = Vault::new(Arc::new(NoAnswer));
+    assert_eq!(vault.status(dir.path()).await, Status { role: Role::Owner, state: State::Unavailable });
+}
+
 #[tokio::test]
 async fn locked_keyring_then_opened_and_the_key_stays_in_memory() {
     let dir = tempfile::tempdir().unwrap();

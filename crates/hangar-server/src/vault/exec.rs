@@ -143,7 +143,13 @@ impl Drop for Pending {
             Owner::Remote { peers, id } => {
                 let (peers, owner, request) = (peers.clone(), id.clone(), std::mem::take(&mut self.id));
                 if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-                    runtime.spawn(async move { let _ = Remote { peers: &peers, owner: &owner }.cancel(&request).await; });
+                    runtime.spawn(async move {
+                        // Pedido já fechado na dona é o fim esperado; o resto deixa o cartão na tela até o prazo dela.
+                        match (Remote { peers: &peers, owner: &owner }).cancel(&request).await {
+                            Ok(()) | Err(RemoteError::Lost) => {}
+                            Err(error) => tracing::warn!(code = "vault_cancel_failed", owner = %owner, reason = error.code(), "o pedido não foi cancelado na dona"),
+                        }
+                    });
                 }
             }
         }

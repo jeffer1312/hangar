@@ -128,8 +128,14 @@ async fn status_body(st: &AppState, local: bool) -> Response {
         st.vault_requests.note_state(here.state);
         let mut body = json!(here);
         if let Some(id) = own_id(&st.server_id) { body["server_id"] = json!(id); }
-        if here.role == Role::Owner && let Ok(config::Config { backup_peer: Some(peer), .. }) = config::load(&st.hangar_dir) {
-            body["backup"] = super::backup::status(&st.hangar_dir, &peer);
+        // Cliente que ainda não conhece o estado mostra o motivo.
+        if here.state == super::State::Unavailable { body["detail"] = json!(VaultError::Key(KeyError::Bus).code_msg().2); }
+        if here.role == Role::Owner {
+            match config::load(&st.hangar_dir) {
+                Ok(config::Config { backup_peer: Some(peer), .. }) => body["backup"] = super::backup::status(&st.hangar_dir, &peer),
+                Ok(_) => {}
+                Err(_) => body["backup"] = super::backup::status_without_config(&st.hangar_dir),
+            }
         }
         ok(body)
     };
@@ -184,14 +190,19 @@ pub async fn config(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         let rewrite = matches!(&change.owner, Some(None)) || matches!(&change.owner, Some(Some(id)) if is_self(id.as_str()));
         let before = match config::load(&st.hangar_dir) {
             Ok(cfg) => Some(cfg),
-            Err(ConfigError::Unreadable) if rewrite => None,
+            Err(ConfigError::Unreadable) if rewrite => {
+                tracing::warn!(code = "vault_config_rewritten", "o vault.json estava torto e vai ser reescrito: a máquina da cópia diária precisa ser escolhida de novo");
+                None
+            }
             Err(error) => break 'r config_failure(&st, error),
         };
         let mut cfg = before.clone().unwrap_or_default();
+        let mut created = false;
         match change.owner {
             Some(Some(id)) if is_self(id.as_str()) => {
                 if let Err(error) = st.vault.create(&st.hangar_dir).await { break 'r failure(&st, error); }
                 cfg.owner = None;
+                created = true;
             }
             Some(Some(id)) => {
                 // Apontar para outra dona deixaria as senhas daqui inalcançáveis pelas tools.
@@ -214,8 +225,17 @@ pub async fn config(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         }
         if before.as_ref() != Some(&cfg) {
             let dir = st.hangar_dir.clone();
-            let saved = tokio::task::spawn_blocking(move || config::save(&dir, &cfg)).await.unwrap_or(Err(ConfigError::Io));
-            if let Err(error) = saved { break 'r config_failure(&st, error); }
+            let saved = tokio::task::spawn_blocking(move || config::save(&dir, &cfg)).await
+                .unwrap_or_else(|error| Err(super::join_cause("vault_config_interrupted", ConfigError::Io)(error)));
+            match saved {
+                Err(_) if created => {
+                    st.diag.report("rust.vault_failed", "", "erro_cofre_indisponivel", "o cofre nasceu e o vault.json não gravou");
+                    break 'r fail(StatusCode::SERVICE_UNAVAILABLE, "erro_cofre_indisponivel",
+                        "o cofre já existe nesta máquina, mas o vault.json não gravou; ela segue como dona");
+                }
+                Err(error) => break 'r config_failure(&st, error),
+                Ok(()) => {}
+            }
         }
         drop(config_guard);
         status_body(&st, false).await
@@ -499,7 +519,8 @@ pub async fn backup_copy(State(st): State<Arc<AppState>>, ConnectInfo(peer): Con
         if !backup::looks_like_copy(&bytes) { break 'r invalid(); }
         match tokio::task::spawn_blocking(move || backup::keep_copy(&dir, &server_id, &bytes, entries)).await {
             Ok(Ok(_)) => ok(json!({"server_id": own_id(&st.server_id)})),
-            _ => failure(&st, VaultError::Io),
+            Ok(Err(error)) => failure(&st, super::io_cause("vault_backup_keep", VaultError::Io)(error)),
+            Err(error) => failure(&st, super::join_cause("vault_backup_keep_interrupted", VaultError::Io)(error)),
         }
     };
     done(&headers, resp)

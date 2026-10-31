@@ -157,7 +157,8 @@ fn answer_ok(kind: Kind, a: &Answer) -> bool {
 fn seen(result: Result<(), VaultError>) -> Option<State> {
     match result {
         Ok(()) | Err(VaultError::UnknownEntry | VaultError::DuplicateName) => Some(State::Open),
-        Err(VaultError::Key(KeyError::Locked | KeyError::Bus)) => Some(State::Locked),
+        Err(VaultError::Key(KeyError::Locked)) => Some(State::Locked),
+        Err(VaultError::Key(KeyError::Bus)) => Some(State::Unavailable),
         Err(VaultError::Key(KeyError::Lost | KeyError::Absent)) => Some(State::KeyLost),
         Err(VaultError::Absent | VaultError::Key(KeyError::Unsupported)) => Some(State::Absent),
         Err(VaultError::Unreadable | VaultError::Io | VaultError::Invalid) => None,

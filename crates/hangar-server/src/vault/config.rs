@@ -37,7 +37,7 @@ pub fn load(hangar_dir: &Path) -> Result<Config, ConfigError> {
     let raw = match std::fs::read(path(hangar_dir)) {
         Ok(raw) => raw,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Config::default()),
-        Err(_) => return Err(ConfigError::Io),
+        Err(error) => return Err(super::io_cause("vault_config_read", ConfigError::Io)(error)),
     };
     let cfg: Config = serde_json::from_slice(&raw).map_err(|_| ConfigError::Unreadable)?;
     let ok = |id: &Option<String>| id.as_deref().is_none_or(valid_server_id);
@@ -45,9 +45,9 @@ pub fn load(hangar_dir: &Path) -> Result<Config, ConfigError> {
 }
 
 pub fn save(hangar_dir: &Path, cfg: &Config) -> Result<(), ConfigError> {
-    std::fs::create_dir_all(hangar_dir).map_err(|_| ConfigError::Io)?;
-    let bytes = serde_json::to_vec_pretty(cfg).map_err(|_| ConfigError::Io)?;
-    crate::runtime::queue::atomic_write(&path(hangar_dir), &bytes).map_err(|_| ConfigError::Io)
+    std::fs::create_dir_all(hangar_dir).map_err(super::io_cause("vault_config_dir", ConfigError::Io))?;
+    let bytes = serde_json::to_vec_pretty(cfg).map_err(super::plain_cause("vault_config_format", ConfigError::Io))?;
+    crate::runtime::queue::atomic_write(&path(hangar_dir), &bytes).map_err(super::io_cause("vault_config_write", ConfigError::Io))
 }
 
 pub fn placement(hangar_dir: &Path) -> Result<Placement, ConfigError> {

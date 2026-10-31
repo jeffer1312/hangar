@@ -6,7 +6,7 @@ import type { Server } from './servers';
 import * as m from './paraglide/messages';
 
 export type VaultRole = 'owner' | 'remote' | 'none';
-export type VaultState = 'open' | 'locked' | 'absent' | 'offline' | 'key_lost';
+export type VaultState = 'open' | 'locked' | 'absent' | 'offline' | 'key_lost' | 'unavailable';
 export type VaultPolicy = 'ask' | 'free';
 
 export interface VaultBackupStatus { peer: string; last_ok_at?: number; last_error?: string }

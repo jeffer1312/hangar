@@ -52,7 +52,7 @@ impl Recovery {
     /// Sal novo e a chave derivada da senha. PBKDF2 de 600 000 voltas: chamar fora do executor.
     pub fn new(password: &str) -> Result<Self, VaultError> {
         let mut salt = [0u8; SALT_LEN];
-        ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut salt).map_err(|_| VaultError::Io)?;
+        ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut salt).map_err(super::plain_cause("vault_random_failed", VaultError::Io))?;
         Ok(Self { key: derive(password, &salt), salt })
     }
 }
@@ -163,14 +163,38 @@ pub struct SendState {
 
 fn state_path(hangar_dir: &Path) -> PathBuf { hangar_dir.join("vault").join("backup-state.json") }
 
-/// Arquivo torto conta como nenhuma cópia aceita: o pior caso é mandar de novo.
+/// Arquivo torto conta como nenhuma cópia aceita: o pior caso é mandar de novo. A tela relê o estado a
+/// cada abertura: o aviso passa pelo limite.
 pub fn load_state(hangar_dir: &Path) -> SendState {
-    std::fs::read(state_path(hangar_dir)).ok().and_then(|raw| serde_json::from_slice(&raw).ok()).unwrap_or_default()
+    let raw = match std::fs::read(state_path(hangar_dir)) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return SendState::default(),
+        Err(error) => {
+            if crate::warn_limit::allow(None, "vault_backup_state_read") {
+                tracing::warn!(code = "vault_backup_state_read", kind = ?error.kind(), "o backup-state.json não leu; vale como nenhuma cópia aceita");
+            }
+            return SendState::default();
+        }
+    };
+    serde_json::from_slice(&raw).unwrap_or_else(|_| {
+        if crate::warn_limit::allow(None, "vault_backup_state_corrupt") {
+            tracing::warn!(code = "vault_backup_state_corrupt", "o backup-state.json está torto; vale como nenhuma cópia aceita");
+        }
+        SendState::default()
+    })
 }
 
 fn save_state(hangar_dir: &Path, state: &SendState) -> io::Result<()> {
     let bytes = serde_json::to_vec_pretty(state).map_err(io::Error::other)?;
     crate::runtime::queue::atomic_write(&state_path(hangar_dir), &bytes)
+}
+
+/// `status` com o `vault.json` ilegível: a máquina da cópia é a última que o estado guardou (vazia se nenhuma).
+pub fn status_without_config(hangar_dir: &Path) -> Value {
+    let state = load_state(hangar_dir);
+    let mut body = json!({"peer": state.peer.unwrap_or_default(), "last_error": "o vault.json desta máquina não lê: a cópia diária está parada"});
+    if let Some(at) = state.last_ok_at { body["last_ok_at"] = json!(at); }
+    body
 }
 
 /// O `backup` de `GET /api/vault/status`.
@@ -212,8 +236,11 @@ fn record_now(hangar_dir: &Path, peer: &str, result: Result<u64, String>) -> Sen
         }
     };
     match save_state(hangar_dir, &state) {
-        Err(error) if sent == Sent::Sent => Sent::Failed(format!("a cópia foi aceita, mas o backup-state.json não gravou: {error}")),
-        _ => sent,
+        Err(error) => {
+            tracing::warn!(code = "vault_backup_state_write", kind = ?error.kind(), "o backup-state.json não gravou");
+            if sent == Sent::Sent { Sent::Failed(format!("a cópia foi aceita, mas o backup-state.json não gravou: {:?}", error.kind())) } else { sent }
+        }
+        Ok(()) => sent,
     }
 }
 
@@ -240,7 +267,11 @@ pub async fn send_once(vault: &Vault, peers: &PeerClient, hangar_dir: &Path, ser
             Some(recovery) => recovery,
             None => return record(hangar_dir, &peer, Err("o item da senha de recuperação no chaveiro está torto: defina de novo".into())).await,
         },
-        Ok(None) => return Sent::Skipped("sem senha de recuperação"),
+        // Não é falha da rodada (nem tenta de novo em 1 h), mas a tela precisa dizer por que nada sai.
+        Ok(None) => {
+            record(hangar_dir, &peer, Err("sem senha de recuperação: defina uma para a cópia sair".into())).await;
+            return Sent::Skipped("sem senha de recuperação");
+        }
         Err(error) => return record(hangar_dir, &peer, Err(vault_text(VaultError::Key(error)).into())).await,
     };
     let (revision, entries) = (doc.revision, doc.entries.len());
@@ -292,15 +323,15 @@ pub fn spawn(st: Arc<AppState>) -> tokio::task::JoinHandle<()> {
 /// `POST /api/vault/recovery`: só na dona. A cópia seguinte sai com a senha nova.
 pub async fn set_recovery(vault: &Vault, hangar_dir: &Path, password: Zeroizing<String>) -> Result<(), VaultError> {
     if !store::exists(&store::path(hangar_dir)) { return Err(VaultError::Absent); }
-    let recovery = tokio::task::spawn_blocking(move || Recovery::new(&password)).await.map_err(|_| VaultError::Io)??;
+    let recovery = tokio::task::spawn_blocking(move || Recovery::new(&password)).await.map_err(super::join_cause("vault_recovery_interrupted", VaultError::Io))??;
     vault.keys.write_recovery(recovery.to_item()).await.map_err(VaultError::Key)?;
     // A cópia que está lá abre com a senha velha: esquecer a revisão aceita força a próxima.
     let dir = hangar_dir.to_owned();
     tokio::task::spawn_blocking(move || {
         let mut state = load_state(&dir);
-        if state.revision.take().is_some() { save_state(&dir, &state).map_err(|_| VaultError::Io)?; }
+        if state.revision.take().is_some() { save_state(&dir, &state).map_err(super::io_cause("vault_backup_state_write", VaultError::Io))?; }
         Ok(())
-    }).await.map_err(|_| VaultError::Io)?
+    }).await.map_err(super::join_cause("vault_recovery_interrupted", VaultError::Io))?
 }
 
 // --- Restauração -----------------------------------------------------------------------------
@@ -340,7 +371,7 @@ impl Vault {
         let key = match opened {
             Some(Ok(key)) => key,
             Some(Err(VaultError::Key(KeyError::Lost | KeyError::Absent))) => {
-                set_aside(&path).map_err(|_| RestoreError::Vault(VaultError::Io))?;
+                set_aside(&path).map_err(super::io_cause("vault_restore_set_aside", RestoreError::Vault(VaultError::Io)))?;
                 existed = false;
                 key::create(&*self.keys).await.map_err(|e| RestoreError::Vault(VaultError::Key(e)))?
             }
@@ -357,7 +388,7 @@ impl Vault {
             store::save(&path, &key, &doc).map_err(|e| RestoreError::Vault(e.into()))?;
             *slot = Some(key);
             Ok(())
-        }).await.map_err(|_| RestoreError::Vault(VaultError::Io))?
+        }).await.map_err(super::join_cause("vault_restore_interrupted", RestoreError::Vault(VaultError::Io)))?
     }
 }
 
@@ -385,7 +416,8 @@ pub async fn restore(vault: &Vault, peers: &PeerClient, hangar_dir: &Path, from_
             return Err(RestoreError::NoCopy),
         Err(error) => return Err(RestoreError::PeerDown(error.text(from_peer))),
     };
-    let opened = tokio::task::spawn_blocking(move || open_copy(&password, &raw)).await.map_err(|_| RestoreError::Vault(VaultError::Io))?;
+    let opened = tokio::task::spawn_blocking(move || open_copy(&password, &raw)).await
+        .map_err(super::join_cause("vault_restore_interrupted", RestoreError::Vault(VaultError::Io)))?;
     let (doc, recovery) = opened.map_err(|e| match e {
         CopyError::Unreadable => RestoreError::Unreadable,
         CopyError::WrongPassword => RestoreError::WrongPassword,

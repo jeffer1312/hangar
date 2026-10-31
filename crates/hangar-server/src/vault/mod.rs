@@ -39,7 +39,7 @@ pub enum Role { Owner, Remote, None }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum State { Open, Locked, Absent, KeyLost, Offline }
+pub enum State { Open, Locked, Absent, KeyLost, Offline, Unavailable }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Status { pub role: Role, pub state: State }
@@ -153,9 +153,24 @@ pub(crate) fn same_name(a: &str, b: &str) -> bool { a.trim().to_lowercase() == b
 
 use crate::accounts::quotas::now;
 
+/// A causa do erro de disco vai ao log antes de virar código: só o tipo, sem caminho nem valor.
+pub(crate) fn io_cause<T>(code: &'static str, to: T) -> impl FnOnce(std::io::Error) -> T {
+    move |error| { tracing::warn!(code, kind = ?error.kind(), "cofre: falha de E/S"); to }
+}
+
+/// Tarefa bloqueante que não voltou (pânico ou servidor saindo).
+pub(crate) fn join_cause<T>(code: &'static str, to: T) -> impl FnOnce(tokio::task::JoinError) -> T {
+    move |error| { tracing::warn!(code, panicked = error.is_panic(), "cofre: tarefa interrompida"); to }
+}
+
+/// Cifra, aleatório ou serialização: o erro não entra no log, porque pode citar o que estava sendo lido.
+pub(crate) fn plain_cause<E, T>(code: &'static str, to: T) -> impl FnOnce(E) -> T {
+    move |_| { tracing::warn!(code, "cofre: falha na cifra ou no formato"); to }
+}
+
 fn new_id() -> Result<String, VaultError> {
     let mut raw = [0u8; 16];
-    ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut raw).map_err(|_| VaultError::Io)?;
+    ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut raw).map_err(plain_cause("vault_random_failed", VaultError::Io))?;
     Ok(raw.iter().map(|b| format!("{b:02x}")).collect())
 }
 
@@ -194,8 +209,9 @@ impl Vault {
             Err(VaultError::Key(KeyError::Lost | KeyError::Absent)) => State::KeyLost,
             Err(VaultError::Key(KeyError::Unsupported)) => return Status { role: Role::None, state: State::Absent },
             Err(VaultError::Absent) => return Status { role: Role::None, state: State::Absent },
-            // Sem daemon ou sem resposta: o cofre não abre agora, como trancado.
-            Err(_) => State::Locked,
+            Err(VaultError::Key(KeyError::Locked)) => State::Locked,
+            // Sem daemon ou sem resposta: destrancar não resolve, e a tela não pode pedir isso.
+            Err(_) => State::Unavailable,
         };
         Status { role: Role::Owner, state }
     }
@@ -210,7 +226,7 @@ impl Vault {
             store::save(&path, &key, &store::Doc::default())?;
             *slot = Some(key);
             Ok(())
-        }).await.map_err(|_| VaultError::Io)?
+        }).await.map_err(join_cause("vault_create_interrupted", VaultError::Io))?
     }
 
     async fn read<T: Send + 'static>(&self, hangar_dir: &Path, f: impl FnOnce(store::Doc) -> Result<T, VaultError> + Send + 'static)
@@ -218,7 +234,7 @@ impl Vault {
         let path = store::path(hangar_dir);
         let mut slot = self.key.lock().await;
         let key = self.key_for(&mut slot, &path).await?;
-        tokio::task::spawn_blocking(move || f(store::load(&path, &key)?)).await.map_err(|_| VaultError::Io)?
+        tokio::task::spawn_blocking(move || f(store::load(&path, &key)?)).await.map_err(join_cause("vault_read_interrupted", VaultError::Io))?
     }
 
     async fn write<T: Send + 'static>(&self, hangar_dir: &Path, f: impl FnOnce(&mut store::Doc) -> Result<T, VaultError> + Send + 'static)
@@ -233,7 +249,7 @@ impl Vault {
             doc.revision += 1;
             store::save(&path, &key, &doc)?;
             Ok(out)
-        }).await.map_err(|_| VaultError::Io)?
+        }).await.map_err(join_cause("vault_write_interrupted", VaultError::Io))?
     }
 
     pub async fn list(&self, hangar_dir: &Path) -> Result<Vec<Summary>, VaultError> {

@@ -169,9 +169,21 @@ mod linux {
 
     fn fail(error: zbus::Error) -> Fail {
         let dead = matches!(error, zbus::Error::InputOutput(_));
+        // Só o nome: o texto e a mensagem do erro não entram no log de quem lida com a chave.
         let error = match &error {
             zbus::Error::MethodError(name, ..) if name.to_string() == "org.freedesktop.Secret.Error.IsLocked" => KeyError::Locked,
-            _ => KeyError::Bus,
+            zbus::Error::MethodError(name, ..) => {
+                tracing::warn!(code = "vault_key_dbus", name = %name, "o Secret Service recusou");
+                KeyError::Bus
+            }
+            zbus::Error::InputOutput(cause) => {
+                tracing::warn!(code = "vault_key_dbus", kind = ?cause.kind(), "a conexão com o Secret Service falhou");
+                KeyError::Bus
+            }
+            _ => {
+                tracing::warn!(code = "vault_key_dbus", "resposta inesperada do Secret Service");
+                KeyError::Bus
+            }
         };
         Fail { error, dead }
     }

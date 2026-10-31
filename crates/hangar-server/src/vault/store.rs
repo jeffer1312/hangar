@@ -52,7 +52,7 @@ pub fn path(hangar_dir: &Path) -> PathBuf { hangar_dir.join("vault").join("vault
 pub fn exists(path: &Path) -> bool { !matches!(path.try_exists(), Ok(false)) }
 
 fn cipher(key: &[u8; 32]) -> Result<aead::LessSafeKey, StoreError> {
-    Ok(aead::LessSafeKey::new(aead::UnboundKey::new(&aead::AES_256_GCM, key).map_err(|_| StoreError::Io)?))
+    Ok(aead::LessSafeKey::new(aead::UnboundKey::new(&aead::AES_256_GCM, key).map_err(super::plain_cause("vault_cipher_key", StoreError::Io))?))
 }
 
 /// Só conta os bytes.
@@ -74,15 +74,15 @@ pub fn unseal(key: &[u8; 32], bytes: &[u8]) -> Result<Doc, StoreError> {
 /// diária põe o sal nele).
 pub fn seal_with(key: &[u8; 32], head: &[u8], doc: &Doc) -> Result<Vec<u8>, StoreError> {
     let mut nonce = [0u8; NONCE_LEN];
-    ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut nonce).map_err(|_| StoreError::Io)?;
+    ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut nonce).map_err(super::plain_cause("vault_random_failed", StoreError::Io))?;
     // Tamanho medido antes: o buffer já nasce com o JSON e a etiqueta, e nada realoca deixando
     // cópia da senha sem zerar.
     let mut size = Count(0);
-    serde_json::to_writer(&mut size, doc).map_err(|_| StoreError::Io)?;
+    serde_json::to_writer(&mut size, doc).map_err(super::plain_cause("vault_doc_format", StoreError::Io))?;
     let mut body = Zeroizing::new(Vec::with_capacity(size.0 + aead::AES_256_GCM.tag_len()));
-    serde_json::to_writer(&mut *body, doc).map_err(|_| StoreError::Io)?;
+    serde_json::to_writer(&mut *body, doc).map_err(super::plain_cause("vault_doc_format", StoreError::Io))?;
     cipher(key)?.seal_in_place_append_tag(aead::Nonce::assume_unique_for_key(nonce), aead::Aad::from(head), &mut *body)
-        .map_err(|_| StoreError::Io)?;
+        .map_err(super::plain_cause("vault_seal_failed", StoreError::Io))?;
     let mut out = Vec::with_capacity(head.len() + NONCE_LEN + body.len());
     out.extend_from_slice(head);
     out.extend_from_slice(&nonce);
@@ -105,17 +105,17 @@ pub fn load(path: &Path, key: &[u8; 32]) -> Result<Doc, StoreError> {
     match std::fs::read(path) {
         Ok(bytes) => unseal(key, &bytes),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Err(StoreError::Missing),
-        Err(_) => Err(StoreError::Io),
+        Err(error) => Err(super::io_cause("vault_store_read", StoreError::Io)(error)),
     }
 }
 
 pub fn save(path: &Path, key: &[u8; 32], doc: &Doc) -> Result<(), StoreError> {
     let dir = path.parent().ok_or(StoreError::Io)?;
-    std::fs::create_dir_all(dir).map_err(|_| StoreError::Io)?;
+    std::fs::create_dir_all(dir).map_err(super::io_cause("vault_store_dir", StoreError::Io))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).map_err(|_| StoreError::Io)?;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).map_err(super::io_cause("vault_store_dir_mode", StoreError::Io))?;
     }
-    crate::runtime::queue::atomic_write(path, &seal(key, doc)?).map_err(|_| StoreError::Io)
+    crate::runtime::queue::atomic_write(path, &seal(key, doc)?).map_err(super::io_cause("vault_store_write", StoreError::Io))
 }

@@ -130,6 +130,17 @@ async fn exec_runs_with_the_value_in_the_env_and_masks_the_output() {
     assert_eq!((code, out.as_str()), (124, "timeout 0s"));
 }
 
+/// Senha em claro que não saiu do disco vira erro; o outro arquivo sai mesmo assim e o que já sumiu não conta.
+#[test]
+fn a_failed_unlink_is_reported_and_the_rest_still_goes() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("abc")).unwrap();
+    std::fs::write(dir.path().join("abc.json"), b"{}").unwrap();
+    assert!(files::remove(dir.path(), "abc").is_err(), "pasta no lugar do arquivo não apaga");
+    assert!(!dir.path().join("abc.json").exists());
+    assert!(files::remove(dir.path(), "nunca-existiu").is_ok());
+}
+
 /// Tudo na pasta como gravado há um minuto: fora da janela em que a varredura poupa.
 fn backdate(dir: &std::path::Path) {
     let old = std::time::SystemTime::now() - Duration::from_secs(60);
