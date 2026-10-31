@@ -165,6 +165,17 @@ pub(super) fn targets(index: &Index) -> Option<Targets> {
         };
         if !out.contains(&target) { out.push(target); }
     }
+    // Raiz de agente ainda inexistente: vigia a pasta de cima até ela nascer, como `projects`.
+    for root in index.agents().map(super::agents::roots).unwrap_or_default() {
+        let target = if root.is_dir() {
+            (root, RecursiveMode::Recursive)
+        } else if let Some(parent) = root.parent().filter(|p| p.is_dir()) {
+            (parent.to_owned(), RecursiveMode::NonRecursive)
+        } else {
+            continue;
+        };
+        if !out.contains(&target) { out.push(target); }
+    }
     Some(out)
 }
 

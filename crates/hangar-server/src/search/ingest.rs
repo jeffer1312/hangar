@@ -10,12 +10,14 @@ use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
-use hangar_api::chat::ChatKind;
+use hangar_api::chat::{ChatEvent, ChatKind};
 use regex::Regex;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde_json::Value;
 
 use super::{Account, IndexError};
+use crate::accounts::environment::AccountEnvironment;
+use crate::session_open::AgentProvider;
 use crate::transcript::{RewriteFilter, parse_claude_object, py, pyjson};
 
 // Mesmo teto do `rg -M` da busca antiga: linha maior é saída de ferramenta ou contexto injetado.
@@ -90,11 +92,16 @@ fn windows_file_index(path: &Path) -> u64 {
 #[cfg(not(windows))]
 fn windows_file_index(_path: &Path) -> u64 { 0 }
 
-pub(super) struct Found<'a> { pub project: String, pub sid: String, pub stat: Stat, pub account: &'a Account }
+/// Um transcript a indexar. `cwd` vem da descoberta nos outros agentes (cabeçalho próprio de cada um);
+/// no Claude sai das linhas.
+pub(super) struct Found {
+    pub project: String, pub sid: String, pub stat: Stat, pub provider: &'static str,
+    pub config_dir: Option<String>, pub account: String, pub codex_account: Option<String>, pub cwd: Option<String>,
+}
 
 struct Known {
     id: i64, size: i64, mtime_ns: i64, ino: i64, offset: i64, config_dir: Option<String>,
-    head_len: i64, head_hash: Option<String>,
+    head_len: i64, head_hash: Option<String>, provider: String,
 }
 
 /// Bytes do começo do arquivo guardados como hash: `cp` por cima mantém o inode e não encolhe.
@@ -103,7 +110,7 @@ const HEAD_BYTES: i64 = 4096;
 /// Filhos diretos `<uuid>.jsonl` de cada pasta de projeto; a cópia `.from-<conta>` e `subagents/`
 /// ficam fora. Devolve também o que não deu para ler agora (pasta ou arquivo): o que o índice já
 /// tem lá dentro fica como está.
-pub(super) fn conversations(accounts: &[Account]) -> (BTreeMap<String, Found<'_>>, Vec<PathBuf>) {
+pub(super) fn conversations(accounts: &[Account]) -> (BTreeMap<String, Found>, Vec<PathBuf>) {
     let mut out = BTreeMap::new();
     let mut unreadable = Vec::new();
     let mut failed = |path: PathBuf, e: &std::io::Error| {
@@ -133,8 +140,9 @@ pub(super) fn conversations(accounts: &[Account]) -> (BTreeMap<String, Found<'_>
                     Err(e) => { failed(path, &e); continue; }
                 };
                 if !md.is_file() { continue; }
-                out.entry(path.to_string_lossy().into_owned()).or_insert(Found {
-                    project: project.file_name().to_string_lossy().into_owned(), sid: stem.to_owned(), stat: Stat::of(&md), account,
+                out.entry(path.to_string_lossy().into_owned()).or_insert_with(|| Found {
+                    project: project.file_name().to_string_lossy().into_owned(), sid: stem.to_owned(), stat: Stat::of(&md),
+                    provider: "claude", config_dir: account.config_dir.clone(), account: account_key(account), codex_account: None, cwd: None,
                 });
             }
         }
@@ -157,16 +165,20 @@ pub(super) fn account_key(account: &Account) -> String {
 
 pub(super) type Report<'a> = &'a dyn Fn(&'static str, String);
 
-pub(super) fn pass(conn: &mut Connection, accounts: &[Account], report: Report) -> Result<(), IndexError> {
-    let (current, unreadable) = conversations(accounts);
-    let known: BTreeMap<String, Known> = conn.prepare("SELECT path, id, size, mtime_ns, ino, offset, config_dir, head_len, head_hash FROM files")?
+pub(super) fn pass(conn: &mut Connection, accounts: &[Account], agents: Option<&AccountEnvironment>, report: Report) -> Result<(), IndexError> {
+    let (mut current, unreadable) = conversations(accounts);
+    let (others, failed) = agents.map(super::agents::discover).unwrap_or_default();
+    current.extend(others);
+    let pi_account = |provider: &str| agents.and_then(|env| crate::provider_accounts::pi_account(env, Some(provider))).unwrap_or_default();
+    let known: BTreeMap<String, Known> = conn.prepare("SELECT path, id, size, mtime_ns, ino, offset, config_dir, head_len, head_hash, provider FROM files")?
         .query_map([], |r| Ok((r.get(0)?, Known { id: r.get(1)?, size: r.get(2)?, mtime_ns: r.get(3)?, ino: r.get(4)?,
-            offset: r.get(5)?, config_dir: r.get(6)?, head_len: r.get(7)?, head_hash: r.get(8)? })))?
+            offset: r.get(5)?, config_dir: r.get(6)?, head_len: r.get(7)?, head_hash: r.get(8)?, provider: r.get(9)? })))?
         .collect::<Result<_, _>>()?;
     let listed: Vec<Option<&str>> = accounts.iter().map(|a| a.config_dir.as_deref()).collect();
     let tx = conn.transaction()?;
     for (path, k) in &known {
-        if current.contains_key(path) || unreadable.iter().any(|d| Path::new(path).starts_with(d)) {
+        // Agente que não pôde ser varrido agora (catálogo Codex ilegível) mantém o que o índice tem dele.
+        if current.contains_key(path) || unreadable.iter().any(|d| Path::new(path).starts_with(d)) || failed.iter().any(|p| *p == k.provider) {
             continue;
         }
         // Conta em migração sai do catálogo por um tempo: as conversas dela ficam.
@@ -186,9 +198,8 @@ pub(super) fn pass(conn: &mut Connection, accounts: &[Account], report: Report) 
         let old = known.get(path);
         if let Some(k) = old {
             if unchanged((k.size, k.mtime_ns, k.ino), &found.stat) {
-                if k.config_dir != found.account.config_dir {
-                    conn.execute("UPDATE files SET config_dir=?, account=? WHERE id=?",
-                        params![found.account.config_dir, account_key(found.account), k.id])?;
+                if k.config_dir != found.config_dir {
+                    conn.execute("UPDATE files SET config_dir=?, account=? WHERE id=?", params![found.config_dir, found.account, k.id])?;
                 }
                 continue;
             }
@@ -197,7 +208,7 @@ pub(super) fn pass(conn: &mut Connection, accounts: &[Account], report: Report) 
         // offset velho viraria mensagem repetida na passada seguinte.
         let ino = found.stat.ino.unwrap_or_else(|| file_id(Path::new(path)));
         let tx = conn.transaction()?;
-        match ingest(&tx, path, found, ino, old, &prefixes, report) {
+        match ingest(&tx, path, found, ino, old, &prefixes, &pi_account, report) {
             Ok(()) => tx.commit()?,
             Err(IndexError::Io(e)) => tracing::debug!(path = %path, error = %e, "busca: transcript ilegível"),
             Err(e) => tracing::warn!(path = %path, error = %e, "busca: ingestão falhou; fica para a próxima passada"),
@@ -219,6 +230,8 @@ pub(crate) struct FileState {
     pub last_text: String,
     pub rewrite: RewriteFilter,
     pub illegible: u32,
+    /// Provedor do último modelo escolhido na leitura (Pi e omp): dá a conta da conversa.
+    pub model: Option<String>,
 }
 
 /// Mensagem a indexar: (event_id, role, ts, texto).
@@ -247,14 +260,35 @@ pub(crate) fn absorb_line(st: &mut FileState, raw: &[u8], prefixes: &[String]) -
     if obj.get("type").and_then(Value::as_str) == Some("user") {
         st.has_user = true;
     }
-    let events = parse_claude_object(obj);
+    let cwd = obj.get("cwd").and_then(Value::as_str).filter(|c| !c.is_empty());
+    absorb_events(st, parse_claude_object(obj), cwd, raw.len(), kept, prefixes)
+}
+
+/// Uma linha completa de Codex, Pi, omp ou Kimi, pelo parser do histórico do Arquivo (os ids são os
+/// dele). O cwd já vem da descoberta.
+pub(crate) fn absorb_agent_line(st: &mut FileState, raw: &[u8], provider: AgentProvider, prefixes: &[String]) -> Vec<Message> {
+    st.offset += raw.len() as i64;
+    st.lines += 1;
+    // O histórico parte o arquivo no `\n`: a linha chega ao parser sem ele.
+    let line = raw.strip_suffix(b"\n").unwrap_or(raw);
+    if matches!(provider, AgentProvider::Pi | AgentProvider::Omp) && line.windows(14).any(|w| w == b"\"model_change\"") {
+        if let Some(model) = super::agents::model_provider(line) { st.model = Some(model); }
+    }
+    let events = crate::archive_history::agent_line(provider, line);
+    if events.iter().any(|e| e.kind == ChatKind::UserMsg) {
+        st.has_user = true;
+    }
+    absorb_events(st, events, None, raw.len(), true, prefixes)
+}
+
+fn absorb_events(st: &mut FileState, events: Vec<ChatEvent>, cwd: Option<&str>, size: usize, kept: bool, prefixes: &[String]) -> Vec<Message> {
     let msgs: Vec<_> = events.into_iter()
         .filter(|e| matches!(e.kind, ChatKind::UserMsg | ChatKind::AssistantMsg) && e.text.as_deref().is_some_and(|t| !t.is_empty()))
         .collect();
     let first_user = msgs.iter().find(|e| e.kind == ChatKind::UserMsg).and_then(|e| e.text.as_deref());
     if !st.head_done {
         if st.cwd.is_none() {
-            st.cwd = obj.get("cwd").and_then(Value::as_str).filter(|c| !c.is_empty()).map(str::to_owned);
+            st.cwd = cwd.map(str::to_owned);
         }
         if st.preview.is_empty() {
             if let Some(text) = first_user { st.preview = cut(&crate::list::reply::plain_text(text)); }
@@ -273,7 +307,7 @@ pub(crate) fn absorb_line(st: &mut FileState, raw: &[u8], prefixes: &[String]) -
         st.last_text = cut(&crate::list::reply::plain_text(text));
     }
     // Linha grande só alimenta cabeçalho e fatos do Arquivo.
-    if raw.len() > MAX_LINE_BYTES || !kept {
+    if size > MAX_LINE_BYTES || !kept {
         return Vec::new();
     }
     msgs.into_iter().map(|e| {
@@ -294,13 +328,15 @@ pub(crate) fn cut(text: &str) -> String {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn ingest(tx: &Transaction, path: &str, found: &Found, ino: i64, old: Option<&Known>, prefixes: &[String], report: Report) -> Result<(), IndexError> {
+fn ingest(tx: &Transaction, path: &str, found: &Found, ino: i64, old: Option<&Known>, prefixes: &[String],
+          pi_account: &dyn Fn(&str) -> String, report: Report) -> Result<(), IndexError> {
     let stat = &found.stat;
+    let agent = AgentProvider::parse(found.provider).filter(|p| *p != AgentProvider::Claude);
     let mut file = File::open(path)?;
     let fid = match old {
         None => {
-            tx.execute("INSERT INTO files(path, project, session_id, ino, provider, config_dir, account) VALUES (?,?,?,?,'claude',?,?)",
-                params![path, found.project, found.sid, ino, found.account.config_dir, account_key(found.account)])?;
+            tx.execute("INSERT INTO files(path, project, session_id, ino, provider, config_dir, account, codex_account) VALUES (?,?,?,?,?,?,?,?)",
+                params![path, found.project, found.sid, ino, found.provider, found.config_dir, found.account, found.codex_account])?;
             tx.last_insert_rowid()
         }
         Some(k) => {
@@ -315,13 +351,16 @@ fn ingest(tx: &Transaction, path: &str, found: &Found, ino: i64, old: Option<&Kn
             k.id
         }
     };
-    let (mut st, saved_rewrite) = tx.query_row(
-        "SELECT offset, lines, cwd, preview, head_done, internal, has_user, last_text, rewrite FROM files WHERE id=?", [fid],
+    let (mut st, saved_rewrite, saved_account) = tx.query_row(
+        "SELECT offset, lines, cwd, preview, head_done, internal, has_user, last_text, rewrite, account FROM files WHERE id=?", [fid],
         |r| Ok((FileState {
             offset: r.get(0)?, lines: r.get(1)?, cwd: r.get(2)?, preview: r.get(3)?, head_done: r.get::<_, i64>(4)? != 0,
             internal: r.get::<_, Option<i64>>(5)?.map(|v| v != 0), has_user: r.get::<_, i64>(6)? != 0, last_text: r.get(7)?,
-            rewrite: RewriteFilter::default(), illegible: 0,
-        }, r.get::<_, Option<String>>(8)?)))?;
+            rewrite: RewriteFilter::default(), illegible: 0, model: None,
+        }, r.get::<_, Option<String>>(8)?, r.get::<_, Option<String>>(9)?)))?;
+    if agent.is_some() {
+        st.cwd = found.cwd.clone();
+    }
     if let Some(saved) = saved_rewrite {
         match RewriteFilter::from_state(&saved) {
             Some(filter) => st.rewrite = filter,
@@ -340,7 +379,10 @@ fn ingest(tx: &Transaction, path: &str, found: &Found, ino: i64, old: Option<&Kn
             break;   // linha ainda sendo escrita: entra na próxima passada
         }
         let before = st.illegible;
-        let msgs = absorb_line(&mut st, &raw, prefixes);
+        let msgs = match agent {
+            Some(provider) => absorb_agent_line(&mut st, &raw, provider, prefixes),
+            None => absorb_line(&mut st, &raw, prefixes),
+        };
         if before == 0 && st.illegible == 1 {
             // Parser que regrediu indexaria a sessão como vazia e a busca diria "nada".
             tracing::warn!(path, byte = st.offset - raw.len() as i64, "busca: linha ilegível; pulando");
@@ -355,11 +397,17 @@ fn ingest(tx: &Transaction, path: &str, found: &Found, ino: i64, old: Option<&Kn
     }
     let head_len = st.offset.min(HEAD_BYTES);
     let head = if head_len > 0 { Some(head_hash(rd.get_mut(), head_len)?) } else { None };
+    // Pi e omp: a conta é a da credencial do último modelo; leitura sem troca de modelo mantém a gravada.
+    let account = match (agent, &st.model) {
+        (Some(AgentProvider::Pi | AgentProvider::Omp), Some(model)) => pi_account(model),
+        (Some(AgentProvider::Pi | AgentProvider::Omp), None) => saved_account.unwrap_or_default(),
+        _ => found.account.clone(),
+    };
     // size/mtime da stat de antes da leitura: se o arquivo cresceu no meio, a próxima passada relê.
     tx.execute("UPDATE files SET size=?, mtime_ns=?, offset=?, lines=?, cwd=?, preview=?, head_done=?, internal=?, \
-                has_user=?, last_text=?, rewrite=?, config_dir=?, account=?, head_len=?, head_hash=? WHERE id=?",
+                has_user=?, last_text=?, rewrite=?, config_dir=?, account=?, head_len=?, head_hash=?, codex_account=? WHERE id=?",
         params![stat.size, stat.mtime_ns, st.offset, st.lines, st.cwd, st.preview, st.head_done as i64,
             st.internal.map(i64::from), st.has_user as i64, st.last_text, st.rewrite.to_state(),
-            found.account.config_dir, account_key(found.account), head_len, head, fid])?;
+            found.config_dir, account, head_len, head, found.codex_account, fid])?;
     Ok(())
 }

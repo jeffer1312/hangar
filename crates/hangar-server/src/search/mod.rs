@@ -1,10 +1,11 @@
 // crates/hangar-server/src/search/mod.rs
 //! Índice SQLite (FTS5) das conversas Claude de todas as contas, porte de
-//! `backend/app/transcript_index.py`. Um escritor só (o produtor ou a passada disparada pela busca,
+//! `backend/app/transcript_index.py`, mais as de Codex, Pi, omp e Kimi (`agents`). Um escritor só (o produtor ou a passada disparada pela busca,
 //! sob a mesma trava); cada leitura abre conexão própria e o WAL a deixa ler durante a escrita.
 //! Também guarda por arquivo o que o Arquivo precisa (cabeçalho, conta, se tem usuário, última
 //! mensagem), para listar sem reabrir os transcripts.
 
+mod agents;
 mod db;
 pub(crate) mod hits;
 pub mod http;
@@ -23,6 +24,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use rusqlite::{Connection, OptionalExtension};
+
+use crate::accounts::environment::AccountEnvironment;
 use unicode_normalization::UnicodeNormalization;
 
 pub const FILE_NAME: &str = "busca-rust.sqlite3";
@@ -97,6 +100,8 @@ pub struct Row {
     pub provider: String,
     pub config_dir: Option<String>,
     pub account: String,
+    /// A conta Codex dona do rollout; só no Codex.
+    pub codex_account: Option<String>,
 }
 
 /// O que o Arquivo lê de um transcript sem abri-lo.
@@ -149,6 +154,8 @@ struct Inner {
     wake: Mutex<Option<std::sync::mpsc::Sender<watch::Wake>>>,
     /// Pastas que o produtor vigia agora; `None` = produtor parado ou observador fora.
     watched: Mutex<Option<watch::Targets>>,
+    /// De onde saem as conversas de Codex, Pi, omp e Kimi; vazio = só Claude.
+    agents: std::sync::OnceLock<AccountEnvironment>,
 }
 
 impl Index {
@@ -158,8 +165,14 @@ impl Index {
             path: dir.join(FILE_NAME), accounts, report, timing,
             writer: Mutex::new(None), ready: AtomicBool::new(false), last_pass: Mutex::new(None),
             watch_ok: AtomicBool::new(false), started: AtomicBool::new(false), wake: Mutex::new(None),
-            watched: Mutex::new(None),
+            watched: Mutex::new(None), agents: std::sync::OnceLock::new(),
         }) }
+    }
+
+    /// Liga as conversas de Codex, Pi, omp e Kimi do ambiente ao índice (uma vez, antes do produtor).
+    pub fn with_agents(self, env: AccountEnvironment) -> Self {
+        let _ = self.inner.agents.set(env);
+        self
     }
 
     /// O do servidor: contas do catálogo e a do processo, banco ao lado do de custos, diário do Rust.
@@ -174,17 +187,21 @@ impl Index {
     /// Contas do catálogo do serviço e a do processo; banco em `dir`.
     pub fn for_accounts(service: crate::accounts::AccountService, dir: &Path, report: Reporter, timing: Timing) -> Self {
         let server_dir = service.env.claude_base.clone();
+        let env = service.env.clone();
         let accounts: AccountSource = Arc::new(move || {
             let rows = service.claude_catalog().map_err(|e| e.code.to_string())?;
             let dirs: Vec<String> = rows.as_array().into_iter().flatten()
                 .filter_map(|r| r["path"].as_str().filter(|p| !p.is_empty()).map(str::to_owned)).collect();
             Ok(server_accounts(&dirs, &server_dir))
         });
-        Self::new(dir, accounts, report, timing)
+        Self::new(dir, accounts, report, timing).with_agents(env)
     }
 
     /// As contas que a passada varreria agora (a busca sem índice varre as mesmas).
     pub(crate) fn accounts(&self) -> Result<Vec<Account>, String> { (self.inner.accounts)() }
+
+    /// De onde saem as conversas dos outros agentes; `None` = índice só do Claude.
+    pub(crate) fn agents(&self) -> Option<&AccountEnvironment> { self.inner.agents.get() }
 
     /// Linha no diário do índice: código e detalhe, nunca texto de conversa.
     pub(crate) fn report(&self, code: &'static str, detail: String) { (self.inner.report)(code, detail) }
@@ -207,7 +224,7 @@ impl Index {
         let conn = writer.as_mut().unwrap();
         let started = Instant::now();
         let accounts = (self.inner.accounts)().map_err(IndexError::Catalog)?;
-        ingest::pass(conn, &accounts, &*self.inner.report)?;
+        ingest::pass(conn, &accounts, self.agents(), &*self.inner.report)?;
         if !self.ready() {
             conn.execute("INSERT OR REPLACE INTO meta(k, v) VALUES ('built', ?)", [now_text()])?;
             self.inner.ready.store(true, Ordering::Release);
@@ -410,7 +427,7 @@ pub fn server_accounts(config_dirs: &[String], server_dir: &Path) -> Vec<Account
 }
 
 const CANDIDATE_COLUMNS: &str = "m.id, m.file_id, f.mtime_ns, f.path, f.project, f.session_id, f.cwd, m.text, \
-    m.role, m.event_id, m.ts, f.provider, f.config_dir, f.account";
+    m.role, m.event_id, m.ts, f.provider, f.config_dir, f.account, f.codex_account";
 
 struct Candidate { id: i64, file_id: i64, mtime_ns: i64, row: Row }
 
@@ -419,7 +436,7 @@ impl Candidate {
         Ok(Self { id: r.get(0)?, file_id: r.get(1)?, mtime_ns: r.get(2)?, row: Row {
             path: r.get(3)?, project: r.get(4)?, session_id: r.get(5)?, cwd: r.get(6)?, text: r.get(7)?,
             role: r.get(8)?, event_id: r.get(9)?, ts: r.get(10)?, provider: r.get(11)?, config_dir: r.get(12)?,
-            account: r.get::<_, Option<String>>(13)?.unwrap_or_default(),
+            account: r.get::<_, Option<String>>(13)?.unwrap_or_default(), codex_account: r.get(14)?,
         } })
     }
 }

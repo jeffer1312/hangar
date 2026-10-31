@@ -12,6 +12,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use super::{Account, Index, Row, fold, ingest};
+use crate::session_open::AgentProvider;
 use crate::transcript::py;
 
 pub(crate) const MAX_HITS: usize = 50;
@@ -77,7 +78,7 @@ fn find(hay: &[char], needle: &str) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle.as_slice())
 }
 
-/// Trechos de `q` em todas as contas Claude, conversa mais nova primeiro, até `limit`. `live`:
+/// Trechos de `q` em todas as contas Claude e nos outros agentes, conversa mais nova primeiro, até `limit`. `live`:
 /// realpath do transcript → nome da sessão viva. Erro: o catálogo de contas não pôde ser lido.
 pub(crate) fn search(index: &Index, q: &str, live: &HashMap<String, String>, limit: usize) -> Result<Vec<Hit>, String> {
     let terms = terms(q);
@@ -86,10 +87,10 @@ pub(crate) fn search(index: &Index, q: &str, live: &HashMap<String, String>, lim
     }
     let hits = match index.search(&terms, limit) {
         Ok(Some(rows)) => from_rows(rows, &terms, live),
-        Ok(None) => scan(&index.accounts()?, &terms, live, limit),
+        Ok(None) => scan(index, &index.accounts()?, &terms, live, limit),
         Err(e) => {
             index.report("busca.indice_falhou", e.to_string());
-            scan(&index.accounts()?, &terms, live, limit)
+            scan(index, &index.accounts()?, &terms, live, limit)
         }
     };
     Ok(without_repeats(hits))
@@ -115,15 +116,15 @@ fn by_mtime(hits: &mut [Hit]) {
 }
 
 struct Source<'a> { path: &'a str, project: &'a str, session_id: &'a str, cwd: Option<String>, mtime: f64,
-    config_dir: Option<String>, account: String }
+    provider: &'a str, config_dir: Option<String>, account: String, codex_account: Option<String> }
 
 fn hit(src: &Source, live: &HashMap<String, String>, terms: &[String], (event_id, role, ts, text): ingest::Message) -> Hit {
     let session_name = live.get(&crate::list::discover::real(src.path)).cloned();
     Hit {
         project: src.project.to_owned(), session_id: src.session_id.to_owned(), live: session_name.is_some(), session_name,
         cwd: src.cwd.clone(), line: snippet(&text, terms), mtime: src.mtime, role: Some(role.to_owned()),
-        event_id: Some(event_id), ts, provider: "claude".into(), conta: src.account.clone(),
-        config_dir: src.config_dir.clone(), codex_account: None,
+        event_id: Some(event_id), ts, provider: src.provider.to_owned(), conta: src.account.clone(),
+        config_dir: src.config_dir.clone(), codex_account: src.codex_account.clone(),
     }
 }
 
@@ -133,7 +134,7 @@ fn from_rows(rows: Vec<Row>, terms: &[String], live: &HashMap<String, String>) -
     for row in rows {
         let Some(mtime) = *mtimes.entry(row.path.clone()).or_insert_with(|| mtime_of(&row.path)) else { continue };
         let src = Source { path: &row.path, project: &row.project, session_id: &row.session_id, cwd: row.cwd.clone(), mtime,
-            config_dir: row.config_dir.clone(), account: row.account.clone() };
+            provider: &row.provider, config_dir: row.config_dir.clone(), account: row.account.clone(), codex_account: row.codex_account.clone() };
         let role: &'static str = if row.role == "user" { "user" } else { "assistant" };
         hits.push(hit(&src, live, terms, (row.event_id, role, row.ts, row.text)));
     }
@@ -142,8 +143,10 @@ fn from_rows(rows: Vec<Row>, terms: &[String], live: &HashMap<String, String>) -
 }
 
 /// A varredura de antes do índice pronto: arquivo mais novo primeiro, até 3 por arquivo e `limit` no total.
-fn scan(accounts: &[Account], terms: &[String], live: &HashMap<String, String>, limit: usize) -> Vec<Hit> {
-    let (files, _) = ingest::conversations(accounts);
+fn scan(index: &Index, accounts: &[Account], terms: &[String], live: &HashMap<String, String>, limit: usize) -> Vec<Hit> {
+    let (mut files, _) = ingest::conversations(accounts);
+    let agents = index.agents();
+    files.extend(agents.map(|env| super::agents::discover(env).0).unwrap_or_default());
     let mut order: Vec<_> = files.iter().filter(|(_, f)| f.stat.size <= MAX_FILE_BYTES).collect();
     order.sort_by(|a, b| b.1.stat.mtime_ns.cmp(&a.1.stat.mtime_ns).then(a.0.cmp(b.0)));
     let folded: Vec<String> = terms.iter().map(|t| fold(t)).collect();
@@ -154,14 +157,21 @@ fn scan(accounts: &[Account], terms: &[String], live: &HashMap<String, String>, 
     let mut hits = Vec::new();
     for (path, found) in order {
         if hits.len() >= limit { break; }
-        let scanned = match scan_file(path, &folded, longest, &prefixes) {
+        let agent = AgentProvider::parse(found.provider).filter(|p| *p != AgentProvider::Claude);
+        let scanned = match scan_file(path, agent, found.cwd.clone(), &folded, longest, &prefixes) {
             Ok(Some(scanned)) => scanned,
             Ok(None) => continue,
             Err(e) => { tracing::debug!(path = %path, error = %e, "busca: transcript ilegível na varredura"); continue }
         };
         let Some(mtime) = mtime_of(path) else { continue };
+        // Pi e omp: a credencial do modelo lido até aqui, como a passada do índice faz.
+        let account = match (agent, &scanned.model, agents) {
+            (Some(AgentProvider::Pi | AgentProvider::Omp), Some(model), Some(env)) =>
+                crate::provider_accounts::pi_account(env, Some(model.as_str())).unwrap_or_default(),
+            _ => found.account.clone(),
+        };
         let src = Source { path, project: &found.project, session_id: &found.sid, cwd: scanned.cwd, mtime,
-            config_dir: found.account.config_dir.clone(), account: ingest::account_key(found.account) };
+            provider: found.provider, config_dir: found.config_dir.clone(), account, codex_account: found.codex_account.clone() };
         let room = limit - hits.len();
         hits.extend(scanned.messages.into_iter().take(room).map(|m| hit(&src, live, terms, m)));
     }
@@ -169,12 +179,14 @@ fn scan(accounts: &[Account], terms: &[String], live: &HashMap<String, String>, 
     hits
 }
 
-struct Scanned { messages: Vec<ingest::Message>, cwd: Option<String> }
+struct Scanned { messages: Vec<ingest::Message>, cwd: Option<String>, model: Option<String> }
 
 /// Mensagens do arquivo com todos os termos; `None` = conversa interna do Hangar ou sem achado.
-fn scan_file(path: &str, terms: &[String], longest: &str, prefixes: &[String]) -> std::io::Result<Option<Scanned>> {
+/// `agent`: outro agente, lido pelo parser dele, com o `cwd` da descoberta.
+fn scan_file(path: &str, agent: Option<AgentProvider>, cwd: Option<String>, terms: &[String], longest: &str, prefixes: &[String])
+    -> std::io::Result<Option<Scanned>> {
     let mut rd = BufReader::new(File::open(path)?);
-    let mut st = ingest::FileState::default();
+    let mut st = ingest::FileState { cwd, ..Default::default() };
     let mut messages: Vec<ingest::Message> = Vec::new();
     let mut held = HashSet::new();
     let mut matched_lines = 0;
@@ -188,13 +200,17 @@ fn scan_file(path: &str, terms: &[String], longest: &str, prefixes: &[String]) -
         if raw.len() <= ingest::MAX_LINE_BYTES && fold(&String::from_utf8_lossy(&raw)).contains(longest) {
             matched_lines += 1;
         }
-        for msg in ingest::absorb_line(&mut st, &raw, prefixes) {
+        let msgs = match agent {
+            Some(provider) => ingest::absorb_agent_line(&mut st, &raw, provider, prefixes),
+            None => ingest::absorb_line(&mut st, &raw, prefixes),
+        };
+        for msg in msgs {
             // Cada reenvio de prompt barrado repete o `held:`; o histórico leva um só.
             if (msg.0.starts_with("held:") || msg.0.starts_with("delivery:")) && !held.insert(msg.0.clone()) { continue; }
             if open && messages.len() < PER_FILE {
                 let text = fold(&msg.3);
                 if terms.iter().all(|t| text.contains(t.as_str())) {
-                    if messages.is_empty() { line_cwd = cwd_of(&raw); }
+                    if messages.is_empty() && agent.is_none() { line_cwd = cwd_of(&raw); }
                     messages.push(msg);
                 }
             }
@@ -205,7 +221,7 @@ fn scan_file(path: &str, terms: &[String], longest: &str, prefixes: &[String]) -
     if messages.is_empty() || st.internal == Some(true) {
         return Ok(None);
     }
-    Ok(Some(Scanned { messages, cwd: line_cwd.or(st.cwd) }))
+    Ok(Some(Scanned { messages, cwd: line_cwd.or(st.cwd), model: st.model }))
 }
 
 fn cwd_of(raw: &[u8]) -> Option<String> {

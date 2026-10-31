@@ -43,7 +43,10 @@ pub fn matches(method: &Method, path: &str) -> bool {
 struct Claude { mtime: f64, md: std::fs::Metadata, path: PathBuf, project: String, config_dir: Option<String>, label: String, account: usize }
 
 /// Uma conversa de Pi, omp, Kimi ou Codex (`archive_providers.Conversa`), com a conta Codex dona.
-struct Other { provider: &'static str, cwd: Option<String>, sid: String, path: PathBuf, mtime: f64, codex: Option<Account> }
+pub(crate) struct Other {
+    pub(crate) provider: &'static str, pub(crate) cwd: Option<String>, pub(crate) sid: String, pub(crate) path: PathBuf,
+    pub(crate) mtime: f64, pub(crate) codex: Option<Account>,
+}
 
 /// O que o Arquivo sabe de um transcript Claude.
 struct Facts { preview: String, cwd: Option<String>, listed: bool, last: Option<String> }
@@ -57,7 +60,7 @@ fn py_mtime(md: &std::fs::Metadata) -> f64 {
 fn real(path: &Path) -> PathBuf { std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned()) }
 
 /// `_projeto_de`: a pasta do Claude para o cwd de outro agente.
-fn project_of(cwd: Option<&str>) -> Option<String> {
+pub(crate) fn project_of(cwd: Option<&str>) -> Option<String> {
     let project = hangar_workspace::worktrees::sanitize_cwd(cwd.filter(|c| !c.is_empty())?);
     PROJECT.is_match(&project).then_some(project)
 }
@@ -197,44 +200,15 @@ impl<'a> Ctx<'a> {
         tail_text(&c.path, provider)
     }
 
-    fn where_(&self) -> (PathBuf, Vec<String>) {
-        (self.st.accounts.env.claude_base.join("projects"), self.catalog.iter().map(|(p, _)| p.clone()).collect())
-    }
-
     /// `archive_providers.conversas`: agente que falha sai da lista com aviso, sem derrubar os outros.
     fn others(&self) -> Vec<Other> {
         let env = &self.st.accounts.env;
-        let (server_projects, config_dirs) = self.where_();
-        let w = Where { home: &env.home, env: &env.base, server_projects: &server_projects, config_dirs: &config_dirs, live: &[] };
-        let mut out = pi_conversations(&archive::agent_root(&w, AgentProvider::Pi), "pi");
-        out.extend(pi_conversations(&archive::agent_root(&w, AgentProvider::Omp), "omp"));
-        out.extend(kimi_conversations(&crate::session_open::agents::kimi_home(&env.home, &env.base)));
-        match self.codex_conversations() {
+        let mut out = agent_conversations(env);
+        match codex_conversations(env) {
             Ok(codex) => out.extend(codex),
             Err(e) => tracing::warn!(error = %e, "arquivo: falha ao varrer conversas do Codex"),
         }
         out
-    }
-
-    /// `_codex_conversas`: rollouts de cada conta só na conta dona, sem transferência em andamento.
-    fn codex_conversations(&self) -> Result<Vec<Other>, String> {
-        let service = crate::accounts::AccountService::new(self.st.accounts.env.clone());
-        let accounts = service.snapshot(AccountProvider::Codex).map_err(|e| e.code.to_string())?;
-        let mut out = Vec::new();
-        for account in &accounts {
-            for path in codex_rollouts(&account.home) {
-                let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-                let sid: String = stem.chars().skip(stem.chars().count().saturating_sub(36)).collect();
-                if !UUID.is_match(&sid) { continue; }
-                let owner = archive::codex_owner(&accounts, &path).map_err(|_| "codex_account_ambiguous_rollout".to_owned())?;
-                let Some(owner) = owner.filter(|o| o.id == account.id) else { continue };
-                let phase = crate::list::local_transfers::thread_phase(&self.st.accounts.env.home, &owner.home.to_string_lossy(), &sid)?;
-                if phase.is_some_and(|p| p != "complete") { continue; }
-                let cwd = archive::header(&path, 5, |o| (o["type"] == "session_meta").then(|| o["payload"]["cwd"].as_str().filter(|c| !c.is_empty()).map(str::to_owned)).flatten());
-                out.push(Other { provider: "codex", cwd, sid, mtime: mtime_of(&path), path, codex: Some(owner.clone()) });
-            }
-        }
-        Ok(out)
     }
 
     /// `list_folders`: as pastas com conversa, de todas as contas somadas; os outros agentes entram na
@@ -330,6 +304,36 @@ impl<'a> Ctx<'a> {
 }
 
 fn mtime_of(path: &Path) -> f64 { std::fs::metadata(path).map_or(0.0, |md| py_mtime(&md)) }
+
+/// As conversas de Pi, omp e Kimi (o índice da busca lê as mesmas).
+pub(crate) fn agent_conversations(env: &crate::accounts::environment::AccountEnvironment) -> Vec<Other> {
+    let w = Where { home: &env.home, env: &env.base, server_projects: Path::new(""), config_dirs: &[], live: &[] };
+    let mut out = pi_conversations(&archive::agent_root(&w, AgentProvider::Pi), "pi");
+    out.extend(pi_conversations(&archive::agent_root(&w, AgentProvider::Omp), "omp"));
+    out.extend(kimi_conversations(&crate::session_open::agents::kimi_home(&env.home, &env.base)));
+    out
+}
+
+/// `_codex_conversas`: rollouts de cada conta só na conta dona, sem transferência em andamento.
+pub(crate) fn codex_conversations(env: &crate::accounts::environment::AccountEnvironment) -> Result<Vec<Other>, String> {
+    let service = crate::accounts::AccountService::new(env.clone());
+    let accounts = service.snapshot(AccountProvider::Codex).map_err(|e| e.code.to_string())?;
+    let mut out = Vec::new();
+    for account in &accounts {
+        for path in codex_rollouts(&account.home) {
+            let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+            let sid: String = stem.chars().skip(stem.chars().count().saturating_sub(36)).collect();
+            if !UUID.is_match(&sid) { continue; }
+            let owner = archive::codex_owner(&accounts, &path).map_err(|_| "codex_account_ambiguous_rollout".to_owned())?;
+            let Some(owner) = owner.filter(|o| o.id == account.id) else { continue };
+            let phase = crate::list::local_transfers::thread_phase(&env.home, &owner.home.to_string_lossy(), &sid)?;
+            if phase.is_some_and(|p| p != "complete") { continue; }
+            let cwd = archive::header(&path, 5, |o| (o["type"] == "session_meta").then(|| o["payload"]["cwd"].as_str().filter(|c| !c.is_empty()).map(str::to_owned)).flatten());
+            out.push(Other { provider: "codex", cwd, sid, mtime: mtime_of(&path), path, codex: Some(owner.clone()) });
+        }
+    }
+    Ok(out)
+}
 
 /// `_pi_conversas`: o transcript mora direto no slug do cwd; subagente (`<stem>/…`) fica fora.
 fn pi_conversations(root: &Path, provider: &'static str) -> Vec<Other> {

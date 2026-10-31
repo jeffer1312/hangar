@@ -30,6 +30,9 @@ struct Hit {
     role: Option<String>,
     event_id: Option<String>,
     ts: Option<f64>,
+    /// Agente e conta Codex do trecho: o contexto lê pelo parser dele.
+    provider: Option<String>,
+    codex_account: Option<String>,
     /// Máquina de onde o trecho veio (chave e rótulo), marcada ao chegar.
     #[serde(skip)]
     server: String,
@@ -458,7 +461,10 @@ impl Hangar {
         let connection = self.connection;
         let task = self.runtime.spawn(async move {
             let api = match api { Ok(api) => api, Err(reason) => return Err(Failure::local(reason)) };
-            api.server_read(&["search", "context"], &[("project", hit.project.as_str()), ("session_id", hit.session_id.as_str()), ("event_id", event.as_str())], 15).await
+            let mut query = vec![("project", hit.project.as_str()), ("session_id", hit.session_id.as_str()), ("event_id", event.as_str())];
+            query.extend(hit.provider.as_deref().map(|p| ("provider", p)));
+            query.extend(hit.codex_account.as_deref().map(|a| ("codex_account", a)));
+            api.server_read(&["search", "context"], &query, 15).await
         });
         cx.spawn(async move |this, cx| {
             let joined = task.await;

@@ -40,6 +40,9 @@ const RESERVE: &str = ".claude-a/projects/-home-jefferson/f2afaa93-d2aa-45db-9d6
 const FROM_COPY_MTIME: f64 = 1_793_001_000.0;
 /// O `/compact` que o `--resume` regravou: o índice do Python o tinha, o histórico não (M8, F5).
 const REWRITTEN: &str = "1c3fcd4c-a0d5-5f03-978c-2be4a25ee107";
+/// Chave de mentira que casa o provedor do Pi e do omp e o modelo padrão do Kimi com `kimi:apikey`.
+const KIMI_CONFIG: &str = "default_model=\"apikey/k3\"\n[providers.apikey]\ntype=\"kimi\"\napi_key=\"sk-teste\"\nbase_url=\"https://example.invalid\"\n";
+const PI_AUTH: &str = r#"{"openai-codex":{"key":"sk-teste"},"opencode-go":{"key":"sk-teste"}}"#;
 
 fn capture() -> Value {
     let text = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/search/contract/search/search_index.json")).unwrap();
@@ -86,6 +89,12 @@ impl Scene {
             for (i, rel) in MTIMES.iter().enumerate() { set_mtime(&home.join(rel), T0 + 100 * (i as u64 + 1)); }
             let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs();
             set_mtime(&home.join(RESERVE), now - 60);
+            // R5: o índice do Kimi aponta para este HOME, e credenciais de mentira dão conta ao Pi, ao omp
+            // e ao Kimi (o mtime de cada transcript fica o da captura).
+            let kimi = home.join(".kimi-code/session_index.jsonl");
+            std::fs::write(&kimi, std::fs::read_to_string(&kimi).unwrap().replace("{HOME}", &home.to_string_lossy())).unwrap();
+            std::fs::write(home.join(".kimi-code/config.toml"), KIMI_CONFIG).unwrap();
+            std::fs::write(home.join(".pi/agent/auth.json"), PI_AUTH).unwrap();
         } else {
             std::fs::create_dir_all(&home).unwrap();
         }
@@ -177,10 +186,47 @@ impl Scene {
     }
 }
 
+/// A captura só tem conversas do Claude: os trechos dos outros agentes (R5, mais velhos nas fixtures,
+/// então depois dos do Claude) ficam fora da comparação e têm teste próprio.
 async fn assert_like_the_capture(scene: &Scene) {
     let capture = capture();
     for (q, hits) in capture.as_object().unwrap() {
-        assert_eq!(scene.search(q).await, scene.expected(hits), "q={q:?}");
+        let mut got = scene.search(q).await;
+        got.as_array_mut().unwrap().retain(|h| h["provider"] == "claude");
+        assert_eq!(got, scene.expected(hits), "q={q:?}");
+    }
+}
+
+#[tokio::test]
+async fn search_route_finds_other_agents_with_provider_and_account() {
+    // R5: trechos de Codex (duas contas), Pi, omp e Kimi saem com agente, conta e conta Codex, pelo
+    // índice e pela varredura de antes dele.
+    let pick = |hits: Value| -> Vec<Value> {
+        hits.as_array().unwrap().iter().map(|h| json!({"provider": h["provider"], "conta": h["conta"], "codex_account": h["codex_account"],
+            "config_dir": h["config_dir"], "project": h["project"], "session_id": h["session_id"], "cwd": h["cwd"], "role": h["role"],
+            "event_id": h["event_id"].is_string()})).collect()
+    };
+    let hit = |provider: &str, conta: &str, codex: Option<&str>, project: &str, sid: &str, cwd: &str, role: &str| json!({
+        "provider": provider, "conta": conta, "codex_account": codex, "config_dir": null, "project": project, "session_id": sid,
+        "cwd": cwd, "role": role, "event_id": true});
+    for ready in [true, false] {
+        let scene = Scene::new(Opts { ready, ..Opts::default() }).await;
+        let home = scene.home.to_string_lossy().into_owned();
+        let (codex_a, codex_b) = (format!("codex:{home}/.codex"), format!("codex:{home}/.codex-b"));
+        let hangar = "/home/jefferson/Projetos/hangar";
+        let a = |role| hit("codex", &codex_a, Some("default"), "-home-jefferson-Projetos-hangar", "01a05511-e980-71b3-93a9-befda5704b20", hangar, role);
+        assert_eq!(pick(scene.search("lider2").await), [a("user"), a("assistant")], "ready={ready}");
+        let b = |role| hit("codex", &codex_b, Some("b"), "-tmp-hangar-native-task4-fixture-jf", "01a0d000-f6ac-74e3-b19b-98d42af1a712",
+            "/tmp/hangar-native-task4-fixture-jf", role);
+        assert_eq!(pick(scene.search("continued").await), [b("user"), b("assistant")], "ready={ready}");
+        let pi = |role| hit("pi", "kimi:apikey", None, "-home-jefferson-Projetos-hangar--worktrees-contas-modelos",
+            "d337d6b8-0b3c-4bbe-8034-939d7c48f246", "/home/jefferson/Projetos/hangar/.worktrees/contas-modelos", role);
+        assert_eq!(pick(scene.search("ancora").await), [pi("user"), pi("assistant")], "ready={ready}");
+        let omp = hit("omp", "kimi:apikey", None, "-tmp-claude-1000--home-jefferson-Projetos-hangar-ac1a7b0f-d0a7-4e66-8f05-f53ea5d4b4da-scratchpad-omp-teste",
+            "01a06932-79ae-77e9-b95a-286b6e2e9288", "/tmp/claude-1000/-home-jefferson-Projetos-hangar/ac1a7b0f-d0a7-4e66-8f05-f53ea5d4b4da/scratchpad/omp-teste", "user");
+        assert_eq!(pick(scene.search("responda apenas").await), [omp], "ready={ready}");
+        let kimi = |role| hit("kimi", "kimi:apikey", None, "-home-jefferson-Projetos-hangar", "session_ab697d05-66da-4b2a-8e80-3d769951e752", hangar, role);
+        assert_eq!(pick(scene.search("posso ajudar").await), [kimi("assistant"), kimi("assistant")], "ready={ready}");
     }
 }
 
