@@ -4,6 +4,7 @@ mod account_tags;
 mod auto_report;
 mod codex_activity;
 mod composer_history;
+mod login_browser;
 mod rename_suggestion;
 
 use std::time::Instant;
@@ -20,6 +21,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "etiquetas-maquina-conta" => Some(account_tags::render),
         "sugestao-de-nome" => Some(rename_suggestion::render),
         "relatorio-automatico" => Some(auto_report::render),
+        "login-navegador" => Some(login_browser::render),
         _ => None,
     }
 }

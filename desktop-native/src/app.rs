@@ -78,6 +78,7 @@ pub(crate) use session_tabs::{PlateMark, PlateSegment, plate, tab_frame, tab_tit
 pub(crate) use tags::{account_icon, machine_icon};
 pub(crate) use rename_suggest::{Strip as RenameStrip, rename_strip};
 pub(crate) use settings::{setting_row, settings_box};
+pub(crate) use accounts::{login_heading, target_row};
 mod shortcuts;
 mod shortcut_transfer;
 mod keyboard;

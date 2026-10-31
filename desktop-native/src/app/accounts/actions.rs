@@ -855,9 +855,7 @@ impl Hangar {
         let footer = || div().mt(px(4.)).flex().justify_end().gap(px(8.));
         let mut panel = settings_box().mt(px(24.)).p(px(20.)).gap(px(16.)).child(head);
         if let Some(choosing) = &s.choosing {
-            let heading = |title: String, help: String| div().flex().flex_col().gap(px(4.))
-                .child(div().font_weight(FontWeight::MEDIUM).text_size(px(13.)).child(title))
-                .child(div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(help));
+            let heading = login_heading;
             let mut list = div().flex().flex_col().gap(px(2.));
             let mut in_machine = false;
             match choosing {
@@ -1027,7 +1025,13 @@ fn machine_detail(answered: bool, offered: &[&Value]) -> String {
     offered.iter().map(|target| target_names(target).0).collect::<Vec<_>>().join(", ")
 }
 
-fn target_row(id: impl Into<ElementId>, name: String, detail: String, is_last: bool) -> Button {
+pub(crate) fn login_heading(title: String, help: String) -> Div {
+    div().flex().flex_col().gap(px(4.))
+        .child(div().font_weight(FontWeight::MEDIUM).text_size(px(13.)).child(title))
+        .child(div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(help))
+}
+
+pub(crate) fn target_row(id: impl Into<ElementId>, name: String, detail: String, is_last: bool) -> Button {
     crate::app::popup::row(id, false).accessibility_label(name.clone()).child(div().w_full().flex().items_center().gap_2()
         .child(div().flex_1().min_w_0().flex().flex_col().gap(px(2.))
             .child(div().truncate().text_sm().font_weight(FontWeight::MEDIUM).child(name))
