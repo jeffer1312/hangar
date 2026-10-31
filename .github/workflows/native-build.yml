@@ -1,0 +1,197 @@
+# Build do app desktop nativo por sistema e o cache de release que a pré-release de branch lê, chamados pelo
+# native.yml (Linux e Windows) e pelo native-macos.yml (macOS, depois que o Native da main ou do canal termina).
+# Quem publica é quem chama. `branch` e `ref` vêm de quem chama: no workflow_run o github.ref_name e o github.sha
+# são os da main, não os do commit compilado.
+name: Native (build)
+
+on:
+  workflow_call:
+    inputs:
+      sistemas:
+        description: JSON com os sistemas (os, platform, exe, experimental)
+        type: string
+        required: true
+      branch:
+        type: string
+        required: true
+      ref:
+        description: Commit compilado; vazio é o do evento
+        type: string
+        default: ""
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(inputs.sistemas) }}
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.experimental }}
+    concurrency:
+      group: native-build-${{ inputs.branch }}-${{ matrix.platform }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      actions: write
+    # Perfil do cargo: a main publica o binário do usuário com o `dist` (LTO completo, uma unidade de código);
+    # a pré-release de branch, com o `release` comum, que sai em minutos.
+    env:
+      PERFIL: ${{ inputs.branch == 'main' && 'dist' || 'release' }}
+    defaults:
+      run:
+        working-directory: desktop-native
+        shell: bash
+    steps:
+      # Histórico inteiro: a versão embutida é `VERSION` + número de commits, e clone raso contaria 1.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+      # Mesma lista do `check` do native.yml.
+      - if: runner.os == 'Linux'
+        run: &apt-linux |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libasound2-dev libfontconfig-dev libfreetype-dev libwayland-dev \
+            libx11-xcb-dev libxkbcommon-dev libxkbcommon-x11-dev libvulkan-dev libzstd-dev rpm
+      # O rustup do runner lê o rust-toolchain.toml (1.98.1) no primeiro cargo. actions/cache e não rust-cache: a
+      # política do repositório só libera actions do GitHub e de criadores verificados.
+      # Só a main grava; as outras branches leem o dela. Cada branch gravando a própria cópia estourava o limite de
+      # cache do repositório e o GitHub despejava a da main. O perfil entra na chave: com LTO as dependências saem
+      # em bitcode, e o cache da main (dist) não serve à branch (release), que lê o do job `cache-release`.
+      # O vendor do GPUI também: com ele igual ao do cache, o passo seguinte o reaproveita.
+      - uses: actions/cache/restore@v4
+        id: cache-rust
+        with:
+          path: &cache-native |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop-native/target
+          key: &chave-native native-${{ runner.os }}-${{ runner.arch }}-${{ env.PERFIL }}-${{ hashFiles('desktop-native/Cargo.lock', 'desktop-native/rust-toolchain.toml') }}-${{ hashFiles('desktop-native/vendor/**') }}
+          restore-keys: &chave-native-parcial |
+            native-${{ runner.os }}-${{ runner.arch }}-${{ env.PERFIL }}-${{ hashFiles('desktop-native/Cargo.lock', 'desktop-native/rust-toolchain.toml') }}-
+            native-${{ runner.os }}-${{ runner.arch }}-${{ env.PERFIL }}-
+      # O cargo julga crate de caminho pela data dos arquivos, e o checkout novo data tudo de agora: o GPUI
+      # vendorizado recompilava inteiro a cada push, com o cache achado. Só com a chave exata (vendor igual ao
+      # compilado no cache) a data antiga é verdade.
+      - name: Reaproveitar o vendor do cache
+        if: steps.cache-rust.outputs.cache-hit == 'true'
+        run: git ls-files -z vendor | xargs -0 touch -t 200001010000
+      - run: cargo build --locked --profile "$PERFIL"
+        env:
+          # A branch embutida faz o app trocar de canal mesmo para uma versão de contagem menor (update.rs).
+          HANGAR_NATIVE_CHANNEL: ${{ inputs.branch }}
+      # Binário cru com nome limpo (o que o app baixa para se atualizar) + arquivo compactado para quem baixa à mão.
+      # O binário cru mantém o nome usado pelo atualizador. O arquivo manual leva o lançador/ícone no Linux,
+      # o executável com ícone incorporado no Windows e o pacote .app com ICNS no macOS.
+      - name: Empacotar
+        run: |
+          name=Hangar-${{ matrix.platform }}
+          bin="target/$PERFIL/hangar-native"
+          mkdir -p out stage
+          cp "$bin${{ matrix.exe }}" "out/$name${{ matrix.exe }}"
+          case "$RUNNER_OS" in
+            Linux)
+              install -m755 "$bin" stage/hangar
+              install -m755 tools/install-linux.sh stage/install-linux.sh
+              install -m644 assets/brand/icon.png stage/icon.png
+              tar -czf "out/$name.tar.gz" -C stage hangar install-linux.sh icon.png
+              # .deb e .rpm abrem pela loja de programas; a versão é a mesma conta do build.rs.
+              tools/package-linux.sh "$bin" "$(tr -d '[:space:]' < ../VERSION).$(git rev-list --count HEAD)" out "$name"
+              ;;
+            Windows) cp "$bin.exe" stage/Hangar.exe && (cd stage && 7z a -tzip "../out/$name.zip" Hangar.exe) ;;
+            macOS)
+              tools/package-macos.sh "$bin" stage/Hangar.app
+              (cd stage && zip -qr "../out/$name.zip" Hangar.app)
+              ;;
+          esac
+          ls -l out
+      # Depois de empacotar: a poda tira o que é do app (recompila a cada push) e fica só o que o cache poupa.
+      - if: &grava-native inputs.branch == 'main' && steps.cache-rust.outputs.cache-hit != 'true'
+        run: ../scripts/podar-target --cache target
+      - uses: actions/cache/save@v4
+        if: *grava-native
+        with:
+          path: *cache-native
+          key: ${{ steps.cache-rust.outputs.cache-primary-key }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.platform }}
+          path: desktop-native/out/*
+          retention-days: 1
+      # Mesmo passo do `check` do native.yml: chave nova não substitui a velha, e sem apagar o cache do
+      # repositório chega ao teto e o GitHub despeja o da main.
+      - name: Apagar cópias antigas do cache
+        if: *grava-native
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREFIXO: native-${{ runner.os }}-${{ runner.arch }}-${{ env.PERFIL }}-
+          CHAVE: ${{ steps.cache-rust.outputs.cache-primary-key }}
+        run: &apagar-antigos |
+          set -o pipefail
+          lista() { gh cache list --repo "$GITHUB_REPOSITORY" --ref refs/heads/main --key "$1" --limit 100 --json key --jq '.[].key'; }
+          gravada=$(lista "$CHAVE") || { echo "::warning::não consegui listar o cache $CHAVE; as cópias antigas ficam"; exit 0; }
+          grep -qxF -- "$CHAVE" <<<"$gravada" || { echo "::warning::o cache $CHAVE não aparece gravado; as cópias antigas ficam"; exit 0; }
+          antigas=$(lista "$PREFIXO") || { echo "::warning::não consegui listar o cache $PREFIXO; as cópias antigas ficam"; exit 0; }
+          while IFS= read -r k; do
+            [ -z "$k" ] || [ "$k" = "$CHAVE" ] || gh cache delete "$k" --repo "$GITHUB_REPOSITORY" || echo "::warning::não apaguei o cache $k"
+          done <<<"$antigas"
+
+  # O cache de release que a pré-release de branch lê. Só a main grava, e só quando as dependências, o
+  # toolchain ou o vendor mudam (a chave não existe ainda); nos outros pushes o job termina na consulta.
+  cache-release:
+    if: inputs.branch == 'main'
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(inputs.sistemas) }}
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    concurrency:
+      group: native-cache-release-${{ inputs.branch }}-${{ matrix.os }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      actions: write
+    env:
+      PERFIL: release
+    defaults:
+      run:
+        working-directory: desktop-native
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: actions/cache/restore@v4
+        id: consulta
+        with:
+          path: *cache-native
+          key: *chave-native
+          lookup-only: true
+      - if: steps.consulta.outputs.cache-hit != 'true' && runner.os == 'Linux'
+        run: *apt-linux
+      # A base é o cache anterior do mesmo perfil: só o que mudou compila.
+      - if: &falta-native steps.consulta.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: *cache-native
+          key: *chave-native
+          restore-keys: *chave-native-parcial
+      - if: *falta-native
+        run: |
+          cargo build --locked --profile "$PERFIL"
+          ../scripts/podar-target --cache target
+      - if: *falta-native
+        uses: actions/cache/save@v4
+        with:
+          path: *cache-native
+          key: ${{ steps.consulta.outputs.cache-primary-key }}
+      - name: Apagar cópias antigas do cache
+        if: *falta-native
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREFIXO: native-${{ runner.os }}-${{ runner.arch }}-${{ env.PERFIL }}-
+          CHAVE: ${{ steps.consulta.outputs.cache-primary-key }}
+        run: *apagar-antigos

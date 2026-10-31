@@ -372,7 +372,7 @@ mod tests {
 /// Grava um executável de teste sem abrir o arquivo para escrita neste processo: quem grava é um
 /// `install` à parte. Gravado aqui, um filho de outro teste nascido nesse instante herdaria o descritor
 /// de escrita, e rodar o arquivo daria "Text file busy" (ETXTBSY).
-#[cfg(all(unix, any(test, target_os = "linux")))]
+#[cfg(all(unix, test))]
 pub(crate) fn write_test_executable(path: &std::path::Path, content: impl AsRef<[u8]>) {
     let source = path.with_extension("conteudo");
     std::fs::write(&source, content).unwrap();

@@ -259,38 +259,61 @@ mod tests {
         assert!(parse(b"nao json").is_empty());
     }
 
-    fn golden() -> Value {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../backend/tests/fixtures/contract/nav/nav.json");
-        serde_json::from_slice(&std::fs::read(path).expect("golden do Python (gen_nav.py)")).unwrap()
-    }
-
-    /// Cada url do golden sai igual à do Python, menos a só de espaços (N3: o Rust recusa).
+    /// Cada url em cada endereço de escuta; `{host}` é o host que a página da sessão usa nele.
     #[test]
-    fn urls_match_the_python_route() {
-        let g = golden();
-        let port = g["port"].as_u64().unwrap() as u16;
-        for c in g["urls"].as_array().unwrap() {
-            let ip: std::net::IpAddr = c["bind"].as_str().unwrap().parse().unwrap();
-            let got = resolve_url(c["name"].as_str().unwrap(), c["input"].as_str().unwrap(), SocketAddr::new(ip, port), c["token"].as_str().unwrap());
-            if c["input"].as_str().unwrap().trim().is_empty() {
-                assert_eq!(c["out"], "http://", "o Python manda http:// vazio");
-                assert_eq!(got, Err((StatusCode::BAD_REQUEST, "url vazia")));
-                continue;
-            }
-            match c["status"].as_u64().unwrap() {
-                200 => assert_eq!(got.as_deref(), Ok(c["out"].as_str().unwrap()), "{c}"),
-                s => assert_eq!(got.map_err(|(st, d)| (st.as_u16() as u64, d.to_owned())), Err((s, c["detail"].as_str().unwrap().to_owned())), "{c}"),
+    fn urls_resolve_for_every_listen_address() {
+        const BINDS: [(&str, &str); 5] = [("0.0.0.0", "127.0.0.1"), ("::", "127.0.0.1"), ("192.168.1.5", "192.168.1.5"),
+            ("127.0.0.1", "127.0.0.1"), ("fe80::1", "[fe80::1]")];
+        const TOKEN: &str = "tok/en+ç~_.-";
+        const QUERY: &str = "?token=tok%2Fen%2B%C3%A7~_.-";
+        const RELATIVE: Result<&str, (StatusCode, &str)> =
+            Err((StatusCode::BAD_REQUEST, "caminho relativo só vale para página desta sessão"));
+        let long_page = format!("/api/sessions/s/pages/{}", "a".repeat(129));
+        let cases: [(&str, &str, Result<String, (StatusCode, &str)>); 19] = [
+            ("s", "http://x", Ok("http://x".into())),
+            ("s", "https://x/a?b=1", Ok("https://x/a?b=1".into())),
+            ("s", "HTTP://X", Ok("HTTP://X".into())),
+            ("s", "HtTpS://x", Ok("HtTpS://x".into())),
+            ("s", "x.com", Ok("http://x.com".into())),
+            ("s", "localhost:5173/#/a", Ok("http://localhost:5173/#/a".into())),
+            ("s", "  http://x  ", Ok("http://x".into())),
+            ("s", "\u{1c}http://x\u{1f}", Ok("http://x".into())),
+            ("s", "ftp://x", Ok("http://ftp://x".into())),
+            ("s", "//x", RELATIVE.map(str::to_owned)),
+            ("s", "   ", Err((StatusCode::BAD_REQUEST, "url vazia"))),
+            ("s", "/api/sessions/s/pages/abc_DEF-1", Ok(format!("http://{{host}}:8765/api/sessions/s/pages/abc_DEF-1{QUERY}"))),
+            ("s t", "/api/sessions/s%20t/pages/a", Ok(format!("http://{{host}}:8765/api/sessions/s%20t/pages/a{QUERY}"))),
+            ("s", "/api/sessions/s/pages/a", Ok(format!("http://{{host}}:8765/api/sessions/s/pages/a{QUERY}"))),
+            ("s", "/api/sessions/outra/pages/a", RELATIVE.map(str::to_owned)),
+            ("s", &long_page, RELATIVE.map(str::to_owned)),
+            ("s", "/api/sessions/s/pages/a b", RELATIVE.map(str::to_owned)),
+            ("s", "/x", RELATIVE.map(str::to_owned)),
+            ("s", "/api/sessions/s/pages/a?x=1", RELATIVE.map(str::to_owned)),
+        ];
+        for (name, input, expected) in &cases {
+            for (bind, host) in BINDS {
+                let ip: std::net::IpAddr = bind.parse().unwrap();
+                let got = resolve_url(name, input, SocketAddr::new(ip, 8765), TOKEN);
+                let expected = expected.clone().map(|out| out.replace("{host}", host));
+                assert_eq!(got, expected, "{name} {input:?} em {bind}");
             }
         }
     }
 
     #[test]
-    fn pending_files_load_like_python() {
-        for c in golden()["files"].as_array().unwrap() {
-            let mut live: Vec<String> = parse(c["raw"].as_str().unwrap().as_bytes()).into_iter()
+    fn pending_files_keep_only_valid_recent_entries() {
+        let cases: [(&str, &[&str]); 5] = [
+            (r#"{"a": {"url": "u", "ts": 4000000000.0}, "b": {"url": 1, "ts": 4000000000.0}, "c": {"url": "u"}, "d": {"url": "u", "ts": "1"}, "e": "x", "f": {"url": "u", "ts": 1.0}}"#, &["a"]),
+            ("[1]", &[]),
+            ("nao json", &[]),
+            ("{}", &[]),
+            (r#"{"g": {"url": "u", "ts": 4000000000.0, "extra": true}}"#, &["g"]),
+        ];
+        for (raw, expected) in cases {
+            let mut live: Vec<String> = parse(raw.as_bytes()).into_iter()
                 .filter(|(_, m)| now() - m.ts <= TTL_SECS).map(|(n, _)| n).collect();
             live.sort();
-            assert_eq!(json!(live), c["live"], "{c}");
+            assert_eq!(live, expected, "{raw}");
         }
     }
 

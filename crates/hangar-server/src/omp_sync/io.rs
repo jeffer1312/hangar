@@ -287,16 +287,34 @@ mod codec_tests {
     use super::*;
 
     #[test]
-    fn op081_numbers_and_private_named_objects_keep_the_python_json_contract() {
-        let fixture: Value = serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/omp-json/numbers.json")).unwrap();
-        for case in fixture["cases"].as_array().unwrap() {
-            let raw = case["input"].as_str().unwrap();
-            let actual = read_record(raw);
-            if let Some(expected) = case["expected"]["text"].as_str() {
-                assert_eq!(serde_json::to_string(&actual.unwrap()).unwrap(), expected, "{raw}");
-            } else {
-                assert_eq!(actual.unwrap_err(), case["expected"]["error"].as_str().unwrap(), "{raw}");
-            }
+    fn op081_numbers_and_private_named_objects_keep_their_json_form() {
+        let texts = [
+            (r#"{"x":0.5}"#, r#"{"x":0.5}"#),
+            (r#"{"x":1e3}"#, r#"{"x":1000.0}"#),
+            (r#"{"x":-2.5e-2}"#, r#"{"x":-0.025}"#),
+            (r#"{"x":18446744073709551616}"#, r#"{"x":18446744073709551616}"#),
+            (r#"{"x":-18446744073709551616}"#, r#"{"x":-18446744073709551616}"#),
+            (r#"{"x":[0.5,{"y":1e3}]}"#, r#"{"x":[0.5,{"y":1000.0}]}"#),
+            (
+                r#"{"$serde_json::private::Number":"0.5","other":true}"#,
+                r#"{"$serde_json::private::Number":"0.5","other":true}"#,
+            ),
+            (
+                r#"{"nested":{"$serde_json::private::Number":"invalid"}}"#,
+                r#"{"nested":{"$serde_json::private::Number":"invalid"}}"#,
+            ),
+        ];
+        for (raw, expected) in texts {
+            assert_eq!(serde_json::to_string(&read_record(raw).unwrap()).unwrap(), expected, "{raw}");
+        }
+        let errors = [
+            ("0.5", "Registro deve ser um objeto"),
+            ("1e3", "Registro deve ser um objeto"),
+            (r#"{"x":0.5,"x":1}"#, "Registro JSON inválido"),
+            (r#"{"x":{"y":0.5,"y":1}}"#, "Registro JSON inválido"),
+        ];
+        for (raw, expected) in errors {
+            assert_eq!(read_record(raw).unwrap_err(), expected, "{raw}");
         }
     }
 

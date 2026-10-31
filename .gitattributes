@@ -15,4 +15,3 @@
 # Fixtures do contrato da conversa: os testes comparam offsets em bytes e há um 0xFF de propósito.
 backend/tests/fixtures/contract/transcripts/** -text
 backend/tests/fixtures/contract/queue/** -text
-backend/tests/fixtures/uploads_contract/** -text

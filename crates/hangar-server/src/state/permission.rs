@@ -359,14 +359,22 @@ mod tests {
     }
 
     #[test]
-    fn parse_matches_python() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../backend/tests/fixtures/contract/golden/permission_mode.json");
-        let rows: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-        let rows = rows.as_array().unwrap();
-        assert!(rows.len() >= 10);
-        for row in rows {
-            assert_eq!(parse_permission_mode(row["pane"].as_str().unwrap()), row["expected"].as_str(), "{}", row["name"]);
+    fn parse_reads_the_footer_mode() {
+        let rows = [
+            ("glyph_bypass", "texto\n⏵⏵ bypass permissions on (shift+tab to cycle)", Some("bypassPermissions")),
+            ("glyph_plan", "⏸ plan mode on (shift+tab to cycle)", Some("plan")),
+            ("last_glyph_wins", "⏸ plan mode on\n⏵⏵ accept edits on", Some("acceptEdits")),
+            ("conversation_without_glyph_loses", "plan mode on\n⏵⏵ auto mode on", Some("auto")),
+            ("no_glyph_fallback", "x\nmanual mode on", Some("manual")),
+            ("upper_and_curly", "⏵⏵ DON\u{2019}T ASK ON", Some("dontAsk")),
+            ("kelvin", "⏵⏵ don't as\u{212a} on", Some("dontAsk")),
+            ("long_s", "⏵⏵ bypa\u{17f}s permi\u{17f}sions on", None),
+            ("unknown", "⏵⏵ turbo mode on", None),
+            ("empty", "", None),
+            ("separators", "⏵⏵ plan mode on\u{2028}⏵⏵ auto mode on\u{1c}", Some("auto")),
+        ];
+        for (name, pane, expected) in rows {
+            assert_eq!(parse_permission_mode(pane), expected, "{name}");
         }
     }
 
