@@ -1,6 +1,7 @@
 //! Animações das novidades da atualização: cada uma é desenhada com as mesmas partes do app que ela mostra.
 
 mod account_tags;
+mod auto_report;
 mod codex_activity;
 mod composer_history;
 mod password_vault;
@@ -20,6 +21,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "etiquetas-maquina-conta" => Some(account_tags::render),
         "sugestao-de-nome" => Some(rename_suggestion::render),
         "cofre-de-senhas" => Some(password_vault::render),
+        "relatorio-automatico" => Some(auto_report::render),
         _ => None,
     }
 }

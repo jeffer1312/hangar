@@ -3730,8 +3730,7 @@ ganho de ponta a ponta que não tenha sido medido.
 
 ## Cofre de senhas: uma máquina dona, chave no chaveiro, uso aprovado por senha (30/10/2026)
 
-**Regra.** O Hangar guarda as senhas do dono num **cofre** único, numa máquina dona (hoje
-`notebook-jefferson`); as outras máquinas pedem a ela pelos peers, por qualquer endereço que o
+**Regra.** O Hangar guarda as senhas do dono num **cofre** único, numa máquina dona; as outras máquinas pedem a ela pelos peers, por qualquer endereço que o
 `peers.json` dá, inclusive o `app.hangar.dev.br`. O arquivo é criptografado e a chave mora no
 chaveiro do sistema da dona. Cada senha é **pedir sempre** (padrão: o uso por agente abre cartão
 e push no celular, espera até 10 min) ou **liberada**. O agente usa por três caminhos: login
@@ -3749,7 +3748,7 @@ um cofre por máquina, rede só por Tailscale.
 **Medição.** O agente roda com o mesmo usuário do sistema: com a coleção `login` aberta,
 `secret-tool lookup` devolve o que estiver nela sem prompt, então ele consegue a chave do cofre.
 A memória do `hangar-server` ele não lê (`kernel.yama.ptrace_scope=1`; o agente é filho do
-servidor, não o contrário). A VPS `srv1633222` não tem chaveiro do sistema (sem
+servidor, não o contrário). A VPS medida não tem chaveiro do sistema (sem
 `gnome-keyring-daemon` nem `secret-tool`).
 
 **Medição do item da chave (daemon isolado, HOME/XDG_RUNTIME_DIR/barramento temporários,

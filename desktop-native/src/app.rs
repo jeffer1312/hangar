@@ -80,6 +80,7 @@ pub(crate) use session_tabs::{PlateMark, PlateSegment, plate, tab_frame, tab_tit
 pub(crate) use tags::{account_icon, machine_icon};
 pub(crate) use rename_suggest::{Strip as RenameStrip, rename_strip};
 pub(crate) use vault_requests::{approve_body, approve_title, request_button, request_card, request_command, request_pair};
+pub(crate) use settings::{setting_row, settings_box};
 mod shortcuts;
 mod shortcut_transfer;
 mod keyboard;

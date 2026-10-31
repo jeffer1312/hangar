@@ -9804,5 +9804,8 @@
   "news_tags_sample_account_personal": "pessoal",
   "news_rename_sample_generic": "hangar-2",
   "news_rename_sample_message": "o login do app quebra depois de atualizar, dá uma olhada?",
-  "news_rename_sample_name": "corrigir-login-do-app"
+  "news_rename_sample_name": "corrigir-login-do-app",
+  "news_auto_report_sample_machine": "escritorio",
+  "news_auto_report_sample_step": "Reiniciando",
+  "news_auto_report_sample_error": "a versão nova não respondeu"
 }

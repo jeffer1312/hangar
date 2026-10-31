@@ -1,4 +1,5 @@
 import type { ComponentType } from 'react';
+import { AutoReportAnimation } from './AutoReportAnimation';
 import { CodexActivityAnimation } from './CodexActivityAnimation';
 import { RenameSuggestionAnimation } from './RenameSuggestionAnimation';
 import { TagsPlateAnimation } from './TagsPlateAnimation';
@@ -9,6 +10,7 @@ const animations: Record<string, ComponentType<{ width: number }>> = {
   'cofre-de-senhas': VaultAnimation,
   'codex-atividade': CodexActivityAnimation,
   'etiquetas-maquina-conta': TagsPlateAnimation,
+  'relatorio-automatico': AutoReportAnimation,
   'sugestao-de-nome': RenameSuggestionAnimation,
 };
 
