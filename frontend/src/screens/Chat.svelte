@@ -4117,7 +4117,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   <ShareSessionSheet open={shareOpen} name={sessionName} serverId={chatServerId} onClose={() => (shareOpen = false)} />
   <ConfirmSheet open={revealOthers.length > 0}
                 title={m.session_show_group_title()}
-                message={`${m.session_show_group_body()} ${revealOthers.map((r) => r.name).join(', ')}`}
+                message={`${m.session_show_group_body()} ${revealOthers.map((r) => (r.serverId === chatServerId ? r.name : `${r.name} · ${r.serverLabel}`)).join(', ')}`}
                 confirmLabel={m.session_show_others({ n: revealOthers.length })}
                 cancelLabel={m.session_show_only_this()}
                 onConfirm={() => void showRevealOthers()} onClose={() => (revealOthers = [])} />

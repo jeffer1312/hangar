@@ -1067,7 +1067,7 @@ impl Hangar {
     pub(super) fn reveal_on_send(&mut self, server: &str, name: &str, window: &mut Window, cx: &mut Context<Self>) {
         use super::grouping::{Row, group_show_targets};
         let target = Target::new(&servers::norm(server), name);
-        if !self.target_session(&target).is_some_and(|s| s.hidden_from_list) { return; }
+        if self.invite_target(&target) || !self.target_session(&target).is_some_and(|s| s.hidden_from_list) { return; }
         // ponytail: janela fixa no lugar de acompanhar a lista; cobre o tique de 1,5 s com folga.
         let now = std::time::Instant::now();
         self.sidebar.revealed.retain(|_, at| now.duration_since(*at) < REVEAL_WINDOW);

@@ -1,11 +1,11 @@
 import { ActionSheetIOS, Alert, Platform } from 'react-native';
-import { groupShowTargets, showSession } from '@hangar/core';
+import { formataErro, groupShowTargets, showSession } from '@hangar/core';
 import * as m from '../../paraglide/messages';
 import { useServers } from '../../stores/servers';
 import { useSessions } from '../../stores/sessions';
 import { toast } from '../../ui/Toast';
 
-const errorText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+const errorText = (e: unknown): string => formataErro(e) ?? (e instanceof Error ? e.message : String(e));
 
 // A linha só perde a marca na lista seguinte: outro envio até lá não repete o pedido nem a pergunta.
 // ponytail: janela fixa no lugar de acompanhar a lista; cobre o tique de 1,5 s com folga.
@@ -39,7 +39,7 @@ export function revealOnSend(serverId: string, name: string): void {
     const reasons = [...new Set(failed.map((f) => f.error))].join('; ');
     toast.erro(`${m.session_show_group_skipped({ names: failed.map((f) => f.name).join(', ') })}\n${reasons}`);
   };
-  const body = `${m.session_show_group_body()}\n${others.map((o) => o.name).join('\n')}`;
+  const body = `${m.session_show_group_body()}\n${others.map((o) => (o.serverId === serverId ? o.name : `${o.name} · ${o.serverLabel}`)).join('\n')}`;
   const onlyThis = m.session_show_only_this();
   const all = m.session_show_others({ n: others.length });
   if (Platform.OS === 'ios') {

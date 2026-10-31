@@ -2849,7 +2849,6 @@ impl Hangar {
         }
         self.confirm = None;
         self.action_feedback.remove(&key);
-        self.reveal_on_send(&key.server, &key.name, window, cx);
         // O grupo é o da hora do Enter: o texto pode sair depois, com outra conversa aberta ou o grupo mudado.
         let group = if steer { None } else { self.group_targets(&key, &text) };
         let steer = steer || group.is_none() && !command && self.queue_sends_direct();
@@ -2863,6 +2862,7 @@ impl Hangar {
             cx.notify();
             return;
         }
+        self.reveal_on_send(&key.server, &key.name, window, cx);
         let field = text.clone();
         let text = if surface_btw { composer::surface_side_question(&text) } else { text };
         // Enter com um envio em voo não se perde: o texto sai do campo e vai na vez dele.
