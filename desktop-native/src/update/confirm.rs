@@ -237,7 +237,7 @@ pub(crate) fn open(window: &mut Window, cx: &mut App, title: String, description
                             let value = understood.clone();
                             move |checked: &bool, window, _| { value.set(*checked); window.refresh(); }
                         })))))
-            .child(sections(tr_shared("update_notes_news", &[]), &primary.news, true, &fixes_open, started, window, cx))
+            .child(sections(tr_shared("update_notes_news", &[]), &primary.news, None, &fixes_open, started, window, cx))
             .when_some(all.clone(), |el, (label, value)| el.child(div().px(px(10.)).py(px(9.)).rounded(px(9.)).border_1()
                 .border_color(palette::edge()).bg(palette::fill(0.04)).text_size(px(13.)).child(check("confirm-check", label, value))))
             .into_any_element()
@@ -291,14 +291,15 @@ fn check(id: &'static str, label: String, value: Rc<Cell<bool>>) -> impl IntoEle
 }
 
 /// Rótulo em caixa alta, os cartões (novo e melhoria) e as correções recolhidas: o mesmo bloco nos dois modais.
-/// `compact`: cartão deitado, animação à esquerda (o "Atualizar?"); sem ele, em pé com o "Experimente".
-fn sections(label: String, news: &[News], compact: bool, fixes_open: &Rc<Cell<bool>>, started: Instant, window: &mut Window, cx: &mut App) -> Div {
+/// `stage`: largura da animação no cartão em pé, com o "Experimente"; sem ela, cartão deitado com a animação à esquerda
+/// (o "Atualizar?").
+fn sections(label: String, news: &[News], stage: Option<Pixels>, fixes_open: &Rc<Cell<bool>>, started: Instant, window: &mut Window, cx: &mut App) -> Div {
     let (fixes, cards): (Vec<&News>, Vec<&News>) = news.iter().partition(|n| n.kind == "fix");
     let open = fixes_open.get();
     let toggle = fixes_open.clone();
     div().flex().flex_col().gap(px(12.))
         .when(!cards.is_empty(), |el| el.child(div().mt(px(2.)).text_size(px(10.5)).text_color(theme::faint()).child(label.to_uppercase())))
-        .children(cards.into_iter().map(|item| card(item, compact, started, window, cx)))
+        .children(cards.into_iter().map(|item| card(item, stage, started, window, cx)))
         .when(!fixes.is_empty(), |el| el.child(div().flex().flex_col().gap(px(6.))
             .child(div().flex().child(Button::new("update-fixes").ghost().xsmall().ml(px(-6.)).text_size(px(12.)).text_color(theme::muted())
                 .icon(if open { IconName::ChevronDown } else { IconName::ChevronRight })
@@ -309,8 +310,17 @@ fn sections(label: String, news: &[News], compact: bool, fixes_open: &Rc<Cell<bo
                     .child(div().flex_1().min_w_0().whitespace_normal().child(item.title.clone()))))))))
 }
 
-fn card(item: &News, compact: bool, started: Instant, window: &mut Window, cx: &mut App) -> Div {
+fn card(item: &News, stage: Option<Pixels>, started: Instant, window: &mut Window, cx: &mut App) -> Div {
     let animation = item.animation.as_deref().and_then(crate::news::animation);
+    // Cartão fora da área visível do modal (o quadro anterior diz) para de redesenhar a janela; ao voltar, pede um quadro.
+    let seen = window.use_keyed_state(SharedString::from(format!("news-seen-{}", item.id)), cx, |_, _| Rc::new(Cell::new(true)))
+        .read(cx).clone();
+    let animate = seen.get();
+    let probe = canvas(move |bounds, window, _| {
+        let now = window.content_mask().bounds.intersects(&bounds);
+        if now && !seen.get() { window.request_animation_frame(); }
+        seen.set(now);
+    }, |_, _, _, _| {}).absolute().size_full();
     let (badge_hue, badge_text) = palette::badge();
     let kind = match item.kind.as_str() { "new" => Some("update_news_kind_new"), "improvement" => Some("update_news_kind_improvement"), _ => None };
     let heading = div().flex().flex_wrap().items_center().gap_x(px(5.)).gap_y(px(2.))
@@ -319,14 +329,15 @@ fn card(item: &News, compact: bool, started: Instant, window: &mut Window, cx: &
             .text_size(px(9.5)).font_weight(FontWeight::SEMIBOLD).text_color(badge_text).child(tr_shared(key, &[]))));
     let text = (!item.text.is_empty()).then(|| div().text_size(px(11.8)).line_height(px(16.5)).text_color(theme::muted())
         .child(TextView::markdown(SharedString::from(format!("update-news-{}", item.id)), item.text.clone()).selectable(true).scrollable(false)));
-    let base = div().rounded(px(10.)).border_1().border_color(palette::edge()).bg(palette::fill(0.035));
-    if compact {
+    let base = div().relative().rounded(px(10.)).border_1().border_color(palette::edge()).bg(palette::fill(0.035))
+        .when(animation.is_some(), |el| el.child(probe));
+    let Some(stage) = stage else {
         return base.flex().items_center().gap(px(12.)).p(px(10.))
-            .when_some(animation, |el, draw| el.child(div().flex_shrink_0().w(px(160.)).child(draw(started, px(160.), window, cx))))
+            .when_some(animation, |el, draw| el.child(div().flex_shrink_0().w(px(160.)).child(draw(started, px(160.), animate, window, cx))))
             .child(div().flex_1().min_w_0().flex().flex_col().gap(px(3.)).child(heading).children(text));
-    }
+    };
     base.flex().flex_col().gap(px(10.)).p(px(12.))
-        .when_some(animation, |el, draw| el.child(draw(started, px(500.), window, cx)))
+        .when_some(animation, |el, draw| el.child(draw(started, stage, animate, window, cx)))
         .child(div().flex().flex_col().gap(px(3.)).child(heading).children(text))
         .when_some(item.try_it.clone(), |el, text| el.child(div().text_size(px(11.5)).text_color(badge_text).whitespace_normal()
             .child(tr_shared("update_notes_try_it", &[("text", &text)]))))
@@ -339,9 +350,12 @@ fn open_whats_new(items: Vec<News>, window: &mut Window, cx: &mut App) {
     window.open_dialog(cx, move |dialog, window, cx| {
         let max = window.viewport_size().height * 0.8 - px(110.);
         let top = (window.viewport_size().height * 0.1).max(px(24.));
-        crate::app::popup::dialog(dialog).w(px(560.)).p(px(18.)).rounded(px(14.)).close_button(false).margin_top(top)
+        let width = px(780.).min(window.viewport_size().width * 0.92);
+        // A animação ocupa o cartão: largura do modal menos o respiro dele (18) e o do cartão (12 e a borda), dos dois lados.
+        let stage = width - px(62.);
+        crate::app::popup::dialog(dialog).w(width).p(px(18.)).rounded(px(14.)).close_button(false).margin_top(top)
             .child(div().id("whats-new-body").max_h(max).overflow_y_scroll()
-                .child(sections(tr_shared("update_whats_new_title", &[]), &items, false, &fixes_open, started, window, cx)))
+                .child(sections(tr_shared("update_whats_new_title", &[]), &items, Some(stage), &fixes_open, started, window, cx)))
             .footer(DialogFooter::new().child(chrome::light_button("whats-new-close", true, cx).label(tr("close"))
                 .on_click(|_, window, cx| window.close_dialog(cx))))
     });
@@ -397,7 +411,13 @@ pub(crate) fn open_preview(whats_new: bool, window: &mut Window, cx: &mut App) {
         news("windows-passo", "O backend no Windows não cai mais ao subir com passo pendente", "fix", "", None, None),
         news("worktrees", "A limpeza de worktrees reconhece as já mescladas", "fix", "", None, None),
     ];
-    if whats_new { return open_whats_new(items, window, cx); }
+    if whats_new {
+        // Um cartão por animação: a rolagem e o redesenho são provados com o modal cheio, como numa versão de verdade.
+        let more = ["codex-atividade", "etiquetas-maquina-conta", "sugestao-de-nome", "cofre-de-senhas", "relatorio-automatico", "ocultar-da-lista"]
+            .map(|name| news(name, name, "new", "Texto de amostra da novidade, com duas linhas para o cartão ter a altura de um real.",
+                Some("abra e teste"), Some(name)));
+        return open_whats_new(items.into_iter().chain(more).collect(), window, cx);
+    }
     let notes = Notes { version: Some("0.1.0.8242 → 0.1.0.8311".into()), news: items, server: "preview".into(), failed: false,
         incomplete: false, label: None,
         warnings: vec![Warning { id: "pacote".into(), title: "o Hangar passa a se atualizar por pacote".into(), choice: Some("mode".into()),

@@ -11,8 +11,9 @@ mod rename_suggestion;
 use std::time::Instant;
 use gpui_kit::*;
 
-/// Desenha a animação na largura do cartão. `started` é quando o cartão apareceu: o ciclo conta dele.
-pub type NewsAnimation = fn(started: Instant, width: Pixels, window: &mut Window, cx: &mut App) -> AnyElement;
+/// Desenha a animação na largura do cartão. `started` é quando o cartão apareceu: o ciclo conta dele. Sem `animate`
+/// (cartão fora da área visível) desenha o quadro do instante e não marca o próximo redesenho da janela.
+pub type NewsAnimation = fn(started: Instant, width: Pixels, animate: bool, window: &mut Window, cx: &mut App) -> AnyElement;
 
 /// A animação pelo nome do arquivo da novidade (`animacao:`); nome desconhecido = cartão só com texto.
 pub fn animation(name: &str) -> Option<NewsAnimation> {
@@ -36,6 +37,6 @@ pub fn open_preview(name: String, window: &mut Window, cx: &mut App) {
     let Some(draw) = animation(&name) else { eprintln!("novidades: animação desconhecida: {name}"); return; };
     let started = Instant::now();
     window.open_dialog(cx, move |dialog, window, cx| {
-        crate::app::popup::dialog(dialog).w(px(560.)).title(name.clone()).child(draw(started, px(520.), window, cx))
+        crate::app::popup::dialog(dialog).w(px(560.)).title(name.clone()).child(draw(started, px(520.), true, window, cx))
     });
 }

@@ -64,11 +64,11 @@ fn tab(name: &str, provider: &str, on: bool, pct: f64, plate: Option<Div>, width
     div().relative().flex_shrink_0().child(card).children(plate)
 }
 
-pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &mut App) -> AnyElement {
+pub(super) fn render(started: Instant, width: Pixels, animate: bool, window: &mut Window, cx: &mut App) -> AnyElement {
     // Movimento reduzido: as duas placas à vista e o anel já bem cheio.
     let (local, remote, pct) = if cx.reduce_motion() { (true, true, 60.) } else {
         let t = started.elapsed().as_secs_f32() % CYCLE;
-        schedule_repaint(t, window, cx);
+        if animate { schedule_repaint(t, window, cx); }
         frame(t)
     };
     let compact = width < px(COMPACT_BELOW);

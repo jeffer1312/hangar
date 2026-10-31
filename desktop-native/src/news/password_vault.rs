@@ -51,11 +51,11 @@ const COMPACT_BELOW: f32 = 240.;
 const STAGE_HEIGHT: f32 = 250.;
 const COMPACT_HEIGHT: f32 = 58.;
 
-pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &mut App) -> AnyElement {
+pub(super) fn render(started: Instant, width: Pixels, animate: bool, window: &mut Window, cx: &mut App) -> AnyElement {
     // Movimento reduzido: quadro parado no cartão de aprovação, antes do clique.
     let (card, pressed, resolved) = if cx.reduce_motion() { (Some(SLIDE_STEPS), false, false) } else {
         let t = started.elapsed().as_secs_f32() % CYCLE;
-        schedule_repaint(t, window, cx);
+        if animate { schedule_repaint(t, window, cx); }
         frame(t)
     };
     let compact = width < px(COMPACT_BELOW);

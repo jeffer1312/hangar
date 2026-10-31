@@ -53,11 +53,11 @@ const COMPACT_BELOW: f32 = 240.;
 const CONVERSATION_HEIGHT: f32 = 76.;
 const STRIP_HEIGHT: f32 = 44.;
 
-pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &mut App) -> AnyElement {
+pub(super) fn render(started: Instant, width: Pixels, animate: bool, window: &mut Window, cx: &mut App) -> AnyElement {
     // Movimento reduzido: quadro parado com a faixa à vista, antes do clique.
     let (bubble, strip, renaming, renamed) = if cx.reduce_motion() { (true, Some(SLIDE_STEPS), false, false) } else {
         let t = started.elapsed().as_secs_f32() % CYCLE;
-        schedule_repaint(t, window, cx);
+        if animate { schedule_repaint(t, window, cx); }
         frame(t)
     };
     let compact = width < px(COMPACT_BELOW);

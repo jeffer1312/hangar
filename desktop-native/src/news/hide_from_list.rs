@@ -109,11 +109,11 @@ fn menu(name: String, picked: bool, cx: &App) -> Div {
         .child(div().flex().flex_col().refine_style(&app::menu_list_look()).child(app::menu_label(name)).children(items))
 }
 
-pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &mut App) -> AnyElement {
+pub(super) fn render(started: Instant, width: Pixels, animate: bool, window: &mut Window, cx: &mut App) -> AnyElement {
     // Movimento reduzido: quadro parado com a linha já dentro de "Ocultas (1)".
     let f = if cx.reduce_motion() { Frame { menu: false, picked: false, fading: None, hidden: true, open: true } } else {
         let t = started.elapsed().as_secs_f32() % CYCLE;
-        schedule_repaint(t, window, cx);
+        if animate { schedule_repaint(t, window, cx); }
         frame(t)
     };
     let compact = width < px(COMPACT_BELOW);
@@ -142,7 +142,7 @@ pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &
         .when(f.menu, |el| el.child(div().absolute().top(px(MENU_TOP)).left(px(menu_left)).w(px(menu_width))
             .child(menu(samples[TARGET].name.clone(), f.picked, cx))))
         // Miniatura só leitura: nada aqui dentro recebe o mouse.
-        .child(div().absolute().top_0().left_0().size_full().occlude())
+        .child(div().absolute().top_0().left_0().size_full().block_mouse_except_scroll())
         .into_any_element()
 }
 
