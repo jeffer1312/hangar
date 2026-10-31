@@ -47,7 +47,7 @@ use gpui_kit::{component::{Root, Theme, ThemeMode}, *};
 use std::{borrow::Cow, sync::Arc};
 
 gpui_kit::assets::icon_assets!(ExtraIcons, [ArrowUp, GitBranch, RotateCcwClock, Paperclip, Plug, SquareSlash,
-    Activity, Contrast, Droplet, Image, Keyboard, Layers, List, Mic, Monitor, RefreshCw, Server, SlidersHorizontal, Type, Users,
+    Activity, Contrast, Droplet, Image, Keyboard, Layers, Lightbulb, List, Mic, Monitor, RefreshCw, Server, SlidersHorizontal, Type, Users,
     SquarePen, FilePlus, Wrench, Circle, CircleDashed, ChartColumn, Table, ListChecks, Download, Clock, Languages, Banknote,
     Zap, Rocket, MessageCircle, Key, Pencil, GripVertical, AudioLines, Volume2, Hash, LogOut, Smartphone, FolderTree, ChevronsDownUp, FileCode,
     RotateCcw, CornerDownRight, MessageSquare, Square, Sparkles, CircleAlert, CircleCheck, TriangleAlert, Link, Wifi,
