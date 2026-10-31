@@ -106,9 +106,15 @@ def _preparar_conta_codex(account_id: str, cwd: str, codex_home: Path | None = N
         from app.adapters.codex.sessions import pretrust_cwd
         pretrust_cwd(cwd,home)
         print("hangar-codex-tui: serviço indisponível; reutilizando a conta já preparada",file=sys.stderr)
+        try:
+            parcial = json.loads((home/PREPARED_MARKER).read_text()).get("status") == "partial"
+        except (OSError, ValueError, AttributeError):
+            parcial = False
+        if parcial:
+            print("hangar-codex-tui: a conta foi preparada com pendências; confira a sincronização da conta",file=sys.stderr)
         return {"status":"ready"}
-    # Parcial: o servidor acabou de preparar ao abrir; outro preparo aqui repetiria o mesmo trabalho.
-    if result.get("status") not in ("ready","running","partial"):
+    # Parcial também pede o preparo: o servidor reaproveita o recente e tenta de novo o antigo.
+    if result.get("status") not in ("ready","running"):
         result = _api_backend("POST",path)
     return _aguardar_preparo(result,lambda:_api_backend("GET",path))
 # Quanto esperamos a TUI abrir a thread. Estourar NAO e fatal: o pane segue sendo um Codex

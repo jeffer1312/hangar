@@ -34,10 +34,20 @@ pub struct Launch {
 
 /// O lançador da instalação que roda este servidor. O do PATH pode ser de outra versão (link que
 /// ficou no checkout) e recusar os argumentos de agora, e o pane morre ao nascer. No Windows o
-/// PATH tem o `.cmd` que o `install.ps1` escreve.
+/// PATH tem o `.cmd` que o `install.ps1` escreve. Fora do `current`, o nome no PATH.
 pub fn launcher_program(home: &Path, windows: bool) -> Option<String> {
+    launcher_from(home, windows, std::env::current_exe().ok().as_deref())
+}
+
+fn launcher_from(home: &Path, windows: bool, exe: Option<&Path>) -> Option<String> {
     let path = crate::install_root::current(home).join("scripts").join(LAUNCHER);
-    (!windows && path.is_file()).then(|| path.to_string_lossy().into_owned())
+    if windows || !path.is_file() {
+        return None;
+    }
+    // Só o `current` de onde este binário roda: servidor de um checkout com um `current` de outra
+    // versão passaria os argumentos de agora a um lançador que não os conhece.
+    let root = crate::install_root::current(home).canonicalize().ok()?;
+    exe?.canonicalize().ok()?.starts_with(root).then(|| path.to_string_lossy().into_owned())
 }
 
 /// Pasta absoluta da conta Codex pelo id (`resolve_account`), a mesma que a resolução conferiu.
@@ -210,13 +220,23 @@ mod tests {
     #[test]
     fn the_launcher_comes_from_the_install_root_when_it_has_one() {
         let home = tempfile::tempdir().unwrap();
-        assert_eq!(launcher_program(home.path(), false), None);
-        let scripts = home.path().join(".hangar").join("current").join("scripts");
+        let current = home.path().join(".hangar").join("current");
+        let exe = current.join("bin").join("hangar-server");
+        assert_eq!(launcher_from(home.path(), false, Some(&exe)), None);
+        let scripts = current.join("scripts");
         std::fs::create_dir_all(&scripts).unwrap();
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(&exe, "").unwrap();
         std::fs::write(scripts.join(LAUNCHER), "#!/bin/sh\n").unwrap();
         let own = scripts.join(LAUNCHER).to_string_lossy().into_owned();
-        assert_eq!(launcher_program(home.path(), false), Some(own.clone()));
-        assert_eq!(launcher_program(home.path(), true), None);
+        assert_eq!(launcher_from(home.path(), false, Some(&exe)), Some(own.clone()));
+        assert_eq!(launcher_from(home.path(), true, Some(&exe)), None);
+        // Servidor de um checkout com um `current` de outra versão: o do `current` recusaria os argumentos.
+        let checkout = home.path().join("checkout").join("hangar-server");
+        std::fs::create_dir_all(checkout.parent().unwrap()).unwrap();
+        std::fs::write(&checkout, "").unwrap();
+        assert_eq!(launcher_from(home.path(), false, Some(&checkout)), None);
+        assert_eq!(launcher_from(home.path(), false, None), None);
         let argv = launcher_argv(&Launch { launcher: Some(own.clone()), ..launch() }).unwrap();
         assert_eq!(argv[..3], [own, "--cwd".into(), "/w".into()]);
     }

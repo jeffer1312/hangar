@@ -292,18 +292,28 @@ async fn partial_preparation_opens_and_error_refuses() {
         let server = tokio::spawn(async move { axum::serve(listener,router).await.unwrap(); });
         let result = service.prepare_for_session(&account,bridge.clone(),
             tokio::time::Instant::now()+std::time::Duration::from_secs(15)).await;
-        // Parcial não fica registrada: a próxima abertura (aqui, servidor reiniciado) prepara de novo.
-        let reopened = if opens { Some(AccountService::new(env()).prepare_for_session(&account,bridge.clone(),
-            tokio::time::Instant::now()+std::time::Duration::from_secs(15)).await) } else { None };
+        let open = || async { AccountService::new(env()).prepare_for_session(&account,bridge.clone(),
+            tokio::time::Instant::now()+std::time::Duration::from_secs(15)).await };
+        // Parcial recente é reaproveitado (aqui, com o servidor reiniciado); passado o intervalo, a
+        // abertura seguinte tenta de novo.
+        let (reused, retried) = if opens {
+            let reused = open().await;
+            let marker = account.home.join(".hangar-prepared-v1");
+            std::fs::File::options().write(true).open(&marker).unwrap()
+                .set_modified(std::time::SystemTime::now()-std::time::Duration::from_secs(301)).unwrap();
+            (Some(reused), Some(open().await))
+        } else { (None, None) };
         server.abort();
         assert!(server.await.unwrap_err().is_cancelled());
         if opens {
             let ready = result.unwrap();
             assert_eq!(ready["status"],"partial");
             assert_eq!(ready["issues"][0]["code"],"codex_account_source_sync_incomplete");
-            assert_eq!(reopened.unwrap().unwrap()["status"],"partial");
-            assert_eq!(calls.load(Ordering::SeqCst),2,"o parcial tenta de novo na abertura seguinte");
-            assert!(!account.home.join(".hangar-prepared-v1").exists(),"parcial não é conta pronta");
+            assert_eq!(reused.unwrap().unwrap()["status"],"partial");
+            assert_eq!(retried.unwrap().unwrap()["status"],"partial");
+            assert_eq!(calls.load(Ordering::SeqCst),2,"o parcial recente não prepara de novo; o antigo, sim");
+            let marker: serde_json::Value = serde_json::from_slice(&std::fs::read(account.home.join(".hangar-prepared-v1")).unwrap()).unwrap();
+            assert_eq!(marker["status"],"partial");
         } else {
             assert_eq!(result.unwrap_err().code,"codex_account_prepare_incomplete");
         }

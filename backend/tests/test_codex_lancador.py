@@ -249,14 +249,16 @@ def test_conta_ja_preparada_ainda_confirma_trust_da_pasta(monkeypatch):
 
 
 @pytest.mark.skipif(os.name != "posix", reason="binário falso POSIX")
-def test_conta_preparada_abre_com_backend_desligado(tmp_path):
+@pytest.mark.parametrize("marker,warning", [('{"version":1}', False),
+                                             ('{"version":1,"status":"partial"}', True)])
+def test_conta_preparada_abre_com_backend_desligado(tmp_path, marker, warning):
     cwd = tmp_path/"project"
     cwd.mkdir()
     env = _ambiente(tmp_path,cwd)
     env["FAKE_SERVER_OUT"] = str(tmp_path/"server-started.json")
     home = tmp_path/"profile"
     home.mkdir()
-    (home/".hangar-prepared-v1").write_text('{"version":1}')
+    (home/".hangar-prepared-v1").write_text(marker)
     control = Path(env["HOME"])/".hangar/codex-atualizacao.json"
     control.parent.mkdir()
     control.write_text(json.dumps({"proxima_em":time.time()+3600}))
@@ -273,6 +275,7 @@ def test_conta_preparada_abre_com_backend_desligado(tmp_path):
     assert process.returncode == 0,stdout+stderr
     assert Path(env["FAKE_SERVER_OUT"]).exists()
     assert Path(env["FAKE_TUI_OUT"]).exists()
+    assert ("pendências" in stderr) is warning, stderr
     import tomllib
     assert tomllib.loads((home/"config.toml").read_text())["projects"][str(cwd)]["trust_level"] == "trusted"
 
@@ -302,7 +305,8 @@ def test_preparo_parcial_abre_com_pendencias_e_erro_nao_sobe(tmp_path, status, o
                 except subprocess.TimeoutExpired:process.kill();process.wait(timeout=5)
     assert (process.returncode == 0) is opens,stdout+stderr
     if opens:
-        assert methods == ["GET"], "o lançador não repete o preparo que o servidor acabou de fazer"
+        # O servidor decide se o parcial é recente (reaproveita) ou antigo (tenta de novo).
+        assert methods[:2] == ["GET", "POST"], methods
     assert "codex_account_plugin_hooks_failed" in stderr
     assert "private detail" not in stderr
     assert Path(env["FAKE_SERVER_OUT"]).exists() is opens
