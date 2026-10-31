@@ -10,21 +10,27 @@ use serde_json::Value;
 
 use super::ingest::{Found, Stat};
 use crate::accounts::environment::AccountEnvironment;
+use crate::archive_list::Unread;
 
-/// Os transcripts dos outros agentes e os agentes que não puderam ser varridos agora (o índice
-/// mantém o que já tem deles).
-pub(super) fn discover(env: &AccountEnvironment) -> (BTreeMap<String, Found>, Vec<&'static str>) {
-    let mut others = crate::archive_list::agent_conversations(env);
-    let mut failed = Vec::new();
+/// Os transcripts dos outros agentes e o que não pôde ser varrido agora (o índice mantém o que já
+/// tem lá).
+pub(super) fn discover(env: &AccountEnvironment) -> (BTreeMap<String, Found>, Vec<Unread>) {
+    let (mut others, mut unread) = crate::archive_list::agent_conversations(env);
     match crate::archive_list::codex_conversations(env) {
-        // O transferido do Claude sai inteiro: o histórico dele é composto com a conversa de origem e
-        // não se lê do offset; a parte Claude já está no índice pelo transcript dela.
-        Ok(codex) => others.extend(codex.into_iter().filter(|c| c.codex.as_ref().is_some_and(|owner|
-            matches!(crate::list::local_transfers::thread_phase(&env.home, &owner.home.to_string_lossy(), &c.sid), Ok(None))))),
-        Err(e) => {
-            tracing::debug!(error = %e, "busca: conversas do Codex ilegíveis agora; índice delas mantido");
-            failed.push("codex");
+        Ok((codex, bad)) => {
+            unread.extend(bad);
+            for c in codex {
+                let Some(owner) = c.codex.as_ref() else { continue };
+                match crate::list::local_transfers::thread_phase(&env.home, &owner.home.to_string_lossy(), &c.sid) {
+                    Ok(None) => others.push(c),
+                    // O transferido do Claude sai inteiro: o histórico dele é composto com a conversa de
+                    // origem e não se lê do offset; a parte Claude já está no índice pelo transcript dela.
+                    Ok(Some(_)) => {}
+                    Err(e) => unread.push(Unread::new("codex", Some(&c.path), e)),
+                }
+            }
         }
+        Err(e) => unread.push(Unread::new("codex", None, e)),
     }
     let kimi = crate::provider_accounts::kimi_account(env).unwrap_or_default();
     let mut out = BTreeMap::new();
@@ -43,7 +49,7 @@ pub(super) fn discover(env: &AccountEnvironment) -> (BTreeMap<String, Found>, Ve
             codex_account: c.codex.map(|owner| owner.id), cwd: c.cwd,
         });
     }
-    (out, failed)
+    (out, unread)
 }
 
 /// As pastas a vigiar: a raiz do Pi, a do omp, a casa do Kimi e `sessions`/`archived_sessions` de

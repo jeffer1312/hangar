@@ -1071,3 +1071,52 @@ fn poisoned_last_pass_lock_does_not_bring_the_index_down() {
     env.index.update().unwrap();
     assert_eq!(env.index.search(&terms("nada"), 50).unwrap(), Some(vec![]));
 }
+
+#[cfg(unix)]
+#[test]
+fn unreadable_agent_folders_keep_their_conversations_and_reach_the_diary_on_the_transition() {
+    // Erro de `read_dir` no Pi ou de leitura do `session_index.jsonl` do Kimi não é "nenhuma conversa":
+    // a passada mantém o que o índice tem desses agentes e o diário recebe uma linha por agente.
+    use std::os::unix::fs::PermissionsExt;
+    let env = Env::agents(quiet());
+    env.index.update().unwrap();
+    let count = |provider: &str| env.count(&format!("SELECT count(*) FROM files WHERE provider = '{provider}'"));
+    assert_eq!((count("pi"), count("kimi")), (1, 1));
+    let (pi_root, kimi_index) = (env.home().join(".pi/agent/sessions"), env.home().join(".kimi-code/session_index.jsonl"));
+    let mode = |p: &Path, m: u32| fs::set_permissions(p, fs::Permissions::from_mode(m)).unwrap();
+    mode(&pi_root, 0o000);
+    mode(&kimi_index, 0o000);
+    if fs::read_dir(&pi_root).is_ok() { return mode(&pi_root, 0o755); } // root lê mesmo assim
+    env.index.update().unwrap();
+    env.index.update().unwrap();
+    assert_eq!((count("pi"), count("kimi")), (1, 1), "agente ilegível não sai do índice");
+    assert_eq!(env.reported("busca.agente_ilegivel"), 2, "uma linha por agente, não por passada");
+    mode(&pi_root, 0o755);
+    mode(&kimi_index, 0o644);
+    env.index.update().unwrap();
+    mode(&pi_root, 0o000);
+    env.index.update().unwrap();
+    mode(&pi_root, 0o755);
+    assert_eq!(env.reported("busca.agente_ilegivel"), 3, "voltou e caiu de novo: outra linha");
+    assert_eq!(count("pi"), 1);
+}
+
+#[test]
+fn codex_rollout_with_an_unreadable_transfer_record_stays_and_the_others_go_on() {
+    // `thread_phase` com erro não descarta a conversa (nem a apaga do índice) e não para as outras.
+    let env = Env::agents(quiet());
+    env.index.update().unwrap();
+    let before = env.indexed_ids(CODEX_A);
+    let home = env.home();
+    let key = crate::list::local_transfers::thread_key(&home.join(".codex").to_string_lossy(), "01a05511-e980-71b3-93a9-befda5704b20");
+    let indexes = home.join(".hangar/conversation-transfers/indexes");
+    fs::create_dir_all(&indexes).unwrap();
+    fs::write(indexes.join(format!("thread-{}.json", crate::list::local_transfers::sha256_hex(&key))), "{").unwrap();
+    append(&home.join(CODEX_B), format!("{}\n", json!({"timestamp": "2026-09-23T21:05:00.000Z", "type": "response_item",
+        "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "zebracodex nova"}]}})).as_bytes());
+    env.index.update().unwrap();
+    env.index.update().unwrap();
+    assert_eq!(env.indexed_ids(CODEX_A), before, "registro ilegível não apaga a conversa");
+    assert_eq!(env.index.search(&terms("zebracodex"), 50).unwrap().unwrap().len(), 1, "o outro rollout segue");
+    assert_eq!(env.reported("busca.agente_ilegivel"), 1);
+}

@@ -68,6 +68,8 @@ struct Harness {
     hits: Arc<Mutex<Vec<String>>>,
     client: reqwest::Client,
     search: hangar_server::search::Index,
+    /// O diário do índice: (código, detalhe).
+    reports: Arc<Mutex<Vec<(&'static str, String)>>>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 
@@ -129,14 +131,19 @@ impl Harness {
         let dirs = vec![claude.to_string_lossy().into_owned(), home.join(".claude-b").to_string_lossy().into_owned()];
         let server_dir = claude.clone();
         let accounts: hangar_server::search::AccountSource = Arc::new(move || Ok(hangar_server::search::server_accounts(&dirs, &server_dir)));
-        let search = hangar_server::search::Index::new(&dir.path().join("idx"), accounts, Arc::new(|_, _| {}), Default::default());
+        let reports = Arc::new(Mutex::new(Vec::new()));
+        let diary = reports.clone();
+        let search = hangar_server::search::Index::new(&dir.path().join("idx"), accounts,
+            Arc::new(move |code, detail| diary.lock().unwrap().push((code, detail))), Default::default());
         if mode == Mode::Index { search.update().unwrap(); }
         state.search = search.clone();
         state.list = Arc::new(live_list(dir.path(), &home, upstream));
         let app = router(Arc::new(state));
         let server = tokio::spawn(async move { axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await.unwrap() });
-        Self { _dir: dir, home, address, hits, client: reqwest::Client::new(), search, tasks: vec![up_task, server] }
+        Self { _dir: dir, home, address, hits, client: reqwest::Client::new(), search, reports, tasks: vec![up_task, server] }
     }
+
+    fn reported(&self, code: &str) -> usize { self.reports.lock().unwrap().iter().filter(|(c, _)| *c == code).count() }
 
     fn url(&self, path: &str) -> String { format!("http://{}{path}", self.address) }
 
@@ -524,4 +531,46 @@ async fn prv16_transfer_in_progress_hides_the_rollout() {
     let (status, body) = h.get(&format!("/api/archive-por-cwd?cwd={}&provider=codex", enc(&cwd))).await;
     assert_eq!(status, 200, "{body}");
     assert_eq!(body, json!([]));
+}
+
+/// Um rollout com o registro da transferência ilegível sai sozinho, com uma linha no diário; os outros
+/// rollouts Codex continuam no Arquivo.
+#[tokio::test]
+async fn codex_rollout_with_an_unreadable_transfer_record_is_skipped_and_the_rest_listed() {
+    let h = Harness::with(Mode::NoIndex, |home: &Path| {
+        transferred(home, "complete");
+        for entry in std::fs::read_dir(home.join(".hangar/conversation-transfers/indexes")).unwrap().flatten() {
+            std::fs::write(entry.path(), "{").unwrap();
+        }
+    }).await;
+    for _ in 0..2 {
+        let (status, body) = h.get(&format!("/api/archive-por-cwd?cwd={}&provider=codex", enc("/home/jefferson/Projetos/hangar"))).await;
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(sids(&body), ["01a05511"]);
+    }
+    assert_eq!(h.reported("arquivo.conversa_ilegivel"), 1, "uma linha por rollout, não por pedido");
+}
+
+/// Pasta de projeto sem permissão sai da lista com uma linha no diário; o resto continua.
+#[cfg(unix)]
+#[tokio::test]
+async fn unreadable_project_folder_is_skipped_with_one_diary_line() {
+    use std::os::unix::fs::PermissionsExt;
+    let locked = std::sync::OnceLock::new();
+    let h = Harness::with(Mode::NoIndex, |home: &Path| {
+        let dir = home.join(".claude-b/projects/-tmp-cx-probe-work");
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o000)).unwrap();
+        locked.set(dir).unwrap();
+    }).await;
+    let dir = locked.get().unwrap();
+    let readable = std::fs::read_dir(dir).is_ok(); // root lê mesmo assim
+    let (status, body) = h.get("/api/archive").await;
+    let (_, again) = h.get("/api/archive").await;
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    if readable { return; }
+    assert_eq!(status, 200, "{body}");
+    let projects: Vec<&str> = body.as_array().unwrap().iter().map(|f| f["project"].as_str().unwrap()).collect();
+    assert!(projects.contains(&HANGAR) && !projects.contains(&"-tmp-cx-probe-work"), "{projects:?}");
+    assert_eq!(body, again);
+    assert_eq!(h.reported("arquivo.pasta_ilegivel"), 1, "uma linha por pasta, não por pedido");
 }

@@ -106,15 +106,18 @@ impl<'a> Ctx<'a> {
     }
 
     /// Os transcripts `<uuid>.jsonl` das contas; a conversa que mudou de pasta fica só no caminho
-    /// mais novo (F9). Pasta ilegível é pulada, stat que falha tira o arquivo.
+    /// mais novo (F9). Pasta ilegível é pulada com linha no diário, stat que falha tira o arquivo.
     fn claude_files(&self, only: Option<&str>) -> Vec<Claude> {
         let mut out: Vec<Claude> = Vec::new();
         let mut newest: HashMap<String, usize> = HashMap::new();
+        let read_dir = |dir: &Path| std::fs::read_dir(dir).inspect_err(|e| if e.kind() != std::io::ErrorKind::NotFound {
+            self.st.search.report_once("arquivo.pasta_ilegivel", &dir.to_string_lossy(), || format!("{}: {e}", dir.display()));
+        }).into_iter().flatten().flatten();
         for (i, (config_dir, label, base)) in self.accounts(only).into_iter().enumerate() {
-            for project in std::fs::read_dir(&base).into_iter().flatten().flatten() {
+            for project in read_dir(&base) {
                 let dir = project.path();
                 if !dir.is_dir() { continue; }
-                for file in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+                for file in read_dir(&dir) {
                     let name = file.file_name().to_string_lossy().into_owned();
                     if !hangar_workspace::worktrees::is_conversation_file(&name) { continue; }
                     let path = file.path();
@@ -200,14 +203,15 @@ impl<'a> Ctx<'a> {
         tail_text(&c.path, provider)
     }
 
-    /// `archive_providers.conversas`: agente que falha sai da lista com aviso, sem derrubar os outros.
+    /// `archive_providers.conversas`: o que falha sai da lista com linha no diário, sem derrubar o resto.
     fn others(&self) -> Vec<Other> {
         let env = &self.st.accounts.env;
-        let mut out = agent_conversations(env);
+        let (mut out, mut unread) = agent_conversations(env);
         match codex_conversations(env) {
-            Ok(codex) => out.extend(codex),
-            Err(e) => tracing::warn!(error = %e, "arquivo: falha ao varrer conversas do Codex"),
+            Ok((codex, bad)) => { out.extend(codex); unread.extend(bad); }
+            Err(e) => unread.push(Unread::new("codex", None, e)),
         }
+        self.st.search.failing("arquivo.conversa_ilegivel", unread.into_iter().map(|u| (u.key(), u.error)).collect());
         out
     }
 
@@ -305,41 +309,82 @@ impl<'a> Ctx<'a> {
 
 fn mtime_of(path: &Path) -> f64 { std::fs::metadata(path).map_or(0.0, |md| py_mtime(&md)) }
 
-/// As conversas de Pi, omp e Kimi (o índice da busca lê as mesmas).
-pub(crate) fn agent_conversations(env: &crate::accounts::environment::AccountEnvironment) -> Vec<Other> {
+/// O que não pôde ser lido agora: o agente, onde (`None` = o agente inteiro) e o erro com o lugar.
+/// O índice da busca mantém o que já tem lá; o Arquivo lista o resto e registra no diário.
+pub(crate) struct Unread { pub(crate) provider: &'static str, pub(crate) scope: Option<PathBuf>, pub(crate) error: String }
+
+impl Unread {
+    pub(crate) fn new(provider: &'static str, scope: Option<&Path>, error: impl std::fmt::Display) -> Self {
+        let error = match scope { Some(p) => format!("{provider} {}: {error}", p.display()), None => format!("{provider}: {error}") };
+        Self { provider, scope: scope.map(Path::to_owned), error }
+    }
+
+    /// Erro de leitura; a ausência não é falha (agente não instalado, pasta que nasce depois).
+    fn io(provider: &'static str, scope: Option<&Path>, at: &Path, e: &std::io::Error, unread: &mut Vec<Unread>) {
+        if e.kind() != std::io::ErrorKind::NotFound { unread.push(Self::new(provider, scope, format!("{}: {e}", at.display()))); }
+    }
+
+    pub(crate) fn key(&self) -> String {
+        format!("{}:{}", self.provider, self.scope.as_deref().map_or(String::new(), |p| p.to_string_lossy().into_owned()))
+    }
+
+    /// O transcript `path` do agente `provider` está no que não pôde ser lido.
+    pub(crate) fn covers(&self, provider: &str, path: &str) -> bool {
+        self.provider == provider && self.scope.as_deref().is_none_or(|s| Path::new(path).starts_with(s))
+    }
+}
+
+/// As conversas de Pi, omp e Kimi (o índice da busca lê as mesmas) e o que não pôde ser lido.
+pub(crate) fn agent_conversations(env: &crate::accounts::environment::AccountEnvironment) -> (Vec<Other>, Vec<Unread>) {
     let w = Where { home: &env.home, env: &env.base, server_projects: Path::new(""), config_dirs: &[], live: &[] };
-    let mut out = pi_conversations(&archive::agent_root(&w, AgentProvider::Pi), "pi");
-    out.extend(pi_conversations(&archive::agent_root(&w, AgentProvider::Omp), "omp"));
-    out.extend(kimi_conversations(&crate::session_open::agents::kimi_home(&env.home, &env.base)));
-    out
+    let mut unread = Vec::new();
+    let mut out = pi_conversations(&archive::agent_root(&w, AgentProvider::Pi), "pi", &mut unread);
+    out.extend(pi_conversations(&archive::agent_root(&w, AgentProvider::Omp), "omp", &mut unread));
+    out.extend(kimi_conversations(&crate::session_open::agents::kimi_home(&env.home, &env.base), &mut unread));
+    (out, unread)
 }
 
 /// `_codex_conversas`: rollouts de cada conta só na conta dona, sem transferência em andamento.
-pub(crate) fn codex_conversations(env: &crate::accounts::environment::AccountEnvironment) -> Result<Vec<Other>, String> {
+/// Erro = catálogo de contas ilegível; rollout ambíguo ou com transferência ilegível sai sozinho.
+pub(crate) fn codex_conversations(env: &crate::accounts::environment::AccountEnvironment) -> Result<(Vec<Other>, Vec<Unread>), String> {
     let service = crate::accounts::AccountService::new(env.clone());
     let accounts = service.snapshot(AccountProvider::Codex).map_err(|e| e.code.to_string())?;
-    let mut out = Vec::new();
+    let (mut out, mut unread) = (Vec::new(), Vec::new());
     for account in &accounts {
-        for path in codex_rollouts(&account.home) {
+        for path in codex_rollouts(&account.home, &mut unread) {
             let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
             let sid: String = stem.chars().skip(stem.chars().count().saturating_sub(36)).collect();
             if !UUID.is_match(&sid) { continue; }
-            let owner = archive::codex_owner(&accounts, &path).map_err(|_| "codex_account_ambiguous_rollout".to_owned())?;
+            let owner = match archive::codex_owner(&accounts, &path) {
+                Ok(owner) => owner,
+                Err(_) => { unread.push(Unread::new("codex", Some(&path), "codex_account_ambiguous_rollout")); continue }
+            };
             let Some(owner) = owner.filter(|o| o.id == account.id) else { continue };
-            let phase = crate::list::local_transfers::thread_phase(&env.home, &owner.home.to_string_lossy(), &sid)?;
+            let phase = match crate::list::local_transfers::thread_phase(&env.home, &owner.home.to_string_lossy(), &sid) {
+                Ok(phase) => phase,
+                Err(e) => { unread.push(Unread::new("codex", Some(&path), e)); continue }
+            };
             if phase.is_some_and(|p| p != "complete") { continue; }
             let cwd = archive::header(&path, 5, |o| (o["type"] == "session_meta").then(|| o["payload"]["cwd"].as_str().filter(|c| !c.is_empty()).map(str::to_owned)).flatten());
             out.push(Other { provider: "codex", cwd, sid, mtime: mtime_of(&path), path, codex: Some(owner.clone()) });
         }
     }
-    Ok(out)
+    Ok((out, unread))
 }
 
 /// `_pi_conversas`: o transcript mora direto no slug do cwd; subagente (`<stem>/…`) fica fora.
-fn pi_conversations(root: &Path, provider: &'static str) -> Vec<Other> {
+fn pi_conversations(root: &Path, provider: &'static str, unread: &mut Vec<Unread>) -> Vec<Other> {
     let mut out = Vec::new();
-    for dir in std::fs::read_dir(root).into_iter().flatten().flatten().map(|d| d.path()).filter(|d| d.is_dir()) {
-        for path in std::fs::read_dir(&dir).into_iter().flatten().flatten().map(|f| f.path()) {
+    let dirs = match std::fs::read_dir(root) {
+        Ok(dirs) => dirs,
+        Err(e) => { Unread::io(provider, Some(root), root, &e, unread); return out }
+    };
+    for dir in dirs.flatten().map(|d| d.path()).filter(|d| d.is_dir()) {
+        let files = match std::fs::read_dir(&dir) {
+            Ok(files) => files,
+            Err(e) => { Unread::io(provider, Some(&dir), &dir, &e, unread); continue }
+        };
+        for path in files.flatten().map(|f| f.path()) {
             if path.extension().and_then(|e| e.to_str()) != Some("jsonl") { continue; }
             let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
             let sid = stem.split_once('_').map_or(stem.as_str(), |(_, s)| s).to_owned();
@@ -352,8 +397,13 @@ fn pi_conversations(root: &Path, provider: &'static str) -> Vec<Other> {
 }
 
 /// `_kimi_conversas`: o índice de trás para frente, a entrada mais recente por sessão, só com o wire.
-fn kimi_conversations(kimi_home: &Path) -> Vec<Other> {
-    let Ok(raw) = std::fs::read(kimi_home.join("session_index.jsonl")) else { return Vec::new() };
+fn kimi_conversations(kimi_home: &Path, unread: &mut Vec<Unread>) -> Vec<Other> {
+    let index = kimi_home.join("session_index.jsonl");
+    let raw = match std::fs::read(&index) {
+        Ok(raw) => raw,
+        // Os wires moram fora do índice: sem ele, nenhuma conversa do Kimi pode sair do índice da busca.
+        Err(e) => { Unread::io("kimi", None, &index, &e, unread); return Vec::new() }
+    };
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     for o in raw.split(|b| *b == b'\n').rev().filter_map(|line| serde_json::from_slice::<Value>(line).ok()) {
@@ -368,18 +418,22 @@ fn kimi_conversations(kimi_home: &Path) -> Vec<Other> {
 
 /// `_codex_rollouts`: `rollout-*.jsonl` em qualquer profundidade de `sessions` e `archived_sessions`,
 /// sem repetir pelo caminho real.
-fn codex_rollouts(home: &Path) -> Vec<PathBuf> {
-    fn walk(dir: &Path, seen: &mut HashSet<PathBuf>, out: &mut Vec<PathBuf>) {
-        for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+fn codex_rollouts(home: &Path, unread: &mut Vec<Unread>) -> Vec<PathBuf> {
+    fn walk(dir: &Path, seen: &mut HashSet<PathBuf>, out: &mut Vec<PathBuf>, unread: &mut Vec<Unread>) {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(e) => return Unread::io("codex", Some(dir), dir, &e, unread),
+        };
+        for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_dir() { walk(&path, seen, out); continue; }
+            if path.is_dir() { walk(&path, seen, out, unread); continue; }
             let name = entry.file_name().to_string_lossy().into_owned();
             if !(name.starts_with("rollout-") && name.ends_with(".jsonl")) { continue; }
             if let Ok(canonical) = path.canonicalize() && seen.insert(canonical) { out.push(path); }
         }
     }
     let (mut seen, mut out) = (HashSet::new(), Vec::new());
-    for root in [home.join("sessions"), home.join("archived_sessions")] { walk(&root, &mut seen, &mut out); }
+    for root in [home.join("sessions"), home.join("archived_sessions")] { walk(&root, &mut seen, &mut out, unread); }
     out
 }
 

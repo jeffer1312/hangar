@@ -212,12 +212,28 @@ impl Index {
     /// `report` só na entrada em falha de `key`: a mesma falha a cada passada ou busca não se repete.
     pub(crate) fn report_once(&self, code: &'static str, key: &str, detail: impl FnOnce() -> String) {
         let new = self.inner.reported.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert((code, key.to_owned()));
-        if new { self.report(code, detail()); }
+        if new { self.logged(code, detail()); }
     }
 
     /// `key` voltou: a próxima falha dela volta ao diário.
     pub(crate) fn recovered(&self, code: &'static str, key: &str) {
         self.inner.reported.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&(code, key.to_owned()));
+    }
+
+    /// Todas as falhas de agora sob `code`, como (chave, detalhe): as novas vão ao diário e as que
+    /// sumiram saem do registro, para voltarem ao diário se caírem de novo.
+    pub(crate) fn failing(&self, code: &'static str, now: Vec<(String, String)>) {
+        let fresh: Vec<String> = {
+            let mut reported = self.inner.reported.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            reported.retain(|(c, k)| *c != code || now.iter().any(|(key, _)| key == k));
+            now.into_iter().filter(|(key, _)| reported.insert((code, key.clone()))).map(|(_, detail)| detail).collect()
+        };
+        for detail in fresh { self.logged(code, detail); }
+    }
+
+    fn logged(&self, code: &'static str, detail: String) {
+        tracing::warn!(code, detail = %detail, "busca: falha registrada no diário");
+        self.report(code, detail);
     }
 
     pub fn path(&self) -> &Path { &self.inner.path }

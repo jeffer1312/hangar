@@ -168,6 +168,7 @@ pub(super) fn pass(conn: &mut Connection, accounts: &[Account], agents: Option<&
     let report = |code, detail| index.report(code, detail);
     let (mut current, unreadable) = conversations(accounts);
     let (others, failed) = agents.map(super::agents::discover).unwrap_or_default();
+    index.failing("busca.agente_ilegivel", failed.iter().map(|u| (u.key(), u.error.clone())).collect());
     current.extend(others);
     let pi_account = |provider: &str| agents.and_then(|env| crate::provider_accounts::pi_account(env, Some(provider))).unwrap_or_default();
     let known: BTreeMap<String, Known> = conn.prepare("SELECT path, id, size, mtime_ns, ino, offset, config_dir, head_len, head_hash, provider FROM files")?
@@ -177,8 +178,8 @@ pub(super) fn pass(conn: &mut Connection, accounts: &[Account], agents: Option<&
     let listed: Vec<Option<&str>> = accounts.iter().map(|a| a.config_dir.as_deref()).collect();
     let tx = conn.transaction()?;
     for (path, k) in &known {
-        // Agente que não pôde ser varrido agora (catálogo Codex ilegível) mantém o que o índice tem dele.
-        if current.contains_key(path) || unreadable.iter().any(|d| Path::new(path).starts_with(d)) || failed.iter().any(|p| *p == k.provider) {
+        // Agente, pasta ou rollout que não pôde ser varrido agora mantém o que o índice tem lá.
+        if current.contains_key(path) || unreadable.iter().any(|d| Path::new(path).starts_with(d)) || failed.iter().any(|u| u.covers(&k.provider, path)) {
             continue;
         }
         // Conta em migração sai do catálogo por um tempo: as conversas dela ficam.
