@@ -22,9 +22,9 @@ const clampHours = (h: number) => Math.min(168, Math.max(1, Math.round(h)));
 export default function SessionsSettings() {
   const router = useRouter();
   const c = useSettingsColors();
-  const todos = useServers((s) => s.servers);
+  const servers = useServers((s) => s.servers);
   const ready = useServers((s) => s.ready);
-  const own = useMemo(() => ownUpdatableServers(todos), [todos]);
+  const own = useMemo(() => ownUpdatableServers(servers), [servers]);
   const ownKey = own.map((s) => `${s.id}@${s.baseUrl}`).join('|');
   const hiddenCount = useSessions((s) => s.rows.filter((r) => r.hidden_from_list && r.state !== 'dead').length);
   useEffect(() => useSessions.getState().retain(), []);
@@ -85,7 +85,7 @@ export default function SessionsSettings() {
 
   const label = (id: string) => own.find((s) => s.id === id)?.label ?? id;
   const failedReads = read?.filter((r) => !r.ok) ?? [];
-  const differs = read && !saved ? autoHideDiverges(read).filter((id) => read.some((r) => r.serverId === id && r.ok)) : [];
+  const differs = read && !saved ? autoHideDiverges(read) : [];
   // A frase traz o número; a unidade sai dela para ficar ao lado do campo.
   const unit = m.session_auto_hide_hours({ n: '' }).trim();
 

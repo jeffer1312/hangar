@@ -75,7 +75,7 @@ interface Props {
 }
 
 // `id` obrigatório: só com campos opcionais o TS recusa os itens sem `attributes` (tipo fraco).
-const desabilitada = (a: { id: string; attributes?: { disabled?: boolean; destructive?: boolean } }) => !!a.attributes?.disabled;
+const isDisabled = (a: { id: string; attributes?: { disabled?: boolean; destructive?: boolean } }) => !!a.attributes?.disabled;
 
 // O iOS já vibra ao abrir o menu de contexto; o PopupMenu do Android não.
 const vibrarAoAbrir =
@@ -95,7 +95,7 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
   // Vários pares: o dono sozinho não diz qual desfazer.
   const donoDo = (p: PairExternal) => (pares.length > 1 ? `${p.owner} · ${p.session}` : p.owner);
   // Esperando você, a oculta voltaria na rodada seguinte da lista: ocultar fica desabilitado, com o motivo no título.
-  const esperando = s.state === 'awaiting_input' || (s.pending_questions ?? 0) > 0;
+  const waiting = s.state === 'awaiting_input' || (s.pending_questions ?? 0) > 0;
   // Sem o arrasto, o menu é o único caminho visível pro Git: o orquestrador fica só com ele.
   // A sessão de fora é de outra pessoa: nem renomear, nem fechar, só sair do par.
   const acoesMenu = useMemo(
@@ -112,9 +112,9 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
         ? [{ id: 'show', title: m.session_show_in_list(), image: Platform.select({ ios: 'eye' }) }]
         : [{
           id: 'hide',
-          title: esperando ? `${m.session_hide_from_list()} · ${m.session_hide_waiting()}` : m.session_hide_from_list(),
+          title: waiting ? `${m.session_hide_from_list()} · ${m.session_hide_waiting()}` : m.session_hide_from_list(),
           image: Platform.select({ ios: 'eye.slash' }),
-          ...(esperando ? { attributes: { disabled: true } } : {}),
+          ...(waiting ? { attributes: { disabled: true } } : {}),
         }]),
       ...(orq || !onExcluir ? [] : [{
         id: s.serverInvite ? 'stop-following' : 'delete',
@@ -123,11 +123,11 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
         attributes: { destructive: true },
       }]),
     ],
-    [s.cwd, s.serverInvite, s.hidden_from_list, esperando, orq, fora, parAtivo, pares, wtAcao, onPair, onRenomear, onGit, onExcluir, onHidden],
+    [s.cwd, s.serverInvite, s.hidden_from_list, waiting, orq, fora, parAtivo, pares, wtAcao, onPair, onRenomear, onGit, onExcluir, onHidden],
   );
   const acao = (nome: string) => {
     if (nome === 'rename') onRenomear?.(s);
-    else if (nome === 'hide' && !esperando) onHidden?.(s, true);
+    else if (nome === 'hide' && !waiting) onHidden?.(s, true);
     else if (nome === 'show') onHidden?.(s, false);
     else if (nome === 'git') onGit?.(s);
     else if (nome === 'worktree' && wtAcao) onWorktree?.(s, wtAcao);
@@ -148,7 +148,7 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
   const groupTitle = badge && onPair && !fora ? m.par_grupo_titulo({ n: (s.pair_peers?.length ?? 0) + 1 }) : null;
   // O desabilitado não vira ação do leitor de tela: o rótulo da linha já diz que ela espera você.
   const acoesA11y = useMemo(
-    () => [...acoesMenu.filter((a) => !desabilitada(a)).map((a) => ({ name: a.id, label: a.title })), ...(groupTitle ? [{ name: 'group', label: groupTitle }] : [])],
+    () => [...acoesMenu.filter((a) => !isDisabled(a)).map((a) => ({ name: a.id, label: a.title })), ...(groupTitle ? [{ name: 'group', label: groupTitle }] : [])],
     [acoesMenu, groupTitle],
   );
   const pendentes = pares.filter((p) => p.pending);
@@ -196,7 +196,7 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
         options: [...acoesMenu.map((a) => a.title), m.comum_cancelar()],
         cancelButtonIndex: acoesMenu.length,
         destructiveButtonIndex: destructive >= 0 ? destructive : undefined,
-        disabledButtonIndices: acoesMenu.flatMap((a, i) => (desabilitada(a) ? [i] : [])),
+        disabledButtonIndices: acoesMenu.flatMap((a, i) => (isDisabled(a) ? [i] : [])),
       },
       (i) => { if (i < acoesMenu.length) acao(acoesMenu[i].id); },
     );

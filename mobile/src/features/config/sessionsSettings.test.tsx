@@ -101,6 +101,14 @@ describe('página Sessões', () => {
     expect(c.textContent).not.toContain(m.session_auto_hide_differs({ servers: 'VPS' }));
   });
 
+  it('leitura que falhou aparece como erro à parte, fora de "diferente"', async () => {
+    calls.servers = [a, b, { ...b, id: 'c', label: 'Lab' }, { ...b, id: 'd', label: 'Sala' }];
+    calls.read.mockResolvedValue([ok('a', true, 240), { serverId: 'b', ok: false, error: 'fora do ar' }, ok('c', true, 240), ok('d', false)]);
+    const c = await mount();
+    expect(c.querySelector('[data-error="true"]')?.textContent).toBe('VPS: fora do ar');
+    expect(c.textContent).toContain(m.session_auto_hide_differs({ servers: 'Sala' }));
+  });
+
   it('ligar e mudar o prazo gravam em todas, em horas inteiras de 1 a 168', async () => {
     calls.read.mockResolvedValue([ok('a', false), ok('b', false)]);
     calls.save.mockImplementation(async (_servers: Server[], cfg: { enabled: boolean; after_minutes: number }) => [

@@ -217,7 +217,7 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
 
   // A marca mora no servidor da sessão, por endereço explícito: não troca a ativa. A linha muda de
   // lugar quando a lista do servidor chega, sem aviso de sucesso.
-  const alternarOculta = useCallback((s: AggSession, hide: boolean) => {
+  const toggleHidden = useCallback((s: AggSession, hide: boolean) => {
     const server = useServers.getState().servers.find((x) => x.id === s.serverId && !x.invite);
     if (!server) { toast.erro(m.servidor_nao_existe()); return; }
     (hide ? hideSession : showSession)(server, s.name).catch((e: unknown) =>
@@ -509,7 +509,7 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
               onResume={retomar}
               onWorktree={proprios.has(item.serverId) ? abrirWorktree : undefined}
               onPair={proprios.has(item.serverId) || item.outside ? fazerPar : undefined}
-              onHidden={proprios.has(item.serverId) && !item.outside ? alternarOculta : undefined}
+              onHidden={proprios.has(item.serverId) && !item.outside ? toggleHidden : undefined}
               crossBadgeText={crossBadges.get(pickKey(item.serverId, item.name))?.text}
               crossBadgeMachines={crossBadges.get(pickKey(item.serverId, item.name))?.machines}
             />}
