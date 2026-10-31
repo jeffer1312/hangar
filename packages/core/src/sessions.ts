@@ -209,6 +209,14 @@ export function groupHideTargets<T extends GroupRow>(row: T, rows: readonly T[])
   return [row, ...others];
 }
 
+/** Mensagem numa oculta: as outras ocultas do mesmo `pair_gid`, de todas as máquinas, para perguntar se voltam junto.
+ *  A sessão de outra pessoa fica de fora, como em `groupHideTargets`. */
+export function groupShowTargets<T extends GroupRow>(row: T, rows: readonly T[]): T[] {
+  if (!row.pair_gid) return [];
+  return rows.filter((r) => r.pair_gid === row.pair_gid && !(r.serverId === row.serverId && r.name === row.name)
+    && !r.outside && !r.serverInvite && r.guest_kind !== 'pair' && r.hidden_from_list);
+}
+
 /** Linhas visíveis e ocultas (`hidden_from_list`), cada grupo na ordem em que chegou. */
 export function splitHidden<T extends Pick<SessionInfo, 'hidden_from_list'>>(rows: readonly T[]): { shown: T[]; hidden: T[] } {
   const shown: T[] = [];

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Slot } from './sessions';
 import type { Server } from './servers';
 import type { SessionInfo } from './types';
-import { aggregateSessions, epocasDeRecriacao, machineNoticeVisible, machinesAllDown, nextNoticeEnd, OFFLINE_NOTICE_MS, patchSlot, splitHidden, sweepHidden, groupHideTargets } from './sessions';
+import { aggregateSessions, epocasDeRecriacao, machineNoticeVisible, machinesAllDown, nextNoticeEnd, OFFLINE_NOTICE_MS, patchSlot, splitHidden, sweepHidden, groupHideTargets, groupShowTargets } from './sessions';
 
 const srv = (id: string): Server => ({ id, label: `srv-${id}`, baseUrl: `http://${id}`, token: 't' });
 const sess = (name: string, extra: Partial<SessionInfo> = {}): SessionInfo =>
@@ -289,5 +289,31 @@ describe('groupHideTargets', () => {
       row('pc', 'par-so-ver', { guest_kind: 'pair' }),
     ];
     expect(groupHideTargets(me, rows).map((r) => `${r.serverId}::${r.name}`)).toEqual(['pc::a', 'pc::b', 'nb::c']);
+  });
+});
+
+describe('groupShowTargets', () => {
+  type Row = Parameters<typeof groupShowTargets>[0];
+  const row = (serverId: string, name: string, extra: Partial<Row> = {}): Row =>
+    ({ serverId, name, pair_gid: 'g1', state: 'idle', hidden_from_list: true, ...extra }) as Row;
+
+  it('fora de grupo não traz ninguém', () => {
+    const solo = row('pc', 'solo', { pair_gid: null });
+    expect(groupShowTargets(solo, [solo, row('pc', 'x')])).toEqual([]);
+  });
+
+  it('traz as outras ocultas do grupo, de todas as máquinas, sem a própria, as visíveis e as de outra pessoa', () => {
+    const me = row('pc', 'a');
+    const rows = [
+      me,
+      row('pc', 'b'),
+      row('nb', 'c'),
+      row('pc', 'visivel', { hidden_from_list: false }),
+      row('pc', 'outro-grupo', { pair_gid: 'g2' }),
+      row('pc', 'outra-pessoa', { outside: { alias: 'x', owner: 'y', localServerId: 'pc', localSession: 'a' } }),
+      row('convite', 'de-convite', { serverInvite: true }),
+      row('pc', 'par-so-ver', { guest_kind: 'pair' }),
+    ];
+    expect(groupShowTargets(me, rows).map((r) => `${r.serverId}::${r.name}`)).toEqual(['pc::b', 'nb::c']);
   });
 });

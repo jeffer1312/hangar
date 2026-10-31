@@ -13,6 +13,7 @@ import { abandonUnknownAttempt, attachInsert, confirmFirstInput, firstInputMessa
 import { useSessions } from '../stores/sessions';
 import { clearDraft, clearRecoverableDraft, readDraft, readRecoverableDraft, resolveDraftTranscript, removeDraftRecording, reusableUploadPath, withoutUpload, writeDraft, writeRecoverableDraft, clearDictation, readDictation, writeDictation, recoverDictation, applyReadyDictation, associateDictationTranscript, type ConversationDraft, type DraftAttachment, type DictationDraft, type UploadTarget } from '../stores/drafts';
 import { useServers } from '../stores/servers';
+import { revealOnSend } from '../features/sessions/revealOnSend';
 import { removeDraftAttachment, retainDraftAttachment } from './draftAttachments';
 import { useNavigation, useRouter } from 'expo-router';
 import { DictationStyleMenu, useDictationStyleLabel } from '../features/ditado/EstiloPill';
@@ -1478,6 +1479,7 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
     const server = useServers.getState().servers.find((s) => s.id === origin.serverId);
     if (!server) { setError(m.chat_servidor_removido()); return; }
     setError('');
+    revealOnSend(origin.serverId, origin.name);
     try {
       await sendInputForServer(server, origin.name, cmd);
     } catch (e) {

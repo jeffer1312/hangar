@@ -94,7 +94,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
     descartarDaFila,
   } from '@hangar/core';
   import { dictations, draftStorageKey, parseStoredDraft, readMigrating } from '../lib/dictationStore.svelte';
-  import { formataErro } from '@hangar/core';
+  import { formataErro, groupShowTargets, showSession, type AggSession } from '@hangar/core';
   import QueuePanel from '../components/QueuePanel.svelte';
   import {
     beginQueueEdit, cancelQueuedMessage, currentQueuePanel, echoInQueuePanel, editQueuedMessage, hiddenByQueuePanel, parseQueuePanel,
@@ -2968,6 +2968,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
 
   async function handleSend(text: string, steer = false, onlyThisSession = false) {
     if (abrirBtwSe(text)) return;
+    revealOnSend();
     if (isCodex && /^\/compact(?:\s|$)/.test(text.trim())) {
       await sendInput(sessionName, text, sessionServer());
       return;
@@ -3112,6 +3113,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
 
   async function handleCommand(cmd: string) {
     if (abrirBtwSe(cmd)) return;
+    revealOnSend();
     try {
       await sendInput(sessionName, cmd, sessionServer());
     } catch (err) {
@@ -3146,6 +3148,29 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
     const detalhe = stateEvent?.problema_detalhe?.split('\n')[0].slice(0, inteiro ? 300 : 80);
     return detalhe ? `${texto} — ${detalhe}` : texto;
   });
+
+  // Mensagem minha numa oculta a traz de volta; com outras ocultas no grupo dela, pergunta se voltam junto.
+  // O grupo não muda: só a marca de oculta sai, cada uma no próprio servidor.
+  let revealOthers = $state<AggSession[]>([]);
+  function revealOnSend() {
+    const rows = sessionsStore.rows;
+    const row = rows.find((r) => r.serverId === chatServerId && r.name === sessionName);
+    if (!row?.hidden_from_list) return;
+    const server = listOwnServers().find((s) => s.id === chatServerId);
+    if (!server) return;
+    showSession(server, sessionName).catch((e: unknown) => mostrarAviso(m.session_show_failed({ error: formataErro(e) ?? String(e) })));
+    revealOthers = groupShowTargets(row, rows);
+  }
+  async function showRevealOthers() {
+    const targets = revealOthers;
+    revealOthers = [];
+    const results = await Promise.allSettled(targets.map((t) => {
+      const server = listOwnServers().find((s) => s.id === t.serverId);
+      return server ? showSession(server, t.name) : Promise.reject(new Error(m.convidados_servidor_fora_da_lista()));
+    }));
+    const failed = targets.filter((_, i) => results[i].status === 'rejected').map((t) => t.name);
+    if (failed.length) mostrarAviso(m.session_show_group_skipped({ names: failed.join(', ') }));
+  }
 
   function mostrarAviso(err: unknown) {
     clearTimeout(avisoErrTimer);
@@ -4086,6 +4111,12 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
              modsLigado={modsCelular.ligado} modsPaineis={modsItem?.paineis ?? 0}
              {activityRunning} {activityBadge} />
   <ShareSessionSheet open={shareOpen} name={sessionName} serverId={chatServerId} onClose={() => (shareOpen = false)} />
+  <ConfirmSheet open={revealOthers.length > 0}
+                title={m.session_show_group_title()}
+                message={`${m.session_show_group_body()} ${revealOthers.map((r) => r.name).join(', ')}`}
+                confirmLabel={m.session_show_others({ n: revealOthers.length })}
+                cancelLabel={m.session_show_only_this()}
+                onConfirm={() => void showRevealOthers()} onClose={() => (revealOthers = [])} />
   <ConfirmSheet open={confirmaModo}
                 title={sessionHeadless ? m.modo_abrir_no_terminal() : m.modo_continuar_sem_terminal()}
                 message={sessionHeadless ? m.modo_confirmar_terminal_msg() : m.modo_confirmar_sem_terminal_msg()}

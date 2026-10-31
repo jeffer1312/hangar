@@ -122,8 +122,8 @@ pub(super) enum SidebarReply {
     BranchRead(u64, Result<Value, Failure>),
     AccountsRead(u64, Result<(Vec<AccountTarget>, Option<String>), Failure>),
     Wrote(Target, Write, Result<Value, Failure>),
-    /// "Ocultar o grupo inteiro": as sessões que não ocultaram, com o motivo de cada uma.
-    HidGroup(Vec<(Target, Failure)>),
+    /// Ocultar ou mostrar o grupo inteiro (`true` = ocultar): as sessões que falharam, com o motivo de cada uma.
+    GroupVisibility(bool, Vec<(Target, Failure)>),
     /// Resultado de uma gravação de git: nível e texto da notificação daquela sessão.
     Note(Target, NotificationType, String),
     Chained(Target, u64, String, Result<Value, Failure>),
@@ -1043,7 +1043,7 @@ impl Hangar {
                 let (weak, targets) = (weak.clone(), targets.clone());
                 Button::new(id).label(label).when(all, |b| b.primary()).on_click(move |_, window, cx| {
                     window.close_dialog(cx);
-                    let _ = weak.update(cx, |this, cx| if all { this.hide_group(targets.clone()) } else { this.write(targets[0].clone(), Write::Hide, cx) });
+                    let _ = weak.update(cx, |this, cx| if all { this.set_group_hidden(targets.clone(), true) } else { this.write(targets[0].clone(), Write::Hide, cx) });
                 })
             };
             popup::dialog(dialog).w(px(420.)).title(tr("sidebar_hide_group_title"))
@@ -1057,20 +1057,54 @@ impl Hangar {
         });
     }
 
+    /// Mensagem minha numa oculta a traz de volta; com outras ocultas no grupo dela, pergunta se voltam junto. O grupo
+    /// não muda: só a marca de oculta sai.
+    pub(super) fn reveal_on_send(&mut self, server: &str, name: &str, window: &mut Window, cx: &mut Context<Self>) {
+        use super::grouping::{Row, group_show_targets};
+        let target = Target::new(server, name);
+        let Some(session) = self.target_session(&target).filter(|s| s.hidden_from_list) else { return };
+        let machines = self.group_machines();
+        let others = if machines.contains(&target.server) {
+            let rows: Vec<Row> = machines.iter().flat_map(|key| self.sessions_of(key).iter()
+                .filter(|s| !self.sidebar.is_hidden(key, &s.name)).map(move |s| Row { server: key, session: s, invite: false })).collect();
+            group_show_targets(Row { server: &target.server, session, invite: false }, &rows)
+        } else { Vec::new() };
+        self.write(target, Write::Show, cx);
+        if others.is_empty() { return; }
+        let names: Vec<String> = others.iter().map(|t| if t.server == server { t.name.clone() }
+            else { format!("{} · {}", t.name, self.machine_label(&t.server, cx)) }).collect();
+        let weak = cx.entity().downgrade();
+        window.open_dialog(cx, move |dialog, _, _| {
+            let (weak, others) = (weak.clone(), others.clone());
+            popup::dialog(dialog).w(px(420.)).title(tr("sidebar_show_group_title"))
+                .child(div().flex().flex_col().gap(px(2.)).text_sm().child(tr("sidebar_show_group_body"))
+                    .children(names.iter().map(|name| div().min_w_0().truncate().font_family(theme::MONO).child(name.clone()))))
+                .footer(div().flex().justify_end().gap_2()
+                    .child(Button::new("show-group-one").label(tr("sidebar_show_only_this")).on_click(|_, window, cx| window.close_dialog(cx)))
+                    .child(Button::new("show-group-all").label(tr("sidebar_show_others").replace("{n}", &names.len().to_string())).primary()
+                        .on_click(move |_, window, cx| {
+                            window.close_dialog(cx);
+                            let _ = weak.update(cx, |this, _| this.set_group_hidden(others.clone(), false));
+                        })))
+                .on_ok(enter_to_focused)
+        });
+    }
+
     /// Cada membro na máquina dele, todos juntos; os que falham voltam numa notificação só, com o motivo de cada um.
-    fn hide_group(&mut self, targets: Vec<Target>) {
+    fn set_group_hidden(&mut self, targets: Vec<Target>, hide: bool) {
         let calls: Vec<(Target, Result<Api, String>)> = targets.into_iter()
             .map(|t| { let api = self.machine_api(&t.server).ok_or_else(|| self.machine_error(&t.server)); (t, api) }).collect();
+        let method = if hide { reqwest::Method::PUT } else { reqwest::Method::DELETE };
         let tell = self.sidebar_tell();
         self.runtime.spawn(async move {
-            let results = futures::future::join_all(calls.into_iter().map(|(target, api)| async move {
+            let results = futures::future::join_all(calls.into_iter().map(|(target, api)| { let method = method.clone(); async move {
                 let result = match api {
-                    Ok(api) => api.server_send(reqwest::Method::PUT, &["sessions", target.name.as_str(), "hidden"], None, 15).await.map(|_| ()),
+                    Ok(api) => api.server_send(method, &["sessions", target.name.as_str(), "hidden"], None, 15).await.map(|_| ()),
                     Err(reason) => Err(Failure::local(reason)),
                 };
                 result.err().map(|error| (target, error))
-            })).await;
-            tell.send(SidebarReply::HidGroup(results.into_iter().flatten().collect())).await;
+            }})).await;
+            tell.send(SidebarReply::GroupVisibility(hide, results.into_iter().flatten().collect())).await;
         });
     }
 
@@ -1320,10 +1354,11 @@ impl Hangar {
                 cx.notify();
             }
             SidebarReply::Note(target, kind, text) => window.push_notification(git_note(&target.name, kind, text), cx),
-            SidebarReply::HidGroup(skipped) => {
+            SidebarReply::GroupVisibility(hide, skipped) => {
                 if skipped.is_empty() { return; }
                 let names: Vec<String> = skipped.iter().map(|(t, error)| format!("{} ({})", t.name, Self::visibility_failure(error))).collect();
-                window.push_notification(Notification::error(tr("sidebar_hide_group_skipped").replace("{names}", &names.join(", "))), cx);
+                let key = if hide { "sidebar_hide_group_skipped" } else { "sidebar_show_group_skipped" };
+                window.push_notification(Notification::error(tr(key).replace("{names}", &names.join(", "))), cx);
             }
             SidebarReply::Group(seq, reply) => self.receive_group(seq, reply, window, cx),
             SidebarReply::Sheet(reply) => self.receive_sheet(reply, window, cx),
