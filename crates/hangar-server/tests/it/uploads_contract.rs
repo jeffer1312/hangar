@@ -1,6 +1,7 @@
-//! Repete no Rust as referências congeladas do Python (`backend/tests/fixtures/uploads_contract`):
-//! cada pedido gravado vai às rotas públicas reais, e status, cabeçalhos, corpo e árvore do cofre
-//! são comparados com a mesma normalização do `README.md` de lá. A referência nunca é regravada.
+//! Cada pedido de `uploads_contract_cases` vai às rotas públicas reais, e status, cabeçalhos, corpo e
+//! árvore do cofre são comparados depois de normalizar raiz (`<root>`) e chave de projeto (`<project>`,
+//! `<other-project>`). Fora disso, o corpo JSON é comparado byte a byte; a tabela foi medida no Python,
+//! e o que o Rust faz diferente são as exceções nomeadas abaixo.
 use super::fake::{OWNER, spawn_fake};
 use base64::Engine;
 use hangar_server::{
@@ -25,41 +26,26 @@ use std::{
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+#[path = "uploads_contract_cases.rs"]
+pub mod cases;
+
 const EPOCH: f64 = 1_700_000_000.0;
 const SECRET: &str = "contrato";
 const CHILD: &str = "HANGAR_UPLOAD_CONTRACT_CHILD";
 
-fn fixtures() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../backend/tests/fixtures/uploads_contract")
-}
-
-/// O perfil de `profiles.json` desta plataforma cujo `.xml` é o que o servidor Rust atribui
-/// (`mime_guess`), com o hash conferido como no leitor Python.
-fn reference(name: &str) -> Value {
-    let manifest: Value = serde_json::from_slice(&std::fs::read(fixtures().join("profiles.json")).unwrap()).unwrap();
-    assert_eq!(manifest["version"], 1, "manifesto de perfis MIME incompatível");
-    let platform = if cfg!(windows) {
-        "win32"
-    } else if cfg!(target_os = "linux") {
-        "linux"
-    } else {
-        panic!("sem referência Python para esta plataforma: o contrato de anexos não rodou")
-    };
-    let xml = mime_guess::from_ext("xml").first_or_octet_stream().to_string();
-    let profile = manifest["profiles"]
-        .as_object()
-        .unwrap()
-        .values()
-        .find(|p| p["platform"] == platform && p["xml"] == xml.as_str())
-        .unwrap_or_else(|| panic!("perfil MIME desconhecido: {platform}, .xml={xml}"));
-    let entry = &profile["fixtures"][name];
-    let relative = Path::new(entry["file"].as_str().unwrap_or_else(|| panic!("referência ausente: {name}")));
-    assert!(relative.is_relative() && !relative.components().any(|c| c == std::path::Component::ParentDir));
-    let content = std::fs::read(fixtures().join(relative)).unwrap();
-    let digest = ring::digest::digest(&ring::digest::SHA256, &content);
-    let hex: String = digest.as_ref().iter().map(|b| format!("{b:02x}")).collect();
-    assert_eq!(hex, entry["sha256"].as_str().unwrap(), "hash da referência divergiu: {name}");
-    serde_json::from_slice(&content).unwrap()
+/// A tabela do cenário, com o `mode` deste sistema.
+fn table(text: &str) -> Value {
+    let mut scenario: Value = serde_json::from_str(text).unwrap();
+    if cfg!(windows) {
+        for row in scenario["normalized_tree"].as_array_mut().unwrap() {
+            row["mode"] = match row["mode"].as_u64() {
+                Some(0o40755) => json!(0o40777),
+                Some(0o100644) => json!(0o100666),
+                other => json!(other),
+            };
+        }
+    }
+    scenario
 }
 
 #[derive(Default)]
@@ -84,7 +70,6 @@ struct Replay {
     sessions: Arc<Sessions>,
     projects: Vec<(String, &'static str)>,
     public: SocketAddr,
-    names: Arc<AtomicU64>,
     _tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 
@@ -140,7 +125,6 @@ impl Replay {
         ));
         // Relógio fixo e contador hexadecimal reiniciado por fixture, como o `token_hex` da captura.
         let counter = Arc::new(AtomicU64::new(0));
-        let names = counter.clone();
         state.upload_naming = Naming {
             now: Arc::new(|| EPOCH),
             suffix: Arc::new(move || Ok(format!("{:06x}", counter.fetch_add(1, Ordering::SeqCst) + 1))),
@@ -149,7 +133,7 @@ impl Replay {
         let (public, public_task) = serve(router(state.clone())).await;
         let projects = vec![(project_key(&project).unwrap(), "<project>"), (project_key(&other).unwrap(), "<other-project>")];
         let vault = root.join(".hangar").join("uploads");
-        let replay = Self { _dir: dir, root, vault, claude, sessions, projects, public, names, _tasks: vec![public_task] };
+        let replay = Self { _dir: dir, root, vault, claude, sessions, projects, public, _tasks: vec![public_task] };
         replay.retention(0);
         replay
     }
@@ -422,12 +406,6 @@ const RUST_RESOLVER: &[(&str, &str)] = &[
     ("missing", "erro_upload_inexistente"),
 ];
 
-/// Exceção aceita, Rust já no ar: nome de sessão hostil recusado no envio vira o erro do Rust.
-/// Só o Windows grava esse caso: `create_dir` de `..-..` cria `..-` (o Win32 tira pontos finais),
-/// `Directory::child` recusa com InvalidInput (store.rs, ramo `cfg(windows)`: `real_path(&path)? != path`)
-/// e `storage_error(e, true)` responde 400 `erro_arquivo_vazio` (http.rs, `InvalidInput if upload`).
-const RUST_SAVE_ERRORS: &[(&str, &str, &str)] = &[("../..", "erro_arquivo_vazio", "arquivo vazio ou caminho inválido")];
-
 /// O mapeamento do ramo "resolve" de `uploads::http::execute`, que a transcrição por arquivo usa.
 fn resolver_error(kind: std::io::ErrorKind) -> (u16, &'static str) {
     match kind {
@@ -443,10 +421,17 @@ fn quoted(value: Option<&Value>) -> bool {
     value.and_then(Value::as_str).is_some_and(|v| v.len() > 2 && v.starts_with('"') && v.ends_with('"'))
 }
 
-/// Repete a fixture inteira e devolve as divergências; as diferenças de MIME aceitas vão ao stderr.
-async fn replay(name: &str) -> Vec<String> {
-    let golden = reference(name);
+/// Repete o cenário inteiro e devolve as divergências; as diferenças de MIME aceitas vão ao stderr.
+async fn replay(name: &str, text: &str) -> Vec<String> {
+    let golden = table(text);
     let records = golden["normalized_response"].as_array().unwrap();
+    let total = match name {
+        "active-content-range" => 20,
+        "errors-and-isolation" | "retention-and-audio" => 16,
+        "video-without-ffmpeg" => 2,
+        other => panic!("cenário sem total: {other}"),
+    };
+    assert_eq!(records.len(), total, "{name}");
     let r = Replay::new().await;
     let mut diffs = Vec::new();
     let mut uploads: Vec<PathBuf> = Vec::new();
@@ -478,7 +463,7 @@ async fn replay(name: &str) -> Vec<String> {
                     uploads.push(path);
                 }
                 if status != expected["status"] {
-                    diffs.push(format!("{} python={} rust={status}", at("status"), expected["status"]));
+                    diffs.push(format!("{} esperado={} recebido={status}", at("status"), expected["status"]));
                 }
                 // Cabeçalho de transporte do hyper; o cliente em processo da captura não tinha servidor.
                 headers.remove("date");
@@ -496,49 +481,38 @@ async fn replay(name: &str) -> Vec<String> {
                     }
                     continue;
                 }
-                let want = expected["headers"].as_object().unwrap();
+                let mut want = expected["headers"].as_object().unwrap().clone();
                 let download = url.contains("/uploads/") && matches!(status, 200 | 206);
+                // Todo download leva `max-age=60`; a página que embrulha o HTML, sem tamanho, sai em chunked.
+                if download {
+                    want.insert("cache-control".to_owned(), json!("max-age=60"));
+                    if !want.contains_key("content-length") {
+                        want.insert("transfer-encoding".to_owned(), json!("chunked"));
+                    }
+                }
                 let names: std::collections::BTreeSet<&String> = want.keys().chain(headers.keys()).collect();
                 for header in names {
-                    let (python, rust) = (want.get(header), headers.get(header));
-                    if python == rust {
+                    let (wanted, got) = (want.get(header), headers.get(header));
+                    if wanted == got {
                         continue;
                     }
-                    // Exceção aceita: o MIME do download vem do `mime_guess`, não do `mimetypes` do Python.
-                    if download && header == "content-type" && python.is_some() && rust.is_some() {
-                        eprintln!("MIME aceito {}: python={} rust={}", at("headers.content-type"), python.unwrap(), rust.unwrap());
+                    // Exceção aceita: o MIME do download vem do `mime_guess`, não da tabela.
+                    if download && header == "content-type" && wanted.is_some() && got.is_some() {
+                        eprintln!("MIME aceito {}: esperado={} recebido={}", at("headers.content-type"), wanted.unwrap(), got.unwrap());
                         continue;
                     }
-                    // Exceção aceita, Rust já no ar: sem a compressão do Python, não manda `vary`.
-                    if header == "vary" && python == Some(&json!("Accept-Encoding")) && rust.is_none() {
+                    // Exceção aceita: ETag em formato próprio, presente e entre aspas.
+                    if download && header == "etag" && quoted(got) {
                         continue;
                     }
-                    // Exceção aceita, Rust já no ar: ETag em formato próprio, presente e entre aspas.
-                    if download && header == "etag" && quoted(rust) {
-                        continue;
-                    }
-                    // Exceção aceita, Rust já no ar: o download leva `cache-control: max-age=60`.
-                    if download && header == "cache-control" && python.is_none() && rust == Some(&json!("max-age=60")) {
-                        continue;
-                    }
-                    // Exceção aceita, Rust já no ar: a página que embrulha o HTML sai em chunked, sem tamanho dos dois lados.
-                    if download
-                        && header == "transfer-encoding"
-                        && python.is_none()
-                        && rust == Some(&json!("chunked"))
-                        && !want.contains_key("content-length")
-                        && !headers.contains_key("content-length")
-                    {
-                        continue;
-                    }
-                    diffs.push(format!("{} python={python:?} rust={rust:?}", at(&format!("headers.{header}"))));
+                    diffs.push(format!("{} esperado={wanted:?} recebido={got:?}", at(&format!("headers.{header}"))));
                 }
                 let want_body = decode(&expected["body_base64"]);
                 if body != want_body {
-                    diffs.push(format!("{} python={:?} rust={:?}", at("body"), excerpt(&want_body), excerpt(&body)));
+                    diffs.push(format!("{} esperado={:?} recebido={:?}", at("body"), excerpt(&want_body), excerpt(&body)));
                 }
                 if parsed != expected["json"] {
-                    diffs.push(format!("{} python={} rust={parsed}", at("json"), expected["json"]));
+                    diffs.push(format!("{} esperado={} recebido={parsed}", at("json"), expected["json"]));
                 }
             }
             Some("platform-save") => {
@@ -552,19 +526,12 @@ async fn replay(name: &str) -> Vec<String> {
                     let path = PathBuf::from(raw_path(&r, &parsed));
                     set_mtime(&path, EPOCH);
                     json!({"status": 200, "path": parsed["path"]})
-                } else if let Some(&(_, code, msg)) = RUST_SAVE_ERRORS.iter().find(|(s, _, _)| *s == session) {
-                    // Artefato da captura: o contador do Python foi gasto no `token_hex` antes da recusa (uploads.py antigo, linhas 74-79).
-                    r.names.fetch_add(1, Ordering::SeqCst);
-                    let rust_body = json!({"detail": {"code": code, "params": {}, "msg": msg}});
-                    if parsed != rust_body {
-                        diffs.push(format!("{} esperado={rust_body} rust={parsed}", at(&format!("platform-save[{session:?}](erro Rust)"))));
-                    }
-                    json!({"status": status, "detail": expected["result"]["detail"]})
                 } else {
-                    json!({"status": status, "detail": detail(&parsed)})
+                    // Só o Windows recusa: `..-..` vira `..-` no Win32 e `Directory::child` não aceita.
+                    json!({"status": status, "detail": parsed["detail"]})
                 };
                 if result != expected["result"] {
-                    diffs.push(format!("{} python={} rust={result}", at(&format!("platform-save[{session:?}]")), expected["result"]));
+                    diffs.push(format!("{} esperado={} recebido={result}", at(&format!("platform-save[{session:?}]")), expected["result"]));
                 }
             }
             Some("audio-resolver") => {
@@ -601,7 +568,7 @@ async fn replay(name: &str) -> Vec<String> {
                     }
                 };
                 if result != expected["result"] {
-                    diffs.push(format!("{} python={} rust={result}", at(&format!("audio-resolver[{case}]")), expected["result"]));
+                    diffs.push(format!("{} esperado={} recebido={result}", at(&format!("audio-resolver[{case}]")), expected["result"]));
                 }
             }
             other => diffs.push(format!("{} registro de tipo {other:?} não foi repetido", at("kind"))),
@@ -611,13 +578,13 @@ async fn replay(name: &str) -> Vec<String> {
     let want = golden["normalized_tree"].as_array().unwrap();
     let paths = |rows: &[Value]| rows.iter().map(|row| row["path"].as_str().unwrap().to_owned()).collect::<Vec<_>>();
     if paths(&tree) != paths(want) {
-        diffs.push(format!("{name} tree.paths python={:?} rust={:?}", paths(want), paths(&tree)));
+        diffs.push(format!("{name} tree.paths esperado={:?} recebido={:?}", paths(want), paths(&tree)));
     }
     for row in want {
         if let Some(actual) = tree.iter().find(|t| t["path"] == row["path"])
             && actual != row
         {
-            diffs.push(format!("{name} tree[{}] python={row} rust={actual}", row["path"]));
+            diffs.push(format!("{name} tree[{}] esperado={row} recebido={actual}", row["path"]));
         }
     }
     diffs
@@ -638,49 +605,37 @@ fn raw_path(r: &Replay, parsed: &Value) -> String {
     path.to_str().unwrap().to_owned()
 }
 
-/// O texto do erro: a captura grava `detail` como frase; o Rust responde `{code, params, msg}`.
-fn detail(parsed: &Value) -> Value {
-    match &parsed["detail"] {
-        Value::Object(detail) => detail.get("msg").cloned().unwrap_or(Value::Null),
-        other => other.clone(),
-    }
-}
-
 #[track_caller]
 fn assert_same(name: &str, diffs: Vec<String>) {
-    assert!(diffs.is_empty(), "{name}: {} divergência(s) da referência Python:\n{}", diffs.len(), diffs.join("\n"));
+    assert!(diffs.is_empty(), "{name}: {} divergência(s) da tabela:\n{}", diffs.len(), diffs.join("\n"));
 }
 
 #[tokio::test]
-#[cfg_attr(target_os = "macos", ignore = "o Python só gravou referência de Linux e Windows")]
-async fn errors_and_isolation_match_python_reference() {
-    assert_same("errors-and-isolation", replay("errors-and-isolation").await);
+async fn errors_and_isolation_sequence() {
+    assert_same("errors-and-isolation", replay("errors-and-isolation", cases::ERRORS_AND_ISOLATION).await);
 }
 
 #[tokio::test]
-#[cfg_attr(target_os = "macos", ignore = "o Python só gravou referência de Linux e Windows")]
-async fn retention_and_audio_match_python_reference() {
-    assert_same("retention-and-audio", replay("retention-and-audio").await);
+async fn retention_and_audio_sequence() {
+    assert_same("retention-and-audio", replay("retention-and-audio", cases::RETENTION_AND_AUDIO).await);
 }
 
 #[tokio::test]
-#[cfg_attr(target_os = "macos", ignore = "o Python só gravou referência de Linux e Windows")]
-async fn active_content_range_matches_python_reference() {
-    assert_same("active-content-range", replay("active-content-range").await);
+async fn active_content_range_sequence() {
+    assert_same("active-content-range", replay("active-content-range", cases::ACTIVE_CONTENT_RANGE).await);
 }
 
 /// Sem decodificador de verdade: o próprio executável roda de novo, só este teste, com o PATH vazio.
 #[tokio::test]
-#[cfg_attr(target_os = "macos", ignore = "o Python só gravou referência de Linux e Windows")]
-async fn video_without_ffmpeg_matches_python_reference() {
+async fn video_without_ffmpeg_sequence() {
     if std::env::var_os(CHILD).is_some() {
         let missing = std::process::Command::new("ffmpeg").arg("-version").output();
         assert!(missing.is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound), "o ffmpeg ainda está ao alcance; o cenário sem decodificador não rodaria");
-        return assert_same("video-without-ffmpeg", replay("video-without-ffmpeg").await);
+        return assert_same("video-without-ffmpeg", replay("video-without-ffmpeg", cases::VIDEO_WITHOUT_FFMPEG).await);
     }
     let empty = tempfile::tempdir().unwrap();
     let result = std::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", &crate::exact_name(module_path!(), "video_without_ffmpeg_matches_python_reference"), "--nocapture"])
+        .args(["--exact", &crate::exact_name(module_path!(), "video_without_ffmpeg_sequence"), "--nocapture"])
         .env("PATH", empty.path())
         .env(CHILD, "1")
         .output()

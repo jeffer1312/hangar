@@ -8,16 +8,13 @@ use std::{collections::BTreeMap, path::Path, sync::{Arc, Mutex}, time::Duration}
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, sync::Notify};
 use tokio_tungstenite::tungstenite::{Error, Message};
 
-const SOURCE: &str = "ba2db1021ab7fb801eca50a50f9509dcb825ac7e";
 const DESKTOP_TOKEN: &str = "remote-browser-contract-desktop";
 const BARRIER: &str = "__remote_browser_contract_barrier__";
 
 fn reference(name: &str) -> Value {
     let corpus = support::contract("url-gaps");
-    assert_eq!(corpus["source_commit"], SOURCE);
-    support::assert_python_platform(&corpus["platform"]);
     corpus["cases"].as_array().unwrap().iter().find(|case| case["name"] == name)
-        .unwrap_or_else(|| panic!("caso não capturado pelo Python original: {name}")).clone()
+        .unwrap_or_else(|| panic!("caso ausente da tabela: {name}")).clone()
 }
 
 async fn isolated(name: &str, deadline: u64) -> bool {
@@ -57,12 +54,44 @@ fn snapshot(dir: &Path) -> Option<BTreeMap<String, Value>> {
     }).collect())
 }
 
-fn assert_order(scene: &Scene, expected: &Value) {
-    let actual = if scene.nav_dir().is_dir() {
-        json!(std::fs::read_dir(scene.nav_dir()).unwrap().map(|entry| entry.unwrap().file_name().to_str().unwrap().to_owned())
-            .filter(|name| name.ends_with(".json")).collect::<Vec<_>>())
-    } else { Value::Null };
-    assert_eq!(actual, *expected, "enumeração diferente da captura original; usar o mesmo filesystem e a ordem de criação, sem ordenar ou ajustar esperado");
+fn directory_order(scene: &Scene) -> Vec<String> {
+    if !scene.nav_dir().is_dir() { return Vec::new(); }
+    std::fs::read_dir(scene.nav_dir()).unwrap().map(|entry| entry.unwrap().file_name().to_str().unwrap().to_owned())
+        .filter(|name| name.ends_with(".json")).collect()
+}
+
+/// A enumeração muda por sistema de arquivos: troca o nome do sidecar válido e a ordem de criação até ele
+/// vir depois de todos os outros, porque só assim os anteriores provam que não são escolhidos.
+fn write_valid_last(scene: &Scene, files: &Value, port: u16) -> Vec<String> {
+    let files = files.as_array().unwrap();
+    let required: Vec<&str> = files.iter().map(|file| file["name"].as_str().unwrap()).filter(|name| *name != "browser.json").collect();
+    assert_eq!(required.len() + 1, files.len(), "a preparação exige um navegador válido");
+    let candidates = ["browser.json".to_owned(), "z-browser.json".to_owned()].into_iter()
+        .chain((0..64).map(|index| format!("z-browser-{index:03}.json")));
+    for valid in candidates {
+        let mut renamed = files.clone();
+        renamed.iter_mut().filter(|file| file["name"] == "browser.json").for_each(|file| file["name"] = json!(valid));
+        for reverse in [false, true] {
+            if reverse { renamed.reverse(); }
+            write_files(scene, &json!(renamed), port);
+            let order = directory_order(scene);
+            let at = |name: &str| order.iter().position(|item| item == name).unwrap();
+            if required.iter().all(|name| at(name) < at(&valid)) { return order; }
+        }
+    }
+    panic!("nenhuma combinação pôs o válido por último");
+}
+
+/// Os avisos saem na ordem da enumeração, uma leva por varredura do diretório.
+fn in_directory_order(warnings: &Value, order: &[String]) -> Value {
+    let file = |row: &Value| order.iter().position(|name| row["message"].as_str().unwrap().contains(&format!("/nav/{name}:"))).unwrap();
+    let rows = warnings.as_array().unwrap();
+    let mut keyed: Vec<_> = rows.iter().enumerate().map(|(index, row)| {
+        let round = rows[..index].iter().filter(|earlier| file(earlier) == file(row)).count();
+        (round, file(row), row.clone())
+    }).collect();
+    keyed.sort_by_key(|(round, position, _)| (*round, *position));
+    json!(keyed.into_iter().map(|(_, _, row)| row).collect::<Vec<_>>())
 }
 
 fn seed(scene: &Scene, name: &str) {
@@ -251,8 +280,20 @@ async fn selection(name: &str) {
         seed(&scene, session);
         let electron = input["files"].as_array().is_some_and(|files| files.iter().any(|file| file["name"] == "electron.json"));
         let peer = Peer::new(input["evaluate"].clone(), electron).await;
-        write_files(&scene, &input["files"], peer.native.address.port());
-        assert_order(&scene, &input["directory_order"]);
+        let port = peer.native.address.port();
+        let order = if name.contains("before_valid") || name == "ws_underscore_match_is_ignored" {
+            write_valid_last(&scene, &input["files"], port)
+        } else {
+            write_files(&scene, &input["files"], port);
+            directory_order(&scene)
+        };
+        // Vence o primeiro que a enumeração devolve: a linha certa é a de quem veio primeiro aqui.
+        let first_match;
+        let expected = if name.starts_with("ws_first_match_creation_order_") {
+            let at = |file: &str| order.iter().position(|item| item == file).unwrap();
+            first_match = reference(if at("a.json") < at("b.json") { "ws_first_match_creation_order_a_b" } else { "ws_first_match_creation_order_b_a" });
+            &first_match["expected"]["phases"][0]
+        } else { expected };
         let before = snapshot(&scene.nav_dir());
         logs.clear();
         let mut events = Vec::new();
@@ -278,10 +319,10 @@ async fn selection(name: &str) {
             assert_eq!(json!(actual.electron_cdp), expected["electron_cdp"]);
         }
         if name == "ws_unreadable_and_non_objects_before_valid" {
-            assert!(!expected["warnings"].as_array().unwrap().is_empty(), "a captura original precisa conter os avisos dos arquivos ilegíveis");
+            assert!(!expected["warnings"].as_array().unwrap().is_empty(), "a tabela precisa conter os avisos dos arquivos ilegíveis");
         }
-        if input["directory_order"].is_null() { assert!(logs.0.lock().unwrap().is_empty()); }
-        else { logs.assert_warnings(&expected["warnings"]); }
+        if input["files"].is_null() { assert!(logs.0.lock().unwrap().is_empty()); }
+        else { logs.assert_warnings(&in_directory_order(&expected["warnings"], &order)); }
         assert_eq!(expected["files_unchanged"], true);
         assert_eq!(snapshot(&scene.nav_dir()), before);
         peer.close().await;
@@ -304,7 +345,6 @@ selection_cases! {
 async fn ready(scene: &Scene, peer: &Peer, input: &Value) -> Client {
     seed(scene, "nav-contract");
     write_files(scene, &input["initial_files"], peer.native.address.port());
-    assert_order(scene, &input["initial_directory_order"]);
     let (mut client, response) = connect(scene, "nav-contract").await.unwrap();
     assert_eq!(response.status(), 101);
     until(&mut client, &mut Vec::new(), |event| event["url"] == "http://contract.test/ready").await;
@@ -329,10 +369,16 @@ async fn commands(name: &str) {
     let peer = Peer::new(json!({}), false).await;
     let mut client = ready(&scene, &peer, &case["inputs"]).await;
     let mut outcomes = Vec::new();
+    let mut order = Vec::new();
     logs.clear();
     for stage in case["inputs"]["stages"].as_array().unwrap() {
-        write_files(&scene, &stage["files"], peer.native.address.port());
-        assert_order(&scene, &stage["directory_order"]);
+        let port = peer.native.address.port();
+        order = if name == "cmd_warning_and_non_objects_before_valid" {
+            write_valid_last(&scene, &stage["files"], port)
+        } else {
+            write_files(&scene, &stage["files"], port);
+            directory_order(&scene)
+        };
         let before = snapshot(&scene.nav_dir());
         client.send(Message::Text(json!({"t":"layout", "modo":"mobile"}).to_string().into())).await.unwrap();
         outcomes.push(outcome(&mut client).await);
@@ -343,9 +389,9 @@ async fn commands(name: &str) {
     assert_eq!(json!(outcomes), case["expected"]["outcomes"]);
     assert_eq!(json!(peer.context.observed.lock().unwrap().requests), case["expected"]["requests"]);
     if name == "cmd_warning_and_non_objects_before_valid" {
-        assert!(!case["expected"]["warnings"].as_array().unwrap().is_empty(), "a captura original precisa conter os avisos do leitor de comandos");
+        assert!(!case["expected"]["warnings"].as_array().unwrap().is_empty(), "a tabela precisa conter os avisos do leitor de comandos");
     }
-    logs.assert_warnings(&case["expected"]["warnings"]);
+    logs.assert_warnings(&in_directory_order(&case["expected"]["warnings"], &order));
     scene.upstream.assert_no_browser_or_discovery_calls();
     peer.close().await;
     scene.close().await;
@@ -424,7 +470,6 @@ async fn cmd_default_read_timeout_45_seconds() {
         while let Some(result) = connections.join_next().await { result.unwrap(); }
     });
     write_files(&scene, &case["inputs"]["files"], address.port());
-    assert_order(&scene, &case["inputs"]["directory_order"]);
     let before = snapshot(&scene.nav_dir());
     logs.clear();
     let keeper = tokio::spawn(async {
@@ -458,7 +503,6 @@ async fn cmd_default_read_timeout_45_seconds() {
         if !wall.is_finished() { wall.await.unwrap(); }
         actual.expect("o comando não terminou com o relógio parado no prazo original de 45 s")
     };
-    eprintln!("prazo de leitura: Python original={} s; Rust virtual={} s", case["expected"]["elapsed_seconds"], deadline.as_secs_f64());
     assert_eq!(json!([actual]), case["expected"]["outcomes"]);
     assert!(peer.context.observed.lock().unwrap().requests.is_empty());
     barrier(&mut client, &mut Vec::new()).await;

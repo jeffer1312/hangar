@@ -5,6 +5,7 @@ import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
 import { isOwnMachine, subscribeExpoPushForServer, type Server } from '@hangar/core';
 import { useServers } from '../../stores/servers';
+import { openVaultRequest } from '../vault/target';
 import { getLocale } from '../../paraglide/runtime';
 
 // Convite (token de convidado), desligado e entrada montada para par externo não recebem push do dono.
@@ -86,9 +87,13 @@ export function pushRegistrationKey(servers: Server[], locale: string): string {
 }
 
 export function openFromNotification(data: unknown, servers: Server[]): void {
-  const d = (data ?? {}) as { server?: unknown; session?: unknown };
+  const d = (data ?? {}) as { server?: unknown; session?: unknown; server_id?: unknown; request_id?: unknown };
   const known = typeof d.server === 'string' && servers.some((s) => s.id === d.server);
-  if (known && typeof d.session === 'string' && d.session) {
+  // Pedido do cofre: a folha dele mora na lista, não no chat da sessão que pediu.
+  if (typeof d.request_id === 'string' && d.request_id && typeof d.server_id === 'string' && servers.some((s) => s.id === d.server_id)) {
+    openVaultRequest({ serverId: d.server_id, requestId: d.request_id });
+    router.push('/');
+  } else if (known && typeof d.session === 'string' && d.session) {
     router.push({ pathname: '/s/[server]/[name]', params: { server: d.server as string, name: d.session } });
   } else {
     router.push('/');

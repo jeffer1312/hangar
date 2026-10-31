@@ -2286,8 +2286,8 @@ impl Hangar {
         use crate::browser::{control::Reply, server::Request};
         fn answer(reply: futures::channel::oneshot::Sender<Reply>, text: String) { let _ = reply.send(Reply::Text(text)); }
         let missing = |key: &str| format!("erro: a sessao {key} nao tem navegador aberto");
-        let (key, verb, args, tab, reply) = match request {
-            Request::Command { key, verb, args, tab, reply } => (key, verb, args, tab, reply),
+        let (key, verb, args, tab, secret, reply) = match request {
+            Request::Command { key, verb, args, tab, secret, reply } => (key, verb, args, tab, secret, reply),
             Request::Cdp { key, method, params, reply } => {
                 let Some(cdp) = self.side.browsers.get(&key).and_then(|b| b.read(cx).relay_cdp()) else { let _ = reply.send(Err(missing(&key))); return };
                 let call = cdp.call(&method, params);
@@ -2359,7 +2359,7 @@ impl Hangar {
         cx.spawn(async move |_, cx| {
             #[cfg(target_os = "windows")]
             if let Some(settle) = settle { settle.await; }
-            let _ = reply.send(ctl.run(&verb, &args).await);
+            let _ = reply.send(ctl.run_with(&verb, &args, secret).await);
             let _ = browser.update(cx, |panel, cx| panel.agent_finished(cx));
         }).detach();
     }

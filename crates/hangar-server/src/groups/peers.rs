@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use serde_json::{Map, Value};
+use zeroize::Zeroizing;
 
 use crate::transcript::py::py_str;
 
@@ -14,7 +15,13 @@ const TOTAL_TIMEOUT: Duration = Duration::from_secs(16);
 /// espera até `federation::JOIN_WAIT`, `op: message` até `fed_notice::DELIVER_WAIT`): maior que as
 /// duas, senão quem pede desiste antes do resultado e relata o contrário do que a dona fez.
 pub const OWNER_WAIT_TIMEOUT: Duration = Duration::from_secs(20);
-const MAX_BODY: usize = 1 << 20;
+/// Leitura e prazo total da consulta longa do cofre (`/api/vault/requests/{id}/wait`): acima do que
+/// a dona segura (`vault::wire::WAIT_HOLD`), senão quem espera desiste antes do `pending`.
+pub const LONG_POLL_TIMEOUT: Duration = Duration::from_secs(30);
+/// Corpo com senha sem `Content-Length`: cobre a maior senha do cofre (16 KiB) com todo byte
+/// escapado no JSON, para o vetor não crescer.
+const SECRET_RESERVE: usize = 128 * 1024;
+pub(crate) const MAX_BODY: usize = 1 << 20;
 /// Texto do erro de sucesso acima de `MAX_BODY`; quem lê pode pedir menos.
 pub const TOO_LARGE: &str = "resposta maior que 1 MiB";
 
@@ -114,10 +121,19 @@ impl PeerError {
     }
 }
 
-pub struct PeerClient { book: Arc<PeerBook>, http: OnceLock<reqwest::Client>, waiting: OnceLock<reqwest::Client> }
+pub struct PeerClient {
+    book: Arc<PeerBook>,
+    http: OnceLock<reqwest::Client>,
+    waiting: OnceLock<reqwest::Client>,
+    /// `send_secret` (curto e longo): sem redirect.
+    secret: OnceLock<reqwest::Client>,
+    long: OnceLock<reqwest::Client>,
+}
 
 impl PeerClient {
-    pub fn new(book: PeerBook) -> Self { Self { book: Arc::new(book), http: OnceLock::new(), waiting: OnceLock::new() } }
+    pub fn new(book: PeerBook) -> Self {
+        Self { book: Arc::new(book), http: OnceLock::new(), waiting: OnceLock::new(), secret: OnceLock::new(), long: OnceLock::new() }
+    }
 
     pub fn enabled_ids(&self) -> Vec<String> { self.book.enabled_ids() }
 
@@ -170,6 +186,56 @@ impl PeerClient {
         request(http, server, &format!("{}{path}", cfg.base_url), Some(&cfg.token), method, body).await
     }
 
+    /// Como `call`, sem redirect e com o corpo 2xx cru em `Zeroizing` até `limit`: a resposta pode levar
+    /// senha e nunca vira `Value`, que não zera. Recusa (fora de 2xx) volta como no `call`. `long`: a
+    /// consulta longa do cofre, sem o `READ_TIMEOUT` de 8 s, leitura e total de `LONG_POLL_TIMEOUT`.
+    pub(crate) async fn send_secret(&self, long: bool, server: &str, method: reqwest::Method, path: &str, body: Option<(Vec<u8>, &'static str)>,
+                         limit: usize) -> Result<(u16, Zeroizing<Vec<u8>>), PeerError> {
+        let book = self.book.clone();
+        let key = server.to_owned();
+        let cfg = tokio::task::spawn_blocking(move || book.get(&key)).await.ok().flatten().ok_or(PeerError::Unknown)?;
+        let (slot, read, total) = if long { (&self.long, LONG_POLL_TIMEOUT, LONG_POLL_TIMEOUT) } else { (&self.secret, READ_TIMEOUT, TOTAL_TIMEOUT) };
+        let http = match slot.get() {
+            Some(http) => http,
+            None => {
+                // Sem redirect: o 3xx volta como recusa, e nada com senha vai a outro endereço.
+                let built = crate::http_client().redirect(reqwest::redirect::Policy::none())
+                    .connect_timeout(READ_TIMEOUT).read_timeout(read).timeout(total).build()
+                    .map_err(|e| transport(server, &e))?;
+                slot.get_or_init(|| built)
+            }
+        };
+        let kind = body.as_ref().map_or("application/json", |(_, kind)| *kind);
+        let mut req = http.request(method, format!("{}{path}", cfg.base_url))
+            .header(reqwest::header::CONTENT_TYPE, kind).bearer_auth(&cfg.token);
+        if let Some((body, _)) = body { req = req.body(body); }
+        let mut resp = req.send().await.map_err(|e| transport(server, &e))?;
+        let status = resp.status();
+        // Capacidade reservada antes: o vetor que cresce deixa cópias do corpo sem zerar.
+        let mut raw = Zeroizing::new(Vec::with_capacity(resp.content_length().map_or(SECRET_RESERVE.min(limit), |n| (n as usize).min(limit))));
+        loop {
+            match resp.chunk().await {
+                Ok(Some(chunk)) if raw.len() + chunk.len() > limit => {
+                    if status.is_success() { return Err(PeerError::Transport(TOO_LARGE.into())); }
+                    break;
+                }
+                Ok(Some(chunk)) => raw.extend_from_slice(&chunk),
+                Ok(None) => break,
+                Err(e) if status.is_success() => return Err(transport(server, &e)),
+                Err(_) => break,
+            }
+        }
+        if !status.is_success() {
+            let text = String::from_utf8_lossy(&raw);
+            let detail = match serde_json::from_str::<Value>(&text) {
+                Ok(Value::Object(mut map)) => map.remove("detail").unwrap_or_else(|| Value::String(text.clone().into_owned())),
+                _ => Value::String(text.into_owned()),
+            };
+            return Err(PeerError::Refused { status: status.as_u16(), detail });
+        }
+        Ok((status.as_u16(), raw))
+    }
+
     /// `call_group` de um pedido à dona que espera outras máquinas (`op: join`, `op: message`), com
     /// `OWNER_WAIT_TIMEOUT`.
     pub async fn call_group_waiting(&self, server: &str, path: &str, body: &Value) -> Result<Value, PeerError> {
@@ -204,6 +270,8 @@ impl PeerClient {
         }
     }
 }
+
+pub(crate) fn json_body(body: Option<&Value>) -> Option<(Vec<u8>, &'static str)> { body.map(|b| (b.to_string().into_bytes(), "application/json")) }
 
 /// O cliente com os prazos do `peers.call`: 8 s por leitura e 16 s no total.
 pub(crate) fn client(builder: reqwest::ClientBuilder) -> reqwest::Result<reqwest::Client> {

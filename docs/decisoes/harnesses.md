@@ -1286,7 +1286,7 @@ capturava. O Python de reserva (`registry.list_with_state`) tem o mesmo defeito.
 
 Conserto: o `POST /internal/list/facts` leva `held` (`pergunta_pendente` das linhas Claude com
 terminal, contrato 32), e a lista a mostra como o `Monitor` (`terminal_state::held_question`:
-"ferramenta: resumo", Yes/No). Sequência gravada em `gen_terminal.py`
+"ferramenta: resumo", Yes/No). Sequência em `tests/it/contract_terminal_cases.rs`
 (`permission_card_after_bash`); `contract_terminal::permission_card_after_bash` confere lista e
 `Monitor` rodada a rodada.
 
@@ -4836,8 +4836,8 @@ novo catálogo corrige essa exceção, preservando a exclusão dos demais comand
 A [referência oficial de comandos](https://code.claude.com/docs/en/commands) documenta a execução
 sem terminal e o limite das alterações de MCP de plugins.
 
-As fixtures de `backend/tests/fixtures/contract/commands/` foram geradas executando o Python do
-commit de origem, com HOME temporário. A comparação conserva campos, nulos, ordem, nomes do
+Os casos de `crates/hangar-server/tests/it/commands_cases.rs` foram capturados executando o Python
+do commit de origem, com HOME temporário. A comparação conserva campos, nulos, ordem, nomes do
 frontmatter e a prioridade da primeira ocorrência. Os casos incluem YAML 1.1, chaves repetidas,
 tags, BOM/CRLF e metadados inválidos; o scanner do catálogo de configurações tem outras regras
 e não foi substituto para essa composição.

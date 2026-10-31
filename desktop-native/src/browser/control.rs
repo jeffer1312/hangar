@@ -5,7 +5,7 @@ use std::{cell::{Cell, RefCell}, collections::{HashMap, HashSet, VecDeque}, futu
 use futures::{future::{Either, select}, lock::Mutex};
 use serde_json::{Value, json};
 
-use super::preview_fmt::{Layout, SNAPSHOT_MAX, capped, compact_ax, key_event, parse_layout};
+use super::preview_fmt::{Layout, SNAPSHOT_MAX, capped, compact_ax, key_event, mask, mask_forms, parse_layout};
 
 pub trait Page {
     fn call(&self, method: &str, params: Value) -> impl Future<Output = Result<Value, String>>;
@@ -77,13 +77,13 @@ const HIDDEN_VIEWPORT: (u32, u32) = (1280, 800);
 const MOBILE_UA: &str = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1";
 /// Dois quadros: só o segundo garante que o que a ação mudou já está pintado. O timer cobre página escondida.
 const FRAME: &str = "new Promise(r=>{requestAnimationFrame(()=>requestAnimationFrame(r));setTimeout(r,100)})";
-/// '' = dá para digitar; senão, o que está com foco.
-const FOCUS: &str = "(()=>{const a=document.activeElement;if(!a||a===document.body)return 'nada';const t=a.tagName.toLowerCase();const ok=a.isContentEditable||t==='textarea'||(t==='input'&&!/^(button|submit|reset|checkbox|radio|file|image|range|color)$/i.test(a.type||''));return ok?'':t+(a.type?'['+a.type+']':'')})()";
+/// '' = dá para digitar; senão, o que está com foco. Desce o shadow DOM: lá o foco do documento é só o invólucro.
+const FOCUS: &str = "(()=>{let a=document.activeElement;while(a&&a.shadowRoot&&a.shadowRoot.activeElement)a=a.shadowRoot.activeElement;if(!a||a===document.body)return 'nada';const t=a.tagName.toLowerCase();const ok=a.isContentEditable||t==='textarea'||(t==='input'&&!/^(button|submit|reset|checkbox|radio|file|image|range|color)$/i.test(a.type||''));return ok?'':t+(a.type?'['+a.type+']':'')})()";
 const PROBE_READ: &str = "(typeof window.__hangarSonda===\"undefined\"?2:window.__hangarSonda)";
 /// Lista nativa do `<select>` aberta: ela consome a tecla e o documento não vê o keydown.
 const OPEN_LIST: &str = "(()=>{const a=document.activeElement;try{return !!a&&a.tagName==='SELECT'&&a.matches(':open')}catch(e){return false}})()";
 /// Verbos que mudam a página: pausado, só estes são recusados; ler continua livre.
-const ACTING: [&str; 12] = ["click", "fill", "type", "press", "hover", "eval", "layout", "tema", "goto", "back", "reload", "dialog"];
+const ACTING: [&str; 13] = ["click", "fill", "fill-secret", "type", "press", "hover", "eval", "layout", "tema", "goto", "back", "reload", "dialog"];
 /// Com diálogo aberto a página não roda script: só estes respondem sem ele.
 const WITH_DIALOG: [&str; 3] = ["url", "estado", "console"];
 pub const PAUSED: &str = "erro: o usuario pausou o navegador; espere ele clicar em Retomar no painel e tente de novo";
@@ -117,7 +117,34 @@ struct State {
     /// Conta navegações do quadro principal (documento novo ou só o endereço): `goto`/`back`/`reload` esperam mudar.
     navs: u64,
     enabled: HashSet<&'static str>,
+    /// Campos (`backendNodeId`) com senha do cofre: o snapshot não mostra o valor deles. Somem na navegação.
+    marked: HashSet<i64>,
+    /// Senhas já preenchidas, trocadas por `••••` em toda resposta enquanto o navegador viver (a página seguinte
+    /// pode ecoá-las numa URL ou no console).
+    secrets: Vec<Secret>,
 }
+
+/// Senha do cofre na memória do controlador, com as formas que a resposta troca por `••••` (preenchidas ao guardá-la):
+/// tudo zerado ao sair. Sem `Debug` de propósito.
+pub struct Secret { value: String, forms: Vec<String> }
+
+impl Secret {
+    pub fn new(value: String) -> Self { Self { value, forms: Vec::new() } }
+    pub fn as_str(&self) -> &str { &self.value }
+}
+
+impl Drop for Secret {
+    fn drop(&mut self) {
+        for text in std::iter::once(&mut self.value).chain(self.forms.iter_mut()) {
+            // SAFETY: zero é UTF-8 válido; a escrita volátil não é cortada pelo compilador.
+            for byte in unsafe { text.as_bytes_mut() } { unsafe { std::ptr::write_volatile(byte, 0) } }
+        }
+        std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// O alvo é o elemento com foco na raiz dele (documento, shadow root ou iframe) e, se for, se é campo de senha.
+const TARGET_FOCUS: &str = "function(){const r=this.getRootNode&&this.getRootNode();if(!r||r.activeElement!==this)return 'fora';return this.tagName==='INPUT'&&this.type==='password'?'senha':'campo'}";
 
 pub struct Controller<P: Page> {
     page: P,
@@ -167,7 +194,7 @@ impl<P: Page> Controller<P> {
     pub fn new(page: P, hidden: bool) -> Self {
         Self { page, turn: Mutex::new(()), wanted_hidden: Cell::new(hidden), paused: Cell::new(false), picking: Cell::new(false), on_activity: RefCell::new(None), on_layout: RefCell::new(None), on_page_error: RefCell::new(None), dialog_open: RefCell::new(None), strip_shown: Cell::new(false), settle: Cell::new(false), dialog_answered: Cell::new(false), dialog_signal: RefCell::new(None), on_dialog_answer: RefCell::new(None), state: RefCell::new(State { refs: HashMap::new(), console: VecDeque::new(),
             network: VecDeque::new(), inflight: HashSet::new(), requests: HashMap::new(), dialog: None, last_network: Instant::now(), noise: HashSet::new(), theme: "sistema", layout: Layout::Desktop,
-            hidden: false, scale: None, navigated: false, navs: 0, enabled: HashSet::new() }) }
+            hidden: false, scale: None, navigated: false, navs: 0, enabled: HashSet::new(), marked: HashSet::new(), secrets: Vec::new() }) }
     }
 
     /// Algum verbo segurando a vez agora (um `wait` longo, por exemplo).
@@ -289,7 +316,8 @@ impl<P: Page> Controller<P> {
             "Page.frameNavigated" if p["frame"]["parentId"].is_null() => Some(None),
             _ => None,
         };
-        if let (Some(error), Some(f)) = (error, self.on_page_error.borrow().as_ref()) { f(error); }
+        // O painel guarda e mostra esse texto: a senha que a página registrou não chega nele.
+        if let (Some(error), Some(f)) = (error, self.on_page_error.borrow().as_ref()) { f(error.map(|text| self.masked(text))); }
     }
 
     fn log_event(&self, method: &str, p: &Value) {
@@ -357,7 +385,22 @@ impl<P: Page> Controller<P> {
         }
     }
 
-    pub async fn run(&self, verb: &str, args: &[String]) -> Reply {
+    pub async fn run(&self, verb: &str, args: &[String]) -> Reply { self.run_with(verb, args, None).await }
+
+    /// `secret`: o valor do `fill-secret`, que nunca vem nos `args`. Toda resposta de texto sai com as senhas já
+    /// preenchidas trocadas por `••••`.
+    pub async fn run_with(&self, verb: &str, args: &[String], secret: Option<Secret>) -> Reply {
+        match self.run_inner(verb, args, secret).await {
+            Reply::Text(text) => Reply::Text(self.masked(text)),
+            png => png,
+        }
+    }
+
+    fn masked(&self, text: String) -> String {
+        self.state.borrow().secrets.iter().fold(text, |out, secret| mask(&out, &secret.forms))
+    }
+
+    async fn run_inner(&self, verb: &str, args: &[String], mut secret: Option<Secret>) -> Reply {
         if let Some(why) = self.blocked().filter(|_| ACTING.contains(&verb)) { return Reply::Text(why.into()); }
         // Antes da vez: o verbo que segura a vez pode estar parado justamente no diálogo.
         if verb == "dialog" { return Reply::Text(self.answer_dialog(args).await); }
@@ -389,6 +432,7 @@ impl<P: Page> Controller<P> {
             "snapshot" => self.snapshot_verb(args).await.map(Reply::Text),
             "click" => self.click(arg(0)).await.map(Reply::Text),
             "fill" => self.fill(arg(0), arg(1)).await.map(Reply::Text),
+            "fill-secret" => self.fill_secret(arg(0), arg(1), secret.take()).await.map(Reply::Text),
             "type" => self.type_text(arg(0)).await.map(Reply::Text),
             "press" => self.press(arg(0)).await.map(Reply::Text),
             "hover" => self.hover(arg(0)).await.map(Reply::Text),
@@ -429,6 +473,7 @@ impl<P: Page> Controller<P> {
         {
             let mut s = self.state.borrow_mut();
             s.refs.clear();
+            s.marked.clear();
             // Requisição cancelada pela navegação nem sempre vira loadingFailed.
             s.inflight.clear();
         }
@@ -468,8 +513,15 @@ impl<P: Page> Controller<P> {
 
     async fn tree(&self, refs_only: bool) -> Result<Vec<String>, String> {
         self.enable("Accessibility").await?;
-        let tree = self.page.call("Accessibility.getFullAXTree", json!({})).await?;
-        let out = compact_ax(tree["nodes"].as_array().map_or(&[][..], Vec::as_slice), refs_only);
+        let mut tree = self.page.call("Accessibility.getFullAXTree", json!({})).await?;
+        let mut nodes = tree["nodes"].take();
+        {
+            let marked = &self.state.borrow().marked;
+            for node in nodes.as_array_mut().into_iter().flatten() {
+                if node["backendDOMNodeId"].as_i64().is_some_and(|id| marked.contains(&id)) { node["value"] = Value::Null; }
+            }
+        }
+        let out = compact_ax(nodes.as_array().map_or(&[][..], Vec::as_slice), refs_only);
         self.state.borrow_mut().refs = out.refs;
         Ok(out.lines)
     }
@@ -589,6 +641,52 @@ impl<P: Page> Controller<P> {
         self.page.call("Input.insertText", json!({"text": text})).await?;
         self.frame().await;
         Ok(format!("ok: fill {r}"))
+    }
+
+    /// `fill-secret @eN username|password`, com o valor do cofre fora dos args. O valor só entra no próprio alvo com
+    /// foco, e a senha só em `input[type=password]`: digitada noutro campo ela apareceria na tela e no snapshot.
+    async fn fill_secret(&self, r: &str, kind: &str, secret: Option<Secret>) -> Result<String, String> {
+        let Some(secret) = secret.filter(|s| !s.as_str().is_empty()) else {
+            return Ok("erro: fill-secret: so pela tool vault_fill, com o valor no corpo do pedido".into());
+        };
+        let password = match kind {
+            "password" => true,
+            "username" => false,
+            _ => return Ok("erro: fill-secret: o campo e username ou password".into()),
+        };
+        let clicked = self.click_as("fill-secret", r).await?;
+        if clicked.starts_with("erro:") { return Ok(clicked); }
+        if let Some(why) = self.blocked() { return Ok(why.into()); }
+        if let Some(focus) = self.not_editable().await? {
+            return Ok(format!("erro: fill-secret {r}: o clique nao deixou um campo de texto com foco (foco em {focus}) — rode snapshot"));
+        }
+        let Some(id) = self.state.borrow().refs.get(r).copied() else { return Ok(format!("erro: ref {r} nao existe (rode snapshot de novo)")) };
+        self.enable("DOM").await?;
+        let node = self.page.call("DOM.resolveNode", json!({"backendNodeId": id})).await?;
+        let object = node["object"]["objectId"].as_str().ok_or("fill-secret: o alvo nao tem objeto na pagina")?;
+        let found = self.page.call("Runtime.callFunctionOn", json!({"objectId": object, "functionDeclaration": TARGET_FOCUS, "returnByValue": true})).await?;
+        match returned(&found)?.as_str() {
+            Some("senha") => {}
+            Some("campo") if !password => {}
+            Some("campo") => return Ok(format!("erro: erro_cofre_campo_nao_senha: {r} nao e um campo de senha (input type=password)")),
+            _ => return Ok(format!("erro: fill-secret {r}: o foco nao ficou no campo da ref — rode snapshot")),
+        }
+        self.page.call("Input.dispatchKeyEvent", json!({"type": "keyDown", "commands": ["selectAll"]})).await?;
+        // shortcut: a cópia do valor no JSON do CDP não é zerada; trocar se o transporte passar a guardar os pedidos.
+        let insert = json!({"text": secret.as_str()});
+        // Registrada antes de digitar: se o envio falhar depois de o texto chegar à página, o snapshot já a esconde.
+        if password {
+            let mut s = self.state.borrow_mut();
+            s.marked.insert(id);
+            if !s.secrets.iter().any(|known| known.as_str() == secret.as_str()) {
+                let mut secret = secret;
+                secret.forms = mask_forms(secret.as_str());
+                s.secrets.push(secret);
+            }
+        }
+        self.page.call("Input.insertText", insert).await?;
+        self.frame().await;
+        Ok(format!("ok: fill-secret {r}"))
     }
 
     async fn type_text(&self, text: &str) -> Result<String, String> {
@@ -990,6 +1088,106 @@ mod tests {
     fn snapshot_lists_refs() {
         let c = ctl(|m, _| Ok(if m == "Accessibility.getFullAXTree" { tree() } else { json!({}) }));
         assert_eq!(text(block_on(c.run("snapshot", &[]))), "- RootWebArea \"x\"\n  - button \"Ok\" [ref=@e1]");
+    }
+
+    const SECRET: &str = "S3nh@ \"x\"/é";
+
+    /// Página com um campo de senha (`@e1`, backend 7) que a árvore mostra com o valor cru, como mostraria com
+    /// as senhas expostas à acessibilidade; `focus` é o que o alvo responde (`senha`, `campo`, `fora`).
+    fn login_page(focus: &'static str) -> Controller<Fake> { ctl(move |m, p| Ok(login_answer(focus, m, p))) }
+
+    fn login_answer(focus: &'static str, m: &str, p: &Value) -> Value {
+        match m {
+            "Accessibility.getFullAXTree" => json!({"nodes": [
+                {"nodeId": "1", "role": {"value": "RootWebArea"}, "name": {"value": "Login"}, "childIds": ["2"]},
+                {"nodeId": "2", "role": {"value": "textbox"}, "name": {"value": "Senha"}, "value": {"value": SECRET}, "backendDOMNodeId": 7, "childIds": []}]}),
+            "DOM.getBoxModel" => json!({"model": {"content": [0, 0, 20, 0, 20, 10, 0, 10]}}),
+            "DOM.resolveNode" => json!({"object": {"objectId": "o7"}}),
+            "Runtime.callFunctionOn" => json!({"result": {"value": focus}}),
+            "Runtime.evaluate" => match p["expression"].as_str().unwrap_or("") {
+                e if e.starts_with("(typeof window.__hangarSonda") => json!({"result": {"value": 1}}),
+                e if e.contains("a.shadowRoot.activeElement;if(!a") => json!({"result": {"value": ""}}),
+                // O `eval` e o `text` leem o campo e devolvem o valor como a página o tem.
+                e if e.contains("querySelector('input').value") || e == "document.body.innerText" => json!({"result": {"value": SECRET}}),
+                _ => json!({"result": {}}),
+            },
+            _ => json!({}),
+        }
+    }
+
+    fn fill_secret(c: &Controller<Fake>, kind: &str) -> String {
+        block_on(c.run("snapshot", &[]));
+        text(block_on(c.run_with("fill-secret", &s(&["@e1", kind]), Some(Secret::new(SECRET.into())))))
+    }
+
+    #[test]
+    fn every_secret_filled_in_the_session_stays_masked() {
+        let c = login_page("senha");
+        block_on(c.run("snapshot", &[]));
+        let secret = |i: usize| format!("S3nh@-distinta-{i}");
+        for i in 0..9 {
+            assert_eq!(text(block_on(c.run_with("fill-secret", &s(&["@e1", "password"]), Some(Secret::new(secret(i)))))), "ok: fill-secret @e1");
+        }
+        c.on_event("Runtime.consoleAPICalled", &json!({"type": "log", "args": [{"type": "string", "value": secret(0)}]}));
+        assert!(!text(block_on(c.run("console", &[]))).contains("distinta"), "a primeira de nove segue escondida");
+    }
+
+    #[test]
+    fn a_page_error_with_the_secret_reaches_the_panel_masked() {
+        let c = login_page("senha");
+        assert_eq!(fill_secret(&c, "password"), "ok: fill-secret @e1");
+        let seen = std::rc::Rc::new(RefCell::new(None));
+        let sink = seen.clone();
+        c.on_page_error(move |error| *sink.borrow_mut() = error);
+        c.on_event("Runtime.consoleAPICalled", &json!({"type": "error", "args": [{"type": "string", "value": format!("falhou com {SECRET}")}]}));
+        let shown = seen.borrow().clone().expect("o erro chega ao painel");
+        assert!(shown.contains("falhou com") && !shown.contains("S3nh"), "{shown}");
+    }
+
+    #[test]
+    fn a_filled_secret_never_comes_back_in_snapshot_eval_or_text() {
+        let c = login_page("senha");
+        assert_eq!(fill_secret(&c, "password"), "ok: fill-secret @e1");
+        let typed: Vec<Value> = c.page.calls.borrow().iter().filter(|(m, _)| m == "Input.insertText").map(|(_, p)| p.clone()).collect();
+        assert_eq!(typed, vec![json!({"text": SECRET})]);
+        let snapshot = text(block_on(c.run("snapshot", &[])));
+        assert_eq!(snapshot, "- RootWebArea \"Login\"\n  - textbox \"Senha\" [ref=@e1]", "o nó marcado sai sem value");
+        assert_eq!(text(block_on(c.run("eval", &s(&["document.querySelector('input').value"])))), format!("ok: \"{}\"", crate::browser::preview_fmt::MASK));
+        assert!(!text(block_on(c.run("text", &[]))).contains("S3nh"));
+        c.on_event("Runtime.consoleAPICalled", &json!({"type": "log", "args": [{"type": "string", "value": SECRET}]}));
+        assert!(!text(block_on(c.run("console", &[]))).contains("S3nh"));
+    }
+
+    #[test]
+    fn a_failed_insert_still_hides_the_secret() {
+        let c = ctl(|m, p| if m == "Input.insertText" { Err("caiu".into()) } else { Ok(login_answer("senha", m, p)) });
+        assert!(!fill_secret(&c, "password").starts_with("ok:"));
+        assert_eq!(text(block_on(c.run("snapshot", &[]))), "- RootWebArea \"Login\"\n  - textbox \"Senha\" [ref=@e1]");
+        assert!(!text(block_on(c.run("text", &[]))).contains("S3nh"));
+    }
+
+    #[test]
+    fn a_password_only_goes_into_a_password_field() {
+        let c = login_page("campo");
+        assert!(fill_secret(&c, "password").starts_with("erro: erro_cofre_campo_nao_senha:"));
+        let c = login_page("fora");
+        assert!(fill_secret(&c, "password").starts_with("erro: fill-secret @e1: o foco nao ficou"));
+        assert!(!methods(&c).contains(&"Input.insertText".to_string()), "nada digitado fora do campo de senha");
+        // O usuário vai em campo de texto, e sem valor o verbo nem toca a página.
+        assert_eq!(fill_secret(&login_page("campo"), "username"), "ok: fill-secret @e1");
+        let c = login_page("senha");
+        assert!(text(block_on(c.run("fill-secret", &s(&["@e1", "password"])))).starts_with("erro: fill-secret: so pela tool vault_fill"));
+    }
+
+    #[test]
+    fn navigation_drops_the_mark_but_keeps_masking() {
+        let c = login_page("senha");
+        fill_secret(&c, "password");
+        c.on_event("Page.frameNavigated", &json!({"frame": {"id": "f"}}));
+        block_on(c.run("url", &[]));
+        assert!(c.state.borrow().marked.is_empty());
+        c.on_event("Network.responseReceived", &json!({"requestId": "1", "response": {"status": 302, "url": format!("https://x.test/?p={}", url::form_urlencoded::byte_serialize(SECRET.as_bytes()).collect::<String>())}}));
+        assert!(!text(block_on(c.run("network", &[]))).contains("S3nh"));
     }
 
     #[test]

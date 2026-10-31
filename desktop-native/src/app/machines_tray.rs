@@ -12,13 +12,15 @@ impl Tray {
 impl Hangar {
     pub(super) fn ungrouped_tab_targets(&self) -> Vec<Target> {
         let active = self.active_key();
-        let mut targets = self.sessions.iter().filter(|s| !self.sidebar.is_hidden(&active, &s.name))
+        let open = self.selected_target();
+        let listed = |key: &str, s: &SessionInfo| !self.sidebar.is_hidden(key, &s.name) && sidebar::listed_on(s, &Target::new(key, &s.name), open.as_ref());
+        let mut targets = self.sessions.iter().filter(|s| listed(&active, s))
             .map(|s| Target::new(&active, &s.name)).collect::<Vec<_>>();
         if appearance::get().show_remote_tabs {
             for entry in self.servers.iter().filter(|s| servers::has_section(s)) {
                 let key = servers::norm(&entry.address);
                 if key == active { continue; }
-                targets.extend(self.sessions_of(&key).iter().filter(|s| !self.sidebar.is_hidden(&key, &s.name))
+                targets.extend(self.sessions_of(&key).iter().filter(|s| listed(&key, s))
                     .map(|s| Target::new(&key, &s.name)));
             }
         }
@@ -33,7 +35,9 @@ impl Hangar {
     }
 
     fn tray_sessions<'a>(&'a self, key: &str) -> Vec<&'a SessionInfo> {
-        let mut sessions: Vec<_> = self.sessions_of(key).iter().filter(|s| !self.sidebar.is_hidden(key, &s.name)).collect();
+        let open = self.selected_target();
+        let mut sessions: Vec<_> = self.sessions_of(key).iter()
+            .filter(|s| !self.sidebar.is_hidden(key, &s.name) && sidebar::listed_on(s, &Target::new(key, &s.name), open.as_ref())).collect();
         sessions.sort_by(|a, b| a.name.cmp(&b.name));
         sessions
     }

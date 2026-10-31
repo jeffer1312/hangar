@@ -165,9 +165,15 @@ async fn catalog_is_the_python_one_with_the_whole_open_request() {
     let mut mcp = Mcp::open(s.addr, &[]).await;
     let listed = mcp.request("tools/list", json!({})).await["result"]["tools"].clone();
     // Tools que nasceram depois do Python (ele não tem mais MCP) ficam fora da comparação.
-    let listed: Vec<Value> = listed.as_array().unwrap().iter().filter(|t| !matches!(t["name"].as_str(), Some("interrupt" | "contract"))).cloned().collect();
     let python: Vec<Value> = serde_json::from_str(PYTHON_CATALOG).unwrap();
     let names = |tools: &[Value]| tools.iter().map(|t| t["name"].as_str().unwrap().to_owned()).collect::<Vec<_>>();
+    let known = names(&python);
+    let all = names(listed.as_array().unwrap());
+    for tool in ["request_secret", "vault_list", "vault_exec", "vault_file", "vault_fill"] {
+        assert!(all.iter().any(|n| n == tool), "falta {tool} no catálogo");
+    }
+    let listed: Vec<Value> = listed.as_array().unwrap().iter()
+        .filter(|t| t["name"].as_str().is_some_and(|n| known.iter().any(|k| k == n))).cloned().collect();
     assert_eq!(names(&listed), names(&python), "as 14 tools do Python, na mesma ordem");
     for (rust, python) in listed.iter().zip(&python) {
         // O texto destas mudou com o grupo entre máquinas; os parâmetros continuam os do Python.

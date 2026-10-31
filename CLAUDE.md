@@ -629,6 +629,13 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   (com daemon de pé ele sobe outro e não abre nada), linha de comando, log ou disco. Os três
   clientes mostram o aviso por servidor. Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#chaveiro-trancado-no-boot-o-rust-detecta-e-o-dono-destranca-de-outra-máquina-26102026).
+- **Cofre de senhas: um só, na máquina dona, chave no chaveiro dela; o valor nunca entra em
+  transcript, evento, diário nem log.** As outras máquinas pedem pelos peers. Senha **pedir
+  sempre** só sai com aprovação do dono num cartão; **liberada** sai direto. O agente usa por
+  login preenchido no navegador da sessão, comando com variável de ambiente e saída apagada, ou
+  arquivo 0600 de vida curta. Convidado não vê nem aprova. A aprovação não é barreira contra um
+  agente decidido: ele alcança o chaveiro. Decisão e limites em
+  [plataforma.md](docs/decisoes/plataforma.md#cofre-de-senhas-uma-máquina-dona-chave-no-chaveiro-uso-aprovado-por-senha-30102026).
 - **Chave secreta nunca vai no argv do `new-session`.** O escopo leva `--description`, e o
   `ProcessMux::run` passa `*_API_KEY`/`*_TOKEN`/`*_SECRET` por um arquivo 0600 que o pane lê e
   apaga: o systemd grava a linha de comando do escopo no journal. Evidência em

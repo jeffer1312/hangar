@@ -1,4 +1,5 @@
-//! Paridade da borda pública com a caracterização Python congelada.
+//! Borda pública do ditado: status e corpo escritos em `dictation_public_cases.rs`.
+use super::dictation_public_cases as cases;
 use axum::{
     Router,
     routing::{get, post},
@@ -66,13 +67,11 @@ async fn dictation_public_characterized_contract() {
         .await
         .unwrap();
     });
-    let fixture: Value = serde_json::from_str(include_str!(
-        "../../../../backend/tests/fixtures/contract/dictation_public/responses.json"
-    ))
-    .unwrap();
+    let table: Vec<Value> = serde_json::from_str(cases::RESPONSES).unwrap();
+    assert_eq!(table.len(), 20);
     let client = reqwest::Client::new();
     let mut differences = Vec::new();
-    for case in fixture["cases"].as_array().unwrap() {
+    for case in &table {
         configuration.lock().unwrap()["providers"] = if case["path"]
             .as_str()
             .unwrap()
@@ -343,16 +342,14 @@ fn dictation_public_generated_json_never_panics() {
 }
 
 #[tokio::test]
-async fn dictation_public_audio_edges_match_python() {
+async fn dictation_public_audio_edges_answer_each_case() {
     let server = PublicServer::start().await;
-    let fixture: Value = serde_json::from_str(include_str!(
-        "../../../../backend/tests/fixtures/contract/dictation_public/edges.json"
-    ))
-    .unwrap();
+    let table: Vec<Value> = serde_json::from_str(cases::EDGES).unwrap();
+    assert_eq!(table.len(), 12);
     let endpoint = format!("http://{}", server.state.cfg.upstream);
     let before = directory_snapshot(server._directory.path());
     let mut differences = Vec::new();
-    for case in fixture["cases"].as_array().unwrap().iter().filter(|c| {
+    for case in table.iter().filter(|c| {
         !c["id"].as_str().unwrap().ends_with("limit")
             && !c["id"].as_str().unwrap().ends_with("_timeout")
     }) {
@@ -383,7 +380,7 @@ async fn dictation_public_audio_edges_match_python() {
                 json!({"id":case["id"],"status":status,"actual":body,"expected":case["response"]}),
             );
         }
-        if let Some(filename) = case["calls"][0]["query"]["filename"].as_str() {
+        if let Some(filename) = case["filename"].as_str() {
             let heard = server.heard.lock().unwrap();
             assert!(
                 heard.iter().any(|(_, body)| body.contains(&format!(
@@ -405,7 +402,7 @@ async fn dictation_public_audio_edges_match_python() {
 }
 
 #[tokio::test]
-async fn dictation_public_declared_audio_limit_matches_python() {
+async fn dictation_public_declared_audio_limit_answers_413() {
     use tokio::io::AsyncWriteExt;
     let server = PublicServer::start().await;
     let mut stream = tokio::net::TcpStream::connect(server.base.trim_start_matches("http://"))
@@ -590,39 +587,19 @@ async fn dictation_public_global_does_not_inherit_a_session_from_query() {
 #[tokio::test]
 async fn dictation_public_chunked_audio_limit_uses_approved_413() {
     let server = PublicServer::start().await;
-    let fixture: Value = serde_json::from_str(include_str!(
-        "../../../../backend/tests/fixtures/contract/dictation_public/edges.json"
-    ))
-    .unwrap();
+    let table: Vec<Value> = serde_json::from_str(cases::EDGES).unwrap();
     let mut differences = Vec::new();
-    for case in fixture["cases"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|case| case["transport"] == "chunked")
-    {
+    for case in table.iter().filter(|case| case["transport"] == "chunked") {
         let (status, headers, text) =
             chunked_response(&server, case["path"].as_str().unwrap(), false).await;
-        // A diferença aprovada corrige somente áudio; a captura Python continua imutável.
-        let audio = case["path"] != "/api/ditado/relimpar";
-        let expected_status = if audio {
-            json!(413)
-        } else {
-            case["status"].clone()
-        };
-        let expected_body = if audio {
-            json!("request body too large")
-        } else {
-            case["response"].clone()
-        };
-        if audio {
+        if case["path"] != "/api/ditado/relimpar" {
             assert_eq!(headers["access-control-allow-origin"], "*");
             assert_eq!(headers["content-type"], "text/plain; charset=utf-8");
         }
         let body = serde_json::from_str::<Value>(&text).unwrap_or(Value::String(text));
-        if json!(status) != expected_status || body != expected_body {
+        if json!(status) != case["status"] || body != case["response"] {
             differences.push(
-                json!({"id":case["id"],"actual":body,"status":status,"expected":expected_body}),
+                json!({"id":case["id"],"actual":body,"status":status,"expected":case["response"]}),
             );
         }
         assert!(server.heard.lock().unwrap().is_empty());
@@ -632,16 +609,8 @@ async fn dictation_public_chunked_audio_limit_uses_approved_413() {
 
 #[tokio::test]
 async fn dictation_public_180_second_deadline_cancels_both_audio_routes() {
-    let fixture: Value = serde_json::from_str(include_str!(
-        "../../../../backend/tests/fixtures/contract/dictation_public/edges.json"
-    ))
-    .unwrap();
-    for case in fixture["cases"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|case| case["timeout_seconds"] == 180)
-    {
+    let table: Vec<Value> = serde_json::from_str(cases::EDGES).unwrap();
+    for case in table.iter().filter(|case| case["timeout_seconds"] == 180) {
         let server = PublicServer::start().await;
         let endpoint = format!("http://{}", server.state.cfg.upstream);
         *server.config.lock().unwrap() = json!({"dictation_max_minutes":10,"providers":[{"id":"fixture","kind":"openai","base_url":format!("{endpoint}/stall")}],"organization":{"dictation_organization_mode":"none"}});

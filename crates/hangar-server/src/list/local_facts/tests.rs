@@ -1,4 +1,4 @@
-//! Os fatos lidos do disco contra o golden do Python (`backend/tests/fixtures/contract/list_facts/`).
+//! Os fatos lidos do disco, com o esperado por caso em `tests/cases.rs`.
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
@@ -9,11 +9,12 @@ use super::*;
 use crate::list::discover_other::Dirs;
 use crate::list::local_transfers::{self, self as testing};
 
+mod cases;
+
 const HOME: &str = "⟦HOME⟧";
 
-fn golden() -> Value {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../backend/tests/fixtures/contract/list_facts/list_facts.json");
-    serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+fn parsed(cases: &[&str]) -> Vec<Value> {
+    cases.iter().map(|case| serde_json::from_str(case).unwrap()).collect()
 }
 
 fn expand(v: &Value, home: &str) -> Value {
@@ -25,14 +26,15 @@ fn expand(v: &Value, home: &str) -> Value {
     }
 }
 
-/// Caminho do golden (POSIX) como o Python o grava no Windows: separador nativo.
+/// Caminho do caso (POSIX) com o separador nativo do sistema.
 fn native(path: &str) -> String { if cfg!(windows) { path.replace('/', "\\") } else { path.to_owned() } }
 
 fn now() -> f64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64() }
 
 #[test]
-fn guest_access_matches_python() {
-    for case in golden()["guests"].as_array().unwrap() {
+fn guest_access_follows_the_guests_file() {
+    assert_eq!(cases::GUESTS.len(), 7);
+    for case in parsed(cases::GUESTS) {
         let dir = tempfile::tempdir().unwrap();
         if !case["file"].is_null() {
             std::fs::write(dir.path().join("guests.json"), case["file"].to_string()).unwrap();
@@ -47,8 +49,9 @@ fn guest_access_matches_python() {
 }
 
 #[test]
-fn orq_rows_match_python() {
-    for case in golden()["orq"].as_array().unwrap() {
+fn orq_rows_follow_the_run_files() {
+    assert_eq!(cases::ORQ.len(), 6);
+    for case in parsed(cases::ORQ) {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join(".hangar").join("orq");
         let at = now();
@@ -85,10 +88,11 @@ fn orq_rows_match_python() {
 }
 
 #[test]
-fn thread_key_matches_python() {
-    for case in golden()["thread_key"].as_array().unwrap() {
+fn thread_key_joins_home_and_thread() {
+    assert_eq!(cases::THREAD_KEY.len(), 2);
+    for case in parsed(cases::THREAD_KEY) {
         let mut want = case["key"].as_str().unwrap().to_owned();
-        // `Path.resolve()` do Python no Windows: o caminho POSIX ganha o drive atual e separador nativo.
+        // No Windows o caminho POSIX resolvido ganha o drive atual e separador nativo.
         if cfg!(windows) {
             let posix = case["home"].as_str().unwrap().trim_end_matches('/');
             let drive = std::env::current_dir().unwrap().to_string_lossy()[..2].to_owned();
@@ -104,10 +108,11 @@ fn dirs(home: &Path) -> Dirs {
 }
 
 #[test]
-fn transfers_match_python() {
+fn transfers_follow_the_record_files() {
     const FIELDS: [&str; 12] = ["name", "cwd", "jsonl", "provider", "headless", "engine", "codex_home", "conta", "lifecycle_id",
         "transfer_id", "transfer_phase", "problema"];
-    for case in golden()["transfers"].as_array().unwrap() {
+    assert_eq!(cases::TRANSFERS.len(), 6);
+    for case in parsed(cases::TRANSFERS) {
         let dir = tempfile::tempdir().unwrap();
         let home_path = std::fs::canonicalize(dir.path()).unwrap();
         let home = home_path.to_string_lossy().into_owned();
