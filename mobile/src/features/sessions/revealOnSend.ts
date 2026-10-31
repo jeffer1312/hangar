@@ -7,12 +7,22 @@ import { toast } from '../../ui/Toast';
 
 const errorText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
+// A linha só perde a marca na lista seguinte: outro envio até lá não repete o pedido nem a pergunta.
+// ponytail: janela fixa no lugar de acompanhar a lista; cobre o tique de 1,5 s com folga.
+const REVEAL_WINDOW_MS = 10_000;
+const revealed = new Map<string, number>();
+
 /** Mensagem minha numa oculta a traz de volta; com outras ocultas no grupo dela, pergunta se voltam junto.
  *  O grupo não muda: só a marca de oculta sai, cada uma no próprio servidor. */
 export function revealOnSend(serverId: string, name: string): void {
   const rows = useSessions.getState().rows;
   const row = rows.find((r) => r.serverId === serverId && r.name === name);
   if (!row?.hidden_from_list) return;
+  const now = Date.now();
+  for (const [key, at] of revealed) if (now - at >= REVEAL_WINDOW_MS) revealed.delete(key);
+  const key = `${serverId}::${name}`;
+  if (revealed.has(key)) return;
+  revealed.set(key, now);
   const ownServer = (id: string) => useServers.getState().servers.find((x) => x.id === id && !x.invite);
   const server = ownServer(serverId);
   if (!server) return;

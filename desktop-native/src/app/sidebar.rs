@@ -249,6 +249,9 @@ pub(super) struct Sidebar {
     leads_gen: u64,
     /// Fechadas agora: somem da lista na hora e voltam se o servidor recusar.
     deleting: HashSet<Target>,
+    /// Desocultadas por mensagem há pouco: a linha só perde a marca na lista seguinte, e outro envio até lá não repete
+    /// o pedido nem a pergunta do grupo.
+    revealed: HashMap<Target, std::time::Instant>,
     pub(super) editing: Option<Edit>,
     renaming: HashSet<Target>,
     /// Aberta e renomeada: o nome novo abre assim que aparecer na lista.
@@ -296,7 +299,7 @@ impl Sidebar {
     pub(super) fn new(window: &mut Window, cx: &mut Context<Hangar>) -> Self {
         let filter = cx.new(|cx| InputState::new(window, cx).placeholder(tr("sidebar_filter")).clean_on_escape());
         cx.subscribe(&filter, |_, _, _: &InputEvent, cx| cx.notify()).detach();
-        Self { filter, collapsed: load_json(collapsed_path()), group_leads: load_json(group_leads_path()), leads_gen: 0, deleting: HashSet::new(), editing: None, renaming: HashSet::new(), follow: None, lost: None, moving: HashMap::new(),
+        Self { filter, collapsed: load_json(collapsed_path()), group_leads: load_json(group_leads_path()), leads_gen: 0, deleting: HashSet::new(), revealed: HashMap::new(), editing: None, renaming: HashSet::new(), follow: None, lost: None, moving: HashMap::new(),
             menu: None, menu_seq: 0, rename_seq: 0, chain: None, chain_seq: 0, focus_tab: None, remote_focus: HashMap::new(), collapse_gen: 0, button_menu: None, hover: None, last_sub: Default::default(), press_seq: 0,
             long_pressed: false, rail_anim: None, resize: None, grouping: Default::default(), flip: Default::default(), tab_flip: Default::default(), tab_follow: Default::default(), still_avatar: Default::default() }
     }
@@ -424,6 +427,8 @@ pub(super) fn layout<'a>(sessions: &'a [SessionInfo], query: &str, by_project: b
 
 /// Chave do grupo "Ocultas" no `sidebar-collapsed.json`, com o sentido invertido: presente = aberto. Recolhido é o padrão.
 pub(super) const HIDDEN_GROUP: &str = "sidebar:hidden-open";
+
+const REVEAL_WINDOW: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// As ocultas de todas as máquinas, por nome; sendo fechadas (`closing`) ficam de fora como no resto da barra. Cada lista leva
 /// o filtro da máquina dela (`filter_query`), o mesmo que `layout` aplica às visíveis.
@@ -1062,7 +1067,12 @@ impl Hangar {
     pub(super) fn reveal_on_send(&mut self, server: &str, name: &str, window: &mut Window, cx: &mut Context<Self>) {
         use super::grouping::{Row, group_show_targets};
         let target = Target::new(&servers::norm(server), name);
-        let Some(session) = self.target_session(&target).filter(|s| s.hidden_from_list) else { return };
+        if !self.target_session(&target).is_some_and(|s| s.hidden_from_list) { return; }
+        // ponytail: janela fixa no lugar de acompanhar a lista; cobre o tique de 1,5 s com folga.
+        let now = std::time::Instant::now();
+        self.sidebar.revealed.retain(|_, at| now.duration_since(*at) < REVEAL_WINDOW);
+        if self.sidebar.revealed.insert(target.clone(), now).is_some() { return; }
+        let Some(session) = self.target_session(&target) else { return };
         let machines = self.group_machines();
         let others = if machines.contains(&target.server) {
             let rows: Vec<Row> = machines.iter().flat_map(|key| self.sessions_of(key).iter()

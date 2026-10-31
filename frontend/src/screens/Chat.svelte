@@ -3151,14 +3151,18 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
 
   // Mensagem minha numa oculta a traz de volta; com outras ocultas no grupo dela, pergunta se voltam junto.
   // O grupo não muda: só a marca de oculta sai, cada uma no próprio servidor.
+  // A linha só perde a marca na lista seguinte: outro envio até lá não repete o pedido nem a pergunta.
   let revealOthers = $state<AggSession[]>([]);
+  let revealedAt = 0;
+  const revealError = (e: unknown) => formataErro(e) ?? (e instanceof Error ? e.message : String(e));
   function revealOnSend() {
     const rows = sessionsStore.rows;
     const row = rows.find((r) => r.serverId === chatServerId && r.name === sessionName);
-    if (!row?.hidden_from_list) return;
+    if (!row?.hidden_from_list || Date.now() - revealedAt < 10_000) return;
+    revealedAt = Date.now();
     const server = listOwnServers().find((s) => s.id === chatServerId);
     if (!server) return;
-    showSession(server, sessionName).catch((e: unknown) => mostrarAviso(m.session_show_failed({ error: formataErro(e) ?? String(e) })));
+    showSession(server, sessionName).catch((e: unknown) => mostrarAviso(m.session_show_failed({ error: revealError(e) })));
     revealOthers = groupShowTargets(row, rows);
   }
   async function showRevealOthers() {
@@ -3168,7 +3172,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
       const server = listOwnServers().find((s) => s.id === t.serverId);
       return server ? showSession(server, t.name) : Promise.reject(new Error(m.convidados_servidor_fora_da_lista()));
     }));
-    const failed = targets.filter((_, i) => results[i].status === 'rejected').map((t) => t.name);
+    const failed = results.flatMap((r, i) => (r.status === 'rejected' ? [`${targets[i].name} (${revealError(r.reason)})`] : []));
     if (failed.length) mostrarAviso(m.session_show_group_skipped({ names: failed.join(', ') }));
   }
 
