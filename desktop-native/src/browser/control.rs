@@ -674,18 +674,23 @@ impl<P: Page> Controller<P> {
         }
         self.page.call("Input.dispatchKeyEvent", json!({"type": "keyDown", "commands": ["selectAll"]})).await?;
         // shortcut: a cópia do valor no JSON do CDP não é zerada; trocar se o transporte passar a guardar os pedidos.
-        self.page.call("Input.insertText", json!({"text": secret.as_str()})).await?;
-        self.frame().await;
+        let insert = json!({"text": secret.as_str()});
+        // Registrada antes de digitar: se o envio falhar depois de o texto chegar à página, o snapshot já a esconde.
         if password {
             let mut s = self.state.borrow_mut();
             s.marked.insert(id);
             if !s.secrets.iter().any(|known| known.as_str() == secret.as_str()) {
-                if s.secrets.len() >= SECRETS_MAX { s.secrets.remove(0); }
+                if s.secrets.len() >= SECRETS_MAX {
+                    s.secrets.remove(0);
+                    crate::log_line("cofre: o navegador deixou de esconder a senha preenchida mais antiga (limite de senhas por navegador)");
+                }
                 let mut secret = secret;
                 secret.forms = mask_forms(secret.as_str());
                 s.secrets.push(secret);
             }
         }
+        self.page.call("Input.insertText", insert).await?;
+        self.frame().await;
         Ok(format!("ok: fill-secret {r}"))
     }
 
@@ -1094,8 +1099,10 @@ mod tests {
 
     /// Página com um campo de senha (`@e1`, backend 7) que a árvore mostra com o valor cru, como mostraria com
     /// as senhas expostas à acessibilidade; `focus` é o que o alvo responde (`senha`, `campo`, `fora`).
-    fn login_page(focus: &'static str) -> Controller<Fake> {
-        ctl(move |m, p| Ok(match m {
+    fn login_page(focus: &'static str) -> Controller<Fake> { ctl(move |m, p| Ok(login_answer(focus, m, p))) }
+
+    fn login_answer(focus: &'static str, m: &str, p: &Value) -> Value {
+        match m {
             "Accessibility.getFullAXTree" => json!({"nodes": [
                 {"nodeId": "1", "role": {"value": "RootWebArea"}, "name": {"value": "Login"}, "childIds": ["2"]},
                 {"nodeId": "2", "role": {"value": "textbox"}, "name": {"value": "Senha"}, "value": {"value": SECRET}, "backendDOMNodeId": 7, "childIds": []}]}),
@@ -1110,7 +1117,7 @@ mod tests {
                 _ => json!({"result": {}}),
             },
             _ => json!({}),
-        }))
+        }
     }
 
     fn fill_secret(c: &Controller<Fake>, kind: &str) -> String {
@@ -1130,6 +1137,14 @@ mod tests {
         assert!(!text(block_on(c.run("text", &[]))).contains("S3nh"));
         c.on_event("Runtime.consoleAPICalled", &json!({"type": "log", "args": [{"type": "string", "value": SECRET}]}));
         assert!(!text(block_on(c.run("console", &[]))).contains("S3nh"));
+    }
+
+    #[test]
+    fn a_failed_insert_still_hides_the_secret() {
+        let c = ctl(|m, p| if m == "Input.insertText" { Err("caiu".into()) } else { Ok(login_answer("senha", m, p)) });
+        assert!(!fill_secret(&c, "password").starts_with("ok:"));
+        assert_eq!(text(block_on(c.run("snapshot", &[]))), "- RootWebArea \"Login\"\n  - textbox \"Senha\" [ref=@e1]");
+        assert!(!text(block_on(c.run("text", &[]))).contains("S3nh"));
     }
 
     #[test]

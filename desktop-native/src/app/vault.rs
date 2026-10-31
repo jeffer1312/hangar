@@ -191,8 +191,10 @@ impl VaultPage {
         run(&self.runtime, async move { api.server_read(&["peers"], &[], 15).await }, window, cx, move |this: &mut Self, result, _, _| {
             if seq != this.seq { return; }
             match result {
-                Ok(value) => this.peers = value.as_array().map(|list| list.iter()
-                    .filter_map(|p| Some(Peer { id: p.get("id")?.as_str()?.to_owned() })).collect()).unwrap_or_default(),
+                Ok(value) => match value.as_array() {
+                    Some(list) => this.peers = list.iter().filter_map(|p| Some(Peer { id: p.get("id")?.as_str()?.to_owned() })).collect(),
+                    None => this.peers_error = Some(tr("invalid_response")),
+                },
                 Err(error) => this.peers_error = Some(vault_failure(&error)),
             }
         });
@@ -462,6 +464,15 @@ impl VaultPage {
         }).collect()
     }
 
+    /// As opções de máquina; sem nenhuma, a falha da leitura ou o aviso de que a lista é mesmo vazia.
+    fn peers_or_note(&self, peers: Vec<Button>) -> Div {
+        if !peers.is_empty() { return div().flex().flex_wrap().gap_2().children(peers); }
+        match &self.peers_error {
+            Some(error) => div().text_sm().text_color(theme::danger()).whitespace_normal().child(tr("vault_peers_failed").replace("{error}", error)),
+            None => muted(tr("vault_backup_no_peers")),
+        }
+    }
+
     /// Cópia diária para outra máquina: quem guarda, como foi a última e a senha que abre a cópia.
     fn render_backup(&self, status: &Status, cx: &mut Context<Self>) -> AnyElement {
         let label = |key: &str| div().text_sm().font_weight(FontWeight::MEDIUM).child(tr(key));
@@ -481,7 +492,7 @@ impl VaultPage {
             .child(section_head(IconName::RotateCcwClock, tr("vault_backup"), Some(tr("vault_backup_hint")), None, px(16.)))
             .child(div().px_4().pb(px(16.)).flex().flex_col().gap_3()
                 .child(div().flex().flex_col().gap_2().child(label("vault_backup_peer"))
-                    .child(if peers.is_empty() { muted(tr("vault_backup_no_peers")) } else { div().flex().flex_wrap().gap_2().children(peers) })
+                    .child(self.peers_or_note(peers))
                     .child(div().id("vault-backup-last").role(Role::Status).child(last)))
                 .child(div().flex().flex_col().gap_2().child(label("vault_recovery"))
                     .child(div().text_sm().text_color(theme::warning()).whitespace_normal().child(tr("vault_recovery_hint")))
@@ -505,7 +516,7 @@ impl VaultPage {
             .child(section_head(IconName::RefreshCw, tr("vault_restore"), Some(tr("vault_restore_hint")), None, px(16.)))
             .child(div().px_4().pb(px(16.)).flex().flex_col().gap_2()
                 .child(label("vault_restore_peer"))
-                .child(if peers.is_empty() { muted(tr("vault_backup_no_peers")) } else { div().flex().flex_wrap().gap_2().children(peers) })
+                .child(self.peers_or_note(peers))
                 .child(label("vault_restore_server"))
                 .child(Input::new(&self.fields.restore_server).small().disabled(off).aria_label(tr("vault_restore_server")))
                 .child(label("vault_recovery_password"))
@@ -537,7 +548,8 @@ impl VaultPage {
         settings_box()
             .child(section_head(IconName::Server, tr("vault_where"), Some(text), None, px(16.)))
             .when(choices, |el| el.child(div().px_4().pb(px(14.)).flex().flex_wrap().gap_2().children(make_here).children(peers)))
-            .when_some(self.peers_error.clone(), |el, error| el.child(div().px_4().pb(px(14.))
+            // Na dona e sem dona, a falha já aparece na lista da cópia ou da restauração.
+            .when_some(self.peers_error.clone().filter(|_| status.role == "remote"), |el, error| el.child(div().px_4().pb(px(14.))
                 .child(alert("vault-peers-error", tr("vault_peers_failed").replace("{error}", &error)))))
             .into_any_element()
     }

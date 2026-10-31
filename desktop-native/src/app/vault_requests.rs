@@ -236,7 +236,13 @@ impl Hangar {
     pub(super) fn set_vault_requests(&mut self, key: &str, data: Option<&Value>, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let list = match data {
             None => Vec::new(),
-            Some(data) => match parse(data) { Some(list) => list, None => return false },
+            Some(data) => match parse(data) {
+                Some(list) => list,
+                None => {
+                    crate::log_line("cofre: evento vault ilegível; os cartões anteriores ficam");
+                    return false;
+                }
+            },
         };
         if list.is_empty() { return self.vault.remove(key).is_some(); }
         let (api, machine) = (self.machine_api(key), self.vault_machine_label(key, cx));
