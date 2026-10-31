@@ -124,7 +124,12 @@ pub fn is_backend(dir: &std::path::Path) -> bool {
 /// cópia acima do binário (checkout), ou a que o servidor anotou ao subir (binário em `~/.hangar/bin`).
 pub fn backend_dir() -> Option<PathBuf> {
     let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from)?;
-    Some(crate::install_root::root(&home)?.join("backend")).filter(|dir| is_backend(dir))
+    backend_dir_for_home(&home)
+}
+
+/// Resolve a instalação com o ambiente do serviço, inclusive nas execuções isoladas.
+pub fn backend_dir_for_home(home: &std::path::Path) -> Option<PathBuf> {
+    Some(crate::install_root::root(home)?.join("backend")).filter(|dir| is_backend(dir))
 }
 
 /// O ambiente que o servidor teria: a conta e as opções `CP_*` de quem chama não valem (uma sessão

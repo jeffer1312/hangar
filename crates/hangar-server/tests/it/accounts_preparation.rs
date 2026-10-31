@@ -1,4 +1,35 @@
-//! O catálogo só passa ao Rust junto com a coordenação verdadeira do preparo.
+use hangar_server::accounts::preparation::CodexSetup;
+use std::sync::{Arc, Mutex};
+use serde_json::{Value, json};
+
+#[derive(Default)]
+struct NativeSetup { calls: Mutex<Vec<String>> }
+impl CodexSetup for NativeSetup {
+    fn update(self: Arc<Self>, force: bool) -> futures_util::future::BoxFuture<'static, Result<Value, String>> {
+        Box::pin(async move {
+            self.calls.lock().unwrap().push(format!("source:{force}"));
+            Ok(json!({"estado":"ok"}))
+        })
+    }
+    fn repair(self: Arc<Self>, account: hangar_server::accounts::catalog::Account) -> futures_util::future::BoxFuture<'static, Result<Option<bool>, String>> {
+        Box::pin(async move {
+            self.calls.lock().unwrap().push(format!("repair:{}",account.id));
+            Ok(Some(true))
+        })
+    }
+    fn project(self: Arc<Self>, _account: hangar_server::accounts::catalog::Account, _cwd: String) -> futures_util::future::BoxFuture<'static, Result<(), String>> {
+        Box::pin(async move { self.calls.lock().unwrap().push("project".into()); Ok(()) })
+    }
+    fn status(&self) -> Result<Value, String> { Ok(json!({"estado":"ok"})) }
+}
+fn bind_native(service: &hangar_server::accounts::AccountService) -> Arc<NativeSetup> {
+    let setup = Arc::new(NativeSetup::default());
+    let native: Arc<dyn CodexSetup> = setup.clone();
+    *service.codex_setup.lock().unwrap() = Some(Arc::downgrade(&native));
+    setup
+}
+
+// O catálogo só passa ao Rust junto com a coordenação verdadeira do preparo.
 #[test]
 fn preparation_routes_belong_to_rust() {
     use axum::http::Method;
@@ -27,6 +58,7 @@ async fn lost_response_keeps_guard_and_force_waits_for_the_effective_worker() {
     let service = AccountService::new(AccountEnvironment::from_map(
         [("HOME".into(), home.clone()), ("USERPROFILE".into(), home)].into(),
     ));
+    let native = bind_native(&service);
     let account = service
         .create(Provider::Codex, "extra", |_| Ok(()))
         .unwrap();
@@ -81,6 +113,7 @@ async fn lost_response_keeps_guard_and_force_waits_for_the_effective_worker() {
     );
     let first = requests.recv().await.unwrap();
     assert_eq!(first["force"], false);
+    assert_eq!(*native.calls.lock().unwrap(), ["source:false"]);
     assert_eq!(
         service
             .prepare(&account, bridge.clone(), true, None)
@@ -125,6 +158,14 @@ async fn lost_response_keeps_guard_and_force_waits_for_the_effective_worker() {
     .await
     .unwrap();
     assert!(requests.try_recv().is_err());
+    assert_eq!(*native.calls.lock().unwrap(), ["source:false", "repair:extra", "source:true", "repair:extra"]);
+    assert_eq!(service.preparation_status(&account, &bridge).await["trust_pending"], true);
+    finished.add_permits(1);
+    let cwd = root.path().display().to_string();
+    let trusted = service.pretrust(&account, bridge.clone(), cwd.clone()).await.unwrap();
+    assert_eq!(trusted["status"], "ready");
+    assert_eq!(requests.recv().await.unwrap()["cwd"], cwd);
+    assert_eq!(*native.calls.lock().unwrap(), ["source:false", "repair:extra", "source:true", "repair:extra", "project"]);
     server.abort();
 }
 
@@ -226,6 +267,7 @@ async fn ready_preparation_is_reused_after_restart_until_explicit_force() {
         ("HOME".into(), home.clone()), ("USERPROFILE".into(), home),
     ].into());
     let first_service = AccountService::new(environment.clone());
+    let _first_native = bind_native(&first_service);
     let account = first_service.create(Provider::Codex, "extra", |_|Ok(())).unwrap();
     let calls = Arc::new(AtomicUsize::new(0));
     let seen = calls.clone();
@@ -243,6 +285,7 @@ async fn ready_preparation_is_reused_after_restart_until_explicit_force() {
         }
     }).await.unwrap();
     let service = AccountService::new(environment);
+    let _native = bind_native(&service);
     let cached = service.prepare(&account,bridge.clone(),false,None).await.unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(15),async {
         while service.preparation_status(&account,&bridge).await["status"] == "running" {
@@ -276,6 +319,7 @@ async fn first_open_waits_for_preparation_and_expired_birth_budget_refuses_open(
         let service = AccountService::new(AccountEnvironment::from_map([
             ("HOME".into(),home.clone()),("USERPROFILE".into(),home),
         ].into()));
+        let _native = bind_native(&service);
         let account = if id == "default" { service.resolve(Provider::Codex,id).unwrap() }
             else { service.create(Provider::Codex,id,|_|Ok(())).unwrap() };
         let calls = Arc::new(AtomicUsize::new(0));

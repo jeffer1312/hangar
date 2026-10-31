@@ -88,6 +88,13 @@ impl SharedLimiter {
         use subtle::ConstantTimeEq;
         token.is_some_and(|t| bool::from(t.ct_eq(self.expected.as_slice())))
     }
+    pub fn sync_session_key(&self) -> Result<Vec<u8>, AuthError> {
+        self.transaction(|_| {
+            let mut message = b"hangar:sync-session:v1\0".to_vec();
+            message.extend_from_slice(self.epoch.as_bytes());
+            hmac::sign(&self.key, &message).as_ref().to_vec()
+        })
+    }
     pub fn receipt(&self, context: &ReceiptContext) -> Result<String, AuthError> {
         let mut nonce = [0u8; 16];
         SystemRandom::new().fill(&mut nonce).map_err(|_| AuthError::StoreUnavailable)?;

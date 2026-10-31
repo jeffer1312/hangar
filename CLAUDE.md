@@ -553,8 +553,10 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   copiada ou salva vem do servidor, sem o que ele injetou; link da página e do chat passam pela
   mesma `links::open_link`. Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#página-da-conversa-mora-no-rust-e-some-com-a-sessão).
-- **Configuração compartilhada leva o conteúdo, e o destino resolve caminho e programa.** Caminho
-  vira marcador `⟦HOME⟧`/`⟦CLAUDE⟧`/`⟦CODEX⟧`/`⟦HANGAR⟧` (nunca `{HOME}`); quem envia vence;
+- **Configuração compartilhada leva o conteúdo, e o destino resolve caminho e programa.**
+  A API, a aplicação e o pós-aplicar são do Rust (`config_sync/`), incluindo espelhos de skills,
+  hooks e o agendamento da integração Codex; não há rota nem executor Python de reserva.
+  Caminho vira marcador `⟦HOME⟧`/`⟦CLAUDE⟧`/`⟦CODEX⟧`/`⟦HANGAR⟧` (nunca `{HOME}`); quem envia vence;
   hooks e skills do Hangar, MCP `hangar`, credenciais e o login do `.claude.json` são sempre do
   destino. Regras e motivo em [plataforma.md](docs/decisoes/plataforma.md#configuração-compartilhada-leva-o-conteúdo-o-destino-resolve-caminho-e-programa).
 - **Compartilhar sessão: só a porta do convidado (8766, Funnel 8443) vai à internet, ela é do
@@ -655,6 +657,13 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   ANTES de escrever, dizendo o que é, por que o Rust sozinho não basta e o que se perde sem ela.
   Vale para migração, correção e subagente (que para e pergunta pela sessão). Linha nova no Python
   sem essa autorização é defeito na revisão, mesmo que "só repasse".
+- **Motores, login de convidados e peers são do Rust.** Catálogo, CLIProxy, espelhos e instalação
+  ficam em `engines/`, `harness_setup/` e `codex_setup/`; identidade, permissões, raízes e lista do
+  convidado em `login_guests/`; configuração, descoberta e canal dos peers em `machine_peers/`.
+  `guests.json` ilegível conserva a última leitura válida. A administração usa criar, alterar e
+  excluir convidados e `/api/me`; não existe `GET /api/guests`. Não há ponte Python dessas rotas.
+  A inicialização anuncia saúde antes dos passos demorados, mas bloqueia ações e adoção até
+  concluir a preparação. Evidência em [plataforma.md](docs/decisoes/plataforma.md#motores-convidados-e-peers-no-rust).
 - **Migrar do Python para o Rust é migrar o caminho inteiro.** Antes de dar a migração por feita,
   procure nos dois lados todo chamador da responsabilidade (rotas `/internal/*`, `*_bridge`,
   `to_thread` que esperam o Rust) e apague o que ficou no Python. O Rust nunca pergunta ao Python o
@@ -673,7 +682,7 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   - Chat Claude/Codex do dono: nada. `/history`, `/events`, mensagens, estado, prévia, fila, faixa
     `stats` (`stats.rs`), faixa e avisos de mod (`mods`) e pedido de navegador (`nav_requests.rs`)
     são do hub do Rust, sem conexão ao Python. O `sse.merged_events` só serve o `/events` do próprio
-    Python: Pi/omp/Kimi, convidado com login próprio (lê o canal privado do hub) e o modo `python`;
+    Python: Pi/omp/Kimi e o modo `python`;
     o `stats.py` serve esse `/events`. O consumo da orquestração é calculado no Rust.
   - Lista do dono: montada pelo Rust; só com linha Pi/omp/Kimi o tique pede `POST
     /internal/list/facts` (`list/facts.rs` → `list_facts.py`), levando só essas linhas: estado,
@@ -684,16 +693,13 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
     `worktrees/context`,
     `transcription/config`, `costs/scopes`, `migration/status`, `diag` e `ping`.
   - Partes ainda no Python: transcript, estado e entrada geral de Pi, omp e Kimi; Arquivo;
-    transferência Claude→Codex; peers;
-    workflows e runners; login de convidado. O Connect (8768) está inativo.
-  - Atualização: na máquina migrada (pacote ou modo desenvolvedor) as rotas `/api/atualizacao*`
-    são do Rust (`update/http.rs`); na não migrada, ao motor `git` do Python (`atualizar.py`). No
-    pacote, `_fetch_loop` e `_auto_update_loop` (`api.py`) saem na subida e a verificação de hora em
-    hora é do Rust (`update/periodic.rs`); no modo desenvolvedor o automático segue no motor `git`.
+    transferência Claude→Codex; workflows e runners. O Connect (8768) está inativo.
+  - Atualização: rotas, passos iniciais, fetch e atualização automática são do Rust.
+    O pacote usa `update/http.rs` e `update/periodic.rs`; o checkout usa `update/git_engine/`.
     O `rust_bins.py` lança o Rust pelo caminho real da versão.
   - Tarefas próprias do Python em modo `rust`: `hook_state.watch` (estado de Pi/omp/Kimi; não reage
     a sessão do Rust), `watch_sessions` do Codex a cada 2 s (desligada quando todo Codex é do Rust),
-    índice do Arquivo, `git fetch` e atualização automática (fora do pacote). Travada, limite e queda são avisados
+    índice do Arquivo. Travada, limite e queda são avisados
     pelo Rust (`push/watch.rs`); o vigia Python foi apagado e, no modo `python`, esses avisos não
     saem. A retomada dos loops ativos na subida também é só do Rust (`loops/watch.rs`): no modo
     `python` eles não voltam depois do reinício.
@@ -844,8 +850,8 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
 - **A porta privada de loopback do Rust mora no mesmo filho**, anunciada na saúde somente como
   endereço; o segredo vem do Supervisor em memória após conferir o protocolo. Uma captura canônica
   por rodada, sem grade auxiliar: com o Rust de pé, quem captura o pane de Claude com terminal para o
-  estado ao vivo é o `Monitor` (abaixo; modo de permissão e entrega também capturam no Rust, só a
-  captura avulsa do push segue no Python), e a ponte Python do observador (`terminal_observer` →
+  estado ao vivo é o `Monitor` (abaixo; modo de permissão, entrega e captura avulsa do push também
+  são do Rust), e a ponte Python do observador (`terminal_observer` →
   `/__hangar_server/terminal`) ficou sem consumidor, porque o `StateMonitor`/`PreviewBroker` de
   Claude só roda no modo `python`, com a ponte desligada. Pi, omp e Kimi capturam pelo Python e
   guardam lá o estado temporal; Codex conserva estado e prévia nativos. `/clear` ou troca do filho
@@ -855,7 +861,7 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
 - **Estado ao vivo de Claude com terminal é do `Monitor` do Rust no modo `rust`/`pending`, em
   qualquer porta.** Um por hub (`side.rs`), nascido com o primeiro assinante: o `/events` do dono
   ou o canal privado `/__hangar_server/state/{name}/events`, que o Python lê para quem entrou por
-  ele (login de convidado, 8768). Ele publica `state`, `preview`, `ask_question` e `suggest` pelo retrato do hub, com o
+  ele (8768). Ele publica `state`, `preview`, `ask_question` e `suggest` pelo retrato do hub, com o
   `interaction_id` da pergunta ou permissão em aberto, e drena a fila direto no `RuntimeRegistry`
   (`LiveSources::deliverable`); o Python não sobe `StateMonitor` nem `PreviewBroker` dessas
   sessões. Captura em processo
@@ -875,7 +881,7 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   [plataforma.md](docs/decisoes/plataforma.md#estado-do-claude-sem-terminal-no-feed-do-runtime).
 - **A fila durável ao vivo do chat é do hub do Rust no modo `rust`/`pending`, em qualquer porta.**
   Um produtor por hub e por geração (`queue_feed.rs`) lê a projeção da fila e publica
-  `message`/`queue_confirmed` pelo retrato; o canal privado os leva ao convidado com login. A
+  `message`/`queue_confirmed` pelo retrato; o login de convidado lê o mesmo hub no Rust. A
   baixa da fila do Codex sem terminal é pedida pelo hub ao ator, em processo. O `follow` do Python fica com Pi/omp/Kimi e o modo
   `python`. Contrato e diferenças em
   [plataforma.md](docs/decisoes/plataforma.md#fila-durável-ao-vivo-no-hub-do-rust).

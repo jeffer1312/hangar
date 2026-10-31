@@ -384,7 +384,7 @@ def _worker() -> None:
     from fastapi import FastAPI, Request as HttpRequest
     from fastapi.responses import JSONResponse
     from fastapi.testclient import TestClient
-    from app import api, codex_contas_login, codex_preparo, credenciais, account_bridge, dictation_bridge
+    from app import api, codex_contas_login, credenciais, account_bridge, dictation_bridge
     from app.account_lifecycle import AccountKey
     from types import SimpleNamespace
     from app import internal_api, runtime_coordinator
@@ -465,12 +465,6 @@ def _worker() -> None:
     def secondary_native_only():
         secondary["native_only"] = True
         return {"ok": True}
-
-
-    @app.post("/__contract__/device-repair")
-    def device_repair(body: dict):
-        from app import harness_saude
-        return {"result": harness_saude.consertar(body["action"])}
 
 
     model_invalidations = []
@@ -653,21 +647,6 @@ def _worker() -> None:
     def deny_external(*args, **kwargs):
         raise AssertionError("uma operação de contrato tentou executar CLI ou acessar rede real")
 
-    class HooksNative:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *args):
-            pass
-
-        async def request(self, method, params):
-            assert method == "hooks/list" and params == {"cwds": []}
-            return {"data": []}
-
-
     import socket
     original_connection = socket.create_connection
     def private_connection(address, *args, **kwargs):
@@ -683,8 +662,6 @@ def _worker() -> None:
             patch.object(api, "_codex_require_idle_preparation"), \
             patch.object(api, "_invalidate_lists"), \
             patch.object(codex_contas_sync, "_prepare_account_guarded", side_effect=prepare_at_barrier), \
-            patch.object(codex_preparo, "CodexNativo", HooksNative), \
-            patch.object(codex_preparo, "shutil", SimpleNamespace(which=lambda name: "contract-codex" if name == "codex" else None)), \
             patch.object(api.tmux, "has_session", side_effect=lambda name: name in mux and any(child.poll() is None for child in children)), \
             patch.object(api.tmux, "_run", side_effect=mux_command), \
             patch.object(api.tmux, "is_hidden", return_value=False), \

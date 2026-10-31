@@ -2,7 +2,7 @@
 
 O script inteiro lê `~` via `expanduser`, então dar-lhe um HOME de mentira é o seam. O que ele
 faz hoje: persona (CLAUDE.md como AGENTS.md/CLAUDE.md) e os pacotes do Pi
-— e no fim chama a `backend/app/skill_bridge.py`, dona das pontes de skills do Pi e Kimi. Ele
+— e no fim chama a `instalador nativo de skills`, dona das pontes de skills do Pi e Kimi. Ele
 próprio não cria nem apaga link de skill: com dois donos, a poda de um desfazia o outro a cada
 largada do Pi (67 skills sumindo, listadas como "skill path does not exist").
 """
@@ -48,6 +48,11 @@ def _home(tmp_path: Path) -> Path:
     return home
 
 
+@pytest.fixture(autouse=True)
+def _native_binary(hangar_server_bin):
+    return hangar_server_bin
+
+
 def _rodar(home: Path) -> str:
     env = dict(os.environ, HOME=str(home))
     r = subprocess.run([str(BRIDGE)], capture_output=True, text=True, timeout=60, env=env)
@@ -67,7 +72,7 @@ def test_instalador_preserva_codex_para_o_reconciliador(tmp_path):
 
 
 def test_skills_vem_da_skill_bridge_e_o_script_nao_poda(tmp_path):
-    """A pasta de skills é da skill_bridge.py: o script cria a skill do plugin por ela e deixa em
+    """A pasta de skills é da instalador nativo: o script cria a skill do plugin por ela e deixa em
     paz um link que não é de nenhuma fonte dela (o caso dos 67 apagados)."""
     home = _home(tmp_path)
     ponte = home / ".pi" / "agent" / "skills-bridge"

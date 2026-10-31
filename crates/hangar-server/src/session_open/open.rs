@@ -601,16 +601,17 @@ async fn claude_plan(host: &dyn OpenHost, spec: &SessionSpec, sid: &str, read_on
     Ok((pane, jsonl, route))
 }
 
-/// A ponte de skills (`skill_bridge.py`): a skill instalada no Claude vale já nesta sessão de Pi ou
-/// Kimi. Nunca impede a abertura.
+/// A abertura usa o mesmo espelhamento da instalação, sem depender de outro processo.
 async fn sync_skills(host: &dyn OpenHost) {
-    let Some(argv) = host.backend_dir().and_then(|dir| agents::skill_bridge_argv(&dir, host.terminal().windows)) else {
-        tracing::warn!(backend = ?host.backend_dir(), "ponte de skills sem a venv do backend; não refeita antes de abrir a sessão");
+    let Some(repo) = host.backend_dir().and_then(|dir| dir.parent().map(Path::to_path_buf)) else {
+        tracing::warn!("raiz da instalação ausente; skills não conferidas antes da abertura");
         return;
     };
-    let out = host.run(argv, Duration::from_secs(30)).await;
-    if out.code != Some(0) {
-        tracing::warn!(code = ?out.code, stderr = %out.stderr.trim(), "ponte de skills não refeita antes de abrir a sessão");
+    let mut env = crate::accounts::environment::AccountEnvironment::from_map(host.env().clone());
+    env.home = host.home().to_path_buf();
+    match tokio::task::spawn_blocking(move || crate::harness_setup::skills::rebuild_report(&env, &repo, false)).await {
+        Ok(report) => for (source,error) in report.errors { tracing::warn!(%source,%error,"skills não conferidas antes da abertura"); },
+        Err(error) => tracing::warn!(%error, "skills não conferidas antes da abertura"),
     }
 }
 
@@ -811,7 +812,7 @@ async fn terminal_life(host: &dyn OpenHost, spec: &mut SessionSpec, read_only: O
         let mut launch = super::codex::creation(spec, home, initial_prompt);
         launch.resume = resume.map(str::to_owned);
         // O rollout só nasce com a TUI, num caminho que não se deriva do cwd: nada a semear.
-        (super::codex::pane(&spec.name, &spec.key, &launch, spec.jev, runtime, read_only, host.terminal().windows)?, None, None)
+        (super::codex::pane(&spec.name, &spec.key, &launch, spec.jev, runtime, read_only, host.terminal().windows, host.env())?, None, None)
     } else {
         let ctx = agents::AgentContext { home: host.home(), server_env: host.env(), runtime_config: runtime, read_only,
             windows: host.terminal().windows };

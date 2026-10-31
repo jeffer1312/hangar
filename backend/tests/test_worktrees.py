@@ -581,27 +581,6 @@ def test_detail_on_plain_folder_is_404(tmp_path, monkeypatch):
     assert r.status_code == 404
 
 
-def test_guest_gets_403_on_every_route(tmp_path, monkeypatch):
-    from fastapi.testclient import TestClient
-    from app import api, guest_users
-    monkeypatch.setattr(guest_users, "_path_override", tmp_path / "guests.json")
-    guest_users._reset()
-    main = _repo(tmp_path / "repo")
-    wt = _wt(main, tmp_path / "repo-x", "x")
-    monkeypatch.setattr(api.settings, "auth_token", "secret")
-    _, tok = guest_users.create("bia", str(tmp_path), False, True)
-    h = {"Authorization": f"Bearer {tok}"}
-    c = TestClient(api.app)
-    try:
-        assert c.get("/api/worktrees", headers=h).status_code == 403
-        assert c.get("/api/worktrees/detail", params={"path": wt}, headers=h).status_code == 403
-        assert c.post("/api/worktrees/fetch", json={"repo": main}, headers=h).status_code == 403
-        assert c.post("/api/worktrees/delete", json={"repo": main, "path": wt},
-                      headers=h).status_code == 403
-        assert c.post("/api/worktrees/delete-merged", json={"repo": main}, headers=h).status_code == 403
-        assert (tmp_path / "repo-x").exists()
-    finally:
-        guest_users._reset()
 
 
 def _claude_project(tmp_path, monkeypatch, wt, sid="d0000002-0000-4000-8000-000000000000"):

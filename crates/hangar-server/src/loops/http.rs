@@ -1,12 +1,10 @@
-//! Rotas do loop e do `then` do dono, com os corpos do Python: `PUT`/`DELETE /then`,
-//! `POST`/`GET`/`DELETE /loop`, `POST /loop/refine` e `POST /loop/resolve`. O convidado segue ao
-//! Python, como antes.
+//! Rotas nativas do loop e do `then`, com autorização da sessão e formulários originais.
 use super::store::{self, is_active, status, Loop, Store};
 use super::tick;
 use axum::body::to_bytes;
 use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{Method, StatusCode};
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use futures_util::future::BoxFuture;
 use hangar_api::session::SessionRow;
 use percent_encoding::percent_decode_str;
@@ -15,16 +13,35 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use crate::routes::AppState;
-use crate::session_write::{detail_body, json_response};
+use crate::session_write::detail_body;
 
-const BODY_LIMIT: usize = 256 * 1024;
+const ROUTES: &[(&str,&str)] = &[
+    ("/api/sessions/{name}/then","PUT"),("/api/sessions/{name}/then","DELETE"),
+    ("/api/sessions/{name}/loop","POST"),("/api/sessions/{name}/loop","GET"),("/api/sessions/{name}/loop","DELETE"),
+    ("/api/sessions/{name}/loop/refine","POST"),("/api/sessions/{name}/loop/resolve","POST"),
+];
+pub fn owns_path(raw:&str)->bool {
+    let family=|tail:&str|tail=="loop" || tail.starts_with("loop/") || tail=="then" || tail.starts_with("then/");
+    let path=percent_decode_str(raw).decode_utf8_lossy();
+    if path.strip_prefix("/api/sessions/").and_then(|rest|rest.split_once('/')).is_some_and(|(_,tail)|family(tail)){return true;}
+    // Uma barra escapada no nome invalida a rota, mas o 404 dessa família continua no Rust.
+    let mut parts=raw.splitn(5,'/');
+    let Some("")=parts.next() else{return false;};
+    let (Some(api),Some(sessions),Some(_name),Some(tail))=(parts.next(),parts.next(),parts.next(),parts.next()) else{return false;};
+    percent_decode_str(api).decode_utf8_lossy()=="api" && percent_decode_str(sessions).decode_utf8_lossy()=="sessions" && family(&percent_decode_str(tail).decode_utf8_lossy())
+}
+
+fn schema_name(op:Op)->Option<&'static str> {
+    match op {Op::ThenSet=>Some("ThenLinkBody"),Op::Create=>Some("LoopCreate"),Op::Refine=>Some("LoopRefine"),Op::Resolve=>Some("LoopResolve"),_=>None}
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Op { ThenSet, ThenClear, Create, Get, Stop, Refine, Resolve }
 
 /// A rota pelo caminho (segmento do nome escapado) e o método.
 pub fn op(method: &Method, path: &str) -> Option<(String, Op)> {
-    let rest = path.strip_prefix("/api/sessions/")?;
+    let decoded=percent_decode_str(path).decode_utf8_lossy();
+    let rest = decoded.strip_prefix("/api/sessions/")?;
     let (seg, tail) = rest.split_once('/')?;
     if seg.is_empty() { return None; }
     let op = match (method.as_str(), tail) {
@@ -37,7 +54,7 @@ pub fn op(method: &Method, path: &str) -> Option<(String, Op)> {
         ("POST", "loop/resolve") => Op::Resolve,
         _ => return None,
     };
-    Some((percent_decode_str(seg).decode_utf8().ok()?.into_owned(), op))
+    Some((seg.to_owned(), op))
 }
 
 pub(crate) fn matches(method: &Method, path: &str) -> bool { op(method, path).is_some() }
@@ -46,9 +63,10 @@ pub(crate) fn matches(method: &Method, path: &str) -> bool { op(method, path).is
 pub trait Backend: Send + Sync {
     fn store(&self) -> Store;
     fn now(&self) -> f64;
-    fn automations(&self) -> bool;
+    fn automations(&self) -> Result<bool, &'static str>;
     /// A linha da sessão; `Err` é a resposta da lista indisponível.
     fn row<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<Option<SessionRow>, (StatusCode, Value)>>;
+    fn current_row<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<Option<SessionRow>, Reply>>;
     fn exists<'a>(&'a self, name: &'a str) -> BoxFuture<'a, bool>;
     /// Branch da worktree onde o agente da sessão trabalha.
     fn branch(&self, row: &SessionRow) -> Option<String>;
@@ -64,7 +82,7 @@ struct RouteEnv<'a> { b: &'a dyn Backend, name: &'a str }
 
 impl tick::Env for RouteEnv<'_> {
     fn now(&self) -> f64 { self.b.now() }
-    fn automations(&self) -> bool { self.b.automations() }
+    fn automations(&self) -> Result<bool, &'static str> { self.b.automations() }
     fn branch(&self) -> Option<String> { None }
     fn entry_delivered(&self, _id: Option<String>) -> BoxFuture<'_, Option<bool>> { Box::pin(async { None }) }
     fn run_check(&self, _cmd: String) -> BoxFuture<'_, (i64, String)> { Box::pin(async { (super::check::UNRUNNABLE, String::new()) }) }
@@ -87,18 +105,40 @@ fn unprocessable(msg: &str) -> Reply {
     (StatusCode::UNPROCESSABLE_ENTITY, json!({"detail": [{"type": "value_error", "loc": ["body"], "msg": msg, "input": null}]}))
 }
 
+fn config_failed(code: &'static str) -> Reply {
+    refused(StatusCode::SERVICE_UNAVAILABLE, code, "a configuração das automações está inválida", json!({}))
+}
+
 fn unwritable(e: std::io::Error) -> Reply {
+    if let Some(error) = e.get_ref().and_then(|error| error.downcast_ref::<super::ConfigFailure>()) {
+        return config_failed(error.0);
+    }
     tracing::error!(code = "loop_store_unwritable", kind = ?e.kind(), "loop: sidecar não gravou");
     refused(StatusCode::INTERNAL_SERVER_ERROR, "loop_store_unwritable", "o estado do loop não pôde ser gravado", json!({}))
 }
 
 /// Corpo estrito (`_StrictBody`): objeto JSON só com as chaves conhecidas.
 fn object(bytes: &[u8], allowed: &[&str]) -> Result<Map<String, Value>, Reply> {
-    let Ok(Value::Object(m)) = serde_json::from_slice::<Value>(bytes) else { return Err(unprocessable("Input should be a valid dictionary")) };
-    if let Some(extra) = m.keys().find(|k| !allowed.contains(&k.as_str())) {
-        return Err(unprocessable(&format!("Extra inputs are not permitted: {extra}")));
+    let schema=match allowed {
+        ["target","text"]=>"ThenLinkBody",
+        ["goal","check_cmd","max_iters","require_branch"]=>"LoopCreate",
+        ["goal","check_cmd"]=>"LoopRefine",
+        ["accept"]=>"LoopResolve",
+        _=>unreachable!("formulário de loop conhecido"),
+    };
+    let parsed=crate::orchestration::body::parse(bytes)?;
+    let normalized=crate::login_guests::schema::validate(schema,&parsed);
+    crate::orchestration::codec::discard(parsed);
+    match normalized {
+        Ok(Value::Object(m))=>Ok(m),
+        Ok(value)=>{crate::orchestration::codec::discard(value);unreachable!("schema retorna objeto")},
+        Err(failure)=>{
+            if crate::orchestration::codec::contains_surrogate(&failure.body) || crate::orchestration::codec::contains_nonfinite(&failure.body) {
+                crate::orchestration::codec::discard(failure.body);
+                Err((StatusCode::INTERNAL_SERVER_ERROR,Value::String("Internal Server Error".into())))
+            } else {Err((StatusCode::from_u16(failure.status).unwrap(),failure.body))}
+        }
     }
-    Ok(m)
 }
 
 fn text(m: &Map<String, Value>, key: &str, max: Option<usize>) -> Result<String, Reply> {
@@ -175,14 +215,14 @@ async fn create(b: &dyn Backend, name: &str, body: &[u8]) -> Result<Reply, Reply
     };
     if !(1..=100).contains(&max_iters) { return Err(unprocessable("max_iters: Input should be between 1 and 100")); }
     let require_branch = boolean(&m, "require_branch", Some(true))?;
-    let Some(row) = b.row(name).await? else {
+    let Some(row) = b.current_row(name).await? else {
         return Err(refused(StatusCode::NOT_FOUND, "erro_sessao_inexistente", "sessão não encontrada", json!({})));
     };
     // Sem fim de turno o tique nunca dispara: o loop ficaria rodando mudo.
     if row.provider != "claude" {
         return Err(refused(StatusCode::CONFLICT, "erro_loop_provider_invalido", "loop runner só suporta sessões claude", json!({})));
     }
-    if !b.automations() {
+    if !b.automations().map_err(config_failed)? {
         return Err(refused(StatusCode::CONFLICT, "erro_automacoes_desligadas", "automações desligadas (kill-switch)", json!({})));
     }
     let store = b.store();
@@ -223,13 +263,17 @@ async fn resolve(b: &dyn Backend, name: &str, body: &[u8]) -> Result<Reply, Repl
         return Err(refused(StatusCode::CONFLICT, "erro_loop_estado_errado", "loop não está aguardando confirmação", json!({})));
     };
     if accept { return Ok(loop_reply(tick::end(&store, name, "done", "confirmado pronto", &env).map_err(unwritable)?)); }
+    let row = b.current_row(name).await?;
+    if row.as_ref().is_some_and(|r| r.provider != "claude") {
+        return Err(refused(StatusCode::CONFLICT, "erro_loop_provider_invalido", "loop runner só suporta sessões claude", json!({})));
+    }
     d.insert("status".into(), json!("running"));
     store.set(name, &d).map_err(unwritable)?;
     let max = store::int(&d, "max_iters");
     if store::int(&d, "iter") + 1 > max {
         return Ok(loop_reply(tick::end(&store, name, "exhausted", &format!("esgotou {max} iterações"), &env).map_err(unwritable)?));
     }
-    if !b.row(name).await?.is_some_and(|r| r.jsonl.is_some()) {
+    if !row.is_some_and(|r| r.jsonl.is_some()) {
         tick::end(&store, name, "failed", "sessão morta", &env).map_err(unwritable)?;
         return Ok(loop_reply(store.get(name)));
     }
@@ -241,7 +285,7 @@ async fn refine(b: &dyn Backend, body: &[u8]) -> Result<Reply, Reply> {
     let m = object(body, &["goal", "check_cmd"])?;
     let goal = text(&m, "goal", Some(super::refine::GOAL_MAX))?;
     let check_cmd = optional_text(&m, "check_cmd")?;
-    if !b.automations() {
+    if !b.automations().map_err(config_failed)? {
         return Err(refused(StatusCode::CONFLICT, "erro_automacoes_desligadas", "automações desligadas (kill-switch)", json!({})));
     }
     match b.refine(&goal, check_cmd.as_deref()).await {
@@ -275,15 +319,24 @@ pub fn suggest_checks(cwd: &std::path::Path) -> Vec<String> {
 }
 
 /// O servidor de verdade.
-pub struct Live { pub st: Arc<AppState> }
+pub struct Live<'a> { pub st: Arc<AppState>, pass: Option<&'a crate::runtime::ingress::IngressPass> }
 
-impl Backend for Live {
+impl Backend for Live<'_> {
     fn store(&self) -> Store { super::store(&self.st) }
     fn now(&self) -> f64 { crate::nav_requests::now() }
-    fn automations(&self) -> bool { super::automations(&self.st) }
+    fn automations(&self) -> Result<bool, &'static str> { super::automations(&self.st) }
     fn row<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<Option<SessionRow>, Reply>> {
         Box::pin(async move {
             match tokio::time::timeout(crate::locate::LOCATE_TIMEOUT, self.st.list.find_row(name)).await {
+                Ok(Ok(row)) => Ok(row),
+                Ok(Err(e)) => Err(refused(StatusCode::SERVICE_UNAVAILABLE, e.code, e.detail, json!({}))),
+                Err(_) => Err(refused(StatusCode::SERVICE_UNAVAILABLE, "locate_timeout", "a lista de sessões não respondeu a tempo", json!({}))),
+            }
+        })
+    }
+    fn current_row<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<Option<SessionRow>, Reply>> {
+        Box::pin(async move {
+            match tokio::time::timeout(crate::locate::LOCATE_TIMEOUT, super::fresh_row(&self.st, name)).await {
                 Ok(Ok(row)) => Ok(row),
                 Ok(Err(e)) => Err(refused(StatusCode::SERVICE_UNAVAILABLE, e.code, e.detail, json!({}))),
                 Err(_) => Err(refused(StatusCode::SERVICE_UNAVAILABLE, "locate_timeout", "a lista de sessões não respondeu a tempo", json!({}))),
@@ -298,9 +351,23 @@ impl Backend for Live {
     }
     fn branch(&self, row: &SessionRow) -> Option<String> { super::branch(row) }
     fn append<'a>(&'a self, name: &'a str, text: &'a str) -> BoxFuture<'a, Result<String, (String, String)>> {
-        Box::pin(async move { super::append(&self.st, name, text).await.map_err(|e| (e.code, e.message)) })
+        Box::pin(async move {
+            let result = match self.pass {
+                Some(pass) => super::append_entered(&self.st, name, text, pass).await,
+                None => super::append(&self.st, name, text).await,
+            };
+            result.map_err(|e| (e.code, e.message))
+        })
     }
-    fn drain<'a>(&'a self, name: &'a str) -> BoxFuture<'a, ()> { Box::pin(super::drain(&self.st, name)) }
+    fn drain<'a>(&'a self, name: &'a str) -> BoxFuture<'a, ()> {
+        Box::pin(async move {
+            if let Some(pass) = self.pass {
+                if let Some(runtime) = self.st.state.runtime.get() && let Err(error) = runtime.drain_entered(name, pass).await {
+                    tracing::warn!(session = name, code = %error.code, "loop: drain falhou; a entrada fica na fila");
+                }
+            } else { super::drain(&self.st, name).await; }
+        })
+    }
     fn notify(&self, name: &str, status: &str, reason: &str) { super::notify(&self.st, name, status, reason); }
     fn refine<'a>(&'a self, goal: &'a str, check_cmd: Option<&'a str>) -> BoxFuture<'a, Result<String, String>> {
         Box::pin(async move {
@@ -311,27 +378,74 @@ impl Backend for Live {
     }
 }
 
-/// Só o dono; o resto segue ao Python.
-pub async fn route(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (fwd, owner) = match crate::routes::gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
-    if !owner { return crate::routes::pass(&st, req, &fwd).await; }
-    let headers = req.headers().clone();
-    let mut r = serve(&st, req).await;
-    crate::routes::cors(&headers, r.headers_mut());
-    r
+fn http_response(status:StatusCode, body:Value)->Response {
+    if status==StatusCode::INTERNAL_SERVER_ERROR && body.as_str()==Some("Internal Server Error") {
+        crate::orchestration::codec::discard(body);
+        return crate::http_cors::internal_error();
+    }
+    let persistence_error=status==StatusCode::INTERNAL_SERVER_ERROR && body["detail"]["code"]=="loop_store_unwritable";
+    let mut response=crate::http_cors::json_guarded(status,body);
+    // A falha de disco saía pelo middleware externo do Python, sem cabeçalhos CORS.
+    if persistence_error {response.extensions_mut().insert(crate::http_cors::UnhandledServerError);}
+    response
+}
+fn parsing_failed()->Response {
+    http_response(StatusCode::BAD_REQUEST,json!({"detail":"There was an error parsing the body"}))
 }
 
+/// O porteiro já delimitou o convidado; o handler mantém a autorização sem elevar sua identidade.
+pub async fn route(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
+    if let Some(response)=crate::http_cors::preflight(req.method(),req.headers()){return response;}
+    let headers=req.headers().clone();let method=req.method().clone();
+    let mut response=admit(&st,peer,req).await;
+    crate::http_cors::apply(&headers,&mut response);
+    crate::http_route_response::suppress_head(&method,&mut response);
+    response
+}
+async fn admit(st:&Arc<AppState>,peer:SocketAddr,mut req:Request)->Response {
+    if let Some(response)=crate::http_body_limit::precheck(req.headers()){return response;}
+    let decoded=percent_decode_str(req.uri().path()).decode_utf8_lossy();
+    let decision=crate::http_contract::resolve(ROUTES,req.method().as_str(),&decoded);
+    let (_,https)=st.cfg.trusted.resolve(peer.ip(),req.headers());
+    if let Some(response)=crate::http_route_response::response(&decision,req.method(),req.uri(),req.headers(),https,&st.cfg.listen.to_string()){return response;}
+    let Some((name,operation))=op(req.method(),req.uri().path()) else{return http_response(StatusCode::NOT_FOUND,json!({"detail":"Not Found"}));};
+    // FastAPI lê a sintaxe JSON antes das dependências; o schema vem depois delas.
+    if schema_name(operation).is_some() && crate::http_body_input::is_json(req.headers()) {
+        let (parts,body)=req.into_parts();
+        let bytes=match to_bytes(body,crate::http_body_limit::MAX_BYTES).await {Ok(bytes)=>bytes,Err(_)=>return parsing_failed()};
+        match crate::orchestration::body::parse(&bytes) {
+            Ok(value)=>crate::orchestration::codec::discard(value),
+            Err((status,body))=>return http_response(status,body),
+        }
+        req=Request::from_parts(parts,axum::body::Body::from(bytes));
+    }
+    let (_,caller)=match crate::routes::who(st,peer,&req).await {Ok(value)=>value,Err(error)=>return crate::auth::unavailable(error)};
+    match caller {
+        Some(caller) if caller.can(&name,req.method())=>{},
+        Some(_)=>return StatusCode::FORBIDDEN.into_response(),
+        None=>if let Err(response)=crate::routes::owner_gate(st,peer,&req).await{return response;},
+    }
+    serve(st,req).await
+}
 async fn serve(st: &Arc<AppState>, req: Request) -> Response {
-    let Some((name, op)) = op(req.method(), req.uri().path()) else {
-        return json_response(StatusCode::NOT_FOUND, json!({"detail": "Not Found"}));
+    let Some((name, operation)) = op(req.method(), req.uri().path()) else {
+        return http_response(StatusCode::NOT_FOUND, json!({"detail": "Not Found"}));
     };
-    // A trava vem antes do corpo, como a dependência `_transfer_guard` antes da validação.
-    let _pass = if op == Op::Get { None } else {
+    let pass = if operation == Op::Get { None } else {
         match crate::plans::routes::enter(st, &name).await { Ok(p) => p, Err(r) => return r }
     };
-    let Ok(bytes) = to_bytes(req.into_body(), BODY_LIMIT).await else { return crate::plans::routes::unprocessable_body("corpo grande demais") };
-    let (status, body) = handle(&Live { st: st.clone() }, &name, op, &bytes).await;
-    json_response(status, body)
+    let schema=schema_name(operation);
+    let json_body=crate::http_body_input::is_json(req.headers());
+    let bytes=if schema.is_some() {
+        match to_bytes(req.into_body(),crate::http_body_limit::MAX_BYTES).await {Ok(bytes)=>bytes,Err(_)=>return parsing_failed()}
+    } else {axum::body::Bytes::new()};
+    if let Some(schema)=schema && !json_body && !bytes.is_empty() {
+        let Ok(text)=std::str::from_utf8(&bytes) else{return http_response(StatusCode::INTERNAL_SERVER_ERROR,Value::String("Internal Server Error".into()));};
+        let error=crate::login_guests::schema::validate(schema,&Value::String(text.into())).unwrap_err();
+        return http_response(StatusCode::from_u16(error.status).unwrap(),error.body);
+    }
+    let (status, body) = handle(&Live { st: st.clone(), pass: pass.as_ref() }, &name, operation, &bytes).await;
+    http_response(status, body)
 }
 
 #[cfg(test)]

@@ -25,6 +25,7 @@ def test_supervisor_starts_runtime_and_workspace_bridges_together(tmp_path, monk
     # O binário real varre canos órfãos ao subir: nunca com o HOME e os processos desta máquina.
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("CP_RUST_NO_ORPHAN_SWEEP", "1")
+    monkeypatch.setenv("CP_RUST_SERVER_BIN", str(_BINARY))
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
@@ -41,8 +42,16 @@ def test_supervisor_starts_runtime_and_workspace_bridges_together(tmp_path, monk
             assert configured, "a ponte de contas não recebeu o endereço privado"
             configured = groups_bridge._config is not None
             assert configured, "a ponte de grupos não recebeu o endereço privado"
-            assert await asyncio.to_thread(workspace_bridge.request, "head_info", {"cwd": str(tmp_path)}) == {
-                "ok": True, "result": ["main", False]}
+            # O handshake publica as pontes antes de concluir a preparação inicial do Rust.
+            deadline = time.monotonic() + 15
+            while True:
+                result = await asyncio.to_thread(workspace_bridge.request, "head_info", {"cwd": str(tmp_path)})
+                if result == {"ok": True, "result": ["main", False]}:
+                    break
+                assert result == {"ok": False, "error": {
+                    "status": 503, "code": "workspace_unavailable", "detail": "sem resposta do Rust"}}
+                assert time.monotonic() < deadline, result
+                await asyncio.sleep(.01)
         finally:
             await supervisor.stop()
             internal_api.set_secret(None)

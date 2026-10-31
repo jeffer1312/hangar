@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# hangar-doctor [--qr]: diagnóstico da instalação, uma linha por item, com conserto.
+# Diagnóstico offline; o serviço não precisa estar de pé.
 set -euo pipefail
-cd "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")/../backend"
-# O Python do pacote ou o venv do checkout: no pacote não há uv.
-exec ../scripts/hangar-python -m app.doctor "$@"
+root="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")/.." && pwd)"
+exec "$root/scripts/hangar-server-command" doctor --backend "$root/backend" "$@"

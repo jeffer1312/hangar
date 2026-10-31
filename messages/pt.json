@@ -3727,7 +3727,6 @@
   "harness_codex_m_etapa_marketplace": "Atualizando marketplace {marketplace}",
   "harness_codex_m_etapa_plugin": "Instalando ou atualizando {id}",
   "harness_codex_m_erro_registro_ilegivel": "Registro da integração ilegível",
-  "harness_codex_m_erro_falha": "Falha na integração ({tipo}); configuração anterior preservada nas etapas não concluídas",
   "harness_codex_m_erro_falha_inesperada": "Falha inesperada na integração ({tipo}); configuração anterior preservada nas etapas não concluídas",
   "harness_codex_m_erro_falha_etapa": "Falha em \"{etapa}\" ({tipo}); configuração anterior preservada nas etapas não concluídas",
   "harness_codex_m_erro_marketplace_origem": "Origem do marketplace {marketplace} não confirmada; instalação existente preservada",

@@ -51,7 +51,15 @@ async fn execute(st: Arc<AppState>, share: Arc<ShareState>, op: Operation) -> Re
             if revoked > 0 { sync_tunnel(&share).await; }
             Ok(json!({"revoked": revoked}))
         }
-        Operation::SetLife { name, life } => share.store.set_life(&name, life).map(|()| json!({})).map_err(io_failed),
+        Operation::SetLife { name, life } => {
+            share.store.set_life(&name, life.clone()).map_err(io_failed)?;
+            let store = st.login_guests.store.clone();
+            let saved = tokio::task::spawn_blocking(move || store.set_life(&name, life.as_deref())).await;
+            if !matches!(saved, Ok(Ok(()))) {
+                tracing::warn!(code = "guest_life_write_failed", "o dono da sessão não acompanhou a troca de modo");
+            }
+            Ok(json!({}))
+        },
         Operation::ModeChangeBegin { name } => { facts.begin_mode_change(&name); Ok(json!({})) }
         Operation::ModeChangeEnd { name, source_life } => {
             // A transferência que segue incompleta (restauração que falhou) continua valendo.

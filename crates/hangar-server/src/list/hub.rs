@@ -640,13 +640,16 @@ pub async fn events(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         _ => return pass(&st, req, &fwd).await,
     };
     let (tx, rx) = mpsc::channel::<Bytes>(16);
-    match (grant, st.share.clone()) {
+    if let Some(login) = req.extensions().get::<crate::login_guests::gate::Login>() {
+        tokio::spawn(login_loop(st.hub.subscribe(&st.list, &st.diag, false), st.login_guests.clone(), login.token.clone(), tx));
+    } else { match (grant, st.share.clone()) {
         (None, _) => { tokio::spawn(client_loop(st.hub.subscribe(&st.list, &st.diag, true), tx)); }
         (Some(grant), Some(share)) => {
             tokio::spawn(guest_loop(st.hub.subscribe(&st.list, &st.diag, false), share, grant.token.clone(), tx));
         }
         // Convidado sem convites no Rust não existe: o porteiro nem sobe.
         (Some(_), None) => return pass(&st, req, &fwd).await,
+    }
     }
     let stream = futures_util::stream::unfold(rx, |mut rx| async move { rx.recv().await.map(|b| (Ok::<Bytes, Infallible>(b), rx)) });
     let mut resp = Response::new(Body::from_stream(stream));
@@ -666,7 +669,8 @@ pub async fn list(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInf
         return pass(&st, req, &fwd).await;
     }
     // Relido agora: o grant do porteiro é desta mesma requisição, mas o registro é a fonte.
-    let guest = match who.as_ref().and_then(|c| c.grant()) {
+    let login = req.extensions().get::<crate::login_guests::gate::Login>().cloned();
+    let guest = match who.as_ref().and_then(|c| c.grant()).filter(|_|login.is_none()) {
         None => None,
         Some(grant) => match st.share.as_ref().and_then(|s| s.store.lookup_token(&grant.token)) {
             Some(guest) => Some(guest),
@@ -679,10 +683,15 @@ pub async fn list(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInf
         Ok(p) => p,
         Err(e) => return unavailable(&st, req.headers(), e),
     };
-    let body = match &guest {
+    let body = if let Some(login) = login {
+        match login_rows(st.login_guests.clone(), produced.clone(), login.guest).await {
+            Ok(rows) => serde_json::to_vec(&rows),
+            Err(()) => return unavailable(&st, req.headers(), ListError { code: "guests_worker_failed", detail: "" }),
+        }
+    } else { match &guest {
         None => serde_json::to_vec(&visible(&produced)),
         Some(guest) => serde_json::to_vec(&guest_rows(visible(&produced), guest)),
-    };
+    }};
     let body = match body {
         Ok(b) => b,
         Err(_) => return unavailable(&st, req.headers(), ListError { code: "list_unserializable", detail: "" }),
@@ -741,5 +750,41 @@ mod tests {
         assert_eq!(frames(&p, &mut sent).len(), 1);
         frames(&Published::default(), &mut sent);
         assert!(sent.nav.is_empty());
+    }
+}
+
+async fn login_rows(service:Arc<crate::login_guests::Service>,produced:Produced,guest:crate::login_guests::store::Guest)->Result<Vec<SessionRow>,()> {
+    tokio::task::spawn_blocking(move||produced.rows.iter().filter(|row|service.store.visible(Some(&guest),&row.name,row.lifecycle_id.as_deref())).cloned().collect()).await.map_err(|_|())
+}
+
+async fn login_loop(mut sub:Subscription,service:Arc<crate::login_guests::Service>,token:String,out:mpsc::Sender<Bytes>) {
+    let start=tokio::time::Instant::now();
+    let mut refresh=tokio::time::interval(TICK);
+    let mut ping=tokio::time::interval_at(start+PING_EVERY,PING_EVERY);
+    let mut comment=tokio::time::interval_at(start+COMMENT_EVERY,COMMENT_EVERY);
+    let mut previous=None;let mut error=None;
+    loop {
+        let read=service.clone();let credential=token.clone();
+        let Some(guest)=tokio::task::spawn_blocking(move||read.store.lookup(credential.as_bytes())).await.ok().flatten() else{return};
+        let published=sub.rx.borrow_and_update().clone();
+        if let Some((code,frame))=&published.error {
+            if error!=Some(*code) {if !push(&out,frame.clone()).await{return;}error=Some(*code);}
+            previous=None;
+        }else if let Some(rows)=&published.rows {
+            error=None;
+            let Ok(rows)=login_rows(service.clone(),rows.clone(),guest).await else{let _=push(&out,error_frame("guests_worker_failed")).await;return;};
+            let Ok(json)=serde_json::to_string(&rows) else{return};
+            if previous.as_deref()!=Some(json.as_str()) {
+                if !push(&out,sse_frame("sessions",&json,None)).await{return;}
+                previous=Some(json);
+            }
+        }
+        tokio::select! {
+            _=out.closed()=>return,
+            _=refresh.tick()=>{},
+            _=ping.tick()=>if !push(&out,ping_frame()).await{return},
+            _=comment.tick()=>if !push(&out,comment_frame()).await{return},
+            changed=sub.rx.changed()=>if changed.is_err(){return},
+        }
     }
 }

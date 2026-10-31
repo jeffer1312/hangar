@@ -308,8 +308,20 @@ fn refuse(st: &AppState, session: &str, route: &str, code: &'static str, motivo:
     resp
 }
 
+pub(crate) fn login_fs_path(req: &Request) -> Option<String> {
+    if req.method() != Method::GET
+        || req.extensions().get::<crate::login_guests::gate::Login>().is_none()
+    {
+        return None;
+    }
+    let path = percent_encoding::percent_decode_str(req.uri().path()).decode_utf8_lossy();
+    matches!(path.as_ref(), "/api/fs/roots" | "/api/fs/scan" | "/api/fs/branches")
+        .then(|| path.into_owned())
+}
+
 pub async fn public(st: Arc<AppState>, req: Request, forward: Forward) -> Response {
-    let route = req.uri().path().to_owned();
+    let login_fs = login_fs_path(&req);
+    let route = login_fs.clone().unwrap_or_else(|| req.uri().path().to_owned());
     let name = route
         .strip_prefix("/api/sessions/")
         .and_then(|p| p.split_once('/').map(|(n, _)| n))
@@ -330,11 +342,21 @@ pub async fn public(st: Arc<AppState>, req: Request, forward: Forward) -> Respon
     // Pasta sem sessão (`/api/fs/*`) vai ao diário sem nome.
     let session = name.clone().unwrap_or_default();
     let (parts, body) = req.into_parts();
-    let bytes = match to_bytes(body, MAX_BODY).await {
-        Ok(b) => b,
-        Err(_) => return response(json!({"detail":"request body too large"}), 413),
+    let bytes = if login_fs.is_some() {
+        // Estas consultas não têm parâmetro Body no FastAPI: o conteúdo não participa da validação.
+        Bytes::new()
+    } else {
+        match to_bytes(body, MAX_BODY).await {
+            Ok(b) => b,
+            Err(_) => return response(json!({"detail":"request body too large"}), 413),
+        }
     };
-    let ctx = match context(&st, name.as_deref()).await {
+    let guest_root = parts.extensions.get::<crate::login_guests::gate::Login>()
+        .filter(|_| name.is_none()).map(|login| login.guest.root.clone());
+    let resolved = if let Some(root) = guest_root {
+        Ok(json!({"roots":[root],"sessions":[]}))
+    } else { context(&st, name.as_deref()).await };
+    let ctx = match resolved {
         Ok(ctx) => ctx,
         // Sessão inexistente: o 404 é do Python, nada roda.
         Err(None) => return pass(&st, Request::from_parts(parts, Body::from(bytes)), &forward).await,
@@ -374,11 +396,17 @@ async fn run(
     ctx: Value,
     forward: &Forward,
 ) -> hangar_workspace::Result<Response> {
-    let route = parts.uri.path().to_owned();
     let params = form_urlencoded::parse(parts.uri.query().unwrap_or("").as_bytes())
         .into_owned()
         .collect::<HashMap<String, String>>();
     let method = parts.method.clone();
+    if parts.extensions.get::<crate::login_guests::gate::Login>().is_some()
+        && matches!(tail, "/api/fs/scan" | "/api/fs/branches")
+        && !params.contains_key("root")
+    {
+        return Ok(response(json!({"detail":[{"type":"missing","loc":["query","root"],
+            "msg":"Field required","input":null}]}), 422));
+    }
     let payload = if bytes.is_empty() {
         json!({})
     } else {
@@ -460,7 +488,7 @@ async fn run(
             return Ok(pass(st, Request::from_parts(parts, Body::from(bytes)), forward).await);
         };
         execute(st, next).await?
-    } else if route.starts_with("/api/fs/")
+    } else if tail.starts_with("/api/fs/")
         && matches!(
             tail,
             "/api/fs/branches"
@@ -766,6 +794,7 @@ async fn folder_operation(
     let path = body["path"]
         .as_str()
         .or_else(|| q.get("path").map(String::as_str))
+        .filter(|path| !path.is_empty())
         .unwrap_or(root);
     let cwd = hangar_workspace::real(Path::new(path))
         .to_string_lossy()

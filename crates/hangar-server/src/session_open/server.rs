@@ -68,72 +68,21 @@ pub struct LoginGuest { pub id: String, pub name: String, pub root: PathBuf }
 /// `guest_users.lookup_token`, só lendo: o hash do token contra o `token_hash` de cada um. Ausente,
 /// ilegível ou com um convidado torto é "nenhum convidado", como no `_load` de lá.
 pub fn login_guest(claude_base: &Path, token: &[u8]) -> Option<LoginGuest> {
-    use subtle::ConstantTimeEq;
-    let raw: Value = serde_json::from_slice(&std::fs::read(claude_base.join("guests.json")).ok()?).ok()?;
-    let hash: String = ring::digest::digest(&ring::digest::SHA256, token).as_ref().iter().map(|b| format!("{b:02x}")).collect();
-    let text = |guest: &Value, key: &str| guest[key].as_str().map(str::to_owned);
-    let guests: Option<Vec<(String, LoginGuest)>> = raw["guests"].as_array()?.iter().map(|g| Some((text(g, "token_hash")?,
-        LoginGuest { id: text(g, "id")?, name: text(g, "name")?, root: text(g, "root")?.into() }))).collect();
-    guests?.into_iter().find(|(stored, _)| bool::from(stored.as_bytes().ct_eq(hash.as_bytes()))).map(|(_, guest)| guest)
+    crate::login_guests::store::Store::shared(claude_base.join("guests.json")).lookup(token)
+        .map(|g| LoginGuest { id:g.id, name:g.name, root:g.root })
 }
 
-/// `guest_users.claim`: o dono da sessão no `guests.json`, sob a `guests.lock` que o Python também
-/// pega (`atomico.locked`), relendo o arquivo dentro da trava. Ilegível não é sobrescrito.
+/// Grava o dono da sessão sob a trava do cadastro; arquivo ilegível não é sobrescrito.
 pub fn claim_guest(claude_base: &Path, session: &str, guest: &str, life: Option<&str>) -> std::io::Result<()> {
-    use std::io::{Error, ErrorKind};
-    std::fs::create_dir_all(claude_base)?;
-    let lock = std::fs::OpenOptions::new().read(true).append(true).create(true).open(claude_base.join("guests.lock"))?;
-    lock.lock()?;
-    let path = claude_base.join("guests.json");
-    let mut state = match crate::runtime::queue::read_replaced(&path) {
-        Ok(raw) => serde_json::from_slice::<Value>(&raw).ok().filter(Value::is_object)
-            .ok_or_else(|| Error::new(ErrorKind::InvalidData, "guests.json ilegível"))?,
-        Err(error) if error.kind() == ErrorKind::NotFound => json!({}),
-        Err(error) => return Err(error),
-    };
-    if state.get("guests").is_none() { state["guests"] = json!([]); }
-    if state.get("sessions").is_none() { state["sessions"] = json!({}); }
-    let sessions = state["sessions"].as_object_mut().ok_or_else(|| Error::new(ErrorKind::InvalidData, "guests.json ilegível"))?;
-    sessions.insert(session.into(), json!({"guest": guest, "life": life}));
-    crate::runtime::queue::atomic_write(&path, &serde_json::to_vec_pretty(&state)?)
+    crate::login_guests::store::Store::shared(claude_base.join("guests.json")).claim(session, guest, life)
+        .map_err(|_| std::io::Error::other("registro de convidados indisponível"))
 }
 
-/// `guest_users.set_life`: a vida nova da sessão que o convidado criou, sob a mesma `guests.lock`.
+/// Atualiza a vida da sessão sob a mesma trava do cadastro.
 /// Sem dono gravado não há o que mudar; ilegível não é sobrescrito.
 pub fn guest_set_life(claude_base: &Path, session: &str, life: &str) -> std::io::Result<()> {
-    use std::io::{Error, ErrorKind};
-    let lock = std::fs::OpenOptions::new().read(true).append(true).create(true).open(claude_base.join("guests.lock"))?;
-    lock.lock()?;
-    let path = claude_base.join("guests.json");
-    let mut state = match crate::runtime::queue::read_replaced(&path) {
-        Ok(raw) => serde_json::from_slice::<Value>(&raw).ok().filter(Value::is_object)
-            .ok_or_else(|| Error::new(ErrorKind::InvalidData, "guests.json ilegível"))?,
-        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error),
-    };
-    let Some(owner) = state["sessions"].get_mut(session).filter(|o| o.is_object()) else { return Ok(()) };
-    if owner["life"] == life { return Ok(()); }
-    owner["life"] = json!(life);
-    crate::runtime::queue::atomic_write(&path, &serde_json::to_vec_pretty(&state)?)
-}
-
-/// O convidado do envelope da ponte: `guest` ausente ou nulo é o dono; o id, o convidado dele.
-pub fn bridge_guest(envelope: &Value, claude_base: &Path) -> Result<Option<LoginGuest>, OpenError> {
-    let malformed = || OpenError::new(400, "erro_corpo_invalido", "guest é o id do convidado ou null");
-    if envelope.get("guest_root").is_some() { return Err(malformed()); }
-    match &envelope["guest"] {
-        Value::Null => Ok(None),
-        Value::String(id) if !id.is_empty() => guest_by_id(claude_base, id).map(Some)
-            .ok_or_else(|| OpenError::new(403, "erro_criacao_sessao", "convidado inexistente")),
-        _ => Err(malformed()),
-    }
-}
-
-/// O convidado `id` do `guests.json`, para a ponte do Connect, que chega com o id já autenticado lá.
-pub fn guest_by_id(claude_base: &Path, id: &str) -> Option<LoginGuest> {
-    let raw: Value = serde_json::from_slice(&std::fs::read(claude_base.join("guests.json")).ok()?).ok()?;
-    let guest = raw["guests"].as_array()?.iter().find(|g| g["id"] == id)?;
-    Some(LoginGuest { id: id.into(), name: guest["name"].as_str()?.into(), root: guest["root"].as_str()?.into() })
+    crate::login_guests::store::Store::shared(claude_base.join("guests.json")).set_life(session, Some(life))
+        .map_err(|_| std::io::Error::other("registro de convidados indisponível"))
 }
 
 /// A fila que a sessão morta deixou no nome (a projeção `.hangar-queue/<nome>.jsonl`, que o Rust lê
@@ -557,6 +506,26 @@ pub(super) fn baton_step(asked: &Value) -> &'static str {
 
 /// `POST /api/sessions/{name}/bastao` do dono: o Python monta e grava o dossiê (é dele) e devolve o
 /// pedido de abertura da sucessora em vez de abrir; o Rust a abre com o kick-off como primeira mensagem.
+async fn prepare_baton_engine(st:&AppState,asked:&mut Value)->Result<(),OpenError>{
+    if asked.get("provider").is_none(){
+        let provider=if !asked["config_dir"].is_null()||asked["engine"].as_str().is_some_and(|v|!v.is_empty()){"claude".to_owned()}
+        else if !asked["codex_account"].is_null(){"codex".to_owned()}
+        else if asked["omp_profile"].as_str().is_some_and(|v|!v.is_empty()){"omp".to_owned()}
+        else{crate::session_open::resolve::choose_provider(&crate::engines::providers::read(&st.accounts).await?.selection).name().to_owned()};
+        asked["provider"]=json!(provider);
+    }
+    let Some(account)=asked["engine_account"].as_str()else{return Ok(());};
+    let engine=asked["engine"].as_str().unwrap_or("");
+    if asked["provider"]!="claude"||engine.is_empty(){return Err(OpenError::new(400,"erro_cliproxy_conta","conta ChatGPT exige Claude com motor CLIProxyAPI local"));}
+    let (engine,account,model)=(engine.to_owned(),account.to_owned(),asked["model"].as_str().map(str::to_owned));
+    let accounts=st.accounts.clone();let runtime=tokio::runtime::Handle::current();
+    tokio::task::spawn_blocking(move||{
+        use super::OpenFacts;
+        let facts=super::facts::LocalFacts::shared(accounts.env.clone(),&accounts,runtime);
+        facts.fixed_engine_model(&engine,&account,model.as_deref()).map(|_|())
+    }).await.map_err(|_|OpenError::new(500,"erro_cliproxy_conta","a validação da conta do motor foi interrompida"))?
+}
+
 pub async fn bastao(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let (fwd, owner) = match crate::routes::gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     let (mut parts, body) = req.into_parts();
@@ -566,7 +535,11 @@ pub async fn bastao(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     };
     let headers = parts.headers.clone();
     if owner { parts.headers.insert(DECLINED, axum::http::HeaderValue::from_static("rust")); }
-    let asked = serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null);
+    let mut asked = serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null);
+    if owner && asked.is_object() {
+        if let Err(error)=prepare_baton_engine(&st,&mut asked).await {return reply(&error);}
+    }
+    let bytes=if owner && asked.is_object(){serde_json::to_vec(&asked).expect("Pedido JSON já lido").into()}else{bytes};
     let successor = asked["name"].as_str().unwrap_or_default().to_owned();
     let _progress = super::open::Progress::track(&successor);
     super::open::progress_step(&successor, baton_step(&asked), json!({}));
@@ -590,9 +563,8 @@ pub async fn bastao(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     response
 }
 
-/// `/__hangar_server/claude/<nome>/open`: o que entrou direto no Python (Connect, com o convidado e a
-/// pasta dele, e o bastão por ele) abre aqui pelo mesmo caminho. `{"request": …, "guest": <id>}`; o
-/// que não é do Rust volta 421 e o Python segue. O dono da sessão do convidado é gravado aqui.
+/// A abertura do dono que entrou diretamente pelo Connect usa o mesmo lançador.
+/// Login próprio só entra pela rota pública, com a identidade decidida no Rust.
 pub async fn bridge(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     if !crate::workspace_routes::private_ok(&st, peer, req.headers()) { return StatusCode::NOT_FOUND.into_response(); }
     let Ok(bytes) = to_bytes(req.into_body(), crate::session_write::BODY_LIMIT).await else { return StatusCode::PAYLOAD_TOO_LARGE.into_response() };
@@ -601,16 +573,14 @@ pub async fn bridge(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         Ok(envelope) => envelope,
         Err(error) => return reply(&OpenError::invalid_body(&error.to_string())),
     };
+    if envelope.get("guest").is_some_and(|value| !value.is_null()) || envelope.get("guest_root").is_some() {
+        return reply(&OpenError::new(400,"erro_corpo_invalido","a ponte de abertura não aceita identidade de convidado"));
+    }
     let request = match SessionOpenRequest::parse(envelope["request"].to_string().as_bytes()) {
         Ok(request) => request,
         Err(error) => return reply(&error),
     };
-    let guest = match bridge_guest(&envelope, &AccountEnvironment::capture().claude_base) {
-        Ok(guest) => guest,
-        Err(error) => return reply(&error),
-    };
-    let caller = guest.as_ref().map_or(OpenCaller::Owner, |g| OpenCaller::Guest { root: g.root.clone() });
-    match decide_detached(&st, request, caller, guest).await {
+    match decide_detached(&st, request, OpenCaller::Owner, None).await {
         Decision::Opened(opened) => crate::session_write::json_response(StatusCode::OK, json!({"info": opened.body})),
         Decision::Refused(error) => reply(&error),
         Decision::NotOurs => StatusCode::MISDIRECTED_REQUEST.into_response(),

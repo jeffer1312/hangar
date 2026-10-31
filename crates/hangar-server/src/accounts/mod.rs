@@ -1,5 +1,6 @@
 //! Proteção de existência e fatos estritos de uso das contas.
 pub mod bridge;
+pub mod aliases;
 pub mod catalog;
 pub mod claude_config;
 pub mod credentials;

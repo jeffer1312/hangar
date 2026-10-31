@@ -1748,9 +1748,8 @@ export interface PushSubscriptionJSON {
   keys?: Record<string, string>;
 }
 
-// Registra a inscricao push do celular NESTE servidor, com label + id locais (pra notif e deep-link)
-// e o idioma escolhido na tela Geral — o backend renderiza a notificacao no idioma da inscricao
-// (app/push.py); inscricao antiga sem o campo cai em pt.
+// Registra a inscrição push do celular neste servidor, com nome, id e idioma escolhidos.
+// O backend Rust monta a notificação no idioma da inscrição; registro antigo sem idioma usa pt.
 export async function subscribePush(s: Server, subscription: PushSubscriptionJSON): Promise<void> {
   const res = await fetch(`${baseOf(s)}/api/push/subscribe`, {
     method: 'POST',

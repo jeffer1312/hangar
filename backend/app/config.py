@@ -535,35 +535,10 @@ def resolve_bind_ip(s: "Settings") -> str:
     return detect_lan_ip() if s.lan_bind_ip == "auto" else s.lan_bind_ip
 
 
-def porta_do_front(s: "Settings") -> int:
-    """Onde a interface responde: o serviço separado, quando existe, senão o próprio backend."""
-    return s.front_port or s.port
 
 
-def pairing_url(s: "Settings") -> str:
-    """The URL a phone should open (QR target): the PWA front + the auth token.
-
-    The phone reaches the PWA (vite/Caddy), not the API directly, so this points at the
-    front. When the bind is loopback/auto/0.0.0.0 we substitute the detected LAN IP so the
-    phone has something routable.
-    """
-    if s.public_url:
-        base = s.public_url.rstrip("/")
-    else:
-        host = detect_lan_ip() if s.lan_bind_ip in _LOOPBACK else s.lan_bind_ip
-        base = f"http://{host}:{porta_do_front(s)}"
-    return f"{base}/?token={s.auth_token}"
 
 
-def pairing_url_api(s: "Settings") -> str:
-    """QR pro app nativo. `public_url` é o endereço do FRONT (PWA), não da API — por isso, com ele
-    setado, o QR vai no formato que validarPareamento/parsePairing já entendem: front + `&api=` com
-    a API na LAN. Sem public_url, aponta direto pra API."""
-    host = detect_lan_ip() if s.lan_bind_ip in _LOOPBACK else s.lan_bind_ip
-    api = f"http://{host}:{s.port}"
-    if s.public_url:
-        return f"{s.public_url.rstrip('/')}/?token={s.auth_token}&api={api}"
-    return f"{api}/?token={s.auth_token}"
 
 
 # Porta do convidado: quem escuta é o hangar-server (Rust); o Python nunca a abre.

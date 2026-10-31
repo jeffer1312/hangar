@@ -88,15 +88,20 @@ def _h():
     return {"Authorization": "Bearer secret"}
 
 
-def test_list_sessions_route(api_client):
-    with patch("app.api.registry.list", return_value=[SessionInfo(name="cc", cwd="/p")]):
-        r = api_client.get("/api/sessions", headers=_h())
-    assert r.status_code == 200
-    assert r.json()[0]["name"] == "cc"
 
 
 def test_resposta_json_grande_usa_gzip(api_client):
-    r = api_client.get("/api/config", headers={**_h(), "Accept-Encoding": "gzip"})
+    async def payload():
+        return {"texto": "x" * 4096}
+
+    api_client.app.add_api_route("/api/test-gzip", payload)
+    try:
+        r = api_client.get("/api/test-gzip", headers={**_h(), "Accept-Encoding": "gzip"})
+    finally:
+        api_client.app.router.routes[:] = [
+            route for route in api_client.app.router.routes
+            if getattr(route, "path", None) != "/api/test-gzip"
+        ]
     assert r.status_code == 200
     assert r.headers["content-encoding"] == "gzip"
     assert "Accept-Encoding" in r.headers["vary"]
@@ -809,155 +814,12 @@ def test_select_404_when_session_missing(api_client, monkeypatch):
 
 
 def test_routes_require_auth(api_client):
-    assert api_client.get("/api/sessions").status_code == 401
+    assert api_client.post("/api/sessions/cc/input", json={"text": "oi"}).status_code == 401
 
 
 # ---------------------------------------------------------------------------
 # Testes de config dirs (Task 4)
 # ---------------------------------------------------------------------------
-
-@pytest.fixture(autouse=False)
-def _transition_fixture(monkeypatch):
-    """Isola _on_hook_transition: sem tmux real (registry.list vazio) e captura os pushes
-    disparados via _notify_async em vez de rodar a thread/rede de verdade."""
-    from types import SimpleNamespace
-    calls = []
-    monkeypatch.setattr(api_mod, "_notify_async", lambda sid, fn: calls.append((sid, fn)))
-    monkeypatch.setattr(api_mod.registry, "list", lambda: [])
-    # O push de "terminou" saiu do caminho sincrono: no Kimi so o `_work` sabe se o "idle" que
-    # chegou e de verdade (marcador congelado, ver corrige_ocioso_kimi). `_work` roda em thread —
-    # aqui executa em linha pra o teste continuar deterministico.
-    monkeypatch.setattr(api_mod.threading, "Thread",
-                        lambda target, daemon=None: SimpleNamespace(start=target))
-    monkeypatch.setattr(api_mod, "_FINISH_SETTLE", 0)
-    api_mod._working_started.clear()
-    api_mod._last_idle.clear()
-    api_mod._recheca_armada.clear()
-    return calls
-
-
-def test_finish_ping_skipped_on_short_turn(_transition_fixture, monkeypatch):
-    calls = _transition_fixture
-    monkeypatch.setattr(api_mod.settings, "notify_finished", True)
-    monkeypatch.setattr(api_mod.settings, "finish_min_seconds", 45)
-    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("working", 1000.0))
-    api_mod._on_hook_transition("s1", "working")
-    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("idle", 1010.0))  # 10s: curto demais
-    api_mod._on_hook_transition("s1", "idle")
-    assert calls == []
-
-
-def test_finish_ping_fires_on_long_turn(_transition_fixture, monkeypatch):
-    calls = _transition_fixture
-    monkeypatch.setattr(api_mod.settings, "notify_finished", True)
-    monkeypatch.setattr(api_mod.settings, "finish_min_seconds", 45)
-    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("working", 1000.0))
-    api_mod._on_hook_transition("s2", "working")
-    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("idle", 1050.0))  # 50s: dispara
-    api_mod._on_hook_transition("s2", "idle")
-    assert calls == [("s2", api_mod.push.notify_finished)]
-
-
-def test_finish_ping_waits_for_the_session_to_really_stop(_transition_fixture, monkeypatch):
-    calls = _transition_fixture
-    monkeypatch.setattr(api_mod.settings, "notify_finished", True)
-    monkeypatch.setattr(api_mod.settings, "finish_min_seconds", 45)
-    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("working", 1000.0))
-    api_mod._on_hook_transition("s7", "working")
-    # Fim de turno, mas quando a espera acaba a sessão já voltou a trabalhar (recado na fila): nada sai.
-    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("working", 1200.0))
-    api_mod._terminou_se_parou("s7", 1000.0, None)
-    assert calls == [] and api_mod._working_started["s7"] == 1000.0
-    # O turno seguinte continua a mesma série: o início fica o do primeiro.
-    api_mod._on_hook_transition("s7", "working")
-    assert api_mod._working_started["s7"] == 1000.0
-    # Ele dura 10 s, mas a série inteira passou de 45: avisa no fim de verdade.
-    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("idle", 1210.0))
-    api_mod._on_hook_transition("s7", "idle")
-    assert calls == [("s7", api_mod.push.notify_finished)] and "s7" not in api_mod._working_started
-
-
-def test_finish_ping_holds_while_background_work_is_open(_transition_fixture, monkeypatch):
-    from types import SimpleNamespace
-    from app import background_open
-    calls = _transition_fixture
-    monkeypatch.setattr(api_mod.settings, "notify_finished", True)
-    monkeypatch.setattr(api_mod.settings, "finish_min_seconds", 45)
-    info = SimpleNamespace(name="s8", jsonl="/tmp/s8.jsonl", provider="claude", last_reply="**Pronto**: build verde")
-    monkeypatch.setattr(api_mod.registry, "list", lambda: [info])
-    monkeypatch.setattr(api_mod, "session_key", lambda p: "s8")
-    monkeypatch.setattr(api_mod, "drain", lambda *a, **k: 0)
-    monkeypatch.setattr(api_mod, "_maybe_chain", lambda n: None)
-    monkeypatch.setattr(api_mod, "_agendar_confirmacao", lambda *a: None)
-    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("working", 1000.0))
-    api_mod._on_hook_transition("s8", "working")
-    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("idle", 1100.0))
-    monkeypatch.setattr(background_open, "scan", lambda jsonl: background_open.Scan(1, "ainda não"))
-    api_mod._on_hook_transition("s8", "idle")
-    assert calls == [] and "s8" in api_mod._working_started    # agente rodando: espera ele
-    monkeypatch.setattr(background_open, "scan",
-                        lambda jsonl: background_open.Scan(0, "**Pronto**: build [verde](http://ci) do meu_var"))
-    api_mod._on_hook_transition("s8", "idle")
-    assert [sid for sid, _ in calls] == ["s8"] and "s8" not in api_mod._working_started
-    enviado = []
-    monkeypatch.setattr(api_mod.push, "notify_finished", lambda name, reply=None: enviado.append((name, reply)))
-    calls[0][1]("s8")
-    assert enviado == [("s8", "Pronto: build verde do meu_var")]
-
-
-def test_finish_series_restarts_after_a_long_stop(_transition_fixture, monkeypatch):
-    # O fim real nunca chegou (tarefa de fundo que ninguém fechou): sem isto, todo turno curto depois
-    # mediria desde o início velho e viraria um "terminou".
-    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("working", 1000.0))
-    api_mod._on_hook_transition("s6", "working")
-    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("idle", 1100.0))
-    monkeypatch.setattr(api_mod, "_push_terminou", lambda sid, st: None)
-    api_mod._on_hook_transition("s6", "idle")
-    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("working", 1100.0 + api_mod._SERIES_GAP + 1))
-    api_mod._on_hook_transition("s6", "working")
-    assert api_mod._working_started["s6"] == 1100.0 + api_mod._SERIES_GAP + 1
-
-
-def test_finish_ping_respects_flag(_transition_fixture, monkeypatch):
-    calls = _transition_fixture
-    monkeypatch.setattr(api_mod.settings, "notify_finished", False)
-    monkeypatch.setattr(api_mod.settings, "finish_min_seconds", 45)
-    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("working", 1000.0))
-    api_mod._on_hook_transition("s3", "working")
-    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("idle", 1050.0))
-    api_mod._on_hook_transition("s3", "idle")
-    assert calls == []  # flag desligado -> nunca dispara, mesmo com turno longo
-
-
-def test_dead_ping_always_fires(_transition_fixture, monkeypatch):
-    calls = _transition_fixture
-    monkeypatch.setattr(api_mod.settings, "notify_dead", True)
-    api_mod._on_hook_transition("s4", "dead")
-    assert calls == [("s4", api_mod.push.notify_dead)]
-
-
-def test_dead_ping_respects_flag(_transition_fixture, monkeypatch):
-    calls = _transition_fixture
-    monkeypatch.setattr(api_mod.settings, "notify_dead", False)
-    api_mod._on_hook_transition("s5", "dead")
-    assert calls == []
-
-
-def test_working_started_cleaned_up_on_idle(_transition_fixture, monkeypatch):
-    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("working", 1000.0))
-    api_mod._on_hook_transition("s6", "working")
-    assert "s6" in api_mod._working_started
-    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("idle", 1001.0))
-    api_mod._on_hook_transition("s6", "idle")
-    assert "s6" not in api_mod._working_started
-
-
-def test_working_started_cleaned_up_on_dead(_transition_fixture, monkeypatch):
-    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("working", 1000.0))
-    api_mod._on_hook_transition("s7", "working")
-    assert "s7" in api_mod._working_started
-    api_mod._on_hook_transition("s7", "dead")
-    assert "s7" not in api_mod._working_started
 
 
 def _rust_owner_world(monkeypatch):
@@ -975,15 +837,10 @@ def _rust_owner_world(monkeypatch):
     monkeypatch.setattr(api_mod, "_drenar", lambda name, jsonl, provider: feitos.append(("drain", name)) or 0)
     monkeypatch.setattr(api_mod, "_agendar_confirmacao", lambda name, delay: feitos.append(("confirm", name)))
     monkeypatch.setattr(api_mod, "_maybe_chain", lambda name: feitos.append(("then", name)))
-    monkeypatch.setattr(api_mod, "_push_terminou", lambda sid, started: feitos.append(("terminou", sid)))
     monkeypatch.setattr(api_mod.loop_mod, "LoopLink", lambda name: SimpleNamespace(
         get=lambda: {"status": "running"} if name == "c1" else None,
         update=lambda **kw: feitos.append(("pausa", name))))
-    monkeypatch.setattr(api_mod.loop_mod, "schedule_tick", lambda name, ctx: feitos.append(("tick", name)))
-    monkeypatch.setattr(api_mod.push, "notify_awaiting", lambda name, body=None: feitos.append(("aguardando", name)))
-    monkeypatch.setattr(api_mod.push, "notify_dead", lambda name: feitos.append(("caiu", name)))
     monkeypatch.setattr(api_mod.settings, "notify_dead", True)
-    monkeypatch.setattr(api_mod, "_pane_wants_input", lambda name: True)
     return feitos
 
 
@@ -993,10 +850,7 @@ def test_rust_owned_session_transitions_do_nothing_in_python(monkeypatch):
     feitos = _rust_owner_world(monkeypatch)
     for state in ("idle", "awaiting_input", "dead"):
         api_mod._on_hook_transition("claude-sid", state)
-    api_mod._do_notify_awaiting("claude-sid")
-    enviados = []
-    api_mod._notify_async("claude-sid", enviados.append)
-    assert feitos == [] and enviados == []
+    assert feitos == []
 
 
 def test_kimi_transitions_still_run_in_python_with_rust_up(monkeypatch):
@@ -1316,177 +1170,12 @@ from types import SimpleNamespace
 from app.models import AskQuestion, AskQuestionItem, AskOption
 
 
-def test_awaiting_body_prefers_askq(monkeypatch):
-    info = SimpleNamespace(name="s1", jsonl="/x/u.jsonl", cwd="/x")
-    monkeypatch.setattr(api_mod, "read_pending_askq", lambda jsonl: AskQuestion(questions=[
-        AskQuestionItem(header="h", question="Qual branch usar?", options=[AskOption(label="a")]),
-    ]))
-    assert api_mod._awaiting_body(info) == "Qual branch usar?"
 
 
-def test_awaiting_body_falls_back_to_classify(monkeypatch):
-    import app.state as state_mod
-    import app.tmux as tmux_mod
-    info = SimpleNamespace(name="s1", jsonl="/x/u.jsonl", cwd="/x")
-    monkeypatch.setattr(api_mod, "read_pending_askq", lambda jsonl: None)  # sem AskUserQuestion nativo
-    monkeypatch.setattr(tmux_mod, "capture_pane", lambda name: "pane cru")
-    monkeypatch.setattr(state_mod, "classify",
-                        lambda pane: ("awaiting_input", None, "Pode sobrescrever o arquivo?", ["a", "b"]))
-    assert api_mod._awaiting_body(info) == "Pode sobrescrever o arquivo?"
 
 
-def test_awaiting_body_fallback_static(monkeypatch):
-    import app.state as state_mod
-    import app.tmux as tmux_mod
-    info = SimpleNamespace(name="s1", jsonl="/x/u.jsonl", cwd="/x")
-    monkeypatch.setattr(api_mod, "read_pending_askq", lambda jsonl: None)
-    monkeypatch.setattr(tmux_mod, "capture_pane", lambda name: "pane cru")
-    monkeypatch.setattr(state_mod, "classify", lambda pane: ("idle", None, None, None))
-    # None = fallback: quem resolve o texto e o push, no idioma da inscricao (nao texto fixo em pt)
-    assert api_mod._awaiting_body(info) is None
 
 
-def test_do_notify_awaiting_resolves_name_and_body(monkeypatch):
-    calls = []
-    info = SimpleNamespace(name="minha-sessao", jsonl="/x/uuid1.jsonl", cwd="/x")
-    monkeypatch.setattr(api_mod.registry, "list", lambda: [info])
-    monkeypatch.setattr(api_mod, "read_pending_askq", lambda jsonl: None)
-    monkeypatch.setattr(api_mod, "_pane_wants_input", lambda name: True)  # menu real no pane
-    monkeypatch.setattr(api_mod, "_awaiting_body", lambda i: "corpo rico")
-    monkeypatch.setattr(api_mod.push, "notify_awaiting", lambda name, body: calls.append((name, body)))
-    api_mod._do_notify_awaiting("uuid1")
-    assert calls == [("minha-sessao", "corpo rico")]
-
-
-def test_do_notify_awaiting_sem_terminal_usa_o_estado_da_lista(monkeypatch):
-    # Claude sem terminal: não há pane pra raspar nem askq no sidecar. A lista vem como o
-    # `registry.list` real devolve (estado padrão idle, sem pergunta): quem sabe é o adapter.
-    from app.adapters import CLAUDE_HEADLESS, get_adapter
-    calls = []
-    info = SimpleNamespace(name="hl", jsonl="/x/uuid1.jsonl", cwd="/x", headless=True,
-                           state="idle", question=None)
-    snap = SimpleNamespace(state="awaiting_input", question="Permitir Bash? ls")
-    monkeypatch.setattr(api_mod.registry, "list", lambda: [info])
-    monkeypatch.setattr(get_adapter(CLAUDE_HEADLESS), "snapshot", lambda name: snap if name == "hl" else None)
-    monkeypatch.setattr(api_mod, "read_pending_askq", lambda jsonl: None)
-    monkeypatch.setattr(api_mod, "_pane_wants_input", lambda name: pytest.fail("raspou pane inexistente"))
-    monkeypatch.setattr(api_mod, "_AWAITING_PUSH_RETRY_S", 0)
-    monkeypatch.setattr(api_mod.push, "notify_awaiting", lambda name, body: calls.append((name, body)))
-    api_mod._do_notify_awaiting("uuid1")
-    assert calls == [("hl", "Permitir Bash? ls")]
-    snap.state = "working"
-    api_mod._do_notify_awaiting("uuid1")
-    assert len(calls) == 1
-
-
-def test_do_notify_awaiting_skips_idle_notification(monkeypatch):
-    # Notification de "idle 60s" (state_hook mapeia pra awaiting): sem askq pendente e sem menu no
-    # pane (nas 2 checagens) -> NENHUM push. Era o push falso "Aguardando sua resposta" em toda
-    # sessao parada >60s.
-    calls = []
-    info = SimpleNamespace(name="parada", jsonl="/x/uuid1.jsonl", cwd="/x")
-    monkeypatch.setattr(api_mod.registry, "list", lambda: [info])
-    monkeypatch.setattr(api_mod, "read_pending_askq", lambda jsonl: None)
-    monkeypatch.setattr(api_mod, "_pane_wants_input", lambda name: False)
-    monkeypatch.setattr(api_mod, "_AWAITING_PUSH_RETRY_S", 0)
-    monkeypatch.setattr(api_mod.push, "notify_awaiting", lambda name, body: calls.append((name, body)))
-    api_mod._do_notify_awaiting("uuid1")
-    assert calls == []
-
-
-def test_do_notify_awaiting_retry_catches_late_menu(monkeypatch):
-    # Corrida de render: 1a checagem sem menu, retry acha o menu -> push sai (permissao legitima).
-    calls = []
-    seen = {"n": 0}
-    info = SimpleNamespace(name="perm", jsonl="/x/uuid1.jsonl", cwd="/x")
-    monkeypatch.setattr(api_mod.registry, "list", lambda: [info])
-    monkeypatch.setattr(api_mod, "read_pending_askq", lambda jsonl: None)
-
-    def _late_menu(name):
-        seen["n"] += 1
-        return seen["n"] >= 2
-
-    monkeypatch.setattr(api_mod, "_pane_wants_input", _late_menu)
-    monkeypatch.setattr(api_mod, "_AWAITING_PUSH_RETRY_S", 0)
-    monkeypatch.setattr(api_mod, "_awaiting_body", lambda i: "Pode rodar X?")
-    monkeypatch.setattr(api_mod.push, "notify_awaiting", lambda name, body: calls.append((name, body)))
-    api_mod._do_notify_awaiting("uuid1")
-    assert calls == [("perm", "Pode rodar X?")]
-
-
-def test_do_notify_awaiting_retry_catches_late_askq(monkeypatch):
-    # Sidecar askq pode ser o que atrasa (nao so o render do pane): 1a leitura None, retry acha a
-    # pergunta -> push sai. O retry re-le askq ALEM do pane.
-    calls = []
-    reads = {"n": 0}
-    info = SimpleNamespace(name="ask", jsonl="/x/uuid1.jsonl", cwd="/x")
-    monkeypatch.setattr(api_mod.registry, "list", lambda: [info])
-
-    def _late_askq(jsonl):
-        reads["n"] += 1
-        if reads["n"] < 2:
-            return None
-        return AskQuestion(questions=[
-            AskQuestionItem(header="h", question="Qual branch?", options=[AskOption(label="a")]),
-        ])
-
-    monkeypatch.setattr(api_mod, "read_pending_askq", _late_askq)
-    monkeypatch.setattr(api_mod, "_pane_wants_input", lambda name: False)
-    monkeypatch.setattr(api_mod, "_AWAITING_PUSH_RETRY_S", 0)
-    monkeypatch.setattr(api_mod.push, "notify_awaiting", lambda name, body: calls.append((name, body)))
-    api_mod._do_notify_awaiting("uuid1")
-    assert calls == [("ask", "Qual branch?")]
-
-
-def test_do_notify_awaiting_askq_pending_pushes_without_pane(monkeypatch):
-    # AskUserQuestion pendente no sidecar = awaiting real por definicao — push sem depender do pane.
-    calls = []
-    info = SimpleNamespace(name="ask", jsonl="/x/uuid1.jsonl", cwd="/x")
-    monkeypatch.setattr(api_mod.registry, "list", lambda: [info])
-    monkeypatch.setattr(api_mod, "read_pending_askq", lambda jsonl: AskQuestion(questions=[
-        AskQuestionItem(header="h", question="Qual branch?", options=[AskOption(label="a")]),
-    ]))
-    monkeypatch.setattr(api_mod, "_pane_wants_input",
-                        lambda name: (_ for _ in ()).throw(AssertionError("nao devia capturar pane")))
-    monkeypatch.setattr(api_mod.push, "notify_awaiting", lambda name, body: calls.append((name, body)))
-    api_mod._do_notify_awaiting("uuid1")
-    assert calls == [("ask", "Qual branch?")]
-
-
-def test_do_notify_awaiting_no_match_is_noop(monkeypatch):
-    calls = []
-    monkeypatch.setattr(api_mod.registry, "list", lambda: [])
-    monkeypatch.setattr(api_mod.push, "notify_awaiting", lambda name, body: calls.append((name, body)))
-    api_mod._do_notify_awaiting("uuid-nenhuma")
-    assert calls == []
-
-
-def test_push_mute_route(api_client, monkeypatch, tmp_path):
-    monkeypatch.setattr(api_mod.push, "_file", lambda: tmp_path / "subs.json")
-    r = api_client.post("/api/push/mute", json={"session": "s1", "muted": True}, headers=_h())
-    assert r.status_code == 200
-    assert api_mod.push.is_muted("s1") is True
-
-
-def test_push_quiet_hours_route(api_client, monkeypatch, tmp_path):
-    monkeypatch.setattr(api_mod.push, "_file", lambda: tmp_path / "subs.json")
-    r = api_client.post("/api/push/quiet-hours", json={"start": "22:00", "end": "07:00"}, headers=_h())
-    assert r.status_code == 200
-    assert api_mod.push.get_push_prefs()["quiet_hours"] == {"start": "22:00", "end": "07:00"}
-
-
-def test_push_quiet_hours_route_rejects_bad_format(api_client, monkeypatch, tmp_path):
-    monkeypatch.setattr(api_mod.push, "_file", lambda: tmp_path / "subs.json")
-    r = api_client.post("/api/push/quiet-hours", json={"start": "25:99", "end": "07:00"}, headers=_h())
-    assert r.status_code == 422
-
-
-def test_push_settings_route(api_client, monkeypatch, tmp_path):
-    monkeypatch.setattr(api_mod.push, "_file", lambda: tmp_path / "subs.json")
-    api_mod.push.set_muted("s1", True)
-    r = api_client.get("/api/push/settings", headers=_h())
-    assert r.status_code == 200
-    assert r.json()["muted"] == ["s1"]
 
 
 # --- POST /api/archive/{project}/{session_id}/resume: "Retomar conversa" do Arquivo ---
@@ -1659,127 +1348,32 @@ def test_answer_validation_error_still_409(api_client):
 from app import loop as loop_mod
 
 
-@pytest.fixture
-def loop_dir(tmp_path, monkeypatch):
-    monkeypatch.setattr(loop_mod.settings, "projects_dir", tmp_path / "projects")
-    return tmp_path
 
 
-def _info(name="cc", cwd="/repo", jsonl="/repo/t.jsonl"):
-    return SessionInfo(name=name, cwd=cwd, jsonl=jsonl)
 
 
-def test_loop_create_404_when_session_missing(api_client, loop_dir):
-    with patch("app.api.registry.list", return_value=[]):
-        r = api_client.post("/api/sessions/cc/loop", json={"goal": "g"}, headers=_h())
-    assert r.status_code == 404
 
 
-def test_loop_create_409_on_codex_session(api_client, loop_dir):
-    # Codex nao e tmux: loop ficaria running mudo pra sempre (sem hook/tick). Recusa cedo.
-    info = SessionInfo(name="cx", cwd="/repo", jsonl="/repo/t.jsonl", provider="codex")
-    with patch("app.api.registry.list", return_value=[info]), \
-         patch("app.api.automations_enabled", return_value=True):
-        r = api_client.post("/api/sessions/cx/loop", json={"goal": "g"}, headers=_h())
-    assert r.status_code == 409
 
 
-def test_loop_create_422_when_max_iters_too_high(api_client, loop_dir):
-    with patch("app.api.registry.list", return_value=[_info()]), \
-         patch("app.api.automations_enabled", return_value=True), \
-         patch("app.api.branch_of", return_value="TICKET-0000"):
-        r = api_client.post("/api/sessions/cc/loop",
-                            json={"goal": "g", "max_iters": 500}, headers=_h())
-    assert r.status_code == 422
 
 
-def test_loop_create_409_on_main_branch(api_client, loop_dir):
-    with patch("app.api.registry.list", return_value=[_info()]), \
-         patch("app.api.automations_enabled", return_value=True), \
-         patch("app.api.branch_of", return_value="main"):
-        r = api_client.post("/api/sessions/cc/loop",
-                            json={"goal": "g", "require_branch": True}, headers=_h())
-    assert r.status_code == 409
 
 
-def test_loop_branch_guard_reads_the_agent_worktree(api_client, loop_dir):
-    # Aberta na main, o agente trabalha numa worktree: a trava olha a branch de onde ele trabalha.
-    info = SessionInfo(name="cc", cwd="/repo", jsonl="/repo/t.jsonl", git_cwd="/repo-feat")
-    with patch("app.api.registry.list", return_value=[info]), \
-         patch("app.api.automations_enabled", return_value=True), \
-         patch("app.api.drain", return_value=1), \
-         patch("app.api.branch_of", side_effect=lambda d: "feat" if d == "/repo-feat" else "main"):
-        r = api_client.post("/api/sessions/cc/loop",
-                            json={"goal": "g", "require_branch": True}, headers=_h())
-    assert r.status_code == 200
 
 
-def test_loop_create_ok(api_client, loop_dir):
-    calls = []
-    with patch("app.api.registry.list", return_value=[_info()]), \
-         patch("app.api.automations_enabled", return_value=True), \
-         patch("app.api.branch_of", return_value="TICKET-0000"), \
-         patch("app.api.drain", side_effect=lambda n, j, p="claude": calls.append((n, j)) or 1):
-        r = api_client.post("/api/sessions/cc/loop",
-                            json={"goal": "criar ok.txt", "check_cmd": "test -f ok.txt"}, headers=_h())
-    assert r.status_code == 200
-    d = r.json()["loop"]
-    assert d["status"] == "running" and d["goal_entry_id"]
-    assert calls  # drain chamado
 
 
-def test_loop_create_409_when_already_running(api_client, loop_dir):
-    loop_mod.LoopLink("cc").set(loop_mod.new_loop("g", None, 10, True))
-    with patch("app.api.registry.list", return_value=[_info()]), \
-         patch("app.api.automations_enabled", return_value=True), \
-         patch("app.api.branch_of", return_value="TICKET-0000"):
-        r = api_client.post("/api/sessions/cc/loop", json={"goal": "g"}, headers=_h())
-    assert r.status_code == 409
 
 
-def test_loop_get_none_returns_suggestions(api_client, loop_dir):
-    with patch("app.api.registry.list", return_value=[_info(cwd=str(loop_dir))]):
-        r = api_client.get("/api/sessions/cc/loop", headers=_h())
-    assert r.status_code == 200
-    body = r.json()
-    assert body["loop"] is None and isinstance(body["suggestions"], list)
 
 
-def test_loop_delete_stops(api_client, loop_dir):
-    loop_mod.LoopLink("cc").set(loop_mod.new_loop("g", None, 10, True))
-    with patch("app.api.registry.list", return_value=[_info()]):
-        r = api_client.delete("/api/sessions/cc/loop", headers=_h())
-    assert r.status_code == 200
-    assert r.json()["loop"]["status"] == "stopped"
 
 
-def test_loop_resolve_accept(api_client, loop_dir):
-    d = loop_mod.new_loop("g", None, 10, True)
-    d["status"] = "done_claimed"
-    loop_mod.LoopLink("cc").set(d)
-    with patch("app.api.registry.list", return_value=[_info()]):
-        r = api_client.post("/api/sessions/cc/loop/resolve", json={"accept": True}, headers=_h())
-    assert r.status_code == 200 and r.json()["loop"]["status"] == "done"
 
 
-def test_loop_resolve_409_when_not_done_claimed(api_client, loop_dir):
-    loop_mod.LoopLink("cc").set(loop_mod.new_loop("g", None, 10, True))  # running
-    with patch("app.api.registry.list", return_value=[_info()]):
-        r = api_client.post("/api/sessions/cc/loop/resolve", json={"accept": True}, headers=_h())
-    assert r.status_code == 409
 
 
-def test_loop_resolve_reject_reprompts(api_client, loop_dir):
-    d = loop_mod.new_loop("g", None, 10, True)
-    d["status"] = "done_claimed"
-    d["goal_delivered_ts"] = 1.0
-    loop_mod.LoopLink("cc").set(d)
-    with patch("app.api.registry.list", return_value=[_info()]), \
-         patch("app.api.drain", return_value=1):
-        r = api_client.post("/api/sessions/cc/loop/resolve", json={"accept": False}, headers=_h())
-    assert r.status_code == 200
-    out = r.json()["loop"]
-    assert out["status"] == "running" and out["iter"] == 1
 
 
 # --- Loop goal refiner (claude -p efemero) -----------------------------------
@@ -1797,83 +1391,24 @@ def _claude_resolvido(monkeypatch):
     monkeypatch.setattr("app.loop._exe_claude", lambda: "claude")
 
 
-def test_loop_refine_ok(api_client):
-    with patch("app.api.automations_enabled", return_value=True), \
-         patch("app.loop.subprocess.run",
-               return_value=_completed(0, stdout="Migre date.ts pra date-fns e mostre o check verde")) as run:
-        r = api_client.post("/api/sessions/cc/loop/refine",
-                            json={"goal": "arruma as datas", "check_cmd": "npm run check"}, headers=_h())
-    assert r.status_code == 200
-    assert "date-fns" in r.json()["goal"]
-    # argv sem shell, modelo sonnet, tools de efeito colateral negadas (prompt injection headless)
-    args = run.call_args[0][0]
-    assert args[:4] == ["claude", "-p", "--model", "sonnet"]
-    assert "--disallowedTools" in args
-    for t in ("Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch"):
-        assert t in args
-    # prompt vai por STDIN (nunca no argv — --disallowedTools e variadico e engoliria o positional)
-    assert "arruma as datas" in run.call_args.kwargs["input"]
-    assert all("arruma as datas" not in a for a in args)
 
 
-def test_loop_refine_409_when_automations_off(api_client):
-    with patch("app.api.automations_enabled", return_value=False):
-        r = api_client.post("/api/sessions/cc/loop/refine", json={"goal": "x"}, headers=_h())
-    assert r.status_code == 409
 
 
-def test_loop_refine_stderr_in_detail(api_client):
-    with patch("app.api.automations_enabled", return_value=True), \
-         patch("app.loop.subprocess.run",
-               return_value=_completed(2, stderr="erro-especifico-do-cli")):
-        r = api_client.post("/api/sessions/cc/loop/refine", json={"goal": "x"}, headers=_h())
-    assert r.status_code == 502
-    assert "erro-especifico-do-cli" in r.json()["detail"]
 
 
-def test_loop_refine_timeout_502(api_client):
-    with patch("app.loop.subprocess.run",
-               side_effect=_subprocess.TimeoutExpired(cmd="claude", timeout=60)):
-        r = api_client.post("/api/sessions/cc/loop/refine", json={"goal": "x"}, headers=_h())
-    assert r.status_code == 502
 
 
-def test_loop_refine_enoent_502(api_client):
-    with patch("app.loop.subprocess.run", side_effect=FileNotFoundError("claude")):
-        r = api_client.post("/api/sessions/cc/loop/refine", json={"goal": "x"}, headers=_h())
-    assert r.status_code == 502
 
 
-def test_loop_refine_nonzero_exit_502(api_client):
-    with patch("app.loop.subprocess.run", return_value=_completed(1, stderr="boom")):
-        r = api_client.post("/api/sessions/cc/loop/refine", json={"goal": "x"}, headers=_h())
-    assert r.status_code == 502
 
 
-def test_loop_refine_empty_output_502(api_client):
-    with patch("app.loop.subprocess.run", return_value=_completed(0, stdout="   ")):
-        r = api_client.post("/api/sessions/cc/loop/refine", json={"goal": "x"}, headers=_h())
-    assert r.status_code == 502
 
 
-def test_loop_refine_422_when_goal_too_long(api_client):
-    r = api_client.post("/api/sessions/cc/loop/refine", json={"goal": "x" * 2001}, headers=_h())
-    assert r.status_code == 422
 
 
-def test_loop_refine_refusal_is_502(api_client):
-    # haiku devolveu pergunta/recusa em vez do objetivo -> guard 502 (nao repassa meta-resposta).
-    with patch("app.loop.subprocess.run",
-               return_value=_completed(0, stdout="Não consigo reescrever sem saber qual arquivo você quer?")):
-        r = api_client.post("/api/sessions/cc/loop/refine", json={"goal": "arruma o haiku"}, headers=_h())
-    assert r.status_code == 502
 
 
-def test_loop_refine_question_ending_is_502(api_client):
-    with patch("app.loop.subprocess.run",
-               return_value=_completed(0, stdout="Qual haiku você quer melhorar?")):
-        r = api_client.post("/api/sessions/cc/loop/refine", json={"goal": "melhora"}, headers=_h())
-    assert r.status_code == 502
 
 
 # --- ask-history (RAG lexical) -----------------------------------------------
@@ -1986,54 +1521,21 @@ def test_broadcast_uses_send_thread(api_client, monkeypatch):
 
 from app import model_picker as mp
 
-_ENGINE_CAT = [
-    {"id": "k3", "context_length": 1048576, "vision": True},
-    {"id": "kimi-for-coding", "context_length": 262144, "vision": True},
-]
 
 
-def _engine_info():
-    return SessionInfo(name="cc", cwd="/p", jsonl="/p/a.jsonl", provider="claude", engine="kimi")
 
 
 @pytest.fixture
 def api_client_limpo(api_client):
     # O cache do catalogo e por processo e vive 5 min: sem limpar, um teste leria o do anterior.
     from app import api as api_mod
-    api_mod._engine_models_cache.clear()
     api_mod._claude_models_cache.clear()
     yield api_client
-    api_mod._engine_models_cache.clear()
     api_mod._claude_models_cache.clear()
 
 
-def test_model_options_engine_vem_do_provedor_nao_do_picker(api_client_limpo):
-    # Numa sessao de motor o picker do CC so lista os 4 aliases (todos o mesmo ANTHROPIC_MODEL):
-    # a lista util e a do /v1/models. O terminal NAO pode ser tocado nesse caminho.
-    with patch("app.api._cached_info", AsyncMock(return_value=_engine_info())), \
-         patch("app.api.engines.listar", return_value={"kimi": {"base_url": "https://x", "api_key": "k"}}), \
-         patch("app.api.engine_probe.listar_modelos", return_value=_ENGINE_CAT) as probe, \
-         patch("app.api.terminal.list_model_options") as picker:
-        r = api_client_limpo.get("/api/sessions/cc/model/options", headers=_h())
-    assert r.status_code == 200
-    body = r.json()
-    assert body["kind"] == "engine" and body["engine"] == "kimi"
-    assert [m["id"] for m in body["models"]] == ["k3", "kimi-for-coding"]
-    picker.assert_not_called()
-    probe.assert_called_once()
 
 
-def test_model_options_engine_ignora_painel_aberto(api_client_limpo, monkeypatch):
-    # O ramo de motor fala com o provedor por HTTP (_engine_models) — nao le o pane, entao o painel
-    # anexado nao pode derrubar esta listagem (achado da revisao da Task 3).
-    from app import termsock
-    monkeypatch.setitem(termsock._ativos, "cc", object())
-    with patch("app.api._cached_info", AsyncMock(return_value=_engine_info())), \
-         patch("app.api.engines.listar", return_value={"kimi": {"base_url": "https://x", "api_key": "k"}}), \
-         patch("app.api.engine_probe.listar_modelos", return_value=_ENGINE_CAT):
-        r = api_client_limpo.get("/api/sessions/cc/model/options", headers=_h())
-    assert r.status_code == 200
-    assert r.json()["kind"] == "engine"
 
 
 def test_model_options_conta_anthropic_recusa_com_painel_aberto(api_client_limpo, monkeypatch):
@@ -2096,96 +1598,16 @@ def test_model_options_sessao_ocupada_propaga_409(api_client_limpo):
     assert "trabalhando" in r.json()["detail"]
 
 
-def test_engine_model_set_restaura_o_default_global(api_client_limpo):
-    # O ponto da rota: `/model <id>` grava o id como default GLOBAL. O valor anterior volta pro
-    # settings.json depois — a troca vale na sessao e em lugar nenhum mais.
-    with patch("app.api._cached_info", AsyncMock(return_value=_engine_info())), \
-         patch("app.api.engines.listar", return_value={"kimi": {"base_url": "https://x", "api_key": "k"}}), \
-         patch("app.api.engine_probe.listar_modelos", return_value=_ENGINE_CAT), \
-         patch("app.api._session_config_dir", return_value=None), \
-         patch("app.api.default_model.snapshot", return_value="claude-opus-5"), \
-         patch("app.api.default_model.restore_quando_aterrissar") as restore, \
-         patch("app.api.terminal.set_engine_model",
-               return_value={"ok": True, "result": "Set model to kimi-for-coding"}) as drv:
-        r = api_client_limpo.post("/api/sessions/cc/engine/model", headers=_h(),
-                            json={"model": "kimi-for-coding"})
-    assert r.status_code == 200
-    drv.assert_called_once_with("cc", "kimi-for-coding")
-    restore.assert_called_once_with(None, "claude-opus-5")
 
 
-def test_engine_model_set_restaura_mesmo_quando_o_driver_falha(api_client_limpo):
-    # O comando pode ter sido digitado ANTES da falha de leitura: deixar o default global vazado
-    # por causa de um erro seria a pior combinacao.
-    with patch("app.api._cached_info", AsyncMock(return_value=_engine_info())), \
-         patch("app.api.engines.listar", return_value={"kimi": {"base_url": "https://x", "api_key": "k"}}), \
-         patch("app.api.engine_probe.listar_modelos", return_value=_ENGINE_CAT), \
-         patch("app.api._session_config_dir", return_value=None), \
-         patch("app.api.default_model.snapshot", return_value="claude-opus-5"), \
-         patch("app.api.default_model.restore_quando_aterrissar") as restore, \
-         patch("app.api.terminal.set_engine_model", side_effect=mp.PickerError(409, "sem confirmacao")):
-        r = api_client_limpo.post("/api/sessions/cc/engine/model", headers=_h(),
-                            json={"model": "kimi-for-coding"})
-    assert r.status_code == 409
-    restore.assert_called_once_with(None, "claude-opus-5")
 
 
-def test_engine_model_set_recusa_modelo_fora_do_catalogo(api_client_limpo):
-    # Digitar o id assim mesmo faria a sessao mandar request pra um modelo inexistente e a falha
-    # apareceria so no proximo turno.
-    with patch("app.api._cached_info", AsyncMock(return_value=_engine_info())), \
-         patch("app.api.engines.listar", return_value={"kimi": {"base_url": "https://x", "api_key": "k"}}), \
-         patch("app.api.engine_probe.listar_modelos", return_value=_ENGINE_CAT), \
-         patch("app.api.terminal.set_engine_model") as drv:
-        r = api_client_limpo.post("/api/sessions/cc/engine/model", headers=_h(),
-                            json={"model": "gpt-5.4"})
-    assert r.status_code == 422
-    drv.assert_not_called()
 
 
-def test_engine_model_set_recusa_sessao_sem_motor(api_client):
-    with patch("app.api._cached_info", AsyncMock(return_value=SessionInfo(
-            name="cc", cwd="/p", jsonl="/p/a.jsonl", provider="claude"))):
-        r = api_client.post("/api/sessions/cc/engine/model", headers=_h(), json={"model": "k3"})
-    assert r.status_code == 400
 
 
-def test_engine_model_set_recusado_antes_de_digitar_nao_espera_a_escrita(api_client_limpo):
-    # Sessao ocupada: o terminal ficou intocado, entao esperar ~3.6s pela escrita do settings.json
-    # so faria o erro demorar a aparecer na tela.
-    from app.terminal_input import TerminalInput
-    with patch("app.api._cached_info", AsyncMock(return_value=_engine_info())), \
-         patch("app.api.engines.listar", return_value={"kimi": {"base_url": "https://x", "api_key": "k"}}), \
-         patch("app.api.engine_probe.listar_modelos", return_value=_ENGINE_CAT), \
-         patch("app.api._session_config_dir", return_value=None), \
-         patch("app.api.default_model.snapshot", return_value="claude-opus-5"), \
-         patch("app.api.default_model.restore_quando_aterrissar") as restore, \
-         patch("app.api.terminal.set_engine_model",
-               side_effect=TerminalInput.NaoDigitou(409, "a sessao esta trabalhando")):
-        r = api_client_limpo.post("/api/sessions/cc/engine/model", headers=_h(),
-                                  json={"model": "k3"})
-    assert r.status_code == 409
-    restore.assert_not_called()
 
 
-def test_engine_model_set_valida_contra_catalogo_FRESCO(api_client_limpo):
-    # O cache de 5 min existe pra folha abrir rapido. Se a validacao da troca usasse ele, um modelo
-    # tirado do plano passaria e a falha apareceria so no proximo turno — exatamente o que o check
-    # promete evitar.
-    with patch("app.api._cached_info", AsyncMock(return_value=_engine_info())), \
-         patch("app.api.engines.listar", return_value={"kimi": {"base_url": "https://x", "api_key": "k"}}), \
-         patch("app.api.engine_probe.listar_modelos", return_value=_ENGINE_CAT) as probe:
-        # 1) esquenta o cache pela rota de listagem
-        assert api_client_limpo.get("/api/sessions/cc/model/options", headers=_h()).status_code == 200
-        assert probe.call_count == 1
-        # 2) o provedor tirou o k3 do plano
-        probe.return_value = [m for m in _ENGINE_CAT if m["id"] != "k3"]
-        with patch("app.api.terminal.set_engine_model") as drv:
-            r = api_client_limpo.post("/api/sessions/cc/engine/model", headers=_h(),
-                                      json={"model": "k3"})
-    assert probe.call_count == 2          # nao reusou o cache
-    assert r.status_code == 422
-    drv.assert_not_called()
 
 
 # 13/08/2026 — o "idle" mentiroso do Kimi no caminho de ACAO
@@ -2220,7 +1642,6 @@ def _rodar_transicao_idle(monkeypatch, tmp_path, mtime_do_wire, marcador_ts, lim
     monkeypatch.setattr(api_mod.settings, "notify_finished", False)
     chain, tick, timers = [], [], []
     monkeypatch.setattr(api_mod, "_maybe_chain", lambda n: chain.append(n))
-    monkeypatch.setattr(api_mod.loop_mod, "schedule_tick", lambda n, ctx: tick.append(n))
     monkeypatch.setattr(api_mod.loop_mod, "LoopLink",
                         lambda n: SimpleNamespace(get=lambda: {"status": "running"}))
     monkeypatch.setattr(api_mod.threading, "Timer",
@@ -2228,7 +1649,6 @@ def _rodar_transicao_idle(monkeypatch, tmp_path, mtime_do_wire, marcador_ts, lim
     # _work roda numa thread; aqui executa o alvo direto pra o teste ser deterministico.
     monkeypatch.setattr(api_mod.threading, "Thread",
                         lambda target, daemon=None: SimpleNamespace(start=target))
-    monkeypatch.setattr(api_mod, "_FINISH_SETTLE", 0)
     if limpar:
         api_mod._recheca_armada.clear()
     api_mod._on_hook_transition("sid-k", "idle")
@@ -2248,7 +1668,7 @@ def test_idle_falso_do_kimi_nao_dispara_automacao(monkeypatch, tmp_path):
 def test_idle_de_verdade_do_kimi_segue_disparando(monkeypatch, tmp_path):
     # O contrario, pra a correcao nao matar a feature: wire e marcador no mesmo instante = parada.
     chain, tick, timers = _rodar_transicao_idle(monkeypatch, tmp_path, _AGORA, _AGORA)
-    assert tick == ["k1"]                     # loop ativo + sent == 0 -> tica
+    assert tick == []                         # D59: o Rust recusa loop de outro provedor
     assert chain == []                        # com loop ativo o chain fica suprimido (regra antiga)
     assert not any(a[1] is api_mod._recheca_kimi for a in timers)   # nada a reavaliar
 
@@ -2262,88 +1682,6 @@ def test_recheca_do_kimi_e_uma_cadeia_por_sessao(monkeypatch, tmp_path):
     api_mod._armar_recheca("sid-k")
     _, _, t2 = _rodar_transicao_idle(monkeypatch, tmp_path, _AGORA + 90, _AGORA, limpar=False)
     assert not any(a[1] is api_mod._recheca_kimi for a in t2)   # nao abre a segunda corrente
-
-
-def test_push_terminou_nao_sai_no_idle_falso_do_kimi(monkeypatch, tmp_path):
-    # O push de "terminou" era o unico dos quatro que ficava fora do `_work` — avisava "terminou"
-    # com a sessao escrevendo codigo, e ainda consumia o inicio do turno, entao o fim REAL vinha sem
-    # saber ha quanto tempo ela trabalhava e o debounce de turno longo nunca mais disparava.
-    monkeypatch.setattr(api_mod.runtime_config, "get",
-                        lambda k: True if k == "notify_finished" else 1)
-    avisos = []
-    monkeypatch.setattr(api_mod, "_notify_async", lambda sid, fn: avisos.append(sid))
-    api_mod._working_started["sid-k"] = _AGORA - 300      # turno longo em andamento
-    _rodar_transicao_idle(monkeypatch, tmp_path, _AGORA + 90, _AGORA)
-    assert avisos == []                                   # nada de "terminou" no meio do turno
-    assert "sid-k" in api_mod._working_started            # o inicio do turno NAO foi consumido
-
-    # E o fim de verdade (transcript parado) avisa, com a duracao inteira preservada.
-    _rodar_transicao_idle(monkeypatch, tmp_path, _AGORA, _AGORA)
-    assert avisos == ["sid-k"]
-    assert "sid-k" not in api_mod._working_started
-
-
-def test_push_terminou_nao_consome_o_inicio_de_outro_turno(monkeypatch):
-    # Corrida real: entre o inicio do `_work` e o push rodam registry.list() e drain(), e o proprio
-    # drain pode largar um prompt novo — a sessao volta a "working" e o caminho sincrono grava o
-    # inicio do turno NOVO. Um `pop` cego levaria embora esse valor: o push deste turno sairia com
-    # duracao errada e o turno seguinte, ao acabar de verdade, acharia `started is None` e nunca
-    # avisaria.
-    monkeypatch.setattr(api_mod.runtime_config, "get",
-                        lambda k: True if k == "notify_finished" else 1)
-    from types import SimpleNamespace
-    avisos = []
-    monkeypatch.setattr(api_mod, "_notify_async", lambda sid, fn: avisos.append(sid))
-    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("idle", _AGORA))
-    # A espera de a sessão sossegar roda numa thread: aqui em linha e sem espera.
-    monkeypatch.setattr(api_mod.threading, "Thread", lambda target, daemon=None: SimpleNamespace(start=target))
-    monkeypatch.setattr(api_mod, "_FINISH_SETTLE", 0)
-    monkeypatch.setattr(api_mod.registry, "list", lambda: [])
-
-    api_mod._working_started["s9"] = _AGORA - 300          # turno NOVO ja registrado
-    api_mod._push_terminou("s9", _AGORA - 999)             # push do turno VELHO chega atrasado
-    assert avisos == []                                    # nao e dele pra consumir
-    assert api_mod._working_started["s9"] == _AGORA - 300   # o do turno novo continua intacto
-
-    api_mod._push_terminou("s9", _AGORA - 300)             # agora sim, o dono certo
-    assert avisos == ["s9"]
-    assert "s9" not in api_mod._working_started
-
-
-def test_working_started_e_protegido_dos_dois_lados(monkeypatch):
-    # O compare-and-delete de `_push_terminou` so vale se os ESCRITORES pegarem o mesmo lock: quem
-    # grava o inicio do turno roda no laco do hook_state.watch e quem consome roda numa thread de
-    # `_work`. Protegido de um lado so, o produtor passa entre o get e o del — e o turno seguinte
-    # termina com `started is None`, sem aviso nenhum e sem rastro.
-    import threading as _th
-    monkeypatch.setattr(api_mod.runtime_config, "get",
-                        lambda k: True if k == "notify_finished" else 1)
-    monkeypatch.setattr(api_mod, "_notify_async", lambda sid, fn: None)
-    monkeypatch.setattr(api_mod.hook_state, "get_state", lambda sid: ("working", _AGORA))
-
-    api_mod._working_started.clear()
-    erros = []
-
-    def escrever():           # o produtor: hook "working" chegando em rajada
-        try:
-            for i in range(300):
-                api_mod._on_hook_transition("s-lock", "working")
-        except Exception as e:      # noqa: BLE001 — o teste quer QUALQUER falha da corrida
-            erros.append(e)
-
-    def consumir():           # o consumidor: fim de turno tentando fechar a conta
-        try:
-            for i in range(300):
-                api_mod._push_terminou("s-lock", api_mod._working_started.get("s-lock"))
-        except Exception as e:      # noqa: BLE001
-            erros.append(e)
-
-    ts = [_th.Thread(target=escrever), _th.Thread(target=consumir)]
-    for t in ts:
-        t.start()
-    for t in ts:
-        t.join()
-    assert erros == []        # sem KeyError/RuntimeError de mutacao concorrente
 
 
 def test_recheca_desiste_depois_de_falhas_seguidas(monkeypatch, tmp_path):

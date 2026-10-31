@@ -8,7 +8,7 @@ use std::io;
 /// O que a volta precisa do mundo; o teste troca tudo.
 pub trait Env: Send + Sync {
     fn now(&self) -> f64;
-    fn automations(&self) -> bool;
+    fn automations(&self) -> Result<bool, &'static str>;
     /// Branch da worktree onde o agente trabalha.
     fn branch(&self) -> Option<String>;
     /// A entrada do objetivo na fila: entregue, esperando, ou `None` se sumiu.
@@ -84,6 +84,7 @@ pub async fn run_tick(store: &Store, name: &str, env: &dyn Env) -> io::Result<Op
     let check_cmd = {
         let _one = lock(name).await;
         let Some(mut d) = store.get(name).filter(ticking) else { return Ok(None) };
+        let automations = env.automations().map_err(|code| io::Error::other(super::ConfigFailure(code)))?;
         // A pausa da pergunta acaba no fim de turno, calada.
         if status(&d) == "paused_awaiting" {
             d.insert("status".into(), json!("running"));
@@ -96,7 +97,7 @@ pub async fn run_tick(store: &Store, name: &str, env: &dyn Env) -> io::Result<Op
             d.insert("goal_delivered_ts".into(), json!(env.now()));
             store.set(name, &d)?;
         }
-        if !env.automations() { return end(store, name, "stopped", "automations_disabled", env); }
+        if !automations { return end(store, name, "stopped", "automations_disabled", env); }
         if let Some(br) = env.branch().filter(|b| b == "main" || b == "master") && truthy(d.get("require_branch")) {
             return end(store, name, "stopped", &format!("branch {br}"), env);
         }
@@ -133,6 +134,7 @@ pub(crate) mod tests {
     pub(crate) struct Fake {
         pub now: f64,
         pub automations: bool,
+        pub config: Option<std::sync::Arc<crate::routes::AppState>>,
         pub branch: Option<String>,
         pub delivered: Option<bool>,
         pub check: (i64, String),
@@ -144,7 +146,7 @@ pub(crate) mod tests {
 
     impl Env for Fake {
         fn now(&self) -> f64 { self.now }
-        fn automations(&self) -> bool { self.automations }
+        fn automations(&self) -> Result<bool, &'static str> { self.config.as_ref().map_or(Ok(self.automations), |state| super::super::automations(state)) }
         fn branch(&self) -> Option<String> { self.branch.clone() }
         fn entry_delivered(&self, _id: Option<String>) -> BoxFuture<'_, Option<bool>> { Box::pin(async move { self.delivered }) }
         fn run_check(&self, _cmd: String) -> BoxFuture<'_, (i64, String)> { Box::pin(async move { self.check.clone() }) }
@@ -214,4 +216,18 @@ pub(crate) mod tests {
         assert_eq!(after["ended_reason"], "re-prompt não entrou na fila (runtime_binding)");
         assert_eq!(env.pushed.lock().unwrap().len(), 1);
     }
+    #[tokio::test]
+    async fn guest_loop_invalid_config_preserves_tick_work() {
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::new(home.path());
+        let mut before = crate::loops::store::new_loop("g", None, 10, false, 1.0);
+        before.insert("status".into(), json!("paused_awaiting"));
+        store.set("s", &before).unwrap();
+        let env = Fake {config:Some(crate::loops::tests::invalid_config_state(home.path())),automations:true,..Default::default()};
+        assert!(run_tick(&store,"s",&env).await.is_err(),"D52: configuração inválida não executa tique");
+        assert_eq!(store.get("s").unwrap(),before);
+        assert!(env.sent.lock().unwrap().is_empty());
+        assert!(env.pushed.lock().unwrap().is_empty());
+    }
+
 }

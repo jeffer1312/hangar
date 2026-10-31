@@ -1,14 +1,10 @@
-"""Quadro de pane compartilhado entre estado e prévia, e /api/sessions servido do refresher."""
+"""Quadro de pane compartilhado entre estado e prévia dos consumidores Python."""
 import asyncio
 import threading
 import time
-from unittest.mock import patch
 
-from fastapi.testclient import TestClient
 
-from app import sse, state
-from app.config import settings
-from app.models import SessionInfo
+from app import state
 
 
 def _fake_capture(calls, text="● oi\n", delay=0.05):
@@ -89,26 +85,3 @@ def test_capture_runs_on_tmux_pool(monkeypatch):
     monkeypatch.setattr(state.tmux, "capture_pane", capture)
     asyncio.run(state.shared_capture("s", 0))
     assert threads[0].startswith("hangar-tmux")
-
-
-def _client(monkeypatch):
-    monkeypatch.setattr(settings, "auth_token", "secret")
-    from app.api import app
-    return TestClient(app), {"Authorization": "Bearer secret"}
-
-
-def test_sessions_route_serves_recent_refresher_list(monkeypatch):
-    client, h = _client(monkeypatch)
-    sse._list_refresher.latest = (time.monotonic(), [SessionInfo(name="viva", cwd="/p", state="working")])
-    with patch("app.api.registry.list_with_state", side_effect=AssertionError("recalculou")):
-        r = client.get("/api/sessions", headers=h)
-    assert r.status_code == 200
-    assert [(s["name"], s["state"]) for s in r.json()] == [("viva", "working")]
-
-
-def test_sessions_route_recomputes_when_refresher_is_stale(monkeypatch):
-    client, h = _client(monkeypatch)
-    sse._list_refresher.latest = (time.monotonic() - 10, [SessionInfo(name="velha", cwd="/p")])
-    with patch("app.api.registry.list", return_value=[SessionInfo(name="nova", cwd="/p")]):
-        r = client.get("/api/sessions", headers=h)
-    assert [s["name"] for s in r.json()] == ["nova"]

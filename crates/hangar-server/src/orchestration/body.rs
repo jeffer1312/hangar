@@ -82,7 +82,9 @@ fn error(kind: &str, loc: &[Value], input: &Value) -> Value {
         "list_type" => "Input should be a valid list",
         _ => unreachable!("erro de validação conhecido"),
     };
-    json!({"type":kind,"loc":loc,"msg":message,"input":input})
+    let mut result = json!({"type":kind,"loc":loc,"msg":message});
+    result["input"] = super::codec::clone_value(input);
+    result
 }
 fn boolean(value: &Value) -> Result<bool, &'static str> {
     if let Some(value) = value.as_bool() {
@@ -141,9 +143,10 @@ fn model(value: &Value, schema: &[Field], loc: &[Value], errors: &mut Vec<Value>
             loc,
             value,
         ));
-        return value.clone();
+        return super::codec::clone_value(value);
     };
-    let mut output = input.clone();
+    let mut output: serde_json::Map<String, Value> = input.iter()
+        .map(|(key, value)| (key.clone(), super::codec::clone_value(value))).collect();
     for (name, kind, required) in schema {
         let mut at = loc.to_vec();
         at.push(json!(name));
@@ -167,7 +170,9 @@ fn model(value: &Value, schema: &[Field], loc: &[Value], errors: &mut Vec<Value>
                 } else {
                     match boolean(v) {
                         Ok(b) => {
-                            output.insert((*name).into(), json!(b));
+                            if let Some(previous) = output.insert((*name).into(), json!(b)) {
+                                super::codec::discard(previous);
+                            }
                             None
                         }
                         Err(e) => Some(e),
@@ -177,7 +182,9 @@ fn model(value: &Value, schema: &[Field], loc: &[Value], errors: &mut Vec<Value>
             Kind::Number => match number(v) {
                 Ok(n) => {
                     if n.is_finite() {
-                        output.insert((*name).into(), json!(n));
+                        if let Some(previous) = output.insert((*name).into(), json!(n)) {
+                            super::codec::discard(previous);
+                        }
                     }
                     None
                 }
@@ -197,11 +204,13 @@ fn model(value: &Value, schema: &[Field], loc: &[Value], errors: &mut Vec<Value>
                                 if !item.is_string() {
                                     errors.push(error("string_type", &at, item));
                                 }
-                                item.clone()
+                                super::codec::clone_value(item)
                             }
                         })
                         .collect();
-                    output.insert((*name).into(), Value::Array(converted));
+                    if let Some(previous) = output.insert((*name).into(), Value::Array(converted)) {
+                        super::codec::discard(previous);
+                    }
                     None
                 } else {
                     Some("list_type")
@@ -227,32 +236,87 @@ pub fn validate(name: &str, value: &Value) -> Result<Value, Value> {
     if errors.is_empty() {
         Ok(output)
     } else {
-        Err(json!({"detail":errors}))
+        super::codec::discard(output);
+        Err(Value::Object(std::iter::once(("detail".into(), Value::Array(errors))).collect()))
     }
 }
+fn diagnostic_check(text: &str) -> Result<(), serde_json::Error> {
+    let mut decoder = serde_json::Deserializer::from_str(text);
+    decoder.disable_recursion_limit();
+    serde::de::IgnoredAny::deserialize(&mut decoder)?;
+    decoder.end()
+}
+
+fn diagnostic_parse(text: &str) -> Result<Value, serde_json::Error> {
+    diagnostic_check(text)?;
+    let mut decoder = serde_json::Deserializer::from_str(text);
+    // O diagnóstico precisa alcançar a mesma entrada que o leitor lossless.
+    decoder.disable_recursion_limit();
+    let value = Value::deserialize(&mut decoder)?;
+    decoder.end()?;
+    Ok(value)
+}
+
 pub fn parse(bytes: &[u8]) -> Result<Value, (axum::http::StatusCode, Value)> {
     use axum::http::StatusCode;
     if bytes.is_empty() {
         return Ok(Value::Null);
     }
-    let text = std::str::from_utf8(bytes).map_err(|_| {
+    let decoded = super::body_encoding::decode(bytes).map_err(|_| {
         (
             StatusCode::BAD_REQUEST,
             json!({"detail":"There was an error parsing the body"}),
         )
     })?;
+    let text = decoded.text.as_ref();
     if let Some(value) = super::codec::loads(text) { return Ok(value); }
-    serde_json::from_str(text).map_err(|e|{
+    let normalized = super::body_numbers::for_diagnostic(text);
+    if let Some((Some(first), normalized)) = &normalized {
+        let reached = match diagnostic_check(normalized) {
+            Ok(_) => true,
+            Err(error) => {
+                let previous:usize=normalized.split_inclusive('\n').take(error.line().saturating_sub(1)).map(str::len).sum();
+                previous + error.column().saturating_sub(usize::from(!error.is_eof())) > *first
+            }
+        };
+        if reached {
+            return Err((StatusCode::BAD_REQUEST, json!({"detail":"There was an error parsing the body"})));
+        }
+    }
+    let text = normalized.as_ref().map(|(_, text)| text.as_str()).unwrap_or(text);
+    diagnostic_parse(text).map_err(|e|{
         let raw=e.to_string();let eof=e.is_eof();
         let previous:usize=text.split_inclusive('\n').take(e.line().saturating_sub(1)).map(str::len).sum();
         let byte=(previous+e.column().saturating_sub(usize::from(!eof))).min(text.len());
-        let position=text[..text.floor_char_boundary(byte)].chars().count();
+        let mut position=text[..text.floor_char_boundary(byte)].chars().count();
         let last=text.trim_end().chars().next_back();
-        let message=if raw.starts_with("trailing characters"){"Extra data"}
-            else if raw.starts_with("key must be a string")||(eof&&matches!(last,Some('{'))){"Expecting property name enclosed in double quotes"}
+        let unicode_escape = raw.starts_with("invalid escape").then(|| {
+            text[..text.floor_char_boundary(byte)].rfind("\\u")
+                .filter(|start| byte.saturating_sub(*start) <= 6)
+        }).flatten();
+        let trailing_comma = matches!(text.as_bytes().get(byte), Some(b'}' | b']'))
+            && text[..text.floor_char_boundary(byte)].trim_end().ends_with(',');
+        let message=if raw.starts_with("trailing comma") || trailing_comma {
+            // O diagnóstico aponta a vírgula, não o fechamento que a revelou.
+            if let Some((offset, _)) = text[..text.floor_char_boundary(byte)].char_indices().rev().find(|(_, c)| !c.is_whitespace()) {
+                position = text[..offset].chars().count();
+            }
+            if text.as_bytes().get(byte) == Some(&b'}') { "Illegal trailing comma before end of object" } else { "Illegal trailing comma before end of array" }
+        } else if let Some(start) = unicode_escape {
+            position = text[..start + 1].chars().count();
+            "Invalid \\uXXXX escape"
+        } else if raw.starts_with("invalid escape") { "Invalid \\escape" }
+            else if raw.starts_with("invalid number") {
+                if diagnostic_check(&text[..text.floor_char_boundary(byte)]).is_ok() {
+                    "Extra data"
+                } else { "Expecting ',' delimiter" }
+            }
+            else if raw.starts_with("trailing characters"){"Extra data"}
+            else if raw.starts_with("key must be a string")||(eof&&matches!(last,Some('{')))||(raw.starts_with("EOF while parsing an object")&&last==Some(',')){"Expecting property name enclosed in double quotes"}
             else if raw.starts_with("expected `:`"){"Expecting ':' delimiter"}
-            else if raw.starts_with("expected `,`")||(eof&&!matches!(last,Some('['|':'|','))){"Expecting ',' delimiter"}
+            else if raw.starts_with("expected `,`")||(eof&&last.is_some()&&!matches!(last,Some('['|':'|','))){"Expecting ',' delimiter"}
             else {"Expecting value"};
+        let position = decoded.position(position).saturating_sub(usize::from(raw.starts_with("invalid escape") && unicode_escape.is_none()));
         (StatusCode::UNPROCESSABLE_ENTITY,json!({"detail":[{"type":"json_invalid","loc":["body",position],"msg":"JSON decode error","input":{},"ctx":{"error":message}}]}))
     })
 }

@@ -181,7 +181,7 @@ impl Machine {
     }
 
     fn current(&self) -> PathBuf { real(&self.layout.current()) }
-    fn state(&self) -> serde_json::Map<String, Value> { StateFile::new(&self.state_dir).read() }
+    fn state(&self) -> super::StateSnapshot { StateFile::new(&self.state_dir).read() }
     fn applied(&self) -> Vec<String> {
         std::fs::read(self.state_dir.join("aplicados.json")).ok().map(|b| serde_json::from_slice(&b).unwrap()).unwrap_or_default()
     }

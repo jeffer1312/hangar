@@ -20,7 +20,7 @@ fn summary_matches_python() {
 fn quiet_hours_match_python() {
     for c in cases()["quiet"].as_array().unwrap() {
         let now = store::parse_time(c["now"].as_str().unwrap()).unwrap();
-        assert_eq!(Value::Bool(store::in_quiet_hours(&c["prefs"], now)), c["out"], "{c}");
+        assert_eq!(Value::Bool(store::in_quiet_hours(&c["prefs"], now).unwrap()), c["out"], "{c}");
     }
 }
 
@@ -54,7 +54,7 @@ fn payloads_match_python_for_every_subscription_and_expo() {
         json!({"subscription": {"endpoint": "e-old"}, "label": "", "serverId": "s3"})];
     for c in cases()["payloads"].as_array().unwrap() {
         let out = outgoing(c["case"].as_str().unwrap());
-        let web: Vec<Value> = subs.iter().map(|s| json!({"endpoint": s["subscription"]["endpoint"], "payload": out.payload(s)})).collect();
+        let web: Vec<Value> = subs.iter().map(|s| json!({"endpoint": s["subscription"]["endpoint"], "payload": out.payload(s).unwrap()})).collect();
         assert_eq!(Value::Array(web), c["web"], "{}", c["case"]);
         let expo = json!([{"session": out.session, "title": {"pt": out.title_suffix("pt"), "en": out.title_suffix("en")},
             "body": {"pt": (out.body)("pt"), "en": (out.body)("en")}, "list": out.url.as_deref() == Some("/")}]);
@@ -216,18 +216,18 @@ fn store_upserts_by_endpoint_and_validates_quiet_hours() {
     let dir = tempfile::tempdir().unwrap();
     store::add(dir.path(), json!({"endpoint": "e1", "keys": {}}), "Casa", "s1", "pt").unwrap();
     store::add(dir.path(), json!({"endpoint": "e1", "keys": {}}), "Casa2", "s1", "en").unwrap();
-    assert_eq!(store::subs(dir.path()).len(), 1);
-    assert_eq!(store::subs(dir.path())[0]["label"], "Casa2");
+    assert_eq!(store::subs(dir.path()).unwrap().len(), 1);
+    assert_eq!(store::subs(dir.path()).unwrap()[0]["label"], "Casa2");
     assert_eq!(store::add(dir.path(), json!({}), "x", "s", "pt"), Err("subscription sem endpoint"));
     store::prune(dir.path(), &["e1".to_owned()]).unwrap();
-    assert!(store::subs(dir.path()).is_empty());
+    assert!(store::subs(dir.path()).unwrap().is_empty());
     assert_eq!(store::set_quiet_hours(dir.path(), Some("25:00"), Some("07:00")), Err("horario invalido (use HH:MM)"));
     store::set_quiet_hours(dir.path(), Some("22:00"), Some("07:00")).unwrap();
     store::set_muted(dir.path(), "s", true).unwrap();
-    assert_eq!(store::settings(dir.path()), json!({"muted": ["s"], "quiet_hours": {"start": "22:00", "end": "07:00"}}));
+    assert_eq!(store::settings(dir.path()).unwrap(), json!({"muted": ["s"], "quiet_hours": {"start": "22:00", "end": "07:00"}}));
     store::set_quiet_hours(dir.path(), None, Some("07:00")).unwrap();
     store::set_muted(dir.path(), "s", false).unwrap();
-    assert_eq!(store::settings(dir.path()), json!({"muted": [], "quiet_hours": null}));
+    assert_eq!(store::settings(dir.path()).unwrap(), json!({"muted": [], "quiet_hours": null}));
 }
 
 proptest::proptest! {

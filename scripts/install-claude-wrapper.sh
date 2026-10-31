@@ -364,16 +364,8 @@ link_agent_extensions pi  "$PI_AGENT_DIR/extensions"
 link_agent_extensions omp "$OMP_AGENT_DIR/extensions"
 enable_fullscreen pi  "$PI_AGENT_DIR"
 
-# --- ponte de skills (pi/kimi/codex) -----------------------------------------------------------
-# O omp descobre as skills dos outros CLIs sozinho na largada; pi, kimi e codex nao — leem so as
-# pastas declaradas na config deles. Este passo materializa symlinks pras skills do Claude
-# (plugins inclusos) nas pastas que eles leem. Tambem roda na subida do backend: o alvo e o cache
-# VERSIONADO dos plugins, e um bump de versao deixaria a fazenda pendurada ate o proximo install.
-if command -v python3 >/dev/null 2>&1; then
-  python3 "$SCRIPT_DIR/../backend/app/skill_bridge.py" || echo "  ⚠ ponte de skills falhou — a instalacao segue"
-else
-  echo "  python3 nao encontrado — pulando a ponte de skills"
-fi
+# O mesmo espelhamento atende instalação e abertura de sessão.
+"$SCRIPT_DIR/hangar-harness-setup" skills --repo "$SCRIPT_DIR/.." || echo "  espelhamento de skills falhou — a instalação segue"
 
 # Statusline: ask if undecided and interactive; default yes otherwise.
 if [ -z "$DO_STATUS" ]; then

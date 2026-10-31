@@ -648,7 +648,7 @@ fn collide(dir: &Path, destination: &Path, target: &Path) -> Result<Option<Strin
 }
 
 /// `str.isdigit` do Python 3.14 (Unicode 16): decimais e os dígitos sobrescritos, circulados etc.
-fn py_isdigit(c: char) -> bool {
+pub(crate) fn py_isdigit(c: char) -> bool {
     const DIGITS: [(u32, u32); 90] = [(0x30, 0x39), (0xB2, 0xB3), (0xB9, 0xB9), (0x660, 0x669), (0x6F0, 0x6F9), (0x7C0, 0x7C9),
         (0x966, 0x96F), (0x9E6, 0x9EF), (0xA66, 0xA6F), (0xAE6, 0xAEF), (0xB66, 0xB6F), (0xBE6, 0xBEF), (0xC66, 0xC6F),
         (0xCE6, 0xCEF), (0xD66, 0xD6F), (0xDE6, 0xDEF), (0xE50, 0xE59), (0xED0, 0xED9), (0xF20, 0xF29), (0x1040, 0x1049),
@@ -700,7 +700,7 @@ fn relink(text: &Path, at: &Path) -> io::Result<()> {
 
 /// Acesso e modificação de `meta` em `path`, e depois o modo (o `copystat`: o modo por último, para um
 /// modo sem escrita não barrar as datas).
-fn copy_stat(path: &Path, meta: &fs::Metadata) -> Result<()> {
+pub(crate) fn copy_stat(path: &Path, meta: &fs::Metadata) -> Result<()> {
     let times = fs::FileTimes::new().set_accessed(meta.accessed().at(path)?).set_modified(meta.modified().at(path)?);
     #[cfg(unix)]
     let file = fs::File::open(path).at(path)?;
@@ -925,7 +925,7 @@ fn mirror_claude_json(home: &Path, dir: &Path) -> Result<Option<String>> {
 
 /// Plugin ligado no `settings.json` da conta sem instalação no compartilhado: avisa, nunca instala
 /// (instalar escreveria no compartilhado a partir de uma conta).
-fn check_plugins(home: &Path, dir: &Path) -> Result<Vec<String>> {
+pub(crate) fn check_plugins(home: &Path, dir: &Path) -> Result<Vec<String>> {
     let Some(settings) = read_json(&dir.join("settings.json"))
         .map_err(|e| refused(format!("não consegui ler o settings.json da conta: {e}")))? else { return Ok(vec![]) };
     let Value::Object(settings) = settings else {

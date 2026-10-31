@@ -1,8 +1,26 @@
 //! hangar-server: sobe como filho do Python (app/main.py), na porta pública.
 
 fn main() -> std::process::ExitCode {
+    let hook_args: Vec<_> = std::env::args_os().skip(1).collect();
+    if let Some(mode) = hook_args.first().and_then(|arg| arg.to_str())
+        && matches!(mode, "codex-hook-allow" | "codex-hook-json")
+    {
+        std::process::exit(hangar_server::codex_setup::hook_command::run(mode, &hook_args[1..]));
+    }
     // `open`/`resolve`: o lançador como comando de terminal, com runtime próprio (fora do `run`).
     let args: Vec<String> = std::env::args_os().skip(1).map(|a| a.to_string_lossy().into_owned()).collect();
+    if matches!(args.first().map(String::as_str),Some("panel-data"|"panel-action")){
+        return hangar_server::machine_peers::panel::cli(&args[0],&args[1..]);
+    }
+    if args.first().map(String::as_str) == Some("peers") {
+        return hangar_server::machine_peers::cli::cli(&args[1..]);
+    }
+    if args.first().map(String::as_str) == Some("pairing") {
+        return hangar_server::machine_peers::pairing::cli(&args[1..]);
+    }
+    if args.first().map(String::as_str) == Some("doctor") {
+        return hangar_server::machine_peers::doctor::cli(&args[1..]);
+    }
     if matches!(args.first().map(String::as_str), Some("orq-info" | "provider-info")) {
         return hangar_server::provider_info::cli(&args[0], &args[1..]);
     }
@@ -25,12 +43,24 @@ fn main() -> std::process::ExitCode {
         return hangar_server::update::install::cli(&args[1..]);
     }
     // Liga e desliga o modo desenvolvedor numa máquina já migrada.
+    if args.first().map(String::as_str) == Some("rust-release") {
+        return hangar_server::update::git_engine::releases::cli(&args[1..]);
+    }
+    if args.first().map(String::as_str) == Some("checkout-update") {
+        return hangar_server::update::git_engine::launch::cli(&args[1..]);
+    }
     if args.first().map(String::as_str) == Some("dev-mode") {
         return hangar_server::update::dev_mode::cli(&args[1..]);
     }
     // O executor destacado da atualização: processo e runtime próprios, fora do servidor que reinicia.
     if args.first().map(String::as_str) == Some("update") {
         return hangar_server::update::executor::cli(&args[1..]);
+    }
+    if args.first().map(String::as_str) == Some("harness-setup") {
+        return hangar_server::harness_setup::cli::run(&args[1..]);
+    }
+    if args.first().map(String::as_str) == Some("engine") {
+        return hangar_server::engines::cli::run(&args[1..]);
     }
     // `conta`: a reconciliação das contas Claude que o `hangar-conta` do shell chama, sem o servidor.
     if args.first().map(String::as_str) == Some("conta") {
@@ -143,7 +173,13 @@ async fn run() {
     // O Python segura o cano do stdin; fechou = pai morreu. Vale igual em Linux, Windows e macOS.
     let stop = hangar_server::parent_gone(tokio::io::stdin());
     #[allow(unused_mut)]
-    let mut state = hangar_server::routes::AppState::with_server_id(cfg, std::env::var("HANGAR_SERVER_ID").unwrap_or_default());
+    let home = hangar_server::accounts::environment::AccountEnvironment::capture().home;
+    let server_id = match hangar_server::machine_peers::startup_identity(&home, hangar_server::session_open::cli::backend_dir().as_deref()) {
+        Ok(value) => value,
+        Err(error) => { eprintln!("hangar-server: identidade indisponível: {error}"); std::process::exit(1); }
+    };
+    #[allow(unused_mut)]
+    let mut state = hangar_server::routes::AppState::with_server_id(cfg, server_id);
     #[cfg(windows)]
     if state.cfg.listen.ip() == std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED) {
         // Falhar aqui não derruba o servidor: fica como antes, só sem a guarda do IPv6.
@@ -152,48 +188,25 @@ async fn run() {
             Err(e) => tracing::warn!(error = %e, "porta pública sem a guarda dual-stack: outro programa pode ocupá-la em IPv6"),
         }
     }
+    state.startup = hangar_server::startup::Readiness::pending();
     state.front = hangar_server::routes::front_address(&state.accounts.env.home, state.cfg.listen);
-    state.costs.schedule_warmup(std::time::Duration::from_secs(30));
-    hangar_server::pages::routes::spawn_sweep(state.list.clone(), state.pages.clone());
-    // Só aqui, nunca no `serve_until`: os testes sobem servidores contra o tmux de verdade.
-    #[cfg(unix)]
-    tokio::spawn({
-        let term = state.term.clone();
-        async move { term.restore_after_crash().await }
+    let startup = state.startup.clone();
+    let service = hangar_server::update::git_engine::Service::from_state(&state);
+    let startup_environment = state.accounts.env.clone();
+    let startup_prewarm = state.prewarm.clone();
+    let _preparation = tokio::spawn(async move {
+        match service {
+            Ok(service) => match tokio::task::spawn_blocking(move || service.startup_outcome()).await {
+                Ok(outcome) => if let Some(message) = outcome.message() { eprintln!("{message}"); },
+                Err(error) => tracing::warn!(code="startup_steps_failed", %error, "preparação inicial interrompida"),
+            },
+            Err(error) => tracing::warn!(code="startup_config_failed", %error, "preparação inicial sem configuração"),
+        }
+        startup_prewarm.clean_receipts().await;
+        hangar_server::startup::prepare_sessions(startup_environment).await;
+        startup.finish();
     });
-    // Reservas pré-aquecidas que um servidor que caiu deixou (todo sistema: a varredura abaixo é só Linux
-    // e não apaga transcript nem marcadores). Só aqui, pelo mesmo motivo do tmux acima.
-    // Atualização: o commit do checkout na subida (modo desenvolvedor) e a verificação periódica do
-    // pacote. Só aqui, pelo mesmo motivo do tmux acima.
-    {
-        let home = state.accounts.env.home.clone();
-        let _ = tokio::task::spawn_blocking(move || hangar_server::update::dev::note_boot(&home)).await;
-        match hangar_server::http_client().build() {
-            Ok(client) => { hangar_server::update::periodic::spawn(hangar_server::update::periodic::Live {
-                env: state.accounts.env.clone(), list: state.list.clone(), listen: state.cfg.listen, client }); }
-            Err(e) => tracing::warn!("update: verificação periódica sem cliente http: {e}"),
-        }
-    }
     let prewarm = state.prewarm.clone();
-    let cleaned = prewarm.clean_receipts().await;
-    if cleaned > 0 { tracing::info!(cleaned, "reservas pré-aquecidas que sobraram foram limpas"); }
-    let _prewarm_sweeper = prewarm.spawn_sweeper();
-    // Órfãos do cano têm dono só: com o runtime ligado, o Rust varre uma vez, antes de anunciar o
-    // gateway (o Python só abre sessões depois do anúncio). Só aqui, pelo mesmo motivo do tmux acima.
-    // `CP_RUST_NO_ORPHAN_SWEEP=1`: o teste que sobe este binário de verdade nunca varre processos da máquina.
-    if matches!(hangar_server::config::Config::runtime_instance(), Ok(Some(_)))
-        && std::env::var_os("CP_RUST_NO_ORPHAN_SWEEP").is_none_or(|value| value != "1") {
-        let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
-        if home.is_none() { tracing::warn!("HOME ausente: varredura de canos órfãos pulada"); }
-        if let Some(home) = home {
-            let swept = tokio::task::spawn_blocking(move || {
-                let base = home.join(".hangar");
-                hangar_server::runtime::process::sweep_orphans(&base.join("claude-headless"), &base.join("codex-sessions"),
-                    &home.to_string_lossy())
-            }).await.unwrap_or_else(|e| { tracing::warn!(error = %e, "varredura de canos órfãos falhou"); None });
-            if let Some(count) = swept.filter(|count| *count > 0) { tracing::info!(count, "canos de sessão já encerrada finalizados"); }
-        }
-    }
     // A porta do convidado não entra no bind fatal acima: o filho anterior pode ainda segurá-la.
     let served = hangar_server::serve_until_with_guest(listener, state, guest.listen, stop).await;
     prewarm.discard_all("saida_do_servidor").await;

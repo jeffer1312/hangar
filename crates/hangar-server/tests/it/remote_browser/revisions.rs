@@ -327,7 +327,20 @@ async fn stopped_server(name: &str, entry: &str) {
         }
         _ => format!("ws://{public}/api/sessions/nav-contract/nav-remoto?token={OWNER}").into_client_request().unwrap(),
     };
-    let (mut client, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+    // A saúde anuncia portas antes de liberar as operações da preparação inicial.
+    let (mut client, _) = tokio::time::timeout(Duration::from_secs(4), async {
+        loop {
+            match tokio_tungstenite::connect_async(request.clone()).await {
+                Ok(connection) => break connection,
+                Err(tokio_tungstenite::tungstenite::Error::Http(response))
+                    if response.status() == 503 && response.body().as_deref() == Some(br#"{"detail":"server_starting"}"#.as_slice()) => {
+                    assert!(serving.try_wait().unwrap().is_none(), "servidor saiu durante a preparação");
+                    tokio::task::yield_now().await;
+                }
+                Err(error) => panic!("abertura do espectador falhou: {error}"),
+            }
+        }
+    }).await.expect("a preparação inicial não liberou o espectador");
     let mut events = Vec::new();
     until(&mut client, &mut events, |event|event["url"]=="http://contract.test/ready").await;
     client.send(Message::Text(json!({"t":"layout","w":900,"h":700}).to_string().into())).await.unwrap();

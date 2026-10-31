@@ -3727,7 +3727,6 @@
   "harness_codex_m_etapa_marketplace": "Updating marketplace {marketplace}",
   "harness_codex_m_etapa_plugin": "Installing or updating {id}",
   "harness_codex_m_erro_registro_ilegivel": "Integration record is unreadable",
-  "harness_codex_m_erro_falha": "Integration failed ({tipo}); previous configuration kept for the unfinished steps",
   "harness_codex_m_erro_falha_inesperada": "Unexpected integration failure ({tipo}); previous configuration kept for the unfinished steps",
   "harness_codex_m_erro_falha_etapa": "Failed at \"{etapa}\" ({tipo}); previous configuration kept for the unfinished steps",
   "harness_codex_m_erro_marketplace_origem": "Origin of marketplace {marketplace} not confirmed; existing installation kept",

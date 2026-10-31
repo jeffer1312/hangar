@@ -22,7 +22,7 @@ pub trait Machine {
     /// O canal que o Atualizar segue (`super::channel`); `None` fora do modo pacote.
     fn package_channel(&self) -> Option<String>;
     fn automations(&self) -> bool;
-    fn state(&self) -> Map<String, Value>;
+    fn state(&self) -> super::StateSnapshot;
     /// A versão publicada quando é mais nova que a instalada.
     fn newer(&self, channel: &str) -> impl Future<Output = Result<Option<String>, String>> + Send;
     /// Alguma sessão trabalhando agora.
@@ -73,14 +73,12 @@ pub struct Live {
     pub list: Arc<crate::list::bridge::ListBridge>,
     pub listen: SocketAddr,
     pub client: reqwest::Client,
+    pub runtime: crate::config_sync::runtime::RuntimeConfig,
 }
 
 impl Live {
     fn layout(&self) -> Layout { Layout::new(&self.env.home) }
-    /// A pasta do Claude que a lista lê (a mesma de `loops::automations`).
-    fn claude_dir(&self) -> std::path::PathBuf {
-        self.list.env().dirs.as_ref().map_or_else(|| self.env.claude_base.clone(), |d| d.claude.clone())
-    }
+
 }
 
 impl Machine for Live {
@@ -88,9 +86,14 @@ impl Machine for Live {
         matches!(super::http::mode(&self.env.home), super::http::Mode::Package(_)).then(|| super::channel(&self.layout()))
     }
 
-    fn automations(&self) -> bool { crate::push::watch::Settings::read(&self.claude_dir(), &crate::push::server_env()).automations }
+    fn automations(&self) -> bool {
+        let value=self.runtime.get("automations");
+        let enabled=crate::orchestration::truthy(&value);
+        crate::orchestration::codec::discard(value);
+        enabled
+    }
 
-    fn state(&self) -> Map<String, Value> {
+    fn state(&self) -> super::StateSnapshot {
         super::for_screen(&super::state_dir(&self.env.claude_base), &self.layout(), super::running_package().map(|p| p.version.as_str()))
     }
 
@@ -163,7 +166,7 @@ mod tests {
     impl Machine for Fake {
         fn package_channel(&self) -> Option<String> { self.channel.map(str::to_owned) }
         fn automations(&self) -> bool { self.automations }
-        fn state(&self) -> Map<String, Value> { self.state.as_object().cloned().unwrap() }
+        fn state(&self) -> crate::update::StateSnapshot { self.state.as_object().cloned().unwrap().into() }
         async fn newer(&self, _channel: &str) -> Result<Option<String>, String> { Ok(self.newer.map(str::to_owned)) }
         async fn working(&self) -> Result<bool, String> { Ok(self.working) }
         async fn launch(&self) -> Result<(), String> { self.launched.fetch_add(1, Ordering::SeqCst); Ok(()) }

@@ -17,9 +17,11 @@ pub mod dev;
 pub mod dev_mode;
 pub mod executor;
 pub mod http;
+pub mod git_engine;
 pub mod install;
 pub mod migrate;
 pub mod periodic;
+pub mod process;
 pub mod restart;
 pub mod startup_output;
 pub mod state;
@@ -28,7 +30,7 @@ pub mod steps;
 #[cfg(test)]
 mod tests;
 
-pub use state::{state_dir, StateFile};
+pub use state::{state_dir, StateFile, StateSnapshot};
 pub use steps::{apply_machine_steps, ShellRunner, StepRun, StepRunner};
 
 /// Onde o pacote mora: `~/.hangar`.
@@ -151,10 +153,11 @@ fn read_manifest(dir: &Path) -> Option<Manifest> { Manifest::parse(&std::fs::rea
 /// É pacote pelo mesmo critério do `diag.install_manifest()` do Python: `version`, `commit` e
 /// `channel` presentes e não vazios. O resto não decide o modo: os dois lados têm que concordar,
 /// senão um manifesto aceito por um e recusado pelo outro deixa a máquina sem quem a atualize.
-pub fn is_package(dir: &Path) -> bool {
-    let Some(value) = std::fs::read(dir.join(MANIFEST_FILE)).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()) else { return false };
-    ["version", "commit", "channel"].iter().all(|k| value.get(k).and_then(Value::as_str).is_some_and(|s| !s.is_empty()))
+pub fn package_manifest(dir: &Path) -> Option<Value> {
+    let value = std::fs::read(dir.join(MANIFEST_FILE)).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok())?;
+    ["version", "commit", "channel"].iter().all(|k| value.get(k).and_then(Value::as_str).is_some_and(|s| !s.is_empty())).then_some(value)
 }
+pub fn is_package(dir: &Path) -> bool { package_manifest(dir).is_some() }
 
 /// O manifesto em uso marca pacote mas não serve ao atualizador: o motivo, para o estado e a tela.
 pub fn broken_manifest(layout: &Layout) -> Option<String> {
@@ -822,7 +825,7 @@ const BIRTH_WINDOW: chrono::TimeDelta = chrono::TimeDelta::seconds(120);
 /// desfecho que ele não gravou (e fica gravado). Morreu no reinício que pediu com a versão nova
 /// instalada e no ar (`running`): concluída. Quem chama é sempre o servidor de pé (rota, verificação
 /// periódica, lançamento do executor), com `running` = a versão dele.
-pub fn for_screen(state_dir: &Path, layout: &Layout, running: Option<&str>) -> serde_json::Map<String, Value> {
+pub fn for_screen(state_dir: &Path, layout: &Layout, running: Option<&str>) -> StateSnapshot {
     let state = StateFile::new(state_dir);
     let current = state.read();
     if current.get("fase").and_then(Value::as_str) != Some("rodando") { return current; }
@@ -898,11 +901,11 @@ pub async fn run<R: Restarter, H: HealthProbe>(job: &Job<'_>, steps: std::sync::
         return failed_before(&state, health, UpdateError::Io(why)).await;
     }
     let before = installed(job.layout);
-    state.write(json!({"fase": "rodando", "ok": null, "erro": null, "resgate": null, "voltou": null, "no_ar": null,
+    if let Err(error)=state.try_write(json!({"fase": "rodando", "ok": null, "erro": null, "resgate": null, "voltou": null, "no_ar": null,
         "commit_de": before.as_ref().map_or("", |m| m.commit.as_str()), "commit_para": null,
         "versao_de": before.as_ref().map(|m| m.version.clone()), "versao_para": null,
         "pid": std::process::id(), "backend_pid": null, "reiniciar_manual": false, "shell_mudou": false,
-        "waiting_for_server_build": false, "request_id": null, "log": [], "avisos": [], "passos_invalidos": []}));
+        "waiting_for_server_build": false, "request_id": null, "log": [], "avisos": [], "passos_invalidos": []})) {return failed_before(&state,health,UpdateError::Io(error)).await;}
     for note in &job.notes { state.warn(note); }
 
     state.step("baixar");
@@ -911,12 +914,12 @@ pub async fn run<R: Restarter, H: HealthProbe>(job: &Job<'_>, steps: std::sync::
     let entry = match check(job.client, job.release, job.platform, installed_version).await {
         Ok(Some(entry)) => entry,
         Ok(None) => {
-            state.write(json!({"fase": "pronto", "ok": true, "texto": "Já está na versão mais nova"}));
+            if let Err(error)=state.try_write(json!({"fase": "pronto", "ok": true, "texto": "Já está na versão mais nova"})) {return failed_before(&state,health,UpdateError::Io(error)).await;}
             return Outcome::UpToDate;
         }
         Err(e) => return failed_before(&state, health, e).await,
     };
-    state.write(json!({"commit_para": entry.commit, "versao_para": entry.version}));
+    if let Err(error)=state.try_write(json!({"commit_para": entry.commit, "versao_para": entry.version})) {return failed_before(&state,health,UpdateError::Io(error)).await;}
     let dir = match prepare(job.client, job.release, &entry, job.layout, job.settings.download_deadline).await {
         Ok(dir) => dir,
         Err(e) => return failed_before(&state, health, e).await,
@@ -969,7 +972,7 @@ pub async fn run<R: Restarter, H: HealthProbe>(job: &Job<'_>, steps: std::sync::
     // Na mão não há reinício nem prova: o servidor de antes segue no ar até alguém reiniciá-lo.
     if restarter.manual() {
         keep_swap(job.layout, &state);
-        state.write(json!({"fase": "pronto", "ok": true, "texto": "Atualizado", "reiniciar_manual": true}));
+        if let Err(error)=state.try_write(json!({"fase": "pronto", "ok": true, "texto": "Atualizado", "reiniciar_manual": true})) {return failed_before(&state,health,UpdateError::Io(error)).await;}
         return Outcome::UpdatedManual { version: manifest.version };
     }
 
@@ -990,6 +993,6 @@ pub async fn run<R: Restarter, H: HealthProbe>(job: &Job<'_>, steps: std::sync::
     for failure in pruned.map_or_else(|e| vec![e.to_string()], |p| p.failed) {
         state.warn(&failure);
     }
-    state.write(json!({"fase": "pronto", "ok": true, "texto": "Atualizado"}));
+    if let Err(error)=state.try_write(json!({"fase": "pronto", "ok": true, "texto": "Atualizado"})) {return failed_before(&state,health,UpdateError::Io(error)).await;}
     Outcome::Updated { version: manifest.version }
 }

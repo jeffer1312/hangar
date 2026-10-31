@@ -2,6 +2,9 @@
 //! marcadores e do registro nativo ("aguardando", série de turnos e "terminou") e a varredura da lista
 //! a cada `stall_poll_seconds` ("caiu", "travada", "limite" e o auto-resume). A memória dos avisos
 //! fica em disco por sessão: reiniciar não perde um "terminou" nem repete um "travada".
+mod terminal_notices;
+mod finished;
+mod settings;
 use super::send::{Notice, Sender};
 use crate::list::facts_files::HookStates;
 use crate::routes::AppState;
@@ -275,17 +278,39 @@ pub fn seed_resumes_finish(memory: &Memory, sid: &str, state: &str) -> bool { st
 
 fn now_epoch() -> f64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64()) }
 
+struct SweepSettings { notify_dead: bool, automations: bool, auto_resume: bool }
+
 struct Watch {
+    #[cfg(test)]
+    finish_source: Option<Arc<dyn finished::FinishSources>>,
     st: Arc<AppState>,
-    env: BTreeMap<String, String>,
+    config: crate::config_sync::runtime::RuntimeConfig,
+    frozen: settings::Frozen,
     sender: Arc<Sender>,
     hooks: Mutex<HookStates>,
     memory: Mutex<Memory>,
     memory_path: PathBuf,
 }
 
+async fn resolve_row<F, Fut>(mut lookup: F, fresh: bool) -> Option<hangar_api::session::SessionRow>
+where
+    F: FnMut(bool) -> Fut,
+    Fut: std::future::Future<Output = Option<hangar_api::session::SessionRow>>,
+{
+    let row = lookup(fresh).await;
+    // O marcador pode chegar antes de a sessão entrar no retrato compartilhado.
+    if row.is_none() && !fresh { lookup(true).await } else { row }
+}
+
 impl Watch {
-    fn settings(&self) -> Settings { Settings::read(&self.st.accounts.env.claude_base, &self.env) }
+    fn finish_source(&self) -> &dyn finished::FinishSources {
+        #[cfg(test)]
+        if let Some(source) = &self.finish_source { return source.as_ref(); }
+        self
+    }
+    fn settings(&self) -> SweepSettings {
+        SweepSettings {notify_dead: settings::flag(&self.config, "notify_dead"), automations: settings::flag(&self.config, "automations"), auto_resume: self.frozen.auto_resume}
+    }
 
     fn persist(&self) {
         let saved = self.memory.lock().unwrap_or_else(|e| e.into_inner()).save(&self.memory_path);
@@ -298,6 +323,10 @@ impl Watch {
     }
 
     async fn row_of(&self, sid: &str, fresh: bool) -> Option<hangar_api::session::SessionRow> {
+        resolve_row(|refresh| self.lookup_row(sid, refresh), fresh).await
+    }
+
+    async fn lookup_row(&self, sid: &str, fresh: bool) -> Option<hangar_api::session::SessionRow> {
         let produced = match if fresh { self.st.list.refresh().await } else { self.st.list.snapshot().await } {
             Ok(produced) => produced,
             Err(e) => {
@@ -317,6 +346,7 @@ impl Watch {
         for attempt in 0..2 {
             if attempt == 1 { tokio::time::sleep(AWAITING_RETRY).await; }
             let Some(row) = self.row_of(&sid, attempt == 1).await else { return };
+            if terminal_notices::owns(&row.provider) {terminal_notices::awaiting(self.as_ref(),row).await;return;}
             if !turn_notices(&row.provider) { return; }
             let (ask, overlay) = if row.headless { (None, false) } else {
                 let dirs = self.st.list.state_dirs_blocking().map(|(d, _)| d.to_vec()).unwrap_or_default();
@@ -339,11 +369,28 @@ impl Watch {
 
     /// "Terminou" depois de a sessão sossegar, sem trabalho de fundo aberto e com a série longa.
     async fn finished(self: Arc<Self>, sid: String, started: f64, idle_ts: f64) {
-        tokio::time::sleep(FINISH_SETTLE).await;
-        if !self.state_of(&sid).is_some_and(|m| m.state == "idle" && m.ts == idle_ts) { return; }
+        let source = self.finish_source();
+        let initial = match source.row(&sid).await {
+            Ok(row) => row,
+            Err(code) => { finished::FinishSources::failure(self.as_ref(), &sid, &code); return; }
+        };
+        if initial.is_some_and(|row| terminal_notices::owns(&row.provider)) {
+            finished::confirm_and_finish(source, &sid, started, idle_ts).await;
+            return;
+        }
+        source.sleep(FINISH_SETTLE).await;
+        if !source.marker(&sid).is_some_and(|(state, ts)| state == "idle" && ts == idle_ts) { return; }
         let same = |me: &Self| me.memory.lock().unwrap_or_else(|e| e.into_inner()).started.get(&sid) == Some(&started);
         if !same(&self) { return; }
-        let row = self.row_of(&sid, false).await;
+        let row = match source.row(&sid).await {
+            Ok(row) => row,
+            Err(code) => { source.failure(&sid, &code); return; }
+        };
+        // A sessão pode entrar na lista durante a espera, sem outro marcador idle.
+        if row.as_ref().is_some_and(|row| terminal_notices::owns(&row.provider)) {
+            finished::settled(source, &sid, started, idle_ts).await;
+            return;
+        }
         let mut reply = None;
         if let Some(jsonl) = row.as_ref().filter(|r| r.provider == "claude").and_then(|r| r.jsonl.clone()) {
             match tokio::task::spawn_blocking(move || scan(Path::new(&jsonl), now_epoch())).await {
@@ -358,12 +405,22 @@ impl Watch {
             m.started.remove(&sid);
         }
         self.persist();
-        let s = self.settings();
         let Some(row) = row else {
             tracing::warn!(code = "push_finished_row_missing", "terminou: sessão fora da lista; aviso não saiu");
             return;
         };
-        if !s.notify_finished || !turn_notices(&row.provider) || idle_ts - started < s.finish_min_seconds { return; }
+        if !turn_notices(&row.provider) { return; }
+        let (enabled, minimum) = match source.settings() {
+            Ok(values) => values,
+            Err(code) => {source.failure(&sid, &code); return;}
+        };
+        let allowed = finished::permitted(&enabled, &minimum, idle_ts - started);
+        crate::orchestration::codec::discard(enabled);
+        crate::orchestration::codec::discard(minimum);
+        match allowed {
+            Ok(true) => {}, Ok(false) => return,
+            Err(code) => {source.failure(&sid, code); return;}
+        }
         self.sender.notify(&row.name, Notice::Finished(summary(reply.as_deref())));
     }
 
@@ -428,12 +485,15 @@ impl Watch {
                 Ok(done) => first &= !done,
                 Err(_) => tracing::error!(code = "push_sweep_panicked", "vigia de avisos: ciclo da varredura entrou em pânico"),
             }
-            tokio::time::sleep(s.poll).await;
+            if let Err(code) = self.frozen.poll.wait().await {
+                self.st.diag.report("rust.push_config_failed", "push", code, "intervalo do vigia não pode ser representado; acompanhamento interrompido");
+                return;
+            }
         }
     }
 
     /// Um ciclo; `true` quando a lista respondeu com os fatos conhecidos.
-    async fn sweep_once(&self, s: &Settings, armed: &mut BTreeSet<String>, first: bool) -> bool {
+    async fn sweep_once(&self, s: &SweepSettings, armed: &mut BTreeSet<String>, first: bool) -> bool {
         let produced = match self.st.list.snapshot().await {
             Ok(produced) => produced,
             // Retrato com erro perde o ciclo; nunca vira "todos morreram".
@@ -453,7 +513,7 @@ impl Watch {
     }
 
     /// Opt-in (`CP_AUTO_RESUME` e a chave mestra): drena a fila da sessão no horário de volta.
-    fn auto_resume(&self, s: &Settings, name: &str, reset: &str, armed: &mut BTreeSet<String>) {
+    fn auto_resume(&self, s: &SweepSettings, name: &str, reset: &str, armed: &mut BTreeSet<String>) {
         if !s.automations || !s.auto_resume || armed.contains(name) { return; }
         if !undelivered(&self.st.accounts.env.claude_base, name) { return; }
         let Some(delay) = reset_delay(reset, chrono::Local::now().naive_local()) else {
@@ -473,9 +533,22 @@ impl Watch {
 /// Liga o vigia. As tarefas vivem enquanto os `JoinHandle` não forem abortados.
 pub fn start(st: Arc<AppState>) -> Vec<tokio::task::JoinHandle<()>> {
     if st.state.runtime.get().is_none() { return Vec::new(); }
-    let env = super::server_env();
+    let prepared = crate::config_sync::runtime::RuntimeConfig::from_state(&st).and_then(|config| {
+        settings::Frozen::load(&config.settings).map(|frozen| (config, frozen)).map_err(str::to_owned)
+    });
+    let (config, frozen) = match prepared {
+        Ok(values) => values,
+        Err(_) => {
+            st.diag.report("rust.push_config_failed", "push", "push_config_invalid", "configuração inválida impediu o vigia de avisos");
+            return Vec::new();
+        }
+    };
+    let sender=match Sender::from_state(st.clone()) {
+        Ok(sender)=>sender,
+        Err(code)=>{st.diag.report("rust.push_config_failed","push",code,"configuração inválida impediu o vigia de avisos");return Vec::new();}
+    };
     let memory_path = Memory::path(&st.accounts.env.home);
-    let w = Arc::new(Watch { sender: Sender::new(st.clone(), env.clone()), env, memory: Mutex::new(Memory::load(&memory_path)),
+    let w = Arc::new(Watch { #[cfg(test)] finish_source: None, sender, config, frozen, memory: Mutex::new(Memory::load(&memory_path)),
         memory_path, hooks: Mutex::new(HookStates::default()), st });
     vec![tokio::spawn(w.clone().transitions()), tokio::spawn(w.sweep())]
 }

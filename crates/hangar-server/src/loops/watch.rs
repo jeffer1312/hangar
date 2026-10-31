@@ -20,13 +20,14 @@ const BOOT_RETRY: Duration = Duration::from_secs(2);
 
 pub trait Host: Send + Sync + 'static {
     fn store(&self) -> Store;
+    fn guard<'a>(&'a self, row: &'a SessionRow) -> BoxFuture<'a, Result<(crate::runtime::ingress::IngressPass, SessionRow), &'static str>>;
     fn row_by_sid<'a>(&'a self, sid: &'a str) -> BoxFuture<'a, Option<SessionRow>>;
     /// A lista inteira; `None` enquanto ela não sabe quem está vivo.
     fn rows(&self) -> BoxFuture<'_, Option<Vec<SessionRow>>>;
     /// A fila entregou algo neste fim de turno (o turno que vem é do texto, não do trabalho).
     fn just_sent<'a>(&'a self, name: &'a str, since: f64) -> BoxFuture<'a, bool>;
     fn tick(&self, row: SessionRow) -> BoxFuture<'static, ()>;
-    fn automations(&self) -> bool;
+    fn automations(&self) -> Result<bool, &'static str>;
     fn deliver<'a>(&'a self, target: &'a str, text: &'a str) -> BoxFuture<'a, Result<(), String>>;
     fn notify(&self, name: &str, status: &str, reason: &str);
     fn now(&self) -> f64;
@@ -38,7 +39,14 @@ pub enum Chain { Off, Absent, Sent, Dropped, Failed(String) }
 
 /// Um salto só: entregue, o vínculo sai; falha de entrega o mantém para o próximo fim de turno.
 pub async fn fire_chain(host: &dyn Host, name: &str) -> Chain {
-    if !host.automations() { return Chain::Off; }
+    match host.automations() {
+        Ok(false) => return Chain::Off,
+        Ok(true) => {},
+        Err(code) => {
+            host.diag("loop.chain_failed", name, code, "configuração inválida; vínculo preservado sem entregar");
+            return Chain::Failed(code.into());
+        }
+    }
     let store = host.store();
     let Some(link) = store.chain(name) else { return Chain::Absent };
     let field = |k: &str| link.get(k).and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_owned);
@@ -95,9 +103,24 @@ impl<H: Host> Watcher<H> {
         }
     }
 
+    fn supports_loop(&self, row: &SessionRow) -> bool {
+        if row.provider == "claude" { return true; }
+        self.host.diag("loop.provider_refused", &row.name, "loop_provider_unsupported", "loop preservado: provedor incompatível com o vínculo");
+        false
+    }
+
     async fn pause(&self, sid: &str) {
         let Some(row) = self.host.row_by_sid(sid).await else { return };
         let store = self.host.store();
+        if !store.get(&row.name).is_some_and(|d| status(&d) == "running") { return; }
+        if !self.supports_loop(&row) { return; }
+        let (_pass, row) = match self.host.guard(&row).await {
+            Ok(guarded) => guarded,
+            Err(code) => {
+                self.host.diag("loop.pause_refused", &row.name, code, "pausa recusada; vínculo preservado");
+                return;
+            }
+        };
         let _one = loop_lock(&row.name).await;
         if !store.get(&row.name).is_some_and(|d| status(&d) == "running") { return; }
         let mut fields = serde_json::Map::new();
@@ -109,8 +132,9 @@ impl<H: Host> Watcher<H> {
 
     async fn idle(&self, ev: TurnEvent) {
         let Some(row) = self.host.row_by_sid(&ev.sid).await else { return };
-        if !crate::push::watch::turn_notices(&row.provider) { return; }
         let active = self.host.store().get(&row.name).is_some_and(|d| is_active(&d));
+        if active && !self.supports_loop(&row) { return; }
+        if !crate::push::watch::turn_notices(&row.provider) { return; }
         if !active {
             fire_chain(&*self.host, &row.name).await;
             return;
@@ -120,6 +144,7 @@ impl<H: Host> Watcher<H> {
 
     /// Uma volta em voo por sessão.
     pub fn schedule(&self, row: SessionRow) {
+        if !self.supports_loop(&row) { return; }
         if !lock(&self.inflight).insert(row.name.clone()) { return; }
         let (inflight, name, work) = (self.inflight.clone(), row.name.clone(), self.host.tick(row));
         tokio::spawn(async move {
@@ -165,13 +190,29 @@ struct HostEnv<'a> { host: &'a dyn Host, name: &'a str }
 
 impl super::tick::Env for HostEnv<'_> {
     fn now(&self) -> f64 { self.host.now() }
-    fn automations(&self) -> bool { self.host.automations() }
+    fn automations(&self) -> Result<bool, &'static str> { self.host.automations() }
     fn branch(&self) -> Option<String> { None }
     fn entry_delivered(&self, _id: Option<String>) -> BoxFuture<'_, Option<bool>> { Box::pin(async { None }) }
     fn run_check(&self, _cmd: String) -> BoxFuture<'_, (i64, String)> { Box::pin(async { (super::check::UNRUNNABLE, String::new()) }) }
     fn last_assistant(&self) -> BoxFuture<'_, Option<String>> { Box::pin(async { None }) }
     fn enqueue(&self, _text: String) -> BoxFuture<'_, Result<(), String>> { Box::pin(async { Err("boot".into()) }) }
     fn notify(&self, status: &str, reason: &str) { self.host.notify(self.name, status, reason); }
+}
+
+/// Revalida a seleção sob o mesmo ingresso que impede troca de vida durante a conferência.
+async fn enter_tick<F>(gates: &crate::runtime::ingress::IngressGates, expected: &SessionRow, current: F)
+    -> Result<(crate::runtime::ingress::IngressPass, SessionRow), &'static str>
+where F: std::future::Future<Output = Result<Option<SessionRow>, &'static str>> {
+    let pass = gates.enter(&expected.name, Duration::ZERO).await.map_err(|_| "session_transfer_busy")?;
+    let row = current.await?.ok_or("loop_life_changed")?;
+    if row.provider != "claude" { return Err("loop_provider_unsupported"); }
+    if expected.lifecycle_id.as_deref().is_none_or(str::is_empty) || row.lifecycle_id.as_deref().is_none_or(str::is_empty) {
+        return Err("loop_life_unavailable");
+    }
+    if row.name != expected.name || row.lifecycle_id != expected.lifecycle_id || row.jsonl != expected.jsonl {
+        return Err("loop_life_changed");
+    }
+    Ok((pass, row))
 }
 
 /// O servidor de verdade.
@@ -181,6 +222,13 @@ fn key_of(row: &SessionRow) -> Option<String> { row.jsonl.as_deref().map(crate::
 
 impl Host for Live {
     fn store(&self) -> Store { super::store(&self.st) }
+    fn guard<'a>(&'a self, row: &'a SessionRow) -> BoxFuture<'a, Result<(crate::runtime::ingress::IngressPass, SessionRow), &'static str>> {
+        Box::pin(async move {
+            let runtime = self.st.state.runtime.get().ok_or("runtime_unavailable")?;
+            let current = async { super::fresh_row(&self.st, &row.name).await.map_err(|_| "loop_list_unavailable") };
+            enter_tick(runtime.ingress(), row, current).await
+        })
+    }
     fn row_by_sid<'a>(&'a self, sid: &'a str) -> BoxFuture<'a, Option<SessionRow>> {
         Box::pin(async move {
             for fresh in [false, true] {
@@ -216,13 +264,23 @@ impl Host for Live {
         let st = self.st.clone();
         Box::pin(async move {
             let name = row.name.clone();
-            let env = super::Live { st: st.clone(), row };
+            let host = Live { st: st.clone() };
+            let (pass, row) = match host.guard(&row).await {
+                Ok(guarded) => guarded,
+                Err(code) => {
+                    st.diag.report("loop.tick_refused", &name, code, "tique recusado; vínculo preservado");
+                    return;
+                }
+            };
+            let env = super::Live { st: st.clone(), row, pass };
             if let Err(e) = super::tick::run_tick(&super::store(&st), &name, &env).await {
-                st.diag.report("loop.tick_failed", &name, &format!("{:?}", e.kind()), "volta do loop não gravou; o loop ficou como estava");
+                let code = e.get_ref().and_then(|error| error.downcast_ref::<super::ConfigFailure>())
+                    .map_or_else(|| format!("{:?}", e.kind()), |error| error.0.into());
+                st.diag.report("loop.tick_failed", &name, &code, "volta do loop interrompida; trabalho preservado");
             }
         })
     }
-    fn automations(&self) -> bool { super::automations(&self.st) }
+    fn automations(&self) -> Result<bool, &'static str> { super::automations(&self.st) }
     fn deliver<'a>(&'a self, target: &'a str, text: &'a str) -> BoxFuture<'a, Result<(), String>> {
         Box::pin(async move {
             crate::session_write::input::deliver_text(&self.st, target, text).await

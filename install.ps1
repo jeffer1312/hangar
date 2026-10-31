@@ -40,7 +40,7 @@ if ($App) {
     # O app le a saida como UTF-8; sem isto o 5.1 escreveria na codepage OEM do console.
     try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false } catch { }
     $OutputEncoding = New-Object System.Text.UTF8Encoding $false
-    # O mesmo para o Python (app.doctor, uv run), que escreveria em cp1252 no arquivo do app.
+    # O mesmo para o Python (hangar-server doctor, uv run), que escreveria em cp1252 no arquivo do app.
     $env:PYTHONIOENCODING = 'utf-8'
     Write-Host "##HANGAR-PROTOCOLO## $HangarProtocol"
 }
@@ -890,7 +890,7 @@ if (-not $Agentes -and $Avancado -and $script:Interativo -and -not $Update -and 
     }
 }
 # Escolhidos que faltam e nao sao o Claude: o comando oficial deles roda no 2/8, com o backend
-# pronto, pela mesma tabela do painel de Harnesses (backend\app\harness_commands.py).
+# pronto, pela mesma tabela do painel de Harnesses (harness_setup::commands).
 $script:agentesNovos = @()
 if ($listaAgentes.Count) {
     foreach ($a in $listaAgentes) {
@@ -1052,12 +1052,9 @@ if ($script:psmuxConsole -eq 'pular') {
 }
 
 if ($SoChecar) {
-    $pyVenvCheck = $pyBackend
-    if (Test-Path $pyVenvCheck) {
-        Titulo 'Diagnostico'
-        Push-Location (Join-Path $raiz 'backend'); & $pyVenvCheck -m app.doctor; $rcDoctor = $LASTEXITCODE; Pop-Location
-        if ($rcDoctor -ne 0) { $pendencias += 'doctor' }
-    }
+    Titulo 'Diagnóstico'
+    & (Join-Path $raiz 'scripts\hangar-server-command.ps1') doctor --backend (Join-Path $raiz 'backend'); $rcDoctor = $LASTEXITCODE
+    if ($rcDoctor -ne 0) { $pendencias += 'doctor' }
     if ($pendencias.Count -eq 0) { Mark-Step 'preparar' 'ok'; $script:finalState = 'ok'; Titulo 'Nada faltando.'; Pausa-Log; exit 0 }
     Mark-Step 'preparar' 'pendente'; $script:finalState = 'pendente'
     Titulo "Faltam: $($pendencias -join ', ')"
@@ -1092,12 +1089,39 @@ Ok 'dependencias instaladas'
 Nota 'psutil entra aqui: no Windows nao ha /proc pra ler informacao de processo'
 }
 Mark-Item 'backend' 'ok' 'servidor do Hangar'
-$pyVenvAgentes = $pyBackend
+# -- Binarios Rust (hangar-server e hangar-cano, release server-latest) -------
+# Sem eles o Python atende a API, mas a tela web e o ditado nao: a falta fica como pendencia.
+if (-not $SoChecar) {
+    Titulo 'Binarios Rust'
+    if ($pacote) {
+        $rcRust = 'pacote'
+    } else {
+        $rcRust = Nativo 'powershell' -NoProfile -ExecutionPolicy Bypass -File (Join-Path $raiz 'scripts\install-server-binaries.ps1')
+    }
+    if ("$rcRust" -eq 'pacote') {
+        Ok 'hangar-server e hangar-cano: vieram no pacote'
+        Mark-Item 'rust' 'ok' 'servidor rapido'
+    } elseif ($rcRust -eq 0) {
+        Ok 'hangar-server e hangar-cano em ~\.hangar\bin'
+        Mark-Item 'rust' 'ok' 'servidor rapido'
+    } elseif ($rcRust -eq 2) {
+        Falta 'sem binarios Rust para esta maquina - sem eles a tela web e o ditado nao funcionam'
+        Mark-Item 'rust' 'pendente' 'servidor rapido (nao ha para esta maquina)'
+        $script:pendencias += 'binarios Rust'
+    } else {
+        $motivo = 'download ou conferência falhou'
+        Falta "binarios Rust nao baixaram ($motivo) - o backend em Python atende sozinho"
+        Mark-Item 'rust' 'pendente' 'servidor rapido'
+        $script:pendencias += 'binarios Rust'
+        Write-Host '##HANGAR-AVISO## binarios Rust nao baixaram; o backend em Python atende sozinho'
+    }
+}
+
 foreach ($a in $script:agentesNovos) {
     $nome = $nomesAgentes[$a]
     Write-Host "  .. instalando $nome"
     Mark-Item $a 'fazendo' $nome
-    $rcAgente = Nativo $pyVenvAgentes -m app.harness_commands $a
+    $rcAgente = Nativo $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $raiz 'scripts\hangar-server-command.ps1') harness-setup install $a
     Atualiza-Path
     if ($rcAgente -eq 0 -and (Tem $a)) { Ok "$nome instalado"; Mark-Item $a 'ok' $nome; continue }
     if ($rcAgente -eq 0) { Falta "$nome instalou, mas o comando $a nao aparece no PATH - abra outro terminal e rode o instalador de novo" }
@@ -1107,7 +1131,7 @@ foreach ($a in $script:agentesNovos) {
     Add-AppPending $nome 'agente-nao-instalou'
 }
 # Sem o par VAPID o push para o celular sai calado e o celular nem se inscreve.
-if ((Nativo $pyVenvAgentes -m app.vapid_setup) -eq 0) { Ok 'chaves do push para o celular prontas' }
+if ((Nativo $pyBackend -m app.vapid_setup) -eq 0) { Ok 'chaves do push para o celular prontas' }
 else { Falha 'chaves do push para o celular' 'rodar na mao:  cd backend ; uv run python -m app.vapid_setup' }
 Pop-Location
 # Prova do minimo: sem nenhum agente o app abre, mas nao tem o que pilotar.
@@ -1295,8 +1319,8 @@ function Pare-Servico {
         # desce do backend) o matava - a atualizacao terminava "interrompida". Sobe enquanto o PAI
         # ainda e motor; para no ultimo.
         $pai = $paisMapa[$cur]
-        $souMotor = $cmdMapa[$cur] -and $cmdMapa[$cur] -match 'app\.atualizar'
-        $paiMotor = $pai -and $cmdMapa[$pai] -and $cmdMapa[$pai] -match 'app\.atualizar'
+        $souMotor = $cmdMapa[$cur] -and $cmdMapa[$cur] -match 'app\.atualizar|hangar-server(?:\.exe)?"?\s+checkout-update(?:\s|$)'
+        $paiMotor = $pai -and $cmdMapa[$pai] -and $cmdMapa[$pai] -match 'app\.atualizar|hangar-server(?:\.exe)?"?\s+checkout-update(?:\s|$)'
         if ($souMotor -and -not $paiMotor) { break }
         # PID e RECICLADO: o ppid e so um numero gravado no nascimento, e se aquele pai morreu o
         # numero pode pertencer hoje a um processo qualquer — inclusive ao Vite que a gente QUER
@@ -1336,7 +1360,7 @@ function Pare-Servico {
     # nao bastou; reconhecer pelo comando nao depende do mapa de pais estar completo nem do WMI ter
     # respondido. No Linux quem resolve isso e o escopo transiente do systemd, que aqui nao existe.
     $atualizador = @(@($tabela) |
-        Where-Object { $_ -and $_.CommandLine -and $_.CommandLine -match 'app\.atualizar' } |
+        Where-Object { $_ -and $_.CommandLine -and $_.CommandLine -match 'app\.atualizar|hangar-server(?:\.exe)?"?\s+checkout-update(?:\s|$)'  } |
         Select-Object -ExpandProperty ProcessId)
     if ($atualizador.Count -gt 0) {
         $alvos = @($alvos | Where-Object { -not ($atualizador -contains [int]$_) })
@@ -1618,39 +1642,6 @@ if ($SemNativo -and -not $SoChecar) {
         Mark-Item 'nativo' 'pendente' 'app do Hangar'
         $script:pendencias += 'app nativo'
         Write-Host '##HANGAR-AVISO## o app nativo nao instalou; use o Hangar pelo navegador'
-    }
-}
-
-# -- Binarios Rust (hangar-server e hangar-cano, release server-latest) -------
-# Sem eles o Python atende a API, mas a tela web e o ditado nao: a falta fica como pendencia.
-if (-not $SoChecar) {
-    Titulo 'Binarios Rust'
-    $pyRust = Join-Path $raiz 'backend\.venv\Scripts\python.exe'
-    if ($pacote) {
-        $rcRust = 'pacote'
-    } elseif (-not (Test-Path $pyRust)) {
-        $rcRust = -1
-    } else {
-        Push-Location (Join-Path $raiz 'backend')
-        $rcRust = Nativo $pyRust -m app.rust_release
-        Pop-Location
-    }
-    if ("$rcRust" -eq 'pacote') {
-        Ok 'hangar-server e hangar-cano: vieram no pacote'
-        Mark-Item 'rust' 'ok' 'servidor rapido'
-    } elseif ($rcRust -eq 0) {
-        Ok 'hangar-server e hangar-cano em ~\.hangar\bin'
-        Mark-Item 'rust' 'ok' 'servidor rapido'
-    } elseif ($rcRust -eq 2) {
-        Falta 'sem binarios Rust para esta maquina - sem eles a tela web e o ditado nao funcionam'
-        Mark-Item 'rust' 'pendente' 'servidor rapido (nao ha para esta maquina)'
-        $script:pendencias += 'binarios Rust'
-    } else {
-        $motivo = if ($rcRust -eq -1) { 'sem o python do venv' } else { 'download ou conferencia falhou' }
-        Falta "binarios Rust nao baixaram ($motivo) - o backend em Python atende sozinho"
-        Mark-Item 'rust' 'pendente' 'servidor rapido'
-        $script:pendencias += 'binarios Rust'
-        Write-Host '##HANGAR-AVISO## binarios Rust nao baixaram; o backend em Python atende sozinho'
     }
 }
 
@@ -2556,19 +2547,11 @@ if (-not $bash) {
     if (Escrever-Lancador $lancadorConta $conteudoConta 'cmd') { Ok "lancador hangar-conta.cmd criado em $binUsuario" }
     else { Ok 'lancador hangar-conta.cmd ja atualizado' }
 
-    # hangar-doctor.cmd: Python do VENV do backend (importa app.*), com cd para backend\ (o .env e lido pelo cwd).
-    $pyVenv = Join-Path $raiz 'backend\.venv\Scripts\python.exe'
-    if ($pacote -or (Test-Path $pyVenv)) {
-        $lancadorDoctor = Join-Path $binUsuario 'hangar-doctor.cmd'
-        # No pacote pelo hangar-python.cmd e pelo current: o caminho real da versao seria podado.
-        $conteudoDoctor = if ($pacote) { "@echo off`r`ncd /d `"$raizAtalhos\backend`"`r`ncall `"%~dp0hangar-python.cmd`" -m app.doctor %*`r`n" }
-                          else { "@echo off`r`ncd /d `"$raiz\backend`"`r`n`"$pyVenv`" -m app.doctor %*`r`n" }
-        if (Escrever-Lancador $lancadorDoctor $conteudoDoctor 'cmd') { Ok "lancador hangar-doctor.cmd criado em $binUsuario" }
-        else { Ok 'lancador hangar-doctor.cmd ja atualizado' }
-    } else {
-        Falta 'hangar-doctor.cmd nao criado - o venv do backend nao existe (passo 2/8 falhou?)'
-        $sendOk = $false
-    }
+    # O diagnóstico usa o Rust mesmo com o serviço parado, sem depender do venv.
+    $lancadorDoctor = Join-Path $binUsuario 'hangar-doctor.cmd'
+    $conteudoDoctor = "@echo off`r`npowershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$raizAtalhos\scripts\hangar-server-command.ps1`" doctor --backend `"$raizAtalhos\backend`" %*`r`n"
+    if (Escrever-Lancador $lancadorDoctor $conteudoDoctor 'cmd') { Ok "lançador hangar-doctor.cmd criado em $binUsuario" }
+    else { Ok 'lançador hangar-doctor.cmd já atualizado' }
 
     # (2c) lancador pro hangar-engine (motores de modelo). Sem ele o backend monta o comando do pane
     # como `hangar-engine --exec <motor> -- claude ...`, o pane morre no ato e o `tmux new-session`
@@ -2576,11 +2559,10 @@ if (-not $bash) {
     # O app reportava "sessao criada" e ela sumia calada. Hoje o backend recusa alto quando este
     # lancador falta (registry._exigir_cp_engine) — este bloco e o outro lado do conserto, o que
     # faz o motor de fato FUNCIONAR no Windows.
-    # Pelo PYTHON e nao pelo bash, mesmo motivo do hangar-conta: o hangar-engine e script Python
-    # (`#!/usr/bin/env python3`) e `bash arquivo` nao honra shebang.
+    # O lançador resolve o executável Rust sem depender do Python ou do serviço.
     $lancadorEngine = Join-Path $binUsuario 'hangar-engine.cmd'
     $conteudoEngine = "@echo off`r`n" +
-                      "call `"%~dp0hangar-python.cmd`" `"$raizAtalhos\scripts\hangar-engine`" %*`r`n"
+                      "call `"$raizAtalhos\scripts\hangar-engine.cmd`" %*`r`n"
     if (Escrever-Lancador $lancadorEngine $conteudoEngine 'cmd') { Ok "lancador hangar-engine.cmd criado em $binUsuario" }
     else { Ok 'lancador hangar-engine.cmd ja atualizado' }
 
@@ -3010,8 +2992,8 @@ Mark-Step 'final' 'ok'
 # a tela final nao pode depender de um ramo anterior ter executado.
 $pyVenv = $pyBackend
 $qrMostrado = $false
-if ($script:Interativo -and -not $Update -and (Test-Path $pyVenv)) {
-    Pausa-Log   # a URL do QR carrega o token (a legenda quem escreve e o proprio app.doctor)
+if ($script:Interativo -and -not $Update) {
+    Pausa-Log   # a URL do QR carrega o token (a legenda quem escreve e o proprio hangar-server doctor)
     # Sem UTF-8 no console os blocos do QR viram '?' na codepage OEM; e o preference baixa pra
     # Continue porque qualquer linha no stderr viraria NativeCommandError com 'Stop'.
     $eapAnt = $ErrorActionPreference
@@ -3022,13 +3004,13 @@ if ($script:Interativo -and -not $Update -and (Test-Path $pyVenv)) {
         $ErrorActionPreference = 'Continue'
         [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false
         $env:PYTHONIOENCODING = 'utf-8'
-        & $pyVenv -m app.doctor --qr
-        # Exit 0 e a prova: com o preference em 'Continue' um app.doctor que falha nao levanta nada,
+        & (Join-Path $raiz 'scripts\hangar-server-command.ps1') doctor --backend (Join-Path $raiz 'backend') --qr
+        # Exit 0 e a prova: com o preference em 'Continue' um hangar-server doctor que falha nao levanta nada,
         # e a tela final mandaria ler um QR que nunca foi desenhado.
-        # 2 = o app.doctor achou que nao ha terminal e so imprimiu a URL: nao ha QR a ler, e nao
+        # 2 = o hangar-server doctor achou que nao ha terminal e so imprimiu a URL: nao ha QR a ler, e nao
         # ha nada a consertar - a tela final ja cai na linha "abra <url> e digite o token".
         if ($LASTEXITCODE -eq 0) { $qrMostrado = $true }
-        elseif ($LASTEXITCODE -ne 2) { Falta "nao consegui desenhar o QR (app.doctor saiu $LASTEXITCODE)" }
+        elseif ($LASTEXITCODE -ne 2) { Falta "nao consegui desenhar o QR (hangar-server doctor saiu $LASTEXITCODE)" }
     } catch {
         Nota "nao consegui desenhar o QR: $_"
     } finally {

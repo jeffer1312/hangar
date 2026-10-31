@@ -97,11 +97,16 @@ pub fn area_of(path: &str) -> usize {
 /// O Rust atende este pedido do dono sem repassar? Mesma decisão do `routes::router`: as rotas
 /// GET registradas lá, mais os `matches` de Git/arquivos e de worktrees que o `pass_any` consulta.
 pub fn rust_route(method: &Method, path: &str) -> bool {
+    // Essas famílias resolvem também os métodos recusados dentro do Rust.
+    if crate::login_guests::owns_path(path) || crate::loops::http::owns_path(path)
+        || crate::push::http::owns_path(path) || crate::machine_peers::owns_http_path(path)
+        || matches!(path, "/api/config-sync/apply" | "/api/update-channel") { return true; }
+    if *method == Method::GET && matches!(path, "/api/config-sync/manifest" | "/api/config-sync/bundle") { return true; }
     if crate::ui::matches(method, path) || crate::dictation::http::matches(method, path)
         || crate::speech::http::matches(method, path) { return true; }
     // O serviço MCP responde também aos métodos recusados, sem repasse ao Python.
     if matches!(path, "/mcp" | "/mcp/") { return true; }
-    if matches!(*method, Method::GET | Method::PUT) && matches!(path, "/api/auto-report" | "/api/session-defaults" | "/api/tags" | "/api/web-ui") { return true; }
+    if matches!(*method, Method::GET | Method::PUT) && matches!(path, "/api/session-defaults" | "/api/tags" | "/api/web-ui" | "/api/auto-report") { return true; }
     if (matches!(*method, Method::GET | Method::PUT) && path == "/api/update-channel") { return true; }
     if (*method == Method::GET && path == "/api/atualizacao")
         || (*method == Method::POST && matches!(path, "/api/atualizacao/iniciar" | "/api/atualizacao/reiniciar" | "/api/atualizacao/dev-mode")) { return true; }
@@ -244,7 +249,7 @@ const PROBES: &[(&str, &str)] = &[
     ("GET", "/api/orq"), ("GET", "/api/orq/x/conductor"), ("GET", "/api/sessions/x/pi/models"), ("POST", "/api/sessions/x/pi/model"),
     ("GET", "/api/sessions/x/kimi/models"), ("POST", "/api/sessions/x/kimi/model"), ("GET", "/api/omp/plugin-sync"),
     ("GET", "/api/claude-configs"), ("GET", "/api/engines"), ("POST", "/api/sessions/x/conta"),
-    ("GET", "/api/guests"), ("POST", "/api/sessions/x/share"),
+    ("POST", "/api/guests"), ("POST", "/api/sessions/x/share"),
     ("GET", "/api/peers"), ("POST", "/api/sessions/x/pair"),
     ("GET", "/mcp"), ("POST", "/mcp"), ("DELETE", "/mcp"),
     ("GET", "/api/push/settings"),
@@ -384,16 +389,46 @@ async fn python_facts(st: &AppState) -> Result<Value, &'static str> {
     serde_json::from_slice(&bytes).map_err(|_| "json")
 }
 
+async fn owned_branch_fields(st: Arc<AppState>) -> Result<(Option<String>, Option<String>), String> {
+    static CLOCK: LazyLock<Instant> = LazyLock::new(Instant::now);
+    tokio::task::spawn_blocking(move || {
+        let home = &st.accounts.env.home;
+        let root = crate::install_root::root(home);
+        let branch = root.as_deref().and_then(|root| st.migration_branch.get(root, &st.accounts.env.base, CLOCK.elapsed()));
+        let update_branch = if matches!(crate::update::http::mode(home), crate::update::http::Mode::Package(_)) {
+            let channel = crate::update::channel(&crate::update::Layout::new(home));
+            if channel == "latest" { String::new() } else { channel }
+        } else {
+            let snapshot = st.settings_snapshot()?;
+            crate::machine_peers::live_config::update_channel(home, root.as_deref().map(|root|root.join("backend")).as_deref(), snapshot.environment(), "CP_UPDATE_BRANCH")?
+        };
+        Ok((branch, (!update_branch.is_empty()).then_some(update_branch)))
+    }).await.map_err(|error|error.to_string())?
+}
+
 /// `GET /api/migration/status` do dono. Convidado e outro método seguem ao Python, que recusa.
 pub async fn status(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let (fwd, owner) = match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     if !owner || req.method() != Method::GET {
         return pass(&st, req, &fwd).await;
     }
-    let (python, python_error) = match cached_python_facts(&st).await {
+    let (mut python, python_error) = match cached_python_facts(&st).await {
         Ok(v) => (v, Value::Null),
         Err(code) => (Value::Null, json!(code)),
     };
+    if python.is_object() {
+        let (branch, update_branch) = match owned_branch_fields(st.clone()).await {
+            Ok(fields) => fields,
+            Err(_) => {
+                st.diag.report("migration_status.config", "", "migration_status_config_unavailable", "não foi possível ler a configuração do canal");
+                let mut response = crate::session_write::detail(axum::http::StatusCode::SERVICE_UNAVAILABLE, "migration_status_config_unavailable", "não foi possível ler a configuração do canal", json!({}));
+                cors(req.headers(), response.headers_mut());
+                return response;
+            }
+        };
+        python["branch"] = json!(branch);
+        python["update_branch"] = json!(update_branch);
+    }
     let (public, private) = totals();
     let body = json!({
         "served_by": "rust",
@@ -479,9 +514,13 @@ mod tests {
             let path = line.split('"').nth(1).unwrap().replace("{name}", "x");
             if !path.starts_with("/api/") { continue; }
             // Uma rota pode juntar métodos (`get(…).post(…)`): cada um tem de estar na tabela.
-            let methods:Vec<Method> = [("get(",Method::GET),("post(",Method::POST),("delete(",Method::DELETE),("put(",Method::PUT),("patch(",Method::PATCH)]
+            let mut methods:Vec<Method> = [("get(",Method::GET),("post(",Method::POST),("delete(",Method::DELETE),("put(",Method::PUT),("patch(",Method::PATCH)]
                 .into_iter().filter(|(call,_)| line.contains(&format!("::{call}")) || line.contains(&format!(" {call}")) || line.contains(&format!(".{call}")) || line.contains(&format!("({call}")))
                 .map(|(_,method)| method).collect();
+            if line.contains("::any(") {
+                methods = vec![Method::GET, Method::POST, Method::PUT, Method::PATCH,
+                    Method::DELETE, Method::HEAD, Method::OPTIONS, Method::TRACE, Method::CONNECT];
+            }
             assert!(!methods.is_empty(), "método que o leitor não conhece: {line}");
             for method in methods { assert!(rust_route(&method, &path), "rota do roteador fora da tabela: {method} {path}"); }
             api += 1;

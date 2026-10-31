@@ -2324,3 +2324,13 @@ async fn queued_row_goes_out_at_turn_end_and_is_confirmed_without_any_drain_or_c
     h.stop().await.unwrap();
 }
 
+#[tokio::test]
+async fn engine_model_actor_refuses_borrowed_keyboard_before_waiting_for_default() {
+    let f=Fixture::new().await;
+    let (io,h)=picker_actor(&f,&picker_golden("session_navigates_and_presses_s"));
+    h.control("loan".into(),"keyboard_loan".into(),json!({"seconds":30})).await.unwrap();
+    let refusal=tokio::time::timeout(Duration::from_secs(1),h.control("engine".into(),"set_engine_model".into(),json!({"model":"k3","effort":null}))).await.unwrap();
+    assert_eq!(refusal.unwrap_err().code,"erro_opcao_nao_convergiu");
+    assert!(io.keys.lock().unwrap().is_empty());
+    h.stop().await.unwrap();
+}

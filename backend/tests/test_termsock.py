@@ -222,29 +222,8 @@ def test_token_do_dono_abre_de_qualquer_origem():
     assert (e.value.code, e.value.reason) == (1008, "sessao nao existe")
 
 
-def test_convidado_com_login_continua_preso_a_origem(monkeypatch):
-    # Login de convidado é sessão própria (credencial ambiente): a Origin continua conferida.
-    import contextvars
-    from starlette.websockets import WebSocketDisconnect
-    from app import guest_users
-    monkeypatch.setattr(guest_users, "current", contextvars.ContextVar("guest", default=object()))
-    with pytest.raises(WebSocketDisconnect) as e:
-        with _client().websocket_connect("/api/sessions/nao-existe/term?cols=80&rows=24",
-                                         headers={"origin": "https://evil.com"}):
-            pass
-    assert (e.value.code, e.value.reason) == (1008, "")
 
 
-def test_config_nao_avisa_recusa_ao_dono_de_origem_estranha(monkeypatch):
-    # O dono abre o terminal com `?token=` de qualquer Origin: a tela não pode dizer que recusa.
-    # Convidado com login segue preso à Origin, e a config tem que avisar.
-    import contextvars
-    from app import guest_users
-    r = _client().get("/api/config", headers={"Authorization": "Bearer secret", "origin": "https://evil.com"})
-    assert r.status_code == 200 and r.json()["somente_leitura"]["terminal_origem_ok"] is True
-    monkeypatch.setattr(guest_users, "current", contextvars.ContextVar("guest", default=object()))
-    from app import api
-    assert api._origem_do_terminal_ok(type("R", (), {"headers": {"origin": "https://evil.com", "host": "x"}})()) is False
 
 
 def test_sessao_desconhecida_recusa(sessao):
@@ -475,8 +454,16 @@ def test_fechamento_feio_nao_deixa_zumbi_nem_trava_a_listagem(sessao):
             _esperar(lambda: not _anexado(sessao))
     # A regressao do threadpool: se as bombas de bytes tivessem sido to_thread, os workers ficariam
     # parqueados e este GET seria o que trava.
-    r = c.get("/api/sessions", headers={"Authorization": "Bearer secret"})
-    assert r.status_code == 200
+    from app.api import app
+    # A listagem HTTP migrou; a sonda síncrona ainda paga o pool do transporte Python.
+    app.add_api_route("/api/test-terminal-pool", lambda: {"ok": True})
+    try:
+        r = c.get("/api/test-terminal-pool")
+        assert r.status_code == 200
+        assert r.json() == {"ok": True}
+    finally:
+        app.router.routes[:] = [route for route in app.router.routes
+                                if getattr(route, "path", None) != "/api/test-terminal-pool"]
     assert termsock.clientes_ativos() == set()
     assert not _anexado(sessao)
 
@@ -764,107 +751,24 @@ def test_shell_escondido_orfa_nao_reata_no_cwd_errado(sessao, tmp_path):
     # kill do shell fica pro teardown do fixture `sessao`.
 
 
-def test_config_expoe_capacidade_do_painel_de_terminal():
-    """A chave e CAPACIDADE ("da pra abrir painel aqui?"), nao nome de sistema.
-
-    A afirmacao antiga era `== (os.name == "posix")`, que descrevia o gate de quando so havia
-    motor POSIX — e virou MENTIRA no dia em que o ConPTY entrou (22/08/2026). Trocar por
-    `== painel_disponivel()` seria tautologia (a rota devolve exatamente essa funcao); o que vale
-    afirmar e o fato: nas duas plataformas em que este projeto roda existe motor, entao a chave e
-    True nas duas, e continua sendo um booleano em `somente_leitura` porque o app nunca decide
-    isto sozinho.
-    """
-    c = _client()
-    r = c.get("/api/config", headers={"Authorization": "Bearer secret"})
-    assert r.status_code == 200
-    valor = r.json()["somente_leitura"]["terminal_panel"]
-    assert isinstance(valor, bool)
-    assert valor is True
 
 
 
 
 
 
-def test_origem_mesma_do_host_e_aceita_mesmo_com_public_url_diferente(monkeypatch):
-    # Regressao de producao: `public_url` aponta pro nome do Tailscale, mas o dono abre o app em
-    # http://127.0.0.1:8765. Comparar SO com a public_url recusava a origem local com 403 e o painel
-    # so funcionava pelo endereco publico. Passou por todas as revisoes porque na instancia de teste
-    # a public_url estava VAZIA e a checagem inteira era pulada.
-    from app import termsock as ts
-    monkeypatch.setattr(ts.settings, "public_url", "https://notebook.tailnet.ts.net", raising=False)
-    assert ts._origem_aceita("http://127.0.0.1:8765", "127.0.0.1:8765") is True
-    assert ts._origem_aceita("http://192.168.15.28:8765", "192.168.15.28:8765") is True
-    assert ts._origem_aceita("https://notebook.tailnet.ts.net", "127.0.0.1:8765") is True
 
 
-def test_origem_de_terceiro_continua_recusada(monkeypatch):
-    from app import termsock as ts
-    monkeypatch.setattr(ts.settings, "public_url", "https://notebook.tailnet.ts.net", raising=False)
-    # Sufixo colado no dominio legitimo: o `startswith` de antes deixava passar.
-    assert ts._origem_aceita("https://notebook.tailnet.ts.net.evil.com", "127.0.0.1:8765") is False
-    assert ts._origem_aceita("https://evil.com", "127.0.0.1:8765") is False
 
 
-def test_sem_public_url_so_mesma_origem_passa(monkeypatch):
-    from app import termsock as ts
-    monkeypatch.setattr(ts.settings, "public_url", "", raising=False)
-    assert ts._origem_aceita("http://127.0.0.1:8766", "127.0.0.1:8766") is True
-    assert ts._origem_aceita("https://evil.com", "127.0.0.1:8766") is False
 
 
-def test_origem_de_qualquer_peer_da_malha_e_aceita(monkeypatch):
-    # O app e servido de UMA maquina e fala com VARIAS: o PWA do celular carrega de um host e
-    # conversa com este backend por outro endereco. So mesma-origem + public_url recusaria o celular
-    # com 403 — mesma classe do bug que a public_url sozinha causou no desktop.
-    from app import termsock as ts
-    monkeypatch.setattr(ts.settings, "public_url", "https://notebook.tailnet.ts.net", raising=False)
-    monkeypatch.setattr(ts, "_peers_conhecidos",
-                        lambda: ["http://100.64.0.2:8766", "https://win-x.tailnet.ts.net"])
-    assert ts._origem_aceita("http://100.64.0.2:8766", "127.0.0.1:8765") is True
-    assert ts._origem_aceita("https://win-x.tailnet.ts.net", "127.0.0.1:8765") is True
-    assert ts._origem_aceita("https://outra-maquina.tailnet.ts.net", "127.0.0.1:8765") is False
 
 
-def test_origem_extra_declarada_e_aceita(monkeypatch):
-    # O front pode ser servido de uma maquina que NAO e peer nenhum (o PWA da VPS carrega de la e
-    # fala com este backend pelo Tailscale): a Origin dele nao e mesma-origem, nao e a public_url e
-    # nao esta no peers.json — o terminal do celular levava 403 no handshake. CP_TERM_ORIGINS e a
-    # unica forma de declarar essa origem, e sem ela nada muda.
-    from app import termsock as ts
-    monkeypatch.setattr(ts.settings, "public_url", "https://notebook.tailnet.ts.net", raising=False)
-    monkeypatch.setattr(ts, "_peers_conhecidos", lambda: [])
-    monkeypatch.setattr(ts.settings, "term_origins",
-                        "https://pocket.exemplo.com, http://127.0.0.1:5173", raising=False)
-    assert ts._origem_aceita("https://pocket.exemplo.com", "127.0.0.1:8765") is True
-    assert ts._origem_aceita("http://127.0.0.1:5173", "127.0.0.1:8765") is True
-    # Declarar uma origem nao abre as outras — inclusive o dominio colado no legitimo.
-    assert ts._origem_aceita("https://pocket.exemplo.com.evil.com", "127.0.0.1:8765") is False
-    assert ts._origem_aceita("https://evil.com", "127.0.0.1:8765") is False
 
 
-def test_sem_term_origins_nada_muda(monkeypatch):
-    # Vazio (o default) nao pode virar "aceita qualquer um": o handshake tambem autentica pelo
-    # cookie `cp_token`, entao origem arbitraria seria qualquer site abrindo um terminal na maquina.
-    from app import termsock as ts
-    monkeypatch.setattr(ts.settings, "public_url", "", raising=False)
-    monkeypatch.setattr(ts, "_peers_conhecidos", lambda: [])
-    monkeypatch.setattr(ts.settings, "term_origins", "", raising=False)
-    assert ts._origem_aceita("https://qualquer.com", "127.0.0.1:8765") is False
 
 
-def test_malha_ilegivel_nao_derruba_o_painel(monkeypatch):
-    # peers.json ausente/corrompido: sobra mesma-origem + public_url, que ja cobrem a maquina local.
-    from app import termsock as ts
-    monkeypatch.setattr(ts.settings, "public_url", "", raising=False)
-    def explode():
-        raise OSError("peers.json ilegivel")
-    monkeypatch.setattr(ts, "_peers_conhecidos", explode)
-    try:
-        ok = ts._origem_aceita("http://127.0.0.1:8765", "127.0.0.1:8765")
-    except OSError:
-        ok = "explodiu"
-    assert ok is True, "mesma-origem tem que passar ANTES de tocar na malha"
 
 
 # ===========================================================================================

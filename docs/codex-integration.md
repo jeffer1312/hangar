@@ -10,14 +10,15 @@ pontuais e registra o que passou a gerenciar. A integração funciona sem o Code
 | Componente | Responsabilidade |
 | --- | --- |
 | Codex CLI | Executa a importação pelo app-server e instala/atualiza plugins e marketplaces pelos comandos nativos. |
-| Backend do Hangar | Acompanha as fontes locais, agenda reconciliações e atualizações e publica o estado para o painel. |
+| Servidor Rust do Hangar | Acompanha as fontes locais, agenda reconciliações e atualizações e publica o estado para o painel. |
 | `hangar-codex-tui` | Aguarda a reconciliação antes de abrir o app-server da sessão e a TUI; informa falhas sem impedir a abertura. |
 | Codex Desktop | Pode executar sua própria sincronização opcional, independente do Hangar. |
 
-O reconciliador é `backend/app/codex_integracao.py`, e quem o chama é sempre o backend, em dois
-momentos: quando o lançador abre uma sessão Codex (`POST /api/harness/codex/integracao/sessao`)
-e no botão **Reconciliar agora**, em **Configurações → Harnesses → Codex**. Não há laço nem
-rodada na subida do backend: o Codex converte, o backend decide quando, o lançador só avisa.
+O reconciliador fica em `crates/hangar-server/src/codex_setup/`. A abertura e o preparo de contas,
+o botão **Reconciliar agora** e a aplicação de configurações compartilhadas usam a mesma instância
+do serviço Rust. As rotas `/api/harness/codex/integracao` e `/sessao` publicam o estado e recebem
+os gatilhos; não há executor Python de reserva. Aplicar configurações agenda a integração, enquanto
+o preparo de conta aguarda sua conclusão. Inicializar o serviço não dispara uma rodada.
 
 A abertura de sessão é um cache por conteúdo: o `estado.json` guarda a assinatura das pastas do
 Claude da última rodada; assinatura igual, marketplaces dentro do prazo e última rodada sem falha
@@ -51,7 +52,7 @@ apaga; sem isso cada hook passava a rodar duas vezes.
 
 ## Importação e compatibilidades
 
-`backend/app/codex_importador.py` inicia um processo temporário `codex app-server --stdio`,
+O cliente de `codex_setup/import_api.rs` inicia um processo temporário `codex app-server --stdio`,
 inicializa o protocolo e chama `externalAgentConfig/detect` e `externalAgentConfig/import`.
 A resposta inicial com `importId` não significa conclusão: o cliente espera
 `externalAgentConfig/import/completed` com o mesmo identificador e examina os resultados.
@@ -81,15 +82,15 @@ GitHub. Essa seleção depende da estrutura de cada repositório e não deve ser
 marketplaces sem conferir os caminhos dos plugins.
 
 Script de `~/.claude/hooks/` que é symlink não é copiado pelo importador nativo; depois da
-importação o Hangar cria em `~/.codex/hooks/` um link para o arquivo real (`codex_hooks_arquivos`),
+importação o Hangar cria em `~/.codex/hooks/` um link para o arquivo real (`codex_setup/hook_files.rs`),
 sem cópia. Subpastas são preservadas, inclusive `hooks/gitnexus/gitnexus-hook.cjs`; sem
 equivalente no Claude, vira aviso com o caminho relativo completo. No Windows, a cópia segue
 essa mesma estrutura e acompanha alterações na fonte. Caminhos que escapam da pasta de hooks
 por `..` ou por um link de subpasta não autorizam escrita fora dela.
 
 O `security-guidance` emite telemetria (`metrics`, `rewakeSummary`) e, no bootstrap, duas linhas
-JSON com anúncio `async`. O adaptador `codex-hook-json.py`, instalado em
-`CODEX_HOME/.hangar-hooks/`, converte somente esse plugin para o contrato estrito do Codex.
+JSON com anúncio `async`. O comando `hangar-server codex-hook-json`
+converte somente esse plugin para o contrato estrito do Codex.
 Mensagens, contexto, decisões de bloqueio, stderr e código de saída são preservados. A mudança
 dos comandos exige nova aprovação na interface de hooks do Codex; o Hangar não concede confiança.
 
@@ -112,7 +113,8 @@ nos arquivos locais de configuração, manifesto e backups restritos, sem aparec
 nos diagnósticos públicos e sem serem versionados. As sessões seguintes recebem a configuração
 atualizada; o contexto de processos já abertos não é reescrito.
 
-As compatibilidades próprias do Hangar ficam em `backend/app/codex_compat.py` e `codex_instrucoes.py`:
+As compatibilidades dessa integração ficam em `codex_setup/`, incluindo `instructions.rs`,
+`hook_wrappers.rs` e os módulos de plugins:
 
 - `CLAUDE.md` tem prioridade sobre `AGENTS.md`, com `CLAUDE.MD` como segunda opção. O Hangar
   cria `AGENTS.override.md` como link para a fonte, no Codex home (global) e nos escopos dos
@@ -135,7 +137,7 @@ As compatibilidades próprias do Hangar ficam em `backend/app/codex_compat.py` e
   o app-server. Sessões já abertas não recebem um novo contexto inicial. Os fallbacks
   `CLAUDE.md`/`CLAUDE.MD` continuam configurados para projetos ainda sem alias.
 - Hooks `SessionEnd` com timeout numérico acima de 3 segundos são limitados a 3 segundos.
-- O hook RTK reconhecido passa pelo executor `scripts/codex-hook-allow.py`, que preserva a
+- O hook RTK reconhecido passa pelo comando `hangar-server codex-hook-allow`, que preserva a
   execução e seu código de saída e completa `permissionDecision: allow` quando a reescrita
   `updatedInput` exige isso. Não existe autorização genérica de hooks nem reescrita arbitrária
   de comandos de shell.

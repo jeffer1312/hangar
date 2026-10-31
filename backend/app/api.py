@@ -26,10 +26,10 @@ from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import ClientDisconnect
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sse_starlette.sse import EventSourceResponse
-from app import (agentes_sync, atomico, atualizacoes, atualizar, closed_names, diag, harness_api,
+from app import (atomico, closed_names, diag,
                  loop_monitor, permission_mode, plugin_bridge, procinfo, quem_chama, tmux,
                  uds_messaging)
-from app import groups_bridge, internal_api, list_bridge, migration_status, share_bridge, update_channel
+from app import groups_bridge, internal_api, list_bridge, migration_status, share_bridge
 from app.auth import require_auth, require_loopback
 from app.send_executor import send_thread as _send_thread
 from app import bastao as bastao_mod   # `bastao` sem sufixo é a ROTA GET, mais abaixo neste arquivo
@@ -39,7 +39,6 @@ from app.model_picker import PickerError
 from app.mensagens import erro
 from app import claude_models
 from app import claude_customizations
-from app import cliproxy
 from app import codex_models
 from app import model_args
 from app import filesearch, filetree, git_ops, worktrees
@@ -69,14 +68,12 @@ from app.state import corrige_ocioso_kimi, forget_frame, menu_codex
 from app.uploads import MAX_BYTES
 from app.config import (list_config_dirs, _backend_config_base, settings,
                         resolve_scan_roots,
-                        automations_enabled, resolve_bind_ip, variaveis_env)
+                        automations_enabled, resolve_bind_ip)
 from app import runtime_config
-from app.guest_user_gate import GuestUserGate
 from app.connect_port import CONNECT_PORT, ConnectPortGate
-from app import guest_users, guest_users_api
 from app.guest_header import guest_of, guest_safe
 from app.share_life import session_life
-from app import contas, default_model, engine_probe, engines, procinfo
+from app import contas, default_model, procinfo
 from app.costs import report as costs_report, usd_brl as _usd_brl, PERIODOS as _COST_PERIODOS
 from app import costs_sources, pricing
 from app.git_ops import (
@@ -94,14 +91,11 @@ from app.archive import (ArchiveEntry, ArchiveFolder, archive_cwd, archive_jsonl
                          list_conversations, list_folders, list_recent, tail_events)
 from app.search import SearchHit, search, extract_terms, search_terms, build_ask_prompt
 from app.askquestion import clear_pending_askq, read_pending_askq
-from app import alcance, credenciais, peers_api
-from app import config_sync_api
+from app import credenciais
 from app import codex_contas as codex_accounts
 from app.codex_contas_login import CodexContasLogin
 from app.pair import PairLink
 from app.hook_state import hook_state
-from app import push
-from app.sync import sync_admin_router, sync_router
 from app.deploy import deploy_router
 from app import desktop_palette
 
@@ -211,7 +205,6 @@ async def _lifespan(app: FastAPI):
                      exc_info=True)
     await _boot_sessions(runtime)
     _state_dirs =list({Path(c.path) for c in list_config_dirs()} | {_backend_config_base().resolve()})
-    hook_state.on_awaiting = _on_awaiting  # transicao -> awaiting_input dispara web push
     hook_state.on_transition = _on_hook_transition  # drain server-side + confirmacao de entrega
     task = asyncio.create_task(hook_state.watch(_state_dirs))
 
@@ -228,26 +221,6 @@ async def _lifespan(app: FastAPI):
     # Poda periodica dos sidecars de sessao morta (Task G3): varre na subida e depois a cada
     # 24h — ver app/prune.py para o criterio conservador (chave de sessao nao viva + idade
     # minima de 7 dias) e o porquê de periodica em vez de so no startup.
-    fetch_task = asyncio.create_task(_fetch_loop())
-
-    def _fetch_done(t: asyncio.Task) -> None:
-        if not t.cancelled():
-            exc = t.exception()
-            if exc is not None:
-                _log.exception("_fetch_loop crashed", exc_info=exc)
-
-    fetch_task.add_done_callback(_fetch_done)
-
-    auto_update_task = asyncio.create_task(_auto_update_loop())
-
-    def _auto_update_done(t: asyncio.Task) -> None:
-        if not t.cancelled():
-            exc = t.exception()
-            if exc is not None:
-                _log.exception("_auto_update_loop crashed", exc_info=exc)
-
-    auto_update_task.add_done_callback(_auto_update_done)
-
     prune_task = asyncio.create_task(_prune_loop())
 
     def _prune_done(t: asyncio.Task) -> None:
@@ -272,10 +245,7 @@ async def _lifespan(app: FastAPI):
     if runtime.mode == "python":
         _start_transfer_recovery()
     codex_warm_task = asyncio.create_task(get_adapter("codex").watch_sessions())
-    from app.codex_integracao import SERVICO as integracao_codex
-    codex_contas_login = CodexContasLogin(
-        atualizar_principal=integracao_codex.atualizar_e_aguardar,
-    )
+    codex_contas_login = CodexContasLogin()
     app.state.codex_contas_login = codex_contas_login
     # Referência guardada: task sem dono pode ser coletada no meio.
     app.state.codex_auth_aquecer = asyncio.create_task(codex_contas_login.aquecer())
@@ -293,10 +263,6 @@ async def _lifespan(app: FastAPI):
         codex_warm_task.cancel()
         app.state.codex_auth_aquecer.cancel()
         await asyncio.gather(codex_warm_task, app.state.codex_auth_aquecer, return_exceptions=True)
-        try:
-            await integracao_codex.fechar()
-        except Exception:
-            _log.exception("Falha ao encerrar a integração Codex")
         task.cancel()
         loop_monitor_task.cancel()
         prune_task.cancel()
@@ -514,7 +480,7 @@ async def _providers_via_rust(request: Request, call_next):
             return JSONResponse({"detail": error.detail}, status_code=error.status_code, headers=error.headers)
         if account_bridge.owner_mode() == "python":
             return JSONResponse({"detail": {"code": "providers_need_rust_server"}}, status_code=503)
-        response = await account_bridge.forward_stream(request, guest=guest_of(request) is not None or guest_users.current.get() is not None)
+        response = await account_bridge.forward_stream(request, guest=guest_of(request) is not None)
         return await call_next(request) if response.status_code == 421 else response
     unavailable = (erro("orq_conductor_need_rust_server", "o condutor precisa do servidor Rust, que não está rodando")
                    if re.fullmatch(r"/api/orq/[^/]+/conductor", path) else
@@ -545,7 +511,7 @@ async def _worktrees_pelo_rust(request: Request, call_next):
              or method == "POST" and path in {"/api/worktrees/create", "/api/worktrees/delete", "/api/worktrees/delete-merged"})
     if not owned:
         return await call_next(request)
-    if guest_of(request) is not None or guest_users.current.get() is not None:
+    if guest_of(request) is not None:
         return JSONResponse({"detail": "convidado não acessa worktrees"}, status_code=403)
     if account_bridge.owner_mode() == "python" and path != "/api/worktrees/settings":
         return await call_next(request)
@@ -559,7 +525,7 @@ async def _jev_aux_pelo_rust(request: Request, call_next):
     delivery = request.url.path == "/api/jev/delivery"
     if not delivery and not request.url.path.startswith("/api/jev/aux/"):
         return await call_next(request)
-    if delivery and (guest_of(request) is not None or guest_users.current.get() is not None):
+    if delivery and (guest_of(request) is not None):
         return JSONResponse({"detail": "Not Found"}, status_code=404)
     return await _repasse_ao_rust(request, erro("erro_jev_aux_precisa_rust", "o servidor está sem o processo Rust; reinicie o Hangar"),
                                   "/__hangar_server/forwarded" if delivery else "/__hangar_server/jev/aux")
@@ -573,7 +539,7 @@ async def _grupos_pelo_rust(request: Request, call_next):
     path = request.url.path
     if not (path.startswith("/api/groups/") or (request.method == "GET" and path.startswith("/api/sessions/") and path.endswith("/group"))):
         return await call_next(request)
-    if guest_of(request) is not None or guest_users.current.get() is not None:
+    if guest_of(request) is not None:
         return JSONResponse({"detail": erro("erro_fora_do_convite", "fora da sessao compartilhada")}, status_code=403)
     resp = await _repasse_ao_rust(request, _groups_need_rust(), "/__hangar_server/forwarded")
     # Recado a sessão que só o Python atende volta no corpo: sai dele e é entregue antes da resposta,
@@ -600,7 +566,7 @@ async def _planos_pelo_rust(request: Request, call_next):
     dono, recusa o convidado."""
     path, metodo = request.url.path, request.method
     if metodo == "GET" and path == _CATALOGO:
-        if guest_of(request) is not None or guest_users.current.get() is not None:
+        if guest_of(request) is not None:
             return JSONResponse({"detail": erro("erro_fora_da_pasta", "a seleção de plugins pertence ao dono")}, status_code=403)
         return await _repasse_ao_rust(request, erro("claude_customizations_unavailable", "a seleção de plugins e skills precisa do servidor Rust"),
                                       "/__hangar_server/forwarded")
@@ -637,7 +603,7 @@ async def _midia_pelo_rust(request: Request, call_next):
     if account_bridge.owner_mode() == "python":
         return JSONResponse({"detail": erro("erro_midia_precisa_rust", "anexos, transcrição e saída de ferramenta precisam do servidor Rust, que não está rodando")},
                             status_code=503)
-    guest = guest_of(request) is not None or guest_users.current.get() is not None
+    guest = guest_of(request) is not None
     return await account_bridge.forward_stream(request, guest=guest)
 
 
@@ -649,7 +615,7 @@ _MERMAID_HEADERS = ("x-hangar-css-width", "x-hangar-css-height", "cache-control"
 async def mermaid_pelo_rust(request: Request):
     """O desenho é do Rust (`mermaid::serve`). Aqui chegam o dono pelo Connect, que segue pela ponte,
     e quem o Rust não reconheceu como dono. O convidado fica sem a rota, como antes."""
-    if guest_of(request) is not None or guest_users.current.get() is not None:
+    if guest_of(request) is not None:
         return JSONResponse({"detail": "Not Found"}, status_code=404)
     return await _repasse_ao_rust(request, erro("mermaid_indisponivel", "o desenho de diagramas precisa do servidor Rust"),
                                   "/__hangar_server/forwarded", keep=_MERMAID_HEADERS, limit=64 * 1024 * 1024)
@@ -658,7 +624,7 @@ async def mermaid_pelo_rust(request: Request):
 @app.api_route("/api/session-defaults", methods=["GET", "PUT"], dependencies=[Depends(require_auth)])
 async def session_defaults_forward(request: Request):
     """O Connect só transporta o padrão; leitura e escrita pertencem ao Rust."""
-    if guest_of(request) is not None or guest_users.current.get() is not None:
+    if guest_of(request) is not None:
         raise HTTPException(403, detail=erro("session_defaults_owner_only", "só o dono pode acessar o padrão da abertura"))
     return await _repasse_ao_rust(request, erro("session_defaults_unavailable", "o padrão da abertura precisa do servidor Rust"),
                                   "/__hangar_server/forwarded")
@@ -674,13 +640,6 @@ async def prewarm_forward(request: Request):
                                   "/__hangar_server/forwarded")
 
 
-@app.post("/api/push/expo/subscribe", dependencies=[Depends(require_auth)])
-async def push_expo_subscribe_forward(request: Request):
-    """O registro é do Rust; pelo Connect o cabeçalho de convidado não chega a ele, então a recusa é aqui."""
-    if _convidado(request):
-        raise HTTPException(403, detail=erro("push_expo_owner_only", "só o dono pode registrar o aviso no celular"))
-    return await _repasse_ao_rust(request, erro("push_expo_unavailable", "o aviso no celular precisa do servidor Rust"),
-                                  "/__hangar_server/forwarded")
 
 
 @app.get("/api/client-api")
@@ -736,7 +695,6 @@ async def _correlaciona_diag(request: Request, call_next):
 
 # Porteiro do convidado com login ANTES do CORS: o CORS o envolve, entao ate o 403 dele sai com
 # Access-Control-Allow-Origin e o app do convidado le o codigo em vez de "erro de rede".
-app.add_middleware(GuestUserGate)
 # Body-size ANTES do CORS no codigo -> CORS fica por FORA (envolve ate o 413, adicionando headers CORS
 # na rejeicao). Ver _BodySizeLimitMiddleware.
 app.add_middleware(_BodySizeLimitMiddleware, max_bytes=MAX_BYTES)
@@ -760,19 +718,11 @@ app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
 # Por fora de tudo (o último registrado é o mais externo): os porteiros e o CORS já veem o cliente
 # trocado de quem chegou pela porta do Connect.
 app.add_middleware(ConnectPortGate)
-app.include_router(sync_admin_router)
-app.include_router(sync_router)
-app.include_router(guest_users_api.router)
 app.include_router(deploy_router)
 # Roteadores por assunto (Task 1 do plano descoberta-e-configuracao): cada Task do lote escreve
 # só no módulo dela. Última edição de api.py deste plano.
-app.include_router(alcance.alcance_router)
 app.include_router(credenciais.credenciais_router)
-app.include_router(harness_api.harness_router)
-app.include_router(peers_api.peers_router)
-app.include_router(update_channel.router)
 app.include_router(plugin_bridge.plugin_router)
-app.include_router(config_sync_api.config_sync_router)
 # Convites e par externo são do Rust; aqui só o repasse do dono que chega pelo Connect.
 app.include_router(share_bridge.router)
 app.include_router(migration_status.router)
@@ -1031,100 +981,6 @@ def _rust_conduz(info) -> bool:
     return c is not None and c.mode in {"pending", "rust"} and c.rust_owns(info.provider, bool(getattr(info, "headless", False)))
 
 
-def _notify_async(session_id: str, send_fn) -> None:
-    """Resolve uuid->nome e manda o push escolhido, TUDO numa thread: registry.list() mexe no tmux
-    e o webpush e rede — nada disso pode bloquear o loop do watch."""
-    def _work() -> None:
-        try:
-            info = next(
-                (s for s in registry.list() if s.jsonl and session_key(s.jsonl) == session_id),
-                None,
-            )
-            if info and not _rust_conduz(info):
-                send_fn(info.name)
-        except Exception:
-            _log.warning("push falhou (%s)", session_id, exc_info=True)
-    threading.Thread(target=_work, daemon=True).start()
-
-
-def _awaiting_body(info) -> str:
-    """Corpo rico da notif de awaiting (feature #5): 1) a pergunta do AskUserQuestion nativo (sidecar
-    gravado pelo hook PreToolUse); 2) senao a pergunta lida do PANE (classify — cobre pickers/permissao
-    da TUI, que nao passam pelo AskUserQuestion); 3) None se nenhuma deu certo — o push (app.push)
-    resolve o fallback no idioma da inscricao, em vez de mandar texto fixo em pt."""
-    askq = read_pending_askq(info.jsonl) if info.jsonl else None
-    if askq and askq.questions:
-        return askq.questions[0].question
-    if getattr(info, "headless", False):
-        return info.question or None   # sem pane: a pergunta/permissão vem do processo, já na lista
-    if info.name:
-        from app import tmux
-        from app.state import classify
-        try:
-            _, _, question, _ = classify(tmux.capture_pane(info.name))
-        except Exception:
-            question = None
-        if question:
-            return question
-    return None  # fallback resolvido pelo push, no idioma da inscricao
-
-
-_AWAITING_PUSH_RETRY_S = 1.5  # Notification chega junto do pedido; o menu pode atrasar um frame
-
-
-def _pane_wants_input(name: str) -> bool:
-    """Pane mostra menu (classify awaiting) ou overlay de teclas — algo REAL esperando resposta.
-    Falha de captura -> True (erro de leitura nao pode segurar um push legitimo)."""
-    from app import tmux
-    from app.state import classify, is_overlay
-    try:
-        pane = tmux.capture_pane(name)
-    except Exception:
-        _log.warning("_pane_wants_input falhou name=%s", name, exc_info=True)
-        return True
-    return classify(pane)[0] == "awaiting_input" or is_overlay(pane)
-
-
-def _do_notify_awaiting(session_id: str) -> None:
-    """Logica sincrona de _on_awaiting: resolve nome+corpo rico e manda pro push (que decide
-    mute/quiet-hours/coalescing). Extraida da thread pra ficar testavel direto, sem mockar Thread.
-
-    Gate anti-fantasma: o state_hook mapeia QUALQUER Notification pra awaiting — inclusive a de
-    "idle ha 60s" do Claude Code, que chega DEPOIS do Stop com a sessao apenas parada. Sem o gate,
-    toda sessao parada >60s empurrava push falso "Aguardando sua resposta". Push so sai com awaiting
-    REAL: askq pendente no sidecar OU menu/overlay no pane (retry curto cobre o frame de render)."""
-    info = next((s for s in registry.list() if s.jsonl and session_key(s.jsonl) == session_id), None)
-    if info is None or _rust_conduz(info):
-        return
-    def _real() -> bool:
-        if getattr(info, "headless", False):
-            # Sem pane: quem sabe da permissão/pergunta em aberto é o adapter. `registry.list`
-            # não calcula estado (sai sempre idle), então ler dali nunca mandava o push.
-            snap = get_adapter(CLAUDE_HEADLESS).snapshot(info.name)
-            if snap is None:
-                return False
-            info.state, info.question = snap.state, snap.question
-            return snap.state == "awaiting_input"
-        askq = read_pending_askq(info.jsonl) if info.jsonl else None
-        return bool(askq and askq.questions) or _pane_wants_input(info.name)
-
-    real = _real()
-    if not real:
-        time.sleep(_AWAITING_PUSH_RETRY_S)
-        real = _real()  # re-le askq TAMBEM: o sidecar pode ser o que atrasou, nao so o pane
-    if real:
-        push.notify_awaiting(info.name, _awaiting_body(info))
-
-
-def _on_awaiting(session_id: str) -> None:
-    """hook_state -> transicao awaiting_input. Roda numa thread (registry.list mexe no tmux; resolver
-    o corpo toca pane/disco) — nada disso pode bloquear o loop do watch."""
-    def _work() -> None:
-        try:
-            _do_notify_awaiting(session_id)
-        except Exception:
-            _log.warning("push awaiting falhou (%s)", session_id, exc_info=True)
-    threading.Thread(target=_work, daemon=True).start()
 
 
 _CONFIRM_GRACE = 8.0  # s entre o send e a checagem "o transcript gravou o prompt?"
@@ -1417,13 +1273,6 @@ def _maybe_chain(name: str) -> None:
         link.clear()  # one-shot sempre, mesmo se target/text vier malformado -> nao fica repetindo lixo
 
 
-_working_started: dict[str, float] = {}  # session_id -> ts de quando entrou em "working" (mede duracao do turno pro push de "terminou")
-# Lock PROPRIO do `_working_started`, separado do da cadeia de recheck: quem escreve ali roda no laco
-# do hook_state.watch e quem le/consome roda numa thread de `_work`. Um compare-and-delete protegido
-# so de um lado nao protege nada — o produtor concorrente passaria por cima entre o get e o del, e o
-# turno seguinte terminaria com `started is None`, sem aviso e sem rastro. Nunca aninhar com
-# `_recheca_lock`: sao independentes de proposito.
-_turno_lock = threading.Lock()
 # Sessoes com uma reavaliacao de "idle mentiroso" ja agendada. UMA cadeia por sessao: sem isto, cada
 # transicao espuria abria a sua propria corrente de Timers, e duas correntes em paralelo dobram o
 # `registry.list()` (que toca tmux) a cada 5s, sem limite e sem ninguem notar.
@@ -1453,165 +1302,16 @@ def _recheca_kimi(session_id: str, state: str) -> None:
     _on_hook_transition(session_id, state)
 
 
-def _push_terminou(session_id: str, started: Optional[float]) -> None:
-    """Push de 'terminou': avisa se o turno que comecou em `started` passou do minimo configurado.
-
-    Mora numa funcao propria porque o disparo saiu do caminho sincrono — no Kimi so o `_work` sabe
-    se o 'idle' que chegou e de verdade, e avisar 'terminou' no meio do trabalho e tao errado quanto
-    re-promptar a sessao.
-
-    `started` vem de FORA, lido no inicio do `_work`, e o consumo aqui e CONDICIONAL. Popar direto
-    seria uma corrida real: entre o inicio do `_work` e este ponto rodam `registry.list()` e
-    `drain()`, e o proprio drain pode largar um prompt novo — a sessao volta a "working" e o
-    caminho sincrono grava o inicio do turno NOVO. Um `pop` cego levaria embora esse valor: o push
-    deste turno sairia com duracao errada e o turno seguinte, ao acabar de verdade, acharia
-    `started is None` e nunca avisaria."""
-    if started is None:
-        return
-    m = hook_state.get_state(session_id)
-    idle_ts = m[1] if m and m[0] == "idle" else None
-
-    def run() -> None:
-        try:
-            _terminou_se_parou(session_id, started, idle_ts)
-        except Exception:
-            # Sem isto a thread morria calada: nem aviso nem limpeza do início da série.
-            _log.warning("terminou: falhou para %s", session_id[:8], exc_info=True)
-    threading.Thread(target=run, daemon=True).start()
-
-
-# Fim de turno não é fim de trabalho: recado na fila e agente ou shell em segundo plano acordam a
-# sessão de novo. O "terminou" espera ela sossegar e só sai com ela parada de verdade.
-_FINISH_SETTLE = 20.0
-# Parada mais longa que isto entre um turno e o próximo é trabalho novo, não continuação.
-_SERIES_GAP = 30 * 60
-_last_idle: dict[str, float] = {}
-
-
-def _resumo_resposta(texto: str | None, limite: int = 160) -> str | None:
-    """Uma linha do começo da última resposta, sem a marcação do markdown."""
-    if not texto:
-        return None
-    linha = " ".join(texto.split())
-    linha = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", linha)            # [texto](link) -> texto
-    linha = re.sub(r"[`*#>|]+|(?<!\w)_+|_+(?!\w)", "", linha).strip()  # mantém o _ dentro de nome
-    return (linha[:limite - 1].rstrip() + "…") if len(linha) > limite else (linha or None)
-
-
-def _terminou_se_parou(session_id: str, started: float, idle_ts: float | None) -> None:
-    time.sleep(_FINISH_SETTLE)
-    m = hook_state.get_state(session_id)
-    # Outro "parou" depois deste tem a sua própria espera: só ela decide.
-    if not m or m[0] != "idle" or (idle_ts is not None and m[1] != idle_ts):
-        return       # voltou a trabalhar: o início da série fica para o fim de verdade
-    with _turno_lock:
-        if _working_started.get(session_id) != started:
-            return
-    info = next((s for s in registry.list() if s.jsonl and session_key(s.jsonl) == session_id), None)
-    resposta = None
-    if info is not None and info.jsonl and getattr(info, "provider", "claude") == "claude":
-        from app import background_open
-        try:
-            fim = background_open.scan(info.jsonl)
-        except OSError as e:
-            _log.warning("terminou: não li o transcript de %s (%s); aviso sai mesmo assim", info.name, type(e).__name__)
-        else:
-            if fim.open:
-                _log.info("terminou: %s segue com %d tarefa(s) em segundo plano; aviso espera", info.name, fim.open)
-                return   # o aviso sai quando o trabalho de fundo acordar a sessão e ela parar
-            resposta = fim.last_reply
-    with _turno_lock:
-        if _working_started.get(session_id) != started:
-            return
-        del _working_started[session_id]
-    if not runtime_config.get("notify_finished") or m[1] - started < runtime_config.get("finish_min_seconds"):
-        return
-    resumo = _resumo_resposta(resposta)
-    _notify_async(session_id, (lambda name: push.notify_finished(name, resumo)) if resumo else push.notify_finished)
-
-
 def _on_hook_transition(session_id: str, state: str) -> None:
-    """hook_state -> mudanca de estado. Drain SERVER-SIDE: o gatilho antigo morava na conexao SSE de
-    cada chat — sem celular conectado, entrada deferred ficava parada indefinidamente. idle/working =
-    o pane aceita texto (Claude Code enfileira internamente); o drain re-checa deliverable sozinho.
-    Tambem agenda a confirmacao de entrega das drenadas.
-
-    Alem do drain, e o choke-point dos pushes de 'terminou' (working -> idle apos turno longo, com
-    debounce) e 'caiu' (-> dead, sempre) — ver push.py. Tambem o choke-point do encadeamento de sessao
-    (feature #12, _maybe_chain): idle == turno realmente terminado (so o hook Stop escreve idle), entao
-    e o ponto certo pra disparar o vinculo 'then' sem correr risco de pegar um redraw no meio do turno."""
-    if state == "working":
-        m = hook_state.get_state(session_id)
-        if m:
-            with _turno_lock:
-                # Só o primeiro turno da série grava: os que vêm por recado ou trabalho de fundo
-                # continuam o mesmo trabalho, e o "terminou" mede ele inteiro. Quem apaga é o fim real;
-                # se ele nunca veio, a parada longa antes deste turno abre uma série nova.
-                parou = _last_idle.get(session_id)
-                if session_id not in _working_started or (parou is not None and m[1] - parou > _SERIES_GAP):
-                    _working_started[session_id] = m[1]
-    elif state == "idle":
-        m = hook_state.get_state(session_id)
-        if m:
-            with _turno_lock:
-                _last_idle[session_id] = m[1]
-        # O push de "terminou" NAO sai daqui: ele espera o `_work` decidir se este idle e de verdade
-        # (no Kimi ele pode ser o marcador congelado do turno anterior — ver corrige_ocioso_kimi).
-        # Antes disso, avisar "terminou" no meio do trabalho era o mesmo erro das outras automacoes,
-        # com o agravante de o `pop` abaixo consumir o inicio do turno: o fim REAL viria sem saber
-        # ha quanto tempo a sessao trabalhava, e o debounce de turno longo nunca mais dispararia.
-        pass
-    elif state == "dead":
-        with _turno_lock:
-            _working_started.pop(session_id, None)
-            _last_idle.pop(session_id, None)
-        if runtime_config.get("notify_dead"):
-            _notify_async(session_id, push.notify_dead)
-
     if state == "awaiting_input":
-        # Loop runner: awaiting cobre pedido de permissao tb -> pausa o loop (retoma no idle seguinte).
-        # Thread propria (registry.list toca tmux); sem push proprio (o _on_awaiting ja empurra).
-        def _pause_loop() -> None:
-            try:
-                info = next((s for s in registry.list()
-                             if s.jsonl and session_key(s.jsonl) == session_id), None)
-                if info and not _rust_conduz(info):
-                    with loop_mod._lock:
-                        link = loop_mod.LoopLink(info.name)
-                        d = link.get()
-                        if d and d["status"] == "running":
-                            link.update(status="paused_awaiting")
-            except Exception as e:
-                # Sem a lista o loop segue rodando com a sessão parada na pergunta: a falha aparece.
-                _log.warning("loop: pausa no awaiting de %s falhou: %s", session_id[:8], type(e).__name__)
-                diag.registrar("loop.pausa_falhou", "aviso", sessao=session_id[:8],
-                               codigo=getattr(e, "code", None) or type(e).__name__)
-        threading.Thread(target=_pause_loop, daemon=True).start()
         return
-    # Inicio do turno lido AQUI, antes de qualquer subprocess: o `drain` la embaixo pode largar um
-    # prompt novo e a sessao voltar pra "working", e ai o valor no dict ja seria de OUTRO turno.
-    # Quem consome (`_push_terminou`) confere que ainda e este antes de tirar.
-    with _turno_lock:
-        inicio_do_turno = _working_started.get(session_id) if state == "idle" else None
-
     def _work() -> None:
         try:
             info = next((s for s in registry.list()
                          if s.jsonl and session_key(s.jsonl) == session_id), None)
             if info and _rust_conduz(info):
                 return
-            # Sessao nao encontrada (morreu, ou nao esta no tmux): o push de "terminou" continua
-            # saindo pelo caminho de sempre. Nao ha como desconfiar do idle sem o transcript.
-            if state == "idle" and not (info and info.jsonl):
-                _push_terminou(session_id, inicio_do_turno)
             if info and info.jsonl:
-                # Kimi: este "idle" pode ser MENTIRA. Um turno que comeca a partir de um prompt
-                # enfileirado na TUI nao dispara evento nenhum, entao o marcador fica congelado no
-                # idle do turno ANTERIOR enquanto o novo roda (ver state.corrige_ocioso_kimi). Sem
-                # esta checagem, tres automacoes disparam com a sessao trabalhando: o loop
-                # re-prompta, o `then` e CONSUMIDO (one-shot: o fim de turno real nao o dispara de
-                # novo) e o push diz "terminou". O drain segue — enfileirar texto e sempre seguro,
-                # e e o que o Claude/Kimi ja fazem sozinhos.
                 real = state
                 if state == "idle" and getattr(info, "provider", "claude") == "kimi":
                     m = hook_state.get_state(session_id)
@@ -1622,20 +1322,12 @@ def _on_hook_transition(session_id: str, state: str) -> None:
                 # do backend — sem isto, entrada entregue ficava sem confirmar indefinidamente.
                 if sent or real == "idle":
                     _agendar_confirmacao(info.name, _CONFIRM_GRACE + 0.5)
-                # Loop runner: no idle, se ha loop ativo e o drain NAO acabou de digitar algo
-                # (sent == 0 -> este idle e fim de turno de trabalho, nao o eco do goal/re-prompt),
-                # tica o loop. Loop ativo SUPRIME o chain (senao cada idle entre iteracoes dispararia).
                 loop_d = loop_mod.LoopLink(info.name).get()
                 loop_active = loop_d is not None and loop_d["status"] in loop_mod.ACTIVE
-                if real == "idle" and loop_active and sent == 0:
-                    loop_mod.schedule_tick(info.name, lambda: _loop_ctx(info.name))
                 # Encadeamento (feature #12): so quando NAO ha loop ativo — turno REALMENTE terminado,
                 # reusando o info.name ja resolvido nesta thread — ver _maybe_chain.
                 if real == "idle" and not loop_active:
                     _maybe_chain(info.name)
-                if real == "idle":
-                    # so no fim de turno PROVADO (ver o elif la em cima)
-                    _push_terminou(session_id, inicio_do_turno)
                 # Idle desmentido pelo transcript: o fim de turno REAL nao vai gerar transicao
                 # nenhuma (o Stop grava idle sobre idle, e hook_state._apply so avisa quando o
                 # estado MUDA). Sem reagendar, o turno terminaria sem drenar a fila, sem ticar o
@@ -1695,60 +1387,20 @@ class _StrictBody(BaseModel):
 
 
 
-class PushSubscribeBody(_StrictBody):
-    subscription: dict  # PushSubscription do browser: {endpoint, keys:{p256dh, auth}}
-    label: str = Field(min_length=1)    # nome do servidor escolhido no celular (Casa/my-org)
-    serverId: str = Field(min_length=1)  # id local do servidor no celular (pro deep-link da notif)
-    # Idioma da inscricao: o front manda o escolhido na tela Geral; ausente (front velho) cai em
-    # "en", o baseLocale do app — a leitura do registro antigo e que trata o campo ausente como pt.
-    locale: str = "en"
 
 
-@app.get("/api/push/vapid", dependencies=[Depends(require_auth)])
-def push_vapid():
-    # Chave publica VAPID (applicationServerKey) pro browser assinar. Vazia = push desligado no backend.
-    return {"key": settings.vapid_public}
 
 
-@app.post("/api/push/subscribe", dependencies=[Depends(require_auth)])
-def push_subscribe(body: PushSubscribeBody):
-    try:
-        push.add_subscription(body.subscription, body.label, body.serverId, body.locale)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    return {"ok": True}
 
 
-@app.get("/api/push/settings", dependencies=[Depends(require_auth)])
-def push_settings():
-    # Estado atual (mute por sessao + quiet hours global) pro app refletir na UI.
-    return push.get_push_prefs()
 
 
-class PushMuteBody(_StrictBody):
-    session: str = Field(min_length=1)
-    muted: bool
 
 
-@app.post("/api/push/mute", dependencies=[Depends(require_auth)])
-def push_mute(body: PushMuteBody):
-    push.set_muted(body.session, body.muted)
-    return {"ok": True}
 
 
-class PushQuietHoursBody(_StrictBody):
-    # HH:MM. Ambos None desliga a janela; so ha janela com os dois presentes.
-    start: str | None = None
-    end: str | None = None
 
 
-@app.post("/api/push/quiet-hours", dependencies=[Depends(require_auth)])
-def push_quiet_hours(body: PushQuietHoursBody):
-    try:
-        push.set_quiet_hours(body.start, body.end)
-    except ValueError as e:
-        raise HTTPException(422, str(e))
-    return {"ok": True}
 
 
 class InputBody(_StrictBody):
@@ -1790,53 +1442,6 @@ async def whoami(request: Request):
     return {"name": nome, "origem": origem}
 
 
-@app.get("/api/sessions", dependencies=[Depends(require_auth)], response_model=list[SessionInfo])
-async def list_sessions(request: Request):
-    # list_with_state: resolucao otimizada (1 scan /proc + 1 chamada tmux em lote) + estado vivo por
-    # sessao (working/idle/awaiting_input) classificado do pane. async pq captura os panes concorrente.
-    # MuxIndisponivel nao e tratada aqui: o handler de `_mux_indisponivel` cobre esta rota e as
-    # outras quinze que chamam registry.list(). Um try/except so nesta seria a mesma resposta
-    # escrita duas vezes, e a que envelhece primeiro.
-    #
-    # A RESOLUCAO (scan de /proc + fork de tmux) vem do snapshot de `_guardar_snap`, com TTL de 1s e
-    # single-flight; o ESTADO continua sendo classificado a cada chamada, entao a resposta nao fica
-    # velha. Medido em 06/09/2026: sem isto as chamadas nao se sobrepoem — 1 custa 13ms, 3 custam
-    # 35ms de parede, 6 custam 67ms e 12 custam 134ms, linear, porque cada uma refaz a varredura
-    # inteira. E o front chama isto a cada 2s POR cliente. Com o snapshot, N clientes que caem na
-    # mesma janela pagam uma varredura so. `to_thread` porque `_guardar_snap` bloqueia (mesma regra
-    # do git status na corrotina, o incidente de 2026-07-23).
-    #
-    # CADA requisicao decora as SUAS copias, e isto nao e zelo: `list_with_state` escreve NOS
-    # objetos (`info.state`, `info.last_activity`, `info.question`...), e o snapshot e a mesma lista
-    # servida a todo mundo dentro do TTL. Sem a copia, duas chamadas concorrentes — que e justamente
-    # o que este cache existe pra permitir — se intercalam nos MESMOS SessionInfo entre os awaits da
-    # decoracao, e o estado decorado ainda vazaria pro snapshot que `/history` e `/workflows` leem
-    # esperando a lista crua. `model_copy` rasa basta: a decoracao ATRIBUI campos, nunca muta em
-    # lugar o que ja esta neles.
-    # Com a lista SSE aberta, o refresher já decorou isto há menos de um tique: serve dele. Com o
-    # Rust dono, o retrato é dele (até 2 s, produzido na hora se mais velho).
-    from app.sse import recent_list
-    guest = guest_of(request)
-    viewer = guest_users.current.get()
-    decorated = (await asyncio.to_thread(list_bridge.snapshot) if await registry_mod.rust_owns_list_async()
-                 else recent_list(2.0))
-    if decorated is not None:
-        if guest is not None:
-            decorated = [i for i in decorated if guest.sees(i.name)]
-        # Mesmo recorte do caminho sem cache: convidado com login próprio só vê o que lhe cabe.
-        if viewer is not None or guest_users.has_claims():
-            decorated = await asyncio.to_thread(guest_users.filter_visible, viewer, decorated,
-                                                lambda i: i.name)
-        return decorated if guest is None else [guest_safe(i, guest) for i in decorated]
-    snap = await asyncio.to_thread(_guardar_snap)
-    # Convidado ve so a sessao compartilhada; o filtro fica depois do snapshot para nao tocar no cache.
-    if guest is not None:
-        snap = [i for i in snap if guest.sees(i.name)]
-    if viewer is not None or guest_users.has_claims():
-        snap = await asyncio.to_thread(guest_users.filter_visible, viewer, snap, lambda i: i.name)
-    decorated = await registry.list_with_state([i.model_copy() for i in snap])
-    # O pareamento e o encadeamento são decorados acima e citam outras sessões do dono.
-    return decorated if guest is None else [guest_safe(i, guest) for i in decorated]
 
 
 @app.post("/api/diag", dependencies=[Depends(require_auth)])
@@ -1957,6 +1562,8 @@ def _codex_as_claude_mode(name: str) -> str | None:
     return "acceptEdits" if sandbox == "workspace-write" else "manual"
 
 
+
+
 async def _open_in_rust(raw: bytes, request: Request | None) -> CreatedSessionInfo | None:
     """Claude com terminal abre no Rust. O que entra pela 8765 ele decide antes de repassar; à ponte,
     num sentido, só vai o que entrou direto aqui: o Connect (8768), inclusive o bastão por ela. O
@@ -1965,8 +1572,7 @@ async def _open_in_rust(raw: bytes, request: Request | None) -> CreatedSessionIn
     port = (request.scope.get("server") or (None, None))[1] if request is not None else None
     if port != CONNECT_PORT or port == settings.port:
         return None
-    guest = guest_users.current.get()
-    payload = b'{"request":' + raw + b',"guest":' + json.dumps(guest.id if guest is not None else None).encode() + b"}"
+    payload = b'{"request":' + raw + b"}"
     # O prazo da criação, que prepara conta e worktree. O nome na rota é só rótulo: a ponte lê o pedido.
     answer = await asyncio.to_thread(runtime_coordinator.rust_claude, "_", "open", "POST", payload, 180)
     if answer is None:
@@ -1975,8 +1581,8 @@ async def _open_in_rust(raw: bytes, request: Request | None) -> CreatedSessionIn
     data = json.loads(raw)
     if status >= 400:
         raise HTTPException(status, detail=data["detail"])
-    # O dono da sessão do convidado o Rust já gravou no `guests.json`.
     return CreatedSessionInfo(**data["info"])
+
 
 
 @app.post("/api/sessions", dependencies=[Depends(require_auth)], response_model=CreatedSessionInfo)
@@ -2291,11 +1897,6 @@ async def _durante_troca(name: str, troca):
             def _move_life():
                 life = session_life(name)
                 share_bridge.set_life(name, life)
-                try:
-                    guest_users.set_life(name, life)
-                except Exception:
-                    # Não troca o resultado da troca pelo erro de gravar o dono.
-                    _log.exception("[guests] dono de %s nao acompanhou a troca de modo", name)
             await asyncio.to_thread(_move_life)
         finally:
             share_bridge.changing_mode.discard(name)
@@ -2357,29 +1958,6 @@ async def trocar_conta(name: str, body: AccountMoveBody):
         raise HTTPException(exc.status, detail=public_error(exc)) from None
 
 
-def _engine_fast_selection(name: str) -> tuple[str | None, str]:
-    meta = headless_sessions.load(name)
-    if meta is not None:
-        from app import runtime_coordinator
-        coordinator = runtime_coordinator.current()
-        try:
-            view = coordinator.source_view(name) if coordinator is not None else None
-        except RuntimeError:
-            raise HTTPException(409, detail=erro("erro_sessao_iniciando", "estado da sessão indisponível; aguarde a reposição")) from None
-        model = (view or {}).get("model")
-        if model is None:
-            model = get_adapter(CLAUDE_HEADLESS).escolhas(name)[0]
-        return model or meta.get("model"), meta.get("service_tier") or "default"
-    pane = registry._pane_of(name)
-    agent = registry_mod._pid_do_agente((pane or {}).get("pid"))
-    if not agent or pane is None:
-        return None, "default"
-    model = procinfo._model_of(agent)[0]
-    jsonl, tracked = registry.resolve_tracked(name, pane["cwd"])
-    if jsonl and tracked:
-        current = registry_mod._escolhas_status(Path(jsonl).stem)[0]
-        model = current or model
-    return model, procinfo._env_var_of(agent, "CP_ENGINE_SERVICE_TIER") or "default"
 
 
 @app.post("/api/sessions/{name}/rename")
@@ -2439,139 +2017,6 @@ for _method, _path in (("PATCH", "/api/sessions/{name}/queue/{entry_id}"), ("POS
                        ("POST", "/api/sessions/{name}/queue/{entry_id}/steer")):
     app.add_api_route(_path, _queue_unavailable, methods=[_method],
                       dependencies=[Depends(require_auth), Depends(_transfer_guard), Depends(_codex_rust_port)])
-
-
-# --- Loop runner (harness bloco A) -------------------------------------------
-
-class LoopCreate(_StrictBody):
-    goal: str = Field(min_length=1)
-    check_cmd: str | None = None
-    max_iters: int = Field(default=10, ge=1, le=100)  # teto: loop nao vira gerador infinito de prompts
-    require_branch: bool = True
-
-
-class LoopResolve(_StrictBody):
-    accept: bool
-
-
-class LoopRefine(_StrictBody):
-    goal: str = Field(min_length=1, max_length=2000)
-    check_cmd: str | None = None
-
-
-def _loop_ctx(name: str) -> "loop_mod.TickCtx | None":
-    """Monta o TickCtx real da sessao CORRENTE (nome -> jsonl/cwd via registry, sobrevive /clear).
-    deliver = enfileira delivered=False + drain (caminho unico de entrega; a entrada e duravel, entao
-    o drain server-side reentrega depois) -> retorna True sempre; enqueue nunca dispara o fallback do
-    run_tick (senao duplicaria a entrada). Sessao sumida -> loop failed + notify, return None."""
-    info = next((i for i in registry.list() if i.name == name), None)
-    if info is None or not info.jsonl:
-        loop_mod._end(loop_mod.LoopLink(name), name, "failed", "sessão morta", push.notify_loop)
-        return None
-    jsonl = info.jsonl
-    provider = info.provider
-
-    def deliver(prompt: str) -> bool:
-        PromptQueue(name).append(prompt, delivered=False)
-        _drenar(name, jsonl, provider)
-        return True
-
-    return loop_mod.TickCtx(
-        cwd=info.cwd or "",
-        jsonl=jsonl,
-        deliver=deliver,
-        enqueue=lambda p: PromptQueue(name).append(p, delivered=False),
-        notify=push.notify_loop,
-        automations=automations_enabled,
-        branch=branch_of,
-        last_assistant=last_assistant_text,
-        run_check=loop_mod._run_check,
-        entry_delivered=lambda eid: PromptQueue(name).entry_delivered(eid),
-    )
-
-
-@app.post("/api/sessions/{name}/loop", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
-def loop_create(name: str, body: LoopCreate):
-    info = next((i for i in registry.list() if i.name == name), None)
-    if info is None:
-        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessão não encontrada"))
-    if getattr(info, "provider", "claude") != "claude":
-        # Codex e outros nao sao tmux: sem hook de transicao, o tick nunca dispara -> loop ficaria
-        # running mudo pra sempre. Recusa cedo em vez de criar um loop-zumbi.
-        raise HTTPException(409, detail=erro("erro_loop_provider_invalido", "loop runner só suporta sessões claude"))
-    if not automations_enabled():
-        raise HTTPException(409, detail=erro("erro_automacoes_desligadas", "automações desligadas (kill-switch)"))
-    with loop_mod._lock:
-        link = loop_mod.LoopLink(name)
-        cur = link.get()
-        if cur and cur["status"] in loop_mod.ACTIVE:
-            raise HTTPException(409, detail=erro("erro_loop_ja_ativo", "já existe um loop ativo nesta sessão"))
-        br = branch_of(info.git_dir) if info.git_dir else None
-        if body.require_branch and br in ("main", "master"):
-            raise HTTPException(409, detail=erro("erro_loop_branch_invalida", f"sessão está na branch {br} — crie uma branch ou desligue 'exigir branch'", br=br))
-        d = loop_mod.new_loop(body.goal, body.check_cmd, body.max_iters, body.require_branch)
-        entry = PromptQueue(name).append(body.goal, delivered=False)
-        d["goal_entry_id"] = entry["id"]
-        link.set(d)
-    if info.jsonl:
-        _drenar(name, info.jsonl, info.provider)   # entrega ja se a sessao estiver entregavel; senao o drain server-side entrega depois
-    return {"loop": link.get()}
-
-
-@app.get("/api/sessions/{name}/loop", dependencies=[Depends(require_auth)])
-def loop_get(name: str):
-    info = next((i for i in registry.list() if i.name == name), None)
-    suggestions = loop_mod.suggest_checks(info.cwd) if info and info.cwd else []
-    return {"loop": loop_mod.LoopLink(name).get(), "suggestions": suggestions}
-
-
-@app.delete("/api/sessions/{name}/loop", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
-def loop_stop(name: str):
-    with loop_mod._lock:
-        link = loop_mod.LoopLink(name)
-        if link.get() is None:
-            raise HTTPException(404, detail=erro("erro_loop_inexistente", "nenhum loop nesta sessão"))
-        d = loop_mod._end(link, name, "stopped", "parado pelo usuário", push.notify_loop)
-    return {"loop": d}
-
-
-@app.post("/api/sessions/{name}/loop/refine", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
-def loop_refine(name: str, body: LoopRefine):
-    """Refina o objetivo do loop via claude -p efemero (sonnet). Stateless — nao toca a sessao nem o
-    sidecar; o {name} da rota so mantem a familia de URLs consistente. Falha do CLI -> 502.
-    Sob o kill-switch mestre: refine dispara um agente autonomo, entao respeita automations_enabled."""
-    if not automations_enabled():
-        raise HTTPException(409, detail=erro("erro_automacoes_desligadas", "automações desligadas (kill-switch)"))
-    try:
-        return {"goal": loop_mod.refine_goal(body.goal, body.check_cmd)}
-    except loop_mod.ClaudePError as e:
-        _log.warning("loop/refine falhou (%s): %s", name, e)
-        raise HTTPException(502, str(e))
-
-
-@app.post("/api/sessions/{name}/loop/resolve", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
-def loop_resolve(name: str, body: LoopResolve):
-    with loop_mod._lock:
-        link = loop_mod.LoopLink(name)
-        cur = link.get()
-        if cur is None or cur["status"] != "done_claimed":
-            raise HTTPException(409, detail=erro("erro_loop_estado_errado", "loop não está aguardando confirmação"))
-        if body.accept:
-            d = loop_mod._end(link, name, "done", "confirmado pronto", push.notify_loop)
-            return {"loop": d}
-        # reject: conta iteracao e re-prompta (reusa o MESMO helper do run_tick)
-        cur["status"] = "running"
-        link.set(cur)
-        if cur["iter"] + 1 > cur["max_iters"]:
-            d = loop_mod._end(link, name, "exhausted", f"esgotou {cur['max_iters']} iterações",
-                              push.notify_loop)
-            return {"loop": d}
-        ctx = _loop_ctx(name)
-        if ctx is None:
-            return {"loop": link.get()}
-        loop_mod._reprompt(link, cur, "conclusão rejeitada pelo usuário", None,
-                           ctx.deliver, ctx.enqueue)
-    return {"loop": link.get()}
 
 
 @app.get("/api/sessions/{name}/history", dependencies=[Depends(require_auth)], response_model=list[ChatEvent])
@@ -2814,9 +2259,6 @@ def _bastao_preparar(info: SessionInfo, origem: str, destino: str,
 
 @app.post("/api/sessions/{name}/bastao", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
 async def bastao_passar(name: str, body: BastaoBody, request: Request):
-    if "provider" not in body.model_fields_set:
-        provider = await _default_session_provider(body.config_dir, body.engine, body.codex_account, body.omp_profile)
-        body = body.model_copy(update={"provider": provider})
     return await _passar_bastao(name, body, request)
 
 
@@ -2898,16 +2340,6 @@ async def _passar_bastao(name: str, body: BastaoBody, request: Request):
         raise HTTPException(400, detail=erro("erro_bastao_cwd_inexistente",
                                              f"a pasta {cwd} não existe mais; se ela foi renomeada "
                                              f"ou movida, escolha a pasta nova", cwd=cwd))
-    if body.engine_account is not None:
-        if body.provider != "claude" or not body.engine:
-            raise HTTPException(400, detail=erro("erro_cliproxy_conta", "conta ChatGPT exige Claude com motor CLIProxyAPI local"))
-        account = await asyncio.to_thread(_fixed_engine_account, body.engine, body.engine_account)
-        cfg = engines.listar()[body.engine]
-        account_models = await _engine_models(body.engine, fresco=True)
-        try:
-            cliproxy.validate_models(cfg, body.model or cfg["model"], account, account_models)
-        except ValueError as exc:
-            raise HTTPException(400, detail=erro("erro_cliproxy_conta", str(exc))) from None
     try:
         texto, alvo, kick, aviso_resumo = await asyncio.to_thread(
             _bastao_preparar, info, name, destino, body.resumo_por_modelo)
@@ -3003,13 +2435,6 @@ async def subagents_pelo_rust(request: Request, name: str, agent_id: str | None 
     return await account_bridge.forward_public(request, "/__hangar_server/subagents")
 
 
-@app.get("/api/sessions/events", dependencies=[Depends(require_auth)])
-async def sessions_events(request: Request):
-    from app.sse import list_events
-    guest = guest_of(request)
-    return EventSourceResponse(
-        list_events(only=guest, viewer=guest_users.current.get()),
-        send_timeout=30)
 
 
 @app.get("/api/sessions/{name}/events", dependencies=[Depends(require_auth)])
@@ -3046,7 +2471,7 @@ async def events(name: str, request: Request):
     # SSE do Codex nunca ligava (chat vazio, sem estado ao vivo).
     return EventSourceResponse(
         merged_events(name, info.jsonl, provider=info.provider, start_offset=start_offset,
-                      count_app=guest_of(request) is None and guest_users.current.get() is None),
+                      count_app=guest_of(request) is None),
         send_timeout=30)
 
 
@@ -4324,8 +3749,7 @@ _MOD_SEM_RUST = erro("mods_need_rust_server", "O clique do mod precisa do servid
 
 
 def _convidado(request: Request) -> bool:
-    from app import guest_users
-    return guest_of(request) is not None or guest_users.current.get() is not None
+    return guest_of(request) is not None
 
 
 async def _mod_no_rust(name: str, op: str, request: Request) -> Response | None:
@@ -4701,652 +4125,32 @@ def term_input(name: str, body: TermInputBody):
     return {"ok": True}
 
 
-def _painel_disponivel() -> bool:
-    # O termsock NAO importa `pty` no topo justamente pra este import funcionar no Windows.
-    from app import termsock
-    return termsock.painel_disponivel()
 
 
 
 
-def _origem_do_terminal_ok(request: Request) -> bool:
-    """A mesma pergunta que o handshake do terminal faz, respondida por HTTP (que tem corpo).
 
-    Sem `Origin` (cliente que nao e navegador) e True: o handshake tambem so cobra origem quando o
-    cabecalho existe, e responder False aqui poria um aviso de recusa numa tela que abre normal.
-    O dono abre com `?token=` e o handshake nao confere a Origin dele: so o login de convidado cobra.
-    """
-    from app import termsock
-    origem = request.headers.get("origin")
-    if not origem or guest_users.current.get() is None:
-        return True
-    return termsock._origem_aceita(origem, request.headers.get("host"))
 
 
-# ─── Atualizar ─────────────────────────────────────────────────────────────────────────────────
 
-_ALVOS_AUSENTES_AVISADOS: set[str] = set()
-# Por alvo: (instante, até onde o código pode ir, binário instalado diferente do publicado, API de
-# cliente do publicado). Rede e o hash do binário não cabem no polling de 2 s da tela.
-_PUBLICADO: dict[str, tuple[float, str, bool, int]] = {}
-_PUBLICADO_TTL_S = 300
 
 
-def _publicado(destino: str, procurar: bool) -> tuple[str, bool, int]:
-    """O commit do binário Rust publicado para este sistema, se o instalado aqui é outro e a API de
-    cliente que ele fala."""
-    agora = time.monotonic()
-    guardado = _PUBLICADO.get(destino)
-    if guardado and not procurar and agora - guardado[0] < _PUBLICADO_TTL_S:
-        return guardado[1], guardado[2], guardado[3]
-    ate, release = atualizar.pinned_target(destino)
-    # Sem como conferir, a lista mostra o topo, como antes; é o motor que avisa o motivo.
-    valor = (ate or f"origin/{destino}", atualizar.rust_release.stale(release), atualizar.published_api(release))
-    _PUBLICADO[destino] = (agora, *valor)
-    return valor
 
 
-def _mudancas_pendentes(ate: str | None = None) -> list[dict] | None:
-    """Os commits que entraram em `origin/<alvo>` e ainda não estão aqui — o changelog da tela.
 
-    Título de commit, e não um `CHANGELOG.md` mantido à mão: as mensagens deste repo já são
-    descritivas, e um arquivo à parte seria uma segunda cópia pra envelhecer. Passo que merecer
-    texto próprio ganha um arquivo em `docs/atualizacoes/`, cujo corpo entra junto.
 
-    `None` quando o git não compara (ref do alvo ainda não buscada): a tela oferece o Atualizar, e
-    é o motor que diz o motivo. Lista vazia ali seria "Tudo em dia" sem sinal nenhum.
-    """
-    destino = atualizar.alvo()
-    p = atualizar._git("log", "--format=%h%x00%s", f"HEAD..{ate or f'origin/{destino}'}", timeout=30)
-    if p.returncode != 0:
-        # Uma vez por alvo enquanto falhar: o polling da tela passa aqui a cada 2s.
-        if destino not in _ALVOS_AUSENTES_AVISADOS:
-            _ALVOS_AUSENTES_AVISADOS.add(destino)
-            diag.registrar("atualizacao.alvo_ausente", "aviso",
-                           detalhe=f"origin/{destino} rc={p.returncode}: {atualizar._cauda(p, 3)}")
-        return None
-    _ALVOS_AUSENTES_AVISADOS.discard(destino)
-    linhas = []
-    for linha in p.stdout.splitlines():
-        sha, _, titulo = linha.partition("\x00")
-        if titulo:
-            linhas.append({"sha": sha, "titulo": titulo})
-    return linhas
 
 
-@app.get("/api/atualizacao", dependencies=[Depends(require_auth)])
-async def get_atualizacao(procurar: bool = False):
-    """Estado da atualização: as três versões, o que há de novo, e o que o motor está fazendo.
 
-    As TRÊS versões porque "a versão instalada" tem três respostas — o disco, o processo vivo e o
-    bundle que o navegador carregou — e elas divergem justamente na janela em que alguém está
-    atualizando. Comparar só o disco com `origin/main` diria "tudo em dia" pra quem está olhando
-    uma tela de dias atrás.
 
-    Tudo em `to_thread`: são chamadas de `git` (subprocess), e o precedente de 23/07 é que elas
-    nunca podem rodar na corrotina.
-    """
-    def _ler() -> dict:
-        # `procurar=1` vai à REDE antes de comparar. Sem isto, o botão "Procurar de novo" só relia
-        # o `origin/main` que já estava no disco — a foto do último fetch do laço, que roda a cada
-        # 30min — e respondia "Tudo em dia" com informação velha, afirmando ter procurado. Não é
-        # o padrão porque o polling da tela bate aqui a cada 2s durante uma atualização, e um
-        # `git fetch` nessa cadência é rede à toa.
-        if procurar:
-            atualizar._git("fetch", "origin", timeout=120)
-        pre = atualizar.checar()
-        # Só até o commit do binário Rust publicado: o código depois dele rodaria com o binário de antes.
-        ate, servidor_velho, api_publicado = _publicado(atualizar.alvo(), procurar)
-        mudancas = _mudancas_pendentes(ate)
-        # Checkout fora da branch do alvo (campo esvaziado na branch de teste, ou branch já contida
-        # na main) não tem commit a puxar, mas tem troca a fazer.
-        troca = atualizar._troca_de_branch(pre) and not pre.get("branch_de_trabalho")
-        # Código em dia com o binário publicado depois dele: a atualização só troca o binário.
-        disponivel = mudancas is None or bool(mudancas) or troca or servidor_velho
-        mudancas = mudancas or []
-        return {
-            "versoes": {"repo": diag._git_describe(), "backend": diag.VERSAO_EM_EXECUCAO},
-            # A versão que a pessoa lê: data do commit + hash. `remoto` é o que está em
-            # origin/<alvo> desde o último fetch; `atras` é quantos commits faltam.
-            "versao_legivel": {"repo": diag.versao_legivel(),
-                               "backend": diag.VERSAO_LEGIVEL_EM_EXECUCAO,
-                               "remoto": diag.versao_legivel(f"origin/{atualizar.alvo()}")},
-            "atras": len(mudancas),
-            "atualizacao_disponivel": disponivel,
-            "servidor_desatualizado": servidor_velho,
-            "api_publicado": api_publicado,
-            "mudancas": mudancas,
-            "passos": [{"id": s["id"], "titulo": s["titulo"], "texto": s["texto"]}
-                       for s in atualizacoes.pendentes()],
-            "pre_voo": pre,
-            # `estado_para_tela`, não `estado`: converte "rodando" com o processo morto na falha
-            # que ele não conseguiu escrever. Sem isso a tela fica presa numa atualização que já
-            # não existe, e só sai editando o JSON na mão.
-            "estado": atualizar.estado_para_tela(),
-        }
-    return await asyncio.to_thread(_ler)
 
 
-@app.post("/api/atualizacao/iniciar", dependencies=[Depends(require_auth)])
-async def post_atualizacao_iniciar():
-    """Lança a atualização e devolve na hora — ela roda FORA deste processo, que vai reiniciar."""
-    pre = await asyncio.to_thread(atualizar.checar)
-    # Recusa ANTES de lançar o motor: a atualização alinha o disco com `origin/<alvo>` e arrastaria a
-    # branch de trabalho junto (medido em 25/08/2026 numa máquina com `mobile-expo` no checkout).
-    if pre.get("branch_de_trabalho"):
-        raise HTTPException(409, detail=erro(
-            "erro_atualizacao_branch",
-            f"este checkout esta na branch {pre.get('branch')}, nao na {pre.get('alvo') or 'main'}",
-            branch=pre.get("branch"), alvo=pre.get("alvo") or "main"))
-    if not pre.get("pode"):
-        faltando = pre.get("faltando") or []
-        raise HTTPException(409, detail=erro(
-            "erro_atualizacao_dependencia", f"falta o que a atualizacao precisa: {', '.join(faltando)}",
-            faltando=faltando))
-    # A resposta guardada é de antes desta atualização.
-    _PUBLICADO.clear()
-    r = await asyncio.to_thread(atualizar.iniciar, settings.port)
-    if not r.get("ok"):
-        raise HTTPException(409, detail=erro("erro_atualizacao_ja_rodando",
-                                             "ja existe uma atualizacao rodando"))
-    return r
 
 
-@app.post("/api/atualizacao/reiniciar", dependencies=[Depends(require_auth)])
-async def post_atualizacao_reiniciar():
-    """Reinicia o servidor sem atualizar nada — o caso do disco já estar à frente do processo."""
-    r = await asyncio.to_thread(atualizar.reiniciar_agora, settings.port)
-    if r.get("erro") == "ja_rodando":
-        raise HTTPException(409, detail=erro("erro_atualizacao_ja_rodando", "ja existe uma atualizacao rodando"))
-    if not r.get("ok"):
-        raise HTTPException(409, detail=erro(
-            "erro_reinicio_indisponivel",
-            f"esta maquina nao reinicia sozinha (topologia {r.get('topologia')})",
-            topologia=r.get("topologia")))
-    return r
 
 
-async def _fetch_loop():
-    """`git fetch` de tempos em tempos, senão `origin/main` é a foto do último pull de alguém.
 
-    Sem isto o botão simplesmente nunca apareceria numa máquina que ninguém puxa à mão. Fail-soft
-    e em `to_thread`: máquina sem rede não pode virar erro na tela nem derrubar o laço.
-    """
-    # Modo pacote: sem `.git`, quem verifica a versão nova é o Rust (`update::periodic`).
-    if diag.install_manifest() is not None:
-        return
-    while True:
-        try:
-            await asyncio.to_thread(atualizar._git, "fetch", "origin", timeout=120)
-        except Exception:                            # noqa: BLE001 — sem rede é o caso comum
-            _log.debug("fetch periodico falhou", exc_info=True)
-        await asyncio.sleep(1800)
 
-
-# ─── Auto-update ────────────────────────────────────────────────────────────────────────────────
-# O botão pede um clique; a correção de bug não pode esperar o clique em cada máquina. Este laço
-# checa a cada hora e dispara o MESMO motor do botão (`atualizar.iniciar`), sem ninguém tocar em
-# nada. Os gates vivem em `_auto_update_motivo`: qualquer um deles recusando, o tick vira um log e
-# a próxima hora tenta de novo.
-_AUTO_UPDATE_INTERVALO = 3600
-_AUTO_UPDATE_FALHA_JANELA_S = 86400   # uma atualização que falhou segura novas tentativas por 24h
-_DIST_SHA_URL = "https://github.com/jeffer1312/hangar/releases/download/dist-latest/frontend-dist.sha"
-
-
-def _auto_update_motivo() -> Optional[str]:
-    """Por que o auto-update NÃO deve disparar neste tick. None = dispara.
-
-    Diferenças pro botão, de propósito: árvore suja ou commits locais adiante BLOQUEIAM aqui (o
-    botão resguarda e pergunta; o automático não pode decidir sobre trabalho de ninguém), e sem o
-    dist do CI deste commit exato NÃO cai no build local — espera o próximo tick (sha publicado =
-    CI verde + build pronto, que é condição, não aceleração). Sobrava uma corrida de segundos — push entre o gate e o fetch do motor, ou release `dist-latest` móvel —
-    em que o build local de fallback podia ainda acontecer: consequencia e lentidao, nao tela errada, entao ficou aceita e registrada aqui.
-    """
-    # O CI só publica o dist da main: branch de teste atualiza pelo botão, que compila a tela aqui.
-    if atualizar.alvo() != "main":
-        return "branch de teste configurada (CP_UPDATE_BRANCH)"
-    pre = atualizar.checar()
-    if not pre.get("pode"):
-        return "dependencias faltando"
-    if pre.get("branch_de_trabalho"):
-        return f"checkout na branch {pre.get('branch')}"
-    # Trocar de branch é decisão de quem aperta o botão, nunca do laço.
-    if atualizar._troca_de_branch(pre):
-        return f"checkout na branch {pre.get('branch')}, fora do alvo {pre.get('alvo')}"
-    # divergiu ANTES de ahead: divergiu = ahead>0 AND behind>0, e o motivo mais preciso e o dela.
-    if pre.get("divergiu"):
-        return "checkout divergiu de origin/main"
-    if pre.get("ahead"):
-        return "checkout adiante de origin/main (commits locais nao pushados)"
-    if pre.get("ahead_incerto"):
-        return "nao deu pra contar os commits locais"
-    if not pre.get("behind"):
-        return "em dia"
-    if pre.get("sujo"):
-        return "arvore suja (trabalho nao commitado)"
-    # estado_para_tela, NAO estado: o cru congela em "rodando" se o motor morrer sem gravar o
-    # desfecho (kill, queda de energia), e cada tick devolveria "ja rodando" pra sempre — o auto-update
-    # morria em silencio ate alguem abrir a tela. A conversao de dono-morto ja existe aqui.
-    est = atualizar.estado_para_tela()
-    if est.get("fase") == "rodando":
-        return "atualizacao ja rodando"
-    if est.get("ok") is False:
-        try:
-            idade = (datetime.now().astimezone() - datetime.fromisoformat(est.get("ts"))).total_seconds()
-        except (TypeError, ValueError):
-            # ts corrompido: abre, mas com log — senao a maquina re-tenta a cada hora com zero linha de log
-            # explicando por que a janela de repeticao nao segurou.
-            _log.warning("auto-update: ts invalido no estado da atualizacao (%r)", est.get("ts"))
-            idade = _AUTO_UPDATE_FALHA_JANELA_S
-        if idade < _AUTO_UPDATE_FALHA_JANELA_S:
-            return "ultima atualizacao falhou"
-    # Como o dist: o automático espera o topo inteiro publicado; parar antes dele é só no botão.
-    ate = atualizar.pinned_target("main")[0]
-    if ate is None:
-        return "nao deu pra conferir o binario do Rust publicado"
-    if ate != "origin/main":
-        return "binario do Rust do topo ainda nao publicado para este sistema"
-    try:
-        with urllib.request.urlopen(_DIST_SHA_URL, timeout=15) as r:
-            sha_dist = r.read().decode().strip()
-    except Exception:                                  # noqa: BLE001 — qualquer falha aqui = dist ilegivel
-        return "sem acesso ao dist do CI"
-    p = atualizar._git("rev-parse", "origin/main", timeout=30)
-    sha_alvo = p.stdout.strip()
-    if p.returncode != 0 or not sha_alvo:
-        return "rev-parse origin/main falhou"
-    if sha_dist != sha_alvo:
-        return "dist do CI ainda nao e deste commit"
-    return None
-
-
-
-async def _auto_update_loop():
-    """Checa a cada hora e dispara a atualização quando TODOS os gates abrem. Fail-soft inteiro:
-    qualquer exceção vira log e o próximo tick, nunca derruba o laço nem o backend."""
-    if diag.install_manifest() is not None:   # modo pacote: o automático é o do Rust
-        return
-    await asyncio.sleep(_AUTO_UPDATE_INTERVALO)   # nunca na subida: o boot já é o ponto de ruído
-    while True:
-        try:
-            if automations_enabled():
-                # rc checado, NAO so o lance de excecao: fetch falho por rc (rede fora, auth quebrada) nao lanca nada — a origin/main fica velha, o gate reporta "em dia" e a máquina NUNCA se atualiza com zero log. rc checado, loga warning com a cauda: "sem rede" deixa de parecer "sem novidade".
-                p = await asyncio.to_thread(atualizar._git, "fetch", "origin", timeout=120)
-                if p.returncode != 0:
-                    _log.warning("auto-update: fetch falhou (rc=%s): %s", p.returncode, atualizar._cauda(p))
-                motivo = await asyncio.to_thread(_auto_update_motivo)
-                if motivo is None:
-                    # Sessão trabalhando é gate async (classify captura os panes), não cabe no helper.
-                    infos = await registry.list_with_state()
-                    if any(i.state == "working" for i in infos):
-                        motivo = "sessao trabalhando"
-                if motivo is None:
-                    _log.info("auto-update: disparando atualizacao")
-                    r = await asyncio.to_thread(atualizar.iniciar, settings.port, expected_branch="main")
-                    if not r.get("ok"):
-                        _log.warning("auto-update: iniciar recusou (%s)", r.get("erro"))
-                elif motivo != "em dia":
-                    _log.info("auto-update: pulando (%s)", motivo)
-        except Exception:                            # noqa: BLE001 — sem rede/sem tmux é comum
-            _log.exception("auto-update: tick falhou")
-        await asyncio.sleep(_AUTO_UPDATE_INTERVALO)
-
-
-@app.get("/api/config", dependencies=[Depends(require_auth)])
-def get_config(request: Request):
-    """Config editavel pelo app + o que e so-leitura (exige reiniciar o servico).
-
-    O bloco so-leitura (`_somente_leitura`) volta tambem no POST: parte dele depende de campo
-    editavel. Segredo NUNCA volta inteiro: `estado()` devolve mascarado (gsk_••••1234) — da pra
-    conferir QUAL chave esta la sem conseguir copia-la de volta."""
-    return {
-        "campos": runtime_config.estado(),
-        "somente_leitura": _somente_leitura(request),
-        # IRMÃ do `somente_leitura`, nunca dentro dele: aquele bloco é um mapa chave -> valor
-        # simples, tipado assim no core e desenhado linha a linha pela tela. Uma lista lá dentro
-        # quebraria o tipo e desenharia "[object Object]".
-        "variaveis_env": variaveis_env(),
-    }
-
-
-def _somente_leitura(request: Request) -> dict:
-    """O que a tela mostra sem poder editar. Volta também no PATCH: parte dela (a capacidade de
-    traduzir o pensamento) muda com um campo editável, e a linha ficava velha até reabrir o modal."""
-    return {
-            "port": settings.port,
-            "lan_bind_ip": settings.lan_bind_ip,
-            "server_id": settings.server_id,
-            "public_url": settings.public_url,
-            # CAPACIDADE, nao nome de sistema: "da pra abrir o painel aqui?". O
-            # `os.name == "posix"` que estava aqui respondia outra pergunta — e a diferenca deixou
-            # de ser teorica em 22/08/2026, quando o Windows ganhou motor (ConPTY): a resposta la
-            # virou True sem ninguem tocar nesta linha, que e o ponto de perguntar por capacidade.
-            # Ela tambem responde False num POSIX sem `pty`. Import tardio pelo mesmo motivo de
-            # sempre: o termsock nao pode ser importado no topo deste modulo.
-            "terminal_panel": _painel_disponivel(),
-            # A ORIGEM DESTE cliente abriria o terminal aqui? O handshake do WebSocket recusa com
-            # 403 e o navegador nao entrega corpo nem motivo — a tela dizia so "desconectado", e o
-            # unico lugar com a explicacao era o log do servidor. Com este campo a propria tela
-            # nomeia a origem recusada e manda pro campo que a libera.
-            "terminal_origem_ok": _origem_do_terminal_ok(request),
-            # A versao do PROCESSO VIVO, nao a do checkout. Durante a janela entre o `git pull` e o
-            # restart as duas divergem, e e exatamente ai que o botao Atualizar vive: dizer a do
-            # disco aqui seria afirmar estar rodando codigo que ninguem carregou (o defeito que
-            # `diag.VERSAO_EM_EXECUCAO` corrigiu em f4013343).
-            "versao": diag.VERSAO_EM_EXECUCAO,
-    }
-
-
-# POST **e** PATCH: o PATCH morria em erro de CORS cross-origin e a culpa foi posta no "proxy na
-# frente do backend". ERRADO — o culpado era o plugin apiCorsPreflight do frontend/vite.config.ts,
-# que respondia TODO preflight de /api com uma LISTA FIXA de metodos que nao tinha PATCH (nem PUT,
-# o que so apareceu em 2026-07-31, derrubando salvar motor). Hoje o plugin ECOA o metodo pedido e
-# nao ha mais lista pra envelhecer. O cliente segue no POST porque funciona; o PATCH vale pra quem
-# chamar a API na mao.
-@app.post("/api/config", dependencies=[Depends(require_auth)])
-@app.patch("/api/config", dependencies=[Depends(require_auth)])
-async def patch_config(request: Request):
-    """Grava overrides. Campo desconhecido e ignorado (o cliente nao inventa setting); tipo errado
-    volta 400 com a mensagem, em vez de gravar lixo que so quebraria depois."""
-    body = await request.json()
-    if not isinstance(body, dict):
-        raise HTTPException(400, detail=erro("erro_corpo_deve_ser_objeto", "corpo deve ser um objeto"))
-    remover = {campo for campo, valor in body.items() if valor is None}
-    mudancas = {campo: valor for campo, valor in body.items() if valor is not None}
-    try:
-        await asyncio.to_thread(runtime_config.aplicar, mudancas, remover=remover)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    if "claude_function_hooks" in body:
-        # O wrapper do shell lê o caminho do plugin de um arquivo; ele acompanha o interruptor.
-        try:
-            await asyncio.to_thread(plugin_bridge.publish_address)
-        except OSError:
-            _log.warning("plugin: caminho do plugin não regravado", exc_info=True)
-    return {"campos": runtime_config.estado(), "somente_leitura": _somente_leitura(request)}
-
-
-def _motores_para_cliente() -> dict[str, dict]:
-    """Motores com a api_key MASCARADA: dá para conferir QUAL chave está lá sem copiá-la de volta
-    (mesma regra do groq_api_key no runtime_config)."""
-    out = {}
-    for nome, e in engines.listar().items():
-        visivel = dict(e)
-        chave = visivel.pop("api_key", "")
-        visivel["api_key"] = runtime_config.mascarar(chave)
-        visivel["api_key_definida"] = bool(chave)
-        try:
-            if cliproxy.is_local_engine(e):
-                from app.cliproxy_accounts import list_accounts
-                visivel["cliproxy_accounts"] = []
-                visivel["cliproxy_accounts"] = list_accounts()
-                if not visivel["cliproxy_accounts"]:
-                    visivel["cliproxy_error"] = "nenhuma conta ChatGPT do proxy corresponde às contas cadastradas no Hangar"
-        except ValueError as exc:
-            visivel["cliproxy_error"] = str(exc)
-        out[nome] = visivel
-    return out
-
-
-@app.get("/api/providers", dependencies=[Depends(require_auth)])
-async def get_providers():
-    return await _session_provider_catalog()
-
-
-async def _session_provider_catalog() -> dict[str, dict]:
-    from app import conta_estado, session_defaults
-
-    probes = {provider: dict(probe) for provider, probe in
-              (await asyncio.to_thread(cli_probe.sondar_providers)).items()}
-    connected: set[str] = set()
-    disconnected: set[str] = set()
-    if probes.get("claude", {}).get("disponivel"):
-        configs = await asyncio.to_thread(list_config_dirs, False)
-        try:
-            logins = await asyncio.to_thread(conta_estado.logins, configs)
-        except Exception:  # noqa: BLE001 — sem o login a escolha só deixa de preferir quem está conectado
-            _log.warning("catálogo de provedores: login Claude ilegível", exc_info=True)
-            logins = []
-        if any(login.loggedIn is True for login in logins) or engines.listar():
-            connected.add("claude")
-        elif logins and all(login.loggedIn is False for login in logins):
-            disconnected.add("claude")
-    if probes.get("codex", {}).get("disponivel"):
-        auth = [login for _account, login in await _codex_auth_states()]
-        if any(item.get("status") == "connected" for item in auth):
-            connected.add("codex")
-        elif auth and all(item.get("status") == "disconnected" for item in auth):
-            disconnected.add("codex")
-    default = session_defaults.choose_provider(probes, runtime_config.get("last_session_provider"),
-                                               connected, disconnected)
-    return {provider: {**probe, "default": provider == default} for provider, probe in probes.items()}
-
-
-async def _codex_auth_states() -> list[tuple]:
-    service = _codex_service()
-    if service is None:
-        return []
-    accounts = await asyncio.to_thread(codex_accounts.list_visible_accounts)
-    results = await asyncio.gather(*(service.read_auth_rapido(account) for account in accounts),
-                                   return_exceptions=True)
-    states = []
-    for account, result in zip(accounts, results):
-        if isinstance(result, BaseException):
-            _log.warning("login Codex de %s ilegível: %s", account.id, result)
-            result = {"status": "unavailable"}
-        states.append((account, result))
-    return states
-
-
-async def _default_session_provider(config_dir=None, engine=None, codex_account=None, omp_profile=None,
-                                    subagent_model=None) -> str:
-    # Opções exclusivas de um provedor continuam identificando o destino dos clientes antigos.
-    if config_dir is not None or engine or subagent_model is not None:
-        return "claude"
-    if codex_account is not None:
-        return "codex"
-    if omp_profile:
-        return "omp"
-    probes = await _session_provider_catalog()
-    return next((provider for provider, probe in probes.items() if probe["default"]), "claude")
-
-
-@app.get("/api/engines", dependencies=[Depends(require_auth)])
-def get_engines():
-    # arquivo_corrompido: distingue "ninguém configurou motor" de "engines.json existe mas não
-    # pôde ser lido" — as duas batem em {} no listar() de propósito (não pode derrubar sessão nem
-    # o tick do SSE por um hand-edit ruim), mas a tela precisa saber a diferença (item 1 do
-    # review): sem isto o usuário vê "nenhum motor ainda" com um arquivo quebrado escondendo
-    # motores reais, re-adiciona um, e a próxima gravação apaga os outros.
-    return {
-        "motores": _motores_para_cliente(),
-        "arquivo_corrompido": engines.arquivo_corrompido(),
-        "arquivo_caminho": str(engines.caminho()),
-    }
-
-
-@app.put("/api/engines/{nome}", dependencies=[Depends(require_auth)])
-async def put_engine(nome: str, request: Request):
-    """Cria/atualiza um motor.
-
-    api_key ausente, vazia, ou IGUAL à máscara que o cliente recebeu = preserva a atual. Sem isso,
-    salvar o formulário só para trocar o modelo apagava a chave, sem volta — o bug pago em 22ae599.
-
-    Campo AUSENTE do corpo herda o valor do disco; campo presente vale, inclusive `""`, que é como
-    se LIMPA (_normalizar descarta vazio, então o campo sai do registro — texto ou numérico). `0`
-    NÃO limpa: num campo numérico é valor inválido, e volta 400 "deve ser maior que zero".
-    engines.salvar() substitui o registro inteiro, e sem a herança um cliente que só conhece parte
-    do schema — um PUT de script, uma versão antiga do front — apagava o resto calado. Medido: o
-    probe de modelos devolve `context_length: null` para provedor que não informa (opencode), o PUT
-    seguinte vinha sem `context_window` e o motor perdia a janela de 1M, voltando a compactar em
-    200k sem avisar.
-
-    `null` conta como AUSENTE de propósito (é o que o probe manda quando não sabe). Quem quer limpar
-    manda `""` — a tela de Motores faz isso nos campos opcionais."""
-    body = await request.json()
-    if not isinstance(body, dict):
-        raise HTTPException(400, detail=erro("erro_corpo_deve_ser_objeto", "corpo deve ser um objeto"))
-    if body.pop("use_cliproxy_key", None) is True:
-        try:
-            inst = await asyncio.to_thread(cliproxy.local)
-        except ValueError as e:
-            raise HTTPException(400, str(e))
-        if not inst:
-            raise HTTPException(400, detail=erro("erro_cliproxy_ausente", "CLIProxyAPI local sem config ou sem api-keys"))
-        # A chave do config só vai para a instância dele, nunca para um endereço escolhido pelo cliente.
-        if cliproxy.normalize_base(str(body.get("base_url") or "")) != inst["base_url"]:
-            raise HTTPException(400, detail=erro("erro_cliproxy_endereco", "endereço diferente do CLIProxyAPI local"))
-        body["api_key"] = inst["api_key"]
-    # I/O de disco no threadpool, igual ao resto deste handler (ver comentário acima de create_session).
-    atual = (await asyncio.to_thread(engines.listar)).get(nome, {})
-    chave_atual = atual.get("api_key", "")
-    enviada = body.get("api_key")
-    if chave_atual and (
-        not isinstance(enviada, str)
-        or not enviada.strip()
-        or enviada.strip() == runtime_config.mascarar(chave_atual)
-    ):
-        body["api_key"] = chave_atual
-    # `campo not in body` (não `body.get(campo) is None`): a segunda forma tratava `""` como ausente
-    # e reinjetava o valor do disco, então LIMPAR um campo opcional na tela virava no-op com HTTP 200
-    # — o usuário escolhia "mesmo que o principal" em subagent_model, salvava, e o modelo antigo
-    # voltava sem aviso. `null` segue herdando (é o que o probe manda quando não sabe o valor).
-    for campo, valor_atual in atual.items():
-        if campo not in body or body[campo] is None:
-            body[campo] = valor_atual
-    try:
-        await asyncio.to_thread(engines.salvar, nome, body)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    # A chave do cache é o NOME do motor: trocar base_url ou api_key mantendo o nome serviria a
-    # lista do provedor ANTIGO por até 5 minutos.
-    _engine_models_cache.pop(nome, None)
-    return {"motores": await asyncio.to_thread(_motores_para_cliente)}
-
-
-@app.delete("/api/engines/{nome}", dependencies=[Depends(require_auth)])
-async def delete_engine(nome: str):
-    try:
-        if not await asyncio.to_thread(engines.remover, nome):
-            raise HTTPException(404, detail=erro("erro_motor_nao_encontrado", "motor nao encontrado"))
-    except ValueError as e:
-        # engines.json corrompido: remover() recusa escrever por cima (item 1 do review) em vez de
-        # apagar os outros motores. Vira 400 com a mensagem em vez de 500 cru.
-        raise HTTPException(400, str(e))
-    # Mesma invalidação do PUT: a chave do cache é o NOME do motor.
-    _engine_models_cache.pop(nome, None)
-    # O espelho nos outros agentes sai junto; sem isso o Kimi seguia listando um provedor cuja
-    # chave o app já não conhece.
-    espelhos = await asyncio.to_thread(agentes_sync.remover, nome)
-    for alvo, r in espelhos.items():
-        if not r["ok"] and r["motivo"] not in ("nao-gerenciado", "nao-instalado"):
-            _log.warning("motor %r apagado, mas o espelho no %s ficou: %s", nome, alvo, r["motivo"])
-    return {"ok": True}
-
-
-class EngineProbeBody(_StrictBody):
-    # `nome` de um motor já salvo (reusa a key do disco, que o cliente não tem inteira) OU
-    # base_url+api_key de um motor sendo criado. Os dois modos são MUTUAMENTE EXCLUSIVOS — ver
-    # o guard em engine_modelos: misturar `nome` com um `base_url` do cliente mandaria a api_key
-    # REAL do motor salvo, no header Authorization, para qualquer host que o cliente escolher.
-    nome: str | None = None
-    base_url: str | None = None
-    api_key: str | None = None
-
-
-@app.post("/api/engines/modelos", dependencies=[Depends(require_auth)])
-async def engine_modelos(body: EngineProbeBody):
-    """Modelos que a key pode usar, direto do provedor. É também o 'Testar' da tela: 200 = key boa,
-    502 = a mensagem do provedor (401, host errado, endpoint ausente).
-
-    `nome` e `base_url`/`api_key` não se combinam: com `nome`, SÓ o base_url e a key salvos valem
-    — um base_url do cliente junto seria exfiltração da key real para host arbitrário, não SSRF
-    comum (o app já aceita SSRF cego por trás do token; isto seria mais forte, key sai de propósito).
-    Recusa em vez de ignorar em silêncio: um ignore silencioso deixaria o cliente achando que testou
-    o host que mandou."""
-    if body.nome:
-        if body.base_url or body.api_key:
-            raise HTTPException(400, detail=erro("erro_motor_nome_com_dados", "nome já usa o motor salvo; não envie base_url/api_key junto"))
-        # I/O de disco no threadpool, igual ao resto deste handler (ver comentário acima de create_session).
-        salvo = (await asyncio.to_thread(engines.listar)).get(body.nome)
-        if not salvo:
-            raise HTTPException(404, detail=erro("erro_motor_nao_encontrado", "motor nao encontrado"))
-        base_url, api_key = salvo["base_url"], salvo["api_key"]
-    else:
-        base_url, api_key = body.base_url, body.api_key
-        if not base_url or not api_key:
-            raise HTTPException(400, detail=erro("erro_motor_nome_ou_dados", "informe nome de um motor salvo, ou base_url + api_key"))
-    try:
-        # Mesma guarda do salvar: a key vai no header, http para host público a expõe na rede.
-        base_url = engines.validar_base_url(base_url)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    try:
-        modelos = await asyncio.to_thread(engine_probe.listar_modelos, base_url, api_key)
-    except RuntimeError as e:
-        raise HTTPException(502, str(e))
-    except ValueError as e:
-        # \r/\n na key ou no base_url (item 3 do review): engine_probe recusa ANTES de montar o
-        # Request — sem isto o urllib levantaria com a key crua na mensagem, e a rota abaixo relança
-        # RuntimeError pro uvicorn logar (traceback com a key no journal). 400 sem ecoar o valor.
-        raise HTTPException(400, str(e))
-    # Diz à tela que é o CLIProxyAPI desta máquina, que aceita os campos beta (ver MotorForm).
-    try:
-        local = await asyncio.to_thread(cliproxy.is_local_engine, {"base_url": base_url})
-    except ValueError as e:
-        # Config do proxy quebrada não derruba o teste; a tela de CLIProxyAPI mostra o motivo.
-        _log.warning("CLIProxyAPI local ilegível ao testar motor: %s", e)
-        local = False
-    return {"modelos": modelos, "gateway": "cliproxyapi" if local else None}
-
-
-@app.get("/api/engines/cliproxy", dependencies=[Depends(require_auth)])
-async def engine_cliproxy():
-    """CLIProxyAPI desta máquina: endereço e modelos, sem a chave."""
-    try:
-        inst = await asyncio.to_thread(cliproxy.local)
-    except ValueError as e:
-        return {"found": False, "base_url": None, "models": [], "error": str(e)}
-    if not inst:
-        return {"found": False, "base_url": None, "models": [], "error": None}
-    try:
-        modelos = await asyncio.to_thread(engine_probe.listar_modelos, inst["base_url"], inst["api_key"])
-    except (RuntimeError, ValueError) as e:
-        return {"found": True, "base_url": inst["base_url"], "models": [],
-                "error": cliproxy.redact(str(e), inst["api_key"])}
-    return {"found": True, "base_url": inst["base_url"], "error": None,
-            "models": [m for m in modelos if cliproxy.is_engine_model(m["id"])],
-            **await asyncio.to_thread(_cliproxy_naming)}
-
-
-def _cliproxy_naming() -> dict:
-    """Nomeia as contas que der e diz quantas ficaram sem nome — a tela pede a senha só aí."""
-    erro_nome = None
-    try:
-        cliproxy.name_accounts()
-    except ValueError as e:
-        erro_nome = str(e)
-    try:
-        faltam: int | None = len(cliproxy.unnamed_accounts())
-    except ValueError as e:
-        # Credencial ilegível: a senha não resolve, então a tela mostra só o motivo.
-        faltam, erro_nome = None, erro_nome or str(e)
-    return {"unnamed_accounts": faltam, "management_key_set": cliproxy.management_key() is not None,
-            "naming_error": erro_nome}
-
-
-class CliproxyManagementBody(_StrictBody):
-    management_key: str = Field(default="", max_length=512)
-
-
-@app.put("/api/engines/cliproxy/management-key", dependencies=[Depends(require_auth)])
-async def engine_cliproxy_management_key(body: CliproxyManagementBody):
-    """Guarda a senha de gerenciamento do CLIProxyAPI e já nomeia as contas; o valor nunca volta."""
-    try:
-        await asyncio.to_thread(cliproxy.set_management_key, body.management_key)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    return await asyncio.to_thread(_cliproxy_naming)
 
 
 
@@ -5878,8 +4682,7 @@ def _shortcut_shell(name: str, body: ShortcutShellBody, request: Request, *, pow
     from app.guest_header import guest_of
     # Convidado nao cria nem reaproveita copia No Hangar: ele nao a ve, nao a fecha, e o reuso traria
     # uma janela pra frente na tela do dono.
-    guest_user = guest_users.current.get()
-    if body.runs_in == "hangar" and (guest_of(request) is not None or guest_user is not None):
+    if body.runs_in == "hangar" and (guest_of(request) is not None):
         raise HTTPException(403, detail=erro("erro_shortcut_hangar_convidado",
                                              "convidado nao roda atalho No Hangar"))
     cwd = _session_cwd(name)
@@ -5896,10 +4699,6 @@ def _shortcut_shell(name: str, body: ShortcutShellBody, request: Request, *, pow
             raise _project_error(e)
         except ValueError as e:
             raise HTTPException(400, detail=erro("erro_shortcut_pasta", str(e), detalhe=str(e)))
-    # `pasta` absoluta passa direto pelo resolve_folder: o convidado não sai da pasta dele.
-    if guest_user is not None and not guest_users.inside_root(guest_user, cwd):
-        raise HTTPException(403, detail=erro("erro_fora_da_pasta",
-                                             "o convidado só abre sessão dentro da pasta dele"))
     # Atalho importado com a credencial em branco: rodar mandaria o marcador literal pro programa.
     from app.shortcut_transfer import has_placeholder
     missing = has_placeholder(command)
@@ -7250,15 +6049,10 @@ def _bypass_no_ciclo(name: str) -> bool:
 #     a versao do CC (o Fable entrou e a lista chumbada no front nao soube), entao ela nao pode
 #     morar no codigo.
 
-class EngineModelBody(_StrictBody):
-    model: str
-    effort: str | None = None
 
 
 # Catalogo por motor: e uma chamada de REDE ao provedor, e abrir a folha nao pode pagar isso toda
 # vez. TTL curto porque a lista muda com o plano do usuario, nao a cada minuto.
-_ENGINE_MODELS_TTL = 300.0
-_engine_models_cache: dict[str, tuple[float, list[dict]]] = {}
 
 # Catalogo da conta Anthropic: ler o picker DIRIGE O TERMINAL, e isso deixa RASTRO — o `❯ /model` e
 # o `⎿ Kept model as …` (o Esc de saida) ficam no scrollback do tmux pra sempre. Nao aparece no chat
@@ -7339,50 +6133,12 @@ def _chave_config(p) -> str:
     return str(Path(s).expanduser().resolve())
 
 
-def _fixed_engine_account(engine: str, account: str) -> dict:
-    cfg = engines.listar().get(engine)
-    if not cfg:
-        raise HTTPException(400, detail=erro("erro_motor_invalido", "motor inválido"))
-    try:
-        return cliproxy.account_for_engine(cfg, account)
-    except ValueError as exc:
-        raise HTTPException(400, detail=erro("erro_cliproxy_conta", str(exc))) from None
 
 
-async def _fixed_engine_models(engine: str, account: str, *, fresco: bool = False) -> list[dict]:
-    from app.cliproxy_accounts import models_for
-    selected = await asyncio.to_thread(_fixed_engine_account, engine, account)
-    return models_for(await _engine_models(engine, fresco=fresco), selected["prefix"])
 
 
-async def _engine_models(nome: str, fresco: bool = False) -> list[dict]:
-    """Catalogo do provedor. `fresco=True` ignora o cache.
-
-    Quem VALIDA uma troca pede fresco: o cache existe pra folha abrir rapido, mas a promessa do
-    check ("recusa aqui em vez de deixar a falha aparecer so no proximo turno") nao sobrevive a 5
-    minutos de lista velha — modelo tirado do plano passaria pela validacao e falharia depois. Uma
-    chamada de rede numa acao deliberada do usuario e barata; num tick de tela, nao.
-    """
-    hit = _engine_models_cache.get(nome)
-    if hit and not fresco and time.monotonic() - hit[0] < _ENGINE_MODELS_TTL:
-        return hit[1]
-    cfg = engines.listar().get(nome)
-    if not cfg:
-        raise HTTPException(409, detail=erro("erro_motor_ausente", f"motor {nome!r} nao esta mais no engines.json", nome=nome))
-    try:
-        modelos = await asyncio.to_thread(engine_probe.listar_modelos, cfg["base_url"], cfg["api_key"])
-    except RuntimeError as e:
-        # O proxy pode repetir a chave no erro; ela não vai para o cliente.
-        message = cliproxy.redact(str(e), cfg["api_key"])
-        raise HTTPException(502, detail=erro("erro_provedor_offline", f"o provedor do motor {nome!r} nao respondeu: {message}", nome=nome, erro=message))
-    _engine_models_cache[nome] = (time.monotonic(), modelos)
-    return modelos
 
 
-def _engine_picker_models(engine: str, models: list[dict]) -> list[dict]:
-    return [{"id": model["id"], "context_length": model.get("context_length"),
-             "vision": model.get("vision"), "supports_fast": cliproxy.supports_fast(engine, model["id"])}
-            for model in models]
 
 
 @app.get("/api/sessions/{name}/model/options", dependencies=[Depends(require_auth)])
@@ -7393,19 +6149,6 @@ async def model_options(name: str):
         raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
     if info.provider not in (None, "claude"):
         raise HTTPException(400, detail=erro("erro_rota_so_claude", "esta rota so existe pra sessoes Claude Code"))
-    if info.engine:
-        # Motor: catalogo vem do /v1/models do provedor (HTTP), nao do pane -- nao conta linha,
-        # nao depende do tamanho da janela. A guarda so vale pro ramo abaixo (le o picker).
-        modelos = await (_fixed_engine_models(info.engine, info.engine_account)
-                         if info.engine_account else _engine_models(info.engine))
-        models = await asyncio.to_thread(_engine_picker_models, info.engine, modelos)
-        result = {"kind": "engine", "engine": info.engine, "models": models}
-        if any(model["supports_fast"] for model in models):
-            model, tier = await asyncio.to_thread(_engine_fast_selection, name)
-            model = model or engines.listar()[info.engine].get("model")
-            result.update(supports_fast=True,
-                          current={"model": model.rsplit("/", 1)[-1] if model else None, "service_tier": tier})
-        return result
     if _headless(name):
         # Sem terminal: a lista vem do `control_request list_models` do próprio processo — sem
         # picker, sem rastro no scrollback e sem cache de 1h.
@@ -7476,12 +6219,6 @@ async def model_options_sem_sessao(provider: str = "claude", engine: str = "",
             raise HTTPException(502, detail=erro("erro_codex_model_list", f"codex app-server model/list falhou: {e}", erro=str(e)))
     if provider != "claude":
         raise HTTPException(400, detail=erro("erro_provider_invalido", "provider deve ser 'claude', 'pi', 'omp', 'kimi' ou 'codex'"))
-    if engine:
-        modelos = await (_fixed_engine_models(engine, engine_account)
-                         if engine_account is not None else _engine_models(engine))
-        models = await asyncio.to_thread(_engine_picker_models, engine, modelos)
-        return {"kind": "engine", "reduced": False, "models": models,
-                "supports_fast": any(model["supports_fast"] for model in models)}
     chave = _chave_config(config_dir)
     cacheado = _models_cache_get(chave)
     if cacheado is not None:
@@ -7507,80 +6244,6 @@ async def model_options_sem_sessao(provider: str = "claude", engine: str = "",
             "models": [{"id": a} for a in ("opus", "fable", "sonnet", "haiku")]}
 
 
-@app.post("/api/sessions/{name}/engine/model", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
-async def engine_model_set(name: str, body: EngineModelBody):
-    """Troca o modelo (e opcionalmente o esforco) de uma sessao que roda num motor.
-
-    O `/model <id>` do Claude Code aplica na sessao E grava o id como default GLOBAL pra sessoes
-    novas — inclusive as da conta Anthropic, que nao conhecem esse id. Por isso o valor anterior do
-    settings.json e capturado antes e reposto depois: a troca vale onde foi pedida e em lugar nenhum
-    mais. Ver app/default_model.py.
-    """
-    await asyncio.to_thread(_recusa_se_painel_aberto, name)
-    info = await _cached_info(name)
-    if not info:
-        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
-    if not info.engine:
-        raise HTTPException(400, detail=erro("erro_rota_so_motor", "esta rota so existe pra sessoes que rodam num motor"))
-    if info.engine_account:
-        # A conta ChatGPT fixa troca o modelo reabrindo a sessão: é do Rust.
-        raise registry_mod.SessionOpenNeedsRust()
-    # fresco=True: a validacao promete "recusa aqui em vez de deixar a falha aparecer so no proximo
-    # turno", e essa promessa nao sobrevive ao cache de 5 min (ver _engine_models).
-    modelos = await _engine_models(info.engine, fresco=True)
-    catalog_id = await asyncio.to_thread(engines.catalog_model, body.model)
-    if not any(m["id"] == catalog_id for m in modelos):
-        # Recusar aqui em vez de digitar: o CC aceitaria o id, a sessao passaria a mandar request
-        # pra um modelo que o provedor nao tem, e a falha apareceria so no proximo turno.
-        raise HTTPException(422, detail=erro("erro_modelo_fora_catalogo", f"modelo fora do catalogo do motor {info.engine!r}: {body.model}", motor=info.engine, modelo=body.model))
-
-    _, tier = await asyncio.to_thread(_engine_fast_selection, name)
-    if tier == "priority" and not await asyncio.to_thread(cliproxy.supports_fast, info.engine, body.model):
-        raise HTTPException(409, detail=erro("erro_fast_indisponivel", "Desligue Fast antes de escolher um modelo que não o suporta"))
-
-    if _headless(name):
-        # Sem pane: `set_model` por control_request, que (medido) NÃO grava o default global —
-        # nada a repor no settings.json. O esforço vai como `/effort <x>` pelo stdin.
-        try:
-            esforco_ja_vale = await get_adapter(CLAUDE_HEADLESS).set_model(name, body.model, body.effort)
-        except Exception as e:
-            _log.exception("claude headless: troca de modelo falhou name=%s", name)
-            raise HTTPException(409, detail=erro("erro_headless_modelo", f"troca de modelo falhou: {e}", erro=str(e)))
-        res = {"ok": True, "model": body.model}
-        if body.effort and not esforco_ja_vale:
-            res["effort_error"] = "esforço entra no fim do turno em andamento"
-        return res
-
-    cfg_dir = _session_config_dir(name)  # mesma leitura de /proc que resolve o config dir das outras rotas
-    antes = await asyncio.to_thread(default_model.snapshot, cfg_dir)
-    digitou = True
-    try:
-        res = await asyncio.to_thread(terminal.set_engine_model, name, body.model)
-    except TerminalInput.NaoDigitou as e:
-        # Recusado antes de qualquer tecla (sessao ocupada/morta, menu aberto): o settings.json esta
-        # intocado, entao esperar a escrita aterrissar so faria o erro demorar ~3.6s a aparecer.
-        digitou = False
-        raise HTTPException(e.status, e.detail)
-    except PickerError as e:
-        raise HTTPException(e.status, e.detail)
-    except ValueError as e:
-        raise HTTPException(422, str(e))
-    finally:
-        # No finally de proposito: se o comando foi digitado mas a confirmacao nao pode ser lida, o
-        # settings.json PODE ja ter sido reescrito — deixar o default global vazado por causa de um
-        # erro de leitura seria a pior combinacao.
-        if digitou:
-            await asyncio.to_thread(default_model.restore_quando_aterrissar, cfg_dir, antes)
-
-    if body.effort:
-        # Esforco continua saindo do picker (Left/Right): medido que ele funciona igual em sessao de
-        # motor — o chip `(high✦)` e real, nao maquiagem. Falha aqui nao desfaz o modelo, que ja
-        # pegou; reporta junto pra tela nao dizer que tudo deu certo.
-        try:
-            await asyncio.to_thread(terminal.set_model_effort, name, None, body.effort, "session")
-        except (PickerError, ValueError) as e:
-            return {**res, "model": body.model, "effort_error": str(e)}
-    return {**res, "model": body.model}
 
 
 def _session_config_dir(name: str) -> Path | None:
@@ -7641,9 +6304,6 @@ def fs_branches(root: str, path: str | None = None):
         raise HTTPException(exc.status, detail=erro("erro_criacao_sessao", exc.detail)) from None
 
 
-def _no_guest() -> None:
-    if guest_users.current.get() is not None:
-        raise HTTPException(403, detail="convidado não acessa worktrees")
 
 
 def _allowed_repo(path: str) -> str:
@@ -7693,7 +6353,6 @@ async def _worktree_inputs():
 @app.get("/api/worktrees", dependencies=[Depends(require_auth)])
 async def worktrees_list(repo: str | None = None, sizes: bool = True):
     """`repo`: só as desse repositório; `sizes=false`: não agenda medir o espaço (menu de branch)."""
-    _no_guest()
     sessions, allowed, roots = await _worktree_inputs()
     if repo is not None:
         repo = await asyncio.to_thread(_allowed_repo, repo)
@@ -7710,7 +6369,6 @@ def _allowed_worktree(path: str) -> str:
 
 @app.get("/api/worktrees/detail", dependencies=[Depends(require_auth)])
 async def worktrees_detail(path: str):
-    _no_guest()
     path = await asyncio.to_thread(_allowed_worktree, path)
     sessions = await asyncio.to_thread(registry.list)
     return await asyncio.to_thread(worktrees.status, path, sessions)
@@ -7722,7 +6380,6 @@ class WorktreeRepoBody(_StrictBody):
 
 @app.post("/api/worktrees/fetch", dependencies=[Depends(require_auth)])
 async def worktrees_fetch(body: WorktreeRepoBody):
-    _no_guest()
     try:
         await asyncio.to_thread(lambda: worktrees.fetch(_allowed_repo(body.repo)))
     except GitError as exc:
@@ -7740,7 +6397,6 @@ class WorktreeDeleteBody(_StrictBody):
 
 @app.post("/api/worktrees/delete", dependencies=[Depends(require_auth)])
 async def worktrees_delete(body: WorktreeDeleteBody):
-    _no_guest()
     repo, path = await asyncio.to_thread(lambda: (_allowed_repo(body.repo), _allowed_repo(body.path)))
     sessions = await asyncio.to_thread(registry.list)
     try:
@@ -7764,7 +6420,6 @@ class WorktreeDeleteMergedBody(_StrictBody):
 
 @app.post("/api/worktrees/delete-merged", dependencies=[Depends(require_auth)])
 async def worktrees_delete_merged(body: WorktreeDeleteMergedBody):
-    _no_guest()
     if body.confirm and body.paths is None:
         raise HTTPException(422, detail="confirmar exige a lista das worktrees mostradas")
     repo = await asyncio.to_thread(_allowed_repo, body.repo)
@@ -7791,7 +6446,6 @@ class WorktreeCreateBody(_StrictBody):
 @app.post("/api/worktrees/create", dependencies=[Depends(require_auth)])
 async def worktrees_create(body: WorktreeCreateBody):
     """Só a worktree, sem sessão; com sessão, o caminho continua sendo o `POST /api/sessions`."""
-    _no_guest()
     name = sanitize_session_name(body.name)
     if not name:
         raise HTTPException(400, detail="nome de pasta inválido")

@@ -1,9 +1,13 @@
 //! Servidor do Hangar: lê conversas e custos das sessões e repassa o restante ao backend Python.
+pub mod startup;
 pub mod accounts;
 pub mod artifacts;
 pub mod auth;
 pub mod remote_browser;
 pub mod config;
+pub mod config_sync;
+pub mod command_capture;
+pub mod cli_probe;
 pub mod commands;
 pub mod orq_conductor;
 pub mod orq_storage;
@@ -81,6 +85,7 @@ pub mod dictation;
 pub mod workspace_routes;
 pub mod uploads;
 pub mod user_data;
+pub mod machine_peers;
 pub mod install_root;
 pub mod update;
 pub mod ui;
@@ -93,7 +98,7 @@ mod warn_limit;
 
 /// Versão do contrato com o Python (rotas `/internal`, canal privado do estado, ambiente). O
 /// Python (`RUST_SERVER_PROTOCOL`) recusa um binário de outra versão e atende sozinho.
-pub const INTERNAL_PROTOCOL: u32 = 97;
+pub const INTERNAL_PROTOCOL: u32 = 100;
 
 /// Todo cliente HTTP do servidor nasce aqui. Uma dependência liga `gzip`, `http2` e (no Windows)
 /// `native-tls` no reqwest, e o Cargo estende isso a todo cliente: sem estes desligamentos ele
@@ -142,10 +147,22 @@ pub async fn serve_until_with_state(
 /// `guest`: porta do convidado (`HANGAR_SERVER_GUEST_LISTEN`), ligada sem segurar a principal.
 pub async fn serve_until_with_guest(
     listener: tokio::net::TcpListener,
-    state: routes::AppState,
+    mut state: routes::AppState,
     guest: Option<std::net::SocketAddr>,
     stop: impl std::future::Future<Output = ()>,
 ) -> std::io::Result<()> {
+    let _ = state.settings_snapshot();
+    let boot_environment = state.accounts.env.base.clone();
+    let boot_root = install_root::root(&state.accounts.env.home)
+        .unwrap_or_else(||state.accounts.env.home.join(".hangar/current"));
+    let _boot_version = AbortOnDrop(tokio::spawn(async move {
+        if boot_version::ensure(boot_root,boot_environment).await.is_err() {
+            tracing::warn!(code="boot_version_failed","versão em execução não foi preparada");
+        }
+    }));
+    if state.login_guests.needs_initialization {
+        state.login_guests=std::sync::Arc::new(login_guests::Service::from_state(&state).await);
+    }
     // Lida na subida: no Windows o executável é aberto pela junction, que a troca de versão move.
     let _ = update::running_package();
     let cfg = state.cfg.clone();
@@ -153,25 +170,26 @@ pub async fn serve_until_with_guest(
     let browser_dir = state.hangar_dir.join("nav");
     let browser_list = state.list.clone();
     let transcription = state.transcription.clone();
+    let startup_producers = state.startup_producers.clone();
     let omp_sync = state.omp_sync.clone();
+    let codex_setup = state.codex_setup.clone();
+    let harness_installer = state.harness_installer.clone();
     let codex_logins=state.accounts.codex_logins.clone();
     let codex_readers=state.accounts.codex_readers.clone();
     let device_logins=state.accounts.device_logins.clone();
     let mut runtime_registry=None;
-    let mut refresh_loop=None;
+    let mut runtime_producers=None;
+    let refresh_loop = std::sync::Arc::new(std::sync::Mutex::new(None));
     let result=async {
-    if let Some(home) = std::env::home_dir() {
-        transcription.recover_on_startup(&home).await;
-    }
+    let _recovery = AbortOnDrop(tokio::spawn({
+        let (readiness, transcription) = (state.startup.clone(), transcription.clone());
+        async move { readiness.wait().await; if let Some(home) = std::env::home_dir() { transcription.recover_on_startup(&home).await; } }
+    }));
     if let Some(instance) = config::Config::runtime_instance().map_err(std::io::Error::other)? {
-        // Sem catálogo legível não há janela a fechar; isso não pode impedir o servidor de subir.
-        if let Err(error) = state.accounts.recover_claude_logins(state.accounts.claude_windows.clone()).await {
-            tracing::warn!(code = "claude_login_recovery_failed", reason = error.code, "catálogo de contas ilegível na subida");
-        }
         let private = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let port = private.local_addr()?.port();
         let registry = std::sync::Arc::new(runtime::gateway::RuntimeRegistry::new(cfg.upstream,
-            cfg.internal_secret.clone(),instance.clone()).with_mods(state.mods.clone()).with_accounts(state.accounts.clone())
+            cfg.internal_secret.clone(),instance.clone()).with_startup(state.startup.clone()).with_mods(state.mods.clone()).with_accounts(state.accounts.clone())
             .with_interactions(state.interactions.clone()).with_plugin(state.plugin.clone())
             .with_terminal_states(state.list.published.clone()).with_terms(state.term.clone())
             .with_permissions(state.state.permissions.clone())
@@ -185,22 +203,41 @@ pub async fn serve_until_with_guest(
         // O hub do chat pergunta ao registro quem é dono do Codex com terminal, e o registro o avisa na troca.
         registry.bind_hubs(state.side.hubs.downgrade());
         let _ = state.side.runtime.set(registry.clone());
+        state.initialize_codex_setup();
         let _ = state.accounts.quotas.runtime.set(registry.clone());
         let _ = state.accounts.quotas.diag.set(state.diag.clone());
-        refresh_loop=Some(accounts::claude_refresh::start(state.accounts.clone(),registry.clone()));
+        runtime_producers = Some(AbortOnDrop(tokio::spawn({
+            let registry = registry.clone();
+            let readiness = state.startup.clone();
+            let refresh_loop = refresh_loop.clone();
+            let accounts = state.accounts.clone();
+            let http = state.http.clone();
+            let runtime_cfg = cfg.clone();
+            let dirs = state.list.env().dirs.clone();
+            let capture_program = state.list.env().capture_program.clone();
+            async move {
+                readiness.wait().await;
+        // Sem catálogo legível não há janela a fechar; isso não pode impedir o servidor de subir.
+        if let Err(error) = accounts.recover_claude_logins(accounts.claude_windows.clone()).await {
+            tracing::warn!(code = "claude_login_recovery_failed", reason = error.code, "catálogo de contas ilegível na subida");
+        }
+        *refresh_loop.lock().unwrap() = Some(accounts::claude_refresh::start(accounts, registry.clone()));
         let _watchdog = std::env::home_dir().map(|home| AbortOnDrop(tokio::spawn(
-            watchdog::run(state.http.clone(), cfg.upstream, cfg.internal_secret.clone(), home))));
+            watchdog::run(http.clone(), runtime_cfg.upstream, runtime_cfg.internal_secret.clone(), home))));
+
+        if !readiness.prepares() {
         // A troca de conta que o Rust anterior deixou no meio, antes de qualquer sessão subir pelo spec.
         { let env=registry.codex_environment();
           if tokio::task::spawn_blocking(move||runtime::claude_reopen::settle_switches(&env)).await.is_err() {
               tracing::warn!("trocas de conta interrompidas não foram conferidas");
           } }
+        }
         // A vigia do Codex com terminal precisa das pastas da lista (sidecars e fila).
-        let _codex_watch = match state.list.env().dirs.clone() {
+        let _codex_watch = match dirs {
             Some(dirs) => {
                 let watcher = std::sync::Arc::new(runtime::codex_terminal::Watcher::new(runtime::codex_terminal::WatchConfig {
                     home: dirs.home.clone(), queue_dir: dirs.claude.join(".hangar-queue"),
-                    mux: list::mux::Mux::default(), mux_program: state.list.env().capture_program.clone() }));
+                    mux: list::mux::Mux::default(), mux_program: capture_program }));
                 registry.bind_watcher(watcher.clone());
                 // Presas ao desligamento: uma adoção tardia abriria sessão depois do `registry.shutdown()`.
                 // Os Claude com terminal que já tinham fila aqui: o Rust os adota, sem esperar o Python.
@@ -216,6 +253,9 @@ pub async fn serve_until_with_guest(
         // As sessões Claude sem terminal que já existem: o Rust as reconhece sozinho, sem esperar o Python.
         let _claude_boot = AbortOnDrop(tokio::spawn(registry.clone().register_claude_headless()));
         let _claude_park = AbortOnDrop(tokio::spawn(registry.clone().watch_idle_claude()));
+                std::future::pending::<()>().await;
+            }
+        })));
         println!("{}",runtime::gateway::startup_line(INTERNAL_PROTOCOL,&instance,port));
         let gateway = runtime::gateway::serve(private,registry.clone(),cfg.internal_secret.clone(),instance,INTERNAL_PROTOCOL);
         let result = tokio::select! {
@@ -230,17 +270,26 @@ pub async fn serve_until_with_guest(
         () = stop => Ok(()),
     }
     }.await;
+    if let Some(mut producer) = runtime_producers {
+        producer.0.abort();
+        let _ = (&mut producer.0).await;
+    }
     let cleanup = async {
+        startup_producers.shutdown().await;
+        harness_installer.shutdown().await;
         if let Some(service) = omp_sync.get() { service.close().await; }
+        let codex_setup_result = match codex_setup.get() {
+            Some(Ok(service)) => service.shutdown().await,
+            Some(Err(_)) | None => Ok(()),
+        };
         transcription.shutdown().await;
-        if let Some((stop,task))=refresh_loop {
-            let _=stop.send(true);
-            let _=task.await;
-        }
+        let refresh = refresh_loop.lock().unwrap().take();
+        if let Some((stop, task)) = refresh { let _ = stop.send(true); let _ = task.await; }
         tokio::join!(codex_readers.close(),codex_logins.close(),device_logins.close());
         if let Some(registry)=runtime_registry {
             registry.shutdown().await.map_err(|error|std::io::Error::other(error.code))?;
         }
+        codex_setup_result.map_err(std::io::Error::other)?;
         Ok::<_, std::io::Error>(())
     };
     let (_, cleanup) = tokio::join!(remote_browser.shutdown(&browser_dir, &browser_list), cleanup);
@@ -379,3 +428,24 @@ pub(crate) fn write_test_executable(path: &std::path::Path, content: impl AsRef<
     assert!(status.success(), "install não gravou {}", path.display());
     std::fs::remove_file(&source).unwrap();
 }
+
+pub mod codex_setup;
+
+pub mod harness_setup;
+
+pub mod cliproxy_config;
+pub mod value_coercion;
+pub mod provider_discovery;
+pub mod http_contract;
+pub mod http_cors;
+
+pub mod http_body_limit;
+pub mod http_route_response;
+pub mod boot_version;
+pub mod migration_branch;
+pub mod login_guests;
+
+pub mod shortcuts;
+
+pub mod engines;
+pub mod http_body_input;

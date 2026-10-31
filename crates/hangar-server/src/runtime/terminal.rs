@@ -978,8 +978,8 @@ impl Executor {
 
     /// O seletor do `/model` (`model_picker::drive`), com o payload já validado pela rota. Fica no diário
     /// como a troca de modo: o mesmo ID repetido responde o que ficou, sem digitar de novo.
-    async fn model_effort(&mut self,id:&str,payload:Value)->Result<RuntimeReply,RuntimeError> {
-        let original=json!({"operation_id":id,"kind":"set_model_effort","payload":payload});
+    async fn model_change(&mut self,id:&str,kind:&str,payload:Value)->Result<RuntimeReply,RuntimeError> {
+        let original=json!({"operation_id":id,"kind":kind,"payload":payload});
         let state=self.queue.snapshot().await.map_err(|_|error("queue_io"))?;
         if state.generation!=self.target.generation {return Err(error("runtime_generation"));}
         if let Some(old)=state.operations.get(id) {
@@ -993,12 +993,43 @@ impl Executor {
         let driver=TerminalDriver::new(self.target.binding.clone(),self.services(id,id,""),self.options.io.clone(),self.options.limits.clone());
         self.action(Action::Prepare {id:id.into(),payload:original,entry_id:None}).await?;
         self.action(Action::BeginDispatch {id:id.into(),wire_id:format!("model:{}:{id}",self.target.generation),staged:false}).await?;
-        let result=match crate::model_picker::drive(&driver,payload["model"].as_str(),payload["effort"].as_str(),payload["scope"]=="default").await {
+        let changed=if kind=="set_engine_model" {
+            self.engine_model(&driver,&payload).await
+        } else {
+            crate::model_picker::drive(&driver,payload["model"].as_str(),payload["effort"].as_str(),payload["scope"]=="default").await
+        };
+        let result=match changed {
             Ok(value)=>reply(id,Disposition::Accepted,value),
             Err(refusal)=>reply(id,if refusal.uncertain {Disposition::Unknown} else {Disposition::Rejected},json!({"detail":refusal.detail,"error_code":refusal.code})),
         };
         self.action(Action::Finish {id:id.into(),status:status(result.disposition),result:serde_json::to_value(&result).unwrap()}).await?;
         Ok(result)
+    }
+
+    async fn engine_model(&self,driver:&TerminalDriver,payload:&Value)->Result<Value,crate::model_picker::Refusal> {
+        use crate::{model_picker::default_model,model_picker::Refusal};
+        let failure=|code,detail:&str,typed| Refusal {code:Some(code),detail:detail.into(),uncertain:typed,typed};
+        let config=self.target.metadata.config_dir.clone();
+        let snapshot_config=config.clone();
+        let before=tokio::task::spawn_blocking(move||default_model::snapshot(&snapshot_config)).await
+            .map_err(|_|failure("engine_default_read_failed","não consegui ler o modelo padrão da conta",false))?
+            .map_err(|_|failure("engine_default_read_failed","não consegui ler o modelo padrão da conta",false))?;
+        let result=crate::model_picker::drive_engine(driver,payload["model"].as_str().unwrap_or("")).await;
+        if result.as_ref().map_or_else(|error|error.typed,|_|true) {
+            default_model::restore_after_write(&config,&before).await
+                .map_err(|_|failure("engine_default_restore_failed","não consegui restaurar o modelo padrão da conta; confira settings.json",true))?;
+        }
+        let mut value=result?;
+        if let Some(effort)=payload["effort"].as_str().filter(|effort|!effort.is_empty()) {
+            match crate::model_picker::normalize(None,Some(effort)) {
+                Err(error)=>value["effort_error"]=json!(error),
+                Ok((model,effort))=>if let Err(error)=crate::model_picker::drive(driver,model.as_deref(),effort.as_deref(),false).await {
+                    value["effort_error"]=json!(error.detail);
+                },
+            }
+        }
+        value["model"]=payload["model"].clone();
+        Ok(value)
     }
 
     /// `steer`: o "Orientar" de uma entrada, que passa pelo turno em curso em vez de esperar o Claude parar.
@@ -1027,7 +1058,7 @@ impl Executor {
             return Ok(reply(id,Disposition::Accepted,json!({"idle":true,"conversation":self.target.binding.conversation})));
         }
         if matches!(kind,"permission_modes"|"set_permission_mode") {return self.permission(id,kind,payload).await;}
-        if kind=="set_model_effort" {return self.model_effort(id,payload).await;}
+        if matches!(kind,"set_model_effort"|"set_engine_model") {return self.model_change(id,kind,payload).await;}
         validate(kind,&payload)?;
         let requested=json!({"operation_id":id,"kind":kind,"payload":payload});
         let mut original=requested.clone();

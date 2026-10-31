@@ -41,6 +41,7 @@ md-5.workspace = true
 sha1_smol.workspace = true
 # sha256 do workdir_key do Kimi; já vem pelo rustls, sem crate novo.
 ring = "=0.17.14"
+qrcode = { version = "=0.14.1", default-features = false }
 serde = { workspace = true, features = ["alloc"] }
 serde-saphyr = "=1.3.0"
 axum = { workspace = true }
@@ -106,6 +107,7 @@ windows-sys = { workspace = true, features = ["Wdk_System_SystemInformation", "W
 zbus = { version = "=5.19.0", default-features = false, features = ["tokio"] }
 
 [dev-dependencies]
+rqrr = { version = "=0.11.0", default-features = false }
 proptest = "=1.12.0"
 tower = { version = "=0.5.3", default-features = false, features = ["util"] }
 # Relógio pausado: as rodadas do `state::Monitor` contadas sem esperar o tempo real.

@@ -6,9 +6,18 @@
 
 mod common;
 mod remote_browser;
+mod cli_probe;
+mod provider_discovery;
+mod json_body;
+mod json_scrub;
+mod json_large_input;
+mod login_guests;
+mod harness_routes;
 mod groups_text;
 mod session_defaults;
 mod tags;
+mod machine_peers;
+mod update_process;
 mod push_expo;
 mod artifacts;
 mod session_media;
@@ -281,3 +290,110 @@ mod voice_ws;
 mod speech_public;
 mod workspace_routes;
 mod worktree_routes;
+
+mod codex_setup;
+
+mod harness_setup;
+mod dotenv_config;
+mod value_coercion;
+mod codec_values;
+mod http_contract;
+mod http_cors;
+mod http_route_response;
+mod boot_version;
+
+mod engine_aliases;
+mod runtime_boot;
+mod migration_branch;
+
+mod live_config;
+
+mod engines;
+mod engine_cli;
+mod engine_routes;
+mod python_repr;
+mod http_body_input;
+
+mod harness_health;
+mod guest_loops;
+
+mod codex_trust;
+mod command_capture;
+mod codex_ecc;
+
+mod peer_file;
+
+mod codex_normalize;
+mod peer_panel;
+mod codex_plugins;
+mod pairing_print;
+
+
+mod codex_fragments;
+
+
+mod codex_service;
+
+
+mod codex_batch;
+
+
+mod codex_skills;
+
+
+
+mod codex_fingerprints;
+mod codex_stage_sources;
+
+mod codex_plugin_edits;
+
+
+
+mod guest_push;
+
+mod codex_pipeline_round;
+
+mod update_git;
+
+
+mod update_launch;
+mod update_launch_gate;
+
+mod update_state_contract;
+
+mod update_lock_contract;
+
+
+
+mod update_restart;
+
+
+
+mod peer_diagnostic;
+
+
+
+
+
+
+
+
+
+
+
+
+fn physical_tempdir() -> tempfile::TempDir {
+    let parent = std::env::temp_dir().canonicalize().unwrap();
+    #[cfg(windows)]
+    let parent = {
+        let text = parent.to_str().unwrap();
+        if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+            std::path::PathBuf::from(format!(r"\\{rest}"))
+        } else {
+            std::path::PathBuf::from(text.strip_prefix(r"\\?\").unwrap_or(text))
+        }
+    };
+    tempfile::tempdir_in(parent).unwrap()
+}
+
+mod native_setup_cli;

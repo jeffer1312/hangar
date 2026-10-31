@@ -69,7 +69,7 @@ fn mux_down() -> Refusal { no(StatusCode::SERVICE_UNAVAILABLE, "erro_mux_indispo
 struct Ctx { st: Arc<AppState>, runtime: Arc<RuntimeRegistry>, home: PathBuf, claude: PathBuf, mux: MuxProcess }
 
 /// O que já mudou, na ordem: o desfazer percorre ao contrário.
-enum Done { Group, Mux, Sidecar(PathBuf), File(PathBuf, PathBuf), ParkedQueue(String), Guest, Spec, Transfer, Share, Pairs, Shortcuts(Vec<String>), HiddenShell }
+enum Done { Group, Mux, Sidecar(PathBuf), File(PathBuf, PathBuf), LoopFile(PathBuf, PathBuf), LoopBackup(PathBuf, PathBuf), ParkedQueue(String), Guest, Spec, Transfer, Share, Pairs, Shortcuts(Vec<String>), HiddenShell }
 
 #[derive(PartialEq)]
 enum Kind { ClaudeHeadless, CodexHeadless, Terminal }
@@ -116,6 +116,11 @@ impl Ctx {
         self.transfer_free(old).await?;
         self.transfer_free(&new).await?;
         self.check_free(&new).await?;
+        let mut loop_names: Vec<_> = names.iter().map(|name| crate::loops::store::file_stem(name)).collect();
+        loop_names.sort();
+        loop_names.dedup();
+        let mut loop_guards = Vec::new();
+        for name in &loop_names { loop_guards.push(crate::loops::store::lock(name).await); }
         let mut done = Vec::new();
         let mut detached = None;
         match self.apply(kind, old, &new, &mut done, &mut detached).await {
@@ -196,6 +201,7 @@ impl Ctx {
         }
         self.move_file(files::then_file(&self.claude, old), files::then_file(&self.claude, new), done).await.map_err(|c| ("then", c))?;
         self.move_file(files::bastao_file(&self.claude, old), files::bastao_file(&self.claude, new), done).await.map_err(|c| ("bastao", c))?;
+        self.move_loop(old, new, done).await.map_err(|c| ("loop", c))?;
         let (claude, o, n) = (self.claude.clone(), old.to_owned(), new.to_owned());
         if blocking(move || files::move_guest(&claude, &o, &n)).await.map_err(|e| ("guest", io_code(&e)))? { done.push(Done::Guest); }
         let (home, o, n) = (self.home.clone(), old.to_owned(), new.to_owned());
@@ -234,6 +240,26 @@ impl Ctx {
     async fn move_file(&self, src: PathBuf, dst: PathBuf, done: &mut Vec<Done>) -> Result<(), String> {
         let (s, d) = (src.clone(), dst.clone());
         if blocking(move || files::move_file(&s, &d)).await.map_err(|e| io_code(&e))? { done.push(Done::File(src, dst)); }
+        Ok(())
+    }
+
+    /// O destino pode conter um loop de outra vida: fica guardado até a transação terminar.
+    async fn move_loop(&self, old: &str, new: &str, done: &mut Vec<Done>) -> Result<(), String> {
+        let dir = crate::loops::store(&self.st).loop_dir();
+        let src = dir.join(format!("{}.json", crate::loops::store::file_stem(old)));
+        let dst = dir.join(format!("{}.json", crate::loops::store::file_stem(new)));
+        if src == dst || (cfg!(windows) && src.to_string_lossy().eq_ignore_ascii_case(&dst.to_string_lossy())) { return Ok(()); }
+        let (s, d) = (src.clone(), dst.clone());
+        blocking(move || { files::regular_or_absent(&s)?; files::regular_or_absent(&d) }).await.map_err(|e| io_code(&e))?;
+        let backup = dir.join(format!(".rename-{}.backup", crate::mods::state::random_hex(16)));
+        let (d, b) = (dst.clone(), backup.clone());
+        if blocking(move || files::move_loop_file(&d, &b)).await.map_err(|e| io_code(&e))? {
+            done.push(Done::LoopBackup(dst.clone(), backup));
+        }
+        let (s, d) = (src.clone(), dst.clone());
+        if blocking(move || files::move_loop_file(&s, &d)).await.map_err(|e| io_code(&e))? {
+            done.push(Done::LoopFile(src, dst));
+        }
         Ok(())
     }
 
@@ -323,6 +349,14 @@ impl Ctx {
                 self.st.diag.report("rust.rename_suggestion", new, "rename_mark_kept", "marca de nome generico ficou no rename");
             }
         }
+        for item in done {
+            if let Done::LoopBackup(_, backup) = item {
+                let backup = backup.clone();
+                if blocking(move || std::fs::remove_file(backup)).await.is_err() {
+                    self.st.diag.report("loop.rename_cleanup", new, "loop_rename_backup_kept", "cópia do loop órfão preservada após a troca");
+                }
+            }
+        }
         self.st.list.rename(old, new);
         self.st.list.invalidate();
     }
@@ -340,6 +374,7 @@ impl Ctx {
                     ("sidecar", matches!(blocking(move || files::move_sidecar(&dir, &n, &o)).await, Ok(true)))
                 },
                 Done::File(src, dst) => ("file", matches!(blocking(move || files::move_file(&dst, &src)).await, Ok(true))),
+                Done::LoopFile(src, dst) | Done::LoopBackup(src, dst) => ("loop", matches!(blocking(move || files::move_loop_file(&dst, &src)).await, Ok(true))),
                 Done::ParkedQueue(key) => ("queue", matches!(self.runtime.rename_parked_queue(&key, old).await, Ok(true))),
                 Done::Guest => {
                     let (c, o, n) = (self.claude.clone(), old.to_owned(), new.to_owned());

@@ -62,8 +62,8 @@ def _child(home: Path, code: str) -> subprocess.CompletedProcess:
                           text=True, timeout=120)
 
 
-_WIRING = ("from app import peers, peers_api, projects, update_channel, vapid_setup\n"
-           "for p in (peers._PEERS_FILE, projects._CONFIG, peers_api._ENV_ARQUIVO, update_channel.ENV_FILE, vapid_setup.ENV):\n"
+_WIRING = ("from app import projects, vapid_setup\n"
+           "for p in (projects._CONFIG, vapid_setup.ENV):\n"
            "    print(p)\n")
 
 
@@ -75,14 +75,14 @@ def test_readers_and_writers_use_the_new_place(tmp_path):
     out = _child(tmp_path, _WIRING)
     assert out.returncode == 0, out.stderr
     assert [Path(line) for line in out.stdout.splitlines()] == [
-        config / "peers.json", config / "projects.json", config / ".env", config / ".env", config / ".env"]
+        config / "projects.json", config / ".env"]
 
 
 def test_unmigrated_machine_keeps_the_backend_files(tmp_path):
     out = _child(tmp_path, _WIRING)
     assert out.returncode == 0, out.stderr
     assert [Path(line) for line in out.stdout.splitlines()] == [
-        BACKEND / "peers.json", BACKEND / "projects.json", BACKEND / ".env", BACKEND / ".env", BACKEND / ".env"]
+        BACKEND / "projects.json", BACKEND / ".env"]
     assert not (tmp_path / ".hangar").exists()
 
 

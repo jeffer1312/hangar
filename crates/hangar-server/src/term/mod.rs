@@ -187,7 +187,7 @@ pub async fn private_ws(State(st): State<Arc<AppState>>, ConnectInfo(peer): Conn
         st.diag.report("rust.term_failed", &target, "panel_cap", "teto de painéis de terminal atingido");
         return close_after_accept(ws, 1013, "limite de paineis");
     };
-    ws.on_upgrade(move |socket| run(st, socket, target, cols, rows, slot, None))
+    ws.on_upgrade(move |socket| run(st, socket, target, cols, rows, slot, None, None))
 }
 
 /// `cols`/`rows` da query com o clamp; ausente vale 80x24, inválido é `None`.
@@ -220,10 +220,9 @@ async fn serve(st: Arc<AppState>, peer: SocketAddr, req: Request, want: Want) ->
         Want::Session { .. } => session.is_some_and(|s| g.sessions.get(s) == Some(&Kind::Share)),
         Want::Hangar(_) => false,
     });
-    // Só `?token=`, como o termsock: Bearer e cookie não abrem shell. Por isso não há Origin a
-    // conferir: ela barra credencial ambiente, e página estranha não tem o token.
+    // O token explícito do dono dispensa Origin; o login próprio mantém essa guarda.
     let token = auth::query_param(req.uri().query(), "token").filter(|t| !t.is_empty());
-    let owner = if guest.is_none() && token.is_some() {
+    let owner = if token.is_some() {
         match st.auth.owner(&fwd.client_ip, token.as_deref().map(str::as_bytes)).await {
             Ok(owner) => owner, Err(e) => return crate::auth::unavailable(e),
         }
@@ -231,6 +230,13 @@ async fn serve(st: Arc<AppState>, peer: SocketAddr, req: Request, want: Want) ->
     if !(owner || guest == Some(true)) || req.method() != Method::GET || (guest.is_some() && matches!(want, Want::Hangar(_))) {
         return pass(&st, req, &fwd).await;
     }
+    if req.extensions().get::<crate::login_guests::gate::Login>().is_some()
+        && !owner
+        && !crate::login_guests::gate::terminal_origin_allowed(&st, req.headers()).await
+    {
+        return refuse("origem não autorizada");
+    }
+    let login_watcher = req.extensions().get::<crate::login_guests::gate::Watcher>().cloned();
     let watcher = req.extensions().get::<Watcher>().cloned();
     let (mut parts, body) = req.into_parts();
     let ws = match WebSocketUpgrade::from_request_parts(&mut parts, &()).await {
@@ -261,7 +267,7 @@ async fn serve(st: Arc<AppState>, peer: SocketAddr, req: Request, want: Want) ->
         st.diag.report("rust.term_failed", &label, "panel_cap", "teto de painéis de terminal atingido");
         return close_after_accept(ws, 1013, "limite de paineis");
     };
-    ws.on_upgrade(move |socket| run(st, socket, target, cols, rows, slot, watcher))
+    ws.on_upgrade(move |socket| run(st, socket, target, cols, rows, slot, watcher, login_watcher))
 }
 
 fn mux_down(st: &AppState, ws: WebSocketUpgrade, label: &str) -> Response {
@@ -272,7 +278,7 @@ fn mux_down(st: &AppState, ws: WebSocketUpgrade, label: &str) -> Response {
 enum End { Client, Output, TakenOver, PingTimeout, InputGone, Revoked }
 
 /// `watcher`: o do convidado; o acesso que acaba fecha com 4410, desmontando o painel como sempre.
-async fn run(st: Arc<AppState>, socket: WebSocket, target: String, cols: u16, rows: u16, slot: Arc<Slot>, watcher: Option<Watcher>) {
+async fn run(st: Arc<AppState>, socket: WebSocket, target: String, cols: u16, rows: u16, slot: Arc<Slot>, watcher: Option<Watcher>, login_watcher: Option<crate::login_guests::gate::Watcher>) {
     let terms = &st.term;
     let cfg = &terms.cfg;
     let claim = terms.claim(&target, &st.diag).await;
@@ -342,7 +348,12 @@ async fn run(st: Arc<AppState>, socket: WebSocket, target: String, cols: u16, ro
     let mut ping = tokio::time::interval_at(start + cfg.ping_every, cfg.ping_every);
     let mut pong_due: Option<tokio::time::Instant> = None;
     let mut warned = false;
-    let revoked = Watcher::ended(watcher.as_ref());
+    let revoked = async {
+        tokio::select! {
+            _ = Watcher::ended(watcher.as_ref()) => {},
+            _ = crate::login_guests::gate::Watcher::ended(login_watcher.as_ref()) => {},
+        }
+    };
     tokio::pin!(revoked);
     let end = loop {
         tokio::select! {

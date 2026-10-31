@@ -72,7 +72,7 @@ pub struct Service {
     sync: Synchronizer,
     enabled: bool,
     interval: f64,
-    permitted: Arc<dyn Fn() -> bool + Send + Sync>,
+    permitted: Arc<dyn Fn() -> Result<bool, &'static str> + Send + Sync>,
     stopping: Arc<AtomicBool>,
     wake: Notify,
     status: Mutex<Value>,
@@ -90,10 +90,22 @@ impl Service {
         let duration = interval(&env);
         let sync = Synchronizer::new(home.clone(), claude, env, Arc::new(NativeRunner));
         let weak = Arc::downgrade(&st);
-        let allowed: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(move || {
-            weak.upgrade()
-                .is_some_and(|st| crate::loops::automations(&st))
-        });
+        let allowed: Arc<dyn Fn() -> Result<bool, &'static str> + Send + Sync> =
+            Arc::new(move || {
+                let Some(st) = weak.upgrade() else {
+                    return Ok(false);
+                };
+                let result = crate::loops::automations(&st);
+                if let Err(code) = result {
+                    st.diag.report(
+                        "omp.sync_config_failed",
+                        "omp",
+                        code,
+                        "configuração inválida interrompeu a sincronização automática",
+                    );
+                }
+                result
+            });
         let service = Self::new(
             sync,
             enabled,
@@ -132,7 +144,7 @@ impl Service {
         sync: Synchronizer,
         enabled: bool,
         interval: f64,
-        permitted: Arc<dyn Fn() -> bool + Send + Sync>,
+        permitted: Arc<dyn Fn() -> Result<bool, &'static str> + Send + Sync>,
     ) -> Result<Arc<Self>, String> {
         if !interval.is_finite() || interval <= 0.0 {
             return Err(err("O intervalo deve ser positivo e finito"));
@@ -191,69 +203,101 @@ impl Service {
     }
     async fn run(&self) {
         while !self.stopping.load(Ordering::SeqCst) {
-            if !(self.permitted)() {
-                self.status.lock().unwrap()["state"] = json!("paused")
-            } else {
-                {
-                    let mut s = self.status.lock().unwrap();
-                    s["state"] = json!("running");
-                    s["started_at"] = json!(crate::nav_requests::now());
-                }
-                let interrupted = AtomicBool::new(false);
-                let stop = || {
-                    if self.stopping.load(Ordering::SeqCst) || !(self.permitted)() {
-                        interrupted.store(true, Ordering::SeqCst)
-                    }
-                    interrupted.load(Ordering::SeqCst)
-                };
-                let mut reports = Map::new();
-                if !stop() {
-                    reports.insert(
-                        "marketplaces".into(),
-                        self.sync.import_marketplaces(false, &stop).await,
+            match (self.permitted)() {
+                Err(code) => {
+                    tracing::warn!(
+                        code,
+                        "configuração inválida; ciclo automático OMP não executado"
                     );
+                    let mut status = self.status.lock().unwrap();
+                    status["state"] = json!("error");
+                    status["last_report"] = json!({"errors":[code]});
                 }
-                if !stop() {
-                    reports.insert("plugins".into(), self.sync.reconcile(false, &stop).await);
-                }
-                let state = if self.stopping.load(Ordering::SeqCst) {
-                    "stopped"
-                } else if interrupted.load(Ordering::SeqCst) || !(self.permitted)() {
-                    "paused"
-                } else if reports.values().any(|r| {
-                    r["errors"].as_array().is_some_and(|a| !a.is_empty())
-                        || r["complete_inventory"] != true
-                }) {
-                    "error"
-                } else {
-                    let actions = reports
-                        .values()
-                        .filter_map(|r| r["items"].as_array())
-                        .flatten()
-                        .filter_map(|i| i["action"].as_str())
-                        .collect::<BTreeSet<_>>();
-                    if actions.contains("suspended") || actions.contains("conflict") {
-                        "suspended"
-                    } else if [
-                        "install",
-                        "uninstall",
-                        "enable",
-                        "disable",
-                        "adopt",
-                        "import",
-                    ]
-                    .iter()
-                    .any(|a| actions.contains(a))
+                Ok(false) => self.status.lock().unwrap()["state"] = json!("paused"),
+                Ok(true) => {
                     {
-                        "updated"
-                    } else {
-                        "unchanged"
+                        let mut s = self.status.lock().unwrap();
+                        s["state"] = json!("running");
+                        s["started_at"] = json!(crate::nav_requests::now());
                     }
-                };
-                let mut s = self.status.lock().unwrap();
-                s["state"] = json!(state);
-                s["completed_at"] = json!(crate::nav_requests::now());
-                s["last_report"] = json!(reports);
+                    let interrupted = AtomicBool::new(false);
+                    let config_error = Mutex::new(None);
+                    let stop = || {
+                        if self.stopping.load(Ordering::SeqCst) {
+                            interrupted.store(true, Ordering::SeqCst);
+                        } else {
+                            match (self.permitted)() {
+                                Ok(true) => {}
+                                Ok(false) => interrupted.store(true, Ordering::SeqCst),
+                                Err(code) => {
+                                    *config_error.lock().unwrap() = Some(code);
+                                    interrupted.store(true, Ordering::SeqCst);
+                                }
+                            }
+                        }
+                        interrupted.load(Ordering::SeqCst)
+                    };
+                    let mut reports = Map::new();
+                    if !stop() {
+                        reports.insert(
+                            "marketplaces".into(),
+                            self.sync.import_marketplaces(false, &stop).await,
+                        );
+                    }
+                    if !stop() {
+                        reports.insert("plugins".into(), self.sync.reconcile(false, &stop).await);
+                    }
+                    if !self.stopping.load(Ordering::SeqCst) && !interrupted.load(Ordering::SeqCst)
+                    {
+                        stop();
+                    }
+                    let error = *config_error.lock().unwrap();
+                    let state = if let Some(code) = error {
+                        tracing::warn!(
+                            code,
+                            "configuração inválida interrompeu a sincronização OMP; relatórios preservados"
+                        );
+                        reports.insert("configuration".into(), json!({"errors":[code]}));
+                        "error"
+                    } else if self.stopping.load(Ordering::SeqCst) {
+                        "stopped"
+                    } else if interrupted.load(Ordering::SeqCst) {
+                        "paused"
+                    } else if reports.values().any(|r| {
+                        r["errors"].as_array().is_some_and(|a| !a.is_empty())
+                            || r["complete_inventory"] != true
+                    }) {
+                        "error"
+                    } else {
+                        let actions = reports
+                            .values()
+                            .filter_map(|r| r["items"].as_array())
+                            .flatten()
+                            .filter_map(|i| i["action"].as_str())
+                            .collect::<BTreeSet<_>>();
+                        if actions.contains("suspended") || actions.contains("conflict") {
+                            "suspended"
+                        } else if [
+                            "install",
+                            "uninstall",
+                            "enable",
+                            "disable",
+                            "adopt",
+                            "import",
+                        ]
+                        .iter()
+                        .any(|a| actions.contains(a))
+                        {
+                            "updated"
+                        } else {
+                            "unchanged"
+                        }
+                    };
+                    let mut s = self.status.lock().unwrap();
+                    s["state"] = json!(state);
+                    s["completed_at"] = json!(crate::nav_requests::now());
+                    s["last_report"] = json!(reports);
+                }
             }
             if !self.stopping.load(Ordering::SeqCst) {
                 let mut remaining = self.interval;

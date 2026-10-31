@@ -458,7 +458,7 @@ async fn op099_public_status_requires_owner_token_and_returns_the_published_snap
         BTreeMap::new(),
         Arc::new(ForbiddenRunner),
     );
-    let service = Service::new(sync, false, 300., Arc::new(|| true)).unwrap();
+    let service = Service::new(sync, false, 300., Arc::new(|| Ok(true))).unwrap();
     let expected = service.status();
     assert!(st.omp_sync.set(service).is_ok());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

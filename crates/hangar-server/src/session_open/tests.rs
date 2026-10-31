@@ -1382,29 +1382,6 @@ fn pi_omp_and_kimi_resume_with_their_own_verb() {
     assert_eq!(command(&kimi, agents::Conversation::Resume(ID)).unwrap_err().msg, "session_id invalido");
 }
 
-/// A ponte de skills roda o `skill_bridge.py` do backend com o Python da venv dele, nas duas
-/// plataformas (o `hangar-skills-sync` é sh, e o `python` solto do Windows pode ser o atalho da Store).
-#[test]
-fn the_skill_bridge_runs_with_the_backend_python() {
-    let root = tempfile::tempdir().unwrap();
-    let b = &root.path().join("backend");
-    assert_eq!(agents::skill_bridge_argv(b, false), None, "sem venv não roda");
-    for (windows, python) in [(false, ".venv/bin/python"), (true, ".venv/Scripts/python.exe")] {
-        std::fs::create_dir_all(b.join(python).parent().unwrap()).unwrap();
-        std::fs::write(b.join(python), "").unwrap();
-        std::fs::create_dir_all(b.join("app")).unwrap();
-        std::fs::write(b.join("app/skill_bridge.py"), "").unwrap();
-        let python = python.split('/').fold(b.to_path_buf(), |path, part| path.join(part));
-        assert_eq!(agents::skill_bridge_argv(b, windows), Some(vec![python.to_string_lossy().into_owned(),
-            b.join("app").join("skill_bridge.py").to_string_lossy().into_owned(), "--quiet".into()]), "windows={windows}");
-    }
-    // Pacote: o Python embutido na raiz vence o venv.
-    let embedded = root.path().join("python").join("bin").join("python3");
-    std::fs::create_dir_all(embedded.parent().unwrap()).unwrap();
-    std::fs::write(&embedded, "").unwrap();
-    assert_eq!(agents::skill_bridge_argv(b, false).unwrap()[0], embedded.to_string_lossy());
-}
-
 /// `kimi_sessions.pretrust_cwd` (test_kimi_sessions::test_pretrust_writes_workspace_trust_once): grava
 /// `{root, trustedAt}` na chave do CLI uma vez; já confiada não reescreve.
 #[test]
@@ -1879,20 +1856,23 @@ fn the_guest_claim_writes_guests_json_under_the_shared_lock() {
     assert_eq!(written["sessions"]["s4"], json!({"guest": "g1", "life": null}));
 }
 
-/// A ponte só aceita o id de um convidado que existe, ou nada (o dono); qualquer outra forma,
-/// inclusive o `guest_root` antigo, é recusada em vez de virar o dono.
-#[test]
-fn the_bridge_refuses_a_guest_field_that_is_not_an_id() {
-    let base = tempfile::tempdir().unwrap();
-    std::fs::write(base.path().join("guests.json"), json!({"guests": [{"id": "g1", "name": "Ana", "token_hash": "h", "root": "/casa/ana",
-        "sees_owner": false, "owner_sees": true}], "sessions": {}}).to_string()).unwrap();
-    let guest = |envelope: Value| server::bridge_guest(&envelope, base.path());
-    assert_eq!(guest(json!({"request": {}})).ok(), Some(None));
-    assert_eq!(guest(json!({"guest": null})).ok(), Some(None));
-    assert_eq!(guest(json!({"guest": "g1"})).ok().flatten().map(|g| g.root), Some(PathBuf::from("/casa/ana")));
-    assert_eq!(guest(json!({"guest": "nada"})).err().map(|e| e.status), Some(403));
-    for bad in [json!({"guest": 1}), json!({"guest": {"id": "g1"}}), json!({"guest": ""}), json!({"guest_root": "/casa/ana"})] {
-        assert_eq!(guest(bad.clone()).err().map(|e| e.status), Some(400), "{bad}");
+/// O transporte do dono não converte a identidade de uma ponte de login retirada.
+#[tokio::test]
+async fn the_owner_bridge_refuses_every_guest_identity_without_launching() {
+    use axum::{extract::{State,ConnectInfo},body::{Body,to_bytes},http::Request};
+    let address="127.0.0.1:0".parse().unwrap();
+    let state=std::sync::Arc::new(crate::routes::AppState::new(crate::config::Config {
+        listen:address,upstream:address,internal_secret:"fixture".into(),auth_token:"owner".into(),log_path:None,
+        trusted:crate::auth::TrustedHosts::parse("127.0.0.1"),
+    }));
+    for envelope in [json!({"guest":"g1"}),json!({"guest":""}),json!({"guest":1}),json!({"guest":false}),json!({"guest":{"id":"g1"}}),json!({"guest_root":"/fixture"})] {
+        let request=Request::post("/__hangar_server/claude/s/open").header("x-hangar-internal","fixture").body(Body::from(envelope.to_string())).unwrap();
+        let response=server::bridge(State(state.clone()),ConnectInfo(address),request).await;
+        assert_eq!(response.status(),400,"{envelope}");
+        let bytes=to_bytes(response.into_body(),4096).await.unwrap();
+        let body:Value=serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["detail"]["code"],"erro_corpo_invalido");
+        assert_eq!(body["detail"]["msg"],"a ponte de abertura não aceita identidade de convidado");
     }
 }
 
@@ -2310,16 +2290,24 @@ fn the_initial_prompt_of_pi_omp_and_kimi_waits_in_the_durable_queue() {
     assert!(!root.join("home/.claude/.hangar-queue/p1.jsonl").exists(), "pane que não nasceu deixou a fila");
 }
 
-/// A ponte de skills roda antes de abrir Pi e Kimi, como no Python; o omp não a usa.
+/// A abertura refaz os links antes de Pi/Kimi sem precisar de Python instalado.
 #[cfg(target_os = "linux")]
 #[test]
-fn the_skill_bridge_runs_for_pi_and_kimi_only() {
+fn skills_are_ready_without_python_for_pi_and_kimi_only() {
     for (name, runs) in [("create_pi_terminal", true), ("create_kimi_terminal", true), ("create_omp_terminal", false)] {
-        let (raw, _dir, _root) = run_contract(name, |_| {});
+        let (raw, _dir, root) = run_contract_with(name, |_| {}, |root| {
+            for path in ["home/.claude/skills/fixture", "home/.pi/agent", "home/.kimi-code"] {
+                std::fs::create_dir_all(root.join(path)).unwrap();
+            }
+            std::fs::write(root.join("home/.claude/skills/fixture/SKILL.md"), "fixture").unwrap();
+            std::fs::remove_dir_all(root.join(".harness/backend/.venv")).unwrap();
+        });
         assert_eq!(raw["steps"][0]["status"], 200, "{name}: {}", raw["steps"][0]["body"]);
-        let bridged = raw["subprocesses"].as_array().unwrap().iter()
-            .any(|p| p["argv"].as_array().is_some_and(|a| a.iter().any(|x| x.as_str().is_some_and(|x| x.ends_with("skill_bridge.py")))));
-        assert_eq!(bridged, runs, "{name}");
+        assert_eq!(root.join("home/.pi/agent/skills-bridge/fixture/SKILL.md").is_file(), runs, "{name}");
+        assert_eq!(root.join("home/.kimi-code/skills-bridge/fixture/SKILL.md").is_file(), runs, "{name}");
+        assert!(!raw["subprocesses"].as_array().unwrap().iter().any(|p|
+            p["argv"].as_array().is_some_and(|a| a.iter().any(|x|
+                x.as_str().is_some_and(|x| x.ends_with("skill_bridge.py"))))));
     }
 }
 
@@ -2696,36 +2684,6 @@ fn local_facts(home: &std::path::Path, runtime: &tokio::runtime::Runtime) -> fac
     facts::LocalFacts::new(crate::accounts::environment::AccountEnvironment::from_map(env.into_iter().collect()), runtime.handle().clone())
         .with_terminal(crate::list::mux::Mux::with_program(home.join("bin/tmux"), std::time::Duration::from_secs(2)),
             std::sync::Arc::new(crate::list::procs::SystemProcs::default()))
-}
-
-/// Instalado é o que o shell de login acha (quem roda o CLI é o pane, pelo `$SHELL`), com
-/// permissão de execução; o resultado vale 60 s.
-#[cfg(unix)]
-#[test]
-fn installed_clis_come_from_the_login_shell_path() {
-    use std::os::unix::fs::PermissionsExt;
-    let home = tempfile::tempdir().unwrap();
-    let (bin, login) = (home.path().join("bin"), home.path().join("login-bin"));
-    for dir in [&bin, &login] { std::fs::create_dir_all(dir).unwrap(); }
-    let exec = |path: std::path::PathBuf, mode: u32| {
-        std::fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
-    };
-    exec(login.join("pi"), 0o755);
-    exec(login.join("codex"), 0o644);
-    exec(bin.join("kimi"), 0o755);
-    let shell = home.path().join("login-shell");
-    crate::write_test_executable(&shell, format!("#!/bin/sh\necho x >> {}\necho {}\n", home.path().join("calls").display(), login.display()));
-    let env: std::collections::BTreeMap<String, String> = [("HOME", home.path()), ("PATH", &bin), ("SHELL", &shell)]
-        .map(|(k, v)| (k.to_owned(), v.to_string_lossy().into_owned())).into_iter().collect();
-    assert_eq!(facts::installed_providers(&env), vec![AgentProvider::Pi], "PATH do login, e o `codex` sem permissão não conta");
-    assert_eq!(facts::installed_providers(&env), vec![AgentProvider::Pi]);
-    assert_eq!(std::fs::read_to_string(home.path().join("calls")).unwrap().lines().count(), 1, "a segunda leitura sai do cache");
-    let broken = home.path().join("broken-shell");
-    exec(broken.clone(), 0o755);
-    std::fs::write(&broken, "#!/bin/sh\nexit 1\n").unwrap();
-    let env: std::collections::BTreeMap<String, String> = env.into_iter().map(|(k, v)| if k == "SHELL" { (k, broken.to_string_lossy().into_owned()) } else { (k, v) }).collect();
-    assert_eq!(facts::installed_providers(&env), vec![AgentProvider::Kimi], "shell de login quebrado cai no PATH do processo");
 }
 
 fn test_runtime() -> tokio::runtime::Runtime {

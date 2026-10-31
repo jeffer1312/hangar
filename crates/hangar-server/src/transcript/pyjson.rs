@@ -23,44 +23,19 @@ pub fn dumps_unicode(v: &Value, sort_keys: bool) -> String {
     out
 }
 
+/// Separadores e Unicode da resposta HTTP, sem copiar a árvore recebida.
+pub fn dumps_compact_unicode(v: &Value) -> String {
+    let mut out = String::new();
+    super::json_writer::write(&mut out, v, false, None, None, true, true);
+    out
+}
+
 /// `json.dumps(v, indent=indent, ensure_ascii=ascii)`: um item por linha, separadores "," e ": ", `{}` e
 /// `[]` vazios compactos.
 pub fn dumps_indent(v: &Value, indent: usize, ascii: bool) -> String {
     let mut out = String::new();
-    write_indented(&mut out, v, indent, 0, ascii);
+    super::json_writer::write(&mut out, v, ascii, Some(indent), None, false, true);
     out
-}
-
-fn write_indented(out: &mut String, v: &Value, indent: usize, level: usize, ascii: bool) {
-    let open = |out: &mut String, first: bool| {
-        out.push_str(if first { "\n" } else { ",\n" });
-        out.push_str(&" ".repeat(indent * (level + 1)));
-    };
-    match v {
-        Value::Array(items) if !items.is_empty() => {
-            out.push('[');
-            for (i, x) in items.iter().enumerate() {
-                open(out, i == 0);
-                write_indented(out, x, indent, level + 1, ascii);
-            }
-            out.push('\n');
-            out.push_str(&" ".repeat(indent * level));
-            out.push(']');
-        }
-        Value::Object(m) if !m.is_empty() => {
-            out.push('{');
-            for (i, (k, x)) in m.iter().enumerate() {
-                open(out, i == 0);
-                write_str(out, k, ascii);
-                out.push_str(": ");
-                write_indented(out, x, indent, level + 1, ascii);
-            }
-            out.push('\n');
-            out.push_str(&" ".repeat(indent * level));
-            out.push('}');
-        }
-        other => write_value(out, other, false, ascii),
-    }
 }
 
 /// `json.loads` que aceita surrogate solto como o Python. O valor guarda o surrogate como marcador;
@@ -71,41 +46,8 @@ pub fn loads_lossless(s: &str) -> Option<Value> {
 }
 
 pub(crate) fn decode_raw(raw: &str) -> Option<Value> {
-        use serde::Deserialize;
-        fn typed<'de, T: Deserialize<'de>>(raw: &'de str) -> Option<T> {
-            let mut decoder = serde_json::Deserializer::from_str(raw);
-            decoder.disable_recursion_limit();
-            let value = T::deserialize(&mut decoder).ok()?;
-            decoder.end().ok()?;
-            Some(value)
-        }
-        let raw = raw.trim_matches([' ', '\t', '\r', '\n']);
-        match raw.as_bytes().first()? {
-            b'{' => {
-                let entries: indexmap::IndexMap<String, Box<serde_json::value::RawValue>> = typed(raw)?;
-                let mut map = serde_json::Map::new();
-                for (key,value) in entries { map.insert(key,decode_raw(value.get())?); }
-                Some(Value::Object(map))
-            }
-            b'[' => {
-                let entries: Vec<Box<serde_json::value::RawValue>> = typed(raw)?;
-                Some(Value::Array(entries.into_iter().map(|v|decode_raw(v.get())).collect::<Option<_>>()?))
-            }
-            b'"' => typed(raw).map(Value::String),
-            b't' | b'f' => typed(raw).map(Value::Bool),
-            b'n' if raw == "null" => Some(Value::Null),
-            _ => {
-                if raw == "-0" || raw.contains(['.','e','E']) {
-                    let number: f64 = typed(raw)?;
-                    Number::from_f64(number).map(Value::Number)
-                } else {
-                    let _: Number = typed(raw)?;
-                    let canonical = raw.parse::<num_bigint::BigInt>().ok()?.to_string();
-                    canonical.parse::<Number>().ok().map(Value::Number)
-                }
-            },
-        }
-    }
+    super::json_tree::decode(raw)
+}
 
 /// Troca cada `\uD8xx`..`\uDFxx` sem par, dentro de string JSON, pelo marcador cru.
 fn mark_lone_surrogates(s: &str) -> String {
@@ -154,42 +96,33 @@ fn hex4(b: &[u8], at: usize) -> Option<u32> {
 }
 
 fn write_value(out: &mut String, v: &Value, sort_keys: bool, ascii: bool) {
-    match v {
-        Value::Null => out.push_str("null"),
-        Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
-        Value::Number(n) => out.push_str(&number_repr(n)),
-        Value::String(s) => write_str(out, s, ascii),
-        Value::Array(items) => {
-            out.push('[');
-            for (i, x) in items.iter().enumerate() {
-                if i > 0 {
-                    out.push_str(", ");
-                }
-                write_value(out, x, sort_keys, ascii);
-            }
-            out.push(']');
-        }
-        Value::Object(m) => {
-            let mut pairs: Vec<_> = m.iter().collect();
-            if sort_keys {
-                // Ordem de ponto de código do Python, com o surrogate marcado no lugar dele.
-                pairs.sort_by(|a, b| a.0.chars().map(py::py_code).cmp(b.0.chars().map(py::py_code)));
-            }
-            out.push('{');
-            for (i, (k, x)) in pairs.into_iter().enumerate() {
-                if i > 0 {
-                    out.push_str(", ");
-                }
-                write_str(out, k, ascii);
-                out.push_str(": ");
-                write_value(out, x, sort_keys, ascii);
-            }
-            out.push('}');
-        }
-    }
+    let compare = |left: &str, right: &str| {
+        left.chars().map(py::py_code).cmp(right.chars().map(py::py_code))
+    };
+    super::json_writer::write(out, v, ascii, None, if sort_keys { Some(&compare) } else { None }, false, true);
 }
 
-fn write_str(out: &mut String, s: &str, ascii: bool) {
+/// O codec do cofre usa marcadores próprios e fornece a ordem dos pontos de código.
+pub(crate) fn dumps_ordered(v: &Value, compare: &dyn Fn(&str, &str) -> std::cmp::Ordering) -> String {
+    let mut out = String::new();
+    super::json_writer::write(&mut out, v, true, None, Some(compare), false, false);
+    out
+}
+
+/// O livro de configuração usa UTF-8 literal e ordenação por pontos de código válidos.
+pub(crate) fn dumps_compact_sorted_unicode(value:&Value,sort_keys:bool)->String {
+    let mut out=String::new();let compare=|left:&str,right:&str|left.cmp(right);
+    super::json_writer::write(&mut out,value,false,None,if sort_keys{Some(&compare)}else{None},true,false);out
+}
+
+/// O codec com marcadores próprios precisa conservar os caracteres Unicode legítimos.
+pub(crate) fn dumps_literal(v: &Value) -> String {
+    let mut out = String::new();
+    super::json_writer::write(&mut out, v, true, None, None, false, false);
+    out
+}
+
+pub(super) fn write_str(out: &mut String, s: &str, ascii: bool, legacy_surrogates: bool) {
     out.push('"');
     for c in s.chars() {
         match c {
@@ -204,7 +137,7 @@ fn write_str(out: &mut String, s: &str, ascii: bool) {
                 let _ = write!(out, "\\u{:04x}", c as u32);
             }
             // O Python escreve o surrogate solto como \udXXX; com ensure_ascii=False ele sai cru.
-            c if ascii && py::is_marker(c) => {
+            c if ascii && legacy_surrogates && py::is_marker(c) => {
                 let _ = write!(out, "\\u{:04x}", py::surrogate_of(c));
             }
             c if ascii && c as u32 > 0x7e => {

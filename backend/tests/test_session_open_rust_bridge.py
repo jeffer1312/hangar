@@ -59,7 +59,7 @@ def test_only_what_entered_python_directly_goes_to_the_rust_open(monkeypatch):
     info = asyncio.run(api_mod._open_in_rust(_body(provider="claude", headless=False), connect))
     assert (info.name, info.provider, info.owner) == ("s1", "claude", None)
     # Ausente continua ausente: o Rust decide o provedor padrão.
-    assert sent[0] == ("_", "open", "POST", {"request": {"name": "s1", "cwd": "/p", "provider": "claude", "headless": False}, "guest": None})
+    assert sent[0] == ("_", "open", "POST", {"request": {"name": "s1", "cwd": "/p", "provider": "claude", "headless": False}})
     assert asyncio.run(api_mod._open_in_rust(_body(provider="codex"), connect)) is None
     upstream = SimpleNamespace(scope={"server": ("127.0.0.1", 49152)})
     assert asyncio.run(api_mod._open_in_rust(_body(provider="claude"), upstream)) is None
@@ -73,21 +73,6 @@ def test_only_what_entered_python_directly_goes_to_the_rust_open(monkeypatch):
     assert (refused.value.status_code, refused.value.detail["code"]) == (409, "erro_nome_em_uso")
 
 
-def test_the_connect_guest_goes_to_the_rust_by_id_and_is_not_claimed_here(monkeypatch):
-    """O Rust grava o dono no `guests.json`: daqui só vai o id do convidado autenticado."""
-    from app import guest_users, runtime_coordinator
-    from app.connect_port import CONNECT_PORT
-    sent = []
-    monkeypatch.setattr(runtime_coordinator, "rust_claude", lambda *args: (
-        sent.append(json.loads(args[3])), (200, json.dumps({"info": {**INFO, "owner": "ana"}}).encode()))[1])
-    monkeypatch.setattr(guest_users, "claim", lambda *a: pytest.fail("o dono é gravado pelo Rust"))
-    marker = guest_users.current.set(SimpleNamespace(id="g1", name="ana", root="/casa/ana"))
-    try:
-        info = asyncio.run(api_mod._open_in_rust(_body(provider="claude"), SimpleNamespace(scope={"server": ("127.0.0.1", CONNECT_PORT)})))
-    finally:
-        guest_users.current.reset(marker)
-    assert sent[0]["guest"] == "g1" and "guest_root" not in sent[0]
-    assert info.owner == "ana"
 
 
 def test_the_connect_request_reaches_the_rust_as_sent_inherit_included(monkeypatch):
@@ -104,4 +89,4 @@ def test_the_connect_request_reaches_the_rust_as_sent_inherit_included(monkeypat
         "/api/sessions", json=request, headers={"Authorization": "Bearer secret"})
     assert answer.status_code == 200, answer.text
     assert answer.json()["name"] == "s1"
-    assert sent == [{"request": request, "guest": None}]
+    assert sent == [{"request": request}]

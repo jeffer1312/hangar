@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from app import harness_saude, oauth_codex, omp_dirs
+from app import oauth_codex, omp_dirs
 from app.adapters.pi import sessions
 
 
@@ -20,7 +20,6 @@ def test_sem_perfil_todos_apontam_para_omp_agent(home):
     raiz = home / ".omp" / "agent"
     assert omp_dirs.agent_dir() == raiz
     assert sessions.sessions_root("omp") == raiz / "sessions"
-    assert harness_saude._raiz_agente("omp") == raiz
     assert oauth_codex._omp_db(None) == raiz / "agent.db"
 
 
@@ -30,14 +29,12 @@ def test_com_perfil_leitores_e_escritores_concordam(home, monkeypatch):
     escritor = omp_dirs.agent_dir(home=home, env={"OMP_PROFILE": "trabalho"}, estrito=True)
     assert escritor == raiz
     assert sessions.sessions_root("omp") == raiz / "sessions"
-    assert harness_saude._raiz_agente("omp") == raiz
     assert oauth_codex._omp_db(None) == raiz / "agent.db"
 
 
 def test_pi_coding_agent_dir_continua_valendo_sem_perfil(home, monkeypatch):
     monkeypatch.setenv("PI_CODING_AGENT_DIR", str(home / "custom"))
     assert sessions.sessions_root("omp") == home / "custom" / "sessions"
-    assert harness_saude._raiz_agente("omp") == home / "custom"
 
 
 def test_perfil_invalido_nao_derruba_quem_le(home, monkeypatch, caplog):

@@ -768,13 +768,13 @@ pub(crate) mod tests {
         }
     }
 
-    /// O que o `hangar-engine` exporta (`engines.py`) é da sessão de motor que o pôs; o pane novo
+    /// O que o `hangar-engine` exporta é da sessão de motor que o pôs; o pane novo
     /// não herda de um servidor tmux subido de dentro dela.
     #[test]
     fn the_pane_does_not_inherit_what_an_engine_exports() {
-        let source = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../backend/app/engines.py")).unwrap();
+        let source = include_str!("../engines/environment.rs");
         let exported: std::collections::BTreeSet<&str> = regex::Regex::new(r#""((?:ANTHROPIC|CLAUDE_CODE|CP_ENGINE|ENABLE|DISABLE)_[A-Z0-9_]+|CP_ENGINE)""#)
-            .unwrap().captures_iter(&source).map(|c| c.get(1).unwrap().as_str()).collect();
+            .unwrap().captures_iter(source).map(|c| c.get(1).unwrap().as_str()).collect();
         assert!(exported.len() >= 20, "o padrão não achou as variáveis do motor: {exported:?}");
         let missing: Vec<&&str> = exported.iter().filter(|var| !NOT_INHERITED.contains(var)).collect();
         assert!(missing.is_empty(), "o pane herdaria do motor: {missing:?}");

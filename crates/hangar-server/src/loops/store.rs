@@ -92,7 +92,10 @@ impl Store {
 
     pub fn set(&self, name: &str, d: &Loop) -> io::Result<()> {
         let path = self.loop_file(name);
-        let body = serde_json::to_vec(d).map_err(io::Error::other)?;
+        let value=Value::Object(d.iter().map(|(key,value)|(key.clone(),crate::orchestration::codec::clone_value(value))).collect());
+        let value=crate::orchestration::codec::scrub_surrogates(value);
+        let body=crate::transcript::pyjson::dumps_unicode(&value, false).into_bytes();
+        crate::orchestration::codec::discard(value);
         write_atomic(&path, &path.with_extension("tmp"), &body)
     }
 

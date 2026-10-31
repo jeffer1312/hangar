@@ -162,30 +162,13 @@ TOKEN=$(grep '^CP_AUTH_TOKEN=' "$ENV_FILE" | cut -d= -f2-)
 PORT=$(grep '^CP_PORT=' "$ENV_FILE" | cut -d= -f2- || true)
 BASE="http://127.0.0.1:${PORT:-8765}"
 AUTH="Authorization: Bearer $TOKEN"
-PEERS_FILE="$HOME/.hangar/config/peers.json"
-[[ -e "$PEERS_FILE" ]] || PEERS_FILE="$BACKEND_DIR/peers.json"
+HANGAR_SERVER_COMMAND="$(dirname "$(realpath "$0")")/hangar-server-command"
+PEERS_FILE=$("$HANGAR_SERVER_COMMAND" peers path)
 SERVER_ID=$(grep '^CP_SERVER_ID=' "$ENV_FILE" | cut -d= -f2- || true)
 
 # peer_cfg <id> — imprime "base_url token" do servidor remoto no peers.json; erro claro se ausente.
 peer_cfg() {
-    if [[ ! -f "$PEERS_FILE" ]]; then
-        echo "erro: servidor '$1' desconhecido — crie $PEERS_FILE (ver peers.json.example)" >&2
-        return 1
-    fi
-    "$PY" - "$PEERS_FILE" "$1" <<'PY'
-import json, sys
-try:
-    peers = json.load(open(sys.argv[1]))
-    p = peers.get(sys.argv[2])
-    # Entrada só com "app" é máquina da lista do app, não peer de recado.
-    if not p or not p.get("base_url"):
-        known = ", ".join(peers) or "nenhum"
-        sys.exit("erro: servidor '%s' não está em %s (conhecidos: %s)" % (sys.argv[2], sys.argv[1], known))
-    # \t como separador (mesmo formato do peers_tsv do --list): token/URL com espaço não quebra o parse.
-    print("%s\t%s" % (p["base_url"].rstrip("/"), p["token"]))
-except Exception as e:  # qualquer problema de parse vira mensagem clara, nunca traceback
-    sys.exit("erro: %s inválido (%s)" % (sys.argv[1], e))
-PY
+    "$HANGAR_SERVER_COMMAND" peers config "$1"
 }
 
 # api <METHOD> <path> [json-body] — imprime o corpo no stdout; falha (!2xx) imprime status + corpo
@@ -258,19 +241,8 @@ if eu.get("pair_peers"):
     # Servidores do peers.json: mesmas colunas, nome prefixado servidor::sessao (é o endereço
     # que o hangar-send de envio aceita). Peer fora do ar não derruba a lista local — vira aviso.
     if [[ -f "$PEERS_FILE" ]]; then
-        peers_tsv=$("$PY" -c 'import json, sys
-for k, v in json.load(open(sys.argv[1])).items():
-    # Só com "app" (sem base_url) é máquina da lista do app, não peer: fora da varredura, calada.
-    if isinstance(v, dict) and "app" in v and not v.get("base_url"):
-        continue
-    # "enabled": false -> máquina que o dono sabe que está desligada. Fica FORA da varredura
-    # (cada uma custa o timeout inteiro), mas avisa: some da lista sem nota nenhuma e daqui a
-    # duas semanas vira "cadê meu PC?". Endereçar servidor::sessao continua funcionando.
-    if isinstance(v, dict) and v.get("enabled") is False:
-        print("(%s desativado no peers.json — enderece direto se precisar)" % k, file=sys.stderr)
-        continue
-    print("%s\t%s\t%s" % (k, v["base_url"].rstrip("/"), v["token"]))' "$PEERS_FILE") \
-            || { echo "⚠ $PEERS_FILE inválido — servidores remotos ignorados" >&2; peers_tsv=""; }
+        peers_tsv=$("$HANGAR_SERVER_COMMAND" peers tsv) \
+            || { echo "$PEERS_FILE inválido — servidores remotos ignorados" >&2; peers_tsv=""; }
         # Um peer POR PROCESSO, todos ao mesmo tempo: em série, uma máquina fora do ar atrasava
         # todas as seguintes pelo tempo dela — e as que vinham depois nem chegavam a ser tentadas.
         # A saída volta arquivada e é impressa na ordem do peers.json, senão as linhas intercalam.

@@ -14,7 +14,7 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 
 
-def test_wrappers_sh():
+def test_wrappers_sh(hangar_server_bin):
     if not shutil.which("zsh") or not shutil.which("fish"):
         pytest.skip("precisa de zsh e fish no PATH")
     # timeout: hoje os dois scripts rodam em ~2s, sem rede e sem tmux. Mas um deles ganhar uma espera

@@ -21,6 +21,7 @@ import subprocess
 import sys
 import time
 import tempfile
+import tomllib
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -46,6 +47,15 @@ if args[:1] == ["app-server"]:
     if os.environ.get("FAKE_SERVER_OUT"):
         with open(os.environ["FAKE_SERVER_OUT"], "w") as fh:
             json.dump(args, fh)
+    if os.environ.get("FAKE_SERVER_INSTRUCTION_LIMIT"):
+        import tomllib
+        from pathlib import Path
+        config = Path(os.environ["CODEX_HOME"]) / "config.toml"
+        limit = tomllib.loads(config.read_text()).get("project_doc_max_bytes", 32768)
+        for index, arg in enumerate(args[:-1]):
+            if arg in ("-c", "--config") and args[index + 1].startswith("project_doc_max_bytes="):
+                limit = tomllib.loads(args[index + 1])["project_doc_max_bytes"]
+        Path(os.environ["FAKE_SERVER_INSTRUCTION_LIMIT"]).write_text(str(limit))
     if os.environ.get("FAKE_SERVIDOR_MORRE"):
         if os.environ.get("FAKE_ERRO_PRIVADO"):
             print(os.environ["FAKE_ERRO_PRIVADO"], file=sys.stderr)
@@ -832,12 +842,13 @@ def test_launcher_resume_uses_imported_account_policy_identity_and_explicit_over
 @pytest.mark.skipif(os.name != "posix", reason="binário falso POSIX")
 @pytest.mark.parametrize("permission_mode", ["Ask for approval", None])
 def test_relaunch_of_own_session_completes_from_the_sidecar_and_refuses_unknown_mode(tmp_path, permission_mode):
-    # O relançamento pelo Rust passa só --cwd/--resume e a chave da sessão.
+    # A conta pronta já traz o limite publicado pelo preparo nativo, inclusive sem servidor.
     cwd = tmp_path / "project"
     cwd.mkdir()
     env = _ambiente(tmp_path, cwd)
     env["FAKE_TUI_SLEEP"] = "3"
     env["FAKE_SERVER_OUT"] = str(tmp_path / "server-argv.json")
+    env["FAKE_SERVER_INSTRUCTION_LIMIT"] = str(tmp_path / "instruction-limit.txt")
     env["FAKE_SEM_THREAD"] = "1"
     env["CP_SESSION_KEY"] = "same-key"
     thread_id = "01a052d1-3e59-7441-9ed3-6bbd9e2704fc"
@@ -846,6 +857,7 @@ def test_relaunch_of_own_session_completes_from_the_sidecar_and_refuses_unknown_
     rollout.parent.mkdir(parents=True)
     rollout.write_text("{}\n")
     (home/".hangar-prepared-v1").write_text('{"version":1}')
+    (home/"config.toml").write_text("project_doc_max_bytes = 1048576\n", encoding="utf-8")
     sidecar = _sidecar(env, "sess")
     sidecar.parent.mkdir(parents=True, exist_ok=True)
     meta = {"name": "sess", "thread_id": thread_id, "rollout_path": env["FAKE_ROLLOUT"], "cwd": str(cwd),
@@ -868,7 +880,10 @@ def test_relaunch_of_own_session_completes_from_the_sidecar_and_refuses_unknown_
         server_args = json.loads((tmp_path / "server-argv.json").read_text())
         assert "tool_output_token_limit=144000" in server_args
         assert 'approval_policy="on-request"' in server_args and 'sandbox_mode="read-only"' in server_args
-        assert any("project_doc_max_bytes" in arg for arg in server_args), "não herda os pulos da importação"
+        assert Path(env["FAKE_SERVER_INSTRUCTION_LIMIT"]).read_text() == "1048576"
+        assert tomllib.loads((home/"config.toml").read_text(encoding="utf-8")) == {
+            "project_doc_max_bytes": 1048576, "projects": {str(cwd): {"trust_level": "trusted"}}
+        }
     finally:
         proc.wait(timeout=20)
 

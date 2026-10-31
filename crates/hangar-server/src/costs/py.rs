@@ -140,7 +140,7 @@ fn parse_integer(text: &str) -> i64 {
     })
 }
 
-pub(super) fn normalized_number(text: &str) -> Option<String> {
+pub(crate) fn normalized_number(text: &str) -> Option<String> {
     // int()/float() rejeitam \x1c..\x1f, embora str.strip() os remova.
     let chars: Vec<char> = text.trim_matches(char::is_whitespace).chars().collect();
     let mut result = String::with_capacity(text.len());

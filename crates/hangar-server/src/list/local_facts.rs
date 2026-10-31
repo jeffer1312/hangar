@@ -26,83 +26,28 @@ pub fn stall_seconds(claude: &Path) -> f64 {
     std::env::var("CP_STALL_SECONDS").ok().and_then(|v| v.trim().parse::<i64>().ok()).map_or(STALL_DEFAULT, |v| v as f64)
 }
 
-/// `guests.json` como o `guest_users._load` o lê. Ilegível vale a última leitura boa (sem nenhuma,
-/// ninguém é convidado): ler no meio de uma escrita não mostra ao dono a sessão escondida.
-#[derive(Debug, Default, Clone)]
+/// Lista e avisos usam o mesmo registro do login; só a visibilidade conserva a última leitura válida.
+#[derive(Debug, Clone)]
 pub struct Guests {
-    /// id → (nome, o dono vê as sessões dele).
-    guests: HashMap<String, (String, bool)>,
-    /// sessão → (id do convidado, vida gravada).
-    sessions: HashMap<String, (String, Option<String>)>,
+    store: std::sync::Arc<crate::login_guests::store::Store>,
+    claims: std::collections::HashSet<String>,
 }
-
 impl Guests {
     pub fn read(claude: &Path) -> Self {
-        static LAST: LazyLock<Mutex<HashMap<PathBuf, Guests>>> = LazyLock::new(Mutex::default);
-        let path = claude.join("guests.json");
-        let parsed = match std::fs::read(&path) {
-            Ok(raw) => Self::parse(&raw),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(Self::default()),
-            Err(_) => None,
-        };
-        let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
-        match parsed {
-            Some(guests) => { last.insert(path, guests.clone()); guests }
-            None => {
-                if crate::warn_limit::allow(None, "guests_unreadable") {
-                    tracing::warn!(code = "guests_unreadable", "guests.json ilegível; fica a última leitura boa");
-                }
-                last.get(&path).cloned().unwrap_or_default()
-            }
-        }
+        let store = crate::login_guests::store::Store::shared(claude.join("guests.json"));
+        let snapshot = store.snapshot(true);
+        let claims = snapshot.as_ref().and_then(|doc| doc["sessions"].as_object())
+            .into_iter().flat_map(|sessions| sessions.keys().cloned()).collect();
+        Self { store, claims }
     }
-
-    fn parse(raw: &[u8]) -> Option<Self> {
-        let raw: Value = serde_json::from_slice(raw).ok()?;
-        let mut guests = HashMap::new();
-        for g in raw.get("guests").map_or(Some(&Vec::new()), Value::as_array)? {
-            // `Guest(**g)`: campo obrigatório faltando ou de sobra torna o arquivo inteiro ilegível.
-            let known = ["id", "name", "token_hash", "root", "sees_owner", "owner_sees"];
-            let obj = g.as_object()?;
-            if obj.keys().any(|k| !known.contains(&k.as_str())) || ["id", "name", "token_hash", "root"].iter().any(|k| !obj.contains_key(*k)) {
-                return None;
-            }
-            let owner_sees = obj.get("owner_sees").map_or(Some(true), Value::as_bool)?;
-            guests.insert(g["id"].as_str()?.to_owned(), (g["name"].as_str()?.to_owned(), owner_sees));
-        }
-        let mut sessions = HashMap::new();
-        for (name, entry) in raw.get("sessions").and_then(Value::as_object).into_iter().flatten() {
-            let Some(guest) = entry["guest"].as_str() else { continue };
-            sessions.insert(name.clone(), (guest.to_owned(), entry["life"].as_str().map(str::to_owned)));
-        }
-        Some(Self { guests, sessions })
-    }
-
-    pub fn has_claims(&self) -> bool { !self.sessions.is_empty() }
-
-    pub fn claimed(&self, name: &str) -> bool { self.sessions.contains_key(name) }
-
-    /// `owner_of`: só a vida gravada desfaz o dono. Vida gravada vazia vale sem gravar: quem adota
-    /// a vida é a abertura, a leitura da lista não escreve.
-    fn owner(&self, name: &str, life: Option<&str>) -> Option<&(String, bool)> {
-        let (guest, stored) = self.sessions.get(name)?;
-        let owner = self.guests.get(guest)?;
-        match (stored, life) {
-            (None, _) | (_, None) => Some(owner),
-            (Some(stored), Some(life)) => (stored == life).then_some(owner),
-        }
-    }
-
-    /// Dono de cada sessão e as escondidas do dono, para os nomes dados com a vida de cada um.
+    pub fn has_claims(&self) -> bool { !self.claims.is_empty() }
+    pub fn claimed(&self, name: &str) -> bool { self.claims.contains(name) }
     pub fn access(&self, names: &[(String, Option<String>)]) -> (HashMap<String, String>, Vec<String>) {
         let (mut owners, mut hidden) = (HashMap::new(), Vec::new());
-        if !self.has_claims() {
-            return (owners, hidden);
-        }
         for (name, life) in names {
-            if let Some((owner, sees)) = self.owner(name, life.as_deref()) {
-                owners.insert(name.clone(), owner.clone());
-                if !sees { hidden.push(name.clone()); }
+            if let Some(owner) = self.store.owner(name, life.as_deref(), true) {
+                owners.insert(name.clone(), owner.name);
+                if !owner.owner_sees { hidden.push(name.clone()); }
             }
         }
         hidden.sort();

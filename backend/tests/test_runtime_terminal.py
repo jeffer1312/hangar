@@ -520,7 +520,7 @@ while True:
     env['CLAUDE_CONFIG_DIR']=str(config)
     command=shlex.join(['env','CLAUDE_CONFIG_DIR='+str(config),sys.executable,str(cli),'--session-id',sid,str(transcript)])
     subprocess.run(['tmux','-L',label,'-f','/dev/null','new-session','-d','-s','session','-x','100','-y','40','-c',str(tmp_path),
-        shlex.join(['bash','-c',command])],env=env,check=True)
+        shlex.join(['bash','-c',command])],env=env,cwd=tmp_path,check=True)
     raw_run=subprocess.run
     def mux_run(args,**kwargs):
         return raw_run(args[:1]+['-L',label]+args[1:] if args[0]=='tmux' else args,**kwargs)
@@ -536,8 +536,10 @@ while True:
         deadline=time.monotonic()+3
         binding=None
         while time.monotonic()<deadline:
-            binding=terminal.resolve_binding('session')
-            if binding and '❯' in tmux.capture_pane('session'): break
+            # O vínculo só é observado depois de a CLI concluir a partida no diretório da prova.
+            if '❯' in tmux.capture_pane('session'):
+                binding=terminal.resolve_binding('session')
+                if binding: break
             time.sleep(.01)
         pane=tmux.list_panes_all()['session'][0]
         agent=registry_module.agente_do_pane(pane['pid'])[1]
@@ -777,10 +779,10 @@ def test_claude_terminal_controls_route_to_owner(monkeypatch,tmp_path,control):
 
 
 # O nível do convite (`pair` só lê) é do porteiro do Rust; aqui chega o convidado já decidido.
-@pytest.mark.parametrize('kind,status', [('share',200),('guest_user',200)])
+@pytest.mark.parametrize('kind,status', [('share',200)])
 def test_public_guest_routes_follow_owner(monkeypatch,tmp_path,kind,status):
     import base64,hashlib,hmac
-    from app import api, guest_header, guest_users, internal_api
+    from app import api, guest_header, internal_api
     from types import SimpleNamespace
     from app.config import settings
     from fastapi.testclient import TestClient
@@ -791,18 +793,12 @@ def test_public_guest_routes_follow_owner(monkeypatch,tmp_path,kind,status):
     monkeypatch.setattr(api,'_headless',lambda name:False)
     monkeypatch.setattr(api,'_session_exists',lambda name:True)
     headers={'Authorization':'Bearer guest'}
-    if kind=='guest_user':
-        guest=guest_users.Guest('test','guest','hash',str(tmp_path))
-        monkeypatch.setattr(guest_users,'lookup_token',lambda token:guest if token=='guest' else None)
-        monkeypatch.setattr(guest_users,'visible_to',lambda guest,name:name=='session')
-        client=TestClient(api.app,base_url='http://127.0.0.1:8765')
-    else:
-        internal_api.set_secret('secret')
-        monkeypatch.setattr(guest_header,'time',SimpleNamespace(time=lambda:1000))
-        payload=base64.urlsafe_b64encode(json.dumps({'s':{'session':kind},'exp':1030}).encode()).rstrip(b'=').decode()
-        mac=hmac.new(b'secret',f'POST\n/api/sessions/session/input\n{payload}'.encode(),hashlib.sha256).hexdigest()
-        headers={'x-hangar-guest':f'{payload}.{mac}'}
-        client=TestClient(api.app,base_url='http://127.0.0.1:8765',client=('127.0.0.1',1))
+    internal_api.set_secret('secret')
+    monkeypatch.setattr(guest_header,'time',SimpleNamespace(time=lambda:1000))
+    payload=base64.urlsafe_b64encode(json.dumps({'s':{'session':kind},'exp':1030}).encode()).rstrip(b'=').decode()
+    mac=hmac.new(b'secret',f'POST\n/api/sessions/session/input\n{payload}'.encode(),hashlib.sha256).hexdigest()
+    headers={'x-hangar-guest':f'{payload}.{mac}'}
+    client=TestClient(api.app,base_url='http://127.0.0.1:8765',client=('127.0.0.1',1))
     async def flow():
         await _to_rust(owner,'session')
         result=await asyncio.to_thread(client.post,'/api/sessions/session/input',

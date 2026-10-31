@@ -69,6 +69,7 @@ pub struct WriteTarget { pub key:String,pub generation:u64,pub provider:String,p
 /// Prazo do fechamento da porta: abaixo do `OP_TIMEOUT_S` (75 s) do transporte no Python.
 const INGRESS_CLOSE_WAIT:Duration = Duration::from_secs(60);
 pub struct RuntimeRegistry {
+    startup: crate::startup::Readiness,
     interactions:Option<Arc<crate::interactions::InteractionStore>>,
     entries:Arc<Mutex<BTreeMap<String,Entry>>>,
     terminal_states:Option<Arc<crate::state::published::Published>>,
@@ -334,7 +335,7 @@ async fn attach_terminal_mods(mods:&crate::mods::state::Mods,target:&super::term
 impl RuntimeRegistry {
     pub fn new(upstream:SocketAddr,secret:String,instance:String) -> Self {
         let preparation = crate::accounts::bridge::AccountsBridge::new(upstream,secret.clone(),instance.clone()).ok();
-        Self { diag:crate::diag::DiagClient::new(upstream,secret.clone()),reopening:Default::default(),terminal_problems:Default::default(),terminal_status:Default::default(),heal_attempts:Default::default(),interactions:None,entries:Arc::new(Mutex::new(BTreeMap::new())),terminal_states:None,terms:None,events:broadcast::channel(1024).0,
+        Self { startup: Default::default(), diag:crate::diag::DiagClient::new(upstream,secret.clone()),reopening:Default::default(),terminal_problems:Default::default(),terminal_status:Default::default(),heal_attempts:Default::default(),interactions:None,entries:Arc::new(Mutex::new(BTreeMap::new())),terminal_states:None,terms:None,events:broadcast::channel(1024).0,
             policy:PolicyClient::new(upstream,secret).with_preparation(preparation),instance,lifecycle:Mutex::new(BTreeMap::new()),revisions:Mutex::new(BTreeMap::new()),mods:None,plugin:None,ingress:Default::default(),
             respawn_base:Duration::from_secs(5),reconnect_waits:Default::default(),permissions:None,processes:Arc::new(crate::list::procs::SystemProcs::default()),live:Default::default(),codex_owned:Default::default(),hubs:std::sync::OnceLock::new(),self_ref:std::sync::OnceLock::new(),
             watcher:std::sync::OnceLock::new(),codex_wake:Arc::new(tokio::sync::Notify::new()),native:Default::default(),limits:std::sync::OnceLock::new(),limit_holds:Default::default() }
@@ -639,6 +640,7 @@ impl RuntimeRegistry {
     /// ainda não entregue na fila (sobe o processo); a parada sem pendência fica fechada e o próximo envio
     /// a sobe. Falha de uma não impede as outras e vai ao diário.
     pub async fn register_claude_headless(self:Arc<Self>) {
+        self.startup.wait().await;
         let (dir,queue_dir) = self.claude_dirs();
         let listed = tokio::task::spawn_blocking(move || -> std::io::Result<(Vec<(String,bool,bool)>,Vec<String>)> {
             let (mut out,mut unreadable) = (Vec::new(),Vec::new());
@@ -1072,6 +1074,7 @@ impl RuntimeRegistry {
     /// Interface dos mods: sessão Claude sem terminal aberta aqui vira superfície remota e publica no `Mods`.
     pub fn with_mods(mut self,mods:crate::mods::state::Mods) -> Self { self.mods = Some(mods); self }
     /// A linha de status do ator lê a cota direto do módulo de contas.
+    pub fn with_startup(mut self, startup: crate::startup::Readiness) -> Self { self.startup = startup; self }
     pub fn with_accounts(mut self,accounts:crate::accounts::AccountService) -> Self { self.policy = self.policy.with_accounts(accounts); self }
     /// A ponte do plugin que o Claude sem terminal subido aqui recebe no ambiente.
     pub fn with_plugin_bridge(mut self,bridge:crate::session_open::claude::PluginBridge) -> Self { self.policy = self.policy.with_plugin_bridge(bridge); self }
@@ -1238,9 +1241,16 @@ impl RuntimeRegistry {
     /// pela porta. O sem terminal estacionado não sobe por isto.
     pub async fn adopt_claude_terminal(&self,name:&str)->Result<(),RuntimeError> {
         if self.has_entry(None,name).await {return Ok(());}
-        let Some(watcher)=self.watcher.get().cloned() else {return Ok(())};
-        let _pass=self.ingress.enter(name,Duration::ZERO).await
+        if self.watcher.get().is_none() {return Ok(());}
+        let pass=self.ingress.enter(name,Duration::ZERO).await
             .map_err(|_|RuntimeError::new("session_transfer_busy","a sessão está trocando de agente"))?;
+        self.adopt_claude_terminal_entered(name,&pass).await
+    }
+    /// Quem já reteve a vida não readquire ingresso enquanto um fechamento espera esse passe.
+    pub(crate) async fn adopt_claude_terminal_entered(&self,name:&str,pass:&super::ingress::IngressPass)->Result<(),RuntimeError> {
+        if !pass.protects(&self.ingress,name) {return Err(failure("runtime_ingress_mismatch"));}
+        if self.has_entry(None,name).await {return Ok(());}
+        let Some(watcher)=self.watcher.get().cloned() else {return Ok(())};
         watcher.adopt_claude(self,name).await.unwrap_or(Ok(()))
     }
     /// O plugin do Claude com terminal sem ator pede (`/pull`) com a conversa dele: sem o registro nativo, é
@@ -1289,6 +1299,13 @@ impl RuntimeRegistry {
     }
     pub async fn drain(&self,name:&str)->Result<Value,RuntimeError> {
         self.adopt_claude_terminal(name).await?;
+        self.drain_ready(name).await
+    }
+    pub(crate) async fn drain_entered(&self,name:&str,pass:&super::ingress::IngressPass)->Result<Value,RuntimeError> {
+        self.adopt_claude_terminal_entered(name,pass).await?;
+        self.drain_ready(name).await
+    }
+    async fn drain_ready(&self,name:&str)->Result<Value,RuntimeError> {
         let handle={
             let entries=self.entries.lock().await;let mut matches=entries.values().filter(|entry|entry.name==name);
             let entry=matches.next().ok_or_else(||failure("runtime_binding"))?;
@@ -2704,6 +2721,7 @@ async fn authorize(State(state):State<Gateway>,request:Request,next:Next) -> Res
     if !local || secret.ct_eq(state.secret.as_bytes()).unwrap_u8() != 1 || instance.ct_eq(state.instance.as_bytes()).unwrap_u8() != 1 {
         return StatusCode::NOT_FOUND.into_response();
     }
+    if !state.registry.startup.is_ready() { return crate::startup::unavailable(); }
     next.run(request).await
 }
 

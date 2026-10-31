@@ -722,8 +722,6 @@ def main() -> int:
     resumed_metadata = ({"codex_home": str(selected_home), "codex_account": args.codex_account,
                          "cwd": cwd, "permission_mode": resumed_mode} if imported_resume else {})
     from app import codex_contas
-    from app.codex_instrucoes import (LIMITE_INSTRUCOES, limite_instrucoes,
-                                      preparar_instrucoes, preparar_projeto)
 
     account = codex_contas.Account(
         args.codex_account,
@@ -742,34 +740,11 @@ def main() -> int:
             print(f"hangar-codex-tui: a conta não abriu porque o preparo não foi confirmado ({exc})",file=sys.stderr)
             return 1
 
-    # O cwd novo ainda pode não estar no config do Codex. O alias precisa existir antes do app-server.
-    # Falha (override pessoal, config.toml ilegível) não impede a TUI: fica sem alias e sem limite maior.
-    codex_home = selected_home
-    limite = LIMITE_INSTRUCOES
-    if not imported_resume and not account_prepared:
-        print("hangar-codex-tui: preparando as instruções do Codex…", file=sys.stderr)
-    if account.is_default and not imported_resume and not account_prepared:
-        try:
-            preparar_instrucoes(Path.home(), codex_home, Path(cwd))
-            limite = limite_instrucoes(codex_home)
-        except Exception as exc:                          # noqa: BLE001
-            print(f"hangar-codex-tui: instruções nativas não preparadas ({exc}); a sessão abre assim mesmo",
-                  file=sys.stderr)
-    elif not imported_resume:
-        try:
-            preparar_projeto(codex_home, Path(cwd))
-            limite = limite_instrucoes(codex_home)
-        except Exception as exc:                          # noqa: BLE001
-            print(f"hangar-codex-tui: limite de instruções da conta não pôde ser lido ({exc})",
-                  file=sys.stderr)
-
     endpoint = _porta_livre()
     # stdout no lixo (no modo WebSocket o protocolo nao passa por ele), mas o stderr vai pra um
     # arquivo temporario: PIPE sem consumidor encheria numa sessao longa, e DEVNULL jogaria fora
     # justamente a mensagem que explica uma largada que falhou.
     erros = tempfile.TemporaryFile()
-    # O preparo conferiu a configuração da conta; a retomada não amplia as instruções.
-    instruction_overrides = [] if imported_resume else ["-c", f"project_doc_max_bytes={limite}"]
 
     previous_thread = None
 
@@ -785,7 +760,7 @@ def main() -> int:
             return subprocess.Popen(
                 # Sandbox e aprovacao tambem no SERVIDOR: o thread/resume que a TUI faz ao reconectar
                 # nao repassa as flags dela, e a conversa caia em `Workspace` com aprovacao.
-                [_codex(), "app-server", "--listen", endpoint, *instruction_overrides,
+                [_codex(), "app-server", "--listen", endpoint,
                  "-c", f'sandbox_mode="{sandbox}"', "-c", f'approval_policy="{approval}"',
                  *tool_output_override(args.tool_output_token_limit),
                  *service_tier_override(selected_service_tier()), *identity_override(os.environ),
@@ -818,7 +793,7 @@ def main() -> int:
                 codex_sessions.save(args.name, thread_id, rollout, cwd,
                                 model=args.model, effort=args.effort,
                                 endpoint=endpoint, app_pid=servidor.pid,
-                                codex_home=str(codex_home),
+                                codex_home=str(selected_home),
                                 codex_account=args.codex_account,
                                 tool_output_token_limit=args.tool_output_token_limit,
                                 # A chave do spec que o Rust pôs no pane: o registro da sessão é por ela.

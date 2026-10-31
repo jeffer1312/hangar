@@ -702,7 +702,7 @@ def test_get_bastao_404_quando_nem_viva_nem_arquivada(api_client_bastao):
 
 
 def test_post_bastao_de_sessao_morta_usa_o_cwd_do_transcript(api_client_bastao, monkeypatch, tmp_path):
-    from unittest.mock import AsyncMock, patch
+    from unittest.mock import patch
     import app.api as api_mod
     cfg, proj, sid = _arquivo_morto(tmp_path)
     _conta_conhecida(monkeypatch, cfg)
@@ -711,7 +711,6 @@ def test_post_bastao_de_sessao_morta_usa_o_cwd_do_transcript(api_client_bastao, 
     monkeypatch.setattr(api_mod, "_open_in_rust", _abertura_fingida(criadas))
     monkeypatch.setattr(api_mod, "_drain_session", lambda name: None)
     monkeypatch.setattr(api_mod, "_nome_ocupado", lambda nome: False)
-    monkeypatch.setattr(api_mod, "_default_session_provider", AsyncMock(return_value="claude"))
     # Pasta que EXISTE: sessão nunca nasce em pasta sumida, e o bastão recusa antes de criar.
     origem = tmp_path / "origem"
     origem.mkdir()
@@ -861,9 +860,9 @@ def test_o_que_falta_cita_o_plano_da_sessao_e_diz_que_concluiu(hangar2):
 def test_o_que_falta_com_plano_concluido_e_loop_ativo_nao_lista_pendentes(hangar2):
     # Loop ativo mantém o corte de hoje: com o loop ainda trabalhando, o bloco de pedidos sem
     # resposta não entra — o loop já é o "o que falta" desta sessão.
-    from app.loop import LoopLink, new_loop
+    from app.loop import LoopLink
     jsonl, cwd = hangar2
-    LoopLink("hangar-2").set(new_loop("passar a suíte", "uv run pytest -q", 5, False) | {"iter": 1})
+    LoopLink("hangar-2").path.write_text(json.dumps({"goal": "passar a suíte", "check_cmd": "uv run pytest -q", "status": "running", "max_iters": 5, "iter": 1}), encoding="utf-8")
     bloco = _bloco(bastao.montar(jsonl, cwd, "claude", "hangar-2"), "O que falta")
     assert "concluído" in bloco and "60/60" in bloco
     assert "Loop `running`" in bloco
@@ -883,12 +882,14 @@ def test_o_que_falta_lista_steps_pendentes_por_task(hangar2):
 
 
 def test_o_que_falta_mostra_loop_ativo_e_ignora_terminado(tmp_path):
-    from app.loop import LoopLink, new_loop
-    LoopLink("s").set(new_loop("passar a suíte", "uv run pytest -q", 5, False) | {"iter": 2})
+    from app.loop import LoopLink
+    data = {"goal": "passar a suíte", "check_cmd": "uv run pytest -q", "status": "running", "max_iters": 5, "iter": 2}
+    LoopLink("s").path.write_text(json.dumps(data), encoding="utf-8")
     md = bastao.montar(str(FIX / "jsonl_samples.jsonl"), None, "claude", "s")
     bloco = _bloco(md, "O que falta")
     assert "Loop `running`" in bloco and "2/5" in bloco and "passar a suíte" in bloco
-    LoopLink("s").update(status="done")
+    data["status"] = "done"
+    LoopLink("s").path.write_text(json.dumps(data), encoding="utf-8")
     assert "Loop" not in _bloco(bastao.montar(str(FIX / "jsonl_samples.jsonl"), None, "claude", "s"), "O que falta")
 
 
