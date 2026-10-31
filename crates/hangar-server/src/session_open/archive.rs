@@ -201,7 +201,7 @@ fn codex_jsonl(accounts: &[crate::accounts::catalog::Account], sid: &str, asked:
 
 /// O rollout que veio de uma transferência Claude→Codex: retomá-lo exige conferir a fronteira dela, que
 /// é da transferência (no Python). Índice ilegível também recusa: não se sabe se é dela.
-fn from_transfer(home: &Path, codex_home: &Path, thread: &str) -> bool {
+pub(crate) fn from_transfer(home: &Path, codex_home: &Path, thread: &str) -> bool {
     let home_text = codex_home.canonicalize().unwrap_or_else(|_| codex_home.to_owned()).to_string_lossy().into_owned();
     let key = format!("[{}, {}]", serde_json::to_string(&home_text).unwrap_or_default(), serde_json::to_string(thread).unwrap_or_default());
     let digest: String = ring::digest::digest(&ring::digest::SHA256, key.as_bytes()).as_ref().iter().map(|b| format!("{b:02x}")).collect();
@@ -210,6 +210,48 @@ fn from_transfer(home: &Path, codex_home: &Path, thread: &str) -> bool {
         Err(_) => true,
         Ok(raw) => serde_json::from_slice::<Value>(&raw).ok().and_then(|v| v.as_array().map(|a| !a.is_empty())).unwrap_or(true),
     }
+}
+
+/// A raiz das conversas do Pi ou do omp.
+fn agent_root(w: &Where, provider: AgentProvider) -> PathBuf {
+    match provider {
+        AgentProvider::Pi => w.env.get("PI_CODING_AGENT_SESSION_DIR").filter(|v| !v.is_empty()).map(PathBuf::from)
+            .unwrap_or_else(|| w.home.join(".pi").join("agent").join("sessions")),
+        _ => super::agents::omp_agent_dir(w.home, w.env, None).join("sessions"),
+    }
+}
+
+/// O rollout Codex da conversa, a conta dona e a casa dela; conta pedida desconhecida é o erro dela.
+fn codex_found(w: &Where, sid: &str, asked: Option<&str>) -> Result<(PathBuf, String, PathBuf), OpenError> {
+    let service = crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::from_map(w.env.clone()));
+    let accounts = match asked {
+        Some(id) => service.resolve(crate::accounts::Provider::Codex, id).map(|a| vec![a]),
+        None => service.snapshot(crate::accounts::Provider::Codex),
+    }.map_err(|e| OpenError::new(e.status, e.code, e.message.clone()).with_params(e.params.clone()))?;
+    let all = service.snapshot(crate::accounts::Provider::Codex).map_err(|e| OpenError::new(e.status, e.code, e.message))?;
+    let (transcript, owner) = match codex_jsonl(&all, sid, asked) {
+        Ok(found) if accounts.iter().any(|a| a.id == found.1) => found,
+        Ok(_) => return Err(Miss::Absent.into()),
+        Err(miss) => return Err(miss.into()),
+    };
+    let home = all.iter().find(|a| a.id == owner).map(|a| a.home.clone()).unwrap_or_default();
+    Ok((transcript, owner, home))
+}
+
+/// `archive_jsonl` das leituras do Arquivo: o transcript e, no Codex, a casa da conta dona. Sem a
+/// conta, o Claude vale a primeira conta que tiver o arquivo.
+pub(crate) fn locate(w: &Where, project: &str, sid: &str, config_dir: Option<&str>, provider: AgentProvider, codex_account: Option<&str>)
+    -> Result<(PathBuf, Option<PathBuf>), OpenError> {
+    Ok(match provider {
+        AgentProvider::Claude => (claude_jsonl(w, project, sid, config_dir)?, None),
+        AgentProvider::Pi | AgentProvider::Omp => (pi_jsonl(&agent_root(w, provider), sid)?, None),
+        AgentProvider::Kimi => (kimi_jsonl(&super::agents::kimi_home(w.home, w.env), sid)?.0, None),
+        AgentProvider::Codex => {
+            if !UUID.is_match(sid) { return Err(Miss::Invalid.into()); }
+            let (transcript, _, home) = codex_found(w, sid, codex_account)?;
+            (transcript, Some(home))
+        }
+    })
 }
 
 /// `worktrees.redirect`: a worktree apagada pelo Hangar retoma na pasta principal.
@@ -261,12 +303,7 @@ pub fn plan(w: &Where, facts: &dyn OpenFacts, project: &str, sid: &str, body: Ar
             Found { transcript, cwd: cwd.unwrap_or_default(), owner: lookup, codex_account: None }
         }
         AgentProvider::Pi | AgentProvider::Omp => {
-            let root = match provider {
-                AgentProvider::Pi => w.env.get("PI_CODING_AGENT_SESSION_DIR").filter(|v| !v.is_empty()).map(PathBuf::from)
-                    .unwrap_or_else(|| w.home.join(".pi").join("agent").join("sessions")),
-                _ => super::agents::omp_agent_dir(w.home, w.env, None).join("sessions"),
-            };
-            let transcript = pi_jsonl(&root, sid)?;
+            let transcript = pi_jsonl(&agent_root(w, provider), sid)?;
             let cwd = header(&transcript, 5, |o| (o["type"] == "session").then(|| text(&o["cwd"])).flatten());
             Found { transcript, cwd: cwd.unwrap_or_default(), owner: None, codex_account: None }
         }
@@ -275,18 +312,7 @@ pub fn plan(w: &Where, facts: &dyn OpenFacts, project: &str, sid: &str, body: Ar
             Found { transcript, cwd: cwd.unwrap_or_default(), owner: None, codex_account: None }
         }
         AgentProvider::Codex => {
-            let service = crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::from_map(w.env.clone()));
-            let accounts = match body.codex_account.as_deref() {
-                Some(id) => service.resolve(crate::accounts::Provider::Codex, id).map(|a| vec![a]),
-                None => service.snapshot(crate::accounts::Provider::Codex),
-            }.map_err(|e| OpenError::new(e.status, e.code, e.message.clone()).with_params(e.params.clone()))?;
-            let all = service.snapshot(crate::accounts::Provider::Codex).map_err(|e| OpenError::new(e.status, e.code, e.message))?;
-            let (transcript, owner) = match codex_jsonl(&all, sid, body.codex_account.as_deref()) {
-                Ok(found) if accounts.iter().any(|a| a.id == found.1) => found,
-                Ok(_) => return Err(Miss::Absent.into()),
-                Err(miss) => return Err(miss.into()),
-            };
-            let home = all.iter().find(|a| a.id == owner).map(|a| a.home.clone()).unwrap_or_default();
+            let (transcript, owner, home) = codex_found(w, sid, body.codex_account.as_deref())?;
             if from_transfer(w.home, &home, sid) {
                 return Err(OpenError::new(409, "session_transfer_resume_unsupported",
                     "esta conversa veio de uma transferência do Claude para o Codex; retomá-la pelo Arquivo ainda não é possível"));

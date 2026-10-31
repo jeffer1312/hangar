@@ -115,6 +115,7 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     if crate::loops::http::matches(method, path) { return true; }
     if crate::push::http::matches(method, path) { return true; }
     if crate::session_media::is_media(method, path) { return true; }
+    if crate::archive_history::matches(method, path) { return true; }
     if crate::accounts::http::matches(method, path) { return true; }
     // Senha do chaveiro (`keyring::unlock_route`): nunca repassada.
     if *method == Method::POST && path == "/api/keyring/unlock" { return true; }
@@ -233,6 +234,7 @@ fn share_route(method: &Method, path: &str) -> bool {
 /// Um ou mais pedidos reais por área, só para a tabela; a decisão é de `rust_route`.
 const PROBES: &[(&str, &str)] = &[
     ("GET", "/api/sessions/x/history"), ("GET", "/api/sessions/x/events"),
+    ("GET", "/api/archive/p/s/history"), ("GET", "/api/archive/p/s/transcript-image/u/0"),
     ("GET", "/api/sessions/x/navegador"),
     ("GET", "/api/sessions/x/nav-remoto"),
     ("GET", "/api/sessions"), ("GET", "/api/sessions/events"), ("POST", "/api/sessions"),

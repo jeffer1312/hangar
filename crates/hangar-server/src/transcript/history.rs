@@ -112,6 +112,30 @@ pub(crate) fn merged_history_window(req: &HistoryRequest) -> io::Result<Vec<Chat
     merged_history_impl(req, u64::MAX, false)
 }
 
+/// As últimas `n` mensagens com texto (pedido e resposta), lidas pelo fim com a janela crescendo ×8 e
+/// pelo mesmo filtro do histórico inteiro: a prévia não mostra o que o `--resume` regravou nem repete
+/// um `held:`. A janela cresce porque a cauda de um transcript longo é quase só ferramenta e anexo.
+pub(crate) fn message_tail(req: &HistoryRequest, n: usize) -> io::Result<Vec<ChatEvent>> {
+    let mut window = req.tail_window.max(1);
+    loop {
+        let off = tail_offset(&req.jsonl, window);
+        let start = if off > 0 { transcript_start_ts(&req.jsonl) } else { 0.0 };
+        let mut parsed = parse_from(req, off, start)?;
+        if let Some(queue) = &req.queue {
+            merge_queue(queue, &mut parsed)?;
+        }
+        parsed.items.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal).then(a.1.cmp(&b.1)));
+        let mut msgs: Vec<ChatEvent> = parsed.items.into_iter().map(|(_, _, ev)| ev)
+            .filter(|ev| matches!(ev.kind, ChatKind::UserMsg | ChatKind::AssistantMsg) && ev.text.as_deref().is_some_and(|t| !t.is_empty()))
+            .collect();
+        if off == 0 || msgs.len() >= n {
+            msgs.drain(..msgs.len().saturating_sub(n));
+            return Ok(msgs);
+        }
+        window = window.saturating_mul(8);
+    }
+}
+
 fn merged_history_impl(req: &HistoryRequest, max_window: u64, truncate: bool) -> io::Result<Vec<ChatEvent>> {
     let mut parsed = match req.limit {
         Some(limit) => {
