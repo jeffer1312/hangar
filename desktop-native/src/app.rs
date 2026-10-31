@@ -82,6 +82,7 @@ pub(crate) use tags::{account_icon, machine_icon};
 pub(crate) use rename_suggest::{Strip as RenameStrip, rename_strip};
 pub(crate) use vault_requests::{approve_body, approve_title, request_button, request_card, request_command, request_pair};
 pub(crate) use settings::{setting_row, settings_box};
+pub(crate) use accounts::{login_heading, target_row};
 pub(crate) use sidebar::{Sub as RowSub, group_header_look, menu_item_height, menu_item_look, menu_label, menu_list_look, menu_surface_look};
 mod shortcuts;
 mod shortcut_transfer;

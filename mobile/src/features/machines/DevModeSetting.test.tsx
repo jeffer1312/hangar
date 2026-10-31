@@ -15,6 +15,10 @@ vi.mock('react-native', async (original) => ({ ...await original<typeof import('
 vi.mock('react-native-keyboard-controller', () => ({ KeyboardAvoidingView: ({ children }: { children: React.ReactNode }) => <div>{children}</div> }));
 vi.mock('../../ui/Icon', () => ({ Icon: () => null }));
 vi.mock('../../ui/Sheet', () => ({ Sheet: ({ children }: { children: React.ReactNode }) => children }));
+// O expo-router de verdade carrega o react-native de verdade, que o Node não lê.
+vi.mock('expo-router', () => ({ useRouter: () => ({ push: vi.fn() }) }));
+vi.mock('react-native-mmkv', () => ({ createMMKV: () => ({ getString: () => undefined, set: vi.fn(), remove: vi.fn() }) }));
+vi.mock('expo-secure-store', () => ({ getItemAsync: async () => null, setItemAsync: async () => {} }));
 import { DevModeSetting } from './DevModeSetting';
 import * as m from '../../paraglide/messages';
 

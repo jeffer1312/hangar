@@ -164,7 +164,9 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   "pronto". Nas etapas `reiniciar` e `nativo`, backend com outro pid e disco no `commit_para` =
   sucesso com aviso de que o app nativo não foi atualizado; fora disso, falha.
 - **`scripts/verificar-local` é exigido ao abrir PR e ao subir para a `main` ou para branch com PR
-  aberto; branch sem PR sobe livre.** O hook PreToolUse do `gh pr create` (`.claude/settings.json`)
+  aberto; branch sem PR sobe livre.** Todo passo fixa o par do porteiro numa cópia própria
+  (`target/par-auth`), e com a `main` juntada a base do plano é o `merge-base` com `origin/main`.
+  O hook PreToolUse do `gh pr create` (`.claude/settings.json`)
   confere o PR inteiro, desde o ponto em que a ponta saiu da base; a trava `pre-push` confere cada
   push, e consulta o PR com prazo de 10 s: sem `gh` ou sem resposta, segue com aviso. PR aberto pelo
   site fica com o CI. O padrão, que as travas exigem, é o rápido: só o ligado aos arquivos mudados
@@ -919,6 +921,12 @@ As tentativas relatadas às 07:49–07:57 não têm POST no journal desta máqui
 comprova o defeito do lançamento, sem atribuir a ele aqueles cliques sem a resposta capturada.
 
 ## Verificação local antes do push (06/10/2026)
+
+**Dois desencontros com o CI (30/10/2026).** Numa branch de login, a rodada falhou em testes que ela
+não tocava. (1) O par do porteiro só era fixado com arquivo de autenticação no diff, e teste mudado no
+backend puxa a suíte inteira, e outro `cargo` com outros pacotes religava o executável de
+`target/debug`, e o par deixava de conferir. (2) Com a main juntada, a base do plano continuava antes
+da junção e o diff trazia tudo que veio dela.
 
 **Rápido por padrão (14/10/2026).** A rodada da bateria do CI virou espera de mais de 40 min por push.
 Numa rodada real de outra sessão (commit `a2c14ee7a6`): preparo 441 s, rust 327 s, backend 813 s,

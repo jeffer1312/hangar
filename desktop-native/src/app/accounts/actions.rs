@@ -31,7 +31,69 @@ pub(super) struct SignIn {
     has_code: bool,
     poll: Option<JoinHandle<()>>,
     _subscription: Subscription,
+    /// Antes da tentativa: onde abrir a autorização.
+    choosing: Option<Choosing>,
+    /// O navegador escolhido, repetido em "Tentar de novo".
+    target: Option<Value>,
+    /// `browser` do passo do login: estado, motivo e máquina.
+    browser: Option<Value>,
+    view: Option<LoginView>,
+    view_focus: FocusHandle,
+    /// Com o navegador aberto o link e o código ficam guardados, até a pessoa pedir.
+    manual: bool,
+    /// O servidor a que o app está ligado, como a lista de máquinas o chama.
+    server_machine: Option<String>,
 }
+
+enum Choosing {
+    Loading,
+    /// `machine`: a máquina já escolhida, e só então os perfis dela.
+    Ready { machines: Vec<LoginMachine>, targets: Vec<Value>, last: Option<Value>, machine: Option<String> },
+}
+
+struct LoginMachine {
+    id: String,
+    answered: bool,
+}
+
+/// A janela do login transmitida da máquina do navegador.
+struct LoginView {
+    frame: Option<Arc<RenderImage>>,
+    size: (f64, f64),
+    title: String,
+    can_input: bool,
+    notice: Option<&'static str>,
+    bounds: Rc<Cell<Bounds<Pixels>>>,
+    notice_until: Option<std::time::Instant>,
+    retries: u32,
+    input: tokio::sync::mpsc::Sender<Value>,
+    frames: JoinHandle<()>,
+    sender: JoinHandle<()>,
+}
+
+impl Drop for LoginView {
+    fn drop(&mut self) {
+        self.frames.abort();
+        self.sender.abort();
+    }
+}
+
+/// O quadro decodificado fora da tela, ou o que o servidor disse no lugar dele.
+pub(in crate::app) enum ViewReply {
+    Frame { image: Arc<RenderImage>, size: (f64, f64), title: String, can_input: bool },
+    Notice(&'static str),
+    /// A captura falhou agora: a imagem anterior continua, e a sessão pode ter desconectado.
+    CaptureFailed { can_input: bool },
+    Lost,
+    /// A lista de janelas não veio neste quadro: a imagem anterior continua valendo.
+    Retry,
+    InputFailed,
+    ActivateFailed,
+}
+
+const VIEW_EVERY: Duration = Duration::from_millis(350);
+const VIEW_RETRIES_SILENT: u32 = 10;
+const VIEW_INPUT_QUEUE: usize = 32;
 
 impl Drop for SignIn {
     // Tarefa do tokio não morre com o handle: sem isto a leitura do passo seguiria no servidor anterior.
@@ -50,6 +112,8 @@ pub(super) struct Change { pub(super) id: String, pub(super) kind: ChangeKind }
 pub(in crate::app) enum ActionReply {
     Started(u64, Result<Value, Failure>, oneshot::Sender<bool>),
     Step(u64, Result<Value, Failure>),
+    Targets(u64, Result<Value, Failure>),
+    View(u64, ViewReply),
     Code(u64, Result<Value, Failure>, oneshot::Sender<bool>),
     Stopped(u64, bool, Result<Value, Failure>),
     /// O `Option<bool>` é a escolha de guardar as conversas que a exclusão levou, para repeti-la ao liberar.
@@ -246,9 +310,30 @@ impl Hangar {
             _ => {}
         });
         self.accounts.outcome = None;
-        self.accounts.sign_in = Some(SignIn { label, name, attempt: 0, open: false, starting: false, sending: false, stopping: false,
+        self.accounts.login_attempt += 1;
+        let attempt = self.accounts.login_attempt;
+        self.accounts.sign_in = Some(SignIn { label: label.clone(), name, attempt, open: false, starting: false, sending: false, stopping: false,
             failed: false, url: None, copied: false, step_failed: false, error: None, done: None, code, has_code: false, poll: None,
-            _subscription: subscription });
+            _subscription: subscription, choosing: Some(Choosing::Loading), target: None, browser: None, view: None, view_focus: cx.focus_handle(), manual: false, server_machine: None });
+        let Some(api) = self.api.clone() else { return };
+        let done = self.accounts_send_later();
+        self.runtime.spawn(async move {
+            let result = api.server_read(&["conta-estado", &label, "login", "targets"], &[], 8).await;
+            done(AccountsReply::Action(ActionReply::Targets(attempt, result))).await;
+        });
+        cx.notify();
+    }
+
+    fn choose_machine(&mut self, chosen: Option<String>, cx: &mut Context<Self>) {
+        if let Some(Choosing::Ready { machine, .. }) = self.accounts.sign_in.as_mut().and_then(|s| s.choosing.as_mut()) {
+            *machine = chosen;
+        }
+        cx.notify();
+    }
+
+    fn choose_target(&mut self, target: Option<Value>, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(s) = self.accounts.sign_in.as_mut() else { return };
+        (s.choosing, s.target) = (None, target);
         self.begin_login(window, cx);
     }
 
@@ -257,16 +342,21 @@ impl Hangar {
         let Some(api) = self.api.clone() else { return };
         self.accounts.login_attempt += 1;
         let attempt = self.accounts.login_attempt;
+        self.close_login_view(window, cx);
         let Some(s) = self.accounts.sign_in.as_mut() else { return };
         if let Some(poll) = s.poll.take() { poll.abort(); }
-        (s.attempt, s.starting, s.failed, s.url, s.copied, s.step_failed, s.error, s.done, s.has_code) =
-            (attempt, true, false, None, false, false, None, None, false);
+        (s.attempt, s.starting, s.failed, s.url, s.copied, s.step_failed, s.error, s.done, s.has_code, s.browser, s.manual) =
+            (attempt, true, false, None, false, false, None, None, false, None, false);
         s.code.update(cx, |input, cx| input.set_value("", window, cx));
-        let label = s.label.clone();
+        let (label, target) = (s.label.clone(), s.target.clone());
         let (done, turn) = (self.accounts_send_later(), login_turn(&api, &label));
         self.runtime.spawn(async move {
             let _turn = turn.lock().await;
-            let result = api.server_post(&["conta-estado", &label, "login"], 30).await;
+            let path = ["conta-estado", label.as_str(), "login"];
+            let result = match target {
+                Some(target) => api.server_send(reqwest::Method::POST, &path, Some(json!({"target": target})), 30).await,
+                None => api.server_post(&path, 30).await,
+            };
             let opened = result.as_ref().map_or_else(|e| e.uncertain, |_| true);
             let (owner, owned) = oneshot::channel();
             done(AccountsReply::Action(ActionReply::Started(attempt, result, owner))).await;
@@ -333,12 +423,107 @@ impl Hangar {
     }
 
     fn close_sign_in(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_login_view(window, cx);
         self.accounts.sign_in = None;
         self.root_focus.focus(window, cx);
         cx.notify();
     }
 
-    fn finish_login(&mut self, email: Option<String>, plan: Option<String>, cx: &mut Context<Self>) {
+    /// Só enquanto a tela está aberta: cada quadro passa por duas máquinas.
+    fn open_login_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(api) = self.api.clone() else { return };
+        let (frames_done, input_done) = (self.accounts_send_later(), self.accounts_send_later());
+        let runtime = self.runtime.clone();
+        let Some(s) = self.accounts.sign_in.as_mut() else { return };
+        let (attempt, label) = (s.attempt, s.label.clone());
+        let (input, mut queue) = tokio::sync::mpsc::channel::<Value>(VIEW_INPUT_QUEUE);
+        let (frame_api, frame_label) = (api.clone(), label.clone());
+        let frames = runtime.spawn(async move {
+            loop {
+                let reply = match frame_api.server_read(&["conta-estado", &frame_label, "login", "view"], &[], 10).await {
+                    Ok(frame) => view_reply(&frame),
+                    Err(_) => ViewReply::Lost,
+                };
+                frames_done(AccountsReply::Action(ActionReply::View(attempt, reply))).await;
+                tokio::time::sleep(VIEW_EVERY).await;
+            }
+        });
+        // Fila única: clique e tecla têm que chegar na ordem em que foram feitos.
+        let sender = runtime.spawn(async move {
+            while let Some(event) = queue.recv().await {
+                if let Err(error) = api.server_send(reqwest::Method::POST, &["conta-estado", &label, "login", "view", "input"], Some(event), 10).await {
+                    eprintln!("[contas] entrada na janela do login recusada: {:?}", error.status);
+                    input_done(AccountsReply::Action(ActionReply::View(attempt, ViewReply::InputFailed))).await;
+                }
+            }
+        });
+        s.view = Some(LoginView { frame: None, size: (1., 1.), title: String::new(), can_input: true, notice: None, bounds: Rc::default(),
+            notice_until: None, retries: 0, input, frames, sender });
+        s.view_focus.focus(window, cx);
+        cx.notify();
+    }
+
+    /// Com a transmissão aberta, a página inteira é dela: o cabeçalho das contas só tiraria espaço.
+    pub(super) fn login_view_open(&self) -> bool {
+        self.accounts.sign_in.as_ref().is_some_and(|s| s.view.is_some())
+    }
+
+    fn close_login_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(s) = self.accounts.sign_in.as_mut()
+            && let Some(mut view) = s.view.take()
+        {
+            if let Some(frame) = view.frame.take() { cx.drop_image(frame, None); }
+            self.root_focus.focus(window, cx);
+        }
+        cx.notify();
+    }
+
+    fn view_input(&mut self, event: Value) {
+        if let Some(view) = self.accounts.sign_in.as_mut().and_then(|s| s.view.as_mut()) {
+            // Um gesto de rolagem manda dezenas de eventos: não pode tomar o lugar do clique que vem depois.
+            if event["t"] == "wheel" && view.input.capacity() < VIEW_INPUT_QUEUE / 2 { return; }
+            // Fila cheia é máquina que não dá conta: evento velho cairia numa tela que já mudou.
+            if view.input.try_send(event).is_err() {
+                view.notice = Some("accounts_login_view_input_failed");
+                view.notice_until = Some(std::time::Instant::now() + Duration::from_secs(4));
+            }
+        }
+    }
+
+    /// Coordenada da imagem desenhada, na medida que o servidor deu para a janela.
+    fn view_point(&self, point: Point<Pixels>, clamp: bool) -> Option<(f64, f64)> {
+        let view = self.accounts.sign_in.as_ref()?.view.as_ref()?;
+        view.frame.as_ref()?;
+        // Quadro velho na tela: a página pode ter mudado, e o clique cairia em outro controle.
+        if matches!(view.notice, Some("accounts_login_view_capture" | "accounts_login_view_lost")) { return None; }
+        let (x, y) = crate::app::remote_browser::fraction(view.bounds.get(), (view.size.0 as f32, view.size.1 as f32), point, clamp)?;
+        Some((f64::from(x) * view.size.0, f64::from(y) * view.size.1))
+    }
+
+    fn view_click(&mut self, point: Point<Pixels>) {
+        if let Some((x, y)) = self.view_point(point, false) {
+            self.view_input(json!({"t": "click", "x": x, "y": y}));
+        }
+    }
+
+    fn activate_login_view(&mut self, cx: &mut Context<Self>) {
+        let Some(api) = self.api.clone() else { return };
+        let Some(s) = self.accounts.sign_in.as_mut() else { return };
+        let (label, attempt) = (s.label.clone(), s.attempt);
+        if let Some(view) = s.view.as_mut() { view.notice = None; }
+        let done = self.accounts_send_later();
+        self.runtime.spawn(async move {
+            // O tscon pode recusar com o servidor respondendo 200: vale o `ok` da resposta.
+            let reply = api.server_post(&["conta-estado", &label, "login", "view", "activate"], 15).await;
+            if !reply.as_ref().is_ok_and(|reply| reply["ok"] == true) {
+                done(AccountsReply::Action(ActionReply::View(attempt, ViewReply::ActivateFailed))).await;
+            }
+        });
+        cx.notify();
+    }
+
+    fn finish_login(&mut self, email: Option<String>, plan: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_login_view(window, cx);
         let Some(s) = self.accounts.sign_in.as_mut() else { return };
         if let Some(poll) = s.poll.take() { poll.abort(); }
         (s.open, s.sending, s.failed, s.error, s.step_failed, s.done) = (false, false, false, None, false, Some((email, plan)));
@@ -449,6 +634,61 @@ impl Hangar {
     pub(super) fn receive_action(&mut self, reply: ActionReply, window: &mut Window, cx: &mut Context<Self>) {
         let page_open = self.settings == Some(Page::Accounts);
         match reply {
+            ActionReply::Targets(attempt, result) => {
+                let Some(s) = self.accounts.sign_in.as_mut().filter(|s| s.attempt == attempt && s.choosing.is_some()) else { return };
+                let targets = result.as_ref().ok().and_then(|reply| reply["targets"].as_array().cloned()).unwrap_or_default();
+                let machines: Vec<LoginMachine> = result.as_ref().ok().and_then(|reply| reply["machines"].as_array())
+                    .map(|rows| rows.iter().filter_map(|row| Some(LoginMachine {
+                        id: row["id"].as_str()?.to_owned(),
+                        answered: row["answered"].as_bool().unwrap_or(false),
+                    })).collect()).unwrap_or_default();
+                if let Err(error) = &result { eprintln!("[contas] lista de navegadores do login falhou: {:?}", error.status); }
+                // Nada para escolher, ou a lista não veio: segue o caminho de sempre, com o link.
+                if targets.is_empty() && machines.len() <= 1 {
+                    self.choose_target(None, window, cx);
+                    return;
+                }
+                let last = result.ok().map(|reply| reply["last"].clone()).filter(|last| !last.is_null());
+                s.server_machine = machines.first().map(|machine| machine.id.clone());
+                s.choosing = Some(Choosing::Ready { machines, targets, last, machine: None });
+            }
+            ActionReply::View(attempt, reply) => {
+                let Some(view) = self.accounts.sign_in.as_mut().filter(|s| s.attempt == attempt).and_then(|s| s.view.as_mut()) else {
+                    if let ViewReply::Frame { image, .. } = reply { cx.drop_image(image, None); }
+                    return;
+                };
+                match reply {
+                    ViewReply::Frame { image, size, title, can_input } => {
+                        if let Some(old) = view.frame.replace(image) { cx.drop_image(old, None); }
+                        (view.size, view.title, view.can_input, view.retries) = (size, title, can_input, 0);
+                        // O aviso de entrada perdida dura o bastante para ser lido: quadro chega a cada instante.
+                        if view.notice_until.is_none_or(|until| until <= std::time::Instant::now()) { view.notice = None; }
+                    }
+                    ViewReply::Notice(notice) => {
+                        // A janela acabou: o último quadro pareceria clicável.
+                        if let Some(old) = view.frame.take() { cx.drop_image(old, None); }
+                        view.notice = Some(notice);
+                    }
+                    ViewReply::CaptureFailed { can_input } => {
+                        view.can_input = can_input;
+                        view.notice = Some("accounts_login_view_capture");
+                    }
+                    ViewReply::Lost => view.notice = Some("accounts_login_view_lost"),
+                    // Uma leitura perdida passa sozinha; seguidas, a pessoa precisa saber que a imagem parou.
+                    ViewReply::Retry => {
+                        view.retries += 1;
+                        if view.retries >= VIEW_RETRIES_SILENT { view.notice = Some("accounts_login_view_lost"); }
+                    }
+                    ViewReply::ActivateFailed => {
+                        view.notice = Some("accounts_login_view_activate_failed");
+                        view.notice_until = Some(std::time::Instant::now() + Duration::from_secs(6));
+                    }
+                    ViewReply::InputFailed => {
+                        view.notice = Some("accounts_login_view_input_failed");
+                        view.notice_until = Some(std::time::Instant::now() + Duration::from_secs(4));
+                    }
+                }
+            }
             ActionReply::Started(attempt, result, owner) => {
                 let s = self.accounts.sign_in.as_mut().filter(|s| s.attempt == attempt && page_open);
                 let _ = owner.send(s.is_some());
@@ -466,18 +706,31 @@ impl Hangar {
                 match result {
                     Ok(step) if step.get("etapa").and_then(Value::as_str) == Some("concluido") => {
                         let field = |key: &str| step.get(key).and_then(Value::as_str).map(str::to_owned);
-                        self.finish_login(field("email"), field("plano"), cx);
+                        self.finish_login(field("email"), field("plano"), window, cx);
+                    }
+                    // O servidor não tem mais a tentativa (reiniciou): a tela não pode ficar esperando por ela.
+                    // Com o código em voo é a própria confirmação que a encerra, e a resposta dela decide.
+                    Ok(step) if step.get("etapa").and_then(Value::as_str) == Some("idle") && !s.sending => {
+                        if let Some(poll) = s.poll.take() { poll.abort(); }
+                        (s.failed, s.error) = (true, Some(tr("accounts_login_not_confirmed")));
+                        self.close_login_view(window, cx);
+                        // A tentativa pode ter terminado com a conta dentro: a lista relida mostra.
+                        self.load_accounts(false, cx);
                     }
                     Ok(step) => {
                         s.step_failed = false;
+                        s.browser = step.get("browser").filter(|browser| !browser.is_null()).cloned();
                         if let Some(url) = step.get("url").and_then(Value::as_str).filter(|u| u.starts_with("https://") || u.starts_with("http://")) {
                             s.url = Some(url.to_owned());
                         }
+                        // Com erro a transmissão não é desenhada: sem fechar, os quadros seguiriam sendo pedidos.
+                        if s.browser.as_ref().is_some_and(|browser| browser["state"] == "error") { self.close_login_view(window, cx); }
                     }
                     // O servidor desistiu da tentativa: perguntar de novo só mostraria "aguardando".
                     Err(error) if error.status == Some(409) => {
                         if let Some(poll) = s.poll.take() { poll.abort(); }
                         (s.failed, s.error) = (true, Some(Self::failure(&error)));
+                        self.close_login_view(window, cx);
                     }
                     Err(_) => s.step_failed = true,
                 }
@@ -494,7 +747,7 @@ impl Hangar {
                 match result {
                     Ok(value) if value.get("ok").and_then(Value::as_bool) == Some(true) => {
                         let field = |key: &str| value.get(key).and_then(Value::as_str).map(str::to_owned);
-                        self.finish_login(field("email"), field("plano"), cx);
+                        self.finish_login(field("email"), field("plano"), window, cx);
                     }
                     other => {
                         if let Some(poll) = s.poll.take() { poll.abort(); }
@@ -504,6 +757,7 @@ impl Hangar {
                             Err(error) => Self::failure(&error),
                             Ok(_) => tr("accounts_login_not_confirmed"),
                         });
+                        self.close_login_view(window, cx);
                         // A recusa não prova que a conta ficou de fora: a lista relida mostra como o servidor a vê.
                         self.load_accounts(false, cx);
                     }
@@ -582,8 +836,74 @@ impl Hangar {
         }
     }
 
+    fn render_login_view(&self, view: &LoginView, machine: &str, height: Pixels, cx: &mut Context<Self>) -> Div {
+        let Some(s) = self.accounts.sign_in.as_ref() else { return div() };
+        let note = |text: String, color: Hsla| div().size_full().flex().items_center().justify_center().p_4()
+            .text_size(px(12.)).text_color(color).text_center().whitespace_normal().child(text);
+        let bounds = view.bounds.clone();
+        let page = div().id("accounts-login-view").relative().w_full().h(height).overflow_hidden().rounded(px(8.)).bg(theme::background())
+            .border_1().border_color(theme::border())
+            .track_focus(&s.view_focus).role(Role::Application).aria_label(tr("accounts_login_view_open"))
+            .child(canvas(|_, _, _| {}, move |b, _, _, _| bounds.set(b)).absolute().inset_0())
+            .map(|el| match &view.frame {
+                Some(image) => el.child(img(image.clone()).absolute().inset_0().size_full().object_fit(ObjectFit::Contain)),
+                None => el.child(note(tr(view.notice.unwrap_or("accounts_login_view_waiting")), theme::muted())),
+            })
+            .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                if let Some(s) = this.accounts.sign_in.as_ref() { s.view_focus.focus(window, cx); }
+            }))
+            // Ao soltar: com o botão físico ainda apertado, o clique na mesma máquina não vale.
+            .on_mouse_up(MouseButton::Left, cx.listener(|this, e: &MouseUpEvent, _, _| this.view_click(e.position)))
+            .on_scroll_wheel(cx.listener(|this, e: &ScrollWheelEvent, _, cx| {
+                // Rola a página da outra máquina, não a de configurações em volta.
+                cx.stop_propagation();
+                let Some((x, y)) = this.view_point(e.position, false) else { return };
+                let delta = e.delta.pixel_delta(px(17.78));
+                if f32::from(delta.y) != 0. { this.view_input(json!({"t": "wheel", "x": x, "y": y, "down": f32::from(delta.y) < 0.})); }
+            }))
+            .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
+                let keystroke = &e.keystroke;
+                cx.stop_propagation();
+                if keystroke.modifiers.control && !keystroke.modifiers.alt && keystroke.key == "v" {
+                    if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) { this.view_input(json!({"t": "text", "text": text})); }
+                    return;
+                }
+                // No Windows o AltGr chega como Ctrl+Alt com o caractere pronto: é digitação, não atalho.
+                let alt_gr = keystroke.modifiers.control && keystroke.modifiers.alt && keystroke.key_char.as_ref().is_some_and(|text| !text.is_empty());
+                // Sem atalhos: só digitação e as teclas de navegar.
+                if !alt_gr && (keystroke.modifiers.control || keystroke.modifiers.alt || keystroke.modifiers.platform) { return; }
+                if let Some(key) = view_key(&keystroke.key) {
+                    this.view_input(json!({"t": "key", "key": key}));
+                } else if let Some(text) = keystroke.key_char.clone().filter(|text| !text.is_empty()) {
+                    this.view_input(json!({"t": "text", "text": text}));
+                }
+            }));
+        // Linha de altura fixa: aviso que vem e vai não pode empurrar a imagem onde a pessoa está clicando.
+        let status = div().h(px(32.)).flex_shrink_0().flex().items_center().gap(px(8.)).text_size(px(12.)).overflow_hidden();
+        let status = if !view.can_input {
+            let text = view.notice.filter(|notice| *notice == "accounts_login_view_activate_failed").map(tr)
+                .unwrap_or_else(|| tr("accounts_login_view_no_input").replace("{machine}", machine));
+            status.child(div().flex_1().min_w_0().text_color(theme::warning()).child(text))
+                .child(Button::new("accounts-login-view-activate").outline().xsmall().label(tr("accounts_login_view_activate"))
+                    .on_click(cx.listener(|this, _, _, cx| this.activate_login_view(cx))))
+        } else if let Some(notice) = view.notice.filter(|_| view.frame.is_some()) {
+            status.child(div().flex_1().min_w_0().truncate().text_color(theme::warning()).child(tr(notice)))
+        } else {
+            status.child(div().flex_1().min_w_0().truncate().text_color(theme::muted()).child(tr("accounts_login_view_hint")))
+        };
+        div().flex().flex_col().gap(px(8.))
+            .child(div().flex().items_center().gap(px(8.))
+                .child(Button::new("accounts-login-view-back").outline().xsmall().icon(IconName::ArrowLeft).label(tr("accounts_login_view_back"))
+                    .on_click(cx.listener(|this, _, _, _| this.view_input(json!({"t": "back"})))))
+                .child(div().flex_1().min_w_0().truncate().text_size(px(12.)).text_color(theme::muted()).child(view.title.clone()))
+                .child(Button::new("accounts-login-view-close").ghost().xsmall().label(tr("accounts_login_view_close"))
+                    .on_click(cx.listener(|this, _, window, cx| this.close_login_view(window, cx)))))
+            .child(status)
+            .child(page)
+    }
+
     /// A página no lugar da lista enquanto há uma tentativa de login: os passos do web, um por vez.
-    pub(super) fn render_sign_in(&self, cx: &mut Context<Self>) -> Option<Div> {
+    pub(super) fn render_sign_in(&self, window: &Window, cx: &mut Context<Self>) -> Option<Div> {
         let s = self.accounts.sign_in.as_ref()?;
         let (color, _) = theme::provider("claude");
         let avatar = div().size(px(36.)).flex_shrink_0().rounded(px(10.)).bg(color.opacity(0.16)).flex().items_center().justify_center()
@@ -596,6 +916,49 @@ impl Hangar {
         let line = |text: String, color: Hsla| div().text_size(px(13.)).whitespace_normal().child(div().text_color(color).child(text));
         let footer = || div().mt(px(4.)).flex().justify_end().gap(px(8.));
         let mut panel = settings_box().mt(px(24.)).p(px(20.)).gap(px(16.)).child(head);
+        if let Some(choosing) = &s.choosing {
+            let heading = login_heading;
+            let mut list = div().flex().flex_col().gap(px(2.));
+            let mut in_machine = false;
+            match choosing {
+                Choosing::Loading => {
+                    panel = panel.child(heading(tr("accounts_login_where_title"), tr("accounts_login_where_help")))
+                        .child(line(tr("accounts_login_where_loading"), theme::muted()));
+                }
+                Choosing::Ready { machines, targets, last, machine: None } => {
+                    panel = panel.child(heading(tr("accounts_login_where_title"), tr("accounts_login_where_help")));
+                    for (index, machine) in machines.iter().enumerate() {
+                        let offered: Vec<&Value> = targets.iter().filter(|target| target["machine"] == machine.id.as_str()).collect();
+                        let is_last = last.as_ref().is_some_and(|last| last["machine"] == machine.id.as_str());
+                        let detail = machine_detail(machine.answered, &offered);
+                        let id = machine.id.clone();
+                        list = list.child(target_row(("accounts-login-machine", index), machine.id.clone(), detail, is_last)
+                            .disabled(offered.is_empty())
+                            .on_click(cx.listener(move |this, _, _, cx| this.choose_machine(Some(id.clone()), cx))));
+                    }
+                }
+                Choosing::Ready { targets, last, machine: Some(machine), .. } => {
+                    in_machine = true;
+                    panel = panel.child(heading(tr("accounts_login_where_profile_title").replace("{machine}", machine), tr("accounts_login_where_profile_help")));
+                    let same = |a: &Value, b: &Value| a["machine"] == b["machine"] && a["kind"] == b["kind"] && a["profile"] == b["profile"];
+                    for (index, target) in targets.iter().enumerate().filter(|(_, target)| target["machine"] == machine.as_str()) {
+                        let is_last = last.as_ref().is_some_and(|last| same(last, target));
+                        let (name, email) = target_names(target);
+                        let chosen = target.clone();
+                        list = list.child(target_row(("accounts-login-target", index), name, email, is_last)
+                            .on_click(cx.listener(move |this, _, window, cx| this.choose_target(Some(chosen.clone()), window, cx))));
+                    }
+                }
+            }
+            if matches!(choosing, Choosing::Ready { .. }) { panel = panel.child(list); }
+            return Some(panel.child(footer().justify_between()
+                .child(Button::new("accounts-login-link-only").ghost().small().label(tr("accounts_login_where_link")).disabled(matches!(choosing, Choosing::Loading))
+                    .on_click(cx.listener(|this, _, window, cx| this.choose_target(None, window, cx))))
+                .child(Button::new("accounts-login-where-back").outline().small().label(tr("settings_back"))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if in_machine { this.choose_machine(None, cx); } else { this.close_sign_in(window, cx); }
+                    })))));
+        }
         if let Some((email, plan)) = &s.done {
             let fact = |label: &'static str, value: &Option<String>| value.clone().map(|value| div().flex().gap(px(12.)).text_size(px(13.))
                 .child(div().w(px(72.)).text_color(theme::muted()).child(tr(label))).child(div().child(value)));
@@ -612,6 +975,44 @@ impl Hangar {
             .when(s.step_failed, |el| el.child(line(tr("accounts_login_step_failed"), theme::danger())));
         let waiting = s.open && !s.failed;
         let locked = s.sending || s.stopping;
+        // Do clique no perfil em diante a tela já nasce completa: nada aparece depois empurrando o resto.
+        if let Some(target) = s.target.as_ref().filter(|_| s.starting || waiting) {
+            let machine = target["machine"].as_str().unwrap_or_default();
+            let address = self.api.as_ref().map(|api| api.server_address()).unwrap_or_default();
+            let viewable = target["kind"] == "chrome_profile"
+                && !browser_is_here(machine, s.server_machine.as_deref(), &address, this_computer());
+            let state = s.browser.as_ref().and_then(|browser| browser["state"].as_str()).unwrap_or("opening");
+            if state == "error" {
+                let reason = s.browser.as_ref().and_then(|browser| browser["reason"].as_str());
+                panel = panel.child(line(tr("accounts_login_browser_error").replace("{machine}", machine).replace("{reason}", &tr(browser_reason(reason))), theme::danger()));
+            } else {
+                let open = state == "open";
+                panel = panel.child(line(
+                    tr(if open { "accounts_login_browser_open" } else { "accounts_login_browser_opening" }).replace("{machine}", machine),
+                    if open { theme::text() } else { theme::muted() },
+                ));
+                if let Some(view) = &s.view {
+                    let height = (window.viewport_size().height - px(340.)).max(px(320.));
+                    return Some(panel.child(self.render_login_view(view, machine, height, cx))
+                        .child(footer().child(Button::new("accounts-login-cancel").outline().small().label(tr("cancel")).disabled(locked)
+                            .on_click(cx.listener(|this, _, window, cx| this.stop_sign_in(false, window, cx))))));
+                }
+                if !s.manual {
+                    return Some(panel
+                        .when(viewable, |el| el.child(div().flex().child(Button::new("accounts-login-view-open").primary().small().icon(IconName::Monitor)
+                            .label(tr("accounts_login_view_open")).disabled(!open)
+                            .on_click(cx.listener(|this, _, window, cx| this.open_login_view(window, cx))))))
+                        .child(footer().justify_between()
+                            .child(Button::new("accounts-login-manual").ghost().small().label(tr("accounts_login_manual")).disabled(s.url.is_none())
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    if let Some(s) = this.accounts.sign_in.as_mut() { s.manual = true; }
+                                    cx.notify();
+                                })))
+                            .child(Button::new("accounts-login-cancel").outline().small().label(tr("cancel")).disabled(locked || s.starting)
+                                .on_click(cx.listener(|this, _, window, cx| this.stop_sign_in(false, window, cx))))));
+                }
+            }
+        }
         if s.starting || (waiting && s.url.is_none()) {
             panel = panel.child(line(tr("accounts_login_preparing"), theme::muted()));
         } else if let (true, Some(url)) = (waiting, s.url.clone()) {
@@ -658,9 +1059,129 @@ impl Hangar {
     }
 }
 
+/// Lido uma vez: a tela pergunta a cada quadro, e isso roda na thread da interface.
+fn this_computer() -> Option<&'static str> {
+    static NAME: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    NAME.get_or_init(|| {
+        let name = if cfg!(windows) { std::env::var("COMPUTERNAME").ok()? } else { std::fs::read_to_string("/etc/hostname").ok()? };
+        Some(name.trim().to_owned()).filter(|name| !name.is_empty())
+    }).as_deref()
+}
+
+/// O navegador está na frente da pessoa: transmitir a janela para a própria tela não serve para nada.
+/// ponytail: máquina com id diferente do nome do computador continua mostrando o botão, o que só sobra.
+fn browser_is_here(machine: &str, server_machine: Option<&str>, address: &str, computer: Option<&str>) -> bool {
+    let host = address.split("://").nth(1).unwrap_or(address);
+    let loopback = host.starts_with("127.") || host.starts_with("localhost") || host.starts_with("[::1]");
+    (loopback && server_machine == Some(machine)) || computer.is_some_and(|computer| computer.eq_ignore_ascii_case(machine))
+}
+
+/// Nome e detalhe de um navegador: o do perfil e o email dele, ou "Navegador padrão".
+fn target_names(target: &Value) -> (String, String) {
+    match target["kind"].as_str() {
+        Some("chrome_profile") => (target["label"].as_str().unwrap_or_default().to_owned(), target["email"].as_str().unwrap_or_default().to_owned()),
+        _ => (tr("accounts_login_where_default"), String::new()),
+    }
+}
+
+/// O que a máquina oferece, para decidir antes de abrir; a máquina que não respondeu aparece e diz isso.
+fn machine_detail(answered: bool, offered: &[&Value]) -> String {
+    if !answered { return tr("accounts_login_where_no_answer"); }
+    if offered.is_empty() { return tr("accounts_login_where_no_browser"); }
+    offered.iter().map(|target| target_names(target).0).collect::<Vec<_>>().join(", ")
+}
+
+pub(crate) fn login_heading(title: String, help: String) -> Div {
+    div().flex().flex_col().gap(px(4.))
+        .child(div().font_weight(FontWeight::MEDIUM).text_size(px(13.)).child(title))
+        .child(div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(help))
+}
+
+pub(crate) fn target_row(id: impl Into<ElementId>, name: String, detail: String, is_last: bool) -> Button {
+    crate::app::popup::row(id, false).accessibility_label(name.clone()).child(div().w_full().flex().items_center().gap_2()
+        .child(div().flex_1().min_w_0().flex().flex_col().gap(px(2.))
+            .child(div().truncate().text_sm().font_weight(FontWeight::MEDIUM).child(name))
+            .when(!detail.is_empty(), |el| el.child(div().truncate().text_xs().text_color(theme::muted()).child(detail))))
+        .when(is_last, |el| el.child(div().flex_shrink_0().text_xs().text_color(theme::muted()).child(tr("accounts_login_where_last"))))
+        .child(chrome::small_icon(IconName::ChevronRight, 14., theme::faint())))
+}
+
+fn browser_reason(reason: Option<&str>) -> &'static str {
+    match reason {
+        Some("erro_login_machine_unreachable") => "accounts_login_reason_unreachable",
+        Some("erro_login_port_busy") => "accounts_login_reason_port",
+        Some("erro_login_target_missing") => "accounts_login_reason_target",
+        _ => "accounts_login_reason_other",
+    }
+}
+
+fn view_key(key: &str) -> Option<&'static str> {
+    Some(match key {
+        "enter" => "Enter",
+        "tab" => "Tab",
+        "backspace" => "Backspace",
+        "delete" => "Delete",
+        "escape" => "Escape",
+        "left" => "ArrowLeft",
+        "right" => "ArrowRight",
+        "up" => "ArrowUp",
+        "down" => "ArrowDown",
+        "home" => "Home",
+        "end" => "End",
+        _ => return None,
+    })
+}
+
+fn view_reply(frame: &Value) -> ViewReply {
+    if frame["available"] != true { return ViewReply::Notice("accounts_login_view_unavailable"); }
+    if frame["error"] == "erro_login_machine_unreachable" { return ViewReply::Lost; }
+    if frame["retry"] == true { return ViewReply::Retry; }
+    if frame["closed"] == true { return ViewReply::Notice("accounts_login_view_closed"); }
+    if frame["pending"] == true { return ViewReply::Notice("accounts_login_view_waiting"); }
+    let image = frame["d"].as_str()
+        .and_then(|data| base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data).ok())
+        .and_then(|bytes| crate::media::decode(&bytes, 4096, 4096, None));
+    let Some(image) = image else { return ViewReply::CaptureFailed { can_input: frame["input"].as_bool().unwrap_or(true) } };
+    ViewReply::Frame {
+        image,
+        size: (frame["w"].as_f64().unwrap_or(1.), frame["h"].as_f64().unwrap_or(1.)),
+        title: frame["title"].as_str().unwrap_or_default().to_owned(),
+        can_input: frame["input"].as_bool().unwrap_or(true),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::account_slug;
+    use super::{browser_is_here, view_key, view_reply, ViewReply};
+    use serde_json::json;
+
+    #[test]
+    fn the_view_is_only_for_a_browser_on_another_machine() {
+        let local = "http://127.0.0.1:8765/";
+        let remote = "http://100.64.0.2:8765/";
+        assert!(browser_is_here("casa", Some("casa"), local, None), "app e navegador no mesmo servidor local");
+        assert!(!browser_is_here("notebook", Some("casa"), local, None), "navegador em outra máquina");
+        assert!(!browser_is_here("casa", Some("casa"), remote, Some("notebook")), "app no notebook, servidor e navegador em casa");
+        assert!(browser_is_here("notebook", Some("casa"), remote, Some("NOTEBOOK")), "app e navegador no notebook, conta em casa");
+    }
+
+    #[test]
+    fn view_reply_says_why_there_is_no_frame() {
+        let notice = |frame| match view_reply(&frame) { ViewReply::Notice(notice) => notice, _ => "outro" };
+        assert_eq!(notice(json!({"available": false})), "accounts_login_view_unavailable");
+        assert_eq!(notice(json!({"available": true, "closed": true})), "accounts_login_view_closed");
+        assert_eq!(notice(json!({"available": true, "pending": true})), "accounts_login_view_waiting");
+        assert!(matches!(view_reply(&json!({"available": true, "error": "x", "input": false})), ViewReply::CaptureFailed { can_input: false }));
+        assert!(matches!(view_reply(&json!({"available": true, "error": "erro_login_machine_unreachable"})), ViewReply::Lost));
+    }
+
+    #[test]
+    fn only_navigation_keys_go_by_name() {
+        assert_eq!(view_key("enter"), Some("Enter"));
+        assert_eq!(view_key("a"), None);
+        assert_eq!(view_key("f4"), None);
+    }
 
     #[test]
     fn slug_is_what_the_server_accepts() {
