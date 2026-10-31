@@ -39,9 +39,12 @@
     results = r;
   }
 
-  async function save() {
+  // Recebe o valor novo: o anterior é lido antes de trocar, para a falha total poder voltar a ele.
+  async function save(next: { enabled: boolean; hours: number } = { enabled, hours }) {
     busy = true;
     const before = { enabled, hours };
+    enabled = next.enabled;
+    hours = next.hours;
     try {
       const r = await saveAutoHideAll(servers, { enabled, after_minutes: hours * 60 });
       saved = r;
@@ -81,18 +84,18 @@
     <div class="ss-row">
       <label class="ss-label" for="auto-hide-on">{m.session_auto_hide_label()}</label>
       <input id="auto-hide-on" type="checkbox" class="switch" checked={enabled} disabled={busy}
-             onchange={(e) => { enabled = e.currentTarget.checked; void save(); }} />
+             onchange={(e) => { void save({ enabled: e.currentTarget.checked, hours }); }} />
     </div>
     <div class="ss-row">
       <Select ariaLabel={m.session_auto_hide_label()} value={String(hours)} opcoes={HOURS}
               disabled={busy || !enabled}
-              onchange={(v) => { hours = Number(v); void save(); }} />
+              onchange={(v) => { void save({ enabled, hours: Number(v) }); }} />
     </div>
 
     {#if differs.length > 0}
       <div class="ss-differs" role="status">
         <span>{m.session_auto_hide_differs({ servers: differs.map(labelOf).join(', ') })}</span>
-        <button class="ss-btn" disabled={busy} onclick={save}>{m.session_auto_hide_apply_all()}</button>
+        <button class="ss-btn" disabled={busy} onclick={() => save()}>{m.session_auto_hide_apply_all()}</button>
       </div>
     {/if}
 

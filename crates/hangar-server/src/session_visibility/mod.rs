@@ -4,6 +4,7 @@ pub mod auto;
 pub mod fill;
 pub mod store;
 
+use std::io;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -24,8 +25,12 @@ use crate::groups::link_state::blocking;
 fn home(st: &AppState) -> Option<PathBuf> { st.list.env().dirs.as_ref().map(|d| d.home.clone()) }
 
 /// Chave com registro: sem ele a limpeza tiraria a marca na rodada seguinte, e a sessão voltaria sozinha.
-pub(crate) fn registered(home: &Path, key: &str) -> bool {
-    crate::session_open::record::path(home, key).is_ok_and(|p| p.exists())
+/// Erro de leitura do disco é erro, nunca "sem registro": a limpeza apagaria a marca de sessão viva.
+pub(crate) fn registered(home: &Path, key: &str) -> io::Result<bool> {
+    match crate::session_open::record::path(home, key) {
+        Ok(path) => path.try_exists(),
+        Err(_) => Ok(false),
+    }
 }
 
 /// `PUT`/`DELETE /api/sessions/{name}/hidden`.
@@ -58,9 +63,9 @@ async fn set(st: &AppState, name: &str, hidden: bool) -> Response {
     };
     let key = crate::dictation::rename_suggestion::key_of(st, name, row.lifecycle_id.as_deref()).await;
     let now = crate::state::monitor::wall_now();
-    let written = blocking(move || match key.filter(|k| registered(&home, k)) {
-        Some(key) => store::set_hidden(&home, &key, hidden, now).map(|()| true),
-        None => Ok(false),
+    let written = blocking(move || match key {
+        Some(key) if registered(&home, &key)? => store::set_hidden(&home, &key, hidden, now).map(|()| true),
+        _ => Ok(false),
     }).await;
     match written {
         Ok(true) => {

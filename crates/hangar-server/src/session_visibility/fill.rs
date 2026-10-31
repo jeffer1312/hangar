@@ -76,7 +76,11 @@ pub async fn fill_rows(home: &Path, mux: &Mux, rows: &mut [SessionRow], diag: &D
     }
     // Sem registro a sessão não volta pelo "Mostrar" (a rota recusa): nem a marca nem o automático a escondem.
     let (at, asked) = (home.to_owned(), keys.iter().flatten().chain(marks.keys()).cloned().collect::<HashSet<_>>());
-    let known = match blocking(move || Ok(asked.into_iter().filter(|k| registered(&at, k)).collect::<HashSet<_>>())).await {
+    let known = match blocking(move || {
+        let mut known = HashSet::new();
+        for key in asked { if registered(&at, &key)? { known.insert(key); } }
+        Ok(known)
+    }).await {
         Ok(known) => known,
         Err(error) => return failed(diag, "session_visibility_unreadable", &error),
     };
@@ -93,7 +97,8 @@ pub async fn fill_rows(home: &Path, mux: &Mux, rows: &mut [SessionRow], diag: &D
     let at = home.to_owned();
     let written = blocking(move || {
         if !clear.is_empty() { store::unhide_if_hidden(&at, &clear, now)?; }
-        if stale { store::prune(&at, |key| registered(&at, key))?; }
+        // Na dúvida a marca fica: só some a chave cujo registro o disco confirma que não existe.
+        if stale { store::prune(&at, |key| registered(&at, key).unwrap_or(true))?; }
         Ok(())
     }).await;
     if let Err(error) = written { failed(diag, "session_visibility_store_failed", &error); }

@@ -297,7 +297,11 @@ import { textoProblema } from '../lib/problema';
   const hideBlocked = $derived(!hidden && asking);
   function toggleHidden() {
     const server = listOwnServers().find((s) => s.id === serverId);
-    if (!server) return;
+    if (!server) {
+      const error = m.convidados_servidor_fora_da_lista();
+      say(hidden ? m.session_show_failed({ error }) : m.session_hide_failed({ error }), true);
+      return;
+    }
     void act(async () => {
       try {
         await (hidden ? showSession(server, session.name) : hideSession(server, session.name));
