@@ -1082,6 +1082,19 @@ async fn terminal_runtime_a_starting_life_runs_a_first_slash_command_once_its_co
     assert!(since.elapsed()<Duration::from_secs(5),"esperou {:?}",since.elapsed());
     h.stop().await.unwrap();
 }
+/// A mensagem comum entregue também prova a conversa: um comando de barra depois dela não espera a subida.
+#[tokio::test]
+async fn terminal_runtime_a_delivered_message_proves_the_conversation_for_later_slash_commands() {
+    let f=Fixture::new().await;
+    let native=f.target.metadata.config_dir.join("sessions").join(format!("{}.json",f.target.metadata.agent_pid));
+    let h=f.start_grace(Duration::from_secs(24*3600));
+    h.command(f.command("primeira","oi")).await.unwrap();
+    f.wait_for("a mensagem sai",||!typed_at(&f,"oi").is_empty()).await;
+    f.io.native_record.lock().unwrap().take();std::fs::remove_file(&native).unwrap();
+    let refused=tokio::time::timeout(Duration::from_secs(5),h.command(f.command("segunda","/help"))).await.expect("o comando não esperou a subida").unwrap();
+    assert_eq!((refused.disposition,refused.payload["code"].as_str()),(hangar_server::runtime::protocol::Disposition::Deferred,Some("terminal_facts")));
+    h.stop().await.unwrap();
+}
 #[tokio::test]
 async fn terminal_runtime_unreadable_capture_recovers_without_sse() {
     let f=Fixture::new().await;f.ready.store(false,std::sync::atomic::Ordering::Release);let h=f.start();

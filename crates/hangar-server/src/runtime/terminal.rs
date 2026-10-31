@@ -1153,6 +1153,7 @@ impl Executor {
         if self.footer_misses.as_ref().is_some_and(|(row,misses)|row==root && *misses>=FOCUS_RETURN_TRIES) {driver=driver.footer_kept();}
         let facts=if prompt {Some(services.facts(&self.target.binding).await)}else{None};
         let current=facts.as_ref().is_none_or(|result|result.as_ref().is_ok_and(|facts|facts.binding==self.target.binding));
+        if prompt && current {self.conversation_proved=true;}
         if let Some(facts)=&facts {self.deliverable=facts.as_ref().is_ok_and(|facts|current && facts.ready && !facts.open_question);}
         // Com o Claude trabalhando a mensagem fica na fila do Hangar, onde o painel a apaga, edita e reordena.
         // O recado com socket nativo segue: é o canal do próprio Claude Code para o meio do turno.
