@@ -165,10 +165,7 @@ async fn answer(st: &Arc<AppState>, headers: &HeaderMap, bytes: &[u8]) -> Respon
     let prompt = prompt(&question, &hits);
     let result = match &st.claude_p {
         Some(runner) => crate::claude_p::claude_p(&prompt, runner.as_ref()).await,
-        None => {
-            let cli = crate::claude_p::Cli { accounts: st.accounts.clone(), bridge: crate::accounts::http::bridge(st).ok() };
-            crate::claude_p::claude_p(&prompt, &cli).await
-        }
+        None => crate::claude_p::claude_p(&prompt, &cli(st)).await,
     };
     match result {
         Ok(answer) => json_response(StatusCode::OK, json!({"answer": answer, "hits": hits})),
@@ -179,9 +176,39 @@ async fn answer(st: &Arc<AppState>, headers: &HeaderMap, bytes: &[u8]) -> Respon
     }
 }
 
+/// O `claude` do servidor, com a ponte das contas para ler as cotas. Sem ponte tudo vai para a conta
+/// padrão: a falha vai ao diário quando começa.
+fn cli(st: &AppState) -> crate::claude_p::Cli {
+    let bridge = match crate::accounts::http::bridge(st) {
+        Ok(bridge) => { st.search.recovered("busca.ponte_contas_falhou", ""); Some(bridge) }
+        Err(e) => {
+            st.search.report_once("busca.ponte_contas_falhou", "", || format!("{}: {}", e.code, e.message));
+            None
+        }
+    };
+    crate::claude_p::Cli { accounts: st.accounts.clone(), bridge }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn bridge_failure_reaches_the_diary_once() {
+        // Sem a ponte as cotas não são lidas e tudo vai para a conta padrão: isso não pode ser calado.
+        if crate::config::Config::runtime_instance().is_ok_and(|i| i.is_some()) { return; }
+        let dir = tempfile::tempdir().unwrap();
+        let mut st = AppState::new(crate::config::Config { listen: "127.0.0.1:0".parse().unwrap(), upstream: "127.0.0.1:9".parse().unwrap(),
+            auth_token: "dono".into(), internal_secret: "interno".into(), log_path: None, trusted: crate::auth::TrustedHosts::parse("127.0.0.1") });
+        let reports = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let diary = reports.clone();
+        st.search = super::super::Index::new(dir.path(), std::sync::Arc::new(|| Ok(Vec::new())),
+            std::sync::Arc::new(move |code, detail| diary.lock().unwrap().push((code, detail))), Default::default());
+        assert!(cli(&st).bridge.is_none());
+        assert!(cli(&st).bridge.is_none());
+        let got: Vec<_> = reports.lock().unwrap().iter().map(|(c, _)| *c).collect();
+        assert_eq!(got, ["busca.ponte_contas_falhou"]);
+    }
 
     #[test]
     fn extract_terms_matches_the_capture() {

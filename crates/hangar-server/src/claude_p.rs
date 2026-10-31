@@ -104,18 +104,18 @@ impl Runner for Cli {
         Box::pin(async move {
             use tokio::io::{AsyncReadExt, AsyncWriteExt};
             let Some(mut command) = self.accounts.claude_command() else { return Err("claude CLI não encontrado".into()) };
-            let failed = || "claude -p excedeu o tempo ou falhou ao iniciar".to_owned();
+            let failed = |e: std::io::Error| format!("claude -p falhou ao iniciar: {}", e.kind());
             command.args(["-p", "--model", "sonnet", "--no-session-persistence", "--disallowedTools"]).args(DISALLOWED)
                 .current_dir(std::env::temp_dir()).stdin(std::process::Stdio::piped())
                 .stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).kill_on_drop(true);
             for key in crate::terminal_process::PRIVATE_ENV_KEYS { command.env_remove(key); }
             if let Some(dir) = account { command.env("CLAUDE_CONFIG_DIR", dir); }
-            let mut tree = crate::terminal_process::CommandTree::configure(&mut command).map_err(|_| failed())?;
-            let mut child = command.spawn().map_err(|e| if e.kind() == std::io::ErrorKind::NotFound { "claude CLI não encontrado".into() } else { failed() })?;
-            if tree.attach(&child).is_err() {
+            let mut tree = crate::terminal_process::CommandTree::configure(&mut command).map_err(failed)?;
+            let mut child = command.spawn().map_err(|e| if e.kind() == std::io::ErrorKind::NotFound { "claude CLI não encontrado".into() } else { failed(e) })?;
+            if let Err(e) = tree.attach(&child) {
                 crate::terminal_process::finish(&mut tree).await;
                 let _ = child.wait().await;
-                return Err(failed());
+                return Err(failed(e));
             }
             let (mut stdin, mut out, mut err) = (child.stdin.take().unwrap(), child.stdout.take().unwrap(), child.stderr.take().unwrap());
             let done = tokio::time::timeout(TIMEOUT, async {
@@ -134,7 +134,8 @@ impl Runner for Cli {
                     stdout: String::from_utf8_lossy(&o).replace("\r\n", "\n").replace('\r', "\n"),
                     stderr: String::from_utf8_lossy(&e).replace("\r\n", "\n").replace('\r', "\n"),
                 }),
-                _ => { let _ = child.wait().await; Err(failed()) }
+                Ok((Err(e), _, _)) => { let _ = child.wait().await; Err(format!("claude -p falhou ao ler a saída: {}", e.kind())) }
+                Err(_) => { let _ = child.wait().await; Err(format!("claude -p excedeu o tempo ({} s)", TIMEOUT.as_secs())) }
             }
         })
     }
@@ -186,5 +187,13 @@ mod tests {
         assert_eq!(read("env"), "/conta/b");
         let empty = tempfile::tempdir().unwrap();
         assert_eq!(self::cli(empty.path()).run("p", None).await.unwrap_err(), "claude CLI não encontrado");
+    }
+
+    #[tokio::test]
+    async fn cli_that_fails_to_start_says_the_kind_of_error() {
+        // `claude` sem bit de execução: o 502 diz o motivo em vez de "excedeu o tempo ou falhou".
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("claude"), "#!/bin/sh\n").unwrap();
+        assert_eq!(cli(dir.path()).run("p", None).await.unwrap_err(), "claude -p falhou ao iniciar: permission denied");
     }
 }
