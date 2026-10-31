@@ -88,8 +88,14 @@ pub async fn handle(State(state): State<Arc<AppState>>, ConnectInfo(peer): Conne
     let path = path(&state.accounts.env.home);
     match tokio::task::spawn_blocking(move || apply(&path, patch)).await {
         Ok(Ok(progress)) => json_response(StatusCode::OK, json!(progress)),
-        _ => failure(StatusCode::SERVICE_UNAVAILABLE, "tour_progress_unreadable", "não foi possível ler ou guardar o que já foi visto do tour"),
+        Ok(Err(error)) => unreadable(&error.to_string()),
+        Err(error) => unreadable(&error.to_string()),
     }
+}
+
+fn unreadable(cause: &str) -> Response {
+    tracing::warn!(code = "tour_progress_unreadable", %cause, "tour-progress sem leitura ou gravação");
+    failure(StatusCode::SERVICE_UNAVAILABLE, "tour_progress_unreadable", "não foi possível ler ou guardar o que já foi visto do tour")
 }
 
 #[cfg(test)]
