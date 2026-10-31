@@ -538,6 +538,13 @@ fn locked(listens: &Listens) -> std::sync::MutexGuard<'_, HashMap<String, Listen
     listens.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+fn drop_received_code(listens: &Listens, operation: &str, generation: u64) {
+    let mut listens = locked(listens);
+    if listens.get(operation).is_some_and(|listen| listen.generation == generation) {
+        listens.remove(operation);
+    }
+}
+
 /// Código já recebido fica: quem consulta pode estar a um passo de buscá-lo quando o prazo vence.
 fn expire_listen(listens: &Listens, operation: &str, generation: u64) -> bool {
     let mut listens = locked(listens);
@@ -792,7 +799,11 @@ impl LoginBrowser {
             serve.abort();
             if expire_listen(&listens, &operation, generation) {
                 close_view_in(&views, &operation).await;
+                return;
             }
+            // O código recebido fica até o fechamento, que pode nunca chegar se a outra máquina caiu.
+            tokio::time::sleep(LISTEN_CAP).await;
+            drop_received_code(&listens, &operation, generation);
         });
         Ok(())
     }
@@ -1247,6 +1258,10 @@ mod tests {
         assert!(expire_listen(&listens, "empty", 1));
         assert!(locked(&listens).contains_key("got"));
         assert!(!locked(&listens).contains_key("empty"));
+        drop_received_code(&listens, "got", 2);
+        assert!(locked(&listens).contains_key("got"), "outra tentativa com a mesma operação não apaga");
+        drop_received_code(&listens, "got", 1);
+        assert!(!locked(&listens).contains_key("got"));
     }
 
     #[tokio::test]

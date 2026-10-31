@@ -493,8 +493,14 @@ async fn only_the_owner_reaches_the_login_window_routes() {
         assert_eq!(client.request(method.clone(), &url).bearer_auth("convidado").send().await.unwrap().status(), 401, "{path} convidado");
         assert!(h.forwarded(method.as_str(), path), "{path} tem que ir ao porteiro, sem resposta do Rust");
     }
-    let owner = h.request(reqwest::Method::GET, "/api/login-browser/view").send().await.unwrap().status();
-    assert_ne!(owner, 401);
+    for (method, path) in [
+        (reqwest::Method::GET, "/api/login-browser/view"),
+        (reqwest::Method::GET, "/api/login-browser/result"),
+        // Sem corpo é recusado antes de abrir o navegador.
+        (reqwest::Method::POST, "/api/login-browser/open"),
+    ] {
+        assert_ne!(h.request(method, path).send().await.unwrap().status(), 401, "{path} com o token do dono");
+    }
 }
 
 #[tokio::test]

@@ -494,6 +494,8 @@ impl Hangar {
     fn view_point(&self, point: Point<Pixels>, clamp: bool) -> Option<(f64, f64)> {
         let view = self.accounts.sign_in.as_ref()?.view.as_ref()?;
         view.frame.as_ref()?;
+        // Quadro velho na tela: a página pode ter mudado, e o clique cairia em outro controle.
+        if matches!(view.notice, Some("accounts_login_view_capture" | "accounts_login_view_lost")) { return None; }
         let (x, y) = crate::app::remote_browser::fraction(view.bounds.get(), (view.size.0 as f32, view.size.1 as f32), point, clamp)?;
         Some((f64::from(x) * view.size.0, f64::from(y) * view.size.1))
     }
@@ -705,6 +707,13 @@ impl Hangar {
                     Ok(step) if step.get("etapa").and_then(Value::as_str) == Some("concluido") => {
                         let field = |key: &str| step.get(key).and_then(Value::as_str).map(str::to_owned);
                         self.finish_login(field("email"), field("plano"), window, cx);
+                    }
+                    // O servidor não tem mais a tentativa (reiniciou): a tela não pode ficar esperando por ela.
+                    // Com o código em voo é a própria confirmação que a encerra, e a resposta dela decide.
+                    Ok(step) if step.get("etapa").and_then(Value::as_str) == Some("idle") && !s.sending => {
+                        if let Some(poll) = s.poll.take() { poll.abort(); }
+                        (s.open, s.url, s.browser) = (false, None, None);
+                        self.close_login_view(window, cx);
                     }
                     Ok(step) => {
                         s.step_failed = false;
