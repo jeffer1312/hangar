@@ -70,7 +70,6 @@ struct Replay {
     sessions: Arc<Sessions>,
     projects: Vec<(String, &'static str)>,
     public: SocketAddr,
-    names: Arc<AtomicU64>,
     _tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 
@@ -126,7 +125,6 @@ impl Replay {
         ));
         // Relógio fixo e contador hexadecimal reiniciado por fixture, como o `token_hex` da captura.
         let counter = Arc::new(AtomicU64::new(0));
-        let names = counter.clone();
         state.upload_naming = Naming {
             now: Arc::new(|| EPOCH),
             suffix: Arc::new(move || Ok(format!("{:06x}", counter.fetch_add(1, Ordering::SeqCst) + 1))),
@@ -135,7 +133,7 @@ impl Replay {
         let (public, public_task) = serve(router(state.clone())).await;
         let projects = vec![(project_key(&project).unwrap(), "<project>"), (project_key(&other).unwrap(), "<other-project>")];
         let vault = root.join(".hangar").join("uploads");
-        let replay = Self { _dir: dir, root, vault, claude, sessions, projects, public, names, _tasks: vec![public_task] };
+        let replay = Self { _dir: dir, root, vault, claude, sessions, projects, public, _tasks: vec![public_task] };
         replay.retention(0);
         replay
     }
@@ -408,12 +406,6 @@ const RUST_RESOLVER: &[(&str, &str)] = &[
     ("missing", "erro_upload_inexistente"),
 ];
 
-/// Exceção aceita, Rust já no ar: nome de sessão hostil recusado no envio vira o erro do Rust.
-/// Só o Windows grava esse caso: `create_dir` de `..-..` cria `..-` (o Win32 tira pontos finais),
-/// `Directory::child` recusa com InvalidInput (store.rs, ramo `cfg(windows)`: `real_path(&path)? != path`)
-/// e `storage_error(e, true)` responde 400 `erro_arquivo_vazio` (http.rs, `InvalidInput if upload`).
-const RUST_SAVE_ERRORS: &[(&str, &str, &str)] = &[("../..", "erro_arquivo_vazio", "arquivo vazio ou caminho inválido")];
-
 /// O mapeamento do ramo "resolve" de `uploads::http::execute`, que a transcrição por arquivo usa.
 fn resolver_error(kind: std::io::ErrorKind) -> (u16, &'static str) {
     match kind {
@@ -489,8 +481,15 @@ async fn replay(name: &str, text: &str) -> Vec<String> {
                     }
                     continue;
                 }
-                let want = expected["headers"].as_object().unwrap();
+                let mut want = expected["headers"].as_object().unwrap().clone();
                 let download = url.contains("/uploads/") && matches!(status, 200 | 206);
+                // Todo download leva `max-age=60`; a página que embrulha o HTML, sem tamanho, sai em chunked.
+                if download {
+                    want.insert("cache-control".to_owned(), json!("max-age=60"));
+                    if !want.contains_key("content-length") {
+                        want.insert("transfer-encoding".to_owned(), json!("chunked"));
+                    }
+                }
                 let names: std::collections::BTreeSet<&String> = want.keys().chain(headers.keys()).collect();
                 for header in names {
                     let (wanted, got) = (want.get(header), headers.get(header));
@@ -502,26 +501,8 @@ async fn replay(name: &str, text: &str) -> Vec<String> {
                         eprintln!("MIME aceito {}: esperado={} recebido={}", at("headers.content-type"), wanted.unwrap(), got.unwrap());
                         continue;
                     }
-                    // Exceção aceita: sem compressão, o Rust não manda `vary`.
-                    if header == "vary" && wanted == Some(&json!("Accept-Encoding")) && got.is_none() {
-                        continue;
-                    }
                     // Exceção aceita: ETag em formato próprio, presente e entre aspas.
                     if download && header == "etag" && quoted(got) {
-                        continue;
-                    }
-                    // Exceção aceita: o download leva `cache-control: max-age=60`.
-                    if download && header == "cache-control" && wanted.is_none() && got == Some(&json!("max-age=60")) {
-                        continue;
-                    }
-                    // Exceção aceita: a página que embrulha o HTML sai em chunked, sem tamanho dos dois lados.
-                    if download
-                        && header == "transfer-encoding"
-                        && wanted.is_none()
-                        && got == Some(&json!("chunked"))
-                        && !want.contains_key("content-length")
-                        && !headers.contains_key("content-length")
-                    {
                         continue;
                     }
                     diffs.push(format!("{} esperado={wanted:?} recebido={got:?}", at(&format!("headers.{header}"))));
@@ -545,16 +526,9 @@ async fn replay(name: &str, text: &str) -> Vec<String> {
                     let path = PathBuf::from(raw_path(&r, &parsed));
                     set_mtime(&path, EPOCH);
                     json!({"status": 200, "path": parsed["path"]})
-                } else if let Some(&(_, code, msg)) = RUST_SAVE_ERRORS.iter().find(|(s, _, _)| *s == session) {
-                    // Na tabela, o contador foi gasto antes da recusa.
-                    r.names.fetch_add(1, Ordering::SeqCst);
-                    let rust_body = json!({"detail": {"code": code, "params": {}, "msg": msg}});
-                    if parsed != rust_body {
-                        diffs.push(format!("{} esperado={rust_body} rust={parsed}", at(&format!("platform-save[{session:?}](erro Rust)"))));
-                    }
-                    json!({"status": status, "detail": expected["result"]["detail"]})
                 } else {
-                    json!({"status": status, "detail": detail(&parsed)})
+                    // Só o Windows recusa: `..-..` vira `..-` no Win32 e `Directory::child` não aceita.
+                    json!({"status": status, "detail": parsed["detail"]})
                 };
                 if result != expected["result"] {
                     diffs.push(format!("{} esperado={} recebido={result}", at(&format!("platform-save[{session:?}]")), expected["result"]));
@@ -631,40 +605,28 @@ fn raw_path(r: &Replay, parsed: &Value) -> String {
     path.to_str().unwrap().to_owned()
 }
 
-/// O texto do erro: a captura grava `detail` como frase; o Rust responde `{code, params, msg}`.
-fn detail(parsed: &Value) -> Value {
-    match &parsed["detail"] {
-        Value::Object(detail) => detail.get("msg").cloned().unwrap_or(Value::Null),
-        other => other.clone(),
-    }
-}
-
 #[track_caller]
 fn assert_same(name: &str, diffs: Vec<String>) {
     assert!(diffs.is_empty(), "{name}: {} divergência(s) da tabela:\n{}", diffs.len(), diffs.join("\n"));
 }
 
 #[tokio::test]
-#[cfg_attr(target_os = "macos", ignore = "a tabela só tem Linux e Windows")]
 async fn errors_and_isolation_sequence() {
     assert_same("errors-and-isolation", replay("errors-and-isolation", cases::ERRORS_AND_ISOLATION).await);
 }
 
 #[tokio::test]
-#[cfg_attr(target_os = "macos", ignore = "a tabela só tem Linux e Windows")]
 async fn retention_and_audio_sequence() {
     assert_same("retention-and-audio", replay("retention-and-audio", cases::RETENTION_AND_AUDIO).await);
 }
 
 #[tokio::test]
-#[cfg_attr(target_os = "macos", ignore = "a tabela só tem Linux e Windows")]
 async fn active_content_range_sequence() {
     assert_same("active-content-range", replay("active-content-range", cases::ACTIVE_CONTENT_RANGE).await);
 }
 
 /// Sem decodificador de verdade: o próprio executável roda de novo, só este teste, com o PATH vazio.
 #[tokio::test]
-#[cfg_attr(target_os = "macos", ignore = "a tabela só tem Linux e Windows")]
 async fn video_without_ffmpeg_sequence() {
     if std::env::var_os(CHILD).is_some() {
         let missing = std::process::Command::new("ffmpeg").arg("-version").output();

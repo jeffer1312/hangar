@@ -916,61 +916,59 @@ async fn filename_extension_preserves_percent_encoded_python_behavior() {
 #[test]
 fn gallery_reads_older_vault_files() {
     use base64::Engine;
-    {
-        let golden: serde_json::Value = serde_json::from_str(crate::uploads_contract::cases::BINARY_AND_GALLERY).unwrap();
-        let fixture = tempfile::tempdir().unwrap();
-        for row in golden["normalized_tree"].as_array().unwrap() {
-            let relative = row["path"]
-                .as_str()
-                .unwrap()
-                .strip_prefix("<root>/vault/")
-                .unwrap()
-                .replace("<project>", "project");
-            let path = fixture.path().join(relative);
-            if row["kind"] == "directory" {
-                fs::create_dir_all(path).unwrap();
-                continue;
-            }
-            let data = base64::engine::general_purpose::STANDARD
-                .decode(row["content_base64"].as_str().unwrap())
-                .unwrap();
-            fs::write(&path, &data).unwrap();
-            let time = UNIX_EPOCH + Duration::from_secs_f64(row["mtime"].as_f64().unwrap());
-            fs::File::options()
-                .write(true)
-                .open(path)
-                .unwrap()
-                .set_times(fs::FileTimes::new().set_modified(time))
-                .unwrap();
+    let golden: serde_json::Value = serde_json::from_str(crate::uploads_contract::cases::BINARY_AND_GALLERY).unwrap();
+    let fixture = tempfile::tempdir().unwrap();
+    for row in golden["normalized_tree"].as_array().unwrap() {
+        let relative = row["path"]
+            .as_str()
+            .unwrap()
+            .strip_prefix("<root>/vault/")
+            .unwrap()
+            .replace("<project>", "project");
+        let path = fixture.path().join(relative);
+        if row["kind"] == "directory" {
+            fs::create_dir_all(path).unwrap();
+            continue;
         }
-        let store = UploadStore::new(fixture.path()).unwrap();
-        let entries = store
-            .list("project", "transcript", 0, 1_700_000_000.0)
+        let data = base64::engine::general_purpose::STANDARD
+            .decode(row["content_base64"].as_str().unwrap())
             .unwrap();
-        let expected = &golden["normalized_response"][3]["json"]["files"];
-        // Empates mantêm a ordem da enumeração, que varia entre filesystems.
-        let mut actual = serde_json::to_value(entries)
+        fs::write(&path, &data).unwrap();
+        let time = UNIX_EPOCH + Duration::from_secs_f64(row["mtime"].as_f64().unwrap());
+        fs::File::options()
+            .write(true)
+            .open(path)
             .unwrap()
-            .as_array()
-            .unwrap()
-            .clone();
-        let mut expected = expected.as_array().unwrap().clone();
-        actual.sort_by_key(|r| r["filename"].as_str().unwrap().to_string());
-        expected.sort_by_key(|r| r["filename"].as_str().unwrap().to_string());
-        assert_eq!(actual, expected);
-        for row in golden["normalized_tree"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|r| r["kind"] == "file")
-        {
-            let name = row["path"].as_str().unwrap().rsplit('/').next().unwrap();
-            let path = store.resolve("project", "transcript", name).unwrap();
-            assert_eq!(
-                base64::engine::general_purpose::STANDARD.encode(fs::read(path).unwrap()),
-                row["content_base64"].as_str().unwrap()
-            );
-        }
+            .set_times(fs::FileTimes::new().set_modified(time))
+            .unwrap();
+    }
+    let store = UploadStore::new(fixture.path()).unwrap();
+    let entries = store
+        .list("project", "transcript", 0, 1_700_000_000.0)
+        .unwrap();
+    let expected = &golden["normalized_response"][3]["json"]["files"];
+    // Empates mantêm a ordem da enumeração, que varia entre filesystems.
+    let mut actual = serde_json::to_value(entries)
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .clone();
+    let mut expected = expected.as_array().unwrap().clone();
+    actual.sort_by_key(|r| r["filename"].as_str().unwrap().to_string());
+    expected.sort_by_key(|r| r["filename"].as_str().unwrap().to_string());
+    assert_eq!(actual, expected);
+    for row in golden["normalized_tree"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["kind"] == "file")
+    {
+        let name = row["path"].as_str().unwrap().rsplit('/').next().unwrap();
+        let path = store.resolve("project", "transcript", name).unwrap();
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD.encode(fs::read(path).unwrap()),
+            row["content_base64"].as_str().unwrap()
+        );
     }
 }
 
