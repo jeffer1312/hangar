@@ -339,6 +339,8 @@
         <p class="pv-aviso" role="status">{m.vault_web_state_locked()}</p>
       {:else if status.state === 'key_lost'}
         <p class="pv-erro-txt" role="alert">{m.vault_web_state_key_lost()}</p>
+      {:else if status.state === 'unavailable'}
+        <p class="pv-erro-txt" role="alert">{status.detail ?? m.vault_err_chaveiro_indisponivel()}</p>
       {:else if status.state === 'offline'}
         <p class="pv-aviso" role="status">{m.vault_web_state_offline({ owner: status.owner ?? '', detail: status.detail ?? '' })}</p>
       {:else if status.state === 'absent' && status.role !== 'none'}

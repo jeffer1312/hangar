@@ -437,6 +437,7 @@ impl VaultPage {
         let owner = status.owner.clone().unwrap_or_default();
         let (text, retry) = match (status.state.as_str(), status.role.as_str()) {
             ("locked", _) => (tr("vault_state_locked"), true),
+            ("unavailable", _) => (tr("vault_error_chaveiro_indisponivel"), true),
             ("key_lost", _) => (tr("vault_state_key_lost"), false),
             ("offline", _) => (tr("vault_state_offline").replace("{owner}", &owner), true),
             ("absent", "remote") => (tr("vault_state_owner_empty").replace("{owner}", &owner), true),

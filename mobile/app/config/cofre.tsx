@@ -21,6 +21,7 @@ const STATE: Record<VaultState, () => string> = {
   absent: m.vault_app_state_absent,
   offline: m.vault_app_state_offline,
   key_lost: m.vault_app_state_key_lost,
+  unavailable: m.vault_err_chaveiro_indisponivel,
 };
 
 const host = (url?: string) => {
@@ -136,6 +137,7 @@ export default function Cofre() {
           {status.role === 'none' ? <InfoNotice text={m.vault_app_none_help()} />
             : state === 'locked' ? <InfoNotice text={m.vault_app_locked_help()} />
             : state === 'key_lost' ? <Notice text={m.vault_app_key_lost_help()} error />
+            : state === 'unavailable' ? <Notice text={status.detail ?? m.vault_err_chaveiro_indisponivel()} error />
             : state === 'offline' ? <Notice text={status.detail ? `${m.vault_app_offline_help()} ${status.detail}` : m.vault_app_offline_help()} error />
             : state === 'absent' ? <InfoNotice text={status.detail ?? m.vault_app_absent_help()} />
             : null}
