@@ -59,7 +59,9 @@ pub struct AppState {
     pub workspace_meta_slots: Arc<tokio::sync::Semaphore>,
     pub diag: crate::diag::DiagClient,
     pub costs: Arc<crate::costs::collect::Collector>,
-    pub fx: Arc<crate::costs::fx::Fx>,
+    /// Índice de conversas da busca e do Arquivo; o produtor liga só na subida real (`main.rs`).
+    pub search: crate::search::Index,
+    pub fx:Arc<crate::costs::fx::Fx>,
     pub reports: Arc<crate::costs::ReportCache>,
     pub origins_home: std::path::PathBuf,
     /// `~/.hangar`: etapas de ferramenta e cofre de anexos; o teste troca por uma pasta temporária.
@@ -189,7 +191,9 @@ impl AppState {
                     list.env().dirs.as_ref().map(|d| d.claude.join(".hangar-pair")).unwrap_or_default())
                 .with_mux(list.env().capture_program.to_string_lossy().into_owned())), list.clone(), diag.clone());
         let vault_requests = Arc::new(crate::vault::requests::Requests::default());
-        AppState { accounts: crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture()), command_catalog: Arc::default(), groups, server_id, peers: Arc::new(crate::groups::peers_from_env()), auth: Auth::configured(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, public_v6: None, front: None, diag,
+        let accounts = crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture());
+        let search = crate::search::Index::server(accounts.clone());
+        AppState { accounts, search, command_catalog: Arc::default(), groups, server_id, peers: Arc::new(crate::groups::peers_from_env()), auth: Auth::configured(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, public_v6: None, front: None, diag,
             workspace_slots: Arc::new(tokio::sync::Semaphore::new(4)),
             interactions, plugin,
             remote_browser: Arc::default(),
