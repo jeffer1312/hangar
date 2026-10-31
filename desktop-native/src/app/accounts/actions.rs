@@ -476,6 +476,8 @@ impl Hangar {
 
     fn view_input(&mut self, event: Value) {
         if let Some(view) = self.accounts.sign_in.as_mut().and_then(|s| s.view.as_mut()) {
+            // Um gesto de rolagem manda dezenas de eventos: não pode tomar o lugar do clique que vem depois.
+            if event["t"] == "wheel" && view.input.capacity() < VIEW_INPUT_QUEUE / 2 { return; }
             // Fila cheia é máquina que não dá conta: evento velho cairia numa tela que já mudou.
             if view.input.try_send(event).is_err() {
                 view.notice = Some("accounts_login_view_input_failed");
