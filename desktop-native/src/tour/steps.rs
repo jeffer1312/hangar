@@ -41,10 +41,11 @@ impl Need {
         match self {
             Need::EmptyList => s.sessions == 0,
             Need::Sessions(n) => s.sessions >= n,
-            Need::Accounts => s.accounts.is_some_and(|n| n >= 2) || s.codex,
+            // O anel e o microfone só existem no compositor de uma sessão aberta, não na tela inicial.
+            Need::Accounts => s.open.is_some() && (s.accounts.is_some_and(|n| n >= 2) || s.codex),
             Need::Nothing => true,
             Need::OpenSession => s.open.is_some(),
-            Need::Transcription => s.transcription == Some(true),
+            Need::Transcription => s.open.is_some() && s.transcription == Some(true),
             Need::ClaudeOrCodex => matches!(s.open, Some(Agent::Claude | Agent::Codex)),
         }
     }
@@ -171,6 +172,13 @@ mod tests {
         let failed = Snapshot { accounts: Some(0), codex: false, transcription: Some(false), ..FULL };
         assert!(failed.known());
         assert_eq!(tip_ids(&failed), ["account", "dictation"]);
+    }
+
+    #[test]
+    fn ring_and_microphone_wait_for_an_open_session() {
+        // Na tela inicial o compositor não tem anel nem microfone: o balão ficaria esperando uma peça que não existe.
+        let landing = Snapshot { open: None, ..FULL };
+        assert!(tip_ids(&landing).contains(&"account") && tip_ids(&landing).contains(&"dictation"));
     }
 
     #[test]

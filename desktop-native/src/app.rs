@@ -7481,7 +7481,8 @@ impl Hangar {
     fn render_tour(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let gate = crate::tour::Gate {
             // O painel do compositor fica abaixo do balão: com ele aberto, o balão o cobriria e roubaria o clique.
-            dialogs_open: self.connection_dialog || self.setup.is_some() || window.has_active_dialog(cx) || self.popup_open(),
+            dialogs_open: self.connection_dialog || self.setup.is_some() || window.has_active_dialog(cx) || self.popup_open()
+                || self.search.open,
             window_visible: !self.window_tray.hidden,
             server_read: self.tour.server_read && self.api.is_some(),
         };
