@@ -399,7 +399,7 @@ fn sqlite_failure_mid_file_leaves_no_partial_rows() {
     env.db().execute_batch("CREATE TRIGGER boom BEFORE UPDATE OF size ON files BEGIN SELECT RAISE(ABORT, 'disco cheio'); END;").unwrap();
     let lines: Vec<String> = (0..3).map(|i| line(&format!("agulha {i}"), &format!("u{i}"), "user")).collect();
     env.write(SID, &lines, false);
-    env.index.update().unwrap();
+    assert!(env.index.update().is_err(), "erro do banco volta da passada");
     assert_eq!(env.count("SELECT count(*) FROM msg"), 0);
     env.db().execute_batch("DROP TRIGGER boom").unwrap();
     env.index.update().unwrap();
@@ -623,7 +623,8 @@ fn producer_waits_first_pass_then_follows_writes() {
     wait_for("escrita indexada sem passada manual", || env.ids("agulha") == ["u1", "u2"]);
     env.write(SID2, &[line("agulha nova conversa", "n1", "user")], false);
     wait_for("conversa nova indexada", || env.ids("nova") == ["n1"]);
-    assert!(env.reports.lock().unwrap().is_empty());
+    let reports = env.reports.lock().unwrap().clone();
+    assert!(reports.is_empty(), "{reports:?}");
 }
 
 #[test]
@@ -1010,5 +1011,63 @@ fn producer_follows_agent_roots_and_codex_accounts() {
     fs::write(home.join(".hangar-codex-conta"), r#"{"version": 1, "id": "c"}"#).unwrap();
     wait_for("conta Codex nova indexada", || env.index.search(&terms("zebracontac"), 50).unwrap().unwrap()
         .iter().any(|r| r.codex_account.as_deref() == Some("c")));
-    assert!(env.reports.lock().unwrap().is_empty());
+    // A linha ilegível de verdade da fixture do Claude (`f8f12de6…`, linha 4) é contada; mais nada.
+    let reports = env.reports.lock().unwrap().clone();
+    assert_eq!(reports, [("busca.linhas_ilegiveis", "1 linhas ilegíveis puladas em 1 arquivos".to_owned())]);
+}
+
+// Falhas que não podem ficar só no journal.
+
+#[test]
+fn ingest_failure_of_the_database_keeps_the_index_not_ready_and_reaches_the_diary_once() {
+    // Disco cheio ou banco somente leitura na 1ª passada: o índice não fica pronto vazio (a busca
+    // varreria `[]` para tudo), a passada devolve o erro e o diário recebe a queda uma vez.
+    let env = Env::small(quiet());
+    env.index.open_now().unwrap();
+    env.db().execute_batch("CREATE TRIGGER falha BEFORE INSERT ON files BEGIN SELECT RAISE(ABORT, 'disco cheio'); END;").unwrap();
+    env.write(SID, &[line("zebra listrada", "u1", "user")], false);
+    assert!(env.index.update().is_err(), "a passada devolve o erro do banco");
+    assert!(!env.index.ready(), "índice não fica pronto vazio");
+    assert!(env.index.update().is_err());
+    assert_eq!(env.reported("busca.ingestao_falhou"), 1, "a mesma queda vai ao diário uma vez");
+    env.db().execute_batch("DROP TRIGGER falha").unwrap();
+    env.index.update().unwrap();
+    assert!(env.index.ready());
+    assert_eq!(env.ids("zebra"), ["u1"]);
+    // Voltou e caiu de novo: é outra transição.
+    env.db().execute_batch("CREATE TRIGGER falha BEFORE INSERT ON msg BEGIN SELECT RAISE(ABORT, 'somente leitura'); END;").unwrap();
+    env.write(SID2, &[line("outra zebra", "u2", "user")], false);
+    assert!(env.index.update().is_err());
+    assert_eq!(env.reported("busca.ingestao_falhou"), 2);
+}
+
+#[test]
+fn illegible_lines_are_counted_per_pass_in_one_diary_line() {
+    let env = Env::small(quiet());
+    env.write(SID, &["lixo 1\n".into(), "lixo 2\n".into(), line("boa", "u1", "user"), "{\"quebrado\n".into()], false);
+    env.write(SID2, &["nada disso\n".into(), "nem isto\n".into()], false);
+    env.index.update().unwrap();
+    let lines = |env: &Env| env.reports.lock().unwrap().iter().filter(|(c, _)| *c == "busca.linhas_ilegiveis").map(|(_, d)| d.clone()).collect::<Vec<_>>();
+    let got = lines(&env);
+    assert_eq!(got.len(), 1, "{got:?}");
+    assert!(got[0].starts_with("5 "), "{got:?}");
+    env.index.update().unwrap();
+    assert_eq!(lines(&env).len(), 1, "passada sem linha nova não repete");
+    append(&env.root.join(format!("acct/projects/-home-u-proj/{SID}.jsonl")), b"mais lixo\n");
+    env.index.update().unwrap();
+    let got = lines(&env);
+    assert_eq!(got.len(), 2, "{got:?}");
+    assert!(got[1].starts_with("1 "), "{got:?}");
+}
+
+#[test]
+fn poisoned_last_pass_lock_does_not_bring_the_index_down() {
+    let env = Env::small(Timing { stale: Duration::ZERO, ..quiet() });
+    let index = env.index.clone();
+    let _ = std::thread::spawn(move || {
+        let _held = index.inner.last_pass.lock().unwrap();
+        panic!("envenena a trava");
+    }).join();
+    env.index.update().unwrap();
+    assert_eq!(env.index.search(&terms("nada"), 50).unwrap(), Some(vec![]));
 }

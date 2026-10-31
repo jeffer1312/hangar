@@ -18,7 +18,7 @@ mod tests;
 pub use watch::Producer;
 pub(crate) use ingest::{FileState, absorb_line, cut, internal_prefixes};
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -157,6 +157,8 @@ struct Inner {
     watched: Mutex<Option<watch::Targets>>,
     /// De onde saem as conversas de Codex, Pi, omp e Kimi; vazio = só Claude.
     agents: std::sync::OnceLock<AccountEnvironment>,
+    /// Falhas já no diário, por (código, chave): só a entrada no estado de falha vai para lá.
+    reported: Mutex<HashSet<(&'static str, String)>>,
 }
 
 impl Index {
@@ -166,7 +168,7 @@ impl Index {
             path: dir.join(FILE_NAME), accounts, report, timing,
             writer: Mutex::new(None), ready: AtomicBool::new(false), last_pass: Mutex::new(None),
             watch_ok: AtomicBool::new(false), started: AtomicBool::new(false), wake: Mutex::new(None),
-            watched: Mutex::new(None), agents: std::sync::OnceLock::new(),
+            watched: Mutex::new(None), agents: std::sync::OnceLock::new(), reported: Mutex::new(HashSet::new()),
         }) }
     }
 
@@ -207,6 +209,17 @@ impl Index {
     /// Linha no diário do índice: código e detalhe, nunca texto de conversa.
     pub(crate) fn report(&self, code: &'static str, detail: String) { (self.inner.report)(code, detail) }
 
+    /// `report` só na entrada em falha de `key`: a mesma falha a cada passada ou busca não se repete.
+    pub(crate) fn report_once(&self, code: &'static str, key: &str, detail: impl FnOnce() -> String) {
+        let new = self.inner.reported.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert((code, key.to_owned()));
+        if new { self.report(code, detail()); }
+    }
+
+    /// `key` voltou: a próxima falha dela volta ao diário.
+    pub(crate) fn recovered(&self, code: &'static str, key: &str) {
+        self.inner.reported.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&(code, key.to_owned()));
+    }
+
     pub fn path(&self) -> &Path { &self.inner.path }
 
     /// A 1ª passada completa já terminou (`meta.built`); antes disso a busca não responde pelo índice.
@@ -225,12 +238,16 @@ impl Index {
         let conn = writer.as_mut().unwrap();
         let started = Instant::now();
         let accounts = (self.inner.accounts)().map_err(IndexError::Catalog)?;
-        ingest::pass(conn, &accounts, self.agents(), &*self.inner.report)?;
+        if let Err(e) = ingest::pass(conn, &accounts, self.agents(), self) {
+            self.report_once("busca.ingestao_falhou", "", || e.to_string());
+            return Err(e);
+        }
+        self.recovered("busca.ingestao_falhou", "");
         if !self.ready() {
             conn.execute("INSERT OR REPLACE INTO meta(k, v) VALUES ('built', ?)", [now_text()])?;
             self.inner.ready.store(true, Ordering::Release);
         }
-        *self.inner.last_pass.lock().unwrap() = Some(Instant::now());
+        *self.inner.last_pass.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =Some(Instant::now());
         let spent = started.elapsed();
         // Passada normal leva milissegundos: só a lenta merece linha no journal.
         if spent > Duration::from_secs(1) {
@@ -264,7 +281,7 @@ impl Index {
         if inner.watch_ok.load(Ordering::Acquire) {
             return;
         }
-        let fresh = inner.last_pass.lock().unwrap().is_some_and(|t| t.elapsed() < inner.timing.stale);
+        let fresh = inner.last_pass.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_some_and(|t| t.elapsed() < inner.timing.stale);
         if fresh {
             return;
         }

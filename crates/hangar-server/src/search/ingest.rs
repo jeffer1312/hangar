@@ -163,7 +163,9 @@ pub(super) fn account_key(account: &Account) -> String {
 
 pub(super) type Report<'a> = &'a dyn Fn(&'static str, String);
 
-pub(super) fn pass(conn: &mut Connection, accounts: &[Account], agents: Option<&AccountEnvironment>, report: Report) -> Result<(), IndexError> {
+/// Erro do banco num arquivo não para os outros, mas volta no fim: índice que não gravou não fica pronto.
+pub(super) fn pass(conn: &mut Connection, accounts: &[Account], agents: Option<&AccountEnvironment>, index: &super::Index) -> Result<(), IndexError> {
+    let report = |code, detail| index.report(code, detail);
     let (mut current, unreadable) = conversations(accounts);
     let (others, failed) = agents.map(super::agents::discover).unwrap_or_default();
     current.extend(others);
@@ -192,6 +194,8 @@ pub(super) fn pass(conn: &mut Connection, accounts: &[Account], agents: Option<&
     // Mais velho primeiro: o id da mensagem acompanha a recência e a busca pega as mais novas pelo id.
     let mut order: Vec<(&String, &Found)> = current.iter().collect();
     order.sort_by(|a, b| a.1.stat.mtime_ns.cmp(&b.1.stat.mtime_ns).then(a.0.cmp(b.0)));
+    let mut failure = None;
+    let (mut illegible, mut illegible_files) = (0u64, 0usize);
     for (path, found) in order {
         let old = known.get(path);
         if let Some(k) = old {
@@ -206,13 +210,23 @@ pub(super) fn pass(conn: &mut Connection, accounts: &[Account], agents: Option<&
         // offset velho viraria mensagem repetida na passada seguinte.
         let ino = found.stat.ino.unwrap_or_else(|| file_id(Path::new(path)));
         let tx = conn.transaction()?;
-        match ingest(&tx, path, found, ino, old, &prefixes, &pi_account, report) {
-            Ok(()) => tx.commit()?,
+        match ingest(&tx, path, found, ino, old, &prefixes, &pi_account, &report) {
+            Ok(skipped) => {
+                tx.commit()?;
+                if skipped > 0 { illegible += u64::from(skipped); illegible_files += 1; }
+            }
             Err(IndexError::Io(e)) => tracing::debug!(path = %path, error = %e, "busca: transcript ilegível"),
-            Err(e) => tracing::warn!(path = %path, error = %e, "busca: ingestão falhou; fica para a próxima passada"),
+            Err(e) => {
+                tracing::warn!(path = %path, error = %e, "busca: ingestão falhou; fica para a próxima passada");
+                failure.get_or_insert(e);
+            }
         }
     }
-    Ok(())
+    // Parser que regrediu indexaria sessões como vazias e a busca diria "nada".
+    if illegible > 0 {
+        report("busca.linhas_ilegiveis", format!("{illegible} linhas ilegíveis puladas em {illegible_files} arquivos"));
+    }
+    failure.map_or(Ok(()), Err)
 }
 
 /// O que o arquivo já tem no índice e o que a leitura acrescenta.
@@ -325,9 +339,10 @@ pub(crate) fn cut(text: &str) -> String {
     format!("{}…", short.trim_end_matches([' ', ',', ';', ':', '.']))
 }
 
+/// Devolve quantas linhas ilegíveis a leitura pulou.
 #[allow(clippy::too_many_arguments)]
 fn ingest(tx: &Transaction, path: &str, found: &Found, ino: i64, old: Option<&Known>, prefixes: &[String],
-          pi_account: &dyn Fn(&str) -> String, report: Report) -> Result<(), IndexError> {
+          pi_account: &dyn Fn(&str) -> String, report: Report) -> Result<u32, IndexError> {
     let stat = &found.stat;
     let agent = AgentProvider::parse(found.provider).filter(|p| *p != AgentProvider::Claude);
     let mut file = File::open(path)?;
@@ -407,5 +422,5 @@ fn ingest(tx: &Transaction, path: &str, found: &Found, ino: i64, old: Option<&Kn
         params![stat.size, stat.mtime_ns, st.offset, st.lines, st.cwd, st.preview, st.head_done as i64,
             st.internal.map(i64::from), st.has_user as i64, st.last_text, st.rewrite.to_state(),
             found.config_dir, account, head_len, head, found.codex_account, fid])?;
-    Ok(())
+    Ok(st.illegible)
 }
