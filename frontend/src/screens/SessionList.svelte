@@ -560,7 +560,7 @@ import * as m from '../paraglide/messages';
     {/each}
     {#each ownBuckets as b (b.server.id)}
       {@const vault = sessionsStore.vaultFor(b.server.id)}
-      {#if vault?.requests.length}<PasswordVaultRequestSheet server={b.server} event={vault} />{/if}
+      {#if vault}<PasswordVaultRequestSheet server={b.server} event={vault} />{/if}
     {/each}
     {#if loading && sessions.length === 0}
       <div class="empty-state">

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import BottomSheet from '../BottomSheet.svelte';
   import ConfirmSheet from '../ConfirmSheet.svelte';
   import * as m from '../../paraglide/messages';
@@ -23,23 +24,37 @@
 
   const reason = (err: unknown) => vaultFailureText(err) ?? (err instanceof Error ? err.message : String(err));
 
+  // Só a leitura mais nova vale: resposta atrasada de outra rodada não sobrescreve a tela.
+  let loadSeq = 0;
   async function load() {
+    const seq = ++loadSeq;
     statusError = null;
     entriesError = null;
     // Lista das outras máquinas já em paralelo: serve às escolhas e, sem `owner_url`, a achar a dona.
     void loadPeers();
     const [st, list] = await Promise.allSettled([getVaultStatus(server), listVaultEntries(server)]);
+    if (seq !== loadSeq) return;
     if (st.status === 'rejected') {
       status = null;
+      clearRevealed();
       statusError = reason(st.reason);
       return;
     }
     status = st.value;
-    if (status.state !== 'open') { entries = null; return; }
-    if (list.status === 'fulfilled') entries = list.value;
-    else { entries = null; entriesError = reason(list.reason); }
+    if (status.state !== 'open') { entries = null; clearRevealed(); return; }
+    if (list.status === 'rejected') { entries = null; entriesError = reason(list.reason); }
+    else if (!Array.isArray(list.value)) { entries = null; entriesError = m.vault_web_bad_answer(); }
+    else entries = list.value;
   }
-  $effect(() => { void load(); });
+  // `untrack`: o `load` lê e grava o estado dos peers, e o efeito se reagendaria sozinho.
+  $effect(() => { untrack(() => void load()); });
+
+  // A senha revelada não fica na tela de um app que foi para o fundo.
+  $effect(() => {
+    const onChange = () => { if (document.hidden) clearRevealed(); };
+    document.addEventListener('visibilitychange', onChange);
+    return () => document.removeEventListener('visibilitychange', onChange);
+  });
 
   // Quem recebe as escritas e a leitura da senha: a dona. Numa máquina que aponta para outra, a
   // lista vem encaminhada, mas o resto só vai à dona, achada entre os servidores salvos neste aparelho.
@@ -119,8 +134,9 @@
     rError = null;
     rDone = false;
     try {
-      status = await setVaultRecovery(server, typed);
+      await setVaultRecovery(server, typed);
       rDone = true;
+      await load();
     } catch (err) {
       rError = reason(err);
     } finally {
@@ -163,26 +179,44 @@
       || (status.state === 'open' && entries?.length === 0)));
 
   // ── Revelar e copiar ────────────────────────────────────────────────────────────────────────
+  // Uma marca por busca em voo: `forget` a apaga, e a resposta que chegar depois é descartada.
+  const revealTokens = new Map<string, object>();
+  // Senha já buscada à espera do segundo toque em Copiar; não aparece na tela.
+  let copyReady: { id: string; password: string } | null = null;
+
   async function fetchPassword(id: string): Promise<string | null> {
-    if (revealed[id] !== undefined) return revealed[id];
     const w = writer;
     if (!w) return null;
+    const token = {};
+    revealTokens.set(id, token);
     busyId = id;
     try {
-      const { password } = await revealVaultPassword(w, id);
-      return password;
+      const answer = await revealVaultPassword(w, id);
+      if (revealTokens.get(id) !== token) return null;
+      if (typeof answer?.password === 'string') return answer.password;
+      notice = m.vault_web_reveal_failed({ error: m.vault_web_bad_answer() });
+      return null;
     } catch (err) {
-      notice = m.vault_web_reveal_failed({ error: reason(err) });
+      if (revealTokens.get(id) === token) notice = m.vault_web_reveal_failed({ error: reason(err) });
       return null;
     } finally {
+      if (revealTokens.get(id) === token) revealTokens.delete(id);
       busyId = null;
     }
   }
 
   function forget(id: string) {
+    revealTokens.delete(id);
+    if (copyReady?.id === id) copyReady = null;
     const next = { ...revealed };
     delete next[id];
     revealed = next;
+  }
+
+  function clearRevealed() {
+    revealTokens.clear();
+    copyReady = null;
+    revealed = {};
   }
 
   async function toggleReveal(id: string) {
@@ -193,13 +227,14 @@
 
   async function copy(id: string) {
     notice = null;
-    const had = revealed[id];
-    const pw = had ?? await fetchPassword(id);
+    const ready = revealed[id] ?? (copyReady?.id === id ? copyReady.password : undefined);
+    const pw = ready ?? await fetchPassword(id);
     if (pw === null) return;
-    if (await copyText(pw)) { notice = m.vault_web_copied(); return; }
+    if (await copyText(pw)) { copyReady = null; notice = m.vault_web_copied(); return; }
     // Depois de buscar a senha o navegador pode recusar a cópia fora do toque: o segundo toque copia direto.
-    revealed = { ...revealed, [id]: pw };
-    notice = m.vault_web_copy_again();
+    if (ready === undefined) { copyReady = { id, password: pw }; notice = m.vault_web_copy_again(); return; }
+    copyReady = null;
+    notice = m.vault_web_copy_failed();
   }
 
   // ── Cadastrar e editar ──────────────────────────────────────────────────────────────────────
@@ -213,8 +248,11 @@
   let fVisible = $state(false);
   let saving = $state(false);
   let formError = $state<string | null>(null);
+  // Muda a cada abrir e fechar: o fim de um envio não mexe num formulário aberto depois dele.
+  let formToken = 0;
 
   function openForm(e: VaultEntry | 'new') {
+    formToken++;
     editing = e;
     const cur = e === 'new' ? null : e;
     fName = cur?.name ?? '';
@@ -226,7 +264,7 @@
     fVisible = false;
     formError = null;
   }
-  function closeForm() { editing = null; fPassword = ''; formError = null; }
+  function closeForm() { formToken++; editing = null; fPassword = ''; formError = null; }
 
   const canSave = $derived(!!fName.trim() && (editing !== 'new' || !!fPassword));
 
@@ -243,6 +281,7 @@
     };
     const typed = fPassword;
     const target = editing;
+    const token = formToken;
     saving = true;
     formError = null;
     try {
@@ -251,10 +290,12 @@
         await updateVaultEntry(w, target.id, typed ? { ...fields, password: typed } : fields);
         forget(target.id);
       }
-      closeForm();
+      if (token === formToken) closeForm();
       await load();
     } catch (err) {
-      formError = reason(err);
+      // Formulário fechado durante o envio: a falha aparece na lista, nunca some.
+      if (token === formToken) formError = reason(err);
+      else notice = reason(err);
     } finally {
       saving = false;
     }
@@ -345,7 +386,7 @@
           <p class="pv-aviso">{m.vault_web_recovery_warning()}</p>
           <label class="pv-campo"><span>{m.vault_web_recovery_password()}</span>
             <span class="pv-pw">
-              <input type={rVisible ? 'text' : 'password'} autocomplete="new-password" autocapitalize="off" spellcheck="false"
+              <input type={rVisible ? 'text' : 'password'} autocomplete="off" data-1p-ignore data-lpignore="true" autocapitalize="off" spellcheck="false"
                 bind:value={rPassword} oninput={() => { rError = null; rDone = false; }} disabled={rSaving} />
               <button type="button" class="pv-reveal" onclick={() => (rVisible = !rVisible)} disabled={rSaving}
                 aria-label={rVisible ? m.vault_web_hide_password() : m.vault_web_show_password()} aria-pressed={rVisible}>
@@ -356,7 +397,7 @@
               </button>
             </span></label>
           <label class="pv-campo"><span>{m.vault_web_recovery_confirm()}</span>
-            <input type={rVisible ? 'text' : 'password'} autocomplete="new-password" autocapitalize="off" spellcheck="false"
+            <input type={rVisible ? 'text' : 'password'} autocomplete="off" data-1p-ignore data-lpignore="true" autocapitalize="off" spellcheck="false"
               bind:value={rConfirm} disabled={rSaving} aria-invalid={rMismatch} /></label>
           {#if rPassword && rLength < RECOVERY_MIN}
             <p class="pv-muted">{m.vault_web_recovery_short({ n: RECOVERY_MIN })}</p>
@@ -388,7 +429,7 @@
           <input type="text" autocomplete="off" autocapitalize="off" spellcheck="false" bind:value={restoreFrom}
             placeholder={status.server_id ?? ''} disabled={restoring} /></label>
         <label class="pv-campo"><span>{m.vault_web_recovery_password()}</span>
-          <input type="password" autocomplete="off" autocapitalize="off" spellcheck="false"
+          <input type="password" autocomplete="off" data-1p-ignore data-lpignore="true" autocapitalize="off" spellcheck="false"
             bind:value={restorePassword} oninput={() => (restoreError = null)} disabled={restoring} /></label>
         {#if restoreError}<p class="pv-erro-txt" role="alert">{restoreError}</p>{/if}
         <div class="pv-acoes">
@@ -471,7 +512,7 @@
         <input type="text" autocomplete="off" autocapitalize="off" spellcheck="false" bind:value={fUser} disabled={saving} /></label>
       <label class="pv-campo"><span>{editing === 'new' ? m.vault_web_password() : m.vault_web_password_keep()}</span>
         <span class="pv-pw">
-          <input type={fVisible ? 'text' : 'password'} autocomplete="new-password" autocapitalize="off" spellcheck="false"
+          <input type={fVisible ? 'text' : 'password'} autocomplete="off" data-1p-ignore data-lpignore="true" autocapitalize="off" spellcheck="false"
             bind:value={fPassword} disabled={saving} />
           <button type="button" class="pv-reveal" onclick={() => (fVisible = !fVisible)} disabled={saving}
             aria-label={fVisible ? m.vault_web_hide_password() : m.vault_web_show_password()} aria-pressed={fVisible}>

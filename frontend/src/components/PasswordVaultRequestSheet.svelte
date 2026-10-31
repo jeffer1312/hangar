@@ -28,18 +28,30 @@
   let error = $state<string | null>(null);
   let field = $state<HTMLInputElement>();
 
-  const live = $derived(shown ? event.requests.find((r) => r.id === shown!.id) ?? null : null);
+  // O que sobrou de um pedido que sumiu com a folha aberta: fica no aviso até a pessoa dispensar.
+  let gone = $state<string | null>(null);
 
-  // Respondido em outro aparelho, expirado ou cancelado: o pedido some do evento e a folha fecha.
-  $effect(() => { if (shown && !live) close(); });
+  // Tipo desconhecido (servidor mais novo) não abre folha nenhuma: cairia no formulário de senha.
+  const requests = $derived(event.requests.filter((r) => r.kind === 'approve' || r.kind === 'entry'));
+  const live = $derived(shown ? requests.find((r) => r.id === shown!.id) ?? null : null);
+
+  // Respondido em outro aparelho, expirado ou cancelado: o pedido some do evento e a folha fecha,
+  // dizendo por quê. Com envio em voo quem decide é a resposta dele.
+  $effect(() => {
+    if (shown && !live && !sending) {
+      close();
+      gone = m.vault_web_request_gone();
+    }
+  });
 
   $effect(() => {
     if (deepLinkUsed || !deepLink || deepLink.server !== server.id) return;
-    const r = event.requests.find((x) => x.id === deepLink.request);
+    const r = requests.find((x) => x.id === deepLink.request);
     if (r) { deepLinkUsed = true; open(r); }
   });
 
   function open(r: VaultRequest) {
+    gone = null;
     shown = r;
     password = '';
     name = r.label ?? '';
@@ -76,14 +88,17 @@
       await answerVaultRequest(server, card.id, answer);
       close();
     } catch (err) {
-      error = failure(err);
+      const why = failure(err);
+      const code = (err as { code?: string })?.code;
+      if (code === 'erro_cofre_pedido_respondido' || code === 'erro_cofre_pedido_perdido') {
+        close();
+        gone = why;
+        return;
+      }
       // Pedido trocado: mostra o atual para a pessoa decidir de novo sobre o que vê.
       // O texto digitado para o pedido antigo nunca fica pronto para ser gravado no novo.
-      if (live && live.interaction_id !== card.interaction_id) {
-        shown = live;
-        password = '';
-        name = live.label ?? '';
-      }
+      if (live && live.interaction_id !== card.interaction_id) open(live);
+      error = why;
     } finally {
       sending = false;
     }
@@ -108,6 +123,7 @@
   }
 </script>
 
+{#if requests.length || gone}
 <section class="vault-notice" aria-label={m.vault_web_notice_title({ label: server.label })}>
   <div class="vault-head">
     <svg class="lock" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
@@ -115,7 +131,13 @@
     </svg>
     <p class="vault-title">{m.vault_web_notice_title({ label: server.label })}</p>
   </div>
-  {#each event.requests as r (r.id)}
+  {#if gone}
+    <div class="vault-gone" role="status">
+      <p>{gone}</p>
+      <button type="button" class="vault-gone-x" onclick={() => (gone = null)} aria-label={m.sessao_fechar()}>✕</button>
+    </div>
+  {/if}
+  {#each requests as r (r.id)}
     <button type="button" class="vault-row" onclick={() => open(r)}>
       <span class="vault-row-txt">
         <span class="vault-row-main">
@@ -129,6 +151,7 @@
     </button>
   {/each}
 </section>
+{/if}
 
 <BottomSheet open={!!shown} onClose={close}
   ariaLabel={shown?.kind === 'entry' ? m.vault_web_entry_title() : m.vault_web_approve_title()}>
@@ -208,6 +231,9 @@
   .vault-head { display: flex; gap: var(--space-2); align-items: center; }
   .lock { flex-shrink: 0; fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
   .vault-title { margin: 0; font-size: var(--text-sm); font-weight: 600; color: var(--text-primary); }
+  .vault-gone { display: flex; align-items: flex-start; gap: var(--space-2); font-size: var(--text-xs); color: var(--text-secondary); }
+  .vault-gone p { margin: 0; flex: 1; min-width: 0; align-self: center; }
+  .vault-gone-x { width: 44px; height: 44px; flex-shrink: 0; border: 0; background: transparent; color: var(--text-muted); cursor: pointer; }
   .vault-row {
     display: flex; align-items: center; justify-content: flex-start; gap: var(--space-2);
     width: 100%; min-height: 44px; padding: var(--space-2);

@@ -409,7 +409,15 @@ function createSessionsStore() {
         let ev: VaultEvent | null = null;
         try { ev = JSON.parse((e as MessageEvent).data); } catch { return; }
         if (!ev || !Array.isArray(ev.requests)) return;
-        setVault(s.id, ev);
+        // Elemento torto ou repetido sai sozinho: os outros pedidos continuam valendo.
+        const seen = new Set<string>();
+        const requests = ev.requests.filter((r) => {
+          const ok = !!r && typeof r.id === 'string' && typeof r.interaction_id === 'string'
+            && typeof r.kind === 'string' && typeof r.expires_at === 'number' && !seen.has(r.id);
+          if (ok) seen.add(r.id);
+          return ok;
+        });
+        setVault(s.id, { ...ev, requests });
       });
       // Etiquetas da máquina e das contas: vêm na conexão e a cada troca. Repetido ou torto mantém a anterior.
       es.addEventListener('tags', (e) => {

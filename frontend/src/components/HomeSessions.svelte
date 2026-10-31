@@ -52,7 +52,7 @@
   {/each}
   {#each sessionsStore.byServer.filter((b) => !b.server.invite) as b (b.server.id)}
     {@const vault = sessionsStore.vaultFor(b.server.id)}
-    {#if vault?.requests.length}<PasswordVaultRequestSheet server={b.server} event={vault} />{/if}
+    {#if vault}<PasswordVaultRequestSheet server={b.server} event={vault} />{/if}
   {/each}
   {#if deleteError}<p class="machine error" role="alert">{deleteError}</p>{/if}
 
