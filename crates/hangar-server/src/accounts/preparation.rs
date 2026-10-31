@@ -158,8 +158,12 @@ impl AccountService {
                 Err(_) => return failed("codex_account_state_invalid"),
             }
         }
-        if account.is_default && account.home.join(PREPARED_MARKER).is_file() {
-            json!({"status":"ready","trust_pending":false,"issues":[],"etapa":null,"herdado":null})
+        let marker = account.home.join(PREPARED_MARKER);
+        if account.is_default && marker.is_file() {
+            // A marca parcial continua parcial: lida como pronta, nunca mais tentaria de novo.
+            let partial = std::fs::read(&marker).ok().and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+                .is_some_and(|value| value["status"] == "partial");
+            json!({"status":if partial {"partial"} else {"ready"},"trust_pending":false,"issues":[],"etapa":null,"herdado":null})
         } else {
             idle_sync()
         }

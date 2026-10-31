@@ -213,6 +213,24 @@ async fn newer_python_preparation_survives_return_to_rust() {
     );
 }
 
+/// Conta padrão só com a marca (o resultado sumiu): a marca parcial não vira conta pronta.
+#[tokio::test]
+async fn default_account_with_only_a_partial_marker_stays_partial() {
+    use hangar_server::accounts::{AccountService, Provider, bridge::AccountsBridge,
+        environment::AccountEnvironment};
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().to_string_lossy().into_owned();
+    let service = AccountService::new(AccountEnvironment::from_map(
+        [("HOME".into(),home.clone()),("USERPROFILE".into(),home)].into()));
+    let account = service.resolve(Provider::Codex,"default").unwrap();
+    std::fs::create_dir_all(&account.home).unwrap();
+    let bridge = AccountsBridge::new("127.0.0.1:9".parse().unwrap(),"synthetic".into(),"instance".into()).unwrap();
+    for (marker, status) in [(r#"{"version":1}"#, "ready"), (r#"{"version":1,"status":"partial"}"#, "partial")] {
+        std::fs::write(account.home.join(".hangar-prepared-v1"), marker).unwrap();
+        assert_eq!(service.preparation_status(&account,&bridge).await["status"], status);
+    }
+}
+
 #[tokio::test]
 async fn ready_preparation_is_reused_after_restart_until_explicit_force() {
     use axum::{Router, routing::post};
