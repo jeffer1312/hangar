@@ -42,6 +42,7 @@ pub mod queue_panel;
 mod plugin_listener;
 pub mod routes;
 pub mod runtime;
+pub mod search;
 pub mod session_open;
 pub mod session_rename;
 pub mod session_defaults;

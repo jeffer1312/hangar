@@ -104,6 +104,19 @@ impl RewriteFilter {
         }
         true
     }
+
+    /// Estado para continuar o filtro noutra leitura do mesmo arquivo (o índice lê aos pedaços).
+    pub(crate) fn to_state(&self) -> String {
+        let recent: Vec<(&str, &str, f64)> = self.recent.iter().map(|((t, h), ts)| (t.as_str(), h.as_str(), *ts)).collect();
+        serde_json::json!({"max": self.max, "recent": recent}).to_string()
+    }
+
+    pub(crate) fn from_state(state: &str) -> Option<Self> {
+        #[derive(serde::Deserialize)]
+        struct Saved { max: f64, recent: Vec<(String, String, f64)> }
+        let saved: Saved = serde_json::from_str(state).ok()?;
+        Some(Self { max: saved.max, recent: saved.recent.into_iter().map(|(t, h, ts)| ((t, h), ts)).collect() })
+    }
 }
 
 /// `silent_attachment_timestamp` (transcript.py:381): relógio de um anexo que nunca vira bolha,

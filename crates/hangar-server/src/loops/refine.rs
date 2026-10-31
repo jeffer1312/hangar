@@ -13,7 +13,7 @@ const LIMIT_EXIT0_MAX: usize = 300;
 pub const DISALLOWED: [&str; 6] = ["Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch"];
 const REFUSALS: [&str; 7] = ["não consigo", "nao consigo", "não posso", "nao posso", "desculpe", "não é possível", "nao e possivel"];
 
-const SYSTEM: &str = "Você reescreve OBJETIVOS pra um loop autônomo de código. Boas práticas:\n\
+pub(crate) const SYSTEM: &str = "Você reescreve OBJETIVOS pra um loop autônomo de código. Boas práticas:\n\
 - Objetivo é UMA coisa só e VERIFICÁVEL: descreve o RESULTADO final, não os passos.\n\
 - Pequeno e concreto (ex: \"migre utils/date.ts pra date-fns mantendo o check verde\"), nunca amplo (\"refatore o projeto\").\n\
 - Peça EVIDÊNCIA, não promessa: inclua \"rode o comando de verificação e mostre a saída\".\n\

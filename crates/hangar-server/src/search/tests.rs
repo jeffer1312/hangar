@@ -1,0 +1,690 @@
+// crates/hangar-server/src/search/tests.rs
+//! Índice da busca contra a captura do Python (`tests/fixtures/search/index_lifecycle.json`, gerada por
+//! `capture.py` sobre `tests/fixtures/search/home`) e contra os casos de `test_transcript_index.py`.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant, UNIX_EPOCH};
+
+use proptest::prelude::*;
+use rusqlite::Connection;
+use serde_json::{Value, json};
+
+use super::ingest::{FileState, absorb_line, internal_prefixes, masked_ino};
+use super::*;
+
+const T0: u64 = 1_793_000_000;
+// Ordem do mais velho ao mais novo, como em `capture.py`.
+const MTIMES: [&str; 14] = [
+    ".codex/sessions/2026/08/30/rollout-2026-08-30T20-47-12-01a05511-e980-71b3-93a9-befda5704b20.jsonl",
+    ".pi/agent/sessions/--home-jefferson-Projetos-hangar-.worktrees-contas-modelos--/2026-08-11T09-37-57-248Z_d337d6b8-0b3c-4bbe-8034-939d7c48f246.jsonl",
+    ".omp/agent/sessions/-tmp-claude-1000--home-jefferson-Projetos-hangar-ac1a7b0f-d0a7-4e66-8f05-f53ea5d4b4da-scratchpad-omp-teste/2026-09-03T21-35-10-766Z_01a06932-79ae-77e9-b95a-286b6e2e9288.jsonl",
+    ".kimi-code/sessions/wd_hangar_5112ff7a84e0/session_ab697d05-66da-4b2a-8e80-3d769951e752/agents/main/wire.jsonl",
+    ".codex-b/sessions/2026/09/23/rollout-2026-09-23T17-41-59-01a0d000-f6ac-74e3-b19b-98d42af1a712.jsonl",
+    ".claude-b/projects/-tmp-cx-probe-work/f8f12de6-7941-4bd0-8f0c-02bc0b4b7f53.jsonl",
+    ".claude-a/projects/-home-jefferson/42a7c450-7f7e-4fd7-84ed-ee699d11098d.jsonl",
+    ".claude-b/projects/-home-jefferson-Projetos-hangar-mobile-deliveries-cad3e6fe-t32/db401d8f-fc08-463c-a3cc-4734fc5dc634.jsonl",
+    ".claude-b/projects/-home-jefferson-Projetos-hangar/db401d8f-fc08-463c-a3cc-4734fc5dc634.jsonl",
+    ".claude-b/projects/-home-jefferson-Projetos-hangar-computer-control-9c0b634f-t1/0cc60e6c-eafc-4915-9936-f0c7b81191d9.from-a.jsonl",
+    ".claude-b/projects/-home-jefferson-Projetos-hangar/a5a5a5a5-0000-4000-8000-000000000001.jsonl",
+    ".claude-a/projects/-home-jefferson-Projetos-hangar/75fea57d-2237-43fe-a669-bb1ed97c6eae.jsonl",
+    ".claude-a/projects/-home-jefferson-Projetos-hangar/75fea57d-2237-43fe-a669-bb1ed97c6eae/subagents/agent-a23f817306f1d1b6a.jsonl",
+    ".claude-a/projects/-home-jefferson-Projetos-hangar-computer-control-9c0b634f-t1/0cc60e6c-eafc-4915-9936-f0c7b81191d9.jsonl",
+];
+const RESERVE: &str = ".claude-a/projects/-home-jefferson/f2afaa93-d2aa-45db-9d68-b430c22deab2.jsonl";
+const COMPACT_ID: &str = "1c3fcd4c-a0d5-5f03-978c-2be4a25ee107";
+
+struct Env {
+    _tmp: tempfile::TempDir,
+    root: PathBuf,
+    accounts: Arc<Mutex<Vec<Account>>>,
+    reports: Arc<Mutex<Vec<(&'static str, String)>>>,
+    index: Index,
+}
+
+impl Env {
+    fn new(accounts: impl FnOnce(&Path) -> Vec<Account>, timing: Timing) -> Self {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let accounts = Arc::new(Mutex::new(accounts(&root)));
+        let reports = Arc::new(Mutex::new(Vec::new()));
+        let (a, r) = (accounts.clone(), reports.clone());
+        let index = Index::new(&root.join("idx"), Arc::new(move || a.lock().unwrap().clone()),
+            Arc::new(move |code, detail| r.lock().unwrap().push((code, detail))), timing);
+        Self { _tmp: tmp, root, accounts, reports, index }
+    }
+
+    /// O HOME das fixtures com as duas contas Claude; `.claude-a` é a do servidor.
+    fn fixtures(timing: Timing) -> Self {
+        Self::new(|root| {
+            let home = root.join("home");
+            copy_dir(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/search/home"), &home);
+            // O transcript do Pi não está nesta cópia das fixtures; só os Claude contam aqui.
+            for (i, rel) in MTIMES.iter().enumerate().filter(|(_, rel)| home.join(rel).exists()) {
+                set_mtime(&home.join(rel), T0 + 100 * (i as u64 + 1));
+            }
+            set_mtime(&home.join(RESERVE), T0 + 50);
+            let dirs = [home.join(".claude-a"), home.join(".claude-b")].map(|p| p.to_string_lossy().into_owned());
+            server_accounts(&dirs, &home.join(".claude-a"))
+        }, timing)
+    }
+
+    /// Uma conta só, a do servidor, com `projects` vazio.
+    fn small(timing: Timing) -> Self {
+        Self::new(|root| {
+            fs::create_dir_all(root.join("acct/projects")).unwrap();
+            vec![Account { config_dir: None, dir: root.join("acct"), projects: root.join("acct/projects") }]
+        }, timing)
+    }
+
+    fn home(&self) -> PathBuf { self.root.join("home") }
+
+    fn write(&self, sid: &str, lines: &[String], append: bool) -> PathBuf {
+        let dir = self.root.join("acct/projects/-home-u-proj");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("{sid}.jsonl"));
+        let mut f = fs::OpenOptions::new().create(true).append(append).write(true).truncate(!append).open(&path).unwrap();
+        std::io::Write::write_all(&mut f, lines.concat().as_bytes()).unwrap();
+        path
+    }
+
+    fn ids(&self, q: &str) -> Vec<String> {
+        self.index.search(&terms(q), 50).unwrap().unwrap().into_iter().map(|r| r.event_id).collect()
+    }
+
+    fn db(&self) -> Connection { Connection::open(self.index.path()).unwrap() }
+
+    fn count(&self, sql: &str) -> i64 { self.db().query_row(sql, [], |r| r.get(0)).unwrap() }
+
+    /// As tabelas como `capture.py` as despeja, com o HOME trocado por `{HOME}`.
+    fn dump(&self) -> Value {
+        let c = self.db();
+        let home = self.home().to_string_lossy().into_owned();
+        let files: Vec<Value> = c.prepare("SELECT path, project, session_id, size, offset, lines, cwd, preview, head_done, internal FROM files ORDER BY path").unwrap()
+            .query_map([], |r| Ok(json!({"path": r.get::<_, String>(0)?.replace(&home, "{HOME}"), "project": r.get::<_, String>(1)?,
+                "session_id": r.get::<_, String>(2)?, "size": r.get::<_, i64>(3)?, "offset": r.get::<_, i64>(4)?, "lines": r.get::<_, i64>(5)?,
+                "cwd": r.get::<_, Option<String>>(6)?, "preview": r.get::<_, String>(7)?, "head_done": r.get::<_, i64>(8)?,
+                "internal": r.get::<_, Option<i64>>(9)?}))).unwrap().map(Result::unwrap).collect();
+        let msg: Vec<Value> = c.prepare("SELECT f.path, m.event_id, m.role, m.ts, m.text FROM msg m JOIN files f ON f.id = m.file_id ORDER BY f.path, m.id").unwrap()
+            .query_map([], |r| Ok(json!({"path": r.get::<_, String>(0)?.replace(&home, "{HOME}"), "event_id": r.get::<_, String>(1)?,
+                "role": r.get::<_, String>(2)?, "ts": r.get::<_, Option<f64>>(3)?, "text": r.get::<_, String>(4)?}))).unwrap().map(Result::unwrap).collect();
+        json!({"ready": self.index.ready(), "files": files, "msg": msg})
+    }
+}
+
+fn copy_dir(from: &Path, to: &Path) {
+    fs::create_dir_all(to).unwrap();
+    for e in fs::read_dir(from).unwrap().flatten() {
+        let (src, dst) = (e.path(), to.join(e.file_name()));
+        if src.is_dir() { copy_dir(&src, &dst) } else { fs::copy(&src, &dst).unwrap(); }
+    }
+}
+
+fn set_mtime(path: &Path, secs: u64) {
+    fs::File::options().write(true).open(path).unwrap().set_modified(UNIX_EPOCH + Duration::from_secs(secs)).unwrap();
+}
+
+fn append(path: &Path, bytes: &[u8]) {
+    std::io::Write::write_all(&mut fs::OpenOptions::new().append(true).open(path).unwrap(), bytes).unwrap();
+}
+
+fn terms(q: &str) -> Vec<String> { q.split_whitespace().map(str::to_owned).collect() }
+
+/// A linha de `_linha` do teste Python: sem relógio, então o filtro de reescrita a mantém.
+fn line(text: &str, uuid: &str, role: &str) -> String {
+    let msg = if role == "user" { json!({"role": "user", "content": text}) }
+        else { json!({"role": "assistant", "content": [{"type": "text", "text": text}]}) };
+    format!("{}\n", json!({"type": role, "uuid": uuid, "cwd": "/home/u/proj", "message": msg}))
+}
+
+fn quiet() -> Timing { Timing { first_pass: Duration::ZERO, debounce: Duration::from_millis(100), stale: Duration::from_secs(3600) } }
+
+fn wait_for(what: &str, mut ok: impl FnMut() -> bool) {
+    let until = Instant::now() + Duration::from_secs(10);
+    while !ok() {
+        assert!(Instant::now() < until, "não aconteceu: {what}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+const SID: &str = "11111111-1111-1111-1111-111111111111";
+const SID2: &str = "22222222-2222-2222-2222-222222222222";
+
+/// A captura de uma etapa com as diferenças aprovadas aplicadas.
+fn expected(step: &str) -> Value {
+    let raw = fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/search/index_lifecycle.json")).unwrap();
+    let mut v: Value = serde_json::from_str::<Value>(&raw).unwrap()["data"][step].clone();
+    let msgs = v["msg"].as_array_mut().unwrap();
+    // M8: o `/compact` regravado pelo `--resume` sai pelo filtro de reescrita, como no histórico.
+    msgs.retain(|m| m["event_id"] != COMPACT_ID);
+    // M8 e o `held:` do histórico: o prompt barrado reenviado e a linha acrescentada duas vezes (mesmo
+    // relógio e conteúdo) entram uma vez só por arquivo.
+    let mut seen = std::collections::HashSet::new();
+    msgs.retain(|m| seen.insert((m["path"].to_string(), m["event_id"].to_string())));
+    v
+}
+
+#[test]
+fn lifecycle_matches_python_capture() {
+    // IDX-16, 26..31, 35..39; SRCH-30/31 (subagente e cópia `.from-` fora); M8.
+    let env = Env::fixtures(quiet());
+    let home = env.home();
+    let check = |step: &str| {
+        env.index.update().unwrap();
+        assert_eq!(env.dump(), expected(step), "etapa {step}");
+    };
+    check("first_pass");
+    let normal = home.join(MTIMES[13]);
+    let sub = fs::read(home.join(MTIMES[12])).unwrap();
+    append(&normal, &sub);
+    set_mtime(&normal, T0 + 5000);
+    check("append_line");
+    append(&normal, &sub[..sub.len() / 2]);
+    set_mtime(&normal, T0 + 5100);
+    check("append_partial");
+    append(&normal, &sub[sub.len() / 2..]);
+    set_mtime(&normal, T0 + 5200);
+    check("complete_partial");
+    let tmp = normal.with_extension("tmp");
+    fs::write(&tmp, fs::read(&normal).unwrap()).unwrap();
+    fs::rename(&tmp, &normal).unwrap();
+    set_mtime(&normal, T0 + 5300);
+    check("inode_swap");
+    let data = fs::read(&normal).unwrap();
+    let first3: Vec<&[u8]> = data.split(|b| *b == b'\n').take(3).collect();
+    let f = fs::OpenOptions::new().write(true).open(&normal).unwrap();
+    f.set_len(0).unwrap();
+    std::io::Write::write_all(&mut &f, &[first3.join(&b"\n"[..]), b"\n".to_vec()].concat()).unwrap();
+    drop(f);
+    set_mtime(&normal, T0 + 5400);
+    check("shrink");
+    fs::remove_file(home.join(MTIMES[6])).unwrap();
+    check("delete");
+    let dst = home.join(MTIMES[11].replace(".claude-a/", ".claude-b/"));
+    fs::create_dir_all(dst.parent().unwrap()).unwrap();
+    fs::rename(home.join(MTIMES[11]), &dst).unwrap();
+    check("move_account");
+    let b = home.join(".claude-b");
+    let facts = env.index.file_facts(&dst.to_string_lossy()).unwrap().unwrap();
+    assert_eq!((facts.config_dir.as_deref(), facts.account.as_str(), facts.provider.as_str()),
+        (Some(&*b.to_string_lossy()), &*format!("claude:{}", b.to_string_lossy()), "claude"));
+}
+
+#[test]
+fn indexed_ids_exist_in_merged_history() {
+    // M8/F5: o id de todo trecho é um id do histórico do mesmo arquivo.
+    let env = Env::fixtures(quiet());
+    env.index.update().unwrap();
+    let c = env.db();
+    let paths: Vec<String> = c.prepare("SELECT path FROM files").unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+    assert_eq!(paths.len(), 8);
+    for path in paths {
+        let req = crate::transcript::HistoryRequest { provider: crate::transcript::Provider::Claude, jsonl: PathBuf::from(&path),
+            queue: None, limit: None, tail_window: crate::transcript::TAIL_WINDOW };
+        let mut history: Vec<String> = crate::transcript::merged_history(&req).unwrap().into_iter()
+            .filter(|e| matches!(e.kind, hangar_api::chat::ChatKind::UserMsg | hangar_api::chat::ChatKind::AssistantMsg)
+                && e.text.as_deref().is_some_and(|t| !t.is_empty()))
+            .map(|e| e.id).collect();
+        let mut indexed: Vec<String> = c.prepare("SELECT m.event_id FROM msg m JOIN files f ON f.id=m.file_id WHERE f.path=?").unwrap()
+            .query_map([&path], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+        history.sort();
+        indexed.sort();
+        if path.contains("42a7c450") {
+            // IDX-36: a linha de mais de 40000 bytes só alimenta o cabeçalho.
+            assert!(indexed.is_empty() && !history.is_empty(), "{path}");
+        } else {
+            assert_eq!(indexed, history, "{path}");
+        }
+    }
+}
+
+#[test]
+fn rewrite_filter_continues_across_passes_and_restarts() {
+    // M8 numa leitura incremental: a linha regravada que chega noutra passada (ou noutro processo)
+    // sai como sairia na leitura inteira do histórico.
+    let env = Env::small(quiet());
+    let stamped = |uuid: &str, ts: &str| format!("{}\n", json!({"type": "user", "uuid": uuid, "timestamp": ts, "cwd": "/p",
+        "message": {"role": "user", "content": "agulha regravada"}}));
+    let f = env.write(SID, &[stamped("u1", "2026-10-13T22:39:12.030Z")], false);
+    env.index.update().unwrap();
+    append(&f, stamped("u2", "2026-10-13T22:37:58.473Z").as_bytes());
+    env.index.update().unwrap();
+    assert_eq!(env.ids("agulha"), ["u1"]);
+    let again = Index::new(env.index.path().parent().unwrap(), env.index.inner.accounts.clone(), env.index.inner.report.clone(), quiet());
+    append(&f, stamped("u3", "2026-10-13T22:37:00.000Z").as_bytes());
+    again.update().unwrap();
+    assert_eq!(env.ids("agulha"), ["u1"]);
+}
+
+#[test]
+fn finds_substring_without_case_or_accent() {
+    // IDX-18, SRCH-23: `test_acha_substring_no_meio_da_palavra` e `test_acha_por_prefixo_e_sem_acento`.
+    let env = Env::small(quiet());
+    env.write(SID, &[line("deu Error no TKT-40213abc", "u1", "user")], false);
+    env.write(SID2, &[line("Configuração do SQLite3 na sessão", "u2", "user")], false);
+    env.index.update().unwrap();
+    for q in ["rror", "40213", "t-402"] { assert_eq!(env.ids(q), ["u1"], "{q}"); }
+    for q in ["sqlite", "configuracao", "SESSAO", "sessão sqlite"] { assert_eq!(env.ids(q), ["u2"], "{q}"); }
+    assert!(env.ids("sqlite inexistente").is_empty());
+    let row = &env.index.search(&terms("sqlite"), 50).unwrap().unwrap()[0];
+    assert_eq!((row.project.as_str(), row.session_id.as_str(), row.cwd.as_deref(), row.role.as_str(), row.provider.as_str(), row.config_dir.as_deref()),
+        ("-home-u-proj", SID2, Some("/home/u/proj"), "user", "claude", None));
+    assert_eq!(row.account, format!("claude:{}", env.root.join("acct").to_string_lossy()));
+}
+
+#[test]
+fn fts_syntax_is_literal_text() {
+    // IDX-19, SRCH-22: `test_sintaxe_do_fts_nao_quebra_a_busca` e o texto como frase literal.
+    let env = Env::small(quiet());
+    env.write(SID, &[line("texto qualquer com a\"bc e near( junto", "u1", "user")], false);
+    env.index.update().unwrap();
+    for q in ["\"", "AND", "OR NOT", "foo*", "NEAR(a b)", "col:x", "^a", "(", "'"] {
+        env.index.search(&terms(q), 50).unwrap().unwrap();
+    }
+    assert_eq!(env.ids("a\"bc"), ["u1"]);
+    assert_eq!(env.ids("near("), ["u1"]);
+    assert!(env.ids("texto OR").is_empty());
+}
+
+#[test]
+fn short_terms_filter_folded_text() {
+    // IDX-20/SRCH-20 pelo M3: termo curto responde pelo índice, sem acento nem caixa.
+    let env = Env::small(quiet());
+    env.write(SID, &[line("deu Error no TKT-40213abc", "u1", "user"), line("Ação feita", "u2", "assistant")], false);
+    env.index.update().unwrap();
+    assert_eq!(env.ids("tk 40213"), ["u1"]);
+    assert_eq!(env.ids("40"), ["u1"]);
+    assert_eq!(env.ids("aç"), ["u2"]);
+    assert_eq!(env.ids("AC"), ["u2"]);
+    assert!(env.ids("zz").is_empty());
+    assert_eq!(fold("ÉÉ Ação"), "ee acao");
+}
+
+#[test]
+fn not_ready_answers_none_and_empty_index_answers_empty() {
+    // IDX-21 (antes da 1ª passada completa não há resposta do índice) e SRCH-21 (pronto e vazio = []).
+    let env = Env::small(quiet());
+    assert!(!env.index.ready());
+    assert_eq!(env.index.search(&terms("agulha"), 50).unwrap(), None);
+    env.index.update().unwrap();
+    assert!(env.index.ready());
+    assert_eq!(env.index.search(&terms("agulha"), 50).unwrap(), Some(vec![]));
+    assert_eq!(env.index.search(&[], 50).unwrap(), None);
+    // Reaberto do disco já pronto: `meta.built` fica gravado.
+    let again = Index::new(env.index.path().parent().unwrap(), env.index.inner.accounts.clone(), env.index.inner.report.clone(), quiet());
+    again.open_now().unwrap();
+    assert!(again.ready());
+}
+
+#[test]
+fn three_per_file_newest_file_first() {
+    // IDX-22, SRCH-11: `test_tres_por_arquivo`, arquivo mais novo primeiro, teto `limit`.
+    let env = Env::small(quiet());
+    let lines: Vec<String> = (0..5).map(|i| line(&format!("agulha {i}"), &format!("u{i}"), "user")).collect();
+    let old = env.write(SID, &lines, false);
+    set_mtime(&old, T0);
+    let new = env.write(SID2, &[line("agulha nova", "n1", "user")], false);
+    set_mtime(&new, T0 + 10);
+    env.index.update().unwrap();
+    assert_eq!(env.ids("agulha"), ["n1", "u0", "u1", "u2"]);
+    let two: Vec<String> = env.index.search(&terms("agulha"), 2).unwrap().unwrap().into_iter().map(|r| r.event_id).collect();
+    assert_eq!(two, ["n1", "u0"]);
+}
+
+#[test]
+fn only_newest_candidates_enter_the_cap() {
+    // IDX-23, SRCH-25: o lote é das 2000 casadas mais novas; a conversa antiga fica fora dele.
+    let env = Env::small(quiet());
+    let old = env.write(SID, &[line("agulha velha", "old", "user")], false);
+    set_mtime(&old, T0);
+    let lines: Vec<String> = (0..2000).map(|i| line(&format!("agulha {i}"), &format!("n{i}"), "user")).collect();
+    let new = env.write(SID2, &lines, false);
+    set_mtime(&new, T0 + 10);
+    env.index.update().unwrap();
+    assert_eq!(env.ids("agulha"), ["n0", "n1", "n2"]);
+    assert_eq!(env.ids("velha"), ["old"]);
+}
+
+#[test]
+fn internal_conversations_stay_out() {
+    // IDX-24, SRCH-06: a cópia do Perguntar nas fixtures some da busca; os prefixos são os do Python.
+    assert_eq!(internal_prefixes(), [
+        "Você responde onde um assunto apareceu nas conversas do usuá",
+        "Você reescreve OBJETIVOS pra um loop autônomo de código. Boa",
+        "Você recebeu abaixo um resumo automático de uma sessão de tr",
+    ]);
+    let env = Env::fixtures(quiet());
+    env.index.update().unwrap();
+    let rows = env.index.search(&terms("Revisor da Task 32"), 50).unwrap().unwrap();
+    let sessions: std::collections::BTreeSet<&str> = rows.iter().map(|r| r.session_id.as_str()).collect();
+    assert_eq!(sessions.into_iter().collect::<Vec<_>>(), ["db401d8f-fc08-463c-a3cc-4734fc5dc634"]);
+    assert!(rows.iter().any(|r| r.event_id == "f94331cf-dc2c-4f1e-890e-b6a3d87836a0"));
+}
+
+#[test]
+fn internal_is_decided_in_the_first_30_lines() {
+    // IDX-25: 1ª user_msg depois da linha 30 não marca a conversa como interna.
+    let env = Env::small(quiet());
+    let prefix = &internal_prefixes()[0];
+    let mut late: Vec<String> = (0..30).map(|i| line(&format!("resposta {i}"), &format!("a{i}"), "assistant")).collect();
+    late.push(line(&format!("{prefix} agulha tardia"), "u1", "user"));
+    env.write(SID, &late, false);
+    env.write(SID2, &[line(&format!("  {prefix} agulha cedo"), "u2", "user")], false);
+    env.index.update().unwrap();
+    assert_eq!(env.ids("agulha"), ["u1"]);
+}
+
+#[test]
+fn sqlite_failure_mid_file_leaves_no_partial_rows() {
+    // IDX-33: `test_erro_de_sqlite_no_meio_nao_deixa_linhas_parciais`.
+    let env = Env::small(quiet());
+    env.index.update().unwrap();
+    env.db().execute_batch("CREATE TRIGGER boom BEFORE UPDATE OF size ON files BEGIN SELECT RAISE(ABORT, 'disco cheio'); END;").unwrap();
+    let lines: Vec<String> = (0..3).map(|i| line(&format!("agulha {i}"), &format!("u{i}"), "user")).collect();
+    env.write(SID, &lines, false);
+    env.index.update().unwrap();
+    assert_eq!(env.count("SELECT count(*) FROM msg"), 0);
+    env.db().execute_batch("DROP TRIGGER boom").unwrap();
+    env.index.update().unwrap();
+    assert_eq!(env.ids("agulha"), ["u0", "u1", "u2"]);
+}
+
+#[test]
+fn unchanged_file_is_skipped_and_inode_is_masked() {
+    // IDX-28 (mesma tupla, sem releitura) e IDX-32 (inode acima do INTEGER com sinal).
+    assert_eq!(masked_ino(u64::MAX - 4), i64::MAX - 4);
+    assert_eq!(masked_ino(42), 42);
+    let env = Env::small(quiet());
+    env.write(SID, &[line("agulha grande", "u1", "user")], false);
+    env.index.update().unwrap();
+    let before: (i64, i64) = env.db().query_row("SELECT ino, offset FROM files", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+    env.db().execute_batch("UPDATE files SET offset = offset + 1000").unwrap();
+    env.index.update().unwrap();
+    let after: (i64, i64) = env.db().query_row("SELECT ino, offset FROM files", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+    assert_eq!(after, (before.0, before.1 + 1000), "arquivo igual não é relido");
+    assert_eq!(env.ids("agulha"), ["u1"]);
+}
+
+#[test]
+fn incomplete_line_waits_for_the_next_pass() {
+    // IDX-30: `test_append_incremental_so_linha_completa`.
+    let env = Env::small(quiet());
+    let f = env.write(SID, &[line("primeira agulha", "u1", "user")], false);
+    env.index.update().unwrap();
+    let partial = line("segunda agulha", "a1", "assistant");
+    append(&f, &partial.as_bytes()[..partial.len() - 10]);
+    env.index.update().unwrap();
+    assert_eq!(env.ids("agulha"), ["u1"]);
+    append(&f, &partial.as_bytes()[partial.len() - 10..]);
+    env.index.update().unwrap();
+    assert_eq!(env.ids("agulha"), ["u1", "a1"]);
+}
+
+#[test]
+fn rewritten_or_deleted_file_is_reread_or_dropped() {
+    // IDX-27, IDX-31: `test_arquivo_truncado_ou_trocado_e_relido`.
+    let env = Env::small(quiet());
+    let f = env.write(SID, &[line("velho texto", "u1", "user"), line("mais velho", "u2", "user")], false);
+    env.index.update().unwrap();
+    fs::write(&f, line("novo", "u3", "user")).unwrap();
+    env.index.update().unwrap();
+    assert!(env.ids("velho").is_empty());
+    assert_eq!(env.ids("novo"), ["u3"]);
+    fs::remove_file(&f).unwrap();
+    env.index.update().unwrap();
+    assert!(env.ids("novo").is_empty());
+    assert_eq!(env.count("SELECT count(*) FROM files"), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn unreadable_file_waits_and_others_go_on() {
+    // IDX-34: arquivo que não abre fica para a próxima passada, os outros entram.
+    use std::os::unix::fs::PermissionsExt;
+    let env = Env::small(quiet());
+    let locked = env.write(SID, &[line("agulha trancada", "u1", "user")], false);
+    env.write(SID2, &[line("agulha livre", "u2", "user")], false);
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    env.index.update().unwrap();
+    assert_eq!(env.ids("agulha"), ["u2"]);
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o644)).unwrap();
+    env.index.update().unwrap();
+    let mut ids = env.ids("agulha");
+    ids.sort();
+    assert_eq!(ids, ["u1", "u2"]);
+}
+
+#[test]
+fn schema_version_change_rebuilds() {
+    // IDX-13: `test_versao_do_esquema_diferente_reconstroi`.
+    let env = Env::small(quiet());
+    env.write(SID, &[line("agulha", "u1", "user")], false);
+    env.index.update().unwrap();
+    env.db().pragma_update(None, "user_version", 999).unwrap();
+    let again = Index::new(env.index.path().parent().unwrap(), env.index.inner.accounts.clone(), env.index.inner.report.clone(), quiet());
+    again.open_now().unwrap();
+    assert!(!again.ready());
+    assert_eq!(env.count("SELECT count(*) FROM files"), 0);
+    assert_eq!(env.count("PRAGMA user_version"), db::SCHEMA_VERSION);
+}
+
+#[test]
+fn corrupt_file_is_deleted_and_rebuilt() {
+    // IDX-14/15: banco ilegível sai (com -wal e -shm) e volta vazio, não pronto.
+    let env = Env::small(quiet());
+    let path = env.index.path().to_owned();
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, b"isto nao e um banco sqlite".repeat(100)).unwrap();
+    fs::write(format!("{}-wal", path.display()), b"lixo").unwrap();
+    env.index.open_now().unwrap();
+    assert!(!env.index.ready());
+    env.write(SID, &[line("agulha", "u1", "user")], false);
+    env.index.update().unwrap();
+    assert_eq!(env.ids("agulha"), ["u1"]);
+}
+
+#[test]
+fn connections_use_the_python_pragmas_and_read_during_write() {
+    // IDX-12 (PRAGMAs) e IDX-11 (leitura com escrita aberta noutra conexão).
+    let env = Env::small(quiet());
+    env.write(SID, &[line("agulha", "u1", "user")], false);
+    env.index.update().unwrap();
+    {
+        let guard = env.index.inner.writer.lock().unwrap();
+        let w = guard.as_ref().unwrap();
+        let get = |p: &str| -> String { w.query_row(&format!("PRAGMA {p}"), [], |r| r.get::<_, rusqlite::types::Value>(0)).map(|v| format!("{v:?}")).unwrap() };
+        assert_eq!(get("journal_mode"), "Text(\"wal\")");
+        assert_eq!(get("synchronous"), "Integer(1)");
+        assert_eq!(get("journal_size_limit"), "Integer(8388608)");
+        assert_eq!(get("busy_timeout"), "Integer(10000)");
+    }
+    let writer = env.db();
+    writer.execute_batch("BEGIN IMMEDIATE; INSERT INTO meta(k, v) VALUES ('x', 'y');").unwrap();
+    assert_eq!(env.ids("agulha"), ["u1"]);
+    writer.execute_batch("ROLLBACK").unwrap();
+}
+
+#[test]
+fn one_writer_at_a_time() {
+    // IDX-09: passadas simultâneas não se sobrepõem nem duplicam mensagens.
+    let env = Env::small(quiet());
+    let lines: Vec<String> = (0..200).map(|i| line(&format!("agulha {i}"), &format!("u{i}"), "user")).collect();
+    env.write(SID, &lines, false);
+    let threads: Vec<_> = (0..4).map(|_| { let i = env.index.clone(); std::thread::spawn(move || i.update().unwrap()) }).collect();
+    threads.into_iter().for_each(|t| t.join().unwrap());
+    assert_eq!(env.count("SELECT count(*) FROM msg"), 200);
+}
+
+#[test]
+fn creating_the_index_touches_no_disk() {
+    // IDX-02: o `AppState` dos testes monta o índice sem abrir banco nem varrer transcripts.
+    let env = Env::small(quiet());
+    assert!(!env.index.path().parent().unwrap().exists());
+    assert_eq!(env.index.search(&terms("agulha"), 50).unwrap(), None);
+    assert!(env.index.heads().is_empty());
+    assert_eq!(env.index.file_facts("/x").unwrap(), None);
+    assert!(!env.index.path().parent().unwrap().exists());
+    // IDX-03: arquivo próprio do Rust ao lado do índice de custos.
+    let server = Index::server(crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture()));
+    assert_eq!(server.path(), crate::costs::index::default_dir().join("busca-rust.sqlite3"));
+}
+
+#[test]
+fn heads_and_file_facts_for_the_archive() {
+    // IDX-42 e M4/F12: cabeçalho pronto, conta, se tem usuário e a última mensagem real.
+    let env = Env::fixtures(quiet());
+    env.index.update().unwrap();
+    let home = env.home();
+    let heads = env.index.heads();
+    let normal = home.join(MTIMES[13]).to_string_lossy().into_owned();
+    assert_eq!(heads[&normal], ("[painel: orquestrador 9c0b634f] Read /.claude/skills/orquestrar/references/executor.md — your role's page, plus the…".to_owned(),
+        Some("/home/jefferson/Projetos/hangar-computer-control-9c0b634f-t1".to_owned())));
+    assert_eq!(heads.len(), 7, "a reserva sem cabeçalho fica fora");
+    assert!(!heads.contains_key(&*home.join(RESERVE).to_string_lossy()));
+    let a = home.join(".claude-a").to_string_lossy().into_owned();
+    let facts = |rel: &str| env.index.file_facts(&home.join(rel).to_string_lossy()).unwrap().unwrap();
+    assert_eq!(facts(MTIMES[13]), FileFacts { has_user: true, provider: "claude".into(), config_dir: Some(a.clone()), account: format!("claude:{a}"),
+        last_text: "O árbitro aceitou a correção do scripts/windows-test.sh e mandou incluir components = [\"clippy\"] no rust-toolchain.toml…".into() });
+    let reserve = facts(RESERVE);
+    assert_eq!((reserve.has_user, reserve.last_text.as_str()), (false, ""));
+    assert_eq!(facts(MTIMES[6]).last_text, "tem como dedesativar esse mod do ponytail? eu nao queria isso ativo nao querof icar vendo esse botao ai");
+    assert_eq!(facts(MTIMES[11]).last_text, "O ator do Rust chama POST /internal/runtime/policy no Python ao abrir e recebe 503. Vou ver por quê.");
+    assert_eq!(env.index.file_facts("/nao/existe.jsonl").unwrap(), None);
+}
+
+#[test]
+fn server_accounts_skip_repeats_and_add_the_server_last() {
+    // `archive._contas`: sem repetir pelo caminho real; a do servidor por último se não veio.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    for d in ["a/projects", "b/projects", "srv/projects"] { fs::create_dir_all(root.join(d)).unwrap(); }
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(root.join("a"), root.join("a-link")).unwrap();
+    let s = |p: &str| root.join(p).to_string_lossy().into_owned();
+    let mut dirs = vec![s("a"), s("b"), s("missing")];
+    if cfg!(unix) { dirs.push(s("a-link")); }
+    let got = server_accounts(&dirs, &root.join("srv"));
+    assert_eq!(got, vec![
+        Account { config_dir: Some(s("a")), dir: root.join("a"), projects: root.join("a/projects") },
+        Account { config_dir: Some(s("b")), dir: root.join("b"), projects: root.join("b/projects") },
+        Account { config_dir: None, dir: root.join("srv"), projects: root.join("srv/projects") },
+    ]);
+    assert_eq!(server_accounts(&[s("a")], &root.join("a")).len(), 1);
+}
+
+#[test]
+fn stale_search_starts_a_background_pass_without_waiting() {
+    // IDX-10, SRCH-24: sem observador, a busca não espera; a conversa nova aparece numa busca seguinte.
+    let env = Env::small(Timing { stale: Duration::ZERO, ..quiet() });
+    let f = env.write(SID, &[line("agulha um", "u1", "user")], false);
+    env.index.update().unwrap();
+    append(&f, line("agulha dois", "u2", "user").as_bytes());
+    let held = env.index.inner.writer.lock().unwrap();
+    let t0 = Instant::now();
+    assert_eq!(env.ids("agulha"), ["u1"]);
+    assert!(t0.elapsed() < Duration::from_secs(1));
+    drop(held);
+    wait_for("passada disparada pela busca", || env.ids("agulha") == ["u1", "u2"]);
+}
+
+#[test]
+fn producer_waits_first_pass_then_follows_writes() {
+    // M1 (no lugar de IDX-05..07), IDX-01 e IDX-06 com prazo curto.
+    let env = Env::small(Timing { first_pass: Duration::from_millis(400), ..quiet() });
+    let f = env.write(SID, &[line("agulha um", "u1", "user")], false);
+    assert!(env.index.start().is_some());
+    assert!(env.index.start().is_none(), "uma vez por processo");
+    std::thread::sleep(Duration::from_millis(150));
+    assert!(!env.index.ready(), "a 1ª passada espera o prazo");
+    wait_for("1ª passada", || env.index.ready());
+    assert_eq!(env.ids("agulha"), ["u1"]);
+    wait_for("observador de pé", || env.index.inner.watch_ok.load(std::sync::atomic::Ordering::Acquire));
+    append(&f, line("agulha dois", "u2", "user").as_bytes());
+    wait_for("escrita indexada sem passada manual", || env.ids("agulha") == ["u1", "u2"]);
+    env.write(SID2, &[line("agulha nova conversa", "n1", "user")], false);
+    wait_for("conversa nova indexada", || env.ids("nova") == ["n1"]);
+    assert!(env.reports.lock().unwrap().is_empty());
+}
+
+#[test]
+fn producer_rereads_the_catalog() {
+    // Conta removida do catálogo sai; conta que volta entra e passa a ser vigiada.
+    let env = Env::fixtures(Timing { first_pass: Duration::ZERO, ..quiet() });
+    let home = env.home();
+    env.index.start().unwrap();
+    wait_for("1ª passada", || env.index.ready());
+    let b_files = || env.count("SELECT count(*) FROM files WHERE config_dir LIKE '%.claude-b'");
+    assert_eq!(b_files(), 4);
+    let all = env.accounts.lock().unwrap().clone();
+    env.accounts.lock().unwrap().retain(|a| !a.dir.ends_with(".claude-b"));
+    append(&home.join(MTIMES[13]), line("agulha gatilho", "g1", "user").as_bytes());
+    wait_for("conta removida sai", || b_files() == 0);
+    *env.accounts.lock().unwrap() = all;
+    append(&home.join(MTIMES[13]), line("agulha gatilho 2", "g2", "user").as_bytes());
+    wait_for("conta de volta entra", || b_files() == 4);
+    append(&home.join(MTIMES[5]), line("zebraconta de volta", "b1", "user").as_bytes());
+    wait_for("conta de volta é vigiada", || env.ids("zebraconta") == ["b1"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn watcher_that_fails_is_reported_and_search_takes_over() {
+    // M1: observador que não sobe vai ao diário e a busca dispara a passada (IDX-10).
+    use std::os::unix::fs::PermissionsExt;
+    let env = Env::small(Timing { first_pass: Duration::ZERO, stale: Duration::ZERO, ..quiet() });
+    let blocked = env.root.join("blocked");
+    fs::create_dir_all(blocked.join("projects")).unwrap();
+    fs::set_permissions(blocked.join("projects"), fs::Permissions::from_mode(0o000)).unwrap();
+    env.accounts.lock().unwrap().push(Account { config_dir: Some(blocked.to_string_lossy().into_owned()), dir: blocked.clone(), projects: blocked.join("projects") });
+    let f = env.write(SID, &[line("agulha um", "u1", "user")], false);
+    env.index.start().unwrap();
+    wait_for("1ª passada", || env.index.ready());
+    wait_for("falha no diário", || env.reports.lock().unwrap().iter().any(|(c, _)| *c == "busca.observador_falhou"));
+    assert!(!env.index.inner.watch_ok.load(std::sync::atomic::Ordering::Acquire));
+    append(&f, line("agulha dois", "u2", "user").as_bytes());
+    wait_for("busca dispara a passada", || env.ids("agulha") == ["u1", "u2"]);
+    fs::set_permissions(blocked.join("projects"), fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[test]
+fn watcher_that_falls_is_reported() {
+    let env = Env::small(Timing { first_pass: Duration::ZERO, ..quiet() });
+    env.index.start().unwrap();
+    wait_for("observador de pé", || env.index.inner.watch_ok.load(std::sync::atomic::Ordering::Acquire));
+    env.index.wake_producer(watch::Wake::Failed("fila do inotify cheia".into()));
+    wait_for("queda no diário", || env.reports.lock().unwrap().iter().any(|(c, d)| *c == "busca.observador_falhou" && d.contains("inotify")));
+    assert!(!env.index.inner.watch_ok.load(std::sync::atomic::Ordering::Acquire));
+}
+
+#[test]
+fn index_that_cannot_open_is_reported() {
+    // IDX-04: banco que não abre vai ao diário (`busca.indice_indisponivel`); a busca segue sem ele.
+    let env = Env::small(quiet());
+    fs::write(env.root.join("idx"), b"arquivo no lugar da pasta").unwrap();
+    env.index.start().unwrap().join().unwrap();
+    assert_eq!(env.reports.lock().unwrap()[0].0, "busca.indice_indisponivel");
+    assert_eq!(env.index.search(&terms("agulha"), 50).unwrap(), None);
+}
+
+proptest! {
+    #[test]
+    fn absorb_line_never_panics(bytes in proptest::collection::vec(any::<u8>(), 0..512)) {
+        let mut st = FileState::default();
+        let mut raw = bytes;
+        raw.push(b'\n');
+        let _ = absorb_line(&mut st, &raw, &internal_prefixes());
+        prop_assert_eq!(st.offset, raw.len() as i64);
+    }
+
+    #[test]
+    fn absorb_truncated_json_never_panics(cut in 0usize..2000) {
+        let full = line("Configuração com \"aspas\" e emoji 🚀", "u1", "user");
+        let bytes = full.as_bytes();
+        let mut raw = bytes[..cut.min(bytes.len() - 1)].to_vec();
+        raw.push(b'\n');
+        let mut st = FileState::default();
+        let msgs = absorb_line(&mut st, &raw, &internal_prefixes());
+        prop_assert!(msgs.len() <= 1);
+    }
+}

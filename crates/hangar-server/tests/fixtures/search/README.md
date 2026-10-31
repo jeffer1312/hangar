@@ -23,5 +23,10 @@ Codex padrão, Codex gerenciada `b`, Pi, omp e Kimi.
 | `.omp/agent/sessions/-tmp-claude-1000--…-omp-teste/…_01a06932-….jsonl` | omp |
 | `.kimi-code/sessions/wd_hangar_5112ff7a84e0/session_ab697d05-…/agents/main/wire.jsonl` e `.kimi-code/session_index.jsonl` | Kimi. O wire fica sem as linhas de perfil, requisição e uso, que têm chaves. ⚠ No índice, `sessionDir` usa o marcador `{HOME}`, que quem copia troca pelo HOME de teste |
 
+`index_lifecycle.json` é a captura do índice do Python (`transcript_index.py`) sobre este `home/`:
+as tabelas `files` e `msg` depois de cada fim de vida (append, linha incompleta, troca de inode,
+encolher, apagar, mover de conta). O teste do índice do Rust compara com ela, aplicadas as
+diferenças aprovadas.
+
 Não tem caso real nesta máquina: transferência Codex (não há registro em `conversation-transfers`)
 e fila `queue-operation` limpa.
