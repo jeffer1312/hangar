@@ -180,7 +180,7 @@
   const when = (at: number) => new Date(at * 1000).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' });
   // Chave perdida na dona também restaura: a cópia traz o cofre de volta com chave nova.
   const canRestore = $derived(!!status && status.role !== 'remote' &&
-    (status.state === 'absent' || (status.role === 'owner' && (status.state === 'key_lost' || status.state === 'unavailable'))
+    (status.state === 'absent' || (status.role === 'owner' && (status.state === 'key_lost' || status.unreadable))
       || (status.state === 'open' && entries?.length === 0)));
 
   // ── Revelar e copiar ────────────────────────────────────────────────────────────────────────

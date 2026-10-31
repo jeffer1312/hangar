@@ -121,7 +121,7 @@ export default function Cofre() {
   // Restaurar só nesta máquina: sem cofre ainda, dona aberta sem nenhuma senha, ou dona com a chave perdida
   // (o servidor põe o arquivo velho de lado e cria chave nova).
   const canRestore = !!status && (status.role === 'none'
-    || (status.role === 'owner' && (state === 'key_lost' || state === 'unavailable' || (state === 'open' && entries?.length === 0))));
+    || (status.role === 'owner' && (state === 'key_lost' || status.unreadable || (state === 'open' && entries?.length === 0))));
   return (
     <Pagina>
       <Stack.Screen options={{ title: m.vault_app_title() }} />

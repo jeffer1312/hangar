@@ -17,6 +17,8 @@ export interface VaultStatus {
   state: VaultState;
   /** Motivo do `offline` ou do `absent` na dona. */
   detail?: string;
+  /** `unavailable` porque o arquivo não abre com a chave: a restauração resolve. */
+  unreadable?: boolean;
   backup?: VaultBackupStatus;
   /** Id da máquina que respondeu, quando ela fala do próprio cofre. */
   server_id?: string;

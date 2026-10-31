@@ -136,6 +136,8 @@ async fn status_body(st: &AppState, local: bool) -> Response {
         if here.state == super::State::Unavailable {
             let why = if unreadable { VaultError::Unreadable } else { VaultError::Key(KeyError::Bus) };
             body["detail"] = json!(why.code_msg().2);
+            // Só este caso a cópia resolve: com o chaveiro fora, restaurar falharia também.
+            if unreadable { body["unreadable"] = json!(true); }
         }
         if here.role == Role::Owner {
             match config::load(&st.hangar_dir) {

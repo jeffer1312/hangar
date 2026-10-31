@@ -36,6 +36,9 @@ struct Status {
     state: String,
     #[serde(default)]
     detail: Option<String>,
+    /// O arquivo não abre com a chave: só neste `unavailable` a restauração resolve.
+    #[serde(default)]
+    unreadable: bool,
     /// Só na dona com máquina de cópia escolhida.
     #[serde(default)]
     backup: Option<Backup>,
@@ -577,7 +580,7 @@ impl Render for VaultPage {
         let empty = matches!(&self.entries, Some(Ok(list)) if list.is_empty());
         let backup = (status.role == "owner" && status.state == "open").then(|| self.render_backup(&status, cx));
         // Chave perdida também restaura: o servidor guarda o arquivo velho de lado e cria uma chave nova.
-        let restore = (status.role == "none" || (status.role == "owner" && (empty || status.state == "key_lost" || status.state == "unavailable"))).then(|| self.render_restore(cx));
+        let restore = (status.role == "none" || (status.role == "owner" && (empty || status.state == "key_lost" || status.unreadable))).then(|| self.render_restore(cx));
         page.child(body).children(backup).children(restore).child(self.render_where(&status, cx))
     }
 }
