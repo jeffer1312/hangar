@@ -1417,18 +1417,20 @@ impl Hangar {
     /// `count`: as sessões que a seção mostra, com os grupos juntados.
     pub(super) fn render_group_header(&self, group: &Group, count: usize, awaiting: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let open = !self.sidebar.collapsed.contains(&group.key);
-        self.group_trigger(&group.key, group.label.clone(), open, Some(count), awaiting, window, cx)
+        self.group_trigger(&group.key, &group.key, group.label.clone(), open, Some(count), awaiting, window, cx)
     }
 
-    /// "Ocultas (N)" no fim da barra: o mesmo cabeçalho, aberto quando a chave está no arquivo.
-    pub(super) fn render_hidden_header(&self, count: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        self.group_trigger(HIDDEN_GROUP, tr("sidebar_hidden_group").replace("{n}", &count.to_string()), self.hidden_open(), None, 0, window, cx)
+    /// "Ocultas (N)": o mesmo cabeçalho, aberto quando a chave está no arquivo. `place` separa o id de foco
+    /// de cada lugar (barra, cada coluna da bandeja); abrir e fechar segue um interruptor só.
+    pub(super) fn render_hidden_header(&self, place: &str, count: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let label = tr("sidebar_hidden_group").replace("{n}", &count.to_string());
+        self.group_trigger(HIDDEN_GROUP, &format!("{HIDDEN_GROUP}/{place}"), label, self.hidden_open(), None, 0, window, cx)
     }
 
-    /// `count` ausente: o rótulo já leva a contagem.
+    /// `count` ausente: o rótulo já leva a contagem. `id_key` é o id do elemento; `key`, o interruptor.
     #[allow(clippy::too_many_arguments)]
-    fn group_trigger(&self, key: &str, label: String, open: bool, count: Option<usize>, awaiting: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let id = SharedString::from(format!("group-{key}"));
+    fn group_trigger(&self, key: &str, id_key: &str, label: String, open: bool, count: Option<usize>, awaiting: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let id = SharedString::from(format!("group-{id_key}"));
         let focus = window.use_keyed_state(SharedString::from(format!("{id}-focus")), cx, |_, cx| cx.focus_handle().tab_stop(true)).read(cx).clone();
         let (key, weak) = (key.to_owned(), cx.entity().downgrade());
         let trigger = AccordionTrigger::new(id).open(open).track_focus(&focus).aria_label(count.map_or_else(|| label.clone(), |n| format!("{label} · {n}")));

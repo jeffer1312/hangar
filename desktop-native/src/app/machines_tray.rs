@@ -177,7 +177,7 @@ impl Hangar {
         }
         // As ocultas no fim da coluna, recolhidas pelo mesmo interruptor do grupo da barra lateral.
         if !hidden.is_empty() {
-            rows.push(self.render_hidden_header(hidden.len(), window, cx));
+            rows.push(self.render_hidden_header(key, hidden.len(), window, cx));
             if self.hidden_open() { rows.extend(hidden.iter().map(|s| self.render_machine_session(s, key, invite, window, cx))); }
         }
         let empty = sessions.is_empty() && hidden.is_empty();

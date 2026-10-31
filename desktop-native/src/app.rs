@@ -5825,7 +5825,7 @@ impl Hangar {
         // As ocultas de todas as máquinas no fim, recolhidas por padrão; cada linha diz de qual máquina é.
         let hidden_rows = self.hidden_sessions(cx);
         if !hidden_rows.is_empty() {
-            children.push(("hidden/head".into(), "hidden", self.render_hidden_header(hidden_rows.len(), window, cx)));
+            children.push(("hidden/head".into(), "hidden", self.render_hidden_header("sidebar", hidden_rows.len(), window, cx)));
             if self.hidden_open() {
                 for (key, session) in hidden_rows {
                     let remote = remote_of(&key);
