@@ -673,7 +673,8 @@ impl Hangar {
     /// quando espera resposta, como o web). `remote` é a chave da máquina quando ela não é a ativa.
     pub(super) fn group_row(&self, el: Stateful<Div>, session: &SessionInfo, remote: Option<&str>, radius: f32, cx: &mut Context<Self>) -> Stateful<Div> {
         let target = Target::new(&remote.map(str::to_owned).unwrap_or_else(|| self.active_key()), &session.name);
-        let member = session.pair_gid.is_some();
+        // A oculta aparece no grupo "Ocultas", fora do bloco do par: a barra do bloco não vai junto.
+        let member = session.pair_gid.is_some() && !session.hidden_from_list;
         let lifted = self.dragging(cx) == Some(&target);
         let bar = if session.state == "awaiting_input" { theme::warning() } else { theme::accent() };
         let el = el.when(member, |el| el.ml(px(8.)).child(div().absolute().left_0().top(px(6.)).bottom(px(6.)).w(px(2.)).rounded_full().bg(bar)))
