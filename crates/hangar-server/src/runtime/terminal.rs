@@ -1129,6 +1129,7 @@ impl Executor {
             tokio::time::sleep(Duration::from_millis(200)).await;
             facts=Some(services.facts(&self.target.binding).await);
         }
+        if facts.as_ref().is_some_and(|result|result.is_ok()) {self.conversation_proved=true;}
         let current=facts.as_ref().is_none_or(|result|result.as_ref().is_ok_and(|facts|facts.binding==self.target.binding));
         if let Some(facts)=&facts {self.deliverable=facts.as_ref().is_ok_and(|facts|current && facts.ready && !facts.open_question);}
         // Com o Claude trabalhando a mensagem fica na fila do Hangar, onde o painel a apaga, edita e reordena.
