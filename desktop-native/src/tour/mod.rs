@@ -126,6 +126,10 @@ impl Tour {
 
     /// Os passos dependem da lista de sessões: entram quando ela é lida, e de novo no "Ver o tour de novo".
     pub fn set_steps(&mut self, steps: Vec<Step>) {
+        // Reaberto no meio do tour: o que já passou não volta; "Ver o tour de novo" (keep_open) mostra tudo.
+        let steps: Vec<Step> = if self.keep_open { steps } else {
+            steps.into_iter().filter(|step| !self.seen.tips.contains(&steps::tip_id(step))).collect()
+        };
         self.current = (self.seen.tour.is_none() && !steps.is_empty()).then_some(0);
         (self.steps, self.done_any, self.celebrated) = (steps, false, None);
     }
@@ -366,6 +370,13 @@ mod tests {
         assert_eq!(tour.seen.tour, None);
         assert!(tour.seen.tips.contains("fila"));
         assert_eq!(tour.next_surface(&FREE).unwrap().id, "new");
+    }
+
+    #[test]
+    fn reopening_mid_tour_skips_the_steps_already_passed() {
+        let seen = Seen { tips: ["tour-new".to_owned()].into(), ..Default::default() };
+        let tour = Tour::with_steps(seen, steps());
+        assert_eq!(tour.next_surface(&FREE).unwrap().id, "search", "o passo feito antes de fechar não volta");
     }
 
     #[test]
