@@ -554,7 +554,11 @@ impl Hangar {
             None => { ui.reveal.set(false); ui.scroll.set_offset(point(px(0.), px(0.))); }
         }
         self.settings = Some(found.page);
-        if opened { self.settings_opened(found.page, cx); }
+        if opened {
+            // Como no `open_settings`: a senha revelada não sobrevive à saída da página.
+            self.vault_page = None;
+            self.settings_opened(found.page, cx);
+        }
         cx.notify();
     }
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert } from 'react-native';
+import { Alert, AppState } from 'react-native';
 import { Stack } from 'expo-router';
 import { findOwnerServer, getVaultStatus, listVaultEntries, listVaultPeers, putVaultConfig, type Server, type VaultEntry, type VaultPeer, type VaultState, type VaultStatus } from '@hangar/core';
 import { Pagina } from '../../src/features/config/Pagina';
@@ -68,7 +68,8 @@ export default function Cofre() {
         if (now !== generation.current) return;
         setStatus(next);
         setEntries(list);
-        setWriter(owner);
+        // Falha ao reler os peers não fecha o formulário aberto: quem grava continua conhecido.
+        setWriter((known) => owner ?? (lookupError ? known : null));
         setOwnerLookupError(lookupError);
       } catch (e) {
         if (now === generation.current) setError(vaultErrorText(e));
@@ -88,6 +89,12 @@ export default function Cofre() {
     load();
     return () => { generation.current++; };
   }, [load, server?.id, server?.baseUrl, server?.token]);
+
+  // A rota fica montada no fundo: ao voltar, status e senhas podem ter mudado em outro aparelho.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => { if (state === 'active') load(); });
+    return () => sub.remove();
+  }, [load]);
 
   const becomeOwner = () => {
     if (!server) return;

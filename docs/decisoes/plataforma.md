@@ -3737,7 +3737,9 @@ e push no celular, espera até 10 min) ou **liberada**. O agente usa por três c
 preenchido pelo navegador da sessão (não vê o valor), comando no shell com o valor numa variável
 de ambiente e apagado da saída, e arquivo 0600 que some no fim da sessão ou em 24 h. Entrada pela
 tela dos três clientes e pelo cartão `request_secret`; ver e copiar não pedem confirmação extra.
-Cópia diária criptografada vai à VPS e abre só com a senha de recuperação que o dono guarda fora.
+O login só é preenchido em entrada com site cadastrado e na página desse site; token sem site
+serve ao shell e ao arquivo. Cópia diária criptografada vai à máquina escolhida em `backup_peer`
+(nesta implantação, a VPS) e abre só com a senha de recuperação que o dono guarda fora.
 Tudo no Rust, espera por evento.
 
 **Por quê.** O pedido é parar de colar senha no chat (fica no transcript e vai ao modelo) e de
@@ -3764,7 +3766,9 @@ com o servidor, abre e fecha a sessão `plain` nela e nunca pergunta sem dono do
 (`NoAutoStart`): o caso que derrubou o daemon de verdade não foi isolado.
 
 **Limite.** A aprovação e a saída apagada barram o uso normal, não um agente decidido a burlar: com
-a chave no chaveiro ele abre o cofre, e no shell e no arquivo ele vê o valor se quiser. Senha que
+a chave no chaveiro ele abre o cofre, e no shell e no arquivo ele vê o valor se quiser. Entre a
+conferência do domínio e o `Input.insertText` há uma janela de milissegundos em que uma navegação
+pode trocar o documento, porque o CDP não amarra a inserção ao documento. Senha que
 passa pelo `app.hangar.dev.br` é decifrada no servidor intermediário. Notebook fechado = nenhuma
 outra máquina tem senha. 2FA fica fora da primeira entrega: o login pede o código num cartão. O
 token do `peers.json` é o token de dono da outra máquina, então a origem de um pedido entre

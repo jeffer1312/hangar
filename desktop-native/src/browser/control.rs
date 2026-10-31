@@ -143,8 +143,6 @@ impl Drop for Secret {
     }
 }
 
-/// Teto de senhas lembradas para a máscara.
-const SECRETS_MAX: usize = 8;
 /// O alvo é o elemento com foco na raiz dele (documento, shadow root ou iframe) e, se for, se é campo de senha.
 const TARGET_FOCUS: &str = "function(){const r=this.getRootNode&&this.getRootNode();if(!r||r.activeElement!==this)return 'fora';return this.tagName==='INPUT'&&this.type==='password'?'senha':'campo'}";
 
@@ -318,7 +316,8 @@ impl<P: Page> Controller<P> {
             "Page.frameNavigated" if p["frame"]["parentId"].is_null() => Some(None),
             _ => None,
         };
-        if let (Some(error), Some(f)) = (error, self.on_page_error.borrow().as_ref()) { f(error); }
+        // O painel guarda e mostra esse texto: a senha que a página registrou não chega nele.
+        if let (Some(error), Some(f)) = (error, self.on_page_error.borrow().as_ref()) { f(error.map(|text| self.masked(text))); }
     }
 
     fn log_event(&self, method: &str, p: &Value) {
@@ -680,10 +679,6 @@ impl<P: Page> Controller<P> {
             let mut s = self.state.borrow_mut();
             s.marked.insert(id);
             if !s.secrets.iter().any(|known| known.as_str() == secret.as_str()) {
-                if s.secrets.len() >= SECRETS_MAX {
-                    s.secrets.remove(0);
-                    crate::log_line("cofre: o navegador deixou de esconder a senha preenchida mais antiga (limite de senhas por navegador)");
-                }
                 let mut secret = secret;
                 secret.forms = mask_forms(secret.as_str());
                 s.secrets.push(secret);
@@ -1123,6 +1118,30 @@ mod tests {
     fn fill_secret(c: &Controller<Fake>, kind: &str) -> String {
         block_on(c.run("snapshot", &[]));
         text(block_on(c.run_with("fill-secret", &s(&["@e1", kind]), Some(Secret::new(SECRET.into())))))
+    }
+
+    #[test]
+    fn every_secret_filled_in_the_session_stays_masked() {
+        let c = login_page("senha");
+        block_on(c.run("snapshot", &[]));
+        let secret = |i: usize| format!("S3nh@-distinta-{i}");
+        for i in 0..9 {
+            assert_eq!(text(block_on(c.run_with("fill-secret", &s(&["@e1", "password"]), Some(Secret::new(secret(i)))))), "ok: fill-secret @e1");
+        }
+        c.on_event("Runtime.consoleAPICalled", &json!({"type": "log", "args": [{"type": "string", "value": secret(0)}]}));
+        assert!(!text(block_on(c.run("console", &[]))).contains("distinta"), "a primeira de nove segue escondida");
+    }
+
+    #[test]
+    fn a_page_error_with_the_secret_reaches_the_panel_masked() {
+        let c = login_page("senha");
+        assert_eq!(fill_secret(&c, "password"), "ok: fill-secret @e1");
+        let seen = std::rc::Rc::new(RefCell::new(None));
+        let sink = seen.clone();
+        c.on_page_error(move |error| *sink.borrow_mut() = error);
+        c.on_event("Runtime.consoleAPICalled", &json!({"type": "error", "args": [{"type": "string", "value": format!("falhou com {SECRET}")}]}));
+        let shown = seen.borrow().clone().expect("o erro chega ao painel");
+        assert!(shown.contains("falhou com") && !shown.contains("S3nh"), "{shown}");
     }
 
     #[test]

@@ -112,6 +112,8 @@ pub(super) struct VaultPage {
     hangar: WeakEntity<Hangar>,
     /// Número da leitura: resposta de uma leitura anterior não pisa na nova.
     seq: u64,
+    /// Apagar e salvar releem a lista sem refazer a leitura inteira: só a resposta mais nova vale.
+    entries_seq: u64,
     status: Option<Result<Status, String>>,
     entries: Option<Result<Vec<Entry>, String>>,
     peers: Vec<Peer>,
@@ -141,7 +143,7 @@ impl VaultPage {
             restore_password: masked(tr("vault_recovery_password"), window, cx),
             restore_server: cx.new(|cx| InputState::new(window, cx).placeholder(tr("vault_restore_server_hint"))),
         };
-        let mut page = Self { api, runtime, hangar, seq: 0, status: None, entries: None, peers: Vec::new(), peers_error: None, writer: None,
+        let mut page = Self { api, runtime, hangar, seq: 0, entries_seq: 0, status: None, entries: None, peers: Vec::new(), peers_error: None, writer: None,
             revealed: HashMap::new(), copied: None, busy: HashSet::new(), config_busy: false, error: None, fields, recovery_busy: false,
             recovery_saved: false, recovery_error: None, restore_peer: None, restore_busy: false, restore_error: None };
         page.load(window, cx);
@@ -178,9 +180,10 @@ impl VaultPage {
     }
 
     fn load_entries(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (seq, api) = (self.seq, self.api.clone());
+        self.entries_seq += 1;
+        let (seq, entries_seq, api) = (self.seq, self.entries_seq, self.api.clone());
         run(&self.runtime, async move { api.server_read(&["vault", "entries"], &[], 45).await }, window, cx, move |this: &mut Self, result, _, _| {
-            if seq != this.seq { return; }
+            if seq != this.seq || entries_seq != this.entries_seq { return; }
             this.entries = Some(result.map_err(|e| vault_failure(&e))
                 .and_then(|v| serde_json::from_value(v).map_err(|_| tr("invalid_response"))));
         });
@@ -223,7 +226,8 @@ impl VaultPage {
         }
     }
 
-    fn set_backup_peer(&mut self, peer: String, window: &mut Window, cx: &mut Context<Self>) {
+    /// `None` para a cópia diária: o servidor apaga a máquina escolhida.
+    fn set_backup_peer(&mut self, peer: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
         if self.config_busy { return; }
         (self.config_busy, self.error) = (true, None);
         let api = self.api.clone();
@@ -478,7 +482,11 @@ impl VaultPage {
     fn render_backup(&self, status: &Status, cx: &mut Context<Self>) -> AnyElement {
         let label = |key: &str| div().text_sm().font_weight(FontWeight::MEDIUM).child(tr(key));
         let chosen = status.backup.as_ref().map(|b| b.peer.as_str());
-        let peers = self.peer_choices("vault-backup-peer", chosen, self.config_busy, |this, id, window, cx| this.set_backup_peer(id, window, cx), cx);
+        let mut peers = self.peer_choices("vault-backup-peer", chosen, self.config_busy, |this, id, window, cx| this.set_backup_peer(Some(id), window, cx), cx);
+        if status.backup.is_some() {
+            peers.push(Button::new("vault-backup-clear").outline().small().label(tr("vault_backup_clear")).disabled(self.config_busy)
+                .on_click(cx.listener(|this, _, window, cx| this.set_backup_peer(None, window, cx))));
+        }
         let last = match &status.backup {
             None => muted(tr("vault_backup_off")),
             Some(Backup { last_error: Some(error), .. }) => div().text_sm().text_color(theme::danger()).whitespace_normal()
@@ -691,9 +699,10 @@ impl Hangar {
     pub(super) fn vault_owner_api(&self, url: &str) -> Option<Api> {
         let want = machines::host_key(url);
         // Pelo endereço salvo ou pelo da rede local aprendido: o `peers.json` pode dar qualquer um dos dois.
+        // Duas entradas podem dar no mesmo endereço: vale a primeira com conexão.
         self.servers.iter().filter(|s| !s.invite && !s.disabled)
-            .find(|s| std::iter::once(s.address.as_str()).chain(s.lan.as_ref().map(|l| l.url.as_str())).any(|u| machines::host_key(u) == want))
-            .and_then(|s| self.machine_api(&servers::norm(&s.address)))
+            .filter(|s| std::iter::once(s.address.as_str()).chain(s.lan.as_ref().map(|l| l.url.as_str())).any(|u| machines::host_key(u) == want))
+            .find_map(|s| self.machine_api(&servers::norm(&s.address)))
     }
 }
 

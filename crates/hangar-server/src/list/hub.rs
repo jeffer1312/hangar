@@ -803,16 +803,17 @@ mod tests {
             codex_home: tmp.path().join(".codex"), pi_sessions: tmp.path().join("pi"), omp_config: tmp.path().join("omp"),
             omp_agent: tmp.path().join("omp/agent"), kimi_home: tmp.path().join("kimi") };
         let share = crate::share::from_env(Some(tmp.path().join("shares.json")), Some(&dirs), "missing-test-mux".into()).unwrap();
-        let p = Published { vault: Some(sse_frame("vault", r#"{"state":"open","requests":[]}"#, None)), vault_seq: 1, ..Default::default() };
-        let (tx, _) = watch::channel(Arc::new(p));
-        let hub = Arc::new(ListHub::default());
+        let requests = crate::vault::requests::Requests::default();
+        let hub = Arc::new(ListHub::with_vault(requests.feed()));
+        requests.note_state(crate::vault::State::Open);
+        publish_vault(&hub.tx, &mut Last::default(), hub.vault.clone().borrow_and_update().clone());
         let (owner_tx, owner_rx) = mpsc::channel(16);
-        tokio::spawn(client_loop(Subscription { hub: hub.clone(), rx: tx.subscribe(), owner: true }, owner_tx));
+        tokio::spawn(client_loop(Subscription { hub: hub.clone(), rx: hub.tx.subscribe(), owner: true }, owner_tx));
         let (guest_tx, guest_rx) = mpsc::channel(16);
-        tokio::spawn(guest_loop(Subscription { hub, rx: tx.subscribe(), owner: false }, share, "tok".into(), guest_tx));
+        let rx = hub.tx.subscribe();
+        tokio::spawn(guest_loop(Subscription { hub, rx, owner: false }, share, "tok".into(), guest_tx));
         let is_vault = |f: &Bytes| f.starts_with(b"event: vault\r\n");
         assert!(drain(owner_rx).await.iter().any(is_vault));
         assert!(!drain(guest_rx).await.iter().any(is_vault));
-        drop(tx);
     }
 }

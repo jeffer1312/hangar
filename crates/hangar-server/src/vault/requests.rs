@@ -112,7 +112,7 @@ struct Request {
 
 struct Temporary { session_key: String, name: String, value: Zeroizing<String>, until: Instant }
 
-struct Grant { session_key: String, name: String, until: Instant }
+struct Grant { session_key: String, entry_id: String, until: Instant }
 
 #[derive(Default)]
 struct Inner { requests: HashMap<String, Request>, temporary: Vec<Temporary>, grants: Vec<Grant>, state: Option<State>, seq: u64,
@@ -257,7 +257,7 @@ impl Requests {
             self.publish(&inner);
             let entry = found?;
             if entry.policy == Policy::Free { return Ok(Start::Value(entry.password)); }
-            let grant = inner.grants.iter().position(|g| g.session_key == req.session_key && super::same_name(&g.name, &entry.name));
+            let grant = inner.grants.iter().position(|g| g.session_key == req.session_key && g.entry_id == entry.id);
             if let Some(at) = grant {
                 inner.grants.remove(at);
                 return Ok(Start::Value(entry.password));
@@ -334,6 +334,7 @@ impl Requests {
         let name = answer.name.as_deref().map(str::trim).filter(|n| !n.is_empty()).map(str::to_owned).or(label).unwrap_or_default();
         if answer.decision == Decision::Save && !super::name_ok(&name) { return Err(VaultError::Invalid.into()); }
         let mut password = answer.password;
+        let mut saved_id = None;
         let (result, touched) = match answer.decision {
             Decision::Deny => (Ok(WaitStatus::Denied), false),
             Decision::Decline => (Ok(WaitStatus::Declined), false),
@@ -345,7 +346,10 @@ impl Requests {
                 let Some(secret) = password.take() else { return Err(VaultError::Invalid.into()) };
                 let new = NewEntry { name: name.clone(), username: None, password: secret, url: None, notes: None,
                     policy: answer.policy.unwrap_or_default() };
-                (vault.add(hangar_dir, new).await.map(|_| WaitStatus::Saved { entry: name.clone(), temporary: false }), true)
+                (vault.add(hangar_dir, new).await.map(|id| {
+                    saved_id = Some(id);
+                    WaitStatus::Saved { entry: name.clone(), temporary: false }
+                }), true)
             }
             Decision::Save => (Ok(WaitStatus::Saved { entry: name.clone(), temporary: true }), false),
         };
@@ -353,6 +357,10 @@ impl Requests {
         let mut guard = lock(&self.inner);
         let inner = &mut *guard;
         if touched { Self::note(inner, result.as_ref().map(drop).map_err(|e| *e)); }
+        // A temporária vem antes do cofre no `start_use`: ficando, o próximo uso receberia o valor velho.
+        if let Ok(WaitStatus::Saved { entry, temporary: false }) = &result {
+            inner.temporary.retain(|t| !(t.session_key == session_key && super::same_name(&t.name, entry)));
+        }
         let Some(request) = inner.requests.get_mut(id) else {
             // Quem pediu desistiu durante a gravação: a senha guardada fica, sem liberação.
             self.publish(inner);
@@ -369,8 +377,9 @@ impl Requests {
         };
         let now = Instant::now();
         match &outcome {
-            WaitStatus::Saved { entry, temporary: false } =>
-                inner.grants.push(Grant { session_key, name: entry.clone(), until: now + TEMPORARY }),
+            WaitStatus::Saved { temporary: false, .. } => {
+                if let Some(entry_id) = saved_id { inner.grants.push(Grant { session_key, entry_id, until: now + TEMPORARY }); }
+            }
             WaitStatus::Saved { entry, temporary: true } => {
                 inner.temporary.retain(|t| !(t.session_key == session_key && super::same_name(&t.name, entry)));
                 if let Some(value) = password.take() {

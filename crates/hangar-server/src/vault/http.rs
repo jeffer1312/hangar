@@ -122,14 +122,21 @@ pub async fn status(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
 /// O estado daqui; na máquina que aponta para uma dona, o da dona (`offline` com o motivo quando
 /// ela não responde). `local`: nunca encaminha.
 async fn status_body(st: &AppState, local: bool) -> Response {
-    let here = st.vault.status(&st.hangar_dir).await;
+    let mut here = st.vault.status(&st.hangar_dir).await;
+    // A chave abre, mas o arquivo não: dizer "aberto" levaria a tela a oferecer o que vai falhar.
+    let unreadable = here.state == super::State::Open
+        && matches!(st.vault.read(&st.hangar_dir, |_| Ok(())).await, Err(VaultError::Unreadable));
+    if unreadable { here.state = super::State::Unavailable; }
     // O estado daqui vai para o evento `vault` da lista; o de outra dona, não.
     let mine = |here: Status| {
         st.vault_requests.note_state(here.state);
         let mut body = json!(here);
         if let Some(id) = own_id(&st.server_id) { body["server_id"] = json!(id); }
         // Cliente que ainda não conhece o estado mostra o motivo.
-        if here.state == super::State::Unavailable { body["detail"] = json!(VaultError::Key(KeyError::Bus).code_msg().2); }
+        if here.state == super::State::Unavailable {
+            let why = if unreadable { VaultError::Unreadable } else { VaultError::Key(KeyError::Bus) };
+            body["detail"] = json!(why.code_msg().2);
+        }
         if here.role == Role::Owner {
             match config::load(&st.hangar_dir) {
                 Ok(config::Config { backup_peer: Some(peer), .. }) => body["backup"] = super::backup::status(&st.hangar_dir, &peer),

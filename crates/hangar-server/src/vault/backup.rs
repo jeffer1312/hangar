@@ -1,11 +1,11 @@
-//! Cópia diária do cofre noutra máquina (`backup_peer` do `vault.json`, a VPS) e a restauração.
+//! Cópia diária do cofre noutra máquina (`backup_peer` do `vault.json`) e a restauração.
 //! A cópia abre só com a senha de recuperação, que nunca é gravada: o chaveiro guarda o sal e a
 //! chave derivada dela (PBKDF2-HMAC-SHA256), num item próprio (`kind: vault-backup-key`).
 //!
 //! Formato da cópia: `versão (1) || sal (16) || nonce (12) || AES-256-GCM(json do cofre)`, com versão e
 //! sal autenticados. Quem guarda não decifra: o `PUT` diz quantas senhas a cópia tem (`?entries=N`), a
-//! cópia vazia vira `<data>.empty.bin`, e a mais nova não vazia nunca é apagada, para um cofre
-//! esvaziado por engano não levar junto a última cópia boa.
+//! cópia vazia vira `<contador>-<data>.empty.bin`, e a mais nova não vazia nunca é apagada e é a que
+//! a restauração recebe, para um cofre esvaziado por engano não levar junto a última cópia boa.
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{io, num::NonZeroU32, path::{Path, PathBuf}, sync::Arc, time::Duration};
@@ -97,7 +97,7 @@ fn copies_root(hangar_dir: &Path) -> PathBuf { hangar_dir.join("vault-backups") 
 
 fn copies_dir(hangar_dir: &Path, server_id: &str) -> PathBuf { copies_root(hangar_dir).join(server_id) }
 
-/// As cópias da pasta, da mais velha para a mais nova (o nome começa pela data UTC).
+/// As cópias da pasta, da mais velha para a mais nova (o nome começa pelo contador).
 fn copy_names(dir: &Path) -> io::Result<Vec<String>> {
     let read = match std::fs::read_dir(dir) {
         Ok(read) => read,
@@ -126,8 +126,10 @@ pub fn keep_copy(hangar_dir: &Path, server_id: &str, bytes: &[u8], entries: u64)
     let dir = copies_dir(hangar_dir, server_id);
     super::files::private_dir(&copies_root(hangar_dir))?;
     super::files::private_dir(&dir)?;
+    // O contador ordena: o relógio voltar não pode fazer a cópia nova parecer velha.
+    let last = copy_names(&dir)?.last().and_then(|n| n.split_once('-')).and_then(|(n, _)| n.parse::<u64>().ok()).unwrap_or(0);
     let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%.6fZ");
-    let name = format!("{stamp}{}", if entries == 0 { EMPTY_SUFFIX } else { COPY_SUFFIX });
+    let name = format!("{:012}-{stamp}{}", last + 1, if entries == 0 { EMPTY_SUFFIX } else { COPY_SUFFIX });
     crate::runtime::queue::atomic_write(&dir.join(&name), bytes)?;
     for old in prune(&copy_names(&dir)?) {
         if let Err(error) = std::fs::remove_file(dir.join(&old)) && error.kind() != io::ErrorKind::NotFound {
@@ -137,10 +139,11 @@ pub fn keep_copy(hangar_dir: &Path, server_id: &str, bytes: &[u8], entries: u64)
     Ok(name)
 }
 
-/// `GET /api/vault/backup/{server_id}`: a cópia mais nova, vazia ou não.
+/// `GET /api/vault/backup/{server_id}`: a mais nova com senhas; só cópias vazias, a última delas.
 pub fn newest_copy(hangar_dir: &Path, server_id: &str) -> io::Result<Option<Vec<u8>>> {
     let dir = copies_dir(hangar_dir, server_id);
-    match copy_names(&dir)?.last() {
+    let names = copy_names(&dir)?;
+    match names.iter().rev().find(|n| !n.ends_with(EMPTY_SUFFIX)).or(names.last()) {
         Some(name) => std::fs::read(dir.join(name)).map(Some),
         None => Ok(None),
     }
@@ -244,8 +247,14 @@ fn record_now(hangar_dir: &Path, peer: &str, result: Result<u64, String>) -> Sen
     }
 }
 
+/// Só a resposta "não tenho" reenvia: máquina fora do ar não é cópia perdida.
+async fn copy_is_gone(peers: &PeerClient, peer: &str, server_id: &str) -> bool {
+    matches!(peers.send_secret(false, peer, reqwest::Method::GET, &format!("/api/vault/backup/{server_id}"), None, MAX_COPY).await,
+        Err(PeerError::Refused { status: 404, detail }) if detail.get("code").and_then(Value::as_str) == Some("erro_cofre_backup_ausente"))
+}
+
 /// Uma rodada: só na dona com `backup_peer` e senha de recuperação, e só quando a revisão mudou
-/// desde a última cópia aceita por aquele `peer`.
+/// desde a última cópia aceita por aquele `peer` ou quando ele perdeu a cópia.
 pub async fn send_once(vault: &Vault, peers: &PeerClient, hangar_dir: &Path, server_id: &str) -> Sent {
     if !store::exists(&store::path(hangar_dir)) { return Sent::Skipped("sem cofre nesta máquina"); }
     let peer = match config::load(hangar_dir) {
@@ -260,7 +269,8 @@ pub async fn send_once(vault: &Vault, peers: &PeerClient, hangar_dir: &Path, ser
         Err(error) => return record(hangar_dir, &peer, Err(vault_text(error).into())).await,
     };
     let state = load_state(hangar_dir);
-    if state.peer.as_deref() == Some(peer.as_str()) && state.revision == Some(doc.revision) { return Sent::Skipped("sem mudança"); }
+    if state.peer.as_deref() == Some(peer.as_str()) && state.revision == Some(doc.revision)
+        && !copy_is_gone(peers, &peer, server_id).await { return Sent::Skipped("sem mudança"); }
     // Só com cópia a mandar o item da recuperação sai do chaveiro.
     let recovery = match vault.keys.read_recovery().await {
         Ok(Some(item)) => match Recovery::from_item(&item) {
@@ -297,9 +307,10 @@ pub async fn send_once(vault: &Vault, peers: &PeerClient, hangar_dir: &Path, ser
     record(hangar_dir, &peer, result).await
 }
 
-/// Rodada do laço e da senha nova: uma por vez.
+/// Rodada do laço e troca da senha de recuperação: uma por vez.
+static ONE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 pub async fn run(st: &AppState) -> Sent {
-    static ONE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     let _one = ONE.lock().await;
     let sent = send_once(&st.vault, &st.peers, &st.hangar_dir, &st.server_id).await;
     if let Sent::Failed(why) = &sent {
@@ -322,16 +333,18 @@ pub fn spawn(st: Arc<AppState>) -> tokio::task::JoinHandle<()> {
 
 /// `POST /api/vault/recovery`: só na dona. A cópia seguinte sai com a senha nova.
 pub async fn set_recovery(vault: &Vault, hangar_dir: &Path, password: Zeroizing<String>) -> Result<(), VaultError> {
+    let _one = ONE.lock().await;
     if !store::exists(&store::path(hangar_dir)) { return Err(VaultError::Absent); }
     let recovery = tokio::task::spawn_blocking(move || Recovery::new(&password)).await.map_err(super::join_cause("vault_recovery_interrupted", VaultError::Io))??;
-    vault.keys.write_recovery(recovery.to_item()).await.map_err(VaultError::Key)?;
     // A cópia que está lá abre com a senha velha: esquecer a revisão aceita força a próxima.
+    // Vem antes da chave: falhando depois, sai uma cópia a mais, nunca uma a menos.
     let dir = hangar_dir.to_owned();
-    tokio::task::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || -> Result<(), VaultError> {
         let mut state = load_state(&dir);
         if state.revision.take().is_some() { save_state(&dir, &state).map_err(super::io_cause("vault_backup_state_write", VaultError::Io))?; }
         Ok(())
-    }).await.map_err(super::join_cause("vault_recovery_interrupted", VaultError::Io))?
+    }).await.map_err(super::join_cause("vault_recovery_interrupted", VaultError::Io))??;
+    vault.keys.write_recovery(recovery.to_item()).await.map_err(VaultError::Key)
 }
 
 // --- Restauração -----------------------------------------------------------------------------
@@ -404,6 +417,8 @@ fn set_aside(path: &Path) -> io::Result<()> {
 /// cofre próprio ao lado.
 pub async fn restore(vault: &Vault, peers: &PeerClient, hangar_dir: &Path, from_peer: &str, server_id: &str,
                      password: Zeroizing<String>) -> Result<(), RestoreError> {
+    // A dona não troca no meio: o `vault.bin` não pode nascer ao lado de uma dona remota.
+    let _config = vault.config_lock.lock().await;
     match config::placement(hangar_dir) {
         Ok(config::Placement::Remote(_)) => return Err(RestoreError::RemoteOwner),
         Err(_) => return Err(RestoreError::Vault(VaultError::Io)),

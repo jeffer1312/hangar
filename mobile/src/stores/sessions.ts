@@ -534,6 +534,10 @@ function refresh(get: () => SessionsState, set: (p: Partial<SessionsState>) => v
       lastFailureHttp.delete(s.id);
       refused.delete(s.id);
       slots.delete(s.id);
+      // Mesmo id com outro token ou endereço: o pedido antigo não é desta conexão.
+      vaultRaw.delete(s.id);
+      const { [s.id]: _dropped, ...vault } = get().vault;
+      set({ vault });
     } else if (serversCache.find((next) => next.id === s.id)?.inviteEnded) {
       disconnect(s.id);
       slots.delete(s.id);

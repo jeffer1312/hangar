@@ -44,7 +44,11 @@
     if (status.state !== 'open') { entries = null; clearRevealed(); return; }
     if (list.status === 'rejected') { entries = null; entriesError = reason(list.reason); }
     else if (!Array.isArray(list.value)) { entries = null; entriesError = m.vault_web_bad_answer(); }
-    else entries = list.value;
+    else {
+      // A senha pode ter mudado em outro aparelho: a revelada aqui ficaria velha.
+      clearRevealed();
+      entries = list.value;
+    }
   }
   // `untrack`: o `load` lê e grava o estado dos peers, e o efeito se reagendaria sozinho.
   $effect(() => { untrack(() => void load()); });
@@ -95,7 +99,7 @@
     void loadPeers();
   }
 
-  async function setConfig(change: { owner: string } | { backup_peer: string }) {
+  async function setConfig(change: { owner: string } | { backup_peer: string | null }) {
     configuring = true;
     configError = null;
     try {
@@ -348,7 +352,10 @@
       {/if}
       <div class="pv-acoes">
         {#if status.role !== 'owner'}
-          <button type="button" class="pv-btn" disabled={configuring} onclick={() => setOwner('self')}>{m.vault_web_make_owner()}</button>
+          <!-- Com dona remota, virar dona deixaria as senhas dela fora do alcance desta máquina. -->
+          {#if status.role === 'none'}
+            <button type="button" class="pv-btn" disabled={configuring} onclick={() => setOwner('self')}>{m.vault_web_make_owner()}</button>
+          {/if}
           <button type="button" class="pv-btn" disabled={configuring || peersLoading} onclick={() => showPeers('owner')}>
             {m.vault_web_choose_owner()}
           </button>
@@ -380,7 +387,14 @@
             {status.backup?.peer ? m.vault_web_backup_change() : m.vault_web_backup_choose()}
           </button>
         </div>
-        {#if peersFor === 'backup'}{@render peerChoice((id) => setConfig({ backup_peer: id }), status.backup?.peer ?? null)}{/if}
+        {#if peersFor === 'backup'}
+          {@render peerChoice((id) => setConfig({ backup_peer: id }), status.backup?.peer ?? null)}
+          {#if status.backup?.peer}
+            <div class="pv-acoes">
+              <button type="button" class="pv-btn" disabled={configuring} onclick={() => setConfig({ backup_peer: null })}>{m.vault_web_backup_clear()}</button>
+            </div>
+          {/if}
+        {/if}
         {#if configError && peersFor === 'backup'}<p class="pv-erro-txt" role="alert">{configError}</p>{/if}
 
         <form class="pv-form-inline" onsubmit={saveRecovery}>

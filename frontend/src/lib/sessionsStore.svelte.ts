@@ -576,6 +576,8 @@ function createSessionsStore() {
     identities = new Map();
     identitiesWanted = false;
     identityLoaders.clear();
+    // Pedido que expirou com a lista parada não pode voltar aberto antes do quadro novo.
+    vaultEvents = new Map();
     // As entradas temporárias ficam no auth: o chat de uma sessão de fora segue com a lista fechada.
     pairSync.reset();
     pairLeft = null;

@@ -196,6 +196,33 @@ async fn saving_with_keep_grants_exactly_one_use_to_that_session() {
     assert_eq!(second.entry_name.as_deref(), Some("github"), "o segundo uso já pede");
 }
 
+#[tokio::test]
+async fn the_first_use_belongs_to_the_saved_entry_not_to_its_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_, vault) = vault_in(dir.path()).await;
+    let reqs = Arc::new(Requests::default());
+    let card = reqs.start_ask(dir.path(), ask("k1", "github")).unwrap();
+    reqs.answer(&vault, dir.path(), &card.id, save(&card, true)).await.unwrap();
+    let id = vault.list(dir.path()).await.unwrap()[0].id.clone();
+    vault.remove(dir.path(), &id).await.unwrap();
+    vault.add(dir.path(), entry("github", Policy::Ask)).await.unwrap();
+    let asked = opened(reqs.start_use(&vault, dir.path(), use_req("k1", "github")).await.unwrap());
+    assert_eq!(asked.kind, Kind::Approve, "outra entrada com o mesmo nome pede de novo");
+}
+
+#[tokio::test]
+async fn keeping_replaces_the_temporary_value_of_that_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_, vault) = vault_in(dir.path()).await;
+    let reqs = Arc::new(Requests::default());
+    let card = reqs.start_ask(dir.path(), ask("k1", "github")).unwrap();
+    let old = Answer { password: Some(Zeroizing::new("valor-velho".into())), ..save(&card, false) };
+    reqs.answer(&vault, dir.path(), &card.id, old).await.unwrap();
+    let card = reqs.start_ask(dir.path(), ask("k1", "github")).unwrap();
+    reqs.answer(&vault, dir.path(), &card.id, save(&card, true)).await.unwrap();
+    assert_eq!(value(reqs.start_use(&vault, dir.path(), use_req("k1", "github")).await.unwrap()), VALUE);
+}
+
 struct Server { addr: SocketAddr, st: Arc<AppState>, _dir: tempfile::TempDir }
 
 async fn serve() -> Server {

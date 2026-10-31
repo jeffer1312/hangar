@@ -133,7 +133,16 @@ fn the_keeper_prunes_on_disk_and_serves_the_newest() {
     let names = copies(dir.path(), OWNER_ID);
     assert_eq!(names.len(), 8, "{names:?}");
     assert!(!names[0].ends_with(".empty.bin"), "a cópia com senhas sobreviveu: {names:?}");
-    assert_eq!(backup::newest_copy(dir.path(), OWNER_ID).unwrap(), Some(copy(9)));
+    assert_eq!(backup::newest_copy(dir.path(), OWNER_ID).unwrap(), Some(copy(1)), "cofre esvaziado não esconde a última cópia boa");
+    let empties = tempfile::tempdir().unwrap();
+    for tag in 1..=2 { backup::keep_copy(empties.path(), OWNER_ID, &copy(tag), 0).unwrap(); }
+    assert_eq!(backup::newest_copy(empties.path(), OWNER_ID).unwrap(), Some(copy(2)), "só vazias: a última");
+    let clock = tempfile::tempdir().unwrap();
+    let ahead = clock.path().join("vault-backups").join(OWNER_ID);
+    std::fs::create_dir_all(&ahead).unwrap();
+    std::fs::write(ahead.join("000000000005-29990101T000000.000000Z.bin"), copy(1)).unwrap();
+    assert!(backup::keep_copy(clock.path(), OWNER_ID, &copy(2), 1).unwrap().starts_with("000000000006-"), "relógio atrás");
+    assert_eq!(backup::newest_copy(clock.path(), OWNER_ID).unwrap(), Some(copy(2)));
     assert_eq!(backup::newest_copy(dir.path(), "outro").unwrap(), None);
     #[cfg(unix)]
     {
@@ -164,6 +173,22 @@ async fn the_copy_goes_only_when_the_revision_changed() {
     // Senha de recuperação nova: a cópia de lá abre com a velha, então vai de novo.
     backup::set_recovery(&vault, dir.path(), Zeroizing::new("outra-recuperacao".into())).await.unwrap();
     assert_eq!(backup::send_once(&vault, &peers, dir.path(), OWNER_ID).await, Sent::Sent);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_keeper_that_lost_the_copy_gets_it_again() {
+    let (addr, keeper_dir) = keeper().await;
+    let dir = tempfile::tempdir().unwrap();
+    let peers = peers_for(dir.path(), addr);
+    let (vault, _) = owner_vault(dir.path()).await;
+    assert_eq!(backup::send_once(&vault, &peers, dir.path(), OWNER_ID).await, Sent::Sent);
+    std::fs::remove_dir_all(keeper_dir.path().join("vault-backups")).unwrap();
+    assert_eq!(backup::send_once(&vault, &peers, dir.path(), OWNER_ID).await, Sent::Sent);
+    assert_eq!(copies(keeper_dir.path(), OWNER_ID).len(), 1);
+    // Máquina da cópia fora do ar não conta como perda.
+    std::fs::write(dir.path().join("peers.json"), json!({"lab": {"base_url": "http://127.0.0.1:9", "token": TOKEN}}).to_string()).unwrap();
+    let down = PeerClient::new(PeerBook::new(Some(dir.path().join("peers.json"))));
+    assert_eq!(backup::send_once(&vault, &down, dir.path(), OWNER_ID).await, Sent::Skipped("sem mudança"));
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -83,7 +83,8 @@ vi.mock('../pair/leaveExternal', () => ({ leaveExternal: vi.fn() }));
 vi.mock('./ConversationList', () => ({ ConversationList: () => null }));
 vi.mock('./RenameSheet', () => ({ RenameSheet: () => null }));
 vi.mock('../worktrees/WorktreeSheet', () => ({ WorktreeSheet: () => null }));
-vi.mock('../vault/VaultRequests', () => ({ VaultRequests: () => null }));
+vi.mock('../vault/VaultRequests', () => ({ VaultRequests: ({ byServer }: { byServer: { server: { id: string } }[] }) =>
+  React.createElement('div', { 'data-vault-servers': byServer.map((bucket) => bucket.server.id).join(',') }) }));
 vi.mock('../../paraglide/messages', () => ({ ...Object.fromEntries((
   'lista_agrupar_nenhum lista_agrupar_servidor lista_agrupar_projeto lista_agrupar ' +
   'native_brand lista_buscar lista_filtrar lista_filtro_limpar native_connected config_modal_titulo switcher_buscar_conversas nav_custos ' +
@@ -599,6 +600,12 @@ describe('SessionList', () => {
     expect(group.getAttribute('aria-label')).toBe('fixture-server, 4 lista_sessoes_plural');
     await act(async () => group.click());
     expect(names()).toEqual(['ready-a', 'ready-a-outside', 'ready-b', 'ready-b-outside']);
+  });
+
+  it('os pedidos do cofre recebem os servidores da lista', async () => {
+    await mount({ variant: 'home' });
+    await act(async () => useSessions.setState({ byServer: [{ server, sessions: [], loaded: true, error: null }] }));
+    expect(container.querySelector('[data-vault-servers]')?.getAttribute('data-vault-servers')).toBe(server.id);
   });
 
   it('home mostra carregamento, vazio e falha identificada por máquina', async () => {

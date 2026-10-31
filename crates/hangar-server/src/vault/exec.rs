@@ -391,6 +391,14 @@ pub fn same_site(entry_url: &str, page_host: &str) -> bool {
     page_host == host || page_host.ends_with(&format!(".{host}"))
 }
 
+/// Sem site cadastrado não há com o que comparar a página: o valor entraria em qualquer domínio.
+pub fn fill_refusal(entry_url: Option<&str>, page_host: &str) -> Option<String> {
+    let Some(url) = entry_url.filter(|u| !u.trim().is_empty()) else {
+        return Some("erro_cofre_sem_site: cadastre o site desta entrada para o agente preencher login".into());
+    };
+    (!same_site(url, page_host)).then(|| format!("erro_cofre_dominio_diferente: a página é de {page_host} e a senha é de {url}"))
+}
+
 /// Ref de snapshot (`@eN`): o único alvo que o `fill-secret` aceita.
 pub fn ref_ok(target: &str) -> bool {
     target.len() > 2 && target.starts_with("@e") && target[2..].bytes().all(|b| b.is_ascii_digit())

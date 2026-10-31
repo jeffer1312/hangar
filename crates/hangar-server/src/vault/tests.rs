@@ -268,6 +268,19 @@ async fn a_locked_keyring_answers_its_code() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_file_the_key_cannot_open_is_not_reported_as_open() {
+    use reqwest::Method;
+    let keys = Arc::new(FakeKeys::default());
+    let srv = serve(keys.clone()).await;
+    Vault::new(keys).create(srv.dir.path()).await.unwrap();
+    assert_eq!(owner(srv.addr, Method::GET, "/api/vault/status", None).await.1["state"], "open");
+    std::fs::write(store::path(srv.dir.path()), vec![0u8; 64]).unwrap();
+    let (status, body) = owner(srv.addr, Method::GET, "/api/vault/status", None).await;
+    assert_eq!((status, body["state"].as_str()), (200, Some("unavailable")));
+    assert_eq!(body["detail"], "o arquivo do cofre não abriu com a chave do chaveiro");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn only_the_owner_and_never_a_guest() {
     use reqwest::Method;
     let srv = serve(Arc::new(FakeKeys::default())).await;

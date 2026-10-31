@@ -1,5 +1,5 @@
 //! O `vault_fill`: a senha só entra numa página do site da entrada, e só por ref de snapshot.
-use super::{host_of, ref_ok, same_site};
+use super::{fill_refusal, host_of, ref_ok, same_site};
 
 #[test]
 fn the_page_host_comes_without_scheme_user_port_or_path() {
@@ -19,6 +19,15 @@ fn a_page_of_another_domain_is_refused() {
     assert!(!same_site("https://github.com", "evilgithub.com"));
     assert!(!same_site("https://gist.github.com", "github.com"), "o site pai não é o subdomínio cadastrado");
     assert!(!same_site("", "github.com"));
+}
+
+#[test]
+fn an_entry_without_a_site_never_fills() {
+    for url in [None, Some(""), Some("   ")] {
+        assert!(fill_refusal(url, "github.com").is_some_and(|e| e.starts_with("erro_cofre_sem_site:")), "{url:?}");
+    }
+    assert!(fill_refusal(Some("https://github.com"), "evil.io").is_some_and(|e| e.starts_with("erro_cofre_dominio_diferente:")));
+    assert_eq!(fill_refusal(Some("https://github.com"), "github.com"), None);
 }
 
 #[test]

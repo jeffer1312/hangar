@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Alert, Text } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { Alert, AppState, Text } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import * as Clipboard from 'expo-clipboard';
 import { addVaultEntry, deleteVaultEntry, revealVaultPassword, updateVaultEntry, type Server, type VaultEntry, type VaultEntryChange, type VaultPolicy } from '@hangar/core';
@@ -37,6 +37,17 @@ export function VaultEntrySheet({ server, entry, onClose, onChanged }: {
   const [shown, setShown] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  // Resposta que chega depois de o app ir para o fundo não pode pôr a senha de volta na tela.
+  const revealGeneration = useRef(0);
+
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') return;
+      revealGeneration.current++;
+      setShown(null);
+    });
+    return () => { revealGeneration.current++; sub.remove(); };
+  }, []);
 
   const run = async (work: () => Promise<void>) => {
     if (busy) return;
@@ -72,7 +83,12 @@ export function VaultEntrySheet({ server, entry, onClose, onChanged }: {
 
   const reveal = () => {
     if (shown !== null) { setShown(null); return; }
-    if (entry) void run(async () => setShown((await revealVaultPassword(server, entry.id)).password));
+    if (!entry) return;
+    const generation = revealGeneration.current;
+    void run(async () => {
+      const { password } = await revealVaultPassword(server, entry.id);
+      if (generation === revealGeneration.current && AppState.currentState === 'active') setShown(password);
+    });
   };
   const copy = () => {
     if (entry) void run(async () => {

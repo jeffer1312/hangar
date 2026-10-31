@@ -187,6 +187,26 @@ fn a_file_goes_at_close_and_in_the_sweep() {
     assert_eq!(std::fs::read_dir(&base).unwrap().count(), 0, "nenhuma ficha sobra");
 }
 
+#[test]
+fn a_reused_name_does_not_hold_the_file_of_the_session_that_left() {
+    let meta = files::Meta { session_key: "k1".into(), session: "s".into(), created: 0.0 };
+    assert!(files::row_keeps("s", Some("k:k1"), &meta));
+    assert!(files::row_keeps("renomeada", Some("k:k1"), &meta), "a chave acompanha a troca de nome");
+    assert!(!files::row_keeps("s", Some("k:k2"), &meta), "o nome é o mesmo, a sessão é outra");
+    assert!(files::row_keeps("s", Some("j:/a.jsonl"), &meta), "sem chave na vida, vale o nome");
+    assert!(files::row_keeps("s", None, &meta));
+    assert!(!files::row_keeps("outra", None, &meta));
+
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path().join("vault-files");
+    let old = files::write(&base, "k1", "s", VALUE.as_bytes()).unwrap();
+    let new = files::write(&base, "k2", "s", VALUE.as_bytes()).unwrap();
+    files::close(&base, "s", Some("k1"));
+    assert!(!old.exists() && new.exists(), "a sessão nova com o mesmo nome fica com o arquivo dela");
+    files::close(&base, "s", None);
+    assert!(!new.exists(), "sem chave, o nome decide");
+}
+
 #[tokio::test]
 async fn a_denied_use_is_erro_cofre_negado() {
     let (st, _dir) = owner_state().await;

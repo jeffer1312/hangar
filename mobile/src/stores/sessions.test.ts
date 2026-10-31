@@ -120,6 +120,21 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+test('token novo apaga o cofre do servidor; evento igual ao antigo volta a valer', async () => {
+  const event = JSON.stringify({ state: 'open', requests: [{ id: 'r1', interaction_id: 'i1', kind: 'approve' }] });
+  const release = useSessions.getState().retain();
+  await settle();
+  created[0].trigger('vault', event);
+  expect(useSessions.getState().vault.srv1?.requests[0]?.id).toBe('r1');
+  useServers.setState({ servers: [{ ...useServers.getState().servers[0], token: 'new-token' }] });
+  useSessions.getState().refreshServers();
+  expect(useSessions.getState().vault.srv1).toBeUndefined();
+  await settle();
+  created.at(-1)!.trigger('vault', event);
+  expect(useSessions.getState().vault.srv1?.requests[0]?.id).toBe('r1');
+  release();
+});
+
 test('descoberta espera lista válida e roda uma vez por conexão, inclusive após retomar', async () => {
   const discover = vi.fn();
   setMachineDiscovery(discover);

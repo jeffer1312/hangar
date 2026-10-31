@@ -782,10 +782,15 @@ impl Tools {
             kind: UseKind::File, reason: a.reason, target: "arquivo".into() };
         let value = exec::secret(&owner, req, deadline).await?;
         files::sweep_live(&self.st).await;
-        let path = tokio::task::spawn_blocking(move || files::write(&dir, &key, &name, value.as_bytes())).await
-            .map_err(|_| "erro_cofre_arquivo: a gravação foi interrompida".to_owned())?
-            .map_err(|e| format!("erro_cofre_arquivo: o arquivo não foi gravado: {e}"))?;
-        files::expire_later(path.clone());
+        // Tarefa própria: quem desiste da chamada não tira o prazo de um arquivo já gravado.
+        let written = tokio::spawn(async move {
+            let path = tokio::task::spawn_blocking(move || files::write(&dir, &key, &name, value.as_bytes())).await
+                .map_err(|_| "erro_cofre_arquivo: a gravação foi interrompida".to_owned())?
+                .map_err(|e| format!("erro_cofre_arquivo: o arquivo não foi gravado: {e}"))?;
+            files::expire_later(path.clone());
+            Ok::<_, String>(path)
+        });
+        let path = written.await.map_err(|_| "erro_cofre_arquivo: a gravação foi interrompida".to_owned())??;
         Ok(dict(json!({"file": path})))
     }
 
@@ -812,9 +817,7 @@ impl Tools {
         let long_enough = async { if password { self.vault_agent(&name).await.map(drop) } else { Ok(()) } };
         let ((), host, entries) = tokio::try_join!(long_enough, self.fill_host(&home, &name), owner.entries())?;
         let entry = entries.iter().find(|e| crate::vault::same_name(&e.name, &a.entry)).ok_or_else(|| exec::vault_text(VaultError::UnknownEntry))?;
-        if let Some(url) = entry.url.as_deref().filter(|u| !u.trim().is_empty()) && !exec::same_site(url, &host) {
-            return Err(format!("erro_cofre_dominio_diferente: a página é de {host} e a senha é de {url}"));
-        }
+        if let Some(refusal) = exec::fill_refusal(entry.url.as_deref(), &host) { return Err(refusal); }
         let value = if password {
             let req = UseReq { origin_server: self.vault_origin(), session_key: key, session: name.clone(), entry: a.entry, kind: UseKind::Fill,
                 reason: a.reason, target: host.clone() };

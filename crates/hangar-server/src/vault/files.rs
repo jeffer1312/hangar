@@ -136,8 +136,17 @@ pub async fn sweep_at_start() {
     blocking("sweep_at_start", move || sweep(&dir, super::now(), None)).await;
 }
 
+/// Com a chave, só ela decide: outra sessão pode já ter nascido com este nome.
 pub fn close(dir: &Path, name: &str, key: Option<&str>) {
-    retain(dir, |m| m.session != name && key != Some(m.session_key.as_str()), false);
+    retain(dir, |m| key.filter(|k| !k.is_empty()).map_or(m.session != name, |k| m.session_key != k), false);
+}
+
+/// Linha com chave na vida só guarda o arquivo daquela chave: nome reaproveitado não prende senha de quem saiu.
+pub(super) fn row_keeps(name: &str, lifecycle: Option<&str>, m: &Meta) -> bool {
+    match lifecycle.and_then(|l| l.strip_prefix("k:")) {
+        Some(key) => key == m.session_key,
+        None => name == m.session,
+    }
 }
 
 /// A varredura contra a lista de sessões; lista que não responde ou sem fatos só apaga pelo prazo.
@@ -146,8 +155,7 @@ pub async fn sweep_live(st: &AppState) {
     let Some(dir) = base() else { return };
     let rows = st.list.snapshot().await.ok().filter(|p| !p.facts.unknown).map(|p| p.rows);
     blocking("sweep_live", move || {
-        let alive = rows.as_ref().map(|rows| move |m: &Meta| rows.iter().any(|r| r.name == m.session
-            || r.lifecycle_id.as_deref().and_then(|l| l.strip_prefix("k:")) == Some(m.session_key.as_str())));
+        let alive = rows.as_ref().map(|rows| move |m: &Meta| rows.iter().any(|r| row_keeps(&r.name, r.lifecycle_id.as_deref(), m)));
         sweep(&dir, super::now(), alive.as_ref().map(|f| f as &dyn Fn(&Meta) -> bool));
     }).await;
 }

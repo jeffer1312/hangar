@@ -981,7 +981,7 @@
  },
  {
   "name": "vault_fill",
-  "description": "Preenche no navegador desta sessão o campo `ref` (@eN do snapshot) com o usuário (`field: \"username\"`) ou a senha (`field: \"password\"`, só em campo de senha) da entrada `entry` do cofre, sem o valor passar por aqui. A página precisa ser do domínio da `url` da entrada (ou de um subdomínio). A senha pede aprovação ao dono quando exige; espera até 10 min. Depois disso snapshot, eval, text e console mostram •••• no lugar do valor. Devolve \"preenchido\".",
+  "description": "Preenche no navegador desta sessão o campo `ref` (@eN do snapshot) com o usuário (`field: \"username\"`) ou a senha (`field: \"password\"`, só em campo de senha) da entrada `entry` do cofre, sem o valor passar por aqui. A página precisa ser do domínio da `url` da entrada (ou de um subdomínio); entrada sem `url` é recusada. A senha pede aprovação ao dono quando exige; espera até 10 min. Depois disso snapshot, eval, text e console mostram •••• no lugar do valor. Devolve \"preenchido\".",
   "inputSchema": {
    "properties": {
     "entry": {
