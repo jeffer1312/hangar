@@ -33,10 +33,19 @@ pub(super) struct AutoHidePage {
 pub(super) struct AutoHideReply { generation: u64, key: String, write: bool, result: Result<Value, Failure> }
 
 impl AutoHidePage {
-    /// A primeira máquina que respondeu, na ordem da lista (a ativa vem antes).
-    fn reference(&self) -> Option<AutoHide> { self.machines.iter().find_map(|m| m.read.as_ref()?.as_ref().ok().copied()) }
+    /// A configuração mais comum entre as leituras boas; no empate, a da primeira máquina da lista (a ativa vem antes).
+    /// Mesma regra do `autoHideDiverges` do core.
+    fn reference(&self) -> Option<AutoHide> {
+        let ok: Vec<AutoHide> = self.machines.iter().filter_map(|m| m.read.as_ref()?.as_ref().ok().copied()).collect();
+        let mut best: Option<(AutoHide, usize)> = None;
+        for v in &ok {
+            let n = ok.iter().filter(|o| *o == v).count();
+            if best.is_none_or(|(_, top)| n > top) { best = Some((*v, n)); }
+        }
+        best.map(|(v, _)| v)
+    }
 
-    /// Máquinas com configuração diferente da referência.
+    /// Máquinas lidas com configuração diferente da referência; leitura que falhou aparece como erro, não aqui.
     fn differs(&self) -> Vec<&str> {
         let Some(reference) = self.reference() else { return Vec::new() };
         self.machines.iter().filter(|m| matches!(&m.read, Some(Ok(v)) if *v != reference)).map(|m| m.label.as_str()).collect()
@@ -143,7 +152,7 @@ impl Hangar {
         // Reconectou com a página aberta: as respostas da conexão anterior não chegam mais.
         if self.auto_hide.connection != self.connection { self.auto_hide_opened(cx); }
         let mut page = div().flex().flex_col().gap_4().child(div().text_xl().font_weight(FontWeight::SEMIBOLD).child(Page::Sessions.title()));
-        let hidden = self.hidden_sessions().len();
+        let hidden = self.hidden_sessions(cx).len();
         let see_hidden = (hidden > 0).then(|| div().flex().child(Button::new("auto-hide-see-hidden").outline().small()
             .label(tr("sidebar_see_hidden").replace("{n}", &hidden.to_string()))
             .on_click(cx.listener(|this, _, window, cx| this.show_hidden_group(window, cx)))));
@@ -226,12 +235,15 @@ mod tests {
     }
 
     #[test]
-    fn auto_hide_differs_names_machines_unlike_the_first_answer() {
+    fn auto_hide_differs_names_machines_unlike_the_majority() {
         let (off, on) = (AutoHide { enabled: false, after_minutes: 180 }, AutoHide { enabled: true, after_minutes: 180 });
-        let page = AutoHidePage { machines: vec![machine("nb", None), machine("vps", Some(Ok(off))), machine("dp", Some(Ok(on))),
+        let mut page = AutoHidePage { machines: vec![machine("nb", None), machine("vps", Some(Ok(off))), machine("dp", Some(Ok(on))),
             machine("win", Some(Err("x".into())))], ..Default::default() };
-        assert_eq!(page.reference(), Some(off));
-        assert_eq!(page.differs(), ["dp"]);
+        assert_eq!(page.reference(), Some(off), "empate: a primeira que respondeu");
+        assert_eq!(page.differs(), ["dp"], "a que falhou não entra");
+        page.machines.push(machine("lin", Some(Ok(on))));
+        assert_eq!(page.reference(), Some(on), "a mais comum vence a primeira");
+        assert_eq!(page.differs(), ["vps"]);
     }
 
     #[test]

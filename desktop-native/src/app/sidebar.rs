@@ -383,16 +383,24 @@ fn sort_key(text: &str) -> String {
     }).collect()
 }
 
+/// O texto do filtro já em minúsculas, vazio com a lista da máquina curta (`total` antes de filtrar): filtro escondido não
+/// filtra, e o texto que ficou no campo não esconde ninguém.
+fn filter_query(total: usize, query: &str) -> String {
+    if total > FILTER_FROM { query.trim().to_lowercase() } else { String::new() }
+}
+
+/// O filtro casa com nome, pasta e, agrupando por projeto, com o rótulo do projeto.
+fn filter_matches(s: &SessionInfo, q: &str, by_project: bool) -> bool {
+    q.is_empty() || s.name.to_lowercase().contains(q) || s.cwd.as_deref().unwrap_or("").to_lowercase().contains(q)
+        || (by_project && project_label(s.cwd.as_deref()).to_lowercase().contains(q))
+}
+
 pub(super) fn layout<'a>(sessions: &'a [SessionInfo], query: &str, by_project: bool, hidden: &HashSet<String>) -> Layout<'a> {
     // As ocultas da lista vão para o grupo do fim, que junta as máquinas (`hidden_group`).
     let live: Vec<&SessionInfo> = sessions.iter().filter(|s| !hidden.contains(&s.name) && !s.hidden_from_list).collect();
     let total = live.len();
-    // Filtro escondido não filtra: com a lista curta de novo, o texto que ficou no campo não esconde ninguém.
-    let q = if total > FILTER_FROM { query.trim().to_lowercase() } else { String::new() };
-    let matches = |s: &SessionInfo| q.is_empty() || s.name.to_lowercase().contains(&q)
-        || s.cwd.as_deref().unwrap_or("").to_lowercase().contains(&q)
-        || (by_project && project_label(s.cwd.as_deref()).to_lowercase().contains(&q));
-    let mut shown: Vec<&SessionInfo> = live.into_iter().filter(|s| matches(s)).collect();
+    let q = filter_query(total, query);
+    let mut shown: Vec<&SessionInfo> = live.into_iter().filter(|s| filter_matches(s, &q, by_project)).collect();
     // Chave de ordem montada uma vez por sessão, não duas por comparação.
     shown.sort_by_cached_key(|s| text_key(&s.name));
     let (waiting, rest): (Vec<&SessionInfo>, Vec<&SessionInfo>) = shown.into_iter().partition(|s| s.state == "awaiting_input");
@@ -414,10 +422,12 @@ pub(super) fn layout<'a>(sessions: &'a [SessionInfo], query: &str, by_project: b
 /// Chave do grupo "Ocultas" no `sidebar-collapsed.json`, com o sentido invertido: presente = aberto. Recolhido é o padrão.
 pub(super) const HIDDEN_GROUP: &str = "sidebar:hidden-open";
 
-/// As ocultas de todas as máquinas, por nome; sendo fechadas (`closing`) ficam de fora como no resto da barra.
-pub(super) fn hidden_group<'k, 'a>(lists: &[(&'k str, &'a [SessionInfo])], closing: &HashSet<Target>) -> Vec<(&'k str, &'a SessionInfo)> {
-    let mut out: Vec<(&str, &SessionInfo)> = lists.iter().flat_map(|&(key, sessions)| sessions.iter()
-        .filter(move |s| s.hidden_from_list && !closing.contains(&Target::new(key, &s.name))).map(move |s| (key, s))).collect();
+/// As ocultas de todas as máquinas, por nome; sendo fechadas (`closing`) ficam de fora como no resto da barra. Cada lista leva
+/// o filtro da máquina dela (`filter_query`), o mesmo que `layout` aplica às visíveis.
+pub(super) fn hidden_group<'k, 'a>(lists: &[(&'k str, &'a [SessionInfo], &str)], closing: &HashSet<Target>, by_project: bool) -> Vec<(&'k str, &'a SessionInfo)> {
+    let mut out: Vec<(&str, &SessionInfo)> = lists.iter().flat_map(|&(key, sessions, q)| sessions.iter()
+        .filter(move |s| s.hidden_from_list && !closing.contains(&Target::new(key, &s.name)) && filter_matches(s, q, by_project))
+        .map(move |s| (key, s))).collect();
     out.sort_by_cached_key(|(_, s)| text_key(&s.name));
     out
 }
@@ -579,13 +589,18 @@ impl Hangar {
         l
     }
 
-    /// O grupo "Ocultas" do fim da barra: as máquinas com seção, como `machine_lists`.
-    pub(super) fn hidden_sessions(&self) -> Vec<(String, &SessionInfo)> {
+    /// O grupo "Ocultas" do fim da barra: as máquinas com seção, como `machine_lists`, com o filtro que a lista de cada uma usa.
+    pub(super) fn hidden_sessions(&self, cx: &App) -> Vec<(String, &SessionInfo)> {
         let keys: Vec<String> = if self.multi_server() {
             self.servers.iter().filter(|s| servers::has_section(s)).map(|s| servers::norm(&s.address)).collect()
         } else { vec![self.active_key()] };
-        let lists: Vec<(&str, &[SessionInfo])> = keys.iter().map(|key| (key.as_str(), self.sessions_of(key))).collect();
-        hidden_group(&lists, &self.sidebar.deleting).into_iter().map(|(key, s)| (key.to_owned(), s)).collect()
+        let query = self.sidebar.filter.read(cx).value();
+        let queries: Vec<String> = keys.iter().map(|key| {
+            let total = if self.is_active_key(key) { self.sidebar_layout(cx).total } else { self.remote_layout(key, self.sessions_of(key), cx).total };
+            filter_query(total, &query)
+        }).collect();
+        let lists: Vec<(&str, &[SessionInfo], &str)> = keys.iter().zip(&queries).map(|(key, q)| (key.as_str(), self.sessions_of(key), q.as_str())).collect();
+        hidden_group(&lists, &self.sidebar.deleting, Self::by_project()).into_iter().map(|(key, s)| (key.to_owned(), s)).collect()
     }
 
     pub(super) fn hidden_open(&self) -> bool { self.sidebar.is_collapsed(HIDDEN_GROUP) }
@@ -662,7 +677,7 @@ impl Hangar {
             }
         }
         // O trilho não desenha o grupo "Ocultas": o teclado não anda por linha invisível.
-        if self.hidden_open() && !self.rail() { order.extend(self.hidden_sessions().into_iter().map(|(key, s)| Target::new(&key, &s.name))); }
+        if self.hidden_open() && !self.rail() { order.extend(self.hidden_sessions(cx).into_iter().map(|(key, s)| Target::new(&key, &s.name))); }
         order
     }
 
@@ -1499,10 +1514,14 @@ pub(super) fn session_menu(hangar: WeakEntity<Hangar>, server: String, session: 
                     .on_click(move |_, window, cx| { let _ = hangar.update(cx, |this, cx| this.open_arbiter(&target, window, cx)); }));
         }
         // As outras sessões da mesma máquina, na ordem da barra sem o filtro, são as candidatas do encadear (web:
-        // `chainCandidates`, que lê os grupos inteiros daquele servidor): o vínculo é resolvido pelo backend dela.
+        // `chainCandidates`, que lê os grupos inteiros daquele servidor): o vínculo é resolvido pelo backend dela. As ocultas
+        // da lista também servem, depois das outras, na ordem do grupo "Ocultas".
         let others = |hangar: &Hangar, target: &Target| -> Vec<String> {
-            let l = layout(hangar.sessions_of(&target.server), "", Hangar::by_project(), &hangar.sidebar.hidden_on(&target.server));
-            l.waiting.iter().chain(l.groups.iter().flat_map(|g| g.sessions.iter())).filter(|s| s.name != target.name).map(|s| s.name.clone()).collect()
+            let sessions = hangar.sessions_of(&target.server);
+            let l = layout(sessions, "", Hangar::by_project(), &hangar.sidebar.hidden_on(&target.server));
+            let hidden = hidden_group(&[(target.server.as_str(), sessions, "")], &hangar.sidebar.deleting, false);
+            l.waiting.iter().copied().chain(l.groups.iter().flat_map(|g| g.sessions.iter().copied())).chain(hidden.into_iter().map(|(_, s)| s))
+                .filter(|s| s.name != target.name).map(|s| s.name.clone()).collect()
         };
         let invite = entity.read(cx).invite_target(&target);
         // Convite não tem Silenciar, então nada a atualizar na posição dele.
@@ -2056,8 +2075,12 @@ mod tests {
         let names: Vec<&str> = l.groups.iter().flat_map(|g| g.sessions.iter().map(|s| s.name.as_str())).collect();
         assert_eq!((names, l.total), (vec!["api"], 1), "a oculta sai do layout da máquina");
         let closing = HashSet::from([Target::new("dp", "closing")]);
-        let group: Vec<(&str, &str)> = hidden_group(&[("nb", nb.as_slice()), ("dp", dp.as_slice())], &closing).into_iter().map(|(k, s)| (k, s.name.as_str())).collect();
+        let group: Vec<(&str, &str)> = hidden_group(&[("nb", nb.as_slice(), ""), ("dp", dp.as_slice(), "")], &closing, false).into_iter().map(|(k, s)| (k, s.name.as_str())).collect();
         assert_eq!(group, [("dp", "beta"), ("nb", "zeta")], "junta as máquinas por nome, sem a que está sendo fechada");
+        let filtered: Vec<&str> = hidden_group(&[("nb", nb.as_slice(), "zet"), ("dp", dp.as_slice(), "zet")], &closing, false).into_iter().map(|(_, s)| s.name.as_str()).collect();
+        assert_eq!(filtered, ["zeta"], "o filtro da barra vale também para as ocultas");
+        assert_eq!(super::filter_query(6, "Zet "), "", "lista curta: filtro escondido não filtra");
+        assert_eq!(super::filter_query(7, "Zet "), "zet");
         let (zeta, open) = (Target::new("nb", "zeta"), Target::new("nb", "zeta"));
         assert!(listed_on(&nb[1], &zeta, Some(&open)), "a aberta fica nas abas");
         assert!(!listed_on(&nb[1], &zeta, Some(&Target::new("nb", "api"))), "trocou de sessão, a oculta sai");
