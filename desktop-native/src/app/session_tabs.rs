@@ -470,9 +470,10 @@ impl Hangar {
         // vista na faixa (posição do quadro anterior), senão a dica esperaria por uma aba rolada para fora.
         let kids_tip = self.tour.tip_pending("kids").then(|| {
             let view = self.tabs_scroll.bounds();
-            let mut mothers = bands.iter().enumerate().filter(|(_, g)| g.mother && g.label.is_some()).map(|(ix, _)| ix).peekable();
-            let first = mothers.peek().copied();
-            mothers.find(|ix| self.tabs_scroll.bounds_for_item(*ix).is_some_and(|b| view.contains(&b.center()))).or(first)
+            let mothers: Vec<usize> = bands.iter().enumerate().filter(|(_, g)| g.mother && g.label.is_some()).map(|(ix, _)| ix).collect();
+            let shown = |test: &dyn Fn(Bounds<Pixels>) -> bool| mothers.iter().copied().find(|ix| self.tabs_scroll.bounds_for_item(*ix).is_some_and(|b| test(b)));
+            // Nenhuma com o centro à vista: a que aparece em parte ainda pode ter o contador na faixa.
+            shown(&|b| view.contains(&b.center())).or_else(|| shown(&|b| view.intersects(&b))).or(mothers.first().copied())
         }).flatten();
         bands.iter().zip(keys).enumerate().map(|(ix, (group, key))| {
             let first = order;

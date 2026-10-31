@@ -1735,7 +1735,7 @@ impl Hangar {
             Payload::VoiceMemory(server, seq, list) => { self.receive_voice_memory(server, seq, list, cx); return; }
             Payload::VoiceModels(seq, result) => { self.receive_organizer_models(seq, result, window, cx); return; }
             // A junção só soma: a resposta de um servidor que já saiu também vale.
-            Payload::TourProgress(result) => { self.receive_tour_progress(result, cx); return; }
+            Payload::TourProgress(result) => { self.receive_tour_progress(envelope.connection, result, cx); return; }
             Payload::Files(key, owner, generation, files) => { self.receive_files(key, owner, generation, files, cx); cx.notify(); return; }
             Payload::UploadStep(key, id, result) => { let key = self.delivery.current(key); self.receive_upload(key, id, result); cx.notify(); return; }
             Payload::UploadsDone(key, draft, field, refs, steer, known, group) => {
@@ -5964,7 +5964,9 @@ impl Hangar {
             .children((!multi).then(|| self.render_vault_requests(&self.active_key(), cx)).flatten())
             // O CTA do rodapé da barra do web, com o recolher ao lado.
             .child(div().flex_shrink_0().px(px(8.)).pt(px(8.)).pb(px(8.)).flex().items_center().gap_2()
-                .child(popup::anchor(div().flex_shrink_0(), crate::tour::anchors::NEW_SESSION).child(self.new_session_button(false, cx)))
+                // Na troca de forma, só enquanto esta camada está à vista (o par do trilho em `render_nav_rail`).
+                .child(div().flex_shrink_0().map(|el| if self.rail_progress().is_none_or(|p| p < 0.5) { popup::anchor(el, crate::tour::anchors::NEW_SESSION) } else { el })
+                    .child(self.new_session_button(false, cx)))
                 .child(self.fold_button("sidebar-fold", cx)))
             // A engrenagem mora na barra do app, acima de tudo; o rodapé fica com a conexão.
             .child(div().h(px(48.)).flex_shrink_0().px(px(8.)).flex().items_center().gap_1().border_t_1().border_color(theme::border())
@@ -7389,7 +7391,9 @@ impl Hangar {
     fn sync_tour_progress(&mut self) {
         // O convidado não alcança a rota (só o dono): vale o local.
         let Some(api) = self.api.clone().filter(|_| !self.active_invite()) else { self.tour.server_read = true; return };
-        let (local, tx, connection) = (self.tour.seen.clone(), self.tx.clone(), self.connection);
+        // A leitura da conexão anterior não vale por esta: o tour espera a resposta deste servidor.
+        self.tour.server_read = false;
+        let (local, tx, connection) =(self.tour.seen.clone(), self.tx.clone(), self.connection);
         self.runtime.spawn(async move {
             let result = api.sync_tour_progress(local).await;
             let _ = tx.send(Envelope { connection, selection: None, payload: Payload::TourProgress(result) }).await;
@@ -7397,8 +7401,8 @@ impl Hangar {
     }
 
     /// Servidor sem a rota, fora do ar ou ilegível: vale o local, a falha só vai ao diário.
-    fn receive_tour_progress(&mut self, result: Result<Option<crate::tour::state::Seen>, Failure>, cx: &mut Context<Self>) {
-        self.tour.server_read = true;
+    fn receive_tour_progress(&mut self, connection: u64, result: Result<Option<crate::tour::state::Seen>, Failure>, cx: &mut Context<Self>) {
+        if connection == self.connection { self.tour.server_read = true; }
         match result {
             Ok(Some(server)) => {
                 let changed = self.tour.absorb(server.clone());
@@ -7568,6 +7572,7 @@ impl Hangar {
     /// O balão da vez, preso à peça. Lido aqui, no desenho da raiz, a cada quadro: a âncora lida pede outro quadro quando
     /// a peça se move. Peça fora da tela: o balão espera, salvo a comemoração, que fica onde o balão estava.
     fn render_tour(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        self.tour.shown = None;
         let gate = crate::tour::Gate {
             // O painel do compositor fica abaixo do balão: com ele aberto, o balão o cobriria e roubaria o clique.
             dialogs_open: self.connection_dialog || self.setup.is_some() || window.has_active_dialog(cx) || self.popup_open()
@@ -7595,6 +7600,7 @@ impl Hangar {
         };
         self.tour.last_target = Some((surface.anchor.clone(), target));
         self.tour.showing(surface.kind);
+        self.tour.shown = surface.celebrating.is_none().then(|| (surface.id.clone(), surface.kind));
         let id = surface.id.clone();
         let choose = cx.listener(move |this, choice: &crate::tour::Choice, window, cx| this.tour_choice(&id, *choice, window, cx));
         let on_choice: crate::tour::balloon::OnChoice = std::rc::Rc::new(move |choice, window, cx| choose(&choice, window, cx));
@@ -7932,7 +7938,11 @@ impl Render for Hangar {
                 if this.chat.ask.is_some() && in_ask {
                     if this.confirm.take().is_some() { this.confirm_no_ask = false; cx.notify(); } else { this.request_stop(window, cx); }
                     cx.stop_propagation();
+                    return;
                 }
+                // Os botões do balão não têm tab stop (o foco fica no campo, onde Enter e Espaço são do texto): o Esc,
+                // depois de tudo que ele já fecha, é o caminho do teclado.
+                if let Some((id, choice)) = this.tour.escape_choice() { this.tour_choice(&id, choice, window, cx); cx.stop_propagation(); }
             }))
             // Clique em área sem foco próprio devolve o foco à raiz, para os atalhos continuarem chegando.
             .capture_any_mouse_down(cx.listener(|this, _: &MouseDownEvent, window, cx| {

@@ -9,7 +9,8 @@ use tokio::sync::Notify;
 
 use crate::diag::DiagClient;
 
-/// Acima disso sai o de primeira vez mais antiga: o arquivo não cresce com aparelho trocado.
+/// Acima disso sai o de primeira vez mais antiga entre os gravados: o arquivo não cresce com aparelho trocado. O que
+/// chega sempre entra, mesmo com o relógio voltado; cortado na chegada, ele regravaria o arquivo a cada conexão.
 const MAX: usize = 20;
 
 /// O cliente que o `ConnectPortGate` do Python (8768, `connect_port.py`) põe no lugar do real:

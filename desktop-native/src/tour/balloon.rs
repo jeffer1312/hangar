@@ -14,6 +14,8 @@ const EST_HEIGHT: f32 = 200.;
 /// Distância entre a peça e o balão; a seta ocupa ela.
 const GAP: f32 = 14.;
 const MARGIN: f32 = 12.;
+/// O balão menos o texto da novidade: respiros, cabeçalho, título e rodapé.
+const NEWS_CHROME: f32 = 140.;
 pub(crate) const ARROW_W: f32 = 18.;
 pub(crate) const ARROW_H: f32 = 9.;
 /// Folga do recorte em volta da peça.
@@ -111,6 +113,10 @@ pub fn render(surface: &Surface, target: Bounds<Pixels>, on_choice: OnChoice, wi
         .absolute().inset_0();
     let placed = place(target, window.viewport_size());
     let below = placed.top.is_some();
+    // O lado é escolhido pela altura típica; novidade longa em janela curta rola dentro do balão, sem tirar o título
+    // e o Fechar da janela.
+    let vh = f32::from(window.viewport_size().height);
+    let news_room = (placed.top.or(placed.bottom).map_or(vh, |edge| vh - edge) - MARGIN - NEWS_CHROME).max(60.);
     let content = div().flex().flex_col().gap(px(10.))
         .child(header(surface))
         .map(|el| match celebrating {
@@ -119,7 +125,8 @@ pub fn render(surface: &Surface, target: Bounds<Pixels>, on_choice: OnChoice, wi
                 .child(div().text_size(px(13.)).line_height(relative(1.45)).text_color(muted_color()).whitespace_normal()
                     // A novidade traz o texto do cartão, escrito em Markdown; tour e dicas são texto simples.
                     .map(|el| if surface.kind == Kind::News {
-                        el.child(TextView::markdown(SharedString::from(format!("tour-news-body-{}", surface.id)), surface.body.clone()).scrollable(false))
+                        el.child(div().id("tour-news-scroll").max_h(px(news_room)).overflow_y_scroll()
+                            .child(TextView::markdown(SharedString::from(format!("tour-news-body-{}", surface.id)), surface.body.clone()).scrollable(false)))
                     } else { el.child(surface.body.clone()) }))
                 .when(surface.kind == Kind::Tour, |el| el.child(waiting(wave)))
                 .child(footer(surface.kind, on_choice)),

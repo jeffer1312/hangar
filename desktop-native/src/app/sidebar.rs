@@ -2067,8 +2067,10 @@ impl Hangar {
             .child(div().w_full().flex_shrink_0().pt(px(8.)).pb(px(8.)).mt(px(4.)).border_t_1().border_color(theme::border())
                 .flex().flex_col().items_center().gap(px(4.))
                 // O CTA do web no trilho: o botão cheio de destaque, só com o +. Com a barra recolhida, o primeiro passo do
-                // tour aponta para ele.
-                .child(popup::anchor(div().flex_shrink_0(), crate::tour::anchors::NEW_SESSION).child(Button::new("rail-new-session")
+                // tour aponta para ele. Na troca de forma só a camada que está à vista marca a âncora (o corte de
+                // `render_sidebar`): a do trilho, desenhada por último, tomaria a posição do botão da lista cheia.
+                .child(div().flex_shrink_0().map(|el| if self.rail_progress().is_none_or(|p| p >= 0.5) { popup::anchor(el, crate::tour::anchors::NEW_SESSION) } else { el })
+                    .child(Button::new("rail-new-session")
                         .custom(ButtonCustomVariant::new(cx).color(theme::accent()).foreground(theme::on_accent())
                         .hover(theme::accent().opacity(0.85)).active(theme::accent().opacity(0.75)))
                     .icon(chrome::small_icon(IconName::Plus, 16., theme::on_accent())).w(px(44.)).h(px(36.)).rounded(px(8.))

@@ -65,7 +65,9 @@ fn load_at(path: &std::path::Path) -> Result<Seen, String> {
     // Corrompido não se conserta sozinho e travaria toda gravação: fica ao lado e o tour recomeça limpo. Sem conseguir
     // tirá-lo do caminho, vale como ilegível: a próxima gravação o apagaria.
     serde_json::from_slice(&bytes).or_else(|e| {
-        let bad = path.with_extension("json.bad");
+        // Com a hora no nome: uma corrupção nova não apaga a guardada da anterior.
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+        let bad = path.with_file_name(format!("tour.json.bad-{stamp}"));
         std::fs::rename(path, &bad).map_err(|moved| format!("tour.json inválido ({e}) e não movido: {moved}"))?;
         crate::log_line(&format!("tour: tour.json inválido ({e}); {}", bad.display()));
         Ok(Seen::default())
@@ -87,12 +89,17 @@ mod tests {
     #[test]
     fn a_corrupted_file_is_set_aside_and_the_tour_starts_clean() {
         let dir = std::env::temp_dir().join(format!("hangar-tour-state-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("tour.json");
         std::fs::write(&file, b"{nao e json").unwrap();
+        let set_aside = || std::fs::read_dir(&dir).unwrap().filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().starts_with("tour.json.bad-")).count();
         assert_eq!(load_at(&file).unwrap(), Seen::default());
-        assert!(!file.exists() && dir.join("tour.json.bad").exists(), "o arquivo ruim fica ao lado, fora do caminho");
+        assert!(!file.exists() && set_aside() == 1, "o arquivo ruim fica ao lado, fora do caminho");
         assert_eq!(load_at(&file).unwrap(), Seen::default(), "sem arquivo, nada visto");
+        std::fs::write(&file, b"{outro").unwrap();
+        assert_eq!(load_at(&file).unwrap(), Seen::default());
+        assert_eq!(set_aside(), 2, "a segunda corrupção não apaga a primeira");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

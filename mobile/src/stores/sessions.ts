@@ -398,9 +398,9 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
       }
     }
     // O aparelho só alimenta a dica do celular no desktop: cofre que não responde não segura a lista ao vivo. Aberta
-    // sem ele, o primeiro acesso fica para a próxima reabertura da lista.
+    // sem ele, o primeiro acesso fica para a próxima reabertura da lista. Convite não manda o aparelho: não espera.
     let identityTimer: ReturnType<typeof setTimeout> | undefined;
-    const identityLate = await Promise.race([
+    const identityLate = s.invite ? false : await Promise.race([
       deviceIdentityReady().then(() => false),
       new Promise<boolean>((resolve) => { identityTimer = setTimeout(() => resolve(true), 3000); }),
     ]).finally(() => clearTimeout(identityTimer));

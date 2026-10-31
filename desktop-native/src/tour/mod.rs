@@ -112,12 +112,20 @@ pub struct Tour {
     /// Celulares novos cuja dica ainda não foi respondida: só vão ao visto com a resposta, senão a dica que não chegou
     /// à tela (peça fora, app fechado) se perderia para eles.
     pending_devices: BTreeSet<String>,
+    /// O balão do último desenho, fora da comemoração: o Esc o fecha pelo teclado.
+    pub shown: Option<(String, Kind)>,
 }
 
 impl Tour {
     pub fn new(seen: Seen) -> Self {
         Self { seen, steps: Vec::new(), current: None, done_any: false, celebrated: None, tips: VecDeque::new(), news: None,
-            server_read: false, keep_open: false, last_target: None, generation: 0, read_failed: false, pending_devices: BTreeSet::new() }
+            server_read: false, keep_open: false, last_target: None, generation: 0, read_failed: false, pending_devices: BTreeSet::new(), shown: None }
+    }
+
+    /// O Esc no balão vale o botão que só fecha: "Ver depois", "Entendi" ou "Fechar".
+    pub fn escape_choice(&self) -> Option<(String, Choice)> {
+        let (id, kind) = self.shown.clone()?;
+        Some((id, match kind { Kind::Tour => Choice::Later, Kind::Tip => Choice::TipOk, Kind::News => Choice::Close }))
     }
 
     /// O que muda o balão na tela: quem chama compara antes e depois para não redesenhar à toa.
@@ -317,6 +325,16 @@ mod tests {
 
     fn steps() -> Vec<Step> {
         ["new", "search", "menu"].map(|id| Step { id, anchor: anchors::COMPOSER, title_key: "tour_later", body_key: "tour_later" }).to_vec()
+    }
+
+    #[test]
+    fn escape_only_closes_the_balloon_on_screen() {
+        let mut tour = Tour::new(Seen::default());
+        assert_eq!(tour.escape_choice(), None, "sem balão, o Esc segue para quem vem depois");
+        for (kind, choice) in [(Kind::Tour, Choice::Later), (Kind::Tip, Choice::TipOk), (Kind::News, Choice::Close)] {
+            tour.shown = Some(("x".to_owned(), kind));
+            assert_eq!(tour.escape_choice(), Some(("x".to_owned(), choice)));
+        }
     }
 
     fn tip(id: &str) -> Note { Note { id: id.to_owned(), anchor: anchors::QUEUE_PANEL.to_owned(), title: "t".into(), body: "b".into() } }
