@@ -1,10 +1,12 @@
-# App desktop nativo (desktop-native/, Rust/GPUI): compila Linux, Windows e macOS e publica numa release FIXA
+# App desktop nativo (desktop-native/, Rust/GPUI): compila Linux e Windows e publica numa release FIXA
 # `native-latest`, reescrita a cada push na main — o mesmo esquema do `dist-latest` do ci.yml. O app lê o
 # `native-latest.json` dessa release para oferecer o "Atualizar" (desktop-native/src/update.rs).
 # O canal de testes (`beta`) publica na pré-release `native-beta`, que é a que o app procura quando o servidor da
 # máquina está no canal dessa branch. O manifesto mantém o nome em toda release.
 # `check` (build e test em debug, Linux) roda em todo push; `build` + `publish` só na main e no canal.
-# `workflow_dispatch` em outra branch compila sem publicar. Trocar o canal é trocar `beta` aqui e no server.yml.
+# `workflow_dispatch` em outra branch compila sem publicar. Trocar o canal é trocar `beta` aqui, no server.yml e
+# nos *-macos.yml. O build está no native-build.yml. O macOS roda à parte, no native-macos.yml, depois que este
+# run termina, e acrescenta os arquivos dele ao manifesto desta versão: nada daqui espera por ele.
 name: Native
 
 on:
@@ -19,6 +21,7 @@ on:
       - "messages/**"
       - "VERSION"
       - ".github/workflows/native.yml"
+      - ".github/workflows/native-build.yml"
   workflow_dispatch:
 
 # Na main e no canal cada run tem o próprio grupo: quem cancela o run que um push novo substituiu são os jobs
@@ -48,7 +51,8 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v4
-      - run: &apt-linux |
+      # Mesma lista do build do native-build.yml.
+      - run: |
           sudo apt-get update
           sudo apt-get install -y pkg-config libasound2-dev libfontconfig-dev libfreetype-dev libwayland-dev \
             libx11-xcb-dev libxkbcommon-dev libxkbcommon-x11-dev libvulkan-dev libzstd-dev rpm
@@ -61,10 +65,10 @@ jobs:
             desktop-native/target
           key: native-check-${{ runner.os }}-${{ hashFiles('desktop-native/Cargo.lock', 'desktop-native/rust-toolchain.toml') }}-${{ hashFiles('desktop-native/vendor/**') }}
           restore-keys: native-check-${{ runner.os }}-
-      # Mesmo motivo do passo de igual nome no `build`: sem isto o GPUI vendorizado recompilava a cada push.
+      # Mesmo motivo do passo de igual nome no native-build.yml: sem isto o GPUI vendorizado recompilava a cada push.
       - name: Reaproveitar o vendor do cache
         if: steps.cache-check.outputs.cache-hit == 'true'
-        run: &vendor-antigo git ls-files -z vendor | xargs -0 touch -t 200001010000
+        run: git ls-files -z vendor | xargs -0 touch -t 200001010000
       - run: cargo build --locked
       - run: cargo test --locked
       - if: &grava-check github.ref == 'refs/heads/main' && steps.cache-check.outputs.cache-hit != 'true'
@@ -85,7 +89,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PREFIXO: native-check-${{ runner.os }}-
           CHAVE: ${{ steps.cache-check.outputs.cache-primary-key }}
-        run: &apagar-antigos |
+        run: |
           set -o pipefail
           lista() { gh cache list --repo "$GITHUB_REPOSITORY" --ref refs/heads/main --key "$1" --limit 100 --json key --jq '.[].key'; }
           gravada=$(lista "$CHAVE") || { echo "::warning::não consegui listar o cache $CHAVE; as cópias antigas ficam"; exit 0; }
@@ -95,182 +99,20 @@ jobs:
             [ -z "$k" ] || [ "$k" = "$CHAVE" ] || gh cache delete "$k" --repo "$GITHUB_REPOSITORY" || echo "::warning::não apaguei o cache $k"
           done <<<"$antigas"
 
+  # Build e cache de release (este só na main), no native-build.yml. Falha do Windows não segura a release do Linux.
   build:
     if: github.ref_name == 'main' || github.ref_name == 'beta' || github.event_name == 'workflow_dispatch'
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            platform: linux-x86_64
-            exe: ""
-            experimental: false
-          # Windows e macOS nunca foram compilados antes deste workflow: falha deles não segura a release do Linux.
-          - os: windows-latest
-            platform: windows-x86_64
-            exe: ".exe"
-            experimental: true
-          - os: macos-latest
-            platform: macos-aarch64
-            exe: ""
-            experimental: true
-          - os: macos-15-intel
-            platform: macos-x86_64
-            exe: ""
-            experimental: true
-    runs-on: ${{ matrix.os }}
-    continue-on-error: ${{ matrix.experimental }}
-    concurrency:
-      group: native-build-${{ github.ref_name }}-${{ matrix.platform }}
-      cancel-in-progress: true
+    uses: ./.github/workflows/native-build.yml
     permissions:
       contents: read
       actions: write
-    # Perfil do cargo: a main publica o binário do usuário com o `dist` (LTO completo, uma unidade de código);
-    # a pré-release de branch, com o `release` comum, que sai em minutos.
-    env:
-      PERFIL: ${{ github.ref == 'refs/heads/main' && 'dist' || 'release' }}
-    defaults:
-      run:
-        working-directory: desktop-native
-        shell: bash
-    steps:
-      # Histórico inteiro: a versão embutida é `VERSION` + número de commits, e clone raso contaria 1.
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - if: runner.os == 'Linux'
-        run: *apt-linux
-      # O rustup do runner lê o rust-toolchain.toml (1.98.1) no primeiro cargo. actions/cache e não rust-cache: a
-      # política do repositório só libera actions do GitHub e de criadores verificados.
-      # Só a main grava; as outras branches leem o dela. Cada branch gravando a própria cópia estourava o limite de
-      # cache do repositório e o GitHub despejava a da main. O perfil entra na chave: com LTO as dependências saem
-      # em bitcode, e o cache da main (dist) não serve à branch (release), que lê o do job `cache-release`.
-      # O vendor do GPUI também: com ele igual ao do cache, o passo seguinte o reaproveita.
-      - uses: actions/cache/restore@v4
-        id: cache-rust
-        with:
-          path: &cache-native |
-            ~/.cargo/registry
-            ~/.cargo/git
-            desktop-native/target
-          key: &chave-native native-${{ runner.os }}-${{ runner.arch }}-${{ env.PERFIL }}-${{ hashFiles('desktop-native/Cargo.lock', 'desktop-native/rust-toolchain.toml') }}-${{ hashFiles('desktop-native/vendor/**') }}
-          restore-keys: &chave-native-parcial |
-            native-${{ runner.os }}-${{ runner.arch }}-${{ env.PERFIL }}-${{ hashFiles('desktop-native/Cargo.lock', 'desktop-native/rust-toolchain.toml') }}-
-            native-${{ runner.os }}-${{ runner.arch }}-${{ env.PERFIL }}-
-      # O cargo julga crate de caminho pela data dos arquivos, e o checkout novo data tudo de agora: o GPUI
-      # vendorizado recompilava inteiro a cada push, com o cache achado. Só com a chave exata (vendor igual ao
-      # compilado no cache) a data antiga é verdade.
-      - name: Reaproveitar o vendor do cache
-        if: steps.cache-rust.outputs.cache-hit == 'true'
-        run: *vendor-antigo
-      - run: cargo build --locked --profile "$PERFIL"
-        env:
-          # A branch embutida faz o app trocar de canal mesmo para uma versão de contagem menor (update.rs).
-          HANGAR_NATIVE_CHANNEL: ${{ github.ref_name }}
-      # Binário cru com nome limpo (o que o app baixa para se atualizar) + arquivo compactado para quem baixa à mão.
-      # O binário cru mantém o nome usado pelo atualizador. O arquivo manual leva o lançador/ícone no Linux,
-      # o executável com ícone incorporado no Windows e o pacote .app com ICNS no macOS.
-      - name: Empacotar
-        run: |
-          name=Hangar-${{ matrix.platform }}
-          bin="target/$PERFIL/hangar-native"
-          mkdir -p out stage
-          cp "$bin${{ matrix.exe }}" "out/$name${{ matrix.exe }}"
-          case "$RUNNER_OS" in
-            Linux)
-              install -m755 "$bin" stage/hangar
-              install -m755 tools/install-linux.sh stage/install-linux.sh
-              install -m644 assets/brand/icon.png stage/icon.png
-              tar -czf "out/$name.tar.gz" -C stage hangar install-linux.sh icon.png
-              # .deb e .rpm abrem pela loja de programas; a versão é a mesma conta do build.rs.
-              tools/package-linux.sh "$bin" "$(tr -d '[:space:]' < ../VERSION).$(git rev-list --count HEAD)" out "$name"
-              ;;
-            Windows) cp "$bin.exe" stage/Hangar.exe && (cd stage && 7z a -tzip "../out/$name.zip" Hangar.exe) ;;
-            macOS)
-              tools/package-macos.sh "$bin" stage/Hangar.app
-              (cd stage && zip -qr "../out/$name.zip" Hangar.app)
-              ;;
-          esac
-          ls -l out
-      # Depois de empacotar: a poda tira o que é do app (recompila a cada push) e fica só o que o cache poupa.
-      - if: &grava-native github.ref == 'refs/heads/main' && steps.cache-rust.outputs.cache-hit != 'true'
-        run: ../scripts/podar-target --cache target
-      - uses: actions/cache/save@v4
-        if: *grava-native
-        with:
-          path: *cache-native
-          key: ${{ steps.cache-rust.outputs.cache-primary-key }}
-      - uses: actions/upload-artifact@v4
-        with:
-          name: native-${{ matrix.platform }}
-          path: desktop-native/out/*
-          retention-days: 1
-      - name: Apagar cópias antigas do cache
-        if: *grava-native
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PREFIXO: native-${{ runner.os }}-${{ runner.arch }}-${{ env.PERFIL }}-
-          CHAVE: ${{ steps.cache-rust.outputs.cache-primary-key }}
-        run: *apagar-antigos
-
-  # O cache de release que a pré-release de branch lê. Só a main grava, e só quando as dependências, o
-  # toolchain ou o vendor mudam (a chave não existe ainda); nos outros pushes o job termina na consulta.
-  cache-release:
-    if: github.ref == 'refs/heads/main'
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest, macos-15-intel]
-    runs-on: ${{ matrix.os }}
-    continue-on-error: true
-    concurrency:
-      group: native-cache-release-${{ github.ref_name }}-${{ matrix.os }}
-      cancel-in-progress: true
-    permissions:
-      contents: read
-      actions: write
-    env:
-      PERFIL: release
-    defaults:
-      run:
-        working-directory: desktop-native
-        shell: bash
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/cache/restore@v4
-        id: consulta
-        with:
-          path: *cache-native
-          key: *chave-native
-          lookup-only: true
-      - if: steps.consulta.outputs.cache-hit != 'true' && runner.os == 'Linux'
-        run: *apt-linux
-      # A base é o cache anterior do mesmo perfil: só o que mudou compila.
-      - if: &falta-native steps.consulta.outputs.cache-hit != 'true'
-        uses: actions/cache/restore@v4
-        with:
-          path: *cache-native
-          key: *chave-native
-          restore-keys: *chave-native-parcial
-      - if: *falta-native
-        run: |
-          cargo build --locked --profile "$PERFIL"
-          ../scripts/podar-target --cache target
-      - if: *falta-native
-        uses: actions/cache/save@v4
-        with:
-          path: *cache-native
-          key: ${{ steps.consulta.outputs.cache-primary-key }}
-      - name: Apagar cópias antigas do cache
-        if: *falta-native
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PREFIXO: native-${{ runner.os }}-${{ runner.arch }}-${{ env.PERFIL }}-
-          CHAVE: ${{ steps.consulta.outputs.cache-primary-key }}
-        run: *apagar-antigos
+    with:
+      branch: ${{ github.ref_name }}
+      sistemas: >-
+        [
+          {"os": "ubuntu-latest", "platform": "linux-x86_64", "exe": "", "experimental": false},
+          {"os": "windows-latest", "platform": "windows-x86_64", "exe": ".exe", "experimental": true}
+        ]
 
   # Só este job escreve, como o `publica-dist` do ci.yml. Teste vermelho no `check` segura a publicação.
   publish:
@@ -291,8 +133,8 @@ jobs:
           pattern: native-*
           path: out
           merge-multiple: true
-      # sha256 com o NOME PURO (como o release.yml) e o manifesto calculados aqui, num sistema só, para os três
-      # saírem no mesmo formato. A versão é a mesma conta do build.rs sobre o mesmo commit.
+      # sha256 com o NOME PURO (como o release.yml) e o manifesto calculados aqui, num sistema só, para os
+      # arquivos saírem no mesmo formato. A versão é a mesma conta do build.rs sobre o mesmo commit.
       - name: sha256 e manifesto
         run: |
           test -f out/Hangar-linux-x86_64 || { echo "sem o binário do Linux, nada a publicar"; exit 1; }
@@ -309,6 +151,7 @@ jobs:
       # O manifesto sobe por ÚLTIMO: até ele trocar, o app ainda vê o sha antigo e recusa o binário novo em vez de
       # instalar um par trocado. Sistema que não compilou desta vez fica com o arquivo anterior na release (build
       # instável não apaga o único binário dele) e fora do manifesto; as notas da release avisam quem baixa à mão.
+      # O macOS entra depois, pelo native-macos.yml, que troca a linha dele nas notas.
       - env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -334,7 +177,7 @@ jobs:
           }
           changes=""
           if test -n "$previous" && git cat-file -e "$previous^{commit}" 2>/dev/null; then
-            changes=$(git log --no-merges -n 40 --format='- %s' "$previous..$GITHUB_SHA" -- desktop-native crates/hangar-api crates/hangar-workspace VERSION .github/workflows/native.yml)
+            changes=$(git log --no-merges -n 40 --format='- %s' "$previous..$GITHUB_SHA" -- desktop-native crates/hangar-api crates/hangar-workspace VERSION .github/workflows/native.yml .github/workflows/native-build.yml)
           fi
           notes=$(cat <<'EOF'
           ## Hangar para desktop
@@ -366,14 +209,14 @@ jobs:
             notes+=$'\n\n'"### Canal de testes"$'\n\n'"Reescrita a cada push na branch $GITHUB_REF_NAME. O app troca para esta release quando o servidor da máquina está no canal de testes dessa branch; a versão estável é a native-latest."
           fi
           notes+=$'\n\n'"### Esta versão"$'\n\n'"Versão $version ($GITHUB_SHA). Linux: arquivo desta versão."
-          for spec in 'Windows:Hangar-windows-x86_64.exe' 'macOS:Hangar-macos-aarch64' 'macOS Intel:Hangar-macos-x86_64'; do
-            platform=${spec%%:*}
-            file=${spec#*:}
-            if test -f "out/$file"; then
-              notes+=$'\n'"$platform: arquivo desta versão."
-            else
-              notes+=$'\n'"$platform: não houve arquivo desta versão; se houver arquivo nesta página, é de uma publicação anterior. Não corresponde ao manifesto desta versão."
-            fi
+          if test -f out/Hangar-windows-x86_64.exe; then
+            notes+=$'\n'"Windows: arquivo desta versão."
+          else
+            notes+=$'\n'"Windows: não houve arquivo desta versão; se houver arquivo nesta página, é de uma publicação anterior. Não corresponde ao manifesto desta versão."
+          fi
+          # O native-macos.yml troca estas linhas quando publica o macOS desta versão.
+          for platform in macOS 'macOS Intel'; do
+            notes+=$'\n'"$platform: compilado à parte, depois desta publicação; enquanto esta linha estiver assim, o arquivo nesta página é de uma publicação anterior e não corresponde ao manifesto desta versão."
           done
           gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
             || gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" "${kind[@]}" \
