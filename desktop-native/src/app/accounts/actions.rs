@@ -41,6 +41,8 @@ pub(super) struct SignIn {
     view_focus: FocusHandle,
     /// Com o navegador aberto o link e o código ficam guardados, até a pessoa pedir.
     manual: bool,
+    /// O servidor a que o app está ligado, como a lista de máquinas o chama.
+    server_machine: Option<String>,
 }
 
 enum Choosing {
@@ -304,7 +306,7 @@ impl Hangar {
         let attempt = self.accounts.login_attempt;
         self.accounts.sign_in = Some(SignIn { label: label.clone(), name, attempt, open: false, starting: false, sending: false, stopping: false,
             failed: false, url: None, copied: false, step_failed: false, error: None, done: None, code, has_code: false, poll: None,
-            _subscription: subscription, choosing: Some(Choosing::Loading), target: None, browser: None, view: None, view_focus: cx.focus_handle(), manual: false });
+            _subscription: subscription, choosing: Some(Choosing::Loading), target: None, browser: None, view: None, view_focus: cx.focus_handle(), manual: false, server_machine: None });
         let Some(api) = self.api.clone() else { return };
         let done = self.accounts_send_later();
         self.runtime.spawn(async move {
@@ -624,6 +626,7 @@ impl Hangar {
                     return;
                 }
                 let last = result.ok().map(|reply| reply["last"].clone()).filter(|last| !last.is_null());
+                s.server_machine = machines.first().map(|machine| machine.id.clone());
                 s.choosing = Some(Choosing::Ready { machines, targets, last, machine: None });
             }
             ActionReply::View(attempt, reply) => {
@@ -915,7 +918,9 @@ impl Hangar {
         // Do clique no perfil em diante a tela já nasce completa: nada aparece depois empurrando o resto.
         if let Some(target) = s.target.as_ref().filter(|_| s.starting || waiting) {
             let machine = target["machine"].as_str().unwrap_or_default();
-            let viewable = target["kind"] == "chrome_profile";
+            let address = self.api.as_ref().map(|api| api.server_address()).unwrap_or_default();
+            let viewable = target["kind"] == "chrome_profile"
+                && !browser_is_here(machine, s.server_machine.as_deref(), &address, this_computer().as_deref());
             let state = s.browser.as_ref().and_then(|browser| browser["state"].as_str()).unwrap_or("opening");
             if state == "error" {
                 let reason = s.browser.as_ref().and_then(|browser| browser["reason"].as_str());
@@ -994,6 +999,19 @@ impl Hangar {
     }
 }
 
+fn this_computer() -> Option<String> {
+    let name = if cfg!(windows) { std::env::var("COMPUTERNAME").ok()? } else { std::fs::read_to_string("/etc/hostname").ok()? };
+    Some(name.trim().to_owned()).filter(|name| !name.is_empty())
+}
+
+/// O navegador está na frente da pessoa: transmitir a janela para a própria tela não serve para nada.
+/// ponytail: máquina com id diferente do nome do computador continua mostrando o botão, o que só sobra.
+fn browser_is_here(machine: &str, server_machine: Option<&str>, address: &str, computer: Option<&str>) -> bool {
+    let host = address.split("://").nth(1).unwrap_or(address);
+    let loopback = host.starts_with("127.") || host.starts_with("localhost") || host.starts_with("[::1]");
+    (loopback && server_machine == Some(machine)) || computer.is_some_and(|computer| computer.eq_ignore_ascii_case(machine))
+}
+
 /// Nome e detalhe de um navegador: o do perfil e o email dele, ou "Navegador padrão".
 fn target_names(target: &Value) -> (String, String) {
     match target["kind"].as_str() {
@@ -1064,8 +1082,18 @@ fn view_reply(frame: &Value) -> ViewReply {
 #[cfg(test)]
 mod tests {
     use super::account_slug;
-    use super::{view_key, view_reply, ViewReply};
+    use super::{browser_is_here, view_key, view_reply, ViewReply};
     use serde_json::json;
+
+    #[test]
+    fn the_view_is_only_for_a_browser_on_another_machine() {
+        let local = "http://127.0.0.1:8765/";
+        let remote = "http://100.64.0.2:8765/";
+        assert!(browser_is_here("casa", Some("casa"), local, None), "app e navegador no mesmo servidor local");
+        assert!(!browser_is_here("notebook", Some("casa"), local, None), "navegador em outra máquina");
+        assert!(!browser_is_here("casa", Some("casa"), remote, Some("notebook")), "app no notebook, servidor e navegador em casa");
+        assert!(browser_is_here("notebook", Some("casa"), remote, Some("NOTEBOOK")), "app e navegador no notebook, conta em casa");
+    }
 
     #[test]
     fn view_reply_says_why_there_is_no_frame() {
