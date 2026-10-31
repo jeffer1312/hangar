@@ -62,6 +62,21 @@ pub fn order(rows: &[Value]) -> Vec<Option<String>> {
 
 fn account_name(account: &Option<String>) -> &str { account.as_deref().unwrap_or("padrão") }
 
+/// `_avisar_leituras`: a escolha da conta feita sem dado confiável, como (é aviso, linha do log).
+fn reading_warnings(rows: &[Value], now: f64) -> Vec<(bool, String)> {
+    let claude: Vec<&Value> = rows.iter().filter(|r| r["provedor"] == "claude").collect();
+    let mut out = Vec::new();
+    if !claude.iter().any(|r| r["ativa"] == true && r["estado"] == "lida" && r["janelas"].as_array().is_some_and(|w| !w.is_empty())) {
+        out.push((true, format!("claude -p: sem leitura de cota da conta padrão ({} leituras no cache); escolha caiu na padrão sem dados", claude.len())));
+    }
+    let old: Vec<String> = claude.iter().filter_map(|r| {
+        let age = now - r["ts"].as_f64()?;
+        (age > crate::accounts::quotas::cache::TTL).then(|| format!("{} ({}s)", r["label"].as_str().unwrap_or(""), age as i64))
+    }).collect();
+    if !old.is_empty() { out.push((false, format!("claude -p: escolhendo com leitura de cota velha: {}", old.join(", ")))); }
+    out
+}
+
 /// O CLI e as cotas; o teste troca os dois.
 pub trait Runner: Send + Sync {
     fn run<'a>(&'a self, prompt: &'a str, account: Option<&'a str>) -> BoxFuture<'a, Result<Output, String>>;
@@ -71,10 +86,18 @@ pub trait Runner: Send + Sync {
 
 /// O stdout aparado, ou a frase da falha (vira 502).
 pub async fn claude_p(prompt: &str, runner: &dyn Runner) -> Result<String, String> {
-    let rows = runner.quotas(false).await.unwrap_or_else(|e| {
-        tracing::warn!(code = "loop_refine_quotas_failed", "claude -p: cotas ilegíveis ({e}); vai na conta padrão");
-        Vec::new()
-    });
+    let rows = match runner.quotas(false).await {
+        Ok(rows) => {
+            for (warn, line) in reading_warnings(&rows, crate::accounts::quotas::now()) {
+                if warn { tracing::warn!(code = "loop_refine_quotas_unread", "{line}") } else { tracing::info!(code = "loop_refine_quotas_old", "{line}") }
+            }
+            rows
+        }
+        Err(e) => {
+            tracing::warn!(code = "loop_refine_quotas_failed", "claude -p: cotas ilegíveis ({e}); vai na conta padrão");
+            Vec::new()
+        }
+    };
     let mut account = order(&rows).swap_remove(0);
     let mut out = runner.run(prompt, account.as_deref()).await?;
     if limited(&out) {
@@ -145,6 +168,31 @@ impl Runner for Cli {
             let rows = self.accounts.quotas(self.bridge.clone(), false, !fresh).await.map_err(|e| e.code.to_owned())?;
             Ok(rows.as_array().cloned().unwrap_or_default())
         })
+    }
+}
+
+#[cfg(test)]
+mod reading_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn choice_without_a_default_reading_or_with_an_old_one_is_logged() {
+        // ASK-27 (`_avisar_leituras`): sem leitura boa da padrão é aviso; leitura mais velha que o
+        // TTL do cache é informação, com o rótulo e a idade. Só as linhas Claude contam.
+        let now = 10_000.0;
+        let good = json!({"provedor": "claude", "ativa": true, "estado": "lida", "janelas": [{"pct": 1}], "ts": now - 10.0, "label": "padrão"});
+        let old = json!({"provedor": "claude", "ativa": false, "estado": "lida", "janelas": [{"pct": 1}], "ts": now - 301.4, "label": "b"});
+        let codex = json!({"provedor": "codex", "ativa": true, "estado": "lida", "janelas": [{"pct": 1}], "ts": now - 900.0, "label": "Codex"});
+        assert_eq!(reading_warnings(&[good.clone(), codex.clone()], now), vec![]);
+        assert_eq!(reading_warnings(&[good, old.clone()], now),
+            vec![(false, "claude -p: escolhendo com leitura de cota velha: b (301s)".to_owned())]);
+        let unread = json!({"provedor": "claude", "ativa": true, "estado": "indisponivel", "janelas": [], "ts": null, "label": "padrão"});
+        assert_eq!(reading_warnings(&[unread, old, codex], now), vec![
+            (true, "claude -p: sem leitura de cota da conta padrão (2 leituras no cache); escolha caiu na padrão sem dados".to_owned()),
+            (false, "claude -p: escolhendo com leitura de cota velha: b (301s)".to_owned())]);
+        let empty_windows = json!({"provedor": "claude", "ativa": true, "estado": "lida", "janelas": [], "ts": now, "label": "padrão"});
+        assert_eq!(reading_warnings(&[empty_windows], now).len(), 1, "leitura sem janelas não é dado");
     }
 }
 
