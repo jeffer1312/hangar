@@ -896,6 +896,15 @@ O plano original da troca, mantido como registro:
 - Antes: fechar ou aceitar por escrito as linhas `pendente` de `chat-parity.md` e os módulos
   listados ali como fora do nativo (terminal, navegador, Git completo, voz, Board/Canvas).
 
+## A web fica com o que já tem (30/10/2026)
+
+30/10/2026. Jefferson decidiu que o PWA não recebe mais recurso novo: "mantém só o que ele já tem".
+Isso amplia a decisão de 30/09 abaixo, que ainda mandava recursos de celular para a web. Agora
+desktop vai ao nativo e celular ao app Expo, e `frontend/` só recebe conserto do que já existe.
+
+Primeiro caso: o login do Claude pelo navegador escolhido chegou a ser escrito no PWA e foi retirado.
+Ele entrou só no nativo, e o PWA e o Expo continuam no fluxo de copiar o código.
+
 ## Desktop no Rust; web para PWA/mobile
 
 30/09/2026. Jefferson definiu a descontinuação gradual do Electron/desktop web.

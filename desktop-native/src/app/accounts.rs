@@ -14,6 +14,7 @@ use actions::{ActionReply, AddAccount, Change, ChangeKind, SignIn};
 use codex::{CodexFlow, CodexReply, ResetOffer, ResetTry};
 use keys::{CookieForm, EngineForm, KeysReply};
 pub(super) use keys::ModelChoice;
+pub(crate) use actions::{login_heading, target_row};
 use super::settings::{Page, segments, settings_box};
 use chrono::{Datelike, Local, TimeZone, Timelike};
 use gpui_kit::component::menu::DropdownMenu;
@@ -924,7 +925,10 @@ impl Hangar {
                 .into_any_element();
         }
         let page = div().flex().flex_col();
-        if let Some(panel) = self.render_sign_in(cx) { return page.child(top(None)).child(panel).into_any_element(); }
+        if let Some(panel) = self.render_sign_in(window, cx) {
+            let page = if self.login_view_open() { page } else { page.child(top(None)) };
+            return page.child(panel).into_any_element();
+        }
         if let Some(panel) = self.render_engine_form(cx) { return page.child(top(None)).child(panel).into_any_element(); }
         if let Some(panel) = self.render_codex(cx) { return page.child(top(None)).child(panel).into_any_element(); }
         match (&accounts.list.value, accounts.list.loading) {

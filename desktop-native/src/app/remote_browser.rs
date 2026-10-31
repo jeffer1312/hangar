@@ -268,7 +268,7 @@ fn modifier_bits(m: &Modifiers) -> u8 {
 }
 
 /// Ponto da tela em fração do quadro desenhado com `ObjectFit::Contain` (centrado, sem esticar).
-fn fraction(bounds: Bounds<Pixels>, (fw, fh): (f32, f32), p: Point<Pixels>, clamp: bool) -> Option<(f32, f32)> {
+pub(in crate::app) fn fraction(bounds: Bounds<Pixels>, (fw, fh): (f32, f32), p: Point<Pixels>, clamp: bool) -> Option<(f32, f32)> {
     let (bw, bh) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
     if fw <= 0. || fh <= 0. || bw <= 0. || bh <= 0. { return None; }
     let s = (bw / fw).min(bh / fh);
