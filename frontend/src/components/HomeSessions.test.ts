@@ -6,7 +6,7 @@ import { OFFLINE_NOTICE_MS } from '@hangar/core';
 import HomeSessions from './HomeSessions.svelte';
 import { overwriteGetLocale } from '../paraglide/runtime';
 
-const store = vi.hoisted(() => ({ rows: [] as unknown[], byServer: [] as unknown[], loading: false }));
+const store = vi.hoisted(() => ({ rows: [] as unknown[], byServer: [] as unknown[], loading: false, vaultFor: () => null }));
 const model = vi.hoisted(() => ({ open: vi.fn(), requestDelete: vi.fn(), doDelete: vi.fn(), confirmDel: null, mount: () => () => {} }));
 vi.mock('../lib/sessionsStore.svelte', () => ({ sessionsStore: store }));
 vi.mock('../lib/sessionListModel.svelte', () => ({ createSessionListModel: () => model }));

@@ -161,6 +161,11 @@
     { tela: 'computer', rotulo: m.computer_control_new_target, descricao: m.computer_control_target_host_hint },
     { tela: 'computer', rotulo: m.computer_control_setup_title, descricao: m.computer_control_setup_hint },
     { tela: 'computer', rotulo: m.computer_control_llm, descricao: m.computer_control_llm_hint },
+
+    { tela: 'cofre', rotulo: m.vault_web_entries_title, descricao: m.vault_token_hint },
+    { tela: 'cofre', rotulo: m.vault_web_add },
+    { tela: 'cofre', rotulo: m.vault_web_backup_title },
+    { tela: 'cofre', rotulo: m.vault_web_recovery_title },
   ];
 
   // Acento não pode separar "voz" de "vôz" nem "cota" de "cotá": a comparação é sempre sem marca.
@@ -206,7 +211,8 @@
   let { onIrPara, semServidor = false, convidado = false, compacta = false }: Props = $props();
 
   let termo = $state('');
-  const achados = $derived(filtrar(termo).filter((a) => !convidado || !TELAS_DE_SERVIDOR.includes(a.entrada.tela) || convidadoLe(a.entrada.tela)));
+  // O desktop web não abre o cofre: o resultado cairia em outra tela.
+  const achados = $derived(filtrar(termo).filter((a) => !(compacta && a.entrada.tela === 'cofre') && (!convidado || !TELAS_DE_SERVIDOR.includes(a.entrada.tela) || convidadoLe(a.entrada.tela))));
 
   function abrir(tela: TelaConfig) {
     termo = '';
