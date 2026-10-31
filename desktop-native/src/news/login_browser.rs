@@ -56,7 +56,7 @@ fn page(ready: bool) -> Div {
 const COMPACT_BELOW: f32 = 240.;
 /// Altura do passo mais alto: o cartão não pula entre os passos.
 const HEIGHT: f32 = 214.;
-const COMPACT_HEIGHT: f32 = 92.;
+const COMPACT_HEIGHT: f32 = 124.;
 
 pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &mut App) -> AnyElement {
     // Movimento reduzido: quadro parado na escolha da máquina, que é o que muda para quem já conhece o login.

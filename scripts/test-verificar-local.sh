@@ -100,6 +100,11 @@ hist="$(mktemp -d)"
     git update-ref refs/remotes/origin/main main && git checkout -q tarefa && g merge -q --no-edit main)
 plano="$(cd "$hist" && GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 "$Vabs" --plano 2>&1)"
 grep -q rust_rapido <<< "$plano" && ! grep -q mobile_rapido <<< "$plano" || { echo "FALHOU main juntada entrou no plano: $plano"; falhou=1; }
+# Arquivo que veio da main e a branch mudou depois é dela: entra no plano.
+(cd "$hist" && export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 && echo x > mobile/b.tsx && git add . && \
+    git -c user.name=t -c user.email=t@t commit -q -m tarefa-mexe)
+plano="$(cd "$hist" && GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 "$Vabs" --plano 2>&1)"
+grep -q mobile_rapido <<< "$plano" || { echo "FALHOU mudança da branch em arquivo da main ficou fora do plano: $plano"; falhou=1; }
 rm -rf "$hist"
 
 # Erro no cálculo do plano nunca vira "nada a verificar".

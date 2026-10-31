@@ -66,7 +66,7 @@ struct LoginView {
     bounds: Rc<Cell<Bounds<Pixels>>>,
     notice_until: Option<std::time::Instant>,
     retries: u32,
-    input: tokio::sync::mpsc::UnboundedSender<Value>,
+    input: tokio::sync::mpsc::Sender<Value>,
     frames: JoinHandle<()>,
     sender: JoinHandle<()>,
 }
@@ -91,6 +91,7 @@ pub(in crate::app) enum ViewReply {
 
 const VIEW_EVERY: Duration = Duration::from_millis(350);
 const VIEW_RETRIES_SILENT: u32 = 10;
+const VIEW_INPUT_QUEUE: usize = 32;
 
 impl Drop for SignIn {
     // Tarefa do tokio não morre com o handle: sem isto a leitura do passo seguiria no servidor anterior.
@@ -431,7 +432,7 @@ impl Hangar {
         let runtime = self.runtime.clone();
         let Some(s) = self.accounts.sign_in.as_mut() else { return };
         let (attempt, label) = (s.attempt, s.label.clone());
-        let (input, mut queue) = tokio::sync::mpsc::unbounded_channel::<Value>();
+        let (input, mut queue) = tokio::sync::mpsc::channel::<Value>(VIEW_INPUT_QUEUE);
         let (frame_api, frame_label) = (api.clone(), label.clone());
         let frames = runtime.spawn(async move {
             loop {
@@ -473,20 +474,25 @@ impl Hangar {
         cx.notify();
     }
 
-    fn view_input(&self, event: Value) {
-        if let Some(view) = self.accounts.sign_in.as_ref().and_then(|s| s.view.as_ref()) {
-            let _ = view.input.send(event);
+    fn view_input(&mut self, event: Value) {
+        if let Some(view) = self.accounts.sign_in.as_mut().and_then(|s| s.view.as_mut()) {
+            // Fila cheia é máquina que não dá conta: evento velho cairia numa tela que já mudou.
+            if view.input.try_send(event).is_err() {
+                view.notice = Some("accounts_login_view_input_failed");
+                view.notice_until = Some(std::time::Instant::now() + Duration::from_secs(4));
+            }
         }
     }
 
     /// Coordenada da imagem desenhada, na medida que o servidor deu para a janela.
     fn view_point(&self, point: Point<Pixels>, clamp: bool) -> Option<(f64, f64)> {
         let view = self.accounts.sign_in.as_ref()?.view.as_ref()?;
+        view.frame.as_ref()?;
         let (x, y) = crate::app::remote_browser::fraction(view.bounds.get(), (view.size.0 as f32, view.size.1 as f32), point, clamp)?;
         Some((f64::from(x) * view.size.0, f64::from(y) * view.size.1))
     }
 
-    fn view_click(&self, point: Point<Pixels>) {
+    fn view_click(&mut self, point: Point<Pixels>) {
         if let Some((x, y)) = self.view_point(point, false) {
             self.view_input(json!({"t": "click", "x": x, "y": y}));
         }
@@ -628,6 +634,7 @@ impl Hangar {
                         id: row["id"].as_str()?.to_owned(),
                         answered: row["answered"].as_bool().unwrap_or(false),
                     })).collect()).unwrap_or_default();
+                if let Err(error) = &result { eprintln!("[contas] lista de navegadores do login falhou: {:?}", error.status); }
                 // Nada para escolher, ou a lista não veio: segue o caminho de sempre, com o link.
                 if targets.is_empty() && machines.len() <= 1 {
                     self.choose_target(None, window, cx);
@@ -649,7 +656,15 @@ impl Hangar {
                         // O aviso de entrada perdida dura o bastante para ser lido: quadro chega a cada instante.
                         if view.notice_until.is_none_or(|until| until <= std::time::Instant::now()) { view.notice = None; }
                     }
-                    ViewReply::Notice(notice) => view.notice = Some(notice),
+                    ViewReply::Notice(notice) => {
+                        // A janela acabou: o último quadro pareceria clicável. Falha de captura passa sozinha e o mantém.
+                        if notice != "accounts_login_view_capture"
+                            && let Some(old) = view.frame.take()
+                        {
+                            cx.drop_image(old, None);
+                        }
+                        view.notice = Some(notice);
+                    }
                     ViewReply::Lost => view.notice = Some("accounts_login_view_lost"),
                     // Uma leitura perdida passa sozinha; seguidas, a pessoa precisa saber que a imagem parou.
                     ViewReply::Retry => {

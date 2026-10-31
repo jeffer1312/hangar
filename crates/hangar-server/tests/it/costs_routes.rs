@@ -485,6 +485,8 @@ async fn only_the_owner_reaches_the_login_window_routes() {
         (reqwest::Method::POST, "/api/login-browser/input"),
         (reqwest::Method::POST, "/api/login-browser/activate"),
         (reqwest::Method::POST, "/api/login-browser/close"),
+        (reqwest::Method::GET, "/api/login-browser/result"),
+        (reqwest::Method::POST, "/api/login-browser/open"),
     ] {
         let url = format!("http://{}{path}", h.address);
         assert_eq!(client.request(method.clone(), &url).send().await.unwrap().status(), 401, "{path} sem token");

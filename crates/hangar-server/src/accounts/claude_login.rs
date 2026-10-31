@@ -42,7 +42,7 @@ pub struct BrowserPacing {
 impl Default for BrowserPacing {
     fn default() -> Self {
         Self {
-            link_wait: Duration::from_secs(15),
+            link_wait: Duration::from_secs(60),
             link_poll: Duration::from_millis(250),
             result_poll: Duration::from_secs(2),
             result_cap: Duration::from_secs(600),

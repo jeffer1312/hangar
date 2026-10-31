@@ -455,7 +455,19 @@ fn is_login_window(window: &DeskWindow) -> bool {
     ["claude", "anthropic", "hangar"].iter().any(|name| title.contains(name))
 }
 
-/// A janela que o login abriu: a primeira nova com título de login, e nenhuma outra.
+/// A nova com título de login, só se for uma: com duas, uma é da pessoa e não dá para saber qual.
+fn new_login_window(windows: Vec<DeskWindow>, baseline: &HashSet<String>) -> Option<DeskWindow> {
+    let mut found = windows.into_iter().filter(|window| !baseline.contains(&window.id) && is_login_window(window));
+    let window = found.next()?;
+    found.next().is_none().then_some(window)
+}
+
+/// O endereço de uma janela fechada pode já ser de outra: vale também quem ela era.
+fn same_window(window: &DeskWindow, id: &str, capture_id: &Option<String>) -> bool {
+    window.id == id && window.capture_id == *capture_id
+}
+
+/// A janela que o login abriu, e nenhuma outra.
 struct View {
     desk: Arc<dyn Desk>,
     baseline: HashSet<String>,
@@ -487,13 +499,18 @@ fn list_windows(desk: &dyn Desk) -> Option<Vec<DeskWindow>> {
 /// Fecha só a janela do login; o resto do Chrome da pessoa continua aberto.
 async fn close_view_in(views: &Views, operation: &str) {
     let Some(view) = locked_views(views).remove(operation) else { return };
+    let (views, operation) = (views.clone(), operation.to_owned());
     let _ = tokio::task::spawn_blocking(move || {
-        let Some(windows) = list_windows(view.desk.as_ref()) else { return };
+        let Some(windows) = list_windows(view.desk.as_ref()) else {
+            // Callback, cancelamento e prazo passam por aqui: o seguinte ainda pode fechar.
+            locked_views(&views).entry(operation).or_insert(view);
+            return;
+        };
         // Quem não abriu a transmissão ainda tem a janela aberta, e ela é achada pelo título. Já vista,
         // vale quem ela era: no login do Google o título muda e a janela continua sendo a do login.
         let found = match &view.window {
-            Some(id) => windows.into_iter().find(|window| &window.id == id && window.capture_id == view.capture_id),
-            None => windows.into_iter().find(|window| !view.baseline.contains(&window.id) && is_login_window(window)),
+            Some(id) => windows.into_iter().find(|window| same_window(window, id, &view.capture_id)),
+            None => new_login_window(windows, &view.baseline),
         };
         match found {
             Some(window) => view.desk.close(&window),
@@ -517,6 +534,16 @@ type Listens = Arc<Mutex<HashMap<String, Listen>>>;
 
 fn locked(listens: &Listens) -> std::sync::MutexGuard<'_, HashMap<String, Listen>> {
     listens.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Código já recebido fica: quem consulta pode estar a um passo de buscá-lo quando o prazo vence.
+fn expire_listen(listens: &Listens, operation: &str, generation: u64) -> bool {
+    let mut listens = locked(listens);
+    let current = listens.get(operation).is_some_and(|listen| listen.generation == generation && listen.query.is_none());
+    if current {
+        listens.remove(operation);
+    }
+    current
 }
 
 #[derive(Clone)]
@@ -605,7 +632,7 @@ impl LoginBrowser {
         use serde_json::json;
         let Some((desk, baseline, known)) = locked_views(&self.views)
             .get(operation)
-            .map(|view| (view.desk.clone(), view.baseline.clone(), view.window.clone()))
+            .map(|view| (view.desk.clone(), view.baseline.clone(), view.window.clone().map(|id| (id, view.capture_id.clone()))))
         else {
             return json!({"available": false});
         };
@@ -613,8 +640,8 @@ impl LoginBrowser {
         let found = tokio::time::timeout(VIEW_CAP, tokio::task::spawn_blocking(move || {
             let Some(windows) = desk.windows() else { return None };
             let (window, first) = match &known {
-                Some(id) => (windows.into_iter().find(|window| &window.id == id), false),
-                None => (windows.into_iter().find(|window| !baseline.contains(&window.id) && is_login_window(window)), true),
+                Some((id, capture_id)) => (windows.into_iter().find(|window| same_window(window, id, capture_id)), false),
+                None => (new_login_window(windows, &baseline), true),
             };
             let Some(mut window) = window else { return Some((None, None, true)) };
             if first {
@@ -655,15 +682,15 @@ impl LoginBrowser {
         if matches!(&input, DeskInput::Text { text } if text.chars().count() > 4096) {
             return Err(refused(422, "erro_login_view_input_invalid", "texto grande demais"));
         }
-        let view = locked_views(&self.views).get(operation).and_then(|view| Some((view.desk.clone(), view.window.clone()?)));
-        let Some((desk, id)) = view else {
+        let view = locked_views(&self.views).get(operation).and_then(|view| Some((view.desk.clone(), view.window.clone()?, view.capture_id.clone())));
+        let Some((desk, id, capture_id)) = view else {
             return Err(refused(409, "erro_login_view_missing", "a janela do login não está aberta"));
         };
         let delivered = tokio::time::timeout(VIEW_CAP, tokio::task::spawn_blocking(move || {
             if !desk.can_input() {
                 return Err(refused(409, "erro_login_view_no_input", "a sessão desta máquina está desconectada"));
             }
-            let window = desk.windows().into_iter().flatten().find(|window| window.id == id)
+            let window = desk.windows().into_iter().flatten().find(|window| same_window(window, &id, &capture_id))
                 .ok_or_else(|| refused(409, "erro_login_view_missing", "a janela do login não está aberta"))?;
             if desk.input(&window, &input) { Ok(()) } else {
                 Err(refused(409, "erro_login_view_input_failed", "a entrada não chegou à janela do login"))
@@ -761,15 +788,7 @@ impl LoginBrowser {
             tokio::time::sleep(LISTEN_CAP).await;
             // O navegador pode manter conexão parada, e a espera graciosa não terminaria sozinha.
             serve.abort();
-            let expired = {
-                let mut listens = locked(&listens);
-                let current = listens.get(&operation).is_some_and(|listen| listen.generation == generation);
-                if current {
-                    listens.remove(&operation);
-                }
-                current
-            };
-            if expired {
+            if expire_listen(&listens, &operation, generation) {
                 close_view_in(&views, &operation).await;
             }
         });
@@ -1174,6 +1193,58 @@ mod tests {
         desk.windows.lock().unwrap()[0].title = "Sign in - Google Accounts".into();
         browser.close_view("op").await;
         assert_eq!(desk.log.lock().unwrap().last().unwrap(), "close login");
+    }
+
+    #[tokio::test]
+    async fn an_address_taken_by_another_window_gets_no_input_and_is_not_streamed() {
+        let desk = Arc::new(FakeDesk::default());
+        let browser = viewing(desk.clone());
+        browser.open(view_request(TargetKind::ChromeProfile)).await.unwrap();
+        let login = crate::accounts::login_view::DeskWindow { capture_id: Some("stable-1".into()), ..desk_window("same") };
+        desk.windows.lock().unwrap().push(login);
+        browser.view("op").await;
+        let other = crate::accounts::login_view::DeskWindow { capture_id: Some("stable-2".into()), ..desk_window("same") };
+        *desk.windows.lock().unwrap() = vec![other];
+        desk.log.lock().unwrap().clear();
+        assert_eq!(browser.input("op", DeskInput::Back).await.unwrap_err().code, "erro_login_view_missing");
+        assert_eq!(browser.view("op").await["closed"], true);
+        assert!(desk.log.lock().unwrap().is_empty(), "{:?}", desk.log.lock().unwrap());
+    }
+
+    #[tokio::test]
+    async fn two_new_login_windows_are_neither_streamed_nor_closed() {
+        let desk = Arc::new(FakeDesk::default());
+        let browser = viewing(desk.clone());
+        browser.open(view_request(TargetKind::ChromeProfile)).await.unwrap();
+        *desk.windows.lock().unwrap() = vec![desk_window("restored"), desk_window("login")];
+        assert_eq!(browser.view("op").await["pending"], true);
+        browser.close_view("op").await;
+        assert!(desk.log.lock().unwrap().is_empty(), "{:?}", desk.log.lock().unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_later_close_still_works_after_the_window_list_kept_failing() {
+        let desk = Arc::new(FakeDesk::default());
+        let browser = viewing(desk.clone());
+        browser.open(view_request(TargetKind::ChromeProfile)).await.unwrap();
+        desk.windows.lock().unwrap().push(desk_window("login"));
+        browser.view("op").await;
+        desk.unreadable.store(true, Ordering::Relaxed);
+        browser.close_view("op").await;
+        desk.unreadable.store(false, Ordering::Relaxed);
+        browser.close_view("op").await;
+        assert_eq!(desk.log.lock().unwrap().last().unwrap(), "close login");
+    }
+
+    #[test]
+    fn the_listen_deadline_keeps_a_code_already_received() {
+        let listens: Listens = Arc::default();
+        locked(&listens).insert("got".into(), Listen { generation: 1, query: Some("code=a".into()), stop: None });
+        locked(&listens).insert("empty".into(), Listen { generation: 1, query: None, stop: None });
+        assert!(!expire_listen(&listens, "got", 1));
+        assert!(expire_listen(&listens, "empty", 1));
+        assert!(locked(&listens).contains_key("got"));
+        assert!(!locked(&listens).contains_key("empty"));
     }
 
     #[tokio::test]

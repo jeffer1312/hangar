@@ -138,7 +138,7 @@ mod hyprland {
     }
 
     pub fn detect() -> Option<Arc<dyn Desk>> {
-        if !["hyprctl", "grim", "wtype", "ydotool"].into_iter().all(on_path) {
+        if !["hyprctl", "grim", "wtype", "ydotool", "timeout"].into_iter().all(on_path) {
             return None;
         }
         let mut env = crate::display_env::for_launch(|key| std::env::var(key).ok());
@@ -154,10 +154,15 @@ mod hyprland {
         Some(Arc::new(HyprDesk { env }))
     }
 
+    /// O prazo da rota só encerra a espera: sem matar o comando travado, cada quadro deixaria outro para trás.
+    pub fn run_limited(env: &[(String, String)], limit: &str, program: &str, args: &[&str]) -> Option<Output> {
+        let output = Command::new("timeout").arg(limit).arg(program).args(args).envs(env.iter().map(|(key, value)| (key, value))).output().ok()?;
+        output.status.success().then_some(output)
+    }
+
     impl HyprDesk {
         fn run(&self, program: &str, args: &[&str]) -> Option<Output> {
-            let output = Command::new(program).args(args).envs(self.env.iter().map(|(key, value)| (key, value))).output().ok()?;
-            output.status.success().then_some(output)
+            run_limited(&self.env, "5", program, args)
         }
 
         fn focus(&self, window: &DeskWindow) {
@@ -198,7 +203,7 @@ mod hyprland {
                 return Some(out.stdout);
             }
             // Por área, outra janela por cima apareceria na transmissão.
-            self.run("hyprctl", &["dispatch", "alterzorder", &format!("top,address:{}", window.id)]);
+            self.run("hyprctl", &["dispatch", "alterzorder", &format!("top,address:{}", window.id)])?;
             let area = format!("{},{} {}x{}", window.x, window.y, window.w, window.h);
             self.run("grim", &["-g", &area, "-t", "jpeg", "-q", "75", "-"]).map(|out| out.stdout)
         }
@@ -210,21 +215,14 @@ mod hyprland {
         fn input(&self, window: &DeskWindow, input: &DeskInput) -> bool {
             let pointer = |x: f64, y: f64| {
                 let (x, y) = window_point(window, x, y);
-                self.run("hyprctl", &["dispatch", "movecursor", &x.to_string(), &y.to_string()]);
+                self.run("hyprctl", &["dispatch", "movecursor", &x.to_string(), &y.to_string()]).is_some()
             };
+            // O clique é na tela: só agora a janela precisa estar na frente, e sem isso ele cairia em outra.
+            let on_top = || self.ensure_focus(window) && self.run("hyprctl", &["dispatch", "alterzorder", &format!("top,address:{}", window.id)]).is_some();
             match input {
-                DeskInput::Click { x, y } => {
-                    if !self.ensure_focus(window) { return false; }
-                    // O clique é na tela: só agora a janela precisa estar na frente.
-                    self.run("hyprctl", &["dispatch", "alterzorder", &format!("top,address:{}", window.id)]);
-                    pointer(*x, *y);
-                    self.run("ydotool", &["click", "0xC0"]).is_some()
-                }
+                DeskInput::Click { x, y } => on_top() && pointer(*x, *y) && self.run("ydotool", &["click", "0xC0"]).is_some(),
                 DeskInput::Wheel { x, y, down } => {
-                    if !self.ensure_focus(window) { return false; }
-                    self.run("hyprctl", &["dispatch", "alterzorder", &format!("top,address:{}", window.id)]);
-                    pointer(*x, *y);
-                    self.run("ydotool", &["mousemove", "--wheel", "-x", "0", "-y", if *down { "-1" } else { "1" }]).is_some()
+                    on_top() && pointer(*x, *y) && self.run("ydotool", &["mousemove", "--wheel", "-x", "0", "-y", if *down { "-1" } else { "1" }]).is_some()
                 }
                 DeskInput::Key { key } => {
                     if !self.ensure_focus(window) { return false; }
@@ -454,7 +452,7 @@ mod windows_desk {
             let pointer = |x: f64, y: f64| {
                 let (x, y) = window_point(window, x, y);
                 // SAFETY: sem ponteiro.
-                unsafe { SetCursorPos(x, y) };
+                unsafe { SetCursorPos(x, y) != 0 }
             };
             // O Windows pode recusar o primeiro plano: aí nada é enviado, ou iria para o app da frente.
             let front = || {
@@ -469,15 +467,13 @@ mod windows_desk {
             };
             match input {
                 DeskInput::Click { x, y } => {
-                    if !front() { return false; }
-                    pointer(*x, *y);
+                    if !front() || !pointer(*x, *y) { return false; }
                     mouse(MOUSEEVENTF_LEFTDOWN, 0);
                     mouse(MOUSEEVENTF_LEFTUP, 0);
                     true
                 }
                 DeskInput::Wheel { x, y, down } => {
-                    if !front() { return false; }
-                    pointer(*x, *y);
+                    if !front() || !pointer(*x, *y) { return false; }
                     mouse(MOUSEEVENTF_WHEEL, if *down { -120 } else { 120 });
                     true
                 }
@@ -573,5 +569,14 @@ mod tests {
         let windows = hyprland::chrome_windows(clients).unwrap();
         assert_eq!(windows.len(), 1);
         assert_eq!(windows[0], DeskWindow { id: "0x1".into(), title: "Claude".into(), x: 1, y: 2, w: 3, h: 4, capture_id: Some("18".into()) });
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_stuck_desk_command_ends_at_the_deadline() {
+        let started = std::time::Instant::now();
+        assert!(hyprland::run_limited(&[], "0.1", "sleep", &["7"]).is_none());
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        assert!(hyprland::run_limited(&[], "5", "true", &[]).is_some());
     }
 }
