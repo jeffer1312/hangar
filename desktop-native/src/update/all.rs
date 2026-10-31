@@ -194,6 +194,13 @@ fn remote_available(count: usize, rows: &[Row]) -> bool {
 
 fn idle_visible(plan: &Plan, count: usize, rows: &[Row]) -> bool { plan.visible() || remote_available(count, rows) }
 
+/// A máquina e como anda a atualização dela.
+pub(crate) fn status_line(label: String, status: String, color: Hsla) -> Div {
+    div().flex().flex_col().gap_1().min_w_0()
+        .child(div().font_weight(FontWeight::SEMIBOLD).whitespace_normal().child(label))
+        .child(div().text_color(color).whitespace_normal().child(status))
+}
+
 #[derive(Default)]
 struct Progress { rows: Vec<Row>, preparing: bool, deferred_app: bool }
 
@@ -217,9 +224,7 @@ impl Render for Progress {
                     Status::Held(_) | Status::Offline(_) | Status::UpdatedManual => theme::warning(),
                     _ => theme::muted(),
                 };
-                div().id(SharedString::from(format!("update-all-{}", row.key))).flex().flex_col().gap_1().min_w_0()
-                    .child(div().font_weight(FontWeight::SEMIBOLD).whitespace_normal().child(row.label.clone()))
-                    .child(div().text_color(color).whitespace_normal().child(row.status.text()))
+                status_line(row.label.clone(), row.status.text(), color).id(SharedString::from(format!("update-all-{}", row.key)))
                     .when_some(match &row.status {
                         Status::Held(hold) => Some(hold.text()), Status::Offline(error) => Some(error.clone()), _ => None,
                     }, |el, detail| el.child(div().text_color(theme::muted()).whitespace_normal().child(detail)))

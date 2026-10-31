@@ -9465,5 +9465,8 @@
   "news_tags_sample_account_personal": "personal",
   "news_rename_sample_generic": "hangar-2",
   "news_rename_sample_message": "the app login breaks after updating, can you take a look?",
-  "news_rename_sample_name": "fix-app-login"
+  "news_rename_sample_name": "fix-app-login",
+  "news_auto_report_sample_machine": "office",
+  "news_auto_report_sample_step": "Restarting",
+  "news_auto_report_sample_error": "the new version did not respond"
 }

@@ -1,0 +1,565 @@
+# Jobs do hangar-server por sistema (testes, build de release, publicação e cache), chamados pelo server.yml
+# (Linux e Windows, a cada push) e pelo server-macos.yml (macOS, depois que o Server da main ou do canal termina).
+# Assim o macOS, lento e instável, não segura a publicação nem o Package dos outros sistemas.
+# `branch` e `ref` vêm de quem chama: no workflow_run o github.ref_name e o github.sha são os da main, não os do
+# commit testado, e as variáveis GITHUB_* não podem ser trocadas.
+name: Server (jobs)
+
+on:
+  workflow_call:
+    inputs:
+      sistemas:
+        description: JSON com os sistemas de testes, build e publicação
+        type: string
+        required: true
+      cache_release:
+        description: JSON com os sistemas do cache de release
+        type: string
+        required: true
+      branch:
+        type: string
+        required: true
+      ref:
+        description: Commit testado; vazio é o do evento
+        type: string
+        default: ""
+
+jobs:
+  # Os testes rodam ao lado do build de release, não antes dele: o job dura o maior dos dois, não a soma. Teste
+  # vermelho continua segurando a publicação daquele sistema (o `publish` exige o `testes-ok-<sistema>`).
+  testes:
+    name: testes (${{ matrix.os }}, ${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(inputs.sistemas) }}
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.experimental }}
+    concurrency:
+      group: server-testes-${{ inputs.branch }}-${{ matrix.platform }}
+      cancel-in-progress: true
+    # O incremental não serve entre runs; a depuração reduzida vem do perfil dev do crates/Cargo.toml.
+    env:
+      CARGO_INCREMENTAL: "0"
+    # `actions: write` apaga as cópias antigas do cache que este job grava.
+    permissions:
+      contents: read
+      actions: write
+    defaults:
+      run:
+        working-directory: crates
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.14"
+      - working-directory: backend
+        run: uv sync --locked
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Preparar CLI Codex para os contratos de contas
+        run: |
+          npm install --global @openai/codex@0.161.0
+          codex --version
+      - name: Preparar terminal no macOS
+        if: runner.os == 'macOS'
+        run: |
+          brew install tmux
+          # Darwin exige o alias para o teste de bind público distinto do loopback privado.
+          sudo ifconfig lo0 alias 127.0.0.2 up
+      - name: Conferir tmux nos testes Unix
+        if: runner.os != 'Windows'
+        run: tmux -V
+      # O rustup do runner lê o crates/rust-toolchain.toml (1.98.1) no primeiro cargo.
+      # Só a main grava; as outras branches leem o dela. Cada branch gravando a própria cópia estourava o limite
+      # de cache do repositório e o GitHub despejava a da main. Dois caches: o dos testes (debug, deste job) e o
+      # do release (do job `build`), com o perfil na chave, porque com LTO as dependências saem em bitcode e não
+      # servem ao release sem LTO.
+      - uses: actions/cache/restore@v4
+        id: cache-dev
+        with:
+          path: &cache-dev |
+            ~/.cargo/registry
+            ~/.cargo/git
+            crates/target/debug
+          key: server-v3-${{ runner.os }}-${{ runner.arch }}-dev-${{ hashFiles('crates/Cargo.lock', 'crates/rust-toolchain.toml') }}
+          restore-keys: server-v3-${{ runner.os }}-${{ runner.arch }}-dev-
+      - name: Capturar referências Python do navegador neste sistema
+        if: runner.os != 'Windows'
+        working-directory: ${{ runner.temp }}
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          source_commit=ba2db1021ab7fb801eca50a50f9509dcb825ac7e
+          git -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1 origin "$source_commit"
+          test "$(git -C "$GITHUB_WORKSPACE" rev-parse "$source_commit^{commit}")" = "$source_commit"
+          reference_tmp=$(mktemp -d /tmp/hr-XXXXXX)
+          reference_dir=$(mktemp -d "$RUNNER_TEMP/hangar-browser-contract.XXXXXX")
+          TMPDIR="$reference_tmp" "$GITHUB_WORKSPACE/backend/.venv/bin/python" "$GITHUB_WORKSPACE/backend/tests/fixtures/contract/remote-browser/generate_url_commands.py" --output "$reference_dir/url-commands.json"
+          TMPDIR="$reference_tmp" "$GITHUB_WORKSPACE/backend/.venv/bin/python" "$GITHUB_WORKSPACE/backend/tests/fixtures/contract/remote-browser/generate_url_gaps.py" --output "$reference_dir/url-gaps.json"
+          printf 'HANGAR_REMOTE_BROWSER_CONTRACT_DIR=%s\n' "$reference_dir" >> "$GITHUB_ENV"
+          printf 'HANGAR_REMOTE_BROWSER_TMPDIR=%s\n' "$reference_tmp" >> "$GITHUB_ENV"
+      # Os testes do hangar-api leem as amostras de backend/tests/fixtures/, que vêm no mesmo checkout.
+      # --no-fail-fast: sem ele o cargo para no primeiro executável que falha e esconde os outros.
+      - run: cargo test --locked --workspace --no-fail-fast
+      # A poda tira o que é do workspace (recompila a cada push) e fica só o que o cache poupa.
+      - if: &grava-dev inputs.branch == 'main' && steps.cache-dev.outputs.cache-hit != 'true'
+        run: ../scripts/podar-target --cache target
+      - uses: actions/cache/save@v4
+        if: *grava-dev
+        with:
+          path: *cache-dev
+          key: ${{ steps.cache-dev.outputs.cache-primary-key }}
+      # A suíte das regressões da entrega terminal não depende do binário de release.
+      - name: Contenção e regressões da entrega terminal
+        working-directory: backend
+        run: uv run pytest tests/test_runtime_process.py tests/test_runtime_queue_terminal_v2.py tests/test_runtime_terminal_fix.py tests/test_runtime_terminal_fix2.py tests/test_runtime_terminal_failure_policy.py tests/test_runtime_final_fixes.py tests/test_sidecar_coordination.py -q
+      # Só chega aqui com todos os passos acima verdes: é a marca que o `publish` deste sistema exige.
+      - if: inputs.branch == 'main' || inputs.branch == 'beta'
+        run: echo ok > "$RUNNER_TEMP/testes-ok"
+      - if: inputs.branch == 'main' || inputs.branch == 'beta'
+        uses: actions/upload-artifact@v4
+        with:
+          name: testes-ok-${{ matrix.platform }}
+          path: ${{ runner.temp }}/testes-ok
+          retention-days: 1
+      # Chave nova não substitui a velha: sem apagar, cada mudança no Cargo.lock deixava outra cópia até o teto
+      # de 10 GB do repositório, e o GitHub despejava o cache que a main estava usando. Por último e sem
+      # derrubar o job: falha aqui só deixa as cópias antigas, com aviso. Só apaga com a chave nova já gravada
+      # (o `cache/save` que falha só avisa, e apagar então deixaria o próximo push sem cache).
+      - name: Apagar cópias antigas do cache
+        if: *grava-dev
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREFIXO: server-v3-${{ runner.os }}-${{ runner.arch }}-dev-
+          CHAVE: ${{ steps.cache-dev.outputs.cache-primary-key }}
+        run: &apagar-antigos |
+          set -o pipefail
+          lista() { gh cache list --repo "$GITHUB_REPOSITORY" --ref refs/heads/main --key "$1" --limit 100 --json key --jq '.[].key'; }
+          gravada=$(lista "$CHAVE") || { echo "::warning::não consegui listar o cache $CHAVE; as cópias antigas ficam"; exit 0; }
+          grep -qxF -- "$CHAVE" <<<"$gravada" || { echo "::warning::o cache $CHAVE não aparece gravado; as cópias antigas ficam"; exit 0; }
+          antigas=$(lista "$PREFIXO") || { echo "::warning::não consegui listar o cache $PREFIXO; as cópias antigas ficam"; exit 0; }
+          while IFS= read -r k; do
+            [ -z "$k" ] || [ "$k" = "$CHAVE" ] || gh cache delete "$k" --repo "$GITHUB_REPOSITORY" || echo "::warning::não apaguei o cache $k"
+          done <<<"$antigas"
+
+  # PERFIL: a main publica com o `dist` (LTO completo, uma unidade de código); a pré-release de branch, com o
+  # `release` comum, que lê o cache do job `cache-release`. Só na main, no canal e no workflow_dispatch.
+  build:
+    if: inputs.branch == 'main' || inputs.branch == 'beta' || github.event_name == 'workflow_dispatch'
+    name: build (${{ matrix.os }}, ${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(inputs.sistemas) }}
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.experimental }}
+    concurrency:
+      group: server-build-${{ inputs.branch }}-${{ matrix.platform }}
+      cancel-in-progress: true
+    env:
+      CARGO_INCREMENTAL: "0"
+      PERFIL: ${{ inputs.branch == 'main' && 'dist' || 'release' }}
+    permissions:
+      contents: read
+      actions: write
+    defaults:
+      run:
+        working-directory: crates
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: actions/cache/restore@v4
+        id: cache-perfil
+        with:
+          path: &cache-perfil |
+            crates/target/${{ env.PERFIL }}
+            crates/target/x86_64-unknown-linux-gnu/${{ env.PERFIL }}
+          key: &chave-perfil server-v3-${{ runner.os }}-${{ runner.arch }}-${{ env.PERFIL }}-${{ hashFiles('crates/Cargo.lock', 'crates/rust-toolchain.toml') }}
+          restore-keys: &chave-perfil-parcial server-v3-${{ runner.os }}-${{ runner.arch }}-${{ env.PERFIL }}-
+      - if: matrix.target != ''
+        run: rustup target add ${{ matrix.target }}
+      # Zig baixado direto (sha256 do index.json do ziglang.org): o repositório só libera actions da GitHub,
+      # de criador verificado e o setup-uv, e uma action fora da lista derruba o workflow antes de começar.
+      - if: matrix.zigbuild
+        run: &zig |
+          curl -fsSL -o /tmp/zig.tar.xz https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz
+          echo "70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00  /tmp/zig.tar.xz" | sha256sum -c -
+          tar -xJf /tmp/zig.tar.xz -C /tmp
+          echo /tmp/zig-x86_64-linux-0.16.0 >> "$GITHUB_PATH"
+          cargo install cargo-zigbuild --locked --version =0.23.4
+      # O sufixo .2.28 fixa a glibc mínima; o diretório de saída continua sem ele (target/<triplo>/<perfil>).
+      - run: &build-perfil cargo ${{ matrix.zigbuild && 'zigbuild' || 'build' }} --locked --profile "$PERFIL" --workspace ${{ matrix.target && format('--target {0}{1}', matrix.target, matrix.zigbuild && '.2.28' || '') || '' }}
+      # Guarda: se o zigbuild deixar de fixar a glibc, o binário passa a exigir mais que o prometido.
+      - name: glibc máxima exigida
+        if: matrix.zigbuild
+        run: |
+          for bin in hangar-server hangar-cano libhangar_auth.so; do
+            top=$(objdump -T "${{ matrix.dir }}/${{ env.PERFIL }}/$bin" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+            echo "$bin exige $top"
+            test "$(printf '%s\n' "$top" GLIBC_2.28 | sort -V | tail -1)" = GLIBC_2.28
+          done
+      # A suíte de contrato do cano contra o binário que vai ser publicado. Só no Linux: é o único
+      # lugar em que ela roda contra o hangar-cano (o ci.yml não compila Rust). Setup igual ao do ci.yml.
+      - if: matrix.platform == 'linux-x86_64'
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.14"
+      - name: Contrato do cano contra o hangar-cano
+        if: matrix.platform == 'linux-x86_64'
+        working-directory: backend
+        run: |
+          uv sync
+          # Sem o binário a suíte pula os casos Rust e sairia verde: aqui a falta é erro.
+          test -x "$GITHUB_WORKSPACE/crates/${{ matrix.dir }}/${{ env.PERFIL }}/hangar-cano"
+          CP_RUST_CANO_BIN=$GITHUB_WORKSPACE/crates/${{ matrix.dir }}/${{ env.PERFIL }}/hangar-cano uv run pytest tests/test_claude_headless_cano.py
+      - name: Empacotar
+        run: |
+          mkdir -p out
+          for bin in hangar-server hangar-cano; do
+            cp "${{ matrix.dir }}/${{ env.PERFIL }}/$bin${{ matrix.exe }}" "out/$bin-${{ matrix.platform }}${{ matrix.exe }}"
+          done
+          case '${{ matrix.platform }}' in
+            windows-*) auth=hangar_auth.dll; suffix=.dll ;;
+            macos-*) auth=libhangar_auth.dylib; suffix=.dylib ;;
+            *) auth=libhangar_auth.so; suffix=.so ;;
+          esac
+          cp "${{ matrix.dir }}/${{ env.PERFIL }}/$auth" "out/hangar-auth-${{ matrix.platform }}$suffix"
+          ls -l out
+      - if: &grava-perfil inputs.branch == 'main' && steps.cache-perfil.outputs.cache-hit != 'true'
+        run: ../scripts/podar-target --cache target
+      - uses: actions/cache/save@v4
+        if: *grava-perfil
+        with:
+          path: *cache-perfil
+          key: ${{ steps.cache-perfil.outputs.cache-primary-key }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: server-${{ matrix.platform }}
+          path: crates/out/*
+          retention-days: 1
+      - name: Apagar cópias antigas do cache
+        if: *grava-perfil
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREFIXO: server-v3-${{ runner.os }}-${{ runner.arch }}-${{ env.PERFIL }}-
+          CHAVE: ${{ steps.cache-perfil.outputs.cache-primary-key }}
+        run: *apagar-antigos
+
+  # Cada sistema publica assim que o PRÓPRIO build e os PRÓPRIOS testes passam (os dois artefatos dele): sistema
+  # que falhou ou foi cancelado não publica nada, e a release segue com o binário e a entrada anteriores dele.
+  # Grupo próprio sem cancelamento: um push novo nunca corta este job no meio do upload.
+  publish:
+    needs: [testes, build]
+    if: ${{ !cancelled() && (inputs.branch == 'main' || inputs.branch == 'beta') }}
+    name: publicar (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(inputs.sistemas) }}
+    runs-on: ubuntu-latest
+    concurrency:
+      group: server-publish-${{ inputs.branch }}-${{ matrix.platform }}
+      cancel-in-progress: false
+    # `actions: read` confere os artefatos do run quando um download falha.
+    permissions:
+      contents: write
+      actions: read
+    env:
+      BRANCH: ${{ inputs.branch }}
+      SHA: ${{ inputs.ref || github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        id: binarios
+        continue-on-error: true
+        with:
+          name: server-${{ matrix.platform }}
+          path: crates/out
+      - uses: actions/download-artifact@v4
+        id: testes
+        continue-on-error: true
+        with:
+          name: testes-ok-${{ matrix.platform }}
+          path: ${{ runner.temp }}/testes-ok
+      # Artefato ausente = build ou testes daquele sistema falharam ou foram cancelados: nada a publicar. Artefato
+      # que existe e não baixou é falha de transporte: o job fica vermelho, nunca a release velha calada.
+      - name: Conferir o que faltou
+        if: steps.binarios.outcome != 'success' || steps.testes.outcome != 'success'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLATFORM: ${{ matrix.platform }}
+          BINARIOS: ${{ steps.binarios.outcome }}
+          TESTES: ${{ steps.testes.outcome }}
+        run: |
+          set -o pipefail
+          nomes=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" --paginate --jq '.artifacts[].name') \
+            || { echo "::error::não consegui conferir os artefatos deste run"; exit 1; }
+          faltou=()
+          [ "$BINARIOS" = success ] || faltou+=("server-$PLATFORM")
+          [ "$TESTES" = success ] || faltou+=("testes-ok-$PLATFORM")
+          for a in "${faltou[@]}"; do
+            if grep -qxF -- "$a" <<<"$nomes"; then
+              echo "::error::o artefato $a existe neste run e não baixou; a release não foi atualizada"
+              exit 1
+            fi
+          done
+          echo "::notice::$PLATFORM sem build ou sem testes aprovados neste run; a release segue com a entrada anterior."
+      - name: Publicar na release
+        if: steps.binarios.outcome == 'success' && steps.testes.outcome == 'success'
+        working-directory: crates/out
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          # Mesma limpeza do release_tag() do backend/app/rust_release.py: mudar uma exige mudar a outra.
+          if [ "$BRANCH" = main ]; then
+            tag=server-latest
+            criar=(--title 'hangar-server e hangar-cano (topo da main)'
+                   --notes 'Reescrita a cada push na main. O instalador e a atualização do Hangar baixam daqui e conferem o sha256 pelo server-latest.json.')
+          else
+            tag="server-${BRANCH//[^A-Za-z0-9._-]/-}"
+            if [ "$tag" = server-latest ]; then
+              echo "::error::a branch '$BRANCH' vira o tag server-latest, que é a release da main; renomeie a branch"
+              exit 1
+            fi
+            criar=(--prerelease --title "hangar-server e hangar-cano (branch $BRANCH)"
+                   --notes "Reescrita a cada push na branch $BRANCH. A atualização baixa daqui quando o checkout está nessa branch.")
+          fi
+          # Dois sistemas podem achar a release ausente ao mesmo tempo: se o create falha, vale a que o outro criou.
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$SHA" --latest=false "${criar[@]}" \
+            || gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null
+          protocol=$(sed -n 's/^pub const INTERNAL_PROTOCOL: u32 = \([0-9][0-9]*\);.*/\1/p' ../hangar-server/src/lib.rs)
+          test -n "$protocol" || { echo "::error::INTERNAL_PROTOCOL não encontrado em crates/hangar-server/src/lib.rs"; exit 1; }
+          # Versão da API que este servidor atende; o app compara com a que exige antes de se atualizar.
+          api=$(sed -n 's/^pub const CLIENT_API: u32 = \([0-9][0-9]*\);.*/\1/p' ../hangar-api/src/lib.rs)
+          test -n "$api" || { echo "::error::CLIENT_API não encontrado em crates/hangar-api/src/lib.rs"; exit 1; }
+          gh release upload "$tag" hangar-server-* hangar-cano-* hangar-auth-* --repo "$GITHUB_REPOSITORY" --clobber
+          python3 - "$tag" "$PLATFORM" "$protocol" "$api" <<'EOF'
+          import hashlib, json, os, pathlib, random, re, shutil, subprocess, sys, time
+
+          tag, plat, protocol, api = sys.argv[1:]
+          repo, sha = os.environ["GITHUB_REPOSITORY"], os.environ["SHA"]
+          LATEST = "server-latest.json"
+
+          def gh(*args):
+              subprocess.run(["gh", *args, "--repo", repo], check=True)
+
+          def put(path, data):
+              path.write_bytes(json.dumps(data, indent=2, sort_keys=True).encode())
+              gh("release", "upload", tag, str(path), "--clobber")
+
+          # A fonte de cada sistema é o server-<sistema>.json, que só o job dele grava; o server-latest.json é
+          # composto das fontes e continua no formato que o instalador e o rust_release.py leem.
+          files = {}
+          for f in sorted(pathlib.Path().glob("hangar-*")):
+              name = next(n for n in ("hangar-server", "hangar-cano", "hangar-auth") if f.name.startswith(n + "-"))
+              files[f"{plat}/{name}"] = {"name": f.name, "sha256": hashlib.sha256(f.read_bytes()).hexdigest()}
+          put(pathlib.Path(f"server-{plat}.json"),
+              {"platform": plat, "commit": sha, "protocol": int(protocol), "api": int(api), "files": files})
+
+          apis = {}
+          def api_at(commit):
+              # Fonte antiga ou semente sem `api`: vale a constante no commit dela, nunca um 1 por esquecimento.
+              # Só o commit sem o arquivo ou sem a constante é de antes do contrato (api 1).
+              if not commit:
+                  sys.exit("entrada sem commit: não há de onde ler o CLIENT_API")
+              if commit not in apis:
+                  r = subprocess.run(["gh", "api", "-H", "Accept: application/vnd.github.raw",
+                                      f"repos/{repo}/contents/crates/hangar-api/src/lib.rs?ref={commit}"],
+                                     capture_output=True, text=True)
+                  if r.returncode and "HTTP 404" not in r.stderr:
+                      sys.exit(f"não consegui ler o CLIENT_API do commit {commit}: {r.stderr.strip()}")
+                  m = re.search(r"^pub const CLIENT_API: u32 = (\d+);", r.stdout if not r.returncode else "", re.M)
+                  apis[commit] = int(m.group(1)) if m else 1
+              return apis[commit]
+
+          afterwards = {}
+          def comes_after(base, commit):
+              # `compare/A...B` = "ahead": B vem depois de A. 404 = commit sumiu (force-push).
+              if (base, commit) not in afterwards:
+                  r = subprocess.run(["gh", "api", f"repos/{repo}/compare/{base}...{commit}", "--jq", ".status"],
+                                     capture_output=True, text=True)
+                  if r.returncode and "HTTP 404" not in r.stderr:
+                      sys.exit(f"não consegui comparar {base} com {commit}: {r.stderr.strip()}")
+                  afterwards[(base, commit)] = not r.returncode and r.stdout.strip() == "ahead"
+              return afterwards[(base, commit)]
+
+          def read():
+              d = pathlib.Path("lido")
+              shutil.rmtree(d, ignore_errors=True)
+              try:
+                  gh("release", "download", tag, "--pattern", "server-*.json", "--dir", str(d))
+              except subprocess.CalledProcessError as e:
+                  # Outro sistema no meio do --clobber: o arquivo listado já foi trocado.
+                  print(f"::warning::leitura das fontes falhou (rc {e.returncode}); tentando de novo")
+                  return None
+              latest = d / LATEST
+              old = json.loads(latest.read_bytes()) if latest.exists() else {}
+              return old, {p.name: p.read_bytes() for p in sorted(d.glob("server-*.json")) if p.name != LATEST}
+
+          out = pathlib.Path(LATEST)
+          for attempt in range(12):
+              if attempt:
+                  time.sleep(random.uniform(2, 8))
+              got = read()
+              if got is None:
+                  continue
+              old, raw = got
+              # Semente primeiro: a fonte do próprio sistema, quando existe, vale por cima dela.
+              by_plat = {}
+              for n, b in sorted(raw.items(), key=lambda kv: not kv[0].startswith("server-seed-")):
+                  s = json.loads(b)
+                  by_plat[s["platform"]] = s
+              sources = list(by_plat.values())
+              # Fonte nunca é apagada: sistema do manifesto sem fonte na leitura é outro job no meio do --clobber
+              # dela (apaga e sobe), e compor agora o tiraria da release.
+              if set(old.get("platforms", {})) - set(by_plat):
+                  continue
+              # Manifesto de antes das fontes (sem `platforms`): o sistema que ainda não publicou ganha uma semente
+              # com a entrada que ele já tinha, para não sair da release. Ela tem nome próprio para nunca sobrescrever
+              # a fonte que o job do sistema grava, e toda regravação do manifesto vem depois dela.
+              seeds = set() if "platforms" in old else {k.split("/")[0] for k in old.get("files", {})} - set(by_plat)
+              for p in sorted(seeds):
+                  try:
+                      put(pathlib.Path(f"server-seed-{p}.json"),
+                          {"platform": p, "commit": old.get("commit"), "protocol": None,
+                           "files": {k: v for k, v in old["files"].items() if k.startswith(p + "/")}})
+                  except subprocess.CalledProcessError:
+                      pass   # outro sistema gravando a mesma semente; a releitura confere
+              if seeds:
+                  continue
+              # Os sistemas publicam em runs diferentes (o macOS depois): o topo é o commit mais novo entre as
+              # fontes, para um run atrasado não voltar o manifesto e a tag a uma versão anterior.
+              top = sha
+              for s in sources:
+                  if s["commit"] and s["commit"] != top and comes_after(top, s["commit"]):
+                      top = s["commit"]
+              merged = {"commit": top, "files": {}, "platforms": {}}
+              for s in sources:
+                  merged["files"].update(s["files"])
+                  entry = {"commit": s["commit"]}
+                  if s["protocol"] is not None:   # semente: quem lê busca o protocolo pelo commit
+                      entry["protocol"] = s["protocol"]
+                  entry["api"] = s["api"] if s.get("api") is not None else api_at(s["commit"])
+                  merged["platforms"][s["platform"]] = entry
+              try:
+                  put(out, merged)
+              except subprocess.CalledProcessError:
+                  continue   # outro sistema regravando o manifesto no mesmo instante
+              # Se nenhuma fonte mudou entre a leitura e a gravação, quem chegar depois compõe por cima com a fonte
+              # dele; se mudou, esta gravação pode ter deixado outro sistema de fora e é refeita.
+              again = read()
+              if again is not None and again[1] == raw:
+                  print(out.read_text())
+                  pathlib.Path("topo").write_text(top)
+                  break
+          else:
+              sys.exit(f"{LATEST} não estabilizou")
+          EOF
+          if [ "$(cat topo)" = "$SHA" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$tag" -f sha="$SHA" -F force=true >/dev/null
+          else
+            echo "::notice::a release já tem commit mais novo ($(cat topo)); a tag $tag fica nele."
+          fi
+
+  # O cache de release que a pré-release de branch lê. Só a main grava, e só quando as dependências ou o
+  # toolchain mudam (a chave não existe ainda); nos outros pushes o job termina na consulta.
+  cache-release:
+    if: inputs.branch == 'main'
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(inputs.cache_release) }}
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    concurrency:
+      group: server-cache-release-${{ inputs.branch }}-${{ matrix.os }}
+      cancel-in-progress: true
+    env:
+      CARGO_INCREMENTAL: "0"
+      PERFIL: release
+    permissions:
+      contents: read
+      actions: write
+    defaults:
+      run:
+        working-directory: crates
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: actions/cache/restore@v4
+        id: consulta
+        with:
+          path: *cache-perfil
+          key: *chave-perfil
+          lookup-only: true
+      # A base é o cache anterior do mesmo perfil: só o que mudou compila.
+      - if: &falta-perfil steps.consulta.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: *cache-perfil
+          key: *chave-perfil
+          restore-keys: *chave-perfil-parcial
+      - if: steps.consulta.outputs.cache-hit != 'true' && matrix.target != ''
+        run: rustup target add ${{ matrix.target }}
+      - if: steps.consulta.outputs.cache-hit != 'true' && matrix.zigbuild
+        run: *zig
+      - if: *falta-perfil
+        run: *build-perfil
+      - if: *falta-perfil
+        run: ../scripts/podar-target --cache target
+      - if: *falta-perfil
+        uses: actions/cache/save@v4
+        with:
+          path: *cache-perfil
+          key: ${{ steps.consulta.outputs.cache-primary-key }}
+      - name: Apagar cópias antigas do cache
+        if: *falta-perfil
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREFIXO: server-v3-${{ runner.os }}-${{ runner.arch }}-${{ env.PERFIL }}-
+          CHAVE: ${{ steps.consulta.outputs.cache-primary-key }}
+        run: *apagar-antigos
+
+  # Sistema experimental tem continue-on-error para a falha de build dele não segurar os outros; publicação que
+  # falhou depois de começar (binário novo com manifesto velho) não pode passar calada por isso.
+  publish-check:
+    needs: publish
+    if: always() && startsWith(github.ref, 'refs/heads/')
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          failed=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs" --paginate \
+            --jq '.jobs[] | select(any(.steps[]?; .name == "Publicar na release" and .conclusion == "failure")) | .name')
+          if [ -n "$failed" ]; then
+            echo "::error::publicação falhou em: $failed"
+            exit 1
+          fi
