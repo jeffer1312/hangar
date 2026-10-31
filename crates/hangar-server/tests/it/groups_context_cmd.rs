@@ -1,25 +1,20 @@
-//! `hangar-server pair-context` como processo contra o que o `pair_hook.py` devolvia
-//! (`fixtures/contract/pair_hook`), mais as mudanças decididas: grupo com par de fora (I-3A) e linha
-//! do contrato em grupo entre máquinas (I-4A). O tmux falso é um script de shell, por isso só Unix.
+//! `hangar-server pair-context` como processo, mais grupo com par de fora e linha do contrato em grupo
+//! entre máquinas. O tmux falso é um script de shell, por isso só Unix.
 #![cfg(unix)]
-use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
-fn fixtures() -> BTreeMap<String, Value> {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../backend/tests/fixtures/contract/pair_hook");
-    std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|x| x == "json"))
-        .map(|p| (p.file_stem().unwrap().to_string_lossy().into_owned(), serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap()))
-        .collect()
-}
+#[path = "groups_context_cases.rs"]
+mod cases;
+use cases::*;
 
 struct Run { rc: Option<i32>, stdout: String, elapsed: Duration, diary: String }
 
-/// Mesmo arranjo do `gen_golden.py`: pasta de grupo, HOME com `claude-headless`, PATH só com o tmux falso.
+/// Pasta de grupo, HOME com `claude-headless`, PATH só com o tmux falso.
 /// `tmux` = Some((list-panes, código do has-session)) ou um script inteiro em `Err`.
 fn run(files: &Value, headless: &Value, env: &Value, tmux: Option<Result<(&str, i64), &str>>) -> Run {
     let root = tempfile::Builder::new().prefix("grp-t3-").tempdir().unwrap();
@@ -54,10 +49,13 @@ fn run(files: &Value, headless: &Value, env: &Value, tmux: Option<Result<(&str, 
     Run { rc: out.status.code(), stdout, elapsed: started.elapsed(), diary }
 }
 
-fn run_fixture(fx: &Value) -> Run {
-    let input = &fx["input"];
-    let tmux = input["tmux"].as_object().map(|t| Ok((t["list_panes"].as_str().unwrap(), t["has_session_rc"].as_i64().unwrap())));
-    run(&input["pair_dir"], &input["headless"], &input["env"], tmux)
+fn run_case(case: &Case) -> Run {
+    let object = |set: &[(&str, &str)]| Value::Object(set.iter().map(|(k, v)| (k.to_string(), json!(v))).collect::<Map<_, _>>());
+    run(&object(case.pair_dir), &object(case.headless), &object(case.env), case.tmux.map(Ok))
+}
+
+fn case(name: &str) -> &'static Case {
+    CASES.iter().find(|c| c.name == name).unwrap()
 }
 
 /// `additionalContext` de uma saída do hook.
@@ -66,44 +64,13 @@ fn context(stdout: &str) -> String {
     v["hookSpecificOutput"]["additionalContext"].as_str().unwrap().to_owned()
 }
 
-/// Variantes que a I-3A muda: o texto de grupo vem antes do bloco externo.
-const MIXED: [&str; 2] = ["external_registry_unreadable", "external_via_other_member"];
-/// Sidecar sem `gid` (ou vazio): o Python omitia a linha do contrato.
-const GID_DERIVED: [&str; 2] = ["gid_empty", "gid_missing"];
-
 #[test]
-fn pair_context_matches_the_python_hook() {
-    let mut checked = 0;
-    for (name, fx) in fixtures() {
-        if MIXED.contains(&name.as_str()) { continue; }
-        let got = run_fixture(&fx);
-        assert_eq!(got.rc, Some(0), "{name}");
-        if GID_DERIVED.contains(&name.as_str()) {
-            // Mudança decidida: sem `gid`, o contrato é o do gid derivado (a+b), o mesmo da tool `contract`.
-            let gid = &sha1_smol::Sha1::from("a\nb").digest().to_string()[..8];
-            let line = format!("- Decisões que o grupo consulta vão em <pair>/grupo-{gid}.md (criar se não existir, curto).\n");
-            let ours = context(&got.stdout);
-            assert!(ours.contains(&line), "{name}: {ours}");
-            assert_eq!(ours.replace(&line, ""), context(fx["output"]["stdout"].as_str().unwrap()), "{name}");
-        } else {
-            assert_eq!(got.stdout, fx["output"]["stdout"].as_str().unwrap(), "{name}");
-        }
-        checked += 1;
-    }
-    assert_eq!(checked, 30);
-}
-
-/// I-3A: membro local de grupo com par de fora recebe o texto de grupo (o mesmo de um grupo `a`+`b`
-/// sem tarefa) seguido do bloco externo que o Python devolvia sozinho. Registro ilegível: só o stdout.
-#[test]
-fn mixed_group_reinjects_group_and_external_text() {
-    let fx = fixtures();
-    let group = context(fx["headless_key_unknown_falls_to_pane"]["output"]["stdout"].as_str().unwrap());
-    for name in MIXED {
-        let got = run_fixture(&fx[name]);
-        assert_eq!(got.rc, Some(0), "{name}");
-        let external = context(fx[name]["output"]["stdout"].as_str().unwrap());
-        assert_eq!(context(&got.stdout), format!("{group}\n{external}"), "{name}");
+fn pair_context_output_per_arrangement() {
+    assert_eq!(CASES.len(), 32);
+    for c in CASES {
+        let got = run_case(c);
+        assert_eq!(got.rc, Some(0), "{}", c.name);
+        assert_eq!(got.stdout, c.stdout, "{}", c.name);
     }
 }
 
@@ -134,8 +101,7 @@ fn two_outside_pairs_get_one_block_each() {
 /// (a forma do `external_direct`). Filha ligada também fica só com ele.
 #[test]
 fn pair_context_without_local_others_prints_only_the_outside_warning() {
-    let fx = fixtures();
-    let external = context(fx["external_direct"]["output"]["stdout"].as_str().unwrap());
+    let external = context(case("external_direct").stdout);
     let files = json!({
         "a.json": json!({"peers": ["pai", "ana::rev"], "task": "", "gid": "ab12cd34", "harness": {}, "linked_by": "pai"}).to_string(),
         "external_pairs.json": json!([pair_record("a", "ana", "rev", "Ana")]).to_string(),
@@ -156,7 +122,7 @@ fn legacy_peer_sidecar_reinjects_like_peers() {
     assert!(context(&legacy).contains(&format!("<pair>/grupo-{gid}.md")), "{legacy}");
 }
 
-/// I-4A: grupo entre máquinas cita o caminho na dona e a dona pela tool `contract` nas outras.
+/// Grupo entre máquinas cita o caminho na dona e a dona pela tool `contract` nas outras.
 #[test]
 fn fed_contract_line_follows_the_owner() {
     for (local, line) in [(true, "- Decisões que o grupo consulta vão em <pair>/grupo-fe12.md (criar se não existir, curto)."),
@@ -171,9 +137,8 @@ fn fed_contract_line_follows_the_owner() {
 /// Nenhuma porta, token ou servidor no ambiente: a reinjeção sai só do disco.
 #[test]
 fn pair_context_works_without_server() {
-    let fx = &fixtures()["group"];
-    let got = run_fixture(fx);
-    assert_eq!((got.rc, got.stdout.as_str()), (Some(0), fx["output"]["stdout"].as_str().unwrap()));
+    let got = run_case(case("group"));
+    assert_eq!((got.rc, got.stdout.as_str()), (Some(0), case("group").stdout));
 }
 
 /// Pasta inexistente, sidecar torto, sem argumento, sem tmux ou tmux travado: código 0 e nada no stdout,

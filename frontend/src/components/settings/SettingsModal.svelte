@@ -16,6 +16,7 @@
   import SharedConfigSettings from './SharedConfigSettings.svelte';
   import ComputerControlSettings from './ComputerControlSettings.svelte';
   import PasswordVaultSettings from './PasswordVaultSettings.svelte';
+  import SessionsSettings from './SessionsSettings.svelte';
   import ServidorSeletor from './ServidorSeletor.svelte';
   import ConfigIcone from './ConfigIcone.svelte';
   import BuscaConfig, { TITULO_TELA } from './BuscaConfig.svelte';
@@ -109,6 +110,9 @@
   const LINHAS = [
     { id: 'geral', secao: 'app', rotulo: m.config_geral_linha(), icone: 'globo', servidor: false },
     { id: 'aparencia', secao: 'app', rotulo: m.config_modal_aparencia(), icone: 'pincel', servidor: false },
+    // Grava em todas as máquinas próprias (nunca nas de convite), por isso fica fora do grupo do
+    // servidor do seletor.
+    { id: 'sessoes', secao: 'app', rotulo: m.settings_sessions_title(), icone: 'sliders', servidor: false },
     { id: 'sobre', secao: 'app', rotulo: m.config_modal_sobre(), icone: 'info', servidor: false },
     // O diário é do servidor do seletor, não do aparelho; o convidado continua vendo (`servidor: false`).
     { id: 'diario', secao: 'servidor', rotulo: m.config_diag_titulo(), icone: 'recibo', servidor: false },
@@ -361,6 +365,8 @@
     <p class="st-sem-etiqueta">{m.config_escopo_mista({ etiqueta: m.config_escopo_servidor() })}</p>
   {:else if TELAS_DE_SERVIDOR.includes(telaAtual)}
     <p class="st-valem">{m.config_server_valem({ etiqueta: m.config_escopo_servidor() })}</p>
+  {:else if telaAtual === 'sessoes'}
+    <!-- Grava em todas as máquinas: "vale só neste aparelho" seria falso; o resultado por máquina diz onde. -->
   {:else}
     <p class="st-sem-etiqueta">{m.config_escopo_sem_etiqueta()}</p>
   {/if}
@@ -386,6 +392,8 @@
     {/each}
   {:else if telaAtual === 'geral'}
     <GeneralSettings />
+  {:else if telaAtual === 'sessoes'}
+    <SessionsSettings />
   {:else if telaAtual === 'aparencia'}
     <AppearanceSettings podeAoVivo={isDesktop} onVerAoVivo={() => (aoVivo = true)} />
   {:else if telaAtual === 'orquestracao'}

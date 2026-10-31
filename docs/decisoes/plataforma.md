@@ -297,15 +297,15 @@ Os fatos de configuração continuam no Python, sem chamar o Rust de volta; as p
 catálogo só ficam onde ainda têm consumidores. TTS é outra capacidade: sua migração e a dos
 consumidores de narração estão descritas em [Leitura, narração e traduções no Rust](#leitura-narração-e-traduções-no-rust-29102026).
 
-As referências de equivalência vêm da execução do Python antes da remoção, em
-`backend/tests/fixtures/contract/dictation_public/`. Elas incluem validação da borda HTTP,
+As referências de equivalência vêm da execução do Python antes da remoção e estão escritas em
+`crates/hangar-server/tests/it/dictation_public_cases.rs`. Elas incluem validação da borda HTTP,
 erros acumulados de query, avisos e seleção de provedor; os testes públicos Rust verificam
 também autorização, limites, conta e referência da conversa. A contagem de MCP inclui a
 requisição externa ao serviço, separada das rotas que suas ferramentas chamam.
 
 Diferença aprovada na migração: áudio acima de 100 MiB enviado em blocos, sem
 `Content-Length`, recebe 413 `request body too large`, como o tamanho declarado. O Python
-retornava 500 nesse caso; as capturas originais foram preservadas. Outros erros de leitura
+retornava 500 nesse caso. Outros erros de leitura
 mantêm seu tratamento. Catálogo, status dos provedores e transcrição/teste conservam os tetos
 públicos de 60, 15 e 180 segundos, incluindo espera por configuração e consultas concorrentes.
 
@@ -3151,8 +3151,8 @@ Etapa histórica de 18/10/2026, substituída pela migração completa descrita e
 
 Em 18/10/2026, `GET /api/orq/{exec_id}/conductor` passou a montar registro, sombra do Jev e eventos
 no `hangar-server`. O contrato foi congelado executando `orq_conductor.py` e `orq.py` do commit
-`70d0b9ef4`, em `backend/tests/fixtures/contract/orq-conductor/`: o gerador registra a origem e o
-comando, e o teste Rust compara os valores sem produzir o esperado.
+`70d0b9ef4`; os 93 casos, com o esperado escrito, moram em
+`crates/hangar-server/tests/contract_orq_conductor_cases.rs`.
 
 O watchdog não foi migrado: `GET /api/orq`, `runs._active_run` e os fatos da lista dependem dele.
 O Rust faz uma ida a `/internal/orq/{exec_id}/conductor-facts` para receber caminho validado e

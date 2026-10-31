@@ -659,6 +659,9 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/session-defaults", axum::routing::get(crate::session_defaults::handle).put(crate::session_defaults::handle))
         // Sugestão de nome da sessão genérica: só o dono, nunca repassada (o Python não tem a rota).
         .route("/api/sessions/{name}/rename-suggestion", axum::routing::post(crate::dictation::rename_suggestion::route).delete(crate::dictation::rename_suggestion::route))
+        // Ocultar da lista: só o dono, nunca repassada (o Python não tem a rota).
+        .route("/api/sessions/{name}/hidden", axum::routing::put(crate::session_visibility::route).delete(crate::session_visibility::route))
+        .route("/api/session-auto-hide", axum::routing::get(crate::session_visibility::auto::route).put(crate::session_visibility::auto::route))
         .route("/api/tags", axum::routing::get(crate::tags::handle).put(crate::tags::handle))
         .route("/api/push/expo/subscribe", axum::routing::post(crate::push_expo::subscribe))
         .route("/api/push/vapid", get(crate::push::http::route).fallback(pass_any))
@@ -1321,8 +1324,7 @@ mod tests {
     async fn orchestration_history_uses_the_same_parser_on_public_and_forwarded_ports() {
         let dir = tempfile::tempdir().unwrap();
         let timeline = dir.path().join("timeline.jsonl");
-        let fixture: serde_json::Value = serde_json::from_str(include_str!("../../../backend/tests/fixtures/contract/orq-events/events.json")).unwrap();
-        let lines = fixture["cases"].as_array().unwrap().iter().map(|case| format!("{}\n", case["input"])).collect::<String>();
+        let lines = crate::transcript::orq_cases::CASES.iter().map(|(input, _)| format!("{input}\n")).collect::<String>();
         std::fs::write(&timeline, lines).unwrap();
         let mut state = Arc::try_unwrap(state_with_upstream().await).ok().unwrap();
         state.side.locate = Arc::new(crate::locate::Fixed(Some(InternalInfo {

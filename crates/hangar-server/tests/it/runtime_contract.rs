@@ -1,42 +1,59 @@
 use hangar_api::state::StateEvent;
 use serde_json::Value;
 
+#[path = "runtime_contract_cases.rs"]
+mod cases;
+
+fn scenarios() -> Vec<Value> {
+    let rows: Vec<Value> = serde_json::from_str(cases::SCENARIOS).unwrap();
+    assert_eq!(rows.len(), 24);
+    rows
+}
+
+/// As saídas esperadas, com os campos de `STATE` devolvidos a cada estado.
+fn expected(table: &str, total: usize) -> Vec<Value> {
+    let expand = |compact: &Value| {
+        let mut full: Value = serde_json::from_str(cases::STATE).unwrap();
+        for (key, value) in compact.as_object().unwrap() { full[key] = value.clone(); }
+        full
+    };
+    let mut rows: Vec<Value> = serde_json::from_str(table).unwrap();
+    assert_eq!(rows.len(), total);
+    for row in &mut rows {
+        row["initial_state"] = expand(&row["initial_state"]);
+        for output in row["outputs"].as_array_mut().unwrap() {
+            if output["channel"] == "state" { output["data"] = expand(&output["data"]); }
+        }
+    }
+    rows
+}
+
 #[test]
-fn golden_preserves_public_fields() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../backend/tests/fixtures/headless_runtime");
-    for provider in ["claude", "codex"] {
-        let path = root.join(format!("{provider}-golden.json"));
-        let raw = std::fs::read(&path).expect("gerar o oráculo Python antes da comparação");
-        let scenarios: Vec<Value> = serde_json::from_slice(&raw).unwrap();
-        assert!(!scenarios.is_empty(), "o oráculo não pode ser vazio");
-        for scenario in scenarios {
-            for output in scenario["outputs"].as_array().unwrap() {
-                if output["channel"] == "state" {
-                    let data = output["data"].clone();
-                    let event: StateEvent = serde_json::from_value(data.clone()).unwrap();
-                    assert_eq!(serde_json::to_value(event).unwrap(), data, "{}", scenario["name"]);
-                }
+fn state_events_keep_every_public_field() {
+    for scenario in expected(cases::CLAUDE, 13).into_iter().chain(expected(cases::CODEX, 11)) {
+        for output in scenario["outputs"].as_array().unwrap() {
+            if output["channel"] == "state" {
+                let data = output["data"].clone();
+                let event: StateEvent = serde_json::from_value(data.clone()).unwrap();
+                assert_eq!(serde_json::to_value(event).unwrap(), data, "{}", scenario["name"]);
             }
         }
     }
 }
 
-/// O `interaction_id` do cartão é aleatório e posterior ao oráculo Python: a comparação é do resto.
+/// O `interaction_id` do cartão é aleatório: a comparação é do resto. `codex_subagents` fica fora da tabela.
 fn without_ids(mut state:Value) -> Value {
-    // Campos que só o Rust publica: o oráculo do Python nunca os teve.
     if let Some(state) = state.as_object_mut() { state.remove("interaction_id"); state.remove("codex_subagents"); }
     if let Some(form) = state["codex_question"].as_object_mut() { form.remove("interaction_id"); }
     state
 }
 
 #[test]
-fn claude_public_events_match_the_python_oracle() {
+fn claude_public_events() {
     use hangar_server::runtime::{claude::ClaudeEngine,protocol::*};
     use serde_json::json;
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../backend/tests/fixtures/headless_runtime");
-    let scenarios:Vec<Value> = serde_json::from_slice(&std::fs::read(root.join("scenarios.json")).unwrap()).unwrap();
-    let golden:Vec<Value> = serde_json::from_slice(&std::fs::read(root.join("claude-golden.json")).expect("gerar o oráculo Python autorizado")).unwrap();
+    let scenarios = scenarios();
+    let golden = expected(cases::CLAUDE, 13);
     let mut compared = 0;
     for scenario in scenarios.iter().filter(|s|s["provider"] == "claude"
         && s["conservative_changes"].as_array().unwrap().is_empty()
@@ -49,7 +66,7 @@ fn claude_public_events_match_the_python_oracle() {
         let mut metadata = scenario["metadata"].clone();
         metadata["status_line"] = oracle["initial_state"]["status_line"].clone();
         let mut engine = ClaudeEngine::new(metadata,1,clock);
-        // Como em produção: com o store o cartão ganha o ID que o oráculo Python (anterior aos IDs) não tem.
+        // Como em produção: com o store o cartão ganha o ID, que `without_ids` tira da comparação.
         engine.set_interactions("key-oracle".into(),std::sync::Arc::default()).unwrap();
         let mut publications = Vec::new();
         for (index,step) in scenario["steps"].as_array().unwrap().iter().enumerate() {
@@ -79,12 +96,11 @@ fn claude_public_events_match_the_python_oracle() {
 }
 
 #[test]
-fn codex_public_events_match_the_python_oracle() {
+fn codex_public_events() {
     use hangar_server::runtime::{codex::Engine,protocol::*};
     use serde_json::json;
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../backend/tests/fixtures/headless_runtime");
-    let scenarios:Vec<Value> = serde_json::from_slice(&std::fs::read(root.join("scenarios.json")).unwrap()).unwrap();
-    let golden:Vec<Value> = serde_json::from_slice(&std::fs::read(root.join("codex-golden.json")).expect("gerar o oráculo Python autorizado")).unwrap();
+    let scenarios = scenarios();
+    let golden = expected(cases::CODEX, 11);
     let mut compared = 0;
     for scenario in scenarios.iter().filter(|s|s["provider"] == "codex" && s["conservative_changes"].as_array().unwrap().is_empty()
         && s["steps"].as_array().unwrap().iter().all(|step|step["kind"] == "line")) {
@@ -128,5 +144,5 @@ fn codex_public_events_match_the_python_oracle() {
         assert_eq!(notices,expected_notices,"{}: recusa e aviso local",scenario["name"]);
         compared += 1;
     }
-    assert!(compared >= 2,"oráculo precisa comparar perguntas e fim de turno");
+    assert!(compared >= 2,"comparação precisa incluir perguntas e fim de turno");
 }

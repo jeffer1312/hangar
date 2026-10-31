@@ -29,7 +29,8 @@ import * as m from '../paraglide/messages';
   import { abrirConfig } from '../lib/configNav';
   import { quotaFeed } from '../lib/quotaFeed.svelte';
   import { faixaDeCota } from '../lib/cota';
-  import { createSession, canPair, machineNoticeVisible, machinesAllDown, type DropResult } from '@hangar/core';
+  import { createSession, canPair, machineNoticeVisible, machinesAllDown, splitHidden, type DropResult } from '@hangar/core';
+  import { hiddenSection } from '../lib/hiddenSection.svelte';
   import { listAllServers, getActiveId, selectServer, removeServer, renameServer, updateServer, onServersChanged, snapshotRemocao, removalStillMatches } from '../lib/auth';
   import type { AggSession, Provider, SessionOpeningExtras, WorktreeChoice } from '@hangar/core';
   import type { RemovalSnapshot } from '../lib/auth';
@@ -238,6 +239,15 @@ import * as m from '../paraglide/messages';
   // Gate dos dois ramos do template (agrupado x lista plana): o modelo já traduz a preferência
   // gravada no modo efetivo do celular.
   const showGrouped = $derived(model.groupMode !== 'none');
+
+  // Ocultas saem dos grupos e da lista plana e vão para a seção do fim. O modelo é compartilhado com
+  // a Sidebar do desktop web, que continua mostrando as ocultas misturadas (desktop web congelado).
+  const flatSplit = $derived(splitHidden(model.flatRows));
+  // Buscando, a seção abre como os grupos, sem mexer na preferência gravada.
+  const hiddenOpen = $derived(hiddenSection.open || model.filterText.trim() !== '');
+  const shownGroups = $derived(model.groups
+    .map((g) => ({ ...g, sessions: splitHidden(g.sessions).shown }))
+    .filter((g) => g.sessions.length > 0));
 
   // Entrar/sair do modo seleção fecha o drawer — só o celular tem drawer, então o embrulho fica aqui.
   function toggleSelectMode() {
@@ -606,7 +616,7 @@ import * as m from '../paraglide/messages';
         <p class="filter-empty">{m.lista_vazia_filtro()}</p>
       {:else}
         {#if showGrouped}
-          {#each model.groups as g (g.id)}
+          {#each shownGroups as g (g.id)}
             {@const awaiting = countAwaiting(g.sessions)}
             <div class="group">
               {#if g.label}
@@ -701,7 +711,7 @@ import * as m from '../paraglide/messages';
                "Agrupar por" so aparece com 2+ servidores — entao quem usa um servidor so perdia o
                agrupamento de pareamento inteiro, que e justamente a feature de quem pareia sessoes
                no mesmo repo. Sobrava so o chip dentro do card. -->
-          {#each model.cluster(model.flatRows) as item (item.kind === 'header' ? `ph:${item.gid}` : `${item.session.serverId}:${item.session.name}`)}
+          {#each model.cluster(flatSplit.shown) as item (item.kind === 'header' ? `ph:${item.gid}` : `${item.session.serverId}:${item.session.name}`)}
             {#if item.kind === 'header'}
               {@const rep = groupRep(item.gid)}
                     {@const rotulo = model.pairLabel(item.gid, item.label)}
@@ -755,6 +765,37 @@ import * as m from '../paraglide/messages';
               </div>
             {/if}
           {/each}
+        {/if}
+        {#if flatSplit.hidden.length > 0}
+          <div class="group hidden-section">
+            <button class="group-head" onclick={() => (hiddenSection.open = !hiddenSection.open)} aria-expanded={hiddenOpen}>
+              <span class="group-chevron" class:collapsed={!hiddenOpen} aria-hidden="true">▾</span>
+              <span class="group-label">{m.session_hidden_group({ n: flatSplit.hidden.length })}</span>
+            </button>
+            {#if hiddenOpen}
+              {#each flatSplit.hidden as session (`${session.serverId}:${session.name}`)}
+                <SessionCard
+                  {session}
+                  groupBadge={selo(session)}
+                  onClick={() => openSession(session)}
+                  onDelete={() => handleDelete(session)}
+                  onResume={() => handleResume(session)}
+                  onRename={(nv) => handleRename(session, nv)}
+                  onGit={() => handleGit(session)}
+                  selectMode={model.selectMode}
+                  selected={model.selected.has(`${session.serverId}:${session.name}`)}
+                  onToggleSelect={() => model.toggleSelected(`${session.serverId}:${session.name}`)}
+                  showFolder
+                  showMachine
+                  peers={allSessions}
+                  onShare={() => (shareAlvo = { name: session.name, serverId: session.serverId })}
+                  onPairAccept={() => (pairAlvo = { name: session.name, serverId: session.serverId })}
+                  onBastao={() => { bastaoAlvo = { name: session.name, cwd: session.cwd ?? '', serverId: session.serverId }; showCreateSheet = true; }}
+                  onOpenArbiter={arbiterOf(session)}
+                />
+              {/each}
+            {/if}
+          </div>
         {/if}
       {/if}
     {/if}

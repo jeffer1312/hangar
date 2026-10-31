@@ -12,6 +12,9 @@ use std::{
     time::Duration,
 };
 
+#[path = "commands_cases.rs"]
+mod cases;
+
 #[derive(Deserialize)]
 struct Case {
     name: String,
@@ -23,16 +26,28 @@ struct Case {
     expected: Vec<CommandInfo>,
 }
 
+/// Troca `@base` e os nomes de `expected` pelos comandos de `BASE`, por extenso.
+fn table() -> Vec<Case> {
+    let base: Vec<Value> = serde_json::from_str(cases::BASE).unwrap();
+    let mut rows: Vec<Value> = serde_json::from_str(cases::CASES).unwrap();
+    rows.push(serde_json::from_str(cases::PLATFORM_PATH_CASE).unwrap());
+    assert_eq!(rows.len(), 22);
+    rows.into_iter()
+        .map(|mut row| {
+            let expected = row["expected"].as_array().unwrap().iter().flat_map(|item| match item.as_str() {
+                Some("@base") => base.clone(),
+                Some(name) => vec![base.iter().find(|c| c["name"] == name).unwrap().clone()],
+                None => vec![item.clone()],
+            }).collect();
+            row["expected"] = Value::Array(expected);
+            serde_json::from_value(row).unwrap()
+        })
+        .collect()
+}
+
 #[test]
-fn commands_match_frozen_python_catalog() {
-    #[cfg(not(windows))]
-    let raw = include_str!("../../../../backend/tests/fixtures/contract/commands/catalog.json");
-    #[cfg(windows)]
-    let raw =
-        include_str!("../../../../backend/tests/fixtures/contract/commands/catalog-windows.json");
-    let fixture: Value = serde_json::from_str(raw).unwrap();
-    let cases: Vec<Case> = serde_json::from_value(fixture["cases"].clone()).unwrap();
-    for case in cases {
+fn commands_catalog_per_scenario() {
+    for case in table() {
         let root = tempfile::tempdir().unwrap();
         let home = root.path().join("home");
         fs::create_dir_all(&home).unwrap();
@@ -53,7 +68,7 @@ fn commands_match_frozen_python_catalog() {
             &case.excluded,
             case.terminal,
         );
-        // A fixture conserva a saída original; o único acréscimo aprovado é provado à parte.
+        // `reload-plugins` é provado à parte, abaixo.
         let actual: Vec<_> = actual
             .into_iter()
             .filter(|command| command.name != "reload-plugins")

@@ -24,6 +24,7 @@
     jev: m.jev_title,
     migration: m.migration_title,
     cofre: m.vault_web_title,
+    sessoes: m.settings_sessions_title,
   };
 
   export interface EntradaBusca {
@@ -37,6 +38,8 @@
   export const ENTRADAS: readonly EntradaBusca[] = [
     { tela: 'geral', rotulo: m.config_idioma_rotulo, descricao: m.config_idioma_nota_reload },
     { tela: 'geral', rotulo: m.config_moeda_rotulo, descricao: m.config_moeda_busca_desc },
+
+    { tela: 'sessoes', rotulo: m.session_auto_hide_label },
 
     { tela: 'aparencia', rotulo: m.config_tema_curto, descricao: m.config_aparencia_tema_desc_web },
     { tela: 'aparencia', rotulo: m.config_fundo_curto, descricao: m.config_aparencia_fundo_desc },

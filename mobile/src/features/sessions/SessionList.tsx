@@ -11,11 +11,13 @@ import {
   formataErro,
   groupBadges,
   groupGlobal,
+  hideSession,
   machineNoticeVisible,
   machinesAllDown,
   renameSession,
   setPairAccess,
   resumeSession,
+  showSession,
   type AggSession,
   type GroupBy,
   type Server,
@@ -28,7 +30,8 @@ import { LiveVoiceChatButton } from '../voice/LiveVoiceChatButton';
 import { Icon } from '../../ui/Icon';
 import { toast } from '../../ui/Toast';
 import { SessionRow, type PairAction } from './SessionRow';
-import { buildSessionSections, sessionGroupKey, type SessionSection } from './sessionSections';
+import { buildSessionSections, HIDDEN_SECTION_ID, sessionGroupKey, type SessionSection } from './sessionSections';
+import { setHiddenSectionOpen, useHiddenSectionOpen } from './hiddenSectionPref';
 import { GroupBlockHeader, SessionSectionCard, SessionSectionHeader } from './SessionSection';
 import { PairInviteSheet, type PairTarget } from '../pair/PairInviteSheet';
 import { PairAcceptSheet, type PairAcceptTarget } from '../pair/PairAcceptSheet';
@@ -213,6 +216,15 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
     [comServidor],
   );
 
+  // A marca mora no servidor da sessão, por endereço explícito: não troca a ativa. A linha muda de
+  // lugar quando a lista do servidor chega, sem aviso de sucesso.
+  const toggleHidden = useCallback((s: AggSession, hide: boolean) => {
+    const server = useServers.getState().servers.find((x) => x.id === s.serverId && !x.invite);
+    if (!server) { toast.erro(m.servidor_nao_existe()); return; }
+    (hide ? hideSession : showSession)(server, s.name).catch((e: unknown) =>
+      toast.erro((hide ? m.session_hide_failed : m.session_show_failed)({ error: mensagemDe(e) })));
+  }, []);
+
   // O par é desfeito e liberado no servidor PRÓPRIO, por endereço explícito: não troca a ativa.
   const fazerPar = useCallback((s: AggSession, a: PairAction) => {
     const own = (id: string) => useServers.getState().servers.find((x) => x.id === id && !x.invite);
@@ -260,7 +272,9 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
   const busca = filtro.trim().toLowerCase();
   // Filtrar + ordenar + agrupar a lista inteira a cada render é caro, e arrastar um slider de
   // material re-renderiza todo mundo que lê o tema — inclusive esta tela.
-  const sections = useMemo(() => buildSessionSections(rows, modo, busca, recolhidos, undefined, pairGroups), [rows, busca, modo, recolhidos, pairGroups]);
+  const hiddenOpen = useHiddenSectionOpen();
+  const sections = useMemo(() => buildSessionSections(rows, hiddenOpen ? 'expanded' : 'collapsed', modo, busca, recolhidos, undefined, pairGroups),
+    [rows, hiddenOpen, busca, modo, recolhidos, pairGroups]);
   const variosServidores = servers.length > 1;
 
   // Sessão que entra ou sai do topo desliza para o lugar novo em vez de pular. A chave ignora a
@@ -276,7 +290,7 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
   }
 
   const alternarGrupo = useCallback(
-    (id: string) =>
+    (id: string) => id === HIDDEN_SECTION_ID ? setHiddenSectionOpen(!hiddenOpen) :
       setRecolhidos((atual) => {
         const novo = new Set(atual);
         const chave = sessionGroupKey(modo, id);
@@ -285,7 +299,7 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
         if (home) homeView.collapsedGroups = novo;
         return novo;
       }),
-    [modo, home],
+    [modo, home, hiddenOpen],
   );
 
   // "Todas as sessões" desfaz tudo que esconde linha: filtro e grupos recolhidos.
@@ -496,6 +510,7 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
               onResume={retomar}
               onWorktree={proprios.has(item.serverId) ? abrirWorktree : undefined}
               onPair={proprios.has(item.serverId) || item.outside ? fazerPar : undefined}
+              onHidden={proprios.has(item.serverId) && !item.outside ? toggleHidden : undefined}
               crossBadgeText={crossBadges.get(pickKey(item.serverId, item.name))?.text}
               crossBadgeMachines={crossBadges.get(pickKey(item.serverId, item.name))?.machines}
             />}

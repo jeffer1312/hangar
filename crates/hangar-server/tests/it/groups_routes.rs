@@ -1,7 +1,6 @@
-//! Rotas de grupo de uma máquina no Rust (`/pair`, `DELETE /pair`, `/group-message`,
-//! `/pair/contract`) com as respostas do Python: o golden `group_routes.json` roda a mesma sequência
-//! nas rotas do FastAPI. As sessões são Claude de mentira (tmux falso da lista); o aviso vai ao `/input`
-//! do Python falso, porque nenhuma delas tem entrada no runtime do Rust.
+//! Rotas de grupo de uma máquina (`/pair`, `DELETE /pair`, `/group-message`, `/pair/contract`). As
+//! sessões são Claude de mentira (tmux falso da lista); o aviso vai ao `/input` do Python falso, porque
+//! nenhuma delas tem entrada no runtime do Rust.
 #![cfg(unix)]
 use crate::common;
 use crate::fake;
@@ -97,6 +96,9 @@ fn orchestrators(srv: &Server, names: &Value) {
 #[path = "groups_native.rs"]
 mod native_contract;
 
+#[path = "groups_routes_cases.rs"]
+pub mod cases;
+
 #[tokio::test(flavor = "multi_thread")]
 async fn native_promotion_without_identity_keeps_the_group_and_warns() {
     let dir = tempfile::tempdir().unwrap();
@@ -113,11 +115,12 @@ async fn native_promotion_without_identity_keeps_the_group_and_warns() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn routes_answer_like_python() {
+async fn routes_sequence() {
     let dir = tempfile::tempdir().unwrap();
     let srv = server(dir.path(), 4).await;
-    let steps = common::golden("group_routes.json");
-    let golden_gid = "9a9a9a9a";
+    let steps: Value = serde_json::from_str(cases::ROUTES).unwrap();
+    assert_eq!(steps.as_array().unwrap().len(), 22);
+    let table_gid = "9a9a9a9a";
     let names = ["s0", "s1", "s2", "s3"];
     let mut gid = String::new();
     for step in steps.as_array().unwrap() {
@@ -128,8 +131,8 @@ async fn routes_answer_like_python() {
         }
         let before = input_hits(&srv.python, &names);
         let (status, body) = call(srv.addr, step["method"].as_str().unwrap(), step["path"].as_str().unwrap(), step.get("body"), OWNER).await;
-        if step["python_only"] == true {
-            // I-1A: o 422 é do Rust, com código; o Python nunca recebe o corpo.
+        if step["body_refused"] == true {
+            // O 422 é do Rust, com código; o Python nunca recebe o corpo.
             assert_eq!((status, body["detail"]["code"].clone()), (422, json!("erro_corpo_invalido")), "{name}");
             assert_eq!(srv.python.hits_to(&format!("/api/sessions/{}", step["path"].as_str().unwrap())), 0, "{name}");
             continue;
@@ -138,14 +141,14 @@ async fn routes_answer_like_python() {
             assert!(g.len() == 8 && g.bytes().all(|b| b.is_ascii_hexdigit()), "{name}: gid {g}");
             gid = g.to_owned();
         }
-        // A leitura do contrato passou a trazer a dona e o `mtime` (gravar exige o lido); o golden do Python não os tem.
+        // Dona e `mtime` (gravar exige o lido) variam por execução: conferidos aqui, fora da tabela.
         let mut body = body;
         if step["path"].as_str().unwrap().ends_with("/pair/contract") && status == 200 {
             let map = body.as_object_mut().unwrap();
             assert_eq!(map.remove("owner"), Some(json!("casa")), "{name}");
             assert!(map.remove("mtime").is_some_and(|m| m.is_string()), "{name}");
         }
-        let actual = common::canon(&body).replace(&gid, golden_gid).replace(srv.pair.to_str().unwrap(), "<pair>");
+        let actual = common::canon(&body).replace(&gid, table_gid).replace(srv.pair.to_str().unwrap(), "<pair>");
         assert_eq!((status as u64, actual), (step["status"].as_u64().unwrap(), common::canon(&step["response"])), "{name}");
         let after = input_hits(&srv.python, &names);
         let delivered: Vec<&str> = names.iter().zip(before.iter().zip(&after)).filter(|(_, (b, a))| a > b).map(|(n, _)| *n).collect();

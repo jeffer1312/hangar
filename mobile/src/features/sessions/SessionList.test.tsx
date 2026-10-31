@@ -63,6 +63,7 @@ vi.mock('@react-native-menu/menu', () => ({
       React.createElement('button', { key: action.id, 'data-action': action.id, 'data-state': action.state,
         onClick: () => onPressAction({ nativeEvent: { event: action.id } }) }, action.title)) : [])),
 }));
+vi.mock('../../stores/prefs', () => ({ prefs: { getBoolean: () => undefined, set: () => {} } }));
 vi.mock('../../ui/HangarMark', () => ({ HangarMark: () => null }));
 vi.mock('../../ui/Icon', () => ({ Icon: () => null }));
 vi.mock('../../ui/Toast', () => ({ toast: { erro: calls.error, ok: calls.ok } }));
@@ -91,8 +92,12 @@ vi.mock('../../paraglide/messages', () => ({ ...Object.fromEntries((
   'native_new_chat_title native_sidebar_all_sessions lista_sessoes_plural sessao_expandir sessao_recolher ' +
   'lista_carregando lista_vazia_filtro lista_nenhuma_ativa comum_cancelar sessao_excluir sessao_excluir_curto servidor_nao_existe ' +
   'comum_carregando lista_nenhum_servidor lista_pareie_qr native_sidebar_awaiting home_sessions_awaiting home_sessions_working home_sessions_ready home_machines_offline sessao_recolher ' +
-  'sessao_renomear sessao_git convite_parar orq_row_badge native_par_convidar native_par_menu sessao_worktree_abrir'
+  'sessao_renomear sessao_git convite_parar orq_row_badge native_par_convidar native_par_menu sessao_worktree_abrir ' +
+  'session_hide_from_list session_show_in_list session_hide_waiting'
 ).split(' ').map((key) => [key, () => key])),
+  session_hidden_group: ({ n }: { n: number }) => `session_hidden_group:${n}`,
+  session_hide_failed: ({ error }: { error: string }) => `session_hide_failed:${error}`,
+  session_show_failed: ({ error }: { error: string }) => `session_show_failed:${error}`,
   home_sessions_more_ready: ({ n }: { n: number }) => `home_sessions_more_ready:${n}`,
   lista_buscar_dentro: ({ q }: { q: string }) => `lista_buscar_dentro:${q}`,
   lista_servidor_offline: ({ label }: { label: string }) => `${label}:offline`,

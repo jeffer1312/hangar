@@ -24,8 +24,10 @@ export default function Index() {
   const router = useRouter();
   const focused = useIsFocused();
   const tablet = useTabletLandscape();
-  const params = useLocalSearchParams<{ compose?: string | string[] }>();
+  const params = useLocalSearchParams<{ compose?: string | string[]; hidden?: string | string[] }>();
   const compose = Array.isArray(params.compose) ? params.compose[0] : params.compose;
+  // "Ver sessões ocultas" da página Sessões: a lista precisa estar à vista, com a seção já aberta.
+  const hidden = Array.isArray(params.hidden) ? params.hidden[0] : params.hidden;
   const activeId = useServers((s) => s.activeId);
   const count = useSessions((s) => s.rows.filter((row) => row.state !== 'dead').length);
   // O contador lê a lista também com a gaveta fechada e a tela de nova conversa à frente.
@@ -50,6 +52,12 @@ export default function Index() {
     openConversation(true);
     router.setParams({ compose: undefined });
   }, [compose, openConversation, router]));
+
+  useFocusEffect(useCallback(() => {
+    if (hidden !== '1') return;
+    showSessions();
+    router.setParams({ hidden: undefined });
+  }, [hidden, showSessions, router]));
 
   useFocusEffect(useCallback(() => {
     if (tablet || Platform.OS !== 'android') return;
