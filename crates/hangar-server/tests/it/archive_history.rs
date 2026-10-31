@@ -35,6 +35,8 @@ struct Harness {
     address: SocketAddr,
     hits: Arc<Mutex<Vec<String>>>,
     client: reqwest::Client,
+    /// O diário do índice da busca, que o Arquivo também usa: (código, detalhe).
+    reports: Arc<Mutex<Vec<(&'static str, String)>>>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 
@@ -74,9 +76,18 @@ impl Harness {
             ("CLAUDE_CONFIG_DIR", home.join(".claude-a").to_string_lossy().into_owned())];
         state.accounts = hangar_server::accounts::AccountService::new(hangar_server::accounts::environment::AccountEnvironment::from_map(
             env.into_iter().map(|(k, v)| (k.to_owned(), v)).collect()));
+        let reports = Arc::new(Mutex::new(Vec::new()));
+        let diary = reports.clone();
+        state.search = hangar_server::search::Index::new(&dir.path().join("idx"), Arc::new(|| Ok(Vec::new())),
+            Arc::new(move |code, detail| diary.lock().unwrap().push((code, detail))), Default::default());
         let app = router(Arc::new(state));
         let server = tokio::spawn(async move { axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await.unwrap() });
-        Self { _dir: dir, home, address, hits, client: reqwest::Client::new(), tasks: vec![up_task, server] }
+        Self { _dir: dir, home, address, hits, client: reqwest::Client::new(), reports, tasks: vec![up_task, server] }
+    }
+
+    /// Os detalhes registrados sob `code`.
+    fn reported(&self, code: &str) -> Vec<String> {
+        self.reports.lock().unwrap().iter().filter(|(c, _)| *c == code).map(|(_, d)| d.clone()).collect()
     }
 
     fn url(&self, path: &str) -> String { format!("http://{}{path}", self.address) }
@@ -448,4 +459,41 @@ async fn arq44_transfer_image_by_record() {
     let (status, body) = h.get(&url).await;
     assert_eq!((status, body["detail"]["code"].clone()), (404, json!("erro_nao_encontrado")));
     assert!(h.hits.lock().unwrap().is_empty());
+}
+
+/// O status de cada falha fica como era, mas a causa real vai ao diário, uma vez por arquivo.
+#[cfg(unix)]
+#[tokio::test]
+async fn archive_history_failures_keep_the_status_and_write_the_cause_once() {
+    use std::os::unix::fs::PermissionsExt;
+    let h = Harness::new().await;
+    // Transcript sem permissão: 503 com código.
+    let transcript = h.home.join(".claude-a/projects").join(NORMAL.0).join(format!("{}.jsonl", NORMAL.1));
+    std::fs::set_permissions(&transcript, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let readable = std::fs::read(&transcript).is_ok(); // root lê mesmo assim
+    let first = h.get(&history(NORMAL.0, NORMAL.1, "")).await;
+    let second = h.get(&history(NORMAL.0, NORMAL.1, "")).await;
+    std::fs::set_permissions(&transcript, std::fs::Permissions::from_mode(0o644)).unwrap();
+    if !readable {
+        assert_eq!((first.0, first.1["error_code"].clone()), (503, json!("archive_history_io")));
+        assert_eq!(second.0, 503);
+        let causes = h.reported("arquivo.transcript_ilegivel");
+        assert_eq!(causes.len(), 1, "{causes:?}");
+        assert!(causes[0].contains(NORMAL.1) && causes[0].contains("ermission denied"), "{causes:?}");
+    }
+    // Histórico da transferência inválido: o 409 de sempre, com a causa no diário.
+    let j = joined(&h);
+    rewrite_prefix(&j.rollout);
+    for _ in 0..2 {
+        assert_eq!(h.get(&history("x", THREAD, "?provider=codex")).await.0, 409);
+    }
+    // Registro ilegível: o 404 de conversa, com a causa no diário.
+    std::fs::write(&j.record, "{}").unwrap();
+    let id = format!("transfer:{TRANSFER}:claude:{}", j.collision);
+    for _ in 0..2 {
+        assert_eq!(h.get(&image("project", THREAD, &id, "0", "")).await.0, 404);
+    }
+    let causes = h.reported("arquivo.transferencia_ilegivel");
+    assert_eq!(causes.len(), 2, "uma por fonte, não por pedido: {causes:?}");
+    assert!(causes.iter().all(|c| c.len() > TRANSFER.len()), "{causes:?}");
 }

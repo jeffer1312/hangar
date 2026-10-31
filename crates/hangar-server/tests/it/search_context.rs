@@ -31,6 +31,8 @@ struct Scene {
     home: PathBuf,
     python: Arc<Fake>,
     address: SocketAddr,
+    /// O diário do índice da busca: (código, detalhe).
+    reports: Arc<std::sync::Mutex<Vec<(&'static str, String)>>>,
     task: tokio::task::JoinHandle<()>,
 }
 impl Drop for Scene {
@@ -73,12 +75,16 @@ impl Scene {
         ]);
         if let Some(fixed) = fixed { env.insert("CP_CLAUDE_CONFIG_DIRS".into(), fixed.replace("{HOME}", &text(&home))); }
         state.accounts = AccountService::new(AccountEnvironment::from_map(env));
+        let reports = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let diary = reports.clone();
+        state.search = hangar_server::search::Index::new(&dir.path().join("idx"), Arc::new(|| Ok(Vec::new())),
+            Arc::new(move |code, detail| diary.lock().unwrap().push((code, detail))), Default::default());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let task = tokio::spawn(async move {
             axum::serve(listener, router(Arc::new(state)).into_make_service_with_connect_info::<SocketAddr>()).await.unwrap();
         });
-        Self { _dir: dir, home, python, address, task }
+        Self { _dir: dir, home, python, address, reports, task }
     }
 
     async fn get(&self, query: &str) -> (StatusCode, Value) {
@@ -245,15 +251,20 @@ async fn search_context_orders_by_clock_merges_the_archive_queue_and_numbers_ext
 
 #[cfg(unix)]
 #[tokio::test]
-async fn search_context_with_an_unreadable_transcript_is_404_of_the_excerpt() {
-    // CTX-13: o Python abre o jsonl, falha e devolve histórico vazio.
+async fn search_context_with_an_unreadable_transcript_is_503_with_the_cause_in_the_diary() {
+    // CTX-13: o Python devolvia histórico vazio (404 de trecho), escondendo a falha de leitura.
     use std::os::unix::fs::PermissionsExt;
     let scene = Scene::new(None).await;
     let path = synthetic(&scene);
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
     if std::fs::read(&path).is_ok() { return; } // root lê mesmo assim
-    assert_eq!(scene.ctx("-p", "11111111-1111-4111-8111-111111111111", "a2", Some("1")).await,
-        (StatusCode::NOT_FOUND, detail("erro_trecho_nao_encontrado", "a mensagem não está mais nessa conversa")));
+    for _ in 0..2 {
+        assert_eq!(scene.ctx("-p", "11111111-1111-4111-8111-111111111111", "a2", Some("1")).await,
+            (StatusCode::SERVICE_UNAVAILABLE, detail("search_context_io", "o transcript não pôde ser lido")));
+    }
+    let causes: Vec<String> = scene.reports.lock().unwrap().iter().filter(|(c, _)| *c == "busca.contexto_ilegivel").map(|(_, d)| d.clone()).collect();
+    assert_eq!(causes.len(), 1, "uma vez por transcript: {causes:?}");
+    assert!(causes[0].contains("ermission denied"), "{causes:?}");
 }
 
 #[tokio::test]

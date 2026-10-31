@@ -86,8 +86,19 @@ fn find(st: &AppState, project: &str, sid: &str, a: &Asked) -> Result<(PathBuf, 
     let (path, codex_home) = archive::locate(&w, project, sid, a.config_dir.as_deref(), a.provider, a.codex_account.as_deref())?;
     let Some(codex_home) = codex_home else { return Ok((path, None)) };
     let record = transfer::archive_record(&env.home, &codex_home, &crate::locate::session_key(&path.to_string_lossy()))
-        .map_err(|_| history_invalid())?;
+        .map_err(|e| transfer_failed(st, &path, e))?;
     Ok((path, record.map(|r| (r, codex_home))))
+}
+
+/// A causa real de uma falha cujo status a rota mantém, no diário, uma vez por `at`.
+fn note(st: &AppState, code: &'static str, at: &str, e: impl std::fmt::Display) {
+    st.search.report_once(code, at, || format!("{at}: {e}"));
+}
+
+/// `history_invalid` com a causa no diário.
+fn transfer_failed(st: &AppState, at: &Path, e: impl std::fmt::Display) -> OpenError {
+    note(st, "arquivo.transferencia_ilegivel", &at.to_string_lossy(), e);
+    history_invalid()
 }
 
 /// Uma fonte inválida da transferência nunca vira conversa vazia nem o rollout cru.
@@ -105,7 +116,10 @@ fn archived_image(st: &AppState, sid: &str, event_id: &str, idx: i64, asked: Opt
     let record = match transfer::load_record(home, &id) {
         Ok(Some(record)) => record,
         Ok(None) => return Ok(None),
-        Err(_) => return Err(not_found()),
+        Err(e) => {
+            note(st, "arquivo.transferencia_ilegivel", &id, e);
+            return Err(not_found());
+        }
     };
     let boundary = &record["boundary"];
     if record["phase"] != "complete" || !boundary.is_object() || !record["source"].is_object() { return Err(history_invalid()); }
@@ -125,22 +139,27 @@ fn archived_image(st: &AppState, sid: &str, event_id: &str, idx: i64, asked: Opt
     let rollout = if rollout.is_file() { rollout } else {
         let name = rollout.file_name().map(|n| n.to_owned()).unwrap_or_default();
         let mut found = Vec::new();
-        walk(&owner.home.join("archived_sessions"), &name, &mut found);
+        walk(st, &owner.home.join("archived_sessions"), &name, &mut found);
         found.retain(|c| archive::codex_owner(&accounts, c).ok().flatten().is_some_and(|o| same(&o.home, &owner.home)));
         found.sort_by_key(|c| c.canonicalize().unwrap_or_else(|_| c.clone()));
         found.dedup_by_key(|c| c.canonicalize().unwrap_or_else(|_| c.clone()));
         let [only] = found.as_slice() else { return Err(history_invalid()) };
         only.clone()
     };
-    transfer::verify_boundary(&record, &rollout, &owner.home).map_err(|_| history_invalid())?;
-    transfer::historical_image(&record, event_id, idx).map_err(|_| history_invalid())
+    transfer::verify_boundary(&record, &rollout, &owner.home).map_err(|e| transfer_failed(st, &rollout, e))?;
+    transfer::historical_image(&record, event_id, idx).map_err(|e| transfer_failed(st, &rollout, e))
 }
 
-/// Os arquivos de nome `name` sob `dir`, em qualquer profundidade.
-fn walk(dir: &Path, name: &std::ffi::OsStr, out: &mut Vec<PathBuf>) {
-    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+/// Os arquivos de nome `name` sob `dir`, em qualquer profundidade; pasta ilegível vai ao diário.
+fn walk(st: &AppState, dir: &Path, name: &std::ffi::OsStr, out: &mut Vec<PathBuf>) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return,
+        Err(e) => return note(st, "arquivo.pasta_ilegivel", &dir.to_string_lossy(), e),
+    };
+    for entry in entries.flatten() {
         let path = entry.path();
-        if path.is_dir() { walk(&path, name, out); } else if path.file_name() == Some(name) && path.is_file() { out.push(path); }
+        if path.is_dir() { walk(st, &path, name, out); } else if path.file_name() == Some(name) && path.is_file() { out.push(path); }
     }
 }
 
@@ -160,7 +179,7 @@ pub async fn history(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
         let tail = (tail > 0).then(|| tail.min(TAIL_MAX) as usize);
         let read = match transfer {
             Some((record, owner_home)) => {
-                let mut evs = transfer::archived_history(&record, &path, &owner_home).map_err(|_| history_invalid())?;
+                let mut evs = transfer::archived_history(&record, &path, &owner_home).map_err(|e| transfer_failed(&worker, &path, e))?;
                 if let Some(n) = tail {
                     evs.retain(is_message);
                     evs.drain(..evs.len().saturating_sub(n));
@@ -169,12 +188,13 @@ pub async fn history(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
             }
             None => read_history(&worker, &path, a.provider, tail),
         };
+        let at = path.to_string_lossy();
         Ok(match read {
             Ok(evs) => match serde_json::to_vec(&evs) {
                 Ok(body) => Outcome::Done(([(header::CONTENT_TYPE, "application/json")], body).into_response()),
-                Err(_) => Outcome::Unreadable,
+                Err(e) => { note(&worker, "arquivo.historico_json", &at, e); Outcome::Unreadable }
             },
-            Err(_) => Outcome::Unreadable,
+            Err(e) => { note(&worker, "arquivo.transcript_ilegivel", &at, e); Outcome::Unreadable }
         })
     }).await;
     match done {
@@ -390,10 +410,13 @@ pub async fn image(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
                 _ => e,
             })?;
             match transfer {
-                Some((record, _)) => transfer::historical_image(&record, &uuid, idx).map_err(|_| history_invalid())?,
+                Some((record, _)) => transfer::historical_image(&record, &uuid, idx).map_err(|e| transfer_failed(&worker, &path, e))?,
                 None => match crate::session_media::find_image(&path, &uuid, idx) {
                     Ok(found) => found.map(|(raw, media)| (raw, media.to_owned())),
-                    Err(_) => return Ok(Outcome::Unreadable),
+                    Err(e) => {
+                        note(&worker, "arquivo.transcript_ilegivel", &path.to_string_lossy(), e);
+                        return Ok(Outcome::Unreadable);
+                    }
                 },
             }
         };

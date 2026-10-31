@@ -96,10 +96,13 @@ fn excerpt(st: &AppState, p: &Params) -> Response {
     };
     let msgs: Vec<ChatEvent> = match crate::archive_history::read_history(st, &jsonl, provider, None) {
         Ok(evs) => evs.into_iter().filter(crate::archive_history::is_message).collect(),
-        // Como o Python: transcript que não abre é conversa vazia, e o trecho não está mais nela.
-        Err(_) => {
-            st.diag.report("rust.search_context_unreadable", &p.session_id, "search_context_io", "o transcript não pôde ser lido");
-            Vec::new()
+        // Sumiu depois de achado: o trecho não está mais nele.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        // Ilegível não é conversa vazia: o 404 esconderia a falha.
+        Err(e) => {
+            let at = jsonl.to_string_lossy();
+            st.search.report_once("busca.contexto_ilegivel", &at, || format!("{at}: {e}"));
+            return refused(503, "search_context_io", "o transcript não pôde ser lido", json!({}));
         }
     };
     let Some(i) = msgs.iter().position(|ev| ev.id == p.event_id) else {
