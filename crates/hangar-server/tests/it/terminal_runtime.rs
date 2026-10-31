@@ -1060,11 +1060,12 @@ async fn terminal_runtime_a_starting_life_runs_a_first_slash_command_once_its_co
     let saved=f.io.native_record.lock().unwrap().take();std::fs::remove_file(&native).unwrap();
     let h=f.start_grace(Duration::from_secs(24*3600));
     let io=f.io.clone();
-    let opens=tokio::spawn(async move {tokio::time::sleep(Duration::from_millis(300)).await;*io.native_record.lock().unwrap()=saved;io.refresh_record();});
+    let opens=tokio::spawn(async move {tokio::time::sleep(Duration::from_millis(300)).await;let before=io.calls.lock().unwrap().len();*io.native_record.lock().unwrap()=saved;io.refresh_record();before});
     let result=h.command(f.command("primeira","/pr-review-auto 299")).await.unwrap();
-    opens.await.unwrap();
+    let before=opens.await.unwrap();
     assert_eq!(result.disposition,hangar_server::runtime::protocol::Disposition::Accepted,"{result:?}");
     assert_eq!(typed_at(&f,"/pr-review-auto 299").len(),1);
+    assert!(typed_at(&f,"/pr-review-auto 299").iter().all(|&i|i>=before),"comando digitado antes da conversa abrir");
     // Conversa já provada: se ela some depois, o comando não espera a subida de novo.
     f.io.native_record.lock().unwrap().take();std::fs::remove_file(&native).unwrap();
     let since=std::time::Instant::now();
