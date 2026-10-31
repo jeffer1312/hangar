@@ -6,6 +6,8 @@
 //! mensagem), para listar sem reabrir os transcripts.
 
 mod db;
+pub(crate) mod hits;
+pub mod http;
 mod ingest;
 mod watch;
 #[cfg(test)]
@@ -140,6 +142,15 @@ impl Index {
 
     /// O do servidor: contas do catálogo e a do processo, banco ao lado do de custos, diário do Rust.
     pub fn server(service: crate::accounts::AccountService) -> Self {
+        let report: Reporter = Arc::new(|code, detail| {
+            crate::diag::record_blocking(crate::diag::diary_dir().as_deref(),
+                &[serde_json::json!({"evento": code, "nivel": "aviso", "detalhe": detail})], "busca");
+        });
+        Self::for_accounts(service, &crate::costs::index::default_dir(), report, Timing::default())
+    }
+
+    /// Contas do catálogo do serviço e a do processo; banco em `dir`.
+    pub fn for_accounts(service: crate::accounts::AccountService, dir: &Path, report: Reporter, timing: Timing) -> Self {
         let server_dir = service.env.claude_base.clone();
         let accounts: AccountSource = Arc::new(move || {
             let rows = service.claude_catalog().map_err(|e| e.code.to_string())?;
@@ -147,12 +158,14 @@ impl Index {
                 .filter_map(|r| r["path"].as_str().filter(|p| !p.is_empty()).map(str::to_owned)).collect();
             Ok(server_accounts(&dirs, &server_dir))
         });
-        let report: Reporter = Arc::new(|code, detail| {
-            crate::diag::record_blocking(crate::diag::diary_dir().as_deref(),
-                &[serde_json::json!({"evento": code, "nivel": "aviso", "detalhe": detail})], "busca");
-        });
-        Self::new(&crate::costs::index::default_dir(), accounts, report, Timing::default())
+        Self::new(dir, accounts, report, timing)
     }
+
+    /// As contas que a passada varreria agora (a busca sem índice varre as mesmas).
+    pub(crate) fn accounts(&self) -> Result<Vec<Account>, String> { (self.inner.accounts)() }
+
+    /// Linha no diário do índice: código e detalhe, nunca texto de conversa.
+    pub(crate) fn report(&self, code: &'static str, detail: String) { (self.inner.report)(code, detail) }
 
     pub fn path(&self) -> &Path { &self.inner.path }
 

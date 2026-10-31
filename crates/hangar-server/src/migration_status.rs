@@ -130,7 +130,7 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     if *method == Method::GET {
         if matches!(path, "/api/sessions" | "/api/sessions/events" | "/api/sessions/creation-progress" | "/api/costs" | "/api/cotacao" | "/api/uso" | "/api/migration/status" | "/api/presence" | "/api/update/notes"
             | "/api/voice" | "/api/voice/settings" | "/api/voice/memory" | "/api/jev/aux/cliproxy" | "/api/jev/delivery" | "/api/client-api"
-            | "/api/search/context") {
+            | "/api/search" | "/api/search/context") {
             return true;
         }
         let tail = path.strip_prefix("/api/sessions/").and_then(|r| r.split_once('/')).map(|(_, t)| t);
@@ -269,6 +269,7 @@ const PROBES: &[(&str, &str)] = &[
     ("POST", "/api/sessions/x/plugin/press"), ("POST", "/api/sessions/x/plugin/close"), ("POST", "/api/plugin/ui"), ("POST", "/api/plugin/ask"),
     ("GET", "/"), ("GET", "/assets/index.js"),
     ("GET", "/api/config"),
+    ("GET", "/api/search"),
     ("GET", "/api/search/context"),
 ];
 

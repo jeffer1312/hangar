@@ -14,6 +14,7 @@ mod artifacts;
 mod archive_history;
 mod session_media;
 mod search_context;
+mod search_route;
 mod commands;
 mod device_install;
 mod diag_report;

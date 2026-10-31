@@ -659,6 +659,7 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/costs", get(crate::costs_routes::costs).fallback(pass_any))
         .route("/api/cotacao", get(crate::costs_routes::cotacao).fallback(pass_any))
         .route("/api/uso", get(crate::costs_routes::usage).fallback(pass_any))
+        .route("/api/search", get(crate::search::http::route).fallback(pass_any))
         .route("/api/search/context", get(crate::search_context::route).fallback(pass_any))
         .route("/api/migration/status", get(crate::migration_status::status).fallback(pass_any))
         // Novidades e avisos da próxima atualização: só o dono, nunca repassado (o Python não tem a rota).

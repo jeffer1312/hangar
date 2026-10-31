@@ -90,7 +90,7 @@ fn windows_file_index(path: &Path) -> u64 {
 #[cfg(not(windows))]
 fn windows_file_index(_path: &Path) -> u64 { 0 }
 
-struct Found<'a> { project: String, sid: String, stat: Stat, account: &'a Account }
+pub(super) struct Found<'a> { pub project: String, pub sid: String, pub stat: Stat, pub account: &'a Account }
 
 struct Known {
     id: i64, size: i64, mtime_ns: i64, ino: i64, offset: i64, config_dir: Option<String>,
@@ -103,7 +103,7 @@ const HEAD_BYTES: i64 = 4096;
 /// Filhos diretos `<uuid>.jsonl` de cada pasta de projeto; a cópia `.from-<conta>` e `subagents/`
 /// ficam fora. Devolve também o que não deu para ler agora (pasta ou arquivo): o que o índice já
 /// tem lá dentro fica como está.
-fn conversations(accounts: &[Account]) -> (BTreeMap<String, Found<'_>>, Vec<PathBuf>) {
+pub(super) fn conversations(accounts: &[Account]) -> (BTreeMap<String, Found<'_>>, Vec<PathBuf>) {
     let mut out = BTreeMap::new();
     let mut unreadable = Vec::new();
     let mut failed = |path: PathBuf, e: &std::io::Error| {
@@ -151,7 +151,7 @@ fn head_hash(file: &mut File, len: i64) -> std::io::Result<String> {
     Ok(format!("{:x}", Md5::digest(&buf)))
 }
 
-fn account_key(account: &Account) -> String {
+pub(super) fn account_key(account: &Account) -> String {
     format!("claude:{}", crate::list::links::resolve_lenient(&account.dir).to_string_lossy())
 }
 
