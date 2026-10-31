@@ -308,6 +308,8 @@ const MAX_LOAN_S:u64=120;
 const CLEAR_APPLY_WAIT:Duration=Duration::from_secs(10);
 /// Vida nova sem a conversa provada ainda (o Claude subindo): espera assim, sem erro, até este prazo.
 const START_GRACE:Duration=Duration::from_secs(60);
+// ponytail: o ator fica preso nessa espera; teto curto para não segurar o resto da sessão.
+const SLASH_START_WAIT:Duration=Duration::from_secs(20);
 /// O `give_up_after` padrão: a prova chega em segundos; minutos sem ela, com o Claude parado, é perda.
 const GIVE_UP_AFTER:Duration=Duration::from_secs(180);
 const COMPOSER_READ_EVERY:Duration=Duration::from_secs(5);
@@ -1118,7 +1120,15 @@ impl Executor {
         if let Some(store)=&self.options.interactions {driver=driver.with_interactions(store.clone());}
         if matches!(kind,"key"|"navigation_key"|"interactive_key"|"terminal_input"|"interrupt") {driver=driver.controls();}
         if self.footer_misses.as_ref().is_some_and(|(row,misses)|row==root && *misses>=FOCUS_RETURN_TRIES) {driver=driver.footer_kept();}
-        let facts=if prompt {Some(services.facts(&self.target.binding).await)}else{None};
+        let mut facts=if prompt {Some(services.facts(&self.target.binding).await)}else{None};
+        // Comando de barra não tem linha na fila para esperar a subida: como primeira mensagem, espera aqui o Claude abrir a conversa.
+        let waiting_start=tokio::time::Instant::now()+SLASH_START_WAIT;
+        while slash && !self.conversation_proved && tokio::time::Instant::now()<waiting_start
+            && sample().epoch_s-self.target.metadata.agent_birth<self.options.start_grace.as_secs_f64()
+            && facts.as_ref().is_some_and(|result|result.as_ref().is_err_and(|failure|failure.0=="terminal_conversation_unavailable")) {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            facts=Some(services.facts(&self.target.binding).await);
+        }
         let current=facts.as_ref().is_none_or(|result|result.as_ref().is_ok_and(|facts|facts.binding==self.target.binding));
         if let Some(facts)=&facts {self.deliverable=facts.as_ref().is_ok_and(|facts|current && facts.ready && !facts.open_question);}
         // Com o Claude trabalhando a mensagem fica na fila do Hangar, onde o painel a apaga, edita e reordena.

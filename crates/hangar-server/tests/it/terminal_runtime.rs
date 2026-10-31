@@ -1052,6 +1052,21 @@ async fn terminal_runtime_a_starting_life_without_its_conversation_waits_without
     assert_eq!(h.drain().await.unwrap_err().code,"terminal_facts","passado o prazo de subida");
     h.stop().await.unwrap();
 }
+/// Comando de barra não tem linha na fila: como primeira mensagem de uma vida nova, ele espera a conversa abrir.
+#[tokio::test]
+async fn terminal_runtime_a_starting_life_runs_a_first_slash_command_once_its_conversation_opens() {
+    let f=Fixture::new().await;
+    let native=f.target.metadata.config_dir.join("sessions").join(format!("{}.json",f.target.metadata.agent_pid));
+    let saved=f.io.native_record.lock().unwrap().take();std::fs::remove_file(&native).unwrap();
+    let h=f.start_grace(Duration::from_secs(24*3600));
+    let io=f.io.clone();
+    let opens=tokio::spawn(async move {tokio::time::sleep(Duration::from_millis(300)).await;*io.native_record.lock().unwrap()=saved;io.refresh_record();});
+    let result=h.command(f.command("primeira","/pr-review-auto 299")).await.unwrap();
+    opens.await.unwrap();
+    assert_eq!(result.disposition,hangar_server::runtime::protocol::Disposition::Accepted,"{result:?}");
+    assert_eq!(typed_at(&f,"/pr-review-auto 299").len(),1);
+    h.stop().await.unwrap();
+}
 #[tokio::test]
 async fn terminal_runtime_unreadable_capture_recovers_without_sse() {
     let f=Fixture::new().await;f.ready.store(false,std::sync::atomic::Ordering::Release);let h=f.start();
