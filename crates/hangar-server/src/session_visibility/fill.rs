@@ -43,7 +43,8 @@ async fn pane_key(mux: &Mux, row: &SessionRow) -> Option<String> {
     // Sem vida conhecida ainda se pergunta: a rota (`key_of`) pergunta ao multiplexador do mesmo jeito.
     let id = (row.name.clone(), row.lifecycle_id.clone().unwrap_or_default());
     if let Some((key, at)) = PANE_KEYS.lock().unwrap_or_else(PoisonError::into_inner).get(&id)
-        && (key.is_some() || at.elapsed() < ABSENT_RETRY) {
+        // Sem vida, o nome não separa uma sessão recriada da antiga: a chave achada também expira.
+        && ((key.is_some() && !id.1.is_empty()) || at.elapsed() < ABSENT_RETRY) {
         return key.clone();
     }
     let key = mux.session_env(&row.name, "CP_SESSION_KEY").await;
