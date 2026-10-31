@@ -1,7 +1,6 @@
-//! `hangar-server conta` contra o que o `scripts/hangar-conta` do Python fez nos mesmos cenários
-//! (`backend/tests/fixtures/contract/accounts-reconcile/`). Os construtores daqui montam o estado
-//! inicial dos dois lados; o gerador (`#[ignore]`) roda o Python de origem e grava a fixture, e cada
-//! teste roda o Rust e compara pela regra do contrato (as diferenças D* do `decisoes.md`).
+//! `hangar-server conta` em cada cenário: os construtores montam o estado inicial, e cada teste roda o
+//! comando e compara passos, árvore e diário com `accounts_reconcile_cases`. As regras D* abaixo dizem o
+//! que a comparação solta de propósito (texto do sistema, ordem de avisos).
 use hangar_server::accounts::{AccountKey, Provider};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
@@ -12,13 +11,9 @@ use std::process::Command;
 
 /// A espera do comando: cada trava até 120 s.
 const EACH: claude_config::Wait = claude_config::Wait::Each(claude_config::LOCK_WAIT);
-const ORIGIN: &str = "b2832ee04";
-const COMMAND: &str = "HANGAR_FIXTURE_PY_ROOT=<checkout com scripts/hangar-conta e backend/app de b2832ee04> \
-    cargo test -p hangar-server --test it accounts_reconcile::generate_fixtures -- --ignored --exact";
 
-fn fixture_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../backend/tests/fixtures/contract/accounts-reconcile")
-}
+#[path = "accounts_reconcile_cases.rs"]
+mod cases;
 
 // ── construtores ────────────────────────────────────────────────────────────────────────────
 
@@ -52,7 +47,7 @@ fn fifo(path: &Path) {
     assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o644) }, 0);
 }
 
-/// O HOME do `casa` do `test_contas.py`.
+/// O HOME de partida da maioria dos cenários.
 fn casa(h: &Path) {
     put(&h.join(".claude/skills/falar/SKILL.md"), "oi");
     put(&h.join(".claude/projects/-tmp-x/memory/MEMORY.md"), "m");
@@ -85,21 +80,13 @@ enum Step {
 struct Rules {
     /// D2: na linha `line` do stderr do passo `step` só o texto fixo em volta do erro do sistema conta.
     d2: Vec<(usize, usize, &'static str, &'static str)>,
-    /// O texto do sistema muda (D2), o caminho que a mensagem do Python trazia não: o trecho variável da
-    /// linha leva este caminho nos dois lados.
+    /// O texto do sistema muda (D2), o caminho na mensagem não: o trecho variável da linha leva este caminho.
     path: Vec<(usize, usize, &'static str)>,
-    /// D3: exceção crua do Python; o Rust sai com o mesmo código e uma linha `hangar-conta:` em português.
+    /// D3: o comando sai com o código da tabela e uma só linha `hangar-conta:` em português.
     d3: Vec<usize>,
     /// D6: avisos de memória sem ordem, e as `.drift/memory.N` comparadas pelo conteúdo.
     d6: bool,
-    /// A ajuda não diz mais que o comando roda no python3: só essa frase muda, as linhas de uso não.
-    help: bool,
 }
-
-const HELP_PYTHON: &str = "Mesma razão de existir do hangar-engine: a regra mora num lugar SÓ. O backend importa app.contas\n\
-    direto; o shell não pode (não tem venv), então chama este script com o python3 do sistema.";
-const HELP_RUST: &str = "A regra mora num lugar SÓ, o hangar-server: o shell chega a ela pelo hangar-conta, que chama\n\
-    este `hangar-server conta`, e a abertura de sessão roda a mesma reconciliação no próprio processo.";
 
 struct Scenario { build: Build, steps: Vec<Step>, env: Vec<(&'static str, &'static str)>, rules: Rules }
 
@@ -182,16 +169,10 @@ fn scenario(name: &str) -> Scenario {
             put(&h.join(".claude-arquivo"), "");
         }, vec![cli(&["--list"])]),
         "list_empty" => sc(|_| {}, vec![cli(&["--list"])]),
-        "help_flags" => {
-            let mut s = sc(|_| {}, vec![cli(&["--help"]), cli(&["-h"])]);
-            s.rules.help = true;
-            s
-        }
+        "help_flags" => sc(|_| {}, vec![cli(&["--help"]), cli(&["-h"])]),
         "usage_errors" => {
-            let mut s = sc(|_| {}, vec![cli(&[]), cli(&["--list", "x"]), cli(&["--prep"]), cli(&["--prep", "a", "b", "c"]),
-                cli(&["--new", "a", "b"]), cli(&["--bogus"]), cli(&["--help", "x"])]);
-            s.rules.help = true;
-            s
+            sc(|_| {}, vec![cli(&[]), cli(&["--list", "x"]), cli(&["--prep"]), cli(&["--prep", "a", "b", "c"]),
+                cli(&["--new", "a", "b"]), cli(&["--bogus"]), cli(&["--help", "x"])])
         }
 
         // ── reconciliação (`--prep`) ──
@@ -384,7 +365,7 @@ fn scenario(name: &str) -> Scenario {
         "settings_copy_unreadable" => with_path(d2(sc(|h| { casa(h); conta(h, "conta2"); put(&h.join(".claude-conta2/settings.json"), "{}");
             chmod(&h.join(".claude-conta2/settings.json"), 0); }, vec![cli(&PREP)]),
             0, 0, "hangar-conta: não consegui espelhar o settings.json pra conta: ", ""), 0, 0, "<HOME>/.claude-conta2/settings.json"),
-        "settings_python_equality" => sc(|h| {
+        "settings_loose_equality" => sc(|h| {
             casa(h);
             conta(h, "conta2");
             put(&h.join(".claude/settings.json"), r#"{"a": 1, "b": true, "c": 0, "d": [1.0, {"x": false}], "e": {"k": 2, "j": 1}, "f": -0.0}"#);
@@ -432,7 +413,7 @@ fn scenario(name: &str) -> Scenario {
             put(&h.join(".claude-conta2/.claude.json"), "{\"nome\": \"ação ✓ 😀\", \"num\": 1e16, \"meio\": 0.5, \"vazio\": {}, \
                 \"lista\": [], \"mcpServers\": {\"tavily\": {\"velho\": true}}, \"z\": {\"a\": [1, {\"b\": null}]}}");
         }, vec![cli(&PREP)]),
-        "mcp_python_equality" => sc(|h| { casa(h); conta(h, "conta2");
+        "mcp_loose_equality" => sc(|h| { casa(h); conta(h, "conta2");
             put(&h.join(".claude.json"), r#"{"mcpServers": {"x": {"n": 1, "b": true}}}"#);
             put(&h.join(".claude-conta2/.claude.json"), r#"{"mcpServers": {"x": {"b": 1, "n": 1.0}}}"#); }, vec![cli(&PREP)]),
         "mcp_lone_surrogate" => sc(|h| { casa(h); conta(h, "conta2");
@@ -649,7 +630,7 @@ fn scenario(name: &str) -> Scenario {
             put(&h.join(".claude/settings.json"), "{\"ctl\": \"a\\bb\\fc\\rd\\ne\\u0000f\\u0001g\\u001bh\\u0085i\\u00a0j\\u2028k\\u2029l\", \"theme\": \"dark\"}");
             put(&h.join(".claude-conta2/settings.json"), r#"{"theme": "light"}"#);
         }, vec![cli(&PREP)]),
-        // C59: avisos de todo tipo num `--prep` só, na ordem em que o Python os dava.
+        // C59: avisos de todo tipo num `--prep` só.
         "prep_every_warning_kind" => sc(|h| {
             casa(h);
             conta(h, "conta2");
@@ -659,11 +640,11 @@ fn scenario(name: &str) -> Scenario {
             put(&h.join(".claude-conta2/settings.json"), r#"{"theme": "light"}"#);
             put(&h.join(".claude-conta2/projects/-tmp-x/memory/MEMORY.md"), "local");
         }, vec![cli(&PREP)]),
-        // C155: entradas do registro de plugins em objeto, não em lista (exceção crua do Python).
+        // C155: entradas do registro de plugins em objeto, não em lista.
         "plugins_entries_object" => d3(sc(|h| { casa(h); conta(h, "conta2");
             shared_plugins(h, r#"{"a@x": true}"#, Some(r#"{"plugins": {"a@x": {"installPath": "/nada"}}}"#)); }, vec![cli(&PREP)]), 0),
 
-        // ── diferenças aceitas (o Rust é conferido contra o "depois" do decisoes.md) ──
+        // ── cenários com o esperado no próprio teste ──
         "new_fixed_dirs" => Scenario { env: vec![("CP_CLAUDE_CONFIG_DIRS", "<HOME>/.claude")], ..sc(casa, vec![cli(&NEW)]) },
         "list_pending_dead_link" => sc(|h| { conta(h, "a"); conta(h, "b"); ln(&h.join(".claude-b/.hangar-account-pending"), h.join("nada")); },
             vec![cli(&["--list"])]),
@@ -672,11 +653,6 @@ fn scenario(name: &str) -> Scenario {
         other => panic!("cenário desconhecido: {other}"),
     }
 }
-
-/// D12 e D13: o gerador grava o Python, e o teste confere o Rust contra o que foi aceito.
-const ACCEPTED: [&str; 11] = ["new_fixed_dirs", "list_pending_dead_link", "prep_pending_dead_link", "b1_runtime_not_listed",
-    "drift_just_moved_pruned", "drift_slot_dead_link_file", "drift_slot_dead_link_dir", "b3_memory_shared_bucket", "memory_cases",
-    "prep_memory_local_drawer", "prep_every_warning_kind"];
 
 macro_rules! scenarios {
     ($($name:ident),* $(,)?) => {
@@ -699,9 +675,9 @@ scenarios!(
     prep_guard_busy, prep_symlink_refused, prep_account_readonly, settings_principal_invalid, settings_copy_invalid,
     settings_not_object, settings_bom, settings_principal_missing_copy_invalid, settings_principal_missing,
     settings_principal_corrupt_seeded, settings_dead_old_link, settings_link_elsewhere, settings_copy_is_dir,
-    settings_copy_unreadable, settings_python_equality, settings_format, settings_duplicate_keys,
+    settings_copy_unreadable, settings_loose_equality, settings_format, settings_duplicate_keys,
     settings_enabled_plugins_shapes, settings_lone_surrogate_equal, mcp_copy_missing, mcp_principal_invalid, mcp_not_object,
-    mcp_principal_empty_or_not_dict, mcp_copy_not_dict, mcp_format, mcp_python_equality, mcp_lone_surrogate, mcp_bom,
+    mcp_principal_empty_or_not_dict, mcp_copy_not_dict, mcp_format, mcp_loose_equality, mcp_lone_surrogate, mcp_bom,
     plugins_registry_unreadable, plugins_registry_invalid, plugins_registry_not_object, plugins_entry_not_dict,
     plugins_install_path_number, plugins_install_path_shapes, plugins_enabled_shapes, plugins_list_truthy,
     plugins_list_falsy, plugins_seeded_not_object, shared_dead_link, user_dead_link_pruned, drift_slot_reuse,
@@ -715,36 +691,23 @@ scenarios!(
 
 // ── execução ────────────────────────────────────────────────────────────────────────────────
 
-enum Side<'a> { Python(&'a Path), Rust }
-
 struct Run { steps: Vec<Value>, tree: Value, diary: Vec<Value>, raw_diary: Vec<Value>, initial: Value }
 
 static TMP: std::sync::LazyLock<regex::Regex> =
     std::sync::LazyLock::new(|| regex::Regex::new(r"\.hangar-novo\.\d+\.[0-9a-f]{8}").unwrap());
 
-fn norm(text: &str, home: &Path, py_root: Option<&Path>) -> String {
-    let mut text = text.replace(home.to_str().unwrap(), "<HOME>");
-    if let Some(root) = py_root { text = text.replace(root.to_str().unwrap(), "<PY_ROOT>"); }
+fn norm(text: &str, home: &Path) -> String {
+    let text = text.replace(home.to_str().unwrap(), "<HOME>");
     TMP.replace_all(&text, ".hangar-novo.<PID>.<HEX>").into_owned()
 }
 
-fn command(side: &Side, home: &Path, args: &[String], env: &[(&str, &str)]) -> Command {
-    let mut cmd = match side {
-        Side::Python(root) => {
-            let mut cmd = Command::new("python3");
-            cmd.arg(root.join("scripts/hangar-conta"));
-            cmd
-        }
-        Side::Rust => {
-            let mut cmd = Command::new(env!("CARGO_BIN_EXE_hangar-server"));
-            cmd.arg("conta");
-            cmd
-        }
-    };
+fn command(home: &Path, args: &[String], env: &[(&str, &str)]) -> Command {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_hangar-server"));
+    cmd.arg("conta");
     cmd.args(args).env_clear().current_dir(home).env("HOME", home).env("PATH", "/usr/bin:/bin")
-        .env("LANG", "C.UTF-8").env("LC_ALL", "C.UTF-8").env("PYTHONDONTWRITEBYTECODE", "1");
+        .env("LANG", "C.UTF-8").env("LC_ALL", "C.UTF-8");
     for (key, value) in env { cmd.env(key, value.replace("<HOME>", home.to_str().unwrap())); }
-    // Os dois lados com o mesmo umask: o modo dos arquivos novos entra na comparação.
+    // Umask fixo: o modo dos arquivos novos entra na comparação.
     unsafe { cmd.pre_exec(|| { libc::umask(0o022); Ok(()) }); }
     cmd
 }
@@ -763,16 +726,15 @@ fn busy(home: &Path, account: &str) -> std::process::Child {
     child
 }
 
-fn run(name: &str, side: &Side) -> Run { run_checked(name, side, &mut |_, _| {}) }
+fn run(name: &str) -> Run { run_checked(name, &mut |_, _| {}) }
 
 /// `run` com `seen` chamado a cada comando, antes do passo seguinte: a falha aponta o passo que divergiu.
-fn run_checked(name: &str, side: &Side, seen: &mut dyn FnMut(usize, &Value)) -> Run {
+fn run_checked(name: &str, seen: &mut dyn FnMut(usize, &Value)) -> Run {
     let scenario = scenario(name);
     let dir = tempfile::Builder::new().prefix("conta-rec-").tempdir().unwrap();
     let home = dir.path().canonicalize().unwrap();
-    let py_root = match side { Side::Python(root) => Some(*root), Side::Rust => None };
     (scenario.build)(&home);
-    let initial = tree(&home, py_root);
+    let initial = tree(&home);
     let mut accounts = std::collections::BTreeSet::new();
     let mut steps = Vec::new();
     for step in &scenario.steps {
@@ -782,14 +744,14 @@ fn run_checked(name: &str, side: &Side, seen: &mut dyn FnMut(usize, &Value)) -> 
             Step::Busy(args) => (args, Some(busy(&home, &args[1]))),
         };
         if args.len() >= 2 && matches!(args[0].as_str(), "--prep" | "--new") { accounts.insert(args[1].clone()); }
-        let out = command(side, &home, args, &scenario.env).output().unwrap_or_else(|e| panic!("{name}: não rodou: {e}"));
+        let out = command(&home, args, &scenario.env).output().unwrap_or_else(|e| panic!("{name}: não rodou: {e}"));
         if let Some(mut held) = held { held.kill().unwrap(); held.wait().unwrap(); }
-        let stderr: Vec<String> = String::from_utf8_lossy(&out.stderr).lines().map(|l| norm(l, &home, py_root)).collect();
-        steps.push(json!({"args": args.iter().map(|a| norm(a, &home, py_root)).collect::<Vec<_>>(), "exit": out.status.code(),
-            "stdout": norm(&String::from_utf8_lossy(&out.stdout), &home, py_root), "stderr": stderr}));
+        let stderr: Vec<String> = String::from_utf8_lossy(&out.stderr).lines().map(|l| norm(l, &home)).collect();
+        steps.push(json!({"args": args.iter().map(|a| norm(a, &home)).collect::<Vec<_>>(), "exit": out.status.code(),
+            "stdout": norm(&String::from_utf8_lossy(&out.stdout), &home), "stderr": stderr}));
         seen(steps.len() - 1, steps.last().unwrap());
     }
-    let tree = tree(&home, py_root);
+    let tree = tree(&home);
     let (diary, raw_diary) = diary(&home, &accounts);
     unlock(&home);
     Run { steps, tree, diary, raw_diary, initial }
@@ -797,24 +759,24 @@ fn run_checked(name: &str, side: &Side, seen: &mut dyn FnMut(usize, &Value)) -> 
 
 /// O estado de cada caminho do HOME, menos `~/.hangar` (diário e guardas): tipo, alvo do link, bytes e
 /// modo do arquivo. mtime fica fora.
-fn tree(home: &Path, py_root: Option<&Path>) -> Value {
-    fn walk(home: &Path, dir: &Path, py_root: Option<&Path>, out: &mut BTreeMap<String, Value>) {
+fn tree(home: &Path) -> Value {
+    fn walk(home: &Path, dir: &Path, out: &mut BTreeMap<String, Value>) {
         let Ok(entries) = std::fs::read_dir(dir) else { return };
         for entry in entries.flatten() {
             let path = entry.path();
             if path == home.join(".hangar") { continue; }
-            let key = norm(&path.to_string_lossy(), home, py_root);
+            let key = norm(&path.to_string_lossy(), home);
             let meta = std::fs::symlink_metadata(&path).unwrap();
             let value = if meta.file_type().is_symlink() {
-                json!({"kind": "symlink", "target": norm(&std::fs::read_link(&path).unwrap().to_string_lossy(), home, py_root)})
+                json!({"kind": "symlink", "target": norm(&std::fs::read_link(&path).unwrap().to_string_lossy(), home)})
             } else if meta.is_dir() {
-                walk(home, &path, py_root, out);
+                walk(home, &path, out);
                 if std::fs::read_dir(&path).is_ok() { json!({"kind": "dir"}) } else { json!({"kind": "dir", "unreadable": true}) }
             } else if meta.is_file() {
                 let mode = format!("{:04o}", meta.permissions().mode() & 0o7777);
                 match std::fs::read(&path) {
                     Ok(bytes) => match String::from_utf8(bytes) {
-                        Ok(text) => json!({"kind": "file", "mode": mode, "text": norm(&text, home, py_root)}),
+                        Ok(text) => json!({"kind": "file", "mode": mode, "text": norm(&text, home)}),
                         Err(e) => json!({"kind": "file", "mode": mode, "hex": e.as_bytes().iter().map(|b| format!("{b:02x}")).collect::<String>()}),
                     },
                     Err(_) => json!({"kind": "file", "mode": mode, "unreadable": true}),
@@ -826,7 +788,7 @@ fn tree(home: &Path, py_root: Option<&Path>) -> Value {
         }
     }
     let mut out = BTreeMap::new();
-    walk(home, home, py_root, &mut out);
+    walk(home, home, &mut out);
     serde_json::to_value(out).unwrap()
 }
 
@@ -887,47 +849,38 @@ fn diary(home: &Path, accounts: &std::collections::BTreeSet<String>) -> (Vec<Val
     (kept, raw)
 }
 
-fn py_root() -> PathBuf {
-    std::env::var_os("HANGAR_FIXTURE_PY_ROOT").map(PathBuf::from)
-        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap())
-}
-
-/// Gera as fixtures rodando o `scripts/hangar-conta` do commit de origem. Sem `python3`, falha.
+/// Toda linha da tabela é de um cenário testado; sem isto, linha órfã nunca rodaria.
 #[test]
-#[ignore = "gerador das fixtures: roda o Python de origem"]
-fn generate_fixtures() {
-    let root = py_root();
-    let python = Command::new("python3").arg("--version").output();
-    assert!(python.is_ok_and(|o| o.status.success()), "python3 ausente: o gerador precisa do Python de origem");
-    let files = ["backend/app/contas.py", "backend/app/account_lifecycle.py", "backend/app/atomico.py", "backend/app/diag.py",
-        "backend/app/log_paths.py", "scripts/hangar-conta"];
-    let same = Command::new("git").arg("-C").arg(&root).args(["diff", "--quiet", ORIGIN, "--"]).args(files).status().unwrap();
-    assert!(same.success(), "{} não está no commit de origem {ORIGIN} para {files:?}", root.display());
-    std::fs::create_dir_all(fixture_dir()).unwrap();
-    // `HANGAR_FIXTURE_ONLY=a,b`: só esses cenários; os outros ficam como foram gravados.
-    let only = std::env::var("HANGAR_FIXTURE_ONLY").ok();
-    let wanted = |name: &str| only.as_deref().is_none_or(|list| list.split(',').any(|n| n == name));
-    for name in NAMES.iter().chain(ACCEPTED.iter()).filter(|n| wanted(n)) {
-        let out = run(name, &Side::Python(&root));
-        for event in &out.diary {
-            if let Some(id) = event["conta_id"].as_str() { assert_eq!(id, "<CONTA_ID>", "{name}: conta_id fora de sha256(caminho)[:16]"); }
-        }
-        let fixture = json!({"origin_commit": ORIGIN, "command": COMMAND, "scenario": name, "steps": out.steps,
-            "tree": out.tree, "diary": out.diary});
-        std::fs::write(fixture_dir().join(format!("{name}.json")), serde_json::to_string_pretty(&fixture).unwrap() + "\n").unwrap();
-    }
+fn every_table_row_has_a_scenario() {
+    const MEMORY: [&str; 3] = ["memory_cases", "prep_memory_local_drawer", "prep_every_warning_kind"];
+    let rows: Vec<Value> = serde_json::from_str(cases::CASES).unwrap();
+    let names: std::collections::BTreeSet<&str> = rows.iter().map(|row| row["name"].as_str().unwrap()).collect();
+    let tested: std::collections::BTreeSet<&str> = NAMES.iter().chain(&MEMORY).copied().collect();
+    assert_eq!(names, tested);
 }
 
 // ── comparação ──────────────────────────────────────────────────────────────────────────────
 
+/// O cenário por extenso: `BASE_TREE` mais a diferença dele, e os eventos do diário pela posição.
 fn fixture(name: &str) -> Value {
-    let path = fixture_dir().join(format!("{name}.json"));
-    let value: Value = serde_json::from_slice(&std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))).unwrap();
-    assert_eq!(value["origin_commit"], ORIGIN, "{name}");
-    value
+    static TABLE: std::sync::LazyLock<BTreeMap<String, Value>> = std::sync::LazyLock::new(|| {
+        let base: Map<String, Value> = serde_json::from_str(cases::BASE_TREE).unwrap();
+        let events: Vec<Value> = serde_json::from_str(cases::EVENTS).unwrap();
+        let rows: Vec<Value> = serde_json::from_str(cases::CASES).unwrap();
+        assert_eq!(rows.len(), 112);
+        rows.into_iter().map(|row| {
+            let mut tree = base.clone();
+            for (key, value) in row["tree"].as_object().unwrap() {
+                if value.is_null() { tree.remove(key); } else { tree.insert(key.clone(), value.clone()); }
+            }
+            let diary: Vec<Value> = row["diary"].as_array().unwrap().iter().map(|i| events[i.as_u64().unwrap() as usize].clone()).collect();
+            (row["name"].as_str().unwrap().to_owned(), json!({"steps": row["steps"], "tree": tree, "diary": diary}))
+        }).collect()
+    });
+    TABLE.get(name).unwrap_or_else(|| panic!("cenário sem esperado na tabela: {name}")).clone()
 }
 
-/// D6: as vagas da memória, com o nome do Python (`memory.N`) ou o de agora (`memory-<projeto>.N`, U10),
+/// D6: as vagas da memória, com o nome antigo (`memory.N`) ou o de agora (`memory-<projeto>.N`, U10),
 /// renumeradas pela ordem do conteúdo, igual nos dois lados.
 fn d6_tree(tree: &Value) -> Value {
     let map = tree.as_object().unwrap();
@@ -953,17 +906,6 @@ fn d6_tree(tree: &Value) -> Value {
 }
 
 fn compare_step(name: &str, i: usize, want: &Value, got: &Value, rules: &Rules) {
-    let mut want = want.clone();
-    if rules.help {
-        let stdout = want["stdout"].as_str().unwrap().to_owned();
-        let stderr = want["stderr"].as_array().unwrap().iter().map(|l| l.as_str().unwrap()).collect::<Vec<_>>().join("\n");
-        assert!(stdout.contains(HELP_PYTHON) || stderr.contains(HELP_PYTHON), "{name}[{i}]: a fixture não tem a frase antiga da ajuda");
-        want["stdout"] = json!(stdout.replace(HELP_PYTHON, HELP_RUST));
-        if stderr.contains(HELP_PYTHON) {
-            want["stderr"] = json!(stderr.replace(HELP_PYTHON, HELP_RUST).split('\n').collect::<Vec<_>>());
-        }
-    }
-    let want = &want;
     assert_eq!(want["args"], got["args"], "{name}[{i}]");
     assert_eq!(want["exit"], got["exit"], "{name}[{i}] {}: código de saída; stderr {}", want["args"], got["stderr"]);
     assert_eq!(want["stdout"], got["stdout"], "{name}[{i}] {}: stdout", want["args"]);
@@ -971,12 +913,12 @@ fn compare_step(name: &str, i: usize, want: &Value, got: &Value, rules: &Rules) 
     let mut got_err: Vec<String> = serde_json::from_value(got["stderr"].clone()).unwrap();
     if rules.d3.contains(&i) {
         assert!(got_err.len() == 1 && got_err[0].starts_with("hangar-conta: ") && !got_err[0].starts_with(FAILED),
-            "{name}[{i}] D3: uma linha `hangar-conta:` com a frase do Rust: {got_err:?}");
+            "{name}[{i}] D3: uma linha `hangar-conta:`: {got_err:?}");
         return;
     }
     for (step, line, prefix, suffix) in &rules.d2 {
         if *step != i { continue; }
-        for (side, lines) in [("Python", &mut want_err), ("Rust", &mut got_err)] {
+        for (side, lines) in [("esperado", &mut want_err), ("recebido", &mut got_err)] {
             let text = lines.get(*line).unwrap_or_else(|| panic!("{name}[{i}] D2: {side} sem a linha {line}: {lines:?}"));
             assert!(text.starts_with(prefix) && text.ends_with(suffix) && text.len() > prefix.len() + suffix.len(),
                 "{name}[{i}] D2: {side} fora do texto fixo {prefix:?}…{suffix:?}: {text:?}");
@@ -998,7 +940,7 @@ fn check(name: &str) {
     let expected = fixture(name);
     let rules = scenario(name).rules;
     let want_steps = expected["steps"].as_array().unwrap();
-    let got = run_checked(name, &Side::Rust, &mut |i, got| {
+    let got = run_checked(name, &mut |i, got| {
         let want = want_steps.get(i).unwrap_or_else(|| panic!("{name}: passo {i} a mais"));
         compare_step(name, i, want, got, &rules);
     });
@@ -1013,7 +955,7 @@ fn assert_tree(name: &str, want: &Value, got: &Value) {
     let (want, got) = (want.as_object().unwrap(), got.as_object().unwrap());
     let mut diff = vec![];
     for key in want.keys().chain(got.keys()).collect::<std::collections::BTreeSet<_>>() {
-        if want.get(key) != got.get(key) { diff.push(format!("{key}: Python {:?} / Rust {:?}", want.get(key), got.get(key))); }
+        if want.get(key) != got.get(key) { diff.push(format!("{key}: esperado {:?} / recebido {:?}", want.get(key), got.get(key))); }
     }
     assert!(diff.is_empty(), "{name}: árvore difere\n{}", diff.join("\n"));
 }
@@ -1033,14 +975,12 @@ fn one_operation_per_run(name: &str, events: &[Value]) {
     }
 }
 
-// ── diferenças aceitas ──────────────────────────────────────────────────────────────────────
+// ── esperado no próprio teste ───────────────────────────────────────────────────────────────
 
-/// D12: com `CP_CLAUDE_CONFIG_DIRS` setado a criação recusa como a do app; o Python criava.
+/// D12: com `CP_CLAUDE_CONFIG_DIRS` setado a criação recusa como a do app.
 #[test]
 fn new_fixed_dirs() {
-    let python = fixture("new_fixed_dirs");
-    assert_eq!(python["steps"][0]["exit"], 0, "o Python criava a conta");
-    let got = run("new_fixed_dirs", &Side::Rust);
+    let got = run("new_fixed_dirs");
     assert_eq!(got.steps[0]["exit"], 1);
     assert_eq!(got.steps[0]["stderr"], json!(["hangar-conta: CP_CLAUDE_CONFIG_DIRS está setado: a lista de contas é fixa por ambiente. \
         Remova a variável ou acrescente a conta nela."]));
@@ -1051,31 +991,25 @@ fn new_fixed_dirs() {
 /// D13: pendência que é link morto também tira a pasta da lista (a abertura do Rust já fazia assim).
 #[test]
 fn list_pending_dead_link() {
-    let python = fixture("list_pending_dead_link");
-    assert_eq!(python["steps"][0]["stdout"], "a\nb\n", "o Python listava a pendente");
-    let got = run("list_pending_dead_link", &Side::Rust);
+    let got = run("list_pending_dead_link");
     assert_eq!((got.steps[0]["exit"].clone(), got.steps[0]["stdout"].clone()), (json!(0), json!("a\n")));
 }
 
 /// D13: e a reconciliação recusa como conta inexistente, sem mexer em nada.
 #[test]
 fn prep_pending_dead_link() {
-    let python = fixture("prep_pending_dead_link");
-    assert_eq!(python["steps"][0]["exit"], 0, "o Python reconciliava a pendente");
-    let got = run("prep_pending_dead_link", &Side::Rust);
+    let got = run("prep_pending_dead_link");
     assert_eq!(got.steps[0]["exit"], 1);
     assert_eq!(got.steps[0]["stderr"], json!(["hangar-conta: <HOME>/.claude-conta2 não é uma conta criada pelo hangar"]));
     assert_tree("prep_pending_dead_link", &got.initial, &got.tree);
     assert!(got.diary.is_empty());
 }
 
-/// B1 (U3): `.claude.json.lock` e `mcp-needs-auth-cache.json` são runtime da conta. O Python mandava
-/// a trava para a gaveta e subia o cache da conta para o `~/.claude`; agora os dois ficam na conta.
+/// B1 (U3): `.claude.json.lock` e `mcp-needs-auth-cache.json` são runtime da conta: os dois ficam nela,
+/// sem ir para a gaveta nem subir para o `~/.claude`.
 #[test]
 fn b1_runtime_not_listed() {
-    let python = fixture("b1_runtime_not_listed");
-    assert_eq!(python["steps"][0]["stderr"].as_array().unwrap().len(), 2, "o Python gavetava e subia");
-    let got = run("b1_runtime_not_listed", &Side::Rust);
+    let got = run("b1_runtime_not_listed");
     assert_eq!((got.steps[0]["exit"].clone(), got.steps[0]["stderr"].clone()), (json!(0), json!([])));
     let tree = got.tree.as_object().unwrap();
     assert_eq!(tree["<HOME>/.claude-conta2/.claude.json.lock"], json!({"kind": "dir"}));
@@ -1088,9 +1022,7 @@ fn b1_runtime_not_listed() {
 /// ficam ela e as mais novas, e o aviso "movido pra .drift/…" diz a verdade.
 #[test]
 fn drift_just_moved_pruned() {
-    let python = fixture("drift_just_moved_pruned");
-    assert!(python["tree"].get("<HOME>/.claude-conta2/.drift/hooks.4").is_none(), "o Python podava a recém-movida");
-    let got = run("drift_just_moved_pruned", &Side::Rust);
+    let got = run("drift_just_moved_pruned");
     assert_eq!(got.steps[0]["stderr"], json!(["hangar-conta: 'hooks' era local nesta conta; movido pra .drift/hooks.4"]));
     let tree = got.tree.as_object().unwrap();
     assert_eq!(tree.get("<HOME>/.claude-conta2/.drift/hooks.4").map(|e| e["text"].clone()), Some(json!("velho")),
@@ -1099,28 +1031,29 @@ fn drift_just_moved_pruned() {
     assert_eq!(kept, 3, "teto de três por nome de origem");
 }
 
-/// U10: a memória local de cada projeto vai para a gaveta com o nome dele (`memory-<projeto>`). O resto é
-/// o do Python: as vagas da memória são comparadas pelo conteúdo, e cada aviso de memória do Rust tem de
-/// citar o mesmo nome no rótulo e na vaga; `projects` são os projetos que foram para a gaveta.
+/// U10: a memória local de cada projeto vai para a gaveta com o nome dele (`memory-<projeto>`); a tabela
+/// a tem pelo nome único `memory`. As vagas da memória são comparadas pelo conteúdo, e cada aviso de
+/// memória recebido tem de citar o mesmo nome no rótulo e na vaga; `projects` são os projetos que foram
+/// para a gaveta.
 fn check_memory_after(name: &str, projects: &[&str]) {
     let expected = fixture(name);
-    let got = run(name, &Side::Rust);
+    let got = run(name);
     let warning = regex::Regex::new(r"^hangar-conta: '(memory[^']*)' era local nesta conta; movido pra \.drift/(memory[^ ]*)\.\d+$").unwrap();
     let mut moved = std::collections::BTreeSet::new();
     let want_steps = expected["steps"].as_array().unwrap();
     assert_eq!(want_steps.len(), got.steps.len(), "{name}: passos");
     for (i, (want, got)) in want_steps.iter().zip(&got.steps).enumerate() {
         assert_eq!((&want["args"], &want["exit"], &want["stdout"]), (&got["args"], &got["exit"], &got["stdout"]), "{name}[{i}]");
-        let mut canon = |lines: &Value, rust: bool| -> Vec<String> {
+        let mut canon = |lines: &Value, received: bool| -> Vec<String> {
             lines.as_array().unwrap().iter().map(|line| {
                 let line = line.as_str().unwrap();
                 let Some(c) = warning.captures(line) else { return line.to_owned() };
                 assert_eq!(&c[1], &c[2], "{name}[{i}]: rótulo e vaga diferentes: {line}");
-                if rust {
+                if received {
                     let project = c[1].strip_prefix("memory-").unwrap_or_else(|| panic!("{name}[{i}]: sem o projeto: {line}"));
                     moved.insert(project.to_owned());
                 } else {
-                    assert_eq!(&c[1], "memory", "{name}[{i}]: o Python dava o nome só de memory");
+                    assert_eq!(&c[1], "memory", "{name}[{i}]: a tabela tem o nome só de memory");
                 }
                 "<memória para a gaveta>".to_owned()
             }).collect()
@@ -1145,15 +1078,13 @@ fn prep_memory_local_drawer() { check_memory_after("prep_memory_local_drawer", &
 #[test]
 fn prep_every_warning_kind() { check_memory_after("prep_every_warning_kind", &["-tmp-x"]); }
 
-/// U10/B3: com um nome de gaveta por projeto, o teto conta por projeto. O Python punha a memória de
-/// todos no mesmo `memory`, e o quarto projeto levava a de outro.
+/// U10/B3: com um nome de gaveta por projeto, o teto conta por projeto: o quarto projeto não leva a
+/// memória de outro.
 #[test]
 fn b3_memory_shared_bucket() {
-    let python = fixture("b3_memory_shared_bucket");
     let slots = |tree: &Value| tree.as_object().unwrap().keys()
         .filter(|k| k.starts_with("<HOME>/.claude-conta2/.drift/memory") && !k.contains("/MEMORY.md")).count();
-    assert_eq!(slots(&python["tree"]), 3, "o Python podava a memória de um dos quatro projetos");
-    let got = run("b3_memory_shared_bucket", &Side::Rust);
+    let got = run("b3_memory_shared_bucket");
     let mut stderr: Vec<String> = serde_json::from_value(got.steps[0]["stderr"].clone()).unwrap();
     stderr.sort();
     let projects = ["-p1", "-p2", "-p3", "-p4"];
@@ -1180,7 +1111,7 @@ fn a_long_project_name_still_fits_the_memory_drawer() {
     }
     let warning = regex::Regex::new(r"^hangar-conta: '([^']+)' era local nesta conta; movido pra \.drift/([^ ]+)\.(\d+)$").unwrap();
     let prep = || -> Vec<(String, String)> {
-        let out = command(&Side::Rust, &home, &PREP.map(str::to_owned), &[]).output().unwrap();
+        let out = command(&home, &PREP.map(str::to_owned), &[]).output().unwrap();
         let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
         assert!(out.status.success(), "{stderr}");
         stderr.lines().filter_map(|l| warning.captures(l)).map(|c| {
@@ -1203,13 +1134,11 @@ fn a_long_project_name_still_fits_the_memory_drawer() {
     assert_eq!(second, vec![(name_a.clone(), "2".to_owned())], "o nome não é o mesmo a cada passada");
 }
 
-/// U9(a): a vaga da gaveta ocupada por link morto conta como ocupada. O Python a dava por livre: a pasta
-/// não entrava (toda abertura da conta falhava) e o arquivo sobrescrevia o link sem aviso.
+/// U9(a): a vaga da gaveta ocupada por link morto conta como ocupada. Por livre, a pasta não entrava (toda
+/// abertura da conta falhava) e o arquivo sobrescrevia o link sem aviso.
 #[test]
 fn drift_slot_dead_link_dir() {
-    let python = fixture("drift_slot_dead_link_dir");
-    assert_eq!(python["steps"][0]["exit"], 126, "o Python falhava na vaga ocupada pelo link morto");
-    let got = run("drift_slot_dead_link_dir", &Side::Rust);
+    let got = run("drift_slot_dead_link_dir");
     assert_eq!((got.steps[0]["exit"].clone(), got.steps[0]["stderr"].clone()),
         (json!(0), json!(["hangar-conta: 'skills' era local nesta conta; movido pra .drift/skills.2"])));
     let tree = got.tree.as_object().unwrap();
@@ -1220,9 +1149,7 @@ fn drift_slot_dead_link_dir() {
 
 #[test]
 fn drift_slot_dead_link_file() {
-    let python = fixture("drift_slot_dead_link_file");
-    assert_eq!(python["tree"]["<HOME>/.claude-conta2/.drift/hooks.1"]["kind"], "file", "o Python sobrescrevia o link morto");
-    let got = run("drift_slot_dead_link_file", &Side::Rust);
+    let got = run("drift_slot_dead_link_file");
     assert_eq!((got.steps[0]["exit"].clone(), got.steps[0]["stderr"].clone()),
         (json!(0), json!(["hangar-conta: 'hooks' era local nesta conta; movido pra .drift/hooks.2"])));
     let tree = got.tree.as_object().unwrap();
@@ -1312,7 +1239,7 @@ fn the_prep_command_holds_the_account_guard_while_reconciling() {
     conta(&home, "conta2");
     let holder = std::fs::OpenOptions::new().read(true).append(true).create(true).open(home.join(".hangar-contas.lock")).unwrap();
     holder.lock().unwrap();
-    let mut child = command(&Side::Rust, &home, &PREP.map(str::to_owned), &[])
+    let mut child = command(&home, &PREP.map(str::to_owned), &[])
         .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().unwrap();
     let key = AccountKey::new(Provider::Claude, &home.join(".claude-conta2")).unwrap();
     let locks = hangar_server::accounts::AccountLocks::new(home.join(".hangar/account-locks"));
@@ -1398,8 +1325,8 @@ fn stale_config_lock(home: &Path) {
     mtime(&lock, 1_000_000_000);
 }
 
-/// C38/H28: com a guarda da conta presa em exclusivo, o comando espera os 5 s dela antes de recusar,
-/// como o Python; vale também para a conta que não existe.
+/// C38/H28: com a guarda da conta presa em exclusivo, o comando espera os 5 s dela antes de recusar;
+/// vale também para a conta que não existe.
 #[test]
 fn a_busy_guard_waits_before_refusing() {
     for (name, account) in [("prep_guard_busy", "conta2"), ("prep_absent_guard_busy", "naoexiste")] {
@@ -1408,7 +1335,7 @@ fn a_busy_guard_waits_before_refusing() {
         (scenario(name).build)(&home);
         let mut held = busy(&home, account);
         let started = std::time::Instant::now();
-        let out = command(&Side::Rust, &home, &["--prep".into(), account.into()], &[]).output().unwrap();
+        let out = command(&home, &["--prep".into(), account.into()], &[]).output().unwrap();
         let waited = started.elapsed();
         held.kill().unwrap();
         held.wait().unwrap();
@@ -1434,7 +1361,7 @@ fn a_shared_holder_of_the_guard_does_not_block_the_prep() {
         assert!(std::time::Instant::now() < deadline, "o flock compartilhado não pegou a guarda");
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
-    let out = command(&Side::Rust, &home, &PREP.map(str::to_owned), &[]).output().unwrap();
+    let out = command(&home, &PREP.map(str::to_owned), &[]).output().unwrap();
     holder.kill().unwrap();
     holder.wait().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
@@ -1450,7 +1377,7 @@ fn the_accounts_lock_is_taken_before_the_account_lock() {
     conta(&home, "conta2");
     let own = std::fs::OpenOptions::new().read(true).write(true).open(home.join(".claude-conta2/.hangar-conta")).unwrap();
     own.lock().unwrap();
-    let mut child = command(&Side::Rust, &home, &PREP.map(str::to_owned), &[])
+    let mut child = command(&home, &PREP.map(str::to_owned), &[])
         .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().unwrap();
     let shared = std::fs::OpenOptions::new().read(true).append(true).create(true).open(home.join(".hangar-contas.lock")).unwrap();
     // Teto generoso: o comando pega a trava das contas logo depois de subir.
@@ -1483,7 +1410,7 @@ fn the_mirror_replaces_the_account_copies_instead_of_writing_in_place() {
     put(&home.join(".claude.json"), r#"{"mcpServers": {"tavily": {}, "novo": {}}}"#);
     let files = ["settings.json", ".claude.json"].map(|f| home.join(".claude-conta2").join(f));
     let before: Vec<u64> = files.iter().map(|f| std::fs::metadata(f).unwrap().ino()).collect();
-    let out = command(&Side::Rust, &home, &PREP.map(str::to_owned), &[]).output().unwrap();
+    let out = command(&home, &PREP.map(str::to_owned), &[]).output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     assert!(std::fs::read_to_string(&files[0]).unwrap().contains("\"dark\"") && std::fs::read_to_string(&files[1]).unwrap().contains("novo"),
         "o espelho regravou as duas cópias");
@@ -1503,7 +1430,7 @@ fn a_second_prep_with_nothing_to_change_rewrites_nothing() {
     conta(&home, "conta2");
     put(&home.join(".claude.json"), r#"{"mcpServers": {"tavily": {}, "novo": {}}}"#);
     let prep = || {
-        let out = command(&Side::Rust, &home, &PREP.map(str::to_owned), &[]).output().unwrap();
+        let out = command(&home, &PREP.map(str::to_owned), &[]).output().unwrap();
         assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     };
     prep();
@@ -1521,7 +1448,7 @@ fn the_diary_carries_no_warning_text_project_or_arguments() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().canonicalize().unwrap();
     (scenario("prep_shared_link_and_modes").build)(&home);
-    let out = command(&Side::Rust, &home, &["--prep".into(), "conta2".into(), "projeto-secreto".into()], &[]).output().unwrap();
+    let out = command(&home, &["--prep".into(), "conta2".into(), "projeto-secreto".into()], &[]).output().unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success() && stderr.contains("sobrescreveu theme"), "o cenário avisa: {stderr}");
     let (_, raw) = diary(&home, &["conta2".to_owned()].into());
@@ -1540,7 +1467,7 @@ fn the_diary_carries_no_warning_text_project_or_arguments() {
 }
 
 /// C93: a mudança da conta entra no arquivo dos dotfiles no lugar (mesmo inode e modo), e o atalho do
-/// `~/.claude` continua atalho. A paridade com o Python (`prep_shared_link_and_modes`) não vê o inode.
+/// `~/.claude` continua atalho. O cenário `prep_shared_link_and_modes` não vê o inode.
 #[test]
 fn the_change_goes_into_the_linked_shared_file_in_place() {
     use std::os::unix::fs::MetadataExt;
@@ -1549,7 +1476,7 @@ fn the_change_goes_into_the_linked_shared_file_in_place() {
     (scenario("prep_shared_link_and_modes").build)(&home);
     let dotfile = home.join("dotfiles/CLAUDE.md");
     let before = std::fs::metadata(&dotfile).unwrap().ino();
-    let out = command(&Side::Rust, &home, &PREP.map(str::to_owned), &[]).output().unwrap();
+    let out = command(&home, &PREP.map(str::to_owned), &[]).output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let after = std::fs::metadata(&dotfile).unwrap();
     assert_eq!((after.ino(), after.mode() & 0o777), (before, 0o600), "o arquivo dos dotfiles foi trocado, não regravado");
@@ -1590,7 +1517,7 @@ fn a_non_utf8_environment_variable_does_not_crash_the_command() {
     let home = dir.path().canonicalize().unwrap();
     casa(&home);
     conta(&home, "conta2");
-    let out = command(&Side::Rust, &home, &["--list".into()], &[]).env("NAO_UTF8", std::ffi::OsStr::from_bytes(b"\xff\xfe")).output().unwrap();
+    let out = command(&home, &["--list".into()], &[]).env("NAO_UTF8", std::ffi::OsStr::from_bytes(b"\xff\xfe")).output().unwrap();
     assert_eq!((out.status.code(), String::from_utf8_lossy(&out.stdout).trim()), (Some(0), "conta2"), "{}", String::from_utf8_lossy(&out.stderr));
 }
 
@@ -1604,7 +1531,7 @@ fn a_non_utf8_path_variable_refuses_the_command() {
     casa(&home);
     conta(&home, "conta2");
     let bad = [home.as_os_str().as_bytes(), b"/\xff"].concat();
-    let out = command(&Side::Rust, &home, &PREP.map(str::to_owned), &[]).env("HOME", std::ffi::OsStr::from_bytes(&bad)).output().unwrap();
+    let out = command(&home, &PREP.map(str::to_owned), &[]).env("HOME", std::ffi::OsStr::from_bytes(&bad)).output().unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(126), "{stderr}");
     assert!(stderr.lines().any(|l| l.starts_with("hangar-conta: ") && l.contains("HOME")), "{stderr}");
@@ -1617,7 +1544,7 @@ fn the_account_command_prints_internal_warnings_to_stderr() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().canonicalize().unwrap();
     stale_config_lock(&home);
-    let output = command(&Side::Rust, &home, &PREP.map(str::to_owned), &[]).output().unwrap();
+    let output = command(&home, &PREP.map(str::to_owned), &[]).output().unwrap();
     let (stdout, stderr) = (String::from_utf8(output.stdout).unwrap(), String::from_utf8(output.stderr).unwrap());
     assert_eq!((output.status.code(), stdout.trim()), (Some(0), home.join(".claude-conta2").to_str().unwrap()), "{stderr}");
     let file = home.join(".claude-conta2/.claude.json");
@@ -1775,11 +1702,11 @@ async fn create(app: &App, name: &str, timeout: std::time::Duration) -> Option<(
 fn umask_022() {
     let status = std::fs::read_to_string("/proc/self/status").unwrap();
     let umask = status.lines().find_map(|l| l.strip_prefix("Umask:")).map(str::trim);
-    assert_eq!(umask, Some("0022"), "o modo dos arquivos novos é comparado com fixtures gravadas sob umask 022");
+    assert_eq!(umask, Some("0022"), "o modo dos arquivos novos é comparado com a tabela, sob umask 022");
 }
 
-/// A criação pelo app chega ao mesmo estado final que o `contas.criar` do Python (o marcador só no fim
-/// e o modo da pasta são D8 e D16) sem chamar o Python: nenhuma ida à ponte `/internal/accounts/prepare`.
+/// A criação pelo app chega ao mesmo estado final do comando (o marcador só no fim e o modo da pasta são
+/// D8 e D16) sem chamar o Python: nenhuma ida à ponte `/internal/accounts/prepare`.
 async fn check_http(name: &str) {
     umask_022();
     let expected = fixture(name);
@@ -1796,7 +1723,7 @@ async fn check_http(name: &str) {
         accounts.insert(args[1].clone());
         let (status, body) = create(&app, &args[1], std::time::Duration::from_secs(30)).await.unwrap();
         let stderr = want["stderr"].as_array().unwrap().iter().map(|l| l.as_str().unwrap()).collect::<Vec<_>>().join("\n");
-        let body = serde_json::from_str::<Value>(&norm(&body.to_string(), &home, None)).unwrap();
+        let body = serde_json::from_str::<Value>(&norm(&body.to_string(), &home)).unwrap();
         match (want["exit"].as_i64(), stderr.strip_prefix("hangar-conta: ")) {
             (Some(0), _) => assert_eq!((status, body), (200, json!({"path": format!("<HOME>/.claude-{}", args[1]), "label": args[1],
                 "active": false})), "{name}[{i}]"),
@@ -1804,17 +1731,17 @@ async fn check_http(name: &str) {
             (_, Some(detail)) if detail.starts_with("nome:") => assert_eq!(status, 422, "{name}[{i}] {body}"),
             // U9(b): a mensagem leva o motivo que o comando mostraria no mesmo cenário.
             _ => {
-                let cli = run(name, &Side::Rust);
+                let cli = run(name);
                 let reason = cli.steps[i]["stderr"].as_array().and_then(|l| l.last()).and_then(Value::as_str)
                     .and_then(|l| l.strip_prefix("hangar-conta: ")).unwrap_or_else(|| panic!("{name}[{i}]: o comando não recusou"));
                 assert_eq!((status, body), (500, json!({"detail": {"code": "account_prepare_failed", "params": {},
-                    "msg": format!("não foi possível preparar a conta: {reason}")}})), "{name}[{i}] Python: {stderr}");
+                    "msg": format!("não foi possível preparar a conta: {reason}")}})), "{name}[{i}] tabela: {stderr}");
             }
         }
     }
     let python: Vec<String> = app.python_paths.lock().unwrap().iter().filter(|p| crate::app_route(p)).cloned().collect();
     assert!(python.is_empty(), "{name}: a criação chamou o Python: {python:?}");
-    let tree = tree(&home, None);
+    let tree = tree(&home);
     let (diary, _) = diary(&home, &accounts);
     unlock(&home);
     assert_tree(name, &expected["tree"], &tree);
@@ -1835,7 +1762,7 @@ http_scenarios!(
 
 /// `conta --new` pelo comando: código de saída e as linhas do stderr.
 fn cli_new(home: &Path, name: &str) -> (i32, Vec<String>) {
-    let output = command(&Side::Rust, home, &["--new".to_owned(), name.to_owned()], &[]).output().unwrap();
+    let output = command(home, &["--new".to_owned(), name.to_owned()], &[]).output().unwrap();
     (output.status.code().unwrap(), String::from_utf8(output.stderr).unwrap().lines().map(str::to_owned).collect())
 }
 

@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
 use axum::Router;
@@ -47,21 +47,11 @@ pub async fn isolated_with_timeout(test: &str, deadline: Duration, inspect: impl
         || test.starts_with("remote_browser::url_gaps::ws_evaluate_");
     // Os filhos são isolados, mas compartilham a porta fixa do Electron.
     let _electron_port = if needs_electron_port { Some(ELECTRON_PORT.lock().await) } else { None };
-    let uses_local_reference = ["remote_browser::url::", "remote_browser::commands::", "remote_browser::url_gaps::"]
-        .iter().any(|prefix| test.starts_with(prefix));
-    let reference_tmp = uses_local_reference.then(|| std::env::var_os("HANGAR_REMOTE_BROWSER_TMPDIR"))
-        .flatten().map(PathBuf::from);
-    if let Some(path) = &reference_tmp {
-        assert!(path.is_absolute() && path.is_dir(), "HANGAR_REMOTE_BROWSER_TMPDIR precisa ser uma pasta absoluta existente: {}", path.display());
-    }
     // Ensaio de taxa que a máquina não executou a tempo não prova nada: só ele é refeito, numa pasta nova.
     let mut attempts = 0;
     let (root, output) = loop {
     attempts += 1;
-    let root = match &reference_tmp {
-        Some(path) => tempfile::tempdir_in(path),
-        None => tempfile::tempdir(),
-    }.unwrap();
+    let root = tempfile::tempdir().unwrap();
     let home = root.path().join("home");
     std::fs::create_dir_all(home.join(".claude")).unwrap();
     std::fs::create_dir_all(root.path().join("tmp")).unwrap();
@@ -72,14 +62,11 @@ pub async fn isolated_with_timeout(test: &str, deadline: Duration, inspect: impl
         .env("HOME", &home).env("USERPROFILE", &home)
         .env("XDG_CONFIG_HOME", home.join(".config")).env("XDG_DATA_HOME", home.join(".local/share"))
         .env("XDG_CACHE_HOME", home.join(".cache"))
-        .env("TMPDIR", reference_tmp.clone().unwrap_or_else(|| root.path().join("tmp")))
+        .env("TMPDIR", root.path().join("tmp"))
         .env("CLAUDE_CONFIG_DIR", home.join(".claude")).env("CODEX_HOME", home.join(".codex"))
         .env("CP_CLAUDE_CONFIG_DIRS", home.join(".claude")).env("HANGAR_LIST_DIRS", dirs_json(&home))
         .env("HANGAR_SHARES_FILE", home.join("shares.json"))
         .env("PATH", format!("{}:/usr/bin:/bin", bin.display()));
-    if let Some(path) = std::env::var_os("HANGAR_REMOTE_BROWSER_CONTRACT_DIR") {
-        command.env("HANGAR_REMOTE_BROWSER_CONTRACT_DIR", path);
-    }
     let output = tokio::time::timeout(deadline, command.output()).await
         .expect("processo de ensaio não encerrou").unwrap();
     let slow = !output.status.success() && [&output.stdout, &output.stderr].iter()
@@ -109,23 +96,62 @@ pub fn git_probe(root: &Path) -> PathBuf {
     bin
 }
 
+static CHROMIUM: LazyLock<Value> = LazyLock::new(|| {
+    serde_json::from_slice(&std::fs::read(crate::common::contract().join("remote-browser/chromium.json")).unwrap()).unwrap()
+});
+
+/// Uma tabela por vez: cada teste isolado roda em processo próprio e só paga pela que usa.
 pub fn contract(name: &str) -> Value {
-    let reference_dir = if matches!(name, "url-commands" | "url-gaps") {
-        std::env::var_os("HANGAR_REMOTE_BROWSER_CONTRACT_DIR").map(PathBuf::from)
-    } else { None };
-    if let Some(path) = &reference_dir {
-        assert!(path.is_absolute(), "HANGAR_REMOTE_BROWSER_CONTRACT_DIR precisa ser absoluto: {}", path.display());
+    use super::{transport_cases as transport, url_cases as url};
+    fn expanded(table: &str) -> Value {
+        let mut value: Value = serde_json::from_str(table).unwrap();
+        expand(&mut value, &CHROMIUM);
+        value
     }
-    let path = reference_dir.unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../backend/tests/fixtures/contract/remote-browser")).join(format!("{name}.json"));
-    let bytes = std::fs::read(&path).unwrap_or_else(|error| panic!("referência Python indisponível em {}: {error}", path.display()));
-    serde_json::from_slice(&bytes).unwrap_or_else(|error| panic!("referência Python inválida em {}: {error}", path.display()))
+    static TRANSPORT: LazyLock<Value> = LazyLock::new(|| expanded(transport::CASES));
+    static SUPPLEMENT: LazyLock<Value> = LazyLock::new(|| expanded(transport::SUPPLEMENT));
+    static REVIEW: LazyLock<Value> = LazyLock::new(|| expanded(transport::REVIEW));
+    static GAPS: LazyLock<Value> = LazyLock::new(|| expanded(super::transport_gaps_cases::CASES));
+    static URL_COMMANDS: LazyLock<Value> = LazyLock::new(|| expanded(url::COMMANDS));
+    static URL_GAPS: LazyLock<Value> = LazyLock::new(|| expanded(url::GAPS));
+    let table: &Value = match name {
+        "chromium" => &CHROMIUM,
+        "transport" => &TRANSPORT,
+        "transport-supplement" => &SUPPLEMENT,
+        "transport-review-supplement" => &REVIEW,
+        "transport-gaps" => &GAPS,
+        "url-commands" => &URL_COMMANDS,
+        "url-gaps" => &URL_GAPS,
+        other => panic!("tabela desconhecida: {other}"),
+    };
+    table.clone()
 }
 
-pub fn assert_python_platform(platform: &Value) {
-    let platform = platform.as_str().expect("referência Python sem identificador da plataforma");
-    let rust_platform = match platform { "darwin" => "macos", other => other };
-    assert_eq!(rust_platform, std::env::consts::OS, "a referência Python precisa ser da plataforma atual");
+/// As tabelas abreviam o quadro medido e as repetições longas: `⟦FRAME⟧`, `⟦SCREENSHOT⟧`, `⟦n×trecho⟧`.
+fn expand(value: &mut Value, chromium: &Value) {
+    match value {
+        Value::Array(items) => items.iter_mut().for_each(|item| expand(item, chromium)),
+        Value::Object(fields) => fields.values_mut().for_each(|item| expand(item, chromium)),
+        Value::String(text) => *text = match text.as_str() {
+            "⟦FRAME⟧" => chromium["frame"]["data"].as_str().unwrap().to_owned(),
+            "⟦SCREENSHOT⟧" => chromium["screenshot"]["data"].as_str().unwrap().to_owned(),
+            other => expand_runs(other),
+        },
+        _ => {}
+    }
+}
+
+fn expand_runs(mut rest: &str) -> String {
+    let mut text = String::new();
+    while let Some((before, tail)) = rest.split_once('⟦') {
+        let (run, after) = tail.split_once('⟧').unwrap();
+        let (times, chunk) = run.split_once('×').unwrap();
+        text.push_str(before);
+        text.push_str(&chunk.repeat(times.parse().unwrap()));
+        rest = after;
+    }
+    text.push_str(rest);
+    text
 }
 
 /// O JPEG veio do Chromium medido, nunca de um gerador substituto do protocolo.

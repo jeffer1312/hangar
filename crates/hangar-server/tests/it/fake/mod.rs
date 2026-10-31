@@ -368,6 +368,10 @@ pub async fn spawn_server(cfg: Config) -> SocketAddr {
 pub async fn spawn_state(mut state: hangar_server::routes::AppState) -> SocketAddr {
     hangar_server::accounts::quotas::disable_open_network_read();
     state.side.locate = fake_locate(state.cfg.upstream);
+    // Teste que não escolheu pasta: sem isto, a limpeza de worktrees do servidor lê as configurações do HOME real.
+    if std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).is_some_and(|home| state.origins_home.as_os_str() == home) {
+        state.origins_home = std::env::temp_dir().join("hangar-test-empty-home");
+    }
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(hangar_server::routes::serve_with_state(listener, state));

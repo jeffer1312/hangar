@@ -536,15 +536,10 @@ pub(crate) mod tests {
             default_config_dir: "/r/home/.claude".into(), birth: Duration::from_millis(500) }
     }
 
-    fn fixture(name: &str) -> Value {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../backend/tests/fixtures/contract/session-open").join(format!("{name}.json"));
-        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
-    }
-
-    /// O argv que o Python passou ao `new-session` no cenário e o `-e` da sessão (depois de `CP_PROVIDER`
-    /// e do `WAYLAND_DISPLAY`, antes da conta).
-    fn python_argv(name: &str) -> (Vec<String>, Vec<(String, String)>) {
-        let fixture = fixture(name);
+    /// O argv do `new-session` escrito no cenário e o `-e` da sessão (depois de `CP_PROVIDER` e do
+    /// `WAYLAND_DISPLAY`, antes da conta).
+    fn expected_argv(name: &str) -> (Vec<String>, Vec<(String, String)>) {
+        let fixture = crate::session_open::cases::named(name);
         let tmux = fixture["result"]["subprocesses"].as_array().unwrap().iter().find(|p| p["prog"] == "tmux").unwrap();
         let concrete = |a: &str| a.replace("<ROOT>", "/r").replace("<REPO>", "/repo").replace("<uuid:1>", "11111111-1111-4111-8111-111111111111");
         let argv: Vec<String> = tmux["argv"].as_array().unwrap().iter().map(|a| concrete(a.as_str().unwrap())).collect();
@@ -562,12 +557,12 @@ pub(crate) mod tests {
                 "/repo/plugins/github-actions", "--permission-mode", "bypassPermissions"].map(str::to_owned).into() }
     }
 
-    /// O mesmo argv do Python, mais o `CP_SESSION_KEY` (matriz, item 2) e o `/bin/sh -c` que tira o
+    /// O argv do cenário, mais o `CP_SESSION_KEY` (matriz, item 2) e o `/bin/sh -c` que tira o
     /// `default-shell` do caminho: conta padrão com `env -u`, conta escolhida por `-e`.
     #[test]
-    fn the_new_session_argv_is_the_python_one_plus_the_session_key() {
+    fn the_new_session_argv_is_the_expected_one_plus_the_session_key() {
         for (fixture, config_dir) in [("create_claude_terminal_default", None), ("create_claude_terminal_account_b", Some("/r/home/.claude-b"))] {
-            let (mut python, env) = python_argv(fixture);
+            let (mut python, env) = expected_argv(fixture);
             let at = python.iter().position(|a| a == "CP_PROVIDER=claude").unwrap() + 1;
             python.splice(at..at, ["-e".to_owned(), format!("CP_SESSION_KEY={}", "k".repeat(32))]);
             python.insert(0, "tmux".into());

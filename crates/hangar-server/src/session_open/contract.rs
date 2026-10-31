@@ -1,6 +1,5 @@
-//! O lado Rust do harness de contrato da abertura (`session_open_contract.py diff --side rust`): a
-//! abertura do Rust sobre o cenário montado em disco, com o multiplexador, os programas e as pontes
-//! gravados na forma em que o lado Python os grava. Só para o harness e os testes.
+//! A abertura do Rust sobre o cenário montado em disco, com o multiplexador, os programas e as pontes
+//! gravados. Só para os testes.
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -308,7 +307,7 @@ impl OpenHost for Host {
 }
 
 /// Roda os passos do cenário (só `POST /api/sessions`) pela abertura do Rust. `{"not_ours": true}`
-/// quando algum passo não é do Rust (o Python o atende): o harness diz a rota que falta.
+/// quando algum passo não é do Rust.
 pub async fn run(scenario: &Value, root: &Path, env: BTreeMap<String, String>) -> Value { run_with(scenario, root, env, None).await }
 
 /// A resolução de `request` com os fatos do cenário, como a do passo `POST /api/sessions`, sem gravar
