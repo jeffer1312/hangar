@@ -17,6 +17,7 @@ pub mod costs;
 pub mod costs_routes;
 pub mod costs_failure;
 pub mod device_install;
+pub mod devices;
 pub mod diag;
 pub(crate) mod diag_report;
 pub mod display_env;

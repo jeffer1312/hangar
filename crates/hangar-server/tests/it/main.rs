@@ -15,6 +15,8 @@ mod artifacts;
 mod session_media;
 mod commands;
 mod device_install;
+#[cfg(unix)]
+mod devices;
 mod diag_report;
 mod auto_report;
 mod install_root;

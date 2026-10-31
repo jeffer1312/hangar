@@ -70,6 +70,8 @@ pub struct AppState {
     pub list: Arc<crate::list::bridge::ListBridge>,
     /// Produtor único da lista do dono; liga com a primeira lista aberta.
     pub hub: Arc<crate::list::hub::ListHub>,
+    /// Aparelhos que já abriram a lista do dono (`~/.hangar/devices.json`); o teste troca por uma pasta temporária.
+    pub devices: Arc<crate::devices::Registry>,
     /// Painéis de terminal real de todas as portas.
     pub term: Arc<crate::term::Terms>,
     /// O que os `Monitor`s de estado compartilham (Claude com terminal).
@@ -198,6 +200,7 @@ impl AppState {
             costs, fx, reports: Arc::new(crate::costs::ReportCache::default()),
             origins_home: std::path::PathBuf::from(std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).unwrap_or_default()),
             prewarm: Arc::new(crate::prewarm::Store::server(&hangar_dir)),
+            devices: Arc::new(crate::devices::Registry::new(hangar_dir.join("devices.json"))),
             update_release_base: crate::update::RELEASE_BASE.to_owned(),
             diag_report_base: crate::diag_report::WORKER_BASE.to_owned(),
             hangar_dir, device_install,
