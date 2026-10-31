@@ -22,6 +22,7 @@ vi.mock('./TagsPlateAnimation', () => ({ TagsPlateAnimation: () => null }));
 vi.mock('./RenameSuggestionAnimation', () => ({ RenameSuggestionAnimation: () => null }));
 vi.mock('./CodexActivityAnimation', () => ({ CodexActivityAnimation: () => null }));
 vi.mock('./AutoReportAnimation', () => ({ AutoReportAnimation: () => null }));
+vi.mock('./HideFromListAnimation', () => ({ HideFromListAnimation: () => null }));
 // O `Notice` vem de machines/parts, que importa a folha e o teclado nativos.
 vi.mock('react-native-keyboard-controller', () => ({ KeyboardAvoidingView: ({ children }: { children: React.ReactNode }) => children }));
 vi.mock('../../ui/Sheet', () => ({ Sheet: ({ children }: { children: React.ReactNode }) => children }));
