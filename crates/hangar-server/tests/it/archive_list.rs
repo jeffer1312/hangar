@@ -476,6 +476,7 @@ async fn f12_index_keeps_the_last_message_beyond_one_megabyte() {
 }
 
 /// PRV-03: agente que falha sai da lista sem derrubar os outros (Codex com rollout em duas contas).
+#[cfg(unix)]
 #[tokio::test]
 async fn prv03_broken_agent_does_not_drop_the_others() {
     let broken = |home: &Path| {

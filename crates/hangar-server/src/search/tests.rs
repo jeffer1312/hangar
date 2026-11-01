@@ -1159,6 +1159,7 @@ fn the_scan_counts_every_eligible_conversation_like_the_index() {
     assert_eq!((scanned, counted()), (3, 3), "a varredura contava só o que leu antes de parar");
 }
 
+#[cfg(unix)]
 #[test]
 fn an_unreadable_transcript_that_comes_back_is_reported_again_when_it_falls() {
     use std::os::unix::fs::PermissionsExt;
@@ -1178,6 +1179,7 @@ fn an_unreadable_transcript_that_comes_back_is_reported_again_when_it_falls() {
     assert_eq!(env.reported("busca.transcript_ilegivel"), 2, "voltou e caiu de novo: outra linha no diário");
 }
 
+#[cfg(unix)]
 #[test]
 fn scan_reports_skipped_files_and_folders_once_each() {
     // A varredura de antes do índice pronto pula arquivo grande, pasta sem permissão e transcript que
