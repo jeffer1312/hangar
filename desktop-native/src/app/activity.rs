@@ -261,8 +261,8 @@ fn sub_silent(agents: &[AgentRun], subs: &[SubRun], run: &SubRun) -> bool {
 }
 
 /// Parado esperando o próprio trabalho de fundo: segue vivo, mas não está pensando.
-fn sub_waiting(agents: &[AgentRun], run: &SubRun) -> bool {
-    agents.iter().any(|agent| agent.waiting && match_agent(std::slice::from_ref(run), agent).is_some())
+fn sub_waiting(agents: &[AgentRun], subs: &[SubRun], run: &SubRun) -> bool {
+    parent_of(agents, subs, run).is_some_and(|agent| agent.waiting)
 }
 
 /// Rodando, terminado ou falho, com o horário do fim (o `endedAt`, senão a última escrita); ou sem notícia desde a
@@ -290,13 +290,18 @@ fn sub_status(agents: &[AgentRun], subs: &[SubRun], run: &SubRun, now: f64) -> S
 }
 
 fn ended_by_parent(agents: &[AgentRun], subs: &[SubRun], run: &SubRun) -> bool {
-    if run.finished { return true; }
-    if let Some(agent) = agents.iter().find(|a| (a.agent_id.is_some() || a.agent_path.is_some()) && match_agent(std::slice::from_ref(run), a).is_some()) { return !agent.running; }
+    run.finished || parent_of(agents, subs, run).is_some_and(|agent| !agent.running)
+}
+
+/// O Agent que lançou `run`: pelo `agentId`/caminho; sem eles, pelo prompt, só quando um Agent e um subagente casam um
+/// com o outro e mais ninguém.
+fn parent_of<'a>(agents: &'a [AgentRun], subs: &[SubRun], run: &SubRun) -> Option<&'a AgentRun> {
+    if let Some(agent) = agents.iter().find(|a| (a.agent_id.is_some() || a.agent_path.is_some()) && match_agent(std::slice::from_ref(run), a).is_some()) { return Some(agent); }
     let subs_of = |prompt: Option<&str>| subs.iter().filter(|s| match_sub(std::slice::from_ref(*s), prompt).is_some()).count();
     let mut by_prompt = agents.iter().filter(|a| a.agent_id.is_none() && a.agent_path.is_none() && match_sub(std::slice::from_ref(run), a.prompt.as_deref()).is_some());
     match (by_prompt.next(), by_prompt.next()) {
-        (Some(agent), None) => !agent.running && subs_of(agent.prompt.as_deref()) == 1,
-        _ => false,
+        (Some(agent), None) if subs_of(agent.prompt.as_deref()) == 1 => Some(agent),
+        _ => None,
     }
 }
 
@@ -1061,8 +1066,8 @@ impl ActivityPanel {
         let run = &opened.run;
         let empty = |text: String| div().px_4().py_4().text_center().text_sm().text_color(theme::faint()).child(text).into_any_element();
         let running = !opened.done && !run.failed && !run.unreadable && run.problem.is_none() && !sub_silent(&self.activity.agents, &self.subs, run);
-        let waiting = sub_waiting(&self.activity.agents, run);
-        let body =if !opened.loaded { empty(tr("subagent_loading")) }
+        let waiting = sub_waiting(&self.activity.agents, &self.subs, run);
+        let body = if!opened.loaded { empty(tr("subagent_loading")) }
             else if opened.has_events {
                 let conversation = super::panes::cached_selectable(self.conversation.clone().into(), StyleRefinement::default().size_full());
                 // Como o `Spinner` que o web põe sob a conversa do subagente enquanto ele roda.
@@ -1530,7 +1535,7 @@ impl Hangar {
             let silent = opened.is_some_and(|o| sub_silent(&view.activity.agents, &view.subs, &o.run));
             let running = !unavailable && !silent && opened.is_some_and(|o| !o.done);
             let failed = opened.is_some_and(|o| o.run.failed);
-            let waiting = running && opened.is_some_and(|o| sub_waiting(&view.activity.agents, &o.run));
+            let waiting = running && opened.is_some_and(|o| sub_waiting(&view.activity.agents, &view.subs, &o.run));
             let icon = if waiting { chrome::small_icon(IconName::Hourglass, 12., theme::muted()).into_any_element() }
                 else if running { self.working_mark_slot(super::panes::Area::Side, format!("subagent-tab-{id}"), 12., theme::accent()) }
                 else if silent && !unavailable && !failed { chrome::small_icon(IconName::Info, 12., theme::muted()).into_any_element() }
@@ -1917,11 +1922,17 @@ mod tests {
     fn subagent_waiting_on_its_background_work_is_shown_as_waiting() {
         use super::sub_waiting;
         let waiting = |id: Option<&str>| AgentRun { waiting: true, ..parent("t1", "tarefa um", id, true) };
-        assert!(sub_waiting(&[waiting(Some("a"))], &sub("a", "tarefa um")));
-        assert!(sub_waiting(&[waiting(None)], &sub("a", "tarefa um")));
+        let a = sub("a", "tarefa um");
+        let subs = [a.clone()];
+        assert!(sub_waiting(&[waiting(Some("a"))], &subs, &a));
+        assert!(sub_waiting(&[waiting(None)], &subs, &a));
         // A espera de outro Agent não marca este subagente.
-        assert!(!sub_waiting(&[waiting(Some("b"))], &sub("a", "tarefa um")));
-        assert!(!sub_waiting(&[parent("t1", "tarefa um", Some("a"), true)], &sub("a", "tarefa um")));
+        assert!(!sub_waiting(&[waiting(Some("b"))], &subs, &a));
+        assert!(!sub_waiting(&[parent("t1", "tarefa um", Some("a"), true)], &subs, &a));
+        // Dono pelo agentId vence o Agent sem id de prompt igual que está esperando.
+        assert!(!sub_waiting(&[parent("t1", "tarefa um", Some("a"), true), waiting(None)], &subs, &a));
+        // Prompt repetido em dois Agent sem id: ambíguo, não marca.
+        assert!(!sub_waiting(&[waiting(None), parent("t2", "tarefa um", None, true)], &subs, &a));
     }
 
     #[test]
