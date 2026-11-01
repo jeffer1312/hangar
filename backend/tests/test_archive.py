@@ -154,17 +154,3 @@ def test_linha_de_usuario_sem_previa_continua_listada(tmp_path):
     assert [f.count for f in archive.list_folders()] == [1]
 
 
-def test_previa_do_indice_dispensa_a_leitura(tmp_path, monkeypatch):
-    # Com a 1ª msg já no cabeçalho do índice, saber que há usuário não abre o arquivo de novo.
-    j = _write_transcript(tmp_path / "-home-u-proj")
-    monkeypatch.setattr(archive, "_heads", lambda: {str(j): ("oi arquivo", "/home/u/proj")})
-    abertos = []
-    original = open
-
-    def espia(path, *a, **kw):
-        abertos.append(str(path))
-        return original(path, *a, **kw)
-
-    monkeypatch.setattr("builtins.open", espia)
-    assert [f.count for f in archive.list_folders()] == [1]
-    assert str(j) not in abertos

@@ -170,11 +170,6 @@ def _kimi_jsonl(session_id: str) -> Optional[Path]:
 
 
 # ── Codex ─────────────────────────────────────────────────────────────────────
-def _codex_raiz(home: Path | str | None = None) -> Path:
-    base = codex_contas.default_home() if home is None else Path(home)
-    return base.expanduser().absolute() / "sessions"
-
-
 def _codex_raizes(home: Path | str) -> tuple[Path, Path]:
     base = Path(home).expanduser().absolute()
     return base / "sessions", base / "archived_sessions"

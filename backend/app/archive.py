@@ -232,20 +232,11 @@ def _conversas_de_outros_providers():
     return archive_providers.conversas()
 
 
-def _heads() -> dict[str, tuple[str, Optional[str]]]:
-    """Cabecalhos (preview, cwd) ja lidos pelo indice; arquivo fora dele cai no _head_info."""
-    from app import transcript_index
-    idx = transcript_index.current()
-    if idx is None:
-        return {}
-
-
 def list_folders(config_dir: Optional[str] = None) -> list[ArchiveFolder]:
     """Nivel 1: as pastas (projetos) com conversa arquivada, mais recentes primeiro. A MESMA pasta
     costuma existir em varias contas -- aqui elas somam numa linha so (a pasta e o que o usuario
     procura; de qual conta e cada conversa so importa um nivel abaixo)."""
     agg: dict[str, ArchiveFolder] = {}
-    heads = _heads()
     for _cfg, _rot, base in _contas(config_dir):
         try:
             projdirs = [d for d in base.iterdir() if d.is_dir()]
@@ -253,11 +244,10 @@ def list_folders(config_dir: Optional[str] = None) -> list[ArchiveFolder]:
             continue
         for proj in projdirs:
             files = [(mt, f) for mt, f in _folder_files(proj)
-                     if _tem_usuario(f, (heads.get(str(f)) or ("", None))[0], mt)]
+                     if _tem_usuario(f, "", mt)]
             if not files:
                 continue
-            # cwd real do transcript mais recente (1 leitura/pasta quando o indice ainda nao tem)
-            _, cwd = heads.get(str(files[0][1])) or _head_info(files[0][1])
+            _, cwd = _head_info(files[0][1])
             ja = agg.get(proj.name)
             if ja is None:
                 agg[proj.name] = ArchiveFolder(project=proj.name, cwd=cwd, count=len(files),
