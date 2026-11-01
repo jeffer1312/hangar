@@ -41,9 +41,11 @@ pub fn matches(method: &Method, path: &str) -> bool {
 /// O que a leitura decidiu: a resposta pronta ou o transcript que não abriu.
 enum Outcome { Done(Response), Unreadable }
 
-fn int_parsing(loc: [&str; 2], input: &str) -> Response {
-    json_response(StatusCode::UNPROCESSABLE_ENTITY, json!({"detail": [{"type": "int_parsing", "loc": loc,
-        "msg": "Input should be a valid integer, unable to parse string as an integer", "input": input}]}))
+fn int_parsing(req: &axum::http::HeaderMap, loc: [&str; 2], input: &str) -> Response {
+    let mut response = json_response(StatusCode::UNPROCESSABLE_ENTITY, json!({"detail": [{"type": "int_parsing", "loc": loc,
+        "msg": "Input should be a valid integer, unable to parse string as an integer", "input": input}]}));
+    cors(req, response.headers_mut());
+    response
 }
 
 pub(crate) fn reply(error: OpenError) -> Response {
@@ -170,7 +172,7 @@ pub async fn history(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
     let query = req.uri().query().map(str::to_owned);
     let tail = match crate::auth::query_param(query.as_deref(), "tail") {
         None => 0,
-        Some(raw) => match raw.trim().parse::<i64>() { Ok(n) => n, Err(_) => return int_parsing(["query", "tail"], &raw) },
+        Some(raw) => match raw.trim().parse::<i64>() { Ok(n) => n, Err(_) => return int_parsing(req.headers(), ["query", "tail"], &raw) },
     };
     let worker = st.clone();
     let done = tokio::task::spawn_blocking(move || -> Result<Outcome, OpenError> {
@@ -399,7 +401,7 @@ pub async fn image(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
                    RoutePath((project, sid, uuid, idx)): RoutePath<(String, String, String, String)>, req: Request) -> Response {
     let (fwd, owner) = match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     if !owner || req.method() != Method::GET { return pass(&st, req, &fwd).await; }
-    let Ok(idx) = idx.trim().parse::<i64>() else { return int_parsing(["path", "idx"], &idx) };
+    let Ok(idx) = idx.trim().parse::<i64>() else { return int_parsing(req.headers(), ["path", "idx"], &idx) };
     let query = req.uri().query().map(str::to_owned);
     let worker = st.clone();
     let done = tokio::task::spawn_blocking(move || -> Result<Outcome, OpenError> {
