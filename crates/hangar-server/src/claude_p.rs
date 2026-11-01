@@ -1,5 +1,5 @@
-//! `claude -p` efêmero (sonnet), sem ferramenta com efeito: o texto vem do usuário e roda com o
-//! perfil da máquina. A conta é a de mais folga; bateu o limite, relê as cotas e tenta UMA vez a
+//! `claude -p` efêmero (sonnet), sem ferramenta nem MCP (os do perfil e os dos plugins): o texto vem
+//! do usuário e roda com o perfil da máquina. A conta é a de mais folga; bateu o limite, relê as cotas e tenta UMA vez a
 //! próxima. Usado pelo refino do loop e pelo Perguntar.
 use futures_util::future::BoxFuture;
 use serde_json::Value;
@@ -8,8 +8,6 @@ use std::time::Duration;
 
 pub const TIMEOUT: Duration = Duration::from_secs(60);
 const LIMIT_EXIT0_MAX: usize = 300;
-/// Variádico no CLI: o prompt vai pelo stdin, nunca depois destes no argv.
-pub const DISALLOWED: [&str; 6] = ["Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch"];
 
 static LIMIT: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"(?i)hit your .*limit|usage limit|rate limit").unwrap());
 /// Com exit 0 só é limite se a saída inteira FOR o aviso: resposta que cita "limit" fica.
@@ -129,7 +127,7 @@ impl Cli {
             use tokio::io::{AsyncReadExt, AsyncWriteExt};
             let Some(mut command) = self.accounts.claude_command() else { return Err("claude CLI não encontrado".into()) };
             let failed = |e: std::io::Error| format!("claude -p falhou ao iniciar: {}", e.kind());
-            command.args(["-p", "--model", "sonnet", "--no-session-persistence", "--disallowedTools"]).args(DISALLOWED)
+            command.args(["-p", "--model", "sonnet", "--no-session-persistence", "--tools", "", "--strict-mcp-config", "--mcp-config", r#"{"mcpServers":{}}"#])
                 .current_dir(std::env::temp_dir()).stdin(std::process::Stdio::piped())
                 .stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).kill_on_drop(true);
             for key in crate::terminal_process::PRIVATE_ENV_KEYS { command.env_remove(key); }
@@ -250,8 +248,8 @@ mod tests {
         let cli = cli(dir.path());
         let got = cli.run("pergunta\nlinha 2", None).await.unwrap();
         assert_eq!((got.code, got.stdout.as_str(), got.stderr.as_str()), (3, "olá\n", "aviso"));
-        assert_eq!(read("argv").lines().collect::<Vec<_>>(), ["-p", "--model", "sonnet", "--no-session-persistence", "--disallowedTools",
-            "Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch"]);
+        assert_eq!(read("argv").lines().collect::<Vec<_>>(), ["-p", "--model", "sonnet", "--no-session-persistence", "--tools", "",
+            "--strict-mcp-config", "--mcp-config", r#"{"mcpServers":{}}"#]);
         assert_eq!(read("stdin"), "pergunta\nlinha 2");
         assert_eq!(Path::new(read("cwd").trim_end()), std::env::temp_dir().canonicalize().unwrap());
         // Conta padrão: o ambiente do servidor como está (`env=None` no Python).
