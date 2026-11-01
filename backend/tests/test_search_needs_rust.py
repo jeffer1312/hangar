@@ -35,6 +35,11 @@ def test_trailing_slash_is_unavailable_too(python_mode, url):
     assert (response.status_code, response.json()["detail"]["code"]) == (503, "erro_busca_precisa_rust")
 
 
+def test_ask_with_trailing_slash_is_unavailable_too(python_mode):
+    response = TestClient(app).post("/api/ask-history/", headers=AUTH, json={"question": "x"})
+    assert (response.status_code, response.json()["detail"]["code"]) == (503, "erro_busca_precisa_rust")
+
+
 def test_pending_mode_is_unavailable(monkeypatch):
     monkeypatch.setattr(settings, "auth_token", TOKEN)
     monkeypatch.setattr(runtime_coordinator, "current", lambda: SimpleNamespace(mode="pending"))

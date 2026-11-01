@@ -620,7 +620,7 @@ _SEARCH_ASK_ARCHIVE = re.compile(r"^/api/(search|search/context|archive|archive-
 async def _search_without_rust(request: Request, call_next):
     from app import account_bridge
     path, metodo = request.url.path, request.method
-    owned = metodo == "GET" and _SEARCH_ASK_ARCHIVE.match(path) or metodo == "POST" and path == "/api/ask-history"
+    owned = metodo == "GET" and _SEARCH_ASK_ARCHIVE.match(path) or metodo == "POST" and path.rstrip("/") == "/api/ask-history"
     if not owned or account_bridge.owner_mode() == "rust":
         return await call_next(request)
     try:
