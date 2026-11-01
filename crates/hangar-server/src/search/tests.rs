@@ -1390,3 +1390,25 @@ fn a_huge_line_that_comes_back_after_a_clean_read_is_reported_again() {
     env.index.update().unwrap();
     assert_eq!(env.reported("busca.linha_enorme"), 2, "a leitura sem linha enorme libera o registro");
 }
+
+#[test]
+fn corruption_wakes_the_producer_to_rebuild_without_a_new_write() {
+    let env = Env::small(Timing { first_pass: Duration::ZERO, ..quiet() });
+    env.write(SID, &[line("agulha um", "u1", "user")], false);
+    let _producer = env.index.start().unwrap();
+    wait_for("1ª passada", || env.index.ready());
+    wait_for("observador de pé", || env.watching());
+    let other = env.db();
+    other.execute_batch("PRAGMA wal_checkpoint(TRUNCATE); INSERT INTO meta(k, v) VALUES ('t', '1'); PRAGMA wal_checkpoint(TRUNCATE);").unwrap();
+    drop(other);
+    let path = env.index.path().to_owned();
+    let size = fs::metadata(&path).unwrap().len() as usize;
+    let mut file = fs::OpenOptions::new().write(true).open(&path).unwrap();
+    std::io::Seek::seek(&mut file, std::io::SeekFrom::Start(4096)).unwrap();
+    std::io::Write::write_all(&mut file, &b"lixo".repeat(size / 4)).unwrap();
+    drop(file);
+    // Esta escrita dispara a passada que vê a corrupção; depois dela nenhuma outra acontece.
+    env.write(SID2, &[line("agulha dois", "u2", "user")], false);
+    wait_for("índice refeito sem escrita nova", || env.index.ready()
+        && Connection::open(env.index.path()).and_then(|c| c.query_row("SELECT count(*) FROM files", [], |r| r.get::<_, i64>(0))).is_ok_and(|n| n == 2));
+}

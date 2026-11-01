@@ -263,8 +263,10 @@ impl Index {
                 // O banco some agora: até a passada refazê-lo, a busca vai à varredura.
                 self.inner.ready.store(false, Ordering::Release);
                 tracing::warn!(error = %e, "índice da busca corrompido durante a passada, reconstruindo");
-                if let Err(gone) = db::discard(&self.inner.path) {
-                    self.report_once("busca.indice_nao_apagado", "", || gone.to_string());
+                match db::discard(&self.inner.path) {
+                    // Sem escrita nova nada chamaria a passada que refaz o índice.
+                    Ok(()) => self.wake_producer(watch::Wake::Changed),
+                    Err(gone) => self.report_once("busca.indice_nao_apagado", "", || gone.to_string()),
                 }
             }
             self.report_once("busca.ingestao_falhou", "", || e.to_string());
