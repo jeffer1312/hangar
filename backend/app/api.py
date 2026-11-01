@@ -613,7 +613,7 @@ async def _planos_pelo_rust(request: Request, call_next):
 
 # Busca, Perguntar e Arquivo são só do Rust: sem ele, indisponível com código, sem reserva.
 _BUSCA_ARQUIVO = re.compile(r"^/api/(search|search/context|archive|archive-por-cwd|archive/recent|archive/[^/]+"
-                            r"|archive/[^/]+/[^/]+/history|archive/[^/]+/[^/]+/transcript-image/[^/]+/[^/]+)$")
+                            r"|archive/[^/]+/[^/]+/history|archive/[^/]+/[^/]+/transcript-image/[^/]+/[^/]+)/?$")
 
 
 @app.middleware("http")
@@ -621,7 +621,7 @@ async def _busca_sem_rust(request: Request, call_next):
     from app import account_bridge
     path, metodo = request.url.path, request.method
     owned = metodo == "GET" and _BUSCA_ARQUIVO.match(path) or metodo == "POST" and path == "/api/ask-history"
-    if not owned or account_bridge.owner_mode() != "python":
+    if not owned or account_bridge.owner_mode() == "rust":
         return await call_next(request)
     try:
         await require_auth(request)

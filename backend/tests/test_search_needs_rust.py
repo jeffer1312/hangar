@@ -1,4 +1,4 @@
-"""Busca, Perguntar e Arquivo são só do Rust: no modo `python` respondem indisponível com código."""
+"""Busca, Perguntar e Arquivo são só do Rust: fora do modo `rust` respondem indisponível com código."""
 from types import SimpleNamespace
 
 import pytest
@@ -26,6 +26,19 @@ def python_mode(monkeypatch):
 @pytest.mark.parametrize("method,url", ROUTES)
 def test_python_mode_answers_unavailable_with_code(python_mode, method, url):
     response = TestClient(app).request(method, url, headers=AUTH, json={"question": "x"} if method == "POST" else None)
+    assert (response.status_code, response.json()["detail"]["code"]) == (503, "erro_busca_precisa_rust")
+
+
+@pytest.mark.parametrize("url", ["/api/search/", "/api/archive/recent/"])
+def test_trailing_slash_is_unavailable_too(python_mode, url):
+    response = TestClient(app).get(url, headers=AUTH)
+    assert (response.status_code, response.json()["detail"]["code"]) == (503, "erro_busca_precisa_rust")
+
+
+def test_pending_mode_is_unavailable(monkeypatch):
+    monkeypatch.setattr(settings, "auth_token", TOKEN)
+    monkeypatch.setattr(runtime_coordinator, "current", lambda: SimpleNamespace(mode="pending"))
+    response = TestClient(app).get("/api/search?q=x", headers=AUTH)
     assert (response.status_code, response.json()["detail"]["code"]) == (503, "erro_busca_precisa_rust")
 
 
