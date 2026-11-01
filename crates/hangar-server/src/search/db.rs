@@ -8,7 +8,7 @@ use rusqlite::{Connection, ErrorCode};
 
 use super::IndexError;
 
-pub(super) const SCHEMA_VERSION: i64 = 3;
+pub(super) const SCHEMA_VERSION: i64 = 4;
 
 // O `_SCHEMA` do Python mais conta, agente, conta Codex e o que o Arquivo lê do arquivo.
 const SCHEMA: &str = "
@@ -47,11 +47,16 @@ CREATE TABLE msg(
 CREATE INDEX msg_file ON msg(file_id);
 CREATE VIRTUAL TABLE msg_fts USING fts5(
     text, content='msg', content_rowid='id', tokenize='trigram remove_diacritics 1');
+-- Palavra inteira (D28): letras e dígitos formam o token; os símbolos ASCII também separam.
+CREATE VIRTUAL TABLE msg_words USING fts5(
+    text, content='msg', content_rowid='id', tokenize=\"unicode61 remove_diacritics 2 separators '$+<=>^`|~'\");
 CREATE TRIGGER msg_ai AFTER INSERT ON msg BEGIN
     INSERT INTO msg_fts(rowid, text) VALUES (new.id, new.text);
+    INSERT INTO msg_words(rowid, text) VALUES (new.id, new.text);
 END;
 CREATE TRIGGER msg_ad AFTER DELETE ON msg BEGIN
     INSERT INTO msg_fts(msg_fts, rowid, text) VALUES ('delete', old.id, old.text);
+    INSERT INTO msg_words(msg_words, rowid, text) VALUES ('delete', old.id, old.text);
 END;
 CREATE TABLE meta(k TEXT PRIMARY KEY, v TEXT);
 ";
@@ -67,7 +72,7 @@ fn connect(path: &Path) -> rusqlite::Result<Connection> {
     if version != SCHEMA_VERSION {
         let old: Vec<(String, String)> = conn.prepare(
             "SELECT type, name FROM sqlite_master WHERE type IN ('table','trigger') \
-             AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'msg_fts_%'")?
+             AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'msg_fts_%' AND name NOT LIKE 'msg_words_%'")?
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<_, _>>()?;
         for (kind, name) in old {
             conn.execute_batch(&format!("DROP {} IF EXISTS \"{}\"", kind.to_uppercase(), name.replace('"', "\"\"")))?;

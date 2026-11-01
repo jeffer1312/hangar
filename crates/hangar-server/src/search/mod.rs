@@ -343,7 +343,7 @@ impl Index {
         Ok(conn)
     }
 
-    /// Trechos dos termos, arquivo mais novo primeiro, até 3 por arquivo, conversa interna fora.
+    /// Trechos dos termos na ordem de `cap` (D28), até 3 por arquivo, conversa interna fora.
     /// `None`: índice ainda não pronto ou nenhum termo (quem chama procura de outro jeito).
     pub fn search(&self, terms: &[String], limit: usize) -> Result<Option<Vec<Row>>, IndexError> {
         if terms.is_empty() || !self.ready() {
@@ -354,6 +354,7 @@ impl Index {
         let (long, short): (Vec<&String>, Vec<&String>) = terms.iter().partition(|t| t.chars().count() >= 3);
         let short: Vec<String> = short.into_iter().map(|t| fold(t)).collect();
         let matches = |text: &str| short.is_empty() || { let f = fold(text); short.iter().all(|t| f.contains(t.as_str())) };
+        let folded: Vec<String> = terms.iter().map(|t| fold(t)).collect();
         let conn = self.reader()?;
         let mut batch: Vec<Candidate> = Vec::new();
         if long.is_empty() {
@@ -371,17 +372,22 @@ impl Index {
             }
         } else {
             let query = long.iter().map(|t| format!("\"{}\"", t.replace('"', "\"\""))).collect::<Vec<_>>().join(" AND ");
-            // O lote sai do FTS em rowid decrescente e para no LIMIT, como no Python.
-            let mut stmt = conn.prepare(&format!(
-                "SELECT {CANDIDATE_COLUMNS} FROM msg_fts JOIN msg m ON m.id = msg_fts.rowid JOIN files f ON f.id = m.file_id \
-                 WHERE msg_fts MATCH ?1 AND COALESCE(f.internal, 0) = 0 ORDER BY msg_fts.rowid DESC LIMIT ?2"))?;
-            let rows = stmt.query_map(rusqlite::params![query, CANDIDATES as i64], Candidate::from_row)?;
-            for c in rows {
-                let c = c?;
-                if matches(&c.row.text) { batch.push(c); }
+            // Cada lote sai do FTS em rowid decrescente e para no LIMIT, como no Python.
+            let lot = |table: &str| -> Result<Vec<Candidate>, IndexError> {
+                let mut stmt = conn.prepare(&format!(
+                    "SELECT {CANDIDATE_COLUMNS} FROM {table} JOIN msg m ON m.id = {table}.rowid JOIN files f ON f.id = m.file_id \
+                     WHERE {table} MATCH ?1 AND COALESCE(f.internal, 0) = 0 ORDER BY {table}.rowid DESC LIMIT ?2"))?;
+                let rows = stmt.query_map(rusqlite::params![query, CANDIDATES as i64], Candidate::from_row)?;
+                Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+            };
+            // Palavra inteira com lote próprio (D28): pedaço comum ("estoura") não tira do lote a
+            // conversa velha com "tour" inteiro. Termo só de pontuação não forma palavra: fica na trigram.
+            if long.iter().all(|t| t.chars().any(char::is_alphanumeric)) {
+                batch.extend(lot("msg_words")?.into_iter().filter(|c| matches(&c.row.text) && hits::whole(&c.row.text, &folded)));
             }
+            let seen: HashSet<i64> = batch.iter().map(|c| c.id).collect();
+            batch.extend(lot("msg_fts")?.into_iter().filter(|c| !seen.contains(&c.id) && matches(&c.row.text)));
         }
-        let folded: Vec<String> = terms.iter().map(|t| fold(t)).collect();
         Ok(Some(cap(batch, limit, &folded)))
     }
 

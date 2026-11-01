@@ -290,6 +290,21 @@ fn finds_substring_without_case_or_accent() {
 }
 
 #[test]
+fn word_table_tokens_are_whole_words_with_the_d28_boundary() {
+    // D28: a tabela por palavra separa em `_`, `-` e nos símbolos ASCII, ignora acento e caixa, e
+    // dígito fica na palavra; ela some e volta com a mensagem.
+    let env = Env::small(quiet());
+    env.write(SID, &[line("meu_tour-x", "u1", "user"), line("a+tour=b", "u2", "user"), line("estoura tour2", "u3", "user"),
+        line("AÇÃO feita", "u4", "user")], false);
+    env.index.update().unwrap();
+    let words = |q: &str| env.count(&format!("SELECT count(*) FROM msg_words WHERE msg_words MATCH '\"{q}\"'"));
+    assert_eq!((words("tour"), words("acao"), words("tour2"), words("estoura")), (2, 1, 1, 1));
+    env.write(SID, &[line("outra", "u5", "user")], false);
+    env.index.update().unwrap();
+    assert_eq!(words("tour"), 0, "o gatilho de remoção tira a palavra");
+}
+
+#[test]
 fn fts_syntax_is_literal_text() {
     // IDX-19, SRCH-22: `test_sintaxe_do_fts_nao_quebra_a_busca` e o texto como frase literal.
     let env = Env::small(quiet());

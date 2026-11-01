@@ -224,7 +224,7 @@ pub(crate) fn search(index: &Index, q: &str, live: &HashMap<String, String>, lim
 }
 
 /// `search` e quantas conversas foram consideradas: os transcripts não internos do índice ou, antes
-/// dele, os que a varredura leu.
+/// dele, os não internos que a varredura leu.
 pub(crate) fn search_counted(index: &Index, q: &str, live: &HashMap<String, String>, limit: usize)
     -> Result<(Vec<Hit>, usize), String> {
     let terms = terms(q);
@@ -304,7 +304,7 @@ fn from_rows(rows: Vec<Row>, terms: &[String], live: &HashMap<String, String>, c
 }
 
 /// A varredura de antes do índice pronto: arquivo mais novo primeiro, até 3 por arquivo; para quando
-/// as conversas com palavra inteira já enchem `limit`. Devolve também quantos transcripts leu.
+/// as conversas com palavra inteira já enchem `limit`. Devolve também quantos transcripts não internos leu.
 fn scan(index: &Index, accounts: &[Account], terms: &[String], live: &HashMap<String, String>, limit: usize) -> (Vec<Hit>, usize) {
     scan_with(index, accounts, terms, live, limit, true)
 }
@@ -343,10 +343,10 @@ pub(super) fn scan_with(index: &Index, accounts: &[Account], terms: &[String], l
         };
         for (&(path, found), (agent, scanned)) in batch.iter().zip(read) {
             if led >= limit { break; }
-            if scanned.is_ok() { considered += 1; }
+            if matches!(scanned, Ok((false, _))) { considered += 1; }
             let scanned = match scanned {
-                Ok(Some(scanned)) => scanned,
-                Ok(None) => continue,
+                Ok((_, Some(scanned))) => scanned,
+                Ok((_, None)) => continue,
                 Err(e) => { index.report_once("busca.transcript_ilegivel", path, || format!("{path}: {e}")); continue }
             };
             let Some(mtime) = mtime_of(path) else { continue };
@@ -371,18 +371,25 @@ pub(super) fn scan_with(index: &Index, accounts: &[Account], terms: &[String], l
 /// `messages`: os de palavra inteira antes, até 3. `preview`: a do cabeçalho, como o índice guarda.
 struct Scanned { messages: Vec<ingest::Message>, cwd: Option<String>, model: Option<String>, preview: String }
 
-/// Mensagens do arquivo com todos os termos; `None` = conversa interna do Hangar ou sem achado.
-/// `agent`: outro agente, lido pelo parser dele, com o `cwd` da descoberta. `needles`: arquivo sem
-/// nenhuma linha que passe no pré-filtro fica sem parse.
+/// Se a conversa é interna do Hangar e as mensagens dela com todos os termos (`None` = interna ou
+/// sem achado). `agent`: outro agente, lido pelo parser dele, com o `cwd` da descoberta. `needles`:
+/// arquivo sem nenhuma linha que passe no pré-filtro só tem o cabeçalho lido pelo parser.
 #[allow(clippy::too_many_arguments)]
 fn scan_file(path: &str, agent: Option<AgentProvider>, cwd: Option<String>, terms: &[String], longest: &str, prefixes: &[String],
-    needles: Option<&Needles>) -> std::io::Result<Option<Scanned>> {
+    needles: Option<&Needles>) -> std::io::Result<(bool, Option<Scanned>)> {
+    let absorb = |st: &mut ingest::FileState, raw: &[u8]| match agent {
+        Some(provider) => ingest::absorb_agent_line(st, raw, provider, prefixes),
+        None => ingest::absorb_line(st, raw, prefixes),
+    };
     let mut rd = BufReader::new(File::open(path)?);
     if let Some(needles) = needles {
         let (mut raw, mut buf) = (Vec::new(), Vec::new());
+        // Só até saber se é interna: a contagem de conversas consideradas não leva as internas.
+        let mut head = ingest::FileState { cwd: cwd.clone(), ..Default::default() };
         loop {
             raw.clear();
-            if rd.read_until(b'\n', &mut raw)? == 0 { return Ok(None); }
+            if rd.read_until(b'\n', &mut raw)? == 0 { return Ok((head.internal == Some(true), None)); }
+            if head.internal.is_none() { absorb(&mut head, &raw); }
             if may_match(&raw, agent, needles, &mut buf) { break; }
         }
         // O parser precisa de todas as linhas: o filtro de reescrita e o cabeçalho têm estado.
@@ -402,11 +409,7 @@ fn scan_file(path: &str, agent: Option<AgentProvider>, cwd: Option<String>, term
         if raw.len() <= ingest::MAX_LINE_BYTES && fold(&String::from_utf8_lossy(&raw)).contains(longest) {
             matched_lines += 1;
         }
-        let msgs = match agent {
-            Some(provider) => ingest::absorb_agent_line(&mut st, &raw, provider, prefixes),
-            None => ingest::absorb_line(&mut st, &raw, prefixes),
-        };
-        for msg in msgs {
+        for msg in absorb(&mut st, &raw) {
             // Cada reenvio de prompt barrado repete o `held:`; o histórico leva um só.
             if (msg.0.starts_with("held:") || msg.0.starts_with("delivery:")) && !held.insert(msg.0.clone()) { continue; }
             if open && messages.len() < PER_FILE {
@@ -422,10 +425,11 @@ fn scan_file(path: &str, agent: Option<AgentProvider>, cwd: Option<String>, term
     }
     messages.extend(pieces);
     messages.truncate(PER_FILE);
-    if messages.is_empty() || st.internal == Some(true) {
-        return Ok(None);
+    let internal = st.internal == Some(true);
+    if messages.is_empty() || internal {
+        return Ok((internal, None));
     }
-    Ok(Some(Scanned { messages, cwd: st.cwd, model: st.model, preview: st.preview }))
+    Ok((false, Some(Scanned { messages, cwd: st.cwd, model: st.model, preview: st.preview })))
 }
 
 #[cfg(test)]

@@ -525,10 +525,12 @@ async fn search_route_hit_carries_the_closed_name_and_the_first_user_message() {
 
 #[tokio::test]
 async fn search_route_counts_the_conversations_it_considered() {
-    // `X-Hangar-Conversations`: arquivos não internos do índice; antes dele, os transcripts que a
-    // varredura leu. Exposto no CORS.
+    // `X-Hangar-Conversations`: arquivos não internos do índice; antes dele, os transcripts não
+    // internos que a varredura leu. Exposto no CORS.
     for ready in [true, false] {
-        let scene = words_scene(ready, &[("a1", T0 + 30, &["tour"]), ("a2", T0 + 20, &["nada aqui"]), ("a3", T0 + 10, &["outra"])]).await;
+        let internal = "Você recebeu abaixo um resumo automático de uma sessão de trabalho anterior";
+        let scene = words_scene(ready, &[("a1", T0 + 30, &["tour"]), ("a2", T0 + 20, &["nada aqui"]), ("a3", T0 + 10, &["outra"]),
+            ("i1", T0 + 5, &[internal])]).await;
         let response = client().get(format!("http://{}/api/search?q=tour", scene.address)).bearer_auth(OWNER)
             .header("origin", "http://outra").send().await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
@@ -538,4 +540,25 @@ async fn search_route_counts_the_conversations_it_considered() {
         assert!(exposed.split(',').any(|h| h.trim() == "ETag"), "{exposed}");
         assert_eq!(response.json::<Value>().await.unwrap().as_array().unwrap().len(), 1);
     }
+}
+
+#[tokio::test]
+async fn search_route_finds_an_old_whole_word_past_two_thousand_newer_pieces() {
+    // D28 com o índice por palavra: 2100 mensagens novas com "estoura" enchem o lote da trigram; a
+    // conversa velha com "tour" inteiro vem primeiro, com `whole`, pelo índice e pela varredura.
+    let scene = Scene::new(Opts { ready: false, live: None, fixtures: false, ..Opts::default() }).await;
+    conversation(&scene.home, "velha", T0 + 10, &["o tour primeiro uso"]);
+    scene.index.update().unwrap();
+    let texts: Vec<String> = (0..2100).map(|k| format!("estoura {k}")).collect();
+    conversation(&scene.home, "nova", T0 + 50, &texts.iter().map(String::as_str).collect::<Vec<_>>());
+    scene.index.update().unwrap();
+    // O trecho de pedaço é o 1º da conversa nova que coube no lote da trigram (as 2000 mais novas) ou
+    // na varredura (as primeiras do arquivo): só a posição e o `whole` contam aqui.
+    let lead = |hits: &Value| { let r = ranked(hits); (r[0].clone(), r[1].0.starts_with("nova-"), r[1].1.clone()) };
+    let want = (("velha-0".to_owned(), json!(true)), true, json!(false));
+    assert_eq!(lead(&scene.search("tour").await), want, "índice");
+    let fresh = Scene::new(Opts { ready: false, live: None, fixtures: false, ..Opts::default() }).await;
+    conversation(&fresh.home, "velha", T0 + 10, &["o tour primeiro uso"]);
+    conversation(&fresh.home, "nova", T0 + 50, &texts.iter().map(String::as_str).collect::<Vec<_>>());
+    assert_eq!(lead(&fresh.search("tour").await), want, "varredura");
 }
