@@ -690,7 +690,7 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
     `accounts/codex-invalidate`, `workspace/context`,
     `worktrees/context`,
     `transcription/config`, `costs/scopes`, `migration/status`, `diag` e `ping`.
-  - Partes ainda no Python: transcript, estado e entrada geral de Pi, omp e Kimi; Arquivo;
+  - Partes ainda no Python: transcript, estado e entrada geral de Pi, omp e Kimi;
     transferência Claude→Codex; peers;
     workflows e runners; login de convidado. O Connect (8768) está inativo.
   - Atualização: na máquina migrada (pacote ou modo desenvolvedor) as rotas `/api/atualizacao*`
@@ -700,7 +700,7 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
     O `rust_bins.py` lança o Rust pelo caminho real da versão.
   - Tarefas próprias do Python em modo `rust`: `hook_state.watch` (estado de Pi/omp/Kimi; não reage
     a sessão do Rust), `watch_sessions` do Codex a cada 2 s (desligada quando todo Codex é do Rust),
-    índice do Arquivo, `git fetch` e atualização automática (fora do pacote). Travada, limite e queda são avisados
+    `git fetch` e atualização automática (fora do pacote). Travada, limite e queda são avisados
     pelo Rust (`push/watch.rs`); o vigia Python foi apagado e, no modo `python`, esses avisos não
     saem. A retomada dos loops ativos na subida também é só do Rust (`loops/watch.rs`): no modo
     `python` eles não voltam depois do reinício.
@@ -711,8 +711,9 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   (`RuntimeRegistry::request_reopen`), sem pedir ao Python. Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#a-conversa-da-sessão-é-escolhida-pelo-rust-e-a-troca-espera-duas-leituras).
 - **A porta 8765 é do `hangar-server` (Rust); o Python escuta atrás, numa porta de loopback.**
-  O Rust atende `/history` e `/events` de Claude/Codex, `/api/costs`, `/api/uso`, `/api/cotacao` e o
-  custo de sessão Codex com o token do dono, e o terminal real do dono (só pelo
+  O Rust atende `/history` e `/events` de Claude/Codex, `/api/costs`, `/api/uso`, `/api/cotacao`, o
+  custo de sessão Codex, a busca (`/api/search`, com o índice das conversas), o Perguntar
+  (`/api/ask-history`) e o Arquivo (`/api/archive*`) com o token do dono, e o terminal real do dono (só pelo
   `?token=`, sem conferir Origin). Custos e uso têm índice próprio
   (`custos-rust.sqlite3`) no cache local; a faixa `stats` do chat também é do Rust. Contas Claude/Codex e
   cotas são só do Rust: no modo `python` respondem `accounts_need_rust_server`, sem reserva
