@@ -14,7 +14,7 @@ use serde_json::Value;
 use crate::transcript::{InternalInfo, TAIL_WINDOW, history, py, pyjson};
 
 #[path = "transfer_history.rs"]
-mod transfer_history;
+pub(crate) mod transfer_history;
 
 type Item = (f64, u64, ChatEvent);
 static ANSI: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\x1b\[[0-9;:?]*[ -/]*[@-~]").unwrap());

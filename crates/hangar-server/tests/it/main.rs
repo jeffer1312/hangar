@@ -12,7 +12,12 @@ mod tags;
 mod tour_progress;
 mod push_expo;
 mod artifacts;
+mod archive_history;
+mod archive_list;
 mod session_media;
+mod search_context;
+mod search_route;
+mod ask_route;
 mod commands;
 mod device_install;
 #[cfg(unix)]

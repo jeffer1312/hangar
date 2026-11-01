@@ -195,12 +195,3 @@ def test_codex_id_duplicado_exige_conta(duas_contas_codex):
     assert error.value.status == 409
     assert error.value.code == "codex_account_ambiguous_rollout"
     assert ap.jsonl_de("codex", sid, codex_account=work.id) == paths[work.id]
-
-
-def test_historico_arquivado_fora_do_claude_le_linha_a_linha(tmp_path, monkeypatch):
-    from app import api
-    f = tmp_path / "rollout.jsonl"
-    f.write_text('{"n": 1}\nlixo\n\n[1]\n{"n": 2}\n', encoding="utf-8")
-    monkeypatch.setattr(api, "archive_jsonl", lambda *a, **k: f)
-    monkeypatch.setattr(api.archive_providers, "parse_obj", lambda provider, o: [o["n"]])
-    assert api.archive_history("p", "s", provider="codex") == [1, 2]

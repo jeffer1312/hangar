@@ -2,7 +2,7 @@
 pub mod config;
 pub mod http;
 mod body;
-mod history;
+pub(crate) mod history;
 pub mod tts;
 pub mod text_client;
 pub mod narration;

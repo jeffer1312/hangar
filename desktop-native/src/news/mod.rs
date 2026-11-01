@@ -8,6 +8,7 @@ mod login_browser;
 mod password_vault;
 mod hide_from_list;
 mod rename_suggestion;
+mod search_conversations;
 mod tour;
 
 use std::time::Instant;
@@ -28,6 +29,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "relatorio-automatico" => Some(auto_report::render),
         "login-navegador" => Some(login_browser::render),
         "ocultar-da-lista" => Some(hide_from_list::render),
+        "busca-conversas" => Some(search_conversations::render),
         _ => None,
     }
 }

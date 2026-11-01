@@ -83,6 +83,9 @@ pub(crate) use rename_suggest::{Strip as RenameStrip, rename_strip};
 pub(crate) use vault_requests::{approve_body, approve_title, request_button, request_card, request_command, request_pair};
 pub(crate) use settings::{setting_row, settings_box};
 pub(crate) use accounts::{login_heading, target_row};
+pub(crate) use search::{ScopeFound, highlighted as search_highlighted, search_agent_label, search_chat_header, search_chat_sub, search_field, search_filter_chip, search_found_frame,
+    search_group_frame, search_group_header, search_group_sub, search_hit_line, search_live_label, search_open_look, search_scope_block,
+    search_scope_summary, search_status_line, search_who};
 pub(crate) use sidebar::{Sub as RowSub, group_header_look, menu_item_height, menu_item_look, menu_label, menu_list_look, menu_surface_look};
 mod shortcuts;
 mod shortcut_transfer;
@@ -2648,7 +2651,9 @@ impl Hangar {
     }
 
     fn toggle(&mut self, key: String, cx: &mut Context<Self>) {
-        // Linha da prévia da aba: o clique chega aqui com a conversa principal no lugar.
+        // Linha da prévia da busca ou da aba: o clique chega aqui com a conversa principal no lugar. A busca
+        // vem antes, por cima da prévia da aba: a mesma chave pode estar nas duas.
+        if self.toggle_in_search_preview(key.clone(), cx) { return; }
         if self.toggle_in_tab_preview(key.clone(), cx) { return; }
         self.toggle_here(key, cx);
     }
@@ -2656,7 +2661,14 @@ impl Hangar {
     fn toggle_here(&mut self, key: String, cx: &mut Context<Self>) {
         toggle_detail(&mut self.expanded, &mut self.prepared, &key);
         self.prepare_tools();
-        let row = self.row_ids.iter().position(|id| id == &key || id.strip_prefix(PINNED) == Some(key.as_str())).or_else(|| {
+        if let Some(row) = self.row_of(&key) { self.list_state.remeasure_items(row..row + 1); }
+        cx.notify();
+    }
+
+    /// A linha da conversa que mostra a chave: a dela, a do grupo de ferramentas ou do pensamento que a contém, ou a linha
+    /// de que ela é uma parte.
+    fn row_of(&self, key: &str) -> Option<usize> {
+        self.row_ids.iter().position(|id| id == key || id.strip_prefix(PINNED) == Some(key)).or_else(|| {
             let events = &self.chat.events;
             self.conversation.items.iter().position(|item| match item {
                 Item::Group { tools, .. } => tools.iter().any(|t| events[t.call].id == key),
@@ -2664,9 +2676,7 @@ impl Hangar {
                 _ => false,
             })
         // Chave de uma parte da linha ("<linha>#…"): passo da lista de tarefas, tabela da resposta.
-        }).or_else(|| self.row_ids.iter().position(|id| key.strip_prefix(id.as_str()).is_some_and(|rest| rest.starts_with('#'))));
-        if let Some(row) = row { self.list_state.remeasure_items(row..row + 1); }
-        cx.notify();
+        }).or_else(|| self.row_ids.iter().position(|id| key.strip_prefix(id.as_str()).is_some_and(|rest| rest.starts_with('#'))))
     }
 
     fn cancel_preview_drop(&mut self) {
@@ -6374,7 +6384,7 @@ fn worktree_label(session: &SessionInfo) -> Option<String> {
 
 /// Selo da conta do `chipDaConta` do web (lib/conta.ts): o nome é o sufixo da pasta, a pasta sem sufixo é a padrão,
 /// e a cor sai do nome da pasta, com as mesmas seis tintas. Motor (`chave:`) não tem selo.
-fn account_chip(conta: Option<&str>) -> Option<(String, Hsla)> {
+pub(crate) fn account_chip(conta: Option<&str>) -> Option<(String, Hsla)> {
     const TINTS: [u32; 6] = [0x80bbc3, 0xd3a781, 0x97c69d, 0xcd99b9, 0x9ba9d9, 0xccbf87];
     let conta = conta?;
     let harness = ["claude", "codex"].into_iter().find(|h| conta.starts_with(&format!("{h}:")))?;

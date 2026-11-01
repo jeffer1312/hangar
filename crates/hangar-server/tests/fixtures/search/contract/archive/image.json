@@ -1,0 +1,115 @@
+{
+ "origin_commit": "0894896ce10992950253c6ab4e0e02b137c809df",
+ "command": "cd backend && uv run python ../.superpowers/sdd/2026-10-31-busca-rust/contract/capture.py",
+ "data": {
+  "ok_idx0": {
+   "status": 200,
+   "body": {
+    "sha256": "535a3016399dfdfda846a6d732a6d21be7e7122e2fdefcd1a7dd0460a0638356",
+    "len": 150885,
+    "media_type": "image/png",
+    "cache_control": "max-age=31536000, immutable"
+   }
+  },
+  "idx1": {
+   "status": 404,
+   "body": {
+    "detail": {
+     "code": "erro_imagem_nao_encontrada",
+     "params": {},
+     "msg": "image not found"
+    }
+   }
+  },
+  "idx_neg": {
+   "status": 404,
+   "body": {
+    "detail": {
+     "code": "erro_imagem_nao_encontrada",
+     "params": {},
+     "msg": "image not found"
+    }
+   }
+  },
+  "uuid_missing": {
+   "status": 404,
+   "body": {
+    "detail": {
+     "code": "erro_imagem_nao_encontrada",
+     "params": {},
+     "msg": "image not found"
+    }
+   }
+  },
+  "uuid_no_image": {
+   "status": 404,
+   "body": {
+    "detail": {
+     "code": "erro_imagem_nao_encontrada",
+     "params": {},
+     "msg": "image not found"
+    }
+   }
+  },
+  "bad_project": {
+   "status": 404,
+   "body": {
+    "detail": {
+     "code": "erro_nao_encontrado",
+     "params": {},
+     "msg": "not found"
+    }
+   }
+  },
+  "missing": {
+   "status": 404,
+   "body": {
+    "detail": {
+     "code": "erro_nao_encontrado",
+     "params": {},
+     "msg": "not found"
+    }
+   }
+  },
+  "config_b": {
+   "status": 404,
+   "body": {
+    "detail": {
+     "code": "erro_nao_encontrado",
+     "params": {},
+     "msg": "not found"
+    }
+   }
+  },
+  "bad_config": {
+   "status": 400,
+   "body": {
+    "detail": {
+     "code": "erro_config_dir_invalido",
+     "params": {},
+     "msg": "config_dir invalido"
+    }
+   }
+  },
+  "transfer_prefix": {
+   "status": 404,
+   "body": {
+    "detail": {
+     "code": "erro_nao_encontrado",
+     "params": {},
+     "msg": "not found"
+    }
+   }
+  },
+  "codex_no_image": {
+   "status": 404,
+   "body": {
+    "detail": {
+     "code": "erro_imagem_nao_encontrada",
+     "params": {},
+     "msg": "image not found"
+    }
+   }
+  }
+ }
+}

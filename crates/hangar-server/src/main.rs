@@ -154,6 +154,7 @@ async fn run() {
     }
     state.front = hangar_server::routes::front_address(&state.accounts.env.home, state.cfg.listen);
     state.costs.schedule_warmup(std::time::Duration::from_secs(30));
+    let _search_producer = state.search.start();
     hangar_server::pages::routes::spawn_sweep(state.list.clone(), state.pages.clone());
     // Só aqui, nunca no `serve_until`: os testes sobem servidores contra o tmux de verdade.
     #[cfg(unix)]

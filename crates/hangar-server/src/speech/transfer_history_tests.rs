@@ -304,3 +304,20 @@ fn prefix_digest_is_streamed_without_consuming_the_active_suffix() {
     })
     .unwrap();
 }
+
+#[test]
+fn historical_image_serves_only_raster_media_types() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("source.jsonl");
+    let image = |media: &str| json!({"type":"image","source":{"type":"base64","media_type":media,"data":"PGI+"}});
+    let rows = [json!({"type":"user","uuid":"root","parentUuid":null,"message":{"role":"user","content":[
+        image("text/html"), image("image/svg+xml"), image("image/JPEG"),
+    ]}})];
+    let bytes = encoded(&rows);
+    std::fs::write(&path, &bytes).unwrap();
+    let record = json!({"id":"fixture","source":{"path":path,"digest":sha(&bytes),"selected_uuids":["root"]}});
+    let media = |index| historical_image(&record, "transfer:fixture:claude:root", index).unwrap().unwrap().1;
+    assert_eq!(media(0), "application/octet-stream");
+    assert_eq!(media(1), "application/octet-stream");
+    assert_eq!(media(2), "image/jpeg");
+}

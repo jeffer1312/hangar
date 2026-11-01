@@ -328,6 +328,21 @@ it('expande vizinhança de A sem trocar servidor ativo', async () => {
   const { container } = await mount(); await typeQuery(container, 'agulha'); await tick();
   const snippet = [...container.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('agulha azul'))!;
   expect(snippet).toBeDefined(); await act(async () => snippet.click());
-  expect(h.context).toHaveBeenCalledExactlyOnceWith(state.servers[0], 'proj', 'sid', 'ev-a');
+  expect(h.context).toHaveBeenCalledExactlyOnceWith(state.servers[0], 'proj', 'sid', 'ev-a', undefined, undefined, undefined);
   expect(container.textContent).toContain('vizinha anterior'); expect(state.activeId).toBe('b');
+});
+
+it('vizinhança de trecho Codex leva agente, conta e pasta da conta à leitura e ao ponto', async () => {
+  h.search.mockImplementation((server: Server) => Promise.resolve(server.id === 'a'
+    ? [hit({ provider: 'codex', codex_account: 'owner-a', config_dir: '/account-a' })] : []));
+  h.context.mockResolvedValue([{ id: 'ev-a', kind: 'assistant_msg', text: 'agulha azul' }]);
+  const { container } = await mount(); await typeQuery(container, 'agulha'); await tick();
+  const snippet = [...container.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('agulha azul'))!;
+  await act(async () => snippet.click());
+  expect(h.context).toHaveBeenCalledExactlyOnceWith(state.servers[0], 'proj', 'sid', 'ev-a', 'codex', 'owner-a', '/account-a');
+  await act(async () => buttons(container, m.busca_abrir_ponto())[0].click());
+  expect(h.push).toHaveBeenCalledExactlyOnceWith({ pathname: '/search-point', params: {
+    server: 'a', project: 'proj', sid: 'sid', eventId: 'ev-a', name: 'live-a', conversationTitle: 'live-a',
+    provider: 'codex', codexAccount: 'owner-a', configDir: '/account-a',
+  } });
 });

@@ -59,7 +59,11 @@ pub struct AppState {
     pub workspace_meta_slots: Arc<tokio::sync::Semaphore>,
     pub diag: crate::diag::DiagClient,
     pub costs: Arc<crate::costs::collect::Collector>,
-    pub fx: Arc<crate::costs::fx::Fx>,
+    /// Índice de conversas da busca e do Arquivo; o produtor liga só na subida real (`main.rs`).
+    pub search: crate::search::Index,
+    /// O `claude -p` do Perguntar; `None` = o CLI do PATH (o teste troca por um falso).
+    pub claude_p: Option<Arc<dyn crate::claude_p::Runner>>,
+    pub fx:Arc<crate::costs::fx::Fx>,
     pub reports: Arc<crate::costs::ReportCache>,
     pub origins_home: std::path::PathBuf,
     /// `~/.hangar`: etapas de ferramenta e cofre de anexos; o teste troca por uma pasta temporária.
@@ -193,7 +197,9 @@ impl AppState {
                     list.env().dirs.as_ref().map(|d| d.claude.join(".hangar-pair")).unwrap_or_default())
                 .with_mux(list.env().capture_program.to_string_lossy().into_owned())), list.clone(), diag.clone());
         let vault_requests = Arc::new(crate::vault::requests::Requests::default());
-        AppState { accounts: crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture()), command_catalog: Arc::default(), groups, server_id, peers: Arc::new(crate::groups::peers_from_env()), auth: Auth::configured(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, public_v6: None, front: None, diag,
+        let accounts = crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture());
+        let search = crate::search::Index::server(accounts.clone());
+        AppState { accounts, search, claude_p: None, command_catalog: Arc::default(), groups, server_id, peers: Arc::new(crate::groups::peers_from_env()), auth: Auth::configured(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, public_v6: None, front: None, diag,
             workspace_slots: Arc::new(tokio::sync::Semaphore::new(4)),
             login_browser: Arc::default(),
             interactions, plugin,
@@ -641,6 +647,14 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/sessions/{name}/bastao", axum::routing::post(crate::session_open::server::bastao).fallback(pass_any))
         // Retomar do Arquivo e o `/resume` ao vivo: a abertura e a reabertura do Rust, com a conversa que já existe.
         .route("/api/archive/{project}/{session_id}/resume", axum::routing::post(crate::session_open::server::archive_resume).fallback(pass_any))
+        // Ler a conversa do Arquivo e a imagem dela: só o dono; o resto segue ao Python, que recusa.
+        // O Arquivo (pastas, recentes, uma pasta, um cwd): só o dono; `recent` antes da pasta.
+        .route("/api/archive", get(crate::archive_list::folders).fallback(pass_any))
+        .route("/api/archive/recent", get(crate::archive_list::recent).fallback(pass_any))
+        .route("/api/archive/{project}", get(crate::archive_list::folder).fallback(pass_any))
+        .route("/api/archive-por-cwd", get(crate::archive_list::by_cwd).fallback(pass_any))
+        .route("/api/archive/{project}/{session_id}/history", get(crate::archive_history::history).fallback(pass_any))
+        .route("/api/archive/{project}/{session_id}/transcript-image/{uuid}/{idx}", get(crate::archive_history::image).fallback(pass_any))
         .route("/api/sessions/{name}/resume", axum::routing::post(crate::session_write::resume::route).fallback(pass_any))
         // Broadcast do dono: o alvo Codex com terminal do Rust recebe aqui; o resto segue ao Python.
         .route("/api/broadcast", axum::routing::post(crate::session_write::input::broadcast).fallback(pass_any))
@@ -658,6 +672,9 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/costs", get(crate::costs_routes::costs).fallback(pass_any))
         .route("/api/cotacao", get(crate::costs_routes::cotacao).fallback(pass_any))
         .route("/api/uso", get(crate::costs_routes::usage).fallback(pass_any))
+        .route("/api/search", get(crate::search::http::route).fallback(pass_any))
+        .route("/api/ask-history", axum::routing::post(crate::search::ask::route).fallback(pass_any))
+        .route("/api/search/context", get(crate::search_context::route).fallback(pass_any))
         .route("/api/migration/status", get(crate::migration_status::status).fallback(pass_any))
         // Novidades e avisos da próxima atualização: só o dono, nunca repassado (o Python não tem a rota).
         .route("/api/update/notes", get(crate::update_notes::route))

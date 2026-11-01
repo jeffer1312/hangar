@@ -130,7 +130,7 @@ pub fn py_b64decode(text: &str) -> Option<Vec<u8>> {
 }
 
 /// Só imagem raster passa: SVG executa script e o resto não é imagem.
-fn served_media(media: Option<&str>) -> &'static str {
+pub(crate) fn served_media(media: Option<&str>) -> &'static str {
     match media.map(str::to_ascii_lowercase).as_deref() {
         None => "image/png",
         Some("image/png") => "image/png",

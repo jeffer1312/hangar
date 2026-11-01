@@ -16,13 +16,14 @@ let own = servers;
 let all: Array<(typeof servers)[number] & { ephemeral?: boolean }> = servers;
 type Call = { id: string; q: string; resolve: (h: SearchHit[]) => void; reject: (e: Error) => void };
 let calls: Call[] = [];
+let active = 'a';
 
 vi.mock('../lib/auth', () => ({
   listServers: () => all,
   listOwnServers: () => own,
-  selectServer: vi.fn(),
+  selectServer: vi.fn((id: string) => { active = id; return true; }),
   serverColor: () => '#fff',
-  getActiveId: () => 'a',
+  getActiveId: () => active,
   servidorDaOrigem: () => null,
 }));
 vi.mock('@hangar/core', async (importOriginal) => ({
@@ -30,6 +31,15 @@ vi.mock('@hangar/core', async (importOriginal) => ({
   estaDesligado: (id: string) => offline.has(id),
   searchTranscriptsForServer: (s: { id: string }, q: string) =>
     new Promise<SearchHit[]>((resolve, reject) => { calls.push({ id: s.id, q, resolve, reject }); }),
+  getSearchContextForServer: async () => [],
+  getArchiveFolder: (...args: unknown[]) => archiveFolder(...args),
+  rememberEntry: vi.fn(),
+}));
+let archiveFolder: (...args: unknown[]) => Promise<unknown[]> = async () => [];
+const registrar = vi.fn();
+vi.mock('../lib/diag', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/diag')>()),
+  registrar: (...args: unknown[]) => registrar(...args),
 }));
 
 const { default: Sheet } = await import('./SessionSwitcherSheet.svelte');
@@ -40,12 +50,13 @@ const hit = (session_id: string, mtime: number, line = 'x'): SearchHit =>
 async function montar() {
   const el = document.createElement('div');
   document.body.appendChild(el);
+  const onClose = vi.fn();
   const comp = mount(Sheet, {
     target: el,
-    props: { open: true, sessions: [], currentName: '', onPick: vi.fn(), onNew: vi.fn(), onClose: vi.fn(), searchOnly: true },
+    props: { open: true, sessions: [], currentName: '', onPick: vi.fn(), onNew: vi.fn(), onClose, searchOnly: true },
   });
   await tick();
-  return { comp };
+  return { comp, onClose };
 }
 function setInput(v: string) {
   const input = document.body.querySelector<HTMLInputElement>('input.search')!;
@@ -63,6 +74,7 @@ const nenhum = () => m.busca_nenhum_todas({ termos: 'foo' });
 
 beforeEach(() => {
   calls = [];
+  active = 'a';
   offline.clear();
   own = servers;
   all = servers;
@@ -207,6 +219,56 @@ describe('SessionSwitcherSheet: busca de conteúdo', () => {
     calls.forEach((c) => c.resolve([hit('s1', 1, 'x')]));
     await settle();
     expect(document.body.querySelectorAll('.list [role="status"]').length).toBe(1);
+    unmount(comp);
+  });
+});
+
+describe('SessionSwitcherSheet: abrir o trecho no Arquivo', () => {
+  async function abrirTrecho(extra: Partial<SearchHit>, server = 'a') {
+    const { comp, onClose } = await montar();
+    await digitar('foo');
+    calls.find((c) => c.id === server)!.resolve([{ ...hit('s1', 10, 'trecho'), event_id: 'e1', ...extra } as SearchHit]);
+    await settle();
+    document.body.querySelector<HTMLButtonElement>('.hit-btn')!.click();
+    await settle();
+    document.body.querySelector<HTMLButtonElement>('.previa-btn')!.click();
+    await settle();
+    return { comp, onClose };
+  }
+
+  it('a conta do trecho que não pôde ser lida mostra o erro e não abre o Arquivo', async () => {
+    window.location.hash = '';
+    archiveFolder = async () => { throw new Error('503'); };
+    const { selectServer } = await import('../lib/auth');
+    vi.mocked(selectServer).mockClear();
+    const { comp, onClose } = await abrirTrecho({ config_dir: '/home/u/.claude-b' } as Partial<SearchHit>, 'b');
+    expect(text()).toContain(m.arquivo_conversa_erro());
+    expect(onClose).not.toHaveBeenCalled();
+    expect(window.location.hash).toBe('');
+    // A consulta foi ao servidor do trecho; sem abrir, o ativo volta a ser o de antes.
+    expect(vi.mocked(selectServer).mock.calls.at(-1)).toEqual(['a']);
+    expect(registrar).toHaveBeenCalledWith(expect.objectContaining({ evento: 'busca.arquivo_conta', codigo: 'leitura_falhou' }));
+    unmount(comp);
+  });
+
+  it('a falha de uma abertura não desfaz o servidor que outra abertura ativou no meio', async () => {
+    window.location.hash = '';
+    let falhar!: (e: Error) => void;
+    archiveFolder = () => new Promise((_, reject) => { falhar = reject; });
+    const { selectServer } = await import('../lib/auth');
+    const { comp } = await abrirTrecho({ config_dir: '/home/u/.claude-b' } as Partial<SearchHit>, 'b');
+    selectServer('c'); // outro trecho aberto enquanto a consulta do primeiro espera
+    falhar(new Error('503'));
+    await settle();
+    expect(active).toBe('c');
+    unmount(comp);
+  });
+
+  it('sem config_dir no trecho (servidor antigo) abre o Arquivo como antes', async () => {
+    window.location.hash = '';
+    const { comp, onClose } = await abrirTrecho({});
+    expect(onClose).toHaveBeenCalled();
+    expect(window.location.hash).toBe('#/archive/a/p/s1/e1');
     unmount(comp);
   });
 });

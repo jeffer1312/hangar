@@ -49,7 +49,7 @@ from app.filetree import FileError
 from app import cli_probe
 from app import registry as registry_mod
 from app import providers_bridge
-from app.registry import KillFailed, SessionRegistry, sanitize_cwd
+from app.registry import KillFailed, SessionRegistry
 from app.names import sanitize_session_name
 from app.models import (SessionInfo, CreatedSessionInfo, ChatEvent, CostReport, UsoReport, RunnersResponse, RunBody,
                         RunInfo, Runner, CustomRunnersBody, ProjectStatus, ShortcutShellBody, RunCodeBody,
@@ -90,9 +90,8 @@ from app import runner
 from app import project_shortcuts
 from app import projects
 from app import archive_providers
-from app.archive import (ArchiveEntry, ArchiveFolder, archive_cwd, archive_jsonl,
-                         list_conversations, list_folders, list_recent, tail_events)
-from app.search import SearchHit, search, extract_terms, search_terms, build_ask_prompt
+from app.archive import (archive_cwd, archive_jsonl,
+                         list_folders)
 from app.askquestion import clear_pending_askq, read_pending_askq
 from app import alcance, credenciais, peers_api
 from app import config_sync_api
@@ -263,8 +262,6 @@ async def _lifespan(app: FastAPI):
     # montar(). Sem aquecer aqui, o primeiro /api/costs depois de todo restart paga a coleta fria
     # (657ms medidos) MAIS até 3s de câmbio, contra o AbortSignal.timeout(4000) do cliente.
     threading.Thread(target=_usd_brl, name="usd-brl-warm", daemon=True).start()
-    from app import transcript_index
-    transcript_index.start_background()
     # Mesmo motivo, outro caminho: o drain do Codex e assincrono (app-server) e quem o chama sao
     # threads (Timer da confirmacao, gatilho de hook). Ver `_drenar`.
     global _loop_servidor
@@ -612,6 +609,30 @@ async def _planos_pelo_rust(request: Request, call_next):
         return await call_next(request)
     return await _repasse_ao_rust(request, erro("erro_planos_precisa_rust", "os planos precisam do servidor Rust, que não está rodando"),
                                   "/__hangar_server/forwarded")
+
+
+# Busca, Perguntar e Arquivo são só do Rust: sem ele, indisponível com código, sem reserva.
+_SEARCH_ASK_ARCHIVE = re.compile(r"^/api/(search|search/context|archive|archive-por-cwd|archive/recent|archive/[^/]+"
+                            r"|archive/[^/]+/[^/]+/history|archive/[^/]+/[^/]+/transcript-image/[^/]+/[^/]+)/?$")
+
+
+@app.middleware("http")
+async def _search_without_rust(request: Request, call_next):
+    from app import account_bridge
+    path, metodo = request.url.path, request.method
+    owned = metodo == "GET" and _SEARCH_ASK_ARCHIVE.match(path) or metodo == "POST" and path.rstrip("/") == "/api/ask-history"
+    if not owned:
+        return await call_next(request)
+    try:
+        await require_auth(request)
+    except HTTPException as error:
+        return JSONResponse({"detail": error.detail}, status_code=error.status_code, headers=error.headers)
+    # Com o Rust de pé ele atende o dono: o que chega aqui é convidado ou Connect.
+    if account_bridge.owner_mode() == "rust":
+        return JSONResponse({"detail": erro("erro_busca_so_dono", "busca, Perguntar e Arquivo atendem só o dono do servidor")},
+                            status_code=403)
+    return JSONResponse({"detail": erro("erro_busca_precisa_rust", "busca, Perguntar e Arquivo precisam do servidor Rust, que não está rodando")},
+                        status_code=503)
 
 
 # Anexos, `/transcribe`, saída de ferramenta e imagem colada no terminal: o dono é o Rust
@@ -6228,15 +6249,6 @@ def transcript_image(name: str, uuid: str, idx: int):
                                                             "X-Content-Type-Options": "nosniff"})
 
 
-def _json_dict(linha: str) -> dict | None:
-    try:
-        o = json.loads(linha)
-    except (json.JSONDecodeError, ValueError):
-        return None
-    return o if isinstance(o, dict) else None
-
-
-# ── Arquivo: conversas mortas (transcripts sem sessao tmux viva) ──────────────
 def _erro_conta_codex(exc: codex_accounts.AccountError) -> HTTPException:
     mensagens = {
         "codex_account_ambiguous_rollout": "a conversa Codex existe em mais de uma conta; escolha a conta",
@@ -6247,140 +6259,6 @@ def _erro_conta_codex(exc: codex_accounts.AccountError) -> HTTPException:
     }
     return HTTPException(exc.status, detail=erro(
         exc.code, mensagens.get(exc.code, "operação de arquivo Codex recusada"), **exc.params))
-
-
-@app.get("/api/archive", dependencies=[Depends(require_auth)], response_model=list[ArchiveFolder])
-def archive_index():
-    # Nivel 1: so as PASTAS (agregado barato). As conversas vem por pasta, no endpoint abaixo.
-    return list_folders()
-
-
-@app.get("/api/archive-por-cwd", dependencies=[Depends(require_auth)],
-         response_model=list[ArchiveEntry])
-def archive_por_cwd(cwd: str, config_dir: str | None = None, cap: int = 12,
-                    provider: str = "claude", codex_account: str | None = None):
-    """Conversas retomaveis de UM cwd, do agente e da conta pedidos — o que o modal de sessao nova
-    lista embaixo do formulario. Path proprio (nao `/api/archive/{project}`) pra nao disputar a rota
-    com um nome de projeto. Pasta sem conversa nenhuma = lista vazia, nao 404: no modal isso e o
-    caso comum (pasta nova), nao erro. `cap` baixo porque aqui a lista e um atalho, nao o Arquivo.
-
-    `config_dir` so vale pro Claude — Pi, Kimi e Codex nao tem conta, e passa-lo os excluiria."""
-    if config_dir is not None and config_dir not in {c.path for c in list_config_dirs()}:
-        raise HTTPException(400, detail=erro("erro_config_dir_invalido", "config_dir invalido"))
-    if provider != "claude" and provider not in archive_providers.PROVIDERS:
-        raise HTTPException(400, detail=erro("erro_provider_invalido", "provider invalido"))
-    live = {os.path.realpath(s.jsonl) for s in registry.list() if s.jsonl}
-    try:
-        todas = list_conversations(sanitize_cwd(cwd), live, cap=cap,
-                                   config_dir=config_dir if provider == "claude" else None,
-                                   codex_account=codex_account if provider == "codex" else None,
-                                   provider=provider)
-    except codex_accounts.AccountError as e:
-        raise _erro_conta_codex(e) from None
-    except (ValueError, FileNotFoundError):
-        return []
-    return [e for e in todas if e.provider == provider][:cap]
-
-
-@app.get("/api/archive/recent", dependencies=[Depends(require_auth)],
-         response_model=list[ArchiveEntry])
-def archive_recent(cap: int = 40):
-    # A lista "Conversas" do celular e do nativo: as vivas vêm da lista de sessões, as fechadas daqui.
-    live = {os.path.realpath(s.jsonl) for s in registry.list() if s.jsonl}
-    return list_recent(live, cap=max(1, min(cap, 100)))
-
-
-@app.get("/api/archive/{project}", dependencies=[Depends(require_auth)],
-         response_model=list[ArchiveEntry])
-def archive_folder(project: str, codex_account: str | None = None):
-    # live = transcripts em uso agora (badge na lista; a conversa viva abre pelo chat normal).
-    live = {os.path.realpath(s.jsonl) for s in registry.list() if s.jsonl}
-    try:
-        return list_conversations(project, live, codex_account=codex_account)
-    except codex_accounts.AccountError as e:
-        raise _erro_conta_codex(e) from None
-    except ValueError:
-        raise HTTPException(400, detail=erro("erro_path_invalido", "invalid path"))
-    except FileNotFoundError:
-        raise HTTPException(404, detail=erro("erro_projeto_nao_encontrado", "project not found"))
-
-
-@app.get("/api/archive/{project}/{session_id}/history",
-         dependencies=[Depends(require_auth)], response_model=list[ChatEvent])
-def archive_history(project: str, session_id: str, tail: int = 0, config_dir: str | None = None,
-                    provider: str = "claude", codex_account: str | None = None):
-    from app.conversation_history import HistoryError
-    # `tail=N` = so as N ultimas mensagens, lidas pelo FIM do arquivo (a previa do modal de sessao
-    # nova). Sem ele, o historico inteiro, como sempre — e um transcript de 19MB carregado inteiro
-    # so pra mostrar cinco balões era o que essa via evita.
-    if config_dir is not None and config_dir not in {c.path for c in list_config_dirs()}:
-        raise HTTPException(400, detail=erro("erro_config_dir_invalido", "config_dir invalido"))
-    if provider != "claude" and provider not in archive_providers.PROVIDERS:
-        raise HTTPException(400, detail=erro("erro_provider_invalido", "provider invalido"))
-    try:
-        if provider == "codex":
-            p = archive_jsonl(project, session_id, config_dir, provider, codex_account)
-            composed = archive_providers.transferred_history(p)
-            if composed is not None:
-                if tail > 0:
-                    return [event for event in composed if event.kind in ("user_msg", "assistant_msg") and event.text][-min(tail, 200):]
-                return composed
-        if tail > 0:
-            return tail_events(project, session_id, min(tail, 200), config_dir, provider,
-                               codex_account)
-        p = archive_jsonl(project, session_id, config_dir, provider, codex_account)
-        if provider != "claude":
-            # Fora do Claude nao ha fila duravel keyed por este arquivo: o transcript e a conversa
-            # inteira, e cada provider tem o parser dele.
-            # Linha a linha: rollout de dezenas de MB inteiro na memória, mais a lista das linhas.
-            with open(p, encoding="utf-8", errors="replace") as fh:
-                return [ev for linha in fh
-                        if (o := _json_dict(linha)) is not None
-                        for ev in archive_providers.parse_obj(provider, o)]
-    except codex_accounts.AccountError as e:
-        raise _erro_conta_codex(e) from None
-    except HistoryError as exc:
-        raise HTTPException(409, detail=erro("session_transfer_history_invalid", "histórico da transferência indisponível")) from exc
-    except ValueError:
-        raise HTTPException(400, detail=erro("erro_path_invalido", "invalid path"))
-    except FileNotFoundError:
-        raise HTTPException(404, detail=erro("erro_transcript_nao_encontrado", "transcript not found"))
-    from app.pqueue import merged_history
-    # Nome de fila inexistente -> sem entradas de fila: so os eventos do transcript, ordenados por ts.
-    return merged_history("__archive__", str(p))
-
-
-@app.get("/api/archive/{project}/{session_id}/transcript-image/{uuid}/{idx}",
-         dependencies=[Depends(require_auth)])
-def archive_image(project: str, session_id: str, uuid: str, idx: int,
-                  config_dir: str | None = None, provider: str = "claude",
-                  codex_account: str | None = None):
-    from app.conversation_history import archive_transfer, historical_image, archived_image, HistoryError
-    if config_dir is not None and config_dir not in {c.path for c in list_config_dirs()}:
-        raise HTTPException(400, detail=erro("erro_config_dir_invalido", "config_dir invalido"))
-    if provider != "claude" and provider not in archive_providers.PROVIDERS:
-        raise HTTPException(400, detail=erro("erro_provider_invalido", "provider invalido"))
-    try:
-        if uuid.startswith("transfer:"):
-            got = archived_image(session_id, uuid, idx, codex_account)
-        else:
-            p = archive_jsonl(project, session_id, config_dir, provider, codex_account)
-            record = archive_transfer(p) if provider == "codex" else None
-            if record:
-                got = historical_image(record, uuid, idx)
-            else:
-                from app.transcript import get_transcript_image
-                got = get_transcript_image(str(p), uuid, idx)
-    except codex_accounts.AccountError as exc:
-        raise _erro_conta_codex(exc) from None
-    except HistoryError as exc:
-        raise HTTPException(409, detail=erro("session_transfer_history_invalid", "histórico da transferência indisponível")) from exc
-    except (ValueError, FileNotFoundError):
-        raise HTTPException(404, detail=erro("erro_nao_encontrado", "not found"))
-    if got is None:
-        raise HTTPException(404, detail=erro("erro_imagem_nao_encontrada", "image not found"))
-    raw, media = got
-    return Response(content=raw, media_type=media, headers={"Cache-Control": "max-age=31536000, immutable"})
 
 
 # ── MCP hangar-computer-control: liga/desliga e configura nos .claude.json de todas as contas ──
@@ -6481,59 +6359,6 @@ async def connect_delete():
     from app import connect
     await connect.forget()
     return connect.status()
-
-
-# ── Busca de conteudo cross-session: grep (rg) em todos os transcripts (vivos + arquivados) ──
-@app.get("/api/search", dependencies=[Depends(require_auth)], response_model=list[SearchHit])
-def search_transcripts(q: str = ""):
-    # live: realpath(jsonl) -> nome tmux das sessoes VIVAS (mesmo join do /api/archive). A busca marca
-    # o hit como vivo e carrega o nome pra a UI abrir o chat (viva) ou o arquivo (morta). q vazia -> [].
-    live = {os.path.realpath(s.jsonl): s.name for s in registry.list() if s.jsonl}
-    return search(q, live)
-
-
-@app.get("/api/search/context", dependencies=[Depends(require_auth)], response_model=list[ChatEvent])
-def search_context(project: str, session_id: str, event_id: str, around: int = 3):
-    """Mensagens em volta de um trecho da busca: ele e as `around` anteriores e posteriores, só as
-    suas e as do assistente (é o que se lê pra entender o trecho)."""
-    try:
-        p = archive_jsonl(project, session_id)
-    except ValueError:
-        raise HTTPException(400, detail=erro("erro_path_invalido", "invalid path"))
-    except FileNotFoundError:
-        raise HTTPException(404, detail=erro("erro_transcript_nao_encontrado", "transcript not found"))
-    from app.pqueue import merged_history
-    msgs = [ev for ev in merged_history("__archive__", str(p))
-            if ev.kind in ("user_msg", "assistant_msg") and ev.text]
-    i = next((k for k, ev in enumerate(msgs) if ev.id == event_id), None)
-    if i is None:
-        raise HTTPException(404, detail=erro("erro_trecho_nao_encontrado",
-                                             "a mensagem não está mais nessa conversa"))
-    n = max(0, min(around, 10))
-    return msgs[max(0, i - n):i + n + 1]
-
-
-class AskHistoryBody(_StrictBody):
-    question: str = Field(min_length=1, max_length=500)
-
-
-@app.post("/api/ask-history", dependencies=[Depends(require_auth)])
-def ask_history(body: AskHistoryBody):
-    """RAG lexical ("onde falei sobre X"): extrai termos da pergunta -> busca OR nos transcripts ->
-    claude -p resume EM QUAL sessao o assunto apareceu. Sob o kill-switch (dispara claude -p). Sem
-    trecho -> resposta vazia sem chamar o CLI. v1: so o servidor que recebe a chamada (cross-server v2)."""
-    if not automations_enabled():
-        raise HTTPException(409, detail=erro("erro_automacoes_desligadas", "automações desligadas (kill-switch)"))
-    live = {os.path.realpath(s.jsonl): s.name for s in registry.list() if s.jsonl}
-    hits = search_terms(extract_terms(body.question), live)
-    if not hits:
-        return {"answer": "não achei nada sobre isso nas conversas", "hits": []}
-    try:
-        answer = loop_mod._claude_p(build_ask_prompt(body.question, hits))
-    except loop_mod.ClaudePError as e:
-        _log.warning("ask-history falhou: %s", e)
-        raise HTTPException(502, str(e))
-    return {"answer": answer, "hits": hits}
 
 
 # Anexo citado na conversa: 60s sem perguntar + ETag pro resto. A miniatura de 96px do

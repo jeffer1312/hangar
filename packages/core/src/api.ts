@@ -2122,6 +2122,7 @@ export interface ArchiveEntry {
   config_dir: string | null;   // conta dona do transcript (null = a do backend)
   conta: string;               // rotulo dela, pra mostrar na lista
   provider: Provider;          // cada agente guarda transcript num lugar proprio
+  name?: string | null;        // nome que a sessão tinha no Hangar ao ser fechada
 }
 
 export function getArchive(): Promise<ArchiveFolder[]> {
@@ -2132,8 +2133,10 @@ export function getArchiveRecentForServer(server: Server, cap = 40, signal?: Abo
   return apiFetchForServer(server, `/api/archive/recent?cap=${cap}`, { signal: comTeto(signal, 8000) });
 }
 
-export function getArchiveFolder(project: string): Promise<ArchiveEntry[]> {
-  return apiFetch<ArchiveEntry[]>(`/api/archive/${encodeURIComponent(project)}`);
+// `filter`: `session_id`, `provider`, `codex_account` e `config_dir` estreitam a pasta a uma conversa e conta.
+export function getArchiveFolder(project: string, filter?: Record<string, string>): Promise<ArchiveEntry[]> {
+  const query = filter && Object.keys(filter).length ? `?${new URLSearchParams(filter)}` : '';
+  return apiFetch<ArchiveEntry[]>(`/api/archive/${encodeURIComponent(project)}${query}`);
 }
 
 // "Retomar conversa": sobe uma sessao tmux NOVA no cwd original com `claude --resume <uuid>`,
@@ -2207,13 +2210,26 @@ export interface SearchHit {
   role?: 'user' | 'assistant' | null;  // quem escreveu a mensagem casada
   event_id?: string | null;            // id do evento no histórico: abre a conversa no ponto
   ts?: number | null;                  // quando a mensagem foi escrita
+  provider?: Provider;                 // agente da conversa ("claude")
+  conta?: string;                      // conta da conversa, na forma provedor:caminho
+  config_dir?: string | null;
+  codex_account?: string | null;       // só no Codex
+  whole?: boolean;                     // todos os termos como palavra inteira (vem antes na lista)
+  name?: string | null;                // nome que a sessão tinha ao ser fechada
+  preview?: string | null;             // 1ª mensagem do usuário da conversa
 }
 
 // A mensagem do trecho e as vizinhas (suas e do assistente), pra ler sem sair da busca.
 export async function getSearchContextForServer(
   s: Server, project: string, sessionId: string, eventId: string,
+  provider?: Provider | null, codexAccount?: string | null, configDir?: string | null,
 ): Promise<ChatEvent[]> {
   const q = new URLSearchParams({ project, session_id: sessionId, event_id: eventId });
+  // Sem `provider` o servidor lê como Claude; os outros agentes têm parser próprio.
+  if (provider) q.set('provider', provider);
+  if (codexAccount) q.set('codex_account', codexAccount);
+  // A mesma conversa em duas contas Claude: a do trecho.
+  if (configDir) q.set('config_dir', configDir);
   return apiFetchForServer(s, `/api/search/context?${q}`);
 }
 
