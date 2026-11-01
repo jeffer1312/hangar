@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 use std::sync::PoisonError;
 use std::sync::atomic::Ordering;
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::time::{Duration, Instant};
 
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
@@ -69,19 +69,33 @@ pub(super) fn reopen_wait(base: Duration, attempt: u32) -> Duration {
     if attempt < 3 { base * (1 << attempt) } else { base * 10 }
 }
 
-/// Espera `wait` ouvindo o canal; `false` = pediram para parar. `woken`: um aviso de passada ou de
-/// escrita encerra a espera antes (outra passada pode ter aberto o banco).
-fn rest(rx: &Receiver<Wake>, wait: Duration, woken: bool) -> bool {
+#[derive(PartialEq)]
+enum Rest { Stop, Woken, Elapsed }
+
+/// Espera `wait` ouvindo o canal. `woken`: um aviso de passada ou de escrita encerra a espera antes
+/// (outra passada pode ter aberto o banco).
+fn rest(rx: &Receiver<Wake>, wait: Duration, woken: bool) -> Rest {
     let deadline = Instant::now() + wait;
     while let Some(left) = deadline.checked_duration_since(Instant::now()).filter(|d| !d.is_zero()) {
         match rx.recv_timeout(left) {
-            Ok(Wake::Stop) | Err(RecvTimeoutError::Disconnected) => return false,
-            Ok(Wake::Rewatch | Wake::Changed) if woken => break,
+            Ok(Wake::Stop) | Err(RecvTimeoutError::Disconnected) => return Rest::Stop,
+            Ok(Wake::Rewatch | Wake::Changed) if woken => return Rest::Woken,
             Ok(_) => {}
             Err(RecvTimeoutError::Timeout) => break,
         }
     }
-    true
+    Rest::Elapsed
+}
+
+/// Descarta os avisos já na fila; `false` = um deles pedia para parar.
+fn drain(rx: &Receiver<Wake>) -> bool {
+    loop {
+        match rx.try_recv() {
+            Ok(Wake::Stop) | Err(TryRecvError::Disconnected) => return false,
+            Ok(_) => {}
+            Err(TryRecvError::Empty) => return true,
+        }
+    }
 }
 
 /// Saída da thread, normal ou por pânico: sem produtor, a busca volta a disparar passada.
@@ -113,17 +127,24 @@ struct Watch {
 fn run(index: Index, tx: Sender<Wake>, rx: Receiver<Wake>) {
     let _alive = Alive(index.clone());
     let mut attempt = 0;
+    // Rajada de avisos com o banco fechado não vira laço: uma saída antecipada até a próxima espera inteira.
+    let mut early = true;
     while let Err(e) = index.open_now() {
         // Sem índice a busca varre o disco a cada pedido: fica no diário exportável, não só no log.
         tracing::debug!(error = %e, attempt, "busca: índice ainda não abre");
         index.report_once("busca.indice_indisponivel", "", || e.to_string());
-        if !rest(&rx, reopen_wait(index.inner.timing.reopen, attempt), true) {
+        if !drain(&rx) {
             return;
+        }
+        match rest(&rx, reopen_wait(index.inner.timing.reopen, attempt), early) {
+            Rest::Stop => return,
+            Rest::Woken => early = false,
+            Rest::Elapsed => early = true,
         }
         attempt = attempt.saturating_add(1);
     }
     index.recovered("busca.indice_indisponivel", "");
-    if !rest(&rx, index.inner.timing.first_pass, false) {
+    if rest(&rx, index.inner.timing.first_pass, false) == Rest::Stop {
         return;
     }
     let mut watch = Watch::default();

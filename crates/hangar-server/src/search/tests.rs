@@ -798,6 +798,22 @@ fn index_that_cannot_open_is_reported_once_and_retried() {
 }
 
 #[test]
+fn a_burst_of_wakes_ends_the_wait_to_reopen_only_once() {
+    // Avisos em rajada com o banco fechado: uma tentativa antecipada, e a espera longa volta a valer.
+    let env = Env::small(Timing { reopen: Duration::from_secs(60), ..quiet() });
+    fs::write(env.root.join("idx"), b"arquivo no lugar da pasta").unwrap();
+    let _producer = env.index.start().unwrap();
+    wait_for("falha no diário", || env.reported("busca.indice_indisponivel") == 1);
+    std::thread::sleep(Duration::from_millis(100)); // o produtor já dorme na espera da reabertura
+    for _ in 0..20 { env.index.wake_producer(watch::Wake::Changed); }
+    std::thread::sleep(Duration::from_millis(200));
+    fs::remove_file(env.root.join("idx")).unwrap();
+    env.index.wake_producer(watch::Wake::Changed);
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!env.index.ready(), "cada aviso virava uma tentativa em laço");
+}
+
+#[test]
 fn a_pass_that_opens_the_index_ends_the_wait_to_reopen() {
     // Outra passada abriu o banco e acordou o produtor: ele não dorme o resto da espera longa.
     let env = Env::small(Timing { reopen: Duration::from_secs(60), ..quiet() });
