@@ -15,3 +15,5 @@
 # Fixtures do contrato da conversa: os testes comparam offsets em bytes e há um 0xFF de propósito.
 backend/tests/fixtures/contract/transcripts/** -text
 backend/tests/fixtures/contract/queue/** -text
+# HOME de mentira da busca e do Arquivo: o índice grava tamanho e offset em bytes de cada transcript.
+crates/hangar-server/tests/fixtures/search/** -text

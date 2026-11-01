@@ -283,10 +283,11 @@ impl Index {
                 // O banco some agora: até a passada refazê-lo, a busca vai à varredura.
                 self.inner.ready.store(false, Ordering::Release);
                 tracing::warn!(error = %e, "índice da busca corrompido durante a passada, reconstruindo");
-                match db::discard(&self.inner.path) {
-                    Ok(()) => self.rebuild_after_corruption(),
-                    Err(gone) => self.report_once("busca.indice_nao_apagado", "", || gone.to_string()),
+                if let Err(gone) = db::discard(&self.inner.path) {
+                    self.report_once("busca.indice_nao_apagado", "", || gone.to_string());
                 }
+                // Não apagado também acorda: a passada seguinte vê a corrupção e tenta apagar de novo.
+                self.rebuild_after_corruption();
             }
             self.report_once("busca.ingestao_falhou", "", || e.to_string());
             return Err(e);

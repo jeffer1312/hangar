@@ -560,14 +560,9 @@ pub(crate) fn load_record(home: &Path, id: &str) -> io::Result<Option<Value>> {
     Ok(Some(record))
 }
 
-/// `_thread_key`: a conta resolvida e a thread, no `json.dumps` do Python.
+/// `_thread_key`: a mesma chave da lista, sem o `\\?\` que o canonicalize põe no Windows.
 fn thread_key(codex_home: &Path, thread: &str) -> String {
-    let home = codex_home.canonicalize().unwrap_or_else(|_| codex_home.to_owned());
-    format!(
-        "[{}, {}]",
-        serde_json::to_string(&home.to_string_lossy()).unwrap_or_default(),
-        serde_json::to_string(thread).unwrap_or_default()
-    )
+    crate::list::local_transfers::thread_key(&codex_home.to_string_lossy(), thread)
 }
 
 /// `_destination`: a conta e a thread de destino gravadas no registro.

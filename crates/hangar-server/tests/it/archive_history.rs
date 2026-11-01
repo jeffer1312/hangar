@@ -50,8 +50,10 @@ impl Harness {
         let home = dir.path().canonicalize().unwrap().join("home");
         copy_tree(&fixtures().join("home"), &home);
         let index = home.join(".kimi-code/session_index.jsonl");
-        // Escapado como texto JSON: o `\` do caminho do Windows quebrava a linha do índice do Kimi.
-        let escaped = serde_json::to_string(&*home.to_string_lossy()).unwrap();
+        // Escapado como texto JSON: o `\` do caminho do Windows quebrava a linha do índice do Kimi. Sem o
+        // `\\?\` do canonicalize, que o Kimi nunca grava: nele o `/` da fixture não separa pastas.
+        let resolved = hangar_server::accounts::catalog::resolved(&home);
+        let escaped = serde_json::to_string(&*resolved.to_string_lossy()).unwrap();
         std::fs::write(&index, std::fs::read_to_string(&index).unwrap().replace("{HOME}", escaped.trim_matches('"'))).unwrap();
         let hits = Arc::new(Mutex::new(Vec::new()));
         let seen = hits.clone();
@@ -343,8 +345,8 @@ fn joined(h: &Harness) -> Joined {
     std::fs::create_dir_all(store.join("indexes")).unwrap();
     let path = store.join(format!("{TRANSFER}.json"));
     std::fs::write(&path, record.to_string()).unwrap();
-    // `_thread_key`: json.dumps([home resolvido, thread], ensure_ascii=False).
-    let key = format!("[{}, {}]", serde_json::to_string(&codex_home.canonicalize().unwrap()).unwrap(), serde_json::to_string(THREAD).unwrap());
+    // `_thread_key`: json.dumps([home resolvido, thread], ensure_ascii=False); o Python resolve sem o `\\?\`.
+    let key = format!("[{}, {}]", serde_json::to_string(&hangar_server::accounts::catalog::resolved(&codex_home)).unwrap(), serde_json::to_string(THREAD).unwrap());
     std::fs::write(store.join("indexes").join(format!("thread-{}.json", sha(key.as_bytes()))), json!([TRANSFER]).to_string()).unwrap();
     Joined { collision, rollout, prefix, record: path }
 }

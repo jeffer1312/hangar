@@ -1039,7 +1039,9 @@ impl Env {
         let env = Self::fixtures(timing);
         let home = env.home();
         let kimi_index = home.join(".kimi-code/session_index.jsonl");
-        let text = fs::read_to_string(&kimi_index).unwrap().replace("{HOME}", &json_text(&home.to_string_lossy()));
+        // Sem o `\\?\` do canonicalize, que o Kimi nunca grava: nele o `/` da fixture não separa pastas.
+        let resolved = crate::accounts::catalog::resolved(&home);
+        let text = fs::read_to_string(&kimi_index).unwrap().replace("{HOME}", &json_text(&resolved.to_string_lossy()));
         fs::write(&kimi_index, text).unwrap();
         fs::write(home.join(".kimi-code/config.toml"), KIMI_CONFIG).unwrap();
         fs::write(home.join(".pi/agent/auth.json"), PI_AUTH).unwrap();
@@ -1562,6 +1564,21 @@ fn corruption_wakes_the_producer_to_rebuild_without_a_new_write() {
     env.write(SID2, &[line("agulha dois", "u2", "user")], false);
     wait_for("índice refeito sem escrita nova", || env.index.ready()
         && Connection::open(env.index.path()).and_then(|c| c.query_row("SELECT count(*) FROM files", [], |r| r.get::<_, i64>(0))).is_ok_and(|n| n == 2));
+}
+
+#[test]
+fn discard_waits_for_a_reader_that_lets_go() {
+    // No Windows um leitor aberto impede a remoção; o descarte espera ele soltar em vez de desistir.
+    let env = Env::small(quiet());
+    env.index.update().unwrap();
+    *env.index.inner.writer.lock().unwrap() = None;
+    let path = env.index.path().to_owned();
+    let reader = env.db();
+    reader.query_row("SELECT count(*) FROM files", [], |r| r.get::<_, i64>(0)).unwrap();
+    let late = std::thread::spawn(move || { std::thread::sleep(Duration::from_millis(200)); drop(reader); });
+    super::db::discard(&path).unwrap();
+    late.join().unwrap();
+    assert!(!path.exists());
 }
 
 #[test]
