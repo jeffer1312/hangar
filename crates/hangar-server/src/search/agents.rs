@@ -56,7 +56,7 @@ pub(super) fn discover(env: &AccountEnvironment, known: crate::archive_list::Kno
         if !md.is_file() { continue; }
         // Pi e omp: a conta sai do modelo lido nas linhas (`ingest`).
         let account = match (c.provider, &c.codex) {
-            ("codex", Some(owner)) => format!("codex:{}", crate::list::links::resolve_lenient(&owner.home).to_string_lossy()),
+            ("codex", Some(owner)) => format!("codex:{}", crate::accounts::catalog::resolved(&owner.home).to_string_lossy()),
             ("kimi", _) => kimi.clone(),
             _ => String::new(),
         };

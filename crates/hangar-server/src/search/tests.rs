@@ -113,20 +113,42 @@ impl Env {
 
     fn count(&self, sql: &str) -> i64 { self.db().query_row(sql, [], |r| r.get(0)).unwrap() }
 
-    /// As tabelas como `capture.py` as despeja, com o HOME trocado por `{HOME}`.
+    /// As tabelas como `capture.py` as despeja, com o HOME trocado por `{HOME}` e na ordem do caminho com `/`.
     fn dump(&self) -> Value {
         let c = self.db();
-        let home = self.home().to_string_lossy().into_owned();
+        let home = self.home();
         let files: Vec<Value> = c.prepare("SELECT path, project, session_id, size, offset, lines, cwd, preview, head_done, internal FROM files ORDER BY path").unwrap()
-            .query_map([], |r| Ok(json!({"path": r.get::<_, String>(0)?.replace(&home, "{HOME}"), "project": r.get::<_, String>(1)?,
+            .query_map([], |r| Ok(json!({"path": homed(&r.get::<_, String>(0)?, &home), "project": r.get::<_, String>(1)?,
                 "session_id": r.get::<_, String>(2)?, "size": r.get::<_, i64>(3)?, "offset": r.get::<_, i64>(4)?, "lines": r.get::<_, i64>(5)?,
                 "cwd": r.get::<_, Option<String>>(6)?, "preview": r.get::<_, String>(7)?, "head_done": r.get::<_, i64>(8)?,
                 "internal": r.get::<_, Option<i64>>(9)?}))).unwrap().map(Result::unwrap).collect();
         let msg: Vec<Value> = c.prepare("SELECT f.path, m.event_id, m.role, m.ts, m.text FROM msg m JOIN files f ON f.id = m.file_id ORDER BY f.path, m.id").unwrap()
-            .query_map([], |r| Ok(json!({"path": r.get::<_, String>(0)?.replace(&home, "{HOME}"), "event_id": r.get::<_, String>(1)?,
+            .query_map([], |r| Ok(json!({"path": homed(&r.get::<_, String>(0)?, &home), "event_id": r.get::<_, String>(1)?,
                 "role": r.get::<_, String>(2)?, "ts": r.get::<_, Option<f64>>(3)?, "text": r.get::<_, String>(4)?}))).unwrap().map(Result::unwrap).collect();
+        let (mut files, mut msg) = (files, msg);
+        // `\` ordena diferente de `/`: a ordem estável pelo caminho normalizado mantém a de `m.id`.
+        files.sort_by(|a, b| a["path"].as_str().cmp(&b["path"].as_str()));
+        msg.sort_by(|a, b| a["path"].as_str().cmp(&b["path"].as_str()));
         json!({"ready": self.index.ready(), "files": files, "msg": msg})
     }
+}
+
+/// O caminho como o teste o compara: `{HOME}` no lugar das duas grafias do HOME (a conta e o rollout
+/// Codex saem sem o `\\?\` no Windows) e `/` como separador.
+fn homed(text: &str, home: &Path) -> String {
+    let resolved = crate::accounts::catalog::resolved(home).to_string_lossy().into_owned();
+    text.replace(&*home.to_string_lossy(), "{HOME}").replace(&resolved, "{HOME}").replace('\\', "/")
+}
+
+/// `text` escapado para dentro de uma string JSON: o `\` do caminho do Windows quebrava a linha.
+fn json_text(text: &str) -> String {
+    let quoted = serde_json::to_string(text).unwrap();
+    quoted[1..quoted.len() - 1].to_owned()
+}
+
+/// A conta como o índice a grava: `accounts::catalog::resolved`.
+fn account_of(provider: &str, dir: &Path) -> String {
+    format!("{provider}:{}", crate::accounts::catalog::resolved(dir).to_string_lossy())
 }
 
 fn copy_dir(from: &Path, to: &Path) {
@@ -224,7 +246,7 @@ fn lifecycle_matches_python_capture() {
     let b = home.join(".claude-b");
     let facts: (Option<String>, String, String) = env.db().query_row("SELECT config_dir, account, provider FROM files WHERE path = ?",
         [dst.to_string_lossy()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap();
-    assert_eq!(facts, (Some(b.to_string_lossy().into_owned()), format!("claude:{}", b.to_string_lossy()), "claude".to_owned()));
+    assert_eq!(facts, (Some(b.to_string_lossy().into_owned()), account_of("claude", &b), "claude".to_owned()));
 }
 
 #[test]
@@ -286,7 +308,7 @@ fn finds_substring_without_case_or_accent() {
     let row = &env.index.search(&terms("sqlite"), 50).unwrap().unwrap()[0];
     assert_eq!((row.project.as_str(), row.session_id.as_str(), row.cwd.as_deref(), row.role.as_str(), row.provider.as_str(), row.config_dir.as_deref()),
         ("-home-u-proj", SID2, Some("/home/u/proj"), "user", "claude", None));
-    assert_eq!(row.account, format!("claude:{}", env.root.join("acct").to_string_lossy()));
+    assert_eq!(row.account, account_of("claude", &env.root.join("acct")));
 }
 
 #[test]
@@ -992,7 +1014,7 @@ impl Env {
         let env = Self::fixtures(timing);
         let home = env.home();
         let kimi_index = home.join(".kimi-code/session_index.jsonl");
-        let text = fs::read_to_string(&kimi_index).unwrap().replace("{HOME}", &home.to_string_lossy());
+        let text = fs::read_to_string(&kimi_index).unwrap().replace("{HOME}", &json_text(&home.to_string_lossy()));
         fs::write(&kimi_index, text).unwrap();
         fs::write(home.join(".kimi-code/config.toml"), KIMI_CONFIG).unwrap();
         fs::write(home.join(".pi/agent/auth.json"), PI_AUTH).unwrap();
@@ -1012,10 +1034,13 @@ impl Env {
             .filter(crate::archive_history::is_message).map(|e| e.id).collect()
     }
 
+    /// Pelo caminho normalizado: no Windows o rollout Codex é gravado sem o `\\?\` e com `\`.
     fn indexed_ids(&self, rel: &str) -> Vec<String> {
-        let path = self.home().join(rel).to_string_lossy().into_owned();
-        self.db().prepare("SELECT m.event_id FROM msg m JOIN files f ON f.id = m.file_id WHERE f.path = ? ORDER BY m.id").unwrap()
-            .query_map([path], |r| r.get(0)).unwrap().map(Result::unwrap).collect()
+        let home = self.home();
+        let want = homed(&home.join(rel).to_string_lossy(), &home);
+        self.db().prepare("SELECT f.path, m.event_id FROM msg m JOIN files f ON f.id = m.file_id ORDER BY m.id").unwrap()
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get(1)?))).unwrap().map(Result::unwrap)
+            .filter(|(path, _)| homed(path, &home) == want).map(|(_, id)| id).collect()
     }
 }
 
@@ -1025,14 +1050,15 @@ fn agents_enter_the_index_with_provider_and_account() {
     // dona e a pasta do Claude do cwd; `config_dir` nulo.
     let env = Env::agents(quiet());
     env.index.update().unwrap();
-    let home = env.home().to_string_lossy().into_owned();
-    let rows: Vec<Value> = env.db().prepare("SELECT path, provider, project, session_id, cwd, config_dir, account, codex_account \
+    let home = env.home();
+    let mut rows: Vec<Value> = env.db().prepare("SELECT path, provider, project, session_id, cwd, config_dir, account, codex_account \
             FROM files WHERE provider <> 'claude' ORDER BY path").unwrap()
-        .query_map([], |r| Ok(json!({"path": r.get::<_, String>(0)?.replace(&home, "{HOME}"), "provider": r.get::<_, String>(1)?,
+        .query_map([], |r| Ok(json!({"path": homed(&r.get::<_, String>(0)?, &home), "provider": r.get::<_, String>(1)?,
             "project": r.get::<_, String>(2)?, "session_id": r.get::<_, String>(3)?, "cwd": r.get::<_, Option<String>>(4)?,
-            "config_dir": r.get::<_, Option<String>>(5)?, "account": r.get::<_, Option<String>>(6)?.map(|a| a.replace(&home, "{HOME}")),
+            "config_dir": r.get::<_, Option<String>>(5)?, "account": r.get::<_, Option<String>>(6)?.map(|a| homed(&a, &home)),
             "codex_account": r.get::<_, Option<String>>(7)?}))).unwrap().map(Result::unwrap).collect();
-    // Ordem de bytes do caminho: `.codex-b/` vem antes de `.codex/`.
+    rows.sort_by(|a, b| a["path"].as_str().cmp(&b["path"].as_str()));
+    // Ordem de bytes do caminho com `/`: `.codex-b/` vem antes de `.codex/`.
     assert_eq!(Value::Array(rows), json!([
         {"path": format!("{{HOME}}/{CODEX_B}"), "provider": "codex", "project": "-tmp-hangar-native-task4-fixture-jf",
          "session_id": "01a0d000-f6ac-74e3-b19b-98d42af1a712", "cwd": "/tmp/hangar-native-task4-fixture-jf", "config_dir": null,
@@ -1082,7 +1108,7 @@ fn agent_ids_are_the_archive_history_ids() {
         assert_eq!(env.indexed_ids(rel), want, "{rel}");
     }
     let rows = env.index.search(&terms("continued"), 50).unwrap().unwrap();
-    assert_eq!(rows.iter().map(|r| (r.provider.as_str(), r.account.ends_with("/.codex-b"), r.codex_account.as_deref())).collect::<Vec<_>>(),
+    assert_eq!(rows.iter().map(|r| (r.provider.as_str(), r.account == account_of("codex", &env.home().join(".codex-b")), r.codex_account.as_deref())).collect::<Vec<_>>(),
         [("codex", true, Some("b")), ("codex", true, Some("b"))]);
 }
 
@@ -1244,9 +1270,15 @@ fn a_scan_pool_that_cannot_start_is_reported_once() {
 fn the_scan_counts_every_eligible_conversation_like_the_index() {
     // O total do cabeçalho: as conversas não internas, também quando a varredura para antes de ler todas.
     let env = Env::small(quiet());
-    for sid in [SID, SID2, "33333333-3333-3333-3333-333333333333"] { env.write(sid, &[line("zebra aqui", &format!("u{}", &sid[..1]), "user")], false); }
+    for (i, sid) in [SID, SID2, "33333333-3333-3333-3333-333333333333"].into_iter().enumerate() {
+        let f = env.write(sid, &[line("zebra aqui", &format!("u{}", &sid[..1]), "user")], false);
+        set_mtime(&f, T0 + i as u64);
+    }
     let prefix = &internal_prefixes()[0];
-    env.write("44444444-4444-4444-4444-444444444444", &[line(&format!("{prefix} zebra"), "i1", "user")], false);
+    // A interna é a mais nova e a única lida antes de o limite parar a leitura: escrita em sequência, o
+    // Windows pode dar o mesmo relógio às quatro e a ordem por caminho a deixaria sem ler.
+    let internal = env.write("44444444-4444-4444-4444-444444444444", &[line(&format!("{prefix} zebra"), "i1", "user")], false);
+    set_mtime(&internal, T0 + 10);
     let counted = || super::hits::search_counted(&env.index, "zebra", &std::collections::HashMap::new(), 1).unwrap().1;
     let scanned = counted();
     env.index.update().unwrap();

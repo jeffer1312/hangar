@@ -171,7 +171,7 @@ fn head_hash(file: &mut File, len: i64) -> std::io::Result<String> {
 }
 
 pub(super) fn account_key(account: &Account) -> String {
-    format!("claude:{}", crate::list::links::resolve_lenient(&account.dir).to_string_lossy())
+    format!("claude:{}", crate::accounts::catalog::resolved(&account.dir).to_string_lossy())
 }
 
 pub(super) type Report<'a> = &'a dyn Fn(&'static str, String);
