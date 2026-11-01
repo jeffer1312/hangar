@@ -328,6 +328,6 @@ it('expande vizinhança de A sem trocar servidor ativo', async () => {
   const { container } = await mount(); await typeQuery(container, 'agulha'); await tick();
   const snippet = [...container.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('agulha azul'))!;
   expect(snippet).toBeDefined(); await act(async () => snippet.click());
-  expect(h.context).toHaveBeenCalledExactlyOnceWith(state.servers[0], 'proj', 'sid', 'ev-a');
+  expect(h.context).toHaveBeenCalledExactlyOnceWith(state.servers[0], 'proj', 'sid', 'ev-a', undefined, undefined);
   expect(container.textContent).toContain('vizinha anterior'); expect(state.activeId).toBe('b');
 });

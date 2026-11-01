@@ -118,7 +118,7 @@ it('ponto lê somente vizinhança de A e destaca evento sem buscar histórico in
   expect(container.textContent).toContain('posterior');
   expect(container.querySelector('[data-markdown]')?.textContent).toBe('**trecho encontrado**');
   expect(container.querySelector('[testid="search-active-event"]')?.textContent).toContain('trecho encontrado');
-  expect(h.context).toHaveBeenCalledExactlyOnceWith(state.servers[0], 'proj', 'sid', 'match');
+  expect(h.context).toHaveBeenCalledExactlyOnceWith(state.servers[0], 'proj', 'sid', 'match', null, '');
   await act(async () => { h.targetLayout?.({ nativeEvent: { layout: { y: 480 } } }); h.contentLayout?.(390, 1800); });
   expect(h.scroll).toHaveBeenCalledWith({ y: 480, animated: false });
   expect(fetch).not.toHaveBeenCalled(); expect(h.push).not.toHaveBeenCalled();

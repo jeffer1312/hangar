@@ -2209,7 +2209,7 @@ export interface SearchHit {
   event_id?: string | null;            // id do evento no histórico: abre a conversa no ponto
   ts?: number | null;                  // quando a mensagem foi escrita
   provider?: Provider;                 // agente da conversa ("claude")
-  conta?: string;                      // conta da conversa ("claude:<pasta>")
+  conta?: string;                      // conta da conversa, na forma provedor:caminho
   config_dir?: string | null;
   codex_account?: string | null;       // só no Codex
   whole?: boolean;                     // todos os termos como palavra inteira (vem antes na lista)
