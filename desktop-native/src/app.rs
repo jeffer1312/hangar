@@ -2651,10 +2651,10 @@ impl Hangar {
     }
 
     fn toggle(&mut self, key: String, cx: &mut Context<Self>) {
-        // Linha da prévia da aba: o clique chega aqui com a conversa principal no lugar.
-        if self.toggle_in_tab_preview(key.clone(), cx) { return; }
-        // E a da prévia da busca.
+        // Linha da prévia da busca ou da aba: o clique chega aqui com a conversa principal no lugar. A busca
+        // vem antes, por cima da prévia da aba: a mesma chave pode estar nas duas.
         if self.toggle_in_search_preview(key.clone(), cx) { return; }
+        if self.toggle_in_tab_preview(key.clone(), cx) { return; }
         self.toggle_here(key, cx);
     }
 
