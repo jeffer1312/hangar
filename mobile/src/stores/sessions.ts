@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { openSessionsStream, aggregateSessions, jsonlDaSessao, sweepHidden, registrarDiag, decidirRota, discoverRemoteRoute, esquecerRota, rotaDecidida, baseOf, UNCONFIRMED_BASE, probeServerResponse, comTeto, parseTagsEvent, patchSlot, placeExternalRows, listExternalPairs, attachGuest, createExternalPairSync } from '@hangar/core';
+import { openSessionsStream, deviceIdentityReady, aggregateSessions, jsonlDaSessao, sweepHidden, registrarDiag, decidirRota, discoverRemoteRoute, esquecerRota, rotaDecidida, baseOf, UNCONFIRMED_BASE, probeServerResponse, comTeto, parseTagsEvent, patchSlot, placeExternalRows, listExternalPairs, attachGuest, createExternalPairSync } from '@hangar/core';
 import type { SessionInfo, Server, AggSession, ExternalPair, VaultEvent, VaultRequest } from '@hangar/core';
 import { sortSessions, definirArmazem, definirProtegido, definirSemPrazo, registrarFalha, registrarSucesso, retryAfterMs, estaDesligado, startOutage, endOutage, respondeuRecentemente, retentarAgora, esquecerServidor, onServerRecovered, _limparEsfriamentoParaTestes } from '@hangar/core';
 import type { Slot, ServerBucket, Aggregate } from '@hangar/core';
@@ -397,7 +397,15 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
         return;
       }
     }
+    // O aparelho só alimenta a dica do celular no desktop: cofre que não responde não segura a lista ao vivo. Aberta
+    // sem ele, o primeiro acesso fica para a próxima reabertura da lista. Convite não manda o aparelho: não espera.
+    let identityTimer: ReturnType<typeof setTimeout> | undefined;
+    const identityLate = s.invite ? false : await Promise.race([
+      deviceIdentityReady().then(() => false),
+      new Promise<boolean>((resolve) => { identityTimer = setTimeout(() => resolve(true), 3000); }),
+    ]).finally(() => clearTimeout(identityTimer));
     if (!isCurrent(attempt)) return;
+    if (identityLate) registrarDiag({ evento: 'aparelho.atrasou', nivel: 'aviso', tela: 'lista', codigo: 'device_identity_timeout' }, s.baseUrl);
     const es = openSessionsStream(s);
     const active = () => isCurrent(attempt) && streams.get(s.id) === es;
     let falhaDados = false;

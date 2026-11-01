@@ -7,6 +7,7 @@ use gpui_kit::base::AccordionTrigger;
 use gpui_kit::component::{WindowExt, dialog, menu::{DropdownMenu, PopupMenu}, notification::NotificationType};
 use super::machines::enter_to_focused;
 use super::activity::web;
+use crate::appearance::{load_json, save_json};
 use std::{cell::RefCell, rc::Rc};
 
 /// O filtro aparece com mais de 6 sessões, contadas antes de filtrar (`FILTER_FROM` do web).
@@ -121,6 +122,8 @@ pub(super) enum SidebarReply {
     BranchRead(u64, Result<Value, Failure>),
     AccountsRead(u64, Result<(Vec<AccountTarget>, Option<String>), Failure>),
     Wrote(Target, Write, Result<Value, Failure>),
+    /// Ocultar ou mostrar o grupo inteiro (`true` = ocultar): as sessões que falharam, com o motivo de cada uma.
+    GroupVisibility(bool, Vec<(Target, Failure)>),
     /// Resultado de uma gravação de git: nível e texto da notificação daquela sessão.
     Note(Target, NotificationType, String),
     Chained(Target, u64, String, Result<Value, Failure>),
@@ -246,6 +249,9 @@ pub(super) struct Sidebar {
     leads_gen: u64,
     /// Fechadas agora: somem da lista na hora e voltam se o servidor recusar.
     deleting: HashSet<Target>,
+    /// Desocultadas por mensagem há pouco: a linha só perde a marca na lista seguinte, e outro envio até lá não repete
+    /// o pedido nem a pergunta do grupo.
+    revealed: HashMap<Target, std::time::Instant>,
     pub(super) editing: Option<Edit>,
     renaming: HashSet<Target>,
     /// Aberta e renomeada: o nome novo abre assim que aparecer na lista.
@@ -293,7 +299,7 @@ impl Sidebar {
     pub(super) fn new(window: &mut Window, cx: &mut Context<Hangar>) -> Self {
         let filter = cx.new(|cx| InputState::new(window, cx).placeholder(tr("sidebar_filter")).clean_on_escape());
         cx.subscribe(&filter, |_, _, _: &InputEvent, cx| cx.notify()).detach();
-        Self { filter, collapsed: load_json(collapsed_path()), group_leads: load_json(group_leads_path()), leads_gen: 0, deleting: HashSet::new(), editing: None, renaming: HashSet::new(), follow: None, lost: None, moving: HashMap::new(),
+        Self { filter, collapsed: load_json(collapsed_path()), group_leads: load_json(group_leads_path()), leads_gen: 0, deleting: HashSet::new(), revealed: HashMap::new(), editing: None, renaming: HashSet::new(), follow: None, lost: None, moving: HashMap::new(),
             menu: None, menu_seq: 0, rename_seq: 0, chain: None, chain_seq: 0, focus_tab: None, remote_focus: HashMap::new(), collapse_gen: 0, button_menu: None, hover: None, last_sub: Default::default(), press_seq: 0,
             long_pressed: false, rail_anim: None, resize: None, grouping: Default::default(), flip: Default::default(), tab_flip: Default::default(), tab_follow: Default::default(), still_avatar: Default::default() }
     }
@@ -374,7 +380,7 @@ pub(super) fn project_label(cwd: Option<&str>) -> String {
 
 // ponytail: `localeCompare` sem tabela de colação — minúsculas com os acentos do português dobrados na letra-base, empate pelo
 // texto cru. Outras escritas ordenam por ponto de código; uma tabela (icu_collator) resolveria se isso importar.
-fn text_key(text: &str) -> (String, String) { (sort_key(text), text.to_owned()) }
+pub(super) fn text_key(text: &str) -> (String, String) { (sort_key(text), text.to_owned()) }
 
 fn sort_key(text: &str) -> String {
     text.to_lowercase().chars().map(|c| match c {
@@ -421,6 +427,8 @@ pub(super) fn layout<'a>(sessions: &'a [SessionInfo], query: &str, by_project: b
 
 /// Chave do grupo "Ocultas" no `sidebar-collapsed.json`, com o sentido invertido: presente = aberto. Recolhido é o padrão.
 pub(super) const HIDDEN_GROUP: &str = "sidebar:hidden-open";
+
+const REVEAL_WINDOW: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// As ocultas de todas as máquinas, por nome; sendo fechadas (`closing`) ficam de fora como no resto da barra. Cada lista leva
 /// o filtro da máquina dela (`filter_query`), o mesmo que `layout` aplica às visíveis.
@@ -523,33 +531,8 @@ fn group_leads_path() -> Option<PathBuf> {
     Some(crate::appearance::dir()?.join("group-leads.json"))
 }
 
-/// Arquivo ausente é a primeira abertura; ilegível vai ao log em vez de voltar ao padrão sem explicação.
-fn load_json<T: serde::de::DeserializeOwned + Default>(path: Option<PathBuf>) -> T {
-    let Some(path) = path else { return T::default() };
-    let bytes = match std::fs::read(&path) {
-        Ok(bytes) => bytes,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return T::default(),
-        Err(e) => { eprintln!("arquivo ilegível em {}: {e}", path.display()); return T::default(); }
-    };
-    serde_json::from_slice(&bytes).unwrap_or_else(|e| { eprintln!("arquivo inválido em {}: {e}", path.display()); T::default() })
-}
-
 static COLLAPSED_WRITTEN: std::sync::Mutex<u64> = std::sync::Mutex::new(0);
 static LEADS_WRITTEN: std::sync::Mutex<u64> = std::sync::Mutex::new(0);
-
-/// Bloqueante. Só a geração mais nova de cada arquivo grava, trocando o arquivo inteiro (tmp + rename), como
-/// `appearance::save`.
-fn save_json<T: serde::Serialize>(path: Option<PathBuf>, generation: u64, written: &std::sync::Mutex<u64>, saved: &T) -> std::io::Result<()> {
-    let mut written = written.lock().unwrap_or_else(|e| e.into_inner());
-    if generation <= *written { return Ok(()); }
-    let path = path.ok_or_else(|| std::io::Error::other("sem pasta de configuração"))?;
-    std::fs::create_dir_all(path.parent().expect("arquivo dentro de hangar-native"))?;
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, serde_json::to_vec(saved).map_err(std::io::Error::other)?)?;
-    std::fs::rename(&tmp, &path)?;
-    *written = generation;
-    Ok(())
-}
 
 impl Hangar {
     pub(super) fn sidebar_tell(&self) -> Tell { Tell(self.tx.clone(), self.connection) }
@@ -605,12 +588,21 @@ impl Hangar {
 
     pub(super) fn hidden_open(&self) -> bool { self.sidebar.is_collapsed(HIDDEN_GROUP) }
 
+    /// O "N" do "Ver sessões ocultas": o que o grupo "Ocultas" mostra onde o botão leva (a barra, ou a bandeja com abas).
+    pub(super) fn hidden_count(&self, cx: &App) -> usize {
+        if appearance::get().navigation.tabs() { self.tray_counts().1 } else { self.hidden_sessions(cx).len() }
+    }
+
     /// "Ver sessões ocultas": fecha as Configurações e mostra a barra cheia com o grupo aberto.
     pub(super) fn show_hidden_group(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_settings(window, cx);
-        // Com abas não há barra; a busca acha as ocultas com a marca.
-        if appearance::get().navigation.tabs() { self.open_search(window, cx); return; }
-        if self.rail() { self.toggle_rail(cx); }
+        // Custos, worktrees e o arquivo expandido tomam o lugar da barra e escondem a bandeja.
+        self.close_costs(window, cx);
+        self.close_worktrees(window, cx);
+        self.restore_files();
+        // Com abas não há barra; as ocultas moram no fim de cada coluna da bandeja das máquinas.
+        if appearance::get().navigation.tabs() { self.open_machines_tray(window, cx); }
+        else if self.rail() { self.toggle_rail(cx); }
         if !self.hidden_open() { self.toggle_group(HIDDEN_GROUP.into(), cx); }
     }
 
@@ -833,6 +825,7 @@ impl Hangar {
 
     /// Abrir o menu lê o silenciar daquela sessão; resposta de um menu anterior é descartada pelo número.
     pub(super) fn start_menu(&mut self, target: Target, cx: &mut Context<Self>) {
+        self.tour_event(crate::tour::TourEvent::MenuOpened, cx);
         self.clear_hover();
         self.sidebar.press_seq += 1;
         self.sidebar.menu_seq += 1;
@@ -1031,6 +1024,98 @@ impl Hangar {
             tell.send(SidebarReply::Wrote(target, what, result)).await;
         });
         cx.notify();
+    }
+
+    /// "Ocultar da lista": num grupo com mais alguém a ocultar, pergunta antes se vai só esta ou o grupo inteiro.
+    pub(super) fn hide_session(&mut self, target: Target, window: &mut Window, cx: &mut Context<Self>) {
+        use super::grouping::{Row, group_hide_targets};
+        let machines = self.group_machines();
+        let targets = match self.target_session(&target).filter(|_| machines.contains(&target.server)) {
+            Some(session) => {
+                let rows: Vec<Row> = machines.iter().flat_map(|key| self.sessions_of(key).iter()
+                    .filter(|s| !self.sidebar.is_hidden(key, &s.name)).map(move |s| Row { server: key, session: s, invite: false })).collect();
+                group_hide_targets(Row { server: &target.server, session, invite: false }, &rows)
+            }
+            None => Vec::new(),
+        };
+        if targets.len() < 2 { self.write(target, Write::Hide, cx); return; }
+        let names: Vec<String> = targets.iter().map(|t| if t.server == target.server { t.name.clone() }
+            else { format!("{} · {}", t.name, self.machine_label(&t.server, cx)) }).collect();
+        self.focus_origin(&target, window, cx);
+        let weak = cx.entity().downgrade();
+        window.open_dialog(cx, move |dialog, _, _| {
+            let run = |id: &'static str, label: String, all: bool| {
+                let (weak, targets) = (weak.clone(), targets.clone());
+                Button::new(id).label(label).when(all, |b| b.primary()).on_click(move |_, window, cx| {
+                    window.close_dialog(cx);
+                    let _ = weak.update(cx, |this, cx| if all { this.set_group_hidden(targets.clone(), true) } else { this.write(targets[0].clone(), Write::Hide, cx) });
+                })
+            };
+            popup::dialog(dialog).w(px(420.)).title(tr("sidebar_hide_group_title"))
+                .child(div().flex().flex_col().gap(px(2.)).text_sm()
+                    .children(names.iter().map(|name| div().min_w_0().truncate().font_family(theme::MONO).child(name.clone()))))
+                .footer(div().flex().justify_end().gap_2()
+                    .child(Button::new("hide-group-cancel").label(tr("cancel")).on_click(|_, window, cx| window.close_dialog(cx)))
+                    .child(run("hide-group-one", tr("sidebar_hide_only_this"), false))
+                    .child(run("hide-group-all", tr("sidebar_hide_whole_group").replace("{n}", &names.len().to_string()), true)))
+                .on_ok(enter_to_focused)
+        });
+    }
+
+    /// Mensagem minha numa oculta a traz de volta; com outras ocultas no grupo dela, pergunta se voltam junto. O grupo
+    /// não muda: só a marca de oculta sai.
+    pub(super) fn reveal_on_send(&mut self, server: &str, name: &str, window: &mut Window, cx: &mut Context<Self>) {
+        use super::grouping::{Row, group_show_targets};
+        let target = Target::new(&servers::norm(server), name);
+        if self.invite_target(&target) || !self.target_session(&target).is_some_and(|s| s.hidden_from_list) { return; }
+        // ponytail: janela fixa no lugar de acompanhar a lista; cobre o tique de 1,5 s com folga.
+        let now = std::time::Instant::now();
+        self.sidebar.revealed.retain(|_, at| now.duration_since(*at) < REVEAL_WINDOW);
+        if self.sidebar.revealed.insert(target.clone(), now).is_some() { return; }
+        let Some(session) = self.target_session(&target) else { return };
+        let machines = self.group_machines();
+        let others = if machines.contains(&target.server) {
+            let rows: Vec<Row> = machines.iter().flat_map(|key| self.sessions_of(key).iter()
+                .filter(|s| !self.sidebar.is_hidden(key, &s.name)).map(move |s| Row { server: key, session: s, invite: false })).collect();
+            group_show_targets(Row { server: &target.server, session, invite: false }, &rows)
+        } else { Vec::new() };
+        self.write(target.clone(), Write::Show, cx);
+        if others.is_empty() { return; }
+        let names: Vec<String> = others.iter().map(|t| if t.server == target.server { t.name.clone() }
+            else { format!("{} · {}", t.name, self.machine_label(&t.server, cx)) }).collect();
+        let weak = cx.entity().downgrade();
+        window.open_dialog(cx, move |dialog, _, _| {
+            let (weak, others) = (weak.clone(), others.clone());
+            popup::dialog(dialog).w(px(420.)).title(tr("sidebar_show_group_title"))
+                .child(div().flex().flex_col().gap(px(2.)).text_sm().child(tr("sidebar_show_group_body"))
+                    .children(names.iter().map(|name| div().min_w_0().truncate().font_family(theme::MONO).child(name.clone()))))
+                .footer(div().flex().justify_end().gap_2()
+                    .child(Button::new("show-group-one").label(tr("sidebar_show_only_this")).on_click(|_, window, cx| window.close_dialog(cx)))
+                    .child(Button::new("show-group-all").label(tr("sidebar_show_others").replace("{n}", &names.len().to_string())).primary()
+                        .on_click(move |_, window, cx| {
+                            window.close_dialog(cx);
+                            let _ = weak.update(cx, |this, _| this.set_group_hidden(others.clone(), false));
+                        })))
+                .on_ok(enter_to_focused)
+        });
+    }
+
+    /// Cada membro na máquina dele, todos juntos; os que falham voltam numa notificação só, com o motivo de cada um.
+    fn set_group_hidden(&mut self, targets: Vec<Target>, hide: bool) {
+        let calls: Vec<(Target, Result<Api, String>)> = targets.into_iter()
+            .map(|t| { let api = self.machine_api(&t.server).ok_or_else(|| self.machine_error(&t.server)); (t, api) }).collect();
+        let method = if hide { reqwest::Method::PUT } else { reqwest::Method::DELETE };
+        let tell = self.sidebar_tell();
+        self.runtime.spawn(async move {
+            let results = futures::future::join_all(calls.into_iter().map(|(target, api)| { let method = method.clone(); async move {
+                let result = match api {
+                    Ok(api) => api.server_send(method, &["sessions", target.name.as_str(), "hidden"], None, 15).await.map(|_| ()),
+                    Err(reason) => Err(Failure::local(reason)),
+                };
+                result.err().map(|error| (target, error))
+            }})).await;
+            tell.send(SidebarReply::GroupVisibility(hide, results.into_iter().flatten().collect())).await;
+        });
     }
 
     // ── Git e encadear ──
@@ -1279,6 +1364,12 @@ impl Hangar {
                 cx.notify();
             }
             SidebarReply::Note(target, kind, text) => window.push_notification(git_note(&target.name, kind, text), cx),
+            SidebarReply::GroupVisibility(hide, skipped) => {
+                if skipped.is_empty() { return; }
+                let names: Vec<String> = skipped.iter().map(|(t, error)| format!("{} ({})", t.name, Self::visibility_failure(error))).collect();
+                let key = if hide { "sidebar_hide_group_skipped" } else { "sidebar_show_group_skipped" };
+                window.push_notification(Notification::error(tr(key).replace("{names}", &names.join(", "))), cx);
+            }
             SidebarReply::Group(seq, reply) => self.receive_group(seq, reply, window, cx),
             SidebarReply::Sheet(reply) => self.receive_sheet(reply, window, cx),
             SidebarReply::Identity(key, result) => self.receive_identity(key, result, window, cx),
@@ -1380,7 +1471,10 @@ impl Hangar {
                     (Write::Mode(_), Err(error)) => Some(Notification::error(failed("sidebar_mode_failed", &error))),
                     (Write::Reload, Ok(_)) => Some(Notification::success(tr("reload_sent"))),
                     (Write::Reload, Err(error)) => Some(Notification::error(failed("sidebar_reload_failed", &error))),
-                    (Write::Account { label, .. }, Ok(_)) => Some(Notification::success(tr("sidebar_same_moved").replace("{n}", label))),
+                    (Write::Account { label, .. }, Ok(_)) => {
+                        self.tour_event(crate::tour::TourEvent::AccountMoved, cx);
+                        Some(Notification::success(tr("sidebar_same_moved").replace("{n}", label)))
+                    }
                     (Write::Account { .. }, Err(error)) => Some(Notification::error(failed("sidebar_same_failed", &error))),
                     (Write::AnotherRename, result) => {
                         self.rename_suggest.again.remove(&target);
@@ -1417,18 +1511,20 @@ impl Hangar {
     /// `count`: as sessões que a seção mostra, com os grupos juntados.
     pub(super) fn render_group_header(&self, group: &Group, count: usize, awaiting: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let open = !self.sidebar.collapsed.contains(&group.key);
-        self.group_trigger(&group.key, group.label.clone(), open, Some(count), awaiting, window, cx)
+        self.group_trigger(&group.key, &group.key, group.label.clone(), open, Some(count), awaiting, window, cx)
     }
 
-    /// "Ocultas (N)" no fim da barra: o mesmo cabeçalho, aberto quando a chave está no arquivo.
-    pub(super) fn render_hidden_header(&self, count: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        self.group_trigger(HIDDEN_GROUP, tr("sidebar_hidden_group").replace("{n}", &count.to_string()), self.hidden_open(), None, 0, window, cx)
+    /// "Ocultas (N)": o mesmo cabeçalho, aberto quando a chave está no arquivo. `place` separa o id de foco
+    /// de cada lugar (barra, cada coluna da bandeja); abrir e fechar segue um interruptor só.
+    pub(super) fn render_hidden_header(&self, place: &str, count: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let label = tr("sidebar_hidden_group").replace("{n}", &count.to_string());
+        self.group_trigger(HIDDEN_GROUP, &format!("{HIDDEN_GROUP}/{place}"), label, self.hidden_open(), None, 0, window, cx)
     }
 
-    /// `count` ausente: o rótulo já leva a contagem.
+    /// `count` ausente: o rótulo já leva a contagem. `id_key` é o id do elemento; `key`, o interruptor.
     #[allow(clippy::too_many_arguments)]
-    fn group_trigger(&self, key: &str, label: String, open: bool, count: Option<usize>, awaiting: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let id = SharedString::from(format!("group-{key}"));
+    fn group_trigger(&self, key: &str, id_key: &str, label: String, open: bool, count: Option<usize>, awaiting: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let id = SharedString::from(format!("group-{id_key}"));
         let focus = window.use_keyed_state(SharedString::from(format!("{id}-focus")), cx, |_, cx| cx.focus_handle().tab_stop(true)).read(cx).clone();
         let (key, weak) = (key.to_owned(), cx.entity().downgrade());
         let trigger = AccordionTrigger::new(id).open(open).track_focus(&focus).aria_label(count.map_or_else(|| label.clone(), |n| format!("{label} · {n}")));
@@ -1580,9 +1676,8 @@ fn hide_item(hangar: &WeakEntity<Hangar>, target: &Target, session: &SessionInfo
     let label = tr(if hidden { "sidebar_show" } else { "sidebar_hide" });
     let label = if waiting { format!("{label} · {}", tr("sidebar_hide_waiting")) } else { label };
     let (hangar, target) = (hangar.clone(), target.clone());
-    PopupMenuItem::new(label).disabled(waiting).on_click(move |_, _, cx| {
-        let what = if hidden { Write::Show } else { Write::Hide };
-        let _ = hangar.update(cx, |this, cx| this.write(target.clone(), what, cx));
+    PopupMenuItem::new(label).disabled(waiting).on_click(move |_, window, cx| {
+        let _ = hangar.update(cx, |this, cx| if hidden { this.write(target.clone(), Write::Show, cx) } else { this.hide_session(target.clone(), window, cx) });
     })
 }
 
@@ -2011,17 +2106,21 @@ impl Hangar {
             // da rolagem da lista, com teto para várias máquinas em janela curta não tomarem a altura das sessões.
             .when(!vault_chips.is_empty(), |el| el.child(div().id("rail-vault").flex_shrink_0().w_full().max_h(px(84.)).mb(px(4.))
                 .overflow_y_scroll().flex().flex_col().items_center().gap(px(4.)).children(vault_chips)))
-            .child(div().id("session-list").min_h_0().w_full().overflow_y_scroll().px(px(3.)).flex().flex_col().gap(px(4.))
+            .child(div().id("session-list").min_h_0().w_full().overflow_y_scroll().track_scroll(&self.rows_scroll).px(px(3.)).flex().flex_col().gap(px(4.))
                 .when(!fit_content, |el| el.flex_1())
                 .children(rows))
             .child(div().w_full().flex_shrink_0().pt(px(8.)).pb(px(8.)).mt(px(4.)).border_t_1().border_color(theme::border())
                 .flex().flex_col().items_center().gap(px(4.))
-                // O CTA do web no trilho: o botão cheio de destaque, só com o +.
-                .child(Button::new("rail-new-session").custom(ButtonCustomVariant::new(cx).color(theme::accent()).foreground(theme::on_accent())
+                // O CTA do web no trilho: o botão cheio de destaque, só com o +. Com a barra recolhida, o primeiro passo do
+                // tour aponta para ele. Na troca de forma só a camada que está à vista marca a âncora (o corte de
+                // `render_sidebar`): a do trilho, desenhada por último, tomaria a posição do botão da lista cheia.
+                .child(div().flex_shrink_0().map(|el| if self.rail_progress().is_none_or(|p| p >= 0.5) { popup::anchor(el, crate::tour::anchors::NEW_SESSION) } else { el })
+                    .child(Button::new("rail-new-session")
+                        .custom(ButtonCustomVariant::new(cx).color(theme::accent()).foreground(theme::on_accent())
                         .hover(theme::accent().opacity(0.85)).active(theme::accent().opacity(0.75)))
                     .icon(chrome::small_icon(IconName::Plus, 16., theme::on_accent())).w(px(44.)).h(px(36.)).rounded(px(8.))
                     .tooltip(tr("create_title")).accessibility_label(tr("create_title")).disabled(self.api.is_none())
-                    .on_click(cx.listener(|this, _, window, cx| this.open_new_session(None, window, cx))))
+                    .on_click(cx.listener(|this, _, window, cx| this.open_new_session(None, window, cx)))))
                 .child(self.fold_button("rail-fold", cx))
                 .child(Button::new("rail-connection").ghost().size(px(36.)).rounded(px(8.)).tooltip(host).accessibility_label(tr("connection"))
                     .child(div().size(px(7.)).rounded_full().bg(if self.list_online { theme::success() } else { theme::warning() }))
@@ -2060,6 +2159,7 @@ impl Hangar {
         let (weak, menu_target, open) = (cx.entity().downgrade(), target.clone(), target.clone());
         el.on_mouse_down(MouseButton::Right, cx.listener(move |this, _, _, cx| this.start_menu(menu_target.clone(), cx)))
             .on_click(cx.listener(move |this, _, window, cx| this.open_target(&open, window, cx)))
+            .map(|el| popup::anchor(el, crate::tour::anchors::session_row(&target.server, &target.name)))
             .context_menu(session_menu(weak, target.server, session))
             .into_any_element()
     }
@@ -2318,6 +2418,15 @@ mod tests {
         let read: HashSet<String> = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(read, both, "a gravação do 1º clique terminou por último e não voltou o arquivo");
         assert!(!path.with_extension("tmp").exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            // Um tmp largo que sobrou de antes não passa o modo dele ao arquivo.
+            std::fs::write(path.with_extension("tmp"), b"").unwrap();
+            std::fs::set_permissions(path.with_extension("tmp"), std::fs::Permissions::from_mode(0o644)).unwrap();
+            save_json(Some(path.clone()), 3, &written, &one).unwrap();
+            assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        }
         let _ = std::fs::remove_dir_all(dir);
     }
 

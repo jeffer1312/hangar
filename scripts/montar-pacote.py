@@ -283,9 +283,12 @@ def notes(root: Path, os_name: str) -> dict:
         kind, platforms = kinds.get(f.get("tipo")), places.get(f.get("onde"))
         if not (f.get("titulo") and kind and platforms and _for_system(f.get("sistema", ""), os_name.split("-")[0])):
             continue
-        news.append({"id": _stem(name), "title": f["titulo"], "kind": kind, "text": body, "platforms": platforms,
-                     "try_it": f.get("experimente") or None,
-                     "animation": None if kind == "fix" else f.get("animacao") or None})
+        item = {"id": _stem(name), "title": f["titulo"], "kind": kind, "text": body, "platforms": platforms,
+                "try_it": f.get("experimente") or None,
+                "animation": None if kind == "fix" else f.get("animacao") or None}
+        if f.get("ancora"):
+            item["anchor"] = f["ancora"]  # ausente sai sem a chave, como no update_notes do Rust
+        news.append(item)
     order = list(kinds.values())
     news.sort(key=lambda n: (order.index(n["kind"]), n["id"]))
     return {"warnings": warnings, "news": news}

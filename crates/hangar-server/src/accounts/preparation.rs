@@ -34,6 +34,8 @@ pub struct PreparationState {
 pub type Preparations = Arc<Mutex<HashMap<AccountKey, PreparationState>>>;
 pub type PreparationGates = super::locks::KeyedGates;
 pub const PREPARED_MARKER: &str = ".hangar-prepared-v1";
+/// O mesmo `_RETENTATIVA` de `codex_integracao.py`.
+const PARTIAL_RETRY: Duration = Duration::from_secs(300);
 
 pub fn running() -> Value {
     json!({"status":"running","trust_pending":false,"issues":[],"etapa":null})
@@ -59,7 +61,8 @@ impl AccountService {
                     "a conta continua em preparo; aguarde a conclusão e tente abrir novamente",json!({"account_id":account.id})));
             }
             match status["status"].as_str() {
-                Some("ready")=>return Ok(status),
+                // Parcial = um recurso não sincronizou: a conta abre e as pendências vão no aviso.
+                Some("ready" | "partial")=>return Ok(status),
                 Some("running")=>{},
                 _=>return Err(AccountError::new(503,"codex_account_prepare_incomplete",
                     "o preparo da conta não terminou; confira as pendências na sincronização",json!({"account_id":account.id,"issues":status["issues"]}))),
@@ -90,6 +93,13 @@ impl AccountService {
     }
     pub(crate) fn force_path(&self, key: &AccountKey) -> Result<PathBuf, AccountError> {
         self.sidecar(key, "prepare-force.json")
+    }
+    /// Parcial gravado há menos de `PARTIAL_RETRY`: aberturas próximas o reaproveitam, e a primeira
+    /// depois dele tenta de novo (a fonte pode ter voltado), como a integração nativa faz.
+    fn recent(marker: &Path) -> bool {
+        std::fs::metadata(marker)
+            .and_then(|metadata| metadata.modified())
+            .is_ok_and(|modified| modified.elapsed().is_ok_and(|age| age < PARTIAL_RETRY))
     }
     pub(crate) fn persist(path: &Path, value: &Value) -> Result<(), AccountError> {
         // A publicação atômica usa o mesmo volume e não remove o lock de existência.
@@ -148,8 +158,12 @@ impl AccountService {
                 Err(_) => return failed("codex_account_state_invalid"),
             }
         }
-        if account.is_default && account.home.join(PREPARED_MARKER).is_file() {
-            json!({"status":"ready","trust_pending":false,"issues":[],"etapa":null,"herdado":null})
+        let marker = account.home.join(PREPARED_MARKER);
+        if account.is_default && marker.is_file() {
+            // A marca parcial continua parcial: lida como pronta, nunca mais tentaria de novo.
+            let partial = std::fs::read(&marker).ok().and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+                .is_some_and(|value| value["status"] == "partial");
+            json!({"status":if partial {"partial"} else {"ready"},"trust_pending":false,"issues":[],"etapa":null,"herdado":null})
         } else {
             idle_sync()
         }
@@ -253,7 +267,7 @@ impl AccountService {
                 }
                 return Ok(state.result.clone());
             }
-            if prepared["status"] == "ready" {
+            if prepared["status"] == "ready" || (prepared["status"] == "partial" && Self::recent(&marker)) {
                 return Ok(prepared);
             }
             match std::fs::remove_file(&marker) {
@@ -302,7 +316,12 @@ impl AccountService {
                     if forced && self.clear_force(key).is_err() {
                         result = failed("account_prepare_state_failed");
                     }
-                    if result["status"] == "ready" && Self::persist(&account.home.join(PREPARED_MARKER),&json!({"version":1})).is_err() {
+                    let marker = match result["status"].as_str() {
+                        Some("ready")=>Some(json!({"version":1})),
+                        Some("partial")=>Some(json!({"version":1,"status":"partial"})),
+                        _=>None,
+                    };
+                    if marker.is_some_and(|marker| Self::persist(&account.home.join(PREPARED_MARKER),&marker).is_err()) {
                         result = failed("account_prepare_state_failed");
                     }
                     if self

@@ -149,6 +149,17 @@ async fn login_window_on_tmux_is_scoped_hidden_owned_and_typed() {
 }
 
 #[tokio::test]
+async fn login_with_a_target_points_browser_at_the_script_even_with_a_space_in_the_path() {
+    let (_root, fake, windows, key) = setup(false, "work");
+    let script = std::path::Path::new("/tmp/a b/claude-login-browser-x");
+    windows.open_with_browser(&key, OP, script).await.unwrap();
+    let calls = fake.calls();
+    let (_, create, _) = calls.iter().find(|(_, args, _)| args[0] == "new-session").unwrap();
+    assert!(create.contains(&"BROWSER=/tmp/a b/claude-login-browser-x".to_owned()), "{create:?}");
+    assert!(!create.contains(&"BROWSER=true".to_owned()));
+}
+
+#[tokio::test]
 async fn default_account_on_tmux_still_goes_explicit() {
     let (_root, fake, windows, _) = setup(false, ".claude");
     let key = AccountKey::new(super::super::Provider::Claude, &_root.path().join(".claude")).unwrap();

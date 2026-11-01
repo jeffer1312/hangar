@@ -44,14 +44,19 @@ pub fn calls(root: &Path, sub: &str) -> usize {
 /// `private`: a porta privada do mesmo estado, a das pontes que o Python chama.
 pub struct Server { pub addr: SocketAddr, pub private: SocketAddr, pub python: Arc<fake::Fake>, pub list: Arc<ListBridge> }
 
-pub async fn server(root: &Path, n: usize) -> Server {
+pub async fn server(root: &Path, n: usize) -> Server { server_trusting(root, n, "").await }
+
+/// `trusted`: vizinhos cujo `X-Forwarded-For` vale (o Python na frente, como a porta do Connect).
+pub async fn server_trusting(root: &Path, n: usize, trusted: &str) -> Server {
     let script = sessions(root, n);
     let home = root.join("home");
     let dirs = parse_dirs(&json!({"home": home, "claude": home.join(".claude"), "codex_home": home.join(".codex"),
         "pi_sessions": home.join(".pi/agent/sessions"), "omp_config": home.join(".omp"),
         "omp_agent": home.join(".omp/agent"), "kimi_home": home.join(".kimi-code")}).to_string());
     let (python, upstream) = fake::spawn_fake().await;
-    let mut state = AppState::new(config(upstream, ""));
+    let mut state = AppState::new(config(upstream, trusted));
+    // Nunca o `~/.hangar` de quem roda os testes.
+    state.devices = Arc::new(hangar_server::devices::Registry::new(home.join(".hangar/devices.json")));
     let list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&script, Duration::from_secs(5)),
         capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
         FactsClient::new(upstream, SECRET.into())));

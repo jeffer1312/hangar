@@ -74,6 +74,8 @@ pub struct AppState {
     pub list: Arc<crate::list::bridge::ListBridge>,
     /// Produtor único da lista do dono; liga com a primeira lista aberta.
     pub hub: Arc<crate::list::hub::ListHub>,
+    /// Aparelhos que já abriram a lista do dono (`~/.hangar/devices.json`); o teste troca por uma pasta temporária.
+    pub devices: Arc<crate::devices::Registry>,
     /// Painéis de terminal real de todas as portas.
     pub term: Arc<crate::term::Terms>,
     /// O que os `Monitor`s de estado compartilham (Claude com terminal).
@@ -97,6 +99,8 @@ pub struct AppState {
     pub groups: Option<Arc<crate::groups::service::GroupService>>,
     /// Outras máquinas do dono (`peers.json`), para os grupos entre máquinas.
     pub peers: Arc<crate::groups::peers::PeerClient>,
+    /// Abertura do navegador do login Claude e escuta do retorno nesta máquina.
+    pub login_browser: Arc<crate::accounts::login_browser::LoginBrowser>,
     /// Id desta máquina entre as do dono (`CP_SERVER_ID`); vazio = sem id.
     pub server_id: String,
     /// Voz ao vivo; o teste troca por um hub com pastas temporárias.
@@ -197,6 +201,7 @@ impl AppState {
         let search = crate::search::Index::server(accounts.clone());
         AppState { accounts, search, claude_p: None, command_catalog: Arc::default(), groups, server_id, peers: Arc::new(crate::groups::peers_from_env()), auth: Auth::configured(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, public_v6: None, front: None, diag,
             workspace_slots: Arc::new(tokio::sync::Semaphore::new(4)),
+            login_browser: Arc::default(),
             interactions, plugin,
             remote_browser: Arc::default(),
             transcription: Arc::default(),
@@ -209,6 +214,7 @@ impl AppState {
             costs, fx, reports: Arc::new(crate::costs::ReportCache::default()),
             origins_home: std::path::PathBuf::from(std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).unwrap_or_default()),
             prewarm: Arc::new(crate::prewarm::Store::server(&hangar_dir)),
+            devices: Arc::new(crate::devices::Registry::new(hangar_dir.join("devices.json"))),
             update_release_base: crate::update::RELEASE_BASE.to_owned(),
             diag_report_base: crate::diag_report::WORKER_BASE.to_owned(),
             vault: Arc::new(crate::vault::Vault::system()),
@@ -674,6 +680,8 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/update/notes", get(crate::update_notes::route))
         .route("/api/claude/defaults", axum::routing::post(crate::claude_defaults::save).fallback(pass_any))
         .route("/api/session-defaults", axum::routing::get(crate::session_defaults::handle).put(crate::session_defaults::handle))
+        // O que já foi visto do tour do nativo: só o dono, nunca repassado (o Python não tem a rota).
+        .route("/api/tour-progress", axum::routing::get(crate::tour_progress::handle).put(crate::tour_progress::handle))
         // Sugestão de nome da sessão genérica: só o dono, nunca repassada (o Python não tem a rota).
         .route("/api/sessions/{name}/rename-suggestion", axum::routing::post(crate::dictation::rename_suggestion::route).delete(crate::dictation::rename_suggestion::route))
         // Ocultar da lista: só o dono, nunca repassada (o Python não tem a rota).

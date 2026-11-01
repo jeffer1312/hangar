@@ -9,6 +9,7 @@ mod remote_browser;
 mod groups_text;
 mod session_defaults;
 mod tags;
+mod tour_progress;
 mod push_expo;
 mod artifacts;
 mod archive_history;
@@ -19,6 +20,8 @@ mod search_route;
 mod ask_route;
 mod commands;
 mod device_install;
+#[cfg(unix)]
+mod devices;
 mod diag_report;
 mod auto_report;
 mod install_root;

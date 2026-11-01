@@ -11,7 +11,7 @@ import * as m from '../paraglide/messages';
 import * as core from '@hangar/core';
 
 vi.mock('@hangar/core', async (original) => ({
-  ...await original<typeof import('@hangar/core')>(), leavePair: vi.fn(), setPairAccess: vi.fn(),
+  ...await original<typeof import('@hangar/core')>(), leavePair: vi.fn(), setPairAccess: vi.fn(), hideSession: vi.fn(),
 }));
 
 function sessao(over: Partial<SessionInfo>): SessionInfo {
@@ -340,5 +340,80 @@ describe('SessionCard: placa da máquina e da conta, anel de contexto', () => {
     // Com o anel, o ponto do estado continua dentro dele.
     expect(warn.el.querySelector('.lead .ring .state-dot')).not.toBeNull();
     for (const t of [warn, err, ok, none]) unmount(t.comp);
+  });
+});
+
+describe('SessionCard: ocultar sessão em grupo', () => {
+  async function abrirMenu(el: HTMLElement) {
+    vi.useFakeTimers();
+    el.querySelector<HTMLElement>('.session-row')!.dispatchEvent(new PointerEvent('pointerdown', { clientX: 1, clientY: 1, bubbles: true }));
+    vi.advanceTimersByTime(600);
+    vi.useRealTimers();
+    await tick();
+  }
+  const botao = (t: string) => [...document.querySelectorAll('button')].find((b) => b.textContent?.trim() === t);
+  const linha = (serverId: string, name: string, over: Partial<AggSession> = {}) =>
+    ({ name, state: 'idle', serverId, ...over }) as AggSession;
+  const flush = async () => { await new Promise((r) => setTimeout(r, 0)); await tick(); };
+
+  function preparar() {
+    localStorage.setItem('cp_servers', JSON.stringify([
+      { id: 'pc', label: 'PC', baseUrl: 'http://pc:8765', token: 't' },
+      { id: 'nb', label: 'NB', baseUrl: 'http://nb:8765', token: 't' },
+    ]));
+    vi.mocked(core.hideSession).mockReset().mockResolvedValue(undefined as never);
+  }
+  function limpar(comp: ReturnType<typeof mount>) {
+    unmount(comp);
+    document.body.innerHTML = '';
+    localStorage.removeItem('cp_servers');
+  }
+
+  it('em grupo pergunta antes; "grupo inteiro" oculta cada membro no servidor dele', async () => {
+    preparar();
+    const me = linha('pc', 'a', { pair_gid: 'g' });
+    const rows = [me, linha('pc', 'b', { pair_gid: 'g' }), linha('nb', 'c', { pair_gid: 'g' }), linha('pc', 'x')];
+    const { el, comp } = montar(me, { peers: () => rows });
+    await abrirMenu(el);
+    botao(m.session_hide_from_list())!.click();
+    await tick();
+    expect(document.body.textContent).toContain(m.session_hide_group_title());
+    expect(core.hideSession).not.toHaveBeenCalled();
+    expect(botao(m.comum_cancelar())).toBeTruthy();
+    botao(m.session_hide_whole_group({ n: 3 }))!.click();
+    await flush();
+    const calls = vi.mocked(core.hideSession).mock.calls.map(([s, n]) => `${(s as { id: string }).id}::${n}`);
+    expect(calls).toEqual(['pc::a', 'pc::b', 'nb::c']);
+    limpar(comp);
+  });
+
+  it('falha num membro vira um aviso só, com os nomes que ficaram', async () => {
+    preparar();
+    vi.mocked(core.hideSession).mockImplementation(async (_s, name) => { if (name === 'c') throw new Error('offline'); return undefined as never; });
+    const me = linha('pc', 'a', { pair_gid: 'g' });
+    const rows = [me, linha('nb', 'c', { pair_gid: 'g' })];
+    const { el, comp } = montar(me, { peers: () => rows });
+    await abrirMenu(el);
+    botao(m.session_hide_from_list())!.click();
+    await tick();
+    botao(m.session_hide_whole_group({ n: 2 }))!.click();
+    await flush();
+    const note = document.querySelector('.card-menu-note.error');
+    expect(note?.textContent).toContain(m.session_hide_group_skipped({ names: 'c' }));
+    expect(note?.textContent).toContain('offline');
+    limpar(comp);
+  });
+
+  it('fora de grupo oculta direto, sem pergunta', async () => {
+    preparar();
+    const me = linha('pc', 'a');
+    const { el, comp } = montar(me, { peers: () => [me, linha('pc', 'b')] });
+    await abrirMenu(el);
+    botao(m.session_hide_from_list())!.click();
+    await flush();
+    expect(document.body.textContent).not.toContain(m.session_hide_group_title());
+    expect(core.hideSession).toHaveBeenCalledTimes(1);
+    expect(core.hideSession).toHaveBeenCalledWith(expect.objectContaining({ id: 'pc' }), 'a');
+    limpar(comp);
   });
 });

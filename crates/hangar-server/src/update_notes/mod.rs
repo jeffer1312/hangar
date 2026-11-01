@@ -177,7 +177,10 @@ fn news_item(id: &str, text: &str, os: &str) -> Option<(u8, Value)> {
     let opt = |k: &str| f.get(k).filter(|v| !v.is_empty()).cloned();
     // Correção não ganha animação: não há gesto novo a mostrar.
     let animation = if kind == "fix" { None } else { opt("animacao") };
-    Some((rank, json!({"id": id, "title": title, "kind": kind, "text": body, "platforms": platforms, "try_it": opt("experimente"), "animation": animation})))
+    let mut item = json!({"id": id, "title": title, "kind": kind, "text": body, "platforms": platforms, "try_it": opt("experimente"), "animation": animation});
+    // Ausente sai sem a chave: o JSON de quem não usa o campo continua o de antes.
+    if let Some(anchor) = opt("ancora") { item["anchor"] = Value::String(anchor); }
+    Some((rank, item))
 }
 
 /// `state_dir`: a pasta do `aplicados.json`; ilegível é erro, ausente é nada aplicado.

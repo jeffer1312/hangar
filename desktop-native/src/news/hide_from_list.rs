@@ -65,8 +65,8 @@ fn schedule_repaint(t: f32, window: &mut Window, cx: &mut App) {
     }).detach();
 }
 
-/// Abaixo desta largura (o cartão deitado do "Atualizar?") o menu cobre a lista em vez de ficar ao lado.
-const COMPACT_BELOW: f32 = 240.;
+/// Abaixo desta largura o menu cobre a lista em vez de ficar ao lado: lado a lado, ele termina a 384 px, mais respiro e borda.
+const COMPACT_BELOW: f32 = 400.;
 /// Altura do palco com o grupo aberto: o cartão não pula quando a linha muda de lugar.
 const STAGE_HEIGHT: f32 = 268.;
 /// Onde o menu nasce, medido do topo do palco: logo abaixo do nome da linha clicada.
@@ -142,7 +142,7 @@ pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &
         .when(f.menu, |el| el.child(div().absolute().top(px(MENU_TOP)).left(px(menu_left)).w(px(menu_width))
             .child(menu(samples[TARGET].name.clone(), f.picked, cx))))
         // Miniatura só leitura: nada aqui dentro recebe o mouse.
-        .child(div().absolute().top_0().left_0().size_full().occlude())
+        .child(div().absolute().top_0().left_0().size_full().block_mouse_except_scroll())
         .into_any_element()
 }
 

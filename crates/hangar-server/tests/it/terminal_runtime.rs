@@ -1052,6 +1052,49 @@ async fn terminal_runtime_a_starting_life_without_its_conversation_waits_without
     assert_eq!(h.drain().await.unwrap_err().code,"terminal_facts","passado o prazo de subida");
     h.stop().await.unwrap();
 }
+/// Comando de barra não tem linha na fila: como primeira mensagem de uma vida nova, ele espera a conversa abrir.
+#[tokio::test]
+async fn terminal_runtime_a_starting_life_runs_a_first_slash_command_once_its_conversation_opens() {
+    let f=Fixture::new().await;
+    let native=f.target.metadata.config_dir.join("sessions").join(format!("{}.json",f.target.metadata.agent_pid));
+    let saved=f.io.native_record.lock().unwrap().take();std::fs::remove_file(&native).unwrap();
+    let h=f.start_grace(Duration::from_secs(24*3600));
+    // `join!` sonda na ordem: os dois envios entram na caixa do ator antes do terceiro braço rodar.
+    let (slash,after,before)=tokio::join!(h.command(f.command("primeira","/pr-review-auto 299")),h.command(f.command("depois","oi depois")),async {
+        tokio::task::yield_now().await;
+        let snapshot=tokio::time::timeout(Duration::from_secs(1),h.snapshot()).await;
+        assert!(snapshot.is_ok_and(|s|s.is_ok()),"o ator responde enquanto o comando espera a conversa");
+        assert!(typed_at(&f,"/pr-review-auto 299").is_empty(),"nada digitado antes da conversa abrir");
+        let before=f.io.calls.lock().unwrap().len();*f.io.native_record.lock().unwrap()=saved;f.io.refresh_record();before
+    });
+    let slash=slash.unwrap();
+    assert_eq!(slash.disposition,hangar_server::runtime::protocol::Disposition::Accepted,"{slash:?}");
+    after.unwrap();
+    let typed=typed_at(&f,"/pr-review-auto 299");
+    assert_eq!(typed.len(),1);assert!(typed[0]>=before);
+    f.wait_for("a mensagem de depois sai",||!typed_at(&f,"oi depois").is_empty()).await;
+    assert!(typed_at(&f,"oi depois")[0]>typed[0],"a mensagem enviada depois sai depois do comando");
+    // Conversa já provada: se ela some depois, o comando não espera a subida de novo.
+    f.io.native_record.lock().unwrap().take();std::fs::remove_file(&native).unwrap();
+    let since=std::time::Instant::now();
+    let refused=h.command(f.command("segunda","/help")).await.unwrap();
+    assert_eq!((refused.disposition,refused.payload["code"].as_str()),(hangar_server::runtime::protocol::Disposition::Deferred,Some("terminal_facts")));
+    assert!(since.elapsed()<Duration::from_secs(5),"esperou {:?}",since.elapsed());
+    h.stop().await.unwrap();
+}
+/// A mensagem comum entregue também prova a conversa: um comando de barra depois dela não espera a subida.
+#[tokio::test]
+async fn terminal_runtime_a_delivered_message_proves_the_conversation_for_later_slash_commands() {
+    let f=Fixture::new().await;
+    let native=f.target.metadata.config_dir.join("sessions").join(format!("{}.json",f.target.metadata.agent_pid));
+    let h=f.start_grace(Duration::from_secs(24*3600));
+    h.command(f.command("primeira","oi")).await.unwrap();
+    f.wait_for("a mensagem sai",||!typed_at(&f,"oi").is_empty()).await;
+    f.io.native_record.lock().unwrap().take();std::fs::remove_file(&native).unwrap();
+    let refused=tokio::time::timeout(Duration::from_secs(5),h.command(f.command("segunda","/help"))).await.expect("o comando não esperou a subida").unwrap();
+    assert_eq!((refused.disposition,refused.payload["code"].as_str()),(hangar_server::runtime::protocol::Disposition::Deferred,Some("terminal_facts")));
+    h.stop().await.unwrap();
+}
 #[tokio::test]
 async fn terminal_runtime_unreadable_capture_recovers_without_sse() {
     let f=Fixture::new().await;f.ready.store(false,std::sync::atomic::Ordering::Release);let h=f.start();

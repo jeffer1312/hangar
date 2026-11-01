@@ -533,11 +533,15 @@ while True:
     owner=RuntimeCoordinator()
     owner.legacy=LegacyBridge(owner,{'claude':object()})
     try:
-        deadline=time.monotonic()+3
+        # O servidor tmux guarda a pasta de quem o abriu: resolvido antes de o pane entrar na pasta dele,
+        # o vínculo leva a pasta do pytest. O prompt na tela prova que o CLI já roda na pasta certa.
+        deadline=time.monotonic()+10
         binding=None
+        while time.monotonic()<deadline and '❯' not in tmux.capture_pane('session'):
+            time.sleep(.01)
         while time.monotonic()<deadline:
             binding=terminal.resolve_binding('session')
-            if binding and '❯' in tmux.capture_pane('session'): break
+            if binding: break
             time.sleep(.01)
         pane=tmux.list_panes_all()['session'][0]
         agent=registry_module.agente_do_pane(pane['pid'])[1]

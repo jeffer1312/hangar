@@ -164,7 +164,9 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   "pronto". Nas etapas `reiniciar` e `nativo`, backend com outro pid e disco no `commit_para` =
   sucesso com aviso de que o app nativo não foi atualizado; fora disso, falha.
 - **`scripts/verificar-local` é exigido ao abrir PR e ao subir para a `main` ou para branch com PR
-  aberto; branch sem PR sobe livre.** O hook PreToolUse do `gh pr create` (`.claude/settings.json`)
+  aberto; branch sem PR sobe livre.** Todo passo fixa o par do porteiro numa cópia própria
+  (`target/par-auth`), e com a `main` juntada a base do plano é o `merge-base` com `origin/main`.
+  O hook PreToolUse do `gh pr create` (`.claude/settings.json`)
   confere o PR inteiro, desde o ponto em que a ponta saiu da base; a trava `pre-push` confere cada
   push, e consulta o PR com prazo de 10 s: sem `gh` ou sem resposta, segue com aviso. PR aberto pelo
   site fica com o CI. O padrão, que as travas exigem, é o rápido: só o ligado aos arquivos mudados
@@ -330,6 +332,28 @@ desenvolvedor e para a máquina ainda não migrada. Evidência em
   não usa a espera por substituição da fila: ela acrescentava cerca de 50 ms a cada arquivo.
   O caminho HTTP relê a opção sob a mesma trava do escritor, sem cache e sem confundir uma
   gravação concorrente com a configuração padrão ligada.
+- **Máquina no pacote: o que os instaladores gravam fora do Hangar aponta para o `current`.**
+  `install-claude-wrapper.sh` e `install-hangar-send.sh` trocam a própria raiz pelo
+  `~/.hangar/current` quando ele é a pasta de onde rodam ou quando `~/.hangar/migration.json` diz
+  `"mode": "package"`, também rodando de um checkout. No Linux e no macOS o servidor abre o Codex
+  pelo `current/scripts/hangar-codex-tui`, e não pelo nome no PATH. Ver
+  [a entrada](#links-que-voltaram-ao-checkout-depois-da-migração-31102026).
+
+## Links que voltaram ao checkout depois da migração (31/10/2026)
+
+Motivo: numa máquina migrada em 27/10, o Codex parou de abrir depois da atualização de 31/10 com
+`o terminal fechou logo depois de abrir`. Na mesma rodada do motor `git`, o passo
+`2026-10-24-pacote-por-versao` apontou os links para o `current` e, 300 ms depois, o
+`2026-10-26-instalacao-no-macos` rodou `./scripts/install-claude-wrapper.sh` de dentro do checkout
+e devolveu ao checkout os links de `~/.local/bin`, as skills, os agentes e o bloco do shell. O
+checkout parou ali, e o servidor novo passou `--config` a um `hangar-codex-tui` que não conhecia o
+argumento: o lançador saiu com erro de uso e o pane morreu ao nascer. A causa é o motor `git`
+(`backend/app/atualizacoes.py`) continuar a rodada do checkout depois do passo de migração; a
+correção dele é no Python e ficou para quando for autorizada. Os instaladores se defendem por
+conta própria, e o servidor deixa de depender do PATH. O passo
+`2026-10-31-links-do-pacote` repara as máquinas nesse estado. A prova é
+`scripts/test-install-hangar-send.sh`, que roda os dois instaladores a partir de um checkout numa
+máquina migrada.
 
 ## Pacote por versão em vez de `git pull` (24/10/2026)
 
@@ -919,6 +943,12 @@ As tentativas relatadas às 07:49–07:57 não têm POST no journal desta máqui
 comprova o defeito do lançamento, sem atribuir a ele aqueles cliques sem a resposta capturada.
 
 ## Verificação local antes do push (06/10/2026)
+
+**Dois desencontros com o CI (30/10/2026).** Numa branch de login, a rodada falhou em testes que ela
+não tocava. (1) O par do porteiro só era fixado com arquivo de autenticação no diff, e teste mudado no
+backend puxa a suíte inteira, e outro `cargo` com outros pacotes religava o executável de
+`target/debug`, e o par deixava de conferir. (2) Com a main juntada, a base do plano continuava antes
+da junção e o diff trazia tudo que veio dela.
 
 **Rápido por padrão (14/10/2026).** A rodada da bateria do CI virou espera de mais de 40 min por push.
 Numa rodada real de outra sessão (commit `a2c14ee7a6`): preparo 441 s, rust 327 s, backend 813 s,

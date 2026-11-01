@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Alert, LayoutAnimation, Pressable, RefreshControl, SectionList, Text, TextInput, View, ActivityIndicator } from 'react-native';
+import { ActionSheetIOS, Alert, LayoutAnimation, Platform, Pressable, RefreshControl, SectionList, Text, TextInput, View, ActivityIndicator } from 'react-native';
 import { useReducedMotion } from 'react-native-reanimated';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useRouter } from 'expo-router';
@@ -11,6 +11,7 @@ import {
   formataErro,
   groupBadges,
   groupGlobal,
+  groupHideTargets,
   hideSession,
   machineNoticeVisible,
   machinesAllDown,
@@ -219,10 +220,40 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
   // A marca mora no servidor da sessão, por endereço explícito: não troca a ativa. A linha muda de
   // lugar quando a lista do servidor chega, sem aviso de sucesso.
   const toggleHidden = useCallback((s: AggSession, hide: boolean) => {
-    const server = useServers.getState().servers.find((x) => x.id === s.serverId && !x.invite);
-    if (!server) { toast.erro(m.servidor_nao_existe()); return; }
-    (hide ? hideSession : showSession)(server, s.name).catch((e: unknown) =>
-      toast.erro((hide ? m.session_hide_failed : m.session_show_failed)({ error: mensagemDe(e) })));
+    const ownServer = (id: string) => useServers.getState().servers.find((x) => x.id === id && !x.invite);
+    const hideOne = () => {
+      const server = ownServer(s.serverId);
+      if (!server) { toast.erro(m.servidor_nao_existe()); return; }
+      (hide ? hideSession : showSession)(server, s.name).catch((e: unknown) =>
+        toast.erro((hide ? m.session_hide_failed : m.session_show_failed)({ error: mensagemDe(e) })));
+    };
+    const targets = hide ? groupHideTargets(s, useSessions.getState().rows) : [s];
+    if (targets.length < 2) { hideOne(); return; }
+    // Cada sessão é ocultada no próprio servidor; as que falharem saem num aviso só.
+    const hideGroup = async () => {
+      const results = await Promise.allSettled(targets.map((t) => {
+        const server = ownServer(t.serverId);
+        return server ? hideSession(server, t.name) : Promise.reject(new Error(m.servidor_nao_existe()));
+      }));
+      const failed = results.flatMap((r, i) => (r.status === 'rejected' ? [{ name: targets[i].name, error: mensagemDe(r.reason) }] : []));
+      if (failed.length === 0) return;
+      const reasons = [...new Set(failed.map((f) => f.error))].join('; ');
+      toast.erro(`${m.session_hide_group_skipped({ names: failed.map((f) => f.name).join(', ') })}\n${reasons}`);
+    };
+    const onlyThis = m.session_hide_only_this();
+    const wholeGroup = m.session_hide_whole_group({ n: targets.length });
+    if (Platform.OS === 'ios') {
+      ActionSheetIOS.showActionSheetWithOptions(
+        { title: m.session_hide_group_title(), options: [onlyThis, wholeGroup, m.comum_cancelar()], cancelButtonIndex: 2 },
+        (i) => { if (i === 0) hideOne(); else if (i === 1) void hideGroup(); },
+      );
+    } else {
+      Alert.alert(m.session_hide_group_title(), undefined, [
+        { text: m.comum_cancelar(), style: 'cancel' },
+        { text: onlyThis, onPress: hideOne },
+        { text: wholeGroup, onPress: () => void hideGroup() },
+      ]);
+    }
   }, []);
 
   // O par é desfeito e liberado no servidor PRÓPRIO, por endereço explícito: não troca a ativa.

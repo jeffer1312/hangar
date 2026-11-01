@@ -78,7 +78,9 @@ impl Hangar {
         Some(rename_strip(&suggestion, state,
             |button| button.on_click(cx.listener(move |this, _, _, cx| this.dismiss_rename_suggestion(dismiss.clone(), cx))),
             |button| button.on_click(cx.listener(move |this, _, _, cx| this.another_rename_suggestion(again.clone(), cx))),
-            |button| button.on_click(cx.listener(move |this, _, _, cx| this.rename_session_to(apply.clone(), name.clone(), cx))))
+            // Só a faixa de verdade leva a âncora da dica; a miniatura das novidades não.
+            |button| popup::anchor(div(), crate::tour::anchors::RENAME_APPLY)
+                .child(button.on_click(cx.listener(move |this, _, _, cx| this.rename_session_to(apply.clone(), name.clone(), cx)))))
             .into_any_element())
     }
 }
@@ -89,8 +91,8 @@ pub(crate) struct Strip { pub weak: bool, pub renaming: bool, pub again: bool }
 
 /// A faixa por dado simples: a aberta liga o clique nos botões (`dismiss`, `again` e `apply` recebem cada um), a
 /// miniatura das novidades (`crate::news`) usa a mesma sem clique.
-pub(crate) fn rename_strip(suggestion: &str, state: Strip, dismiss: impl FnOnce(Button) -> Button,
-    again: impl FnOnce(Button) -> Button, apply: impl FnOnce(Button) -> Button) -> Stateful<Div> {
+pub(crate) fn rename_strip<E: IntoElement>(suggestion: &str, state: Strip, dismiss: impl FnOnce(Button) -> Button,
+    again: impl FnOnce(Button) -> Button, apply: impl FnOnce(Button) -> E) -> Stateful<Div> {
     let title = tr_shared("rename_suggest_title", &[("name", suggestion)]);
     let busy = state.renaming || state.again;
     div().id("rename-suggest").py_2().flex().items_center().gap_2().border_t_1().border_color(theme::border())

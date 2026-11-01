@@ -6,6 +6,7 @@ pub use recent::RecentFailure;
 pub mod route;
 pub mod sse;
 mod session_defaults;
+mod tour_progress;
 
 use std::time::Duration;
 use reqwest::{Client, Method, Response, StatusCode, header};

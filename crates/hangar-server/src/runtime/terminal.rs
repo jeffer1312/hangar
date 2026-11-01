@@ -247,6 +247,9 @@ struct Executor {
     focus_refused:bool,
     /// Comandos e pedidos de drenagem que chegaram com o pane reservado: saem na ordem depois do `Release`.
     parked:VecDeque<Message>,
+    /// Entradas guardadas enquanto o Claude sobe: um comando de barra não tem linha na fila para esperar a
+    /// conversa abrir, e o que chega depois dele espera atrás, na ordem.
+    starting:VecDeque<Message>,
     /// A entrada adiada porque o foco está num painel ou na faixa de um mod (`focus_guard`).
     away:Option<Away>,
     /// Trava do `/clear` erguida: quando conferir se a conversa nova apareceu (`expire_clear`).
@@ -403,7 +406,7 @@ impl TerminalActor {
         let status=options.status.clone();
         if let Some(sender)=&status { sender.send_replace(Default::default()); }
         let modes_cache=read_modes(&target.state_path);
-        let executor=Executor {batch_blocked:false,target,queue:Arc::new(queue),local,options,events,revision,sequence,receipt,deliverable:false,last_error:None,uncertain:vec![],unprovable:false,mode_unproved:false,modes_cache,uncertain_since:None,loan:None,stall:None,hold:None,hold_checked:false,focus_refused:false,parked:VecDeque::new(),away:None,clear_watch:None,clear_notice:None,footer_misses:None,reconciliation:None,confirm_until:None,confirm_seen:None,
+        let executor=Executor {batch_blocked:false,target,queue:Arc::new(queue),local,options,events,revision,sequence,receipt,deliverable:false,last_error:None,uncertain:vec![],unprovable:false,mode_unproved:false,modes_cache,uncertain_since:None,loan:None,stall:None,hold:None,hold_checked:false,focus_refused:false,parked:VecDeque::new(),starting:VecDeque::new(),away:None,clear_watch:None,clear_notice:None,footer_misses:None,reconciliation:None,confirm_until:None,confirm_seen:None,
             unproved_since:None,no_safe_delivery:false,composer_held:false,composer_read_at:None,plugin_alive:None,born:tokio::time::Instant::now(),heal_requested:None,turn_wait:None,diag:policy.diag(),conversation_proved:false};
         let run=executor.run(receiver,closed.clone());
         let task=tokio::spawn(async move {
@@ -443,6 +446,20 @@ impl Executor {
     fn held(&mut self)->bool {
         if self.hold.is_some_and(|until|tokio::time::Instant::now()>=until) {self.hold=None; self.hold_checked=false;}
         self.hold.is_some()
+    }
+    /// O Claude Code só registra e abre a conversa depois de subir. O prazo conta da idade do processo do
+    /// agente: sessão adotada com o Claude de pé há tempo não espera.
+    fn in_start_grace(&self)->bool {
+        !self.conversation_proved && sample().epoch_s-self.target.metadata.agent_birth<self.options.start_grace.as_secs_f64()
+    }
+    fn starting_life(&self,failure:&ServiceError)->bool {failure.0=="terminal_conversation_unavailable" && self.in_start_grace()}
+    /// A conversa desta vida ainda não abriu e ela está no prazo de subida.
+    async fn conversation_pending(&mut self)->bool {
+        if !self.in_start_grace() {return false;}
+        match self.services("maintenance","maintenance","").facts(&self.target.binding).await {
+            Ok(facts)=>{if facts.binding==self.target.binding {self.conversation_proved=true;} false},
+            Err(failure)=>self.starting_life(&failure),
+        }
     }
     /// O Python pede o teclado por uma operação; fila, trava e estado continuam aqui. O ator é serial:
     /// quando o pedido chega não há digitação em curso.
@@ -542,12 +559,21 @@ impl Executor {
                 let message=tokio::select! {biased;
                     message=receiver.recv()=>message,
                     _=tokio::time::sleep_until(release_at.unwrap_or_else(tokio::time::Instant::now)),if release_at.is_some()=>continue,
-                    _=timer.tick(),if !closed.load(Ordering::Acquire) && (self.last_error.is_none() || self.last_error.as_deref()==Some("terminal_facts") || self.reconciling() || self.clear_watch.is_some() || self.clear_notice.is_some() || self.options.lifecycle.is_some())=>{
+                    _=timer.tick(),if !closed.load(Ordering::Acquire) && (!self.starting.is_empty() || self.last_error.is_none() || self.last_error.as_deref()==Some("terminal_facts") || self.reconciling() || self.clear_watch.is_some() || self.clear_notice.is_some() || self.options.lifecycle.is_some())=>{
                         if self.clear_notice.is_some_and(|until|tokio::time::Instant::now()>=until) {self.clear_notice=None; self.publish().await?;}
                         self.watch_plugin();
                         // Clique de mod em curso, ou o que ele guardou ainda por sair: a fila não entrega nem
                         // reconcilia no pane antes disso (C6).
                         if self.held() || !self.parked.is_empty() {continue;}
+                        // Conversa aberta ou prazo de subida vencido: as entradas guardadas saem na ordem, e
+                        // passado o prazo o `execute` as recusa como antes.
+                        if !self.starting.is_empty() {
+                            if self.conversation_pending().await {continue;}
+                            while let Some(Message::Command {id,kind,payload,response})=self.starting.pop_front() {
+                                let result=self.execute(&id,&kind,payload,None,false).await;
+                                let _=response.send(result);
+                            }
+                        }
                         // Sem ciclo de vida ligado a reconciliação só falharia; a trava do `/clear` sai pelo `expire_clear` da drenagem.
                         if self.options.lifecycle.is_some() && let Err(failure)=self.reconcile_life().await {self.enter_error(failure).await?;}
                         self.watch_proof().await?;
@@ -587,6 +613,12 @@ impl Executor {
                 Some(message@(Message::Command {..}|Message::Drain(_))) if wait=>{self.parked.push_back(message);continue;},
                 other=>other,
             };
+            let starting=match &message {
+                Some(Message::Command {kind,payload,..}) if kind=="input"=>!self.starting.is_empty()
+                    || (payload["text"].as_str().is_some_and(|text|text.trim_start().starts_with('/')) && self.conversation_pending().await),
+                _=>false,
+            };
+            if starting {if let Some(message)=message {self.starting.push_back(message);} continue;}
             match message {
                 Some(Message::Command {id,kind,payload,response})=>{
                     let result=if matches!(kind.as_str(),"keyboard_loan"|"keyboard_return") {self.loan_control(&id,&kind,&payload)}
@@ -647,7 +679,8 @@ impl Executor {
     /// Parada com algo guardado pelo clique de mod: quem esperava ouve `runtime_stopping`, como quem chama
     /// um ator que já está parando, e não a caixa fechada.
     fn refuse_parked(&mut self) {
-        for message in self.parked.drain(..) {
+        let starting=std::mem::take(&mut self.starting);
+        for message in self.parked.drain(..).chain(starting) {
             match message {
                 Message::Command {response,..}=>{let _=response.send(Err(error("runtime_stopping")));},
                 Message::Drain(response)=>{let _=response.send(Err(error("runtime_stopping")));},
@@ -1120,6 +1153,7 @@ impl Executor {
         if self.footer_misses.as_ref().is_some_and(|(row,misses)|row==root && *misses>=FOCUS_RETURN_TRIES) {driver=driver.footer_kept();}
         let facts=if prompt {Some(services.facts(&self.target.binding).await)}else{None};
         let current=facts.as_ref().is_none_or(|result|result.as_ref().is_ok_and(|facts|facts.binding==self.target.binding));
+        if prompt && current {self.conversation_proved=true;}
         if let Some(facts)=&facts {self.deliverable=facts.as_ref().is_ok_and(|facts|current && facts.ready && !facts.open_question);}
         // Com o Claude trabalhando a mensagem fica na fila do Hangar, onde o painel a apaga, edita e reordena.
         // O recado com socket nativo segue: é o canal do próprio Claude Code para o meio do turno.
@@ -1400,8 +1434,7 @@ impl Executor {
             Ok(facts)=>{self.conversation_proved=true;facts},
             // O Claude Code só registra e abre a conversa depois de subir: a entrada espera, sem erro na sessão.
             // O prazo conta da idade do processo do agente: sessão adotada com o Claude de pé há tempo não espera.
-            Err(failure) if failure.0=="terminal_conversation_unavailable" && !self.conversation_proved
-                && sample().epoch_s-self.target.metadata.agent_birth<self.options.start_grace.as_secs_f64()=>return Ok(json!({"drained":0,"starting":true})),
+            Err(failure) if self.starting_life(&failure)=>return Ok(json!({"drained":0,"starting":true})),
             Err(_)=>return Err(error("terminal_facts")),
         };
         // O composer legível e sem pergunta é o que libera a escrita; o turno é conferido logo abaixo.

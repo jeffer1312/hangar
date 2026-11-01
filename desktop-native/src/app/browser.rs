@@ -1922,7 +1922,7 @@ impl Render for BrowserPanel {
             toolbar = toolbar.child(chrome::icon_button("browser-shot", IconName::Image, tr("browser_send_shot"), cx)
                 .disabled(!ready || self.page.url.is_none() || self.shooting)
                 .on_click(cx.listener(|this, _, _, cx| this.send_shot(cx))));
-            toolbar = toolbar.child(self.pick_button(ready, cx));
+            toolbar = toolbar.child(popup::anchor(div().flex_shrink_0(), crate::tour::anchors::PICK_ELEMENT).child(self.pick_button(ready, cx)));
             toolbar = toolbar.child(Button::new("browser-cookies")
                 .custom(ButtonCustomVariant::new(cx).color(transparent_black()).foreground(theme::muted())
                     .hover(theme::hover()).active(theme::hover()))

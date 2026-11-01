@@ -50,16 +50,25 @@ pub async fn fill_secret(http: &reqwest::Client, home: &Path, name: &str, args: 
     verb_on(http, home, sidecar(home, name).as_ref(), "fill-secret", args, None, VERB_TIMEOUT, Some(value)).await
 }
 
+/// Porta e token do app; `None` = sem arquivo ou incompleto. Pid morto no arquivo é recusa na hora: outra execução do
+/// app pode tê-lo publicado e morrido.
+fn server(home: &Path) -> Result<Option<(u64, String)>, Unavailable> {
+    let Some(srv) = std::fs::read(nav_dir(home).join("_srv.json")).ok()
+        .and_then(|raw| serde_json::from_slice::<Value>(&raw).ok()) else { return Ok(None) };
+    if !crate::orchestration::runs::pid_alive(&srv["pid"]) {
+        return Err(Unavailable(format!("o servidor do navegador registrado em ~/.hangar/nav/_srv.json (pid {}) não está mais rodando; \
+            abra o app desktop do Hangar; se ele já está aberto, retoma o registro em poucos segundos: tente de novo e, se continuar, feche e abra o app",
+            srv["pid"])));
+    }
+    let port = srv["porta"].as_u64().or_else(|| srv["porta"].as_str().and_then(|p| p.parse().ok())).filter(|p| *p > 0);
+    Ok(port.zip(srv["token"].as_str().filter(|t| !t.is_empty()).map(str::to_owned)))
+}
+
 /// `verb` com o sidecar já lido.
 #[allow(clippy::too_many_arguments)]
 async fn verb_on(http: &reqwest::Client, home: &Path, sc: Option<&Value>, verb: &str, args: &[String], tab: Option<i64>, timeout: Duration,
     secret: Option<&str>) -> Result<String, Unavailable> {
-    let srv: Value = std::fs::read(nav_dir(home).join("_srv.json")).ok()
-        .and_then(|raw| serde_json::from_slice(&raw).ok()).ok_or_else(|| Unavailable(NOT_OPEN.into()))?;
-    let port = srv["porta"].as_u64().or_else(|| srv["porta"].as_str().and_then(|p| p.parse().ok())).filter(|p| *p > 0);
-    let (Some(port), Some(token)) = (port, srv["token"].as_str().filter(|t| !t.is_empty())) else {
-        return Err(Unavailable(NOT_OPEN.into()));
-    };
+    let (port, token) = server(home)?.ok_or_else(|| Unavailable(NOT_OPEN.into()))?;
     let Some(key) = sc.and_then(|sc| sc["chave"].as_str()) else {
         return Err(Unavailable("esta sessão não tem navegador aberto".into()));
     };
@@ -94,10 +103,15 @@ fn navigated(current: &str, before: Option<&str>, asked: &str) -> bool {
 pub async fn wait_ready(http: &reqwest::Client, home: &Path, name: &str, since_ms: u64, before: Option<&str>, asked: &str)
     -> Result<String, Unavailable> {
     const LIMIT: Duration = Duration::from_secs(20);
-    let deadline = Instant::now() + LIMIT;
+    // O app aberto retoma um registro órfão a cada 3 s; passado isso, o pid morto não volta sozinho.
+    const DEAD_GRACE: Duration = Duration::from_secs(5);
+    let started = Instant::now();
+    let deadline = started + LIMIT;
     let left = || deadline.saturating_duration_since(Instant::now()).clamp(Duration::from_millis(500), VERB_TIMEOUT);
     let (mut last, mut pause_checked) = (String::new(), false);
     while Instant::now() < deadline {
+        // Sem arquivo (app subindo) ou lido pela metade, a espera segue.
+        if let Err(dead) = server(home) && started.elapsed() >= DEAD_GRACE { return Err(dead); }
         let sc = sidecar(home, name);
         // Pausado pelo usuário o app não navega: dizer na hora em vez de esgotar o prazo.
         if sc.is_some() && !pause_checked {

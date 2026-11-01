@@ -213,6 +213,24 @@ async fn newer_python_preparation_survives_return_to_rust() {
     );
 }
 
+/// Conta padrão só com a marca (o resultado sumiu): a marca parcial não vira conta pronta.
+#[tokio::test]
+async fn default_account_with_only_a_partial_marker_stays_partial() {
+    use hangar_server::accounts::{AccountService, Provider, bridge::AccountsBridge,
+        environment::AccountEnvironment};
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().to_string_lossy().into_owned();
+    let service = AccountService::new(AccountEnvironment::from_map(
+        [("HOME".into(),home.clone()),("USERPROFILE".into(),home)].into()));
+    let account = service.resolve(Provider::Codex,"default").unwrap();
+    std::fs::create_dir_all(&account.home).unwrap();
+    let bridge = AccountsBridge::new("127.0.0.1:9".parse().unwrap(),"synthetic".into(),"instance".into()).unwrap();
+    for (marker, status) in [(r#"{"version":1}"#, "ready"), (r#"{"version":1,"status":"partial"}"#, "partial")] {
+        std::fs::write(account.home.join(".hangar-prepared-v1"), marker).unwrap();
+        assert_eq!(service.preparation_status(&account,&bridge).await["status"], status);
+    }
+}
+
 #[tokio::test]
 async fn ready_preparation_is_reused_after_restart_until_explicit_force() {
     use axum::{Router, routing::post};
@@ -261,6 +279,63 @@ async fn ready_preparation_is_reused_after_restart_until_explicit_force() {
     assert_eq!(cached["status"],"ready","abrir a conta pronta não pode criar outro worker");
     assert_eq!(forced["status"],"running");
     assert_eq!(calls.load(Ordering::SeqCst),2,"primeiro preparo e sincronização explícita");
+}
+
+/// Preparo parcial (um recurso que não sincronizou) abre a sessão e devolve as pendências; só o
+/// preparo com erro recusa.
+#[tokio::test]
+async fn partial_preparation_opens_and_error_refuses() {
+    use axum::{Router, routing::post};
+    use hangar_server::accounts::{AccountService, Provider, bridge::AccountsBridge,
+        environment::AccountEnvironment};
+    use serde_json::json;
+    use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+    for (status, opens) in [("partial", true), ("error", false)] {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().to_string_lossy().into_owned();
+        let env = || AccountEnvironment::from_map([("HOME".into(),home.clone()),("USERPROFILE".into(),home.clone())].into());
+        let service = AccountService::new(env());
+        let account = service.resolve(Provider::Codex,"default").unwrap();
+        let prepared_home = account.home.clone();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let seen = calls.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let bridge = AccountsBridge::new(listener.local_addr().unwrap(),"synthetic".into(),"instance".into()).unwrap();
+        let router = Router::new().route("/internal/accounts/prepare",post(move || {
+            std::fs::create_dir_all(&prepared_home).unwrap();
+            seen.fetch_add(1,Ordering::SeqCst);
+            async move { json!({"status":status,"trust_pending":false,
+                "issues":[{"code":"codex_account_source_sync_incomplete","params":{"status":"parcial"}}]}).to_string() }
+        }));
+        let server = tokio::spawn(async move { axum::serve(listener,router).await.unwrap(); });
+        let result = service.prepare_for_session(&account,bridge.clone(),
+            tokio::time::Instant::now()+std::time::Duration::from_secs(15)).await;
+        let open = || async { AccountService::new(env()).prepare_for_session(&account,bridge.clone(),
+            tokio::time::Instant::now()+std::time::Duration::from_secs(15)).await };
+        // Parcial recente é reaproveitado (aqui, com o servidor reiniciado); passado o intervalo, a
+        // abertura seguinte tenta de novo.
+        let (reused, retried) = if opens {
+            let reused = open().await;
+            let marker = account.home.join(".hangar-prepared-v1");
+            std::fs::File::options().write(true).open(&marker).unwrap()
+                .set_modified(std::time::SystemTime::now()-std::time::Duration::from_secs(301)).unwrap();
+            (Some(reused), Some(open().await))
+        } else { (None, None) };
+        server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
+        if opens {
+            let ready = result.unwrap();
+            assert_eq!(ready["status"],"partial");
+            assert_eq!(ready["issues"][0]["code"],"codex_account_source_sync_incomplete");
+            assert_eq!(reused.unwrap().unwrap()["status"],"partial");
+            assert_eq!(retried.unwrap().unwrap()["status"],"partial");
+            assert_eq!(calls.load(Ordering::SeqCst),2,"o parcial recente não prepara de novo; o antigo, sim");
+            let marker: serde_json::Value = serde_json::from_slice(&std::fs::read(account.home.join(".hangar-prepared-v1")).unwrap()).unwrap();
+            assert_eq!(marker["status"],"partial");
+        } else {
+            assert_eq!(result.unwrap_err().code,"codex_account_prepare_incomplete");
+        }
+    }
 }
 
 #[tokio::test]

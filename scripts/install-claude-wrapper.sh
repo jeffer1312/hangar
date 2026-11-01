@@ -24,6 +24,19 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Máquina no pacote: links, bloco do shell e extensões apontam para o `current`, nunca para a
+# pasta da versão (a poda a apaga) nem para o checkout de antes da migração, de onde o motor git
+# ainda roda os passos seguintes da mesma rodada. Rodando de outra pasta, quem instala é o
+# instalador do `current`, para código e arquivos serem da mesma versão.
+if [ -d "$HOME/.hangar/current" ]; then
+    if [ "$(realpath "$HOME/.hangar/current")" = "$(realpath "$SCRIPT_DIR/..")" ]; then
+        SCRIPT_DIR="$HOME/.hangar/current/scripts"
+    elif grep -q '"mode": "package"' "$HOME/.hangar/migration.json" 2>/dev/null \
+            && [ -f "$HOME/.hangar/current/scripts/install-claude-wrapper.sh" ]; then
+        echo "máquina no pacote: quem instala é o $HOME/.hangar/current/scripts/install-claude-wrapper.sh" >&2
+        exec bash "$HOME/.hangar/current/scripts/install-claude-wrapper.sh" "$@"
+    fi
+fi
 SHELL_DIR="$SCRIPT_DIR/shell"
 BEGIN_MARK="# >>> hangar >>>"
 END_MARK="# <<< hangar <<<"
@@ -392,7 +405,7 @@ fi
 
 # Sessões-irmãs: instala o hangar-send junto (symlink + bloco no CLAUDE.md global). Idempotente —
 # era passo manual separado e máquina nova ficava sem o protocolo de pareamento sem ninguém avisar.
-CP_SEND_INSTALLER="$(dirname "$0")/install-hangar-send.sh"
+CP_SEND_INSTALLER="$SCRIPT_DIR/install-hangar-send.sh"
 if [ -x "$CP_SEND_INSTALLER" ]; then
   echo
   echo "hangar-send (sessões-irmãs):"

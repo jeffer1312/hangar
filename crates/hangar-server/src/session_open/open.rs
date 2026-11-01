@@ -806,10 +806,12 @@ async fn terminal_life(host: &dyn OpenHost, spec: &mut SessionSpec, read_only: O
         let (pane, jsonl, route) = claude_plan(host, spec, &sid, read_only, initial_prompt, runtime, resume.is_some()).await?;
         (pane, Some(jsonl), route)
     } else if let Some(home) = codex_home {
-        super::codex::require_launcher(host.env())?;
+        let launcher = super::codex::launcher_program(host.home(), host.terminal().windows);
+        super::codex::require_launcher(host.env(), launcher.as_deref())?;
         // A TUI abre a thread: o prompt inicial vai no comando do pane.
         let mut launch = super::codex::creation(spec, home, initial_prompt);
         launch.resume = resume.map(str::to_owned);
+        launch.launcher = launcher;
         // O rollout só nasce com a TUI, num caminho que não se deriva do cwd: nada a semear.
         (super::codex::pane(&spec.name, &spec.key, &launch, spec.jev, runtime, read_only, host.terminal().windows)?, None, None)
     } else {

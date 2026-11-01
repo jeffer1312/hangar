@@ -23,6 +23,8 @@
     "2026-02-08-linux-mac.md": "---\ntitulo: T linux e mac\ntipo: melhoria\nonde: desktop\nsistema: linux, macos\n---\n\nLinux e Mac.\n",
     "2026-02-09-sistema-ruim.md": "---\ntitulo: T android\ntipo: novo\nonde: todos\nsistema: linux android\n---\n\nIgnorada.\n",
     "2026-02-10-so-windows.md": "---\ntitulo: T windows\ntipo: correcao\nonde: todos\nsistema: windows\n---\n\nSó no Windows.\n",
+    "2026-02-11-com-ancora.md": "---\ntitulo: T ancora\ntipo: novo\nonde: desktop\nancora: composer\n---\n\nCom âncora.\n",
+    "2026-02-12-ancora-vazia.md": "---\ntitulo: T ancora vazia\ntipo: melhoria\nonde: desktop\nancora:\n---\n\nSem âncora.\n",
     "README.md": "formato"
   },
   "notes": {
@@ -37,9 +39,13 @@
          "try_it": "aperte ↑", "animation": "historico-compositor"},
         {"id": "2026-02-07-so-linux", "title": "T linux", "kind": "new", "text": "Só no Linux.", "platforms": "all",
          "try_it": null, "animation": null},
+        {"id": "2026-02-11-com-ancora", "title": "T ancora", "kind": "new", "text": "Com âncora.", "platforms": "desktop",
+         "try_it": null, "animation": null, "anchor": "composer"},
         {"id": "2026-02-04-melhor", "title": "T melhoria", "kind": "improvement", "text": "Corpo melhoria.", "platforms": "all",
          "try_it": null, "animation": null},
         {"id": "2026-02-08-linux-mac", "title": "T linux e mac", "kind": "improvement", "text": "Linux e Mac.", "platforms": "desktop",
+         "try_it": null, "animation": null},
+        {"id": "2026-02-12-ancora-vazia", "title": "T ancora vazia", "kind": "improvement", "text": "Sem âncora.", "platforms": "desktop",
          "try_it": null, "animation": null},
         {"id": "2026-02-01-conserto", "title": "T correcao", "kind": "fix", "text": "Corpo correcao.", "platforms": "desktop",
          "try_it": null, "animation": null}
@@ -54,7 +60,11 @@
       "news": [
         {"id": "2026-02-02-nova", "title": "T novo", "kind": "new", "text": "Corpo novo.", "platforms": "mobile",
          "try_it": "aperte ↑", "animation": "historico-compositor"},
+        {"id": "2026-02-11-com-ancora", "title": "T ancora", "kind": "new", "text": "Com âncora.", "platforms": "desktop",
+         "try_it": null, "animation": null, "anchor": "composer"},
         {"id": "2026-02-04-melhor", "title": "T melhoria", "kind": "improvement", "text": "Corpo melhoria.", "platforms": "all",
+         "try_it": null, "animation": null},
+        {"id": "2026-02-12-ancora-vazia", "title": "T ancora vazia", "kind": "improvement", "text": "Sem âncora.", "platforms": "desktop",
          "try_it": null, "animation": null},
         {"id": "2026-02-01-conserto", "title": "T correcao", "kind": "fix", "text": "Corpo correcao.", "platforms": "desktop",
          "try_it": null, "animation": null},

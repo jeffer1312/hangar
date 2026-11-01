@@ -7,6 +7,7 @@ import { setPairNotice } from '../stores/sessions';
 import { useAparencia } from '../stores/aparencia';
 import { createEventSource } from './sse';
 import { iniciarDiag } from './diag';
+import { deviceIdentity, deviceReady, loadDeviceId } from './deviceIdentity';
 import { toast } from '../ui/Toast';
 
 export function configureCore() {
@@ -41,7 +42,10 @@ export function configureCore() {
     },
     origin: null,
     createEventSource,
+    deviceIdentity,
+    deviceReady,
   });
+  void loadDeviceId();
   setPairNotice((text) => toast.aviso(text));
   configureLocale({ getLocale: locale });
   overwriteGetLocale(locale);

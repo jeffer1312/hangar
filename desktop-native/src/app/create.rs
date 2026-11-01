@@ -2677,6 +2677,7 @@ impl Hangar {
                 });
                 match result {
                     Ok(session) => {
+                        self.tour_event(crate::tour::TourEvent::AccountMoved, cx);
                         if self.is_active_key(&request.target.server) {
                             if let Some(row) = self.sessions.iter_mut().find(|s| s.name == request.target.name) { *row = session.clone(); }
                         } else if let Some(list) = self.remote.get_mut(&request.target.server) {
@@ -2831,6 +2832,7 @@ impl Hangar {
             if compact && finished && !entity.read(cx).creating { self.fail_opening(window, cx); cx.notify(); }
             return;
         };
+        self.tour_event(crate::tour::TourEvent::SessionCreated, cx);
         // A mensagem enviada da tela sem sessão segue na conversa da sessão nova; a chegada já começou no Enviar.
         let opening = if compact { self.opening.take() } else { None };
         // Criar não desfaz a escolha de outra conversa feita enquanto o pedido estava em voo.
