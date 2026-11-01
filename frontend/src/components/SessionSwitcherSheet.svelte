@@ -9,6 +9,7 @@ import * as m from '../paraglide/messages';
   import { searchTranscriptsForServer, askHistoryForServer, getSearchContextForServer, getArchiveFolder, rememberEntry, estaDesligado, type SearchHit } from '@hangar/core';
   import type { ChatEvent, SessionInfo, State } from '@hangar/core';
   import { renderMarkdown } from '../lib/markdown';
+  import * as diag from '../lib/diag';
 
   // Troca de sessao sem voltar pra home. Dois modos: "sessoes" (lista das outras sessoes vivas +
   // "Nova sessão") e "conversas" (busca de CONTEUDO em todos os transcripts, vivos + arquivados,
@@ -105,12 +106,18 @@ import * as m from '../paraglide/messages';
   }
   async function abrirNoPonto(h: Hit) {
     selectServer(h.serverId);
-    onClose();
-    // A mesma conversa em duas contas: o Arquivo abre a cópia da conta do trecho, não a mais nova.
+    // A mesma conversa em duas contas: o Arquivo abre a cópia da conta do trecho, não a mais nova. A
+    // espera vem antes de fechar: navegação feita depois não é sobrescrita por este hash.
     if (h.config_dir) {
-      const items = await getArchiveFolder(h.project, { session_id: h.session_id, config_dir: h.config_dir }).catch(() => []);
-      if (items.length === 1) rememberEntry(h.serverId, items[0]);
+      try {
+        const items = await getArchiveFolder(h.project, { session_id: h.session_id, config_dir: h.config_dir });
+        if (items.length === 1) rememberEntry(h.serverId, items[0]);
+        else diag.registrar({ evento: 'busca.arquivo_conta', nivel: 'aviso', codigo: 'entradas_inesperadas', quantidade: items.length });
+      } catch (e) {
+        diag.registrar({ evento: 'busca.arquivo_conta', nivel: 'aviso', codigo: 'leitura_falhou', detalhe: e instanceof Error ? e.message : String(e) });
+      }
     }
+    onClose();
     const seg = [h.serverId, h.project, h.session_id, ...(h.event_id ? [h.event_id] : [])];
     window.location.hash = '#/archive/' + seg.map(encodeURIComponent).join('/');
   }
