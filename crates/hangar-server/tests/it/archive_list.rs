@@ -756,6 +756,36 @@ async fn arq24_cap_100_cuts_the_oldest_of_any_agent() {
     }
 }
 
+/// `session_id` na pasta: só as entradas daquela conversa, mesmo além das 100 mais novas; `provider` e
+/// `codex_account` estreitam como no resto do Arquivo.
+#[tokio::test]
+async fn folder_with_session_id_finds_a_conversation_beyond_the_cap() {
+    const OLD: &str = "0dd00000-0000-4000-8000-000000000001";
+    fn edit(home: &Path) {
+        for i in 0..100u64 {
+            let sid = format!("{:08x}-0000-4000-8000-{i:012x}", 0xc000_0000u64 + i);
+            write_lines(&home.join(".claude-a/projects").join(HANGAR).join(format!("{sid}.jsonl")),
+                &[user("u1", &format!("conversa {i}"), HANGAR_CWD)], at(T0 + 150 + i));
+        }
+        write_lines(&home.join(".claude-a/projects").join(HANGAR).join(format!("{OLD}.jsonl")),
+            &[user("u1", "a conversa antiga", HANGAR_CWD)], at(T0 + 10));
+    }
+    for mode in [Mode::Index, Mode::NoIndex] {
+        let h = Harness::with(mode, edit).await;
+        let (_, all) = h.get(&format!("/api/archive/{HANGAR}")).await;
+        assert!(!sids(&all).contains(&"0dd00000"), "sem o filtro, o teto continua");
+        let (status, body) = h.get(&format!("/api/archive/{HANGAR}?session_id={OLD}")).await;
+        assert_eq!((status, sids(&body)), (200, vec!["0dd00000"]), "{body}");
+        let (_, body) = h.get(&format!("/api/archive/{HANGAR}?session_id=01a05511-e980-71b3-93a9-befda5704b20&provider=codex&codex_account=default")).await;
+        assert_eq!(sids(&body), ["01a05511"], "{body}");
+        assert_eq!(body[0]["provider"], "codex");
+        let (_, body) = h.get(&format!("/api/archive/{HANGAR}?session_id={OLD}&provider=codex")).await;
+        assert_eq!(sids(&body), Vec::<&str>::new(), "{body}");
+        let (status, body) = h.get(&format!("/api/archive/{HANGAR}?session_id={OLD}&provider=gemini")).await;
+        assert_eq!((status, body["detail"]["code"].as_str()), (400, Some("erro_provider_invalido")), "{body}");
+    }
+}
+
 /// ARQ-26: `live` pelo caminho real: transcript que é link simbólico continua vivo quando a lista dá
 /// o caminho do arquivo de verdade.
 #[cfg(unix)]

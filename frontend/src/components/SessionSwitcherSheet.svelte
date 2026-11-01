@@ -97,7 +97,7 @@ import * as m from '../paraglide/messages';
     const srv = listServers().find((s) => s.id === h.serverId);
     if (!srv || !h.event_id) { contextoErro = m.busca_contexto_indisponivel(); return; }
     try {
-      const evs = await getSearchContextForServer(srv, h.project, h.session_id, h.event_id, h.provider, h.codex_account);
+      const evs = await getSearchContextForServer(srv, h.project, h.session_id, h.event_id, h.provider, h.codex_account, h.config_dir);
       if (aberto === k) contexto = evs;
     } catch (e) {
       if (aberto === k) contextoErro = e instanceof Error ? e.message : m.busca_contexto_indisponivel();

@@ -12,7 +12,8 @@ const h = vi.hoisted(() => ({ context: vi.fn(), push: vi.fn(), replace: vi.fn(),
   drag: null as null | (() => void),
   targetLayout: null as null | ((event: { nativeEvent: { layout: { y: number } } }) => void),
   contentLayout: null as null | ((width: number, height: number) => void),
-  params: { server: 'a', project: 'proj', sid: 'sid', eventId: 'match', name: '', conversationTitle: '' } }));
+  params: { server: 'a', project: 'proj', sid: 'sid', eventId: 'match', name: '', conversationTitle: '' } as
+    { server: string; project: string; sid: string; eventId: string; name: string; conversationTitle: string; provider?: string; codexAccount?: string; configDir?: string } }));
 const state = vi.hoisted(() => ({ activeId: 'b', servers: [
   { id: 'a', label: 'A', baseUrl: 'https://a.test', token: 'a' },
   { id: 'b', label: 'B', baseUrl: 'https://b.test', token: 'b' },
@@ -118,7 +119,7 @@ it('ponto lê somente vizinhança de A e destaca evento sem buscar histórico in
   expect(container.textContent).toContain('posterior');
   expect(container.querySelector('[data-markdown]')?.textContent).toBe('**trecho encontrado**');
   expect(container.querySelector('[testid="search-active-event"]')?.textContent).toContain('trecho encontrado');
-  expect(h.context).toHaveBeenCalledExactlyOnceWith(state.servers[0], 'proj', 'sid', 'match', null, '');
+  expect(h.context).toHaveBeenCalledExactlyOnceWith(state.servers[0], 'proj', 'sid', 'match', null, '', '');
   await act(async () => { h.targetLayout?.({ nativeEvent: { layout: { y: 480 } } }); h.contentLayout?.(390, 1800); });
   expect(h.scroll).toHaveBeenCalledWith({ y: 480, animated: false });
   expect(fetch).not.toHaveBeenCalled(); expect(h.push).not.toHaveBeenCalled();
@@ -133,7 +134,7 @@ it('título do arquivo fica acima da máquina sem transformar abertura em sessã
   expect([...open!.parentElement!.firstElementChild!.children].map((element) => element.textContent)).toEqual(['Conversa arquivada', 'A']);
   expect(button(m.busca_abrir_sessao())).toBeUndefined();
   await act(async () => open!.click());
-  expect(String(fetch.mock.calls[0][0])).toBe('https://a.test/api/archive/proj');
+  expect(String(fetch.mock.calls[0][0])).toBe('https://a.test/api/archive/proj?session_id=sid');
   expect(h.push).toHaveBeenCalledExactlyOnceWith('/archive/a/proj/sid');
   expect(takeEntry('a', 'proj', 'sid')).toEqual(entry);
   expect(state.activeId).toBe('b');
@@ -159,9 +160,19 @@ it('Abrir arquivo resolve conta e provider em A mesmo ativo B, sem enviar ou ret
   const fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify([entry]), { status: 200 })); vi.stubGlobal('fetch', fetch);
   await mount();
   const open = button(m.switcher_arquivo()); expect(open).toBeDefined(); await act(async () => open!.click());
-  expect(fetch).toHaveBeenCalledTimes(1); expect(String(fetch.mock.calls[0][0])).toBe('https://a.test/api/archive/proj');
+  expect(fetch).toHaveBeenCalledTimes(1); expect(String(fetch.mock.calls[0][0])).toBe('https://a.test/api/archive/proj?session_id=sid');
   expect(h.push).toHaveBeenCalledExactlyOnceWith('/archive/a/proj/sid');
   expect(takeEntry('a', 'proj', 'sid')).toEqual(entry); expect(state.activeId).toBe('b');
+});
+
+it('ponto Codex lê a vizinhança e abre o arquivo pela conversa, com agente, conta e pasta da conta', async () => {
+  h.params = { ...h.params, provider: 'codex', codexAccount: 'owner-a', configDir: '/account-a' };
+  const fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify([entry]), { status: 200 })); vi.stubGlobal('fetch', fetch);
+  await mount();
+  expect(h.context).toHaveBeenCalledExactlyOnceWith(state.servers[0], 'proj', 'sid', 'match', 'codex', 'owner-a', '/account-a');
+  const open = button(m.switcher_arquivo()); expect(open).toBeDefined(); await act(async () => open!.click());
+  expect(String(fetch.mock.calls[0][0])).toBe('https://a.test/api/archive/proj?session_id=sid&provider=codex&codex_account=owner-a');
+  expect(h.push).toHaveBeenCalledExactlyOnceWith('/archive/a/proj/sid');
 });
 
 it('arquivo ambíguo e falha de contexto aparecem com recuperação sem navegar', async () => {

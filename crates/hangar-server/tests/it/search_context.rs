@@ -191,6 +191,23 @@ async fn search_context_searches_every_account_and_the_first_with_the_file_wins(
 }
 
 #[tokio::test]
+async fn search_context_reads_the_account_named_by_config_dir() {
+    // A mesma conversa nas duas contas: o `config_dir` do trecho escolhe a conta, antes da ordem do catálogo.
+    let scene = Scene::new(Some("a:{HOME}/.claude-a,b:{HOME}/.claude-b")).await;
+    let copy = scene.home.join(".claude-b/projects").join(NORMAL_P).join(format!("{NORMAL_S}.jsonl"));
+    std::fs::write(&copy, format!("{}\n", json!({"type": "user", "uuid": "so-na-b", "timestamp": "2026-10-01T10:00:00Z",
+        "message": {"role": "user", "content": MID}}))).unwrap();
+    let account = |name: &str| scene.home.join(name).to_string_lossy().replace('/', "%2F");
+    for (dir, want) in [(".claude-b", "so-na-b"), (".claude-a", MID)] {
+        let (status, body) = scene.get(&format!("project={NORMAL_P}&session_id={NORMAL_S}&event_id={want}&around=0&config_dir={}",
+            account(dir))).await;
+        assert_eq!((status, ids(&body)), (StatusCode::OK, vec![want.to_owned()]), "{dir}");
+    }
+    let (status, body) = scene.get(&format!("project={NORMAL_P}&session_id={NORMAL_S}&event_id={MID}&config_dir=%2Fnao%2Fconta")).await;
+    assert_eq!((status, body["detail"]["code"].as_str()), (StatusCode::BAD_REQUEST, Some("erro_config_dir_invalido")), "{body}");
+}
+
+#[tokio::test]
 async fn search_context_reads_claude_without_provider_and_the_named_agent_with_it() {
     // CTX-08 com a R5 (N2): sem `provider` é Claude; com ele, o agente pedido — o Python ignorava o
     // parâmetro e lia a conversa Claude.

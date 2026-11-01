@@ -267,9 +267,9 @@ impl<'a> Ctx<'a> {
     }
 
     /// `list_conversations`: as conversas de uma pasta, de todas as contas (ou da pedida), mais novas
-    /// primeiro, com o teto sobre o total.
-    fn conversations(&self, project: &str, cap: usize, config_dir: Option<&str>, codex_account: Option<&str>, provider: Option<&str>)
-        -> Result<Vec<Value>, OpenError> {
+    /// primeiro, com o teto sobre o total; `session_id` deixa só as entradas daquela conversa.
+    fn conversations(&self, project: &str, cap: usize, config_dir: Option<&str>, codex_account: Option<&str>, provider: Option<&str>,
+        session_id: Option<&str>) -> Result<Vec<Value>, OpenError> {
         if !PROJECT.is_match(project) { return Err(OpenError::new(400, "erro_path_invalido", "invalid path")); }
         if let Some(id) = codex_account {
             crate::accounts::AccountService::new(self.st.accounts.env.clone()).resolve(AccountProvider::Codex, id).map_err(account_error)?;
@@ -277,12 +277,13 @@ impl<'a> Ctx<'a> {
         let found = self.accounts(config_dir).iter().any(|(_, _, base)| base.join(project).is_dir());
         let mut others: Vec<Other> = if config_dir.is_some() || provider == Some("claude") { Vec::new() } else {
             self.others().into_iter().filter(|c| project_of(c.cwd.as_deref()).as_deref() == Some(project)
-                && provider.is_none_or(|p| c.provider == p)).collect()
+                && provider.is_none_or(|p| c.provider == p) && session_id.is_none_or(|s| c.sid == s)).collect()
         };
         others.sort_by(|a, b| b.mtime.total_cmp(&a.mtime));
         if !found && others.is_empty() { return Err(OpenError::new(404, "erro_projeto_nao_encontrado", "project not found")); }
         let mut files: Vec<Claude> = if provider.is_some_and(|p| p != "claude") { Vec::new() } else {
-            self.claude_files(config_dir).into_iter().filter(|f| f.project == project).collect()
+            self.claude_files(config_dir).into_iter().filter(|f| f.project == project
+                && session_id.is_none_or(|s| f.path.file_stem().is_some_and(|stem| stem == s))).collect()
         };
         files.sort_by(|a, b| b.mtime.total_cmp(&a.mtime));
         let mut out: Vec<(f64, Value)> = Vec::new();
@@ -584,7 +585,16 @@ pub async fn recent(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
 pub async fn folder(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, RoutePath(project): RoutePath<String>, req: Request) -> Response {
     serve(st, peer, req, |query| {
         let codex_account = crate::auth::query_param(query, "codex_account");
-        Ok(Box::new(move |ctx: &Ctx| ctx.conversations(&project, FOLDER_CAP, None, codex_account.as_deref(), None).map(Value::Array)))
+        let provider = crate::auth::query_param(query, "provider");
+        // Uma conversa só: a que a busca achou pode estar além das 100 mais novas.
+        let session_id = crate::auth::query_param(query, "session_id");
+        Ok(Box::new(move |ctx: &Ctx| {
+            if provider.as_deref().is_some_and(|p| p != "claude" && !PROVIDERS.contains(&p)) {
+                return Err(OpenError::new(400, "erro_provider_invalido", "provider invalido"));
+            }
+            let cap = if session_id.is_some() { usize::MAX } else { FOLDER_CAP };
+            ctx.conversations(&project, cap, None, codex_account.as_deref(), provider.as_deref(), session_id.as_deref()).map(Value::Array)
+        }))
     }).await
 }
 
@@ -609,7 +619,7 @@ pub async fn by_cwd(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
             let cap = cap.max(0) as usize;
             let claude = provider == "claude";
             let found = ctx.conversations(&hangar_workspace::worktrees::sanitize_cwd(&cwd), cap,
-                config_dir.as_deref().filter(|_| claude), codex_account.as_deref().filter(|_| provider == "codex"), Some(&provider));
+                config_dir.as_deref().filter(|_| claude), codex_account.as_deref().filter(|_| provider == "codex"), Some(&provider), None);
             match found {
                 Ok(list) => Ok(Value::Array(list.into_iter().filter(|e| e["provider"] == provider.as_str()).take(cap).collect())),
                 Err(e) if matches!(e.code, Some("erro_path_invalido" | "erro_projeto_nao_encontrado")) => Ok(json!([])),

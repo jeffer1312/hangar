@@ -18,7 +18,7 @@ const IOS = Platform.OS === 'ios';
 const one = (value: string | string[] | undefined) => (Array.isArray(value) ? value[0] : value) ?? '';
 const message = (error: unknown) => error instanceof Error ? error.message : m.erro_desconhecido();
 
-function Context({ server, project, sid, eventId, name, conversationTitle, provider, codexAccount }: { server: Server; project: string; sid: string; eventId: string; name: string; conversationTitle: string; provider: string; codexAccount: string }) {
+function Context({ server, project, sid, eventId, name, conversationTitle, provider, codexAccount, configDir }: { server: Server; project: string; sid: string; eventId: string; name: string; conversationTitle: string; provider: string; codexAccount: string; configDir: string }) {
   const router = useRouter();
   const [events, setEvents] = useState<ChatEvent[]>([]);
   const [loading, setLoading] = useState(true);
@@ -36,7 +36,7 @@ function Context({ server, project, sid, eventId, name, conversationTitle, provi
   const load = useCallback(() => {
     const id = ++generation.current;
     setLoading(true); setError(''); setEvents([]); setTargetY(null); setContentHeight(0); followingTarget.current = true;
-    void getSearchContextForServer(serverRef.current, project, sid, eventId, (provider || null) as Provider | null, codexAccount)
+    void getSearchContextForServer(serverRef.current, project, sid, eventId, (provider || null) as Provider | null, codexAccount, configDir)
       .then((context) => {
         if (id !== generation.current) return;
         if (!context.some((event) => event.id === eventId)) throw new Error(m.busca_contexto_indisponivel());
@@ -44,7 +44,7 @@ function Context({ server, project, sid, eventId, name, conversationTitle, provi
       })
       .catch((cause: unknown) => { if (id === generation.current) setError(message(cause)); })
       .finally(() => { if (id === generation.current) setLoading(false); });
-  }, [project, sid, eventId, provider, codexAccount]);
+  }, [project, sid, eventId, provider, codexAccount, configDir]);
   useEffect(() => { load(); return () => { generation.current++; openGeneration.current++; }; }, [load]);
   useEffect(() => {
     if (targetY === null || !contentHeight || !followingTarget.current || !scroll.current) return;
@@ -57,7 +57,11 @@ function Context({ server, project, sid, eventId, name, conversationTitle, provi
     const id = ++openGeneration.current;
     setOpening(true); setOpenError('');
     try {
-      const response = await probeServerResponse(server, `/api/archive/${encodeURIComponent(project)}`);
+      // Pela conversa no servidor: a lista da pasta para nas 100 mais novas.
+      const query = new URLSearchParams({ session_id: sid });
+      if (provider) query.set('provider', provider);
+      if (codexAccount) query.set('codex_account', codexAccount);
+      const response = await probeServerResponse(server, `/api/archive/${encodeURIComponent(project)}?${query}`);
       if (!response.ok) throw new Error(`${m.arquivo_conversa_erro()}: ${m.busca_motivo_http({ status: String(response.status) })}`);
       const entries: ArchiveEntry[] = await response.json();
       if (!Array.isArray(entries)) throw new Error(m.arquivo_conversa_erro());
@@ -118,16 +122,16 @@ export default function SearchPoint() {
   const headerOptions = useMemo(() => ({ ...glassHeader, title,
     headerLeft: canGoBack ? undefined : () => <HeaderBack onPress={() => router.replace('/search' as never)} />,
   }), [glassHeader, title, canGoBack, router]);
-  const params = useLocalSearchParams<{ server: string; project: string; sid: string; eventId: string; name?: string; conversationTitle?: string; provider?: string; codexAccount?: string }>();
+  const params = useLocalSearchParams<{ server: string; project: string; sid: string; eventId: string; name?: string; conversationTitle?: string; provider?: string; codexAccount?: string; configDir?: string }>();
   const serverId = one(params.server), project = one(params.project), sid = one(params.sid), eventId = one(params.eventId), name = one(params.name);
   const server = useServers((s) => s.servers.find((item) => item.id === serverId && !item.invite && !item.removed && !item.disabled));
   if (!focused) return null;
   return <Screen edges={EDGES}>
     <Stack.Screen options={headerOptions} />
     <View style={[styles.body, { paddingTop: headerHeight }]}>
-      {server && project && sid && eventId ? <Context key={JSON.stringify([server.id, server.baseUrl, server.token, project, sid, eventId, name, one(params.provider), one(params.codexAccount)])}
+      {server && project && sid && eventId ? <Context key={JSON.stringify([server.id, server.baseUrl, server.token, project, sid, eventId, name, one(params.provider), one(params.codexAccount), one(params.configDir)])}
         server={server} project={project} sid={sid} eventId={eventId} name={name} conversationTitle={one(params.conversationTitle)}
-        provider={one(params.provider)} codexAccount={one(params.codexAccount)} />
+        provider={one(params.provider)} codexAccount={one(params.codexAccount)} configDir={one(params.configDir)} />
         : <Text accessibilityRole="alert" style={styles.error}>{m.busca_contexto_indisponivel()}</Text>}
     </View>
   </Screen>;

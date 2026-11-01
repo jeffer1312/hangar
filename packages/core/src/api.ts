@@ -2220,12 +2220,14 @@ export interface SearchHit {
 // A mensagem do trecho e as vizinhas (suas e do assistente), pra ler sem sair da busca.
 export async function getSearchContextForServer(
   s: Server, project: string, sessionId: string, eventId: string,
-  provider?: Provider | null, codexAccount?: string | null,
+  provider?: Provider | null, codexAccount?: string | null, configDir?: string | null,
 ): Promise<ChatEvent[]> {
   const q = new URLSearchParams({ project, session_id: sessionId, event_id: eventId });
   // Sem `provider` o servidor lê como Claude; os outros agentes têm parser próprio.
   if (provider) q.set('provider', provider);
   if (codexAccount) q.set('codex_account', codexAccount);
+  // A mesma conversa em duas contas Claude: a do trecho.
+  if (configDir) q.set('config_dir', configDir);
   return apiFetchForServer(s, `/api/search/context?${q}`);
 }
 

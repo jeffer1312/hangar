@@ -23,7 +23,8 @@ const MAX_AROUND: f64 = 10.0;
 // O `int` do FastAPI aceita espaço em volta, `_` entre dígitos e `3.0`.
 pub(crate) static PY_INT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\A[+-]?[0-9](?:_?[0-9])*(?:\.0*)?\z").unwrap());
 
-struct Params { project: String, session_id: String, event_id: String, around: usize, provider: Option<String>, codex_account: Option<String> }
+struct Params { project: String, session_id: String, event_id: String, around: usize, provider: Option<String>, codex_account: Option<String>,
+    config_dir: Option<String> }
 
 pub async fn route(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let (forward, owner) = match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
@@ -69,7 +70,8 @@ fn parse(query: &HashMap<String, String>) -> Result<Params, Value> {
     };
     match (project, session_id, event_id, around) {
         (Some(project), Some(session_id), Some(event_id), Some(around)) if errors.is_empty() => Ok(Params { project, session_id, event_id, around,
-            provider: query.get("provider").cloned(), codex_account: query.get("codex_account").cloned() }),
+            provider: query.get("provider").cloned(), codex_account: query.get("codex_account").cloned(),
+            config_dir: query.get("config_dir").cloned() }),
         _ => Err(json!({"detail": errors})),
     }
 }
@@ -84,13 +86,17 @@ fn excerpt(st: &AppState, p: &Params) -> Response {
         Ok(catalog) => catalog.as_array().into_iter().flatten().filter_map(|row| row["path"].as_str().map(str::to_owned)).collect(),
         Err(e) => return refused(e.status, e.code, &e.message, e.params),
     };
+    // A conta do trecho, quando a mesma conversa existe em mais de uma.
+    if p.config_dir.as_ref().is_some_and(|dir| !config_dirs.contains(dir)) {
+        return refused(400, "erro_config_dir_invalido", "config_dir invalido", json!({}));
+    }
     // Sem `provider` é Claude (CTX-08); os outros agentes leem pelo parser do histórico do Arquivo.
     let Some(provider) = AgentProvider::parse(p.provider.as_deref().unwrap_or("claude")) else {
         return refused(400, "erro_provider_invalido", "provider invalido", json!({}));
     };
     let server_projects = env.claude_base.join("projects");
     let w = Where { home: &env.home, env: &env.base, server_projects: &server_projects, config_dirs: &config_dirs, live: &[] };
-    let jsonl = match locate(&w, &p.project, &p.session_id, None, provider, p.codex_account.as_deref()) {
+    let jsonl = match locate(&w, &p.project, &p.session_id, p.config_dir.as_deref(), provider, p.codex_account.as_deref()) {
         Ok((path, _)) => path,
         Err(e) => return refused(e.status, e.code.unwrap_or("erro_path_invalido"), &e.msg, e.params),
     };
