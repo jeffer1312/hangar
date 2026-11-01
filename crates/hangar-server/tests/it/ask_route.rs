@@ -84,7 +84,7 @@ async fn ask_route_answers_with_the_cli_like_the_capture() {
     let (status, body) = ask(&scene, "onde falei sobre o clippy?").await;
     assert_eq!(status.as_u16(), want["status"].as_u64().unwrap() as u16, "{body}");
     assert_eq!(body["answer"], want["body"]["answer"]);
-    let (got, want_hits) = reranked(&body["hits"], &expected_hits(&scene, &want["body"]["hits"]), false);
+    let (got, want_hits) = reranked(&body["hits"], &expected_hits(&scene, &want["body"]["hits"]), false, "onde falei sobre o clippy?");
     assert_eq!(got, want_hits);
     assert_eq!(cli.calls(), [(want["calls"][0]["input"].as_str().unwrap().to_owned(), None)]);
 }
@@ -100,7 +100,7 @@ async fn ask_route_searches_each_term_and_builds_the_prompt_like_the_capture() {
         let (status, body) = ask(&scene, q).await;
         assert_eq!(status, StatusCode::OK, "{q}: {body}");
         let want_hits = expected_hits(&scene, &cap["search_terms"][q]);
-        let (got, want_hits) = reranked(&body["hits"], &want_hits, false);
+        let (got, want_hits) = reranked(&body["hits"], &want_hits, false, q);
         assert_eq!(got, want_hits, "q={q:?}");
         if want_hits.as_array().unwrap().is_empty() {
             assert_eq!(body, cap["route"]["no_hits"]["body"], "q={q:?}");

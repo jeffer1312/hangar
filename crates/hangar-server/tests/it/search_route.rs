@@ -194,7 +194,14 @@ impl Scene {
 /// `lead = false`: só a recência, estável (o Perguntar reordena por mtime a junção das buscas por termo).
 /// A captura tem os 3 primeiros trechos de cada conversa: um trecho fora dela só vale se for de palavra
 /// inteira, da mesma conversa, e a conversa mantém a contagem (ele tomou o lugar de um pedaço).
-pub(super) fn reranked(got: &Value, expected: &Value, lead: bool) -> (Value, Value) {
+/// `q`: o texto buscado; o trecho fora da captura tem que trazer um dos termos como palavra inteira.
+pub(super) fn reranked(got: &Value, expected: &Value, lead: bool, q: &str) -> (Value, Value) {
+    let edge = |c: Option<char>| !c.is_some_and(char::is_alphanumeric);
+    let fold = hangar_server::search::fold;
+    let has_word = |line: &str| q.split_whitespace().map(fold).any(|t| {
+        let line = fold(line);
+        line.match_indices(t.as_str()).any(|(at, _)| edge(line[..at].chars().next_back()) && edge(line[at + t.len()..].chars().next()))
+    });
     let strip = |h: &Value| { let mut h = h.clone(); let o = h.as_object_mut().unwrap(); o.remove("name"); o.remove("preview"); h };
     let got: Vec<Value> = got.as_array().unwrap().iter().map(strip).collect();
     let expected = expected.as_array().unwrap();
@@ -206,7 +213,11 @@ pub(super) fn reranked(got: &Value, expected: &Value, lead: bool) -> (Value, Val
         // O Perguntar repete o evento com o trecho de cada termo: a linha também identifica.
         .find(|e| e["session_id"] == g["session_id"] && e["event_id"] == g["event_id"] && e["line"] == g["line"]) {
         Some(e) => { let mut e = e.clone(); e["whole"] = g["whole"].clone(); e }
-        None => { assert_eq!(g["whole"], true, "trecho fora da captura sem palavra inteira: {g}"); g.clone() }
+        None => {
+            assert_eq!(g["whole"], true, "trecho fora da captura sem palavra inteira: {g}");
+            assert!(has_word(g["line"].as_str().unwrap_or("")), "trecho fora da captura sem o termo como palavra inteira: {g}");
+            g.clone()
+        }
     }).collect();
     let led: Vec<_> = want.iter().filter(|h| lead && h["whole"] == true).map(conv).collect();
     want.sort_by(|a, b| led.contains(&conv(b)).cmp(&led.contains(&conv(a))).then(mtime(b).total_cmp(&mtime(a)))
@@ -221,7 +232,7 @@ async fn assert_like_the_capture(scene: &Scene) {
     for (q, hits) in capture.as_object().unwrap() {
         let mut got = scene.search(q).await;
         got.as_array_mut().unwrap().retain(|h| h["provider"] == "claude");
-        let (got, want) = reranked(&got, &scene.expected(hits), true);
+        let (got, want) = reranked(&got, &scene.expected(hits), true, q);
         assert_eq!(got, want, "q={q:?}");
     }
 }
@@ -287,7 +298,7 @@ async fn search_route_needs_every_word_in_one_message() {
     for ready in [true, false] {
         let scene = Scene::new(Opts { ready, ..Opts::default() }).await;
         for q in ["rust ok", "RUST   Ok rust"] {
-            let (got, want) = reranked(&scene.search(q).await, &json!([scene.with_account(&want)]), true);
+            let (got, want) = reranked(&scene.search(q).await, &json!([scene.with_account(&want)]), true, q);
             assert_eq!(got, want, "q={q:?} ready={ready}");
         }
     }
@@ -347,7 +358,7 @@ async fn search_route_falls_back_to_the_scan_when_the_index_fails() {
     for suffix in ["", "-wal", "-shm"] {
         let _ = std::fs::remove_file(format!("{}{suffix}", scene.index.path().display()));
     }
-    let (got, want) = reranked(&scene.search("clippy").await, &scene.expected(&capture()["clippy"]), true);
+    let (got, want) = reranked(&scene.search("clippy").await, &scene.expected(&capture()["clippy"]), true, "clippy");
     assert_eq!(got, want);
     let reports = scene.reports.lock().unwrap().clone();
     assert!(reports.iter().any(|(code, _)| code == "busca.indice_falhou"), "{reports:?}");
