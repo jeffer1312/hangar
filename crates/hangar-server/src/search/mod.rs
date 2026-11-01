@@ -163,6 +163,8 @@ struct Inner {
     reported: Mutex<HashSet<(&'static str, String)>>,
     /// Bancos descartados por corrupção desde a última passada boa.
     rebuilds: std::sync::atomic::AtomicU32,
+    /// O produtor está sendo solto: a passada para no próximo arquivo.
+    stopping: AtomicBool,
 }
 
 const MAX_REBUILDS: u32 = 3;
@@ -175,7 +177,7 @@ impl Index {
             writer: Mutex::new(None), ready: AtomicBool::new(false), last_pass: Mutex::new(None),
             watch_ok: AtomicBool::new(false), started: AtomicBool::new(false), wake: Mutex::new(None),
             watched: Mutex::new(None), agents: std::sync::OnceLock::new(), reported: Mutex::new(HashSet::new()),
-            rebuilds: std::sync::atomic::AtomicU32::new(0),
+            rebuilds: std::sync::atomic::AtomicU32::new(0), stopping: AtomicBool::new(false),
         }) }
     }
 
@@ -245,6 +247,8 @@ impl Index {
 
     pub fn path(&self) -> &Path { &self.inner.path }
 
+    pub(super) fn stopping(&self) -> bool { self.inner.stopping.load(Ordering::Acquire) }
+
     /// A 1ª passada completa já terminou (`meta.built`); antes disso a busca não responde pelo índice.
     pub fn ready(&self) -> bool { self.inner.ready.load(Ordering::Acquire) }
 
@@ -275,6 +279,10 @@ impl Index {
             }
             self.report_once("busca.ingestao_falhou", "", || e.to_string());
             return Err(e);
+        }
+        // Passada interrompida não está completa: nada de `built` nem de relógio da última passada.
+        if self.stopping() {
+            return Ok(());
         }
         self.recovered("busca.ingestao_falhou", "");
         self.inner.rebuilds.store(0, Ordering::Release);

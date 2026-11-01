@@ -221,6 +221,10 @@ pub(super) fn pass(conn: &mut Connection, accounts: &[Account], agents: Option<&
     let mut failure = None;
     let (mut illegible, mut illegible_files) = (0u64, 0usize);
     for (path, found) in order {
+        // Cada arquivo já entrou inteiro na sua transação: parar aqui não deixa nada pela metade.
+        if index.stopping() {
+            break;
+        }
         let old = known.get(path);
         if let Some(k) = old {
             if unchanged((k.size, k.mtime_ns, k.ino), &found.stat) {

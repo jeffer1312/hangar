@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::PoisonError;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
@@ -28,7 +28,13 @@ pub(super) type Targets = Vec<(PathBuf, RecursiveMode)>;
 pub struct Producer {
     tx: Sender<Wake>,
     thread: Option<std::thread::JoinHandle<()>>,
+    index: Index,
+    /// Desconecta quando a thread acaba, por qualquer saída.
+    done: Receiver<()>,
 }
+
+/// O desligamento do servidor não espera mais que isto por um arquivo grande no meio da passada.
+const STOP_WAIT: Duration = Duration::from_secs(2);
 
 impl Producer {
     /// Espera a thread acabar (sozinha ela só acaba quando o banco não abre).
@@ -39,18 +45,29 @@ impl Producer {
 
 impl Drop for Producer {
     fn drop(&mut self) {
+        let stopping = &self.index.inner.stopping;
+        stopping.store(true, Ordering::Release);
         let _ = self.tx.send(Wake::Stop);
+        // Thread que não acabou no prazo fica solta: a transação do arquivo dela não chega ao banco.
+        if self.done.recv_timeout(STOP_WAIT) == Err(RecvTimeoutError::Timeout) {
+            return;
+        }
         if let Some(thread) = self.thread.take() { let _ = thread.join(); }
+        stopping.store(false, Ordering::Release);
     }
 }
 
 pub(super) fn spawn(index: Index) -> Producer {
     let (tx, rx) = mpsc::channel();
+    let (done_tx, done) = mpsc::channel::<()>();
     *index.inner.wake.lock().unwrap_or_else(PoisonError::into_inner) = Some(tx.clone());
     let events = tx.clone();
-    let thread = std::thread::Builder::new().name("busca-indice".into()).spawn(move || run(index, events, rx))
-        .expect("thread do índice da busca");
-    Producer { tx, thread: Some(thread) }
+    let producer_index = index.clone();
+    let thread = std::thread::Builder::new().name("busca-indice".into()).spawn(move || {
+        let _done = done_tx;
+        run(index, events, rx)
+    }).expect("thread do índice da busca");
+    Producer { tx, thread: Some(thread), index: producer_index, done }
 }
 
 /// Saída da thread, normal ou por pânico: sem produtor, a busca volta a disparar passada.

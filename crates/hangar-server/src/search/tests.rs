@@ -847,6 +847,37 @@ fn dropping_the_producer_stops_it() {
     assert!(!env.watching(), "parado, a busca volta a disparar passada");
 }
 
+#[cfg(unix)]
+#[test]
+fn dropping_the_producer_mid_pass_returns_quickly() {
+    // Desligar o servidor não espera a passada inteira: ela para entre arquivos, sem marcar o índice pronto.
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let dir = root.join("acct/projects/-home-u-proj");
+    fs::create_dir_all(&dir).unwrap();
+    for i in 0..30 {
+        let f = dir.join(format!("{i:08}-0000-4000-8000-000000000000.jsonl"));
+        fs::write(&f, line("agulha", "u1", "user")).unwrap();
+        fs::set_permissions(&f, fs::Permissions::from_mode(0o000)).unwrap();
+    }
+    let accounts = vec![Account { config_dir: None, dir: root.join("acct"), projects: root.join("acct/projects") }];
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let seen = calls.clone();
+    // Cada arquivo ilegível leva 200 ms no diário: a passada inteira levaria 6 s.
+    let index = Index::new(&root.join("idx"), Arc::new(move || Ok(accounts.clone())), Arc::new(move |_, _| {
+        seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(200));
+    }), Timing { first_pass: Duration::ZERO, ..quiet() });
+    let producer = index.start().unwrap();
+    wait_for("passada em andamento", || calls.load(std::sync::atomic::Ordering::SeqCst) > 0);
+    let t0 = Instant::now();
+    drop(producer);
+    assert!(t0.elapsed() < Duration::from_secs(1), "{:?}", t0.elapsed());
+    assert!(calls.load(std::sync::atomic::Ordering::SeqCst) < 10);
+    assert!(!index.ready(), "passada interrompida não marca o índice pronto");
+}
+
 #[test]
 fn producer_panic_is_reported() {
     let env = Env::small(Timing { first_pass: Duration::ZERO, ..quiet() });
