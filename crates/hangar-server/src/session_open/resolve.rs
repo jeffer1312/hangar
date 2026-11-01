@@ -554,7 +554,9 @@ fn quota_check(provider: AgentProvider, current: Option<&str>, facts: &dyn OpenF
 /// `Path(a).resolve() == Path(b).resolve()`, sem exigir que existam.
 fn same_dir(a: &str, b: &str) -> bool {
     let trim = |p: &str| p.trim_end_matches(['/', '\\']).to_owned();
-    trim(a) == trim(b) || crate::list::discover::real(a) == crate::list::discover::real(b)
+    // Sem o `\\?\` antes de resolver: nele o Windows não lê `/` como separador e o canonicalize falha.
+    let resolved = |p: &str| crate::accounts::catalog::resolved(&crate::list::links::without_verbatim(std::path::PathBuf::from(trim(p))));
+    trim(a) == trim(b) || resolved(a) == resolved(b)
 }
 
 /// A grafia do catálogo da conta que `dir` nomeia: barra final, `\\?\` ou `/` no Windows não fazem
