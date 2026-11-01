@@ -552,11 +552,22 @@ fn quota_check(provider: AgentProvider, current: Option<&str>, facts: &dyn OpenF
 }
 
 /// `Path(a).resolve() == Path(b).resolve()`, sem exigir que existam.
-fn same_dir(a: &str, b: &str) -> bool {
+fn same_dir(a: &str, b: &str) -> bool { same_dir_on(a, b, cfg!(windows)) }
+
+/// Texto igual vence; os dois no disco decide o disco (pasta NTFS pode diferenciar maiúsculas); só
+/// sem resposta dele vale a regra do texto.
+fn same_dir_on(a: &str, b: &str, windows: bool) -> bool {
     let trim = |p: &str| p.trim_end_matches(['/', '\\']).to_owned();
+    if trim(a) == trim(b) {
+        return true;
+    }
     // Sem o `\\?\` antes de resolver: nele o Windows não lê `/` como separador e o canonicalize falha.
-    let resolved = |p: &str| crate::accounts::catalog::resolved(&crate::list::links::without_verbatim(std::path::PathBuf::from(trim(p))));
-    lexical_same(a, b, cfg!(windows)) || lexical_same(&resolved(a).to_string_lossy(), &resolved(b).to_string_lossy(), cfg!(windows))
+    let input = |p: &str| crate::list::links::without_verbatim(std::path::PathBuf::from(trim(p)));
+    let (a, b) = (input(a), input(b));
+    if a.canonicalize().is_ok() && b.canonicalize().is_ok() {
+        return crate::accounts::catalog::resolved(&a) == crate::accounts::catalog::resolved(&b);
+    }
+    lexical_same(&a.to_string_lossy(), &b.to_string_lossy(), windows)
 }
 
 /// Grafias da mesma pasta sem o disco (o `canonicalize` falhou): barra final; no Windows também
@@ -809,6 +820,20 @@ mod same_dir_tests {
         // Fora do Windows `\` é parte do nome e a caixa distingue pastas.
         assert!(!lexical_same(r"/a/X", "/a/x", false));
         assert!(!lexical_same(r"/a\x", "/a/x", false));
+    }
+
+    #[test]
+    fn folders_on_disk_are_compared_by_the_disk_before_the_lexical_rule() {
+        // Pasta que diferencia maiúsculas (NTFS por pasta, Linux): `Account` e `account` são contas distintas.
+        let dir = tempfile::tempdir().unwrap();
+        let (upper, lower) = (dir.path().join("Account"), dir.path().join("account"));
+        std::fs::create_dir(&upper).unwrap();
+        std::fs::create_dir(&lower).unwrap();
+        let s = |p: &std::path::Path| p.to_string_lossy().into_owned();
+        assert!(!same_dir_on(&s(&upper), &s(&lower), true));
+        assert!(same_dir_on(&format!("{}/", s(&upper)), &s(&upper), true));
+        // Só sem resposta do disco vale a regra do texto.
+        assert!(same_dir_on(&s(&dir.path().join("Sumida")), &format!("{}/", s(&dir.path().join("sumida"))), true));
     }
 
     #[cfg(windows)]
