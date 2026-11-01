@@ -4,6 +4,8 @@
 //! `tests/fixtures/search/home/`, com o índice pronto e sem ele. O esperado é a captura com as
 //! diferenças aceitas aplicadas: F7 (reserva sem usuário não ocupa vaga), F8 (conversa interna fora,
 //! só a que o índice já marcou) e F9 (conversa que mudou de pasta só na pasta do caminho mais novo).
+// O multiplexador falso é um script de shell (`write_executable`).
+#![cfg(unix)]
 use axum::{Router, extract::Request, http::StatusCode, response::IntoResponse};
 use hangar_server::{auth::TrustedHosts, config::Config, routes::{AppState, router}};
 use serde_json::{Value, json};

@@ -2,6 +2,8 @@
 //! esperado vem da captura do Python (`tests/fixtures/search/contract/ask/ask.json`) sobre as mesmas
 //! fixtures da busca (cena de `search_route`), com as diferenças aprovadas da R2 nos trechos (F4, M8,
 //! N1). O `claude -p` é um `Runner` falso: guarda o prompt e a conta de cada chamada.
+// Usa a cena de `search_route`, que só existe no Unix.
+#![cfg(unix)]
 use super::fake::{OWNER, client};
 use super::search_route::{FROM_COPY_MTIME, Opts, REWRITTEN, Scene, reranked};
 use axum::http::StatusCode;

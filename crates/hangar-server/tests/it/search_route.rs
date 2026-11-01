@@ -2,6 +2,8 @@
 //! captura do Python (`tests/fixtures/search/contract/search/search_index.json`) sobre as fixtures de
 //! `tests/fixtures/search/home`, copiadas para uma pasta temporária com os mesmos mtimes da captura,
 //! aplicadas as diferenças aprovadas (F1, F2, F3, F4, M3, N1).
+// O multiplexador falso é um script de shell (`write_executable`).
+#![cfg(unix)]
 use super::fake::{Fake, OWNER, client, spawn_fake};
 use axum::http::StatusCode;
 use hangar_server::{
