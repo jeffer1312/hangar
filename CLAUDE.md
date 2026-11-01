@@ -709,6 +709,9 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   - Partes ainda no Python: transcript, estado e entrada geral de Pi, omp e Kimi;
     transferência Claude→Codex; peers;
     workflows e runners; login de convidado. O Connect (8768) está inativo.
+  - Arquivo e busca são do Rust. O `archive.py` guarda só o que o Python ainda usa:
+    `list_folders`/`_head_info` para `/internal/worktrees/context` (`_worktree_inputs`) e
+    `archive_jsonl`/`archive_cwd` para o bastão (`_bastao_alvo`, `api.py`).
   - Atualização: na máquina migrada (pacote ou modo desenvolvedor) as rotas `/api/atualizacao*`
     são do Rust (`update/http.rs`); na não migrada, ao motor `git` do Python (`atualizar.py`). No
     pacote, `_fetch_loop` e `_auto_update_loop` (`api.py`) saem na subida e a verificação de hora em
