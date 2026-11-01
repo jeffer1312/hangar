@@ -434,3 +434,34 @@ fn ingest(tx: &Transaction, path: &str, found: &Found, ino: i64, old: Option<&Kn
             found.config_dir, account, head_len, head, found.codex_account, fid])?;
     Ok(st.illegible)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn size_and_mtime_are_the_stat_from_before_the_read() {
+        // IDX-35: o arquivo que cresce entre o stat e a leitura guarda o tamanho de antes; a passada
+        // seguinte vê a diferença em vez de dar o arquivo por lido.
+        let dir = tempfile::tempdir().unwrap();
+        let projects = dir.path().join("acct/projects");
+        let file = projects.join("-home-u-proj/11111111-1111-1111-1111-111111111111.jsonl");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        let line = |uuid: &str, text: &str| format!("{}\n", serde_json::json!({"type": "user", "uuid": uuid, "cwd": "/home/u/proj",
+            "message": {"role": "user", "content": text}}));
+        std::fs::write(&file, line("u1", "primeira")).unwrap();
+        let (found, _) = conversations(&[Account { config_dir: None, dir: dir.path().join("acct"), projects }]);
+        let (path, found) = found.iter().next().unwrap();
+        std::io::Write::write_all(&mut std::fs::OpenOptions::new().append(true).open(&file).unwrap(), line("u2", "segunda").as_bytes()).unwrap();
+        let mut conn = super::super::db::open(&dir.path().join("idx.sqlite3")).unwrap();
+        let tx = conn.transaction().unwrap();
+        ingest(&tx, path, found, found.stat.ino.unwrap_or(0), None, &internal_prefixes(), &|_| String::new(), &|_, _| {}).unwrap();
+        tx.commit().unwrap();
+        let (size, offset, msgs): (i64, i64, i64) = conn.query_row("SELECT size, offset, (SELECT COUNT(*) FROM msg) FROM files", [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap();
+        let now = std::fs::metadata(&file).unwrap();
+        assert_eq!((size, offset, msgs), (found.stat.size, now.len() as i64, 2));
+        let known: (i64, i64, i64) = conn.query_row("SELECT size, mtime_ns, ino FROM files", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap();
+        assert!(!unchanged(known, &Stat::of(&now)), "a passada seguinte relê o arquivo");
+    }
+}

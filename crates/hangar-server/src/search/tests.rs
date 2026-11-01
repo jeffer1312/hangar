@@ -1169,3 +1169,11 @@ fn scan_and_index_give_the_header_cwd() {
     env.index.update().unwrap();
     assert_eq!((scanned, cwd()), (vec![Some("/home/u/proj".to_owned())], vec![Some("/home/u/proj".to_owned())]));
 }
+
+#[test]
+fn only_a_pass_over_one_second_is_logged_at_info() {
+    // IDX-08: o limite entre a linha INFO e a DEBUG da passada.
+    assert!(!super::slow_pass(Duration::from_millis(10)));
+    assert!(!super::slow_pass(Duration::from_secs(1)));
+    assert!(super::slow_pass(Duration::from_millis(1001)));
+}

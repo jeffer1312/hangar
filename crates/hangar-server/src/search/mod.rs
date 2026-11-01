@@ -265,8 +265,7 @@ impl Index {
         }
         *self.inner.last_pass.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =Some(Instant::now());
         let spent = started.elapsed();
-        // Passada normal leva milissegundos: só a lenta merece linha no journal.
-        if spent > Duration::from_secs(1) {
+        if slow_pass(spent) {
             tracing::info!(secs = spent.as_secs_f64(), "índice da busca atualizado");
         } else {
             tracing::debug!(secs = spent.as_secs_f64(), "índice da busca atualizado");
@@ -488,6 +487,9 @@ fn cap(mut batch: Vec<Candidate>, limit: usize) -> Vec<Row> {
 pub fn fold(text: &str) -> String {
     text.nfd().filter(|c| !unicode_normalization::char::is_combining_mark(*c)).flat_map(char::to_lowercase).collect()
 }
+
+/// Passada normal leva milissegundos: só a lenta merece linha INFO no journal.
+fn slow_pass(spent: Duration) -> bool { spent > Duration::from_secs(1) }
 
 fn now_text() -> String {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64()).to_string()
