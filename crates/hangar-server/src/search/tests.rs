@@ -176,7 +176,7 @@ fn line(text: &str, uuid: &str, role: &str) -> String {
     format!("{}\n", json!({"type": role, "uuid": uuid, "cwd": "/home/u/proj", "message": msg}))
 }
 
-fn quiet() -> Timing { Timing { first_pass: Duration::ZERO, debounce: Duration::from_millis(100), stale: Duration::from_secs(3600) } }
+fn quiet() -> Timing { Timing { first_pass: Duration::ZERO, debounce: Duration::from_millis(100), stale: Duration::from_secs(3600), ..Timing::default() } }
 
 fn wait_for(what: &str, mut ok: impl FnMut() -> bool) {
     let until = Instant::now() + Duration::from_secs(10);
@@ -773,13 +773,38 @@ fn watcher_that_falls_is_reported() {
 }
 
 #[test]
-fn index_that_cannot_open_is_reported() {
-    // IDX-04: banco que não abre vai ao diário (`busca.indice_indisponivel`); a busca segue sem ele.
-    let env = Env::small(quiet());
+fn index_that_cannot_open_is_reported_once_and_retried() {
+    // IDX-04: banco que não abre vai ao diário uma vez (`busca.indice_indisponivel`); a busca segue
+    // sem ele, e o produtor tenta abrir de novo até conseguir, sem reiniciar o servidor.
+    let env = Env::small(Timing { reopen: Duration::from_millis(30), ..quiet() });
+    env.write(SID, &[line("agulha um", "u1", "user")], false);
     fs::write(env.root.join("idx"), b"arquivo no lugar da pasta").unwrap();
-    env.index.start().unwrap().join();
-    assert_eq!(env.reports.lock().unwrap()[0].0, "busca.indice_indisponivel");
+    let _producer = env.index.start().unwrap();
+    wait_for("falha no diário", || env.reported("busca.indice_indisponivel") == 1);
     assert_eq!(env.index.search(&terms("agulha"), 50).unwrap(), None);
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(env.reported("busca.indice_indisponivel"), 1, "as novas tentativas não repetem o diário");
+    fs::remove_file(env.root.join("idx")).unwrap();
+    wait_for("índice aberto e pronto", || env.index.ready());
+    assert_eq!(env.ids("agulha"), ["u1"]);
+}
+
+#[test]
+fn stopping_the_producer_interrupts_the_wait_to_reopen() {
+    let env = Env::small(Timing { reopen: Duration::from_secs(60), ..quiet() });
+    fs::write(env.root.join("idx"), b"arquivo no lugar da pasta").unwrap();
+    let producer = env.index.start().unwrap();
+    wait_for("falha no diário", || env.reported("busca.indice_indisponivel") == 1);
+    let t0 = Instant::now();
+    drop(producer);
+    assert!(t0.elapsed() < Duration::from_secs(1), "{:?}", t0.elapsed());
+}
+
+#[test]
+fn reopen_waits_grow_to_five_minutes() {
+    let base = Timing::default().reopen;
+    let waits: Vec<u64> = (0..6).map(|n| watch::reopen_wait(base, n).as_secs()).collect();
+    assert_eq!(waits, [30, 60, 120, 300, 300, 300]);
 }
 
 #[test]

@@ -36,13 +36,6 @@ pub struct Producer {
 /// O desligamento do servidor não espera mais que isto por um arquivo grande no meio da passada.
 const STOP_WAIT: Duration = Duration::from_secs(2);
 
-impl Producer {
-    /// Espera a thread acabar (sozinha ela só acaba quando o banco não abre).
-    pub fn join(mut self) {
-        if let Some(thread) = self.thread.take() { let _ = thread.join(); }
-    }
-}
-
 impl Drop for Producer {
     fn drop(&mut self) {
         let stopping = &self.index.inner.stopping;
@@ -68,6 +61,25 @@ pub(super) fn spawn(index: Index) -> Producer {
         run(index, events, rx)
     }).expect("thread do índice da busca");
     Producer { tx, thread: Some(thread), index: producer_index, done }
+}
+
+/// Espera antes da tentativa `attempt` (0 = a 1ª nova) de abrir o banco: `base`, o dobro, o quádruplo
+/// e depois dez vezes `base` (30 s, 1 min, 2 min, 5 min).
+pub(super) fn reopen_wait(base: Duration, attempt: u32) -> Duration {
+    if attempt < 3 { base * (1 << attempt) } else { base * 10 }
+}
+
+/// Espera `wait` ouvindo o canal; `false` = pediram para parar.
+fn rest(rx: &Receiver<Wake>, wait: Duration) -> bool {
+    let deadline = Instant::now() + wait;
+    while let Some(left) = deadline.checked_duration_since(Instant::now()).filter(|d| !d.is_zero()) {
+        match rx.recv_timeout(left) {
+            Ok(Wake::Stop) | Err(RecvTimeoutError::Disconnected) => return false,
+            Ok(_) => {}
+            Err(RecvTimeoutError::Timeout) => break,
+        }
+    }
+    true
 }
 
 /// Saída da thread, normal ou por pânico: sem produtor, a busca volta a disparar passada.
@@ -98,19 +110,18 @@ struct Watch {
 
 fn run(index: Index, tx: Sender<Wake>, rx: Receiver<Wake>) {
     let _alive = Alive(index.clone());
-    if let Err(e) = index.open_now() {
+    let mut attempt = 0;
+    while let Err(e) = index.open_now() {
         // Sem índice a busca varre o disco a cada pedido: fica no diário exportável, não só no log.
-        tracing::warn!(error = %e, "índice da busca indisponível");
-        (index.inner.report)("busca.indice_indisponivel", e.to_string());
-        return;
-    }
-    let deadline = Instant::now() + index.inner.timing.first_pass;
-    while let Some(left) = deadline.checked_duration_since(Instant::now()).filter(|d| !d.is_zero()) {
-        match rx.recv_timeout(left) {
-            Ok(Wake::Stop) | Err(RecvTimeoutError::Disconnected) => return,
-            Ok(_) => {}
-            Err(RecvTimeoutError::Timeout) => break,
+        index.report_once("busca.indice_indisponivel", "", || e.to_string());
+        if !rest(&rx, reopen_wait(index.inner.timing.reopen, attempt)) {
+            return;
         }
+        attempt = attempt.saturating_add(1);
+    }
+    index.recovered("busca.indice_indisponivel", "");
+    if !rest(&rx, index.inner.timing.first_pass) {
+        return;
     }
     let mut watch = Watch::default();
     let mut need_pass = true;

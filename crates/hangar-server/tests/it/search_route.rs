@@ -125,7 +125,7 @@ impl Scene {
         let sink = reports.clone();
         let report: Reporter = Arc::new(move |code, detail| sink.lock().unwrap().push((code.to_owned(), detail)));
         // Prazos longos: nenhuma passada sozinha no meio do teste.
-        let timing = Timing { first_pass: Duration::from_secs(3600), debounce: Duration::from_secs(3600), stale: Duration::from_secs(3600) };
+        let timing = Timing { first_pass: Duration::from_secs(3600), debounce: Duration::from_secs(3600), stale: Duration::from_secs(3600), ..Timing::default() };
         let index = Index::for_accounts(state.accounts.clone(), &dir.path().join("idx"), report, timing);
         if opts.ready { index.update().unwrap(); }
         state.search = index.clone();

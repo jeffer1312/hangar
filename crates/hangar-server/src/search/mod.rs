@@ -58,11 +58,14 @@ pub struct Timing {
     pub debounce: Duration,
     /// Sem observador, busca com índice mais velho que isto dispara uma passada em segundo plano.
     pub stale: Duration,
+    /// 1ª espera para abrir de novo o banco que não abriu; dobra até dez vezes ela.
+    pub reopen: Duration,
 }
 
 impl Default for Timing {
     fn default() -> Self {
-        Self { first_pass: Duration::from_secs(90), debounce: Duration::from_millis(500), stale: Duration::from_secs(5) }
+        Self { first_pass: Duration::from_secs(90), debounce: Duration::from_millis(500), stale: Duration::from_secs(5),
+            reopen: Duration::from_secs(30) }
     }
 }
 
