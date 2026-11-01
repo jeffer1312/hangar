@@ -228,19 +228,25 @@ fn fold_json(raw: &[u8], out: &mut Vec<u8>) -> bool {
 /// Trechos de `q` em todas as contas Claude e nos outros agentes, na ordem de `order`, até `limit`. `live`:
 /// realpath do transcript → nome da sessão viva. Erro: o catálogo de contas não pôde ser lido.
 pub(crate) fn search(index: &Index, q: &str, live: &HashMap<String, String>, limit: usize) -> Result<Vec<Hit>, String> {
-    search_counted(index, q, live, limit).map(|(hits, _)| hits)
+    found(index, q, live, limit, false).map(|(hits, _)| hits)
 }
 
 /// `search` e quantas conversas foram consideradas: os transcripts não internos, do índice ou, antes
 /// dele, os achados pela varredura (lidos ou não).
 pub(crate) fn search_counted(index: &Index, q: &str, live: &HashMap<String, String>, limit: usize)
     -> Result<(Vec<Hit>, usize), String> {
+    found(index, q, live, limit, true)
+}
+
+/// `count`: só a busca mostra quantas conversas considerou; o Perguntar não paga a contagem por termo.
+fn found(index: &Index, q: &str, live: &HashMap<String, String>, limit: usize, count: bool)
+    -> Result<(Vec<Hit>, usize), String> {
     let terms = terms(q);
     if terms.is_empty() {
         return Ok((Vec::new(), 0));
     }
     let indexed = index.search(&terms, limit)
-        .and_then(|rows| rows.map(|rows| Ok((rows, index.conversations()?))).transpose());
+        .and_then(|rows| rows.map(|rows| Ok((rows, if count { index.conversations()? } else { 0 }))).transpose());
     if indexed.is_ok() { index.recovered("busca.indice_falhou", ""); }
     let (hits, considered) = match indexed {
         Ok(Some((rows, considered))) => (from_rows(rows, &terms, live, &closed_names(index)), considered),

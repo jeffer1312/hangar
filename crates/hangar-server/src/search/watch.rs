@@ -121,7 +121,13 @@ fn run(index: Index, tx: Sender<Wake>, rx: Receiver<Wake>) {
             if let Err(e) = index.update() {
                 tracing::warn!(error = %e, "passada do índice da busca falhou");
             }
+            let used = watch.built_for.clone();
             rewatch(&index, &tx, &mut watch);
+            // Conta que entrou no catálogo durante a passada: os arquivos dela ficaram fora, e o
+            // observador novo só vê escrita futura.
+            if watch.built_for.is_some() && watch.built_for != used {
+                continue;
+            }
         }
         need_pass = loop {
             match rx.recv() {

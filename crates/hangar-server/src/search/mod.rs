@@ -167,7 +167,16 @@ struct Inner {
     rebuilds: std::sync::atomic::AtomicU32,
     /// O produtor está sendo solto: a passada para no próximo arquivo.
     stopping: AtomicBool,
+    /// Relógio da conferência do catálogo; os testes trocam.
+    clock: std::sync::OnceLock<Clock>,
+    /// Última conferência do catálogo pelos leitores.
+    last_notice: Mutex<Option<Instant>>,
 }
+
+type Clock = Arc<dyn Fn() -> Instant + Send + Sync>;
+
+/// Busca, Arquivo e Perguntar leem em rajada: o catálogo de contas é conferido no máximo uma vez nisto.
+const NOTICE_EVERY: Duration = Duration::from_secs(2);
 
 const MAX_REBUILDS: u32 = 3;
 
@@ -180,7 +189,14 @@ impl Index {
             watch_ok: AtomicBool::new(false), started: AtomicBool::new(false), wake: Mutex::new(None),
             watched: Mutex::new(None), agents: std::sync::OnceLock::new(), reported: Mutex::new(HashSet::new()),
             rebuilds: std::sync::atomic::AtomicU32::new(0), stopping: AtomicBool::new(false),
+            clock: std::sync::OnceLock::new(), last_notice: Mutex::new(None),
         }) }
+    }
+
+    #[cfg(test)]
+    fn with_clock(self, clock: Clock) -> Self {
+        let _ = self.inner.clock.set(clock);
+        self
     }
 
     /// Liga as conversas de Codex, Pi, omp e Kimi do ambiente ao índice (uma vez, antes do produtor).
@@ -369,6 +385,14 @@ impl Index {
     /// Conta nova ou removida do catálogo não escreve nas pastas vigiadas: quem lê confere as pastas
     /// que o catálogo pede agora e, mudou, acorda o produtor (a resposta desta leitura não espera).
     fn notice_catalog(&self) {
+        let now = self.inner.clock.get().map_or_else(Instant::now, |clock| clock());
+        {
+            let mut last = self.inner.last_notice.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if last.is_some_and(|t| now.saturating_duration_since(t) < NOTICE_EVERY) {
+                return;
+            }
+            *last = Some(now);
+        }
         let watched = self.inner.watched.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
         let Some(watched) = watched else { return };
         if watch::targets(self).is_some_and(|now| now != watched) {

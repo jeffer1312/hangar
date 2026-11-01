@@ -345,6 +345,33 @@ fn short_terms_stop_at_the_examined_rows_cap() {
 }
 
 #[test]
+fn catalog_check_runs_once_per_interval_across_readers() {
+    // Busca, Arquivo e os termos do Perguntar dividem a conferência do catálogo: uma a cada 2 s.
+    use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    fs::create_dir_all(root.join("acct/projects")).unwrap();
+    let accounts = vec![Account { config_dir: None, dir: root.join("acct"), projects: root.join("acct/projects") }];
+    let calls = Arc::new(AtomicUsize::new(0));
+    let seen = calls.clone();
+    let now = Arc::new(Mutex::new(Instant::now()));
+    let clock = now.clone();
+    let index = Index::new(&root.join("idx"), Arc::new(move || { seen.fetch_add(1, SeqCst); Ok(accounts.clone()) }),
+        Arc::new(|_, _| {}), quiet()).with_clock(Arc::new(move || *clock.lock().unwrap()));
+    index.update().unwrap();
+    *index.inner.watched.lock().unwrap() = watch::targets(&index);
+    index.inner.watch_ok.store(true, std::sync::atomic::Ordering::Release);
+    calls.store(0, SeqCst);
+    index.search(&terms("agulha"), 50).unwrap();
+    index.archive_rows();
+    ask::search_terms(&index, &terms("agulha palheiro feno"), &std::collections::HashMap::new()).unwrap();
+    assert_eq!(calls.load(SeqCst), 1);
+    *now.lock().unwrap() += Duration::from_secs(2);
+    index.search(&terms("agulha"), 50).unwrap();
+    assert_eq!(calls.load(SeqCst), 2);
+}
+
+#[test]
 fn index_read_failure_is_reported_once_until_it_recovers() {
     let env = Env::small(quiet());
     env.write(SID, &[line("agulha um", "u1", "user")], false);

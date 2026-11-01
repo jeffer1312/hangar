@@ -54,7 +54,7 @@ pub(crate) fn extract_terms(question: &str) -> Vec<String> {
 }
 
 /// Busca OU: uma busca por termo, sem repetir (sessão, trecho), conversa mais nova primeiro, até 30.
-fn search_terms(index: &Index, terms: &[String], live: &HashMap<String, String>) -> Result<Vec<Hit>, String> {
+pub(super) fn search_terms(index: &Index, terms: &[String], live: &HashMap<String, String>) -> Result<Vec<Hit>, String> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     for term in terms {
