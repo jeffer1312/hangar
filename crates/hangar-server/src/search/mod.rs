@@ -33,6 +33,8 @@ pub const FILE_NAME: &str = "busca-rust.sqlite3";
 const PER_FILE: usize = 3;
 // Mensagens casadas mais novas consideradas antes do teto por arquivo: termo comum não ordena tudo.
 const CANDIDATES: usize = 2000;
+// Só termos curtos varrem `msg` linha a linha: termo raro não percorre o índice inteiro.
+const SHORT_SCAN_ROWS: usize = if cfg!(test) { 50 } else { 200_000 };
 
 /// Uma conta Claude a varrer: `config_dir` como o catálogo o escreve (`None` = a do servidor),
 /// `dir` a pasta da conta (dá o `account`) e `projects` a pasta das conversas.
@@ -400,7 +402,10 @@ impl Index {
                 "SELECT {CANDIDATE_COLUMNS} FROM msg m JOIN files f ON f.id = m.file_id \
                  WHERE COALESCE(f.internal, 0) = 0 ORDER BY m.id DESC"))?;
             let mut rows = stmt.query([])?;
+            let mut examined = 0;
             while let Some(row) = rows.next()? {
+                examined += 1;
+                if examined > SHORT_SCAN_ROWS { break; }
                 let c = Candidate::from_row(row)?;
                 if matches(&c.row.text) {
                     batch.push(c);

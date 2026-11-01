@@ -333,6 +333,36 @@ fn short_terms_filter_folded_text() {
 }
 
 #[test]
+fn short_terms_stop_at_the_examined_rows_cap() {
+    // Só termo curto percorre `msg` do mais novo: no teto devolve o que juntou, sem ir ao fim.
+    let env = Env::small(quiet());
+    let mut lines = vec![line("ab velho", "old", "user")];
+    lines.extend((0..SHORT_SCAN_ROWS).map(|i| line(&format!("outra {i}"), &format!("x{i}"), "user")));
+    lines.push(line("ab novo", "new", "user"));
+    env.write(SID, &lines, false);
+    env.index.update().unwrap();
+    assert_eq!(env.ids("ab"), ["new"]);
+}
+
+#[test]
+fn index_read_failure_is_reported_once_until_it_recovers() {
+    let env = Env::small(quiet());
+    env.write(SID, &[line("agulha um", "u1", "user")], false);
+    env.index.update().unwrap();
+    let ask = || hits::search_counted(&env.index, "agulha", &std::collections::HashMap::new(), 50).unwrap();
+    let broken = |on: bool| env.db().execute_batch(if on { "ALTER TABLE files RENAME TO files_x" } else { "ALTER TABLE files_x RENAME TO files" }).unwrap();
+    broken(true);
+    ask();
+    ask();
+    assert_eq!(env.reported("busca.indice_falhou"), 1);
+    broken(false);
+    ask();
+    broken(true);
+    ask();
+    assert_eq!(env.reported("busca.indice_falhou"), 2, "voltou a responder: a próxima queda vai ao diário");
+}
+
+#[test]
 fn not_ready_answers_none_and_empty_index_answers_empty() {
     // IDX-21 (antes da 1ª passada completa não há resposta do índice) e SRCH-21 (pronto e vazio = []).
     let env = Env::small(quiet());

@@ -241,11 +241,12 @@ pub(crate) fn search_counted(index: &Index, q: &str, live: &HashMap<String, Stri
     }
     let indexed = index.search(&terms, limit)
         .and_then(|rows| rows.map(|rows| Ok((rows, index.conversations()?))).transpose());
+    if indexed.is_ok() { index.recovered("busca.indice_falhou", ""); }
     let (hits, considered) = match indexed {
         Ok(Some((rows, considered))) => (from_rows(rows, &terms, live, &closed_names(index)), considered),
         Ok(None) => scan(index, &index.accounts()?, &terms, live, limit),
         Err(e) => {
-            index.report("busca.indice_falhou", e.to_string());
+            index.report_once("busca.indice_falhou", "", || e.to_string());
             scan(index, &index.accounts()?, &terms, live, limit)
         }
     };
