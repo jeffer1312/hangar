@@ -601,6 +601,8 @@ async fn transferred_rollout_is_indexed_after_the_boundary_with_the_composed_ids
 
 /// Transferência que a lista vê e o histórico composto não acha (o índice aponta o id noutra grafia):
 /// o rollout não entra cru no índice, e o que ele já tinha fica.
+// A outra grafia só desencontra num sistema de arquivos que diferencia maiúsculas.
+#[cfg(not(any(windows, target_os = "macos")))]
 #[tokio::test]
 async fn transferred_rollout_without_a_readable_record_is_not_indexed_raw_and_keeps_its_rows() {
     let h = Harness::new().await;
