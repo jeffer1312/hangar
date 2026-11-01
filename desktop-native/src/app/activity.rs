@@ -260,6 +260,11 @@ fn sub_silent(agents: &[AgentRun], subs: &[SubRun], run: &SubRun) -> bool {
     matches!(sub_status(agents, subs, run, now_seconds()), SubStatus::Silent(_))
 }
 
+/// Parado esperando o próprio trabalho de fundo: segue vivo, mas não está pensando.
+fn sub_waiting(agents: &[AgentRun], run: &SubRun) -> bool {
+    agents.iter().any(|agent| agent.waiting && match_agent(std::slice::from_ref(run), agent).is_some())
+}
+
 /// Rodando, terminado ou falho, com o horário do fim (o `endedAt`, senão a última escrita); ou sem notícia desde a
 /// última escrita.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1056,7 +1061,8 @@ impl ActivityPanel {
         let run = &opened.run;
         let empty = |text: String| div().px_4().py_4().text_center().text_sm().text_color(theme::faint()).child(text).into_any_element();
         let running = !opened.done && !run.failed && !run.unreadable && run.problem.is_none() && !sub_silent(&self.activity.agents, &self.subs, run);
-        let body = if !opened.loaded { empty(tr("subagent_loading")) }
+        let waiting = sub_waiting(&self.activity.agents, run);
+        let body =if !opened.loaded { empty(tr("subagent_loading")) }
             else if opened.has_events {
                 let conversation = super::panes::cached_selectable(self.conversation.clone().into(), StyleRefinement::default().size_full());
                 // Como o `Spinner` que o web põe sob a conversa do subagente enquanto ele roda.
@@ -1066,7 +1072,10 @@ impl ActivityPanel {
                         .on_click(cx.listener(|this, _, _, cx| this.load_older(cx))))
                     .when(opened.loading_older, |el| el.child(div().text_sm().text_color(theme::muted()).child(tr("loading")))));
                 div().size_full().flex().flex_col().children(older).child(div().flex_1().min_h_0().child(conversation))
-                    .when(running, |el| el.child(div().flex_shrink_0().px_4().h(px(38.)).flex().items_center().gap(px(8.))
+                    .when(running && waiting, |el| el.child(div().flex_shrink_0().px_4().h(px(38.)).flex().items_center().gap(px(8.))
+                        .child(chrome::small_icon(IconName::Hourglass, 14., theme::muted()))
+                        .child(div().min_w_0().truncate().text_size(px(12.)).text_color(theme::muted()).child(web("tool_agente_esperando")))))
+                    .when(running && !waiting, |el| el.child(div().flex_shrink_0().px_4().h(px(38.)).flex().items_center().gap(px(8.))
                         .child(super::panes::mark_slot(&self.marks, super::panes::Area::Side, "act-sub-working", 14., theme::accent()))
                         .child(div().min_w_0().truncate().text_size(px(12.)).text_color(theme::muted()).child(web("pensamento_vivo")))
                         // Os segundos desde a primeira linha do registro, como a linha "trabalhando" da conversa.
@@ -1521,7 +1530,9 @@ impl Hangar {
             let silent = opened.is_some_and(|o| sub_silent(&view.activity.agents, &view.subs, &o.run));
             let running = !unavailable && !silent && opened.is_some_and(|o| !o.done);
             let failed = opened.is_some_and(|o| o.run.failed);
-            let icon = if running { self.working_mark_slot(super::panes::Area::Side, format!("subagent-tab-{id}"), 12., theme::accent()) }
+            let waiting = running && opened.is_some_and(|o| sub_waiting(&view.activity.agents, &o.run));
+            let icon = if waiting { chrome::small_icon(IconName::Hourglass, 12., theme::muted()).into_any_element() }
+                else if running { self.working_mark_slot(super::panes::Area::Side, format!("subagent-tab-{id}"), 12., theme::accent()) }
                 else if silent && !unavailable && !failed { chrome::small_icon(IconName::Info, 12., theme::muted()).into_any_element() }
                 else { chrome::small_icon(if unavailable { IconName::Info } else if failed { TAB_CROSS } else { IconName::Check }, 12.,
                     if failed || unavailable { theme::warning() } else { theme::success() }).into_any_element() };
@@ -1900,6 +1911,17 @@ mod tests {
         // Com o Agent do pai rodando, o registro parado não vira fim.
         assert_eq!(sub_status(&running_parent, &[], &with(None, None, Some(now - 601.)), now), SubStatus::Running);
         assert_eq!(sub_status(&[parent("t1", "tarefa um", None, true)], &[with(None, None, Some(1.))], &with(None, None, Some(1.)), now), SubStatus::Running);
+    }
+
+    #[test]
+    fn subagent_waiting_on_its_background_work_is_shown_as_waiting() {
+        use super::sub_waiting;
+        let waiting = |id: Option<&str>| AgentRun { waiting: true, ..parent("t1", "tarefa um", id, true) };
+        assert!(sub_waiting(&[waiting(Some("a"))], &sub("a", "tarefa um")));
+        assert!(sub_waiting(&[waiting(None)], &sub("a", "tarefa um")));
+        // A espera de outro Agent não marca este subagente.
+        assert!(!sub_waiting(&[waiting(Some("b"))], &sub("a", "tarefa um")));
+        assert!(!sub_waiting(&[parent("t1", "tarefa um", Some("a"), true)], &sub("a", "tarefa um")));
     }
 
     #[test]
