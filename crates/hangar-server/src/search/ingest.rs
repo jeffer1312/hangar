@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::fs::{File, Metadata};
-use std::io::{BufRead, BufReader, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
@@ -18,10 +18,14 @@ use serde_json::Value;
 use super::{Account, IndexError};
 use crate::accounts::environment::AccountEnvironment;
 use crate::session_open::AgentProvider;
+use crate::speech::history::transfer_history as transfer;
 use crate::transcript::{RewriteFilter, parse_claude_object, py, pyjson};
 
 // Mesmo teto do `rg -M` da busca antiga: linha maior é saída de ferramenta ou contexto injetado.
 pub(super) const MAX_LINE_BYTES: usize = 40_000;
+// Acima do teto da busca a linha ainda dá cabeçalho e última resposta (prompt com imagem colada);
+// acima deste, nem isso, e ela é pulada sem ir à memória.
+pub(super) const HUGE_LINE_BYTES: usize = 32 * 1024 * 1024;
 const HEAD_LINES: i64 = 60;
 const INTERNAL_LINES: i64 = 30;
 const PREFIX_CHARS: usize = 60;
@@ -95,6 +99,8 @@ fn windows_file_index(_path: &Path) -> u64 { 0 }
 pub(super) struct Found {
     pub project: String, pub sid: String, pub stat: Stat, pub provider: &'static str,
     pub config_dir: Option<String>, pub account: String, pub codex_account: Option<String>, pub cwd: Option<String>,
+    /// Rollout Codex vindo de uma transferência do Claude: o registro dela e a casa da conta dona.
+    pub transfer: Option<(Value, PathBuf)>,
 }
 
 struct Known {
@@ -121,14 +127,22 @@ pub(super) fn conversations(accounts: &[Account]) -> (BTreeMap<String, Found>, V
             Ok(projects) => projects,
             Err(e) => { failed(account.projects.clone(), &e); continue; }
         };
-        for project in projects.flatten() {
+        for project in projects {
+            let project = match project {
+                Ok(project) => project,
+                Err(e) => { failed(account.projects.clone(), &e); continue; }
+            };
             let dir = project.path();
             if !dir.is_dir() { continue; }
             let files = match std::fs::read_dir(&dir) {
                 Ok(files) => files,
                 Err(e) => { failed(dir, &e); continue; }
             };
-            for file in files.flatten() {
+            for file in files {
+                let file = match file {
+                    Ok(file) => file,
+                    Err(e) => { failed(dir.clone(), &e); continue; }
+                };
                 let path: PathBuf = file.path();
                 let (Some(stem), Some("jsonl")) = (path.file_stem().and_then(|s| s.to_str()), path.extension().and_then(|s| s.to_str())) else { continue };
                 if !SID.is_match(stem) { continue; }
@@ -140,6 +154,7 @@ pub(super) fn conversations(accounts: &[Account]) -> (BTreeMap<String, Found>, V
                 out.entry(path.to_string_lossy().into_owned()).or_insert_with(|| Found {
                     project: project.file_name().to_string_lossy().into_owned(), sid: stem.to_owned(), stat: Stat::of(&md),
                     provider: "claude", config_dir: account.config_dir.clone(), account: account_key(account), codex_account: None, cwd: None,
+                    transfer: None,
                 });
             }
         }
@@ -149,7 +164,6 @@ pub(super) fn conversations(accounts: &[Account]) -> (BTreeMap<String, Found>, V
 
 fn head_hash(file: &mut File, len: i64) -> std::io::Result<String> {
     use md5::{Digest, Md5};
-    use std::io::Read;
     let mut buf = vec![0; len as usize];
     file.seek(SeekFrom::Start(0))?;
     file.read_exact(&mut buf)?;
@@ -223,9 +237,13 @@ pub(super) fn pass(conn: &mut Connection, accounts: &[Account], agents: Option<&
         match ingest(&tx, path, found, ino, old, &prefixes, &pi_account, &report) {
             Ok(skipped) => {
                 tx.commit()?;
+                index.recovered("busca.indice_transcript_ilegivel", path);
                 if skipped > 0 { illegible += u64::from(skipped); illegible_files += 1; }
             }
-            Err(IndexError::Io(e)) => tracing::debug!(path = %path, error = %e, "busca: transcript ilegível"),
+            // Sumiu depois de achado: a passada seguinte o tira.
+            Err(IndexError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {}
+            // O que o índice tem do arquivo fica; a próxima passada tenta de novo.
+            Err(IndexError::Io(e)) => index.report_once("busca.indice_transcript_ilegivel", path, || format!("{path}: {e}")),
             Err(e) => {
                 tracing::warn!(path = %path, error = %e, "busca: ingestão falhou; fica para a próxima passada");
                 failure.get_or_insert(e);
@@ -349,6 +367,28 @@ pub(crate) fn cut(text: &str) -> String {
     format!("{}…", short.trim_end_matches([' ', ',', ';', ':', '.']))
 }
 
+/// O que `next_line` leu: uma linha inteira em `raw`, o fim sem `\n` (linha ainda sendo escrita) ou
+/// uma linha maior que o teto, pulada com o tamanho dela.
+pub(super) enum Line { Full, Partial, Skipped(u64) }
+
+/// A próxima linha até `cap` bytes; a maior é descartada até o `\n` sem guardar o resto.
+pub(super) fn next_line(rd: &mut impl BufRead, raw: &mut Vec<u8>, cap: usize) -> std::io::Result<Line> {
+    raw.clear();
+    let read = rd.by_ref().take(cap as u64 + 1).read_until(b'\n', raw)?;
+    if raw.ends_with(b"\n") { return Ok(Line::Full); }
+    if read <= cap { return Ok(Line::Partial); }
+    raw.clear();
+    let mut skipped = read as u64;
+    loop {
+        let buf = rd.fill_buf()?;
+        if buf.is_empty() { return Ok(Line::Partial); }
+        let (used, done) = match buf.iter().position(|b| *b == b'\n') { Some(i) => (i + 1, true), None => (buf.len(), false) };
+        rd.consume(used);
+        skipped += used as u64;
+        if done { return Ok(Line::Skipped(skipped)); }
+    }
+}
+
 /// Devolve quantas linhas ilegíveis a leitura pulou.
 #[allow(clippy::too_many_arguments)]
 fn ingest(tx: &Transaction, path: &str, found: &Found, ino: i64, old: Option<&Known>, prefixes: &[String],
@@ -391,21 +431,47 @@ fn ingest(tx: &Transaction, path: &str, found: &Found, ino: i64, old: Option<&Kn
             None => report("busca.filtro_ilegivel", format!("{}/{}", found.project, found.sid)),
         }
     }
+    // Rollout transferido: só os turnos depois da fronteira, sem os importados, com os ids do composto.
+    let transferred = match &found.transfer {
+        None => None,
+        Some((record, home)) => {
+            transfer::verify_boundary(record, Path::new(path), home)?;
+            let invalid = || std::io::Error::new(std::io::ErrorKind::InvalidData, "transferência sem fronteira legível");
+            let boundary = &record["boundary"];
+            let start = boundary["min_offset"].as_i64().ok_or_else(invalid)?;
+            let imported: std::collections::HashSet<&str> = boundary["imported_item_ids"].as_array().ok_or_else(invalid)?
+                .iter().filter_map(Value::as_str).collect();
+            st.offset = st.offset.max(start);
+            Some((record["id"].as_str().ok_or_else(invalid)?, imported))
+        }
+    };
     let mut rd = BufReader::new(file);
     rd.seek(SeekFrom::Start(st.offset as u64))?;
     let mut insert = tx.prepare_cached("INSERT INTO msg(file_id, event_id, role, ts, text) VALUES (?,?,?,?,?)")?;
     let mut exists = tx.prepare_cached("SELECT 1 FROM msg WHERE file_id=? AND event_id=?")?;
     let mut raw = Vec::new();
     loop {
-        raw.clear();
-        if rd.read_until(b'\n', &mut raw)? == 0 || !raw.ends_with(b"\n") {
-            break;   // linha ainda sendo escrita: entra na próxima passada
+        match next_line(&mut rd, &mut raw, HUGE_LINE_BYTES)? {
+            Line::Full => {}
+            Line::Partial => break,   // linha ainda sendo escrita: entra na próxima passada
+            Line::Skipped(len) => { st.offset += len as i64; st.lines += 1; continue; }
+        }
+        if let Some((_, imported)) = &transferred {
+            let row: Value = serde_json::from_slice(&raw).unwrap_or(Value::Null);
+            if [&row["id"], &row["payload"]["id"]].into_iter().filter_map(Value::as_str).any(|id| imported.contains(id)) {
+                st.offset += raw.len() as i64;
+                st.lines += 1;
+                continue;
+            }
         }
         let before = st.illegible;
-        let msgs = match agent {
+        let mut msgs = match agent {
             Some(provider) => absorb_agent_line(&mut st, &raw, provider, prefixes),
             None => absorb_line(&mut st, &raw, prefixes),
         };
+        if let Some((id, _)) = &transferred {
+            for msg in &mut msgs { msg.0 = format!("transfer:{id}:codex:{}", msg.0); }
+        }
         if before == 0 && st.illegible == 1 {
             // Parser que regrediu indexaria a sessão como vazia e a busca diria "nada".
             tracing::warn!(path, byte = st.offset - raw.len() as i64, "busca: linha ilegível; pulando");
@@ -463,5 +529,43 @@ mod tests {
         assert_eq!((size, offset, msgs), (found.stat.size, now.len() as i64, 2));
         let known: (i64, i64, i64) = conn.query_row("SELECT size, mtime_ns, ino FROM files", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap();
         assert!(!unchanged(known, &Stat::of(&now)), "a passada seguinte relê o arquivo");
+    }
+
+    #[test]
+    fn a_huge_line_is_skipped_without_being_kept() {
+        // Linha acima do teto: o resto é descartado sem guardar e o offset passa dela; sem o `\n` final
+        // ela ainda está sendo escrita e espera a próxima passada.
+        let mut rd = std::io::Cursor::new(b"0123456789abcdef\n{\"ok\":1}\n0123456789".to_vec());
+        let mut raw = Vec::new();
+        assert!(matches!(next_line(&mut rd, &mut raw, 4).unwrap(), Line::Skipped(17)));
+        assert!(raw.capacity() <= 64, "o resto da linha não foi guardado");
+        assert!(matches!(next_line(&mut rd, &mut raw, 4).unwrap(), Line::Skipped(9)));
+        assert!(matches!(next_line(&mut rd, &mut raw, 40).unwrap(), Line::Partial));
+        let mut rd = std::io::Cursor::new(b"{\"ok\":1}\n".to_vec());
+        assert!(matches!(next_line(&mut rd, &mut raw, 40).unwrap(), Line::Full));
+        assert_eq!(raw, b"{\"ok\":1}\n");
+        assert!(matches!(next_line(&mut rd, &mut raw, 40).unwrap(), Line::Partial));
+    }
+
+    #[test]
+    fn a_huge_line_without_a_break_advances_the_offset_and_the_next_line_enters() {
+        let dir = tempfile::tempdir().unwrap();
+        let projects = dir.path().join("acct/projects");
+        let file = projects.join("-home-u-proj/11111111-1111-1111-1111-111111111111.jsonl");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        let huge = format!("{}\n", serde_json::json!({"type": "user", "uuid": "u0", "cwd": "/home/u/proj",
+            "message": {"role": "user", "content": "x".repeat(HUGE_LINE_BYTES + 10)}}));
+        let small = format!("{}\n", serde_json::json!({"type": "user", "uuid": "u1", "cwd": "/home/u/proj",
+            "message": {"role": "user", "content": "agulha"}}));
+        std::fs::write(&file, format!("{huge}{small}")).unwrap();
+        let (found, _) = conversations(&[Account { config_dir: None, dir: dir.path().join("acct"), projects }]);
+        let (path, found) = found.iter().next().unwrap();
+        let mut conn = super::super::db::open(&dir.path().join("idx.sqlite3")).unwrap();
+        let tx = conn.transaction().unwrap();
+        ingest(&tx, path, found, found.stat.ino.unwrap_or(0), None, &internal_prefixes(), &|_| String::new(), &|_, _| {}).unwrap();
+        tx.commit().unwrap();
+        let (offset, lines, ids): (i64, i64, String) = conn.query_row(
+            "SELECT offset, lines, (SELECT group_concat(event_id) FROM msg) FROM files", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap();
+        assert_eq!((offset, lines, ids.as_str()), ((huge.len() + small.len()) as i64, 2, "u1"));
     }
 }

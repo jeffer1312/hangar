@@ -17,6 +17,7 @@ use crate::routes::{AppState, cors, gate, pass, route_failed};
 use crate::session_open::AgentProvider;
 use crate::session_open::archive::{Where, locate};
 use crate::session_write::{detail_body, json_response};
+use crate::speech::history::transfer_history as transfer;
 
 const DEFAULT_AROUND: usize = 3;
 const MAX_AROUND: f64 = 10.0;
@@ -96,11 +97,21 @@ fn excerpt(st: &AppState, p: &Params) -> Response {
     };
     let server_projects = env.claude_base.join("projects");
     let w = Where { home: &env.home, env: &env.base, server_projects: &server_projects, config_dirs: &config_dirs, live: &[] };
-    let jsonl = match locate(&w, &p.project, &p.session_id, p.config_dir.as_deref(), provider, p.codex_account.as_deref()) {
-        Ok((path, _)) => path,
+    let (jsonl, codex_home) = match locate(&w, &p.project, &p.session_id, p.config_dir.as_deref(), provider, p.codex_account.as_deref()) {
+        Ok(found) => found,
         Err(e) => return refused(e.status, e.code.unwrap_or("erro_path_invalido"), &e.msg, e.params),
     };
-    let msgs: Vec<ChatEvent> = match crate::archive_history::read_history(st, &jsonl, provider, None) {
+    // Rollout transferido do Claude: os ids do índice são os do histórico composto, como no Arquivo.
+    let composed = codex_home.as_deref().map_or(Ok(None), |home| {
+        transfer::archive_record(&env.home, home, &crate::locate::session_key(&jsonl.to_string_lossy()))
+            .and_then(|record| record.map(|r| transfer::archived_history(&r, &jsonl, home)).transpose())
+    });
+    let read = match composed {
+        Ok(Some(evs)) => Ok(evs),
+        Ok(None) => crate::archive_history::read_history(st, &jsonl, provider, None),
+        Err(e) => Err(e),
+    };
+    let msgs: Vec<ChatEvent> = match read {
         Ok(evs) => evs.into_iter().filter(crate::archive_history::is_message).collect(),
         // Sumiu depois de achado: o trecho não está mais nele.
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),

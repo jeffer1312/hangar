@@ -567,3 +567,34 @@ async fn history_and_image_answer_with_cors() {
     }
 }
 
+/// O rollout transferido entra no índice da busca só depois da fronteira, com os ids do histórico
+/// composto; o "ok" importado da origem fica fora (a parte Claude vem do transcript dela). O trecho
+/// achado abre no contexto pelo mesmo id.
+#[tokio::test]
+async fn transferred_rollout_is_indexed_after_the_boundary_with_the_composed_ids() {
+    let h = Harness::new().await;
+    let j = joined(&h);
+    let env = [("HOME", h.home.to_string_lossy().into_owned()), ("USERPROFILE", h.home.to_string_lossy().into_owned()),
+        ("CLAUDE_CONFIG_DIR", h.home.join(".claude-a").to_string_lossy().into_owned())];
+    let env = hangar_server::accounts::environment::AccountEnvironment::from_map(env.into_iter().map(|(k, v)| (k.to_owned(), v)).collect());
+    let index = hangar_server::search::Index::new(&h.home.join("idx-transfer"), Arc::new(|| Ok(Vec::new())),
+        Arc::new(|_, _| {}), Default::default()).with_agents(env);
+    index.update().unwrap();
+    let rollout = j.rollout.to_string_lossy().into_owned();
+    let found = |q: &str| index.search(&[q.to_owned()], 50).unwrap().unwrap().into_iter().filter(|r| r.path == rollout)
+        .map(|r| r.event_id).collect::<Vec<_>>();
+    let id = format!("transfer:{TRANSFER}:codex:{}", j.collision);
+    assert_eq!(found("novo"), [id.clone()]);
+    assert!(found("ok").is_empty(), "a linha importada não entra pelo rollout");
+    let project = h.home.join("transfer").to_string_lossy().replace('/', "-");
+    let (status, body) = h.get(&format!("/api/search/context?project={project}&session_id={THREAD}&event_id={}&around=0&provider=codex",
+        id.replace(':', "%3A"))).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body.as_array().unwrap().iter().map(|e| e["id"].clone()).collect::<Vec<_>>(), [json!(id)]);
+    // O turno novo depois de indexado: só a linha nova é lida.
+    std::fs::OpenOptions::new().append(true).open(&j.rollout).map(|mut f| std::io::Write::write_all(&mut f,
+        line(&codex_message("depois", "later", 3)).as_bytes())).unwrap().unwrap();
+    index.update().unwrap();
+    assert_eq!(found("depois").len(), 1);
+    assert!(found("depois")[0].starts_with(&format!("transfer:{TRANSFER}:codex:")));
+}

@@ -1343,3 +1343,25 @@ fn corruption_with_the_index_open_rebuilds_on_the_next_pass() {
     ids.sort();
     assert_eq!(ids, ["u1", "u2"]);
 }
+
+#[cfg(unix)]
+#[test]
+fn transcript_that_does_not_open_reaches_the_diary_once_per_fall() {
+    use std::os::unix::fs::PermissionsExt;
+    let env = Env::small(quiet());
+    let locked = env.write(SID, &[line("agulha trancada", "u1", "user")], false);
+    let mode = |m: u32| fs::set_permissions(&locked, fs::Permissions::from_mode(m)).unwrap();
+    mode(0o000);
+    if fs::File::open(&locked).is_ok() { mode(0o644); return; } // root lê mesmo assim
+    env.index.update().unwrap();
+    env.index.update().unwrap();
+    assert_eq!(env.reported("busca.indice_transcript_ilegivel"), 1, "a mesma queda não se repete a cada passada");
+    mode(0o644);
+    env.index.update().unwrap();
+    // Arquivo lido não volta a ser aberto: outra linha muda o stat.
+    append(&locked, line("mais", "u2", "user").as_bytes());
+    mode(0o000);
+    env.index.update().unwrap();
+    mode(0o644);
+    assert_eq!(env.reported("busca.indice_transcript_ilegivel"), 2, "voltou e caiu de novo: outra linha no diário");
+}
