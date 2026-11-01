@@ -1412,3 +1412,16 @@ fn corruption_wakes_the_producer_to_rebuild_without_a_new_write() {
     wait_for("índice refeito sem escrita nova", || env.index.ready()
         && Connection::open(env.index.path()).and_then(|c| c.query_row("SELECT count(*) FROM files", [], |r| r.get::<_, i64>(0))).is_ok_and(|n| n == 2));
 }
+
+#[test]
+fn rebuilds_in_a_row_stop_waking_the_producer_after_three_until_a_pass_works() {
+    let env = Env::small(quiet());
+    let (tx, rx) = std::sync::mpsc::channel();
+    *env.index.inner.wake.lock().unwrap() = Some(tx);
+    for _ in 0..5 { env.index.rebuild_after_corruption(); }
+    assert_eq!(rx.try_iter().count(), 3, "depois de 3 seguidas, só a passada por evento");
+    assert_eq!(env.reported("busca.indice_corrompido_seguido"), 1);
+    env.index.update().unwrap();
+    env.index.rebuild_after_corruption();
+    assert_eq!(rx.try_iter().count(), 1, "passada boa zera a contagem");
+}

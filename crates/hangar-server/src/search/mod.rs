@@ -161,7 +161,11 @@ struct Inner {
     agents: std::sync::OnceLock<AccountEnvironment>,
     /// Falhas já no diário, por (código, chave): só a entrada no estado de falha vai para lá.
     reported: Mutex<HashSet<(&'static str, String)>>,
+    /// Bancos descartados por corrupção desde a última passada boa.
+    rebuilds: std::sync::atomic::AtomicU32,
 }
+
+const MAX_REBUILDS: u32 = 3;
 
 impl Index {
     /// Não toca no disco: o banco abre com o produtor ou com a primeira passada.
@@ -171,6 +175,7 @@ impl Index {
             writer: Mutex::new(None), ready: AtomicBool::new(false), last_pass: Mutex::new(None),
             watch_ok: AtomicBool::new(false), started: AtomicBool::new(false), wake: Mutex::new(None),
             watched: Mutex::new(None), agents: std::sync::OnceLock::new(), reported: Mutex::new(HashSet::new()),
+            rebuilds: std::sync::atomic::AtomicU32::new(0),
         }) }
     }
 
@@ -264,8 +269,7 @@ impl Index {
                 self.inner.ready.store(false, Ordering::Release);
                 tracing::warn!(error = %e, "índice da busca corrompido durante a passada, reconstruindo");
                 match db::discard(&self.inner.path) {
-                    // Sem escrita nova nada chamaria a passada que refaz o índice.
-                    Ok(()) => self.wake_producer(watch::Wake::Changed),
+                    Ok(()) => self.rebuild_after_corruption(),
                     Err(gone) => self.report_once("busca.indice_nao_apagado", "", || gone.to_string()),
                 }
             }
@@ -273,6 +277,8 @@ impl Index {
             return Err(e);
         }
         self.recovered("busca.ingestao_falhou", "");
+        self.inner.rebuilds.store(0, Ordering::Release);
+        self.recovered("busca.indice_corrompido_seguido", "");
         if !self.ready() {
             conn.execute("INSERT OR REPLACE INTO meta(k, v) VALUES ('built', ?)", [now_text()])?;
             self.inner.ready.store(true, Ordering::Release);
@@ -285,6 +291,17 @@ impl Index {
             tracing::debug!(secs = spent.as_secs_f64(), "índice da busca atualizado");
         }
         Ok(())
+    }
+
+    /// Sem escrita nova nada chamaria a passada que refaz o banco descartado: o produtor é acordado. Disco
+    /// que corrompe todo banco novo faria disso um laço; depois de 3 seguidas, só a passada por evento.
+    fn rebuild_after_corruption(&self) {
+        let n = self.inner.rebuilds.fetch_add(1, Ordering::AcqRel) + 1;
+        if n <= MAX_REBUILDS {
+            self.wake_producer(watch::Wake::Changed);
+        } else {
+            self.report_once("busca.indice_corrompido_seguido", "", || format!("{n} reconstruções seguidas do índice corrompido; sem nova tentativa automática"));
+        }
     }
 
     /// Abre (ou reconstrói) o banco e lê se ele já estava pronto.
