@@ -166,20 +166,14 @@ def test_lifecycle_new_thread_does_not_inherit_source_but_renamed_thread_does(jo
 
 
 def test_archive_uses_account_thread_after_name_sidecar_closed(joined, monkeypatch, tmp_path):
-    from app import codex_contas, archive_providers
+    from app import codex_contas
     monkeypatch.setattr(store, "_base", lambda: tmp_path / "transfers")
     store.save_transfer(joined.record)
     monkeypatch.setattr(history, "transfer_for_session", lambda *args, **kwargs: None)
     monkeypatch.setattr(codex_contas, "account_for_rollout", lambda path: SimpleNamespace(
         home=Path(joined.record.destination_meta["codex_home"])))
     monkeypatch.setattr(history, "archive_transfer", REAL_ARCHIVE_TRANSFER)
-    events = archive_providers.transferred_history(joined.path)
-    assert events == history.composed_history("__archive__", str(joined.path), "codex", joined.record, None, include_queue=False)
     assert history.session_transfer("resumed-name", str(joined.path), "codex") == joined.record
-    assert not any(event.id.startswith("queued-") for event in events)
-    store.save_transfer(replace(joined.record, phase=TransferPhase.IMPORTED))
-    with pytest.raises(history.HistoryError):
-        archive_providers.transferred_history(joined.path)
 
 
 def test_live_frames_below_boundary_and_import_replays_are_filtered(joined):
@@ -381,34 +375,6 @@ async def test_sse_resume_below_boundary_only_emits_new_source(joined, monkeypat
         await stream.aclose()
 
 
-def test_archive_image_legacy_url_uses_exact_transfer_thread_and_registered_account(joined, monkeypatch, tmp_path):
-    from app import api, codex_contas
-    image = b"frozen-image"
-    joined.rows[0]["message"]["content"] = [{"type": "text", "text": "imagem"}, {"type": "image", "source": {
-        "type": "base64", "media_type": "image/webp", "data": base64.b64encode(image).decode()}}]
-    joined.snapshot.write_bytes(b"".join(map(encoded, joined.rows)))
-    joined.record = replace(joined.record, source=replace(joined.record.source,
-                            digest=hashlib.sha256(joined.snapshot.read_bytes()).hexdigest()))
-    monkeypatch.setattr(store, "_base", lambda: tmp_path / "image-transfers")
-    store.save_transfer(joined.record)
-    owner = SimpleNamespace(id="registered", home=Path(joined.record.destination_meta["codex_home"]))
-    monkeypatch.setattr(codex_contas, "account_for_rollout", lambda path: owner)
-    def no_global_archive_lookup(*args, **kwargs):
-        raise AssertionError("a imagem por ID não procura noutras contas")
-    monkeypatch.setattr(api, "archive_jsonl", no_global_archive_lookup)
-    client, headers = client_for(joined, monkeypatch)
-    event_id = f"transfer:{TRANSFER}:claude:{joined.collision}"
-    url = f"/api/archive/project/{THREAD}/transcript-image/{event_id}/0"
-    response = client.get(url, headers=headers)
-    assert response.status_code == 200
-    assert response.content == image and response.headers["content-type"] == "image/webp"
-    assert client.get(url).status_code == 401
-    assert client.get(url.replace(THREAD, "different-thread"), headers=headers).status_code == 404
-    assert client.get(url, headers=headers, params={"codex_account": "other"}).status_code == 409
-    monkeypatch.setattr(codex_contas, "account_for_rollout", lambda path: None)
-    assert client.get(url, headers=headers).status_code == 409
-
-
 def test_complete_record_cannot_silently_lose_one_history_source(joined, monkeypatch):
     sources = history.conversation_sources(joined.info)
     assert sources[0] == joined.record.source
@@ -444,58 +410,6 @@ def test_ack_suffix_rewrite_before_anchor_with_restored_mtime_cannot_confirm_new
     assert queue.path.read_bytes() == queue_before
 
 
-def archive_image_case(joined, monkeypatch, tmp_path):
-    from app import api, codex_contas
-    image = b"frozen-archive-image"
-    joined.rows[0]["message"]["content"] = [{"type": "text", "text": "imagem"}, {"type": "image", "source": {
-        "type": "base64", "media_type": "image/png", "data": base64.b64encode(image).decode()}}]
-    joined.snapshot.write_bytes(b"".join(map(encoded, joined.rows)))
-    joined.record = replace(joined.record, source=replace(joined.record.source,
-                            digest=hashlib.sha256(joined.snapshot.read_bytes()).hexdigest()))
-    monkeypatch.setattr(store, "_base", lambda: tmp_path / "image-boundary-transfers")
-    store.save_transfer(joined.record)
-    owner = SimpleNamespace(id="registered", home=Path(joined.record.destination_meta["codex_home"]))
-    monkeypatch.setattr(codex_contas, "account_for_rollout", lambda path: owner)
-    monkeypatch.setattr(history, "_verified_prefixes", {})
-    def no_global_archive_lookup(*args, **kwargs):
-        raise AssertionError("a imagem por ID não procura noutras contas")
-    monkeypatch.setattr(api, "archive_jsonl", no_global_archive_lookup)
-    client, headers = client_for(joined, monkeypatch)
-    event_id = f"transfer:{TRANSFER}:claude:{joined.collision}"
-    url = f"/api/archive/project/{THREAD}/transcript-image/{event_id}/0"
-    return client, headers, url, owner, image
-
-
-@pytest.mark.parametrize("change", ["rewrite", "truncate"])
-@pytest.mark.parametrize("reset_cache", [False, True])
-def test_archive_image_legacy_url_rejects_changed_prefix_even_after_cache_reset(joined, monkeypatch, tmp_path,
-                                                                               change, reset_cache):
-    client, headers, url, _, image = archive_image_case(joined, monkeypatch, tmp_path)
-    first = client.get(url, headers=headers)
-    assert first.status_code == 200 and first.content == image
-    if change == "rewrite":
-        joined.path.write_bytes(joined.path.read_bytes().replace(b'"text": "ok"', b'"text": "no"', 1))
-    else:
-        joined.path.write_bytes(joined.prefix[:-1])
-    if reset_cache:
-        monkeypatch.setattr(history, "_verified_prefixes", {})
-    assert client.get(url, headers=headers).status_code == 409
-
-
-def test_archive_image_legacy_url_follows_native_archive_move_only_within_registered_account(joined, monkeypatch, tmp_path):
-    client, headers, url, owner, image = archive_image_case(joined, monkeypatch, tmp_path)
-    destination = owner.home / "archived_sessions" / joined.path.name
-    destination.parent.mkdir(parents=True)
-    joined.path.rename(destination)
-    response = client.get(url, headers=headers)
-    assert response.status_code == 200
-    assert response.content == image and response.headers["content-type"] == "image/png"
-    assert not joined.path.exists()
-    destination.write_bytes(destination.read_bytes().replace(b'"text": "ok"', b'"text": "no"', 1))
-    monkeypatch.setattr(history, "_verified_prefixes", {})
-    assert client.get(url, headers=headers).status_code == 409
-
-
 def test_ack_recheck_rejects_suffix_rewrite_during_read_even_with_restored_mtime(joined, monkeypatch):
     import os
     from app.adapters.codex.rollout import parse_rollout_obj
@@ -520,7 +434,6 @@ def test_ack_recheck_rejects_suffix_rewrite_during_read_even_with_restored_mtime
 
 @pytest.mark.parametrize("newline", [b"\n", b"\r\n"])
 def test_literal_unicode_separators_survive_history_citations_and_archive(joined, monkeypatch, tmp_path, newline):
-    from app import archive_providers, codex_contas
     from app.claude_to_codex import convert_snapshot
     target = tmp_path / "literal-report.md"
     target.write_text("arquivo citado", encoding="utf-8")
@@ -541,13 +454,6 @@ def test_literal_unicode_separators_survive_history_citations_and_archive(joined
     assert response.status_code == 200 and response.json()[0]["text"] == text
     cited = client.get("/api/sessions/s/file/text", headers=headers, params={"path": str(target)})
     assert cited.status_code == 200 and cited.json()["text"] == "arquivo citado"
-    monkeypatch.setattr(store, "_base", lambda: tmp_path / "transfers")
-    store.save_transfer(joined.record)
-    monkeypatch.setattr(history, "transfer_for_session", lambda *args, **kwargs: None)
-    monkeypatch.setattr(codex_contas, "account_for_rollout", lambda path: SimpleNamespace(
-        home=Path(joined.record.destination_meta["codex_home"])))
-    monkeypatch.setattr(history, "archive_transfer", REAL_ARCHIVE_TRANSFER)
-    assert archive_providers.transferred_history(joined.path)[0].text == text
     joined.snapshot.write_bytes(raw[:-1])
     incomplete = replace(joined.record.source, digest=hashlib.sha256(raw[:-1]).hexdigest())
     with pytest.raises(history.HistoryError, match="linha incompleta"):

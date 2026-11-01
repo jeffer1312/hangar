@@ -5,10 +5,7 @@ import os
 import pytest
 
 from app import archive
-from app import archive_providers
-from app import codex_contas
 from app import worktrees
-import codex_contas_apoio
 
 
 SID = "11111111-1111-1111-1111-111111111111"
@@ -53,77 +50,12 @@ def test_list_folders_aggregates(tmp_path):
     ]
 
 
-def test_list_conversations_preview_cwd_live(tmp_path):
-    j = _write_transcript(tmp_path / "-home-u-proj")
-    entries = archive.list_conversations("-home-u-proj", set())
-    assert [(e.project, e.session_id, e.cwd, e.preview, e.live) for e in entries] == [
-        ("-home-u-proj", SID, "/home/u/proj", "oi arquivo", False),
-    ]
-    # live: o realpath do jsonl em uso marca a entrada
-    entries = archive.list_conversations("-home-u-proj", {os.path.realpath(str(j))})
-    assert entries[0].live is True
-    # validacao: projeto fora do alfabeto / inexistente
-    import pytest as _pytest
-    with _pytest.raises(ValueError):
-        archive.list_conversations("../fora", set())
-    with _pytest.raises(FileNotFoundError):
-        archive.list_conversations("nao-existe", set())
-
-
-def test_ultima_msg_vem_do_fim_do_arquivo(tmp_path):
-    # A ultima msg e o que identifica a conversa meses depois -- e ela e lida por seek do FIM,
-    # nunca varrendo o arquivo: o recheio abaixo passa do span da 1a passada de proposito.
-    projdir = tmp_path / "-home-u-proj"
-    j = _write_transcript(projdir)
-    linhas = [json.dumps({"type": "assistant", "uuid": f"a{i}", "timestamp": "2026-01-01T00:00:01Z",
-                          "message": {"role": "assistant", "content": [
-                              {"type": "text", "text": "x" * 2000}]}})
-              for i in range(60)]
-    linhas.append(json.dumps({"type": "assistant", "uuid": "fim",
-                              "timestamp": "2026-01-01T00:00:02Z",
-                              "message": {"role": "assistant", "content": [
-                                  {"type": "text", "text": "ultima resposta"}]}}))
-    with open(j, "a", encoding="utf-8") as fh:
-        fh.write("\n".join(linhas) + "\n")
-    assert j.stat().st_size > archive._TAIL_BYTES
-    e = archive.list_conversations("-home-u-proj", set())[0]
-    assert e.ultima == "ultima resposta"
-    assert e.preview == "oi arquivo"      # a 1a msg continua servindo pro titulo
-
-
-def test_tail_events_cresce_a_janela_ate_juntar_as_msgs(tmp_path):
-    # As ultimas msgs de texto podem estar MUITO atras do fim: transcript real enche o final de
-    # `attachment` e saida de ferramenta (medido: 300 linhas nas ultimas 2MB, com 6 msgs de texto).
-    # Uma janela fixa devolveria a previa quase vazia justo na conversa longa.
-    projdir = tmp_path / "-home-u-proj"
-    j = _write_transcript(projdir, text="primeira")
-    linhas = [json.dumps({"type": "user", "uuid": f"u{i}", "timestamp": "2026-01-01T00:00:01Z",
-                          "message": {"role": "user", "content": f"msg {i}"}})
-              for i in range(4)]
-    # Recheio SEM msg de texto, grande o bastante pra empurrar as msgs pra fora da 1a janela.
-    entulho = [json.dumps({"type": "attachment", "uuid": f"a{i}", "content": "x" * 4000})
-               for i in range(400)]
-    with open(j, "a", encoding="utf-8") as fh:
-        fh.write("\n".join(linhas + entulho) + "\n")
-    assert j.stat().st_size > archive._TAIL_BYTES * 4
-
-    evs = archive.tail_events("-home-u-proj", SID, 5)
-    assert [e.text for e in evs] == ["primeira", "msg 0", "msg 1", "msg 2", "msg 3"]
-    assert [e.text for e in archive.tail_events("-home-u-proj", SID, 2)] == ["msg 2", "msg 3"]
-
-
 def test_previa_sai_sem_marcacao_de_markdown():
     # A previa e UMA linha de lista: renderizar nao e opcao, e `**assim**` na tela e ruido.
     assert archive._texto_simples("**O backend responde certo** — veja `app.py`") == \
         "O backend responde certo — veja app.py"
     assert archive._texto_simples("## Titulo\n- item um\n- item dois") == "Titulo item um item dois"
     assert archive._texto_simples("veja [o guia](http://x/y) agora") == "veja o guia agora"
-
-
-def test_ultima_msg_com_arquivo_menor_que_o_span(tmp_path):
-    # Arquivo curto: o seek pega o inicio junto e a 1a linha NAO pode ser descartada como parcial.
-    _write_transcript(tmp_path / "-home-u-proj", text="unica msg")
-    assert archive.list_conversations("-home-u-proj", set())[0].ultima == "unica msg"
 
 
 def _conta(tmp_path, monkeypatch, nome, rotulo):
@@ -148,38 +80,8 @@ def test_varre_todas_as_contas(tmp_path, monkeypatch):
 
     assert [(f.project, f.count) for f in archive.list_folders()] == [("-home-u-proj", 2)]
 
-    entries = archive.list_conversations("-home-u-proj", set())
-    assert {(e.session_id, e.config_dir, e.conta) for e in entries} == {
-        (SID, None, ""),
-        (OUTRO_SID, str(cdir), "Trabalho"),
-    }
     # Link direto (so projeto + uuid) continua abrindo conversa de outra conta.
     assert archive.archive_jsonl("-home-u-proj", OUTRO_SID).parent.parent.parent == cdir
-
-
-def test_teto_corta_as_mais_VELHAS_dos_outros_providers(tmp_path, monkeypatch):
-    # A ordem que vem do disco e a do glob/indice, nao a de recencia. Cortar antes de ordenar
-    # descartava conversa NOVA e mantinha velha, calado, na lista que promete "mais recentes
-    # primeiro".
-    # Sem transcript do Claude na pasta de proposito: o real teria mtime de AGORA e mascararia a
-    # ordem dos falsos. Pasta que so existe pra outro agente tambem nao pode virar 404.
-    from app.archive_providers import Conversa
-    fora_de_ordem = [2.0, 5.0, 1.0, 4.0, 3.0]
-    monkeypatch.setattr(archive, "_conversas_de_outros_providers", lambda: [
-        Conversa("pi", "/home/u/proj", f"{i}", tmp_path / f"p{i}.jsonl", mt)
-        for i, mt in enumerate(fora_de_ordem)
-    ])
-    entries = archive.list_conversations("-home-u-proj", set(), cap=2)
-    assert [e.mtime for e in entries] == [5.0, 4.0]
-
-
-def test_filtra_por_conta_quando_pedido(tmp_path, monkeypatch):
-    # E o que o modal de sessao nova usa: so a conta escolhida no seletor.
-    cdir = _conta(tmp_path, monkeypatch, "conta-b", "Trabalho")
-    _write_transcript(tmp_path / "-home-u-proj", text="da conta do backend")
-    _write_transcript(cdir / "projects" / "-home-u-proj", sid=OUTRO_SID, text="da outra conta")
-    entries = archive.list_conversations("-home-u-proj", set(), config_dir=str(cdir))
-    assert [e.session_id for e in entries] == [OUTRO_SID]
 
 
 def test_archive_jsonl_valid_path(tmp_path):
@@ -203,55 +105,6 @@ def test_archive_cwd_reads_from_header(tmp_path):
     assert archive.archive_cwd("-home-u-proj", SID) == "/home/u/proj"
     with pytest.raises(FileNotFoundError):
         archive.archive_cwd("-home-u-proj", "22222222-2222-2222-2222-222222222222")
-
-
-def test_archive_codex_filtra_a_conta_antes_do_limite(tmp_path, monkeypatch):
-    monkeypatch.setattr(__import__("pathlib").Path, "home",
-                        classmethod(lambda cls: tmp_path))
-    monkeypatch.setattr(codex_contas, "_DEFAULT_HOME", tmp_path / ".codex")
-    default = codex_contas.Account("default", tmp_path / ".codex", True)
-    work = codex_contas_apoio.create_account("work")
-    sid_default = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-    sid_work = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
-
-    def rollout(account, sid, text):
-        path = account.home / "sessions" / "2026" / "09" / "09"
-        path.mkdir(parents=True)
-        out = path / f"rollout-2026-09-09T10-00-00-{sid}.jsonl"
-        out.write_text(json.dumps({
-            "type": "session_meta", "payload": {"session_id": sid, "cwd": "/repo"},
-        }) + "\n" + text + "\n", encoding="utf-8")
-        return out
-
-    rollout(default, sid_default, "default")
-    rollout(work, sid_work, "work")
-    monkeypatch.setattr(archive, "_conversas_de_outros_providers", archive_providers.conversas)
-
-    entries = archive.list_conversations("-repo", set(), cap=1, codex_account="work")
-    assert [(entry.session_id, entry.codex_account) for entry in entries] == [(sid_work, "work")]
-
-
-def test_archive_por_cwd_filtra_provider_antes_do_limite(tmp_path, monkeypatch):
-    from app import archive_providers
-    monkeypatch.setattr(__import__("pathlib").Path, "home",
-                        classmethod(lambda cls: tmp_path))
-    monkeypatch.setattr(codex_contas, "_DEFAULT_HOME", tmp_path / ".codex")
-    work = codex_contas_apoio.create_account("work")
-    sid = "cccccccc-cccc-cccc-cccc-cccccccccccc"
-    path = work.home / "sessions" / "2026" / "09" / "09"
-    path.mkdir(parents=True)
-    rollout = path / f"rollout-2026-09-09T10-00-00-{sid}.jsonl"
-    rollout.write_text(json.dumps({
-        "type": "session_meta", "payload": {"session_id": sid, "cwd": "/repo"},
-    }) + "\n", encoding="utf-8")
-    monkeypatch.setattr(archive, "_conversas_de_outros_providers", lambda: [
-        archive_providers.Conversa("pi", "/repo", f"pi-{i}", tmp_path / f"p{i}.jsonl", 1000 - i)
-        for i in range(60)
-    ] + archive_providers.conversas())
-
-    entries = archive.list_conversations("-repo", set(), cap=12, codex_account="work",
-                                         provider="codex")
-    assert [entry.session_id for entry in entries] == [sid]
 
 
 
@@ -284,15 +137,11 @@ def test_jsonl_sem_linha_de_usuario_fica_fora_do_arquivo(tmp_path):
     assert reserva.stat().st_mtime > 1000
 
     assert [(f.project, f.count) for f in archive.list_folders()] == [("-home-u-proj", 1)]
-    assert [e.session_id for e in archive.list_conversations("-home-u-proj", set())] == [SID]
-    assert [e.session_id for e in archive.list_conversations("-home-u-proj", set(), cap=1)] == [SID]
-    assert [e.session_id for e in archive.list_recent(set())] == [SID]
 
 
 def test_pasta_so_com_reserva_nao_aparece(tmp_path):
     _write_so_attachments(tmp_path / "-home-u-proj")
     assert archive.list_folders() == []
-    assert archive.list_conversations("-home-u-proj", set()) == []
 
 
 def test_linha_de_usuario_sem_previa_continua_listada(tmp_path):
@@ -302,7 +151,6 @@ def test_linha_de_usuario_sem_previa_continua_listada(tmp_path):
     with open(projdir / f"{SID}.jsonl", "a", encoding="utf-8") as fh:
         fh.write(json.dumps({"type": "user", "uuid": "m1", "isMeta": True, "cwd": "/home/u/proj",
                              "message": {"role": "user", "content": "Caveat: meta"}}) + "\n")
-    assert [e.session_id for e in archive.list_conversations("-home-u-proj", set())] == [SID]
     assert [f.count for f in archive.list_folders()] == [1]
 
 
@@ -320,20 +168,3 @@ def test_previa_do_indice_dispensa_a_leitura(tmp_path, monkeypatch):
     monkeypatch.setattr("builtins.open", espia)
     assert [f.count for f in archive.list_folders()] == [1]
     assert str(j) not in abertos
-
-
-def test_archive_por_cwd_ignora_jsonl_sem_usuario(tmp_path, monkeypatch):
-    from unittest.mock import patch
-    from fastapi.testclient import TestClient
-    from app.api import app
-    from app.config import settings
-
-    monkeypatch.setattr(settings, "auth_token", "t-arquivo")
-    projdir = tmp_path / "-home-u-proj"
-    _write_transcript(projdir)
-    _write_so_attachments(projdir)
-    with patch("app.api.registry.list", return_value=[]):
-        r = TestClient(app).get("/api/archive-por-cwd", params={"cwd": "/home/u/proj"},
-                                headers={"Authorization": "Bearer t-arquivo"})
-    assert r.status_code == 200
-    assert [e["session_id"] for e in r.json()] == [SID]

@@ -24,7 +24,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
-from app.models import ChatEvent
 from app import codex_contas
 
 _log = logging.getLogger("hangar.archive_providers")
@@ -309,24 +308,3 @@ def jsonl_de(provider: str, session_id: str, codex_account: str | None = None) -
     if p is None:
         raise FileNotFoundError(session_id)
     return p
-
-
-def transferred_history(path: str | Path, limit: int | None = None) -> list[ChatEvent] | None:
-    from app.conversation_history import archive_transfer, composed_history
-    record = archive_transfer(path)
-    if record is None:
-        return None
-    return composed_history("__archive__", str(path), "codex", record, limit, include_queue=False)
-
-
-def parse_obj(provider: str, obj: dict) -> list[ChatEvent]:
-    if provider in ("pi", "omp"):
-        from app.adapters.pi import transcript as pi_transcript
-        return pi_transcript.parse_obj(obj)
-    if provider == "kimi":
-        from app.adapters.kimi import transcript as kimi_transcript
-        return kimi_transcript.parse_obj(obj)
-    if provider == "codex":
-        from app.adapters.codex import rollout as codex_rollout
-        return codex_rollout.parse_rollout_obj(obj)
-    raise ValueError("provider invalido")
