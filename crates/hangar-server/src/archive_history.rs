@@ -19,7 +19,7 @@ use regex::Regex;
 use serde_json::{Map, Value, json};
 
 use crate::{
-    routes::{AppState, gate, pass, route_failed},
+    routes::{AppState, cors, gate, pass, route_failed},
     session_open::{AgentProvider, OpenError, archive},
     speech::history::transfer_history as transfer,
     session_write::{detail_body, json_response},
@@ -197,12 +197,14 @@ pub async fn history(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
             Err(e) => { note(&worker, "arquivo.transcript_ilegivel", &at, e); Outcome::Unreadable }
         })
     }).await;
-    match done {
+    let mut response = match done {
         Ok(Ok(Outcome::Done(response))) => response,
         Ok(Ok(Outcome::Unreadable)) => route_failed(&st, req.headers(), "rust.archive_history_failed", "archive", "archive_history_io", "o transcript não pôde ser lido"),
         Ok(Err(error)) => reply(error),
         Err(_) => route_failed(&st, req.headers(), "rust.archive_history_failed", "archive", "archive_history_panic", "a leitura da conversa caiu no servidor"),
-    }
+    };
+    cors(req.headers(), response.headers_mut());
+    response
 }
 
 /// O histórico inteiro ou as últimas `tail` mensagens com texto.
@@ -428,10 +430,12 @@ pub async fn image(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
         headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
         Ok(Outcome::Done(response))
     }).await;
-    match done {
+    let mut response = match done {
         Ok(Ok(Outcome::Done(response))) => response,
         Ok(Ok(Outcome::Unreadable)) => route_failed(&st, req.headers(), "rust.archive_image_failed", "archive", "archive_image_io", "o transcript não pôde ser lido"),
         Ok(Err(error)) => reply(error),
         Err(_) => route_failed(&st, req.headers(), "rust.archive_image_failed", "archive", "archive_image_panic", "a leitura da imagem caiu no servidor"),
-    }
+    };
+    cors(req.headers(), response.headers_mut());
+    response
 }

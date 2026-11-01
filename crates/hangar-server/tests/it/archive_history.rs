@@ -555,3 +555,15 @@ async fn prv19_same_codex_sid_in_two_accounts_needs_the_account() {
     let (status, body) = h.get(&history("x", CODEX_A, "?provider=codex&codex_account=b")).await;
     assert_eq!(status, 200, "{body}");
 }
+
+/// O histórico e a imagem levam CORS como o resto das rotas do Rust: com `Origin`, `*`.
+#[tokio::test]
+async fn history_and_image_answer_with_cors() {
+    let h = Harness::new().await;
+    for path in [history(NORMAL.0, NORMAL.1, ""), image(LONG.0, LONG.1, IMAGE_UUID, "0", "")] {
+        let response = h.client.get(h.url(&path)).bearer_auth(OWNER).header("origin", "http://app.local").send().await.unwrap();
+        assert_eq!(response.status(), 200, "{path}");
+        assert_eq!(response.headers().get("access-control-allow-origin").map(|v| v.to_str().unwrap()), Some("*"), "{path}");
+    }
+}
+
