@@ -405,7 +405,7 @@ fn plain(text: &str) -> String {
     }).collect::<Vec<_>>().join(" ").replace("**", "").replace('`', "")
 }
 
-fn highlighted(text: String, terms: &[String]) -> StyledText {
+pub(crate) fn highlighted(text: String, terms: &[String]) -> StyledText {
     let whole = HighlightStyle { color: Some(theme::text()), background_color: Some(theme::accent().alpha(0.28)), ..Default::default() };
     // Pedaço de palavra: outra cor e sublinhado, para não parecer o mesmo acerto.
     let part = HighlightStyle { color: Some(theme::text()), background_color: Some(theme::warning().alpha(0.2)),
@@ -1455,7 +1455,8 @@ pub(crate) fn search_scope_block(line: Div, chips: Vec<AnyElement>) -> Div {
 
 /// Linha de estado da lista ("Buscando…", nada achado, falha).
 pub(crate) fn search_status_line(text: String, color: Hsla) -> Div {
-    div().px(px(10.)).py(px(14.)).flex().justify_center().text_size(px(13.)).text_color(color).whitespace_normal().child(text)
+    // Centrado pelo texto, não pelo flex: a frase maior que a lista quebra em vez de sair pelos dois lados.
+    div().w_full().px(px(10.)).py(px(14.)).text_center().text_size(px(13.)).text_color(color).whitespace_normal().child(text)
 }
 
 /// A caixa de uma conversa da lista; a escolhida ganha borda e fundo.
