@@ -1251,12 +1251,12 @@ fn fast_scan_returns_exactly_what_the_sequential_scan_did() {
             let fast = super::hits::scan_with(&env.index, &accounts, &terms, &live, limit, true);
             let slow = super::hits::scan_with(&env.index, &accounts, &terms, &live, limit, false);
             assert_eq!(fast, slow, "q={q:?} limit={limit}");
-            found += slow.len();
+            found += slow.0.len();
         }
     }
     assert!(found > 100, "as consultas acham trechos: {found}");
-    let ids = |q: &str| super::hits::scan_with(&env.index, &accounts, &super::hits::terms(q), &live, 50, true)
+    let ids = |q: &str| super::hits::scan_with(&env.index, &accounts, &super::hits::terms(q), &live, 50, true).0
         .into_iter().filter_map(|h| h.event_id).filter(|id| id.starts_with('e') && id.len() == 2).collect::<Vec<_>>();
-    assert_eq!((ids("configuracao"), ids("login"), ids("ação")), (vec!["e1".to_owned()], vec!["e2".to_owned(), "e3".to_owned()], vec!["e1".to_owned(), "e2".to_owned()]),
-        "o `\\u` do JSON, a junção do `<system-reminder>` e o acento");
+    assert_eq!((ids("configuracao"), ids("login"), ids("ação")), (vec!["e1".to_owned()], vec!["e2".to_owned(), "e3".to_owned()], vec!["e2".to_owned(), "e1".to_owned()]),
+        "o `\\u` do JSON, a junção do `<system-reminder>` e o acento (D28: \"AÇÃO\" inteira antes de \"Configuração\")");
 }

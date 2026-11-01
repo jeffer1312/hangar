@@ -103,6 +103,8 @@ pub struct Row {
     pub account: String,
     /// A conta Codex dona do rollout; só no Codex.
     pub codex_account: Option<String>,
+    /// 1ª mensagem do usuário do arquivo; vazia quando não há.
+    pub preview: String,
 }
 
 /// O que o Arquivo lê de um transcript sem abri-lo.
@@ -379,7 +381,14 @@ impl Index {
                 if matches(&c.row.text) { batch.push(c); }
             }
         }
-        Ok(Some(cap(batch, limit)))
+        let folded: Vec<String> = terms.iter().map(|t| fold(t)).collect();
+        Ok(Some(cap(batch, limit, &folded)))
+    }
+
+    /// Transcripts não internos do índice: as conversas que a busca considera.
+    pub fn conversations(&self) -> Result<usize, IndexError> {
+        let n: i64 = self.reader()?.query_row("SELECT COUNT(*) FROM files WHERE COALESCE(internal, 0) = 0", [], |r| r.get(0))?;
+        Ok(usize::try_from(n).unwrap_or(0))
     }
 
     /// path → (prévia, cwd) dos arquivos com cabeçalho completo; erro dá vazio (o Arquivo lê do disco).
@@ -460,7 +469,7 @@ pub fn server_accounts(config_dirs: &[String], server_dir: &Path) -> Vec<Account
 }
 
 const CANDIDATE_COLUMNS: &str = "m.id, m.file_id, f.mtime_ns, f.path, f.project, f.session_id, f.cwd, m.text, \
-    m.role, m.event_id, m.ts, f.provider, f.config_dir, f.account, f.codex_account";
+    m.role, m.event_id, m.ts, f.provider, f.config_dir, f.account, f.codex_account, f.preview";
 
 struct Candidate { id: i64, file_id: i64, mtime_ns: i64, row: Row }
 
@@ -469,18 +478,22 @@ impl Candidate {
         Ok(Self { id: r.get(0)?, file_id: r.get(1)?, mtime_ns: r.get(2)?, row: Row {
             path: r.get(3)?, project: r.get(4)?, session_id: r.get(5)?, cwd: r.get(6)?, text: r.get(7)?,
             role: r.get(8)?, event_id: r.get(9)?, ts: r.get(10)?, provider: r.get(11)?, config_dir: r.get(12)?,
-            account: r.get::<_, Option<String>>(13)?.unwrap_or_default(), codex_account: r.get(14)?,
+            account: r.get::<_, Option<String>>(13)?.unwrap_or_default(), codex_account: r.get(14)?, preview: r.get(15)?,
         } })
     }
 }
 
-/// O `ROW_NUMBER() OVER (PARTITION BY file_id ORDER BY id)` e a ordem final do Python, sobre o lote.
-fn cap(mut batch: Vec<Candidate>, limit: usize) -> Vec<Row> {
-    batch.sort_by_key(|c| c.id);
+/// Até 3 por arquivo, os de palavra inteira antes e depois a ordem do arquivo; arquivos com palavra
+/// inteira primeiro, cada grupo do mais novo para o mais velho (D28).
+fn cap(batch: Vec<Candidate>, limit: usize, folded: &[String]) -> Vec<Row> {
+    let mut batch: Vec<(bool, Candidate)> = batch.into_iter().map(|c| (hits::whole(&c.row.text, folded), c)).collect();
+    batch.sort_by_key(|(whole, c)| (!*whole, c.id));
     let mut seen: HashMap<i64, usize> = HashMap::new();
-    batch.retain(|c| { let n = seen.entry(c.file_id).or_default(); *n += 1; *n <= PER_FILE });
-    batch.sort_by(|a, b| b.mtime_ns.cmp(&a.mtime_ns).then(a.id.cmp(&b.id)));
-    batch.into_iter().take(limit).map(|c| c.row).collect()
+    batch.retain(|(_, c)| { let n = seen.entry(c.file_id).or_default(); *n += 1; *n <= PER_FILE });
+    let led: HashSet<i64> = batch.iter().filter(|(whole, _)| *whole).map(|(_, c)| c.file_id).collect();
+    batch.sort_by(|(wa, a), (wb, b)| led.contains(&b.file_id).cmp(&led.contains(&a.file_id))
+        .then(b.mtime_ns.cmp(&a.mtime_ns)).then(a.file_id.cmp(&b.file_id)).then(wb.cmp(wa)).then(a.id.cmp(&b.id)));
+    batch.into_iter().take(limit).map(|(_, c)| c.row).collect()
 }
 
 /// Minúsculas e sem marca combinante: o que o trigram com `remove_diacritics` ignora.

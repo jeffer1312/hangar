@@ -188,6 +188,32 @@ impl Scene {
     }
 }
 
+/// D28 mudou a ordem da captura: o esperado é ela reordenada pela regra nova (conversas com algum
+/// trecho de palavra inteira primeiro, cada grupo por recência; dentro da conversa, os inteiros antes),
+/// com `whole` lido da resposta. `name` e `preview` (D29) têm teste próprio e saem da comparação.
+/// `lead = false`: só a recência, estável (o Perguntar reordena por mtime a junção das buscas por termo).
+/// A captura tem os 3 primeiros trechos de cada conversa: um trecho fora dela só vale se for de palavra
+/// inteira, da mesma conversa, e a conversa mantém a contagem (ele tomou o lugar de um pedaço).
+pub(super) fn reranked(got: &Value, expected: &Value, lead: bool) -> (Value, Value) {
+    let strip = |h: &Value| { let mut h = h.clone(); let o = h.as_object_mut().unwrap(); o.remove("name"); o.remove("preview"); h };
+    let got: Vec<Value> = got.as_array().unwrap().iter().map(strip).collect();
+    let expected = expected.as_array().unwrap();
+    let mtime = |h: &Value| h["mtime"].as_f64().unwrap();
+    let conv = |h: &Value| (h["project"].clone(), h["session_id"].clone(), mtime(h).to_bits());
+    let counts = |hits: &[Value]| { let mut c: Vec<_> = hits.iter().map(conv).collect(); c.sort_by_key(|k| format!("{k:?}")); c };
+    assert_eq!(counts(&got), counts(expected), "conversas e trechos por conversa");
+    let mut want: Vec<Value> = got.iter().map(|g| match expected.iter()
+        // O Perguntar repete o evento com o trecho de cada termo: a linha também identifica.
+        .find(|e| e["session_id"] == g["session_id"] && e["event_id"] == g["event_id"] && e["line"] == g["line"]) {
+        Some(e) => { let mut e = e.clone(); e["whole"] = g["whole"].clone(); e }
+        None => { assert_eq!(g["whole"], true, "trecho fora da captura sem palavra inteira: {g}"); g.clone() }
+    }).collect();
+    let led: Vec<_> = want.iter().filter(|h| lead && h["whole"] == true).map(conv).collect();
+    want.sort_by(|a, b| led.contains(&conv(b)).cmp(&led.contains(&conv(a))).then(mtime(b).total_cmp(&mtime(a)))
+        .then(if lead { (b["whole"] == true).cmp(&(a["whole"] == true)) } else { std::cmp::Ordering::Equal }));
+    (Value::Array(got), Value::Array(want))
+}
+
 /// A captura só tem conversas do Claude: os trechos dos outros agentes (R5, mais velhos nas fixtures,
 /// então depois dos do Claude) ficam fora da comparação e têm teste próprio.
 async fn assert_like_the_capture(scene: &Scene) {
@@ -195,7 +221,8 @@ async fn assert_like_the_capture(scene: &Scene) {
     for (q, hits) in capture.as_object().unwrap() {
         let mut got = scene.search(q).await;
         got.as_array_mut().unwrap().retain(|h| h["provider"] == "claude");
-        assert_eq!(got, scene.expected(hits), "q={q:?}");
+        let (got, want) = reranked(&got, &scene.expected(hits), true);
+        assert_eq!(got, want, "q={q:?}");
     }
 }
 
@@ -260,7 +287,8 @@ async fn search_route_needs_every_word_in_one_message() {
     for ready in [true, false] {
         let scene = Scene::new(Opts { ready, ..Opts::default() }).await;
         for q in ["rust ok", "RUST   Ok rust"] {
-            assert_eq!(scene.search(q).await, json!([scene.with_account(&want)]), "q={q:?} ready={ready}");
+            let (got, want) = reranked(&scene.search(q).await, &json!([scene.with_account(&want)]), true);
+            assert_eq!(got, want, "q={q:?} ready={ready}");
         }
     }
 }
@@ -319,7 +347,8 @@ async fn search_route_falls_back_to_the_scan_when_the_index_fails() {
     for suffix in ["", "-wal", "-shm"] {
         let _ = std::fs::remove_file(format!("{}{suffix}", scene.index.path().display()));
     }
-    assert_eq!(scene.search("clippy").await, scene.expected(&capture()["clippy"]));
+    let (got, want) = reranked(&scene.search("clippy").await, &scene.expected(&capture()["clippy"]), true);
+    assert_eq!(got, want);
     let reports = scene.reports.lock().unwrap().clone();
     assert!(reports.iter().any(|(code, _)| code == "busca.indice_falhou"), "{reports:?}");
 }
@@ -398,4 +427,115 @@ async fn search_route_is_answered_by_rust_only_for_the_owner() {
     let _ = response.status();
     assert_eq!(scene.python.hits_to("/api/search"), 1);
     assert!(hangar_server::migration_status::rust_route(&axum::http::Method::GET, "/api/search"));
+}
+
+/// Conversa do Claude na conta `a`, só pedidos do usuário, com o mtime dado; devolve o caminho. O
+/// arquivo tem nome de UUID (a descoberta só lê esses); os ids dos eventos são `<sid>-<k>`.
+fn conversation(home: &Path, sid: &str, mtime: u64, texts: &[&str]) -> PathBuf {
+    let dir = home.join(".claude-a/projects/-w");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(home.join(".claude-a/.credentials.json"), "{}").unwrap();
+    let hex: String = sid.bytes().take(6).map(|b| format!("{b:02x}")).collect();
+    let path = dir.join(format!("00000000-0000-4000-8000-{hex:0>12}.jsonl"));
+    let lines: String = texts.iter().enumerate().map(|(k, text)| format!("{}\n", json!({"type": "user", "uuid": format!("{sid}-{k}"),
+        "cwd": "/w", "timestamp": "2026-10-01T10:00:00Z", "message": {"role": "user", "content": text}}))).collect();
+    std::fs::write(&path, lines).unwrap();
+    set_mtime(&path, mtime);
+    path
+}
+
+/// `(event_id, whole)` de cada trecho, na ordem da resposta.
+fn ranked(hits: &Value) -> Vec<(String, Value)> {
+    hits.as_array().unwrap().iter().map(|h| (h["event_id"].as_str().unwrap().to_owned(), h["whole"].clone())).collect()
+}
+
+async fn words_scene(ready: bool, files: &[(&str, u64, &[&str])]) -> Scene {
+    let scene = Scene::new(Opts { ready: false, live: None, fixtures: false, ..Opts::default() }).await;
+    for (sid, mtime, texts) in files { conversation(&scene.home, sid, *mtime, texts); }
+    if ready { scene.index.update().unwrap(); }
+    scene
+}
+
+fn owned(pairs: &[(&str, bool)]) -> Vec<(String, Value)> { pairs.iter().map(|(id, w)| ((*id).to_owned(), json!(w))).collect() }
+
+#[tokio::test]
+async fn search_route_puts_whole_word_conversations_first_in_both_paths() {
+    // D28: "tour" casa "estoura" por pedaço e "o tour" por palavra inteira; a conversa velha com a
+    // palavra inteira vem antes da nova só com pedaço, pelo índice e pela varredura.
+    for ready in [true, false] {
+        let scene = words_scene(ready, &[("nova", T0 + 50, &["estoura o balão"]), ("velha", T0 + 10, &["o tour foi bom"])]).await;
+        assert_eq!(ranked(&scene.search("tour").await), owned(&[("velha-0", true), ("nova-0", false)]), "ready={ready}");
+    }
+}
+
+#[tokio::test]
+async fn search_route_whole_word_ignores_accents_and_case() {
+    // D28: a dobra da busca vale para a palavra inteira ("ação" acha "Acao"; "reação" é pedaço).
+    for ready in [true, false] {
+        let scene = words_scene(ready, &[("pedaco", T0 + 50, &["uma reação"]), ("inteira", T0 + 10, &["a Acao terminou"])]).await;
+        assert_eq!(ranked(&scene.search("ação").await), owned(&[("inteira-0", true), ("pedaco-0", false)]), "ready={ready}");
+        assert_eq!(ranked(&scene.search("ACAO").await), owned(&[("inteira-0", true), ("pedaco-0", false)]), "ready={ready}");
+    }
+}
+
+#[tokio::test]
+async fn search_route_whole_needs_every_term_whole() {
+    // D28: com dois termos, só um inteiro não basta.
+    for ready in [true, false] {
+        let scene = words_scene(ready, &[("um", T0 + 50, &["estourou o balão"]), ("dois", T0 + 10, &["o tour e o balão"])]).await;
+        assert_eq!(ranked(&scene.search("tour balão").await), owned(&[("dois-0", true), ("um-0", false)]), "ready={ready}");
+    }
+}
+
+#[tokio::test]
+async fn search_route_whole_word_boundary_is_any_non_letter_non_digit() {
+    // D28: `-` e `_` são fronteira; dígito não é.
+    for ready in [true, false] {
+        let scene = words_scene(ready, &[("digito", T0 + 50, &["tour2 lento"]), ("hifen", T0 + 20, &["meu-tour_ok"])]).await;
+        assert_eq!(ranked(&scene.search("tour").await), owned(&[("hifen-0", true), ("digito-0", false)]), "ready={ready}");
+    }
+}
+
+#[tokio::test]
+async fn search_route_whole_word_hits_lead_inside_a_conversation() {
+    // D28: até 3 trechos por conversa, os de palavra inteira antes, mesmo depois de três pedaços.
+    for ready in [true, false] {
+        let scene = words_scene(ready, &[("c", T0 + 50, &["estoura 1", "estoura 2", "estoura 3", "o tour", "estoura 4"])]).await;
+        assert_eq!(ranked(&scene.search("tour").await), owned(&[("c-3", true), ("c-0", false), ("c-1", false)]), "ready={ready}");
+    }
+}
+
+#[tokio::test]
+async fn search_route_hit_carries_the_closed_name_and_the_first_user_message() {
+    // D29: `name` sai dos nomes de sessão fechada pelo caminho real; `preview` é o 1º pedido, do
+    // índice e da varredura; sem nome fica null.
+    for ready in [true, false] {
+        let scene = Scene::new(Opts { ready: false, live: None, fixtures: false, ..Opts::default() }).await;
+        let named = conversation(&scene.home, "nomeada", T0 + 50, &["primeiro pedido", "depois o tour"]);
+        conversation(&scene.home, "anonima", T0 + 10, &["outro começo", "o tour de novo"]);
+        let key = named.canonicalize().unwrap().to_string_lossy().into_owned();
+        std::fs::write(scene.home.join(".claude-a/closed-sessions.json"), json!({key: {"name": "minha-sessao"}}).to_string()).unwrap();
+        if ready { scene.index.update().unwrap(); }
+        let hits = scene.search("tour").await;
+        let got: Vec<Value> = hits.as_array().unwrap().iter().map(|h| json!([h["event_id"], h["name"], h["preview"], h["session_name"]])).collect();
+        assert_eq!(got, [json!(["nomeada-1", "minha-sessao", "primeiro pedido", null]), json!(["anonima-1", null, "outro começo", null])],
+            "ready={ready}");
+    }
+}
+
+#[tokio::test]
+async fn search_route_counts_the_conversations_it_considered() {
+    // `X-Hangar-Conversations`: arquivos não internos do índice; antes dele, os transcripts que a
+    // varredura leu. Exposto no CORS.
+    for ready in [true, false] {
+        let scene = words_scene(ready, &[("a1", T0 + 30, &["tour"]), ("a2", T0 + 20, &["nada aqui"]), ("a3", T0 + 10, &["outra"])]).await;
+        let response = client().get(format!("http://{}/api/search?q=tour", scene.address)).bearer_auth(OWNER)
+            .header("origin", "http://outra").send().await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()["x-hangar-conversations"], "3", "ready={ready}");
+        let exposed = response.headers()["access-control-expose-headers"].to_str().unwrap().to_owned();
+        assert!(exposed.split(',').any(|h| h.trim().eq_ignore_ascii_case("X-Hangar-Conversations")), "{exposed}");
+        assert!(exposed.split(',').any(|h| h.trim() == "ETag"), "{exposed}");
+        assert_eq!(response.json::<Value>().await.unwrap().as_array().unwrap().len(), 1);
+    }
 }

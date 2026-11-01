@@ -3,7 +3,7 @@
 //! fixtures da busca (cena de `search_route`), com as diferenças aprovadas da R2 nos trechos (F4, M8,
 //! N1). O `claude -p` é um `Runner` falso: guarda o prompt e a conta de cada chamada.
 use super::fake::{OWNER, client};
-use super::search_route::{FROM_COPY_MTIME, Opts, REWRITTEN, Scene};
+use super::search_route::{FROM_COPY_MTIME, Opts, REWRITTEN, Scene, reranked};
 use axum::http::StatusCode;
 use futures_util::future::BoxFuture;
 use hangar_server::claude_p::{Output, Runner};
@@ -84,7 +84,8 @@ async fn ask_route_answers_with_the_cli_like_the_capture() {
     let (status, body) = ask(&scene, "onde falei sobre o clippy?").await;
     assert_eq!(status.as_u16(), want["status"].as_u64().unwrap() as u16, "{body}");
     assert_eq!(body["answer"], want["body"]["answer"]);
-    assert_eq!(body["hits"], expected_hits(&scene, &want["body"]["hits"]));
+    let (got, want_hits) = reranked(&body["hits"], &expected_hits(&scene, &want["body"]["hits"]), false);
+    assert_eq!(got, want_hits);
     assert_eq!(cli.calls(), [(want["calls"][0]["input"].as_str().unwrap().to_owned(), None)]);
 }
 
@@ -99,7 +100,8 @@ async fn ask_route_searches_each_term_and_builds_the_prompt_like_the_capture() {
         let (status, body) = ask(&scene, q).await;
         assert_eq!(status, StatusCode::OK, "{q}: {body}");
         let want_hits = expected_hits(&scene, &cap["search_terms"][q]);
-        assert_eq!(body["hits"], want_hits, "q={q:?}");
+        let (got, want_hits) = reranked(&body["hits"], &want_hits, false);
+        assert_eq!(got, want_hits, "q={q:?}");
         if want_hits.as_array().unwrap().is_empty() {
             assert_eq!(body, cap["route"]["no_hits"]["body"], "q={q:?}");
             assert!(cli.calls().is_empty(), "q={q:?}");

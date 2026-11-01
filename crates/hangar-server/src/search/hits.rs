@@ -56,6 +56,12 @@ pub struct Hit {
     pub conta: String,
     pub config_dir: Option<String>,
     pub codex_account: Option<String>,
+    /// Todos os termos aparecem como palavra inteira na mensagem (D28).
+    pub whole: bool,
+    /// Nome da sessão ao ser fechada (D29).
+    pub name: Option<String>,
+    /// 1ª mensagem do usuário da conversa (D29).
+    pub preview: Option<String>,
 }
 
 /// Palavras da busca: minúsculas, cortadas em 200 caracteres, sem repetir, na ordem.
@@ -94,6 +100,38 @@ fn find(hay: &[char], needle: &str) -> Option<usize> {
     let needle: Vec<char> = needle.chars().collect();
     if needle.is_empty() { return Some(0); }
     hay.windows(needle.len()).position(|w| w == needle.as_slice())
+}
+
+/// Todos os termos dobrados aparecem em `text` como palavra inteira: com a dobra de `fold`, e
+/// fronteira no começo, no fim ou em caractere que não é letra nem dígito.
+pub(crate) fn whole(text: &str, folded: &[String]) -> bool { whole_in_folded(&fold(text), folded) }
+
+fn whole_in_folded(text: &str, folded: &[String]) -> bool {
+    let edge = |c: Option<char>| !c.is_some_and(char::is_alphanumeric);
+    folded.iter().all(|t| {
+        if t.is_empty() { return true; }
+        let mut from = 0;
+        while let Some(at) = text[from..].find(t.as_str()).map(|k| from + k) {
+            if edge(text[..at].chars().next_back()) && edge(text[at + t.len()..].chars().next()) { return true; }
+            from = at + text[at..].chars().next().map_or(1, char::len_utf8);
+        }
+        false
+    })
+}
+
+/// D28: conversas com algum trecho de palavra inteira primeiro, cada grupo da mais nova para a mais
+/// velha; dentro da conversa os inteiros antes, na ordem em que vieram. Corta em `limit`.
+fn order(mut hits: Vec<Hit>, limit: usize) -> Vec<Hit> {
+    fn conv(h: &Hit) -> (&str, &str, u64) { (&h.project, &h.session_id, h.mtime.to_bits()) }
+    let led: HashSet<(String, String, u64)> = hits.iter().filter(|h| h.whole)
+        .map(|h| { let (p, s, m) = conv(h); (p.to_owned(), s.to_owned(), m) }).collect();
+    let is_led = |h: &Hit| led.contains(&(h.project.clone(), h.session_id.clone(), h.mtime.to_bits()));
+    hits.sort_by(|a, b| is_led(b).cmp(&is_led(a))
+        .then(b.mtime.partial_cmp(&a.mtime).unwrap_or(std::cmp::Ordering::Equal))
+        .then_with(|| conv(a).cmp(&conv(b)))
+        .then(b.whole.cmp(&a.whole)));
+    hits.truncate(limit);
+    hits
 }
 
 /// Os termos dobrados, prontos para o `memmem`.
@@ -179,22 +217,36 @@ fn fold_json(raw: &[u8], out: &mut Vec<u8>) -> bool {
     true
 }
 
-/// Trechos de `q` em todas as contas Claude e nos outros agentes, conversa mais nova primeiro, até `limit`. `live`:
+/// Trechos de `q` em todas as contas Claude e nos outros agentes, na ordem de `order`, até `limit`. `live`:
 /// realpath do transcript → nome da sessão viva. Erro: o catálogo de contas não pôde ser lido.
 pub(crate) fn search(index: &Index, q: &str, live: &HashMap<String, String>, limit: usize) -> Result<Vec<Hit>, String> {
+    search_counted(index, q, live, limit).map(|(hits, _)| hits)
+}
+
+/// `search` e quantas conversas foram consideradas: os transcripts não internos do índice ou, antes
+/// dele, os que a varredura leu.
+pub(crate) fn search_counted(index: &Index, q: &str, live: &HashMap<String, String>, limit: usize)
+    -> Result<(Vec<Hit>, usize), String> {
     let terms = terms(q);
     if terms.is_empty() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), 0));
     }
-    let hits = match index.search(&terms, limit) {
-        Ok(Some(rows)) => from_rows(rows, &terms, live),
+    let indexed = index.search(&terms, limit)
+        .and_then(|rows| rows.map(|rows| Ok((rows, index.conversations()?))).transpose());
+    let (hits, considered) = match indexed {
+        Ok(Some((rows, considered))) => (from_rows(rows, &terms, live, &closed_names(index)), considered),
         Ok(None) => scan(index, &index.accounts()?, &terms, live, limit),
         Err(e) => {
             index.report("busca.indice_falhou", e.to_string());
             scan(index, &index.accounts()?, &terms, live, limit)
         }
     };
-    Ok(without_repeats(hits))
+    Ok((order(without_repeats(hits), limit), considered))
+}
+
+/// Nomes das sessões fechadas, pelo mesmo leitor do Arquivo; índice sem ambiente não tem nenhum.
+fn closed_names(index: &Index) -> HashMap<String, String> {
+    index.agents().map(|env| crate::archive_list::closed_names(&env.claude_base)).unwrap_or_default()
 }
 
 /// O mesmo trecho em duas pastas de projeto (sessão que mudou de pasta) fica uma vez, o mais novo.
@@ -217,41 +269,52 @@ fn by_mtime(hits: &mut [Hit]) {
 }
 
 struct Source<'a> { path: &'a str, project: &'a str, session_id: &'a str, cwd: Option<String>, mtime: f64,
-    provider: &'a str, config_dir: Option<String>, account: String, codex_account: Option<String> }
+    provider: &'a str, config_dir: Option<String>, account: String, codex_account: Option<String>, preview: &'a str }
 
-fn hit(src: &Source, live: &HashMap<String, String>, terms: &[String], (event_id, role, ts, text): ingest::Message) -> Hit {
-    let session_name = live.get(&crate::list::discover::real(src.path)).cloned();
+/// Sessões vivas e fechadas, pelo realpath do transcript.
+struct Names<'a> { live: &'a HashMap<String, String>, closed: &'a HashMap<String, String> }
+
+fn hit(src: &Source, names: &Names, terms: &[String], (event_id, role, ts, text): ingest::Message) -> Hit {
+    let real = crate::list::discover::real(src.path);
+    let session_name = names.live.get(&real).cloned();
+    let folded: Vec<String> = terms.iter().map(|t| fold(t)).collect();
     Hit {
         project: src.project.to_owned(), session_id: src.session_id.to_owned(), live: session_name.is_some(), session_name,
         cwd: src.cwd.clone(), line: snippet(&text, terms), mtime: src.mtime, role: Some(role.to_owned()),
         event_id: Some(event_id), ts, provider: src.provider.to_owned(), conta: src.account.clone(),
-        config_dir: src.config_dir.clone(), codex_account: src.codex_account.clone(),
+        config_dir: src.config_dir.clone(), codex_account: src.codex_account.clone(), whole: whole(&text, &folded),
+        name: names.closed.get(&real).cloned(), preview: Some(src.preview.to_owned()).filter(|p| !p.is_empty()),
     }
 }
 
-fn from_rows(rows: Vec<Row>, terms: &[String], live: &HashMap<String, String>) -> Vec<Hit> {
+fn from_rows(rows: Vec<Row>, terms: &[String], live: &HashMap<String, String>, closed: &HashMap<String, String>) -> Vec<Hit> {
+    let names = Names { live, closed };
     let mut mtimes: HashMap<String, Option<f64>> = HashMap::new();
     let mut hits = Vec::new();
     for row in rows {
         let Some(mtime) = *mtimes.entry(row.path.clone()).or_insert_with(|| mtime_of(&row.path)) else { continue };
         let src = Source { path: &row.path, project: &row.project, session_id: &row.session_id, cwd: row.cwd.clone(), mtime,
-            provider: &row.provider, config_dir: row.config_dir.clone(), account: row.account.clone(), codex_account: row.codex_account.clone() };
+            provider: &row.provider, config_dir: row.config_dir.clone(), account: row.account.clone(), codex_account: row.codex_account.clone(),
+            preview: &row.preview };
         let role: &'static str = if row.role == "user" { "user" } else { "assistant" };
-        hits.push(hit(&src, live, terms, (row.event_id, role, row.ts, row.text)));
+        hits.push(hit(&src, &names, terms, (row.event_id, role, row.ts, row.text)));
     }
     by_mtime(&mut hits);
     hits
 }
 
-/// A varredura de antes do índice pronto: arquivo mais novo primeiro, até 3 por arquivo e `limit` no total.
-fn scan(index: &Index, accounts: &[Account], terms: &[String], live: &HashMap<String, String>, limit: usize) -> Vec<Hit> {
+/// A varredura de antes do índice pronto: arquivo mais novo primeiro, até 3 por arquivo; para quando
+/// as conversas com palavra inteira já enchem `limit`. Devolve também quantos transcripts leu.
+fn scan(index: &Index, accounts: &[Account], terms: &[String], live: &HashMap<String, String>, limit: usize) -> (Vec<Hit>, usize) {
     scan_with(index, accounts, terms, live, limit, true)
 }
 
 /// `fast`: pré-filtro da linha crua e lotes de arquivos em paralelo; sem ele, um arquivo por vez com o
 /// parser em toda linha (a referência dos testes de equivalência).
 pub(super) fn scan_with(index: &Index, accounts: &[Account], terms: &[String], live: &HashMap<String, String>, limit: usize, fast: bool)
-    -> Vec<Hit> {
+    -> (Vec<Hit>, usize) {
+    let closed = closed_names(index);
+    let names = Names { live, closed: &closed };
     let agents = index.agents();
     let (files, _, _) = ingest::discover(accounts, agents, index);
     let mut order: Vec<_> = files.iter().filter(|(path, f)| f.stat.size <= MAX_FILE_BYTES || {
@@ -270,14 +333,17 @@ pub(super) fn scan_with(index: &Index, accounts: &[Account], terms: &[String], l
         (agent, scan_file(path, agent, found.cwd.clone(), &folded, longest, &prefixes, needles.as_ref()))
     };
     let mut hits = Vec::new();
+    // Trechos de conversas com palavra inteira: só eles param a leitura (D28).
+    let (mut led, mut considered) = (0, 0);
     for batch in order.chunks(if fast { SCAN_BATCH } else { 1 }) {
-        if hits.len() >= limit { break; }
+        if led >= limit { break; }
         let read: Vec<_> = match POOL.as_ref().filter(|_| fast) {
             Some(pool) => pool.install(|| batch.par_iter().map(read).collect()),
             None => batch.iter().map(read).collect(),
         };
         for (&(path, found), (agent, scanned)) in batch.iter().zip(read) {
-            if hits.len() >= limit { break; }
+            if led >= limit { break; }
+            if scanned.is_ok() { considered += 1; }
             let scanned = match scanned {
                 Ok(Some(scanned)) => scanned,
                 Ok(None) => continue,
@@ -291,16 +357,19 @@ pub(super) fn scan_with(index: &Index, accounts: &[Account], terms: &[String], l
                 _ => found.account.clone(),
             };
             let src = Source { path, project: &found.project, session_id: &found.sid, cwd: scanned.cwd, mtime,
-                provider: found.provider, config_dir: found.config_dir.clone(), account, codex_account: found.codex_account.clone() };
-            let room = limit - hits.len();
-            hits.extend(scanned.messages.into_iter().take(room).map(|m| hit(&src, live, terms, m)));
+                provider: found.provider, config_dir: found.config_dir.clone(), account, codex_account: found.codex_account.clone(),
+                preview: &scanned.preview };
+            let new: Vec<Hit> = scanned.messages.into_iter().map(|m| hit(&src, &names, terms, m)).collect();
+            if new.iter().any(|h| h.whole) { led += new.len(); }
+            hits.extend(new);
         }
     }
     by_mtime(&mut hits);
-    hits
+    (hits, considered)
 }
 
-struct Scanned { messages: Vec<ingest::Message>, cwd: Option<String>, model: Option<String> }
+/// `messages`: os de palavra inteira antes, até 3. `preview`: a do cabeçalho, como o índice guarda.
+struct Scanned { messages: Vec<ingest::Message>, cwd: Option<String>, model: Option<String>, preview: String }
 
 /// Mensagens do arquivo com todos os termos; `None` = conversa interna do Hangar ou sem achado.
 /// `agent`: outro agente, lido pelo parser dele, com o `cwd` da descoberta. `needles`: arquivo sem
@@ -320,7 +389,9 @@ fn scan_file(path: &str, agent: Option<AgentProvider>, cwd: Option<String>, term
         rd.seek(SeekFrom::Start(0))?;
     }
     let mut st = ingest::FileState { cwd, ..Default::default() };
+    // Os de palavra inteira e, enquanto eles não enchem o teto, os de pedaço (D28).
     let mut messages: Vec<ingest::Message> = Vec::new();
+    let mut pieces: Vec<ingest::Message> = Vec::new();
     let mut held = HashSet::new();
     let mut matched_lines = 0;
     let mut raw = Vec::new();
@@ -340,17 +411,21 @@ fn scan_file(path: &str, agent: Option<AgentProvider>, cwd: Option<String>, term
             if (msg.0.starts_with("held:") || msg.0.starts_with("delivery:")) && !held.insert(msg.0.clone()) { continue; }
             if open && messages.len() < PER_FILE {
                 let text = fold(&msg.3);
-                if terms.iter().all(|t| text.contains(t.as_str())) { messages.push(msg); }
+                if terms.iter().all(|t| text.contains(t.as_str())) {
+                    if whole_in_folded(&text, terms) { messages.push(msg); } else if pieces.len() < PER_FILE { pieces.push(msg); }
+                }
             }
         }
         let collected = messages.len() >= PER_FILE || matched_lines >= MAX_MATCHED_LINES;
         // O cwd é o do cabeçalho, como o índice guarda: a leitura segue até ele fechar.
-        if collected && (messages.is_empty() || (st.internal.is_some() && st.head_done)) { break; }
+        if collected && ((messages.is_empty() && pieces.is_empty()) || (st.internal.is_some() && st.head_done)) { break; }
     }
+    messages.extend(pieces);
+    messages.truncate(PER_FILE);
     if messages.is_empty() || st.internal == Some(true) {
         return Ok(None);
     }
-    Ok(Some(Scanned { messages, cwd: st.cwd, model: st.model }))
+    Ok(Some(Scanned { messages, cwd: st.cwd, model: st.model, preview: st.preview }))
 }
 
 #[cfg(test)]
@@ -387,6 +462,43 @@ mod tests {
         // `İ` vira dois caracteres em minúsculas: a posição achada passa do fim do texto original.
         let text = format!("{} meio {}", "İ".repeat(300), "x".repeat(10));
         assert_eq!(snippet(&text, &["meio".to_owned()]), "…meio xxxxxxxxxx");
+    }
+
+    fn w(text: &str, q: &str) -> bool { whole(text, &terms(q).iter().map(|t| fold(t)).collect::<Vec<_>>()) }
+
+    #[test]
+    fn whole_word_rule() {
+        // D28: dobra de `fold`; fronteira = começo, fim ou caractere que não é letra nem dígito.
+        assert!(!w("estoura", "tour"));
+        assert!(w("o tour", "tour"));
+        assert!(w("Tour.", "tour"));
+        assert!(w("Ação feita", "acao"));
+        assert!(w("acao", "AÇÃO"));
+        assert!(!w("reação", "ação"));
+        assert!(w("o tour estoura", "tour estoura"));
+        assert!(!w("o tour estourado", "tour estoura"), "só um termo inteiro");
+        assert!(w("meu-tour_ok", "tour"), "hífen e sublinhado são fronteira");
+        assert!(!w("tour2", "tour"), "dígito não é fronteira");
+        assert!(!w("2tour", "tour"));
+        assert!(w("estoura e tour", "tour"), "a ocorrência inteira depois de um pedaço");
+        assert!(w("aaa a", "a"));
+        assert!(!w("ação", "çã"), "dentro da palavra");
+    }
+
+    fn h(sid: &str, mtime: f64, whole: bool, id: &str) -> Hit {
+        Hit { project: "-p".into(), session_id: sid.into(), session_name: None, cwd: None, line: String::new(), mtime, live: false,
+            role: None, event_id: Some(id.into()), ts: None, provider: "claude".into(), conta: String::new(), config_dir: None,
+            codex_account: None, whole, name: None, preview: None }
+    }
+
+    #[test]
+    fn order_puts_whole_conversations_first_then_recency_and_caps() {
+        // D28: conversas com trecho inteiro por recência, depois as de pedaço; dentro, os inteiros antes.
+        let hits = vec![h("nova", 3.0, false, "n0"), h("meio", 2.0, false, "m0"), h("meio", 2.0, true, "m1"), h("velha", 1.0, true, "v0"),
+            h("velha", 1.0, false, "v1")];
+        let ids = |hits: Vec<Hit>| hits.into_iter().map(|h| h.event_id.unwrap()).collect::<Vec<_>>();
+        assert_eq!(ids(order(hits.clone(), 50)), ["m1", "m0", "v0", "v1", "n0"]);
+        assert_eq!(ids(order(hits, 3)), ["m1", "m0", "v0"]);
     }
 
     /// As linhas que cada parser lê, com os dois textos nos campos de mensagem.

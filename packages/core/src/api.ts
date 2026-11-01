@@ -2212,6 +2212,9 @@ export interface SearchHit {
   conta?: string;                      // conta da conversa ("claude:<pasta>")
   config_dir?: string | null;
   codex_account?: string | null;       // só no Codex
+  whole?: boolean;                     // todos os termos como palavra inteira (vem antes na lista)
+  name?: string | null;                // nome que a sessão tinha ao ser fechada
+  preview?: string | null;             // 1ª mensagem do usuário da conversa
 }
 
 // A mensagem do trecho e as vizinhas (suas e do assistente), pra ler sem sair da busca.

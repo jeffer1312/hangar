@@ -236,7 +236,7 @@ mod tests {
     fn hit(session_name: Option<&str>, project: &str, live: bool) -> Hit {
         Hit { project: project.into(), session_id: "abcdef0123456789".into(), session_name: session_name.map(Into::into), cwd: None,
             line: "trecho".into(), mtime: 1.0, live, role: None, event_id: None, ts: None, provider: "codex".into(), conta: String::new(),
-            config_dir: None, codex_account: None }
+            config_dir: None, codex_account: None, whole: false, name: None, preview: None }
     }
 
     #[test]

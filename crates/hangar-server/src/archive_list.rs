@@ -453,7 +453,7 @@ fn codex_rollouts(home: &Path, unread: &mut Vec<Unread>) -> Vec<PathBuf> {
 }
 
 /// `closed_names.names()`: caminho real do transcript → nome da sessão fechada; ilegível é vazio.
-fn closed_names(claude_base: &Path) -> HashMap<String, String> {
+pub(crate) fn closed_names(claude_base: &Path) -> HashMap<String, String> {
     let path = claude_base.join("closed-sessions.json");
     let raw = match std::fs::read(&path) {
         Ok(raw) => raw,
