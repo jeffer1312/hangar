@@ -1018,16 +1018,12 @@ impl Hangar {
 
         let tabs = settings::segments("search-mode", &[tr("search_tab_hits"), tr("search_tab_ask")], if mode == Mode::Ask { 1 } else { 0 }, 2,
             false, String::new(), |this, n, window, cx| this.search_set_mode(if n == 0 { Mode::Hits } else { Mode::Ask }, window, cx), cx);
-        let field = div().flex_1().min_w_0().h(px(40.)).px(px(12.)).flex().items_center().gap(px(10.)).rounded(px(10.))
-            .border_1().border_color(theme::border_strong()).bg(theme::inset())
-            .child(chrome::small_icon(IconName::Search, 16., theme::muted()))
-            .child(div().flex_1().min_w_0()
-                .capture_action(cx.listener(|this, _: &MoveUp, _, cx| { this.search_move(-1, cx); cx.stop_propagation(); }))
-                .capture_action(cx.listener(|this, _: &MoveDown, _, cx| { this.search_move(1, cx); cx.stop_propagation(); }))
-                .capture_action(cx.listener(|this, _: &IndentInline, _, cx| { this.search_next_conversation(cx); cx.stop_propagation(); }))
-                .capture_action(cx.listener(|this, _: &Escape, window, cx| { this.close_search(window, cx); cx.stop_propagation(); }))
-                .child(Input::new(&input).appearance(false).aria_label(web_with("lista_buscar", &[]))))
-            .child(chrome::kbd("Esc"));
+        let field = search_field(div().flex_1().min_w_0()
+            .capture_action(cx.listener(|this, _: &MoveUp, _, cx| { this.search_move(-1, cx); cx.stop_propagation(); }))
+            .capture_action(cx.listener(|this, _: &MoveDown, _, cx| { this.search_move(1, cx); cx.stop_propagation(); }))
+            .capture_action(cx.listener(|this, _: &IndentInline, _, cx| { this.search_next_conversation(cx); cx.stop_propagation(); }))
+            .capture_action(cx.listener(|this, _: &Escape, window, cx| { this.close_search(window, cx); cx.stop_propagation(); }))
+            .child(Input::new(&input).appearance(false).aria_label(web_with("lista_buscar", &[]))));
         let header = div().flex_shrink_0().px(px(16.)).pt(px(14.)).pb(px(8.)).flex().items_center().gap(px(10.)).child(field).child(tabs);
         let body = match mode {
             Mode::Hits => self.render_search_hits(active.as_ref(), cx),
@@ -1058,10 +1054,8 @@ impl Hangar {
 
     /// A linha de baixo da busca: onde ela procurou, quanto achou, e os filtros por agente e por estado.
     fn render_search_scope(&self, cx: &mut Context<Self>) -> AnyElement {
-        // Quebra em vez de passar da borda na paleta estreita.
-        let line = div().px(px(16.)).pb(px(8.)).flex().flex_wrap().items_center().gap(px(6.)).min_w_0().text_size(px(12.)).text_color(theme::faint());
         if self.search.mode == Mode::Ask {
-            return line.child(div().truncate().child(tr("search_ask_hint"))).into_any_element();
+            return scope_line().child(div().truncate().child(tr("search_ask_hint"))).into_any_element();
         }
         let scope = match self.search.total() {
             Some(n) => tr("search_scope_total").replace("{n}", &n.to_string()),
@@ -1069,31 +1063,15 @@ impl Hangar {
         };
         let hits = &self.search.hits;
         let all = groups(hits, &Filter::default(), usize::MAX);
-        let mut found: Vec<AnyElement> = Vec::new();
-        if !hits.is_empty() {
-            let count = |one: &str, many: &str, n: usize| if n == 1 { web_with(one, &[]) } else { web_with(many, &[("n", n.to_string())]) };
-            found.push(div().flex_shrink_0().font_weight(FontWeight::MEDIUM).text_color(theme::muted())
-                .child(format!("{} {}", count("busca_um_trecho", "busca_n_trechos", hits.len()), count("busca_uma_conversa", "busca_n_conversas", all.len())))
-                .into_any_element());
-            if terms(&self.search.query).len() > 1 { found.push(div().truncate().child(format!("· {}", tr("search_same_message"))).into_any_element()); }
-            let partial = all.iter().filter(|(_, ix)| !ix.iter().any(|i| hits[*i].is_whole())).count();
-            if partial > 0 {
-                found.push(div().flex_shrink_0().text_color(theme::warning_text())
-                    .child(format!("· {}", tr("search_partial_only").replace("{n}", &partial.to_string()))).into_any_element());
-            }
-        }
-        let line = line
-            .child(div().flex_shrink_0().text_color(theme::muted()).child(scope))
-            .child(div().min_w_0().truncate().child(format!("· {}", tr("search_scope_everywhere"))))
-            .child(div().flex_1())
-            .children(found);
+        let found = (!hits.is_empty()).then(|| ScopeFound { hits: hits.len(), conversations: all.len(),
+            many_terms: terms(&self.search.query).len() > 1,
+            partial: all.iter().filter(|(_, ix)| !ix.iter().any(|i| hits[*i].is_whole())).count() });
+        let line = search_scope_summary(scope, found);
         if hits.is_empty() { return line.into_any_element(); }
         // Filtros: cada agente que aparece, e aberta/arquivada.
         let filter = self.search.filter.clone();
         let chip = |id: String, on: bool, label: AnyElement, count: usize, pick: Filter| {
-            Button::new(SharedString::from(id)).outline().xsmall().selected(on)
-                .child(div().flex().items_center().gap(px(5.)).child(label)
-                    .child(div().text_color(theme::faint()).child(count.to_string())))
+            search_filter_chip(id, on, label, count)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.search.filter = if this.search.filter == pick { Filter::default() } else { pick.clone() };
                     this.search.active = 0;
@@ -1104,22 +1082,16 @@ impl Hangar {
         for agent in AGENTS {
             let count = hits.iter().filter(|h| h.agent() == agent).count();
             if count == 0 { continue; }
-            let (color, _) = theme::provider(agent);
-            let logo = chrome::provider_logo(agent, 12., if agent == "codex" { theme::text() } else { color }).map(|l| l.into_any_element());
-            let label = div().flex().items_center().gap(px(5.)).children(logo).child(agent_name(agent)).into_any_element();
             let pick = Filter { agent: Some(agent.to_owned()), live: None };
-            chips.push(chip(format!("search-filter-{agent}"), filter == pick, label, count, pick).into_any_element());
+            chips.push(chip(format!("search-filter-{agent}"), filter == pick, search_agent_label(agent), count, pick).into_any_element());
         }
         for live in [true, false] {
             let count = hits.iter().filter(|h| h.live == live).count();
             if count == 0 { continue; }
             let pick = Filter { agent: None, live: Some(live) };
-            let label = div().flex().items_center().gap(px(5.))
-                .when(live, |el| el.child(div().size(px(6.)).rounded_full().bg(theme::success())))
-                .child(tr(if live { "search_filter_live" } else { "search_filter_archived" })).into_any_element();
-            chips.push(chip(format!("search-filter-live-{live}"), filter == pick, label, count, pick).into_any_element());
+            chips.push(chip(format!("search-filter-live-{live}"), filter == pick, search_live_label(live), count, pick).into_any_element());
         }
-        div().flex().flex_col().child(line).child(div().px(px(16.)).pb(px(10.)).flex().flex_wrap().gap(px(6.)).children(chips)).into_any_element()
+        search_scope_block(line, chips).into_any_element()
     }
 
     /// As linhas da lista da esquerda, na ordem da tela.
@@ -1196,14 +1168,12 @@ impl Hangar {
     fn render_search_row(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
         let Some(row) = self.search.rows.get(index).cloned() else { return div().into_any_element() };
         let (active, words) = (self.search.drawn_active.clone(), self.search.drawn_words.clone());
-        let state_line = |text: String, color: Hsla| div().px(px(10.)).py(px(14.)).flex().justify_center().text_size(px(13.)).text_color(color)
-            .whitespace_normal().child(text).into_any_element();
         let content = match row {
             Row::ResumeError(error) => div().id("search-resume-error").px(px(10.)).py(px(8.)).rounded(px(8.)).bg(theme::danger().alpha(0.12))
                 .role(Role::Alert).text_size(px(13.)).text_color(theme::danger()).whitespace_normal().child(error).into_any_element(),
             Row::Section(key) => div().px(px(10.)).pt(px(6.)).pb(px(2.)).text_size(px(11.5)).font_weight(FontWeight::MEDIUM)
                 .text_color(theme::faint()).child(tr(key)).into_any_element(),
-            Row::Status(text, danger) => state_line(text, if danger { theme::danger() } else { theme::muted() }),
+            Row::Status(text, danger) => search_status_line(text, if danger { theme::danger() } else { theme::muted() }).into_any_element(),
             Row::Retry => div().flex().justify_center().pb(px(6.)).child(Button::new("search-retry").outline().small()
                 .label(web_with("busca_tentar_de_novo", &[])).on_click(cx.listener(|this, _, _, cx| this.search_retry(cx)))).into_any_element(),
             Row::Group(key, indexes) => {
@@ -1242,41 +1212,24 @@ impl Hangar {
         actions: bool, cx: &mut Context<Self>) -> AnyElement {
         let first = &hits[indexes[0]];
         let selected = indexes.iter().any(|i| active == Some(&entry(*i)));
-        let mut sub = vec![agent_name(first.agent()).to_owned()];
-        if self.multi_server() { sub.push(first.label.clone()); }
-        sub.push(first.place());
-        if first.mtime > 0. { sub.push(tr("search_last_activity").replace("{when}", &when(first.mtime))); }
+        let sub = search_group_sub(first.agent(), self.multi_server().then(|| first.label.clone()), first.place(), first.mtime);
         let pick = entry(indexes[0]);
-        let header = div().id(SharedString::from(format!("search-group-head-{id}"))).flex().flex_col().gap(px(2.)).cursor_pointer()
-            .on_click(cx.listener(move |this, _, _, cx| this.search_select(&pick, cx)))
-            .child(div().flex().items_center().gap(px(8.)).min_w_0()
-                .child(self.search_avatar(first, 22.))
-                .child(div().flex_1().min_w_0().truncate().text_size(px(13.5)).font_weight(FontWeight::SEMIBOLD).child(first.title()))
-                .child(state_badge(first.live))
-                .children(self.search_account(first).map(|(label, color)| account_pill(label, color))))
-            .child(div().pl(px(30.)).truncate().text_size(px(11.5)).text_color(theme::faint()).child(sub.join(" · ")));
-        let mut group = div().id(SharedString::from(format!("search-group-{id}"))).p(px(10.)).rounded(px(10.)).flex().flex_col().gap(px(4.))
-            .border_1().border_color(if selected { theme::border_strong() } else { transparent_black() })
-            .when(selected, |el| el.bg(theme::hover()))
-            .child(header);
+        let header = search_group_header(self.search_avatar(first, 22.), first.title(), first.live, self.search_account(first), sub)
+            .id(SharedString::from(format!("search-group-head-{id}"))).cursor_pointer()
+            .on_click(cx.listener(move |this, _, _, cx| this.search_select(&pick, cx)));
+        let mut group = search_group_frame(selected).id(SharedString::from(format!("search-group-{id}"))).child(header);
         for i in indexes {
             let e = entry(*i);
             let hit = &hits[*i];
             let on = active == Some(&e);
-            let who = if hit.role.as_deref() == Some("user") { tr("search_you") } else { agent_name(hit.agent()).to_owned() };
+            let who = search_who(hit.role.as_deref() == Some("user"), hit.agent());
             let line: String = plain(&hit.line).chars().take(600).collect();
             let resuming = self.search.resuming.as_deref() == Some(hit.conversation().as_str());
-            group = group.child(div().id(SharedString::from(format!("search-hit-{}-{}", matches!(e, Entry::Answer(_)), hit.key()))).ml(px(22.))
-                .px(px(8.)).py(px(6.)).rounded(px(8.)).flex().items_start().gap(px(10.)).cursor_pointer()
-                .when(on, |el| el.bg(theme::accent_dim())).when(!on, |el| el.hover(|el| el.bg(theme::hover())))
-                .role(Role::Button).aria_selected(on).aria_label(format!("{who}: {line}"))
-                .on_click(cx.listener(move |this, _, _, cx| this.search_select(&e, cx)))
-                .child(div().w(px(64.)).flex_shrink_0().flex().flex_col().text_size(px(11.)).text_color(theme::muted())
-                    .child(div().truncate().child(who))
-                    .child(div().text_size(px(10.5)).text_color(theme::faint()).child(when(hit.when()))))
-                .child(div().flex_1().min_w_0().flex().flex_col().gap(px(4.))
-                    .child(div().text_size(px(13.)).line_height(relative(1.45)).text_color(theme::text()).line_clamp(4).child(highlighted(line, words)))
-                    .when(resuming, |el| el.child(div().text_size(px(12.)).text_color(theme::muted()).child(tr("search_resuming"))))));
+            let aria = format!("{who}: {line}");
+            group = group.child(search_hit_line(on, who, hit.when(), line, words, resuming)
+                .id(SharedString::from(format!("search-hit-{}-{}", matches!(e, Entry::Answer(_)), hit.key()))).cursor_pointer()
+                .role(Role::Button).aria_selected(on).aria_label(aria)
+                .on_click(cx.listener(move |this, _, _, cx| this.search_select(&e, cx))));
         }
         if actions && selected { group = group.child(div().pl(px(30.)).pt(px(4.)).flex().gap(px(6.)).child(self.search_open_button(first, cx))); }
         group.into_any_element()
@@ -1286,8 +1239,7 @@ impl Hangar {
     fn search_open_button(&self, hit: &Hit, cx: &mut Context<Self>) -> Button {
         let resuming = self.search.resuming.as_deref() == Some(hit.conversation().as_str());
         let hit = hit.clone();
-        let label = tr(if hit.live_name().is_some() { "search_go" } else { "search_resume_short" });
-        Button::new(SharedString::from(format!("search-open-{}", hit.conversation()))).primary().small().label(label)
+        search_open_look(format!("search-open-{}", hit.conversation()), hit.live_name().is_some())
             .loading(resuming).disabled(self.search.resuming.is_some())
             .on_click(cx.listener(move |this, _, window, cx| this.search_open_hit(hit.clone(), window, cx)))
     }
@@ -1299,24 +1251,15 @@ impl Hangar {
         let Some(chat) = self.search.chat.as_ref() else { return center(tr("search_pick"), theme::faint()) };
         let hit = chat.hit.clone();
         let live = hit.live_name().is_some();
-        let mut sub = vec![agent_name(hit.agent()).to_owned()];
-        if let Some((account, _)) = self.search_account(&hit) { sub.push(tr("search_account").replace("{name}", &account)); }
-        sub.push(hit.place());
-        sub.push(if live { tr("search_badge_live") } else if hit.mtime > 0. { tr("search_archived_ago").replace("{ago}", &ago(hit.mtime)) } else { tr("search_badge_archived") });
-        let wide = self.search.wide;
-        let mut buttons = div().flex_shrink_0().flex().items_center().gap(px(6.));
+        let sub = search_chat_sub(hit.agent(), self.search_account(&hit).map(|(account, _)| account), hit.place(), live, hit.mtime);
+        let mut buttons = Vec::new();
         // Na paleta estreita a conversa ocupa o lugar da lista: o botão é o caminho de volta.
         if !live || self.search.narrow {
-            buttons = buttons.child(Button::new("search-whole").ghost().small()
-                .label(tr(if wide { "search_back_to_list" } else { "search_view_whole" }))
-                .on_click(cx.listener(|this, _, _, cx| { this.search.wide = !this.search.wide; cx.notify(); })));
+            buttons.push(search_whole_look("search-whole", self.search.wide)
+                .on_click(cx.listener(|this, _, _, cx| { this.search.wide = !this.search.wide; cx.notify(); })).into_any_element());
         }
-        let header = div().flex_shrink_0().px(px(14.)).py(px(10.)).flex().items_center().gap(px(10.)).border_b_1().border_color(theme::border())
-            .child(self.search_avatar(&hit, 28.))
-            .child(div().flex_1().min_w_0().flex().flex_col().gap(px(1.))
-                .child(div().truncate().text_size(px(14.)).font_weight(FontWeight::SEMIBOLD).child(hit.title()))
-                .child(div().truncate().text_size(px(11.5)).text_color(theme::faint()).child(sub.join(" · "))))
-            .child(buttons.child(self.search_open_button(&hit, cx)));
+        buttons.push(self.search_open_button(&hit, cx).into_any_element());
+        let header = search_chat_header(self.search_avatar(&hit, 28.), hit.title(), sub, buttons);
         let (loaded, error) = (chat.loaded, chat.error.clone());
         let body = match (loaded, error) {
             (false, _) => popup::skeleton("search-chat-loading", 8).p_4().into_any_element(),
@@ -1335,13 +1278,7 @@ impl Hangar {
                             view.update(cx, |this, cx| {
                                 let focus = this.search.chat.as_ref().and_then(|c| c.focus_row) == Some(i);
                                 let row = this.with_search_slot(cx, |this, cx| this.render_row(i, window, cx))?;
-                                // `w_full` nas duas caixas: sem largura definida, a linha media o texto sem quebra e passava da borda.
-                                Some(if !focus { row } else {
-                                    div().w_full().px(px(8.)).py(px(4.)).flex().flex_col().gap(px(4.))
-                                        .child(div().px(px(4.)).text_size(px(11.)).font_weight(FontWeight::MEDIUM).text_color(theme::accent_text()).child(tr("search_found_snippet")))
-                                        .child(div().w_full().rounded(px(10.)).border_1().border_color(theme::accent()).overflow_hidden().child(row))
-                                        .into_any_element()
-                                })
+                                Some(if !focus { row } else { search_found_frame(row).into_any_element() })
                             }).ok().flatten().unwrap_or_else(|| div().into_any_element())
                         }).size_full())
                         .child(div().absolute().inset_0().child(Scrollbar::vertical(&list_state).mode(ScrollbarMode::Always)))
@@ -1448,6 +1385,156 @@ fn account_pill(label: String, color: Hsla) -> Div {
         .text_size(px(10.)).font_weight(FontWeight::MEDIUM).text_color(theme::muted())
         .child(div().size(px(5.)).flex_shrink_0().rounded_full().bg(color))
         .child(div().min_w_0().truncate().child(label))
+}
+
+// Partes de vista da paleta que a miniatura da novidade (`crate::news::search_conversations`) também desenha.
+
+/// O campo da busca: lupa, o que se digita (`content`) e o Esc.
+pub(crate) fn search_field(content: impl IntoElement) -> Div {
+    div().flex_1().min_w_0().h(px(40.)).px(px(12.)).flex().items_center().gap(px(10.)).rounded(px(10.))
+        .border_1().border_color(theme::border_strong()).bg(theme::inset())
+        .child(chrome::small_icon(IconName::Search, 16., theme::muted()))
+        .child(content)
+        .child(chrome::kbd("Esc"))
+}
+
+/// Quebra em vez de passar da borda na paleta estreita.
+fn scope_line() -> Div {
+    div().px(px(16.)).pb(px(8.)).flex().flex_wrap().items_center().gap(px(6.)).min_w_0().text_size(px(12.)).text_color(theme::faint())
+}
+
+/// O que a busca achou, para a linha de escopo.
+pub(crate) struct ScopeFound { pub hits: usize, pub conversations: usize, pub many_terms: bool, pub partial: usize }
+
+/// A linha de escopo: onde a busca procurou e, com resultado, quanto achou.
+pub(crate) fn search_scope_summary(scope: String, found: Option<ScopeFound>) -> Div {
+    let mut parts: Vec<AnyElement> = Vec::new();
+    if let Some(found) = found {
+        let count = |one: &str, many: &str, n: usize| if n == 1 { web_with(one, &[]) } else { web_with(many, &[("n", n.to_string())]) };
+        parts.push(div().flex_shrink_0().font_weight(FontWeight::MEDIUM).text_color(theme::muted())
+            .child(format!("{} {}", count("busca_um_trecho", "busca_n_trechos", found.hits), count("busca_uma_conversa", "busca_n_conversas", found.conversations)))
+            .into_any_element());
+        if found.many_terms { parts.push(div().truncate().child(format!("· {}", tr("search_same_message"))).into_any_element()); }
+        if found.partial > 0 {
+            parts.push(div().flex_shrink_0().text_color(theme::warning_text())
+                .child(format!("· {}", tr("search_partial_only").replace("{n}", &found.partial.to_string()))).into_any_element());
+        }
+    }
+    scope_line()
+        .child(div().flex_shrink_0().text_color(theme::muted()).child(scope))
+        .child(div().min_w_0().truncate().child(format!("· {}", tr("search_scope_everywhere"))))
+        .child(div().flex_1())
+        .children(parts)
+}
+
+/// Um botão de filtro, sem a ação.
+pub(crate) fn search_filter_chip(id: String, on: bool, label: AnyElement, count: usize) -> Button {
+    Button::new(SharedString::from(id)).outline().xsmall().selected(on)
+        .child(div().flex().items_center().gap(px(5.)).child(label)
+            .child(div().text_color(theme::faint()).child(count.to_string())))
+}
+
+/// O rótulo do filtro de agente: a marca dele e o nome.
+pub(crate) fn search_agent_label(agent: &str) -> AnyElement {
+    let (color, _) = theme::provider(agent);
+    let logo = chrome::provider_logo(agent, 12., if agent == "codex" { theme::text() } else { color }).map(|l| l.into_any_element());
+    div().flex().items_center().gap(px(5.)).children(logo).child(agent_name(agent)).into_any_element()
+}
+
+/// O rótulo do filtro de aberta ou arquivada.
+pub(crate) fn search_live_label(live: bool) -> AnyElement {
+    div().flex().items_center().gap(px(5.))
+        .when(live, |el| el.child(div().size(px(6.)).rounded_full().bg(theme::success())))
+        .child(tr(if live { "search_filter_live" } else { "search_filter_archived" })).into_any_element()
+}
+
+/// A linha de escopo com os filtros embaixo.
+pub(crate) fn search_scope_block(line: Div, chips: Vec<AnyElement>) -> Div {
+    div().flex().flex_col().child(line).child(div().px(px(16.)).pb(px(10.)).flex().flex_wrap().gap(px(6.)).children(chips))
+}
+
+/// Linha de estado da lista ("Buscando…", nada achado, falha).
+pub(crate) fn search_status_line(text: String, color: Hsla) -> Div {
+    div().px(px(10.)).py(px(14.)).flex().justify_center().text_size(px(13.)).text_color(color).whitespace_normal().child(text)
+}
+
+/// A caixa de uma conversa da lista; a escolhida ganha borda e fundo.
+pub(crate) fn search_group_frame(selected: bool) -> Div {
+    div().p(px(10.)).rounded(px(10.)).flex().flex_col().gap(px(4.))
+        .border_1().border_color(if selected { theme::border_strong() } else { transparent_black() })
+        .when(selected, |el| el.bg(theme::hover()))
+}
+
+/// O cabeçalho da conversa: avatar, nome, aberta ou arquivada, conta e a linha de baixo.
+pub(crate) fn search_group_header(avatar: Div, title: String, live: bool, account: Option<(String, Hsla)>, sub: String) -> Div {
+    div().flex().flex_col().gap(px(2.))
+        .child(div().flex().items_center().gap(px(8.)).min_w_0()
+            .child(avatar)
+            .child(div().flex_1().min_w_0().truncate().text_size(px(13.5)).font_weight(FontWeight::SEMIBOLD).child(title))
+            .child(state_badge(live))
+            .children(account.map(|(label, color)| account_pill(label, color))))
+        .child(div().pl(px(30.)).truncate().text_size(px(11.5)).text_color(theme::faint()).child(sub))
+}
+
+/// "Claude · máquina · pasta · última atividade …"; a máquina só com várias.
+pub(crate) fn search_group_sub(agent: &str, machine: Option<String>, place: String, mtime: f64) -> String {
+    let mut sub = vec![agent_name(agent).to_owned()];
+    sub.extend(machine);
+    sub.push(place);
+    if mtime > 0. { sub.push(tr("search_last_activity").replace("{when}", &when(mtime))); }
+    sub.join(" · ")
+}
+
+/// Quem escreveu o trecho: "você" ou o agente.
+pub(crate) fn search_who(user: bool, agent: &str) -> String { if user { tr("search_you") } else { agent_name(agent).to_owned() } }
+
+/// Um trecho: quem e quando à esquerda, a mensagem com as palavras marcadas à direita.
+pub(crate) fn search_hit_line(on: bool, who: String, ts: f64, line: String, words: &[String], resuming: bool) -> Div {
+    div().ml(px(22.)).px(px(8.)).py(px(6.)).rounded(px(8.)).flex().items_start().gap(px(10.))
+        .when(on, |el| el.bg(theme::accent_dim())).when(!on, |el| el.hover(|el| el.bg(theme::hover())))
+        .child(div().w(px(64.)).flex_shrink_0().flex().flex_col().text_size(px(11.)).text_color(theme::muted())
+            .child(div().truncate().child(who))
+            .child(div().text_size(px(10.5)).text_color(theme::faint()).child(when(ts))))
+        .child(div().flex_1().min_w_0().flex().flex_col().gap(px(4.))
+            .child(div().text_size(px(13.)).line_height(relative(1.45)).text_color(theme::text()).line_clamp(4).child(highlighted(line, words)))
+            .when(resuming, |el| el.child(div().text_size(px(12.)).text_color(theme::muted()).child(tr("search_resuming")))))
+}
+
+/// "Ir para a conversa" (viva) ou "Retomar" (arquivada), sem a ação.
+pub(crate) fn search_open_look(id: String, live: bool) -> Button {
+    Button::new(SharedString::from(id)).primary().small().label(tr(if live { "search_go" } else { "search_resume_short" }))
+}
+
+/// "Ver inteira" / "Voltar à lista", sem a ação.
+fn search_whole_look(id: &'static str, wide: bool) -> Button {
+    Button::new(id).ghost().small().label(tr(if wide { "search_back_to_list" } else { "search_view_whole" }))
+}
+
+/// "Claude · conta X · pasta · aberta agora / arquivada há …" do cabeçalho da prévia.
+pub(crate) fn search_chat_sub(agent: &str, account: Option<String>, place: String, live: bool, mtime: f64) -> String {
+    let mut sub = vec![agent_name(agent).to_owned()];
+    if let Some(account) = account { sub.push(tr("search_account").replace("{name}", &account)); }
+    sub.push(place);
+    sub.push(if live { tr("search_badge_live") } else if mtime > 0. { tr("search_archived_ago").replace("{ago}", &ago(mtime)) } else { tr("search_badge_archived") });
+    sub.join(" · ")
+}
+
+/// O cabeçalho da prévia: avatar, nome, a linha de baixo e os botões.
+pub(crate) fn search_chat_header(avatar: Div, title: String, sub: String, buttons: Vec<AnyElement>) -> Div {
+    div().flex_shrink_0().px(px(14.)).py(px(10.)).flex().items_center().gap(px(10.)).border_b_1().border_color(theme::border())
+        .child(avatar)
+        .child(div().flex_1().min_w_0().flex().flex_col().gap(px(1.))
+            .child(div().truncate().text_size(px(14.)).font_weight(FontWeight::SEMIBOLD).child(title))
+            .child(div().truncate().text_size(px(11.5)).text_color(theme::faint()).child(sub)))
+        .child(div().flex_shrink_0().flex().items_center().gap(px(6.)).children(buttons))
+}
+
+/// A mensagem do trecho na prévia, com o contorno e o rótulo "trecho encontrado".
+pub(crate) fn search_found_frame(row: AnyElement) -> Div {
+    // `w_full` nas duas caixas: sem largura definida, a linha media o texto sem quebra e passava da borda.
+    div().w_full().px(px(8.)).py(px(4.)).flex().flex_col().gap(px(4.))
+        .child(div().px(px(4.)).text_size(px(11.)).font_weight(FontWeight::MEDIUM).text_color(theme::accent_text()).child(tr("search_found_snippet")))
+        .child(div().w_full().rounded(px(10.)).border_1().border_color(theme::accent()).overflow_hidden().child(row))
 }
 
 #[cfg(test)]

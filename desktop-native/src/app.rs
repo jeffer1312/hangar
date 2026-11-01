@@ -83,6 +83,9 @@ pub(crate) use rename_suggest::{Strip as RenameStrip, rename_strip};
 pub(crate) use vault_requests::{approve_body, approve_title, request_button, request_card, request_command, request_pair};
 pub(crate) use settings::{setting_row, settings_box};
 pub(crate) use accounts::{login_heading, target_row};
+pub(crate) use search::{ScopeFound, search_agent_label, search_chat_header, search_chat_sub, search_field, search_filter_chip, search_found_frame,
+    search_group_frame, search_group_header, search_group_sub, search_hit_line, search_live_label, search_open_look, search_scope_block,
+    search_scope_summary, search_status_line, search_who};
 pub(crate) use sidebar::{Sub as RowSub, group_header_look, menu_item_height, menu_item_look, menu_label, menu_list_look, menu_surface_look};
 mod shortcuts;
 mod shortcut_transfer;
@@ -6381,7 +6384,7 @@ fn worktree_label(session: &SessionInfo) -> Option<String> {
 
 /// Selo da conta do `chipDaConta` do web (lib/conta.ts): o nome é o sufixo da pasta, a pasta sem sufixo é a padrão,
 /// e a cor sai do nome da pasta, com as mesmas seis tintas. Motor (`chave:`) não tem selo.
-fn account_chip(conta: Option<&str>) -> Option<(String, Hsla)> {
+pub(crate) fn account_chip(conta: Option<&str>) -> Option<(String, Hsla)> {
     const TINTS: [u32; 6] = [0x80bbc3, 0xd3a781, 0x97c69d, 0xcd99b9, 0x9ba9d9, 0xccbf87];
     let conta = conta?;
     let harness = ["claude", "codex"].into_iter().find(|h| conta.starts_with(&format!("{h}:")))?;
