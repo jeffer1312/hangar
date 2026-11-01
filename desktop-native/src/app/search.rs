@@ -1,21 +1,35 @@
-//! "Buscar conversas" (Ctrl+K): paleta no meio da janela, na superfície de vidro dos popovers, com o que o web mostra no
-//! modo só-busca do `SessionSwitcherSheet.svelte` — busca de conteúdo em todas as conversas (vivas e arquivadas, `/api/search`),
-//! trecho com a mensagem em volta (`/api/search/context`) e o "Perguntar" (`/api/ask-history`) — mais as sessões vivas
-//! pelo nome, como a paleta do Zeron. Enter abre a sessão viva; a arquivada é retomada numa sessão nova
-//! (`/api/archive/…/resume`), porque o nativo não tem a vista de arquivo do web.
-//! Sessões e busca de conteúdo cobrem todas as máquinas próprias, como o web; cada trecho abre, mostra contexto e retoma na
-//! máquina de onde veio. O "Perguntar" segue só na ativa, como no web.
+//! "Buscar conversas" (Ctrl+K): paleta no meio da janela, na superfície de vidro dos popovers. Duas abas:
+//! - Trechos: busca de conteúdo em todas as conversas (vivas e arquivadas, `/api/search`), agrupada por conversa na lista da
+//!   esquerda, e a conversa inteira do trecho escolhido à direita, com o mesmo desenho do chat e rolada até ele. As sessões
+//!   vivas pelo nome entram no topo da lista, como a paleta do Zeron.
+//! - Perguntar (`/api/ask-history`): a resposta e só as conversas que ela cita.
+//!
+//! Enter abre a sessão viva; a arquivada é retomada numa sessão nova (`/api/archive/…/resume`). Sessões e busca de conteúdo
+//! cobrem todas as máquinas próprias, como o web; cada trecho abre e retoma na máquina de onde veio. O "Perguntar" segue só
+//! na ativa, como no web.
 use super::*;
 use super::device::Remote;
 use super::costs::web_with;
 use super::sidebar::Target;
+use super::tab_preview::ConversationSlot;
 use serde::Deserialize;
+use std::ops::Range;
 
 /// Espera entre a última tecla e a busca, como o web.
 const DEBOUNCE: Duration = Duration::from_millis(250);
 const SESSIONS_MAX: usize = 8;
 /// Com o índice FTS a busca responde em milissegundos; esperar mais só prende a linha numa máquina inalcançável.
 const MACHINE_WAIT: Duration = Duration::from_secs(8);
+/// Espera da prévia: percorrer a lista com as setas não lê a conversa de cada trecho do caminho.
+const PREVIEW_DELAY: Duration = Duration::from_millis(150);
+/// Trechos mostrados por conversa.
+const HITS_SHOWN: usize = 3;
+/// Total de conversas onde a máquina procurou; servidor antigo não manda.
+const TOTAL_HEADER: &str = "x-hangar-conversations";
+const LABEL_MAX: usize = 58;
+/// Mensagens lidas da sessão viva escolhida pelo nome, que não tem trecho para alcançar.
+const SESSION_TAIL: usize = 120;
+const AGENTS: [&str; 5] = ["claude", "codex", "pi", "kimi", "omp"];
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
@@ -33,6 +47,14 @@ struct Hit {
     /// Agente e conta Codex do trecho: o contexto lê pelo parser dele.
     provider: Option<String>,
     codex_account: Option<String>,
+    /// Conta da conversa ("claude:<pasta>", "codex:<casa>") e a pasta de config que o Arquivo pede para lê-la.
+    conta: Option<String>,
+    config_dir: Option<String>,
+    /// Todos os termos como palavra inteira; servidor antigo não manda, e a chegada calcula.
+    whole: Option<bool>,
+    /// Nome da sessão ao fechar e a primeira mensagem: o rótulo da conversa arquivada.
+    name: Option<String>,
+    preview: Option<String>,
     /// Máquina de onde o trecho veio (chave e rótulo), marcada ao chegar.
     #[serde(skip)]
     server: String,
@@ -48,6 +70,56 @@ impl Hit {
     }
     /// A sessão viva abre; a morta não tem nome de sessão.
     fn live_name(&self) -> Option<&str> { self.session_name.as_deref().filter(|_| self.live) }
+    fn agent(&self) -> &str { self.provider.as_deref().filter(|p| !p.is_empty()).unwrap_or("claude") }
+    fn is_whole(&self) -> bool { self.whole != Some(false) }
+    /// O nome da conversa na lista: o da sessão viva, o que ela tinha ao fechar, o começo da primeira mensagem ou a pasta.
+    fn title(&self) -> String {
+        self.names().into_iter().next().unwrap_or_else(|| self.folder())
+    }
+    /// Os nomes que a conversa tem, sem a pasta: é por eles que a resposta do Perguntar a cita.
+    fn names(&self) -> Vec<String> {
+        let name = self.name.as_deref().map(str::trim).filter(|n| !n.is_empty()).map(str::to_owned);
+        let start = self.preview.as_deref().map(first_words).filter(|s| !s.is_empty());
+        self.live_name().map(str::to_owned).into_iter().chain(name).chain(start).collect()
+    }
+    /// A pasta com a casa como `~`.
+    fn place(&self) -> String { self.cwd.as_deref().map(home_short).unwrap_or_else(|| self.project.clone()) }
+    /// Quando a mensagem foi escrita; servidor antigo só manda a data da conversa.
+    fn when(&self) -> f64 { self.ts.filter(|t| *t > 0.).unwrap_or(self.mtime) }
+    /// Identidade da conversa da prévia: a viva pelo nome da sessão, a arquivada pelo arquivo.
+    fn chat_key(&self) -> String {
+        match self.live_name() { Some(name) => format!("live:{}:{name}", self.server), None => format!("archive:{}", self.conversation()) }
+    }
+}
+
+/// A sessão viva da lista como um trecho sem mensagem: a prévia e o cabeçalho a tratam como uma conversa da busca.
+fn session_hit(target: &Target, session: &SessionInfo) -> Hit {
+    Hit { session_name: Some(session.name.clone()), live: true, cwd: session.cwd.clone(), provider: Some(session.provider.clone()),
+        conta: session.conta.clone(), mtime: session.last_activity.unwrap_or(0.), server: target.server.clone(), ..Default::default() }
+}
+
+/// O começo da primeira mensagem como nome: sem endereço, sem o "[de: …]" do recado de outra sessão, cortado numa palavra.
+fn first_words(text: &str) -> String {
+    let text = super::quotes::summary(text);
+    let mut words: Vec<&str> = text.split_whitespace().filter(|w| !w.starts_with("http://") && !w.starts_with("https://")).collect();
+    if words.first().is_some_and(|w| w.starts_with("[de:")) {
+        let end = words.iter().position(|w| w.ends_with(']')).map_or(words.len(), |i| i + 1);
+        words.drain(..end);
+    }
+    let line = words.join(" ");
+    if line.chars().count() <= LABEL_MAX { return line; }
+    let cut: String = line.chars().take(LABEL_MAX).collect();
+    format!("{}…", cut.rsplit_once(' ').map_or(cut.as_str(), |(head, _)| head))
+}
+
+/// `/home/<usuário>/x` como `~/x`, como a lista de sessões mostra.
+fn home_short(path: &str) -> String {
+    for root in ["/home/", "/Users/"] {
+        if let Some(rest) = path.strip_prefix(root) {
+            return match rest.split_once('/') { Some((_, tail)) => format!("~/{tail}"), None => "~".into() };
+        }
+    }
+    path.to_owned()
 }
 
 /// Backend antigo em outra máquina ainda repete o trecho quando o transcript repete a mensagem: a chave repetida daria
@@ -57,38 +129,97 @@ fn without_repeats(hits: Vec<Hit>) -> Vec<Hit> {
     hits.into_iter().filter(|hit| seen.insert(hit.key())).collect()
 }
 
-/// Junta a resposta de mais uma máquina: sem repetidos, a mais recente primeiro.
+/// Junta a resposta de mais uma máquina: sem repetidos, palavra inteira primeiro (como cada máquina já manda), a mais
+/// recente primeiro dentro de cada parte.
 fn merge_hits(hits: &mut Vec<Hit>, more: Vec<Hit>) {
     let mut all = std::mem::take(hits);
     all.extend(more);
     *hits = without_repeats(all);
-    hits.sort_by(|a, b| b.mtime.total_cmp(&a.mtime));
+    hits.sort_by(|a, b| b.is_whole().cmp(&a.is_whole()).then(b.mtime.total_cmp(&a.mtime)));
 }
 
-/// Junta como `merge_hits` e devolve onde foi parar o trecho `active`: a reordenação por data não pode trocar o destacado
-/// (e o que o Enter abre) por outro.
+/// Junta como `merge_hits` e devolve onde foi parar o trecho `active`: a reordenação não pode trocar o destacado (e o que
+/// o Enter abre) por outro.
 fn merge_keeping(hits: &mut Vec<Hit>, more: Vec<Hit>, active: Option<usize>) -> Option<usize> {
     let key = active.and_then(|i| hits.get(i)).map(Hit::key);
     merge_hits(hits, more);
     key.and_then(|key| hits.iter().position(|hit| hit.key() == key))
 }
 
+/// O que os botões de filtro deixam na lista: um agente, só as abertas ou só as arquivadas.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Filter { agent: Option<String>, live: Option<bool> }
+
+impl Filter {
+    fn keeps(&self, hit: &Hit) -> bool {
+        self.agent.as_deref().is_none_or(|agent| agent == hit.agent()) && self.live.is_none_or(|live| live == hit.live)
+    }
+}
+
+/// Os trechos por conversa, na ordem em que chegaram, só os que o filtro deixa e até `cap` por conversa.
+fn groups(hits: &[Hit], filter: &Filter, cap: usize) -> Vec<(String, Vec<usize>)> {
+    let mut out: Vec<(String, Vec<usize>)> = Vec::new();
+    for (i, hit) in hits.iter().enumerate().filter(|(_, hit)| filter.keeps(hit)) {
+        let key = hit.conversation();
+        match out.iter_mut().find(|g| g.0 == key) {
+            Some(group) => if group.1.len() < cap { group.1.push(i) },
+            None => out.push((key, vec![i])),
+        }
+    }
+    out
+}
+
+/// A resposta do Perguntar cita a conversa: um nome dela aparece no texto.
+fn cites(answer: &str, hit: &Hit) -> bool {
+    let answer = answer.to_lowercase();
+    hit.names().iter().map(|n| n.trim_end_matches('…').trim()).filter(|n| n.chars().count() >= 3)
+        .any(|n| answer.contains(&n.to_lowercase()))
+}
+
+/// A primeira entrada da conversa seguinte (o Tab); da última, volta ao começo.
+fn next_group(keys: &[String], active: usize) -> usize {
+    let current = keys.get(active);
+    (active + 1..keys.len()).find(|&i| Some(&keys[i]) != current).unwrap_or(0)
+}
+
 /// Máquina da busca de conteúdo. `offline`: a lista dela já estava fora do ar quando a busca começou.
 #[derive(Clone, Debug)]
 struct Machine { key: String, label: String, offline: bool }
 
-/// O que as setas percorrem: sessões vivas pelo nome e trechos da busca, na ordem da tela.
+/// O que as setas percorrem: sessões vivas pelo nome e trechos da busca (ou da resposta), na ordem da tela.
 #[derive(Clone, Debug, PartialEq)]
 enum Entry { Session(Target), Hit(usize), Answer(usize) }
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+enum Mode { #[default] Hits, Ask }
+
+/// A conversa da prévia: o pacote de conversa do chat (o mesmo da prévia da aba), lido uma vez pelo histórico.
+pub(super) struct SearchChat {
+    /// O trecho escolhido (ou a sessão, como trecho sem mensagem): o cabeçalho e as ações saem dele.
+    hit: Hit,
+    key: String,
+    /// A mensagem do trecho e a linha da conversa onde ela está.
+    focus: Option<String>,
+    focus_row: Option<usize>,
+    seq: u64,
+    /// `None` só enquanto o pacote está dentro do `Hangar`.
+    slot: Option<ConversationSlot>,
+    loaded: bool,
+    error: Option<String>,
+}
 
 #[derive(Default)]
 pub(super) struct Search {
     pub(super) open: bool,
     input: Option<Entity<InputState>>,
+    mode: Mode,
     /// A busca que está na tela (ou em voo).
     query: String,
     /// Trechos das máquinas que já responderam, entrando conforme chegam.
     hits: Vec<Hit>,
+    /// O total de conversas de cada máquina que respondeu (`None`: ela não disse).
+    totals: Vec<Option<u64>>,
+    filter: Filter,
     /// Nenhuma máquina respondeu ainda: é o "Buscando…".
     searching: bool,
     pending: Vec<Machine>,
@@ -101,7 +232,15 @@ pub(super) struct Search {
     /// Buscas por máquina em voo.
     tasks: Vec<tokio::task::AbortHandle>,
     active: usize,
-    preview: Option<(String, Remote<Vec<ChatEvent>>)>,
+    /// A seta mexeu na escolha: o próximo desenho rola a lista até ela.
+    scroll_pending: bool,
+    chat: Option<SearchChat>,
+    /// Número da prévia: só cresce, para a resposta de uma prévia trocada nunca entrar na nova.
+    chat_seq: u64,
+    /// "Ver inteira": a prévia ocupa a paleta toda.
+    wide: bool,
+    /// A pergunta da resposta na tela: Enter com o mesmo texto abre a conversa escolhida, com outro pergunta de novo.
+    asked: String,
     ask: Remote<(String, Vec<Hit>)>,
     /// Retomada em curso (a conversa) e o erro da última.
     resuming: Option<String>,
@@ -117,11 +256,18 @@ impl Search {
         for task in self.tasks.drain(..) { task.abort(); }
     }
 
-    /// Cada abertura começa vazia, mas o número da busca só cresce: zerado, a resposta de uma abertura anterior ainda em voo
-    /// casaria número e texto com a busca nova.
+    /// Cada abertura começa vazia, mas os números da busca e da prévia só crescem: zerados, a resposta de uma abertura
+    /// anterior ainda em voo casaria com a nova.
     fn reopen(&mut self, previous_focus: Option<FocusHandle>) {
         self.abort_machines();
-        *self = Search { open: true, input: self.input.take(), previous_focus, _events: self._events.take(), debounce: self.debounce + 1, ..Default::default() };
+        *self = Search { open: true, input: self.input.take(), previous_focus, _events: self._events.take(), debounce: self.debounce + 1,
+            chat_seq: self.chat_seq, ..Default::default() };
+    }
+
+    /// Onde a busca procurou, quando toda máquina que respondeu disse.
+    fn total(&self) -> Option<u64> {
+        if self.totals.is_empty() { return None; }
+        self.totals.iter().copied().sum()
     }
 }
 
@@ -132,25 +278,64 @@ fn terms(query: &str) -> Vec<String> {
     out
 }
 
-/// Faixas de `text` com qualquer um dos termos, sem diferenciar maiúsculas (o `<mark>` do web).
-fn marks(text: &str, terms: &[String]) -> Vec<std::ops::Range<usize>> {
+/// Faixas de `text` com algum dos termos, sem diferenciar maiúsculas; `true` quando o termo está ali como palavra inteira,
+/// `false` quando é pedaço de outra ("tour" em "estourava").
+fn marks(text: &str, terms: &[String]) -> Vec<(Range<usize>, bool)> {
     let lower = text.to_lowercase();
     // Minúscula que muda o tamanho do texto desalinharia as faixas: aí não destaca nada.
     if lower.len() != text.len() { return Vec::new(); }
-    let mut ranges: Vec<std::ops::Range<usize>> = terms.iter().filter(|t| !t.is_empty())
-        .flat_map(|t| lower.match_indices(t.as_str()).map(|(at, m)| at..at + m.len()).collect::<Vec<_>>()).collect();
-    ranges.sort_by_key(|r| r.start);
-    let mut merged: Vec<std::ops::Range<usize>> = Vec::new();
-    for r in ranges {
-        match merged.last_mut() { Some(last) if r.start <= last.end => last.end = last.end.max(r.end), _ => merged.push(r) }
+    let letter = |c: Option<char>| c.is_some_and(char::is_alphabetic);
+    let mut ranges: Vec<(Range<usize>, bool)> = terms.iter().filter(|t| !t.is_empty()).flat_map(|t| lower.match_indices(t.as_str()).map(|(at, m)| {
+        let end = at + m.len();
+        (at..end, !letter(lower[..at].chars().next_back()) && !letter(lower[end..].chars().next()))
+    }).collect::<Vec<_>>()).collect();
+    ranges.sort_by_key(|(r, _)| r.start);
+    let mut merged: Vec<(Range<usize>, bool)> = Vec::new();
+    for (r, whole) in ranges {
+        match merged.last_mut() {
+            Some((last, was_whole)) if r.start <= last.end => { last.end = last.end.max(r.end); *was_whole |= whole; }
+            _ => merged.push((r, whole)),
+        }
     }
     merged
 }
 
+/// Todos os termos aparecem ao menos uma vez como palavra inteira.
+fn all_whole(text: &str, terms: &[String]) -> bool {
+    terms.iter().filter(|t| !t.is_empty()).all(|t| marks(text, std::slice::from_ref(t)).iter().any(|(_, whole)| *whole))
+}
+
+/// O trecho sem as marcas de markdown que ele traz do transcript (negrito, código, título).
+fn plain(text: &str) -> String {
+    text.lines().map(|line| {
+        let line = line.trim_start();
+        let hashes = line.chars().take_while(|c| *c == '#').count();
+        if hashes > 0 && line[hashes..].starts_with(' ') { line[hashes + 1..].to_owned() } else { line.to_owned() }
+    }).collect::<Vec<_>>().join(" ").replace("**", "").replace('`', "")
+}
+
 fn highlighted(text: String, terms: &[String]) -> StyledText {
-    let style = HighlightStyle { color: Some(theme::text()), background_color: Some(theme::accent().alpha(0.28)), ..Default::default() };
+    let whole = HighlightStyle { color: Some(theme::text()), background_color: Some(theme::accent().alpha(0.28)), ..Default::default() };
+    // Pedaço de palavra: outra cor e sublinhado, para não parecer o mesmo acerto.
+    let part = HighlightStyle { color: Some(theme::text()), background_color: Some(theme::warning().alpha(0.2)),
+        underline: Some(UnderlineStyle { thickness: px(1.), color: Some(theme::warning()), wavy: false }), ..Default::default() };
     let ranges = marks(&text, terms);
-    StyledText::new(text).with_highlights(ranges.into_iter().map(|r| (r, style)))
+    StyledText::new(text).with_highlights(ranges.into_iter().map(|(r, w)| (r, if w { whole } else { part })))
+}
+
+/// "hoje 14:02", "ontem 11:24", "30/10 19:34"; de outro ano, com o ano.
+fn moment(at: chrono::NaiveDateTime, now: chrono::NaiveDateTime, today: &str, yesterday: &str, date_format: &str) -> String {
+    use chrono::Datelike;
+    let time = at.format("%H:%M");
+    if at.date() == now.date() { return format!("{today} {time}"); }
+    if now.date().pred_opt() == Some(at.date()) { return format!("{yesterday} {time}"); }
+    if at.year() == now.year() { format!("{} {time}", at.format(date_format)) } else { format!("{}/{} {time}", at.format(date_format), at.format("%y")) }
+}
+
+fn when(ts: f64) -> String {
+    let Some(at) = chrono::DateTime::from_timestamp(ts as i64, 0) else { return String::new() };
+    let at = at.with_timezone(&chrono::Local).naive_local();
+    moment(at, chrono::Local::now().naive_local(), &tr("search_today"), &tr("search_yesterday"), &tr("search_date_format"))
 }
 
 fn ago(ts: f64) -> String { side::ago(chrono::Local::now().timestamp() as f64 - ts) }
@@ -172,8 +357,11 @@ impl Hangar {
                 _ => {}
             }));
         }
-        // Cada abertura começa vazia, como o web.
-        input.update(cx, |input, cx| input.set_value("", window, cx));
+        // Cada abertura começa vazia, como o web, e na aba dos trechos.
+        input.update(cx, |input, cx| {
+            input.set_value("", window, cx);
+            input.set_placeholder(web_with("switcher_buscar_conversas", &[]), window, cx);
+        });
         let previous = window.focused(cx);
         self.search.reopen(previous);
         input.update(cx, |input, cx| input.focus(window, cx));
@@ -185,6 +373,7 @@ impl Hangar {
         self.search.open = false;
         self.search.debounce += 1;
         self.search.abort_machines();
+        self.search.chat = None;
         match self.search.previous_focus.take() { Some(focus) => focus.focus(window, cx), None => self.root_focus.focus(window, cx) }
         cx.notify();
     }
@@ -197,14 +386,16 @@ impl Hangar {
     fn search_text(&self, cx: &App) -> String { self.search.input.as_ref().map(|i| i.read(cx).value().to_string()).unwrap_or_default() }
 
     fn search_changed(&mut self, cx: &mut Context<Self>) {
+        // Escrever a pergunta não busca trechos: a resposta só sai no Enter.
+        if self.search.mode == Mode::Ask { cx.notify(); return; }
         let query = self.search_text(cx).trim().to_owned();
-        (self.search.active, self.search.preview, self.search.ask, self.search.resume_error) = (0, None, Remote::default(), None);
+        (self.search.active, self.search.resume_error, self.search.filter) = (0, None, Filter::default());
         self.search.scroll.set_offset(point(px(0.), px(0.)));
         self.search.debounce += 1;
         self.search.abort_machines();
         let seq = self.search.debounce;
         if query.is_empty() {
-            (self.search.query, self.search.hits, self.search.searching) = (String::new(), Vec::new(), false);
+            (self.search.query, self.search.hits, self.search.totals, self.search.searching) = (String::new(), Vec::new(), Vec::new(), false);
             (self.search.pending, self.search.failed, self.search.error) = (Vec::new(), Vec::new(), None);
             cx.notify();
             return;
@@ -214,6 +405,18 @@ impl Hangar {
             cx.background_executor().timer(DEBOUNCE).await;
             let _ = this.update(cx, |this, cx| if this.search.debounce == seq { this.run_search(query, cx) });
         }).detach();
+        cx.notify();
+    }
+
+    /// Trechos ou Perguntar; o texto do campo fica, e a aba dos trechos busca o que estiver nele.
+    fn search_set_mode(&mut self, mode: Mode, window: &mut Window, cx: &mut Context<Self>) {
+        if self.search.mode == mode { return; }
+        (self.search.mode, self.search.active, self.search.wide) = (mode, 0, false);
+        let placeholder = web_with(if mode == Mode::Ask { "mobile_busca_perguntar" } else { "switcher_buscar_conversas" }, &[]);
+        if let Some(input) = self.search.input.clone() {
+            input.update(cx, |input, cx| { input.set_placeholder(placeholder, window, cx); input.focus(window, cx) });
+        }
+        if mode == Mode::Hits && self.search.query != self.search_text(cx).trim() { self.search_changed(cx); }
         cx.notify();
     }
 
@@ -243,7 +446,7 @@ impl Hangar {
 
     fn run_search(&mut self, query: String, cx: &mut Context<Self>) {
         self.search.query = query;
-        (self.search.hits, self.search.pending, self.search.failed, self.search.error) = (Vec::new(), Vec::new(), Vec::new(), None);
+        (self.search.hits, self.search.totals, self.search.pending, self.search.failed, self.search.error) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), None);
         let machines = self.search_machines(cx);
         // Nenhuma máquina para buscar não é "nada encontrado".
         if machines.is_empty() {
@@ -270,7 +473,7 @@ impl Hangar {
             let query = query.clone();
             // O prazo de fora é o que vale: só ele sabe dizer "tempo esgotado"; o da requisição fica de reserva.
             self.runtime.spawn(async move {
-                tokio::time::timeout(MACHINE_WAIT, api.server_read(&["search"], &[("q", query.as_str())], MACHINE_WAIT.as_secs() + 2)).await
+                tokio::time::timeout(MACHINE_WAIT, api.server_read_header(&["search"], &[("q", query.as_str())], MACHINE_WAIT.as_secs() + 2, TOTAL_HEADER)).await
             })
         };
         self.search.tasks.push(task.abort_handle());
@@ -290,14 +493,19 @@ impl Hangar {
                     Ok(Err(_)) => Err(web_with("busca_motivo_timeout", &[])),
                     Ok(Ok(result)) => result
                         .map_err(|e| match e.status { Some(status) => web_with("busca_motivo_http", &[("status", status.to_string())]), None => Hangar::failure(&e) })
-                        .and_then(|v| serde_json::from_value::<Vec<Hit>>(v).map_err(|error| {
+                        .and_then(|(v, total)| serde_json::from_value::<Vec<Hit>>(v).map(|list| (list, total)).map_err(|error| {
                             eprintln!("busca em {}: resposta inválida: {error}", machine.label);
                             tr("invalid_response")
                         })),
                 };
                 match result {
-                    Ok(list) => {
-                        let list = list.into_iter().map(|hit| Hit { server: machine.key.clone(), label: machine.label.clone(), ..hit }).collect();
+                    Ok((list, total)) => {
+                        this.search.totals.push(total.and_then(|t| t.trim().parse().ok()));
+                        let words = terms(&query);
+                        let list = list.into_iter().map(|mut hit| {
+                            hit.whole.get_or_insert_with(|| all_whole(&plain(&hit.line), &words));
+                            Hit { server: machine.key.clone(), label: machine.label.clone(), ..hit }
+                        }).collect();
                         let active = match this.search_entries(cx).get(this.search.active) { Some(Entry::Hit(i)) => Some(*i), _ => None };
                         let moved = merge_keeping(&mut this.search.hits, list, active);
                         if active.is_some() {
@@ -335,30 +543,51 @@ impl Hangar {
         list
     }
 
-    /// Os trechos na ordem da tela: por conversa, a mais recente primeiro.
-    fn search_groups(&self) -> Vec<(String, Vec<usize>)> {
-        let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
-        for (i, hit) in self.search.hits.iter().enumerate() {
-            let key = hit.conversation();
-            match groups.iter_mut().find(|g| g.0 == key) { Some(g) => g.1.push(i), None => groups.push((key, vec![i])) }
-        }
-        groups
+    /// As conversas da resposta: só as que ela cita.
+    fn cited_groups(&self) -> Vec<(String, Vec<usize>)> {
+        let Some((answer, hits)) = self.search.ask.ok() else { return Vec::new() };
+        groups(hits, &Filter::default(), HITS_SHOWN).into_iter().filter(|(_, ix)| cites(answer, &hits[ix[0]])).collect()
     }
 
     fn search_entries(&self, cx: &App) -> Vec<Entry> {
+        if self.search.mode == Mode::Ask {
+            return self.cited_groups().into_iter().flat_map(|(_, ix)| ix.into_iter().map(Entry::Answer)).collect();
+        }
         let query = self.search_text(cx).trim().to_owned();
         let mut out: Vec<Entry> = self.search_sessions(&query).into_iter().map(|(target, _)| Entry::Session(target)).collect();
-        if let Some((_, hits)) = self.search.ask.ok() { out.extend((0..hits.len()).map(Entry::Answer)); }
-        out.extend(self.search_groups().into_iter().flat_map(|(_, hits)| hits.into_iter().map(Entry::Hit)));
+        out.extend(groups(&self.search.hits, &self.search.filter, HITS_SHOWN).into_iter().flat_map(|(_, ix)| ix.into_iter().map(Entry::Hit)));
         out
+    }
+
+    /// A conversa da entrada, para o Tab pular para a próxima.
+    fn entry_conversation(&self, entry: &Entry) -> String {
+        match entry {
+            Entry::Session(target) => format!("session:{}", target.id()),
+            other => self.hit_of(other).map(|hit| hit.conversation()).unwrap_or_default(),
+        }
     }
 
     fn search_move(&mut self, delta: isize, cx: &mut Context<Self>) {
         let count = self.search_entries(cx).len();
         if count == 0 { return; }
         self.search.active = (self.search.active as isize + delta).rem_euclid(count as isize) as usize;
-        self.search.scroll.scroll_to_item(self.search.active);
+        self.search.scroll_pending = true;
         cx.notify();
+    }
+
+    fn search_next_conversation(&mut self, cx: &mut Context<Self>) {
+        let keys: Vec<String> = self.search_entries(cx).iter().map(|e| self.entry_conversation(e)).collect();
+        if keys.is_empty() { return; }
+        self.search.active = next_group(&keys, self.search.active);
+        self.search.scroll_pending = true;
+        cx.notify();
+    }
+
+    fn search_select(&mut self, entry: &Entry, cx: &mut Context<Self>) {
+        if let Some(ix) = self.search_entries(cx).iter().position(|e| e == entry) {
+            self.search.active = ix;
+            cx.notify();
+        }
     }
 
     fn hit_of(&self, entry: &Entry) -> Option<Hit> {
@@ -369,18 +598,33 @@ impl Hangar {
         }
     }
 
-    /// Enter (ou o botão): abre a sessão viva, retoma a arquivada.
+    fn preview_hit(&self, entry: &Entry) -> Option<Hit> {
+        match entry {
+            Entry::Session(target) => self.target_session(target).map(|s| session_hit(target, s)),
+            other => self.hit_of(other),
+        }
+    }
+
+    /// Enter: abre a sessão viva, retoma a arquivada. No Perguntar, texto novo pergunta de novo.
     fn search_activate(&mut self, entry: Option<Entry>, window: &mut Window, cx: &mut Context<Self>) {
+        if entry.is_none() && self.search.mode == Mode::Ask
+            && (self.search.ask.value.is_none() || self.search.asked != self.search_text(cx).trim()) {
+            return self.search_ask(cx);
+        }
         let Some(entry) = entry.or_else(|| self.search_entries(cx).get(self.search.active).cloned()) else { return };
         match entry {
             Entry::Session(target) => self.search_open_session(&target, window, cx),
             other => {
                 let Some(hit) = self.hit_of(&other) else { return };
-                match hit.live_name() {
-                    Some(name) => { let target = Target::new(&hit.server, name); self.search_open_session(&target, window, cx) }
-                    None => self.search_resume(hit, window, cx),
-                }
+                self.search_open_hit(hit, window, cx);
             }
+        }
+    }
+
+    fn search_open_hit(&mut self, hit: Hit, window: &mut Window, cx: &mut Context<Self>) {
+        match hit.live_name() {
+            Some(name) => { let target = Target::new(&hit.server, name); self.search_open_session(&target, window, cx) }
+            None => self.search_resume(hit, window, cx),
         }
     }
 
@@ -443,54 +687,16 @@ impl Hangar {
         cx.notify();
     }
 
-    /// Clique no trecho: abre ou fecha a mensagem inteira com as vizinhas, sem sair da busca.
-    fn search_toggle_preview(&mut self, hit: Hit, cx: &mut Context<Self>) {
-        let key = hit.key();
-        if self.search.preview.as_ref().is_some_and(|(k, _)| *k == key) { self.search.preview = None; cx.notify(); return; }
-        let mut remote = Remote::default();
-        let Some(event) = hit.event_id.clone() else {
-            remote.value = Some(Err(web_with("busca_contexto_indisponivel", &[])));
-            self.search.preview = Some((key, remote));
-            cx.notify();
-            return;
-        };
-        let seq = remote.start();
-        self.search.preview = Some((key.clone(), remote));
-        // O contexto é lido da máquina do trecho.
-        let api = self.machine_api(&hit.server).ok_or_else(|| self.machine_error(&hit.server));
-        let connection = self.connection;
-        let task = self.runtime.spawn(async move {
-            let api = match api { Ok(api) => api, Err(reason) => return Err(Failure::local(reason)) };
-            let mut query = vec![("project", hit.project.as_str()), ("session_id", hit.session_id.as_str()), ("event_id", event.as_str())];
-            query.extend(hit.provider.as_deref().map(|p| ("provider", p)));
-            query.extend(hit.codex_account.as_deref().map(|a| ("codex_account", a)));
-            api.server_read(&["search", "context"], &query, 15).await
-        });
-        cx.spawn(async move |this, cx| {
-            let joined = task.await;
-            let _ = this.update(cx, |this, cx| {
-                let current = this.connection == connection;
-                let Some((_, remote)) = this.search.preview.as_mut().filter(|(k, _)| *k == key) else { return };
-                // Tarefa perdida ou conexão trocada: a prévia termina com o aviso em vez de carregar para sempre.
-                let result = match joined {
-                    Ok(result) if current => result.map_err(|e| Self::fetch_failure(&e)),
-                    _ => Err(tr("search_interrupted")),
-                };
-                remote.finish(seq, result.and_then(|v| serde_json::from_value::<Vec<ChatEvent>>(v).map_err(|_| tr("invalid_response"))));
-                cx.notify();
-            });
-        }).detach();
-        cx.notify();
-    }
-
     /// "Perguntar": o backend acha os trechos e um modelo responde onde o assunto apareceu (só neste servidor, como o web).
     fn search_ask(&mut self, cx: &mut Context<Self>) {
         let question = self.search_text(cx).trim().to_owned();
         if question.is_empty() || self.search.ask.loading { return; }
         let Some(api) = self.api.clone() else { return };
         let seq = self.search.ask.start();
+        (self.search.asked, self.search.active) = (question.clone(), 0);
         let connection = self.connection;
         let (server, label) = (self.active_key(), self.server_label(cx));
+        let words = terms(&question);
         let task = self.runtime.spawn(async move {
             api.server_send(reqwest::Method::POST, &["ask-history"], Some(json!({ "question": question })), 90).await
         });
@@ -505,7 +711,11 @@ impl Hangar {
                 let parsed = result.and_then(|v| {
                     let answer = v.get("answer").and_then(Value::as_str).unwrap_or_default().to_owned();
                     let hits = serde_json::from_value::<Vec<Hit>>(v.get("hits").cloned().unwrap_or(json!([]))).map_err(|_| tr("invalid_response"))?;
-                    Ok((answer, without_repeats(hits.into_iter().map(|hit| Hit { server: server.clone(), label: label.clone(), ..hit }).collect())))
+                    let hits = hits.into_iter().map(|mut hit| {
+                        hit.whole.get_or_insert_with(|| all_whole(&plain(&hit.line), &words));
+                        Hit { server: server.clone(), label: label.clone(), ..hit }
+                    }).collect();
+                    Ok((answer, without_repeats(hits)))
                 });
                 this.search.ask.finish(seq, parsed);
                 cx.notify();
@@ -514,72 +724,304 @@ impl Hangar {
         cx.notify();
     }
 
+    // ── Prévia da conversa ──────────────────────────────────────────────────
+
+    /// Roda `f` com a conversa da prévia no lugar da principal e destroca antes de devolver, como a prévia da aba.
+    fn with_search_slot<R>(&mut self, cx: &mut Context<Self>, f: impl FnOnce(&mut Self, &mut Context<Self>) -> R) -> Option<R> {
+        let mut slot = self.search.chat.as_mut()?.slot.take()?;
+        self.leave_tab_preview_event();
+        self.swap_conversation(&mut slot);
+        let inside = std::mem::replace(&mut self.in_tab_preview, true);
+        let result = f(self, cx);
+        self.in_tab_preview = inside;
+        self.swap_conversation(&mut slot);
+        if let Some(chat) = self.search.chat.as_mut() { chat.slot = Some(slot); }
+        Some(result)
+    }
+
+    /// Clique de linha que veio da prévia da busca (abrir ferramenta, pensamento): mexe na conversa dela.
+    pub(super) fn toggle_in_search_preview(&mut self, key: String, cx: &mut Context<Self>) -> bool {
+        let owned = self.search.chat.as_ref().and_then(|c| c.slot.as_ref()).is_some_and(|slot| slot.owns(&key));
+        if self.in_tab_preview || !owned { return false; }
+        self.with_search_slot(cx, |this, cx| this.toggle_here(key, cx));
+        true
+    }
+
+    /// A prévia acompanha a escolha: conversa nova monta o pacote e lê o histórico depois da espera; a mesma conversa só
+    /// rola até a mensagem nova.
+    fn search_sync_chat(&mut self, hit: Option<Hit>, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(hit) = hit else { self.search.chat = None; return };
+        let key = hit.chat_key();
+        if let Some(chat) = self.search.chat.as_mut().filter(|chat| chat.key == key) {
+            if chat.focus != hit.event_id {
+                chat.focus = hit.event_id.clone();
+                chat.hit = hit;
+                self.search_scroll_to_focus(cx);
+            }
+            return;
+        }
+        let session = hit.live_name().and_then(|name| self.target_session(&Target::new(&hit.server, name)).cloned())
+            .unwrap_or_else(|| SessionInfo { name: hit.title(), cwd: hit.cwd.clone(), provider: hit.agent().to_owned(), conta: hit.conta.clone(), ..Default::default() });
+        // Como a principal: `open_api` só existe para sessão de outra máquina.
+        let api = (!self.is_active_key(&hit.server)).then(|| self.machine_api(&hit.server)).flatten();
+        let composer = cx.new(|cx| TextareaState::new(window, cx));
+        self.search.chat_seq += 1;
+        let seq = self.search.chat_seq;
+        self.search.chat = Some(SearchChat { key, focus: hit.event_id.clone(), focus_row: None, seq,
+            slot: Some(ConversationSlot::new(session, api, composer, window)), loaded: false, error: None, hit });
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(PREVIEW_DELAY).await;
+            let _ = this.update(cx, |this, cx| if this.search.chat.as_ref().is_some_and(|c| c.seq == seq) { this.search_fetch_chat(cx) });
+        }).detach();
+    }
+
+    /// A conversa inteira: a viva pelo `/history` da sessão, a arquivada pelo histórico do Arquivo, na máquina do trecho.
+    fn search_fetch_chat(&mut self, cx: &mut Context<Self>) {
+        let Some((seq, hit)) = self.search.chat.as_ref().map(|c| (c.seq, c.hit.clone())) else { return };
+        let Some(api) = self.machine_api(&hit.server) else {
+            let error = self.machine_error(&hit.server);
+            if let Some(chat) = self.search.chat.as_mut() { (chat.error, chat.loaded) = (Some(error), true); }
+            cx.notify();
+            return;
+        };
+        let live = hit.live_name().map(str::to_owned);
+        // `limit` 0 é o histórico inteiro: o trecho pode estar longe do fim. Sem trecho (a sessão pelo nome), só a cauda.
+        let limit = if hit.event_id.is_some() { 0 } else { SESSION_TAIL };
+        let task = self.runtime.spawn(async move {
+            match live {
+                Some(name) => api.history(&name, limit, None).await.map(|h| h.events.unwrap_or_default()),
+                None => {
+                    let mut query: Vec<(&str, &str)> = Vec::new();
+                    query.extend(hit.provider.as_deref().map(|p| ("provider", p)));
+                    query.extend(hit.config_dir.as_deref().map(|d| ("config_dir", d)));
+                    query.extend(hit.codex_account.as_deref().map(|a| ("codex_account", a)));
+                    api.server_read(&["archive", &hit.project, &hit.session_id, "history"], &query, 30).await
+                        .and_then(|v| serde_json::from_value::<Vec<ChatEvent>>(v).map_err(|_| Failure::local("invalid_response")))
+                }
+            }
+        });
+        cx.spawn(async move |this, cx| {
+            let joined = task.await;
+            let _ = this.update(cx, |this, cx| {
+                let result = match joined { Ok(result) => result.map_err(|e| Self::fetch_failure(&e)), Err(_) => Err(tr("search_interrupted")) };
+                let Some(chat) = this.search.chat.as_mut().filter(|c| c.seq == seq) else { return };
+                chat.loaded = true;
+                match result {
+                    Err(error) => chat.error = Some(error),
+                    Ok(events) => {
+                        this.with_search_slot(cx, |this, cx| {
+                            this.chat.merge_history(events);
+                            (this.loading, this.history_installed) = (false, true);
+                            this.sync_tab_preview_rows(cx);
+                        });
+                        this.search_scroll_to_focus(cx);
+                    }
+                }
+                cx.notify();
+            });
+        }).detach();
+    }
+
+    /// Rola a prévia até a linha da mensagem do trecho; sem mensagem (a sessão pelo nome), fica no fim.
+    fn search_scroll_to_focus(&mut self, cx: &mut Context<Self>) {
+        let Some(chat) = self.search.chat.as_ref().filter(|c| c.loaded && c.error.is_none()) else { return };
+        let (focus, old) = (chat.focus.clone(), chat.focus_row);
+        let row = self.with_search_slot(cx, |this, _| {
+            let row = focus.as_deref().and_then(|id| this.row_of(id));
+            // A linha do trecho ganha a etiqueta e o contorno: a altura dela e a da anterior mudam.
+            for r in [old, row].into_iter().flatten() { this.list_state.remeasure_items(r..r + 1); }
+            if let Some(r) = row { this.list_state.scroll_to(ListOffset { item_ix: r, offset_in_item: px(0.) }); }
+            row
+        }).flatten();
+        if let Some(chat) = self.search.chat.as_mut() { chat.focus_row = row; }
+        cx.notify();
+    }
+
     // ── Desenho ─────────────────────────────────────────────────────────────
+
+    /// Selo da conta: o nome que as etiquetas da máquina dão, senão o sufixo da pasta, como a lista de sessões.
+    fn search_account(&self, hit: &Hit) -> Option<(String, Hsla)> {
+        let conta = hit.conta.as_deref()?;
+        let chip = account_chip(Some(conta));
+        match self.tags.get(&hit.server).and_then(|t| t.accounts.get(conta)) {
+            Some(badge) => Some((badge.name.clone(), badge.color.as_deref().and_then(theme::tag_color)
+                .or_else(|| chip.map(|(_, color)| color)).unwrap_or_else(theme::muted))),
+            None => chip,
+        }
+    }
+
+    /// O avatar da lista de sessões; a viva com o anel de aberta agora.
+    fn search_avatar(&self, hit: &Hit, side: f32) -> Div {
+        let look = match hit.live_name().and_then(|name| self.target_session(&Target::new(&hit.server, name))) {
+            Some(session) => sidebar::session_look(session).ring(theme::success()),
+            None => chrome::AvatarLook::new(hit.agent(), None, "", false),
+        };
+        chrome::session_avatar(&look, side, None)
+    }
 
     pub(super) fn render_search(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.search.open { return None; }
         let input = self.search.input.clone()?;
-        let query = self.search_text(cx).trim().to_owned();
-        let words = terms(&query);
+        let mode = self.search.mode;
         let entries = self.search_entries(cx);
         self.search.active = self.search.active.min(entries.len().saturating_sub(1));
         let active = entries.get(self.search.active).cloned();
+        if mode == Mode::Hits {
+            let hit = active.as_ref().and_then(|e| self.preview_hit(e));
+            self.search_sync_chat(hit, window, cx);
+        }
         let viewport = window.viewport_size();
-        let width = (viewport.width - px(32.)).min(px(760.));
-        let list_h = (viewport.height * 0.72 - px(150.)).max(px(160.));
+        let width = (viewport.width - px(32.)).min(px(1180.));
+        let height = (viewport.height * 0.86).min(px(880.));
 
+        let tabs = settings::segments("search-mode", &[tr("search_tab_hits"), tr("search_tab_ask")], if mode == Mode::Ask { 1 } else { 0 }, 2,
+            false, String::new(), |this, n, window, cx| this.search_set_mode(if n == 0 { Mode::Hits } else { Mode::Ask }, window, cx), cx);
+        let field = div().flex_1().min_w_0().h(px(40.)).px(px(12.)).flex().items_center().gap(px(10.)).rounded(px(10.))
+            .border_1().border_color(theme::border_strong()).bg(theme::inset())
+            .child(chrome::small_icon(IconName::Search, 16., theme::muted()))
+            .child(div().flex_1().min_w_0()
+                .capture_action(cx.listener(|this, _: &MoveUp, _, cx| { this.search_move(-1, cx); cx.stop_propagation(); }))
+                .capture_action(cx.listener(|this, _: &MoveDown, _, cx| { this.search_move(1, cx); cx.stop_propagation(); }))
+                .capture_action(cx.listener(|this, _: &IndentInline, _, cx| { this.search_next_conversation(cx); cx.stop_propagation(); }))
+                .capture_action(cx.listener(|this, _: &Escape, window, cx| { this.close_search(window, cx); cx.stop_propagation(); }))
+                .child(Input::new(&input).appearance(false).aria_label(web_with("lista_buscar", &[]))))
+            .child(chrome::kbd("Esc"));
+        let header = div().flex_shrink_0().px(px(16.)).pt(px(14.)).pb(px(8.)).flex().items_center().gap(px(10.)).child(field).child(tabs);
+        let body = match mode {
+            Mode::Hits => self.render_search_hits(active.as_ref(), cx),
+            Mode::Ask => self.render_search_ask(active.as_ref(), cx),
+        };
+        let footer = div().h(px(34.)).flex_shrink_0().px(px(16.)).flex().items_center().border_t_1().border_color(theme::border())
+            .text_size(px(11.5)).text_color(theme::faint()).child(tr("search_shortcuts"));
+        let card = div().id("search-palette").w(width).h(height).flex().flex_col().rounded(px(16.)).border_1()
+            .border_color(theme::glass_border()).bg(theme::popup_fill(theme::raised())).shadow(theme::popover_shadow()).overflow_hidden().occlude()
+            .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
+            .child(header)
+            .child(self.render_search_scope(cx))
+            .child(div().flex_1().min_h_0().flex().border_t_1().border_color(theme::border()).child(body))
+            .child(footer);
+        let card = if appearance::get().surface_material == appearance::SurfaceMaterial::Glass { chrome::Glass::new(card, px(16.)).into_any_element() }
+            else { card.into_any_element() };
+        // Sem tecla, o agente fecha pela acessibilidade: um "Fechar" sem tamanho, fora do desenho.
+        let close_search = cx.listener(|this, _: &(), window, cx| this.close_search(window, cx));
+        let close = div().id("search-close").absolute().size_0().role(Role::Button).aria_label(tr("close"))
+            .on_a11y_action(AccessibleAction::Click, move |_, window, cx| close_search(&(), window, cx));
+        Some(deferred(div().id("search-overlay").role(Role::Dialog).aria_label(web_with("lista_buscar", &[]))
+            .absolute().inset_0().bg(cx.theme().overlay).occlude()
+            .on_any_mouse_down(cx.listener(|this, _, window, cx| { this.close_search(window, cx); cx.stop_propagation(); }))
+            .flex().items_start().justify_center().pt((viewport.height - height) / 2.).child(close).child(card))
+            .with_priority(gpui_kit::base::POPUP_PRIORITY + 1).into_any_element())
+    }
+
+    /// A linha de baixo da busca: onde ela procurou, quanto achou, e os filtros por agente e por estado.
+    fn render_search_scope(&self, cx: &mut Context<Self>) -> AnyElement {
+        let line = div().px(px(16.)).pb(px(8.)).flex().items_center().gap(px(6.)).min_w_0().text_size(px(12.)).text_color(theme::faint());
+        if self.search.mode == Mode::Ask {
+            return line.child(div().truncate().child(tr("search_ask_hint"))).into_any_element();
+        }
+        let scope = match self.search.total() {
+            Some(n) => tr("search_scope_total").replace("{n}", &n.to_string()),
+            None => tr("search_scope_all"),
+        };
+        let hits = &self.search.hits;
+        let all = groups(hits, &Filter::default(), usize::MAX);
+        let mut found: Vec<AnyElement> = Vec::new();
+        if !hits.is_empty() {
+            let count = |one: &str, many: &str, n: usize| if n == 1 { web_with(one, &[]) } else { web_with(many, &[("n", n.to_string())]) };
+            found.push(div().flex_shrink_0().font_weight(FontWeight::MEDIUM).text_color(theme::muted())
+                .child(format!("{} {}", count("busca_um_trecho", "busca_n_trechos", hits.len()), count("busca_uma_conversa", "busca_n_conversas", all.len())))
+                .into_any_element());
+            if terms(&self.search.query).len() > 1 { found.push(div().truncate().child(format!("· {}", tr("search_same_message"))).into_any_element()); }
+            let partial = all.iter().filter(|(_, ix)| !ix.iter().any(|i| hits[*i].is_whole())).count();
+            if partial > 0 {
+                found.push(div().flex_shrink_0().text_color(theme::warning_text())
+                    .child(format!("· {}", tr("search_partial_only").replace("{n}", &partial.to_string()))).into_any_element());
+            }
+        }
+        let line = line
+            .child(div().flex_shrink_0().text_color(theme::muted()).child(scope))
+            .child(div().min_w_0().truncate().child(format!("· {}", tr("search_scope_everywhere"))))
+            .child(div().flex_1())
+            .children(found);
+        if hits.is_empty() { return line.into_any_element(); }
+        // Filtros: cada agente que aparece, e aberta/arquivada.
+        let filter = self.search.filter.clone();
+        let chip = |id: String, on: bool, label: AnyElement, count: usize, pick: Filter| {
+            Button::new(SharedString::from(id)).outline().xsmall().selected(on)
+                .child(div().flex().items_center().gap(px(5.)).child(label)
+                    .child(div().text_color(theme::faint()).child(count.to_string())))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.search.filter = if this.search.filter == pick { Filter::default() } else { pick.clone() };
+                    this.search.active = 0;
+                    cx.notify();
+                }))
+        };
+        let mut chips: Vec<AnyElement> = Vec::new();
+        for agent in AGENTS {
+            let count = hits.iter().filter(|h| h.agent() == agent).count();
+            if count == 0 { continue; }
+            let (color, _) = theme::provider(agent);
+            let logo = chrome::provider_logo(agent, 12., if agent == "codex" { theme::text() } else { color }).map(|l| l.into_any_element());
+            let label = div().flex().items_center().gap(px(5.)).children(logo).child(agent_name(agent)).into_any_element();
+            let pick = Filter { agent: Some(agent.to_owned()), live: None };
+            chips.push(chip(format!("search-filter-{agent}"), filter == pick, label, count, pick).into_any_element());
+        }
+        for live in [true, false] {
+            let count = hits.iter().filter(|h| h.live == live).count();
+            if count == 0 { continue; }
+            let pick = Filter { agent: None, live: Some(live) };
+            let label = div().flex().items_center().gap(px(5.))
+                .when(live, |el| el.child(div().size(px(6.)).rounded_full().bg(theme::success())))
+                .child(tr(if live { "search_filter_live" } else { "search_filter_archived" })).into_any_element();
+            chips.push(chip(format!("search-filter-live-{live}"), filter == pick, label, count, pick).into_any_element());
+        }
+        div().flex().flex_col().child(line).child(div().px(px(16.)).pb(px(10.)).flex().flex_wrap().gap(px(6.)).children(chips)).into_any_element()
+    }
+
+    /// Aba Trechos: a lista à esquerda e a conversa escolhida à direita ("Ver inteira": só a conversa).
+    fn render_search_hits(&mut self, active: Option<&Entry>, cx: &mut Context<Self>) -> AnyElement {
+        let query = self.search_text(cx).trim().to_owned();
+        let words = terms(&query);
         let mut rows: Vec<AnyElement> = Vec::new();
+        let mut active_row = None;
         let section = |title: String| div().px(px(10.)).pt(px(10.)).pb(px(4.)).text_size(px(11.5)).font_weight(FontWeight::MEDIUM)
             .text_color(theme::faint()).child(title).into_any_element();
+        let state_line = |text: String, color: Hsla| div().px(px(10.)).py(px(14.)).flex().justify_center().text_size(px(13.)).text_color(color)
+            .whitespace_normal().child(text).into_any_element();
+
+        if let Some(error) = self.search.resume_error.clone() {
+            rows.push(div().id("search-resume-error").mx(px(4.)).mt(px(6.)).px(px(10.)).py(px(8.)).rounded(px(8.)).bg(theme::danger().alpha(0.12)).role(Role::Alert)
+                .text_size(px(13.)).text_color(theme::danger()).whitespace_normal().child(error).into_any_element());
+        }
 
         let multi = self.multi_server();
         let sessions = self.search_sessions(&query);
         if !sessions.is_empty() {
             rows.push(section(tr("search_sessions")));
-            for (target, s) in sessions {
+            for (target, s) in &sessions {
                 let entry = Entry::Session(target.clone());
-                let on = active.as_ref() == Some(&entry);
+                let on = active == Some(&entry);
+                if on { active_row = Some(rows.len()); }
                 // Com várias máquinas, de qual é: o mesmo nome pode estar em duas.
-                let place = match (multi.then(|| self.machine_label(&target.server, cx)), s.cwd.clone()) {
+                let place = match (multi.then(|| self.machine_label(&target.server, cx)), s.cwd.as_deref().map(home_short)) {
                     (Some(label), Some(cwd)) => Some(format!("{label} · {cwd}")),
                     (label, cwd) => label.or(cwd),
                 };
                 rows.push(self.search_row(format!("search-session-{}", target.id()), on, entry, cx)
-                    .child(div().size(px(8.)).flex_shrink_0().rounded_full().bg(theme::status(&s.state)))
+                    .child(chrome::session_avatar(&sidebar::session_look(s), 22., None))
                     .child(div().flex_1().min_w_0().flex().flex_col().gap(px(1.))
                         .child(div().flex().items_center().gap(px(6.)).min_w_0()
                             .child(div().truncate().text_size(px(13.5)).font_weight(FontWeight::MEDIUM).child(highlighted(s.name.clone(), &words)))
                             // A busca é o caminho até a oculta: a marca diz por que ela não está na barra.
                             .when(s.hidden_from_list, |el| el.child(div().flex_shrink_0().px(px(6.)).rounded_full().bg(theme::inset())
                                 .text_size(px(10.5)).text_color(theme::muted()).child(tr("sidebar_hidden_badge")))))
-                        .children(place.map(|c| div().truncate().font_family(theme::MONO).text_size(px(11.5)).text_color(theme::faint()).child(c))))
+                        .children(place.map(|c| div().truncate().text_size(px(11.5)).text_color(theme::faint()).child(c))))
                     .children(s.last_activity.map(|t| div().flex_shrink_0().text_size(px(12.)).text_color(theme::faint()).child(ago(t))))
                     .into_any_element());
             }
+            if !query.is_empty() { rows.push(section(tr("search_conversations"))); }
         }
 
-        if !query.is_empty() {
-            rows.push(div().px(px(6.)).pt(px(8.)).child(Button::new("search-ask").ghost().small().w_full().loading(self.search.ask.loading)
-                .disabled(self.search.ask.loading)
-                .label(web_with(if self.search.ask.loading { "switcher_perguntando" } else { "switcher_perguntar" }, &[]))
-                .on_click(cx.listener(|this, _, _, cx| this.search_ask(cx)))).into_any_element());
-            match &self.search.ask.value {
-                Some(Err(error)) => rows.push(div().px(px(10.)).py(px(4.)).text_size(px(13.)).text_color(theme::danger()).child(error.clone()).into_any_element()),
-                Some(Ok((answer, hits))) => {
-                    let mut card = div().mx(px(6.)).mt(px(6.)).p(px(12.)).rounded(px(10.)).border_1().border_color(theme::border()).bg(theme::inset())
-                        .flex().flex_col().gap(px(6.)).child(div().text_size(px(13.)).whitespace_normal().child(answer.clone()));
-                    for (i, hit) in hits.iter().enumerate() {
-                        card = card.child(self.render_hit(Entry::Answer(i), hit, true, active.as_ref(), &words, cx));
-                    }
-                    rows.push(card.into_any_element());
-                }
-                None => {}
-            }
-        }
-
-        rows.push(section(tr("search_conversations")));
-        let state_line = |text: String, color: Hsla| div().px(px(10.)).py(px(14.)).flex().justify_center().text_size(px(13.)).text_color(color)
-            .whitespace_normal().child(text).into_any_element();
         if query.is_empty() {
             rows.push(state_line(web_with("busca_digite_todas", &[]), theme::muted()));
         } else if self.search.searching || self.search.query != query {
@@ -595,166 +1037,224 @@ impl Hangar {
                 rows.push(div().flex().justify_center().pb(px(6.)).child(Button::new("search-retry").outline().small()
                     .label(web_with("busca_tentar_de_novo", &[])).on_click(cx.listener(|this, _, _, cx| this.search_retry(cx)))).into_any_element());
             }
-            let hits = self.search.hits.clone();
-            let groups = self.search_groups();
             let waiting = |offline: bool, key: &str| {
                 let names: Vec<String> = self.search.pending.iter().filter(|m| m.offline == offline).map(|m| m.label.clone()).collect();
                 (!names.is_empty()).then(|| web_with(key, &[("servidores", names.join(", "))]))
             };
-            let lead = if !hits.is_empty() {
-                Some(format!("{} · {}",
-                    if hits.len() == 1 { web_with("busca_um_trecho", &[]) } else { web_with("busca_n_trechos", &[("n", hits.len().to_string())]) },
-                    if groups.len() == 1 { web_with("busca_uma_conversa", &[]) } else { web_with("busca_n_conversas", &[("n", groups.len().to_string())]) }))
-            } else if self.search.failed.is_empty() && self.search.pending.is_empty() {
-                Some(web_with("busca_nenhum_todas", &[("termos", words.join(", "))]))
-            } else { None };
+            let hits = self.search.hits.clone();
+            let lead = (hits.is_empty() && self.search.failed.is_empty() && self.search.pending.is_empty())
+                .then(|| web_with("busca_nenhum_todas", &[("termos", words.join(", "))]));
             let status: Vec<String> = [lead, waiting(false, "busca_aguardando"), waiting(true, "busca_tentando_fora")].into_iter().flatten().collect();
-            if !status.is_empty() {
-                let status = status.join(" · ");
-                rows.push(if hits.is_empty() { state_line(status, theme::muted()) }
-                    else { div().px(px(10.)).pb(px(4.)).text_size(px(12.)).text_color(theme::faint()).whitespace_normal().child(status).into_any_element() });
-            }
-            for (n, (_, indexes)) in groups.iter().enumerate() {
-                let first = &hits[indexes[0]];
-                let title = first.live_name().map(str::to_owned).unwrap_or_else(|| first.folder());
-                let mut meta = Vec::new();
-                if multi { meta.push(div().child(first.label.clone())); }
-                if first.live_name().is_some_and(|name| name != first.folder()) { meta.push(div().font_family(theme::MONO).child(first.folder())); }
-                meta.push(div().when(first.live, |el| el.text_color(theme::success()).font_weight(FontWeight::SEMIBOLD))
-                    .child(web_with(if first.live { "switcher_ativa" } else { "switcher_arquivo" }, &[])));
-                if first.mtime > 0. { meta.push(div().child(ago(first.mtime))); }
-                let mut group = div().flex().flex_col().gap(px(2.)).pt(px(6.)).when(n > 0, |el| el.mt(px(4.)).border_t_1().border_color(theme::border()))
-                    .child(div().px(px(10.)).pb(px(2.)).flex().items_center().gap(px(8.)).min_w_0()
-                        .child(div().flex_shrink(1.).min_w_0().truncate().text_size(px(13.5)).font_weight(FontWeight::SEMIBOLD).child(title))
-                        .child(div().flex().items_center().gap(px(6.)).text_size(px(12.)).text_color(theme::faint())
-                            .children(meta.into_iter().enumerate().flat_map(|(i, el)| [(i > 0).then(|| div().child("·")), Some(el)].into_iter().flatten()))));
-                for i in indexes {
-                    group = group.child(self.render_hit(Entry::Hit(*i), &hits[*i], false, active.as_ref(), &words, cx));
-                }
-                rows.push(group.into_any_element());
+            if !status.is_empty() { rows.push(state_line(status.join(" · "), theme::muted())); }
+            for (key, indexes) in groups(&hits, &self.search.filter, HITS_SHOWN) {
+                if indexes.iter().any(|i| active == Some(&Entry::Hit(*i))) { active_row = Some(rows.len()); }
+                rows.push(self.render_search_group(&format!("hits-{key}"), &hits, &indexes, Entry::Hit, active, &words, false, cx));
             }
         }
-        if let Some(error) = self.search.resume_error.clone() {
-            rows.insert(0, div().mx(px(6.)).mt(px(6.)).px(px(10.)).py(px(8.)).rounded(px(8.)).bg(theme::danger().alpha(0.12))
-                .text_size(px(13.)).text_color(theme::danger()).whitespace_normal().child(error).into_any_element());
-        }
+        if std::mem::take(&mut self.search.scroll_pending) && let Some(row) = active_row { self.search.scroll.scroll_to_item(row); }
 
-        let header = div().h(px(52.)).flex_shrink_0().px(px(14.)).flex().items_center().gap(px(10.)).border_b_1().border_color(theme::border())
-            .child(chrome::small_icon(IconName::Search, 17., theme::muted()))
-            .child(div().flex_1().min_w_0()
-                .capture_action(cx.listener(|this, _: &MoveUp, _, cx| { this.search_move(-1, cx); cx.stop_propagation(); }))
-                .capture_action(cx.listener(|this, _: &MoveDown, _, cx| { this.search_move(1, cx); cx.stop_propagation(); }))
-                .capture_action(cx.listener(|this, _: &Escape, window, cx| { this.close_search(window, cx); cx.stop_propagation(); }))
-                .child(Input::new(&input).appearance(false).aria_label(web_with("lista_buscar", &[]))))
-            .child(chrome::kbd("Ctrl K"));
-        let footer = div().h(px(34.)).flex_shrink_0().px(px(14.)).flex().items_center().border_t_1().border_color(theme::border())
-            .text_size(px(11.5)).text_color(theme::faint()).child(web_with("busca_atalhos", &[]));
-        let card = div().id("search-palette").w(width).max_h(viewport.height * 0.8).flex().flex_col().rounded(px(16.)).border_1()
-            .border_color(theme::glass_border()).bg(theme::popup_fill(theme::raised())).shadow(theme::popover_shadow()).overflow_hidden().occlude()
-            .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
-            .child(header)
-            .child(div().id("search-results").max_h(list_h).overflow_y_scroll().track_scroll(&self.search.scroll).px(px(6.)).pb(px(8.))
-                .flex().flex_col().children(rows))
-            .child(footer);
-        let card = if appearance::get().surface_material == appearance::SurfaceMaterial::Glass { chrome::Glass::new(card, px(16.)).into_any_element() }
-            else { card.into_any_element() };
-        // Sem tecla, o agente fecha pela acessibilidade: um "Fechar" sem tamanho, fora do desenho.
-        let close_search = cx.listener(|this, _: &(), window, cx| this.close_search(window, cx));
-        let close = div().id("search-close").absolute().size_0().role(Role::Button).aria_label(tr("close"))
-            .on_a11y_action(AccessibleAction::Click, move |_, window, cx| close_search(&(), window, cx));
-        Some(deferred(div().id("search-overlay").role(Role::Dialog).aria_label(web_with("lista_buscar", &[]))
-            .absolute().inset_0().bg(cx.theme().overlay).occlude()
-            .on_any_mouse_down(cx.listener(|this, _, window, cx| { this.close_search(window, cx); cx.stop_propagation(); }))
-            .flex().items_start().justify_center().pt(viewport.height / 10.).child(close).child(card))
-            .with_priority(gpui_kit::base::POPUP_PRIORITY + 1).into_any_element())
-    }
-
-    /// Linha escolhível da paleta: o ponteiro que se move sobre ela leva o destaque (teclado e mouse nunca acendem duas).
-    fn search_row(&self, id: String, on: bool, entry: Entry, cx: &mut Context<Self>) -> Stateful<Div> {
-        let hover_entry = entry.clone();
-        div().id(SharedString::from(id)).w_full().min_h(px(40.)).px(px(10.)).py(px(6.)).rounded(px(8.)).flex().items_center().gap(px(10.))
-            .cursor_pointer().when(on, |el| el.bg(theme::accent_dim()))
-            .on_mouse_move(cx.listener(move |this, _: &MouseMoveEvent, _, cx| {
-                if let Some(ix) = this.search_entries(cx).iter().position(|e| *e == hover_entry).filter(|ix| *ix != this.search.active) {
-                    this.search.active = ix;
-                    cx.notify();
-                }
-            }))
-            .on_click(cx.listener(move |this, _, window, cx| this.search_click(entry.clone(), window, cx)))
-    }
-
-    /// Clique: a sessão viva abre na hora; a conversa arquivada abre a prévia, e retomar (que cria uma sessão) fica no botão
-    /// dela ou no Enter.
-    fn search_click(&mut self, entry: Entry, window: &mut Window, cx: &mut Context<Self>) {
-        match self.hit_of(&entry).filter(|hit| hit.live_name().is_none()) {
-            Some(hit) => self.search_toggle_preview(hit, cx),
-            None => self.search_activate(Some(entry), window, cx),
-        }
-    }
-
-    fn render_hit(&self, entry: Entry, hit: &Hit, with_folder: bool, active: Option<&Entry>, words: &[String], cx: &mut Context<Self>) -> AnyElement {
-        let on = active == Some(&entry);
-        let key = hit.key();
-        let open = self.search.preview.as_ref().filter(|(k, _)| *k == key);
-        let mine = hit.role.as_deref() == Some("user");
-        let resuming = self.search.resuming.as_deref() == Some(hit.conversation().as_str());
-        let who = div().text_size(px(12.)).font_weight(FontWeight::SEMIBOLD).text_color(if mine { theme::accent() } else { theme::muted() })
-            .child(web_with(if mine { "busca_voce" } else { "busca_assistente" }, &[]));
-        let preview_hit = hit.clone();
-        let head = div().w_full().flex().items_center().gap(px(8.)).child(who)
-            .when(with_folder, |el| el.child(div().truncate().font_family(theme::MONO).text_size(px(11.5)).text_color(theme::faint())
-                .child(hit.live_name().map(str::to_owned).unwrap_or_else(|| hit.folder()))))
-            .child(div().flex_1())
-            .children(hit.ts.or(Some(hit.mtime)).filter(|t| *t > 0.).map(|t| div().text_size(px(12.)).text_color(theme::faint()).child(ago(t))))
-            .child(Button::new(SharedString::from(format!("search-preview-{key}"))).ghost().xsmall()
-                .icon(if open.is_some() { IconName::ChevronDown } else { IconName::ChevronRight })
-                .tooltip(web_with("busca_carregando_contexto", &[]).trim_end_matches('…').to_owned())
-                .on_click(cx.listener(move |this, _, _, cx| { cx.stop_propagation(); this.search_toggle_preview(preview_hit.clone(), cx); })));
-        let line: String = hit.line.chars().take(400).collect();
-        let row = self.search_row(format!("search-hit-{}-{key}", matches!(entry, Entry::Answer(_))), on, entry.clone(), cx)
-            .flex_col().items_start().gap(px(3.))
-            .child(head)
-            .child(div().w_full().text_size(px(13.)).line_height(relative(1.45)).text_color(theme::text()).whitespace_normal()
-                .child(highlighted(line, words)))
-            .when(resuming, |el| el.child(div().text_size(px(12.)).text_color(theme::muted()).child(tr("search_resuming"))));
-        let Some((_, preview)) = open else { return row.into_any_element() };
-        let body = match &preview.value {
-            None => div().text_size(px(12.5)).text_color(theme::muted()).child(web_with("busca_carregando_contexto", &[])),
-            Some(Err(error)) => div().text_size(px(12.5)).text_color(theme::danger()).child(error.clone()),
-            Some(Ok(events)) => div().flex().flex_col().gap(px(10.)).children(events.iter().map(|ev| {
-                let target = hit.event_id.as_deref() == Some(ev.id.as_str());
-                let mine = ev.kind == "user_msg";
-                let text: String = super::quotes::summary(ev.text.as_deref().unwrap_or_default()).chars().take(1200).collect();
-                div().pl(px(10.)).border_l_2().border_color(if target { theme::accent() } else { theme::border() }).flex().flex_col().gap(px(3.))
-                    .child(div().text_size(px(11.5)).font_weight(FontWeight::SEMIBOLD).text_color(if mine { theme::accent() } else { theme::muted() })
-                        .child(web_with(if mine { "busca_voce" } else { "busca_assistente" }, &[])))
-                    .child(div().text_size(px(12.5)).text_color(if target { theme::text() } else { theme::muted() }).whitespace_normal().child(text))
-            })),
-        };
-        let action_hit = hit.clone();
-        let label = if hit.live_name().is_some() { web_with("busca_abrir_sessao", &[]) } else { tr("search_resume") };
-        div().flex().flex_col().rounded(px(8.)).bg(theme::inset()).border_1().border_color(theme::border())
-            .child(row)
-            .child(div().px(px(12.)).pb(px(12.)).flex().flex_col().gap(px(10.)).child(body)
-                .child(div().flex().child(Button::new(SharedString::from(format!("search-open-{key}"))).primary().small().label(label)
-                    .loading(resuming).disabled(self.search.resuming.is_some())
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        match action_hit.live_name() {
-                            Some(name) => { let target = Target::new(&action_hit.server, name); this.search_open_session(&target, window, cx) }
-                            None => this.search_resume(action_hit.clone(), window, cx),
-                        }
-                    })))))
+        let list = div().id("search-results").h_full().overflow_y_scroll().track_scroll(&self.search.scroll).p(px(8.))
+            .flex().flex_col().gap(px(4.)).children(rows);
+        let wide = self.search.wide && self.search.chat.is_some();
+        div().size_full().flex()
+            .when(!wide, |el| el.child(div().w(relative(0.44)).flex_shrink_0().h_full().border_r_1().border_color(theme::border()).child(list)))
+            .child(div().flex_1().min_w_0().h_full().child(self.render_search_chat(cx)))
             .into_any_element()
     }
+
+    /// Uma conversa da lista: o cabeçalho (avatar, nome, estado, conta) e até três trechos dela. `actions`: os botões de
+    /// abrir na conversa escolhida (o Perguntar não tem a prévia, onde eles moram na outra aba).
+    #[allow(clippy::too_many_arguments)]
+    fn render_search_group(&self, id: &str, hits: &[Hit], indexes: &[usize], entry: fn(usize) -> Entry, active: Option<&Entry>, words: &[String],
+        actions: bool, cx: &mut Context<Self>) -> AnyElement {
+        let first = &hits[indexes[0]];
+        let selected = indexes.iter().any(|i| active == Some(&entry(*i)));
+        let mut sub = vec![agent_name(first.agent()).to_owned()];
+        if self.multi_server() { sub.push(first.label.clone()); }
+        sub.push(first.place());
+        if first.mtime > 0. { sub.push(tr("search_last_activity").replace("{when}", &when(first.mtime))); }
+        let pick = entry(indexes[0]);
+        let header = div().id(SharedString::from(format!("search-group-head-{id}"))).flex().flex_col().gap(px(2.)).cursor_pointer()
+            .on_click(cx.listener(move |this, _, _, cx| this.search_select(&pick, cx)))
+            .child(div().flex().items_center().gap(px(8.)).min_w_0()
+                .child(self.search_avatar(first, 22.))
+                .child(div().flex_1().min_w_0().truncate().text_size(px(13.5)).font_weight(FontWeight::SEMIBOLD).child(first.title()))
+                .child(state_badge(first.live))
+                .children(self.search_account(first).map(|(label, color)| account_pill(label, color))))
+            .child(div().pl(px(30.)).truncate().text_size(px(11.5)).text_color(theme::faint()).child(sub.join(" · ")));
+        let mut group = div().id(SharedString::from(format!("search-group-{id}"))).p(px(10.)).rounded(px(10.)).flex().flex_col().gap(px(4.))
+            .border_1().border_color(if selected { theme::border_strong() } else { transparent_black() })
+            .when(selected, |el| el.bg(theme::hover()))
+            .child(header);
+        for i in indexes {
+            let e = entry(*i);
+            let hit = &hits[*i];
+            let on = active == Some(&e);
+            let who = if hit.role.as_deref() == Some("user") { tr("search_you") } else { agent_name(hit.agent()).to_owned() };
+            let line: String = plain(&hit.line).chars().take(600).collect();
+            let resuming = self.search.resuming.as_deref() == Some(hit.conversation().as_str());
+            group = group.child(div().id(SharedString::from(format!("search-hit-{}-{}", matches!(e, Entry::Answer(_)), hit.key()))).ml(px(22.))
+                .px(px(8.)).py(px(6.)).rounded(px(8.)).flex().items_start().gap(px(10.)).cursor_pointer()
+                .when(on, |el| el.bg(theme::accent_dim())).when(!on, |el| el.hover(|el| el.bg(theme::hover())))
+                .role(Role::Button).aria_selected(on).aria_label(format!("{who}: {line}"))
+                .on_click(cx.listener(move |this, _, _, cx| this.search_select(&e, cx)))
+                .child(div().w(px(64.)).flex_shrink_0().flex().flex_col().text_size(px(11.)).text_color(theme::muted())
+                    .child(div().truncate().child(who))
+                    .child(div().text_size(px(10.5)).text_color(theme::faint()).child(when(hit.when()))))
+                .child(div().flex_1().min_w_0().flex().flex_col().gap(px(4.))
+                    .child(div().text_size(px(13.)).line_height(relative(1.45)).text_color(theme::text()).line_clamp(4).child(highlighted(line, words)))
+                    .when(resuming, |el| el.child(div().text_size(px(12.)).text_color(theme::muted()).child(tr("search_resuming"))))));
+        }
+        if actions && selected { group = group.child(div().pl(px(30.)).pt(px(4.)).flex().gap(px(6.)).child(self.search_open_button(first, cx))); }
+        group.into_any_element()
+    }
+
+    /// "Ir para a conversa" (viva) ou "Retomar" (arquivada).
+    fn search_open_button(&self, hit: &Hit, cx: &mut Context<Self>) -> Button {
+        let resuming = self.search.resuming.as_deref() == Some(hit.conversation().as_str());
+        let hit = hit.clone();
+        let label = tr(if hit.live_name().is_some() { "search_go" } else { "search_resume_short" });
+        Button::new(SharedString::from(format!("search-open-{}", hit.conversation()))).primary().small().label(label)
+            .loading(resuming).disabled(self.search.resuming.is_some())
+            .on_click(cx.listener(move |this, _, window, cx| this.search_open_hit(hit.clone(), window, cx)))
+    }
+
+    /// A conversa do trecho escolhido, desenhada pelo `render_row` do chat com o pacote da prévia no lugar.
+    fn render_search_chat(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let center = |text: String, color: Hsla| div().size_full().p_6().flex().items_center().justify_center().text_size(px(13.)).text_color(color)
+            .whitespace_normal().child(text).into_any_element();
+        let Some(chat) = self.search.chat.as_ref() else { return center(tr("search_pick"), theme::faint()) };
+        let hit = chat.hit.clone();
+        let live = hit.live_name().is_some();
+        let mut sub = vec![agent_name(hit.agent()).to_owned()];
+        if let Some((account, _)) = self.search_account(&hit) { sub.push(tr("search_account").replace("{name}", &account)); }
+        sub.push(hit.place());
+        sub.push(if live { tr("search_badge_live") } else if hit.mtime > 0. { tr("search_archived_ago").replace("{ago}", &ago(hit.mtime)) } else { tr("search_badge_archived") });
+        let wide = self.search.wide;
+        let mut buttons = div().flex_shrink_0().flex().items_center().gap(px(6.));
+        if !live {
+            buttons = buttons.child(Button::new("search-whole").ghost().small()
+                .label(tr(if wide { "search_back_to_list" } else { "search_view_whole" }))
+                .on_click(cx.listener(|this, _, _, cx| { this.search.wide = !this.search.wide; cx.notify(); })));
+        }
+        let header = div().flex_shrink_0().px(px(14.)).py(px(10.)).flex().items_center().gap(px(10.)).border_b_1().border_color(theme::border())
+            .child(self.search_avatar(&hit, 28.))
+            .child(div().flex_1().min_w_0().flex().flex_col().gap(px(1.))
+                .child(div().truncate().text_size(px(14.)).font_weight(FontWeight::SEMIBOLD).child(hit.title()))
+                .child(div().truncate().text_size(px(11.5)).text_color(theme::faint()).child(sub.join(" · "))))
+            .child(buttons.child(self.search_open_button(&hit, cx)));
+        let (loaded, error) = (chat.loaded, chat.error.clone());
+        let body = match (loaded, error) {
+            (false, _) => popup::skeleton("search-chat-loading", 8).p_4().into_any_element(),
+            (true, Some(error)) => div().id("search-chat-error").p_4().role(Role::Alert).text_size(px(13.)).text_color(theme::warning())
+                .whitespace_normal().child(error).into_any_element(),
+            (true, None) => match self.with_search_slot(cx, |this, _| this.list_state.clone()) {
+                None => center(tr("loading"), theme::faint()),
+                Some(list_state) => {
+                    let view = cx.entity().downgrade();
+                    list(list_state, move |i, window, cx| {
+                        view.update(cx, |this, cx| {
+                            let focus = this.search.chat.as_ref().and_then(|c| c.focus_row) == Some(i);
+                            let row = this.with_search_slot(cx, |this, cx| this.render_row(i, window, cx))?;
+                            Some(if !focus { row } else {
+                                div().px(px(8.)).py(px(4.)).flex().flex_col().gap(px(4.))
+                                    .child(div().px(px(4.)).text_size(px(11.)).font_weight(FontWeight::MEDIUM).text_color(theme::accent_text()).child(tr("search_found_snippet")))
+                                    .child(div().rounded(px(10.)).border_1().border_color(theme::accent()).child(row))
+                                    .into_any_element()
+                            })
+                        }).ok().flatten().unwrap_or_else(|| div().into_any_element())
+                    }).size_full().into_any_element()
+                }
+            },
+        };
+        div().size_full().flex().flex_col().child(header).child(div().flex_1().min_h_0().pt(px(6.)).child(body)).into_any_element()
+    }
+
+    /// Aba Perguntar: a pergunta, a resposta e só as conversas que ela cita.
+    fn render_search_ask(&mut self, active: Option<&Entry>, cx: &mut Context<Self>) -> AnyElement {
+        let center = |text: String, color: Hsla| div().py(px(24.)).flex().justify_center().text_size(px(13.)).text_color(color)
+            .whitespace_normal().child(text).into_any_element();
+        let mut rows: Vec<AnyElement> = Vec::new();
+        if let Some(error) = self.search.resume_error.clone() {
+            rows.push(div().id("search-ask-resume-error").px(px(10.)).py(px(8.)).rounded(px(8.)).bg(theme::danger().alpha(0.12)).role(Role::Alert)
+                .text_size(px(13.)).text_color(theme::danger()).whitespace_normal().child(error).into_any_element());
+        }
+        let label = |text: String| div().text_size(px(11.)).font_weight(FontWeight::SEMIBOLD).text_color(theme::muted()).child(text.to_uppercase());
+        if self.search.ask.loading {
+            rows.push(center(web_with("switcher_perguntando", &[]), theme::muted()));
+        } else {
+            match &self.search.ask.value {
+                None => rows.push(center(tr("search_ask_empty"), theme::faint())),
+                Some(Err(error)) => {
+                    rows.push(div().id("search-ask-error").py(px(16.)).flex().flex_col().items_center().gap(px(8.)).role(Role::Alert)
+                        .child(div().text_size(px(13.)).text_color(theme::danger()).whitespace_normal().child(error.clone()))
+                        .child(Button::new("search-ask-retry").outline().small().label(web_with("busca_tentar_de_novo", &[]))
+                            .on_click(cx.listener(|this, _, _, cx| this.search_ask(cx))))
+                        .into_any_element());
+                }
+                Some(Ok((answer, hits))) => {
+                    let (answer, hits) = (answer.clone(), hits.clone());
+                    rows.push(div().p(px(16.)).rounded(px(12.)).border_1().border_color(theme::border()).bg(theme::inset()).flex().flex_col().gap(px(6.))
+                        .child(label(tr("search_question")))
+                        .child(div().text_size(px(13.)).whitespace_normal().child(self.search.asked.clone()))
+                        .child(label(tr("search_answer")).mt(px(8.)))
+                        .child(gpui_kit::base::TextView::markdown("search-answer", answer.clone()).selectable(true).scrollable(false).style(theme::conversation_markdown(cx)))
+                        .into_any_element());
+                    let words = terms(&self.search.asked);
+                    let cited = self.cited_groups();
+                    if cited.is_empty() {
+                        rows.push(div().pt(px(4.)).text_size(px(12.)).text_color(theme::faint()).child(tr("search_no_cited")).into_any_element());
+                    } else {
+                        rows.push(div().pt(px(8.)).text_size(px(12.)).font_weight(FontWeight::SEMIBOLD).text_color(theme::muted())
+                            .child(tr("search_cited").replace("{n}", &cited.len().to_string())).into_any_element());
+                        for (key, indexes) in &cited {
+                            rows.push(self.render_search_group(&format!("ask-{key}"), &hits, indexes, Entry::Answer, active, &words, true, cx));
+                        }
+                    }
+                    let shown: std::collections::HashSet<&str> = cited.iter().map(|(key, _)| key.as_str()).collect();
+                    let left = hits.iter().filter(|h| !shown.contains(h.conversation().as_str())).count();
+                    if left > 0 && !cited.is_empty() {
+                        rows.push(div().text_size(px(11.5)).text_color(theme::faint()).whitespace_normal()
+                            .child(tr("search_uncited").replace("{n}", &left.to_string())).into_any_element());
+                    }
+                }
+            }
+        }
+        div().id("search-ask").size_full().overflow_y_scroll().p(px(16.)).child(div().max_w(px(860.)).flex().flex_col().gap(px(8.)).children(rows))
+            .into_any_element()
+    }
+
+    /// Linha escolhível de sessão viva: o clique abre.
+    fn search_row(&self, id: String, on: bool, entry: Entry, cx: &mut Context<Self>) -> Stateful<Div> {
+        div().id(SharedString::from(id)).w_full().min_h(px(40.)).px(px(10.)).py(px(6.)).rounded(px(8.)).flex().items_center().gap(px(10.))
+            .cursor_pointer().when(on, |el| el.bg(theme::accent_dim())).when(!on, |el| el.hover(|el| el.bg(theme::hover())))
+            .on_click(cx.listener(move |this, _, window, cx| this.search_activate(Some(entry.clone()), window, cx)))
+    }
+}
+
+fn state_badge(live: bool) -> Div {
+    let (text, fg, bg) = if live { (tr("search_badge_live"), theme::success_text(), theme::success().alpha(0.16)) }
+        else { (tr("search_badge_archived"), theme::muted(), theme::inset()) };
+    div().flex_shrink_0().px(px(7.)).h(px(18.)).flex().items_center().rounded_full().bg(bg).text_size(px(10.5)).text_color(fg).child(text)
+}
+
+/// O selo de conta da lista de sessões.
+fn account_pill(label: String, color: Hsla) -> Div {
+    div().flex_shrink_1().min_w_0().max_w(px(110.)).h(px(18.)).px(px(6.)).flex().items_center().gap(px(4.)).rounded_full().bg(theme::hover())
+        .text_size(px(10.)).font_weight(FontWeight::MEDIUM).text_color(theme::muted())
+        .child(div().size(px(5.)).flex_shrink_0().rounded_full().bg(color))
+        .child(div().min_w_0().truncate().child(label))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Hit, Search, marks, merge_hits, merge_keeping, terms};
+    use super::{Filter, Hit, Search, all_whole, cites, first_words, groups, marks, merge_hits, merge_keeping, moment, next_group, plain, terms};
 
     fn hit(server: &str, line: &str, mtime: f64) -> Hit {
         Hit { project: "p".into(), session_id: "s".into(), line: line.into(), mtime, server: server.into(), ..Default::default() }
     }
+
+    fn at(text: &str) -> chrono::NaiveDateTime { chrono::NaiveDateTime::parse_from_str(text, "%Y-%m-%d %H:%M").unwrap() }
 
     #[test]
     fn highlighted_hit_stays_put_when_a_late_machine_reorders() {
@@ -767,19 +1267,21 @@ mod tests {
 
     #[test]
     fn reopening_never_reuses_a_search_number() {
-        let mut search = Search { debounce: 7, query: "x".into(), hits: vec![hit("a", "x", 1.)], ..Default::default() };
+        let mut search = Search { debounce: 7, chat_seq: 3, query: "x".into(), hits: vec![hit("a", "x", 1.)], ..Default::default() };
         search.reopen(None);
         assert!(search.debounce > 7, "resposta da abertura anterior casaria com a busca nova");
+        assert_eq!(search.chat_seq, 3, "a prévia nova reusaria o número de uma resposta em voo");
         assert!(search.open && search.query.is_empty() && search.hits.is_empty());
     }
 
     #[test]
-    fn late_machine_merges_without_repeats_newest_first() {
+    fn late_machine_merges_without_repeats_whole_words_first_then_newest() {
         let mut hits = Vec::new();
         merge_hits(&mut hits, vec![hit("a", "x", 1.), hit("a", "x", 1.)]);
-        merge_hits(&mut hits, vec![hit("b", "x", 3.), hit("a", "y", 2.)]);
+        let part = Hit { whole: Some(false), ..hit("c", "w", 9.) };
+        merge_hits(&mut hits, vec![hit("b", "x", 3.), hit("a", "y", 2.), part]);
         let keys: Vec<String> = hits.iter().map(Hit::key).collect();
-        assert_eq!(keys, ["b/p/s/x", "a/p/s/y", "a/p/s/x"], "repetido viraria dois elementos com o mesmo id");
+        assert_eq!(keys, ["b/p/s/x", "a/p/s/y", "a/p/s/x", "c/p/s/w"], "pedaço de palavra subiria acima da palavra inteira");
     }
 
     #[test]
@@ -790,10 +1292,80 @@ mod tests {
     }
 
     #[test]
-    fn highlights_every_term_without_overlaps() {
-        let words = terms("Hangar  hangar busca");
-        assert_eq!(words, ["hangar", "busca"]);
-        assert_eq!(marks("O Hangar busca no hangar", &words), vec![2..8, 9..14, 18..24]);
-        assert!(marks("ÁRVORE", &terms("árvore")).is_empty() || marks("ÁRVORE", &terms("árvore")) == vec![0..7]);
+    fn groups_by_conversation_in_arrival_order_capped_and_filtered() {
+        let conv = |sid: &str, line: &str, provider: &str, live: bool| Hit { session_id: sid.into(), provider: Some(provider.into()), live, ..hit("a", line, 1.) };
+        let hits = vec![conv("s1", "a", "claude", true), conv("s2", "b", "codex", false), conv("s1", "c", "claude", true),
+            conv("s1", "d", "claude", true), conv("s1", "e", "claude", true)];
+        assert_eq!(groups(&hits, &Filter::default(), 3), vec![("a/p/s1".to_owned(), vec![0, 2, 3]), ("a/p/s2".to_owned(), vec![1])]);
+        assert_eq!(groups(&hits, &Filter::default(), usize::MAX)[0].1.len(), 4, "a contagem leva os trechos além dos mostrados");
+        let codex = Filter { agent: Some("codex".into()), live: None };
+        assert_eq!(groups(&hits, &codex, 3), vec![("a/p/s2".to_owned(), vec![1])]);
+        let archived = Filter { agent: None, live: Some(false) };
+        assert_eq!(groups(&hits, &archived, 3).len(), 1);
+        assert_eq!(groups(&[hit("a", "x", 1.)], &Filter { agent: Some("claude".into()), live: None }, 3).len(), 1, "sem provider é Claude");
+    }
+
+    #[test]
+    fn the_label_is_the_live_name_then_the_closing_name_then_the_first_message_then_the_folder() {
+        let base = Hit { cwd: Some("/home/j/Projetos/hangar".into()), ..hit("a", "x", 1.) };
+        let full = Hit { session_name: Some("viva".into()), live: true, name: Some("ao-fechar".into()), preview: Some("oi".into()), ..base.clone() };
+        assert_eq!(full.title(), "viva");
+        assert_eq!(Hit { live: false, ..full.clone() }.title(), "ao-fechar", "a morta não tem nome de sessão");
+        assert_eq!(Hit { live: false, name: Some("  ".into()), ..full.clone() }.title(), "oi");
+        assert_eq!(base.title(), "hangar");
+        assert_eq!(first_words("[de: outra] veja https://x.y/z o tour"), "veja o tour");
+        let long = first_words(&"palavra ".repeat(20));
+        assert!(long.ends_with('…') && long.chars().count() <= 59 && !long.contains("palavr…"), "cortou no meio da palavra: {long}");
+        assert_eq!(base.place(), "~/Projetos/hangar");
+    }
+
+    #[test]
+    fn the_moment_says_today_yesterday_or_the_date() {
+        let now = at("2026-11-01 15:00");
+        let say = |when: &str| moment(at(when), now, "hoje", "ontem", "%d/%m");
+        assert_eq!(say("2026-11-01 14:02"), "hoje 14:02");
+        assert_eq!(say("2026-10-31 11:24"), "ontem 11:24");
+        assert_eq!(say("2026-10-30 19:34"), "30/10 19:34");
+        assert_eq!(say("2025-10-30 19:34"), "30/10/25 19:34", "de outro ano, sem o ano parece deste");
+    }
+
+    #[test]
+    fn whole_words_and_word_pieces_are_marked_apart() {
+        let words = terms("Tour  tour uso");
+        assert_eq!(words, ["tour", "uso"]);
+        assert_eq!(marks("O tour de uso", &words), vec![(2..6, true), (10..13, true)]);
+        assert_eq!(marks("estourava o uso", &words), vec![(2..6, false), (12..15, true)]);
+        assert!(all_whole("o Tour, de uso.", &words));
+        assert!(!all_whole("estourava o uso", &words), "pedaço contaria como acerto inteiro");
+        assert_eq!(plain("**Recomendação:** `x`\n## Título\n#296 ok"), "Recomendação: x Título #296 ok");
+    }
+
+    #[test]
+    fn the_answer_cites_a_conversation_by_one_of_its_names_only() {
+        let named = Hit { session_name: Some("tela-onboarding-hangar".into()), live: true, ..hit("a", "x", 1.) };
+        assert!(cites("Na sessão **tela-onboarding-hangar** (aberta agora)", &named));
+        assert!(!cites("Em outra conversa", &named));
+        let archived = Hit { name: Some("Tarefa: redesenhar".into()), cwd: Some("/home/j/hangar".into()), ..hit("a", "x", 1.) };
+        assert!(cites("Na tarefa: redesenhar a tela", &archived), "sem diferenciar maiúsculas");
+        assert!(!cites("o hangar mudou", &archived), "a pasta não é nome: toda resposta citaria a conversa");
+    }
+
+    #[test]
+    fn tab_goes_to_the_next_conversation_and_wraps() {
+        let keys: Vec<String> = ["a", "a", "b", "c", "c"].map(str::to_owned).to_vec();
+        assert_eq!(next_group(&keys, 0), 2);
+        assert_eq!(next_group(&keys, 2), 3);
+        assert_eq!(next_group(&keys, 3), 0);
+    }
+
+    #[test]
+    fn an_old_server_without_the_new_fields_still_parses() {
+        let hits: Vec<Hit> = serde_json::from_value(serde_json::json!([{"project": "p", "session_id": "s", "line": "x", "mtime": 1.0, "live": false}])).unwrap();
+        let hit = &hits[0];
+        assert!(hit.provider.is_none() && hit.conta.is_none() && hit.whole.is_none() && hit.name.is_none() && hit.preview.is_none());
+        assert_eq!(hit.agent(), "claude");
+        let new: Vec<Hit> = serde_json::from_value(serde_json::json!([{"project": "p", "session_id": "s", "line": "x", "provider": "codex",
+            "conta": "codex:/h/.codex", "config_dir": null, "codex_account": "w", "whole": false, "name": null, "preview": "oi"}])).unwrap();
+        assert!(!new[0].is_whole() && new[0].agent() == "codex" && new[0].preview.as_deref() == Some("oi"));
     }
 }

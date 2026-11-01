@@ -732,6 +732,16 @@ impl Api {
         Self::checked(r, false).await?.json().await.map_err(|_| Failure::local("invalid_response"))
     }
 
+    /// Como `server_read`, com o valor de um cabeçalho da resposta (o total de conversas da busca).
+    pub async fn server_read_header(&self, path: &[&str], query: &[(&str, &str)], seconds: u64, header: &str)
+        -> Result<(Value, Option<String>), Failure> {
+        let r = self.client.get(self.server_url(path, query)).timeout(Duration::from_secs(seconds)).send().await
+            .map_err(|e| Failure::lost("GET", &e, false))?;
+        let r = Self::checked(r, false).await?;
+        let value = r.headers().get(header).and_then(|h| h.to_str().ok()).map(str::to_owned);
+        Ok((r.json().await.map_err(|_| Failure::local("invalid_response"))?, value))
+    }
+
     /// Arquivo inteiro do servidor (o diário), com o mesmo teto dos anexos.
     pub async fn server_bytes(&self, path: &[&str], seconds: u64) -> Result<Vec<u8>, Failure> {
         let r = self.client.get(self.server_url(path, &[])).timeout(Duration::from_secs(seconds)).send().await
