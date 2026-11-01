@@ -345,8 +345,8 @@ fn joined(h: &Harness) -> Joined {
     std::fs::create_dir_all(store.join("indexes")).unwrap();
     let path = store.join(format!("{TRANSFER}.json"));
     std::fs::write(&path, record.to_string()).unwrap();
-    // `_thread_key`: json.dumps([home resolvido, thread], ensure_ascii=False).
-    let key = format!("[{}, {}]", serde_json::to_string(&codex_home.canonicalize().unwrap()).unwrap(), serde_json::to_string(THREAD).unwrap());
+    // `_thread_key`: json.dumps([home resolvido, thread], ensure_ascii=False); o Python resolve sem o `\\?\`.
+    let key = format!("[{}, {}]", serde_json::to_string(&hangar_server::accounts::catalog::resolved(&codex_home)).unwrap(), serde_json::to_string(THREAD).unwrap());
     std::fs::write(store.join("indexes").join(format!("thread-{}.json", sha(key.as_bytes()))), json!([TRANSFER]).to_string()).unwrap();
     Joined { collision, rollout, prefix, record: path }
 }
