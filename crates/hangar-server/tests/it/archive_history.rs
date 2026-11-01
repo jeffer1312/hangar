@@ -50,8 +50,10 @@ impl Harness {
         let home = dir.path().canonicalize().unwrap().join("home");
         copy_tree(&fixtures().join("home"), &home);
         let index = home.join(".kimi-code/session_index.jsonl");
-        // Escapado como texto JSON: o `\` do caminho do Windows quebrava a linha do índice do Kimi.
-        let escaped = serde_json::to_string(&*home.to_string_lossy()).unwrap();
+        // Escapado como texto JSON: o `\` do caminho do Windows quebrava a linha do índice do Kimi. Sem o
+        // `\\?\` do canonicalize, que o Kimi nunca grava: nele o `/` da fixture não separa pastas.
+        let resolved = hangar_server::accounts::catalog::resolved(&home);
+        let escaped = serde_json::to_string(&*resolved.to_string_lossy()).unwrap();
         std::fs::write(&index, std::fs::read_to_string(&index).unwrap().replace("{HOME}", escaped.trim_matches('"'))).unwrap();
         let hits = Arc::new(Mutex::new(Vec::new()));
         let seen = hits.clone();

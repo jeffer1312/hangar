@@ -1014,7 +1014,9 @@ impl Env {
         let env = Self::fixtures(timing);
         let home = env.home();
         let kimi_index = home.join(".kimi-code/session_index.jsonl");
-        let text = fs::read_to_string(&kimi_index).unwrap().replace("{HOME}", &json_text(&home.to_string_lossy()));
+        // Sem o `\\?\` do canonicalize, que o Kimi nunca grava: nele o `/` da fixture não separa pastas.
+        let resolved = crate::accounts::catalog::resolved(&home);
+        let text = fs::read_to_string(&kimi_index).unwrap().replace("{HOME}", &json_text(&resolved.to_string_lossy()));
         fs::write(&kimi_index, text).unwrap();
         fs::write(home.join(".kimi-code/config.toml"), KIMI_CONFIG).unwrap();
         fs::write(home.join(".pi/agent/auth.json"), PI_AUTH).unwrap();
