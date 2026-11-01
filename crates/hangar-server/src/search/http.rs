@@ -1,5 +1,5 @@
 // crates/hangar-server/src/search/http.rs
-//! `GET /api/search?q=`: só o dono; o resto segue ao Python, que recusa como hoje.
+//! `GET /api/search?q=`: só o dono; o resto segue ao Python, que responde 403 `erro_busca_so_dono`.
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;

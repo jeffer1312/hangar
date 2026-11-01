@@ -621,12 +621,16 @@ async def _search_without_rust(request: Request, call_next):
     from app import account_bridge
     path, metodo = request.url.path, request.method
     owned = metodo == "GET" and _SEARCH_ASK_ARCHIVE.match(path) or metodo == "POST" and path.rstrip("/") == "/api/ask-history"
-    if not owned or account_bridge.owner_mode() == "rust":
+    if not owned:
         return await call_next(request)
     try:
         await require_auth(request)
     except HTTPException as error:
         return JSONResponse({"detail": error.detail}, status_code=error.status_code, headers=error.headers)
+    # Com o Rust de pé ele atende o dono: o que chega aqui é convidado ou Connect.
+    if account_bridge.owner_mode() == "rust":
+        return JSONResponse({"detail": erro("erro_busca_so_dono", "busca, Perguntar e Arquivo atendem só o dono do servidor")},
+                            status_code=403)
     return JSONResponse({"detail": erro("erro_busca_precisa_rust", "busca, Perguntar e Arquivo precisam do servidor Rust, que não está rodando")},
                         status_code=503)
 

@@ -1,7 +1,7 @@
 //! `GET /api/search/context`: a mensagem achada pela busca e as vizinhas dela, só as do usuário e as do
 //! assistente com texto. Port de `search_context` (api.py) com `archive_jsonl` e
 //! `merged_history("__archive__", …)`; `provider` (e `codex_account`) leem Codex, Pi, omp e Kimi pela
-//! leitura do histórico do Arquivo. Só o dono; o resto segue ao Python, que recusa.
+//! leitura do histórico do Arquivo. Só o dono; o resto segue ao Python, que responde 403 `erro_busca_so_dono`.
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, LazyLock};

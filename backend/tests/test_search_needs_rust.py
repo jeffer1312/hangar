@@ -54,3 +54,22 @@ def test_unauthenticated_is_401(python_mode):
 def test_resume_is_not_taken(python_mode):
     response = TestClient(app).post("/api/archive/-home-u/0cc60e6c-eafc-4915-9936-f0c7b81191d9/resume", headers=AUTH, json={})
     assert response.json()["detail"]["code"] != "erro_busca_precisa_rust"
+
+
+@pytest.fixture
+def rust_mode(monkeypatch):
+    monkeypatch.setattr(settings, "auth_token", TOKEN)
+    monkeypatch.setattr(runtime_coordinator, "current", lambda: SimpleNamespace(mode="rust"))
+
+
+@pytest.mark.parametrize("method,url", ROUTES)
+def test_rust_mode_refuses_who_is_not_the_owner_with_code(rust_mode, monkeypatch, method, url):
+    # O Rust atende o dono; o que ele repassa para cá (convidado, Connect) recebe o motivo, não um 404.
+    from app import guest_header
+    monkeypatch.setattr(guest_header, "guest_of", lambda _request: SimpleNamespace(session="s"))
+    response = TestClient(app).request(method, url, json={"question": "x"} if method == "POST" else None)
+    assert (response.status_code, response.json()["detail"]["code"]) == (403, "erro_busca_so_dono")
+
+
+def test_rust_mode_unauthenticated_is_401(rust_mode):
+    assert TestClient(app).get("/api/search?q=x").status_code == 401

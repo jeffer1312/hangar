@@ -1,5 +1,5 @@
 //! `POST /api/ask-history` (Perguntar): termos da pergunta, uma busca por termo no índice e um
-//! `claude -p` que diz em qual sessão o assunto apareceu. Só o dono; o resto segue ao Python.
+//! `claude -p` que diz em qual sessão o assunto apareceu. Só o dono; o resto segue ao Python, que responde 403 `erro_busca_so_dono`.
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::{Arc, LazyLock};
