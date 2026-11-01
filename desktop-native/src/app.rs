@@ -2613,13 +2613,22 @@ impl Hangar {
     fn toggle(&mut self, key: String, cx: &mut Context<Self>) {
         // Linha da prévia da aba: o clique chega aqui com a conversa principal no lugar.
         if self.toggle_in_tab_preview(key.clone(), cx) { return; }
+        // E a da prévia da busca.
+        if self.toggle_in_search_preview(key.clone(), cx) { return; }
         self.toggle_here(key, cx);
     }
 
     fn toggle_here(&mut self, key: String, cx: &mut Context<Self>) {
         toggle_detail(&mut self.expanded, &mut self.prepared, &key);
         self.prepare_tools();
-        let row = self.row_ids.iter().position(|id| id == &key || id.strip_prefix(PINNED) == Some(key.as_str())).or_else(|| {
+        if let Some(row) = self.row_of(&key) { self.list_state.remeasure_items(row..row + 1); }
+        cx.notify();
+    }
+
+    /// A linha da conversa que mostra a chave: a dela, a do grupo de ferramentas ou do pensamento que a contém, ou a linha
+    /// de que ela é uma parte.
+    fn row_of(&self, key: &str) -> Option<usize> {
+        self.row_ids.iter().position(|id| id == key || id.strip_prefix(PINNED) == Some(key)).or_else(|| {
             let events = &self.chat.events;
             self.conversation.items.iter().position(|item| match item {
                 Item::Group { tools, .. } => tools.iter().any(|t| events[t.call].id == key),
@@ -2627,9 +2636,7 @@ impl Hangar {
                 _ => false,
             })
         // Chave de uma parte da linha ("<linha>#…"): passo da lista de tarefas, tabela da resposta.
-        }).or_else(|| self.row_ids.iter().position(|id| key.strip_prefix(id.as_str()).is_some_and(|rest| rest.starts_with('#'))));
-        if let Some(row) = row { self.list_state.remeasure_items(row..row + 1); }
-        cx.notify();
+        }).or_else(|| self.row_ids.iter().position(|id| key.strip_prefix(id.as_str()).is_some_and(|rest| rest.starts_with('#'))))
     }
 
     fn cancel_preview_drop(&mut self) {
