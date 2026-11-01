@@ -1542,6 +1542,21 @@ fn corruption_wakes_the_producer_to_rebuild_without_a_new_write() {
 }
 
 #[test]
+fn discard_waits_for_a_reader_that_lets_go() {
+    // No Windows um leitor aberto impede a remoção; o descarte espera ele soltar em vez de desistir.
+    let env = Env::small(quiet());
+    env.index.update().unwrap();
+    *env.index.inner.writer.lock().unwrap() = None;
+    let path = env.index.path().to_owned();
+    let reader = env.db();
+    reader.query_row("SELECT count(*) FROM files", [], |r| r.get::<_, i64>(0)).unwrap();
+    let late = std::thread::spawn(move || { std::thread::sleep(Duration::from_millis(200)); drop(reader); });
+    super::db::discard(&path).unwrap();
+    late.join().unwrap();
+    assert!(!path.exists());
+}
+
+#[test]
 fn rebuilds_in_a_row_stop_waking_the_producer_after_three_until_a_pass_works() {
     let env = Env::small(quiet());
     let (tx, rx) = std::sync::mpsc::channel();

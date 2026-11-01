@@ -92,12 +92,25 @@ pub(super) fn discard(path: &Path) -> std::io::Result<()> {
     for suffix in ["", "-wal", "-shm"] {
         let mut p = path.as_os_str().to_os_string();
         p.push(suffix);
-        match std::fs::remove_file(&p) {
+        match remove(Path::new(&p)) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
             _ => {}
         }
     }
     Ok(())
+}
+
+/// No Windows o SQLite abre sem `FILE_SHARE_DELETE`: um leitor da busca no meio da consulta segura o
+/// arquivo (erro 32) por alguns milissegundos, e a remoção espera ele soltar.
+fn remove(path: &Path) -> std::io::Result<()> {
+    let mut tries = 0;
+    loop {
+        match std::fs::remove_file(path) {
+            Err(e) if e.raw_os_error() == Some(32) && cfg!(windows) && tries < 40 => tries += 1,
+            other => return other,
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
 }
 
 /// Índice é cache: arquivo ilegível se apaga e se refaz uma vez.
