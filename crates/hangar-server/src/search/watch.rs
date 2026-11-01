@@ -18,6 +18,8 @@ pub(super) enum Wake {
     Changed,
     /// Uma passada que o produtor não fez terminou: refazer o observador se as contas mudaram.
     Rewatch,
+    /// O banco corrompido foi descartado: refazer já, também durante a espera da 1ª passada.
+    Rebuild,
     Failed(String),
     Stop,
 }
@@ -72,13 +74,14 @@ pub(super) fn reopen_wait(base: Duration, attempt: u32) -> Duration {
 #[derive(PartialEq)]
 enum Rest { Stop, Woken, Elapsed }
 
-/// Espera `wait` ouvindo o canal. `woken`: um aviso de passada ou de escrita encerra a espera antes
-/// (outra passada pode ter aberto o banco).
+/// Espera `wait` ouvindo o canal. A reconstrução por corrupção sempre encerra a espera; `woken`: um
+/// aviso de passada ou de escrita também (outra passada pode ter aberto o banco).
 fn rest(rx: &Receiver<Wake>, wait: Duration, woken: bool) -> Rest {
     let deadline = Instant::now() + wait;
     while let Some(left) = deadline.checked_duration_since(Instant::now()).filter(|d| !d.is_zero()) {
         match rx.recv_timeout(left) {
             Ok(Wake::Stop) | Err(RecvTimeoutError::Disconnected) => return Rest::Stop,
+            Ok(Wake::Rebuild) => return Rest::Woken,
             Ok(Wake::Rewatch | Wake::Changed) if woken => return Rest::Woken,
             Ok(_) => {}
             Err(RecvTimeoutError::Timeout) => break,
@@ -170,6 +173,7 @@ fn run(index: Index, tx: Sender<Wake>, rx: Receiver<Wake>) {
                     Some(pass) => break pass,
                     None => return,
                 },
+                Ok(Wake::Rebuild) => break true,
                 Ok(Wake::Rewatch) => break false,
                 Ok(Wake::Failed(detail)) => down(&index, &mut watch, detail),
                 Ok(Wake::Stop) | Err(_) => return,

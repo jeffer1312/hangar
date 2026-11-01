@@ -798,6 +798,21 @@ fn index_that_cannot_open_is_reported_once_and_retried() {
 }
 
 #[test]
+fn a_rebuild_ends_the_wait_for_the_first_pass() {
+    // Índice descartado por corrupção na espera da subida: refaz na hora. Mudança comum segue esperando.
+    let env = Env::small(Timing { first_pass: Duration::from_secs(60), ..quiet() });
+    env.write(SID, &[line("agulha um", "u1", "user")], false);
+    let _producer = env.index.start().unwrap();
+    wait_for("banco aberto", || env.index.path().exists());
+    std::thread::sleep(Duration::from_millis(100));
+    env.index.wake_producer(watch::Wake::Changed);
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!env.index.ready(), "mudança comum não encurta a espera da 1ª passada");
+    env.index.wake_producer(watch::Wake::Rebuild);
+    wait_for("passada de reconstrução", || env.index.ready());
+}
+
+#[test]
 fn a_burst_of_wakes_ends_the_wait_to_reopen_only_once() {
     // Avisos em rajada com o banco fechado: uma tentativa antecipada, e a espera longa volta a valer.
     let env = Env::small(Timing { reopen: Duration::from_secs(60), ..quiet() });

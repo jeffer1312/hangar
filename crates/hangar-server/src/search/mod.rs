@@ -318,7 +318,7 @@ impl Index {
     fn rebuild_after_corruption(&self) {
         let n = self.inner.rebuilds.fetch_add(1, Ordering::AcqRel) + 1;
         if n <= MAX_REBUILDS {
-            self.wake_producer(watch::Wake::Changed);
+            self.wake_producer(watch::Wake::Rebuild);
         } else {
             self.report_once("busca.indice_corrompido_seguido", "", || format!("{n} reconstruções seguidas do índice corrompido; sem nova tentativa automática"));
         }
