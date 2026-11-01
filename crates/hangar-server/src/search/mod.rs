@@ -257,6 +257,14 @@ impl Index {
         let started = Instant::now();
         let accounts = (self.inner.accounts)().map_err(IndexError::Catalog)?;
         if let Err(e) = ingest::pass(conn, &accounts, self.agents(), self) {
+            // Conexão sobre arquivo corrompido não se recupera: solta, apaga, e a próxima passada refaz.
+            if matches!(&e, IndexError::Sqlite(s) if db::corrupt(s)) {
+                *writer = None;
+                tracing::warn!(error = %e, "índice da busca corrompido durante a passada, reconstruindo");
+                if let Err(gone) = db::discard(&self.inner.path) {
+                    self.report_once("busca.indice_nao_apagado", "", || gone.to_string());
+                }
+            }
             self.report_once("busca.ingestao_falhou", "", || e.to_string());
             return Err(e);
         }

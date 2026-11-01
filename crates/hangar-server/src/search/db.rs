@@ -83,25 +83,30 @@ fn connect(path: &Path) -> rusqlite::Result<Connection> {
     Ok(conn)
 }
 
-fn corrupt(e: &rusqlite::Error) -> bool {
+pub(super) fn corrupt(e: &rusqlite::Error) -> bool {
     matches!(e.sqlite_error_code(), Some(ErrorCode::DatabaseCorrupt | ErrorCode::NotADatabase))
 }
 
-/// Índice é cache: arquivo ilegível se apaga (banco, `-wal`, `-shm`) e se refaz uma vez.
+/// Apaga o banco, o `-wal` e o `-shm`. A conexão tem que estar solta: no Windows o arquivo aberto não sai.
+pub(super) fn discard(path: &Path) -> std::io::Result<()> {
+    for suffix in ["", "-wal", "-shm"] {
+        let mut p = path.as_os_str().to_os_string();
+        p.push(suffix);
+        match std::fs::remove_file(&p) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Índice é cache: arquivo ilegível se apaga e se refaz uma vez.
 pub(super) fn open(path: &Path) -> Result<Connection, IndexError> {
     std::fs::create_dir_all(path.parent().unwrap_or(Path::new(".")))?;
     match connect(path) {
         Err(e) if corrupt(&e) => {
             tracing::warn!(error = %e, "índice da busca ilegível, reconstruindo");
-            // `connect` já soltou a conexão: no Windows o arquivo aberto não sai.
-            for suffix in ["", "-wal", "-shm"] {
-                let mut p = path.as_os_str().to_os_string();
-                p.push(suffix);
-                match std::fs::remove_file(&p) {
-                    Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
-                    _ => {}
-                }
-            }
+            discard(path)?;
             Ok(connect(path)?)
         }
         other => Ok(other?),

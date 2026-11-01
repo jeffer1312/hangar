@@ -1318,3 +1318,28 @@ fn fast_scan_returns_exactly_what_the_sequential_scan_did() {
     assert_eq!((ids("configuracao"), ids("login"), ids("ação")), (vec!["e1".to_owned()], vec!["e2".to_owned(), "e3".to_owned()], vec!["e2".to_owned(), "e1".to_owned()]),
         "o `\\u` do JSON, a junção do `<system-reminder>` e o acento (D28: \"AÇÃO\" inteira antes de \"Configuração\")");
 }
+
+#[test]
+fn corruption_with_the_index_open_rebuilds_on_the_next_pass() {
+    // A conexão do escritor não fica quebrada: o arquivo corrompido sai e a passada seguinte refaz.
+    let env = Env::small(quiet());
+    env.write(SID, &[line("agulha um", "u1", "user")], false);
+    env.index.update().unwrap();
+    // Tudo no arquivo principal e o cache do escritor invalidado (outra escrita mudou o WAL); depois as
+    // páginas além da primeira viram lixo no mesmo arquivo.
+    let other = env.db();
+    other.execute_batch("PRAGMA wal_checkpoint(TRUNCATE); INSERT INTO meta(k, v) VALUES ('t', '1'); PRAGMA wal_checkpoint(TRUNCATE);").unwrap();
+    drop(other);
+    let path = env.index.path().to_owned();
+    let size = fs::metadata(&path).unwrap().len() as usize;
+    let mut file = fs::OpenOptions::new().write(true).open(&path).unwrap();
+    std::io::Seek::seek(&mut file, std::io::SeekFrom::Start(4096)).unwrap();
+    std::io::Write::write_all(&mut file, &b"lixo".repeat(size / 4)).unwrap();
+    drop(file);
+    env.write(SID2, &[line("agulha dois", "u2", "user")], false);
+    assert!(env.index.update().is_err(), "a passada vê a corrupção");
+    env.index.update().unwrap();
+    let mut ids = env.ids("agulha");
+    ids.sort();
+    assert_eq!(ids, ["u1", "u2"]);
+}
