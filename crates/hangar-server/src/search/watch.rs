@@ -69,12 +69,14 @@ pub(super) fn reopen_wait(base: Duration, attempt: u32) -> Duration {
     if attempt < 3 { base * (1 << attempt) } else { base * 10 }
 }
 
-/// Espera `wait` ouvindo o canal; `false` = pediram para parar.
-fn rest(rx: &Receiver<Wake>, wait: Duration) -> bool {
+/// Espera `wait` ouvindo o canal; `false` = pediram para parar. `woken`: um aviso de passada ou de
+/// escrita encerra a espera antes (outra passada pode ter aberto o banco).
+fn rest(rx: &Receiver<Wake>, wait: Duration, woken: bool) -> bool {
     let deadline = Instant::now() + wait;
     while let Some(left) = deadline.checked_duration_since(Instant::now()).filter(|d| !d.is_zero()) {
         match rx.recv_timeout(left) {
             Ok(Wake::Stop) | Err(RecvTimeoutError::Disconnected) => return false,
+            Ok(Wake::Rewatch | Wake::Changed) if woken => break,
             Ok(_) => {}
             Err(RecvTimeoutError::Timeout) => break,
         }
@@ -113,14 +115,15 @@ fn run(index: Index, tx: Sender<Wake>, rx: Receiver<Wake>) {
     let mut attempt = 0;
     while let Err(e) = index.open_now() {
         // Sem índice a busca varre o disco a cada pedido: fica no diário exportável, não só no log.
+        tracing::debug!(error = %e, attempt, "busca: índice ainda não abre");
         index.report_once("busca.indice_indisponivel", "", || e.to_string());
-        if !rest(&rx, reopen_wait(index.inner.timing.reopen, attempt)) {
+        if !rest(&rx, reopen_wait(index.inner.timing.reopen, attempt), true) {
             return;
         }
         attempt = attempt.saturating_add(1);
     }
     index.recovered("busca.indice_indisponivel", "");
-    if !rest(&rx, index.inner.timing.first_pass) {
+    if !rest(&rx, index.inner.timing.first_pass, false) {
         return;
     }
     let mut watch = Watch::default();

@@ -779,7 +779,7 @@ fn index_that_cannot_open_is_reported_once_and_retried() {
     let env = Env::small(Timing { reopen: Duration::from_millis(30), ..quiet() });
     env.write(SID, &[line("agulha um", "u1", "user")], false);
     fs::write(env.root.join("idx"), b"arquivo no lugar da pasta").unwrap();
-    let _producer = env.index.start().unwrap();
+    let producer = env.index.start().unwrap();
     wait_for("falha no diário", || env.reported("busca.indice_indisponivel") == 1);
     assert_eq!(env.index.search(&terms("agulha"), 50).unwrap(), None);
     std::thread::sleep(Duration::from_millis(200));
@@ -787,6 +787,27 @@ fn index_that_cannot_open_is_reported_once_and_retried() {
     fs::remove_file(env.root.join("idx")).unwrap();
     wait_for("índice aberto e pronto", || env.index.ready());
     assert_eq!(env.ids("agulha"), ["u1"]);
+    // Abriu: a próxima falha ao abrir volta ao diário (outra subida do produtor, banco perdido de novo).
+    drop(producer);
+    *env.index.inner.writer.lock().unwrap() = None;
+    env.index.inner.started.store(false, std::sync::atomic::Ordering::Release);
+    fs::remove_dir_all(env.root.join("idx")).unwrap();
+    fs::write(env.root.join("idx"), b"arquivo no lugar da pasta").unwrap();
+    let _producer = env.index.start().unwrap();
+    wait_for("segunda falha no diário", || env.reported("busca.indice_indisponivel") == 2);
+}
+
+#[test]
+fn a_pass_that_opens_the_index_ends_the_wait_to_reopen() {
+    // Outra passada abriu o banco e acordou o produtor: ele não dorme o resto da espera longa.
+    let env = Env::small(Timing { reopen: Duration::from_secs(60), ..quiet() });
+    fs::write(env.root.join("idx"), b"arquivo no lugar da pasta").unwrap();
+    let _producer = env.index.start().unwrap();
+    wait_for("falha no diário", || env.reported("busca.indice_indisponivel") == 1);
+    fs::remove_file(env.root.join("idx")).unwrap();
+    env.index.update().unwrap();
+    env.index.wake_producer(watch::Wake::Rewatch);
+    wait_for("observador de pé", || env.watching());
 }
 
 #[test]
