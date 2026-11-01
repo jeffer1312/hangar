@@ -222,9 +222,9 @@ fn lifecycle_matches_python_capture() {
     fs::rename(home.join(MTIMES[11]), &dst).unwrap();
     check("move_account");
     let b = home.join(".claude-b");
-    let facts = env.index.file_facts(&dst.to_string_lossy()).unwrap().unwrap();
-    assert_eq!((facts.config_dir.as_deref(), facts.account.as_str(), facts.provider.as_str()),
-        (Some(&*b.to_string_lossy()), &*format!("claude:{}", b.to_string_lossy()), "claude"));
+    let facts: (Option<String>, String, String) = env.db().query_row("SELECT config_dir, account, provider FROM files WHERE path = ?",
+        [dst.to_string_lossy()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap();
+    assert_eq!(facts, (Some(b.to_string_lossy().into_owned()), format!("claude:{}", b.to_string_lossy()), "claude".to_owned()));
 }
 
 #[test]
@@ -610,8 +610,7 @@ fn creating_the_index_touches_no_disk() {
     let env = Env::small(quiet());
     assert!(!env.index.path().parent().unwrap().exists());
     assert_eq!(env.index.search(&terms("agulha"), 50).unwrap(), None);
-    assert!(env.index.heads().is_empty());
-    assert_eq!(env.index.file_facts("/x").unwrap(), None);
+    assert!(env.index.archive_rows().is_empty());
     assert!(!env.index.path().parent().unwrap().exists());
     // IDX-03: arquivo próprio do Rust ao lado do índice de custos.
     let server = Index::server(crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture()));
@@ -619,26 +618,22 @@ fn creating_the_index_touches_no_disk() {
 }
 
 #[test]
-fn heads_and_file_facts_for_the_archive() {
-    // IDX-42 e M4/F12: cabeçalho pronto, conta, se tem usuário e a última mensagem real.
+fn archive_rows_carry_the_head_and_the_last_message() {
+    // IDX-42 e M4/F12: cabeçalho, se tem usuário e a última mensagem real, como o Arquivo os lê.
     let env = Env::fixtures(quiet());
     env.index.update().unwrap();
     let home = env.home();
-    let heads = env.index.heads();
-    let normal = home.join(MTIMES[13]).to_string_lossy().into_owned();
-    assert_eq!(heads[&normal], ("[painel: orquestrador 9c0b634f] Read /.claude/skills/orquestrar/references/executor.md — your role's page, plus the…".to_owned(),
-        Some("/home/jefferson/Projetos/hangar-computer-control-9c0b634f-t1".to_owned())));
-    assert_eq!(heads.len(), 7, "a reserva sem cabeçalho fica fora");
-    assert!(!heads.contains_key(&*home.join(RESERVE).to_string_lossy()));
-    let a = home.join(".claude-a").to_string_lossy().into_owned();
-    let facts = |rel: &str| env.index.file_facts(&home.join(rel).to_string_lossy()).unwrap().unwrap();
-    assert_eq!(facts(MTIMES[13]), FileFacts { has_user: true, provider: "claude".into(), config_dir: Some(a.clone()), account: format!("claude:{a}"),
-        last_text: "O árbitro aceitou a correção do scripts/windows-test.sh e mandou incluir components = [\"clippy\"] no rust-toolchain.toml…".into() });
-    let reserve = facts(RESERVE);
+    let rows = env.index.archive_rows();
+    let row = |rel: &str| rows[&*home.join(rel).to_string_lossy()].clone();
+    let normal = row(MTIMES[13]);
+    assert_eq!((normal.preview.as_str(), normal.cwd.as_deref(), normal.has_user),
+        ("[painel: orquestrador 9c0b634f] Read /.claude/skills/orquestrar/references/executor.md — your role's page, plus the…",
+         Some("/home/jefferson/Projetos/hangar-computer-control-9c0b634f-t1"), true));
+    assert_eq!(normal.last_text, "O árbitro aceitou a correção do scripts/windows-test.sh e mandou incluir components = [\"clippy\"] no rust-toolchain.toml…");
+    let reserve = row(RESERVE);
     assert_eq!((reserve.has_user, reserve.last_text.as_str()), (false, ""));
-    assert_eq!(facts(MTIMES[6]).last_text, "tem como dedesativar esse mod do ponytail? eu nao queria isso ativo nao querof icar vendo esse botao ai");
-    assert_eq!(facts(MTIMES[11]).last_text, "O ator do Rust chama POST /internal/runtime/policy no Python ao abrir e recebe 503. Vou ver por quê.");
-    assert_eq!(env.index.file_facts("/nao/existe.jsonl").unwrap(), None);
+    assert_eq!(row(MTIMES[6]).last_text, "tem como dedesativar esse mod do ponytail? eu nao queria isso ativo nao querof icar vendo esse botao ai");
+    assert_eq!(row(MTIMES[11]).last_text, "O ator do Rust chama POST /internal/runtime/policy no Python ao abrir e recebe 503. Vou ver por quê.");
 }
 
 #[test]

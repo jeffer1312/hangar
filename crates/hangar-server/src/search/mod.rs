@@ -109,16 +109,6 @@ pub struct Row {
     pub preview: String,
 }
 
-/// O que o Arquivo lê de um transcript sem abri-lo.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct FileFacts {
-    pub has_user: bool,
-    pub last_text: String,
-    pub account: String,
-    pub config_dir: Option<String>,
-    pub provider: String,
-}
-
 /// Um transcript indexado como o Arquivo o lê, com o tamanho e o relógio da leitura: arquivo que
 /// mudou depois dela é lido do disco.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -478,37 +468,6 @@ impl Index {
             tracing::warn!(error = %e, "busca: conversas internas do índice ilegíveis");
             HashSet::new()
         })
-    }
-
-    /// path → (prévia, cwd) dos arquivos com cabeçalho completo; erro dá vazio (o Arquivo lê do disco).
-    pub fn heads(&self) -> HashMap<String, (String, Option<String>)> {
-        let read = || -> rusqlite::Result<HashMap<String, (String, Option<String>)>> {
-            let conn = self.reader()?;
-            let mut stmt = conn.prepare("SELECT path, preview, cwd FROM files WHERE head_done=1")?;
-            let heads = stmt.query_map([], |r| Ok((r.get(0)?, (r.get(1)?, r.get(2)?))))?.collect();
-            heads
-        };
-        if !self.inner.path.exists() {
-            return HashMap::new();
-        }
-        self.notice_catalog();
-        read().unwrap_or_else(|e| {
-            tracing::warn!(error = %e, "busca: cabeçalhos do índice ilegíveis");
-            HashMap::new()
-        })
-    }
-
-    /// Fatos de um transcript indexado; `None` = fora do índice (o Arquivo lê do disco).
-    pub fn file_facts(&self, path: &str) -> Result<Option<FileFacts>, IndexError> {
-        if !self.inner.path.exists() {
-            return Ok(None);
-        }
-        let conn = self.reader()?;
-        Ok(conn.query_row(
-            "SELECT has_user, last_text, account, config_dir, provider FROM files WHERE path=?", [path],
-            |r| Ok(FileFacts { has_user: r.get::<_, i64>(0)? != 0, last_text: r.get(1)?,
-                account: r.get::<_, Option<String>>(2)?.unwrap_or_default(), config_dir: r.get(3)?, provider: r.get(4)? }),
-        ).optional()?)
     }
 
     /// Todos os transcripts indexados numa leitura só (o Arquivo lista milhares); erro dá vazio e o
