@@ -29,10 +29,12 @@ pub(super) fn discover(env: &AccountEnvironment) -> (BTreeMap<String, Found>, Ve
                     // O transferido do Claude entra só depois da fronteira, com os ids do histórico composto;
                     // a parte Claude já está no índice pelo transcript dela.
                     Ok(Some(_)) => match transfer::archive_record(&env.home, &owner.home, &crate::locate::session_key(&c.path.to_string_lossy())) {
-                        Ok(record) => {
-                            if let Some(record) = record { transfers.insert(c.path.clone(), (record, owner.home.clone())); }
+                        Ok(Some(record)) => {
+                            transfers.insert(c.path.clone(), (record, owner.home.clone()));
                             others.push(c);
                         }
+                        // Sem o registro não há fronteira: lido cru, entrariam as linhas importadas.
+                        Ok(None) => unread.push(Unread::new("codex", Some(&c.path), "transferência sem registro legível")),
                         Err(e) => unread.push(Unread::new("codex", Some(&c.path), e)),
                     },
                     Err(e) => unread.push(Unread::new("codex", Some(&c.path), e)),

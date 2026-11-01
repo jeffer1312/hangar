@@ -598,3 +598,35 @@ async fn transferred_rollout_is_indexed_after_the_boundary_with_the_composed_ids
     assert_eq!(found("depois").len(), 1);
     assert!(found("depois")[0].starts_with(&format!("transfer:{TRANSFER}:codex:")));
 }
+
+/// Transferência que a lista vê e o histórico composto não acha (o índice aponta o id noutra grafia):
+/// o rollout não entra cru no índice, e o que ele já tinha fica.
+#[tokio::test]
+async fn transferred_rollout_without_a_readable_record_is_not_indexed_raw_and_keeps_its_rows() {
+    let h = Harness::new().await;
+    let j = joined(&h);
+    let codex_home = h.home.join(".codex");
+    let key = format!("[{}, {}]", serde_json::to_string(&codex_home.canonicalize().unwrap()).unwrap(), serde_json::to_string(THREAD).unwrap());
+    let thread_index = h.home.join(".hangar/conversation-transfers/indexes").join(format!("thread-{}.json", sha(key.as_bytes())));
+    let point = |id: &str| std::fs::write(&thread_index, json!([id]).to_string()).unwrap();
+    let env = [("HOME", h.home.to_string_lossy().into_owned()), ("USERPROFILE", h.home.to_string_lossy().into_owned()),
+        ("CLAUDE_CONFIG_DIR", h.home.join(".claude-a").to_string_lossy().into_owned())];
+    let env = hangar_server::accounts::environment::AccountEnvironment::from_map(env.into_iter().map(|(k, v)| (k.to_owned(), v)).collect());
+    let index = hangar_server::search::Index::new(&h.home.join("idx-transfer"), Arc::new(|| Ok(Vec::new())),
+        Arc::new(|_, _| {}), Default::default()).with_agents(env);
+    let rollout = j.rollout.to_string_lossy().into_owned();
+    let found = |q: &str| index.search(&[q.to_owned()], 50).unwrap().unwrap().into_iter().filter(|r| r.path == rollout)
+        .map(|r| r.event_id).collect::<Vec<_>>();
+    point(&TRANSFER.to_uppercase());
+    index.update().unwrap();
+    assert!(found("ok").is_empty() && found("novo").is_empty(), "sem o registro, nada do rollout entra");
+    point(TRANSFER);
+    index.update().unwrap();
+    assert_eq!(found("novo").len(), 1);
+    point(&TRANSFER.to_uppercase());
+    std::fs::OpenOptions::new().append(true).open(&j.rollout).map(|mut f| std::io::Write::write_all(&mut f,
+        line(&codex_message("depois", "later", 3)).as_bytes())).unwrap().unwrap();
+    index.update().unwrap();
+    assert_eq!(found("novo").len(), 1, "o que o índice tinha fica");
+    assert!(found("depois").is_empty());
+}
