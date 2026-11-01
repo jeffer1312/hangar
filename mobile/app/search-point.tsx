@@ -4,7 +4,7 @@ import { StyleSheet } from 'react-native-unistyles';
 import { Stack, useIsFocused, useLocalSearchParams, useRouter } from 'expo-router';
 import { useHeaderHeight } from 'expo-router/react-navigation';
 import type { Edge } from 'react-native-safe-area-context';
-import { getSearchContextForServer, probeServerResponse, rememberEntry, type ArchiveEntry, type ChatEvent, type Server } from '@hangar/core';
+import { getSearchContextForServer, probeServerResponse, rememberEntry, type ArchiveEntry, type ChatEvent, type Provider, type Server } from '@hangar/core';
 import { useServers } from '../src/stores/servers';
 import { Screen } from '../src/ui/Screen';
 import { HeaderBack, useGlassHeader } from '../src/ui/glassHeader';
@@ -36,7 +36,7 @@ function Context({ server, project, sid, eventId, name, conversationTitle, provi
   const load = useCallback(() => {
     const id = ++generation.current;
     setLoading(true); setError(''); setEvents([]); setTargetY(null); setContentHeight(0); followingTarget.current = true;
-    void getSearchContextForServer(serverRef.current, project, sid, eventId, provider, codexAccount)
+    void getSearchContextForServer(serverRef.current, project, sid, eventId, (provider || null) as Provider | null, codexAccount)
       .then((context) => {
         if (id !== generation.current) return;
         if (!context.some((event) => event.id === eventId)) throw new Error(m.busca_contexto_indisponivel());
@@ -61,7 +61,9 @@ function Context({ server, project, sid, eventId, name, conversationTitle, provi
       if (!response.ok) throw new Error(`${m.arquivo_conversa_erro()}: ${m.busca_motivo_http({ status: String(response.status) })}`);
       const entries: ArchiveEntry[] = await response.json();
       if (!Array.isArray(entries)) throw new Error(m.arquivo_conversa_erro());
-      const matches = entries.filter((entry) => entry?.session_id === sid && entry.project === project);
+      // Link antigo não traz agente nem conta: o filtro só estreita quando eles vieram.
+      const matches = entries.filter((entry) => entry?.session_id === sid && entry.project === project
+        && (!provider || entry.provider === provider) && (!codexAccount || entry.codex_account === codexAccount));
       if (matches.length > 1) throw new Error(m.arquivo_conversa_conta_ambigua());
       if (matches.length !== 1) throw new Error(m.arquivo_conversa_erro());
       if (id !== openGeneration.current) return;
