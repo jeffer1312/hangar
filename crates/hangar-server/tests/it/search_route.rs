@@ -95,7 +95,9 @@ impl Scene {
             // R5: o índice do Kimi aponta para este HOME, e credenciais de mentira dão conta ao Pi, ao omp
             // e ao Kimi (o mtime de cada transcript fica o da captura).
             let kimi = home.join(".kimi-code/session_index.jsonl");
-            std::fs::write(&kimi, std::fs::read_to_string(&kimi).unwrap().replace("{HOME}", &home.to_string_lossy())).unwrap();
+            // Escapado como texto JSON: o `\` do caminho do Windows quebrava a linha do índice do Kimi.
+            let escaped = serde_json::to_string(&*home.to_string_lossy()).unwrap();
+            std::fs::write(&kimi, std::fs::read_to_string(&kimi).unwrap().replace("{HOME}", escaped.trim_matches('"'))).unwrap();
             std::fs::write(home.join(".kimi-code/config.toml"), KIMI_CONFIG).unwrap();
             std::fs::write(home.join(".pi/agent/auth.json"), PI_AUTH).unwrap();
         } else {

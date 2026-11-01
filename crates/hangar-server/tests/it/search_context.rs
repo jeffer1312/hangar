@@ -54,7 +54,9 @@ impl Scene {
         let home = dir.path().join("home");
         copy_tree(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/search/home"), &home);
         let kimi = home.join(".kimi-code/session_index.jsonl");
-        std::fs::write(&kimi, std::fs::read_to_string(&kimi).unwrap().replace("{HOME}", &home.to_string_lossy())).unwrap();
+        // Escapado como texto JSON: o `\` do caminho do Windows quebrava a linha do índice do Kimi.
+        let escaped = serde_json::to_string(&*home.to_string_lossy()).unwrap();
+        std::fs::write(&kimi, std::fs::read_to_string(&kimi).unwrap().replace("{HOME}", escaped.trim_matches('"'))).unwrap();
         let (python, upstream) = spawn_fake().await;
         let cfg = Config {
             listen: "127.0.0.1:0".parse().unwrap(),
@@ -198,7 +200,8 @@ async fn search_context_reads_the_account_named_by_config_dir() {
     std::fs::write(&copy, format!("{}\n", json!({"type": "user", "uuid": "so-na-b", "timestamp": "2026-10-01T10:00:00Z",
         "message": {"role": "user", "content": MID}}))).unwrap();
     let account = |name: &str| scene.home.join(name).to_string_lossy().replace('/', "%2F");
-    for (dir, want) in [(".claude-b", "so-na-b"), (".claude-a", MID)] {
+    // `.claude-b/`: outra grafia da mesma pasta é a mesma conta do catálogo.
+    for (dir, want) in [(".claude-b", "so-na-b"), (".claude-a", MID), (".claude-b/", "so-na-b")] {
         let (status, body) = scene.get(&format!("project={NORMAL_P}&session_id={NORMAL_S}&event_id={want}&around=0&config_dir={}",
             account(dir))).await;
         assert_eq!((status, ids(&body)), (StatusCode::OK, vec![want.to_owned()]), "{dir}");

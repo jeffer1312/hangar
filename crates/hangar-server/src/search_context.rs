@@ -88,16 +88,20 @@ fn excerpt(st: &AppState, p: &Params) -> Response {
         Err(e) => return refused(e.status, e.code, &e.message, e.params),
     };
     // A conta do trecho, quando a mesma conversa existe em mais de uma.
-    if p.config_dir.as_ref().is_some_and(|dir| !config_dirs.contains(dir)) {
-        return refused(400, "erro_config_dir_invalido", "config_dir invalido", json!({}));
-    }
+    let config_dir = match &p.config_dir {
+        None => None,
+        Some(dir) => match crate::session_open::resolve::known_config_dir(config_dirs.iter().map(String::as_str), dir) {
+            Some(known) => Some(known.to_owned()),
+            None => return refused(400, "erro_config_dir_invalido", "config_dir invalido", json!({})),
+        },
+    };
     // Sem `provider` é Claude (CTX-08); os outros agentes leem pelo parser do histórico do Arquivo.
     let Some(provider) = AgentProvider::parse(p.provider.as_deref().unwrap_or("claude")) else {
         return refused(400, "erro_provider_invalido", "provider invalido", json!({}));
     };
     let server_projects = env.claude_base.join("projects");
     let w = Where { home: &env.home, env: &env.base, server_projects: &server_projects, config_dirs: &config_dirs, live: &[] };
-    let (jsonl, codex_home) = match locate(&w, &p.project, &p.session_id, p.config_dir.as_deref(), provider, p.codex_account.as_deref()) {
+    let (jsonl, codex_home) = match locate(&w, &p.project, &p.session_id, config_dir.as_deref(), provider, p.codex_account.as_deref()) {
         Ok(found) => found,
         Err(e) => return refused(e.status, e.code.unwrap_or("erro_path_invalido"), &e.msg, e.params),
     };

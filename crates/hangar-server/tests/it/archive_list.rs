@@ -85,7 +85,9 @@ impl Drop for Harness {
 fn prepare_home(home: &Path) {
     copy_tree(&fixtures().join("home"), home);
     let index = home.join(".kimi-code/session_index.jsonl");
-    std::fs::write(&index, std::fs::read_to_string(&index).unwrap().replace("{HOME}", &home.to_string_lossy())).unwrap();
+    // Escapado como texto JSON: o `\` do caminho do Windows quebrava a linha do índice do Kimi.
+    let escaped = serde_json::to_string(&*home.to_string_lossy()).unwrap();
+    std::fs::write(&index, std::fs::read_to_string(&index).unwrap().replace("{HOME}", escaped.trim_matches('"'))).unwrap();
     for (i, rel) in MTIMES.iter().enumerate() {
         set_mtime(&home.join(rel), UNIX_EPOCH + Duration::from_secs(T0 + 100 * (i as u64 + 1)));
     }
@@ -807,6 +809,9 @@ async fn folder_with_config_dir_lists_that_account_copy() {
         let (_, body) = h.get(&format!("/api/archive/{PROJECT}")).await;
         assert_eq!(pick(&body), [json!("{HOME}/.claude-a")], "sem a conta, a cópia mais nova");
         let (status, body) = h.get(&format!("/api/archive/{PROJECT}?config_dir={}", enc(&h.dir(".claude-b")))).await;
+        assert_eq!((status, pick(&body)), (200, vec![json!("{HOME}/.claude-b")]), "{body}");
+        // Outra grafia da mesma pasta: a conta e o `config_dir` devolvido são os do catálogo.
+        let (status, body) = h.get(&format!("/api/archive/{PROJECT}?config_dir={}", enc(&format!("{}/", h.dir(".claude-b"))))).await;
         assert_eq!((status, pick(&body)), (200, vec![json!("{HOME}/.claude-b")]), "{body}");
         let (status, body) = h.get(&format!("/api/archive/{PROJECT}?config_dir=/nao/conta")).await;
         assert_eq!((status, body["detail"]["code"].as_str()), (400, Some("erro_config_dir_invalido")), "{body}");

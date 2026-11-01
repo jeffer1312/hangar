@@ -50,7 +50,9 @@ impl Harness {
         let home = dir.path().canonicalize().unwrap().join("home");
         copy_tree(&fixtures().join("home"), &home);
         let index = home.join(".kimi-code/session_index.jsonl");
-        std::fs::write(&index, std::fs::read_to_string(&index).unwrap().replace("{HOME}", &home.to_string_lossy())).unwrap();
+        // Escapado como texto JSON: o `\` do caminho do Windows quebrava a linha do índice do Kimi.
+        let escaped = serde_json::to_string(&*home.to_string_lossy()).unwrap();
+        std::fs::write(&index, std::fs::read_to_string(&index).unwrap().replace("{HOME}", escaped.trim_matches('"'))).unwrap();
         let hits = Arc::new(Mutex::new(Vec::new()));
         let seen = hits.clone();
         // O Python de mentira: recusa sem o token do dono e marca o que recebeu.
@@ -150,6 +152,8 @@ async fn arq38_history_validation_and_tail_bounds() {
     let (status, body) = h.get(&history(NORMAL.0, NORMAL.1, "?tail=abc")).await;
     assert_eq!(status, 422);
     assert_eq!(body["detail"][0]["loc"], json!(["query", "tail"]));
+    // Outra grafia da mesma pasta (barra final; no Windows `\\?\` e `/`) é a mesma conta do catálogo.
+    assert_case(&h, "normal|config_a", &history(NORMAL.0, NORMAL.1, &format!("?config_dir={}/", h.dir(".claude-a")))).await;
 }
 
 /// ARQ-39: `tail` traz só pedido e resposta com texto, em ordem; a janela cresce além dos 256 KB.
@@ -581,8 +585,10 @@ async fn transferred_rollout_is_indexed_after_the_boundary_with_the_composed_ids
     let index = hangar_server::search::Index::new(&h.home.join("idx-transfer"), Arc::new(|| Ok(Vec::new())),
         Arc::new(|_, _| {}), Default::default()).with_agents(env);
     index.update().unwrap();
-    let rollout = j.rollout.to_string_lossy().into_owned();
-    let found = |q: &str| index.search(&[q.to_owned()], 50).unwrap().unwrap().into_iter().filter(|r| r.path == rollout)
+    // Pela grafia resolvida: no Windows o rollout Codex é gravado sem o `\\?\`.
+    let rollout = hangar_server::accounts::catalog::resolved(&j.rollout);
+    let found = |q: &str| index.search(&[q.to_owned()], 50).unwrap().unwrap().into_iter()
+        .filter(|r| hangar_server::accounts::catalog::resolved(Path::new(&r.path)) == rollout)
         .map(|r| r.event_id).collect::<Vec<_>>();
     let id = format!("transfer:{TRANSFER}:codex:{}", j.collision);
     assert_eq!(found("novo"), [id.clone()]);
@@ -617,8 +623,10 @@ async fn transferred_rollout_without_a_readable_record_is_not_indexed_raw_and_ke
     let env = hangar_server::accounts::environment::AccountEnvironment::from_map(env.into_iter().map(|(k, v)| (k.to_owned(), v)).collect());
     let index = hangar_server::search::Index::new(&h.home.join("idx-transfer"), Arc::new(|| Ok(Vec::new())),
         Arc::new(|_, _| {}), Default::default()).with_agents(env);
-    let rollout = j.rollout.to_string_lossy().into_owned();
-    let found = |q: &str| index.search(&[q.to_owned()], 50).unwrap().unwrap().into_iter().filter(|r| r.path == rollout)
+    // Pela grafia resolvida: no Windows o rollout Codex é gravado sem o `\\?\`.
+    let rollout = hangar_server::accounts::catalog::resolved(&j.rollout);
+    let found = |q: &str| index.search(&[q.to_owned()], 50).unwrap().unwrap().into_iter()
+        .filter(|r| hangar_server::accounts::catalog::resolved(Path::new(&r.path)) == rollout)
         .map(|r| r.event_id).collect::<Vec<_>>();
     point(&TRANSFER.to_uppercase());
     index.update().unwrap();

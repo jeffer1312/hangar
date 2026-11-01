@@ -65,12 +65,13 @@ pub(crate) fn reply(error: OpenError) -> Response {
 struct Asked { config_dir: Option<String>, provider: AgentProvider, codex_account: Option<String> }
 
 fn asked(st: &AppState, query: Option<&str>) -> Result<Asked, OpenError> {
-    let config_dir = crate::auth::query_param(query, "config_dir");
+    let mut config_dir = crate::auth::query_param(query, "config_dir");
     if let Some(dir) = &config_dir {
         let catalog = st.accounts.claude_catalog().map_err(|e| OpenError::new(e.status, e.code, e.message))?;
-        if !catalog.as_array().into_iter().flatten().any(|row| row["path"].as_str() == Some(dir)) {
-            return Err(OpenError::new(400, "erro_config_dir_invalido", "config_dir invalido"));
-        }
+        let known = crate::session_open::resolve::known_config_dir(
+            catalog.as_array().into_iter().flatten().filter_map(|row| row["path"].as_str()), dir);
+        let Some(known) = known else { return Err(OpenError::new(400, "erro_config_dir_invalido", "config_dir invalido")) };
+        config_dir = Some(known.to_owned());
     }
     let provider = crate::auth::query_param(query, "provider").unwrap_or_else(|| "claude".into());
     let provider = AgentProvider::parse(&provider).ok_or_else(|| OpenError::new(400, "erro_provider_invalido", "provider invalido"))?;

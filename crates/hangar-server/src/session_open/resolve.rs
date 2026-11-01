@@ -557,6 +557,12 @@ fn same_dir(a: &str, b: &str) -> bool {
     trim(a) == trim(b) || crate::list::discover::real(a) == crate::list::discover::real(b)
 }
 
+/// A grafia do catálogo da conta que `dir` nomeia: barra final, `\\?\` ou `/` no Windows não fazem
+/// outra conta, e quem segue usa o caminho como o catálogo o escreve.
+pub(crate) fn known_config_dir<'a>(known: impl IntoIterator<Item = &'a str>, dir: &str) -> Option<&'a str> {
+    known.into_iter().find(|k| same_dir(k, dir))
+}
+
 /// Validação na ordem do `_create_session_owned` (o primeiro erro vence), tudo antes de qualquer
 /// efeito. Devolve o modelo efetivo (a conta ChatGPT fixa tira o prefixo dela).
 #[allow(clippy::too_many_arguments)]

@@ -89,7 +89,13 @@ impl<'a> Ctx<'a> {
         Ok(Self { st, catalog, index: st.search.archive_rows(), live, closed: closed_names(&st.accounts.env.claude_base), now })
     }
 
-    fn valid_config_dir(&self, dir: &str) -> bool { self.catalog.iter().any(|(path, _)| path == dir) }
+    /// `config_dir` pedido na grafia do catálogo; `Err` = conta fora dele.
+    fn config_dir(&self, dir: Option<String>) -> Result<Option<String>, OpenError> {
+        let Some(dir) = dir else { return Ok(None) };
+        crate::session_open::resolve::known_config_dir(self.catalog.iter().map(|(path, _)| path.as_str()), &dir)
+            .map(|known| Some(known.to_owned()))
+            .ok_or_else(|| OpenError::new(400, "erro_config_dir_invalido", "config_dir invalido"))
+    }
 
     /// `_contas`: (conta, rótulo, `projects`); a do servidor por último, se ainda não veio.
     fn accounts(&self, only: Option<&str>) -> Vec<(Option<String>, String, PathBuf)> {
@@ -592,9 +598,7 @@ pub async fn folder(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         // A conta pedida: a mesma conversa em duas contas mostra a cópia dela, não a mais nova.
         let config_dir = crate::auth::query_param(query, "config_dir");
         Ok(Box::new(move |ctx: &Ctx| {
-            if config_dir.as_deref().is_some_and(|d| !ctx.valid_config_dir(d)) {
-                return Err(OpenError::new(400, "erro_config_dir_invalido", "config_dir invalido"));
-            }
+            let config_dir = ctx.config_dir(config_dir)?;
             let cap = if session_id.is_some() { usize::MAX } else { FOLDER_CAP };
             ctx.conversations(&project, cap, config_dir.as_deref(), codex_account.as_deref(), provider.as_deref(), session_id.as_deref())
                 .map(Value::Array)
@@ -613,9 +617,7 @@ pub async fn by_cwd(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         let provider = crate::auth::query_param(query, "provider").unwrap_or_else(|| "claude".into());
         let codex_account = crate::auth::query_param(query, "codex_account");
         Ok(Box::new(move |ctx: &Ctx| {
-            if config_dir.as_deref().is_some_and(|d| !ctx.valid_config_dir(d)) {
-                return Err(OpenError::new(400, "erro_config_dir_invalido", "config_dir invalido"));
-            }
+            let config_dir = ctx.config_dir(config_dir)?;
             if provider != "claude" && !PROVIDERS.contains(&provider.as_str()) {
                 return Err(OpenError::new(400, "erro_provider_invalido", "provider invalido"));
             }
