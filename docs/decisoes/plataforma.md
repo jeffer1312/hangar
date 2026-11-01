@@ -3815,3 +3815,28 @@ de texto do controlador troca a senha preenchida por `••••` (literal, JS
 enquanto o navegador viver, inclusive depois de a página navegar (a marca do nó some; a máscara não).
 **Limite:** o `eval` continua sendo um oráculo para um agente decidido (`value.length`,
 `value.split('')`, trocar o `type` e tirar `shot`); a máscara barra a leitura comum, não essa.
+
+## Busca, Perguntar e Arquivo no Rust (01/11/2026)
+
+`/api/search`, `/api/search/context`, `/api/ask-history` e `/api/archive*` saíram do Python. O índice
+(`busca-rust.sqlite3`, na pasta do índice de custos) cobre Claude, Codex, Pi, omp e Kimi de todas as
+contas, com duas tabelas FTS5: trigram (pedaço de palavra, acento e caixa ignorados) e `unicode61`
+(palavra inteira). A passada é disparada pelo observador de arquivos (500 ms de calma), não por
+relógio; a primeira roda 90 s depois da subida. O id de cada trecho sai do mesmo filtro de reescrita
+do histórico, então todo trecho abre no contexto.
+
+Ordem: conversas com todos os termos como palavra inteira primeiro, por recência, depois as só de
+pedaço (`whole` no trecho). Sem isso, buscar "tour" listava dez conversas com "estoura" à frente da
+que falava do tour, e o lote de 2000 candidatos recentes escondia a conversa antiga com a palavra
+inteira. Cada trecho traz `provider`, `conta`, `codex_account`, `name` (nome ao fechar) e `preview`;
+o total considerado vai no cabeçalho `X-Hangar-Conversations` (o corpo continua lista: a voz espera
+array). Sem Rust, as rotas respondem 503 `erro_busca_precisa_rust`.
+
+Antes do índice pronto a busca varre os transcripts no processo, sem `rg` (o Windows não precisa mais
+do binário), com os tetos do `rg` e pré-filtro na linha crua antes do JSON.
+
+Medido no uso real (Linux, 878 Claude + 733 Codex + 197 Pi + 86 Kimi + 48 omp, 65 mil mensagens):
+busca com índice 0,01–0,08 s; Arquivo 0,01–0,05 s; Perguntar 8,9 s (com `claude -p`). Primeira
+passada ~5 min. Varredura antes do índice, termo raro: 132 s antes do pré-filtro; depois, 67,3 s →
+7,7 s sobre 521 MB em build de debug. Contrato, inventários (218 itens) e conferência ficaram na
+pasta de fase do trabalho.

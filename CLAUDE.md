@@ -557,6 +557,10 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
 - **Mermaid é desenhado pelo `hangar-server` (`POST /api/mermaid`), em PNG, num Chromium sem rede**,
   com a biblioteca embutida no binário; os clientes só exibem a imagem. Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#mermaid-desenhado-no-servidor-15102026).
+- **Busca, Perguntar e Arquivo são do Rust, com um índice de todos os agentes e contas.** A passada
+  é por evento de arquivo; palavra inteira vem antes de pedaço (`whole`); o id do trecho é o do
+  histórico. Sem Rust, 503 `erro_busca_precisa_rust`. Evidência em
+  [plataforma.md](docs/decisoes/plataforma.md#busca-perguntar-e-arquivo-no-rust-01112026).
 - **Página da conversa mora no Rust e some com a sessão.** `html_render` publica dentro do processo
   do Rust (`pages::routes::publish_value`); lê o dono, convidado não vê. Link e URL do rascunho nunca
   levam token ao transcript; o documento da página nunca tem `allow-same-origin` nem token na URL
