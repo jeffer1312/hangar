@@ -822,6 +822,8 @@ mod same_dir_tests {
         assert!(!lexical_same(r"/a\x", "/a/x", false));
     }
 
+    // `Account` e `account` só coexistem num sistema de arquivos que diferencia maiúsculas.
+    #[cfg(not(any(windows, target_os = "macos")))]
     #[test]
     fn folders_on_disk_are_compared_by_the_disk_before_the_lexical_rule() {
         // Pasta que diferencia maiúsculas (NTFS por pasta, Linux): `Account` e `account` são contas distintas.
