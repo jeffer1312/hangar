@@ -122,8 +122,9 @@ pub async fn claude_p(prompt: &str, runner: &dyn Runner) -> Result<String, Strin
 /// O `claude` do PATH do servidor, sem a autoridade dele no ambiente.
 pub struct Cli { pub accounts: crate::accounts::AccountService, pub bridge: Option<crate::accounts::bridge::AccountsBridge> }
 
-impl Runner for Cli {
-    fn run<'a>(&'a self, prompt: &'a str, account: Option<&'a str>) -> BoxFuture<'a, Result<Output, String>> {
+impl Cli {
+    /// `run` com o teto de tempo dado.
+    fn run_within<'a>(&'a self, prompt: &'a str, account: Option<&'a str>, limit: Duration) -> BoxFuture<'a, Result<Output, String>> {
         Box::pin(async move {
             use tokio::io::{AsyncReadExt, AsyncWriteExt};
             let Some(mut command) = self.accounts.claude_command() else { return Err("claude CLI não encontrado".into()) };
@@ -141,7 +142,7 @@ impl Runner for Cli {
                 return Err(failed(e));
             }
             let (mut stdin, mut out, mut err) = (child.stdin.take().unwrap(), child.stdout.take().unwrap(), child.stderr.take().unwrap());
-            let done = tokio::time::timeout(TIMEOUT, async {
+            let done = tokio::time::timeout(limit, async {
                 let write = async { let r = stdin.write_all(prompt.as_bytes()).await; drop(stdin); r };
                 let (mut o, mut e) = (Vec::new(), Vec::new());
                 let (w, ro, re) = tokio::join!(write, out.read_to_end(&mut o), err.read_to_end(&mut e));
@@ -158,9 +159,15 @@ impl Runner for Cli {
                     stderr: String::from_utf8_lossy(&e).replace("\r\n", "\n").replace('\r', "\n"),
                 }),
                 Ok((Err(e), _, _)) => { let _ = child.wait().await; Err(format!("claude -p falhou ao ler a saída: {}", e.kind())) }
-                Err(_) => { let _ = child.wait().await; Err(format!("claude -p excedeu o tempo ({} s)", TIMEOUT.as_secs())) }
+                Err(_) => { let _ = child.wait().await; Err(format!("claude -p excedeu o tempo ({} s)", limit.as_secs())) }
             }
         })
+    }
+}
+
+impl Runner for Cli {
+    fn run<'a>(&'a self, prompt: &'a str, account: Option<&'a str>) -> BoxFuture<'a, Result<Output, String>> {
+        self.run_within(prompt, account, TIMEOUT)
     }
 
     fn quotas(&self, fresh: bool) -> BoxFuture<'_, Result<Vec<Value>, String>> {
@@ -193,6 +200,24 @@ mod reading_tests {
             (false, "claude -p: escolhendo com leitura de cota velha: b (301s)".to_owned())]);
         let empty_windows = json!({"provedor": "claude", "ativa": true, "estado": "lida", "janelas": [], "ts": now, "label": "padrão"});
         assert_eq!(reading_warnings(&[empty_windows], now).len(), 1, "leitura sem janelas não é dado");
+    }
+
+    struct Once(std::sync::Mutex<Option<Output>>);
+
+    impl Runner for Once {
+        fn run<'a>(&'a self, _prompt: &'a str, _account: Option<&'a str>) -> BoxFuture<'a, Result<Output, String>> {
+            Box::pin(async move { Ok(self.0.lock().unwrap().take().unwrap()) })
+        }
+        fn quotas(&self, _fresh: bool) -> BoxFuture<'_, Result<Vec<Value>, String>> { Box::pin(async { Ok(Vec::new()) }) }
+    }
+
+    #[tokio::test]
+    async fn failure_reason_keeps_the_last_500_characters() {
+        // ASK-31 (`_motivo`): stderr, senão stdout, aparado, últimos 500 caracteres (não bytes).
+        let fail = |stdout: &str, stderr: &str| Once(std::sync::Mutex::new(Some(Output { code: 1, stdout: stdout.into(), stderr: stderr.into() })));
+        let long = format!("{}{}", "x".repeat(100), "é".repeat(500));
+        assert_eq!(claude_p("p", &fail("", &format!("{long}\n"))).await, Err(format!("claude -p falhou (exit 1): {}", "é".repeat(500))));
+        assert_eq!(claude_p("p", &fail(&long, "  ")).await, Err(format!("claude -p falhou (exit 1): {}", "é".repeat(500))));
     }
 }
 
@@ -235,6 +260,32 @@ mod tests {
         assert_eq!(read("env"), "/conta/b");
         let empty = tempfile::tempdir().unwrap();
         assert_eq!(self::cli(empty.path()).run("p", None).await.unwrap_err(), "claude CLI não encontrado");
+    }
+
+    /// Um `claude` de mentira com `body` (sh) na pasta `dir`.
+    fn fake(dir: &Path, body: &str) -> Cli {
+        let source = dir.join("claude.conteudo");
+        std::fs::write(&source, format!("#!/bin/sh\n{body}\n")).unwrap();
+        assert!(std::process::Command::new("install").arg("-m").arg("755").arg(&source).arg(dir.join("claude")).status().unwrap().success());
+        cli(dir)
+    }
+
+    #[tokio::test]
+    async fn invalid_utf8_in_the_output_becomes_the_replacement_character() {
+        // ASK-23 (`errors="replace"`): byte inválido vira U+FFFD, sem falhar a leitura.
+        let dir = tempfile::tempdir().unwrap();
+        let got = fake(dir.path(), "cat > /dev/null\nprintf 'a\\377b'\nprintf '\\376' >&2").run("p", None).await.unwrap();
+        assert_eq!((got.code, got.stdout.as_str(), got.stderr.as_str()), (0, "a\u{FFFD}b", "\u{FFFD}"));
+    }
+
+    #[tokio::test]
+    async fn cli_past_the_time_limit_is_stopped() {
+        // ASK-24: o CLI que passa do teto é encerrado e a falha diz que excedeu o tempo.
+        let dir = tempfile::tempdir().unwrap();
+        let started = std::time::Instant::now();
+        let got = fake(dir.path(), "cat > /dev/null\nsleep 30").run_within("p", None, Duration::from_millis(300)).await;
+        assert_eq!(got.unwrap_err(), "claude -p excedeu o tempo (0 s)");
+        assert!(started.elapsed() < Duration::from_secs(10), "{:?}", started.elapsed());
     }
 
     #[tokio::test]

@@ -220,4 +220,54 @@ mod tests {
         }
         assert_eq!(extract_terms("você voce falou"), ["você", "falou"]);
     }
+
+    #[test]
+    fn kill_switch_reads_cp_automations_from_the_environment() {
+        // ASK-05: sem `runtime-config.json`, `CP_AUTOMATIONS=0` desliga; o arquivo vence o ambiente.
+        let dir = tempfile::tempdir().unwrap();
+        let read = |env: &[(&str, &str)]| crate::push::watch::Settings::read(dir.path(),
+            &env.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())).collect()).automations;
+        assert!(read(&[]));
+        assert!(!read(&[("CP_AUTOMATIONS", "0")]));
+        std::fs::write(dir.path().join("runtime-config.json"), r#"{"automations": true}"#).unwrap();
+        assert!(read(&[("CP_AUTOMATIONS", "0")]));
+    }
+
+    fn hit(session_name: Option<&str>, project: &str, live: bool) -> Hit {
+        Hit { project: project.into(), session_id: "abcdef0123456789".into(), session_name: session_name.map(Into::into), cwd: None,
+            line: "trecho".into(), mtime: 1.0, live, role: None, event_id: None, ts: None, provider: "codex".into(), conta: String::new(),
+            config_dir: None, codex_account: None }
+    }
+
+    #[test]
+    fn prompt_label_is_the_name_then_the_folder_then_the_short_id() {
+        // ASK-17: nome da sessão viva, senão a pasta do projeto, senão `session_id[:8]`.
+        let got = prompt("p?", &[hit(Some("viva"), "-proj", true), hit(Some(""), "-proj", false), hit(None, "", false)]);
+        let labels: Vec<&str> = got.lines().skip(5).collect();
+        assert_eq!(labels, ["[sessão viva — viva]: trecho", "[sessão -proj — arquivada]: trecho", "[sessão abcdef01 — arquivada]: trecho"]);
+    }
+
+    #[test]
+    fn or_search_caps_at_thirty_newest_first() {
+        // ASK-13: dois termos com 18 trechos cada; o total passa de 30 e ficam os 30 mais novos.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let projects = root.join("acct/projects/-home-u-proj");
+        std::fs::create_dir_all(&projects).unwrap();
+        for i in 0..12u64 {
+            let term = if i % 2 == 0 { "alfa" } else { "beta" };
+            let path = projects.join(format!("{i:08x}-0000-4000-8000-000000000000.jsonl"));
+            let body: String = (0..3).map(|k| format!("{}\n", json!({"type": "user", "uuid": format!("u{k}"), "cwd": "/home/u/proj",
+                "message": {"role": "user", "content": format!("{term} {i} {k}")}}))).collect();
+            std::fs::write(&path, body).unwrap();
+            std::fs::File::options().write(true).open(&path).unwrap()
+                .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_790_000_000 + i)).unwrap();
+        }
+        let account = super::super::Account { config_dir: None, dir: root.join("acct"), projects: root.join("acct/projects") };
+        let index = Index::new(&root.join("idx"), Arc::new(move || Ok(vec![account.clone()])), Arc::new(|_, _| {}), Default::default());
+        let hits = search_terms(&index, &["alfa".into(), "beta".into()], &HashMap::new()).unwrap();
+        assert_eq!(hits.len(), 30);
+        assert!(hits.windows(2).all(|w| w[0].mtime >= w[1].mtime));
+        assert!(hits.iter().all(|h| !h.session_id.starts_with("00000000") && !h.session_id.starts_with("00000001")), "os 2 mais velhos ficam fora");
+    }
 }

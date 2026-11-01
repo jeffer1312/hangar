@@ -201,3 +201,15 @@ async fn ask_route_is_answered_by_rust_only_for_the_owner() {
     assert!(cli.calls().is_empty());
     assert!(hangar_server::migration_status::rust_route(&axum::http::Method::POST, "/api/ask-history"));
 }
+
+#[tokio::test]
+async fn ask_route_answer_is_not_cut_nor_refused() {
+    // ASK-33: a resposta do Perguntar não passa pelo corte de 2000 nem pela recusa do refino (pergunta no fim).
+    let long = format!("{}?", "sessão sessao-viva ".repeat(150));
+    let cli = Arc::new(FakeCli { answers: Mutex::new(vec![Output { code: 0, stdout: format!("\n{long}\n"), stderr: String::new() }]), ..FakeCli::default() });
+    let scene = scene(&cli).await;
+    let (status, body) = ask(&scene, "onde falei sobre o clippy?").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(long.chars().count() > 2000);
+    assert_eq!(body["answer"], long.trim_end());
+}
