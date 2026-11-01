@@ -556,7 +556,17 @@ fn same_dir(a: &str, b: &str) -> bool {
     let trim = |p: &str| p.trim_end_matches(['/', '\\']).to_owned();
     // Sem o `\\?\` antes de resolver: nele o Windows não lê `/` como separador e o canonicalize falha.
     let resolved = |p: &str| crate::accounts::catalog::resolved(&crate::list::links::without_verbatim(std::path::PathBuf::from(trim(p))));
-    trim(a) == trim(b) || resolved(a) == resolved(b)
+    lexical_same(a, b, cfg!(windows)) || lexical_same(&resolved(a).to_string_lossy(), &resolved(b).to_string_lossy(), cfg!(windows))
+}
+
+/// Grafias da mesma pasta sem o disco (o `canonicalize` falhou): barra final; no Windows também
+/// `/` e `\` e a caixa, que lá não distinguem pastas.
+fn lexical_same(a: &str, b: &str, windows: bool) -> bool {
+    let norm = |p: &str| {
+        let p = p.trim_end_matches(['/', '\\']);
+        if windows { p.replace('/', "\\").to_lowercase() } else { p.to_owned() }
+    };
+    norm(a) == norm(b)
 }
 
 /// A grafia do catálogo da conta que `dir` nomeia: barra final, `\\?\` ou `/` no Windows não fazem
@@ -784,5 +794,26 @@ mod quota_usage_tests {
         assert_eq!(quota_usage(Some(&row), None, 100.), Some(100.));
         let renewed = json!({"estado": "lida", "janelas": [{"pct": 100.0, "reset_ts": 500.0}]});
         assert_eq!(quota_usage(Some(&renewed), None, 1000.), Some(0.));
+    }
+}
+
+#[cfg(test)]
+mod same_dir_tests {
+    use super::*;
+
+    #[test]
+    fn spellings_of_a_folder_that_does_not_resolve() {
+        assert!(lexical_same("C:/x/", r"C:\x", true));
+        assert!(lexical_same(r"C:\X", r"C:\x", true));
+        assert!(lexical_same("/a/x/", "/a/x", false));
+        // Fora do Windows `\` é parte do nome e a caixa distingue pastas.
+        assert!(!lexical_same(r"/a/X", "/a/x", false));
+        assert!(!lexical_same(r"/a\x", "/a/x", false));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn missing_folder_spellings_are_the_same_on_windows() {
+        assert!(same_dir(r"C:\nao\existe\X", "c:/nao/existe/x/"));
     }
 }
