@@ -67,7 +67,8 @@ function Context({ server, project, sid, eventId, name, conversationTitle, provi
       if (!Array.isArray(entries)) throw new Error(m.arquivo_conversa_erro());
       // Link antigo não traz agente nem conta: o filtro só estreita quando eles vieram.
       const matches = entries.filter((entry) => entry?.session_id === sid && entry.project === project
-        && (!provider || entry.provider === provider) && (!codexAccount || entry.codex_account === codexAccount));
+        && (!provider || entry.provider === provider) && (!codexAccount || entry.codex_account === codexAccount)
+        && (!configDir || entry.config_dir === configDir));
       if (matches.length > 1) throw new Error(m.arquivo_conversa_conta_ambigua());
       if (matches.length !== 1) throw new Error(m.arquivo_conversa_erro());
       if (id !== openGeneration.current) return;

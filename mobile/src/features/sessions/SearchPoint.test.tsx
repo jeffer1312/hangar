@@ -186,6 +186,17 @@ it('arquivo ambíguo e falha de contexto aparecem com recuperação sem navegar'
   expect(container.textContent).toContain(m.arquivo_conversa_conta_ambigua()); expect(h.push).not.toHaveBeenCalled();
 });
 
+it('a mesma conversa em duas contas abre a da pasta de conta do trecho', async () => {
+  h.params = { ...h.params, configDir: '/other-account' };
+  const other = { ...entry, config_dir: '/other-account' };
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify([entry, other]), { status: 200 })));
+  await mount();
+  await act(async () => button(m.switcher_arquivo())!.click());
+  expect(container.textContent).not.toContain(m.arquivo_conversa_conta_ambigua());
+  expect(h.push).toHaveBeenCalledExactlyOnceWith('/archive/a/proj/sid');
+  expect(takeEntry('a', 'proj', 'sid')).toEqual(other);
+});
+
 it('repetir contexto durante abertura não prende arquivo', async () => {
   h.context.mockRejectedValueOnce(new Error('503 contexto indisponível'));
   let finish!: (response: Response) => void;
