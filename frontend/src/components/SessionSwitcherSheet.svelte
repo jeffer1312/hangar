@@ -6,7 +6,7 @@ import * as m from '../paraglide/messages';
   import BackgroundToggle from './BackgroundToggle.svelte';
   import { basename, relativeTime, rotuloEstado, stateColors } from '@hangar/core';
   import { listServers, listOwnServers, selectServer, serverColor, getActiveId, type Server } from '../lib/auth';
-  import { searchTranscriptsForServer, askHistoryForServer, getSearchContextForServer, estaDesligado, type SearchHit } from '@hangar/core';
+  import { searchTranscriptsForServer, askHistoryForServer, getSearchContextForServer, getArchiveFolder, rememberEntry, estaDesligado, type SearchHit } from '@hangar/core';
   import type { ChatEvent, SessionInfo, State } from '@hangar/core';
   import { renderMarkdown } from '../lib/markdown';
 
@@ -103,9 +103,14 @@ import * as m from '../paraglide/messages';
       if (aberto === k) contextoErro = e instanceof Error ? e.message : m.busca_contexto_indisponivel();
     }
   }
-  function abrirNoPonto(h: Hit) {
+  async function abrirNoPonto(h: Hit) {
     selectServer(h.serverId);
     onClose();
+    // A mesma conversa em duas contas: o Arquivo abre a cópia da conta do trecho, não a mais nova.
+    if (h.config_dir) {
+      const items = await getArchiveFolder(h.project, { session_id: h.session_id, config_dir: h.config_dir }).catch(() => []);
+      if (items.length === 1) rememberEntry(h.serverId, items[0]);
+    }
     const seg = [h.serverId, h.project, h.session_id, ...(h.event_id ? [h.event_id] : [])];
     window.location.hash = '#/archive/' + seg.map(encodeURIComponent).join('/');
   }

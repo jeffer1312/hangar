@@ -789,6 +789,30 @@ async fn folder_with_session_id_finds_a_conversation_beyond_the_cap() {
     }
 }
 
+/// `config_dir` na pasta: a mesma conversa em duas contas mostra a cópia daquela conta; sem ele, a mais
+/// nova (F9); conta fora do catálogo é 400.
+#[tokio::test]
+async fn folder_with_config_dir_lists_that_account_copy() {
+    const PROJECT: &str = "-home-jefferson-Projetos-hangar-computer-control-9c0b634f-t1";
+    fn edit(home: &Path) {
+        let from = home.join(MTIMES[13]);
+        let to = home.join(".claude-b/projects").join(PROJECT).join(from.file_name().unwrap());
+        std::fs::copy(&from, &to).unwrap();
+        set_mtime(&to, UNIX_EPOCH + Duration::from_secs(T0 + 50));
+    }
+    for mode in [Mode::Index, Mode::NoIndex] {
+        let h = Harness::with(mode, edit).await;
+        let pick = |body: &Value| body.as_array().unwrap().iter().filter(|e| e["session_id"] == "0cc60e6c-eafc-4915-9936-f0c7b81191d9")
+            .map(|e| e["config_dir"].clone()).collect::<Vec<_>>();
+        let (_, body) = h.get(&format!("/api/archive/{PROJECT}")).await;
+        assert_eq!(pick(&body), [json!("{HOME}/.claude-a")], "sem a conta, a cópia mais nova");
+        let (status, body) = h.get(&format!("/api/archive/{PROJECT}?config_dir={}", enc(&h.dir(".claude-b")))).await;
+        assert_eq!((status, pick(&body)), (200, vec![json!("{HOME}/.claude-b")]), "{body}");
+        let (status, body) = h.get(&format!("/api/archive/{PROJECT}?config_dir=/nao/conta")).await;
+        assert_eq!((status, body["detail"]["code"].as_str()), (400, Some("erro_config_dir_invalido")), "{body}");
+    }
+}
+
 /// ARQ-26: `live` pelo caminho real: transcript que é link simbólico continua vivo quando a lista dá
 /// o caminho do arquivo de verdade.
 #[cfg(unix)]

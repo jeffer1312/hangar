@@ -171,7 +171,7 @@ it('ponto Codex lê a vizinhança e abre o arquivo pela conversa, com agente, co
   await mount();
   expect(h.context).toHaveBeenCalledExactlyOnceWith(state.servers[0], 'proj', 'sid', 'match', 'codex', 'owner-a', '/account-a');
   const open = button(m.switcher_arquivo()); expect(open).toBeDefined(); await act(async () => open!.click());
-  expect(String(fetch.mock.calls[0][0])).toBe('https://a.test/api/archive/proj?session_id=sid&provider=codex&codex_account=owner-a');
+  expect(String(fetch.mock.calls[0][0])).toBe('https://a.test/api/archive/proj?session_id=sid&provider=codex&codex_account=owner-a&config_dir=%2Faccount-a');
   expect(h.push).toHaveBeenCalledExactlyOnceWith('/archive/a/proj/sid');
 });
 

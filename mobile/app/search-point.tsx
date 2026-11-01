@@ -61,6 +61,7 @@ function Context({ server, project, sid, eventId, name, conversationTitle, provi
       const query = new URLSearchParams({ session_id: sid });
       if (provider) query.set('provider', provider);
       if (codexAccount) query.set('codex_account', codexAccount);
+      if (configDir) query.set('config_dir', configDir);
       const response = await probeServerResponse(server, `/api/archive/${encodeURIComponent(project)}?${query}`);
       if (!response.ok) throw new Error(`${m.arquivo_conversa_erro()}: ${m.busca_motivo_http({ status: String(response.status) })}`);
       const entries: ArchiveEntry[] = await response.json();

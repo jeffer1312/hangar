@@ -589,9 +589,15 @@ pub async fn folder(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         let provider = crate::auth::query_param(query, "provider").filter(|p| p == "claude" || PROVIDERS.contains(&p.as_str()));
         // Uma conversa só: a que a busca achou pode estar além das 100 mais novas.
         let session_id = crate::auth::query_param(query, "session_id");
+        // A conta pedida: a mesma conversa em duas contas mostra a cópia dela, não a mais nova.
+        let config_dir = crate::auth::query_param(query, "config_dir");
         Ok(Box::new(move |ctx: &Ctx| {
+            if config_dir.as_deref().is_some_and(|d| !ctx.valid_config_dir(d)) {
+                return Err(OpenError::new(400, "erro_config_dir_invalido", "config_dir invalido"));
+            }
             let cap = if session_id.is_some() { usize::MAX } else { FOLDER_CAP };
-            ctx.conversations(&project, cap, None, codex_account.as_deref(), provider.as_deref(), session_id.as_deref()).map(Value::Array)
+            ctx.conversations(&project, cap, config_dir.as_deref(), codex_account.as_deref(), provider.as_deref(), session_id.as_deref())
+                .map(Value::Array)
         }))
     }).await
 }

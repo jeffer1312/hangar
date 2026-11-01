@@ -2133,8 +2133,10 @@ export function getArchiveRecentForServer(server: Server, cap = 40, signal?: Abo
   return apiFetchForServer(server, `/api/archive/recent?cap=${cap}`, { signal: comTeto(signal, 8000) });
 }
 
-export function getArchiveFolder(project: string): Promise<ArchiveEntry[]> {
-  return apiFetch<ArchiveEntry[]>(`/api/archive/${encodeURIComponent(project)}`);
+// `filter`: `session_id`, `provider`, `codex_account` e `config_dir` estreitam a pasta a uma conversa e conta.
+export function getArchiveFolder(project: string, filter?: Record<string, string>): Promise<ArchiveEntry[]> {
+  const query = filter && Object.keys(filter).length ? `?${new URLSearchParams(filter)}` : '';
+  return apiFetch<ArchiveEntry[]>(`/api/archive/${encodeURIComponent(project)}${query}`);
 }
 
 // "Retomar conversa": sobe uma sessao tmux NOVA no cwd original com `claude --resume <uuid>`,
