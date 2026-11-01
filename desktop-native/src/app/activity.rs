@@ -506,8 +506,11 @@ impl ActivityPanel {
     /// Conversa e estado novos da sessão aberta: a view só redesenha se a lista mudou.
     fn set_data(&mut self, activity: &Activity, processes: &[ShellAlive], cx: &mut Context<Self>) {
         if &self.activity == activity && self.processes == processes { return; }
+        let waiting = |view: &Self| view.opened.as_ref().is_some_and(|o| sub_waiting(&view.activity.agents, &view.subs, &o.run));
+        let was_waiting = waiting(self);
         (self.activity, self.processes) = (activity.clone(), processes.to_vec());
-        if self.prepare() { cx.notify(); }
+        // O `prepare` não olha a espera, e o detalhe aberto a desenha.
+        if self.prepare() | (waiting(self) != was_waiting) { cx.notify(); }
         // O Agent do pai terminou com o detalhe aberto: uma última leitura traz o fim, e a resposta dela para a consulta.
         if self.poll.is_some() && self.opened.as_ref().is_some_and(|o| !o.done && self.done(&o.run)) { self.fetch_detail(); }
     }
