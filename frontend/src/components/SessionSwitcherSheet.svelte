@@ -119,7 +119,8 @@ import * as m from '../paraglide/messages';
         // Seguir abriria a cópia de outra conta sem aviso: o erro fica na prévia do trecho.
         if (aberto === chaveHit(h)) contextoErro = m.arquivo_conversa_erro();
         // A consulta vai ao servidor ativo, por isso ele trocou antes; sem abrir, volta o de antes.
-        if (anterior) selectServer(anterior);
+        // Outra abertura no meio já escolheu o ativo: não desfazer a dela.
+        if (anterior && getActiveId() === h.serverId) selectServer(anterior);
         return;
       }
     }

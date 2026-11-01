@@ -16,13 +16,14 @@ let own = servers;
 let all: Array<(typeof servers)[number] & { ephemeral?: boolean }> = servers;
 type Call = { id: string; q: string; resolve: (h: SearchHit[]) => void; reject: (e: Error) => void };
 let calls: Call[] = [];
+let active = 'a';
 
 vi.mock('../lib/auth', () => ({
   listServers: () => all,
   listOwnServers: () => own,
-  selectServer: vi.fn(),
+  selectServer: vi.fn((id: string) => { active = id; return true; }),
   serverColor: () => '#fff',
-  getActiveId: () => 'a',
+  getActiveId: () => active,
   servidorDaOrigem: () => null,
 }));
 vi.mock('@hangar/core', async (importOriginal) => ({
@@ -73,6 +74,7 @@ const nenhum = () => m.busca_nenhum_todas({ termos: 'foo' });
 
 beforeEach(() => {
   calls = [];
+  active = 'a';
   offline.clear();
   own = servers;
   all = servers;
@@ -246,6 +248,19 @@ describe('SessionSwitcherSheet: abrir o trecho no Arquivo', () => {
     // A consulta foi ao servidor do trecho; sem abrir, o ativo volta a ser o de antes.
     expect(vi.mocked(selectServer).mock.calls.at(-1)).toEqual(['a']);
     expect(registrar).toHaveBeenCalledWith(expect.objectContaining({ evento: 'busca.arquivo_conta', codigo: 'leitura_falhou' }));
+    unmount(comp);
+  });
+
+  it('a falha de uma abertura não desfaz o servidor que outra abertura ativou no meio', async () => {
+    window.location.hash = '';
+    let falhar!: (e: Error) => void;
+    archiveFolder = () => new Promise((_, reject) => { falhar = reject; });
+    const { selectServer } = await import('../lib/auth');
+    const { comp } = await abrirTrecho({ config_dir: '/home/u/.claude-b' } as Partial<SearchHit>, 'b');
+    selectServer('c'); // outro trecho aberto enquanto a consulta do primeiro espera
+    falhar(new Error('503'));
+    await settle();
+    expect(active).toBe('c');
     unmount(comp);
   });
 
