@@ -29,10 +29,18 @@ const MAX_FILE_BYTES: i64 = 64 * 1024 * 1024;
 const SCAN_BATCH: usize = 16;
 
 // Metade dos núcleos, até 4: a passada do índice segue no seu ritmo enquanto a varredura responde.
-static POOL: LazyLock<Option<rayon::ThreadPool>> = LazyLock::new(|| {
+static POOL: LazyLock<Result<rayon::ThreadPool, String>> = LazyLock::new(|| {
     let threads = std::thread::available_parallelism().map_or(1, usize::from).div_ceil(2).min(4);
-    rayon::ThreadPoolBuilder::new().num_threads(threads).thread_name(|i| format!("busca-{i}")).build().ok()
+    rayon::ThreadPoolBuilder::new().num_threads(threads).thread_name(|i| format!("busca-{i}")).build().map_err(|e| e.to_string())
 });
+
+/// O pool da varredura; sem ele a varredura segue um arquivo por vez.
+pub(super) fn scan_pool<'a>(built: &'a Result<rayon::ThreadPool, String>, index: &Index) -> Option<&'a rayon::ThreadPool> {
+    match built {
+        Ok(pool) => Some(pool),
+        Err(e) => { index.report_once("busca.pool_falhou", "pool", || format!("varredura sem paralelo: {e}")); None }
+    }
+}
 
 // Trechos que o parser apaga ou monta (lembrete, colado, imagem, recado com o nome da sessão, colega,
 // ANSI do Pi): o texto da mensagem tem o que a linha crua não tem contínuo, e só o parser da linha diz.
@@ -223,8 +231,8 @@ pub(crate) fn search(index: &Index, q: &str, live: &HashMap<String, String>, lim
     search_counted(index, q, live, limit).map(|(hits, _)| hits)
 }
 
-/// `search` e quantas conversas foram consideradas: os transcripts não internos do índice ou, antes
-/// dele, os não internos que a varredura leu.
+/// `search` e quantas conversas foram consideradas: os transcripts não internos, do índice ou, antes
+/// dele, os achados pela varredura (lidos ou não).
 pub(crate) fn search_counted(index: &Index, q: &str, live: &HashMap<String, String>, limit: usize)
     -> Result<(Vec<Hit>, usize), String> {
     let terms = terms(q);
@@ -304,7 +312,7 @@ fn from_rows(rows: Vec<Row>, terms: &[String], live: &HashMap<String, String>, c
 }
 
 /// A varredura de antes do índice pronto: arquivo mais novo primeiro, até 3 por arquivo; para quando
-/// as conversas com palavra inteira já enchem `limit`. Devolve também quantos transcripts não internos leu.
+/// as conversas com palavra inteira já enchem `limit`. Devolve também quantas conversas não internas achou.
 fn scan(index: &Index, accounts: &[Account], terms: &[String], live: &HashMap<String, String>, limit: usize) -> (Vec<Hit>, usize) {
     scan_with(index, accounts, terms, live, limit, true)
 }
@@ -334,16 +342,22 @@ pub(super) fn scan_with(index: &Index, accounts: &[Account], terms: &[String], l
     };
     let mut hits = Vec::new();
     // Trechos de conversas com palavra inteira: só eles param a leitura (D28).
-    let (mut led, mut considered) = (0, 0);
+    let mut led = 0;
+    // Interna ou não, pelo que esta varredura leu; o resto pelo que o índice já sabe.
+    let mut internal: HashMap<&str, bool> = HashMap::new();
     for batch in order.chunks(if fast { SCAN_BATCH } else { 1 }) {
         if led >= limit { break; }
-        let read: Vec<_> = match POOL.as_ref().filter(|_| fast) {
+        let read: Vec<_> = match fast.then(|| scan_pool(&POOL, index)).flatten() {
             Some(pool) => pool.install(|| batch.par_iter().map(read).collect()),
             None => batch.iter().map(read).collect(),
         };
         for (&(path, found), (agent, scanned)) in batch.iter().zip(read) {
             if led >= limit { break; }
-            if matches!(scanned, Ok((false, _))) { considered += 1; }
+            if let Ok((is_internal, _)) = &scanned {
+                internal.insert(path.as_str(), *is_internal);
+                // Voltou a abrir: a próxima falha dele vai ao diário de novo.
+                index.recovered("busca.transcript_ilegivel", path);
+            }
             let scanned = match scanned {
                 Ok((_, Some(scanned))) => scanned,
                 Ok((_, None)) => continue,
@@ -365,6 +379,12 @@ pub(super) fn scan_with(index: &Index, accounts: &[Account], terms: &[String], l
         }
     }
     by_mtime(&mut hits);
+    // Pelo critério do índice: toda conversa não interna, lida ou não antes de a leitura parar.
+    let known_internal = index.internal_paths();
+    let considered = files.keys().filter(|path| match internal.get(path.as_str()) {
+        Some(is_internal) => !is_internal,
+        None => !known_internal.contains(path.as_str()),
+    }).count();
     (hits, considered)
 }
 

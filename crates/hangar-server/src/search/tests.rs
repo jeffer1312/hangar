@@ -1138,6 +1138,47 @@ fn codex_rollout_with_an_unreadable_transfer_record_stays_and_the_others_go_on()
 
 #[cfg(unix)]
 #[test]
+fn a_scan_pool_that_cannot_start_is_reported_once() {
+    let env = Env::small(quiet());
+    let failed: Result<rayon::ThreadPool, String> = Err("sem threads".into());
+    assert!(super::hits::scan_pool(&failed, &env.index).is_none());
+    assert!(super::hits::scan_pool(&failed, &env.index).is_none());
+    assert_eq!(env.reported("busca.pool_falhou"), 1, "a varredura ficaria sequencial sem nada no diário");
+}
+
+#[test]
+fn the_scan_counts_every_eligible_conversation_like_the_index() {
+    // O total do cabeçalho: as conversas não internas, também quando a varredura para antes de ler todas.
+    let env = Env::small(quiet());
+    for sid in [SID, SID2, "33333333-3333-3333-3333-333333333333"] { env.write(sid, &[line("zebra aqui", &format!("u{}", &sid[..1]), "user")], false); }
+    let prefix = &internal_prefixes()[0];
+    env.write("44444444-4444-4444-4444-444444444444", &[line(&format!("{prefix} zebra"), "i1", "user")], false);
+    let counted = || super::hits::search_counted(&env.index, "zebra", &std::collections::HashMap::new(), 1).unwrap().1;
+    let scanned = counted();
+    env.index.update().unwrap();
+    assert_eq!((scanned, counted()), (3, 3), "a varredura contava só o que leu antes de parar");
+}
+
+#[test]
+fn an_unreadable_transcript_that_comes_back_is_reported_again_when_it_falls() {
+    use std::os::unix::fs::PermissionsExt;
+    let env = Env::small(quiet());
+    env.write(SID, &[line("zebra boa", "u1", "user")], false);
+    let locked = env.write(SID2, &[line("zebra fechada", "f1", "user")], false);
+    let mode = |m: u32| fs::set_permissions(&locked, fs::Permissions::from_mode(m)).unwrap();
+    let search = || super::hits::search(&env.index, "zebra", &std::collections::HashMap::new(), 50).unwrap();
+    mode(0o000);
+    if fs::File::open(&locked).is_ok() { mode(0o644); return; } // root lê mesmo assim
+    search();
+    mode(0o644);
+    search();
+    mode(0o000);
+    search();
+    mode(0o644);
+    assert_eq!(env.reported("busca.transcript_ilegivel"), 2, "voltou e caiu de novo: outra linha no diário");
+}
+
+#[test]
 fn scan_reports_skipped_files_and_folders_once_each() {
     // A varredura de antes do índice pronto pula arquivo grande, pasta sem permissão e transcript que
     // não abre; cada um vai ao diário uma vez, não a cada busca. Os tetos continuam.

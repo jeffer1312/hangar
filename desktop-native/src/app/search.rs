@@ -299,6 +299,8 @@ pub(super) struct Search {
     /// A pergunta da resposta na tela: Enter com o mesmo texto abre a conversa escolhida, com outro pergunta de novo.
     asked: String,
     ask: Remote<(String, Vec<Hit>)>,
+    /// O Perguntar em voo: fechar a paleta o interrompe.
+    ask_task: Option<tokio::task::AbortHandle>,
     /// Retomada em curso (a conversa) e o erro da última.
     resuming: Option<String>,
     resume_error: Option<String>,
@@ -317,15 +319,46 @@ impl Search {
     /// anterior ainda em voo casaria com a nova.
     fn reopen(&mut self, previous_focus: Option<FocusHandle>) {
         self.abort_machines();
+        self.abort_ask();
+        let mut ask = std::mem::take(&mut self.ask);
+        ask.reset();
         *self = Search { open: true, input: self.input.take(), previous_focus, _events: self._events.take(), debounce: self.debounce + 1,
-            chat_seq: self.chat_seq, ..Default::default() };
+            chat_seq: self.chat_seq, ask, ..Default::default() };
     }
 
-    /// Onde a busca procurou, quando toda máquina que respondeu disse.
+    fn abort_ask(&mut self) {
+        if let Some(task) = self.ask_task.take() { task.abort(); }
+    }
+
+    /// "Tentar de novo" da prévia que falhou: ela volta a carregar; `false` sem falha para refazer.
+    fn retry_chat(&mut self) -> bool {
+        let Some(chat) = self.chat.as_mut().filter(|c| c.error.is_some()) else { return false };
+        self.chat_seq += 1;
+        (chat.seq, chat.error, chat.loaded) = (self.chat_seq, None, false);
+        true
+    }
+
+    /// Onde a busca procurou, quando toda máquina respondeu e disse; enquanto alguma falta ou falhou, não há total.
     fn total(&self) -> Option<u64> {
-        if self.totals.is_empty() { return None; }
+        if self.totals.is_empty() || !self.pending.is_empty() || !self.failed.is_empty() { return None; }
         self.totals.iter().copied().sum()
     }
+}
+
+/// O motivo da máquina que não respondeu à busca.
+fn machine_reason(e: &Failure) -> String {
+    let Some(status) = e.status else { return Hangar::failure(e) };
+    let http = web_with("busca_motivo_http", &[("status", status.to_string())]);
+    // O servidor diz o porquê (contas ilegíveis, lista fora); sem corpo, `detail` é só o "HTTP n" de novo.
+    let said = e.detail.trim();
+    if said.is_empty() || said == format!("HTTP {status}") { http } else { format!("{http}: {said}") }
+}
+
+/// A resposta do Perguntar e os trechos que ela usou. Sem o texto da resposta é resposta inválida, nunca uma vazia.
+fn parse_answer(v: &Value) -> Result<(String, Vec<Hit>), String> {
+    let answer = v.get("answer").and_then(Value::as_str).ok_or_else(|| tr("invalid_response"))?.to_owned();
+    let hits = serde_json::from_value::<Vec<Hit>>(v.get("hits").cloned().unwrap_or(json!([]))).map_err(|_| tr("invalid_response"))?;
+    Ok((answer, hits))
 }
 
 /// Palavras da busca, minúsculas e sem repetição (`termos` do backend).
@@ -338,9 +371,10 @@ fn terms(query: &str) -> Vec<String> {
 /// Faixas de `text` com algum dos termos, sem diferenciar maiúsculas; `true` quando o termo está ali como palavra inteira,
 /// `false` quando é pedaço de outra ("tour" em "estourava").
 fn marks(text: &str, terms: &[String]) -> Vec<(Range<usize>, bool)> {
+    // Caractere cuja minúscula muda de tamanho desalinharia as faixas (o total pode empatar: Ⱥ cresce, o K de Kelvin
+    // encolhe) e cortaria um caractere ao meio: aí não destaca nada.
+    if !text.chars().all(|c| c.to_lowercase().map(char::len_utf8).sum::<usize>() == c.len_utf8()) { return Vec::new(); }
     let lower = text.to_lowercase();
-    // Minúscula que muda o tamanho do texto desalinharia as faixas: aí não destaca nada.
-    if lower.len() != text.len() { return Vec::new(); }
     let letter = |c: Option<char>| c.is_some_and(char::is_alphabetic);
     let mut ranges: Vec<(Range<usize>, bool)> = terms.iter().filter(|t| !t.is_empty()).flat_map(|t| lower.match_indices(t.as_str()).map(|(at, m)| {
         let end = at + m.len();
@@ -433,6 +467,9 @@ impl Hangar {
         self.search.open = false;
         self.search.debounce += 1;
         self.search.abort_machines();
+        self.search.abort_ask();
+        // A resposta da pergunta interrompida não entra em nada: nem nesta paleta, nem na próxima.
+        self.search.ask.reset();
         self.search.chat = None;
         match self.search.previous_focus.take() { Some(focus) => focus.focus(window, cx), None => self.root_focus.focus(window, cx) }
         cx.notify();
@@ -552,7 +589,7 @@ impl Hangar {
                     }
                     Ok(Err(_)) => Err(web_with("busca_motivo_timeout", &[])),
                     Ok(Ok(result)) => result
-                        .map_err(|e| match e.status { Some(status) => web_with("busca_motivo_http", &[("status", status.to_string())]), None => Hangar::failure(&e) })
+                        .map_err(|e| machine_reason(&e))
                         .and_then(|(v, total)| serde_json::from_value::<Vec<Hit>>(v).map(|list| (list, total)).map_err(|error| {
                             eprintln!("busca em {}: resposta inválida: {error}", machine.label);
                             tr("invalid_response")
@@ -762,6 +799,7 @@ impl Hangar {
         let task = self.runtime.spawn(async move {
             api.server_send(reqwest::Method::POST, &["ask-history"], Some(json!({ "question": question })), 90).await
         });
+        self.search.ask_task = Some(task.abort_handle());
         cx.spawn(async move |this, cx| {
             let joined = task.await;
             let _ = this.update(cx, |this, cx| {
@@ -771,8 +809,7 @@ impl Hangar {
                     _ => Err(tr("search_interrupted")),
                 };
                 let parsed = result.and_then(|v| {
-                    let answer = v.get("answer").and_then(Value::as_str).unwrap_or_default().to_owned();
-                    let hits = serde_json::from_value::<Vec<Hit>>(v.get("hits").cloned().unwrap_or(json!([]))).map_err(|_| tr("invalid_response"))?;
+                    let (answer, hits) = parse_answer(&v)?;
                     let hits = hits.into_iter().map(|mut hit| {
                         hit.whole.get_or_insert_with(|| all_whole(&plain(&hit.line), &words));
                         Hit { server: server.clone(), label: label.clone(), ..hit }
@@ -1283,8 +1320,11 @@ impl Hangar {
         let (loaded, error) = (chat.loaded, chat.error.clone());
         let body = match (loaded, error) {
             (false, _) => popup::skeleton("search-chat-loading", 8).p_4().into_any_element(),
-            (true, Some(error)) => div().id("search-chat-error").p_4().role(Role::Alert).text_size(px(13.)).text_color(theme::warning())
-                .whitespace_normal().child(error).into_any_element(),
+            (true, Some(error)) => div().id("search-chat-error").p_4().flex().flex_col().items_start().gap(px(8.)).role(Role::Alert)
+                .child(div().text_size(px(13.)).text_color(theme::warning()).whitespace_normal().child(error))
+                .child(Button::new("search-chat-retry").outline().small().label(web_with("busca_tentar_de_novo", &[]))
+                    .on_click(cx.listener(|this, _, _, cx| if this.search.retry_chat() { this.search_fetch_chat(cx); cx.notify(); })))
+                .into_any_element(),
             (true, None) => match self.with_search_slot(cx, |this, _| this.list_state.clone()) {
                 None => center(tr("loading"), theme::faint()),
                 Some(list_state) => {
@@ -1412,9 +1452,92 @@ fn account_pill(label: String, color: Hsla) -> Div {
 
 #[cfg(test)]
 mod tests {
-    use super::{Filter, Hit, Search, all_whole, cites, first_words, groups, marks, merge_hits, merge_keeping, moment, next_group, palette_frame,
-        plain, terms, window_around};
+    use super::{Filter, Hit, Machine, Search, SearchChat, all_whole, cites, first_words, groups, machine_reason, marks, merge_hits, merge_keeping,
+        moment, next_group, palette_frame, parse_answer, plain, terms, window_around};
+    use crate::api::Failure;
     use gpui_kit::{px, size};
+    use proptest::prelude::*;
+
+    #[test]
+    fn a_question_from_a_closed_palette_never_answers_the_new_one() {
+        let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let mut search = Search::default();
+        let old = search.ask.start();
+        let task = runtime.spawn(std::future::pending::<()>());
+        search.ask_task = Some(task.abort_handle());
+        search.reopen(None);
+        assert!(!search.ask.loading && search.ask.value.is_none());
+        let new = search.ask.start();
+        assert_ne!(old, new, "a resposta da pergunta A entraria como a da B");
+        assert!(!search.ask.finish(old, Ok((String::from("A"), Vec::new()))));
+        assert!(runtime.block_on(task).is_err_and(|e| e.is_cancelled()), "a pergunta A seguiria em voo");
+    }
+
+    #[test]
+    fn a_machine_failure_says_why_when_the_server_did() {
+        let fail = |status: u16, detail: &str| Failure { status: Some(status), detail: detail.into(), retry_after: None, uncertain: false,
+            code: Some("erro_busca_contas".into()) };
+        let said = machine_reason(&fail(503, "as contas Claude não puderam ser lidas"));
+        assert!(said.contains("503") && said.contains("as contas Claude não puderam ser lidas"), "{said}");
+        let bare = machine_reason(&fail(503, "HTTP 503"));
+        assert!(bare.contains("503") && bare.matches("503").count() == 1, "{bare}");
+    }
+
+    #[test]
+    fn an_answer_without_text_is_an_invalid_response() {
+        assert!(parse_answer(&serde_json::json!({"hits": []})).is_err(), "200 sem answer viraria resposta vazia");
+        assert!(parse_answer(&serde_json::json!({"answer": 5, "hits": []})).is_err());
+        assert_eq!(parse_answer(&serde_json::json!({"answer": "na sessão x", "hits": []})).unwrap().0, "na sessão x");
+    }
+
+    #[test]
+    fn marks_never_split_a_character() {
+        // Ⱥ cresce um byte na minúscula e o K de Kelvin perde dois: o total fica igual e as faixas desalinham.
+        let text = "\u{23A}\u{23A}\u{212A}";
+        assert_eq!(text.len(), text.to_lowercase().len());
+        for (range, _) in marks(text, &terms("k")) {
+            assert!(text.is_char_boundary(range.start) && text.is_char_boundary(range.end), "{range:?} corta um caractere de {text:?}");
+        }
+    }
+
+    /// Texto Unicode qualquer, com peso nos caracteres que mudam de tamanho na minúscula.
+    fn unicode(max: usize) -> impl Strategy<Value = String> {
+        let tricky = prop_oneof![Just('\u{23A}'), Just('\u{212A}'), Just('\u{130}'), Just('ß'), Just('k'), Just('a'), Just(' ')];
+        prop::collection::vec(prop_oneof![tricky, any::<char>()], 0..max).prop_map(|chars| chars.into_iter().collect())
+    }
+
+    proptest! {
+        #[test]
+        fn marks_stay_on_character_boundaries(text in unicode(40), query in unicode(6)) {
+            for (range, _) in marks(&text, &terms(&query)) {
+                prop_assert!(range.start < range.end && range.end <= text.len());
+                prop_assert!(text.is_char_boundary(range.start) && text.is_char_boundary(range.end));
+            }
+        }
+    }
+
+    #[test]
+    fn the_total_waits_for_every_machine() {
+        let machine = Machine { key: "b".into(), label: "B".into(), offline: false };
+        let pending = Search { totals: vec![Some(10)], pending: vec![machine.clone()], ..Default::default() };
+        assert_eq!(pending.total(), None, "o total sairia antes da outra máquina responder");
+        let failed = Search { totals: vec![Some(10)], failed: vec![(machine, "x".into())], ..Default::default() };
+        assert_eq!(failed.total(), None, "a máquina que falhou ficaria fora do total");
+        assert_eq!(Search { totals: vec![Some(10), Some(5)], ..Default::default() }.total(), Some(15));
+    }
+
+    #[test]
+    fn a_failed_preview_can_be_tried_again() {
+        let chat = |error: Option<&str>| SearchChat { hit: Hit::default(), key: "k".into(), focus: None, focus_row: None, seq: 4, slot: None,
+            loaded: true, error: error.map(str::to_owned), events: Vec::new(), shown: 0..0, top_armed: false, bottom_armed: false };
+        let mut search = Search { chat: Some(chat(Some("caiu"))), chat_seq: 4, ..Default::default() };
+        assert!(search.retry_chat(), "sem saída do erro da prévia");
+        let retried = search.chat.as_ref().unwrap();
+        assert!(!retried.loaded && retried.error.is_none());
+        assert!(retried.seq > 4, "a resposta da tentativa anterior entraria na nova");
+        let mut fine = Search { chat: Some(chat(None)), ..Default::default() };
+        assert!(!fine.retry_chat());
+    }
 
     #[test]
     fn the_palette_fits_any_window_centered_with_a_margin() {

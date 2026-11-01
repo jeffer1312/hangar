@@ -397,6 +397,23 @@ impl Index {
         Ok(usize::try_from(n).unwrap_or(0))
     }
 
+    /// Os transcripts que o índice já marcou como internos; sem índice ou com erro, nenhum (o erro vai ao log).
+    pub(crate) fn internal_paths(&self) -> HashSet<String> {
+        if !self.inner.path.exists() {
+            return HashSet::new();
+        }
+        let read = || -> rusqlite::Result<HashSet<String>> {
+            let conn = self.reader()?;
+            let mut stmt = conn.prepare("SELECT path FROM files WHERE internal = 1")?;
+            let paths = stmt.query_map([], |r| r.get(0))?.collect();
+            paths
+        };
+        read().unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "busca: conversas internas do índice ilegíveis");
+            HashSet::new()
+        })
+    }
+
     /// path → (prévia, cwd) dos arquivos com cabeçalho completo; erro dá vazio (o Arquivo lê do disco).
     pub fn heads(&self) -> HashMap<String, (String, Option<String>)> {
         let read = || -> rusqlite::Result<HashMap<String, (String, Option<String>)>> {
