@@ -239,7 +239,9 @@ pub(super) fn pass(conn: &mut Connection, accounts: &[Account], agents: Option<&
                 tx.commit()?;
                 index.recovered("busca.indice_transcript_ilegivel", path);
                 if skipped > 0 { illegible += u64::from(skipped); illegible_files += 1; }
+                // Leitura sem linha enorme libera o registro: a próxima que aparecer volta ao diário.
                 if huge > 0 { index.report_once("busca.linha_enorme", path, || format!("{path}: linha de {huge} bytes pulada")); }
+                else { index.recovered("busca.linha_enorme", path); }
             }
             // Sumiu depois de achado: a passada seguinte o tira.
             Err(IndexError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {}

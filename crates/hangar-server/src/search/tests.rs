@@ -1377,3 +1377,16 @@ fn a_huge_line_reaches_the_diary_once_and_counts_as_illegible() {
     assert_eq!(env.ids("agulha"), ["u1"]);
     assert_eq!((env.reported("busca.linha_enorme"), env.reported("busca.linhas_ilegiveis")), (1, 1), "{:?}", env.reports.lock().unwrap());
 }
+
+#[test]
+fn a_huge_line_that_comes_back_after_a_clean_read_is_reported_again() {
+    let env = Env::small(quiet());
+    let huge = || format!("{}\n", json!({"type": "user", "uuid": "u0", "message": {"role": "user", "content": "x".repeat(ingest::HUGE_LINE_BYTES)}}));
+    let f = env.write(SID, &[huge(), line("agulha", "u1", "user")], false);
+    env.index.update().unwrap();
+    append(&f, line("limpa", "u2", "user").as_bytes());
+    env.index.update().unwrap();
+    append(&f, huge().as_bytes());
+    env.index.update().unwrap();
+    assert_eq!(env.reported("busca.linha_enorme"), 2, "a leitura sem linha enorme libera o registro");
+}
