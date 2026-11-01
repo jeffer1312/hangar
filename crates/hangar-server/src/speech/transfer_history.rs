@@ -668,7 +668,7 @@ pub(crate) fn historical_image(record: &Value, event_id: &str, index: i64) -> io
     let source = &image["source"];
     let Some(data) = source["data"].as_str().filter(|_| source["type"] == "base64") else { return Ok(None) };
     let Ok(raw) = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data) else { return Ok(None) };
-    Ok(Some((raw, source["media_type"].as_str().unwrap_or("image/png").to_owned())))
+    Ok(Some((raw, crate::session_media::served_media(source["media_type"].as_str()).to_owned())))
 }
 
 #[cfg(test)]
