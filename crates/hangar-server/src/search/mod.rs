@@ -260,6 +260,8 @@ impl Index {
             // Conexão sobre arquivo corrompido não se recupera: solta, apaga, e a próxima passada refaz.
             if matches!(&e, IndexError::Sqlite(s) if db::corrupt(s)) {
                 *writer = None;
+                // O banco some agora: até a passada refazê-lo, a busca vai à varredura.
+                self.inner.ready.store(false, Ordering::Release);
                 tracing::warn!(error = %e, "índice da busca corrompido durante a passada, reconstruindo");
                 if let Err(gone) = db::discard(&self.inner.path) {
                     self.report_once("busca.indice_nao_apagado", "", || gone.to_string());

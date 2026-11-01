@@ -1338,6 +1338,7 @@ fn corruption_with_the_index_open_rebuilds_on_the_next_pass() {
     drop(file);
     env.write(SID2, &[line("agulha dois", "u2", "user")], false);
     assert!(env.index.update().is_err(), "a passada vê a corrupção");
+    assert!(!env.index.ready(), "até a passada refazer o índice, a busca vai à varredura");
     env.index.update().unwrap();
     let mut ids = env.ids("agulha");
     ids.sort();
