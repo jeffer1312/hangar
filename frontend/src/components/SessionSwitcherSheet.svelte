@@ -115,6 +115,9 @@ import * as m from '../paraglide/messages';
         else diag.registrar({ evento: 'busca.arquivo_conta', nivel: 'aviso', codigo: 'entradas_inesperadas', quantidade: items.length });
       } catch (e) {
         diag.registrar({ evento: 'busca.arquivo_conta', nivel: 'aviso', codigo: 'leitura_falhou', detalhe: e instanceof Error ? e.message : String(e) });
+        // Seguir abriria a cópia de outra conta sem aviso: o erro fica na prévia do trecho.
+        if (aberto === chaveHit(h)) contextoErro = m.arquivo_conversa_erro();
+        return;
       }
     }
     onClose();

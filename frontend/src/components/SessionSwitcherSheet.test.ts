@@ -30,6 +30,15 @@ vi.mock('@hangar/core', async (importOriginal) => ({
   estaDesligado: (id: string) => offline.has(id),
   searchTranscriptsForServer: (s: { id: string }, q: string) =>
     new Promise<SearchHit[]>((resolve, reject) => { calls.push({ id: s.id, q, resolve, reject }); }),
+  getSearchContextForServer: async () => [],
+  getArchiveFolder: (...args: unknown[]) => archiveFolder(...args),
+  rememberEntry: vi.fn(),
+}));
+let archiveFolder: (...args: unknown[]) => Promise<unknown[]> = async () => [];
+const registrar = vi.fn();
+vi.mock('../lib/diag', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/diag')>()),
+  registrar: (...args: unknown[]) => registrar(...args),
 }));
 
 const { default: Sheet } = await import('./SessionSwitcherSheet.svelte');
@@ -40,12 +49,13 @@ const hit = (session_id: string, mtime: number, line = 'x'): SearchHit =>
 async function montar() {
   const el = document.createElement('div');
   document.body.appendChild(el);
+  const onClose = vi.fn();
   const comp = mount(Sheet, {
     target: el,
-    props: { open: true, sessions: [], currentName: '', onPick: vi.fn(), onNew: vi.fn(), onClose: vi.fn(), searchOnly: true },
+    props: { open: true, sessions: [], currentName: '', onPick: vi.fn(), onNew: vi.fn(), onClose, searchOnly: true },
   });
   await tick();
-  return { comp };
+  return { comp, onClose };
 }
 function setInput(v: string) {
   const input = document.body.querySelector<HTMLInputElement>('input.search')!;
@@ -207,6 +217,39 @@ describe('SessionSwitcherSheet: busca de conteúdo', () => {
     calls.forEach((c) => c.resolve([hit('s1', 1, 'x')]));
     await settle();
     expect(document.body.querySelectorAll('.list [role="status"]').length).toBe(1);
+    unmount(comp);
+  });
+});
+
+describe('SessionSwitcherSheet: abrir o trecho no Arquivo', () => {
+  async function abrirTrecho(extra: Partial<SearchHit>) {
+    const { comp, onClose } = await montar();
+    await digitar('foo');
+    calls.find((c) => c.id === 'a')!.resolve([{ ...hit('s1', 10, 'trecho'), event_id: 'e1', ...extra } as SearchHit]);
+    await settle();
+    document.body.querySelector<HTMLButtonElement>('.hit-btn')!.click();
+    await settle();
+    document.body.querySelector<HTMLButtonElement>('.previa-btn')!.click();
+    await settle();
+    return { comp, onClose };
+  }
+
+  it('a conta do trecho que não pôde ser lida mostra o erro e não abre o Arquivo', async () => {
+    window.location.hash = '';
+    archiveFolder = async () => { throw new Error('503'); };
+    const { comp, onClose } = await abrirTrecho({ config_dir: '/home/u/.claude-b' } as Partial<SearchHit>);
+    expect(text()).toContain(m.arquivo_conversa_erro());
+    expect(onClose).not.toHaveBeenCalled();
+    expect(window.location.hash).toBe('');
+    expect(registrar).toHaveBeenCalledWith(expect.objectContaining({ evento: 'busca.arquivo_conta', codigo: 'leitura_falhou' }));
+    unmount(comp);
+  });
+
+  it('sem config_dir no trecho (servidor antigo) abre o Arquivo como antes', async () => {
+    window.location.hash = '';
+    const { comp, onClose } = await abrirTrecho({});
+    expect(onClose).toHaveBeenCalled();
+    expect(window.location.hash).toBe('#/archive/a/p/s1/e1');
     unmount(comp);
   });
 });
