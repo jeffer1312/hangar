@@ -1177,3 +1177,86 @@ fn only_a_pass_over_one_second_is_logged_at_info() {
     assert!(!super::slow_pass(Duration::from_secs(1)));
     assert!(super::slow_pass(Duration::from_millis(1001)));
 }
+
+/// Medição da varredura de antes do índice pronto: `copies` cópias de cada transcript Claude das
+/// fixtures, cada uma numa pasta de projeto, com o termo raro ausente de todas.
+/// `SEARCH_BENCH_COPIES=600 cargo test --lib search::tests::scan_timing -- --ignored --nocapture`
+#[test]
+#[ignore = "medição"]
+fn scan_timing_synthetic() {
+    let copies: usize = std::env::var("SEARCH_BENCH_COPIES").ok().and_then(|v| v.parse().ok()).unwrap_or(300);
+    let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/search/home");
+    let sources: Vec<PathBuf> = MTIMES.iter().chain([&RESERVE]).filter(|rel| rel.starts_with(".claude"))
+        .map(|rel| fixtures.join(rel)).filter(|p| p.exists()).collect();
+    let env = Env::small(quiet());
+    let mut bytes = 0;
+    for k in 0..copies {
+        let dir = env.root.join(format!("acct/projects/-home-u-p{k}"));
+        fs::create_dir_all(&dir).unwrap();
+        for (j, src) in sources.iter().enumerate() {
+            let dst = dir.join(format!("{k:08x}-0000-4000-8000-{j:012x}.jsonl"));
+            bytes += fs::copy(src, &dst).unwrap();
+            set_mtime(&dst, T0 + (k * sources.len() + j) as u64);
+        }
+    }
+    for q in ["login-claude-navegador", "sessão", "sessao hangar"] {
+        let started = Instant::now();
+        let hits = super::hits::search(&env.index, q, &std::collections::HashMap::new(), 50).unwrap();
+        eprintln!("bench {q:?}: {} arquivos, {} MB, {} trechos, {:.2?}", copies * sources.len(), bytes / 1_000_000, hits.len(), started.elapsed());
+    }
+}
+
+/// A mesma medida sobre as contas reais da máquina, só leitura; o banco fica num temporário.
+/// `SEARCH_BENCH_DIRS` restringe às contas Claude listadas (vírgula) e deixa os outros agentes de fora.
+#[test]
+#[ignore = "medição"]
+fn scan_timing_real_home() {
+    let tmp = tempfile::tempdir().unwrap();
+    let env = crate::accounts::environment::AccountEnvironment::capture();
+    let index = match std::env::var("SEARCH_BENCH_DIRS") {
+        Ok(dirs) => {
+            let dirs: Vec<String> = dirs.split(',').map(str::to_owned).collect();
+            let server = PathBuf::from(&dirs[0]);
+            Index::new(tmp.path(), Arc::new(move || Ok(server_accounts(&dirs, &server))), Arc::new(|_, _| {}), quiet())
+        }
+        Err(_) => Index::for_accounts(crate::accounts::AccountService::new(env), tmp.path(), Arc::new(|_, _| {}), quiet()),
+    };
+    for q in ["login-claude-navegador", "sessão"] {
+        let started = Instant::now();
+        let hits = super::hits::search(&index, q, &std::collections::HashMap::new(), 50).unwrap();
+        eprintln!("bench real {q:?}: {} trechos, {:.2?}", hits.len(), started.elapsed());
+    }
+}
+
+#[test]
+fn fast_scan_returns_exactly_what_the_sequential_scan_did() {
+    // A varredura com pré-filtro e arquivos em paralelo contra a de antes (sequencial, parser em toda
+    // linha): mesmos trechos, na mesma ordem, com os mesmos tetos.
+    let env = Env::agents(quiet());
+    let escaped = env.home().join(".claude-b/projects/-home-u-escapes/33333333-3333-4333-8333-333333333333.jsonl");
+    fs::create_dir_all(escaped.parent().unwrap()).unwrap();
+    let ascii = |text: &str, uuid: &str| format!("{}\n", crate::transcript::pyjson::dumps(&json!({"type": "user", "uuid": uuid,
+        "cwd": "/home/u/escapes", "message": {"role": "user", "content": text}}), false));
+    fs::write(&escaped, [ascii("Configuração da Sessão do Hangar", "e1"), ascii("AÇÃO no login-claude", "e2"),
+        ascii("log<system-reminder>lembrete</system-reminder>in partido", "e3")].concat()).unwrap();
+    set_mtime(&escaped, T0 + 10_000);
+    let accounts = env.index.accounts().unwrap();
+    let live = std::collections::HashMap::new();
+    let queries = ["sessão", "SESSAO", "sessao hangar", "configuracao", "ação", "acao login", "ç", "a", "de", "e", "hangar",
+        "recado cx-livre", "\"sem", "kimi", "login", "login-claude-navegador", "Hangar Sessão ação", "zzz-nada"];
+    let mut found = 0;
+    for q in queries {
+        let terms = super::hits::terms(q);
+        for limit in [50, 7, 2] {
+            let fast = super::hits::scan_with(&env.index, &accounts, &terms, &live, limit, true);
+            let slow = super::hits::scan_with(&env.index, &accounts, &terms, &live, limit, false);
+            assert_eq!(fast, slow, "q={q:?} limit={limit}");
+            found += slow.len();
+        }
+    }
+    assert!(found > 100, "as consultas acham trechos: {found}");
+    let ids = |q: &str| super::hits::scan_with(&env.index, &accounts, &super::hits::terms(q), &live, 50, true)
+        .into_iter().filter_map(|h| h.event_id).filter(|id| id.starts_with('e') && id.len() == 2).collect::<Vec<_>>();
+    assert_eq!((ids("configuracao"), ids("login"), ids("ação")), (vec!["e1".to_owned()], vec!["e2".to_owned(), "e3".to_owned()], vec!["e1".to_owned(), "e2".to_owned()]),
+        "o `\\u` do JSON, a junção do `<system-reminder>` e o acento");
+}
