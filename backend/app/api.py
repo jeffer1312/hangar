@@ -611,6 +611,26 @@ async def _planos_pelo_rust(request: Request, call_next):
                                   "/__hangar_server/forwarded")
 
 
+# Busca, Perguntar e Arquivo são só do Rust: sem ele, indisponível com código, sem reserva.
+_BUSCA_ARQUIVO = re.compile(r"^/api/(search|search/context|archive|archive-por-cwd|archive/recent|archive/[^/]+"
+                            r"|archive/[^/]+/[^/]+/history|archive/[^/]+/[^/]+/transcript-image/[^/]+/[^/]+)$")
+
+
+@app.middleware("http")
+async def _busca_sem_rust(request: Request, call_next):
+    from app import account_bridge
+    path, metodo = request.url.path, request.method
+    owned = metodo == "GET" and _BUSCA_ARQUIVO.match(path) or metodo == "POST" and path == "/api/ask-history"
+    if not owned or account_bridge.owner_mode() != "python":
+        return await call_next(request)
+    try:
+        await require_auth(request)
+    except HTTPException as error:
+        return JSONResponse({"detail": error.detail}, status_code=error.status_code, headers=error.headers)
+    return JSONResponse({"detail": erro("erro_busca_precisa_rust", "busca, Perguntar e Arquivo precisam do servidor Rust, que não está rodando")},
+                        status_code=503)
+
+
 # Anexos, `/transcribe`, saída de ferramenta e imagem colada no terminal: o dono é o Rust
 # (`uploads`, `session_media`). A imagem de conversa transferida fica aqui, como o histórico dela.
 _MIDIA = re.compile(r"^/api/sessions/[^/]+/(upload|uploads|uploads/[^/]+|transcribe|bash-output|tool-progress/[^/]+|transcript-image/[^/]+/[^/]+)$")
