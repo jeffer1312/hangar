@@ -781,8 +781,9 @@ async fn folder_with_session_id_finds_a_conversation_beyond_the_cap() {
         assert_eq!(body[0]["provider"], "codex");
         let (_, body) = h.get(&format!("/api/archive/{HANGAR}?session_id={OLD}&provider=codex")).await;
         assert_eq!(sids(&body), Vec::<&str>::new(), "{body}");
+        // Agente desconhecido é ignorado, como antes do filtro: cliente antigo não passa a receber 400.
         let (status, body) = h.get(&format!("/api/archive/{HANGAR}?session_id={OLD}&provider=gemini")).await;
-        assert_eq!((status, body["detail"]["code"].as_str()), (400, Some("erro_provider_invalido")), "{body}");
+        assert_eq!((status, sids(&body)), (200, vec!["0dd00000"]), "{body}");
     }
 }
 

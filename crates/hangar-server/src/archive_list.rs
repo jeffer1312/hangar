@@ -585,13 +585,11 @@ pub async fn recent(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
 pub async fn folder(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, RoutePath(project): RoutePath<String>, req: Request) -> Response {
     serve(st, peer, req, |query| {
         let codex_account = crate::auth::query_param(query, "codex_account");
-        let provider = crate::auth::query_param(query, "provider");
+        // Agente desconhecido é ignorado: a rota já existia sem o filtro e cliente antigo não recebe 400.
+        let provider = crate::auth::query_param(query, "provider").filter(|p| p == "claude" || PROVIDERS.contains(&p.as_str()));
         // Uma conversa só: a que a busca achou pode estar além das 100 mais novas.
         let session_id = crate::auth::query_param(query, "session_id");
         Ok(Box::new(move |ctx: &Ctx| {
-            if provider.as_deref().is_some_and(|p| p != "claude" && !PROVIDERS.contains(&p)) {
-                return Err(OpenError::new(400, "erro_provider_invalido", "provider invalido"));
-            }
             let cap = if session_id.is_some() { usize::MAX } else { FOLDER_CAP };
             ctx.conversations(&project, cap, None, codex_account.as_deref(), provider.as_deref(), session_id.as_deref()).map(Value::Array)
         }))
