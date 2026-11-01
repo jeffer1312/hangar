@@ -235,10 +235,11 @@ pub(super) fn pass(conn: &mut Connection, accounts: &[Account], agents: Option<&
         let ino = found.stat.ino.unwrap_or_else(|| file_id(Path::new(path)));
         let tx = conn.transaction()?;
         match ingest(&tx, path, found, ino, old, &prefixes, &pi_account, &report) {
-            Ok(skipped) => {
+            Ok((skipped, huge)) => {
                 tx.commit()?;
                 index.recovered("busca.indice_transcript_ilegivel", path);
                 if skipped > 0 { illegible += u64::from(skipped); illegible_files += 1; }
+                if huge > 0 { index.report_once("busca.linha_enorme", path, || format!("{path}: linha de {huge} bytes pulada")); }
             }
             // Sumiu depois de achado: a passada seguinte o tira.
             Err(IndexError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -389,10 +390,10 @@ pub(super) fn next_line(rd: &mut impl BufRead, raw: &mut Vec<u8>, cap: usize) ->
     }
 }
 
-/// Devolve quantas linhas ilegíveis a leitura pulou.
+/// Devolve quantas linhas ilegíveis a leitura pulou (as enormes entre elas) e o tamanho da maior enorme.
 #[allow(clippy::too_many_arguments)]
 fn ingest(tx: &Transaction, path: &str, found: &Found, ino: i64, old: Option<&Known>, prefixes: &[String],
-          pi_account: &dyn Fn(&str) -> String, report: Report) -> Result<u32, IndexError> {
+          pi_account: &dyn Fn(&str) -> String, report: Report) -> Result<(u32, u64), IndexError> {
     let stat = &found.stat;
     let agent = AgentProvider::parse(found.provider).filter(|p| *p != AgentProvider::Claude);
     let mut file = File::open(path)?;
@@ -450,11 +451,18 @@ fn ingest(tx: &Transaction, path: &str, found: &Found, ino: i64, old: Option<&Kn
     let mut insert = tx.prepare_cached("INSERT INTO msg(file_id, event_id, role, ts, text) VALUES (?,?,?,?,?)")?;
     let mut exists = tx.prepare_cached("SELECT 1 FROM msg WHERE file_id=? AND event_id=?")?;
     let mut raw = Vec::new();
+    let mut huge = 0u64;
     loop {
         match next_line(&mut rd, &mut raw, HUGE_LINE_BYTES)? {
             Line::Full => {}
             Line::Partial => break,   // linha ainda sendo escrita: entra na próxima passada
-            Line::Skipped(len) => { st.offset += len as i64; st.lines += 1; continue; }
+            Line::Skipped(len) => {
+                st.offset += len as i64;
+                st.lines += 1;
+                st.illegible += 1;
+                huge = huge.max(len);
+                continue;
+            }
         }
         if let Some((_, imported)) = &transferred {
             let row: Value = serde_json::from_slice(&raw).unwrap_or(Value::Null);
@@ -498,7 +506,7 @@ fn ingest(tx: &Transaction, path: &str, found: &Found, ino: i64, old: Option<&Kn
         params![stat.size, stat.mtime_ns, st.offset, st.lines, st.cwd, st.preview, st.head_done as i64,
             st.internal.map(i64::from), st.has_user as i64, st.last_text, st.rewrite.to_state(),
             found.config_dir, account, head_len, head, found.codex_account, fid])?;
-    Ok(st.illegible)
+    Ok((st.illegible, huge))
 }
 
 #[cfg(test)]

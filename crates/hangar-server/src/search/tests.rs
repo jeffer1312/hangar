@@ -1366,3 +1366,14 @@ fn transcript_that_does_not_open_reaches_the_diary_once_per_fall() {
     mode(0o644);
     assert_eq!(env.reported("busca.indice_transcript_ilegivel"), 2, "voltou e caiu de novo: outra linha no diário");
 }
+
+#[test]
+fn a_huge_line_reaches_the_diary_once_and_counts_as_illegible() {
+    let env = Env::small(quiet());
+    let huge = format!("{}\n", json!({"type": "user", "uuid": "u0", "message": {"role": "user", "content": "x".repeat(ingest::HUGE_LINE_BYTES)}}));
+    env.write(SID, &[huge, line("agulha", "u1", "user")], false);
+    env.index.update().unwrap();
+    env.index.update().unwrap();
+    assert_eq!(env.ids("agulha"), ["u1"]);
+    assert_eq!((env.reported("busca.linha_enorme"), env.reported("busca.linhas_ilegiveis")), (1, 1), "{:?}", env.reports.lock().unwrap());
+}
