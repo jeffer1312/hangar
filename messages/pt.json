@@ -5159,7 +5159,7 @@
   "native_search_date_format": "%d/%m",
   "native_search_you": "você",
   "native_search_account": "conta {name}",
-  "native_search_archived_ago": "arquivada há {ago}",
+  "native_search_archived_ago": "arquivada {ago}",
   "native_search_go": "Ir para a conversa",
   "native_search_view_whole": "Ver inteira",
   "native_search_back_to_list": "Voltar à lista",

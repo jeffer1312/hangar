@@ -29,6 +29,13 @@ const TOTAL_HEADER: &str = "x-hangar-conversations";
 const LABEL_MAX: usize = 58;
 /// Mensagens lidas da sessão viva escolhida pelo nome, que não tem trecho para alcançar.
 const SESSION_TAIL: usize = 120;
+/// Mensagens que a prévia desenha antes e depois do trecho, e quantas cada borda traz ao rolar até ela.
+const PREVIEW_BEFORE: usize = 40;
+const PREVIEW_AFTER: usize = 40;
+const PREVIEW_PAGE: usize = 40;
+/// Abaixo desta largura, lista e conversa não cabem lado a lado: a conversa abre no lugar da lista.
+const NARROW: f32 = 860.;
+const PALETTE_MAX: (f32, f32) = (1180., 880.);
 const AGENTS: [&str; 5] = ["claude", "codex", "pi", "kimi", "omp"];
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -72,9 +79,10 @@ impl Hit {
     fn live_name(&self) -> Option<&str> { self.session_name.as_deref().filter(|_| self.live) }
     fn agent(&self) -> &str { self.provider.as_deref().filter(|p| !p.is_empty()).unwrap_or("claude") }
     fn is_whole(&self) -> bool { self.whole != Some(false) }
-    /// O nome da conversa na lista: o da sessão viva, o que ela tinha ao fechar, o começo da primeira mensagem ou a pasta.
+    /// O nome da conversa na lista: o da sessão viva, o que ela tinha ao fechar, o começo da primeira mensagem ou, de
+    /// servidor antigo, a pasta com o começo do próprio trecho (só a pasta deixava várias conversas com o mesmo nome).
     fn title(&self) -> String {
-        self.names().into_iter().next().unwrap_or_else(|| self.folder())
+        self.names().into_iter().next().unwrap_or_else(|| title_from_line(&self.folder(), &self.line))
     }
     /// Os nomes que a conversa tem, sem a pasta: é por eles que a resposta do Perguntar a cita.
     fn names(&self) -> Vec<String> {
@@ -110,6 +118,30 @@ fn first_words(text: &str) -> String {
     if line.chars().count() <= LABEL_MAX { return line; }
     let cut: String = line.chars().take(LABEL_MAX).collect();
     format!("{}…", cut.rsplit_once(' ').map_or(cut.as_str(), |(head, _)| head))
+}
+
+/// "pasta · começo do trecho", sem as reticências do corte que o servidor põe no trecho.
+fn title_from_line(folder: &str, line: &str) -> String {
+    let start = first_words(plain(line).trim().trim_matches('…'));
+    if start.is_empty() { folder.to_owned() } else { format!("{folder} · {start}") }
+}
+
+/// Onde a paleta fica na janela: centralizada, com margem, do tamanho que couber; `true` quando estreita demais para lista
+/// e conversa lado a lado.
+fn palette_frame(window: gpui_kit::Size<Pixels>) -> (Bounds<Pixels>, bool) {
+    let margin = if window.width < px(700.) || window.height < px(560.) { px(8.) } else { px(24.) };
+    let width = (window.width - margin * 2.).min(px(PALETTE_MAX.0)).max(px(0.));
+    let height = (window.height - margin * 2.).min(px(PALETTE_MAX.1)).max(px(0.));
+    let origin = point((window.width - width) / 2., (window.height - height) / 2.);
+    (Bounds::new(origin, size(width, height)), width < px(NARROW))
+}
+
+/// Os eventos que a prévia desenha: `before` antes e `after` depois do trecho (sem trecho, o fim da conversa).
+fn window_around(len: usize, focus: Option<usize>, before: usize, after: usize) -> Range<usize> {
+    match focus {
+        Some(at) => at.saturating_sub(before)..(at + after + 1).min(len),
+        None => len.saturating_sub(before + after)..len,
+    }
 }
 
 /// `/home/<usuário>/x` como `~/x`, como a lista de sessões mostra.
@@ -206,6 +238,23 @@ pub(super) struct SearchChat {
     slot: Option<ConversationSlot>,
     loaded: bool,
     error: Option<String>,
+    /// A conversa inteira e o pedaço dela que a prévia desenha: desenhar tudo deixava a rolagem pesada.
+    events: Vec<ChatEvent>,
+    shown: Range<usize>,
+    /// Chegar a uma borda traz mais mensagens uma vez; só sair de perto dela arma de novo.
+    top_armed: bool,
+    bottom_armed: bool,
+}
+
+/// Linha da lista da esquerda: o modelo do que ela desenha, para a lista virtual pedir só as linhas à vista.
+#[derive(Clone, Debug, PartialEq)]
+enum Row {
+    ResumeError(String),
+    Section(&'static str),
+    Session(Target),
+    Status(String, bool),
+    Retry,
+    Group(String, Vec<usize>),
 }
 
 #[derive(Default)]
@@ -237,8 +286,16 @@ pub(super) struct Search {
     chat: Option<SearchChat>,
     /// Número da prévia: só cresce, para a resposta de uma prévia trocada nunca entrar na nova.
     chat_seq: u64,
-    /// "Ver inteira": a prévia ocupa a paleta toda.
+    /// "Ver inteira": a prévia ocupa a paleta toda. Na paleta estreita, é a prévia aberta no lugar da lista.
     wide: bool,
+    /// A janela não cabe lista e conversa lado a lado (do último desenho).
+    narrow: bool,
+    /// A lista da esquerda: as linhas e a lista virtual, com a escolha e as palavras do último desenho.
+    rows: Vec<Row>,
+    list: Option<ListState>,
+    drawn_active: Option<Entry>,
+    drawn_words: Vec<String>,
+    drawn_resuming: Option<String>,
     /// A pergunta da resposta na tela: Enter com o mesmo texto abre a conversa escolhida, com outro pergunta de novo.
     asked: String,
     ask: Remote<(String, Vec<Hit>)>,
@@ -246,7 +303,7 @@ pub(super) struct Search {
     resuming: Option<String>,
     resume_error: Option<String>,
     previous_focus: Option<FocusHandle>,
-    scroll: ScrollHandle,
+    ask_scroll: ScrollHandle,
     _events: Option<Subscription>,
 }
 
@@ -390,7 +447,7 @@ impl Hangar {
         if self.search.mode == Mode::Ask { cx.notify(); return; }
         let query = self.search_text(cx).trim().to_owned();
         (self.search.active, self.search.resume_error, self.search.filter) = (0, None, Filter::default());
-        self.search.scroll.set_offset(point(px(0.), px(0.)));
+        if let Some(list) = &self.search.list { list.scroll_to(ListOffset::default()); }
         self.search.debounce += 1;
         self.search.abort_machines();
         let seq = self.search.debounce;
@@ -586,6 +643,8 @@ impl Hangar {
     fn search_select(&mut self, entry: &Entry, cx: &mut Context<Self>) {
         if let Some(ix) = self.search_entries(cx).iter().position(|e| e == entry) {
             self.search.active = ix;
+            // Na paleta estreita, escolher abre a conversa no lugar da lista; "Voltar à lista" volta.
+            if self.search.narrow && self.search.mode == Mode::Hits { self.search.wide = true; }
             cx.notify();
         }
     }
@@ -756,6 +815,13 @@ impl Hangar {
             if chat.focus != hit.event_id {
                 chat.focus = hit.event_id.clone();
                 chat.hit = hit;
+                // Trecho fora do pedaço desenhado: o pedaço cresce até ele (só crescer: a conversa já na tela continua).
+                let at = chat.focus.as_deref().and_then(|id| chat.events.iter().position(|e| e.id == id));
+                let shown = chat.shown.clone();
+                if let Some(at) = at.filter(|at| !shown.contains(at)) {
+                    let around = window_around(chat.events.len(), Some(at), PREVIEW_BEFORE, PREVIEW_AFTER);
+                    self.search_show(shown.start.min(around.start)..shown.end.max(around.end), cx);
+                }
                 self.search_scroll_to_focus(cx);
             }
             return;
@@ -768,7 +834,8 @@ impl Hangar {
         self.search.chat_seq += 1;
         let seq = self.search.chat_seq;
         self.search.chat = Some(SearchChat { key, focus: hit.event_id.clone(), focus_row: None, seq,
-            slot: Some(ConversationSlot::new(session, api, composer, window)), loaded: false, error: None, hit });
+            slot: Some(ConversationSlot::new(session, api, composer, window)), loaded: false, error: None, hit,
+            events: Vec::new(), shown: 0..0, top_armed: false, bottom_armed: false });
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(PREVIEW_DELAY).await;
             let _ = this.update(cx, |this, cx| if this.search.chat.as_ref().is_some_and(|c| c.seq == seq) { this.search_fetch_chat(cx) });
@@ -809,11 +876,10 @@ impl Hangar {
                 match result {
                     Err(error) => chat.error = Some(error),
                     Ok(events) => {
-                        this.with_search_slot(cx, |this, cx| {
-                            this.chat.merge_history(events);
-                            (this.loading, this.history_installed) = (false, true);
-                            this.sync_tab_preview_rows(cx);
-                        });
+                        let at = chat.focus.as_deref().and_then(|id| events.iter().position(|e| e.id == id));
+                        let shown = window_around(events.len(), at, PREVIEW_BEFORE, PREVIEW_AFTER);
+                        chat.events = events;
+                        this.search_show(shown, cx);
                         this.search_scroll_to_focus(cx);
                     }
                 }
@@ -822,15 +888,52 @@ impl Hangar {
         }).detach();
     }
 
+    /// Desenha o pedaço `shown` da conversa da prévia. Só cresce: o histórico se junta ao que já está desenhado.
+    fn search_show(&mut self, shown: Range<usize>, cx: &mut Context<Self>) {
+        let Some(chat) = self.search.chat.as_mut() else { return };
+        let slice = chat.events[shown.clone()].to_vec();
+        chat.shown = shown;
+        self.with_search_slot(cx, |this, cx| {
+            this.chat.merge_history(slice);
+            (this.loading, this.history_installed) = (false, true);
+            this.sync_tab_preview_rows(cx);
+        });
+    }
+
+    /// A rolagem chegou a uma borda do pedaço desenhado: traz mais `PREVIEW_PAGE` mensagens daquele lado, com a linha do
+    /// topo parada no lugar quando elas entram por cima.
+    fn search_extend(&mut self, top: bool, cx: &mut Context<Self>) {
+        let Some(chat) = self.search.chat.as_ref() else { return };
+        let (shown, len) = (chat.shown.clone(), chat.events.len());
+        let more = if top { shown.start.saturating_sub(PREVIEW_PAGE)..shown.end } else { shown.start..(shown.end + PREVIEW_PAGE).min(len) };
+        if more == shown { return; }
+        let anchor = self.with_search_slot(cx, |this, _| {
+            let top = this.list_state.logical_scroll_top();
+            this.row_ids.get(top.item_ix).cloned().map(|id| (id, top.offset_in_item))
+        }).flatten();
+        self.search_show(more, cx);
+        if top && let Some((id, offset)) = anchor {
+            self.with_search_slot(cx, |this, _| {
+                if let Some(ix) = this.row_ids.iter().position(|row| *row == id) {
+                    this.list_state.scroll_to(ListOffset { item_ix: ix, offset_in_item: offset });
+                }
+            });
+        }
+        self.search_focus_row(false, cx);
+    }
+
     /// Rola a prévia até a linha da mensagem do trecho; sem mensagem (a sessão pelo nome), fica no fim.
-    fn search_scroll_to_focus(&mut self, cx: &mut Context<Self>) {
+    fn search_scroll_to_focus(&mut self, cx: &mut Context<Self>) { self.search_focus_row(true, cx) }
+
+    /// Acha a linha do trecho (as linhas mudam quando o pedaço desenhado cresce) e, com `scroll`, rola até ela.
+    fn search_focus_row(&mut self, scroll: bool, cx: &mut Context<Self>) {
         let Some(chat) = self.search.chat.as_ref().filter(|c| c.loaded && c.error.is_none()) else { return };
         let (focus, old) = (chat.focus.clone(), chat.focus_row);
         let row = self.with_search_slot(cx, |this, _| {
             let row = focus.as_deref().and_then(|id| this.row_of(id));
             // A linha do trecho ganha a etiqueta e o contorno: a altura dela e a da anterior mudam.
             for r in [old, row].into_iter().flatten() { this.list_state.remeasure_items(r..r + 1); }
-            if let Some(r) = row { this.list_state.scroll_to(ListOffset { item_ix: r, offset_in_item: px(0.) }); }
+            if scroll && let Some(r) = row { this.list_state.scroll_to(ListOffset { item_ix: r, offset_in_item: px(0.) }); }
             row
         }).flatten();
         if let Some(chat) = self.search.chat.as_mut() { chat.focus_row = row; }
@@ -870,9 +973,8 @@ impl Hangar {
             let hit = active.as_ref().and_then(|e| self.preview_hit(e));
             self.search_sync_chat(hit, window, cx);
         }
-        let viewport = window.viewport_size();
-        let width = (viewport.width - px(32.)).min(px(1180.));
-        let height = (viewport.height * 0.86).min(px(880.));
+        let (frame, narrow) = palette_frame(window.viewport_size());
+        self.search.narrow = narrow;
 
         let tabs = settings::segments("search-mode", &[tr("search_tab_hits"), tr("search_tab_ask")], if mode == Mode::Ask { 1 } else { 0 }, 2,
             false, String::new(), |this, n, window, cx| this.search_set_mode(if n == 0 { Mode::Hits } else { Mode::Ask }, window, cx), cx);
@@ -893,7 +995,7 @@ impl Hangar {
         };
         let footer = div().h(px(34.)).flex_shrink_0().px(px(16.)).flex().items_center().border_t_1().border_color(theme::border())
             .text_size(px(11.5)).text_color(theme::faint()).child(tr("search_shortcuts"));
-        let card = div().id("search-palette").w(width).h(height).flex().flex_col().rounded(px(16.)).border_1()
+        let card = div().id("search-palette").w(frame.size.width).h(frame.size.height).flex().flex_col().rounded(px(16.)).border_1()
             .border_color(theme::glass_border()).bg(theme::popup_fill(theme::raised())).shadow(theme::popover_shadow()).overflow_hidden().occlude()
             .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
             .child(header)
@@ -909,13 +1011,15 @@ impl Hangar {
         Some(deferred(div().id("search-overlay").role(Role::Dialog).aria_label(web_with("lista_buscar", &[]))
             .absolute().inset_0().bg(cx.theme().overlay).occlude()
             .on_any_mouse_down(cx.listener(|this, _, window, cx| { this.close_search(window, cx); cx.stop_propagation(); }))
-            .flex().items_start().justify_center().pt((viewport.height - height) / 2.).child(close).child(card))
+            // Posição na janela, como a prévia da aba: centralizar pelo fluxo do pai deixava a paleta sair pela esquerda e por cima.
+            .child(close).child(anchored().position_mode(AnchoredPositionMode::Window).position(frame.origin).child(card)))
             .with_priority(gpui_kit::base::POPUP_PRIORITY + 1).into_any_element())
     }
 
     /// A linha de baixo da busca: onde ela procurou, quanto achou, e os filtros por agente e por estado.
     fn render_search_scope(&self, cx: &mut Context<Self>) -> AnyElement {
-        let line = div().px(px(16.)).pb(px(8.)).flex().items_center().gap(px(6.)).min_w_0().text_size(px(12.)).text_color(theme::faint());
+        // Quebra em vez de passar da borda na paleta estreita.
+        let line = div().px(px(16.)).pb(px(8.)).flex().flex_wrap().items_center().gap(px(6.)).min_w_0().text_size(px(12.)).text_color(theme::faint());
         if self.search.mode == Mode::Ask {
             return line.child(div().truncate().child(tr("search_ask_hint"))).into_any_element();
         }
@@ -978,37 +1082,104 @@ impl Hangar {
         div().flex().flex_col().child(line).child(div().px(px(16.)).pb(px(10.)).flex().flex_wrap().gap(px(6.)).children(chips)).into_any_element()
     }
 
-    /// Aba Trechos: a lista à esquerda e a conversa escolhida à direita ("Ver inteira": só a conversa).
+    /// As linhas da lista da esquerda, na ordem da tela.
+    fn search_rows(&self, query: &str) -> Vec<Row> {
+        let mut rows = Vec::new();
+        if let Some(error) = self.search.resume_error.clone() { rows.push(Row::ResumeError(error)); }
+        let sessions = self.search_sessions(query);
+        if !sessions.is_empty() {
+            rows.push(Row::Section("search_sessions"));
+            rows.extend(sessions.into_iter().map(|(target, _)| Row::Session(target)));
+            if !query.is_empty() { rows.push(Row::Section("search_conversations")); }
+        }
+        if query.is_empty() {
+            rows.push(Row::Status(web_with("busca_digite_todas", &[]), false));
+        } else if self.search.searching || self.search.query != query {
+            rows.push(Row::Status(web_with("switcher_buscando", &[]), false));
+        } else if let Some(error) = self.search.error.clone() {
+            rows.push(Row::Status(error, true));
+        } else {
+            // A máquina que falhou aparece mesmo com resultados das outras, como o web.
+            for (machine, reason) in &self.search.failed {
+                rows.push(Row::Status(web_with("busca_servidor_falhou_motivo", &[("servidor", machine.label.clone()), ("motivo", reason.clone())]), true));
+            }
+            if !self.search.failed.is_empty() { rows.push(Row::Retry); }
+            let waiting = |offline: bool, key: &str| {
+                let names: Vec<String> = self.search.pending.iter().filter(|m| m.offline == offline).map(|m| m.label.clone()).collect();
+                (!names.is_empty()).then(|| web_with(key, &[("servidores", names.join(", "))]))
+            };
+            let lead = (self.search.hits.is_empty() && self.search.failed.is_empty() && self.search.pending.is_empty())
+                .then(|| web_with("busca_nenhum_todas", &[("termos", terms(query).join(", "))]));
+            let status: Vec<String> = [lead, waiting(false, "busca_aguardando"), waiting(true, "busca_tentando_fora")].into_iter().flatten().collect();
+            if !status.is_empty() { rows.push(Row::Status(status.join(" · "), false)); }
+            rows.extend(groups(&self.search.hits, &self.search.filter, HITS_SHOWN).into_iter().map(|(key, ix)| Row::Group(key, ix)));
+        }
+        rows
+    }
+
+    /// Aba Trechos: a lista à esquerda e a conversa escolhida à direita. "Ver inteira", ou a paleta estreita com uma
+    /// conversa aberta: só a conversa.
     fn render_search_hits(&mut self, active: Option<&Entry>, cx: &mut Context<Self>) -> AnyElement {
         let query = self.search_text(cx).trim().to_owned();
-        let words = terms(&query);
-        let mut rows: Vec<AnyElement> = Vec::new();
-        let mut active_row = None;
-        let section = |title: String| div().px(px(10.)).pt(px(10.)).pb(px(4.)).text_size(px(11.5)).font_weight(FontWeight::MEDIUM)
-            .text_color(theme::faint()).child(title).into_any_element();
+        let rows = self.search_rows(&query);
+        let active_row = rows.iter().position(|row| match row {
+            Row::Session(target) => active == Some(&Entry::Session(target.clone())),
+            Row::Group(_, ix) => ix.iter().any(|i| active == Some(&Entry::Hit(*i))),
+            _ => false,
+        });
+        // Lista virtual, como a conversa: só as linhas à vista são desenhadas.
+        let list_state = self.search.list.get_or_insert_with(|| ListState::new(0, ListAlignment::Top, px(400.))).clone();
+        // A lista guarda a altura de cada linha: mudou o que ela mostra (linhas ou o "Retomando…" de um trecho), remede.
+        if rows != self.search.rows || self.search.resuming != self.search.drawn_resuming {
+            list_state.reset(rows.len());
+            (self.search.rows, self.search.drawn_resuming) = (rows, self.search.resuming.clone());
+        }
+        (self.search.drawn_active, self.search.drawn_words) = (active.cloned(), terms(&query));
+        if std::mem::take(&mut self.search.scroll_pending) && let Some(row) = active_row { list_state.scroll_to_reveal_item(row); }
+        let view = cx.entity().downgrade();
+        let results = div().relative().size_full()
+            .child(list(list_state.clone(), move |i, _, cx| {
+                view.update(cx, |this, cx| this.render_search_row(i, cx)).unwrap_or_else(|_| div().into_any_element())
+            }).size_full().pt(px(8.)))
+            .child(div().absolute().inset_0().child(Scrollbar::vertical(&list_state).mode(ScrollbarMode::Always)));
+        let show_list = !(self.search.wide && self.search.chat.is_some());
+        let show_chat = !self.search.narrow || !show_list;
+        div().size_full().flex()
+            .when(show_list, |el| el.child(div().h_full().min_w_0()
+                .map(|el| if show_chat { el.w(relative(0.44)).flex_shrink_0().border_r_1().border_color(theme::border()) } else { el.flex_1() })
+                .child(results)))
+            .when(show_chat, |el| el.child(div().flex_1().min_w_0().h_full().child(self.render_search_chat(cx))))
+            .into_any_element()
+    }
+
+    /// Uma linha da lista virtual da esquerda.
+    fn render_search_row(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+        let Some(row) = self.search.rows.get(index).cloned() else { return div().into_any_element() };
+        let (active, words) = (self.search.drawn_active.clone(), self.search.drawn_words.clone());
         let state_line = |text: String, color: Hsla| div().px(px(10.)).py(px(14.)).flex().justify_center().text_size(px(13.)).text_color(color)
             .whitespace_normal().child(text).into_any_element();
-
-        if let Some(error) = self.search.resume_error.clone() {
-            rows.push(div().id("search-resume-error").mx(px(4.)).mt(px(6.)).px(px(10.)).py(px(8.)).rounded(px(8.)).bg(theme::danger().alpha(0.12)).role(Role::Alert)
-                .text_size(px(13.)).text_color(theme::danger()).whitespace_normal().child(error).into_any_element());
-        }
-
-        let multi = self.multi_server();
-        let sessions = self.search_sessions(&query);
-        if !sessions.is_empty() {
-            rows.push(section(tr("search_sessions")));
-            for (target, s) in &sessions {
+        let content = match row {
+            Row::ResumeError(error) => div().id("search-resume-error").px(px(10.)).py(px(8.)).rounded(px(8.)).bg(theme::danger().alpha(0.12))
+                .role(Role::Alert).text_size(px(13.)).text_color(theme::danger()).whitespace_normal().child(error).into_any_element(),
+            Row::Section(key) => div().px(px(10.)).pt(px(6.)).pb(px(2.)).text_size(px(11.5)).font_weight(FontWeight::MEDIUM)
+                .text_color(theme::faint()).child(tr(key)).into_any_element(),
+            Row::Status(text, danger) => state_line(text, if danger { theme::danger() } else { theme::muted() }),
+            Row::Retry => div().flex().justify_center().pb(px(6.)).child(Button::new("search-retry").outline().small()
+                .label(web_with("busca_tentar_de_novo", &[])).on_click(cx.listener(|this, _, _, cx| this.search_retry(cx)))).into_any_element(),
+            Row::Group(key, indexes) => {
+                self.render_search_group(&format!("hits-{key}"), &self.search.hits, &indexes, Entry::Hit, active.as_ref(), &words, false, cx)
+            }
+            Row::Session(target) => {
+                let Some(s) = self.target_session(&target).cloned() else { return div().into_any_element() };
                 let entry = Entry::Session(target.clone());
-                let on = active == Some(&entry);
-                if on { active_row = Some(rows.len()); }
+                let on = active.as_ref() == Some(&entry);
                 // Com várias máquinas, de qual é: o mesmo nome pode estar em duas.
-                let place = match (multi.then(|| self.machine_label(&target.server, cx)), s.cwd.as_deref().map(home_short)) {
+                let place = match (self.multi_server().then(|| self.machine_label(&target.server, cx)), s.cwd.as_deref().map(home_short)) {
                     (Some(label), Some(cwd)) => Some(format!("{label} · {cwd}")),
                     (label, cwd) => label.or(cwd),
                 };
-                rows.push(self.search_row(format!("search-session-{}", target.id()), on, entry, cx)
-                    .child(chrome::session_avatar(&sidebar::session_look(s), 22., None))
+                self.search_row(format!("search-session-{}", target.id()), on, entry, cx)
+                    .child(chrome::session_avatar(&sidebar::session_look(&s), 22., None))
                     .child(div().flex_1().min_w_0().flex().flex_col().gap(px(1.))
                         .child(div().flex().items_center().gap(px(6.)).min_w_0()
                             .child(div().truncate().text_size(px(13.5)).font_weight(FontWeight::MEDIUM).child(highlighted(s.name.clone(), &words)))
@@ -1017,49 +1188,11 @@ impl Hangar {
                                 .text_size(px(10.5)).text_color(theme::muted()).child(tr("sidebar_hidden_badge")))))
                         .children(place.map(|c| div().truncate().text_size(px(11.5)).text_color(theme::faint()).child(c))))
                     .children(s.last_activity.map(|t| div().flex_shrink_0().text_size(px(12.)).text_color(theme::faint()).child(ago(t))))
-                    .into_any_element());
+                    .into_any_element()
             }
-            if !query.is_empty() { rows.push(section(tr("search_conversations"))); }
-        }
-
-        if query.is_empty() {
-            rows.push(state_line(web_with("busca_digite_todas", &[]), theme::muted()));
-        } else if self.search.searching || self.search.query != query {
-            rows.push(state_line(web_with("switcher_buscando", &[]), theme::muted()));
-        } else if let Some(error) = self.search.error.clone() {
-            rows.push(state_line(error, theme::danger()));
-        } else {
-            // A máquina que falhou aparece mesmo com resultados das outras, como o web.
-            for (machine, reason) in &self.search.failed {
-                rows.push(state_line(web_with("busca_servidor_falhou_motivo", &[("servidor", machine.label.clone()), ("motivo", reason.clone())]), theme::danger()));
-            }
-            if !self.search.failed.is_empty() {
-                rows.push(div().flex().justify_center().pb(px(6.)).child(Button::new("search-retry").outline().small()
-                    .label(web_with("busca_tentar_de_novo", &[])).on_click(cx.listener(|this, _, _, cx| this.search_retry(cx)))).into_any_element());
-            }
-            let waiting = |offline: bool, key: &str| {
-                let names: Vec<String> = self.search.pending.iter().filter(|m| m.offline == offline).map(|m| m.label.clone()).collect();
-                (!names.is_empty()).then(|| web_with(key, &[("servidores", names.join(", "))]))
-            };
-            let hits = self.search.hits.clone();
-            let lead = (hits.is_empty() && self.search.failed.is_empty() && self.search.pending.is_empty())
-                .then(|| web_with("busca_nenhum_todas", &[("termos", words.join(", "))]));
-            let status: Vec<String> = [lead, waiting(false, "busca_aguardando"), waiting(true, "busca_tentando_fora")].into_iter().flatten().collect();
-            if !status.is_empty() { rows.push(state_line(status.join(" · "), theme::muted())); }
-            for (key, indexes) in groups(&hits, &self.search.filter, HITS_SHOWN) {
-                if indexes.iter().any(|i| active == Some(&Entry::Hit(*i))) { active_row = Some(rows.len()); }
-                rows.push(self.render_search_group(&format!("hits-{key}"), &hits, &indexes, Entry::Hit, active, &words, false, cx));
-            }
-        }
-        if std::mem::take(&mut self.search.scroll_pending) && let Some(row) = active_row { self.search.scroll.scroll_to_item(row); }
-
-        let list = div().id("search-results").h_full().overflow_y_scroll().track_scroll(&self.search.scroll).p(px(8.))
-            .flex().flex_col().gap(px(4.)).children(rows);
-        let wide = self.search.wide && self.search.chat.is_some();
-        div().size_full().flex()
-            .when(!wide, |el| el.child(div().w(relative(0.44)).flex_shrink_0().h_full().border_r_1().border_color(theme::border()).child(list)))
-            .child(div().flex_1().min_w_0().h_full().child(self.render_search_chat(cx)))
-            .into_any_element()
+        };
+        // A barra de rolagem fica por cima da borda direita: a linha não passa por baixo dela.
+        div().w_full().pl(px(8.)).pr(px(14.)).pb(px(4.)).child(content).into_any_element()
     }
 
     /// Uma conversa da lista: o cabeçalho (avatar, nome, estado, conta) e até três trechos dela. `actions`: os botões de
@@ -1132,7 +1265,8 @@ impl Hangar {
         sub.push(if live { tr("search_badge_live") } else if hit.mtime > 0. { tr("search_archived_ago").replace("{ago}", &ago(hit.mtime)) } else { tr("search_badge_archived") });
         let wide = self.search.wide;
         let mut buttons = div().flex_shrink_0().flex().items_center().gap(px(6.));
-        if !live {
+        // Na paleta estreita a conversa ocupa o lugar da lista: o botão é o caminho de volta.
+        if !live || self.search.narrow {
             buttons = buttons.child(Button::new("search-whole").ghost().small()
                 .label(tr(if wide { "search_back_to_list" } else { "search_view_whole" }))
                 .on_click(cx.listener(|this, _, _, cx| { this.search.wide = !this.search.wide; cx.notify(); })));
@@ -1151,23 +1285,47 @@ impl Hangar {
             (true, None) => match self.with_search_slot(cx, |this, _| this.list_state.clone()) {
                 None => center(tr("loading"), theme::faint()),
                 Some(list_state) => {
+                    self.search_watch_edges(&list_state, cx);
                     let view = cx.entity().downgrade();
-                    list(list_state, move |i, window, cx| {
-                        view.update(cx, |this, cx| {
-                            let focus = this.search.chat.as_ref().and_then(|c| c.focus_row) == Some(i);
-                            let row = this.with_search_slot(cx, |this, cx| this.render_row(i, window, cx))?;
-                            Some(if !focus { row } else {
-                                div().px(px(8.)).py(px(4.)).flex().flex_col().gap(px(4.))
-                                    .child(div().px(px(4.)).text_size(px(11.)).font_weight(FontWeight::MEDIUM).text_color(theme::accent_text()).child(tr("search_found_snippet")))
-                                    .child(div().rounded(px(10.)).border_1().border_color(theme::accent()).child(row))
-                                    .into_any_element()
-                            })
-                        }).ok().flatten().unwrap_or_else(|| div().into_any_element())
-                    }).size_full().into_any_element()
+                    div().relative().size_full()
+                        .child(list(list_state.clone(), move |i, window, cx| {
+                            view.update(cx, |this, cx| {
+                                let focus = this.search.chat.as_ref().and_then(|c| c.focus_row) == Some(i);
+                                let row = this.with_search_slot(cx, |this, cx| this.render_row(i, window, cx))?;
+                                // `w_full` nas duas caixas: sem largura definida, a linha media o texto sem quebra e passava da borda.
+                                Some(if !focus { row } else {
+                                    div().w_full().px(px(8.)).py(px(4.)).flex().flex_col().gap(px(4.))
+                                        .child(div().px(px(4.)).text_size(px(11.)).font_weight(FontWeight::MEDIUM).text_color(theme::accent_text()).child(tr("search_found_snippet")))
+                                        .child(div().w_full().rounded(px(10.)).border_1().border_color(theme::accent()).overflow_hidden().child(row))
+                                        .into_any_element()
+                                })
+                            }).ok().flatten().unwrap_or_else(|| div().into_any_element())
+                        }).size_full())
+                        .child(div().absolute().inset_0().child(Scrollbar::vertical(&list_state).mode(ScrollbarMode::Always)))
+                        .into_any_element()
                 }
             },
         };
-        div().size_full().flex().flex_col().child(header).child(div().flex_1().min_h_0().pt(px(6.)).child(body)).into_any_element()
+        div().size_full().flex().flex_col().overflow_hidden().child(header).child(div().flex_1().min_h_0().min_w_0().pt(px(6.)).overflow_hidden().child(body))
+            .into_any_element()
+    }
+
+    /// Rolar até perto de uma borda do pedaço desenhado traz mais mensagens daquele lado, uma vez por chegada.
+    fn search_watch_edges(&mut self, list_state: &ListState, cx: &mut Context<Self>) {
+        const NEAR: f32 = 240.;
+        let scrolled = -f32::from(list_state.scroll_px_offset_for_scrollbar().y);
+        let max = f32::from(list_state.max_offset_for_scrollbar().y);
+        let Some(chat) = self.search.chat.as_mut() else { return };
+        let (near_top, near_bottom) = (scrolled < NEAR, max - scrolled < NEAR);
+        let mut extend = None;
+        if !near_top { chat.top_armed = true; } else if chat.top_armed && chat.shown.start > 0 { chat.top_armed = false; extend = Some(true); }
+        if !near_bottom { chat.bottom_armed = true; } else if chat.bottom_armed && chat.shown.end < chat.events.len() { chat.bottom_armed = false; extend = Some(false); }
+        let Some(top) = extend else { return };
+        let seq = chat.seq;
+        let view = cx.entity().downgrade();
+        cx.defer(move |cx| {
+            let _ = view.update(cx, |this, cx| if this.search.chat.as_ref().is_some_and(|c| c.seq == seq) { this.search_extend(top, cx) });
+        });
     }
 
     /// Aba Perguntar: a pergunta, a resposta e só as conversas que ela cita.
@@ -1220,7 +1378,10 @@ impl Hangar {
                 }
             }
         }
-        div().id("search-ask").size_full().overflow_y_scroll().p(px(16.)).child(div().max_w(px(860.)).flex().flex_col().gap(px(8.)).children(rows))
+        div().relative().size_full()
+            .child(div().id("search-ask").size_full().overflow_y_scroll().track_scroll(&self.search.ask_scroll).p(px(16.)).pr(px(22.))
+                .child(div().max_w(px(860.)).flex().flex_col().gap(px(8.)).children(rows)))
+            .child(div().absolute().inset_0().child(Scrollbar::vertical(&self.search.ask_scroll).mode(ScrollbarMode::Always)))
             .into_any_element()
     }
 
@@ -1248,7 +1409,56 @@ fn account_pill(label: String, color: Hsla) -> Div {
 
 #[cfg(test)]
 mod tests {
-    use super::{Filter, Hit, Search, all_whole, cites, first_words, groups, marks, merge_hits, merge_keeping, moment, next_group, plain, terms};
+    use super::{Filter, Hit, Search, all_whole, cites, first_words, groups, marks, merge_hits, merge_keeping, moment, next_group, palette_frame,
+        plain, terms, window_around};
+    use gpui_kit::{px, size};
+
+    #[test]
+    fn the_palette_fits_any_window_centered_with_a_margin() {
+        for (w, h) in [(1350., 820.), (2560., 1440.), (900., 600.), (520., 380.), (300., 200.)] {
+            let window = size(px(w), px(h));
+            let (frame, _) = palette_frame(window);
+            assert!(frame.origin.x >= px(0.) && frame.origin.y >= px(0.), "{w}×{h}: a borda esquerda ou a de cima sai da janela");
+            assert!(frame.origin.x + frame.size.width <= window.width && frame.origin.y + frame.size.height <= window.height, "{w}×{h}: passa da janela");
+            assert_eq!(frame.origin.x * 2. + frame.size.width, window.width, "{w}×{h}: fora do centro");
+            assert_eq!(frame.origin.y * 2. + frame.size.height, window.height, "{w}×{h}: fora do centro");
+            assert!(frame.origin.x >= px(8.) && frame.origin.y >= px(8.), "{w}×{h}: sem margem");
+        }
+        assert!(palette_frame(size(px(2560.), px(1440.))).0.size.width <= px(1180.), "janela grande esticaria a paleta");
+        assert!(!palette_frame(size(px(1350.), px(820.))).1, "1350 cabe lista e conversa lado a lado");
+        assert!(palette_frame(size(px(800.), px(700.))).1, "800 empilha");
+    }
+
+    #[test]
+    fn the_preview_draws_a_window_around_the_snippet() {
+        assert_eq!(window_around(1000, Some(500), 40, 40), 460..541);
+        assert_eq!(window_around(1000, Some(10), 40, 40), 0..51);
+        assert_eq!(window_around(1000, Some(990), 40, 40), 950..1000);
+        assert_eq!(window_around(1000, None, 40, 40), 920..1000, "sem trecho, o fim da conversa");
+        assert_eq!(window_around(30, Some(5), 40, 40), 0..30);
+        assert_eq!(window_around(0, None, 40, 40), 0..0);
+    }
+
+    #[test]
+    fn an_old_server_hit_is_named_by_folder_and_its_own_start() {
+        let old = |line: &str| Hit { cwd: Some("/home/j/pessoal/hangar".into()), ..hit("a", line, 1.) };
+        assert_eq!(old("…junto. 4. Trocar **modelo**").title(), "hangar · junto. 4. Trocar modelo");
+        assert_ne!(old("travou outra vez").title(), old("O PC está travando").title(), "várias conversas da mesma pasta ficariam com o mesmo nome");
+    }
+
+    #[test]
+    fn date_phrases_never_repeat_the_ago_word() {
+        for (lang, source) in [("pt", include_str!("../../../messages/pt.json")), ("en", include_str!("../../../messages/en.json"))] {
+            let dict: serde_json::Value = serde_json::from_str(source).unwrap();
+            let text = |key: &str| dict[format!("native_{key}")].as_str().unwrap().to_owned();
+            for ago in ["ago_now", "ago_min", "ago_h", "ago_d"] {
+                let phrase = text("search_archived_ago").replace("{ago}", &text(ago).replace("{n}", "24"));
+                let words: Vec<&str> = phrase.split_whitespace().collect();
+                assert!(!words.windows(2).any(|w| w[0] == w[1]), "{lang}: {phrase}");
+                assert!(phrase.matches(" ago").count() <= 1 && phrase.matches("há").count() <= 1, "{lang}: {phrase}");
+            }
+        }
+    }
 
     fn hit(server: &str, line: &str, mtime: f64) -> Hit {
         Hit { project: "p".into(), session_id: "s".into(), line: line.into(), mtime, server: server.into(), ..Default::default() }
@@ -1312,7 +1522,7 @@ mod tests {
         assert_eq!(full.title(), "viva");
         assert_eq!(Hit { live: false, ..full.clone() }.title(), "ao-fechar", "a morta não tem nome de sessão");
         assert_eq!(Hit { live: false, name: Some("  ".into()), ..full.clone() }.title(), "oi");
-        assert_eq!(base.title(), "hangar");
+        assert_eq!(base.title(), "hangar · x", "servidor antigo: a pasta com o começo do trecho");
         assert_eq!(first_words("[de: outra] veja https://x.y/z o tour"), "veja o tour");
         let long = first_words(&"palavra ".repeat(20));
         assert!(long.ends_with('…') && long.chars().count() <= 59 && !long.contains("palavr…"), "cortou no meio da palavra: {long}");

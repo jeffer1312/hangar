@@ -5159,7 +5159,7 @@
   "native_search_date_format": "%m/%d",
   "native_search_you": "you",
   "native_search_account": "account {name}",
-  "native_search_archived_ago": "archived {ago} ago",
+  "native_search_archived_ago": "archived {ago}",
   "native_search_go": "Go to the conversation",
   "native_search_view_whole": "View whole",
   "native_search_back_to_list": "Back to the list",
