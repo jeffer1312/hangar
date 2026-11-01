@@ -107,8 +107,16 @@ pub(crate) fn claude_jsonl(w: &Where, project: &str, sid: &str, config_dir: Opti
         .find(|p| p.is_file()).ok_or(Miss::Absent)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Quantos cabeçalhos esta thread abriu: os testes conferem que transcript parado não é reaberto.
+    pub(crate) static HEADER_OPENS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// O primeiro valor que `field` acha nas `lines` primeiras linhas JSON do arquivo.
 pub(crate) fn header(path: &Path, lines: usize, field: impl Fn(&Value) -> Option<String>) -> Option<String> {
+    #[cfg(test)]
+    HEADER_OPENS.with(|n| n.set(n.get() + 1));
     let file = std::fs::File::open(path).ok()?;
     std::io::BufReader::new(file).split(b'\n').take(lines).flatten()
         .filter_map(|line| serde_json::from_slice::<Value>(&line).ok()).find_map(|obj| field(&obj))

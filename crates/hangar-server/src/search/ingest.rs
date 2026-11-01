@@ -105,7 +105,7 @@ pub(super) struct Found {
 
 struct Known {
     id: i64, size: i64, mtime_ns: i64, ino: i64, offset: i64, config_dir: Option<String>,
-    head_len: i64, head_hash: Option<String>, provider: String,
+    head_len: i64, head_hash: Option<String>, provider: String, cwd: Option<String>,
 }
 
 /// Bytes do começo do arquivo guardados como hash: `cp` por cima mantém o inode e não encolhe.
@@ -178,12 +178,13 @@ pub(super) type Report<'a> = &'a dyn Fn(&'static str, String);
 
 /// Os transcripts de todas as contas e agentes, com o que não pôde ser lido agora; pasta e agente
 /// ilegíveis vão ao diário quando passam a falhar (a passada e a varredura veem o mesmo conjunto).
-pub(super) fn discover(accounts: &[Account], agents: Option<&AccountEnvironment>, index: &super::Index)
+/// `known` dá o cwd guardado do transcript de agente que não mudou desde a leitura do índice.
+pub(super) fn discover(accounts: &[Account], agents: Option<&AccountEnvironment>, index: &super::Index, known: crate::archive_list::KnownCwd)
     -> (BTreeMap<String, Found>, Vec<(PathBuf, String)>, Vec<crate::archive_list::Unread>) {
     let (mut current, unreadable) = conversations(accounts);
     index.failing("busca.pasta_ilegivel", unreadable.iter()
         .map(|(path, e)| (path.to_string_lossy().into_owned(), format!("{}: {e}", path.display()))).collect());
-    let (others, failed) = agents.map(super::agents::discover).unwrap_or_default();
+    let (others, failed) = agents.map(|env| super::agents::discover(env, known)).unwrap_or_default();
     index.failing("busca.agente_ilegivel", failed.iter().map(|u| (u.key(), u.error.clone())).collect());
     current.extend(others);
     (current, unreadable, failed)
@@ -192,12 +193,18 @@ pub(super) fn discover(accounts: &[Account], agents: Option<&AccountEnvironment>
 /// Erro do banco num arquivo não para os outros, mas volta no fim: índice que não gravou não fica pronto.
 pub(super) fn pass(conn: &mut Connection, accounts: &[Account], agents: Option<&AccountEnvironment>, index: &super::Index) -> Result<(), IndexError> {
     let report = |code, detail| index.report(code, detail);
-    let (current, unreadable, failed) = discover(accounts, agents, index);
     let pi_account = |provider: &str| agents.and_then(|env| crate::provider_accounts::pi_account(env, Some(provider))).unwrap_or_default();
-    let known: BTreeMap<String, Known> = conn.prepare("SELECT path, id, size, mtime_ns, ino, offset, config_dir, head_len, head_hash, provider FROM files")?
+    let known: BTreeMap<String, Known> = conn.prepare("SELECT path, id, size, mtime_ns, ino, offset, config_dir, head_len, head_hash, provider, cwd FROM files")?
         .query_map([], |r| Ok((r.get(0)?, Known { id: r.get(1)?, size: r.get(2)?, mtime_ns: r.get(3)?, ino: r.get(4)?,
-            offset: r.get(5)?, config_dir: r.get(6)?, head_len: r.get(7)?, head_hash: r.get(8)?, provider: r.get(9)? })))?
+            offset: r.get(5)?, config_dir: r.get(6)?, head_len: r.get(7)?, head_hash: r.get(8)?, provider: r.get(9)?, cwd: r.get(10)? })))?
         .collect::<Result<_, _>>()?;
+    // Transcript de agente parado não é reaberto: o cwd e a fase da transferência ficam como o índice leu.
+    let stored = |path: &Path| -> Option<Option<String>> {
+        let k = known.get(&*path.to_string_lossy()).filter(|k| k.provider != "claude")?;
+        let md = std::fs::metadata(path).ok()?;
+        unchanged((k.size, k.mtime_ns, k.ino), &Stat::of(&md)).then(|| k.cwd.clone())
+    };
+    let (current, unreadable, failed) = discover(accounts, agents, index, &stored);
     let listed: Vec<Option<&str>> = accounts.iter().map(|a| a.config_dir.as_deref()).collect();
     let tx = conn.transaction()?;
     for (path, k) in &known {

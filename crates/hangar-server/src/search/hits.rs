@@ -324,7 +324,7 @@ pub(super) fn scan_with(index: &Index, accounts: &[Account], terms: &[String], l
     let closed = closed_names(index);
     let names = Names { live, closed: &closed };
     let agents = index.agents();
-    let (files, _, _) = ingest::discover(accounts, agents, index);
+    let (files, _, _) = ingest::discover(accounts, agents, index, &|_| None);
     // shortcut: o rollout transferido do Claude só entra pelo índice (fronteira e ids do composto); antes
     // dele pronto, a varredura não o lê.
     let mut order: Vec<_> = files.iter().filter(|(_, f)| f.transfer.is_none()).filter(|(path, f)| f.stat.size <= MAX_FILE_BYTES || {

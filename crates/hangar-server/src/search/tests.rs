@@ -1005,6 +1005,17 @@ fn agents_enter_the_index_with_provider_and_account() {
 }
 
 #[test]
+fn unchanged_agent_transcripts_are_not_reopened() {
+    // Pi, omp e Codex com o mesmo stat: o cwd sai da tabela `files`, sem reabrir o cabeçalho.
+    let env = Env::agents(quiet());
+    env.index.update().unwrap();
+    crate::session_open::archive::HEADER_OPENS.with(|n| n.set(0));
+    env.index.update().unwrap();
+    assert_eq!(crate::session_open::archive::HEADER_OPENS.with(|n| n.get()), 0);
+    assert_eq!(env.count("SELECT count(*) FROM files WHERE provider IN ('pi', 'omp', 'codex') AND cwd IS NOT NULL"), 4);
+}
+
+#[test]
 fn agent_ids_are_the_archive_history_ids() {
     // R5: cada trecho abre no ponto — o id indexado é o que o histórico do Arquivo devolve.
     use crate::session_open::AgentProvider;

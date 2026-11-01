@@ -15,15 +15,20 @@ use crate::speech::history::transfer_history as transfer;
 
 /// Os transcripts dos outros agentes e o que não pôde ser varrido agora (o índice mantém o que já
 /// tem lá).
-pub(super) fn discover(env: &AccountEnvironment) -> (BTreeMap<String, Found>, Vec<Unread>) {
-    // O índice é a fonte do que ele mesmo guarda: o cabeçalho sai sempre do disco.
-    let (mut others, mut unread) = crate::archive_list::agent_conversations(env, &|_| None);
+/// `known`: o cwd que o índice guardou do transcript que não mudou; ele não é reaberto.
+pub(super) fn discover(env: &AccountEnvironment, known: crate::archive_list::KnownCwd) -> (BTreeMap<String, Found>, Vec<Unread>) {
+    let (mut others, mut unread) = crate::archive_list::agent_conversations(env, known);
     let mut transfers = HashMap::new();
-    match crate::archive_list::codex_conversations(env, &|_| None) {
+    match crate::archive_list::codex_conversations(env, known) {
         Ok((codex, bad)) => {
             unread.extend(bad);
             for c in codex {
                 let Some(owner) = c.codex.as_ref() else { continue };
+                // Parado desde a leitura: a passada não o relê, então a fronteira da transferência não serve.
+                if known(&c.path).is_some() {
+                    others.push(c);
+                    continue;
+                }
                 match crate::list::local_transfers::thread_phase(&env.home, &owner.home.to_string_lossy(), &c.sid) {
                     Ok(None) => others.push(c),
                     // O transferido do Claude entra só depois da fronteira, com os ids do histórico composto;
