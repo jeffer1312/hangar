@@ -105,6 +105,7 @@ import * as m from '../paraglide/messages';
     }
   }
   async function abrirNoPonto(h: Hit) {
+    const anterior = getActiveId();
     selectServer(h.serverId);
     // A mesma conversa em duas contas: o Arquivo abre a cópia da conta do trecho, não a mais nova. A
     // espera vem antes de fechar: navegação feita depois não é sobrescrita por este hash.
@@ -117,6 +118,8 @@ import * as m from '../paraglide/messages';
         diag.registrar({ evento: 'busca.arquivo_conta', nivel: 'aviso', codigo: 'leitura_falhou', detalhe: e instanceof Error ? e.message : String(e) });
         // Seguir abriria a cópia de outra conta sem aviso: o erro fica na prévia do trecho.
         if (aberto === chaveHit(h)) contextoErro = m.arquivo_conversa_erro();
+        // A consulta vai ao servidor ativo, por isso ele trocou antes; sem abrir, volta o de antes.
+        if (anterior) selectServer(anterior);
         return;
       }
     }

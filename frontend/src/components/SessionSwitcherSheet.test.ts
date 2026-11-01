@@ -222,10 +222,10 @@ describe('SessionSwitcherSheet: busca de conteúdo', () => {
 });
 
 describe('SessionSwitcherSheet: abrir o trecho no Arquivo', () => {
-  async function abrirTrecho(extra: Partial<SearchHit>) {
+  async function abrirTrecho(extra: Partial<SearchHit>, server = 'a') {
     const { comp, onClose } = await montar();
     await digitar('foo');
-    calls.find((c) => c.id === 'a')!.resolve([{ ...hit('s1', 10, 'trecho'), event_id: 'e1', ...extra } as SearchHit]);
+    calls.find((c) => c.id === server)!.resolve([{ ...hit('s1', 10, 'trecho'), event_id: 'e1', ...extra } as SearchHit]);
     await settle();
     document.body.querySelector<HTMLButtonElement>('.hit-btn')!.click();
     await settle();
@@ -237,10 +237,14 @@ describe('SessionSwitcherSheet: abrir o trecho no Arquivo', () => {
   it('a conta do trecho que não pôde ser lida mostra o erro e não abre o Arquivo', async () => {
     window.location.hash = '';
     archiveFolder = async () => { throw new Error('503'); };
-    const { comp, onClose } = await abrirTrecho({ config_dir: '/home/u/.claude-b' } as Partial<SearchHit>);
+    const { selectServer } = await import('../lib/auth');
+    vi.mocked(selectServer).mockClear();
+    const { comp, onClose } = await abrirTrecho({ config_dir: '/home/u/.claude-b' } as Partial<SearchHit>, 'b');
     expect(text()).toContain(m.arquivo_conversa_erro());
     expect(onClose).not.toHaveBeenCalled();
     expect(window.location.hash).toBe('');
+    // A consulta foi ao servidor do trecho; sem abrir, o ativo volta a ser o de antes.
+    expect(vi.mocked(selectServer).mock.calls.at(-1)).toEqual(['a']);
     expect(registrar).toHaveBeenCalledWith(expect.objectContaining({ evento: 'busca.arquivo_conta', codigo: 'leitura_falhou' }));
     unmount(comp);
   });
