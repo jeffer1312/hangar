@@ -11,7 +11,8 @@ import { useSessions } from '../stores/sessions';
 import { useIdentities } from '../features/pair/identities';
 import { SessionRow } from '../features/sessions/SessionRow';
 import { GroupBlockHeader, SessionSectionCard, SessionSectionHeader } from '../features/sessions/SessionSection';
-import { buildSessionSections, sessionGroupKey } from '../features/sessions/sessionSections';
+import { buildSessionSections, HIDDEN_SECTION_ID, sessionGroupKey } from '../features/sessions/sessionSections';
+import { setHiddenSectionOpen, useHiddenSectionOpen } from '../features/sessions/hiddenSectionPref';
 import * as m from '../paraglide/messages';
 
 // Trocar de sessão sem voltar pra lista. `replace` e não `push`: empilhar chats faria o voltar
@@ -55,6 +56,7 @@ function PickerList({ onClose, atual, serverId }: { onClose: () => void; atual: 
     : loading;
   const [query, setQuery] = useState('');
   const [collapsedGroups, setCollapsedGroups] = useState<ReadonlySet<string>>(() => new Set());
+  const hiddenOpen = useHiddenSectionOpen();
   const search = query.trim().toLowerCase();
   const liveRows = useMemo(() => rows.filter((s) => s.state !== 'dead'), [rows]);
   // Como na lista: o identificador de cada máquina só é lido quando há grupo entre máquinas.
@@ -65,17 +67,18 @@ function PickerList({ onClose, atual, serverId }: { onClose: () => void; atual: 
   const groups = useMemo(() => {
     const current = liveRows.find((s) => s.name === atual && s.serverId === serverId);
     const currentServer = current?.outside?.localServerId ?? serverId;
-    // Trocar para uma oculta continua possível; a linha leva a marca "Oculta".
-    return buildSessionSections(liveRows, 'include', 'server', search, collapsedGroups, currentServer, pairGroups);
-  }, [liveRows, atual, serverId, search, collapsedGroups, pairGroups]);
+    // Como na lista: as ocultas no fim, em "Ocultas (N)"; a aberta fica no lugar dela.
+    const visible = current?.hidden_from_list ? liveRows.map((s) => s === current ? { ...s, hidden_from_list: false } : s) : liveRows;
+    return buildSessionSections(visible, hiddenOpen ? 'expanded' : 'collapsed', 'server', search, collapsedGroups, currentServer, pairGroups);
+  }, [liveRows, atual, serverId, search, collapsedGroups, pairGroups, hiddenOpen]);
   const multipleServers = useMemo(() => new Set(liveRows.map((s) => s.serverId)).size > 1, [liveRows]);
-  const toggleGroup = useCallback((id: string) => setCollapsedGroups((current) => {
+  const toggleGroup = useCallback((id: string) => id === HIDDEN_SECTION_ID ? setHiddenSectionOpen(!hiddenOpen) : setCollapsedGroups((current) => {
     const next = new Set(current);
     const key = sessionGroupKey('server', id);
     if (next.has(key)) next.delete(key);
     else next.add(key);
     return next;
-  }), []);
+  }), [hiddenOpen]);
   const selectSession = useCallback((session: AggSession) => {
     if (session.name === atual && session.serverId === serverId) return;
     onClose();

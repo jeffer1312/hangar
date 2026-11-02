@@ -3,7 +3,7 @@ import type { AggSession, CotaContaResumo } from '@hangar/core';
 
 export function recentSessions(rows: AggSession[], limit: number): AggSession[] {
   return rows
-    .filter((r) => r.state !== 'dead')
+    .filter((r) => r.state !== 'dead' && !r.hidden_from_list)
     .sort((a, b) => (b.last_activity ?? -Infinity) - (a.last_activity ?? -Infinity))
     .slice(0, limit);
 }
