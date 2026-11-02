@@ -197,7 +197,7 @@ pub fn backfill(path: &Path, key: &str, provider: Provider, resume: Option<&str>
     if start >= cut {
         return Vec::new();
     }
-    let mut parser = LineParser::new(provider).with_path(path);
+    let mut parser = LineParser::new(provider).with_path(path).with_notices();
     match read_frames(path, start, Some(cut), &mut parser, key) {
         Ok((frames, _)) => frames,
         Err(e) => {
@@ -366,7 +366,7 @@ impl TailState {
         let Ok(meta) = std::fs::metadata(&self.path) else { return };
         if meta.len() < pos {
             tracing::info!(key = %self.key, "transcript encolheu; recomeça do início");
-            self.parser = LineParser::new(self.provider).with_path(&self.path);
+            self.parser = LineParser::new(self.provider).with_path(&self.path).with_notices();
             self.pos = Some(0);
             let _ = tx.send(Out::Tail(self.generation, reset_frame()));
         }
@@ -418,7 +418,7 @@ impl FileTail {
             provider,
             generation,
             pos: None,
-            parser: LineParser::new(provider).with_path(&path),
+            parser: LineParser::new(provider).with_path(&path).with_notices(),
         }));
         let task = tokio::spawn(run(path, state.clone(), tx, watchers, on_dead)).abort_handle();
         Arc::new(FileTail { state, task })

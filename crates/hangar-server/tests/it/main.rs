@@ -172,6 +172,7 @@ mod contract_costs_pricing;
 mod contract_costs_reports;
 mod contract_costs_simple;
 mod contract_history;
+mod transcript_notices;
 mod contract_list;
 mod contract_pyjson;
 mod contract_tail;

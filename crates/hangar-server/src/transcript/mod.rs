@@ -73,11 +73,21 @@ pub struct LineParser {
     rewrite: claude::RewriteFilter,
     peer_resolver: claude::PeerResolver,
     run_dir: Option<std::path::PathBuf>,
+    notices: Option<claude::NoticeFold>,
 }
 
 impl LineParser {
     pub fn new(provider: Provider) -> Self {
-        Self { provider, rewrite: claude::RewriteFilter::default(), peer_resolver: peer::name_of_pid, run_dir: None }
+        Self { provider, rewrite: claude::RewriteFilter::default(), peer_resolver: peer::name_of_pid, run_dir: None, notices: None }
+    }
+
+    /// Com as notas dos avisos da CLI (hook que falha, nova tentativa, recusa). Só o chat as pede: quem procura
+    /// a última resposta ou o texto da pessoa (push, loops, retomada) tomaria uma nota por resposta.
+    pub fn with_notices(mut self) -> Self {
+        if matches!(self.provider, Provider::Claude | Provider::ClaudeHeadless) {
+            self.notices = Some(claude::NoticeFold::default());
+        }
+        self
     }
 
     pub fn with_path(mut self, path: &std::path::Path) -> Self {
@@ -99,7 +109,8 @@ impl LineParser {
         }
         let text = String::from_utf8_lossy(line);
         if let Some(Value::Object(obj)) = pyjson::loads_lossless(py::strip(&text)) {
-            self.rewrite.keep(&obj);
+            // O fold também precisa do começo do turno que já passou: senão a 2ª falha viraria a "primeira".
+            if self.rewrite.keep(&obj) && let Some(fold) = self.notices.as_mut() { fold.feed(&obj, &mut Vec::new()); }
         }
     }
 
@@ -110,7 +121,9 @@ impl LineParser {
             (Provider::Codex, _) => codex::parse_rollout_obj(&value),
             (Provider::Orq, _) => crate::orchestration::timeline::parse_obj(&value, self.run_dir.as_deref()),
             (Provider::Claude | Provider::ClaudeHeadless, Value::Object(obj)) if self.rewrite.keep(obj) => {
-                claude::parse_obj(obj, self.peer_resolver)
+                let mut evs = claude::parse_obj(obj, self.peer_resolver);
+                if let Some(fold) = self.notices.as_mut() { fold.feed(obj, &mut evs); }
+                evs
             }
             _ => Vec::new(),
         };
