@@ -4,7 +4,7 @@ import { useUnistyles } from 'react-native-unistyles';
 import { useIsFocused, useRouter } from 'expo-router';
 import { custoDesconhecido, custoSemCacheDe, equivalenteDe, fillDayGaps, intlLocale, isFree, mergeReports, mergeUso, partirOcultos, precoParcial, tarifasPorModelo, type DimBucket } from '@hangar/core';
 import { Sheet } from '../../ui/Sheet';
-import { Action, Bar, Card, Choice, Columns, compactNumber, Composition, Copy, dollars, Grid, Metric, number, Paged, percent, ReportFrame, ReportStatus, useChartColors, useReportSelection, useUsagePreferences } from './ReportUI';
+import { Action, Bar, Card, Choice, Columns, compactNumber, Composition, Copy, dollars, Grid, number, Paged, percent, ReportFrame, ReportStatus, useChartColors, useReportSelection, useUsagePreferences } from './ReportUI';
 import { comparison, compactMoney, costView, dimensionBuckets, dimensions, filterCombos, groupCombos, monthForecast, outlierDays, rawTokens, setCostFilter, sumCombos, type CostFilter, type Dimension } from './costs-model';
 import { ForecastLine, KpiTile, Panel, RiseNumber, Ring, Segmented, SourceChips, SourceMark } from './CostsVisuals';
 import { useReports } from './useReports';
@@ -113,8 +113,8 @@ export function CostsScreen() {
   const heroStyle = { color: sc.text, fontSize: theme.base.text.xl * 1.45, fontWeight: theme.base.weight.bold, fontVariant: ['tabular-nums' as const], letterSpacing: -0.5 };
   const now = new Date();
   const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-  // A previsão precisa do mês inteiro até hoje dentro do período carregado.
-  const forecast = !unknownCost(total) && (period === 'all' || now.getDate() <= periodDays) ? monthForecast(view.days.map((d) => ({ key: d.key, cost: d.cost })), todayKey, period === '90d' || period === 'all') : null;
+  // A previsão precisa do mês até hoje e dos 7 dias da média no período carregado; sem combos, os dias não seguem o recorte.
+  const forecast = !unknownCost(total) && (view.cross || !activeFilter) && (period === 'all' || (periodDays >= 7 && now.getDate() <= periodDays)) ?monthForecast(view.days.map((d) => ({ key: d.key, cost: d.cost })), todayKey, period === '90d' || period === 'all') : null;
   const namesOfServers = new Map(own.map((s) => [s.id, s.label]));
   const labelOf = (dim: Dimension, key: string) => {
     if (dim === 'servidor') return namesOfServers.get(key) ?? key;
@@ -163,7 +163,8 @@ export function CostsScreen() {
     const group = view.cross ? groupBy ?? (metric === 'cost' ? 'source' : 'tipo') : 'tipo';
     const byType = group === 'tipo';
     const OTHERS = '\u0000outros';
-    const top = byType ? [] : view.groups[group].slice(0, 5).map((bucket) => bucket.key);
+    const weight = (bucket: DimBucket) => metric === 'tokens' ? rawTokens(bucket) : bucket.cost;
+    const top = byType ? [] : [...view.groups[group]].sort((a, b) => weight(b) - weight(a)).slice(0, 4).map((bucket) => bucket.key);
     const rest = !byType && view.groups[group].length > top.length;
     const layers = byType ? tokenTypes.map((key, index) => ({ key, label: types[key], color: colors[index] }))
       : [...top.map((key, index) => ({ key, label: group === 'source' ? view.groups.source.find((b) => b.key === key)?.label ?? key : labelOf(group, key), color: colors[index % colors.length] })),
@@ -177,12 +178,12 @@ export function CostsScreen() {
           return metric === 'tokens' ? bucket[type] : custoDesconhecido(bucket) && bucket[type] > 0 ? null : bucket[`cost_${type}`];
         }
         const part = sumCombos(view.rows.filter((row) => row.dia === item.key && (layer.key === OTHERS ? !top.includes(row[group]) : row[group] === layer.key)));
-        if (metric === 'tokens') return part.input + part.output + part.cache_write;
+        if (metric === 'tokens') return rawTokens(part);
         return custoDesconhecido(part) ? null : part.cost;
       }) };
     });
     const marks = outlierDays(days.map((d) => ({ key: d.key, value: d.values.reduce<number>((sum, v) => sum + (v ?? 0), 0) })));
-    const changeMetric = (value: 'cost' | 'tokens') => { setMetric(value); setHiddenLayers(value === 'tokens' && (groupBy ?? 'tipo') === 'tipo' ? ['cache_read'] : []); };
+    const changeMetric = (value: 'cost' | 'tokens') => { setMetric(value); setHiddenLayers(value === 'tokens' && byType ? ['cache_read'] : []); };
     const changeGroup = (value: string) => { setGroupBy(value as NonNullable<typeof groupBy>); setHiddenLayers(metric === 'tokens' && value === 'tipo' ? ['cache_read'] : []); };
     return <Panel title={m.custos_uso_por_dia()} icon="ChartColumn">
       <Segmented label={m.custos_metrica_diaria()} value={metric} onChange={(v) => changeMetric(v as 'cost' | 'tokens')} options={[{ key: 'tokens', label: m.ctx_tokens() }, { key: 'cost', label: m.custos_estimativa_api() }]} />
@@ -349,14 +350,14 @@ export function CostsScreen() {
               {line(m.custos_pago_de_verdade(), cost(cacheTotal))}
               {line(m.custos_se_nada_cache(), known ? money(without) : '—')}
               {line(m.custos_economizou(), known ? money(saved) : '—', theme.tokens.status.success)}
-              {line(m.custos_cache_perdido(), report.cache_detalhado && !unknownCost(total) ? money(total.custo_regravado ?? 0) : '—', theme.tokens.status.error)}
-              {line(m.custos_cache_1h(),report.cache_detalhado && !emptySelection ? percent(total.cache_write_1h ?? 0, total.cache_write) : '—')}
+              {line(m.custos_cache_perdido(), report.cache_detalhado && !unknownCost(cacheTotal) ? money(cacheTotal.custo_regravado ?? 0) : '—', theme.tokens.status.error)}
+              {line(m.custos_cache_1h(),report.cache_detalhado && !emptySelection ? percent(cacheTotal.cache_write_1h ?? 0, cacheTotal.cache_write) : '—')}
             </View>
           </View>
           <Composition label={m.custos_o_que_cache()} items={parts} />
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: SPACE[3] }}>{parts.map((part) => <View key={part.label} style={{ flexDirection: 'row', alignItems: 'center', gap: SPACE[1.5] }}><View style={{ width: 9, height: 9, borderRadius: 3, backgroundColor: part.color }} /><Copy muted>{part.label}</Copy></View>)}</View>
           <Copy muted>{`${percent(cacheTotal.cache_read, rawTokens(cacheTotal))} ${m.custos_do_volume_cache_lido()}`}</Copy>
-          <Copy muted>{report.cache_detalhado ? m.custos_cache_1h_pe({ h1: compactNumber(total.cache_write_1h ?? 0), total: compactNumber(total.cache_write) }) : m.custos_cache_sem_dado()}</Copy>
+          <Copy muted>{report.cache_detalhado ? m.custos_cache_1h_pe({ h1: compactNumber(cacheTotal.cache_write_1h ?? 0), total: compactNumber(cacheTotal.cache_write) }) : m.custos_cache_sem_dado()}</Copy>
         </Panel>;
       })()}
       {renderRanking('provider')}{renderRanking('source')}

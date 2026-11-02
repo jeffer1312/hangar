@@ -55,6 +55,7 @@ describe('compactTokens', () => {
   it('sobe de unidade quando o arredondamento chega a mil', () => {
     expect(compactTokens(999_600, 'pt-BR')).toBe('1,0 Mi');
     expect(compactTokens(999_960_000, 'pt-BR')).toBe('1,00 Bi');
+    expect(compactTokens(999.5, 'pt-BR')).toBe('1 mil');
   });
 });
 
@@ -64,6 +65,10 @@ describe('dinheiro compacto', () => {
     expect(compactMoney(13_654.4, 'en-US')).toBe('13.7K');
     expect(compactMoney(2_000_000, 'pt-BR')).toBe('2 mi');
     expect(compactMoney(950, 'pt-BR')).toBe('950');
+  });
+  it('sobe de unidade quando o arredondamento chega a mil', () => {
+    expect(compactMoney(999_960, 'pt-BR')).toBe('1 mi');
+    expect(compactMoney(999_960, 'en-US')).toBe('1M');
   });
 });
 

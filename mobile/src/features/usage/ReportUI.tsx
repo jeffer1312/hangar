@@ -21,6 +21,8 @@ import { RADIUS, SPACE } from '../../theme/scale';
 export const useUsagePreferences = create(() => ({ period: '30d', off: [] as string[] }));
 export const number = (value: number, digits = 0) => value.toLocaleString(intlLocale(), { maximumFractionDigits: digits });
 export const compactNumber = (value: number) => compactTokens(value, intlLocale());
+// Eixo de contagem pequena (máximo 3 → meio 1,5) precisa da casa decimal que o compacto tira.
+export const axisNumber = (value: number) => value < 999.5 ? number(value, 1) : compactNumber(value);
 export const dollars = (value: number) => `US$ ${value.toLocaleString(intlLocale(), { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 export const percent = (part: number, total: number) => `${number(total > 0 ? part / total * 100 : 0, 1)}%`;
 
@@ -52,16 +54,6 @@ export function Card({ children, flat = false }: { children: ReactNode; flat?: b
   const c = useSettingsColors();
   const { theme } = useUnistyles();
   return <View style={{ padding: flat ? 0 : theme.base.space[4], paddingVertical: theme.base.space[4], gap: theme.base.space[2], backgroundColor: flat ? 'transparent' : c.inset, borderRadius: flat ? 0 : theme.base.radius.lg, ...(flat ? { borderTopWidth: 1, borderColor: c.borderStrong } : {}) }}>{children}</View>;
-}
-
-export function Metric({ label, value, primary = false, children }: { label: string; value: string; primary?: boolean; children?: ReactNode }) {
-  const { theme } = useUnistyles();
-  const c = useSettingsColors();
-  return <View style={{ gap: SPACE[1.5], paddingVertical: SPACE[3], minWidth: 0 }}>
-    <Copy muted>{label}</Copy>
-    <Text style={{ color: c.text, fontSize: primary ? theme.base.text.xl : theme.base.text.lg, fontWeight: theme.base.weight.semibold, fontVariant: ['tabular-nums'] }}>{value}</Text>
-    {children}
-  </View>;
 }
 
 export function Grid({ children }: { children: ReactNode }) {
@@ -161,7 +153,7 @@ export function Composition({ label, items }: { label: string; items: { label: s
 export interface ChartSeries { key: string; label: string; color: string }
 export interface ChartDay { key: string; values: (number | null)[]; detail?: string }
 
-export function Columns({ label, days, series, format = number, axisFormat = compactNumber, onPress, lines = false, fit = false, marks = [] }: { label: string; days: ChartDay[]; series: ChartSeries[]; format?: (value: number) => string; axisFormat?: (value: number) => string; onPress?: (key: string) => void; lines?: boolean; fit?: boolean; marks?: string[] }) {
+export function Columns({ label, days, series, format = number, axisFormat = axisNumber, onPress, lines = false, fit = false, marks = [] }: { label: string; days: ChartDay[]; series: ChartSeries[]; format?: (value: number) => string; axisFormat?: (value: number) => string; onPress?: (key: string) => void; lines?: boolean; fit?: boolean; marks?: string[] }) {
   const c = useSettingsColors();
   const { theme } = useUnistyles();
   const [selectedDay, setSelectedDay] = useState<string | null>(null);

@@ -10,14 +10,15 @@ export function compactTokens(value: number, locale: string): string {
   const fixed = (n: number, digits: number) => n.toLocaleString(locale, { minimumFractionDigits: digits, maximumFractionDigits: digits });
   if (value >= 999.95e6) return `${fixed(value / 1e9, 2)} ${en ? 'B' : 'Bi'}`;
   if (value >= 999.5e3) return `${fixed(value / 1e6, 1)} ${en ? 'M' : 'Mi'}`;
-  if (value >= 1e3) return `${fixed(value / 1e3, 0)}${en ? 'k' : ' mil'}`;
+  if (value >= 999.5) return `${fixed(value / 1e3, 0)}${en ? 'k' : ' mil'}`;
   return fixed(value, 0);
 }
 // Grandeza de dinheiro na regra do `money()` do nativo: uma casa, sem ",0" sobrando.
 export function compactMoney(value: number, locale: string): string {
   const en = locale.startsWith('en');
   const abs = Math.abs(value);
-  const [size, unit] = abs >= 1e9 ? [1e9, en ? 'B' : ' bi'] : abs >= 1e6 ? [1e6, en ? 'M' : ' mi'] : abs >= 1e3 ? [1e3, en ? 'K' : ' mil'] : [1, ''];
+  // Cortes no valor já arredondado a uma casa: 999.960 é "1 mi", não "1.000 mil".
+  const [size, unit] = abs >= 999.95e6 ? [1e9, en ? 'B' : ' bi'] : abs >= 999.95e3 ? [1e6, en ? 'M' : ' mi'] : abs >= 999.95 ? [1e3, en ? 'K' : ' mil'] : [1, ''];
   return `${(value / size).toLocaleString(locale, { maximumFractionDigits: 1 })}${unit}`;
 }
 const dayKey = (date: Date) => date.toISOString().slice(0, 10);

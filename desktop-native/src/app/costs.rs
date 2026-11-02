@@ -48,7 +48,7 @@ pub(super) fn tok(n: f64) -> String {
     let en = crate::i18n::english();
     if n >= 999.95e6 { format!("{} {}", dec(n / 1e9, 2), if en { "B" } else { "Bi" }) }
     else if n >= 999.5e3 { format!("{} {}", dec(n / 1e6, 1), if en { "M" } else { "Mi" }) }
-    else if n >= 1e3 { format!("{}{}", dec(n / 1e3, 0), if en { "k" } else { " mil" }) }
+    else if n >= 999.5 { format!("{}{}", dec(n / 1e3, 0), if en { "k" } else { " mil" }) }
     else { dec(n, 0) }
 }
 
@@ -67,8 +67,9 @@ pub(super) fn money(usd: f64, rate: Option<f64>) -> String {
     let (symbol, value) = currency_value(usd, rate);
     if value.abs() < 1000. { return money2(usd, rate); }
     let en = crate::i18n::english();
-    let (scaled, unit) = if value.abs() >= 1e9 { (value / 1e9, if en { "B" } else { " bi" }) }
-        else if value.abs() >= 1e6 { (value / 1e6, if en { "M" } else { " mi" }) } else { (value / 1e3, if en { "K" } else { " mil" }) };
+    // Os cortes olham o valor já arredondado a uma casa: 999.960 é "1 mi", não "1.000 mil".
+    let (scaled, unit) = if value.abs() >= 999.95e6 { (value / 1e9, if en { "B" } else { " bi" }) }
+        else if value.abs() >= 999.95e3 { (value / 1e6, if en { "M" } else { " mi" }) } else { (value / 1e3, if en { "K" } else { " mil" }) };
     let text = dec(scaled, 1);
     let text = text.strip_suffix(if tr("decimal") == "," { ",0" } else { ".0" }).unwrap_or(&text).to_owned();
     format!("{symbol} {text}{unit}")
@@ -1397,19 +1398,24 @@ impl Hangar {
         }
     }
 
-    /// Gasto diário (em dinheiro) do recorte atual: a fonte da previsão do mês.
-    fn daily_cost(&self, report: &Report, d: &Derived) -> Vec<(String, f64)> {
+    /// Gasto diário (em dinheiro) do recorte atual: a fonte da previsão do mês. Sem detalhamento, o `by_day` é do
+    /// período inteiro e não serve a um recorte.
+    fn daily_cost(&self, report: &Report, d: &Derived) -> Option<Vec<(String, f64)>> {
         if d.has_combos {
-            filtered(&report.combos, &self.costs.filter).into_iter().map(|c| (c.dia.clone(), c.cost)).collect()
-        } else { report.by_day.iter().map(|b| (b.key.clone(), b.cost)).collect() }
+            Some(filtered(&report.combos, &self.costs.filter).into_iter().map(|c| (c.dia.clone(), c.cost)).collect())
+        } else if self.costs.filter.active() { None } else { Some(report.by_day.iter().map(|b| (b.key.clone(), b.cost)).collect()) }
     }
 
     fn render_forecast(&self, report: &Report, d: &Derived, rate: Option<f64>, cx: &mut Context<Self>) -> Option<Div> {
         use chrono::Datelike;
         let today = chrono::Local::now().date_naive();
         let previous = (today.with_day(1)? - chrono::Duration::days(1)).with_day(1)?;
-        let covered = self.costs.period == Period::All || today - chrono::Duration::days(self.costs.period.days() as i64 - 1) <= previous;
-        let f = month_forecast(&self.daily_cost(report, d), today, covered)?;
+        let all = self.costs.period == Period::All;
+        // A média é de 7 dias e o "até hoje" soma o mês desde o dia 1: o período carregado precisa cobrir os dois.
+        let days = self.costs.period.days();
+        if !all && (days < 7. || today.day() as f64 > days) { return None; }
+        let covered = all || today - chrono::Duration::days(days as i64 - 1) <= previous;
+        let f = month_forecast(&self.daily_cost(report, d)?, today, covered)?;
         if f.projected <= 0. { return None; }
         let (cumulative, dim, projected, last) = (f.cumulative.clone(), f.days_in_month, f.projected, f.last_month);
         let top = projected.max(last.unwrap_or(0.)) * 1.08;
