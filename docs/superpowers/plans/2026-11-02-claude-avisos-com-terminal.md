@@ -74,13 +74,21 @@ por plugin, deixa pra lá":
 
 Status: ready-for-agent
 
-- [ ] **Step 1: Recortar** de transcripts reais (sem `sessionId`, caminho pessoal nem texto de conversa)
+- [x] **Step 1: Recortar** de transcripts reais (sem `sessionId`, caminho pessoal nem texto de conversa)
   para `crates/hangar-server/tests/fixtures/claude_events/terminal_*.jsonl`: `api_error` que voltou e que
   terminou em `isApiErrorMessage`; `hook_non_blocking_error` repetido com `turn_duration`; turno interrompido
   (sem `turn_duration`); transcript misto `cli`/`sdk-cli`; falha de hook gravada com `sdk-cli`; recusa.
   Onde a conta não tiver o caso com `cli`, montar a partir do real trocando só o `entrypoint`.
-- [ ] **Step 2: Medir o `reason`** numa sessão `cx-avisos-term` com terminal: log temporário no próprio plugin
+- [x] **Step 2: Medir o `reason`** numa sessão `cx-avisos-term` com terminal: log temporário no próprio plugin
   (arquivo no scratchpad, removido depois) com o `e.reason` de um turno normal e de um interrompido.
+
+  Resolvido sem sessão nem log, lendo o binário 2.1.316:
+  `Nn=(e,n,s)=>e?{reason:"aborted"}:n?{reason:"refusal",refusal:n}:{reason:s?"error":"answer"}`. O `reason` só
+  tem `aborted`, `refusal`, `error` e `answer`: não diz por que o turno parou. Recusa e erro já chegam pelo
+  transcript, então **T3 fica com o que já existe e a Task 4 sai**.
+
+  Achados dos recortes: na conta, `api_error` só existe com `sdk-cli` (a fixture troca o `entrypoint`); o prompt
+  `cli` traz `promptId`, `turnOrigin` e `turnPosition` (`{"promptIndex":0,"turnIndex":1}`).
 
 Prova: arquivos existem e `rg -n '/home/|"sessionId"' …/terminal_*.jsonl` não acha nada; valores de `reason`
 anotados aqui. Se `reason` não distinguir motivo anormal, T3 fica com o erro final da API, que já aparece.
