@@ -898,10 +898,11 @@ fn notice_init_needs_auth() {
 
 #[test]
 fn notice_init_many_servers_are_one_note() {
-    let mut servers:Vec<Value> = (1..=8).map(|n|json!({"name":format!("falho{n}"),"status":"failed"})).collect();
+    let mut servers:Vec<Value> = (1..=8).map(|n|json!({"name":format!("plugin:x:falho{n}"),"status":"failed"})).collect();
+    servers.push(json!({"name":"meu","status":"failed","source":"project"}));
     servers.extend((1..=3).map(|n|json!({"name":format!("login{n}"),"status":"needs-auth"})));
     let effects = line(&mut notice_engine(),json!({"type":"system","subtype":"init","session_id":FIXTURE_SID,"mcp_servers":servers}),11.0);
-    assert_eq!(notes(&effects),vec!["⚙️ Servidores MCP que não subiram: `falho1`, `falho2`, `falho3`, `falho4`, `falho5` e mais 3\n\
+    assert_eq!(notes(&effects),vec!["⚙️ Servidores MCP que não subiram: `meu`, `plugin:x:falho1`, `plugin:x:falho2`, `plugin:x:falho3`, `plugin:x:falho4` e mais 4\n\
         Servidores MCP que precisam de login: `login1`, `login2`, `login3`".to_owned()]);
 }
 

@@ -1345,8 +1345,13 @@ impl ClaudeEngine {
     /// Uma nota só: os plugins instalados trazem dezenas de conectores sem login, e uma nota por servidor
     /// enchia a conversa a cada processo novo. Os erros de cada servidor ficam no diário.
     fn startup_notices(&mut self,init:&Value,effects:&mut Vec<Effect>) {
-        let servers = |status:&str| -> Vec<&str> { init["mcp_servers"].as_array().into_iter().flatten()
-            .filter(|server|server["status"] == status).map(|server|server["name"].as_str().unwrap_or("?")).collect() };
+        // O servidor que a pessoa configurou vem antes dos conectores dos plugins, que ficam no "e mais N".
+        let servers = |status:&str| -> Vec<&str> {
+            let mut names:Vec<&str> = init["mcp_servers"].as_array().into_iter().flatten()
+                .filter(|server|server["status"] == status).map(|server|server["name"].as_str().unwrap_or("?")).collect();
+            names.sort_by_key(|name|name.starts_with("plugin:"));
+            names
+        };
         let mut lines = Vec::new();
         for (status,one,many) in [("failed","Servidor MCP que não subiu","Servidores MCP que não subiram"),
             ("needs-auth","Servidor MCP que precisa de login","Servidores MCP que precisam de login")] {
