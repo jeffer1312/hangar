@@ -2,7 +2,7 @@ import { View } from 'react-native';
 import { useReducedMotion } from 'react-native-reanimated';
 import { StyleSheet } from 'react-native-unistyles';
 import { LinearGradient } from 'expo-linear-gradient';
-import { RevealFrame } from '../../chat/ImageThumb';
+import { RevealFrame } from '../../chat/RevealFrame';
 import { superficie } from '../../theme/superficie';
 import { useScriptStep } from './scriptStep';
 
