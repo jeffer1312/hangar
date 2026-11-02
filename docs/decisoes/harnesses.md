@@ -989,7 +989,7 @@ CLI, troca de modelo por recusa. O `terminal_reason` do `result` também não ap
 | Evento | Canal |
 |---|---|
 | `system/api_retry` | rótulo `Nova tentativa N de M em X s · erro S` (ou `· sem resposta da API`), sai na próxima linha de resposta, inclusive de subagente |
-| `init.mcp_servers` `failed`/`needs-auth`, `init.plugin_errors` | nota única por vida do processo |
+| `init.mcp_servers` `failed`/`needs-auth`, `init.plugin_errors` | **uma** nota por vida do processo, com até 5 nomes por linha ("e mais N"). Na prova ao vivo, a conta com os plugins instalados trazia uns 20 conectores sem login ou que não sobem: uma nota por servidor despejava 20 notas a cada processo |
 | `hook_started`/`hook_response` (flag `--include-hook-events`) | rótulo `Rodando hook {hook_name}…` só depois de 3 s; `outcome: error` com `exit_code` diferente de 2 vira `Hook falhou — …`; as falhas seguintes do mesmo `hook_name` (com qualquer motivo, porque o `stderr` muda a cada chamada) somam e viram `(N× neste turno)` no fim do turno (não no sucesso: vários hooks dividem o mesmo `hook_name`); `exit 2` (bloqueio) só no diário (`claude_hook`), sucesso no diário em tipo próprio (`claude_hook_ok`) para não gastar o teto das falhas |
 | `system/notification` | `high`/`immediate`: nota única por `key` + texto; o resto, diário |
 | `model_refusal_fallback`, `model_refusal_no_fallback` | nota a cada ocorrência |

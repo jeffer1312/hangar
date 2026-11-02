@@ -867,7 +867,7 @@ fn diary(effects:&[Effect]) -> Vec<String> {
 fn notice_init_mcp_failed_once_per_process() {
     let init = fixture("init.jsonl").remove(0);
     let mut engine = notice_engine();
-    assert_eq!(notes(&line(&mut engine,init.clone(),11.0)),vec!["⚙️ O servidor MCP `quebrado` não subiu".to_owned()]);
+    assert_eq!(notes(&line(&mut engine,init.clone(),11.0)),vec!["⚙️ Servidor MCP que não subiu: `quebrado`".to_owned()]);
     assert!(notes(&line(&mut engine,init.clone(),12.0)).is_empty(),"o mesmo processo não repete a nota");
     let mut relaunched = notice_engine();
     assert_eq!(notes(&line(&mut relaunched,init,13.0)).len(),1,"processo novo mostra de novo");
@@ -893,7 +893,16 @@ fn notice_init_clean_is_silent() {
 fn notice_init_needs_auth() {
     let effects = line(&mut notice_engine(),json!({"type":"system","subtype":"init","session_id":FIXTURE_SID,
         "mcp_servers":[{"name":"github","status":"needs-auth"}]}),11.0);
-    assert_eq!(notes(&effects),vec!["⚙️ O servidor MCP `github` precisa de login".to_owned()]);
+    assert_eq!(notes(&effects),vec!["⚙️ Servidor MCP que precisa de login: `github`".to_owned()]);
+}
+
+#[test]
+fn notice_init_many_servers_are_one_note() {
+    let mut servers:Vec<Value> = (1..=8).map(|n|json!({"name":format!("falho{n}"),"status":"failed"})).collect();
+    servers.extend((1..=3).map(|n|json!({"name":format!("login{n}"),"status":"needs-auth"})));
+    let effects = line(&mut notice_engine(),json!({"type":"system","subtype":"init","session_id":FIXTURE_SID,"mcp_servers":servers}),11.0);
+    assert_eq!(notes(&effects),vec!["⚙️ Servidores MCP que não subiram: `falho1`, `falho2`, `falho3`, `falho4`, `falho5` e mais 3\n\
+        Servidores MCP que precisam de login: `login1`, `login2`, `login3`".to_owned()]);
 }
 
 #[test]

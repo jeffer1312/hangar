@@ -1342,27 +1342,29 @@ impl ClaudeEngine {
     }
 
     /// MCP e plugin que não subiram, como o terminal avisa na abertura.
+    /// Uma nota só: os plugins instalados trazem dezenas de conectores sem login, e uma nota por servidor
+    /// enchia a conversa a cada processo novo. Os erros de cada servidor ficam no diário.
     fn startup_notices(&mut self,init:&Value,effects:&mut Vec<Effect>) {
-        let mut notices = Vec::new();
-        for server in init["mcp_servers"].as_array().into_iter().flatten() {
-            let name = server["name"].as_str().unwrap_or("?");
-            match server["status"].as_str() {
-                Some("failed") => {
-                    let why = server["error"].as_str().filter(|error|!error.is_empty()).map(|error|format!(": {}",clip(error,300))).unwrap_or_default();
-                    notices.push(format!("⚙️ O servidor MCP `{name}` não subiu{why}"));
-                }
-                Some("needs-auth") => notices.push(format!("⚙️ O servidor MCP `{name}` precisa de login")),
-                _ => {}
-            }
+        let servers = |status:&str| -> Vec<&str> { init["mcp_servers"].as_array().into_iter().flatten()
+            .filter(|server|server["status"] == status).map(|server|server["name"].as_str().unwrap_or("?")).collect() };
+        let mut lines = Vec::new();
+        for (status,one,many) in [("failed","Servidor MCP que não subiu","Servidores MCP que não subiram"),
+            ("needs-auth","Servidor MCP que precisa de login","Servidores MCP que precisam de login")] {
+            let names = servers(status);
+            if names.is_empty() { continue; }
+            let shown:Vec<String> = names.iter().take(5).map(|name|format!("`{name}`")).collect();
+            let rest = if names.len() > 5 { format!(" e mais {}",names.len()-5) } else { String::new() };
+            lines.push(format!("{}: {}{rest}",if names.len() == 1 { one } else { many },shown.join(", ")));
         }
         for plugin in init["plugin_errors"].as_array().into_iter().flatten() {
-            notices.push(format!("⚙️ O plugin `{}` não carregou: {}",plugin["plugin"].as_str().unwrap_or("?"),clip(plugin["message"].as_str().unwrap_or(""),300)));
+            lines.push(format!("O plugin `{}` não carregou: {}",plugin["plugin"].as_str().unwrap_or("?"),clip(plugin["message"].as_str().unwrap_or(""),300)));
         }
-        if notices.is_empty() { return; }
+        if lines.is_empty() { return; }
         if !self.replaying {
             self.diary("claude_init_problem",||json!({"mcp_servers":init["mcp_servers"],"plugin_errors":init["plugin_errors"]}),effects);
         }
-        for text in notices { self.notice_once(&text.clone(),text,effects); }
+        let text = format!("⚙️ {}",lines.join("\n"));
+        self.notice_once(&text.clone(),text,effects);
     }
 
     fn on_stream(&mut self,event:&Value,effects:&mut Vec<Effect>) {
