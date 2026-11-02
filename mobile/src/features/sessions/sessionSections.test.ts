@@ -114,4 +114,13 @@ describe('sessões ocultas', () => {
     const sections = buildSessionSections(hiddenRows, 'collapsed', 'server', '', new Set(), undefined, [], 'fora::convidada');
     expect(keys(sections.filter((s) => s.id !== HIDDEN_SECTION_ID))).toEqual(expect.arrayContaining(['nb::oculta-nb', 'fora::convidada']));
   });
+
+  it('seletor: com a oculta aberta, as de fora presas a ela ficam junto, sem "Ocultas" vazia', () => {
+    const irma = { ...hiddenRows[4], name: 'convidada-2' } as AggSession;
+    for (const keep of ['nb::oculta-nb', 'fora::convidada']) {
+      const sections = buildSessionSections([...hiddenRows, irma], 'expanded', 'server', '', new Set(), undefined, [], keep);
+      expect(keys(sections.filter((s) => s.id !== HIDDEN_SECTION_ID))).toEqual(expect.arrayContaining(['nb::oculta-nb', 'fora::convidada', 'fora::convidada-2']));
+      expect(sections.find((s) => s.id === HIDDEN_SECTION_ID)?.data.map(key)).toEqual(['vm::oculta-vm']);
+    }
+  });
 });
