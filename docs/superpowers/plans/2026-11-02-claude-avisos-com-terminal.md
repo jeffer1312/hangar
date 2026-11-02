@@ -137,9 +137,15 @@ do ator sem terminal); se `reason` servir, vira plano à parte.
 
 - [x] **Step 1:** em `docs/decisoes/harnesses.md`, a regra dos avisos ganha "com terminal: só transcript ou
   plugin, nunca a tela; nota só em linha `cli`", e a entrada lista o que ficou de fora.
-- [ ] **Step 2 (verificação manual):** build, troca do par (binário, `hangar-server.auth.json`,
+- [x] **Step 2 (verificação manual):** build, troca do par (binário, `hangar-server.auth.json`,
   `auth/<sha>/libhangar_auth.so`) na pasta da versão, reinício, sessão `cx-avisos-term` com o hook que falha;
   conferir pelo `/history` e pelo fluxo ao vivo, nunca pela tela.
+
+  Feito em 02/11/2026 (`c99704ca0`). A primeira rodada não deu nota nenhuma: o recado do `hangar-send` chega
+  como `isMeta` com `origin.kind: "peer"`, sem prompt, e no primeiro turno o fold nunca sincronizava. Corrigido
+  (recado de par com a sessão parada abre o turno) e coberto por teste. Depois: `/history` com
+  `hookfail:` na primeira falha e `hookfail-sum:… (2× neste turno)` no fim; o fluxo ao vivo trouxe as do turno
+  anterior pela cauda e as do turno novo com os mesmos ids.
 
 ## Aceitação
 
