@@ -479,6 +479,8 @@ impl ClaudeEngine {
         self.in_progress = true; self.turn_start = Some(self.clock.monotonic_s);
         self.label_deadline = Some(self.clock.monotonic_s+1.0); self.tokens_closed = 0; self.tokens_message = None;
         self.token_chars = 0; self.thinking_start = None; self.thought_s = 0.0; self.compacting = false;
+        // Hook já lento antes do turno começou com a sessão parada (assíncrono que talvez nunca responda).
+        self.hooks_running.retain(|_,hook|!hook.shown);
     }
 
     fn control(&mut self,operation_id:String,subtype:&str,payload:Value,effects:&mut Vec<Effect>) {

@@ -213,13 +213,22 @@ const TURN_SEED_MAX: u64 = 4 * 1024 * 1024;
 /// próprio `before`. As notas só contam a partir de um começo de turno, e a janela da cauda não cobre um turno longo.
 /// Lê de trás para frente em blocos que crescem; achar o texto num resultado de ferramenta só faz semear mais.
 pub(crate) fn turn_seed_start(path: &Path, before: u64) -> u64 {
-    let Ok(mut f) = File::open(path) else { return before };
+    let failed = |e: io::Error| {
+        if crate::warn_limit::allow(None, "transcript_notice_seed") {
+            tracing::warn!(code = "transcript_notice_seed", path = %path.display(), "notas: começo do turno ilegível; somas podem sair incompletas: {e}");
+        }
+        before
+    };
+    let mut f = match File::open(path) {
+        Ok(f) => f,
+        Err(e) => return failed(e),
+    };
     let mut window = 64 * 1024;
     loop {
         let from = before.saturating_sub(window);
         let mut buf = Vec::new();
-        if f.seek(SeekFrom::Start(from)).is_err() || (&mut f).take(before - from).read_to_end(&mut buf).is_err() {
-            return before;
+        if let Err(e) = f.seek(SeekFrom::Start(from)).and_then(|_| (&mut f).take(before - from).read_to_end(&mut buf)) {
+            return failed(e);
         }
         if let Some(hit) = memchr::memmem::rfind(&buf, b"\"turn_duration\"") {
             match buf[..hit].iter().rposition(|&b| b == b'\n') {
@@ -244,18 +253,26 @@ fn seed_notices(path: &Path, fold: &mut claude::NoticeFold, from: u64, to: u64) 
     if from == 0 {
         fold.file_start();
     }
-    let Ok(file) = File::open(path) else { return };
-    let mut rd = BufReader::new(file);
-    if from >= to || rd.seek(SeekFrom::Start(from)).is_err() {
+    if from >= to {
         return;
     }
+    let failed = |e: io::Error| {
+        if crate::warn_limit::allow(None, "transcript_notice_seed") {
+            tracing::warn!(code = "transcript_notice_seed", path = %path.display(), "notas: semeadura do turno parou; somas podem sair incompletas: {e}");
+        }
+    };
+    let mut rd = match File::open(path).and_then(|f| { let mut rd = BufReader::new(f); rd.seek(SeekFrom::Start(from)).map(|_| rd) }) {
+        Ok(rd) => rd,
+        Err(e) => return failed(e),
+    };
     let mut rewrite = claude::RewriteFilter::default();
     let (mut at, mut raw) = (from, Vec::new());
     while at < to {
         raw.clear();
         match rd.read_until(b'\n', &mut raw) {
-            Ok(n) if n > 0 => at += n as u64,
-            _ => return,
+            Ok(0) => return,
+            Ok(n) => at += n as u64,
+            Err(e) => return failed(e),
         }
         if let Some(Value::Object(obj)) = pyjson::loads_lossless(&String::from_utf8_lossy(&raw)) {
             if rewrite.keep(&obj) {

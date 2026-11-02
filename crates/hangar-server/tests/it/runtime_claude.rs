@@ -978,6 +978,8 @@ fn notice_hook_started_while_idle_shows_no_label() {
     line(&mut engine,json!({"type":"system","subtype":"hook_started","hook_id":"n","hook_name":"Notification","hook_event":"Notification"}),10.0);
     tick(&mut engine,14.0);
     assert!(!shown_label(&engine).contains("Rodando hook"),"hook assíncrono sem resposta: {}",shown_label(&engine));
+    line(&mut engine,json!({"type":"command_lifecycle","state":"started"}),15.0);
+    assert!(!shown_label(&engine).contains("Rodando hook"),"o turno seguinte não herda: {}",shown_label(&engine));
 }
 
 fn hook_notes(effects:&[Effect]) -> Vec<(String,Value)> {
