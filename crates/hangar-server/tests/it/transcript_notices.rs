@@ -122,6 +122,70 @@ fn terminal_compact_summary_and_local_command_do_not_end_the_turn() {
 }
 
 #[test]
+fn terminal_hook_failure_before_the_first_prompt_counts_from_the_file_start() {
+    let rows = rows("terminal_hooks.jsonl");
+    let (prompt,failure,end) = (&rows[0],&rows[1],&rows[4]);
+    let mut start = with_uuid(failure,"s1");
+    start["attachment"]["hookName"] = json!("SessionStart:startup");
+    start["attachment"]["hookEvent"] = json!("SessionStart");
+    let lines = [start,prompt.clone(),with_uuid(failure,"h1"),with_uuid(end,"d1")];
+    let expected = vec![
+        ("hookfail:s1".to_owned(),"hook_failed".to_owned(),Some("SessionStart:startup: falhou-de-proposito".to_owned())),
+        ("hookfail:h1".to_owned(),"hook_failed".to_owned(),Some("PostToolUse:Bash: falhou-de-proposito".to_owned())),
+    ];
+    let (history,live) = both(&lines);
+    assert_eq!(history,expected);
+    assert_eq!(live,expected);
+}
+
+/// Notas da cauda de um aparelho (`tail::backfill`), lidas dos quadros SSE.
+fn backfill_notes(lines:&[Value],resume_at:Option<usize>) -> Vec<(String,String,Option<String>)> {
+    let text:String = lines.iter().map(|row|format!("{row}\n")).collect();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.jsonl");
+    std::fs::write(&path,&text).unwrap();
+    let resume = resume_at.map(|at|format!("k:{}",lines[..at].iter().map(|row|row.to_string().len() as u64 + 1).sum::<u64>()));
+    let frames = hangar_server::tail::backfill(&path,"k",Provider::Claude,resume.as_deref(),text.len() as u64);
+    notes(frames.iter().filter_map(|frame|{
+        let frame = std::str::from_utf8(frame).unwrap();
+        let data = frame.lines().find_map(|row|row.strip_prefix("data: "))?;
+        serde_json::from_str::<ChatEvent>(data).ok()
+    }).collect())
+}
+
+/// O aparelho que volta no meio do turno: a fila injetada no turno não abre outro, e a soma sai igual à do histórico.
+#[test]
+fn terminal_resumed_tail_mid_turn_keeps_the_turn() {
+    let rows = rows("terminal_hooks.jsonl");
+    let (prompt,failure,end) = (&rows[0],&rows[1],&rows[4]);
+    let mut queued = with_uuid(failure,"q1");
+    queued["attachment"] = json!({"type":"queued_command","prompt":"mensagem da fila","commandMode":"prompt"});
+    // O segundo prompt é o real: a cópia do primeiro com outro `uuid` cai no filtro de reescrita do `--resume`.
+    let lines = [prompt.clone(),with_uuid(end,"d0"),rows[5].clone(),with_uuid(failure,"h1"),queued,
+        with_uuid(failure,"h2"),with_uuid(failure,"h3"),with_uuid(end,"d1")];
+    let sum = ("hookfail-sum:d1:5182a3be".to_owned(),"hook_failed".to_owned(),Some("PostToolUse:Bash: falhou-de-proposito (3× neste turno)".to_owned()));
+    assert!(both(&lines).0.contains(&sum));
+    assert_eq!(backfill_notes(&lines,Some(4)),vec![sum]);
+}
+
+/// Turno mais longo que as 200 linhas da cauda: o fold começa no último fim de turno, não no meio.
+#[test]
+fn terminal_long_turn_still_sums_in_the_tail() {
+    let rows = rows("terminal_hooks.jsonl");
+    let (prompt,failure,end) = (&rows[0],&rows[1],&rows[4]);
+    let mut lines = vec![prompt.clone(),with_uuid(end,"d0"),rows[5].clone(),with_uuid(failure,"h1")];
+    for i in 0..250 {
+        let mut filler = with_uuid(prompt,&format!("f{i}"));
+        filler["type"] = json!("assistant");
+        filler["message"] = json!({"role":"assistant","content":[{"type":"text","text":"ok"}]});
+        lines.push(filler);
+    }
+    lines.extend([with_uuid(failure,"h2"),with_uuid(end,"d1")]);
+    let sum = ("hookfail-sum:d1:5182a3be".to_owned(),"hook_failed".to_owned(),Some("PostToolUse:Bash: falhou-de-proposito (2× neste turno)".to_owned()));
+    assert_eq!(backfill_notes(&lines,None),vec![sum]);
+}
+
+#[test]
 fn terminal_history_tail_never_invents_a_different_note() {
     let full = history("terminal_hooks.jsonl",None,TAIL_WINDOW);
     for window in [256,512,1024,2048] {

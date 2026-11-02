@@ -176,6 +176,52 @@ pub fn tail_offset(path: &Path, max_lines: usize) -> std::io::Result<u64> {
     }
 }
 
+/// Até onde se volta procurando o começo do turno para as notas; turno maior que isso fica sem nota ao vivo.
+const TURN_SEED_MAX: u64 = 4 * 1024 * 1024;
+
+/// Começo da linha do último `turn_duration` antes de `before`; sem ele na janela, o começo do arquivo (se coube)
+/// ou o próprio `before`. As notas só contam a partir de um começo de turno, e 200 linhas não cobrem um turno longo.
+/// Achar o texto num resultado de ferramenta só faz semear mais: o fold sincroniza na fronteira real seguinte.
+fn turn_seed_start(path: &Path, before: u64) -> u64 {
+    let from = before.saturating_sub(TURN_SEED_MAX);
+    let read = || -> std::io::Result<Vec<u8>> {
+        let mut f = File::open(path)?;
+        f.seek(SeekFrom::Start(from))?;
+        let mut buf = Vec::new();
+        f.take(before - from).read_to_end(&mut buf)?;
+        Ok(buf)
+    };
+    let Ok(buf) = read() else { return before };
+    match memchr::memmem::rfind(&buf, b"\"turn_duration\"") {
+        Some(hit) => from + buf[..hit].iter().rposition(|&b| b == b'\n').map_or(0, |nl| nl as u64 + 1),
+        None if from == 0 => 0,
+        None => before,
+    }
+}
+
+/// Passa as linhas de `[from, to)` pelo parser sem gerar evento: relógio da reescrita e começo do turno das notas.
+fn seed_parser(path: &Path, parser: &mut LineParser, from: u64, to: u64, key: &str) {
+    let Ok(file) = File::open(path) else { return };
+    let mut reader = BufReader::new(file);
+    if from >= to || reader.seek(SeekFrom::Start(from)).is_err() {
+        return;
+    }
+    let mut at = from;
+    let mut line = Vec::new();
+    while at < to {
+        line.clear();
+        let n = match reader.read_until(b'\n', &mut line) {
+            Ok(n) if n > 0 && line.last() == Some(&b'\n') => n as u64,
+            _ => break,
+        };
+        // Como no `feed`: pânico aqui derrubaria o leitor compartilhado.
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| parser.seed(&line, at))).is_err() {
+            tracing::error!(key, offset = at, "linha do transcript derrubou o parser na semeadura; pulada");
+        }
+        at += n;
+    }
+}
+
 /// Cauda de UM aparelho, de onde ele pediu até `cut`, com parser próprio (cada leitor tem o seu).
 /// `resume` só vale com o stem desta sessão e dentro do arquivo; senão, as últimas 200 linhas.
 pub fn backfill(path: &Path, key: &str, provider: Provider, resume: Option<&str>, cut: u64) -> Vec<Bytes> {
@@ -198,6 +244,10 @@ pub fn backfill(path: &Path, key: &str, provider: Provider, resume: Option<&str>
         return Vec::new();
     }
     let mut parser = LineParser::new(provider).with_path(path).with_notices();
+    // O aparelho que volta no meio do turno precisa do começo dele, como o leitor compartilhado.
+    if matches!(provider, Provider::Claude | Provider::ClaudeHeadless) {
+        seed_parser(path, &mut parser, turn_seed_start(path, start), start, key);
+    }
     match read_frames(path, start, Some(cut), &mut parser, key) {
         Ok((frames, _)) => frames,
         Err(e) => {
@@ -334,26 +384,7 @@ impl TailState {
             return;
         }
         let Ok(start) = tail_offset(&self.path, BACKFILL_LINES) else { return };
-        let Ok(file) = File::open(&self.path) else { return };
-        let mut reader = BufReader::new(file);
-        if start >= end || reader.seek(SeekFrom::Start(start)).is_err() {
-            return;
-        }
-        let mut at = start;
-        let mut line = Vec::new();
-        while at < end {
-            line.clear();
-            let n = match reader.read_until(b'\n', &mut line) {
-                Ok(n) if n > 0 && line.last() == Some(&b'\n') => n as u64,
-                _ => break,
-            };
-            // Como no `feed`: pânico aqui derrubaria o leitor compartilhado.
-            let parser = &mut self.parser;
-            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| parser.seed(&line))).is_err() {
-                tracing::error!(key = %self.key, offset = at, "linha do transcript derrubou o parser na semeadura; pulada");
-            }
-            at += n;
-        }
+        seed_parser(&self.path, &mut self.parser, turn_seed_start(&self.path, start), end, &self.key);
     }
 
     /// Lê o que chegou e manda a todos, sob a trava. Arquivo menor que a posição = truncado:

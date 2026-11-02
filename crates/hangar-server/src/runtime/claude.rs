@@ -277,7 +277,8 @@ impl ClaudeEngine {
         if let Some(hook) = self.hooks_running.values().filter(|hook|hook.shown).min_by(|a,b|a.started.total_cmp(&b.started)) {
             label = Some(format!("Rodando hook {}…",hook.name));
         }
-        if let Some(retry) = &self.retry_label { label = Some(retry.clone()); }
+        // Chamada de fundo com a sessão parada também tenta de novo, e o sucesso dela não limpa o rótulo.
+        if let Some(retry) = self.retry_label.as_ref().filter(|_|self.in_progress) { label = Some(retry.clone()); }
         if state.state == "working" {
             if let Some(start) = self.turn_start {
                 let seconds = (self.clock.monotonic_s - start).max(0.0) as u64;
@@ -1290,9 +1291,11 @@ impl ClaudeEngine {
         },effects);
         let hook = event["hook_id"].as_str().and_then(|id|self.hooks_running.remove(id));
         if hook.as_ref().is_some_and(|hook|hook.shown) { self.changed(effects,false); }
-        // `exit 2` é o hook decidindo (bloqueio); a CLI já mostra o motivo onde ele vale.
-        if event["outcome"] != "error" || event["exit_code"].as_i64() == Some(2) { return; }
         let name = event["hook_name"].as_str().map(str::to_owned).or(hook.map(|hook|hook.name)).unwrap_or_else(||"hook".into());
+        // `exit 2` é o hook decidindo (bloqueio). Nos eventos de ferramenta e de parada o motivo vai ao modelo; nos
+        // outros a CLI o mostraria só à pessoa, e sem terminal ele sumiria.
+        let to_model = ["PreToolUse","PostToolUse","Stop","SubagentStop"].contains(&name.split(':').next().unwrap_or(""));
+        if event["outcome"] != "error" || (event["exit_code"].as_i64() == Some(2) && to_model) { return; }
         let reason = ["stderr","output"].iter().filter_map(|field|event[*field].as_str())
             .flat_map(str::lines).map(str::trim).find(|row|!row.is_empty()).map(|row|clip(row,300))
             .or_else(||event["exit_code"].as_i64().map(|code|format!("exit {code}")))
@@ -1301,7 +1304,8 @@ impl ClaudeEngine {
         if let Some(streak) = self.hook_streaks.get_mut(&name) { streak.1 += 1; return; }
         let detail = format!("{name}: {reason}");
         self.hook_notice(&detail,effects);
-        self.hook_streaks.insert(name,(detail,1));
+        // Fora de turno (`SessionStart`, `Notification` parada) não há turno para somar.
+        if self.in_progress { self.hook_streaks.insert(name,(detail,1)); }
     }
 
     /// O evento só é montado se ainda cabe: passado o teto, hook com saída grande não custa cópia.

@@ -994,7 +994,7 @@ CLI, troca de modelo por recusa. O `terminal_reason` do `result` também não ap
 |---|---|
 | `system/api_retry` | rótulo `Nova tentativa N de M em X s · erro S` (ou `· sem resposta da API`), sai na próxima linha de resposta, inclusive de subagente |
 | `init.mcp_servers` `failed`/`needs-auth`, `init.plugin_errors` | **uma** nota por vida do processo, com até 5 nomes por linha ("e mais N"). Na prova ao vivo, a conta com os plugins instalados trazia uns 20 conectores sem login ou que não sobem: uma nota por servidor despejava 20 notas a cada processo |
-| `hook_started`/`hook_response` (flag `--include-hook-events`) | rótulo `Rodando hook {hook_name}…` só depois de 3 s; `outcome: error` com `exit_code` diferente de 2 vira `Hook falhou — …`; as falhas seguintes do mesmo `hook_name` (com qualquer motivo, porque o `stderr` muda a cada chamada) somam e viram `(N× neste turno)` no fim do turno (não no sucesso: vários hooks dividem o mesmo `hook_name`); `exit 2` (bloqueio) só no diário (`claude_hook`), sucesso no diário em tipo próprio (`claude_hook_ok`) para não gastar o teto das falhas |
+| `hook_started`/`hook_response` (flag `--include-hook-events`) | rótulo `Rodando hook {hook_name}…` só depois de 3 s; `outcome: error` com `exit_code` diferente de 2 vira `Hook falhou — …`; as falhas seguintes do mesmo `hook_name` (com qualquer motivo, porque o `stderr` muda a cada chamada) somam e viram `(N× neste turno)` no fim do turno (não no sucesso: vários hooks dividem o mesmo `hook_name`); `exit 2` (bloqueio) só no diário (`claude_hook`) nos eventos em que o motivo vai ao modelo (`PreToolUse`, `PostToolUse`, `Stop`, `SubagentStop`); nos outros (`UserPromptSubmit`, `SessionStart`…) a CLI o mostraria só à pessoa, então vira nota; falha fora de turno avisa sem somar; o rótulo de nova tentativa só aparece com turno em curso (chamada de fundo também tenta de novo); sucesso no diário em tipo próprio (`claude_hook_ok`) para não gastar o teto das falhas |
 | `system/notification` | `high`/`immediate`: nota única por `key` + texto; o resto, diário |
 | `model_refusal_fallback`, `model_refusal_no_fallback` | nota a cada ocorrência |
 | `result.terminal_reason` anormal | nota `Turno parado: …` e o mesmo texto no começo do detalhe da faixa de erro; fim normal e parada pela pessoa ficam de fora, e também o turno que bateu no limite de uso ou ficou sem login, que já têm aviso próprio. `blocking_limit` é o limite de **contexto** e `rapid_refill_breaker` a compactação automática em laço (lido no binário 2.1.316): o limite de uso chega como `api_error` com `api_error: "usage_limit_reached"` |
@@ -1033,8 +1033,13 @@ por transcript ou plugin ficou de fora. Plano: `docs/superpowers/plans/2026-11-0
   fecha, e o prompt que vem da fila com a sessão parada (anexo `queued_command`, sem linha `user`) também
   abre; no meio do turno o mesmo anexo é a mensagem injetada no turno em curso e não abre outro. Resumo
   da compactação (`isCompactSummary`, no meio do turno) e `/comando` local não são prompt. Leitura a partir
-  do meio do arquivo só monta nota depois do primeiro começo ou fim de turno visto, e a nova tentativa só
-  abre na tentativa 1: senão a 2ª falha viraria uma "primeira" com outro id e o cliente veria duas.
+  do meio do arquivo só monta nota depois do primeiro começo ou fim de turno visto (fila e recado não contam:
+  podem ser o meio do turno), e a nova tentativa só abre na tentativa 1: senão a 2ª falha viraria uma
+  "primeira" com outro id e o cliente veria duas. Leitura do byte 0 já vale (a falha do `SessionStart` vem
+  antes do primeiro prompt). A cauda ao vivo e a do aparelho que volta são semeadas desde o último
+  `turn_duration` (até 4 MiB para trás), porque 200 linhas não cobrem um turno longo.
+- **Nota não é resposta:** `retry-ok:` e `refusal:` saem como `assistant_msg` depois da resposta real;
+  `committed_from_event` os ignora, senão a resposta gravada voltaria como prévia.
 - **Linha `cli` × `sdk-cli`:** o mesmo transcript pode ter os dois modos (conversa retomada no outro). Em
   `-p` a CLI também grava hook e recusa; filtrar pelo provider não bastava.
 - **Quem liga:** `with_notices()` no `FileTail` e no `backfill`, e `merged_history_with_notices` só na rota

@@ -17,7 +17,7 @@ use serde_json::Value;
 
 pub use history::{history_etag, merged_history, merged_history_with_notices, HistoryRequest, InternalInfo, TAIL_WINDOW};
 pub use py::ts_of_iso;
-pub(crate) use claude::{is_command_meta, strip_meta_blocks, RewriteFilter};
+pub(crate) use claude::{is_cli_note, is_command_meta, strip_meta_blocks, RewriteFilter};
 pub(crate) use codex::is_context_wrapper;
 
 /// O histórico transferido já validou ramo e fronteira; não passa pelo filtro temporal do stream.
@@ -103,10 +103,11 @@ impl LineParser {
 
     /// Só passa a linha pelo filtro de reescrita, sem gerar evento: o leitor compartilhado começa
     /// no fim do arquivo e precisa do relógio das linhas anteriores, como o Python que lê a cauda.
-    pub fn seed(&mut self, line: &[u8]) {
+    pub fn seed(&mut self, line: &[u8], offset: u64) {
         if !matches!(self.provider, Provider::Claude | Provider::ClaudeHeadless) {
             return;
         }
+        self.at_line(offset);
         let text = String::from_utf8_lossy(line);
         if let Some(Value::Object(obj)) = pyjson::loads_lossless(py::strip(&text)) {
             // O fold também precisa do começo do turno que já passou: senão a 2ª falha viraria a "primeira".
@@ -114,8 +115,13 @@ impl LineParser {
         }
     }
 
+    fn at_line(&mut self, offset: u64) {
+        if offset == 0 && let Some(fold) = self.notices.as_mut() { fold.file_start(); }
+    }
+
     /// Eventos de uma linha completa; `offset` é o byte onde ela começa (vira o `id:` do SSE).
     pub fn feed(&mut self, line: &[u8], offset: u64) -> Vec<ChatEvent> {
+        self.at_line(offset);
         let Some(value) = line_value(line) else { return Vec::new() };
         let mut evs = match (self.provider, &value) {
             (Provider::Codex, _) => codex::parse_rollout_obj(&value),

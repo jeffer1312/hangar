@@ -165,8 +165,8 @@ fn parse_raw(obj: &Map<String, Value>, resolve: PeerResolver) -> Vec<ChatEvent> 
 /// Só linhas `"entrypoint":"cli"`: as do sem terminal (`sdk-cli`) já viram nota pelo ator.
 #[derive(Default)]
 pub(crate) struct NoticeFold {
-    /// Já viu um começo ou fim de turno: lido a partir do meio, a 2ª falha viraria uma "primeira" com outro id.
-    /// Não volta a falso: o turno que nasce da fila (`queued_command`) ou de recado não tem linha de prompt.
+    /// Já viu um começo ou fim de turno, ou leu do começo do arquivo: lido a partir do meio, a 2ª falha viraria
+    /// uma "primeira" com outro id. Não volta a falso.
     synced: bool,
     /// Turno em curso: a mensagem da fila (`queued_command`) no meio dele é injetada no turno, não abre outro.
     turn_open: bool,
@@ -179,6 +179,15 @@ pub(crate) struct NoticeFold {
 const HOOK_STDERR_PREFIX: &str = "Failed with non-blocking status code: ";
 
 impl NoticeFold {
+    /// Leitura que começa no byte 0 sabe onde está: a falha do `SessionStart`, antes do primeiro prompt, também conta.
+    pub(crate) fn new(from_file_start: bool) -> Self {
+        Self { synced: from_file_start, ..Self::default() }
+    }
+
+    pub(crate) fn file_start(&mut self) {
+        self.synced = true;
+    }
+
     /// Notas da linha: o fecho do turno anterior entra antes dos eventos dela (o prompt novo vem depois), o resto depois.
     pub(crate) fn feed(&mut self, obj: &Map<String, Value>, events: &mut Vec<ChatEvent>) {
         if obj.get("entrypoint").and_then(Value::as_str) != Some("cli") {
@@ -187,11 +196,12 @@ impl NoticeFold {
         let uid = obj.get("uuid").and_then(Value::as_str).unwrap_or("");
         let at = ts(obj);
         match obj.get("type").and_then(Value::as_str) {
-            // Turno interrompido não grava `turn_duration`: o prompt seguinte também fecha.
+            // Turno interrompido não grava `turn_duration`: o prompt seguinte também fecha, e a marca da CLI
+            // ("[Request interrupted by user]") conta como prompt.
             Some("user") if is_prompt(obj) => self.open_turn(uid, at, events),
             // Recado de outra sessão: `isMeta`, sem prompt; com a sessão parada é ele que abre o turno.
             Some("user") if !self.turn_open && obj.get("origin").and_then(|o| o.get("kind")).and_then(Value::as_str) == Some("peer") => {
-                self.open_turn(uid, at, events)
+                self.wake(uid, at, events)
             }
             Some("user") => self.retries = None,
             Some("system") => match obj.get("subtype").and_then(Value::as_str) {
@@ -232,6 +242,16 @@ impl NoticeFold {
         }
     }
 
+    /// Fila ou recado com a sessão parada. Antes da sincronia não se sabe se ela estava parada (a leitura pode ter
+    /// começado no meio de um turno, onde a fila é injetada): só marca o turno, sem soma nem nota.
+    fn wake(&mut self, uid: &str, at: Option<f64>, events: &mut Vec<ChatEvent>) {
+        if self.synced {
+            self.open_turn(uid, at, events);
+        } else {
+            self.turn_open = true;
+        }
+    }
+
     /// Prompt novo: fecha as somas do turno anterior antes dele (turno interrompido não grava `turn_duration`).
     fn open_turn(&mut self, uid: &str, at: Option<f64>, events: &mut Vec<ChatEvent>) {
         let closed = self.close_turn(uid, at);
@@ -245,7 +265,7 @@ impl NoticeFold {
     fn on_attachment(&mut self, obj: &Map<String, Value>, uid: &str, at: Option<f64>, events: &mut Vec<ChatEvent>) {
         let Some(att) = obj.get("attachment").and_then(Value::as_object) else { return };
         match att.get("type").and_then(Value::as_str) {
-            Some("queued_command") if !self.turn_open => return self.open_turn(uid, at, events),
+            Some("queued_command") if !self.turn_open => return self.wake(uid, at, events),
             Some("hook_non_blocking_error") if self.synced => {}
             _ => return,
         }
@@ -283,6 +303,11 @@ fn is_prompt(obj: &Map<String, Value>) -> bool {
             && blocks.iter().any(|b| b.get("type").and_then(Value::as_str) == Some("text")),
         _ => false,
     }
+}
+
+/// Nota de aviso da CLI no formato de resposta: não é a resposta do modelo (prévia, última resposta).
+pub(crate) fn is_cli_note(id: &str) -> bool {
+    ["retry:", "retry-ok:", "refusal:"].iter().any(|prefix| id.starts_with(prefix))
 }
 
 fn note(id: String, text: String, at: Option<f64>) -> ChatEvent {

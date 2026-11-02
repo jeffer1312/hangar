@@ -267,7 +267,7 @@ fn parse_from(req: &HistoryRequest, offset: u64, start_ts: f64, notices: bool) -
     rd.seek(SeekFrom::Start(offset))?;
     // Reescrita do `--resume`: só o Claude regrava o jsonl.
     let mut rewrite = matches!(req.provider, Provider::Claude | Provider::ClaudeHeadless).then(claude::RewriteFilter::default);
-    let mut notices = (notices && rewrite.is_some()).then(claude::NoticeFold::default);
+    let mut notices = (notices && rewrite.is_some()).then(|| claude::NoticeFold::new(offset == 0));
     let mut held_ids = HashSet::new();
     let mut raw = Vec::new();
     let mut i = 0u64;

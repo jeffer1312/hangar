@@ -856,6 +856,11 @@ fn fixture(name:&str) -> Vec<Value> {
     std::fs::read_to_string(path).unwrap().lines().map(|row|serde_json::from_str(row).unwrap()).collect()
 }
 fn notice_engine() -> ClaudeEngine { engine(json!({"name":"session","session_id":FIXTURE_SID,"initialized":true})) }
+fn turn_engine() -> ClaudeEngine {
+    let mut engine = notice_engine();
+    line(&mut engine,json!({"type":"command_lifecycle","state":"started"}),9.0);
+    engine
+}
 fn diary(effects:&[Effect]) -> Vec<String> {
     effects.iter().filter_map(|effect|match effect {
         Effect::Policy { kind,payload,.. } if kind == "unknown_private" => payload["kind"].as_str().map(str::to_owned),
@@ -931,7 +936,7 @@ fn shown_label(engine:&ClaudeEngine) -> String { engine.view()["public_state"]["
 #[test]
 fn notice_api_retry_label_until_stream() {
     let retries = fixture("api_retry.jsonl");
-    let mut engine = notice_engine();
+    let mut engine = turn_engine();
     let effects = line(&mut engine,retries[0].clone(),11.0);
     assert!(shown_label(&engine).starts_with("Nova tentativa 1 de 2 em 1 s · erro 529"),"{}",shown_label(&engine));
     assert!(notes(&effects).is_empty() && diary(&effects) == vec!["claude_api_retry".to_owned()]);
@@ -953,9 +958,16 @@ fn notice_api_retry_label_until_stream() {
 
 #[test]
 fn notice_api_retry_without_status() {
-    let mut engine = notice_engine();
+    let mut engine = turn_engine();
     line(&mut engine,fixture("api_retry.jsonl").remove(2),11.0);
     assert!(shown_label(&engine).starts_with("Nova tentativa 1 de 1 em 1 s · sem resposta da API"),"{}",shown_label(&engine));
+}
+
+#[test]
+fn notice_api_retry_of_an_idle_session_shows_no_label() {
+    let mut engine = notice_engine();
+    line(&mut engine,fixture("api_retry.jsonl").remove(0),11.0);
+    assert!(!shown_label(&engine).contains("Nova tentativa"),"chamada de fundo: {}",shown_label(&engine));
 }
 
 fn hook_notes(effects:&[Effect]) -> Vec<(String,Value)> {
@@ -989,7 +1001,7 @@ fn notice_hook_slow_label_after_three_seconds() {
 #[test]
 fn notice_hook_failure_streak() {
     let hooks = fixture("hooks.jsonl");
-    let mut engine = notice_engine();
+    let mut engine = turn_engine();
     line(&mut engine,hooks[4].clone(),10.0);
     let first = hook_notes(&line(&mut engine,hooks[5].clone(),10.2));
     assert_eq!(first,vec![("Hook falhou — PostToolUse:Bash: falhou-de-proposito".to_owned(),json!("hook_failed"))]);
@@ -1013,7 +1025,7 @@ fn notice_hook_failure_streak() {
 
 #[test]
 fn notice_hook_failure_with_changing_message_is_one_note() {
-    let mut engine = notice_engine();
+    let mut engine = turn_engine();
     let mut shown = Vec::new();
     for at in 0..3 {
         shown.extend(notes(&line(&mut engine,json!({"type":"system","subtype":"hook_response","hook_id":format!("h{at}"),
@@ -1023,6 +1035,28 @@ fn notice_hook_failure_with_changing_message_is_one_note() {
     assert_eq!(shown,vec!["Hook falhou — PostToolUse:Edit: lint falhou em arquivo0.rs".to_owned()]);
     let effects = line(&mut engine,turn_end("completed",false),20.0);
     assert_eq!(notes(&effects),vec!["Hook falhou — PostToolUse:Edit: lint falhou em arquivo0.rs (3× neste turno)".to_owned()]);
+}
+
+#[test]
+fn notice_hook_failure_outside_a_turn_is_not_summed() {
+    let mut engine = notice_engine();
+    let failure = json!({"type":"system","subtype":"hook_response","hook_id":"s","hook_name":"SessionStart:startup",
+        "hook_event":"SessionStart","stderr":"sem rede","outcome":"error","exit_code":1});
+    assert_eq!(notes(&line(&mut engine,failure.clone(),10.0)).len(),1);
+    assert_eq!(notes(&line(&mut engine,failure,11.0)).len(),1,"sem turno não há soma: cada falha avisa");
+    line(&mut engine,json!({"type":"command_lifecycle","state":"started"}),12.0);
+    assert!(notes(&line(&mut engine,turn_end("completed",false),13.0)).is_empty(),"nada vira \"neste turno\"");
+}
+
+#[test]
+fn notice_hook_block_reaches_the_person_when_the_model_would_not_see_it() {
+    let mut engine = turn_engine();
+    let block = |name:&str,id:&str| json!({"type":"system","subtype":"hook_response","hook_id":id,"hook_name":name,
+        "hook_event":name.split(':').next().unwrap(),"stderr":"prompt recusado pela regra","outcome":"error","exit_code":2});
+    assert_eq!(notes(&line(&mut engine,block("UserPromptSubmit","u"),10.0)),
+        vec!["Hook falhou — UserPromptSubmit: prompt recusado pela regra".to_owned()]);
+    assert!(notes(&line(&mut engine,block("PreToolUse:Bash","p"),11.0)).is_empty(),"o motivo vai ao modelo pelo tool_result");
+    assert!(notes(&line(&mut engine,block("Stop","s"),12.0)).is_empty(),"o motivo vai ao modelo, que segue o turno");
 }
 
 #[test]
@@ -1036,7 +1070,7 @@ fn notice_hook_failure_without_message() {
 #[test]
 fn notice_turn_end_from_transcript_clears_labels() {
     let hooks = fixture("hooks.jsonl");
-    let mut engine = notice_engine();
+    let mut engine = turn_engine();
     line(&mut engine,fixture("api_retry.jsonl").remove(0),10.0);
     line(&mut engine,hooks[4].clone(),10.0); line(&mut engine,hooks[5].clone(),10.1);
     line(&mut engine,hooks[4].clone(),10.2); line(&mut engine,hooks[5].clone(),10.3);
