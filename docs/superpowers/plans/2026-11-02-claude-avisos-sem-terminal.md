@@ -332,7 +332,7 @@ projeto passou a vir antes dos conectores (`b8d30a059`).
 - [x] **Step 3: Sessão `cx-avisos`** sem terminal numa pasta descartável com o `.mcp.json` quebrado, o
   hook lento e o hook que falha da Task 0. Conferir: nota do MCP uma vez; ao mandar duas mensagens, a
   nota não repete; rótulo do hook lento aparece e some; `Hook falhou` e, no fim do turno, `(N× neste turno)`.
-- [ ] **Step 4: Relançar** a sessão (`/recarregar`): a nota do MCP volta uma vez (2B).
+- [x] **Step 4: Relançar** a sessão (`/recarregar`): a nota do MCP volta uma vez (2B).
 - [ ] **Step 5: Prints** do nativo e do Expo da mesma conversa, um por um, caminho absoluto no relato.
 - [ ] **Step 6: Encerrar** `cx-avisos`; manter ou devolver o binário conforme ele disser.
 
