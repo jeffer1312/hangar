@@ -318,10 +318,18 @@ Prova: `rg -n "Avisos do Claude sem terminal" docs/decisoes/harnesses.md` acha a
 
 Status: ready-for-human — precisa do ok dele para trocar o binário e reiniciar o backend.
 
-- [ ] **Step 1: Build** `scripts/cargo-pinned build --release -p hangar-server` na worktree.
-- [ ] **Step 2: Troca** (com ok): `~/.hangar/bin/hangar-server` → `.bak-2026-11-02-avisos-claude`;
+Feito em 02/11/2026. O backend roda o binário do pacote (`~/.hangar/versions/0.1.0.9074/bin/hangar-server`),
+não o de `~/.hangar/bin`; a troca leva o par inteiro (binário, `hangar-server.auth.json` e `auth/<sha>/libhangar_auth.so`),
+senão o Python recusa ("sem par válido da biblioteca de autenticação") e assume a porta sozinho.
+Resultado: nota de hook e soma `(3× neste turno)` certas; rótulo `Rodando hook PreToolUse:Bash…` aos 6 s com hook de 5 s;
+relançamento repete a nota de MCP uma vez. A conta com os plugins do marketplace trouxe ~20 conectores sem login ou
+falhos: uma nota por servidor despejava 20 notas por processo, virou uma nota só (`eb95b9016`) e o servidor do
+projeto passou a vir antes dos conectores (`b8d30a059`).
+
+- [x] **Step 1: Build** `scripts/cargo-pinned build --release -p hangar-server` na worktree.
+- [x] **Step 2: Troca** (com ok): `~/.hangar/bin/hangar-server` → `.bak-2026-11-02-avisos-claude`;
   copiar o novo; `systemctl --user restart hangar-backend.service`.
-- [ ] **Step 3: Sessão `cx-avisos`** sem terminal numa pasta descartável com o `.mcp.json` quebrado, o
+- [x] **Step 3: Sessão `cx-avisos`** sem terminal numa pasta descartável com o `.mcp.json` quebrado, o
   hook lento e o hook que falha da Task 0. Conferir: nota do MCP uma vez; ao mandar duas mensagens, a
   nota não repete; rótulo do hook lento aparece e some; `Hook falhou` e, no fim do turno, `(N× neste turno)`.
 - [ ] **Step 4: Relançar** a sessão (`/recarregar`): a nota do MCP volta uma vez (2B).
