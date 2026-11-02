@@ -847,7 +847,7 @@ fn a_good_open_clears_the_persisted_problem() {
     assert_eq!(persisted_problem(&effects),Some(Value::Null),"o arquivo da sessão perde a queda antiga");
 }
 
-// ---- avisos que a CLI manda e a tela precisa mostrar (linhas reais da CLI 2.1.316) ----
+// ---- avisos que a CLI manda e a tela precisa mostrar (formatos em docs/decisoes/harnesses.md) ----
 
 const FIXTURE_SID:&str = "00000000-0000-4000-8000-000000000001";
 
@@ -1135,12 +1135,12 @@ fn notice_refusal_fallback_each_time() {
     let refusal = system("model_refusal_fallback",json!({"trigger":"refusal","direction":"retry","scope":"session",
         "original_model":"claude-opus-5-5","fallback_model":"claude-sonnet-5-5","request_id":null,"content":"x"}));
     for at in [11.0,12.0] {
-        assert_eq!(notes(&line(&mut engine,refusal.clone(),at)),vec!["⚙️ O claude-opus-5-5 recusou; esta resposta veio do claude-sonnet-5-5".to_owned()]);
+        assert_eq!(notes(&line(&mut engine,refusal.clone(),at)),vec!["⚙️ O claude-opus-5-5 recusou; nova tentativa no claude-sonnet-5-5".to_owned()]);
     }
     let mut local = refusal;
     local["scope"] = json!("local");
     assert_eq!(notes(&line(&mut engine,local,13.0)),
-        vec!["⚙️ O claude-opus-5-5 recusou; esta resposta veio do claude-sonnet-5-5 (só esta resposta; a sessão segue no claude-opus-5-5)".to_owned()]);
+        vec!["⚙️ O claude-opus-5-5 recusou; nova tentativa no claude-sonnet-5-5 (só esta resposta; a sessão segue no claude-opus-5-5)".to_owned()]);
 }
 
 #[test]

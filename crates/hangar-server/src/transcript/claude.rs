@@ -120,13 +120,13 @@ impl RewriteFilter {
 }
 
 /// `silent_attachment_timestamp` (transcript.py:381): relógio de um anexo que nunca vira bolha,
-/// lido sem json.
-pub(crate) fn silent_attachment_timestamp(line: &str) -> Option<&str> {
+/// lido sem json. A falha de hook só vira nota quem pediu as notas (`notices`).
+pub(crate) fn silent_attachment_timestamp(line: &str, notices: bool) -> Option<&str> {
     if !line.ends_with("}\n") {
         return None;
     }
     let head = ATTACHMENT_HEAD.captures(line)?;
-    if matches!(&head[1], "queued_command" | "hook_additional_context" | "hook_non_blocking_error") {
+    if matches!(&head[1], "queued_command" | "hook_additional_context") || (notices && &head[1] == "hook_non_blocking_error") {
         return None;
     }
     let i = line.rfind(ATTACHMENT_TAIL)?;
@@ -300,7 +300,8 @@ fn is_prompt(obj: &Map<String, Value>) -> bool {
     match obj.get("message").and_then(|m| m.get("content")) {
         Some(Value::String(text)) => !strip(text).is_empty() && !is_command_meta(text),
         Some(Value::Array(blocks)) => !blocks.iter().any(|b| b.get("type").and_then(Value::as_str) == Some("tool_result"))
-            && blocks.iter().any(|b| b.get("type").and_then(Value::as_str) == Some("text")),
+            && blocks.iter().find(|b| b.get("type").and_then(Value::as_str) == Some("text"))
+                .is_some_and(|b| !is_command_meta(b.get("text").and_then(Value::as_str).unwrap_or(""))),
         _ => false,
     }
 }

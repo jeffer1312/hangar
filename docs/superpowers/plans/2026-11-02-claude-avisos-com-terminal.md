@@ -90,7 +90,8 @@ Status: ready-for-agent
   Achados dos recortes: na conta, `api_error` só existe com `sdk-cli` (a fixture troca o `entrypoint`); o prompt
   `cli` traz `promptId`, `turnOrigin` e `turnPosition` (`{"promptIndex":0,"turnIndex":1}`).
 
-Prova: arquivos existem e `rg -n '/home/|"sessionId"' …/terminal_*.jsonl` não acha nada; valores de `reason`
+Prova: arquivos existem e `rg -n -F '/home/' …/terminal_*.jsonl` não acha nada; o `sessionId` de todas as linhas
+é o sintético `00000000-0000-4000-8000-000000000001`; valores de `reason`
 anotados aqui. Se `reason` não distinguir motivo anormal, T3 fica com o erro final da API, que já aparece.
 
 ### Task 1: `NoticeFold`, filtro `cli` e falha de hook (T2)

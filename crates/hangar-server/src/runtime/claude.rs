@@ -1264,7 +1264,8 @@ impl ClaudeEngine {
                 let text = match event["fallback_model"].as_str() {
                     Some(fallback) if subtype == "model_refusal_fallback" => {
                         let local = if event["scope"] == "local" { format!(" (só esta resposta; a sessão segue no {original})") } else { String::new() };
-                        format!("⚙️ O {original} recusou; esta resposta veio do {fallback}{local}")
+                        // O evento chega quando a CLI decide repetir: a resposta do outro modelo ainda pode falhar.
+                        format!("⚙️ O {original} recusou; nova tentativa no {fallback}{local}")
                     }
                     _ => {
                         let why = event["api_refusal_explanation"].as_str().filter(|why|!why.is_empty()).map(|why|format!(": {}",clip(why,300))).unwrap_or_default();

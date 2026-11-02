@@ -143,7 +143,7 @@ Arquivos: `crates/hangar-server/tests/fixtures/claude_events/*.jsonl` (novos).
     `terminal_reason: "api_error"`: já cai no ramo da faixa `headless_turno_erro`.
 
 Prova: `ls crates/hangar-server/tests/fixtures/claude_events/` lista `init.jsonl`, `hooks.jsonl`,
-`api_retry.jsonl` e `result.jsonl`; `rg -n '/home/|session_id' crates/hangar-server/tests/fixtures/claude_events/` não acha nada.
+`api_retry.jsonl` e `result.jsonl`; `rg -n -F '/home/' crates/hangar-server/tests/fixtures/claude_events/` não acha nada. Os `session_id` dos fixtures são sintéticos (`00000000-0000-4000-8000-…`).
 
 **Bloqueio condicional:** se o MCP quebrado chegar no `init` como `pending` e nenhum evento posterior
 disser `failed`, R2 não se cumpre só com o `init`. Aí a execução para e pergunta: um `mcp_status` único

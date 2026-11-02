@@ -111,7 +111,9 @@ fn terminal_compact_summary_and_local_command_do_not_end_the_turn() {
     compact["message"] = json!({"role":"user","content":"This session is being continued from a previous conversation."});
     let mut command = with_uuid(prompt,"c2");
     command["message"] = json!({"role":"user","content":"<command-name>/context</command-name>"});
-    let lines = [prompt.clone(),with_uuid(failure,"h1"),compact,command,with_uuid(failure,"h2"),with_uuid(end,"d1")];
+    let mut blocks = with_uuid(prompt,"c3");
+    blocks["message"] = json!({"role":"user","content":[{"type":"text","text":"<command-name>/model</command-name>"},{"type":"text","text":"lembrete"}]});
+    let lines = [prompt.clone(),with_uuid(failure,"h1"),compact,command,blocks,with_uuid(failure,"h2"),with_uuid(end,"d1")];
     let expected = vec![
         ("hookfail:h1".to_owned(),"hook_failed".to_owned(),Some("PostToolUse:Bash: falhou-de-proposito".to_owned())),
         ("hookfail-sum:d1:5182a3be".to_owned(),"hook_failed".to_owned(),Some("PostToolUse:Bash: falhou-de-proposito (2× neste turno)".to_owned())),
@@ -188,10 +190,17 @@ fn terminal_long_turn_still_sums_in_the_tail() {
 #[test]
 fn terminal_history_tail_never_invents_a_different_note() {
     let full = history("terminal_hooks.jsonl",None,TAIL_WINDOW);
-    for window in [256,512,1024,2048] {
-        let tail = history("terminal_hooks.jsonl",Some(200),window);
-        assert!(tail.iter().all(|note|full.contains(note)),"janela {window}: {tail:?} fora de {full:?}");
+    let text = std::fs::read_to_string(fixture("terminal_hooks.jsonl")).unwrap();
+    let starts:Vec<u64> = std::iter::once(0).chain(text.match_indices('\n').map(|(at,_)|at as u64 + 1)).collect();
+    // Janela que começa em cada linha do meio (+1: o `tail_offset` pula a linha cortada). `limit` 4 = os itens da
+    // janela que começa no fim do 1º turno (2 prompts, 2 notas): ela para ali, sem voltar ao byte 0, e não corta nota.
+    let mut seen = 0;
+    for start in &starts[1..starts.len() - 1] {
+        let tail = history("terminal_hooks.jsonl",Some(4),text.len() as u64 - start + 1);
+        assert!(tail.iter().all(|note|full.contains(note)),"linha em {start}: {tail:?} fora de {full:?}");
+        seen += tail.len();
     }
+    assert!(seen > 0,"nenhuma janela parcial montou nota: a asserção acima não provaria nada");
 }
 
 #[test]

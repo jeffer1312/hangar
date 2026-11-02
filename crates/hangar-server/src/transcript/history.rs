@@ -286,7 +286,7 @@ fn parse_from(req: &HistoryRequest, offset: u64, start_ts: f64, notices: bool) -
             fixed.truncate(fixed.len() - 2);
             fixed.push('\n');
         }
-        let silent = rewrite.as_ref().and_then(|_| claude::silent_attachment_timestamp(&line));
+        let silent = rewrite.as_ref().and_then(|_| claude::silent_attachment_timestamp(&line, notices.is_some()));
         let (line_ts, evs) = match silent {
             Some(att) => (py::iso_timestamp(&att.replace('Z', "+00:00")).unwrap_or(0.0), Vec::new()),
             None => {
