@@ -81,7 +81,7 @@ export function SourceChips({ items }: { items: { key: string; label: string; de
 // O valor certo desde o primeiro quadro; cada troca entra subindo, na thread de UI.
 export function RiseNumber({ text, style }: { text: string; style: TextStyle }) {
   const reduced = useReducedMotion();
-  return <Animated.Text key={text} entering={reduced ? undefined : FadeInDown.duration(420)} style={style}>{text}</Animated.Text>;
+  return <Animated.Text key={text} entering={reduced ? undefined : FadeInDown.duration(420)} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6} style={style}>{text}</Animated.Text>;
 }
 
 export function GrowFill({ percent, color, height = 5, delay = 0 }: { percent: number; color: string; height?: number; delay?: number }) {
@@ -109,8 +109,9 @@ export function KpiTile({ icon, color, label, value, caption, exact, index }: { 
   const reduced = useReducedMotion();
   const press = usePressScale();
   const [open, setOpen] = useState(false);
-  return <Animated.View entering={reduced ? undefined : FadeInDown.delay(80 + index * 50).duration(360)} style={[{ flexGrow: 1, flexBasis: '45%', minWidth: 140 }, press.style]}>
-    <Pressable accessibilityRole="button" accessibilityLabel={`${label}: ${value}. ${caption}`} accessibilityState={{ expanded: open }}
+  // Entrada e escala do toque em views separadas: as duas animam `transform` e se atropelariam na mesma.
+  return <Animated.View entering={reduced ? undefined : FadeInDown.delay(80 + index * 50).duration(360)} style={{ flexGrow: 1, flexBasis: '45%', minWidth: 140 }}><Animated.View style={press.style}>
+    <Pressable accessibilityRole="button" accessibilityLabel={open ? undefined : `${label}: ${value}. ${caption}`} accessibilityState={{ expanded: open }}
       onPressIn={press.onPressIn} onPressOut={press.onPressOut} onPress={() => { haptic.selection(); setOpen(!open); }}
       style={{ minHeight: 44, padding: SPACE[3], gap: SPACE[1], borderRadius: theme.base.radius.lg, backgroundColor: c.inset, borderWidth: 1, borderColor: open ? withAlpha(c.accent, 0.45) : 'transparent' }}>
       <View style={{ width: 28, height: 28, borderRadius: RADIUS.sm, alignItems: 'center', justifyContent: 'center', backgroundColor: withAlpha(color, 0.16), marginBottom: SPACE[1] }}><Icon name={icon} size={15} color={color} /></View>
@@ -119,7 +120,7 @@ export function KpiTile({ icon, color, label, value, caption, exact, index }: { 
       <Text numberOfLines={open ? undefined : 1} style={{ color: c.muted, fontSize: theme.base.text.xxs }}>{caption}</Text>
       {open && exact}
     </Pressable>
-  </Animated.View>;
+  </Animated.View></Animated.View>;
 }
 
 export function Ring({ fraction, color, value, label, size = 92 }: { fraction: number; color: string; value: string; label: string; size?: number }) {

@@ -21,8 +21,8 @@ import { RADIUS, SPACE } from '../../theme/scale';
 export const useUsagePreferences = create(() => ({ period: '30d', off: [] as string[] }));
 export const number = (value: number, digits = 0) => value.toLocaleString(intlLocale(), { maximumFractionDigits: digits });
 export const compactNumber = (value: number) => compactTokens(value, intlLocale());
-// Eixo de contagem pequena (máximo 3 → meio 1,5) precisa da casa decimal que o compacto tira.
-export const axisNumber = (value: number) => value < 999.5 ? number(value, 1) : compactNumber(value);
+// O compacto arredonda "1,5 mil" para "2 mil" e 1,5 para "2": o meio do eixo precisa do valor certo.
+export const axisNumber = (value: number) => value < 999.5 ? number(value, 1) : value < 999.5e3 ? number(value) : compactNumber(value);
 export const dollars = (value: number) => `US$ ${value.toLocaleString(intlLocale(), { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 export const percent = (part: number, total: number) => `${number(total > 0 ? part / total * 100 : 0, 1)}%`;
 
@@ -159,14 +159,13 @@ export function Columns({ label, days, series, format = number, axisFormat = axi
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
   const [plotWidth, setPlotWidth] = useState(264);
   const reduced = useReducedMotion();
-  // As colunas crescem da base a cada troca de série.
+  // As colunas crescem da base quando os dias mudam; ligar ou desligar uma camada não refaz a entrada.
   const reveal = useSharedValue(reduced ? 1 : 0);
-  const seriesKey = series.map((item) => item.key).join('|');
   useEffect(() => {
     if (reduced) { reveal.value = 1; return; }
     reveal.value = 0;
     reveal.value = withTiming(1, { duration: 700, easing: Easing.out(Easing.cubic) });
-  }, [seriesKey, days.length, reduced]);
+  }, [days.length, reduced]);
   const revealStyle = useAnimatedStyle(() => ({ transform: [{ scaleY: reveal.value }] }));
   if (!days.length) return <Copy muted>{m.uso_sem_dias()}</Copy>;
   const describe = (day: ChartDay) => {

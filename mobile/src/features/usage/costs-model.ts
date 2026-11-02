@@ -13,10 +13,11 @@ export function compactTokens(value: number, locale: string): string {
   if (value >= 999.5) return `${fixed(value / 1e3, 0)}${en ? 'k' : ' mil'}`;
   return fixed(value, 0);
 }
-// Grandeza de dinheiro na regra do `money()` do nativo: uma casa, sem ",0" sobrando.
+// Grandeza de dinheiro na regra do `money()` do nativo: até centavos abaixo de mil (US$ 0,04 não vira 0), depois uma casa.
 export function compactMoney(value: number, locale: string): string {
   const en = locale.startsWith('en');
   const abs = Math.abs(value);
+  if (abs < 999.95) return value.toLocaleString(locale, { maximumFractionDigits: 2 });
   // Cortes no valor já arredondado a uma casa: 999.960 é "1 mi", não "1.000 mil".
   const [size, unit] = abs >= 999.95e6 ? [1e9, en ? 'B' : ' bi'] : abs >= 999.95e3 ? [1e6, en ? 'M' : ' mi'] : abs >= 999.95 ? [1e3, en ? 'K' : ' mil'] : [1, ''];
   return `${(value / size).toLocaleString(locale, { maximumFractionDigits: 1 })}${unit}`;
@@ -36,7 +37,9 @@ export function monthForecast(days: { key: string; cost: number }[], today: stri
   for (let i = 0; i < 7; i++) week += byKey.get(dayKey(new Date(now.getTime() - i * 86_400_000))) ?? 0;
   const mtd = cumulative.at(-1)!;
   const prev = dayKey(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1))).slice(0, 7);
-  const lastMonth = coversPrevMonth ? days.filter((d) => d.key.startsWith(prev)).reduce((sum, d) => sum + d.cost, 0) : null;
+  // Histórico que começa depois do dia 1 do mês passado faria parecer um mês barato (ou de custo zero).
+  const sinceStart = days.some((d) => d.key <= `${prev}-01`);
+  const lastMonth = coversPrevMonth && sinceStart ? days.filter((d) => d.key.startsWith(prev)).reduce((sum, d) => sum + d.cost, 0) : null;
   return { mtd, projected: mtd + week / 7 * (daysInMonth - day), daysInMonth, cumulative, lastMonth };
 }
 export function outlierDays(values: { key: string; value: number }[]): string[] {

@@ -65,6 +65,7 @@ describe('dinheiro compacto', () => {
     expect(compactMoney(13_654.4, 'en-US')).toBe('13.7K');
     expect(compactMoney(2_000_000, 'pt-BR')).toBe('2 mi');
     expect(compactMoney(950, 'pt-BR')).toBe('950');
+    expect(compactMoney(0.04, 'en-US')).toBe('0.04');
   });
   it('sobe de unidade quando o arredondamento chega a mil', () => {
     expect(compactMoney(999_960, 'pt-BR')).toBe('1 mi');
@@ -84,7 +85,8 @@ describe('previsão do mês', () => {
     expect(f.lastMonth).toBeNull();
   });
   it('mês passado só quando o período cobre o mês inteiro', () => {
-    expect(monthForecast(days, '2026-11-10', true)!.lastMonth).toBe(50);
+    expect(monthForecast(days, '2026-11-10', true)!.lastMonth).toBeNull();
+    expect(monthForecast([{ key: '2026-10-01', cost: 5 }, ...days], '2026-11-10', true)!.lastMonth).toBe(55);
   });
   it('dia sem dado conta como zero na média', () => {
     expect(monthForecast([{ key: '2026-11-10', cost: 70 }], '2026-11-10', false)!.projected).toBe(70 + 10 * 20);

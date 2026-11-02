@@ -268,7 +268,9 @@ it('custos sequenciais preservam oito indicadores e análises com controles comp
   }
   for (const label of [m.custos_uso_por_dia(), m.custos_por_provedor(), m.custos_por_projeto(), m.custos_por_modelo(), m.lista_comparar()]) expect(node.querySelector(`button[aria-label="${label}"]`)).toBeNull();
   const kpi = [...node.querySelectorAll('span')].find((span) => span.textContent === m.custos_tokens_novos())!;
-  expect(kpi.parentElement?.parentElement?.parentElement?.style.flexWrap).toBe('wrap');
+  let row = kpi.parentElement;
+  while (row && !row.style.flexWrap) row = row.parentElement;
+  expect(row?.style.flexWrap).toBe('wrap');
   expect(text).not.toContain(m.custos_equivalente_cobrado());
   expect(text).not.toContain(m.custos_metodo_standard());
   expect(net.usage).toHaveBeenCalledWith(a, '30d', { projeto: [], modelo: [] }, false);

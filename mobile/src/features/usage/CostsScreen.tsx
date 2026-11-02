@@ -4,7 +4,7 @@ import { useUnistyles } from 'react-native-unistyles';
 import { useIsFocused, useRouter } from 'expo-router';
 import { custoDesconhecido, custoSemCacheDe, equivalenteDe, fillDayGaps, intlLocale, isFree, mergeReports, mergeUso, partirOcultos, precoParcial, tarifasPorModelo, type DimBucket } from '@hangar/core';
 import { Sheet } from '../../ui/Sheet';
-import { Action, Bar, Card, Choice, Columns, compactNumber, Composition, Copy, dollars, Grid, number, Paged, percent, ReportFrame, ReportStatus, useChartColors, useReportSelection, useUsagePreferences } from './ReportUI';
+import { Action, axisNumber, Bar, Card, Choice, Columns, compactNumber, Composition, Copy, dollars, Grid, number, Paged, percent, ReportFrame, ReportStatus, useChartColors, useReportSelection, useUsagePreferences } from './ReportUI';
 import { comparison, compactMoney, costView, dimensionBuckets, dimensions, filterCombos, groupCombos, monthForecast, outlierDays, rawTokens, setCostFilter, sumCombos, type CostFilter, type Dimension } from './costs-model';
 import { ForecastLine, KpiTile, Panel, RiseNumber, Ring, Segmented, SourceChips, SourceMark } from './CostsVisuals';
 import { useReports } from './useReports';
@@ -182,7 +182,13 @@ export function CostsScreen() {
         return custoDesconhecido(part) ? null : part.cost;
       }) };
     });
-    const marks = outlierDays(days.map((d) => ({ key: d.key, value: d.values.reduce<number>((sum, v) => sum + (v ?? 0), 0) })));
+    // Pelo total do dia, não pelas camadas ligadas; dia com custo sem tarifa fica fora da média.
+    const dayTotal = (key: string): number | null => {
+      const bucket = view.days.find((b) => b.key === key);
+      if (!bucket) return 0;
+      return metric === 'tokens' ? rawTokens(bucket) : custoDesconhecido(bucket) ? null : bucket.cost;
+    };
+    const marks = outlierDays(days.flatMap((d) => { const value = dayTotal(d.key); return value === null ? [] : [{ key: d.key, value }]; }));
     const changeMetric = (value: 'cost' | 'tokens') => { setMetric(value); setHiddenLayers(value === 'tokens' && byType ? ['cache_read'] : []); };
     const changeGroup = (value: string) => { setGroupBy(value as NonNullable<typeof groupBy>); setHiddenLayers(metric === 'tokens' && value === 'tipo' ? ['cache_read'] : []); };
     return <Panel title={m.custos_uso_por_dia()} icon="ChartColumn">
@@ -190,7 +196,7 @@ export function CostsScreen() {
       {view.cross && <ScrollView horizontal showsHorizontalScrollIndicator={false}><Segmented label={m.custos_agrupar_por()} value={group} onChange={changeGroup} options={[{ key: 'tipo', label: m.custos_grupo_tipo() }, { key: 'source', label: m.custos_grupo_cli() }, { key: 'model', label: m.custos_grupo_modelo() }, { key: 'servidor', label: m.custos_grupo_maquina() }]} /></ScrollView>}
       <Copy muted>{m.custos_empilhado_por({ modo: byType ? m.custos_tipo_token() : names[group as Dimension] })}</Copy><Copy muted>{m.custos_hover_detalhe()}</Copy>
       {metric === 'tokens' && byType && <Copy muted>{m.custos_cache_lido_desligado()}</Copy>}
-      <Columns fit marks={marks} label={m.custos_grafico_diario({ metrica: metric === 'tokens' ? m.ctx_tokens() : m.custos_estimativa_api() })} days={days} series={visible} format={metric === 'tokens' ? number : money} axisFormat={metric === 'tokens' ? compactNumber : moneyAxis} onPress={setDay} />
+      <Columns fit marks={marks} label={m.custos_grafico_diario({ metrica: metric === 'tokens' ? m.ctx_tokens() : m.custos_estimativa_api() })} days={days} series={visible} format={metric === 'tokens' ? number : money} axisFormat={metric === 'tokens' ? axisNumber : moneyAxis} onPress={setDay} />
       <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>{layers.map((layer) => <Action key={layer.key} label={layer.label} selected={!hiddenLayers.includes(layer.key)} icon={hiddenLayers.includes(layer.key) ? 'Square' : 'CheckSquare'} onPress={() => setHiddenLayers((previous) => {
         const next = previous.includes(layer.key) ? previous.filter((key) => key !== layer.key) : [...previous, layer.key];
         return layers.every((item) => next.includes(item.key)) ? [] : next;
@@ -273,7 +279,7 @@ export function CostsScreen() {
           <Copy muted>{compareMetric === 'cost' && custoDesconhecido(entity.total) ? '—' : m.custos_do_comparado({ pct: percent(compareMetric === 'tokens' ? rawTokens(entity.total) : entity.total.cost, comparable) })}</Copy>
           <Copy muted>{`${compareMetric === 'tokens' ? compactNumber(rawTokens(entity.total) / periodDays) : custoDesconhecido(entity.total) ? '—' : money(entity.total.cost / periodDays)} ${m.custos_por_dia()}`}</Copy>
         </Card>)}</Grid>
-        {view.cross && <><Copy muted>{weekly ? m.custos_ponto_semana() : m.custos_ponto_dia()}</Copy><Columns fit lines label={m.custos_grafico_comp_aria({ metrica: metricLabel, modo: weekly ? m.custos_semana() : m.custos_dia() })} days={points} series={comparisons.map((entity, index) => ({ key: entity.key, label: labelOf(compareDimension, entity.key), color: colors[index] }))} format={compareMetric === 'tokens' ? number : money} axisFormat={compareMetric === 'tokens' ? compactNumber : moneyAxis} /></>}
+        {view.cross && <><Copy muted>{weekly ? m.custos_ponto_semana() : m.custos_ponto_dia()}</Copy><Columns fit lines label={m.custos_grafico_comp_aria({ metrica: metricLabel, modo: weekly ? m.custos_semana() : m.custos_dia() })} days={points} series={comparisons.map((entity, index) => ({ key: entity.key, label: labelOf(compareDimension, entity.key), color: colors[index] }))} format={compareMetric === 'tokens' ? number : money} axisFormat={compareMetric === 'tokens' ? axisNumber : moneyAxis} /></>}
       </>}
     </Panel>;
   }
@@ -295,9 +301,10 @@ export function CostsScreen() {
     {load.accepted && <>
       {missingPrices.length > 0 && <Copy muted>{`${m.custos_estimativa_incompleta({ n: missingPrices.length })} ${missingPrices.join(', ')}`}</Copy>}
       {!view.cross && <Copy muted>{m.custos_recorte_parcial()}</Copy>}
-      <SourceChips items={[{ key: '\u0000all', all: true, label: m.custos_todas_fontes(), detail: (() => { const b = costView(report, { ...filter, source: [] }).total; return compactNumber(b.input + b.output + b.cache_write); })(), selected: !filter.source?.length, onPress: () => setFilter(setCostFilter(filter, 'source', [], view.cross)) },
+      <SourceChips items={[{ key: '\u0000all', all: true, label: m.custos_todas_fontes(), detail: (() => { const b = costView(report, view.cross ? { ...filter, source: [] } : {}).total; return compactNumber(b.input + b.output + b.cache_write); })(), selected: !filter.source?.length, onPress: () => setFilter(setCostFilter(filter, 'source', [], view.cross)) },
         ...optionBuckets('source').map((source) => {
-          const bucket = costView(report, { ...filter, source: [source.key] }).total;
+          // Sem combos, o toque troca o filtro inteiro pela fonte: o chip mostra o que o toque vai mostrar.
+          const bucket = costView(report, view.cross ? { ...filter, source: [source.key] } : { source: [source.key] }).total;
           return { key: source.key, label: source.label, detail: compactNumber(bucket.input + bucket.output + bucket.cache_write), selected: !!filter.source?.includes(source.key), onPress: () => toggleFilter('source', source.key) };
         })]} />
       <View style={{ padding: SPACE[4], gap: SPACE[2], backgroundColor: sc.inset, borderRadius: theme.base.radius.lg }}>

@@ -101,7 +101,9 @@ fn month_forecast(days: &[(String, f64)], today: chrono::NaiveDate, last_month_c
     let next = if today.month() == 12 { chrono::NaiveDate::from_ymd_opt(today.year() + 1, 1, 1) } else { first.with_month(today.month() + 1) }?;
     let days_in_month = (next - first).num_days() as u32;
     let previous = (first - chrono::Duration::days(1)).with_day(1)?;
-    let last_month = last_month_covered.then(|| previous.iter_days().take_while(|d| *d < first).map(cost).sum());
+    // Histórico que começa depois do dia 1 do mês passado faria parecer um mês barato (ou de custo zero).
+    let since_start = days.iter().any(|(k, _)| *k <= key(previous));
+    let last_month = (last_month_covered && since_start).then(|| previous.iter_days().take_while(|d| *d < first).map(cost).sum());
     Some(Forecast { mtd: acc, projected: acc + week * (days_in_month - today.day()) as f64, days_in_month, cumulative, last_month })
 }
 
@@ -669,6 +671,9 @@ pub(super) struct Costs {
     report: Remote<Report>,
     parts: Vec<MachinePart<Report>>,
     pending: usize,
+    /// Pedido cujos dados estão na tela: as animações tocam quando ele troca, não quando o pedido sai (o relatório
+    /// velho segue visível até a resposta chegar).
+    shown: u64,
     warming: Vec<Warming>,
     partial: Partial,
     /// Máquinas tiradas da soma, pelo id; lidas do disco junto dos projetos escondidos e valem também nas Estatísticas.
@@ -961,6 +966,7 @@ impl Hangar {
         let done = c.pending == 0;
         if done || c.parts.iter().any(MachinePart::answered) {
             c.report.value = Some(all_failed(&c.parts).map_or_else(|| Ok(merge_costs(&c.parts)), Err));
+            c.shown = seq;
         }
         c.report.loading = !done;
         // Com máquina fora do ar, o recorte dela não some: os projetos dela só não chegaram.
@@ -1382,7 +1388,7 @@ impl Hangar {
             else if cx.reduce_motion() { value.child(money2(f.cost, rate)).into_any_element() }
             else {
                 let cost = f.cost;
-                value.with_animation(SharedString::from(format!("costs-hero-{}", self.costs.report.seq)),
+                value.with_animation(SharedString::from(format!("costs-hero-{}", self.costs.shown)),
                     Animation::new(Duration::from_millis(900)).with_easing(crate::motion::ease_out),
                     move |el, t| el.child(money2(cost * t as f64, rate))).into_any_element()
             };
@@ -1456,7 +1462,7 @@ impl Hangar {
         };
         let chart = div().relative().h(px(96.)).w_full();
         let chart = if animate {
-            chart.with_animation(SharedString::from(format!("costs-forecast-{}", self.costs.report.seq)),
+            chart.with_animation(SharedString::from(format!("costs-forecast-{}", self.costs.shown)),
                 Animation::new(Duration::from_millis(1100)).with_easing(crate::motion::ease_out), move |el, t| el.child(plot(t))).into_any_element()
         } else { chart.child(plot(1.)).into_any_element() };
         Some(card_plain().gap(px(6.))
@@ -1501,8 +1507,8 @@ impl Hangar {
             } else { kpi(IconName::Hourglass, theme::danger(), web("custos_cache_perdido"), "—".into(), web("custos_cache_sem_dado"), String::new()) },
         ];
         let animate = !cx.reduce_motion();
-        let seq = self.costs.report.seq;
-        let mut grid = div().flex().flex_col().gap(px(12.));
+        let seq = self.costs.shown;
+        let mut grid =div().flex().flex_col().gap(px(12.));
         let mut tiles = tiles.into_iter().enumerate();
         loop {
             let row: Vec<AnyElement> = tiles.by_ref().take(3).map(|(i, (body, tip))| {
@@ -1654,11 +1660,12 @@ impl Hangar {
         }));
         let n = columns.len();
         let totals: Vec<f64> = columns.iter().map(|c| c.3).collect();
-        let spikes = outliers(&totals);
+        // O dia é atípico pelo total dele, não pelas camadas que a legenda deixou ligadas.
+        let spikes = outliers(&columns.iter().map(|c| c.1.value(metric)).collect::<Vec<_>>());
         let mean = if n > 0 { totals.iter().sum::<f64>() / n as f64 } else { 0. };
         let animate = !cx.reduce_motion();
-        let seq = self.costs.report.seq;
-        let bars = div().relative().flex_1().h(px(H)).child(grid).child(div().absolute().inset_0().flex().items_end()
+        let seq = self.costs.shown;
+        let bars =div().relative().flex_1().h(px(H)).child(grid).child(div().absolute().inset_0().flex().items_end()
             .children(columns.iter().enumerate().map(|(i, (day, _, segs, total))| {
                 let key = day.clone();
                 let lit = hover.as_deref() == Some(day.as_str());
@@ -1668,8 +1675,10 @@ impl Hangar {
                     .children(segs.iter().map(|(_, v, color)| div().w_full().rounded(px(2.)).bg(*color)
                         .h(px((((*v / top) as f32 * H - 2.) * t).max(if t > 0. { 1. } else { 0. })))))
                     .when(total <= 0., |el| el.h(px(0.)));
-                let column = div().flex().flex_col().items_center().w_full()
-                    .when(spike, |el| el.child(div().mb(px(4.)).size(px(7.)).rounded_full().bg(theme::danger())));
+                // A bolinha flutua acima da barra: no fluxo, ela encolheria a barra mais alta contra o eixo.
+                let column = div().relative().flex().flex_col().items_center().w_full()
+                    .when(spike, |el| el.child(div().absolute().left_0().right_0().top(px(-11.)).flex().justify_center()
+                        .child(div().size(px(7.)).rounded_full().bg(theme::danger()))));
                 let column = if animate {
                     // Uma barra depois da outra, da esquerda para a direita, na mesma curva.
                     let lag = (i as f32 / n.max(1) as f32) * 0.45;
@@ -1753,7 +1762,7 @@ impl Hangar {
                 .child(div().text_size(px(16.)).font_weight(FontWeight::BOLD).child(format!("{}%", dec(reuse as f64 * t as f64, 1))))
                 .child(div().text_size(px(10.5)).text_color(theme::muted()).child(web("custos_reuso_curto"))));
         let ring = if cx.reduce_motion() { ring(1.).into_any_element() } else {
-            div().with_animation(SharedString::from(format!("costs-ring-{}", self.costs.report.seq)),
+            div().with_animation(SharedString::from(format!("costs-ring-{}", self.costs.shown)),
                 Animation::new(Duration::from_millis(1100)).with_easing(crate::motion::ease_out), move |el, t| el.child(ring(t))).into_any_element()
         };
         let mut lines = div().flex_1().min_w_0().flex().flex_col().gap(px(8.))
@@ -1781,7 +1790,7 @@ impl Hangar {
     /// Ranking de uma dimensão: nome, custo e a barra com a forma do gasto (os quatro tipos), clicável para recortar.
     fn rank_rows(&self, report: &Report, dim: Dim, list: &[Bucket], rate: Option<f64>, hide: bool, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let peak = list.iter().map(|b| b.cost).fold(1., f64::max);
-        let (animate, seq) = (!cx.reduce_motion(), self.costs.report.seq);
+        let (animate, seq) = (!cx.reduce_motion(), self.costs.shown);
         list.iter().map(|b| {
             let key = b.key.clone();
             let on = self.costs.filter.has(dim, &key);
@@ -2373,7 +2382,9 @@ mod tests {
         days.extend((1..=10).map(|d| (format!("2026-11-{d:02}"), 10.)));
         let f = month_forecast(&days, today, false).unwrap();
         assert_eq!((f.mtd, f.projected, f.days_in_month, f.cumulative.len(), f.last_month), (100., 300., 30, 10, None));
-        assert_eq!(month_forecast(&days, today, true).unwrap().last_month, Some(50.));
+        assert_eq!(month_forecast(&days, today, true).unwrap().last_month, None);
+        days.push(("2026-10-01".to_owned(), 5.));
+        assert_eq!(month_forecast(&days, today, true).unwrap().last_month, Some(55.));
         assert_eq!(month_forecast(&[("2026-11-10".into(), 70.)], today, false).unwrap().projected, 70. + 10. * 20.);
         assert!(month_forecast(&[("2026-10-31".into(), 5.)], today, false).is_none());
         let mut values = vec![10.; 10];
