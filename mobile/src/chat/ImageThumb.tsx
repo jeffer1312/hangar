@@ -38,7 +38,8 @@ export function RevealFrame({ style, chegou, children }: { style: object; chegou
   const flat = RNStyleSheet.flatten(style) as { width: number; height: number };
   const { width: w, height: h } = flat;
   const diag = Math.hypot(w, h);
-  const abre = useSharedValue(0);
+  // Já chegada ao montar (quadro parado da novidade com movimento reduzido): nasce aberta, sem animar.
+  const abre = useSharedValue(chegou ? 1 : 0);
   const passada = useSharedValue(0);
 
   useEffect(() => {
@@ -54,7 +55,8 @@ export function RevealFrame({ style, chegou, children }: { style: object; chegou
     abre.value = 0;
     if (pausado) return;
     passada.value = 0;
-    passada.value = withRepeat(withTiming(1, { duration: 1400, easing: Easing.linear }), -1);
+    // Teto de passadas: carregamento travado numa linha fora da tela não deixa o brilho rodando para sempre.
+    passada.value = withRepeat(withTiming(1, { duration: 1400, easing: Easing.linear }), 10);
     return () => cancelAnimation(passada);
   }, [chegou, pausado, abre, passada]);
 
