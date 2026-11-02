@@ -5,6 +5,20 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 
 ## Regras vigentes
 
+- **Evento da CLI do Claude sem terminal escolhe um canal que já existe; nenhum cai calado.** Rótulo
+  passageiro para o que some sozinho (nova tentativa da API, hook rodando há mais de 3 s); nota na
+  conversa para falha ou mudança que a pessoa precisa saber; faixa só para o erro do turno; diário para
+  o resto. Nota de configuração (MCP ou plugin que não subiu, aviso `high`/`immediate` da CLI) sai uma
+  vez por vida do processo, e a adoção pelo Rust reiniciado não a repete. Nota de ocorrência (recusa
+  do modelo, motivo anormal do fim do turno, falha de hook com as seguidas somadas) sai quando
+  acontece; a falha de hook repetida soma até o fim do turno. O `system/*` sem ramo vai ao diário como
+  `system/{subtype}`. Com terminal, os avisos saem só do transcript ou do plugin, **nunca lendo a
+  tela**, e o leitor só monta nota em linha `"entrypoint":"cli"` (a `sdk-cli` já tem a nota do ator);
+  só o chat ao vivo e o `/history` do chat ligam as notas (`LineParser::with_notices`,
+  `merged_history_with_notices`). Ver
+  [avisos do Claude sem terminal](#avisos-do-claude-sem-terminal-02112026) e
+  [com terminal](#avisos-do-claude-com-terminal-pelo-transcript-02112026).
+
 - **Subagentes Codex são conversas filhas, acompanhadas no mesmo painel dos subagentes Claude.**
   UUID, caminho do agente e nome da sessão são identificadores distintos. A descoberta fica na
   conta e na conversa do pai; histórico copiado antes do nascimento do filho não é atividade dele.
@@ -968,6 +982,75 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   uma vez por aparição (`rust.trust_dialog_shown`, código `trust_flag_present` ou
   `trust_flag_absent`) e o log guarda a entrada, a idade do arquivo e a trava. Ver
   [diálogo de confiança com a pasta confiada](#diálogo-de-confiança-com-a-pasta-já-confiada-23102026).
+
+## Avisos do Claude sem terminal (02/11/2026)
+
+O ator do Claude sem terminal (`runtime/claude.rs`) jogava fora, no `_ => return` de `on_system`,
+eventos que o terminal mostra: nova tentativa da API, MCP e plugin que não subiram, hooks, avisos da
+CLI, troca de modelo por recusa. O `terminal_reason` do `result` também não aparecia. Plano e decisões:
+`docs/superpowers/plans/2026-11-02-claude-avisos-sem-terminal.md`.
+
+| Evento | Canal |
+|---|---|
+| `system/api_retry` | rótulo `Nova tentativa N de M em X s · erro S` (ou `· sem resposta da API`), sai na próxima linha de resposta, inclusive de subagente |
+| `init.mcp_servers` `failed`/`needs-auth`, `init.plugin_errors` | **uma** nota por vida do processo, com até 5 nomes por linha ("e mais N"). Na prova ao vivo, a conta com os plugins instalados trazia uns 20 conectores sem login ou que não sobem: uma nota por servidor despejava 20 notas a cada processo |
+| `hook_started`/`hook_response` (flag `--include-hook-events`) | rótulo `Rodando hook {hook_name}…` só depois de 3 s; `outcome: error` com `exit_code` diferente de 2 vira `Hook falhou — …`; as falhas seguintes do mesmo `hook_name` (com qualquer motivo, porque o `stderr` muda a cada chamada) somam e viram `(N× neste turno)` no fim do turno (não no sucesso: vários hooks dividem o mesmo `hook_name`); `exit 2` (bloqueio) só no diário (`claude_hook`) nos eventos em que o motivo vai ao modelo (`PreToolUse`, `PostToolUse`, `Stop`, `SubagentStop`) e no `UserPromptSubmit` (o prompt barrado já é bolha retida); nos outros (`SessionStart`, `Notification`…) a CLI o mostraria só à pessoa, então vira nota; falha fora de turno avisa sem somar; os rótulos de nova tentativa e de hook só valem com turno em curso (chamada de fundo também tenta de novo, e hook assíncrono pode não responder); `terminal_reason` que esta versão não conhece vai só ao diário (`claude_terminal_reason`); sucesso no diário em tipo próprio (`claude_hook_ok`) para não gastar o teto das falhas |
+| `system/notification` | `high`/`immediate`: nota única por `key` + texto; o resto, diário |
+| `model_refusal_fallback`, `model_refusal_no_fallback` | nota a cada ocorrência |
+| `result.terminal_reason` anormal | nota `Turno parado: …` e o mesmo texto no começo do detalhe da faixa de erro; fim normal e parada pela pessoa ficam de fora, e também o turno que bateu no limite de uso ou ficou sem login, que já têm aviso próprio. `blocking_limit` é o limite de **contexto** e `rapid_refill_breaker` a compactação automática em laço (lido no binário 2.1.316): o limite de uso chega como `api_error` com `api_error: "usage_limit_reached"` |
+
+Formatos lidos de um `claude -p` 2.1.316 real (fixtures em `crates/hangar-server/tests/fixtures/claude_events/`):
+`hook_name` é `Evento:matcher` ou só o evento; `exit 1` e `exit 2` chegam ambos como `outcome: "error"`,
+distintos pelo `exit_code`; hook `async` emite `hook_started` igual aos outros (não dá para separá-lo, e
+o `result` limpa o que ficar aberto); `UserPromptSubmit` emite os eventos antes do `init`; MCP com
+comando inexistente chega como `failed` sem `error`; o último `api_retry` é seguido de `result` com
+`subtype: "success"`, `is_error: true` e `terminal_reason: "api_error"`.
+
+"Por vida do processo" foi a escolha dele (02/11/2026) no lugar de "por conversa": o relançamento por
+ociosidade mostra a nota de novo. O motor também nasce quando o Rust reinicia e adota o processo vivo, e
+o `hydrate` repassa o `init` gravado; a nota já está na conversa, por isso o repasse só marca a chave.
+Limite: processo que subiu com o servidor fora não mostra a nota daquela vida. O diário é o log privado,
+com teto de 30 por sessão, geração e tipo. O motor conta o mesmo teto por tipo e para de pedir a gravação
+depois dele: cada pedido custa uma tarefa bloqueante e um redesenho, e com `--include-hook-events` há
+vários hooks por chamada de ferramenta.
+
+Fora desta fase, vistos no binário 2.1.316: `system/model_fallback` (troca de modelo por sobrecarga ou
+modelo ausente, a mesma família da recusa), `system/api_error` e `system/instruction_size_warning` vão
+só ao diário como `system/*`.
+
+## Avisos do Claude com terminal pelo transcript (02/11/2026)
+
+O usuário vetou ler a tela do terminal para isso ("ler da tela é sempre um caminho ruim"); o que não sai
+por transcript ou plugin ficou de fora. Plano: `docs/superpowers/plans/2026-11-02-claude-avisos-com-terminal.md`.
+
+| Aviso | Fonte no transcript | Nota |
+|---|---|---|
+| Hook que falha | anexo `hook_non_blocking_error` (`hookName`, `stderr` com o prefixo "Failed with non-blocking status code: ") | `hookfail:{uuid}` na primeira do turno; soma `hookfail-sum:{uuid que fechou}:{md5_8(hookName)}` "(N× neste turno)" |
+| Nova tentativa da API | `system/api_error` (`retryAttempt`, `maxRetries`, `error.formatted`), uma linha por tentativa em corrente | `retry:{uuid}` na tentativa 1; `retry-ok:{uuid}` na primeira `assistant` depois de mais de uma; terminou em `isApiErrorMessage` = sem fecho |
+| Recusa | `assistant` com `stop_reason: "refusal"` | `refusal:{uuid}` |
+
+- **Fim de turno:** `system/turn_duration`, que não aparece em turno interrompido; o prompt seguinte também
+  fecha, e o prompt que vem da fila com a sessão parada (anexo `queued_command`, sem linha `user`) também
+  abre; no meio do turno o mesmo anexo é a mensagem injetada no turno em curso e não abre outro. Resumo
+  da compactação (`isCompactSummary`, no meio do turno) e `/comando` local não são prompt. Leitura a partir
+  do meio do arquivo só monta nota depois do primeiro começo ou fim de turno visto (fila e recado não contam:
+  podem ser o meio do turno), e a nova tentativa só abre na tentativa 1: senão a 2ª falha viraria uma
+  "primeira" com outro id e o cliente veria duas. Leitura do byte 0 já vale (a falha do `SessionStart` vem
+  antes do primeiro prompt). A cauda ao vivo, a do aparelho que volta e a janela do `/history` são semeadas
+  desde o último `turn_duration` (até 4 MiB para trás), porque a janela não cobre um turno longo e o histórico
+  recarregado tem que mostrar as notas que o ao vivo já mostrou.
+- **Nota não é resposta:** `retry-ok:` e `refusal:` saem como `assistant_msg` depois da resposta real;
+  `committed_from_event` os ignora, senão a resposta gravada voltaria como prévia.
+- **Linha `cli` × `sdk-cli`:** o mesmo transcript pode ter os dois modos (conversa retomada no outro). Em
+  `-p` a CLI também grava hook e recusa; filtrar pelo provider não bastava.
+- **Quem liga:** `with_notices()` no `FileTail` e no `backfill`, e `merged_history_with_notices` só na rota
+  `/history` do chat. O resto (`merged_history`, `_capped`, `_window`, `message_tail`, push, loops,
+  `last_committed`, retomada, subagentes, `each_event`, busca, transferência, arquivo, lista, retorno da
+  filha ligada, ditado, leitura em voz) fica sem as notas: procuram a última resposta ou o texto da pessoa,
+  e uma nota `⚙️` viraria a resposta.
+- **Ficou de fora:** MCP ou plugin que não subiu, hook lento, notificação da CLI e o modelo de troca na
+  recusa: nem transcript nem evento de plugin no 2.1.316. O `reason` do `turn.complete` do plugin só tem
+  `aborted`, `refusal`, `error` e `answer` (lido no binário), sem o motivo da parada.
 
 ## Plugin reinstalado com a sessão aberta (28/10/2026)
 

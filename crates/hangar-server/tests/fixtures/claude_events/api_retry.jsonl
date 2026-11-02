@@ -1,0 +1,3 @@
+{"type": "system", "subtype": "api_retry", "attempt": 1, "max_retries": 2, "retry_delay_ms": 569, "error_status": 529, "error": "overloaded", "session_id": "00000000-0000-4000-8000-000000000001", "uuid": "00000000-0000-4000-8000-000000000022"}
+{"type": "system", "subtype": "api_retry", "attempt": 2, "max_retries": 2, "retry_delay_ms": 1025, "error_status": 529, "error": "overloaded", "session_id": "00000000-0000-4000-8000-000000000001", "uuid": "00000000-0000-4000-8000-000000000023"}
+{"type": "system", "subtype": "api_retry", "attempt": 1, "max_retries": 1, "retry_delay_ms": 510, "error_status": null, "error": "unknown", "session_id": "00000000-0000-4000-8000-000000000001", "uuid": "00000000-0000-4000-8000-000000000024"}
