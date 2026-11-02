@@ -968,6 +968,16 @@ fn notice_api_retry_of_an_idle_session_shows_no_label() {
     let mut engine = notice_engine();
     line(&mut engine,fixture("api_retry.jsonl").remove(0),11.0);
     assert!(!shown_label(&engine).contains("Nova tentativa"),"chamada de fundo: {}",shown_label(&engine));
+    line(&mut engine,json!({"type":"command_lifecycle","state":"started"}),12.0);
+    assert!(!shown_label(&engine).contains("Nova tentativa"),"o turno seguinte não herda: {}",shown_label(&engine));
+}
+
+#[test]
+fn notice_hook_started_while_idle_shows_no_label() {
+    let mut engine = notice_engine();
+    line(&mut engine,json!({"type":"system","subtype":"hook_started","hook_id":"n","hook_name":"Notification","hook_event":"Notification"}),10.0);
+    tick(&mut engine,14.0);
+    assert!(!shown_label(&engine).contains("Rodando hook"),"hook assíncrono sem resposta: {}",shown_label(&engine));
 }
 
 fn hook_notes(effects:&[Effect]) -> Vec<(String,Value)> {
@@ -981,11 +991,13 @@ fn tick(engine:&mut ClaudeEngine,seconds:f64) -> Vec<Effect> { engine.apply(Engi
 #[test]
 fn notice_hook_slow_label_after_three_seconds() {
     let hooks = fixture("hooks.jsonl");
-    let mut engine = notice_engine();
+    let mut engine = turn_engine();
     let effects = line(&mut engine,hooks[2].clone(),10.0);
     assert!(!shown_label(&engine).contains("Rodando hook"));
     assert!(!effects.iter().any(|effect|matches!(effect,Effect::StateChanged)),"hook que começou não muda a tela");
-    assert_eq!(engine.next_deadline(),Some(13.0));
+    // Com turno aberto o relógio do turno também tem prazo: o do hook se prova pelo rótulo antes e depois dos 3 s.
+    tick(&mut engine,12.9);
+    assert!(!shown_label(&engine).contains("Rodando hook"),"{}",shown_label(&engine));
     let effects = tick(&mut engine,13.1);
     assert!(effects.iter().any(|effect|matches!(effect,Effect::StateChanged)));
     assert!(shown_label(&engine).starts_with("Rodando hook PreToolUse:Bash…"),"{}",shown_label(&engine));
@@ -1053,8 +1065,9 @@ fn notice_hook_block_reaches_the_person_when_the_model_would_not_see_it() {
     let mut engine = turn_engine();
     let block = |name:&str,id:&str| json!({"type":"system","subtype":"hook_response","hook_id":id,"hook_name":name,
         "hook_event":name.split(':').next().unwrap(),"stderr":"prompt recusado pela regra","outcome":"error","exit_code":2});
-    assert_eq!(notes(&line(&mut engine,block("UserPromptSubmit","u"),10.0)),
-        vec!["Hook falhou — UserPromptSubmit: prompt recusado pela regra".to_owned()]);
+    assert_eq!(notes(&line(&mut engine,block("SessionStart:startup","u"),10.0)),
+        vec!["Hook falhou — SessionStart:startup: prompt recusado pela regra".to_owned()]);
+    assert!(notes(&line(&mut engine,block("UserPromptSubmit","b"),10.5)).is_empty(),"o prompt barrado já é bolha retida");
     assert!(notes(&line(&mut engine,block("PreToolUse:Bash","p"),11.0)).is_empty(),"o motivo vai ao modelo pelo tool_result");
     assert!(notes(&line(&mut engine,block("Stop","s"),12.0)).is_empty(),"o motivo vai ao modelo, que segue o turno");
 }
@@ -1098,7 +1111,7 @@ fn notice_hook_block_is_diary_only() {
 #[test]
 fn notice_hook_label_leaves_on_reattach() {
     let hooks = fixture("hooks.jsonl");
-    let mut engine = notice_engine();
+    let mut engine = turn_engine();
     line(&mut engine,hooks[2].clone(),10.0);
     tick(&mut engine,13.5);
     assert!(shown_label(&engine).starts_with("Rodando hook"));
@@ -1218,5 +1231,7 @@ fn notice_terminal_reason_in_error_strip() {
 
 #[test]
 fn notice_terminal_reason_unknown_value() {
-    assert_eq!(notes(&line(&mut notice_engine(),turn_end("xyz",false),11.0)),vec!["⚙️ Turno parado: xyz".to_owned()]);
+    let effects = line(&mut notice_engine(),turn_end("xyz",false),11.0);
+    assert!(notes(&effects).is_empty(),"motivo desconhecido não vira nota: {:?}",notes(&effects));
+    assert!(diary(&effects).contains(&"claude_terminal_reason".to_owned()));
 }

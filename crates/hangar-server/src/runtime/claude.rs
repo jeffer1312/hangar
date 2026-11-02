@@ -274,11 +274,12 @@ impl ClaudeEngine {
             else if self.in_progress || self.initializing { "working" } else { "idle" }.into();
         let mut label = self.label.clone();
         if self.initializing && !self.in_progress { label = Some("Iniciando sessão…".into()); }
-        if let Some(hook) = self.hooks_running.values().filter(|hook|hook.shown).min_by(|a,b|a.started.total_cmp(&b.started)) {
+        // Hook assíncrono começado com a sessão parada pode não responder: o rótulo ficaria preso até o próximo turno.
+        if let Some(hook) = self.hooks_running.values().filter(|hook|hook.shown && (self.in_progress || self.initializing))
+            .min_by(|a,b|a.started.total_cmp(&b.started)) {
             label = Some(format!("Rodando hook {}…",hook.name));
         }
-        // Chamada de fundo com a sessão parada também tenta de novo, e o sucesso dela não limpa o rótulo.
-        if let Some(retry) = self.retry_label.as_ref().filter(|_|self.in_progress) { label = Some(retry.clone()); }
+        if let Some(retry) = &self.retry_label { label = Some(retry.clone()); }
         if state.state == "working" {
             if let Some(start) = self.turn_start {
                 let seconds = (self.clock.monotonic_s - start).max(0.0) as u64;
@@ -1011,6 +1012,9 @@ impl ClaudeEngine {
                 }
                 let subtype = event["subtype"].as_str().unwrap_or("");
                 let mut stop_reason = event["terminal_reason"].as_str().and_then(|reason|terminal_reason_text(reason,&event));
+                if stop_reason.is_none() && event["terminal_reason"].as_str().is_some_and(|reason|!NORMAL_TERMINAL.contains(&reason)) {
+                    self.diary("claude_terminal_reason",||json!({"terminal_reason":event["terminal_reason"]}),effects);
+                }
                 // A CLI manda o nome do comando ("cost", "clear"), não um booleano.
                 let local = !event["local_command"].is_null() && event["local_command"] != false;
                 let failed = subtype != "error_during_execution" && (event["is_error"] == true || subtype.starts_with("error"));
@@ -1235,6 +1239,9 @@ impl ClaudeEngine {
                 self.diary("claude_api_retry",||event.clone(),effects);
                 let seconds = event["retry_delay_ms"].as_u64().unwrap_or(0).div_ceil(1000).max(1);
                 let why = event["error_status"].as_u64().map_or_else(||"sem resposta da API".to_owned(),|status|format!("erro {status}"));
+                // Chamada de fundo com a sessão parada também tenta de novo, e o sucesso dela não limpa o rótulo:
+                // guardado, apareceria no turno seguinte.
+                if !self.in_progress { return; }
                 self.retry_label = Some(format!("Nova tentativa {} de {} em {seconds} s · {why}",
                     event["attempt"].as_u64().unwrap_or(1),event["max_retries"].as_u64().unwrap_or(1)));
                 self.changed(effects,false);
@@ -1293,14 +1300,12 @@ impl ClaudeEngine {
         let hook = event["hook_id"].as_str().and_then(|id|self.hooks_running.remove(id));
         if hook.as_ref().is_some_and(|hook|hook.shown) { self.changed(effects,false); }
         let name = event["hook_name"].as_str().map(str::to_owned).or(hook.map(|hook|hook.name)).unwrap_or_else(||"hook".into());
-        // `exit 2` é o hook decidindo (bloqueio). Nos eventos de ferramenta e de parada o motivo vai ao modelo; nos
-        // outros a CLI o mostraria só à pessoa, e sem terminal ele sumiria.
-        let to_model = ["PreToolUse","PostToolUse","Stop","SubagentStop"].contains(&name.split(':').next().unwrap_or(""));
-        if event["outcome"] != "error" || (event["exit_code"].as_i64() == Some(2) && to_model) { return; }
-        let reason = ["stderr","output"].iter().filter_map(|field|event[*field].as_str())
-            .flat_map(str::lines).map(str::trim).find(|row|!row.is_empty()).map(|row|clip(row,300))
-            .or_else(||event["exit_code"].as_i64().map(|code|format!("exit {code}")))
-            .unwrap_or_else(||"sem mensagem de erro".into());
+        // `exit 2` é o hook decidindo (bloqueio). Nos eventos de ferramenta e de parada o motivo vai ao modelo, e o
+        // prompt barrado já aparece como bolha retida; nos outros a CLI o mostraria só à pessoa, e sem terminal sumiria.
+        let shown = ["PreToolUse","PostToolUse","Stop","SubagentStop","UserPromptSubmit"].contains(&name.split(':').next().unwrap_or(""));
+        if event["outcome"] != "error" || (event["exit_code"].as_i64() == Some(2) && shown) { return; }
+        let reason = crate::transcript::hook_failure_reason(["stderr","output"].iter().filter_map(|field|event[*field].as_str()),
+            event["exit_code"].as_i64());
         // Por nome, não por motivo: o `stderr` muda a cada chamada (arquivo, linha) e viraria uma nota por ferramenta.
         if let Some(streak) = self.hook_streaks.get_mut(&name) { streak.1 += 1; return; }
         let detail = format!("{name}: {reason}");
@@ -1342,8 +1347,10 @@ impl ClaudeEngine {
     }
 
     /// Aviso que vale uma vez por vida do processo: o relançamento mostra de novo, a adoção pelo Rust não.
-    fn notice_once(&mut self,key:&str,text:String,effects:&mut Vec<Effect>) {
-        if self.unknown.insert(format!("notice:{key}")) && !self.replaying { self.policy("local_output",json!({"text":text}),effects); }
+    fn notice_once(&mut self,key:&str,text:String,effects:&mut Vec<Effect>) -> bool {
+        let new = self.unknown.insert(format!("notice:{key}"));
+        if new && !self.replaying { self.policy("local_output",json!({"text":text}),effects); }
+        new
     }
 
     /// MCP e plugin que não subiram, como o terminal avisa na abertura.
@@ -1370,11 +1377,11 @@ impl ClaudeEngine {
             lines.push(format!("O plugin `{}` não carregou: {}",plugin["plugin"].as_str().unwrap_or("?"),clip(plugin["message"].as_str().unwrap_or(""),300)));
         }
         if lines.is_empty() { return; }
-        if !self.replaying {
+        let text = format!("⚙️ {}",lines.join("\n"));
+        // O `init` chega a cada turno: o diário só registra o problema novo.
+        if self.notice_once(&text.clone(),text,effects) && !self.replaying {
             self.diary("claude_init_problem",||json!({"mcp_servers":init["mcp_servers"],"plugin_errors":init["plugin_errors"]}),effects);
         }
-        let text = format!("⚙️ {}",lines.join("\n"));
-        self.notice_once(&text.clone(),text,effects);
     }
 
     fn on_stream(&mut self,event:&Value,effects:&mut Vec<Effect>) {
@@ -1522,9 +1529,11 @@ impl ClaudeEngine {
 }
 
 /// Por que o turno parou, quando não foi o fim normal nem a pessoa parando.
+const NORMAL_TERMINAL:[&str;5] = ["completed","aborted_streaming","aborted_tools","background_requested","tool_deferred"];
+
 fn terminal_reason_text(reason:&str,result:&Value) -> Option<String> {
     Some(match reason {
-        "completed" | "aborted_streaming" | "aborted_tools" | "background_requested" | "tool_deferred" => return None,
+        _ if NORMAL_TERMINAL.contains(&reason) => return None,
         "api_error" => return Some(result["api_error_status"].as_u64().map_or_else(||"erro da API".into(),|status|format!("erro da API ({status})"))),
         "blocking_limit" => "a conversa chegou ao limite do contexto",
         "rapid_refill_breaker" => "a compactação automática entrou em laço",
@@ -1538,7 +1547,8 @@ fn terminal_reason_text(reason:&str,result:&Value) -> Option<String> {
         "structured_output_retry_exhausted" => "a resposta estruturada falhou várias vezes",
         "tool_deferred_unavailable" => "a ferramenta adiada não está disponível",
         "turn_setup_failed" => "o turno não conseguiu começar",
-        other => other,
+        // Motivo novo de uma CLI futura pode ser normal: viraria nota em todo turno. Fica só no diário.
+        _ => return None,
     }.to_owned())
 }
 

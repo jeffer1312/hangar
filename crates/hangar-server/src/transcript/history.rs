@@ -5,7 +5,7 @@
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::io::{self, BufRead, BufReader, Seek, SeekFrom};
+use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::time::UNIX_EPOCH;
@@ -206,6 +206,65 @@ pub(crate) fn each_event(provider: Provider, jsonl: &Path, mut visit: impl FnMut
     Ok(())
 }
 
+/// Até onde se volta procurando o começo do turno para as notas; turno maior que isso fica sem nota.
+const TURN_SEED_MAX: u64 = 4 * 1024 * 1024;
+
+/// Começo da linha do último `turn_duration` antes de `before`; sem ele, o começo do arquivo (se coube) ou o
+/// próprio `before`. As notas só contam a partir de um começo de turno, e a janela da cauda não cobre um turno longo.
+/// Lê de trás para frente em blocos que crescem; achar o texto num resultado de ferramenta só faz semear mais.
+pub(crate) fn turn_seed_start(path: &Path, before: u64) -> u64 {
+    let Ok(mut f) = File::open(path) else { return before };
+    let mut window = 64 * 1024;
+    loop {
+        let from = before.saturating_sub(window);
+        let mut buf = Vec::new();
+        if f.seek(SeekFrom::Start(from)).is_err() || (&mut f).take(before - from).read_to_end(&mut buf).is_err() {
+            return before;
+        }
+        if let Some(hit) = memchr::memmem::rfind(&buf, b"\"turn_duration\"") {
+            match buf[..hit].iter().rposition(|&b| b == b'\n') {
+                Some(nl) => return from + nl as u64 + 1,
+                None if from == 0 => return 0,
+                // A linha começa antes do bloco: cresce, nunca devolve o meio dela.
+                None => {}
+            }
+        } else if from == 0 {
+            return 0;
+        }
+        if window >= TURN_SEED_MAX {
+            return before;
+        }
+        window = (window * 4).min(TURN_SEED_MAX);
+    }
+}
+
+/// Passa `[from, to)` só pelo fold das notas: a janela do `/history` que começa no meio do turno conta as falhas
+/// desde o começo dele, como a cauda ao vivo. O filtro de reescrita é à parte: não muda o que a janela mostra.
+fn seed_notices(path: &Path, fold: &mut claude::NoticeFold, from: u64, to: u64) {
+    if from == 0 {
+        fold.file_start();
+    }
+    let Ok(file) = File::open(path) else { return };
+    let mut rd = BufReader::new(file);
+    if from >= to || rd.seek(SeekFrom::Start(from)).is_err() {
+        return;
+    }
+    let mut rewrite = claude::RewriteFilter::default();
+    let (mut at, mut raw) = (from, Vec::new());
+    while at < to {
+        raw.clear();
+        match rd.read_until(b'\n', &mut raw) {
+            Ok(n) if n > 0 => at += n as u64,
+            _ => return,
+        }
+        if let Some(Value::Object(obj)) = pyjson::loads_lossless(&String::from_utf8_lossy(&raw)) {
+            if rewrite.keep(&obj) {
+                fold.feed(&obj, &mut Vec::new());
+            }
+        }
+    }
+}
+
 /// `_tail_offset` (pqueue.py:961): primeira linha completa dentro dos últimos `window` bytes.
 fn tail_offset(path: &Path, window: u64) -> u64 {
     let read = || -> io::Result<u64> {
@@ -268,6 +327,9 @@ fn parse_from(req: &HistoryRequest, offset: u64, start_ts: f64, notices: bool) -
     // Reescrita do `--resume`: só o Claude regrava o jsonl.
     let mut rewrite = matches!(req.provider, Provider::Claude | Provider::ClaudeHeadless).then(claude::RewriteFilter::default);
     let mut notices = (notices && rewrite.is_some()).then(|| claude::NoticeFold::new(offset == 0));
+    if let Some(fold) = notices.as_mut().filter(|_| offset > 0) {
+        seed_notices(&req.jsonl, fold, turn_seed_start(&req.jsonl, offset), offset);
+    }
     let mut held_ids = HashSet::new();
     let mut raw = Vec::new();
     let mut i = 0u64;

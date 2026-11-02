@@ -184,7 +184,15 @@ fn terminal_long_turn_still_sums_in_the_tail() {
     }
     lines.extend([with_uuid(failure,"h2"),with_uuid(end,"d1")]);
     let sum = ("hookfail-sum:d1:5182a3be".to_owned(),"hook_failed".to_owned(),Some("PostToolUse:Bash: falhou-de-proposito (2× neste turno)".to_owned()));
-    assert_eq!(backfill_notes(&lines,None),vec![sum]);
+    assert_eq!(backfill_notes(&lines,None),vec![sum.clone()]);
+    // O `/history` com janela começa no meio do turno e conta igual.
+    let text:String = lines.iter().map(|row|format!("{row}\n")).collect();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.jsonl");
+    std::fs::write(&path,&text).unwrap();
+    let full = notes(merged_history_with_notices(&request(path.clone(),None,TAIL_WINDOW)).unwrap());
+    let window = notes(merged_history_with_notices(&request(path,Some(5),2048)).unwrap());
+    assert!(window.contains(&sum) && window.iter().all(|note|full.contains(note)),"{window:?} × {full:?}");
 }
 
 #[test]

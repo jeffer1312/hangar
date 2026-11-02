@@ -274,11 +274,7 @@ impl NoticeFold {
             streak.1 += 1;
             return;
         }
-        let stderr = att.get("stderr").and_then(Value::as_str).unwrap_or("");
-        let reason = stderr.strip_prefix(HOOK_STDERR_PREFIX).unwrap_or(stderr).lines().map(str::trim)
-            .find(|row| !row.is_empty()).map(|row| row.chars().take(300).collect::<String>())
-            .or_else(|| att.get("exitCode").and_then(Value::as_i64).map(|code| format!("exit {code}")))
-            .unwrap_or_else(|| "sem mensagem de erro".into());
+        let reason = hook_failure_reason(att.get("stderr").and_then(Value::as_str), att.get("exitCode").and_then(Value::as_i64));
         let detail = format!("{name}: {reason}");
         events.push(hook_note(format!("hookfail:{uid}"), detail.clone(), at));
         self.hooks.insert(name, (detail, 1));
@@ -304,6 +300,15 @@ fn is_prompt(obj: &Map<String, Value>) -> bool {
                 .is_some_and(|b| !is_command_meta(b.get("text").and_then(Value::as_str).unwrap_or(""))),
         _ => false,
     }
+}
+
+/// Motivo da falha de hook, o mesmo com e sem terminal: primeira linha com texto, cortada; senão o código de saída.
+pub(crate) fn hook_failure_reason<'a>(texts: impl IntoIterator<Item = &'a str>, exit: Option<i64>) -> String {
+    texts.into_iter().map(|text| text.strip_prefix(HOOK_STDERR_PREFIX).unwrap_or(text)).flat_map(str::lines).map(str::trim)
+        .find(|row| !row.is_empty())
+        .map(|row| match row.char_indices().nth(300) { Some((at, _)) => format!("{}…", &row[..at]), None => row.to_owned() })
+        .or_else(|| exit.map(|code| format!("exit {code}")))
+        .unwrap_or_else(|| "sem mensagem de erro".into())
 }
 
 /// Nota de aviso da CLI no formato de resposta: não é a resposta do modelo (prévia, última resposta).

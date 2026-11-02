@@ -17,7 +17,8 @@ use serde_json::Value;
 
 pub use history::{history_etag, merged_history, merged_history_with_notices, HistoryRequest, InternalInfo, TAIL_WINDOW};
 pub use py::ts_of_iso;
-pub(crate) use claude::{is_cli_note, is_command_meta, strip_meta_blocks, RewriteFilter};
+pub(crate) use claude::{hook_failure_reason, is_cli_note, is_command_meta, strip_meta_blocks, RewriteFilter};
+pub(crate) use history::turn_seed_start;
 pub(crate) use codex::is_context_wrapper;
 
 /// O histórico transferido já validou ramo e fronteira; não passa pelo filtro temporal do stream.
