@@ -3,6 +3,47 @@ import { custoDesconhecido, isFree, type ComboLocal, type DimBucket, type Relato
 export const dimensions = ['provider', 'source', 'project', 'model', 'servidor'] as const;
 export type Dimension = typeof dimensions[number];
 export type CostFilter = Partial<Record<Dimension, string[]>> & { sub?: boolean };
+// À mão, na regra do `tok()` do nativo: o Intl do Hermes no iOS ignora `notation: 'compact'`.
+// Os cortes olham o valor já arredondado ("999,6 mil" sobe para "1,0 Mi").
+export function compactTokens(value: number, locale: string): string {
+  const en = locale.startsWith('en');
+  const fixed = (n: number, digits: number) => n.toLocaleString(locale, { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  if (value >= 999.95e6) return `${fixed(value / 1e9, 2)} ${en ? 'B' : 'Bi'}`;
+  if (value >= 999.5e3) return `${fixed(value / 1e6, 1)} ${en ? 'M' : 'Mi'}`;
+  if (value >= 1e3) return `${fixed(value / 1e3, 0)}${en ? 'k' : ' mil'}`;
+  return fixed(value, 0);
+}
+// Grandeza de dinheiro na regra do `money()` do nativo: uma casa, sem ",0" sobrando.
+export function compactMoney(value: number, locale: string): string {
+  const en = locale.startsWith('en');
+  const abs = Math.abs(value);
+  const [size, unit] = abs >= 1e9 ? [1e9, en ? 'B' : ' bi'] : abs >= 1e6 ? [1e6, en ? 'M' : ' mi'] : abs >= 1e3 ? [1e3, en ? 'K' : ' mil'] : [1, ''];
+  return `${(value / size).toLocaleString(locale, { maximumFractionDigits: 1 })}${unit}`;
+}
+const dayKey = (date: Date) => date.toISOString().slice(0, 10);
+// Projeção = gasto do mês até hoje + média dos últimos 7 dias × dias que faltam (dia sem dado vale zero).
+export function monthForecast(days: { key: string; cost: number }[], today: string, coversPrevMonth: boolean) {
+  const month = today.slice(0, 7);
+  const byKey = new Map(days.map((d) => [d.key, d.cost]));
+  if (!days.some((d) => d.key.startsWith(month) && d.key <= today)) return null;
+  const now = new Date(`${today}T12:00:00Z`);
+  const day = now.getUTCDate();
+  const daysInMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)).getUTCDate();
+  const cumulative: number[] = [];
+  for (let d = 1; d <= day; d++) cumulative.push((cumulative.at(-1) ?? 0) + (byKey.get(`${month}-${String(d).padStart(2, '0')}`) ?? 0));
+  let week = 0;
+  for (let i = 0; i < 7; i++) week += byKey.get(dayKey(new Date(now.getTime() - i * 86_400_000))) ?? 0;
+  const mtd = cumulative.at(-1)!;
+  const prev = dayKey(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1))).slice(0, 7);
+  const lastMonth = coversPrevMonth ? days.filter((d) => d.key.startsWith(prev)).reduce((sum, d) => sum + d.cost, 0) : null;
+  return { mtd, projected: mtd + week / 7 * (daysInMonth - day), daysInMonth, cumulative, lastMonth };
+}
+export function outlierDays(values: { key: string; value: number }[]): string[] {
+  if (values.length < 7) return [];
+  const mean = values.reduce((sum, v) => sum + v.value, 0) / values.length;
+  const sd = Math.sqrt(values.reduce((sum, v) => sum + (v.value - mean) ** 2, 0) / values.length);
+  return sd > 0 ? values.filter((v) => v.value > mean + 2 * sd).map((v) => v.key) : [];
+}
 export const rawTokens = (b: { input: number; output: number; cache_write: number; cache_read: number }) => b.input + b.output + b.cache_write + b.cache_read;
 const fields = ['input', 'output', 'cache_write', 'cache_read', 'cost', 'cost_input', 'cost_output', 'cost_cache_write', 'cost_cache_read', 'cache_write_1h', 'regravado', 'custo_regravado'] as const;
 const zero = (key: string): DimBucket => ({ key, sessions: 0, input: 0, output: 0, cache_write: 0, cache_read: 0, cost: 0, cost_input: 0, cost_output: 0, cost_cache_write: 0, cost_cache_read: 0 });

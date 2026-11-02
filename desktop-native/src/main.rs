@@ -53,7 +53,8 @@ gpui_kit::assets::icon_assets!(ExtraIcons, [ArrowUp, GitBranch, RotateCcwClock, 
     RotateCcw, CornerDownRight, MessageSquare, Square, Sparkles, CircleAlert, CircleCheck, TriangleAlert, Link, Wifi,
     CircleStop, Upload, Workflow, CloudDownload, ArrowDownToLine, ArrowUpFromLine, GitFork, Trash, MessageCircleQuestionMark, Brain,
     ListOrdered, CornerUpRight, TextQuote, MousePointerClick, Code, Hourglass,
-    CreditCard, House, Laptop, Briefcase, Cloud, KeyRound, Wallet, UserRound, CircleUser, Contact, BadgeCheck, AtSign, Ticket, IdCard]);
+    CreditCard, House, Laptop, Briefcase, Cloud, KeyRound, Wallet, UserRound, CircleUser, Contact, BadgeCheck, AtSign, Ticket, IdCard,
+    Recycle, ChartLine, PiggyBank, Gauge, Database, Coins, Boxes, TrendingUp, TrendingDown]);
 
 pub const HANGAR_MARK: &str = "brand/hangar-mark.svg";
 pub const GROUP_GLYPH: &str = "brand/group-glyph.svg";

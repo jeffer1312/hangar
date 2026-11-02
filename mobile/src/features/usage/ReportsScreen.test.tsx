@@ -35,7 +35,7 @@ vi.mock('react-native', async (original) => {
 });
 vi.mock('react-native-svg', () => {
   const tag = (name: string) => ({ children, ...props }: Record<string, unknown>) => React.createElement(name, props, children as ReactNode);
-  return { default: tag('svg'), Rect: tag('rect'), Line: tag('line'), Polyline: tag('polyline'), Circle: tag('circle'), Text: tag('text') };
+  return { default: tag('svg'), Rect: tag('rect'), Line: tag('line'), Polyline: tag('polyline'), Polygon: tag('polygon'), Path: tag('path'), Circle: tag('circle'), Text: tag('text'), Defs: tag('defs'), ClipPath: tag('clipPath'), G: tag('g'), LinearGradient: tag('linearGradient'), Stop: tag('stop') };
 });
 import CostsScreen from '../../../app/costs';
 import StatsScreen from '../../../app/stats';
@@ -247,18 +247,18 @@ it('barras de custos preservam rótulo e valores grandes em linhas próprias', a
   useServers.setState({ servers: [a] });
   net.costs.mockImplementation((_server: Server, period: string) => Promise.resolve({ ...costs(period), combos: [{ ...combo, input: 786_211_945, cost: 2_730.88, cost_input: 2_730.88 }] }));
   await act(async () => root.render(React.createElement(CostsScreen)));
-  const bar = node.querySelector(`[aria-label^="${m.custos_input_sem_cache()}: 786.211.945"]`)!;
+  const bar = node.querySelector(`[aria-label^="${m.custos_input_sem_cache()}: 786,2 Mi"]`)!;
   const label = [...bar.querySelectorAll('span')].find((span) => span.textContent === m.custos_input_sem_cache())!;
-  const detail = [...bar.querySelectorAll('span')].find((span) => span.textContent?.startsWith('786.211.945 · US$ 2.730,88'))!;
+  const detail = [...bar.querySelectorAll('span')].find((span) => span.textContent?.startsWith('786,2 Mi · US$ 2.730,88'))!;
   expect(detail.parentElement!.style.flexDirection).not.toBe('row');
   expect(label.parentElement).toBe(detail.parentElement);
   expect(label.parentElement!.style.flex).not.toBe('1');
-  expect(bar.getAttribute('aria-label')).toContain(`${m.custos_input_sem_cache()}: 786.211.945 · US$ 2.730,88`);
+  expect(bar.getAttribute('aria-label')).toContain(`${m.custos_input_sem_cache()}: 786,2 Mi · US$ 2.730,88`);
 });
 
 it('custos sequenciais preservam oito indicadores e análises com controles compactos', async () => {
   await act(async () => root.render(React.createElement(CostsScreen)));
-  const headings = [m.custos_periodo_30d(), m.mobile_costs_filters(), m.custos_todas_fontes(), m.custos_custo_periodo(), m.custos_tokens_novos(), m.custos_tokens_processados(), m.custos_cache_na_entrada(), m.custos_economia_cache(), m.custos_custo_por_milhao(), m.custos_cache_perdido(), m.custos_cache_1h(), m.custos_uso_por_dia(), m.custos_para_onde_dolar(), m.custos_o_que_cache(), m.custos_por_provedor(), m.custos_por_fonte(), m.custos_por_maquina(), m.uso_graf_areas(), m.custos_por_projeto(), m.custos_sessoes_caras(), m.custos_por_modelo(), m.lista_comparar(), m.custos_como_calculamos()];
+  const headings = [m.custos_periodo_30d(), m.mobile_costs_filters(), m.custos_todas_fontes(), m.custos_custo_periodo(), m.custos_tokens_novos(), m.custos_tokens_processados(), m.custos_cache_na_entrada(), m.custos_economia_cache(), m.custos_custo_por_milhao(), m.custos_cache_perdido(), m.custos_uso_por_dia(), m.custos_para_onde_dolar(), m.custos_o_que_cache(), m.custos_cache_1h(), m.custos_por_provedor(), m.custos_por_fonte(), m.custos_por_maquina(), m.uso_graf_areas(), m.custos_por_projeto(), m.custos_sessoes_caras(), m.custos_por_modelo(), m.lista_comparar(), m.custos_como_calculamos()];
   const text = node.textContent!;
   let previous = -1;
   for (const label of headings) {
@@ -334,8 +334,8 @@ it('custos públicos têm cartões honestos, seções sequenciais, comparação,
 });
 
 it.each([
-  ['pt', '311,8 mi', 'US$ 2,7 mil', 'R$ 13,7 mil'],
-  ['en', '311.8M', 'US$ 2.7K', 'R$ 13.7K'],
+  ['pt', '311,8 Mi', 'US$ 2,7 mil', 'R$ 13,7 mil'],
+  ['en', '311.8 M', 'US$ 2.7K', 'R$ 13.7K'],
 ] as const)('gráfico compacta eixo e datas sem perder moeda ou valores exatos em %s', async (locale, tokenAxis, usdAxis, brlAxis) => {
   configureLocale({ getLocale: () => locale }); overwriteGetLocale(() => locale);
   useServers.setState({ servers: [a] });
@@ -559,8 +559,8 @@ it('custos composição conserva custos e percentuais, economia e áreas ordenad
   expect(composition?.getAttribute('aria-label')).toContain('60%');
   expect([...composition!.children].map((part) => (part as HTMLElement).style.width)).toEqual(['20%', '60%', '10%', '10%']);
   const cache = [...node.querySelectorAll('span')].find((span) => span.textContent === m.custos_o_que_cache())?.parentElement;
-  expect(cache?.textContent).toContain(`${m.custos_se_nada_cache()}: US$ 20,00`);
-  expect(cache?.textContent).toContain(`${m.custos_economizado()}: US$ 10,00`);
+  expect(cache?.textContent).toContain(`${m.custos_se_nada_cache()}US$ 20,00`);
+  expect(cache?.textContent).toContain(`${m.custos_economizou()}US$ 10,00`);
   expect(cache?.textContent).toContain('27,8%');
   const areas = [...node.querySelectorAll('span')].find((span) => span.textContent === m.uso_graf_areas())?.parentElement;
   const areaLabels = [...areas!.querySelectorAll('[aria-label]')].map((row) => row.getAttribute('aria-label')).filter((label) => /^(front|back|conversa):/.test(label ?? ''));
@@ -725,7 +725,7 @@ it('custos listas expandem projetos e sessões e modelos conservam todos os camp
   expect(sessions.textContent).not.toContain('/session-30');
   const models = section(m.custos_por_modelo());
   for (const label of [m.custos_col_entrada(), m.custos_output_total(), m.custos_tipo_cache_lido(), m.custos_tarifa_in_out(), m.custos_origem(), m.custos_col_pct_conta(), m.custos_preco_parcial(), m.custos_cache_estimado()]) expect(models.textContent).toContain(label);
-  expect(models.textContent).toContain('2.240 / 1.400');
+  expect(models.textContent).toContain('2 mil / 1 mil');
   expect(models.textContent).toContain('snapshot');
   expect(models.textContent).toContain(`${m.custos_tipo_cache_escrito()}: US$ 1,25`);
   expect(models.textContent).toContain(`${m.custos_tipo_cache_lido()}: US$ 0,10`);

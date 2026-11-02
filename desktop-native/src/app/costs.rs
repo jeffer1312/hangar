@@ -9,6 +9,7 @@ use super::device::Remote;
 use super::settings::segments;
 use crate::appearance::{self, Currency};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
+use gpui_kit::component::progress::ProgressCircle;
 use serde::Deserialize;
 
 /// Quantas vezes a página repergunta enquanto o servidor ainda lê o histórico (202 `aquecendo`), a cada 3 s: ~5 min.
@@ -77,6 +78,39 @@ fn pct(n: f64, total: f64) -> String { if total > 0. { format!("{}%", dec(n / to
 
 /// Rótulo do dia no eixo: "26/09".
 fn day_label(key: &str) -> String { if key.len() >= 10 { format!("{}/{}", &key[8..10], &key[5..7]) } else { key.to_owned() } }
+
+/// Previsão do mês corrente, a mesma regra do `monthForecast` do Expo.
+#[derive(Debug, PartialEq)]
+struct Forecast { mtd: f64, projected: f64, days_in_month: u32, cumulative: Vec<f64>, last_month: Option<f64> }
+
+/// Gasto do mês até hoje mais a média dos últimos 7 dias (dia sem dado conta zero) vezes os dias que faltam. O mês
+/// passado só entra quando o período carregado o cobre inteiro: parte dele pareceria um mês barato.
+fn month_forecast(days: &[(String, f64)], today: chrono::NaiveDate, last_month_covered: bool) -> Option<Forecast> {
+    use chrono::Datelike;
+    let key = |d: chrono::NaiveDate| d.format("%Y-%m-%d").to_string();
+    let mut by_day: HashMap<String, f64> = HashMap::new();
+    for (k, v) in days { *by_day.entry(k.clone()).or_default() += v; }
+    let cost = |d: chrono::NaiveDate| by_day.get(&key(d)).copied().unwrap_or(0.);
+    let first = today.with_day(1)?;
+    let (from, to) = (key(first), key(today));
+    if !days.iter().any(|(k, _)| *k >= from && *k <= to) { return None; }
+    let mut acc = 0.;
+    let cumulative: Vec<f64> = first.iter_days().take_while(|d| *d <= today).map(|d| { acc += cost(d); acc }).collect();
+    let week = (0..7).map(|i| cost(today - chrono::Duration::days(i))).sum::<f64>() / 7.;
+    let next = if today.month() == 12 { chrono::NaiveDate::from_ymd_opt(today.year() + 1, 1, 1) } else { first.with_month(today.month() + 1) }?;
+    let days_in_month = (next - first).num_days() as u32;
+    let previous = (first - chrono::Duration::days(1)).with_day(1)?;
+    let last_month = last_month_covered.then(|| previous.iter_days().take_while(|d| *d < first).map(cost).sum());
+    Some(Forecast { mtd: acc, projected: acc + week * (days_in_month - today.day()) as f64, days_in_month, cumulative, last_month })
+}
+
+/// Dias acima da média mais dois desvios; com menos de 7 dias não há curva para fugir dela (o `outlierDays` do Expo).
+fn outliers(values: &[f64]) -> Vec<bool> {
+    if values.len() < 7 { return vec![false; values.len()]; }
+    let mean = values.iter().sum::<f64>() / values.len() as f64;
+    let sd = (values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / values.len() as f64).sqrt();
+    values.iter().map(|v| sd > 0. && *v > mean + 2. * sd).collect()
+}
 
 /// A paleta de gráfico do web (`--chart-1..4` do `app.css`), no tom do tema da tela; a 1 é o destaque.
 pub(super) fn chart(slot: usize) -> Hsla {
@@ -373,7 +407,7 @@ impl Partial {
     }
     pub(super) fn is_empty(&self) -> bool { self.failed.is_empty() && self.mismatched.is_empty() }
     pub(super) fn text(&self) -> String {
-        let mut text = format!("⚠ {}", web("custos_total_parcial"));
+        let mut text = web("custos_total_parcial");
         for (names, one, many) in [(&self.failed, "custos_servidor_nao_respondeu_1", "custos_servidor_nao_respondeu"),
             (&self.mismatched, "custos_fora_periodo_1", "custos_fora_periodo")] {
             if names.is_empty() { continue; }
@@ -405,8 +439,11 @@ pub(super) fn warming_note(w: &Warming) -> Div {
 }
 
 pub(super) fn partial_note(id: &'static str, partial: &Partial, retry: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Div {
-    note_box(partial.text(), theme::warning()).child(div().mt(px(6.)).child(Button::new(id).outline().xsmall()
-        .label(web("config_server_tentar_de_novo")).on_click(retry)))
+    div().px(px(14.)).py(px(10.)).rounded(px(10.)).border_1().border_color(theme::warning().alpha(0.35)).bg(theme::warning().alpha(0.1))
+        .flex().items_center().gap(px(10.)).text_size(px(13.)).text_color(theme::warning())
+        .child(chrome::small_icon(IconName::TriangleAlert, 16., theme::warning()))
+        .child(div().flex_1().min_w_0().whitespace_normal().child(partial.text()))
+        .child(Button::new(id).outline().xsmall().label(web("config_server_tentar_de_novo")).on_click(retry))
 }
 
 /// Ganchos de uma leitura por máquina: se o pedido ainda vale, o progresso da primeira leitura e a resposta.
@@ -508,6 +545,23 @@ impl Kind {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum Metric { #[default] Tokens, Cost }
+
+/// O que empilha cada barra do gasto por dia. Sem detalhamento só o tipo de token existe.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Group { #[default] Kind, Source, Model, Machine }
+
+impl Group {
+    const ALL: [Group; 4] = [Group::Kind, Group::Source, Group::Model, Group::Machine];
+    fn label(self) -> String {
+        web(match self { Group::Kind => "custos_grupo_tipo", Group::Source => "custos_grupo_cli", Group::Model => "custos_grupo_modelo",
+            Group::Machine => "custos_grupo_maquina" })
+    }
+    fn dim(self) -> Option<Dim> { match self { Group::Kind => None, Group::Source => Some(Dim::Source), Group::Model => Some(Dim::Model), Group::Machine => Some(Dim::Machine) } }
+    fn id(self) -> &'static str { match self { Group::Kind => "kind", Group::Source => "source", Group::Model => "model", Group::Machine => "machine" } }
+}
+
+/// Camada que junta o que passou das quatro maiores de um agrupamento.
+const OTHERS: &str = "__outros";
 
 /// Recorte cruzado: cada dimensão é uma lista (vazia = todas) e o subagente tem três estados.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -621,8 +675,11 @@ pub(super) struct Costs {
     show_machines: bool,
     filter: Filter,
     daily: Metric,
+    group: Group,
     layers_off: HashSet<String>,
-    layers_mode: &'static str,
+    layers_mode: String,
+    /// Coluna e sentido da tabela de modelos (`true` = crescente); `None` é a ordem por custo.
+    model_sort: Option<(usize, bool)>,
     hover_day: Option<String>,
     /// Projetos tirados da lista (continuam somando); lidos do disco na primeira abertura.
     hidden: Option<HashSet<String>>,
@@ -857,6 +914,9 @@ impl Hangar {
 
     /// Outra conexão: as conexões das máquinas mudaram. Com a página aberta, relê.
     pub(super) fn costs_reconnected(&mut self, cx: &mut Context<Self>) {
+        // Só para ver e fotografar no build de debug: HANGAR_NATIVE_OPEN=costs abre a página assim que o servidor conecta.
+        #[cfg(debug_assertions)]
+        if self.costs.view.is_none() && std::env::var("HANGAR_NATIVE_OPEN").as_deref() == Ok("costs") { self.costs.view = Some(View::Costs); }
         let (view, hidden, off) = (self.costs.view, self.costs.hidden.take(), self.costs.off.take());
         self.costs = Costs { view, hidden, off, ..Default::default() };
         self.usage_stats = Default::default();
@@ -998,7 +1058,7 @@ impl Hangar {
 
     fn clear_cut(&mut self, layers_too: bool, cx: &mut Context<Self>) {
         self.costs.filter = Filter::default();
-        if layers_too { self.costs.layers_mode = ""; }
+        if layers_too { self.costs.layers_mode.clear(); }
         self.refresh_areas(cx);
         cx.notify();
     }
@@ -1046,6 +1106,17 @@ impl Hangar {
                 .on_click(cx.listener(|this, _, _, cx| this.load_costs(true, cx))).into_any_element(),
         ], cx);
         let body = self.render_costs_body(window, cx);
+        // Só para fotografar no build de debug: HANGAR_NATIVE_COSTS_SCROLL=<px> rola a página uma vez, quando ela já for alta o bastante.
+        #[cfg(debug_assertions)]
+        {
+            static SCROLLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            if let Some(y) = std::env::var("HANGAR_NATIVE_COSTS_SCROLL").ok().and_then(|v| v.parse::<f32>().ok()) {
+                if !SCROLLED.load(std::sync::atomic::Ordering::Relaxed) && f32::from(self.costs.scroll.max_offset().y) >= y && !self.costs.report.loading {
+                    SCROLLED.store(true, std::sync::atomic::Ordering::Relaxed);
+                    self.costs.scroll.set_offset(point(px(0.), px(-y)));
+                } else if !SCROLLED.load(std::sync::atomic::Ordering::Relaxed) { window.request_animation_frame(); }
+            }
+        }
         let scroll = div().id("costs-scroll").flex_1().min_h_0().overflow_y_scroll().track_scroll(&self.costs.scroll)
             .child(div().w_full().flex().justify_center()
                 .child(div().w_full().max_w(px(1120.)).px(px(24.)).pt(px(20.)).pb(px(48.)).flex().flex_col().gap(px(16.)).child(body)));
@@ -1092,9 +1163,10 @@ impl Hangar {
         }
         page.child(self.render_source_tabs(&report, &d, cx))
             .children(self.unknown_note(&report, &d))
-            .child(self.render_kpis(&report, &d, rate))
+            .child(self.render_hero(&report, &d, rate, cx))
+            .child(self.render_kpis(&report, &d, rate, cx))
             .child(self.render_daily(&report, &d, rate, window, cx))
-            .child(two_cols(self.render_dollar(&d, rate), self.render_cache(&d, rate)))
+            .child(two_cols(self.render_dollar(&d, rate), self.render_cache(&report, &d, rate, cx)))
             .child(two_cols(self.render_rank(&report, &d, Dim::Provider, rate, cx), self.render_rank(&report, &d, Dim::Source, rate, cx)))
             .children(multi.then(|| self.render_costs_by_machine(&report, rate, cx)))
             .child(self.render_areas(&d, rate, cx))
@@ -1224,7 +1296,7 @@ impl Hangar {
                 |this: &mut Hangar, n, _: &mut Window, cx| { this.costs.filter.sub = [None, Some(false), Some(true)][n]; cx.notify(); }, cx);
             row = row.child(field(web("custos_subagente"), sub));
         }
-        let default_layers = self.costs.layers_off == default_layers(self.costs.layers_mode);
+        let default_layers = self.costs.layers_off == default_layers(&self.costs.layers_mode);
         row = row.child(Button::new("costs-clear").ghost().small().label(web("custos_limpar_filtros"))
             .disabled(!self.costs.filter.active() && default_layers)
             .on_click(cx.listener(|this, _, _, cx| this.clear_cut(true, cx))));
@@ -1256,12 +1328,15 @@ impl Hangar {
             .h(px(34.)).px(px(12.)).rounded(px(8.)).border_1().border_color(if on { theme::accent().alpha(0.5) } else { theme::border() })
             .when(on, |el| el.bg(theme::accent_dim())).child(label);
         div().flex().flex_wrap().gap(px(8.))
-            .child(chip("costs-src-all".into(), selected.is_empty(), div().child(web("custos_todas_fontes")), cx)
+            .child(chip("costs-src-all".into(), selected.is_empty(), div().flex().items_center().gap(px(8.))
+                    .child(chrome::small_icon(IconName::Layers, 15., theme::muted())).child(web("custos_todas_fontes")), cx)
                 .on_click(cx.listener(|this, _, _, cx| this.set_cut(Dim::Source, Vec::new(), cx))))
             .children(self.options_of(report, Dim::Source).into_iter().map(|b| {
                 let key = b.key.clone();
+                let mark = chrome::provider_logo(&key, 15., source_color(&key)).map(IntoElement::into_any_element)
+                    .unwrap_or_else(|| chrome::small_icon(IconName::SquareTerminal, 15., source_color(&key)).into_any_element());
                 chip(format!("costs-src-{key}"), selected.contains(&key), div().flex().items_center().gap(px(8.))
-                        .child(swatch(source_color(&key)))
+                        .child(mark)
                         .child(source_name(&key))
                         .child(div().text_color(theme::faint()).child(tok(b.fresh()))), cx)
                     .on_click(cx.listener(move |this, _, _, cx| this.toggle_cut(Dim::Source, key.clone(), cx)))
@@ -1278,26 +1353,122 @@ impl Hangar {
         (!unknown.is_empty()).then(|| note_box(web_with("custos_estimativa_incompleta", &[("n", unknown.len().to_string())]), theme::warning()))
     }
 
-    fn render_kpis(&self, report: &Report, d: &Derived, rate: Option<f64>) -> Div {
+    /// Gasto do período no topo, por extenso e contando até o valor, e ao lado a previsão do mês corrente.
+    fn render_hero(&self, report: &Report, d: &Derived, rate: Option<f64>, cx: &mut Context<Self>) -> Div {
+        let f = &d.focus;
+        let dash = d.unknown || d.empty_cut;
+        let m2 = |v: f64| if dash { "—".to_owned() } else { money2(v, rate) };
+        let days = if self.costs.period.days() > 0. { self.costs.period.days() } else { report.by_day.len().max(1) as f64 };
+        let mut foot = vec![format!("{} · {}{}", self.sessions_text(d.has_combos, f), m2(f.cost / days), web("custos_por_dia"))];
+        if d.unknown { foot.push(web("custos_sem_tarifa_volume")); }
+        else if d.free_only { foot.push(web("custos_modelo_gratis_nada")); }
+        else if d.empty_cut { foot.push(web("custos_recorte_vazio")); }
+        if d.sub_cost > 0. && f.cost > 0. { foot.push(web_with("custos_veio_subagente", &[("pct", pct(d.sub_cost, f.cost))])); }
+        // Máquina desmarcada sai da conta: sem esta linha, "parte do gasto" passaria por "o gasto".
+        let (chosen, all) = (self.chosen_machines().len(), self.report_machines().len());
+        if chosen < all { foot.push(web_with("custos_somando_maquinas", &[("n", chosen.to_string()), ("m", all.to_string())])); }
+        let delta = report.anterior.as_ref().filter(|p| !d.filtering && p.cost > 0.).map(|prev| (report.totals.cost - prev.cost) / prev.cost * 100.);
+        let badge = delta.map(|delta| {
+            let (icon, color, text) = if delta.abs() < 1. { (None, theme::muted(), web("custos_delta_igual")) } else {
+                (Some(if delta > 0. { IconName::TrendingUp } else { IconName::TrendingDown }), if delta > 0. { theme::danger() } else { theme::success() },
+                    web_with("custos_delta_vs", &[("n", dec(delta.abs(), 0)), ("rot", self.costs.period.label())]))
+            };
+            div().flex().items_center().gap(px(5.)).px(px(8.)).py(px(2.)).rounded_full().bg(color.alpha(0.14)).text_size(px(12.5)).text_color(color)
+                .children(icon.map(|i| chrome::small_icon(i, 13., color))).child(text)
+        });
+        let value = div().text_size(px(34.)).font_weight(FontWeight::BOLD).line_height(px(42.));
+        let value = if dash { value.text_color(theme::muted()).child("—").into_any_element() }
+            else if cx.reduce_motion() { value.child(money2(f.cost, rate)).into_any_element() }
+            else {
+                let cost = f.cost;
+                value.with_animation(SharedString::from(format!("costs-hero-{}", self.costs.report.seq)),
+                    Animation::new(Duration::from_millis(900)).with_easing(crate::motion::ease_out),
+                    move |el, t| el.child(money2(cost * t as f64, rate))).into_any_element()
+            };
+        let hero = card_plain().gap(px(6.))
+            .child(section_label(IconName::Wallet, format!("{} · {}", web("custos_custo_periodo"), self.costs.period.label())))
+            .child(value)
+            .children(badge.map(|b| div().flex().child(b)))
+            .children(foot.into_iter().map(|t| div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(t)));
+        let forecast = (!d.unknown).then(|| self.render_forecast(report, d, rate, cx)).flatten();
+        match forecast {
+            Some(forecast) => div().flex().gap(px(16.)).items_stretch().child(hero.flex_1()).child(forecast.flex_1()),
+            None => hero,
+        }
+    }
+
+    /// Gasto diário (em dinheiro) do recorte atual: a fonte da previsão do mês.
+    fn daily_cost(&self, report: &Report, d: &Derived) -> Vec<(String, f64)> {
+        if d.has_combos {
+            filtered(&report.combos, &self.costs.filter).into_iter().map(|c| (c.dia.clone(), c.cost)).collect()
+        } else { report.by_day.iter().map(|b| (b.key.clone(), b.cost)).collect() }
+    }
+
+    fn render_forecast(&self, report: &Report, d: &Derived, rate: Option<f64>, cx: &mut Context<Self>) -> Option<Div> {
+        use chrono::Datelike;
+        let today = chrono::Local::now().date_naive();
+        let previous = (today.with_day(1)? - chrono::Duration::days(1)).with_day(1)?;
+        let covered = self.costs.period == Period::All || today - chrono::Duration::days(self.costs.period.days() as i64 - 1) <= previous;
+        let f = month_forecast(&self.daily_cost(report, d), today, covered)?;
+        if f.projected <= 0. { return None; }
+        let (cumulative, dim, projected, last) = (f.cumulative.clone(), f.days_in_month, f.projected, f.last_month);
+        let top = projected.max(last.unwrap_or(0.)) * 1.08;
+        let animate = !cx.reduce_motion();
+        let plot = move |t: f32| {
+            let (cumulative, last) = (cumulative.clone(), last);
+            canvas(|_, _, _| {}, move |bounds, _, window, _| {
+                let (w, h) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
+                let x = |day: usize| (day as f32 - 1.) / (dim.max(2) - 1) as f32 * w;
+                let y = |v: f64| h - (v / top) as f32 * (h - 4.);
+                let at = |day: usize, v: f64| bounds.origin + point(px(x(day)), px(y(v)));
+                if let Some(last) = last {
+                    let mut line = PathBuilder::stroke(px(1.)).dash_array(&[px(2.), px(4.)]);
+                    line.move_to(at(1, last));
+                    line.line_to(at(dim as usize, last));
+                    if let Ok(path) = line.build() { window.paint_path(path, theme::muted()); }
+                }
+                let shown = ((cumulative.len() as f32 * t).ceil() as usize).clamp(1, cumulative.len());
+                let mut area = PathBuilder::fill();
+                area.move_to(at(1, 0.));
+                for (i, v) in cumulative.iter().take(shown).enumerate() { area.line_to(at(i + 1, *v)); }
+                area.line_to(at(shown, 0.));
+                area.close();
+                if let Ok(path) = area.build() { window.paint_path(path, theme::accent().alpha(0.14 * t)); }
+                let mut path = PathBuilder::stroke(px(2.));
+                path.move_to(at(1, cumulative[0]));
+                for (i, v) in cumulative.iter().take(shown).enumerate().skip(1) { path.line_to(at(i + 1, *v)); }
+                if let Ok(path) = path.build() { window.paint_path(path, theme::accent()); }
+                if t >= 1. {
+                    let today = cumulative.len();
+                    let mut dashed = PathBuilder::stroke(px(2.)).dash_array(&[px(4.), px(4.)]);
+                    dashed.move_to(at(today, cumulative[today - 1]));
+                    dashed.line_to(at(dim as usize, projected));
+                    if let Ok(path) = dashed.build() { window.paint_path(path, theme::accent()); }
+                    window.paint_quad(fill(Bounds::centered_at(at(dim as usize, projected), size(px(7.), px(7.))), theme::accent()).corner_radii(px(3.5)));
+                }
+            }).size_full()
+        };
+        let chart = div().relative().h(px(96.)).w_full();
+        let chart = if animate {
+            chart.with_animation(SharedString::from(format!("costs-forecast-{}", self.costs.report.seq)),
+                Animation::new(Duration::from_millis(1100)).with_easing(crate::motion::ease_out), move |el, t| el.child(plot(t))).into_any_element()
+        } else { chart.child(plot(1.)).into_any_element() };
+        Some(card_plain().gap(px(6.))
+            .child(div().flex().items_start().gap(px(12.))
+                .child(div().flex_1().flex().flex_col().gap(px(4.))
+                    .child(section_label(IconName::ChartLine, web("custos_previsao_mes")))
+                    .child(div().text_size(px(22.)).font_weight(FontWeight::SEMIBOLD).child(money(projected, rate)))
+                    .child(div().text_size(px(12.5)).text_color(theme::muted()).child(web_with("custos_ate_hoje", &[("valor", money2(f.mtd, rate))]))))
+                .children(last.map(|v| div().text_size(px(12.5)).text_color(theme::muted()).child(web_with("custos_mes_passado_valor", &[("valor", money(v, rate))])))))
+            .child(chart))
+    }
+
+    /// Os números de apoio, cada um com o ícone do que mede; a linha de baixo cabe numa linha e o detalhe vai no balão.
+    fn render_kpis(&self, report: &Report, d: &Derived, rate: Option<f64>, cx: &mut Context<Self>) -> Div {
         let f = &d.focus;
         let dash = d.unknown || d.empty_cut;
         let m1 = |v: f64| if dash { "—".to_owned() } else { money(v, rate) };
         let m2 = |v: f64| if dash { "—".to_owned() } else { money2(v, rate) };
-        let days = if self.costs.period.days() > 0. { self.costs.period.days() } else { report.by_day.len().max(1) as f64 };
-        let mut cost_foot = vec![format!("{} · {} · {}{}", m2(f.cost), self.sessions_text(d.has_combos, f), m2(f.cost / days), web("custos_por_dia"))];
-        if d.unknown { cost_foot.push(web("custos_sem_tarifa_volume")); }
-        else if d.free_only { cost_foot.push(web("custos_modelo_gratis_nada")); }
-        else if d.empty_cut { cost_foot.push(web("custos_recorte_vazio")); }
-        if d.sub_cost > 0. && f.cost > 0. { cost_foot.push(web_with("custos_veio_subagente", &[("pct", pct(d.sub_cost, f.cost))])); }
-        if let Some(prev) = report.anterior.as_ref().filter(|p| !d.filtering && p.cost > 0.) {
-            let delta = (report.totals.cost - prev.cost) / prev.cost * 100.;
-            cost_foot.push(if delta.abs() < 1. { web("custos_delta_igual") } else {
-                format!("{} {}", if delta > 0. { "▲" } else { "▼" }, web_with("custos_delta_vs", &[("n", dec(delta.abs(), 0)), ("rot", self.costs.period.label())]))
-            });
-        }
-        // Máquina desmarcada sai da conta: sem esta linha, "parte do gasto" passaria por "o gasto".
-        let (chosen, all) = (self.chosen_machines().len(), self.report_machines().len());
-        if chosen < all { cost_foot.push(web_with("custos_somando_maquinas", &[("n", chosen.to_string()), ("m", all.to_string())])); }
         let raw = f.raw();
         let entry = f.input + f.cache_read + f.cache_write;
         let saved = d.without_cache - f.cost;
@@ -1305,41 +1476,71 @@ impl Hangar {
             else if d.empty_cut { ("—".to_owned(), web("custos_sem_dados_recorte_short")) }
             else { (m1(saved), format!("{} · {}", m2(saved), web_with("custos_abaixo_preco_cheio", &[("n",
                 if d.without_cache > 0. { dec(100. - f.cost / d.without_cache * 100., 0) } else { "0".into() })]))) };
-        let kpis = vec![
-            kpi(web("custos_custo_periodo"), m1(f.cost), cost_foot, false, dash),
-            kpi(web("custos_tokens_novos"), tok(f.fresh()), vec![web("custos_tokens_novos_pe")], false, false),
-            kpi(web("custos_tokens_processados"), tok(raw), vec![web_with("custos_tokens_processados_pe", &[("relidos", tok(f.cache_read)), ("pct", pct(f.cache_read, raw))])], true, false),
-            kpi(web("custos_cache_na_entrada"), pct(f.cache_read, entry),
-                if f.cache_write > 0. { vec![web_with("custos_cada_gravado_lido", &[("x", dec(f.cache_read / f.cache_write, 1))])] } else { vec![] }, false, false),
-            kpi(web("custos_economia_cache"), economy.0, vec![economy.1], false, false),
-            kpi(web("custos_custo_por_milhao"), if raw > 0. { m1(f.cost / raw * 1e6) } else { "—".into() },
-                if f.fresh() > 0. { vec![web_with("custos_por_milhao_novos", &[("valor", m1(f.cost / f.fresh() * 1e6))])] } else { vec![] }, false, false),
-            if report.cache_detailed { kpi(web("custos_cache_perdido"), m1(f.custo_regravado), vec![web_with("custos_cache_perdido_pe", &[("tokens", tok(f.regravado))])], false, false) }
-                else { kpi(web("custos_cache_perdido"), "—".into(), vec![web("custos_cache_sem_dado")], false, false) },
-            kpi(web("custos_cache_1h"), if report.cache_detailed { pct(f.cache_write_1h, f.cache_write) } else { "—".into() },
-                if !report.cache_detailed { vec![web("custos_cache_sem_dado")] }
-                else if f.cache_write > 0. { vec![web_with("custos_cache_1h_pe", &[("h1", tok(f.cache_write_1h)), ("total", tok(f.cache_write))])] } else { vec![] }, false, false),
+        let exact = |n: f64| format!("{} {}", dec(n, 0), web("ctx_tokens"));
+        let tiles = vec![
+            kpi(IconName::Zap, chart(1), web("custos_tokens_novos"), tok(f.fresh()), web("custos_tokens_novos_pe"), exact(f.fresh())),
+            kpi(IconName::Layers, chart(2), web("custos_tokens_processados"), tok(raw),
+                web_with("custos_tokens_processados_pe", &[("relidos", tok(f.cache_read)), ("pct", pct(f.cache_read, raw))]), exact(raw)),
+            kpi(IconName::Recycle, chart(3), web("custos_cache_na_entrada"), pct(f.cache_read, entry),
+                if f.cache_write > 0. { web_with("custos_cada_gravado_lido", &[("x", dec(f.cache_read / f.cache_write, 1))]) } else { String::new() },
+                exact(f.cache_read)),
+            kpi(IconName::PiggyBank, theme::success(), web("custos_economia_cache"), economy.0, economy.1, String::new()),
+            kpi(IconName::Gauge, chart(4), web("custos_custo_por_milhao"), if raw > 0. { m1(f.cost / raw * 1e6) } else { "—".into() },
+                if f.fresh() > 0. { web_with("custos_por_milhao_novos", &[("valor", m1(f.cost / f.fresh() * 1e6))]) } else { String::new() },
+                if raw > 0. { m2(f.cost / raw * 1e6) } else { String::new() }),
+            if report.cache_detailed {
+                kpi(IconName::Hourglass, theme::danger(), web("custos_cache_perdido"), m1(f.custo_regravado),
+                    web_with("custos_cache_perdido_pe", &[("tokens", tok(f.regravado))]),
+                    format!("{}\n{} · {}", web("custos_cache_perdido_ajuda"), m2(f.custo_regravado), exact(f.regravado)))
+            } else { kpi(IconName::Hourglass, theme::danger(), web("custos_cache_perdido"), "—".into(), web("custos_cache_sem_dado"), String::new()) },
         ];
-        let mut rows = div().flex().flex_col().gap(px(12.));
-        let mut kpis = kpis.into_iter();
+        let animate = !cx.reduce_motion();
+        let seq = self.costs.report.seq;
+        let mut grid = div().flex().flex_col().gap(px(12.));
+        let mut tiles = tiles.into_iter().enumerate();
         loop {
-            let chunk: Vec<Div> = kpis.by_ref().take(4).collect();
-            if chunk.is_empty() { break; }
-            rows = rows.child(div().flex().gap(px(12.)).children(chunk));
+            let row: Vec<AnyElement> = tiles.by_ref().take(3).map(|(i, (body, tip))| {
+                let tile = body.id(SharedString::from(format!("costs-kpi-{i}")))
+                    .when(!tip.is_empty(), |el| el.tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(window, cx)));
+                if !animate { return tile.into_any_element(); }
+                // Cada cartão entra um pouco depois do anterior: a mesma curva, adiada pela posição.
+                let lag = i as f32 * 0.08;
+                tile.with_animation(SharedString::from(format!("costs-kpi-in-{seq}-{i}")),
+                    Animation::new(Duration::from_millis(700)).with_easing(move |x| crate::motion::ease_out(((x - lag) / (1. - lag)).clamp(0., 1.))),
+                    |el, t| el.opacity(t)).into_any_element()
+            }).collect();
+            if row.is_empty() { break; }
+            grid = grid.child(div().flex().gap(px(12.)).children(row));
         }
-        rows
+        grid
     }
 
-    /// Camadas do gráfico diário: por tipo de token (tokens, ou sem detalhamento) ou por fonte (custo com detalhamento).
-    fn daily_layers(&self, report: &Report, d: &Derived) -> (bool, Vec<(String, String, Hsla)>) {
-        let by_kind = !d.has_combos || self.costs.daily == Metric::Tokens;
-        let layers = if by_kind { Kind::ALL.iter().map(|k| (k.id().to_owned(), k.label(), k.color())).collect() }
-            else { group(&filtered(&report.combos, &self.costs.filter), Dim::Source).into_iter().map(|b| (b.key.clone(), source_name(&b.key), source_color(&b.key))).collect() };
-        (by_kind, layers)
+    /// O agrupamento valendo: sem detalhamento só o tipo de token, e máquina só com mais de uma.
+    fn daily_group(&self, d: &Derived) -> Group {
+        match self.costs.group {
+            _ if !d.has_combos => Group::Kind,
+            Group::Machine if self.report_machines().len() < 2 => Group::Kind,
+            g => g,
+        }
+    }
+
+    /// Camadas do gráfico diário: os tipos de token, ou as quatro maiores do agrupamento e o resto junto.
+    fn daily_layers(&self, report: &Report, by: Group) -> Vec<(String, String, Hsla)> {
+        let Some(dim) = by.dim() else { return Kind::ALL.iter().map(|k| (k.id().to_owned(), k.label(), k.color())).collect() };
+        let list = group(&filtered(&report.combos, &self.costs.filter), dim);
+        let metric = self.costs.daily;
+        let mut ranked: Vec<&Bucket> = list.iter().collect();
+        ranked.sort_by(|a, b| b.value(metric).total_cmp(&a.value(metric)));
+        let mut layers: Vec<(String, String, Hsla)> = ranked.iter().take(4).enumerate().map(|(i, b)| {
+            let color = if dim == Dim::Source { source_color(&b.key) } else { chart(i + 1) };
+            (b.key.clone(), Self::name_of(report, dim, &b.key), color)
+        }).collect();
+        if ranked.len() > 4 { layers.push((OTHERS.to_owned(), web("uso_area_outros"), theme::border_strong())); }
+        layers
     }
 
     /// Série diária: um balde por dia, com o valor de cada camada; dia parado entra zerado.
-    fn daily_series(&self, report: &Report, d: &Derived, by_kind: bool) -> Vec<(String, Bucket, HashMap<String, f64>)> {
+    fn daily_series(&self, report: &Report, d: &Derived, by: Group, layers: &[(String, String, Hsla)]) -> Vec<(String, Bucket, HashMap<String, f64>)> {
         let metric = self.costs.daily;
         let per_kind = |b: &Bucket| Kind::ALL.iter().map(|k| (k.id().to_owned(), if metric == Metric::Tokens { b.tokens_of(*k) } else { b.cost_of(*k) })).collect();
         let mut days: BTreeMap<String, (Bucket, HashMap<String, f64>)> = BTreeMap::new();
@@ -1349,7 +1550,17 @@ impl Hangar {
             for c in cut { by_day.entry(c.dia.as_str()).or_default().push(c); }
             for (day, rows) in by_day {
                 let bucket = Bucket { key: day.to_owned(), ..sum(&rows) };
-                let values = if by_kind { per_kind(&bucket) } else { group(&rows, Dim::Source).into_iter().map(|b| (b.key.clone(), b.value(metric))).collect() };
+                let values = match by.dim() {
+                    None => per_kind(&bucket),
+                    Some(dim) => {
+                        let mut values: HashMap<String, f64> = HashMap::new();
+                        for b in group(&rows, dim) {
+                            let key = if layers.iter().any(|l| l.0 == b.key) { b.key.clone() } else { OTHERS.to_owned() };
+                            *values.entry(key).or_default() += b.value(metric);
+                        }
+                        values
+                    }
+                };
                 days.insert(day.to_owned(), (bucket, values));
             }
         } else {
@@ -1363,15 +1574,17 @@ impl Hangar {
     }
 
     fn render_daily(&mut self, report: &Report, d: &Derived, rate: Option<f64>, window: &mut Window, cx: &mut Context<Self>) -> Div {
-        let (by_kind, layers) = self.daily_layers(report, d);
-        let mode = if by_kind { if self.costs.daily == Metric::Tokens { "kind-tokens" } else { "kind-cost" } } else { "source" };
+        let by = self.daily_group(d);
+        let layers = self.daily_layers(report, by);
+        let by_kind = by == Group::Kind;
+        let mode = format!("{}-{}", by.id(), if self.costs.daily == Metric::Tokens { "tokens" } else { "cost" });
         // Trocou o que a legenda lista: volta ao padrão do modo (o cache lido nasce desligado em tokens).
-        if self.costs.layers_mode != mode { self.costs.layers_mode = mode; self.costs.layers_off = default_layers(mode); }
+        if self.costs.layers_mode != mode { self.costs.layers_off = default_layers(&mode); self.costs.layers_mode = mode.clone(); }
         let metric = self.costs.daily;
         let fmt = move |v: f64| if metric == Metric::Tokens { tok(v) } else { money(v, rate) };
         let fmt2 = move |v: f64| if metric == Metric::Tokens { tok(v) } else { money2(v, rate) };
         let visible: Vec<(String, String, Hsla)> = layers.iter().filter(|l| !self.costs.layers_off.contains(&l.0)).cloned().collect();
-        let series = self.daily_series(report, d, by_kind);
+        let series = self.daily_series(report, d, by, &layers);
         let columns: Vec<(String, Bucket, Vec<(String, f64, Hsla)>, f64)> = series.into_iter().map(|(day, bucket, values)| {
             let segs: Vec<(String, f64, Hsla)> = visible.iter().map(|(id, label, color)| (label.clone(), values.get(id).copied().unwrap_or(0.), *color))
                 .filter(|s| s.1 > 0.).collect();
@@ -1385,8 +1598,12 @@ impl Hangar {
                 this.costs.hover_day = None;
                 cx.notify();
             }, cx);
-        let mut hint = web_with("custos_empilhado_por", &[("modo", web(if by_kind { "custos_tipo_token" } else { "custos_dim_fonte" }))]);
-        if metric == Metric::Tokens { hint.push(' '); hint.push_str(&web("custos_cache_lido_desligado")); }
+        let mut hint = web_with("custos_empilhado_por", &[("modo", by.dim().map_or_else(|| web("custos_tipo_token"), Dim::name))]);
+        if metric == Metric::Tokens && by_kind { hint.push(' '); hint.push_str(&web("custos_cache_lido_desligado")); }
+        let groups: Vec<Group> = Group::ALL.into_iter().filter(|g| *g != Group::Machine || self.report_machines().len() > 1).collect();
+        let group_seg = segments("costs-daily-group", &groups.iter().map(|g| g.label()).collect::<Vec<_>>(),
+            groups.iter().position(|g| *g == by).unwrap_or(0), if d.has_combos { groups.len() } else { 1 }, false, web("custos_sem_detalhamento"),
+            move |this: &mut Hangar, n, _: &mut Window, cx| { this.costs.group = groups[n]; this.costs.hover_day = None; cx.notify(); }, cx);
         if d.filtering && !d.has_combos { hint.push(' '); hint.push_str(&web("custos_ressalva_periodo_inteiro")); }
         let layer_count = layers.len();
         let legend = div().flex().flex_wrap().gap(px(6.)).children(layers.iter().map(|(id, label, color)| {
@@ -1401,8 +1618,11 @@ impl Hangar {
                 }))
         }));
 
-        let head = div().flex().items_center().gap(px(12.))
-            .child(div().flex_1().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).child(web("custos_uso_por_dia"))).child(metric_seg);
+        let head = div().flex().flex_wrap().items_center().gap(px(12.))
+            .child(div().flex_1().flex().items_center().gap(px(8.)).text_size(px(15.)).font_weight(FontWeight::SEMIBOLD)
+                .child(chrome::small_icon(IconName::ChartColumn, 16., theme::accent())).child(web("custos_uso_por_dia")))
+            .child(div().flex().items_center().gap(px(8.)).text_size(px(12.5)).text_color(theme::muted()).child(web("custos_agrupar_por")).child(group_seg))
+            .child(metric_seg);
         let mut body = card_plain().child(head)
             .child(div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(hint)).child(legend);
         if columns.is_empty() { return body.child(empty_state(web("custos_sem_dados_recorte"))); }
@@ -1427,19 +1647,35 @@ impl Hangar {
             div().absolute().right(px(8.)).top(px(y - 7.)).text_size(px(10.5)).text_color(theme::faint()).child(fmt(*g))
         }));
         let n = columns.len();
+        let totals: Vec<f64> = columns.iter().map(|c| c.3).collect();
+        let spikes = outliers(&totals);
+        let mean = if n > 0 { totals.iter().sum::<f64>() / n as f64 } else { 0. };
+        let animate = !cx.reduce_motion();
+        let seq = self.costs.report.seq;
         let bars = div().relative().flex_1().h(px(H)).child(grid).child(div().absolute().inset_0().flex().items_end()
-            .children(columns.iter().map(|(day, _, segs, total)| {
+            .children(columns.iter().enumerate().map(|(i, (day, _, segs, total))| {
                 let key = day.clone();
                 let lit = hover.as_deref() == Some(day.as_str());
+                let (segs, total, spike, faded) = (segs.clone(), *total, spikes[i], hover.is_some() && !lit);
+                let stack = move |t: f32| div().w(relative(0.72)).max_w(px(26.)).min_w(px(2.)).flex().flex_col_reverse().gap(px(2.))
+                    .when(faded, |el| el.opacity(0.55))
+                    .children(segs.iter().map(|(_, v, color)| div().w_full().rounded(px(2.)).bg(*color)
+                        .h(px((((*v / top) as f32 * H - 2.) * t).max(if t > 0. { 1. } else { 0. })))))
+                    .when(total <= 0., |el| el.h(px(0.)));
+                let column = div().flex().flex_col().items_center().w_full()
+                    .when(spike, |el| el.child(div().mb(px(4.)).size(px(7.)).rounded_full().bg(theme::danger())));
+                let column = if animate {
+                    // Uma barra depois da outra, da esquerda para a direita, na mesma curva.
+                    let lag = (i as f32 / n.max(1) as f32) * 0.45;
+                    column.with_animation(SharedString::from(format!("costs-col-{seq}-{}-{day}", by.id())),
+                        Animation::new(Duration::from_millis(900)).with_easing(move |x| crate::motion::ease_out(((x - lag) / (1. - lag)).clamp(0., 1.))),
+                        move |el, t| el.child(stack(t))).into_any_element()
+                } else { column.child(stack(1.)).into_any_element() };
                 div().id(SharedString::from(format!("costs-day-{day}"))).flex_1().h_full().flex().flex_col().justify_end().items_center()
                     .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                         if *hovered { this.costs.hover_day = Some(key.clone()); cx.notify(); }
                     }))
-                    .child(div().w(relative(0.72)).max_w(px(26.)).min_w(px(2.)).flex().flex_col_reverse().gap(px(2.))
-                        .when(hover.is_some() && !lit, |el| el.opacity(0.55))
-                        .children(segs.iter().map(|(_, v, color)| div().w_full().rounded(px(2.)).bg(*color)
-                            .h(px(((*v / top) as f32 * H - 2.).max(1.)))))
-                        .when(*total <= 0., |el| el.h(px(0.))))
+                    .child(column)
             })));
         let labels = div().flex().pl(px(56.)).children(columns.iter().enumerate().map(|(i, (day, ..))| {
             div().flex_1().flex().justify_center().text_size(px(10.5)).text_color(theme::faint())
@@ -1452,10 +1688,19 @@ impl Hangar {
                     .child(div().font_weight(FontWeight::SEMIBOLD).text_color(theme::text()).child(day_label(day)))
                     .child(format!("{} · {}", fmt2(*total), self.sessions_text(d.has_combos, bucket)))
                     .when(entry > 0., |el| el.child(web_with("custos_dia_reuso", &[("pct", pct(bucket.cache_read, entry))])))
+                    .when(mean > 0., |el| {
+                        let up = *total > mean;
+                        el.child(div().text_color(if up { theme::danger() } else { theme::success() })
+                            .child(format!("{} {} {}%", web("custos_vs_media"), if up { "▲" } else { "▼" }, dec((*total / mean - 1.).abs() * 100., 0))))
+                    })
                     .children(segs.iter().map(|(label, v, color)| div().flex().items_center().gap(px(5.)).child(swatch(*color)).child(format!("{label} {}", fmt2(*v)))))
             }
             None => div().child(web("custos_hover_detalhe")),
         };
+        if spikes.iter().any(|s| *s) {
+            body = body.child(div().flex().items_center().gap(px(6.)).text_size(px(12.)).text_color(theme::muted())
+                .child(div().size(px(7.)).rounded_full().bg(theme::danger())).child(web("custos_legenda_fora_curva")));
+        }
         body = body.child(div().id("costs-daily").flex().flex_col().gap(px(6.))
                 .on_hover(cx.listener(|this, hovered: &bool, _, cx| if !*hovered && this.costs.hover_day.take().is_some() { cx.notify() }))
                 .child(div().flex().child(axis).child(bars)).child(labels))
@@ -1466,7 +1711,7 @@ impl Hangar {
     fn render_dollar(&self, d: &Derived, rate: Option<f64>) -> Div {
         let f = &d.focus;
         let m2f = |v: f64| if d.unknown || d.empty_cut { "—".to_owned() } else { money2(v, rate) };
-        let mut body = card(web("custos_para_onde_dolar"), Some(web("custos_tipo_token_conta")));
+        let mut body = icon_card(IconName::Coins, web("custos_para_onde_dolar"), Some(web("custos_tipo_token_conta")));
         body = if d.unknown {
             let what = if d.filtering { self.cut_description(self.costs.report.ok().unwrap_or(&Report::default())) } else { web("custos_nenhum_modelo_periodo") };
             body.child(hint_text(format!("{}{} {}", web("custos_sem_tarifa_para"), what, web("custos_sem_tarifa_aqui"))))
@@ -1481,34 +1726,66 @@ impl Hangar {
         }))
     }
 
-    fn render_cache(&self, d: &Derived, rate: Option<f64>) -> Div {
+    fn render_cache(&self, report: &Report, d: &Derived, rate: Option<f64>, cx: &mut Context<Self>) -> Div {
         let source = &d.cache_source;
         let dash = if d.has_combos { d.unknown || d.empty_cut } else { source.unknown() };
         let m1 = |v: f64| if dash { "—".to_owned() } else { money(v, rate) };
         let m2 = |v: f64| if dash { "—".to_owned() } else { money2(v, rate) };
         let saved = d.without_cache - source.cost;
-        let reuse = if source.raw() > 0. { source.cache_read / source.raw() } else { 0. };
+        let volume = if source.raw() > 0. { source.cache_read / source.raw() } else { 0. };
+        let entry = source.input + source.cache_write + source.cache_read;
+        let reuse = if entry > 0. { (source.cache_read / entry * 100.) as f32 } else { 0. };
         let mut hint = web("custos_mesmos_tokens");
         if !d.has_combos && d.filtering { hint.push(' '); hint.push_str(&web("custos_ressalva_cache")); }
-        let line = |label: String, value: String| div().flex().items_center().text_size(px(13.5))
-            .child(div().flex_1().text_color(theme::muted()).child(label)).child(div().font_weight(FontWeight::SEMIBOLD).child(value));
+        let line = |label: String, value: String, color: Option<Hsla>| div().flex().items_center().gap(px(10.)).text_size(px(13.5))
+            .child(div().flex_1().text_color(theme::muted()).child(label))
+            .child(div().font_weight(FontWeight::SEMIBOLD).text_color(color.unwrap_or_else(theme::text)).child(value));
         let fill = if d.without_cache > 0. { (source.cost / d.without_cache).clamp(0.02, 1.) as f32 } else { 0. };
-        card(web("custos_o_que_cache"), Some(hint))
-            .child(line(web("custos_pago_de_verdade"), m2(source.cost)))
+        let ring = move |t: f32| div().relative().size(px(88.)).flex_shrink_0()
+            .child(ProgressCircle::new("costs-cache-ring").color(chart(3)).value(reuse * t).size(px(88.)))
+            .child(div().absolute().inset_0().flex().flex_col().items_center().justify_center()
+                .child(div().text_size(px(16.)).font_weight(FontWeight::BOLD).child(format!("{}%", dec(reuse as f64 * t as f64, 1))))
+                .child(div().text_size(px(10.5)).text_color(theme::muted()).child(web("custos_reuso_curto"))));
+        let ring = if cx.reduce_motion() { ring(1.).into_any_element() } else {
+            div().with_animation(SharedString::from(format!("costs-ring-{}", self.costs.report.seq)),
+                Animation::new(Duration::from_millis(1100)).with_easing(crate::motion::ease_out), move |el, t| el.child(ring(t))).into_any_element()
+        };
+        let mut lines = div().flex_1().min_w_0().flex().flex_col().gap(px(8.))
+            .child(line(web("custos_economizou"), m1(saved), Some(theme::success())));
+        if report.cache_detailed {
+            lines = lines.child(line(web("custos_cache_perdido"), m1(source.custo_regravado), Some(theme::danger())))
+                .child(div().id("costs-cache-1h").child(line(web("custos_gravado_1h_curto"), pct(source.cache_write_1h, source.cache_write), None))
+                    .when(source.cache_write > 0., |el| {
+                        let tip = web_with("custos_cache_1h_pe", &[("h1", tok(source.cache_write_1h)), ("total", tok(source.cache_write))]);
+                        el.tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(window, cx))
+                    }));
+        } else { lines = lines.child(line(web("custos_cache_1h"), "—".into(), Some(theme::muted()))).child(hint_text(web("custos_cache_sem_dado"))); }
+        lines = lines.child(line(web("custos_do_volume_cache_lido"), format!("{}%", dec(volume * 100., 0)), None));
+        let parts = [(source.cache_read, chart(3), "custos_cache_lida_n"), (source.cache_write, chart(4), "custos_cache_gravada_n"), (source.input, chart(1), "custos_cache_nova_n")];
+        icon_card(IconName::Database, web("custos_o_que_cache"), Some(hint))
+            .child(div().flex().items_center().gap(px(16.)).child(ring).child(lines))
+            .child(stack_bar(parts.iter().map(|(v, c, _)| (*v, *c)).collect()).h(px(12.)).rounded_full())
+            .child(div().flex().flex_wrap().gap(px(12.)).text_size(px(12.)).text_color(theme::muted())
+                .children(parts.iter().map(|(v, c, key)| div().flex().items_center().gap(px(5.)).child(swatch(*c)).child(web_with(key, &[("n", tok(*v))])))))
+            .child(line(web("custos_pago_de_verdade"), m2(source.cost), None))
             .child(div().h(px(10.)).rounded_full().bg(theme::inset()).child(div().h_full().rounded_full().bg(chart(1)).w(relative(fill))))
-            .child(line(web("custos_se_nada_cache"), m2(d.without_cache)))
-            .child(div().flex().gap(px(12.))
-                .child(mini_kpi(web("custos_economizado"), m1(saved), Some(theme::success())))
-                .child(mini_kpi(web("custos_do_volume_cache_lido"), format!("{}%", dec(reuse * 100., 0)), None)))
+            .child(line(web("custos_se_nada_cache"), m2(d.without_cache), None))
     }
 
     /// Ranking de uma dimensão: nome, custo e a barra com a forma do gasto (os quatro tipos), clicável para recortar.
     fn rank_rows(&self, report: &Report, dim: Dim, list: &[Bucket], rate: Option<f64>, hide: bool, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let peak = list.iter().map(|b| b.cost).fold(1., f64::max);
+        let (animate, seq) = (!cx.reduce_motion(), self.costs.report.seq);
         list.iter().map(|b| {
             let key = b.key.clone();
             let on = self.costs.filter.has(dim, &key);
             let width = (b.cost / peak * 100.).max(1.5) as f32 / 100.;
+            let shape = div().w(relative(width)).h(px(6.)).flex().gap(px(2.)).children(Kind::ALL.iter().filter(|k| b.cost_of(**k) > 0.)
+                .map(|k| div().h_full().rounded(px(2.)).bg(k.color()).flex_basis(px(0.)).flex_grow(b.cost_of(*k) as f32)));
+            let shape = if animate {
+                shape.with_animation(SharedString::from(format!("costs-rank-in-{seq}-{}-{key}", dim.id())),
+                    Animation::new(Duration::from_millis(800)).with_easing(crate::motion::ease_out), move |el, t| el.w(relative(width * t))).into_any_element()
+            } else { shape.into_any_element() };
             let row = Button::new(SharedString::from(format!("costs-rank-{}-{key}", dim.id())))
                 .custom(ButtonCustomVariant::new(cx).color(if on { theme::accent_dim() } else { transparent_black() })
                     .foreground(theme::text()).hover(theme::hover()).active(theme::hover()))
@@ -1519,8 +1796,7 @@ impl Hangar {
                     .child(div().w_full().flex().items_center().gap(px(10.)).text_size(px(13.5))
                         .child(div().flex_1().min_w_0().truncate().text_left().child(Self::name_of(report, dim, &b.key)))
                         .child(div().flex_shrink_0().font_weight(FontWeight::SEMIBOLD).child(if b.unknown() { "—".into() } else { money2(b.cost, rate) })))
-                    .child(div().w(relative(width)).h(px(6.)).flex().gap(px(2.)).children(Kind::ALL.iter().filter(|k| b.cost_of(**k) > 0.)
-                        .map(|k| div().h_full().rounded(px(2.)).bg(k.color()).flex_basis(px(0.)).flex_grow(b.cost_of(*k) as f32)))))
+                    .child(shape))
                 .on_click(cx.listener(move |this, _, _, cx| this.toggle_cut(dim, key.clone(), cx)));
             let hide_key = b.key.clone();
             div().flex().items_center().gap(px(4.)).child(row)
@@ -1537,13 +1813,13 @@ impl Hangar {
         if d.filtering && !d.has_combos { hint.push(' '); hint.push_str(&web("custos_ressalva_periodo_inteiro")); }
         let list = self.list_of(report, dim);
         let rows = self.rank_rows(report, dim, &list, rate, false, cx);
-        card(web(title), Some(hint)).child(if rows.is_empty() { empty_state(web("custos_sem_dados_no_periodo")) } else { div().flex().flex_col().gap(px(2.)).children(rows) })
+        icon_card(if dim == Dim::Provider { IconName::Server } else { IconName::SquareTerminal }, web(title), Some(hint)).child(if rows.is_empty() { empty_state(web("custos_sem_dados_no_periodo")) } else { div().flex().flex_col().gap(px(2.)).children(rows) })
     }
 
     /// Total de cada máquina no período inteiro, clicável para recortar o resto da tela.
     fn render_costs_by_machine(&self, report: &Report, rate: Option<f64>, cx: &mut Context<Self>) -> Div {
         let rows = self.rank_rows(report, Dim::Machine, &report.by_machine, rate, false, cx);
-        card(web("custos_por_maquina"), Some(web("custos_onde_sessao")))
+        icon_card(IconName::Server, web("custos_por_maquina"), Some(web("custos_onde_sessao")))
             .child(if rows.is_empty() { empty_state(web("custos_sem_dados_no_periodo")) } else { div().flex().flex_col().gap(px(2.)).children(rows) })
     }
 
@@ -1551,7 +1827,7 @@ impl Hangar {
         let filter = &self.costs.filter;
         let mut hint = web("uso_graf_areas_nota");
         if [Dim::Provider, Dim::Source, Dim::Machine].iter().any(|d| !filter.get(*d).is_empty()) { hint.push(' '); hint.push_str(&web("custos_areas_sem_recorte")); }
-        let body = card(web("uso_graf_areas"), Some(hint));
+        let body = icon_card(IconName::Boxes, web("uso_graf_areas"), Some(hint));
         let _ = d;
         match &self.costs.areas.value {
             None => body.child(empty_state(web("custos_areas_carregando"))),
@@ -1589,7 +1865,7 @@ impl Hangar {
         let mut hint = web("custos_pasta_sessao");
         if d.filtering && !d.has_combos { hint.push(' '); hint.push_str(&web("custos_ressalva_periodo_inteiro")); }
         let rows = self.rank_rows(report, Dim::Project, &shown, rate, true, cx);
-        let mut body = card(web("custos_por_projeto"), Some(hint))
+        let mut body = icon_card(IconName::Folder, web("custos_projetos_mais_gastam"), Some(hint))
             .child(if rows.is_empty() { empty_state(web("custos_sem_dados_no_periodo")) } else { div().flex().flex_col().gap(px(2.)).children(rows) });
         if visible.len() > 12 {
             let all = self.costs.all_projects;
@@ -1617,7 +1893,7 @@ impl Hangar {
         let f = &self.costs.filter;
         let cut: Vec<&Session> = report.sessoes.iter().filter(|s| matches(f.get(Dim::Provider), &s.provider) && matches(f.get(Dim::Source), &s.source)
             && matches(f.get(Dim::Project), &s.project) && matches(f.get(Dim::Model), &s.model) && matches(f.get(Dim::Machine), &s.machine)).collect();
-        let body = card(web("custos_sessoes_caras"), Some(web("custos_sessoes_hint")));
+        let body = icon_card(IconName::Activity, web("custos_sessoes_caras"), Some(web("custos_sessoes_hint")));
         let _ = d;
         if report.sessoes.is_empty() && report.totals.sessions > 0. { return body.child(empty_state(web("custos_sessoes_atualize"))); }
         if cut.is_empty() { return body.child(empty_state(web("custos_sessoes_vazio"))); }
@@ -1648,50 +1924,88 @@ impl Hangar {
     }
 
     fn render_models(&self, report: &Report, d: &Derived, rate: Option<f64>, cx: &mut Context<Self>) -> Div {
-        let list = self.list_of(report, Dim::Model);
+        let mut list = self.list_of(report, Dim::Model);
         let total: f64 = list.iter().map(|b| b.cost).sum();
         let peak = list.iter().map(|b| b.cost).fold(1., f64::max);
+        // A cor de cada modelo é a da posição por custo, e fica com ele quando a tabela é reordenada.
+        let colors: HashMap<String, Hsla> = list.iter().enumerate().map(|(i, b)| (b.key.clone(), chart(i % 4 + 1))).collect();
+        let sort = self.costs.model_sort;
+        if let Some((col, asc)) = sort {
+            list.sort_by(|a, b| {
+                let order = match col {
+                    0 => a.key.cmp(&b.key),
+                    1 => (a.input + a.cache_write + a.cache_read).total_cmp(&(b.input + b.cache_write + b.cache_read)),
+                    2 => a.output.total_cmp(&b.output),
+                    3 => a.cache_read.total_cmp(&b.cache_read),
+                    _ => a.cost.total_cmp(&b.cost),
+                };
+                if asc { order } else { order.reverse() }
+            });
+        }
         let mut hint = web("custos_com_tarifa");
         if d.filtering && !d.has_combos { hint.push(' '); hint.push_str(&web("custos_ressalva_periodo_inteiro")); }
-        const COLS: [f32; 7] = [150., 80., 80., 96., 110., 90., 100.];
-        let head = table_row(vec![(web("custos_dim_modelo"), None), (web("custos_col_entrada"), Some(COLS[0])), ("out".into(), Some(COLS[1])),
-            ("cache R".into(), Some(COLS[2])), (web("custos_tarifa_in_out"), Some(COLS[3])), (web("custos_origem"), Some(COLS[4])),
-            (web("custos_col_pct_conta"), Some(COLS[5])), (web("custos_custo"), Some(COLS[6])), (String::new(), Some(60.))], true);
-        let mut body = card(web("custos_por_modelo"), Some(hint)).child(head);
+        hint.push(' ');
+        hint.push_str(&web("custos_clique_ordenar"));
+        // Tarifa e origem descem para baixo do nome: com elas em coluna, o nome do modelo não cabia numa janela de 950 px.
+        const COLS: [f32; 5] = [130., 72., 80., 96., 100.];
+        let heads: [(String, Option<f32>, Option<usize>); 7] = [(web("custos_dim_modelo"), None, Some(0)), (web("custos_col_entrada"), Some(COLS[0]), Some(1)),
+            ("out".into(), Some(COLS[1]), Some(2)), ("cache R".into(), Some(COLS[2]), Some(3)), (web("custos_col_pct_conta"), Some(COLS[3]), Some(7)),
+            (web("custos_custo"), Some(COLS[4]), Some(7)), (String::new(), Some(56.), None)];
+        let head = div().flex().items_center().px(px(8.)).py(px(4.)).border_b_1().border_color(theme::border())
+            .children(heads.into_iter().enumerate().map(|(i, (label, width, col))| {
+                let cell = match width { None => div().flex_1().min_w_0().flex(), Some(w) => div().w(px(w)).flex_shrink_0().flex().justify_end() };
+                // Custo e % são a mesma ordem; o clique na coluna ligada inverte o sentido.
+                let Some(col) = col else { return cell.text_size(px(11.5)).text_color(theme::faint()).child(label) };
+                let on = sort.map(|s| s.0) == Some(col);
+                let arrow = sort.filter(|_| on).map(|(_, asc)| if asc { IconName::ChevronUp } else { IconName::ChevronDown });
+                cell.child(Button::new(SharedString::from(format!("costs-model-sort-{i}"))).ghost().xsmall()
+                    .child(div().flex().items_center().gap(px(3.)).text_size(px(11.5)).text_color(if on { theme::text() } else { theme::faint() })
+                        .child(label).children(arrow.map(|a| chrome::small_icon(a, 12., theme::text()))))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let next = match this.costs.model_sort { Some((c, asc)) if c == col => Some((col, !asc)), _ => Some((col, col == 0)) };
+                        this.costs.model_sort = next;
+                        cx.notify();
+                    })))
+            }));
+        let mut body = icon_card(IconName::Cpu, web("custos_por_modelo"), Some(hint)).child(head);
         if list.is_empty() { return body.child(empty_state(web("custos_sem_dados_no_periodo"))); }
         for b in &list {
+            let dot = colors.get(&b.key).copied().unwrap_or_else(theme::muted);
             let priced = d.rates.contains_key(&b.key);
             let shown_rate = d.rates.get(&b.key).cloned().flatten();
             let partial = priced && report.sem_tarifa.contains(&b.key);
             let key = b.key.clone();
             let on = self.costs.filter.has(Dim::Model, &key);
             let tag = |text: String| div().px(px(6.)).py(px(1.)).rounded(px(4.)).bg(theme::inset()).text_size(px(11.)).text_color(theme::muted()).child(text);
-            let name = div().flex().items_center().gap(px(6.)).child(div().truncate().child(b.key.clone()))
-                .when(!priced, |el| el.child(tag(web(if is_free(&b.key) { "custos_gratis" } else { "custos_sem_tarifa" }))))
-                .when(partial, |el| el.child(tag(web("custos_preco_parcial"))));
+            let detail = shown_rate.as_ref().map_or_else(|| "—".to_owned(),
+                |r| format!("{} {}/{} · {}", web("custos_tarifa_in_out"), dec(r.input, 2), dec(r.output, 2), r.origin));
+            let name = div().flex().flex_col().gap(px(2.))
+                .child(div().flex().items_center().gap(px(6.)).child(div().size(px(8.)).flex_shrink_0().rounded_full().bg(dot))
+                    .child(div().min_w_0().truncate().child(b.key.clone()))
+                    .when(!priced, |el| el.child(tag(web(if is_free(&b.key) { "custos_gratis" } else { "custos_sem_tarifa" }))))
+                    .when(partial, |el| el.child(tag(web("custos_preco_parcial")))))
+                .child(div().pl(px(14.)).flex().items_center().gap(px(6.)).text_size(px(11.5)).text_color(theme::faint())
+                    .child(div().min_w_0().truncate().child(detail))
+                    .when(shown_rate.as_ref().is_some_and(|r| r.cache_estimado), |el| el.child(tag(web("custos_cache_estimado")))));
             let entry = div().flex().justify_end().child(tok(b.input + b.cache_write + b.cache_read))
                 .child(div().text_color(theme::faint()).child(format!("/{}", tok(b.input))))
                 .when(b.cache_write == 0. && b.cache_read > 0., |el| el.child(div().text_color(theme::faint()).child("*")));
-            let origin = div().flex().justify_end().gap(px(4.)).child(shown_rate.as_ref().map_or("—".into(), |r| r.origin.clone()))
-                .when(shown_rate.as_ref().is_some_and(|r| r.cache_estimado), |el| el.child(tag(web("custos_cache_estimado"))));
             let cells: Vec<(AnyElement, f32)> = vec![
                 (entry.into_any_element(), COLS[0]),
                 (div().child(tok(b.output)).into_any_element(), COLS[1]),
                 (div().child(tok(b.cache_read)).into_any_element(), COLS[2]),
-                (div().text_color(theme::muted()).child(shown_rate.as_ref().map_or("—".into(), |r| format!("{}/{}", dec(r.input, 2), dec(r.output, 2)))).into_any_element(), COLS[3]),
-                (origin.text_color(theme::muted()).into_any_element(), COLS[4]),
-                (div().text_color(theme::muted()).child(if priced { pct(b.cost, total) } else { "—".into() }).into_any_element(), COLS[5]),
+                (div().text_color(theme::muted()).child(if priced { pct(b.cost, total) } else { "—".into() }).into_any_element(), COLS[3]),
                 (div().font_weight(FontWeight::SEMIBOLD).text_color(if priced { theme::accent() } else { theme::faint() })
-                    .child(if priced { money2(b.cost, rate) } else { "—".into() }).into_any_element(), COLS[6]),
+                    .child(if priced { money2(b.cost, rate) } else { "—".into() }).into_any_element(), COLS[4]),
             ];
-            let bar = div().w(px(60.)).flex_shrink_0().pl(px(10.)).child(div().h(px(5.)).rounded_full().bg(theme::inset())
-                .when(priced, |el| el.child(div().h_full().rounded_full().bg(chart(1)).w(relative(((b.cost / peak) as f32).max(0.03))))));
+            let bar = div().w(px(56.)).flex_shrink_0().pl(px(10.)).child(div().h(px(5.)).rounded_full().bg(theme::inset())
+                .when(priced, |el| el.child(div().h_full().rounded_full().bg(dot).w(relative(((b.cost / peak) as f32).max(0.03))))));
             body = body.child(Button::new(SharedString::from(format!("costs-model-{key}")))
                 .custom(ButtonCustomVariant::new(cx).color(if on { theme::accent_dim() } else { transparent_black() }).foreground(theme::text())
                     .hover(theme::hover()).active(theme::hover()))
-                .when(on, |el| el.bg(theme::accent_dim())).w_full().h(px(34.)).px(px(8.)).rounded(px(6.))
+                .when(on, |el| el.bg(theme::accent_dim())).w_full().h_auto().py(px(6.)).px(px(8.)).rounded(px(6.)).tooltip(key.clone())
                 .child(div().w_full().flex().items_center().text_size(px(13.))
-                    .child(div().flex_1().min_w_0().child(name))
+                    .child(div().flex_1().min_w_0().pr(px(8.)).child(name))
                     .children(cells.into_iter().map(|(el, w)| div().w(px(w)).flex_shrink_0().flex().justify_end().child(el)))
                     .child(bar))
                 .on_click(cx.listener(move |this, _, _, cx| this.toggle_cut(Dim::Model, key.clone(), cx))));
@@ -1725,7 +2039,7 @@ impl Hangar {
                 .label(Self::name_of(report, dim, &key))
                 .on_click(cx.listener(move |this, _, _, cx| this.toggle_compared(key.clone(), cx)))
         }));
-        let mut body = card(web("lista_comparar"), Some(web_with("custos_comparar_hint", &[("n", COMPARE_MAX.to_string())])))
+        let mut body = icon_card(IconName::ChartLine, web("lista_comparar"), Some(web_with("custos_comparar_hint", &[("n", COMPARE_MAX.to_string())])))
             .child(div().flex().flex_wrap().items_center().gap(px(10.))
                 .child(div().text_size(px(12.5)).text_color(theme::muted()).child(web("custos_comparar_por"))).child(dims).child(metrics))
             .child(chips);
@@ -1912,7 +2226,10 @@ pub(super) fn card_plain() -> Div {
     div().w_full().min_w_0().p(px(16.)).rounded(px(14.)).border_1().border_color(theme::border()).bg(theme::boxed()).flex().flex_col().gap(px(12.))
 }
 
-fn two_cols(a: Div, b: Div) -> Div { div().flex().gap(px(16.)).items_start().child(a.flex_1()).child(b.flex_1()) }
+/// Dois cartões lado a lado; abaixo de ~900 px de conteúdo cada um ocupa a linha, para as tabelas não se espremerem.
+fn two_cols(a: Div, b: Div) -> Div {
+    div().flex().flex_wrap().gap(px(16.)).items_start().child(a.flex_1().min_w(px(440.))).child(b.flex_1().min_w(px(440.)))
+}
 
 pub(super) fn field(label: String, control: AnyElement) -> Div {
     div().flex().flex_col().gap(px(5.)).child(div().text_size(px(12.)).text_color(theme::muted()).child(label)).child(control)
@@ -1942,18 +2259,31 @@ pub(super) fn error_state(error: String, retry: impl Fn(&ClickEvent, &mut Window
         .child(Button::new("costs-retry").outline().small().label(web("config_server_tentar_de_novo")).on_click(retry))
 }
 
-fn kpi(label: String, value: String, foot: Vec<String>, secondary: bool, dash: bool) -> Div {
-    div().flex_1().min_w_0().p(px(14.)).rounded(px(12.)).border_1().border_color(theme::border()).bg(theme::boxed()).flex().flex_col().gap(px(4.))
+/// Cartão de número: ícone na cor do que mede, rótulo, valor e uma linha de apoio; devolve também o texto do balão.
+fn kpi(icon: IconName, color: Hsla, label: String, value: String, foot: String, tip: String) -> (Div, String) {
+    let dash = value == "—";
+    let tip = [foot.clone(), tip].into_iter().filter(|t| !t.is_empty()).collect::<Vec<_>>().join("\n");
+    let body = div().flex_1().min_w_0().p(px(14.)).rounded(px(12.)).border_1().border_color(theme::border()).bg(theme::boxed())
+        .hover(|s| s.border_color(theme::accent().alpha(0.45))).flex().flex_col().gap(px(4.))
+        .child(div().size(px(28.)).mb(px(4.)).rounded(px(8.)).flex().items_center().justify_center().bg(color.alpha(0.16))
+            .child(chrome::small_icon(icon, 15., color)))
         .child(div().text_size(px(12.5)).text_color(theme::muted()).child(label))
-        .child(div().text_size(px(26.)).font_weight(if secondary { FontWeight::NORMAL } else { FontWeight::SEMIBOLD })
-            .text_color(if secondary || dash { theme::muted() } else { theme::text() }).child(value))
-        .children(foot.into_iter().map(|f| div().text_size(px(12.)).text_color(theme::muted()).whitespace_normal().child(f)))
+        .child(div().text_size(px(22.)).font_weight(FontWeight::SEMIBOLD).text_color(if dash { theme::muted() } else { theme::text() }).child(value))
+        .child(div().text_size(px(12.)).text_color(theme::muted()).truncate().child(foot));
+    (body, tip)
 }
 
-fn mini_kpi(label: String, value: String, color: Option<Hsla>) -> Div {
-    div().flex_1().p(px(12.)).rounded(px(10.)).border_1().border_color(theme::border()).bg(theme::inset()).flex().flex_col().gap(px(4.))
-        .child(div().text_size(px(12.)).text_color(theme::muted()).child(label))
-        .child(div().text_size(px(19.)).font_weight(FontWeight::SEMIBOLD).text_color(color.unwrap_or_else(theme::text)).child(value))
+/// Rótulo de seção pequeno com ícone, o do topo dos cartões grandes.
+fn section_label(icon: IconName, text: String) -> Div {
+    div().flex().items_center().gap(px(6.)).text_size(px(12.5)).text_color(theme::muted()).child(chrome::small_icon(icon, 14., theme::muted())).child(text)
+}
+
+/// O `card` com ícone ao lado do título.
+fn icon_card(icon: IconName, title: String, hint: Option<String>) -> Div {
+    card_plain().child(div().flex().flex_col().gap(px(3.))
+        .child(div().flex().items_center().gap(px(8.)).text_size(px(15.)).font_weight(FontWeight::SEMIBOLD)
+            .child(chrome::small_icon(icon, 16., theme::accent())).child(title))
+        .children(hint.map(|h| div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(h))))
 }
 
 /// Barra de 100% com uma fatia por valor positivo.
@@ -1975,7 +2305,7 @@ fn table_row(cells: Vec<(String, Option<f32>)>, header: bool) -> Div {
 
 fn table_row_el(first: Div, cells: Vec<(String, f32, bool)>) -> Div {
     div().flex().items_center().px(px(8.)).py(px(6.)).text_size(px(13.)).border_t_1().border_color(theme::border())
-        .child(first.flex_1().min_w_0())
+        .child(first.flex_1().min_w_0().overflow_hidden().pr(px(8.)))
         .children(cells.into_iter().map(|(text, w, dim)| div().w(px(w)).flex_shrink_0().flex().justify_end()
             .text_color(if dim { theme::muted() } else { theme::text() }).child(text)))
 }
@@ -2028,6 +2358,23 @@ mod tests {
         let bare = Report { combos: Vec::new(), anterior: None, ..report(1., "s3") };
         let merged = merge_costs(&[part("a", "casa", Part::Ok(report(2., "s1"))), part("e", "antiga", Part::Ok(bare))]);
         assert!(merged.combos.is_empty() && merged.anterior.is_none());
+    }
+
+    #[test]
+    fn forecast_and_outliers_follow_the_expo() {
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 11, 10).unwrap();
+        let mut days = vec![("2026-10-31".to_owned(), 50.)];
+        days.extend((1..=10).map(|d| (format!("2026-11-{d:02}"), 10.)));
+        let f = month_forecast(&days, today, false).unwrap();
+        assert_eq!((f.mtd, f.projected, f.days_in_month, f.cumulative.len(), f.last_month), (100., 300., 30, 10, None));
+        assert_eq!(month_forecast(&days, today, true).unwrap().last_month, Some(50.));
+        assert_eq!(month_forecast(&[("2026-11-10".into(), 70.)], today, false).unwrap().projected, 70. + 10. * 20.);
+        assert!(month_forecast(&[("2026-10-31".into(), 5.)], today, false).is_none());
+        let mut values = vec![10.; 10];
+        values.push(100.);
+        assert_eq!(outliers(&values).iter().filter(|o| **o).count(), 1);
+        assert!(outliers(&values)[10]);
+        assert_eq!(outliers(&[1., 100.]), vec![false, false]);
     }
 
     #[test]
