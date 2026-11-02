@@ -128,6 +128,12 @@ const PREVIEW: &str = "__preview__";
 const WORKING: &str = "__working__";
 /// Entrada da linha "trabalhando"; a marca, desenhada fora da conversa, entra no mesmo tempo.
 const WORKING_FADE: Duration = motion::WORKING.duration();
+// A miniatura citada chegando: abre do centro, borrada, e fica nítida no fim.
+const REVEAL: Duration = Duration::from_millis(1400);
+/// Mensagem mais velha que isto (segundos) é histórico: a imagem dela aparece sem a revelação.
+const LIVE_REVEAL_WINDOW: f64 = 30.;
+// Uma passada do brilho sobre a caixa da miniatura que ainda carrega.
+const LOADING_SWEEP: Duration = Duration::from_millis(1400);
 /// Quanto "Enviando…" espera o turno começar depois da entrega; passou disso, a sessão não vai trabalhar.
 const SENT_BRIDGE: Duration = Duration::from_secs(5);
 /// Prefixo da linha do cartão fixo de um agente rodando, seguido do id do tool_use.
@@ -309,7 +315,8 @@ enum Payload {
     Commands(String, u64, Result<Vec<CommandInfo>, Failure>),
     Recent(SessionKey, Result<Vec<UploadFile>, Failure>),
     // Miniatura já decodificada fora da thread da janela; `None` = bytes que não são imagem legível.
-    Media(SessionKey, Source, Result<Option<Arc<RenderImage>>, Failure>),
+    // A miniatura e os quadros da revelação dela.
+    Media(SessionKey, Source, Result<Option<(Arc<RenderImage>, Vec<Arc<RenderImage>>)>, Failure>),
     /// Resultado de Abrir/Salvar: o arquivo gravado e se veio vazio, ou a falha e se ele não existe no servidor.
     Saved(SessionKey, Source, bool, Result<(PathBuf, bool), (String, bool)>),
     ConnectionNotSaved(String),
@@ -733,6 +740,8 @@ pub struct Hangar {
     plugin_toasts_shown: std::collections::VecDeque<SharedString>,
     recent: Option<Recent>,
     media: MediaCache<(SessionKey, Source)>,
+    // Miniatura que acabou de chegar: quando chegou e os quadros da revelação, até ela terminar.
+    media_reveal: HashMap<(SessionKey, Source), (Instant, Vec<Arc<RenderImage>>)>,
     /// Páginas publicadas na conversa, pelo id da página.
     pages: page_card::Pages,
     full_images: viewer::FullImages,
@@ -1114,7 +1123,7 @@ impl Hangar {
             plugin_question_seen: None,
             suggest_pick: 0, slash_open: false, suggest_dismissed: None, command_panel: false, context_card: false, command_search, confirm: None, confirm_no_ask: false,
             mention: Default::default(),
-            terminal_suggestion: String::new(), plugin_band: Value::Null, plugin_panes: Vec::new(), plugin_shown: None, plugin_columns: None, plugin_source: None, plugin_caps: Vec::new(), plugin_local_tab: None, plugin_presentations: HashMap::new(), linked_children_open: HashSet::new(), plugin_body_scrolls: HashMap::new(), plugin_question_focus: cx.focus_handle(), plugin_tabs_scroll: ScrollHandle::new(), plugin_tabs_seen: None, plugin_tabs_waits: 0, plugin_hovered: HashSet::new(), plugin_fields: HashMap::new(), plugin_draws: 0, plugin_toasts_seen: Default::default(), plugin_toasts_shown: Default::default(), recent: None, media: MediaCache::new(), pages: page_card::Pages::new(window.window_handle()), full_images: viewer::full_images(), stats: None,
+            terminal_suggestion: String::new(), plugin_band: Value::Null, plugin_panes: Vec::new(), plugin_shown: None, plugin_columns: None, plugin_source: None, plugin_caps: Vec::new(), plugin_local_tab: None, plugin_presentations: HashMap::new(), linked_children_open: HashSet::new(), plugin_body_scrolls: HashMap::new(), plugin_question_focus: cx.focus_handle(), plugin_tabs_scroll: ScrollHandle::new(), plugin_tabs_seen: None, plugin_tabs_waits: 0, plugin_hovered: HashSet::new(), plugin_fields: HashMap::new(), plugin_draws: 0, plugin_toasts_seen: Default::default(), plugin_toasts_shown: Default::default(), recent: None, media: MediaCache::new(), media_reveal: HashMap::new(), pages: page_card::Pages::new(window.window_handle()), full_images: viewer::full_images(), stats: None,
             side: side::Side::default(), controls: controls::Controls::default(),
             settings: None, settings_ui, tab_focus: HashMap::new(), tabs_scroll: ScrollHandle::new(), pending_tab_reveal: None, tab_group_open: None, tab_reveal_scheduled: false,
             tab_preview: None, tab_hover: None, tab_hover_epoch: 0, tab_hover_moved: Instant::now(), tab_preview_seq: 0, tab_preview_parked: None, in_tab_preview: false,
@@ -2060,8 +2069,17 @@ impl Hangar {
                 }
             }
             Payload::Media(key, source, result) => {
+                // Revelação que ninguém desenhou até o fim (a conversa saiu da tela) é solta aqui.
+                let now = Instant::now();
+                let stale: Vec<_> = self.media_reveal.iter().filter(|(_, (at, _))| now - *at > REVEAL * 2).map(|(slot, _)| slot.clone()).collect();
+                for slot in stale {
+                    for frame in self.media_reveal.remove(&slot).map(|(_, frames)| frames).unwrap_or_default() { cx.drop_image(frame, Some(window)); }
+                }
                 let state = match result {
-                    Ok(Some(image)) => MediaState::Image(image),
+                    Ok(Some((image, frames))) => {
+                        if !frames.is_empty() && !cx.reduce_motion() { self.media_reveal.insert((key.clone(), source.clone()), (now, frames)); }
+                        MediaState::Image(image)
+                    }
                     Ok(None) => MediaState::Failed(tr("media_unreadable")),
                     Err(error) => MediaState::Failed(Self::fetch_failure(&error)),
                 };
@@ -3209,7 +3227,7 @@ impl Hangar {
         }, cx);
     }
 
-    fn ensure_media(&mut self, source: &Source) {
+    fn ensure_media(&mut self, source: &Source, reveal: bool) {
         let (Some(api), Some(key)) = (self.session_api(), self.selected_key()) else { return; };
         let slot = (key.clone(), source.clone());
         if self.media.contains(&slot) { return; }
@@ -3221,7 +3239,8 @@ impl Hangar {
             let result = match uploads.fetch(&api, &key.name, &source).await {
                 Ok(bytes) => {
                     media::trace(format_args!("thumb fetched {source:?} {} B in {:.1} ms", bytes.len(), started.elapsed().as_secs_f64() * 1000.));
-                    Ok(tokio::task::spawn_blocking(move || media::thumbnail(&bytes)).await.ok().flatten())
+                    Ok(tokio::task::spawn_blocking(move || media::thumbnail(&bytes).map(|thumb| { let frames = if reveal { media::reveal(&thumb) } else { Vec::new() }; (thumb, frames) }))
+                        .await.ok().flatten())
                 }
                 Err(error) => Err(error),
             };
@@ -4068,7 +4087,8 @@ impl Hangar {
         let refs = if shown_outside { Vec::new() } else { tool_file_refs(call) };
         let look = appearance::get().tool_look;
         if !refs.is_empty() {
-            let refs = self.render_refs(&format!("{row}-read"), refs, cx);
+            let ts = result.and_then(|result| result.ts).or(call.ts);
+            let refs = self.render_refs(&format!("{row}-read"), refs, ts, cx);
             body = body.child(terminal_look::tool_body_control(look, &format!("{key}:files"), refs));
         }
         if let Some(diff) = diff { body = body.child(terminal_look::tool_body_control(look, &format!("{key}:diff"), diff)); }
@@ -4564,24 +4584,37 @@ impl Hangar {
             .into_any_element()
     }
 
-    fn render_refs(&mut self, row: &str, refs: Vec<(Source, String, bool)>, cx: &mut Context<Self>) -> AnyElement {
+    /// `ts` é a hora da mensagem: só a que acabou de chegar abre a imagem com a revelação; a do histórico aparece direto.
+    fn render_refs(&mut self, row: &str, refs: Vec<(Source, String, bool)>, ts: Option<f64>, cx: &mut Context<Self>) -> AnyElement {
         let key = self.selected_key();
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.);
+        let live = ts.is_some_and(|ts| now - ts < LIVE_REVEAL_WINDOW);
         let images: Vec<Source> = refs.iter().filter(|(_, _, image)| *image).map(|(source, _, _)| source.clone()).collect();
         let mut list = div().flex().flex_col().gap_2();
         let mut shown = 0;
         for (n, (source, name, image)) in refs.into_iter().enumerate() {
             let preview = if image {
-                self.ensure_media(&source);
-                let state = key.as_ref().and_then(|key| self.media.get(&(key.clone(), source.clone())));
-                let thumb = match state {
-                    Some(MediaState::Image(picture)) => div().max_w(px(320.)).max_h(px(240.)).rounded_md().overflow_hidden()
+                self.ensure_media(&source, live);
+                let slot = key.as_ref().map(|key| (key.clone(), source.clone()));
+                let reveal_done = slot.as_ref().and_then(|slot| self.media_reveal.get(slot)).is_some_and(|(at, _)| at.elapsed() >= REVEAL);
+                if reveal_done && let Some((_, frames)) = slot.as_ref().and_then(|slot| self.media_reveal.remove(slot)) {
+                    for frame in frames { cx.drop_image(frame, None); }
+                }
+                let revealing = slot.as_ref().and_then(|slot| self.media_reveal.get(slot)).map(|(_, frames)| frames.clone());
+                let state = slot.as_ref().and_then(|slot| self.media.get(slot));
+                let thumb = match (state, revealing) {
+                    (Some(MediaState::Image(picture)), Some(frames)) => {
+                        let picture = picture.clone();
+                        reveal_box().with_animation(SharedString::from(format!("thumb-reveal-{row}-{n}")), Animation::new(REVEAL).with_easing(ease_in_out),
+                            move |el, t| reveal_layers(el, &picture, &frames, t)).into_any_element()
+                    }
+                    (Some(MediaState::Image(picture)), None) => div().max_w(px(320.)).max_h(px(240.)).rounded_md().overflow_hidden()
                         // O id guarda o quadro corrente: sem ele a GPUI não anima o GIF. Fora da tela não é desenhado e para.
                         .child(img(picture.clone()).max_w(px(320.)).max_h(px(240.)).object_fit(ObjectFit::Contain)
                             .id(SharedString::from(format!("thumb-image-{row}-{n}")))).into_any_element(),
-                    Some(MediaState::Failed(reason)) => div().text_xs().text_color(theme::warning())
+                    (Some(MediaState::Failed(reason)), _) => div().text_xs().text_color(theme::warning())
                         .child(tr("media_failed").replace("{name}", &name).replace("{reason}", reason)).into_any_element(),
-                    _ => div().w(px(160.)).h(px(96.)).rounded_md().bg(theme::raised()).flex().items_center().justify_center()
-                        .text_xs().text_color(theme::muted()).child(tr("media_loading")).into_any_element(),
+                    _ => loading_thumb(&format!("{row}-{n}"), cx.reduce_motion()),
                 };
                 // Focável para o Esc do visor devolver o foco aqui; Enter abre como o clique.
                 let (open_key, sources, index) = (key.clone(), images.clone(), shown);
@@ -4636,7 +4669,7 @@ impl Hangar {
         let label = activity::web("anexos_ver_original");
         let mut tiles = Vec::new();
         for (n, source) in images.iter().enumerate() {
-            self.ensure_media(source);
+            self.ensure_media(source, false);
             let state = key.as_ref().and_then(|key| self.media.get(&(key.clone(), source.clone())));
             let inner = match state {
                 // O id guarda o quadro corrente: sem ele a GPUI não anima o GIF.
@@ -5338,7 +5371,8 @@ impl Hangar {
         let peer_head = peer.map(|peer| self.peer_head(&id, peer, cx));
         let (images, refs): (Vec<_>, Vec<_>) = refs.into_iter().partition(|(_, _, image)| user && *image);
         let thumbs = self.render_thumbs(&id, images.into_iter().map(|(source, _, _)| source).collect(), cx);
-        let files = (!refs.is_empty()).then(|| self.render_refs(&id, refs, cx));
+        let ts = match self.conversation.items.get(index) { Some(Item::Event(i)) => self.chat.events.get(*i).and_then(|event| event.ts), _ => None };
+        let files = (!refs.is_empty()).then(|| self.render_refs(&id, refs, ts, cx));
         let more_key = format!("{id}#more");
         // Skill injetada: só o rótulo, e o SKILL.md inteiro no "mostrar mais" (como a linha recolhida do web).
         let skill = match self.conversation.items.get(index) {
@@ -5660,6 +5694,34 @@ pub(super) fn tool_file_refs(call: &ChatEvent) -> Vec<(Source, String, bool)> {
     };
     // csv/txt lidos são texto: o cartão da ferramenta já mostra o conteúdo.
     paths.into_iter().flat_map(composer::cited_paths).filter(|path| !(read && composer::is_text_data(path))).map(cited_ref).collect()
+}
+
+pub(crate) fn reveal_box() -> Div { div().relative().max_w(px(320.)).max_h(px(240.)).rounded_md().overflow_hidden() }
+
+/// A miniatura no ponto `t` da abertura: a máscara abre até 70% do tempo; o resto troca o quadro reduzido pelo nítido.
+pub(crate) fn reveal_layers(el: Div, picture: &Arc<RenderImage>, frames: &[Arc<RenderImage>], t: f32) -> Div {
+    let k = ((t / 0.7 * frames.len() as f32) as usize).min(frames.len() - 1);
+    let sharp = ((t - 0.7) / 0.3).clamp(0., 1.);
+    el.child(img(picture.clone()).max_w(px(320.)).max_h(px(240.)).object_fit(ObjectFit::Contain).opacity(sharp))
+        .child(img(frames[k].clone()).absolute().inset_0().size_full().object_fit(ObjectFit::Contain).opacity(1. - sharp))
+}
+
+/// Caixa da miniatura citada que ainda carrega: duas faixas de brilho de larguras e fases diferentes cruzam a caixa,
+/// e o cruzamento delas ondula. Com movimento reduzido, fica parada.
+pub(crate) fn loading_thumb(id: &str, still: bool) -> AnyElement {
+    const W: f32 = 160.;
+    let boxed = div().relative().overflow_hidden().w(px(W)).h(px(96.)).rounded_md().bg(theme::raised())
+        .flex().items_center().justify_center().text_xs().text_color(theme::muted()).child(tr("media_loading"));
+    if still { return boxed.into_any_element(); }
+    let band = |key: &str, width: f32, glow: f32, phase: f32| {
+        let (clear, lit) = (theme::text().alpha(0.), theme::text().alpha(glow));
+        div().absolute().top_0().bottom_0().w(px(width)).flex()
+            .child(div().flex_1().bg(linear_gradient(90., linear_color_stop(clear, 0.), linear_color_stop(lit, 1.))))
+            .child(div().flex_1().bg(linear_gradient(90., linear_color_stop(lit, 0.), linear_color_stop(clear, 1.))))
+            .with_animation(SharedString::from(format!("thumb-loading-{key}-{id}")), Animation::new(LOADING_SWEEP).repeat(),
+                move |el, t| el.left(px(-width + (t + phase).fract() * (W + width))))
+    };
+    boxed.child(band("wide", 120., 0.05, 0.)).child(band("narrow", 56., 0.07, 0.45)).into_any_element()
 }
 
 /// Cartão de um arquivo que não tem prévia (pdf, planilha, zip, texto): ícone, nome, extensão ou o estado do último

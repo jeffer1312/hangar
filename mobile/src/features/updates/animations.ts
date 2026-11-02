@@ -2,6 +2,7 @@ import type { ComponentType } from 'react';
 import { AutoReportAnimation } from './AutoReportAnimation';
 import { CodexActivityAnimation } from './CodexActivityAnimation';
 import { HideFromListAnimation } from './HideFromListAnimation';
+import { ImageRevealAnimation } from './ImageRevealAnimation';
 import { RenameSuggestionAnimation } from './RenameSuggestionAnimation';
 import { TagsPlateAnimation } from './TagsPlateAnimation';
 import { VaultAnimation } from './VaultAnimation';
@@ -13,6 +14,7 @@ const animations: Record<string, ComponentType<{ width: number }>> = {
   'etiquetas-maquina-conta': TagsPlateAnimation,
   'ocultar-da-lista': HideFromListAnimation,
   'relatorio-automatico': AutoReportAnimation,
+  'revelacao-imagem': ImageRevealAnimation,
   'sugestao-de-nome': RenameSuggestionAnimation,
 };
 

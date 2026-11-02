@@ -583,8 +583,9 @@ impl Hangar {
         };
         // O que o SendUserFile mandou fica à vista: é a razão da chamada, e no Claude Code a imagem chega à pessoa.
         let call = &self.chat.events[tool.call];
+        let ts = call.ts;
         let sent = sends_files(call).then(|| tool_file_refs(call)).filter(|refs| !refs.is_empty())
-            .map(|refs| div().pl(px(INDENT + 16.)).pt_1().child(self.render_refs(&format!("{row}-{key}-sent"), refs, cx)));
+            .map(|refs| div().pl(px(INDENT + 16.)).pt_1().child(self.render_refs(&format!("{row}-{key}-sent"), refs, ts, cx)));
         div().flex().flex_col().child(header).child(outcome_line).children(sent).children(body).into_any_element()
     }
 

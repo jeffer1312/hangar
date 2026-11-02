@@ -7,6 +7,7 @@ mod composer_history;
 mod login_browser;
 mod password_vault;
 mod hide_from_list;
+mod image_reveal;
 mod rename_suggestion;
 mod search_conversations;
 mod tour;
@@ -30,6 +31,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "login-navegador" => Some(login_browser::render),
         "ocultar-da-lista" => Some(hide_from_list::render),
         "busca-conversas" => Some(search_conversations::render),
+        "revelacao-imagem" => Some(image_reveal::render),
         _ => None,
     }
 }
