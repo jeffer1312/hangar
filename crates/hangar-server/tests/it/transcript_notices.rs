@@ -82,6 +82,26 @@ fn terminal_turn_opened_by_the_queue_still_counts() {
     assert_eq!(live,expected);
 }
 
+/// Recado de outra sessão (`hangar-send`) chega como `isMeta` com `origin.kind: "peer"`, sem prompt: abre o turno
+/// da sessão parada. Medido na prova ao vivo: a primeira falha do primeiro turno sumia.
+#[test]
+fn terminal_turn_opened_by_a_peer_message_counts() {
+    let rows = rows("terminal_hooks.jsonl");
+    let (prompt,failure,end) = (&rows[0],&rows[1],&rows[4]);
+    let mut peer = with_uuid(prompt,"p1");
+    peer["isMeta"] = json!(true);
+    peer["origin"] = json!({"kind":"peer","name":"outra-sessao","body":"[de: outra-sessao] rode ls"});
+    peer["message"] = json!({"role":"user","content":"Another Claude session sent a message: rode ls"});
+    let lines = [peer,with_uuid(failure,"h1"),with_uuid(failure,"h2"),with_uuid(end,"d1")];
+    let expected = vec![
+        ("hookfail:h1".to_owned(),"hook_failed".to_owned(),Some("PostToolUse:Bash: falhou-de-proposito".to_owned())),
+        ("hookfail-sum:d1:5182a3be".to_owned(),"hook_failed".to_owned(),Some("PostToolUse:Bash: falhou-de-proposito (2× neste turno)".to_owned())),
+    ];
+    let (history,live) = both(&lines);
+    assert_eq!(history,expected);
+    assert_eq!(live,expected);
+}
+
 #[test]
 fn terminal_compact_summary_and_local_command_do_not_end_the_turn() {
     let rows = rows("terminal_hooks.jsonl");

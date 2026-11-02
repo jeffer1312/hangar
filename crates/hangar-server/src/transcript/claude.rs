@@ -189,6 +189,10 @@ impl NoticeFold {
         match obj.get("type").and_then(Value::as_str) {
             // Turno interrompido não grava `turn_duration`: o prompt seguinte também fecha.
             Some("user") if is_prompt(obj) => self.open_turn(uid, at, events),
+            // Recado de outra sessão: `isMeta`, sem prompt; com a sessão parada é ele que abre o turno.
+            Some("user") if !self.turn_open && obj.get("origin").and_then(|o| o.get("kind")).and_then(Value::as_str) == Some("peer") => {
+                self.open_turn(uid, at, events)
+            }
             Some("user") => self.retries = None,
             Some("system") => match obj.get("subtype").and_then(Value::as_str) {
                 Some("turn_duration") => {
