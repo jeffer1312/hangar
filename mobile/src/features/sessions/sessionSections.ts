@@ -21,9 +21,8 @@ export const sessionGroupKey = (mode: GroupBy, id: string) => id.startsWith('sta
 const rowKey = (r: AggSession) => `${r.serverId}::${r.name}`;
 
 /** O que fazer com as linhas `hidden_from_list`: cada tela escolhe, nenhuma herda sem querer.
- *  `collapsed`/`expanded`: seção "Ocultas (N)" no fim (lista); `exclude`: fora (barra do tablet);
- *  `include`: no lugar de sempre (seletor, que mostra a marca na linha). */
-export type HiddenRows = 'collapsed' | 'expanded' | 'exclude' | 'include';
+ *  `collapsed`/`expanded`: seção "Ocultas (N)" no fim (lista, seletor); `exclude`: fora (barra do tablet). */
+export type HiddenRows = 'collapsed' | 'expanded' | 'exclude';
 export const HIDDEN_SECTION_ID = 'hidden';
 
 // O grupo é um bloco só, com os membros de todas as máquinas, onde o primeiro deles cairia na lista.
@@ -54,11 +53,15 @@ function gatherGroups(sections: GrupoSessoes[], groupOf: ReadonlyMap<string, Glo
   return { sections: out, heads };
 }
 
-export function buildSessionSections(rows: AggSession[], hiddenRows: HiddenRows, mode: GroupBy, search: string, collapsedGroups: ReadonlySet<string>, preferredServerId?: string, pairGroups: GlobalGroup[] = []): SessionSection[] {
+export function buildSessionSections(rows: AggSession[], hiddenRows: HiddenRows, mode: GroupBy, search: string, collapsedGroups: ReadonlySet<string>, preferredServerId?: string, pairGroups: GlobalGroup[] = [], keep?: string): SessionSection[] {
   const allLive = rows.filter((r) => r.state !== 'dead');
-  // A sessão de fora acompanha a do par: some e volta junto com ela.
-  const hiddenKeys = new Set(hiddenRows === 'include' ? [] : allLive.filter((r) => r.hidden_from_list).map(rowKey));
-  const isHidden = (r: AggSession) => hiddenKeys.has(rowKey(r)) || (!!r.outside && hiddenKeys.has(`${r.outside.localServerId}::${r.outside.localSession}`));
+  // A sessão de fora acompanha a do par: some e volta junto com ela. `keep` (a aberta) fica no lugar,
+  // e sendo de fora leva a do par, onde ela se encaixa.
+  const hiddenKeys = new Set(allLive.filter((r) => r.hidden_from_list).map(rowKey));
+  const keptOutside = allLive.find((r) => rowKey(r) === keep)?.outside;
+  const kept = new Set([keep, keptOutside && `${keptOutside.localServerId}::${keptOutside.localSession}`]);
+  const isHidden = (r: AggSession) => !kept.has(rowKey(r))
+    && (hiddenKeys.has(rowKey(r)) || (!!r.outside && hiddenKeys.has(`${r.outside.localServerId}::${r.outside.localSession}`)));
   const liveRows = hiddenKeys.size ? allLive.filter((r) => !isHidden(r)) : allLive;
   const live = new Set(liveRows.map(rowKey));
   const groupOf = new Map<string, GlobalGroup>();

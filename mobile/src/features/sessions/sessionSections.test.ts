@@ -104,10 +104,14 @@ describe('sessões ocultas', () => {
     expect(keys(sections)).toEqual(['nb::visivel']);
   });
 
-  it('seletor: as ocultas ficam no lugar de sempre, sem seção própria', () => {
-    const sections = buildSessionSections(hiddenRows, 'include', 'server', '', new Set());
-    expect(sections.some((s) => s.id === HIDDEN_SECTION_ID)).toBe(false);
-    expect(keys(sections)).toEqual(expect.arrayContaining(['nb::visivel', 'nb::oculta-nb', 'vm::oculta-vm', 'fora::convidada']));
+  it('seletor: a aberta fica no lugar mesmo oculta, e as outras ocultas vão para "Ocultas"', () => {
+    const sections = buildSessionSections(hiddenRows, 'expanded', 'server', '', new Set(), undefined, [], 'vm::oculta-vm');
     expect(sections.find((s) => s.id === 'state:working')?.data.map(key)).toEqual(['vm::oculta-vm']);
+    expect(sections.find((s) => s.id === HIDDEN_SECTION_ID)?.data.map(key)).not.toContain('vm::oculta-vm');
+  });
+
+  it('seletor: a de fora aberta fica no lugar mesmo com a sessão do par oculta', () => {
+    const sections = buildSessionSections(hiddenRows, 'collapsed', 'server', '', new Set(), undefined, [], 'fora::convidada');
+    expect(keys(sections.filter((s) => s.id !== HIDDEN_SECTION_ID))).toEqual(expect.arrayContaining(['nb::oculta-nb', 'fora::convidada']));
   });
 });

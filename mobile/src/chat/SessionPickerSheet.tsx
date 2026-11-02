@@ -68,8 +68,7 @@ function PickerList({ onClose, atual, serverId }: { onClose: () => void; atual: 
     const current = liveRows.find((s) => s.name === atual && s.serverId === serverId);
     const currentServer = current?.outside?.localServerId ?? serverId;
     // Como na lista: as ocultas no fim, em "Ocultas (N)"; a aberta fica no lugar dela.
-    const visible = current?.hidden_from_list ? liveRows.map((s) => s === current ? { ...s, hidden_from_list: false } : s) : liveRows;
-    return buildSessionSections(visible, hiddenOpen ? 'expanded' : 'collapsed', 'server', search, collapsedGroups, currentServer, pairGroups);
+    return buildSessionSections(liveRows, hiddenOpen ? 'expanded' : 'collapsed', 'server', search, collapsedGroups, currentServer, pairGroups, `${serverId}::${atual}`);
   }, [liveRows, atual, serverId, search, collapsedGroups, pairGroups, hiddenOpen]);
   const multipleServers = useMemo(() => new Set(liveRows.map((s) => s.serverId)).size > 1, [liveRows]);
   const toggleGroup = useCallback((id: string) => id === HIDDEN_SECTION_ID ? setHiddenSectionOpen(!hiddenOpen) : setCollapsedGroups((current) => {
