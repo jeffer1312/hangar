@@ -60,6 +60,14 @@ pub struct ClaudeEngine {
     tool_name: Option<String>,
     tool_visible: bool,
     label: Option<String>,
+    /// `api_retry` em curso: vence os outros rótulos até a resposta voltar.
+    retry_label: Option<String>,
+    /// Hooks em curso por `hook_id`: o que passa de `HOOK_SLOW_S` vira rótulo.
+    hooks_running: BTreeMap<String,RunningHook>,
+    /// Falhas de cada hook no turno (`hook_name` → detalhe da primeira, total): a primeira vai à conversa, as outras só somam.
+    hook_streaks: BTreeMap<String,(String,u32)>,
+    /// Registros no diário por tipo nesta vida: passado o teto, o motor nem pede a gravação.
+    diary_counts: BTreeMap<String,u32>,
     compacting: bool,
     turn_start: Option<f64>,
     label_deadline: Option<f64>,
@@ -78,7 +86,10 @@ pub struct ClaudeEngine {
     active_input: Option<String>,
     /// Último `/comando` escrito no processo: a CLI responde alguns sozinha, sem linha no transcript.
     slash_input: Option<String>,
+    /// O que já foi avisado nesta vida do processo: tipos desconhecidos e as chaves de `notice_once`.
     unknown: BTreeSet<String>,
+    /// Linhas do retrato do cano repassadas na adoção: a nota delas já está na conversa.
+    replaying: bool,
     surface: Option<Surface>,
     /// Últimas linhas do stderr do processo: o motivo de uma queda (`not logged in`, CLI quebrada).
     stderr_tail: Vec<String>,
@@ -99,6 +110,13 @@ pub struct ClaudeEngine {
 
 const ECHO_LIMIT: usize = 64;
 
+/// Hook rápido não aparece: só o que passa disto vira rótulo.
+const HOOK_SLOW_S: f64 = 3.0;
+/// O mesmo teto por tipo do diário (`local_policy::UNKNOWN_PER_KIND`): cada pedido ao diário redesenha a vista.
+const DIARY_PER_KIND: u32 = 30;
+
+struct RunningHook { name:String, started:f64, shown:bool }
+
 /// UUID estável da mensagem de uma operação (formato v5 sobre o SHA-1 do ID): reescrever o mesmo quadro
 /// depois de reiniciar mantém o eco casável.
 fn echo_uuid(operation_id:&str) -> String {
@@ -111,6 +129,9 @@ fn echo_uuid(operation_id:&str) -> String {
 const STDERR_TAIL: usize = 10;
 
 fn string(value:&Value) -> Option<String> { value.as_str().map(str::to_owned) }
+fn clip(text:&str,max:usize) -> String {
+    match text.char_indices().nth(max) { Some((at,_)) => format!("{}…",&text[..at]), None => text.to_owned() }
+}
 fn error(message:&str) -> RuntimeError { RuntimeError::new("claude_command",message) }
 fn mode(value:&str) -> String { if value == "default" { "manual".into() } else { value.into() } }
 
@@ -136,9 +157,9 @@ impl ClaudeEngine {
             waiters:BTreeMap::new(),wires:BTreeMap::new(),retired_writes:BTreeSet::new(),policies:BTreeMap::new(),last_format_request:None,format_gate:FormatGate::default(),reload_deadline:clock.monotonic_s+10.0,
             rate_limit_info:Value::Null,turn_limit:None,commands:metadata.get("commands").filter(|commands|!commands.is_null()).cloned(),terminal_commands:metadata.get("terminal_commands").cloned().unwrap_or_else(||json!([])),
             preview:LiveBuffer::default(),thinking:LiveBuffer::default(),tool_input:LiveBuffer::default(),tool_name:None,tool_visible:false,
-            label:None,compacting:false,turn_start:None,label_deadline:None,tokens_closed:0,tokens_message:None,gen_start:None,
+            label:None,retry_label:None,hooks_running:BTreeMap::new(),hook_streaks:BTreeMap::new(),diary_counts:BTreeMap::new(),compacting:false,turn_start:None,label_deadline:None,tokens_closed:0,tokens_message:None,gen_start:None,
             token_chars:0,thinking_start:None,thought_s:0.0,tasks:Vec::new(),usage:metadata.get("usage").cloned().unwrap_or(Value::Null),
-            context_window:metadata["context_window"].as_u64(),cost:metadata["cost"].as_f64(),effort_intent,effort_deadline:None,active_input:None,slash_input:None,unknown:BTreeSet::new(),surface:None,stderr_tail:Vec::new(),problem_persisted,subagents:BTreeMap::new(),echoes:std::collections::VecDeque::new(),background:BTreeSet::new(),active_at:clock.monotonic_s,deaf:false,metadata };
+            context_window:metadata["context_window"].as_u64(),cost:metadata["cost"].as_f64(),effort_intent,effort_deadline:None,active_input:None,slash_input:None,unknown:BTreeSet::new(),replaying:false,surface:None,stderr_tail:Vec::new(),problem_persisted,subagents:BTreeMap::new(),echoes:std::collections::VecDeque::new(),background:BTreeSet::new(),active_at:clock.monotonic_s,deaf:false,metadata };
         if let Some(controls) = engine.metadata["control_carry"].as_array() {
             for control in controls {
                 let Ok(request_id) = serde_json::from_value::<RequestId>(control["request_id"].clone()) else { continue };
@@ -219,7 +240,7 @@ impl ClaudeEngine {
         }
         self.waiters.clear(); self.policies.clear(); self.last_format_request = None; self.format_gate.reset();
         self.pending.clear(); self.question = None; self.effort_intent = None; self.subagents.clear();
-        self.tasks.clear(); self.background.clear(); self.label = None;
+        self.tasks.clear(); self.background.clear(); self.label = None; self.drop_turn_notices();
         self.effort_deadline = None; self.active_input = None; self.restore_plan = None;
         self.in_progress = false; self.turn_start = None; self.label_deadline = None;
         self.clear_streams(effects);
@@ -253,6 +274,10 @@ impl ClaudeEngine {
             else if self.in_progress || self.initializing { "working" } else { "idle" }.into();
         let mut label = self.label.clone();
         if self.initializing && !self.in_progress { label = Some("Iniciando sessão…".into()); }
+        if let Some(hook) = self.hooks_running.values().filter(|hook|hook.shown).min_by(|a,b|a.started.total_cmp(&b.started)) {
+            label = Some(format!("Rodando hook {}…",hook.name));
+        }
+        if let Some(retry) = &self.retry_label { label = Some(retry.clone()); }
         if state.state == "working" {
             if let Some(start) = self.turn_start {
                 let seconds = (self.clock.monotonic_s - start).max(0.0) as u64;
@@ -358,6 +383,7 @@ impl ClaudeEngine {
         let mut effects = Vec::new();
         self.deaf = true;
         self.in_progress = false; self.turn_start = None; self.label_deadline = None; self.label = None;
+        self.end_turn_notices(&mut effects);
         self.pending.clear(); self.question = None;
         if let Some(id) = self.active_input.take() {
             if let Some(wire) = self.wires.get_mut(&id) { wire.final_result = true; }
@@ -408,6 +434,7 @@ impl ClaudeEngine {
         self.waiters.clear();
         self.transport_up = true;
         self.in_progress = false; self.turn_start = None; self.label_deadline = None; self.active_input = None;
+        self.drop_turn_notices();
         self.pending.clear(); self.question = None; self.clear_streams(&mut effects);
         effects.extend(self.hydrate(snapshot)?);
         Ok(effects)
@@ -519,9 +546,13 @@ impl ClaudeEngine {
         let mut effects = Vec::new();
         self.alive = snapshot.saiu.is_none();
         self.stderr_tail = snapshot.stderr_tail.iter().rev().take(STDERR_TAIL).rev().cloned().collect();
-        for raw in snapshot.init.iter().chain(snapshot.rate_limit.iter()) {
+        self.replaying = true;
+        let replayed:Result<(),RuntimeError> = snapshot.init.iter().chain(snapshot.rate_limit.iter()).try_for_each(|raw|{
             effects.extend(self.apply(EngineInput::Line(serde_json::from_str(raw).map_err(|_|error("snapshot inválido"))?),self.clock)?);
-        }
+            Ok(())
+        });
+        self.replaying = false;
+        replayed?;
         if snapshot.aberto { self.start_turn(); }
         for raw in snapshot.pendentes {
             effects.extend(self.apply(EngineInput::Line(serde_json::from_str(&raw).map_err(|_|error("pedido pendente inválido"))?),self.clock)?);
@@ -780,6 +811,8 @@ impl ClaudeEngine {
 
     fn on_line(&mut self,event:Value,effects:&mut Vec<Effect>) -> Result<(),RuntimeError> {
         let kind = event["type"].as_str().unwrap_or("");
+        // O `api_retry` não diz de quem é (subagente, chamada de fundo): qualquer resposta que volta o encerra.
+        if matches!(kind,"stream_event" | "assistant" | "user") && self.retry_label.take().is_some() { self.changed(effects,false); }
         if !event["parent_tool_use_id"].is_null() && !kind.starts_with("control_") && kind != "sdk_control_request" { return Ok(()); }
         // Turno que a CLI já tocava quando o motor abriu (Rust reiniciado, turno emendado pela própria
         // CLI) não passou por `start_turn`: sem isto a sessão fica livre e a fila entrega no meio dele.
@@ -965,6 +998,7 @@ impl ClaudeEngine {
             }
             "result" => {
                 self.in_progress = false; self.turn_start = None; self.label_deadline = None;
+                self.end_turn_notices(effects);
                 // O agente de fundo ainda vivo segue no rótulo; o resto acabou com o turno.
                 let background = &self.background;
                 self.tasks.retain(|(key,_)|background.contains(key));
@@ -975,16 +1009,22 @@ impl ClaudeEngine {
                     effects.push(Effect::Reply { operation_id:id,disposition:Disposition::Accepted,payload:json!({"consumed":true}) });
                 }
                 let subtype = event["subtype"].as_str().unwrap_or("");
+                let mut stop_reason = event["terminal_reason"].as_str().and_then(|reason|terminal_reason_text(reason,&event));
                 // A CLI manda o nome do comando ("cost", "clear"), não um booleano.
                 let local = !event["local_command"].is_null() && event["local_command"] != false;
-                if subtype != "error_during_execution" && (event["is_error"] == true || subtype.starts_with("error")) {
-                    self.state.problema = Some(if event["result"].as_str().unwrap_or("").to_lowercase().contains("not logged in") {
-                        "headless_sem_login" } else { "headless_turno_erro" }.into());
-                    self.state.problema_detalhe = Some(format!("{subtype}: {}",event["result"].as_str().unwrap_or("").chars().take(300).collect::<String>()));
-                    if let Some(limit) = self.turn_limit.take().or_else(||usage_limit(&event,&self.rate_limit_info,self.clock.epoch_s)) {
-                        effects.push(Effect::UsageLimit { limit });
-                    }
-                } else if subtype == "success" && !local {
+                let failed = subtype != "error_during_execution" && (event["is_error"] == true || subtype.starts_with("error"));
+                if failed {
+                    let logged_out = event["result"].as_str().unwrap_or("").to_lowercase().contains("not logged in");
+                    self.state.problema = Some(if logged_out { "headless_sem_login" } else { "headless_turno_erro" }.into());
+                    let limit = self.turn_limit.take().or_else(||usage_limit(&event,&self.rate_limit_info,self.clock.epoch_s));
+                    // Limite de uso e falta de login já têm aviso próprio: o motivo genérico ("erro da API") só confundiria.
+                    if logged_out || limit.is_some() { stop_reason = None; }
+                    let reason = stop_reason.as_ref().map(|reason|format!("{reason} — ")).unwrap_or_default();
+                    self.state.problema_detalhe = Some(format!("{reason}{subtype}: {}",clip(event["result"].as_str().unwrap_or(""),300)));
+                    if let Some(limit) = limit { effects.push(Effect::UsageLimit { limit }); }
+                }
+                if let Some(reason) = &stop_reason { self.policy("local_output",json!({"text":format!("⚙️ Turno parado: {reason}")}),effects); }
+                if !failed && subtype == "success" && !local {
                     self.state.problema = None; self.state.problema_detalhe = None;
                     if std::mem::take(&mut self.problem_persisted) {
                         effects.push(Effect::PersistClaude { operation_id:None,patch:json!({"problema":null}) });
@@ -1013,7 +1053,7 @@ impl ClaudeEngine {
                 self.turn_start = None; self.label_deadline = None; self.init_warning = None; self.effort_deadline = None;
                 self.pending.clear(); self.question = None; self.clear_streams(effects);
                 // O trabalho de fundo morre com o processo.
-                self.tasks.clear(); self.background.clear(); self.label = None;
+                self.tasks.clear(); self.background.clear(); self.label = None; self.drop_turn_notices();
                 for agent in self.subagents.values_mut().filter(|agent|agent["state"] == "running") { agent["state"] = json!("stopped"); }
                 // Pedidos dos apps em aberto respondem com código e a interface dos mods some.
                 if let Some(surface) = self.surface.as_mut() { let out = surface.on_exit(); Self::surface_out(effects,out); }
@@ -1152,6 +1192,7 @@ impl ClaudeEngine {
                 // Sessão com motor: o proxy pode devolver só o modelo base; a rota fixa é a escolha da sessão.
                 if let Some(model) = event["model"].as_str().filter(|_|self.metadata["engine_account"].as_str().is_none_or(str::is_empty)) { self.model = Some(model.into()); }
                 if event["terminal_slash_commands"].is_array() { self.terminal_commands = event["terminal_slash_commands"].clone(); }
+                self.startup_notices(event,effects);
             }
             "status" => {
                 if event["status"] == "compacting" { self.compacting = true; self.label = Some("Compactando…".into()); }
@@ -1189,9 +1230,139 @@ impl ClaudeEngine {
                     .is_some_and(|s|["completed","failed","killed","cancelled"].contains(&s)) { self.tasks.retain(|(key,_)|key != &id); true } else { false };
                 if relabel { self.label = self.tasks_label(); }
             }
-            _ => return,
+            "api_retry" => {
+                self.diary("claude_api_retry",||event.clone(),effects);
+                let seconds = event["retry_delay_ms"].as_u64().unwrap_or(0).div_ceil(1000).max(1);
+                let why = event["error_status"].as_u64().map_or_else(||"sem resposta da API".to_owned(),|status|format!("erro {status}"));
+                self.retry_label = Some(format!("Nova tentativa {} de {} em {seconds} s · {why}",
+                    event["attempt"].as_u64().unwrap_or(1),event["max_retries"].as_u64().unwrap_or(1)));
+                self.changed(effects,false);
+                return;
+            }
+            "hook_started" => {
+                if let Some(id) = event["hook_id"].as_str() {
+                    let name = event["hook_name"].as_str().or_else(||event["hook_event"].as_str()).unwrap_or("hook").to_owned();
+                    self.hooks_running.insert(id.to_owned(),RunningHook { name,started:self.clock.monotonic_s,shown:false });
+                }
+                return;
+            }
+            "hook_response" => { self.on_hook_response(event,effects); return; }
+            "hook_progress" => return,
+            "notification" => {
+                let text = event["text"].as_str().unwrap_or("");
+                if matches!(event["priority"].as_str(),Some("high" | "immediate")) && !text.is_empty() {
+                    self.notice_once(&format!("notification:{}:{text}",event["key"].as_str().unwrap_or("")),format!("⚙️ {text}"),effects);
+                } else {
+                    self.diary("claude_notification",||event.clone(),effects);
+                }
+                return;
+            }
+            "model_refusal_fallback" | "model_refusal_no_fallback" => {
+                self.diary(&format!("claude_{subtype}"),||event.clone(),effects);
+                let original = event["original_model"].as_str().unwrap_or("modelo");
+                let text = match event["fallback_model"].as_str() {
+                    Some(fallback) if subtype == "model_refusal_fallback" => {
+                        let local = if event["scope"] == "local" { format!(" (só esta resposta; a sessão segue no {original})") } else { String::new() };
+                        format!("⚙️ O {original} recusou; esta resposta veio do {fallback}{local}")
+                    }
+                    _ => {
+                        let why = event["api_refusal_explanation"].as_str().filter(|why|!why.is_empty()).map(|why|format!(": {}",clip(why,300))).unwrap_or_default();
+                        format!("⚙️ O {original} recusou responder{why}")
+                    }
+                };
+                self.policy("local_output",json!({"text":text}),effects);
+                return;
+            }
+            _ => { self.diary(&format!("system/{subtype}"),||event.clone(),effects); return; }
         }
         self.changed(effects,true);
+    }
+
+    fn on_hook_response(&mut self,event:&Value,effects:&mut Vec<Effect>) {
+        // Sucesso em tipo próprio: o teto do diário por tipo não pode esconder falha e bloqueio.
+        let kind = if event["outcome"] == "success" { "claude_hook_ok" } else { "claude_hook" };
+        self.diary(kind,||{
+            let mut logged = event.clone();
+            for field in ["stdout","stderr","output"] {
+                if let Some(text) = event[field].as_str() { logged[field] = json!(clip(text,2000)); }
+            }
+            logged
+        },effects);
+        let hook = event["hook_id"].as_str().and_then(|id|self.hooks_running.remove(id));
+        if hook.as_ref().is_some_and(|hook|hook.shown) { self.changed(effects,false); }
+        // `exit 2` é o hook decidindo (bloqueio); a CLI já mostra o motivo onde ele vale.
+        if event["outcome"] != "error" || event["exit_code"].as_i64() == Some(2) { return; }
+        let name = event["hook_name"].as_str().map(str::to_owned).or(hook.map(|hook|hook.name)).unwrap_or_else(||"hook".into());
+        let reason = ["stderr","output"].iter().filter_map(|field|event[*field].as_str())
+            .flat_map(str::lines).map(str::trim).find(|row|!row.is_empty()).map(|row|clip(row,300))
+            .or_else(||event["exit_code"].as_i64().map(|code|format!("exit {code}")))
+            .unwrap_or_else(||"sem mensagem de erro".into());
+        // Por nome, não por motivo: o `stderr` muda a cada chamada (arquivo, linha) e viraria uma nota por ferramenta.
+        if let Some(streak) = self.hook_streaks.get_mut(&name) { streak.1 += 1; return; }
+        let detail = format!("{name}: {reason}");
+        self.hook_notice(&detail,effects);
+        self.hook_streaks.insert(name,(detail,1));
+    }
+
+    /// O evento só é montado se ainda cabe: passado o teto, hook com saída grande não custa cópia.
+    fn diary(&mut self,kind:&str,event:impl FnOnce() -> Value,effects:&mut Vec<Effect>) {
+        match self.diary_counts.get_mut(kind) {
+            Some(count) if *count >= DIARY_PER_KIND => return,
+            Some(count) => *count += 1,
+            None => { self.diary_counts.insert(kind.to_owned(),1); }
+        }
+        self.policy("unknown_private",json!({"kind":kind,"event":event()}),effects);
+    }
+
+    /// Fim do turno: o rótulo de nova tentativa e os hooks abertos saem, e as somas de falha viram aviso.
+    fn end_turn_notices(&mut self,effects:&mut Vec<Effect>) {
+        self.retry_label = None; self.hooks_running.clear(); self.flush_hook_streaks(effects);
+    }
+
+    /// Processo, conexão ou conversa trocados: o que era do turno some sem aviso.
+    fn drop_turn_notices(&mut self) {
+        self.retry_label = None; self.hooks_running.clear(); self.hook_streaks.clear();
+    }
+
+    /// Fim do turno: a falha que repetiu ganha um aviso com o total. Vários hooks dividem o mesmo nome
+    /// (`PostToolUse:Bash`), então o sucesso de um não fecha a soma do outro.
+    fn flush_hook_streaks(&mut self,effects:&mut Vec<Effect>) {
+        for (detail,count) in std::mem::take(&mut self.hook_streaks).into_values() {
+            if count > 1 { self.hook_notice(&format!("{detail} ({count}× neste turno)"),effects); }
+        }
+    }
+
+    fn hook_notice(&mut self,detail:&str,effects:&mut Vec<Effect>) {
+        self.policy("local_output",json!({"text":format!("Hook falhou — {detail}"),"hook_error":detail,"notice":"hook_failed"}),effects);
+    }
+
+    /// Aviso que vale uma vez por vida do processo: o relançamento mostra de novo, a adoção pelo Rust não.
+    fn notice_once(&mut self,key:&str,text:String,effects:&mut Vec<Effect>) {
+        if self.unknown.insert(format!("notice:{key}")) && !self.replaying { self.policy("local_output",json!({"text":text}),effects); }
+    }
+
+    /// MCP e plugin que não subiram, como o terminal avisa na abertura.
+    fn startup_notices(&mut self,init:&Value,effects:&mut Vec<Effect>) {
+        let mut notices = Vec::new();
+        for server in init["mcp_servers"].as_array().into_iter().flatten() {
+            let name = server["name"].as_str().unwrap_or("?");
+            match server["status"].as_str() {
+                Some("failed") => {
+                    let why = server["error"].as_str().filter(|error|!error.is_empty()).map(|error|format!(": {}",clip(error,300))).unwrap_or_default();
+                    notices.push(format!("⚙️ O servidor MCP `{name}` não subiu{why}"));
+                }
+                Some("needs-auth") => notices.push(format!("⚙️ O servidor MCP `{name}` precisa de login")),
+                _ => {}
+            }
+        }
+        for plugin in init["plugin_errors"].as_array().into_iter().flatten() {
+            notices.push(format!("⚙️ O plugin `{}` não carregou: {}",plugin["plugin"].as_str().unwrap_or("?"),clip(plugin["message"].as_str().unwrap_or(""),300)));
+        }
+        if notices.is_empty() { return; }
+        if !self.replaying {
+            self.diary("claude_init_problem",||json!({"mcp_servers":init["mcp_servers"],"plugin_errors":init["plugin_errors"]}),effects);
+        }
+        for text in notices { self.notice_once(&text.clone(),text,effects); }
     }
 
     fn on_stream(&mut self,event:&Value,effects:&mut Vec<Effect>) {
@@ -1312,6 +1483,9 @@ impl ClaudeEngine {
         if self.label_deadline.is_some_and(|deadline|now >= deadline) {
             self.label_deadline = self.turn_start.map(|_|now+1.0); self.changed(effects,false);
         }
+        let mut slow = false;
+        for hook in self.hooks_running.values_mut().filter(|hook|!hook.shown && now >= hook.started+HOOK_SLOW_S) { hook.shown = true; slow = true; }
+        if slow { self.changed(effects,false); }
         // Prazos da superfície: janela dos desenhos, nova ligação e pedidos vencidos.
         let out = self.surface.as_mut().map(|surface|surface.tick(now)).unwrap_or_default();
         Self::surface_out(effects,out);
@@ -1330,8 +1504,30 @@ impl ClaudeEngine {
         [self.preview.deadline(),self.thinking.deadline(),self.tool_input.deadline(),self.init_warning,self.label_deadline,self.effort_deadline,Some(self.reload_deadline),
             self.surface.as_ref().and_then(Surface::deadline)]
             .into_iter().flatten().chain(self.waiters.values().filter(|w|!w.timed_out).map(|w|w.deadline))
+            .chain(self.hooks_running.values().filter(|hook|!hook.shown).map(|hook|hook.started+HOOK_SLOW_S))
             .min_by(f64::total_cmp)
     }
+}
+
+/// Por que o turno parou, quando não foi o fim normal nem a pessoa parando.
+fn terminal_reason_text(reason:&str,result:&Value) -> Option<String> {
+    Some(match reason {
+        "completed" | "aborted_streaming" | "aborted_tools" | "background_requested" | "tool_deferred" => return None,
+        "api_error" => return Some(result["api_error_status"].as_u64().map_or_else(||"erro da API".into(),|status|format!("erro da API ({status})"))),
+        "blocking_limit" => "a conversa chegou ao limite do contexto",
+        "rapid_refill_breaker" => "a compactação automática entrou em laço",
+        "prompt_too_long" => "a conversa passou do tamanho do contexto",
+        "image_error" => "a API recusou uma imagem",
+        "model_error" => "erro do modelo",
+        "malformed_tool_use_exhausted" => "o modelo errou o formato da ferramenta várias vezes",
+        "stop_hook_prevented" | "hook_stopped" => "um hook parou o turno",
+        "max_turns" => "limite de passos do turno",
+        "budget_exhausted" => "orçamento do turno esgotado",
+        "structured_output_retry_exhausted" => "a resposta estruturada falhou várias vezes",
+        "tool_deferred_unavailable" => "a ferramenta adiada não está disponível",
+        "turn_setup_failed" => "o turno não conseguiu começar",
+        other => other,
+    }.to_owned())
 }
 
 fn permission_text(request:&Value) -> String {

@@ -109,7 +109,9 @@ pub fn plan(spec: &SessionSpec, meta: &Value, ctx: &Context) -> Result<Launch, R
     let mut claude: Vec<String> = ["claude", "-p", "--output-format", "stream-json", "--input-format", "stream-json", "--verbose",
         "--include-partial-messages", "--permission-prompt-tool", "stdio", "--setting-sources", "user,project,local",
         // O eco com o mesmo `uuid` é a prova de entrega (o prompt barrado por hook não ecoa).
-        "--replay-user-messages"].map(str::to_owned).into();
+        "--replay-user-messages",
+        // Sem a flag só SessionStart e Setup chegam: hook lento ou com falha ficaria calado.
+        "--include-hook-events"].map(str::to_owned).into();
     claude.extend([(if resume { "--resume" } else { "--session-id" }).to_owned(), sid.to_owned()]);
     for root in ctx.plugin_roots { claude.extend(["--plugin-dir".into(), root.clone()]); }
     // Com `-p` a CLI ignora `showThinkingSummaries`; só a flag traz o texto do pensamento.

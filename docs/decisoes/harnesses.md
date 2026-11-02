@@ -5,6 +5,16 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 
 ## Regras vigentes
 
+- **Evento da CLI do Claude sem terminal escolhe um canal que já existe; nenhum cai calado.** Rótulo
+  passageiro para o que some sozinho (nova tentativa da API, hook rodando há mais de 3 s); nota na
+  conversa para falha ou mudança que a pessoa precisa saber; faixa só para o erro do turno; diário para
+  o resto. Nota de configuração (MCP ou plugin que não subiu, aviso `high`/`immediate` da CLI) sai uma
+  vez por vida do processo, e a adoção pelo Rust reiniciado não a repete. Nota de ocorrência (recusa
+  do modelo, motivo anormal do fim do turno, falha de hook com as seguidas somadas) sai quando
+  acontece; a falha de hook repetida soma até o fim do turno. O `system/*` sem ramo vai ao diário como
+  `system/{subtype}`. Ver
+  [avisos do Claude sem terminal](#avisos-do-claude-sem-terminal-02112026).
+
 - **Subagentes Codex são conversas filhas, acompanhadas no mesmo painel dos subagentes Claude.**
   UUID, caminho do agente e nome da sessão são identificadores distintos. A descoberta fica na
   conta e na conversa do pai; histórico copiado antes do nascimento do filho não é atividade dele.
@@ -968,6 +978,41 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   uma vez por aparição (`rust.trust_dialog_shown`, código `trust_flag_present` ou
   `trust_flag_absent`) e o log guarda a entrada, a idade do arquivo e a trava. Ver
   [diálogo de confiança com a pasta confiada](#diálogo-de-confiança-com-a-pasta-já-confiada-23102026).
+
+## Avisos do Claude sem terminal (02/11/2026)
+
+O ator do Claude sem terminal (`runtime/claude.rs`) jogava fora, no `_ => return` de `on_system`,
+eventos que o terminal mostra: nova tentativa da API, MCP e plugin que não subiram, hooks, avisos da
+CLI, troca de modelo por recusa. O `terminal_reason` do `result` também não aparecia. Plano e decisões:
+`docs/superpowers/plans/2026-11-02-claude-avisos-sem-terminal.md`.
+
+| Evento | Canal |
+|---|---|
+| `system/api_retry` | rótulo `Nova tentativa N de M em X s · erro S` (ou `· sem resposta da API`), sai na próxima linha de resposta, inclusive de subagente |
+| `init.mcp_servers` `failed`/`needs-auth`, `init.plugin_errors` | nota única por vida do processo |
+| `hook_started`/`hook_response` (flag `--include-hook-events`) | rótulo `Rodando hook {hook_name}…` só depois de 3 s; `outcome: error` com `exit_code` diferente de 2 vira `Hook falhou — …`; as falhas seguintes do mesmo `hook_name` (com qualquer motivo, porque o `stderr` muda a cada chamada) somam e viram `(N× neste turno)` no fim do turno (não no sucesso: vários hooks dividem o mesmo `hook_name`); `exit 2` (bloqueio) só no diário (`claude_hook`), sucesso no diário em tipo próprio (`claude_hook_ok`) para não gastar o teto das falhas |
+| `system/notification` | `high`/`immediate`: nota única por `key` + texto; o resto, diário |
+| `model_refusal_fallback`, `model_refusal_no_fallback` | nota a cada ocorrência |
+| `result.terminal_reason` anormal | nota `Turno parado: …` e o mesmo texto no começo do detalhe da faixa de erro; fim normal e parada pela pessoa ficam de fora, e também o turno que bateu no limite de uso ou ficou sem login, que já têm aviso próprio. `blocking_limit` é o limite de **contexto** e `rapid_refill_breaker` a compactação automática em laço (lido no binário 2.1.316): o limite de uso chega como `api_error` com `api_error: "usage_limit_reached"` |
+
+Formatos lidos de um `claude -p` 2.1.316 real (fixtures em `crates/hangar-server/tests/fixtures/claude_events/`):
+`hook_name` é `Evento:matcher` ou só o evento; `exit 1` e `exit 2` chegam ambos como `outcome: "error"`,
+distintos pelo `exit_code`; hook `async` emite `hook_started` igual aos outros (não dá para separá-lo, e
+o `result` limpa o que ficar aberto); `UserPromptSubmit` emite os eventos antes do `init`; MCP com
+comando inexistente chega como `failed` sem `error`; o último `api_retry` é seguido de `result` com
+`subtype: "success"`, `is_error: true` e `terminal_reason: "api_error"`.
+
+"Por vida do processo" foi a escolha dele (02/11/2026) no lugar de "por conversa": o relançamento por
+ociosidade mostra a nota de novo. O motor também nasce quando o Rust reinicia e adota o processo vivo, e
+o `hydrate` repassa o `init` gravado; a nota já está na conversa, por isso o repasse só marca a chave.
+Limite: processo que subiu com o servidor fora não mostra a nota daquela vida. O diário é o log privado,
+com teto de 30 por sessão, geração e tipo. O motor conta o mesmo teto por tipo e para de pedir a gravação
+depois dele: cada pedido custa uma tarefa bloqueante e um redesenho, e com `--include-hook-events` há
+vários hooks por chamada de ferramenta.
+
+Fora desta fase, vistos no binário 2.1.316: `system/model_fallback` (troca de modelo por sobrecarga ou
+modelo ausente, a mesma família da recusa), `system/api_error` e `system/instruction_size_warning` vão
+só ao diário como `system/*`.
 
 ## Plugin reinstalado com a sessão aberta (28/10/2026)
 
