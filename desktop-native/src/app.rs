@@ -741,7 +741,7 @@ pub struct Hangar {
     recent: Option<Recent>,
     media: MediaCache<(SessionKey, Source)>,
     // Miniatura que acabou de chegar: quando chegou e os quadros da revelação, até ela terminar.
-    media_reveal: HashMap<(SessionKey, Source), (Instant, Vec<Arc<RenderImage>>)>,
+    media_reveal: HashMap<(SessionKey, Source), (Instant, Option<Instant>, Vec<Arc<RenderImage>>)>,
     /// Páginas publicadas na conversa, pelo id da página.
     pages: page_card::Pages,
     full_images: viewer::FullImages,
@@ -1493,6 +1493,7 @@ impl Hangar {
         // Resposta de imagem da conexão anterior é descartada no filtro; sem limpar, a prévia ficava em "Carregando".
         for image in self.media.clear() { cx.drop_image(image, Some(window)); }
         for image in self.full_images.borrow_mut().clear() { cx.drop_image(image, Some(window)); }
+        for (_, (_, _, frames)) in self.media_reveal.drain() { for frame in frames { cx.drop_image(frame, Some(window)); } }
         self.error = None;
         self.list_error = None;
         self.list_online = false;
@@ -2069,15 +2070,21 @@ impl Hangar {
                 }
             }
             Payload::Media(key, source, result) => {
-                // Revelação que ninguém desenhou até o fim (a conversa saiu da tela) é solta aqui.
+                // Revelação que ninguém desenhou até o fim (a conversa saiu da tela) é solta aqui. Sem desenho, espera o
+                // prazo de mensagem ao vivo: quem volta à conversa nesse tempo ainda vê a imagem abrir.
                 let now = Instant::now();
-                let stale: Vec<_> = self.media_reveal.iter().filter(|(_, (at, _))| now - *at > REVEAL * 2).map(|(slot, _)| slot.clone()).collect();
+                let stale: Vec<_> = self.media_reveal.iter()
+                    .filter(|(_, (arrived, drawn, _))| drawn.map_or(now - *arrived > Duration::from_secs_f64(LIVE_REVEAL_WINDOW), |at| now - at > REVEAL * 2))
+                    .map(|(slot, _)| slot.clone()).collect();
                 for slot in stale {
-                    for frame in self.media_reveal.remove(&slot).map(|(_, frames)| frames).unwrap_or_default() { cx.drop_image(frame, Some(window)); }
+                    for frame in self.media_reveal.remove(&slot).map(|(_, _, frames)| frames).unwrap_or_default() { cx.drop_image(frame, Some(window)); }
                 }
                 let state = match result {
                     Ok(Some((image, frames))) => {
-                        if !frames.is_empty() && !cx.reduce_motion() { self.media_reveal.insert((key.clone(), source.clone()), (now, frames)); }
+                        if !frames.is_empty() && !cx.reduce_motion()
+                            && let Some((_, _, old)) = self.media_reveal.insert((key.clone(), source.clone()), (now, None, frames)) {
+                            for frame in old { cx.drop_image(frame, Some(window)); }
+                        }
                         MediaState::Image(image)
                     }
                     Ok(None) => MediaState::Failed(tr("media_unreadable")),
@@ -4594,13 +4601,15 @@ impl Hangar {
         let mut shown = 0;
         for (n, (source, name, image)) in refs.into_iter().enumerate() {
             let preview = if image {
-                self.ensure_media(&source, live);
+                self.ensure_media(&source, live && !cx.reduce_motion());
                 let slot = key.as_ref().map(|key| (key.clone(), source.clone()));
-                let reveal_done = slot.as_ref().and_then(|slot| self.media_reveal.get(slot)).is_some_and(|(at, _)| at.elapsed() >= REVEAL);
-                if reveal_done && let Some((_, frames)) = slot.as_ref().and_then(|slot| self.media_reveal.remove(slot)) {
-                    for frame in frames { cx.drop_image(frame, None); }
+                // A animação da GPUI começa no primeiro desenho; o fim conta do mesmo ponto, não da chegada.
+                let drawn = slot.as_ref().and_then(|slot| self.media_reveal.get_mut(slot)).map(|(_, drawn, _)| *drawn.get_or_insert_with(Instant::now));
+                if drawn.is_some_and(|at| at.elapsed() >= REVEAL) && let Some((_, _, frames)) = slot.as_ref().and_then(|slot| self.media_reveal.remove(slot)) {
+                    // A janela que está desenhando sai da lista do App durante o render: soltar depois, quando ela voltou.
+                    cx.defer(move |cx| for frame in frames { cx.drop_image(frame, None); });
                 }
-                let revealing = slot.as_ref().and_then(|slot| self.media_reveal.get(slot)).map(|(_, frames)| frames.clone());
+                let revealing = slot.as_ref().and_then(|slot| self.media_reveal.get(slot)).map(|(_, _, frames)| frames.clone());
                 let state = slot.as_ref().and_then(|slot| self.media.get(slot));
                 let thumb = match (state, revealing) {
                     (Some(MediaState::Image(picture)), Some(frames)) => {

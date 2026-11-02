@@ -42,7 +42,8 @@ fn schedule_repaint(t: f32, window: &mut Window, cx: &mut App) {
     if (ARRIVE..ARRIVE + OPEN).contains(&t) { window.request_animation_frame(); return; }
     let next = if t < ARRIVE { ARRIVE } else { CYCLE };
     let at = Instant::now() + Duration::from_secs_f32(next - t) + Duration::from_millis(5);
-    if NEXT_REPAINT.get().is_some_and(|scheduled| scheduled > Instant::now() && scheduled <= at) { return; }
+    // Folga de 50 ms: o `t` de cada quadro varia um pouco e não pode virar um timer novo por quadro.
+    if NEXT_REPAINT.get().is_some_and(|scheduled| scheduled > Instant::now() && scheduled <= at + Duration::from_millis(50)) { return; }
     NEXT_REPAINT.set(Some(at));
     window.spawn(cx, async move |cx| {
         cx.background_executor().timer(at.saturating_duration_since(Instant::now())).await;

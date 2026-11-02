@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useState } from 'react';
+import { type ReactNode, useContext, useEffect, useState } from 'react';
 import { Pressable, StyleSheet as RNStyleSheet, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Image } from 'expo-image';
@@ -7,6 +7,7 @@ import Animated, { cancelAnimation, Easing, useAnimatedStyle, useReducedMotion, 
 import * as m from '../paraglide/messages';
 import { LightboxModal } from '../features/attachments/LightboxModal';
 import { Icon } from '../ui/Icon';
+import { WorkingMarkPaused } from '../ui/WorkingMark';
 import { superficie } from '../theme/superficie';
 
 export interface MediaItem {
@@ -41,16 +42,21 @@ export function RevealFrame({ style, chegou, children }: { style: object; chegou
   const passada = useSharedValue(0);
 
   useEffect(() => {
-    if (chegou) {
-      cancelAnimation(passada);
-      abre.value = withTiming(1, { duration: 1400, easing: Easing.inOut(Easing.quad) });
-      return;
-    }
+    if (!chegou) return;
+    cancelAnimation(passada);
+    abre.value = withTiming(1, { duration: 1400, easing: Easing.inOut(Easing.quad) });
+  }, [chegou, abre, passada]);
+
+  // O brilho é contínuo: para com a tela escondida (gaveta aberta, outra tela à frente), como a marca de trabalhando.
+  const pausado = useContext(WorkingMarkPaused);
+  useEffect(() => {
+    if (chegou) return;
     abre.value = 0;
+    if (pausado) return;
     passada.value = 0;
     passada.value = withRepeat(withTiming(1, { duration: 1400, easing: Easing.linear }), -1);
     return () => cancelAnimation(passada);
-  }, [chegou, abre, passada]);
+  }, [chegou, pausado, abre, passada]);
 
   // Um círculo que cresce do centro até a diagonal recorta a imagem, que fica parada no lugar.
   const recorte = useAnimatedStyle(() => {
