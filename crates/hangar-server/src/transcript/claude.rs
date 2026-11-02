@@ -165,8 +165,11 @@ fn parse_raw(obj: &Map<String, Value>, resolve: PeerResolver) -> Vec<ChatEvent> 
 /// Só linhas `"entrypoint":"cli"`: as do sem terminal (`sdk-cli`) já viram nota pelo ator.
 #[derive(Default)]
 pub(crate) struct NoticeFold {
-    /// Viu o começo do turno: lido a partir do meio, a 2ª falha viraria uma "primeira" com outro id.
-    in_turn: bool,
+    /// Já viu um começo ou fim de turno: lido a partir do meio, a 2ª falha viraria uma "primeira" com outro id.
+    /// Não volta a falso: o turno que nasce da fila (`queued_command`) ou de recado não tem linha de prompt.
+    synced: bool,
+    /// Turno em curso: a mensagem da fila (`queued_command`) no meio dele é injetada no turno, não abre outro.
+    turn_open: bool,
     /// Falhas do turno por `hookName` → (detalhe da primeira, total). Por nome: o `stderr` muda a cada chamada.
     hooks: std::collections::BTreeMap<String, (String, u32)>,
     /// Maior tentativa do grupo aberto pela `retryAttempt == 1`.
@@ -185,23 +188,19 @@ impl NoticeFold {
         let at = ts(obj);
         match obj.get("type").and_then(Value::as_str) {
             // Turno interrompido não grava `turn_duration`: o prompt seguinte também fecha.
-            Some("user") if is_prompt(obj) => {
-                let closed = self.close_turn(uid, at);
-                events.splice(0..0, closed);
-                self.in_turn = true;
-                self.retries = None;
-            }
+            Some("user") if is_prompt(obj) => self.open_turn(uid, at, events),
             Some("user") => self.retries = None,
             Some("system") => match obj.get("subtype").and_then(Value::as_str) {
                 Some("turn_duration") => {
                     let closed = self.close_turn(uid, at);
                     events.extend(closed);
-                    self.in_turn = false;
+                    self.synced = true;
+                    self.turn_open = false;
                     self.retries = None;
                 }
                 Some("api_error") => {
                     let attempt = obj.get("retryAttempt").and_then(Value::as_u64).unwrap_or(0);
-                    if attempt == 1 && self.in_turn {
+                    if attempt == 1 && self.synced {
                         let why = obj.get("error").and_then(|e| e.get("formatted")).and_then(Value::as_str).unwrap_or("erro");
                         let max = obj.get("maxRetries").and_then(Value::as_u64).unwrap_or(1);
                         events.push(note(format!("retry:{uid}"), format!("⚙️ A API falhou ({why}); nova tentativa 1 de {max}"), at));
@@ -212,7 +211,7 @@ impl NoticeFold {
                 }
                 _ => {}
             },
-            Some("attachment") => self.hook_failure(obj, uid, at, events),
+            Some("attachment") => self.on_attachment(obj, uid, at, events),
             Some("assistant") => {
                 // Só a resposta fecha o grupo: um anexo no meio (mensagem digitada na espera) não.
                 if let Some(failed) = self.retries.take() {
@@ -229,10 +228,22 @@ impl NoticeFold {
         }
     }
 
-    fn hook_failure(&mut self, obj: &Map<String, Value>, uid: &str, at: Option<f64>, events: &mut Vec<ChatEvent>) {
+    /// Prompt novo: fecha as somas do turno anterior antes dele (turno interrompido não grava `turn_duration`).
+    fn open_turn(&mut self, uid: &str, at: Option<f64>, events: &mut Vec<ChatEvent>) {
+        let closed = self.close_turn(uid, at);
+        events.splice(0..0, closed);
+        self.synced = true;
+        self.turn_open = true;
+        self.retries = None;
+    }
+
+    /// Prompt que vem da fila com a sessão parada abre turno; falha de hook (não bloqueio) vira nota, as seguintes somam.
+    fn on_attachment(&mut self, obj: &Map<String, Value>, uid: &str, at: Option<f64>, events: &mut Vec<ChatEvent>) {
         let Some(att) = obj.get("attachment").and_then(Value::as_object) else { return };
-        if !self.in_turn || att.get("type").and_then(Value::as_str) != Some("hook_non_blocking_error") {
-            return;
+        match att.get("type").and_then(Value::as_str) {
+            Some("queued_command") if !self.turn_open => return self.open_turn(uid, at, events),
+            Some("hook_non_blocking_error") if self.synced => {}
+            _ => return,
         }
         let name = att.get("hookName").or_else(|| att.get("hookEvent")).and_then(Value::as_str).unwrap_or("hook").to_owned();
         if let Some(streak) = self.hooks.get_mut(&name) {
@@ -256,13 +267,14 @@ impl NoticeFold {
     }
 }
 
-/// Prompt da pessoa (ou de quem fala por ela): abre um turno. Resultado de ferramenta e linha de sistema não.
+/// Prompt da pessoa (ou de quem fala por ela): abre um turno. Resultado de ferramenta, resumo da compactação
+/// (cai no meio do turno) e `/comando` local (não grava `turn_duration`) não.
 fn is_prompt(obj: &Map<String, Value>) -> bool {
-    if py::truthy(obj.get("isMeta")) {
+    if py::truthy(obj.get("isMeta")) || py::truthy(obj.get("isCompactSummary")) {
         return false;
     }
     match obj.get("message").and_then(|m| m.get("content")) {
-        Some(Value::String(text)) => !strip(text).is_empty(),
+        Some(Value::String(text)) => !strip(text).is_empty() && !is_command_meta(text),
         Some(Value::Array(blocks)) => !blocks.iter().any(|b| b.get("type").and_then(Value::as_str) == Some("tool_result"))
             && blocks.iter().any(|b| b.get("type").and_then(Value::as_str) == Some("text")),
         _ => false,

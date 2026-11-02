@@ -100,16 +100,22 @@ pub fn merged_history(req: &HistoryRequest) -> io::Result<Vec<ChatEvent>> {
     merged_history_capped(req, u64::MAX)
 }
 
+/// O histórico do chat, com as notas dos avisos da CLI do Claude com terminal. Só o chat as pede: quem lê a
+/// última resposta (lista, retorno da filha, ditado, leitura em voz) tomaria uma nota `⚙️` pela resposta.
+pub fn merged_history_with_notices(req: &HistoryRequest) -> io::Result<Vec<ChatEvent>> {
+    merged_history_impl(req, u64::MAX, true, true)
+}
+
 /// Como `merged_history`, mas a janela com `limit` para em `max_window` bytes mesmo sem `limit`
 /// eventos: quem só quer o fim (a última resposta da lista) não relê o transcript inteiro quando
 /// a cauda é só anexo e tool_result.
 pub(crate) fn merged_history_capped(req: &HistoryRequest, max_window: u64) -> io::Result<Vec<ChatEvent>> {
-    merged_history_impl(req, max_window, true)
+    merged_history_impl(req, max_window, true, false)
 }
 
 /// A sugestão de tarefa conserva a janela lida inteira, como o consumidor original do histórico.
 pub(crate) fn merged_history_window(req: &HistoryRequest) -> io::Result<Vec<ChatEvent>> {
-    merged_history_impl(req, u64::MAX, false)
+    merged_history_impl(req, u64::MAX, false, false)
 }
 
 /// As últimas `n` mensagens com texto (pedido e resposta), lidas pelo fim com a janela crescendo ×8 e
@@ -120,7 +126,7 @@ pub(crate) fn message_tail(req: &HistoryRequest, n: usize) -> io::Result<Vec<Cha
     loop {
         let off = tail_offset(&req.jsonl, window);
         let start = if off > 0 { transcript_start_ts(&req.jsonl) } else { 0.0 };
-        let mut parsed = parse_from(req, off, start)?;
+        let mut parsed = parse_from(req, off, start, false)?;
         if let Some(queue) = &req.queue {
             merge_queue(queue, &mut parsed)?;
         }
@@ -136,7 +142,7 @@ pub(crate) fn message_tail(req: &HistoryRequest, n: usize) -> io::Result<Vec<Cha
     }
 }
 
-fn merged_history_impl(req: &HistoryRequest, max_window: u64, truncate: bool) -> io::Result<Vec<ChatEvent>> {
+fn merged_history_impl(req: &HistoryRequest, max_window: u64, truncate: bool, notices: bool) -> io::Result<Vec<ChatEvent>> {
     let mut parsed = match req.limit {
         Some(limit) => {
             let mut window = req.tail_window.max(1).min(max_window);
@@ -144,7 +150,7 @@ fn merged_history_impl(req: &HistoryRequest, max_window: u64, truncate: bool) ->
             loop {
                 let off = tail_offset(&req.jsonl, window);
                 let start = if off > 0 { *start_ts.get_or_insert_with(|| transcript_start_ts(&req.jsonl)) } else { 0.0 };
-                let parsed = parse_from(req, off, start)?;
+                let parsed = parse_from(req, off, start, notices)?;
                 if off == 0 || parsed.items.len() >= limit || window >= max_window {
                     break parsed;
                 }
@@ -158,7 +164,7 @@ fn merged_history_impl(req: &HistoryRequest, max_window: u64, truncate: bool) ->
                 window = guess.clamp(window.saturating_mul(4), window.saturating_mul(grow)).min(max_window);
             }
         }
-        None => parse_from(req, 0, 0.0)?,
+        None => parse_from(req, 0, 0.0, notices)?,
     };
     if let Some(queue) = &req.queue {
         merge_queue(queue, &mut parsed)?;
@@ -249,7 +255,7 @@ pub(crate) fn transcript_start_ts(path: &Path) -> f64 {
 
 /// `_parse_from` (pqueue.py:1021).
 /// `start_ts`: relógio da primeira linha do arquivo quando `offset > 0` (0.0 quando lê do início).
-fn parse_from(req: &HistoryRequest, offset: u64, start_ts: f64) -> io::Result<Parsed> {
+fn parse_from(req: &HistoryRequest, offset: u64, start_ts: f64, notices: bool) -> io::Result<Parsed> {
     let mut p = Parsed { items: Vec::new(), committed: HashMap::new(), prev_ts: 0.0, start_ts };
     // Só a ausência é histórico vazio: um 200 vazio com ETag faria o aparelho apagar a conversa.
     let file = match File::open(&req.jsonl) {
@@ -261,7 +267,7 @@ fn parse_from(req: &HistoryRequest, offset: u64, start_ts: f64) -> io::Result<Pa
     rd.seek(SeekFrom::Start(offset))?;
     // Reescrita do `--resume`: só o Claude regrava o jsonl.
     let mut rewrite = matches!(req.provider, Provider::Claude | Provider::ClaudeHeadless).then(claude::RewriteFilter::default);
-    let mut notices = rewrite.as_ref().map(|_| claude::NoticeFold::default());
+    let mut notices = (notices && rewrite.is_some()).then(claude::NoticeFold::default);
     let mut held_ids = HashSet::new();
     let mut raw = Vec::new();
     let mut i = 0u64;

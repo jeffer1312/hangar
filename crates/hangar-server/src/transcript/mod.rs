@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use hangar_api::chat::{ChatEvent, ChatKind};
 use serde_json::Value;
 
-pub use history::{history_etag, merged_history, HistoryRequest, InternalInfo, TAIL_WINDOW};
+pub use history::{history_etag, merged_history, merged_history_with_notices, HistoryRequest, InternalInfo, TAIL_WINDOW};
 pub use py::ts_of_iso;
 pub(crate) use claude::{is_command_meta, strip_meta_blocks, RewriteFilter};
 pub(crate) use codex::is_context_wrapper;

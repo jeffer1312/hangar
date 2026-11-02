@@ -27,7 +27,7 @@ use crate::share::caller::{Caller, SessionPath, caller};
 use crate::share::pair_routes::PairState;
 use crate::side::{Binding, Hub, Hubs, Lease, Out, Queued, SideCtx};
 use crate::tail::{self, Watchers};
-use crate::transcript::{InternalInfo, SKIPPED_LINES, history_etag, merged_history};
+use crate::transcript::{InternalInfo, SKIPPED_LINES, history_etag, merged_history_with_notices};
 
 const PING_EVERY: Duration = Duration::from_secs(10);
 const COMMENT_EVERY: Duration = Duration::from_secs(15);
@@ -1110,7 +1110,7 @@ pub(crate) async fn history(
         }
         let before = SKIPPED_LINES.load(Ordering::Relaxed);
         // Já vem com o corte `evs[-limit:]` da rota (Task 9).
-        let evs = merged_history(&hreq)?;
+        let evs = merged_history_with_notices(&hreq)?;
         tail::log_skipped(&log_name, before);
         Ok((etag, Some(serde_json::to_vec(&evs)?)))
     })

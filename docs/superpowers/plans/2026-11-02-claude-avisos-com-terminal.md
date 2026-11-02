@@ -104,7 +104,7 @@ Status: ready-for-agent · Revisão: sim — contrato entre o leitor ao vivo e o
   (`FileTail` a partir do meio) dão as mesmas notas com os mesmos ids; `LineParser` sem `with_notices()` →
   nada novo (o push e a "última resposta" não mudam).
 
-- [ ] **Step 1: RED/GREEN** nos testes de `transcript/claude.rs` (`mod tests`, :757) e um caso novo em
+- [x] **Step 1: RED/GREEN** nos testes de `transcript/claude.rs` (`mod tests`, :757) e um caso novo em
   `tests/it/contract_history.rs` que passa o mesmo arquivo pelo histórico e pelo `LineParser`.
 
 Prova: `scripts/cargo-pinned test -p hangar-server --lib transcript` e
@@ -135,7 +135,7 @@ do ator sem terminal); se `reason` servir, vira plano à parte.
 
 ### Task 5: Regra e prova ao vivo
 
-- [ ] **Step 1:** em `docs/decisoes/harnesses.md`, a regra dos avisos ganha "com terminal: só transcript ou
+- [x] **Step 1:** em `docs/decisoes/harnesses.md`, a regra dos avisos ganha "com terminal: só transcript ou
   plugin, nunca a tela; nota só em linha `cli`", e a entrada lista o que ficou de fora.
 - [ ] **Step 2 (verificação manual):** build, troca do par (binário, `hangar-server.auth.json`,
   `auth/<sha>/libhangar_auth.so`) na pasta da versão, reinício, sessão `cx-avisos-term` com o hook que falha;

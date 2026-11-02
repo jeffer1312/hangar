@@ -12,8 +12,12 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   vez por vida do processo, e a adoção pelo Rust reiniciado não a repete. Nota de ocorrência (recusa
   do modelo, motivo anormal do fim do turno, falha de hook com as seguidas somadas) sai quando
   acontece; a falha de hook repetida soma até o fim do turno. O `system/*` sem ramo vai ao diário como
-  `system/{subtype}`. Ver
-  [avisos do Claude sem terminal](#avisos-do-claude-sem-terminal-02112026).
+  `system/{subtype}`. Com terminal, os avisos saem só do transcript ou do plugin, **nunca lendo a
+  tela**, e o leitor só monta nota em linha `"entrypoint":"cli"` (a `sdk-cli` já tem a nota do ator);
+  só o chat ao vivo e o `/history` do chat ligam as notas (`LineParser::with_notices`,
+  `merged_history_with_notices`). Ver
+  [avisos do Claude sem terminal](#avisos-do-claude-sem-terminal-02112026) e
+  [com terminal](#avisos-do-claude-com-terminal-pelo-transcript-02112026).
 
 - **Subagentes Codex são conversas filhas, acompanhadas no mesmo painel dos subagentes Claude.**
   UUID, caminho do agente e nome da sessão são identificadores distintos. A descoberta fica na
@@ -1013,6 +1017,34 @@ vários hooks por chamada de ferramenta.
 Fora desta fase, vistos no binário 2.1.316: `system/model_fallback` (troca de modelo por sobrecarga ou
 modelo ausente, a mesma família da recusa), `system/api_error` e `system/instruction_size_warning` vão
 só ao diário como `system/*`.
+
+## Avisos do Claude com terminal pelo transcript (02/11/2026)
+
+O usuário vetou ler a tela do terminal para isso ("ler da tela é sempre um caminho ruim"); o que não sai
+por transcript ou plugin ficou de fora. Plano: `docs/superpowers/plans/2026-11-02-claude-avisos-com-terminal.md`.
+
+| Aviso | Fonte no transcript | Nota |
+|---|---|---|
+| Hook que falha | anexo `hook_non_blocking_error` (`hookName`, `stderr` com o prefixo "Failed with non-blocking status code: ") | `hookfail:{uuid}` na primeira do turno; soma `hookfail-sum:{uuid que fechou}:{md5_8(hookName)}` "(N× neste turno)" |
+| Nova tentativa da API | `system/api_error` (`retryAttempt`, `maxRetries`, `error.formatted`), uma linha por tentativa em corrente | `retry:{uuid}` na tentativa 1; `retry-ok:{uuid}` na primeira `assistant` depois de mais de uma; terminou em `isApiErrorMessage` = sem fecho |
+| Recusa | `assistant` com `stop_reason: "refusal"` | `refusal:{uuid}` |
+
+- **Fim de turno:** `system/turn_duration`, que não aparece em turno interrompido; o prompt seguinte também
+  fecha, e o prompt que vem da fila com a sessão parada (anexo `queued_command`, sem linha `user`) também
+  abre; no meio do turno o mesmo anexo é a mensagem injetada no turno em curso e não abre outro. Resumo
+  da compactação (`isCompactSummary`, no meio do turno) e `/comando` local não são prompt. Leitura a partir
+  do meio do arquivo só monta nota depois do primeiro começo ou fim de turno visto, e a nova tentativa só
+  abre na tentativa 1: senão a 2ª falha viraria uma "primeira" com outro id e o cliente veria duas.
+- **Linha `cli` × `sdk-cli`:** o mesmo transcript pode ter os dois modos (conversa retomada no outro). Em
+  `-p` a CLI também grava hook e recusa; filtrar pelo provider não bastava.
+- **Quem liga:** `with_notices()` no `FileTail` e no `backfill`, e `merged_history_with_notices` só na rota
+  `/history` do chat. O resto (`merged_history`, `_capped`, `_window`, `message_tail`, push, loops,
+  `last_committed`, retomada, subagentes, `each_event`, busca, transferência, arquivo, lista, retorno da
+  filha ligada, ditado, leitura em voz) fica sem as notas: procuram a última resposta ou o texto da pessoa,
+  e uma nota `⚙️` viraria a resposta.
+- **Ficou de fora:** MCP ou plugin que não subiu, hook lento, notificação da CLI e o modelo de troca na
+  recusa: nem transcript nem evento de plugin no 2.1.316. O `reason` do `turn.complete` do plugin só tem
+  `aborted`, `refusal`, `error` e `answer` (lido no binário), sem o motivo da parada.
 
 ## Plugin reinstalado com a sessão aberta (28/10/2026)
 
