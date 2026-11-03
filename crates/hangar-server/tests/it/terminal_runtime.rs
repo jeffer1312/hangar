@@ -1415,7 +1415,8 @@ async fn terminal_runtime_prepared_without_dispatch_is_deferred_not_unknown() {
 #[tokio::test]
 async fn terminal_runtime_invalid_prompt_is_rejected_before_queue_and_dispatch() {
     let f=Fixture::new().await; let h=f.start();
-    for (id,text) in [("empty",""),("blank"," \n\t"),("escape","bad\u{1b}"),("delete","bad\u{7f}")] {
+    // Controle colado sai do texto; só recusa o que fica vazio depois disso.
+    for (id,text) in [("empty",""),("blank"," \n\t"),("escape","\u{1b}"),("delete"," \u{7f}\u{0}")] {
         assert!(h.command(f.command(id,text)).await.is_err()); assert!(f.state()["operations"].get(id).is_none());
     }
     assert!(f.state()["rows"].as_array().unwrap().is_empty()); assert!(f.io.calls.lock().unwrap().is_empty()); h.stop().await.unwrap();
