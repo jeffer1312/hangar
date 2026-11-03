@@ -1618,7 +1618,8 @@ async fn sleep_registry(fx:&Fixture) -> Arc<RuntimeRegistry> {
 /// tmux falso do adormecer: o da troca, sem cliente olhando, e um `new-session` no papel do lançador: sobe
 /// TUI e app-server de `endpoint`, põe o pane na lista e grava o sidecar com a chave do pane e o modo `mode`.
 /// Tecla mandada ao pane (o seletor `/permissions`) fica anotada em `<panes>.keys`. `list-sessions` dá a
-/// última ligação de `<panes>.attached` (vazio = nunca) e falha com `<panes>.nosessions`.
+/// última ligação de `<panes>.attached` (vazio = nunca) e a última atividade de `<panes>.activity` (sem ele,
+/// 1), e falha com `<panes>.nosessions`.
 fn waking_tmux(fx:&Fixture,endpoint:&str,mode:&str) -> PathBuf {
     let rollout = fx.root.join("rollout.jsonl");
     if !rollout.exists() { std::fs::write(&rollout,"{}\n").unwrap(); }
@@ -1632,7 +1633,7 @@ fn waking_tmux(fx:&Fixture,endpoint:&str,mode:&str) -> PathBuf {
         kill-session) n=\"${{3#=}}\"; for p in $(cat \"$P.pids\"); do pkill -P $p; kill $p; done 2>/dev/null; grep -v \"^$n\t\" \"$P\" > \"$P.new\"; mv \"$P.new\" \"$P\";;\n  \
         display-message) printf 'cx-proof\t%%7\t1700000000\\n';;\n  \
         list-clients) ;;\n  \
-        list-sessions) [ -f \"$P.nosessions\" ] && exit 1; printf 'cx-proof\t%s\\n' \"$(cat \"$P.attached\" 2>/dev/null)\";;\n  \
+        list-sessions) [ -f \"$P.nosessions\" ] && exit 1; printf 'cx-proof\t%s\t%s\\n' \"$(cat \"$P.attached\" 2>/dev/null)\" \"$(cat \"$P.activity\" 2>/dev/null || echo 1)\";;\n  \
         send-keys|capture-pane) echo \"$@\" >> \"$P.keys\"; exit 1;;\n  \
         new-session) echo x >> \"$P.spawns\"; K=''; for a in \"$@\"; do case \"$a\" in CP_SESSION_KEY=*) K=\"${{a#CP_SESSION_KEY=}}\";; esac; done\n    \
             sh -c 'sleep 120; true' app-server \"$E\" </dev/null >/dev/null 2>&1 & A=$!\n    \
@@ -2010,8 +2011,12 @@ async fn codex_terminal_sleeps_only_when_nobody_attached_after_the_last_turn() {
     std::fs::write(fx.panes.with_extension("attached"),"1767226000").unwrap();
     assert!(!sleep_until(&watcher,&registry,"cx-proof").await,"ligado depois da rodada: não adormece");
     assert!(registry.owns_codex_terminal("cx-proof") && fx.sidecar("cx-proof").unwrap().get("asleep").is_none());
+    // Ligado antes, mas digitou depois da rodada (o `/permissions` sem rodada seguinte).
     std::fs::write(fx.panes.with_extension("attached"),"1767225000").unwrap();
-    assert!(sleep_until(&watcher,&registry,"cx-proof").await,"ligado antes da rodada: adormece");
+    std::fs::write(fx.panes.with_extension("activity"),"1767226000").unwrap();
+    assert!(!sleep_until(&watcher,&registry,"cx-proof").await,"digitou depois da rodada: não adormece");
+    std::fs::write(fx.panes.with_extension("activity"),"1767225100").unwrap();
+    assert!(sleep_until(&watcher,&registry,"cx-proof").await,"ligado e ativo só antes da rodada: adormece");
     assert_eq!(fx.sidecar("cx-proof").unwrap()["asleep"]["wake_surface"],"terminal");
     reaper.join().unwrap();
 }

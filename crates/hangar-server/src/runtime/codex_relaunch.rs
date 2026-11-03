@@ -408,14 +408,18 @@ impl Watcher {
         if !matches!(done,Ok(Ok(()))) { tracing::warn!(session=%name,"a marca de adormecida ficou no sidecar do Codex que acordou"); }
     }
 
-    /// Quando um cliente se ligou à sessão do multiplexador pela última vez (epoch s; os de controle do
-    /// Hangar também contam). `Ok(None)`: nunca (o tmux deixa o campo vazio). `Err`: o multiplexador não
-    /// respondeu ou não tem o campo; no psmux o vazio não prova nada, e é sempre `Err`.
-    async fn last_attached(&self,name:&str) -> Result<Option<f64>,()> {
+    /// A última vez que alguém mexeu na sessão pelo multiplexador (epoch s): a ligação de um cliente (os de
+    /// controle do Hangar também contam) ou uma tecla digitada nele (`session_activity`, que o tmux também
+    /// move ao ligar e desligar). `Err`: o multiplexador não respondeu ou não tem os campos; no psmux não há
+    /// como provar, e é sempre `Err`.
+    async fn last_seen(&self,name:&str) -> Result<f64,()> {
         if cfg!(windows) { return Err(()); }
-        let listed = self.mux_text(&["list-sessions","-F","#{session_name}\t#{session_last_attached}"]).await.ok_or(())?;
-        let (_,at) = listed.lines().find_map(|line|line.split_once('\t').filter(|(session,_)|*session == name)).ok_or(())?;
-        match at.trim() { ""=>Ok(None), at=>at.parse::<f64>().map(Some).map_err(|_|()) }
+        let listed = self.mux_text(&["list-sessions","-F","#{session_name}\t#{session_last_attached}\t#{session_activity}"]).await.ok_or(())?;
+        let fields:Vec<&str> = listed.lines().map(|line|line.split('\t').collect::<Vec<_>>()).find(|fields|fields.len() == 3 && fields[0] == name).ok_or(())?;
+        // Nunca ligada deixa a ligação vazia; a atividade sempre tem valor (o nascimento, no mínimo).
+        let attached = match fields[1].trim() { ""=>0.0, at=>at.parse::<f64>().map_err(|_|())? };
+        let activity = fields[2].trim().parse::<f64>().map_err(|_|())?;
+        Ok(attached.max(activity))
     }
 
     /// A vigia de adormecer pede (`RuntimeRegistry::sleep_codex`). `Ok(false)`: desistiu.
@@ -480,13 +484,9 @@ impl Watcher {
             (quiet,permission,turn_at)
         }).await.unwrap_or((false,None,None));
         let (true,Some(permission),Some(turn_at)) = (quiet,permission,turn_at) else { return Ok(None) };
-        // Quem se ligou ao terminal depois da última rodada pode ter trocado a permissão sem deixar rastro (o
-        // `/permissions` só chega ao rollout na rodada seguinte): desiste. Sem a hora, também.
-        match self.last_attached(name).await {
-            Ok(None)=>{},
-            Ok(Some(at)) if at < turn_at.floor()=>{},
-            _=>return Ok(None),
-        }
+        // Quem se ligou ou digitou no terminal depois da última rodada pode ter trocado a permissão sem deixar
+        // rastro (o `/permissions` só chega ao rollout na rodada seguinte): desiste. Sem a hora, também.
+        if !self.last_seen(name).await.is_ok_and(|at|at < turn_at.floor()) { return Ok(None); }
         // Um terminal de verdade olhando fecharia com ela; os clientes de controle do Hangar não contam.
         if !matches!(terminal::pane_driver(&target.terminal,cell.pane_serial(),None).mods_clients().await,Ok(0)) { return Ok(None); }
         let (settings,view,turns) = match self.terminal_now(name,&target,&handle,&cell,&meta,view,PermissionRead::Known(permission.into())).await {
