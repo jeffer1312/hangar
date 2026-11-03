@@ -331,7 +331,8 @@ pub async fn input(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
     answer(&ctx, result)
 }
 
-static FROM: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"^\s*\[(de|grupo|de fora|painel):\s*([^\]]{1,120})\]").unwrap());
+static COMMAND: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"^/[a-z][a-z0-9:_-]{0,30}$").unwrap());
+static FROM: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"^\s*\[(de|grupo|de fora|painel):\s*([A-Za-z0-9._:-]{1,64})").unwrap());
 
 /// De onde veio cada mensagem e o que aconteceu com ela, sem o texto: o cliente (`hangar-mcp (de x)`,
 /// app), o remetente do recado (`[de: x]`), o endereço, o pedido do cliente e a resposta da entrega.
@@ -344,7 +345,8 @@ fn received_line(name: &str, headers: &HeaderMap, peer: SocketAddr, text: &str, 
         "codigo": if failed { body["detail"]["code"].as_str().or(body["code"].as_str()).map(str::to_owned).or(Some(status.as_u16().to_string())) } else { None },
         "remetente": from, "cliente": header("user-agent"), "req": header("x-hangar-req"),
         "origem": header("x-forwarded-for").unwrap_or_else(|| peer.ip().to_string()),
-        "comando": text.trim_start().starts_with('/').then(|| text.split_whitespace().next().unwrap_or("").chars().take(40).collect::<String>()),
+        // Só nome de comando: caminho colado (`/home/…`) também começa com barra.
+        "comando": text.split_whitespace().next().filter(|w| COMMAND.is_match(w)),
         "caracteres": text.chars().count(), "orientar": steer, "status": status.as_u16(),
         "entregue": body["delivered"].as_bool(), "fila": body["queued"].as_bool().or(body["queue_id"].as_str().map(|_| true))})
 }

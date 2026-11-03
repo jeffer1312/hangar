@@ -271,9 +271,15 @@ fn processes(new: Option<&Path>, old: Option<&Path>) -> Vec<String> {
             (_, Some(o)) if same_root(&here, o) => "versão anterior",
             _ => "versão ?",
         };
-        out.push(format!("processo: pid {pid} (pai {}), {name}, {version}, há {} s, {:?}, {} MB, cpu {} s: {}",
+        // Só o que identifica o processo: o resto do argv pode ser texto digitado (`hangar-server open claude "…"`).
+        let args: Vec<String> = p.cmd().iter().map(|a| a.to_string_lossy().into_owned()).collect();
+        let what = if ours { args.get(1).cloned().unwrap_or_default() } else {
+            args.iter().position(|a| a == "-m").and_then(|i| args.get(i + 1)).cloned()
+                .or_else(|| args.iter().find(|a| a.ends_with(".py")).cloned()).unwrap_or_default()
+        };
+        out.push(format!("processo: pid {pid} (pai {}), {name}, {version}, há {} s, {:?}, {} MB, cpu {} s: {exe} {}",
             p.parent().map_or("?".into(), |pp| pp.to_string()), now.saturating_sub(p.start_time()), p.status(),
-            p.memory() / 1_048_576, p.accumulated_cpu_time() / 1000, cmd.chars().take(200).collect::<String>()));
+            p.memory() / 1_048_576, p.accumulated_cpu_time() / 1000, what.chars().take(200).collect::<String>()));
     }
     out.sort();
     if out.is_empty() { out.push("processo: nenhum python nem hangar-server do Hangar de pé".to_owned()); }

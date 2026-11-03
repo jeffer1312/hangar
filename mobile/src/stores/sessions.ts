@@ -387,11 +387,11 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
     } catch (error) {
       if (!isCurrent(attempt)) return;
       lastFailureHttp.set(s.id, httpResponse);
-      // Status HTTP (a mensagem do erro lançado acima) ou o tipo da falha de rede, com o tempo até ela.
-      const falha = error instanceof Error ? `${error.name}: ${error.message}`.slice(0, 160) : 'erro';
-      registrarDiag({ evento: 'lista.falhou', nivel: 'erro', tela: 'lista',
-        codigo: httpResponse && error instanceof Error && /^\d{3}$/.test(error.message) ? error.message : 'sincronia',
-        detalhe: `${httpResponse ? 'resposta' : 'conexao'}: ${falha}`, ms: Date.now() - inicio }, s.baseUrl);
+      // Só o tipo do erro: a mensagem pode trazer trecho do corpo (JSON inválido) ou o nome da máquina.
+      const status = httpResponse && error instanceof Error && /^\d{3}$/.test(error.message) ? error.message : null;
+      registrarDiag({ evento: 'lista.falhou', nivel: 'erro', tela: 'lista', codigo: status ?? 'sincronia',
+        detalhe: `${httpResponse ? 'resposta' : 'conexao'}: ${error instanceof Error ? error.name : 'erro'}`,
+        ms: Date.now() - inicio }, s.baseUrl);
       if (!httpResponse) failed(true);
       slots.set(s.id, failedSlot(s.id, httpResponse ? m.sessao_erro_servidor() : 'offline'));
       recompute(set);

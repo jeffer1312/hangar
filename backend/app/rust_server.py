@@ -13,6 +13,7 @@ import http.client
 import json
 import logging
 import os
+import re
 import secrets
 import socket
 import subprocess
@@ -124,9 +125,21 @@ def _last_errors(path: Path, count: int = 3) -> str:
     except OSError as e:
         return f"log ilegível: {type(e).__name__}"
     kept = [line for line in tail if " ERROR " in line or " WARN " in line][-count:]
-    # `2026-11-03T10:55:00.123Z  ERROR msg` vira `10:55:00 ERROR msg`.
-    return " | ".join(f"{line[11:19]} {line.split(maxsplit=1)[1][:200]}" if line[:4].isdigit() and " " in line else line[:200]
-                      for line in kept)
+    return " | ".join(_reduce_error(line) for line in kept)
+
+
+_FIELD = re.compile(r"\s[a-z_][a-z0-9_.]*=")
+_KEPT_FIELD = re.compile(r"\s((?:code|panic)=(?:\"[^\"]{0,160}\"|\S{1,80}))")
+
+
+def _reduce_error(line: str) -> str:
+    """`2026-11-03T10:55:00.123Z  ERROR alvo: msg code=x detail="…"` vira `10:55:00 ERROR alvo: msg code=x`:
+    só a mensagem fixa e os campos que nunca levam texto de conversa."""
+    head = line.split(maxsplit=1)[1] if line[:4].isdigit() and " " in line else line
+    cut = _FIELD.search(head)
+    kept = " ".join(_KEPT_FIELD.findall(head[cut.start():])) if cut else ""
+    when = f"{line[11:19]} " if line[:4].isdigit() else ""
+    return f"{when}{(head[:cut.start()] if cut else head)[:200]} {kept}".rstrip()
 
 
 def _health(host: str, port: int) -> dict | None:
