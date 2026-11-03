@@ -1617,7 +1617,8 @@ async fn sleep_registry(fx:&Fixture) -> Arc<RuntimeRegistry> {
 
 /// tmux falso do adormecer: o da troca, sem cliente olhando, e um `new-session` no papel do lançador: sobe
 /// TUI e app-server de `endpoint`, põe o pane na lista e grava o sidecar com a chave do pane e o modo `mode`.
-/// Tecla mandada ao pane (o seletor `/permissions`) fica anotada em `<panes>.keys`.
+/// Tecla mandada ao pane (o seletor `/permissions`) fica anotada em `<panes>.keys`. `list-sessions` dá a
+/// última ligação de `<panes>.attached` (vazio = nunca) e falha com `<panes>.nosessions`.
 fn waking_tmux(fx:&Fixture,endpoint:&str,mode:&str) -> PathBuf {
     let rollout = fx.root.join("rollout.jsonl");
     if !rollout.exists() { std::fs::write(&rollout,"{}\n").unwrap(); }
@@ -1631,6 +1632,7 @@ fn waking_tmux(fx:&Fixture,endpoint:&str,mode:&str) -> PathBuf {
         kill-session) n=\"${{3#=}}\"; for p in $(cat \"$P.pids\"); do pkill -P $p; kill $p; done 2>/dev/null; grep -v \"^$n\t\" \"$P\" > \"$P.new\"; mv \"$P.new\" \"$P\";;\n  \
         display-message) printf 'cx-proof\t%%7\t1700000000\\n';;\n  \
         list-clients) ;;\n  \
+        list-sessions) [ -f \"$P.nosessions\" ] && exit 1; printf 'cx-proof\t%s\\n' \"$(cat \"$P.attached\" 2>/dev/null)\";;\n  \
         send-keys|capture-pane) echo \"$@\" >> \"$P.keys\"; exit 1;;\n  \
         new-session) echo x >> \"$P.spawns\"; K=''; for a in \"$@\"; do case \"$a\" in CP_SESSION_KEY=*) K=\"${{a#CP_SESSION_KEY=}}\";; esac; done\n    \
             sh -c 'sleep 120; true' app-server \"$E\" </dev/null >/dev/null 2>&1 & A=$!\n    \
@@ -1951,4 +1953,88 @@ async fn reading_an_asleep_codex_answers_from_its_file_and_wakes_nothing() {
     assert!(!registry.owns_codex_terminal("cx-proof") && !registry.owns_codex_headless("cx-proof").await);
     assert!(registry.waking_key("cx-proof").is_none());
     assert_eq!(fx.sidecar("cx-proof").unwrap(),meta);
+}
+
+/// Codex com terminal adotado e pronto para adormecer, com o rollout dado. Devolve chave, pid do app-server e
+/// o colhedor dos processos do pane.
+async fn sleepy_terminal(fx:&Fixture,server:&crate::runtime_open::FakeAppServer,rollout:&str) -> (Arc<RuntimeRegistry>,Arc<Watcher>,String,u32,std::thread::JoinHandle<()>) {
+    let (app,tui) = (app_server_process(&server.endpoint),tui());
+    let (app_pid,tui_pid) = (app.id(),tui.id());
+    fx.put_sidecar("cx-proof",sleepy_meta(fx,&server.endpoint,&app,&tui));
+    std::fs::write(fx.root.join("rollout.jsonl"),rollout).unwrap();
+    std::fs::write(&fx.panes,format!("cx-proof\t1\t{tui_pid}\t/w\t%7\t\tcodex\t1700000000\t0\t0\n")).unwrap();
+    std::fs::write(fx.panes.with_extension("pids"),format!("{app_pid} {tui_pid}")).unwrap();
+    let reaper = reap(vec![app,tui]);
+    let registry = sleep_registry(fx).await;
+    let watcher = relaunch_watcher(fx,&waking_tmux(fx,&server.endpoint,"Ask for approval"));
+    registry.bind_watcher(watcher.clone());
+    watcher.round(&registry).await;
+    assert!(registry.owns_codex_terminal("cx-proof"));
+    let key = key_of(&fx.sidecar("cx-proof").unwrap());
+    (registry,watcher,key,app_pid,reaper)
+}
+
+/// Modo confirmado no terminal fora dos três (rótulo da TUI): o gravado antes, maior, não vale, e a sessão não
+/// adormece até um modo conhecido ser confirmado.
+#[tokio::test]
+async fn codex_terminal_with_an_unknown_permission_does_not_sleep() {
+    let fx = fixture();
+    let server = fake_app_server(true).await;
+    let (registry,watcher,key,app_pid,reaper) = sleepy_terminal(&fx,&server,"").await;
+    let remember = |mode:&str|hangar_server::runtime::codex_sidecar::remember_permission(&fx.sidecar_dir(),"cx-proof",&key,app_pid,mode).unwrap();
+    assert!(remember("Custom (config.toml)"));
+    let meta = fx.sidecar("cx-proof").unwrap();
+    assert_eq!((meta["permission_unknown"].as_str(),meta["permission_mode"].as_str()),(Some("Custom (config.toml)"),Some("Full Access")),"{meta}");
+    assert!(!sleep_until(&watcher,&registry,"cx-proof").await,"modo desconhecido: não adormece");
+    assert!(registry.owns_codex_terminal("cx-proof") && fx.sidecar("cx-proof").unwrap().get("asleep").is_none());
+    // Um modo conhecido confirmado depois tira a trava.
+    assert!(remember("Ask for approval"));
+    assert!(fx.sidecar("cx-proof").unwrap()["permission_unknown"].is_null());
+    assert!(sleep_until(&watcher,&registry,"cx-proof").await);
+    assert_eq!(fx.sidecar("cx-proof").unwrap()["permission_mode"],"Ask for approval");
+    reaper.join().unwrap();
+}
+
+/// Alguém ligado ao terminal depois da última rodada pode ter trocado a permissão sem rastro: só adormece
+/// quem não foi visto depois dela, e sem a hora da ligação não adormece.
+#[tokio::test]
+async fn codex_terminal_sleeps_only_when_nobody_attached_after_the_last_turn() {
+    let fx = fixture();
+    let server = fake_app_server(true).await;
+    // Rodada às 2026-01-01T00:00:00Z (1767225600), em Ask: a hora vem da linha, não do arquivo.
+    let turn = json!({"timestamp":"2026-01-01T00:00:00.000Z","type":"turn_context","payload":{"approval_policy":"on-request","sandbox_policy":{"type":"read-only"}}});
+    let (registry,watcher,_,_,reaper) = sleepy_terminal(&fx,&server,&format!("{turn}\n")).await;
+    std::fs::write(fx.panes.with_extension("nosessions"),"").unwrap();
+    assert!(!sleep_until(&watcher,&registry,"cx-proof").await,"sem a hora da ligação: não adormece");
+    std::fs::remove_file(fx.panes.with_extension("nosessions")).unwrap();
+    std::fs::write(fx.panes.with_extension("attached"),"1767226000").unwrap();
+    assert!(!sleep_until(&watcher,&registry,"cx-proof").await,"ligado depois da rodada: não adormece");
+    assert!(registry.owns_codex_terminal("cx-proof") && fx.sidecar("cx-proof").unwrap().get("asleep").is_none());
+    std::fs::write(fx.panes.with_extension("attached"),"1767225000").unwrap();
+    assert!(sleep_until(&watcher,&registry,"cx-proof").await,"ligado antes da rodada: adormece");
+    assert_eq!(fx.sidecar("cx-proof").unwrap()["asleep"]["wake_surface"],"terminal");
+    reaper.join().unwrap();
+}
+
+/// Ler por uma rota do Codex uma sessão Claude adormecida não a acorda: segue ao Python, que a conhece.
+#[tokio::test]
+async fn reading_a_codex_route_of_an_asleep_claude_wakes_nothing() {
+    let fx = fixture();
+    let dir = fx.home.join(".hangar").join("claude-headless");
+    std::fs::create_dir_all(&dir).unwrap();
+    let meta = json!({"name":"cl","key":"k-claude","session_id":"sid-1","cwd":fx.root,"asleep":{"wake_surface":"terminal","since":1.0}});
+    std::fs::write(dir.join("cl.json"),meta.to_string()).unwrap();
+    let registry = sleep_registry(&fx).await;
+    registry.bind_watcher(fx.watcher());
+    let (python,addr) = serve_owner(registry.clone()).await;
+    for route in ["models","commands","limits","codex-permissions"] {
+        let _ = crate::fake::client().get(format!("http://{addr}/api/sessions/cl/{route}"))
+            .header("authorization",format!("Bearer {}",crate::fake::OWNER)).send().await.unwrap();
+        assert_eq!(python.hits_to(&format!("/api/sessions/cl/{route}")),1,"{route}: segue ao Python");
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(registry.waking_key("cl").is_none(),"nenhum acordar");
+    assert!(!registry.has_entry(None,"cl").await,"nada aberto");
+    let after:Value = serde_json::from_slice(&std::fs::read(dir.join("cl.json")).unwrap()).unwrap();
+    assert_eq!(after,meta,"a marca segue");
 }

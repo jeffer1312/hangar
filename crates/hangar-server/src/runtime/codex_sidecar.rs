@@ -112,11 +112,20 @@ pub fn update_if(dir:&Path,name:&str,expect:&[(&str,Value)],patch:&Meta) -> io::
 }
 
 /// O modo que o seletor do terminal confirmou, no arquivo desta vida (chave e app-server): o rollout só
-/// o grava na rodada seguinte, e o adormecer parte daqui. `false`: o arquivo já é de outra vida.
-pub fn remember_permission(dir:&Path,name:&str,key:&str,app_pid:u32,mode:&str) -> io::Result<bool> {
-    let patch:Meta = std::iter::once(("permission_mode".to_owned(),json!(mode))).collect();
+/// o grava na rodada seguinte, e o adormecer parte daqui. Modo fora dos três (rótulo da TUI como "Read
+/// Only") fica em `permission_unknown`, e a sessão não adormece enquanto ele estiver lá; o gravado antes não
+/// pode valer por ele. `false`: o arquivo já é de outra vida.
+pub fn remember_permission(dir:&Path,name:&str,key:&str,app_pid:u32,confirmed:&str) -> io::Result<bool> {
+    let known = super::codex_launch::policy_of(confirmed).and_then(|(approval,sandbox)|super::codex_launch::mode_of(approval,sandbox));
+    let patch:Meta = match known {
+        Some(mode) => [("permission_mode".to_owned(),json!(mode)),(PERMISSION_UNKNOWN.to_owned(),Value::Null)].into_iter().collect(),
+        None => std::iter::once((PERMISSION_UNKNOWN.to_owned(),json!(confirmed))).collect(),
+    };
     update_if(dir,name,&[("key",json!(key)),("app_pid",json!(app_pid))],&patch).map(|meta|meta.is_some())
 }
+
+/// Modo confirmado no terminal que não é nenhum dos três do app.
+pub const PERMISSION_UNKNOWN:&str = "permission_unknown";
 
 /// Grava o sidecar inteiro sob a trava: a volta da troca de modo cobre o lançador que o apagou ao sair.
 pub fn put(dir:&Path,name:&str,meta:&Meta) -> io::Result<()> { locked(dir,name,|path|write(path,meta)) }

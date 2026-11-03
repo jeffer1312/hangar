@@ -254,9 +254,10 @@ fn collaboration(view:&Value) -> Option<String> { view["mode"].as_str().filter(|
 /// Fins do rollout lidos atrás da última rodada antes do arquivo inteiro: há rollout de centenas de MB.
 const ROLLOUT_TAILS:[u64;2] = [1 << 20,16 << 20];
 
-/// O modo de permissão da última rodada gravada no rollout (`turn_context`), sem ler a tela. `Ok(None)`:
-/// a conversa ainda não teve rodada; `Err`: rollout ilegível ou política fora dos três modos. Bloqueante.
-fn rollout_mode(path:&Path) -> Result<Option<&'static str>,()> {
+/// O modo de permissão da última rodada gravada no rollout (`turn_context`), sem ler a tela, e quando ela
+/// foi gravada (epoch s, se a linha disser). `Ok(None)`: a conversa ainda não teve rodada; `Err`: rollout
+/// ilegível ou política fora dos três modos. Bloqueante.
+fn rollout_mode(path:&Path) -> Result<Option<(&'static str,Option<f64>)>,()> {
     use std::io::{Read,Seek,SeekFrom};
     let mut file = std::fs::File::open(path).map_err(|_|())?;
     let size = file.metadata().map_err(|_|())?.len();
@@ -272,7 +273,8 @@ fn rollout_mode(path:&Path) -> Result<Option<&'static str>,()> {
             if record["type"] != "turn_context" { continue; }
             let policy = &record["payload"];
             let found = super::codex_launch::mode_of(policy["approval_policy"].as_str().unwrap_or(""),policy["sandbox_policy"]["type"].as_str().unwrap_or(""));
-            return found.map(Some).ok_or(());
+            let at = record["timestamp"].as_str().and_then(|at|chrono::DateTime::parse_from_rfc3339(at).ok()).map(|at|at.timestamp_millis() as f64 / 1000.0);
+            return found.map(|mode|Some((mode,at))).ok_or(());
         }
         if start == 0 { break; }
     }
@@ -406,6 +408,16 @@ impl Watcher {
         if !matches!(done,Ok(Ok(()))) { tracing::warn!(session=%name,"a marca de adormecida ficou no sidecar do Codex que acordou"); }
     }
 
+    /// Quando um cliente se ligou à sessão do multiplexador pela última vez (epoch s; os de controle do
+    /// Hangar também contam). `Ok(None)`: nunca (o tmux deixa o campo vazio). `Err`: o multiplexador não
+    /// respondeu ou não tem o campo; no psmux o vazio não prova nada, e é sempre `Err`.
+    async fn last_attached(&self,name:&str) -> Result<Option<f64>,()> {
+        if cfg!(windows) { return Err(()); }
+        let listed = self.mux_text(&["list-sessions","-F","#{session_name}\t#{session_last_attached}"]).await.ok_or(())?;
+        let (_,at) = listed.lines().find_map(|line|line.split_once('\t').filter(|(session,_)|*session == name)).ok_or(())?;
+        match at.trim() { ""=>Ok(None), at=>at.parse::<f64>().map(Some).map_err(|_|()) }
+    }
+
     /// A vigia de adormecer pede (`RuntimeRegistry::sleep_codex`). `Ok(false)`: desistiu.
     pub async fn sleep(&self,registry:&RuntimeRegistry,name:&str,after:Duration) -> Result<bool,RuntimeError> {
         let Some(meta) = self.load(name).await else { return Ok(false) };
@@ -442,25 +454,39 @@ impl Watcher {
         let view = match self.preconditions(registry,&handle,&meta,false).await { Ok(view)=>view, Err(error)=>return gave_up(error) };
         let Some(idle) = view["park_idle_s"].as_f64().filter(|idle|*idle >= after.as_secs_f64()) else { return Ok(None) };
         let (rollout,app) = (terminal::text(&meta,"rollout_path").map(PathBuf::from),terminal::pid(&meta,"app_pid").map(i64::from));
-        let stored = super::codex_launch::stored_mode(&Value::Object(meta.clone())).ok();
-        let (quiet,permission) = tokio::task::spawn_blocking(move || {
+        // Modo confirmado no terminal fora dos três: o gravado antes dele não vale, e não há como acordar igual.
+        let unknown = meta.get(codex_sidecar::PERMISSION_UNKNOWN).is_some_and(|mode|!mode.is_null());
+        let stored = (!unknown).then(||super::codex_launch::stored_mode(&Value::Object(meta.clone())).ok()).flatten();
+        let (quiet,permission,turn_at) = tokio::task::spawn_blocking(move || {
+            let modified = rollout.as_deref().and_then(|path|std::fs::metadata(path).and_then(|m|m.modified()).ok());
             // Parada também pela conversa: o motor readotado depois de um reinício conta do zero.
-            let still = rollout.as_deref().and_then(|path|std::fs::metadata(path).and_then(|m|m.modified()).ok()).and_then(|at|at.elapsed().ok()).is_some_and(|idle|idle >= after);
+            let still = modified.and_then(|at|at.elapsed().ok()).is_some_and(|idle|idle >= after);
             let procs = SystemProcs::default();
             // Filhos ilegíveis não dizem que nenhum comando roda.
             let quiet = still && procs.children(Duration::ZERO).is_ok() && app.is_some_and(|pid|crate::state::shells::shells_of(pid,&procs).is_empty());
-            if !quiet { return (false,None); }
+            if !quiet { return (false,None,None); }
             // A menos permissiva entre a última rodada (leva o `/permissions` digitado na TUI) e a gravada (leva a
             // troca pelo app, que a rodada só grava depois). Fonte ilegível ou fora dos três modos: desiste, sem
             // abrir o seletor na tela.
-            let permission = match (rollout.as_deref().map(rollout_mode),stored) {
-                (Some(Ok(Some(turn))),Some(stored))=>super::codex_launch::least(turn,stored),
+            let turn = rollout.as_deref().map(rollout_mode);
+            let permission = match (&turn,stored) {
+                (Some(Ok(Some((turn,_)))),Some(stored))=>super::codex_launch::least(turn,stored),
                 (Some(Ok(None)),stored)=>stored,
                 _=>None,
             };
-            (quiet,permission)
-        }).await.unwrap_or((false,None));
-        let (true,Some(permission)) = (quiet,permission) else { return Ok(None) };
+            // Quando foi a última rodada: a hora da linha, ou a do arquivo quando ela não diz.
+            let written = modified.and_then(|at|at.duration_since(std::time::UNIX_EPOCH).ok()).map(|at|at.as_secs_f64());
+            let turn_at = match turn { Some(Ok(Some((_,Some(at)))))=>Some(at), _=>written };
+            (quiet,permission,turn_at)
+        }).await.unwrap_or((false,None,None));
+        let (true,Some(permission),Some(turn_at)) = (quiet,permission,turn_at) else { return Ok(None) };
+        // Quem se ligou ao terminal depois da última rodada pode ter trocado a permissão sem deixar rastro (o
+        // `/permissions` só chega ao rollout na rodada seguinte): desiste. Sem a hora, também.
+        match self.last_attached(name).await {
+            Ok(None)=>{},
+            Ok(Some(at)) if at < turn_at.floor()=>{},
+            _=>return Ok(None),
+        }
         // Um terminal de verdade olhando fecharia com ela; os clientes de controle do Hangar não contam.
         if !matches!(terminal::pane_driver(&target.terminal,cell.pane_serial(),None).mods_clients().await,Ok(0)) { return Ok(None); }
         let (settings,view,turns) = match self.terminal_now(name,&target,&handle,&cell,&meta,view,PermissionRead::Known(permission.into())).await {
@@ -1057,13 +1083,15 @@ mod tests {
         std::fs::write(&path,"{\"type\":\"session_meta\"}\n").unwrap();
         assert_eq!(rollout_mode(&path),Ok(None),"sem rodada");
         std::fs::write(&path,format!("{}\n{}\n{{}}\n",turn("never","danger-full-access"),turn("on-request","workspace-write"))).unwrap();
-        assert_eq!(rollout_mode(&path),Ok(Some("Approve for me")),"a última rodada vence");
+        assert_eq!(rollout_mode(&path),Ok(Some(("Approve for me",None))),"a última rodada vence");
+        std::fs::write(&path,"{\"timestamp\":\"2026-01-01T00:00:01.500Z\",\"type\":\"turn_context\",\"payload\":{\"approval_policy\":\"never\",\"sandbox_policy\":{\"type\":\"danger-full-access\"}}}\n").unwrap();
+        assert_eq!(rollout_mode(&path),Ok(Some(("Full Access",Some(1_767_225_601.5)))),"a hora da rodada vem da linha");
         std::fs::write(&path,format!("{}\n",turn("untrusted","read-only"))).unwrap();
         assert_eq!(rollout_mode(&path),Err(()),"fora dos três modos não vira nenhum deles");
         assert_eq!(rollout_mode(&dir.path().join("sem")),Err(()),"ilegível");
         // Rodada longe do fim (saída grande depois dela): a janela maior a acha.
         std::fs::write(&path,format!("{}\n{{\"filler\":\"{}\"}}\n",turn("on-request","read-only"),"x".repeat(2 << 20))).unwrap();
-        assert_eq!(rollout_mode(&path),Ok(Some("Ask for approval")));
+        assert_eq!(rollout_mode(&path),Ok(Some(("Ask for approval",None))));
         assert_eq!(super::super::codex_launch::least("Full Access"," ask for approval"),Some("Ask for approval"),"vence o menos permissivo");
         assert_eq!(super::super::codex_launch::least("Approve for me","Full Access"),Some("Approve for me"));
         assert_eq!(super::super::codex_launch::least("Full Access","Read Only"),None);
