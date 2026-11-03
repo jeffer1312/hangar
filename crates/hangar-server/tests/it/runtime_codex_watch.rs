@@ -1660,7 +1660,7 @@ fn kill_spawned(fx:&Fixture) {
 /// rodada do rollout está em "Approve for me" (o `/permissions` da TUI); o sidecar, atrasado, em Full Access.
 fn sleepy_meta(fx:&Fixture,endpoint:&str,app:&Child,tui:&Child) -> Value {
     let mut meta = relaunch_meta(fx,endpoint,app,tui);
-    let turn = |approval:&str,sandbox:&str|json!({"type":"turn_context","payload":{"approval_policy":approval,"sandbox_policy":{"type":sandbox}}}).to_string();
+    let turn = |approval:&str,sandbox:&str|json!({"timestamp":"2026-01-01T00:00:00.000Z","type":"turn_context","payload":{"approval_policy":approval,"sandbox_policy":{"type":sandbox}}}).to_string();
     std::fs::write(fx.root.join("rollout.jsonl"),format!("{}\n{}\n",turn("never","danger-full-access"),turn("on-request","workspace-write"))).unwrap();
     meta["thread_id"] = json!(RESUMABLE);
     meta["permission_mode"] = json!("Full Access");
@@ -1787,6 +1787,14 @@ async fn codex_terminal_sleeps_and_wakes_in_terminal() {
 
     // A mensagem vai à fila e acorda com terminal, na mesma conversa; nenhum sem terminal sobe.
     registry.queue_asleep("cx-proof",&key,"acorda e responde").await.unwrap();
+    // Guardada há uma hora (um acordar anterior falhou): o acordar a leva com a hora de agora.
+    let hour_ago = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64() - 3600.0;
+    let mut slept = fx.sidecar("cx-proof").unwrap();
+    slept["asleep"]["since"] = json!(hour_ago - 60.0);
+    fx.put_sidecar("cx-proof",slept);
+    let mut queued = fx.queue_json(&key);
+    for row in queued["rows"].as_array_mut().unwrap() { if row["text"] == "acorda e responde" { row["ts"] = json!(hour_ago); } }
+    std::fs::write(fx.queue_state(&key),queued.to_string()).unwrap();
     assert_eq!(registry.adopt_now("cx-proof").await.map(|r|r.map_err(|e|e.code)),Some(Err(ASLEEP_WAKING.into())));
     let awake_until = Instant::now() + Duration::from_secs(20);
     while !registry.owns_codex_terminal("cx-proof") {
@@ -1804,6 +1812,8 @@ async fn codex_terminal_sleeps_and_wakes_in_terminal() {
     assert_eq!(app_server(new_app,&second.endpoint),AppServer::Ours);
     let turn = second.wait_method(1,"turn/start").await;
     assert!(turn.to_string().contains("acorda e responde"),"a vida nova entregou o texto guardado: {turn}");
+    let rows = fx.queue_json(&key)["rows"].as_array().unwrap().iter().filter(|r|r["text"] == "acorda e responde").cloned().collect::<Vec<_>>();
+    assert!(rows.len() == 1 && rows[0]["ts"].as_f64().is_some_and(|ts|ts > hour_ago + 3000.0),"uma linha só, com a hora do acordar: {rows:?}");
     let now = fx.queue_json(&key)["generation"].as_u64().unwrap();
     assert!(now > generation,"vida nova na mesma fila");
     // Acordou em plan: o motor pediu o modo à conversa e a vista o confirma.
@@ -1827,7 +1837,7 @@ async fn codex_terminal_lowered_by_the_app_wakes_in_ask() {
     let (app,tui) = (app_server_process(&first.endpoint),tui());
     let (app_pid,tui_pid) = (app.id(),tui.id());
     fx.put_sidecar("cx-proof",sleepy_meta(&fx,&first.endpoint,&app,&tui));
-    let turn = json!({"type":"turn_context","payload":{"approval_policy":"never","sandbox_policy":{"type":"danger-full-access"}}});
+    let turn = json!({"timestamp":"2026-01-01T00:00:00.000Z","type":"turn_context","payload":{"approval_policy":"never","sandbox_policy":{"type":"danger-full-access"}}});
     std::fs::write(fx.root.join("rollout.jsonl"),format!("{turn}\n")).unwrap();
     std::fs::write(&fx.panes,format!("cx-proof\t1\t{tui_pid}\t/w\t%7\t\tcodex\t1700000000\t0\t0\n")).unwrap();
     std::fs::write(fx.panes.with_extension("pids"),format!("{app_pid} {tui_pid}")).unwrap();
@@ -2019,6 +2029,18 @@ async fn codex_terminal_sleeps_only_when_nobody_attached_after_the_last_turn() {
     assert!(sleep_until(&watcher,&registry,"cx-proof").await,"ligado e ativo só antes da rodada: adormece");
     assert_eq!(fx.sidecar("cx-proof").unwrap()["asleep"]["wake_surface"],"terminal");
     reaper.join().unwrap();
+}
+
+/// Rodada sem hora não usa a do arquivo, que é posterior a ela: sem saber quando foi, não adormece.
+#[tokio::test]
+async fn codex_terminal_turn_without_time_does_not_sleep() {
+    let fx = fixture();
+    let server = fake_app_server(true).await;
+    let turn = json!({"type":"turn_context","payload":{"approval_policy":"on-request","sandbox_policy":{"type":"read-only"}}});
+    // O colhedor não é esperado: sem adormecer, os processos do pane só saem no prazo dele.
+    let (registry,watcher,_,_,_reaper) = sleepy_terminal(&fx,&server,&format!("{turn}\n")).await;
+    assert!(!sleep_until(&watcher,&registry,"cx-proof").await,"rodada sem hora: não adormece");
+    assert!(registry.owns_codex_terminal("cx-proof") && fx.sidecar("cx-proof").unwrap().get("asleep").is_none());
 }
 
 /// Ler por uma rota do Codex uma sessão Claude adormecida não a acorda: segue ao Python, que a conhece.

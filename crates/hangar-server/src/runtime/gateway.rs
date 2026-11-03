@@ -594,19 +594,58 @@ impl RuntimeRegistry {
     /// Texto para a sessão adormecida: entra na fila da chave dela como `pre_transcript`, e a vida nova o
     /// entrega. `runtime_lease`: a vida nova já tem a fila, e o texto vai pela entrada dela.
     pub async fn queue_asleep(&self,name:&str,key:&str,text:&str) -> Result<(),RuntimeError> {
+        let epoch_s = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0,|d|d.as_secs_f64());
+        let id = crate::mods::state::random_hex(16);
+        let row = Action::Append { text:text.to_owned(),delivered:false,ts:Some(epoch_s),pre_transcript:true,entry_id:Some(id.clone()) };
+        self.asleep_queue_action(name,key,&format!("append:{id}"),row).await.map(|_|())
+    }
+    /// Ação na fila da adormecida direto no arquivo dela, sem processo: guardar texto e o painel da fila
+    /// (tirar, editar, mover) não a acordam. `runtime_lease`: uma vida já tem a fila.
+    pub async fn asleep_queue_action(&self,name:&str,key:&str,call_id:&str,action:Action) -> Result<Value,RuntimeError> {
         let queue_dir = self.claude_dirs().1;
-        let (key,name,text) = (key.to_owned(),name.to_owned(),text.to_owned());
-        tokio::task::spawn_blocking(move || -> Result<(),RuntimeError> {
+        let (key,name,call_id) = (key.to_owned(),name.to_owned(),call_id.to_owned());
+        tokio::task::spawn_blocking(move || -> Result<Value,RuntimeError> {
             let (state_path,lease_path) = super::codex_terminal::queue_files(&queue_dir,&key);
             if let Some(dir) = state_path.parent() { std::fs::create_dir_all(dir).map_err(|_|failure("queue_io"))?; }
             let _lease = acquire_lease_within(&lease_path,Duration::from_secs(3)).map_err(|_|RuntimeError::new("runtime_lease","a fila da sessão já tem dono"))?;
             let mut store = Store::open(&state_path,&queue_dir,QueueState::new(&key,1,&name,Vec::new())).map_err(|_|failure("queue_io"))?;
             let epoch_s = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0,|d|d.as_secs_f64());
-            let id = crate::mods::state::random_hex(16);
             let generation = store.state().generation;
-            store.exec(generation,&format!("append:{id}"),ClockSample { monotonic_s:0.0,epoch_s },
-                Action::Append { text,delivered:false,ts:Some(epoch_s),pre_transcript:true,entry_id:Some(id) }).map_err(|_|failure("queue_io"))?;
-            Ok(())
+            store.exec(generation,&call_id,ClockSample { monotonic_s:0.0,epoch_s },action).map_err(|_|failure("queue_io"))
+        }).await.map_err(|_|failure("queue_job"))?
+    }
+    /// Antes da vida nova da adormecida: o texto guardado desde `since` que ainda espera volta à fila com a
+    /// hora de agora, na mesma ordem. A vida nova só entrega o que tem até 15 min antes do nascimento dela, e
+    /// um acordar que falhou deixaria o texto antigo de fora para sempre.
+    pub(super) async fn restamp_asleep(&self,key:&str,since:f64) -> Result<usize,RuntimeError> {
+        let queue_dir = self.claude_dirs().1;
+        let key = key.to_owned();
+        tokio::task::spawn_blocking(move || -> Result<usize,RuntimeError> {
+            let (state_path,lease_path) = super::codex_terminal::queue_files(&queue_dir,&key);
+            if !state_path.exists() { return Ok(0); }
+            let _lease = acquire_lease_within(&lease_path,Duration::from_secs(3)).map_err(|_|RuntimeError::new("runtime_lease","a fila da sessão já tem dono"))?;
+            let mut store = Store::open(&state_path,&queue_dir,QueueState::new(&key,1,"",Vec::new())).map_err(|_|failure("queue_io"))?;
+            let generation = store.state().generation;
+            let rows:Vec<Value> = store.state().rows.iter()
+                .filter(|row|super::queue::row_waits(row) && row["ts"].as_f64().is_some_and(|ts|ts >= since)).cloned().collect();
+            let clock = || ClockSample { monotonic_s:0.0,epoch_s:SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0,|d|d.as_secs_f64()) };
+            let mut restamped = 0;
+            for row in rows {
+                let (old,text) = (row["id"].as_str().unwrap_or("").to_owned(),row["text"].as_str().unwrap_or("").to_owned());
+                if old.is_empty() || text.is_empty() { continue; }
+                // A nova entra antes de a antiga sair: falha no meio deixa o texto em dobro, nunca sem ele.
+                let id = crate::mods::state::random_hex(16);
+                store.exec(generation,&format!("restamp:{id}"),clock(),Action::Append { text,delivered:false,ts:None,
+                    pre_transcript:row["pre_transcript"]==true,entry_id:Some(id.clone()) }).map_err(|_|failure("queue_io"))?;
+                let cancelled = store.exec(generation,&format!("restamp-cancel:{id}"),clock(),Action::Cancel { entry_id:old }).map_err(|_|failure("queue_io"))?;
+                // A antiga em voo fica onde está: a cópia sai, para não entregar duas vezes.
+                if cancelled != json!("cancelled") {
+                    store.exec(generation,&format!("restamp-undo:{id}"),clock(),Action::Cancel { entry_id:id }).map_err(|_|failure("queue_io"))?;
+                    continue;
+                }
+                restamped += 1;
+            }
+            Ok(restamped)
         }).await.map_err(|_|failure("queue_job"))?
     }
     /// Painel de terminal aberto na sessão (rodapé ou celular).

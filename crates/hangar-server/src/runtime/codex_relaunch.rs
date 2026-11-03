@@ -478,9 +478,10 @@ impl Watcher {
                 (Some(Ok(None)),stored)=>stored,
                 _=>None,
             };
-            // Quando foi a última rodada: a hora da linha, ou a do arquivo quando ela não diz.
+            // Quando foi a última rodada: a hora da linha. Rodada sem hora desiste: a do arquivo é posterior a ela
+            // e deixaria passar um `/permissions` digitado depois. Sem rodada nenhuma, vale a hora do arquivo.
             let written = modified.and_then(|at|at.duration_since(std::time::UNIX_EPOCH).ok()).map(|at|at.as_secs_f64());
-            let turn_at = match turn { Some(Ok(Some((_,Some(at)))))=>Some(at), _=>written };
+            let turn_at = match turn { Some(Ok(Some((_,at))))=>at, _=>written };
             (quiet,permission,turn_at)
         }).await.unwrap_or((false,None,None));
         let (true,Some(permission),Some(turn_at)) = (quiet,permission,turn_at) else { return Ok(None) };
@@ -552,6 +553,9 @@ impl Watcher {
             Some(true)=>return Err(RuntimeError::new("codex_wake_name_taken","já existe um terminal com o nome desta sessão; ela continua adormecida")),
             None=>return Err(RuntimeError::new("codex_terminal_mux","o multiplexador não respondeu; a sessão continua adormecida")),
         }
+        // O terminal novo só entrega o que tem até 15 min antes de nascer: o texto guardado no sono vem com ele.
+        let since = meta.get("asleep").and_then(|mark|mark["since"].as_f64()).unwrap_or(0.0);
+        registry.restamp_asleep(&key,since).await?;
         let Err(error) = self.open_terminal(registry,name,&key,&wanted,mode.as_deref(),&pane).await else { return Ok(true) };
         if !kill_phase(&error) && let Err(put) = self.sidecar_put(name,&meta).await {
             tracing::warn!(session=%name,code=%put.code,"o Codex que não acordou ficou sem o arquivo adormecido");

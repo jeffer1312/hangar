@@ -3889,8 +3889,9 @@ antigo responderia 422 e deixaria de gravar até o ocultar. A mudança de API é
 **Quem adormece.** A vigia roda a cada 5 min; desligada, não assina nada. Ligada, assina a lista do
 dono só durante a rodada (até 30 s pela primeira produção boa) e pré-seleciona: `claude` ou `codex`,
 oculta, `idle`, sem `problema`, sem pergunta, ainda não adormecida, sem filha ligada e sem ser filha,
-fora de grupo `orq`, sem loop ativo e com `last_activity` além do prazo (estrito). Claude sem
-terminal fica de fora: segue o estacionamento de 65 min de sempre, oculto ou não. A linha é só a
+fora de grupo `orq` (membro cujo `pair_gid` é o da linha `orq` viva), sem convite, sem dono convidado
+e sem par de fora (a vida nova encerraria o acesso deles), sem loop ativo e com `last_activity` além
+do prazo (estrito). Claude sem terminal fica de fora: segue o estacionamento de 65 min de sempre, oculto ou não. A linha é só a
 pré-seleção; quem decide é o `sleep_*` do `RuntimeRegistry`, que fecha a porta de entrada da
 sessão (1 s) e reconfere sob ela: tempo parado pelo mtime do transcript (a linha não é republicada
 quando só `last_activity` muda), fila entregue, pergunta, turno, comandos nos shells do pane,
@@ -3908,10 +3909,13 @@ linha da lista (`SessionRow.asleep`) é verdadeira para todo sidecar sem termina
 fora do registro do Rust, inclusive o Claude sem terminal estacionado nos 65 min: ele também mostra
 "Adormecida".
 
-**Acordar.** Toda escrita (`/input`, fila, resposta, `POST` de modo ou modelo, pergunta `btw`) numa
-adormecida passa por `adopt_now`, que dispara `wake` e devolve `session_asleep_waking`; o `/input`
-grava o texto na fila da chave com `pre_transcript` e responde como texto guardado, o resto espera.
-O acordar roda num `tokio::spawn` próprio: cliente que cai no meio não o interrompe, e o sidecar só
+**Acordar.** Toda escrita (`/input`, Orientar da fila, resposta, `POST` de modo ou modelo, pergunta
+`btw`) numa adormecida passa por `adopt_now`, que dispara `wake` e devolve `session_asleep_waking`; o
+`/input` grava o texto na fila da chave com `pre_transcript` e responde como texto guardado, o resto
+espera. O painel da fila (tirar, editar, mover) não acorda: age no arquivo da fila da chave, senão o
+texto que a pessoa quis cancelar seria entregue. Antes de a vida nova nascer, o texto guardado desde
+`since` volta à fila com a hora de agora (`restamp_asleep`): a vida com terminal só entrega o que tem
+até 15 min antes do nascimento dela, e um acordar que falhou deixaria o texto de fora. O acordar roda num `tokio::spawn` próprio: cliente que cai no meio não o interrompe, e o sidecar só
 sai dentro dessa tarefa. Uma vaga por sessão (`waking`) garante um acordar só; texto que chega com a
 vaga tomada marca `rewake`, e ao soltar a vaga o acordar se repete se a sessão voltou a dormir (uma
 reabertura de `/conta` que falhou, por exemplo), então nenhum texto fica parado na fila. A subida do

@@ -1416,6 +1416,78 @@ async fn write_after_the_new_life_took_the_queue_is_stored_not_refused() {
     fx.finish();
 }
 
+/// Texto guardado no sono há uma hora (um acordar anterior falhou): o acordar seguinte o devolve à fila com a
+/// hora de agora, e a vida nova, nascida depois, o entrega em vez de deixá-lo de fora pelo corte de 15 min.
+#[tokio::test]
+async fn text_stored_long_before_the_wake_is_still_delivered() {
+    let fx = fixture();
+    let key = "c9".repeat(16);
+    asleep_terminal(&fx,&key);
+    std::fs::write(fx.state.with_extension("keys"),"").unwrap();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
+    std::fs::create_dir_all(fx.queue.join("runtime")).unwrap();
+    std::fs::write(fx.queue.join(format!("runtime/{key}.json")),json!({"key":key,"owner_key":key,"generation":1,"name":"s1",
+        "rows":[{"id":"old","text":"antigo","ts":now-3600.0,"delivered":false,"pre_transcript":true},
+            {"id":"old2","text":"antigo2","ts":now-3500.0,"delivered":false,"pre_transcript":true}]}).to_string()).unwrap();
+    let registry = fx.registry().await;
+    registry.clone().register_claude_headless().await;
+    until("acordou",||{let registry=registry.clone();async move {
+        registry.waking_key("s1").is_none() && registry.terminal_view("s1").await.is_some()}}).await;
+    let raw = std::fs::read(fx.queue.join(format!("runtime/{key}.json"))).unwrap();
+    let state:Value = serde_json::from_slice(&raw).unwrap();
+    // Em linhas separadas ou no lote que a entrega junta: uma de cada, na ordem.
+    let ours:Vec<&Value> = state["rows"].as_array().unwrap().iter().filter(|r|r["text"].as_str().is_some_and(|text|text.contains("antigo"))).collect();
+    assert_eq!(ours.iter().map(|r|r["text"].as_str().unwrap()).collect::<Vec<_>>().join("\n"),"antigo\nantigo2","{state}");
+    let (loaded,_) = hangar_server::runtime::queue::State::load(&raw).unwrap();
+    let waiting = hangar_server::runtime::queue::waiting_ids(&loaded,now+60.0);
+    for row in ours {
+        assert!(row["ts"].as_f64().is_some_and(|ts|ts>=now),"com a hora do acordar: {row}");
+        assert!(row["delivered"]==true || waiting.iter().any(|id|row["id"]==id.as_str()),"a vida nova a entrega: {row}");
+    }
+    registry.close(&key,2).await.unwrap();
+    fx.finish();
+}
+
+async fn queue_panel(server:std::net::SocketAddr,method:reqwest::Method,route:&str,body:Value) -> u16 {
+    crate::fake::client().request(method,format!("http://{server}/api/sessions/s1/{route}"))
+        .header("authorization", format!("Bearer {}", crate::fake::OWNER)).header("content-type", "application/json")
+        .body(body.to_string()).send().await.unwrap().status().as_u16()
+}
+
+/// O painel da fila na adormecida (editar, mover, tirar) age no arquivo da fila: a marca fica, nenhum terminal
+/// nasce e a linha tirada não sobra para a vida nova entregar.
+#[tokio::test]
+async fn queue_panel_on_asleep_changes_the_queue_and_wakes_nothing() {
+    let fx = fixture();
+    let key = "d1".repeat(16);
+    asleep_terminal(&fx,&key);
+    let registry = fx.registry().await;
+    let (python,server) = crate::runtime_codex_watch::serve_owner(registry.clone()).await;
+    for text in ["um","dois"] { registry.queue_asleep("s1",&key,text).await.map_err(|e|e.code).unwrap(); }
+    let rows = || -> Vec<Value> {
+        let state:Value = serde_json::from_slice(&std::fs::read(fx.queue.join(format!("runtime/{key}.json"))).unwrap()).unwrap();
+        state["rows"].as_array().unwrap().clone()
+    };
+    let texts = || rows().iter().map(|r|r["text"].as_str().unwrap().to_owned()).collect::<Vec<_>>();
+    let ids:Vec<String> = rows().iter().map(|r|r["id"].as_str().unwrap().to_owned()).collect();
+
+    assert_eq!(queue_panel(server,reqwest::Method::PATCH,&format!("queue/{}",ids[0]),json!({"text":"editado"})).await,200);
+    assert_eq!(texts(),["editado","dois"]);
+    let (status,body) = post(server,"queue/reorder",json!({"id":ids[1],"before_id":ids[0]})).await;
+    assert_eq!(status,200,"{body}");
+    assert_eq!(texts(),["dois","editado"]);
+    assert_eq!(queue_panel(server,reqwest::Method::DELETE,&format!("queue/{}?only_waiting=true",ids[0]),Value::Null).await,200);
+    assert_eq!(texts(),["dois"],"a linha tirada saiu");
+    assert_eq!(queue_panel(server,reqwest::Method::DELETE,&format!("queue/{}?only_waiting=true",ids[0]),Value::Null).await,409,"já saiu");
+
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(registry.waking_key("s1").is_none(),"nada acorda");
+    assert_eq!(fx.spawns(),0,"nenhum terminal nasce");
+    let meta:Value = serde_json::from_slice(&std::fs::read(fx.sidecar_path("s1")).unwrap()).unwrap();
+    assert_eq!(meta["asleep"]["wake_surface"],"terminal","segue adormecida");
+    assert_eq!(python.hits_to(&format!("/api/sessions/s1/queue/{}",ids[0])),0,"o Python não recebe nada");
+}
+
 /// Outra reabertura da adormecida tem a vaga de acordar (aqui a troca de modo) e falha: ela volta a dormir.
 /// A mensagem guardada nesse meio-tempo não fica esperando a próxima: a vaga, ao soltar, acorda a sessão,
 /// e o terminal sobe com a mensagem na fila da vida nova (entregue ou esperando por ela).

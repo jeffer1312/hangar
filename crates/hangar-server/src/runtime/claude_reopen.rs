@@ -658,6 +658,10 @@ impl RuntimeRegistry {
             _=>BusyCheck::Refuse,
         };
         let mut current=self.claude_current(name,check,resume.is_some()).await.map_err(ReopenFailure::refused)?;
+        // A vida nova só entrega o que tem até 15 min antes de nascer: o texto guardado no sono vem com ela.
+        if let Some(meta)=meta.as_ref().filter(|meta|asleep_of(meta).is_some()) && let Some(key)=meta["key"].as_str() {
+            self.restamp_asleep(key,meta["asleep"]["since"].as_f64().unwrap_or(0.0)).await.map_err(ReopenFailure::refused)?;
+        }
         // Outra conversa leva as escolhas de plugins e skills guardadas dela, não as do processo de agora.
         if let Some(sid)=resume.filter(|sid|*sid!=current.sid) {
             let (home,sid)=(self.codex_environment().home,sid.to_owned());
