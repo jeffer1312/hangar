@@ -116,7 +116,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    const ON: AutoHide = AutoHide { enabled: true, after_minutes: 180 };
+    const ON: AutoHide = AutoHide { enabled: true, after_minutes: 180, sleep: auto::Sleep { enabled: false, after_minutes: 1440 } };
     const NOW: f64 = 1_000_000.0;
     const MIN: f64 = 60.0;
 
@@ -224,7 +224,7 @@ mod tick {
     /// `last_activity` fica fora da assinatura: sem o campo nela, a lista não reemitiria ao vencer o prazo.
     #[test]
     fn crossing_the_deadline_changes_the_list_signature() {
-        let cfg = AutoHide { enabled: true, after_minutes: 180 };
+        let cfg = AutoHide { enabled: true, after_minutes: 180, ..AutoHide::default() };
         let mut row: SessionRow = serde_json::from_value(json!({"name": "s", "state": "idle", "last_activity": 0.0})).unwrap();
         row.hidden_from_list = decide(&row, None, &cfg, 179.0 * 60.0).0;
         let before = crate::list::sig::list_sig([&row]);

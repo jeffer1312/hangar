@@ -21,11 +21,25 @@ const MAX_MINUTES: u32 = 7 * 24 * 60;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct AutoHide { pub enabled: bool, pub after_minutes: u32 }
+pub struct AutoHide { pub enabled: bool, pub after_minutes: u32, #[serde(default)] pub sleep: Sleep }
 
 impl Default for AutoHide {
-    fn default() -> Self { Self { enabled: false, after_minutes: 180 } }
+    fn default() -> Self { Self { enabled: false, after_minutes: 180, sleep: Sleep::default() } }
 }
+
+/// Prazo para fechar o processo da sessão oculta e parada; ela acorda na próxima mensagem.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Sleep { pub enabled: bool, pub after_minutes: u32 }
+
+impl Default for Sleep {
+    fn default() -> Self { Self { enabled: false, after_minutes: 1440 } }
+}
+
+/// Corpo do `PUT`: sem `sleep` o gravado fica (clientes antigos não o conhecem).
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Put { enabled: bool, after_minutes: u32, sleep: Option<Sleep> }
 
 fn path(home: &Path) -> PathBuf { home.join(".hangar").join("session-auto-hide.json") }
 
@@ -75,14 +89,21 @@ async fn serve(st: &AppState, req: Request) -> Response {
             Err(error) => store_failed(st, &error),
         };
     }
+    let in_range = |minutes: u32| (1..=MAX_MINUTES).contains(&minutes);
     let parsed = to_bytes(req.into_body(), 4096).await.ok()
-        .and_then(|raw| serde_json::from_slice::<AutoHide>(&raw).ok())
-        .filter(|value| (1..=MAX_MINUTES).contains(&value.after_minutes));
-    let Some(value) = parsed else {
+        .and_then(|raw| serde_json::from_slice::<Put>(&raw).ok())
+        .filter(|put| in_range(put.after_minutes) && put.sleep.is_none_or(|s| in_range(s.after_minutes)));
+    let Some(put) = parsed else {
         return refuse(StatusCode::UNPROCESSABLE_ENTITY, "session_auto_hide_invalid", "prazo fora de 1 minuto a 7 dias, ou campo desconhecido");
     };
-    match blocking(move || save(&home, &value)).await {
-        Ok(()) => {
+    // Ler e gravar no mesmo trabalho bloqueante: o merge não vê o arquivo de antes de outro PUT.
+    let saved = blocking(move || {
+        let sleep = match put.sleep { Some(sleep) => sleep, None => load(&home)?.sleep };
+        let value = AutoHide { enabled: put.enabled, after_minutes: put.after_minutes, sleep };
+        save(&home, &value).map(|()| value)
+    }).await;
+    match saved {
+        Ok(value) => {
             st.list.invalidate();
             json_response(StatusCode::OK, json!(value))
         }
@@ -100,13 +121,40 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let st = state(root.path());
         let (status, body) = call(&st, route, Method::GET, "/api/session-auto-hide", "fixture-owner", "").await;
-        assert_eq!((status, body), (StatusCode::OK, json!({"enabled": false, "after_minutes": 180})));
+        assert_eq!((status, body), (StatusCode::OK, json!({"enabled": false, "after_minutes": 180, "sleep": {"enabled": false, "after_minutes": 1440}})));
         let sent = r#"{"enabled": true, "after_minutes": 60}"#;
         let (status, body) = call(&st, route, Method::PUT, "/api/session-auto-hide", "fixture-owner", sent).await;
-        assert_eq!((status, body), (StatusCode::OK, json!({"enabled": true, "after_minutes": 60})));
+        assert_eq!((status, body), (StatusCode::OK, json!({"enabled": true, "after_minutes": 60, "sleep": {"enabled": false, "after_minutes": 1440}})));
         let (_, body) = call(&st, route, Method::GET, "/api/session-auto-hide", "fixture-owner", "").await;
-        assert_eq!(body, json!({"enabled": true, "after_minutes": 60}));
-        assert_eq!(load(root.path()).unwrap(), AutoHide { enabled: true, after_minutes: 60 });
+        assert_eq!(body, json!({"enabled": true, "after_minutes": 60, "sleep": {"enabled": false, "after_minutes": 1440}}));
+        assert_eq!(load(root.path()).unwrap(), AutoHide { enabled: true, after_minutes: 60, sleep: Sleep::default() });
+    }
+
+    #[test]
+    fn sleep_defaults_off_at_24h() {
+        assert_eq!(AutoHide::default().sleep, Sleep { enabled: false, after_minutes: 1440 });
+    }
+
+    #[tokio::test]
+    async fn put_without_sleep_keeps_recorded_sleep() {
+        let root = tempfile::tempdir().unwrap();
+        let st = state(root.path());
+        save(root.path(), &AutoHide { enabled: false, after_minutes: 180, sleep: Sleep { enabled: true, after_minutes: 600 } }).unwrap();
+        let (status, _) = call(&st, route, Method::PUT, "/api/session-auto-hide", "fixture-owner", r#"{"enabled": true, "after_minutes": 180}"#).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(load(root.path()).unwrap().sleep, Sleep { enabled: true, after_minutes: 600 });
+    }
+
+    #[tokio::test]
+    async fn put_rejects_sleep_out_of_range() {
+        let root = tempfile::tempdir().unwrap();
+        let st = state(root.path());
+        for minutes in [0, MAX_MINUTES + 1] {
+            let sent = format!(r#"{{"enabled": true, "after_minutes": 60, "sleep": {{"enabled": true, "after_minutes": {minutes}}}}}"#);
+            let (status, got) = call(&st, route, Method::PUT, "/api/session-auto-hide", "fixture-owner", &sent).await;
+            assert_eq!((status, got["detail"]["code"].as_str()), (StatusCode::UNPROCESSABLE_ENTITY, Some("session_auto_hide_invalid")), "{sent}");
+        }
+        assert!(!path(root.path()).exists(), "nada gravado");
     }
 
     #[tokio::test]
