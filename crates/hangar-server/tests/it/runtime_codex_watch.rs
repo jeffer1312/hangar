@@ -1598,3 +1598,266 @@ async fn clear_of_a_headless_codex_opens_a_new_thread_without_turn_start() {
     assert_eq!(python.hits_to("/api/sessions/cx-h/input"),0);
     registry.close_with_kill("k-clear",generation).await.unwrap();
 }
+
+// ── adormecer e acordar ─────────────────────────────────────────────────────────────────────────
+
+/// Conversa que o app-server falso retoma (`thread/resume` cola): o terminal que acorda assina nela.
+const RESUMABLE:&str = "thread-resumable";
+
+/// Registro do adormecer: o do relançamento, com a fila do registro na mesma pasta da vigia e o lançador no PATH.
+async fn sleep_registry(fx:&Fixture) -> Arc<RuntimeRegistry> {
+    let bin = fx.root.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    crate::write_executable(&bin.join("hangar-codex-tui"),"#!/bin/sh\nexit 0\n");
+    if !bin.join("codex").exists() { crate::write_executable(&bin.join("codex"),"#!/bin/sh\nexit 1\n"); }
+    let map = [("HOME",fx.home.clone()),("PATH",bin),("CLAUDE_CONFIG_DIR",fx.root.join("claude"))]
+        .into_iter().map(|(k,v)|(k.to_owned(),v.to_string_lossy().into_owned())).collect();
+    crate::runtime_open::registry_with(|registry|registry.with_codex_environment(AccountEnvironment::from_map(map))).await
+}
+
+/// tmux falso do adormecer: o da troca, sem cliente olhando, e um `new-session` no papel do lançador: sobe
+/// TUI e app-server de `endpoint`, põe o pane na lista e grava o sidecar com a chave do pane.
+fn waking_tmux(fx:&Fixture,endpoint:&str) -> PathBuf {
+    let rollout = fx.root.join("rollout.jsonl");
+    std::fs::write(&rollout,"{}\n").unwrap();
+    let template = json!({"name":"cx-proof","provider":"codex","key":"__KEY__","thread_id":RESUMABLE,"rollout_path":rollout,"cwd":fx.root,
+        "codex_home":fx.home.join(".codex"),"endpoint":endpoint,"app_pid":"__APP__","tui_pid":"__TUI__","headless":false,"permission_mode":"Full Access"});
+    std::fs::write(fx.panes.with_extension("sidecar"),template.to_string().replace("\"__APP__\"","__APP__").replace("\"__TUI__\"","__TUI__")).unwrap();
+    let tmux = fx.root.join("tmux-wake");
+    let (p,s) = (fx.panes.display(),fx.sidecar_path("cx-proof").display());
+    crate::write_executable(&tmux,format!("#!/bin/sh\nP='{p}'\nS='{s}'\nE='{endpoint}'\ncase \"$1\" in\n  list-panes) cat \"$P\";;\n  \
+        has-session) n=\"${{3#=}}\"; grep -q \"^$n\t\" \"$P\";;\n  \
+        kill-session) n=\"${{3#=}}\"; for p in $(cat \"$P.pids\"); do pkill -P $p; kill $p; done 2>/dev/null; grep -v \"^$n\t\" \"$P\" > \"$P.new\"; mv \"$P.new\" \"$P\";;\n  \
+        display-message) printf 'cx-proof\t%%7\t1700000000\\n';;\n  \
+        list-clients) ;;\n  \
+        new-session) echo x >> \"$P.spawns\"; K=''; for a in \"$@\"; do case \"$a\" in CP_SESSION_KEY=*) K=\"${{a#CP_SESSION_KEY=}}\";; esac; done\n    \
+            sh -c 'sleep 120; true' app-server \"$E\" </dev/null >/dev/null 2>&1 & A=$!\n    \
+            sh -c 'sleep 120; true' codex-tui </dev/null >/dev/null 2>&1 & T=$!\n    \
+            echo \"$A $T\" > \"$P.pids\"\n    \
+            printf 'cx-proof\t1\t%s\t/w\t%%7\t\tcodex\t1700000000\t0\t0\\n' \"$T\" >> \"$P\"\n    \
+            sed -e \"s/__KEY__/$K/\" -e \"s/__APP__/$A/\" -e \"s/__TUI__/$T/\" \"$P.sidecar\" > \"$S.tmp\" && mv \"$S.tmp\" \"$S\";;\n  \
+        *) exit 1;;\nesac\n"));
+    tmux
+}
+
+/// Quantos terminais o `new-session` falso abriu.
+fn spawns(fx:&Fixture) -> usize { std::fs::read_to_string(fx.panes.with_extension("spawns")).map_or(0,|s|s.lines().count()) }
+
+/// Encerra o que o `new-session` falso subiu.
+fn kill_spawned(fx:&Fixture) {
+    for pid in std::fs::read_to_string(fx.panes.with_extension("pids")).unwrap_or_default().split_whitespace() {
+        let _ = std::process::Command::new("pkill").args(["-P",pid]).status();
+        let _ = std::process::Command::new("kill").arg(pid).status();
+    }
+}
+
+/// Sidecar com terminal pronto para adormecer: rollout no disco e conversa que o app-server falso retoma.
+fn sleepy_meta(fx:&Fixture,endpoint:&str,app:&Child,tui:&Child) -> Value {
+    let mut meta = relaunch_meta(fx,endpoint,app,tui);
+    meta["thread_id"] = json!(RESUMABLE);
+    meta["permission_mode"] = json!("Full Access");
+    meta
+}
+
+/// Adormece assim que o motor recém-adotado assentar; desistir além do prazo é a resposta.
+async fn sleep_until(watcher:&Watcher,registry:&RuntimeRegistry,name:&str) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match watcher.sleep_with(registry,name,Duration::ZERO,PermissionRead::Known("Full Access".into())).await {
+            Ok(true) => return true,
+            Ok(false) if Instant::now() < deadline => tokio::time::sleep(Duration::from_millis(50)).await,
+            Ok(false) => return false,
+            Err(error) => panic!("adormecer falhou: {} {}",error.code,error.message),
+        }
+    }
+}
+
+/// Processo que saiu (ou só espera ser colhido): sem `cmdline`.
+fn exited_pid(pid:u64) -> bool { std::fs::read(format!("/proc/{pid}/cmdline")).map_or(true,|argv|argv.is_empty()) }
+
+#[tokio::test]
+async fn codex_headless_sleeps_and_open_parked_wakes() {
+    use hangar_server::runtime::gateway::ASLEEP_WAKING;
+    crate::use_cano_bin();
+    let fx = fixture();
+    let log = fx.root.join("codex-methods.jsonl");
+    std::fs::create_dir_all(fx.root.join("bin")).unwrap();
+    fake_headless_codex(&fx.root.join("bin"),&log);
+    let registry = sleep_registry(&fx).await;
+    let rollout = fx.root.join("rollout.jsonl");
+    std::fs::write(&rollout,"{}\n").unwrap();
+    fx.put_sidecar("cx-h",json!({"name":"cx-h","provider":"codex","headless":true,"key":"k-sleep","thread_id":"thread-1",
+        "rollout_path":rollout,"cwd":fx.root,"codex_home":fx.home.join(".codex"),"permission_mode":"Full Access","model":"gpt-test"}));
+    registry.bind_watcher(fx.watcher());
+    assert!(matches!(registry.adopt_now("cx-h").await,Some(Ok(()))));
+    let ready_until = Instant::now() + Duration::from_secs(5);
+    while fx.queue_json("k-sleep")["runtime_state"]["view"]["ready"] != true {
+        assert!(Instant::now() < ready_until,"o Codex terminou de abrir");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let cano = fx.sidecar("cx-h").unwrap()["cano"]["pid"].as_u64().expect("cano gravado");
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !registry.sleep_codex("cx-h",Duration::ZERO).await.unwrap() {
+        assert!(Instant::now() < deadline,"parado e sem nada em aberto: adormece");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let asleep = fx.sidecar("cx-h").expect("o sidecar fica");
+    assert_eq!(asleep["asleep"]["wake_surface"],"headless","{asleep}");
+    assert!(asleep.get("cano").is_none(),"sem cano: {asleep}");
+    assert_eq!(asleep["key"],"k-sleep","a mesma fila");
+    assert!(!registry.owns_codex_headless("cx-h").await,"a entrada saiu");
+    let gone_until = Instant::now() + Duration::from_secs(5);
+    while !exited_pid(cano) { assert!(Instant::now() < gone_until,"o cano morreu"); tokio::time::sleep(Duration::from_millis(50)).await; }
+    assert!(registry.ingress().enter("cx-h",Duration::ZERO).await.is_ok(),"a porta reabriu");
+    assert!(!registry.sleep_codex("cx-h",Duration::ZERO).await.unwrap(),"já adormecida: nada a fazer");
+
+    // A mensagem vai à fila e a sessão acorda sem terminal, na mesma conversa, sem a marca.
+    registry.queue_asleep("cx-h","k-sleep","bom dia").await.unwrap();
+    assert_eq!(registry.adopt_now("cx-h").await.map(|r|r.map_err(|e|e.code)),Some(Err(ASLEEP_WAKING.into())));
+    let awake_until = Instant::now() + Duration::from_secs(10);
+    while !registry.owns_codex_headless("cx-h").await || fx.sidecar("cx-h").unwrap().get("asleep").is_some() {
+        assert!(Instant::now() < awake_until,"acordou e a marca saiu: {}",fx.sidecar("cx-h").unwrap());
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let delivered_until = Instant::now() + Duration::from_secs(10);
+    let methods = loop {
+        let methods:Vec<Value> = std::fs::read_to_string(&log).unwrap().lines().map(|l|serde_json::from_str(l).unwrap()).collect();
+        if methods.iter().any(|m|m["method"] == "turn/start" && m["params"].to_string().contains("bom dia")) { break methods; }
+        assert!(Instant::now() < delivered_until,"a vida nova entregou o texto guardado: {methods:?}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    assert!(methods.iter().filter(|m|m["method"] == "thread/resume" && m["params"]["threadId"] == "thread-1").count() >= 2,"retomou a mesma conversa");
+    let generation = fx.queue_json("k-sleep")["generation"].as_u64().unwrap();
+    registry.close_with_kill("k-sleep",generation).await.unwrap();
+}
+
+#[tokio::test]
+async fn codex_terminal_sleeps_and_wakes_in_terminal() {
+    use hangar_server::runtime::codex_terminal::{AppServer,app_server};
+    use hangar_server::runtime::gateway::ASLEEP_WAKING;
+    let fx = fixture();
+    let (first,second) = (fake_app_server(true).await,fake_app_server(true).await);
+    let (app,tui) = (app_server_process(&first.endpoint),tui());
+    let (app_pid,tui_pid) = (app.id(),tui.id());
+    fx.put_sidecar("cx-proof",sleepy_meta(&fx,&first.endpoint,&app,&tui));
+    std::fs::write(&fx.panes,format!("cx-proof\t1\t{tui_pid}\t/w\t%7\t\tcodex\t1700000000\t0\t0\n")).unwrap();
+    std::fs::write(fx.panes.with_extension("pids"),format!("{app_pid} {tui_pid}")).unwrap();
+    let reaper = reap(vec![app,tui]);
+    let registry = sleep_registry(&fx).await;
+    let watcher = relaunch_watcher(&fx,&waking_tmux(&fx,&second.endpoint));
+    registry.bind_watcher(watcher.clone());
+    watcher.round(&registry).await;
+    assert!(registry.owns_codex_terminal("cx-proof"));
+    let key = key_of(&fx.sidecar("cx-proof").unwrap());
+    let generation = fx.queue_json(&key)["generation"].as_u64().unwrap();
+
+    assert!(sleep_until(&watcher,&registry,"cx-proof").await,"parada, sem nada em aberto e sem ninguém olhando: adormece");
+    let asleep = fx.sidecar("cx-proof").expect("o sidecar fica");
+    assert_eq!((asleep["headless"].clone(),asleep["asleep"]["wake_surface"].clone()),(json!(true),json!("terminal")),"{asleep}");
+    assert!(asleep["asleep"]["since"].as_f64().is_some_and(|since|since > 0.0));
+    for field in ["cano","endpoint","app_pid","tui_pid"] { assert!(asleep[field].is_null(),"{field}: {asleep}"); }
+    assert_eq!((asleep["key"].as_str(),asleep["thread_id"].as_str(),asleep["permission_mode"].as_str()),(Some(key.as_str()),Some(RESUMABLE),Some("Full Access")));
+    assert!(std::fs::read_to_string(&fx.panes).unwrap().is_empty(),"o pane fechou");
+    assert!(registry.writable("cx-proof").await.is_none() && !registry.owns_codex_terminal("cx-proof"),"o ator saiu");
+    let dead_until = Instant::now() + Duration::from_secs(5);
+    while app_server(app_pid,&first.endpoint) == AppServer::Ours {
+        assert!(Instant::now() < dead_until,"o app-server do pane morreu pelo pid");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(matches!(registry.asleep("cx-proof").await.map(|mark|mark.wake_surface),Some(hangar_server::session_open::Surface::Terminal)));
+    assert!(registry.ingress().enter("cx-proof",Duration::ZERO).await.is_ok(),"a porta reabriu");
+    // Pedir sem terminal recusa; o celular não sobe outro processo por aí.
+    let refused = watcher.switch_mode(&registry,"cx-proof",false,PermissionRead::Known("Full Access".into())).await.expect("Codex do Rust").unwrap_err();
+    assert_eq!(refused.code,"erro_sessao_adormecida");
+    assert_eq!(registry.restart_codex("cx-proof").await.expect("Codex do Rust").unwrap_err().code,"erro_recarregar_so_sem_terminal");
+    assert_eq!(spawns(&fx),0,"recusas não abrem terminal");
+
+    // A mensagem vai à fila e acorda com terminal, na mesma conversa; nenhum sem terminal sobe.
+    registry.queue_asleep("cx-proof",&key,"acorda e responde").await.unwrap();
+    assert_eq!(registry.adopt_now("cx-proof").await.map(|r|r.map_err(|e|e.code)),Some(Err(ASLEEP_WAKING.into())));
+    let awake_until = Instant::now() + Duration::from_secs(20);
+    while !registry.owns_codex_terminal("cx-proof") {
+        assert!(Instant::now() < awake_until,"acordou com terminal: {:?}",fx.sidecar("cx-proof"));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let awake = fx.sidecar("cx-proof").unwrap();
+    assert!(awake.get("asleep").is_none() && awake["headless"] == false,"{awake}");
+    assert_eq!(awake["endpoint"],json!(second.endpoint));
+    assert!(!registry.owns_codex_headless("cx-proof").await);
+    assert_eq!(spawns(&fx),1,"um terminal só");
+    // Um app-server vivo: o antigo saiu, o novo é o do sidecar.
+    assert_ne!(app_server(app_pid,&first.endpoint),AppServer::Ours);
+    let new_app = u32::try_from(awake["app_pid"].as_u64().unwrap()).unwrap();
+    assert_eq!(app_server(new_app,&second.endpoint),AppServer::Ours);
+    let turn = second.wait_method(1,"turn/start").await;
+    assert!(turn.to_string().contains("acorda e responde"),"a vida nova entregou o texto guardado: {turn}");
+    assert!(fx.queue_json(&key)["generation"].as_u64().unwrap() > generation,"vida nova na mesma fila");
+    kill_spawned(&fx);
+    reaper.join().unwrap();
+}
+
+#[tokio::test]
+async fn codex_sleep_gives_up_mid_turn() {
+    let fx = fixture();
+    let server = fake_app_server(true).await;
+    let (mut app,mut tui) = (app_server_process(&server.endpoint),tui());
+    fx.put_sidecar("cx-proof",sleepy_meta(&fx,&server.endpoint,&app,&tui));
+    fx.panes(&["cx-proof"]);
+    let registry = sleep_registry(&fx).await;
+    let watcher = relaunch_watcher(&fx,&waking_tmux(&fx,&server.endpoint));
+    registry.bind_watcher(watcher.clone());
+    watcher.round(&registry).await;
+    assert!(registry.owns_codex_terminal("cx-proof"));
+    // Turno aberto: o app-server aceita o `turn/start` e nunca o encerra.
+    let (_python,addr) = serve_owner(registry.clone()).await;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let (status,body) = post_owner(addr,"cx-proof","input",r#"{"text":"trabalhe"}"#).await;
+        if status == 200 { break; }
+        assert!(Instant::now() < deadline,"{status} {body}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    server.wait_method(1,"turn/start").await;
+    let before = fx.sidecar("cx-proof").unwrap();
+    for _ in 0..3 {
+        assert!(!watcher.sleep_with(&registry,"cx-proof",Duration::ZERO,PermissionRead::Known("Full Access".into())).await.unwrap(),"turno em curso: desiste");
+    }
+    assert!(!registry.sleep_codex("cx-proof",Duration::ZERO).await.unwrap());
+    untouched(&fx,&registry,&before,&mut app,&mut tui);
+    assert!(before.get("asleep").is_none());
+    assert!(registry.ingress().enter("cx-proof",Duration::ZERO).await.is_ok(),"a porta reabriu");
+    assert_eq!(spawns(&fx),0);
+    finish(&mut [&mut app,&mut tui]);
+}
+
+#[tokio::test]
+async fn register_wakes_asleep_codex_terminal_in_terminal() {
+    // O Rust sobe com a adormecida que tinha terminal e uma mensagem na fila: acorda com terminal, nunca sem.
+    let fx = fixture();
+    let server = fake_app_server(true).await;
+    let rollout = fx.root.join("rollout.jsonl");
+    std::fs::write(&rollout,"{}\n").unwrap();
+    fx.put_sidecar("cx-proof",json!({"name":"cx-proof","provider":"codex","headless":true,"key":"k-asleep","thread_id":RESUMABLE,
+        "rollout_path":rollout,"cwd":fx.root,"codex_home":fx.home.join(".codex"),"permission_mode":"Full Access",
+        "asleep":{"wake_surface":"terminal","since":1.0}}));
+    // `codex` que não sobe: um sem terminal aberto por engano falharia, e a entrada dele não apareceria.
+    let registry = sleep_registry(&fx).await;
+    let watcher = relaunch_watcher(&fx,&waking_tmux(&fx,&server.endpoint));
+    registry.bind_watcher(watcher.clone());
+    registry.queue_asleep("cx-proof","k-asleep","mensagem da noite").await.unwrap();
+    watcher.register_codex_headless(&registry).await;
+    let awake_until = Instant::now() + Duration::from_secs(20);
+    while !registry.owns_codex_terminal("cx-proof") {
+        assert!(!registry.owns_codex_headless("cx-proof").await,"nunca sobe sem terminal");
+        assert!(Instant::now() < awake_until,"acordou com terminal: {:?}",fx.sidecar("cx-proof"));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let awake = fx.sidecar("cx-proof").unwrap();
+    assert!(awake.get("asleep").is_none() && awake["headless"] == false && awake.get("cano").is_none(),"{awake}");
+    assert_eq!(awake["key"],"k-asleep");
+    assert_eq!(spawns(&fx),1);
+    let turn = server.wait_method(1,"turn/start").await;
+    assert!(turn.to_string().contains("mensagem da noite"),"{turn}");
+    kill_spawned(&fx);
+}

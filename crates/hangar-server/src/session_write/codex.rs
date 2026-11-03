@@ -243,9 +243,11 @@ fn literal(fields: &Map<String, Value>, key: &str, values: &[&str]) -> Option<St
 
 /// Sessão Codex que a tabela entrega ao Rust nesta rota. Sem ator aberto, o Codex do Rust é adotado (com
 /// terminal) ou aberto (sem terminal parado) agora: o Python recusaria o próprio cliente.
-async fn ours(st: &AppState, name: Option<&str>) -> Result<bool, RuntimeError> {
+async fn ours(st: &AppState, name: Option<&str>, read: bool) -> Result<bool, RuntimeError> {
     let (Some(runtime), Some(name)) = (st.state.runtime.get(), name) else { return Ok(false) };
     if runtime.writable(name).await.is_none() {
+        // Leitura não acorda a adormecida: só a próxima mensagem sobe o processo dela.
+        if read && runtime.asleep(name).await.is_some() { return Err(RuntimeError::new(ASLEEP_READ, "a sessão está adormecida; ela acorda com a próxima mensagem")); }
         match runtime.adopt_now(name).await {
             None => return Ok(false),
             // É do Rust e não abriu: a falha aparece com o código dela, nunca vira repasse.
@@ -254,6 +256,17 @@ async fn ours(st: &AppState, name: Option<&str>) -> Result<bool, RuntimeError> {
         }
     }
     Ok(runtime.writable(name).await.is_some_and(|t| codex_owned(&t.provider, t.terminal)))
+}
+
+/// Leitura numa sessão adormecida, que segue dormindo.
+const ASLEEP_READ: &str = "session_asleep";
+
+/// O modo gravado no arquivo da adormecida: é o que vale quando ela acordar.
+async fn asleep_mode(st: &AppState, name: &str) -> Option<String> {
+    let home = st.state.runtime.get()?.codex_environment().home;
+    let file = crate::runtime::codex_sidecar::path(&crate::runtime::codex_sidecar::dir(&home), name);
+    tokio::task::spawn_blocking(move || crate::runtime::codex_sidecar::load(&file)).await.ok().flatten()?
+        .get("permission_mode").and_then(Value::as_str).map(str::to_owned)
 }
 
 /// A saúde fica com a admissão; aqui só provedor e modo, pela mesma tabela que anuncia a posse.
@@ -270,11 +283,15 @@ async fn admit_codex_as(st: &Arc<AppState>, peer: SocketAddr, req: Request, rout
     let (fwd, owner) = match gate(st, peer, &req).await { Ok(value) => value, Err(e) => return Err(crate::auth::unavailable(e)) };
     // Só o dono abre ou adota: o convidado segue ao Python, que o autentica.
     if !owner { return Err(pass(st, req, &fwd).await); }
-    match ours(st, session_name(req.uri().path()).as_deref()).await {
+    let name = session_name(req.uri().path());
+    match ours(st, name.as_deref(), req.method() == axum::http::Method::GET).await {
         Ok(true) => admit(st, peer, req, route).await,
         Ok(false) => Err(pass(st, req, &fwd).await),
         Err(error) => {
-            let mut response = json_response(super::failed_status(&error), detail_body(&error.code, &error.message, json!({})));
+            let mut response = if error.code == ASLEEP_READ && route == WriteRoute::CodexPermission {
+                let mode = match name.as_deref() { Some(name) => asleep_mode(st, name).await, None => None };
+                json_response(StatusCode::OK, permission_modes(mode.as_deref()))
+            } else { json_response(super::failed_status(&error), detail_body(&error.code, &error.message, json!({}))) };
             cors(req.headers(), response.headers_mut());
             Err(response)
         }
@@ -340,11 +357,11 @@ pub async fn limits(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     let (fwd, who) = match who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     let name = session_name(req.uri().path()).filter(|n| who.as_ref().is_some_and(|c| c.can(n, req.method())));
     let (Some(runtime), Some(name)) = (st.state.runtime.get(), name) else { return pass(&st, req, &fwd).await };
-    match ours(&st, Some(&name)).await {
+    match ours(&st, Some(&name), true).await {
         Ok(true) => {}
         Ok(false) => return pass(&st, req, &fwd).await,
-        // Conversa ainda abrindo: ainda não há cota a ler, e a resposta é a neutra.
-        Err(error) if error.code == crate::runtime::codex_relaunch::STARTING => {}
+        // Conversa ainda abrindo ou adormecida: não há cota a ler, e a resposta é a neutra.
+        Err(error) if error.code == crate::runtime::codex_relaunch::STARTING || error.code == ASLEEP_READ => {}
         // Do Rust e não abriu: o código da falha, como nas outras rotas do Codex, nunca a resposta neutra.
         Err(error) => {
             let mut response = json_response(StatusCode::SERVICE_UNAVAILABLE, detail_body(&error.code, &error.message, json!({})));

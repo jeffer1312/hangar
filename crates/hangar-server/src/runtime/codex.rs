@@ -641,6 +641,16 @@ impl Engine {
             "subagents":self.subagent_views()})
     }
 
+    /// Segundos sem evento da conversa, só com nada em aberto: turno, pedido, pergunta, comando de pé,
+    /// resposta reservada na fila ou envio a caminho. `None`: algo segura a sessão acordada.
+    pub fn park_idle(&self,now:f64) -> Option<f64> {
+        let open = !self.alive || self.in_progress || self.compacting || !self.server_requests.is_empty() || !self.lost_requests.is_empty()
+            || !self.async_questions.pending.is_empty() || !self.running_commands.is_empty() || !self.reservations.is_empty()
+            || !self.skill_preparations.is_empty() || self.mode_write.is_some()
+            || self.rpc.values().any(|rpc|matches!(rpc.method.as_str(),"turn/start" | "turn/steer" | "thread/compact/start"));
+        (!open).then(||now - self.last_event)
+    }
+
     fn blocking_question(&self) -> Option<Value> {
         let (id,request) = self.server_requests.iter().find(|(_,r)|r["method"] == "item/tool/requestUserInput" || form_fields(r).is_some())?;
         Self::question_for(id,request)

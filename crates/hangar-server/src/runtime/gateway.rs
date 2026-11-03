@@ -568,7 +568,10 @@ impl RuntimeRegistry {
             let (provider,result) = match registry.asleep(&name).await {
                 None=>("",Ok(false)),
                 Some(mark) if mark.provider=="claude"=>("claude",registry.wake_claude(&name,mark.wake_surface).await),
-                Some(mark)=>(mark.provider,Err(RuntimeError::new("session_asleep_provider","este agente ainda não acorda sozinho"))),
+                Some(mark)=>(mark.provider,match registry.watcher.get().cloned() {
+                    Some(watcher)=>watcher.wake(&registry,&name,mark.wake_surface).await,
+                    None=>Err(RuntimeError::new("runtime_watcher","a vigia do Codex não está ligada; a sessão adormecida não acorda")),
+                }),
             };
             drop(slot);
             let event = match &result {
@@ -881,6 +884,47 @@ impl RuntimeRegistry {
         if !cano_is_ours(procs.as_ref(),&target,born,key)? {return Err(failure("lifecycle_process_changed"));}
         self.close_locked_as(key,generation,true,true).await?;
         *barrier.parked.lock().map_err(|_|failure("lifecycle_parked"))?=Some(name.to_owned());
+        Ok(Some(idle))
+    }
+    /// A vigia de adormecer pede: o Codex `name`, com ou sem terminal, parado há `after` e sem nada em aberto,
+    /// tem os processos fechados e fica no sidecar sem terminal marcado `asleep`. Tudo é conferido de novo
+    /// com a porta fechada. `Ok(false)`: desistiu.
+    pub async fn sleep_codex(&self,name:&str,after:Duration) -> Result<bool,RuntimeError> {
+        let Some(watcher) = self.watcher.get().cloned() else { return Ok(false) };
+        watcher.sleep(self,name,after).await
+    }
+    /// O Codex sem terminal aberto aqui adormece como o Claude estaciona: porta fechada, conferência de novo,
+    /// o cano morre e o sidecar fica, sem `cano` e com a marca. `Some(segundos parada)` = adormeceu.
+    pub(super) async fn park_codex(&self,name:&str,after:Duration) -> Result<Option<f64>,RuntimeError> {
+        let idle=|view:&Value|view["park_idle_s"].as_f64().filter(|idle|*idle>=after.as_secs_f64());
+        let Some((key,generation,handle))=self.codex_headless(name).await else {return Ok(None)};
+        if idle(&handle.view().await?).is_none() {return Ok(None);}
+        let Ok(_ingress)=super::lifecycle::ClosedIngress::acquire_within(&self.ingress,name,Duration::from_secs(1)).await else {return Ok(None)};
+        let home=self.policy.codex_environment().home;
+        let dir=super::codex_sidecar::dir(&home);
+        // A porta fechada não exclui a troca de agente nem o acordar: os dois são conferidos aqui.
+        if super::codex_relaunch::transfer_open(&home,name,None,Some(key.as_str())) || self.waking_key(name).is_some() {return Ok(None);}
+        let barrier=self.barrier(&key).await;
+        if barrier.operation.lock().map_err(|_|failure("lifecycle_operation"))?.is_some() {return Ok(None);}
+        let Ok(_guard)=barrier.try_lock() else {return Ok(None)};
+        let Ok(_parking)=barrier.park.try_write() else {return Ok(None)};
+        if !self.entries.lock().await.get(&key).is_some_and(|entry|entry.generation==generation) {return Ok(None);}
+        let Some(idle)=idle(&handle.view().await?) else {return Ok(None)};
+        let state_path=super::codex_terminal::queue_files(&self.claude_dirs().1,&key).0;
+        if tokio::task::spawn_blocking(move||pending(&state_path)).await.map_err(|_|failure("queue_job"))? {return Ok(None);}
+        let closed=self.close_locked_as(&key,generation,true,true).await?;
+        // O cano que não morreu continua no sidecar: a próxima escrita o reaproveita, sem marca.
+        if closed["killed"]!=true {return Err(failure("codex_sleep_kill"));}
+        let since=SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0,|d|d.as_secs_f64());
+        let (owned,key2)=(name.to_owned(),key.clone());
+        let marked=tokio::task::spawn_blocking(move||super::codex_sidecar::locked(&dir,&owned,|path| {
+            let Some(mut meta)=super::codex_sidecar::load(path) else {return Ok(false)};
+            if meta.get("key").and_then(Value::as_str)!=Some(key2.as_str()) {return Ok(false);}
+            meta.remove("cano");
+            meta.insert("asleep".into(),json!({"wake_surface":"headless","since":since}));
+            super::codex_sidecar::write(path,&meta).map(|()|true)
+        })).await.map_err(|_|failure("queue_job"))?;
+        if !matches!(marked,Ok(true)) {return Err(failure("codex_sleep_sidecar"));}
         Ok(Some(idle))
     }
     /// `_vigiar_ociosas`: uma rodada por minuto enquanto o registro existir.

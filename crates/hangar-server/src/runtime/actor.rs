@@ -223,7 +223,7 @@ impl RuntimeEngine {
         match &mut self.core { Core::Claude(core)=>core.mods_call(token,call,left_s,clock),Core::Codex(_)=>Err(crate::mods::model::missing()) }
     }
     fn park_idle(&self,now:f64) -> Option<f64> {
-        match &self.core { Core::Claude(core)=>core.park_idle(now),Core::Codex(_)=>None }
+        match &self.core { Core::Claude(core)=>core.park_idle(now),Core::Codex(core)=>core.park_idle(now) }
     }
     fn view(&self) -> Value {
         match &self.core { Core::Claude(core)=>core.view(),Core::Codex(core)=> {

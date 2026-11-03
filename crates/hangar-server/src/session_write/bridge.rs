@@ -120,11 +120,14 @@ pub async fn codex(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
     let outcome = match (method.as_str(), rest.as_str()) {
         ("POST", "kill") => runtime.kill_codex_terminal(&name).await,
         _ => {
-            if !runtime.owns_codex_terminal(&name) && !runtime.owns_codex_headless(&name).await {
+            // Leitura não acorda a adormecida: a rota responde por ela.
+            let reading = method == "GET" && runtime.asleep(&name).await.is_some();
+            if !reading && !runtime.owns_codex_terminal(&name) && !runtime.owns_codex_headless(&name).await {
                 match runtime.adopt_now(&name).await {
                     None => return not_ours(),
-                    // Conversa ainda abrindo: a rota decide (texto vai à fila, o resto espera).
-                    Some(Err(error)) if error.code == crate::runtime::codex_relaunch::STARTING => {}
+                    // Conversa ainda abrindo ou adormecida acordando: a rota decide (texto vai à fila, o resto espera).
+                    Some(Err(error)) if error.code == crate::runtime::codex_relaunch::STARTING
+                        || error.code == crate::runtime::gateway::ASLEEP_WAKING => {}
                     Some(Err(error)) => return super::detail(super::failed_status(&error), &error.code, &error.message, json!({})),
                     Some(Ok(())) => {}
                 }
