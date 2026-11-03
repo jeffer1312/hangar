@@ -15,6 +15,7 @@ use tokio::time::Instant;
 
 pub use route::{WORKER_BASE, report_route};
 pub use scrub::Scrubber;
+pub(crate) use collect::reduce_server_line;
 
 #[derive(serde::Deserialize)]
 pub struct ClientInput {

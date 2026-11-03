@@ -142,7 +142,7 @@ fn read_json(path: &Path, what: &'static str) -> Result<Option<Value>, ()> {
     match serde_json::from_slice(&raw) {
         Ok(v) => Ok(Some(v)),
         Err(e) => {
-            warn_file(&stem(path), "list_state_file_invalid", &format!("{what}:{:?}", e.classify()));
+            warn_file(&stem(path), "list_state_file_invalid", &format!("{what}:{:?}", e.classify()), Some(path));
             Ok(None)
         }
     }
@@ -158,11 +158,11 @@ fn read_marker(path: &Path) -> Result<Option<Marker>, ()> {
     match (state, ts) {
         (Some(state), Some(ts)) => Ok(Some(Marker { state: state.to_owned(), ts })),
         (None, _) => {
-            warn_file(&stem(path), "list_state_file_invalid", "state");
+            warn_file(&stem(path), "list_state_file_invalid", "state", Some(path));
             Ok(None)
         }
         (_, None) => {
-            warn_file(&stem(path), "list_state_file_invalid", "ts");
+            warn_file(&stem(path), "list_state_file_invalid", "ts", Some(path));
             Ok(None)
         }
     }
@@ -337,7 +337,7 @@ impl HookStates {
                     Err("json") => None,
                     // Formato novo do Claude aparece aqui; escrita no meio é relida no tique seguinte.
                     Err(field) => {
-                        warn_file(&stem(p), "list_native_file_invalid", field);
+                        warn_file(&stem(p), "list_native_file_invalid", field, Some(p));
                         None
                     }
                 })), &mut files);
@@ -415,12 +415,16 @@ fn parsed_sid(path: &Path, parsed: &Parsed) -> Option<String> {
     }
 }
 
-/// A lista roda a cada 1,5 s: um aviso por minuto por sessão e código, no log e no diário.
-pub fn warn_file(session: &str, code: &'static str, field: &str) {
+/// A lista roda a cada 1,5 s: um aviso por minuto por sessão e código, no log e no diário. `session` é o
+/// nome do arquivo (o id da conversa); `file`, o arquivo recusado, que diz também a pasta da conta.
+pub fn warn_file(session: &str, code: &'static str, field: &str, file: Option<&Path>) {
     if crate::warn_limit::allow(Some(session), code) {
-        tracing::warn!(code, session, field, "list: arquivo da sessão recusado");
+        tracing::warn!(code, session, field, path = ?file, "list: arquivo da sessão recusado");
     }
-    super::facts::note("rust.list_file_rejected", session, format!("{code}:{field}"), "arquivo da sessão recusado pela lista");
+    let fields = file.map_or(Value::Null, |file| serde_json::json!({
+        "arquivo": file.file_name().map(|n| n.to_string_lossy().into_owned()),
+        "pasta": file.parent().map(|p| p.to_string_lossy().into_owned()), "campo": field}));
+    super::facts::note_with("rust.list_file_rejected", session, format!("{code}:{field}"), "arquivo da sessão recusado pela lista", fields);
 }
 
 /// Pergunta pendente que o pane pode não mostrar, e as opções dela (só a primeira pergunta).
@@ -480,7 +484,7 @@ fn answered_after(session: &str, jsonl: &str, since: f64, call: Option<&str>) ->
         Err(e) => {
             // Transcript apagado é o fim normal da sessão; outra falha some com a pergunta calada.
             if e.kind() != ErrorKind::NotFound {
-                warn_file(session, "list_askq_transcript_unreadable", "transcript_path");
+                warn_file(session, "list_askq_transcript_unreadable", &format!("transcript_path:{:?}", e.kind()), Some(Path::new(jsonl)));
             }
             return (true, false);
         }
@@ -540,7 +544,7 @@ fn note_once(session: &str, since: f64, code: &'static str, field: &str) {
     let mut noted = NOTED.lock().unwrap_or_else(|e| e.into_inner());
     if noted.peek(session) != Some(&since) {
         noted.insert(session.to_owned(), since);
-        warn_file(session, code, field);
+        warn_file(session, code, field, None);
     }
 }
 
@@ -581,18 +585,18 @@ pub fn open_question(stem: Option<&str>, dirs: &[PathBuf]) -> Option<OpenQuestio
         let (raw, mtime) = match read {
             Ok(v) => v,
             Err(e) if e.kind() == ErrorKind::NotFound => continue,
-            Err(_) => {
+            Err(e) => {
                 // Calar faria toda sessão da conta dizer "sem pergunta" para sempre.
-                warn_file(stem, "list_askq_sidecar_unreadable", "file");
+                warn_file(stem, "list_askq_sidecar_unreadable", &format!("file:{:?}", e.kind()), Some(&f));
                 continue;
             }
         };
         let Ok(data) = serde_json::from_slice::<Value>(&raw) else {
-            warn_file(stem, "list_askq_sidecar_invalid", "json");
+            warn_file(stem, "list_askq_sidecar_invalid", "json", Some(&f));
             continue;
         };
         let Some(tp) = data.get("transcript_path").and_then(Value::as_str) else {
-            warn_file(stem, "list_askq_sidecar_invalid", "transcript_path");
+            warn_file(stem, "list_askq_sidecar_invalid", "transcript_path", Some(&f));
             continue;
         };
         let since = mtime.duration_since(UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
@@ -603,7 +607,7 @@ pub fn open_question(stem: Option<&str>, dirs: &[PathBuf]) -> Option<OpenQuestio
         }
         match first_question(&data) {
             Ok(q) => return Some(q),
-            Err(field) => warn_file(stem, "list_askq_sidecar_invalid", field),
+            Err(field) => warn_file(stem, "list_askq_sidecar_invalid", field, Some(&f)),
         }
     }
     None
@@ -627,18 +631,18 @@ pub fn published_status(stem: Option<&str>, dirs: &[PathBuf], now: f64) -> Optio
             Ok(raw) => raw,
             // Ausente é o caso normal: sessão sem a statusline do Hangar.
             Err(e) if e.kind() == ErrorKind::NotFound => continue,
-            Err(_) => {
-                warn_file(stem, "list_status_sidecar_unreadable", "file");
+            Err(e) => {
+                warn_file(stem, "list_status_sidecar_unreadable", &format!("file:{:?}", e.kind()), Some(&f));
                 continue;
             }
         };
         // Quem publica grava por tmp+rename: JSON torto é bug de escrita, não sessão sem sidecar.
         let Ok(o) = serde_json::from_slice::<Value>(&raw) else {
-            warn_file(stem, "list_status_sidecar_invalid", "json");
+            warn_file(stem, "list_status_sidecar_invalid", "json", Some(&f));
             continue;
         };
         if !o.is_object() {
-            warn_file(stem, "list_status_sidecar_invalid", "object");
+            warn_file(stem, "list_status_sidecar_invalid", "object", Some(&f));
             continue;
         }
         let Some(line) = o.get("line").and_then(Value::as_str).filter(|l| !l.trim().is_empty()) else { continue };

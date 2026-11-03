@@ -290,11 +290,18 @@ fn native_record(metadata: &TerminalMetadata, conversation: &str) -> Result<Opti
 /// `recent`: o `/pull` visto há pouco cobre só a leitura que falta (nenhum transcript aberto, ou os arquivos
 /// do processo e as pastas que não se leem); nunca um transcript aberto ilegível, outro aberto ou mais de um.
 fn current_transcript(procs: &dyn ProcessView, metadata: &TerminalMetadata, conversation: &str, transcript: &Path, recent: bool) -> Result<(), ServiceError> {
-    let unavailable = || ServiceError("terminal_conversation_unavailable");
-    let missing = || if recent { Ok(()) } else { Err(unavailable()) };
-    let Ok(projects) = metadata.config_dir.join("projects").canonicalize() else { return missing() };
-    let Ok(expected) = transcript.canonicalize() else { return missing() };
-    let Ok(fds) = procs.fds_checked(i64::from(metadata.agent_pid)) else { return missing() };
+    // A etapa que falhou vai ao log: o código sozinho não separa pasta, transcript, arquivos do processo ou ambiguidade.
+    let unavailable = |stage: &'static str, kind: Option<std::io::ErrorKind>| {
+        if crate::warn_limit::allow(Some(conversation), stage) {
+            tracing::warn!(code = "terminal_conversation_unavailable", stage, pid = metadata.agent_pid, kind = ?kind,
+                "conversa do terminal sem prova");
+        }
+        ServiceError("terminal_conversation_unavailable")
+    };
+    let missing = |stage, kind| if recent { Ok(()) } else { Err(unavailable(stage, kind)) };
+    let projects = match metadata.config_dir.join("projects").canonicalize() { Ok(p) => p, Err(e) => return missing("projects_dir", Some(e.kind())) };
+    let expected = match transcript.canonicalize() { Ok(p) => p, Err(e) => return missing("transcript_path", Some(e.kind())) };
+    let Ok(fds) = procs.fds_checked(i64::from(metadata.agent_pid)) else { return missing("open_files_unreadable", None) };
     let mut current = std::collections::BTreeSet::new();
     let mut unreadable = false;
     for path in fds.into_iter().filter(|path| path.extension().is_some_and(|extension| extension == "jsonl")) {
@@ -314,12 +321,12 @@ fn current_transcript(procs: &dyn ProcessView, metadata: &TerminalMetadata, conv
         if path.starts_with(&projects) { current.insert(path); }
     }
     // O argv conserva o SID de abertura depois do /clear; só arquivo aberto prova a conversa atual.
-    if current.len() > 1 { return Err(unavailable()); }
+    if current.len() > 1 { return Err(unavailable("several_transcripts_open", None)); }
     if let Some(path) = current.first() && (path != &expected || path.file_stem().and_then(|stem| stem.to_str()) != Some(conversation)) {
         return Err(ServiceError("terminal_conversation_changed"));
     }
-    if unreadable { return Err(unavailable()); }
-    if current.is_empty() { return missing(); }
+    if unreadable { return Err(unavailable("open_file_unreadable", None)); }
+    if current.is_empty() { return missing("no_transcript_open", None); }
     Ok(())
 }
 fn native_state(status: &str) -> Option<&'static str> { match status { "idle" | "shell" => Some("idle"), "busy" => Some("working"), "waiting" => Some("awaiting_input"), _ => None } }

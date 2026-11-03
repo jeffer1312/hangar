@@ -118,8 +118,8 @@ fn modified(path: &Path) -> Option<f64> {
         .duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs_f64())
 }
 
-/// Uma leitura que falha conserva a última linha boa da execução.
-type OrqRead<T> = Result<Option<T>, ()>;
+/// Uma leitura que falha conserva a última linha boa da execução; o `Err` diz o arquivo e o erro.
+type OrqRead<T> = Result<Option<T>, String>;
 
 fn orq_activity(timeline: &Path, now: f64) -> (&'static str, Option<f64>) {
     crate::orchestration::runs::activity(timeline, now)
@@ -127,9 +127,10 @@ fn orq_activity(timeline: &Path, now: f64) -> (&'static str, Option<f64>) {
 
 /// A linha de uma execução: `Ok(None)` quando ela não está viva, `Err` quando um arquivo não leu.
 fn orq_row(dir: &Path, now: f64) -> OrqRead<SessionRow> {
-    let Some((cfg, gid, ended)) = crate::orchestration::runs::list_run(dir).map_err(|_|())? else { return Ok(None) };
+    let failed = |file: &str, e: std::io::Error| format!("{file}: {:?}: {e}", e.kind());
+    let Some((cfg, gid, ended)) = crate::orchestration::runs::list_run(dir).map_err(|e| failed("orq.json/eventos.jsonl", e))? else { return Ok(None) };
     if ended { return Ok(None); }
-    let Some(hb) = crate::orchestration::runs::heartbeat(dir, now).map_err(|_|())? else { return Ok(None) };
+    let Some(hb) = crate::orchestration::runs::heartbeat(dir, now).map_err(|e| failed("vigia.json", e))? else { return Ok(None) };
     let resolved = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_owned());
     let Some(name) = resolved.file_name().map(|n| n.to_string_lossy().into_owned()) else { return Ok(None) };
     let timeline = dir.join(format!("timeline-{name}.jsonl"));
@@ -143,9 +144,9 @@ fn orq_row(dir: &Path, now: f64) -> OrqRead<SessionRow> {
 }
 
 /// `runs.active()` + `list_facts._orq_rows`: uma linha por execução `auto` viva em `~/.hangar/orq`.
-/// Arquivo que não leu mantém a última linha boa daquela execução (`keep_orq`), e o `true` diz que
-/// houve falha, para o diário.
-pub fn orq_rows(home: &Path, now: f64) -> (Vec<SessionRow>, bool) {
+/// Arquivo que não leu mantém a última linha boa daquela execução (`keep_orq`), e o `Some` diz qual
+/// execução e arquivo falharam e por quê, para o diário.
+pub fn orq_rows(home: &Path, now: f64) -> (Vec<SessionRow>, Option<String>) {
     static LAST: LazyLock<Mutex<HashMap<PathBuf, SessionRow>>> = LazyLock::new(Mutex::default);
     let root = home.join(".hangar").join("orq");
     let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
@@ -155,19 +156,23 @@ pub fn orq_rows(home: &Path, now: f64) -> (Vec<SessionRow>, bool) {
         Ok(entries) => entries.flatten()
             .filter(|e| e.file_type().map_or(true, |t| t.is_dir() || t.is_symlink() && e.path().is_dir()))
             .map(|e| e.path()).collect(),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => { last.retain(|d, _| !d.starts_with(&root)); return (Vec::new(), false); }
-        Err(_) => {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => { last.retain(|d, _| !d.starts_with(&root)); return (Vec::new(), None); }
+        Err(e) => {
             let mut kept: Vec<(&PathBuf, &SessionRow)> = last.iter().filter(|(d, _)| d.starts_with(&root)).collect();
             kept.sort_by_key(|(d, _)| *d);
-            return (kept.into_iter().map(|(_, r)| r.clone()).collect(), true);
+            return (kept.into_iter().map(|(_, r)| r.clone()).collect(), Some(format!("{}: {:?}: {e}", root.display(), e.kind())));
         }
     };
     dirs.sort();
-    let mut failed = false;
+    let mut failed = None;
     let rows = dirs.iter().filter_map(|dir| match orq_row(dir, now) {
         Ok(Some(row)) => { last.insert(dir.clone(), row.clone()); Some(row) }
         Ok(None) => { last.remove(dir); None }
-        Err(()) => { failed = true; last.get(dir).cloned() }
+        Err(why) => {
+            // A primeira falha basta para o diário; a execução é a pasta.
+            failed.get_or_insert_with(|| format!("execução {}: {why}", dir.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned())));
+            last.get(dir).cloned()
+        }
     }).collect();
     last.retain(|d, _| !d.starts_with(&root) || dirs.contains(d));
     (rows, failed)

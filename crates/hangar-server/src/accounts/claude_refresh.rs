@@ -131,6 +131,12 @@ pub fn renewed(before: &Value, after: &Value) -> bool {
     before != after && before["expiresAt"].as_f64().is_none_or(|old| expiry > old)
 }
 
+/// A falha com a conta e a etapa no log: `renovacao-falhou` sozinho não diz o que caiu nem em qual conta.
+fn failed(account: &Account, stage: &'static str, cause: impl std::fmt::Display) -> &'static str {
+    tracing::warn!(code = "claude_refresh_failed", account = %account.id, stage, reason = %cause, "renovação do login do Claude falhou");
+    "renovacao-falhou"
+}
+
 impl AccountService {
     pub async fn refresh_claude(
         &self,
@@ -158,22 +164,22 @@ impl AccountService {
         quick: bool,
     ) -> Result<(), &'static str> {
         let before = oauth(&account.home);
-        if !before["refreshToken"]
-            .as_str()
-            .is_some_and(|s| !s.is_empty())
-            || before["refreshTokenExpiresAt"]
-                .as_f64()
-                .is_some_and(|ms| ms / 1000.0 <= now())
-        {
+        let missing = !before["refreshToken"].as_str().is_some_and(|s| !s.is_empty());
+        let expired = before["refreshTokenExpiresAt"].as_f64().filter(|ms| ms / 1000.0 <= now());
+        if missing || expired.is_some() {
+            let reason = if missing { "sem refreshToken em .credentials.json".to_owned() }
+                else { format!("refreshToken venceu em {}", expired.and_then(|ms| chrono::DateTime::from_timestamp_millis(ms as i64))
+                    .map_or("?".into(), |at| at.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string())) };
+            tracing::warn!(code = "claude_login_needed", account = %account.id, reason, "renovação do Claude precisa de login");
             return Err("login-necessario");
         }
         if quick && account.is_default {
             return Err("sessao-viva");
         }
         let key =
-            AccountKey::new(Provider::Claude, &account.home).map_err(|_| "renovacao-falhou")?;
+            AccountKey::new(Provider::Claude, &account.home).map_err(|e| failed(&account, "account_key", format!("{e:?}")))?;
         if quick && self.quick_renewals.pending(&key, &before, now()) {
-            return Err("renovacao-falhou");
+            return Err(failed(&account, "quick_backoff", "renovação rápida ainda na espera da falha anterior"));
         }
         // Limpeza incerta conserva a guarda; a próxima tentativa só prossegue após o ACK.
         {
@@ -182,7 +188,7 @@ impl AccountService {
                 client
                     .call(&key, operation, "close", None)
                     .await
-                    .map_err(|_| "renovacao-falhou")?;
+                    .map_err(|e| failed(&account, "previous_window_close", format!("{e:?}")))?;
                 pending.remove(&key);
                 if let Ok(record) = self.login_record(&key) {
                     let _ = fs::remove_file(record);
@@ -236,7 +242,7 @@ impl AccountService {
         window: Arc<std::sync::Mutex<Option<String>>>,
     ) -> Result<(), &'static str> {
         self.validate_claude(&account, &key)
-            .map_err(|_| "renovacao-falhou")?;
+            .map_err(|e| failed(&account, "validate", format!("{e:?}")))?;
         self.usage(runtime.as_deref(), &key)
             .await
             .ensure_unused()
@@ -250,7 +256,7 @@ impl AccountService {
         }
         if quick {
             // CLI que nem subiu (ausente, processo recusado) não custou nada: a espera fica para o que rodou.
-            if let Err(code @ ("cli_missing" | "cli_not_started")) = cli {
+            if let Err(code @ ("cli_missing" | "cli_not_started")) = &cli {
                 tracing::warn!(code, "renovação rápida sem o CLI do Claude; nada de espera");
             } else {
                 let wait = self.quick_renewals.failed(&key, before, now());
@@ -260,30 +266,28 @@ impl AccountService {
                     "renovação rápida não renovou; próxima tentativa automática após a espera"
                 );
             }
-            return Err("renovacao-falhou");
+            let ran = match &cli { Ok((ok, out)) => format!("CLI saiu com sucesso={ok}, {} bytes", out.len()), Err(code) => (*code).to_owned() };
+            return Err(failed(&account, "quick_cli", format!("o token não mudou: {ran}")));
         }
-        let operation = super::claude_login::nonce().map_err(|_| "renovacao-falhou")?;
-        let record = self.login_record(&key).map_err(|_| "renovacao-falhou")?;
+        let operation = super::claude_login::nonce().map_err(|e| failed(&account, "nonce", format!("{e:?}")))?;
+        let record = self.login_record(&key).map_err(|e| failed(&account, "login_record", format!("{e:?}")))?;
         crate::runtime::queue::atomic_write(
             &record,
             serde_json::json!({"key":key,"operation":operation})
                 .to_string()
                 .as_bytes(),
         )
-        .map_err(|_| "renovacao-falhou")?;
+        .map_err(|e| failed(&account, "login_record_write", e))?;
         *window.lock().unwrap_or_else(|p| p.into_inner()) = Some(operation.clone());
-        if client
-            .call(&key, &operation, "refresh", None)
-            .await
-            .is_err()
-        {
+        if let Err(error) = client.call(&key, &operation, "refresh", None).await {
+            let cause = format!("{error:?}");
             if client.call(&key, &operation, "close", None).await.is_err() {
                 self.park_cleanup(client, key, operation, Some(_guard), record)
                     .await;
             } else {
                 let _ = fs::remove_file(record);
             }
-            return Err("renovacao-falhou");
+            return Err(failed(&account, "window_refresh", cause));
         }
         let mut timer = tokio::time::interval(Duration::from_millis(250));
         let deadline = tokio::time::Instant::now() + Duration::from_secs(45);
@@ -296,15 +300,17 @@ impl AccountService {
             }
             timer.tick().await;
         };
-        if client.call(&key, &operation, "close", None).await.is_err() {
+        if let Err(error) = client.call(&key, &operation, "close", None).await {
             self.park_cleanup(client, key, operation, Some(_guard), record)
                 .await;
-            return Err("renovacao-falhou");
+            return Err(failed(&account, "window_close", format!("{error:?}; token renovado: {success}")));
         }
         let _ = fs::remove_file(record);
         self.claude_auth.invalidate(&key);
         if success {
             self.quick_renewals.clear(&key);
+        } else {
+            tracing::warn!(code = "claude_refresh_timeout", account = %account.id, wait_s = 45, "a janela de login não renovou o token no prazo");
         }
         if success { Ok(()) } else { Err("timeout") }
     }

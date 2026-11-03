@@ -3514,12 +3514,34 @@ próxima subida, dentro das 24 h; recusa do worker não se repete. `GET /api/atu
 ou o código) e `relatorio_erro`; as telas de atualização mostram a linha e seguem lendo enquanto
 está `pendente`, até 12 min. 429 do worker tenta de novo depois de 1, 3 e 7 min.
 
-Quando a versão nova não responde depois do reinício, o executor lê a saída dela desde antes do
-reinício (Windows: o `hangar-backend*.log` mais novo e o tamanho dele; Linux: o journal da unit,
-que roda sem `--log`) e grava como `update: saída` só o traceback e as linhas ERROR/CRITICAL, até
-40 linhas de até 300 caracteres, com `scrub`. Linhas no formato do `hangar-server` ficam de fora
-(já saem pela lista fixa de campos). O relatório as mostra embaixo da linha da falha, nas 3 falhas
-mais recentes. É a única exceção ao "do log do Python, só a contagem".
+Quando um reinício não volta (a versão nova, a volta para a anterior ou o reinício avulso), o
+executor grava como `update: saída`, com `scrub`, o que explica a falha sem precisar pedir mais
+nada à pessoa (`update/startup_output.rs`):
+
+- `etapas:` tempo de baixar, trocar, passos, comando de reinício e espera, o prazo e o pid de antes;
+- `prova a–b s:` cada mudança no que a porta respondeu, com a causa do erro de conexão inteira
+  (recusada = ninguém escutando; tempo esgotado = processo de pé e travado);
+- `log:` a saída da versão nova desde antes do reinício (Windows: o `hangar-backend*.log`; Linux: o
+  journal da unit), reduzida: traceback, linhas do lançador, do uvicorn e `[hangar]` inteiras; do
+  Python com logger, aviso e erro inteiros e INFO só nível e logger; do `hangar-server`, a lista
+  fixa de campos (INFO, só a mensagem fixa). Repetidas viram `×N`; ficam as 25 primeiras e as 60
+  últimas, e quantas linhas de acesso HTTP e sem formato saíram;
+- o retrato do fim do prazo: o Python que o lançador acharia, se o pacote novo tem manifesto,
+  Python, `main.py` e binário, cada `python`/`hangar-server`/`hangar-cano` do Hangar (pid, pai,
+  versão, idade, memória, CPU, linha de comando; Python de fora só conta), a tarefa
+  `hangar-backend` (estado, última execução, último resultado, ação) ou a unit (estado, pid,
+  status de saída, reinícios) e quem escuta a porta.
+
+O lançador escreve no mesmo log `launch_start` (versão, pid) e, no Windows,
+`launch_backend_started`/`launch_backend_exited` com versão, pid do Python, código e duração:
+o `0xffffffff` da versão anterior parada pelo `Stop-Process` do reinício não se confunde mais com
+a saída da nova. O relatório mostra as linhas embaixo da linha da falha, nas 3 falhas mais
+recentes. É a única exceção ao "do log do Python, só a contagem".
+
+**Por que tudo de uma vez (03/11/2026).** O relatório `f7rtsvcv` (Windows, 9074 → 9091) trouxe só
+a linha do lançador antigo morto, e a análise parou em "falta saber se a tarefa subiu". Cada
+leitura que termina em "acrescentar X para a próxima" deixa a falha sem causa: a captura cobre o
+que um investigador perguntaria na primeira leitura.
 
 **Por quê.** O relatório `5z4vw3l3` (Mayron, 30/10): toda atualização acima da `0.1.0.8589`
 falhava com "o servidor não voltou depois de reiniciar", a máquina voltava sozinha, e o relatório

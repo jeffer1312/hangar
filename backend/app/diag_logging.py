@@ -16,9 +16,15 @@ class DiaryHandler(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
         if record.name.startswith(("hangar.diag", "hangar.log_paths")):
             return
-        # A mensagem formatada pode conter token, OAuth ou conversa. Só a origem é exportável.
+        # A mensagem vai cortada: sem ela o aviso só diz onde, não o quê. Token e OAuth saem no scrub
+        # da exportação (diag_report); o arquivo do diário não sai da máquina sem ele.
+        try:
+            message = record.getMessage()[:200]
+        except Exception:                                # noqa: BLE001 — argumento que não formata
+            message = None
         fields = {"codigo": record.name,
-                  "detalhe": f"{os.path.basename(record.pathname)}:{record.lineno} {record.funcName}"}
+                  "detalhe": f"{os.path.basename(record.pathname)}:{record.lineno} {record.funcName}",
+                  "mensagem": message}
         if record.exc_info and record.exc_info[1] is not None:
             fields.update(diag.erro_campos(record.exc_info[1]))
             frames = []

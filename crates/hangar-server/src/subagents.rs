@@ -157,10 +157,16 @@ async fn serve(st: &AppState, (name, agent): (String, Option<String>), query: Op
             Err(_) => return reply(StatusCode::UNPROCESSABLE_ENTITY, json!({"detail": [{"loc": ["query", "events"], "msg": "events must be an integer"}]}), headers),
         },
     };
+    let started = std::time::Instant::now();
     let row = match tokio::time::timeout(LOOKUP_TIMEOUT, row_of(st, &name)).await.unwrap_or(Err("locate_timeout")) {
         Ok(Some(row)) => row,
         Ok(None) => return refusal(StatusCode::NOT_FOUND, "erro_sessao_inexistente", "session or transcript not found", headers),
-        Err(code) => return route_failed(st, headers, "rust.subagents_failed", &name, code, crate::routes::INFO_REASON),
+        Err(code) => {
+            // Quem não respondeu (lista, fatos, prazo) e em quanto tempo: o código só diz que caiu.
+            st.diag.report_with("rust.subagents_failed", &name, code, crate::routes::INFO_REASON,
+                json!({"etapa": "lista_da_sessao", "ms": started.elapsed().as_millis() as u64, "prazo_ms": LOOKUP_TIMEOUT.as_millis() as u64}));
+            return route_failed(st, headers, "rust.subagents_failed", &name, code, crate::routes::INFO_REASON);
+        }
     };
     let Some((provider, jsonl)) = conversation(&row, st.side.hubs.bound(&name)) else {
         return refusal(StatusCode::CONFLICT, "erro_subagentes_conversa_desconhecida",
@@ -290,10 +296,15 @@ pub async fn message(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
     let Ok(bytes) = axum::body::to_bytes(req.into_body(), MESSAGE_BODY_MAX).await else { return invalid() };
     let Some(text) = serde_json::from_slice::<Value>(&bytes).ok().and_then(|v| v.get("text").and_then(Value::as_str).map(str::to_owned))
         .filter(|t| valid_text(t)) else { return invalid() };
+    let started = std::time::Instant::now();
     let row = match tokio::time::timeout(LOOKUP_TIMEOUT, row_of(&st, &name)).await.unwrap_or(Err("locate_timeout")) {
         Ok(Some(row)) => row,
         Ok(None) => return refusal(StatusCode::NOT_FOUND, "erro_sessao_inexistente", "session or transcript not found", &headers),
-        Err(code) => return route_failed(&st, &headers, "rust.subagents_failed", &name, code, crate::routes::INFO_REASON),
+        Err(code) => {
+            st.diag.report_with("rust.subagents_failed", &name, code, crate::routes::INFO_REASON,
+                json!({"etapa": "lista_da_sessao_mensagem", "ms": started.elapsed().as_millis() as u64, "prazo_ms": LOOKUP_TIMEOUT.as_millis() as u64}));
+            return route_failed(&st, &headers, "rust.subagents_failed", &name, code, crate::routes::INFO_REASON);
+        }
     };
     if row.provider != "codex" && let Some(code) = message_blocked(&row.provider) {
         return refusal(StatusCode::CONFLICT, code, "this session cannot message its subagents", &headers);

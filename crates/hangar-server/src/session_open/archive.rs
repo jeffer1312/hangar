@@ -381,7 +381,9 @@ fn move_with(rename: &dyn Fn(&Path, &Path) -> std::io::Result<()>, server_projec
                 dst.join(&file).display(), src.join(sid).display());
             tracing::error!(back = %back, "{message}");
             let line = json!({"evento": "sessao.conversa_partida", "nivel": "erro", "codigo": "erro_mover_conversa", "detalhe": message});
-            crate::diag::record_blocking(crate::diag::diary_dir().as_deref(), &[line], "conversa partida");
+            // O teste deste caminho não suja o diário da máquina (as linhas com `/tmp/.tmp…` iam aos relatórios).
+            let diary = if cfg!(test) { None } else { crate::diag::diary_dir() };
+            crate::diag::record_blocking(diary.as_deref(), &[line], "conversa partida");
             return Err(OpenError::new(500, "erro_mover_conversa", message).with_params(json!({"erro": error.to_string()})));
         }
         return Err(failed(error));

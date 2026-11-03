@@ -222,16 +222,17 @@ fn unreadable_orq_keeps_the_last_good_row_and_says_so() {
     std::fs::write(d.join("vigia.json"), beat()).unwrap();
     let names = |rows: &[SessionRow]| rows.iter().map(|r| r.name.clone()).collect::<Vec<_>>();
     let (rows, failed) = orq_rows(dir.path(), now());
-    assert_eq!((names(&rows), failed), (vec!["g1-orq".to_owned()], false));
-    // Batimento lido no meio da escrita: a orquestração não some por um tique.
+    assert_eq!((names(&rows), failed), (vec!["g1-orq".to_owned()], None));
+    // Batimento lido no meio da escrita: a orquestração não some por um tique, e o diário sabe qual arquivo.
     std::fs::write(d.join("vigia.json"), "{").unwrap();
     let (rows, failed) = orq_rows(dir.path(), now());
-    assert_eq!((names(&rows), failed), (vec!["g1-orq".to_owned()], true));
+    assert_eq!(names(&rows), vec!["g1-orq".to_owned()]);
+    assert!(failed.as_deref().is_some_and(|why| why.contains("vigia.json")), "{failed:?}");
     // Encerrada de verdade: sai, sem falha.
     std::fs::write(d.join("vigia.json"), beat()).unwrap();
     std::fs::write(d.join("eventos.jsonl"), format!("{start}\n{}\n", json!({"tipo": "execucao_fim"}))).unwrap();
     let (rows, failed) = orq_rows(dir.path(), now());
-    assert_eq!((names(&rows), failed), (Vec::<String>::new(), false));
+    assert_eq!((names(&rows), failed), (Vec::<String>::new(), None));
 }
 
 #[test]
@@ -241,7 +242,7 @@ fn loose_file_in_orq_dir_is_not_a_failure() {
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join("2026-09-05-plano.md"), "# plano").unwrap();
     let (rows, failed) = orq_rows(dir.path(), now());
-    assert!(rows.is_empty() && !failed, "arquivo solto não é execução nem leitura falha");
+    assert!(rows.is_empty() && failed.is_none(), "arquivo solto não é execução nem leitura falha");
 }
 
 #[test]

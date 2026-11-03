@@ -1,5 +1,6 @@
 import anyio.to_thread
 import asyncio
+import functools
 import json
 import logging
 import os
@@ -734,8 +735,18 @@ async def _correlaciona_diag(request: Request, call_next):
     started = time.monotonic()
     response = None
     failure = ""
+    error_code = None
     try:
         response = await call_next(request)
+        # O código do erro mora no corpo; o de erro é pequeno, lido e devolvido igual.
+        size = response.headers.get("content-length", "")
+        if (response.status_code >= 400 and size.isdigit() and int(size) <= 8192
+                and response.headers.get("content-type", "").startswith("application/json")):
+            body = b"".join([chunk async for chunk in response.body_iterator])
+            error_code = _codigo_do_erro(body)
+            rebuilt = Response(content=body, status_code=response.status_code, background=response.background)
+            rebuilt.raw_headers = list(response.raw_headers)
+            response = rebuilt
         return response
     except Exception as exc:
         failure = type(exc).__name__
@@ -744,15 +755,42 @@ async def _correlaciona_diag(request: Request, call_next):
         elapsed = int((time.monotonic() - started) * 1000)
         status = response.status_code if response is not None else 500
         # O template da rota não contém query, caminho de arquivo nem corpo do pedido.
-        route = getattr(request.scope.get("route"), "path", "(rota desconhecida)")
+        template = getattr(request.scope.get("route"), "path", None)
+        route = template or "(rota desconhecida)"
         # O Rust chama `/internal/*` a cada tique: o POST que deu certo e rápido enchia o teto do dia de madrugada.
         internal_ok = request.url.path.startswith("/internal/") and status < 400 and not failure and elapsed < 1000
         if (response is not None or failure) and not internal_ok and not request.url.path.startswith("/api/diag") and (
                 failure or status >= 400 or elapsed >= 1000 or request.method in ("POST", "PUT", "PATCH", "DELETE")):
             diag.registrar("api.servidor", "erro" if status >= 500 else "aviso" if status >= 400 else "ok",
                            detalhe=f"{request.method} {route}", codigo=str(status), ms=elapsed,
-                           etapa="cabecalhos", sessao=request.path_params.get("name"), erro_tipo=failure)
+                           etapa="cabecalhos", sessao=request.path_params.get("name"), erro_tipo=failure,
+                           causa=error_code, rota=None if template else _rota_mascarada(path))
         diag.req_atual.reset(token)
+
+
+@functools.cache
+def _palavras_das_rotas() -> frozenset[str]:
+    return frozenset(seg for r in app.routes for seg in getattr(r, "path", "").split("/") if seg and "{" not in seg)
+
+
+def _rota_mascarada(path: str) -> str:
+    """O caminho sem rota conhecida: diz qual chamada errou o endereço. Só ficam as palavras que
+    existem nas rotas; nome, id e qualquer outro texto do caminho viram `*`."""
+    known = _palavras_das_rotas()
+    return "/".join(p if not p or p in known else "*" for p in path.split("/"))[:120]
+
+
+def _codigo_do_erro(body: bytes) -> str | None:
+    """`detail.code` ou `code` do corpo de erro; o resto do corpo nunca vai ao diário."""
+    try:
+        value = json.loads(body)
+    except ValueError:
+        return None
+    if not isinstance(value, dict):
+        return None
+    detail = value.get("detail")
+    code = detail.get("code") if isinstance(detail, dict) else value.get("code")
+    return code[:64] if isinstance(code, str) else None
 
 
 # Porteiro do convidado com login ANTES do CORS: o CORS o envolve, entao ate o 403 dele sai com

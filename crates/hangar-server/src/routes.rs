@@ -1157,8 +1157,15 @@ pub(crate) async fn events(
     };
     // Convidado não recebe aviso de mod nem pedido de navegador, e não conta como app do dono.
     let guest = matches!(who, Some(Caller::Guest(_))) || req.extensions().get::<crate::forwarded::ReadGuest>().is_some_and(|guest| guest.0);
-    let Ok(info) = st.info(&name).await else {
-        return route_failed(&st, req.headers(), "rust.events_failed", &name, "internal_info", INFO_REASON);
+    let started = std::time::Instant::now();
+    let info = match st.info(&name).await {
+        Ok(info) => info,
+        Err(crate::locate::InfoFailed(cause)) => {
+            // A etapa da descoberta que não respondeu e o tempo: `internal_info` sozinho não diz qual.
+            st.diag.report_with("rust.events_failed", &name, "internal_info", INFO_REASON,
+                serde_json::json!({"etapa": cause, "ms": started.elapsed().as_millis() as u64}));
+            return route_failed(&st, req.headers(), "rust.events_failed", &name, "internal_info", INFO_REASON);
+        }
     };
     // Antes de qualquer repasse: sessão em erro ainda sem transcript também é reaberta.
     if info.is_some() { st.request_reopen(&name); }

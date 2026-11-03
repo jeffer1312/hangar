@@ -723,8 +723,9 @@ impl ListBridge {
             (local_transfers::transfers(&found, &d), local_facts::orq_rows(&d.home, wall_now()),
                 local_facts::Guests::read(&d.claude), problems, local_facts::stall_seconds(&d.claude))
         }).await.map_err(|e| joined(e, "fatos locais interrompidos"))?;
-        if orq_failed {
-            self.facts.diag.report("rust.list_orq_unavailable", "", "list_orq_unavailable", "orquestração ilegível; fica a última linha boa");
+        if let Some(why) = orq_failed {
+            self.facts.diag.report_with("rust.list_orq_unavailable", "", "list_orq_unavailable", "orquestração ilegível; fica a última linha boa",
+                serde_json::json!({"detalhe": why}));
         }
         let (unknown, (overrides, frozen), shortcuts) = {
             let mut last = lock(&self.local);
@@ -819,7 +820,7 @@ impl ListBridge {
     /// Falhas vistas pela leitura síncrona da rodada, ao diário.
     fn flush_notes(&self) {
         for n in list_facts::take_notes() {
-            self.facts.diag.report(n.event, &n.session, &n.code, n.reason);
+            self.facts.diag.report_with(n.event, &n.session, &n.code, n.reason, n.fields);
         }
         let hits = std::mem::take(&mut *self.caches.limits.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
         for hit in hits {
@@ -974,7 +975,9 @@ impl ListBridge {
         for row in rows.iter_mut() {
             // Diagnóstico sai já, sem prazo: o código fica no diário da lista, nunca na tela nem no `Shown`.
             if let Some(code) = row.problema.as_deref().filter(|code| crate::problem_gate::diagnostic(code, &row.state)) {
-                list_facts::note("rust.problem_hidden", &row.name, code.to_owned(), "aviso de diagnóstico fora da tela");
+                // A linha não traz o detalhe do problema: vão o estado e o tipo da sessão, que situam o código.
+                list_facts::note_with("rust.problem_hidden", &row.name, code.to_owned(), "aviso de diagnóstico fora da tela",
+                    serde_json::json!({"via": "lista", "estado": &row.state, "provider": &row.provider, "sem_terminal": if row.headless { 1 } else { 0 }}));
                 row.problema = None;
             }
             let gate = gates.entry(row.name.clone()).or_default();
@@ -1230,8 +1233,9 @@ async fn execute(bridge: &Arc<ListBridge>, op: Operation) -> Result<Value, ListE
             let home = bridge.dirs()?.home;
             let (orq, failed) = tokio::task::spawn_blocking(move || local_facts::orq_rows(&home, wall_now())).await
                 .map_err(|e| joined(e, "orquestrações interrompidas"))?;
-            if failed {
-                bridge.facts.diag.report("rust.list_orq_unavailable", "", "list_orq_unavailable", "orquestração ilegível; fica a última linha boa");
+            if let Some(why) = failed {
+                bridge.facts.diag.report_with("rust.list_orq_unavailable", "", "list_orq_unavailable", "orquestração ilegível; fica a última linha boa",
+                    serde_json::json!({"detalhe": why}));
             }
             found.extend(orq);
             rows(&found)

@@ -21,12 +21,15 @@ pub fn spawn(st: Arc<AppState>) -> tokio::task::JoinHandle<()> {
         ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             ticks.tick().await;
-            if cleanup_once(st.clone()).await.is_err() {
-                st.diag.report(
+            let started = Instant::now();
+            if let Err(e) = cleanup_once(st.clone()).await {
+                st.diag.report_with(
                     "rust.worktrees_cleanup_failed",
                     "",
                     "worktrees_cleanup_unavailable",
                     "limpeza de worktrees indisponível; nenhuma exclusão foi presumida",
+                    serde_json::json!({"status": e.status, "erro_codigo": e.code, "detalhe": failure_text(&e),
+                        "ms": started.elapsed().as_millis() as u64}),
                 );
             }
         }
@@ -240,11 +243,13 @@ pub async fn cleanup_once(st: Arc<AppState>) -> Result<Vec<String>> {
                 ) {
                     Ok(Some(candidate)) => candidates.push(candidate),
                     Ok(None) => {}
-                    Err(_) => reader.diag.report(
+                    Err(e) => reader.diag.report_with(
                         "rust.worktrees_cleanup_skipped",
                         "",
                         "worktree_read_uncertain",
                         "worktree protegida por leitura incerta",
+                        serde_json::json!({"repositorio": repo["repo"].as_str(), "worktree": path,
+                            "status": e.status, "detalhe": failure_text(&e)}),
                     ),
                 }
             }
@@ -293,11 +298,12 @@ pub async fn cleanup_once(st: Arc<AppState>) -> Result<Vec<String>> {
         match done {
             Ok(true) => removed.push(path),
             Ok(false) => {}
-            Err(_) => st.diag.report(
+            Err(e) => st.diag.report_with(
                 "rust.worktrees_cleanup_skipped",
                 "",
                 "worktree_changed",
                 "worktree conservada na revalidação",
+                serde_json::json!({"worktree": path, "status": e.status, "detalhe": failure_text(&e)}),
             ),
         }
     }
@@ -305,4 +311,9 @@ pub async fn cleanup_once(st: Arc<AppState>) -> Result<Vec<String>> {
         st.list.invalidate();
     }
     Ok(removed)
+}
+
+/// O texto do `WorkspaceError` (o `Display` dele só diz o status).
+fn failure_text(e: &hangar_api::workspace::WorkspaceError) -> String {
+    e.detail.as_str().map_or_else(|| e.detail.to_string(), str::to_owned)
 }

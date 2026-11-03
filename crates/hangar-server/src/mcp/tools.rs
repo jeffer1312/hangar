@@ -358,8 +358,13 @@ impl Tools {
     }
 
     /// A rota pública, como o dono desta máquina; `(status, corpo)`.
-    async fn route(&self, method: Method, path: &str, body: Option<Value>) -> (u16, Value) {
-        let mut request = Request::builder().method(method).uri(path)
+    async fn route(&self, method: Method, path: &str, body: Option<Value>) -> (u16, Value) { self.route_from(None, method, path, body).await }
+
+    /// `caller`: a sessão que chamou a tool. Vai no `user-agent`, que o diário grava como `cliente`:
+    /// sem ele, fechar ou mandar pelo MCP fica igual a um clique do dono.
+    async fn route_from(&self, caller: Option<&str>, method: Method, path: &str, body: Option<Value>) -> (u16, Value) {
+        let agent = caller.map_or_else(|| "hangar-mcp".to_owned(), |c| format!("hangar-mcp (de {c})"));
+        let mut request = Request::builder().method(method).uri(path).header("user-agent", agent)
             .header("authorization", format!("Bearer {}", self.st.cfg.auth_token));
         if body.is_some() { request = request.header("content-type", "application/json"); }
         let Ok(mut request) = request.body(body.map_or_else(Body::empty, |b| Body::from(b.to_string()))) else {
@@ -374,7 +379,11 @@ impl Tools {
 
     /// Corpo de sucesso da rota, ou a frase do erro.
     async fn ok(&self, method: Method, path: &str, body: Option<Value>) -> Result<Value, String> {
-        let (status, value) = self.route(method, path, body).await;
+        self.ok_from(None, method, path, body).await
+    }
+
+    async fn ok_from(&self, caller: Option<&str>, method: Method, path: &str, body: Option<Value>) -> Result<Value, String> {
+        let (status, value) = self.route_from(caller, method, path, body).await;
         if (200..300).contains(&status) { Ok(value) } else { Err(detail(status, &value)) }
     }
 
@@ -419,7 +428,7 @@ impl Tools {
         };
         let Some((server_id, session)) = a.alvo.split_once("::") else {
             let body = json!({"text": format!("[de: {me}] {texto}"), "steer": true});
-            return self.ok(Method::POST, &format!("/api/sessions/{}/input", segment(&a.alvo)), Some(body)).await.map(with_target);
+            return self.ok_from(Some(&me), Method::POST, &format!("/api/sessions/{}/input", segment(&a.alvo)), Some(body)).await.map(with_target);
         };
         // Par externo primeiro (só o Rust sabe chamar a máquina de outra pessoa); apelido que não é
         // par desta sessão segue como máquina própria.
@@ -513,7 +522,7 @@ impl Tools {
         if !identity::exists(&Local { home: &home, mux: &self.st.list.env().mux }, alvo).await {
             return Err(format!("sessão '{alvo}' não existe (tool `sessions`)"));
         }
-        self.ok(Method::DELETE, &format!("/api/sessions/{}", segment(alvo)), None).await.map(dict)
+        self.ok_from(Some(&me), Method::DELETE, &format!("/api/sessions/{}", segment(alvo)), None).await.map(dict)
     }
 
     async fn interrupt(&self, headers: &HeaderMap, alvo: &str) -> Outcome {
@@ -526,7 +535,7 @@ impl Tools {
         let groups = self.st.groups.as_ref().ok_or("grupos indisponíveis neste servidor: o vínculo da filha não pode ser conferido")?;
         let sidecar = groups.link(alvo).await.map_err(|e| format!("arquivo de grupo de '{alvo}' ilegível: {e}"))?;
         if let Some(refusal) = link_refusal(&me, alvo, sidecar.as_ref()) { return Err(refusal); }
-        self.ok(Method::POST, &format!("/api/sessions/{}/interrupt", segment(alvo)), None).await.map(dict)
+        self.ok_from(Some(&me), Method::POST, &format!("/api/sessions/{}/interrupt", segment(alvo)), None).await.map(dict)
     }
 
     async fn browser_open(&self, headers: &HeaderMap, a: BrowserOpen) -> Outcome {

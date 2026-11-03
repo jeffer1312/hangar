@@ -312,7 +312,7 @@ pub async fn input(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
     }
     let (steer, note, expected_turn) = if let Some((task, message)) = task.filter(|_| !text.trim_start().starts_with('/')) {
         let before = ctx.target.handle.snapshot().await.ok();
-        let (mut direct, mut note) = super::delivery_timing::decide(&ctx.st, &message, &task).await;
+        let (mut direct, mut note) = super::delivery_timing::decide(&ctx.st, &ctx.name, &message, &task).await;
         if direct {
             let after = ctx.target.handle.snapshot().await.ok();
             if !super::delivery_timing::same_work(before.as_ref(), after.as_ref()) { direct = false; note = "work_changed"; }
@@ -327,7 +327,26 @@ pub async fn input(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
         tracing::info!(target: "delivery_timing", session=%ctx.name, outcome, "decisão de entrega aplicada");
         result.1["timing_note"] = json!(outcome);
     }
+    crate::diag::record(crate::diag::diary_dir(), vec![received_line(&ctx.name, ctx.headers(), peer, &text, steer, &result)], "mensagem recebida");
     answer(&ctx, result)
+}
+
+static FROM: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"^\s*\[(de|grupo|de fora|painel):\s*([^\]]{1,120})\]").unwrap());
+
+/// De onde veio cada mensagem e o que aconteceu com ela, sem o texto: o cliente (`hangar-mcp (de x)`,
+/// app), o remetente do recado (`[de: x]`), o endereço, o pedido do cliente e a resposta da entrega.
+fn received_line(name: &str, headers: &HeaderMap, peer: SocketAddr, text: &str, steer: bool, result: &(StatusCode, Value)) -> Value {
+    let header = |key: &str| headers.get(key).and_then(|v| v.to_str().ok()).map(|v| v.chars().take(80).collect::<String>());
+    let from = FROM.captures(text).map(|c| format!("{}: {}", &c[1], &c[2]));
+    let (status, body) = result;
+    let failed = !status.is_success();
+    json!({"evento": "sessao.mensagem_recebida", "nivel": if failed { "erro" } else { "ok" }, "sessao": name,
+        "codigo": if failed { body["detail"]["code"].as_str().or(body["code"].as_str()).map(str::to_owned).or(Some(status.as_u16().to_string())) } else { None },
+        "remetente": from, "cliente": header("user-agent"), "req": header("x-hangar-req"),
+        "origem": header("x-forwarded-for").unwrap_or_else(|| peer.ip().to_string()),
+        "comando": text.trim_start().starts_with('/').then(|| text.split_whitespace().next().unwrap_or("").chars().take(40).collect::<String>()),
+        "caracteres": text.chars().count(), "orientar": steer, "status": status.as_u16(),
+        "entregue": body["delivered"].as_bool(), "fila": body["queued"].as_bool().or(body["queue_id"].as_str().map(|_| true))})
 }
 
 /// Texto para o Codex com terminal que ainda abre a conversa: fica na fila da chave dela e a resposta é a

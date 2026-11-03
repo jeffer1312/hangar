@@ -114,6 +114,21 @@ def server_log_path() -> Path:
     return folder / "hangar-server.log"
 
 
+def _last_errors(path: Path, count: int = 3) -> str:
+    """As últimas linhas ERROR/WARN do log do filho, sem a data: o pânico sai por elas (gancho do
+    `tracing`), e o código de saída sozinho não diz por que ele caiu."""
+    try:
+        with path.open("rb") as f:
+            f.seek(max(0, f.seek(0, os.SEEK_END) - 65536))
+            tail = f.read().decode("utf-8", errors="replace").splitlines()
+    except OSError as e:
+        return f"log ilegível: {type(e).__name__}"
+    kept = [line for line in tail if " ERROR " in line or " WARN " in line][-count:]
+    # `2026-11-03T10:55:00.123Z  ERROR msg` vira `10:55:00 ERROR msg`.
+    return " | ".join(f"{line[11:19]} {line.split(maxsplit=1)[1][:200]}" if line[:4].isdigit() and " " in line else line[:200]
+                      for line in kept)
+
+
 def _health(host: str, port: int) -> dict | None:
     """Corpo da saúde quando ela responde `ok`; None enquanto não responde."""
     # Quem escuta em todas as interfaces responde no loopback da mesma família.
@@ -418,7 +433,7 @@ class Supervisor:
                                             env["HANGAR_RUNTIME_INSTANCE"]), START_TIMEOUT)
         except ProtocolMismatch as e:
             _log.error("hangar-server fala o protocolo %r; este backend fala %d", e.args[0], RUST_SERVER_PROTOCOL)
-            diag.registrar("hangar_server.protocolo", "erro", esperado=RUST_SERVER_PROTOCOL, recebido=e.args[0])
+            diag.registrar("hangar_server.protocolo", "erro", esperado=RUST_SERVER_PROTOCOL, recebido=repr(e.args[0]))
             return "protocol"
         except (OSError, ValueError, asyncio.TimeoutError):
             diag.registrar("hangar_server.partida", "erro", codigo="runtime_invalido")
@@ -432,7 +447,7 @@ class Supervisor:
                 got = health.get("protocol")
                 if isinstance(got, bool) or got != RUST_SERVER_PROTOCOL:
                     _log.error("hangar-server fala o protocolo %r; este backend fala %d", got, RUST_SERVER_PROTOCOL)
-                    diag.registrar("hangar_server.protocolo", "erro", esperado=RUST_SERVER_PROTOCOL, recebido=got)
+                    diag.registrar("hangar_server.protocolo", "erro", esperado=RUST_SERVER_PROTOCOL, recebido=repr(got))
                     return "protocol"
                 if self.proc.poll() is not None:
                     return "died"
@@ -518,8 +533,9 @@ class Supervisor:
                 crashes = [t for t in crashes if now - t < CRASH_WINDOW] + [now]
                 _log.warning("hangar-server saiu (código %s), queda %d em %ds",
                              self.proc.returncode, len(crashes), int(CRASH_WINDOW))
+                saida = await asyncio.to_thread(_last_errors, server_log_path())
                 diag.registrar("hangar_server.caiu", "aviso", retorno=self.proc.returncode,
-                               tentativa=len(crashes))
+                               tentativa=len(crashes), saida=saida)
                 if len(crashes) >= MAX_CRASHES:
                     return "quedas"
         except Exception as e:                           # noqa: BLE001 — a porta pública não fica sem dono

@@ -661,7 +661,7 @@ def test_other_protocol_means_python_alone_and_a_diary_line(
     [spawn] = _spawns(tmp_path)                     # protocolo errado não religa
     assert _dead(spawn["pid"])
     assert ("hangar_server.protocolo", "erro",
-            {"esperado": rust_server.RUST_SERVER_PROTOCOL, "recebido": got}) in events
+            {"esperado": rust_server.RUST_SERVER_PROTOCOL, "recebido": repr(got)}) in events
     assert ("hangar_server.reserva", "erro", {"codigo": "protocolo"}) in events
 
 

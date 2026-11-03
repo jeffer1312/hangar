@@ -31,10 +31,28 @@ fn wire_event(event:&str) -> String {
 }
 
 #[derive(Clone)]
-pub struct DiagClient { upstream:SocketAddr,secret:String,http:crate::proxy::HttpClient }
+pub struct DiagClient { upstream:SocketAddr,secret:String,http:crate::proxy::HttpClient,
+    /// O diário do próprio Rust, para `report_with`; nos testes, nenhum: não sujar o diário da máquina.
+    diary:Option<std::path::PathBuf> }
 
 impl DiagClient {
-    pub fn new(upstream:SocketAddr,secret:String) -> Self { Self { upstream,secret,http:crate::proxy::client() } }
+    pub fn new(upstream:SocketAddr,secret:String) -> Self {
+        Self { upstream,secret,http:crate::proxy::client(),diary:if cfg!(test) { None } else { diary_dir() } }
+    }
+
+    /// `report` com o que diagnostica a falha (`detalhe`, caminho, `io_kind`, ms…) no próprio evento: o
+    /// `/internal/diag` do Python só aceita os quatro campos fixos, então a linha vai ao diário do Rust.
+    /// `fields`: objeto de valores curtos (texto até 300, números), nunca texto de conversa.
+    /// Sem a pasta do diário do Rust (nos testes, ou sem pasta de logs), vai ao do Python sem os campos.
+    pub fn report_with(&self,event:&'static str,session:&str,code:&str,reason:&'static str,fields:serde_json::Value) {
+        if self.diary.is_none() { return self.report(event,session,code,reason); }
+        if !crate::warn_limit::allow(Some(session),&format!("diag:{}:{event}:{code}",self.upstream)) { return; }
+        let level = if matches!(event,"rust.groups_sweep_failed" | "rust.groups_sweep_recovered") { "aviso" } else { "erro" };
+        let mut line = json!({"evento":wire_event(event),"nivel":level,"sessao":session.chars().take(128).collect::<String>(),
+            "codigo":wire_code(code),"motivo":reason});
+        if let (Some(line), serde_json::Value::Object(extra)) = (line.as_object_mut(), fields) { line.extend(extra); }
+        record(self.diary.clone(),vec![line],"diag");
+    }
 
     /// `event` começa com `rust.`; `reason` é frase fixa do código (por isso `'static`), nunca texto
     /// de conversa nem erro formatado, que pode ecoar valores.

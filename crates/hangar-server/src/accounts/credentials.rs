@@ -221,7 +221,8 @@ pub async fn public(state: Arc<crate::routes::AppState>, request: Request) -> Re
     let quotas = async {
         let (result, late) = service.quotas_within(bridge.clone(), force, super::quotas::CLIENT_DEADLINE, Some(config.clone())).await;
         if late {
-            report("quota_deadline", "cotas passaram do prazo; a lista sai com o cache e a leitura segue");
+            state.diag.report_with("rust.credentials_partial", "credenciais", "quota_deadline",
+                "cotas passaram do prazo; a lista sai com o cache e a leitura segue", service.quotas_late_fields(super::quotas::CLIENT_DEADLINE));
         }
         result.map_err(|err| report(err.code, "cotas indisponíveis; as linhas saem sem cota")).ok()
     };

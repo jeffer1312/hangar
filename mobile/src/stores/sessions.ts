@@ -367,6 +367,7 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
     attempt.routing = false;
     if (!isCurrent(attempt)) return;
     let httpResponse = false;
+    const inicio = Date.now();
     try {
       const response = await probeServerResponse(s, '/api/sessions', { signal: comTeto(attempt.abort.signal, 4000) });
       if (!isCurrent(attempt)) return;
@@ -386,8 +387,11 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
     } catch (error) {
       if (!isCurrent(attempt)) return;
       lastFailureHttp.set(s.id, httpResponse);
-      registrarDiag({ evento: 'lista.falhou', nivel: 'erro', tela: 'lista', codigo: 'sincronia',
-        detalhe: error instanceof Error ? error.name : 'erro' }, s.baseUrl);
+      // Status HTTP (a mensagem do erro lançado acima) ou o tipo da falha de rede, com o tempo até ela.
+      const falha = error instanceof Error ? `${error.name}: ${error.message}`.slice(0, 160) : 'erro';
+      registrarDiag({ evento: 'lista.falhou', nivel: 'erro', tela: 'lista',
+        codigo: httpResponse && error instanceof Error && /^\d{3}$/.test(error.message) ? error.message : 'sincronia',
+        detalhe: `${httpResponse ? 'resposta' : 'conexao'}: ${falha}`, ms: Date.now() - inicio }, s.baseUrl);
       if (!httpResponse) failed(true);
       slots.set(s.id, failedSlot(s.id, httpResponse ? m.sessao_erro_servidor() : 'offline'));
       recompute(set);

@@ -18,10 +18,15 @@ pub(crate) async fn configuration(state: &AppState) -> Result<ConfigSnapshot, Tr
 /// Transcrição pedida dentro do próprio servidor (ditado, anexo, vídeo), sem passar pelo Python.
 pub(crate) async fn transcribe_here(state: &AppState, content: bytes::Bytes, filename: Option<String>, profile: Profile)
     -> Result<super::model::Transcription, TranscriptionError> {
+    let (started, bytes) = (std::time::Instant::now(), content.len());
+    // Os provedores configurados (tipo:modelo), nunca chave nem endereço: o erro não diz qual foi tentado.
+    let mut providers = String::new();
     let result = match state.transcription_slots.clone().try_acquire_owned() {
         Err(_) => Err(TranscriptionError { status: 503, code: "transcription_busy".into(), detail: "As vagas de transcrição estão ocupadas. Tente novamente.".into() }),
         Ok(_slot) => match configuration(state).await {
             Ok(snapshot) => {
+                providers = snapshot.providers.iter().chain(snapshot.legacy.iter())
+                    .map(|p| format!("{}:{}", p.kind, if p.model.is_empty() { "-" } else { &p.model })).collect::<Vec<_>>().join(",");
                 state.transcription.configure(snapshot).await;
                 state.transcription.transcribe(content, filename, profile).await
             }
@@ -29,7 +34,9 @@ pub(crate) async fn transcribe_here(state: &AppState, content: bytes::Bytes, fil
         },
     };
     if let Err(error) = &result {
-        state.diag.report("transcription.failed", "", &error.code, "A transcrição falhou.");
+        state.diag.report_with("transcription.failed", "", &error.code, "A transcrição falhou.",
+            serde_json::json!({"status": error.status, "detalhe": error.detail, "provedores": providers,
+                "perfil": serde_json::to_value(profile).ok(), "bytes": bytes, "ms": started.elapsed().as_millis() as u64}));
     }
     result
 }

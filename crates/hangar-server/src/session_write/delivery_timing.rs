@@ -59,8 +59,10 @@ pub fn request(message: &str, task: &str) -> (Value, Value) {
 }
 
 /// Erro, contexto ausente ou resposta sem certeza conservam a entrega comum pela fila.
-pub async fn decide(st: &AppState, message: &str, task: &str) -> (bool, &'static str) {
+pub async fn decide(st: &AppState, session: &str, message: &str, task: &str) -> (bool, &'static str) {
     let started = std::time::Instant::now();
+    // O que o Jev respondeu, para o diário dizer por que a entrega não saiu direta.
+    let mut seen: (Option<String>, Option<f64>, Option<String>) = (None, None, None);
     let (direct, note) = async {
         if task.trim().is_empty() { return (false, "no_context"); }
         let Some(config) = config(st).await else { return (false, "unavailable") };
@@ -68,8 +70,9 @@ pub async fn decide(st: &AppState, message: &str, task: &str) -> (bool, &'static
         let result = tokio::time::timeout(std::time::Duration::from_secs(2), jev::ask(&config, &state.to_string(), &questions)).await;
         match result {
             Ok(Ok(answers)) => {
-                let Some(pick) = answers.get("timing") else { return (false, "unavailable") };
+                let Some(pick) = answers.get("timing") else { seen.2 = Some("sem_timing".into()); return (false, "unavailable") };
                 tracing::info!(target: "delivery_timing", probability=pick.p, "resposta do Jev para o envio");
+                seen = (Some(pick.choice.clone()), Some(pick.p), None);
                 let direct = direct_answer(&json!({"choice": pick.choice, "probabilities": {"direct": pick.p}}));
                 if direct { (true, "direct") }
                 else if pick.choice == "queue" && (0.9..=1.0).contains(&pick.p) { (false, "queue") }
@@ -77,15 +80,18 @@ pub async fn decide(st: &AppState, message: &str, task: &str) -> (bool, &'static
             }
             Ok(Err(code)) => {
                 tracing::warn!(target: "delivery_timing", code=%code, "consulta do Jev falhou");
+                seen.2 = Some(code.to_string());
                 (false, if code == "timeout" { "timeout" } else { "unavailable" })
             }
             Err(_) => (false, "timeout"),
         }
     }.await;
-    tracing::info!(target: "delivery_timing", outcome=note, direct, elapsed_ms=started.elapsed().as_millis() as u64,
-        "decisão do Jev para o envio");
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+    tracing::info!(target: "delivery_timing", outcome=note, direct, elapsed_ms, "decisão do Jev para o envio");
     if !matches!(note, "direct" | "queue") {
-        st.diag.report("rust.delivery_timing", "", note, "a decisão automática conservou a fila normal");
+        let (choice, p, jev_error) = seen;
+        st.diag.report_with("rust.delivery_timing", session, note, "a decisão automática conservou a fila normal",
+            json!({"escolha": choice, "p": p, "erro_jev": jev_error, "ms": elapsed_ms, "prazo_ms": 2000}));
     }
     (direct, note)
 }

@@ -252,17 +252,30 @@ impl Classifier {
                 Err(error) => bound = Err(error),
             }
         }
-        let failed = |code: String, reason: &'static str| if first_note(name, &code) { super::facts::note("rust.list_permission_failed", name, code, reason) };
+        // O vínculo esperado (o da captura) e o visto no runtime: separa vida trocada de conversa trocada.
+        let side = |b: Option<&crate::interactions::InteractionBinding>| b.map(|b| format!("geração {} conversa {}", b.generation, b.conversation));
+        let failed = |code: String, reason: &'static str, fields: serde_json::Value| if first_note(name, &code) {
+            super::facts::note_with("rust.list_permission_failed", name, code, reason, fields)
+        };
+        let base = serde_json::json!({"esperado": side(expected), "modo": mode, "revisao_captura": revision.is_some().to_string()});
         match bound {
             Ok(binding) if expected == Some(&binding) => match memory.lock() {
                 Ok(mut memory) => match revision.ok_or("permission_frame_unavailable").and_then(|revision| memory.observe_capture(&binding.conversation, mode, revision)) {
                     Ok(_) => clear_notes(name),
-                    Err(code) => failed(code.into(), "captura de permissão recusada"),
+                    Err(code) => failed(code.into(), "captura de permissão recusada", base),
                 },
-                Err(_) => failed("permission_store_unavailable".into(), "memória de permissão indisponível"),
+                Err(_) => failed("permission_store_unavailable".into(), "memória de permissão indisponível", base),
             },
-            Err(error) => failed(error.code, "vínculo de permissão não confirmado"),
-            Ok(_) => failed("permission_binding_changed".into(), "captura pertence a outra vida"),
+            Err(error) => {
+                let mut fields = base;
+                fields["detalhe"] = error.message.chars().take(200).collect::<String>().into();
+                failed(error.code, "vínculo de permissão não confirmado", fields)
+            }
+            Ok(binding) => {
+                let mut fields = base;
+                fields["visto"] = side(Some(&binding)).into();
+                failed("permission_binding_changed".into(), "captura pertence a outra vida", fields)
+            }
         }
     }
 
