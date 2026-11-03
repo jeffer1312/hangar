@@ -10004,6 +10004,8 @@
   "session_auto_hide_invalid": "Prazo inválido: escolha de 1 h a 7 dias.",
   "session_auto_hide_store_failed": "Não consegui gravar a ocultação automática nesta máquina.",
   "session_asleep_badge": "Adormecida",
+  "session_sleep_label": "Adormecer sessões ocultas",
+  "session_sleep_hint": "Fecha o processo da sessão oculta e parada depois do prazo. A próxima mensagem a reabre na mesma conversa.",
   "native_sidebar_hide": "Ocultar da lista",
   "native_sidebar_show": "Mostrar na lista",
   "native_sidebar_hidden_group": "Ocultas ({n})",

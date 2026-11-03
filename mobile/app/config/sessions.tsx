@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { Switch, Text, TextInput, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { Stack, useRouter } from 'expo-router';
-import { autoHideDiverges, ownUpdatableServers, readAutoHideAll, saveAutoHideAll, type AutoHideConfig, type AutoHideResult } from '@hangar/core';
+import { autoHideDiverges, autoHideSleepReference, ownUpdatableServers, readAutoHideAll, saveAutoHideAll, type AutoHideConfig, type AutoHideResult } from '@hangar/core';
 import { Pagina } from '../../src/features/config/Pagina';
 import { InfoNotice } from '../../src/features/config/InfoNotice';
 import { useSettingsColors } from '../../src/features/config/colors';
@@ -33,6 +33,7 @@ export default function SessionsSettings() {
   const [saved, setSaved] = useState<AutoHideResult[] | null>(null);
   const [cfg, setCfg] = useState<AutoHideConfig>(DEFAULT);
   const [draft, setDraft] = useState<string | null>(null);
+  const [sleepDraft, setSleepDraft] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   // Só a resposta da última leitura ou gravação vale: outra mais nova a substitui.
   const seq = useRef(0);
@@ -45,7 +46,9 @@ export default function SessionsSettings() {
     void readAutoHideAll(own).then((results) => {
       if (n !== seq.current) return;
       const diverging = new Set(autoHideDiverges(results));
-      setCfg(results.find((r) => r.ok && r.config && !diverging.has(r.serverId))?.config ?? DEFAULT);
+      const base = results.find((r) => r.ok && r.config && !diverging.has(r.serverId))?.config ?? DEFAULT;
+      // O adormecer vem só das máquinas que o têm; nenhuma → a linha some.
+      setCfg({ enabled: base.enabled, after_minutes: base.after_minutes, sleep: autoHideSleepReference(results) });
       setRead(results);
     });
   }, [own]);
@@ -56,7 +59,9 @@ export default function SessionsSettings() {
     const before = cfg;
     setCfg(next);
     setSaving(true);
-    void saveAutoHideAll(own, next).then((results) => {
+    // Servidor antigo recusa o campo `sleep`: só vai a quem o devolveu na leitura.
+    const sleepIds = new Set(read?.filter((r) => r.ok && r.config?.sleep).map((r) => r.serverId));
+    void saveAutoHideAll(own, next, sleepIds).then((results) => {
       if (n !== seq.current) return;
       setSaving(false);
       setSaved(results);
@@ -77,6 +82,18 @@ export default function SessionsSettings() {
   const toggle = (enabled: boolean) => {
     haptic.selection();
     save({ ...cfg, enabled });
+  };
+  const sleepHours = cfg.sleep ? clampHours(cfg.sleep.after_minutes / 60) : 0;
+  const commitSleepHours = () => {
+    const typed = sleepDraft === null ? NaN : Number.parseInt(sleepDraft, 10);
+    setSleepDraft(null);
+    if (!cfg.sleep || Number.isNaN(typed) || clampHours(typed) === sleepHours) return;
+    save({ ...cfg, sleep: { ...cfg.sleep, after_minutes: clampHours(typed) * 60 } });
+  };
+  const toggleSleep = (enabled: boolean) => {
+    if (!cfg.sleep) return;
+    haptic.selection();
+    save({ ...cfg, sleep: { ...cfg.sleep, enabled } });
   };
   const openHidden = () => {
     setHiddenSectionOpen(true);
@@ -118,6 +135,27 @@ export default function SessionsSettings() {
           <Switch value={cfg.enabled} disabled={saving} onValueChange={toggle}
             accessibilityLabel={`${m.session_auto_hide_label()} ${m.session_auto_hide_hours({ n: hours })}`} />
         </View>
+        {cfg.sleep ? <View style={[styles.row, { borderTopColor: c.border }]}>
+          <View style={styles.labelCol}>
+            <Text style={[styles.label, { color: c.text, flex: 0 }]}>{m.session_sleep_label()}</Text>
+            <Text style={[styles.hint, { color: c.muted }]}>{m.session_sleep_hint()}</Text>
+          </View>
+          <TextInput
+            value={sleepDraft ?? String(sleepHours)}
+            onChangeText={setSleepDraft}
+            onEndEditing={commitSleepHours}
+            keyboardType="number-pad"
+            returnKeyType="done"
+            maxLength={3}
+            selectTextOnFocus
+            editable={!saving}
+            accessibilityLabel={`${m.session_sleep_label()} (${unit})`}
+            style={[styles.hours, { color: c.text, borderColor: c.border, backgroundColor: c.inset }]}
+          />
+          <Text style={[styles.unit, { color: c.muted }]}>{unit}</Text>
+          <Switch value={cfg.sleep.enabled} disabled={saving} onValueChange={toggleSleep}
+            accessibilityLabel={`${m.session_sleep_label()} ${m.session_auto_hide_hours({ n: sleepHours })}`} />
+        </View> : null}
       </MachineGroup>
       {saving ? <Notice text={m.native_server_saving()} /> : null}
       {saved ? saved.map((r) => <Notice key={r.serverId} error={!r.ok}
@@ -145,6 +183,8 @@ export default function SessionsSettings() {
 const styles = StyleSheet.create((theme) => ({
   row: { minHeight: 56, flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2], paddingHorizontal: theme.base.space[4], paddingVertical: theme.base.space[2], borderTopWidth: 1 },
   label: { flex: 1, minWidth: 0, fontSize: theme.base.text.base },
+  labelCol: { flex: 1, minWidth: 0, gap: 2 },
+  hint: { fontSize: theme.base.text.xs, lineHeight: 19 },
   hours: { width: 56, minHeight: 44, borderWidth: 1, borderRadius: theme.base.radius.sm, textAlign: 'center', fontSize: theme.base.text.base, fontVariant: ['tabular-nums'] },
   unit: { fontSize: theme.base.text.base },
 }));

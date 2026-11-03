@@ -1598,6 +1598,20 @@ describe('ocultar da lista e ocultação automática', () => {
     ]);
   });
 
+  it('manda sleep só a quem o trouxe na leitura; servidor sem ele não diverge por isso', async () => {
+    const { saveAutoHideAll, autoHideDiverges } = await import('./api');
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('{"enabled":true,"after_minutes":240}'));
+    const cfg = { enabled: true, after_minutes: 240, sleep: { enabled: true, after_minutes: 1440 } };
+    await saveAutoHideAll([b, c], cfg, new Set(['b']));
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual(cfg);
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({ enabled: true, after_minutes: 240 });
+    const sleep = { enabled: true, after_minutes: 1440 };
+    expect(autoHideDiverges([
+      { serverId: 'a', ok: true, config: { enabled: true, after_minutes: 240, sleep } },
+      { serverId: 'b', ok: true, config: { enabled: true, after_minutes: 240 } },
+    ])).toEqual([]);
+  });
+
   it('aponta só quem respondeu com configuração diferente da mais comum', async () => {
     const { autoHideDiverges } = await import('./api');
     const on3 = { enabled: true, after_minutes: 180 };

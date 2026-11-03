@@ -229,7 +229,7 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
       // estado e a pergunta sumiriam do leitor de tela.
       // Máquina e projeto entram mesmo quando a tela os esconde (lista agrupada, pasta = nome):
       // é o que distingue duas conversas de mesmo nome no leitor de tela.
-      accessibilityLabel={`${s.name}${hiddenBadge && s.hidden_from_list ? `, ${m.session_hidden_badge()}` : ''}${s.headless === true ? `, ${m.criar_modo_exec_headless()}` : ''}${fora ? `, ${m.pair_from_owner({ dono: fora.owner })}${s.guest_kind === 'share' ? '' : `, ${m.pair_level_view()}`}` : ''}, ${rotuloEstado(s.state)}${s.limited ? `, ${s.limit_reset ? m.sessao_limite_volta({ n: s.limit_reset }) : m.sessao_limite()}` : ''}${pendingQuestions > 0 ? `, ${m.ask_perguntas()}: ${pendingQuestions}` : ''}${sub ? `, ${sub}` : ''}${badgeText ? `, ${badgeText}` : ''}${providerLabel ? `, ${providerLabel}` : ''}${account ? `, ${m.sessao_conta({ n: account.name })}` : ''}${ctxPct !== null ? `, ${m.tags_context_ring({ pct: Math.round(ctxPct) })}` : ''}, ${s.serverLabel}${s.cwd ? `, ${cwd.base}` : ''}${s.branch ? `, ${s.branch}` : ''}${gitAhead || gitBehind ? `, ${m.git_sync_titulo({ ahead: gitAhead, behind: gitBehind })}` : ''}${selected ? `, ${m.switcher_atual()}` : ''}`}
+      accessibilityLabel={`${s.name}${hiddenBadge && s.hidden_from_list ? `, ${m.session_hidden_badge()}` : ''}${s.asleep ? `, ${m.session_asleep_badge()}` : ''}${s.headless === true ? `, ${m.criar_modo_exec_headless()}` : ''}${fora ? `, ${m.pair_from_owner({ dono: fora.owner })}${s.guest_kind === 'share' ? '' : `, ${m.pair_level_view()}`}` : ''}, ${rotuloEstado(s.state)}${s.limited ? `, ${s.limit_reset ? m.sessao_limite_volta({ n: s.limit_reset }) : m.sessao_limite()}` : ''}${pendingQuestions > 0 ? `, ${m.ask_perguntas()}: ${pendingQuestions}` : ''}${sub ? `, ${sub}` : ''}${badgeText ? `, ${badgeText}` : ''}${providerLabel ? `, ${providerLabel}` : ''}${account ? `, ${m.sessao_conta({ n: account.name })}` : ''}${ctxPct !== null ? `, ${m.tags_context_ring({ pct: Math.round(ctxPct) })}` : ''}, ${s.serverLabel}${s.cwd ? `, ${cwd.base}` : ''}${s.branch ? `, ${s.branch}` : ''}${gitAhead || gitBehind ? `, ${m.git_sync_titulo({ ahead: gitAhead, behind: gitBehind })}` : ''}${selected ? `, ${m.switcher_atual()}` : ''}`}
       accessibilityActions={acoesA11y}
       onAccessibilityAction={({ nativeEvent }) => {
         acao(nativeEvent.actionName);
@@ -246,6 +246,7 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
           {pendingQuestions > 0 ? <Chip tone="warning">{`? ${pendingQuestions}`}</Chip> : null}
           {orq ? <Chip>{m.orq_row_badge()}</Chip> : null}
           {hiddenBadge && s.hidden_from_list ? <Chip icon="EyeOff">{m.session_hidden_badge()}</Chip> : null}
+          {s.asleep ? <Chip icon="Moon">{m.session_asleep_badge()}</Chip> : null}
           {untracked ? <Chip tone="warning">{m.sessao_sem_id()}</Chip> : null}
           {fora ? <Chip tone="accent" icon={s.guest_kind === 'share' ? 'Link' : 'Eye'}>{m.pair_from_owner({ dono: fora.owner })}</Chip> : null}
           <Text style={[styles.tempo, { color: muted }]} numberOfLines={1}>{relativeTime(s.last_activity)}</Text>

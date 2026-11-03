@@ -1084,7 +1084,9 @@ export async function showSession(server: Server, name: string): Promise<void> {
 }
 
 /** Ocultação automática de um servidor. */
-export interface AutoHideConfig { enabled: boolean; after_minutes: number }
+export interface SleepConfig { enabled: boolean; after_minutes: number }
+// `sleep` só vem de servidor com o adormecer; o antigo recusa o campo (422).
+export interface AutoHideConfig { enabled: boolean; after_minutes: number; sleep?: SleepConfig }
 
 export async function getAutoHide(server: Server): Promise<AutoHideConfig> {
   const res = await apiFetchRes('/api/session-auto-hide', { signal: AbortSignal.timeout(8000) }, server);
@@ -1095,7 +1097,9 @@ export async function getAutoHide(server: Server): Promise<AutoHideConfig> {
 /** Grava e devolve o valor que o servidor guardou. */
 export async function saveAutoHide(server: Server, cfg: AutoHideConfig): Promise<AutoHideConfig> {
   const res = await apiFetchRes('/api/session-auto-hide', {
-    method: 'PUT', body: JSON.stringify({ enabled: cfg.enabled, after_minutes: cfg.after_minutes }), signal: AbortSignal.timeout(8000),
+    method: 'PUT',
+    body: JSON.stringify({ enabled: cfg.enabled, after_minutes: cfg.after_minutes, ...(cfg.sleep ? { sleep: cfg.sleep } : {}) }),
+    signal: AbortSignal.timeout(8000),
   }, server);
   await ensureVisibilityOk(res, server);
   return res.json() as Promise<AutoHideConfig>;
@@ -1120,21 +1124,40 @@ export function readAutoHideAll(servers: readonly Server[]): Promise<AutoHideRes
   return autoHidePerServer(servers, getAutoHide);
 }
 
-/** Grava a mesma configuração em cada servidor e devolve o resultado de cada um. */
-export function saveAutoHideAll(servers: readonly Server[], cfg: AutoHideConfig): Promise<AutoHideResult[]> {
-  return autoHidePerServer(servers, (server) => saveAutoHide(server, cfg));
+/** Grava a mesma configuração em cada servidor e devolve o resultado de cada um.
+ *  `sleepServers`: ids que trouxeram `sleep` na leitura; só esses recebem o campo. */
+export function saveAutoHideAll(servers: readonly Server[], cfg: AutoHideConfig, sleepServers: ReadonlySet<string> = new Set()): Promise<AutoHideResult[]> {
+  const { sleep: _sleep, ...plain } = cfg;
+  return autoHidePerServer(servers, (server) => saveAutoHide(server, sleepServers.has(server.id) ? cfg : plain));
+}
+
+// Mais comum; no empate, o que veio primeiro.
+function mostCommon(keys: string[]): string | null {
+  const counts = new Map<string, number>();
+  for (const k of keys) counts.set(k, (counts.get(k) ?? 0) + 1);
+  let best: string | null = null;
+  for (const [k, n] of counts) if (best === null || n > counts.get(best)!) best = k;
+  return best;
+}
+const sleepKey = (s: SleepConfig) => `${s.enabled}:${s.after_minutes}`;
+
+/** Adormecer mais comum entre as leituras boas que o trazem; `undefined` se nenhuma o trouxe. */
+export function autoHideSleepReference(results: readonly AutoHideResult[]): SleepConfig | undefined {
+  const sleeps = results.flatMap((r) => (r.ok && r.config?.sleep ? [r.config.sleep] : []));
+  const best = mostCommon(sleeps.map(sleepKey));
+  return sleeps.find((s) => sleepKey(s) === best);
 }
 
 /** Servidores que responderam com configuração diferente da mais comum entre as respostas boas
  *  (empate: a que veio primeiro). Falha de leitura não entra: as telas a mostram como erro.
- *  Sem nenhuma resposta boa, lista vazia. */
+ *  Servidor sem adormecer não difere por isso. Sem nenhuma resposta boa, lista vazia. */
 export function autoHideDiverges(results: readonly AutoHideResult[]): string[] {
   const keyOf = (c: AutoHideConfig) => `${c.enabled}:${c.after_minutes}`;
-  const counts = new Map<string, number>();
-  for (const r of results) if (r.ok && r.config) counts.set(keyOf(r.config), (counts.get(keyOf(r.config)) ?? 0) + 1);
-  let majority: string | null = null;
-  for (const [key, n] of counts) if (majority === null || n > counts.get(majority)!) majority = key;
-  return results.filter((r) => r.ok && r.config && keyOf(r.config) !== majority).map((r) => r.serverId);
+  const majority = mostCommon(results.flatMap((r) => (r.ok && r.config ? [keyOf(r.config)] : [])));
+  const sleepRef = autoHideSleepReference(results);
+  return results.filter((r) => r.ok && r.config
+    && (keyOf(r.config) !== majority || (r.config.sleep && sleepRef && sleepKey(r.config.sleep) !== sleepKey(sleepRef))))
+    .map((r) => r.serverId);
 }
 
 // Abrir ou retomar sessão leva bem mais que o prazo padrão: estourar antes faz a tela acusar erro

@@ -95,7 +95,7 @@ describe('página Sessões', () => {
     expect(c.querySelector<HTMLInputElement>('[data-hours]')?.value).toBe('4');
     expect(c.textContent).toContain(m.session_auto_hide_differs({ servers: 'VPS' }));
     await act(async () => byLabel(c, m.session_auto_hide_apply_all())!.click());
-    expect(calls.save).toHaveBeenCalledWith(calls.servers, { enabled: true, after_minutes: 240 });
+    expect(calls.save).toHaveBeenCalledWith(calls.servers, { enabled: true, after_minutes: 240 }, new Set());
     expect(c.textContent).toContain(m.session_auto_hide_saved_on({ server: 'Casa' }));
     expect(c.textContent).toContain(m.session_auto_hide_not_saved_on({ server: 'VPS', error: 'sem rota' }));
     expect(c.textContent).not.toContain(m.session_auto_hide_differs({ servers: 'VPS' }));
@@ -116,7 +116,7 @@ describe('página Sessões', () => {
     const c = await mount();
     expect(c.querySelector<HTMLInputElement>('[data-hours]')?.value).toBe('3');
     await act(async () => c.querySelector<HTMLButtonElement>('[role="switch"]')!.click());
-    expect(calls.save).toHaveBeenLastCalledWith([a, b], { enabled: true, after_minutes: 180 });
+    expect(calls.save).toHaveBeenLastCalledWith([a, b], { enabled: true, after_minutes: 180 }, new Set());
     const input = c.querySelector<HTMLInputElement>('[data-hours]')!;
     await act(async () => {
       input.value = '500';
@@ -124,7 +124,33 @@ describe('página Sessões', () => {
     });
     // O onBlur do React escuta `focusout`.
     await act(async () => input.dispatchEvent(new FocusEvent('focusout', { bubbles: true })));
-    expect(calls.save).toHaveBeenLastCalledWith([a, b], { enabled: true, after_minutes: 168 * 60 });
+    expect(calls.save).toHaveBeenLastCalledWith([a, b], { enabled: true, after_minutes: 168 * 60 }, new Set());
+  });
+
+  it('adormecer: sem servidor que o traga a linha não aparece', async () => {
+    calls.read.mockResolvedValue([ok('a', false), ok('b', false)]);
+    const c = await mount();
+    expect(c.textContent).not.toContain(m.session_sleep_label());
+  });
+
+  it('ligar o adormecer grava sleep.enabled mantendo o resto e só marca quem o trouxe', async () => {
+    const withSleep = (id: string): AutoHideResult => ({ serverId: id, ok: true, config: { enabled: true, after_minutes: 240, sleep: { enabled: false, after_minutes: 1440 } } });
+    calls.read.mockResolvedValue([withSleep('a'), ok('b', true, 240)]);
+    calls.save.mockResolvedValue([withSleep('a'), ok('b', true, 240)]);
+    const c = await mount();
+    expect(c.textContent).toContain(m.session_sleep_label());
+    // Servidor sem sleep não conta como divergente.
+    expect(c.textContent).not.toContain(m.session_auto_hide_differs({ servers: 'VPS' }));
+    await act(async () => byLabel(c, `${m.session_sleep_label()} ${m.session_auto_hide_hours({ n: 24 })}`)!.click());
+    expect(calls.save).toHaveBeenLastCalledWith([a, b],
+      { enabled: true, after_minutes: 240, sleep: { enabled: true, after_minutes: 1440 } }, new Set(['a']));
+  });
+
+  it('adormecer diferente entre servidores que o têm aparece como divergência', async () => {
+    const withSleep = (id: string, enabled: boolean): AutoHideResult => ({ serverId: id, ok: true, config: { enabled: false, after_minutes: 180, sleep: { enabled, after_minutes: 1440 } } });
+    calls.servers = [a, b, { ...b, id: 'c', label: 'Lab' }];
+    calls.read.mockResolvedValue([withSleep('a', true), withSleep('b', false), withSleep('c', true)]);
+    expect((await mount()).textContent).toContain(m.session_auto_hide_differs({ servers: 'VPS' }));
   });
 
   it('"Ver sessões ocultas" abre a lista com a seção expandida', async () => {

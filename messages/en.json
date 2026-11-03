@@ -10004,6 +10004,8 @@
   "session_auto_hide_invalid": "Invalid period: pick between 1 h and 7 days.",
   "session_auto_hide_store_failed": "Couldn't save auto-hide on this machine.",
   "session_asleep_badge": "Asleep",
+  "session_sleep_label": "Put hidden sessions to sleep",
+  "session_sleep_hint": "Closes the process of a hidden idle session after the deadline. The next message reopens it in the same conversation.",
   "native_sidebar_hide": "Hide from list",
   "native_sidebar_show": "Show in list",
   "native_sidebar_hidden_group": "Hidden ({n})",
