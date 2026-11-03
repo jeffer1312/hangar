@@ -6499,7 +6499,8 @@ pub(crate) fn session_row_sub(text: String, kind: sidebar::Sub, color: Hsla, ita
             .child(div().min_w_0().truncate().when(italic, |el| el.italic()).child(text)))
 }
 
-fn badge(text: String, color: Hsla) -> Div {
+/// Selo curto da linha da sessão ("Adormecida", "orq"…); a miniatura da novidade "adormecer ocultas" desenha o mesmo.
+pub(crate) fn badge(text: String, color: Hsla) -> Div {
     div().flex_shrink_0().px(px(5.)).py(px(1.)).rounded(px(6.)).bg(theme::raised()).border_1().border_color(theme::border())
         .text_size(px(10.)).text_color(color).child(text)
 }

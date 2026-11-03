@@ -10,6 +10,7 @@ mod hide_from_list;
 mod image_reveal;
 mod rename_suggestion;
 mod search_conversations;
+mod sleep_hidden;
 mod tour;
 
 use std::time::Instant;
@@ -32,6 +33,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "ocultar-da-lista" => Some(hide_from_list::render),
         "busca-conversas" => Some(search_conversations::render),
         "revelacao-imagem" => Some(image_reveal::render),
+        "adormecer-ocultas" => Some(sleep_hidden::render),
         _ => None,
     }
 }
