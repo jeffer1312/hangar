@@ -77,7 +77,7 @@ pub(crate) fn plate(machine: Option<PlateSegment>, account: Option<PlateSegment>
 
 /// Contexto usado da sessão, em %: o que o backend leu do transcript, senão o da linha de status (a ordem do PWA e do
 /// Expo). Sem a sessão no `parse`: o transcript já foi consultado aqui.
-fn context_pct(session: &SessionInfo) -> Option<f64> {
+pub(super) fn context_pct(session: &SessionInfo) -> Option<f64> {
     session.context.as_ref().filter(|c| c.window > 0.).map(|c| (c.used / c.window * 100.).clamp(0., 100.))
         .or_else(|| crate::status::parse(session.status_line.as_deref(), None)?.ctx_pct)
 }
