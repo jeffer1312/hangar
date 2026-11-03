@@ -98,8 +98,16 @@ const DIARY_HARD_CAP: u64 = 8 << 20;
 /// `uso-*.jsonl` da árvore do diário (baixar, últimas linhas, poda dos 7 dias), e cada arquivo fica
 /// com um escritor só: no Windows o append de dois processos no mesmo arquivo se sobrescreve.
 pub fn diary_dir() -> Option<std::path::PathBuf> {
+    if DIARY_OFF.load(std::sync::atomic::Ordering::Relaxed) { return None; }
     Some(crate::runtime::local_policy::log_base()?.join("diario").join("servidor-rust"))
 }
+
+/// Os testes de integração rodam o servidor no processo deles, fora do `cfg!(test)`: sem isto
+/// gravariam no diário real de quem roda os testes.
+static DIARY_OFF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[doc(hidden)]
+pub fn disable_diary() { DIARY_OFF.store(true, std::sync::atomic::Ordering::Relaxed) }
 /// `diary_dir` pelo ambiente-base do registro.
 pub fn diary_dir_in(env: &crate::accounts::environment::AccountEnvironment) -> Option<std::path::PathBuf> {
     Some(crate::runtime::local_policy::log_base_in(env)?.join("diario").join("servidor-rust"))

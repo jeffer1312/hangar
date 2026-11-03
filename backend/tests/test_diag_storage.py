@@ -101,17 +101,16 @@ def test_diary_symlink_cannot_export_another_file(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("logger_name", ["hangar.contas", "app.conpty", "uvicorn.error", "asyncio"])
-def test_python_log_exports_location_message_and_exception_type(logger_name, logs):
+def test_python_log_exports_location_and_exception_without_message(logger_name, logs):
     diag_logging.instalar()
     try:
         raise PermissionError(13, "segredo-token")
     except PermissionError:
-        logging.getLogger(logger_name).exception("falhou %s", "x" * 300)
+        logging.getLogger(logger_name).exception("segredo-prompt %s", "segredo-url")
     event = next(r for r in rows() if r["evento"] == "backend.erro")
     assert event["codigo"] == logger_name and event["erro_tipo"] == "PermissionError"
     assert event["errno"] == 13 and "test_diag_storage.py:" in event["pilha"]
-    assert event["mensagem"] == ("falhou " + "x" * 300)[:200]
-    assert "segredo-token" not in diag.ler_tudo()
+    assert "segredo" not in diag.ler_tudo()
     assert "segredo-token" in (logs / "privado" / "backend.log").read_text()
 
 

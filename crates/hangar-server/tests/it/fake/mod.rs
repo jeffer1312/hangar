@@ -316,6 +316,7 @@ async fn fake_python(State(f): State<Arc<Fake>>, mut req: Request) -> Response {
 pub fn config(upstream: SocketAddr, trusted: &str) -> Config {
     // A abertura leria a cota pela rede com o token falso das contas de teste.
     hangar_server::accounts::quotas::disable_open_network_read();
+    hangar_server::diag::disable_diary();
     Config {
         listen: "127.0.0.1:0".parse().unwrap(),
         upstream,
@@ -367,6 +368,7 @@ pub async fn spawn_server(cfg: Config) -> SocketAddr {
 /// Servidor com um `AppState` montado pelo teste (para mexer no `Mods` dele por fora).
 pub async fn spawn_state(mut state: hangar_server::routes::AppState) -> SocketAddr {
     hangar_server::accounts::quotas::disable_open_network_read();
+    hangar_server::diag::disable_diary();
     state.side.locate = fake_locate(state.cfg.upstream);
     // Teste que não escolheu pasta: sem isto, a limpeza de worktrees do servidor lê as configurações do HOME real.
     if std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).is_some_and(|home| state.origins_home.as_os_str() == home) {

@@ -331,7 +331,7 @@ mod tests {
             "WARNING:  [hangar.loop_monitor] laço lento 4 s\n",
             "INFO:     Started server process [4242]\n",
             "INFO:     127.0.0.1:5000 - \"GET /api/sessions/x HTTP/1.1\" 200 OK\n",
-            "2026-10-30T11:31:00.300Z  WARN estado: falhou code=x detail=\"conversa secreta\"\n",
+            "2026-10-30T11:31:00.300Z  WARN estado: falhou code=x text=\"conversa secreta\"\n",
             "2026-10-30T11:31:00.350Z  INFO hangar_server::list: tique da lista session=conversa-secreta n=3\n",
             "Traceback (most recent call last):\n",
             "  File \"C:\\Users\\Fulano\\.hangar\\current\\backend\\app\\main.py\", line 12, in <module>\n",

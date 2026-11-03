@@ -141,7 +141,6 @@ _CAMPOS: dict[str, type] = {
     "api": int,
     "requires_api": int,
     "rota": str,        # caminho do pedido sem rota conhecida, com nomes e ids mascarados
-    "mensagem": str,    # mensagem do log do backend; o export passa pelo scrub
     "saida": str,       # últimas linhas do stderr do hangar-server que caiu
 }
 
