@@ -117,6 +117,12 @@ pub struct RuntimeRegistry {
     waking:std::sync::Mutex<BTreeMap<String,String>>,
 }
 
+/// A vaga de acordar de uma sessão, solta ao sair (também em pânico).
+pub(super) struct WakingSlot<'a>(&'a RuntimeRegistry,String);
+impl Drop for WakingSlot<'_> {
+    fn drop(&mut self) { self.0.waking.lock().unwrap_or_else(|e|e.into_inner()).remove(&self.1); }
+}
+
 /// A escrita achou a sessão adormecida: o acordar já corre à parte.
 pub const ASLEEP_WAKING:&str = "session_asleep_waking";
 pub(crate) fn asleep_waking() -> RuntimeError { RuntimeError::new(ASLEEP_WAKING,"a sessão estava adormecida e está acordando; tente de novo em instantes") }
@@ -516,6 +522,17 @@ impl RuntimeRegistry {
     }
     /// Acordar em curso na sessão: a chave da fila dela.
     pub fn waking_key(&self,name:&str) -> Option<String> { self.waking.lock().unwrap_or_else(|e|e.into_inner()).get(name).cloned() }
+    fn claim_waking(&self,name:&str,key:&str) -> bool {
+        let mut waking = self.waking.lock().unwrap_or_else(|e|e.into_inner());
+        if waking.contains_key(name) { return false; }
+        waking.insert(name.to_owned(),key.to_owned());
+        true
+    }
+    /// A vaga de acordar para outra reabertura da adormecida (`/conta`, modo, motor): `None` se o acordar
+    /// ou outra reabertura já a tem. Duas juntas subiriam dois terminais no mesmo nome.
+    pub(super) fn reserve_waking(&self,name:&str,key:&str) -> Option<WakingSlot<'_>> {
+        self.claim_waking(name,key).then(||WakingSlot(self,name.to_owned()))
+    }
     /// Acorda a sessão adormecida numa tarefa própria e volta na hora: quem escreveu pode desistir sem
     /// interromper. Um acordar por sessão; o segundo pedido no meio dele não faz nada.
     pub fn wake(&self,name:&str,key:&str) {
@@ -524,13 +541,11 @@ impl RuntimeRegistry {
             self.diag.report("runtime.wake_failed",name,"runtime_unbound","a sessão adormecida não pôde acordar");
             return;
         };
-        if self.waking.lock().unwrap_or_else(|e|e.into_inner()).insert(name.to_owned(),key.to_owned()).is_some() { return; }
+        if !self.claim_waking(name,key) { return; }
         let name = name.to_owned();
         tokio::spawn(async move {
             // Solta a vaga mesmo se a tarefa cair no meio: senão a sessão nunca mais acordaria.
-            struct Slot(Arc<RuntimeRegistry>,String);
-            impl Drop for Slot { fn drop(&mut self) { self.0.waking.lock().unwrap_or_else(|e|e.into_inner()).remove(&self.1); } }
-            let slot = Slot(registry.clone(),name.clone());
+            let slot = WakingSlot(registry.as_ref(),name.clone());
             let (provider,result) = match registry.asleep(&name).await {
                 None=>("",Ok(false)),
                 Some(mark) if mark.provider=="claude"=>("claude",registry.wake_claude(&name,mark.wake_surface).await),

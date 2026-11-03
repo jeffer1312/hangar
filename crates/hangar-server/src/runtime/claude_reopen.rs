@@ -567,10 +567,11 @@ impl RuntimeRegistry {
             procs.children(Duration::ZERO).is_ok() && crate::state::shells::shells_of(agent,&procs).is_empty()
         }).await.unwrap_or(false);
         if !quiet || self.panel_open(name) {return Ok(false);}
-        // Um cliente do multiplexador olhando a sessão fecharia com ela; sem resposta, também desiste.
-        let session=crate::session_open::terminal::target(target.binding.windows,name);
-        let attached=watcher.mux_text(&["display-message","-p","-t",&session,"#{session_attached}"]).await.and_then(|n|n.trim().parse::<u32>().ok());
-        if attached!=Some(0) {return Ok(false);}
+        // Um terminal de verdade olhando a sessão fecharia com ela; os clientes de controle do Hangar não
+        // contam (`mods_clients`). Sem resposta, também desiste.
+        let Some((_,handle))=self.claude_terminal_entry(name).await else {return Ok(false)};
+        let clients=handle.pane(crate::mods::click::PaneOp::Clients,std::time::Instant::now()+Duration::from_secs(5)).await;
+        if !matches!(clients,Ok(crate::mods::click::PaneReply::Clients(0))) {return Ok(false);}
         let change=SessionChange { reason:ChangeReason::Sleep,surface:Some(Surface::Headless),account:None,permission_mode:None,model:None,effort:None,service_tier:None };
         let mut next=current.spec.with(&change);
         next.conversation=Some(current.sid.clone());
@@ -580,6 +581,9 @@ impl RuntimeRegistry {
         if let Account::Engine { account:Some(account),.. }=&next.account {meta["engine_account"]=json!(account);}
         let since=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0,|d|d.as_secs_f64());
         meta["asleep"]=json!({"wake_surface":"terminal","since":since});
+        // Fora da fotografia antes de fechar: um tique no meio a daria por sumida, e depois de um reboot ela
+        // acorda pela mensagem, não pelo restore. Se a sessão ficar, o próximo tique a põe de volta.
+        {let owned=name.to_owned();let _=tokio::task::spawn_blocking(move||crate::session_open::restore::forget(&home,&owned)).await;}
         match self.stop_claude(name,&current,Surface::Headless).await {
             Ok(())=>{},
             // Rolando o histórico do pane: alguém está olhando.
@@ -605,8 +609,6 @@ impl RuntimeRegistry {
             // Sem o arquivo a sessão sumiria da lista sem processo: volta como estava.
             return Err(self.restore_claude(name,&current,refused("lifecycle_sidecar_io","o arquivo da sessão adormecida não foi gravado")).await.error);
         }
-        // Fora da fotografia: depois de um reboot ela acorda pela mensagem, não pelo restore.
-        {let owned=name.to_owned();let _=tokio::task::spawn_blocking(move||crate::session_open::restore::forget(&home,&owned)).await;}
         tracing::info!(session=%name,idle_s=idle.as_secs(),"sessão com terminal adormecida");
         let event=json!({"evento":"sessao.adormecida","nivel":"ok","sessao":name,"provider":"claude","parada_s":idle.as_secs()});
         crate::diag::record(crate::diag::diary_dir_in(&self.codex_environment()),vec![event],"adormecer");
@@ -639,6 +641,16 @@ impl RuntimeRegistry {
         if change.reason==ChangeReason::ModeSwitch && now.is_some() && change.surface==now {
             return Ok(Reopened { spec:None,changed:false,warnings:Vec::new() });
         }
+        // A porta fechada não exclui outro fechador: quem reabre a adormecida, ou chega com o acordar em curso,
+        // reserva a vaga de acordar, e o `ParkWake` só entra pela tarefa que já a tem.
+        let marked=meta.as_ref().filter(|meta|asleep_of(meta).is_some()).and_then(|meta|meta["key"].as_str()).map(str::to_owned);
+        let _slot=match (change.reason,marked) {
+            (ChangeReason::ParkWake,_) if self.waking_key(name).is_some()=>None,
+            (ChangeReason::ParkWake,_)=>return Err(ReopenFailure::refused(busy("erro_sessao_iniciando"))),
+            (_,Some(key))=>Some(self.reserve_waking(name,&key).ok_or_else(||ReopenFailure::refused(busy("erro_sessao_iniciando")))?),
+            (_,None) if self.waking_key(name).is_some()=>return Err(ReopenFailure::refused(busy("erro_sessao_iniciando"))),
+            (_,None)=>None,
+        };
         // O acordar vem de uma mensagem: a fila esperando é justamente o que a vida nova entrega.
         let check=match change.reason {
             ChangeReason::Reload=>BusyCheck::RefuseUnlessStalled,
