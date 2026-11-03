@@ -326,6 +326,7 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
     let _session_restore = crate::session_open::restore::spawn(state.clone()).map(crate::AbortOnDrop);
     let _group_sweep = crate::groups::sweep::spawn(state.clone()).map(crate::AbortOnDrop);
     let _link_return = crate::groups::link_return::spawn(state.clone()).map(crate::AbortOnDrop);
+    let _session_sleep = crate::AbortOnDrop(crate::session_sleep::spawn(state.clone()));
     let _federation = crate::groups::federation::spawn(state.clone()).map(crate::AbortOnDrop);
     // O aviso no celular é decidido aqui, com ou sem lista aberta.
     let _push_watch: Vec<crate::AbortOnDrop> = crate::push::start(state.clone()).into_iter().map(crate::AbortOnDrop).collect();
