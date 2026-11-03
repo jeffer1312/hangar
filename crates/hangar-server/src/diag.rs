@@ -45,7 +45,8 @@ impl DiagClient {
     /// `fields`: objeto de valores curtos (texto até 300, números), nunca texto de conversa.
     /// Sem a pasta do diário do Rust (nos testes, ou sem pasta de logs), vai ao do Python sem os campos.
     pub fn report_with(&self,event:&'static str,session:&str,code:&str,reason:&'static str,fields:serde_json::Value) {
-        if self.diary.is_none() { return self.report(event,session,code,reason); }
+        // A chave dos testes é lida aqui, não na construção: há teste que monta o estado antes de desligar.
+        if self.diary.is_none() || DIARY_OFF.load(std::sync::atomic::Ordering::Relaxed) { return self.report(event,session,code,reason); }
         if !crate::warn_limit::allow(Some(session),&format!("diag:{}:{event}:{code}",self.upstream)) { return; }
         let level = if matches!(event,"rust.groups_sweep_failed" | "rust.groups_sweep_recovered") { "aviso" } else { "erro" };
         let mut line = json!({"evento":wire_event(event),"nivel":level,"sessao":session.chars().take(128).collect::<String>(),
@@ -103,7 +104,8 @@ pub fn diary_dir() -> Option<std::path::PathBuf> {
 }
 
 /// Os testes de integração rodam o servidor no processo deles, fora do `cfg!(test)`: sem isto
-/// gravariam no diário real de quem roda os testes.
+/// gravariam no diário real de quem roda os testes. `diary_dir_in` fica de fora: segue o HOME do
+/// ambiente da conta, que os testes já apontam para pasta temporária e leem.
 static DIARY_OFF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 #[doc(hidden)]
