@@ -261,12 +261,26 @@ async fn ours(st: &AppState, name: Option<&str>, read: bool) -> Result<bool, Run
 /// Leitura numa sessão adormecida, que segue dormindo.
 const ASLEEP_READ: &str = "session_asleep";
 
-/// O modo gravado no arquivo da adormecida: é o que vale quando ela acordar.
-async fn asleep_mode(st: &AppState, name: &str) -> Option<String> {
-    let home = st.state.runtime.get()?.codex_environment().home;
-    let file = crate::runtime::codex_sidecar::path(&crate::runtime::codex_sidecar::dir(&home), name);
-    tokio::task::spawn_blocking(move || crate::runtime::codex_sidecar::load(&file)).await.ok().flatten()?
-        .get("permission_mode").and_then(Value::as_str).map(str::to_owned)
+/// O arquivo da adormecida: o que ele grava é o que vale quando ela acordar.
+async fn asleep_sidecar(st: &AppState, name: &str) -> Map<String, Value> {
+    let Some(runtime) = st.state.runtime.get() else { return Map::new() };
+    let file = crate::runtime::codex_sidecar::path(&crate::runtime::codex_sidecar::dir(&runtime.codex_environment().home), name);
+    tokio::task::spawn_blocking(move || crate::runtime::codex_sidecar::load(&file)).await.ok().flatten().unwrap_or_default()
+}
+
+/// A leitura da adormecida responde pelo arquivo dela, nas formas de sempre: o modo de permissão, a
+/// configuração sem catálogo (como quando a lista de modelos falha) e nenhum comando. `None`: outra leitura.
+async fn asleep_answer(st: &AppState, name: &str, path: &str, route: WriteRoute) -> Option<Answer> {
+    let meta = asleep_sidecar(st, name).await;
+    let field = |f: &str| meta.get(f).cloned().unwrap_or(Value::Null);
+    if route == WriteRoute::CodexPermission { return Some((StatusCode::OK, permission_modes(meta.get("permission_mode").and_then(Value::as_str)))); }
+    if path.ends_with("/models") {
+        // O plan/default da adormecida com terminal mora na marca.
+        let mode = meta.get("asleep").map(|mark| mark["mode"].clone()).filter(|mode| !mode.is_null()).unwrap_or_else(|| field("mode"));
+        let current = json!({"model": field("model"), "effort": field("effort"), "service_tier": field("service_tier"), "mode": mode});
+        return Some((StatusCode::OK, json!({"models": [], "current": current})));
+    }
+    path.ends_with("/commands").then(|| (StatusCode::OK, json!([])))
 }
 
 /// A saúde fica com a admissão; aqui só provedor e modo, pela mesma tabela que anuncia a posse.
@@ -288,10 +302,12 @@ async fn admit_codex_as(st: &Arc<AppState>, peer: SocketAddr, req: Request, rout
         Ok(true) => admit(st, peer, req, route).await,
         Ok(false) => Err(pass(st, req, &fwd).await),
         Err(error) => {
-            let mut response = if error.code == ASLEEP_READ && route == WriteRoute::CodexPermission {
-                let mode = match name.as_deref() { Some(name) => asleep_mode(st, name).await, None => None };
-                json_response(StatusCode::OK, permission_modes(mode.as_deref()))
-            } else { json_response(super::failed_status(&error), detail_body(&error.code, &error.message, json!({}))) };
+            let asleep = match name.as_deref() {
+                Some(name) if error.code == ASLEEP_READ => asleep_answer(st, name, req.uri().path(), route).await,
+                _ => None,
+            };
+            let (status, body) = asleep.unwrap_or_else(|| (super::failed_status(&error), detail_body(&error.code, &error.message, json!({}))));
+            let mut response = json_response(status, body);
             cors(req.headers(), response.headers_mut());
             Err(response)
         }

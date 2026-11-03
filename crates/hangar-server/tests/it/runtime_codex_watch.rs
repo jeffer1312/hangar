@@ -1616,12 +1616,13 @@ async fn sleep_registry(fx:&Fixture) -> Arc<RuntimeRegistry> {
 }
 
 /// tmux falso do adormecer: o da troca, sem cliente olhando, e um `new-session` no papel do lançador: sobe
-/// TUI e app-server de `endpoint`, põe o pane na lista e grava o sidecar com a chave do pane.
-fn waking_tmux(fx:&Fixture,endpoint:&str) -> PathBuf {
+/// TUI e app-server de `endpoint`, põe o pane na lista e grava o sidecar com a chave do pane e o modo `mode`.
+/// Tecla mandada ao pane (o seletor `/permissions`) fica anotada em `<panes>.keys`.
+fn waking_tmux(fx:&Fixture,endpoint:&str,mode:&str) -> PathBuf {
     let rollout = fx.root.join("rollout.jsonl");
-    std::fs::write(&rollout,"{}\n").unwrap();
+    if !rollout.exists() { std::fs::write(&rollout,"{}\n").unwrap(); }
     let template = json!({"name":"cx-proof","provider":"codex","key":"__KEY__","thread_id":RESUMABLE,"rollout_path":rollout,"cwd":fx.root,
-        "codex_home":fx.home.join(".codex"),"endpoint":endpoint,"app_pid":"__APP__","tui_pid":"__TUI__","headless":false,"permission_mode":"Full Access"});
+        "codex_home":fx.home.join(".codex"),"endpoint":endpoint,"app_pid":"__APP__","tui_pid":"__TUI__","headless":false,"permission_mode":mode});
     std::fs::write(fx.panes.with_extension("sidecar"),template.to_string().replace("\"__APP__\"","__APP__").replace("\"__TUI__\"","__TUI__")).unwrap();
     let tmux = fx.root.join("tmux-wake");
     let (p,s) = (fx.panes.display(),fx.sidecar_path("cx-proof").display());
@@ -1630,6 +1631,7 @@ fn waking_tmux(fx:&Fixture,endpoint:&str) -> PathBuf {
         kill-session) n=\"${{3#=}}\"; for p in $(cat \"$P.pids\"); do pkill -P $p; kill $p; done 2>/dev/null; grep -v \"^$n\t\" \"$P\" > \"$P.new\"; mv \"$P.new\" \"$P\";;\n  \
         display-message) printf 'cx-proof\t%%7\t1700000000\\n';;\n  \
         list-clients) ;;\n  \
+        send-keys|capture-pane) echo \"$@\" >> \"$P.keys\"; exit 1;;\n  \
         new-session) echo x >> \"$P.spawns\"; K=''; for a in \"$@\"; do case \"$a\" in CP_SESSION_KEY=*) K=\"${{a#CP_SESSION_KEY=}}\";; esac; done\n    \
             sh -c 'sleep 120; true' app-server \"$E\" </dev/null >/dev/null 2>&1 & A=$!\n    \
             sh -c 'sleep 120; true' codex-tui </dev/null >/dev/null 2>&1 & T=$!\n    \
@@ -1651,11 +1653,15 @@ fn kill_spawned(fx:&Fixture) {
     }
 }
 
-/// Sidecar com terminal pronto para adormecer: rollout no disco e conversa que o app-server falso retoma.
+/// Sidecar com terminal pronto para adormecer, em plan, e conversa que o app-server falso retoma. A última
+/// rodada do rollout está em "Approve for me" (o `/permissions` da TUI); o sidecar, atrasado, em Full Access.
 fn sleepy_meta(fx:&Fixture,endpoint:&str,app:&Child,tui:&Child) -> Value {
     let mut meta = relaunch_meta(fx,endpoint,app,tui);
+    let turn = |approval:&str,sandbox:&str|json!({"type":"turn_context","payload":{"approval_policy":approval,"sandbox_policy":{"type":sandbox}}}).to_string();
+    std::fs::write(fx.root.join("rollout.jsonl"),format!("{}\n{}\n",turn("never","danger-full-access"),turn("on-request","workspace-write"))).unwrap();
     meta["thread_id"] = json!(RESUMABLE);
     meta["permission_mode"] = json!("Full Access");
+    meta["mode"] = json!("plan");
     meta
 }
 
@@ -1663,7 +1669,7 @@ fn sleepy_meta(fx:&Fixture,endpoint:&str,app:&Child,tui:&Child) -> Value {
 async fn sleep_until(watcher:&Watcher,registry:&RuntimeRegistry,name:&str) -> bool {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        match watcher.sleep_with(registry,name,Duration::ZERO,PermissionRead::Known("Full Access".into())).await {
+        match watcher.sleep(registry,name,Duration::ZERO).await {
             Ok(true) => return true,
             Ok(false) if Instant::now() < deadline => tokio::time::sleep(Duration::from_millis(50)).await,
             Ok(false) => return false,
@@ -1745,7 +1751,7 @@ async fn codex_terminal_sleeps_and_wakes_in_terminal() {
     std::fs::write(fx.panes.with_extension("pids"),format!("{app_pid} {tui_pid}")).unwrap();
     let reaper = reap(vec![app,tui]);
     let registry = sleep_registry(&fx).await;
-    let watcher = relaunch_watcher(&fx,&waking_tmux(&fx,&second.endpoint));
+    let watcher = relaunch_watcher(&fx,&waking_tmux(&fx,&second.endpoint,"Approve for me"));
     registry.bind_watcher(watcher.clone());
     watcher.round(&registry).await;
     assert!(registry.owns_codex_terminal("cx-proof"));
@@ -1753,11 +1759,14 @@ async fn codex_terminal_sleeps_and_wakes_in_terminal() {
     let generation = fx.queue_json(&key)["generation"].as_u64().unwrap();
 
     assert!(sleep_until(&watcher,&registry,"cx-proof").await,"parada, sem nada em aberto e sem ninguém olhando: adormece");
+    assert!(!fx.panes.with_extension("keys").exists(),"adormecer não abre o seletor nem lê a tela: {:?}",std::fs::read_to_string(fx.panes.with_extension("keys")));
     let asleep = fx.sidecar("cx-proof").expect("o sidecar fica");
     assert_eq!((asleep["headless"].clone(),asleep["asleep"]["wake_surface"].clone()),(json!(true),json!("terminal")),"{asleep}");
     assert!(asleep["asleep"]["since"].as_f64().is_some_and(|since|since > 0.0));
+    assert_eq!(asleep["asleep"]["mode"],"plan","o plan da conversa vai na marca");
     for field in ["cano","endpoint","app_pid","tui_pid"] { assert!(asleep[field].is_null(),"{field}: {asleep}"); }
-    assert_eq!((asleep["key"].as_str(),asleep["thread_id"].as_str(),asleep["permission_mode"].as_str()),(Some(key.as_str()),Some(RESUMABLE),Some("Full Access")));
+    assert_eq!((asleep["key"].as_str(),asleep["thread_id"].as_str()),(Some(key.as_str()),Some(RESUMABLE)));
+    assert_eq!(asleep["permission_mode"],"Approve for me","a permissão da última rodada do rollout, não a do sidecar atrasado");
     assert!(std::fs::read_to_string(&fx.panes).unwrap().is_empty(),"o pane fechou");
     assert!(registry.writable("cx-proof").await.is_none() && !registry.owns_codex_terminal("cx-proof"),"o ator saiu");
     let dead_until = Instant::now() + Duration::from_secs(5);
@@ -1792,7 +1801,16 @@ async fn codex_terminal_sleeps_and_wakes_in_terminal() {
     assert_eq!(app_server(new_app,&second.endpoint),AppServer::Ours);
     let turn = second.wait_method(1,"turn/start").await;
     assert!(turn.to_string().contains("acorda e responde"),"a vida nova entregou o texto guardado: {turn}");
-    assert!(fx.queue_json(&key)["generation"].as_u64().unwrap() > generation,"vida nova na mesma fila");
+    let now = fx.queue_json(&key)["generation"].as_u64().unwrap();
+    assert!(now > generation,"vida nova na mesma fila");
+    // Acordou em plan: o motor pediu o modo à conversa e a vista o confirma.
+    let handle = registry.handle(&key,now).await.unwrap();
+    let plan_until = Instant::now() + Duration::from_secs(10);
+    while !second.frames_of(1).iter().any(|f|f["method"] == "thread/settings/update" && f["params"]["collaborationMode"]["mode"] == "plan")
+        || handle.view().await.unwrap()["mode"] != "plan" {
+        assert!(Instant::now() < plan_until,"acordou em plan: {:?}",second.frames_of(1));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
     kill_spawned(&fx);
     reaper.join().unwrap();
 }
@@ -1805,7 +1823,7 @@ async fn codex_sleep_gives_up_mid_turn() {
     fx.put_sidecar("cx-proof",sleepy_meta(&fx,&server.endpoint,&app,&tui));
     fx.panes(&["cx-proof"]);
     let registry = sleep_registry(&fx).await;
-    let watcher = relaunch_watcher(&fx,&waking_tmux(&fx,&server.endpoint));
+    let watcher = relaunch_watcher(&fx,&waking_tmux(&fx,&server.endpoint,"Approve for me"));
     registry.bind_watcher(watcher.clone());
     watcher.round(&registry).await;
     assert!(registry.owns_codex_terminal("cx-proof"));
@@ -1821,7 +1839,7 @@ async fn codex_sleep_gives_up_mid_turn() {
     server.wait_method(1,"turn/start").await;
     let before = fx.sidecar("cx-proof").unwrap();
     for _ in 0..3 {
-        assert!(!watcher.sleep_with(&registry,"cx-proof",Duration::ZERO,PermissionRead::Known("Full Access".into())).await.unwrap(),"turno em curso: desiste");
+        assert!(!watcher.sleep(&registry,"cx-proof",Duration::ZERO).await.unwrap(),"turno em curso: desiste");
     }
     assert!(!registry.sleep_codex("cx-proof",Duration::ZERO).await.unwrap());
     untouched(&fx,&registry,&before,&mut app,&mut tui);
@@ -1843,7 +1861,7 @@ async fn register_wakes_asleep_codex_terminal_in_terminal() {
         "asleep":{"wake_surface":"terminal","since":1.0}}));
     // `codex` que não sobe: um sem terminal aberto por engano falharia, e a entrada dele não apareceria.
     let registry = sleep_registry(&fx).await;
-    let watcher = relaunch_watcher(&fx,&waking_tmux(&fx,&server.endpoint));
+    let watcher = relaunch_watcher(&fx,&waking_tmux(&fx,&server.endpoint,"Full Access"));
     registry.bind_watcher(watcher.clone());
     registry.queue_asleep("cx-proof","k-asleep","mensagem da noite").await.unwrap();
     watcher.register_codex_headless(&registry).await;
@@ -1860,4 +1878,38 @@ async fn register_wakes_asleep_codex_terminal_in_terminal() {
     let turn = server.wait_method(1,"turn/start").await;
     assert!(turn.to_string().contains("mensagem da noite"),"{turn}");
     kill_spawned(&fx);
+}
+
+#[tokio::test]
+async fn reading_an_asleep_codex_answers_from_its_file_and_wakes_nothing() {
+    let fx = fixture();
+    let server = fake_app_server(true).await;
+    let meta = json!({"name":"cx-proof","provider":"codex","headless":true,"key":"k-asleep","thread_id":RESUMABLE,"cwd":fx.root,
+        "codex_home":fx.home.join(".codex"),"permission_mode":"Approve for me","model":"gpt-sono","effort":"high","service_tier":"priority",
+        "asleep":{"wake_surface":"terminal","since":1.0,"mode":"plan"}});
+    fx.put_sidecar("cx-proof",meta.clone());
+    let registry = sleep_registry(&fx).await;
+    let watcher = relaunch_watcher(&fx,&waking_tmux(&fx,&server.endpoint,"Approve for me"));
+    registry.bind_watcher(watcher);
+    let (python,addr) = serve_owner(registry.clone()).await;
+    let get = |route:&'static str| async move {
+        let response = crate::fake::client().get(format!("http://{addr}/api/sessions/cx-proof/{route}"))
+            .header("authorization",format!("Bearer {}",crate::fake::OWNER)).send().await.unwrap();
+        (response.status().as_u16(),serde_json::from_str::<Value>(&response.text().await.unwrap()).unwrap_or(Value::Null))
+    };
+    let (status,models) = get("models").await;
+    assert_eq!(status,200,"{models}");
+    assert_eq!(models,json!({"models":[],"current":{"model":"gpt-sono","effort":"high","service_tier":"priority","mode":"plan"}}));
+    assert_eq!(get("commands").await,(200,json!([])));
+    let (status,modes) = get("codex-permissions").await;
+    assert_eq!((status,modes["current"].as_str()),(200,Some("Approve for me")),"{modes}");
+    let (status,limits) = get("limits").await;
+    assert_eq!(status,200,"neutro: {limits}");
+    for route in ["models","commands","codex-permissions","limits"] { assert_eq!(python.hits_to(&format!("/api/sessions/cx-proof/{route}")),0,"{route}"); }
+    // Ler não acorda: nada subiu, a marca segue, e nenhum acordar ficou em curso.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(spawns(&fx),0);
+    assert!(!registry.owns_codex_terminal("cx-proof") && !registry.owns_codex_headless("cx-proof").await);
+    assert!(registry.waking_key("cx-proof").is_none());
+    assert_eq!(fx.sidecar("cx-proof").unwrap(),meta);
 }

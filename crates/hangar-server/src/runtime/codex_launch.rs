@@ -51,6 +51,11 @@ pub fn policy_of(mode:&str) -> Option<(&'static str,&'static str)> {
     MODES.iter().find(|(name,..)|name.eq_ignore_ascii_case(mode.trim())).map(|&(_,approval,sandbox)|(approval,sandbox))
 }
 
+/// O inverso de `policy_of`: o modo do app de uma (aprovação, sandbox); fora dos três, nenhum.
+pub fn mode_of(approval:&str,sandbox:&str) -> Option<&'static str> {
+    MODES.iter().find(|&&(_,a,s)|a == approval && s == sandbox).map(|&(name,..)|name)
+}
+
 /// `politica` sobre o modo gravado.
 fn policy(meta:&Value) -> Result<(&'static str,&'static str),RuntimeError> {
     let &(_,approval,sandbox) = stored(meta)?;

@@ -178,6 +178,7 @@ pub(crate) async fn fake_app_server(answer_turns:bool) -> FakeAppServer {
                         // Conversa que já tem rollout: a assinatura cola (o terminal que acorda espera por ela).
                         Some("thread/resume") if frame["params"]["threadId"] == "thread-resumable" =>
                             Some(json!({"id":frame["id"],"result":{"thread":{"id":"thread-resumable","path":"/tmp/rollout.jsonl","status":{"type":"idle"}}}})),
+                        Some("thread/settings/update") if frame["params"]["threadId"] == "thread-resumable" => Some(json!({"id":frame["id"],"result":{}})),
                         Some("thread/resume") => Some(json!({"id":frame["id"],"error":{"code":-32600,"message":"no rollout found for thread id thread-1"}})),
                         Some("turn/start") if answer_turns => Some(json!({"id":frame["id"],"result":{"turn":{"id":"turn-1","status":"inProgress","items":[]}}})),
                         // A configuração que a TUI tem agora (o `/model` digitado nela não avisa o motor).

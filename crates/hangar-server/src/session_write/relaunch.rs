@@ -49,7 +49,9 @@ pub fn mode_refusal(error: &RuntimeError) -> (StatusCode, Value) {
     // A recusa que já é a frase da troca (`erro_troca_modo`) dispensa o código; as outras o levam à vista.
     let shown = if error.code == "erro_troca_modo" { error.message.clone() } else { with_code(error) };
     let mut params = json!({"erro": shown});
-    if crate::runtime::codex_relaunch::kill_phase(error) || error.code == crate::runtime::codex_relaunch::STARTING { params["code"] = json!(error.code); }
+    if crate::runtime::codex_relaunch::kill_phase(error) || error.code == crate::runtime::codex_relaunch::STARTING || error.code == "erro_sessao_adormecida" {
+        params["code"] = json!(error.code);
+    }
     (StatusCode::CONFLICT, super::detail_body("erro_troca_modo", &format!("não troquei de modo: {shown}"), params))
 }
 

@@ -252,6 +252,20 @@ fn terminal_settings(meta:Meta,view:&Value,key:&str) -> Result<Meta,RuntimeError
 /// Plan/default voltam depois da troca; outro modo não existe no sem terminal.
 fn collaboration(view:&Value) -> Option<String> { view["mode"].as_str().filter(|mode|matches!(*mode,"plan" | "default")).map(str::to_owned) }
 
+/// O modo de permissão da última rodada gravada no rollout (`turn_context`), sem ler a tela. `Ok(None)`:
+/// a conversa ainda não teve rodada; `Err`: rollout ilegível ou política fora dos três modos. Bloqueante.
+fn rollout_mode(path:&Path) -> Result<Option<&'static str>,()> {
+    let raw = std::fs::read(path).map_err(|_|())?;
+    for line in raw.split(|b|*b == b'\n').rev() {
+        let Ok(record) = serde_json::from_slice::<Value>(line) else { continue };
+        if record["type"] != "turn_context" { continue; }
+        let policy = &record["payload"];
+        let found = super::codex_launch::mode_of(policy["approval_policy"].as_str().unwrap_or(""),policy["sandbox_policy"]["type"].as_str().unwrap_or(""));
+        return found.map(Some).ok_or(());
+    }
+    Ok(None)
+}
+
 /// Alvo do sem terminal a partir do sidecar e dos caminhos da fila (o `Binding.descriptor()` do Python).
 fn headless_target(queue_dir:&Path,name:&str,key:&str,generation:u64,meta:&Meta) -> RuntimeTarget {
     let (state_path,lease_path) = terminal::queue_files(queue_dir,key);
@@ -345,7 +359,11 @@ impl Watcher {
             registry.wake(name,&key);
             return Some(Err(asleep_waking()));
         }
-        if registry.codex_headless(name).await.is_some() { return Some(Ok(())); }
+        if registry.codex_headless(name).await.is_some() {
+            // Aberta com a marca que ficou (a retirada falhou antes): sai agora, senão ela não adormece mais.
+            if mark.is_some() { self.unmark(name,&key).await; }
+            return Some(Ok(()));
+        }
         // Outra entrada com esta chave ou nome (vida de terminal ainda aberta, outro provedor): é do Rust e
         // não dá para abrir; a escrita recebe o código, nunca o Python.
         if registry.has_entry(Some(&key),name).await {
@@ -377,15 +395,15 @@ impl Watcher {
 
     /// A vigia de adormecer pede (`RuntimeRegistry::sleep_codex`). `Ok(false)`: desistiu.
     pub async fn sleep(&self,registry:&RuntimeRegistry,name:&str,after:Duration) -> Result<bool,RuntimeError> {
-        self.sleep_with(registry,name,after,PermissionRead::Pane(None)).await
-    }
-
-    /// `sleep` com a leitura da permissão do terminal escolhida (os testes não têm a TUI).
-    #[doc(hidden)]
-    pub async fn sleep_with(&self,registry:&RuntimeRegistry,name:&str,after:Duration,read:PermissionRead) -> Result<bool,RuntimeError> {
         let Some(meta) = self.load(name).await else { return Ok(false) };
-        if registry.waking_key(name).is_some() || asleep_surface(&meta).is_some() || self.transfer_busy(name,&meta).await { return Ok(false); }
-        let idle = if meta.get("headless").is_some_and(truthy) { registry.park_codex(name,after).await? } else { self.sleep_terminal(registry,name,after,read).await? };
+        let mut mark = asleep_surface(&meta);
+        // Marca que ficou numa sessão já aberta (a retirada falhou ao acordar): sai, e ela volta a poder adormecer.
+        if mark == Some(Surface::Headless) && registry.codex_headless(name).await.is_some() && let Some(key) = terminal::text(&meta,"key") {
+            self.unmark(name,key).await;
+            mark = None;
+        }
+        if registry.waking_key(name).is_some() || mark.is_some() || self.transfer_busy(name,&meta).await { return Ok(false); }
+        let idle = if meta.get("headless").is_some_and(truthy) { registry.park_codex(name,after).await? } else { self.sleep_terminal(registry,name,after).await? };
         let Some(idle) = idle else { return Ok(false) };
         tracing::info!(session=%name,idle_s=idle as u64,"sessão Codex adormecida");
         let event = json!({"evento":"sessao.adormecida","nivel":"ok","sessao":name,"provider":"codex","parada_s":idle as u64});
@@ -397,7 +415,7 @@ impl Watcher {
     /// (turno, perguntas, fila, conversa gravada, conta) e as do Claude com terminal (comando de pé, painel,
     /// terminal olhando, parada pelo motor e pela conversa). Então a vida do terminal fecha e o sidecar vira
     /// o sem terminal adormecido que acorda com terminal; o spec gravado não muda. `None`: desistiu.
-    async fn sleep_terminal(&self,registry:&RuntimeRegistry,name:&str,after:Duration,read:PermissionRead) -> Result<Option<f64>,RuntimeError> {
+    async fn sleep_terminal(&self,registry:&RuntimeRegistry,name:&str,after:Duration) -> Result<Option<f64>,RuntimeError> {
         let Ok(_ingress) = ClosedIngress::acquire_within(registry.ingress(),name,Duration::from_secs(1)).await else { return Ok(None) };
         let _round = self.misses.lock().await;
         if registry.waking_key(name).is_some() || registry.panel_open(name) { return Ok(None); }
@@ -411,29 +429,40 @@ impl Watcher {
         let view = match self.preconditions(registry,&handle,&meta,false).await { Ok(view)=>view, Err(error)=>return gave_up(error) };
         let Some(idle) = view["park_idle_s"].as_f64().filter(|idle|*idle >= after.as_secs_f64()) else { return Ok(None) };
         let (rollout,app) = (terminal::text(&meta,"rollout_path").map(PathBuf::from),terminal::pid(&meta,"app_pid").map(i64::from));
-        let quiet = tokio::task::spawn_blocking(move || {
+        let stored = super::codex_launch::stored_mode(&Value::Object(meta.clone())).ok();
+        let (quiet,permission) = tokio::task::spawn_blocking(move || {
             // Parada também pela conversa: o motor readotado depois de um reinício conta do zero.
-            let still = rollout.and_then(|path|std::fs::metadata(path).and_then(|m|m.modified()).ok()).and_then(|at|at.elapsed().ok()).is_some_and(|idle|idle >= after);
+            let still = rollout.as_deref().and_then(|path|std::fs::metadata(path).and_then(|m|m.modified()).ok()).and_then(|at|at.elapsed().ok()).is_some_and(|idle|idle >= after);
             let procs = SystemProcs::default();
             // Filhos ilegíveis não dizem que nenhum comando roda.
-            still && procs.children(Duration::ZERO).is_ok() && app.is_some_and(|pid|crate::state::shells::shells_of(pid,&procs).is_empty())
-        }).await.unwrap_or(false);
-        if !quiet { return Ok(None); }
+            let quiet = still && procs.children(Duration::ZERO).is_ok() && app.is_some_and(|pid|crate::state::shells::shells_of(pid,&procs).is_empty());
+            // A permissão da última rodada, que leva o `/permissions` digitado na TUI; sem rodada, a gravada.
+            // Política fora dos três modos ou conversa ilegível: desiste, sem abrir o seletor na tela.
+            let permission = match rollout.as_deref().map(rollout_mode) { Some(Ok(Some(mode)))=>Some(mode), Some(Ok(None))=>stored, _=>None };
+            (quiet,permission)
+        }).await.unwrap_or((false,None));
+        let (true,Some(permission)) = (quiet,permission) else { return Ok(None) };
         // Um terminal de verdade olhando fecharia com ela; os clientes de controle do Hangar não contam.
         if !matches!(terminal::pane_driver(&target.terminal,cell.pane_serial(),None).mods_clients().await,Ok(0)) { return Ok(None); }
-        let (settings,_,turns) = match self.terminal_now(name,&target,&handle,&cell,&meta,view,read).await {
+        let (settings,view,turns) = match self.terminal_now(name,&target,&handle,&cell,&meta,view,PermissionRead::Known(permission.into())).await {
             Ok(now)=>now,
             Err(error)=>return gave_up(error),
         };
         let back = cleared(settings.clone(),false);
         // Montado antes de fechar: lançador ausente desiste com tudo de pé, e é ele que acordaria a sessão.
-        let back_pane = self.terminal_pane(registry,name,&target.key,&back).await?;
+        let Ok(back_pane) = self.terminal_pane(registry,name,&target.key,&back).await else { return Ok(None) };
+        let mode = collaboration(&view);
         let mut asleep = cleared(settings,true);
         let since = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0,|d|d.as_secs_f64());
-        asleep.insert("asleep".into(),json!({"wake_surface":"terminal","since":since}));
+        asleep.insert("asleep".into(),json!({"wake_surface":"terminal","since":since,"mode":mode}));
         // Fora da fotografia antes de fechar: depois de um reboot ela acorda pela mensagem, não pelo restore.
         { let (home,owned) = (self.cfg.home.clone(),name.to_owned()); let _ = tokio::task::spawn_blocking(move||crate::session_open::restore::forget(&home,&owned)).await; }
-        self.stop_terminal(registry,name,&target,&meta,turns).await?;
+        // Antes do kill tudo é recusa e nada mudou; depois dele, falha a registrar.
+        match self.stop_terminal(registry,name,&target,&meta,turns).await {
+            Ok(())=>{},
+            Err(error) if kill_phase(&error)=>return Err(error),
+            Err(error)=>return gave_up(error),
+        }
         let mux = MuxProcess::new(&self.cfg.mux_program,TIMEOUT);
         let hidden = format!("term-{name}");
         if mux.is_hidden(&hidden).await && mux.kill_session(&hidden).await != Some(true) {
@@ -441,7 +470,7 @@ impl Watcher {
         }
         if let Err(error) = self.sidecar_put(name,&asleep).await {
             // Sem o arquivo adormecido a sessão ficaria parada sem dono: o terminal volta como estava.
-            return Err(match self.open_terminal(registry,name,&target.key,&back,None,&back_pane).await {
+            return Err(match self.open_terminal(registry,name,&target.key,&back,mode.as_deref(),&back_pane).await {
                 Ok(())=>error,
                 Err(restore)=>RuntimeError::new(&restore.code,&format!("{} (e o terminal não voltou: {})",error.message,restore.message)),
             });
@@ -468,7 +497,8 @@ impl Watcher {
         if asleep_surface(&meta) != Some(Surface::Terminal) { return Ok(false); }
         let key = terminal::text(&meta,"key").filter(|key|terminal::valid_key(key)).ok_or_else(gone)?.to_owned();
         let mut awake = meta.clone();
-        awake.remove("asleep");
+        // Plan/default da conversa voltam depois da assinatura, como na troca de modo.
+        let mode = awake.remove("asleep").and_then(|mark|mark["mode"].as_str().map(str::to_owned));
         let wanted = cleared(terminal_settings(awake,&json!({}),&key)?,false);
         let pane = self.terminal_pane(registry,name,&key,&wanted).await?;
         // Outro terminal no nome: subir este daria dois app-servers para o mesmo nome.
@@ -477,7 +507,7 @@ impl Watcher {
             Some(true)=>return Err(RuntimeError::new("codex_wake_name_taken","já existe um terminal com o nome desta sessão; ela continua adormecida")),
             None=>return Err(RuntimeError::new("codex_terminal_mux","o multiplexador não respondeu; a sessão continua adormecida")),
         }
-        let Err(error) = self.open_terminal(registry,name,&key,&wanted,None,&pane).await else { return Ok(true) };
+        let Err(error) = self.open_terminal(registry,name,&key,&wanted,mode.as_deref(),&pane).await else { return Ok(true) };
         if !kill_phase(&error) && let Err(put) = self.sidecar_put(name,&meta).await {
             tracing::warn!(session=%name,code=%put.code,"o Codex que não acordou ficou sem o arquivo adormecido");
         }
@@ -998,6 +1028,20 @@ mod tests {
             assert!(!codex_opening(&[pane(other)],"s"),"{other:?}: não é a TUI do Codex abrindo");
         }
         assert!(!codex_opening(&[pane(Some("codex"))],"outra"));
+    }
+
+    #[test]
+    fn the_sleep_permission_comes_from_the_last_turn_of_the_rollout() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rollout.jsonl");
+        let turn = |approval:&str,sandbox:&str|json!({"type":"turn_context","payload":{"approval_policy":approval,"sandbox_policy":{"type":sandbox}}}).to_string();
+        std::fs::write(&path,"{\"type\":\"session_meta\"}\n").unwrap();
+        assert_eq!(rollout_mode(&path),Ok(None),"sem rodada");
+        std::fs::write(&path,format!("{}\n{}\n{{}}\n",turn("never","danger-full-access"),turn("on-request","workspace-write"))).unwrap();
+        assert_eq!(rollout_mode(&path),Ok(Some("Approve for me")),"a última rodada vence");
+        std::fs::write(&path,format!("{}\n",turn("untrusted","read-only"))).unwrap();
+        assert_eq!(rollout_mode(&path),Err(()),"fora dos três modos não vira nenhum deles");
+        assert_eq!(rollout_mode(&dir.path().join("sem")),Err(()),"ilegível");
     }
 
     #[test]
