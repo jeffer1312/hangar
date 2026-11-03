@@ -491,19 +491,21 @@ pub async fn term_input(State(st): State<Arc<AppState>>, ConnectInfo(peer): Conn
 }
 
 /// O painel da fila na adormecida (tirar, editar, mover): a ação vai ao arquivo da fila dela e ela segue
-/// dormindo, com as respostas de sempre. `None`: outra rota, ou sessão acordada ou acordando, que seguem o
-/// caminho comum. Orientar fica de fora: pedir a entrega agora é pedir para ela acordar.
+/// dormindo, com as respostas de sempre. `None`: outra rota, ou sessão acordada, que seguem o caminho comum.
+/// Orientar fica de fora: pedir a entrega agora é pedir para ela acordar.
 pub(super) async fn asleep_queue(runtime: &RuntimeRegistry, name: &str, route: WriteRoute, wait: std::time::Duration, parts: &Parts, bytes: &Bytes) -> Option<Response> {
     if !matches!(route, WriteRoute::QueueRemove | WriteRoute::QueueEdit | WriteRoute::QueueReorder) { return None; }
-    // Acordando: a rota comum espera a vida nova, que atende pela fila dela.
-    if runtime.waking_key(name).is_some() { return None; }
-    // A porta aberta segura o acordar até a ação terminar. Fechada até o fim do prazo: a recusa da rota comum.
-    let Ok(_pass) = runtime.ingress().enter(name, wait).await else {
+    let busy = || {
         let mut response = json_response(StatusCode::CONFLICT, busy_body());
         cors(&parts.headers, response.headers_mut());
-        return Some(response);
+        Some(response)
     };
-    if runtime.waking_key(name).is_some() || runtime.writable(name).await.is_some() { return None; }
+    // Acordando, recusa sem mexer: a rota comum, com o acordar que falhou, acordaria de novo.
+    if runtime.waking_key(name).is_some() { return busy(); }
+    // A porta aberta segura o acordar até a ação terminar.
+    let Ok(_pass) = runtime.ingress().enter(name, wait).await else { return busy() };
+    if runtime.waking_key(name).is_some() { return busy(); }
+    if runtime.writable(name).await.is_some() { return None; }
     let mark = runtime.asleep(name).await?;
     let (key, headers) = (mark.key.as_str(), &parts.headers);
     let action = |action: Action| async move { runtime.asleep_queue_action(name, key, &random_hex(16), action).await };

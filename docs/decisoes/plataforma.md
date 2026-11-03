@@ -3913,7 +3913,8 @@ fora do registro do Rust, inclusive o Claude sem terminal estacionado nos 65 min
 `btw`) numa adormecida passa por `adopt_now`, que dispara `wake` e devolve `session_asleep_waking`; o
 `/input` grava o texto na fila da chave com `pre_transcript` e responde como texto guardado, o resto
 espera. O painel da fila (tirar, editar, mover) não acorda: age no arquivo da fila da chave, senão o
-texto que a pessoa quis cancelar seria entregue. Antes de a vida nova nascer, o texto guardado desde
+texto que a pessoa quis cancelar seria entregue; por isso `write_health` responde `true` para a
+adormecida. Acordando, os botões somem e a rota recusa com 409 sem mexer. Antes de a vida nova nascer, o texto guardado desde
 `since` volta à fila com a hora de agora (`restamp_asleep`): a vida com terminal só entrega o que tem
 até 15 min antes do nascimento dela, e um acordar que falhou deixaria o texto de fora. O acordar roda num `tokio::spawn` próprio: cliente que cai no meio não o interrompe, e o sidecar só
 sai dentro dessa tarefa. Uma vaga por sessão (`waking`) garante um acordar só; texto que chega com a

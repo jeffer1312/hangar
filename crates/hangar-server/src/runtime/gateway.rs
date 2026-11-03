@@ -2815,10 +2815,14 @@ impl RuntimeRegistry {
         Some(WriteTarget { key,generation,provider,terminal,healthy,handle })
     }
     /// A saúde que o painel da fila mostra: `None` quando o ator não respondeu no prazo (ocupado entregando),
-    /// para quem pergunta manter o último valor em vez de piscar os botões a cada entrega.
+    /// para quem pergunta manter o último valor em vez de piscar os botões a cada entrega. A adormecida não tem
+    /// ator e o painel age no arquivo da fila dela; acordando, os botões somem até a vida nova.
     pub async fn write_health(&self,name:&str) -> Option<bool> {
         let handle = self.entries.lock().await.values().filter(|e|e.name==name).max_by_key(|e|e.generation).map(|e|e.handle.clone());
-        match handle { Some(handle)=>probe(&handle).await, None=>Some(false) }
+        match handle {
+            Some(handle)=>probe(&handle).await,
+            None=>Some(self.waking_key(name).is_none() && self.asleep(name).await.is_some()),
+        }
     }
     /// A entrada mais nova do nome é de terminal? Sem retrato: serve a decisão que vem antes da porta.
     pub async fn is_terminal(&self,name:&str) -> bool {

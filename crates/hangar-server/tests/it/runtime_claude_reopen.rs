@@ -1361,6 +1361,10 @@ async fn write_to_asleep_queues_text_and_wakes_once() {
     until("o acordar chegou à subida do terminal",||{let held=fx.state.with_extension("held");async move {held.exists()}}).await;
     assert_eq!(registry.waking_key("s1"),Some(key.clone()));
     assert_eq!(post(server,"input",json!({"text":"dois"})).await,stored,"a segunda, no meio do acordar, também vai à fila");
+    assert_eq!(registry.write_health("s1").await,Some(false),"acordando, o painel fica sem botões");
+    let queued:Value = serde_json::from_slice(&std::fs::read(fx.queue.join(format!("runtime/{key}.json"))).unwrap()).unwrap();
+    let first = queued["rows"][0]["id"].as_str().unwrap().to_owned();
+    assert_eq!(queue_panel(server,reqwest::Method::DELETE,&format!("queue/{first}?only_waiting=true"),Value::Null).await,409,"no meio do acordar: recusa, sem mexer");
     std::fs::remove_file(fx.state.with_extension("hold")).unwrap();
     until("acordou",||{let registry=registry.clone();async move {registry.waking_key("s1").is_none()}}).await;
     let (found,_) = registry.terminal_view("s1").await.expect("acordou com terminal");
@@ -1375,8 +1379,10 @@ async fn write_to_asleep_queues_text_and_wakes_once() {
     let raw = std::fs::read(fx.queue.join(format!("runtime/{key}.json"))).unwrap();
     let state:Value = serde_json::from_slice(&raw).unwrap();
     assert_eq!(state["generation"],2,"a vida nova é a geração seguinte");
-    let ours:Vec<&Value> = state["rows"].as_array().unwrap().iter().filter(|r|r["text"]=="um" || r["text"]=="dois").collect();
-    assert_eq!(ours.iter().map(|r|r["text"].as_str().unwrap()).collect::<Vec<_>>(),["um","dois"],"as duas, na ordem: {state}");
+    // Em linhas separadas ou no lote que a entrega junta: as duas, na ordem.
+    let ours:Vec<&Value> = state["rows"].as_array().unwrap().iter()
+        .filter(|r|r["text"].as_str().is_some_and(|text|text.lines().any(|line|line=="um" || line=="dois"))).collect();
+    assert_eq!(ours.iter().map(|r|r["text"].as_str().unwrap()).collect::<Vec<_>>().join("\n"),"um\ndois","{state}");
     let (loaded,_) = hangar_server::runtime::queue::State::load(&raw).unwrap();
     let born_later = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64()+60.0;
     let waiting = hangar_server::runtime::queue::waiting_ids(&loaded,born_later);
@@ -1425,11 +1431,12 @@ async fn text_stored_long_before_the_wake_is_still_delivered() {
     asleep_terminal(&fx,&key);
     std::fs::write(fx.state.with_extension("keys"),"").unwrap();
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
-    std::fs::create_dir_all(fx.queue.join("runtime")).unwrap();
-    std::fs::write(fx.queue.join(format!("runtime/{key}.json")),json!({"key":key,"owner_key":key,"generation":1,"name":"s1",
-        "rows":[{"id":"old","text":"antigo","ts":now-3600.0,"delivered":false,"pre_transcript":true},
-            {"id":"old2","text":"antigo2","ts":now-3500.0,"delivered":false,"pre_transcript":true}]}).to_string()).unwrap();
     let registry = fx.registry().await;
+    for text in ["antigo","antigo2"] { registry.queue_asleep("s1",&key,text).await.map_err(|e|e.code).unwrap(); }
+    let path = fx.queue.join(format!("runtime/{key}.json"));
+    let mut queued:Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    for row in queued["rows"].as_array_mut().unwrap() { row["ts"] = json!(now-3600.0); }
+    std::fs::write(&path,queued.to_string()).unwrap();
     registry.clone().register_claude_headless().await;
     until("acordou",||{let registry=registry.clone();async move {
         registry.waking_key("s1").is_none() && registry.terminal_view("s1").await.is_some()}}).await;
@@ -1464,6 +1471,7 @@ async fn queue_panel_on_asleep_changes_the_queue_and_wakes_nothing() {
     let registry = fx.registry().await;
     let (python,server) = crate::runtime_codex_watch::serve_owner(registry.clone()).await;
     for text in ["um","dois"] { registry.queue_asleep("s1",&key,text).await.map_err(|e|e.code).unwrap(); }
+    assert_eq!(registry.write_health("s1").await,Some(true),"o painel da adormecida tem botões");
     let rows = || -> Vec<Value> {
         let state:Value = serde_json::from_slice(&std::fs::read(fx.queue.join(format!("runtime/{key}.json"))).unwrap()).unwrap();
         state["rows"].as_array().unwrap().clone()
@@ -1575,10 +1583,8 @@ async fn register_wakes_asleep_with_pending_queue_in_terminal() {
     let fx = fixture();
     let key = "c3".repeat(16);
     asleep_terminal(&fx,&key);
-    std::fs::create_dir_all(fx.queue.join("runtime")).unwrap();
-    std::fs::write(fx.queue.join(format!("runtime/{key}.json")),json!({"key":key,"owner_key":key,"generation":1,"name":"s1",
-        "rows":[{"id":"1","text":"oi","delivered":false}]}).to_string()).unwrap();
     let registry = fx.registry().await;
+    registry.queue_asleep("s1",&key,"oi").await.map_err(|e|e.code).unwrap();
     registry.clone().register_claude_headless().await;
     until("acordou na subida",||{let registry=registry.clone();async move {
         registry.waking_key("s1").is_none() && registry.terminal_view("s1").await.is_some()}}).await;
