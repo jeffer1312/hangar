@@ -1037,8 +1037,10 @@ impl Executor {
     /// `steer`: o "Orientar" de uma entrada, que passa pelo turno em curso em vez de esperar o Claude parar.
     async fn execute(&mut self,id:&str,kind:&str,mut payload:Value,entry:Option<String>,steer:bool)->Result<RuntimeReply,RuntimeError> {
         if !valid_operation_id(id) {return Err(error("operation_id"));}
-        // Texto colado no Windows chega com `\r\n`; o `\r` é controle e o Claude Code só entende `\n`.
-        let unix=payload["text"].as_str().filter(|t|kind=="input" && t.contains('\r')).map(|t|t.replace("\r\n","\n").replace('\r',"\n"));
+        // Texto colado no Windows chega com `\r\n`; o `\r` é controle e o Claude Code só entende `\n`. Outro controle
+        // colado (um NUL invisível) sai do texto: recusar travava o envio sem a pessoa ver o que apagar.
+        let unix=payload["text"].as_str().filter(|t|kind=="input" && !safe_characters(t))
+            .map(|t|t.replace("\r\n","\n").replace('\r',"\n").chars().filter(|c|!c.is_control() || matches!(c,'\n'|'\t')).collect::<String>());
         if let Some(text)=unix {payload["text"]=json!(text);}
         if kind=="lifecycle_guard" {
             if self.loaned() || self.held() || self.last_error.is_some() || !self.uncertain.is_empty() || self.unprovable || self.mode_unproved {return Err(error("lifecycle_busy"));}

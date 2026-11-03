@@ -1468,7 +1468,7 @@ async fn terminal_runtime_native_receipt_matches_queue_append_without_submit_roo
 #[tokio::test]
 async fn terminal_runtime_windows_line_breaks_are_typed_as_plain_newlines() {
     let f=Fixture::new().await; let h=f.start();
-    let reply=h.command(f.command("pasted","Pessoal:\r\nlinha dois\rtrês")).await.unwrap();
+    let reply=h.command(f.command("pasted","Pessoal:\r\nlinha dois\rtr\u{0}ês")).await.unwrap();
     assert_eq!(reply.disposition,hangar_server::runtime::protocol::Disposition::Accepted,"{}",reply.payload);
     assert_eq!(f.state()["rows"][0]["text"],"Pessoal:\nlinha dois\ntrês");
     h.drain().await.unwrap();
