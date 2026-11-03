@@ -203,7 +203,13 @@ pub async fn switch_route(State(st):State<Arc<AppState>>,ConnectInfo(peer):Conne
     let (Some(runtime),true,Some(name))=(runtime,owner,session_name(req.uri().path())) else {return pass(&st,req,&fwd).await};
     let (parts,body)=req.into_parts();
     let Ok(bytes)=to_bytes(body,BODY_LIMIT).await else {return too_large(&parts.headers)};
-    let destination=match target(&bytes) {
+    let asked=target(&bytes);
+    // A transferência é do Python e não conhece a adormecida: ela leria um sidecar sem processo.
+    if asked==Some(Target::Codex) && runtime.asleep(&name).await.is_some() {
+        return reply(Some(&parts.headers),StatusCode::CONFLICT,detail_body("erro_sessao_adormecida",
+            "a sessão está adormecida; mande uma mensagem para ela acordar e transfira depois",json!({})));
+    }
+    let destination=match asked {
         Some(Target::ConfigDir(dir))=>dir,
         // A transferência para o Codex e o corpo torto seguem ao Python, que os conduz e recusa.
         Some(Target::Codex) | None=>return forward_whole(&st,parts,bytes,&fwd).await,

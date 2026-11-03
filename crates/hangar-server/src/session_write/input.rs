@@ -386,6 +386,38 @@ pub(super) async fn opening_response(st: &Arc<AppState>, name: &str, key: &str, 
     response
 }
 
+/// Texto para a sessão adormecida: vai à fila da chave dela e a vida nova o entrega; o acordar já corre à parte.
+async fn queue_while_asleep(st: &AppState, name: &str, key: &str, text: &str, steer: bool) -> (StatusCode, Value) {
+    let Some(runtime) = st.state.runtime.get() else { return (StatusCode::SERVICE_UNAVAILABLE, detail_body("runtime_watcher", "o servidor ainda não abriu as sessões", json!({}))) };
+    // Comando de barra não tem linha na fila: só a vida nova o executa.
+    if !queued(text) {
+        let error = crate::runtime::gateway::asleep_waking();
+        return (StatusCode::CONFLICT, detail_body(&error.code, &error.message, json!({})));
+    }
+    match runtime.queue_asleep(name, key, text).await {
+        Ok(()) => (StatusCode::OK, json!({"ok": true, "delivered": false, "steered": false, "native": false})),
+        // A vida nova já pegou a fila: o texto vai pela entrada dela, uma vez só.
+        Err(error) if error.code == "runtime_lease" => match route_write(runtime, name, WriteRoute::Input, st.write_gate_wait).await {
+            Write::Rust(held, target) => {
+                let result = send(st, name, &target, text, steer, None).await;
+                drop(held);
+                result
+            }
+            _ => (StatusCode::SERVICE_UNAVAILABLE, detail_body(&error.code, &error.message, json!({}))),
+        },
+        Err(error) => (StatusCode::SERVICE_UNAVAILABLE, detail_body(&error.code, &error.message, json!({}))),
+    }
+}
+
+/// `/input` do dono (ou pela ponte) para a sessão adormecida.
+pub(super) async fn asleep_response(st: &Arc<AppState>, name: &str, key: &str, headers: &HeaderMap, bytes: &Bytes) -> Response {
+    let Some((text, steer, _)) = parse_input(bytes).filter(|_| json_content_type(headers)) else { return invalid_body(headers) };
+    let (status, body) = queue_while_asleep(st, name, key, &text, steer).await;
+    let mut response = json_response(status, body);
+    cors(headers, response.headers_mut());
+    response
+}
+
 /// Recado de fora da rota (aviso de grupo): o mesmo `/input` com `steer: false` que o `_enviar` do
 /// Python faz. `Err` = o `detail` da resposta, o envelope `{code, params, msg}`.
 pub async fn deliver_text(st: &AppState, name: &str, text: &str) -> Result<(), Value> {
@@ -430,6 +462,7 @@ pub async fn write_input(st: &AppState, name: &str, text: &str, steer: bool) -> 
         }
         Write::Busy => (StatusCode::CONFLICT, busy_body()),
         Write::Opening(key) => queue_opening(st, name, &key, text, steer).await,
+        Write::Asleep(key) => queue_while_asleep(st, name, &key, text, steer).await,
         // Pela ponte do Python: ele mesmo entrega, depois de a ponte responder (sem ida e volta).
         Write::Python => match crate::groups::bridge::current() {
             Some(ctx) => { ctx.defer_delivery(name, text, steer); (StatusCode::OK, json!({"ok": true, "deferred": true})) }
@@ -468,8 +501,8 @@ pub async fn broadcast(State(st): State<Arc<AppState>>, ConnectInfo(peer): Conne
         if runtime.has_entry(None, name).await { ours.insert(name.clone()); continue; }
         match runtime.adopt_now(name).await {
             Some(Ok(())) => { ours.insert(name.clone()); }
-            // Conversa ainda abrindo: a entrega do `/input` guarda o texto na fila dela.
-            Some(Err(error)) if error.code == crate::runtime::codex_relaunch::STARTING => { ours.insert(name.clone()); }
+            // Conversa ainda abrindo ou sessão adormecida: a entrega do `/input` guarda o texto na fila dela.
+            Some(Err(error)) if error.code == crate::runtime::codex_relaunch::STARTING || error.code == crate::runtime::gateway::ASLEEP_WAKING => { ours.insert(name.clone()); }
             Some(Err(error)) => {
                 let detail = detail_body(&error.code, &error.message, json!({}))["detail"].clone();
                 refused.insert(name.clone(), json!({"ok": false, "error": detail, "delivered": false}));

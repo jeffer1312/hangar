@@ -364,7 +364,7 @@ pub struct SessionSpec {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ChangeReason { ModeSwitch, AccountSwitch, Bypass, Reload, Resume, RebootRestore, ParkWake, LimitSwitch }
+pub enum ChangeReason { ModeSwitch, AccountSwitch, Bypass, Reload, Resume, RebootRestore, ParkWake, LimitSwitch, Sleep }
 
 /// O que uma reabertura muda; o campo ausente fica como está no spec gravado.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

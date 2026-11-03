@@ -11,7 +11,7 @@ use super::terminal::TerminalTarget;
 use crate::list::procs::{ProcessView,SystemProcs};
 use crate::session_open::claude::ClaudeContext;
 use crate::session_open::terminal::{PaneSpec,TerminalEnv};
-use crate::session_open::{Account,PermissionMode,SessionChange,SessionSpec,Surface};
+use crate::session_open::{Account,ChangeReason,PermissionMode,SessionChange,SessionSpec,Surface};
 use serde_json::{Value,json};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -61,6 +61,23 @@ enum BusyCheck { Skip, Refuse, RefuseUnlessStalled }
 
 /// O que a vida nova precisa, montado antes de encerrar a antiga.
 enum Start { Terminal(Box<PaneSpec>,TerminalEnv), Headless(Value) }
+
+/// A marca `asleep` do sidecar, se ele for de uma sessão adormecida.
+fn asleep_of(meta:&Value) -> Option<Surface> { meta.as_object().and_then(super::gateway::asleep_surface) }
+
+/// Onde a sessão está, pelo sidecar dela: sem ele, com terminal. A adormecida não está em nenhuma, e trocar
+/// de modo nela sempre reabre.
+fn surface_now(meta:Option<&Value>) -> Option<Surface> {
+    match meta {
+        None=>Some(Surface::Terminal),
+        Some(meta) if asleep_of(meta).is_some()=>None,
+        Some(_)=>Some(Surface::Headless),
+    }
+}
+
+/// Motivos de desistir de adormecer: a sessão em uso, ou alguém mexendo nela.
+const SLEEP_GAVE_UP:[&str;8] = ["erro_sessao_iniciando","erro_sessao_esperando_resposta","erro_sessao_trabalhando","erro_fila_pendente",
+    "lifecycle_busy","lifecycle_uncertain","terminal_panel_active","session_transfer_busy"];
 
 /// O que a reabertura devolve: o spec da vida que ficou de pé (`None` sem mudança) e o que a pessoa precisa
 /// saber da troca que deu certo (motor que sumiu, registro não gravado), para a resposta mostrar.
@@ -464,7 +481,7 @@ impl RuntimeRegistry {
         let mut warnings=Vec::new();
         let surface=match self.claude_sidecar(name).await {
             Err(error)=>return Some(Err(ReopenFailure::refused(error))),
-            Ok(Some(_))=>Surface::Headless,
+            Ok(Some(meta))=>surface_now(Some(&meta)),
             Ok(None)=>{
                 let watcher=self.watcher_ref()?;
                 let to_terminal=change.reason==crate::session_open::ChangeReason::ModeSwitch && change.surface==Some(Surface::Terminal);
@@ -474,10 +491,10 @@ impl RuntimeRegistry {
                     if !to_terminal {return Some(Err(ReopenFailure::refused(error)));}
                     warnings.push(format!("o Claude do terminal ainda não foi adotado: {} ({})",error.message,error.code));
                 }
-                Surface::Terminal
+                Some(Surface::Terminal)
             },
         };
-        if change.reason==crate::session_open::ChangeReason::ModeSwitch && change.surface==Some(surface) {
+        if change.reason==ChangeReason::ModeSwitch && surface.is_some() && change.surface==surface {
             return Some(Ok(Reopened { spec:None,changed:false,warnings }));
         }
         Some(self.reopen_by_spec(name,change,between,None).await)
@@ -514,6 +531,95 @@ impl RuntimeRegistry {
         }
     }
 
+    /// A vigia de adormecer pede: a sessão Claude com terminal `name`, parada há `after` e sem nada em aberto,
+    /// tem o Claude e o terminal fechados e fica no sidecar sem terminal marcado `asleep`, sem processo; o spec
+    /// gravado segue com terminal. Tudo é conferido de novo com a porta fechada. `Ok(false)`: desistiu.
+    pub async fn sleep_claude_terminal(&self,name:&str,after:Duration) -> Result<bool,RuntimeError> {
+        if self.waking_key(name).is_some() || self.claude_sidecar(name).await?.is_some() {return Ok(false);}
+        let watcher=self.watcher_ref().ok_or_else(||refused("runtime_binding","sem a vigia do terminal"))?;
+        match watcher.adopt_claude(self,name).await {
+            Some(Ok(()))=>{},
+            None=>return Ok(false),
+            Some(Err(error))=>return Err(error),
+        }
+        let Ok(_ingress)=super::lifecycle::ClosedIngress::acquire_within(self.ingress(),name,Duration::from_secs(1)).await else {return Ok(false)};
+        let home=self.codex_environment().home;
+        // A porta fechada não exclui a troca de agente nem o acordar: os dois são conferidos aqui.
+        if super::codex_relaunch::transfer_open(&home,name,None,None) || self.waking_key(name).is_some() || self.claude_sidecar(name).await?.is_some() {
+            return Ok(false);
+        }
+        // Pergunta, fila, entrega incerta, turno e painel: a guarda da reabertura.
+        let current=match self.claude_current(name,BusyCheck::Refuse,false).await {
+            Ok(current)=>current,
+            Err(error) if SLEEP_GAVE_UP.contains(&error.code.as_str())=>return Ok(false),
+            Err(error)=>return Err(error),
+        };
+        let Life::Terminal { target }=&current.life else {return Ok(false)};
+        // Só leitura não roda sem terminal, e o sidecar dela seria o da estacionada à espera do terminal protegido.
+        if current.spec.read_only {return Ok(false);}
+        let (transcript,agent,mux)=(target.transcript.clone(),i64::from(target.metadata.agent_pid),target.binding.mux_argv.first().cloned());
+        // Parada pelo transcript: a linha da lista não acompanha a última atividade.
+        let idle=tokio::task::spawn_blocking(move||std::fs::metadata(&transcript).and_then(|m|m.modified()).ok().and_then(|at|at.elapsed().ok())).await.ok().flatten();
+        let Some(idle)=idle.filter(|idle|*idle>=after) else {return Ok(false)};
+        // Filhos ilegíveis não dizem que nenhum comando roda.
+        let quiet=tokio::task::spawn_blocking(move||{
+            let procs=SystemProcs::default();
+            procs.children(Duration::ZERO).is_ok() && crate::state::shells::shells_of(agent,&procs).is_empty()
+        }).await.unwrap_or(false);
+        if !quiet || self.panel_open(name) {return Ok(false);}
+        // Um cliente do multiplexador olhando a sessão fecharia com ela; sem resposta, também desiste.
+        let session=crate::session_open::terminal::target(target.binding.windows,name);
+        let attached=watcher.mux_text(&["display-message","-p","-t",&session,"#{session_attached}"]).await.and_then(|n|n.trim().parse::<u32>().ok());
+        if attached!=Some(0) {return Ok(false);}
+        let change=SessionChange { reason:ChangeReason::Sleep,surface:Some(Surface::Headless),account:None,permission_mode:None,model:None,effort:None,service_tier:None };
+        let mut next=current.spec.with(&change);
+        next.conversation=Some(current.sid.clone());
+        let previous=current.previous_non_plan.as_deref().and_then(PermissionMode::claude);
+        let mut meta=crate::session_open::open::headless_sidecar(&next,&current.sid,previous,current.settings.as_ref(),None);
+        // A conta ChatGPT fixa do motor: sem rota calculada aqui, é o sidecar que a guarda até o acordar.
+        if let Account::Engine { account:Some(account),.. }=&next.account {meta["engine_account"]=json!(account);}
+        let since=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0,|d|d.as_secs_f64());
+        meta["asleep"]=json!({"wake_surface":"terminal","since":since});
+        match self.stop_claude(name,&current,Surface::Headless).await {
+            Ok(())=>{},
+            // Rolando o histórico do pane: alguém está olhando.
+            Err(Stop::Before(error)) if error.code=="lifecycle_panel"=>return Ok(false),
+            Err(Stop::Before(error))=>return Err(error),
+            Err(Stop::Alive(error))=>{
+                super::actor::mark_live_error(&self.live_channel(name),&error.code,&error.message);
+                return Err(error);
+            },
+            Err(Stop::After(error))=>return Err(self.restore_claude(name,&current,error).await.error),
+        }
+        if let Some(program)=&mux {
+            // O shell do painel (`term-<nome>`) sai junto, só com a marca de que é nosso.
+            let shell=crate::state::capture::MuxProcess::new(program,crate::state::capture::TIMEOUT);
+            let hidden=format!("term-{name}");
+            if shell.is_hidden(&hidden).await && shell.kill_session(&hidden).await!=Some(true) {
+                tracing::warn!(session=%name,"shell escondido do Claude adormecido não fechou");
+            }
+        }
+        let (dir,owned,meta)=(self.claude_sidecars(),name.to_owned(),meta.as_object().cloned().unwrap_or_default());
+        let written=tokio::task::spawn_blocking(move||super::codex_sidecar::put(&dir,&owned,&meta)).await;
+        if !matches!(written,Ok(Ok(()))) {
+            // Sem o arquivo a sessão sumiria da lista sem processo: volta como estava.
+            return Err(self.restore_claude(name,&current,refused("lifecycle_sidecar_io","o arquivo da sessão adormecida não foi gravado")).await.error);
+        }
+        // Fora da fotografia: depois de um reboot ela acorda pela mensagem, não pelo restore.
+        {let owned=name.to_owned();let _=tokio::task::spawn_blocking(move||crate::session_open::restore::forget(&home,&owned)).await;}
+        tracing::info!(session=%name,idle_s=idle.as_secs(),"sessão com terminal adormecida");
+        let event=json!({"evento":"sessao.adormecida","nivel":"ok","sessao":name,"provider":"claude","parada_s":idle.as_secs()});
+        crate::diag::record(crate::diag::diary_dir_in(&self.codex_environment()),vec![event],"adormecer");
+        Ok(true)
+    }
+
+    /// Acorda a sessão Claude adormecida `name` na superfície da marca, pelo spec, como o estacionamento.
+    /// `Ok(false)`: a marca já tinha saído.
+    pub(super) async fn wake_claude(&self,name:&str,surface:Surface) -> Result<bool,RuntimeError> {
+        let change=SessionChange { reason:ChangeReason::ParkWake,surface:Some(surface),account:None,permission_mode:None,model:None,effort:None,service_tier:None };
+        self.reopen_by_spec(name,change,None,None).await.map(|reopened|reopened.changed).map_err(|failure|failure.error)
+    }
+
     async fn reopen_by_spec(&self,name:&str,change:SessionChange,between:Option<&dyn Between>,resume:Option<&str>) -> Result<Reopened,ReopenFailure> {
         let transfer=|| {
             let open=super::codex_relaunch::transfer_open(&self.codex_environment().home,name,None,None);
@@ -524,11 +630,21 @@ impl RuntimeRegistry {
         // A transferência que começou enquanto esta esperava a porta.
         transfer()?;
         // Conferido de novo sob a porta: outra troca pode ter terminado enquanto esta esperava.
-        let now=match self.claude_sidecar(name).await.map_err(ReopenFailure::refused)? {Some(_)=>Surface::Headless,None=>Surface::Terminal};
-        if change.reason==crate::session_open::ChangeReason::ModeSwitch && change.surface==Some(now) {
+        let meta=self.claude_sidecar(name).await.map_err(ReopenFailure::refused)?;
+        // Acordar a sessão que outra reabertura já acordou seria um segundo Claude na mesma conversa.
+        if change.reason==ChangeReason::ParkWake && meta.as_ref().and_then(asleep_of).is_none() {
             return Ok(Reopened { spec:None,changed:false,warnings:Vec::new() });
         }
-        let check=if change.reason==crate::session_open::ChangeReason::Reload {BusyCheck::RefuseUnlessStalled} else {BusyCheck::Refuse};
+        let now=surface_now(meta.as_ref());
+        if change.reason==ChangeReason::ModeSwitch && now.is_some() && change.surface==now {
+            return Ok(Reopened { spec:None,changed:false,warnings:Vec::new() });
+        }
+        // O acordar vem de uma mensagem: a fila esperando é justamente o que a vida nova entrega.
+        let check=match change.reason {
+            ChangeReason::Reload=>BusyCheck::RefuseUnlessStalled,
+            ChangeReason::ParkWake=>BusyCheck::Skip,
+            _=>BusyCheck::Refuse,
+        };
         let mut current=self.claude_current(name,check,resume.is_some()).await.map_err(ReopenFailure::refused)?;
         // Outra conversa leva as escolhas de plugins e skills guardadas dela, não as do processo de agora.
         if let Some(sid)=resume.filter(|sid|*sid!=current.sid) {
@@ -607,6 +723,8 @@ impl RuntimeRegistry {
         let (env,checks)=(self.codex_environment(),check!=BusyCheck::Skip);
         if let Some(meta)=self.claude_sidecar(name).await? {
             let mut spec=crate::session_open::record::claude_live(&env.home,&meta,name).map_err(|e|refused("launch_meta",&format!("registro da sessão ilegível: {e}")))?;
+            // A adormecida que era com terminal volta com ele: `/conta` e `/recarregar` nela reabrem o terminal.
+            if let Some(surface)=asleep_of(&meta) {spec.surface=surface;}
             let sid=meta["session_id"].as_str().filter(|s|!s.is_empty()).ok_or_else(||refused("lifecycle_conversation","sessão sem conversa"))?.to_owned();
             let open=self.claude_headless_view(name).await;
             let (generation,view)=match open {
@@ -897,6 +1015,15 @@ impl RuntimeRegistry {
             }
             return ReopenFailure { error:RuntimeError::new("erro_troca_conta_parada",&message),stopped:true,landed:Some(Surface::Headless) };
         }
+        // A adormecida que não acordou volta a dormir com o arquivo dela, marca incluída: nada sobe sem terminal,
+        // e a próxima mensagem tenta de novo.
+        if let Life::Headless { meta,.. }=&current.life && asleep_of(meta).is_some() {
+            let (dir,owned,meta)=(self.claude_sidecars(),name.to_owned(),meta.as_object().cloned().unwrap_or_default());
+            let asleep=tokio::task::spawn_blocking(move||super::codex_sidecar::put(&dir,&owned,&meta)).await;
+            let message=if matches!(asleep,Ok(Ok(()))) {format!("{}; a sessão continua adormecida",error.message)}
+                else {format!("{}; a sessão ficou sem processo e o arquivo dela não foi regravado",error.message)};
+            return ReopenFailure { error:RuntimeError::new(&error.code,&message),stopped:true,landed:None };
+        }
         let mut tries=vec![current.spec.clone()];
         if current.spec.surface==Surface::Terminal && !current.spec.read_only {
             let mut headless=current.spec.clone();headless.surface=Surface::Headless;tries.push(headless);
@@ -1060,6 +1187,17 @@ mod tests {
         let env = std::collections::BTreeMap::from([("PROGRAMFILES".to_owned(), dir.path().to_string_lossy().into_owned())]);
         let error = bypass_policy(&dir.path().join("conta"), &dir.path().join("cwd"), None, &env).unwrap_err();
         assert_eq!(error.code, "relaunch_policy_forbids_bypass");
+    }
+    /// Sem sidecar a sessão é com terminal; com ele, sem; adormecida não está em nenhuma, e só a marca
+    /// `asleep` de superfície conhecida conta.
+    #[test]
+    fn an_asleep_session_is_on_no_surface_until_it_wakes() {
+        assert_eq!(surface_now(None),Some(Surface::Terminal));
+        assert_eq!(surface_now(Some(&json!({"key":"k"}))),Some(Surface::Headless));
+        let asleep=json!({"key":"k","asleep":{"wake_surface":"terminal","since":1.0}});
+        assert_eq!((surface_now(Some(&asleep)),asleep_of(&asleep)),(None,Some(Surface::Terminal)));
+        let crooked=json!({"key":"k","asleep":{"wake_surface":"tela"}});
+        assert_eq!((surface_now(Some(&crooked)),asleep_of(&crooked)),(Some(Surface::Headless),None));
     }
     use crate::list::procs::ChildrenMap;
     use std::ffi::OsString;

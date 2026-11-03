@@ -33,7 +33,10 @@ S='{s}'
 read_state() {{ [ -f "$S" ] && read -r NAME PID BORN < "$S"; }}
 case "$1" in
   new-session)
+    # `$S.hold`: a subida espera aqui até o teste soltar, e marca `$S.held`.
+    while [ -f "$S.hold" ]; do : > "$S.held"; sleep 0.05; done
     printf '%s\n' "$@" > "$S.args"
+    echo "$4" >> "$S.spawns"
     [ -f "$S.nospawn" ] && exit 1
     # `$S.next-screen`: a tela do pane que nasce agora; a do pane antigo fica até aqui.
     [ -f "$S.next-screen" ] && mv "$S.next-screen" "$S.screen"
@@ -47,7 +50,9 @@ case "$1" in
     [ -f "$S.forge" ] && while IFS= read -r l; do E+=("$l"); done < "$S.forge"
     # `$S.stubborn`: este `claude` ignora o SIGTERM (só esta subida).
     pre=''; [ -f "$S.stubborn" ] && pre='trap "" TERM; ' && rm -f "$S.stubborn"
-    env -u CLAUDE_CONFIG_DIR "${{E[@]}}" bash -c "${{pre}}exec -a claude sleep 120" </dev/null >/dev/null 2>&1 &
+    # `$S.shell`: o `claude` roda este script (um comando no shell dele).
+    run='exec -a claude sleep 120'; [ -f "$S.shell" ] && run="exec -a claude /bin/bash $S.shell"
+    env -u CLAUDE_CONFIG_DIR "${{E[@]}}" bash -c "${{pre}}${{run}}" </dev/null >/dev/null 2>&1 &
     pid=$!; for i in $(seq 100); do tr '\0' ' ' < /proc/$pid/cmdline | grep -q '^claude ' && break; sleep 0.01; done
     echo "$4 $pid 1700000100" > "$S"
     sid=$(printf '%s\n' "$@" | grep -oE -- '--(resume|session-id) [0-9a-f-]{{36}}' | head -1 | cut -d' ' -f2); [ -n "$sid" ] || sid='{SID}'
@@ -55,7 +60,9 @@ case "$1" in
     dir='{sessions}'; for l in "${{E[@]}}"; do case "$l" in CLAUDE_CONFIG_DIR=*) dir="${{l#CLAUDE_CONFIG_DIR=}}/sessions";; esac; done
     mkdir -p "$dir"; echo "{{\"pid\":$pid,\"sessionId\":\"$sid\"}}" > "$dir/$pid.json";;
   has-session) read_state && [ "$3" = "=$NAME" ];;
-  kill-session) read_state && kill "$PID" 2>/dev/null; rm -f "$S";;
+  # O shell escondido `term-<nome>` existe enquanto houver `$S.term`.
+  kill-session) case "$3" in *term-*) rm -f "$S.term";; *) read_state && kill "$PID" 2>/dev/null; rm -f "$S";; esac;;
+  show-options) [ -f "$S.term" ] && [ "$4" = "=term-s1:" ] && echo 1;;
   list-panes) read_state && printf '%s\t1\t%s\t%s\t%%7\t\tclaude\t%s\t0\t0\n' "$NAME" "$PID" '{c}' "$BORN";;
   show-environment) grep "^$4=" "$S.env" || exit 1;;
   set-environment) echo "$4=$5" >> "$S.env";;
@@ -63,6 +70,7 @@ case "$1" in
     read_state || exit 1
     case "$5" in
       '#{{pane_pid}}') echo "$PID";;
+      '#{{session_attached}}') [ -f "$S.attached" ] && echo 1 || echo 0;;
       '#{{session_name}}'*) printf '%s\t%%7\t%s\t%s\t0\t0\t0\n' "$NAME" "$BORN" "$PID";;
       '#{{pane_pid}}'*) printf '%s\t%s\t%%7\t%s\n' "$PID" "$NAME" "$BORN";;
       *) exit 1;;
@@ -98,6 +106,8 @@ impl Fixture {
         std::fs::write(dir.join(format!("{SID}.jsonl")),"{\"type\":\"user\"}\n").unwrap();
     }
     fn args(&self) -> Vec<String> { std::fs::read_to_string(self.state.with_extension("args")).unwrap_or_default().lines().map(str::to_owned).collect() }
+    /// Quantos `new-session` o multiplexador falso recebeu.
+    fn spawns(&self) -> usize { std::fs::read_to_string(self.state.with_extension("spawns")).unwrap_or_default().lines().count() }
     fn agent(&self) -> Option<u32> { std::fs::read_to_string(&self.state).ok()?.split_whitespace().nth(1)?.parse().ok() }
     fn finish(&self) { if let Some(pid) = self.agent() { let _ = std::process::Command::new("kill").arg(pid.to_string()).status(); } }
 }
@@ -1215,4 +1225,236 @@ async fn resume_refuses_a_bad_id_and_a_session_that_does_not_exist() {
     let (status,body) = post(server,"resume",json!({"session_id":SID})).await;
     assert_eq!((status,body["detail"]["code"].as_str(),body["detail"]["msg"].as_str()),(404,Some("erro_sessao_inexistente"),Some("sessao nao encontrada")),"{body}");
     fx.finish();
+}
+
+fn home_env(fx:&Fixture) -> AccountEnvironment {
+    AccountEnvironment::from_map([("HOME".to_owned(),fx.home.to_string_lossy().into_owned()),("PATH".to_owned(),std::env::var("PATH").unwrap())].into())
+}
+
+/// A sessão `s1` adormecida: o spec com terminal e o sidecar sem processo com a marca `asleep`.
+fn asleep_terminal(fx:&Fixture,key:&str) {
+    fx.transcript();
+    let spec = json!({"version":1,"key":key,"name":"s1","cwd":fx.cwd,"provider":"claude","surface":"terminal","account":{"kind":"default"},
+        "account_source":"default","model":null,"effort":null,"service_tier":null,"permission_mode":"acceptEdits","subagent_model":null,
+        "customizations":null,"jev":false,"read_only":false,"worktree":null,"creator":null,"created_at":1.0});
+    std::fs::create_dir_all(fx.home.join(".hangar/session-specs")).unwrap();
+    std::fs::write(fx.home.join(format!(".hangar/session-specs/{key}.json")),spec.to_string()).unwrap();
+    fx.put_sidecar(json!({"name":"s1","provider":"claude","headless":true,"key":key,"cwd":fx.cwd,"session_id":SID,
+        "permission_mode":"acceptEdits","asleep":{"wake_surface":"terminal","since":1.0}}));
+}
+
+fn asleep_waking() -> String { hangar_server::runtime::gateway::ASLEEP_WAKING.to_owned() }
+
+/// Adormecer: o Claude e o terminal saem, o shell escondido também, e o sidecar sem processo leva a marca;
+/// o spec segue com terminal, a fila passa à geração seguinte e a sessão sai da fotografia do restore.
+#[tokio::test]
+async fn sleep_terminal_writes_asleep_sidecar_and_keeps_terminal_spec() {
+    let fx = fixture();
+    fx.transcript();
+    let key = "a1".repeat(16);
+    terminal_with_spec(&fx,&key);
+    std::fs::write(fx.state.with_extension("term"),"").unwrap();
+    let agent = fx.agent().unwrap();
+    let mut sessions = serde_json::Map::new();
+    sessions.insert(key.clone(),json!({"name":"s1","provider":"claude","conversation":SID}));
+    std::fs::create_dir_all(fx.home.join(".hangar")).unwrap();
+    std::fs::write(fx.home.join(".hangar/session-restore.json"),json!({"mux_started":1,"sessions":sessions}).to_string()).unwrap();
+    let in_snapshot = || hangar_server::session_open::restore::read(&fx.home).sessions.values().any(|entry|entry.name=="s1");
+    assert!(in_snapshot(),"a fotografia do teste tem a sessão");
+    let registry = terminal_registry(&fx).await;
+    registry.adopt_claude_terminal("s1").await.map_err(|e|e.code).unwrap();
+    let before = registry.terminal_target("s1").await.map_err(|e|e.code).unwrap().expect("adotado").generation;
+    let slept = registry.sleep_claude_terminal("s1",Duration::ZERO).await.map_err(|e|(e.code,e.message));
+    assert_eq!(slept,Ok(true));
+    assert!(gone(agent),"o Claude saiu");
+    assert!(!fx.state.exists(),"o terminal fechou");
+    assert!(!fx.state.with_extension("term").exists(),"o shell escondido fechou junto");
+    let meta:Value = serde_json::from_slice(&std::fs::read(fx.sidecar_path("s1")).unwrap()).unwrap();
+    assert_eq!((meta["asleep"]["wake_surface"].as_str(),meta["headless"].as_bool(),meta["session_id"].as_str(),meta["key"].as_str(),meta["permission_mode"].as_str()),
+        (Some("terminal"),Some(true),Some(SID),Some(key.as_str()),Some("acceptEdits")),"{meta}");
+    assert!(meta["asleep"]["since"].as_f64().is_some_and(|since|since>0.0),"{meta}");
+    assert!(meta["cano"].is_null(),"sem processo, nada sobe sem terminal: {meta}");
+    let spec:Value = serde_json::from_slice(&std::fs::read(fx.home.join(format!(".hangar/session-specs/{key}.json"))).unwrap()).unwrap();
+    assert_eq!(spec["surface"],"terminal","o spec segue com terminal");
+    assert!(!in_snapshot(),"fora da fotografia: o reboot não a reabre");
+    assert_eq!(generation(&fx,&key),before+1,"a vida que acordar é a geração seguinte");
+    assert!(registry.terminal_view("s1").await.is_none(),"nenhuma entrada fica aberta");
+}
+
+/// O terminal da sessão `s1` adotado, com o painel de terminal ligado; `shell`: um comando roda no shell do Claude.
+struct Awake { fx:Fixture, agent:u32, registry:Arc<RuntimeRegistry>, terms:Arc<hangar_server::term::Terms> }
+
+async fn awake_terminal(key:&str,shell:bool) -> Awake {
+    let fx = fixture();
+    fx.transcript();
+    if shell { std::fs::write(fx.state.with_extension("shell"),"sh -c 'while :; do sleep 1; done' &\nwait\n").unwrap(); }
+    terminal_with_spec(&fx,key);
+    let agent = fx.agent().unwrap();
+    let terms = Arc::new(hangar_server::term::Terms::default());
+    let registry = crate::runtime_open::registry_with(|registry|registry.with_codex_environment(home_env(&fx)).with_terms(terms.clone())).await;
+    registry.bind_watcher(fx_watcher(&fx));
+    registry.adopt_claude_terminal("s1").await.map_err(|e|e.code).unwrap();
+    Awake { fx,agent,registry,terms }
+}
+
+impl Awake {
+    /// Pedir para adormecer desiste, e nada muda.
+    async fn refused(self,after:Duration,what:&str) {
+        let outcome = self.registry.sleep_claude_terminal("s1",after).await.map_err(|e|(e.code,e.message));
+        // O comando do shell não morre com o Claude: sai antes.
+        let _ = std::process::Command::new("pkill").args(["-P",&self.agent.to_string()]).status();
+        let alive = !gone(self.agent);
+        self.fx.finish();
+        assert_eq!(outcome,Ok(false),"{what}");
+        assert!(alive,"{what}: o Claude seguiu vivo");
+        assert!(!self.fx.sidecar_path("s1").exists(),"{what}: sem sidecar");
+    }
+}
+
+/// Atividade entre a escolha da vigia e o fechamento: tudo é conferido de novo com a porta fechada.
+#[tokio::test]
+async fn sleep_terminal_gives_up_when_busy() {
+    // Mexida há pouco: o tempo parado conta do transcript, não da linha da lista.
+    awake_terminal(&"b1".repeat(16),false).await.refused(Duration::from_secs(3600),"transcript recente").await;
+    let awake = awake_terminal(&"b2".repeat(16),false).await;
+    let asks = awake.fx.home.join(".claude/.hangar-askq");
+    std::fs::create_dir_all(&asks).unwrap();
+    std::fs::write(asks.join(format!("{SID}.json")),json!({"tool_use_id":"t1","tool_input":{"questions":[
+        {"question":"Cor?","header":"Cor","multiSelect":false,"options":[{"label":"Azul","description":""},{"label":"Verde","description":""}]}]}}).to_string()).unwrap();
+    awake.refused(Duration::ZERO,"pergunta aberta").await;
+    let awake = awake_terminal(&"b3".repeat(16),false).await;
+    awake.registry.queue_action("s1","fila".into(),hangar_server::runtime::queue::Action::Append { text:"fila".into(),delivered:false,ts:None,
+        pre_transcript:false,entry_id:Some("fila".into()) }).await.map_err(|e|e.code).unwrap();
+    awake.refused(Duration::ZERO,"fila pendente").await;
+    awake_terminal(&"b4".repeat(16),true).await.refused(Duration::ZERO,"comando no shell").await;
+    let awake = awake_terminal(&"b5".repeat(16),false).await;
+    awake.terms.mark_open_for_test("s1",&hangar_server::diag::DiagClient::new("127.0.0.1:9".parse().unwrap(),"teste".into())).await;
+    awake.refused(Duration::ZERO,"terminal do rodapé").await;
+    let awake = awake_terminal(&"b6".repeat(16),false).await;
+    std::fs::write(awake.fx.state.with_extension("attached"),"").unwrap();
+    awake.refused(Duration::ZERO,"cliente do multiplexador olhando").await;
+}
+
+/// Duas mensagens na adormecida, a segunda no meio do acordar: as duas guardadas, um acordar só e um terminal
+/// só; a reabertura de acordar que chega depois acha a marca fora, com a porta fechada, e não reabre por cima.
+/// Guardadas como `pre_transcript` na fila que a vida nova (geração seguinte) assume, elas valem para ela
+/// mesmo com o terminal nascendo depois.
+#[tokio::test]
+async fn write_to_asleep_queues_text_and_wakes_once() {
+    let fx = fixture();
+    let key = "c1".repeat(16);
+    asleep_terminal(&fx,&key);
+    std::fs::write(fx.state.with_extension("hold"),"").unwrap();
+    let registry = fx.registry().await;
+    let (python,server) = crate::runtime_codex_watch::serve_owner(registry.clone()).await;
+    let stored = (200,json!({"ok":true,"delivered":false,"steered":false,"native":false}));
+    assert_eq!(post(server,"input",json!({"text":"um"})).await,stored,"a primeira guarda e acorda");
+    until("o acordar chegou à subida do terminal",||{let held=fx.state.with_extension("held");async move {held.exists()}}).await;
+    assert_eq!(registry.waking_key("s1"),Some(key.clone()));
+    assert_eq!(post(server,"input",json!({"text":"dois"})).await,stored,"a segunda, no meio do acordar, também vai à fila");
+    std::fs::remove_file(fx.state.with_extension("hold")).unwrap();
+    until("acordou",||{let registry=registry.clone();async move {registry.waking_key("s1").is_none()}}).await;
+    let (found,_) = registry.terminal_view("s1").await.expect("acordou com terminal");
+    assert_eq!(found,key);
+    let late = SessionChange { reason:ChangeReason::ParkWake,surface:Some(Surface::Terminal),account:None,permission_mode:None,model:None,effort:None,service_tier:None };
+    let late = registry.reopen_claude_session("s1",late,None).await.expect("é sessão Claude daqui").map_err(|f|f.error.code).unwrap();
+    assert!(!late.changed,"nada reabre por cima");
+    assert_eq!(fx.spawns(),1,"um terminal só");
+    assert!(command(&fx.args()).contains(&format!("claude --resume {SID}")),"a mesma conversa");
+    assert!(!fx.sidecar_path("s1").exists(),"a marca saiu com o sidecar");
+    assert_eq!(python.hits_to("/api/sessions/s1/input"),0,"o Python não recebe nada");
+    let raw = std::fs::read(fx.queue.join(format!("runtime/{key}.json"))).unwrap();
+    let state:Value = serde_json::from_slice(&raw).unwrap();
+    assert_eq!(state["generation"],2,"a vida nova é a geração seguinte");
+    let ours:Vec<&Value> = state["rows"].as_array().unwrap().iter().filter(|r|r["text"]=="um" || r["text"]=="dois").collect();
+    assert_eq!(ours.iter().map(|r|r["text"].as_str().unwrap()).collect::<Vec<_>>(),["um","dois"],"as duas, na ordem: {state}");
+    let (loaded,_) = hangar_server::runtime::queue::State::load(&raw).unwrap();
+    let born_later = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64()+60.0;
+    let waiting = hangar_server::runtime::queue::waiting_ids(&loaded,born_later);
+    for row in ours {
+        assert_eq!(row["pre_transcript"],true,"{row}");
+        assert!(row["delivered"]==true || waiting.iter().any(|id|row["id"]==id.as_str()),"a vida nova a entrega: {row}");
+    }
+    registry.close(&key,2).await.unwrap();
+    fx.finish();
+}
+
+/// Quem escreveu desiste logo depois de pedir: o acordar corre numa tarefa própria e o terminal sobe assim mesmo.
+#[tokio::test]
+async fn wake_survives_dropped_request() {
+    let fx = fixture();
+    let key = "c2".repeat(16);
+    asleep_terminal(&fx,&key);
+    std::fs::write(fx.state.with_extension("hold"),"").unwrap();
+    let registry = fx.registry().await;
+    let (asked,answer) = tokio::sync::oneshot::channel();
+    let caller = {let registry=registry.clone();tokio::spawn(async move {
+        let _ = asked.send(registry.adopt_now("s1").await.map(|opened|opened.map_err(|e|e.code)));
+        std::future::pending::<()>().await;
+    })};
+    assert_eq!(answer.await.unwrap(),Some(Err(asleep_waking())),"a escrita volta na hora");
+    until("o acordar chegou à subida do terminal",||{let held=fx.state.with_extension("held");async move {held.exists()}}).await;
+    caller.abort();
+    std::fs::remove_file(fx.state.with_extension("hold")).unwrap();
+    until("acordou sem ninguém esperando",||{let registry=registry.clone();async move {registry.waking_key("s1").is_none()}}).await;
+    assert!(registry.terminal_view("s1").await.is_some(),"o terminal subiu");
+    assert!(!fx.sidecar_path("s1").exists(),"o sidecar saiu dentro do acordar");
+    assert_eq!(fx.spawns(),1);
+    registry.close(&key,2).await.unwrap();
+    fx.finish();
+}
+
+/// O Rust que sobe com a adormecida e uma mensagem esperando a acorda com terminal; sem terminal ela não sobe.
+#[tokio::test]
+async fn register_wakes_asleep_with_pending_queue_in_terminal() {
+    let fx = fixture();
+    let key = "c3".repeat(16);
+    asleep_terminal(&fx,&key);
+    std::fs::create_dir_all(fx.queue.join("runtime")).unwrap();
+    std::fs::write(fx.queue.join(format!("runtime/{key}.json")),json!({"key":key,"owner_key":key,"generation":1,"name":"s1",
+        "rows":[{"id":"1","text":"oi","delivered":false}]}).to_string()).unwrap();
+    let registry = fx.registry().await;
+    registry.clone().register_claude_headless().await;
+    until("acordou na subida",||{let registry=registry.clone();async move {
+        registry.waking_key("s1").is_none() && registry.terminal_view("s1").await.is_some()}}).await;
+    assert_eq!(fx.spawns(),1,"um terminal");
+    assert!(command(&fx.args()).contains(&format!("claude --resume {SID}")),"a mesma conversa, com terminal");
+    assert!(!fx.sidecar_path("s1").exists());
+    registry.close(&key,2).await.unwrap();
+    fx.finish();
+}
+
+/// `/conta` na adormecida reabre com terminal na conta nova, levando a conversa; a marca sai com o sidecar.
+#[tokio::test]
+async fn account_switch_on_asleep_reopens_with_terminal() {
+    let fx = fixture();
+    let b = account_b(&fx);
+    logged_in_default(&fx);
+    let key = "c4".repeat(16);
+    asleep_terminal(&fx,&key);
+    let registry = fx.registry().await;
+    let server = serve_with_accounts(&fx,registry.clone()).await;
+    let (status,body) = post(server,"conta",json!({"config_dir":b})).await;
+    assert_eq!((status,&body),(200,&json!({"ok":true,"config_dir":b})),"{body}");
+    let args = fx.args();
+    assert!(args.windows(2).any(|w|w[0]=="-e" && w[1]==format!("CLAUDE_CONFIG_DIR={}",b.display())),"com terminal, na conta B: {args:?}");
+    assert!(command(&args).contains(&format!("--resume {SID}")),"{args:?}");
+    assert!(!fx.sidecar_path("s1").exists(),"a marca saiu com o sidecar");
+    let spec:Value = serde_json::from_slice(&std::fs::read(fx.home.join(format!(".hangar/session-specs/{key}.json"))).unwrap()).unwrap();
+    assert_eq!((spec["surface"].as_str(),spec["account"]["config_dir"].as_str()),(Some("terminal"),b.to_str()));
+    let (found,_) = registry.terminal_view("s1").await.expect("com terminal");
+    registry.close(&found,2).await.unwrap();
+    fx.finish();
+}
+
+/// A transferência para o Codex, que segue ao Python, é recusada na adormecida antes de repassar.
+#[tokio::test]
+async fn transfer_on_asleep_is_refused() {
+    let fx = fixture();
+    asleep_terminal(&fx,&"c5".repeat(16));
+    let (python,server) = crate::runtime_codex_watch::serve_owner(fx.registry().await).await;
+    let (status,body) = post(server,"conta",json!({"credential_id":"codex:x"})).await;
+    assert_eq!((status,body["detail"]["code"].as_str()),(409,Some("erro_sessao_adormecida")),"{body}");
+    assert_eq!(python.hits_to("/api/sessions/s1/conta"),0,"nada foi ao Python");
+    assert!(fx.sidecar_path("s1").exists(),"segue adormecida");
 }

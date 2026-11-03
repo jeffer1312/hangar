@@ -85,7 +85,8 @@ pub async fn claude(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         match runtime.adopt_now(&name).await {
             None => return not_ours(),
             // Sem sidecar o Python toma o Codex que ainda abre por Claude: o `/input` o guarda na fila dele.
-            Some(Err(error)) if error.code == crate::runtime::codex_relaunch::STARTING && rest == "input" => {
+            // A adormecida também: o `/input` guarda o texto na fila dela, e o acordar já corre à parte.
+            Some(Err(error)) if (error.code == crate::runtime::codex_relaunch::STARTING || error.code == crate::runtime::gateway::ASLEEP_WAKING) && rest == "input" => {
                 if !as_owner(&mut req, &name, &rest) { return not_ours(); }
                 return input::input(State(st), ConnectInfo(peer), req).await;
             }
