@@ -42,7 +42,14 @@ pub fn spawn(st: Arc<AppState>) -> JoinHandle<()> { tokio::spawn(watch(st)) }
 pub async fn watch(st: Arc<AppState>) {
     loop {
         tokio::time::sleep(ROUND).await;
-        round(&st).await;
+        // Pânico na rodada não pode parar a vigia de vez e calado; o sono de 5 min evita laço quente.
+        // Abortar o laço de fora tem de abortar a rodada: soltar o JoinHandle só desanexa.
+        let mut inner = crate::AbortOnDrop(tokio::spawn({ let st = st.clone(); async move { round(&st).await } }));
+        if let Err(e) = (&mut inner.0).await {
+            if e.is_panic() {
+                st.diag.report("rust.session_sleep_failed", "", "session_sleep_panicked", "vigia de adormecer caiu; recomeça");
+            }
+        }
     }
 }
 
