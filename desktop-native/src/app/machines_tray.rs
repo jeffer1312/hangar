@@ -184,7 +184,8 @@ impl Hangar {
                 let Some((input, _)) = this.machines_tray.search.as_ref() else { return };
                 if input.read(cx).focus_handle(cx).is_focused(window) { return; }
                 match event.keystroke.key.as_str() {
-                    "/" => { let input = input.clone(); input.update(cx, |state, cx| state.focus(window, cx)); }
+                    // Depois do evento: focado agora, o próprio "/" seria digitado na busca.
+                    "/" => { let input = input.clone(); window.defer(cx, move |window, cx| input.update(cx, |state, cx| state.focus(window, cx))); }
                     "down" => window.focus_next(cx),
                     "up" => window.focus_prev(cx),
                     _ => return,
@@ -313,7 +314,9 @@ impl Hangar {
         let (all_shown, all_hidden) = self.tray_sessions(key);
         let total = all_shown.len() + all_hidden.len();
         let remote = (!self.is_active_key(key)).then_some(key);
-        let closed = self.machines_tray.collapsed.contains(key);
+        let filtered = !query.is_empty() || self.machines_tray.filter != Filter::All;
+        // Com busca ou filtro a seção abre: recolhida, ela esconderia o que casou.
+        let closed = !filtered && self.machines_tray.collapsed.contains(key);
         let mut rows = Vec::new();
         // O bloco do par junta só os membros desta máquina.
         let column: Vec<grouping::Row> = sessions.iter().map(|&session| grouping::Row { server: key, session, invite: m.invite }).collect();
@@ -331,7 +334,6 @@ impl Hangar {
             rows.push(self.render_hidden_header(key, hidden.len(), window, cx));
             if self.hidden_open() { rows.extend(hidden.iter().map(|s| self.render_machine_session(s, key, m.invite, true, window, cx))); }
         }
-        let filtered = !query.is_empty() || self.machines_tray.filter != Filter::All;
         let working = all_shown.iter().chain(&all_hidden).filter(|s| Filter::Working.keeps(s)).count();
         let waiting = all_shown.iter().chain(&all_hidden).filter(|s| Filter::Waiting.keeps(s)).count();
         let tally = |n: usize, key: &str, (bg, fg): (Hsla, Hsla)| (n > 0).then(|| div().flex_shrink_0().px(px(6.)).rounded_full().bg(bg).text_color(fg)
@@ -355,9 +357,12 @@ impl Hangar {
                 cx.notify();
             }));
         let empty = rows.is_empty();
+        let retrying = m.key.clone();
         let retry = remote.is_some().then(|| Button::new(SharedString::from(format!("machines-tray-retry-{key}"))).outline().xsmall()
             .label(tr("machines_tray_retry"))
-            .on_click(cx.listener(|this, _, _, cx| {
+            .on_click(cx.listener(move |this, _, _, cx| {
+                // Volta a "Carregando" até a nova resposta: sem isso o clique não muda nada na tela.
+                if let Some(list) = this.remote.get_mut(&retrying) { list.error = None; list.loaded = false; }
                 this.start_remote_lists();
                 this.redraw(panes::Area::Nav, cx);
                 cx.notify();
