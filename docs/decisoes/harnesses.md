@@ -1099,7 +1099,9 @@ primeiras ferramentas; a reaprovação reativa gravou o `config.toml` às 08:23:
   `manager.rs`), que também reinstala o cache dos plugins, então a do app-server não acha nada novo.
   Custa ~5 s com 10 marketplaces e nada a atualizar (medido duas vezes: 5,6 s e 5,2 s); roda depois
   da atualização do Codex porque no Windows o binário não troca com outro `codex` aberto. Falha ou
-  prazo de 90 s só registram e a abertura segue.
+  prazo de 20 s só registram e a abertura segue (sem rede, o `git fetch` não segura a sessão; o
+  observador do ator reaprova o que mudar depois). Conta sem `plugins/cache` ganha a pasta vazia
+  na abertura, para o observador ligar desde o começo.
 - Uma reinstalação feita por qualquer sessão da conta quebra a confiança das outras sessões abertas
   dela; cada ator recarrega a própria, porque o `reloadUserConfig` só vale no app-server que recebe a
   escrita.

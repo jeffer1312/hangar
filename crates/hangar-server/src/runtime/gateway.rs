@@ -274,7 +274,8 @@ async fn upgrade_marketplaces(program:&[String],env:&std::collections::BTreeMap<
         Err(_) => tracing::warn!("codex: conferência dos marketplaces passou do prazo"),
     }
 }
-const MARKETPLACES_TIMEOUT:Duration = Duration::from_secs(90);
+/// Toda abertura espera a conferência: sem rede, o `git fetch` não pode segurar a sessão; o ator cobre o resto.
+const MARKETPLACES_TIMEOUT:Duration = Duration::from_secs(20);
 
 /// Marca da configuração que o `claude -p` leu ao nascer: o botão Recarregar e a adoção da reserva
 /// pré-aquecida comparam com ela. Bloqueante.

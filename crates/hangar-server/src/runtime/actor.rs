@@ -2356,7 +2356,10 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
             // Só acorda; a limpeza da retenção solta é a do topo do laço.
             _ = turn_hold_released.notified(), if turn_hold.is_some() => {}
             changed = async { plugins.as_mut().unwrap().changes.changed().await }, if plugins.is_some() => {
-                if changed.is_ok() { plugins_due = Some(Instant::now() + PLUGINS_SETTLE); } else { plugins = None; }
+                if changed.is_ok() { plugins_due = Some(Instant::now() + PLUGINS_SETTLE); } else {
+                    tracing::warn!(session=%target.name,"codex: observador de plugins encerrou; a reaprovação espera a recusa do hook");
+                    plugins = None;
+                }
             }
             _ = tokio::time::sleep_until(tokio::time::Instant::from_std(plugins_due.unwrap_or_else(Instant::now))), if plugins_due.is_some() => {
                 plugins_due = None;

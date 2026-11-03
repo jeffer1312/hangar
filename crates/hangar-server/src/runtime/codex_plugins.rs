@@ -40,6 +40,8 @@ pub fn subscribe(cache: &Path) -> notify::Result<Subscription> {
     let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
         if relevant(&event) { sender.send_modify(|count| *count += 1); }
     })?;
+    // Conta que ainda não instalou plugin não tem a pasta; sem ela o observador não liga.
+    std::fs::create_dir_all(cache)?;
     watcher.watch(cache, RecursiveMode::Recursive)?;
     let live = Arc::new(Shared { _watcher: watcher, changes });
     shared.insert(cache.to_path_buf(), Arc::downgrade(&live));

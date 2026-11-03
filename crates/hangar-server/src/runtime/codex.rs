@@ -830,7 +830,13 @@ impl Engine {
         let reply = |effects:&mut Vec<Effect>,disposition,payload| {
             if let Some(parent) = parent { effects.push(Effect::Reply { operation_id:parent.into(),disposition,payload }); }
         };
-        if early && (rpc.method != "hooks/list" || !line["error"].is_null() || !line["result"]["data"].is_array()) { return; }
+        if early && (rpc.method != "hooks/list" || !line["error"].is_null() || !line["result"]["data"].is_array()) {
+            if !line["error"].is_null() || rpc.method == "hooks/list" {
+                tracing::warn!(session=%self.state.session,method=%rpc.method,error=%line["error"]["message"].as_str().unwrap_or("sem a lista de hooks"),
+                    "codex: reaprovação antecipada falhou; a recusa do hook dispara a reativa");
+            }
+            return;
+        }
         // Uma rodada por turno: a recusa que voltar depois dela é falha de verdade e aparece como as outras.
         if rpc.method != "hooks/list" || !line["error"].is_null() { self.hook_trust_settled = true; }
         if !line["error"].is_null() {
@@ -853,7 +859,10 @@ impl Engine {
             return;
         };
         if entries.iter().any(|entry|["errors","warnings"].iter().any(|field|entry[field].as_array().is_some_and(|items|!items.is_empty()))) {
-            if early { return; }
+            if early {
+                tracing::warn!(session=%self.state.session,"codex: reaprovação antecipada parou; o Codex não carregou todos os hooks");
+                return;
+            }
             self.hook_trust_settled = true;
             self.hook_notice("hook_failed",&format!("o Codex não conseguiu carregar todos os hooks. {review}"),effects);
             reply(effects,Disposition::Rejected,json!({"error":"O Codex não conseguiu carregar todos os hooks","approval_required":true}));
@@ -1922,7 +1931,11 @@ impl Engine {
                 for rpc in self.rpc.values_mut() {
                     if !rpc.timed_out && clock.monotonic_s >= rpc.deadline {
                         rpc.timed_out = true;
-                        trust_expired |= rpc.continuation.as_ref().is_some_and(|next|next["kind"] == "hook_trust" && next["early"] != true);
+                        let hook_trust = rpc.continuation.as_ref().filter(|next|next["kind"] == "hook_trust");
+                        if hook_trust.is_some_and(|next|next["early"] == true) {
+                            tracing::warn!(session=%self.state.session,method=%rpc.method,"codex: reaprovação antecipada sem resposta");
+                        }
+                        trust_expired |= hook_trust.is_some_and(|next|next["early"] != true);
                         subscribe_lost |= subscribe_rpc(rpc) && rpc.params["threadId"] == self.thread_id.as_str();
                         uncertain.extend(reserved_entry(rpc));
                         effects.push(Effect::Reply { operation_id:rpc.operation_id.clone(),disposition:Disposition::Unknown,payload:json!({"error":"RPC sem resposta"}) });
