@@ -17,6 +17,8 @@ const POLL: Duration = Duration::from_millis(250);
 /// Nomes das linhas que a vigia deve tentar adormecer. Claude sem terminal fica fora: ele já estaciona sozinho.
 pub fn candidates(rows: &[SessionRow], cfg: &Sleep, now: f64) -> Vec<String> {
     let limit = f64::from(cfg.after_minutes) * 60.0;
+    // Executor e revisor de orq não levam `orq_arbiter`: o grupo só aparece na linha `orq` da execução.
+    let orq_groups: Vec<&str> = rows.iter().filter(|r| r.provider == "orq").filter_map(|r| r.pair_gid.as_deref()).collect();
     rows.iter().filter(|r| {
         matches!(r.provider.as_str(), "claude" | "codex")
             && !(r.provider == "claude" && r.headless)
@@ -28,6 +30,12 @@ pub fn candidates(rows: &[SessionRow], cfg: &Sleep, now: f64) -> Vec<String> {
             && r.linked_by.is_none()
             && !rows.iter().any(|c| c.linked_by.as_deref() == Some(r.name.as_str()))
             && r.orq_arbiter.is_none()
+            && !r.pair_gid.as_deref().is_some_and(|g| orq_groups.contains(&g))
+            // Adormecer troca a vida da sessão, e a vida nova encerra o convite e o par de fora.
+            && !r.shared
+            && r.owner.is_none()
+            && r.pair_externals.as_ref().is_none_or(|p| p.is_empty())
+            && r.pair_external.is_none()
             && !r.loop_status.as_deref().is_some_and(|s| crate::loops::store::ACTIVE.contains(&s))
             && r.last_activity.is_some_and(|last| now - last > limit)
     }).map(|r| r.name.clone()).collect()
@@ -73,20 +81,14 @@ async fn round(st: &Arc<AppState>) {
     };
     let Some(rows) = rows else { return };
     let after = Duration::from_secs(u64::from(cfg.after_minutes) * 60);
-    let mut slept = Vec::new();
+    // O `sessao.adormecida` do diário sai do runtime, que sabe o tempo parado.
     for name in candidates(&rows, &cfg, now()) {
         let Some(row) = rows.iter().find(|r| r.name == name) else { continue };
         let result = if row.provider == "codex" { registry.sleep_codex(&name, after).await }
             else { registry.sleep_claude_terminal(&name, after).await };
-        match result {
-            Ok(true) => slept.push(name),
-            Ok(false) => {}
-            Err(_) => st.diag.report("rust.session_sleep_failed", &name, "session_sleep_failed", "a sessão oculta não adormeceu"),
+        if result.is_err() {
+            st.diag.report("rust.session_sleep_failed", &name, "session_sleep_failed", "a sessão oculta não adormeceu");
         }
-    }
-    if !slept.is_empty() {
-        let events = slept.iter().map(|n| serde_json::json!({"evento":"sessao.adormecida","nivel":"ok","sessao":n})).collect();
-        crate::diag::record(crate::diag::diary_dir(), events, "adormecer");
     }
 }
 
@@ -125,6 +127,8 @@ mod tests {
             json!({"problema":"x"}), json!({"linked_by":"p"}), json!({"orq_arbiter":"o"}),
             json!({"loop_status":"running"}), json!({"loop_status":"paused_awaiting"}), json!({"provider":"pi"}),
             json!({"provider":"omp"}), json!({"provider":"kimi"}), json!({"asleep":true}), json!({"headless":true}),
+            json!({"shared":true}), json!({"owner":"convidado"}), json!({"pair_external":{"alias":"x"}}),
+            json!({"pair_externals":[{"alias":"x","owner":"o","session":"s","address":"https://a.ts.net:8443","level":"view","pending":false}]}),
         ] {
             assert!(picks(vec![row(extra.clone())]).is_empty(), "{extra}");
         }
@@ -134,6 +138,20 @@ mod tests {
     fn parent_of_a_linked_child_is_left_out() {
         let rows = vec![row(json!({})), row(json!({"name":"b","linked_by":"a"}))];
         assert!(picks(rows).is_empty());
+    }
+
+    #[test]
+    fn members_of_a_live_orq_group_are_left_out() {
+        let rows = vec![
+            row(json!({"pair_gid":"g1"})), row(json!({"name":"b","pair_gid":"g2"})),
+            row(json!({"name":"g1-orq","provider":"orq","pair_gid":"g1","orq_arbiter":"arb"})),
+        ];
+        assert_eq!(picks(rows), vec!["b"]);
+    }
+
+    #[test]
+    fn empty_external_pair_list_does_not_block() {
+        assert_eq!(picks(vec![row(json!({"pair_externals":[]}))]), vec!["a"]);
     }
 
     #[test]
