@@ -126,6 +126,8 @@ pub struct SessionInfo {
     #[serde(default)] pub shared: bool,
     /// Fora da lista principal (à mão ou pelo automático do servidor); a sessão segue rodando.
     #[serde(default)] pub hidden_from_list: bool,
+    /// Oculta e parada, com o processo fechado pelo servidor; a próxima mensagem a reabre na mesma conversa.
+    #[serde(default)] pub asleep: bool,
     /// Nome do convidado que criou a sessão; `None` = dono do servidor.
     pub owner: Option<String>,
     /// Só na linha `orq`: a sessão do árbitro atual, que o "Falar com o árbitro" abre.

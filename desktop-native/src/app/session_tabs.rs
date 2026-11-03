@@ -518,7 +518,11 @@ impl Hangar {
         // Quem espera a pessoa vem primeiro: com muitas filhas as últimas etiquetas ficam fora da aba.
         kids.sort_by_key(|(_, s, _)| !waits(s));
         let waiting = kids.iter().filter(|(_, s, _)| waits(s)).count();
-        let state = |s: &SessionInfo| tr(&format!("chip_{}", if s.limited == Some(true) { "limited" } else { s.state.as_str() }));
+        let state = |s: &SessionInfo| {
+            let text = tr(&format!("chip_{}", if s.limited == Some(true) { "limited" } else { s.state.as_str() }));
+            // A etiqueta da filha e a aba-mãe não têm largura para o selo: ele vai na dica e no que o leitor de tela diz.
+            if s.asleep { format!("{text} · {}", tr_shared("session_asleep_badge", &[])) } else { text }
+        };
         let host = self.server_label(cx);
         let machine = |t: &Target| self.server_entry(&t.server).map(|s| s.label.clone()).unwrap_or_else(|| host.clone());
         let multi = self.multi_server();
@@ -663,6 +667,8 @@ impl Hangar {
             label.push_str(&format!(" · {}", tr_shared("sessao_grupo_pareado", &[("label", group)])));
         }
         if session.pending_questions > 0 { label.push_str(&format!(" · ? {}", session.pending_questions)); }
+        let asleep = tr_shared("session_asleep_badge", &[]);
+        if session.asleep { label.push_str(&format!(" · {asleep}")); }
         // A aba de trás de um grupo é posicionada pela faixa dele: sem placa.
         let plate = slot.is_none().then(|| self.tab_plate(target, session, on, self.multi_server().then(|| machine.to_owned()), machines)).flatten();
         let ctx = context_pct(session);
@@ -685,6 +691,8 @@ impl Hangar {
             .when(!appearance::get().tab_preview, |el| el.tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(label.clone()).build(window, cx)))
             .child(mark).children(self.session_number_badge(target))
             .child(title)
+            // A aba estreita de trás da faixa não tem largura para o selo: lá ele fica só na dica.
+            .when(session.asleep && !compact, |el| el.child(badge(asleep, theme::muted())))
             .when(session.pending_questions > 0, |el| el.child(div().flex_shrink_0().text_size(px(if compact { 9. } else { 12. })).text_color(theme::warning())
                 .child(if compact { format!("?{}", session.pending_questions) } else { format!("? {}", session.pending_questions) })))
             .on_click(cx.listener(move |this, _, window, cx| this.open_target(&pick, window, cx)))

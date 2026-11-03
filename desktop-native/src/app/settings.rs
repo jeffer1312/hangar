@@ -96,7 +96,7 @@ const PAGE_ROWS: &[(Page, &[(&str, Option<&str>)])] = &[
     (Page::General, &[("settings_language", Some("settings_language_desc")), ("settings_currency", Some("settings_currency_search")),
         ("settings_tray", Some("settings_tray_desc")), ("settings_chrome_autofill", Some("settings_chrome_autofill_desc")),
         ("settings_full_chrome", Some("settings_full_chrome_desc"))]),
-    (Page::Sessions, &[("settings_auto_hide_label", None)]),
+    (Page::Sessions, &[("settings_auto_hide_label", None), ("settings_sleep_title", Some("settings_sleep_hint"))]),
     (Page::Diary, &[("settings_diary_rules", Some("settings_diary_rule_private")), ("settings_diary_download", Some("settings_diary_rule_local")),
         ("settings_diary_recent", None)]),
     (Page::About, &[("settings_about_app", None), ("settings_about_server", None), ("settings_about_update", Some("settings_about_update_desc")),

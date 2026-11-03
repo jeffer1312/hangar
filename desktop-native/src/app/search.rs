@@ -1195,7 +1195,9 @@ impl Hangar {
                             .child(div().truncate().text_size(px(13.5)).font_weight(FontWeight::MEDIUM).child(highlighted(s.name.clone(), &words)))
                             // A busca é o caminho até a oculta: a marca diz por que ela não está na barra.
                             .when(s.hidden_from_list, |el| el.child(div().flex_shrink_0().px(px(6.)).rounded_full().bg(theme::inset())
-                                .text_size(px(10.5)).text_color(theme::muted()).child(tr("sidebar_hidden_badge")))))
+                                .text_size(px(10.5)).text_color(theme::muted()).child(tr("sidebar_hidden_badge"))))
+                            .when(s.asleep, |el| el.child(div().flex_shrink_0().px(px(6.)).rounded_full().bg(theme::inset())
+                                .text_size(px(10.5)).text_color(theme::muted()).child(tr_shared("session_asleep_badge", &[])))))
                         .children(place.map(|c| div().truncate().text_size(px(11.5)).text_color(theme::faint()).child(c))))
                     .children(s.last_activity.map(|t| div().flex_shrink_0().text_size(px(12.)).text_color(theme::faint()).child(ago(t))))
                     .into_any_element()

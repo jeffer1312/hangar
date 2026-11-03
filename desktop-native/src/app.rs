@@ -6162,7 +6162,8 @@ impl Hangar {
         let outcome = selected.then(|| self.selected_key()).flatten().and_then(|key| self.delivery.outcome(&key));
         let queued = selected && self.history_installed && self.pending_count() > 0;
         let state = conversation_row_state(&session, outcome, queued);
-        let status_label = tr(&format!("sidebar_state_{state}"));
+        let mut status_label = tr(&format!("sidebar_state_{state}"));
+        if session.asleep { status_label.push_str(&format!(" · {}", tr_shared("session_asleep_badge", &[]))); }
         let label = self.session_number_label(&target,
             match folder_name(&session) { Some(folder) => format!("{name} · {folder} · {status_label}"), None => format!("{name} · {status_label}") });
         let branch = shown_branch(&session).filter(|_| !compact);
@@ -6203,6 +6204,7 @@ impl Hangar {
             .when(session.pending_questions > 0, |el| el.child(div().flex_shrink_0().text_xs().text_color(theme::warning())
                 .child(format!("? {}", session.pending_questions))))
             .when(session.tracked == Some(false), |el| el.child(badge(tr("untracked_badge"), theme::muted())))
+            .when(session.asleep, |el| el.child(badge(tr_shared("session_asleep_badge", &[]), theme::muted())))
             .when(session.orq(), |el| el.child(badge(tr_shared("orq_row_badge", &[]), theme::muted())))
             .when_some(session.owner.clone(), |el, owner| el.child(badge(format!("👤 {owner}"), theme::muted())))
             .children(pair_badges(&session))
@@ -6341,6 +6343,7 @@ impl Hangar {
                 .when(session.headless, |el| el.child(div().id(SharedString::from(format!("row-headless-{row_key}"))).flex_shrink_0().flex().opacity(0.72)
                     .tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new(tr("create_mode_headless")).build(window, cx))
                     .child(chrome::no_terminal_mark(12., theme::muted()))))
+                .when(session.asleep, |el| el.child(badge(tr_shared("session_asleep_badge", &[]), theme::muted())))
                 .when(session.orq(), |el| el.child(badge(tr_shared("orq_row_badge", &[]), theme::muted())))
                 .when(session.shared, |el| el.child(div().id(SharedString::from(format!("row-shared-{row_key}"))).flex_shrink_0().flex()
                     .tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new(tr_shared("sessao_compartilhada", &[])).build(window, cx))
@@ -6356,6 +6359,7 @@ impl Hangar {
         let mut spoken = vec![name.clone()];
         if let Some(label) = &agent_label { spoken.push(label.clone()); }
         spoken.push(state_label);
+        if session.asleep { spoken.push(tr_shared("session_asleep_badge", &[])); }
         if session.headless { spoken.push(tr("create_mode_headless")); }
         session_row_frame(SharedString::from(row_id), selected)
             .when_some(focus.as_ref(), |el, focus| el.track_focus(focus))

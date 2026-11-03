@@ -7,10 +7,29 @@ use gpui_kit::component::switch::Switch;
 const MAX_HOURS: u32 = 168;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
-struct AutoHide { enabled: bool, after_minutes: u32 }
+struct Sleep { enabled: bool, after_minutes: u32 }
 
-impl AutoHide {
-    fn hours(self) -> u32 { ((self.after_minutes + 30) / 60).clamp(1, MAX_HOURS) }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+struct AutoHide {
+    enabled: bool,
+    after_minutes: u32,
+    /// Servidor antigo não manda `sleep` e recusa o campo (422): só vai na gravação a quem o trouxe na leitura.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sleep: Option<Sleep>,
+}
+
+fn hours(minutes: u32) -> u32 { ((minutes + 30) / 60).clamp(1, MAX_HOURS) }
+
+fn parse_hours(text: &str) -> Option<u32> { text.trim().parse::<u32>().ok().filter(|h| (1..=MAX_HOURS).contains(h)) }
+
+/// O valor mais comum; no empate, o primeiro da lista.
+fn most_common<T: Copy + PartialEq>(values: &[T]) -> Option<T> {
+    let mut best: Option<(T, usize)> = None;
+    for v in values {
+        let n = values.iter().filter(|o| *o == v).count();
+        if best.is_none_or(|(_, top)| n > top) { best = Some((*v, n)); }
+    }
+    best.map(|(v, _)| v)
 }
 
 /// Uma máquina da pessoa: a leitura (`None` esperando) e o resultado da última gravação.
@@ -25,37 +44,47 @@ pub(super) struct AutoHidePage {
     draft: Option<AutoHide>,
     edited: bool,
     hours_text: String,
+    sleep_hours_text: String,
     /// Máquinas com a gravação ainda sem resposta.
     saving: usize,
     hours: Option<(Entity<InputState>, Subscription)>,
+    sleep_hours: Option<(Entity<InputState>, Subscription)>,
 }
 
 pub(super) struct AutoHideReply { generation: u64, key: String, write: bool, result: Result<Value, Failure> }
 
 impl AutoHidePage {
+    fn reads(&self) -> impl Iterator<Item = AutoHide> + '_ { self.machines.iter().filter_map(|m| m.read.as_ref()?.as_ref().ok().copied()) }
+
     /// A configuração mais comum entre as leituras boas; no empate, a da primeira máquina da lista (a ativa vem antes).
-    /// Mesma regra do `autoHideDiverges` do core.
+    /// Mesma regra do `autoHideDiverges` do core. O adormecer conta só entre as máquinas que o têm.
     fn reference(&self) -> Option<AutoHide> {
-        let ok: Vec<AutoHide> = self.machines.iter().filter_map(|m| m.read.as_ref()?.as_ref().ok().copied()).collect();
-        let mut best: Option<(AutoHide, usize)> = None;
-        for v in &ok {
-            let n = ok.iter().filter(|o| *o == v).count();
-            if best.is_none_or(|(_, top)| n > top) { best = Some((*v, n)); }
-        }
-        best.map(|(v, _)| v)
+        let hide: Vec<(bool, u32)> = self.reads().map(|v| (v.enabled, v.after_minutes)).collect();
+        let sleep: Vec<Sleep> = self.reads().filter_map(|v| v.sleep).collect();
+        most_common(&hide).map(|(enabled, after_minutes)| AutoHide { enabled, after_minutes, sleep: most_common(&sleep) })
     }
 
     /// Máquinas lidas com configuração diferente da referência; leitura que falhou aparece como erro, não aqui.
+    /// A máquina sem adormecer não difere por isso: ela não tem o que acertar.
     fn differs(&self) -> Vec<&str> {
-        let Some(reference) = self.reference() else { return Vec::new() };
-        self.machines.iter().filter(|m| matches!(&m.read, Some(Ok(v)) if *v != reference)).map(|m| m.label.as_str()).collect()
+        let Some(r) = self.reference() else { return Vec::new() };
+        let same = |v: &AutoHide| v.enabled == r.enabled && v.after_minutes == r.after_minutes && (v.sleep.is_none() || v.sleep == r.sleep);
+        self.machines.iter().filter(|m| matches!(&m.read, Some(Ok(v)) if !same(v))).map(|m| m.label.as_str()).collect()
     }
 
     /// O que gravar; `None` com as horas digitadas fora do limite.
     fn value(&self) -> Option<AutoHide> {
         let mut value = self.draft?;
-        if value.enabled { value.after_minutes = self.hours_text.trim().parse::<u32>().ok().filter(|h| (1..=MAX_HOURS).contains(h))? * 60; }
+        if value.enabled { value.after_minutes = parse_hours(&self.hours_text)? * 60; }
+        if let Some(sleep) = value.sleep.as_mut().filter(|s| s.enabled) { sleep.after_minutes = parse_hours(&self.sleep_hours_text)? * 60; }
         Some(value)
+    }
+
+    /// O valor que vai para uma máquina: o adormecer só para quem o trouxe na leitura; leitura sem resposta ou que falhou
+    /// pode ser de servidor antigo, e sem o campo o servidor novo mantém o que tem gravado.
+    fn payload(&self, key: &str, value: AutoHide) -> AutoHide {
+        let supports = self.machines.iter().any(|m| m.key == key && matches!(&m.read, Some(Ok(v)) if v.sleep.is_some()));
+        AutoHide { sleep: value.sleep.filter(|_| supports), ..value }
     }
 
     fn dirty(&self) -> bool { self.value().is_some_and(|v| Some(v) != self.reference()) }
@@ -108,7 +137,10 @@ impl Hangar {
         for m in &mut page.machines { m.wrote = None; }
         page.saving = machines.iter().filter(|(key, ..)| page.machines.iter().any(|m| &m.key == key)).count();
         for (key, _, api) in machines {
-            if self.auto_hide.machines.iter().any(|m| m.key == key) { self.request_auto_hide(key, api, Some(value)); }
+            if self.auto_hide.machines.iter().any(|m| m.key == key) {
+                let value = self.auto_hide.payload(&key, value);
+                self.request_auto_hide(key, api, Some(value));
+            }
         }
         cx.notify();
     }
@@ -131,12 +163,19 @@ impl Hangar {
         }
         if !page.edited && let Some(reference) = page.reference() {
             page.draft = Some(reference);
-            page.hours_text = reference.hours().to_string();
+            page.hours_text = hours(reference.after_minutes).to_string();
+            page.sleep_hours_text = reference.sleep.map(|s| hours(s.after_minutes).to_string()).unwrap_or_default();
             // O texto guardado antes do `set_value` faz o aviso de mudança do campo não contar como edição.
-            if let Some((input, _)) = &page.hours {
-                let text = page.hours_text.clone();
+            for (input, text) in [(&page.hours, &page.hours_text), (&page.sleep_hours, &page.sleep_hours_text)] {
+                let Some((input, _)) = input else { continue };
+                let text = text.clone();
                 input.update(cx, |input, cx| input.set_value(text, window, cx));
             }
+        } else if let Some(sleep) = page.reference().and_then(|r| r.sleep)
+            && let Some(draft) = page.draft.as_mut().filter(|d| d.sleep.is_none()) {
+            // Já editado quando chegou a primeira máquina com adormecer: a linha aparece sem desfazer a edição.
+            draft.sleep = Some(sleep);
+            page.sleep_hours_text = hours(sleep.after_minutes).to_string();
         }
         cx.notify();
     }
@@ -174,15 +213,10 @@ impl Hangar {
                 .on_click(cx.listener(|this, _, _, cx| this.auto_hide_opened(cx))))).children(see_hidden).into_any_element();
         }
         if s.hours.is_none() {
-            let input = cx.new(|cx| InputState::new(window, cx).default_value(self.auto_hide.hours_text.clone()));
-            let sub = cx.subscribe_in(&input, window, |this: &mut Hangar, input, event: &InputEvent, _, cx| {
-                if !matches!(event, InputEvent::Change) { return; }
-                let text = input.read(cx).value().to_string();
-                if text == this.auto_hide.hours_text { return; }
-                this.auto_hide.hours_text = text;
-                this.edit_auto_hide(cx);
-            });
-            self.auto_hide.hours = Some((input, sub));
+            self.auto_hide.hours = Some(hours_input(self.auto_hide.hours_text.clone(), |p| &mut p.hours_text, window, cx));
+        }
+        if self.auto_hide.draft.is_some_and(|d| d.sleep.is_some()) && self.auto_hide.sleep_hours.is_none() {
+            self.auto_hide.sleep_hours = Some(hours_input(self.auto_hide.sleep_hours_text.clone(), |p| &mut p.sleep_hours_text, window, cx));
         }
         let s = &self.auto_hide;
         let (Some(draft), Some((input, _))) = (s.draft, &s.hours) else { return page.into_any_element() };
@@ -198,7 +232,29 @@ impl Hangar {
                     if let Some(draft) = &mut this.auto_hide.draft { draft.enabled = *on; }
                     this.edit_auto_hide(cx);
                 })));
-        page = page.child(settings_box().child(self.row(IconName::EyeOff, "settings_auto_hide_label", description, true, control.into_any_element())));
+        // Servidor sem adormecer não traz `sleep`: sem nenhuma máquina com ele, a linha não aparece.
+        let sleep_row = match (draft.sleep, &s.sleep_hours) {
+            (Some(sleep), Some((sleep_input, _))) => {
+                let hint = tr("settings_sleep_hint");
+                let description = match value.and_then(|v| v.sleep).filter(|v| v.enabled) {
+                    Some(v) => format!("{} · {hint}", tr("settings_sleep_hours").replace("{n}", &(v.after_minutes / 60).to_string())),
+                    None => hint,
+                };
+                let control = div().flex().items_center().gap_3()
+                    .when(sleep.enabled, |el| el.child(div().w(px(72.)).child(Input::new(sleep_input).id("auto-hide-sleep-hours").small().disabled(busy)
+                        .accessibility_id("auto-hide-sleep-hours").aria_label(tr("settings_sleep_title")))))
+                    .child(Switch::new("auto-hide-sleep-enabled").checked(sleep.enabled).disabled(busy).accessibility_label(tr("settings_sleep_title"))
+                        .on_click(cx.listener(|this, on: &bool, _, cx| {
+                            if this.auto_hide.saving > 0 { return; }
+                            if let Some(sleep) = this.auto_hide.draft.as_mut().and_then(|d| d.sleep.as_mut()) { sleep.enabled = *on; }
+                            this.edit_auto_hide(cx);
+                        })));
+                Some(self.row(IconName::Moon, "settings_sleep_title", Some(description), true, control.into_any_element()))
+            }
+            _ => None,
+        };
+        page = page.child(settings_box().child(self.row(IconName::EyeOff, "settings_auto_hide_label", description, true, control.into_any_element()))
+            .children(sleep_row));
         let s = &self.auto_hide;
         if value.is_none() {
             page = page.child(line("auto-hide-invalid".into(), tr_shared("session_auto_hide_invalid", &[]), theme::danger()).role(Role::Alert));
@@ -226,9 +282,24 @@ impl Hangar {
     }
 }
 
+/// Campo de horas: `text` é o guardado em `field`, que segue o que a pessoa digita.
+fn hours_input(text: String, field: fn(&mut AutoHidePage) -> &mut String, window: &mut Window, cx: &mut Context<Hangar>)
+    -> (Entity<InputState>, Subscription) {
+    let input = cx.new(|cx| InputState::new(window, cx).default_value(text));
+    let sub = cx.subscribe_in(&input, window, move |this: &mut Hangar, input, event: &InputEvent, _, cx| {
+        if !matches!(event, InputEvent::Change) { return; }
+        let text = input.read(cx).value().to_string();
+        let kept = field(&mut this.auto_hide);
+        if text == *kept { return; }
+        *kept = text;
+        this.edit_auto_hide(cx);
+    });
+    (input, sub)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{AutoHide, AutoHidePage, Machine};
+    use super::{AutoHide, AutoHidePage, Machine, Sleep};
 
     fn machine(label: &str, read: Option<Result<AutoHide, String>>) -> Machine {
         Machine { key: label.into(), label: label.into(), read, wrote: None }
@@ -236,7 +307,7 @@ mod tests {
 
     #[test]
     fn auto_hide_differs_names_machines_unlike_the_majority() {
-        let (off, on) = (AutoHide { enabled: false, after_minutes: 180 }, AutoHide { enabled: true, after_minutes: 180 });
+        let (off, on) = (AutoHide { enabled: false, after_minutes: 180, sleep: None }, AutoHide { enabled: true, after_minutes: 180, sleep: None });
         let mut page = AutoHidePage { machines: vec![machine("nb", None), machine("vps", Some(Ok(off))), machine("dp", Some(Ok(on))),
             machine("win", Some(Err("x".into())))], ..Default::default() };
         assert_eq!(page.reference(), Some(off), "empate: a primeira que respondeu");
@@ -248,12 +319,32 @@ mod tests {
 
     #[test]
     fn auto_hide_hours_outside_the_screen_limits_cannot_be_saved() {
-        let mut page = AutoHidePage { draft: Some(AutoHide { enabled: true, after_minutes: 180 }), ..Default::default() };
+        let mut page = AutoHidePage { draft: Some(AutoHide { enabled: true, after_minutes: 180, sleep: None }), ..Default::default() };
         for typed in ["", "0", "169", "três"] {
             page.hours_text = typed.into();
             assert!(page.value().is_none(), "{typed}");
         }
         page.hours_text = "168".into();
         assert_eq!(page.value().map(|v| v.after_minutes), Some(10080));
+    }
+
+    #[test]
+    fn sleep_goes_only_to_machines_that_reported_it_and_old_ones_do_not_differ() {
+        let sleep = Sleep { enabled: true, after_minutes: 1440 };
+        let (old, new) = (AutoHide { enabled: true, after_minutes: 180, sleep: None }, AutoHide { enabled: true, after_minutes: 180, sleep: Some(sleep) });
+        let mut page = AutoHidePage { machines: vec![machine("old", Some(Ok(old))), machine("new", Some(Ok(new))), machine("off", Some(Err("x".into())))],
+            ..Default::default() };
+        assert_eq!(page.reference(), Some(new), "o adormecer vem de quem o tem");
+        assert!(page.differs().is_empty(), "servidor antigo não difere só por não ter o adormecer");
+        assert_eq!(page.payload("new", new).sleep, Some(sleep));
+        assert_eq!(page.payload("old", new).sleep, None);
+        assert_eq!(page.payload("off", new).sleep, None, "leitura que falhou pode ser de servidor antigo");
+        assert!(!serde_json::to_string(&page.payload("old", new)).unwrap().contains("sleep"), "o 422 do servidor antigo");
+        page.draft = Some(new);
+        page.hours_text = "3".into();
+        page.sleep_hours_text = "0".into();
+        assert!(page.value().is_none(), "prazo do adormecer fora do limite");
+        page.sleep_hours_text = "2".into();
+        assert_eq!(page.value().and_then(|v| v.sleep).map(|s| s.after_minutes), Some(120));
     }
 }

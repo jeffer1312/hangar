@@ -2140,6 +2140,8 @@ impl Hangar {
         let questions = session.pending_questions;
         let mut tip = format!("{} · {host} · {}", session.name, tr(&format!("chip_{}", if limited { "limited" } else { state })));
         if questions > 0 { tip.push_str(&format!(" · ? {questions}")); }
+        // O trilho não tem largura para o selo: a marca vai na dica e no que o leitor de tela diz.
+        if session.asleep { tip.push_str(&format!(" · {}", tr_shared("session_asleep_badge", &[]))); }
         if session.orq() { tip.push_str(&format!(" · {}", tr_shared("orq_row_badge", &[]))); }
         let status = self.nav_avatar(format!("rail-mark-{row_key}"), session_look(&session), 24.);
         let tip_text = tip.clone();
