@@ -823,6 +823,15 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   com impressão, nome, conta, `config_marca` e pasta iguais, senão descarta e abre frio. Falha não
   vai à tela. Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#reserva-pré-aquecida-da-nova-conversa-do-claude-22102026).
+- **Sessão oculta e parada além do prazo adormece; ler não acorda, escrever acorda onde estava.**
+  A vigia `session_sleep/` só pré-seleciona; o `sleep_*` do `RuntimeRegistry` reconfere sob a porta
+  fechada e desiste calado. A marca `asleep` mora no sidecar sem terminal e o spec segue com a
+  superfície de antes: acorda com terminal se tinha, também na subida do Rust. Um acordar por vez
+  (`waking` + `rewake`), texto pela fila durável. O Codex com terminal acorda com a permissão menor
+  entre rollout e sidecar e só adormece sem ninguém ligado depois da última rodada. Claude sem
+  terminal segue no estacionamento de 65 min. O cliente só manda `sleep` a servidor cujo `GET` o
+  trouxe. Evidência e limites em
+  [plataforma.md](docs/decisoes/plataforma.md#sessão-oculta-adormece-e-acorda-onde-estava-03112026).
 - **Perguntas, permissões e ciclo de vida da sessão aberta são do Rust.** Rust: plugin do Claude (`/api/plugin/*`, `plugin::Store`), fatos e entrega, modos de
   permissão (sondagem, troca, memória), Codex e Claude com terminal adotados (o Claude pela
   `CP_SESSION_KEY` do pane, que o vínculo do Python também usa), pane morto, fechamento, `/clear`,

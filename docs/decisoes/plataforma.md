@@ -3862,3 +3862,99 @@ busca com índice 0,01–0,08 s; Arquivo 0,01–0,05 s; Perguntar 8,9 s (com `cl
 passada ~5 min. Varredura antes do índice, termo raro: 132 s antes do pré-filtro; depois, 67,3 s →
 7,7 s sobre 521 MB em build de debug. Contrato, inventários (218 itens) e conferência ficaram na
 pasta de fase do trabalho.
+
+## Sessão oculta adormece e acorda onde estava (03/11/2026)
+
+**Regra.** Com "Adormecer sessões ocultas" ligado (Configurações › Sessões; nasce desligado, prazo
+padrão 24 h, de 1 min a `MAX_MINUTES`, separado do prazo de ocultar), a vigia
+`crates/hangar-server/src/session_sleep/` fecha o processo da sessão Claude ou Codex, com ou sem
+terminal, que está oculta e parada além do prazo. A sessão continua na lista com o selo
+"Adormecida". Ler não a acorda; escrever acorda: a mensagem vai para a fila durável, a sessão reabre
+em segundo plano na mesma conversa (com terminal se tinha terminal) e a fila entrega o texto.
+Falha de adormecer vai ao diário (`rust.session_sleep_failed`), nunca à tela; falha de acordar
+marca a sessão com o erro (`mark_live_error`), porque a pessoa mandou e o texto não foi entregue.
+
+**Medição.** Neste notebook, em 03/11/2026, as sessões paradas havia 90–122 h ocupavam 670–850 MB
+cada de RAM+swap, somando todos os processos da árvore do `claude` de cada uma (o próprio Claude
+Code, MCPs e hooks filhos). Sessão oculta e esquecida por dias era o maior consumo de memória fixo
+da máquina, sem nenhum uso.
+
+**Configuração.** `AutoHide` ganhou `sleep: {enabled, after_minutes}` com `#[serde(default)]`; o
+`GET /api/session-auto-hide` sempre o devolve e o `PUT` sem `sleep` mantém o gravado (a web, que
+não recebe recurso novo, continua gravando só o ocultar). Como `AutoHide` tem
+`deny_unknown_fields`, o nativo e o Expo só mandam `sleep` ao servidor cujo `GET` o trouxe: servidor
+antigo responderia 422 e deixaria de gravar até o ocultar. A mudança de API é aditiva e não subiu o
+`CLIENT_API`: app novo com servidor antigo só não mostra a linha nem o selo.
+
+**Quem adormece.** A vigia roda a cada 5 min; desligada, não assina nada. Ligada, assina a lista do
+dono só durante a rodada (até 30 s pela primeira produção boa) e pré-seleciona: `claude` ou `codex`,
+oculta, `idle`, sem `problema`, sem pergunta, ainda não adormecida, sem filha ligada e sem ser filha,
+fora de grupo `orq`, sem loop ativo e com `last_activity` além do prazo (estrito). Claude sem
+terminal fica de fora: segue o estacionamento de 65 min de sempre, oculto ou não. A linha é só a
+pré-seleção; quem decide é o `sleep_*` do `RuntimeRegistry`, que fecha a porta de entrada da
+sessão (1 s) e reconfere sob ela: tempo parado pelo mtime do transcript (a linha não é republicada
+quando só `last_activity` muda), fila entregue, pergunta, turno, comandos nos shells do pane,
+terminal do rodapé aberto, cliente do multiplexador anexado e modo só leitura. Qualquer um desses
+desiste (`Ok(false)`), sem erro.
+
+**Marca `asleep`.** Mora no sidecar sem terminal (Claude: `~/.hangar/claude-headless/<nome>.json`;
+Codex: `~/.hangar/codex-sessions/<nome>.json` com `headless: true`), sem `cano`:
+`"asleep": {"wake_surface": "terminal" | "headless", "since": <epoch>}`, e no Codex com terminal
+também `mode` (colaboração, para `plan` voltar `plan`). Sessão com terminal vira sidecar sem terminal
+estacionado com a marca, mas o spec gravado continua `surface: Terminal`: `/conta` e `/recarregar`
+nela reabrem com terminal. Adormecer tira a chave da fotografia de restauração (`restore::forget`) e
+fecha também o shell escondido `term-<nome>`. Renomear leva o sidecar inteiro, marca incluída. A
+linha da lista (`SessionRow.asleep`) é verdadeira para todo sidecar sem terminal sem `cano` vivo e
+fora do registro do Rust, inclusive o Claude sem terminal estacionado nos 65 min: ele também mostra
+"Adormecida".
+
+**Acordar.** Toda escrita (`/input`, fila, resposta, `POST` de modo ou modelo, pergunta `btw`) numa
+adormecida passa por `adopt_now`, que dispara `wake` e devolve `session_asleep_waking`; o `/input`
+grava o texto na fila da chave com `pre_transcript` e responde como texto guardado, o resto espera.
+O acordar roda num `tokio::spawn` próprio: cliente que cai no meio não o interrompe, e o sidecar só
+sai dentro dessa tarefa. Uma vaga por sessão (`waking`) garante um acordar só; texto que chega com a
+vaga tomada marca `rewake`, e ao soltar a vaga o acordar se repete se a sessão voltou a dormir (uma
+reabertura de `/conta` que falhou, por exemplo), então nenhum texto fica parado na fila. A subida do
+Rust com adormecida e fila pendente acorda pela marca: com terminal se ela tinha terminal, nunca
+sem. Leituras (`GET permission-modes`, `models`, `commands`, `codex-permissions`, `limits`, a
+listagem do `btw`) respondem pelo arquivo, como a estacionada, e não acordam: passar o mouse numa
+aba não pode subir um Claude de 600 MB. A transferência Claude→Codex numa adormecida é recusada com
+409 `erro_sessao_adormecida`. No Codex com terminal adormecido, pedir a troca para sem terminal
+também recusa, pedir terminal acorda, e `/recarregar` recusa. O histórico de rolagem do pane se
+perde: a sessão volta na conversa, não na tela.
+
+**Codex com terminal.** O motor não acompanha o `/permissions` digitado na TUI e ler a tela é
+proibido, então a permissão do acordar é a **menos permissiva** entre a do último `turn_context` do
+rollout e a gravada no sidecar (que o seletor do app passa a gravar ao confirmar); permissão
+desconhecida confirmada pelo app (`permission_unknown`), rollout ilegível ou política fora dos três
+modos desistem. Ela nunca acorda com mais permissão do que tinha. E só adormece se ninguém se ligou
+nem digitou depois da última rodada: o maior entre `#{session_last_attached}` e
+`#{session_activity}` (tmux, lidos por `list-sessions`) tem de ser anterior ao `timestamp` do último
+`turn_context`; leitura que falha desiste. Preço conhecido, aceito: a sessão cuja última rodada foi
+digitada na TUI quase nunca adormece (o Enter e o desligar movem `session_activity` depois do
+`turn_context`), e os clientes de controle do próprio Hangar contam como ligados. Só o tmux 3.8 foi
+conferido.
+
+**Limites desta etapa.**
+- Windows: Codex com terminal nunca adormece, até alguém conferir se o psmux preenche
+  `session_last_attached`/`session_activity` (sem isso o vazio não prova "nunca ligada"). Codex sem
+  terminal segue a regra geral; Claude com terminal depende de o psmux responder quantos clientes
+  estão anexados (`#{session_attached}`, não conferido), e sem resposta desiste.
+- Pi, omp e Kimi ficam para uma segunda etapa: só existem com terminal, e estado e entrada ainda são
+  do Python.
+- `DELETE` de um Codex durante o acordar com terminal pode ressuscitar a sessão (o fechamento ainda
+  passa pelo Python, que não respeita a porta).
+- O acordar não passa pelo `during_life_change`: convite de compartilhamento ativo não acompanha a
+  vida nova.
+- Rótulo nos clientes: trilho, aba estreita, aba-mãe e etiquetas das filhas do nativo e as abas e o
+  trilho do tablet no Expo dizem "Adormecida" só na dica e no leitor de tela, por largura.
+
+**Riscos e onde estão testados.** Os testes de integração (`tests/it/runtime_claude_reopen.rs`,
+`runtime_codex_watch.rs`) cobrem os cinco riscos do desenho: duas mensagens seguidas = um acordar e
+as duas entregues em ordem pela vida nova; cliente que desconecta no meio do acordar; reinício do
+Rust com adormecida e fila pendente; atividade entre a escolha da vigia e o fechamento; texto
+gravado na geração antiga entregue pela nova. O tmux é falso nesses testes: a garantia é "acordou e
+a mensagem está na fila da vida nova", não a resposta do agente. Na escrita desta entrada nada fora
+compilado nem rodado (testes escritos e revisados no papel; o uso real no app fica para quando o
+build for liberado). Plano e decisões em
+`docs/superpowers/plans/2026-11-03-adormecer-sessoes-ocultas.md`.
