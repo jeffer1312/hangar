@@ -164,7 +164,7 @@ pub(crate) enum Write { Rust(IngressPass, WriteTarget), Python, Busy, Opening(St
 pub(crate) async fn route_write(runtime: &RuntimeRegistry, name: &str, route: WriteRoute, wait: Duration) -> Write {
     use crate::runtime::protocol::RuntimeError;
     // O acordar fecha a porta: o texto que chega no meio dele vai à fila, sem esperar a vida nova.
-    if route == WriteRoute::Input && let Some(key) = runtime.waking_key(name) { return Write::Asleep(key); }
+    if route == WriteRoute::Input && let Some(key) = runtime.waking_key_for_text(name) { return Write::Asleep(key); }
     let (pass_in, target) = match enter_then_find(runtime, name, wait).await {
         Err(GateClosed) => return Write::Busy,
         Ok(Some(found)) => found,
@@ -173,7 +173,7 @@ pub(crate) async fn route_write(runtime: &RuntimeRegistry, name: &str, route: Wr
             // Adormecida: o texto vai à fila da chave dela e o acordar já corre à parte; o resto espera.
             Some(Err(error)) if error.code == crate::runtime::gateway::ASLEEP_WAKING => {
                 if route != WriteRoute::Input { return Write::Busy; }
-                if let Some(key) = runtime.waking_key(name) { return Write::Asleep(key); }
+                if let Some(key) = runtime.waking_key_for_text(name) { return Write::Asleep(key); }
                 if let Some(mark) = runtime.asleep(name).await { return Write::Asleep(mark.key); }
                 // O acordar acabou nesse meio-tempo: a vida nova recebe.
                 match enter_then_find(runtime, name, wait).await {

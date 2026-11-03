@@ -115,17 +115,28 @@ pub struct RuntimeRegistry {
     limit_holds:std::sync::Mutex<std::collections::BTreeSet<String>>,
     /// Acordar em curso por nome, com a chave da fila: um por sessão, e o texto que chega no meio vai a ela.
     waking:std::sync::Mutex<BTreeMap<String,String>>,
+    /// Sessões que receberam texto enquanto outra tinha a vaga: ao soltar, a vaga acorda de novo.
+    rewake:std::sync::Mutex<std::collections::BTreeSet<String>>,
 }
 
-/// A vaga de acordar de uma sessão, solta ao sair (também em pânico).
-pub(super) struct WakingSlot<'a>(&'a RuntimeRegistry,String);
+/// A vaga de acordar de uma sessão (nome e chave), solta ao sair (também em pânico).
+pub(super) struct WakingSlot<'a>(&'a RuntimeRegistry,String,String);
 impl Drop for WakingSlot<'_> {
-    fn drop(&mut self) { self.0.waking.lock().unwrap_or_else(|e|e.into_inner()).remove(&self.1); }
+    fn drop(&mut self) {
+        let again = {
+            let mut waking = self.0.waking.lock().unwrap_or_else(|e|e.into_inner());
+            waking.remove(&self.1);
+            self.0.rewake.lock().unwrap_or_else(|e|e.into_inner()).remove(&self.1)
+        };
+        // Texto guardado enquanto a vaga estava tomada: se quem a tinha devolveu a sessão ao sono, ele acorda
+        // agora; acordada, o `wake` não acha a marca e não faz nada.
+        if again { self.0.wake(&self.1,&self.2); }
+    }
 }
 
-/// A escrita achou a sessão adormecida: o acordar já corre à parte.
+/// A escrita achou a sessão adormecida, acordando ou sendo reaberta: o texto vai à fila, o resto espera.
 pub const ASLEEP_WAKING:&str = "session_asleep_waking";
-pub(crate) fn asleep_waking() -> RuntimeError { RuntimeError::new(ASLEEP_WAKING,"a sessão estava adormecida e está acordando; tente de novo em instantes") }
+pub(crate) fn asleep_waking() -> RuntimeError { RuntimeError::new(ASLEEP_WAKING,"a sessão adormecida está sendo reaberta; tente de novo em instantes") }
 
 /// Sessão adormecida: o agente, a chave da fila e onde ela acorda.
 #[derive(Clone,Debug,PartialEq)]
@@ -387,7 +398,7 @@ impl RuntimeRegistry {
         Self { diag:crate::diag::DiagClient::new(upstream,secret.clone()),reopening:Default::default(),terminal_problems:Default::default(),terminal_status:Default::default(),heal_attempts:Default::default(),interactions:None,entries:Arc::new(Mutex::new(BTreeMap::new())),terminal_states:None,terms:None,events:broadcast::channel(1024).0,
             policy:PolicyClient::new(upstream,secret).with_preparation(preparation),instance,lifecycle:Mutex::new(BTreeMap::new()),revisions:Mutex::new(BTreeMap::new()),mods:None,plugin:None,ingress:Default::default(),
             respawn_base:Duration::from_secs(5),reconnect_waits:Default::default(),permissions:None,processes:Arc::new(crate::list::procs::SystemProcs::default()),live:Default::default(),codex_owned:Default::default(),hubs:std::sync::OnceLock::new(),self_ref:std::sync::OnceLock::new(),
-            watcher:std::sync::OnceLock::new(),codex_wake:Arc::new(tokio::sync::Notify::new()),native:Default::default(),limits:std::sync::OnceLock::new(),limit_holds:Default::default(),waking:Default::default() }
+            watcher:std::sync::OnceLock::new(),codex_wake:Arc::new(tokio::sync::Notify::new()),native:Default::default(),limits:std::sync::OnceLock::new(),limit_holds:Default::default(),waking:Default::default(),rewake:Default::default() }
     }
     /// Escrita para sessão doente, ou a conversa aberta: a sessão em erro é reaberta aqui, em segundo plano
     /// e uma por vez; a saudável só refaz a projeção da fila. Responde na hora; quem escreveu recebe o 503
@@ -531,7 +542,15 @@ impl RuntimeRegistry {
     /// A vaga de acordar para outra reabertura da adormecida (`/conta`, modo, motor): `None` se o acordar
     /// ou outra reabertura já a tem. Duas juntas subiriam dois terminais no mesmo nome.
     pub(super) fn reserve_waking(&self,name:&str,key:&str) -> Option<WakingSlot<'_>> {
-        self.claim_waking(name,key).then(||WakingSlot(self,name.to_owned()))
+        self.claim_waking(name,key).then(||WakingSlot(self,name.to_owned(),key.to_owned()))
+    }
+    /// Para o texto que chega com a vaga tomada: a chave da fila, e a vaga acorda a sessão ao soltar, caso
+    /// quem a tinha (outra reabertura que falhou) a devolva ao sono. Sob a trava da vaga, para não perder a soltura.
+    pub fn waking_key_for_text(&self,name:&str) -> Option<String> {
+        let waking = self.waking.lock().unwrap_or_else(|e|e.into_inner());
+        let key = waking.get(name).cloned()?;
+        self.rewake.lock().unwrap_or_else(|e|e.into_inner()).insert(name.to_owned());
+        Some(key)
     }
     /// Acorda a sessão adormecida numa tarefa própria e volta na hora: quem escreveu pode desistir sem
     /// interromper. Um acordar por sessão; o segundo pedido no meio dele não faz nada.
@@ -542,10 +561,10 @@ impl RuntimeRegistry {
             return;
         };
         if !self.claim_waking(name,key) { return; }
-        let name = name.to_owned();
+        let (name,key) = (name.to_owned(),key.to_owned());
         tokio::spawn(async move {
             // Solta a vaga mesmo se a tarefa cair no meio: senão a sessão nunca mais acordaria.
-            let slot = WakingSlot(registry.as_ref(),name.clone());
+            let slot = WakingSlot(registry.as_ref(),name.clone(),key);
             let (provider,result) = match registry.asleep(&name).await {
                 None=>("",Ok(false)),
                 Some(mark) if mark.provider=="claude"=>("claude",registry.wake_claude(&name,mark.wake_surface).await),

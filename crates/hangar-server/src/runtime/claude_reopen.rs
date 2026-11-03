@@ -582,7 +582,7 @@ impl RuntimeRegistry {
         let since=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0,|d|d.as_secs_f64());
         meta["asleep"]=json!({"wake_surface":"terminal","since":since});
         // Fora da fotografia antes de fechar: um tique no meio a daria por sumida, e depois de um reboot ela
-        // acorda pela mensagem, não pelo restore. Se a sessão ficar, o próximo tique a põe de volta.
+        // acorda pela mensagem, não pelo restore. Se a sessão ficar, ela volta à fotografia em até dois tiques.
         {let owned=name.to_owned();let _=tokio::task::spawn_blocking(move||crate::session_open::restore::forget(&home,&owned)).await;}
         match self.stop_claude(name,&current,Surface::Headless).await {
             Ok(())=>{},

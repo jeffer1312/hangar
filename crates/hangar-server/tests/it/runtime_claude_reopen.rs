@@ -38,6 +38,7 @@ case "$1" in
     printf '%s\n' "$@" > "$S.args"
     echo "$4" >> "$S.spawns"
     [ -f "$S.nospawn" ] && exit 1
+    [ -f "$S.nospawn-once" ] && rm -f "$S.nospawn-once" && exit 1
     # `$S.next-screen`: a tela do pane que nasce agora; a do pane antigo fica até aqui.
     [ -f "$S.next-screen" ] && mv "$S.next-screen" "$S.screen"
     : > "$S.env"; prev=""; for a in "$@"; do [ "$prev" = "-e" ] && echo "$a" >> "$S.env"; prev="$a"; done
@@ -1412,6 +1413,42 @@ async fn write_after_the_new_life_took_the_queue_is_stored_not_refused() {
     let row = state["rows"].as_array().unwrap().iter().find(|r|r["text"]=="tres").cloned().unwrap_or(Value::Null);
     assert_eq!((row["pre_transcript"].as_bool(),row["desistiu"].as_bool()),(Some(true),None),"na fila da vida nova: {state}");
     registry.close(&key,2).await.unwrap();
+    fx.finish();
+}
+
+/// Outra reabertura da adormecida tem a vaga de acordar (aqui a troca de modo) e falha: ela volta a dormir.
+/// A mensagem guardada nesse meio-tempo não fica esperando a próxima: a vaga, ao soltar, acorda a sessão,
+/// e o terminal sobe com a mensagem na fila da vida nova (entregue ou esperando por ela).
+#[tokio::test]
+async fn text_stored_while_another_reopen_fails_wakes_the_session_again() {
+    let fx = fixture();
+    let key = "c8".repeat(16);
+    asleep_terminal(&fx,&key);
+    std::fs::write(fx.state.with_extension("keys"),"").unwrap();
+    std::fs::write(fx.state.with_extension("hold"),"").unwrap();
+    let registry = fx.registry().await;
+    let (_python,server) = crate::runtime_codex_watch::serve_owner(registry.clone()).await;
+    let switch = {let registry=registry.clone();tokio::spawn(async move {
+        registry.reopen_claude_session("s1",mode_switch(true),None).await.map(|outcome|outcome.map(|_|()).map_err(|f|(f.error.code,f.stopped)))
+    })};
+    until("a troca segura a vaga na subida do terminal",||{let held=fx.state.with_extension("held");async move {held.exists()}}).await;
+    assert_eq!(registry.waking_key("s1"),Some(key.clone()),"a troca reservou a vaga");
+    let stored = (200,json!({"ok":true,"delivered":false,"steered":false,"native":false}));
+    assert_eq!(post(server,"input",json!({"text":"oi"})).await,stored,"guardada enquanto a troca tem a vaga");
+    // O terminal da troca não nasce: ela falha e a sessão volta a dormir.
+    std::fs::write(fx.state.with_extension("nospawn-once"),"").unwrap();
+    std::fs::remove_file(fx.state.with_extension("hold")).unwrap();
+    let failed = switch.await.unwrap().expect("é sessão Claude daqui");
+    assert_eq!(failed.map_err(|(_,stopped)|stopped),Err(true),"a troca falhou depois de encerrar");
+    until("a vaga soltou e acordou de novo",||{let registry=registry.clone();async move {
+        registry.waking_key("s1").is_none() && registry.terminal_view("s1").await.is_some()}}).await;
+    assert_eq!(fx.spawns(),2,"o terminal da troca, que falhou, e o do acordar");
+    assert!(!fx.sidecar_path("s1").exists(),"acordada");
+    let generation = generation(&fx,&key);
+    let state:Value = serde_json::from_slice(&std::fs::read(fx.queue.join(format!("runtime/{key}.json"))).unwrap()).unwrap();
+    let row = state["rows"].as_array().unwrap().iter().find(|r|r["text"]=="oi").cloned().unwrap_or(Value::Null);
+    assert_eq!((row["pre_transcript"].as_bool(),row["desistiu"].as_bool()),(Some(true),None),"na fila que a vida nova assume: {state}");
+    registry.close(&key,generation).await.unwrap();
     fx.finish();
 }
 
