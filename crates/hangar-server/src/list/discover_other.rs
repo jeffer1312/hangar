@@ -530,6 +530,16 @@ fn text(meta: &Map<String, Value>, key: &str) -> Option<String> {
     meta.get(key).and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_owned)
 }
 
+/// Candidata a adormecida: marca do sidecar ou nenhum `cano`. O `classify` confirma contra o
+/// registro do runtime (vivo lá desfaz), que é a mesma decisão que mostra a sessão parada.
+fn sleep_candidate(row: &mut SessionRow, meta: &Map<String, Value>) {
+    let mark = meta.get("asleep").filter(|a| a.is_object());
+    row.wake_surface = mark.and_then(|a| a.get("wake_surface")).and_then(Value::as_str)
+        .filter(|s| matches!(*s, "terminal" | "headless")).map(str::to_owned);
+    let has_cano = meta.get("cano").and_then(|c| c.get("pid")).and_then(Value::as_i64).is_some();
+    row.asleep = mark.is_some() || !has_cano;
+}
+
 /// `cwd_atual`: renomeada com a sessão viva, a pasta gravada some e o processo (conferido pela
 /// chave no cmdline) mostra a nova.
 fn current_cwd(meta: &Map<String, Value>, procs: &dyn ProcessView) -> Option<String> {
@@ -583,6 +593,7 @@ pub fn codex_rows(dirs: &Dirs, births: &HashMap<String, u64>, procs: &dyn Proces
         // Cru, como o `meta.get` do Python: vazio continua vazio.
         row.codex_service_tier = meta.get("service_tier").and_then(Value::as_str).map(str::to_owned);
         row.headless = meta.get("headless").is_some_and(truthy);
+        if row.headless { sleep_candidate(&mut row, &meta); }
         links::fill_location(&mut row, "codex", dirs, problems);
         links::fill_links(&mut row, dirs, problems);
         out.push(row);
@@ -647,6 +658,7 @@ pub fn headless_rows(dirs: &Dirs, procs: &dyn ProcessView, problems: &mut Proble
         row.cwd = current_cwd(&meta, procs);
         row.jsonl = Some(headless_transcript(&saved_cwd, &sid, config_dir.as_deref(), dirs, problems));
         row.headless = true;
+        sleep_candidate(&mut row, &meta);
         row.conta = if account.is_some() {
             text(&meta, "engine_credential_id")
         } else if let Some(e) = &engine {
@@ -798,6 +810,33 @@ mod tests {
         Dirs { home: home.to_path_buf(), claude: home.join(".claude"), codex_home: home.join(".codex"),
             pi_sessions: home.join(".pi"), omp_config: home.join(".omp"), omp_agent: home.join(".omp/agent"),
             kimi_home: home.join(".kimi-code") }
+    }
+
+    fn sleep_rows(sidecars: &[(&str, &str)]) -> Vec<SessionRow> {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().canonicalize().unwrap();
+        for (name, body) in sidecars {
+            write(&home.join(format!(".hangar/claude-headless/{name}.json")), body);
+        }
+        let procs = Tree { sids: Vec::new(), config: String::new(), reads: AtomicUsize::new(0) };
+        let mut rows = headless_rows(&dirs_at(&home), &procs, &mut Problems::default());
+        rows.sort_by(|a, b| a.name.cmp(&b.name));
+        rows
+    }
+
+    #[test]
+    fn headless_row_is_asleep_without_a_live_cano_or_with_the_mark() {
+        let base = |name: &str, extra: &str| format!(r#"{{"name":"{name}","session_id":"sid-{name}","cwd":"/w"{extra}}}"#);
+        let rows = sleep_rows(&[
+            ("parked", &base("parked", "")),
+            ("live", &base("live", r#","cano":{"pid":7,"escuta":"unix:/s"}"#)),
+            ("marked", &base("marked", r#","asleep":{"wake_surface":"terminal","since":1.5}"#)),
+        ]);
+        let by = |n: &str| rows.iter().find(|r| r.name == n).unwrap();
+        assert!(by("parked").asleep && by("parked").wake_surface.is_none() && by("parked").headless);
+        assert!(!by("live").asleep);
+        assert!(by("marked").asleep && by("marked").headless);
+        assert_eq!(by("marked").wake_surface.as_deref(), Some("terminal"));
     }
 
     #[test]

@@ -67,6 +67,10 @@ export interface SessionInfo {
   rename_weak?: boolean;
   /** Fora da lista principal (oculta à mão ou parada além do prazo); o servidor só manda quando é `true`. */
   hidden_from_list?: boolean;
+  /** Sem processo vivo; acorda na próxima mensagem. O servidor só manda quando é `true`. */
+  asleep?: boolean;
+  /** Onde a sessão adormecida reabre ao acordar. */
+  wake_surface?: 'terminal' | 'headless';
   /** Servidores MCP criados por plugin (`$.tool.register`); a pele 'terminal' deixa as chamadas deles fora da dobra. */
   plugin_tool_servers?: string[] | null;
   // Linhas adicionadas/removidas no working tree vs HEAD (git diff --numstat, staged+unstaged;

@@ -135,6 +135,8 @@ fn mtime(name: &str, jsonl: Option<&str>) -> Option<f64> {
 /// `working`/`idle`. Sem retrato nenhum, também o marcador, com a ausência na linha: sessão parada
 /// calada esconderia que o runtime não foi consultado.
 fn headless_state(row: &mut SessionRow, retrato: Option<&BTreeMap<String, Value>>, marker: Option<&facts_files::Marker>) {
+    // Candidata do sidecar: só vira adormecida onde o runtime confirma a sessão parada, abaixo.
+    let candidate = std::mem::take(&mut row.asleep);
     let Some(retrato) = retrato else {
         row.problema = Some(RUNTIME_ABSENT.into());
         row.state = marker.map(|m| m.state.as_str()).filter(|s| ["working", "idle"].contains(s)).unwrap_or("idle").into();
@@ -165,6 +167,7 @@ fn headless_state(row: &mut SessionRow, retrato: Option<&BTreeMap<String, Value>
         // limite de uso, queda), e o chat (feed estacionado) já diz parada.
         row.state = "idle".into();
         (row.label, row.question, row.options, row.interaction_id) = (None, None, None, None);
+        row.asleep = candidate;
         return;
     };
     let text = |k: &str| state[k].as_str().map(str::to_owned);
@@ -343,6 +346,7 @@ impl Classifier {
             if row.provider == "codex" && (row.headless || rust_codex_terminal)
                 && let Some(ev) = facts.monitors.get(&row.name, sid(row).as_deref())
             {
+                row.asleep = false;
                 from_monitor(row, &ev);
                 codex_question(row, ev.codex_question.as_ref());
                 codex_pending(row, facts.headless);
@@ -368,6 +372,8 @@ impl Classifier {
                 row.status_line = Some(line.to_owned());
             }
             if row.provider != "claude" {
+                // Sem retrato do runtime a candidata não se confirma.
+                row.asleep = false;
                 continue;
             }
             let sid = sid(row);
@@ -836,6 +842,16 @@ mod tests {
         let snap = |alive: bool| BTreeMap::from([("s".to_owned(), serde_json::json!({"error": null, "view": {"alive": alive,
             "public_state": {"state": "awaiting_input", "label": null, "question": "Permitir Bash?",
                              "options": ["Permitir", "Negar"], "status_line": "🤖 Haiku 4.5"}}}))]);
+        // Candidata do sidecar: vivo no runtime desfaz, parado confirma, erro e sem retrato não confirmam.
+        row.asleep = true;
+        run(&mut row, &dirs, &io, Some(&snap(true))).await;
+        assert!(!row.asleep);
+        row.asleep = true;
+        run(&mut row, &dirs, &io, Some(&snap(false))).await;
+        assert!(row.asleep);
+        row.asleep = true;
+        run(&mut row, &dirs, &io, None).await;
+        assert!(!row.asleep);
         run(&mut row, &dirs, &io, Some(&snap(true))).await;
         assert_eq!((row.state.as_str(), row.question.as_deref()), ("awaiting_input", Some("Permitir Bash?")));
         assert_eq!(row.options, Some(vec!["Permitir".into(), "Negar".into()]));
