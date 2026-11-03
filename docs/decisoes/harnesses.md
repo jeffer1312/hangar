@@ -450,7 +450,8 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   ou o standalone oficial por `codex update` com `CODEX_RELEASE` fixado e o `CODEX_HOME` do
   standalone (nunca o da conta), antes do app-server (versão publicada consultada no máximo
   uma vez por hora, a tela mostra
-  "atualizando o Codex"), e confia nos hooks pendentes pelo app-server (`hooks/list` +
+  "atualizando o Codex"), confere os marketplaces de plugins (`codex plugin marketplace upgrade`,
+  em toda abertura, também no sem terminal) e confia nos hooks pendentes pelo app-server (`hooks/list` +
   `config/batchWrite` do `trusted_hash`), porque eles vêm da sincronização do próprio Hangar.
   Falha em qualquer dos dois só registra na tela e a abertura segue. O cartão pré-thread
   reconhece o rodapé curto (`enter continue · esc skip`) além do antigo.
@@ -459,7 +460,9 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   `config/batchWrite` do `currentHash` (formato `declaração/conteúdo`; o Codex grava
   `trusted_hash` e `trusted_content_hash`) com `reloadUserConfig`, para os hooks `user`,
   `plugin` e o `hooks.json` da conta. Só a recarga no app-server da sessão tira a recusa da
-  memória dela; gravar o arquivo por outro processo não basta. Ver
+  memória dela; gravar o arquivo por outro processo não basta. A mesma rodada sai antes da recusa,
+  calada, quando o `plugins/cache` da conta muda (observador único por conta, 500 ms de espera). Ver
+  [reaprovação antes da recusa](#reaprovação-antes-da-recusa-03112026) e
   [plugin reinstalado com a sessão aberta](#plugin-reinstalado-com-a-sessão-aberta-28102026).
 - **Pergunta assíncrona do Codex chega como `agentMessage` com `delivery: "async"`**, não como
   pedido JSON-RPC. Cada pergunta é independente; o eco da resposta local não responde outra de
@@ -1072,6 +1075,36 @@ Codex 0.165. Sintoma: toda chamada de ferramenta da TUI mostrava `Hook failed` /
 - Cada sessão Codex tem o seu app-server, então a correção é no ator, que já tem a conexão (com e
   sem terminal). O primeiro lote de hooks depois da mudança ainda falha uma vez; os seguintes
   passam.
+
+### Reaprovação antes da recusa (03/11/2026)
+
+Codex 0.166. Sessão `jefferson` aberta às 08:22:49: às 08:23:18–29 o próprio app-server
+(`plugins-marketplace-auto-upgrade`, `core-plugins/src/manager.rs`) reinstalou caveman, last30days e
+um plugin de marketplace privado, que tinham commit novo no git. O turno das 08:23:22 teve cinco `Hook failed` nas três
+primeiras ferramentas; a reaprovação reativa gravou o `config.toml` às 08:23:31 e as chamadas de
+08:23:34 em diante passaram.
+
+- A atualização automática roda em toda subida com plugins ligados e não tem opção para desligar.
+  O Codex só aprova sozinho plugin remoto da OpenAI (`effective_plugin_change.rs`), nunca o de
+  marketplace git.
+- O app-server não avisa o cliente quando termina: o `skills/changed` vem de um observador de
+  arquivos com atraso de 10 s.
+- Por isso o ator observa `<CODEX_HOME>/plugins/cache` (um observador por conta, dividido entre as
+  sessões: são ~3.300 pastas) e, 500 ms depois do último evento, faz a mesma rodada `hooks/list` +
+  `config/batchWrite` sem aviso e sem gastar a rodada reativa do turno. Leitura de arquivo e
+  bytecode Python não acordam: o próprio hook rodando abriria os arquivos sem fim.
+- Os dois lançadores (`scripts/hangar-codex-tui` e `launch_if_needed` do sem terminal) rodam
+  `codex plugin marketplace upgrade --json` no `CODEX_HOME` da conta antes do app-server, em toda
+  abertura (decisão do dono): é a mesma função da atualização automática (`marketplace_cmd.rs` →
+  `manager.rs`), que também reinstala o cache dos plugins, então a do app-server não acha nada novo.
+  Custa ~5 s com 10 marketplaces e nada a atualizar (medido duas vezes: 5,6 s e 5,2 s); roda depois
+  da atualização do Codex porque no Windows o binário não troca com outro `codex` aberto. Falha ou
+  prazo de 90 s só registram e a abertura segue.
+- Uma reinstalação feita por qualquer sessão da conta quebra a confiança das outras sessões abertas
+  dela; cada ator recarrega a própria, porque o `reloadUserConfig` só vale no app-server que recebe a
+  escrita.
+- `--dangerously-bypass-hook-trust` (ou `bypass_hook_trust` no `config` do `thread/start`) liga
+  todo hook sem revisão, inclusive o `.codex/hooks.json` de repositório clonado. Recusado pelo dono.
 
 ## Hook, comando em segundo plano e saída parcial no app-server (28/10/2026)
 

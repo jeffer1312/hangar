@@ -37,6 +37,13 @@ _FAKE_CODEX = '''#!/usr/bin/env python3
 import json, os, sys, time
 
 args = sys.argv[1:]
+if args[:3] == ["plugin", "marketplace", "upgrade"]:
+    if os.environ.get("FAKE_MARKETPLACES_OUT"):
+        with open(os.environ["FAKE_MARKETPLACES_OUT"], "a") as fh:
+            servidor = os.path.exists(os.environ.get("FAKE_SERVER_OUT", ""))
+            fh.write(json.dumps({"home": os.environ.get("CODEX_HOME"), "servidor_ja_subiu": servidor}) + "\\n")
+    print(json.dumps({"selectedMarketplaces": [], "upgradedRoots": [], "errors": []}))
+    sys.exit(0)
 if args[:1] == ["app-server"]:
     if os.environ.get("FAKE_SERVER_ENV"):
         with open(os.environ["FAKE_SERVER_ENV"], "w") as fh:
@@ -213,6 +220,54 @@ def test_launcher_applies_creation_tier_to_server_and_tui_before_prompt(tmp_path
                 assert f'service_tier="{tier}"' in argv
     finally:
         proc.wait(timeout=20)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="binário falso POSIX")
+def test_marketplaces_sao_conferidos_na_conta_antes_do_app_server(tmp_path):
+    cwd = tmp_path / "proj"
+    cwd.mkdir()
+    env = _ambiente(tmp_path, cwd)
+    env["FAKE_TUI_SLEEP"] = "1"
+    env["FAKE_SERVER_OUT"] = str(tmp_path / "server-argv.json")
+    env["FAKE_MARKETPLACES_OUT"] = str(tmp_path / "marketplaces.jsonl")
+    proc = subprocess.Popen([sys.executable, str(_LANCADOR), "--name", "sess", "--cwd", str(cwd)],
+                            env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        assert _espera(lambda: Path(env["FAKE_TUI_OUT"]).exists())
+        chamadas = [json.loads(l) for l in Path(env["FAKE_MARKETPLACES_OUT"]).read_text().splitlines()]
+        assert chamadas == [{"home": env["CODEX_HOME"], "servidor_ja_subiu": False}]
+    finally:
+        proc.wait(timeout=20)
+
+
+def _marketplaces(monkeypatch, resultado):
+    atualizar = runpy.run_path(str(_LANCADOR))["_atualizar_marketplaces"]
+    globais = atualizar.__globals__
+    monkeypatch.setattr(globais["shutil"], "which", lambda nome: f"/bin/{nome}")
+
+    def run(argv, **_):
+        if isinstance(resultado, Exception):
+            raise resultado
+        return subprocess.CompletedProcess(argv, *resultado)
+
+    monkeypatch.setattr(globais["subprocess"], "run", run)
+    return atualizar
+
+
+def test_marketplaces_atualizados_aparecem_na_tela(monkeypatch, capsys):
+    saida = json.dumps({"selectedMarketplaces": ["m"], "upgradedRoots": ["/h/.tmp/marketplaces/m"], "errors": []})
+    _marketplaces(monkeypatch, (0, saida, ""))()
+    assert "plugins atualizados em 1 marketplace(s)" in capsys.readouterr().err
+
+
+def test_falha_nos_marketplaces_nao_impede_a_abertura(monkeypatch, capsys):
+    erro = "Failed to upgrade marketplace `exemplo`: git fetch failed\nError: 1 upgrade failure(s) occurred.\n"
+    _marketplaces(monkeypatch, (1, "", erro))()
+    tela = capsys.readouterr().err
+    assert "Failed to upgrade marketplace `exemplo`: git fetch failed" in tela
+    assert "saiu com código 1" in tela and "Error: 1 upgrade" not in tela
+    _marketplaces(monkeypatch, subprocess.TimeoutExpired("codex", 90))()
+    assert "não deu para conferir os plugins (TimeoutExpired)" in capsys.readouterr().err
 
 
 def test_conta_secundaria_aguarda_primeiro_preparo(monkeypatch):

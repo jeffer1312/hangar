@@ -13,6 +13,8 @@ enum Core { Claude(ClaudeEngine),Codex(CodexEngine) }
 const CONFIRM_POLL:Duration=Duration::from_millis(50);
 const CONFIRM_WINDOW:Duration=Duration::from_secs(30);
 const CONFIRM_RETRY:Duration=Duration::from_secs(30);
+// Uma reinstalação do Codex são vários eventos (cópia, troca da pasta): reaprova uma vez, no fim.
+const PLUGINS_SETTLE:Duration=Duration::from_millis(500);
 /// Teto de um pedido de app aos mods: o mais longo da superfície (desenho de novo e clique, 6 s) mais
 /// 1 s de folga para o relógio do ator, abaixo dos 8 s em que o app desiste. O registro serializa os
 /// pedidos da sessão, então um pedido sem teto prenderia os seguintes.
@@ -163,6 +165,9 @@ impl RuntimeEngine {
     }
     fn set_problem(&mut self,code:&str,detail:Option<String>) -> Vec<Effect> {
         match &mut self.core { Core::Codex(core)=>core.set_problem(code,detail),Core::Claude(_)=>Vec::new() }
+    }
+    fn plugins_changed(&mut self) -> Vec<Effect> {
+        match &mut self.core { Core::Codex(core)=>core.plugins_changed(),Core::Claude(_)=>Vec::new() }
     }
     /// O problema que vem de fora do ator (`Message::Problem`), nos dois provedores.
     fn show_problem(&mut self,code:&str,detail:Option<String>) -> Vec<Effect> {
@@ -887,6 +892,11 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
     // Retenção de turnos (`hold_turns`): só a referência fraca fica aqui; quem segura é dono da forte.
     let mut turn_hold:Option<std::sync::Weak<()>> = None;
     let turn_hold_released = Arc::new(Notify::new());
+    // Plugin reinstalado pelo próprio Codex: a reaprovação sai quando a troca assenta, antes do próximo hook.
+    let mut plugins = (target.provider == "codex").then(||super::codex_plugins::cache_dir(&target.metadata)).flatten()
+        .and_then(|cache|super::codex_plugins::subscribe(&cache)
+            .map_err(|err|tracing::warn!(session=%target.name,error=%err,"codex: sem observador de plugins; a reaprovação espera a recusa do hook")).ok());
+    let mut plugins_due:Option<Instant> = None;
     // Pedidos de retenção que chegaram com uma drenagem em curso: respondem quando ela termina.
     let mut hold_waiters:Vec<oneshot::Sender<Result<TurnHold,RuntimeError>>> = Vec::new();
     // O snapshot é do cano; no WebSocket o estado vem do próprio app-server depois de conectar.
@@ -2345,6 +2355,13 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
             }
             // Só acorda; a limpeza da retenção solta é a do topo do laço.
             _ = turn_hold_released.notified(), if turn_hold.is_some() => {}
+            changed = async { plugins.as_mut().unwrap().changes.changed().await }, if plugins.is_some() => {
+                if changed.is_ok() { plugins_due = Some(Instant::now() + PLUGINS_SETTLE); } else { plugins = None; }
+            }
+            _ = tokio::time::sleep_until(tokio::time::Instant::from_std(plugins_due.unwrap_or_else(Instant::now))), if plugins_due.is_some() => {
+                plugins_due = None;
+                effects.extend(engine.plugins_changed());
+            }
             _ = tokio::time::sleep_until(tokio::time::Instant::from_std(confirm_recheck.unwrap_or_else(Instant::now))), if confirm_recheck.is_some() && !confirming => {
                 confirm_recheck = None;
                 confirming = true;

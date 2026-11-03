@@ -193,6 +193,7 @@ def _codex() -> str:
 _CONSULTA_VERSAO_S = 3600
 _NEW_ATTEMPT_S = 300
 _UPDATE_TIMEOUT_S = 600
+_MARKETPLACES_TIMEOUT_S = 90
 _PREFIXO = "hangar-codex-tui:"
 
 
@@ -412,6 +413,41 @@ def _atualizar_codex() -> None:
     finally:
         if trava is not None:
             trava.close()
+
+
+def _atualizar_marketplaces() -> None:
+    """Puxa os marketplaces git do CODEX_HOME da conta antes do app-server.
+
+    Ao subir, o app-server faz a mesma conferência em segundo plano e reinstala o plugin que mudou
+    com a sessão já aberta; o Codex então recusa os hooks dele até a reaprovação. Feita aqui, a dele
+    não acha nada novo. Roda depois da atualização do Codex: no Windows o binário não troca com
+    outro `codex` aberto. Falha nunca impede a abertura: o Codex confere sozinho depois.
+    """
+    codex = shutil.which("codex")
+    if not codex:
+        return
+    print(f"{_PREFIXO} conferindo os plugins…", file=sys.stderr)
+    try:
+        feito = subprocess.run([codex, "plugin", "marketplace", "upgrade", "--json"], capture_output=True,
+                               text=True, errors="replace", timeout=_MARKETPLACES_TIMEOUT_S,
+                               stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"{_PREFIXO} não deu para conferir os plugins ({type(exc).__name__}); o Codex confere "
+              "depois de abrir e o Hangar reaprova os hooks que mudarem", file=sys.stderr)
+        return
+    if feito.returncode != 0:
+        # O Codex escreve uma linha por marketplace que falhou; o resto atualizou.
+        for linha in [l for l in feito.stderr.splitlines() if l.startswith("Failed to upgrade marketplace")][:3]:
+            print(f"{_PREFIXO} {linha[:200]}", file=sys.stderr)
+        print(f"{_PREFIXO} a conferência dos plugins saiu com código {feito.returncode}; a sessão "
+              "abre assim", file=sys.stderr)
+        return
+    try:
+        atualizados = json.loads(feito.stdout).get("upgradedRoots") or []
+    except (ValueError, AttributeError):
+        atualizados = []
+    if atualizados:
+        print(f"{_PREFIXO} plugins atualizados em {len(atualizados)} marketplace(s)", file=sys.stderr)
 
 
 def _porta_livre() -> str:
@@ -806,6 +842,7 @@ def main() -> int:
             raise
 
     _atualizar_codex()
+    _atualizar_marketplaces()
     servidor = subir_servidor()
 
     def salvar(thread_id: str, rollout: str, thread: dict | None = None) -> None:

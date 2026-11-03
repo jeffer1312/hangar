@@ -227,6 +227,7 @@ pub(super) async fn launch_if_needed(policy:&PolicyClient,target:&mut RuntimeTar
     }).await.map_err(|_|failure("launch_job"))??;
     if target.provider == "codex" {
         policy.prepare_codex(env.get("CODEX_HOME").ok_or_else(||failure("codex_account_invalid"))?).await?;
+        upgrade_marketplaces(&program,&env).await;
     }
     let cwd = target.metadata["cwd"].as_str().filter(|cwd|!cwd.is_empty()).ok_or_else(||failure("launch_cwd"))?;
     let spec = process::LaunchSpec { provider:process::Provider::from_str(&target.provider).ok_or_else(||failure("runtime_provider"))?,
@@ -252,6 +253,29 @@ pub(super) async fn launch_if_needed(policy:&PolicyClient,target:&mut RuntimeTar
     target.metadata["cano"] = value;
     Ok(Some(cano))
 }
+/// Ao subir, o app-server confere os marketplaces git sozinho e reinstala o plugin que mudou com a
+/// sessão já aberta, recusando os hooks dele até a reaprovação; conferidos antes, ele não acha nada
+/// novo. Falha não impede a abertura: o Codex confere depois e o ator reaprova o que mudar.
+async fn upgrade_marketplaces(program:&[String],env:&std::collections::BTreeMap<String,String>) {
+    let Some(codex) = program.first().and_then(|name|process::resolve_program(name,env.iter())) else { return };
+    let mut command = tokio::process::Command::new(codex);
+    command.args(["plugin","marketplace","upgrade","--json"]).env_clear().envs(env)
+        .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped()).kill_on_drop(true);
+    #[cfg(windows)]
+    command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    match tokio::time::timeout(MARKETPLACES_TIMEOUT,command.output()).await {
+        Ok(Ok(out)) if out.status.success() => {}
+        Ok(Ok(out)) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            let detail = stderr.lines().find(|line|line.starts_with("Failed to upgrade marketplace")).unwrap_or("");
+            tracing::warn!(code=?out.status.code(),detail=%detail.chars().take(200).collect::<String>(),"codex: conferência dos marketplaces falhou");
+        }
+        Ok(Err(err)) => tracing::warn!(kind=?err.kind(),"codex: conferência dos marketplaces não rodou"),
+        Err(_) => tracing::warn!("codex: conferência dos marketplaces passou do prazo"),
+    }
+}
+const MARKETPLACES_TIMEOUT:Duration = Duration::from_secs(90);
+
 /// Marca da configuração que o `claude -p` leu ao nascer: o botão Recarregar e a adoção da reserva
 /// pré-aquecida comparam com ela. Bloqueante.
 pub(crate) fn claude_config_stamp(config_dir:Option<&str>) -> Option<String> {
