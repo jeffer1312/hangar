@@ -121,7 +121,7 @@ pub async fn codex(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
         ("POST", "kill") => runtime.kill_codex_terminal(&name).await,
         _ => {
             // Leitura não acorda a adormecida: a rota responde por ela.
-            let reading = method == "GET" && runtime.asleep(&name).await.is_some();
+            let reading = method == "GET" && runtime.asleep(&name).await.is_some_and(|mark| mark.provider == "codex");
             if !reading && !runtime.owns_codex_terminal(&name) && !runtime.owns_codex_headless(&name).await {
                 match runtime.adopt_now(&name).await {
                     None => return not_ours(),

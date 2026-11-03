@@ -56,6 +56,12 @@ pub fn mode_of(approval:&str,sandbox:&str) -> Option<&'static str> {
     MODES.iter().find(|&&(_,a,s)|a == approval && s == sandbox).map(|&(name,..)|name)
 }
 
+/// O menos permissivo de dois modos do app (a lista vai de Ask a Full Access); fora dela, nenhum.
+pub fn least(a:&str,b:&str) -> Option<&'static str> {
+    let rank = |mode:&str|MODES.iter().position(|(name,..)|name.eq_ignore_ascii_case(mode.trim()));
+    Some(MODES[rank(a)?.min(rank(b)?)].0)
+}
+
 /// `politica` sobre o modo gravado.
 fn policy(meta:&Value) -> Result<(&'static str,&'static str),RuntimeError> {
     let &(_,approval,sandbox) = stored(meta)?;

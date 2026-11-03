@@ -111,6 +111,13 @@ pub fn update_if(dir:&Path,name:&str,expect:&[(&str,Value)],patch:&Meta) -> io::
     })
 }
 
+/// O modo que o seletor do terminal confirmou, no arquivo desta vida (chave e app-server): o rollout só
+/// o grava na rodada seguinte, e o adormecer parte daqui. `false`: o arquivo já é de outra vida.
+pub fn remember_permission(dir:&Path,name:&str,key:&str,app_pid:u32,mode:&str) -> io::Result<bool> {
+    let patch:Meta = std::iter::once(("permission_mode".to_owned(),json!(mode))).collect();
+    update_if(dir,name,&[("key",json!(key)),("app_pid",json!(app_pid))],&patch).map(|meta|meta.is_some())
+}
+
 /// Grava o sidecar inteiro sob a trava: a volta da troca de modo cobre o lançador que o apagou ao sair.
 pub fn put(dir:&Path,name:&str,meta:&Meta) -> io::Result<()> { locked(dir,name,|path|write(path,meta)) }
 

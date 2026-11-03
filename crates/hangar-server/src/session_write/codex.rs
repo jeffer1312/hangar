@@ -247,7 +247,7 @@ async fn ours(st: &AppState, name: Option<&str>, read: bool) -> Result<bool, Run
     let (Some(runtime), Some(name)) = (st.state.runtime.get(), name) else { return Ok(false) };
     if runtime.writable(name).await.is_none() {
         // Leitura não acorda a adormecida: só a próxima mensagem sobe o processo dela.
-        if read && runtime.asleep(name).await.is_some() { return Err(RuntimeError::new(ASLEEP_READ, "a sessão está adormecida; ela acorda com a próxima mensagem")); }
+        if read && runtime.asleep(name).await.is_some_and(|mark| mark.provider == "codex") { return Err(RuntimeError::new(ASLEEP_READ, "a sessão está adormecida; ela acorda com a próxima mensagem")); }
         match runtime.adopt_now(name).await {
             None => return Ok(false),
             // É do Rust e não abriu: a falha aparece com o código dela, nunca vira repasse.
@@ -522,9 +522,19 @@ async fn terminal_permission(ctx: &Ctx, action: PermissionAction) -> Answer {
         Err(_) => None,
     };
     let driver = crate::runtime::codex_terminal::pane_driver(&target.terminal, cell.pane_serial(), Some(ctx.st.term.clone()));
+    let setting = matches!(action, PermissionAction::Set { .. });
     let sent = crate::permission_control::codex(&driver, action).await;
     if let Err(error) = &sent && crate::warn_limit::allow(Some(&ctx.name), &format!("codex_permission:{}", error.code)) {
         tracing::warn!(session = %ctx.name, code = %error.code, message = %error.message, "seletor de permissões do Codex falhou");
+    }
+    // O modo trocado vai ao arquivo da sessão: o rollout só o grava na próxima rodada, e adormecer antes
+    // dela acordaria com o modo antigo, às vezes mais permissivo.
+    let confirmed = sent.as_ref().ok().filter(|_| setting).and_then(|value| value["current"].as_str())
+        .and_then(crate::runtime::codex_launch::policy_of).and_then(|(approval, sandbox)| crate::runtime::codex_launch::mode_of(approval, sandbox));
+    if let (Some(mode), Some(dir)) = (confirmed, target.sidecar_dir.clone()) {
+        let (name, key, app_pid) = (ctx.name.clone(), target.key.clone(), target.app_pid);
+        let saved = tokio::task::spawn_blocking(move || crate::runtime::codex_sidecar::remember_permission(&dir, &name, &key, app_pid, mode)).await;
+        if !matches!(saved, Ok(Ok(true))) { tracing::warn!(session = %ctx.name, code = "codex_permission_unsaved", "o modo trocado no terminal não foi gravado no arquivo da sessão"); }
     }
     terminal_permission_answer(&sent)
 }

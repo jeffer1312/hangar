@@ -48,8 +48,7 @@ const MSG_QUEUE:&str = "Há mensagens na fila esperando entrega.";
 pub enum PermissionRead {
     /// O seletor `/permissions` da TUI, com o painel de terminal real (aberto recusa).
     Pane(Option<Arc<crate::term::Terms>>),
-    /// Só testes: o modo já lido, sem a TUI.
-    #[doc(hidden)]
+    /// O modo já sabido, sem a TUI: o do adormecer (rollout e arquivo da sessão) e o dos testes.
     Known(String),
 }
 
@@ -252,16 +251,30 @@ fn terminal_settings(meta:Meta,view:&Value,key:&str) -> Result<Meta,RuntimeError
 /// Plan/default voltam depois da troca; outro modo não existe no sem terminal.
 fn collaboration(view:&Value) -> Option<String> { view["mode"].as_str().filter(|mode|matches!(*mode,"plan" | "default")).map(str::to_owned) }
 
+/// Fins do rollout lidos atrás da última rodada antes do arquivo inteiro: há rollout de centenas de MB.
+const ROLLOUT_TAILS:[u64;2] = [1 << 20,16 << 20];
+
 /// O modo de permissão da última rodada gravada no rollout (`turn_context`), sem ler a tela. `Ok(None)`:
 /// a conversa ainda não teve rodada; `Err`: rollout ilegível ou política fora dos três modos. Bloqueante.
 fn rollout_mode(path:&Path) -> Result<Option<&'static str>,()> {
-    let raw = std::fs::read(path).map_err(|_|())?;
-    for line in raw.split(|b|*b == b'\n').rev() {
-        let Ok(record) = serde_json::from_slice::<Value>(line) else { continue };
-        if record["type"] != "turn_context" { continue; }
-        let policy = &record["payload"];
-        let found = super::codex_launch::mode_of(policy["approval_policy"].as_str().unwrap_or(""),policy["sandbox_policy"]["type"].as_str().unwrap_or(""));
-        return found.map(Some).ok_or(());
+    use std::io::{Read,Seek,SeekFrom};
+    let mut file = std::fs::File::open(path).map_err(|_|())?;
+    let size = file.metadata().map_err(|_|())?.len();
+    for window in ROLLOUT_TAILS.into_iter().chain([u64::MAX]) {
+        let start = size.saturating_sub(window);
+        let mut raw = Vec::new();
+        file.seek(SeekFrom::Start(start)).map_err(|_|())?;
+        (&mut file).take(size - start).read_to_end(&mut raw).map_err(|_|())?;
+        let lines:Vec<&[u8]> = raw.split(|b|*b == b'\n').collect();
+        // A primeira linha de um fim parcial pode vir cortada: fica para a janela maior.
+        for line in lines[usize::from(start > 0).min(lines.len())..].iter().rev() {
+            let Ok(record) = serde_json::from_slice::<Value>(line) else { continue };
+            if record["type"] != "turn_context" { continue; }
+            let policy = &record["payload"];
+            let found = super::codex_launch::mode_of(policy["approval_policy"].as_str().unwrap_or(""),policy["sandbox_policy"]["type"].as_str().unwrap_or(""));
+            return found.map(Some).ok_or(());
+        }
+        if start == 0 { break; }
     }
     Ok(None)
 }
@@ -436,9 +449,15 @@ impl Watcher {
             let procs = SystemProcs::default();
             // Filhos ilegíveis não dizem que nenhum comando roda.
             let quiet = still && procs.children(Duration::ZERO).is_ok() && app.is_some_and(|pid|crate::state::shells::shells_of(pid,&procs).is_empty());
-            // A permissão da última rodada, que leva o `/permissions` digitado na TUI; sem rodada, a gravada.
-            // Política fora dos três modos ou conversa ilegível: desiste, sem abrir o seletor na tela.
-            let permission = match rollout.as_deref().map(rollout_mode) { Some(Ok(Some(mode)))=>Some(mode), Some(Ok(None))=>stored, _=>None };
+            if !quiet { return (false,None); }
+            // A menos permissiva entre a última rodada (leva o `/permissions` digitado na TUI) e a gravada (leva a
+            // troca pelo app, que a rodada só grava depois). Fonte ilegível ou fora dos três modos: desiste, sem
+            // abrir o seletor na tela.
+            let permission = match (rollout.as_deref().map(rollout_mode),stored) {
+                (Some(Ok(Some(turn))),Some(stored))=>super::codex_launch::least(turn,stored),
+                (Some(Ok(None)),stored)=>stored,
+                _=>None,
+            };
             (quiet,permission)
         }).await.unwrap_or((false,None));
         let (true,Some(permission)) = (quiet,permission) else { return Ok(None) };
@@ -1042,6 +1061,12 @@ mod tests {
         std::fs::write(&path,format!("{}\n",turn("untrusted","read-only"))).unwrap();
         assert_eq!(rollout_mode(&path),Err(()),"fora dos três modos não vira nenhum deles");
         assert_eq!(rollout_mode(&dir.path().join("sem")),Err(()),"ilegível");
+        // Rodada longe do fim (saída grande depois dela): a janela maior a acha.
+        std::fs::write(&path,format!("{}\n{{\"filler\":\"{}\"}}\n",turn("on-request","read-only"),"x".repeat(2 << 20))).unwrap();
+        assert_eq!(rollout_mode(&path),Ok(Some("Ask for approval")));
+        assert_eq!(super::super::codex_launch::least("Full Access"," ask for approval"),Some("Ask for approval"),"vence o menos permissivo");
+        assert_eq!(super::super::codex_launch::least("Approve for me","Full Access"),Some("Approve for me"));
+        assert_eq!(super::super::codex_launch::least("Full Access","Read Only"),None);
     }
 
     #[test]

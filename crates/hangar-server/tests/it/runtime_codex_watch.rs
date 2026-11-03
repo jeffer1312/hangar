@@ -1815,6 +1815,45 @@ async fn codex_terminal_sleeps_and_wakes_in_terminal() {
     reaper.join().unwrap();
 }
 
+/// A permissão baixada pelo app depois da última rodada (o rollout ainda diz Full Access) não pode voltar
+/// maior: o adormecer usa a menos permissiva entre a rodada e o arquivo da sessão.
+#[tokio::test]
+async fn codex_terminal_lowered_by_the_app_wakes_in_ask() {
+    let fx = fixture();
+    let (first,second) = (fake_app_server(true).await,fake_app_server(true).await);
+    let (app,tui) = (app_server_process(&first.endpoint),tui());
+    let (app_pid,tui_pid) = (app.id(),tui.id());
+    fx.put_sidecar("cx-proof",sleepy_meta(&fx,&first.endpoint,&app,&tui));
+    let turn = json!({"type":"turn_context","payload":{"approval_policy":"never","sandbox_policy":{"type":"danger-full-access"}}});
+    std::fs::write(fx.root.join("rollout.jsonl"),format!("{turn}\n")).unwrap();
+    std::fs::write(&fx.panes,format!("cx-proof\t1\t{tui_pid}\t/w\t%7\t\tcodex\t1700000000\t0\t0\n")).unwrap();
+    std::fs::write(fx.panes.with_extension("pids"),format!("{app_pid} {tui_pid}")).unwrap();
+    let reaper = reap(vec![app,tui]);
+    let registry = sleep_registry(&fx).await;
+    let watcher = relaunch_watcher(&fx,&waking_tmux(&fx,&second.endpoint,"Ask for approval"));
+    registry.bind_watcher(watcher.clone());
+    watcher.round(&registry).await;
+    let key = key_of(&fx.sidecar("cx-proof").unwrap());
+    // O que a troca pelo app (`POST /codex-permissions` no terminal) grava depois do seletor confirmar.
+    assert!(hangar_server::runtime::codex_sidecar::remember_permission(&fx.sidecar_dir(),"cx-proof",&key,app_pid,"Ask for approval").unwrap());
+    assert!(!hangar_server::runtime::codex_sidecar::remember_permission(&fx.sidecar_dir(),"cx-proof",&key,app_pid + 1,"Full Access").unwrap(),"outra vida não grava");
+
+    assert!(sleep_until(&watcher,&registry,"cx-proof").await);
+    assert_eq!(fx.sidecar("cx-proof").unwrap()["permission_mode"],"Ask for approval","a menos permissiva vence a rodada em Full Access");
+    registry.queue_asleep("cx-proof",&key,"de volta").await.unwrap();
+    let _ = registry.adopt_now("cx-proof").await;
+    let awake_until = Instant::now() + Duration::from_secs(20);
+    while !registry.owns_codex_terminal("cx-proof") {
+        assert!(Instant::now() < awake_until,"acordou: {:?}",fx.sidecar("cx-proof"));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    // O terminal novo subiu em Ask: o lançador falso grava Ask, e a conferência do acordar exige o mesmo modo.
+    assert_eq!(fx.sidecar("cx-proof").unwrap()["permission_mode"],"Ask for approval");
+    assert_eq!(spawns(&fx),1);
+    kill_spawned(&fx);
+    reaper.join().unwrap();
+}
+
 #[tokio::test]
 async fn codex_sleep_gives_up_mid_turn() {
     let fx = fixture();
