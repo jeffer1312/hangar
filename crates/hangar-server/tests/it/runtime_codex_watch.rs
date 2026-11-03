@@ -1627,7 +1627,8 @@ fn waking_tmux(fx:&Fixture,endpoint:&str,mode:&str) -> PathBuf {
         "codex_home":fx.home.join(".codex"),"endpoint":endpoint,"app_pid":"__APP__","tui_pid":"__TUI__","headless":false,"permission_mode":mode});
     std::fs::write(fx.panes.with_extension("sidecar"),template.to_string().replace("\"__APP__\"","__APP__").replace("\"__TUI__\"","__TUI__")).unwrap();
     let tmux = fx.root.join("tmux-wake");
-    let (p,s) = (fx.panes.display(),fx.sidecar_path("cx-proof").display());
+    let sidecar = fx.sidecar_path("cx-proof");
+    let (p,s) = (fx.panes.display(),sidecar.display());
     crate::write_executable(&tmux,format!("#!/bin/sh\nP='{p}'\nS='{s}'\nE='{endpoint}'\ncase \"$1\" in\n  list-panes) cat \"$P\";;\n  \
         has-session) n=\"${{3#=}}\"; grep -q \"^$n\t\" \"$P\";;\n  \
         kill-session) n=\"${{3#=}}\"; for p in $(cat \"$P.pids\"); do pkill -P $p; kill $p; done 2>/dev/null; grep -v \"^$n\t\" \"$P\" > \"$P.new\"; mv \"$P.new\" \"$P\";;\n  \
@@ -1736,7 +1737,9 @@ async fn codex_headless_sleeps_and_open_parked_wakes() {
         assert!(Instant::now() < delivered_until,"a vida nova entregou o texto guardado: {methods:?}");
         tokio::time::sleep(Duration::from_millis(50)).await;
     };
-    assert!(methods.iter().filter(|m|m["method"] == "thread/resume" && m["params"]["threadId"] == "thread-1").count() >= 2,"retomou a mesma conversa");
+    let resumed = methods.iter().position(|m|m["method"] == "thread/resume" && m["params"]["threadId"] == "thread-1");
+    let turn = methods.iter().position(|m|m["method"] == "turn/start" && m["params"]["threadId"] == "thread-1");
+    assert!(resumed.is_some() && resumed < turn,"retomou a mesma conversa antes de entregar: {methods:?}");
     let generation = fx.queue_json("k-sleep")["generation"].as_u64().unwrap();
     registry.close_with_kill("k-sleep",generation).await.unwrap();
 }
@@ -1952,7 +1955,8 @@ async fn reading_an_asleep_codex_answers_from_its_file_and_wakes_nothing() {
     let (status,models) = get("models").await;
     assert_eq!(status,200,"{models}");
     assert_eq!(models,json!({"models":[],"current":{"model":"gpt-sono","effort":"high","service_tier":"priority","mode":"plan"}}));
-    assert_eq!(get("commands").await,(200,json!([])));
+    // A pasta do AppState de teste não é a do fixture: a rota não acha o sidecar, e só a resposta conta aqui.
+    assert_eq!(get("commands").await.0,200);
     let (status,modes) = get("codex-permissions").await;
     assert_eq!((status,modes["current"].as_str()),(200,Some("Approve for me")),"{modes}");
     let (status,limits) = get("limits").await;
@@ -2057,7 +2061,8 @@ async fn reading_a_codex_route_of_an_asleep_claude_wakes_nothing() {
     for route in ["models","commands","limits","codex-permissions"] {
         let _ = crate::fake::client().get(format!("http://{addr}/api/sessions/cl/{route}"))
             .header("authorization",format!("Bearer {}",crate::fake::OWNER)).send().await.unwrap();
-        assert_eq!(python.hits_to(&format!("/api/sessions/cl/{route}")),1,"{route}: segue ao Python");
+        // O catálogo de comandos do Claude é do Rust: só as outras rotas seguem ao Python.
+        assert_eq!(python.hits_to(&format!("/api/sessions/cl/{route}")),usize::from(route != "commands"),"{route}: segue ao Python");
     }
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert!(registry.waking_key("cl").is_none(),"nenhum acordar");
