@@ -37,7 +37,7 @@ pub enum DeskKey {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(tag = "t", rename_all = "snake_case")]
+#[serde(try_from = "RawInput")]
 pub enum DeskInput {
     /// Apertar e soltar juntos: soltar depois deixaria o botão preso se o fim não chegasse.
     Click { x: f64, y: f64 },
@@ -45,6 +45,36 @@ pub enum DeskInput {
     Key { key: DeskKey },
     Text { text: String },
     Back,
+}
+
+/// Struct comum, não enum com `tag`: com o `arbitrary_precision` do crate, o enum etiquetado recusa
+/// coordenada com casa decimal, que é o que os clientes mandam.
+#[derive(Deserialize)]
+struct RawInput {
+    t: String,
+    x: Option<f64>,
+    y: Option<f64>,
+    down: Option<bool>,
+    key: Option<DeskKey>,
+    text: Option<String>,
+}
+
+impl TryFrom<RawInput> for DeskInput {
+    type Error = &'static str;
+
+    fn try_from(raw: RawInput) -> Result<Self, Self::Error> {
+        let RawInput { t, x, y, down, key, text } = raw;
+        let point = x.zip(y);
+        match t.as_str() {
+            "click" => point.map(|(x, y)| Self::Click { x, y }),
+            "wheel" => point.zip(down).map(|((x, y), down)| Self::Wheel { x, y, down }),
+            "key" => key.map(|key| Self::Key { key }),
+            "text" => text.map(|text| Self::Text { text }),
+            "back" => Some(Self::Back),
+            _ => None,
+        }
+        .ok_or("entrada da janela do login inválida")
+    }
 }
 
 /// Bloqueia: quem chama faz fora da thread do runtime.
@@ -175,8 +205,14 @@ mod hyprland {
             run_limited(&self.env, "5", program, args)
         }
 
+        /// Hyprland com configuração em Lua recusa o dispatcher clássico e só aceita a chamada `hl.dsp.*`.
+        fn dispatch(&self, classic: &[&str], lua: &str) -> Option<Output> {
+            self.run("hyprctl", &[&["dispatch"], classic].concat()).or_else(|| self.run("hyprctl", &["dispatch", lua]))
+        }
+
         fn focus(&self, window: &DeskWindow) {
-            self.run("hyprctl", &["dispatch", "focuswindow", &format!("address:{}", window.id)]);
+            let address = format!("address:{}", window.id);
+            self.dispatch(&["focuswindow", &address], &format!(r#"hl.dsp.focus({{ window = "{address}" }})"#));
         }
 
         fn focused(&self, window: &DeskWindow) -> bool {
@@ -216,10 +252,16 @@ mod hyprland {
         fn input(&self, window: &DeskWindow, input: &DeskInput) -> bool {
             let pointer = |x: f64, y: f64| {
                 let (x, y) = window_point(window, x, y);
-                self.run("hyprctl", &["dispatch", "movecursor", &x.to_string(), &y.to_string()]).is_some()
+                self.dispatch(&["movecursor", &x.to_string(), &y.to_string()], &format!("hl.dsp.cursor.move({{ x = {x}, y = {y} }})")).is_some()
             };
             // O clique é na tela: só agora a janela precisa estar na frente, e sem isso ele cairia em outra.
-            let on_top = || self.ensure_focus(window) && self.run("hyprctl", &["dispatch", "alterzorder", &format!("top,address:{}", window.id)]).is_some();
+            let on_top = || {
+                self.ensure_focus(window)
+                    && self.dispatch(
+                        &["alterzorder", &format!("top,address:{}", window.id)],
+                        &format!(r#"hl.dsp.window.alter_zorder({{ mode = "top", window = "address:{}" }})"#, window.id),
+                    ).is_some()
+            };
             match input {
                 DeskInput::Click { x, y } => on_top() && pointer(*x, *y) && self.run("ydotool", &["click", "0xC0"]).is_some(),
                 DeskInput::Wheel { x, y, down } => {
@@ -248,7 +290,8 @@ mod hyprland {
         }
 
         fn close(&self, window: &DeskWindow) {
-            if self.run("hyprctl", &["dispatch", "closewindow", &format!("address:{}", window.id)]).is_none() {
+            let address = format!("address:{}", window.id);
+            if self.dispatch(&["closewindow", &address], &format!(r#"hl.dsp.window.close({{ window = "{address}" }})"#)).is_none() {
                 tracing::warn!(code = "login_view_close_failed", "a janela do login não fechou");
             }
         }
@@ -263,7 +306,7 @@ mod windows_desk {
         Foundation::{CloseHandle, HWND, LPARAM, RECT},
         Graphics::Gdi::{
             BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS, DeleteDC, DeleteObject,
-            SelectObject,
+            GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow, SelectObject,
         },
         Storage::Xps::PrintWindow,
         System::{
@@ -272,20 +315,25 @@ mod windows_desk {
             Threading::{GetCurrentProcessId, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW},
         },
         UI::{
-            HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetThreadDpiAwarenessContext},
+            HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForWindow, SetThreadDpiAwarenessContext},
             Input::KeyboardAndMouse::{
-                INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, MOUSE_EVENT_FLAGS,
-                MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_WHEEL, SendInput, VIRTUAL_KEY, VK_BACK, VK_DELETE, VK_DOWN,
-                VK_END, VK_ESCAPE, VK_HOME, VK_LEFT, VK_MENU, VK_RETURN, VK_RIGHT, VK_TAB, VK_UP, mouse_event,
+                INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE,
+                MOUSE_EVENT_FLAGS, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_WHEEL, MOUSEINPUT, SendInput, VIRTUAL_KEY,
+                VK_BACK, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_HOME, VK_LEFT, VK_MENU, VK_RETURN, VK_RIGHT, VK_TAB, VK_UP,
+                mouse_event,
             },
             WindowsAndMessaging::{
                 EnumWindows, GetClassNameW, GetForegroundWindow, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
-                PostMessageW, SW_RESTORE, SetCursorPos, SetForegroundWindow, ShowWindow, WM_CLOSE,
+                IsZoomed, PostMessageW, SW_RESTORE, SWP_NOACTIVATE, SWP_NOZORDER, SetCursorPos, SetForegroundWindow, SetWindowPos, ShowWindow,
+                WM_CLOSE,
             },
         },
     };
 
     const PW_RENDERFULLCONTENT: u32 = 2;
+    // Em pixel lógico: cabe a página de autorização inteira sem sobrar faixa vazia dos lados.
+    const LOGIN_WIDTH: i32 = 1000;
+    const LOGIN_HEIGHT: i32 = 900;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     const DESKTOP_READOBJECTS: u32 = 0x0001;
 
@@ -365,6 +413,41 @@ mod windows_desk {
         unsafe { SendInput(inputs.len() as u32, inputs.as_ptr(), size_of::<INPUT>() as i32) as usize == inputs.len() }
     }
 
+    /// Processo em segundo plano não traz janela para a frente; uma entrada vazia o torna o dono da última entrada.
+    fn bring_to_front(window: HWND) {
+        let empty = INPUT {
+            r#type: INPUT_MOUSE,
+            Anonymous: INPUT_0 { mi: MOUSEINPUT { dx: 0, dy: 0, mouseData: 0, dwFlags: 0, time: 0, dwExtraInfo: 0 } },
+        };
+        send(&[empty]);
+        // SAFETY: sem ponteiro; handle morto só faz a chamada falhar.
+        unsafe { SetForegroundWindow(window) };
+    }
+
+    /// Janela do tamanho da tela larga encolhe a página no quadro: a do login ganha tamanho de página.
+    fn fit(window: HWND) {
+        // SAFETY: a saída é uma variável local, e handle morto só faz as chamadas falharem.
+        unsafe {
+            if IsZoomed(window) != 0 || IsIconic(window) != 0 {
+                ShowWindow(window, SW_RESTORE);
+            }
+            let mut monitor: MONITORINFO = std::mem::zeroed();
+            monitor.cbSize = size_of::<MONITORINFO>() as u32;
+            if GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST), &mut monitor) == 0 {
+                return;
+            }
+            let area = monitor.rcWork;
+            let scale = GetDpiForWindow(window).max(96) as i32;
+            let width = (LOGIN_WIDTH * scale / 96).min(area.right - area.left);
+            let height = (LOGIN_HEIGHT * scale / 96).min(area.bottom - area.top);
+            let mut rect = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+            GetWindowRect(window, &mut rect);
+            let x = rect.left.clamp(area.left, area.right - width);
+            let y = rect.top.clamp(area.top, area.bottom - height);
+            SetWindowPos(window, std::ptr::null_mut(), x, y, width, height, SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+    }
+
     fn mouse(flags: MOUSE_EVENT_FLAGS, data: i32) {
         // SAFETY: sem ponteiro; a posição já foi dada por `SetCursorPos`.
         unsafe { mouse_event(flags, 0, 0, data, 0) };
@@ -385,8 +468,9 @@ mod windows_desk {
         }
 
         fn present(&self, window: &DeskWindow) {
-            // SAFETY: handle morto só faz a chamada falhar.
-            unsafe { SetForegroundWindow(handle(window)) };
+            aware();
+            fit(handle(window));
+            bring_to_front(handle(window));
         }
 
         fn capture(&self, window: &DeskWindow) -> Option<Vec<u8>> {
@@ -461,7 +545,7 @@ mod windows_desk {
                 unsafe {
                     if GetForegroundWindow() == handle(window) { return true; }
                     if IsIconic(handle(window)) != 0 { ShowWindow(handle(window), SW_RESTORE); }
-                    SetForegroundWindow(handle(window));
+                    bring_to_front(handle(window));
                     std::thread::sleep(FOCUS_SETTLE);
                     GetForegroundWindow() == handle(window)
                 }
@@ -556,6 +640,15 @@ mod tests {
         assert!(serde_json::from_str::<DeskInput>(r#"{"t":"key","key":"Enter"}"#).is_ok());
         assert!(serde_json::from_str::<DeskInput>(r#"{"t":"key","key":"Super_L"}"#).is_err());
         assert!(serde_json::from_str::<DeskInput>(r#"{"t":"shell","cmd":"x"}"#).is_err());
+        assert!(serde_json::from_str::<DeskInput>(r#"{"t":"click","x":1}"#).is_err());
+    }
+
+    #[test]
+    fn fractional_coordinates_are_accepted() {
+        let raw = r#"{"t":"click","x":494.37,"y":803.5}"#;
+        assert_eq!(serde_json::from_str::<DeskInput>(raw).unwrap(), DeskInput::Click { x: 494.37, y: 803.5 });
+        let value: serde_json::Value = serde_json::from_str(r#"{"t":"wheel","x":1.5,"y":2.25,"down":true}"#).unwrap();
+        assert_eq!(serde_json::from_value::<DeskInput>(value).unwrap(), DeskInput::Wheel { x: 1.5, y: 2.25, down: true });
     }
 
     #[cfg(target_os = "linux")]
