@@ -107,10 +107,18 @@ const json = (body: unknown, status = 200) =>
 
 const unavailable = () => json({ detail: 'Not available in the demo' }, 404);
 
+const VOICE_MODEL = { model: null, effort: 'low', tier: null };
+const VOICE_SETTINGS = {
+  enabled: false, codex: false, jev: false, voices: [], call: { active: false, client: null },
+  settings: { voice: null, codex_account: 'demo', organizer: { direct: VOICE_MODEL, plan: VOICE_MODEL } },
+};
+
 function route(path: string, init?: RequestInit): Response {
   if (path === '/api/sessions') return !init?.method || init.method === 'GET' ? json(SESSIONS) : unavailable();
   if (path === '/api/config') return json({ campos: {}, somente_leitura: {} });
   if (path === '/api/peers/identificador') return json({ identificador: 'demo' });
+  // Sem Codex o botão de voz some; um 404 aqui viraria "Falha" vermelho no topo da lista.
+  if (path === '/api/voice/settings') return json(VOICE_SETTINGS);
   const [, name, action] = path.match(/^\/api\/sessions\/([^/]+)\/(history|input)$/) ?? [];
   const session = name && decodeURIComponent(name);
   if (!session || !CHATS[session]) return unavailable();
