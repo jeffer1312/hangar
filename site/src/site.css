@@ -22,8 +22,16 @@ a:hover{color:#FFFFFF}
 .hg a:focus-visible,.hg button:focus-visible{outline:2px solid var(--a);outline-offset:3px}
 .hg code,.hg pre{font-variant-ligatures:none}
 .card{box-shadow:inset 0 1px 0 rgba(255,255,255,.045)}
-.dl{position:relative}
-.dl .dl-arrow{position:absolute;top:22px;right:22px;color:#7A7D7B;transition:transform .3s cubic-bezier(.2,.8,.2,1),color .3s}
+.dl{position:relative;overflow:hidden}
+.dl-head{position:relative;display:flex;align-items:center;gap:14px}
+.dl-name{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px}
+.dl-ic{flex:none;width:52px;height:52px;border-radius:14px;display:grid;place-items:center;color:var(--t);background:color-mix(in srgb,var(--t) 11%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--t) 20%,transparent);transition:background .3s,box-shadow .3s}
+.dl:hover .dl-ic{background:color-mix(in srgb,var(--t) 18%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--t) 34%,transparent)}
+.dl-mark{position:absolute;top:-30px;right:-40px;width:128px;height:128px;color:#fff;opacity:.05;pointer-events:none;transition:opacity .3s,color .3s}
+.dl:hover .dl-mark{opacity:.09}
+.dl.is-mine .dl-mark{color:var(--a);opacity:.16}
+.dl-foot{position:relative;margin-top:auto;padding-top:14px;border-top:1px solid rgba(255,255,255,.07);display:flex;align-items:center;justify-content:space-between;gap:12px}
+.dl .dl-arrow{flex:none;color:#7A7D7B;transition:transform .3s cubic-bezier(.2,.8,.2,1),color .3s}
 .dl:hover .dl-arrow{transform:translateY(3px);color:#ECEBE6}
 .hg h1,.hg h2,.hg h3{text-wrap:balance}
 .hg p{text-wrap:pretty}
