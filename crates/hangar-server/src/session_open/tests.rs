@@ -1815,6 +1815,16 @@ fn a_login_guest_is_found_by_the_token_hash() {
     assert_eq!(server::login_guest(base.path(), b"tok"), None, "um torto deixa o arquivo ilegível, como no Python");
 }
 
+/// Sem arquivo não há convidados; ilegível recusa, para a filha de convidado não nascer do dono.
+#[test]
+fn unreadable_guests_refuse_instead_of_reading_as_no_guests() {
+    let base = tempfile::tempdir().unwrap();
+    assert_eq!(server::read_guests(base.path()).unwrap(), None);
+    std::fs::write(base.path().join("guests.json"), "{\"guests\": [").unwrap();
+    let refused = server::read_guests(base.path()).unwrap_err();
+    assert_eq!((refused.status, refused.code), (503, Some("erro_convidados_ilegivel")));
+}
+
 /// O dono da sessão do convidado vai ao `guests.json` como o `claim` do Python grava: entrada
 /// `{"guest", "life"}`, o resto do arquivo intacto, 0600; ilegível não é sobrescrito; e espera a
 /// `guests.lock` que o Python segura.

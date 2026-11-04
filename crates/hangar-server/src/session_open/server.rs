@@ -136,6 +136,19 @@ pub fn guest_by_id(claude_base: &Path, id: &str) -> Option<LoginGuest> {
     Some(LoginGuest { id: id.into(), name: guest["name"].as_str()?.into(), root: guest["root"].as_str()?.into() })
 }
 
+/// O `guests.json`, `None` sem arquivo; ilegível é erro, nunca "sem convidados".
+pub(crate) fn read_guests(claude_base: &Path) -> Result<Option<Value>, OpenError> {
+    let unreadable = |cause: &dyn std::fmt::Display| {
+        tracing::warn!(code = "guests_unreadable", output = %cause, "guests.json ilegível: abertura recusada");
+        OpenError::new(503, "erro_convidados_ilegivel", "o arquivo de convidados está ilegível")
+    };
+    match crate::runtime::queue::read_replaced(&claude_base.join("guests.json")) {
+        Ok(bytes) => serde_json::from_slice(&bytes).map(Some).map_err(|error| unreadable(&error)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(unreadable(&error)),
+    }
+}
+
 /// O id do convidado dono de `session` no `guests.json`. Só outra vida desfaz o dono, como no `owner_of`.
 fn session_guest(raw: &Value, session: &str, life: Option<&str>) -> Option<String> {
     let entry = &raw["sessions"][session];
@@ -180,15 +193,14 @@ impl ServerHost {
     }
 
     /// A sessão de convidado abre pelo token do dono (`hangar-send`, MCP): sem isto, a filha nasce do dono.
-    async fn creator_guest(&self, creator: &str) -> Option<LoginGuest> {
-        let raw: Value = match crate::runtime::queue::read_replaced(&self.env.claude_base.join("guests.json")) {
-            Ok(bytes) => serde_json::from_slice(&bytes).inspect_err(|e| tracing::warn!("guests.json ilegível: a sessão abre sem dono convidado: {e}")).ok()?,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
-            Err(error) => { tracing::warn!("guests.json ilegível: a sessão abre sem dono convidado: {error}"); return None; }
-        };
-        raw["sessions"].get(creator)?;
+    /// Na dúvida recusa: abrir sem saber quem é o criador daria à filha os poderes do dono.
+    async fn creator_guest(&self, creator: &str) -> Result<Option<LoginGuest>, OpenError> {
+        let Some(raw) = read_guests(&self.env.claude_base)? else { return Ok(None) };
+        if raw["sessions"].get(creator).is_none() { return Ok(None); }
         let life = self.lives().life(creator, true).await;
-        guest_by_id(&self.env.claude_base, &session_guest(&raw, creator, life.as_deref())?)
+        let Some(id) = session_guest(&raw, creator, life.as_deref()) else { return Ok(None) };
+        guest_by_id(&self.env.claude_base, &id).map(Some)
+            .ok_or_else(|| OpenError::new(403, "erro_convidado_inexistente", "o convidado desta sessão não existe mais"))
     }
 
     /// O dono da sessão que o convidado com login abriu vai ao `guests.json`. Falhou: a sessão sai
@@ -394,7 +406,10 @@ async fn decide_detached(st: &Arc<AppState>, request: SessionOpenRequest, caller
     tokio::spawn(async move {
         let host = ServerHost::new(st.clone()).await;
         let claim = match (claim, request.creator.as_deref()) {
-            (None, Some(creator)) => host.creator_guest(creator).await,
+            (None, Some(creator)) => match host.creator_guest(creator).await {
+                Ok(guest) => guest,
+                Err(error) => return Decision::Refused(error),
+            },
             (claim, _) => claim,
         };
         // A filha de sessão de convidado segue as regras dele, mesmo aberta com o token do dono.
