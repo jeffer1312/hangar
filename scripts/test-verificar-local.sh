@@ -197,5 +197,58 @@ printf '<< windows: rust ok\n  ok      rust 1s\n' | "$V" --marcar "$anda" > /dev
     { echo "FALHOU --marcar saiu com erro numa última linha que não é de passo"; falhou=1; }
 rm -f "$anda"
 
+# Trava do pre-push no fork de um PR: a main pública juntada passa, segredo novo não.
+gancho="$(cd "$(dirname "$0")/hooks" && pwd)/pre-push"
+base="$(mktemp -d)"
+(
+    set -e
+    unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+    export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t.invalid GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t.invalid HANGAR_SEM_VERIFICACAO=1
+    chave="sk-$(printf 'a%.0s' {1..24})"
+    git init -q --bare -b main "$base/publico.git"
+    git clone -q "$base/publico.git" "$base/w" 2> /dev/null
+    cd "$base/w"
+    git config url."$base/publico.git".insteadOf https://github.com/jeffer1312/hangar.git
+    git checkout -q -B main
+    git commit -q --allow-empty -m raiz
+    git push -q origin main
+    git checkout -q -b pr
+    git commit -q --allow-empty -m pr
+    no_fork="$(git rev-parse HEAD)"
+    git checkout -q main
+    echo "$chave" > fixture.txt
+    git add fixture.txt
+    git commit -q -m fixture
+    git push -q origin main
+    git checkout -q pr
+    git merge -q --no-edit main
+    empurra() { printf 'refs/heads/pr %s refs/heads/pr %s\n' "$(git rev-parse HEAD)" "$no_fork" | "$gancho" "file://$base/fork.git" 2>&1; }
+    # Recusa pela varredura: um hook quebrado também sai com erro e não pode contar como barrado.
+    barra() { local saida; if saida="$(empurra)"; then return 1; fi; grep -q 'push recusado' <<< "$saida"; }
+    empurra > /dev/null || { echo "FALHOU pre-push cobrou do fork o que a main pública já tem"; exit 1; }
+    # Sem resposta do GitHub nada sai da varredura.
+    git config --unset url."$base/publico.git".insteadOf
+    git config url."$base/nada.git".insteadOf https://github.com/jeffer1312/hangar.git
+    barra || { echo "FALHOU pre-push descontou a main sem resposta do GitHub"; exit 1; }
+    git config --unset url."$base/nada.git".insteadOf
+    git config url."$base/publico.git".insteadOf https://github.com/jeffer1312/hangar.git
+    # `origin/main` local com commit que o GitHub não tem (espelho privado, ref velha) não conta.
+    git checkout -q main
+    echo "$chave" > privado.txt
+    git add privado.txt
+    git commit -q -m privado
+    git update-ref refs/remotes/origin/main HEAD
+    git checkout -q pr
+    git merge -q --no-edit main
+    barra || { echo "FALHOU pre-push descontou uma origin/main que não está publicada"; exit 1; }
+    git reset -q --hard HEAD~1
+    git update-ref refs/remotes/origin/main "$(git ls-remote origin refs/heads/main | cut -f1)"
+    echo "$chave" > novo.txt
+    git add novo.txt
+    git commit -q -m novo
+    barra || { echo "FALHOU pre-push deixou passar segredo novo"; exit 1; }
+) || falhou=1
+rm -rf "$base"
+
 (( falhou )) && exit 1
 echo "ok: classificação do verificar-local"
