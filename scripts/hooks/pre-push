@@ -49,8 +49,12 @@ achou=0
 enviados=()
 # Fora da varredura: o que o destino já tem e a main pública. O fork de um PR não tem a main, e
 # `$1` nem é nome de remoto quando o push vai por URL: sem isso o merge dela cairia inteiro aqui.
+# Só vale com `origin` no repositório público: a main de um espelho privado não está publicada.
 publicado="--remotes=$1"
-git rev-parse -q --verify refs/remotes/origin/main >/dev/null && publicado+=" refs/remotes/origin/main"
+case "$(git config --get remote.origin.url)" in
+    *github.com[:/]jeffer1312/hangar|*github.com[:/]jeffer1312/hangar.git)
+        git rev-parse -q --verify refs/remotes/origin/main >/dev/null && publicado+=" refs/remotes/origin/main" ;;
+esac
 while read -r _localref localsha _remoteref remotesha; do
     [[ "$localsha" == "$ZERO" ]] && continue          # delete de branch: nada sai
     if [[ "$remotesha" == "$ZERO" ]]; then

@@ -208,6 +208,8 @@ base="$(mktemp -d)"
     git init -q --bare -b main "$base/publico.git"
     git clone -q "$base/publico.git" "$base/w" 2> /dev/null
     cd "$base/w"
+    git config url."$base/publico.git".insteadOf https://github.com/jeffer1312/hangar.git
+    git remote set-url origin https://github.com/jeffer1312/hangar.git
     git checkout -q -B main
     git commit -q --allow-empty -m raiz
     git push -q origin main
@@ -223,6 +225,10 @@ base="$(mktemp -d)"
     git merge -q --no-edit main
     empurra() { printf 'refs/heads/pr %s refs/heads/pr %s\n' "$(git rev-parse HEAD)" "$no_fork" | "$gancho" "file://$base/fork.git" > /dev/null 2>&1; }
     empurra || { echo "FALHOU pre-push cobrou do fork o que a main pública já tem"; exit 1; }
+    # A main de um espelho privado não conta como publicada.
+    git remote set-url origin "$base/publico.git"
+    if empurra; then echo "FALHOU pre-push descontou a main de um origin que não é o público"; exit 1; fi
+    git remote set-url origin https://github.com/jeffer1312/hangar.git
     echo "$chave" > novo.txt
     git add novo.txt
     git commit -q -m novo
