@@ -17,17 +17,17 @@ tree_pids() {
 }
 
 cpu_ticks() {
-    local p total=0 campos
-    for p in "$@"; do
+    local p campos
+    for p in $(tree_pids); do
         campos="$(cut -d')' -f2- "/proc/$p/stat" 2>/dev/null)" || continue
         read -ra f <<< "$campos"
-        (( total += ${f[11]:-0} + ${f[12]:-0} ))
+        echo "$p $(( ${f[11]:-0} + ${f[12]:-0} ))"
     done
-    echo "$total"
 }
 
-swap_pages() {
-    awk '/^pswpin|^pswpout/ {t += $2} END {print t + 0}' /proc/vmstat
+# Parte do tempo em que todas as tarefas ficaram esperando memória, nos últimos 10 s.
+memory_stall() {
+    awk -F'avg10=' '/^full/ {print int($2)}' /proc/pressure/memory
 }
 
 show() {
@@ -55,22 +55,23 @@ show() {
         END {if (total) printf "  testes: %d de %d, %d falharam\n", feitos, total, falhas
              else print "  compilando: o rustc não informa progresso"}' "$log"
 
-    local pids antes swap_antes depois swap_depois cpu swap
+    local pids antes depois cpu espera
     mapfile -t pids < <(tree_pids)
     if (( ${#pids[@]} == 0 )); then echo "nenhum processo da verificação rodando"; return; fi
-    antes="$(cpu_ticks "${pids[@]}")"; swap_antes="$(swap_pages)"
+    antes="$(cpu_ticks)"
     sleep "$JANELA"
-    depois="$(cpu_ticks "${pids[@]}")"; swap_depois="$(swap_pages)"
-    cpu=$(( (depois - antes) / JANELA ))
-    swap=$(( (swap_depois - swap_antes) / JANELA ))
-    (( cpu < 0 )) && cpu=0
+    depois="$(cpu_ticks)"
+    # Por processo: quem saiu na janela não desconta, e quem nasceu nela conta inteiro.
+    cpu="$(awk -v janela="$JANELA" 'NR == FNR {a[$1] = $2; next} {d += $2 - a[$1]} END {print int(d / janela)}' \
+        <(echo "$antes") <(echo "$depois"))"
+    espera="$(memory_stall)"
     local veredito
-    if (( cpu >= 50 )); then veredito="ANDANDO"
-    elif (( swap > 2000 )); then veredito="PRESO NO SWAP"
+    if (( espera >= 30 )); then veredito="PRESO NO SWAP"
+    elif (( cpu >= 50 )); then veredito="ANDANDO"
     elif (( cpu >= 5 )); then veredito="LENTO"
     else veredito="PARADO"
     fi
-    echo "$veredito: CPU ${cpu}%, swap $swap páginas/s, ${#pids[@]} processos"
+    echo "$veredito: CPU ${cpu}%, ${espera}% do tempo esperando memória, ${#pids[@]} processos"
     ps -o pid=,etime=,pcpu=,rss=,comm= -p "$(IFS=,; echo "${pids[*]}")" --sort=-rss 2>/dev/null | head -3 |
         awk '{printf "  %s %s, %d MB em RAM\n", $5, $2, $4 / 1024}'
     awk '/MemAvailable/ {a = $2} /SwapTotal/ {t = $2} /SwapFree/ {f = $2}
