@@ -387,7 +387,8 @@ pub fn execute(op: Operation) -> Result<Value> {
         ListBranches { cwd, root } => {
             let mut info = git::branches(Path::new(&cwd))?;
             // Só mostra onde a worktree nova vai nascer; sem a configuração legível, a tela não mostra a pasta.
-            let parent = home().and_then(|home| {
+            // Sem raiz (painel de git local do nativo) ninguém mostra a pasta: não gasta os dois `git` dela.
+            let parent = home().filter(|_| !root.is_empty()).and_then(|home| {
                 let location = worktree_settings::load_default().and_then(|s| s.location_path(&home)).ok()?;
                 let parent = git::worktree_parent(Path::new(&cwd), Path::new(&root), &location)?;
                 // Abreviada com `~`, como a pessoa escreve a pasta nas configurações.

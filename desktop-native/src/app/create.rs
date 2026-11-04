@@ -1373,10 +1373,11 @@ impl NewSession {
             }
             CreateReply::Branches(seq, result) => {
                 if !self.checkout.finish(seq, result) { return None; }
-                // A branch escolhida virou a da pasta (troca pelo Git): a sessão abriria na pasta, não numa worktree nova.
-                if !self.new_branch && !self.branch.is_empty()
-                    && self.checkout.ok().and_then(Option::as_ref).and_then(|c| c.current.as_deref()) == Some(self.branch.as_str()) {
-                    self.branch.clear();
+                // Lista nova (fetch, troca ou criação pelo Git): o nome digitado vale de novo pela mesma regra, porque
+                // a branch pode ter chegado do remoto, virado a da pasta ou sido aberta em outra worktree.
+                if self.new_branch || !self.branch.is_empty() {
+                    let typed = self.new_branch_name.read(cx).value().trim().to_owned();
+                    self.apply_typed_branch(typed);
                 }
                 // A base padrão da branch nova é a branch atual da pasta; com HEAD solto, a primeira local.
                 if self.base.is_empty() {

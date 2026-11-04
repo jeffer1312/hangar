@@ -7843,6 +7843,7 @@
   "native_find_close": "Close (Esc)",
   "native_create_checkout_pick_worktree_help": "Pick the branch: on send it opens in a new worktree, leaving the original folder's branch alone.",
   "native_folder_git_label": "Git",
+  "native_folder_git_title": "Folder Git",
   "native_folder_git_branch_entry": "Switch or create the folder's branch",
   "native_folder_git_branch_title": "Folder branch",
   "native_folder_git_up_to_date": "Up to date",

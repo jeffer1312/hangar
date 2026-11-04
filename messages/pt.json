@@ -7843,6 +7843,7 @@
   "native_find_close": "Fechar (Esc)",
   "native_create_checkout_pick_worktree_help": "Escolha a branch: ao enviar, ela abre numa worktree nova, sem trocar a branch da pasta original.",
   "native_folder_git_label": "Git",
+  "native_folder_git_title": "Git da pasta",
   "native_folder_git_branch_entry": "Trocar ou criar branch da pasta",
   "native_folder_git_branch_title": "Branch da pasta",
   "native_folder_git_up_to_date": "Atualizada",

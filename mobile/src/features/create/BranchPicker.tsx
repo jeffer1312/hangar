@@ -89,7 +89,9 @@ export function BranchPicker({ server, cwd, sessionName, value, onChange, onPick
   // Nome de uma branch que já existe abre a worktree nela, sem criar outra; a base não vale para ela.
   // Branch aberta em outra worktree (ou na pasta principal) não abre outra: o git recusa.
   const openIn = typed ? wts?.list.find((w) => w.branch === typed) ?? wts?.list.find((w) => w.main_branch === typed) : undefined;
-  const openElsewhere = !!openIn;
+  // A leitura das branches já diz onde cada uma está aberta, sem esperar a lista de worktrees.
+  const openAt = typed ? info?.elsewhere?.[typed]?.path : undefined;
+  const openElsewhere = !!openIn || !!openAt;
   const known = !!info && !!typed && typed !== info.current && !openElsewhere && [...info.branches, ...info.remotes].includes(typed);
   const taken = fresh && !!info && !!typed && (typed === info.current || openElsewhere);
 
@@ -228,7 +230,7 @@ export function BranchPicker({ server, cwd, sessionName, value, onChange, onPick
             </Text>
           ) : taken ? (
             <Text style={styles.warn}>{m.worktree_menu_ja_aberta({ branch: typed, pasta: basename(typed === info.current ? cwd
-              : openIn?.branch === typed ? openIn.path : openIn?.repo ?? cwd) })}</Text>
+              : openAt ?? (openIn?.branch === typed ? openIn.path : openIn?.repo ?? cwd)) })}</Text>
           ) : null}
           {parent ? (
             <View style={styles.line}>

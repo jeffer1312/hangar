@@ -678,7 +678,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   const pickedWorktree = !worktree && picked ? repos.flatMap((r) => r.worktrees).find((w) => samePath(w.path, picked)) : undefined;
   const branchLabel = pickedWorktree ? m.worktree_menu_pill_existente({ nome: basename(pickedWorktree.path) })
     : !worktree ? m.native_create_checkout_current()
-    : !worktree.new_branch ? m.worktree_menu_pill_existente({ nome: worktree.branch })
+    : !worktree.new_branch ? m.worktree_menu_pill_nova({ branch: worktree.branch })
     : m.worktree_menu_pill_nova({ branch: worktree.branch || m.worktree_menu_nome_sessao() });
 
   const on = (yes: boolean) => (yes ? 'on' : 'off') as 'on' | 'off';
