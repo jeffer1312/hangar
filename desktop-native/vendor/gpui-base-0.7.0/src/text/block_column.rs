@@ -14,6 +14,9 @@ use super::{
 pub(super) const MIN_BLOCKS: usize = 8;
 /// A block laid out alone can round apart from its place in the column.
 const DRIFT: Pixels = px(1.);
+/// A block that keeps missing its place would flip the column between both
+/// layouts every frame, so after this many misses it stops skipping.
+const MAX_DRIFTS: u32 = 3;
 
 #[cfg(test)]
 thread_local! {
@@ -24,13 +27,18 @@ thread_local! {
 /// laid all of them out.
 #[derive(Default)]
 pub(crate) struct BlockPlaces {
-    document: usize,
+    /// Held, not just its address: a freed document's address can come back.
+    document: Option<Arc<Vec<BlockNode>>>,
     size: Size<Pixels>,
     places: Vec<Bounds<Pixels>>,
     /// Frames in a row that measured the same document at the same width.
     /// While a window resizes or a message streams this stays at zero, so
     /// the column keeps laying everything out.
     settled: u32,
+    drifts: u32,
+    /// Asked for at another width: a list measures rows it never prepaints,
+    /// so the width change can only be noticed during layout.
+    stale: bool,
 }
 
 impl BlockPlaces {
@@ -39,16 +47,38 @@ impl BlockPlaces {
         self.settled = 0;
     }
 
-    fn known(&self, document: usize) -> bool {
-        self.document == document && self.settled > 0 && !self.places.is_empty()
+    fn is_document(&self, document: &Arc<Vec<BlockNode>>) -> bool {
+        self.document.as_ref().is_some_and(|known| Arc::ptr_eq(known, document))
     }
 
-    fn measured(&mut self, document: usize, size: Size<Pixels>, places: Vec<Bounds<Pixels>>) {
-        let same = self.document == document && self.size.width == size.width;
+    fn known(&self, document: &Arc<Vec<BlockNode>>) -> bool {
+        self.is_document(document)
+            && self.settled > 0
+            && self.drifts < MAX_DRIFTS
+            && !self.stale
+            && !self.places.is_empty()
+    }
+
+    fn measured(
+        &mut self,
+        document: &Arc<Vec<BlockNode>>,
+        size: Size<Pixels>,
+        places: Vec<Bounds<Pixels>>,
+    ) {
+        let same = self.is_document(document) && self.size.width == size.width;
         self.settled = if same { self.settled + 1 } else { 0 };
-        self.document = document;
+        if !same {
+            self.drifts = 0;
+        }
+        self.stale = false;
+        self.document = Some(document.clone());
         self.size = size;
         self.places = places;
+    }
+
+    fn drifted(&mut self) {
+        self.drifts += 1;
+        self.forget();
     }
 }
 
@@ -90,10 +120,6 @@ impl BlockColumn {
             skip_unseen,
             children: Vec::new(),
         }
-    }
-
-    fn document(&self) -> usize {
-        Arc::as_ptr(&self.blocks) as usize
     }
 
     fn render(&self, ix: usize, window: &mut Window, cx: &mut App) -> AnyElement {
@@ -140,19 +166,22 @@ impl Element for BlockColumn {
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
         let places = self.places.borrow();
-        if self.skip_unseen && places.known(self.document()) {
+        if self.skip_unseen && places.known(&self.blocks) {
             let whole = places.size;
+            let shared = self.places.clone();
             let layout = window.request_measured_layout(
                 Style::default(),
                 move |known, available, _, _| {
-                    let width = match available.width {
+                    let width = known.width.unwrap_or(match available.width {
                         AvailableSpace::Definite(width) => width,
                         _ => whole.width,
-                    };
-                    size(
-                        known.width.unwrap_or(width),
-                        known.height.unwrap_or(whole.height),
-                    )
+                    });
+                    if width == whole.width {
+                        return size(width, known.height.unwrap_or(whole.height));
+                    }
+                    // Text rewraps about in proportion until the next frame measures it.
+                    shared.borrow_mut().stale = true;
+                    size(width, known.height.unwrap_or(whole.height * (whole.width / width)))
                 },
             );
             return (layout, BlockColumnLayout::Seen);
@@ -180,7 +209,6 @@ impl Element for BlockColumn {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let document = self.document();
         match layout {
             BlockColumnLayout::All(ids) => {
                 let places = ids
@@ -190,7 +218,7 @@ impl Element for BlockColumn {
                         Bounds::new(place.origin - bounds.origin, place.size)
                     })
                     .collect();
-                self.places.borrow_mut().measured(document, bounds.size, places);
+                self.places.borrow_mut().measured(&self.blocks, bounds.size, places);
                 for child in &mut self.children {
                     child.prepaint(window, cx);
                 }
@@ -198,7 +226,8 @@ impl Element for BlockColumn {
             BlockColumnLayout::Seen => {
                 let mask = window.content_mask().bounds;
                 let places = self.places.borrow().places.clone();
-                let mut moved = self.places.borrow().size.width != bounds.size.width;
+                let resized = self.places.borrow().size.width != bounds.size.width;
+                let mut drifted = false;
                 for (ix, place) in places.iter().enumerate() {
                     let top = bounds.origin.y + place.origin.y;
                     if top >= mask.bottom() || top + place.size.height <= mask.top() {
@@ -210,14 +239,18 @@ impl Element for BlockColumn {
                         AvailableSpace::MinContent,
                     );
                     let laid = block.layout_as_root(space, window, cx);
-                    moved |= (laid.height - place.size.height).abs() > DRIFT;
+                    drifted |= (laid.height - place.size.height).abs() > DRIFT;
                     block.prepaint_at(bounds.origin + place.origin, window, cx);
                     self.children.push(block);
                 }
                 // An image that loaded or a width that changed: the next
                 // frames lay everything out again.
-                if moved {
+                if resized {
                     self.places.borrow_mut().forget();
+                } else if drifted {
+                    self.places.borrow_mut().drifted();
+                }
+                if resized || drifted {
                     window.request_animation_frame();
                 }
             }
@@ -242,7 +275,7 @@ impl Element for BlockColumn {
 
 #[cfg(test)]
 mod tests {
-    use super::BUILT;
+    use super::{BUILT, BlockPlaces, MAX_DRIFTS};
     use crate::text::{TextView, TextViewState};
     use gpui::{
         AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
@@ -351,6 +384,41 @@ mod tests {
         assert!(bottom(&row, cx) > wide, "a narrower column wraps into more lines");
         let seen = frame(cx);
         assert!(seen < BLOCKS / 2, "built {seen} of {BLOCKS} after settling");
+    }
+
+    #[test]
+    fn a_block_that_keeps_missing_its_place_stops_the_skipping() {
+        let document = std::sync::Arc::new(Vec::new());
+        let whole = gpui::size(px(300.), px(900.));
+        let place = vec![gpui::Bounds::new(point(px(0.), px(0.)), whole)];
+        let mut places = BlockPlaces::default();
+        places.measured(&document, whole, place.clone());
+        places.measured(&document, whole, place.clone());
+        assert!(places.known(&document));
+        for _ in 0..MAX_DRIFTS {
+            places.drifted();
+            places.measured(&document, whole, place.clone());
+            places.measured(&document, whole, place.clone());
+        }
+        assert!(!places.known(&document));
+        let wider = gpui::size(px(400.), px(900.));
+        places.measured(&document, wider, place.clone());
+        places.measured(&document, wider, place);
+        assert!(places.known(&document), "another width starts over");
+    }
+
+    #[test]
+    fn a_stale_column_is_measured_again() {
+        let document = std::sync::Arc::new(Vec::new());
+        let whole = gpui::size(px(300.), px(900.));
+        let place = vec![gpui::Bounds::new(point(px(0.), px(0.)), whole)];
+        let mut places = BlockPlaces::default();
+        places.measured(&document, whole, place.clone());
+        places.measured(&document, whole, place.clone());
+        places.stale = true;
+        assert!(!places.known(&document));
+        places.measured(&document, whole, place);
+        assert!(places.known(&document));
     }
 
     #[gpui::test]
