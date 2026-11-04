@@ -411,6 +411,8 @@ enum Reply {
     Diff(String),
     /// Rótulo do atalho e se o pedido foi No Hangar.
     Shell(String, bool),
+    /// Rótulo e id do terminal de atalho que o clique no bloco aceso fechou.
+    ShellStopped(String, String),
     RunCode(String),
     Reload,
     PlanPreview(bool),

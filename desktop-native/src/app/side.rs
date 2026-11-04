@@ -145,6 +145,8 @@ pub(super) struct Side {
     diff: Option<(SessionKey, String, Option<Result<(String, bool), String>>)>,
     reloading: HashSet<SessionKey>,
     run_code_pending: HashSet<SessionKey>,
+    /// Terminais de atalho com o fechamento pedido e sem resposta: o segundo clique não repete o pedido.
+    stop_pending: HashSet<String>,
     /// A aba Git da sessão aberta (dono = `session_owner`).
     pub(super) git: Option<(SessionOwner, Entity<super::git::GitPanel>)>,
     /// Terminais dos atalhos shell por nome de sessão, e a aba que o painel deve trazer pra frente.
@@ -173,7 +175,7 @@ impl Default for Side {
     fn default() -> Self {
         let saved = appearance::get();
         Self { open: true, menu: false, width: saved.side_width, browser_width: saved.side_browser_width, drag: None, shortcuts: None, project: ProjectShortcuts::default(), cost: None, cost_task: None, cost_gen: 0, orq: Default::default(),
-            files: None, diff: None, reloading: HashSet::new(), run_code_pending: HashSet::new(), git: None, run: None, browsers: HashMap::new(), remote_browsers: HashMap::new(), browser_open: HashSet::new(), tabs: HashMap::new(),
+            files: None, diff: None, reloading: HashSet::new(), run_code_pending: HashSet::new(), stop_pending: HashSet::new(), git: None, run: None, browsers: HashMap::new(), remote_browsers: HashMap::new(), browser_open: HashSet::new(), tabs: HashMap::new(),
             #[cfg(target_os = "linux")] warm: None,
             shortcut_terms: HashMap::new(), shortcut_focus: HashMap::new(), shortcut_running: HashMap::new(), shortcut_recheck: HashMap::new() }
     }
@@ -188,6 +190,7 @@ impl Side {
         self.on_select();
         self.reloading.clear();
         self.run_code_pending.clear();
+        self.stop_pending.clear();
         self.shortcut_terms.clear();
         self.shortcut_focus.clear();
         self.shortcut_running.clear();
@@ -441,6 +444,21 @@ impl Hangar {
 
     pub(super) fn run_shortcut(&mut self, shortcut: Shortcut, confirmed: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(key) = self.selected_key() else { return; };
+        // Credencial e confirmação são de rodar: com terminal vivo o clique abre a pergunta dele ou o encerra. Quem
+        // confirmou pediu para rodar, então um terminal que surgiu com o diálogo aberto não é parado.
+        if let Shortcut::Shell { key: term_key, hangar, .. } = &shortcut {
+            if let Some(asking) = self.asking_term(&key.server, term_key, *hangar, &key.name) {
+                self.open_question(&key.server, &asking.owner, &asking.term.id, window, cx);
+                return;
+            }
+        }
+        if !confirmed {
+            if let Some(term) = hangar_live::running_term(&self.live_for(&key.server), &key.name, &shortcut) {
+                self.stop_shortcut(key, shortcut.label(), term);
+                cx.notify();
+                return;
+            }
+        }
         if let Some(name) = shortcut.missing_secret() {
             self.action_feedback.insert(key, (tr("shortcut_secret_missing").replace("{name}", &name), true));
             cx.notify();
@@ -471,11 +489,6 @@ impl Hangar {
             // aba do painel, onde dá pra ver a saída e fechar o programa.
             Shortcut::Shell { label, command, pasta, key: shortcut_key, hangar, home, ask, .. } => {
                 let Some(api) = self.api_for(&key.server) else { return; };
-                // Terminal desse atalho perguntando: o clique abre a pergunta em vez de rodar outro.
-                if let Some(asking) = self.asking_term(&key.server, &shortcut_key, hangar, &key.name) {
-                    self.open_question(&key.server, &asking.owner, &asking.term.id, window, cx);
-                    return;
-                }
                 self.action_feedback.insert(key.clone(), (tr("shortcut_started").replace("{label}", &label), false));
                 let (connection, tx) = (self.connection, self.tx.clone());
                 let mut body = json!({"command": command, "label": label, "ask": ask, "key": shortcut_key});
@@ -488,6 +501,26 @@ impl Hangar {
             }
         }
         cx.notify();
+    }
+
+    /// Fecha o terminal do atalho: No Hangar pela cópia do servidor; na sessão, pelo terminal dela.
+    fn stop_shortcut(&mut self, key: SessionKey, label: String, term: super::terminal::LiveTerm) {
+        let Some(api) = self.api_for(&key.server) else {
+            self.action_feedback.insert(key, (tr("term_disconnected"), true));
+            return;
+        };
+        let id = term.term.id.clone();
+        if !self.side.stop_pending.insert(id.clone()) { return; }
+        self.action_feedback.insert(key.clone(), (tr("shortcut_stopping").replace("{label}", &label), false));
+        let (connection, tx) = (self.connection, self.tx.clone());
+        self.runtime.spawn(async move {
+            let result = if term.owner.is_empty() {
+                api.server_send(reqwest::Method::POST, &["hangar-terminals", &id, "close"], None, 20).await
+            } else {
+                api.act(&key.name, &["shortcut-terminals", &id, "close"], None, false, 15).await
+            };
+            let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Reply(key, Reply::ShellStopped(label, id), result) }).await;
+        });
     }
 
     pub(super) fn run_code_command(&mut self, code: String, language: Option<String>, cx: &mut Context<Self>) {
@@ -574,6 +607,18 @@ impl Hangar {
                     Ok(value) => Ok((value.get("diff").and_then(Value::as_str).unwrap_or("").to_owned(), value.get("truncated").and_then(Value::as_bool).unwrap_or(false))),
                     Err(error) => Err(Self::read_failure(&error)),
                 });
+            }
+            Reply::ShellStopped(label, id) => {
+                self.side.stop_pending.remove(&id);
+                self.refresh_shortcut_terms(&key.name);
+                // Só estes códigos dizem que o terminal já saiu; outra falha o deixa vivo e sempre aparece.
+                match result {
+                    Err(error) if !matches!(error.code.as_deref(), Some("erro_shortcut_terminal_inexistente" | "erro_hangar_terminal_inexistente")) => { self.action_feedback.insert(key, (format!("{label}: {}", Self::failure(&error)), true)); }
+                    _ => {
+                        let stopping = tr("shortcut_stopping").replace("{label}", &label);
+                        if self.action_feedback.get(&key).is_some_and(|(text, _)| *text == stopping) { self.action_feedback.remove(&key); }
+                    }
+                }
             }
             Reply::Shell(label, hangar) => {
                 // A aba do terminal vai pra frente (sem abrir o painel); a que falhou também, com a saída inteira.
@@ -893,7 +938,7 @@ impl Hangar {
                 _ => (shortcut.label(), shortcut.label()),
             };
             let missing = shortcut.missing_secret();
-            // Estado do terminal do atalho (No Hangar: a cópia do servidor; na sessão: só a pergunta): borda e fundo verdes
+            // Estado do terminal do atalho (No Hangar: a cópia do servidor; na sessão: o mais novo dela): borda e fundo verdes
             // rodando, âmbar perguntando, com a marca HANGAR no canto e a linha de estado embaixo.
             let live = key.as_ref().map(|key| self.tile_for(&key.server, &key.name, &shortcut)).unwrap_or_default();
             let tip = live.tip.clone().unwrap_or(tip);
@@ -943,8 +988,9 @@ impl Hangar {
             // Uma nota só para todos os terminais abertos por outra sessão, com o nome do atalho em destaque.
             .when(!notes.is_empty(), |el| el.child(div().flex().flex_col().gap(px(8.)).px(px(14.)).py(px(12.)).rounded(px(10.)).bg(theme::raised().opacity(0.5))
                 .text_size(px(12.)).line_height(px(18.)).text_color(theme::muted())
-                .children(notes.into_iter().map(|(label, origin)| {
-                    let text = format!("{label} {}", tr_shared("atalho_tile_nota_hangar", &[("sessao", &origin)]));
+                .children(notes.into_iter().map(|(label, origin, asking)| {
+                    let note = if asking { "atalho_tile_nota_hangar_pergunta" } else { "atalho_tile_nota_hangar" };
+                    let text = format!("{label} {}", tr_shared(note, &[("sessao", &origin)]));
                     let bold = HighlightStyle { color: Some(theme::success_text()), font_weight: Some(FontWeight::SEMIBOLD), ..Default::default() };
                     div().w_full().whitespace_normal().child(StyledText::new(text).with_highlights([(0..label.len(), bold)]))
                 }))))
