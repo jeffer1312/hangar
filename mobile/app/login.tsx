@@ -11,6 +11,7 @@ import { QrScanner } from '../src/features/login/QrScanner';
 import { parsePairing } from '../src/features/login/pairing';
 import { syncLogin } from '../src/features/login/syncLogin';
 import { useServers } from '../src/stores/servers';
+import { DEMO_BASE_URL, DEMO_TOKEN } from '../src/net/demo';
 import { parseInviteLink } from '@hangar/core';
 import { verifyLoginMachine } from '../src/features/machines/loginMachine';
 import { InvitePanel } from '../src/features/share/InvitePanel';
@@ -28,6 +29,11 @@ export default function Login() {
   const [scanning, setScanning] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteLink, setInviteLink] = useState('');
+
+  const openDemo = () => {
+    useServers.getState().add({ baseUrl: DEMO_BASE_URL, token: DEMO_TOKEN, label: m.mobile_demo_server() });
+    router.replace('/');
+  };
 
   const handleScan = (texto: string) => {
     const cru = texto.trim();
@@ -181,6 +187,9 @@ export default function Login() {
             </Pressable>
             <Pressable style={styles.scanBtn} onPress={() => { setInviteLink(''); setInviteOpen(true); }} disabled={loading} accessibilityRole="button" accessibilityLabel={m.mobile_share_invite_open()}>
               <Text style={styles.scanText}>{m.mobile_share_invite_open()}</Text>
+            </Pressable>
+            <Pressable style={styles.scanBtn} onPress={openDemo} disabled={loading} accessibilityRole="button" accessibilityLabel={m.mobile_demo_open()}>
+              <Text style={styles.scanText}>{m.mobile_demo_open()}</Text>
             </Pressable>
           </View>
         </Glass>
