@@ -593,7 +593,9 @@ pub fn copy_ignored(repo: &Path, target: &Path) -> Vec<String> {
     copied
 }
 pub fn remove_worktree(cwd: &Path, path: &str, force: bool) -> Result<Value> {
-    let mut args = vec!["worktree", "remove"];
+    // Sem longpaths o Git do Windows para no primeiro caminho >260 (node_modules), mas apaga o
+    // registro mesmo assim: a pasta fica pela metade e some da lista.
+    let mut args = vec!["-c", "core.longpaths=true", "worktree", "remove"];
     if force {
         args.push("--force");
     }
