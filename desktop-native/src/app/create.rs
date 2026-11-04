@@ -2628,8 +2628,11 @@ impl NewSession {
     fn wanted_branch(&self, cx: &App) -> String {
         let typed = self.new_branch_name.read(cx).value().trim().to_owned();
         if !typed.is_empty() { return typed; }
-        if self.compact { self.picked.as_deref().map(basename).unwrap_or_default().to_owned() }
-        else { self.name.read(cx).value().trim().to_owned() }
+        // No compacto a criação usa o nome único da sessão (`unique_name` sobre a lista na hora): a mesma regra aqui.
+        if self.compact {
+            let taken: HashSet<String> = self.sessions.ok().into_iter().flatten().map(|s| s.name.clone()).collect();
+            unique_name(self.picked.as_deref().map(basename).unwrap_or_default(), &taken)
+        } else { self.name.read(cx).value().trim().to_owned() }
     }
 
     /// Aviso de que a worktree escolhida já tem outra sessão trabalhando nela.
