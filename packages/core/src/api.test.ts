@@ -207,6 +207,21 @@ describe('padrões de criação do servidor', () => {
     expect(fetchMock.mock.calls[0][1]?.signal?.aborted).toBe(true);
     expect(caller.signal.aborted).toBe(false);
   });
+
+  it.each(['erro_fora_do_convidado', 'session_defaults_owner_only'])('convidado fica sem padrão, sem falha: %s', async (code) => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ detail: { code, message: 'x' } }), { status: 403 }));
+    expect(await getSessionDefaultsForServer(server, 'claude')).toBeNull();
+  });
+
+  it('403 de quem não é o Hangar continua falha de leitura', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('proibido', { status: 403 }));
+    await expect(getSessionDefaultsForServer(server, 'claude')).rejects.toMatchObject({ status: 403 });
+  });
+
+  it('403 com outro código continua falha de leitura', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ detail: { code: 'outro_erro', message: 'x' } }), { status: 403 }));
+    await expect(getSessionDefaultsForServer(server, 'claude')).rejects.toMatchObject({ code: 'outro_erro' });
+  });
 });
 
 describe('rotaGenerica — o que pode ir pro diário de uso', () => {
