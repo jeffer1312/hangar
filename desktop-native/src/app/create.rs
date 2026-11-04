@@ -1167,7 +1167,7 @@ impl NewSession {
     pub(super) fn can_create(&self, cx: &App) -> bool {
         !self.is_transfer() && self.defaults_ready && !self.default_saving && !self.customizations.is_open() && !self.creating && !self.headless_saving && !self.jev.loading && self.picked.is_some() && !self.sessions.loading && (self.compact || !self.name.read(cx).value().trim().is_empty())
             && self.provider_ready() == Some(true) && self.codex_ready() && self.engine_ready() && !(self.provider == "codex" && self.context_busy)
-            && !self.checkout.loading
+            && !self.checkout.loading && !self.typed_branch_taken(cx)
             && (!self.compact || ((self.provider != "claude" || (!self.configs.loading && self.configs.ok().is_some_and(|list| !list.is_empty())))
                 && !self.models.loading && self.models.ok().is_some()))
     }
@@ -1373,6 +1373,11 @@ impl NewSession {
             }
             CreateReply::Branches(seq, result) => {
                 if !self.checkout.finish(seq, result) { return None; }
+                // A branch escolhida virou a da pasta (troca pelo Git): a sessão abriria na pasta, não numa worktree nova.
+                if !self.new_branch && !self.branch.is_empty()
+                    && self.checkout.ok().and_then(Option::as_ref).and_then(|c| c.current.as_deref()) == Some(self.branch.as_str()) {
+                    self.branch.clear();
+                }
                 // A base padrão da branch nova é a branch atual da pasta; com HEAD solto, a primeira local.
                 if self.base.is_empty() {
                     self.base = self.checkout.ok().and_then(Option::as_ref).and_then(default_base).unwrap_or_default();
@@ -2605,6 +2610,13 @@ impl NewSession {
         let known = self.checkout.ok().and_then(Option::as_ref).is_some_and(|c| c.current.as_deref() != Some(typed.as_str())
             && !c.elsewhere.contains_key(&typed) && c.branches.iter().chain(&c.remotes).any(|b| *b == typed));
         (self.new_branch, self.branch) = if known { (false, typed) } else { (true, String::new()) };
+    }
+
+    /// Branch nova com o nome de uma que já está aberta (nesta pasta ou em outra): o servidor recusaria, o menu já avisa.
+    fn typed_branch_taken(&self, cx: &App) -> bool {
+        let typed = self.new_branch_name.read(cx).value().trim().to_owned();
+        self.new_branch && !typed.is_empty() && self.checkout.ok().and_then(Option::as_ref)
+            .is_some_and(|c| c.current.as_deref() == Some(typed.as_str()) || c.elsewhere.contains_key(&typed))
     }
 
     /// Aviso de que a worktree escolhida já tem outra sessão trabalhando nela.

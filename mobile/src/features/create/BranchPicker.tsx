@@ -12,7 +12,9 @@ import * as m from '../../paraglide/messages';
 type Props = { server: Server; cwd: string; sessionName: string; value: WorktreeChoice | null;
                onChange: (v: WorktreeChoice | null) => void;
                /** Abrir a sessão noutra pasta (uma worktree que já existe, ou de volta à principal); `keepOpen` mantém o painel para o aviso. */
-               onPickFolder: (path: string, keepOpen: boolean) => void };
+               onPickFolder: (path: string, keepOpen: boolean) => void;
+               /** Branch nova com o nome de uma já aberta: o servidor recusaria, a criação fica travada. */
+               onTakenChange?: (taken: boolean) => void };
 type Worktrees = { repo: string; list: WorktreeStatus[] } | null;
 
 // Pasta fora de repositório não é falha: só não há o que escolher (mesma regra do web, `isNotRepo`).
@@ -32,7 +34,7 @@ function worktreeHint(w: WorktreeStatus, now: number): string {
   return days ? m.worktree_dias_atras({ n: days }) : '';
 }
 
-export function BranchPicker({ server, cwd, sessionName, value, onChange, onPickFolder }: Props) {
+export function BranchPicker({ server, cwd, sessionName, value, onChange, onPickFolder, onTakenChange }: Props) {
   const { theme } = useUnistyles();
   const [info, setInfo] = useState<FolderBranches | null>(null);
   const [loading, setLoading] = useState(true);
@@ -86,8 +88,12 @@ export function BranchPicker({ server, cwd, sessionName, value, onChange, onPick
   const typed = name.trim();
   // Nome de uma branch que já existe abre a worktree nela, sem criar outra; a base não vale para ela.
   // Branch aberta em outra worktree (ou na pasta principal) não abre outra: o git recusa.
-  const openElsewhere = !!wts?.list.some((w) => w.branch === typed || w.main_branch === typed);
+  const openIn = typed ? wts?.list.find((w) => w.branch === typed) ?? wts?.list.find((w) => w.main_branch === typed) : undefined;
+  const openElsewhere = !!openIn;
   const known = !!info && !!typed && typed !== info.current && !openElsewhere && [...info.branches, ...info.remotes].includes(typed);
+  const taken = fresh && !!info && !!typed && (typed === info.current || openElsewhere);
+
+  useEffect(() => { onTakenChange?.(taken); }, [taken, onTakenChange]);
 
   useEffect(() => {
     if (!info) return;   // sem a leitura não dá para saber se o nome já existe
@@ -219,8 +225,9 @@ export function BranchPicker({ server, cwd, sessionName, value, onChange, onPick
             <Text style={styles.warn}>
               {m.worktree_menu_ja_existe({ branch: typed })}{remoteOnly ? ` (${m.worktree_nova_so_remoto()})` : ''}
             </Text>
-          ) : typed && typed === info.current ? (
-            <Text style={styles.warn}>{m.worktree_menu_ja_aberta({ branch: typed, pasta: basename(cwd) })}</Text>
+          ) : taken ? (
+            <Text style={styles.warn}>{m.worktree_menu_ja_aberta({ branch: typed, pasta: basename(typed === info.current ? cwd
+              : openIn?.branch === typed ? openIn.path : openIn?.repo ?? cwd) })}</Text>
           ) : null}
           {parent ? (
             <View style={styles.line}>

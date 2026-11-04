@@ -109,6 +109,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   const [name, setName] = useState('');
   const [worktree, setWorktree] = useState<WorktreeChoice | null>(null);
   const onWorktree = useCallback((v: WorktreeChoice | null) => setWorktree(v), []);
+  const [branchTaken, setBranchTaken] = useState(false);
   const [branchOpen, setBranchOpen] = useState(false);
   const [folderOpen, setFolderOpen] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -489,6 +490,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     const generation = ++pickGeneration.current;
     setPicked(p);
     setWorktree(null);
+    setBranchTaken(false);
     setError('');
     setProjectWarning('');
     if (root) {
@@ -897,12 +899,13 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     >
       {picked ? <BranchPicker server={active} cwd={picked} sessionName={name.trim() || basename(picked)}
                               value={worktree} onChange={onWorktree}
-                              onPickFolder={(path, keepOpen) => { void handlePick(path); if (!keepOpen) setBranchOpen(false); }} /> : null}
+                              onPickFolder={(path, keepOpen) => { void handlePick(path); if (!keepOpen) setBranchOpen(false); }}
+                              onTakenChange={setBranchTaken} /> : null}
     </AnchoredPanel>
   );
 
   const blocked = contextBusy || retomando || !!retomavel || (!!picked && !codexReady);
-  const canCreate = !!body && !blocked && !creating;
+  const canCreate = !!body && !blocked && !creating && !(worktree?.new_branch && branchTaken);
   // Sem primeira mensagem: cria e abre a conversa vazia, como o formulário do PWA. O nome escolhido vale
   // para a mesma pasta e nome digitado: repetir depois de uma falha de rede não abre uma segunda sessão.
   const createInFlight = useRef(false);
