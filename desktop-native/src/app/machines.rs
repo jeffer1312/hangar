@@ -1794,10 +1794,11 @@ impl Hangar {
         // Recados: ligar registra as duas pontas com o token deste aparelho; desligar é remover, com a mesma pergunta do Remover.
         let has_id = !own_id.is_empty();
         let registered = line.peer.is_some();
-        let to_register = line.entry.clone().zip(line.ident.clone()).filter(|_| !registered);
+        // Token de convite é de convidado: lá ele não grava registro, e aqui viraria o token dos recados.
+        let to_register = line.entry.clone().filter(|e| !e.invite && !e.token.is_empty()).zip(line.ident.clone()).filter(|_| !registered);
         // Sem como ligar: sem token aqui, ou o identificador dela ainda não veio.
         let blocked = (!registered && to_register.is_none())
-            .then(|| tr(if line.entry.is_none() { "machines_peer_no_token_here" } else { "machines_row_silent" }));
+            .then(|| tr(if line.entry.as_ref().is_none_or(|e| e.invite || e.token.is_empty()) { "machines_peer_no_token_here" } else { "machines_row_silent" }));
         let no_token = blocked.is_some();
         let remove_line = line.clone();
         let messages_switch = Switch::new("machines-peer-messages").checked(registered).disabled(no_token || !has_id || busy)
