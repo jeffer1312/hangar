@@ -82,7 +82,7 @@ pub async fn route(
     RoutePath(name): RoutePath<String>,
     req: Request,
 ) -> Response {
-    let (_, owner) = gate(&st, peer, &req);
+    let (_, owner) = match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     if !owner {
         return reply(
             &req,
@@ -129,16 +129,22 @@ pub async fn route(
     };
     let catalogs = st.artifacts.clone();
     let session = name.clone();
+    let jsonl = binding.jsonl.clone();
     match tokio::task::spawn_blocking(move || catalogs.read(&session, binding)).await {
         Ok(Ok(items)) => reply(&req, StatusCode::OK, json!({"items":items})),
-        Ok(Err(_)) => route_failed(
-            &st,
-            req.headers(),
-            "rust.artifacts_failed",
-            &name,
-            "artifacts_io",
-            "a leitura dos metadados de artefatos falhou",
-        ),
+        Ok(Err(error)) => {
+            // O erro de E/S e o transcript lido: o código sozinho não diz qual leitura caiu.
+            st.diag.report_with("rust.artifacts_failed", &name, "artifacts_io", "a leitura dos metadados de artefatos falhou",
+                json!({"io_kind": format!("{:?}", error.kind()), "detalhe": error.to_string(), "caminho": jsonl.display().to_string()}));
+            route_failed(
+                &st,
+                req.headers(),
+                "rust.artifacts_failed",
+                &name,
+                "artifacts_io",
+                "a leitura dos metadados de artefatos falhou",
+            )
+        }
         Err(_) => route_failed(
             &st,
             req.headers(),
@@ -316,13 +322,16 @@ impl Entry {
                 break;
             }
             if !line.iter().all(u8::is_ascii_whitespace) {
-                let value: Value = serde_json::from_slice(&line).map_err(|_| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "registro de transcript inválido",
-                    )
-                })?;
-                self.fold.line(value);
+                // O Claude Code às vezes grava dois registros colados numa linha e o primeiro cortado; a conversa
+                // segue legível, então a linha estragada fica de fora e o resto do catálogo vale.
+                match serde_json::from_slice::<Value>(&line) {
+                    Ok(value) => self.fold.line(value),
+                    Err(_) => {
+                        if crate::warn_limit::allow(None, "artifacts_invalid_line") {
+                            tracing::warn!(path=%self.binding.jsonl.display(), offset=self.offset, "artefatos: linha de transcript inválida ignorada");
+                        }
+                    }
+                }
             }
             self.prefix_hash.update(&line);
             self.offset += line.len() as u64;

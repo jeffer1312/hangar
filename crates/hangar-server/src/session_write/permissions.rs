@@ -28,9 +28,18 @@ fn result(reply:crate::runtime::protocol::RuntimeReply)->(StatusCode,Value) {
     (StatusCode::CONFLICT,detail_body(code,"não consegui confirmar o modo de permissão; confira a sessão",params))
 }
 async fn serve(st:Arc<AppState>,peer:SocketAddr,req:Request,set:bool)->Response {
-    let (forward,owner)=gate(&st,peer,&req);
+    let (forward,owner)=match gate(&st,peer,&req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     let Some(runtime)=st.state.runtime.get().cloned().filter(|_|owner) else {return pass(&st,req,&forward).await;};
     let Some(name)=session_name(req.uri().path()) else {return pass(&st,req,&forward).await;};
+    // Ler não acorda a adormecida (o app pergunta ao passar o mouse na aba): o modo vem do spec dela.
+    if !set && runtime.asleep(&name).await.is_some() {
+        let (status,body)=match runtime.claude_spec(&name).await {
+            Some(Ok(spec))=>(StatusCode::OK,json!({"current":spec.permission_mode.map(crate::session_open::PermissionMode::name),"modes":MODES,"sondavel":false,"previous_non_plan":null})),
+            Some(Err(error))=>(StatusCode::CONFLICT,detail_body(public_code(&error.code),&error.message,json!({}))),
+            None=>(StatusCode::CONFLICT,detail_body("runtime_binding","a sessão adormecida não tem registro legível",json!({}))),
+        };
+        let mut response=json_response(status,body);cors(req.headers(),response.headers_mut());return response;
+    }
     // Claude com terminal ainda sem ator aqui: o Rust o adota agora, em vez de mandar ao Python.
     let found=match enter_then_find(&runtime,&name,st.write_gate_wait).await {
         Ok(None)=>match runtime.adopt_now(&name).await {

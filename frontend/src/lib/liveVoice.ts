@@ -16,7 +16,8 @@ export interface LiveVoiceState {
   effective: { model: string | null; effort: string | null; tier: string | null } | null;
   context: { used: number; window: number | null } | null;
   limits: { five_hour: RateWindow; seven_day: RateWindow };
-  backstage: { kind: 'heard' | 'result' | 'answer'; text: string }[];
+  /** `at`: ms em que a fala começou; `live`: ainda chegando. Servidor antigo não manda os dois. */
+  backstage: { kind: 'you' | 'voice' | 'heard' | 'result' | 'answer'; text: string; at?: number; live?: boolean }[];
   thought: string;
   action: { kind: 'tool' | 'search' | 'command'; text: string } | null;
   /** Etapa do objetivo em curso no computador; servidor antigo não manda. */

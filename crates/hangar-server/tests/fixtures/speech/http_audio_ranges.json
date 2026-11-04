@@ -1,0 +1,255 @@
+{
+  "source_commit": "a136bcb1693bd542974608dcf1d60073e802fcd9",
+  "source": "Handler tts_audio original extraído por AST e executado em FastAPI efêmero; áudio temporário, mtime fixo1700000000, nenhuma rede.",
+  "normalization": "Somente boundary aleatória de26hex é substituída por <boundary> no content-type e no corpo. Content-Length original é comparado integralmente.",
+  "cases": [
+    {
+      "name": "mp3-multipart",
+      "method": "GET",
+      "path": "/api/tts/audio/27656ffd5a01dc640a8f9d96a8684be7372800bdd618fa2311b4b85478052613",
+      "auth": true,
+      "config": {},
+      "headers": {
+        "Range": "bytes=0-1,8-10"
+      },
+      "body": null,
+      "status": 206,
+      "response_text": "--<boundary>\r\nContent-Type: audio/mpeg\r\nContent-Range: bytes 0-1/16\r\n\r\nID\r\n--<boundary>\r\nContent-Type: audio/mpeg\r\nContent-Range: bytes 8-10/16\r\n\r\nre-\r\n--<boundary>--",
+      "response_headers": {
+        "content-type": "multipart/byteranges; boundary=<boundary>",
+        "accept-ranges": "bytes",
+        "content-length": "214",
+        "last-modified": "Tue, 14 Nov 2023 22:13:20 GMT",
+        "etag": "\"37a2d2ee0dcb072becf5c82d87399f99\""
+      }
+    },
+    {
+      "name": "mp3-if-range-etag",
+      "method": "GET",
+      "path": "/api/tts/audio/27656ffd5a01dc640a8f9d96a8684be7372800bdd618fa2311b4b85478052613",
+      "auth": true,
+      "config": {},
+      "headers": {
+        "Range": "bytes=1-4",
+        "If-Range": "\"37a2d2ee0dcb072becf5c82d87399f99\""
+      },
+      "body": null,
+      "status": 206,
+      "response_text": "D3fi",
+      "response_headers": {
+        "content-type": "audio/mpeg",
+        "accept-ranges": "bytes",
+        "content-length": "4",
+        "last-modified": "Tue, 14 Nov 2023 22:13:20 GMT",
+        "etag": "\"37a2d2ee0dcb072becf5c82d87399f99\"",
+        "content-range": "bytes 1-4/16"
+      }
+    },
+    {
+      "name": "mp3-if-range-date",
+      "method": "GET",
+      "path": "/api/tts/audio/27656ffd5a01dc640a8f9d96a8684be7372800bdd618fa2311b4b85478052613",
+      "auth": true,
+      "config": {},
+      "headers": {
+        "Range": "bytes=1-4",
+        "If-Range": "Tue, 14 Nov 2023 22:13:20 GMT"
+      },
+      "body": null,
+      "status": 206,
+      "response_text": "D3fi",
+      "response_headers": {
+        "content-type": "audio/mpeg",
+        "accept-ranges": "bytes",
+        "content-length": "4",
+        "last-modified": "Tue, 14 Nov 2023 22:13:20 GMT",
+        "etag": "\"37a2d2ee0dcb072becf5c82d87399f99\"",
+        "content-range": "bytes 1-4/16"
+      }
+    },
+    {
+      "name": "mp3-giant-suffix",
+      "method": "GET",
+      "path": "/api/tts/audio/27656ffd5a01dc640a8f9d96a8684be7372800bdd618fa2311b4b85478052613",
+      "auth": true,
+      "config": {},
+      "headers": {
+        "Range": "bytes=-99999999999999999999999999999999999999999999999999999999999999999999999999999999"
+      },
+      "body": null,
+      "status": 206,
+      "response_text": "ID3fixture-audio",
+      "response_headers": {
+        "content-type": "audio/mpeg",
+        "accept-ranges": "bytes",
+        "content-length": "16",
+        "last-modified": "Tue, 14 Nov 2023 22:13:20 GMT",
+        "etag": "\"37a2d2ee0dcb072becf5c82d87399f99\"",
+        "content-range": "bytes 0-15/16"
+      }
+    },
+    {
+      "name": "mp3-giant-start",
+      "method": "GET",
+      "path": "/api/tts/audio/27656ffd5a01dc640a8f9d96a8684be7372800bdd618fa2311b4b85478052613",
+      "auth": true,
+      "config": {},
+      "headers": {
+        "Range": "bytes=99999999999999999999999999999999999999999999999999999999999999999999999999999999-"
+      },
+      "body": null,
+      "status": 416,
+      "response_text": "",
+      "response_headers": {
+        "content-range": "bytes */16",
+        "content-length": "0",
+        "content-type": "text/plain; charset=utf-8"
+      }
+    },
+    {
+      "name": "mp3-overlap",
+      "method": "GET",
+      "path": "/api/tts/audio/27656ffd5a01dc640a8f9d96a8684be7372800bdd618fa2311b4b85478052613",
+      "auth": true,
+      "config": {},
+      "headers": {
+        "Range": "bytes=4-6,1-2,2-4"
+      },
+      "body": null,
+      "status": 206,
+      "response_text": "D3fixt",
+      "response_headers": {
+        "content-type": "audio/mpeg",
+        "accept-ranges": "bytes",
+        "content-length": "6",
+        "last-modified": "Tue, 14 Nov 2023 22:13:20 GMT",
+        "etag": "\"37a2d2ee0dcb072becf5c82d87399f99\"",
+        "content-range": "bytes 1-6/16"
+      }
+    },
+    {
+      "name": "wav-multipart",
+      "method": "GET",
+      "path": "/api/tts/audio/61e25c2cdda1758ce167dbeb7e6d776c5cd6c2f12168f190ef0dca674ff60e6c",
+      "auth": true,
+      "config": {},
+      "headers": {
+        "Range": "bytes=0-1,8-10"
+      },
+      "body": null,
+      "status": 206,
+      "response_text": "--<boundary>\r\nContent-Type: audio/wav\r\nContent-Range: bytes 0-1/16\r\n\r\nRI\r\n--<boundary>\r\nContent-Type: audio/wav\r\nContent-Range: bytes 8-10/16\r\n\r\nure\r\n--<boundary>--",
+      "response_headers": {
+        "content-type": "multipart/byteranges; boundary=<boundary>",
+        "accept-ranges": "bytes",
+        "content-length": "212",
+        "last-modified": "Tue, 14 Nov 2023 22:13:20 GMT",
+        "etag": "\"37a2d2ee0dcb072becf5c82d87399f99\""
+      }
+    },
+    {
+      "name": "wav-if-range-etag",
+      "method": "GET",
+      "path": "/api/tts/audio/61e25c2cdda1758ce167dbeb7e6d776c5cd6c2f12168f190ef0dca674ff60e6c",
+      "auth": true,
+      "config": {},
+      "headers": {
+        "Range": "bytes=1-4",
+        "If-Range": "\"37a2d2ee0dcb072becf5c82d87399f99\""
+      },
+      "body": null,
+      "status": 206,
+      "response_text": "IFFf",
+      "response_headers": {
+        "content-type": "audio/wav",
+        "accept-ranges": "bytes",
+        "content-length": "4",
+        "last-modified": "Tue, 14 Nov 2023 22:13:20 GMT",
+        "etag": "\"37a2d2ee0dcb072becf5c82d87399f99\"",
+        "content-range": "bytes 1-4/16"
+      }
+    },
+    {
+      "name": "wav-if-range-date",
+      "method": "GET",
+      "path": "/api/tts/audio/61e25c2cdda1758ce167dbeb7e6d776c5cd6c2f12168f190ef0dca674ff60e6c",
+      "auth": true,
+      "config": {},
+      "headers": {
+        "Range": "bytes=1-4",
+        "If-Range": "Tue, 14 Nov 2023 22:13:20 GMT"
+      },
+      "body": null,
+      "status": 206,
+      "response_text": "IFFf",
+      "response_headers": {
+        "content-type": "audio/wav",
+        "accept-ranges": "bytes",
+        "content-length": "4",
+        "last-modified": "Tue, 14 Nov 2023 22:13:20 GMT",
+        "etag": "\"37a2d2ee0dcb072becf5c82d87399f99\"",
+        "content-range": "bytes 1-4/16"
+      }
+    },
+    {
+      "name": "wav-giant-suffix",
+      "method": "GET",
+      "path": "/api/tts/audio/61e25c2cdda1758ce167dbeb7e6d776c5cd6c2f12168f190ef0dca674ff60e6c",
+      "auth": true,
+      "config": {},
+      "headers": {
+        "Range": "bytes=-99999999999999999999999999999999999999999999999999999999999999999999999999999999"
+      },
+      "body": null,
+      "status": 206,
+      "response_text": "RIFFfixture-wave",
+      "response_headers": {
+        "content-type": "audio/wav",
+        "accept-ranges": "bytes",
+        "content-length": "16",
+        "last-modified": "Tue, 14 Nov 2023 22:13:20 GMT",
+        "etag": "\"37a2d2ee0dcb072becf5c82d87399f99\"",
+        "content-range": "bytes 0-15/16"
+      }
+    },
+    {
+      "name": "wav-giant-start",
+      "method": "GET",
+      "path": "/api/tts/audio/61e25c2cdda1758ce167dbeb7e6d776c5cd6c2f12168f190ef0dca674ff60e6c",
+      "auth": true,
+      "config": {},
+      "headers": {
+        "Range": "bytes=99999999999999999999999999999999999999999999999999999999999999999999999999999999-"
+      },
+      "body": null,
+      "status": 416,
+      "response_text": "",
+      "response_headers": {
+        "content-range": "bytes */16",
+        "content-length": "0",
+        "content-type": "text/plain; charset=utf-8"
+      }
+    },
+    {
+      "name": "wav-overlap",
+      "method": "GET",
+      "path": "/api/tts/audio/61e25c2cdda1758ce167dbeb7e6d776c5cd6c2f12168f190ef0dca674ff60e6c",
+      "auth": true,
+      "config": {},
+      "headers": {
+        "Range": "bytes=4-6,1-2,2-4"
+      },
+      "body": null,
+      "status": 206,
+      "response_text": "IFFfix",
+      "response_headers": {
+        "content-type": "audio/wav",
+        "accept-ranges": "bytes",
+        "content-length": "6",
+        "last-modified": "Tue, 14 Nov 2023 22:13:20 GMT",
+        "etag": "\"37a2d2ee0dcb072becf5c82d87399f99\"",
+        "content-range": "bytes 1-6/16"
+      }
+    }
+  ]
+}

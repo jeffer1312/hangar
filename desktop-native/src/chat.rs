@@ -15,6 +15,7 @@ pub struct Chat {
     ask_seen: bool,
     pub live_thinking: String,
     pub live_tool: Option<LiveTool>,
+    pub command_output: HashMap<String, String>,
     /// Turno visto terminar nesta conversa, já em texto: a linha de trabalhando fica no lugar com ele, como o
     /// "Worked for 16s" do Claude Code, em vez de sair e puxar o chat para baixo.
     pub turn_done: Option<String>,

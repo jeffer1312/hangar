@@ -1,9 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatEvent } from './types';
-import { appendTail, hasSeam, mergeHistoryWithLive, mergeHistoryWithLiveRetiring, prependOlder, queuedMessages, waitsInQueue } from './history';
+import { appendTail, discardsHeld, hasSeam, holdsQueue, mergeHistoryWithLive, mergeHistoryWithLiveRetiring, prependOlder, queuedMessages, waitsInQueue } from './history';
 
 const ev = (id: string): ChatEvent => ({ kind: 'user_msg', id, text: id });
 const ids = (evs: ChatEvent[] | null) => (evs ?? []).map((e) => e.id);
+
+it('entrega sem prova segura a fila; com texto no campo o Descartar some', () => {
+  const sent = { ...ev('queued-a'), queued_delivered: true };
+  expect([holdsQueue(sent, 'terminal_input_delivery_unproved'), discardsHeld(sent, 'terminal_input_delivery_unproved')]).toEqual([true, true]);
+  expect([holdsQueue(sent, 'terminal_input_delivery_composer_busy'), discardsHeld(sent, 'terminal_input_delivery_composer_busy')]).toEqual([true, false]);
+  expect(holdsQueue({ ...sent, queued_consumed: true }, 'terminal_input_delivery_unproved'), 'já consumida').toBe(false);
+  expect(holdsQueue({ ...sent, desistiu: true }, 'terminal_input_delivery_unproved')).toBe(false);
+  expect(holdsQueue(ev('queued-b'), 'terminal_input_delivery_unproved'), 'ainda não entregue').toBe(false);
+  expect(holdsQueue(sent, null)).toBe(false);
+});
 
 it('Codex conta só mensagens ainda não encaminhadas, preservando Kimi e o legado', () => {
   const events: ChatEvent[] = [ev('queued-legado'), { ...ev('queued-enviada'), queued_delivered: true },

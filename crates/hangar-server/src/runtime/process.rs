@@ -29,6 +29,7 @@ pub struct Cano {
     pub pid: u32,
     pub escuta: String,
     pub token: String,
+    #[serde(deserialize_with = "crate::json_envelope::float")]
     pub ts: f64,
     pub versao: u32,
     #[serde(flatten)]
@@ -634,4 +635,16 @@ fn linux_orphans(live: &HashSet<String>, owner: &str) -> usize {
     if denied > 0 { tracing::info!(denied, "varredura de órfãos sem permissão em processos deste usuário"); }
     if foreign > 0 { tracing::info!(foreign, "processos de cano sem prova de que são deste servidor ficaram"); }
     killed
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn cano_with_a_non_canonical_timestamp_still_reconnects() {
+        let raw = r#"{"pid":1,"escuta":"x","token":"t","versao":1,"ts":1.70e9,"outro":true}"#;
+        let meta = serde_json::from_str::<serde_json::Value>(raw).unwrap();
+        let cano = serde_json::from_value::<super::Cano>(meta).unwrap();
+        assert_eq!(cano.ts, 1.7e9);
+        assert_eq!(cano.extra["outro"], true);
+    }
 }

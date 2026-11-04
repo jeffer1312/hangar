@@ -115,7 +115,7 @@ async fn occupied_guest_port_is_retried_without_blocking_the_main_port() {
 
     tokio::time::sleep(Duration::from_millis(600)).await;
     assert_eq!(bound(main).await, json!(false));
-    let r = client().get(format!("http://{main}/qualquer")).bearer_auth(OWNER).send().await.unwrap();
+    let r = client().get(format!("http://{main}/api/qualquer")).bearer_auth(OWNER).send().await.unwrap();
     assert_eq!(r.text().await.unwrap(), "from-python", "a porta principal atende enquanto a do convidado espera");
 
     drop(holder);

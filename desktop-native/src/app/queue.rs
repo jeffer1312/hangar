@@ -285,6 +285,7 @@ impl Hangar {
         // Mesmo material do cartão do composer, colado acima dele.
         let body = div().id("queue-panel").flex().flex_col().rounded(px(12.)).border_1().border_color(theme::border_strong())
             .bg(theme::boxed()).child(top).children(stalled).children(list);
+        let body = popup::anchor(body, crate::tour::anchors::QUEUE_PANEL);
         Some(div().mb(px(6.)).child(chrome::glass_panel(body, px(12.))).into_any_element())
     }
 

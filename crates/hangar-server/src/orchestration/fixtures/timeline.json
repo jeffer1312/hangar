@@ -1,0 +1,873 @@
+{
+  "source_commit": "a0860f26b6e3f611806e780acf87588f6065b328",
+  "command": "python crates/hangar-server/src/orchestration/fixtures/generate.py",
+  "cases": [
+    {
+      "run": "2026-09-29-cad3e6fe",
+      "shadow": "",
+      "entries": [
+        {
+          "input": {
+            "ts": "2026-09-29T21:53:40-03:00",
+            "kind": "advance",
+            "text": "T1: abriu w-t1 (claude, opus[1m]) e w-review1 (claude, opus[1m]) e entregou o kick-off",
+            "task": 1
+          },
+          "output": {
+            "kind": "advance",
+            "task": 1,
+            "line": {
+              "code": "opened",
+              "sessions": [
+                {
+                  "name": "w-t1",
+                  "provider": "claude",
+                  "model": "opus[1m]"
+                },
+                {
+                  "name": "w-review1",
+                  "provider": "claude",
+                  "model": "opus[1m]"
+                }
+              ]
+            },
+            "origin": null,
+            "sender": null,
+            "mark": null,
+            "alarm": false,
+            "rejected_round": null,
+            "body": "T1: abriu w-t1 (claude, opus[1m]) e w-review1 (claude, opus[1m]) e entregou o kick-off",
+            "question": null,
+            "parecer": null,
+            "error": null,
+            "decided_by": null
+          },
+          "id": "orq:53e165567cabac7b"
+        },
+        {
+          "input": {
+            "ts": "2026-09-29T21:53:48-03:00",
+            "kind": "woke",
+            "text": "acordou o árbitro: [vigia] ARMED over: w-arbiter (window 5min, journal /fixture/user/.hangar/orq/2026-09-29-cad3e6fe/registro.md). This message IS the channel's proof — if you read it, the alarms arrive. Do not reply.",
+            "task": null
+          },
+          "output": {
+            "kind": "woke",
+            "task": null,
+            "line": null,
+            "origin": "notify",
+            "sender": "vigia",
+            "mark": null,
+            "alarm": true,
+            "rejected_round": null,
+            "body": "ARMED over: w-arbiter (window 5min, journal `/fixture/user/.hangar/orq/2026-09-29-cad3e6fe/registro.md`). This message IS the channel's proof — if you read it, the alarms arrive. Do not reply.",
+            "question": null,
+            "parecer": null,
+            "error": null,
+            "decided_by": {
+              "source": "alarm",
+              "rule": null,
+              "jev": null,
+              "regex": null,
+              "regex_agreed": null
+            }
+          },
+          "id": "orq:6a7529003b3528fc"
+        },
+        {
+          "input": {
+            "ts": "2026-09-29T21:58:08-03:00",
+            "kind": "advance",
+            "text": "T1 fechada → merge → integração verde",
+            "task": 1
+          },
+          "output": {
+            "kind": "advance",
+            "task": 1,
+            "line": {
+              "code": "integrated",
+              "merge": true
+            },
+            "origin": null,
+            "sender": null,
+            "mark": null,
+            "alarm": false,
+            "rejected_round": null,
+            "body": "T1 fechada → merge → integração verde",
+            "question": null,
+            "parecer": null,
+            "error": null,
+            "decided_by": null
+          },
+          "id": "orq:aa3e9680d7821c53"
+        },
+        {
+          "input": {
+            "ts": "2026-09-29T21:58:29-03:00",
+            "kind": "advance",
+            "text": "T2: abriu w-t2 (codex, gpt-6.1-sol) e w-review2 (claude, opus[1m]) e entregou o kick-off",
+            "task": 2
+          },
+          "output": {
+            "kind": "advance",
+            "task": 2,
+            "line": {
+              "code": "opened",
+              "sessions": [
+                {
+                  "name": "w-t2",
+                  "provider": "codex",
+                  "model": "gpt-6.1-sol"
+                },
+                {
+                  "name": "w-review2",
+                  "provider": "claude",
+                  "model": "opus[1m]"
+                }
+              ]
+            },
+            "origin": null,
+            "sender": null,
+            "mark": null,
+            "alarm": false,
+            "rejected_round": null,
+            "body": "T2: abriu w-t2 (codex, gpt-6.1-sol) e w-review2 (claude, opus[1m]) e entregou o kick-off",
+            "question": null,
+            "parecer": null,
+            "error": null,
+            "decided_by": null
+          },
+          "id": "orq:20c4620fd9f206b8"
+        },
+        {
+          "input": {
+            "ts": "2026-09-29T21:58:38-03:00",
+            "kind": "advance",
+            "text": "T3: abriu w-t3 (claude, opus[1m]) e w-review3 (claude, opus[1m]) e entregou o kick-off",
+            "task": 3
+          },
+          "output": {
+            "kind": "advance",
+            "task": 3,
+            "line": {
+              "code": "opened",
+              "sessions": [
+                {
+                  "name": "w-t3",
+                  "provider": "claude",
+                  "model": "opus[1m]"
+                },
+                {
+                  "name": "w-review3",
+                  "provider": "claude",
+                  "model": "opus[1m]"
+                }
+              ]
+            },
+            "origin": null,
+            "sender": null,
+            "mark": null,
+            "alarm": false,
+            "rejected_round": null,
+            "body": "T3: abriu w-t3 (claude, opus[1m]) e w-review3 (claude, opus[1m]) e entregou o kick-off",
+            "question": null,
+            "parecer": null,
+            "error": null,
+            "decided_by": null
+          },
+          "id": "orq:58aa2e332e9a66b4"
+        },
+        {
+          "input": {
+            "ts": "2026-09-29T21:59:02-03:00",
+            "kind": "advance",
+            "text": "T4: abriu w-t4 (codex, gpt-6.1-sol) e w-review4 (claude, opus[1m]) e entregou o kick-off",
+            "task": 4
+          },
+          "output": {
+            "kind": "advance",
+            "task": 4,
+            "line": {
+              "code": "opened",
+              "sessions": [
+                {
+                  "name": "w-t4",
+                  "provider": "codex",
+                  "model": "gpt-6.1-sol"
+                },
+                {
+                  "name": "w-review4",
+                  "provider": "claude",
+                  "model": "opus[1m]"
+                }
+              ]
+            },
+            "origin": null,
+            "sender": null,
+            "mark": null,
+            "alarm": false,
+            "rejected_round": null,
+            "body": "T4: abriu w-t4 (codex, gpt-6.1-sol) e w-review4 (claude, opus[1m]) e entregou o kick-off",
+            "question": null,
+            "parecer": null,
+            "error": null,
+            "decided_by": null
+          },
+          "id": "orq:188fa5f79ac817aa"
+        },
+        {
+          "input": {
+            "ts": "2026-09-29T22:01:05-03:00",
+            "kind": "advance",
+            "text": "T3 fechada → merge → integração verde",
+            "task": 3
+          },
+          "output": {
+            "kind": "advance",
+            "task": 3,
+            "line": {
+              "code": "integrated",
+              "merge": true
+            },
+            "origin": null,
+            "sender": null,
+            "mark": null,
+            "alarm": false,
+            "rejected_round": null,
+            "body": "T3 fechada → merge → integração verde",
+            "question": null,
+            "parecer": null,
+            "error": null,
+            "decided_by": null
+          },
+          "id": "orq:621c72d22692043b"
+        },
+        {
+          "input": {
+            "ts": "2026-09-29T22:01:38-03:00",
+            "kind": "woke",
+            "text": "acordou o árbitro: [decisao] T4: StateEvent.problema_detalhe é documentado como detalhe cru do processo (core/types.ts:214); precedente web apenas primeira linha 80/300 chars, sem redigir segredo; core não oferece redator. Recorte pede detalhe expansível sem logs/segredos. Recomendo apresentar detalhe recebido somente se contrato do produtor garantir remoção de segredo; caso contrário preservar código traduzido e não expor bruto até saneamento por área autorizada. Autoriza detalhe recebido como dado já seguro, ou define redator mínimo/pendência? PendingPlan e AssistantBubble podem avançar enquanto isso.",
+            "task": null
+          },
+          "output": {
+            "kind": "woke",
+            "task": 4,
+            "line": null,
+            "origin": "notify",
+            "sender": null,
+            "mark": "decisao",
+            "alarm": false,
+            "rejected_round": null,
+            "body": "`StateEvent.problema_detalhe` é documentado como detalhe cru do processo (`core/types.ts:214`); precedente web apenas primeira linha 80/300 chars, sem redigir segredo; core não oferece redator. Recorte pede detalhe expansível sem logs/segredos. Recomendo apresentar detalhe recebido somente se contrato do produtor garantir remoção de segredo; caso contrário preservar código traduzido e não expor bruto até saneamento por área autorizada. PendingPlan e AssistantBubble podem avançar enquanto isso.",
+            "question": "Autoriza detalhe recebido como dado já seguro, ou define redator mínimo/pendência?",
+            "parecer": null,
+            "error": null,
+            "decided_by": {
+              "source": "rule",
+              "rule": "mark",
+              "jev": null,
+              "regex": null,
+              "regex_agreed": null
+            }
+          },
+          "id": "orq:4b0708fb64356927"
+        },
+        {
+          "input": {
+            "ts": "2026-09-29T22:11:19-03:00",
+            "kind": "advance",
+            "text": "T2 fechada → merge → integração verde",
+            "task": 2
+          },
+          "output": {
+            "kind": "advance",
+            "task": 2,
+            "line": {
+              "code": "integrated",
+              "merge": true
+            },
+            "origin": null,
+            "sender": null,
+            "mark": null,
+            "alarm": false,
+            "rejected_round": null,
+            "body": "T2 fechada → merge → integração verde",
+            "question": null,
+            "parecer": null,
+            "error": null,
+            "decided_by": null
+          },
+          "id": "orq:cb4cc90882b48326"
+        },
+        {
+          "input": {
+            "ts": "2026-09-29T22:12:22-03:00",
+            "kind": "woke",
+            "text": "acordou o árbitro: [decisao] T4: MessageList.tsx:104 (fora dos Files) já passa planDisplayText(ev.text) para Codex, então proposedPlan na AssistantBubble sempre é null e o rótulo 'Plano proposto' nunca aparece. Incluir MessageList.tsx:104 em T4 (passar ev.text cru) ou deixar para T11? Parecer: /fixture/user/.hangar/orq/2026-09-29-cad3e6fe/pareceres/task-4-r1-revisor.md (NOTED 1)",
+            "task": null
+          },
+          "output": {
+            "kind": "woke",
+            "task": 4,
+            "line": null,
+            "origin": "notify",
+            "sender": null,
+            "mark": "decisao",
+            "alarm": false,
+            "rejected_round": null,
+            "body": "`MessageList.tsx:104` (fora dos Files) já passa `planDisplayText(ev.text)` para Codex, então `proposedPlan` na AssistantBubble sempre é null e o rótulo 'Plano proposto' nunca aparece.",
+            "question": "Incluir `MessageList.tsx:104` em T4 (passar `ev.text` cru) ou deixar para T11?",
+            "parecer": "/fixture/user/.hangar/orq/2026-09-29-cad3e6fe/pareceres/task-4-r1-revisor.md",
+            "error": null,
+            "decided_by": {
+              "source": "rule",
+              "rule": "mark",
+              "jev": null,
+              "regex": null,
+              "regex_agreed": null
+            }
+          },
+          "id": "orq:311b4a55af09b266"
+        },
+        {
+          "input": {
+            "ts": "2026-09-29T22:12:48-03:00",
+            "kind": "woke",
+            "text": "acordou o árbitro: [decisao] T4 R1 reprovada: receita exige planDisplayText(text) para preservar prosa/links/caminhos fora do plano, em vez da fórmula literal da fonte planDisplayText(proposed ?? assistantText). Causa confirmada por leitura do helper+callers, sem execução funcional (lotes). Recomendo aceitar receita/prosa preservando resposta inteira. executor.md exige decisão antes de divergir de código literal; aguardo autorização da fórmula. Rótulo Codex inalcançável porque MessageList.tsx:104 já remove tags: recomendo deixar integração/rótulo para T11, sem ampliar Files desta T4. Parecer: /fixture/user/.hangar/orq/2026-09-29-cad3e6fe/pareceres/task-4-r1-revisor.md",
+            "task": null
+          },
+          "output": {
+            "kind": "woke",
+            "task": 4,
+            "line": null,
+            "origin": "notify",
+            "sender": null,
+            "mark": "decisao",
+            "alarm": false,
+            "rejected_round": 1,
+            "body": "receita exige `planDisplayText(text)` para preservar prosa/links/caminhos fora do plano, em vez da fórmula literal da fonte `planDisplayText`(proposed ?? `assistantText`). Causa confirmada por leitura do helper+callers, sem execução funcional (lotes). Recomendo aceitar receita/prosa preservando resposta inteira. `executor.md` exige decisão antes de divergir de código literal; aguardo autorização da fórmula. Rótulo Codex inalcançável porque `MessageList.tsx:104` já remove tags: recomendo deixar integração/rótulo para T11, sem ampliar Files desta T4.",
+            "question": null,
+            "parecer": "/fixture/user/.hangar/orq/2026-09-29-cad3e6fe/pareceres/task-4-r1-revisor.md",
+            "error": null,
+            "decided_by": {
+              "source": "rule",
+              "rule": "mark",
+              "jev": null,
+              "regex": null,
+              "regex_agreed": null
+            }
+          },
+          "id": "orq:aacad09df2e10a36"
+        },
+        {
+          "input": {
+            "ts": "2026-09-29T22:19:00-03:00",
+            "kind": "advance",
+            "text": "T4 fechada → merge → integração verde",
+            "task": 4
+          },
+          "output": {
+            "kind": "advance",
+            "task": 4,
+            "line": {
+              "code": "integrated",
+              "merge": true
+            },
+            "origin": null,
+            "sender": null,
+            "mark": null,
+            "alarm": false,
+            "rejected_round": null,
+            "body": "T4 fechada → merge → integração verde",
+            "question": null,
+            "parecer": null,
+            "error": null,
+            "decided_by": null
+          },
+          "id": "orq:f4b7f0fb39d4cb0f"
+        },
+        {
+          "input": {
+            "ts": "2026-09-29T22:19:12-03:00",
+            "kind": "advance",
+            "text": "T5: abriu hangar-mobile-t5 (claude, opus[1m]) e hangar-mobile-review5 (claude, opus[1m]) e entregou o kick-off",
+            "task": 5
+          },
+          "output": {
+            "kind": "advance",
+            "task": 5,
+            "line": {
+              "code": "opened",
+              "sessions": [
+                {
+                  "name": "hangar-mobile-t5",
+                  "provider": "claude",
+                  "model": "opus[1m]"
+                },
+                {
+                  "name": "hangar-mobile-review5",
+                  "provider": "claude",
+                  "model": "opus[1m]"
+                }
+              ]
+            },
+            "origin": null,
+            "sender": null,
+            "mark": null,
+            "alarm": false,
+            "rejected_round": null,
+            "body": "T5: abriu hangar-mobile-t5 (claude, opus[1m]) e hangar-mobile-review5 (claude, opus[1m]) e entregou o kick-off",
+            "question": null,
+            "parecer": null,
+            "error": null,
+            "decided_by": null
+          },
+          "id": "orq:84cc21ab244ffe79"
+        }
+      ]
+    },
+    {
+      "run": "synthetic",
+      "shadow": "{\"ts\": \"2026-09-29T22:18:39-03:00\", \"mode\": \"on\", \"alarm\": false, \"text\": \"Rodada 2 entregue ao revisor, sigo aguardando o veredito.\", \"choice\": \"nothing\", \"p\": 0.97, \"veto\": {\"context\": 0.02, \"user\": 0.01, \"problem\": 0.03, \"deviation\": 0.02}, \"probs\": {\"nothing\": 0.97, \"act\": 0.03}, \"would_drop\": true}\n{\"ts\": \"2026-09-29T22:19:29-03:00\", \"mode\": \"on\", \"alarm\": false, \"text\": \"tela fechada, 41 de 60 ações\", \"choice\": \"nothing\", \"p\": 0.91, \"veto\": {\"context\": 0.1, \"user\": 0.1, \"problem\": 0.1, \"deviation\": 0.1}, \"probs\": {\"nothing\": 0.91, \"act\": 0.09}, \"would_drop\": true}\n{\"ts\": \"2026-09-29T22:21:02-03:00\", \"mode\": \"on\", \"alarm\": false, \"text\": \"T5: preciso da tela do celular, posso usar?\", \"choice\": \"act\", \"p\": 0.0, \"veto\": {\"context\": 0.05, \"user\": 0.1, \"problem\": 0.02, \"deviation\": 0.01}, \"probs\": {\"act\": 0.94, \"nothing\": 0.06}, \"would_drop\": false}\n{\"ts\": \"2026-09-29T22:22:09-03:00\", \"mode\": \"on\", \"alarm\": false, \"text\": \"o build do android travou de novo\", \"error\": \"URLError: <urlopen error timed out>\", \"would_drop\": false}\n{\"ts\": \"2026-09-29T22:22:59-03:00\", \"mode\": \"on\", \"alarm\": false, \"text\": \"sigo na rodada 1\", \"choice\": \"nothing\", \"p\": 0.62, \"veto\": {\"context\": 0.1, \"user\": 0.1, \"problem\": 0.55, \"deviation\": 0.1}, \"would_drop\": false}\n",
+      "entries": [
+        {
+          "input": {
+            "ts": "2026-09-29T22:18:40-03:00",
+            "kind": "dropped",
+            "text": "recado registrado sem acordar o árbitro (jev): Rodada 2 entregue ao revisor, sigo aguardando o veredito.",
+            "task": null,
+            "from": "w-t4"
+          },
+          "output": {
+            "kind": "dropped",
+            "task": null,
+            "line": null,
+            "origin": "notify",
+            "sender": "w-t4",
+            "mark": null,
+            "alarm": false,
+            "rejected_round": null,
+            "body": "Rodada 2 entregue ao revisor, sigo aguardando o veredito.",
+            "question": null,
+            "parecer": null,
+            "error": null,
+            "decided_by": {
+              "source": "jev",
+              "rule": null,
+              "jev": {
+                "mode": "on",
+                "choice": "nothing",
+                "p": 0.97,
+                "veto": {
+                  "context": 0.02,
+                  "user": 0.01,
+                  "problem": 0.03,
+                  "deviation": 0.02
+                },
+                "held": [],
+                "would_drop": true,
+                "error": null,
+                "probs": {
+                  "nothing": 0.97,
+                  "act": 0.03
+                }
+              },
+              "regex": {
+                "verdict": "drop",
+                "category": "entrega"
+              },
+              "regex_agreed": true
+            }
+          },
+          "id": "orq:540d4de9cdc2e680"
+        },
+        {
+          "input": {
+            "ts": "2026-09-29T22:19:30-03:00",
+            "kind": "dropped",
+            "text": "recado registrado sem acordar o árbitro (jev): tela fechada, 41 de 60 ações",
+            "task": null,
+            "from": "w-t4"
+          },
+          "output": {
+            "kind": "dropped",
+            "task": null,
+            "line": null,
+            "origin": "notify",
+            "sender": "w-t4",
+            "mark": null,
+            "alarm": false,
+            "rejected_round": null,
+            "body": "tela fechada, 41 de 60 ações",
+            "question": null,
+            "parecer": null,
+            "error": null,
+            "decided_by": {
+              "source": "jev",
+              "rule": null,
+              "jev": {
+                "mode": "on",
+                "choice": "nothing",
+                "p": 0.91,
+                "veto": {
+                  "context": 0.1,
+                  "user": 0.1,
+                  "problem": 0.1,
+                  "deviation": 0.1
+                },
+                "held": [],
+                "would_drop": true,
+                "error": null,
+                "probs": {
+                  "nothing": 0.91,
+                  "act": 0.09
+                }
+              },
+              "regex": {
+                "verdict": "wake",
+                "category": null
+              },
+              "regex_agreed": false
+            }
+          },
+          "id": "orq:4f516c2966fe594e"
+        },
+        {
+          "input": {
+            "ts": "2026-09-29T22:20:05-03:00",
+            "kind": "would_drop",
+            "text": "teria descartado (regex: janela); acordou o árbitro: janela de prova fechada",
+            "task": null
+          },
+          "output": {
+            "kind": "would_drop",
+            "task": null,
+            "line": null,
+            "origin": "notify",
+            "sender": null,
+            "mark": null,
+            "alarm": false,
+            "rejected_round": null,
+            "body": "janela de prova fechada",
+            "question": null,
+            "parecer": null,
+            "error": null,
+            "decided_by": {
+              "source": "regex",
+              "rule": null,
+              "jev": null,
+              "regex": {
+                "verdict": "drop",
+                "category": "janela"
+              },
+              "regex_agreed": null
+            }
+          },
+          "id": "orq:07058e95c91596d6"
+        },
+        {
+          "input": {
+            "ts": "2026-09-29T22:21:31-03:00",
+            "kind": "woke",
+            "text": "acordou o árbitro: T5: preciso da tela do celular, posso usar?",
+            "task": null,
+            "from": "hangar-mobile-t5"
+          },
+          "output": {
+            "kind": "woke",
+            "task": 5,
+            "line": null,
+            "origin": "notify",
+            "sender": "hangar-mobile-t5",
+            "mark": null,
+            "alarm": false,
+            "rejected_round": null,
+            "body": "",
+            "question": "preciso da tela do celular, posso usar?",
+            "parecer": null,
+            "error": null,
+            "decided_by": {
+              "source": "jev",
+              "rule": null,
+              "jev": {
+                "mode": "on",
+                "choice": "act",
+                "p": 0.0,
+                "veto": {
+                  "context": 0.05,
+                  "user": 0.1,
+                  "problem": 0.02,
+                  "deviation": 0.01
+                },
+                "held": [],
+                "would_drop": false,
+                "error": null,
+                "probs": {
+                  "act": 0.94,
+                  "nothing": 0.06
+                }
+              },
+              "regex": {
+                "verdict": "wake",
+                "category": null
+              },
+              "regex_agreed": true
+            }
+          },
+          "id": "orq:76e9c1cfd6b6a7ac"
+        },
+        {
+          "input": {
+            "ts": "2026-09-29T22:22:10-03:00",
+            "kind": "woke",
+            "text": "acordou o árbitro: o build do android travou de novo",
+            "task": null,
+            "from": "hangar-mobile-t5"
+          },
+          "output": {
+            "kind": "woke",
+            "task": null,
+            "line": null,
+            "origin": "notify",
+            "sender": "hangar-mobile-t5",
+            "mark": null,
+            "alarm": false,
+            "rejected_round": null,
+            "body": "o build do android travou de novo",
+            "question": null,
+            "parecer": null,
+            "error": null,
+            "decided_by": {
+              "source": "regex",
+              "rule": null,
+              "jev": {
+                "mode": "on",
+                "choice": null,
+                "p": null,
+                "veto": {},
+                "held": [],
+                "would_drop": false,
+                "error": "URLError: <urlopen error timed out>",
+                "probs": {}
+              },
+              "regex": {
+                "verdict": "wake",
+                "category": null
+              },
+              "regex_agreed": null
+            }
+          },
+          "id": "orq:ca92df3d65c52e08"
+        },
+        {
+          "input": {
+            "ts": "2026-09-29T22:23:00-03:00",
+            "kind": "woke",
+            "text": "acordou o árbitro: sigo na rodada 1",
+            "task": null,
+            "from": null
+          },
+          "output": {
+            "kind": "woke",
+            "task": null,
+            "line": null,
+            "origin": "notify",
+            "sender": null,
+            "mark": null,
+            "alarm": false,
+            "rejected_round": null,
+            "body": "sigo na rodada 1",
+            "question": null,
+            "parecer": null,
+            "error": null,
+            "decided_by": {
+              "source": "jev",
+              "rule": null,
+              "jev": {
+                "mode": "on",
+                "choice": "nothing",
+                "p": 0.62,
+                "veto": {
+                  "context": 0.1,
+                  "user": 0.1,
+                  "problem": 0.55,
+                  "deviation": 0.1
+                },
+                "held": [
+                  "problem"
+                ],
+                "would_drop": false,
+                "error": null,
+                "probs": {}
+              },
+              "regex": {
+                "verdict": "wake",
+                "category": null
+              },
+              "regex_agreed": true
+            }
+          },
+          "id": "orq:d2df76338bdfe8fd"
+        },
+        {
+          "input": {
+            "ts": "2026-09-29T22:24:00-03:00",
+            "kind": "failed",
+            "text": "recado ao árbitro não entregue (hangar-send w-arbiter failed (rc=1): boom): [decisao] T5: rodada 1 congelada",
+            "task": null,
+            "from": "hangar-mobile-t5"
+          },
+          "output": {
+            "kind": "failed",
+            "task": 5,
+            "line": null,
+            "origin": "notify",
+            "sender": "hangar-mobile-t5",
+            "mark": "decisao",
+            "alarm": false,
+            "rejected_round": null,
+            "body": "rodada 1 congelada",
+            "question": null,
+            "parecer": null,
+            "error": "hangar-send w-arbiter failed (rc=1): boom",
+            "decided_by": null
+          },
+          "id": "orq:864f32a45649ee1e"
+        },
+        {
+          "input": {
+            "ts": "2026-09-29T22:25:00-03:00",
+            "kind": "failed",
+            "text": "falhou ao integrar a T3: merge abortado",
+            "task": 3
+          },
+          "output": {
+            "kind": "failed",
+            "task": 3,
+            "line": null,
+            "origin": "orchestrator",
+            "sender": null,
+            "mark": null,
+            "alarm": false,
+            "rejected_round": null,
+            "body": "falhou ao integrar a T3: merge abortado",
+            "question": null,
+            "parecer": null,
+            "error": null,
+            "decided_by": null
+          },
+          "id": "orq:f2d8fcf7c4f31907"
+        },
+        {
+          "input": {
+            "ts": "2026-09-29T22:26:00-03:00",
+            "kind": "woke",
+            "text": "acordou o árbitro: lote de prova pronto (T1, T2)",
+            "task": null
+          },
+          "output": {
+            "kind": "woke",
+            "task": 1,
+            "line": null,
+            "origin": "orchestrator",
+            "sender": null,
+            "mark": null,
+            "alarm": false,
+            "rejected_round": null,
+            "body": "lote de prova pronto (T1, T2)",
+            "question": null,
+            "parecer": null,
+            "error": null,
+            "decided_by": {
+              "source": "rule",
+              "rule": "orchestrator",
+              "jev": null,
+              "regex": null,
+              "regex_agreed": null
+            }
+          },
+          "id": "orq:8e3e5e659b59f839"
+        },
+        {
+          "input": {
+            "ts": "2026-09-29T22:27:00-03:00",
+            "kind": "notice",
+            "text": "T5: a linha principal tem mudanças não commitadas; a integração espera a árvore limpa",
+            "task": 5
+          },
+          "output": {
+            "kind": "notice",
+            "task": 5,
+            "line": null,
+            "origin": null,
+            "sender": null,
+            "mark": null,
+            "alarm": false,
+            "rejected_round": null,
+            "body": "T5: a linha principal tem mudanças não commitadas; a integração espera a árvore limpa",
+            "question": null,
+            "parecer": null,
+            "error": null,
+            "decided_by": null
+          },
+          "id": "orq:89d58b77f3d3b752"
+        },
+        {
+          "input": {
+            "ts": "2026-09-29T22:28:00-03:00",
+            "kind": "advance",
+            "text": "T5 entregou a rodada 1 · 7858997",
+            "task": 5
+          },
+          "output": {
+            "kind": "advance",
+            "task": 5,
+            "line": {
+              "code": "delivered",
+              "round": 1,
+              "commit": "7858997"
+            },
+            "origin": null,
+            "sender": null,
+            "mark": null,
+            "alarm": false,
+            "rejected_round": null,
+            "body": "T5 entregou a rodada 1 · 7858997",
+            "question": null,
+            "parecer": null,
+            "error": null,
+            "decided_by": null
+          },
+          "id": "orq:3bc7b7e60cc79d8d"
+        },
+        {
+          "input": {
+            "ts": "2026-09-29T22:29:00-03:00",
+            "kind": "advance",
+            "text": "T3: integração vermelha → devolvida ao executor w-t3",
+            "task": 3
+          },
+          "output": {
+            "kind": "advance",
+            "task": 3,
+            "line": {
+              "code": "red_back",
+              "executor": "w-t3"
+            },
+            "origin": null,
+            "sender": null,
+            "mark": null,
+            "alarm": false,
+            "rejected_round": null,
+            "body": "T3: integração vermelha → devolvida ao executor w-t3",
+            "question": null,
+            "parecer": null,
+            "error": null,
+            "decided_by": null
+          },
+          "id": "orq:0ef77c87d267159c"
+        }
+      ]
+    }
+  ]
+}

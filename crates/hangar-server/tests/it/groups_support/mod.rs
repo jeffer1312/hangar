@@ -59,6 +59,10 @@ pub async fn machine(root: &Path, id: &str) -> Machine {
         "omp_agent": home.join(".omp/agent"), "kimi_home": home.join(".kimi-code")}).to_string());
     let (python, upstream) = fake::spawn_fake().await;
     let mut state = AppState::new(fake::config(upstream, ""));
+    state.accounts = hangar_server::accounts::AccountService::new(
+        hangar_server::accounts::environment::AccountEnvironment::from_map(
+            [("HOME".into(),home.to_string_lossy().into_owned()),
+             ("USERPROFILE".into(),home.to_string_lossy().into_owned())].into()));
     state.list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&script, Duration::from_secs(5)),
         capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
         FactsClient::new(upstream, SECRET.into())));
@@ -66,7 +70,7 @@ pub async fn machine(root: &Path, id: &str) -> Machine {
     federation::configure(&pair, fast());
     let changes = Arc::new(AtomicUsize::new(0));
     let counter = changes.clone();
-    state.groups = Some(Arc::new(GroupService::new(PairDir::new(pair.clone(), root.join("arquivo")), Arc::new(PythonOrq::from_state(&state)), id.into())
+    state.groups = Some(Arc::new(GroupService::new(PairDir::new(pair.clone(), root.join("arquivo")), Arc::new(PythonOrq::from_state(&state).with_paths(home.clone(),pair.clone())), id.into())
         .with_change_hook(Arc::new(move || { counter.fetch_add(1, Ordering::SeqCst); }))));
     state.peers = Arc::new(PeerClient::new(PeerBook::new(Some(root.join("peers.json")))));
     let share = crate::share_pair_routes::share_state(&root.join("shares.json"), &pair, Arc::new(Mutex::new(1_000.0)));

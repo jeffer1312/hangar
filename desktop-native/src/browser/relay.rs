@@ -168,8 +168,11 @@ mod tests {
 
     /// Quadro de texto como o cliente manda: mascarado (máscara zero, o que mantém os bytes legíveis no teste).
     fn client_text(text: &str) -> Vec<u8> {
-        assert!(text.len() < 126);
-        let mut wire = vec![0x81, 0x80 | text.len() as u8, 0, 0, 0, 0];
+        assert!(text.len() <= u16::MAX as usize);
+        let mut wire = vec![0x81];
+        if text.len() < 126 { wire.push(0x80 | text.len() as u8); }
+        else { wire.push(0xfe); wire.extend_from_slice(&(text.len() as u16).to_be_bytes()); }
+        wire.extend_from_slice(&[0, 0, 0, 0]);
         wire.extend_from_slice(text.as_bytes());
         wire
     }
@@ -237,5 +240,103 @@ mod tests {
         assert_eq!(server_text(&mut client).await.1["params"]["reason"], CLOSED);
         assert_eq!(server_text(&mut client).await.0, 8);
         assert!(relay.await.unwrap().is_ok());
+    }
+
+    async fn bounded_text(client: &mut (impl AsyncRead + Unpin)) -> (u8, Value) {
+        tokio::time::timeout(Duration::from_secs(2), server_text(client)).await.expect("o repasse precisa responder")
+    }
+
+    #[tokio::test]
+    async fn every_remote_command_crosses_the_pump_and_other_methods_do_not() {
+        let (mut client, mut server) = tokio::io::duplex(64 * 1024);
+        let (requests, ui) = async_channel::unbounded();
+        let (events, received) = async_channel::bounded(QUEUE);
+        let relay = tokio::spawn(async move { pump(&mut server, "proof::native", received, &requests).await });
+        let allowed = [
+            ("Page.enable", json!({})),
+            ("Page.startScreencast", json!({"format": "jpeg", "quality": 45, "maxWidth": 390, "maxHeight": 390, "everyNthFrame": 5})),
+            ("Page.stopScreencast", json!({})),
+            ("Page.screencastFrameAck", json!({"sessionId": 1})),
+            ("Page.captureScreenshot", json!({"format": "jpeg", "quality": 55})),
+            ("Input.dispatchMouseEvent", json!({"type": "mousePressed", "x": 400, "y": 300, "button": "left", "clickCount": 1})),
+            ("Input.insertText", json!({"text": "ação 🎯"})),
+            ("Input.dispatchKeyEvent", json!({"type": "keyDown", "key": "Backspace", "code": "Backspace", "windowsVirtualKeyCode": 8, "modifiers": 0})),
+        ];
+        for (index, (method, params)) in allowed.into_iter().enumerate() {
+            let id = index + 1;
+            client.write_all(&client_text(&json!({"id": id, "method": method, "params": params}).to_string())).await.unwrap();
+            let Request::Cdp { key, method: received, params: payload, reply } = tokio::time::timeout(Duration::from_secs(2), ui.recv()).await.unwrap().unwrap()
+                else { panic!("esperava comando CDP") };
+            assert_eq!((key.as_str(), received.as_str(), payload), ("proof::native", method, params));
+            reply.send(Ok(json!({"accepted": id}))).unwrap();
+            assert_eq!(bounded_text(&mut client).await.1, json!({"id": id, "result": {"accepted": id}}));
+        }
+        for method in ["Runtime.evaluate", "Emulation.setDeviceMetricsOverride", "Page.navigate", "Browser.close", "Target.attachToTarget", ""] {
+            client.write_all(&client_text(&json!({"id": 99, "method": method}).to_string())).await.unwrap();
+            let refused = bounded_text(&mut client).await.1;
+            assert_eq!(refused, json!({"id": 99, "error": {"code": -32601, "message": format!("{method} fora do repasse do app nativo")}}));
+            assert!(ui.is_empty());
+        }
+        let chromium: Value = serde_json::from_str(include_str!("../../../backend/tests/fixtures/contract/remote-browser/chromium.json")).unwrap();
+        for (method, params) in [
+            ("Page.screencastFrame", chromium["frame"].clone()),
+            ("Page.frameNavigated", json!({"frame": {"id": "main", "url": "http://example.test/"}})),
+        ] {
+            assert_eq!(deliver(&events, method, &params), None);
+            assert_eq!(bounded_text(&mut client).await.1, json!({"method": method, "params": params}));
+        }
+        drop(events);
+        assert_eq!(bounded_text(&mut client).await.1, json!({"method": "Inspector.detached", "params": {"reason": "target_closed"}}));
+        assert_eq!(bounded_text(&mut client).await.0, 8);
+        assert!(tokio::time::timeout(Duration::from_secs(2), relay).await.unwrap().unwrap().is_ok());
+    }
+
+    #[tokio::test]
+    async fn pending_screenshot_does_not_hold_mouse_unicode_or_key_responses() {
+        let (mut client, mut server) = tokio::io::duplex(64 * 1024);
+        let (requests, ui) = async_channel::unbounded();
+        let (events, received) = async_channel::bounded(QUEUE);
+        let relay = tokio::spawn(async move { pump(&mut server, "proof::native", received, &requests).await });
+        client.write_all(&client_text(r#"{"id":1,"method":"Page.captureScreenshot"}"#)).await.unwrap();
+        let Request::Cdp { reply: screenshot, .. } = tokio::time::timeout(Duration::from_secs(2), ui.recv()).await.unwrap().unwrap()
+            else { panic!("esperava captura") };
+        for (id, method, params) in [
+            (2, "Input.dispatchMouseEvent", json!({"type": "mouseReleased", "button": "left", "x": 800, "y": 0})),
+            (3, "Input.insertText", json!({"text": "ação 🎯"})),
+            (4, "Input.dispatchKeyEvent", json!({"type": "keyDown", "key": "Enter", "windowsVirtualKeyCode": 13, "modifiers": 2})),
+        ] {
+            client.write_all(&client_text(&json!({"id": id, "method": method, "params": params}).to_string())).await.unwrap();
+            let Request::Cdp { method: received, params: payload, reply, .. } = tokio::time::timeout(Duration::from_secs(2), ui.recv()).await.unwrap().unwrap()
+                else { panic!("esperava input enquanto o print aguarda") };
+            assert_eq!((received.as_str(), payload), (method, params));
+            reply.send(Ok(json!({}))).unwrap();
+            assert_eq!(bounded_text(&mut client).await.1, json!({"id": id, "result": {}}));
+        }
+        screenshot.send(Ok(json!({"data": "completed-later"}))).unwrap();
+        assert_eq!(bounded_text(&mut client).await.1, json!({"id": 1, "result": {"data": "completed-later"}}));
+        drop(events);
+        assert_eq!(bounded_text(&mut client).await.1["params"]["reason"], "target_closed");
+        assert_eq!(bounded_text(&mut client).await.0, 8);
+        assert!(tokio::time::timeout(Duration::from_secs(2), relay).await.unwrap().unwrap().is_ok());
+    }
+
+    #[tokio::test]
+    async fn screenshot_response_waits_twenty_five_seconds_and_drops_the_expired_reply() {
+        let (mut client, mut server) = tokio::io::duplex(1024);
+        let (requests, ui) = async_channel::unbounded();
+        let (events, received) = async_channel::bounded(QUEUE);
+        let relay = tokio::spawn(async move { pump(&mut server, "proof::native", received, &requests).await });
+        let since = std::time::Instant::now();
+        client.write_all(&client_text(r#"{"id":1,"method":"Page.captureScreenshot"}"#)).await.unwrap();
+        let Request::Cdp { reply, .. } = tokio::time::timeout(Duration::from_secs(2), ui.recv()).await.unwrap().unwrap()
+            else { panic!("esperava captura") };
+        let response = tokio::time::timeout(Duration::from_secs(27), server_text(&mut client)).await.unwrap().1;
+        assert!(since.elapsed() >= Duration::from_secs(25));
+        assert_eq!(response, json!({"id": 1, "error": {"code": -32000, "message": "o navegador nao respondeu"}}));
+        assert!(reply.send(Ok(json!({}))).is_err());
+        drop(events);
+        assert_eq!(bounded_text(&mut client).await.1["params"]["reason"], "target_closed");
+        assert_eq!(bounded_text(&mut client).await.0, 8);
+        assert!(tokio::time::timeout(Duration::from_secs(2), relay).await.unwrap().unwrap().is_ok());
     }
 }

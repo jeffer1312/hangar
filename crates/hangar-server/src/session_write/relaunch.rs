@@ -49,7 +49,9 @@ pub fn mode_refusal(error: &RuntimeError) -> (StatusCode, Value) {
     // A recusa que já é a frase da troca (`erro_troca_modo`) dispensa o código; as outras o levam à vista.
     let shown = if error.code == "erro_troca_modo" { error.message.clone() } else { with_code(error) };
     let mut params = json!({"erro": shown});
-    if crate::runtime::codex_relaunch::kill_phase(error) || error.code == crate::runtime::codex_relaunch::STARTING { params["code"] = json!(error.code); }
+    if crate::runtime::codex_relaunch::kill_phase(error) || error.code == crate::runtime::codex_relaunch::STARTING || error.code == "erro_sessao_adormecida" {
+        params["code"] = json!(error.code);
+    }
     (StatusCode::CONFLICT, super::detail_body("erro_troca_modo", &format!("não troquei de modo: {shown}"), params))
 }
 
@@ -68,7 +70,7 @@ pub fn reload_refusal(error: &RuntimeError) -> (StatusCode, Value) {
 }
 
 pub async fn mode(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (fwd, owner) = gate(&st, peer, &req);
+    let (fwd, owner) = match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     let runtime = st.state.runtime.get().cloned();
     let (Some(runtime), true, Some(name)) = (runtime, owner, session_name(req.uri().path()))
         else { return pass(&st, req, &fwd).await };
@@ -103,7 +105,7 @@ pub async fn mode(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInf
 }
 
 pub async fn reload(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (fwd, owner) = gate(&st, peer, &req);
+    let (fwd, owner) = match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     let runtime = st.state.runtime.get().cloned();
     let (Some(runtime), true, Some(name)) = (runtime, owner, session_name(req.uri().path()))
         else { return pass(&st, req, &fwd).await };

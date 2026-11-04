@@ -8,6 +8,7 @@ mod pair;
 use super::*;
 use std::{collections::HashMap, rc::Rc};
 use super::device::Remote;
+use crate::update::confirm::Launch;
 use add::{AddMachine, Found};
 use pair::Pair;
 use super::server_config::chip;
@@ -205,7 +206,7 @@ impl Line {
 }
 
 /// Host e caminho, sem esquema (`hostDe` do web): atrás de um proxy por caminho, máquinas diferentes dividem o host.
-fn host_key(url: &str) -> String {
+pub(super) fn host_key(url: &str) -> String {
     match url::Url::parse(url.trim()) {
         Ok(u) => format!("{}{}{}", u.host_str().unwrap_or_default(), u.port().map(|p| format!(":{p}")).unwrap_or_default(),
             u.path().trim_end_matches('/')).to_lowercase(),
@@ -389,6 +390,19 @@ fn web_ui_value(result: Result<Value, Failure>) -> Result<Option<bool>, String> 
     }
 }
 
+/// `GET`/`PUT /api/auto-report`. Servidor sem a rota: `Ok(None)`, e a linha some. `Ok(Some(None))` = não respondido.
+fn auto_report_value(result: Result<Value, Failure>) -> Result<Option<Option<bool>>, String> {
+    match result {
+        Err(error) if matches!(error.status, Some(404 | 405)) => Ok(None),
+        Err(error) => Err(Hangar::setting_failure(&error)),
+        Ok(value) => match value.get("auto_report") {
+            Some(Value::Bool(on)) => Ok(Some(Some(*on))),
+            Some(Value::Null) => Ok(Some(None)),
+            _ => Err(tr("invalid_response")),
+        },
+    }
+}
+
 /// O modo de uma máquina migrada, do `GET /api/atualizacao`; `checkout` é a pasta que a troca oferece.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct DevMode { developer: bool, channel: String, checkout: String }
@@ -420,7 +434,7 @@ pub(super) enum MachinesReply {
     Announced(u64, Result<Value, Failure>),
     Restart(u64, Result<Value, Failure>),
     RestartEnd(u64, RestartEnd),
-    Upgrade(u64, Result<Value, Failure>),
+    Upgrade(u64, crate::update::confirm::Launch),
     UpgradeStep(Track, u64, u64, u64, String),
     UpgradeEnd(Track, u64, UpgradeEnd),
     DevMode(u64, Result<Value, Failure>),
@@ -440,6 +454,8 @@ pub(super) enum MachinesReply {
     Paired(u64, Result<Value, Failure>),
     WebUi(u64, Result<Value, Failure>),
     WebUiSaved(u64, Result<Value, Failure>),
+    AutoReport(u64, Result<Value, Failure>),
+    AutoReportSaved(u64, Result<Value, Failure>),
 }
 
 #[derive(Default)]
@@ -528,6 +544,11 @@ pub(in crate::app) struct Machines {
     web_ui_saving: bool,
     web_ui_seq: u64,
     web_ui_error: Option<String>,
+    /// Relatório automático da atualização; `Ok(None)` = servidor sem a rota, `Ok(Some(None))` = não respondido.
+    auto_report: Remote<Option<Option<bool>>>,
+    auto_report_saving: bool,
+    auto_report_seq: u64,
+    auto_report_error: Option<String>,
     /// Pacote ou modo desenvolvedor; `Ok(None)` = servidor sem a troca pela tela (só antes de [`Self::dev_mode_seen`]).
     dev_mode: Remote<Option<DevMode>>,
     /// Já houve uma leitura boa do modo neste servidor: a linha não some mais.
@@ -547,6 +568,7 @@ impl Drop for Machines {
 
 impl Machines {
     fn track(&mut self, track: Track) -> &mut Upgrade { match track { Track::Update => &mut self.upgrade, Track::DevMode => &mut self.dev_switch } }
+    pub(super) fn dev_switch_busy(&self) -> bool { self.dev_switch.busy() }
     /// Um executor por vez no servidor: reiniciar, atualizar e trocar de modo se excluem.
     fn executor_busy(&self) -> bool { self.restart.asking || self.restart.waiting || self.upgrade.busy() || self.dev_switch.busy() }
 
@@ -582,6 +604,15 @@ impl Machines {
             Err(error) => self.web_ui_error = Some(error),
         }
     }
+
+    fn auto_report_saved(&mut self, seq: u64, result: Result<Value, Failure>) {
+        if seq != self.auto_report_seq { return; }
+        self.auto_report_saving = false;
+        match auto_report_value(result) {
+            Ok(saved) => { self.auto_report.set(Ok(saved)); self.auto_report_error = None; }
+            Err(error) => self.auto_report_error = Some(error),
+        }
+    }
 }
 
 impl Hangar {
@@ -610,6 +641,7 @@ impl Hangar {
         m.checks.clear();
         if !m.id_saving { self.load_machine_id(cx); }
         if !self.machines.web_ui_saving { self.load_web_ui(cx); }
+        if !self.machines.auto_report_saving { self.load_auto_report(cx); }
         if !self.machines.dev_switch.busy() { self.load_dev_mode(cx); }
         self.load_reach(cx);
         self.load_saved_ids(cx);
@@ -875,7 +907,72 @@ impl Hangar {
         cx.notify();
     }
 
-    fn load_dev_mode(&mut self, cx: &mut Context<Self>) {
+    fn load_auto_report(&mut self, cx: &mut Context<Self>) {
+        let Some(api) = self.api.clone().filter(|_| !self.active_invite()) else { return };
+        let seq = self.machines.auto_report.start();
+        self.machines.auto_report_error = None;
+        let done = self.machines_send_later();
+        self.runtime.spawn(async move { done(MachinesReply::AutoReport(seq, api.server_read(&["auto-report"], &[], 15).await)).await });
+        cx.notify();
+    }
+
+    fn save_auto_report(&mut self, on: bool, cx: &mut Context<Self>) {
+        let Some(api) = self.api.clone().filter(|_| !self.active_invite()) else { return };
+        let m = &mut self.machines;
+        if m.auto_report_saving || m.auto_report.loading || m.auto_report.ok().copied().flatten().is_none() { return; }
+        m.auto_report_seq += 1;
+        (m.auto_report_saving, m.auto_report_error) = (true, None);
+        let (seq, done) = (m.auto_report_seq, self.machines_send_later());
+        self.runtime.spawn(async move {
+            done(MachinesReply::AutoReportSaved(seq, api.server_send(reqwest::Method::PUT, &["auto-report"], Some(json!({"auto_report": on})), 15).await)).await
+        });
+        cx.notify();
+    }
+
+    /// Uma vez por abertura do app: as máquinas próprias sem resposta ao relatório automático entram numa pergunta só.
+    /// Leitura que falha não pergunta; fica para a próxima abertura.
+    pub(super) fn ask_auto_report(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        static ASKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if ASKED.swap(true, std::sync::atomic::Ordering::SeqCst) { return; }
+        let entries: Vec<_> = self.servers.iter().filter(|s| !s.disabled && !s.invite && !s.ephemeral).cloned().collect();
+        let task = self.runtime.spawn(async move {
+            let mut pending: Vec<(String, Api)> = Vec::new();
+            for entry in entries {
+                let Ok(api) = Api::new(&entry.address, &entry.token) else { continue };
+                if pending.iter().any(|(_, known)| known.identity() == api.identity()) { continue; }
+                if let Ok(value) = api.server_read(&["auto-report"], &[], 10).await && value.get("auto_report") == Some(&Value::Null) {
+                    pending.push((entry.label.clone(), api));
+                }
+            }
+            pending
+        });
+        let runtime = self.runtime.clone();
+        cx.spawn_in(window, async move |_, cx| {
+            let pending = task.await.unwrap_or_default();
+            if pending.is_empty() { return; }
+            let machines = pending.iter().map(|(label, _)| label.as_str()).collect::<Vec<_>>().join(", ");
+            let body = tr_shared("auto_report_question_body", &[("machines", &machines)]);
+            let apis: Vec<Api> = pending.into_iter().map(|(_, api)| api).collect();
+            let answer = move |value: bool| {
+                for api in apis.clone() {
+                    runtime.spawn(async move { let _ = api.server_send(reqwest::Method::PUT, &["auto-report"], Some(json!({"auto_report": value})), 15).await; });
+                }
+            };
+            let _ = cx.update(|window, cx| window.open_dialog(cx, move |dialog, _, _| {
+                let (yes, no) = (answer.clone(), answer.clone());
+                popup::dialog(dialog).w(px(480.)).title(tr_shared("auto_report_question_title", &[]))
+                    .child(div().flex().flex_col().gap(px(14.))
+                        .child(div().whitespace_normal().child(body.clone()))
+                        .child(div().flex().justify_end().gap(px(8.))
+                            .child(Button::new("auto-report-no").outline().label(tr_shared("auto_report_no", &[]))
+                                .on_click(move |_, window, cx| { no(false); window.close_dialog(cx); }))
+                            .child(Button::new("auto-report-yes").primary().label(tr_shared("auto_report_yes", &[]))
+                                .on_click(move |_, window, cx| { yes(true); window.close_dialog(cx); }))))
+            }));
+        }).detach();
+    }
+
+    pub(super) fn load_dev_mode(&mut self, cx: &mut Context<Self>) {
         let Some(api) = self.api.clone().filter(|_| !self.active_invite()) else { return };
         let seq = self.machines.dev_mode.start();
         let done = self.machines_send_later();
@@ -977,7 +1074,7 @@ impl Hangar {
         self.confirm_server_update(Self::start_upgrade, window, cx);
     }
 
-    fn start_upgrade(&mut self, cx: &mut Context<Self>) {
+    fn start_upgrade(&mut self, acceptance: crate::update::confirm::Acceptance, real: bool, cx: &mut Context<Self>) {
         let Some(api) = self.api.clone() else { return };
         if self.machines.upgrade.busy() || self.machines.restart.asking || self.machines.restart.waiting { return; }
         let u = &mut self.machines.upgrade;
@@ -985,7 +1082,9 @@ impl Hangar {
         (u.asking, u.step, u.at, u.manual, u.error) = (true, None, None, false, None);
         u.warnings.clear();
         let (seq, done) = (u.seq, self.machines_send_later());
-        self.runtime.spawn(async move { done(MachinesReply::Upgrade(seq, api.server_post(&["atualizacao", "iniciar"], 30).await)).await });
+        self.runtime.spawn(async move {
+            done(MachinesReply::Upgrade(seq, crate::update::confirm::accept_then_start(&api, &acceptance, real).await)).await
+        });
         cx.notify();
     }
 
@@ -1124,13 +1223,16 @@ impl Hangar {
                 if seq != u.seq { return; }
                 u.asking = false;
                 match result {
-                    Ok(value) => {
+                    Launch::Started(Ok(value)) => {
                         if let Some(pid) = crate::update::update_process_id(&value) {
                             u.waiting = true;
                             self.wait_upgrade(Track::Update, Some(pid));
                         } else { u.error = Some(tr("invalid_response")); }
                     }
-                    Err(error) => u.error = Some(tr("update_refused").replace("{reason}", &Self::fetch_failure(&error))),
+                    Launch::Started(Err(error)) => u.error = Some(tr("update_refused").replace("{reason}", &Self::fetch_failure(&error))),
+                    Launch::AcceptFailed(text) => u.error = Some(text),
+                    // Só o aviso estava pendente: aceito, o servidor não tem o que rodar.
+                    Launch::Nothing => self.sync_updater(cx),
                 }
             }
             MachinesReply::DevMode(seq, result) => {
@@ -1174,7 +1276,8 @@ impl Hangar {
                         error.as_deref().map(|e| e.trim_end_matches('.')).unwrap_or("?"))),
                     UpgradeEnd::Unconfirmed => u.error = Some(tr("update_silent")),
                 }
-                if track == Track::DevMode { self.load_dev_mode(cx); }
+                // A atualização também troca de modo quando o aceite do aviso da migração a lançou.
+                self.load_dev_mode(cx);
                 self.sync_updater(cx);
                 if done { crate::update::confirm::show_pending(false, window, cx); }
             }
@@ -1271,6 +1374,8 @@ impl Hangar {
             MachinesReply::Paired(seq, result) => self.paired(seq, result, window),
             MachinesReply::WebUi(seq, result) => { self.machines.web_ui.finish(seq, web_ui_value(result)); }
             MachinesReply::WebUiSaved(seq, result) => self.machines.web_ui_saved(seq, result),
+            MachinesReply::AutoReport(seq, result) => { self.machines.auto_report.finish(seq, auto_report_value(result)); }
+            MachinesReply::AutoReportSaved(seq, result) => self.machines.auto_report_saved(seq, result),
         }
         cx.notify();
     }
@@ -1796,6 +1901,8 @@ impl Hangar {
         };
         let face = if line.entry.as_ref().is_some_and(|e| e.invite) { chrome::small_icon(IconName::Link, 21., theme::muted()).into_any_element() }
             else { div().text_size(px(19.)).font_weight(FontWeight::SEMIBOLD).text_color(theme::muted()).child(initial(&name)).into_any_element() };
+        let tag_entry = line.entry.clone().filter(|entry| !entry.invite);
+        let tag_title = format!("{} · {name}", tr_shared("tags_machine_title", &[]));
         div().flex().flex_col().gap(px(16.)).pb(px(8.))
             .child(div().mb(px(4.)).flex().items_center().gap(px(14.))
                 .child(tile(face, 46., theme::raised(), Some(head_dot)))
@@ -1807,6 +1914,15 @@ impl Hangar {
                 .when(!rename_ids.is_empty(), |el| el.child(Button::new("machines-peer-rename").ghost().small().label(tr("machines_rename"))
                     .accessibility_label(tr("machines_rename_aria").replace("{nome}", &name))
                     .on_click(cx.listener(move |this, _, window, cx| this.start_machine_rename(rename_ids.clone(), name.clone(), window, cx)))))
+                // A etiqueta é gravada na própria máquina: só com a entrada (endereço e token) guardada aqui.
+                .when_some(tag_entry, |el, entry| el.child(Button::new("machines-peer-tag").ghost().small().label(tr_shared("tags_machine_title", &[]))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        let api = match this.machine_api(&servers::norm(&entry.address)) { Some(api) => Ok(api), None => Api::new(&entry.address, &entry.token) };
+                        match api {
+                            Ok(api) => this.open_tag_editor(api, super::tags::Subject::Machine, tag_title.clone(), window, cx),
+                            Err(error) => window.push_notification(Notification::warning(Self::fetch_failure(&error)), cx),
+                        }
+                    }))))
             .children(rename_editor)
             .child(device)
             .child(messages)
@@ -2049,47 +2165,31 @@ impl Hangar {
                 .when_some(m.web_ui_error.clone(), |el, error| el.child(div().px_4().pb_4().child(alert("machines-web-ui-error", error))))
         });
 
-        // Convidado não troca; servidor sem a troca ou máquina sem migrar (`Ok(None)`) não oferece.
-        let dev_mode = (!self.active_invite() && !matches!(m.dev_mode.value, Some(Ok(None)))).then(|| {
-            let mode = m.dev_mode.ok().cloned().flatten();
-            let read_error = m.dev_mode.value.as_ref().and_then(|v| v.as_ref().err()).filter(|_| !m.dev_mode.loading).cloned();
-            // Sem o modo depois de uma leitura boa: o interruptor aparece ligado e só desliga.
-            let lost = m.dev_mode_lost();
-            let d = &m.dev_switch;
-            let status = match &mode {
-                _ if d.busy() => d.step.as_ref().filter(|(_, total, _)| *total > 0).map(|(step, total, text)| tr("update_step")
-                    .replace("{step}", &step.to_string()).replace("{total}", &total.to_string()).replace("{text}", text))
-                    .unwrap_or_else(|| tr("dev_mode_switching")),
-                _ if lost => tr("dev_mode_unknown"),
-                Some(mode) => dev_mode_line(mode),
+        // Convidado não escolhe; servidor sem a rota não oferece. `Some(None)` = ainda não respondido.
+        let auto_report = (!self.active_invite() && !matches!(m.auto_report.value, Some(Ok(None)))).then(|| {
+            let answer = m.auto_report.ok().copied().flatten();
+            let read_error = m.auto_report.value.as_ref().and_then(|v| v.as_ref().err()).filter(|_| !m.auto_report.loading).cloned();
+            let status = match answer {
+                _ if m.auto_report_saving => tr("server_saving"),
+                Some(Some(on)) => format!("{} · {}", tr_shared(if on { "auto_report_on" } else { "auto_report_off" }, &[]), tr_shared("auto_report_setting_hint", &[])),
+                Some(None) => format!("{} · {}", tr_shared("auto_report_value_unanswered", &[]), tr_shared("auto_report_setting_hint", &[])),
                 None if read_error.is_none() => tr("server_loading"),
-                None => tr("dev_mode_help"),
+                None => tr_shared("auto_report_setting_hint", &[]),
             };
-            let developer = mode.as_ref().is_some_and(|mode| mode.developer);
-            // Para ligar é preciso a pasta; desligar volta para o pacote instalado.
-            let folder = (mode.is_some() && !developer).then(|| m.dev_folder.as_ref().map(|(input, _)| input.clone())).flatten();
-            let no_folder = folder.is_some() && self.dev_folder_value(cx).is_empty();
-            let toggle = Switch::new("machines-dev-mode").checked(developer || lost).accessibility_label(tr("dev_mode_title"))
-                .disabled((mode.is_none() && !lost) || m.dev_mode.loading || busy || no_folder)
-                .on_click(cx.listener(|this, on: &bool, window, cx| this.confirm_dev_mode(*on, window, cx)));
-            let done = if d.manual { Some((tr("dev_mode_done_manual"), theme::warning())) }
-                else { d.at.as_ref().map(|_| (tr("dev_mode_done"), theme::success())) };
+            let toggle = Switch::new("machines-auto-report").checked(answer.flatten().unwrap_or(false)).accessibility_label(tr("auto_report_title"))
+                .disabled(answer.is_none() || m.auto_report.loading || m.auto_report_saving)
+                .on_click(cx.listener(|this, on: &bool, _, cx| this.save_auto_report(*on, cx)));
             let alert = |id: &'static str, text: String| div().id(id).role(Role::Alert).flex_1().text_size(px(12.5)).text_color(theme::danger())
                 .whitespace_normal().child(text);
-            settings_box().child(self.row_with(IconName::SquareTerminal, "dev_mode_title", div().whitespace_normal().child(status), mode.is_some() || lost,
-                    toggle.into_any_element()))
-                .when_some(folder, |el, input| el.child(div().px_4().pb_4().flex().flex_col().gap(px(6.))
-                    .child(div().text_size(px(12.5)).text_color(theme::muted()).child(tr("dev_mode_folder")))
-                    .child(Input::new(&input).small().disabled(busy).aria_label(tr("dev_mode_folder")))))
-                .when(!d.busy() && mode.is_some(), |el| el.child(div().px_4().pb_4().child(muted(tr("dev_mode_help")))))
-                .when_some(done.filter(|_| !d.busy()), |el, (text, color)| el.child(div().id("machines-dev-mode-done").role(Role::Status)
-                    .px_4().pb_4().text_size(px(12.5)).text_color(color).whitespace_normal().child(text)))
+            settings_box().child(self.row_with(IconName::FileText, "auto_report_title", div().whitespace_normal().child(status), answer.is_some(), toggle.into_any_element()))
                 .when_some(read_error, |el, error| el.child(div().flex().items_center().gap(px(10.)).px_4().pb_4()
-                    .child(alert("machines-dev-mode-load-error", error))
-                    .child(Button::new("machines-dev-mode-retry").outline().small().label(tr("server_retry"))
-                        .on_click(cx.listener(|this, _, _, cx| this.load_dev_mode(cx))))))
-                .when_some(d.error.clone(), |el, error| el.child(div().px_4().pb_4().child(alert("machines-dev-mode-error", error))))
+                    .child(alert("machines-auto-report-load-error", error))
+                    .child(Button::new("machines-auto-report-retry").outline().small().label(tr("server_retry"))
+                        .on_click(cx.listener(|this, _, _, cx| this.load_auto_report(cx))))))
+                .when_some(m.auto_report_error.clone(), |el, error| el.child(div().px_4().pb_4().child(alert("machines-auto-report-error", error))))
         });
+
+        let dev_mode = self.render_dev_mode(cx);
 
         let this = cx.entity().downgrade();
         let advanced_open = m.advanced;
@@ -2125,6 +2225,12 @@ impl Hangar {
             .when(!rename_ids.is_empty(), |el| el.child(Button::new("machines-this-rename").ghost().small().label(tr("machines_rename"))
                 .accessibility_label(tr("machines_rename_aria").replace("{nome}", &server_name))
                 .on_click(cx.listener(move |this, _, window, cx| this.start_machine_rename(rename_ids.clone(), server_name.clone(), window, cx)))))
+            .when(!self.active_invite(), |el| el.child(Button::new("machines-this-tag").ghost().small().label(tr_shared("tags_machine_title", &[]))
+                .on_click(cx.listener(|this, _, window, cx| {
+                    let Some(api) = this.api.clone() else { return };
+                    let title = format!("{} · {}", tr_shared("tags_machine_title", &[]), this.server_label(cx));
+                    this.open_tag_editor(api, super::tags::Subject::Machine, title, window, cx);
+                }))))
             .when(!id.is_empty(), |el| el.child(div().flex_shrink_0().px(px(10.)).py(px(2.)).rounded_full().border_1().border_color(theme::border())
                 .font_family(theme::MONO).text_size(px(12.)).text_color(theme::muted()).child(id.clone())));
         let scope_env = chip(tr("machines_scope_env"), theme::muted(), theme::raised()).flex_shrink_0().into_any_element();
@@ -2138,9 +2244,58 @@ impl Hangar {
             .child(settings_box().child(section_head(IconName::RotateCw, tr("machines_service"), None, None, px(16.)))
                 .child(div().px_4().pb_4().child(service)))
             .children(web_ui)
+            .children(auto_report)
             .children(dev_mode)
             .child(advanced)
             .child(remove)
+    }
+
+    /// O interruptor do modo desenvolvedor do servidor ativo, no detalhe desta máquina e na página Sobre. Convidado não
+    /// troca; servidor sem a troca ou máquina sem migrar (`Ok(None)`) não oferece.
+    pub(super) fn render_dev_mode(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let m = &self.machines;
+        if self.active_invite() || matches!(m.dev_mode.value, Some(Ok(None))) { return None; }
+        // A atualização pedida na página Sobre também ocupa o executor.
+        let busy = m.executor_busy() || self.device.run_active();
+        let muted = |text: String| div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(text);
+        let mode = m.dev_mode.ok().cloned().flatten();
+        let read_error = m.dev_mode.value.as_ref().and_then(|v| v.as_ref().err()).filter(|_| !m.dev_mode.loading).cloned();
+        // Sem o modo depois de uma leitura boa: o interruptor aparece ligado e só desliga.
+        let lost = m.dev_mode_lost();
+        let d = &m.dev_switch;
+        let status = match &mode {
+            _ if d.busy() => d.step.as_ref().filter(|(_, total, _)| *total > 0).map(|(step, total, text)| tr("update_step")
+                .replace("{step}", &step.to_string()).replace("{total}", &total.to_string()).replace("{text}", text))
+                .unwrap_or_else(|| tr("dev_mode_switching")),
+            _ if lost => tr("dev_mode_unknown"),
+            Some(mode) => dev_mode_line(mode),
+            None if read_error.is_none() => tr("server_loading"),
+            None => tr("dev_mode_help"),
+        };
+        let developer = mode.as_ref().is_some_and(|mode| mode.developer);
+        // Para ligar é preciso a pasta; desligar volta para o pacote instalado.
+        let folder = (mode.is_some() && !developer).then(|| m.dev_folder.as_ref().map(|(input, _)| input.clone())).flatten();
+        let no_folder = folder.is_some() && self.dev_folder_value(cx).is_empty();
+        let toggle = Switch::new("machines-dev-mode").checked(developer || lost).accessibility_label(tr("dev_mode_title"))
+            .disabled((mode.is_none() && !lost) || m.dev_mode.loading || busy || no_folder)
+            .on_click(cx.listener(|this, on: &bool, window, cx| this.confirm_dev_mode(*on, window, cx)));
+        let done = if d.manual { Some((tr("dev_mode_done_manual"), theme::warning())) }
+            else { d.at.as_ref().map(|_| (tr("dev_mode_done"), theme::success())) };
+        let alert = |id: &'static str, text: String| div().id(id).role(Role::Alert).flex_1().text_size(px(12.5)).text_color(theme::danger())
+            .whitespace_normal().child(text);
+        Some(settings_box().child(self.row_with(IconName::SquareTerminal, "dev_mode_title", div().whitespace_normal().child(status), mode.is_some() || lost,
+                toggle.into_any_element()))
+            .when_some(folder, |el, input| el.child(div().px_4().pb_4().flex().flex_col().gap(px(6.))
+                .child(div().text_size(px(12.5)).text_color(theme::muted()).child(tr("dev_mode_folder")))
+                .child(Input::new(&input).small().disabled(busy).aria_label(tr("dev_mode_folder")))))
+            .when(!d.busy() && mode.is_some(), |el| el.child(div().px_4().pb_4().child(muted(tr("dev_mode_help")))))
+            .when_some(done.filter(|_| !d.busy()), |el, (text, color)| el.child(div().id("machines-dev-mode-done").role(Role::Status)
+                .px_4().pb_4().text_size(px(12.5)).text_color(color).whitespace_normal().child(text)))
+            .when_some(read_error, |el, error| el.child(div().flex().items_center().gap(px(10.)).px_4().pb_4()
+                .child(alert("machines-dev-mode-load-error", error))
+                .child(Button::new("machines-dev-mode-retry").outline().small().label(tr("server_retry"))
+                    .on_click(cx.listener(|this, _, _, cx| this.load_dev_mode(cx))))))
+            .when_some(d.error.clone(), |el, error| el.child(div().px_4().pb_4().child(alert("machines-dev-mode-error", error)))))
     }
 }
 

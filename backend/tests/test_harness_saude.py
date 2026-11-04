@@ -103,7 +103,7 @@ def test_extensao_apontando_pra_outra_fonte_nao_e_falta(tmp_path, monkeypatch):
     assert h._extensoes("pi")["ok"] is True
 
 
-def test_omp_preserva_todo_e_rolagem_nativos_sem_perder_complementos(tmp_path, monkeypatch):
+def test_omp_preserva_todo_e_rolagem_nativos_sem_perder_complementos(tmp_path, monkeypatch, hangar_server_bin):
     repo = tmp_path / "repo"
     fontes = repo / "scripts" / "pi"
     (fontes / "lib").mkdir(parents=True)
@@ -171,7 +171,7 @@ def test_hook_do_grupo_com_binario_sumido_conta_como_falta(tmp_path):
     assert h._hooks_claude(tmp_path)["ok"] is True
 
 
-def test_codex_nao_oferece_a_ponte_antiga_no_painel(tmp_path, monkeypatch):
+def test_codex_nao_oferece_a_ponte_antiga_no_painel(tmp_path, monkeypatch, hangar_server_bin):
     (tmp_path / ".codex").mkdir()
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     monkeypatch.setattr(h, "list_config_dirs", lambda: [])
@@ -182,7 +182,7 @@ def test_codex_nao_oferece_a_ponte_antiga_no_painel(tmp_path, monkeypatch):
     assert all(item["codigo"] != "sem_ponte" and item["conserto"] != "skills" for item in codex["itens"])
 
 
-def test_omp_nao_oferece_fullscreen(tmp_path, monkeypatch):
+def test_omp_nao_oferece_fullscreen(tmp_path, monkeypatch, hangar_server_bin):
     # A conversa do omp mora no scrollback do terminal por desenho (renderizador nunca consulta a
     # posicao de rolagem; issue #10232). Em alternate screen ela some, e a roda vira seta =
     # historico no composer. A tela de saude nao pode oferecer o botao que liga isso.

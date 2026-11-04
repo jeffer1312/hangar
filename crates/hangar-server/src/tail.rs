@@ -176,6 +176,29 @@ pub fn tail_offset(path: &Path, max_lines: usize) -> std::io::Result<u64> {
     }
 }
 
+/// Passa as linhas de `[from, to)` pelo parser sem gerar evento: relógio da reescrita e começo do turno das notas.
+fn seed_parser(path: &Path, parser: &mut LineParser, from: u64, to: u64, key: &str) {
+    let Ok(file) = File::open(path) else { return };
+    let mut reader = BufReader::new(file);
+    if from >= to || reader.seek(SeekFrom::Start(from)).is_err() {
+        return;
+    }
+    let mut at = from;
+    let mut line = Vec::new();
+    while at < to {
+        line.clear();
+        let n = match reader.read_until(b'\n', &mut line) {
+            Ok(n) if n > 0 && line.last() == Some(&b'\n') => n as u64,
+            _ => break,
+        };
+        // Como no `feed`: pânico aqui derrubaria o leitor compartilhado.
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| parser.seed(&line, at))).is_err() {
+            tracing::error!(key, offset = at, "linha do transcript derrubou o parser na semeadura; pulada");
+        }
+        at += n;
+    }
+}
+
 /// Cauda de UM aparelho, de onde ele pediu até `cut`, com parser próprio (cada leitor tem o seu).
 /// `resume` só vale com o stem desta sessão e dentro do arquivo; senão, as últimas 200 linhas.
 pub fn backfill(path: &Path, key: &str, provider: Provider, resume: Option<&str>, cut: u64) -> Vec<Bytes> {
@@ -197,7 +220,11 @@ pub fn backfill(path: &Path, key: &str, provider: Provider, resume: Option<&str>
     if start >= cut {
         return Vec::new();
     }
-    let mut parser = LineParser::new(provider);
+    let mut parser = LineParser::new(provider).with_path(path).with_notices();
+    // O aparelho que volta no meio do turno precisa do começo dele, como o leitor compartilhado.
+    if matches!(provider, Provider::Claude | Provider::ClaudeHeadless) {
+        seed_parser(path, &mut parser, crate::transcript::turn_seed_start(path, start), start, key);
+    }
     match read_frames(path, start, Some(cut), &mut parser, key) {
         Ok((frames, _)) => frames,
         Err(e) => {
@@ -218,7 +245,7 @@ pub fn last_committed(path: &Path, provider: Provider) -> std::io::Result<Option
     };
     let mut reader = BufReader::new(file);
     reader.seek(SeekFrom::Start(start))?;
-    let mut parser = LineParser::new(provider);
+    let mut parser = LineParser::new(provider).with_path(path);
     let (mut at, mut last, mut line) = (start, None, Vec::new());
     loop {
         line.clear();
@@ -330,30 +357,13 @@ impl TailState {
     /// Sem o relógio das linhas da cauda, a regravação do `claude --resume` sairia ao vivo; o
     /// leitor do Python começa 200 linhas antes e não a mostra.
     fn seed_rewrite(&mut self, end: u64) {
-        if self.provider == Provider::Codex {
+        if !matches!(self.provider, Provider::Claude | Provider::ClaudeHeadless) {
             return;
         }
         let Ok(start) = tail_offset(&self.path, BACKFILL_LINES) else { return };
-        let Ok(file) = File::open(&self.path) else { return };
-        let mut reader = BufReader::new(file);
-        if start >= end || reader.seek(SeekFrom::Start(start)).is_err() {
-            return;
-        }
-        let mut at = start;
-        let mut line = Vec::new();
-        while at < end {
-            line.clear();
-            let n = match reader.read_until(b'\n', &mut line) {
-                Ok(n) if n > 0 && line.last() == Some(&b'\n') => n as u64,
-                _ => break,
-            };
-            // Como no `feed`: pânico aqui derrubaria o leitor compartilhado.
-            let parser = &mut self.parser;
-            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| parser.seed(&line))).is_err() {
-                tracing::error!(key = %self.key, offset = at, "linha do transcript derrubou o parser na semeadura; pulada");
-            }
-            at += n;
-        }
+        // Último fim de turno já dentro das 200 linhas: elas bastam.
+        let from = crate::transcript::turn_seed_start(&self.path, end).min(start);
+        seed_parser(&self.path, &mut self.parser, from, end, &self.key);
     }
 
     /// Lê o que chegou e manda a todos, sob a trava. Arquivo menor que a posição = truncado:
@@ -366,7 +376,7 @@ impl TailState {
         let Ok(meta) = std::fs::metadata(&self.path) else { return };
         if meta.len() < pos {
             tracing::info!(key = %self.key, "transcript encolheu; recomeça do início");
-            self.parser = LineParser::new(self.provider);
+            self.parser = LineParser::new(self.provider).with_path(&self.path).with_notices();
             self.pos = Some(0);
             let _ = tx.send(Out::Tail(self.generation, reset_frame()));
         }
@@ -418,7 +428,7 @@ impl FileTail {
             provider,
             generation,
             pos: None,
-            parser: LineParser::new(provider),
+            parser: LineParser::new(provider).with_path(&path).with_notices(),
         }));
         let task = tokio::spawn(run(path, state.clone(), tx, watchers, on_dead)).abort_handle();
         Arc::new(FileTail { state, task })

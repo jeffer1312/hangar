@@ -235,7 +235,7 @@ def test_input_pi_cria_a_entrada_antes_do_envio_com_id_estavel(api_client, tmp_p
     from app import pqueue
     monkeypatch.setattr(pqueue.settings, "projects_dir", tmp_path / "projects")
     monkeypatch.setattr("app.api._pane_info", lambda name: ("pi", "%1"))
-    monkeypatch.setattr("app.api.INBOX.tem_linha", lambda pane: True)
+    monkeypatch.setattr("app.api.providers_bridge.inbox_call", lambda operation, **arguments: {"line": "pisess"})
     with patch("app.api.terminal.send_prompt", return_value="sent") as sp:
         r = api_client.post("/api/sessions/pisess/input", json={"text": "oi"}, headers=_h())
     assert r.status_code == 200
@@ -252,7 +252,7 @@ def test_input_pi_deferred_mantem_a_entrada_pendente_com_o_mesmo_id(api_client, 
     from app import pqueue
     monkeypatch.setattr(pqueue.settings, "projects_dir", tmp_path / "projects")
     monkeypatch.setattr("app.api._pane_info", lambda name: ("pi", "%1"))
-    monkeypatch.setattr("app.api.INBOX.tem_linha", lambda pane: True)
+    monkeypatch.setattr("app.api.providers_bridge.inbox_call", lambda operation, **arguments: {"line": "pisess"})
     with patch("app.api.terminal.send_prompt", return_value="deferred") as sp:
         r = api_client.post("/api/sessions/pisess/input", json={"text": "oi"}, headers=_h())
     assert r.status_code == 200
@@ -268,7 +268,7 @@ def test_input_pi_partial_nao_deixa_entrada_orfa_pendente(api_client, tmp_path, 
     from app import pqueue
     monkeypatch.setattr(pqueue.settings, "projects_dir", tmp_path / "projects")
     monkeypatch.setattr("app.api._pane_info", lambda name: ("pi", "%1"))
-    monkeypatch.setattr("app.api.INBOX.tem_linha", lambda pane: True)
+    monkeypatch.setattr("app.api.providers_bridge.inbox_call", lambda operation, **arguments: {"line": "pisess"})
     with patch("app.api.terminal.send_prompt", return_value="partial"):
         r = api_client.post("/api/sessions/pisess/input", json={"text": "oi"}, headers=_h())
     assert r.status_code == 400
@@ -316,7 +316,7 @@ def test_input_pi_slash_command_nao_cria_entrada_antecipada(api_client, tmp_path
     from app import pqueue
     monkeypatch.setattr(pqueue.settings, "projects_dir", tmp_path / "projects")
     monkeypatch.setattr("app.api._pane_info", lambda name: ("pi", "%1"))
-    monkeypatch.setattr("app.api.INBOX.tem_linha", lambda pane: True)
+    monkeypatch.setattr("app.api.providers_bridge.inbox_call", lambda operation, **arguments: {"line": "pisess"})
     with patch("app.api.terminal.send_prompt", return_value="sent") as sp:
         r = api_client.post("/api/sessions/pisess/input", json={"text": "/clear"}, headers=_h())
     assert r.status_code == 200
@@ -335,7 +335,7 @@ def test_input_pi_sem_linha_nao_cria_entrada_antes_do_envio(api_client, tmp_path
     from app import pqueue
     monkeypatch.setattr(pqueue.settings, "projects_dir", tmp_path / "projects")
     monkeypatch.setattr("app.api._pane_info", lambda name: ("pi", "%1"))
-    monkeypatch.setattr("app.api.INBOX.tem_linha", lambda pane: False)   # sem linha -> fallback de tecla
+    monkeypatch.setattr("app.api.providers_bridge.inbox_call", lambda operation, **arguments: {"line": None})   # sem linha -> fallback de tecla
 
     visto = {}
 
@@ -1077,8 +1077,6 @@ def test_clear_then_link_route(api_client, _tmp_chain_dir):
     assert ThenLink("a").get() is None
 
 
-
-
 @pytest.mark.parametrize("headless, named", [(None, True), (True, True), (None, False)])
 def test_create_claude_needs_rust(api_client, headless, named):
     # Claude, com e sem terminal, abre no Rust: sem ele a abertura recusa antes de qualquer efeito.
@@ -1463,46 +1461,6 @@ def test_do_notify_awaiting_no_match_is_noop(monkeypatch):
     assert calls == []
 
 
-def test_relimpar_aplica_outro_estilo_sem_audio(api_client, monkeypatch):
-    # Trocar de estilo NAO reenvia o audio: a Whisper ja rodou e o cru veio no `raw`. O endpoint so
-    # chama a limpeza de novo — nao ha sessao, nem cwd, nem upload envolvidos.
-    visto = {}
-
-    def fake_limpar(texto, estilo_pedido=None, **options):
-        visto["texto"], visto["estilo"] = texto, estilo_pedido
-        return {"text": "**Objetivo**\nfalar.", "raw": texto, "aviso": None, "estilo_aplicado": "briefing", "organization_mode": "external_api"}
-
-    monkeypatch.setattr(api_mod.dictation_bridge, "organize", fake_limpar)
-    r = api_client.post("/api/ditado/relimpar",
-                        json={"texto": "eu queria falar sobre uma coisa aqui", "estilo": "briefing"},
-                        headers=_h())
-    assert r.status_code == 200
-    assert r.json()["text"] == "**Objetivo**\nfalar."
-    assert visto == {"texto": "eu queria falar sobre uma coisa aqui", "estilo": "briefing"}
-
-
-def test_status_dos_servicos_de_transcricao(api_client, monkeypatch):
-    linhas = [{"id": "el", "name": "ElevenLabs", "kind": "elevenlabs",
-               "waiting_until": 1900000000.0, "reason": "sem cota (402)"}]
-    monkeypatch.setattr(api_mod, "providers_status", lambda: linhas)
-    r = api_client.get("/api/transcription/providers/status", headers=_h())
-    assert r.status_code == 200
-    assert r.json() == {"providers": linhas}
-    assert api_client.get("/api/transcription/providers/status").status_code == 401
-
-
-def test_relimpar_recusa_estilo_que_nao_existe(api_client):
-    # 400, e nao "cai no padrao": aqui a pessoa CLICOU num botao. Entregar outro estilo calada seria
-    # mentir sobre o que ela apertou (na transcricao o estilo e palpite da tela, e cair na config e
-    # o certo — por isso a regra e diferente nos dois lugares).
-    r = api_client.post("/api/ditado/relimpar",
-                        json={"texto": "um texto qualquer aqui", "estilo": "resumir"},
-                        headers=_h())
-    assert r.status_code == 400
-    assert r.json()["detail"]["code"] == "erro_estilo_invalido"
-    assert "resumir" in r.json()["detail"]["msg"]
-
-
 def test_push_mute_route(api_client, monkeypatch, tmp_path):
     monkeypatch.setattr(api_mod.push, "_file", lambda: tmp_path / "subs.json")
     r = api_client.post("/api/push/mute", json={"session": "s1", "muted": True}, headers=_h())
@@ -1609,76 +1567,6 @@ def test_answer_conversar_fecha_o_picker_e_manda_as_respostas_por_texto(api_clie
     intr.assert_called_once_with("s1")
     assert "Azul" in send.call_args[0][1]
     clear.assert_called_once()
-
-
-def test_answer_com_o_plugin_segurando_a_pergunta_entra_sem_tecla(api_client):
-    info = SessionInfo(name="s1", cwd="/x", jsonl="/x/u.jsonl")
-    pend = {"id": "toolu_1", "tool": None, "resumo": None, "questions": [
-        {"question": "Cor?", "options": [{"label": "Azul"}, {"label": "Verde"}]}]}
-    with patch.object(ti_mod, "answer_questions") as drive, \
-         patch("app.api.registry.list", return_value=[info]), \
-         patch.object(api_mod.plugin_bridge, "pergunta_pendente", return_value=pend), \
-         patch.object(api_mod.plugin_bridge, "responder_pergunta", return_value=True) as resp, \
-         patch.object(api_mod, "clear_pending_askq") as clear:
-        r = api_client.post("/api/sessions/s1/answer", headers=_h(),
-                            json={"answers": [{"kind": "option", "indices": [1]}]})
-    assert r.status_code == 200 and r.json()["fallback"] is False
-    resp.assert_called_once_with("s1", {"answers": {"Cor?": "Verde"}}, "toolu_1")
-    drive.assert_not_called()
-    clear.assert_called_once()
-
-
-def test_answer_cai_na_tecla_quando_o_plugin_nao_pega(api_client):
-    # Hook morto ou pergunta já fechada no terminal: a resposta da pessoa não pode parar ali.
-    info = SessionInfo(name="s1", cwd="/x", jsonl="/x/u.jsonl")
-    pend = {"id": "toolu_1", "tool": None, "resumo": None, "questions": [
-        {"question": "Cor?", "options": [{"label": "Azul"}, {"label": "Verde"}]}]}
-    with patch.object(ti_mod, "answer_questions") as drive, \
-         patch("app.api.registry.list", return_value=[info]), \
-         patch.object(api_mod.plugin_bridge, "pergunta_pendente", return_value=pend), \
-         patch.object(api_mod.plugin_bridge, "responder_pergunta", return_value=False), \
-         patch.object(api_mod, "clear_pending_askq"):
-        r = api_client.post("/api/sessions/s1/answer", headers=_h(),
-                            json={"answers": [{"kind": "option", "indices": [1]}]})
-    assert r.status_code == 200
-    drive.assert_called_once()
-
-
-def test_answer_nao_manda_resposta_de_pergunta_pra_pedido_de_permissao(api_client):
-    # O mesmo canal segura pedido de permissão; ele é do /select. Mandar as respostas pra lá
-    # esperava 5 s por um aviso que não vem.
-    info = SessionInfo(name="s1", cwd="/x", jsonl="/x/u.jsonl")
-    pend = {"id": "perm:toolu_1", "tool": "Bash", "resumo": "echo ok", "questions": []}
-    with patch.object(ti_mod, "answer_questions") as drive, \
-         patch("app.api.registry.list", return_value=[info]), \
-         patch.object(api_mod.plugin_bridge, "pergunta_pendente", return_value=pend), \
-         patch.object(api_mod.plugin_bridge, "responder_pergunta") as resp, \
-         patch.object(api_mod, "clear_pending_askq"):
-        r = api_client.post("/api/sessions/s1/answer", headers=_h(),
-                            json={"answers": [{"kind": "option", "indices": [1]}]})
-    assert r.status_code == 200
-    resp.assert_not_called()
-    drive.assert_called_once()
-
-
-def test_select_com_permissao_segurada_pelo_plugin_nao_tecla(api_client):
-    # Segurado, o terminal não tem menu: a opção vai pro plugin e, se ele não pegar, é erro visível
-    # — teclar ali cairia no composer vazio e responderia ok.
-    pend = {"id": "perm:toolu_1", "tool": "Bash", "resumo": "echo ok", "questions": []}
-    with patch("app.api.terminal.select") as sel, \
-         patch.object(api_mod.plugin_bridge, "pergunta_pendente", return_value=pend), \
-         patch.object(api_mod.plugin_bridge, "responder_pergunta", return_value=True) as resp:
-        r = api_client.post("/api/sessions/cc/select", json={"option": 2}, headers=_h())
-    assert r.status_code == 200
-    resp.assert_called_once_with("cc", {"permitir": False}, "perm:toolu_1")
-    sel.assert_not_called()
-
-    with patch("app.api.terminal.select") as sel, \
-         patch.object(api_mod.plugin_bridge, "pergunta_pendente", return_value=pend), \
-         patch.object(api_mod.plugin_bridge, "responder_pergunta", return_value=False):
-        r = api_client.post("/api/sessions/cc/select", json={"option": 1}, headers=_h())
-    assert r.status_code == 409
-    sel.assert_not_called()
 
 
 def test_answer_so_conversar_continua_dirigindo_o_picker(api_client):
@@ -1988,61 +1876,6 @@ def test_loop_refine_question_ending_is_502(api_client):
     assert r.status_code == 502
 
 
-# --- ask-history (RAG lexical) -----------------------------------------------
-from app.search import SearchHit as _SearchHit
-
-
-def _hit(name="minha-sessao"):
-    return _SearchHit(project="p", session_id="s1", session_name=name, cwd="/c",
-                      line="falei de deploy aqui", mtime=1.0, live=True)
-
-
-def test_ask_history_no_hits_200_empty(api_client):
-    with patch("app.api.automations_enabled", return_value=True), \
-         patch("app.api.registry.list", return_value=[]), \
-         patch("app.api.search_terms", return_value=[]), \
-         patch("app.loop.subprocess.run") as run:
-        r = api_client.post("/api/ask-history", json={"question": "onde falei de X"}, headers=_h())
-    assert r.status_code == 200
-    body = r.json()
-    assert body["hits"] == [] and "não achei" in body["answer"]
-    run.assert_not_called()  # sem trecho -> nao chama o CLI
-
-
-def test_ask_history_ok(api_client):
-    with patch("app.api.automations_enabled", return_value=True), \
-         patch("app.api.registry.list", return_value=[]), \
-         patch("app.api.search_terms", return_value=[_hit()]), \
-         patch("app.loop.subprocess.run",
-               return_value=_completed(0, stdout="Apareceu na sessão minha-sessao, sobre deploy.")):
-        r = api_client.post("/api/ask-history", json={"question": "onde falei de deploy"}, headers=_h())
-    assert r.status_code == 200
-    body = r.json()
-    assert "minha-sessao" in body["answer"]
-    assert len(body["hits"]) == 1 and body["hits"][0]["session_name"] == "minha-sessao"
-
-
-def test_ask_history_cli_fail_502(api_client):
-    with patch("app.api.automations_enabled", return_value=True), \
-         patch("app.api.registry.list", return_value=[]), \
-         patch("app.api.search_terms", return_value=[_hit()]), \
-         patch("app.loop.subprocess.run", return_value=_completed(1, stderr="boom-ask")):
-        r = api_client.post("/api/ask-history", json={"question": "q"}, headers=_h())
-    assert r.status_code == 502
-    assert "boom-ask" in r.json()["detail"]
-
-
-def test_ask_history_409_when_automations_off(api_client):
-    with patch("app.api.automations_enabled", return_value=False):
-        r = api_client.post("/api/ask-history", json={"question": "q"}, headers=_h())
-    assert r.status_code == 409
-
-
-def test_ask_history_422_when_question_too_long(api_client):
-    r = api_client.post("/api/ask-history", json={"question": "x" * 501}, headers=_h())
-    assert r.status_code == 422
-
-
 # --- Nucleo sagrado: caminho de envio isolado do executor default ------------
 def test_send_thread_isolated_from_saturated_default_executor():
     # Criterio de aceite (jefferson): com o executor default saturado (simula decoracao/git pendurados),
@@ -2090,226 +1923,6 @@ def test_broadcast_uses_send_thread(api_client, monkeypatch):
     assert r.status_code == 200
     # _session_exists e patchado como lambda pelo fixture -> checa o ENVIO real (_send_one) pelas 2 sessoes
     assert calls.count("_send_one") == 2
-
-
-# ---------------------------------------------------------------------------
-# Modelo + nivel de raciocinio do Pi — GET/POST /pi/model(s)
-# ---------------------------------------------------------------------------
-
-_PI_CAT = {
-    "current": {"provider": "kimi-coding", "id": "k3", "name": "Kimi K3"},
-    "thinking": "low",
-    "levels": ["low", "high", "max"],
-    "models": [{"provider": "kimi-coding", "id": "k3", "name": "Kimi K3", "reasoning": True}],
-}
-
-
-def _pi_info():
-    return SessionInfo(name="pp", cwd="/p", jsonl="/p/ts_uuid.jsonl", provider="pi")
-
-
-def test_pi_models_returns_catalog(api_client):
-    with patch("app.api._cached_info", AsyncMock(return_value=_pi_info())), \
-         patch("app.api.pi_models.read_catalog", return_value=_PI_CAT), \
-         patch("app.api._session_config_dir", return_value=None):
-        r = api_client.get("/api/sessions/pp/pi/models", headers=_h())
-    assert r.status_code == 200
-    assert r.json()["levels"] == ["low", "high", "max"]
-    assert r.json()["current"]["id"] == "k3"
-
-
-def test_pi_models_claude_session_rejected_with_400(api_client):
-    with patch("app.api._cached_info", AsyncMock(return_value=SessionInfo(
-            name="cc", cwd="/p", jsonl="/p/a.jsonl", provider="claude"))):
-        r = api_client.get("/api/sessions/cc/pi/models", headers=_h())
-    assert r.status_code == 400
-
-
-def test_pi_models_missing_sidecar_is_409_not_empty_list(api_client):
-    # Extensao ausente/velha: falha ALTA com instrucao — nunca um catalogo vazio que parece "sem modelos".
-    with patch("app.api._cached_info", AsyncMock(return_value=_pi_info())), \
-         patch("app.api.pi_models.read_catalog", return_value=None), \
-         patch("app.api._session_config_dir", return_value=None):
-        r = api_client.get("/api/sessions/pp/pi/models", headers=_h())
-    assert r.status_code == 409
-    assert r.json()["detail"]["code"] == "erro_catalogo_pi_indisponivel"
-
-
-def test_omp_models_missing_sidecar_is_409_com_codigo_proprio(api_client):
-    # Codigo SEPARADO do erro_catalogo_pi_indisponivel: o front traduz por `code`, entao reusar o
-    # do Pi mostraria "reinicie a sessao" numa sessao omp, onde o /reload nao recarrega a extensao.
-    info_omp = SessionInfo(name="oo", cwd="/p", jsonl="/p/ts_uuid.jsonl", provider="omp")
-    with patch("app.api._cached_info", AsyncMock(return_value=info_omp)), \
-         patch("app.api.pi_models.read_catalog", return_value=None), \
-         patch("app.api._session_config_dir", return_value=None):
-        r = api_client.get("/api/sessions/oo/pi/models", headers=_h())
-    assert r.status_code == 409
-    assert r.json()["detail"]["code"] == "erro_catalogo_omp_indisponivel"
-
-
-def test_pi_model_set_sends_both_commands_and_reports_readback(api_client):
-    # `xhigh` FORA dos levels do modelo novo: e o caso real do clamp (o Pi aterrissa em high).
-    after = {**_PI_CAT, "current": {"provider": "clinepass", "id": "cline-pass/glm-5.2"},
-             "thinking": "high", "levels": ["off", "low", "medium", "high"], "ts": 2.0}
-    cat = {**_PI_CAT, "ts": 1.0, "models": _PI_CAT["models"] + [
-        {"provider": "clinepass", "id": "cline-pass/glm-5.2", "name": "GLM", "reasoning": True}]}
-    with patch("app.api._cached_info", AsyncMock(return_value=_pi_info())), \
-         patch("app.api.pi_models.read_catalog", side_effect=[cat, after]), \
-         patch("app.api._session_config_dir", return_value=None), \
-         patch("app.api.terminal.send_pi_commands") as send:
-        r = api_client.post("/api/sessions/pp/pi/model", headers=_h(),
-                            json={"provider": "clinepass", "model": "cline-pass/glm-5.2",
-                                  "effort": "xhigh"})
-    assert r.status_code == 200
-    send.assert_called_once_with(
-        "pp", ["/cp-model clinepass cline-pass/glm-5.2", "/cp-think xhigh"])
-    # O Pi clampa: pedimos xhigh, o readback e quem manda no que a UI mostra.
-    assert r.json()["thinking"] == "high"
-
-
-def test_pi_model_set_recusado_pelo_pi_vira_409(api_client):
-    # `/cp-model` sem chave pro provedor: setModel devolve false, o Pi notifica DENTRO do TUI e
-    # republica o catalogo com o modelo VELHO. Antes disto o app fechava a folha dizendo ok=True.
-    cat = {**_PI_CAT, "ts": 1.0, "models": _PI_CAT["models"] + [
-        {"provider": "clinepass", "id": "cline-pass/glm-5.2", "name": "GLM", "reasoning": True}]}
-    after = {**cat, "ts": 2.0}                     # ts novo (processou), modelo o mesmo (recusou)
-    with patch("app.api._cached_info", AsyncMock(return_value=_pi_info())), \
-         patch("app.api.pi_models.read_catalog", return_value=cat), \
-         patch("app.api.pi_models.read_back", return_value=after), \
-         patch("app.api._session_config_dir", return_value=None), \
-         patch("app.api.terminal.send_pi_commands"):
-        r = api_client.post("/api/sessions/pp/pi/model", headers=_h(),
-                            json={"provider": "clinepass", "model": "cline-pass/glm-5.2"})
-    assert r.status_code == 409
-    d = r.json()["detail"]
-    assert d["code"] == "erro_pi_recusou_troca"
-    assert d["params"]["provider"] == "kimi-coding" and d["params"]["id"] == "k3"  # diz onde a sessao FICOU
-
-
-def test_pi_model_set_sem_republicacao_diz_que_nao_confirmou(api_client):
-    # Sidecar parado no MESMO ts: o comando pode nem ter chegado — nao da pra chamar de recusa.
-    cat = {**_PI_CAT, "ts": 1.0, "models": _PI_CAT["models"] + [
-        {"provider": "clinepass", "id": "cline-pass/glm-5.2", "name": "GLM", "reasoning": True}]}
-    with patch("app.api._cached_info", AsyncMock(return_value=_pi_info())), \
-         patch("app.api.pi_models.read_catalog", return_value=cat), \
-         patch("app.api.pi_models.read_back", return_value=cat), \
-         patch("app.api._session_config_dir", return_value=None), \
-         patch("app.api.terminal.send_pi_commands"):
-        r = api_client.post("/api/sessions/pp/pi/model", headers=_h(),
-                            json={"provider": "clinepass", "model": "cline-pass/glm-5.2"})
-    assert r.status_code == 409
-    d = r.json()["detail"]
-    assert d["code"] == "erro_sem_confirmacao_troca"
-
-
-def test_pi_model_set_rejects_model_outside_catalog(api_client):
-    with patch("app.api._cached_info", AsyncMock(return_value=_pi_info())), \
-         patch("app.api.pi_models.read_catalog", return_value=_PI_CAT), \
-         patch("app.api._session_config_dir", return_value=None), \
-         patch("app.api.terminal.send_pi_commands") as send:
-        r = api_client.post("/api/sessions/pp/pi/model", headers=_h(),
-                            json={"provider": "kimi-coding", "model": "k9"})
-    assert r.status_code == 422
-    send.assert_not_called()
-
-
-def test_pi_model_set_requires_something_to_change(api_client):
-    with patch("app.api._cached_info", AsyncMock(return_value=_pi_info())), \
-         patch("app.api.pi_models.read_catalog", return_value=_PI_CAT), \
-         patch("app.api._session_config_dir", return_value=None), \
-         patch("app.api.terminal.send_pi_commands") as send:
-        r = api_client.post("/api/sessions/pp/pi/model", headers=_h(), json={})
-    assert r.status_code == 422
-    send.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# Modelo de uma sessão Kimi — GET/POST /kimi/model(s)
-# ---------------------------------------------------------------------------
-
-_KIMI_CAT = {
-    "default": "apikey/k3",
-    "models": [
-        {"alias": "apikey/k3", "provider": "apikey", "id": "k3", "name": "K3",
-         "context_length": 1048576, "efforts": ["low", "high", "max"], "default_effort": "high"},
-        {"alias": "apikey/k3-256k", "provider": "apikey", "id": "k3-256k", "name": "K3-256k",
-         "context_length": 262144, "efforts": ["low", "high", "max"], "default_effort": "high"},
-    ],
-}
-
-
-def _kimi_info():
-    return SessionInfo(name="kk", cwd="/p", jsonl="/p/wire_abc.jsonl", provider="kimi")
-
-
-def test_kimi_models_returns_catalog(api_client):
-    with patch("app.api._cached_info", AsyncMock(return_value=_kimi_info())), \
-         patch("app.api.kimi_models.read_catalog", return_value=_KIMI_CAT):
-        r = api_client.get("/api/sessions/kk/kimi/models", headers=_h())
-    assert r.status_code == 200
-    assert r.json()["default"] == "apikey/k3"
-    assert [m["alias"] for m in r.json()["models"]] == ["apikey/k3", "apikey/k3-256k"]
-
-
-def test_kimi_models_claude_session_rejected_with_400(api_client):
-    with patch("app.api._cached_info", AsyncMock(return_value=SessionInfo(
-            name="cc", cwd="/p", jsonl="/p/a.jsonl", provider="claude"))):
-        r = api_client.get("/api/sessions/cc/kimi/models", headers=_h())
-    assert r.status_code == 400
-
-
-def test_kimi_models_missing_config_is_409_not_empty_list(api_client):
-    # Mesma política do sidecar do Pi: falha ALTA, nunca catálogo vazio que parece "sem modelos".
-    with patch("app.api._cached_info", AsyncMock(return_value=_kimi_info())), \
-         patch("app.api.kimi_models.read_catalog", return_value=None):
-        r = api_client.get("/api/sessions/kk/kimi/models", headers=_h())
-    assert r.status_code == 409
-    assert r.json()["detail"]["code"] == "erro_catalogo_kimi_indisponivel"
-
-
-def test_kimi_model_set_aplica_e_devolve_o_readback(api_client):
-    with patch("app.api._cached_info", AsyncMock(return_value=_kimi_info())), \
-         patch("app.api.kimi_models.read_catalog", return_value=_KIMI_CAT), \
-         patch("app.api._recusa_se_painel_aberto"), \
-         patch("app.api.hook_state") as hs, \
-         patch("app.api.terminal.set_kimi_model",
-               return_value={"ok": True, "result": "Switched to K3-256k …"}) as drive:
-        hs.get_state.return_value = None
-        r = api_client.post("/api/sessions/kk/kimi/model", headers=_h(),
-                            json={"model": "apikey/k3-256k"})
-    assert r.status_code == 200
-    # Alias E display name: o drive digita um e confere o outro na linha "Switched to …".
-    drive.assert_called_once_with("kk", "apikey/k3-256k", "K3-256k", None)
-    assert r.json()["current"]["name"] == "K3-256k"
-
-
-def test_kimi_model_set_rejeita_alias_fora_do_catalogo(api_client):
-    with patch("app.api._cached_info", AsyncMock(return_value=_kimi_info())), \
-         patch("app.api.kimi_models.read_catalog", return_value=_KIMI_CAT), \
-         patch("app.api._recusa_se_painel_aberto"), \
-         patch("app.api.hook_state") as hs, \
-         patch("app.api.terminal.set_kimi_model") as drive:
-        hs.get_state.return_value = None
-        r = api_client.post("/api/sessions/kk/kimi/model", headers=_h(),
-                            json={"model": "apikey/k4"})
-    assert r.status_code == 422
-    drive.assert_not_called()
-
-
-def test_kimi_model_set_com_sessao_trabalhando_vira_409(api_client):
-    # Sem esta guarda o `/model` digitado cai no composer e o Enter o enfileira como MENSAGEM —
-    # a troca vira um "/model" mandado pro modelo ler.
-    with patch("app.api._cached_info", AsyncMock(return_value=_kimi_info())), \
-         patch("app.api.kimi_models.read_catalog", return_value=_KIMI_CAT), \
-         patch("app.api._recusa_se_painel_aberto"), \
-         patch("app.api.hook_state") as hs, \
-         patch("app.api.corrige_ocioso_kimi", side_effect=lambda m, j: m), \
-         patch("app.api.terminal.set_kimi_model") as drive:
-        hs.get_state.return_value = ("working", 1.0)
-        r = api_client.post("/api/sessions/kk/kimi/model", headers=_h(),
-                            json={"model": "apikey/k3-256k"})
-    assert r.status_code == 409
-    drive.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -2426,18 +2039,6 @@ def test_model_options_sessao_ocupada_propaga_409(api_client_limpo):
         r = api_client_limpo.get("/api/sessions/cc/model/options", headers=_h())
     assert r.status_code == 409
     assert "trabalhando" in r.json()["detail"]
-
-
-@pytest.mark.parametrize("provider,codigo", [("omp", "erro_omp_ausente"), ("pi", "erro_pi_ausente")])
-def test_model_options_binario_ausente_tem_codigo_por_provider(api_client_limpo, monkeypatch,
-                                                               provider, codigo):
-    # O front traduz por `code`: um codigo so pros dois mandava a sessao omp instalar o Pi.
-    from app import pi_catalog
-    pi_catalog._cache.clear()
-    monkeypatch.setattr(pi_catalog.shutil, "which", lambda _b: None)
-    r = api_client_limpo.get(f"/api/model-options?provider={provider}", headers=_h())
-    assert r.status_code == 502
-    assert r.json()["detail"]["code"] == codigo
 
 
 def test_engine_model_set_restaura_o_default_global(api_client_limpo):

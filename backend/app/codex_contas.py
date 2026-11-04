@@ -14,6 +14,7 @@ _NOME = r"[a-z0-9][a-z0-9_-]{0,31}"
 _MARKER_VERSION = 1
 MARKER = ".hangar-codex-conta"
 MARCADOR = MARKER
+PREPARED_MARKER = ".hangar-prepared-v1"
 
 _AUTH_ENV = re.compile(
     r"^(?:OPENAI|CODEX|CHATGPT)_.+(?:(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)(?:_FILE)?|ACCOUNT_ID|ORG_ID|PROJECT_ID)$",

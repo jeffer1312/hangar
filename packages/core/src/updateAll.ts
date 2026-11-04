@@ -1,29 +1,40 @@
-import { getAtualizacaoEm, getIdentificadorEm, iniciarAtualizacaoEm } from './api';
+import { acceptUpdateWarningsEm, getAtualizacaoEm, getAutoReportEm, getIdentificadorEm, getUpdateNotesEm, iniciarAtualizacaoEm, type UpdateAcceptResult } from './api';
 import { isOwnMachine } from './machineImport';
 import { registrar as registerDiagnostic } from './diag';
 import type { Server } from './servers';
-import type { Atualizacao, AtualizacaoEstado } from './types';
+import type { Atualizacao, AtualizacaoEstado, UpdateMode, UpdateNotes } from './types';
+import * as m from './paraglide/messages';
 
 export type UpdateHoldReason = 'branch' | 'mudancas' | 'rodando' | 'falta';
 export type UpdateClassification = 'iniciar' | 'em_dia' | `travado:${UpdateHoldReason}`;
 export type UpdateFollow = 'rodando' | 'esperando' | 'atualizado' | 'atualizado_manual' | 'falhou';
 
-type UpdateSnapshot = {
+export type UpdateSnapshot = {
   atualizacao_disponivel?: boolean;
+  pending_warning?: boolean;
   versoes?: Partial<Atualizacao['versoes']>;
   pre_voo?: Partial<Atualizacao['pre_voo']>;
   estado?: { fase?: string };
 };
 
-/** Mesmo pré-voo do nativo; o canal do app local não participa das outras máquinas. */
-export function classify(snapshot: UpdateSnapshot): UpdateClassification {
+/** Versão nova de fato, ou disco à frente do processo; o aviso pendente sozinho não conta. */
+export function hasRealUpdate(snapshot: UpdateSnapshot): boolean {
   const clean = (version: string | undefined) => version?.replace(/(?:-dirty)+$/, '');
   const disk = clean(snapshot.versoes?.repo);
   const live = clean(snapshot.versoes?.backend);
-  if (snapshot.atualizacao_disponivel !== true && !(disk !== undefined && live !== undefined && disk !== live)) return 'em_dia';
+  return snapshot.atualizacao_disponivel === true || (disk !== undefined && live !== undefined && disk !== live);
+}
+
+/** Mesmo pré-voo do nativo; o canal do app local não participa das outras máquinas. */
+export function classify(snapshot: UpdateSnapshot): UpdateClassification {
+  // Aviso pendente pede a folha mesmo sem versão nova; quem decide se inicia é `afterAccept`.
+  if (!hasRealUpdate(snapshot) && snapshot.pending_warning !== true) return 'em_dia';
   const pre = snapshot.pre_voo;
-  if (pre?.branch_de_trabalho === true) return 'travado:branch';
-  if ((pre?.sujo ?? 0) > 0 || (pre?.ahead ?? 0) > 0 || pre?.divergiu === true) return 'travado:mudancas';
+  // Aceitar o aviso não faz `git pull`: edição ou branch de trabalho não o seguram. Com versão nova, o `iniciar`
+  // depois do aceite é que recusa, com o motivo.
+  const warning = snapshot.pending_warning === true;
+  if (!warning && pre?.branch_de_trabalho === true) return 'travado:branch';
+  if (!warning && ((pre?.sujo ?? 0) > 0 || (pre?.ahead ?? 0) > 0 || pre?.divergiu === true)) return 'travado:mudancas';
   if (snapshot.estado?.fase === 'rodando') return 'travado:rodando';
   if (pre?.pode === false) return 'travado:falta';
   return 'iniciar';
@@ -54,8 +65,112 @@ export function follow(state: AtualizacaoEstado, baseTs?: string | null): Update
   return state.reiniciar_manual === true ? 'atualizado_manual' : 'atualizado';
 }
 
+/** A linha do relatório automático de uma falha, pelo que o servidor juntou ao estado. */
+export function updateReportLine(state: AtualizacaoEstado | undefined): string | undefined {
+  if (state?.relatorio === 'pendente') return m.update_report_pending();
+  if (state?.relatorio) return m.update_report_sent({ code: state.relatorio });
+  if (state?.relatorio_erro) return m.update_report_failed({ reason: state.relatorio_erro });
+  return undefined;
+}
+
 export function ownUpdatableServers(list: readonly Server[]): Server[] {
   return list.filter((server) => isOwnMachine(server) && !server.disabled);
+}
+
+/** As máquinas próprias que ainda não responderam ao relatório automático: uma pergunta só cobre todas.
+ *  Servidor sem o recurso fica de fora; falha de leitura vai ao diário e a pergunta fica para a próxima abertura. */
+export async function autoReportUnanswered(list: readonly Server[], fetcher?: typeof fetch): Promise<Server[]> {
+  const own = ownUpdatableServers(list);
+  const answers = await Promise.all(own.map((server) => getAutoReportEm(server, fetcher).catch((error: unknown) => {
+    registerDiagnostic({ evento: 'auto_report.read_failed', nivel: 'aviso', codigo: error instanceof Error ? error.name : 'erro' }, server.baseUrl);
+    return undefined;
+  })));
+  return own.filter((_, index) => answers[index] === null);
+}
+
+/** O que a pessoa aceitou na folha para uma máquina: os ids lidos e, com o aviso da migração, o modo. */
+/** `incomplete`: as notas vieram sem os avisos da versão nova; aceita-se, e nada de `iniciar` por cima deles. */
+export interface UpdateAcceptance { ids: string[]; mode?: UpdateMode; incomplete?: boolean }
+export type AfterAccept = 'started' | 'start' | 'done';
+
+/** `null` = servidor antigo, sem a rota: inicia como antes. Aceite gravado sem lançar inicia só com versão nova. */
+export function afterAccept(accepted: UpdateAcceptResult | null | undefined, snapshot: UpdateSnapshot): AfterAccept {
+  if (accepted === null) return 'start';
+  if (accepted?.started) return 'started';
+  return hasRealUpdate(snapshot) ? 'start' : 'done';
+}
+
+/** Aviso do alvo de agora que o modal não mostrou (versão publicada depois dele): lança, nada é aceito nem iniciado. */
+export async function refuseUnseenWarnings(server: Server, acceptance: UpdateAcceptance | undefined, fetcher?: typeof fetch): Promise<void> {
+  const notes = await getUpdateNotesEm(server, fetcher);
+  const shown = acceptance?.ids ?? [];
+  if (notes?.warnings?.some((warning) => !shown.includes(warning.id))) throw new Error(m.update_new_warnings());
+  // O modal leu os avisos da versão nova e agora não deu: não há como saber se ela trouxe outro.
+  if (notes?.incomplete && !acceptance?.incomplete) throw new Error(m.update_notes_failed());
+}
+
+/** Aceita os avisos e inicia conforme `afterAccept`; `null` = nada foi iniciado. Sem `snapshot`, relê o estado. */
+export async function acceptAndStart(server: Server, acceptance: UpdateAcceptance | undefined, snapshot?: UpdateSnapshot,
+  fetcher?: typeof fetch): Promise<{ ok: boolean; pid: number } | null> {
+  await refuseUnseenWarnings(server, acceptance, fetcher);
+  const accepted =acceptance?.ids.length ? await acceptUpdateWarningsEm(server, acceptance.ids, acceptance.mode, fetcher) : undefined;
+  if (accepted?.started) return { ok: true, pid: accepted.pid! };
+  const next = afterAccept(accepted, accepted === null ? {} : snapshot ?? await getAtualizacaoEm(server, false, fetcher));
+  if (next === 'start' && acceptance?.incomplete) throw new Error(m.update_accept_incomplete());
+  return next === 'start' ? iniciarAtualizacaoEm(server, fetcher) : null;
+}
+
+/** As máquinas próprias, uma por identidade; `last` vence como representante da dele. */
+export async function distinctMachines(servers: readonly Server[], opts: Pick<UpdateAllOptions, 'last' | 'fetch'> = {}): Promise<Server[]> {
+  return (await readMachines(servers, opts)).targets;
+}
+
+/** `offline`: não respondeu à identidade (rede ou prazo, não um status HTTP). */
+async function readMachines(servers: readonly Server[], opts: Pick<UpdateAllOptions, 'last' | 'fetch'>): Promise<{ targets: Server[]; offline: Set<string> }> {
+  const candidates = ownUpdatableServers(servers);
+  const offline = new Set<string>();
+  const identities = await Promise.all(candidates.map(async (server) => {
+    try {
+      const response = await getIdentificadorEm(server, opts.fetch);
+      return typeof response.identificador === 'string' ? response.identificador.trim() : '';
+    } catch (error) {
+      registerDiagnostic({ evento: 'update_all.identity_failed', nivel: 'aviso',
+        codigo: error instanceof Error ? error.name : 'erro' }, server.baseUrl);
+      // Resposta ilegível (SyntaxError) veio de quem atendeu: só rede e prazo contam como desligada.
+      if (httpStatus(error) === undefined && !(error instanceof SyntaxError)) offline.add(server.id);
+      return '';
+    }
+  }));
+  const representatives = new Map<string, Server>();
+  candidates.forEach((server, index) => {
+    const identity = identities[index];
+    if (identity && (!representatives.has(identity) || server.id === opts.last)) representatives.set(identity, server);
+  });
+  return { offline, targets: candidates.filter((server, index) => !identities[index] || representatives.get(identities[index]) === server) };
+}
+
+export interface MachineNotes { server: Server; notes: UpdateNotes | null }
+export interface PreparedUpdateAll { run: MachineNotes[]; failed: Server[] }
+
+/** Avisos de cada máquina a atualizar; quem não responde fica de fora (`failed`), `null` = servidor antigo. */
+export async function prepareUpdateAll(servers: readonly Server[], opts: Pick<UpdateAllOptions, 'last' | 'fetch'> = {}): Promise<PreparedUpdateAll> {
+  const { targets, offline } = await readMachines(servers, opts);
+  const read = await Promise.all(targets.map(async (server): Promise<MachineNotes | null> => {
+    // Máquina desligada atrás de VPN não recusa a conexão: a busca esperaria o prazo inteiro e prenderia a folha.
+    if (offline.has(server.id)) return null;
+    try {
+      // Busca o alvo antes: sem isso os avisos podem ser os da versão anterior. Falhou, segue com o alvo que ela tem; a
+      // releitura antes de iniciar (`refuseUnseenWarnings`) barra o que mudou.
+      await getAtualizacaoEm(server, true, opts.fetch).catch((error: unknown) => registerDiagnostic({
+        evento: 'update_all.search_failed', nivel: 'aviso', codigo: error instanceof Error ? error.name : 'erro' }, server.baseUrl));
+      return { server, notes: await getUpdateNotesEm(server, opts.fetch) };
+    } catch (error) {
+      registerDiagnostic({ evento: 'update_all.notes_failed', nivel: 'aviso',
+        codigo: error instanceof Error ? error.name : 'erro' }, server.baseUrl);
+      return null;
+    }
+  }));
+  return { run: read.filter((entry): entry is MachineNotes => entry !== null), failed: targets.filter((_, index) => !read[index]) };
 }
 
 export interface UpdateAllState {
@@ -72,6 +187,8 @@ export interface UpdateAllState {
 export interface UpdateAllOptions {
   /** Servidor da página PWA: seu reinício só começa depois das outras máquinas. */
   last?: string;
+  /** Aceite da folha por id de servidor, gravado antes de iniciar cada máquina. */
+  accept?: Readonly<Record<string, UpdateAcceptance>>;
   fetch?: typeof fetch;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -82,6 +199,8 @@ export interface UpdateAllResult { server: Server; state: UpdateAllState }
 const POLL_MS = 2000;
 const SILENT_READS = 300;
 const FOLLOW_CEILING_MS = 30 * 60 * 1000;
+/** O servidor tenta o relatório automático por até ~11 min quando o worker limita. */
+const REPORT_WAIT_MS = 12 * 60 * 1000;
 const errorMessage = (error: unknown): string => error instanceof Error ? error.message : String(error);
 const httpStatus = (error: unknown): unknown =>
   typeof error === 'object' && error !== null && 'status' in error ? error.status : undefined;
@@ -94,23 +213,7 @@ export async function updateAll(
 ): Promise<UpdateAllResult[]> {
   const now = opts.now ?? (() => performance.now());
   const sleep = opts.sleep ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  const candidates = ownUpdatableServers(servers);
-  const identities = await Promise.all(candidates.map(async (server) => {
-    try {
-      const response = await getIdentificadorEm(server, opts.fetch);
-      return typeof response.identificador === 'string' ? response.identificador.trim() : '';
-    } catch (error) {
-      registerDiagnostic({ evento: 'update_all.identity_failed', nivel: 'aviso',
-        codigo: error instanceof Error ? error.name : 'erro' }, server.baseUrl);
-      return '';
-    }
-  }));
-  const representatives = new Map<string, Server>();
-  candidates.forEach((server, index) => {
-    const identity = identities[index];
-    if (identity && (!representatives.has(identity) || server.id === opts.last)) representatives.set(identity, server);
-  });
-  const unique = candidates.filter((server, index) => !identities[index] || representatives.get(identities[index]) === server);
+  const unique = await distinctMachines(servers, opts);
 
   async function run(server: Server): Promise<UpdateAllResult> {
     let previous = '';
@@ -135,14 +238,21 @@ export async function updateAll(
     const baseTs = snapshot.estado.ts;
     const startedAt = now();
     publish({ status: 'iniciando', warnings: [] });
+    // Aviso pendente sem aceite desta máquina: "em dia" esconderia a migração que segue pendente.
+    if (snapshot.pending_warning === true && !opts.accept?.[server.id]) {
+      return finish({ status: 'falhou', error: m.update_all_warning_not_accepted({ server: server.label }), warnings: [] });
+    }
     try {
-      await iniciarAtualizacaoEm(server, opts.fetch);
+      if (!await acceptAndStart(server, opts.accept?.[server.id], snapshot, opts.fetch)) return finish({ status: 'em_dia', warnings: [] });
     } catch (error) {
       return finish({ status: 'falhou', error: errorMessage(error), warnings: [] });
     }
     let silent = 0;
+    let failedAt: number | undefined;
+    let failure: UpdateAllState | undefined;
     let latest: UpdateAllState = { status: 'esperando', warnings: [] };
     for (;;) {
+      let waitReport = false;
       await sleep(POLL_MS);
       let value: UpdateAllState;
       try {
@@ -151,7 +261,10 @@ export async function updateAll(
         const status = follow(state, baseTs);
         value = { status, state, warnings: state.avisos ?? [] };
         if (status === 'falhou') value.error = state.erro?.replace(/\.+$/, '') || '?';
-        if (status === 'atualizado' || status === 'atualizado_manual' || status === 'falhou') return finish(value);
+        const reportPending = status === 'falhou' && state.relatorio === 'pendente';
+        if (reportPending) { failedAt ??= now(); failure = value; }
+        waitReport = reportPending && now() - failedAt! < REPORT_WAIT_MS;
+        if ((status === 'atualizado' || status === 'atualizado_manual' || status === 'falhou') && !waitReport) return finish(value);
       } catch (error) {
         const status = httpStatus(error);
         if (status === 401 || status === 403) {
@@ -160,7 +273,9 @@ export async function updateAll(
         silent++;
         value = { ...latest, status: 'esperando', error: errorMessage(error) };
       }
-      if (silent >= SILENT_READS || now() - startedAt >= FOLLOW_CEILING_MS) {
+      if (silent >= SILENT_READS || (now() - startedAt >= FOLLOW_CEILING_MS && !waitReport)) {
+        // Já falhou e só esperava o relatório: o motivo da falha vale mais que o limite da espera.
+        if (failure) return finish(failure);
         return finish({ status: 'falhou', errorCode: silent >= SILENT_READS ? 'silent' : 'timeout',
           state: value.state, warnings: value.warnings });
       }

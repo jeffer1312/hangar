@@ -93,15 +93,21 @@ pub(crate) async fn forward_whole(st: &AppState, parts: Parts, bytes: Bytes, fwd
 /// Decide quem atende. `Ok`: o Rust atende, com o passe na mão e o corpo já lido. `Err`: a resposta
 /// pronta (repasse ao Python com o corpo intacto, recusa da porta fechada, ou a recusa do Rust).
 pub(crate) async fn admit(st: &Arc<AppState>, peer: SocketAddr, req: Request, route: WriteRoute) -> Result<(Ctx, Bytes), Response> {
-    let (fwd, who) = who(st, peer, &req);
+    let (fwd, who) = match who(st, peer, &req).await { Ok(value) => value, Err(e) => return Err(crate::auth::unavailable(e)) };
     let runtime = st.state.runtime.get().cloned();
     let name = session_name(req.uri().path()).filter(|n| who.as_ref().is_some_and(|c| c.can(n, req.method())));
+    if matches!(route, WriteRoute::Input | WriteRoute::Interrupt)
+        && let Some(name) = name.as_deref()
+        && let Some(response) = orchestration_guard(st, name, req.headers()).await {
+        return Err(response);
+    }
     let (Some(runtime), Some(name)) = (runtime, name) else {
         return Err(pass(st, req, &fwd).await);
     };
     let (parts, body) = req.into_parts();
     let Ok(bytes) = to_bytes(body, BODY_LIMIT).await else { return Err(too_large(&parts.headers)) };
     let shaped = table::body_ok(route, &bytes);
+    if let Some(response) = control::asleep_queue(&runtime, &name, route, st.write_gate_wait, &parts, &bytes).await { return Err(response); }
     match route_write(&runtime, &name, route, st.write_gate_wait).await {
         Write::Rust(_, _) if !shaped => Err(invalid_body(&parts.headers)),
         Write::Rust(pass_in, target) => Ok((Ctx { st: st.clone(), name, target, _pass: pass_in, parts }, bytes)),
@@ -112,6 +118,7 @@ pub(crate) async fn admit(st: &Arc<AppState>, peer: SocketAddr, req: Request, ro
             Err(response)
         }
         Write::Opening(key) => Err(input::opening_response(st, &name, &key, &parts.headers, &bytes).await),
+        Write::Asleep(key) => Err(input::asleep_response(st, &name, &key, &parts.headers, &bytes).await),
         Write::Failed(error) => {
             let mut response = detail(failed_status(&error), &error.code, &error.message, json!({}));
             cors(&parts.headers, response.headers_mut());
@@ -120,9 +127,22 @@ pub(crate) async fn admit(st: &Arc<AppState>, peer: SocketAddr, req: Request, ro
     }
 }
 
+pub(crate) async fn orchestration_guard(st: &Arc<AppState>, name: &str, headers: &axum::http::HeaderMap) -> Option<Response> {
+    if !name.ends_with("-orq") { return None; }
+    let mut response = match crate::groups::orq::is_orchestrator(st, &[name.to_owned()]).await {
+        Ok(names) if names.is_empty() => return None,
+        Ok(_) => json_response(StatusCode::CONFLICT, detail_body("erro_sessao_orq",
+            "o orquestrador não recebe mensagens; fale com o árbitro", serde_json::json!({}))),
+        Err(_) => json_response(StatusCode::SERVICE_UNAVAILABLE, detail_body("orq_runs_unavailable",
+            "não foi possível conferir as execuções", serde_json::json!({}))),
+    };
+    cors(headers, response.headers_mut());
+    Some(response)
+}
+
 /// Recusa do Rust a uma sessão dele: esperar a conversa abrir é 409; o resto, 503.
 pub(crate) fn failed_status(error: &crate::runtime::protocol::RuntimeError) -> StatusCode {
-    if error.code == crate::runtime::codex_relaunch::STARTING { StatusCode::CONFLICT } else { StatusCode::SERVICE_UNAVAILABLE }
+    if error.code == crate::runtime::codex_relaunch::STARTING || error.code == crate::runtime::gateway::ASLEEP_WAKING { StatusCode::CONFLICT } else { StatusCode::SERVICE_UNAVAILABLE }
 }
 
 /// Igual ao `_BodySizeLimitMiddleware`: texto puro, e o CORS por fora dele.
@@ -135,7 +155,8 @@ pub(crate) fn too_large(headers: &axum::http::HeaderMap) -> Response {
 /// Quem atende uma escrita. `Failed`: a sessão é do Rust e não pôde ser atendida (entrada doente,
 /// Codex com terminal que não deu para adotar); a escrita nunca cai no Python.
 /// `Opening`: texto para o Codex com terminal que ainda abre a conversa, com a chave da fila dela.
-pub(crate) enum Write { Rust(IngressPass, WriteTarget), Python, Busy, Opening(String), Failed(crate::runtime::protocol::RuntimeError) }
+/// `Asleep`: texto para a sessão adormecida (ou acordando), com a chave da fila dela.
+pub(crate) enum Write { Rust(IngressPass, WriteTarget), Python, Busy, Opening(String), Asleep(String), Failed(crate::runtime::protocol::RuntimeError) }
 
 /// Porta, entrada e tabela, nessa ordem. O passe só volta com `Rust`: repasse nunca o segura. Sem
 /// entrada, o Codex com terminal do Rust é adotado na hora (`adopt_now`) e a entrada procurada de novo;
@@ -143,11 +164,25 @@ pub(crate) enum Write { Rust(IngressPass, WriteTarget), Python, Busy, Opening(St
 /// sem entrada nem Codex com terminal (Pi/omp/Kimi), segue ao Python.
 pub(crate) async fn route_write(runtime: &RuntimeRegistry, name: &str, route: WriteRoute, wait: Duration) -> Write {
     use crate::runtime::protocol::RuntimeError;
+    // O acordar fecha a porta: o texto que chega no meio dele vai à fila, sem esperar a vida nova.
+    if route == WriteRoute::Input && let Some(key) = runtime.waking_key_for_text(name) { return Write::Asleep(key); }
     let (pass_in, target) = match enter_then_find(runtime, name, wait).await {
         Err(GateClosed) => return Write::Busy,
         Ok(Some(found)) => found,
         Ok(None) => match runtime.adopt_now(name).await {
             None => return Write::Python,
+            // Adormecida: o texto vai à fila da chave dela e o acordar já corre à parte; o resto espera.
+            Some(Err(error)) if error.code == crate::runtime::gateway::ASLEEP_WAKING => {
+                if route != WriteRoute::Input { return Write::Busy; }
+                if let Some(key) = runtime.waking_key_for_text(name) { return Write::Asleep(key); }
+                if let Some(mark) = runtime.asleep(name).await { return Write::Asleep(mark.key); }
+                // O acordar acabou nesse meio-tempo: a vida nova recebe.
+                match enter_then_find(runtime, name, wait).await {
+                    Err(GateClosed) => return Write::Busy,
+                    Ok(Some(found)) => found,
+                    Ok(None) => return Write::Failed(error),
+                }
+            }
             Some(Err(error)) if error.code == crate::runtime::codex_relaunch::STARTING && route == WriteRoute::Input => {
                 return match runtime.codex_opening(name).await {
                     Some(Ok(key)) => Write::Opening(key),

@@ -45,6 +45,7 @@ const problemLabels: Record<string, () => string> = {
   terminal_input_capture_failed: m.problema_terminal_input_capture_failed,
   terminal_input_stalled: m.problema_terminal_input_stalled,
   terminal_input_delivery_unproved: m.problema_terminal_input_delivery_unproved,
+  terminal_input_delivery_composer_busy: m.problema_terminal_input_delivery_composer_busy,
   terminal_clear_not_applied: m.problema_terminal_clear_not_applied,
   list_capture_failed: m.problema_list_capture_failed,
   list_runtime_unavailable: m.problema_list_runtime_unavailable,

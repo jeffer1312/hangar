@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { sessionsStore } from './sessionsStore.svelte';
-import { readGroupIdentity, configureDiag, groupGlobal, estaDesligado, registrarFalha, registrarSucesso, _limparEsfriamentoParaTestes } from '@hangar/core';
+import { readGroupIdentity, configureDiag, groupGlobal, estaDesligado, registrarFalha, registrarSucesso, startOutage, _limparEsfriamentoParaTestes } from '@hangar/core';
 
 const streams = vi.hoisted(() => new Map<string, Map<string, (event: { data: string }) => void>>());
 const objetos = vi.hoisted(() => new Map<string, { onerror?: () => void; close: unknown; addEventListener: unknown }>());
@@ -75,6 +75,22 @@ it('evento keyring marca só o servidor dele, sobrevive ao quadro de sessões e 
   expect(vpn()?.keyringLocked).toBe(false);
 });
 
+it('o cofre de uma máquina some enquanto ela está em erro', () => {
+  vi.useFakeTimers();
+  sessionsStore.retain();
+  streams.get('vpn')!.get('vault')!({ data: JSON.stringify({ state: 'open', requests: [] }) });
+  expect(sessionsStore.vaultFor('vpn')?.state).toBe('open');
+  expect(sessionsStore.vaultFor('lan')).toBeNull();
+  objetos.get('vpn')!.onerror!();
+  expect(sessionsStore.vaultFor('vpn')).toBeNull();
+  // A conexão nova traz a lista antes do cofre: o pedido velho não volta nesse intervalo.
+  sessionsStore.buscarAgora('vpn');
+  streams.get('vpn')!.get('sessions')!({ data: JSON.stringify([]) });
+  expect(sessionsStore.vaultFor('vpn')).toBeNull();
+  streams.get('vpn')!.get('vault')!({ data: JSON.stringify({ state: 'open', requests: [] }) });
+  expect(sessionsStore.vaultFor('vpn')?.state).toBe('open');
+});
+
 it('falha do produtor sem linha nenhuma em todos os servidores continua marcando cada um', () => {
   sessionsStore.retain();
   for (const id of ['lan', 'vpn']) streams.get(id)!.get('list_error')!({ data: '' });
@@ -105,6 +121,29 @@ it('resposta recebida fora da lista retoma o stream e atualiza as sessões antig
   registrarSucesso('vpn');
   expect(objetos.get('vpn')).toBe(recovered);
   expect(objetos.get('lan')).toBe(lan);
+});
+
+it('queda registrada antes da recarga mantém o início dela no slot', () => {
+  vi.useFakeTimers({ now: 1_000_000 });
+  startOutage('vpn');
+  registrarFalha('vpn');
+  vi.setSystemTime(1_000_000 + 3_600_000);
+  sessionsStore.retain();
+  expect(sessionsStore.byServer.find(s => s.server.id === 'vpn')?.offlineSince).toBe(1_000_000);
+});
+
+it('o ativo não ganha prazo, mas a queda dele conta do início gravado até uma lista boa', async () => {
+  vi.useFakeTimers({ now: 1_000_000 });
+  startOutage('lan');
+  vi.setSystemTime(1_000_000 + 3_600_000);
+  sessionsStore.retain();
+  objetos.get('lan')!.onerror!();
+  expect(estaDesligado('lan')).toBe(false);
+  expect(sessionsStore.byServer.find(s => s.server.id === 'lan')?.offlineSince).toBe(1_000_000);
+  await vi.advanceTimersByTimeAsync(1000);
+  streams.get('lan')!.get('sessions')!({ data: '[]' });
+  objetos.get('lan')!.onerror!();
+  expect(sessionsStore.byServer.find(s => s.server.id === 'lan')?.offlineSince).toBe(Date.now());
 });
 
 it('servidor desligado antes da montagem aguarda o prazo; reconexão explícita tenta agora', () => {

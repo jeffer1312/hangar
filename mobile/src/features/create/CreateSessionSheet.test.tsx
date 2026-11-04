@@ -248,6 +248,7 @@ vi.mock('../../paraglide/messages', () => ({
     'reasoning_level_low reasoning_level_medium reasoning_level_high reasoning_level_xhigh reasoning_level_max reasoning_level_ultra ' +
     'native_mode_plan native_mode_manual native_mode_auto native_mode_acceptEdits native_mode_bypassPermissions native_mode_dontAsk chat_mode_plan config_motores_modelo_padrao ' +
     'codex_contexto_titulo codex_contexto_padrao codex_contexto_salvando comum_falha_aplicar config_server_tentar_de_novo home_new_conversation ' +
+    'tags_apply_all tags_apply_ok tags_apply_offline tags_apply_old tags_apply_absent tags_apply_failed tags_apply_retry tags_saving ' +
     'criar_criar criar_agente comum_voltar comum_cancelar criar_escolher_pasta native_create_worktrees native_create_worktrees_merged native_create_worktree_session'
   ).split(' ').map((k) => [k, () => k])),
 }));

@@ -21,6 +21,7 @@ pub mod install;
 pub mod migrate;
 pub mod periodic;
 pub mod restart;
+pub mod startup_output;
 pub mod state;
 pub mod steps;
 
@@ -166,6 +167,54 @@ pub fn broken_manifest(layout: &Layout) -> Option<String> {
 /// A versão para onde o `current` aponta, pelo `manifest.json` dela; `None` sem pacote (modo
 /// desenvolvedor, máquina não migrada).
 pub fn installed(layout: &Layout) -> Option<Manifest> { read_manifest(&layout.current()) }
+
+/// Avisos importantes que a pessoa aceitou na tela (ids). O passo destrutivo só roda com o dele aqui;
+/// o `scripts/migrar-pacote.*` lê o mesmo arquivo.
+pub fn accepted_file(layout: &Layout) -> PathBuf { layout.hangar.join("update-accepted.json") }
+
+/// O passo da migração rodou sem o aviso aceito: só deixou esta marca, e a migração espera a tela.
+pub fn offered_file(layout: &Layout) -> PathBuf { layout.hangar.join("migration-offered") }
+
+/// Ilegível é vazio: o aviso volta à tela, e nada destrutivo roda sem aceite.
+pub fn accepted(layout: &Layout) -> std::collections::BTreeSet<String> {
+    std::fs::read(accepted_file(layout)).ok().and_then(|bytes| serde_json::from_slice::<Vec<String>>(&bytes).ok())
+        .unwrap_or_default().into_iter().collect()
+}
+
+pub fn accept(layout: &Layout, ids: &[String]) -> std::io::Result<()> {
+    let mut all = accepted(layout);
+    all.extend(ids.iter().cloned());
+    std::fs::create_dir_all(&layout.hangar)?;
+    crate::runtime::queue::atomic_write(&accepted_file(layout), json!(all).to_string().as_bytes())
+}
+
+/// Desfaz o aceite de `ids`: o que ele devia lançar não subiu, e o aviso tem de voltar à tela.
+pub fn unaccept(layout: &Layout, ids: &[String]) -> std::io::Result<()> {
+    let all: Vec<String> = accepted(layout).into_iter().filter(|id| !ids.contains(id)).collect();
+    crate::runtime::queue::atomic_write(&accepted_file(layout), json!(all).to_string().as_bytes())
+}
+
+/// O Canal de testes do pacote, escolhido pela tela: `{"channel": "beta", "last": "beta"}`.
+pub fn channel_file(layout: &Layout) -> PathBuf { layout.hangar.join("config").join("update-channel.json") }
+
+/// A escolha gravada: `(canal, último canal de testes)`.
+pub fn chosen_channel(layout: &Layout) -> Option<(String, String)> {
+    let value: Value = serde_json::from_slice(&std::fs::read(channel_file(layout)).ok()?).ok()?;
+    let channel = value.get("channel")?.as_str().filter(|c| !c.is_empty())?.to_owned();
+    let last = value.get("last").and_then(Value::as_str).unwrap_or_default().to_owned();
+    Some((channel, last))
+}
+
+pub fn save_channel(layout: &Layout, channel: &str, last: &str) -> std::io::Result<()> {
+    let file = channel_file(layout);
+    if let Some(parent) = file.parent() { std::fs::create_dir_all(parent)?; }
+    crate::runtime::queue::atomic_write(&file, json!({"channel": channel, "last": last}).to_string().as_bytes())
+}
+
+/// O canal que o Atualizar segue: o escolhido na tela, senão o do pacote instalado, senão `latest`.
+pub fn channel(layout: &Layout) -> String {
+    chosen_channel(layout).map(|(c, _)| c).or_else(|| installed(layout).map(|m| m.channel)).unwrap_or_else(|| "latest".to_owned())
+}
 
 /// Caminho real, sem o `\\?\` que o Windows devolve (o `mklink` e o Python não o entendem).
 fn real(path: &Path) -> std::io::Result<PathBuf> { std::fs::canonicalize(path).map(crate::list::links::without_verbatim) }
@@ -484,6 +533,21 @@ pub trait Restarter {
 }
 
 /// Baixa a tela web (`frontend/dist`) da chave para `ui_dir`; o real é o `ui::fetch`.
+/// Baixa e prepara a versão publicada no canal, sem trocar o `current`: a volta do modo
+/// desenvolvedor para o pacote numa máquina que nunca teve um. Devolve o aviso da tela web, se falhou.
+pub async fn download_published(release: &Release, layout: &Layout, home: &Path, settings: &Settings) -> Result<Option<String>, UpdateError> {
+    let client = crate::http_client().build().map_err(|e| UpdateError::Download(e.to_string()))?;
+    let entry = entry(&client, release, &platform()).await?;
+    let dir = prepare(&client, release, &entry, layout, settings.download_deadline).await?;
+    let key = read_manifest(&dir).and_then(|m| m.dist_key);
+    // Escolha ilegível: a tela fica ligada, como na atualização.
+    if let Some(key) = key && crate::ui::enabled(home).unwrap_or(true)
+        && let Err(e) = ReleaseUi.fetch(&key, &layout.hangar.join("ui")).await {
+        return Ok(Some(format!("a tela web não foi baixada: {e}")));
+    }
+    Ok(None)
+}
+
 pub trait UiFetcher: Sync {
     fn fetch<'a>(&'a self, key: &'a str, ui_dir: &'a Path) -> std::pin::Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>>;
 }
@@ -515,7 +579,8 @@ impl HealthProbe for HttpHealth {
     async fn read(&self) -> Reading {
         let response = match self.client.get(&self.url).send().await {
             Ok(response) => response,
-            Err(e) => return Reading::Down(e.to_string()),
+            // A causa separa ninguém escutando (recusada) de processo de pé e travado (tempo esgotado).
+            Err(e) => return Reading::Down(crate::groups::peers::chain(&e)),
         };
         let status = response.status();
         let body: Value = response.bytes().await.ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or(Value::Null);
@@ -557,6 +622,9 @@ pub struct Job<'a> {
     /// Avisos do lançamento, gravados depois que a rodada zera os avisos.
     pub notes: Vec<String>,
     pub settings: Settings,
+    /// A porta pública: com ela, a falha do reinício leva a saída da versão nova e o retrato da
+    /// máquina (`startup_output`). `None` nos testes, que não leem o journal nem os processos da máquina.
+    pub startup_output: Option<u16>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -697,16 +765,27 @@ async fn roll_back<R: Restarter, H: HealthProbe>(job: &Job<'_>, state: &StateFil
         state.warn(&format!("passos de máquina aplicados nesta rodada continuam valendo na versão anterior: {}", applied_now.join(", ")));
     }
     let failed_pid = failed_pid(health, expected).await;
+    let old = previous.clone();
+    let back = Instant::now();
     let failure = match put_back(job.layout, previous).await {
         Err(e) => Some(format!("{why}; e não consegui voltar para a versão anterior: {e}")),
         Ok(()) => restarter.restart().await.err().map(|e| format!("{why}; e a volta para a versão anterior também falhou: {e}")),
     };
+    // A máquina pode ficar fora do ar: o retrato da volta é o que diz por quê.
+    let trail = startup_output::Trail::new(health);
+    let detail = |lines: Vec<String>, old: Option<PathBuf>| async move {
+        if let Some(port) = job.startup_output { log_failure_detail(lines, None, job.home, port, None, old).await; }
+    };
     if let Some(erro) = failure {
+        detail(vec![format!("volta: {erro}")], old).await;
         let no_ar = !matches!(health.read().await, Reading::Down(_));
         state.write(json!({"fase": "pronto", "ok": false, "erro": erro, "voltou": false, "no_ar": no_ar}));
         return Outcome::Failed { voltou: false, no_ar, erro };
     }
-    if let Err(unconfirmed) = wait_previous(health, expected, failed_pid, &job.settings).await {
+    if let Err(unconfirmed) = wait_previous(&trail, expected, failed_pid, &job.settings).await {
+        let mut lines = vec![format!("volta: a versão anterior não se confirmou em {}: {unconfirmed}", secs(back.elapsed()))];
+        lines.extend(trail.lines("prova da volta"));
+        detail(lines, old).await;
         let no_ar = !matches!(health.read().await, Reading::Down(_));
         let erro = format!("{why}; o current voltou para a versão anterior e o servidor reiniciou, mas a versão anterior não se confirmou no ar: {unconfirmed}");
         state.write(json!({"fase": "pronto", "ok": false, "erro": erro, "voltou": false, "no_ar": no_ar}));
@@ -715,6 +794,23 @@ async fn roll_back<R: Restarter, H: HealthProbe>(job: &Job<'_>, state: &StateFil
     state.write(json!({"fase": "pronto", "ok": false, "erro": why, "voltou": true, "no_ar": true}));
     Outcome::Failed { voltou: true, no_ar: true, erro: why }
 }
+
+/// O que explica o reinício que não voltou, uma `update: saída` por linha, antes do `update: fim`:
+/// `before` (etapas e prova), a saída da versão nova desde a marca e o retrato da máquina agora.
+pub(crate) async fn log_failure_detail(before: Vec<String>, mark: Option<startup_output::Mark>, home: &Path, port: u16,
+    new: Option<PathBuf>, old: Option<PathBuf>) {
+    let home = home.to_path_buf();
+    let lines = tokio::task::spawn_blocking(move || {
+        let scrubber = crate::diag_report::Scrubber::new(Some(home.to_string_lossy().into_owned()), std::env::var("LOCALAPPDATA").ok());
+        let mut lines = before;
+        if let Some(mark) = mark { lines.extend(mark.lines(&scrubber).into_iter().map(|l| format!("log: {l}"))); }
+        lines.extend(startup_output::snapshot(&home, port, new.as_deref(), old.as_deref()));
+        lines.into_iter().map(|l| scrubber.scrub(&l).into_owned()).collect::<Vec<_>>()
+    }).await.unwrap_or_else(|e| vec![format!("retrato da falha não montado: {e}")]);
+    for line in lines { tracing::info!(line = %line, "update: saída"); }
+}
+
+fn secs(d: Duration) -> String { format!("{:.1} s", d.as_secs_f64()) }
 
 /// Extração, passos, troca e poda bloqueiam por segundos ou minutos: fora dos fios do runtime.
 async fn blocking<T: Send + 'static>(work: impl FnOnce() -> Result<T, UpdateError> + Send + 'static) -> Result<T, UpdateError> {
@@ -830,7 +926,9 @@ pub async fn run<R: Restarter, H: HealthProbe>(job: &Job<'_>, steps: std::sync::
     for note in &job.notes { state.warn(note); }
 
     state.step("baixar");
-    let installed_version = before.as_ref().and_then(|m| m.version.parse().ok());
+    let downloading = Instant::now();
+    // Trocar de canal instala o publicado no outro, mesmo com número menor que o instalado.
+    let installed_version = before.as_ref().filter(|m| m.channel == job.release.channel).and_then(|m| m.version.parse().ok());
     let entry = match check(job.client, job.release, job.platform, installed_version).await {
         Ok(Some(entry)) => entry,
         Ok(None) => {
@@ -862,6 +960,7 @@ pub async fn run<R: Restarter, H: HealthProbe>(job: &Job<'_>, steps: std::sync::
     }
 
     state.step("trocar");
+    let swapping = Instant::now();
     let pid_before = match health.read().await { Reading::Rust { pid, .. } => pid, _ => None };
     let previous = {
         let (layout, dir) = (job.layout.clone(), dir.clone());
@@ -874,6 +973,7 @@ pub async fn run<R: Restarter, H: HealthProbe>(job: &Job<'_>, steps: std::sync::
     // Depois da troca: o instalador que um passo chama só grava links pelo `current` quando ele já é
     // a versão dele; antes, os prenderia à pasta da versão, que a poda apaga.
     state.step("passos");
+    let stepping = Instant::now();
     let applied_now = {
         let (dir, home, state_dir, log) = (dir.clone(), job.home.to_path_buf(), job.state_dir.to_path_buf(), state.clone());
         match blocking(move || apply_machine_steps(&dir, &home, &state_dir, &*steps, &log)).await {
@@ -897,11 +997,24 @@ pub async fn run<R: Restarter, H: HealthProbe>(job: &Job<'_>, steps: std::sync::
     }
 
     state.step("reiniciar");
-    let proved = match restarter.restart().await {
+    let restarting = Instant::now();
+    let mark = job.startup_output.map(|_| startup_output::Mark::take(false));
+    let trail = startup_output::Trail::new(health);
+    let restarted = restarter.restart().await;
+    let restart_took = restarting.elapsed();
+    let proved = match restarted {
         Err(e) => Err(format!("o servidor não reiniciou: {e}")),
-        Ok(()) => wait_rust(health, &manifest, pid_before, &job.settings).await,
+        Ok(()) => wait_rust(&trail, &manifest, pid_before, &job.settings).await,
     };
     if let Err(why) = proved {
+        if let Some(port) = job.startup_output {
+            let mut lines = vec![format!("etapas: baixar {} · trocar {} · passos {} · comando de reinício {} · espera da versão nova {} (prazo {}); pid antes {}",
+                secs(swapping - downloading), secs(stepping - swapping), secs(restarting - stepping), secs(restart_took),
+                secs(restarting.elapsed().saturating_sub(restart_took)), secs(job.settings.health_deadline),
+                pid_before.map_or("?".into(), |p| p.to_string()))];
+            lines.extend(trail.lines("prova"));
+            log_failure_detail(lines, mark, job.home, port, Some(dir.clone()), previous.clone()).await;
+        }
         return roll_back(job, &state, previous, before.as_ref(), &applied_now, why, restarter, health).await;
     }
     keep_swap(job.layout, &state);

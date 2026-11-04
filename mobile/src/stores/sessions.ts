@@ -1,7 +1,7 @@
 import { create } from 'zustand';
-import { openSessionsStream, aggregateSessions, jsonlDaSessao, sweepHidden, registrarDiag, decidirRota, discoverRemoteRoute, esquecerRota, rotaDecidida, baseOf, UNCONFIRMED_BASE, probeServerResponse, comTeto, placeExternalRows, listExternalPairs, attachGuest, createExternalPairSync } from '@hangar/core';
-import type { SessionInfo, Server, AggSession, ExternalPair } from '@hangar/core';
-import { sortSessions, definirArmazem, definirProtegido, definirSemPrazo, registrarFalha, registrarSucesso, retryAfterMs, estaDesligado, respondeuRecentemente, retentarAgora, esquecerServidor, onServerRecovered, _limparEsfriamentoParaTestes } from '@hangar/core';
+import { openSessionsStream, deviceIdentityReady, aggregateSessions, jsonlDaSessao, sweepHidden, registrarDiag, decidirRota, discoverRemoteRoute, esquecerRota, rotaDecidida, baseOf, UNCONFIRMED_BASE, probeServerResponse, comTeto, parseTagsEvent, patchSlot, placeExternalRows, listExternalPairs, attachGuest, createExternalPairSync } from '@hangar/core';
+import type { SessionInfo, Server, AggSession, ExternalPair, VaultEvent, VaultRequest } from '@hangar/core';
+import { sortSessions, definirArmazem, definirProtegido, definirSemPrazo, registrarFalha, registrarSucesso, retryAfterMs, estaDesligado, startOutage, endOutage, respondeuRecentemente, retentarAgora, esquecerServidor, onServerRecovered, _limparEsfriamentoParaTestes } from '@hangar/core';
 import type { Slot, ServerBucket, Aggregate } from '@hangar/core';
 import { useServers } from './servers';
 import * as m from '../paraglide/messages';
@@ -21,6 +21,8 @@ export interface SessionsState {
   byServer: ServerBucket[];
   // conveniência para o que a Task descreve como Record<serverId, SessionInfo[]>
   byServerRecord: Record<string, AggSession[]>;
+  /** Último evento `vault` de cada servidor; vale só enquanto o balde dele está sem erro. */
+  vault: Record<string, VaultEvent>;
   loading: boolean;
   servers: Server[];
   retain: () => () => void;
@@ -35,7 +37,26 @@ export interface SessionsState {
 
 // internas — fora do set() para não virar proxy
 const slots = new Map<string, Slot>();
+// Sem resposta boa o chaveiro deixa de valer; lista e etiquetas ficam.
+// O início gravado da queda vale depois de reabrir: só uma lista boa (`endOutage`) o encerra.
+const failedSlot = (id: string, error: string) => patchSlot(slots, id, { error, keyring: undefined, offlineSince: startOutage(id) });
 const streams = new Map<string, ReturnType<typeof openSessionsStream>>();
+const vaultRaw = new Map<string, string>();
+const VAULT_STATES = new Set(['open', 'locked', 'absent', 'offline', 'key_lost']);
+
+/** Evento `vault` torto devolve `null`; cartão sem id, interação ou tipo conhecido sai da lista. */
+export function parseVaultEvent(data: string): VaultEvent | null {
+  let raw: unknown;
+  try { raw = JSON.parse(data); } catch { return null; }
+  if (!raw || typeof raw !== 'object') return null;
+  const { state, requests } = raw as { state?: unknown; requests?: unknown };
+  if (state !== null && !VAULT_STATES.has(state as string)) return null;
+  if (!Array.isArray(requests)) return null;
+  const ok = requests.filter((r): r is VaultRequest => !!r && typeof r === 'object'
+    && typeof (r as VaultRequest).id === 'string' && typeof (r as VaultRequest).interaction_id === 'string'
+    && ((r as VaultRequest).kind === 'approve' || (r as VaultRequest).kind === 'entry'));
+  return { state: state as VaultEvent['state'], requests: ok };
+}
 type ConnectionAttempt = { server: Server; generation: number; abort: AbortController; routing: boolean };
 const connecting = new Map<string, ConnectionAttempt>();
 const routeDeadlines = new WeakMap<Promise<void>, number>();
@@ -236,11 +257,11 @@ function connect(list: Server[], get: () => SessionsState, set: (p: Partial<Sess
     if (s.inviteEnded) continue;
     if (streams.has(s.id) || retryTimers.has(s.id) || connecting.has(s.id)) continue;
     if (retryDelay(s.id) > 0) {
-      slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: lastFailureHttp.get(s.id) ? m.sessao_erro_servidor() : 'offline' });
+      slots.set(s.id, failedSlot(s.id, lastFailureHttp.get(s.id) ? m.sessao_erro_servidor() : 'offline'));
       scheduleRetry(s.id, get, set);
       continue;
     }
-    if (estaDesligado(s.id)) slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: 'offline' });
+    if (estaDesligado(s.id)) slots.set(s.id, failedSlot(s.id, 'offline'));
     const attempt = { server: { ...s }, generation, abort: new AbortController(), routing: true };
     connecting.set(s.id, attempt);
     void synchronize(attempt, get, set);
@@ -288,6 +309,7 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
     }
   };
   const receivedList = () => {
+    endOutage(s.id);
     countedHttpFailure = false;
     httpFailures.delete(s.id);
     httpRetryAt.delete(s.id);
@@ -345,6 +367,7 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
     attempt.routing = false;
     if (!isCurrent(attempt)) return;
     let httpResponse = false;
+    const inicio = Date.now();
     try {
       const response = await probeServerResponse(s, '/api/sessions', { signal: comTeto(attempt.abort.signal, 4000) });
       if (!isCurrent(attempt)) return;
@@ -358,15 +381,19 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
       const sessions = await response.json() as SessionInfo[];
       if (!isCurrent(attempt)) return;
       if (!Array.isArray(sessions)) throw new Error('invalid_sessions');
-      slots.set(s.id, { sessions: reuseUnchanged(slots.get(s.id)?.sessions, sessions), error: null });
+      endOutage(s.id);
+      slots.set(s.id, patchSlot(slots, s.id, { sessions: reuseUnchanged(slots.get(s.id)?.sessions, sessions), error: null, keyring: undefined }));
       recompute(set);
     } catch (error) {
       if (!isCurrent(attempt)) return;
       lastFailureHttp.set(s.id, httpResponse);
-      registrarDiag({ evento: 'lista.falhou', nivel: 'erro', tela: 'lista', codigo: 'sincronia',
-        detalhe: error instanceof Error ? error.name : 'erro' }, s.baseUrl);
+      // Só o tipo do erro: a mensagem pode trazer trecho do corpo (JSON inválido) ou o nome da máquina.
+      const status = httpResponse && error instanceof Error && /^\d{3}$/.test(error.message) ? error.message : null;
+      registrarDiag({ evento: 'lista.falhou', nivel: 'erro', tela: 'lista', codigo: status ?? 'sincronia',
+        detalhe: `${httpResponse ? 'resposta' : 'conexao'}: ${error instanceof Error ? error.name : 'erro'}`,
+        ms: Date.now() - inicio }, s.baseUrl);
       if (!httpResponse) failed(true);
-      slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: httpResponse ? m.sessao_erro_servidor() : 'offline' });
+      slots.set(s.id, failedSlot(s.id, httpResponse ? m.sessao_erro_servidor() : 'offline'));
       recompute(set);
       if (countedHttpFailure) {
         esquecerRota(s.id);
@@ -374,7 +401,15 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
         return;
       }
     }
+    // O aparelho só alimenta a dica do celular no desktop: cofre que não responde não segura a lista ao vivo. Aberta
+    // sem ele, o primeiro acesso fica para a próxima reabertura da lista. Convite não manda o aparelho: não espera.
+    let identityTimer: ReturnType<typeof setTimeout> | undefined;
+    const identityLate = s.invite ? false : await Promise.race([
+      deviceIdentityReady().then(() => false),
+      new Promise<boolean>((resolve) => { identityTimer = setTimeout(() => resolve(true), 3000); }),
+    ]).finally(() => clearTimeout(identityTimer));
     if (!isCurrent(attempt)) return;
+    if (identityLate) registrarDiag({ evento: 'aparelho.atrasou', nivel: 'aviso', tela: 'lista', codigo: 'device_identity_timeout' }, s.baseUrl);
     const es = openSessionsStream(s);
     const active = () => isCurrent(attempt) && streams.get(s.id) === es;
     let falhaDados = false;
@@ -392,13 +427,13 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
         const sessions: unknown = JSON.parse(e.data);
         if (!Array.isArray(sessions)) throw new Error('invalid_sessions');
         receivedList();
-        slots.set(s.id, { sessions: reuseUnchanged(slots.get(s.id)?.sessions, sessions as SessionInfo[]), error: null, keyring: slots.get(s.id)?.keyring });
+        slots.set(s.id, patchSlot(slots, s.id, { sessions: reuseUnchanged(slots.get(s.id)?.sessions, sessions as SessionInfo[]), error: null }));
         if (falhaDados) registrarDiag({ evento: 'lista.voltou', tela: 'lista' }, s.baseUrl);
         falhaDados = false;
       } catch {
         falhaDados = true;
         registrarDiag({ evento: 'lista.falhou', nivel: 'erro', tela: 'lista', codigo: 'json_invalido' }, s.baseUrl);
-        slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: m.sessao_erro_servidor(), keyring: slots.get(s.id)?.keyring });
+        slots.set(s.id, patchSlot(slots, s.id, { error: m.sessao_erro_servidor() }));
       }
       recompute(set);
     });
@@ -412,7 +447,7 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
       const slot = slots.get(s.id);
       const sessions = slot?.sessions ?? null;
       if (sessions?.length && !slot?.error) return;
-      slots.set(s.id, { sessions, error: sessions?.length ? null : m.sessao_erro_servidor(), keyring: slot?.keyring });
+      slots.set(s.id, patchSlot(slots, s.id, { sessions, error: sessions?.length ? null : m.sessao_erro_servidor() }));
       recompute(set);
     });
     // Chaveiro `login` da máquina: chega na conexão e a cada troca; frame torto mantém o último.
@@ -424,7 +459,29 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
       if (state !== 'locked' && state !== 'unlocked' && state !== 'absent') return;
       const slot = slots.get(s.id);
       if (slot?.keyring === state) return;
-      slots.set(s.id, { sessions: slot?.sessions ?? null, error: slot?.error ?? null, keyring: state });
+      slots.set(s.id, patchSlot(slots, s.id, { keyring: state }));
+      recompute(set);
+    });
+    // Cofre: estado e pedidos abertos, na conexão e a cada troca. Repetido ou torto mantém o último.
+    es.addEventListener('vault', (e) => {
+      if (!active()) return;
+      answered();
+      const data: string = e.data;
+      if (vaultRaw.get(s.id) === data) return;
+      const event = parseVaultEvent(data);
+      if (!event) return;
+      vaultRaw.set(s.id, data);
+      set({ vault: { ...get().vault, [s.id]: event } });
+    });
+    // Etiquetas da máquina e das contas: chegam na conexão e a cada troca. Repetido ou torto mantém as últimas.
+    es.addEventListener('tags', (e) => {
+      if (!active()) return;
+      answered();
+      const data: string = e.data;
+      if (slots.get(s.id)?.tagsRaw === data) return;
+      const tags = parseTagsEvent(data);
+      if (!tags) return;
+      slots.set(s.id, patchSlot(slots, s.id, { tags, tagsRaw: data }));
       recompute(set);
     });
     es.onerror = (event) => {
@@ -438,7 +495,7 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
       es.close();
       if (http && rejected(status)) return;
       httpFailed();
-      slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: http ? m.sessao_erro_servidor() : 'offline' });
+      slots.set(s.id, failedSlot(s.id, http ? m.sessao_erro_servidor() : 'offline'));
       recompute(set);
       esquecerRota(s.id);
       scheduleRetry(s.id, get, set);
@@ -451,7 +508,7 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
       detalhe: error instanceof Error ? error.name : 'erro' }, s.baseUrl);
     failed();
     httpFailed();
-    slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: 'offline' });
+    slots.set(s.id, failedSlot(s.id, 'offline'));
     recompute(set);
     esquecerRota(s.id);
     scheduleRetry(s.id, get, set);
@@ -489,6 +546,10 @@ function refresh(get: () => SessionsState, set: (p: Partial<SessionsState>) => v
       lastFailureHttp.delete(s.id);
       refused.delete(s.id);
       slots.delete(s.id);
+      // Mesmo id com outro token ou endereço: o pedido antigo não é desta conexão.
+      vaultRaw.delete(s.id);
+      const { [s.id]: _dropped, ...vault } = get().vault;
+      set({ vault });
     } else if (serversCache.find((next) => next.id === s.id)?.inviteEnded) {
       disconnect(s.id);
       slots.delete(s.id);
@@ -534,6 +595,8 @@ function stop(set: (p: Partial<SessionsState>) => void) {
   unsubRecovered = null;
   pause();
   slots.clear();
+  vaultRaw.clear();
+  set({ vault: {} });
   for (const [id, status] of refused) slots.set(id, { sessions: null, error: refusedError(status) });
   // hidden mantém? Não — limpa ao parar para próximo retain começar limpo
   hidden = new Map<string, string | null>();
@@ -544,6 +607,7 @@ export const useSessions = create<SessionsState>((set, get) => ({
   rows: [],
   byServer: [],
   byServerRecord: {},
+  vault: {},
   loading: false,
   servers: [],
   retain() {
@@ -615,6 +679,7 @@ export function _resetSessionsForTests() {
   refused.clear();
   streams.clear();
   slots.clear();
+  vaultRaw.clear();
   hidden = new Map<string, string | null>();
   serversCache = [];
   aggCache = { rows: [], byServer: [], loading: false };
@@ -633,5 +698,5 @@ export function _resetSessionsForTests() {
   _limparEsfriamentoParaTestes();
   definirArmazem(null);
   configureCooldown();
-  useSessions.setState({ rows: [], byServer: [], byServerRecord: {}, loading: false, servers: [] });
+  useSessions.setState({ rows: [], byServer: [], byServerRecord: {}, vault: {}, loading: false, servers: [] });
 }

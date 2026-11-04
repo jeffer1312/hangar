@@ -33,6 +33,7 @@ import type { State, ChatEvent, SessionInfo } from './types';
 import { intlLocale } from './i18n';
 import * as m from './paraglide/messages';
 import { contextRefsEnd } from './contextRefs';
+import { isCodexAgentSpawn } from './activity';
 
 export function formatElapsed(seconds: number | null | undefined): string {
   if (seconds == null || !Number.isFinite(seconds) || seconds < 0) return '—';
@@ -730,6 +731,12 @@ export function summarizeToolInput(
     const v = input[k];
     return v === null || v === undefined ? '' : String(v);
   };
+
+  if (isCodexAgentSpawn(name)) {
+    const label = ['task_name', 'description', 'agent_type'].map(key => input[key])
+      .find((value): value is string => typeof value === 'string' && !!value.trim() && !value.startsWith('gAAAA'));
+    return summarizeText(label ?? '', TOOL_MAX);
+  }
 
   if (name === 'Read') {
     // offset/limit entre parênteses depois do caminho (mesma forma do pacote): são o recorte lido,

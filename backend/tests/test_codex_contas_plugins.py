@@ -101,6 +101,16 @@ class FakeNative:
         return None
 
     async def request(self, method: str, params: dict):
+        if method == "config/batchWrite":
+            for edit in params["edits"]:
+                key = json.loads("["+edit["keyPath"].replace('\".\"','\",\"')+"]")[2]
+                for entry in self.state["hooks"]["data"]:
+                    for hook in entry["hooks"]:
+                        if hook["key"] == key:
+                            assert hook["currentHash"] == edit["value"]
+                            hook["trustStatus"] = "trusted"
+            assert params["reloadUserConfig"] is True
+            return {}
         assert method == "hooks/list"
         return copy.deepcopy(self.state.get("hooks", {"data": []}))
 
@@ -545,7 +555,8 @@ async def test_versao_divergente_reexecuta_add_nativo_e_rele_inventario(contas, 
     assert len([call for call in FakeNative.calls if call[1] == "install"]) == 1
 
 
-async def test_hooks_list_define_pendencia_atual_e_aprovacao_remove_pendencia(contas, fake_native):
+@pytest.mark.parametrize("source_type", ["project","plugin"])
+async def test_hooks_list_define_pendencia_atual_e_aprovacao_remove_pendencia(contas, fake_native, source_type):
     _, source, target, marketplace = contas
     source_state = FakeNative.states[str(source.home)]
     target_state = FakeNative.states[str(target.home)]
@@ -556,16 +567,18 @@ async def test_hooks_list_define_pendencia_atual_e_aprovacao_remove_pendencia(co
     source_state["plugins"] = [_entry(marketplace)]
     target_state["plugins"] = [_entry(marketplace)]
     target_state["hooks"] = {"data": [{"hooks": [{
-        "enabled": True, "trustStatus": "untrusted",
+        "enabled": True, "trustStatus": "untrusted", "source":source_type,
+        "key":"sample@accounts-local:stop:0:0", "currentHash":"sha256:sample",
     }]}]}
 
     pending = await sync_plugins(source, target, {})
     target_state["hooks"] = {"data": [{"hooks": [{
-        "enabled": True, "trustStatus": "trusted",
+        "enabled": True, "trustStatus": "trusted", "source":source_type,
+        "key":"sample@accounts-local:stop:0:0", "currentHash":"sha256:sample",
     }]}]}
     approved = await sync_plugins(source, target, pending["manifest"])
 
-    assert pending["trust_pending"] is True
+    assert pending["trust_pending"] is (source_type == "project")
     assert approved["trust_pending"] is False
 
 

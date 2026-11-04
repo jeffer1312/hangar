@@ -135,6 +135,7 @@ pub fn codex_configuration(home: &Path) -> Result<toml::Value, &'static str> {
             .cloned()
             .ok_or("dictation_harness_unsupported")?;
         for key in [
+            "model",
             "model_provider",
             "cli_auth_credentials_store",
             "chatgpt_base_url",

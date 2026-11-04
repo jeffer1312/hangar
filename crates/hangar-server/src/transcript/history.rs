@@ -5,7 +5,7 @@
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::io::{self, BufRead, BufReader, Seek, SeekFrom};
+use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::time::UNIX_EPOCH;
@@ -81,7 +81,7 @@ impl InternalInfo {
         Some(HistoryRequest {
             provider: Provider::parse(&self.provider)?,
             jsonl: self.jsonl.clone()?,
-            queue: self.history.get("queue").and_then(Value::as_str).map(PathBuf::from),
+            queue: (self.provider != "orq").then(|| self.history.get("queue").and_then(Value::as_str).map(PathBuf::from)).flatten(),
             limit: limit.filter(|&n| n > 0),
             tail_window: TAIL_WINDOW,
         })
@@ -100,10 +100,49 @@ pub fn merged_history(req: &HistoryRequest) -> io::Result<Vec<ChatEvent>> {
     merged_history_capped(req, u64::MAX)
 }
 
+/// O histórico do chat, com as notas dos avisos da CLI do Claude com terminal. Só o chat as pede: quem lê a
+/// última resposta (lista, retorno da filha, ditado, leitura em voz) tomaria uma nota `⚙️` pela resposta.
+pub fn merged_history_with_notices(req: &HistoryRequest) -> io::Result<Vec<ChatEvent>> {
+    merged_history_impl(req, u64::MAX, true, true)
+}
+
 /// Como `merged_history`, mas a janela com `limit` para em `max_window` bytes mesmo sem `limit`
 /// eventos: quem só quer o fim (a última resposta da lista) não relê o transcript inteiro quando
 /// a cauda é só anexo e tool_result.
 pub(crate) fn merged_history_capped(req: &HistoryRequest, max_window: u64) -> io::Result<Vec<ChatEvent>> {
+    merged_history_impl(req, max_window, true, false)
+}
+
+/// A sugestão de tarefa conserva a janela lida inteira, como o consumidor original do histórico.
+pub(crate) fn merged_history_window(req: &HistoryRequest) -> io::Result<Vec<ChatEvent>> {
+    merged_history_impl(req, u64::MAX, false, false)
+}
+
+/// As últimas `n` mensagens com texto (pedido e resposta), lidas pelo fim com a janela crescendo ×8 e
+/// pelo mesmo filtro do histórico inteiro: a prévia não mostra o que o `--resume` regravou nem repete
+/// um `held:`. A janela cresce porque a cauda de um transcript longo é quase só ferramenta e anexo.
+pub(crate) fn message_tail(req: &HistoryRequest, n: usize) -> io::Result<Vec<ChatEvent>> {
+    let mut window = req.tail_window.max(1);
+    loop {
+        let off = tail_offset(&req.jsonl, window);
+        let start = if off > 0 { transcript_start_ts(&req.jsonl) } else { 0.0 };
+        let mut parsed = parse_from(req, off, start, false)?;
+        if let Some(queue) = &req.queue {
+            merge_queue(queue, &mut parsed)?;
+        }
+        parsed.items.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal).then(a.1.cmp(&b.1)));
+        let mut msgs: Vec<ChatEvent> = parsed.items.into_iter().map(|(_, _, ev)| ev)
+            .filter(|ev| matches!(ev.kind, ChatKind::UserMsg | ChatKind::AssistantMsg) && ev.text.as_deref().is_some_and(|t| !t.is_empty()))
+            .collect();
+        if off == 0 || msgs.len() >= n {
+            msgs.drain(..msgs.len().saturating_sub(n));
+            return Ok(msgs);
+        }
+        window = window.saturating_mul(8);
+    }
+}
+
+fn merged_history_impl(req: &HistoryRequest, max_window: u64, truncate: bool, notices: bool) -> io::Result<Vec<ChatEvent>> {
     let mut parsed = match req.limit {
         Some(limit) => {
             let mut window = req.tail_window.max(1).min(max_window);
@@ -111,7 +150,7 @@ pub(crate) fn merged_history_capped(req: &HistoryRequest, max_window: u64) -> io
             loop {
                 let off = tail_offset(&req.jsonl, window);
                 let start = if off > 0 { *start_ts.get_or_insert_with(|| transcript_start_ts(&req.jsonl)) } else { 0.0 };
-                let parsed = parse_from(req, off, start)?;
+                let parsed = parse_from(req, off, start, notices)?;
                 if off == 0 || parsed.items.len() >= limit || window >= max_window {
                     break parsed;
                 }
@@ -125,7 +164,7 @@ pub(crate) fn merged_history_capped(req: &HistoryRequest, max_window: u64) -> io
                 window = guess.clamp(window.saturating_mul(4), window.saturating_mul(grow)).min(max_window);
             }
         }
-        None => parse_from(req, 0, 0.0)?,
+        None => parse_from(req, 0, 0.0, notices)?,
     };
     if let Some(queue) = &req.queue {
         merge_queue(queue, &mut parsed)?;
@@ -134,12 +173,113 @@ pub(crate) fn merged_history_capped(req: &HistoryRequest, max_window: u64) -> io
     // Estável como o sort do Python: empate em (ts, i) mantém a ordem de chegada.
     items.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal).then(a.1.cmp(&b.1)));
     let mut evs: Vec<ChatEvent> = items.into_iter().map(|(_, _, ev)| ev).collect();
-    if let Some(limit) = req.limit {
+    if let Some(limit) = req.limit.filter(|_| truncate) {
         if evs.len() > limit {
             evs.drain(..evs.len() - limit);
         }
     }
     Ok(evs)
+}
+
+/// Cada evento do transcript em ordem, até `visit` devolver `false`: quem só quer o início da conversa
+/// não relê o arquivo inteiro. Transcript ausente = nenhum evento.
+pub(crate) fn each_event(provider: Provider, jsonl: &Path, mut visit: impl FnMut(ChatEvent) -> bool) -> io::Result<()> {
+    let file = match File::open(jsonl) {
+        Ok(f) => f,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    for raw in BufReader::new(file).split(b'\n') {
+        let raw = raw?;
+        let line = String::from_utf8_lossy(&raw);
+        let Some(value) = pyjson::loads_lossless(line.trim_end_matches('\r')) else { continue };
+        let Value::Object(obj) = &value else { continue };
+        let events = match provider {
+            Provider::Claude | Provider::ClaudeHeadless => claude::parse_obj(obj, peer::name_of_pid),
+            Provider::Codex => codex::parse_rollout_obj(&value),
+            Provider::Orq => return Ok(()),
+        };
+        for event in events {
+            if !visit(event) { return Ok(()); }
+        }
+    }
+    Ok(())
+}
+
+/// Até onde se volta procurando o começo do turno para as notas; turno maior que isso fica sem nota.
+const TURN_SEED_MAX: u64 = 4 * 1024 * 1024;
+
+/// Começo da linha do último `turn_duration` antes de `before`; sem ele, o começo do arquivo (se coube) ou o
+/// próprio `before`. As notas só contam a partir de um começo de turno, e a janela da cauda não cobre um turno longo.
+/// Lê de trás para frente em blocos que crescem; achar o texto num resultado de ferramenta só faz semear mais.
+pub(crate) fn turn_seed_start(path: &Path, before: u64) -> u64 {
+    let failed = |e: io::Error| {
+        if crate::warn_limit::allow(None, "transcript_notice_seed") {
+            tracing::warn!(code = "transcript_notice_seed", path = %path.display(), "notas: começo do turno ilegível; somas podem sair incompletas: {e}");
+        }
+        before
+    };
+    let mut f = match File::open(path) {
+        Ok(f) => f,
+        Err(e) => return failed(e),
+    };
+    let mut window = 64 * 1024;
+    loop {
+        let from = before.saturating_sub(window);
+        let mut buf = Vec::new();
+        if let Err(e) = f.seek(SeekFrom::Start(from)).and_then(|_| (&mut f).take(before - from).read_to_end(&mut buf)) {
+            return failed(e);
+        }
+        if let Some(hit) = memchr::memmem::rfind(&buf, b"\"turn_duration\"") {
+            match buf[..hit].iter().rposition(|&b| b == b'\n') {
+                Some(nl) => return from + nl as u64 + 1,
+                None if from == 0 => return 0,
+                // A linha começa antes do bloco: cresce, nunca devolve o meio dela.
+                None => {}
+            }
+        } else if from == 0 {
+            return 0;
+        }
+        if window >= TURN_SEED_MAX {
+            return before;
+        }
+        window = (window * 4).min(TURN_SEED_MAX);
+    }
+}
+
+/// Passa `[from, to)` só pelo fold das notas: a janela do `/history` que começa no meio do turno conta as falhas
+/// desde o começo dele, como a cauda ao vivo. O filtro de reescrita é à parte: não muda o que a janela mostra.
+fn seed_notices(path: &Path, fold: &mut claude::NoticeFold, from: u64, to: u64) {
+    if from == 0 {
+        fold.file_start();
+    }
+    if from >= to {
+        return;
+    }
+    let failed = |e: io::Error| {
+        if crate::warn_limit::allow(None, "transcript_notice_seed") {
+            tracing::warn!(code = "transcript_notice_seed", path = %path.display(), "notas: semeadura do turno parou; somas podem sair incompletas: {e}");
+        }
+    };
+    let mut rd = match File::open(path).and_then(|f| { let mut rd = BufReader::new(f); rd.seek(SeekFrom::Start(from)).map(|_| rd) }) {
+        Ok(rd) => rd,
+        Err(e) => return failed(e),
+    };
+    let mut rewrite = claude::RewriteFilter::default();
+    let (mut at, mut raw) = (from, Vec::new());
+    while at < to {
+        raw.clear();
+        match rd.read_until(b'\n', &mut raw) {
+            Ok(0) => return,
+            Ok(n) => at += n as u64,
+            Err(e) => return failed(e),
+        }
+        if let Some(Value::Object(obj)) = pyjson::loads_lossless(&String::from_utf8_lossy(&raw)) {
+            if rewrite.keep(&obj) {
+                fold.feed(&obj, &mut Vec::new());
+            }
+        }
+    }
 }
 
 /// `_tail_offset` (pqueue.py:961): primeira linha completa dentro dos últimos `window` bytes.
@@ -191,7 +331,7 @@ pub(crate) fn transcript_start_ts(path: &Path) -> f64 {
 
 /// `_parse_from` (pqueue.py:1021).
 /// `start_ts`: relógio da primeira linha do arquivo quando `offset > 0` (0.0 quando lê do início).
-fn parse_from(req: &HistoryRequest, offset: u64, start_ts: f64) -> io::Result<Parsed> {
+fn parse_from(req: &HistoryRequest, offset: u64, start_ts: f64, notices: bool) -> io::Result<Parsed> {
     let mut p = Parsed { items: Vec::new(), committed: HashMap::new(), prev_ts: 0.0, start_ts };
     // Só a ausência é histórico vazio: um 200 vazio com ETag faria o aparelho apagar a conversa.
     let file = match File::open(&req.jsonl) {
@@ -202,7 +342,11 @@ fn parse_from(req: &HistoryRequest, offset: u64, start_ts: f64) -> io::Result<Pa
     let mut rd = BufReader::new(file);
     rd.seek(SeekFrom::Start(offset))?;
     // Reescrita do `--resume`: só o Claude regrava o jsonl.
-    let mut rewrite = (req.provider != Provider::Codex).then(claude::RewriteFilter::default);
+    let mut rewrite = matches!(req.provider, Provider::Claude | Provider::ClaudeHeadless).then(claude::RewriteFilter::default);
+    let mut notices = (notices && rewrite.is_some()).then(|| claude::NoticeFold::new(offset == 0));
+    if let Some(fold) = notices.as_mut().filter(|_| offset > 0) {
+        seed_notices(&req.jsonl, fold, turn_seed_start(&req.jsonl, offset), offset);
+    }
     let mut held_ids = HashSet::new();
     let mut raw = Vec::new();
     let mut i = 0u64;
@@ -221,7 +365,7 @@ fn parse_from(req: &HistoryRequest, offset: u64, start_ts: f64) -> io::Result<Pa
             fixed.truncate(fixed.len() - 2);
             fixed.push('\n');
         }
-        let silent = rewrite.as_ref().and_then(|_| claude::silent_attachment_timestamp(&line));
+        let silent = rewrite.as_ref().and_then(|_| claude::silent_attachment_timestamp(&line, notices.is_some()));
         let (line_ts, evs) = match silent {
             Some(att) => (py::iso_timestamp(&att.replace('Z', "+00:00")).unwrap_or(0.0), Vec::new()),
             None => {
@@ -240,8 +384,16 @@ fn parse_from(req: &HistoryRequest, offset: u64, start_ts: f64) -> io::Result<Pa
                         continue;
                     }
                 }
-                let evs = if rewrite.is_some() { claude::parse_obj(obj, peer::name_of_pid) } else { codex::parse_rollout_obj(&value) };
-                (ts_of_obj(obj), evs)
+                let mut evs = match req.provider {
+                    Provider::Claude | Provider::ClaudeHeadless => claude::parse_obj(obj, peer::name_of_pid),
+                    Provider::Codex => codex::parse_rollout_obj(&value),
+                    Provider::Orq => crate::orchestration::timeline::parse_obj(&value, req.jsonl.parent()),
+                };
+                if let Some(fold) = notices.as_mut() { fold.feed(obj, &mut evs); }
+                let ts = if req.provider == Provider::Orq {
+                    obj.get("ts").and_then(Value::as_str).and_then(py::iso_timestamp).unwrap_or(0.0)
+                } else { ts_of_obj(obj) };
+                (ts, evs)
             }
         };
         if line_ts > 0.0 {
@@ -349,7 +501,11 @@ pub(crate) fn from_current_session(entry: &Map<String, Value>, min_ts: f64, ts: 
 pub(crate) fn entry_event(entry: &Map<String, Value>) -> ChatEvent {
     let id = entry.get("id").map_or_else(|| "None".to_string(), py::py_str);
     let text = entry.get("text").and_then(Value::as_str).map(str::to_string);
-    let mut ev = if is_local_output(entry) {
+    let hook_error = entry.get("hook_error").and_then(Value::as_str).filter(|_| is_local_output(entry));
+    let mut ev = if let Some(hook_error) = hook_error {
+        let notice = entry.get("notice").and_then(Value::as_str).unwrap_or("hook_failed");
+        ChatEvent { text: Some(notice.into()), hook_error: Some(hook_error.into()), ..event(ChatKind::Notice, format!("local-{id}")) }
+    } else if is_local_output(entry) {
         ChatEvent { text, ..event(ChatKind::AssistantMsg, format!("local-{id}")) }
     } else {
         ChatEvent {
@@ -467,6 +623,19 @@ mod tests {
     fn english_attachment_marker_leaves_the_caption() {
         assert_eq!(super::strip_attach("look — 📎 image: /a.png 📎 file: /b.txt"), "look");
         assert_eq!(super::strip_attach("olha — 📎 arquivo: /b.txt"), "olha");
+    }
+
+    #[test]
+    fn local_row_with_hook_error_is_a_hook_notice_with_its_own_code() {
+        let row = serde_json::json!({"id":"a1","text":"Hook falhou — p · postToolUse: exit 127","papel":"assistant","confirmed":true,
+            "hook_error":"p · postToolUse: exit 127","notice":"hook_failed"});
+        let event = super::entry_event(row.as_object().unwrap());
+        assert_eq!(event.kind, hangar_api::chat::ChatKind::Notice);
+        assert_eq!(event.text.as_deref(), Some("hook_failed"));
+        assert_eq!(event.hook_error.as_deref(), Some("p · postToolUse: exit 127"));
+        assert_eq!(event.id, "local-a1");
+        let plain = serde_json::json!({"id":"a2","text":"outro aviso","papel":"assistant","confirmed":true});
+        assert_eq!(super::entry_event(plain.as_object().unwrap()).kind, hangar_api::chat::ChatKind::AssistantMsg);
     }
 
     use super::{chaves_de_commit, merged_history, merged_history_capped, queue_panel_entries, transcript_start_ts, HistoryRequest, Provider, TAIL_WINDOW};

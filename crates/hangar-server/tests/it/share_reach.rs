@@ -193,8 +193,7 @@ async fn route_answers_401_to_non_owner_in_rust() {
 }
 
 #[tokio::test]
-async fn private_route_needs_the_secret_and_answers_like_the_public_one() {
-    // Ponte do Connect (8768): o Python só repassa, a decisão é a mesma da rota pública.
+async fn retired_connect_bridge_is_not_available_with_any_secret() {
     use std::net::SocketAddr;
     let (_fake, up) = crate::fake::spawn_fake().await;
     let state = std::sync::Arc::new(hangar_server::routes::AppState::new(crate::fake::config(up, "")));
@@ -215,7 +214,5 @@ async fn private_route_needs_the_secret_and_answers_like_the_public_one() {
     assert_eq!(post(private, Some("outro")).await.unwrap().status(), 404);
     assert_eq!(post(public, Some(crate::fake::SECRET)).await.unwrap().status(), 404, "a porta pública não tem a ponte");
     let r = post(private, Some(crate::fake::SECRET)).await.unwrap();
-    assert_eq!(r.status(), 400);
-    let v: serde_json::Value = serde_json::from_str(&r.text().await.unwrap()).unwrap();
-    assert_eq!(v["detail"]["code"], "share_reach_link_refused");
+    assert_eq!(r.status(), 404);
 }

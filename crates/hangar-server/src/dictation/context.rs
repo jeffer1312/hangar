@@ -1,6 +1,7 @@
 //! Identidade e autenticação vêm do destino; nunca da sessão que ficou na tela.
 use super::model::OrganizationRequest;
 use crate::{accounts::environment::AccountEnvironment, routes::AppState};
+use hangar_api::session::SessionRow;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -150,6 +151,16 @@ pub async fn resolve(
         .iter()
         .find(|row| row.name == name)
         .ok_or("dictation_target_missing")?;
+    for_row(state, row, request)
+}
+
+/// O contexto de uma linha já descoberta: quem tem a linha não paga outra descoberta.
+pub fn for_row(
+    state: &AppState,
+    row: &SessionRow,
+    request: &OrganizationRequest,
+) -> Result<Context, &'static str> {
+    let name = row.name.as_str();
     let generation = row.lifecycle_id.as_ref().or(row.jsonl.as_ref()).cloned();
     if request.generation.is_some() && request.generation != generation {
         return Err("dictation_target_changed");

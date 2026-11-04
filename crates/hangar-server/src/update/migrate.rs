@@ -2,9 +2,8 @@
 //!
 //!   hangar-server migrate-package [--dry-run] [--undo] [--checkout <pasta>]
 //!
-//! Modo desenvolvedor (o `current` aponta para o próprio checkout, nada é baixado) quando o checkout
-//! tem edição local, commit à frente do upstream, está fora da `main` e da `beta` ou a máquina serve a
-//! tela pelo `vite` (`SERVE=preview`); senão pacote (baixa o primeiro, do canal da branch). Para o backend, copia os dados do
+//! Pacote (baixa o primeiro, do canal da branch), salvo quem instalou com `--dev`: esse fica no modo
+//! desenvolvedor (o `current` aponta para o próprio checkout, nada é baixado). Para o backend, copia os dados do
 //! usuário para `~/.hangar/config/`, cria o `current`, regrava o serviço, os hooks do Kimi e do
 //! Codex, os atalhos e os apontadores, sobe e prova. Falha antes da prova desfaz tudo e sobe o
 //! backend de antes. `--undo` reaponta tudo para o checkout, que nunca é apagado.
@@ -43,23 +42,14 @@ pub enum Mode { Package, Developer, NotMigrated }
 /// Marca que o `bootstrap.sh --dev` grava em `~/.hangar`: quem instalou pelo git pediu o modo desenvolvedor.
 pub const DEV_REQUESTED: &str = "dev-requested";
 
-/// O que decide o modo.
+/// O que decide o modo e o canal.
 #[derive(Debug, Clone, Default)]
-pub struct Facts { pub dirty: usize, pub untracked: usize, pub ahead: u64, pub branch: String, pub upstream: bool, pub preview: bool,
-    pub dev_requested: bool }
+pub struct Facts { pub branch: String, pub dev_requested: bool }
 
-/// Pacote só com o checkout limpo, na `main` ou na `beta`, sem nada à frente do upstream, sem o
-/// `vite` e sem o `--dev` da instalação; senão desenvolvedor, com o motivo.
+/// Pacote sempre; o modo desenvolvedor é escolha da pessoa (o interruptor da tela, ou o `--dev` da
+/// instalação). O checkout fica no disco como está, com edição ou não.
 pub fn decide(f: &Facts) -> (Mode, Option<String>) {
-    let why = if f.dev_requested { Some("a instalação foi feita com --dev".to_owned()) }
-        else if f.preview { Some("a máquina serve a tela pelo vite (SERVE=preview)".to_owned()) }
-        else if f.dirty > 0 { Some(format!("o checkout tem {} arquivo(s) com edição", f.dirty)) }
-        else if f.untracked > 0 { Some(format!("o checkout tem {} arquivo(s) novo(s) fora do git", f.untracked)) }
-        else if f.branch != "main" && f.branch != "beta" { Some(format!("o checkout está na branch {}, fora da main e da beta", f.branch)) }
-        else if !f.upstream { Some(format!("a {} do checkout não tem upstream para comparar", f.branch)) }
-        else if f.ahead > 0 { Some(format!("a {} tem {} commit(s) à frente do upstream", f.branch, f.ahead)) }
-        else { None };
-    (if why.is_some() { Mode::Developer } else { Mode::Package }, why)
+    if f.dev_requested { (Mode::Developer, Some("a instalação foi feita com --dev".to_owned())) } else { (Mode::Package, None) }
 }
 
 /// Canal do pacote: a `beta` baixa `package-beta`; a `main`, `package-latest`.
@@ -69,6 +59,8 @@ fn channel(f: &Facts) -> &'static str { if f.branch == "beta" { "beta" } else { 
 pub trait Service: Sync {
     fn stop(&self) -> Result<(), String>;
     fn start(&self) -> Result<(), String>;
+    /// Liga ou desliga o serviço do front (`vite preview`); sem ele, não faz nada.
+    fn front(&self, on: bool) -> Result<(), String>;
 }
 
 pub enum Fetched {
@@ -118,6 +110,8 @@ pub enum Done {
     Data { name: String, copied: bool, linked: bool },
     Launcher { existed: bool },
     Current,
+    /// O serviço do front (`hangar-frontend`) desligado, quando existia; a volta o religa.
+    Front,
     /// Arquivo gerado reescrito (unit, `.vbs`, `.cmd`, apontadores); `original` em base64, `None` = não existia.
     File { path: PathBuf, original: Option<String> },
     /// Blocos `[[hooks]]` do Kimi tirados, como texto.
@@ -155,10 +149,6 @@ impl Machine<'_> {
     }
     /// Uma porta do `.env` em uso: o novo quando existe, senão o do checkout.
     fn env_port(&self, key: &str) -> Result<Option<u16>, String> { crate::user_data::env_port(&self.home, Some(&self.backend()), key) }
-    /// `SERVE=preview`: a unit do front existe ou o `.env` aponta o front para outra porta.
-    fn preview(&self) -> Result<bool, String> {
-        Ok(self.systemd_dir.join("hangar-frontend.service").exists() || self.env_port("CP_FRONT_PORT")?.is_some_and(|p| p > 0))
-    }
     fn sep(&self) -> char { if self.windows { '\\' } else { '/' } }
     /// `<raiz>/backend/hooks/`, como os instaladores gravam no comando do hook.
     fn hooks_needle(&self, root: &Path) -> String { format!("{}{}", root.join("backend").join("hooks").display(), self.sep()) }
@@ -166,8 +156,45 @@ impl Machine<'_> {
 
 fn facts(m: &Machine<'_>) -> Result<Facts, String> {
     let checkout = super::dev::read(&m.checkout, false).map_err(|e| format!("não consegui ler o checkout {}: {e}", m.checkout.display()))?;
-    Ok(Facts { dirty: checkout.dirty, untracked: checkout.untracked,ahead: checkout.ahead, branch: checkout.branch, upstream: checkout.upstream.is_some(), preview: m.preview()?,
-        dev_requested: m.hangar().join(DEV_REQUESTED).exists() })
+    Ok(Facts { branch: checkout.branch, dev_requested: m.hangar().join(DEV_REQUESTED).exists() })
+}
+
+/// O aviso da migração que a tela ainda tem de mostrar, com a escolha do modo: a máquina que migrou
+/// sem ver o aviso (antes da trava do aceite) e a que tem a migração pendente (`migration-offered`).
+/// `mode` é o modo de agora; `null` antes de migrar. `root`: onde ler o passo (o `current` ou o checkout).
+pub fn pending_warning(home: &Path, root: &Path) -> Option<Value> {
+    let mode = pending_mode(home)?;
+    let file = root.join("docs").join("atualizacoes").join(format!("{STEP_ID}.md"));
+    // Sem o texto o aviso sai assim mesmo: sumir deixaria a migração pendente sem tela que a ofereça.
+    let (title, body) = match std::fs::read_to_string(&file).map(|text| super::steps::frontmatter(&text)) {
+        Ok((fields, body)) if fields.get("titulo").is_some_and(|t| !t.is_empty()) => (fields["titulo"].clone(), body),
+        read => {
+            // Uma vez por processo: a tela relê a cada poucos segundos.
+            static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                tracing::warn!(file = %file.display(), "aviso da migração sem o texto do passo ({:?}); vai com o título padrão", read.err());
+            }
+            ("O Hangar passa a se atualizar por pacote".to_owned(), String::new())
+        }
+    };
+    Some(serde_json::json!({"id": STEP_ID, "title": title, "text": body, "choice": "mode", "mode": mode}))
+}
+
+/// Se o aviso da migração está pendente, sem ler o texto dele: `Some(modo de agora)`, `Some(None)` antes de migrar.
+/// Migrada, vale o aceite. Não migrada com o passo já rodado (`migration-offered`), o aviso volta mesmo aceito:
+/// a migração aceita falhou, ou o script não conseguiu ler o aceite, e só a tela a oferece de novo.
+pub fn pending_mode(home: &Path) -> Option<Option<Mode>> {
+    let layout = Layout::new(home);
+    match read_record(&home.join(".hangar").join(MARKER)) {
+        // Instalação nova pelo pacote, sem checkout: não houve migração a anunciar.
+        Some(record) if record.checkout.as_os_str().is_empty() || record.mode == Mode::NotMigrated => None,
+        Some(_) if super::accepted(&layout).contains(STEP_ID) => None,
+        Some(record) => Some(Some(record.mode)),
+        // Migrando agora (o registro parcial existe): o executor a acompanha.
+        None if home.join(".hangar").join(PARTIAL).exists() => None,
+        None if super::offered_file(&layout).exists() => Some(None),
+        None => None,
+    }
 }
 
 pub(super) fn read_record(path: &Path) -> Option<Record> { serde_json::from_slice(&std::fs::read(path).ok()?).ok() }
@@ -373,6 +400,7 @@ fn plan(m: &Machine<'_>, mode: Mode, why: Option<&str>, channel: &str, service: 
     lines.push(if m.windows { "apontar os atalhos .cmd para %USERPROFILE%\\.hangar\\current".to_owned() }
         else { format!("apontar para {} os links de {} que vão ao checkout", m.layout().current().display(), LINK_DIRS.join(", ")) });
     lines.push("regravar ~/.hangar/backend-dir e ~/.hangar/plugin-dir".to_owned());
+    lines.push("tirar o serviço do front (vite), se houver, guardado em ~/.hangar: a porta dele passa a ser do servidor".to_owned());
     lines.push("subir o backend e provar o servidor em modo rust".to_owned());
     lines.push(format!("gravar {}", m.marker().display()));
     lines
@@ -469,6 +497,11 @@ fn apply(m: &Machine<'_>, record: &mut Record, target: &Path, service: &Path) ->
         unit_with_launcher(&String::from_utf8_lossy(&old), &launcher, &m.hangar())?.into_bytes()
     };
     rewrite(m, record, service, &new)?;
+    // A tela pelo `vite preview` na porta do front: na máquina migrada quem atende essa porta é o
+    // próprio servidor (`routes::front_address`), com a tela da versão (ou do `frontend/dist` do
+    // checkout, no modo desenvolvedor). Sem o serviço, nada a fazer.
+    push(m, record, Done::Front)?;
+    m.service.front(false)?;
     // Hooks que apontam para o checkout: o Kimi só acrescenta e o Codex não troca hook de outro checkout.
     let needle = m.hooks_needle(&m.checkout);
     // Arquivo que não se lê fica como está, com nota: o hook velho dele segue apontando para o checkout.
@@ -582,6 +615,7 @@ fn revert(m: &Machine<'_>, done: &[Done]) -> Vec<String> {
                 fail(format!("{} não saiu: {e}", m.launcher().display()));
             },
             Done::Current => if let Err(e) = super::remove_link(&current) { fail(format!("{} não saiu: {e}", current.display())); },
+            Done::Front => if let Err(e) = m.service.front(true) { fail(format!("o serviço do front não voltou: {e}")); },
             Done::File { path, original } => {
                 let result = match original.as_deref().map(|o| base64::engine::general_purpose::STANDARD.decode(o)) {
                     Some(Ok(bytes)) => crate::runtime::queue::atomic_write(path, &bytes).map_err(|e| e.to_string()),
@@ -816,6 +850,38 @@ impl Service for SystemService {
         if self.windows { return self.run("powershell -NoProfile -Command \"Start-ScheduledTask -TaskName hangar-backend\""); }
         self.run("systemctl --user daemon-reload && systemctl --user start hangar-backend.service")
     }
+
+    fn front(&self, on: bool) -> Result<(), String> { self.run(&front_command(self.windows, on, &self.checkout)) }
+}
+
+/// Tira ou devolve o serviço do front (`vite preview`), quando existe. Na máquina migrada a porta
+/// dele é do servidor (`routes::front_address`). Tirar, e não só desligar: o reinício do Atualizar
+/// sobe a unit que existe (`restart.rs`) e recusa a tarefa desabilitada (`windows-tasks.ps1`). O
+/// original fica em `~/.hangar`, e é de lá que o `--undo` o devolve. `checkout`: de onde o vite roda.
+pub fn front_command(windows: bool, on: bool, checkout: &Path) -> String {
+    if windows {
+        let bak = "(Join-Path $env:USERPROFILE '.hangar\\hangar-frontend.task.xml')";
+        let helper = ps_quote(&checkout.join("scripts").join("windows-tasks.ps1"));
+        let action = if on {
+            format!("if (Test-Path -LiteralPath {bak}) {{ Register-ScheduledTask -TaskName hangar-frontend -Xml (Get-Content -Raw -LiteralPath {bak}) -Force | Out-Null; \
+                Remove-Item -LiteralPath {bak}; Start-ScheduledTask -TaskName hangar-frontend }}")
+        } else {
+            format!("if (Get-ScheduledTask -TaskName hangar-frontend -ErrorAction SilentlyContinue) {{ \
+                Export-ScheduledTask -TaskName hangar-frontend | Set-Content -Encoding Unicode -LiteralPath {bak}; \
+                Stop-ScheduledTask -TaskName hangar-frontend; . '{helper}'; Stop-HangarFrontend '{}'; \
+                Unregister-ScheduledTask -TaskName hangar-frontend -Confirm:$false }}", ps_quote(checkout))
+        };
+        // `Stop`: falha em qualquer comando sai com erro, não só no último.
+        return format!("powershell -NoProfile -ExecutionPolicy Bypass -Command \"$ErrorActionPreference = 'Stop'; {action}\"");
+    }
+    let unit = "\"${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/hangar-frontend.service\"";
+    let bak = "\"$HOME/.hangar/hangar-frontend.service.pre-pacote\"";
+    if on {
+        format!("if [ -f {bak} ]; then mv {bak} {unit} && systemctl --user daemon-reload && systemctl --user enable --now hangar-frontend.service; fi")
+    } else {
+        format!("if [ -f {unit} ]; then systemctl --user disable --now hangar-frontend.service && mkdir -p \"$HOME/.hangar\" \
+            && mv {unit} {bak} && systemctl --user daemon-reload; fi")
+    }
 }
 
 /// O primeiro pacote, da release, e a tela web da chave dele quando ela está ligada.
@@ -938,6 +1004,17 @@ pub(crate) fn is_checkout(dir: &Path) -> bool { dir.join(".git").exists() && dir
 
 /// `hangar-server migrate-package …`: `args` sem o nome do programa nem o subcomando.
 pub fn cli(args: &[String]) -> ExitCode {
+    match run(args) {
+        Ok(lines) => { for line in lines { println!("{line}"); } ExitCode::SUCCESS }
+        Err((2, usage)) => { eprintln!("{usage}"); ExitCode::from(2) }
+        // O motor `git` mostra a linha marcada como o motivo do passo.
+        Err((code, e)) => { println!("##HANGAR-FALHA## {e}"); ExitCode::from(code) }
+    }
+}
+
+/// O `migrate-package` sem imprimir: as linhas do resultado, ou `(código de saída, motivo)`. Cria o
+/// próprio runtime: quem chama de dentro de um (o executor) chama numa thread comum.
+pub fn run(args: &[String]) -> Result<Vec<String>, (u8, String)> {
     let usage = "uso: hangar-server migrate-package [--dry-run] [--undo] [--checkout <pasta>]";
     let (mut dry_run, mut undo_it, mut checkout) = (false, false, None);
     let mut it = args.iter();
@@ -945,8 +1022,8 @@ pub fn cli(args: &[String]) -> ExitCode {
         match arg.as_str() {
             "--dry-run" => dry_run = true,
             "--undo" => undo_it = true,
-            "--checkout" => match it.next() { Some(dir) => checkout = Some(PathBuf::from(dir)), None => { eprintln!("{usage}"); return ExitCode::from(2); } },
-            _ => { eprintln!("{usage}"); return ExitCode::from(2); }
+            "--checkout" => match it.next() { Some(dir) => checkout = Some(PathBuf::from(dir)), None => return Err((2, usage.to_owned())) },
+            _ => return Err((2, usage.to_owned())),
         }
     }
     let env = crate::accounts::environment::AccountEnvironment::capture();
@@ -959,8 +1036,7 @@ pub fn cli(args: &[String]) -> ExitCode {
         .or_else(|| Some(PathBuf::from(std::fs::read_to_string(home.join(".hangar").join("backend-dir")).ok()?.trim()).parent()?.to_path_buf()))
         .filter(|d| is_checkout(d));
     let Some(checkout) = checkout else {
-        eprintln!("##HANGAR-FALHA## não achei o checkout do Hangar; rode de dentro dele ou passe --checkout");
-        return ExitCode::from(2);
+        return Err((2, "##HANGAR-FALHA## não achei o checkout do Hangar; rode de dentro dele ou passe --checkout".to_owned()));
     };
     let windows = cfg!(windows);
     let var = |k: &str| env.base.get(k).filter(|v| !v.is_empty()).map(PathBuf::from);
@@ -980,23 +1056,14 @@ pub fn cli(args: &[String]) -> ExitCode {
         // A prova cabe no prazo do passo do motor `git` (600 s), com o download antes dela.
         settings: Settings { download_deadline: Duration::from_secs(300), ..Settings::default() },
     };
-    let port = match probe.env_port("CP_PORT") {
-        Ok(port) => port.unwrap_or(8765),
-        Err(e) => { println!("##HANGAR-FALHA## {e}"); return ExitCode::from(1); }
-    };
+    let port = probe.env_port("CP_PORT").map_err(|e| (1, e))?.unwrap_or(8765);
     let service = SystemService { runner, windows, checkout, port };
-    let client = match crate::http_client().build() {
-        Ok(client) => client,
-        Err(e) => { eprintln!("##HANGAR-FALHA## cliente http: {e}"); return ExitCode::from(1); }
-    };
+    let client = crate::http_client().build().map_err(|e| (1, format!("cliente http: {e}")))?;
     let fetcher = ReleaseFetcher { client, platform: super::platform(), home: home.clone(), deadline: probe.settings.download_deadline,
         base_url: super::RELEASE_BASE.to_owned() };
     let machine = Machine { service: &service, fetcher: &fetcher, ..probe };
     let health = super::HttpHealth::new(&format!("http://127.0.0.1:{port}"));
-    let runtime = match tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build() {
-        Ok(runtime) => runtime,
-        Err(e) => { eprintln!("##HANGAR-FALHA## runtime: {e}"); return ExitCode::from(1); }
-    };
+    let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().map_err(|e| (1, format!("runtime: {e}")))?;
     let result = if undo_it {
         runtime.block_on(undo(&machine, &health)).map(|()| vec!["migração desfeita: tudo aponta de novo para o checkout".to_owned()])
     } else {
@@ -1009,11 +1076,7 @@ pub fn cli(args: &[String]) -> ExitCode {
             Outcome::NotMigrated(reason) => vec![format!("não migrada: {reason}")],
         })
     };
-    match result {
-        Ok(lines) => { for line in lines { println!("{line}"); } ExitCode::SUCCESS }
-        // O motor `git` mostra a linha marcada como o motivo do passo.
-        Err(e) => { println!("##HANGAR-FALHA## {e}"); ExitCode::from(1) }
-    }
+    result.map_err(|e| (1, e))
 }
 
 /// Lugar de serviço e download antes de o `cli` montar os reais (só lê caminhos).
@@ -1022,6 +1085,7 @@ struct Unused;
 impl Service for Unused {
     fn stop(&self) -> Result<(), String> { Err("sem serviço".into()) }
     fn start(&self) -> Result<(), String> { Err("sem serviço".into()) }
+    fn front(&self, _on: bool) -> Result<(), String> { Err("sem serviço".into()) }
 }
 
 impl Fetcher for Unused {

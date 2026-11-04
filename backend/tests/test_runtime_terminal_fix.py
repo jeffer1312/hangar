@@ -88,7 +88,6 @@ def test_first_claude_resolution_unknown_never_legacy(monkeypatch, tmp_path):
     monkeypatch.setattr(api, '_headless', lambda name: False)
     monkeypatch.setattr(api, '_provider_of', lambda name: 'claude')
     monkeypatch.setattr(api, '_enviar_nativo', lambda *args: effects.append('socket') or 'mid')
-    monkeypatch.setattr(api.plugin_bridge, 'entregar', lambda *args, **kwargs: effects.append('publish') or True)
     monkeypatch.setattr(api.terminal, 'send_prompt', lambda *args, **kwargs: effects.append('key') or 'sent')
     monkeypatch.setattr(api, '_agendar_confirmacao', lambda *args: None)
     async def scenario():

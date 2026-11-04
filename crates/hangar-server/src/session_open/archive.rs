@@ -46,13 +46,13 @@ impl ArchiveBody {
     }
 }
 
-static PROJECT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\A[A-Za-z0-9-]+\z").unwrap());
-static UUID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\z").unwrap());
+pub(crate) static PROJECT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\A[A-Za-z0-9-]+\z").unwrap());
+pub(crate) static UUID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\z").unwrap());
 static KIMI_ID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\Asession_[0-9a-fA-F-]{36}\z").unwrap());
 
 /// Como os `ValueError`/`FileNotFoundError` do Python viram resposta na rota.
 #[derive(Debug)]
-enum Miss { Invalid, Absent, Coded(OpenError) }
+pub(crate) enum Miss { Invalid, Absent, Coded(OpenError) }
 
 impl From<Miss> for OpenError {
     fn from(miss: Miss) -> Self {
@@ -101,14 +101,22 @@ fn claude_owner(w: &Where, project: &str, sid: &str) -> Result<Option<String>, M
 }
 
 /// `archive_jsonl` do Claude: sem conta, a primeira que tiver o arquivo.
-fn claude_jsonl(w: &Where, project: &str, sid: &str, config_dir: Option<&str>) -> Result<PathBuf, Miss> {
+pub(crate) fn claude_jsonl(w: &Where, project: &str, sid: &str, config_dir: Option<&str>) -> Result<PathBuf, Miss> {
     if !PROJECT.is_match(project) || !UUID.is_match(sid) { return Err(Miss::Invalid); }
     claude_accounts(w, config_dir).into_iter().map(|(_, base)| base.join(project).join(format!("{sid}.jsonl")))
         .find(|p| p.is_file()).ok_or(Miss::Absent)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Quantos cabeçalhos esta thread abriu: os testes conferem que transcript parado não é reaberto.
+    pub(crate) static HEADER_OPENS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// O primeiro valor que `field` acha nas `lines` primeiras linhas JSON do arquivo.
-fn header(path: &Path, lines: usize, field: impl Fn(&Value) -> Option<String>) -> Option<String> {
+pub(crate) fn header(path: &Path, lines: usize, field: impl Fn(&Value) -> Option<String>) -> Option<String> {
+    #[cfg(test)]
+    HEADER_OPENS.with(|n| n.set(n.get() + 1));
     let file = std::fs::File::open(path).ok()?;
     std::io::BufReader::new(file).split(b'\n').take(lines).flatten()
         .filter_map(|line| serde_json::from_slice::<Value>(&line).ok()).find_map(|obj| field(&obj))
@@ -147,7 +155,7 @@ fn under(path: &Path, root: &Path) -> bool {
 }
 
 /// `account_for_rollout`: a conta Codex cuja `sessions`/`archived_sessions` guarda o rollout.
-fn codex_owner<'a>(accounts: &'a [crate::accounts::catalog::Account], rollout: &Path) -> Result<Option<&'a crate::accounts::catalog::Account>, Miss> {
+pub(crate) fn codex_owner<'a>(accounts: &'a [crate::accounts::catalog::Account], rollout: &Path) -> Result<Option<&'a crate::accounts::catalog::Account>, Miss> {
     let found: Vec<&crate::accounts::catalog::Account> = accounts.iter()
         .filter(|a| under(rollout, &a.home.join("sessions")) || under(rollout, &a.home.join("archived_sessions"))).collect();
     if found.len() > 1 {
@@ -212,6 +220,48 @@ fn from_transfer(home: &Path, codex_home: &Path, thread: &str) -> bool {
     }
 }
 
+/// A raiz das conversas do Pi ou do omp.
+pub(crate) fn agent_root(w: &Where, provider: AgentProvider) -> PathBuf {
+    match provider {
+        AgentProvider::Pi => w.env.get("PI_CODING_AGENT_SESSION_DIR").filter(|v| !v.is_empty()).map(PathBuf::from)
+            .unwrap_or_else(|| w.home.join(".pi").join("agent").join("sessions")),
+        _ => super::agents::omp_agent_dir(w.home, w.env, None).join("sessions"),
+    }
+}
+
+/// O rollout Codex da conversa, a conta dona e a casa dela; conta pedida desconhecida é o erro dela.
+fn codex_found(w: &Where, sid: &str, asked: Option<&str>) -> Result<(PathBuf, String, PathBuf), OpenError> {
+    let service = crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::from_map(w.env.clone()));
+    let accounts = match asked {
+        Some(id) => service.resolve(crate::accounts::Provider::Codex, id).map(|a| vec![a]),
+        None => service.snapshot(crate::accounts::Provider::Codex),
+    }.map_err(|e| OpenError::new(e.status, e.code, e.message.clone()).with_params(e.params.clone()))?;
+    let all = service.snapshot(crate::accounts::Provider::Codex).map_err(|e| OpenError::new(e.status, e.code, e.message))?;
+    let (transcript, owner) = match codex_jsonl(&all, sid, asked) {
+        Ok(found) if accounts.iter().any(|a| a.id == found.1) => found,
+        Ok(_) => return Err(Miss::Absent.into()),
+        Err(miss) => return Err(miss.into()),
+    };
+    let home = all.iter().find(|a| a.id == owner).map(|a| a.home.clone()).unwrap_or_default();
+    Ok((transcript, owner, home))
+}
+
+/// `archive_jsonl` das leituras do Arquivo: o transcript e, no Codex, a casa da conta dona. Sem a
+/// conta, o Claude vale a primeira conta que tiver o arquivo.
+pub(crate) fn locate(w: &Where, project: &str, sid: &str, config_dir: Option<&str>, provider: AgentProvider, codex_account: Option<&str>)
+    -> Result<(PathBuf, Option<PathBuf>), OpenError> {
+    Ok(match provider {
+        AgentProvider::Claude => (claude_jsonl(w, project, sid, config_dir)?, None),
+        AgentProvider::Pi | AgentProvider::Omp => (pi_jsonl(&agent_root(w, provider), sid)?, None),
+        AgentProvider::Kimi => (kimi_jsonl(&super::agents::kimi_home(w.home, w.env), sid)?.0, None),
+        AgentProvider::Codex => {
+            if !UUID.is_match(sid) { return Err(Miss::Invalid.into()); }
+            let (transcript, _, home) = codex_found(w, sid, codex_account)?;
+            (transcript, Some(home))
+        }
+    })
+}
+
 /// `worktrees.redirect`: a worktree apagada pelo Hangar retoma na pasta principal.
 fn redirect(home: &Path, cwd: String) -> String {
     if Path::new(&cwd).is_dir() { return cwd; }
@@ -261,12 +311,7 @@ pub fn plan(w: &Where, facts: &dyn OpenFacts, project: &str, sid: &str, body: Ar
             Found { transcript, cwd: cwd.unwrap_or_default(), owner: lookup, codex_account: None }
         }
         AgentProvider::Pi | AgentProvider::Omp => {
-            let root = match provider {
-                AgentProvider::Pi => w.env.get("PI_CODING_AGENT_SESSION_DIR").filter(|v| !v.is_empty()).map(PathBuf::from)
-                    .unwrap_or_else(|| w.home.join(".pi").join("agent").join("sessions")),
-                _ => super::agents::omp_agent_dir(w.home, w.env, None).join("sessions"),
-            };
-            let transcript = pi_jsonl(&root, sid)?;
+            let transcript = pi_jsonl(&agent_root(w, provider), sid)?;
             let cwd = header(&transcript, 5, |o| (o["type"] == "session").then(|| text(&o["cwd"])).flatten());
             Found { transcript, cwd: cwd.unwrap_or_default(), owner: None, codex_account: None }
         }
@@ -275,18 +320,7 @@ pub fn plan(w: &Where, facts: &dyn OpenFacts, project: &str, sid: &str, body: Ar
             Found { transcript, cwd: cwd.unwrap_or_default(), owner: None, codex_account: None }
         }
         AgentProvider::Codex => {
-            let service = crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::from_map(w.env.clone()));
-            let accounts = match body.codex_account.as_deref() {
-                Some(id) => service.resolve(crate::accounts::Provider::Codex, id).map(|a| vec![a]),
-                None => service.snapshot(crate::accounts::Provider::Codex),
-            }.map_err(|e| OpenError::new(e.status, e.code, e.message.clone()).with_params(e.params.clone()))?;
-            let all = service.snapshot(crate::accounts::Provider::Codex).map_err(|e| OpenError::new(e.status, e.code, e.message))?;
-            let (transcript, owner) = match codex_jsonl(&all, sid, body.codex_account.as_deref()) {
-                Ok(found) if accounts.iter().any(|a| a.id == found.1) => found,
-                Ok(_) => return Err(Miss::Absent.into()),
-                Err(miss) => return Err(miss.into()),
-            };
-            let home = all.iter().find(|a| a.id == owner).map(|a| a.home.clone()).unwrap_or_default();
+            let (transcript, owner, home) = codex_found(w, sid, body.codex_account.as_deref())?;
             if from_transfer(w.home, &home, sid) {
                 return Err(OpenError::new(409, "session_transfer_resume_unsupported",
                     "esta conversa veio de uma transferência do Claude para o Codex; retomá-la pelo Arquivo ainda não é possível"));
@@ -313,7 +347,8 @@ pub fn plan(w: &Where, facts: &dyn OpenFacts, project: &str, sid: &str, body: Ar
     }
     let config_dir = body.config_dir.clone().or_else(|| found.owner.clone());
     let request = SessionOpenRequest { name: Some(name), cwd: found.cwd.clone(), config_dir, provider: Some(provider.name().into()),
-        codex_account: found.codex_account.clone(), engine: body.engine, engine_account: body.engine_account, model: body.model,
+        codex_account: found.codex_account.clone(), account_bound: provider == AgentProvider::Codex,
+        engine: body.engine, engine_account: body.engine_account, model: body.model,
         headless: body.headless, ..Default::default() };
     Ok(Plan { request, found, provider, project: project.to_owned() })
 }
@@ -346,7 +381,9 @@ fn move_with(rename: &dyn Fn(&Path, &Path) -> std::io::Result<()>, server_projec
                 dst.join(&file).display(), src.join(sid).display());
             tracing::error!(back = %back, "{message}");
             let line = json!({"evento": "sessao.conversa_partida", "nivel": "erro", "codigo": "erro_mover_conversa", "detalhe": message});
-            crate::diag::record_blocking(crate::diag::diary_dir().as_deref(), &[line], "conversa partida");
+            // O teste deste caminho não suja o diário da máquina (as linhas com `/tmp/.tmp…` iam aos relatórios).
+            let diary = if cfg!(test) { None } else { crate::diag::diary_dir() };
+            crate::diag::record_blocking(diary.as_deref(), &[line], "conversa partida");
             return Err(OpenError::new(500, "erro_mover_conversa", message).with_params(json!({"erro": error.to_string()})));
         }
         return Err(failed(error));

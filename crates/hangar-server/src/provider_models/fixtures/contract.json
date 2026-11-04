@@ -1,0 +1,897 @@
+{
+  "source_commit": "d2a42410f9fe6df4ea491b296c7fea7b98d8b844",
+  "generator": "PYTHON=<Python com dependências do backend> bash crates/hangar-server/src/provider_models/fixtures/regenerate.sh <checkout da source_commit>",
+  "cases": [
+    {
+      "op": "parse_pi",
+      "input": "provider model ctx max thinking images\nkimi-coding k3 1M 384K yes yes\nclinepass cline-pass/glm-5.2 200K 12K yes no\n",
+      "expected": {
+        "ok": [
+          {
+            "provider": "kimi-coding",
+            "id": "k3",
+            "context": "1M",
+            "max_out": "384K",
+            "thinking": true,
+            "images": true
+          },
+          {
+            "provider": "clinepass",
+            "id": "cline-pass/glm-5.2",
+            "context": "200K",
+            "max_out": "12K",
+            "thinking": true,
+            "images": false
+          }
+        ]
+      }
+    },
+    {
+      "op": "parse_pi",
+      "input": "lixo\n",
+      "expected": {
+        "ok": []
+      }
+    },
+    {
+      "op": "parse_pi",
+      "input": "provider model ctx max thinking images cost\na b c d yes no 2",
+      "expected": {
+        "ok": []
+      }
+    },
+    {
+      "op": "parse_pi",
+      "input": "p m 1M 1K no yes\np2 m2 10�K 4K yes no",
+      "expected": {
+        "ok": [
+          {
+            "provider": "p",
+            "id": "m",
+            "context": "1M",
+            "max_out": "1K",
+            "thinking": false,
+            "images": true
+          },
+          {
+            "provider": "p2",
+            "id": "m2",
+            "context": "10�K",
+            "max_out": "4K",
+            "thinking": true,
+            "images": false
+          }
+        ]
+      }
+    },
+    {
+      "op": "parse_omp",
+      "input": "{\"models\":[{\"provider\":\"p\",\"id\":\"m\",\"contextWindow\":1000000,\"maxTokens\":384000,\"thinking\":[\"low\"],\"input\":[\"image\"]},{\"provider\":\"q\",\"id\":\"x/y\",\"contextWindow\":\"1M\",\"thinking\":[],\"input\":[\"text\"]}]}",
+      "expected": {
+        "ok": [
+          {
+            "provider": "p",
+            "id": "m",
+            "context": "1M",
+            "max_out": "384K",
+            "thinking": true,
+            "images": true
+          },
+          {
+            "provider": "q",
+            "id": "x/y",
+            "context": "0",
+            "max_out": "0",
+            "thinking": false,
+            "images": false
+          }
+        ]
+      }
+    },
+    {
+      "op": "parse_omp",
+      "input": "[]",
+      "expected": {
+        "ok": []
+      }
+    },
+    {
+      "op": "parse_omp",
+      "input": "bad",
+      "expected": {
+        "ok": []
+      }
+    },
+    {
+      "op": "parse_omp",
+      "input": "{\"models\":[null,{},\"x\",{\"provider\":\"p\",\"id\":\"m\",\"contextWindow\":null,\"maxTokens\":true}]}",
+      "expected": {
+        "ok": [
+          {
+            "provider": "p",
+            "id": "m",
+            "context": "0",
+            "max_out": "1",
+            "thinking": false,
+            "images": false
+          }
+        ]
+      }
+    },
+    {
+      "op": "model_command",
+      "input": [
+        "clinepass",
+        "cline-pass/glm-5.2"
+      ],
+      "expected": {
+        "ok": "/cp-model clinepass cline-pass/glm-5.2"
+      }
+    },
+    {
+      "op": "model_command",
+      "input": [
+        " p ",
+        " m "
+      ],
+      "expected": {
+        "ok": "/cp-model p m"
+      }
+    },
+    {
+      "op": "model_command",
+      "input": [
+        "p",
+        "m\nEnter"
+      ],
+      "expected": {
+        "error": {
+          "status": 422,
+          "detail": "model invalido: 'm\\nEnter'"
+        }
+      }
+    },
+    {
+      "op": "model_command",
+      "input": [
+        "p",
+        "x y"
+      ],
+      "expected": {
+        "error": {
+          "status": 422,
+          "detail": "model invalido: 'x y'"
+        }
+      }
+    },
+    {
+      "op": "model_command",
+      "input": [
+        "",
+        "x"
+      ],
+      "expected": {
+        "error": {
+          "status": 422,
+          "detail": "provider invalido: ''"
+        }
+      }
+    },
+    {
+      "op": "model_command",
+      "input": [
+        "p",
+        "x\u001b"
+      ],
+      "expected": {
+        "error": {
+          "status": 422,
+          "detail": "model invalido: 'x\\x1b'"
+        }
+      }
+    },
+    {
+      "op": "think_command",
+      "input": " XHigh ",
+      "expected": {
+        "ok": "/cp-think xhigh"
+      }
+    },
+    {
+      "op": "think_command",
+      "input": "max",
+      "expected": {
+        "ok": "/cp-think max"
+      }
+    },
+    {
+      "op": "think_command",
+      "input": "ultracode",
+      "expected": {
+        "error": {
+          "status": 422,
+          "detail": "nivel desconhecido: 'ultracode'"
+        }
+      }
+    },
+    {
+      "op": "think_command",
+      "input": "",
+      "expected": {
+        "error": {
+          "status": 422,
+          "detail": "nivel desconhecido: ''"
+        }
+      }
+    },
+    {
+      "op": "think_command",
+      "input": "\tlow\n",
+      "expected": {
+        "ok": "/cp-think low"
+      }
+    },
+    {
+      "op": "confirms",
+      "input": [
+        {
+          "current": {
+            "provider": "kimi-coding",
+            "id": "k3",
+            "name": "Kimi K3"
+          },
+          "thinking": "low",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ],
+          "models": [
+            {
+              "provider": "kimi-coding",
+              "id": "k3",
+              "name": "Kimi K3",
+              "reasoning": true
+            },
+            {
+              "provider": "kimi-coding",
+              "id": "k3-256k",
+              "name": "Kimi K3-256K",
+              "reasoning": true
+            },
+            {
+              "provider": "kimi-coding",
+              "id": "kimi-for-coding",
+              "name": "Kimi K2.7 Code",
+              "reasoning": true
+            },
+            {
+              "provider": "kimi-coding",
+              "id": "kimi-for-coding-highspeed",
+              "name": "Kimi For Coding HighSpeed",
+              "reasoning": true
+            },
+            {
+              "provider": "clinepass",
+              "id": "cline-pass/glm-5.2",
+              "name": "GLM-5.2 (ClinePass)",
+              "reasoning": true
+            }
+          ],
+          "ts": 1785203739.733
+        },
+        "kimi-coding",
+        "k3",
+        null
+      ],
+      "expected": {
+        "ok": true
+      }
+    },
+    {
+      "op": "confirms",
+      "input": [
+        {
+          "current": {
+            "provider": "kimi-coding",
+            "id": "k3",
+            "name": "Kimi K3"
+          },
+          "thinking": "low",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ],
+          "models": [
+            {
+              "provider": "kimi-coding",
+              "id": "k3",
+              "name": "Kimi K3",
+              "reasoning": true
+            },
+            {
+              "provider": "kimi-coding",
+              "id": "k3-256k",
+              "name": "Kimi K3-256K",
+              "reasoning": true
+            },
+            {
+              "provider": "kimi-coding",
+              "id": "kimi-for-coding",
+              "name": "Kimi K2.7 Code",
+              "reasoning": true
+            },
+            {
+              "provider": "kimi-coding",
+              "id": "kimi-for-coding-highspeed",
+              "name": "Kimi For Coding HighSpeed",
+              "reasoning": true
+            },
+            {
+              "provider": "clinepass",
+              "id": "cline-pass/glm-5.2",
+              "name": "GLM-5.2 (ClinePass)",
+              "reasoning": true
+            }
+          ],
+          "ts": 1785203739.733
+        },
+        "other",
+        "k3",
+        null
+      ],
+      "expected": {
+        "ok": false
+      }
+    },
+    {
+      "op": "confirms",
+      "input": [
+        {
+          "current": {
+            "provider": "kimi-coding",
+            "id": "k3",
+            "name": "Kimi K3"
+          },
+          "thinking": "low",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ],
+          "models": [
+            {
+              "provider": "kimi-coding",
+              "id": "k3",
+              "name": "Kimi K3",
+              "reasoning": true
+            },
+            {
+              "provider": "kimi-coding",
+              "id": "k3-256k",
+              "name": "Kimi K3-256K",
+              "reasoning": true
+            },
+            {
+              "provider": "kimi-coding",
+              "id": "kimi-for-coding",
+              "name": "Kimi K2.7 Code",
+              "reasoning": true
+            },
+            {
+              "provider": "kimi-coding",
+              "id": "kimi-for-coding-highspeed",
+              "name": "Kimi For Coding HighSpeed",
+              "reasoning": true
+            },
+            {
+              "provider": "clinepass",
+              "id": "cline-pass/glm-5.2",
+              "name": "GLM-5.2 (ClinePass)",
+              "reasoning": true
+            }
+          ],
+          "ts": 1785203739.733
+        },
+        null,
+        null,
+        "xhigh"
+      ],
+      "expected": {
+        "ok": true
+      }
+    },
+    {
+      "op": "confirms",
+      "input": [
+        {
+          "current": {
+            "provider": "kimi-coding",
+            "id": "k3",
+            "name": "Kimi K3"
+          },
+          "thinking": "low",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ],
+          "models": [
+            {
+              "provider": "kimi-coding",
+              "id": "k3",
+              "name": "Kimi K3",
+              "reasoning": true
+            },
+            {
+              "provider": "kimi-coding",
+              "id": "k3-256k",
+              "name": "Kimi K3-256K",
+              "reasoning": true
+            },
+            {
+              "provider": "kimi-coding",
+              "id": "kimi-for-coding",
+              "name": "Kimi K2.7 Code",
+              "reasoning": true
+            },
+            {
+              "provider": "kimi-coding",
+              "id": "kimi-for-coding-highspeed",
+              "name": "Kimi For Coding HighSpeed",
+              "reasoning": true
+            },
+            {
+              "provider": "clinepass",
+              "id": "cline-pass/glm-5.2",
+              "name": "GLM-5.2 (ClinePass)",
+              "reasoning": true
+            }
+          ],
+          "ts": 1785203739.733
+        },
+        null,
+        null,
+        "high"
+      ],
+      "expected": {
+        "ok": false
+      }
+    },
+    {
+      "op": "confirms",
+      "input": [
+        {
+          "current": {
+            "provider": "kimi-coding",
+            "id": "k3",
+            "name": "Kimi K3"
+          },
+          "thinking": "low",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ],
+          "models": [
+            {
+              "provider": "kimi-coding",
+              "id": "k3",
+              "name": "Kimi K3",
+              "reasoning": true
+            },
+            {
+              "provider": "kimi-coding",
+              "id": "k3-256k",
+              "name": "Kimi K3-256K",
+              "reasoning": true
+            },
+            {
+              "provider": "kimi-coding",
+              "id": "kimi-for-coding",
+              "name": "Kimi K2.7 Code",
+              "reasoning": true
+            },
+            {
+              "provider": "kimi-coding",
+              "id": "kimi-for-coding-highspeed",
+              "name": "Kimi For Coding HighSpeed",
+              "reasoning": true
+            },
+            {
+              "provider": "clinepass",
+              "id": "cline-pass/glm-5.2",
+              "name": "GLM-5.2 (ClinePass)",
+              "reasoning": true
+            }
+          ],
+          "ts": 1785203739.733
+        },
+        null,
+        null,
+        "low"
+      ],
+      "expected": {
+        "ok": true
+      }
+    },
+    {
+      "op": "confirms",
+      "input": [
+        {
+          "models": []
+        },
+        null,
+        null,
+        "max"
+      ],
+      "expected": {
+        "ok": true
+      }
+    },
+    {
+      "op": "parse_switched",
+      "input": "none",
+      "expected": {
+        "ok": null
+      }
+    },
+    {
+      "op": "parse_thinking_set",
+      "input": "none",
+      "expected": {
+        "ok": null
+      }
+    },
+    {
+      "op": "parse_thinking_row",
+      "input": "none",
+      "expected": {
+        "ok": null
+      }
+    },
+    {
+      "op": "parse_switched",
+      "input": "  Switched to K3 with thinking high for this session only.\n",
+      "expected": {
+        "ok": {
+          "name": "K3",
+          "level": "high",
+          "session_only": true,
+          "raw": "Switched to K3 with thinking high for this session only."
+        }
+      }
+    },
+    {
+      "op": "parse_thinking_set",
+      "input": "  Switched to K3 with thinking high for this session only.\n",
+      "expected": {
+        "ok": null
+      }
+    },
+    {
+      "op": "parse_thinking_row",
+      "input": "  Switched to K3 with thinking high for this session only.\n",
+      "expected": {
+        "ok": null
+      }
+    },
+    {
+      "op": "parse_switched",
+      "input": " Switched to X with thinking low.\n Switched to K3-256k with thinking max for this session only.\n",
+      "expected": {
+        "ok": {
+          "name": "K3-256k",
+          "level": "max",
+          "session_only": true,
+          "raw": "Switched to K3-256k with thinking max for this session only."
+        }
+      }
+    },
+    {
+      "op": "parse_thinking_set",
+      "input": " Switched to X with thinking low.\n Switched to K3-256k with thinking max for this session only.\n",
+      "expected": {
+        "ok": null
+      }
+    },
+    {
+      "op": "parse_thinking_row",
+      "input": " Switched to X with thinking low.\n Switched to K3-256k with thinking max for this session only.\n",
+      "expected": {
+        "ok": null
+      }
+    },
+    {
+      "op": "parse_switched",
+      "input": " Thinking set to low for this session only.\n",
+      "expected": {
+        "ok": null
+      }
+    },
+    {
+      "op": "parse_thinking_set",
+      "input": " Thinking set to low for this session only.\n",
+      "expected": {
+        "ok": {
+          "level": "low",
+          "raw": "Thinking set to low for this session only."
+        }
+      }
+    },
+    {
+      "op": "parse_thinking_row",
+      "input": " Thinking set to low for this session only.\n",
+      "expected": {
+        "ok": null
+      }
+    },
+    {
+      "op": "parse_switched",
+      "input": " Thinking (←→ to switch)\nLow [ High ] Max\n",
+      "expected": {
+        "ok": null
+      }
+    },
+    {
+      "op": "parse_thinking_set",
+      "input": " Thinking (←→ to switch)\nLow [ High ] Max\n",
+      "expected": {
+        "ok": null
+      }
+    },
+    {
+      "op": "parse_thinking_row",
+      "input": " Thinking (←→ to switch)\nLow [ High ] Max\n",
+      "expected": {
+        "ok": {
+          "levels": [
+            "Low",
+            "High",
+            "Max"
+          ],
+          "current": "High"
+        }
+      }
+    },
+    {
+      "op": "parse_switched",
+      "input": "Thinking (←→ to switch)\nblank\n[ Low ] High\n",
+      "expected": {
+        "ok": null
+      }
+    },
+    {
+      "op": "parse_thinking_set",
+      "input": "Thinking (←→ to switch)\nblank\n[ Low ] High\n",
+      "expected": {
+        "ok": null
+      }
+    },
+    {
+      "op": "parse_thinking_row",
+      "input": "Thinking (←→ to switch)\nblank\n[ Low ] High\n",
+      "expected": {
+        "ok": {
+          "levels": [
+            "Low",
+            "High"
+          ],
+          "current": "Low"
+        }
+      }
+    },
+    {
+      "op": "parse_switched",
+      "input": "Thinking (←→ to switch)\na\nb\n[ Low ] High\n",
+      "expected": {
+        "ok": null
+      }
+    },
+    {
+      "op": "parse_thinking_set",
+      "input": "Thinking (←→ to switch)\na\nb\n[ Low ] High\n",
+      "expected": {
+        "ok": null
+      }
+    },
+    {
+      "op": "parse_thinking_row",
+      "input": "Thinking (←→ to switch)\na\nb\n[ Low ] High\n",
+      "expected": {
+        "ok": null
+      }
+    },
+    {
+      "op": "clean_alias",
+      "input": " apikey/k3 ",
+      "expected": {
+        "ok": "apikey/k3"
+      }
+    },
+    {
+      "op": "clean_alias",
+      "input": "x y",
+      "expected": {
+        "error": {
+          "status": 422,
+          "detail": "alias invalido: 'x y'"
+        }
+      }
+    },
+    {
+      "op": "clean_alias",
+      "input": "k3\n4",
+      "expected": {
+        "error": {
+          "status": 422,
+          "detail": "alias invalido: 'k3\\n4'"
+        }
+      }
+    },
+    {
+      "op": "clean_alias",
+      "input": "\u001bk3",
+      "expected": {
+        "error": {
+          "status": 422,
+          "detail": "alias invalido: '\\x1bk3'"
+        }
+      }
+    },
+    {
+      "op": "clean_alias",
+      "input": "k3\n",
+      "expected": {
+        "ok": "k3"
+      }
+    },
+    {
+      "op": "clean_alias",
+      "input": "",
+      "expected": {
+        "error": {
+          "status": 422,
+          "detail": "alias invalido: ''"
+        }
+      }
+    },
+    {
+      "op": "kimi_catalog",
+      "input": "\ndefault_model = \"apikey/k3\"\n\n[thinking]\nenabled = true\neffort = \"high\"\n\n[models.\"apikey/k3\"]\nmodel = \"k3\"\ndisplay_name = \"K3\"\nmax_context_size = 1048576\nsupport_efforts = [ \"low\", \"high\", \"max\" ]\ndefault_effort = \"high\"\n\n[models.\"apikey/k3-256k\"]\nmodel = \"k3-256k\"\ndisplay_name = \"K3-256k\"\nmax_context_size = 262144\nsupport_efforts = [ \"low\", \"high\", \"max\" ]\ndefault_effort = \"high\"\n\n[models.\"kimi-code/kimi-for-coding\"]\nmodel = \"kimi-for-coding\"\ndisplay_name = \"K2.7 Coding\"\nmax_context_size = 262144\n",
+      "expected": {
+        "ok": {
+          "default": "apikey/k3",
+          "models": [
+            {
+              "alias": "apikey/k3",
+              "provider": "apikey",
+              "id": "k3",
+              "name": "K3",
+              "context_length": 1048576,
+              "efforts": [
+                "low",
+                "high",
+                "max"
+              ],
+              "default_effort": "high"
+            },
+            {
+              "alias": "apikey/k3-256k",
+              "provider": "apikey",
+              "id": "k3-256k",
+              "name": "K3-256k",
+              "context_length": 262144,
+              "efforts": [
+                "low",
+                "high",
+                "max"
+              ],
+              "default_effort": "high"
+            },
+            {
+              "alias": "kimi-code/kimi-for-coding",
+              "provider": "kimi-code",
+              "id": "kimi-for-coding",
+              "name": "K2.7 Coding",
+              "context_length": 262144,
+              "efforts": [],
+              "default_effort": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "op": "kimi_catalog",
+      "input": "default_model=\"p/m\"",
+      "expected": {
+        "ok": null
+      }
+    },
+    {
+      "op": "kimi_catalog",
+      "input": "[models.\"p/m\"]\nmodel=\"\"\ndisplay_name=\"\"\n",
+      "expected": {
+        "ok": {
+          "default": null,
+          "models": [
+            {
+              "alias": "p/m",
+              "provider": "p",
+              "id": "m",
+              "name": "m",
+              "context_length": null,
+              "efforts": [],
+              "default_effort": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "op": "kimi_catalog",
+      "input": "[models]\nnot_table=1",
+      "expected": {
+        "ok": {
+          "default": null,
+          "models": []
+        }
+      }
+    },
+    {
+      "op": "kimi_catalog",
+      "input": "bad [[[",
+      "expected": {
+        "ok": null
+      }
+    }
+  ],
+  "sidecar": {
+    "current": {
+      "provider": "kimi-coding",
+      "id": "k3",
+      "name": "Kimi K3"
+    },
+    "thinking": "low",
+    "levels": [
+      "low",
+      "high",
+      "max"
+    ],
+    "models": [
+      {
+        "provider": "kimi-coding",
+        "id": "k3",
+        "name": "Kimi K3",
+        "reasoning": true
+      },
+      {
+        "provider": "kimi-coding",
+        "id": "k3-256k",
+        "name": "Kimi K3-256K",
+        "reasoning": true
+      },
+      {
+        "provider": "kimi-coding",
+        "id": "kimi-for-coding",
+        "name": "Kimi K2.7 Code",
+        "reasoning": true
+      },
+      {
+        "provider": "kimi-coding",
+        "id": "kimi-for-coding-highspeed",
+        "name": "Kimi For Coding HighSpeed",
+        "reasoning": true
+      },
+      {
+        "provider": "clinepass",
+        "id": "cline-pass/glm-5.2",
+        "name": "GLM-5.2 (ClinePass)",
+        "reasoning": true
+      }
+    ],
+    "ts": 1785203739.733
+  }
+}

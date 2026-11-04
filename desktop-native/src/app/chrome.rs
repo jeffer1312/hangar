@@ -791,23 +791,23 @@ pub fn meter(pct: f64) -> AnyElement {
 /// Anel de uso do rodapé (caixa de 16 px, anel de 14, traço 2), com a cor do `meter`. Só quads: o `PathBuilder` soma
 /// alfa na janela transparente. O trilho é um quad só de borda, na tinta do texto para aparecer sobre qualquer fundo; o
 /// arco, pontos redondos opacos que se cobrem. Sem dado, só o trilho.
-pub fn ring(pct: Option<f64>) -> AnyElement {
-    const SIZE: f32 = 16.;
-    const RING: f32 = 14.;
-    const STROKE: f32 = 2.;
+pub fn ring(pct: Option<f64>) -> AnyElement { ring_sized(pct, 16., 14., 2.) }
+
+/// O mesmo anel em outra medida: `side` é a caixa, `diameter` o anel e `stroke` o traço.
+pub fn ring_sized(pct: Option<f64>, side: f32, diameter: f32, stroke: f32) -> AnyElement {
     let track = theme::text().opacity(0.16);
     let arc = pct.map(|pct| (pct.clamp(0., 100.) as f32 / 100., meter_color(pct)));
-    div().size(px(SIZE)).flex_shrink_0().child(canvas(|_, _, _| (), move |bounds, _, window, _| {
-        let ring = Bounds::centered_at(bounds.center(), size(px(RING), px(RING)));
-        window.paint_quad(outline(ring, track, BorderStyle::Solid).border_widths(px(STROKE)).corner_radii(px(RING / 2.)));
+    div().size(px(side)).flex_shrink_0().child(canvas(|_, _, _| (), move |bounds, _, window, _| {
+        let ring = Bounds::centered_at(bounds.center(), size(px(diameter), px(diameter)));
+        window.paint_quad(outline(ring, track, BorderStyle::Solid).border_widths(px(stroke)).corner_radii(px(diameter / 2.)));
         let Some((share, color)) = arc.filter(|(share, _)| *share > 0.) else { return };
-        let (center, radius) = (bounds.center(), (RING - STROKE) / 2.);
+        let (center, radius) = (bounds.center(), (diameter - stroke) / 2.);
         // Um ponto a cada meio pixel de arco, do topo em sentido horário.
         let steps = (std::f32::consts::TAU * radius * share / 0.5).ceil().max(1.) as usize;
         for step in 0..=steps {
             let angle = std::f32::consts::TAU * share * step as f32 / steps as f32 - std::f32::consts::FRAC_PI_2;
             let at = point(center.x + px(radius * angle.cos()), center.y + px(radius * angle.sin()));
-            window.paint_quad(fill(Bounds::centered_at(at, size(px(STROKE), px(STROKE))), color).corner_radii(px(STROKE / 2.)));
+            window.paint_quad(fill(Bounds::centered_at(at, size(px(stroke), px(stroke))), color).corner_radii(px(stroke / 2.)));
         }
     }).size_full()).into_any_element()
 }

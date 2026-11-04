@@ -134,9 +134,31 @@ pub(super) enum CallActivity { #[default] Idle, Thinking, Searching, Working }
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum OrganizerAction { Tool(String), Search(String), Command(String) }
 
-/// Uma linha dos bastidores: o que chegou ao organizador e o que ele respondeu.
+/// Uma linha dos bastidores: fala dele, da voz, o que chegou ao organizador e o que ele respondeu.
 #[derive(Clone, Debug, PartialEq)]
-pub(super) enum Backstage { Heard(String), Result(String), Answer(String) }
+pub(super) enum Backstage { Heard(String), Result(String), Answer(String), You(String), Voice(String) }
+
+/// `at`: ms em que a fala começou (servidor antigo não manda); `live`: ainda chegando.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct BackstageLine { pub(super) line: Backstage, at: Option<i64>, live: bool }
+
+/// Hora local HH:MM:SS de uma linha.
+fn backstage_clock(at: i64) -> String {
+    use chrono::TimeZone;
+    chrono::Local.timestamp_millis_opt(at).single().map(|t| t.format("%H:%M:%S").to_string()).unwrap_or_default()
+}
+
+/// Quem fala a linha.
+fn backstage_label(line: &Backstage) -> String {
+    match line {
+        Backstage::You(_) => tr("voice_backstage_you"),
+        Backstage::Voice(_) => tr("voice_backstage_voice"),
+        Backstage::Heard(_) => tr("voice_backstage_heard"),
+        Backstage::Answer(_) => tr("voice_backstage_answer"),
+        Backstage::Result(session) if session.is_empty() => tr("voice_backstage_answer_session"),
+        Backstage::Result(session) => tr("voice_backstage_result").replace("{session}", session),
+    }
+}
 
 /// Modelo, esforço e velocidade que o organizador usa de fato.
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -156,13 +178,16 @@ fn parse_action(value: &Value) -> Option<OrganizerAction> {
     }
 }
 
-fn parse_backstage(value: &Value) -> Option<Backstage> {
-    match kind_text(value)? {
-        ("heard", text) => Some(Backstage::Heard(text)),
-        ("result", text) => Some(Backstage::Result(text)),
-        ("answer", text) => Some(Backstage::Answer(text)),
-        _ => None,
-    }
+fn parse_backstage(value: &Value) -> Option<BackstageLine> {
+    let line = match kind_text(value)? {
+        ("heard", text) => Backstage::Heard(text),
+        ("result", text) => Backstage::Result(text),
+        ("answer", text) => Backstage::Answer(text),
+        ("you", text) => Backstage::You(text),
+        ("voice", text) => Backstage::Voice(text),
+        _ => return None,
+    };
+    Some(BackstageLine { line, at: value["at"].as_i64(), live: value["live"].as_bool().unwrap_or(false) })
 }
 
 fn rate_window(value: &Value) -> RateWindow { Some((value["used_percent"].as_f64()?, value["resets_at"].as_i64())) }
@@ -250,7 +275,7 @@ pub(super) struct VoiceUi {
     pub(super) followed: Vec<String>,
     pub(super) effective: Option<Effective>,
     /// Do mais velho ao mais novo.
-    pub(super) backstage: Vec<Backstage>,
+    pub(super) backstage: Vec<BackstageLine>,
     pub(super) backstage_open: bool,
     pub(super) backstage_scroll: ScrollHandle,
     pub(super) mode: Mode,
@@ -1009,7 +1034,13 @@ impl Hangar {
         self.voice.effective = serde_json::from_value(state["effective"].clone()).ok().flatten();
         self.voice.context = state["context"]["used"].as_u64().map(|used| (used, state["context"]["window"].as_u64()));
         (self.voice.five_hour, self.voice.seven_day) = (rate_window(&state["limits"]["five_hour"]), rate_window(&state["limits"]["seven_day"]));
-        self.voice.backstage = state["backstage"].as_array().into_iter().flatten().filter_map(parse_backstage).collect();
+        let backstage: Vec<BackstageLine> = state["backstage"].as_array().into_iter().flatten().filter_map(parse_backstage).collect();
+        if backstage != self.voice.backstage {
+            // Quem lia o fim continua no fim; quem subiu para ler o começo não é puxado.
+            let scroll = &self.voice.backstage_scroll;
+            if scroll.max_offset().y + scroll.offset().y < px(40.) { scroll.scroll_to_bottom(); }
+            self.voice.backstage = backstage;
+        }
         self.voice.thought = text(&state["thought"]).unwrap_or_default();
         self.voice.action = parse_action(&state["action"]);
         self.voice.progress = text(&state["progress"]).filter(|p| !p.trim().is_empty());
@@ -1394,7 +1425,7 @@ impl Hangar {
         Some(tr("voice_following").replace("{sessions}", &names.join(", ")))
     }
 
-    /// Bastidores: o que chegou ao organizador e o que ele respondeu, do mais novo para o mais velho.
+    /// Bastidores: a conversa e o trabalho do organizador na ordem em que aconteceram, cada linha com quem e quando.
     fn render_backstage(&self, cx: &mut Context<Self>) -> AnyElement {
         let open = self.voice.backstage_open;
         let toggle = Button::new("voice-backstage-toggle").ghost().small().w_full().toggled(open)
@@ -1404,22 +1435,27 @@ impl Hangar {
             .on_click(cx.listener(move |this, _, _, cx| { this.voice.backstage_open = !open; cx.notify(); }));
         let block = div().flex().flex_col().gap(px(2.)).child(toggle);
         if !open { return block.into_any_element(); }
-        let lines: Vec<AnyElement> = self.voice.backstage.iter().rev().map(|line| {
-            let (label, text, color) = match line {
-                Backstage::Heard(text) => (tr("voice_backstage_heard"), text.clone(), theme::accent()),
-                Backstage::Result(session) if session.is_empty() => (tr("voice_backstage_answer_session"), String::new(), theme::warning()),
-                Backstage::Result(session) => (tr("voice_backstage_result").replace("{session}", session), String::new(), theme::warning()),
-                Backstage::Answer(text) => (tr("voice_backstage_answer"), text.clone(), theme::success()),
+        let lines: Vec<AnyElement> = self.voice.backstage.iter().map(|b| {
+            let (text, color, body) = match &b.line {
+                Backstage::You(text) => (text.as_str(), theme::accent(), theme::text()),
+                Backstage::Voice(text) => (text.as_str(), theme::success(), theme::text()),
+                Backstage::Heard(text) => (text.as_str(), theme::muted(), theme::muted()),
+                Backstage::Answer(text) => (text.as_str(), theme::text(), theme::text()),
+                // O texto do resultado é só o nome da sessão, que já vai no rótulo.
+                Backstage::Result(_) => ("", theme::warning(), theme::text()),
             };
-            div().flex().flex_col().gap(px(1.)).py(px(3.))
-                .child(div().text_size(px(10.5)).font_weight(FontWeight::MEDIUM).text_color(color).child(label))
-                .when(!text.is_empty(), |el| el.child(div().text_xs().text_color(theme::text()).whitespace_normal().child(clip(text.trim(), 600))))
+            let head = div().flex().flex_wrap().items_baseline().gap_x(px(6.))
+                .child(div().text_size(px(10.5)).font_weight(FontWeight::SEMIBOLD).text_color(color).child(backstage_label(&b.line)))
+                .when_some(b.at, |el, at| el.child(div().text_size(px(10.)).text_color(theme::faint()).child(backstage_clock(at))))
+                .when(b.live, |el| el.child(div().text_size(px(10.)).text_color(theme::faint()).child(tr("voice_backstage_live"))));
+            div().flex().flex_col().gap(px(1.)).py(px(4.)).child(head)
+                .when(!text.trim().is_empty(), |el| el.child(div().text_xs().text_color(body).whitespace_normal().child(text.trim().to_owned())))
                 .into_any_element()
         }).collect();
         let content = if lines.is_empty() {
             div().px(px(8.)).text_xs().text_color(theme::faint()).whitespace_normal().child(tr("voice_backstage_empty")).into_any_element()
         } else {
-            scrolled("voice-backstage-scroll", &self.voice.backstage_scroll, 220., div().px(px(8.)).flex().flex_col().children(lines))
+            scrolled("voice-backstage-scroll", &self.voice.backstage_scroll, 320., div().px(px(8.)).flex().flex_col().children(lines))
         };
         block.child(content).into_any_element()
     }
@@ -1791,7 +1827,17 @@ mod tests {
     fn state_pieces_read_the_server_snapshot() {
         assert_eq!(parse_action(&json!({"kind": "search", "text": "gpui"})), Some(OrganizerAction::Search("gpui".into())));
         assert_eq!(parse_action(&Value::Null), None);
-        assert_eq!(parse_backstage(&json!({"kind": "result", "text": "web"})), Some(Backstage::Result("web".into())));
+        assert_eq!(parse_backstage(&json!({"kind": "result", "text": "web"})), Some(BackstageLine { line: Backstage::Result("web".into()), at: None, live: false }));
+        assert_eq!(parse_backstage(&json!({"kind": "you", "text": "oi", "at": 1000, "live": true})),
+            Some(BackstageLine { line: Backstage::You("oi".into()), at: Some(1000), live: true }));
+        assert_eq!(parse_backstage(&json!({"kind": "voice", "text": "Pode falar."})).map(|b| b.line), Some(Backstage::Voice("Pode falar.".into())));
+        assert_eq!(parse_backstage(&json!({"kind": "futuro", "text": "x"})), None);
+        use chrono::TimeZone;
+        let at = chrono::Local.with_ymd_and_hms(2026, 10, 28, 16, 12, 6).unwrap().timestamp_millis();
+        assert_eq!(backstage_clock(at), "16:12:06");
+        assert_eq!(backstage_label(&Backstage::You("x".into())), tr("voice_backstage_you"));
+        assert_eq!(backstage_label(&Backstage::Answer("x".into())), tr("voice_backstage_answer"));
+        assert_eq!(backstage_label(&Backstage::Result("web".into())), tr("voice_backstage_result").replace("{session}", "web"));
         assert_eq!(rate_window(&json!({"used_percent": 12.5, "resets_at": 1000})), Some((12.5, Some(1000))));
         assert_eq!(rate_window(&Value::Null), None);
     }

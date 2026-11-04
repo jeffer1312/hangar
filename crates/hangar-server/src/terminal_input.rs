@@ -171,7 +171,7 @@ impl Default for ProcessIo { fn default() -> Self { Self { command_timeout: Dura
 pub(crate) fn child_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     let mut command = Command::new(program);
     // O multiplexador e o clipboard não recebem a autoridade privada do servidor.
-    for name in ["HANGAR_INTERNAL_SECRET", "HANGAR_RUNTIME_INSTANCE", "CP_AUTH_TOKEN"] { command.env_remove(name); }
+    for name in ["HANGAR_INTERNAL_SECRET", "HANGAR_RUNTIME_INSTANCE", "HANGAR_AUTH_CONTEXT", "CP_AUTH_TOKEN"] { command.env_remove(name); }
     command
 }
 /// Observador tmux somente de leitura herdado pelo `send-keys`: a recusa vem antes de qualquer tecla,
@@ -293,6 +293,7 @@ static AGENT_ROW: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*(?:❯\s+)
 // Sem `#`: anexo (`[Image #1]`) nunca passa por dica.
 static ARG_HINT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(?:\[[^\[\]#]*\]|<[^<>#]*>)$").unwrap());
 static NEXT_BUFFER: AtomicU64 = AtomicU64::new(0);
+const CLEANUP_CEILING: usize = 200;
 fn compact(text: &str) -> String { text.chars().filter(|c| !c.is_whitespace() && !"│┃║".contains(*c)).collect() }
 /// O Claude marca `› stashed` na linha de dicas acima do composer enquanto guarda um rascunho.
 fn stash_held(screen: &str) -> bool {
@@ -625,9 +626,7 @@ impl TerminalDriver {
             let facts = self.verify().await?;
             let (screen, typed) = self.composer_capture().await?;
             let composer = Self::composer(&screen, &typed)?;
-            let owned = guard.allow_owned && guard.input.is_some_and(|(text,before)| composer.owned(text,before)
-                || !composer.content.is_empty() && (compact(text).starts_with(&compact(&composer.content))
-                    || self.binding.windows && text.starts_with('-') && format!("x{}",compact(text)).starts_with(&compact(&composer.content))));
+            let owned = guard.allow_owned && guard.input.is_some_and(|(text,before)| self.ours(&composer,text,before));
             if !facts.ready || facts.open_question || crate::terminal_state::analyze(&screen).state == "awaiting_input"
                 || crate::terminal_state::footer_visible(&screen) || !composer.is_empty() && !owned {
                 return Err(failure(InteractionError::Changed));
@@ -748,11 +747,13 @@ impl TerminalDriver {
     }
     /// Só leitura: composer legível e vazio, então uma entrega adiada pode tentar já. Quem chama
     /// acabou de conferir a conversa pelos fatos; aqui basta o mesmo pane.
-    pub async fn composer_free(&self) -> bool {
+    pub async fn composer_free(&self) -> bool { self.composer_empty().await == Some(true) }
+    /// O campo vazio ou não, conferindo só o pane; `None` quando não se lê.
+    pub async fn composer_empty(&self) -> Option<bool> {
         let _serial = self.serial.lock().await;
-        if self.verify_pane().await.is_err() { return false; }
-        let Ok((screen, typed)) = self.composer_capture_unverified().await else { return false };
-        Self::composer(&screen, &typed).is_ok_and(|draft| draft.is_empty())
+        self.verify_pane().await.ok()?;
+        let (screen, typed) = self.composer_capture_unverified().await.ok()?;
+        Self::composer(&screen, &typed).ok().map(|draft| draft.is_empty())
     }
     async fn settle(&self) { tokio::time::sleep(self.limits.settle).await; }
     async fn key_inner(&self, key: &str) -> Result<(), IoFailure> { self.key_guarded(key, None).await }
@@ -926,10 +927,22 @@ impl TerminalDriver {
     async fn prove_input(&self, text: &str, before: &ComposerSnapshot) -> bool {
         // A primeira leitura vem logo depois do `literal_settle` que a escrita já esperou; a espera fica
         // entre as tentativas. A prova é a mesma: só o texto presente passa.
+        let mut last_unread = None;
         for attempt in 0..self.limits.proof_attempts.max(1) {
             if attempt > 0 { self.settle().await; }
-            let Ok(now) = self.snapshot().await else { return false; };
-            if now.proves(text, before) == Proof::Present { return true; }
+            match self.snapshot().await {
+                Ok(now) if now.proves(text, before) == Proof::Present => return true,
+                Ok(_) => last_unread = None,
+                // Tela ainda redesenhando (o TUI recém-retomado): a leitura volta dentro da mesma janela.
+                Err(error) if matches!(error.code, "composer_unreadable" | "overlay" | "footer_focus") => last_unread = Some(error.code),
+                Err(error) => {
+                    tracing::warn!(code = "input_proof_read_failed", reason = error.code, "prova da entrada encerrada por leitura que falhou");
+                    return false;
+                }
+            }
+        }
+        if let Some(reason) = last_unread {
+            tracing::warn!(code = "input_proof_read_failed", reason, "prova da entrada sem leitura do composer até o fim do prazo");
         }
         false
     }
@@ -964,7 +977,9 @@ impl TerminalDriver {
         if !output.success { return Err(IoFailure { code: "mux_effect_failed", may_have_written: true }); }
         Ok(())
     }
-    async fn cleanup_owned(&self, text: &str, before: &ComposerSnapshot) -> bool {
+    /// `wrote`: a escrita falhou no meio (pedaço da colagem, o `x` do Windows que não saiu). Só com ela e o
+    /// campo vazio antes, o começo do nosso texto conta como nosso desde o início.
+    async fn cleanup_owned(&self, text: &str, before: &ComposerSnapshot, wrote: bool) -> bool {
         // A prova da conversa sumiu depois da escrita: o pane e o agente conferidos bastam para
         // reconhecer o próprio texto e tirá-lo, sem apagar o que não é nosso.
         let (mut now, agent) = match self.snapshot().await {
@@ -972,23 +987,38 @@ impl TerminalDriver {
             Err(error) if error.code == "facts_unavailable" => match self.snapshot_agent().await { Ok(now) => (now, true), Err(_) => return false },
             Err(_) => return false,
         };
-        if !now.owned(text, before) { return false; }
-        for _ in 0..self.limits.cleanup_attempts {
+        // Sem escrita nossa pela metade, a limpeza só começa vendo o nosso texto inteiro: um começo dele pode ter
+        // sido digitado pela pessoa. Com ela, o começo vale só a partir de 12 caracteres (ou o texto todo, se
+        // menor): uma ou duas letras no campo podem ser a pessoa digitando enquanto a escrita falhava.
+        let long = compact(&now.content).chars().count() >= compact(text).chars().count().min(12);
+        if !(now.owned(text, before) || wrote && long && self.ours(&now, text, before)) { return false; }
+        // O Ctrl+U apaga só a linha do cursor (numa linha vazia, só a quebra): o texto de várias linhas sai aos
+        // pedaços, e cada pedaço que sobra tem de ser o começo do nosso. Qualquer outra coisa é da pessoa. O
+        // teto segura o `serial` por um tempo limitado: acima dele, entrega incerta.
+        let budget = self.limits.cleanup_attempts.max(text.lines().count() * 2 + 2).min(CLEANUP_CEILING);
+        for _ in 0..budget {
             if if agent { self.key_agent("C-u").await } else { self.key_inner("C-u").await }.is_err() { return false; }
             self.settle().await;
             let Ok(after) = (if agent { self.snapshot_agent().await } else { self.snapshot().await }) else { return false; };
             if after.is_empty() { return true; }
-            if !after.owned(text, before) || after.content.chars().count() >= now.content.chars().count() { return false; }
+            if !self.ours(&after, text, before) || after.content.chars().count() >= now.content.chars().count() { return false; }
             now = after;
         }
+        tracing::warn!(pane = %self.binding.pane, attempts = budget, "limpeza do campo parou no orçamento; o resto do nosso texto fica e a entrega segue incerta");
         false
+    }
+    /// O campo tem o nosso texto inteiro ou o começo dele (a parte que a limpeza ainda não tirou). Com texto
+    /// alheio antes do nosso, um resto que pareça nosso começo pode ser o dele: só o texto inteiro vale.
+    fn ours(&self, now: &ComposerSnapshot, text: &str, before: &ComposerSnapshot) -> bool {
+        now.owned(text, before) || before.content.is_empty() && !now.content.is_empty() && (compact(text).starts_with(&compact(&now.content))
+            || self.binding.windows && text.starts_with('-') && format!("x{}", compact(text)).starts_with(&compact(&now.content)))
     }
     fn failed(error: IoFailure, stage: DeliveryStage) -> DeliveryResult {
         if let Some(interaction) = InteractionError::from_code(error.code) { return Self::interaction_failure(interaction, error.may_have_written); }
         DeliveryResult::new(if error.may_have_written { Disposition::Unknown } else { Disposition::Deferred }, stage, error.code)
     }
     async fn partial(&self, text: &str, before: &ComposerSnapshot, stage: DeliveryStage) -> DeliveryResult {
-        let cleaned = self.cleanup_owned(text, before).await;
+        let cleaned = self.cleanup_owned(text, before, stage == DeliveryStage::Write).await;
         let mut result = DeliveryResult::new(if cleaned { Disposition::Deferred } else { Disposition::Unknown }, stage, "input_unproved");
         result.cleanup = if cleaned { Cleanup::Proved } else { Cleanup::Unproved };
         result
@@ -1003,6 +1033,8 @@ impl TerminalDriver {
         let mark = if expected.is_none() && !text.trim_start().starts_with('/') { self.services.transcript_mark().await.ok().flatten() } else { None };
         let since = crate::state::monitor::wall_now();
         if let Err(error) = self.key_guarded("Enter", expected.map(|expected| GuardedText { expected,closed:true,pane:None,input:Some((text,before)),allow_owned:true })).await {
+            // A conferência antes da tecla falhou: o Enter não saiu, e o texto nosso sai do campo como no ramo acima.
+            if expected.is_none() && !error.may_have_written { return self.partial(text, before, DeliveryStage::Submit).await; }
             return DeliveryResult::new(Disposition::Unknown, DeliveryStage::Submit, if expected.is_some() { "erro_sem_confirmacao_resposta" } else { error.code });
         }
         let mut slash_selected = false;
@@ -1147,7 +1179,9 @@ impl TerminalDriver {
                 _ => return DeliveryResult::new(Disposition::Unknown, DeliveryStage::Plugin, "plugin_uncertain"),
             }
         }
-        let use_clipboard = self.binding.windows && (text.contains('\n') || text.contains('\\'));
+        // `?` sozinho, digitado com o campo vazio, abre a ajuda de atalhos do Claude e não vira texto; colado, entra.
+        let pasted = text.contains('\n') || text == "?";
+        let use_clipboard = self.binding.windows && (pasted || text.contains('\\'));
         let clipboard = if use_clipboard { match self.clipboard_lock().await { Ok(lock) => lock, Err(e) => return Self::failed(e, DeliveryStage::Write) } } else { None };
         if refresh_guard || use_clipboard {
             before = match self.refresh_input_guard().await { Ok(b) => b, Err(e) => return Self::failed(e, DeliveryStage::Composer) };
@@ -1155,7 +1189,7 @@ impl TerminalDriver {
         if self.services.writing().await.is_err() { return DeliveryResult::new(Disposition::Deferred, DeliveryStage::Write, "write_journal"); }
         let guard = expected.map(|expected| GuardedText { expected,closed:true,pane:None,input:Some((text,&before)),allow_owned:false });
         let write = if use_clipboard { self.clipboard_guarded(text, guard).await }
-            else if text.contains('\n') { self.paste_guarded(text, id, guard).await } else { self.literal_guarded(text, guard).await };
+            else if pasted { self.paste_guarded(text, id, guard).await } else { self.literal_guarded(text, guard).await };
         if let Err(e) = write {
             if !e.may_have_written { return Self::failed(e, DeliveryStage::Write); }
             if expected.is_some() { return DeliveryResult::new(Disposition::Unknown, DeliveryStage::Write, "erro_sem_confirmacao_resposta"); }

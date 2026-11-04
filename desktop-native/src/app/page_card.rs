@@ -43,8 +43,12 @@ pub fn page_from_result(tool_name: &str, result: &str) -> Option<PageRef> {
 }
 
 fn result_value(result: &str) -> Option<Value> {
-    let join = |blocks: &[Value]| serde_json::from_str::<Value>(&blocks.iter()
-        .filter(|b| b["type"] == "text").filter_map(|b| b["text"].as_str()).collect::<String>()).ok();
+    // O rascunho com print chega com um bloco `[Image: source: …]` antes do JSON: sem ler bloco a bloco, ele vira falha.
+    let join = |blocks: &[Value]| {
+        let texts: Vec<&str> = blocks.iter().filter(|b| b["type"] == "text").filter_map(|b| b["text"].as_str()).collect();
+        serde_json::from_str::<Value>(&texts.concat()).ok()
+            .or_else(|| texts.iter().find_map(|t| serde_json::from_str::<Value>(t).ok().filter(Value::is_object)))
+    };
     let value: Value = serde_json::from_str(result).ok()?;
     Some(match value {
         Value::Array(blocks) => join(&blocks)?,
@@ -845,6 +849,9 @@ mod tests {
         assert_eq!(page_failure(name, &"x".repeat(400)).unwrap().chars().count(), 301, "cortado com reticências");
         assert!(page_failure(name, r#"{"hangar_page":{"id":"a","title":"T"}}"#).is_none());
         assert!(page_failure(name, r#"{"draft":{"id":"b"}}"#).is_none(), "rascunho segue como chamada comum");
+        let with_shot = serde_json::json!([{"type": "image"}, {"type": "text", "text": "[Image: source: /x/shot.png]"},
+            {"type": "text", "text": r#"{"draft":{"id":"b"}}"#}]).to_string();
+        assert!(page_failure(name, &with_shot).is_none(), "rascunho com print também não é falha");
         assert!(page_failure("Read", "erro").is_none());
     }
 

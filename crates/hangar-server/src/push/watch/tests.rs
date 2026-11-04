@@ -1,32 +1,36 @@
-//! Casos tirados do Python por `backend/tests/fixtures/contract/push/gen_push.py`.
+//! Avisos do vigia: entrada e esperado por caso em `tests/cases.rs`.
 use super::*;
 use crate::push::send::{Notice, Outgoing};
 use crate::push::store;
 use serde_json::json;
 
-fn cases() -> Value {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../backend/tests/fixtures/contract/push/cases.json");
-    serde_json::from_slice(&std::fs::read(path).expect("rode gen_push.py")).unwrap()
+mod cases;
+
+fn parsed(cases: &[&str]) -> Vec<Value> {
+    cases.iter().map(|case| serde_json::from_str(case).unwrap()).collect()
 }
 
 #[test]
-fn summary_matches_python() {
-    for c in cases()["summary"].as_array().unwrap() {
+fn summary_keeps_the_notice_text() {
+    assert_eq!(cases::SUMMARY.len(), 10);
+    for c in parsed(cases::SUMMARY) {
         assert_eq!(summary(c["text"].as_str()).map(Value::from).unwrap_or(Value::Null), c["out"], "{}", c["text"]);
     }
 }
 
 #[test]
-fn quiet_hours_match_python() {
-    for c in cases()["quiet"].as_array().unwrap() {
+fn quiet_hours_cross_midnight_and_need_both_ends() {
+    assert_eq!(cases::QUIET.len(), 7);
+    for c in parsed(cases::QUIET) {
         let now = store::parse_time(c["now"].as_str().unwrap()).unwrap();
         assert_eq!(Value::Bool(store::in_quiet_hours(&c["prefs"], now)), c["out"], "{c}");
     }
 }
 
 #[test]
-fn reset_delay_matches_python() {
-    for c in cases()["reset"].as_array().unwrap() {
+fn reset_delay_reads_the_limit_hour() {
+    assert_eq!(cases::RESET.len(), 12);
+    for c in parsed(cases::RESET) {
         let now = chrono::NaiveDateTime::parse_from_str(c["now"].as_str().unwrap(), "%Y-%m-%dT%H:%M:%S").unwrap();
         assert_eq!(reset_delay(c["reset"].as_str().unwrap(), now).map(Value::from).unwrap_or(Value::Null), c["out"], "{c}");
     }
@@ -43,16 +47,17 @@ fn outgoing(case: &str) -> Outgoing {
         "stalled" => Outgoing::single("s", Notice::Stalled),
         "limited_reset" => Outgoing::single("s", Notice::Limited(Some("3pm".into()))),
         "limited_plain" => Outgoing::single("s", Notice::Limited(None)),
-        other => panic!("caso novo no golden: {other}"),
+        other => panic!("caso sem aviso: {other}"),
     }
 }
 
 #[test]
-fn payloads_match_python_for_every_subscription_and_expo() {
+fn payloads_cover_every_subscription_and_expo() {
     let subs = [json!({"subscription": {"endpoint": "e-pt"}, "label": "Casa", "serverId": "s1", "locale": "pt"}),
         json!({"subscription": {"endpoint": "e-en"}, "label": "Work", "serverId": "s2", "locale": "en"}),
         json!({"subscription": {"endpoint": "e-old"}, "label": "", "serverId": "s3"})];
-    for c in cases()["payloads"].as_array().unwrap() {
+    assert_eq!(cases::PAYLOADS.len(), 9);
+    for c in parsed(cases::PAYLOADS) {
         let out = outgoing(c["case"].as_str().unwrap());
         let web: Vec<Value> = subs.iter().map(|s| json!({"endpoint": s["subscription"]["endpoint"], "payload": out.payload(s)})).collect();
         assert_eq!(Value::Array(web), c["web"], "{}", c["case"]);
@@ -63,8 +68,9 @@ fn payloads_match_python_for_every_subscription_and_expo() {
 }
 
 #[test]
-fn background_scan_matches_python() {
-    for c in cases()["scan"].as_array().unwrap() {
+fn background_scan_reads_open_turn_and_last_reply() {
+    assert_eq!(cases::SCAN.len(), 10);
+    for c in parsed(cases::SCAN) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("t.jsonl");
         let lines: Vec<&str> = c["lines"].as_array().unwrap().iter().map(|l| l.as_str().unwrap()).collect();
@@ -80,7 +86,7 @@ fn row(spec: &str) -> (String, Option<String>, bool, Option<Option<String>>, boo
     (name.to_owned(), Some(name.to_owned()), flags == "stalled", limited, flags == "orq")
 }
 
-fn as_python(name: &str, notice: &Notice) -> Value {
+fn notice_as_json(name: &str, notice: &Notice) -> Value {
     match notice {
         Notice::Dead => json!(["notify_dead", name]),
         Notice::Stalled => json!(["notify_stalled", name]),
@@ -100,23 +106,25 @@ fn awaiting_and_finished_only_for_claude_and_codex_but_stall_for_every_row() {
 }
 
 #[test]
-fn sweep_matches_python_stall_watch() {
-    for c in cases()["sweep"].as_array().unwrap() {
+fn sweep_notices_dead_stalled_and_limited_once() {
+    assert_eq!(cases::SWEEP.len(), 5);
+    for c in parsed(cases::SWEEP) {
         let mut m = Memory::default();
         let mut got = Vec::new();
         for step in c["steps"].as_array().unwrap() {
             let rows: Vec<_> = step.as_array().unwrap().iter().map(|s| row(s.as_str().unwrap()))
                 .filter(|r| !r.4).map(|(n, k, s, l, _)| (n, k, s, l)).collect();
             let notices = m.sweep(&rows, c["notify_dead"].as_bool().unwrap());
-            got.push(Value::Array(notices.iter().map(|(n, x)| as_python(n, x)).collect()));
+            got.push(Value::Array(notices.iter().map(|(n, x)| notice_as_json(n, x)).collect()));
         }
         assert_eq!(Value::Array(got), c["notices"], "{}", c["case"]);
     }
 }
 
 #[test]
-fn turn_series_matches_python() {
-    for c in cases()["series"].as_array().unwrap() {
+fn turn_series_keeps_the_first_start() {
+    assert_eq!(cases::SERIES.len(), 4);
+    for c in parsed(cases::SERIES) {
         let mut m = Memory::default();
         let mut got = Vec::new();
         for step in c["steps"].as_array().unwrap() {

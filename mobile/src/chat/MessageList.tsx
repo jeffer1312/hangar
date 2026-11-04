@@ -12,6 +12,7 @@ import { PreviewBubble } from './PreviewBubble';
 import { ToolGroup } from './tools/ToolGroup';
 import { ToolCard } from './tools/ToolCard';
 import { AgentesRodando, PensamentoVivo, WorkingLine } from './LiveWork';
+import type { AgentSubagents } from '../features/activity/useAgentSubagents';
 import { projectConversation, type ConversationProjection, type MessageRow } from './conversationProjection';
 import { conversationInset } from './conversationColumn';
 import { ToolDetailSheet, type ToolDetailHandle } from './tools/ToolDetailSheet';
@@ -61,6 +62,7 @@ interface Props {
   // Subagentes rodando de verdade, pelo fold de atividade: o cartão deles sai do meio da conversa
   // e fica grudado no fim até acabarem.
   agentesRodando?: AgentRun[];
+  agentSubagents?: AgentSubagents;
   onAbrirAgentes?: () => void;
   // Mensagens que esperam a vez no painel "Na fila": a bolha delas sai da conversa até a entrega.
   queuePanel?: QueuePanel;
@@ -96,6 +98,7 @@ export function MessageList({
   pensamento = '',
   ferramenta = null,
   agentesRodando = SEM_AGENTES,
+  agentSubagents,
   onAbrirAgentes,
   queuePanel,
   canQuote = false,
@@ -214,7 +217,7 @@ export function MessageList({
           const conhecido = ev.text === 'interrupted' || ev.text === 'turn_aborted';
           const frase = conhecido ? m.notice_interrupted()
             : ev.text === 'compacted' ? m.notice_compacted()
-            : ev.text === 'hook_prompt' ? [m.notice_hook_prompt(), ev.hook_error].filter(Boolean).join('\n')
+            : ev.text === 'hook_prompt' || ev.text === 'hook_failed' ? [ev.text === 'hook_failed' ? m.notice_hook_failed() : m.notice_hook_prompt(), ev.hook_error].filter(Boolean).join('\n')
             // ponytail: só a linha; abrir o SKILL.md no app nativo fica pra quando pedirem.
             : ev.text === 'skill_loaded' && ev.skill ? m.notice_skill_loaded({ name: ev.skill.name })
             : ev.text;
@@ -371,7 +374,7 @@ export function MessageList({
           {ferramentaEv ? <ToolCard use={ferramentaEv} result={null} onPress={abrirDetalhe} look={look} onExpand={preserveExpansion ? pauseForToolGroup : undefined} escrevendo /> : null}
           {visiblePreview ? <PreviewBubble text={visiblePreview} md={previewMd} full={previewFull} streaming={working} /> : null}
           {working && !pensamento && !ferramenta ? <WorkingLine label={stateEvent?.label} since={desde} /> : null}
-          {agentesRodando.length ? <AgentesRodando agentes={agentesRodando} inicio={inicioDoAgente} onAbrir={onAbrirAgentes} serverId={serverId} sessionName={sessionName} events={events} eventsRevision={eventsRevision} /> : null}
+          {agentesRodando.length || agentSubagents?.error ? <AgentesRodando agentes={agentesRodando} inicio={inicioDoAgente} onAbrir={onAbrirAgentes} serverId={serverId} sessionName={sessionName} events={events} eventsRevision={eventsRevision} subagentSnapshot={agentSubagents} /> : null}
           {/* O eco que o painel da fila já mostra some: a mesma mensagem não aparece duas vezes. */}
           {pending.filter((p) => !(queuePanel && echoInQueuePanel(p.text, queuePanel))).map((p) => (
             <View key={p.id} style={[styles.pending, p.solid && styles.pendingSolid]}>

@@ -1,7 +1,9 @@
 """Contexto estendido pela configuração oficial, respeitando o teto nativo de cada modelo."""
+import asyncio
 import json
 import tomllib
 
+from app import runtime_config
 from app.codex_arquivos import exclusivo, gravar, json_bytes, json_obj, ler
 
 CONTEXTO = 1_000_000
@@ -23,7 +25,10 @@ def ler_opcoes(servico) -> dict:
     except (OSError, ValueError, KeyError, TypeError):
         pass
     atual = config.get("model_context_window")
-    return {"contexto_estendido": isinstance(atual, int) and atual >= CONTEXTO,
+    # Sem valor no config.toml o Hangar abre o Codex com 1M, salvo quando a pessoa desligou.
+    estendido = (atual >= CONTEXTO if isinstance(atual, int)
+                 else atual is None and runtime_config.get("codex_extended_context") is not False)
+    return {"contexto_estendido": estendido,
             "contexto_configurado": atual, "compactacao": config.get("model_auto_compact_token_limit"),
             "modelos": modelos}
 
@@ -63,4 +68,5 @@ async def salvar_opcoes(servico, habilitado: bool) -> dict:
             return edits, lambda: None
 
         await servico._editar_config(preparar)
+        await asyncio.to_thread(runtime_config.aplicar, {"codex_extended_context": habilitado})
     return ler_opcoes(servico)

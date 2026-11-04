@@ -3,7 +3,6 @@ import shutil
 import subprocess
 import time
 import uuid
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -340,22 +339,6 @@ def test_capture_pane_targets_exact_session():
     assert "=0:" in run.call_args[0][0]
 
 
-def test_capture_pane_juntar_insere_J_so_quando_pedido():
-    # B2 — `juntar=True` poe `-J` na linha de comando; sem o parametro NAO poe (mesmo
-    # precedente do `-e` do cores). O resto do backend le desenho de TUI linha a linha e
-    # juntar linhas quebradas la estragaria a leitura — o padrao e False.
-    with patch.object(tmux, "RUN", return_value=MagicMock(stdout="", returncode=0)) as run:
-        tmux.capture_pane("cc", juntar=True)
-        tmux.capture_pane("cc")
-    # O _pane_target resolve via agentpane (1 list-panes antes de cada capture) — filtra
-    # os args de capture-pane antes de comparar.
-    capturas = [c.args[0] for c in run.call_args_list
-                if c.args[0][:2] == ["tmux", "capture-pane"]]
-    com_j, sem_j = capturas[0], capturas[1]
-    assert "-J" in com_j and com_j.index("-J") < com_j.index("-S")
-    assert "-J" not in sem_j
-
-
 def test_pane_pid_targets_exact_session():
     with patch.object(tmux, "RUN", return_value=MagicMock(stdout="540144\n", returncode=0)) as run:
         assert tmux.pane_pid("0") == 540144
@@ -475,42 +458,6 @@ def test_e_config_dir_compara_pasta_e_nao_string(monkeypatch, tmp_path):
     assert tmux._e_config_dir(os.path.join(str(tmp_path), ".", ".claude")) == []
     assert tmux._e_config_dir(str(padrao) + os.sep) == []
     assert tmux._e_config_dir(str(tmp_path / ".claude2")) != []
-
-
-def test_new_hidden_shell_segue_a_mesma_regra_do_config_dir(monkeypatch, tmp_path):
-    """A janela escondida (login de conta, renovacao de token) usa o MESMO `_e_config_dir`: pedir a
-    pasta PADRAO no psmux nasce sem a variavel — que e o que "conta padrao" quer dizer la — e a
-    credencial cai no mesmo `~/.claude/.credentials.json`. Conta de verdade continua indo."""
-    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
-    padrao = _casa_home(monkeypatch, tmp_path)
-    monkeypatch.setattr(tmux, "_pane_herda_env_do_chamador", lambda: True)
-
-    capturado = []
-
-    def _run_falso(args, **k):
-        cp = _CP()
-        if "has-session" in args:
-            cp = MagicMock(returncode=1, stdout="", stderr="")   # nao existe -> cria
-        elif "new-session" in args:
-            capturado.append(args)
-        return cp
-
-    with patch.object(tmux, "RUN", _run_falso):
-        assert tmux.new_hidden_shell("s", "/tmp", config_dir=str(padrao)) == "term-s"
-    assert _valores_de_config_dir(capturado[-1]) == []
-
-    capturado.clear()
-    conta = str(tmp_path / ".claude-work")
-    with patch.object(tmux, "RUN", _run_falso):
-        tmux.new_hidden_shell("s", "/tmp", config_dir=conta)
-    assert f"CLAUDE_CONFIG_DIR={conta}" in capturado[-1]
-
-    # No tmux o shell nao tem comando pra levar o `env -u`: a pasta padrao segue explicita.
-    capturado.clear()
-    monkeypatch.setattr(tmux, "_pane_herda_env_do_chamador", lambda: False)
-    with patch.object(tmux, "RUN", _run_falso):
-        tmux.new_hidden_shell("s", "/tmp", config_dir=str(padrao))
-    assert f"CLAUDE_CONFIG_DIR={padrao}" in capturado[-1]
 
 
 @pytest.mark.skipif(os.name != "posix", reason="systemd-run so existe no POSIX; no Windows _scope_prefix devolve [] sem olhar o env")
@@ -1083,76 +1030,6 @@ def test_paste_text_falha_no_load_buffer_nao_cola_nada():
          patch("app.tmux._paste_linha_a_linha", return_value=True) as plinha:
         assert tmux.paste_text("cc", "linha 1\nlinha 2") is True
     assert plinha.called
-
-
-# ---------------------------------------------------------------- Task 7 — fonte real (B4)
-#
-# A régua do contrato: commit que muda módulo de backend exercita esse módulo contra a fonte
-# REAL. O `config_dir` novo do `new_hidden_shell` é exercitado aqui contra o tmux de verdade —
-# criando a janela, lendo `/proc/<pane_pid>/environ` (o CLAUDE_CONFIG_DIR de quem roda no pane)
-# e matando a janela no fim. O valor afirmado é exatamente o passado, nunca o do servidor tmux.
-
-
-def _espera_environ_do_pane(alvo: str, esperado: str, timeout: float = 5.0):
-    """Espera o `environ` do pane FICAR PRONTO, e falha explicando o que viu se nao ficar.
-
-    O `new-session -d` volta assim que a SESSAO existe; o processo do pane e forkado pelo servidor
-    tmux e so ganha o ambiente pedido no `exec`. Entre uma coisa e outra ha uma janela em que o
-    `#{pane_pid}` ja responde e `/proc/<pid>/environ` ou nao abre, ou volta vazio, ou ainda e o
-    ambiente do SERVIDOR tmux (sem a variavel). Ler uma vez so tornava este caso — o unico do
-    arquivo que sobe um pane de verdade — instavel na suite cheia: mesmo commit, mesma maquina,
-    passava ou falhava conforme a rodada. Sleep fixo trocaria a corrida por lentidao garantida, e
-    voltaria a falhar numa maquina mais carregada; aqui espera-se a CONDICAO, com falha explicita
-    quando o tempo estoura.
-
-    Variavel presente com valor ERRADO nao espera: `/proc/<pid>/environ` e o ambiente do exec e
-    nao muda depois, entao insistir so adiaria uma falha de verdade ate o timeout.
-    """
-    limite = time.monotonic() + timeout
-    ultimo_pid, ultimo_env = "", None
-    while True:
-        cp = tmux._run(["tmux", "display-message", "-p", "-t", f"={alvo}:", "#{pane_pid}"])
-        ultimo_pid = cp.stdout.strip()
-        if ultimo_pid.isdigit():
-            try:
-                bruto = Path(f"/proc/{ultimo_pid}/environ").read_bytes()
-            except OSError:
-                bruto = b""
-            if bruto:
-                ultimo_env = bruto.replace(b"\0", b"\n").decode("utf-8", "replace")
-                if esperado in ultimo_env:
-                    return ultimo_pid, ultimo_env
-                chave = esperado.split("=", 1)[0] + "="
-                achado = [l for l in ultimo_env.splitlines() if l.startswith(chave)]
-                if achado:
-                    pytest.fail(f"o pane nasceu com {achado!r}, e nao com {esperado!r}")
-        if time.monotonic() >= limite:
-            pytest.fail(f"{timeout}s sem {esperado!r} no ambiente do pane de {alvo!r}: "
-                        f"pane_pid={ultimo_pid!r}, environ="
-                        + ("nao legivel" if ultimo_env is None
-                           else f"{len(ultimo_env.splitlines())} variaveis"))
-        time.sleep(0.02)
-
-
-@pytest.mark.skipif(os.name != "posix", reason="le /proc/<pid>/environ, que so existe no Linux")
-def test_new_hidden_shell_config_dir_chega_no_ambiente_do_pane():
-    # Cenario montado AQUI, nao herdado: zera a sonda do scope pra ela rodar contra o `RUN` de
-    # verdade. Este caso fala com o tmux REAL, entao herdar um `_scope_usavel` que outro teste
-    # gravou sob mock faria o `new_hidden_shell` sair embrulhado num `systemd-run` que este
-    # ambiente pode nao aceitar — e a sessao nem nasceria (`alvo is None`), sem que o assert
-    # abaixo tivesse qualquer relacao com o que ele existe pra provar. O fixture no topo do arquivo
-    # impede o vazamento entre casos; esta linha garante que ESTE nao depende de quem veio antes.
-    tmux._scope_usavel = None
-    cfg = "/tmp/zz-config-dir-prova"
-    alvo = tmux.new_hidden_shell(f"prova-cfg-{uuid.uuid4().hex[:6]}", "/tmp", config_dir=cfg)
-    assert alvo is not None
-    try:
-        pane_pid, env = _espera_environ_do_pane(alvo, f"CLAUDE_CONFIG_DIR={cfg}")
-        assert pane_pid.isdigit()
-        assert f"CLAUDE_CONFIG_DIR={cfg}" in env
-    finally:
-        tmux.kill_session(alvo)
-
 
 
 def test_list_panes_all_reads_session_birth_in_same_batch():

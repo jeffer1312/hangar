@@ -4,12 +4,13 @@
 pub mod adopt;
 pub mod agents;
 pub mod archive;
+#[cfg(test)]
+pub(crate) mod cases;
 pub mod claude;
 pub mod cli;
 pub mod codex;
-#[cfg(target_os = "linux")]
-#[doc(hidden)]
-pub mod contract;
+#[cfg(all(test, target_os = "linux"))]
+mod contract;
 pub mod facts;
 pub mod legacy_restore;
 pub mod local;
@@ -211,6 +212,10 @@ pub struct SessionOpenRequest {
     /// abertura (a reserva sai). A abertura do dono liga; a resolução da própria reserva não.
     #[serde(skip)]
     pub take_reserved_name: bool,
+    /// Fora do fio: a conversa retomada mora na pasta desta conta e não muda com ela (Codex), então
+    /// a regra dos 95% não a troca.
+    #[serde(skip)]
+    pub account_bound: bool,
 }
 
 fn is_false(value: &bool) -> bool { !value }
@@ -342,11 +347,24 @@ pub struct SessionSpec {
     /// omp, a do Kimi retomado): o restore depois do reboot volta nela.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conversation: Option<String>,
+    /// O nome veio da pasta (`folder_name`), não de alguém. Ausente = registro anterior à marca: vale o
+    /// padrão do nome (`rename_suggestion::is_generic`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_auto: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rename_suggestion: Option<String>,
+    /// A sugestão saiu com pouco contexto, de uma conversa com este número de pedidos: um pedido a
+    /// mais a refaz.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rename_weak_at: Option<u32>,
+    /// "Agora não" do dono: a sugestão não volta nesta sessão.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub rename_dismissed: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ChangeReason { ModeSwitch, AccountSwitch, Bypass, Reload, Resume, RebootRestore, ParkWake, LimitSwitch }
+pub enum ChangeReason { ModeSwitch, AccountSwitch, Bypass, Reload, Resume, RebootRestore, ParkWake, LimitSwitch, Sleep }
 
 /// O que uma reabertura muda; o campo ausente fica como está no spec gravado.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

@@ -12,9 +12,6 @@ use serde_json::{json, Value};
 
 /// `settings.stall_seconds` (`CP_STALL_SECONDS`, padrão 300).
 const STALL_DEFAULT: f64 = 300.0;
-/// `runs.ACTIVE_S`: orquestração mexida há menos que isso está trabalhando.
-const ORQ_ACTIVE_S: f64 = 120.0;
-const ORQ_EVENTS: [&str; 6] = ["execucao_inicio", "task_inicio", "entrega", "veredito", "sessao_trocada", "execucao_fim"];
 /// `_STATUS_TAIL` do adaptador Codex.
 const STATUS_TAIL: u64 = 512 << 10;
 /// `registry._STATUS_TTL`.
@@ -116,112 +113,24 @@ impl Guests {
 
 fn text(v: &Value) -> Option<&str> { v.as_str().filter(|s| !s.is_empty()) }
 
-/// `datetime.fromisoformat(...).astimezone()` em segundos; sem fuso vale a hora local.
-fn iso_epoch(v: &Value) -> Option<f64> {
-    use chrono::{DateTime, Local, NaiveDateTime, TimeZone};
-    let s = v.as_str()?.trim();
-    if let Ok(t) = DateTime::parse_from_rfc3339(s) {
-        return Some(t.timestamp_micros() as f64 / 1e6);
-    }
-    ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%dT%H:%M", "%Y-%m-%d"].iter().find_map(|f| {
-        let naive = NaiveDateTime::parse_from_str(s, f).ok()
-            .or_else(|| chrono::NaiveDate::parse_from_str(s, f).ok().and_then(|d| d.and_hms_opt(0, 0, 0)))?;
-        Local.from_local_datetime(&naive).earliest().map(|t| t.timestamp_micros() as f64 / 1e6)
-    })
-}
-
 fn modified(path: &Path) -> Option<f64> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()?
         .duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs_f64())
 }
 
-fn task_number(v: &Value) -> bool { v.is_i64() || v.is_u64() }
+/// Uma leitura que falha conserva a última linha boa da execução; o `Err` diz o arquivo e o erro.
+type OrqRead<T> = Result<Option<T>, String>;
 
-/// Leitura de um arquivo da orquestração: `Ok(None)` ausente, `Err` ilegível (disco, escrita no meio).
-type OrqRead<T> = Result<Option<T>, ()>;
-
-fn read_json(path: &Path) -> OrqRead<Value> {
-    match std::fs::read(path) {
-        Ok(raw) => serde_json::from_slice(&raw).map(Some).map_err(|_| ()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(_) => Err(()),
-    }
-}
-
-/// `orq._le_eventos` sem `strict`: linha ruim é pulada, só os tipos conhecidos ficam.
-fn orq_events(path: &Path) -> Result<Vec<Value>, ()> {
-    let raw = match std::fs::read(path) {
-        Ok(raw) => raw,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(_) => return Err(()),
-    };
-    Ok(String::from_utf8_lossy(&raw).lines().filter_map(|line| serde_json::from_str::<Value>(line.trim()).ok())
-        .filter(|e| e["tipo"].as_str().is_some_and(|t| ORQ_EVENTS.contains(&t))).collect())
-}
-
-/// `runs._auto_run`: (orq.json, gid, encerrada) de uma execução `auto` com início gravado.
-fn auto_run(dir: &Path) -> OrqRead<(Value, String, bool)> {
-    let Some(cfg) = read_json(&dir.join("orq.json"))? else { return Ok(None) };
-    if cfg.get("auto") != Some(&Value::Bool(true)) {
-        return Ok(None);
-    }
-    let events = orq_events(&dir.join("eventos.jsonl"))?;
-    let Some(gid) = events.iter().find(|e| e["tipo"] == "execucao_inicio").and_then(|e| text(&e["gid"])).map(str::to_owned) else { return Ok(None) };
-    // `orq._current_end`: evento de Task depois do fim reabre a execução.
-    let mut ended = false;
-    for e in &events {
-        if e["tipo"] == "execucao_fim" { ended = true } else if task_number(&e["task"]) { ended = false }
-    }
-    Ok(Some((cfg, gid, ended)))
-}
-
-/// `orq_conductor._pid_alive`: só o Linux confere; fora dele vale vivo.
-fn pid_alive(pid: &Value) -> bool {
-    if !cfg!(target_os = "linux") || pid.is_boolean() || !task_number(pid) {
-        return true;
-    }
-    pid.as_i64().is_some_and(|p| Path::new(&format!("/proc/{p}")).exists())
-}
-
-/// `orq_conductor.watchdog(d, None)` sem systemd: o batimento do vigia decide se a execução vive.
-fn watchdog(dir: &Path, now: f64) -> OrqRead<Value> {
-    let Some(hb) = read_json(&dir.join("vigia.json"))? else { return Ok(None) };
-    let Some(ts) = iso_epoch(&hb["ts"]) else { return Ok(None) };
-    let iv = hb["interval_s"].as_i64().filter(|v| *v >= 0 && !hb["interval_s"].is_boolean()).unwrap_or(60);
-    let fresh = now - ts <= (2 * iv + 30) as f64;
-    Ok((fresh && pid_alive(&hb["pid"])).then_some(hb))
-}
-
-/// `runs._held`: trava presa por alguém, lida em `/proc/locks` (pegar a trava faria o `advance` desistir).
-fn held(lock: &Path) -> bool {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        let Ok(ino) = std::fs::metadata(lock).map(|m| m.ino()) else { return false };
-        let Ok(locks) = std::fs::read(Path::new("/proc/locks")) else { return false };
-        let suffix = format!(":{ino}");
-        String::from_utf8_lossy(&locks).lines().any(|l| {
-            let f: Vec<&str> = l.split_whitespace().collect();
-            f.len() > 5 && f[1] == "FLOCK" && f[5].ends_with(&suffix)
-        })
-    }
-    #[cfg(not(unix))]
-    { let _ = lock; false }
-}
-
-/// `runs.activity`: trabalhando com a trava do `advance` presa ou com a linha do tempo mexida há pouco.
 fn orq_activity(timeline: &Path, now: f64) -> (&'static str, Option<f64>) {
-    let lock = timeline.parent().unwrap_or(Path::new("")).join("advance.lock");
-    let last = [modified(timeline), modified(&lock)].into_iter().flatten().reduce(f64::max);
-    let busy = held(&lock) || last.is_some_and(|l| now - l < ORQ_ACTIVE_S);
-    (if busy { "working" } else { "idle" }, last)
+    crate::orchestration::runs::activity(timeline, now)
 }
 
 /// A linha de uma execução: `Ok(None)` quando ela não está viva, `Err` quando um arquivo não leu.
 fn orq_row(dir: &Path, now: f64) -> OrqRead<SessionRow> {
-    let Some((cfg, gid, ended)) = auto_run(dir)? else { return Ok(None) };
+    let failed = |file: &str, e: std::io::Error| format!("{file}: {:?}: {e}", e.kind());
+    let Some((cfg, gid, ended)) = crate::orchestration::runs::list_run(dir).map_err(|e| failed("orq.json/eventos.jsonl", e))? else { return Ok(None) };
     if ended { return Ok(None); }
-    let Some(hb) = watchdog(dir, now)? else { return Ok(None) };
+    let Some(hb) = crate::orchestration::runs::heartbeat(dir, now).map_err(|e| failed("vigia.json", e))? else { return Ok(None) };
     let resolved = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_owned());
     let Some(name) = resolved.file_name().map(|n| n.to_string_lossy().into_owned()) else { return Ok(None) };
     let timeline = dir.join(format!("timeline-{name}.jsonl"));
@@ -235,9 +144,9 @@ fn orq_row(dir: &Path, now: f64) -> OrqRead<SessionRow> {
 }
 
 /// `runs.active()` + `list_facts._orq_rows`: uma linha por execução `auto` viva em `~/.hangar/orq`.
-/// Arquivo que não leu mantém a última linha boa daquela execução (`keep_orq`), e o `true` diz que
-/// houve falha, para o diário.
-pub fn orq_rows(home: &Path, now: f64) -> (Vec<SessionRow>, bool) {
+/// Arquivo que não leu mantém a última linha boa daquela execução (`keep_orq`), e o `Some` diz qual
+/// execução e arquivo falharam e por quê, para o diário.
+pub fn orq_rows(home: &Path, now: f64) -> (Vec<SessionRow>, Option<String>) {
     static LAST: LazyLock<Mutex<HashMap<PathBuf, SessionRow>>> = LazyLock::new(Mutex::default);
     let root = home.join(".hangar").join("orq");
     let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
@@ -247,19 +156,23 @@ pub fn orq_rows(home: &Path, now: f64) -> (Vec<SessionRow>, bool) {
         Ok(entries) => entries.flatten()
             .filter(|e| e.file_type().map_or(true, |t| t.is_dir() || t.is_symlink() && e.path().is_dir()))
             .map(|e| e.path()).collect(),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => { last.retain(|d, _| !d.starts_with(&root)); return (Vec::new(), false); }
-        Err(_) => {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => { last.retain(|d, _| !d.starts_with(&root)); return (Vec::new(), None); }
+        Err(e) => {
             let mut kept: Vec<(&PathBuf, &SessionRow)> = last.iter().filter(|(d, _)| d.starts_with(&root)).collect();
             kept.sort_by_key(|(d, _)| *d);
-            return (kept.into_iter().map(|(_, r)| r.clone()).collect(), true);
+            return (kept.into_iter().map(|(_, r)| r.clone()).collect(), Some(format!("{}: {:?}: {e}", root.display(), e.kind())));
         }
     };
     dirs.sort();
-    let mut failed = false;
+    let mut failed = None;
     let rows = dirs.iter().filter_map(|dir| match orq_row(dir, now) {
         Ok(Some(row)) => { last.insert(dir.clone(), row.clone()); Some(row) }
         Ok(None) => { last.remove(dir); None }
-        Err(()) => { failed = true; last.get(dir).cloned() }
+        Err(why) => {
+            // A primeira falha basta para o diário; a execução é a pasta.
+            failed.get_or_insert_with(|| format!("execução {}: {why}", dir.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned())));
+            last.get(dir).cloned()
+        }
     }).collect();
     last.retain(|d, _| !d.starts_with(&root) || dirs.contains(d));
     (rows, failed)

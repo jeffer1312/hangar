@@ -1,10 +1,13 @@
-//! `GET /api/credenciais` servido pelo Rust: cada caso de `golden/credenciais.json` (gravado pela rota
-//! Python) monta a mesma árvore num HOME temporário e tem de sair com o mesmo status e o mesmo corpo,
-//! sem tocar no Python. Os fatos que a rota Python pedia ao Rust vêm daqui: `claude` e `codex` falsos
-//! no PATH (login lido de `.fake-auth.json` / `.fake-account.json` da pasta da conta) e o cache de cota
-//! semeado com as linhas do caso. Processo próprio porque fixa `HANGAR_RUNTIME_INSTANCE`.
+//! `GET /api/credenciais` servido pelo Rust: cada caso de `contract_credenciais_cases.rs` monta a
+//! árvore num HOME temporário e tem de sair com o status e o corpo escritos nele, sem tocar no
+//! Python. `claude` e `codex` falsos no PATH (login lido de `.fake-auth.json` / `.fake-account.json`
+//! da pasta da conta) e o cache de cota semeado com as linhas do caso. Processo próprio porque fixa
+//! `HANGAR_RUNTIME_INSTANCE`.
 #![cfg(unix)]
+mod contract_credenciais_cases;
+
 use axum::{Router, http::StatusCode};
+use contract_credenciais_cases::{CASES, Case};
 use hangar_server::{auth::TrustedHosts, config::Config, routes::AppState};
 use serde_json::{Value, json};
 use std::path::Path;
@@ -39,19 +42,10 @@ rl.on('line', text => {
 });
 "#;
 
-fn golden() -> Value {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../backend/tests/fixtures/contract/golden/credenciais.json");
-    serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
-}
-
 fn executable(path: &Path, source: &str) {
     use std::os::unix::fs::PermissionsExt;
     std::fs::write(path, source).unwrap();
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
-}
-
-fn with_home(value: &Value, home: &str) -> Value {
-    serde_json::from_str(&value.to_string().replace(HOME, home)).unwrap()
 }
 
 fn now() -> f64 {
@@ -83,23 +77,21 @@ async fn answer(request: reqwest::RequestBuilder, home: &str) -> Answer {
 }
 
 /// A mesma lista pelo dono (8765) e pela ponte do Connect (8768 → `/__hangar_server/accounts/public`).
-async fn run(case: &Value, python: std::net::SocketAddr) -> (Answer, Answer) {
+async fn run(case: &Case, python: std::net::SocketAddr) -> (Answer, Answer) {
     let root = tempfile::tempdir().unwrap();
     let home = root.path().canonicalize().unwrap();
     let home_text = home.to_string_lossy().into_owned();
-    for (rel, content) in with_home(&case["files"], &home_text).as_object().unwrap() {
+    for (rel, content) in case.files {
         let path = home.join(rel);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, content.as_str().unwrap()).unwrap();
+        std::fs::write(path, content.replace(HOME, &home_text)).unwrap();
     }
-    for (rel, raw) in case["files_hex"].as_object().into_iter().flatten() {
-        let raw = raw.as_str().unwrap();
+    for (rel, raw) in case.files_hex {
         let bytes: Vec<u8> = (0..raw.len()).step_by(2).map(|i| u8::from_str_radix(&raw[i..i + 2], 16).unwrap()).collect();
         std::fs::write(home.join(rel), bytes).unwrap();
     }
-    let facts = with_home(&case["fatos"], &home_text);
-    if facts["quotas"].is_array() {
-        seed_quotas(&home, &facts["quotas"]);
+    if let Some(quotas) = case.quotas {
+        seed_quotas(&home, &serde_json::from_str(&quotas.replace(HOME, &home_text)).unwrap());
     }
     let bin = root.path().join("bin");
     std::fs::create_dir(&bin).unwrap();
@@ -110,7 +102,7 @@ async fn run(case: &Value, python: std::net::SocketAddr) -> (Answer, Answer) {
         .expect("node no PATH");
     std::os::unix::fs::symlink(node, bin.join("node")).unwrap();
     executable(&bin.join("claude"), FAKE_CLAUDE);
-    if case["codex_cli"] == true {
+    if case.codex_cli {
         executable(&bin.join("codex"), FAKE_CODEX);
     }
     let state = |listen| {
@@ -122,6 +114,8 @@ async fn run(case: &Value, python: std::net::SocketAddr) -> (Answer, Answer) {
             log_path: None,
             trusted: TrustedHosts::parse("127.0.0.1"),
         });
+        // Sem isto, a limpeza de worktrees do servidor lê as configurações do HOME real.
+        state.origins_home = home.clone();
         state.accounts = hangar_server::accounts::AccountService::new(
             hangar_server::accounts::environment::AccountEnvironment::from_map([
                 ("HOME".into(), home_text.clone()),
@@ -131,7 +125,7 @@ async fn run(case: &Value, python: std::net::SocketAddr) -> (Answer, Answer) {
         );
         // O node falso leva segundos para subir com a máquina cheia: o prazo de produção (3 s) só no caso que mede
         // o prazo, onde o CLI falso nunca responde. O teto da leitura fica acima dele, como em produção.
-        if case["name"] != "codex_estoura_prazo" {
+        if case.name != "codex_estoura_prazo" {
             state.accounts.codex_auth_deadline = std::time::Duration::from_secs(30);
         }
         state.accounts.codex_auth_read_timeout = std::time::Duration::from_secs(60);
@@ -148,7 +142,7 @@ async fn run(case: &Value, python: std::net::SocketAddr) -> (Answer, Answer) {
         axum::serve(private, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap()
     });
     let client = reqwest::Client::new();
-    let query = case["query"].as_str().unwrap();
+    let query = case.query;
     let (owner, connect) = tokio::join!(
         answer(client.get(format!("http://{addr}/api/credenciais{query}")).bearer_auth("contract-only"), &home_text),
         answer(client.get(format!("http://{private_addr}/__hangar_server/accounts/public{query}"))
@@ -167,7 +161,7 @@ fn runtime_instance() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn credentials_match_python() {
+async fn credentials_answer_each_case() {
     runtime_instance();
     let hits = Arc::new(AtomicUsize::new(0));
     let recorded = hits.clone();
@@ -186,41 +180,26 @@ async fn credentials_match_python() {
         .await
         .unwrap();
     });
-    let golden = golden();
+    assert_eq!(CASES.len(), 12);
     let mut failures = vec![];
-    for case in golden["casos"].as_array().unwrap() {
-        let name = case["name"].as_str().unwrap();
-        let expected = &case["esperado"];
+    for case in CASES {
+        let name = case.name;
         let ((status, kind, body), connect) = run(case, python).await;
         if connect != (status, kind.clone(), body.clone()) {
             failures.push(format!("{name}: a ponte do Connect respondeu diferente do dono: {connect:?}"));
         }
-        // A parte com problema sai sozinha (motor torto, engines.json ilegível); a conta Claude
-        // continua na lista.
-        if matches!(name, "engines_fora_do_utf8" | "motor_nao_objeto" | "motor_label_numero" | "motor_base_url_lista") {
-            let ids: Vec<&Value> = body.as_array().into_iter().flatten().map(|row| &row["id"]).collect();
-            if status != 200 || ids != [&json!(format!("claude:{HOME}/.claude"))] {
-                failures.push(format!("{name}: esperava 200 só com a conta Claude, rust {status} {body}"));
-            }
+        let expected = &case.expected;
+        if status != expected.status {
+            failures.push(format!("{name}: status {status} != {}: {body}", expected.status));
             continue;
         }
-        if status != expected["status"].as_u64().unwrap() as u16 {
-            failures.push(format!("{name}: status {status} != {}: {body}", expected["status"]));
-            continue;
+        if kind.as_deref() != expected.content_type {
+            failures.push(format!("{name}: content-type {kind:?} != {:?}", expected.content_type));
         }
-        if kind.as_deref() != expected["content_type"].as_str() {
-            failures.push(format!("{name}: content-type {kind:?} != {}", expected["content_type"]));
-        }
-        // Login Codex indisponível leva a causa na linha; o Python dava `null`.
-        let mut expected_body = expected["body"].clone();
-        if name == "codex_estoura_prazo" {
-            for row in expected_body.as_array_mut().into_iter().flatten().filter(|row| row["tipo"] == "codex") {
-                row["login"]["motivo"] = json!("prazo");
-            }
-        }
-        // Serializado: a ordem das chaves (a do pydantic) e o `-0.0` contam.
+        // Serializado: a ordem das chaves e o `-0.0` contam.
+        let expected_body: Value = serde_json::from_str(expected.body).unwrap();
         if body.to_string() != expected_body.to_string() {
-            failures.push(format!("{name}:\n rust   {body}\n python {expected_body}"));
+            failures.push(format!("{name}:\n rust   {body}\n esperado {expected_body}"));
         }
     }
     assert_eq!(hits.load(Ordering::SeqCst), 0, "a lista chegou ao Python");

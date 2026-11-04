@@ -7,6 +7,7 @@ use gpui_kit::base::AccordionTrigger;
 use gpui_kit::component::{WindowExt, dialog, menu::{DropdownMenu, PopupMenu}, notification::NotificationType};
 use super::machines::enter_to_focused;
 use super::activity::web;
+use crate::appearance::{load_json, save_json};
 use std::{cell::RefCell, rc::Rc};
 
 /// O filtro aparece com mais de 6 sessões, contadas antes de filtrar (`FILTER_FROM` do web).
@@ -25,7 +26,7 @@ pub(super) struct Target { pub(super) server: String, pub(super) name: String }
 
 /// O que a segunda linha da sessão diz: a última resposta, a pergunta em aberto ou o que o agente está fazendo.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Sub { Reply, Question, Working }
+pub(crate) enum Sub { Reply, Question, Working }
 
 type LastSubs = HashMap<Target, (Option<String>, (String, Sub))>;
 
@@ -111,7 +112,7 @@ struct MenuRead { target: Target, seq: u64, mute: Mute, branches: Option<Branche
 
 #[derive(Clone, Debug)]
 /// O renomear leva o número do pedido: resposta de um diálogo cancelado não fecha a tentativa seguinte na mesma sessão.
-pub(super) enum Write { Rename(String, u64), Mute(bool), Editor, Delete, Mode(bool), Reload, Account { path: String, label: String, engine_account: Option<String> } }
+pub(super) enum Write { Rename(String, u64), Mute(bool), Editor, Delete, Mode(bool), Reload, Account { path: String, label: String, engine_account: Option<String> }, DismissRename, AnotherRename, Hide, Show }
 
 /// Gravações de git e o remover vínculo: o resultado é a notificação da sessão, já em texto.
 enum GitWrite { Pull, Checkout(String), StashCheckout(String), Unlink }
@@ -121,6 +122,8 @@ pub(super) enum SidebarReply {
     BranchRead(u64, Result<Value, Failure>),
     AccountsRead(u64, Result<(Vec<AccountTarget>, Option<String>), Failure>),
     Wrote(Target, Write, Result<Value, Failure>),
+    /// Ocultar ou mostrar o grupo inteiro (`true` = ocultar): as sessões que falharam, com o motivo de cada uma.
+    GroupVisibility(bool, Vec<(Target, Failure)>),
     /// Resultado de uma gravação de git: nível e texto da notificação daquela sessão.
     Note(Target, NotificationType, String),
     Chained(Target, u64, String, Result<Value, Failure>),
@@ -132,6 +135,8 @@ pub(super) enum SidebarReply {
     Sheet(super::group_sheet::SheetReply),
     /// Identificador de uma máquina, pela chave dela.
     Identity(String, Result<Value, Failure>),
+    /// Leitura ou gravação da ocultação automática numa máquina (página Sessões).
+    AutoHide(super::auto_hide::AutoHideReply),
 }
 
 /// Uma notificação por sessão: o "git pull…" dá lugar ao resultado, como o `flash` único do web.
@@ -244,6 +249,9 @@ pub(super) struct Sidebar {
     leads_gen: u64,
     /// Fechadas agora: somem da lista na hora e voltam se o servidor recusar.
     deleting: HashSet<Target>,
+    /// Desocultadas por mensagem há pouco: a linha só perde a marca na lista seguinte, e outro envio até lá não repete
+    /// o pedido nem a pergunta do grupo.
+    revealed: HashMap<Target, std::time::Instant>,
     pub(super) editing: Option<Edit>,
     renaming: HashSet<Target>,
     /// Aberta e renomeada: o nome novo abre assim que aparecer na lista.
@@ -291,7 +299,7 @@ impl Sidebar {
     pub(super) fn new(window: &mut Window, cx: &mut Context<Hangar>) -> Self {
         let filter = cx.new(|cx| InputState::new(window, cx).placeholder(tr("sidebar_filter")).clean_on_escape());
         cx.subscribe(&filter, |_, _, _: &InputEvent, cx| cx.notify()).detach();
-        Self { filter, collapsed: load_json(collapsed_path()), group_leads: load_json(group_leads_path()), leads_gen: 0, deleting: HashSet::new(), editing: None, renaming: HashSet::new(), follow: None, lost: None, moving: HashMap::new(),
+        Self { filter, collapsed: load_json(collapsed_path()), group_leads: load_json(group_leads_path()), leads_gen: 0, deleting: HashSet::new(), revealed: HashMap::new(), editing: None, renaming: HashSet::new(), follow: None, lost: None, moving: HashMap::new(),
             menu: None, menu_seq: 0, rename_seq: 0, chain: None, chain_seq: 0, focus_tab: None, remote_focus: HashMap::new(), collapse_gen: 0, button_menu: None, hover: None, last_sub: Default::default(), press_seq: 0,
             long_pressed: false, rail_anim: None, resize: None, grouping: Default::default(), flip: Default::default(), tab_flip: Default::default(), tab_follow: Default::default(), still_avatar: Default::default() }
     }
@@ -372,7 +380,7 @@ pub(super) fn project_label(cwd: Option<&str>) -> String {
 
 // ponytail: `localeCompare` sem tabela de colação — minúsculas com os acentos do português dobrados na letra-base, empate pelo
 // texto cru. Outras escritas ordenam por ponto de código; uma tabela (icu_collator) resolveria se isso importar.
-fn text_key(text: &str) -> (String, String) { (sort_key(text), text.to_owned()) }
+pub(super) fn text_key(text: &str) -> (String, String) { (sort_key(text), text.to_owned()) }
 
 fn sort_key(text: &str) -> String {
     text.to_lowercase().chars().map(|c| match c {
@@ -381,15 +389,24 @@ fn sort_key(text: &str) -> String {
     }).collect()
 }
 
+/// O texto do filtro já em minúsculas, vazio com a lista da máquina curta (`total` antes de filtrar): filtro escondido não
+/// filtra, e o texto que ficou no campo não esconde ninguém.
+fn filter_query(total: usize, query: &str) -> String {
+    if total > FILTER_FROM { query.trim().to_lowercase() } else { String::new() }
+}
+
+/// O filtro casa com nome, pasta e, agrupando por projeto, com o rótulo do projeto.
+fn filter_matches(s: &SessionInfo, q: &str, by_project: bool) -> bool {
+    q.is_empty() || s.name.to_lowercase().contains(q) || s.cwd.as_deref().unwrap_or("").to_lowercase().contains(q)
+        || (by_project && project_label(s.cwd.as_deref()).to_lowercase().contains(q))
+}
+
 pub(super) fn layout<'a>(sessions: &'a [SessionInfo], query: &str, by_project: bool, hidden: &HashSet<String>) -> Layout<'a> {
-    let live: Vec<&SessionInfo> = sessions.iter().filter(|s| !hidden.contains(&s.name)).collect();
+    // As ocultas da lista vão para o grupo do fim, que junta as máquinas (`hidden_group`).
+    let live: Vec<&SessionInfo> = sessions.iter().filter(|s| !hidden.contains(&s.name) && !s.hidden_from_list).collect();
     let total = live.len();
-    // Filtro escondido não filtra: com a lista curta de novo, o texto que ficou no campo não esconde ninguém.
-    let q = if total > FILTER_FROM { query.trim().to_lowercase() } else { String::new() };
-    let matches = |s: &SessionInfo| q.is_empty() || s.name.to_lowercase().contains(&q)
-        || s.cwd.as_deref().unwrap_or("").to_lowercase().contains(&q)
-        || (by_project && project_label(s.cwd.as_deref()).to_lowercase().contains(&q));
-    let mut shown: Vec<&SessionInfo> = live.into_iter().filter(|s| matches(s)).collect();
+    let q = filter_query(total, query);
+    let mut shown: Vec<&SessionInfo> = live.into_iter().filter(|s| filter_matches(s, &q, by_project)).collect();
     // Chave de ordem montada uma vez por sessão, não duas por comparação.
     shown.sort_by_cached_key(|s| text_key(&s.name));
     let (waiting, rest): (Vec<&SessionInfo>, Vec<&SessionInfo>) = shown.into_iter().partition(|s| s.state == "awaiting_input");
@@ -406,6 +423,26 @@ pub(super) fn layout<'a>(sessions: &'a [SessionInfo], query: &str, by_project: b
         by_key
     } else if rest.is_empty() { Vec::new() } else { vec![Group { key: "*".into(), label: tr("sessions"), sessions: rest }] };
     Layout { waiting, groups, by_project, total, filtering: !q.is_empty() }
+}
+
+/// Chave do grupo "Ocultas" no `sidebar-collapsed.json`, com o sentido invertido: presente = aberto. Recolhido é o padrão.
+pub(super) const HIDDEN_GROUP: &str = "sidebar:hidden-open";
+
+const REVEAL_WINDOW: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// As ocultas de todas as máquinas, por nome; sendo fechadas (`closing`) ficam de fora como no resto da barra. Cada lista leva
+/// o filtro da máquina dela (`filter_query`), o mesmo que `layout` aplica às visíveis.
+pub(super) fn hidden_group<'k, 'a>(lists: &[(&'k str, &'a [SessionInfo], &str)], closing: &HashSet<Target>, by_project: bool) -> Vec<(&'k str, &'a SessionInfo)> {
+    let mut out: Vec<(&str, &SessionInfo)> = lists.iter().flat_map(|&(key, sessions, q)| sessions.iter()
+        .filter(move |s| s.hidden_from_list && !closing.contains(&Target::new(key, &s.name)) && filter_matches(s, q, by_project))
+        .map(move |s| (key, s))).collect();
+    out.sort_by_cached_key(|(_, s)| text_key(&s.name));
+    out
+}
+
+/// Abas e bandeja: a oculta só fica enquanto é a aberta, e sai quando a pessoa troca de sessão.
+pub(super) fn listed_on(session: &SessionInfo, target: &Target, open: Option<&Target>) -> bool {
+    !session.hidden_from_list || open == Some(target)
 }
 
 /// Uma máquina da barra no agrupar por máquina: a entrada da conexão (ausente num servidor só sem lista salva), a chave, a
@@ -494,33 +531,8 @@ fn group_leads_path() -> Option<PathBuf> {
     Some(crate::appearance::dir()?.join("group-leads.json"))
 }
 
-/// Arquivo ausente é a primeira abertura; ilegível vai ao log em vez de voltar ao padrão sem explicação.
-fn load_json<T: serde::de::DeserializeOwned + Default>(path: Option<PathBuf>) -> T {
-    let Some(path) = path else { return T::default() };
-    let bytes = match std::fs::read(&path) {
-        Ok(bytes) => bytes,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return T::default(),
-        Err(e) => { eprintln!("arquivo ilegível em {}: {e}", path.display()); return T::default(); }
-    };
-    serde_json::from_slice(&bytes).unwrap_or_else(|e| { eprintln!("arquivo inválido em {}: {e}", path.display()); T::default() })
-}
-
 static COLLAPSED_WRITTEN: std::sync::Mutex<u64> = std::sync::Mutex::new(0);
 static LEADS_WRITTEN: std::sync::Mutex<u64> = std::sync::Mutex::new(0);
-
-/// Bloqueante. Só a geração mais nova de cada arquivo grava, trocando o arquivo inteiro (tmp + rename), como
-/// `appearance::save`.
-fn save_json<T: serde::Serialize>(path: Option<PathBuf>, generation: u64, written: &std::sync::Mutex<u64>, saved: &T) -> std::io::Result<()> {
-    let mut written = written.lock().unwrap_or_else(|e| e.into_inner());
-    if generation <= *written { return Ok(()); }
-    let path = path.ok_or_else(|| std::io::Error::other("sem pasta de configuração"))?;
-    std::fs::create_dir_all(path.parent().expect("arquivo dentro de hangar-native"))?;
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, serde_json::to_vec(saved).map_err(std::io::Error::other)?)?;
-    std::fs::rename(&tmp, &path)?;
-    *written = generation;
-    Ok(())
-}
 
 impl Hangar {
     pub(super) fn sidebar_tell(&self) -> Tell { Tell(self.tx.clone(), self.connection) }
@@ -558,6 +570,40 @@ impl Hangar {
         let mut l = layout(sessions, &self.sidebar.filter.read(cx).value(), Self::by_project(), &hidden);
         for group in &mut l.groups { group.key = format!("{key}::{}", group.key); }
         l
+    }
+
+    /// O grupo "Ocultas" do fim da barra: as máquinas com seção, como `machine_lists`, com o filtro que a lista de cada uma usa.
+    pub(super) fn hidden_sessions(&self, cx: &App) -> Vec<(String, &SessionInfo)> {
+        let keys: Vec<String> = if self.multi_server() {
+            self.servers.iter().filter(|s| servers::has_section(s)).map(|s| servers::norm(&s.address)).collect()
+        } else { vec![self.active_key()] };
+        let query = self.sidebar.filter.read(cx).value();
+        let queries: Vec<String> = keys.iter().map(|key| {
+            let total = if self.is_active_key(key) { self.sidebar_layout(cx).total } else { self.remote_layout(key, self.sessions_of(key), cx).total };
+            filter_query(total, &query)
+        }).collect();
+        let lists: Vec<(&str, &[SessionInfo], &str)> = keys.iter().zip(&queries).map(|(key, q)| (key.as_str(), self.sessions_of(key), q.as_str())).collect();
+        hidden_group(&lists, &self.sidebar.deleting, Self::by_project()).into_iter().map(|(key, s)| (key.to_owned(), s)).collect()
+    }
+
+    pub(super) fn hidden_open(&self) -> bool { self.sidebar.is_collapsed(HIDDEN_GROUP) }
+
+    /// O "N" do "Ver sessões ocultas": o que o grupo "Ocultas" mostra onde o botão leva (a barra, ou a bandeja com abas).
+    pub(super) fn hidden_count(&self, cx: &App) -> usize {
+        if appearance::get().navigation.tabs() { self.tray_counts().1 } else { self.hidden_sessions(cx).len() }
+    }
+
+    /// "Ver sessões ocultas": fecha as Configurações e mostra a barra cheia com o grupo aberto.
+    pub(super) fn show_hidden_group(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_settings(window, cx);
+        // Custos, worktrees e o arquivo expandido tomam o lugar da barra e escondem a bandeja.
+        self.close_costs(window, cx);
+        self.close_worktrees(window, cx);
+        self.restore_files();
+        // Com abas não há barra; as ocultas moram no fim de cada coluna da bandeja das máquinas.
+        if appearance::get().navigation.tabs() { self.open_machines_tray(window, cx); }
+        else if self.rail() { self.toggle_rail(cx); }
+        if !self.hidden_open() { self.toggle_group(HIDDEN_GROUP.into(), cx); }
     }
 
     /// A sessão da linha, lida da lista viva da máquina dela.
@@ -622,6 +668,8 @@ impl Hangar {
                 }
             }
         }
+        // O trilho não desenha o grupo "Ocultas": o teclado não anda por linha invisível.
+        if self.hidden_open() && !self.rail() { order.extend(self.hidden_sessions(cx).into_iter().map(|(key, s)| Target::new(&key, &s.name))); }
         order
     }
 
@@ -777,6 +825,7 @@ impl Hangar {
 
     /// Abrir o menu lê o silenciar daquela sessão; resposta de um menu anterior é descartada pelo número.
     pub(super) fn start_menu(&mut self, target: Target, cx: &mut Context<Self>) {
+        self.tour_event(crate::tour::TourEvent::MenuOpened, cx);
         self.clear_hover();
         self.sidebar.press_seq += 1;
         self.sidebar.menu_seq += 1;
@@ -915,6 +964,29 @@ impl Hangar {
         self.write(old, Write::Rename(new, self.sidebar.rename_seq), cx);
     }
 
+    /// Renomear sem diálogo (faixa de sugestão): mesma gravação e mesma resposta do renomear da linha.
+    pub(super) fn rename_session_to(&mut self, target: Target, new: String, cx: &mut Context<Self>) {
+        if self.sidebar.renaming.contains(&target) { return; }
+        self.sidebar.rename_seq += 1;
+        self.sidebar.renaming.insert(target.clone());
+        self.write(target, Write::Rename(new, self.sidebar.rename_seq), cx);
+    }
+
+    pub(super) fn is_renaming(&self, target: &Target) -> bool { self.sidebar.renaming.contains(target) }
+
+    /// "Agora não" da sugestão de nome: some na hora; se o servidor não guardar a recusa, volta com o motivo.
+    pub(super) fn dismiss_rename_suggestion(&mut self, target: Target, cx: &mut Context<Self>) {
+        let life = self.rename_life(&target);
+        self.rename_suggest.dismissed.insert(life);
+        self.write(target, Write::DismissRename, cx);
+    }
+
+    /// "Outra": o servidor gera um nome novo agora; ele chega pela linha da lista.
+    pub(super) fn another_rename_suggestion(&mut self, target: Target, cx: &mut Context<Self>) {
+        self.rename_suggest.again.insert(target.clone());
+        self.write(target, Write::AnotherRename, cx);
+    }
+
     /// Grava na máquina da linha; sem a conexão dela a falha volta pelo mesmo caminho da resposta, nunca calada.
     /// Fechar: a linha some na hora e volta se o servidor recusar (`Wrote`).
     pub(super) fn delete_target(&mut self, target: Target, cx: &mut Context<Self>) {
@@ -937,6 +1009,14 @@ impl Hangar {
                 Write::Editor => match editor { Some(open) => open.await, None => api.act(name, &["open-editor"], None, false, 15).await },
                 Write::Delete => api.act(name, &[], None, true, 30).await,
                 Write::Rename(new, _) => api.act(name, &["rename"], Some(json!({"new": new})), false, 30).await,
+                // 204 sem corpo: o `act` tentaria ler JSON.
+                Write::DismissRename => api.server_send(reqwest::Method::DELETE, &["sessions", name.as_str(), "rename-suggestion"], None, 15).await,
+                // O executor do ditado gera o nome; o prazo cobre a fila dele.
+                Write::AnotherRename => api.server_send_query(reqwest::Method::POST, &["sessions", name.as_str(), "rename-suggestion"],
+                    &[("again", "1")], None, 120).await,
+                // A linha só muda quando a lista seguinte trouxer a marca: nada some antes do servidor gravar.
+                Write::Hide => api.server_send(reqwest::Method::PUT, &["sessions", name.as_str(), "hidden"], None, 15).await,
+                Write::Show => api.server_send(reqwest::Method::DELETE, &["sessions", name.as_str(), "hidden"], None, 15).await,
                 Write::Mode(terminal) => api.act(name, &["modo-execucao"], Some(json!({"terminal": terminal})), false, crate::api::REOPEN_SECONDS).await,
                 Write::Reload => api.act(name, &["recarregar"], None, false, crate::api::REOPEN_SECONDS).await,
                 Write::Account { path, engine_account, .. } => api.act(name, &["conta"], Some(account_body(path, engine_account.as_deref())), false, crate::api::REOPEN_SECONDS).await,
@@ -944,6 +1024,98 @@ impl Hangar {
             tell.send(SidebarReply::Wrote(target, what, result)).await;
         });
         cx.notify();
+    }
+
+    /// "Ocultar da lista": num grupo com mais alguém a ocultar, pergunta antes se vai só esta ou o grupo inteiro.
+    pub(super) fn hide_session(&mut self, target: Target, window: &mut Window, cx: &mut Context<Self>) {
+        use super::grouping::{Row, group_hide_targets};
+        let machines = self.group_machines();
+        let targets = match self.target_session(&target).filter(|_| machines.contains(&target.server)) {
+            Some(session) => {
+                let rows: Vec<Row> = machines.iter().flat_map(|key| self.sessions_of(key).iter()
+                    .filter(|s| !self.sidebar.is_hidden(key, &s.name)).map(move |s| Row { server: key, session: s, invite: false })).collect();
+                group_hide_targets(Row { server: &target.server, session, invite: false }, &rows)
+            }
+            None => Vec::new(),
+        };
+        if targets.len() < 2 { self.write(target, Write::Hide, cx); return; }
+        let names: Vec<String> = targets.iter().map(|t| if t.server == target.server { t.name.clone() }
+            else { format!("{} · {}", t.name, self.machine_label(&t.server, cx)) }).collect();
+        self.focus_origin(&target, window, cx);
+        let weak = cx.entity().downgrade();
+        window.open_dialog(cx, move |dialog, _, _| {
+            let run = |id: &'static str, label: String, all: bool| {
+                let (weak, targets) = (weak.clone(), targets.clone());
+                Button::new(id).label(label).when(all, |b| b.primary()).on_click(move |_, window, cx| {
+                    window.close_dialog(cx);
+                    let _ = weak.update(cx, |this, cx| if all { this.set_group_hidden(targets.clone(), true) } else { this.write(targets[0].clone(), Write::Hide, cx) });
+                })
+            };
+            popup::dialog(dialog).w(px(420.)).title(tr("sidebar_hide_group_title"))
+                .child(div().flex().flex_col().gap(px(2.)).text_sm()
+                    .children(names.iter().map(|name| div().min_w_0().truncate().font_family(theme::MONO).child(name.clone()))))
+                .footer(div().flex().justify_end().gap_2()
+                    .child(Button::new("hide-group-cancel").label(tr("cancel")).on_click(|_, window, cx| window.close_dialog(cx)))
+                    .child(run("hide-group-one", tr("sidebar_hide_only_this"), false))
+                    .child(run("hide-group-all", tr("sidebar_hide_whole_group").replace("{n}", &names.len().to_string()), true)))
+                .on_ok(enter_to_focused)
+        });
+    }
+
+    /// Mensagem minha numa oculta a traz de volta; com outras ocultas no grupo dela, pergunta se voltam junto. O grupo
+    /// não muda: só a marca de oculta sai.
+    pub(super) fn reveal_on_send(&mut self, server: &str, name: &str, window: &mut Window, cx: &mut Context<Self>) {
+        use super::grouping::{Row, group_show_targets};
+        let target = Target::new(&servers::norm(server), name);
+        if self.invite_target(&target) || !self.target_session(&target).is_some_and(|s| s.hidden_from_list) { return; }
+        // ponytail: janela fixa no lugar de acompanhar a lista; cobre o tique de 1,5 s com folga.
+        let now = std::time::Instant::now();
+        self.sidebar.revealed.retain(|_, at| now.duration_since(*at) < REVEAL_WINDOW);
+        if self.sidebar.revealed.insert(target.clone(), now).is_some() { return; }
+        let Some(session) = self.target_session(&target) else { return };
+        let machines = self.group_machines();
+        let others = if machines.contains(&target.server) {
+            let rows: Vec<Row> = machines.iter().flat_map(|key| self.sessions_of(key).iter()
+                .filter(|s| !self.sidebar.is_hidden(key, &s.name)).map(move |s| Row { server: key, session: s, invite: false })).collect();
+            group_show_targets(Row { server: &target.server, session, invite: false }, &rows)
+        } else { Vec::new() };
+        self.write(target.clone(), Write::Show, cx);
+        if others.is_empty() { return; }
+        let names: Vec<String> = others.iter().map(|t| if t.server == target.server { t.name.clone() }
+            else { format!("{} · {}", t.name, self.machine_label(&t.server, cx)) }).collect();
+        let weak = cx.entity().downgrade();
+        window.open_dialog(cx, move |dialog, _, _| {
+            let (weak, others) = (weak.clone(), others.clone());
+            popup::dialog(dialog).w(px(420.)).title(tr("sidebar_show_group_title"))
+                .child(div().flex().flex_col().gap(px(2.)).text_sm().child(tr("sidebar_show_group_body"))
+                    .children(names.iter().map(|name| div().min_w_0().truncate().font_family(theme::MONO).child(name.clone()))))
+                .footer(div().flex().justify_end().gap_2()
+                    .child(Button::new("show-group-one").label(tr("sidebar_show_only_this")).on_click(|_, window, cx| window.close_dialog(cx)))
+                    .child(Button::new("show-group-all").label(tr("sidebar_show_others").replace("{n}", &names.len().to_string())).primary()
+                        .on_click(move |_, window, cx| {
+                            window.close_dialog(cx);
+                            let _ = weak.update(cx, |this, _| this.set_group_hidden(others.clone(), false));
+                        })))
+                .on_ok(enter_to_focused)
+        });
+    }
+
+    /// Cada membro na máquina dele, todos juntos; os que falham voltam numa notificação só, com o motivo de cada um.
+    fn set_group_hidden(&mut self, targets: Vec<Target>, hide: bool) {
+        let calls: Vec<(Target, Result<Api, String>)> = targets.into_iter()
+            .map(|t| { let api = self.machine_api(&t.server).ok_or_else(|| self.machine_error(&t.server)); (t, api) }).collect();
+        let method = if hide { reqwest::Method::PUT } else { reqwest::Method::DELETE };
+        let tell = self.sidebar_tell();
+        self.runtime.spawn(async move {
+            let results = futures::future::join_all(calls.into_iter().map(|(target, api)| { let method = method.clone(); async move {
+                let result = match api {
+                    Ok(api) => api.server_send(method, &["sessions", target.name.as_str(), "hidden"], None, 15).await.map(|_| ()),
+                    Err(reason) => Err(Failure::local(reason)),
+                };
+                result.err().map(|error| (target, error))
+            }})).await;
+            tell.send(SidebarReply::GroupVisibility(hide, results.into_iter().flatten().collect())).await;
+        });
     }
 
     // ── Git e encadear ──
@@ -1119,6 +1291,11 @@ impl Hangar {
         cx.notify();
     }
 
+    /// Falha de ocultar/mostrar e da ocultação automática: 404 sem código é rota que o servidor ainda não tem.
+    pub(super) fn visibility_failure(error: &Failure) -> String {
+        if error.status == Some(404) && error.code.is_none() { tr("sessions_server_outdated") } else { Self::fetch_failure(error) }
+    }
+
     /// Foco na linha/aba de onde o menu saiu (o `menuOrigem` do web), para o diálogo devolvê-lo ao fechar.
     pub(super) fn focus_origin(&self, target: &Target, window: &mut Window, cx: &mut Context<Self>) {
         self.row_focus(target).unwrap_or(&self.root_focus).focus(window, cx);
@@ -1187,9 +1364,16 @@ impl Hangar {
                 cx.notify();
             }
             SidebarReply::Note(target, kind, text) => window.push_notification(git_note(&target.name, kind, text), cx),
+            SidebarReply::GroupVisibility(hide, skipped) => {
+                if skipped.is_empty() { return; }
+                let names: Vec<String> = skipped.iter().map(|(t, error)| format!("{} ({})", t.name, Self::visibility_failure(error))).collect();
+                let key = if hide { "sidebar_hide_group_skipped" } else { "sidebar_show_group_skipped" };
+                window.push_notification(Notification::error(tr(key).replace("{names}", &names.join(", "))), cx);
+            }
             SidebarReply::Group(seq, reply) => self.receive_group(seq, reply, window, cx),
             SidebarReply::Sheet(reply) => self.receive_sheet(reply, window, cx),
             SidebarReply::Identity(key, result) => self.receive_identity(key, result, window, cx),
+            SidebarReply::AutoHide(reply) => self.receive_auto_hide(reply, window, cx),
             SidebarReply::Chained(from, seq, target, result) => {
                 // Só o diálogo que mandou este pedido recebe a resposta; fechado, ela vai à notificação.
                 let open = self.sidebar.chain.as_ref().filter(|c| c.status.borrow().sent == Some(seq));
@@ -1287,8 +1471,23 @@ impl Hangar {
                     (Write::Mode(_), Err(error)) => Some(Notification::error(failed("sidebar_mode_failed", &error))),
                     (Write::Reload, Ok(_)) => Some(Notification::success(tr("reload_sent"))),
                     (Write::Reload, Err(error)) => Some(Notification::error(failed("sidebar_reload_failed", &error))),
-                    (Write::Account { label, .. }, Ok(_)) => Some(Notification::success(tr("sidebar_same_moved").replace("{n}", label))),
+                    (Write::Account { label, .. }, Ok(_)) => {
+                        self.tour_event(crate::tour::TourEvent::AccountMoved, cx);
+                        Some(Notification::success(tr("sidebar_same_moved").replace("{n}", label)))
+                    }
                     (Write::Account { .. }, Err(error)) => Some(Notification::error(failed("sidebar_same_failed", &error))),
+                    (Write::AnotherRename, result) => {
+                        self.rename_suggest.again.remove(&target);
+                        result.err().map(|error| Notification::error(Self::fetch_failure(&error)))
+                    }
+                    (Write::Hide | Write::Show, Ok(_)) => None,
+                    (Write::Hide, Err(error)) => Some(Notification::error(tr("sidebar_hide_failed").replace("{n}", &Self::visibility_failure(&error)))),
+                    (Write::Show, Err(error)) => Some(Notification::error(tr("sidebar_show_failed").replace("{n}", &Self::visibility_failure(&error)))),
+                    (Write::DismissRename, Ok(_)) => None,
+                    (Write::DismissRename, Err(error)) => {
+                        self.rename_suggest.dismissed.retain(|(dismissed, _)| *dismissed != target);
+                        Some(Notification::error(Self::fetch_failure(&error)))
+                    }
                     (Write::Delete, Ok(value)) => {
                         // Fechou, mas um par do grupo não foi avisado: o motivo aparece em vez de fechar mudo.
                         value.get("warning").filter(|w| !w.is_null()).map(|w| Notification::warning(crate::api::warning_text(w)))
@@ -1312,17 +1511,25 @@ impl Hangar {
     /// `count`: as sessões que a seção mostra, com os grupos juntados.
     pub(super) fn render_group_header(&self, group: &Group, count: usize, awaiting: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let open = !self.sidebar.collapsed.contains(&group.key);
-        let id = SharedString::from(format!("group-{}", group.key));
+        self.group_trigger(&group.key, &group.key, group.label.clone(), open, Some(count), awaiting, window, cx)
+    }
+
+    /// "Ocultas (N)": o mesmo cabeçalho, aberto quando a chave está no arquivo. `place` separa o id de foco
+    /// de cada lugar (barra, cada coluna da bandeja); abrir e fechar segue um interruptor só.
+    pub(super) fn render_hidden_header(&self, place: &str, count: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let label = tr("sidebar_hidden_group").replace("{n}", &count.to_string());
+        self.group_trigger(HIDDEN_GROUP, &format!("{HIDDEN_GROUP}/{place}"), label, self.hidden_open(), None, 0, window, cx)
+    }
+
+    /// `count` ausente: o rótulo já leva a contagem. `id_key` é o id do elemento; `key`, o interruptor.
+    #[allow(clippy::too_many_arguments)]
+    fn group_trigger(&self, key: &str, id_key: &str, label: String, open: bool, count: Option<usize>, awaiting: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let id = SharedString::from(format!("group-{id_key}"));
         let focus = window.use_keyed_state(SharedString::from(format!("{id}-focus")), cx, |_, cx| cx.focus_handle().tab_stop(true)).read(cx).clone();
-        let (key, weak) = (group.key.clone(), cx.entity().downgrade());
-        AccordionTrigger::new(id).open(open).track_focus(&focus).aria_label(format!("{} · {count}", group.label))
-            .flex_shrink_0().mt(px(8.)).h(px(28.)).px(px(8.)).rounded(px(8.)).border_1().border_color(transparent_black())
-            .flex().items_center().gap(px(6.)).cursor_pointer().hover(|el| el.bg(theme::hover())).focus_visible(|el| el.border_color(theme::accent_focus()))
-            .child(chrome::small_icon(if open { IconName::ChevronDown } else { IconName::ChevronRight }, 14., theme::faint()))
-            .child(div().min_w_0().truncate().text_xs().font_weight(FontWeight::MEDIUM).text_color(theme::muted()).child(group.label.clone()))
-            .child(div().flex_shrink_0().font_family(theme::MONO).text_size(px(11.)).text_color(theme::faint()).child(count.to_string()))
-            .when(awaiting > 0, |el| el.child(div().flex_shrink_0().font_family(theme::MONO).text_size(px(11.)).text_color(theme::warning())
-                .child(format!("{awaiting} {}", tr("sidebar_awaiting_short")))))
+        let (key, weak) = (key.to_owned(), cx.entity().downgrade());
+        let trigger = AccordionTrigger::new(id).open(open).track_focus(&focus).aria_label(count.map_or_else(|| label.clone(), |n| format!("{label} · {n}")));
+        group_header_look(trigger, label, open, count, awaiting)
+            .cursor_pointer().hover(|el| el.bg(theme::hover())).focus_visible(|el| el.border_color(theme::accent_focus()))
             .on_change(move |_, _, _, cx| { let _ = weak.update(cx, |this, cx| this.toggle_group(key.clone(), cx)); })
             .into_any_element()
     }
@@ -1352,14 +1559,41 @@ impl Hangar {
 pub(super) fn menu_style(menu: PopupMenu) -> PopupMenu {
     use gpui_kit::component::menu::PopupMenuAppearance;
     menu.appearance(PopupMenuAppearance::default()
-        .surface_style(StyleRefinement::default().rounded(px(12.)).border_1().border_color(theme::glass_border())
-            .bg(theme::raised()).text_color(theme::text()).shadow(theme::popover_shadow()))
-        .list_style(StyleRefinement::default().p(px(popup::INSET)).gap(px(2.)))
-        .item_height(px(28.25))
-        .item_style(StyleRefinement::default().px(px(8.)).rounded(px(7.)).text_size(px(13.)).line_height(relative(1.25)))
+        .surface_style(menu_surface_look())
+        .list_style(menu_list_look())
+        .item_height(menu_item_height())
+        .item_style(menu_item_look())
         .separator_style(StyleRefinement::default().border_b_0().h(px(1.)).mx(px(-popup::INSET)).my(px(2.)).bg(theme::border()))
-        .label_renderer(|label, _, _| popup::title(label.to_string(), Some("esc")).w_full())
+        .label_renderer(|label, _, _| menu_label(label.to_string()))
         .key_renderer(|key, _, _| popup::key_hint("").child(key.appearance(false))))
+}
+
+// As partes do `menu_style` em separado: a miniatura da novidade "ocultar da lista" monta o menu com as mesmas.
+pub(crate) fn menu_surface_look() -> StyleRefinement {
+    StyleRefinement::default().rounded(px(12.)).border_1().border_color(theme::glass_border())
+        .bg(theme::raised()).text_color(theme::text()).shadow(theme::popover_shadow())
+}
+
+pub(crate) fn menu_list_look() -> StyleRefinement { StyleRefinement::default().p(px(popup::INSET)).gap(px(2.)) }
+
+pub(crate) fn menu_item_look() -> StyleRefinement {
+    StyleRefinement::default().px(px(8.)).rounded(px(7.)).text_size(px(13.)).line_height(relative(1.25))
+}
+
+pub(crate) fn menu_item_height() -> Pixels { px(28.25) }
+
+pub(crate) fn menu_label(label: String) -> Div { popup::title(label, Some("esc")).w_full() }
+
+/// O cabeçalho de grupo da barra sem foco nem clique: ▾, rótulo, contagem e quantos aguardam. A tela o veste num
+/// `AccordionTrigger`; a miniatura da novidade, num `div`.
+pub(crate) fn group_header_look<E: Styled + ParentElement + IntoElement>(el: E, label: String, open: bool, count: Option<usize>, awaiting: usize) -> E {
+    el.flex_shrink_0().mt(px(8.)).h(px(28.)).px(px(8.)).rounded(px(8.)).border_1().border_color(transparent_black())
+        .flex().items_center().gap(px(6.))
+        .child(chrome::small_icon(if open { IconName::ChevronDown } else { IconName::ChevronRight }, 14., theme::faint()))
+        .child(div().min_w_0().truncate().text_xs().font_weight(FontWeight::MEDIUM).text_color(theme::muted()).child(label))
+        .when_some(count, |el, n| el.child(div().flex_shrink_0().font_family(theme::MONO).text_size(px(11.)).text_color(theme::faint()).child(n.to_string())))
+        .when(awaiting > 0, |el| el.child(div().flex_shrink_0().font_family(theme::MONO).text_size(px(11.)).text_color(theme::warning())
+            .child(format!("{awaiting} {}", tr("sidebar_awaiting_short")))))
 }
 
 /// O mesmo menu no clique direito da linha, no ⋯ e na aba, para a sessão de qualquer máquina (`server` é a chave dela).
@@ -1376,10 +1610,14 @@ pub(super) fn session_menu(hangar: WeakEntity<Hangar>, server: String, session: 
                     .on_click(move |_, window, cx| { let _ = hangar.update(cx, |this, cx| this.open_arbiter(&target, window, cx)); }));
         }
         // As outras sessões da mesma máquina, na ordem da barra sem o filtro, são as candidatas do encadear (web:
-        // `chainCandidates`, que lê os grupos inteiros daquele servidor): o vínculo é resolvido pelo backend dela.
+        // `chainCandidates`, que lê os grupos inteiros daquele servidor): o vínculo é resolvido pelo backend dela. As ocultas
+        // da lista também servem, depois das outras, na ordem do grupo "Ocultas".
         let others = |hangar: &Hangar, target: &Target| -> Vec<String> {
-            let l = layout(hangar.sessions_of(&target.server), "", Hangar::by_project(), &hangar.sidebar.hidden_on(&target.server));
-            l.waiting.iter().chain(l.groups.iter().flat_map(|g| g.sessions.iter())).filter(|s| s.name != target.name).map(|s| s.name.clone()).collect()
+            let sessions = hangar.sessions_of(&target.server);
+            let l = layout(sessions, "", Hangar::by_project(), &hangar.sidebar.hidden_on(&target.server));
+            let hidden = hidden_group(&[(target.server.as_str(), sessions, "")], &hangar.sidebar.deleting, false);
+            l.waiting.iter().copied().chain(l.groups.iter().flat_map(|g| g.sessions.iter().copied())).chain(hidden.into_iter().map(|(_, s)| s))
+                .filter(|s| s.name != target.name).map(|s| s.name.clone()).collect()
         };
         let invite = entity.read(cx).invite_target(&target);
         // Convite não tem Silenciar, então nada a atualizar na posição dele.
@@ -1429,6 +1667,18 @@ fn mute_item(hangar: &WeakEntity<Hangar>, target: &Target, mute: Option<Mute>) -
         Some(Mute::Failed(reason)) => PopupMenuItem::new(tr("sidebar_mute_unread").replace("{n}", &reason)).disabled(true),
         Some(Mute::Loading) | None => PopupMenuItem::new(format!("{}…", tr("sidebar_mute"))).disabled(true),
     }
+}
+
+/// "Ocultar da lista" / "Mostrar na lista". Esperando você não oculta: o servidor tiraria a marca na rodada seguinte.
+fn hide_item(hangar: &WeakEntity<Hangar>, target: &Target, session: &SessionInfo) -> PopupMenuItem {
+    let hidden = session.hidden_from_list;
+    let waiting = !hidden && (session.state == "awaiting_input" || session.pending_questions > 0);
+    let label = tr(if hidden { "sidebar_show" } else { "sidebar_hide" });
+    let label = if waiting { format!("{label} · {}", tr("sidebar_hide_waiting")) } else { label };
+    let (hangar, target) = (hangar.clone(), target.clone());
+    PopupMenuItem::new(label).disabled(waiting).on_click(move |_, window, cx| {
+        let _ = hangar.update(cx, |this, cx| if hidden { this.write(target.clone(), Write::Show, cx) } else { this.hide_session(target.clone(), window, cx) });
+    })
 }
 
 /// Como a linha sai da lista pelo menu: a sessão de fora nunca se fecha daqui (é da outra pessoa), só se sai do par.
@@ -1526,7 +1776,9 @@ fn fill_menu(menu: PopupMenu, hangar: &WeakEntity<Hangar>, target: &Target, sess
     // são do servidor inteiro ou mexem no processo do dono.
     menu_style(menu).min_w(px(240.)).label(session.name.clone())
         .item(item(tr("sidebar_rename"), |this, target, window, cx| this.start_session_rename(target, window, cx)))
+        // Depois do Silenciar, para o `replace_item(2, …)` continuar achando ele.
         .when(!invite, |menu| menu.item(mute_item(hangar, target, mute))
+            .item(hide_item(hangar, target, session))
             .item(item(tr_shared("compartilhar_menu", &[]), |this, target, window, cx| this.open_share_dialog(target, window, cx)))
             .item(item(tr("par_menu"), |this, target, window, cx| this.open_pair_accept_dialog(Some(target), None, window, cx))))
         .when_some(cwd, |menu, cwd| menu
@@ -1835,6 +2087,7 @@ impl Hangar {
         }
         let host = self.server_label(cx);
         let (on, enabled) = (self.new_chat_screen() && self.reopen.is_none(), self.api.is_some());
+        let vault_chips = self.render_vault_chips(true, cx);
         div().w_full().min_h_0().flex().flex_col().items_center().when(!fit_content, |el| el.h_full())
             // O ponto do chip "N no Hangar" fica no canto da marca.
             .child(div().relative().h(px(44.)).w_full().flex_shrink_0().flex().items_center().justify_center()
@@ -1849,17 +2102,25 @@ impl Hangar {
                 .tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new(tr("new_chat_title")).build(window, cx))
                 .child(chrome::small_icon(IconName::SquarePen, 16., theme::muted()))
                 .when(enabled, |el| el.on_click(cx.listener(|this, _, window, cx| this.go_home(window, cx)))))
-            .child(div().id("session-list").min_h_0().w_full().overflow_y_scroll().px(px(3.)).flex().flex_col().gap(px(4.))
+            // A barra recolhida não mostra os cartões, e o agente fica esperando a resposta: fica à vista, fora
+            // da rolagem da lista, com teto para várias máquinas em janela curta não tomarem a altura das sessões.
+            .when(!vault_chips.is_empty(), |el| el.child(div().id("rail-vault").flex_shrink_0().w_full().max_h(px(84.)).mb(px(4.))
+                .overflow_y_scroll().flex().flex_col().items_center().gap(px(4.)).children(vault_chips)))
+            .child(div().id("session-list").min_h_0().w_full().overflow_y_scroll().track_scroll(&self.rows_scroll).px(px(3.)).flex().flex_col().gap(px(4.))
                 .when(!fit_content, |el| el.flex_1())
                 .children(rows))
             .child(div().w_full().flex_shrink_0().pt(px(8.)).pb(px(8.)).mt(px(4.)).border_t_1().border_color(theme::border())
                 .flex().flex_col().items_center().gap(px(4.))
-                // O CTA do web no trilho: o botão cheio de destaque, só com o +.
-                .child(Button::new("rail-new-session").custom(ButtonCustomVariant::new(cx).color(theme::accent()).foreground(theme::on_accent())
+                // O CTA do web no trilho: o botão cheio de destaque, só com o +. Com a barra recolhida, o primeiro passo do
+                // tour aponta para ele. Na troca de forma só a camada que está à vista marca a âncora (o corte de
+                // `render_sidebar`): a do trilho, desenhada por último, tomaria a posição do botão da lista cheia.
+                .child(div().flex_shrink_0().map(|el| if self.rail_progress().is_none_or(|p| p >= 0.5) { popup::anchor(el, crate::tour::anchors::NEW_SESSION) } else { el })
+                    .child(Button::new("rail-new-session")
+                        .custom(ButtonCustomVariant::new(cx).color(theme::accent()).foreground(theme::on_accent())
                         .hover(theme::accent().opacity(0.85)).active(theme::accent().opacity(0.75)))
                     .icon(chrome::small_icon(IconName::Plus, 16., theme::on_accent())).w(px(44.)).h(px(36.)).rounded(px(8.))
                     .tooltip(tr("create_title")).accessibility_label(tr("create_title")).disabled(self.api.is_none())
-                    .on_click(cx.listener(|this, _, window, cx| this.open_new_session(None, window, cx))))
+                    .on_click(cx.listener(|this, _, window, cx| this.open_new_session(None, window, cx)))))
                 .child(self.fold_button("rail-fold", cx))
                 .child(Button::new("rail-connection").ghost().size(px(36.)).rounded(px(8.)).tooltip(host).accessibility_label(tr("connection"))
                     .child(div().size(px(7.)).rounded_full().bg(if self.list_online { theme::success() } else { theme::warning() }))
@@ -1879,6 +2140,8 @@ impl Hangar {
         let questions = session.pending_questions;
         let mut tip = format!("{} · {host} · {}", session.name, tr(&format!("chip_{}", if limited { "limited" } else { state })));
         if questions > 0 { tip.push_str(&format!(" · ? {questions}")); }
+        // O trilho não tem largura para o selo: a marca vai na dica e no que o leitor de tela diz.
+        if session.asleep { tip.push_str(&format!(" · {}", tr_shared("session_asleep_badge", &[]))); }
         if session.orq() { tip.push_str(&format!(" · {}", tr_shared("orq_row_badge", &[]))); }
         let status = self.nav_avatar(format!("rail-mark-{row_key}"), session_look(&session), 24.);
         let tip_text = tip.clone();
@@ -1898,6 +2161,7 @@ impl Hangar {
         let (weak, menu_target, open) = (cx.entity().downgrade(), target.clone(), target.clone());
         el.on_mouse_down(MouseButton::Right, cx.listener(move |this, _, _, cx| this.start_menu(menu_target.clone(), cx)))
             .on_click(cx.listener(move |this, _, window, cx| this.open_target(&open, window, cx)))
+            .map(|el| popup::anchor(el, crate::tour::anchors::session_row(&target.server, &target.name)))
             .context_menu(session_menu(weak, target.server, session))
             .into_any_element()
     }
@@ -1907,6 +2171,28 @@ impl Hangar {
 mod tests {
     // Sem glob: o `test` do gpui_kit, que o `super::*` traz, esconderia o `#[test]` da linguagem.
     use super::{BranchList, HashSet, SessionInfo, first_line, has_git, layout, machine_split, rail_label, row_server_visible, save_json};
+
+    #[test]
+    fn layout_moves_hidden_sessions_to_the_final_group_and_keeps_the_open_one_in_tabs() {
+        use super::{Target, hidden_group, listed_on};
+        let hidden = |name: &str| SessionInfo { name: name.into(), hidden_from_list: true, ..Default::default() };
+        let nb = vec![SessionInfo { name: "api".into(), ..Default::default() }, hidden("zeta")];
+        let dp = vec![hidden("beta"), hidden("closing")];
+        let l = layout(&nb, "", false, &HashSet::new());
+        let names: Vec<&str> = l.groups.iter().flat_map(|g| g.sessions.iter().map(|s| s.name.as_str())).collect();
+        assert_eq!((names, l.total), (vec!["api"], 1), "a oculta sai do layout da máquina");
+        let closing = HashSet::from([Target::new("dp", "closing")]);
+        let group: Vec<(&str, &str)> = hidden_group(&[("nb", nb.as_slice(), ""), ("dp", dp.as_slice(), "")], &closing, false).into_iter().map(|(k, s)| (k, s.name.as_str())).collect();
+        assert_eq!(group, [("dp", "beta"), ("nb", "zeta")], "junta as máquinas por nome, sem a que está sendo fechada");
+        let filtered: Vec<&str> = hidden_group(&[("nb", nb.as_slice(), "zet"), ("dp", dp.as_slice(), "zet")], &closing, false).into_iter().map(|(_, s)| s.name.as_str()).collect();
+        assert_eq!(filtered, ["zeta"], "o filtro da barra vale também para as ocultas");
+        assert_eq!(super::filter_query(6, "Zet "), "", "lista curta: filtro escondido não filtra");
+        assert_eq!(super::filter_query(7, "Zet "), "zet");
+        let (zeta, open) = (Target::new("nb", "zeta"), Target::new("nb", "zeta"));
+        assert!(listed_on(&nb[1], &zeta, Some(&open)), "a aberta fica nas abas");
+        assert!(!listed_on(&nb[1], &zeta, Some(&Target::new("nb", "api"))), "trocou de sessão, a oculta sai");
+        assert!(listed_on(&nb[0], &Target::new("nb", "api"), None));
+    }
 
     #[test]
     fn outside_session_menu_leaves_the_pair_and_never_closes() {
@@ -2134,6 +2420,15 @@ mod tests {
         let read: HashSet<String> = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(read, both, "a gravação do 1º clique terminou por último e não voltou o arquivo");
         assert!(!path.with_extension("tmp").exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            // Um tmp largo que sobrou de antes não passa o modo dele ao arquivo.
+            std::fs::write(path.with_extension("tmp"), b"").unwrap();
+            std::fs::set_permissions(path.with_extension("tmp"), std::fs::Permissions::from_mode(0o644)).unwrap();
+            save_json(Some(path.clone()), 3, &written, &one).unwrap();
+            assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        }
         let _ = std::fs::remove_dir_all(dir);
     }
 

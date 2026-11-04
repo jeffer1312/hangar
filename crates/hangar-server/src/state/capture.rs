@@ -271,6 +271,7 @@ mod tests {
         async fn preview_capture(&self) -> Option<Result<Frame, CaptureFailed>> { None }
         async fn preview_files(&self, _: &str) -> Vec<crate::state::preview::HookFile> { Vec::new() }
         fn committed(&self) -> Option<Arc<str>> { None }
+        fn committed_known(&self) -> bool { true }
         async fn publish_preview(&self, _: hangar_api::preview::PreviewEvent) -> bool { true }
         fn wall(&self) -> f64 { crate::state::monitor::wall_now() }
     }

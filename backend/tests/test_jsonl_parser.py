@@ -804,6 +804,15 @@ def test_background_agent_launch_carries_the_agent_id():
     assert final.bg_agent_id is None
 
 
+def test_taskstop_fecha_o_trabalho_parado():
+    parada = {"message": "Successfully stopped task: ag1 (Animar)", "task_id": "ag1",
+              "task_type": "local_agent", "command": "Animar"}
+    evs = parse_line(_tool_result_line(parada))
+    assert [(e.kind, e.tool_use_id) for e in evs] == [("tool_result", "toolu_1"), ("tool_result", "task:ag1")]
+    assert evs[1].id != evs[0].id
+    assert [e.tool_use_id for e in parse_line(_tool_result_line({"task_id": "ag1"}))] == ["toolu_1"]
+
+
 def _colega(bloco: str) -> str:
     return _user('Another Claude session sent a message:\n<teammate-message teammate_id="frente-c"'
                  + bloco + '</teammate-message>\n\nThis came from another Claude session.')

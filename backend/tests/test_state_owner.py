@@ -369,7 +369,6 @@ def headless(tmp_path, monkeypatch):
     monkeypatch.setattr(sse, "get_adapter", lambda provider: adapter)
     monkeypatch.setattr(sse.PreviewBroker, "get", _sem_broker)
     monkeypatch.setattr(runtime_coordinator, "_current", _Dono("rust"))
-    monkeypatch.setitem(plugin_bridge._sugestoes, "h", "roda os testes")
     jsonl = tmp_path / "sid.jsonl"
     jsonl.write_text("")
     return adapter, jsonl

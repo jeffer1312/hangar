@@ -18,7 +18,7 @@ pub const PATH: &str = "/api/sessions/prewarm";
 const BODY_LIMIT: usize = 1024 * 1024;
 
 pub async fn put(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (fwd, owner) = crate::routes::gate(&st, peer, &req);
+    let (fwd, owner) = match crate::routes::gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     // Como o Mermaid: o Python recusa o convidado (403, fora do bloqueio) e quem não tem credencial (401, que conta).
     if !owner { return crate::routes::pass(&st, req, &fwd).await; }
     let headers = req.headers().clone();
@@ -29,7 +29,7 @@ pub async fn put(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo
 
 pub async fn delete(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, Path(id): Path<String>,
                     req: Request) -> Response {
-    let (fwd, owner) = crate::routes::gate(&st, peer, &req);
+    let (fwd, owner) = match crate::routes::gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     if !owner { return crate::routes::pass(&st, req, &fwd).await; }
     let mut response = discard(&st, &id, req.uri()).await;
     crate::routes::cors(req.headers(), response.headers_mut());

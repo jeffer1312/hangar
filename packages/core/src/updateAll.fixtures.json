@@ -6,6 +6,8 @@
     { "nome": "disco-a-frente", "estado_get": { "versoes": { "repo": "novo", "backend": "velho-dirty" } }, "esperado": "iniciar" },
     { "nome": "branch", "estado_get": { "atualizacao_disponivel": true, "pre_voo": { "branch_de_trabalho": true, "branch": "feature", "alvo": "main", "sujo": 1 }, "estado": { "fase": "rodando" } }, "esperado": "travado:branch" },
     { "nome": "sujo", "estado_get": { "atualizacao_disponivel": true, "pre_voo": { "sujo": 1 } }, "esperado": "travado:mudancas" },
+    { "nome": "aviso-pendente-com-edicao", "estado_get": { "pending_warning": true, "pre_voo": { "sujo": 1, "branch_de_trabalho": true, "branch": "feature", "alvo": "main" } }, "esperado": "iniciar" },
+    { "nome": "aviso-pendente-rodando", "estado_get": { "pending_warning": true, "estado": { "fase": "rodando" } }, "esperado": "travado:rodando" },
     { "nome": "ahead", "estado_get": { "atualizacao_disponivel": true, "pre_voo": { "ahead": 1 }, "estado": { "fase": "rodando" } }, "esperado": "travado:mudancas" },
     { "nome": "divergiu", "estado_get": { "atualizacao_disponivel": true, "pre_voo": { "divergiu": true } }, "esperado": "travado:mudancas" },
     { "nome": "rodando", "estado_get": { "atualizacao_disponivel": true, "pre_voo": { "pode": false }, "estado": { "fase": "rodando" } }, "esperado": "travado:rodando" },

@@ -5,6 +5,31 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 
 ## Regras vigentes
 
+- **Evento da CLI do Claude sem terminal escolhe um canal que já existe; nenhum cai calado.** Rótulo
+  passageiro para o que some sozinho (nova tentativa da API, hook rodando há mais de 3 s); nota na
+  conversa para falha ou mudança que a pessoa precisa saber; faixa só para o erro do turno; diário para
+  o resto. Nota de configuração (MCP ou plugin que não subiu, aviso `high`/`immediate` da CLI) sai uma
+  vez por vida do processo, e a adoção pelo Rust reiniciado não a repete. Nota de ocorrência (recusa
+  do modelo, motivo anormal do fim do turno, falha de hook com as seguidas somadas) sai quando
+  acontece; a falha de hook repetida soma até o fim do turno. O `system/*` sem ramo vai ao diário como
+  `system/{subtype}`. Com terminal, os avisos saem só do transcript ou do plugin, **nunca lendo a
+  tela**, e o leitor só monta nota em linha `"entrypoint":"cli"` (a `sdk-cli` já tem a nota do ator);
+  só o chat ao vivo e o `/history` do chat ligam as notas (`LineParser::with_notices`,
+  `merged_history_with_notices`). Ver
+  [avisos do Claude sem terminal](#avisos-do-claude-sem-terminal-02112026) e
+  [com terminal](#avisos-do-claude-com-terminal-pelo-transcript-02112026).
+
+- **Subagentes Codex são conversas filhas, acompanhadas no mesmo painel dos subagentes Claude.**
+  UUID, caminho do agente e nome da sessão são identificadores distintos. A descoberta fica na
+  conta e na conversa do pai; histórico copiado antes do nascimento do filho não é atividade dele.
+  Retorno de criação não encerra agente, e evento do filho não troca o estado nem a prévia do pai.
+  O ator publica o estado em `state.codex_subagents`; a descoberta dos metadados é inicial ou
+  motivada por UUID/caminho novo ou evento de atividade da filha, sem consulta periódica saudável do Codex. Histórico sem estado
+  confirmado não cria agente ativo; indisponibilidade não é conclusão. A leitura do detalhe aberto
+  continua enquanto ele executa e recebe uma última atualização ao terminar.
+  Mensagem direta depende da capacidade efetiva do app-server; recusa nunca vira entrega nem
+  prompt ao modelo pai. Ver [subagentes Codex no painel](#subagentes-codex-no-painel-de-atividade-28102026).
+
 - **Claude e Codex enviam a fila comum em lote, com e sem terminal.** A reserva atômica reúne
   as mensagens que já esperam, na ordem, com `\n`; entradas posteriores ficam para o próximo
   turno. Recados, comandos, respostas reservadas e Orientar individual conservam seus caminhos.
@@ -204,7 +229,8 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   mtime. `tool.result` não tem `uuid` — id é `res:<toolCallId>`.
 - **Integração nativa do Codex: o Codex converte, o backend decide quando, o lançador só avisa.**
   Dois gatilhos, e só: abertura de sessão Codex e o botão Reconciliar. A integração não grava
-  confiança de hooks; quem confia nos pendentes é o lançador, na abertura (regra abaixo). Fonte
+  confiança de hooks; quem confia nos pendentes é o lançador, na abertura, e o ator Codex, na
+  recusa com a sessão aberta (regras abaixo). Fonte
   inválida nunca significa remoção.
 - **Triagem do Claude não atravessa a importação para o Codex.** `skill-suggester.py`,
   `jev-command-gate.py` e `jev-answer-check.py` são excluídos pelo nome exato do arquivo,
@@ -316,10 +342,18 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   antes dessa identidade comum.
 - **Contas Codex adicionais têm `CODEX_HOME` próprio**; a identidade é `credential_id=codex:<home>`,
   nunca a chave. Sem migração, rotação ou troca automática por cota.
-- **Abrir Codex nunca espera a sincronização**, nem no modal nem no pane: o lançador dispara o
-  preparo da conta adicional (ou a reconciliação da padrão) no backend e sobe a TUI na hora, com a
-  config que a conta já tem; o resultado vale a partir da próxima sessão. Preparo em andamento →
-  o lançador confia a pasta ele mesmo; falha ao pedir vira aviso no pane, nunca sessão fechada.
+- **O primeiro preparo do Codex termina antes da abertura**, com e sem terminal. A conta pronta
+  fica registrada e é reutilizada; relógio, nova abertura e mudança na fonte não mandam reinstalar
+  recursos. Atualizações posteriores entram pela sincronização manual. A confiança do novo `cwd`
+  continua separada do preparo da conta. Falha (`error`) ou prazo vencido recusam a abertura antes
+  de criar a sessão; o trabalho de preparo continua e pode ser consultado. Preparo parcial
+  (`partial`, um recurso que não sincronizou) abre a sessão: o servidor devolve as pendências em
+  `avisos` e o `hangar-codex-tui` as escreve no pane. O parcial fica registrado e é reaproveitado
+  por 5 minutos; a primeira abertura depois disso prepara de novo e, sem pendência, a conta passa
+  a pronta. Ver [a entrada](#preparo-parcial-abre-a-sessão-31102026). O runtime do ECC é conferido antes
+  de registrar a conta pronta, com dependências de produção sem scripts de instalação ou links de
+  binários. O passo de máquina `2026-10-29-codex-preparo-unico` repara as instalações anteriores uma
+  vez, preservando hooks pessoais e comandos próprios que já funcionam.
 - **A memória do Claude só é vista pelo Codex com uma CONVERSA ao lado dela** — e não basta o
   `.jsonl` existir: sessão que abriu e nunca conversou é descartada igual. Copiar só a `memory/`
   faz a reconciliação terminar `ok` sem trazer nada. Como o critério do detector não é documentado,
@@ -416,10 +450,20 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   ou o standalone oficial por `codex update` com `CODEX_RELEASE` fixado e o `CODEX_HOME` do
   standalone (nunca o da conta), antes do app-server (versão publicada consultada no máximo
   uma vez por hora, a tela mostra
-  "atualizando o Codex"), e confia nos hooks pendentes pelo app-server (`hooks/list` +
+  "atualizando o Codex"), confere os marketplaces de plugins (`codex plugin marketplace upgrade`,
+  em toda abertura, também no sem terminal) e confia nos hooks pendentes pelo app-server (`hooks/list` +
   `config/batchWrite` do `trusted_hash`), porque eles vêm da sincronização do próprio Hangar.
   Falha em qualquer dos dois só registra na tela e a abertura segue. O cartão pré-thread
   reconhece o rodapé curto (`enter continue · esc skip`) além do antigo.
+- **Hook sincronizado recusado com a sessão já aberta é aprovado pelo ator Codex, pela conexão
+  da própria sessão.** O `hook/completed` com "hook approval required" dispara `hooks/list` e
+  `config/batchWrite` do `currentHash` (formato `declaração/conteúdo`; o Codex grava
+  `trusted_hash` e `trusted_content_hash`) com `reloadUserConfig`, para os hooks `user`,
+  `plugin` e o `hooks.json` da conta. Só a recarga no app-server da sessão tira a recusa da
+  memória dela; gravar o arquivo por outro processo não basta. A mesma rodada sai antes da recusa,
+  calada, quando o `plugins/cache` da conta muda (observador único por conta, 500 ms de espera). Ver
+  [reaprovação antes da recusa](#reaprovação-antes-da-recusa-03112026) e
+  [plugin reinstalado com a sessão aberta](#plugin-reinstalado-com-a-sessão-aberta-28102026).
 - **Pergunta assíncrona do Codex chega como `agentMessage` com `delivery: "async"`**, não como
   pedido JSON-RPC. Cada pergunta é independente; o eco da resposta local não responde outra de
   título igual.
@@ -766,12 +810,17 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   conversa em curso também volta como aviso, sem ser falada. O resumo de outra sessão abre com
   "Chegou um resultado da X, não da Y". Sem `delegationAckFiller` ("um segundo" a cada delegação). Medição
   em "Voz: resultado de outra sessão tomando a vez (14/10/2026)".
+- **Voz: sem sessão local na tela, o organizador continua com o computador inteiro.** A nota de código
+  (`code_note`) sem pasta de sessão diz que ele roda nesta máquina e lê por caminho completo, editando quando
+  pedido; nunca proíbe ler código. Sessão da tela de outra máquina: o código dela não está neste disco, e um
+  clone daqui não é ela. O teto de ruído (`MAX_HOLD`/`MAX_WAIT`) conta da voz livre e nunca vence fala
+  transcrita. Medição em "Voz: barulho segurando a resposta e leitura proibida (28/10/2026)".
 - **Voz: quem fala o organizador é o Hangar, nunca o repasse do Codex.** `clientManagedHandoffs: true`: o
   Codex não repassa mais as mensagens do organizador à voz. Toda mensagem dele (as do meio do turno
   também) entra no `SpeechHold`, como resumo, aviso e confirmação: sai em pedaços de até `SPEECH_CHUNK`
   (3.200 bytes, porque o Codex corta em ~1.000 tokens o que entrega de uma vez), um por vez, só depois de a
   voz fechar a fala anterior e com ele calado (microfone por `SILENCE`, transcrição por `TALK_SILENCE`,
-  2 s). O teto `MAX_HOLD` só vence ruído de microfone, nunca transcrição dele. Fala dele de três palavras
+  2 s). O teto `MAX_HOLD` (4 s, como o `MAX_WAIT` do envio) só vence ruído de microfone, nunca transcrição dele. Fala dele de três palavras
   ou mais durante uma leitura em partes corta o resto, que vai ao organizador numa nota para continuar só
   se ele pedir; "uhum" só segura. Medição em "Voz: o Hangar fala o organizador (19/10/2026)".
 - **Voz: a queda não apaga a conversa.** Na reabertura (`thread/realtime/start` de novo), a voz nova recebe
@@ -936,6 +985,151 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   uma vez por aparição (`rust.trust_dialog_shown`, código `trust_flag_present` ou
   `trust_flag_absent`) e o log guarda a entrada, a idade do arquivo e a trava. Ver
   [diálogo de confiança com a pasta confiada](#diálogo-de-confiança-com-a-pasta-já-confiada-23102026).
+
+## Avisos do Claude sem terminal (02/11/2026)
+
+O ator do Claude sem terminal (`runtime/claude.rs`) jogava fora, no `_ => return` de `on_system`,
+eventos que o terminal mostra: nova tentativa da API, MCP e plugin que não subiram, hooks, avisos da
+CLI, troca de modelo por recusa. O `terminal_reason` do `result` também não aparecia. Plano e decisões:
+`docs/superpowers/plans/2026-11-02-claude-avisos-sem-terminal.md`.
+
+| Evento | Canal |
+|---|---|
+| `system/api_retry` | rótulo `Nova tentativa N de M em X s · erro S` (ou `· sem resposta da API`), sai na próxima linha de resposta, inclusive de subagente |
+| `init.mcp_servers` `failed`/`needs-auth`, `init.plugin_errors` | **uma** nota por vida do processo, com até 5 nomes por linha ("e mais N"). Na prova ao vivo, a conta com os plugins instalados trazia uns 20 conectores sem login ou que não sobem: uma nota por servidor despejava 20 notas a cada processo |
+| `hook_started`/`hook_response` (flag `--include-hook-events`) | rótulo `Rodando hook {hook_name}…` só depois de 3 s; `outcome: error` com `exit_code` diferente de 2 vira `Hook falhou — …`; as falhas seguintes do mesmo `hook_name` (com qualquer motivo, porque o `stderr` muda a cada chamada) somam e viram `(N× neste turno)` no fim do turno (não no sucesso: vários hooks dividem o mesmo `hook_name`); `exit 2` (bloqueio) só no diário (`claude_hook`) nos eventos em que o motivo vai ao modelo (`PreToolUse`, `PostToolUse`, `Stop`, `SubagentStop`) e no `UserPromptSubmit` (o prompt barrado já é bolha retida); nos outros (`SessionStart`, `Notification`…) a CLI o mostraria só à pessoa, então vira nota; falha fora de turno avisa sem somar; os rótulos de nova tentativa e de hook só valem com turno em curso (chamada de fundo também tenta de novo, e hook assíncrono pode não responder); `terminal_reason` que esta versão não conhece vai só ao diário (`claude_terminal_reason`); sucesso no diário em tipo próprio (`claude_hook_ok`) para não gastar o teto das falhas |
+| `system/notification` | `high`/`immediate`: nota única por `key` + texto; o resto, diário |
+| `model_refusal_fallback`, `model_refusal_no_fallback` | nota a cada ocorrência |
+| `result.terminal_reason` anormal | nota `Turno parado: …` e o mesmo texto no começo do detalhe da faixa de erro; fim normal e parada pela pessoa ficam de fora, e também o turno que bateu no limite de uso ou ficou sem login, que já têm aviso próprio. `blocking_limit` é o limite de **contexto** e `rapid_refill_breaker` a compactação automática em laço (lido no binário 2.1.316): o limite de uso chega como `api_error` com `api_error: "usage_limit_reached"` |
+
+Formatos lidos de um `claude -p` 2.1.316 real (fixtures em `crates/hangar-server/tests/fixtures/claude_events/`):
+`hook_name` é `Evento:matcher` ou só o evento; `exit 1` e `exit 2` chegam ambos como `outcome: "error"`,
+distintos pelo `exit_code`; hook `async` emite `hook_started` igual aos outros (não dá para separá-lo, e
+o `result` limpa o que ficar aberto); `UserPromptSubmit` emite os eventos antes do `init`; MCP com
+comando inexistente chega como `failed` sem `error`; o último `api_retry` é seguido de `result` com
+`subtype: "success"`, `is_error: true` e `terminal_reason: "api_error"`.
+
+"Por vida do processo" foi a escolha dele (02/11/2026) no lugar de "por conversa": o relançamento por
+ociosidade mostra a nota de novo. O motor também nasce quando o Rust reinicia e adota o processo vivo, e
+o `hydrate` repassa o `init` gravado; a nota já está na conversa, por isso o repasse só marca a chave.
+Limite: processo que subiu com o servidor fora não mostra a nota daquela vida. O diário é o log privado,
+com teto de 30 por sessão, geração e tipo. O motor conta o mesmo teto por tipo e para de pedir a gravação
+depois dele: cada pedido custa uma tarefa bloqueante e um redesenho, e com `--include-hook-events` há
+vários hooks por chamada de ferramenta.
+
+Fora desta fase, vistos no binário 2.1.316: `system/model_fallback` (troca de modelo por sobrecarga ou
+modelo ausente, a mesma família da recusa), `system/api_error` e `system/instruction_size_warning` vão
+só ao diário como `system/*`.
+
+## Avisos do Claude com terminal pelo transcript (02/11/2026)
+
+O usuário vetou ler a tela do terminal para isso ("ler da tela é sempre um caminho ruim"); o que não sai
+por transcript ou plugin ficou de fora. Plano: `docs/superpowers/plans/2026-11-02-claude-avisos-com-terminal.md`.
+
+| Aviso | Fonte no transcript | Nota |
+|---|---|---|
+| Hook que falha | anexo `hook_non_blocking_error` (`hookName`, `stderr` com o prefixo "Failed with non-blocking status code: ") | `hookfail:{uuid}` na primeira do turno; soma `hookfail-sum:{uuid que fechou}:{md5_8(hookName)}` "(N× neste turno)" |
+| Nova tentativa da API | `system/api_error` (`retryAttempt`, `maxRetries`, `error.formatted`), uma linha por tentativa em corrente | `retry:{uuid}` na tentativa 1; `retry-ok:{uuid}` na primeira `assistant` depois de mais de uma; terminou em `isApiErrorMessage` = sem fecho |
+| Recusa | `assistant` com `stop_reason: "refusal"` | `refusal:{uuid}` |
+
+- **Fim de turno:** `system/turn_duration`, que não aparece em turno interrompido; o prompt seguinte também
+  fecha, e o prompt que vem da fila com a sessão parada (anexo `queued_command`, sem linha `user`) também
+  abre; no meio do turno o mesmo anexo é a mensagem injetada no turno em curso e não abre outro. Resumo
+  da compactação (`isCompactSummary`, no meio do turno) e `/comando` local não são prompt. Leitura a partir
+  do meio do arquivo só monta nota depois do primeiro começo ou fim de turno visto (fila e recado não contam:
+  podem ser o meio do turno), e a nova tentativa só abre na tentativa 1: senão a 2ª falha viraria uma
+  "primeira" com outro id e o cliente veria duas. Leitura do byte 0 já vale (a falha do `SessionStart` vem
+  antes do primeiro prompt). A cauda ao vivo, a do aparelho que volta e a janela do `/history` são semeadas
+  desde o último `turn_duration` (até 4 MiB para trás), porque a janela não cobre um turno longo e o histórico
+  recarregado tem que mostrar as notas que o ao vivo já mostrou.
+- **Nota não é resposta:** `retry-ok:` e `refusal:` saem como `assistant_msg` depois da resposta real;
+  `committed_from_event` os ignora, senão a resposta gravada voltaria como prévia.
+- **Linha `cli` × `sdk-cli`:** o mesmo transcript pode ter os dois modos (conversa retomada no outro). Em
+  `-p` a CLI também grava hook e recusa; filtrar pelo provider não bastava.
+- **Quem liga:** `with_notices()` no `FileTail` e no `backfill`, e `merged_history_with_notices` só na rota
+  `/history` do chat. O resto (`merged_history`, `_capped`, `_window`, `message_tail`, push, loops,
+  `last_committed`, retomada, subagentes, `each_event`, busca, transferência, arquivo, lista, retorno da
+  filha ligada, ditado, leitura em voz) fica sem as notas: procuram a última resposta ou o texto da pessoa,
+  e uma nota `⚙️` viraria a resposta.
+- **Ficou de fora:** MCP ou plugin que não subiu, hook lento, notificação da CLI e o modelo de troca na
+  recusa: nem transcript nem evento de plugin no 2.1.316. O `reason` do `turn.complete` do plugin só tem
+  `aborted`, `refusal`, `error` e `answer` (lido no binário), sem o motivo da parada.
+
+## Plugin reinstalado com a sessão aberta (28/10/2026)
+
+Codex 0.165. Sintoma: toda chamada de ferramenta da TUI mostrava `Hook failed` /
+`plugin contents changed; hook approval required`, a sessão inteira, depois de cada atualização.
+
+- Hook de plugin tem duas aprovações: `trusted_hash` (a declaração) e `trusted_content_hash` (o
+  conteúdo da pasta do plugin, `plugin_fingerprint.rs`, que ignora `__pycache__`, `.pyc`, `.venv`
+  e `.egg-info`). O conteúdo é conferido a cada execução (`plugin_trust.rs`). Sem
+  `trusted_content_hash`, vale uma linha de base gravada na primeira aprovação em
+  `<CODEX_HOME>/.hook-trust/`, que nunca muda depois.
+- O `currentHash` do `hooks/list` de hook de plugin é `declaração/conteúdo`; o `config/batchWrite`
+  o separa nos dois campos (`config_manager_service.rs`). O lançador já gravava esse valor.
+- O que falhava: a reinstalação vem do `POST /api/harness/codex/integracao/sessao`, em segundo
+  plano, depois da aprovação do lançador. Às 08:25 e às 11:55 o cache de todos os plugins foi
+  regravado. A sessão já aberta tem a confiança em memória, e `reloadUserConfig` só recarrega o
+  app-server que recebeu a escrita: aprovar pelo arquivo deixou a `hangar-2` recusando até
+  receber a escrita pela própria conexão.
+- Cada sessão Codex tem o seu app-server, então a correção é no ator, que já tem a conexão (com e
+  sem terminal). O primeiro lote de hooks depois da mudança ainda falha uma vez; os seguintes
+  passam.
+
+### Reaprovação antes da recusa (03/11/2026)
+
+Codex 0.166. Sessão `jefferson` aberta às 08:22:49: às 08:23:18–29 o próprio app-server
+(`plugins-marketplace-auto-upgrade`, `core-plugins/src/manager.rs`) reinstalou caveman, last30days e
+um plugin de marketplace privado, que tinham commit novo no git. O turno das 08:23:22 teve cinco `Hook failed` nas três
+primeiras ferramentas; a reaprovação reativa gravou o `config.toml` às 08:23:31 e as chamadas de
+08:23:34 em diante passaram.
+
+- A atualização automática roda em toda subida com plugins ligados e não tem opção para desligar.
+  O Codex só aprova sozinho plugin remoto da OpenAI (`effective_plugin_change.rs`), nunca o de
+  marketplace git.
+- O app-server não avisa o cliente quando termina: o `skills/changed` vem de um observador de
+  arquivos com atraso de 10 s.
+- Por isso o ator observa `<CODEX_HOME>/plugins/cache` (um observador por conta, dividido entre as
+  sessões: são ~3.300 pastas) e, 500 ms depois do último evento, faz a mesma rodada `hooks/list` +
+  `config/batchWrite` sem aviso e sem gastar a rodada reativa do turno. Leitura de arquivo e
+  bytecode Python não acordam: o próprio hook rodando abriria os arquivos sem fim.
+- Os dois lançadores (`scripts/hangar-codex-tui` e `launch_if_needed` do sem terminal) rodam
+  `codex plugin marketplace upgrade --json` no `CODEX_HOME` da conta antes do app-server, em toda
+  abertura (decisão do dono): é a mesma função da atualização automática (`marketplace_cmd.rs` →
+  `manager.rs`), que também reinstala o cache dos plugins, então a do app-server não acha nada novo.
+  Custa ~5 s com 10 marketplaces e nada a atualizar (medido duas vezes: 5,6 s e 5,2 s); roda depois
+  da atualização do Codex porque no Windows o binário não troca com outro `codex` aberto. Falha ou
+  prazo de 20 s só registram e a abertura segue (sem rede, o `git fetch` não segura a sessão; o
+  observador do ator reaprova o que mudar depois). Conta sem `plugins/cache` ganha a pasta vazia
+  na abertura, para o observador ligar desde o começo.
+- Uma reinstalação feita por qualquer sessão da conta quebra a confiança das outras sessões abertas
+  dela; cada ator recarrega a própria, porque o `reloadUserConfig` só vale no app-server que recebe a
+  escrita.
+- `--dangerously-bypass-hook-trust` (ou `bypass_hook_trust` no `config` do `thread/start`) liga
+  todo hook sem revisão, inclusive o `.codex/hooks.json` de repositório clonado. Recusado pelo dono.
+
+## Hook, comando em segundo plano e saída parcial no app-server (28/10/2026)
+
+Codex 0.165, app-server WebSocket com dois clientes na mesma thread (um abriu, o outro fez
+`thread/resume`, como TUI e Hangar), `CODEX_HOME` de teste com um hook de usuário que sai 127 e
+um hook de plugin com o conteúdo trocado depois da aprovação. Nada disso vai ao rollout.
+
+- **Hook.** Todo hook manda `hook/started` (`status` `running`) e `hook/completed`, mesmo o de
+  0 ms; os dois chegam aos dois clientes. O `params` traz `threadId`, `turnId` e `run`. Falha vem
+  como `status` `failed` com `entries` `[{kind: "error", text}]`: `"hook exited with code 127"` e
+  `"plugin contents changed; hook approval required"`. `run.source` é `user` ou `plugin`,
+  `run.sourcePath` é o `hooks.json`, `run.eventName` em camelCase (`preToolUse`,
+  `postToolUse`), `statusMessage` nulo sem mensagem declarada. O `run.id` termina no id do item da
+  ferramenta (`pre-tool-use:1:<sourcePath>:exec-<uuid>`): dá para ligar o aviso ao comando.
+- **Comando que segue rodando.** Um comando que o modelo deixa rodando recebe `item/started`
+  `commandExecution` com `status` `inProgress`, `processId` e `source` `unifiedExecStartup`; o turno
+  fecha (`turn/completed`) sem ele. O `item/completed` (`status` `completed`, `exitCode`,
+  `aggregatedOutput`) só chega quando o processo sai — 88 s depois do fim do turno no teste. Os
+  dois clientes recebem.
+- **Saída parcial.** `item/commandExecution/outputDelta` (`itemId`, `delta`) chega nos dois
+  clientes, também depois do turno fechado. Sem limite de ritmo: um `seq 1 30000` virou 21 pedaços
+  de até 8192 bytes em 7 ms; saída de linha em linha vem um pedaço por linha. A saída escrita
+  logo na largada (antes do `item/started`) não vem em delta, só no `aggregatedOutput` final.
 
 ## Diálogo de confiança com a pasta já confiada (23/10/2026)
 
@@ -1214,7 +1408,7 @@ capturava. O Python de reserva (`registry.list_with_state`) tem o mesmo defeito.
 
 Conserto: o `POST /internal/list/facts` leva `held` (`pergunta_pendente` das linhas Claude com
 terminal, contrato 32), e a lista a mostra como o `Monitor` (`terminal_state::held_question`:
-"ferramenta: resumo", Yes/No). Sequência gravada em `gen_terminal.py`
+"ferramenta: resumo", Yes/No). Sequência em `tests/it/contract_terminal_cases.rs`
 (`permission_card_after_bash`); `contract_terminal::permission_card_after_bash` confere lista e
 `Monitor` rodada a rodada.
 
@@ -1586,6 +1780,19 @@ Sem a ponte, cada um mantinha uma fazenda de symlinks à mão apontando pro
   does not exist", e o backend as recriava no restart seguinte: 67 criados, todo dia). Hoje esse
   script cuida da persona do Pi/Kimi e dos pacotes do Pi, e chama a ponte no fim. Ele não escreve
   mais no Codex: nem hooks, nem persona, nem symlinks de skills.
+
+## Preparo parcial abre a sessão (31/10/2026)
+
+Motivo: um único plugin cujo marketplace sumiu da configuração do Codex deixava o preparo
+`partial` e recusava qualquer sessão Codex. O parcial passou a abrir, com as pendências no aviso.
+Refazer o preparo a cada abertura custava o preparo inteiro (só os plugins, minutos medidos, contra
+um prazo de 60 s), duas vezes na sessão sem terminal (`server.rs` e o `prepare_codex` da subida do
+motor). Registrar o parcial para sempre impedia a cura: o preparo começa pela integração Claude →
+Codex padrão, que pode recolocar o marketplace, e o `reparar_conta` só roda com a conta pronta. O
+meio-termo é o mesmo intervalo de 300 s da integração nativa (`_RETENTATIVA`): a marca
+`.hangar-prepared-v1` guarda `status: partial`, aberturas dentro do intervalo a reaproveitam, e o
+lançador sem servidor abre a conta parcial com o aviso. O lançador sempre pede o preparo (`POST`)
+quando o GET diz `partial`, e quem decide entre reaproveitar e tentar de novo é o servidor.
 
 ## Integração nativa do Codex
 
@@ -4096,6 +4303,23 @@ embrulham tudo em `except` e saem com 0). O aviso cobre script sumido, Python su
   parafrasear, e se o `turn/interrupt` sempre chega antes de a mensagem ficar pronta (a mensagem pronta antes
   da fala dele já foi à voz e não é cortada).
 
+## Voz: barulho segurando a resposta e leitura proibida (28/10/2026)
+
+(`organizer.rs` `SpeechHold`/`SendGate`/`code_note`, `call.rs`.) Chamada de 28/10 16:11 pelo app mobile, na rua
+(`~/.hangar/voz/conversas/2026-10-28_16-11-57.md` e o `hangar-server.log`, UTC).
+
+- **Teto batido sem fala.** 19:15:07 o envio esperou 8,0 s (`MAX_WAIT`); 19:15:17 a resposta do organizador
+  esperou 20,1 s e 19:16:07 o aviso de espera 20,0 s (`MAX_HOLD`), com a resposta pronta das 19:16:12 atrás
+  dele. Nenhuma transcrição dele nesses intervalos e a voz calada: só o microfone acima de 0,02 segurava.
+  Nas chamadas anteriores as esperas iam de 0,5 a 3 s. A transcrição dele chega de 1,3 a 2,7 s depois de a
+  voz parar (reação inclusa), por isso o teto de ruído caiu para 4 s nos dois. Não medido: o nível do
+  microfone (o servidor não o grava); o log passa a marcar `noise_ceiling`/`held by noise ceiling` e o
+  `after_user_ms` da delegação.
+- **Leitura proibida.** A chamada nasce com `cwd: None` (`hub.rs`) e sem `retarget` a nota inicial dizia "O
+  código da sessão atual não está disponível nesta máquina; não leia código." Às 16:41 o organizador
+  recusou ler um repositório que está neste disco, citando a nota; o prompt dele já mandava ler código e
+  rodar o shell com acesso completo. A nota fica nas instruções da thread: só vale na conversa seguinte.
+
 ## Voz: o Hangar fala o organizador (19/10/2026)
 
 (`call.rs`, `organizer.rs` `SpeechHold`, `transcript.rs`.) Chamada de 19/10 16:56 pelo app mobile
@@ -4747,8 +4971,8 @@ novo catálogo corrige essa exceção, preservando a exclusão dos demais comand
 A [referência oficial de comandos](https://code.claude.com/docs/en/commands) documenta a execução
 sem terminal e o limite das alterações de MCP de plugins.
 
-As fixtures de `backend/tests/fixtures/contract/commands/` foram geradas executando o Python do
-commit de origem, com HOME temporário. A comparação conserva campos, nulos, ordem, nomes do
+Os casos de `crates/hangar-server/tests/it/commands_cases.rs` foram capturados executando o Python
+do commit de origem, com HOME temporário. A comparação conserva campos, nulos, ordem, nomes do
 frontmatter e a prioridade da primeira ocorrência. Os casos incluem YAML 1.1, chaves repetidas,
 tags, BOM/CRLF e metadados inválidos; o scanner do catálogo de configurações tem outras regras
 e não foi substituto para essa composição.
@@ -4804,3 +5028,42 @@ chegada posterior, dois consumidores, reconexão e histórico único. O retrato 
 retirada de até toda a capacidade da fila numa publicação, impedindo que quadros atrasados de
 membros desse corte ressuscitem suas bolhas. A prova real usa processos dos CLIs e modelo local
 controlado, com três partes e imagem; não depende de Orientar.
+
+## Subagentes Codex no painel de atividade (28/10/2026)
+
+O binário instalado `codex-cli 0.165.0` grava os filhos como rollouts próprios com
+`source.subagent.thread_spawn.parent_thread_id`, `agent_path`, apelido e papel. A leitura real
+do app-server mostrou conversas filhas ativas com comandos, enquanto a rota de subagentes do
+Hangar devolveu `200 []`: o leitor procurava o diretório `subagents/agent-*.jsonl` do Claude.
+O caminho de atividade também reconhecia `Agent`/`AgentSwarm`, mas não o lançamento Codex;
+notificações de outras threads eram filtradas para proteger o estado da conversa principal.
+
+O schema extraído do próprio binário confirma `collabAgentToolCall`, `subAgentActivity`,
+`parentThreadId`, filtro de fontes de subagente e `canAcceptDirectInput`. O estado dos filhos
+precisa de um caminho separado no runtime, preservando o filtro do estado principal. A leitura
+de arquivos serve ao histórico e à descoberta, sem inferir fim por falta de escrita. Rollouts
+com contexto herdado contêm eventos antigos do pai; só a parte própria do filho alimenta a
+atividade e a conversa mostradas no detalhe.
+
+O fonte Codex local `0.163.0` já recusa `turn/start` e `turn/steer` diretos em filhos V2; essa
+restrição é tratada pela capacidade publicada pelo app-server, sem presumir que todo filho a
+aceita. O compositor existente mostra o bloqueio traduzido quando a capacidade não foi provada.
+As telas reaproveitam lista, estado e renderizador de conversa existentes. `link:true` continua
+sendo sessão Hangar vinculada, uma responsabilidade distinta dos filhos nativos do Codex.
+
+Implementação local nos leitores, runtime e clientes, com casos de regressão escritos e revisão
+estática. As correções incluem invalidação de mensagens na troca do pai, descarte de RPCs
+estrangeiras recuperadas, confirmação do turno no envio, atualização do painel após conclusão
+e retomada, descarte de respostas de outra conversa e reconciliação após reconexão.
+Testes focados do core, PWA, Expo e servidor passaram, assim como os checks de tipos. Servidor,
+PWA e nativo compilaram; servidor e nativo foram ativados localmente, com o executável em uso
+conferido por hash. Na tela, o mesmo filho abriu sua conversa própria, retomou, mostrou a
+ferramenta em execução e voltou a terminado, sem repetir o histórico herdado. O envio direto
+ficou bloqueado com o motivo publicado pelo Codex. A prova também encontrou recusa de spawn
+com `is_error:false`: sem identidade de filho, a tentativa deve terminar, em vez de conservar
+um cartão rodando. Protocolo e nativo passaram nos comandos focados; os dois auxiliares de
+schema ficaram ignorados no comando normal. A prova com a lista aberta encontrou o snapshot
+desatualizado do painel: a recontagem agora entrega a mesma leitura à aba e invalida respostas
+anteriores. O detalhe adota a retomada do mesmo filho e volta a consultar, sem reabertura; a
+transição invalida também o detalhe antigo em voo. A versão recompilada confirmou na tela a
+retomada com o detalhe aberto e a linha Rodando com modelo, chamadas e ferramenta atual.

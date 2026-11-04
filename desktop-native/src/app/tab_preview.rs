@@ -20,7 +20,7 @@ macro_rules! conversation_slot {
     ($($field:ident: $ty:ty),+ $(,)?) => {
         pub(super) struct ConversationSlot { $($field: $ty),+ }
         impl Hangar {
-            fn swap_conversation(&mut self, slot: &mut ConversationSlot) { $(std::mem::swap(&mut self.$field, &mut slot.$field);)+ }
+            pub(super) fn swap_conversation(&mut self, slot: &mut ConversationSlot) { $(std::mem::swap(&mut self.$field, &mut slot.$field);)+ }
         }
     };
 }
@@ -93,7 +93,7 @@ conversation_slot! {
 }
 
 impl ConversationSlot {
-    fn new(session: SessionInfo, api: Option<Api>, composer: Entity<TextareaState>, window: &Window) -> Self {
+    pub(super) fn new(session: SessionInfo, api: Option<Api>, composer: Entity<TextareaState>, window: &Window) -> Self {
         Self {
             selected: Some(session), open_api: api, chat: Chat::default(), chat_online: true, loading: true, history_started: true,
             history_installed: false, history_limit: EVENTS, has_older: false, error: None,
@@ -114,7 +114,7 @@ impl ConversationSlot {
     }
 
     /// A chave de um clique é desta conversa: id de linha ou de evento, com ou sem o sufixo da parte.
-    fn owns(&self, key: &str) -> bool {
+    pub(super) fn owns(&self, key: &str) -> bool {
         let base = key.split([':', '#']).next().unwrap_or(key);
         let base = base.strip_prefix(PINNED).unwrap_or(base);
         self.row_ids.iter().any(|id| id == base || id == key) || self.chat.events.iter().any(|event| event.id == base)
@@ -397,7 +397,7 @@ impl Hangar {
 
     /// As linhas da conversa da prévia pelo mesmo caminho da principal, sem o que é da sessão aberta (Atividade,
     /// conferência de citações).
-    fn sync_tab_preview_rows(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn sync_tab_preview_rows(&mut self, cx: &mut Context<Self>) {
         let a = appearance::get();
         let stable = self.chat.take_unsynced();
         let delta = self.conversation.update(&self.chat.events, stable, conversation::View {

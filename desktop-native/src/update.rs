@@ -13,6 +13,7 @@ use std::{collections::HashMap, ffi::OsString, path::{Path, PathBuf}, sync::Arc,
 use tokio::runtime::Runtime;
 
 mod all;
+pub(crate) use all::status_line;
 pub(crate) mod confirm;
 
 const RELEASES: &str = "https://github.com/jeffer1312/hangar/releases/download";
@@ -354,11 +355,14 @@ impl Plan {
 /// Servidor atrás: há atualização publicada a puxar, ou o disco não é o que está no ar. A versão do app não entra: quem
 /// diz se os dois se entendem é a API. O `-dirty` sai da comparação: qualquer edição depois do boot deixaria o servidor
 /// "atrás" para sempre.
-fn behind(state: &Value) -> bool {
-    let flag = state["atualizacao_disponivel"].as_bool() == Some(true);
+/// O aviso pendente (`pending_warning`) também abre o modal, para ser aceito, mesmo sem versão nova.
+fn behind(state: &Value) -> bool { real_update(state) || state["pending_warning"].as_bool() == Some(true) }
+
+/// O que o `iniciar` tem a rodar: versão nova publicada, ou o disco diferente do que está no ar.
+pub(crate) fn real_update(state: &Value) -> bool {
     let clean = |v: &Value| v.as_str().map(|s| s.trim_end_matches("-dirty").to_owned());
     let restart = matches!((clean(&state["versoes"]["repo"]), clean(&state["versoes"]["backend"])), (Some(disk), Some(up)) if disk != up);
-    flag || restart
+    state["atualizacao_disponivel"].as_bool() == Some(true) || restart
 }
 
 /// API do servidor que a atualização alcança; ausente ou ilegível (branch sem release do servidor) é 1.
@@ -393,12 +397,24 @@ fn hold(state: &Value) -> Option<Hold> {
     None
 }
 
+/// O que segura o Atualizar desta máquina e de cada uma do lote. Aceitar o aviso não faz `git pull`: edição no
+/// checkout ou branch de trabalho não o seguram; se houver versão nova, o `iniciar` depois do aceite é que recusa.
+fn update_hold(state: &Value) -> Option<Hold> {
+    if state["pending_warning"].as_bool() != Some(true) { return hold(state); }
+    // Só a edição e a branch saem: rodando e o que falta no pré-voo continuam segurando.
+    let mut without_checkout = state.clone();
+    for (key, value) in [("sujo", Value::from(0)), ("ahead", 0.into()), ("divergiu", false.into()), ("branch_de_trabalho", false.into())] {
+        without_checkout["pre_voo"][key] = value;
+    }
+    hold(&without_checkout)
+}
+
 /// O que o "Atualizar tudo" faz: `need` é a API que a release do app exige, `server` o `GET /api/atualizacao` do servidor
 /// desta máquina (nenhum = não há servidor local) e `run` a API no ar (a do local, ou a do ativo sem local; `None` =
 /// desconhecida). O botão só aparece quando um clique consegue concluir.
 fn plan(need: Option<u32>, server: Option<&Value>, run: Option<u32>) -> Plan {
     let step = match server {
-        Some(state) if behind(state) => hold(state).map_or(ServerStep::Update, ServerStep::Held),
+        Some(state) if behind(state) => update_hold(state).map_or(ServerStep::Update, ServerStep::Held),
         _ => ServerStep::Skip,
     };
     let Some(need) = need else { return Plan { server: step, app: false } };
@@ -506,6 +522,22 @@ enum Outcome { Updated, UpdatedManual, Failed(String) }
 #[derive(Debug, PartialEq)]
 enum Follow { Running { step: u64, total: u64, text: String }, Waiting, NotStarted, Done(Outcome) }
 
+/// O servidor tenta o relatório automático por até ~11 min quando o worker limita.
+pub(crate) const REPORT_WAIT: Duration = Duration::from_secs(12 * 60);
+
+/// O relatório automático da falha, pelo que o servidor juntou ao estado.
+pub(crate) fn report_line(state: &Value) -> Option<String> {
+    match (state["relatorio"].as_str(), state["relatorio_erro"].as_str()) {
+        (Some("pendente"), _) => Some(tr_shared("update_report_pending", &[])),
+        (Some(code), _) => Some(tr_shared("update_report_sent", &[("code", code)])),
+        (None, Some(error)) => Some(tr_shared("update_report_failed", &[("reason", error)])),
+        (None, None) => None,
+    }
+}
+
+/// A falha ainda espera o relatório: a tela segue lendo até o código chegar.
+pub(crate) fn report_pending(state: &Value) -> bool { state["relatorio"].as_str() == Some("pendente") }
+
 /// Uma leitura do estado durante a atualização do servidor. `baseline` é o `ts` do desfecho anterior: "pronto" com ele, sem
 /// ter visto "rodando", é o desfecho velho, não o desta vez.
 fn follow(state: &Value, saw_running: bool, baseline: Option<&str>) -> Follow {
@@ -515,7 +547,7 @@ fn follow(state: &Value, saw_running: bool, baseline: Option<&str>) -> Follow {
         Some("pronto") if !saw_running && !after_baseline(state["ts"].as_str(), baseline) => Follow::NotStarted,
         Some("pronto") if state["ok"].as_bool() != Some(true) => {
             let reason = Some(text("erro").trim_end_matches('.').to_owned()).filter(|e| !e.is_empty()).unwrap_or_else(|| "?".into());
-            Follow::Done(Outcome::Failed(reason))
+            Follow::Done(Outcome::Failed(match report_line(state) { Some(line) => format!("{reason} · {line}"), None => reason }))
         }
         Some("pronto") if state["reiniciar_manual"].as_bool() == Some(true) => Follow::Done(Outcome::UpdatedManual),
         Some("pronto") => Follow::Done(Outcome::Updated),
@@ -876,21 +908,19 @@ impl Updater {
     fn run(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.batch.is_some() { return self.open_batch(window, cx); }
         if self.busy() { return; }
+        // Com outras máquinas, o modal junta os avisos de todas.
+        if self.update_all_count() >= 2 { return self.confirm_all_machines(window, cx); }
         // Só o modal do servidor mostra avisos e novidades: com ele, busca no remoto e lê a rota antes de abrir.
-        let modal = self.update_all_count() >= 2 || matches!(self.plan().server, ServerStep::Update);
-        let Some(api) = self.local.clone().filter(|_| modal) else { return self.confirm(confirm::Notes::default(), window, cx) };
+        let modal = matches!(self.plan().server, ServerStep::Update);
+        let Some(api) = self.local.clone().filter(|_| modal) else { return self.run_local(confirm::Notes::default(), window, cx) };
         self.run = Run::Searching;
         cx.notify();
         confirm::load_then_open(api, &self.runtime, window, cx, |this, state, notes, window, cx| {
             this.run = Run::Idle;
             if state.is_some() { this.receive_server(state, cx); }
             cx.notify();
-            this.confirm(notes, window, cx);
+            this.run_local(notes, window, cx);
         });
-    }
-
-    fn confirm(&mut self, notes: confirm::Notes, window: &mut Window, cx: &mut Context<Self>) {
-        if self.update_all_count() >= 2 { self.confirm_all(notes, window, cx) } else { self.run_local(notes, window, cx) }
     }
 
     fn run_local(&mut self, notes: confirm::Notes, window: &mut Window, cx: &mut Context<Self>) {
@@ -901,8 +931,10 @@ impl Updater {
                 let this = cx.entity().downgrade();
                 let (title, desc) = if plan.app { ("app_update_confirm_title", "app_update_confirm_desc") }
                     else { ("app_update_confirm_server_title", "app_update_confirm_server_desc") };
-                confirm::open(window, cx, tr(title), tr(desc), notes, None,
-                    move |window, cx| { let _ = this.update(cx, |this, cx| this.search_server(window, cx)); });
+                confirm::open(window, cx, tr(title), tr(desc), vec![notes], None, move |accepted, window, cx| {
+                    let acceptance = accepted.into_iter().next().unwrap_or_default();
+                    let _ = this.update(cx, |this, cx| this.search_server(acceptance, window, cx));
+                });
             }
             _ if plan.app => self.confirm_channel(window, cx),
             _ => {}
@@ -929,7 +961,8 @@ impl Updater {
 
     /// No clique a versão vem da rede: o `origin/main` do servidor só é renovado a cada 30 min, e a release do app sai logo
     /// depois do push. Com o estado novo, o plano é refeito antes de pedir qualquer coisa.
-    fn search_server(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// `acceptance`: os avisos aceitos no modal, gravados no servidor antes do `iniciar`.
+    fn search_server(&mut self, acceptance: confirm::Acceptance, window: &mut Window, cx: &mut Context<Self>) {
         let Some(api) = self.local.clone() else { return };
         if !self.run.begin_server_search() {
             window.push_notification(Notification::error(tr("app_restart_busy")), cx);
@@ -951,7 +984,7 @@ impl Updater {
                     this.receive_server(Some(state), cx);
                     let plan = if this.batch.is_some() { this.batch_plan() } else { this.plan() };
                     match &plan.server {
-                        ServerStep::Update => this.start_server(api, window, cx),
+                        ServerStep::Update => this.start_server(api, acceptance, window, cx),
                         ServerStep::Held(hold) if this.batch.is_some() && hold.stops() => { this.end_intent(); cx.notify(); }
                         ServerStep::Held(hold) if hold.stops() => this.fail(hold.text(), cx),
                         _ if plan.app => this.install_app(window, cx),
@@ -962,25 +995,36 @@ impl Updater {
         }).detach();
     }
 
-    fn start_server(&mut self, api: Api, window: &mut Window, cx: &mut Context<Self>) {
+    fn start_server(&mut self, api: Api, acceptance: confirm::Acceptance, window: &mut Window, cx: &mut Context<Self>) {
         if self.is_channel_blocked() { self.fail(tr("settings_channel_pending"), cx); return; }
         let baseline = self.server.as_ref().and_then(|s| s["estado"]["ts"].as_str()).map(str::to_owned);
+        let real = self.server.as_ref().is_some_and(real_update);
         if self.begin_intent(&api, baseline.clone()).is_err() { return self.fail(tr("app_restart_busy"), cx); }
         self.run = Run::Server { step: 0, total: 0, text: String::new() };
         self.local_batch_status(all::Status::Starting, cx);
         cx.notify();
-        let task = { let api = api.clone(); self.runtime.spawn(async move { api.server_post(&["atualizacao", "iniciar"], 30).await }) };
+        let task = { let api = api.clone(); self.runtime.spawn(async move { confirm::accept_then_start(&api, &acceptance, real).await }) };
         let handle = window.window_handle();
         cx.spawn(async move |this, cx| {
-            let result = task.await.unwrap_or_else(|e| Err(Failure::local(e.to_string())));
+            let result = task.await.unwrap_or_else(|e| confirm::Launch::Started(Err(Failure::local(e.to_string()))));
             let _ = handle.update(cx, |_, window, cx| { let _ = this.update(cx, |this, cx| match result {
                 // O servidor grava "rodando" antes de responder: o próximo "pronto" é o desfecho.
-                Ok(value) if update_process_id(&value).is_some() => this.follow_server(api, true, baseline, false, window, cx),
-                Ok(_) => this.fail(tr("invalid_response"), cx),
-                Err(error) if error.uncertain => this.follow_server(api, false, baseline, false, window, cx),
+                confirm::Launch::Started(Ok(value)) if update_process_id(&value).is_some() => this.follow_server(api, true, baseline, false, window, cx),
+                confirm::Launch::Started(Ok(_)) => this.fail(tr("invalid_response"), cx),
+                confirm::Launch::Started(Err(error)) if error.uncertain => this.follow_server(api, false, baseline, false, window, cx),
                 // Recusa que o estado lido não previa: relê e decide pela mesma regra (branch → só o app).
-                Err(error) if error.status == Some(409) => this.recheck_after_refusal(api, error.detail, window, cx),
-                Err(error) => this.fail(tr("update_refused").replace("{reason}", &error.detail), cx),
+                confirm::Launch::Started(Err(error)) if error.status == Some(409) => this.recheck_after_refusal(api, error.detail, window, cx),
+                confirm::Launch::Started(Err(error)) => this.fail(tr("update_refused").replace("{reason}", &error.detail), cx),
+                confirm::Launch::AcceptFailed(text) => this.fail(text, cx),
+                // Só o aviso estava pendente: aceito, o servidor não tem o que rodar. O botão sai com a releitura; o app, se
+                // houver, fica para o próximo clique, com o plano refeito sobre o estado novo.
+                confirm::Launch::Nothing => {
+                    this.end_intent();
+                    this.run = Run::Idle;
+                    this.local_batch_status(all::Status::Current, cx);
+                    this.refresh_server(cx);
+                    cx.notify();
+                }
             }); });
         }).detach();
     }
@@ -1011,6 +1055,7 @@ impl Updater {
         let handle = window.window_handle();
         cx.spawn(async move |this, cx| {
             let (mut saw, mut silent, started) = (saw_running, 0, std::time::Instant::now());
+            let mut failed_at: Option<std::time::Instant> = None;
             loop {
                 let Ok(task) = this.update(cx, |this, _| read_state(&this.runtime, &api, &[], 10)) else { return };
                 let read = task.await.unwrap_or_else(|e| Err(Failure::local(e.to_string())));
@@ -1031,9 +1076,16 @@ impl Updater {
                     return;
                 }
                 if matches!(step, Some(Follow::Running { .. })) { saw = true; }
+                let report_wait = matches!(step, Some(Follow::Done(Outcome::Failed(_))))
+                    && read.as_ref().is_ok_and(|value| report_pending(&value["estado"]))
+                    && failed_at.get_or_insert_with(std::time::Instant::now).elapsed() < REPORT_WAIT;
                 let finished = handle.update(cx, |_, window, cx| this.update(cx, |this, cx| {
                     if let Ok(value) = &read { this.receive_server(Some(value.clone()), cx); }
                     match step {
+                        Some(Follow::Done(Outcome::Failed(reason))) if report_wait => {
+                            this.fail(tr("update_failed").replace("{reason}", &reason), cx);
+                            false
+                        }
                         Some(Follow::Running { step, total, text }) => { this.run = Run::Server { step, total, text }; cx.notify(); false }
                         None if saw => { this.run = Run::Restarting; cx.notify(); false }
                         None | Some(Follow::Waiting) => false,
@@ -1435,6 +1487,27 @@ mod tests {
         assert!(!plan(None, Some(&server(serde_json::json!({}))), Some(2)).visible(), "nada a fazer: botão some");
     }
 
+    /// Modo desenvolvedor com edição no checkout: o aviso pendente ainda abre o modal e chega ao aceite, que não faz
+    /// `git pull`; sem o aviso, a edição segura a atualização como antes.
+    #[test]
+    fn plan_pending_warning_is_not_held_by_local_changes() {
+        let dirty = |extra: Value| { let mut s = server(extra); s["pre_voo"]["sujo"] = 1.into(); s };
+        assert_eq!(plan(None, Some(&dirty(serde_json::json!({"pending_warning": true}))), Some(2)).server, ServerStep::Update);
+        let mut work = dirty(serde_json::json!({"pending_warning": true}));
+        work["pre_voo"]["branch_de_trabalho"] = true.into();
+        assert_eq!(plan(None, Some(&work), Some(2)).server, ServerStep::Update);
+        assert_eq!(plan(None, Some(&dirty(serde_json::json!({"atualizacao_disponivel": true}))), Some(2)).server,
+            ServerStep::Held(Hold::LocalChanges));
+        // Rodando e o que falta seguram mesmo com o aviso e a edição.
+        let mut running = work.clone();
+        running["estado"]["fase"] = "rodando".into();
+        assert_eq!(plan(None, Some(&running), Some(2)).server, ServerStep::Held(Hold::Running));
+        let mut missing = work;
+        missing["pre_voo"]["pode"] = false.into();
+        missing["pre_voo"]["erro"] = "x".into();
+        assert!(matches!(plan(None, Some(&missing), Some(2)).server, ServerStep::Held(Hold::Missing(_))));
+    }
+
     #[test]
     fn plan_a_compatible_app_goes_alone_or_after_a_behind_server() {
         let current = server(serde_json::json!({}));
@@ -1570,6 +1643,11 @@ mod tests {
             Follow::Done(Outcome::UpdatedManual));
         assert_eq!(follow(&state(serde_json::json!({"fase": "pronto", "ok": false, "erro": "npm ci falhou.", "ts": "t1"})), true, Some("t0")),
             Follow::Done(Outcome::Failed("npm ci falhou".into())));
+        let failed = |extra: Value| { let mut s = serde_json::json!({"fase": "pronto", "ok": false, "erro": "caiu.", "ts": "t1"}); s.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone()); follow(&state(s), true, Some("t0")) };
+        assert_eq!(failed(serde_json::json!({"relatorio": "abcd2345"})), Follow::Done(Outcome::Failed("caiu · Relatório enviado: abcd2345".into())));
+        assert_eq!(failed(serde_json::json!({"relatorio": "pendente"})), Follow::Done(Outcome::Failed("caiu · Enviando relatório…".into())));
+        assert_eq!(failed(serde_json::json!({"relatorio_erro": "diag_report_refused"})),
+            Follow::Done(Outcome::Failed("caiu · Relatório não enviado (diag_report_refused)".into())));
         assert_eq!(follow(&Value::Null, true, Some("t0")), Follow::Waiting);
     }
 

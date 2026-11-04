@@ -124,6 +124,10 @@ pub struct SessionInfo {
     #[serde(default)] pub pair_lead: Option<String>,
     /// Há convite ativo desta sessão (pendente ou já usado): o 🔗 da linha.
     #[serde(default)] pub shared: bool,
+    /// Fora da lista principal (à mão ou pelo automático do servidor); a sessão segue rodando.
+    #[serde(default)] pub hidden_from_list: bool,
+    /// Oculta e parada, com o processo fechado pelo servidor; a próxima mensagem a reabre na mesma conversa.
+    #[serde(default)] pub asleep: bool,
     /// Nome do convidado que criou a sessão; `None` = dono do servidor.
     pub owner: Option<String>,
     /// Só na linha `orq`: a sessão do árbitro atual, que o "Falar com o árbitro" abre.
@@ -137,6 +141,10 @@ pub struct SessionInfo {
     #[serde(default)] pub pair_external: Option<PairExternal>,
     /// Todos os pares de fora do grupo, com o nível desta sessão sob cada um.
     #[serde(default)] pub pair_externals: Option<Vec<PairExternalEntry>>,
+    /// Nome que o servidor sugere para a sessão de nome genérico; só vem enquanto não houve "Agora não".
+    #[serde(default)] pub rename_suggestion: Option<String>,
+    /// A sugestão saiu com pouco contexto: o servidor a refaz no próximo pedido.
+    #[serde(default)] pub rename_weak: bool,
     /// Só no app: a linha é a sessão de outra pessoa posta dentro do grupo local; nunca vem do servidor.
     #[serde(skip)] pub outside: Option<OutsideMark>,
 }

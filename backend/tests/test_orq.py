@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 from unittest import mock
 
-from app import orq
+from orq_contract_client import summary as orq, call
 
 
 def _grava(raiz: Path, nome: str, linhas: list[dict]) -> None:
@@ -133,15 +133,9 @@ def test_entrada_que_falha_no_stat_nao_apaga_as_demais(tmp_path, caplog):
     _grava(tmp_path, "2026-08-22-boa", _exec_basica())
     ruim = tmp_path / "2026-08-24-sem-stat"
     ruim.mkdir()
-    real_is_dir = Path.is_dir
-
-    def is_dir_que_explode(self):
-        if self.name == "2026-08-24-sem-stat":
-            raise PermissionError("stat negado")
-        return real_is_dir(self)
-
-    with mock.patch.object(Path, "is_dir", is_dir_que_explode):
-        execs = orq.listar_execucoes(tmp_path)
+    # Falha no stat injetada no leitor Rust que a rota usa, mantendo as outras entradas.
+    from types import SimpleNamespace
+    execs=[SimpleNamespace(**row) for row in call("runs.list",directory=tmp_path,stat_error="2026-08-24-sem-stat")]
     assert [e.id for e in execs] == ["2026-08-22-boa"]
     assert "sem-stat" in caplog.text
 

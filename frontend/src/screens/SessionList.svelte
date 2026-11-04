@@ -18,6 +18,7 @@ import * as m from '../paraglide/messages';
   import ConfirmSheet from '../components/ConfirmSheet.svelte';
   import Git from '../components/Git.svelte';
   import KeyringNotice from '../components/KeyringNotice.svelte';
+  import PasswordVaultRequestSheet from '../components/PasswordVaultRequestSheet.svelte';
   import AttentionFeed from '../components/AttentionFeed.svelte';
   import AccountMenu from '../components/AccountMenu.svelte';
   import LiveVoiceButton from '../components/LiveVoiceButton.svelte';
@@ -28,11 +29,13 @@ import * as m from '../paraglide/messages';
   import { abrirConfig } from '../lib/configNav';
   import { quotaFeed } from '../lib/quotaFeed.svelte';
   import { faixaDeCota } from '../lib/cota';
-  import { createSession, canPair, type DropResult } from '@hangar/core';
+  import { createSession, canPair, machineNoticeVisible, machinesAllDown, splitHidden, type DropResult } from '@hangar/core';
+  import { hiddenSection } from '../lib/hiddenSection.svelte';
   import { listAllServers, getActiveId, selectServer, removeServer, renameServer, updateServer, onServersChanged, snapshotRemocao, removalStillMatches } from '../lib/auth';
   import type { AggSession, Provider, SessionOpeningExtras, WorktreeChoice } from '@hangar/core';
   import type { RemovalSnapshot } from '../lib/auth';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
+  import { noticeClock } from '../lib/noticeClock.svelte';
   import { createSessionListModel, pairCodigo, pairResto } from '../lib/sessionListModel.svelte';
   import { countAwaiting, fmtWhen, initials } from '@hangar/core';
   import ConversationList from '../components/ConversationList.svelte';
@@ -61,17 +64,21 @@ import * as m from '../paraglide/messages';
   // servidor, refcount compartilhado com Sidebar/Board. As listas vêm do store como $derived.
   const sessions = $derived(sessionsStore.rows);
   const loading = $derived(sessionsStore.loading);
-  // Sessões em cache não são prova de conexão: a falha continua visível no resumo.
+  // Sessões em cache não são prova de conexão: a falha continua visível no resumo (a queda, só no
+  // começo: máquina desligada não fica avisando para sempre).
+  const noticeNow = noticeClock(() => sessionsStore.byServer);
   const serverErrors = $derived(
     sessionsStore.byServer
-      .filter((b) => b.error && !b.server.inviteEnded)
+      .filter((b) => machineNoticeVisible(b, noticeNow.now) && !b.server.inviteEnded)
       .map((b) => ({ label: b.server.label, error: b.error! })),
   );
   // Convite encerrado não é servidor offline: tem aviso próprio.
   const endedInvites = $derived(sessionsStore.byServer.filter((b) => b.server.inviteEnded).map((b) => b.server.label));
   // Só quando TODOS os servidores próprios estão fora: um fora e outro vazio é lista vazia com aviso.
   const ownBuckets = $derived(sessionsStore.byServer.filter((b) => !b.server.invite));
-  const listError = $derived(sessions.length === 0 && ownBuckets.length > 0 && ownBuckets.every((b) => b.error));
+  // Todas fora do ar: o aviso vermelho fica na faixa só no começo; depois, texto neutro.
+  const allDown = $derived(sessions.length === 0 && machinesAllDown(sessionsStore.byServer));
+  const listError = $derived(!allDown && sessions.length === 0 && ownBuckets.length > 0 && ownBuckets.every((b) => b.error));
   // Mensagem de AÇÃO (excluir/renomear), separada do `listError` acima: aquele substitui a lista inteira
   // (estado de "não consegui carregar"), e uma falha de exclusão não pode apagar a lista da tela.
   // Mesma forma do flash() da Sidebar, pra as duas views falharem igual.
@@ -95,8 +102,8 @@ import * as m from '../paraglide/messages';
     if (alvo && !loading && !sessions.some((x) => x.serverId === alvo.serverId && x.name === alvo.name)) grupoAlvo = null;
   });
   function selo(s: AggSession) {
-    // O cabeçalho do bloco já diz o ticket e as máquinas; a linha diz de qual máquina ela é.
-    const label = model.memberMachine(s) ?? model.groupBadge(s);
+    // A máquina da linha vai na placa do card (`showMachine`); o selo fica com o grupo.
+    const label = model.groupBadge(s);
     return label ? { label, onOpen: () => (grupoAlvo = { name: s.name, serverId: s.serverId }) } : null;
   }
   // Sessões locais do mesmo grupo: o convite de par com acesso completo abre todas.
@@ -122,8 +129,8 @@ import * as m from '../paraglide/messages';
   // agregada; o servidor-alvo de uma sessão é o dela, escolhido ao abrir/criar. Vem do store (derived).
   // A entrada temporária de par externo não é máquina desta pessoa: fica fora da conta e do menu.
   const servers = $derived(sessionsStore.servers.filter((x) => !x.ephemeral));
-  // Só `error`, SEM o portão `!loaded` do `serverErrors` acima: aquele existe pra o BANNER não
-  // gritar num piscar, mas aqui a pergunta é outra — "dá pra criar sessão nessa máquina agora?" —, e
+  // Só `error`, SEM a janela de tempo do `serverErrors` acima: aquela existe pra o BANNER não ficar
+  // avisando a queda inteira, mas aqui a pergunta é outra — "dá pra criar sessão nessa máquina agora?" —, e
   // quem respondeu há 5 minutos e calou não dá. Piscar não gera vaivém do chip: o erro só é marcado
   // depois de 25s de silêncio (watchdog) ou 10s sem o primeiro quadro.
   const servidoresOffline = $derived(
@@ -232,6 +239,15 @@ import * as m from '../paraglide/messages';
   // Gate dos dois ramos do template (agrupado x lista plana): o modelo já traduz a preferência
   // gravada no modo efetivo do celular.
   const showGrouped = $derived(model.groupMode !== 'none');
+
+  // Ocultas saem dos grupos e da lista plana e vão para a seção do fim. O modelo é compartilhado com
+  // a Sidebar do desktop web, que continua mostrando as ocultas misturadas (desktop web congelado).
+  const flatSplit = $derived(splitHidden(model.flatRows));
+  // Buscando, a seção abre como os grupos, sem mexer na preferência gravada.
+  const hiddenOpen = $derived(hiddenSection.open || model.filterText.trim() !== '');
+  const shownGroups = $derived(model.groups
+    .map((g) => ({ ...g, sessions: splitHidden(g.sessions).shown }))
+    .filter((g) => g.sessions.length > 0));
 
   // Entrar/sair do modo seleção fecha o drawer — só o celular tem drawer, então o embrulho fica aqui.
   function toggleSelectMode() {
@@ -552,6 +568,10 @@ import * as m from '../paraglide/messages';
     {#each ownBuckets.filter((b) => b.keyringLocked) as b (b.server.id)}
       <KeyringNotice server={b.server} />
     {/each}
+    {#each ownBuckets as b (b.server.id)}
+      {@const vault = sessionsStore.vaultFor(b.server.id)}
+      {#if vault}<PasswordVaultRequestSheet server={b.server} event={vault} />{/if}
+    {/each}
     {#if loading && sessions.length === 0}
       <div class="empty-state">
         <div class="spinner-large" aria-label={m.comum_carregando()}>⟳</div>
@@ -567,6 +587,12 @@ import * as m from '../paraglide/messages';
           <button class="retry-btn" onclick={() => abrirConfig('maquinas', null)}>{m.lista_erro_ver_servidores()}</button>
         </div>
       </div>
+    {:else if allDown}
+      {#if serverErrors.length === 0}
+        <div class="empty-state">
+          <p class="empty-sub">{m.home_machines_offline()}</p>
+        </div>
+      {/if}
     {:else if sessions.length === 0}
       <div class="empty-state">
         <p class="empty-title">{m.lista_nenhuma_ativa()}</p>
@@ -590,7 +616,7 @@ import * as m from '../paraglide/messages';
         <p class="filter-empty">{m.lista_vazia_filtro()}</p>
       {:else}
         {#if showGrouped}
-          {#each model.groups as g (g.id)}
+          {#each shownGroups as g (g.id)}
             {@const awaiting = countAwaiting(g.sessions)}
             <div class="group">
               {#if g.label}
@@ -666,6 +692,7 @@ import * as m from '../paraglide/messages';
                         selected={model.selected.has(`${session.serverId}:${session.name}`)}
                         onToggleSelect={() => model.toggleSelected(`${session.serverId}:${session.name}`)}
                         {showFolder}
+                        showMachine={model.memberMachine(session) !== null}
                         peers={allSessions}
                         onShare={() => (shareAlvo = { name: session.name, serverId: session.serverId })}
               onPairAccept={() => (pairAlvo = { name: session.name, serverId: session.serverId })}
@@ -684,7 +711,7 @@ import * as m from '../paraglide/messages';
                "Agrupar por" so aparece com 2+ servidores — entao quem usa um servidor so perdia o
                agrupamento de pareamento inteiro, que e justamente a feature de quem pareia sessoes
                no mesmo repo. Sobrava so o chip dentro do card. -->
-          {#each model.cluster(model.flatRows) as item (item.kind === 'header' ? `ph:${item.gid}` : `${item.session.serverId}:${item.session.name}`)}
+          {#each model.cluster(flatSplit.shown) as item (item.kind === 'header' ? `ph:${item.gid}` : `${item.session.serverId}:${item.session.name}`)}
             {#if item.kind === 'header'}
               {@const rep = groupRep(item.gid)}
                     {@const rotulo = model.pairLabel(item.gid, item.label)}
@@ -728,6 +755,7 @@ import * as m from '../paraglide/messages';
               selected={model.selected.has(`${session.serverId}:${session.name}`)}
               onToggleSelect={() => model.toggleSelected(`${session.serverId}:${session.name}`)}
               {showFolder}
+              showMachine={model.memberMachine(session) !== null}
               peers={allSessions}
               onShare={() => (shareAlvo = { name: session.name, serverId: session.serverId })}
               onPairAccept={() => (pairAlvo = { name: session.name, serverId: session.serverId })}
@@ -737,6 +765,37 @@ import * as m from '../paraglide/messages';
               </div>
             {/if}
           {/each}
+        {/if}
+        {#if flatSplit.hidden.length > 0}
+          <div class="group hidden-section">
+            <button class="group-head" onclick={() => (hiddenSection.open = !hiddenSection.open)} aria-expanded={hiddenOpen}>
+              <span class="group-chevron" class:collapsed={!hiddenOpen} aria-hidden="true">▾</span>
+              <span class="group-label">{m.session_hidden_group({ n: flatSplit.hidden.length })}</span>
+            </button>
+            {#if hiddenOpen}
+              {#each flatSplit.hidden as session (`${session.serverId}:${session.name}`)}
+                <SessionCard
+                  {session}
+                  groupBadge={selo(session)}
+                  onClick={() => openSession(session)}
+                  onDelete={() => handleDelete(session)}
+                  onResume={() => handleResume(session)}
+                  onRename={(nv) => handleRename(session, nv)}
+                  onGit={() => handleGit(session)}
+                  selectMode={model.selectMode}
+                  selected={model.selected.has(`${session.serverId}:${session.name}`)}
+                  onToggleSelect={() => model.toggleSelected(`${session.serverId}:${session.name}`)}
+                  showFolder
+                  showMachine
+                  peers={allSessions}
+                  onShare={() => (shareAlvo = { name: session.name, serverId: session.serverId })}
+                  onPairAccept={() => (pairAlvo = { name: session.name, serverId: session.serverId })}
+                  onBastao={() => { bastaoAlvo = { name: session.name, cwd: session.cwd ?? '', serverId: session.serverId }; showCreateSheet = true; }}
+                  onOpenArbiter={arbiterOf(session)}
+                />
+              {/each}
+            {/if}
+          </div>
         {/if}
       {/if}
     {/if}

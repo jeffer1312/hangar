@@ -15,18 +15,19 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OrqPhase { Live, Ended, NotStarted, Unknown }
 
-/// Fatos da orquestração, que moram no Python.
+/// Fatos da orquestração lidos no cofre da máquina.
 pub trait OrqFacts: Send + Sync {
     /// Falha em descobrir = `Unknown`.
     fn phase<'a>(&'a self, gid: &'a str) -> BoxFuture<'a, OrqPhase>;
     fn promote<'a>(&'a self, name: &'a str, gid: &'a str) -> BoxFuture<'a, Result<(), PromoteError>>;
 }
 
-/// Python sem resposta não é conflito: "o arquivo mudou, recarregue" seria mentira.
+/// A falta de identidade conserva o grupo; conflito desfaz a associação recém-criada.
 #[derive(Debug, PartialEq, Eq)]
 pub enum PromoteError {
-    /// Texto do 409 do Python.
+    IdentityUnavailable(String),
     Conflict(String),
+    ConflictWithRemaining { message: String, names: Vec<String> },
     /// Código do motivo (prazo, 5xx, rota ausente).
     Unavailable(String),
 }
@@ -66,6 +67,7 @@ pub struct JoinOutcome {
     /// Membros locais que estavam soltos: só eles recebem o protocolo.
     pub newcomers: Vec<String>,
     pub before: Snapshot,
+    pub promotion_warning: Option<String>,
 }
 
 pub struct GroupService {
@@ -156,16 +158,35 @@ impl GroupService {
             self.report("rust.groups_contract_merge_failed", loser, "groups_contract_merge_failed", "a fusão não herdou o contrato do grupo absorvido");
         }
         // Promover sob o mesmo lock: um join concorrente não enxerga o grupo meio configurado.
+        let mut promotion_warning = None;
         if plan.orq && plan.new_gid && let Err(failed) = self.orq.promote(&name, &plan.gid).await {
-            let restored = self.restore_blocking(plan.before.clone()).await;
-            self.changed();
-            // Sidecar `orq` que não voltou pesa mais que a promoção: 409/503 diria que nada ficou.
-            restored?;
-            return Err(GroupError::Orq(failed));
+            match failed {
+                PromoteError::IdentityUnavailable(message) => {
+                    self.report("rust.groups_promotion_without_identity", &name, "erro_orq_promocao_sem_identidade", "o grupo ficou, mas o time não foi promovido");
+                    promotion_warning = Some(message);
+                }
+                PromoteError::Conflict(message) => {
+                    let (dir, before) = (self.dir.clone(), plan.before.clone());
+                    let failures = blocking(move || restore_members(&dir, &before)).await?;
+                    self.changed();
+                    if failures.is_empty() { return Err(GroupError::Orq(PromoteError::Conflict(message))); }
+                    let names = failures.into_iter().map(|(name, _)| {
+                        self.report("rust.groups_promotion_undo_failed", &name, "groups_store_failed", "o membro não voltou ao estado anterior depois da promoção recusada");
+                        name
+                    }).collect();
+                    return Err(GroupError::Orq(PromoteError::ConflictWithRemaining { message, names }));
+                }
+                failed => {
+                    let restored = self.restore_blocking(plan.before.clone()).await;
+                    self.changed();
+                    restored?;
+                    return Err(GroupError::Orq(failed));
+                }
+            }
         }
         self.changed();
         let newcomers = plan.members.iter().filter(|m| matches!(plan.before.get(*m), Some(None))).cloned().collect();
-        Ok(JoinOutcome { members: plan.members, gid: plan.gid, task: plan.task, orq: plan.orq, newcomers, before: plan.before })
+        Ok(JoinOutcome { members: plan.members, gid: plan.gid, task: plan.task, orq: plan.orq, newcomers, before: plan.before, promotion_warning })
     }
 
     /// Devolve os ex-companheiros. O contrato é arquivado depois de soltar o lock: faxina não
@@ -346,7 +367,11 @@ pub(super) fn apply(dir: &PairDir, clears: &[String], writes: &[(String, Sidecar
 
 /// Tenta todos mesmo que um falhe: parar no primeiro deixaria o resto assimétrico. Devolve o primeiro erro.
 pub(super) fn restore_all(dir: &PairDir, before: &Snapshot) -> Result<(), StoreError> {
-    let mut first = None;
+    restore_members(dir, before).into_iter().next().map_or(Ok(()), |(_, error)| Err(error))
+}
+
+fn restore_members(dir: &PairDir, before: &Snapshot) -> Vec<(String, StoreError)> {
+    let mut failures = Vec::new();
     for (name, state) in before {
         let done = match state {
             None => dir.clear_sidecar(name),
@@ -354,10 +379,10 @@ pub(super) fn restore_all(dir: &PairDir, before: &Snapshot) -> Result<(), StoreE
         };
         if let Err(error) = done {
             tracing::warn!(code = "groups_restore_failed", name, %error, "groups: o sidecar não voltou ao estado anterior");
-            first.get_or_insert(error);
+            failures.push((name.clone(), error));
         }
     }
-    first.map_or(Ok(()), Err)
+    failures
 }
 
 /// Restauração de quem já está devolvendo outro erro: o erro original é o que importa ao chamador.

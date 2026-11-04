@@ -4,7 +4,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Icon } from '../../ui/Icon';
 import { superficie } from '../../theme/superficie';
 import { GroupGlyph } from '../pair/GroupGlyph';
-import type { GroupHead, SessionSection } from './sessionSections';
+import { HIDDEN_SECTION_ID, type GroupHead, type SessionSection } from './sessionSections';
 import * as m from '../../paraglide/messages';
 
 export function SessionSectionHeader({ section, onToggle }: { section: SessionSection; onToggle: (id: string) => void }) {
@@ -20,9 +20,10 @@ export function SessionSectionHeader({ section, onToggle }: { section: SessionSe
       accessibilityHint={section.collapsed ? m.sessao_expandir() : m.sessao_recolher()}>
       <View style={[styles.dot, { backgroundColor: color }]} />
       <Text accessibilityRole="header" style={[styles.label, { color: theme.tokens.text.primary }]} numberOfLines={1}>{section.label}</Text>
-      <View style={[styles.badge, { backgroundColor: superficie(theme, 0.5) }]}>
+      {/* "Ocultas (N)" já traz a contagem no nome. */}
+      {section.id === HIDDEN_SECTION_ID ? null : <View style={[styles.badge, { backgroundColor: superficie(theme, 0.5) }]}>
         <Text style={[styles.count, { color: theme.tokens.text.muted }]}>{section.total}</Text>
-      </View>
+      </View>}
       <View style={styles.arrow}>
         <Icon name={section.collapsed ? 'ChevronRight' : 'ChevronDown'} size={12} color={theme.tokens.text.muted} />
       </View>

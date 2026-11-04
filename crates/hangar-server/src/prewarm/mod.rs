@@ -159,9 +159,9 @@ fn failed(detail: String) -> OpenError { OpenError::new(500, "erro_criacao_sessa
 pub(crate) async fn plan_on(st: &crate::routes::AppState, host: &crate::session_open::server::ServerHost, request: &SessionOpenRequest, sid: &str)
     -> Result<Planned, OpenError> {
     use crate::session_open::open::OpenHost;
-    let (facts_env, handle, asked) = (AccountEnvironment::from_map(host.env().clone()), tokio::runtime::Handle::current(), request.clone());
+    let (facts_env, handle, asked, accounts) = (AccountEnvironment::from_map(host.env().clone()), tokio::runtime::Handle::current(), request.clone(), st.accounts.clone());
     let resolved = tokio::task::spawn_blocking(move || {
-        let facts = crate::session_open::facts::LocalFacts::new(facts_env, handle);
+        let facts = crate::session_open::facts::LocalFacts::shared(facts_env, &accounts, handle);
         crate::session_open::resolve_open(&asked, &OpenCaller::Owner, &facts)
     }).await.unwrap_or_else(|_| Err(failed("a resolução da reserva não terminou".into())))?;
     // O que o pedido não disse (provedor e terminal padrão do servidor) também precisa caber.

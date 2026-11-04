@@ -2,10 +2,11 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { tick } from 'svelte';
 import { createClassComponent } from 'svelte/legacy';
+import { OFFLINE_NOTICE_MS } from '@hangar/core';
 import HomeSessions from './HomeSessions.svelte';
 import { overwriteGetLocale } from '../paraglide/runtime';
 
-const store = vi.hoisted(() => ({ rows: [] as unknown[], byServer: [] as unknown[], loading: false }));
+const store = vi.hoisted(() => ({ rows: [] as unknown[], byServer: [] as unknown[], loading: false, vaultFor: () => null }));
 const model = vi.hoisted(() => ({ open: vi.fn(), requestDelete: vi.fn(), doDelete: vi.fn(), confirmDel: null, mount: () => () => {} }));
 vi.mock('../lib/sessionsStore.svelte', () => ({ sessionsStore: store }));
 vi.mock('../lib/sessionListModel.svelte', () => ({ createSessionListModel: () => model }));
@@ -38,6 +39,7 @@ beforeEach(() => {
 afterEach(() => {
   target.querySelector<HTMLButtonElement>('.more[aria-expanded="true"]')?.click();
   component?.$destroy(); component = null; target.remove();
+  store.vaultFor = () => null;
 });
 
 it('carregando enquanto nenhuma máquina respondeu', async () => {
@@ -50,14 +52,58 @@ it('vazio quando as máquinas responderam sem sessão aberta', async () => {
   expect(await mount()).toContain('Nenhuma sessão ativa');
 });
 
-it('erro por máquina aparece junto das sessões das outras', async () => {
+it('erro por máquina aparece junto das sessões das outras; máquina desligada só sai da lista', async () => {
   Object.assign(store, { loading: false, rows: [row('s1', 'working')], byServer: [
+    { server: server('a'), sessions: [], error: null, loaded: true },
+    { server: server('b'), sessions: [], error: 'offline', loaded: false, offlineSince: Date.now() - OFFLINE_NOTICE_MS },
+    { server: server('c'), sessions: [], error: '401', loaded: false },
+  ] });
+  const text = await mount();
+  expect(text).not.toContain('b offline');
+  expect(text).toContain('c: 401');
+  expect(text).toContain('Trabalhando');
+});
+
+it('todas as máquinas desligadas depois da janela: texto neutro, nunca "nenhuma sessão"', async () => {
+  Object.assign(store, { loading: false, rows: [], byServer: [{ server: server('b'), sessions: [], error: 'offline', loaded: false }] });
+  const text = await mount();
+  expect(text).not.toContain('b offline');
+  expect(text).toContain('Suas máquinas estão fora do ar');
+  expect(text).not.toContain('Nenhuma sessão ativa');
+});
+
+it('uma desligada, outra no ar sem sessão: a lista diz que está vazia', async () => {
+  Object.assign(store, { loading: false, rows: [], byServer: [
     { server: server('a'), sessions: [], error: null, loaded: true },
     { server: server('b'), sessions: [], error: 'offline', loaded: false },
   ] });
   const text = await mount();
-  expect(text).toContain('b offline');
-  expect(text).toContain('Trabalhando');
+  expect(text).toContain('Nenhuma sessão ativa');
+  expect(text).not.toContain('b offline');
+});
+
+it('máquina offline aparece só no começo da queda e some sozinha depois', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+  try {
+    Object.assign(store, { loading: false, rows: [], byServer: [
+      { server: server('b'), sessions: [], error: 'offline', loaded: false, offlineSince: Date.now() },
+    ] });
+    expect(await mount()).toContain('b offline');
+    vi.advanceTimersByTime(OFFLINE_NOTICE_MS - 1); await tick();
+    expect(target.textContent).toContain('b offline');
+    // O timer pode disparar um pouco antes do fim da janela: o aviso não pode ficar preso.
+    vi.setSystemTime(Date.now() - 1);
+    vi.advanceTimersByTime(1); await tick();
+    expect(target.textContent).not.toContain('b offline');
+    // Sem lista nem aviso: não volta a dizer "carregando" para a máquina desligada.
+    expect(target.textContent).not.toContain('Carregando');
+    // Todas as máquinas fora: lista vazia não diz "nenhuma sessão ativa".
+    expect(target.textContent).toContain('Suas máquinas estão fora do ar');
+    expect(target.textContent).not.toContain('Nenhuma sessão ativa');
+    expect(target.querySelector('[role="alert"]')).toBeNull();
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 it('rótulos de servidor ficam acima das linhas em cada estado, sem badge repetido', async () => {
@@ -109,6 +155,24 @@ it('chaveiro trancado aparece na tela inicial, por máquina e com campo de senha
   expect(text).toContain('a: chaveiro trancado');
   expect(text).not.toContain('b: chaveiro trancado');
   expect(target.querySelectorAll('input[type="password"]')).toHaveLength(1);
+});
+
+it('pedido do cofre aparece só na máquina dele, e nunca em servidor de convite', async () => {
+  const event = { state: 'open', requests: [{ id: 'r1', interaction_id: 'i1', kind: 'approve', origin: 'a::sessao', entry_name: 'github', reason: 'login', expires_at: 1 }] };
+  Object.assign(store, {
+    loading: false, rows: [row('s1', 'idle')],
+    byServer: [
+      { server: server('a'), sessions: [], error: null, loaded: true },
+      { server: server('b'), sessions: [], error: null, loaded: true },
+      { server: { ...server('c'), invite: true }, sessions: [], error: null, loaded: true },
+    ],
+    vaultFor: (id: string) => (id === 'b' ? null : event),
+  });
+  await mount();
+  const rows = [...target.querySelectorAll('.vault-row')];
+  expect(rows).toHaveLength(1);
+  expect(rows[0].textContent).toContain('github');
+  expect(rows[0].textContent).toContain('a::sessao');
 });
 
 it('sucesso agrupa e "mais N prontas" expande', async () => {

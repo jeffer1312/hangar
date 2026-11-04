@@ -1,4 +1,5 @@
 import logging
+import asyncio
 import secrets
 import threading
 import time
@@ -124,7 +125,11 @@ def reset_backoff() -> None:
         _diag_recusas.clear()
 
 
-def require_auth(request: Request) -> None:
+async def require_auth(request: Request) -> None:
+    await asyncio.to_thread(_authenticate_request, request)
+
+
+def _authenticate_request(request: Request) -> None:
     # Import tardio: o porteiro de convite puxa store/tmux, e auth é importado cedo por quase tudo.
     from app import guest_users
     from app.guest_header import guest_of
@@ -146,6 +151,28 @@ def require_auth(request: Request) -> None:
         token = query or cookie
         mecanismo = "query" if query else "cookie" if cookie else "ausente"
     ip = request.client.host if request.client else "?"
+    from app import shared_auth
+    context = shared_auth.current()
+    if context is not None:
+        try:
+            decision = request.scope.get("hangar.auth_decision")
+            if decision is None:
+                decision = context.request(request, token, mecanismo)
+                request.scope["hangar.auth_decision"] = decision
+        except shared_auth.Unavailable as error:
+            raise HTTPException(status_code=503, detail={"error_code": error.code, "message": "autenticação indisponível"}) from None
+        if decision.became_blocked:
+            _log.warning("[auth] %s errou o token %d vezes em %.0fs — bloqueado por %.0fs",
+                         ip, _MAX_FAILS, _WINDOW, _WINDOW)
+        if decision.status == shared_auth.BLOCKED:
+            registrar_acesso(ip, mecanismo, "bloqueio_temporario")
+            raise HTTPException(status_code=429, detail=erro("erro_muitas_tentativas", "muitas tentativas — aguarde"),
+                                headers={"Retry-After": str(int(_WINDOW))})
+        if decision.status != shared_auth.OWNER:
+            registrar_acesso(ip, mecanismo, "token_invalido" if token else "token_ausente")
+            raise HTTPException(status_code=401, detail=erro("erro_nao_autorizado", "unauthorized"))
+        registrar_acesso(ip, mecanismo, None)
+        return
     local = ip in _LOOPBACK
     now = time.time()
     if not local and _blocked(ip, now):

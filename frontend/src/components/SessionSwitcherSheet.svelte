@@ -6,9 +6,10 @@ import * as m from '../paraglide/messages';
   import BackgroundToggle from './BackgroundToggle.svelte';
   import { basename, relativeTime, rotuloEstado, stateColors } from '@hangar/core';
   import { listServers, listOwnServers, selectServer, serverColor, getActiveId, type Server } from '../lib/auth';
-  import { searchTranscriptsForServer, askHistoryForServer, getSearchContextForServer, estaDesligado, type SearchHit } from '@hangar/core';
+  import { searchTranscriptsForServer, askHistoryForServer, getSearchContextForServer, getArchiveFolder, rememberEntry, estaDesligado, type SearchHit } from '@hangar/core';
   import type { ChatEvent, SessionInfo, State } from '@hangar/core';
   import { renderMarkdown } from '../lib/markdown';
+  import * as diag from '../lib/diag';
 
   // Troca de sessao sem voltar pra home. Dois modos: "sessoes" (lista das outras sessoes vivas +
   // "Nova sessão") e "conversas" (busca de CONTEUDO em todos os transcripts, vivos + arquivados,
@@ -97,14 +98,32 @@ import * as m from '../paraglide/messages';
     const srv = listServers().find((s) => s.id === h.serverId);
     if (!srv || !h.event_id) { contextoErro = m.busca_contexto_indisponivel(); return; }
     try {
-      const evs = await getSearchContextForServer(srv, h.project, h.session_id, h.event_id);
+      const evs = await getSearchContextForServer(srv, h.project, h.session_id, h.event_id, h.provider, h.codex_account, h.config_dir);
       if (aberto === k) contexto = evs;
     } catch (e) {
       if (aberto === k) contextoErro = e instanceof Error ? e.message : m.busca_contexto_indisponivel();
     }
   }
-  function abrirNoPonto(h: Hit) {
+  async function abrirNoPonto(h: Hit) {
+    const anterior = getActiveId();
     selectServer(h.serverId);
+    // A mesma conversa em duas contas: o Arquivo abre a cópia da conta do trecho, não a mais nova. A
+    // espera vem antes de fechar: navegação feita depois não é sobrescrita por este hash.
+    if (h.config_dir) {
+      try {
+        const items = await getArchiveFolder(h.project, { session_id: h.session_id, config_dir: h.config_dir });
+        if (items.length === 1) rememberEntry(h.serverId, items[0]);
+        else diag.registrar({ evento: 'busca.arquivo_conta', nivel: 'aviso', codigo: 'entradas_inesperadas', quantidade: items.length });
+      } catch (e) {
+        diag.registrar({ evento: 'busca.arquivo_conta', nivel: 'aviso', codigo: 'leitura_falhou', detalhe: e instanceof Error ? e.message : String(e) });
+        // Seguir abriria a cópia de outra conta sem aviso: o erro fica na prévia do trecho.
+        if (aberto === chaveHit(h)) contextoErro = m.arquivo_conversa_erro();
+        // A consulta vai ao servidor ativo, por isso ele trocou antes; sem abrir, volta o de antes.
+        // Outra abertura no meio já escolheu o ativo: não desfazer a dela.
+        if (anterior && getActiveId() === h.serverId) selectServer(anterior);
+        return;
+      }
+    }
     onClose();
     const seg = [h.serverId, h.project, h.session_id, ...(h.event_id ? [h.event_id] : [])];
     window.location.hash = '#/archive/' + seg.map(encodeURIComponent).join('/');

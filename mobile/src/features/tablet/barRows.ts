@@ -7,8 +7,11 @@ const keyOf = (s: AggSession) => `${s.serverId}::${s.name}`;
 export const isWorking = (s: AggSession) => s.state === 'working' && !s.limited;
 type TabOrder = { tabsWorkingFirst?: boolean; tabsRecentFirst?: boolean };
 
-export function barRows(rows: AggSession[], identities: ReadonlyMap<string, string>, groupsFirst = true, order: TabOrder = {}): BarItem[] {
-  const ordered = buildSessionSections(rows, 'none', '', new Set()).flatMap(s => s.data);
+export function barRows(rows: AggSession[], identities: ReadonlyMap<string, string>, groupsFirst = true, order: TabOrder = {}, current?: { serverId: string; name: string }): BarItem[] {
+  // Como as abas do nativo: a oculta sai da barra, menos a aberta, que fica até a pessoa trocar de sessão.
+  const isCurrent = (s: AggSession) => s.serverId === current?.serverId && s.name === current?.name;
+  const visible = current ? rows.map(s => s.hidden_from_list && isCurrent(s) ? { ...s, hidden_from_list: false } : s) : rows;
+  const ordered = buildSessionSections(visible, 'exclude', 'none', '', new Set()).flatMap(s => s.data);
   const byKey = new Map(ordered.map(s => [keyOf(s), s]));
   type Group = { key: string | null; members: Set<AggSession> };
   const groupOf = new Map<AggSession, Group>();

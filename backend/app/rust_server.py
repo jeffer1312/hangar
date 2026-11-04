@@ -13,6 +13,7 @@ import http.client
 import json
 import logging
 import os
+import re
 import secrets
 import socket
 import subprocess
@@ -32,9 +33,10 @@ _log = logging.getLogger("hangar.rust_server")
 HEALTH_PATH = "/__hangar_server/health"
 # Versão do contrato interno (rotas /internal, canal privado do estado, ambiente). Tem de casar com o
 # `protocol` da saúde (hangar_server::INTERNAL_PROTOCOL); outro número = o Python atende sozinho.
-RUST_SERVER_PROTOCOL = 90
+RUST_SERVER_PROTOCOL = 97
 START_TIMEOUT = 10.0
 OP_TIMEOUT_S = 75
+PROTECTED_SHUTDOWN_SECONDS = 120
 CRASH_WINDOW = 60.0
 MAX_CRASHES = 3
 # Depois da desistência, espera antes de cada tentativa de religar o Rust (a última se repete).
@@ -52,14 +54,12 @@ GRACEFUL_SHUTDOWN_S = 5
 
 
 class Server(uvicorn.Server):
-    """Uvicorn que solta as esperas longas do plugin assim que o sinal de parada chega."""
+    """Uvicorn que fecha os SSE assim que o sinal de parada chega."""
 
     def handle_exit(self, sig, frame) -> None:
         try:
             from sse_starlette.sse import AppStatus
             AppStatus.should_exit = True        # só o sinal fecha os SSE; soltar a porta pública, não
-            from app import plugin_bridge
-            plugin_bridge.stop_waits()
         finally:
             super().handle_exit(sig, frame)     # falha no gancho não pode impedir a parada
 
@@ -71,6 +71,15 @@ def wanted_binary(enabled: bool) -> Path | None:
     found = rust_bins.find_bin("hangar-server", "CP_RUST_SERVER_BIN")
     if found is None:
         diag.registrar("hangar_server.reserva", "aviso", codigo="sem_binario")
+    else:
+        from app import shared_auth
+        from app.config import settings
+        try:
+            shared_auth.activate(found, settings.auth_token, 0)
+        except (OSError, ValueError, AttributeError, shared_auth.Unavailable):
+            _log.error("hangar-server sem par válido da biblioteca de autenticação")
+            diag.registrar("hangar_server.reserva", "aviso", codigo="auth_pair_invalid")
+            return None
     return found
 
 
@@ -104,6 +113,33 @@ def server_log_path() -> Path:
     folder = log_paths.base() / "privado"
     folder.mkdir(parents=True, exist_ok=True, mode=0o700)
     return folder / "hangar-server.log"
+
+
+def _last_errors(path: Path, count: int = 3) -> str:
+    """As últimas linhas ERROR/WARN do log do filho, sem a data: o pânico sai por elas (gancho do
+    `tracing`), e o código de saída sozinho não diz por que ele caiu."""
+    try:
+        with path.open("rb") as f:
+            f.seek(max(0, f.seek(0, os.SEEK_END) - 65536))
+            tail = f.read().decode("utf-8", errors="replace").splitlines()
+    except OSError as e:
+        return f"log ilegível: {type(e).__name__}"
+    kept = [line for line in tail if " ERROR " in line or " WARN " in line][-count:]
+    return " | ".join(_reduce_error(line) for line in kept)
+
+
+_FIELD = re.compile(r"\s[a-z_][a-z0-9_.]*=")
+_KEPT_FIELD = re.compile(r"\s((?:code|panic)=(?:\"[^\"]{0,160}\"|\S{1,80}))")
+
+
+def _reduce_error(line: str) -> str:
+    """`2026-11-03T10:55:00.123Z  ERROR alvo: msg code=x detail="…"` vira `10:55:00 ERROR alvo: msg code=x`:
+    só a mensagem fixa e os campos que nunca levam texto de conversa."""
+    head = line.split(maxsplit=1)[1] if line[:4].isdigit() and " " in line else line
+    cut = _FIELD.search(head)
+    kept = " ".join(_KEPT_FIELD.findall(head[cut.start():])) if cut else ""
+    when = f"{line[11:19]} " if line[:4].isdigit() else ""
+    return f"{when}{(head[:cut.start()] if cut else head)[:200]} {kept}".rstrip()
 
 
 def _health(host: str, port: int) -> dict | None:
@@ -373,8 +409,11 @@ class Supervisor:
         if self.port != GUEST_PORT:
             host = "0.0.0.0" if self.host in ("0.0.0.0", "::") else "127.0.0.1"
             guest["HANGAR_SERVER_GUEST_LISTEN"] = listen_addr(host, GUEST_PORT)
-        env = {k: v for k, v in os.environ.items() if k != "HANGAR_SERVER_GUEST_LISTEN"}
-        return {**env, **lists, **groups, **guest,
+        from app import shared_auth
+        context = shared_auth.current()
+        auth_env = context.child_env(self.binary) if context is not None else {}
+        env = {k: v for k, v in os.environ.items() if k not in ("HANGAR_SERVER_GUEST_LISTEN", "HANGAR_AUTH_CONTEXT")}
+        return {**env, **lists, **groups, **guest, **auth_env,
                 "HANGAR_SERVER_LISTEN": listen_addr(self.host, self.port),
                 "HANGAR_SERVER_UPSTREAM": f"127.0.0.1:{self.upstream_port}",
                 "HANGAR_INTERNAL_SECRET": secret,
@@ -395,14 +434,19 @@ class Supervisor:
             from app.runtime_process import cleanup
             await asyncio.to_thread(cleanup, self.proc)
             _close_stdin(self.proc)
-        env = self._env()
+        from app import shared_auth
+        try:
+            env = await asyncio.to_thread(self._env)
+        except (OSError, ValueError, shared_auth.Unavailable):
+            diag.registrar("hangar_server.partida", "erro", codigo="auth_pair_invalid")
+            return "protocol"
         self.proc = _spawn(self.binary, env)
         try:
             ready = await asyncio.wait_for(asyncio.to_thread(_runtime_ready, self.proc,
                                             env["HANGAR_RUNTIME_INSTANCE"]), START_TIMEOUT)
         except ProtocolMismatch as e:
             _log.error("hangar-server fala o protocolo %r; este backend fala %d", e.args[0], RUST_SERVER_PROTOCOL)
-            diag.registrar("hangar_server.protocolo", "erro", esperado=RUST_SERVER_PROTOCOL, recebido=e.args[0])
+            diag.registrar("hangar_server.protocolo", "erro", esperado=RUST_SERVER_PROTOCOL, recebido=repr(e.args[0]))
             return "protocol"
         except (OSError, ValueError, asyncio.TimeoutError):
             diag.registrar("hangar_server.partida", "erro", codigo="runtime_invalido")
@@ -416,7 +460,7 @@ class Supervisor:
                 got = health.get("protocol")
                 if isinstance(got, bool) or got != RUST_SERVER_PROTOCOL:
                     _log.error("hangar-server fala o protocolo %r; este backend fala %d", got, RUST_SERVER_PROTOCOL)
-                    diag.registrar("hangar_server.protocolo", "erro", esperado=RUST_SERVER_PROTOCOL, recebido=got)
+                    diag.registrar("hangar_server.protocolo", "erro", esperado=RUST_SERVER_PROTOCOL, recebido=repr(got))
                     return "protocol"
                 if self.proc.poll() is not None:
                     return "died"
@@ -502,8 +546,9 @@ class Supervisor:
                 crashes = [t for t in crashes if now - t < CRASH_WINDOW] + [now]
                 _log.warning("hangar-server saiu (código %s), queda %d em %ds",
                              self.proc.returncode, len(crashes), int(CRASH_WINDOW))
+                saida = await asyncio.to_thread(_last_errors, server_log_path())
                 diag.registrar("hangar_server.caiu", "aviso", retorno=self.proc.returncode,
-                               tentativa=len(crashes))
+                               tentativa=len(crashes), saida=saida)
                 if len(crashes) >= MAX_CRASHES:
                     return "quedas"
         except Exception as e:                           # noqa: BLE001 — a porta pública não fica sem dono
@@ -527,7 +572,7 @@ class Supervisor:
             # Fechar o cano é o pedido de saída que o binário entende em todo sistema.
             _close_stdin(proc)
             try:
-                await asyncio.to_thread(proc.wait, 5)
+                await asyncio.to_thread(proc.wait, PROTECTED_SHUTDOWN_SECONDS)
             except subprocess.TimeoutExpired:
                 proc.kill()
                 await asyncio.to_thread(proc.wait)
@@ -577,6 +622,8 @@ async def serve(server: uvicorn.Server, sockets: list[socket.socket], binary: Pa
     """O uvicorn interno e o hangar-server juntos. `False` = a porta pública ficou sem dono.
 
     `kw` é o da porta pública: a lista `forwarded_allow_ips` do dono vai ao filho e à reserva."""
+    from app import shared_auth
+    await asyncio.to_thread(shared_auth.activate, binary, token, sockets[0].getsockname()[1])
     serving = asyncio.create_task(server.serve(sockets=sockets))
     # O filho só nasce com o uvicorn interno de pé: antes disso todo repasse dele daria 502.
     while not server.started and not serving.done():
@@ -710,6 +757,8 @@ def run(app: str, kw: dict, binary: Path, token: str, sockets: list[socket.socke
                                 loop_factory=config.get_loop_factory())
     finally:
         runtime_coordinator.expect_rust(False)
+        from app import shared_auth
+        shared_auth.shutdown()
     if not server.started:
         return 3
     return 0 if public_ok else 1

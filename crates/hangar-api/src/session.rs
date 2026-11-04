@@ -172,6 +172,21 @@ pub struct SessionRow {
     pub plan_tasks: Option<Vec<(u32, u32)>>,
     #[serde(default)]
     pub plan_hidden: Option<bool>,
+    /// Nome sugerido para a sessão de nome genérico, sem "agora não" do dono; só existe no Rust.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rename_suggestion: Option<String>,
+    /// A sugestão saiu com pouco contexto e se refaz no próximo pedido.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub rename_weak: bool,
+    /// Fora da lista principal pela marca do dono ou por tempo parada; só existe no Rust.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden_from_list: bool,
+    /// Sem terminal e sem processo vivo: acorda na próxima mensagem. Só existe no Rust.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub asleep: bool,
+    /// Onde a sessão adormecida reabre ao acordar (`terminal` ou `headless`), quando a marca diz.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wake_surface: Option<String>,
 }
 
 fn default_provider() -> String {

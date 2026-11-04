@@ -24,13 +24,20 @@ pub fn diagnostic(code: &str, state: &str) -> bool {
 /// Diagnóstico não cobre código de tela: `new` não entra no lugar de `current`, que o portão mostraria.
 pub fn keeps(current: Option<&str>, new: &str) -> bool { current.is_some_and(|current| !is_diagnostic(current)) && is_diagnostic(new) }
 
-/// Registro do aviso tirado da tela: o diário recebe o código (uma vez por minuto por sessão e código) e o
-/// log, o detalhe, que o diário não aceita por ser texto livre.
+/// Registro do aviso tirado da tela: o diário recebe o código e o detalhe que a tela teria mostrado (uma
+/// vez por minuto por sessão e código), e o log também.
 pub fn report_hidden(diag: &crate::diag::DiagClient, session: &str, code: &str, detail: Option<&str>) {
     if crate::warn_limit::allow(Some(session), &format!("problem_hidden:{code}")) {
         tracing::warn!(session, code, detail, "aviso de diagnóstico fora da tela");
     }
-    diag.report("rust.problem_hidden", session, code, "aviso de diagnóstico fora da tela");
+    diag.report_with("rust.problem_hidden", session, code, "aviso de diagnóstico fora da tela",
+        serde_json::json!({"detalhe": detail, "via": "conversa"}));
+}
+
+/// A entrega incerta segura a fila com ou sem texto no campo: a troca do motivo não é problema novo.
+fn same_problem(a: &str, b: &str) -> bool {
+    const HELD: [&str; 2] = ["terminal_input_delivery_unproved", "terminal_input_delivery_composer_busy"];
+    a == b || (HELD.contains(&a) && HELD.contains(&b))
 }
 
 /// O que fazer com o problema que o estado traz agora.
@@ -67,9 +74,9 @@ impl ProblemGate {
 
     pub fn admit(&mut self, code: Option<&str>, now: Instant, hold: Duration) -> Gate {
         let Some(code) = code else { self.shown = None; self.pending = None; return Gate::Clear };
-        if self.shown.as_deref() == Some(code) { return Gate::Show; }
+        if self.shown.as_deref().is_some_and(|shown| same_problem(shown, code)) { self.shown = Some(code.to_owned()); return Gate::Show; }
         self.shown = None;
-        let since = match &self.pending { Some((pending, since)) if pending == code => *since, _ => now };
+        let since = match &self.pending { Some((pending, since)) if same_problem(pending, code) => *since, _ => now };
         if now.saturating_duration_since(since) >= hold {
             self.pending = None;
             self.shown = Some(code.to_owned());
@@ -114,6 +121,14 @@ mod tests {
         assert!(diagnostic("interacao_indisponivel", "working"), "P1: fora da espera, diário");
         assert!(diagnostic("interacao_indisponivel", "idle"));
         assert!(!diagnostic("interacao_indisponivel", "awaiting_input"), "P1: esperando a pessoa, tela");
+    }
+
+    #[test]
+    fn the_held_delivery_switching_its_reason_stays_one_problem() {
+        let (mut gate, t0) = (ProblemGate::default(), Instant::now());
+        assert_eq!(gate.admit(Some("terminal_input_delivery_unproved"), t0, HOLD), Gate::Hold(t0 + HOLD));
+        assert_eq!(gate.admit(Some("terminal_input_delivery_composer_busy"), t0 + HOLD, HOLD), Gate::Show, "o prazo segue do primeiro");
+        assert_eq!(gate.admit(Some("terminal_input_delivery_unproved"), t0 + HOLD * 2, HOLD), Gate::Show, "texto apagado: segue mostrado");
     }
 
     #[test]

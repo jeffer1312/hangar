@@ -68,9 +68,20 @@ pub struct BareClaude { pub pane_pid: i64, pub agent: i64, pub cwd: String, pub 
 /// O que o pane prova: o agente, a conta e a conversa dele.
 struct Proven { agent: u32, config_dir: PathBuf, conversation: String, transcript: PathBuf, plugin_key: Option<String>, pane_birth: Option<f64> }
 
+/// A conversa que o `/pull` do plugin informou, com a chave do token que o assina.
+pub struct PluginClaim { pub key: String, pub conversation: String }
+
+/// A chave do token amarra o pedido ao processo do pane; o `--session-id` do argv é só a conversa com que ele
+/// nasceu, e depois de um `/clear` ou `/resume` é outra. Vale a do `/pull` com o transcript dela no projeto.
+fn claim_holds(claim: &PluginClaim, plugin_key: Option<&str>, transcript_exists: &dyn Fn(&str) -> bool) -> bool {
+    let sid = claim.conversation.as_str();
+    plugin_key == Some(claim.key.as_str()) && !sid.is_empty() && sid.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_".contains(&b))
+        && transcript_exists(sid)
+}
+
 /// O agente Claude do pane e a conversa que ele roda. `Ok(None)`: o pane não é de uma conversa Claude
 /// (shell, outro agente, `claude login`), e a escrita segue o caminho de sempre.
-fn prove(panes: &[Pane], name: &str, claude_base: &Path) -> Result<Option<Proven>, RuntimeError> {
+fn prove(panes: &[Pane], name: &str, claude_base: &Path, claim: Option<&PluginClaim>) -> Result<Option<Proven>, RuntimeError> {
     let procs = SystemProcs::default();
     let children = procs.children(Duration::ZERO).map_err(|_| refused("claude_terminal_process_unavailable", "os processos da máquina não puderam ser lidos"))?;
     let mut resolver = crate::list::discover::Resolver::default();
@@ -100,9 +111,15 @@ fn prove(panes: &[Pane], name: &str, claude_base: &Path) -> Result<Option<Proven
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(_) => return Err(refused("terminal_native_record_unavailable", "o registro do Claude no terminal não pôde ser lido")),
     };
-    let (conversation, transcript) = match native {
+    let plugin_key = env("HANGAR_PLUGIN_TOKEN").and_then(|token| token.split_once('.').map(|(key, _)| key.to_owned())).filter(|k| !k.is_empty());
+    let transcript_of = |sid: &str| config_dir.join("projects").join(hangar_workspace::worktrees::sanitize_cwd(&row.cwd)).join(format!("{sid}.jsonl"));
+    // Sem o registro nativo (o Claude não o recria), o `/pull` do plugin deste processo diz a conversa: a chave
+    // do token é a do ambiente do agente, o transcript dela existe e o argumento do processo não a contradiz.
+    let claimed = claim.filter(|claim| native.is_none()
+        && claim_holds(claim, plugin_key.as_deref(), &|sid| transcript_of(sid).is_file()));
+    let (conversation, transcript) = match native.or_else(|| claimed.map(|claim| claim.conversation.clone())) {
         Some(sid) => {
-            let transcript = config_dir.join("projects").join(hangar_workspace::worktrees::sanitize_cwd(&row.cwd)).join(format!("{sid}.jsonl"));
+            let transcript = transcript_of(&sid);
             (sid, transcript)
         }
         None => {
@@ -120,7 +137,6 @@ fn prove(panes: &[Pane], name: &str, claude_base: &Path) -> Result<Option<Proven
             (sid, path)
         }
     };
-    let plugin_key = env("HANGAR_PLUGIN_TOKEN").and_then(|token| token.split_once('.').map(|(key, _)| key.to_owned())).filter(|k| !k.is_empty());
     let pane_birth = row.pane_pid.and_then(|pid| procs.start_time(pid));
     Ok(Some(Proven { agent, config_dir, conversation, transcript, plugin_key, pane_birth }))
 }
@@ -129,6 +145,11 @@ impl Watcher {
     /// Escrita para um Claude com terminal sem ator aqui: o Rust o adota. `None` = não há conversa Claude
     /// no pane com esse nome.
     pub async fn adopt_claude(&self, registry: &RuntimeRegistry, name: &str) -> Option<Result<(), RuntimeError>> {
+        self.adopt_claude_claimed(registry, name, None).await
+    }
+
+    /// `claim`: a conversa que o `/pull` do plugin informou, que vale quando falta o registro nativo.
+    pub async fn adopt_claude_claimed(&self, registry: &RuntimeRegistry, name: &str, claim: Option<PluginClaim>) -> Option<Result<(), RuntimeError>> {
         let _round = self.misses.lock().await;
         if let Err(error) = self.retire_other_life(registry, name).await { return Some(Err(error)); }
         if registry.has_entry(None, name).await { return Some(Ok(())); }
@@ -140,7 +161,7 @@ impl Watcher {
         let claude_base = registry.codex_environment().claude_base;
         let found = {
             let (panes, name, base) = (panes.clone(), name.to_owned(), claude_base.clone());
-            tokio::task::spawn_blocking(move || prove(&panes, &name, &base)).await
+            tokio::task::spawn_blocking(move || prove(&panes, &name, &base, claim.as_ref())).await
                 .unwrap_or_else(|_| Err(refused("claude_terminal_process_unavailable", "a leitura dos processos parou no meio")))
         };
         let proven = match found {
@@ -290,6 +311,20 @@ impl Watcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_plugin_claim_needs_the_agent_key_and_its_transcript() {
+        let claim = PluginClaim { key: "k".into(), conversation: "sid-1".into() };
+        let exists = |sid: &str| sid == "sid-1";
+        assert!(claim_holds(&claim, Some("k"), &exists));
+        // Nasceu com --session-id sid-0 e fez /clear: a conversa do /pull é a nova, com o transcript dela.
+        let cleared = PluginClaim { key: "k".into(), conversation: "sid-depois-do-clear".into() };
+        assert!(claim_holds(&cleared, Some("k"), &|sid| sid == "sid-depois-do-clear"));
+        assert!(!claim_holds(&claim, Some("outra"), &exists), "token de outro processo");
+        assert!(!claim_holds(&claim, None, &exists), "Claude aberto sem a chave do Hangar");
+        assert!(!claim_holds(&claim, Some("k"), &|_| false), "sem o transcript dela");
+        assert!(!claim_holds(&PluginClaim { key: "k".into(), conversation: "../x".into() }, Some("k"), &|_| true));
+    }
 
     #[test]
     fn login_skips_the_wrapper_options() {

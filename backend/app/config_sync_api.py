@@ -6,13 +6,12 @@ máquina precisa conhecer a outra pelo peers.json.
 import asyncio
 import json
 import logging
-from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel
 
-from app import config_sync, config_sync_translate
+from app import config_sync
 from app.auth import require_auth
 from app.config import settings
 from app.config_sync_paths import Roots
@@ -121,18 +120,8 @@ async def get_bundle(items: str = Query(""), keys: str = Query("")) -> Response:
                     headers={"Content-Encoding": "identity", "Cache-Control": "no-store"})
 
 
-class TranslateBody(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    lang: Literal["pt", "en"]
-    texts: list[Annotated[str, Field(max_length=2000)]] = Field(max_length=2000)
 
 
-@config_sync_router.post("/translate", dependencies=[Depends(require_auth)])
-async def post_translate(body: TranslateBody) -> dict:
-    """Descrições da prévia no idioma da tela. Sempre 200: falha devolve os originais e o motivo
-    em `error`, para a tela mostrar o texto e avisar por que não traduziu."""
-    texts, error = await asyncio.to_thread(config_sync_translate.translate, body.texts, body.lang)
-    return {"texts": texts, "error": error}
 
 
 def _busy() -> HTTPException:

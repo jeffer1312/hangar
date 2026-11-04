@@ -75,14 +75,14 @@ export function useMachineAction() {
     const current = controller.current;
     return () => current.abort();
   }, []);
-  const run = useCallback(async <T,>(work: (signal: AbortSignal) => Promise<T>, commit: (value: T) => void, done = '') => {
+  const run = useCallback(async <T,>(work: (signal: AbortSignal) => Promise<T>, commit: (value: T) => void, done: string | ((value: T) => string) = '') => {
     const signal = controller.current.signal;
     if (locked.current || signal.aborted) return;
     locked.current = true; setBusy(true); setError(''); setMessage('');
     try {
       const value = await work(signal);
       ensureActive(signal);
-      commit(value); setMessage(done);
+      commit(value); setMessage(typeof done === 'function' ? done(value) : done);
     } catch (e) { if (!signal.aborted) setError(reason(e)); }
     finally { if (!signal.aborted) { locked.current = false; setBusy(false); } }
   }, []);

@@ -2,11 +2,13 @@
 //! terminal. A troca roda sob a exclusão da vigia (nenhuma rodada enterra a vida, e com ela a fila, no
 //! meio) e com a porta de entrada da sessão retida: escrita durante a troca recebe 409 na hora.
 //! Modo de permissão que não se lê no seletor recusa a troca; nunca vira Full Access.
-use super::actor::{RuntimeHandle,TURN_HOLD_BUSY};
+use super::actor::{RuntimeHandle,TURN_HOLD_BUSY,TurnHold};
 use super::codex_sidecar::{self,Meta};
-use super::codex_terminal::{self as terminal,Watcher};
-use super::gateway::{EntryHandle,RuntimeRegistry};
+use super::codex_terminal::{self as terminal,AdoptionCell,CodexTerminalTarget,Watcher};
+use super::gateway::{ASLEEP_WAKING,EntryHandle,RuntimeRegistry,asleep_surface,asleep_waking};
 use super::ingress::IngressGates;
+use super::lifecycle::ClosedIngress;
+use crate::session_open::Surface;
 use super::protocol::{CanoBinding,ClockSample,Disposition,OperationKind,RuntimeCommand,RuntimeError,RuntimeTarget};
 use super::queue::{Action,State as QueueState,Store};
 use crate::accounts::{AccountService,Provider,catalog::resolved};
@@ -46,8 +48,7 @@ const MSG_QUEUE:&str = "Há mensagens na fila esperando entrega.";
 pub enum PermissionRead {
     /// O seletor `/permissions` da TUI, com o painel de terminal real (aberto recusa).
     Pane(Option<Arc<crate::term::Terms>>),
-    /// Só testes: o modo já lido, sem a TUI.
-    #[doc(hidden)]
+    /// O modo já sabido, sem a TUI: o do adormecer (rollout e arquivo da sessão) e o dos testes.
     Known(String),
 }
 
@@ -250,6 +251,36 @@ fn terminal_settings(meta:Meta,view:&Value,key:&str) -> Result<Meta,RuntimeError
 /// Plan/default voltam depois da troca; outro modo não existe no sem terminal.
 fn collaboration(view:&Value) -> Option<String> { view["mode"].as_str().filter(|mode|matches!(*mode,"plan" | "default")).map(str::to_owned) }
 
+/// Fins do rollout lidos atrás da última rodada antes do arquivo inteiro: há rollout de centenas de MB.
+const ROLLOUT_TAILS:[u64;2] = [1 << 20,16 << 20];
+
+/// O modo de permissão da última rodada gravada no rollout (`turn_context`), sem ler a tela, e quando ela
+/// foi gravada (epoch s, se a linha disser). `Ok(None)`: a conversa ainda não teve rodada; `Err`: rollout
+/// ilegível ou política fora dos três modos. Bloqueante.
+fn rollout_mode(path:&Path) -> Result<Option<(&'static str,Option<f64>)>,()> {
+    use std::io::{Read,Seek,SeekFrom};
+    let mut file = std::fs::File::open(path).map_err(|_|())?;
+    let size = file.metadata().map_err(|_|())?.len();
+    for window in ROLLOUT_TAILS.into_iter().chain([u64::MAX]) {
+        let start = size.saturating_sub(window);
+        let mut raw = Vec::new();
+        file.seek(SeekFrom::Start(start)).map_err(|_|())?;
+        (&mut file).take(size - start).read_to_end(&mut raw).map_err(|_|())?;
+        let lines:Vec<&[u8]> = raw.split(|b|*b == b'\n').collect();
+        // A primeira linha de um fim parcial pode vir cortada: fica para a janela maior.
+        for line in lines[usize::from(start > 0).min(lines.len())..].iter().rev() {
+            let Ok(record) = serde_json::from_slice::<Value>(line) else { continue };
+            if record["type"] != "turn_context" { continue; }
+            let policy = &record["payload"];
+            let found = super::codex_launch::mode_of(policy["approval_policy"].as_str().unwrap_or(""),policy["sandbox_policy"]["type"].as_str().unwrap_or(""));
+            let at = record["timestamp"].as_str().and_then(|at|chrono::DateTime::parse_from_rfc3339(at).ok()).map(|at|at.timestamp_millis() as f64 / 1000.0);
+            return found.map(|mode|Some((mode,at))).ok_or(());
+        }
+        if start == 0 { break; }
+    }
+    Ok(None)
+}
+
 /// Alvo do sem terminal a partir do sidecar e dos caminhos da fila (o `Binding.descriptor()` do Python).
 fn headless_target(queue_dir:&Path,name:&str,key:&str,generation:u64,meta:&Meta) -> RuntimeTarget {
     let (state_path,lease_path) = terminal::queue_files(queue_dir,key);
@@ -320,7 +351,8 @@ impl Watcher {
             }).collect::<Vec<_>>()
         }).await.unwrap_or_default();
         let opens=listed.into_iter().map(|name|async move {
-            if let Some(Err(error))=self.open_parked(registry,&name).await {
+            // A adormecida com terminal e fila esperando acorda no terminal, à parte: não é falha da subida.
+            if let Some(Err(error))=self.open_parked(registry,&name).await && error.code!=ASLEEP_WAKING {
                 tracing::warn!(session=%name,code=%error.code,"Codex sem terminal não abriu na subida");
                 registry.report("runtime.registration_failed",&name,&error.code,"o Codex sem terminal não abriu na subida do Rust");
             }
@@ -336,7 +368,17 @@ impl Watcher {
         let meta = self.load(name).await?;
         if !meta.get("headless").is_some_and(truthy) || decide(WriteRoute::CodexControl,Route::Codex,false) != Owner::Rust { return None; }
         let key = terminal::text(&meta,"key")?.to_owned();
-        if registry.codex_headless(name).await.is_some() { return Some(Ok(())); }
+        // A adormecida que era com terminal nunca sobe sem ele: acorda no terminal.
+        let mark = asleep_surface(&meta);
+        if mark == Some(Surface::Terminal) {
+            registry.wake(name,&key);
+            return Some(Err(asleep_waking()));
+        }
+        if registry.codex_headless(name).await.is_some() {
+            // Aberta com a marca que ficou (a retirada falhou antes): sai agora, senão ela não adormece mais.
+            if mark.is_some() { self.unmark(name,&key).await; }
+            return Some(Ok(()));
+        }
         // Outra entrada com esta chave ou nome (vida de terminal ainda aberta, outro provedor): é do Rust e
         // não dá para abrir; a escrita recebe o código, nunca o Python.
         if registry.has_entry(Some(&key),name).await {
@@ -350,7 +392,175 @@ impl Watcher {
         if let Some(cano) = meta.get("cano").cloned().and_then(|cano|serde_json::from_value::<super::process::Cano>(cano).ok()) {
             target.binding = CanoBinding { pid:cano.pid,escuta:cano.escuta,token:cano.token,versao:cano.versao };
         }
-        Some(registry.open_with_launch(target,codex_sidecar::dir(&self.cfg.home)).await.map(|_|()))
+        let opened = registry.open_with_launch(target,codex_sidecar::dir(&self.cfg.home)).await.map(|_|());
+        if opened.is_ok() && mark.is_some() { self.unmark(name,&key).await; }
+        Some(opened)
+    }
+
+    /// A marca de adormecida sai do sidecar desta chave; a que ficar some no próximo acordar.
+    async fn unmark(&self,name:&str,key:&str) {
+        let (dir,owned,key) = (codex_sidecar::dir(&self.cfg.home),name.to_owned(),key.to_owned());
+        let done = tokio::task::spawn_blocking(move||codex_sidecar::locked(&dir,&owned,|path| {
+            let Some(mut meta) = codex_sidecar::load(path) else { return Ok(()) };
+            if terminal::text(&meta,"key") != Some(key.as_str()) || meta.remove("asleep").is_none() { return Ok(()); }
+            codex_sidecar::write(path,&meta)
+        })).await;
+        if !matches!(done,Ok(Ok(()))) { tracing::warn!(session=%name,"a marca de adormecida ficou no sidecar do Codex que acordou"); }
+    }
+
+    /// A última vez que alguém mexeu na sessão pelo multiplexador (epoch s): a ligação de um cliente (os de
+    /// controle do Hangar também contam) ou uma tecla digitada nele (`session_activity`, que o tmux também
+    /// move ao ligar e desligar). `Err`: o multiplexador não respondeu ou não tem os campos; no psmux não há
+    /// como provar, e é sempre `Err`.
+    async fn last_seen(&self,name:&str) -> Result<f64,()> {
+        if cfg!(windows) { return Err(()); }
+        let listed = self.mux_text(&["list-sessions","-F","#{session_name}\t#{session_last_attached}\t#{session_activity}"]).await.ok_or(())?;
+        let fields:Vec<&str> = listed.lines().map(|line|line.split('\t').collect::<Vec<_>>()).find(|fields|fields.len() == 3 && fields[0] == name).ok_or(())?;
+        // Nunca ligada deixa a ligação vazia; a atividade sempre tem valor (o nascimento, no mínimo).
+        let attached = match fields[1].trim() { ""=>0.0, at=>at.parse::<f64>().map_err(|_|())? };
+        let activity = fields[2].trim().parse::<f64>().map_err(|_|())?;
+        Ok(attached.max(activity))
+    }
+
+    /// A vigia de adormecer pede (`RuntimeRegistry::sleep_codex`). `Ok(false)`: desistiu.
+    pub async fn sleep(&self,registry:&RuntimeRegistry,name:&str,after:Duration) -> Result<bool,RuntimeError> {
+        let Some(meta) = self.load(name).await else { return Ok(false) };
+        let mut mark = asleep_surface(&meta);
+        // Marca que ficou numa sessão já aberta (a retirada falhou ao acordar): sai, e ela volta a poder adormecer.
+        if mark == Some(Surface::Headless) && registry.codex_headless(name).await.is_some() && let Some(key) = terminal::text(&meta,"key") {
+            self.unmark(name,key).await;
+            mark = None;
+        }
+        if registry.waking_key(name).is_some() || mark.is_some() || self.transfer_busy(name,&meta).await { return Ok(false); }
+        let idle = if meta.get("headless").is_some_and(truthy) { registry.park_codex(name,after).await? } else { self.sleep_terminal(registry,name,after).await? };
+        let Some(idle) = idle else { return Ok(false) };
+        tracing::info!(session=%name,idle_s=idle as u64,"sessão Codex adormecida");
+        let event = json!({"evento":"sessao.adormecida","nivel":"ok","sessao":name,"provider":"codex","parada_s":idle as u64});
+        crate::diag::record(crate::diag::diary_dir_in(&registry.codex_environment()),vec![event],"adormecer");
+        Ok(true)
+    }
+
+    /// Com terminal, sob a porta fechada e a exclusão da vigia: as conferências da troca para sem terminal
+    /// (turno, perguntas, fila, conversa gravada, conta) e as do Claude com terminal (comando de pé, painel,
+    /// terminal olhando, parada pelo motor e pela conversa). Então a vida do terminal fecha e o sidecar vira
+    /// o sem terminal adormecido que acorda com terminal; o spec gravado não muda. `None`: desistiu.
+    async fn sleep_terminal(&self,registry:&RuntimeRegistry,name:&str,after:Duration) -> Result<Option<f64>,RuntimeError> {
+        let Ok(_ingress) = ClosedIngress::acquire_within(registry.ingress(),name,Duration::from_secs(1)).await else { return Ok(None) };
+        let _round = self.misses.lock().await;
+        if registry.waking_key(name).is_some() || registry.panel_open(name) { return Ok(None); }
+        let Some(found) = registry.writable(name).await else { return Ok(None) };
+        let EntryHandle::CodexTerminal { target,handle,cell } = found.handle else { return Ok(None) };
+        let Some(meta) = self.load(name).await.filter(|meta|terminal::text(meta,"key") == Some(target.key.as_str())) else { return Ok(None) };
+        // Só leitura: a proteção vem do ambiente do processo, que o acordar não teria como repor.
+        if self.transfer_busy(name,&meta).await || self.protected(&meta,&target.key).await.unwrap_or(true) { return Ok(None); }
+        // As recusas da troca são desistência; o resto é falha a registrar.
+        let gave_up = |error:RuntimeError| if error.code == "erro_troca_modo" { Ok(None) } else { Err(error) };
+        let view = match self.preconditions(registry,&handle,&meta,false).await { Ok(view)=>view, Err(error)=>return gave_up(error) };
+        let Some(idle) = view["park_idle_s"].as_f64().filter(|idle|*idle >= after.as_secs_f64()) else { return Ok(None) };
+        let (rollout,app) = (terminal::text(&meta,"rollout_path").map(PathBuf::from),terminal::pid(&meta,"app_pid").map(i64::from));
+        // Modo confirmado no terminal fora dos três: o gravado antes dele não vale, e não há como acordar igual.
+        let unknown = meta.get(codex_sidecar::PERMISSION_UNKNOWN).is_some_and(|mode|!mode.is_null());
+        let stored = (!unknown).then(||super::codex_launch::stored_mode(&Value::Object(meta.clone())).ok()).flatten();
+        let (quiet,permission,turn_at) = tokio::task::spawn_blocking(move || {
+            let modified = rollout.as_deref().and_then(|path|std::fs::metadata(path).and_then(|m|m.modified()).ok());
+            // Parada também pela conversa: o motor readotado depois de um reinício conta do zero.
+            let still = modified.and_then(|at|at.elapsed().ok()).is_some_and(|idle|idle >= after);
+            let procs = SystemProcs::default();
+            // Filhos ilegíveis não dizem que nenhum comando roda.
+            let quiet = still && procs.children(Duration::ZERO).is_ok() && app.is_some_and(|pid|crate::state::shells::shells_of(pid,&procs).is_empty());
+            if !quiet { return (false,None,None); }
+            // A menos permissiva entre a última rodada (leva o `/permissions` digitado na TUI) e a gravada (leva a
+            // troca pelo app, que a rodada só grava depois). Fonte ilegível ou fora dos três modos: desiste, sem
+            // abrir o seletor na tela.
+            let turn = rollout.as_deref().map(rollout_mode);
+            let permission = match (&turn,stored) {
+                (Some(Ok(Some((turn,_)))),Some(stored))=>super::codex_launch::least(turn,stored),
+                (Some(Ok(None)),stored)=>stored,
+                _=>None,
+            };
+            // Quando foi a última rodada: a hora da linha. Rodada sem hora desiste: a do arquivo é posterior a ela
+            // e deixaria passar um `/permissions` digitado depois. Sem rodada nenhuma, vale a hora do arquivo.
+            let written = modified.and_then(|at|at.duration_since(std::time::UNIX_EPOCH).ok()).map(|at|at.as_secs_f64());
+            let turn_at = match turn { Some(Ok(Some((_,at))))=>at, _=>written };
+            (quiet,permission,turn_at)
+        }).await.unwrap_or((false,None,None));
+        let (true,Some(permission),Some(turn_at)) = (quiet,permission,turn_at) else { return Ok(None) };
+        // Quem se ligou ou digitou no terminal depois da última rodada pode ter trocado a permissão sem deixar
+        // rastro (o `/permissions` só chega ao rollout na rodada seguinte): desiste. Sem a hora, também.
+        if !self.last_seen(name).await.is_ok_and(|at|at < turn_at.floor()) { return Ok(None); }
+        // Um terminal de verdade olhando fecharia com ela; os clientes de controle do Hangar não contam.
+        if !matches!(terminal::pane_driver(&target.terminal,cell.pane_serial(),None).mods_clients().await,Ok(0)) { return Ok(None); }
+        let (settings,view,turns) = match self.terminal_now(name,&target,&handle,&cell,&meta,view,PermissionRead::Known(permission.into())).await {
+            Ok(now)=>now,
+            Err(error)=>return gave_up(error),
+        };
+        let back = cleared(settings.clone(),false);
+        // Montado antes de fechar: lançador ausente desiste com tudo de pé, e é ele que acordaria a sessão.
+        let Ok(back_pane) = self.terminal_pane(registry,name,&target.key,&back).await else { return Ok(None) };
+        let mode = collaboration(&view);
+        let mut asleep = cleared(settings,true);
+        let since = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0,|d|d.as_secs_f64());
+        asleep.insert("asleep".into(),json!({"wake_surface":"terminal","since":since,"mode":mode}));
+        // Fora da fotografia antes de fechar: depois de um reboot ela acorda pela mensagem, não pelo restore.
+        { let (home,owned) = (self.cfg.home.clone(),name.to_owned()); let _ = tokio::task::spawn_blocking(move||crate::session_open::restore::forget(&home,&owned)).await; }
+        // Antes do kill tudo é recusa e nada mudou; depois dele, falha a registrar.
+        match self.stop_terminal(registry,name,&target,&meta,turns).await {
+            Ok(())=>{},
+            Err(error) if kill_phase(&error)=>return Err(error),
+            Err(error)=>return gave_up(error),
+        }
+        let mux = MuxProcess::new(&self.cfg.mux_program,TIMEOUT);
+        let hidden = format!("term-{name}");
+        if mux.is_hidden(&hidden).await && mux.kill_session(&hidden).await != Some(true) {
+            tracing::warn!(session=%name,"shell escondido do Codex adormecido não fechou");
+        }
+        if let Err(error) = self.sidecar_put(name,&asleep).await {
+            // Sem o arquivo adormecido a sessão ficaria parada sem dono: o terminal volta como estava.
+            return Err(match self.open_terminal(registry,name,&target.key,&back,mode.as_deref(),&back_pane).await {
+                Ok(())=>error,
+                Err(restore)=>RuntimeError::new(&restore.code,&format!("{} (e o terminal não voltou: {})",error.message,restore.message)),
+            });
+        }
+        Ok(Some(idle))
+    }
+
+    /// Acorda o Codex adormecido onde ele estava. `Ok(false)`: a marca já tinha saído.
+    pub(super) async fn wake(&self,registry:&RuntimeRegistry,name:&str,surface:Surface) -> Result<bool,RuntimeError> {
+        if surface == Surface::Terminal { return self.wake_terminal(registry,name).await; }
+        match self.open_parked(registry,name).await {
+            Some(opened)=>opened.map(|()|true),
+            None=>Err(RuntimeError::new("codex_asleep_unowned","a sessão adormecida não é aberta pelo Rust aqui")),
+        }
+    }
+
+    /// O Codex que adormeceu com terminal volta à forma com terminal, e TUI e app-server sobem pelo lançador
+    /// com `--resume`, como no `relaunch_legacy`. Tentativa desfeita sem processo de pé: volta a dormir, e a
+    /// próxima mensagem tenta de novo.
+    async fn wake_terminal(&self,registry:&RuntimeRegistry,name:&str) -> Result<bool,RuntimeError> {
+        let _closed = hold(registry.ingress(),name).await?;
+        let _round = self.misses.lock().await;
+        let Some(meta) = self.load(name).await else { return Ok(false) };
+        if asleep_surface(&meta) != Some(Surface::Terminal) { return Ok(false); }
+        let key = terminal::text(&meta,"key").filter(|key|terminal::valid_key(key)).ok_or_else(gone)?.to_owned();
+        let mut awake = meta.clone();
+        // Plan/default da conversa voltam depois da assinatura, como na troca de modo.
+        let mode = awake.remove("asleep").and_then(|mark|mark["mode"].as_str().map(str::to_owned));
+        let wanted = cleared(terminal_settings(awake,&json!({}),&key)?,false);
+        let pane = self.terminal_pane(registry,name,&key,&wanted).await?;
+        // Outro terminal no nome: subir este daria dois app-servers para o mesmo nome.
+        match MuxProcess::new(&self.cfg.mux_program,TIMEOUT).has_session(name).await {
+            Some(false)=>{},
+            Some(true)=>return Err(RuntimeError::new("codex_wake_name_taken","já existe um terminal com o nome desta sessão; ela continua adormecida")),
+            None=>return Err(RuntimeError::new("codex_terminal_mux","o multiplexador não respondeu; a sessão continua adormecida")),
+        }
+        // O terminal novo só entrega o que tem até 15 min antes de nascer: o texto guardado no sono vem com ele.
+        let since = meta.get("asleep").and_then(|mark|mark["since"].as_f64()).unwrap_or(0.0);
+        registry.restamp_asleep(&key,since).await?;
+        let Err(error) = self.open_terminal(registry,name,&key,&wanted,mode.as_deref(),&pane).await else { return Ok(true) };
+        if !kill_phase(&error) && let Err(put) = self.sidecar_put(name,&meta).await {
+            tracing::warn!(session=%name,code=%put.code,"o Codex que não acordou ficou sem o arquivo adormecido");
+        }
+        Err(error)
     }
 
     /// Sidecar do desenho antigo (terminal sem `endpoint`): sem pane, relança TUI e app-server pelo lançador
@@ -421,6 +631,15 @@ impl Watcher {
             let opening = self.cfg.mux.list_panes().await.ok().is_some_and(|panes|codex_opening(&panes,name));
             return opening.then(||Err(starting()));
         };
+        // A adormecida com terminal só acorda nele: pedir terminal é o acordar, pedir sem terminal recusa.
+        if asleep_surface(&meta) == Some(Surface::Terminal) {
+            if !to_terminal {
+                return Some(Err(RuntimeError::new("erro_sessao_adormecida","a sessão está adormecida e acorda no terminal; mande uma mensagem para ela acordar e troque depois")));
+            }
+            let key = terminal::text(&meta,"key")?.to_owned();
+            let Some(_slot) = registry.reserve_waking(name,&key) else { return Some(Err(asleep_waking())) };
+            return Some(self.wake_terminal(registry,name).await.map(|_|json!({"ok":true,"terminal":true})));
+        }
         let headless = meta.get("headless").is_some_and(truthy);
         let adopted = registry.codex_terminals().await.iter().any(|t|t.name == name);
         if headless && let Err(error) = self.open_parked(registry,name).await? { return Some(Err(error)); }
@@ -506,7 +725,8 @@ impl Watcher {
         let base = registry.codex_environment();
         let refused = |error:crate::session_open::OpenError|refuse(&error.msg);
         // `_exigir_lancador_codex`: o pane morreria na hora com o `new-session` devolvendo sucesso.
-        if super::process::resolve_program(codex::LAUNCHER,&base.base).is_none() {
+        let launcher = codex::launcher_program(&base.home,cfg!(windows));
+        if super::process::resolve_program(launcher.as_deref().unwrap_or(codex::LAUNCHER),&base.base).is_none() {
             return Err(RuntimeError::new("codex_launcher_missing","hangar-codex-tui não está no PATH deste servidor; instale o lançador"));
         }
         if super::process::resolve_program("codex",&base.base).is_none() {
@@ -518,7 +738,8 @@ impl Watcher {
         let codex_home = match text("codex_home") { Some(home)=>home, None=>codex::home(&base.base,&account).map_err(refused)? };
         let launch = codex::Launch { cwd:cwd.clone(),codex_home,account,service_tier:text("service_tier"),resume:text("thread_id"),
             model:text("model"),effort:text("effort"),mode:super::codex_launch::stored_mode(&Value::Object(meta.clone()))?.into(),
-            tool_output_token_limit:meta.get("tool_output_token_limit").and_then(Value::as_u64),prompt:None };
+            tool_output_token_limit:meta.get("tool_output_token_limit").and_then(Value::as_u64),prompt:None,
+            launcher };
         let read_only = if self.read_only(key).await? {
             let run = |argv:Vec<String>,timeout:Duration|->futures_util::future::BoxFuture<'_,crate::session_open::terminal::MuxOutput> {
                 Box::pin(crate::session_open::server::run_program(&base.base,argv,timeout)) };
@@ -543,16 +764,43 @@ impl Watcher {
         let found = registry.writable(name).await.ok_or_else(gone)?;
         let EntryHandle::CodexTerminal { target,handle,cell } = found.handle else { return Err(gone()) };
         let meta = self.load(name).await.filter(|meta|terminal::text(meta,"key") == Some(target.key.as_str())).ok_or_else(gone)?;
-        let mut view = self.preconditions(registry,&handle,&meta,false).await?;
+        let view = self.preconditions(registry,&handle,&meta,false).await?;
         // Sem terminal não há o envelope do só leitura; a sessão protegida fica no terminal.
-        let marked = match terminal::pid(&meta,"app_pid").map(i64::from) {
+        if self.protected(&meta,&target.key).await? {
+            return Err(refuse("Sessão só leitura não continua sem terminal: a proteção do código só existe no terminal. A sessão foi mantida."));
+        }
+        let (settings,view,turns) = self.terminal_now(name,&target,&handle,&cell,&meta,view,read).await?;
+        let back = cleared(settings.clone(),false);
+        let headless = cleared(settings,true);
+        let back_pane = self.terminal_pane(registry,name,&target.key,&back).await.map_err(|error|refuse(&error.message))?;
+        let mode = collaboration(&view);
+        self.stop_terminal(registry,name,&target,&meta,turns).await?;
+        let Err(error) = self.open_headless(registry,name,&target.key,&headless,mode.as_deref()).await else { return Ok(()) };
+        // O sem terminal que falhou não saiu: outro terminal não sobe ao lado dele.
+        if kill_phase(&error) { return Err(error); }
+        tracing::warn!(session=%name,code=%error.code,"troca para sem terminal falhou; voltando ao terminal");
+        match self.open_terminal(registry,name,&target.key,&back,mode.as_deref(),&back_pane).await {
+            Ok(())=>Err(refuse(&format!("A troca falhou; a conversa continua no terminal: {}",error.message))),
+            Err(restore)=>Err(restored_failure(&format!("A troca falhou ({}) e o terminal não voltou: {}",error.message,restore.message),&restore)),
+        }
+    }
+
+    /// Só leitura pelo ambiente do app-server desta vida ou pelo registro da sessão; ilegível recusa.
+    async fn protected(&self,meta:&Meta,key:&str) -> Result<bool,RuntimeError> {
+        let marked = match terminal::pid(meta,"app_pid").map(i64::from) {
             Some(pid)=>tokio::task::spawn_blocking(move||SystemProcs::default().env_var(pid,"HANGAR_ORQ_READ_ONLY")).await.map_err(|_|job())?
                 .map_err(|_|refuse("Não consegui ler o ambiente do terminal (só leitura); a sessão foi mantida."))?.is_some_and(|v|v == "1"),
             None=>false,
         };
-        if marked || self.read_only(&target.key).await? {
-            return Err(refuse("Sessão só leitura não continua sem terminal: a proteção do código só existe no terminal. A sessão foi mantida."));
-        }
+        Ok(marked || self.read_only(key).await?)
+    }
+
+    /// O que o terminal tem agora e o sidecar pode não ter: modelo, esforço e modo da conversa, a permissão
+    /// lida no seletor e o Jev do processo. Devolve as escolhas, a vista e a retenção dos turnos, que segue
+    /// até o ator sair.
+    #[allow(clippy::too_many_arguments)]
+    async fn terminal_now(&self,name:&str,target:&CodexTerminalTarget,handle:&RuntimeHandle,cell:&AdoptionCell,meta:&Meta,mut view:Value,
+        read:PermissionRead) -> Result<(Meta,Value,TurnHold),RuntimeError> {
         // O `/model` digitado na TUI pode não ter avisado o motor: a configuração sai da conversa, como o
         // `thread/resume` do Python. Sem ela a troca não sai: subiria com modelo, esforço ou modo velhos.
         let settings_read = handle.command(RuntimeCommand { operation_id:random_hex(16),kind:OperationKind::ReadSettings,payload:json!({"include_turns":false}) });
@@ -592,7 +840,7 @@ impl Watcher {
         let mut settings = with_settings(meta.clone(),&view,&target.key);
         settings.insert("permission_mode".into(),json!(permission));
         // O Jev está no ambiente do processo vivo: o sidecar do terminal não o grava (`_jev_do_processo`).
-        if let Some(pid) = terminal::pid(&meta,"app_pid").map(i64::from) {
+        if let Some(pid) = terminal::pid(meta,"app_pid").map(i64::from) {
             let read = tokio::task::spawn_blocking(move||SystemProcs::default().env_var(pid,"HANGAR_JEV")).await.map_err(|_|job())?;
             match read {
                 Ok(value) => { settings.insert("jev".into(),json!(value.is_some_and(|v|v == "on"))); }
@@ -603,13 +851,16 @@ impl Watcher {
                 }
             }
         }
-        let back = cleared(settings.clone(),false);
-        let headless = cleared(settings,true);
-        let back_pane = self.terminal_pane(registry,name,&target.key,&back).await.map_err(|error|refuse(&error.message))?;
-        let mode = collaboration(&view);
-        self.confirm_life(&target).await.map_err(|error|refuse(&error.message))?;
+        Ok((settings,view,turns))
+    }
+
+    /// Fecha a vida do terminal: ator, pane, TUI e app-server, este por pid (ele sobrevive ao `kill-session`).
+    /// Pane que não fecha volta a ter dono aqui; processo que não sai é `relaunch_process_alive`, com o pane
+    /// morto e o `app_pid` do sidecar nulo.
+    async fn stop_terminal(&self,registry:&RuntimeRegistry,name:&str,target:&CodexTerminalTarget,meta:&Meta,turns:TurnHold) -> Result<(),RuntimeError> {
+        self.confirm_life(target).await.map_err(|error|refuse(&error.message))?;
         let pane_pid = self.cfg.mux.list_panes().await.ok().and_then(|panes|terminal::pane_of(&panes,name).and_then(|pane|pane.pid));
-        let roots:Vec<i64> = [terminal::pid(&meta,"app_pid"),terminal::pid(&meta,"tui_pid"),terminal::pid(&meta,"launcher_pid"),pane_pid]
+        let roots:Vec<i64> = [terminal::pid(meta,"app_pid"),terminal::pid(meta,"tui_pid"),terminal::pid(meta,"launcher_pid"),pane_pid]
             .into_iter().flatten().map(i64::from).collect();
         let lives = births(roots.clone()).await.map_err(|()|unread())?;
         // `app_pid` nulo antes do kill: o `finally` do lançador não apaga o sidecar e a vigia não readota.
@@ -646,14 +897,7 @@ impl Watcher {
             return Err(alive_error("O terminal ainda está encerrando; não abri outro processo. A sessão ficou parada sem terminal: \
                 feche-a e abra a conversa de novo quando esses processos saírem.",&left));
         }
-        let Err(error) = self.open_headless(registry,name,&target.key,&headless,mode.as_deref()).await else { return Ok(()) };
-        // O sem terminal que falhou não saiu: outro terminal não sobe ao lado dele.
-        if kill_phase(&error) { return Err(error); }
-        tracing::warn!(session=%name,code=%error.code,"troca para sem terminal falhou; voltando ao terminal");
-        match self.open_terminal(registry,name,&target.key,&back,mode.as_deref(),&back_pane).await {
-            Ok(())=>Err(refuse(&format!("A troca falhou; a conversa continua no terminal: {}",error.message))),
-            Err(restore)=>Err(restored_failure(&format!("A troca falhou ({}) e o terminal não voltou: {}",error.message,restore.message),&restore)),
-        }
+        Ok(())
     }
 
     /// Sem terminal → terminal (desenho 1.2).
@@ -799,7 +1043,8 @@ impl Watcher {
     pub async fn restart(&self,registry:&RuntimeRegistry,name:&str) -> Option<Result<Value,RuntimeError>> {
         let meta = self.load(name).await?;
         if self.transfer_busy(name,&meta).await { return None; }
-        if !meta.get("headless").is_some_and(truthy) {
+        // A adormecida com terminal é sessão de terminal: reiniciar não vale e não a acorda.
+        if !meta.get("headless").is_some_and(truthy) || asleep_surface(&meta) == Some(Surface::Terminal) {
             // Só leitura: perguntar se é do Rust não adota nem relança o terminal (o sidecar antigo relançaria).
             use crate::session_write::{Owner,Provider as Route,WriteRoute,decide};
             let ours = registry.codex_terminals().await.iter().any(|t|t.name == name) || decide(WriteRoute::CodexControl,Route::Codex,true) == Owner::Rust;
@@ -832,6 +1077,28 @@ mod tests {
             assert!(!codex_opening(&[pane(other)],"s"),"{other:?}: não é a TUI do Codex abrindo");
         }
         assert!(!codex_opening(&[pane(Some("codex"))],"outra"));
+    }
+
+    #[test]
+    fn the_sleep_permission_comes_from_the_last_turn_of_the_rollout() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rollout.jsonl");
+        let turn = |approval:&str,sandbox:&str|json!({"type":"turn_context","payload":{"approval_policy":approval,"sandbox_policy":{"type":sandbox}}}).to_string();
+        std::fs::write(&path,"{\"type\":\"session_meta\"}\n").unwrap();
+        assert_eq!(rollout_mode(&path),Ok(None),"sem rodada");
+        std::fs::write(&path,format!("{}\n{}\n{{}}\n",turn("never","danger-full-access"),turn("on-request","workspace-write"))).unwrap();
+        assert_eq!(rollout_mode(&path),Ok(Some(("Approve for me",None))),"a última rodada vence");
+        std::fs::write(&path,"{\"timestamp\":\"2026-01-01T00:00:01.500Z\",\"type\":\"turn_context\",\"payload\":{\"approval_policy\":\"never\",\"sandbox_policy\":{\"type\":\"danger-full-access\"}}}\n").unwrap();
+        assert_eq!(rollout_mode(&path),Ok(Some(("Full Access",Some(1_767_225_601.5)))),"a hora da rodada vem da linha");
+        std::fs::write(&path,format!("{}\n",turn("untrusted","read-only"))).unwrap();
+        assert_eq!(rollout_mode(&path),Err(()),"fora dos três modos não vira nenhum deles");
+        assert_eq!(rollout_mode(&dir.path().join("sem")),Err(()),"ilegível");
+        // Rodada longe do fim (saída grande depois dela): a janela maior a acha.
+        std::fs::write(&path,format!("{}\n{{\"filler\":\"{}\"}}\n",turn("on-request","read-only"),"x".repeat(2 << 20))).unwrap();
+        assert_eq!(rollout_mode(&path),Ok(Some(("Ask for approval",None))));
+        assert_eq!(super::super::codex_launch::least("Full Access"," ask for approval"),Some("Ask for approval"),"vence o menos permissivo");
+        assert_eq!(super::super::codex_launch::least("Approve for me","Full Access"),Some("Approve for me"));
+        assert_eq!(super::super::codex_launch::least("Full Access","Read Only"),None);
     }
 
     #[test]

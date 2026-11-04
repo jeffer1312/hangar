@@ -1,6 +1,6 @@
 """Grupo entre máquinas pelas portas do Python. Na 8768 as rotas `/api/groups/*` e `GET …/group` só
 repassam ao Rust (nunca um 404 sem código, que a outra máquina leria como versão antiga). E a rota de
-grupo que vai pela ponte leva os fatos do `orq` e devolve ao Python o que só ele faz, num sentido."""
+grupo que vai pela ponte devolve ao Python somente as entregas que ele ainda atende."""
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -9,8 +9,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from app import account_bridge, api, groups_bridge, guest_users, orq_context, pair, runtime_coordinator
-from app.adapters.orq import runs
+from app import account_bridge, api, groups_bridge, guest_users, runtime_coordinator
 from app.config import settings
 
 TOKEN = "t-grupos"
@@ -131,10 +130,7 @@ def test_groups_routes_refuse_guest_and_python_mode_with_code(rust, monkeypatch)
 @pytest.fixture
 def bridge(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "auth_token", TOKEN)
-    monkeypatch.setattr(pair.settings, "projects_dir", tmp_path / "projects")
     monkeypatch.setattr(groups_bridge, "rust_owns_groups", lambda: True)
-    monkeypatch.setattr(runs, "active", lambda: [{"name": "x-orq"}])
-    monkeypatch.setattr(runs, "group_phase", lambda gid: "live")
     sent = []
 
     async def enviar(name, text):
@@ -150,15 +146,13 @@ def bridge(tmp_path, monkeypatch):
     return state
 
 
-def test_bridged_route_sends_facts_and_delivers_after(bridge):
-    pair._pair_dir().mkdir(parents=True, exist_ok=True)
-    (pair._pair_dir() / "a.json").write_text(json.dumps({"peers": ["b"], "task": "", "gid": "g1", "harness": {}, "orq": True}))
+def test_bridged_route_reads_no_orq_facts_and_delivers_after(bridge):
     bridge.reply = {"status": 200, "body": {"ok": True, "warning": None},
                     "deliveries": [{"name": "b", "text": "oi", "steer": False}, {"name": "falha", "text": "oi", "steer": False}], "post": []}
     r = TestClient(api.app).post("/api/sessions/a/pair", json={"peer": "b"}, headers=AUTH)
     assert r.status_code == 200
     [(op, args)] = bridge.calls
-    assert args["facts"] == {"orchestrators": ["x-orq"], "phases": {"g1": "live"}}
+    assert op == "group.route" and args["facts"] == {}
     assert bridge.sent == [("b", "oi"), ("falha", "oi")]
     warning = r.json()["warning"]
     assert warning["code"] == "erro_pareamento_aviso_parcial" and warning["params"]["avisos"][0]["sessao"] == "falha"
@@ -178,71 +172,46 @@ def test_deferred_deliveries_keep_order_per_session(monkeypatch):
     assert failed == [] and [t for n, t in sent if n == "a"] == ["1", "2"] and sent[0] == ("b", "x")
 
 
-def test_promote_conflict_undoes_the_new_group(bridge, monkeypatch):
-    def conflict(name, gid):
-        raise orq_context.PromotionConflict("o grupo já possui outro contrato")
-    monkeypatch.setattr(orq_context, "promote", conflict)
-    bridge.reply = {"status": 200, "body": {"ok": True}, "deliveries": [], "post": [{"op": "promote", "name": "arb", "gid": "g9"}]}
+def test_promote_conflict_comes_from_rust_without_a_second_request(bridge):
+    bridge.reply = {"status": 409, "body": {"detail": {
+        "code": "erro_orq_arquivo_mudou", "params": {}, "msg": "o grupo já possui outro contrato"}},
+        "deliveries": [], "post": []}
     r = TestClient(api.app).post("/api/sessions/arb/pair", json={"orq": True}, headers=AUTH)
     assert (r.status_code, r.json()["detail"]["code"]) == (409, "erro_orq_arquivo_mudou")
-    assert ("group.leave", {"name": "arb", "phases": {"g9": "ended"}}) in bridge.calls
+    assert [op for op, _ in bridge.calls] == ["group.route"]
 
 
-def test_promote_os_error_undoes_and_names_who_did_not_leave(bridge, monkeypatch):
-    """Promoção que falha no disco desfaz o grupo como o conflito; quem não saiu vai no 409 e no
-    diário, e o aviso que o Rust devolveu na saída é entregue."""
-    def broken(name, gid):
-        raise OSError("disco cheio")
-    monkeypatch.setattr(orq_context, "promote", broken)
-    pair._pair_dir().mkdir(parents=True, exist_ok=True)
-    (pair._pair_dir() / "arb.json").write_text(json.dumps({"peers": ["b"], "task": "", "gid": "g9", "harness": {}, "orq": True}))
-    registered = []
-    monkeypatch.setattr(api.diag, "registrar", lambda evento, nivel, **kw: registered.append((evento, kw)))
-
-    def call(op, **args):
-        bridge.calls.append((op, args))
-        if op == "group.route":
-            return bridge.reply
-        if args["name"] == "b":
-            raise groups_bridge.GroupsBridgeError("groups_store_failed")
-        return {"ex_peers": ["b"], "warnings": [], "deliveries": [{"name": "pi", "text": "saiu", "steer": False}]}
-    monkeypatch.setattr(groups_bridge, "call", call)
-    bridge.reply = {"status": 200, "body": {"ok": True}, "deliveries": [], "post": [{"op": "promote", "name": "arb", "gid": "g9"}]}
+def test_promote_os_error_preserves_who_did_not_leave_and_delivers(bridge):
+    """A restauração parcial e seu diário são do Rust; a porta entrega o envelope inteiro."""
+    bridge.reply = {"status": 409, "body": {"detail": {
+        "code": "erro_orq_arquivo_mudou", "params": {"nao_sairam": ["b"]}, "msg": "disco cheio"}},
+        "deliveries": [{"name": "pi", "text": "saiu", "steer": False}], "post": []}
     r = TestClient(api.app).post("/api/sessions/arb/pair", json={"orq": True}, headers=AUTH)
     assert (r.status_code, r.json()["detail"]["code"]) == (409, "erro_orq_arquivo_mudou")
     assert r.json()["detail"]["params"]["nao_sairam"] == ["b"]
-    assert [e for e, _ in registered if e.startswith("grupos.")] == ["grupos.promocao_desfeita_falhou"]
-    assert ("pi", "saiu") in bridge.sent
+    assert bridge.sent == [("pi", "saiu")]
+    assert [op for op, _ in bridge.calls] == ["group.route"]
 
 
-def test_promote_without_identity_keeps_the_group_and_warns(bridge, monkeypatch):
-    """Sem identidade o time não é promovido: o pareamento fica, mas a resposta diz isso com código."""
-    def no_identity(name, gid):
-        raise orq_context.IdentityUnavailable("sessão sem identidade")
-    monkeypatch.setattr(orq_context, "promote", no_identity)
-    bridge.reply = {"status": 200, "body": {"ok": True, "warning": None}, "deliveries": [], "post": [{"op": "promote", "name": "arb", "gid": "g9"}]}
+def test_promote_without_identity_keeps_the_group_and_warns(bridge):
+    bridge.reply = {"status": 200, "body": {"ok": True, "gid": "g9", "warning": {
+        "code": "erro_orq_promocao_sem_identidade", "params": {"sessao": "arb", "grupo": "g9"},
+        "msg": "o grupo ficou, mas o time não foi promovido"}}, "deliveries": [], "post": []}
     r = TestClient(api.app).post("/api/sessions/arb/pair", json={"orq": True}, headers=AUTH)
     assert r.status_code == 200
     assert r.json()["warning"]["code"] == "erro_orq_promocao_sem_identidade"
-    assert not any(op == "group.leave" for op, _ in bridge.calls)
+    assert r.json()["gid"] == "g9"
+    assert [op for op, _ in bridge.calls] == ["group.route"]
 
 
-def test_promote_undo_reports_the_undo_notices_that_failed(bridge, monkeypatch):
-    """O aviso da saída que desfaz o grupo e não chegou entra na resposta do 409."""
-    def conflict(name, gid):
-        raise orq_context.PromotionConflict("o grupo já possui outro contrato")
-    monkeypatch.setattr(orq_context, "promote", conflict)
-
-    def call(op, **args):
-        bridge.calls.append((op, args))
-        if op == "group.route":
-            return bridge.reply
-        return {"ex_peers": [], "warnings": [], "deliveries": [{"name": "falha", "text": "saiu", "steer": False}]}
-    monkeypatch.setattr(groups_bridge, "call", call)
-    bridge.reply = {"status": 200, "body": {"ok": True}, "deliveries": [], "post": [{"op": "promote", "name": "arb", "gid": "g9"}]}
+def test_promote_undo_reports_the_undo_notices_that_failed(bridge):
+    bridge.reply = {"status": 409, "body": {"detail": {
+        "code": "erro_orq_arquivo_mudou", "params": {}, "msg": "o grupo já possui outro contrato"}},
+        "deliveries": [{"name": "falha", "text": "saiu", "steer": False}], "post": []}
     r = TestClient(api.app).post("/api/sessions/arb/pair", json={"orq": True}, headers=AUTH)
     assert (r.status_code, r.json()["detail"]["code"]) == (409, "erro_orq_arquivo_mudou")
     assert r.json()["warning"]["params"]["avisos"][0]["sessao"] == "falha"
+    assert [op for op, _ in bridge.calls] == ["group.route"]
 
 
 def test_bridged_failure_without_dict_body_goes_to_the_journal(bridge, monkeypatch):

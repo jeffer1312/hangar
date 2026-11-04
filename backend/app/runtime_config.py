@@ -28,7 +28,7 @@ EDITAVEIS: dict[str, type] = {
     "transcription_base_url": str,  # base OpenAI-compatible; vazio = serviço padrão
     "transcription_model": str,     # modelo de áudio; vazio = whisper-large-v3-turbo
     # Lista ordenada de serviços de transcrição com reserva automática. Vazia ou ausente = o
-    # serviço único das três chaves acima. Ver transcribe.transcribe_with_provider.
+    # serviço único das três chaves acima.
     "transcription_providers": list,
     "upload_retention_days": int,  # dias que um anexo sobrevive
     "notify_finished": bool,
@@ -38,6 +38,7 @@ EDITAVEIS: dict[str, type] = {
     "automations": bool,           # kill-switch das automações desatendidas
     "traduzir_pensamento": bool,   # resumo em pt-BR do raciocínio (desligado = texto original)
     "codex_sync": bool,            # reconciliação automática do Codex (por cima do automations)
+    "codex_extended_context": bool,  # 1M do Codex quando o config.toml não diz nada (padrão ligado)
     "codex_memory_import": bool,   # leva as memórias do Claude pro Codex (opt-in: é o único
                                    # item da reconciliação que gasta cota, na consolidação)
     "claude_statusline_update": bool,  # permite ao instalador atualizar a barra do Claude Code

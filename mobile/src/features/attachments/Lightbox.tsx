@@ -142,21 +142,19 @@ export function Lightbox({ visible, uri, headers, filename, onClose, kind = 'ima
             <Text style={styles.closeTxt}>✕</Text>
           </View>
         </Pressable>
-        {kind === 'image' ? (
-          <Pressable
-            style={[styles.saveArea, { top: topo }]}
-            onPress={save}
-            disabled={saving}
-            hitSlop={2}
-            accessibilityLabel={m.anexos_baixar({ nome: filename })}
-            accessibilityRole="button"
-            accessibilityState={{ busy: saving }}
-          >
-            <View style={styles.roundBtn}>
-              {saving ? <ActivityIndicator size="small" color="#fff" /> : <Icon name="Download" size={18} color="#fff" />}
-            </View>
-          </Pressable>
-        ) : null}
+        <Pressable
+          style={[styles.saveArea, { top: topo }]}
+          onPress={save}
+          disabled={saving}
+          hitSlop={2}
+          accessibilityLabel={m.anexos_baixar({ nome: filename })}
+          accessibilityRole="button"
+          accessibilityState={{ busy: saving }}
+        >
+          <View style={styles.roundBtn}>
+            {saving ? <ActivityIndicator size="small" color="#fff" /> : <Icon name="Download" size={18} color="#fff" />}
+          </View>
+        </Pressable>
         {kind === 'video' ? (
           <View style={[styles.videoWrap, { paddingTop: topo + 48 }]}>
             <VideoPage uri={uri} headers={headers} name={filename} />

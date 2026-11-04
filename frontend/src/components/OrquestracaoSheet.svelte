@@ -797,7 +797,7 @@
 
     {#if fProvider === 'codex'}
       <!-- Configuração do Codex da máquina, não do papel: o mesmo interruptor da folha de nova sessão. -->
-      <CodexContextControl server={null} />
+      <CodexContextControl server={null} desktop={isDesktop} />
     {/if}
 
     {#if estadoAtual?.viva && papelAtual}

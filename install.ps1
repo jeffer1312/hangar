@@ -1142,7 +1142,7 @@ $modulos = "$raiz\frontend\node_modules"
 $marcaArq = "$raiz\frontend\dist\.cp-build-stamp"
 
 # MESMA regra do services-setup.sh do Linux: instalacao NOVA nao registra servico de frontend — o
-# backend ja serve o `frontend\dist` na raiz (api.py, `_UIStatic`), entao a tarefa era um SEGUNDO
+# servidor Rust já serve o `frontend\dist` na raiz, então a tarefa era um SEGUNDO
 # servidor pro mesmo arquivo. Quem JA tem a tarefa registrada continua com ela: trocar a porta muda
 # a ORIGEM, e origem nova = localStorage vazio (cp_servers com os tokens, tema, layout do canvas).
 # Ninguem perde configuracao por causa de um `git pull`. Decidido AQUI, e nao no passo 7, porque o
@@ -1622,7 +1622,7 @@ if ($SemNativo -and -not $SoChecar) {
 }
 
 # -- Binarios Rust (hangar-server e hangar-cano, release server-latest) -------
-# Sem eles o backend em Python atende sozinho: falha aqui nunca para a instalacao.
+# Sem eles o Python atende a API, mas a tela web e o ditado nao: a falta fica como pendencia.
 if (-not $SoChecar) {
     Titulo 'Binarios Rust'
     $pyRust = Join-Path $raiz 'backend\.venv\Scripts\python.exe'
@@ -1642,8 +1642,9 @@ if (-not $SoChecar) {
         Ok 'hangar-server e hangar-cano em ~\.hangar\bin'
         Mark-Item 'rust' 'ok' 'servidor rapido'
     } elseif ($rcRust -eq 2) {
-        Nota 'sem binarios Rust para esta maquina; o backend em Python atende sozinho'
-        Mark-Item 'rust' 'ok' 'servidor rapido (nao ha para esta maquina)'
+        Falta 'sem binarios Rust para esta maquina - sem eles a tela web e o ditado nao funcionam'
+        Mark-Item 'rust' 'pendente' 'servidor rapido (nao ha para esta maquina)'
+        $script:pendencias += 'binarios Rust'
     } else {
         $motivo = if ($rcRust -eq -1) { 'sem o python do venv' } else { 'download ou conferencia falhou' }
         Falta "binarios Rust nao baixaram ($motivo) - o backend em Python atende sozinho"

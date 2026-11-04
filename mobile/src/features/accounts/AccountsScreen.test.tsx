@@ -23,6 +23,8 @@ vi.mock('expo-router/react-navigation', () => ({ useHeaderHeight: () => 0 }));
 vi.mock('expo-secure-store', () => ({ getItemAsync: async () => null, setItemAsync: async () => {}, deleteItemAsync: async () => {} }));
 vi.mock('expo-linking', () => ({ openURL: vi.fn() }));
 vi.mock('expo-clipboard', () => ({ setStringAsync: vi.fn() }));
+// A folha da etiqueta puxa o teclado e a área segura nativos, que não carregam no teste.
+vi.mock('../machines/parts', () => ({ MachineSheet: () => null, Notice: () => null }));
 vi.mock('../../stores/prefs', () => ({ prefs: { getString: () => undefined, set: () => {}, remove: () => {} } }));
 vi.mock('../../ui/Sheet', () => ({ Sheet: ({ children, open }: { children: ReactNode; open?: boolean }) => open === false ? null : createElement('div', { role: 'dialog' }, children) }));
 vi.mock('react-native', async original => ({ ...await original<typeof import('react-native')>(),

@@ -78,6 +78,8 @@ zbus = { version = "=5.19.0", default-features = false, features = ["async-io", 
 
 [dev-dependencies]
 gpui = { package = "gpui-pre", version = "=0.3.7", features = ["test-support"] }
+# A mesma versão que o lockfile já tem por dependência do kit.
+proptest = "=1.11.0"
 
 [build-dependencies]
 embed-resource = "=3.0.11"

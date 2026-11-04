@@ -1,0 +1,261 @@
+{
+  "source_commit": "d2a42410f9fe6df4ea491b296c7fea7b98d8b844",
+  "generator": "PYTHON=<Python com dependências do backend> bash crates/hangar-server/src/provider_models/fixtures/regenerate.sh <checkout da source_commit>",
+  "cases": [
+    {
+      "name": "success",
+      "before": {
+        "models": [
+          {
+            "provider": "p",
+            "id": "m"
+          }
+        ],
+        "current": {
+          "provider": "old",
+          "id": "old"
+        },
+        "thinking": "low",
+        "levels": [
+          "low",
+          "high"
+        ],
+        "ts": 1
+      },
+      "after": {
+        "models": [],
+        "current": {
+          "provider": "p",
+          "id": "m"
+        },
+        "thinking": "high",
+        "levels": [
+          "low",
+          "high"
+        ],
+        "ts": 2
+      },
+      "body": {
+        "provider": "p",
+        "model": "m",
+        "effort": "high"
+      },
+      "expected": {
+        "ok": {
+          "ok": true,
+          "current": {
+            "provider": "p",
+            "id": "m"
+          },
+          "thinking": "high",
+          "levels": [
+            "low",
+            "high"
+          ]
+        }
+      }
+    },
+    {
+      "name": "same_ts",
+      "before": {
+        "models": [
+          {
+            "provider": "p",
+            "id": "m"
+          }
+        ],
+        "current": {
+          "provider": "old",
+          "id": "old"
+        },
+        "thinking": "low",
+        "levels": [
+          "low",
+          "high"
+        ],
+        "ts": 1
+      },
+      "after": {
+        "models": [
+          {
+            "provider": "p",
+            "id": "m"
+          }
+        ],
+        "current": {
+          "provider": "old",
+          "id": "old"
+        },
+        "thinking": "low",
+        "levels": [
+          "low",
+          "high"
+        ],
+        "ts": 1
+      },
+      "body": {
+        "provider": "p",
+        "model": "m"
+      },
+      "expected": {
+        "error": {
+          "status": 409,
+          "detail": {
+            "code": "erro_sem_confirmacao_troca",
+            "params": {},
+            "msg": "comandos digitados, mas o Pi nao republicou o catalogo — nao da pra confirmar a troca; veja o modelo no proprio terminal"
+          }
+        }
+      }
+    },
+    {
+      "name": "unreadable",
+      "before": {
+        "models": [
+          {
+            "provider": "p",
+            "id": "m"
+          }
+        ],
+        "current": {
+          "provider": "old",
+          "id": "old"
+        },
+        "thinking": "low",
+        "levels": [
+          "low",
+          "high"
+        ],
+        "ts": 1
+      },
+      "after": null,
+      "body": {
+        "provider": "p",
+        "model": "m"
+      },
+      "expected": {
+        "error": {
+          "status": 409,
+          "detail": {
+            "code": "erro_sem_confirmacao_troca",
+            "params": {},
+            "msg": "comandos digitados, mas o Pi nao republicou o catalogo — nao da pra confirmar a troca; veja o modelo no proprio terminal"
+          }
+        }
+      }
+    },
+    {
+      "name": "refusal",
+      "before": {
+        "models": [
+          {
+            "provider": "p",
+            "id": "m"
+          }
+        ],
+        "current": {
+          "provider": "old",
+          "id": "old"
+        },
+        "thinking": "low",
+        "levels": [
+          "low",
+          "high"
+        ],
+        "ts": 1
+      },
+      "after": {
+        "models": [
+          {
+            "provider": "p",
+            "id": "m"
+          }
+        ],
+        "current": {
+          "provider": "old",
+          "id": "old"
+        },
+        "thinking": "low",
+        "levels": [
+          "low",
+          "high"
+        ],
+        "ts": 2
+      },
+      "body": {
+        "provider": "p",
+        "model": "m"
+      },
+      "expected": {
+        "error": {
+          "status": 409,
+          "detail": {
+            "code": "erro_pi_recusou_troca",
+            "params": {
+              "provider": "old",
+              "id": "old",
+              "thinking": "low"
+            },
+            "msg": "o Pi recusou a troca — segue em old/old (raciocinio low). Causa mais comum: sem chave configurada pro provedor pedido (o Pi avisa dentro do TUI)"
+          }
+        }
+      }
+    },
+    {
+      "name": "clamp",
+      "before": {
+        "models": [
+          {
+            "provider": "p",
+            "id": "m"
+          }
+        ],
+        "current": {
+          "provider": "old",
+          "id": "old"
+        },
+        "thinking": "low",
+        "levels": [
+          "low",
+          "high"
+        ],
+        "ts": 1
+      },
+      "after": {
+        "models": [
+          {
+            "provider": "p",
+            "id": "m"
+          }
+        ],
+        "current": {
+          "provider": "old",
+          "id": "old"
+        },
+        "thinking": "low",
+        "levels": [
+          "low",
+          "high"
+        ],
+        "ts": 1
+      },
+      "body": {
+        "effort": "max"
+      },
+      "expected": {
+        "ok": {
+          "ok": true,
+          "current": {
+            "provider": "old",
+            "id": "old"
+          },
+          "thinking": "low",
+          "levels": [
+            "low",
+            "high"
+          ]
+        }
+      }
+    }
+  ]
+}

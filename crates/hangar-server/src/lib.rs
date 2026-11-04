@@ -1,7 +1,10 @@
 //! Servidor do Hangar: lê conversas e custos das sessões e repassa o restante ao backend Python.
 pub mod accounts;
+pub mod archive_history;
+pub mod archive_list;
 pub mod artifacts;
 pub mod auth;
+pub mod remote_browser;
 pub mod config;
 pub mod commands;
 pub mod orq_conductor;
@@ -10,16 +13,20 @@ pub mod claude_customizations;
 pub mod jev_aux;
 pub mod keyring;
 pub mod claude_defaults;
+pub mod claude_p;
 pub mod presence;
 pub mod watchdog;
 pub mod costs;
 pub mod costs_routes;
 pub mod costs_failure;
 pub mod device_install;
+pub mod devices;
 pub mod diag;
+pub(crate) mod diag_report;
 pub mod display_env;
 pub mod groups;
 pub mod interactions;
+pub(crate) mod json_envelope;
 pub mod list;
 pub mod locate;
 pub mod loops;
@@ -39,9 +46,15 @@ pub mod queue_panel;
 mod plugin_listener;
 pub mod routes;
 pub mod runtime;
+pub mod search;
+pub mod search_context;
 pub mod session_open;
 pub mod session_rename;
 pub mod session_defaults;
+pub mod session_sleep;
+pub mod session_visibility;
+pub mod tags;
+pub mod tour_progress;
 pub mod push;
 pub mod push_expo;
 pub mod session_media;
@@ -50,12 +63,19 @@ pub mod share_reach;
 pub mod side;
 pub mod share;
 pub mod state;
+pub mod speech;
 pub mod stats;
 pub mod subagents;
 pub mod tail;
 pub mod term;
 pub mod terminal_state;
 pub mod terminal_control;
+pub mod terminal_lock;
+pub mod provider_accounts;
+pub mod provider_info;
+pub mod provider_models;
+pub mod omp_sync;
+pub mod orchestration;
 pub mod terminal_input;
 pub mod permission_control;
 pub mod model_picker;
@@ -73,6 +93,7 @@ pub mod user_data;
 pub mod install_root;
 pub mod update;
 pub mod ui;
+pub mod vault;
 pub mod voice;
 pub mod plans;
 mod forwarded;
@@ -82,7 +103,7 @@ mod warn_limit;
 
 /// Versão do contrato com o Python (rotas `/internal`, canal privado do estado, ambiente). O
 /// Python (`RUST_SERVER_PROTOCOL`) recusa um binário de outra versão e atende sozinho.
-pub const INTERNAL_PROTOCOL: u32 = 90;
+pub const INTERNAL_PROTOCOL: u32 = 97;
 
 /// Todo cliente HTTP do servidor nasce aqui. Uma dependência liga `gzip`, `http2` e (no Windows)
 /// `native-tls` no reqwest, e o Cargo estende isso a todo cliente: sem estes desligamentos ele
@@ -138,7 +159,11 @@ pub async fn serve_until_with_guest(
     // Lida na subida: no Windows o executável é aberto pela junction, que a troca de versão move.
     let _ = update::running_package();
     let cfg = state.cfg.clone();
+    let remote_browser = state.remote_browser.clone();
+    let browser_dir = state.hangar_dir.join("nav");
+    let browser_list = state.list.clone();
     let transcription = state.transcription.clone();
+    let omp_sync = state.omp_sync.clone();
     let codex_logins=state.accounts.codex_logins.clone();
     let codex_readers=state.accounts.codex_readers.clone();
     let device_logins=state.accounts.device_logins.clone();
@@ -149,10 +174,8 @@ pub async fn serve_until_with_guest(
         transcription.recover_on_startup(&home).await;
     }
     if let Some(instance) = config::Config::runtime_instance().map_err(std::io::Error::other)? {
-        let windows = accounts::claude_login::WindowClient::new(cfg.upstream, cfg.internal_secret.clone(), instance.clone())
-            .map_err(|error| std::io::Error::other(error.code))?;
         // Sem catálogo legível não há janela a fechar; isso não pode impedir o servidor de subir.
-        if let Err(error) = state.accounts.recover_claude_logins(windows).await {
+        if let Err(error) = state.accounts.recover_claude_logins(state.accounts.claude_windows.clone()).await {
             tracing::warn!(code = "claude_login_recovery_failed", reason = error.code, "catálogo de contas ilegível na subida");
         }
         let private = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -174,9 +197,7 @@ pub async fn serve_until_with_guest(
         let _ = state.side.runtime.set(registry.clone());
         let _ = state.accounts.quotas.runtime.set(registry.clone());
         let _ = state.accounts.quotas.diag.set(state.diag.clone());
-        let quota_bridge=accounts::bridge::AccountsBridge::new(cfg.upstream,cfg.internal_secret.clone(),instance.clone())
-            .map_err(std::io::Error::other)?;
-        refresh_loop=Some(accounts::claude_refresh::start(state.accounts.clone(),quota_bridge,registry.clone()));
+        refresh_loop=Some(accounts::claude_refresh::start(state.accounts.clone(),registry.clone()));
         let _watchdog = std::env::home_dir().map(|home| AbortOnDrop(tokio::spawn(
             watchdog::run(state.http.clone(), cfg.upstream, cfg.internal_secret.clone(), home))));
         // A troca de conta que o Rust anterior deixou no meio, antes de qualquer sessão subir pelo spec.
@@ -219,15 +240,21 @@ pub async fn serve_until_with_guest(
         () = stop => Ok(()),
     }
     }.await;
-    transcription.shutdown().await;
-    if let Some((stop,task))=refresh_loop {
-        let _=stop.send(true);
-        let _=task.await;
-    }
-    tokio::join!(codex_readers.close(),codex_logins.close(),device_logins.close());
-    if let Some(registry)=runtime_registry {
-        registry.shutdown().await.map_err(|error|std::io::Error::other(error.code))?;
-    }
+    let cleanup = async {
+        if let Some(service) = omp_sync.get() { service.close().await; }
+        transcription.shutdown().await;
+        if let Some((stop,task))=refresh_loop {
+            let _=stop.send(true);
+            let _=task.await;
+        }
+        tokio::join!(codex_readers.close(),codex_logins.close(),device_logins.close());
+        if let Some(registry)=runtime_registry {
+            registry.shutdown().await.map_err(|error|std::io::Error::other(error.code))?;
+        }
+        Ok::<_, std::io::Error>(())
+    };
+    let (_, cleanup) = tokio::join!(remote_browser.shutdown(&browser_dir, &browser_list), cleanup);
+    cleanup?;
     result
 }
 
@@ -354,7 +381,7 @@ mod tests {
 /// Grava um executável de teste sem abrir o arquivo para escrita neste processo: quem grava é um
 /// `install` à parte. Gravado aqui, um filho de outro teste nascido nesse instante herdaria o descritor
 /// de escrita, e rodar o arquivo daria "Text file busy" (ETXTBSY).
-#[cfg(all(unix, any(test, target_os = "linux")))]
+#[cfg(all(unix, test))]
 pub(crate) fn write_test_executable(path: &std::path::Path, content: impl AsRef<[u8]>) {
     let source = path.with_extension("conteudo");
     std::fs::write(&source, content).unwrap();

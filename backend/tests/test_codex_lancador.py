@@ -37,6 +37,13 @@ _FAKE_CODEX = '''#!/usr/bin/env python3
 import json, os, sys, time
 
 args = sys.argv[1:]
+if args[:3] == ["plugin", "marketplace", "upgrade"]:
+    if os.environ.get("FAKE_MARKETPLACES_OUT"):
+        with open(os.environ["FAKE_MARKETPLACES_OUT"], "a") as fh:
+            servidor = os.path.exists(os.environ.get("FAKE_SERVER_OUT", ""))
+            fh.write(json.dumps({"home": os.environ.get("CODEX_HOME"), "servidor_ja_subiu": servidor}) + "\\n")
+    print(json.dumps({"selectedMarketplaces": [], "upgradedRoots": [], "errors": []}))
+    sys.exit(0)
 if args[:1] == ["app-server"]:
     if os.environ.get("FAKE_SERVER_ENV"):
         with open(os.environ["FAKE_SERVER_ENV"], "w") as fh:
@@ -129,11 +136,13 @@ def _ambiente(tmp_path, cwd):
 
 
 @contextlib.contextmanager
-def _backend_conta_pronta(env):
+def _backend_conta_pronta(env, status="ready", issues=None, methods=None):
     """Conta secundária só abre depois do preparo no backend; aqui ele responde pronto na hora."""
     class _Pronto(http.server.BaseHTTPRequestHandler):
         def _responder(self):
-            corpo = json.dumps({"status": "ready", "issues": []}).encode()
+            if methods is not None and "/prepare" in self.path:
+                methods.append(self.command)
+            corpo = json.dumps({"status": status, "issues": issues or []}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(corpo)))
@@ -146,7 +155,8 @@ def _backend_conta_pronta(env):
             pass
 
     servidor = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Pronto)
-    threading.Thread(target=servidor.serve_forever, daemon=True).start()
+    thread = threading.Thread(target=servidor.serve_forever, daemon=True)
+    thread.start()
     env["CP_PORT"] = str(servidor.server_address[1])
     env["CP_AUTH_TOKEN"] = "teste"
     try:
@@ -154,6 +164,8 @@ def _backend_conta_pronta(env):
     finally:
         servidor.shutdown()
         servidor.server_close()
+        thread.join(timeout=5)
+        assert not thread.is_alive()
 
 
 def _sidecar(env, nome):
@@ -210,21 +222,71 @@ def test_launcher_applies_creation_tier_to_server_and_tui_before_prompt(tmp_path
         proc.wait(timeout=20)
 
 
-def test_conta_secundaria_nao_espera_preparo_em_andamento(monkeypatch):
+@pytest.mark.skipif(os.name != "posix", reason="binário falso POSIX")
+def test_marketplaces_sao_conferidos_na_conta_antes_do_app_server(tmp_path):
+    cwd = tmp_path / "proj"
+    cwd.mkdir()
+    env = _ambiente(tmp_path, cwd)
+    env["FAKE_TUI_SLEEP"] = "1"
+    env["FAKE_SERVER_OUT"] = str(tmp_path / "server-argv.json")
+    env["FAKE_MARKETPLACES_OUT"] = str(tmp_path / "marketplaces.jsonl")
+    proc = subprocess.Popen([sys.executable, str(_LANCADOR), "--name", "sess", "--cwd", str(cwd)],
+                            env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        assert _espera(lambda: Path(env["FAKE_TUI_OUT"]).exists())
+        chamadas = [json.loads(l) for l in Path(env["FAKE_MARKETPLACES_OUT"]).read_text().splitlines()]
+        assert chamadas == [{"home": env["CODEX_HOME"], "servidor_ja_subiu": False}]
+    finally:
+        proc.wait(timeout=20)
+
+
+def _marketplaces(monkeypatch, resultado):
+    atualizar = runpy.run_path(str(_LANCADOR))["_atualizar_marketplaces"]
+    globais = atualizar.__globals__
+    monkeypatch.setattr(globais["shutil"], "which", lambda nome: f"/bin/{nome}")
+
+    def run(argv, **_):
+        if isinstance(resultado, Exception):
+            raise resultado
+        return subprocess.CompletedProcess(argv, *resultado)
+
+    monkeypatch.setattr(globais["subprocess"], "run", run)
+    return atualizar
+
+
+def test_marketplaces_atualizados_aparecem_na_tela(monkeypatch, capsys):
+    saida = json.dumps({"selectedMarketplaces": ["m"], "upgradedRoots": ["/h/.tmp/marketplaces/m"], "errors": []})
+    _marketplaces(monkeypatch, (0, saida, ""))()
+    assert "plugins atualizados em 1 marketplace(s)" in capsys.readouterr().err
+
+
+def test_falha_nos_marketplaces_nao_impede_a_abertura(monkeypatch, capsys):
+    erro = "Failed to upgrade marketplace `exemplo`: git fetch failed\nError: 1 upgrade failure(s) occurred.\n"
+    _marketplaces(monkeypatch, (1, "", erro))()
+    tela = capsys.readouterr().err
+    assert "Failed to upgrade marketplace `exemplo`: git fetch failed" in tela
+    assert "saiu com código 1" in tela and "Error: 1 upgrade" not in tela
+    _marketplaces(monkeypatch, subprocess.TimeoutExpired("codex", 90))()
+    assert "não deu para conferir os plugins (TimeoutExpired)" in capsys.readouterr().err
+
+
+def test_conta_secundaria_aguarda_primeiro_preparo(monkeypatch):
     lancador = runpy.run_path(str(_LANCADOR))
     chamadas = []
+    states = iter(["idle","running","running","ready"])
 
     def api(method, path):
         chamadas.append((method, path))
-        return {"status": "running", "etapa": "plugins", "issues": []}
+        return {"status": next(states), "etapa": "plugins", "issues": []}
 
     monkeypatch.setitem(lancador["_preparar_conta_codex"].__globals__, "_api_backend", api)
+    monkeypatch.setattr(time,"sleep",lambda _:None)
 
     result = lancador["_preparar_conta_codex"]("work", "/repo com espaço")
 
     path = "/api/codex-contas/work/prepare?cwd=%2Frepo%20com%20espa%C3%A7o"
-    assert chamadas == [("POST", path)]
-    assert result["status"] == "running"
+    assert chamadas == [("GET",path),("POST",path),("GET",path),("GET",path)]
+    assert result["status"] == "ready"
 
 
 def test_conta_ja_preparada_ainda_confirma_trust_da_pasta(monkeypatch):
@@ -238,7 +300,72 @@ def test_conta_ja_preparada_ainda_confirma_trust_da_pasta(monkeypatch):
     monkeypatch.setitem(lancador["_preparar_conta_codex"].__globals__, "_api_backend", api)
 
     assert lancador["_preparar_conta_codex"]("work", "/repo")["status"] == "ready"
-    assert chamadas == ["POST", "GET"]
+    assert chamadas == ["GET"]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="binário falso POSIX")
+@pytest.mark.parametrize("marker,warning", [('{"version":1}', False),
+                                             ('{"version":1,"status":"partial"}', True)])
+def test_conta_preparada_abre_com_backend_desligado(tmp_path, marker, warning):
+    cwd = tmp_path/"project"
+    cwd.mkdir()
+    env = _ambiente(tmp_path,cwd)
+    env["FAKE_SERVER_OUT"] = str(tmp_path/"server-started.json")
+    home = tmp_path/"profile"
+    home.mkdir()
+    (home/".hangar-prepared-v1").write_text(marker)
+    control = Path(env["HOME"])/".hangar/codex-atualizacao.json"
+    control.parent.mkdir()
+    control.write_text(json.dumps({"proxima_em":time.time()+3600}))
+    process = subprocess.Popen([sys.executable,str(_LANCADOR),"--name","prep-offline","--cwd",str(cwd),
+        "--codex-home",str(home),"--codex-account","work"],env=env,
+        stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+    try:
+        stdout,stderr = process.communicate(timeout=25)
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            try:process.wait(timeout=5)
+            except subprocess.TimeoutExpired:process.kill();process.wait(timeout=5)
+    assert process.returncode == 0,stdout+stderr
+    assert Path(env["FAKE_SERVER_OUT"]).exists()
+    assert Path(env["FAKE_TUI_OUT"]).exists()
+    assert ("pendências" in stderr) is warning, stderr
+    import tomllib
+    assert tomllib.loads((home/"config.toml").read_text())["projects"][str(cwd)]["trust_level"] == "trusted"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="binário falso POSIX")
+@pytest.mark.parametrize("status,opens", [("partial", True), ("error", False)])
+def test_preparo_parcial_abre_com_pendencias_e_erro_nao_sobe(tmp_path, status, opens):
+    cwd = tmp_path/"project"
+    cwd.mkdir()
+    env = _ambiente(tmp_path,cwd)
+    env["FAKE_SERVER_OUT"] = str(tmp_path/"server-started.json")
+    control = Path(env["HOME"])/".hangar/codex-atualizacao.json"
+    control.parent.mkdir()
+    control.write_text(json.dumps({"proxima_em":time.time()+3600}))
+    methods = []
+    with _backend_conta_pronta(env,status=status,issues=[
+        {"code":"codex_account_plugin_hooks_failed","params":{"error":"private detail"}}],methods=methods):
+        process = subprocess.Popen([sys.executable,str(_LANCADOR),"--name","prep-test","--cwd",str(cwd),
+            "--codex-home",str(tmp_path/"profile"),"--codex-account","work"],env=env,
+            stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+        try:
+            stdout,stderr = process.communicate(timeout=25)
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                try:process.wait(timeout=5)
+                except subprocess.TimeoutExpired:process.kill();process.wait(timeout=5)
+    assert (process.returncode == 0) is opens,stdout+stderr
+    if opens:
+        # O servidor decide se o parcial é recente (reaproveita) ou antigo (tenta de novo).
+        assert methods[:2] == ["GET", "POST"], methods
+    assert "codex_account_plugin_hooks_failed" in stderr
+    assert "private detail" not in stderr
+    assert Path(env["FAKE_SERVER_OUT"]).exists() is opens
+    assert Path(env["FAKE_TUI_OUT"]).exists() is opens
 
 
 @pytest.mark.skipif(os.name != "posix", reason="o lancador so e usado em pane POSIX por ora")
@@ -783,6 +910,7 @@ def test_relaunch_of_own_session_completes_from_the_sidecar_and_refuses_unknown_
     rollout = home / "sessions" / "2026" / "10" / "03" / f"rollout-example-{thread_id}.jsonl"
     rollout.parent.mkdir(parents=True)
     rollout.write_text("{}\n")
+    (home/".hangar-prepared-v1").write_text('{"version":1}')
     sidecar = _sidecar(env, "sess")
     sidecar.parent.mkdir(parents=True, exist_ok=True)
     meta = {"name": "sess", "thread_id": thread_id, "rollout_path": env["FAKE_ROLLOUT"], "cwd": str(cwd),
@@ -1192,7 +1320,7 @@ def test_confia_so_nos_hooks_sincronizados_pelo_hangar(capsys, resposta):
     confiar = runpy.run_path(str(_LANCADOR))["_confiar_hooks"]
     servidor, endpoint, gravado = _hooks_server(resposta)
     try:
-        confiar(endpoint, "/tmp")
+        confirmed = confiar(endpoint, "/tmp")
     finally:
         servidor.shutdown()
     chaves = [json.loads("[" + e["keyPath"].replace('"."', '","') + "]")[2] for e in gravado]
@@ -1201,10 +1329,11 @@ def test_confia_so_nos_hooks_sincronizados_pelo_hangar(capsys, resposta):
     err = capsys.readouterr().err
     assert "segredo" not in err
     if "error" in resposta:
+        assert confirmed is False
         assert "aceitos" not in err
         assert "config/batchWrite, código -32603" in err
     else:
-        assert "3 hooks sincronizados pelo Hangar foram aceitos: user:Stop:0, plugin:x:Stop:0" in err
+        assert confirmed is True
         assert "1 hooks de outra origem" in err
 
 

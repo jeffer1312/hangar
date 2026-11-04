@@ -97,7 +97,6 @@ def test_call_refuses_to_block_the_event_loop():
 def _kill_stubs(monkeypatch):
     # Saída do grupo pela ponte tem teste próprio (`test_groups_bridge.py`); aqui só os convites.
     monkeypatch.setattr(api, "_rust_leave", lambda name, phases: [])
-    monkeypatch.setattr(api, "_recusa_orq", lambda n: None)
     monkeypatch.setattr(api.registry, "kill", lambda n, closed_by_rust=False: [])
     monkeypatch.setattr(api, "_invalidate_lists", lambda: None)
     monkeypatch.setattr(api, "_jsonl_of_session", lambda n: None)

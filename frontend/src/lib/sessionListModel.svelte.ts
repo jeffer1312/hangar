@@ -177,8 +177,8 @@ export function createSessionListModel(opts: SessionListModelOptions) {
     }
     const byServer: Group[] = placed.byServer.map((b) => ({
       id: b.server.id,
-      label: b.server.label,
-      color: serverColor(b.server.id),
+      label: b.label ?? b.server.label,
+      color: b.color ?? serverColor(b.server.id),
       error: b.error,
       sessions: sortSessions(b.sessions),
     }));

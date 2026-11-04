@@ -164,10 +164,60 @@ def _group_members(containment):
     return members
 
 
+_listchildpids = None
+
+
+def _darwin_listchildpids():
+    """`proc_listchildpids` da libproc; None fora do macOS ou sem a função."""
+    global _listchildpids
+    if _listchildpids is None:
+        if sys.platform != 'darwin':
+            _listchildpids = False
+        else:
+            import ctypes
+            try:
+                api = ctypes.CDLL('/usr/lib/libproc.dylib', use_errno=True).proc_listchildpids
+            except (OSError, AttributeError):
+                _listchildpids = False
+            else:
+                api.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_int]
+                api.restype = ctypes.c_int
+
+                def listchildren(pid):
+                    size = 64
+                    while True:
+                        buffer = (ctypes.c_int * size)()
+                        count = api(pid, buffer, ctypes.sizeof(buffer))
+                        if count <= 0:
+                            return []
+                        if count < size:   # lista cheia pode ter cortado filhos: tenta com mais espaço
+                            return list(buffer[:count])
+                        size *= 4
+
+                _listchildpids = listchildren
+    return _listchildpids or None
+
+
 def _tree_members(containment):
     """Desce do Rust pelos filhos que o kernel lista, sem olhar o resto da máquina.
 
     None = o kernel não expõe `children`; quem chama varre a máquina."""
+    if not sys.platform.startswith('linux'):
+        # macOS: a libproc lista só os filhos de cada membro, em vez de consultar a máquina inteira.
+        listchildren = _darwin_listchildpids()
+        if listchildren is None:
+            return None
+        members, pending = [], [containment.pid]
+        while pending:
+            pid = pending.pop()
+            try:
+                if os.getsid(pid) != containment.pid or psutil.Process(pid).status() == psutil.STATUS_ZOMBIE:
+                    continue
+            except (psutil.NoSuchProcess, ProcessLookupError):
+                continue
+            members.append(pid)
+            pending.extend(listchildren(pid))
+        return members
     if not Path(f'/proc/{containment.pid}/task/{containment.pid}/children').exists():
         return None
     members, pending = [], [containment.pid]
@@ -285,8 +335,7 @@ def refresh_members(proc):
     if containment.job is None:
         # A árvore perde o neto cujo pai morreu (ele segue na sessão); a varredura periódica o pega.
         now = time.monotonic()
-        sweep = (not sys.platform.startswith('linux') or containment.swept is None
-            or now - containment.swept >= _FULL_SWEEP)
+        sweep = containment.swept is None or now - containment.swept >= _FULL_SWEEP
         found = None if sweep else _tree_members(containment)
         if found is None:
             global _tree_warned

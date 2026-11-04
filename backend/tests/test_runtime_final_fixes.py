@@ -142,43 +142,6 @@ def test_unknown_composer_allows_control_and_proven_new_conversation_without_ret
     asyncio.run(flow())
 
 
-def test_lost_fill_ack_retains_publication_across_generation_and_stale_ack_cannot_confirm_new_conversation(monkeypatch):
-    import time
-    from app import plugin_bridge as pb
-    name = 'publication-barrier-test'
-    conversation = {'sid': 'A'}
-    monkeypatch.setattr(pb, 'tracked_session_id', lambda name: conversation['sid'])
-    monkeypatch.setattr(pb, 'PUBLICA_S', .02)
-    async def flow():
-        pb._loop = asyncio.get_running_loop()
-        queue = pb._waiters[name] = asyncio.Queue()
-        pb._donos[name] = ('test', {'fill', 'receipt_v2'}, time.monotonic())
-        first = asyncio.create_task(asyncio.to_thread(pb.publish_terminal, name, 'A', 1,
-            {'id': 'pub-A', 'text': 'A', 'mode': 'fill'}, lambda: None))
-        published = await asyncio.wait_for(queue.get(), .2)
-        assert published['text'] == 'A'
-        assert await first == 'unknown'
-        assert pb._publications[name]['id'] == 'pub-A'
-        assert await asyncio.to_thread(pb.publish_terminal, name, 'A', 2,
-            {'id': 'pub-B', 'text': 'B', 'mode': 'fill'}, lambda: None) == 'unknown'
-        assert queue.empty()
-        conversation['sid'] = 'B'
-        second = asyncio.create_task(asyncio.to_thread(pb.publish_terminal, name, 'B', 3,
-            {'id': 'pub-C', 'text': 'C', 'mode': 'fill'}, lambda: None))
-        assert (await asyncio.wait_for(queue.get(), .2))['publication_id'] == 'pub-C'
-        body = dict(sessao=name, token='test', ok=True)
-        pb._terminal_ack(pb.FilledBody(**body, publication_id='pub-A', generation=1, session_id='A'), 'fill')
-        assert pb._publications[name]['result'] == 'unknown'
-        pb._terminal_ack(pb.FilledBody(**body, publication_id='pub-C', generation=3, session_id='B'), 'fill')
-        assert await second == 'filled'
-    try:
-        asyncio.run(flow())
-    finally:
-        pb._publications.pop(name, None)
-        pb._waiters.pop(name, None)
-        pb._donos.pop(name, None)
-
-
 def _uncertain_terminal_inputs(tmp_path, texts):
     store = open_store(tmp_path)
     transcript = tmp_path / 'sid.jsonl'
@@ -259,38 +222,6 @@ def test_confirmed_uncertain_input_releases_drain_and_next_submit(tmp_path, monk
     asyncio.run(flow())
 
 
-@pytest.mark.parametrize('ok', [True, False])
-def test_late_matching_fill_ack_drops_retained_publication_without_touching_queue(monkeypatch, ok):
-    import time
-    from app import plugin_bridge as pb
-    name = 'publication-late-ack-test'
-    monkeypatch.setattr(pb, 'tracked_session_id', lambda name: 'A')
-    monkeypatch.setattr(pb, 'PUBLICA_S', .02)
-    async def flow():
-        pb._loop = asyncio.get_running_loop()
-        queue = pb._waiters[name] = asyncio.Queue()
-        pb._donos[name] = ('test', {'fill', 'receipt_v2'}, time.monotonic())
-        first = asyncio.create_task(asyncio.to_thread(pb.publish_terminal, name, 'A', 1,
-            {'id': 'pub-A', 'text': 'A', 'mode': 'fill'}, lambda: None))
-        await asyncio.wait_for(queue.get(), .2)
-        assert await first == 'unknown'
-        body = dict(sessao=name, token='test', ok=ok)
-        assert pb._terminal_ack(pb.FilledBody(**body, publication_id='pub-A', generation=1, session_id='A'), 'fill')
-        # O plugin respondeu: a publicação não está mais em voo; a submissão segue a cargo da fila.
-        assert name not in pb._publications
-        second = asyncio.create_task(asyncio.to_thread(pb.publish_terminal, name, 'A', 1,
-            {'id': 'pub-B', 'text': 'B', 'mode': 'fill'}, lambda: None))
-        assert (await asyncio.wait_for(queue.get(), .2))['publication_id'] == 'pub-B'
-        pb._terminal_ack(pb.FilledBody(**body, publication_id='pub-B', generation=1, session_id='A'), 'fill')
-        assert await second == ('filled' if ok else 'unknown')
-    try:
-        asyncio.run(flow())
-    finally:
-        pb._publications.pop(name, None)
-        pb._waiters.pop(name, None)
-        pb._donos.pop(name, None)
-
-
 def test_awaiting_identity_record_retires_when_binding_returns_with_other_key(tmp_path, monkeypatch):
     from app import runtime_coordinator as rc, runtime_terminal as terminal, pqueue
     from app.adapters.claude_headless import sessions as claude_sessions
@@ -341,60 +272,6 @@ def test_clear_with_arguments_passes_terminal_write_barrier_like_rust(tmp_path, 
         assert (result.get('payload') or {}).get('code') != 'terminal_write_barrier'
         assert effects == ['A-publication', 'typed']
     asyncio.run(flow())
-
-
-def test_new_plugin_instance_drops_returned_publication_but_same_instance_keeps_it(monkeypatch):
-    import time
-    from app import plugin_bridge as pb
-    name = 'publication-new-instance-test'
-    monkeypatch.setattr(pb, 'tracked_session_id', lambda name: 'A')
-    monkeypatch.setattr(pb, 'PUBLICA_S', .02)
-    monkeypatch.setattr(pb, 'ESPERA_S', .01)
-    monkeypatch.setattr(pb, '_confere', lambda *a: None)
-    monkeypatch.setattr(pb, '_conversation_mismatch', lambda *a: None)
-    def pull(instance):
-        return pb.pull(pb.PullBody(sessao=name, token='t', instance=instance,
-            modos=['fill', 'receipt_v2'], session_id='A'))
-    async def flow():
-        pb._loop = asyncio.get_running_loop()
-        queue = pb._waiters[name] = asyncio.Queue()
-        pb._donos[name] = ('old', {'fill', 'receipt_v2'}, time.monotonic())
-        first = asyncio.create_task(asyncio.to_thread(pb.publish_terminal, name, 'A', 1,
-            {'id': 'pub-A', 'text': 'A', 'mode': 'fill'}, lambda: None))
-        await asyncio.wait_for(queue.get(), .2)
-        assert await first == 'unknown'
-        await pull('old')
-        assert pb._publications[name]['id'] == 'pub-A'
-        pb._donos[name] = ('old', {'fill', 'receipt_v2'}, time.monotonic() - pb.ESPERA_S - 11)
-        await pull('new')
-        assert name not in pb._publications
-    try:
-        asyncio.run(flow())
-    finally:
-        pb._publications.pop(name, None)
-        pb._waiters.pop(name, None)
-        pb._donos.pop(name, None)
-
-
-@pytest.mark.parametrize('request_id,control,modes,expected', [
-    ('ask:t1', 'select', {'fill', 'receipt_v2'}, 'unavailable'),
-    ('ask:t1', 'answer_questions', {'fill'}, 'unavailable'),
-    ('perm:t1', 'select', {'fill'}, 'rejected'),
-    ('ask:old', 'select', {'fill', 'receipt_v2'}, 'rejected'),
-])
-def test_plugin_control_hands_ask_choices_to_the_tui_keyboard(monkeypatch, request_id, control, modes, expected):
-    from types import SimpleNamespace
-    from app import plugin_bridge as pb, runtime_terminal as terminal
-    current = SimpleNamespace(name='ask-fallback', generation=1, meta={'terminal': 'b', 'session_id': 'A'})
-    monkeypatch.setattr(terminal, 'validate_binding', lambda descriptor: current)
-    monkeypatch.setattr(terminal, '_plugin_current', lambda current: True)
-    pending_id = 'perm:t1' if request_id.startswith('perm:') else 'ask:t1'
-    monkeypatch.setattr(pb, 'pergunta_pendente', lambda name: {'id': pending_id, 'questions': [{'question': 'q'}]})
-    monkeypatch.setattr(pb, 'declared_modes', lambda name: modes)
-    monkeypatch.setattr(pb, 'responder_pergunta', lambda *a: pytest.fail('o plugin não pode responder aqui'))
-    body = {'request_id': request_id, 'option': 2, 'answers': []}
-    payload = {'binding': 'b', 'generation': 1, 'control': control, 'payload': body, 'publication_id': 'p'}
-    assert terminal.plugin_control(payload, {'validate': lambda: None, 'descriptor': {}}) == {'disposition': expected}
 
 
 def test_uncertain_input_of_a_second_conversation_blocks_writes_while_old_barrier_stays(tmp_path):
@@ -543,18 +420,15 @@ def test_kill_after_the_binding_changed_before_closing_still_kills(tmp_path, mon
     assert killed and not owner.managed_queue('session')
 
 
-@pytest.mark.parametrize('pending,expect_panel_check,expect_cursor', [
-    ({'id': 'ask:t1'}, True, True), (None, True, False), ({'id': 'perm:t1'}, False, False)])
-def test_select_on_question_respects_open_panel_and_requires_cursor(monkeypatch, pending, expect_panel_check, expect_cursor):
-    from app import api, plugin_bridge as pb, runtime_terminal
+def test_select_respects_open_panel(monkeypatch):
+    from app import api, runtime_terminal
     checked, routed = [], []
-    monkeypatch.setattr(pb, 'pergunta_pendente', lambda name: pending)
     monkeypatch.setattr(api, '_cached_info_sync', lambda name: None)
     monkeypatch.setattr(api, '_recusa_se_painel_aberto', lambda name: checked.append(name))
     monkeypatch.setattr(runtime_terminal, 'route_sync', lambda name, command: routed.append(command) or {'ok': True})
     assert api.select('s', api.SelectBody(option=1)) == {'ok': True}
-    assert bool(checked) == expect_panel_check
-    assert routed[0]['payload'].get('require_cursor', False) == expect_cursor
+    assert checked == ['s']
+    assert routed[0]['payload'] == {'option': 1}
 
 
 @pytest.mark.parametrize('error,status,code', [
@@ -564,12 +438,11 @@ def test_select_on_question_respects_open_panel_and_requires_cursor(monkeypatch,
     ('control_error', None, None), ('transfer', None, None)])
 def test_select_terminal_route_failure_is_a_coded_error_not_a_bare_500(monkeypatch, error, status, code):
     from fastapi import HTTPException
-    from app import api, plugin_bridge as pb, runtime_terminal
+    from app import api, runtime_terminal
     from app.runtime_coordinator import TransferInProgress
     error = {'outcome_unknown': runtime_terminal.TerminalOutcomeUnknown('resultado terminal incerto'),
              'control_error': runtime_terminal.TerminalControlError('select', 'deferred', None),
              'transfer': TransferInProgress('posse em troca')}.get(error, error)
-    monkeypatch.setattr(pb, 'pergunta_pendente', lambda name: None)
     monkeypatch.setattr(api, '_cached_info_sync', lambda name: None)
     monkeypatch.setattr(api, '_recusa_se_painel_aberto', lambda name: None)
     def failing(name, command):
@@ -615,7 +488,7 @@ def test_select_on_headless_codex_answers_the_approval_without_the_claude_termin
     # Codex sem terminal não tem vínculo Claude: a rota do terminal suspendia a escrita e o cartão
     # de aprovação não se respondia (500).
     from types import SimpleNamespace
-    from app import api, plugin_bridge as pb, runtime_coordinator as rc, runtime_terminal
+    from app import api, runtime_coordinator as rc, runtime_terminal
     owner = rc.RuntimeCoordinator()
     owner.mode = 'python'
     owner.legacy = SimpleNamespace(binding=lambda *args: None)
@@ -623,7 +496,6 @@ def test_select_on_headless_codex_answers_the_approval_without_the_claude_termin
     monkeypatch.setattr(rc, 'current', lambda: owner)
     monkeypatch.setattr(runtime_terminal, 'being_born', lambda name, after=0: False)
     monkeypatch.setattr(runtime_terminal, 'outside_scope', lambda name: False)
-    monkeypatch.setattr(pb, 'pergunta_pendente', lambda name: None)
     monkeypatch.setattr(api, '_recusa_se_painel_aberto', lambda name: None)
     monkeypatch.setattr(api, '_session_exists', lambda name: True)
     monkeypatch.setattr(api, '_headless', lambda name: False)

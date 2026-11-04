@@ -846,3 +846,394 @@ fn a_good_open_clears_the_persisted_problem() {
     assert!(engine.view()["public_state"]["problema"].is_null(),"{}",engine.view()["public_state"]);
     assert_eq!(persisted_problem(&effects),Some(Value::Null),"o arquivo da sessão perde a queda antiga");
 }
+
+// ---- avisos que a CLI manda e a tela precisa mostrar (formatos em docs/decisoes/harnesses.md) ----
+
+const FIXTURE_SID:&str = "00000000-0000-4000-8000-000000000001";
+
+fn fixture(name:&str) -> Vec<Value> {
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/claude_events").join(name);
+    std::fs::read_to_string(path).unwrap().lines().map(|row|serde_json::from_str(row).unwrap()).collect()
+}
+fn notice_engine() -> ClaudeEngine { engine(json!({"name":"session","session_id":FIXTURE_SID,"initialized":true})) }
+fn turn_engine() -> ClaudeEngine {
+    let mut engine = notice_engine();
+    line(&mut engine,json!({"type":"command_lifecycle","state":"started"}),9.0);
+    engine
+}
+fn diary(effects:&[Effect]) -> Vec<String> {
+    effects.iter().filter_map(|effect|match effect {
+        Effect::Policy { kind,payload,.. } if kind == "unknown_private" => payload["kind"].as_str().map(str::to_owned),
+        _ => None,
+    }).collect()
+}
+
+#[test]
+fn notice_init_mcp_failed_once_per_process() {
+    let init = fixture("init.jsonl").remove(0);
+    let mut engine = notice_engine();
+    assert_eq!(notes(&line(&mut engine,init.clone(),11.0)),vec!["⚙️ Servidor MCP que não subiu: `quebrado`".to_owned()]);
+    assert!(notes(&line(&mut engine,init.clone(),12.0)).is_empty(),"o mesmo processo não repete a nota");
+    let mut relaunched = notice_engine();
+    assert_eq!(notes(&line(&mut relaunched,init,13.0)).len(),1,"processo novo mostra de novo");
+}
+
+#[test]
+fn notice_init_plugin_error() {
+    let init = fixture("init.jsonl").remove(1);
+    let shown = notes(&line(&mut notice_engine(),init,11.0));
+    assert_eq!(shown.len(),1,"{shown:?}");
+    assert!(shown[0].starts_with("⚙️ O plugin `inline[0]` não carregou: Failed to load plugin"),"{shown:?}");
+    assert!(shown[0].chars().count() <= 360,"mensagem longa da CLI é cortada: {shown:?}");
+}
+
+#[test]
+fn notice_init_clean_is_silent() {
+    let effects = line(&mut notice_engine(),json!({"type":"system","subtype":"init","session_id":FIXTURE_SID,
+        "mcp_servers":[{"name":"ok","status":"connected"},{"name":"docs","status":"pending"},{"name":"off","status":"disabled"}]}),11.0);
+    assert!(notes(&effects).is_empty());
+}
+
+#[test]
+fn notice_init_needs_auth() {
+    let effects = line(&mut notice_engine(),json!({"type":"system","subtype":"init","session_id":FIXTURE_SID,
+        "mcp_servers":[{"name":"github","status":"needs-auth"}]}),11.0);
+    assert_eq!(notes(&effects),vec!["⚙️ Servidor MCP que precisa de login: `github`".to_owned()]);
+}
+
+#[test]
+fn notice_init_many_servers_are_one_note() {
+    let mut servers:Vec<Value> = (1..=8).map(|n|json!({"name":format!("plugin:x:falho{n}"),"status":"failed"})).collect();
+    servers.push(json!({"name":"meu","status":"failed","source":"project"}));
+    servers.extend((1..=3).map(|n|json!({"name":format!("login{n}"),"status":"needs-auth"})));
+    let effects = line(&mut notice_engine(),json!({"type":"system","subtype":"init","session_id":FIXTURE_SID,"mcp_servers":servers}),11.0);
+    assert_eq!(notes(&effects),vec!["⚙️ Servidores MCP que não subiram: `meu`, `plugin:x:falho1`, `plugin:x:falho2`, `plugin:x:falho3`, `plugin:x:falho4` e mais 4\n\
+        Servidores MCP que precisam de login: `login1`, `login2`, `login3`".to_owned()]);
+}
+
+#[test]
+fn notice_init_hydrate_does_not_repeat() {
+    let mut snapshot = mods_support::cano_snapshot_json();
+    snapshot["init"] = json!(fixture("init.jsonl").remove(0).to_string());
+    let mut adopted = notice_engine();
+    let effects = adopted.hydrate(CanoSnapshot::parse(snapshot).unwrap()).unwrap();
+    assert!(notes(&effects).is_empty(),"Rust reiniciado adota o mesmo processo: a nota já está na conversa");
+    assert!(notes(&line(&mut adopted,fixture("init.jsonl").remove(0),12.0)).is_empty());
+}
+
+#[test]
+fn notice_unhandled_system_goes_to_diary() {
+    let mut engine = notice_engine();
+    let effects = line(&mut engine,json!({"type":"system","subtype":"informational","content":"x","level":"info"}),11.0);
+    assert_eq!(diary(&effects),vec!["system/informational".to_owned()]);
+    let effects = line(&mut engine,json!({"type":"system","subtype":"hook_progress","hook_id":"h","hook_name":"Stop","hook_event":"Stop",
+        "stdout":"","stderr":"","output":""}),12.0);
+    assert!(diary(&effects).is_empty() && notes(&effects).is_empty());
+}
+
+fn shown_label(engine:&ClaudeEngine) -> String { engine.view()["public_state"]["label"].as_str().unwrap_or("").to_owned() }
+
+#[test]
+fn notice_api_retry_label_until_stream() {
+    let retries = fixture("api_retry.jsonl");
+    let mut engine = turn_engine();
+    let effects = line(&mut engine,retries[0].clone(),11.0);
+    assert!(shown_label(&engine).starts_with("Nova tentativa 1 de 2 em 1 s · erro 529"),"{}",shown_label(&engine));
+    assert!(notes(&effects).is_empty() && diary(&effects) == vec!["claude_api_retry".to_owned()]);
+    line(&mut engine,retries[1].clone(),12.0);
+    assert!(shown_label(&engine).starts_with("Nova tentativa 2 de 2 em 2 s · erro 529"),"{}",shown_label(&engine));
+    let effects = line(&mut engine,json!({"type":"stream_event","parent_tool_use_id":null,"event":{"type":"message_start","message":{}}}),13.0);
+    assert!(!shown_label(&engine).contains("Nova tentativa"),"a resposta voltou: {}",shown_label(&engine));
+    assert!(effects.iter().any(|effect|matches!(effect,Effect::StateChanged)));
+
+    line(&mut engine,retries[0].clone(),14.0);
+    let effects = line(&mut engine,json!({"type":"stream_event","parent_tool_use_id":"toolu_sub","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"x"}}}),15.0);
+    assert!(!shown_label(&engine).contains("Nova tentativa"),"o retry do subagente também passa: {}",shown_label(&engine));
+    assert!(effects.iter().any(|effect|matches!(effect,Effect::StateChanged)),"sem desenho novo o rótulo fica preso na tela");
+
+    line(&mut engine,retries[0].clone(),16.0);
+    line(&mut engine,turn_end("completed",false),17.0);
+    assert!(!shown_label(&engine).contains("Nova tentativa"));
+}
+
+#[test]
+fn notice_api_retry_without_status() {
+    let mut engine = turn_engine();
+    line(&mut engine,fixture("api_retry.jsonl").remove(2),11.0);
+    assert!(shown_label(&engine).starts_with("Nova tentativa 1 de 1 em 1 s · sem resposta da API"),"{}",shown_label(&engine));
+}
+
+#[test]
+fn notice_api_retry_of_an_idle_session_shows_no_label() {
+    let mut engine = notice_engine();
+    line(&mut engine,fixture("api_retry.jsonl").remove(0),11.0);
+    assert!(!shown_label(&engine).contains("Nova tentativa"),"chamada de fundo: {}",shown_label(&engine));
+    line(&mut engine,json!({"type":"command_lifecycle","state":"started"}),12.0);
+    assert!(!shown_label(&engine).contains("Nova tentativa"),"o turno seguinte não herda: {}",shown_label(&engine));
+}
+
+#[test]
+fn notice_hook_started_while_idle_shows_no_label() {
+    let mut engine = notice_engine();
+    line(&mut engine,json!({"type":"system","subtype":"hook_started","hook_id":"n","hook_name":"Notification","hook_event":"Notification"}),10.0);
+    tick(&mut engine,14.0);
+    assert!(!shown_label(&engine).contains("Rodando hook"),"hook assíncrono sem resposta: {}",shown_label(&engine));
+    line(&mut engine,json!({"type":"command_lifecycle","state":"started"}),15.0);
+    assert!(!shown_label(&engine).contains("Rodando hook"),"o turno seguinte não herda: {}",shown_label(&engine));
+}
+
+fn hook_notes(effects:&[Effect]) -> Vec<(String,Value)> {
+    effects.iter().filter_map(|effect|match effect {
+        Effect::Policy { kind,payload,.. } if kind == "local_output" => Some((payload["text"].as_str().unwrap_or("").to_owned(),payload["notice"].clone())),
+        _ => None,
+    }).collect()
+}
+fn tick(engine:&mut ClaudeEngine,seconds:f64) -> Vec<Effect> { engine.apply(EngineInput::Tick,clock(seconds)).unwrap() }
+
+#[test]
+fn notice_hook_slow_label_after_three_seconds() {
+    let hooks = fixture("hooks.jsonl");
+    let mut engine = turn_engine();
+    let effects = line(&mut engine,hooks[2].clone(),10.0);
+    assert!(!shown_label(&engine).contains("Rodando hook"));
+    assert!(!effects.iter().any(|effect|matches!(effect,Effect::StateChanged)),"hook que começou não muda a tela");
+    // Com turno aberto o relógio do turno também tem prazo: o do hook se prova pelo rótulo antes e depois dos 3 s.
+    tick(&mut engine,12.9);
+    assert!(!shown_label(&engine).contains("Rodando hook"),"{}",shown_label(&engine));
+    let effects = tick(&mut engine,13.1);
+    assert!(effects.iter().any(|effect|matches!(effect,Effect::StateChanged)));
+    assert!(shown_label(&engine).starts_with("Rodando hook PreToolUse:Bash…"),"{}",shown_label(&engine));
+    assert!(engine.next_deadline().is_some_and(|deadline|deadline > 13.1),"prazo vencido não volta: {:?}",engine.next_deadline());
+    line(&mut engine,hooks[3].clone(),14.0);
+    assert!(!shown_label(&engine).contains("Rodando hook"));
+
+    line(&mut engine,hooks[0].clone(),20.0);
+    let effects = line(&mut engine,hooks[1].clone(),20.5);
+    assert!(notes(&effects).is_empty() && !shown_label(&engine).contains("Rodando hook"),"hook rápido não aparece");
+}
+
+#[test]
+fn notice_hook_failure_streak() {
+    let hooks = fixture("hooks.jsonl");
+    let mut engine = turn_engine();
+    line(&mut engine,hooks[4].clone(),10.0);
+    let first = hook_notes(&line(&mut engine,hooks[5].clone(),10.2));
+    assert_eq!(first,vec![("Hook falhou — PostToolUse:Bash: falhou-de-proposito".to_owned(),json!("hook_failed"))]);
+    for at in [11.0,12.0] {
+        line(&mut engine,hooks[4].clone(),at);
+        assert!(notes(&line(&mut engine,hooks[5].clone(),at+0.2)).is_empty(),"repetição só soma");
+    }
+    // Outro hook com o mesmo nome (`PostToolUse:Bash`) passando não fecha a soma do que falha.
+    let mut passed = hooks[5].clone();
+    passed["hook_id"] = json!("outro"); passed["outcome"] = json!("success"); passed["exit_code"] = json!(0);
+    passed["stderr"] = json!(""); passed["output"] = json!("");
+    assert!(notes(&line(&mut engine,passed,13.2)).is_empty());
+    line(&mut engine,hooks[4].clone(),14.0);
+    assert!(notes(&line(&mut engine,hooks[5].clone(),14.2)).is_empty());
+    let effects = line(&mut engine,turn_end("completed",false),16.0);
+    assert_eq!(notes(&effects),vec!["Hook falhou — PostToolUse:Bash: falhou-de-proposito (4× neste turno)".to_owned()]);
+
+    line(&mut engine,hooks[4].clone(),17.0);
+    assert_eq!(notes(&line(&mut engine,hooks[5].clone(),17.2)).len(),1,"turno novo avisa de novo");
+}
+
+#[test]
+fn notice_hook_failure_with_changing_message_is_one_note() {
+    let mut engine = turn_engine();
+    let mut shown = Vec::new();
+    for at in 0..3 {
+        shown.extend(notes(&line(&mut engine,json!({"type":"system","subtype":"hook_response","hook_id":format!("h{at}"),
+            "hook_name":"PostToolUse:Edit","hook_event":"PostToolUse","stderr":format!("lint falhou em arquivo{at}.rs"),
+            "outcome":"error","exit_code":1}),11.0+at as f64)));
+    }
+    assert_eq!(shown,vec!["Hook falhou — PostToolUse:Edit: lint falhou em arquivo0.rs".to_owned()]);
+    let effects = line(&mut engine,turn_end("completed",false),20.0);
+    assert_eq!(notes(&effects),vec!["Hook falhou — PostToolUse:Edit: lint falhou em arquivo0.rs (3× neste turno)".to_owned()]);
+}
+
+#[test]
+fn notice_hook_failure_outside_a_turn_is_not_summed() {
+    let mut engine = notice_engine();
+    let failure = json!({"type":"system","subtype":"hook_response","hook_id":"s","hook_name":"SessionStart:startup",
+        "hook_event":"SessionStart","stderr":"sem rede","outcome":"error","exit_code":1});
+    assert_eq!(notes(&line(&mut engine,failure.clone(),10.0)).len(),1);
+    assert_eq!(notes(&line(&mut engine,failure,11.0)).len(),1,"sem turno não há soma: cada falha avisa");
+    line(&mut engine,json!({"type":"command_lifecycle","state":"started"}),12.0);
+    assert!(notes(&line(&mut engine,turn_end("completed",false),13.0)).is_empty(),"nada vira \"neste turno\"");
+}
+
+#[test]
+fn notice_hook_block_reaches_the_person_when_the_model_would_not_see_it() {
+    let mut engine = turn_engine();
+    let block = |name:&str,id:&str| json!({"type":"system","subtype":"hook_response","hook_id":id,"hook_name":name,
+        "hook_event":name.split(':').next().unwrap(),"stderr":"prompt recusado pela regra","outcome":"error","exit_code":2});
+    assert_eq!(notes(&line(&mut engine,block("SessionStart:startup","u"),10.0)),
+        vec!["Hook falhou — SessionStart:startup: prompt recusado pela regra".to_owned()]);
+    assert!(notes(&line(&mut engine,block("UserPromptSubmit","b"),10.5)).is_empty(),"o prompt barrado já é bolha retida");
+    assert!(notes(&line(&mut engine,block("PreToolUse:Bash","p"),11.0)).is_empty(),"o motivo vai ao modelo pelo tool_result");
+    assert!(notes(&line(&mut engine,block("Stop","s"),12.0)).is_empty(),"o motivo vai ao modelo, que segue o turno");
+}
+
+#[test]
+fn notice_hook_failure_without_message() {
+    let mut engine = notice_engine();
+    let effects = line(&mut engine,json!({"type":"system","subtype":"hook_response","hook_id":"h","hook_name":"Stop",
+        "hook_event":"Stop","stdout":"","stderr":"","output":"","outcome":"error"}),11.0);
+    assert_eq!(notes(&effects),vec!["Hook falhou — Stop: sem mensagem de erro".to_owned()]);
+}
+
+#[test]
+fn notice_turn_end_from_transcript_clears_labels() {
+    let hooks = fixture("hooks.jsonl");
+    let mut engine = turn_engine();
+    line(&mut engine,fixture("api_retry.jsonl").remove(0),10.0);
+    line(&mut engine,hooks[4].clone(),10.0); line(&mut engine,hooks[5].clone(),10.1);
+    line(&mut engine,hooks[4].clone(),10.2); line(&mut engine,hooks[5].clone(),10.3);
+    line(&mut engine,hooks[2].clone(),10.5);
+    tick(&mut engine,14.0);
+    let effects = engine.transcript_turn_end();
+    let label = shown_label(&engine);
+    assert!(!label.contains("Rodando hook") && !label.contains("Nova tentativa"),"{label}");
+    assert_eq!(notes(&effects),vec!["Hook falhou — PostToolUse:Bash: falhou-de-proposito (2× neste turno)".to_owned()]);
+}
+
+#[test]
+fn notice_hook_block_is_diary_only() {
+    let hooks = fixture("hooks.jsonl");
+    let mut engine = notice_engine();
+    let effects:Vec<Effect> = hooks[6..=9].iter().enumerate().flat_map(|(at,row)|line(&mut engine,row.clone(),10.0+at as f64*0.1)).collect();
+    assert!(notes(&effects).is_empty(),"exit 2 é o hook decidindo: {:?}",notes(&effects));
+    assert_eq!(diary(&effects),vec!["claude_hook".to_owned(),"claude_hook_ok".to_owned()],"sucesso não gasta o teto das falhas");
+    // Hook assíncrono que responde depois do turno (já fora de `hooks_running`): a falha ainda aparece.
+    let effects = line(&mut engine,hooks[5].clone(),11.0);
+    assert_eq!(notes(&effects).len(),1);
+    assert!(!effects.iter().any(|effect|matches!(effect,Effect::StateChanged)),"nada no rótulo mudou");
+}
+
+#[test]
+fn notice_hook_label_leaves_on_reattach() {
+    let hooks = fixture("hooks.jsonl");
+    let mut engine = turn_engine();
+    line(&mut engine,hooks[2].clone(),10.0);
+    tick(&mut engine,13.5);
+    assert!(shown_label(&engine).starts_with("Rodando hook"));
+    engine.reattach(CanoSnapshot::parse(mods_support::cano_snapshot_json()).unwrap()).unwrap();
+    assert!(!shown_label(&engine).contains("Rodando hook"),"{}",shown_label(&engine));
+}
+
+fn system(subtype:&str,fields:Value) -> Value {
+    let mut event = json!({"type":"system","subtype":subtype,"session_id":FIXTURE_SID});
+    for (key,value) in fields.as_object().unwrap() { event[key] = value.clone(); }
+    event
+}
+
+#[test]
+fn notice_notification_high_once() {
+    let mut engine = notice_engine();
+    let update = system("notification",json!({"key":"update","text":"Nova versão disponível","priority":"high"}));
+    assert_eq!(notes(&line(&mut engine,update.clone(),11.0)),vec!["⚙️ Nova versão disponível".to_owned()]);
+    assert!(notes(&line(&mut engine,update,12.0)).is_empty());
+    let changed = system("notification",json!({"key":"update","text":"Versão instalada","priority":"immediate"}));
+    assert_eq!(notes(&line(&mut engine,changed,13.0)).len(),1,"mesmo key com texto novo é aviso novo");
+}
+
+#[test]
+fn notice_notification_low_is_diary_only() {
+    let effects = line(&mut notice_engine(),system("notification",json!({"key":"tip","text":"Dica","priority":"medium"})),11.0);
+    assert!(notes(&effects).is_empty());
+    assert_eq!(diary(&effects),vec!["claude_notification".to_owned()]);
+}
+
+#[test]
+fn notice_refusal_fallback_each_time() {
+    let mut engine = notice_engine();
+    let refusal = system("model_refusal_fallback",json!({"trigger":"refusal","direction":"retry","scope":"session",
+        "original_model":"claude-opus-5-5","fallback_model":"claude-sonnet-5-5","request_id":null,"content":"x"}));
+    for at in [11.0,12.0] {
+        assert_eq!(notes(&line(&mut engine,refusal.clone(),at)),vec!["⚙️ O claude-opus-5-5 recusou; nova tentativa no claude-sonnet-5-5".to_owned()]);
+    }
+    let mut local = refusal;
+    local["scope"] = json!("local");
+    assert_eq!(notes(&line(&mut engine,local,13.0)),
+        vec!["⚙️ O claude-opus-5-5 recusou; nova tentativa no claude-sonnet-5-5 (só esta resposta; a sessão segue no claude-opus-5-5)".to_owned()]);
+}
+
+#[test]
+fn notice_refusal_without_fallback() {
+    let effects = line(&mut notice_engine(),system("model_refusal_no_fallback",json!({"original_model":"claude-opus-5-5",
+        "request_id":null,"api_refusal_explanation":"pedido fora da política","content":"x"})),11.0);
+    assert_eq!(notes(&effects),vec!["⚙️ O claude-opus-5-5 recusou responder: pedido fora da política".to_owned()]);
+}
+
+fn turn_end(reason:&str,is_error:bool) -> Value {
+    json!({"type":"result","subtype":"success","is_error":is_error,"result":"fim","terminal_reason":reason})
+}
+
+#[test]
+fn notice_terminal_reason_hook_stop() {
+    let mut engine = notice_engine();
+    let effects = line(&mut engine,turn_end("stop_hook_prevented",false),11.0);
+    assert_eq!(notes(&effects),vec!["⚙️ Turno parado: um hook parou o turno".to_owned()]);
+    assert!(engine.view()["public_state"]["problema"].is_null(),"turno sem erro não abre faixa");
+}
+
+#[test]
+fn notice_terminal_reason_normal_is_silent() {
+    let mut engine = notice_engine();
+    for (reason,is_error) in [("completed",false),("aborted_tools",false),("aborted_streaming",false),("background_requested",false)] {
+        assert!(notes(&line(&mut engine,turn_end(reason,is_error),11.0)).is_empty(),"{reason}");
+    }
+}
+
+#[test]
+fn notice_terminal_reason_context_limits() {
+    let mut engine = notice_engine();
+    assert_eq!(notes(&line(&mut engine,turn_end("blocking_limit",true),11.0)),vec!["⚙️ Turno parado: a conversa chegou ao limite do contexto".to_owned()]);
+    assert_eq!(notes(&line(&mut engine,turn_end("rapid_refill_breaker",true),12.0)),vec!["⚙️ Turno parado: a compactação automática entrou em laço".to_owned()]);
+}
+
+#[test]
+fn notice_terminal_reason_skips_usage_limit_and_login() {
+    let mut engine = engine(json!({"name":"session","session_id":"sid","initialized":true}));
+    let stream = include_str!("fixtures/usage_limit/claude_stream_five_hour.jsonl").lines()
+        .map(|row|{ let mut event:Value = serde_json::from_str(row).unwrap();
+            if event["type"] == "result" { event["terminal_reason"] = json!("api_error"); } event }).collect::<Vec<_>>();
+    let effects:Vec<Effect> = stream.into_iter().flat_map(|event|line(&mut engine,event,11.0)).collect();
+    assert_eq!(usage_limits(&effects).len(),1);
+    assert!(notes(&effects).iter().all(|note|!note.contains("Turno parado")),"o limite já tem aviso: {:?}",notes(&effects));
+    assert!(!engine.view()["public_state"]["problema_detalhe"].as_str().unwrap_or("").starts_with("erro da API"));
+
+    let mut engine = notice_engine();
+    let effects = line(&mut engine,json!({"type":"result","subtype":"success","is_error":true,"result":"Not logged in · Please run /login","terminal_reason":"api_error"}),11.0);
+    assert_eq!(engine.view()["public_state"]["problema"],"headless_sem_login");
+    assert!(notes(&effects).is_empty(),"{:?}",notes(&effects));
+}
+
+#[test]
+fn notice_diary_stops_after_the_cap() {
+    let mut engine = notice_engine();
+    let mut logged = 0;
+    for at in 0..40 {
+        let effects = line(&mut engine,json!({"type":"system","subtype":"session_state_changed","state":"idle"}),11.0+at as f64);
+        logged += diary(&effects).len();
+    }
+    assert_eq!(logged,30,"depois do teto o motor nem pede a gravação");
+}
+
+#[test]
+fn notice_terminal_reason_in_error_strip() {
+    let mut engine = notice_engine();
+    let failed = fixture("result.jsonl").into_iter().find(|row|row["terminal_reason"] == "api_error").unwrap();
+    let effects = line(&mut engine,failed,11.0);
+    assert_eq!(notes(&effects),vec!["⚙️ Turno parado: erro da API (529)".to_owned()]);
+    let state = engine.view()["public_state"].clone();
+    assert_eq!(state["problema"],"headless_turno_erro");
+    assert!(state["problema_detalhe"].as_str().unwrap().starts_with("erro da API (529) — success: API Error: 529"),"{state}");
+}
+
+#[test]
+fn notice_terminal_reason_unknown_value() {
+    let effects = line(&mut notice_engine(),turn_end("xyz",false),11.0);
+    assert!(notes(&effects).is_empty(),"motivo desconhecido não vira nota: {:?}",notes(&effects));
+    assert!(diary(&effects).contains(&"claude_terminal_reason".to_owned()));
+}

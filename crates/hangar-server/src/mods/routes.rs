@@ -76,7 +76,7 @@ type Done = Box<Response>;
 /// superfície no Rust, para a rota que o Python não tem (`input`).
 async fn owned(st: &Arc<AppState>, peer: SocketAddr, path: Result<Path<String>, PathRejection>, req: Request,
     outside: Option<fn() -> ModsError>) -> Result<(String, HeaderMap, Body), Done> {
-    let (fwd, who) = who(st, peer, &req);
+    let (fwd, who) = match who(st, peer, &req).await { Ok(value) => value, Err(e) => return Err(Box::new(crate::auth::unavailable(e))) };
     let bridged = req.extensions().get::<Bridged>().is_some();
     let owner = matches!(who, Some(Caller::Owner)) || bridged;
     // O convidado da 8766 é atendido como o que chega pela ponte.

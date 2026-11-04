@@ -27,13 +27,14 @@ use crate::share::caller::{Caller, SessionPath, caller};
 use crate::share::pair_routes::PairState;
 use crate::side::{Binding, Hub, Hubs, Lease, Out, Queued, SideCtx};
 use crate::tail::{self, Watchers};
-use crate::transcript::{InternalInfo, SKIPPED_LINES, history_etag, merged_history};
+use crate::transcript::{InternalInfo, SKIPPED_LINES, history_etag, merged_history_with_notices};
 
 const PING_EVERY: Duration = Duration::from_secs(10);
 const COMMENT_EVERY: Duration = Duration::from_secs(15);
 const SEND_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct AppState {
+    pub omp_sync: Arc<std::sync::OnceLock<Arc<crate::omp_sync::Service>>>,
     pub interactions: Arc<crate::interactions::InteractionStore>,
     pub dictation_models: Arc<crate::dictation::catalog::Models>,
     /// Vagas para processos e chamadas de organização do ditado (catálogo sem cache e execução).
@@ -44,18 +45,25 @@ pub struct AppState {
     pub command_catalog: Arc<crate::commands::Service>,
     pub cfg: Config,
     pub auth: Auth,
+    pub remote_browser: Arc<crate::remote_browser::layout::Layouts>,
     pub http: HttpClient,
     pub side: SideCtx,
     pub terminal: crate::terminal_control::TerminalPool,
     pub terminal_address: Option<SocketAddr>,
     /// Segundo socket da porta pública, em `[::]` dual-stack; atende como o primeiro.
     pub public_v6: Option<TcpListener>,
+    /// A porta do front (`front_address`), decidida só na subida real (`main.rs`).
+    pub front: Option<SocketAddr>,
     pub workspace_slots: Arc<tokio::sync::Semaphore>,
     pub workspace_read_slots: Arc<tokio::sync::Semaphore>,
     pub workspace_meta_slots: Arc<tokio::sync::Semaphore>,
     pub diag: crate::diag::DiagClient,
     pub costs: Arc<crate::costs::collect::Collector>,
-    pub fx: Arc<crate::costs::fx::Fx>,
+    /// Índice de conversas da busca e do Arquivo; o produtor liga só na subida real (`main.rs`).
+    pub search: crate::search::Index,
+    /// O `claude -p` do Perguntar; `None` = o CLI do PATH (o teste troca por um falso).
+    pub claude_p: Option<Arc<dyn crate::claude_p::Runner>>,
+    pub fx:Arc<crate::costs::fx::Fx>,
     pub reports: Arc<crate::costs::ReportCache>,
     pub origins_home: std::path::PathBuf,
     /// `~/.hangar`: etapas de ferramenta e cofre de anexos; o teste troca por uma pasta temporária.
@@ -66,6 +74,8 @@ pub struct AppState {
     pub list: Arc<crate::list::bridge::ListBridge>,
     /// Produtor único da lista do dono; liga com a primeira lista aberta.
     pub hub: Arc<crate::list::hub::ListHub>,
+    /// Aparelhos que já abriram a lista do dono (`~/.hangar/devices.json`); o teste troca por uma pasta temporária.
+    pub devices: Arc<crate::devices::Registry>,
     /// Painéis de terminal real de todas as portas.
     pub term: Arc<crate::term::Terms>,
     /// O que os `Monitor`s de estado compartilham (Claude com terminal).
@@ -89,10 +99,13 @@ pub struct AppState {
     pub groups: Option<Arc<crate::groups::service::GroupService>>,
     /// Outras máquinas do dono (`peers.json`), para os grupos entre máquinas.
     pub peers: Arc<crate::groups::peers::PeerClient>,
+    /// Abertura do navegador do login Claude e escuta do retorno nesta máquina.
+    pub login_browser: Arc<crate::accounts::login_browser::LoginBrowser>,
     /// Id desta máquina entre as do dono (`CP_SERVER_ID`); vazio = sem id.
     pub server_id: String,
     /// Voz ao vivo; o teste troca por um hub com pastas temporárias.
     pub voice: Arc<crate::voice::hub::VoiceHub>,
+    pub speech: Arc<crate::speech::Service>,
     /// Convites e par externo; `None` sem `HANGAR_SHARES_FILE` (o Python segue dono).
     pub share: Option<Arc<crate::share::ShareState>>,
     /// A porta do convidado já está escutando; a saúde anuncia.
@@ -103,6 +116,12 @@ pub struct AppState {
     pub prewarm: Arc<crate::prewarm::Store>,
     /// Base das releases do pacote que o `GET /api/atualizacao` consulta; o teste troca.
     pub update_release_base: String,
+    /// Base do worker do "Reportar problema" (`/api/relatorio`); o teste troca por um falso.
+    pub diag_report_base: String,
+    /// Cofre de senhas desta máquina; o teste troca o chaveiro por um falso.
+    pub vault: Arc<crate::vault::Vault>,
+    /// Pedidos do cofre (aprovação e cadastro) na memória; o `hub` publica o evento `vault` deles.
+    pub vault_requests: Arc<crate::vault::requests::Requests>,
 }
 
 impl AppState {
@@ -164,7 +183,8 @@ impl AppState {
             Err(e) => { tracing::error!("{e}"); None }
         };
         if let Some(share) = &share { list.set_shares(share.clone()); }
-        let hangar_dir = std::path::PathBuf::from(std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).unwrap_or_default()).join(".hangar");
+        // O mesmo `~` do app nativo e do Python (USERPROFILE no Windows), que gravam `~/.hangar/nav`.
+        let hangar_dir = std::env::home_dir().unwrap_or_default().join(".hangar");
         let device_install = {
             let env = crate::accounts::environment::AccountEnvironment::capture();
             Arc::new(crate::device_install::job::DeviceInstall::new(
@@ -172,11 +192,20 @@ impl AppState {
                 .with_config(Arc::new(move || crate::runtime::codex_launch::runtime_config(&env))))
         };
         let groups = crate::groups::from_env(list.env().dirs.as_ref(), server_id.clone(),
-            Arc::new(crate::groups::orq::PythonOrq::new(cfg.upstream, cfg.internal_secret.clone(), http.clone())), list.clone(), diag.clone());
-        AppState { accounts: crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture()), command_catalog: Arc::default(), groups, server_id, peers: Arc::new(crate::groups::peers_from_env()), auth: Auth::new(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, public_v6: None, diag,
+            Arc::new(crate::groups::orq::PythonOrq::new(cfg.upstream, cfg.internal_secret.clone(), http.clone())
+                .with_paths(list.env().dirs.as_ref().map(|d| d.home.clone()).unwrap_or_default(),
+                    list.env().dirs.as_ref().map(|d| d.claude.join(".hangar-pair")).unwrap_or_default())
+                .with_mux(list.env().capture_program.to_string_lossy().into_owned())), list.clone(), diag.clone());
+        let vault_requests = Arc::new(crate::vault::requests::Requests::default());
+        let accounts = crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture());
+        let search = crate::search::Index::server(accounts.clone());
+        AppState { accounts, search, claude_p: None, command_catalog: Arc::default(), groups, server_id, peers: Arc::new(crate::groups::peers_from_env()), auth: Auth::configured(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, public_v6: None, front: None, diag,
             workspace_slots: Arc::new(tokio::sync::Semaphore::new(4)),
+            login_browser: Arc::default(),
             interactions, plugin,
+            remote_browser: Arc::default(),
             transcription: Arc::default(),
+            omp_sync: Arc::default(),
             dictation_models: Arc::default(),
             dictation_slots: Arc::new(tokio::sync::Semaphore::new(4)),
             transcription_slots: Arc::new(tokio::sync::Semaphore::new(4)),
@@ -185,12 +214,16 @@ impl AppState {
             costs, fx, reports: Arc::new(crate::costs::ReportCache::default()),
             origins_home: std::path::PathBuf::from(std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).unwrap_or_default()),
             prewarm: Arc::new(crate::prewarm::Store::server(&hangar_dir)),
+            devices: Arc::new(crate::devices::Registry::new(hangar_dir.join("devices.json"))),
             update_release_base: crate::update::RELEASE_BASE.to_owned(),
+            diag_report_base: crate::diag_report::WORKER_BASE.to_owned(),
+            vault: Arc::new(crate::vault::Vault::system()),
+            hub: Arc::new(crate::list::hub::ListHub::with_vault(vault_requests.feed())),
+            vault_requests,
             hangar_dir, device_install,
             upload_naming: Default::default(),
             origins: std::sync::Mutex::new(indexmap::IndexMap::new()),
             list, state,
-            hub: Arc::default(),
             term: Arc::default(),
             mods,
             pages: Arc::new(crate::pages::store::Store::new(crate::pages::store::Store::default_root())),
@@ -200,6 +233,7 @@ impl AppState {
             write_gate_wait: std::time::Duration::from_secs(30),
             btw_programs: Default::default(),
             voice: Arc::new(crate::voice::hub::VoiceHub::new()),
+            speech: Arc::default(),
             share, guest_bound: Default::default() }
     }
 
@@ -255,6 +289,7 @@ pub async fn serve_with_state(listener: TcpListener, state: AppState) -> std::io
 
 /// `guest`: endereço da porta do convidado. Ocupada não derruba a principal: tenta até soltar.
 pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest: Option<SocketAddr>) -> std::io::Result<()> {
+    crate::omp_sync::validate_environment(&crate::push::server_env()).map_err(std::io::Error::other)?;
     let guest = guest.filter(|addr| state.share.is_some() || {
         tracing::error!(listen = %addr, "porta do convidado pedida sem HANGAR_SHARES_FILE: fica fechada");
         false
@@ -266,8 +301,24 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
     state.voice.set_self(listener.local_addr()?, &state.cfg.auth_token);
     let public_v6 = state.public_v6.take();
     let state = Arc::new(state);
+    // Ligado com o estado final: o evento lê as mesmas contas que a rota `/api/tags`.
+    state.list.tags.bind(state.accounts.clone(), state.server_id.clone());
+    if crate::config::Config::runtime_instance().map_err(std::io::Error::other)?.is_some() {
+        let omp_sync = crate::omp_sync::Service::start(state.clone());
+        let _ = state.omp_sync.set(omp_sync.clone());
+        omp_sync.ready().await;
+        crate::provider_models::inbox::install_endpoint(state.clone()).await;
+        crate::provider_models::warm();
+        let policy_home = state.accounts.env.home.clone();
+        let policy_claude = state.accounts.env.claude_base.clone();
+        tokio::task::spawn_blocking(move || crate::orchestration::policy::migrate(&policy_home, &policy_claude)).await
+            .map_err(|_| std::io::Error::other("orq_policy_migrate_interrupted"))?;
+    }
     let _worktree_sweep=crate::AbortOnDrop(crate::worktree_policy::spawn(state.clone()));
     let _keyring_watch = crate::AbortOnDrop(crate::keyring::spawn(state.list.keyring.clone()));
+    let _vault_backup = crate::AbortOnDrop(crate::vault::backup::spawn(state.clone()));
+    let _vault_files = crate::AbortOnDrop(tokio::spawn(crate::vault::files::sweep_at_start()));
+    let _auto_report = crate::AbortOnDrop(crate::diag_report::auto::spawn(state.clone()));
     let v6_state = state.clone();
     // Abortada na saída: a tarefa segura o estado do servidor, que sobreviveria a ele.
     // As sessões com terminal que o multiplexador perdeu voltam pelo spec; antes da varredura de grupos, que
@@ -275,6 +326,7 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
     let _session_restore = crate::session_open::restore::spawn(state.clone()).map(crate::AbortOnDrop);
     let _group_sweep = crate::groups::sweep::spawn(state.clone()).map(crate::AbortOnDrop);
     let _link_return = crate::groups::link_return::spawn(state.clone()).map(crate::AbortOnDrop);
+    let _session_sleep = crate::AbortOnDrop(crate::session_sleep::spawn(state.clone()));
     let _federation = crate::groups::federation::spawn(state.clone()).map(crate::AbortOnDrop);
     // O aviso no celular é decidido aqui, com ou sem lista aberta.
     let _push_watch: Vec<crate::AbortOnDrop> = crate::push::start(state.clone()).into_iter().map(crate::AbortOnDrop).collect();
@@ -286,10 +338,23 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
         crate::share::owner_routes::sweep_loop(share, crate::share::owner_routes::SWEEP_EVERY))));
     let plugin_state = state.clone();
     let guest_state = state.clone();
+    let (front_state, front) = (state.clone(), state.front);
     // Uma só para as portas: convite e par veem as mesmas lojas e a mesma conferência.
     let pair = pair_state(&state);
     let guest_pair = pair.clone();
+    let front_pair = pair.clone();
     tokio::select! {
+        // Nunca termina: a porta do front é extra, e cair nela não derruba o servidor.
+        () = async {
+            let Some(addr) = front else { return std::future::pending().await };
+            let listener = bind_when_free(addr).await;
+            tracing::info!(listen = %addr, "porta do front servida pelo hangar-server");
+            if let Err(e) = axum::serve(listener.tap_io(crate::nodelay), router_with(front_state.clone(), front_pair.as_ref())
+                .into_make_service_with_connect_info::<SocketAddr>()).await {
+                tracing::warn!(listen = %addr, "porta do front parou: {e}");
+            }
+            std::future::pending().await
+        } => Ok(()),
         result = async {
             match guest {
                 Some(addr) => serve_guest(addr, guest_state, guest_pair).await,
@@ -311,6 +376,30 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
                 None => std::future::pending::<std::io::Result<()>>().await,
             }
         } => result,
+    }
+}
+
+/// A porta do front (`CP_FRONT_PORT`) de quem servia a tela pelo `vite preview`: na máquina migrada
+/// (pacote ou modo desenvolvedor) esta porta entrega a mesma tela e a mesma API, e o navegador
+/// guarda o que já tinha nessa origem. Máquina no git segue com o `vite`.
+pub fn front_address(home: &std::path::Path, listen: SocketAddr) -> Option<SocketAddr> {
+    if std::fs::symlink_metadata(crate::install_root::current(home)).is_err() { return None; }
+    let port = crate::user_data::env_port(home, None, "CP_FRONT_PORT")
+        .inspect_err(|e| tracing::warn!("porta do front ilegível: {e}")).ok().flatten()?;
+    (port != 0 && port != listen.port()).then(|| SocketAddr::new(listen.ip(), port))
+}
+
+/// Liga quando a porta solta: o `vite` que a migração desligou pode ainda segurá-la por instantes.
+async fn bind_when_free(addr: SocketAddr) -> TcpListener {
+    let mut warned = false;
+    loop {
+        match TcpListener::bind(addr).await {
+            Ok(listener) => return listener,
+            Err(e) => {
+                if !warned { tracing::warn!(listen = %addr, "porta do front ocupada, tentando de novo: {e}"); warned = true; }
+                tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+            }
+        }
     }
 }
 
@@ -409,7 +498,7 @@ fn private_share_router(state: &Arc<AppState>, pair: Option<&Arc<PairState>>) ->
 
 async fn owner_only(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request,
                     next: axum::middleware::Next) -> Response {
-    let (fwd, owner) = gate(&st, peer, &req);
+    let (fwd, owner) = match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     // O preflight do CORS também é do Python.
     if !owner || req.method() == Method::OPTIONS {
         return pass(&st, req, &fwd).await;
@@ -425,6 +514,7 @@ fn session_routes<H, T>(fallback: H) -> Router<Arc<AppState>>
 where H: axum::handler::Handler<T, Arc<AppState>>, T: 'static {
     Router::new()
         .route("/api/sessions/{name}/term", get(crate::term::session_ws).fallback(fallback.clone()))
+        .route("/api/sessions/{name}/nav-remoto", get(crate::remote_browser::ws::public).head(fallback.clone()).fallback(fallback.clone()))
         // Outro método nessas rotas (preflight OPTIONS, HEAD) segue ao Python.
         .route("/api/sessions", get(crate::list::hub::list).post(crate::session_open::create).fallback(fallback.clone()))
         .route("/api/sessions/events", get(crate::list::hub::events).fallback(fallback.clone()))
@@ -462,7 +552,9 @@ where H: axum::handler::Handler<T, Arc<AppState>>, T: 'static {
         .route("/api/sessions/{name}/codex/mode", axum::routing::post(crate::session_write::codex::mode).fallback(fallback.clone()))
         .route("/api/sessions/{name}/limits", get(crate::session_write::codex::limits).fallback(fallback.clone()))
         .route("/api/sessions/{name}/question/skip", axum::routing::post(crate::session_write::codex::skip_question).fallback(fallback.clone()))
+        .route("/api/sessions/{name}/codex/terminate", axum::routing::post(crate::session_write::codex::terminate).fallback(fallback.clone()))
         .route("/api/orq/{exec_id}/conductor", get(crate::orq_conductor::public).fallback(fallback.clone()))
+        .route("/api/sessions/{name}/navegador", get(crate::remote_browser::url::route).head(fallback.clone()).fallback(fallback.clone()))
         .route("/api/sessions/{name}/commands", get(crate::commands::route).fallback(fallback.clone()))
         .route("/api/sessions/{name}/codex-permissions", get(crate::session_write::codex::permissions).fallback(fallback.clone()))
         // Mesmo caminho: o axum junta o POST à rota de cima (um repasse só, o dela).
@@ -483,7 +575,6 @@ fn terminal_router_with(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> 
     let router = Router::new()
         .route("/__hangar_server/terminal", axum::routing::post(crate::terminal_routes::terminal))
         .route("/__hangar_server/workspace", axum::routing::post(crate::workspace_routes::private))
-        .route("/__hangar_server/transcription/{operation}", axum::routing::post(crate::transcription::routes::private))
         .route("/__hangar_server/dictation/{operation}", axum::routing::post(crate::dictation::routes::private))
         .route("/__hangar_server/claude/customizations", axum::routing::post(crate::claude_customizations::private))
         .route("/__hangar_server/forwarded", axum::routing::any(crate::forwarded::private))
@@ -498,19 +589,15 @@ fn terminal_router_with(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> 
         .route("/__hangar_server/claude/{*rest}", axum::routing::any(crate::session_write::bridge::claude))
         .route("/__hangar_server/presence", axum::routing::get(crate::presence::private))
         .route("/__hangar_server/mods/{name}/{op}", axum::routing::post(crate::mods::routes::bridge))
-        .route("/__hangar_server/voice/settings", axum::routing::any(crate::voice::routes::private_settings))
         .route("/__hangar_server/jev/aux", axum::routing::any(crate::jev_aux::private))
-        .route("/__hangar_server/voice/memory", axum::routing::any(crate::voice::routes::private_memory))
-        .route("/__hangar_server/voice/memory/{id}", axum::routing::any(crate::voice::routes::private_memory))
         .route("/__hangar_server/subagents", get(crate::subagents::private))
-        .route("/__hangar_server/share/reachability", axum::routing::post(crate::share_reach::private))
         .route("/__hangar_server/share", axum::routing::post(crate::share::bridge::private))
         .layer(axum::middleware::from_fn(crate::migration_status::count_bridge));
-    // Painel, canal do estado e voz ficam fora da contagem: conexões longas, não chamadas da ponte.
+    // Painel e canal do estado ficam fora da contagem: conexões longas, não chamadas da ponte.
     let share = private_share_router(&state, pair);
     router.route("/__hangar_server/term", get(crate::term::private_ws))
         .route("/__hangar_server/state/{name}/events", get(crate::side::private_events))
-        .route("/__hangar_server/voice", get(crate::voice::routes::private_ws))
+        .route("/__hangar_server/remote-browser", get(crate::remote_browser::ws::private))
         .with_state(state)
         .merge(share)
 }
@@ -561,6 +648,14 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/sessions/{name}/bastao", axum::routing::post(crate::session_open::server::bastao).fallback(pass_any))
         // Retomar do Arquivo e o `/resume` ao vivo: a abertura e a reabertura do Rust, com a conversa que já existe.
         .route("/api/archive/{project}/{session_id}/resume", axum::routing::post(crate::session_open::server::archive_resume).fallback(pass_any))
+        // Ler a conversa do Arquivo e a imagem dela: só o dono; o resto segue ao Python, que recusa.
+        // O Arquivo (pastas, recentes, uma pasta, um cwd): só o dono; `recent` antes da pasta.
+        .route("/api/archive", get(crate::archive_list::folders).fallback(pass_any))
+        .route("/api/archive/recent", get(crate::archive_list::recent).fallback(pass_any))
+        .route("/api/archive/{project}", get(crate::archive_list::folder).fallback(pass_any))
+        .route("/api/archive-por-cwd", get(crate::archive_list::by_cwd).fallback(pass_any))
+        .route("/api/archive/{project}/{session_id}/history", get(crate::archive_history::history).fallback(pass_any))
+        .route("/api/archive/{project}/{session_id}/transcript-image/{uuid}/{idx}", get(crate::archive_history::image).fallback(pass_any))
         .route("/api/sessions/{name}/resume", axum::routing::post(crate::session_write::resume::route).fallback(pass_any))
         // Broadcast do dono: o alvo Codex com terminal do Rust recebe aqui; o resto segue ao Python.
         .route("/api/broadcast", axum::routing::post(crate::session_write::input::broadcast).fallback(pass_any))
@@ -578,11 +673,22 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/costs", get(crate::costs_routes::costs).fallback(pass_any))
         .route("/api/cotacao", get(crate::costs_routes::cotacao).fallback(pass_any))
         .route("/api/uso", get(crate::costs_routes::usage).fallback(pass_any))
+        .route("/api/search", get(crate::search::http::route).fallback(pass_any))
+        .route("/api/ask-history", axum::routing::post(crate::search::ask::route).fallback(pass_any))
+        .route("/api/search/context", get(crate::search_context::route).fallback(pass_any))
         .route("/api/migration/status", get(crate::migration_status::status).fallback(pass_any))
         // Novidades e avisos da próxima atualização: só o dono, nunca repassado (o Python não tem a rota).
         .route("/api/update/notes", get(crate::update_notes::route))
         .route("/api/claude/defaults", axum::routing::post(crate::claude_defaults::save).fallback(pass_any))
         .route("/api/session-defaults", axum::routing::get(crate::session_defaults::handle).put(crate::session_defaults::handle))
+        // O que já foi visto do tour do nativo: só o dono, nunca repassado (o Python não tem a rota).
+        .route("/api/tour-progress", axum::routing::get(crate::tour_progress::handle).put(crate::tour_progress::handle))
+        // Sugestão de nome da sessão genérica: só o dono, nunca repassada (o Python não tem a rota).
+        .route("/api/sessions/{name}/rename-suggestion", axum::routing::post(crate::dictation::rename_suggestion::route).delete(crate::dictation::rename_suggestion::route))
+        // Ocultar da lista: só o dono, nunca repassada (o Python não tem a rota).
+        .route("/api/sessions/{name}/hidden", axum::routing::put(crate::session_visibility::route).delete(crate::session_visibility::route))
+        .route("/api/session-auto-hide", axum::routing::get(crate::session_visibility::auto::route).put(crate::session_visibility::auto::route))
+        .route("/api/tags", axum::routing::get(crate::tags::handle).put(crate::tags::handle))
         .route("/api/push/expo/subscribe", axum::routing::post(crate::push_expo::subscribe))
         .route("/api/push/vapid", get(crate::push::http::route).fallback(pass_any))
         .route("/api/push/settings", get(crate::push::http::route).fallback(pass_any))
@@ -595,12 +701,12 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/presence/heartbeat", axum::routing::post(crate::presence::route).fallback(pass_any))
         .route("/api/jev/aux/cliproxy", get(crate::jev_aux::cliproxy).fallback(pass_any))
         .route("/api/jev/aux/models", axum::routing::post(crate::jev_aux::models).fallback(pass_any))
-        .route("/api/voice", get(crate::voice::routes::ws).fallback(pass_any))
-        .route("/api/voice/settings", get(crate::voice::routes::settings_route).fallback(pass_any))
+        .route("/api/voice", get(crate::voice::routes::ws).options(crate::voice::routes::preflight))
+        .route("/api/voice/settings", get(crate::voice::routes::settings_route).options(crate::voice::routes::preflight))
         // Mesmo caminho: o axum junta o PUT à rota de cima (um repasse só, o dela).
         .route("/api/voice/settings", axum::routing::put(crate::voice::routes::settings_route))
-        .route("/api/voice/memory", get(crate::voice::routes::memory_route).fallback(pass_any))
-        .route("/api/voice/memory/{id}", axum::routing::delete(crate::voice::routes::memory_route).fallback(pass_any))
+        .route("/api/voice/memory", get(crate::voice::routes::memory_route).options(crate::voice::routes::preflight))
+        .route("/api/voice/memory/{id}", axum::routing::delete(crate::voice::routes::memory_route).options(crate::voice::routes::preflight))
         // Grupos (`/pair`, `/group-message`, `/pair/contract`, `/pair-remote`, `/unpair-remote`).
         .merge(crate::groups::routes::router())
         // Planos e catálogo de plugins e skills: o dono no Rust; o resto segue ao Python.
@@ -608,6 +714,21 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/claude/customizations", get(crate::claude_customizations::catalog_route).fallback(pass_any))
         // Senha do chaveiro: só o dono, nunca repassada; só o preflight do CORS vai ao Python.
         .route("/api/keyring/unlock", axum::routing::post(crate::keyring::unlock_route).options(pass_any))
+        // Cofre de senhas: só o dono, nunca repassado; só o preflight do CORS vai ao Python.
+        .route("/api/vault/status", get(crate::vault::http::status).options(pass_any))
+        .route("/api/vault/config", axum::routing::put(crate::vault::http::config).options(pass_any))
+        .route("/api/vault/entries", get(crate::vault::http::entries).post(crate::vault::http::entries).options(pass_any))
+        .route("/api/vault/entries/{id}", axum::routing::patch(crate::vault::http::entry).delete(crate::vault::http::entry).options(pass_any))
+        .route("/api/vault/entries/{id}/password", get(crate::vault::http::password).options(pass_any))
+        .route("/api/vault/use", axum::routing::post(crate::vault::http::use_entry).options(pass_any))
+        .route("/api/vault/ask-entry", axum::routing::post(crate::vault::http::ask_entry).options(pass_any))
+        .route("/api/vault/requests/{id}", axum::routing::post(crate::vault::http::request).delete(crate::vault::http::request).options(pass_any))
+        .route("/api/vault/requests/{id}/wait", get(crate::vault::http::wait).options(pass_any))
+        .route("/api/vault/recovery", axum::routing::post(crate::vault::http::recovery).options(pass_any))
+        .route("/api/vault/restore", axum::routing::post(crate::vault::http::restore).options(pass_any))
+        .route("/api/vault/backup/{server_id}", get(crate::vault::http::backup_copy).put(crate::vault::http::backup_copy).options(pass_any))
+        // Relatório de diagnóstico: só o dono, nunca repassado; só o preflight do CORS vai ao Python.
+        .route("/api/diag/report", axum::routing::post(crate::diag_report::report_route).options(pass_any))
         // SideStore no iPhone/iPad do cabo: só o dono, nunca repassado (a senha da Apple ID não vai ao Python).
         .route("/api/device-install/devices", get(crate::device_install::routes::devices))
         .route("/api/device-install/progress", get(crate::device_install::routes::progress))
@@ -617,16 +738,23 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/device-install/certs", axum::routing::post(crate::device_install::routes::certs))
         // Tela web ligada ou não: só o dono, nunca repassado.
         .route("/api/web-ui", get(crate::ui::setting).put(crate::ui::setting))
+        // Consentimento do relatório automático da atualização: só o dono, nunca repassado.
+        .route("/api/auto-report", get(crate::diag_report::auto::setting).put(crate::diag_report::auto::setting))
         // Atualização: o Rust atende o dono na máquina migrada; o resto segue ao motor `git` do Python.
         .route("/api/atualizacao", get(crate::update::http::status).fallback(pass_any))
         .route("/api/atualizacao/iniciar", axum::routing::post(crate::update::http::start).fallback(pass_any))
         .route("/api/atualizacao/reiniciar", axum::routing::post(crate::update::http::restart).fallback(pass_any))
         .route("/api/atualizacao/dev-mode", axum::routing::post(crate::update::http::switch_dev_mode).fallback(pass_any))
+        // Aviso importante aceito na tela: só do dono, em todo modo, nunca repassado.
+        .route("/api/update/accept", axum::routing::post(crate::update::http::accept))
+        // Canal de testes: no pacote é do Rust (`latest` ou `beta`); no git, a branch do Python.
+        .route("/api/update-channel", get(crate::update::http::channel_read).put(crate::update::http::channel_write).fallback(pass_any))
         // A tela web é servida aqui; o que não é dela segue ao Python.
         .fallback(crate::ui::fallback)
         .layer(axum::middleware::from_fn(crate::migration_status::count_public))
         .with_state(state.clone())
         .merge(owner_share_router(&state, pair))
+        .layer(axum::middleware::from_fn(request_auth))
 }
 
 /// A ponte do plugin do Claude (`plugin::routes`) é do Rust inteira; a interface dos mods também.
@@ -648,6 +776,7 @@ fn plugin_router(state: Arc<AppState>) -> Router {
     // A ponte local não expõe o restante da API nem dá acesso às rotas privadas.
     plugin_routes(&state).fallback(|| async { StatusCode::NOT_FOUND })
         .layer(axum::middleware::from_fn(crate::migration_status::count_public))
+        .layer(axum::middleware::from_fn(request_auth))
         .with_state(state)
 }
 
@@ -677,8 +806,8 @@ async fn health(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response
 
 /// `GET /api/client-api`: só o dono.
 async fn client_api(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (fwd, owner) = gate(&st, peer, &req);
-    let mut resp = if owner { client_api_reply() } else { crate::share_reach::unauthorized(&st, &fwd.client_ip) };
+    let (fwd, owner) = match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
+    let mut resp = if owner { client_api_reply() } else { crate::share_reach::unauthorized(&st, &fwd.client_ip).await };
     cors(req.headers(), resp.headers_mut());
     resp
 }
@@ -688,23 +817,56 @@ pub(crate) fn client_api_reply() -> Response {
 }
 
 /// Quem pede e se é o dono, resolvidos uma vez por pedido.
-pub(crate) fn gate(st: &AppState, peer: SocketAddr, req: &Request) -> (Forward, bool) {
+#[derive(Clone, Default)]
+struct RequestAuth(Arc<tokio::sync::Mutex<Option<(auth::ReceiptContext, Option<String>)>>>);
+
+async fn request_auth(mut req: Request, next: axum::middleware::Next) -> Response {
+    req.extensions_mut().insert(RequestAuth::default());
+    // Cliente nenhum escolhe uma admissão anterior.
+    req.headers_mut().remove("x-hangar-auth-receipt");
+    req.headers_mut().remove(crate::proxy::AUTH_EMPTY_QUERY);
+    next.run(req).await
+}
+
+pub(crate) fn gate(st: &AppState, peer: SocketAddr, req: &Request)
+    -> impl std::future::Future<Output = Result<(Forward, bool), auth::AuthError>> + Send + use<> {
     let (client_ip, https) = st.cfg.trusted.resolve(peer.ip(), req.headers());
     // A ponte privada do Codex com terminal recebe o pedido já autenticado pela porta do Python.
-    if req.extensions().get::<crate::session_write::bridge::BridgedOwner>().is_some() { return (Forward { client_ip, https, guest: None }, true); }
+    let bridged = req.extensions().get::<crate::session_write::bridge::BridgedOwner>().is_some();
     let token = auth::presented_token(req.headers(), req.uri().query(), req.method(), https);
-    let owner = st.auth.is_owner(&client_ip, token.as_deref());
-    (Forward { client_ip, https, guest: None }, owner)
+    let source = if req.headers().get(header::AUTHORIZATION).is_some_and(|v| v.as_bytes().starts_with(b"Bearer ")) { "bearer" }
+        else if auth::query_param(req.uri().query(), "token").is_some_and(|t| !t.is_empty()) { "query" }
+        else if token.is_some() { "cookie" } else { "ausente" };
+    let context = auth::ReceiptContext { connection_kind: "private_upstream".into(), profile: auth::Profile::LegacyOwnerProbe,
+        origin: client_ip.clone(), method: req.method().as_str().into(),
+        raw_target: req.uri().path_and_query().map_or("/", |p| p.as_str()).into(),
+        credential_source: source.into(), presented_token: token.clone() };
+    let request_auth = req.extensions().get::<RequestAuth>().cloned().unwrap_or_default();
+    let auth = st.auth.clone();
+    async move {
+    if bridged { return Ok((Forward { client_ip, https, guest: None, auth_receipt: None }, true)); }
+    let mut admitted = request_auth.0.lock().await;
+    if let Some((_, receipt)) = admitted.as_ref().filter(|(previous, _)| *previous == context) {
+        return Ok((Forward { client_ip, https, guest: None, auth_receipt: receipt.clone() }, true));
+    }
+    let owner = auth.owner(&client_ip, token.as_deref()).await?;
+    let receipt = if owner { auth.receipt(&context).await? } else { None };
+    if owner { *admitted = Some((context, receipt.clone())); }
+    Ok((Forward { client_ip, https, guest: None, auth_receipt: receipt }, owner))
+    }
 }
 
 /// Quem pede. Na 8766 só o convidado que o porteiro pôs (nunca `is_owner`, nem `X-Forwarded-For`);
 /// na 8765, o dono pelo token.
-pub(crate) fn who(st: &AppState, peer: SocketAddr, req: &Request) -> (Forward, Option<Caller>) {
-    if on_guest_port(req) {
-        return (forward_for(st, peer, req), caller(req).cloned());
+pub(crate) fn who(st: &AppState, peer: SocketAddr, req: &Request)
+    -> impl std::future::Future<Output = Result<(Forward, Option<Caller>), auth::AuthError>> + Send + use<> {
+    let guest = on_guest_port(req).then(|| (forward_for(st, peer, req), caller(req).cloned()));
+    let owner = gate(st, peer, req);
+    async move {
+    if let Some(guest) = guest { return Ok(guest); }
+    let (fwd, owner) = owner.await?;
+    Ok((fwd, owner.then_some(Caller::Owner)))
     }
-    let (fwd, owner) = gate(st, peer, req);
-    (fwd, owner.then_some(Caller::Owner))
 }
 
 /// O repasse de quem pede, sem decidir se é o dono. Convidado vai como loopback para o Python
@@ -713,10 +875,10 @@ pub(crate) fn forward_for(st: &AppState, peer: SocketAddr, req: &Request) -> For
     if on_guest_port(req) {
         let guest = caller(req).and_then(Caller::grant).cloned();
         let client_ip = if guest.is_some() { "127.0.0.1".into() } else { peer.ip().to_string() };
-        return Forward { client_ip, https: false, guest };
+        return Forward { client_ip, https: false, guest, auth_receipt: None };
     }
     let (client_ip, https) = st.cfg.trusted.resolve(peer.ip(), req.headers());
-    Forward { client_ip, https, guest: None }
+    Forward { client_ip, https, guest: None, auth_receipt: None }
 }
 
 /// Chegou pela 8766: o `GuestConn` só existe no listener do convidado.
@@ -746,25 +908,70 @@ pub(crate) async fn pass(st: &AppState, mut req: Request, fwd: &Forward) -> Resp
     if on_guest_port(&req) {
         return not_found(req.headers());
     }
+    let cached = req.extensions().get::<RequestAuth>().cloned();
+    let mut admitted_forward = fwd.clone();
+    if admitted_forward.auth_receipt.is_none() {
+        if let Some(cached) = cached {
+            admitted_forward.auth_receipt = cached.0.lock().await.as_ref().and_then(|(_, receipt)| receipt.clone());
+        }
+    }
     let upgrade = req.headers().contains_key(header::UPGRADE);
-    let mut resp = proxy::forward(&st.http, st.cfg.upstream, req, fwd).await;
+    let configuration = req.uri().path() == "/api/config"
+        && matches!(*req.method(), Method::GET | Method::POST | Method::PATCH);
+    if configuration { req.headers_mut().remove(header::ACCEPT_ENCODING); }
+    let mut resp = proxy::forward(&st.http, st.cfg.upstream, req, &admitted_forward).await;
+    if configuration { resp = crate::speech::configuration_reply(st, resp).await; }
     resp.extensions_mut().insert(crate::migration_status::Forwarded);
-    match resp.status() {
-        StatusCode::UNAUTHORIZED => st.auth.record_fail(&fwd.client_ip),
+    if !st.auth.shared() { match resp.status() {
+        StatusCode::UNAUTHORIZED => if let Err(e) = st.auth.record_failure(&fwd.client_ip).await { return auth::unavailable(e); },
         // WebSocket recusado antes do aceite chega como 403 e o Python já contou a falha.
         // Um 403 de origem também conta: só desliga o atalho, o lado seguro.
-        StatusCode::FORBIDDEN if upgrade => st.auth.record_fail(&fwd.client_ip),
-        StatusCode::TOO_MANY_REQUESTS => st.auth.mark_blocked(&fwd.client_ip),
+        StatusCode::FORBIDDEN if upgrade => if let Err(e) = st.auth.record_failure(&fwd.client_ip).await { return auth::unavailable(e); },
+        StatusCode::TOO_MANY_REQUESTS => if let Err(e) = st.auth.mark_blocked_async(&fwd.client_ip).await { return auth::unavailable(e); },
         _ => {}
-    }
+    } }
     resp
 }
 
 pub(crate) async fn pass_any(
     State(st): State<Arc<AppState>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    req: Request,
+    mut req: Request,
 ) -> Response {
+    if crate::speech::http::matches(req.method(), req.uri().path()) {
+        return crate::speech::http::public(st, peer, req).await;
+    }
+    if crate::dictation::http::matches(req.method(), req.uri().path()) {
+        return crate::dictation::http::public(st, peer, req).await;
+    }
+    if crate::provider_models::inbox_http_request(req.method(), req.uri().path(), req.headers()) {
+        return crate::session_write::json_response(StatusCode::NOT_FOUND, serde_json::json!({"detail":"Not Found"}));
+    }
+    if let Some(mut response) = crate::provider_info::wrong_method(req.method(), req.uri().path(), req.uri().query()) {
+        cors(req.headers(), response.headers_mut());
+        return response;
+    }
+    let models = crate::provider_models::matches(req.method(), req.uri().path())
+        || crate::provider_models::catalog_request(req.method(), req.uri().path(), req.uri().query());
+    let orchestration = crate::orchestration::matches(req.method(), req.uri().path());
+    let sync = crate::omp_sync::matches(req.method(), req.uri().path());
+    if models || orchestration || sync {
+        let (forward, caller) = match who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
+        let allowed = matches!(&caller, Some(Caller::Owner)) || (models && req.extensions().get::<SessionPath>()
+            .is_some_and(|path| caller.as_ref().is_some_and(|who| who.can(&path.session, req.method()))));
+        if !allowed {
+            return if caller.is_some() { StatusCode::FORBIDDEN.into_response() }
+                else { crate::share_reach::unauthorized(&st, &forward.client_ip).await };
+        }
+        req.extensions_mut().insert(ConnectInfo(peer));
+        let headers = req.headers().clone();
+        let mut response = if models { crate::provider_models::serve(&st, req).await }
+            else if orchestration { crate::orchestration::serve(&st, req).await }
+            else if let Some(service) = st.omp_sync.get() { crate::omp_sync::serve(&st, service, req).await }
+            else { crate::session_write::json_response(StatusCode::SERVICE_UNAVAILABLE, serde_json::json!({"code":"omp_sync_unavailable"})) };
+        cors(&headers, response.headers_mut());
+        return response;
+    }
     // Anexos e contas do dono são do Rust; o anexo também do convidado da sessão (o porteiro já
     // limitou ao nível: par só baixa um arquivo).
     let uploads = crate::uploads::http::matches(req.method(), req.uri().path());
@@ -772,7 +979,7 @@ pub(crate) async fn pass_any(
     let (session, method) = (req.extensions().get::<SessionPath>().map(|p| p.session.clone()), req.method().clone());
     let session_ok = |who: &Option<Caller>| who.as_ref().is_some_and(|c| session.as_ref().is_some_and(|s| c.can(s, &method)));
     if (uploads || crate::accounts::http::matches(req.method(), req.uri().path()))
-        && match who(&st, peer, &req).1 {
+        && match (match who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) }).1 {
             Some(Caller::Owner) => true,
             guest => uploads && session_ok(&guest),
         }
@@ -796,18 +1003,18 @@ pub(crate) async fn pass_any(
         return response;
     }
     if crate::share_reach::matches(req.method(), req.uri().path()) && !on_guest_port(&req) {
-        let (forward, owner) = gate(&st, peer, &req);
+        let (forward, owner) = match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
         let headers = req.headers().clone();
         let mut response = if owner {
             crate::share_reach::public(st, req).await
         } else {
-            crate::share_reach::unauthorized(&st, &forward.client_ip)
+            crate::share_reach::unauthorized(&st, &forward.client_ip).await
         };
         cors(&headers, response.headers_mut());
         return response;
     }
     if crate::worktree_routes::matches(req.method(), req.uri().path()) {
-        let (_forward, who) = who(&st, peer, &req);
+        let (_forward, who) = match who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
         // Convidado segue ao Python, que o recusa como antes.
         if matches!(who, Some(Caller::Owner)) {
             let headers = req.headers().clone();
@@ -821,7 +1028,7 @@ pub(crate) async fn pass_any(
         }
     }
     if crate::workspace_routes::matches(req.method(), req.uri().path()) {
-        let (forward, who) = who(&st, peer, &req);
+        let (forward, who) = match who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
         // Só o convite (não o par) alcança as rotas da sessão dele; `/api/fs/*` não tem sessão.
         let share = who.as_ref().and_then(Caller::grant).zip(session.as_ref())
             .is_some_and(|(g, s)| g.sessions.get(s) == Some(&crate::share::store::Kind::Share));
@@ -854,13 +1061,13 @@ pub(crate) fn diag_req(req: &Request) -> String {
         .unwrap_or_default()
 }
 
-async fn history(
+pub(crate) async fn history(
     State(st): State<Arc<AppState>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     path: Result<Path<String>, PathRejection>,
     req: Request,
 ) -> Response {
-    let (fwd, who) = who(&st, peer, &req);
+    let (fwd, who) = match who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     let name = match path {
         Ok(Path(n)) if req.method() == Method::GET && who.as_ref().is_some_and(|c| c.can(&n, req.method())) => n,
         _ => return pass(&st, req, &fwd).await,
@@ -872,6 +1079,9 @@ async fn history(
             Ok(n) if n > 0 => usize::try_from(n).ok(),
             Ok(_) => None,
             // Texto ou vazio fica com o FastAPI e o 422 dele.
+            Err(_) if req.extensions().get::<crate::forwarded::ReadGuest>().is_some() => return crate::session_write::json_response(
+                StatusCode::UNPROCESSABLE_ENTITY, serde_json::json!({"detail":[{"type":"int_parsing","loc":["query","limit"],
+                "msg":"Input should be a valid integer, unable to parse string as an integer","input":v}]})),
             Err(_) => return pass(&st, req, &fwd).await,
         },
     };
@@ -901,7 +1111,7 @@ async fn history(
         }
         let before = SKIPPED_LINES.load(Ordering::Relaxed);
         // Já vem com o corte `evs[-limit:]` da rota (Task 9).
-        let evs = merged_history(&hreq)?;
+        let evs = merged_history_with_notices(&hreq)?;
         tail::log_skipped(&log_name, before);
         Ok((etag, Some(serde_json::to_vec(&evs)?)))
     })
@@ -935,21 +1145,28 @@ async fn history(
     resp
 }
 
-async fn events(
+pub(crate) async fn events(
     State(st): State<Arc<AppState>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     path: Result<Path<String>, PathRejection>,
     req: Request,
 ) -> Response {
-    let (fwd, who) = who(&st, peer, &req);
+    let (fwd, who) = match who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     let name = match path {
         Ok(Path(n)) if req.method() == Method::GET && who.as_ref().is_some_and(|c| c.can(&n, req.method())) => n,
         _ => return pass(&st, req, &fwd).await,
     };
     // Convidado não recebe aviso de mod nem pedido de navegador, e não conta como app do dono.
-    let guest = matches!(who, Some(Caller::Guest(_)));
-    let Ok(info) = st.info(&name).await else {
-        return route_failed(&st, req.headers(), "rust.events_failed", &name, "internal_info", INFO_REASON);
+    let guest = matches!(who, Some(Caller::Guest(_))) || req.extensions().get::<crate::forwarded::ReadGuest>().is_some_and(|guest| guest.0);
+    let started = std::time::Instant::now();
+    let info = match st.info(&name).await {
+        Ok(info) => info,
+        Err(crate::locate::InfoFailed(cause)) => {
+            // A etapa da descoberta que não respondeu e o tempo: `internal_info` sozinho não diz qual.
+            st.diag.report_with("rust.events_failed", &name, "internal_info", INFO_REASON,
+                serde_json::json!({"etapa": cause, "ms": started.elapsed().as_millis() as u64}));
+            return route_failed(&st, req.headers(), "rust.events_failed", &name, "internal_info", INFO_REASON);
+        }
     };
     // Antes de qualquer repasse: sessão em erro ainda sem transcript também é reaberta.
     if info.is_some() { st.request_reopen(&name); }
@@ -1090,6 +1307,86 @@ mod tests {
     use super::*;
     use std::io::Read;
 
+    #[tokio::test]
+    async fn migrated_provider_routes_authenticate_before_validation_and_never_fall_back() {
+        let state = state_with_upstream().await;
+        let peer = "127.0.0.1:5000".parse().unwrap();
+        for path in ["/api/sessions/demo/pi/model", "/api/sessions/demo/kimi/model", "/api/sessions/demo/orq/papeis"] {
+            for (token, expected) in [("errado", StatusCode::UNAUTHORIZED), ("dono", StatusCode::UNPROCESSABLE_ENTITY)] {
+                let mut req = request(path, "198.51.100.50", false, token);
+                *req.method_mut() = Method::POST;
+                req.headers_mut().insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
+                *req.body_mut() = axum::body::Body::from("[]");
+                let response = pass_any(State(state.clone()), ConnectInfo(peer), req).await;
+                assert_eq!(response.status(), expected, "{path}, token {token}");
+            }
+        }
+        let response = pass_any(State(state.clone()), ConnectInfo(peer), request("/api/omp/plugin-sync", "198.51.100.51", false, "dono")).await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        assert_eq!(serde_json::from_slice::<serde_json::Value>(&body).unwrap(), serde_json::json!({"code":"omp_sync_unavailable"}));
+        for method in [Method::GET, Method::POST, Method::OPTIONS, Method::HEAD] {
+            let mut req = request("/api/pi/inbox", "198.51.100.53", false, "errado");
+            *req.method_mut() = method;
+            let response = pass_any(State(state.clone()), ConnectInfo(peer), req).await;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        }
+    }
+
+    #[tokio::test]
+    async fn migrated_provider_forwarding_checks_the_private_secret_and_preserves_guest_limits() {
+        let state = state_with_upstream().await;
+        let peer = "127.0.0.1:5000".parse().unwrap();
+        for (path, guest, secret, expected) in [
+            ("/api/sessions/demo/pi/model", false, "errado", StatusCode::NOT_FOUND),
+            ("/api/sessions/demo/pi/model", true, "s", StatusCode::UNPROCESSABLE_ENTITY),
+            ("/api/sessions/demo/orq/papeis", true, "s", StatusCode::NOT_FOUND),
+            ("/api/sessions/demo/orq/papeis", false, "s", StatusCode::UNPROCESSABLE_ENTITY),
+        ] {
+            let req = Request::builder().method(Method::POST).uri("/__hangar_server/forwarded")
+                .header("x-hangar-internal", secret).header("x-hangar-path", path)
+                .header("x-hangar-forwarded-guest", if guest { "1" } else { "0" })
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from("[]")).unwrap();
+            let response = crate::forwarded::private(State(state.clone()), ConnectInfo(peer), req).await;
+            assert_eq!(response.status(), expected, "{path}, convidado {guest}, segredo {secret}");
+        }
+    }
+
+    #[tokio::test]
+    async fn orchestration_history_uses_the_same_parser_on_public_and_forwarded_ports() {
+        let dir = tempfile::tempdir().unwrap();
+        let timeline = dir.path().join("timeline.jsonl");
+        let lines = crate::transcript::orq_cases::CASES.iter().map(|(input, _)| format!("{input}\n")).collect::<String>();
+        std::fs::write(&timeline, lines).unwrap();
+        let mut state = Arc::try_unwrap(state_with_upstream().await).ok().unwrap();
+        state.side.locate = Arc::new(crate::locate::Fixed(Some(InternalInfo {
+            provider: "orq".into(), jsonl: Some(timeline), session_key: "run".into(),
+            history: serde_json::Value::Null, headless: false, lifecycle_id: Some("life".into()), cwd: None,
+        })));
+        let state = Arc::new(state);
+        let peer = "127.0.0.1:5000".parse().unwrap();
+        let public = history(State(state.clone()), ConnectInfo(peer), Ok(Path("run-orq".into())),
+            request("/api/sessions/run-orq/history", "198.51.100.52", false, "dono")).await;
+        assert_eq!(public.status(), StatusCode::OK);
+        let expected = axum::body::to_bytes(public.into_body(), 1024 * 1024).await.unwrap();
+        assert!(!serde_json::from_slice::<Vec<serde_json::Value>>(&expected).unwrap().is_empty());
+        for guest in [false, true] {
+            let req = Request::builder().uri("/__hangar_server/forwarded")
+                .header("x-hangar-internal", "s").header("x-hangar-path", "/api/sessions/run-orq/history")
+                .header("x-hangar-forwarded-guest", if guest { "1" } else { "0" })
+                .body(axum::body::Body::empty()).unwrap();
+            let response = crate::forwarded::private(State(state.clone()), ConnectInfo(peer), req).await;
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(axum::body::to_bytes(response.into_body(), 1024 * 1024).await.unwrap(), expected);
+        }
+        let req = Request::builder().uri("/__hangar_server/forwarded?limit=invalido")
+            .header("x-hangar-internal", "s").header("x-hangar-path", "/api/sessions/run-orq/history")
+            .body(axum::body::Body::empty()).unwrap();
+        let response = crate::forwarded::private(State(state), ConnectInfo(peer), req).await;
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
     /// Estado com um Python mínimo: `/ws` recusa com 403, `/limited` responde 429.
     async fn state_with_upstream() -> Arc<AppState> {
         use axum::routing::any;
@@ -1122,15 +1419,14 @@ mod tests {
     }
 
     fn is_owner(st: &AppState, ip: &str) -> bool {
-        let peer: SocketAddr = "127.0.0.1:5000".parse().unwrap();
-        gate(st, peer, &request("/x", ip, false, "dono")).1
+        st.auth.is_owner(ip, Some(b"dono"))
     }
 
     #[tokio::test]
     async fn websocket_403_and_429_from_python_lock_the_shortcut() {
         let st = state_with_upstream().await;
         let peer: SocketAddr = "127.0.0.1:5000".parse().unwrap();
-        let fwd = |ip: &str| gate(&st, peer, &request("/x", ip, false, "x")).0;
+        let fwd = |ip: &str| forward_for(&st, peer, &request("/x", ip, false, "x"));
 
         // 8 palpites errados em WebSocket: o Python conta e fecha com 403.
         for _ in 0..8 {

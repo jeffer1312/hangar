@@ -39,7 +39,10 @@ fn main() {
         return;
     }
     if args.iter().any(|arg| arg == "--exit-failure") {
-        println!("{}", json!({"type":"result","result":"parcial","is_error":false}));
+        println!(
+            "{}",
+            json!({"type":"result","result":"parcial","is_error":false})
+        );
         std::process::exit(3);
     }
     for key in [
@@ -189,6 +192,11 @@ fn main() {
                         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
                         .unwrap_or(Value::Null);
                 if settings["fixture_catalog_stall"] == true {
+                    std::fs::write(
+                        std::path::Path::new(&root).join("fixture-catalog-stalled"),
+                        "ready",
+                    )
+                    .unwrap();
                     loop {
                         std::thread::park();
                     }

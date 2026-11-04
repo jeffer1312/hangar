@@ -1,7 +1,24 @@
 import type { ComponentType } from 'react';
+import { AutoReportAnimation } from './AutoReportAnimation';
+import { CodexActivityAnimation } from './CodexActivityAnimation';
+import { HideFromListAnimation } from './HideFromListAnimation';
+import { ImageRevealAnimation } from './ImageRevealAnimation';
+import { RenameSuggestionAnimation } from './RenameSuggestionAnimation';
+import { SleepHiddenAnimation } from './SleepHiddenAnimation';
+import { TagsPlateAnimation } from './TagsPlateAnimation';
+import { VaultAnimation } from './VaultAnimation';
 
 // Miniaturas feitas dos componentes reais (ex.: src/chat/ComposerField.tsx) entram aqui pelo nome da novidade.
-const animations: Record<string, ComponentType<{ width: number }>> = {};
+const animations: Record<string, ComponentType<{ width: number }>> = {
+  'adormecer-ocultas': SleepHiddenAnimation,
+  'cofre-de-senhas': VaultAnimation,
+  'codex-atividade': CodexActivityAnimation,
+  'etiquetas-maquina-conta': TagsPlateAnimation,
+  'ocultar-da-lista': HideFromListAnimation,
+  'relatorio-automatico': AutoReportAnimation,
+  'revelacao-imagem': ImageRevealAnimation,
+  'sugestao-de-nome': RenameSuggestionAnimation,
+};
 
 export const animationFor = (name: string | null): ComponentType<{ width: number }> | null =>
   name ? animations[name] ?? null : null;

@@ -1,5 +1,6 @@
 import { apiEnv, type EventSourceLike } from './apiEnv';
 import type { Server } from './servers';
+import { isOwnMachine } from './machineImport';
 import { baseOf, decidirRota, rotaDecidida, UNCONFIRMED_BASE } from './rota';
 import type { CodexAccount, CodexIntegracaoEstado, CodexLoginAttempt, CodexResetOutcome, Credencial } from './credenciais';
 import * as m from './paraglide/messages';
@@ -7,12 +8,13 @@ import { localeAtual } from './i18n';
 import { basename } from './format';
 import { mensagemDeErro, formataErro, type EnvelopeErro } from './errosApi';
 // diag NÃO importa api (ele usa `fetch` direto) — é o que mantém esta dependência de mão única.
-import { registrar as registrarDiag, novoReq } from './diag';
+import { registrar as registrarDiag, novoReq, recordFailure, recentFailures, type RecentFailure } from './diag';
 import { dispensaPrazo, retryAfterMs, registrarFalha, registrarSucesso } from './esfriamento';
 import {
   inviteAllows, parsePairLink, SharePrerequisiteError, ShareReachError, tailscaleEnableUrl, type ShareCreated, type ShareInfo, type SharePrereqs,
 } from './share';
 import type { ExternalPair } from './externalPairs';
+import type { TagsChange, TagsDoc } from './tags';
 import type { PairLevel } from './types';
 import type { CotaContaResumo } from './cotaResumo';
 import type { Shortcut, ProjectShortcut, ProjectShortcuts } from './shortcuts';
@@ -22,6 +24,7 @@ import type { ConfigSyncItem, ConfigSyncManifest, ConfigSyncProgress, ConfigSync
 import type {
   Atualizacao,
   AtualizacaoEstado,
+  UpdateMode,
   UpdateNotes,
   MigrationStatus,
   SessionInfo,
@@ -227,8 +230,11 @@ async function ensureOk(res: Response, server?: Server | null): Promise<void> {
 //    retomada de conversa arquivada (é POST, então entra mesmo dando certo).
 const SEGMENTOS_OPACOS = /\/(sessions|servers|agents|archive|claude-configs|projects|codex-contas|conta-estado)\/[^/]+/g;
 
+// Id de entrada da fila; `reorder` é rota fixa e fica.
+const ID_DA_FILA = /\/queue\/(?!reorder(?:\/|$))[^/]+/g;
+
 export function rotaGenerica(path: string): string {
-  return path.split('?')[0].replace(SEGMENTOS_OPACOS, '/$1/*');
+  return path.split('?')[0].replace(SEGMENTOS_OPACOS, '/$1/*').replace(ID_DA_FILA, '/queue/*');
 }
 
 function ehCredencialAtiva(server?: Server | null): boolean {
@@ -336,6 +342,7 @@ async function apiFetchRes(path: string, init?: RequestInit, server?: Server, pr
       if (!poll || !_semRede.has(`${destino}|${rota}`)) {
         registrarDiag({ evento: 'api.sem_rede', nivel: 'erro', ms: Date.now() - t0, req, detalhe: rota,
           codigo: timedOut || (e instanceof Error && e.name === 'TimeoutError') ? 'timeout' : 'rede' }, destino);
+        if (!convite) recordFailure(destino, { ts: Date.now() / 1000, route: rota, status: 0, code: null });
       }
       if (poll) _semRede.add(`${destino}|${rota}`);
       if (typeof e === 'object' && e !== null) _semResposta.add(e);
@@ -350,8 +357,10 @@ async function apiFetchRes(path: string, init?: RequestInit, server?: Server, pr
   // "token a repareamento". O 503 (erro_sessao_indisponivel) é a trava do dono numa troca de modo
   // ou com o tmux mudo, e passa sozinho.
   if (convite && (res.status === 410 || res.status === 401)) apiEnv().onInviteEnded?.(server?.id ?? null);
-  {
-    const rota = `${(init?.method ?? 'GET').toUpperCase()} ${rotaGenerica(path)}`;
+  const metodo = (init?.method ?? 'GET').toUpperCase();
+  // Sem rota esperando a volta da rede, a resposta comum não paga a rota genérica.
+  if (_semRede.size) {
+    const rota = `${metodo} ${rotaGenerica(path)}`;
     if (_semRede.delete(`${destino}|${rota}`)) {
       registrarDiag({ evento: 'api.voltou', nivel: 'ok', ms: Date.now() - t0, req, detalhe: rota }, destino);
     }
@@ -362,19 +371,24 @@ async function apiFetchRes(path: string, init?: RequestInit, server?: Server, pr
   //    responde "o que quebrou", e a pergunta era como o app está sendo usado.
   //  - toda LEITURA que FALHA. O sucesso de GET fica de fora de propósito: o poll da lista e o
   //    histórico dariam milhares de linhas por hora e afogariam o resto.
-  const metodo = (init?.method ?? 'GET').toUpperCase();
   const acao = metodo !== 'GET';
   // 304 não é falha: é a resposta certa pra "o que eu tenho ainda vale". Sem esta exceção, toda
   // entrada em sessão sem novidade viraria uma linha de aviso no diário.
   if (acao || (!res.ok && res.status !== 304)) {
+    const rota = `${metodo} ${rotaGenerica(path)}`;
     // Código estável explica a recusa sem copiar texto livre do servidor; o clone preserva a resposta da tela.
     let motivo = '';
     if (!res.ok) {
+      let code: string | undefined;
       try {
-        const { code } = await lerErro(res.clone());
-        motivo = code && /^[a-z][a-z0-9_]{0,79}$/.test(code) ? code : '';
+        code = (await lerErro(res.clone())).code;
       } catch {
-        motivo = '';
+        code = undefined;
+      }
+      motivo = code && /^[a-z][a-z0-9_]{0,79}$/.test(code) ? code : '';
+      // Convite fica de fora: o relatório é do dono e vai só ao servidor dele.
+      if (!convite) {
+        recordFailure(destino, { ts: Date.now() / 1000, route: rota, status: res.status, code: code ?? null });
       }
     }
     registrarDiag({
@@ -383,7 +397,7 @@ async function apiFetchRes(path: string, init?: RequestInit, server?: Server, pr
       codigo: String(res.status),
       ms: Date.now() - t0,
       req,
-      detalhe: [`${metodo} ${rotaGenerica(path)}`, motivo].filter(Boolean).join(' — '),
+      detalhe: [rota, motivo].filter(Boolean).join(' — '),
     }, destino);
   }
   return res;
@@ -427,7 +441,152 @@ async function apiFetchForServer<T>(s: Server, path: string, init?: RequestInit,
     const { msg, code, envelope } = await lerErro(res);
     throw Object.assign(new Error(`${res.status}: ${msg}`), { status: res.status, code, envelope });
   }
+  // 204 não tem corpo: `res.json()` falharia num pedido que deu certo.
+  if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
+}
+
+/** Rotas do cofre (`passwordVault.ts`): o mesmo pedido de `apiFetchForServer`. */
+export function vaultFetchForServer<T>(s: Server, path: string, init?: RequestInit, prazoMs?: number): Promise<T> {
+  return apiFetchForServer<T>(s, path, init, prazoMs);
+}
+
+export { recentFailures, type RecentFailure };
+
+/** Teto do texto da pessoa no relatório; acima disso o servidor responde 422. */
+export const DIAG_REPORT_TEXT_MAX = 2000;
+
+/** O que a tela diz da falha; só `unsupported` não deixa tentar de novo. */
+/** `expired`: a assinatura do envio venceu; repetir nele não adianta, só um envio novo. */
+/** `ungrouped`: o receptor não juntou a máquina ao código do envio (não assinou o grupo); o servidor dela está
+ *  bem, e um envio novo pode juntar. */
+export type DiagReportFailureKind = 'unsupported' | 'expired' | 'ungrouped' | 'rate_limited' | 'unreachable' | 'failed';
+
+/** A máquina que falhou e que repetir no mesmo envio pode resolver. */
+export const diagReportRetryable = (r: DiagReportResult): boolean =>
+  !r.ok && r.kind !== 'unsupported' && r.kind !== 'expired' && r.kind !== 'ungrouped';
+
+const UNGROUPED = 'diag_report_ungrouped';
+
+export type DiagReportResult =
+  /** `groupToken`: a assinatura que o primeiro relatório recebe para as outras máquinas entrarem no código dele. */
+  | { ok: true; code: string; diary: 'sent' | 'failed'; groupToken?: string }
+  /** `code`: o do servidor (C1), `unsupported` (servidor sem a rota), `network` (sem resposta)
+   *  ou `unexpected` (resposta sem código). `status` 0 = sem resposta. */
+  | { ok: false; code: string; status: number; kind: DiagReportFailureKind };
+
+function diagReportFailure(code: string, status: number): DiagReportResult {
+  const kind: DiagReportFailureKind = code === 'unsupported' ? 'unsupported'
+    : code === 'diag_report_group_unknown' ? 'expired'
+    : code === UNGROUPED ? 'ungrouped'
+    : code === 'diag_report_rate_limited' ? 'rate_limited'
+    : code === 'diag_report_unreachable' || code === 'network' ? 'unreachable'
+    : 'failed';
+  return { ok: false, code, status, kind };
+}
+
+/** Falhas recentes deste servidor, por qualquer endereço pelo qual ele foi alcançado. */
+export function recentFailuresFor(server: Server): RecentFailure[] {
+  return recentFailures(server.baseUrl, server.lan?.url ?? '', server.remote?.url ?? '', baseOf(server));
+}
+
+/** Relatório de diagnóstico ao servidor da tela. Não lança: toda saída vira um `DiagReportResult`. */
+export interface DiagReportGroup { code: string; token: string }
+
+export async function sendDiagReport(server: Server, { text, client, group }: { text?: string; client: string; group?: DiagReportGroup }): Promise<DiagReportResult> {
+  const body = { ...(text?.trim() ? { text } : {}), client, failures: recentFailuresFor(server),
+    ...(group ? { group: group.code, group_token: group.token } : {}) };
+  try {
+    // Pior caso do servidor: montagem (até 50 s), worker (20 s) e diário inteiro (60 s).
+    const res = await apiFetchForServer<{ code?: unknown; diary?: unknown; group?: unknown; group_token?: unknown }>(server, '/api/diag/report',
+      { method: 'POST', body: JSON.stringify(body) }, 150_000);
+    if (typeof res?.code !== 'string') return diagReportFailure('unexpected', 201);
+    // Servidor antigo ignora o grupo e nem devolve o campo; o atual devolve `group: null` quando foi o receptor
+    // que não agrupou. Nos dois o relatório não entrou no código do envio.
+    if (group && res.group !== group.code) return diagReportFailure('group' in res ? UNGROUPED : 'unsupported', 201);
+    return { ok: true, code: res.code, diary: res.diary === 'sent' ? 'sent' : 'failed',
+      ...(typeof res.group_token === 'string' ? { groupToken: res.group_token } : {}) };
+  } catch (e) {
+    const { status, code } = (e ?? {}) as { status?: unknown; code?: unknown };
+    if (typeof status !== 'number') return diagReportFailure('network', 0);
+    if (status === 404) return diagReportFailure('unsupported', status);
+    return diagReportFailure(typeof code === 'string' ? code : 'unexpected', status);
+  }
+}
+
+export interface DiagReportAllResult {
+  /** O código do envio: o da primeira máquina que deu certo; `null` se nenhuma deu. */
+  code: string | null;
+  /** O código e a assinatura do envio, para reenviar depois às que falharam. */
+  group: DiagReportGroup | null;
+  results: { server: Server; result: DiagReportResult }[];
+}
+
+/** Máquinas de "todas as minhas máquinas": as próprias e ligadas, a da tela primeiro (vira o código do envio).
+ *  `guest`: quem chama sabe se o papel na máquina é de convidado. */
+export function diagReportMachines(servers: Server[], current: Server | null, guest: (s: Server) => boolean = () => false): Server[] {
+  const own = servers.filter((s) => isOwnMachine(s) && !s.disabled && !guest(s));
+  return [...own.filter((s) => s.id === current?.id), ...own.filter((s) => s.id !== current?.id)];
+}
+
+export type DiagReportScope = 'all' | 'this' | 'pick';
+
+/** As máquinas que a escolha manda; marcada sem escolha explícita só a da tela. A da tela só vai quando está
+ *  entre as elegíveis (desligada, par ou removida não recebe relatório). */
+export function diagReportTargets(machines: Server[], current: Server | null, scope: DiagReportScope, picked: Record<string, boolean>): Server[] {
+  // Com uma máquina a escolha nem aparece: vale ela, mesmo com "Só esta" guardado de antes.
+  if (machines.length < 2) return machines;
+  if (scope === 'this') return machines.filter((s) => s.id === current?.id);
+  return scope === 'all' ? machines : machines.filter((s) => picked[s.id] ?? s.id === current?.id);
+}
+
+/** Um relatório por máquina, uma por vez: a primeira que dá certo vira o código do envio, e as seguintes levam o
+ *  código e a assinatura dela. Sem assinatura (worker ou servidor antigo) as outras não iriam juntas: ficam de fora
+ *  como sem suporte em vez de virar relatórios avulsos que a tela não mostra. */
+export async function sendDiagReportAll(servers: Server[], input: { text?: string; client: string }, previous?: DiagReportGroup): Promise<DiagReportAllResult> {
+  let code: string | null = previous?.code ?? null;
+  let group: DiagReportGroup | null = previous ?? null;
+  const results: DiagReportAllResult['results'] = [];
+  for (const server of servers) {
+    // Sem assinatura do primeiro, o receptor não juntaria as outras: o servidor delas não tem culpa.
+    const result = code !== null && group === null ? diagReportFailure(UNGROUPED, 0)
+      : await sendDiagReport(server, { ...input, ...(group ? { group } : {}) });
+    if (result.ok && code === null) {
+      code = result.code;
+      group = result.groupToken ? { code, token: result.groupToken } : null;
+    }
+    results.push({ server, result });
+  }
+  return { code, group, results };
+}
+
+/** O que o botão do relatório faz agora: `send` (envio novo pela escolha de agora), `resend` (só às que falharam
+ *  e podem ir, no mesmo envio) ou `none` (nada a mandar). */
+export function diagReportNext(previous: DiagReportAllResult | null, targets: Server[]): 'send' | 'resend' | 'none' {
+  if (!targets.length) return 'none';
+  if (!previous) return 'send';
+  const sent = new Set(previous.results.map((r) => r.server.id));
+  // A escolha mudou depois do envio: repetir mandaria só às antigas.
+  if (targets.length !== sent.size || targets.some((t) => !sent.has(t.id))) return 'send';
+  const missed = previous.results.filter((r) => !r.result.ok);
+  // Com código e sem assinatura, as que faltam não entram nele; outro envio também não as juntaria (o receptor
+  // sem assinatura é permanente) e só subiria outro relatório do mesmo aparelho.
+  if (missed.some((r) => diagReportRetryable(r.result))) return previous.code !== null && previous.group === null ? 'none' : 'resend';
+  // Expirado: repetir no mesmo envio não adianta, um envio novo junta.
+  return missed.some((r) => !r.result.ok && r.result.kind === 'expired') ? 'send' : 'none';
+}
+
+/** Reenvia só às máquinas que falharam num envio, no mesmo código, e junta ao resultado dele. */
+export async function resendDiagReportMissed(previous: DiagReportAllResult, input: { text?: string; client: string }): Promise<DiagReportAllResult> {
+  // Envio com código e sem assinatura: as que faltam iriam avulsas, fora do código que a tela mostra.
+  if (previous.code !== null && previous.group === null) {
+    return { ...previous, results: previous.results.map((r) => diagReportRetryable(r.result) ? { server: r.server, result: diagReportFailure(UNGROUPED, 0) } : r) };
+  }
+  const missed = previous.results.filter((r) => diagReportRetryable(r.result)).map((r) => r.server);
+  const again = await sendDiagReportAll(missed, input, previous.group ?? undefined);
+  const resent = new Set(missed.map((s) => s.id));
+  return { code: previous.code ?? again.code, group: previous.group ?? again.group,
+    results: [...previous.results.filter((r) => !resent.has(r.server.id)), ...again.results] };
 }
 
 export function getSessions(server?: Server | null, init?: RequestInit): Promise<SessionInfo[]> {
@@ -841,6 +1000,166 @@ export function uniqueSessionName(base: string, taken: Set<string>): string {
   return `${clean}-${i}`;
 }
 
+/** Nome que o Hangar inventou a partir da pasta (`uniqueSessionName`): só filtra chamadas, quem
+ *  decide é o servidor (409 `erro_nome_nao_generico`). */
+export function looksGenericName(name: string, cwd: string | null | undefined): boolean {
+  const stem = name.replace(/-\d{1,7}$/, '');
+  return [name, stem].some((n) => n === 'sessao' || (!!cwd && n === (sanitizeSessionName(basename(cwd)) || 'sessao')));
+}
+
+const renameSuggestionPath = (name: string) => `/api/sessions/${encodeURIComponent(name)}/rename-suggestion`;
+
+/** Nome sugerido e se o modelo achou a conversa curta demais para acertar (`weak`). */
+export interface RenameSuggestionResult { suggestion: string; weak: boolean }
+
+/** Pede o nome sugerido para a sessão genérica. O pedido automático nunca lança: sem sugestão (204),
+ *  nome escolhido (409), servidor antigo (404) ou falha dão `null`, e a tela não avisa nada. `again`
+ *  é o "Outra", um clique: a falha lança com o motivo do servidor. */
+export async function requestRenameSuggestion(server: Server, name: string, again = false): Promise<RenameSuggestionResult | null> {
+  // O servidor espera o executor do ditado (até 60 s).
+  const ask = async () => {
+    const path = renameSuggestionPath(name) + (again ? '?again=1' : '');
+    const res = await apiFetchRes(path, { method: 'POST', signal: AbortSignal.timeout(75_000) }, server);
+    if (again) await ensureOk(res, server);
+    if (res.status !== 200) return null;
+    const body = await res.json() as { suggestion?: unknown; weak?: unknown };
+    return typeof body.suggestion === 'string' && body.suggestion ? { suggestion: body.suggestion, weak: body.weak === true } : null;
+  };
+  if (again) return ask();
+  try {
+    return await ask();
+  } catch {
+    return null;
+  }
+}
+
+// Quantas mensagens a pessoa tinha no último pedido, por sessão e por vida do cliente: o executor é
+// caro e a resposta fica guardada no spec. Só a fraca volta a ser pedida, com mensagem nova depois dela.
+const renameSuggestionAsked = new Map<string, number>();
+
+/** Gatilho da faixa "Renomear para X?" ao abrir a conversa e, com sugestão fraca, a cada mensagem
+ *  da pessoa (`userMessages` conta as dela); `null` = não pediu. */
+export function requestRenameSuggestionOnce(server: Server, row: SessionInfo, userMessages: number): Promise<RenameSuggestionResult | null> | null {
+  // A conversa entra na chave: outra sessão aberta depois com o mesmo nome não herda o pedido.
+  const key = `${server.id}::${row.name}::${row.jsonl ?? ''}`;
+  const last = renameSuggestionAsked.get(key);
+  if (server.invite || userMessages === 0 || (row.rename_suggestion && !row.rename_weak) || !looksGenericName(row.name, row.cwd)) return null;
+  if (last !== undefined && (!row.rename_weak || userMessages <= last)) return null;
+  renameSuggestionAsked.set(key, userMessages);
+  return requestRenameSuggestion(server, row.name);
+}
+
+/** "Agora não": o servidor guarda a recusa e a linha da lista deixa de trazer a sugestão. */
+export async function dismissRenameSuggestion(server: Server, name: string): Promise<void> {
+  const res = await apiFetchRes(renameSuggestionPath(name), { method: 'DELETE', signal: AbortSignal.timeout(8000) }, server);
+  await ensureOk(res, server);
+}
+
+const hiddenPath = (name: string) => `/api/sessions/${encodeURIComponent(name)}/hidden`;
+
+// Servidor sem as rotas de ocultar responde 404 sem código (mesma regra do nativo); 404 com código
+// (`erro_sessao_inexistente`) mantém a própria frase.
+async function ensureVisibilityOk(res: Response, server: Server): Promise<void> {
+  try {
+    await ensureOk(res, server);
+  } catch (e) {
+    const { status, code } = e as { status?: number; code?: string };
+    if (status === 404 && !code) {
+      throw Object.assign(new Error(m.session_visibility_server_outdated()), { status: 404, code: 'session_visibility_server_outdated' });
+    }
+    throw e;
+  }
+}
+
+/** "Ocultar da lista": a marca fica no servidor da sessão e vale em todos os aparelhos. */
+export async function hideSession(server: Server, name: string): Promise<void> {
+  const res = await apiFetchRes(hiddenPath(name), { method: 'PUT', signal: AbortSignal.timeout(8000) }, server);
+  await ensureVisibilityOk(res, server);
+}
+
+/** "Mostrar na lista": tira a marca e recomeça o prazo da ocultação automática. */
+export async function showSession(server: Server, name: string): Promise<void> {
+  const res = await apiFetchRes(hiddenPath(name), { method: 'DELETE', signal: AbortSignal.timeout(8000) }, server);
+  await ensureVisibilityOk(res, server);
+}
+
+/** Ocultação automática de um servidor. */
+export interface SleepConfig { enabled: boolean; after_minutes: number }
+// `sleep` só vem de servidor com o adormecer; o antigo recusa o campo (422).
+export interface AutoHideConfig { enabled: boolean; after_minutes: number; sleep?: SleepConfig }
+
+export async function getAutoHide(server: Server): Promise<AutoHideConfig> {
+  const res = await apiFetchRes('/api/session-auto-hide', { signal: AbortSignal.timeout(8000) }, server);
+  await ensureVisibilityOk(res, server);
+  return res.json() as Promise<AutoHideConfig>;
+}
+
+/** Grava e devolve o valor que o servidor guardou. */
+export async function saveAutoHide(server: Server, cfg: AutoHideConfig): Promise<AutoHideConfig> {
+  const res = await apiFetchRes('/api/session-auto-hide', {
+    method: 'PUT',
+    body: JSON.stringify({ enabled: cfg.enabled, after_minutes: cfg.after_minutes, ...(cfg.sleep ? { sleep: cfg.sleep } : {}) }),
+    signal: AbortSignal.timeout(8000),
+  }, server);
+  await ensureVisibilityOk(res, server);
+  return res.json() as Promise<AutoHideConfig>;
+}
+
+/** Resultado de uma máquina; `error` é a frase pronta para a tela. */
+export interface AutoHideResult { serverId: string; ok: boolean; config?: AutoHideConfig; error?: string }
+
+// Todas em paralelo: a máquina que falha não impede as outras.
+function autoHidePerServer(servers: readonly Server[], fn: (server: Server) => Promise<AutoHideConfig>): Promise<AutoHideResult[]> {
+  return Promise.all(servers.map(async (server): Promise<AutoHideResult> => {
+    try {
+      return { serverId: server.id, ok: true, config: await fn(server) };
+    } catch (e) {
+      return { serverId: server.id, ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }));
+}
+
+/** Lê a configuração de cada servidor; quem chama passa as máquinas próprias (`ownUpdatableServers`). */
+export function readAutoHideAll(servers: readonly Server[]): Promise<AutoHideResult[]> {
+  return autoHidePerServer(servers, getAutoHide);
+}
+
+/** Grava a mesma configuração em cada servidor e devolve o resultado de cada um.
+ *  `sleepServers`: ids que trouxeram `sleep` na leitura; só esses recebem o campo. */
+export function saveAutoHideAll(servers: readonly Server[], cfg: AutoHideConfig, sleepServers: ReadonlySet<string> = new Set()): Promise<AutoHideResult[]> {
+  const { sleep: _sleep, ...plain } = cfg;
+  return autoHidePerServer(servers, (server) => saveAutoHide(server, sleepServers.has(server.id) ? cfg : plain));
+}
+
+// Mais comum; no empate, o que veio primeiro.
+function mostCommon(keys: string[]): string | null {
+  const counts = new Map<string, number>();
+  for (const k of keys) counts.set(k, (counts.get(k) ?? 0) + 1);
+  let best: string | null = null;
+  for (const [k, n] of counts) if (best === null || n > counts.get(best)!) best = k;
+  return best;
+}
+const sleepKey = (s: SleepConfig) => `${s.enabled}:${s.after_minutes}`;
+
+/** Adormecer mais comum entre as leituras boas que o trazem; `undefined` se nenhuma o trouxe. */
+export function autoHideSleepReference(results: readonly AutoHideResult[]): SleepConfig | undefined {
+  const sleeps = results.flatMap((r) => (r.ok && r.config?.sleep ? [r.config.sleep] : []));
+  const best = mostCommon(sleeps.map(sleepKey));
+  return sleeps.find((s) => sleepKey(s) === best);
+}
+
+/** Servidores que responderam com configuração diferente da mais comum entre as respostas boas
+ *  (empate: a que veio primeiro). Falha de leitura não entra: as telas a mostram como erro.
+ *  Servidor sem adormecer não difere por isso. Sem nenhuma resposta boa, lista vazia. */
+export function autoHideDiverges(results: readonly AutoHideResult[]): string[] {
+  const keyOf = (c: AutoHideConfig) => `${c.enabled}:${c.after_minutes}`;
+  const majority = mostCommon(results.flatMap((r) => (r.ok && r.config ? [keyOf(r.config)] : [])));
+  const sleepRef = autoHideSleepReference(results);
+  return results.filter((r) => r.ok && r.config
+    && (keyOf(r.config) !== majority || (r.config.sleep && sleepRef && sleepKey(r.config.sleep) !== sleepKey(sleepRef))))
+    .map((r) => r.serverId);
+}
+
 // Abrir ou retomar sessão leva bem mais que o prazo padrão: estourar antes faz a tela acusar erro
 // com a sessão nascendo e o reenvio duplicá-la.
 const SESSION_BIRTH_MS = 120_000;
@@ -875,6 +1194,26 @@ export async function getSessionDefaultsForServer(server: Server, provider: Prov
   const result = await apiFetchForServer<{ defaults: SessionDefaults | null }>(server,
     `/api/session-defaults?${query}`, { signal: comTeto(signal, 8000) });
   return result.defaults;
+}
+
+// 404 = servidor antigo, sem a rota: `null`, sem erro na tela.
+async function nullOn404<T>(request: Promise<T>): Promise<T | null> {
+  try {
+    return await request;
+  } catch (e) {
+    if ((e as { status?: number }).status === 404) return null;
+    throw e;
+  }
+}
+
+/** Etiquetas da máquina e das contas; `null` = servidor antigo. */
+export function getTagsForServer(server: Server): Promise<TagsDoc | null> {
+  return nullOn404(apiFetchForServer<TagsDoc>(server, '/api/tags'));
+}
+
+/** Devolve o documento inteiro já gravado; `null` = servidor antigo. */
+export function putTagsForServer(server: Server, change: TagsChange): Promise<TagsDoc | null> {
+  return nullOn404(apiFetchForServer<TagsDoc>(server, '/api/tags', { method: 'PUT', body: JSON.stringify(change) }));
 }
 
 // A senha só viaja no corpo, nunca na URL. Prazo largo: o servidor pode reiniciar o daemon do chaveiro.
@@ -1283,6 +1622,9 @@ export interface WorktreeStatus {
   main_branch: string | null;   // branch da pasta principal, onde as conversas retomam
   merged: boolean; ahead: number; dirty: number; ignored: string[]; sessions: string[]; closed: number;
   degraded?: boolean;   // leitura do git falhou: dirty/ignored podem estar zerados sem ser verdade
+  residual?: boolean;
+  residual_files?: string[];
+  residual_entries?: number | null;
   behind?: number;      // commits novos na base que a branch ainda não tem
   dirty_files?: { code: string; path: string }[];
   last_commit?: WorktreeCommit | null;
@@ -1297,12 +1639,13 @@ export interface WorktreeStatus {
 export interface WorktreeCommit { sha: string; subject: string; at: number }
 export interface WorktreeRepo { repo: string; worktrees: WorktreeStatus[] }
 
-export type WorktreeState = 'gone' | 'session' | 'dirty' | 'merged' | 'detached' | 'active';
+export type WorktreeState = 'gone' | 'session' | 'residual' | 'dirty' | 'merged' | 'detached' | 'active';
 
 /** Um estado só por worktree, na ordem do que mais importa antes de apagar. */
 export function worktreeState(w: WorktreeStatus): WorktreeState {
   if (!w.exists) return 'gone';
   if (w.sessions.length) return 'session';
+  if (w.residual) return 'residual';
   if (w.dirty) return 'dirty';
   if (w.merged) return 'merged';
   if (!w.branch) return 'detached';
@@ -1320,7 +1663,7 @@ export function worktreeAgeDays(w: WorktreeStatus, now = Date.now() / 1000): num
 /** Pronta para apagar: mesclada, sem alteração e sem sessão. Arquivo ignorado não segura (cópia
  *  do CLAUDE.local.md, cache); a confirmação lista o que ele perde. */
 export function worktreeReady(w: WorktreeStatus): boolean {
-  return w.merged && !w.dirty && !w.sessions.length && !w.degraded;
+  return w.merged && !w.dirty && !w.sessions.length && !w.degraded && !w.residual;
 }
 
 /** Soma do disco de várias: com alguma pendente, falha ou parcial, o total é só um mínimo. */
@@ -1375,7 +1718,7 @@ export function getWorktreeForServer(server: Server, path: string, signal?: Abor
 export async function fetchWorktreesForServer(server: Server, repo: string): Promise<void> {
   await apiFetchForServer(server, '/api/worktrees/fetch', { method: 'POST', body: JSON.stringify({ repo }) }, FOLDER_ACTION_MS);
 }
-export function deleteWorktreeForServer(server: Server, body: { repo: string; path: string; confirm: boolean; delete_branch: boolean }):
+export function deleteWorktreeForServer(server: Server, body: { repo: string; path: string; confirm: boolean; delete_branch: boolean; keep_branch?: boolean }):
   Promise<{ removed: string; branch_deleted: boolean; moved: number }> {
   return apiFetchForServer(server, '/api/worktrees/delete', { method: 'POST', body: JSON.stringify(body) }, FOLDER_ACTION_MS);
 }
@@ -1582,8 +1925,8 @@ export async function deleteSession(name: string): Promise<{ ok: boolean; warnin
 }
 
 // Renomeia a sessao do tmux. Devolve o nome final (sanitizado pelo backend).
-export async function renameSession(name: string, newName: string): Promise<{ ok: boolean; name: string }> {
-  return apiFetch<{ ok: boolean; name: string }>(`/api/sessions/${encodeURIComponent(name)}/rename`, {
+export async function renameSession(name: string, newName: string, server?: Server | null): Promise<{ ok: boolean; name: string }> {
+  return sessionFetch<{ ok: boolean; name: string }>(server, `/api/sessions/${encodeURIComponent(name)}/rename`, {
     method: 'POST',
     body: JSON.stringify({ new: newName }),
   });
@@ -1802,6 +2145,7 @@ export interface ArchiveEntry {
   config_dir: string | null;   // conta dona do transcript (null = a do backend)
   conta: string;               // rotulo dela, pra mostrar na lista
   provider: Provider;          // cada agente guarda transcript num lugar proprio
+  name?: string | null;        // nome que a sessão tinha no Hangar ao ser fechada
 }
 
 export function getArchive(): Promise<ArchiveFolder[]> {
@@ -1812,8 +2156,10 @@ export function getArchiveRecentForServer(server: Server, cap = 40, signal?: Abo
   return apiFetchForServer(server, `/api/archive/recent?cap=${cap}`, { signal: comTeto(signal, 8000) });
 }
 
-export function getArchiveFolder(project: string): Promise<ArchiveEntry[]> {
-  return apiFetch<ArchiveEntry[]>(`/api/archive/${encodeURIComponent(project)}`);
+// `filter`: `session_id`, `provider`, `codex_account` e `config_dir` estreitam a pasta a uma conversa e conta.
+export function getArchiveFolder(project: string, filter?: Record<string, string>): Promise<ArchiveEntry[]> {
+  const query = filter && Object.keys(filter).length ? `?${new URLSearchParams(filter)}` : '';
+  return apiFetch<ArchiveEntry[]>(`/api/archive/${encodeURIComponent(project)}${query}`);
 }
 
 // "Retomar conversa": sobe uma sessao tmux NOVA no cwd original com `claude --resume <uuid>`,
@@ -1887,13 +2233,26 @@ export interface SearchHit {
   role?: 'user' | 'assistant' | null;  // quem escreveu a mensagem casada
   event_id?: string | null;            // id do evento no histórico: abre a conversa no ponto
   ts?: number | null;                  // quando a mensagem foi escrita
+  provider?: Provider;                 // agente da conversa ("claude")
+  conta?: string;                      // conta da conversa, na forma provedor:caminho
+  config_dir?: string | null;
+  codex_account?: string | null;       // só no Codex
+  whole?: boolean;                     // todos os termos como palavra inteira (vem antes na lista)
+  name?: string | null;                // nome que a sessão tinha ao ser fechada
+  preview?: string | null;             // 1ª mensagem do usuário da conversa
 }
 
 // A mensagem do trecho e as vizinhas (suas e do assistente), pra ler sem sair da busca.
 export async function getSearchContextForServer(
   s: Server, project: string, sessionId: string, eventId: string,
+  provider?: Provider | null, codexAccount?: string | null, configDir?: string | null,
 ): Promise<ChatEvent[]> {
   const q = new URLSearchParams({ project, session_id: sessionId, event_id: eventId });
+  // Sem `provider` o servidor lê como Claude; os outros agentes têm parser próprio.
+  if (provider) q.set('provider', provider);
+  if (codexAccount) q.set('codex_account', codexAccount);
+  // A mesma conversa em duas contas Claude: a do trecho.
+  if (configDir) q.set('config_dir', configDir);
   return apiFetchForServer(s, `/api/search/context?${q}`);
 }
 
@@ -2247,6 +2606,43 @@ export async function getUpdateNotesEm(s: Server | null, fetcher?: typeof fetch)
     if ((e as { status?: number }).status === 404) return null;
     throw e;
   }
+}
+
+export interface UpdateAcceptResult { ok: true; started: boolean; pid?: number }
+
+/**
+ * Grava o aceite dos avisos lidos (`mode` só com o aviso da migração). `started`: o servidor já
+ * lançou a migração ou a troca de modo e vai reiniciar. 404 = servidor antigo, sem a rota: `null`.
+ */
+export async function acceptUpdateWarningsEm(s: Server | null, ids: string[], mode?: UpdateMode, fetcher?: typeof fetch): Promise<UpdateAcceptResult | null> {
+  const init: RequestInit = { method: 'POST', body: JSON.stringify(mode ? { ids, mode } : { ids }) };
+  let response: { ok?: unknown; started?: unknown; pid?: unknown } | null;
+  try {
+    response = await (s ? apiFetchForServer<typeof response>(s, '/api/update/accept', init, 15000, true, fetcher)
+                        : apiFetch<typeof response>('/api/update/accept', { ...init, signal: AbortSignal.timeout(15000) }, fetcher));
+  } catch (e) {
+    if ((e as { status?: number }).status === 404) return null;
+    throw new Error(m.update_accept_failed({ reason: e instanceof Error ? e.message : String(e) }));
+  }
+  if (response?.ok !== true) throw new Error(m.update_accept_failed({ reason: m.atualizar_resposta_invalida() }));
+  return response.started === true ? { ok: true, started: true, pid: confirmUpdateStarted(response).pid } : { ok: true, started: false };
+}
+
+/** Consentimento do relatório automático da atualização: `null` = não respondido; `undefined` = servidor sem o recurso. */
+export async function getAutoReportEm(s: Server, fetcher?: typeof fetch): Promise<boolean | null | undefined> {
+  try {
+    const res = await apiFetchForServer<{ auto_report?: unknown }>(s, '/api/auto-report', undefined, 8000, false, fetcher);
+    return typeof res?.auto_report === 'boolean' || res?.auto_report === null ? res.auto_report : undefined;
+  } catch (error) {
+    if ((error as { status?: unknown })?.status === 404) return undefined;
+    throw error;
+  }
+}
+
+export async function putAutoReportEm(s: Server, value: boolean, fetcher?: typeof fetch): Promise<boolean> {
+  const res = await apiFetchForServer<{ auto_report?: unknown }>(s, '/api/auto-report',
+    { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ auto_report: value }) }, 8000, false, fetcher);
+  return res?.auto_report === true;
 }
 
 export function getIdentificadorEm(s: Server, fetcher?: typeof fetch): Promise<{ identificador: string; lan_url?: string }> {
@@ -3384,6 +3780,9 @@ export function openSessionsStream(s: Server, req = novoReq()): EventSourceLike 
   const params = new URLSearchParams();
   if (!isSameOrigin) params.set('token', s.token);
   if (req) params.set('diag_req', req);
+  // Só o dono registra aparelho: token de convidado não conta. Vale o alvo, não o servidor ativo.
+  const device = s.invite ? null : apiEnv().deviceIdentity?.();
+  if (device) params.set('device', `${device.kind};${device.id}`);
   const qs = params.toString();
   const url = `${base}/api/sessions/events${qs ? `?${qs}` : ''}`;
   return apiEnv().createEventSource(url, { withCredentials: isSameOrigin });
@@ -3452,7 +3851,13 @@ export function getDiagResumo(): Promise<ResumoDiag> {
 }
 
 /** Baixa o diário como arquivo. Sai da máquina só aqui, e por ação de quem usa. */
-export async function baixarDiag(): Promise<Blob> {
+/** Sem prazo fixo: o diário inteiro pode ter vários MB e vir devagar pela VPN. `server`: o do seletor; sem ele, o ativo. */
+export async function baixarDiag(server?: Server): Promise<Blob> {
+  if (server) {
+    const res = await apiFetchRes('/api/diag/arquivo', {}, server);
+    if (!res.ok) throw Object.assign(new Error(await errorDetail(res)), { status: res.status });
+    return res.blob();
+  }
   const res = await fetch(`${apiEnv().getBaseUrl()}/api/diag/arquivo`, { headers: authHeaders() });
   if (!res.ok) throw Object.assign(new Error(await errorDetail(res)), { status: res.status });
   return res.blob();
@@ -3665,6 +4070,12 @@ export function getCodexModels(name: string, server?: Server | null): Promise<Co
 export function setCodexMode(name: string, mode: 'default' | 'plan', server?: Server | null): Promise<CodexModelsResponse['current']> {
   return sessionFetch(server, `/api/sessions/${encodeURIComponent(name)}/codex/mode`, {
     method: 'POST', body: JSON.stringify({ mode }),
+  });
+}
+
+export function terminateCodexCommand(name: string, processId: string, server?: Server | null): Promise<{ ok: boolean }> {
+  return sessionFetch(server, `/api/sessions/${encodeURIComponent(name)}/codex/terminate`, {
+    method: 'POST', body: JSON.stringify({ process_id: processId }),
   });
 }
 
@@ -3984,7 +4395,7 @@ export async function applyConfigSyncForServer(s: Server, items: readonly Config
 
 // Compartilhar sessão (dono). Todas no servidor ATIVO: a Sidebar usa `withServer`.
 /** O link do Funnel só volta depois de abrir de fora (o servidor confere até 3 min); 404/405 =
- * backend sem o Rust (em produção o StaticFiles do Python responde 405 ao POST). */
+ * backend antigo sem essa rota. */
 export async function createShare(name: string, local = false, server?: Server | null, signal?: AbortSignal): Promise<ShareCreated> {
   return postFunnel(`/api/sessions/${encodeURIComponent(name)}/share${local ? '?local=true' : ''}`, undefined, server, signal, true);
 }

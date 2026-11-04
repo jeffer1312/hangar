@@ -292,7 +292,7 @@ impl LaunchFrame {
             // SAFETY: os() reconstrói encoding nativo, cortado só no `=` ASCII.
             let key=unsafe {OsStr::from_encoded_bytes_unchecked(&bytes[..at])};
             let value=unsafe {OsStr::from_encoded_bytes_unchecked(&bytes[at+1..])};
-            if ["HANGAR_INTERNAL_SECRET","HANGAR_RUNTIME_INSTANCE","CP_AUTH_TOKEN"].contains(&key.to_str().unwrap_or("")) {continue;}
+            if ["HANGAR_INTERNAL_SECRET","HANGAR_RUNTIME_INSTANCE", "HANGAR_AUTH_CONTEXT","CP_AUTH_TOKEN"].contains(&key.to_str().unwrap_or("")) {continue;}
             command.env(key,value);
         }
         // A receita é da vida antiga; o elo do novo pane vem do multiplexador que lançou o helper.

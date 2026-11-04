@@ -262,6 +262,14 @@ def aplicar_pendentes(incluir_destrutivos: bool = True) -> list[str]:
     Comando igual ao do passo imediatamente anterior não roda de novo (vários passos pedem o
     instalador inteiro). Só o vizinho: um comando diferente no meio pode ter mudado o estado.
     """
+    if os.environ.get("HANGAR_UPDATE_OWNS_RUST") == "1":
+        from importlib import reload
+        from app import rust_bins, rust_release
+        # As referências do motor precisam acompanhar o formato do par no disco.
+        if not hasattr(rust_bins, "auth_pair"):
+            reload(rust_bins)
+        if "hangar-auth" not in rust_release.NAMES:
+            reload(rust_release)
     feitos = []
     anterior = None
     for passo in pendentes(incluir_destrutivos):

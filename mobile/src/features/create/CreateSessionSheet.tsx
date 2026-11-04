@@ -473,11 +473,11 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     return () => { controller.abort(); archiveGeneration.current++; };
   }, [enabled, provider, picked, codexAccount, active, active?.id, active?.baseUrl, active?.token]);
 
-  // Conta lembrada (ou a ativa) com a janela geral esgotada sai sozinha para a de mais folga, como no PC
-  // e no web; a troca não é gravada como escolha, e motor escolhido não passa por aqui.
+  // Conta lembrada (ou a ativa) a 95% ou mais sai sozinha para a de mais folga, a regra do servidor, como no
+  // PC e no web; a troca não é gravada como escolha, e motor escolhido não passa por aqui.
   useEffect(() => {
     if (provider !== 'claude' || engine || accountTouched.current || configsLoading) return;
-    const target = contaComFolga(selectedConfig, configs, cotas, Date.now() / 1000);
+    const target = contaComFolga(selectedConfig, configs, cotas);
     if (!target || target === selectedConfig) return;
     const from = configs.find((c) => c.path === selectedConfig)?.label ?? basename(selectedConfig ?? '');
     setSelectedConfig(target);

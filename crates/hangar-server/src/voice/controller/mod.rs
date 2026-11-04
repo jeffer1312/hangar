@@ -24,7 +24,7 @@ type Key = (String, String);
 
 /// No máximo um retrato do estado por intervalo.
 const STATE_EVERY: Duration = Duration::from_millis(150);
-const BACKSTAGE_KEEP: usize = 60;
+const BACKSTAGE_KEEP: usize = 80;
 const THOUGHT_KEEP: usize = 2000;
 const MOVED: &str = "A chamada passou para outro aparelho; tente de novo.";
 const NO_DEVICE: &str = "Nenhum aparelho conectado agora; tente de novo quando a voz voltar.";
@@ -129,11 +129,26 @@ impl Ctx {
 struct Snapshot {
     phase: &'static str, mode: Mode, activity: Activity, draft: Option<String>, error: Option<(String, String)>,
     plan: Option<(PathBuf, String)>, effective: Option<Effective>, context: Option<(u64, Option<u64>)>,
-    five_hour: RateWindow, seven_day: RateWindow, backstage: VecDeque<Backstage>, thought: String, action: Option<OrganizerAction>,
+    five_hour: RateWindow, seven_day: RateWindow, backstage: VecDeque<BackstageLine>, thought: String, action: Option<OrganizerAction>,
     /// Sobe a cada gravação da memória na chamada; o aparelho relê a lista quando ele muda.
     memory: u64,
     /// Objetivo no computador em curso e a última etapa dele (vazia até a primeira).
     computer: Option<String>,
+}
+
+/// Linha dos bastidores com a hora (ms) em que aquela fala começou; `live`: ainda chegando.
+struct BackstageLine { line: Backstage, at: i64, live: bool }
+
+/// Fala dele ou da voz troca a parcial do mesmo lado; cada linha entra na ordem da hora em que começou.
+fn add_backstage(lines: &mut VecDeque<BackstageLine>, line: Backstage, at: i64, live: bool) {
+    let side = |b: &Backstage| match b { Backstage::You(_) => 1, Backstage::Voice(_) => 2, _ => 0 };
+    let mine = side(&line);
+    if mine != 0 { lines.retain(|b| !(b.live && side(&b.line) == mine)); }
+    let empty = matches!(&line, Backstage::You(t) | Backstage::Voice(t) if t.trim().is_empty());
+    if empty { return; }
+    let at_pos = lines.iter().rposition(|b| b.at <= at).map_or(0, |i| i + 1);
+    lines.insert(at_pos, BackstageLine { line, at, live });
+    while lines.len() > BACKSTAGE_KEEP { lines.pop_front(); }
 }
 
 /// Roda um objetivo no computador mandando cada etapa ao segundo argumento; os testes trocam o HCC por um falso.
@@ -324,10 +339,8 @@ impl Controller {
                 self.snap.seven_day = seven_day.or(self.snap.seven_day);
             }
             VoiceEvent::Organizer(effective) => self.snap.effective = Some(effective),
-            VoiceEvent::Backstage(line) => {
-                if self.snap.backstage.len() >= BACKSTAGE_KEEP { self.snap.backstage.pop_front(); }
-                self.snap.backstage.push_back(line);
-            }
+            VoiceEvent::Backstage(line, at) => add_backstage(&mut self.snap.backstage, line, at, false),
+            VoiceEvent::Speaking(line, at) => add_backstage(&mut self.snap.backstage, line, at, true),
             VoiceEvent::Answer(seq, sdp) => self.answer(seq, sdp),
             VoiceEvent::ReadSession { call, session, user_turns } => self.read_session(call, session, user_turns),
             VoiceEvent::Send { call, request, session, turn } => self.send(call, request, session, turn),
@@ -612,10 +625,12 @@ impl Controller {
             "effective": s.effective.as_ref().map(|e| json!({"model": e.model, "effort": e.effort, "tier": e.tier})),
             "context": s.context.map(|(used, window)| json!({"used": used, "window": window})),
             "limits": {"five_hour": window(s.five_hour), "seven_day": window(s.seven_day)},
-            "backstage": s.backstage.iter().map(|line| match line {
-                Backstage::Heard(text) => json!({"kind": "heard", "text": text}),
-                Backstage::Result(text) => json!({"kind": "result", "text": text}),
-                Backstage::Answer(text) => json!({"kind": "answer", "text": text}),
+            "backstage": s.backstage.iter().map(|b| {
+                let (kind, text) = match &b.line {
+                    Backstage::Heard(text) => ("heard", text), Backstage::Result(text) => ("result", text),
+                    Backstage::Answer(text) => ("answer", text), Backstage::You(text) => ("you", text), Backstage::Voice(text) => ("voice", text),
+                };
+                json!({"kind": kind, "text": text, "at": b.at, "live": b.live})
             }).collect::<Vec<_>>(),
             "thought": s.thought,
             "action": s.action.as_ref().map(|a| match a {

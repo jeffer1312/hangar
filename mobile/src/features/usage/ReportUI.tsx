@@ -1,8 +1,10 @@
-import { Children, Fragment as ReactFragment, useMemo, useState, type ReactNode } from 'react';
+import { Children, Fragment as ReactFragment, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { create } from 'zustand';
+import Animated, { Easing, useAnimatedStyle, useReducedMotion, useSharedValue, withTiming } from 'react-native-reanimated';
 import Svg, { Circle, Line, Polyline, Rect } from 'react-native-svg';
+import { GrowFill, Notice } from './CostsVisuals';
 import { intlLocale, type Server } from '@hangar/core';
 import { useServers } from '../../stores/servers';
 import { Stack, useRouter } from 'expo-router';
@@ -12,12 +14,15 @@ import { Sheet } from '../../ui/Sheet';
 import { Icon, type IconName } from '../../ui/Icon';
 import { useSettingsColors } from '../config/colors';
 import type { ReportPart } from './useReports';
+import { compactTokens } from './costs-model';
 import * as m from '../../paraglide/messages';
 import { RADIUS, SPACE } from '../../theme/scale';
 
 export const useUsagePreferences = create(() => ({ period: '30d', off: [] as string[] }));
 export const number = (value: number, digits = 0) => value.toLocaleString(intlLocale(), { maximumFractionDigits: digits });
-export const compactNumber = (value: number) => value.toLocaleString(intlLocale(), { notation: 'compact', maximumFractionDigits: 1 });
+export const compactNumber = (value: number) => compactTokens(value, intlLocale());
+// O compacto arredonda "1,5 mil" para "2 mil" e 1,5 para "2": o meio do eixo precisa do valor certo.
+export const axisNumber = (value: number) => value < 999.5 ? number(value, 1) : value < 999.5e3 ? number(value) : compactNumber(value);
 export const dollars = (value: number) => `US$ ${value.toLocaleString(intlLocale(), { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 export const percent = (part: number, total: number) => `${number(total > 0 ? part / total * 100 : 0, 1)}%`;
 
@@ -49,16 +54,6 @@ export function Card({ children, flat = false }: { children: ReactNode; flat?: b
   const c = useSettingsColors();
   const { theme } = useUnistyles();
   return <View style={{ padding: flat ? 0 : theme.base.space[4], paddingVertical: theme.base.space[4], gap: theme.base.space[2], backgroundColor: flat ? 'transparent' : c.inset, borderRadius: flat ? 0 : theme.base.radius.lg, ...(flat ? { borderTopWidth: 1, borderColor: c.borderStrong } : {}) }}>{children}</View>;
-}
-
-export function Metric({ label, value, primary = false, children }: { label: string; value: string; primary?: boolean; children?: ReactNode }) {
-  const { theme } = useUnistyles();
-  const c = useSettingsColors();
-  return <View style={{ gap: SPACE[1.5], paddingVertical: SPACE[3], minWidth: 0 }}>
-    <Copy muted>{label}</Copy>
-    <Text style={{ color: c.text, fontSize: primary ? theme.base.text.xl : theme.base.text.lg, fontWeight: theme.base.weight.semibold, fontVariant: ['tabular-nums'] }}>{value}</Text>
-    {children}
-  </View>;
 }
 
 export function Grid({ children }: { children: ReactNode }) {
@@ -134,8 +129,8 @@ export function ReportControls({ own, refresh }: { own: Server[]; refresh: () =>
 export function ReportStatus<R>({ parts, loading, accepted, selected }: { parts: ReportPart<R>[]; loading: boolean; accepted: boolean; selected: number }) {
   return <View accessibilityLiveRegion="polite" style={{ gap: SPACE[2] }}>
     {loading && <><ActivityIndicator /><Copy>{m.custos_carregando_maquinas({ n: parts.filter((p) => p.pending).length || selected })}</Copy></>}
-    {parts.some((p) => p.error) && accepted && <Copy>{m.custos_total_parcial()}</Copy>}
-    {parts.map((part) => part.warming ? <Copy key={part.id}>{m.custos_aquecendo_progresso({ maquina: part.label, lidos: part.warming.read, total: part.warming.total })}</Copy> : part.error ? <Copy key={part.id}>{`${part.label}: ${part.error}`}</Copy> : null)}
+    {parts.some((p) => p.error) && accepted && <Notice title={m.custos_parcial_faltou({ nomes: parts.filter((p) => p.error).map((p) => p.label).join(', ') })} details={[m.custos_total_parcial(), ...parts.filter((p) => p.error).map((p) => `${p.label}: ${p.error}`)]} />}
+    {parts.map((part) => part.warming ? <Copy key={part.id}>{m.custos_aquecendo_progresso({ maquina: part.label, lidos: part.warming.read, total: part.warming.total })}</Copy> : part.error && !accepted ? <Copy key={part.id}>{`${part.label}: ${part.error}`}</Copy> : null)}
     {!selected && <Copy>{m.custos_sem_dados_periodo()}</Copy>}
     {!!selected && !loading && !accepted && <Copy>{m.home_usage_load_failed()}</Copy>}
   </View>;
@@ -158,11 +153,20 @@ export function Composition({ label, items }: { label: string; items: { label: s
 export interface ChartSeries { key: string; label: string; color: string }
 export interface ChartDay { key: string; values: (number | null)[]; detail?: string }
 
-export function Columns({ label, days, series, format = number, axisFormat = compactNumber, onPress, lines = false, fit = false }: { label: string; days: ChartDay[]; series: ChartSeries[]; format?: (value: number) => string; axisFormat?: (value: number) => string; onPress?: (key: string) => void; lines?: boolean; fit?: boolean }) {
+export function Columns({ label, days, series, format = number, axisFormat = axisNumber, onPress, lines = false, fit = false, marks = [] }: { label: string; days: ChartDay[]; series: ChartSeries[]; format?: (value: number) => string; axisFormat?: (value: number) => string; onPress?: (key: string) => void; lines?: boolean; fit?: boolean; marks?: string[] }) {
   const c = useSettingsColors();
   const { theme } = useUnistyles();
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
   const [plotWidth, setPlotWidth] = useState(264);
+  const reduced = useReducedMotion();
+  // As colunas crescem da base quando os dias mudam; ligar ou desligar uma camada não refaz a entrada.
+  const reveal = useSharedValue(reduced ? 1 : 0);
+  useEffect(() => {
+    if (reduced) { reveal.value = 1; return; }
+    reveal.value = 0;
+    reveal.value = withTiming(1, { duration: 700, easing: Easing.out(Easing.cubic) });
+  }, [days.length, reduced]);
+  const revealStyle = useAnimatedStyle(() => ({ transform: [{ scaleY: reveal.value }] }));
   if (!days.length) return <Copy muted>{m.uso_sem_dias()}</Copy>;
   const describe = (day: ChartDay) => {
     const sum = day.values.some((value) => value === null) ? '—' : format(day.values.reduce<number>((value, part) => value + (part ?? 0), 0));
@@ -176,6 +180,7 @@ export function Columns({ label, days, series, format = number, axisFormat = com
   return <View accessibilityLabel={label} style={{ gap: theme.base.space[2] }}><View style={{ flexDirection: 'row', gap: theme.base.space[2] }}>
     <View style={{ width: 64, flexShrink: 0, height, justifyContent: 'space-between' }}>{[maximum, maximum / 2, 0].map((value, index) => <Text key={index} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.65} style={{ color: c.muted, fontSize: theme.base.text.sm }}>{axisFormat(value)}</Text>)}</View>
     <ScrollView horizontal scrollEnabled={!fit} onLayout={(event) => { if (fit) setPlotWidth(Math.max(1, event.nativeEvent.layout.width)); }} style={{ flex: 1, flexShrink: 1, minWidth: 0 }}><View style={{ width }}>
+      <Animated.View style={[{ width, height, transformOrigin: 'bottom' }, revealStyle]}>
       <Svg width={width} height={height} accessible={false}>
         {[0, 0.25, 0.5, 0.75, 1].map((ratio) => <Line key={ratio} x1={0} x2={width} y1={height * ratio} y2={height * ratio} stroke={c.borderStrong} />)}
         {lines ? series.map((item, seriesIndex) => {
@@ -194,10 +199,11 @@ export function Columns({ label, days, series, format = number, axisFormat = com
           return day.values.map((value, segment) => {
             const size = Math.max(0, value ?? 0) / maximum * height;
             bottom -= size;
-            return size > 0 ? <Rect key={`${day.key}:${segment}`} x={index * step + step * 0.22} y={bottom} width={step * 0.56} height={size} fill={series[segment].color} /> : null;
-          });
+            return size > 0 ? <Rect key={`${day.key}:${segment}`} x={index * step + step * 0.22} y={bottom} width={step * 0.56} height={size} rx={segment === day.values.length - 1 ? Math.min(3, step * 0.2) : 0} fill={series[segment].color} /> : null;
+          }).concat(marks.includes(day.key) ? [<Circle key={`${day.key}:mark`} cx={index * step + step / 2} cy={Math.max(5, bottom - 6)} r={3.5} fill={theme.tokens.status.error} />] : []);
         })}
       </Svg>
+      </Animated.View>
       {fit ? <Pressable accessibilityRole="button" accessibilityLabel={describe(selected ?? days[0])} onPress={(event) => {
         const day = days[Math.min(days.length - 1, Math.max(0, Math.floor(event.nativeEvent.locationX / step)))];
         if (day) { if (onPress) onPress(day.key); else setSelectedDay(day.key); }
@@ -208,10 +214,11 @@ export function Columns({ label, days, series, format = number, axisFormat = com
   </View>{fit && <Choice label={m.custos_dia()} options={days.map((day) => ({ key: day.key, label: describe(day) }))} values={[]} max={1} closeOnSelect onChange={(keys) => { if (keys[0]) { if (onPress) onPress(keys[0]); else setSelectedDay(keys[0]); } }} />}{!onPress && selected && <Copy>{describe(selected)}</Copy>}</View>;
 }
 
-export function Bar({ label, value, max, detail, onPress, color, compact = false }: { label: string; value: number; max: number; detail: string; onPress?: () => void; color?: string; compact?: boolean }) {
+export function Bar({ label, value, max, detail, onPress, color, compact = false, icon }: { label: string; value: number; max: number; detail: string; onPress?: () => void; color?: string; compact?: boolean; icon?: ReactNode }) {
   const c = useSettingsColors();
-  const body = <View style={{ gap: SPACE[1.5], paddingVertical: SPACE[2] }}>{compact ? <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', gap: SPACE[2] }}><View style={{ flexShrink: 1 }}><Copy>{label}</Copy></View><Copy>{detail}</Copy></View> : <><Copy>{label}</Copy><Copy>{detail}</Copy></>}
-    <View style={{ height: 5, backgroundColor: c.hover, borderRadius: RADIUS.xs }}><View style={{ height: 5, width: `${Math.max(0, Math.min(100, max > 0 ? value / max * 100 : 0))}%`, backgroundColor: color ?? c.accent, borderRadius: RADIUS.xs }} /></View>
+  const name = icon ? <View style={{ flexDirection: 'row', alignItems: 'center', gap: SPACE[2], flexShrink: 1 }}>{icon}<View style={{ flexShrink: 1 }}><Copy>{label}</Copy></View></View> : null;
+  const body = <View style={{ gap: SPACE[1.5], paddingVertical: SPACE[2] }}>{compact ? <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: SPACE[2] }}>{name ?? <View style={{ flexShrink: 1 }}><Copy>{label}</Copy></View>}<Copy>{detail}</Copy></View> : <>{name ?? <Copy>{label}</Copy>}<Copy>{detail}</Copy></>}
+    <View style={{ height: 5, backgroundColor: c.hover, borderRadius: RADIUS.xs, overflow: 'hidden' }}><GrowFill percent={max > 0 ? value / max * 100 : 0} color={color ?? c.accent} /></View>
   </View>;
   return onPress ? <Pressable accessibilityRole="button" accessibilityLabel={`${label}: ${detail}`} onPress={onPress} style={{ minHeight: 44 }}>{body}</Pressable> : <View accessible accessibilityLabel={`${label}: ${detail}`}>{body}</View>;
 }

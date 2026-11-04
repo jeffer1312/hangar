@@ -227,7 +227,7 @@ async def test_codex_sem_persistencia_nao_tenta_orientar(isolated, monkeypatch):
 async def test_kimi_promove_mesmo_entregue_e_outros_nao_reenviam(isolated, monkeypatch, provider):
     monkeypatch.setattr(api, "_provider_of", lambda name: "claude")
     monkeypatch.setattr(api, "_pane_info", lambda name: (provider, "%test"))
-    monkeypatch.setattr(api.pi_inbox, "linha_de", lambda *args: object() if provider in ("pi", "omp") else None)
+    monkeypatch.setattr(api.providers_bridge, "inbox_call", lambda op, **args: {"line": "test-line" if provider in ("pi", "omp") else None})
     monkeypatch.setattr(tmux, "list_panes_active", lambda: [])
     monkeypatch.setattr(api.registry, "resolve_tracked", lambda *args: (None, False))
     monkeypatch.setattr(api.threading, "Timer", lambda *args, **kwargs: SimpleNamespace(start=lambda: None))

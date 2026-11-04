@@ -77,10 +77,17 @@ mod tests {
     use serde_json::Value;
 
     #[test]
-    fn matches_python_fixture() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../backend/tests/fixtures/contract/golden/agent_pane.json");
-        let rows: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-        for row in rows.as_array().unwrap() {
+    fn resolves_the_pane_running_the_agent() {
+        const CASES: [&str; 6] = [
+            r#"{"name":"single_pane","panes":[{"pid":10,"pane_id":"%1","active":true,"window_index":0,"pane_index":0}],"children":{},"cmdline":{},"expected":null}"#,
+            r#"{"name":"agent_in_second","panes":[{"pid":10,"pane_id":"%1","active":true,"window_index":0,"pane_index":0},{"pid":20,"pane_id":"%2","active":false,"window_index":0,"pane_index":0}],"children":{"20":[21]},"cmdline":{"10":"-fish ","20":"-bash ","21":"claude --session-id x "},"expected":"%2"}"#,
+            r#"{"name":"active_first_tiebreak","panes":[{"pid":10,"pane_id":"%1","active":false,"window_index":0,"pane_index":0},{"pid":20,"pane_id":"%2","active":true,"window_index":0,"pane_index":0}],"children":{"10":[11],"20":[22]},"cmdline":{"11":"/usr/bin/claude ","22":"codex --remote ","10":"bash","20":"bash"},"expected":"%2"}"#,
+            r#"{"name":"daemon_skipped","panes":[{"pid":10,"pane_id":"%1","active":true,"window_index":0,"pane_index":0},{"pid":20,"pane_id":"%2","active":false,"window_index":0,"pane_index":0}],"children":{"10":[11],"20":[21]},"cmdline":{"11":"claude daemon ","21":"pi --mode x ","10":"sh","20":"sh"},"expected":"%2"}"#,
+            r#"{"name":"no_agent","panes":[{"pid":10,"pane_id":"%1","active":true,"window_index":0,"pane_index":0},{"pid":20,"pane_id":"%2","active":false,"window_index":0,"pane_index":0}],"children":{},"cmdline":{"10":"bash","20":"vim"},"expected":null}"#,
+            r#"{"name":"no_panes","panes":[],"children":{},"cmdline":{},"expected":null}"#,
+        ];
+        for row in CASES {
+            let row: Value = serde_json::from_str(row).unwrap();
             let panes: Vec<Pane> = row["panes"].as_array().unwrap().iter().enumerate().map(|(i, p)| Pane {
                 session: "fixture".into(), active: p["active"].as_bool().unwrap(), pid: p["pid"].as_u64().map(|v| v as u32),
                 pane_id: p["pane_id"].as_str().unwrap().into(), window_index: Some(0), pane_index: Some(i as u32), ..Default::default()
@@ -88,7 +95,7 @@ mod tests {
             let children: ChildrenMap = row["children"].as_object().unwrap().iter()
                 .map(|(k, v)| (k.parse().unwrap(), serde_json::from_value(v.clone()).unwrap())).collect();
             let cmdline = |pid: i64| row["cmdline"][pid.to_string()].as_str().unwrap_or("").split_whitespace().map(str::to_owned).collect::<Vec<_>>();
-            // O golden vem do Python no Linux (`%N`); no Windows o alvo do mesmo pane é `=s:w.p`.
+            // No Linux o alvo é `%N`; no Windows o do mesmo pane é `=s:w.p`.
             let expected = row["expected"].as_str().and_then(|id| panes.iter().find(|p| p.pane_id == id).and_then(Pane::target));
             assert_eq!(resolve(&panes, &children, &cmdline), expected, "{}", row["name"]);
         }

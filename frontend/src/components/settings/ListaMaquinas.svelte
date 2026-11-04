@@ -14,6 +14,7 @@
     esteNome: string;
     enderecos: EnderecoAlcance[];
     carregando: boolean;
+    desktop?: boolean;
     // Gravações por linha: qual está em voo ('' = nenhuma) e o erro de cada uma.
     idSalvando: string;
     idErro: Record<string, string>;
@@ -34,7 +35,7 @@
     onSalvarIdentificador: (linha: LinhaMaquina, valor: string) => void;
   }
 
-  let { linhas, estados, meuIdentificador, esteNome, enderecos, carregando, idSalvando, idErro, tokenSalvando, tokenErro, erro = '',
+  let { linhas, estados, meuIdentificador, esteNome, enderecos, carregando, desktop = false, idSalvando, idErro, tokenSalvando, tokenErro, erro = '',
         onAcompanhar, onFalar, onToggleScan, onEditar, onTirar, onInformarToken, onTestar, onUsarEndereco, onAbrirEste,
         onRemover, onSalvarIdentificador }: Props = $props();
 
@@ -107,7 +108,7 @@
   <!-- Por máquina, não por chave: informar o token troca a chave da mesma máquina e o detalhe
        segue aberto; outra máquina monta um detalhe novo (e mede de novo). -->
   {#key linhaAberta.identificador ?? linhaAberta.chave}
-  <DetalheServidor linha={linhaAberta} estado={estadoDe(linhaAberta)} {meuIdentificador} {esteNome} {enderecos}
+  <DetalheServidor linha={linhaAberta} estado={estadoDe(linhaAberta)} {meuIdentificador} {esteNome} {enderecos} {desktop}
     idSalvando={!!linhaAberta.navegador && idSalvando === linhaAberta.navegador.id}
     idErro={idErro[linhaAberta.navegador?.id ?? ''] ?? ''}
     tokenSalvando={tokenSalvando === linhaAberta.chave}

@@ -246,3 +246,15 @@ a valer no modo `python`; o texto do protocolo morava em `pair_texto.py` e o hoo
 `SessionStart` era o `hooks/pair_hook.py`, que lia o sidecar e montava o texto em Python. Saíram
 quando o texto passou a `groups/text.rs` e o hook ao `hangar-server pair-context`; no modo
 `python` operação de grupo responde 503 `groups_need_rust_server`.
+
+## Long-poll do plugin e o estado dele no Python
+
+(Até 29/10/2026 → [plugin do Claude no Rust](plataforma.md#perguntas-permissões-e-ciclo-de-vida-no-rust-fronteira-com-o-python).)
+O `plugin_bridge.py` atendia `/api/plugin/{whoami,pull,suggest,ask,ask-fim,filled,submitted,state,rate}`
+e guardava em memória o long-poll (`_waiters`, `_donos`), o estado anunciado (`_estados`), a
+pergunta segurada (`_perguntas`), a sugestão e as publicações do terminal. Dele saíam a entrega
+`fill`/`user` sem tecla no `drain` e no `/input`, a resposta de pergunta e permissão sem tecla no
+`/answer` e no `/select`, a âncora de estado do `StateMonitor` e o `stop_waits` no sinal de parada.
+O diário excluía o sucesso de `POST /api/plugin/pull` (fechava vazio a cada 25 s e enchia o dia).
+O Rust nunca repassava essas rotas: com ele de pé tudo isso ficava sem escritor, e saiu.
+O stub que respondia 503 `mcp_needs_rust_server` no `/mcp` do modo `python` saiu junto.

@@ -11,6 +11,28 @@ pub struct ShellVivo {
     pub desde: Option<f64>,
 }
 
+/// Comando que o Codex ainda roda; `background` = o turno que o abriu já acabou.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CodexCommand {
+    pub id: String,
+    pub process_id: String,
+    pub command: String,
+    pub started_at: f64,
+    pub background: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CodexSubagent {
+    pub agent_path: Option<String>,
+    pub activity_revision: u64,
+    pub state: Option<String>,
+    pub ended_at: Option<f64>,
+    pub can_message: bool,
+    pub message_blocked: Option<String>,
+}
+
 /// `state` e `codex_mode` ficam em texto: o hangar-server só repassa este evento, e valor novo do
 /// Python passa adiante igual. Tudo tem padrão porque o desktop lê o estado antes do primeiro evento.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -22,6 +44,10 @@ pub struct StateEvent {
     pub codex_service_tier: Option<String>,
     pub codex_question: Option<Map<String, Value>>,
     pub codex_buffering: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub codex_commands: Vec<CodexCommand>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub codex_subagents: Option<std::collections::BTreeMap<String, CodexSubagent>>,
     pub claude_permission_mode: Option<String>,
     pub claude_previous_non_plan: Option<String>,
     pub claude_plan_pending: Option<Map<String, Value>>,
@@ -48,6 +74,14 @@ pub struct StateEvent {
 #[cfg(test)]
 mod tests {
     use super::StateEvent;
+
+    #[test]
+    fn codex_subagent_activity_revision_is_optional_and_survives_round_trip() {
+        let old: super::CodexSubagent = serde_json::from_value(serde_json::json!({"state":"running"})).unwrap();
+        assert_eq!(old.activity_revision, 0);
+        let state = super::CodexSubagent { activity_revision: 7, ..old };
+        assert_eq!(serde_json::to_value(state).unwrap()["activity_revision"], 7);
+    }
 
     #[test]
     fn codex_service_tier_survives_state_round_trip() {

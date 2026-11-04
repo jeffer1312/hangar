@@ -1,11 +1,14 @@
 <script lang="ts">
   // Ring de uso de contexto: a % vai DENTRO do circulo (centralizada). Cor muda so nos limiares.
+  import type { Snippet } from 'svelte';
   import * as m from '../paraglide/messages';
   interface Props {
     pct?: number | null;
     size?: number;
+    // Com conteúdo, o anel envolve ele (o ícone do agente no card) no lugar do número.
+    children?: Snippet;
   }
-  let { pct = null, size = 26 }: Props = $props();
+  let { pct = null, size = 26, children }: Props = $props();
 
   const R = 9;
   const C = 2 * Math.PI * R;
@@ -36,17 +39,25 @@
         transform="rotate(-90 12 12)"
       />
     {/if}
-    <text x="12" y="12.5" class="ring-text" text-anchor="middle" dominant-baseline="middle">
-      {known ? Math.round(value) : '—'}
-    </text>
+    {#if !children}
+      <text x="12" y="12.5" class="ring-text" text-anchor="middle" dominant-baseline="middle">
+        {known ? Math.round(value) : '—'}
+      </text>
+    {/if}
   </svg>
+  {#if children}<span class="ring-inner">{@render children()}</span>{/if}
 </div>
 
 <style>
   .ring {
+    position: relative;
     display: inline-flex;
     align-items: center;
     flex-shrink: 0;
+  }
+  .ring-inner {
+    position: absolute; inset: 0;
+    display: inline-flex; align-items: center; justify-content: center;
   }
   svg { flex-shrink: 0; }
   .track {

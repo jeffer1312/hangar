@@ -103,6 +103,8 @@ pub struct AccountService {
     pub quick_renewals: super::claude_refresh::QuickRenewalBackoff,
     pub claude_auth: super::claude_auth::AuthCache,
     pub claude_logins: super::claude_login::ClaudeLogins,
+    /// Janelas do login e da renovação das contas Claude.
+    pub claude_windows: super::claude_login::WindowClient,
     pub codex_logins: super::codex_login::CodexLogins,
     pub device_logins: super::codex_device_login::DeviceLogins,
     pub codex_auth: super::native::AuthCache,
@@ -125,6 +127,7 @@ impl AccountService {
             quick_renewals: Default::default(),
             claude_auth: Default::default(),
             claude_logins: Default::default(),
+            claude_windows: super::claude_login::WindowClient::local(&env),
             codex_logins: Default::default(),
             device_logins: Default::default(),
             codex_auth: Default::default(),
@@ -296,8 +299,9 @@ impl AccountService {
                     found.push(resolved(&path));
                 }
             }
+            // Empate (sem `projects`) desempata pelo caminho: a ordem do disco muda de máquina para máquina.
             found.sort_by_cached_key(|path| {
-                std::cmp::Reverse(projects_mtime(&path.join("projects")))
+                (std::cmp::Reverse(projects_mtime(&path.join("projects"))), path.clone())
             });
             let base = resolved(&self.env.claude_base);
             if !found.contains(&base) && !storage::pending(&base) {

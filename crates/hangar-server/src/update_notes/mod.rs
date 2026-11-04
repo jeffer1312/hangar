@@ -15,13 +15,23 @@ use std::time::Duration;
 const GIT_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub async fn route(State(state): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, request: Request) -> Response {
-    if !gate(&state, peer, &request).1 {
+    if !(match gate(&state, peer, &request).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) }).1 {
         return json_response(StatusCode::FORBIDDEN, detail_body("update_notes_owner_only", "só o dono pode ler as novidades da atualização", json!({})));
     }
-    if let crate::update::http::Mode::Package(_) = crate::update::http::mode(&state.accounts.env.home) {
+    let home = state.accounts.env.home.clone();
+    if let crate::update::http::Mode::Package(_) = crate::update::http::mode(&home) {
         return match package(&state).await {
-            Ok(notes) => json_response(StatusCode::OK, notes),
-            Err(why) => { tracing::warn!("leitura dos avisos da atualização falhou no índice do pacote: {why}"); unavailable() }
+            Ok(notes) => json_response(StatusCode::OK, with_acceptance(notes, &home)),
+            Err(why) => {
+                tracing::warn!("leitura dos avisos da atualização falhou no índice do pacote: {why}");
+                // O aviso da migração pendente é só de arquivos locais: sem o índice ele ainda sai, senão o
+                // Atualizar acenderia por ele e o modal não teria o que aceitar.
+                // `incomplete`: os avisos da versão nova não foram lidos; a tela aceita este e não inicia a atualização.
+                match crate::update::migrate::pending_warning(&home, &notes_root(&home)) {
+                    Some(warning) => json_response(StatusCode::OK, json!({"target": null, "warnings": [warning], "news": [], "incomplete": true})),
+                    None => unavailable(),
+                }
+            }
         };
     }
     // Mesmo registro que o `atualizacoes.py` grava.
@@ -29,9 +39,39 @@ pub async fn route(State(state): State<Arc<AppState>>, ConnectInfo(peer): Connec
     let cwd = std::env::current_dir().unwrap_or_default();
     let branch = update_branch(std::env::var("CP_UPDATE_BRANCH").ok(), tokio::fs::read_to_string(cwd.join(".env")).await.ok().as_deref());
     match collect(&cwd, &format!("origin/{branch}"), &crate::update::state_dir(&base)).await {
-        Ok(notes) => json_response(StatusCode::OK, notes),
+        Ok(notes) => json_response(StatusCode::OK, with_acceptance(notes, &home)),
         Err(()) => { tracing::warn!(branch = %branch, cwd = %cwd.display(), "leitura dos avisos da atualização falhou no git"); unavailable() }
     }
+}
+
+/// Aviso já aceito sai; o da migração leva a escolha do modo e volta para quem migrou sem vê-lo.
+fn with_acceptance(mut notes: Value, home: &Path) -> Value {
+    let layout = crate::update::Layout::new(home);
+    let accepted = crate::update::accepted(&layout);
+    let step = crate::update::migrate::STEP_ID;
+    let Some(warnings) = notes.get_mut("warnings").and_then(Value::as_array_mut) else { return notes };
+    warnings.retain(|w| !w["id"].as_str().is_some_and(|id| accepted.contains(id)));
+    for warning in warnings.iter_mut().filter(|w| w["id"] == step) {
+        warning["choice"] = "mode".into();
+        warning["mode"] = Value::Null;
+    }
+    if !warnings.iter().any(|w| w["id"] == step) && let Some(warning) = crate::update::migrate::pending_warning(home, &notes_root(home)) {
+        warnings.insert(0, warning);
+    }
+    notes
+}
+
+/// Onde estão os `docs/atualizacoes` que esta máquina roda: o `current`, senão o checkout do servidor.
+pub(crate) fn notes_root(home: &Path) -> PathBuf {
+    let current = crate::install_root::current(home);
+    if std::fs::symlink_metadata(&current).is_ok() { return current; }
+    server_root()
+}
+
+/// A raiz de onde este servidor roda: o motor `git` o sobe na `backend/` do checkout.
+pub(crate) fn server_root() -> PathBuf {
+    let cwd = std::env::current_dir().unwrap_or_default();
+    if cwd.file_name().is_some_and(|n| n == "backend") { cwd.parent().map(Path::to_path_buf).unwrap_or(cwd) } else { cwd }
 }
 
 fn unavailable() -> Response {
@@ -43,12 +83,15 @@ fn unavailable() -> Response {
 async fn package(state: &AppState) -> Result<Value, String> {
     let layout = crate::update::Layout::new(&state.accounts.env.home);
     let installed = crate::update::installed(&layout).ok_or_else(|| "manifest.json da versão em uso ilegível".to_owned())?;
-    let release = crate::update::Release { base_url: state.update_release_base.clone(), channel: installed.channel.clone() };
+    let channel = crate::update::channel(&layout);
+    // Trocar de canal instala o publicado no outro, mesmo com número menor.
+    let switching = channel != installed.channel;
+    let release = crate::update::Release { base_url: state.update_release_base.clone(), channel };
     let published = crate::update::http::published(&release, false).await;
     if let Some(error) = published.error { return Err(error); }
     let entry = published.entry.ok_or_else(|| "índice sem entrada para este sistema".to_owned())?;
     let newer = match (entry.version.parse::<hangar_package::Version>(), installed.version.parse::<hangar_package::Version>()) {
-        (Ok(remote), Ok(here)) => remote > here,
+        (Ok(remote), Ok(here)) => remote > here || (switching && remote != here),
         _ => return Err(format!("versão ilegível: publicada {}, em uso {}", entry.version, installed.version)),
     };
     if !newer { return Ok(json!({"target": entry.version, "warnings": [], "news": []})); }
@@ -116,15 +159,28 @@ pub(crate) fn update_branch(env: Option<String>, dotenv: Option<&str>) -> String
 }
 
 
-fn news_item(id: &str, text: &str) -> Option<(u8, Value)> {
+/// `sistema` vazio = todos; nome fora de `linux`/`windows`/`macos` = arquivo ignorado, como o `onde`.
+/// A mesma regra do `_for_system` do `scripts/montar-pacote.py`.
+fn for_system(field: Option<&String>, os: &str) -> Option<bool> {
+    let names: Vec<&str> = field.map(String::as_str).unwrap_or_default().split(|c: char| c == ',' || c.is_whitespace()).filter(|n| !n.is_empty()).collect();
+    if names.iter().any(|n| !matches!(*n, "linux" | "windows" | "macos")) { return None; }
+    Some(names.is_empty() || names.contains(&os))
+}
+
+/// `os`: o sistema da máquina que vai atualizar, nos nomes do `std::env::consts::OS`.
+fn news_item(id: &str, text: &str, os: &str) -> Option<(u8, Value)> {
     let (f, body) = frontmatter(text);
     let title = f.get("titulo").filter(|t| !t.is_empty())?;
+    if !for_system(f.get("sistema"), os)? { return None; }
     let (rank, kind) = match f.get("tipo").map(String::as_str)? { "novo" => (0, "new"), "melhoria" => (1, "improvement"), "correcao" => (2, "fix"), _ => return None };
     let platforms = match f.get("onde").map(String::as_str)? { "desktop" => "desktop", "celular" => "mobile", "todos" => "all", _ => return None };
     let opt = |k: &str| f.get(k).filter(|v| !v.is_empty()).cloned();
     // Correção não ganha animação: não há gesto novo a mostrar.
     let animation = if kind == "fix" { None } else { opt("animacao") };
-    Some((rank, json!({"id": id, "title": title, "kind": kind, "text": body, "platforms": platforms, "try_it": opt("experimente"), "animation": animation})))
+    let mut item = json!({"id": id, "title": title, "kind": kind, "text": body, "platforms": platforms, "try_it": opt("experimente"), "animation": animation});
+    // Ausente sai sem a chave: o JSON de quem não usa o campo continua o de antes.
+    if let Some(anchor) = opt("ancora") { item["anchor"] = Value::String(anchor); }
+    Some((rank, item))
 }
 
 /// `state_dir`: a pasta do `aplicados.json`; ilegível é erro, ausente é nada aplicado.
@@ -182,7 +238,7 @@ async fn news(repo: &Path, target: &str) -> Result<Vec<Value>, ()> {
     let mut news = Vec::new();
     for name in names {
         let id = name.trim_end_matches(".md").to_owned();
-        if let Some(item) = news_item(&id, &show(repo, target, &format!("docs/novidades/{name}")).await?) { news.push((item.0, id, item.1)); }
+        if let Some(item) = news_item(&id, &show(repo, target, &format!("docs/novidades/{name}")).await?, std::env::consts::OS) { news.push((item.0, id, item.1)); }
     }
     Ok(order_news(news))
 }

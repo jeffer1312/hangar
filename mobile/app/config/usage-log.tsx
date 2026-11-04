@@ -1,15 +1,26 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { ScrollView, Text, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Platform, ScrollView, Switch, Text, TextInput, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { Directory } from 'expo-file-system';
-import { getDiagFileForServer, getDiagSummaryForServer, type LinhaDiag, type ResumoDiag } from '@hangar/core';
+import * as Clipboard from 'expo-clipboard';
+import { runtimeVersion } from 'expo-updates';
+import {
+  DIAG_REPORT_TEXT_MAX, diagReportMachines, diagReportNext, diagReportTargets, getDiagFileForServer, getDiagSummaryForServer,
+  resendDiagReportMissed, sendDiagReportAll,
+  type DiagReportAllResult, type DiagReportFailureKind, type DiagReportScope, type LinhaDiag, type ResumoDiag, type Server,
+} from '@hangar/core';
 import { Pagina } from '../../src/features/config/Pagina';
 import { PageHeader, Pill } from '../../src/features/config/PageHeader';
 import { SectionCard } from '../../src/features/config/SectionCard';
 import { SettingsRow } from '../../src/features/config/SettingsRow';
 import { InfoNotice } from '../../src/features/config/InfoNotice';
 import { useSettingsColors } from '../../src/features/config/colors';
+import { useInputStyle } from '../../src/features/config/ServerConfigParts';
+import { Segmented } from '../../src/features/config/Segmented';
 import { useServers } from '../../src/stores/servers';
+import { haptic } from '../../src/ui/haptics';
+import { toast } from '../../src/ui/Toast';
 import * as m from '../../src/paraglide/messages';
 
 /** `missing`: servidor anterior à rota do diário; não é falha, só não há o que mostrar. */
@@ -33,6 +44,170 @@ function context(line: LinhaDiag): string {
   const code = line.codigo && line.nivel && line.nivel !== 'ok' ? `#${line.codigo}` : '';
   return [line.detalhe, platform, line.sessao, line.tela, code, line.ms != null ? `${line.ms}ms` : '']
     .filter(Boolean).join(' · ');
+}
+
+type Failure = { code: string; kind: DiagReportFailureKind };
+type Report = { state: 'sending' } | { state: 'done'; result: DiagReportAllResult };
+
+const CLIENT = `expo ${runtimeVersion ?? 'dev'} ${Platform.OS}`;
+
+function failureText({ code, kind }: Failure): string {
+  if (kind === 'unsupported') return m.native_settings_diary_report_unsupported();
+  if (kind === 'expired') return m.native_settings_diary_report_expired();
+  if (kind === 'ungrouped') return m.native_settings_diary_report_ungrouped();
+  if (kind === 'rate_limited') return m.native_settings_diary_report_rate_limited();
+  if (kind === 'unreachable') return m.native_settings_diary_report_unreachable();
+  return m.native_settings_diary_report_failed({ code });
+}
+
+/** Relatório de diagnóstico: por padrão de todas as máquinas da pessoa (o erro costuma estar noutra, não na
+ *  da tela). Convidado não vê a seção: o servidor recusaria. */
+function ReportSection({ server }: { server: Server }) {
+  const c = useSettingsColors();
+  const { theme } = useUnistyles();
+  const input = useInputStyle();
+  const all = useServers((s) => s.servers);
+  const machines = useMemo(() => diagReportMachines(all, server), [all, server]);
+  const [scope, setScope] = useState<DiagReportScope>('all');
+  const [picked, setPicked] = useState<Record<string, boolean>>({});
+  const [text, setText] = useState('');
+  const [report, setReport] = useState<Report | null>(null);
+  const [copied, setCopied] = useState(false);
+  const generation = useRef(0);
+
+  useEffect(() => {
+    setReport(null);
+    setCopied(false);
+    return () => { generation.current++; };
+  }, [server.id, server.baseUrl, server.token]);
+
+  const many = machines.length > 1;
+  const targets = diagReportTargets(machines, server, scope, picked);
+  const sending = report?.state === 'sending';
+  const done = report?.state === 'done' ? report.result : null;
+  const next = diagReportNext(done, targets);
+
+  const send = async () => {
+    if (sending || next === 'none') return;
+    const prev = next === 'resend' ? done : null;
+    const now = ++generation.current;
+    setReport({ state: 'sending' });
+    setCopied(false);
+    const result = prev ? await resendDiagReportMissed(prev, { text, client: CLIENT }) : await sendDiagReportAll(targets, { text, client: CLIENT });
+    if (now !== generation.current) return;
+    const firstMiss = result.results.find(({ result: r }) => !r.ok)?.result;
+    if (result.code) {
+      haptic.success();
+      if (!firstMiss) setText('');
+    } else if (firstMiss && !firstMiss.ok) toast.erro(failureText(firstMiss));
+    setReport({ state: 'done', result });
+  };
+
+  const copy = async (code: string) => {
+    try {
+      await Clipboard.setStringAsync(code);
+      haptic.success();
+      setCopied(true);
+    } catch (e) {
+      toast.erro(e instanceof Error ? e.message : m.erro_desconhecido());
+    }
+  };
+
+  const sentCode = done?.code ?? null;
+  const diaryFailed = !!done?.results.some(({ result: r }) => r.ok && r.diary === 'failed');
+  const missed = done?.results.flatMap(({ server: s, result: r }) => r.ok ? [] : [{ server: s, failure: { code: r.code, kind: r.kind } }]) ?? [];
+  // Quantas máquinas o envio teve, não a escolha de agora: trocar a escolha depois não muda o texto do erro.
+  const several = (done?.results.length ?? 0) > 1;
+  // O nome é o de quem recebe: a máquina da tela pode estar fora (desligada, par) e outra ir no lugar.
+  const only = machines[0];
+  return (
+    <SectionCard icon="LifeBuoy" title={m.native_settings_diary_report_title()}>
+      {many ? (
+        <SettingsRow icon="Server" title={m.native_settings_diary_report_scope_label()} description={m.native_settings_diary_report_server_many()}>
+          <Segmented<DiagReportScope>
+            options={[
+              { v: 'all', label: m.native_settings_diary_report_scope_all({ count: machines.length }), aria: m.native_settings_diary_report_scope_all_long({ count: machines.length }) },
+              { v: 'this', label: m.native_settings_diary_report_scope_this(), aria: m.native_settings_diary_report_scope_this_long({ server: server.label }) },
+              { v: 'pick', label: m.native_settings_diary_report_scope_pick() },
+            ]}
+            value={scope}
+            onChange={setScope}
+            label={m.native_settings_diary_report_scope_label()}
+            disabled={sending}
+          />
+        </SettingsRow>
+      ) : (
+        <SettingsRow icon="Server" title={only?.label ?? server.label}
+          description={only ? m.native_settings_diary_report_server({ server: only.label }) : m.native_settings_diary_report_no_target()} />
+      )}
+      {many && scope === 'pick' ? machines.map((s) => (
+        <SettingsRow key={s.id} icon="Monitor" title={s.label}
+          right={<Switch value={picked[s.id] ?? s.id === server.id} disabled={sending} accessibilityLabel={s.label}
+            onValueChange={(on) => setPicked((p) => ({ ...p, [s.id]: on }))} />} />
+      )) : null}
+      <SettingsRow icon="MessageSquare" title={m.native_settings_diary_report_text_label()}>
+        <TextInput
+          {...input}
+          style={[input.style, styles.textArea]}
+          value={text}
+          onChangeText={setText}
+          placeholder={m.native_settings_diary_report_text_placeholder()}
+          accessibilityLabel={m.native_settings_diary_report_text_label()}
+          maxLength={DIAG_REPORT_TEXT_MAX}
+          multiline
+          textAlignVertical="top"
+          editable={!sending}
+        />
+      </SettingsRow>
+      <SettingsRow icon="ShieldCheck" title={m.native_settings_diary_report_send()} description={m.native_settings_diary_report_notice()}>
+        {sentCode ? (
+          <View style={styles.sent}>
+            <Text accessibilityLiveRegion="polite" style={[styles.noteText, { color: c.text }]}>{m.native_settings_diary_report_sent()}</Text>
+            <Text selectable style={[styles.code, { color: c.text, fontFamily: theme.base.fontMono }]}>{sentCode}</Text>
+            {diaryFailed ? (
+              <Text style={[styles.noteText, { color: theme.tokens.status.warning }]}>{m.native_settings_diary_report_diary_failed()}</Text>
+            ) : null}
+          </View>
+        ) : null}
+        {missed.length ? (
+          <View accessibilityRole="alert" style={styles.sent}>
+            {several ? (
+              <Text style={[styles.noteText, { color: theme.tokens.status.error }]}>{m.native_settings_diary_report_machines_failed()}</Text>
+            ) : null}
+            {missed.map((x) => (
+              <Text key={x.server.id} style={[styles.noteText, { color: theme.tokens.status.error }]}>
+                {several ? m.native_settings_diary_report_machine_failed({ server: x.server.label, reason: failureText(x.failure) }) : failureText(x.failure)}
+              </Text>
+            ))}
+          </View>
+        ) : null}
+        {!targets.length && machines.length > 0 && !sentCode ? (
+          <Text style={[styles.noteText, { color: c.text }]}>
+            {scope === 'pick' ? m.native_settings_diary_report_none_picked() : m.native_settings_diary_report_no_target()}
+          </Text>
+        ) : null}
+        <View style={styles.row}>
+          {sentCode ? (
+            <Pill
+              icon={copied ? 'Check' : 'Copy'}
+              label={copied ? m.native_settings_diary_report_copied() : m.native_settings_diary_report_copy()}
+              onPress={() => { void copy(sentCode); }}
+            />
+          ) : null}
+          {sentCode && next === 'none' ? null : (
+            <Pill
+              icon={next === 'resend' ? 'RefreshCw' : 'Send'}
+              label={sending ? m.native_settings_diary_report_sending()
+                : next === 'resend' ? m.native_settings_diary_report_retry()
+                : m.native_settings_diary_report_send()}
+              disabled={sending || next === 'none'}
+              onPress={() => { void send(); }}
+            />
+          )}
+        </View>
+      </SettingsRow>
+    </SectionCard>
+  );
 }
 
 const stamp = () => new Date().toISOString().slice(0, 16).replace(/[-:]/g, '').replace('T', '-');
@@ -123,6 +298,7 @@ export default function UsageLogPage() {
   );
 
   return (
+    <KeyboardAvoidingView behavior="padding" automaticOffset style={styles.flex}>
     <Pagina>
       {header}
       <SectionCard icon="ShieldCheck" title={m.native_settings_diary_rules()}>
@@ -139,6 +315,7 @@ export default function UsageLogPage() {
           ) : null}
         </SettingsRow>
       </SectionCard>
+      {server.invite ? null : <ReportSection server={server} />}
       <SectionCard
         icon="List"
         title={m.native_settings_diary_recent()}
@@ -162,10 +339,16 @@ export default function UsageLogPage() {
         {diary && error ? note(error, theme.tokens.status.error, true) : null}
       </SectionCard>
     </Pagina>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create((theme) => ({
+  flex: { flex: 1 },
+  textArea: { minHeight: 88, paddingTop: theme.base.space[2], paddingBottom: theme.base.space[2] },
+  sent: { gap: theme.base.space[1.5] },
+  noteText: { fontSize: theme.base.text.xs },
+  code: { fontSize: theme.base.text.xl, fontWeight: theme.base.weight.semibold, letterSpacing: 2 },
   row: { flexDirection: 'row', flexWrap: 'wrap', gap: theme.base.space[2] },
   note: { paddingHorizontal: theme.base.space[4], paddingVertical: theme.base.space[3], fontSize: theme.base.text.xs },
   lines: { maxHeight: 420 },

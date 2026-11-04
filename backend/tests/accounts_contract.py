@@ -10,6 +10,7 @@ from json import dumps
 import os
 from pathlib import Path
 import queue
+import shutil
 import subprocess
 import sys
 import threading
@@ -44,7 +45,7 @@ def rust_integration_binary(build_log: Path | None = None) -> Path:
     return _integration_binary
 
 
-_BRIDGE_OPERATIONS = frozenset({"bridge.prepare", "bridge.claude_window", "bridge.other_quotas"})
+_BRIDGE_OPERATIONS = frozenset({"bridge.prepare", "bridge.other_quotas"})
 # Rotas da ponte secundária Pi/omp retirada: chamada a qualquer uma é escrita/leitura fora do Rust.
 _RETIRED_SECONDARY_ROUTES = frozenset({
     "/internal/accounts/device-propagate", "/internal/accounts/device-propagate/ack",
@@ -231,7 +232,7 @@ process.stdout.write(r);process.exit(r.includes('false')?1:0);"""
             executable = fixture / "claude"
             executable.write_text("#!/usr/bin/env node\n" + source, encoding="utf-8")
             executable.chmod(0o700)
-        environment["PATH"] = str(fixture) + os.pathsep + environment["PATH"]
+        environment["PATH"] = synthetic_cli_path(fixture)
         environment.update(ACCOUNT_HTTP_UPSTREAM=reference.base_url.removeprefix("http://"),
                            HANGAR_RUNTIME_INSTANCE="contract-instance")
         self.process = subprocess.Popen([str(binary), "--exact", "accounts_claude_login::http_probe_process", "--nocapture"],
@@ -254,6 +255,22 @@ process.stdout.write(r);process.exit(r.includes('false')?1:0);"""
         self.process.wait(timeout=15)
         self.process.stdout.close()
         self.process.stderr.close()
+
+
+def synthetic_cli_path(fixture: Path) -> str:
+    """Só o Node e os dublês: CLIs instaladas não podem aquecer usando a conta da prova."""
+    node = shutil.which("node")
+    assert node, "Node é necessário para os contratos de contas"
+    destination = fixture / ("node.exe" if os.name == "nt" else "node")
+    if not destination.exists():
+        if os.name == "nt":
+            try:
+                os.link(node, destination)
+            except OSError:
+                shutil.copy2(node, destination)
+        else:
+            destination.symlink_to(Path(node).resolve())
+    return str(fixture)
 
 
 class RustCodex(HttpTransport):
@@ -315,7 +332,7 @@ else send({id:m.id,error:{code:-32601,message:'método inesperado'}});
         else:
             (self.fixture / "codex.cmd").write_text("@node fixture\r\n", encoding="utf-8")
         environment = isolated_environment(reference.root)
-        environment["PATH"] = "" if missing_cli else str(self.fixture) + os.pathsep + environment["PATH"]
+        environment["PATH"] = "" if missing_cli else synthetic_cli_path(self.fixture)
         environment.update(ACCOUNT_HTTP_UPSTREAM=reference.base_url.removeprefix("http://"),
                            HANGAR_RUNTIME_INSTANCE="contract-instance")
         if device_url is not None:
@@ -367,7 +384,7 @@ def _worker() -> None:
     from fastapi import FastAPI, Request as HttpRequest
     from fastapi.responses import JSONResponse
     from fastapi.testclient import TestClient
-    from app import api, codex_contas_login, credenciais, account_bridge, dictation_bridge
+    from app import api, codex_contas_login, codex_preparo, credenciais, account_bridge, dictation_bridge
     from app.account_lifecycle import AccountKey
     from types import SimpleNamespace
     from app import internal_api, runtime_coordinator
@@ -435,30 +452,6 @@ def _worker() -> None:
     app.include_router(internal_api.router)
     app.state.codex_contas_login = service
     calls = []
-    from app import claude_window
-    windows = {}
-    window_calls = []
-    code_entered = threading.Event()
-    @app.get("/__contract__/wait-claude-code")
-    async def wait_claude_code():
-        return {"entered": await asyncio.to_thread(code_entered.wait, 20)}
-    def window_create(name, cwd, config_dir=None):
-        windows["term-" + name] = True
-        window_calls.append({"action": "open", "name": "term-" + name, "config_dir": config_dir})
-        return "term-" + name
-    def window_send(name, text):
-        window_calls.append({"action": "command", "name": name, "command": text})
-    def window_code(name, text):
-        # A prova guarda somente a classificação da entrada, nunca o código.
-        window_calls.append({"action": "code", "name": name, "protected": True})
-        code_entered.set()
-    def window_close(name):
-        windows.pop(name, None)
-        window_calls.append({"action": "close", "name": name})
-    @app.get("/__contract__/claude-windows")
-    def claude_windows():
-        return {"windows": list(windows), "calls": window_calls}
-
 
     @app.post("/__contract__/claude-owner")
     def claude_owner(body: dict):
@@ -597,10 +590,6 @@ def _worker() -> None:
             response = await call_next(request)
             entry["status"] = response.status_code
             return response
-        if request.url.path == "/internal/accounts/claude-window":
-            response = await call_next(request)
-            calls.append({"operation": "bridge.claude_window", "status": response.status_code})
-            return response
         if request.url.path.startswith(account_bridge.ACCOUNT_PREFIXES):
             # Conta e cota são do Rust: o pedido que chega aqui fica no diário e é recusado.
             operation = f"account:{request.method} {request.url.path}"
@@ -664,6 +653,20 @@ def _worker() -> None:
     def deny_external(*args, **kwargs):
         raise AssertionError("uma operação de contrato tentou executar CLI ou acessar rede real")
 
+    class HooksNative:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def request(self, method, params):
+            assert method == "hooks/list" and params == {"cwds": []}
+            return {"data": []}
+
 
     import socket
     original_connection = socket.create_connection
@@ -675,14 +678,13 @@ def _worker() -> None:
                 return original_connection(address, *args, **kwargs)
         return deny_external()
 
-    with patch.multiple(claude_window, spawn=window_create, submit=window_send,
-                        read=lambda name: "https://claude.ai/oauth/authorize?fixture=1\nPaste code here if prompted",
-                        kill=window_close, send_code=window_code), \
-            patch.object(runtime_coordinator, "current", return_value=instance), \
+    with patch.object(runtime_coordinator, "current", return_value=instance), \
             patch.object(api.app.state, "codex_contas_login", service, create=True), \
             patch.object(api, "_codex_require_idle_preparation"), \
             patch.object(api, "_invalidate_lists"), \
             patch.object(codex_contas_sync, "_prepare_account_guarded", side_effect=prepare_at_barrier), \
+            patch.object(codex_preparo, "CodexNativo", HooksNative), \
+            patch.object(codex_preparo, "shutil", SimpleNamespace(which=lambda name: "contract-codex" if name == "codex" else None)), \
             patch.object(api.tmux, "has_session", side_effect=lambda name: name in mux and any(child.poll() is None for child in children)), \
             patch.object(api.tmux, "_run", side_effect=mux_command), \
             patch.object(api.tmux, "is_hidden", return_value=False), \

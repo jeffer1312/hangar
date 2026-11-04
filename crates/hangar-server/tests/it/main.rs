@@ -5,18 +5,33 @@
 //! parte. O do diário é por servidor (o Python falso de cada um), e ali os nomes de sessão podem repetir.
 
 mod common;
+mod remote_browser;
 mod groups_text;
 mod session_defaults;
+mod tags;
+mod tour_progress;
 mod push_expo;
 mod artifacts;
+mod archive_history;
+mod archive_list;
 mod session_media;
+mod search_context;
+mod search_route;
+mod ask_route;
 mod commands;
 mod device_install;
+#[cfg(unix)]
+mod devices;
+mod diag_report;
+mod auto_report;
 mod install_root;
 mod web_ui;
 mod update_routes;
 mod update_install;
 mod dictation_routes;
+mod dictation_public;
+mod dictation_public_cases;
+mod session_open_cases;
 mod dictation_catalog;
 mod dictation_harness;
 mod dictation_process;
@@ -157,6 +172,7 @@ mod contract_costs_pricing;
 mod contract_costs_reports;
 mod contract_costs_simple;
 mod contract_history;
+mod transcript_notices;
 mod contract_list;
 mod contract_pyjson;
 mod contract_tail;
@@ -273,5 +289,6 @@ mod uploads_contract;
 mod uploads_store;
 mod voice_settings;
 mod voice_ws;
+mod speech_public;
 mod workspace_routes;
 mod worktree_routes;

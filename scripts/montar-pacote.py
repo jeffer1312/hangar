@@ -250,6 +250,17 @@ def _stem(name: str) -> str:
     return name
 
 
+SYSTEMS = {"linux", "windows", "macos"}
+
+
+def _for_system(value: str, system: str):
+    """O `for_system` do crates/hangar-server/src/update_notes: vazio = todos; nome desconhecido = None."""
+    names = value.replace(",", " ").split()
+    if not set(names) <= SYSTEMS:
+        return None
+    return not names or system in names
+
+
 def notes(root: Path, os_name: str) -> dict:
     """Avisos e novidades da versão, no formato do `GET /api/update/notes`. As regras são as do
     crates/hangar-server/src/update_notes (casos comuns em fixtures.json); aviso só de passo destrutivo
@@ -270,11 +281,14 @@ def notes(root: Path, os_name: str) -> dict:
     for name, text in _note_files(root / "docs/novidades"):
         f, body = frontmatter(text)
         kind, platforms = kinds.get(f.get("tipo")), places.get(f.get("onde"))
-        if not (f.get("titulo") and kind and platforms):
+        if not (f.get("titulo") and kind and platforms and _for_system(f.get("sistema", ""), os_name.split("-")[0])):
             continue
-        news.append({"id": _stem(name), "title": f["titulo"], "kind": kind, "text": body, "platforms": platforms,
-                     "try_it": f.get("experimente") or None,
-                     "animation": None if kind == "fix" else f.get("animacao") or None})
+        item = {"id": _stem(name), "title": f["titulo"], "kind": kind, "text": body, "platforms": platforms,
+                "try_it": f.get("experimente") or None,
+                "animation": None if kind == "fix" else f.get("animacao") or None}
+        if f.get("ancora"):
+            item["anchor"] = f["ancora"]  # ausente sai sem a chave, como no update_notes do Rust
+        news.append(item)
     order = list(kinds.values())
     news.sort(key=lambda n: (order.index(n["kind"]), n["id"]))
     return {"warnings": warnings, "news": news}
@@ -360,6 +374,20 @@ def main(argv=None) -> int:
             shutil.copyfile(src, root / "bin" / f"{name}{exe}")
             # O artefato do Actions perde o bit de execução.
             (root / "bin" / f"{name}{exe}").chmod(0o755)
+        auth_name = "hangar_auth.dll" if a.os.startswith("windows") else "libhangar_auth.dylib" if a.os.startswith("macos") else "libhangar_auth.so"
+        suffix = Path(auth_name).suffix
+        auth = next((a.bin_dir / n for n in (auth_name, f"hangar-auth-{a.os}{suffix}")
+                     if (a.bin_dir / n).is_file()), None)
+        if auth is None:
+            die(f"{auth_name} não está em {a.bin_dir}")
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("pin_auth_pair", Path(__file__).with_name("pin-auth-pair.py"))
+        pair = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(pair)
+        # O artefato publicado leva nome de plataforma; o carregador usa o nome nativo estável.
+        native_auth = work / auth_name
+        shutil.copyfile(auth, native_auth)
+        pair.publish(root / "bin" / f"hangar-server{exe}", native_auth)
         copy_repo(root)
         version_notes = notes(root, a.os)
         compile_pyc(root, a.os, py_version)

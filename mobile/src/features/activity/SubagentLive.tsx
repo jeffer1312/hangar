@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { formatElapsed, getSubagent, mensagemDeErro, prependOlder, sendSubagentMessage } from '@hangar/core';
-import type { Server, SubagentRun } from '@hangar/core';
+import { codexSubagentState, formatElapsed, getSubagent, mensagemDeErro, prependOlder, projectCodexSubagent, sendSubagentMessage } from '@hangar/core';
+import type { CodexSubagents, Server, SubagentRun } from '@hangar/core';
 import { MessageList } from '../../chat/MessageList';
 import { WorkingLine } from '../../chat/LiveWork';
 import * as m from '../../paraglide/messages';
@@ -17,6 +17,7 @@ interface Props {
   agentId: string;
   // O que o transcript do PAI diz (Claude): true/false, ou null quando só o disco conhece o subagente.
   paiRodando?: boolean | null;
+  states?: CodexSubagents;
 }
 
 export function subagentStatus(detail: SubagentRun, parentRunning: boolean | null, nowMs: number): 'running' | 'finished' | 'failed' | 'silent' | 'unknown' {
@@ -45,10 +46,15 @@ export function SubagentLive(props: Props) {
   return <SubagentConversation key={JSON.stringify([props.server.id, props.sessionName, props.agentId])} {...props} />;
 }
 
-function SubagentConversation({ server, sessionName, agentId, paiRodando = null }: Props) {
+function SubagentConversation({ server, sessionName, agentId, paiRodando = null, states }: Props) {
   const { theme } = useUnistyles();
   const readActivity = useActivityRequest();
-  const [detail, setDetail] = useState<SubagentRun | null>(null);
+  const [rawDetail, setDetail] = useState<SubagentRun | null>(null);
+  const detail = rawDetail ? projectCodexSubagent(rawDetail, states) : null;
+  const nativeState = codexSubagentState(states, agentId, detail?.agentPath);
+  const lifecycle = JSON.stringify([nativeState?.state, nativeState?.ended_at]);
+  const latestStates = useRef(states);
+  latestStates.current = states;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [retry, setRetry] = useState(0);
@@ -89,8 +95,9 @@ function SubagentConversation({ server, sessionName, agentId, paiRodando = null 
         setError('');
         failCount = 0;
         setLoading(false);
-        const status = subagentStatus(d, paiRodando, Date.now());
-        stopped = status === 'finished' || status === 'failed';
+        const status = subagentStatus(projectCodexSubagent(d, latestStates.current), paiRodando, Date.now());
+        stopped = status === 'finished' || status === 'failed'
+          || codexSubagentState(latestStates.current, agentId, d.agentPath)?.state === null;
       } catch (e) {
         if (!active || myGen !== gen) return;
         failCount += 1;
@@ -113,7 +120,7 @@ function SubagentConversation({ server, sessionName, agentId, paiRodando = null 
       active = false;
       if (timer) clearTimeout(timer);
     };
-  }, [server, sessionName, agentId, paiRodando, retry, limit, readActivity]);
+  }, [server, sessionName, agentId, paiRodando, lifecycle, retry, limit, readActivity]);
 
   async function send() {
     if (!detail?.canMessage || !text.trim() || sendPending.current) return;

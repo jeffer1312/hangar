@@ -43,7 +43,6 @@ def test_stale_provider_or_ambiguous_process_never_allows_unbound_writer(monkeyp
     monkeypatch.setattr(api, '_provider_of', lambda name: 'claude')
     effects = []
     monkeypatch.setattr(api, '_enviar_nativo', lambda *args: effects.append('socket') or 'mid')
-    monkeypatch.setattr(api.plugin_bridge, 'entregar', lambda *args, **kwargs: effects.append('publish') or True)
     monkeypatch.setattr(api.terminal, 'send_prompt', lambda *args, **kwargs: effects.append('key') or 'sent')
     monkeypatch.setattr(api, '_agendar_confirmacao', lambda *args: None)
     async def scenario():

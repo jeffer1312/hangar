@@ -44,7 +44,7 @@ pub fn router() -> axum::Router<Arc<AppState>> {
 }
 
 pub async fn public(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (forward, owner) = gate(&st, peer, &req);
+    let (forward, owner) = match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     if !owner {
         return pass(&st, req, &forward).await;
     }

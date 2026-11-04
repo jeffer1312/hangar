@@ -1372,3 +1372,27 @@ async fn confirmed_plan_waits_for_silence_and_is_announced_only_after_delivery()
     assert_eq!(rig.api.lock().unwrap().inputs.len(), 1, "a resposta só veio depois da entrega");
     assert!(text(&reply).contains("entregue"), "{reply}");
 }
+
+#[test]
+fn backstage_reads_in_the_order_people_spoke() {
+    let mut lines = VecDeque::new();
+    let kinds = |l: &VecDeque<BackstageLine>| l.iter().map(|b| (b.at, b.live, format!("{:?}", b.line))).collect::<Vec<_>>();
+    add_backstage(&mut lines, Backstage::You("Tá".into()), 1_000, true);
+    add_backstage(&mut lines, Backstage::You("Tá, me diz".into()), 1_000, true);
+    assert_eq!(lines.len(), 1, "a parcial troca no lugar");
+    add_backstage(&mut lines, Backstage::Voice("Entendi".into()), 26_000, true);
+    add_backstage(&mut lines, Backstage::Heard("me diz o status".into()), 33_000, false);
+    // A final dele chega depois de a voz começar, mas fica antes dela: vale a hora em que ele começou a falar.
+    add_backstage(&mut lines, Backstage::You("Tá, me diz o status".into()), 1_000, false);
+    add_backstage(&mut lines, Backstage::Voice("Entendi, vou ver.".into()), 26_000, false);
+    assert_eq!(kinds(&lines), vec![
+        (1_000, false, "You(\"Tá, me diz o status\")".to_owned()),
+        (26_000, false, "Voice(\"Entendi, vou ver.\")".to_owned()),
+        (33_000, false, "Heard(\"me diz o status\")".to_owned()),
+    ]);
+    add_backstage(&mut lines, Backstage::You(" ".into()), 40_000, false);
+    assert_eq!(lines.len(), 3, "final vazia não vira linha");
+    for n in 0..200 { add_backstage(&mut lines, Backstage::Answer(format!("r{n}")), 50_000 + n, false); }
+    assert_eq!(lines.len(), BACKSTAGE_KEEP);
+    assert!(matches!(&lines.back().unwrap().line, Backstage::Answer(t) if t == "r199"), "sai a mais velha");
+}

@@ -13,7 +13,7 @@ pub enum ClientMsg {
     Hello { client: String, screen: Option<Screen>, caps: Vec<String>, #[serde(default)] actions: Vec<Value> },
     Offer { sdp: String },
     Live,
-    Level { input: f32 },
+    Level { #[serde(deserialize_with = "crate::json_envelope::float32")] input: f32 },
     Screen { screen: Option<Screen> },
     ToolResult { call: u64, ok: bool, text: String },
     Mode { mode: String },
@@ -42,4 +42,15 @@ pub enum ToController {
     /// Outro aparelho assumiu: as ferramentas de tela pedidas ao anterior não terão resposta.
     OwnerChanged,
     Models(ModeModels),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ClientMsg;
+
+    #[test]
+    fn level_with_a_fraction_is_read_through_the_tag_buffer() {
+        let msg = serde_json::from_str::<ClientMsg>(r#"{"type":"level","input":0.4}"#).unwrap();
+        assert!(matches!(msg, ClientMsg::Level { input } if (input - 0.4).abs() < 1e-6));
+    }
 }

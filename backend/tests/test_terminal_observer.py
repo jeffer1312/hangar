@@ -371,7 +371,6 @@ def test_retired_monitor_never_publishes_again(monkeypatch):
     monkeypatch.setattr(state, "pergunta_aberta", lambda sid: None)
     monkeypatch.setattr(state.hook_state, "get_state", lambda sid: None)
     monkeypatch.setattr(state.hook_state, "shells", lambda sid: [])
-    monkeypatch.setattr(state.plugin_bridge, "vivo", lambda name: False)
     async def run():
         monitor = state.StateMonitor("s", poll=0, provider="claude", sid_get=lambda: "old").stream()
         assert (await anext(monitor)).state == "idle"
@@ -383,27 +382,6 @@ def test_retired_monitor_never_publishes_again(monkeypatch):
         await replacement.close()
         await monitor.aclose()
     asyncio.run(run())
-
-
-def test_python_contract_generator_explicitly_disables_bridge(monkeypatch):
-    import importlib.util
-    from pathlib import Path
-    t = bridge()
-    t.configure("127.0.0.1:12345", "secret")
-    blocked = []
-    async def request(payload):
-        blocked.append(payload)
-        raise AssertionError("reference generator cannot use Rust")
-    monkeypatch.setattr(t, "_request", request)
-    path = Path(__file__).parent / "fixtures" / "contract" / "gen_terminal.py"
-    spec = importlib.util.spec_from_file_location("terminal_reference", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    frames = [dict(pane="✻ Thinking…", facts={})] * 4
-    result = asyncio.run(module.reference_sequence(frames))
-    assert result[-1]["analysis"]["state"] == "idle"
-    assert result[-1]["memory"]["frozen"] == 3
-    assert not blocked
 
 
 def test_sidecar_preview_producer_keeps_lease_alive_without_capture(monkeypatch):
@@ -479,43 +457,6 @@ def test_stdlib_bridge_performs_real_loopback_http_without_environment_proxy(mon
         server.server_close()
         thread.join(1)
     assert [c["op"] for c in calls] == ["acquire", "capture", "release"]
-
-
-def test_invalid_plugin_label_keeps_python_behavior_and_facts_are_read_once(monkeypatch):
-    from pydantic import ValidationError
-    t = bridge()
-    t.configure("127.0.0.1:12345", "secret")
-    monkeypatch.setattr(state.tmux, "_pane_target", lambda name: "%8")
-    counters = dict(question=0, plugin_question=0, plugin_state=0, hook=0, status=0)
-    question = {"id":"q", "questions":[{"question":"choose", "options":[{"label":None}]}]}
-    def collect(key, value):
-        def get(*args):
-            counters[key] += 1
-            return value
-        return get
-    monkeypatch.setattr(state, "pergunta_aberta", collect("question", None))
-    monkeypatch.setattr(state.plugin_bridge, "pergunta_pendente", collect("plugin_question", question))
-    monkeypatch.setattr(state.plugin_bridge, "estado_recente", collect("plugin_state", ("working", None)))
-    monkeypatch.setattr(state.hook_state, "get_state", collect("hook", None))
-    monkeypatch.setattr(state.hook_state, "shells", lambda sid: [])
-    monkeypatch.setattr(state, "_sidecar_status", collect("status", "sidecar"))
-    from app.loop import LoopLink
-    monkeypatch.setattr(LoopLink, "get", lambda self: None)
-    seen = []
-    async def request(payload):
-        if payload["op"] == "reduce": seen.append(payload)
-        return None
-    monkeypatch.setattr(t, "_request", request)
-    async def run():
-        stream = state.StateMonitor("s", sid_get=lambda: "thread", provider="claude").stream()
-        try:
-            with pytest.raises(ValidationError, match="options.0"):
-                await anext(stream)
-        finally:
-            await stream.aclose()
-    asyncio.run(run())
-    assert counters == dict(question=1, plugin_question=1, plugin_state=0, hook=0, status=1)
-    assert not seen
 
 
 @pytest.mark.parametrize("kind", ["bad-status", "incomplete-read"])
@@ -741,9 +682,6 @@ def test_delayed_sse_clear_keeps_state_stream_until_getter_converges(monkeypatch
     monkeypatch.setattr(t, "_request", fake_http([], fail=True))
     monkeypatch.setattr(state, "pergunta_aberta", lambda sid: None)
     monkeypatch.setattr(state, "_sidecar_status", lambda sid: None)
-    monkeypatch.setattr(state.plugin_bridge, "pergunta_pendente", lambda name: None)
-    monkeypatch.setattr(state.plugin_bridge, "estado_recente", lambda name: None)
-    monkeypatch.setattr(state.plugin_bridge, "vivo", lambda name: False)
     monkeypatch.setattr(state.hook_state, "get_state", lambda sid: None)
     monkeypatch.setattr(state.hook_state, "shells", lambda sid: [])
     from app.loop import LoopLink
@@ -900,9 +838,6 @@ def test_lease_start_failure_preserves_python_consumer(monkeypatch, caplog, fail
     monkeypatch.setattr(state.tmux, "capture_pane", lambda name: pane[0])
     monkeypatch.setattr(state, "pergunta_aberta", lambda sid: None)
     monkeypatch.setattr(state, "_sidecar_status", lambda sid: None)
-    monkeypatch.setattr(state.plugin_bridge, "pergunta_pendente", lambda name: None)
-    monkeypatch.setattr(state.plugin_bridge, "estado_recente", lambda name: None)
-    monkeypatch.setattr(state.plugin_bridge, "vivo", lambda name: False)
     monkeypatch.setattr(state.hook_state, "get_state", lambda sid: None)
     monkeypatch.setattr(state.hook_state, "shells", lambda sid: [])
     monkeypatch.setattr(state.StateMonitor, "FRAME_MAX_AGE", 0)
@@ -1085,9 +1020,6 @@ def test_monitor_reduces_captured_text_without_second_http(monkeypatch):
     monkeypatch.setattr(t, "_request", request)
     monkeypatch.setattr(state, "pergunta_aberta", lambda sid: None)
     monkeypatch.setattr(state, "_sidecar_status", lambda sid: None)
-    monkeypatch.setattr(state.plugin_bridge, "pergunta_pendente", lambda name: None)
-    monkeypatch.setattr(state.plugin_bridge, "estado_recente", lambda name: None)
-    monkeypatch.setattr(state.plugin_bridge, "vivo", lambda name: False)
     monkeypatch.setattr(state.hook_state, "get_state", lambda sid: None)
     monkeypatch.setattr(state.hook_state, "shells", lambda sid: [])
     from app.loop import LoopLink
@@ -1340,9 +1272,6 @@ def test_start_failure_retries_rust_in_same_live_consumer(monkeypatch, failure_s
     monkeypatch.setattr(state.StateMonitor, "FRAME_MAX_AGE", 0)
     monkeypatch.setattr(state, "pergunta_aberta", lambda sid: None)
     monkeypatch.setattr(state, "_sidecar_status", lambda sid: None)
-    monkeypatch.setattr(state.plugin_bridge, "pergunta_pendente", lambda name: None)
-    monkeypatch.setattr(state.plugin_bridge, "estado_recente", lambda name: None)
-    monkeypatch.setattr(state.plugin_bridge, "vivo", lambda name: False)
     monkeypatch.setattr(state.hook_state, "get_state", lambda sid: None)
     monkeypatch.setattr(state.hook_state, "shells", lambda sid: [])
     monkeypatch.setattr(LoopLink, "get", lambda self: None)
@@ -1718,9 +1647,6 @@ def test_rust_capture_error_is_reported_not_replaced(monkeypatch):
     monkeypatch.setattr(diag, "registrar", lambda *args, **kwargs: entries.append((args, kwargs)))
     monkeypatch.setattr(state, "pergunta_aberta", lambda sid: None)
     monkeypatch.setattr(state, "_sidecar_status", lambda sid: None)
-    monkeypatch.setattr(state.plugin_bridge, "pergunta_pendente", lambda name: None)
-    monkeypatch.setattr(state.plugin_bridge, "estado_recente", lambda name: None)
-    monkeypatch.setattr(state.plugin_bridge, "vivo", lambda name: False)
     monkeypatch.setattr(state.hook_state, "get_state", lambda sid: None)
     monkeypatch.setattr(state.hook_state, "shells", lambda sid: [])
     from app.loop import LoopLink
@@ -1773,7 +1699,6 @@ def test_rust_error_still_sees_death_and_never_invents_first_state(monkeypatch, 
     python_captures = []
     monkeypatch.setattr(state.tmux, "capture_pane", lambda *args: python_captures.append(args) or "Python")
     monkeypatch.setattr(t, "_http", lambda config, payload: {})
-    monkeypatch.setattr(state.plugin_bridge, "estado_recente", lambda name: None)
     monkeypatch.setattr(state.plugin_bridge, "esquecer", lambda name: None)
     from app.adapters.claude_headless import sessions
     monkeypatch.setattr(sessions, "em_troca", lambda name: False)

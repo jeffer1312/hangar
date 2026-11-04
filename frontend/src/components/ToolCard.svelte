@@ -38,9 +38,11 @@
     /** Cartão de `Agent`: abrir a conversa DELE (painel de Atividade) em vez de expandir o cartão,
      *  que só mostraria o texto do lançamento. Ausente = comportamento de sempre. */
     onAbrirAgente?: (prompt: string | undefined, titulo: string) => void;
+    /** Subagente parado esperando o próprio trabalho de fundo: sem marca de execução. */
+    esperando?: boolean;
   }
   let { event, result = null, sessionName, animate = true, soDetalhe = false, emGrupo = false, ultimo = false,
-        escrevendo = false, onAbrirAgente = undefined }: Props = $props();
+        escrevendo = false, onAbrirAgente = undefined, esperando = false }: Props = $props();
   const sessionServer = useSessionServer();
 
   // Cartão de subagente COM destino: o clique abre a conversa dele. Sem `onAbrirAgente` (celular,
@@ -261,7 +263,8 @@
   const rodandoHa = $derived(phase === 'pending' && event.ts ? fmtDur(Math.max(0, agora - event.ts * 1000)) : null);
   // Duração no desfecho só onde espera é informação (comando e MCP), e só quando passa de 2 s.
   const statusLinha = $derived(
-    rodandoHa && (comandoInteiro || ehMcp) ? m.tool_executando_ha({ tempo: rodandoHa })
+    esperando ? m.tool_agente_esperando()
+      : rodandoHa &&(comandoInteiro || ehMcp) ? m.tool_executando_ha({ tempo: rodandoHa })
       : phase === 'done' && (comandoInteiro || ehMcp) && duracao !== null && duracao >= 2000
         ? `${outcome} · ${fmtDur(duracao)}` : outcome,
   );
@@ -289,7 +292,7 @@
 <!-- O DETALHE e identico nas duas peles: e o mesmo dado, so a moldura muda. Snippet pra existir uma
      vez so — duplicar estas tres pontas era o jeito de a pele nova perder o diff ou o erro. -->
 {#snippet termHead()}
-  <span class="tr-dot" class:pending={phase === 'pending'} data-phase={phase} aria-hidden="true"></span>
+  <span class="tr-dot" class:pending={phase === 'pending' && !esperando} data-phase={phase} aria-hidden="true"></span>
   <span class="tt-call"><b>{termName}</b>({termArg})</span>
 {/snippet}
 
@@ -402,7 +405,7 @@
       onclick={() => (expanded = !expanded)}
     >
       {#if !emGrupo || phase !== 'done' || escrevendo}
-        <span class="tc-glyph" data-phase={phase} class:vivo={phase === 'pending'}>
+        <span class="tc-glyph" data-phase={phase} class:vivo={phase === 'pending' && !esperando}>
           <ToolGlyph tool={event.tool_name} />
         </span>
       {/if}
@@ -415,6 +418,8 @@
       {/if}
       {#if escrevendo}
         <span class="tc-fim">{m.tool_fase_escrevendo()}</span>
+      {:else if esperando}
+        <span class="tc-fim">{statusLinha}</span>
       {:else if phase === 'pending'}
         <span class="tc-fim tc-brilho">{m.tool_fase_rodando()}</span>
       {:else if phase === 'error'}
@@ -473,7 +478,7 @@
   onkeydown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); aoClicar(); } }}
 >
   <div class="tr-call">
-    <span class="tr-dot" class:pending={phase === 'pending'} data-phase={phase} aria-hidden="true"></span>
+    <span class="tr-dot" class:pending={phase === 'pending' && !esperando} data-phase={phase} aria-hidden="true"></span>
     <span class="tr-name">{nomeFerramenta(event.tool_name)}</span>
     {#if isBackground}<span class="tr-badge">{m.tool_background()}</span>{/if}
     {#if summary}<span class="tr-arg" class:open={expanded}>{summary}</span>{/if}

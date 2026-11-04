@@ -1,45 +1,33 @@
-//! O esperado vem das fixtures do Python (`backend/tests/fixtures/contract/session-open/`), nunca
-//! da saída do Rust; as diferenças dos consertos estão nomeadas onde aparecem.
+//! O esperado está escrito nos cenários de `cases.rs`, nunca vem da saída do Rust; as diferenças dos
+//! consertos estão nomeadas onde aparecem.
 use super::*;
 use proptest::prelude::*;
 use regex::Regex;
 use std::path::PathBuf;
 
-fn fixture_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../backend/tests/fixtures/contract/session-open")
-}
-
 /// `(nome, fixture)` de cada cenário de criação, em ordem.
 fn create_fixtures() -> Vec<(String, Value)> {
-    let mut out: Vec<(String, Value)> = std::fs::read_dir(fixture_dir()).unwrap().flatten()
-        .filter_map(|entry| {
-            let name = entry.file_name().to_string_lossy().strip_suffix(".json")?.to_owned();
-            name.starts_with("create_").then(|| (name, serde_json::from_slice(&std::fs::read(entry.path()).unwrap()).unwrap()))
-        })
-        .collect();
-    out.sort_by(|a, b| a.0.cmp(&b.0));
-    assert_eq!(out.len(), 81, "as 81 fixtures de criação da Task 1");
+    let out: Vec<(String, Value)> = cases::all().into_iter().filter(|(name, _)| name.starts_with("create_")).collect();
+    assert_eq!(out.len(), 81);
     out
 }
 
 fn request_body(fixture: &Value) -> Vec<u8> { serde_json::to_vec(&fixture["scenario"]["steps"][0]["json"]).unwrap() }
 
-fn python_status(fixture: &Value) -> u64 { fixture["result"]["steps"][0]["status"].as_u64().unwrap() }
+fn expected_status(fixture: &Value) -> u64 { fixture["result"]["steps"][0]["status"].as_u64().unwrap() }
 
 #[test]
-fn the_bodies_python_refused_as_shape_are_refused_with_a_code() {
+fn the_bodies_refused_as_shape_are_refused_with_a_code() {
     for (name, fixture) in create_fixtures() {
         let parsed = SessionOpenRequest::parse(&request_body(&fixture));
-        // Pydantic recusa a forma com 422 e a lista de erros; o Rust, com `erro_corpo_invalido`.
-        let python_refused_shape = python_status(&fixture) == 422 && fixture["result"]["steps"][0]["body"]["detail"].is_array();
-        // `inherit` é campo novo; o Python de 601bc62a0 ainda o recusava.
-        let expected_refused = python_refused_shape && name != "create_inherit_flag_not_supported";
+        // A lista de erros no cenário marca a forma recusada; o Rust a recusa com `erro_corpo_invalido`.
+        let refused_shape = expected_status(&fixture) == 422 && fixture["result"]["steps"][0]["body"]["detail"].is_array();
         match parsed {
             Err(error) => {
-                assert!(expected_refused, "{name}: o Python aceitou o corpo e o Rust recusou: {error}");
+                assert!(refused_shape, "{name}: o cenário aceita o corpo e o Rust recusou: {error}");
                 assert_eq!((error.status, error.code), (422, Some("erro_corpo_invalido")), "{name}");
             }
-            Ok(_) => assert!(!expected_refused, "{name}: o Python recusou o corpo e o Rust aceitou"),
+            Ok(_) => assert!(!refused_shape, "{name}: o cenário recusa o corpo e o Rust aceitou"),
         }
     }
 }
@@ -126,6 +114,7 @@ fn reopen_keeps_what_the_change_does_not_name() {
         model: Some("opus".into()), effort: Some("high".into()), service_tier: None,
         permission_mode: Some(PermissionMode::Manual), subagent_model: None, customizations: None, jev: true,
         read_only: false, worktree: None, creator: None, created_at: 1.0, conversation: None,
+        name_auto: None, rename_suggestion: None, rename_weak_at: None, rename_dismissed: false,
     };
     let change = SessionChange { reason: ChangeReason::Bypass, surface: None, account: None,
         permission_mode: Some(PermissionMode::BypassPermissions), model: None, effort: None, service_tier: None };
@@ -136,16 +125,21 @@ fn reopen_keeps_what_the_change_does_not_name() {
 
 // ── resolve_open ─────────────────────────────────────────────────────────────────────────────
 
-/// Os fatos do cenário: o estado inicial (`state`) e as respostas das bordas (`fakes`) que o
-/// harness deu ao Python (`session_open_contract.py`), lidos do mesmo jeito que o Python os lê.
+/// Os fatos do cenário: o estado inicial (`state`) e as respostas das bordas (`fakes`).
 struct FixtureFacts {
     files: serde_json::Map<String, Value>, dirs: Vec<String>, tmux: Vec<Value>, fakes: Value,
     /// Desvios que o teste pede e o cenário não tem: settings ilegível, contas Codex conectadas,
     /// troca de agente em curso e o catálogo do motor (o harness recusa a rede: `Err`).
     broken_mode: bool, connected: Vec<resolve::CodexLogin>, busy: bool, window: Result<Option<u64>, ()>,
+    /// Regra de cota: as linhas depois da leitura de rede (`None` = as mesmas do cache), o
+    /// `limit-spent.json`, quantas leituras de rede houve e as contas registradas como desconhecidas.
+    fresh_quotas: Option<Vec<Value>>, spent: std::collections::BTreeMap<String, f64>,
+    network_reads: std::sync::Mutex<u32>, unknown_quota: std::sync::Mutex<Vec<String>>,
+    /// Pasta de conta Codex cujo catálogo recusa a escolha do pedido.
+    refused_codex_home: Option<String>,
 }
 
-/// A ponte do ditado com o Rust fora, como o harness a responde (`session_open_contract.py:941`).
+/// A ponte do ditado com o Rust fora.
 const HARNESS_BRIDGE_DOWN: &str = "O servidor Rust de organização está indisponível.";
 const HOME: &str = "<ROOT>/home";
 const OWNER: resolve::OpenCaller = resolve::OpenCaller::Owner;
@@ -162,6 +156,11 @@ impl FixtureFacts {
             connected: Vec::new(),
             busy: false,
             window: Err(()),
+            fresh_quotas: None,
+            spent: Default::default(),
+            network_reads: Default::default(),
+            unknown_quota: Default::default(),
+            refused_codex_home: None,
         }
     }
 
@@ -231,9 +230,16 @@ impl resolve::OpenFacts for FixtureFacts {
     // Sem serviço de contas Codex no harness: nenhuma conta conectada.
     fn codex_logins(&self) -> Result<Vec<resolve::CodexLogin>, OpenError> { Ok(self.connected.clone()) }
 
-    fn claude_quotas(&self) -> Vec<Value> {
-        self.fakes["quotas"].as_array().into_iter().flatten().filter(|row| row["provedor"] == "claude").cloned().collect()
+    fn quotas(&self, network: bool) -> Vec<Value> {
+        let cached = || self.fakes["quotas"].as_array().cloned().unwrap_or_default();
+        if !network { return cached(); }
+        *self.network_reads.lock().unwrap() += 1;
+        self.fresh_quotas.clone().unwrap_or_else(cached)
     }
+
+    fn spent_accounts(&self) -> std::collections::BTreeMap<String, f64> { self.spent.clone() }
+
+    fn quota_unknown(&self, _name: &str, account: &str) { self.unknown_quota.lock().unwrap().push(account.to_owned()); }
 
     fn existing_dir(&self, cwd: &str) -> Option<String> {
         let prefix = format!("{cwd}/");
@@ -274,8 +280,11 @@ impl resolve::OpenFacts for FixtureFacts {
         Err(OpenError::new(404, "codex_account_not_found", "conta Codex inválida").with_params(json!({"account_id": account_id})))
     }
 
-    fn codex_choice(&self, _home: Option<&str>, model: Option<&str>, _effort: Option<&str>, _tier: Option<ServiceTier>)
+    fn codex_choice(&self, home: Option<&str>, model: Option<&str>, _effort: Option<&str>, _tier: Option<ServiceTier>)
         -> Result<(), resolve::CodexCatalogError> {
+        if home.is_some() && home == self.refused_codex_home.as_deref() {
+            return Err(resolve::CodexCatalogError::Invalid("modelo fora do catálogo desta conta".into()));
+        }
         let reply = |op: &str| match self.bridge(op) {
             None => Err(resolve::CodexCatalogError::Unavailable(HARNESS_BRIDGE_DOWN.into())),
             Some(reply) if reply["error"]["status"] == 400 => Err(resolve::CodexCatalogError::Invalid(reply["error"]["detail"].as_str().unwrap().into())),
@@ -306,7 +315,7 @@ impl resolve::OpenFacts for FixtureFacts {
     fn now(&self) -> f64 { 0.0 }
 }
 
-/// O que o Python lançou: argv e `-e` do `new-session`, ou o sidecar da sessão sem terminal.
+/// O que o cenário lança: argv e `-e` do `new-session`, ou o sidecar da sessão sem terminal.
 #[derive(Debug, Default, PartialEq)]
 struct Launched {
     permission: Option<String>, model: Option<String>, effort: Option<String>, jev: bool, subagent: Option<String>,
@@ -339,17 +348,9 @@ fn launched(fixture: &Value) -> Option<Launched> {
         tier: text("service_tier"), read_only: meta["read_only"] == true })
 }
 
-/// Recusas que o Python dá depois de decidir a sessão (tmux, worktree): pertencem ao lançamento
-/// (Task 4), e o `resolve_open()` as deixa passar.
+/// Recusas depois de decidir a sessão (tmux, worktree): pertencem ao lançamento, e o `resolve_open()`
+/// as deixa passar.
 const LAUNCH_REFUSALS: [&str; 3] = ["create_claude_terminal_tmux_fails", "create_worktree_outside_roots", "create_worktree_rollback_on_tmux_failure"];
-
-/// Recusas do Python que o Rust já nasce sem, com o que vale no lugar.
-const FIXED: [&str; 2] = [
-    // O prompt inicial é entregue em todo provedor, também sem terminal.
-    "create_claude_headless_initial_prompt_refused",
-    // `inherit: false` é aceito (o Python de 601bc62a0 dava 422).
-    "create_inherit_flag_not_supported",
-];
 
 fn resolve_fixture(fixture: &Value) -> Result<resolve::Resolved, OpenError> {
     let request = SessionOpenRequest::parse(&request_body(fixture)).unwrap();
@@ -361,30 +362,28 @@ enum Expected { Created, Resolves, Refused { status: u64, code: Option<String>, 
 
 fn expected(name: &str, fixture: &Value, local: bool) -> Expected {
     let refused = |status: u64, code: &str| Expected::Refused { status, code: Some(code.into()), msg: None, params: None };
-    let status = python_status(fixture);
+    let status = expected_status(fixture);
     let detail = &fixture["result"]["steps"][0]["body"]["detail"];
     match name {
         // A forma do corpo é do `SessionOpenRequest::parse` (teste próprio).
-        _ if detail.is_array() && !FIXED.contains(&name) => Expected::Skip,
-        _ if LAUNCH_REFUSALS.contains(&name) || FIXED.contains(&name) => Expected::Resolves,
+        _ if detail.is_array() => Expected::Skip,
+        _ if LAUNCH_REFUSALS.contains(&name) || fixture["result"]["resolves_only"] == true => Expected::Resolves,
         // O catálogo do Codex vem do app-server falso do cenário: a frase da recusa é a do Rust, não
-        // a que o harness inventou para a ponte.
+        // a escrita para a ponte.
         "create_codex_catalog_refuses_choice" if local => refused(422, "erro_codex_escolha_invalida"),
-        // Fast sem modelo: o Python recebeu "Rust fora" da ponte que valida (502); o `LocalFacts`
-        // valida aqui mesmo e recusa porque o Fast exige modelo explícito.
+        // Fast sem modelo: com a ponte fora a recusa escrita é 502; o `LocalFacts` valida aqui mesmo e
+        // recusa porque o Fast exige modelo explícito.
         "create_codex_priority_catalog_unavailable" if local => refused(422, "erro_codex_escolha_invalida"),
         _ if status == 200 => Expected::Created,
         _ => Expected::Refused {
             status, code: detail["code"].as_str().map(str::to_owned),
-            // Sem o prompt inicial na regra, a frase da recusa do só leitura sem terminal perde o "nem prompt inicial".
-            msg: Some(detail["msg"].as_str().or(detail.as_str()).unwrap()
-                .replace("sessao sem terminal nao aceita read_only nem prompt inicial", "sessao sem terminal nao aceita read_only")),
+            msg: Some(detail["msg"].as_str().or(detail.as_str()).unwrap().to_owned()),
             params: Some(if detail.is_object() { detail["params"].clone() } else { json!({}) }),
         },
     }
 }
 
-/// Compara com o que o Python fez; devolve o que comparou (criadas, lançamentos, recusas).
+/// Compara com o que o cenário diz; devolve o que comparou (criadas, lançamentos, recusas).
 fn check(name: &str, fixture: &Value, result: Result<resolve::Resolved, OpenError>, local: bool) -> (u32, u32, u32) {
     match (expected(name, fixture, local), result) {
         (Expected::Skip, _) => (0, 0, 0),
@@ -407,7 +406,7 @@ fn check(name: &str, fixture: &Value, result: Result<resolve::Resolved, OpenErro
 fn check_created(name: &str, fixture: &Value, result: Result<resolve::Resolved, OpenError>) -> (u32, u32, u32) {
     {
         let body = &fixture["result"]["steps"][0]["body"];
-        let resolved = result.unwrap_or_else(|e| panic!("{name}: o Python criou e o Rust recusou: {e}"));
+        let resolved = result.unwrap_or_else(|e| panic!("{name}: o cenário cria e o Rust recusou: {e}"));
         let spec = &resolved.spec;
         assert_eq!(spec.name, body["name"].as_str().unwrap(), "{name}");
         assert_eq!(spec.provider.name(), body["provider"].as_str().unwrap(), "{name}");
@@ -440,20 +439,20 @@ fn check_created(name: &str, fixture: &Value, result: Result<resolve::Resolved, 
 
 fn sum(a: (u32, u32, u32), b: (u32, u32, u32)) -> (u32, u32, u32) { (a.0 + b.0, a.1 + b.1, a.2 + b.2) }
 
-/// As 81 criações com os fatos montados do cenário como o harness os deu ao Python.
+/// As 81 criações com os fatos montados do cenário.
 #[test]
-fn every_creation_fixture_resolves_like_python() {
+fn every_creation_case_resolves() {
     let total = create_fixtures().iter()
         .filter(|(name, fixture)| !matches!(expected(name, fixture, false), Expected::Skip))
         .map(|(name, fixture)| check(name, fixture, resolve_fixture(fixture), false)).fold((0, 0, 0), sum);
-    // Todo 200 tem o que o Python lançou (argv do pane ou o sidecar); recusas antes do lançamento.
+    // Todo 200 tem o que foi lançado (argv do pane ou o sidecar); recusas antes do lançamento.
     assert_eq!(total, (43, 43, 29));
 }
 
 /// As mesmas 81 pelo `LocalFacts` de produção, lendo um cenário montado em disco.
 #[cfg(target_os = "linux")]
 #[test]
-fn every_creation_fixture_resolves_like_python_with_the_real_facts() {
+fn every_creation_case_resolves_with_the_real_facts() {
     let runtime = test_runtime();
     let mut total = (0, 0, 0);
     for (name, fixture) in create_fixtures() {
@@ -611,14 +610,16 @@ fn materialize(fixture: &Value, root: &std::path::Path) {
 }
 
 #[test]
-fn launch_refusals_and_fixed_refusals_resolve() {
-    for name in LAUNCH_REFUSALS.iter().chain(FIXED.iter()) {
-        let (_, fixture) = create_fixtures().into_iter().find(|(n, _)| n == name).unwrap();
+fn launch_refusals_and_resolve_only_cases_resolve() {
+    let cases: Vec<_> = create_fixtures().into_iter()
+        .filter(|(name, fixture)| LAUNCH_REFUSALS.contains(&name.as_str()) || fixture["result"]["resolves_only"] == true).collect();
+    assert_eq!(cases.len(), 5);
+    for (name, fixture) in cases {
         let resolved = resolve_fixture(&fixture).unwrap_or_else(|e| panic!("{name}: {e}"));
         assert!(resolved.warnings.is_empty(), "{name}");
     }
     // O prompt inicial viaja até o lançamento em todo provedor, também sem terminal.
-    let (_, fixture) = create_fixtures().into_iter().find(|(n, _)| n == "create_claude_headless_initial_prompt_refused").unwrap();
+    let (_, fixture) = create_fixtures().into_iter().find(|(n, _)| n == "create_claude_headless_initial_prompt").unwrap();
     assert_eq!(resolve_fixture(&fixture).unwrap().initial_prompt.as_deref(), Some("olá"));
 }
 
@@ -669,8 +670,8 @@ fn claude_permission_mode_default_opens_in_manual() {
 fn inherit_false_resolves_like_no_creator() {
     let fixtures = create_fixtures();
     let get = |name: &str| fixtures.iter().find(|(n, _)| n == name).unwrap().1.clone();
-    let opted_out = resolve_fixture(&get("create_inherit_flag_not_supported")).unwrap().spec;
-    let mut alone = get("create_inherit_flag_not_supported");
+    let opted_out = resolve_fixture(&get("create_inherit_false_accepted")).unwrap().spec;
+    let mut alone = get("create_inherit_false_accepted");
     alone["scenario"]["steps"][0]["json"].as_object_mut().unwrap().retain(|k, _| k != "creator" && k != "inherit");
     let alone = resolve_fixture(&alone).unwrap().spec;
     assert_eq!(SessionSpec { creator: None, ..opted_out.clone() }, alone);
@@ -1204,7 +1205,7 @@ fn shell_words(line: &str) -> Vec<String> {
     words
 }
 
-/// O que o Python passou ao `new-session`: o `-e` (sem os de todo provedor) e as palavras do comando.
+/// O argv do `new-session`: o `-e` (sem os de todo provedor) e as palavras do comando.
 fn launched_pane(argv: &[String]) -> (Vec<(String, String)>, Vec<String>) {
     let token = Regex::new(r"\A[0-9a-f]{32}\.[0-9a-f]{32}\z").unwrap();
     let env = argv.windows(2).filter(|w| w[0] == "-e").filter_map(|w| w[1].split_once('='))
@@ -1213,11 +1214,10 @@ fn launched_pane(argv: &[String]) -> (Vec<(String, String)>, Vec<String>) {
     (env, shell_words(argv.last().unwrap()))
 }
 
-/// Os Claude com terminal que o Python lançou: o pane do `claude::pane` sobre o spec do
-/// `resolve_open()` dá o mesmo `-e` e o mesmo comando, menos as variáveis não herdadas que ele tira e a chave da sessão
+/// Os Claude com terminal dos cenários: o pane do `claude::pane` sobre o spec do `resolve_open()` dá o mesmo `-e` e o mesmo comando, menos as variáveis não herdadas que ele tira e a chave da sessão
 /// (matriz, item 2). O `-c` vem do `new-session` (a worktree troca a pasta na abertura).
 #[test]
-fn the_claude_pane_is_the_one_python_launched() {
+fn the_claude_pane_is_the_expected_one() {
     let mut compared = 0;
     for (name, fixture) in create_fixtures() {
         let Some(tmux) = fixture["result"]["subprocesses"].as_array().into_iter().flatten()
@@ -1257,11 +1257,11 @@ fn the_claude_pane_is_the_one_python_launched() {
     assert_eq!(compared, 26);
 }
 
-/// Pi, omp e Kimi que o Python lançou: o pane do `agents::pane` sobre o spec dá o mesmo `-e` e o
+/// Pi, omp e Kimi dos cenários: o pane do `agents::pane` sobre o spec dá o mesmo `-e` e o
 /// mesmo comando, menos as variáveis não herdadas e a chave. O `env CP_PI_SESSION=… OMP_PROFILE=…` do
 /// comando do omp vira `-e`, e o Pi ganha o `CP_PI_SESSION` que não tinha.
 #[test]
-fn the_pi_omp_and_kimi_panes_are_the_ones_python_launched() {
+fn the_pi_omp_and_kimi_panes_are_the_expected_ones() {
     let stamp = Regex::new(r"\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z_").unwrap();
     let mut compared = 0;
     for (name, fixture) in create_fixtures() {
@@ -1595,14 +1595,19 @@ fn a_fixed_chatgpt_account_resolves_and_routes_the_engine() {
     let home_text = home.join(".codex-work").to_string_lossy().into_owned();
     assert_eq!(command[..12], ["hangar-engine", "--exec", "gpt", "--account", "work", "--account-home", &home_text,
         "--account-base-url", &format!("http://127.0.0.1:{port}"), "--model", "gpt-5.5", "--context"]);
-    assert_eq!(route.credential_id, format!("codex:{home_text}"));
+    assert_eq!(route.credential_id, format!("codex:{}", crate::accounts::catalog::resolved(&home.join(".codex-work")).to_string_lossy()));
+    // A `conta` da linha do motor é este id: o evento `tags` tem de nomear a mesma conta.
+    let accounts = crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::from_map(
+        [("HOME".to_owned(), home.to_string_lossy().into_owned())].into()));
+    let tags = crate::tags::event(&accounts, "").unwrap();
+    assert!(tags["accounts"].get(&route.credential_id).is_some(), "{} fora de {}", route.credential_id, tags["accounts"]);
 }
 
-/// A abertura inteira pelo lado Rust do harness: nasceu, a ordem do diário é a do Python e o spec
-/// fica gravado; o pane recusado não chega ao "criada" nem grava o spec.
+/// A abertura inteira: nasceu, a ordem do diário é a esperada e o spec fica gravado; o pane recusado
+/// não chega ao "criada" nem grava o spec.
 #[cfg(target_os = "linux")]
 #[test]
-fn the_claude_terminal_open_runs_in_the_python_order() {
+fn the_claude_terminal_open_runs_in_order() {
     let runtime = test_runtime();
     for (name, status, last) in [("create_claude_terminal_default", 200, "sessao.criada"), ("create_claude_terminal_tmux_fails", 409, "sessao.criar_recusada")] {
         let (_, fixture) = create_fixtures().into_iter().find(|(n, _)| n == name).unwrap();
@@ -1624,12 +1629,12 @@ fn the_claude_terminal_open_runs_in_the_python_order() {
     }
 }
 
-/// A abertura do Codex contra o que o Python fez nas mesmas fixtures: com terminal, o pane é o lançador
-/// do comando do Python (mais a política explícita e a chave do spec) e a pasta é confiada; sem terminal,
-/// o sidecar leva a chave do spec, a sessão é aquecida na criação e a primeira mensagem vai pela escrita.
+/// A abertura do Codex contra os cenários: com terminal, o pane é o lançador do comando escrito neles
+/// (mais a política explícita e a chave do spec) e a pasta é confiada; sem terminal, o sidecar leva a
+/// chave do spec, a sessão é aquecida na criação e a primeira mensagem vai pela escrita.
 #[cfg(target_os = "linux")]
 #[test]
-fn the_codex_open_follows_the_python_fixtures() {
+fn the_codex_open_follows_the_cases() {
     let runtime = test_runtime();
     let run = |name: &str, extra: Value| {
         let (_, mut fixture) = create_fixtures().into_iter().find(|(n, _)| n == name).unwrap();
@@ -1659,12 +1664,14 @@ fn the_codex_open_follows_the_python_fixtures() {
         let created = raw["subprocesses"].as_array().unwrap().iter().find(|p| p["argv"][0] == "new-session").unwrap();
         let argv: Vec<&str> = created["argv"].as_array().unwrap().iter().map(|a| a.as_str().unwrap()).collect();
         assert!(argv.windows(2).any(|w| w == ["-e", &format!("CP_SESSION_KEY={}", spec["key"].as_str().unwrap())]), "{name}: {argv:?}");
-        // O comando do Python com a política do modo padrão (Full Access) explícita.
+        // O comando do cenário com a política do modo padrão (Full Access) explícita.
         let python = place(expected["subprocesses"][0]["argv"].as_array().unwrap().last().unwrap().as_str().unwrap());
         let (launcher, prompt) = python.split_once(" --prompt ").map_or((python.as_str(), None), |(l, p)| (l, Some(p)));
         let launcher = launcher.rsplit_once("hangar-codex-tui").unwrap().1;
         let command = argv.last().unwrap();
-        let wanted = format!("hangar-codex-tui{launcher} --approval-policy never --sandbox danger-full-access{}",
+        // O config.toml da fixture não fixa a janela: o pane pede o 1M padrão do Hangar.
+        let wanted = format!("hangar-codex-tui{launcher} --approval-policy never --sandbox danger-full-access{} \
+            --config model_context_window=1000000 --config model_auto_compact_token_limit=900000",
             prompt.map(|p| format!(" --prompt {p}")).unwrap_or_default());
         assert!(command.ends_with(&wanted), "{name}: {command}\nesperado no fim: {wanted}");
         let body = &raw["steps"][0]["body"];
@@ -2562,7 +2569,7 @@ fn the_record_round_trips_by_key_and_refuses_what_it_cannot_read() {
     assert_eq!(record::read(home.path(), &spec.key).unwrap_err().kind(), std::io::ErrorKind::InvalidData);
 }
 
-/// O sidecar que o Python grava (o `state` das fixtures) vira spec para a sessão viva sem registro.
+/// O sidecar do `state` do cenário vira spec para a sessão viva sem registro.
 fn sidecar_home(fixture: &str, kind: &str, name: &str, patch: impl FnOnce(&mut Value)) -> tempfile::TempDir {
     let (_, fixture) = create_fixtures().into_iter().find(|(n, _)| n == fixture).unwrap();
     let mut meta = fixture["scenario"]["state"]["files"][format!("<ROOT>/home/.hangar/{kind}/{name}.json")].clone();
@@ -2774,7 +2781,7 @@ proptest! {
 
 // ── retomar ──────────────────────────────────────────────────────────────────────────────────
 
-/// Uma fixture de retomada (grupo `d-resume`) rodada pela abertura do Rust, como o harness a roda.
+/// Um cenário de retomada rodado pela abertura do Rust.
 #[cfg(target_os = "linux")]
 fn run_resume_fixture(name: &str, before: impl FnOnce(&std::path::Path)) -> (Value, Value, tempfile::TempDir, PathBuf) {
     run_resume_patched(name, |_| {}, before)
@@ -2782,7 +2789,7 @@ fn run_resume_fixture(name: &str, before: impl FnOnce(&std::path::Path)) -> (Val
 
 #[cfg(target_os = "linux")]
 fn run_resume_patched(name: &str, patch: impl FnOnce(&mut Value), before: impl FnOnce(&std::path::Path)) -> (Value, Value, tempfile::TempDir, PathBuf) {
-    let mut fixture: Value = serde_json::from_slice(&std::fs::read(fixture_dir().join(format!("{name}.json"))).unwrap()).unwrap();
+    let mut fixture = cases::named(name);
     patch(&mut fixture["scenario"]);
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
@@ -2797,13 +2804,13 @@ fn run_resume_patched(name: &str, patch: impl FnOnce(&mut Value), before: impl F
 }
 
 /// Retomar do Arquivo abre pela criação do Rust com a conversa que já existe: o status, o nome (o da
-/// pasta, com `-2` se ocupado), o transcript e o `claude --resume` com os plugins são os do Python; a
+/// pasta, com `-2` se ocupado), o transcript e o `claude --resume` com os plugins são os do cenário; a
 /// conversa aberta noutra sessão e os pedidos inválidos são recusados com o código dele. Diferenças
 /// nomeadas: o modo de permissão vai explícito também no `--resume` (matriz, item 17), e com terminal
 /// só quando o padrão do servidor é com terminal (matriz, itens 21 e 24).
 #[cfg(target_os = "linux")]
 #[test]
-fn an_archived_conversation_resumes_like_python() {
+fn an_archived_conversation_resumes_as_expected() {
     const SID: &str = "11111111-1111-4111-8111-111111111111";
     let terminal_default = |root: &std::path::Path| std::fs::write(root.join("home/.claude/runtime-config.json"), r#"{"headless_default": false}"#).unwrap();
     for name in ["archive_resume_claude", "archive_resume_name_collision", "archive_resume_named_with_model",
@@ -3009,4 +3016,257 @@ fn a_snapshot_entry_comes_back_with_its_whole_spec_keeping_its_group_and_queue()
     }
     assert_eq!(raw["cleaned"], json!([]), "a mesma sessão voltando não limpa grupo, fila nem `then` do nome");
     assert!(root.join("home/.claude/.hangar-pair/proj.json").is_file() && root.join("home/.claude/.hangar-queue/proj.jsonl").is_file());
+}
+
+/// Só o nome com a forma do da pasta é marcado como genérico, venha do servidor ou da tela (que manda
+/// o nome da pasta que ela calculou); chave de PM e nome dado por alguém não são.
+#[test]
+fn only_the_folder_name_is_marked_generic() {
+    assert!(resolve::folder_pattern("hangar-2", "/w/hangar") && resolve::folder_pattern("sessao-3", "/w/x"));
+    assert!(!resolve::folder_pattern("ABC-123-Coordenadora", "/w/hangar") && !resolve::folder_pattern("hangar-x", "/w/hangar"));
+    let (mut server, mut sent, mut named) = (0, 0, 0);
+    for (name, fixture) in create_fixtures() {
+        // Fixtures de corpo inválido de propósito ficam de fora (o `resolve_fixture` desembrulha o parse).
+        let Ok(request) = SessionOpenRequest::parse(&request_body(&fixture)) else { continue };
+        let Ok(resolved) = resolve::resolve_open(&request, &OWNER, &FixtureFacts::of(&fixture)) else { continue };
+        assert_eq!(resolved.spec.name_auto, Some(resolve::folder_pattern(&resolved.spec.name, &request.cwd)), "{name}");
+        let facts = FixtureFacts::of(&fixture);
+        let open = |asked: Option<String>| resolve::resolve_open(&SessionOpenRequest { name: asked, ..request.clone() }, &OWNER, &facts);
+        if let Ok(folder) = open(None) {
+            assert_eq!(folder.spec.name_auto, Some(true), "{name}: sem nome");
+            server += 1;
+        }
+        if let Ok(folder) = open(Some(resolve::fit_name(&resolve::folder_base(&request.cwd), "-2"))) {
+            assert_eq!(folder.spec.name_auto, Some(true), "{name}: a tela mandou o nome da pasta");
+            sent += 1;
+        }
+        if let Ok(pm) = open(Some("ABC-123-Coordenadora".into())) {
+            assert_eq!(pm.spec.name_auto, Some(false), "{name}: nome dado");
+            named += 1;
+        }
+    }
+    assert!(server > 0 && sent > 0 && named > 0, "os três casos foram exercidos ({server}, {sent}, {named})");
+}
+
+// ---------- regra de cota na abertura (parte 3) ----------
+
+fn fixture_named(name: &str) -> Value { create_fixtures().into_iter().find(|(n, _)| n == name).unwrap().1 }
+
+/// Linha de cota Claude do cenário (`<ROOT>/home/.claude*`).
+fn claude_row(dir: &str, label: &str, active: bool, state: &str, pct: f64) -> Value {
+    json!({"id": format!("claude:<ROOT>/home/{dir}"), "label": label, "provedor": "claude", "ativa": active, "estado": state,
+        "janelas": [{"rotulo": "7d", "pct": pct}]})
+}
+
+fn open_with(fixture: &Value, facts: &FixtureFacts) -> Result<resolve::Resolved, OpenError> {
+    resolve::resolve_open(&SessionOpenRequest::parse(&request_body(fixture)).unwrap(), &OWNER, facts)
+}
+
+/// Sem a cota da conta no cache, a abertura lê a rede uma vez antes de decidir; sem leitura nem
+/// assim, segue na conta e registra a conta desconhecida (nunca um aviso na tela).
+#[test]
+fn an_unknown_quota_gets_a_short_read_before_the_open_decides() {
+    let mut fixture = fixture_named("create_quota_switch");
+    let rows = fixture["scenario"]["fakes"]["quotas"].take();
+    let facts = FixtureFacts { fresh_quotas: Some(serde_json::from_value(rows).unwrap()), ..FixtureFacts::of(&fixture) };
+    let resolved = open_with(&fixture, &facts).unwrap();
+    assert_eq!(*facts.network_reads.lock().unwrap(), 1);
+    assert_eq!(resolved.spec.account, Account::Claude { config_dir: "<ROOT>/home/.claude-b".into() });
+    assert_eq!(resolved.spec.account_source, AccountSource::Quota);
+    assert!(facts.unknown_quota.lock().unwrap().is_empty());
+
+    let facts = FixtureFacts::of(&fixture);
+    let resolved = open_with(&fixture, &facts).unwrap();
+    assert_eq!(*facts.network_reads.lock().unwrap(), 1);
+    assert_eq!(resolved.spec.account, Account::Default);
+    assert!(resolved.warnings.is_empty(), "cota desconhecida não vai à tela: {:?}", resolved.warnings);
+    assert_eq!(*facts.unknown_quota.lock().unwrap(), ["claude:padrão"]);
+}
+
+/// Conta que ninguém escolheu (padrão ou herdada) com cota ilegível nasce na de cota lida e mais
+/// folga, com aviso; a escolhida fica; nenhuma lida, fica na padrão.
+#[test]
+fn an_unknown_quota_on_an_unchosen_account_is_born_on_a_known_one() {
+    let unread = claude_row(".claude", "default", true, "expirada", 0.0);
+    let rows = json!([unread, claude_row(".claude-b", "b", false, "lida", 60.0)]);
+    for name in ["create_quota_switch", "create_quota_inherited_switch"] {
+        let mut fixture = fixture_named(name);
+        fixture["scenario"]["fakes"]["quotas"] = rows.clone();
+        let facts = FixtureFacts::of(&fixture);
+        let resolved = open_with(&fixture, &facts).unwrap();
+        assert_eq!(*facts.network_reads.lock().unwrap(), 1, "{name}: lê a rede antes de trocar");
+        assert_eq!((resolved.spec.account, resolved.spec.account_source),
+            (Account::Claude { config_dir: "<ROOT>/home/.claude-b".into() }, AccountSource::Quota), "{name}");
+        assert_eq!(resolved.warnings, ["cota da conta default não pôde ser lida; a sessão nasceu em b"], "{name}");
+        assert!(facts.unknown_quota.lock().unwrap().is_empty(), "{name}");
+    }
+
+    let mut fixture = fixture_named("create_quota_explicit_account_moves");
+    fixture["scenario"]["fakes"]["quotas"] = rows.clone();
+    let facts = FixtureFacts::of(&fixture);
+    let resolved = open_with(&fixture, &facts).unwrap();
+    assert_eq!((resolved.spec.account, resolved.spec.account_source),
+        (Account::Claude { config_dir: "<ROOT>/home/.claude".into() }, AccountSource::Explicit));
+    assert!(resolved.warnings.is_empty());
+    assert_eq!(*facts.unknown_quota.lock().unwrap(), ["claude:<ROOT>/home/.claude"]);
+
+    let mut fixture = fixture_named("create_quota_switch");
+    fixture["scenario"]["fakes"]["quotas"] = json!([unread, claude_row(".claude-b", "b", false, "expirada", 0.0)]);
+    let facts = FixtureFacts::of(&fixture);
+    let resolved = open_with(&fixture, &facts).unwrap();
+    assert_eq!((resolved.spec.account, resolved.spec.account_source), (Account::Default, AccountSource::Default));
+    assert!(resolved.warnings.is_empty());
+    assert_eq!(*facts.unknown_quota.lock().unwrap(), ["claude:<ROOT>/home/.claude"]);
+}
+
+/// Todas a 95% ou mais: nasce na de mais folga mesmo acima dos 95%; nenhuma com mais folga, fica.
+#[test]
+fn all_exhausted_accounts_pick_the_one_with_most_room() {
+    let mut fixture = fixture_named("create_quota_switch");
+    fixture["scenario"]["state"]["dirs"].as_array_mut().unwrap().push(json!("<ROOT>/home/.claude-c/projects"));
+    fixture["scenario"]["state"]["files"]["<ROOT>/home/.claude-c/.credentials.json"] = json!({});
+    fixture["scenario"]["fakes"]["quotas"] = json!([claude_row(".claude", "default", true, "lida", 99.0),
+        claude_row(".claude-b", "b", false, "lida", 98.0), claude_row(".claude-c", "c", false, "lida", 96.0)]);
+    let resolved = resolve_fixture(&fixture).unwrap();
+    assert_eq!((resolved.spec.account, resolved.spec.account_source),
+        (Account::Claude { config_dir: "<ROOT>/home/.claude-c".into() }, AccountSource::Quota));
+    assert_eq!(resolved.warnings, ["conta default com 99% de uso; a sessão nasceu em c"]);
+
+    fixture["scenario"]["fakes"]["quotas"][2]["janelas"] = json!([{"rotulo": "7d", "pct": 99.5}]);
+    fixture["scenario"]["fakes"]["quotas"][1]["janelas"] = json!([{"rotulo": "7d", "pct": 99.0}]);
+    let resolved = resolve_fixture(&fixture).unwrap();
+    assert_eq!((resolved.spec.account, resolved.spec.account_source), (Account::Default, AccountSource::Default));
+    assert!(resolved.warnings.is_empty());
+}
+
+/// Conta que bateu o limite (`limit-spent.json` com reset no futuro) conta como 100%, mesmo com o
+/// cache ainda mostrando folga; reset passado não pesa. O token vencido guarda o uso da última leitura.
+#[test]
+fn a_spent_or_expired_default_account_is_switched() {
+    let mut fixture = fixture_named("create_quota_switch");
+    fixture["scenario"]["fakes"]["quotas"] = json!([claude_row(".claude", "default", true, "lida", 10.0), claude_row(".claude-b", "b", false, "lida", 20.0)]);
+    let spent = |until: f64| FixtureFacts { spent: [("<ROOT>/home/.claude".to_owned(), until)].into(), ..FixtureFacts::of(&fixture) };
+    let resolved = open_with(&fixture, &spent(5000.0)).unwrap();
+    assert_eq!(resolved.spec.account, Account::Claude { config_dir: "<ROOT>/home/.claude-b".into() });
+    assert_eq!(resolved.warnings, ["conta default com 100% de uso; a sessão nasceu em b"]);
+    let facts = spent(-1.0);
+    assert_eq!(open_with(&fixture, &facts).unwrap().spec.account, Account::Default, "o limite já voltou");
+    assert_eq!(*facts.network_reads.lock().unwrap(), 0, "cota conhecida não lê a rede");
+
+    let mut expired = claude_row(".claude", "default", true, "expirada", 100.0);
+    expired["ts"] = json!(1000.0);
+    fixture["scenario"]["fakes"]["quotas"][0] = expired;
+    let resolved = open_with(&fixture, &FixtureFacts::of(&fixture)).unwrap();
+    assert_eq!(resolved.spec.account, Account::Claude { config_dir: "<ROOT>/home/.claude-b".into() });
+}
+
+/// Codex padrão a 95% ou mais nasce na conta Codex conectada de mais folga.
+#[test]
+fn an_exhausted_default_codex_account_is_switched_to_the_one_with_room() {
+    let mut fixture = fixture_named("create_codex_terminal_default");
+    let codex = |home: &str, label: &str, pct: f64| json!({"id": format!("codex:<ROOT>/home/{home}"), "label": label,
+        "provedor": "codex", "ativa": false, "estado": "lida", "janelas": [{"rotulo": "7d", "pct": pct}]});
+    fixture["scenario"]["fakes"]["quotas"] = json!([codex(".codex", "Codex", 99.0), codex(".codex-trabalho", "trabalho", 30.0), codex(".codex-casa", "casa", 60.0)]);
+    let connected = ["trabalho", "casa"].map(|id| resolve::CodexLogin { id: id.into(), is_default: false });
+    let connected = [vec![resolve::CodexLogin { id: "default".into(), is_default: true }], connected.to_vec()].concat();
+    let facts = FixtureFacts { connected: connected.clone(), ..FixtureFacts::of(&fixture) };
+    let resolved = open_with(&fixture, &facts).unwrap();
+    assert_eq!(resolved.spec.account, Account::Codex { account_id: "trabalho".into() });
+    assert_eq!((resolved.spec.account_source, resolved.warnings), (AccountSource::Quota, vec!["conta Codex com 99% de uso; a sessão nasceu em trabalho".to_owned()]));
+
+    // A mesma conta pedida pela tela também sai da escolha: nasce na de mais folga, com o mesmo aviso.
+    fixture["scenario"]["steps"][0]["json"]["codex_account"] = json!("default");
+    let resolved = open_with(&fixture, &FixtureFacts { connected: connected.clone(), ..FixtureFacts::of(&fixture) }).unwrap();
+    assert_eq!(resolved.spec.account, Account::Codex { account_id: "trabalho".into() });
+    assert_eq!((resolved.spec.account_source, resolved.warnings), (AccountSource::Quota, vec!["conta Codex com 99% de uso; a sessão nasceu em trabalho".to_owned()]));
+
+    // Retomada do Arquivo: a conversa Codex mora na pasta da conta e não muda com ela, então fica.
+    let mut request = SessionOpenRequest::parse(&request_body(&fixture)).unwrap();
+    request.account_bound = true;
+    let resolved = resolve::resolve_open(&request, &OWNER, &FixtureFacts { connected, ..FixtureFacts::of(&fixture) }).unwrap();
+    assert_eq!(resolved.spec.account, Account::Codex { account_id: "default".into() });
+    assert!(resolved.warnings.is_empty());
+}
+
+/// A conta mandada pela tela a 95% ou mais nasce na de mais folga, sem perguntar, com o aviso; com
+/// folga, abre nela; sem outra abaixo dos 95%, segue nela.
+#[test]
+fn an_explicit_exhausted_account_is_born_on_the_one_with_room() {
+    let fixture = fixture_named("create_quota_explicit_account_moves");
+    let resolved = resolve_fixture(&fixture).unwrap();
+    assert_eq!((resolved.spec.account, resolved.spec.account_source), (Account::Claude { config_dir: "<ROOT>/home/.claude-b".into() }, AccountSource::Quota));
+    assert_eq!(resolved.warnings, ["conta default com 97% de uso; a sessão nasceu em b"]);
+
+    let mut roomy = fixture.clone();
+    roomy["scenario"]["steps"][0]["json"]["config_dir"] = json!("<ROOT>/home/.claude-b");
+    let resolved = resolve_fixture(&roomy).unwrap();
+    assert_eq!((resolved.spec.account, resolved.spec.account_source), (Account::Claude { config_dir: "<ROOT>/home/.claude-b".into() }, AccountSource::Explicit));
+    assert!(resolved.warnings.is_empty());
+
+    // Acima dos 95% também troca, desde que a outra tenha mais folga (a regra de antes, agora também para a escolhida).
+    let mut tight = fixture.clone();
+    tight["scenario"]["fakes"]["quotas"][1]["janelas"] = json!([{"rotulo": "7d", "pct": 96.0}]);
+    let resolved = resolve_fixture(&tight).unwrap();
+    assert_eq!((resolved.spec.account, resolved.spec.account_source), (Account::Claude { config_dir: "<ROOT>/home/.claude-b".into() }, AccountSource::Quota));
+    assert_eq!(resolved.warnings, ["conta default com 97% de uso; a sessão nasceu em b"]);
+
+    // Nenhuma com mais folga: fica na pedida, sem aviso na tela.
+    let mut full = fixture.clone();
+    full["scenario"]["fakes"]["quotas"][1]["janelas"] = json!([{"rotulo": "7d", "pct": 99.0}]);
+    let resolved = resolve_fixture(&full).unwrap();
+    assert_eq!((resolved.spec.account, resolved.spec.account_source), (Account::Claude { config_dir: "<ROOT>/home/.claude".into() }, AccountSource::Explicit));
+    assert!(resolved.warnings.is_empty());
+}
+
+/// Com a cota atual desconhecida, destino só abaixo dos 95%; a que bateu o limite (`limit-spent`)
+/// nunca é destino, em nenhum dos dois casos.
+#[test]
+fn a_full_or_spent_account_is_never_a_destination() {
+    let unread = claude_row(".claude", "default", true, "expirada", 0.0);
+    let b = "<ROOT>/home/.claude-b".to_owned();
+    let mut fixture = fixture_named("create_quota_switch");
+    fixture["scenario"]["fakes"]["quotas"] = json!([unread, claude_row(".claude-b", "b", false, "lida", 99.0)]);
+    let facts = FixtureFacts::of(&fixture);
+    let resolved = open_with(&fixture, &facts).unwrap();
+    assert_eq!((resolved.spec.account, resolved.warnings), (Account::Default, vec![]), "99% não recebe no lugar da desconhecida");
+    assert_eq!(*facts.unknown_quota.lock().unwrap(), ["claude:<ROOT>/home/.claude"]);
+
+    fixture["scenario"]["fakes"]["quotas"] = json!([unread, claude_row(".claude-b", "b", false, "lida", 10.0)]);
+    let facts = FixtureFacts { spent: [(b.clone(), 5000.0)].into(), ..FixtureFacts::of(&fixture) };
+    assert_eq!(open_with(&fixture, &facts).unwrap().spec.account, Account::Default, "desconhecida: a esgotada não é destino");
+
+    fixture["scenario"]["fakes"]["quotas"] = json!([claude_row(".claude", "default", true, "lida", 101.0), claude_row(".claude-b", "b", false, "lida", 10.0)]);
+    let facts = FixtureFacts { spent: [(b, 5000.0)].into(), ..FixtureFacts::of(&fixture) };
+    assert_eq!(open_with(&fixture, &facts).unwrap().spec.account, Account::Default, "esgotada: a do limite também não");
+}
+
+/// A conta Codex de mais folga que não aceita o modelo pedido não troca a abertura: fica na pedida,
+/// nunca uma abertura recusada por causa da troca.
+#[test]
+fn a_codex_switch_never_fails_the_open_over_the_request_choices() {
+    let mut fixture = fixture_named("create_codex_terminal_default");
+    let codex = |home: &str, label: &str, pct: f64| json!({"id": format!("codex:<ROOT>/home/{home}"), "label": label,
+        "provedor": "codex", "ativa": false, "estado": "lida", "janelas": [{"rotulo": "7d", "pct": pct}]});
+    fixture["scenario"]["fakes"]["quotas"] = json!([codex(".codex", "Codex", 99.0), codex(".codex-trabalho", "trabalho", 30.0)]);
+    fixture["scenario"]["steps"][0]["json"]["model"] = json!("gpt-5.5");
+    let connected = vec![resolve::CodexLogin { id: "default".into(), is_default: true }, resolve::CodexLogin { id: "trabalho".into(), is_default: false }];
+    let facts = FixtureFacts { connected, refused_codex_home: Some("<ROOT>/home/.codex-trabalho".into()), ..FixtureFacts::of(&fixture) };
+    let resolved = open_with(&fixture, &facts).unwrap();
+    assert_eq!(resolved.spec.account, Account::Codex { account_id: "default".into() });
+    assert!(resolved.warnings.is_empty(), "{:?}", resolved.warnings);
+}
+
+/// A segunda passada sem o padrão salvo reaproveita a leitura de rede da primeira e não registra
+/// a conta desconhecida de novo.
+#[test]
+fn the_saved_choice_retry_reads_the_quota_once() {
+    let mut fixture = fixture_named("create_quota_switch");
+    fixture["scenario"]["fakes"]["quotas"] = json!([]);
+    let key = crate::session_defaults::scope_key("claude", "", "").unwrap();
+    fixture["scenario"]["state"]["files"]["<ROOT>/home/.hangar/session-defaults.json"] = json!({ key: {"model": "opus", "effort": "ultra", "permission": ""} });
+    let facts = FixtureFacts::of(&fixture);
+    let resolved = open_with(&fixture, &facts).unwrap();
+    assert!(resolved.warnings.iter().any(|w| w.contains("padrão salvo")), "{:?}", resolved.warnings);
+    assert_eq!(*facts.network_reads.lock().unwrap(), 1);
+    assert_eq!(facts.unknown_quota.lock().unwrap().len(), 1);
 }

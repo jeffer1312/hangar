@@ -35,7 +35,7 @@ pub async fn save(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     request: Request,
 ) -> Response {
-    let (forward, owner) = gate(&state, peer, &request);
+    let (forward, owner) = match gate(&state, peer, &request).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     if !owner {
         return pass(&state, request, &forward).await;
     }

@@ -13,6 +13,8 @@ enum Core { Claude(ClaudeEngine),Codex(CodexEngine) }
 const CONFIRM_POLL:Duration=Duration::from_millis(50);
 const CONFIRM_WINDOW:Duration=Duration::from_secs(30);
 const CONFIRM_RETRY:Duration=Duration::from_secs(30);
+// Uma reinstalação do Codex são vários eventos (cópia, troca da pasta): reaprova uma vez, no fim.
+const PLUGINS_SETTLE:Duration=Duration::from_millis(500);
 /// Teto de um pedido de app aos mods: o mais longo da superfície (desenho de novo e clique, 6 s) mais
 /// 1 s de folga para o relógio do ator, abaixo dos 8 s em que o app desiste. O registro serializa os
 /// pedidos da sessão, então um pedido sem teto prenderia os seguintes.
@@ -24,6 +26,7 @@ const MODS_CALL_LIMIT:Duration=Duration::from_secs(crate::mods::surface::APP_CAL
 pub struct PolicyClient {
     /// Dono das cotas; sem ele a linha de status sai sem janelas.
     accounts:Option<crate::accounts::AccountService>,
+    preparation:Option<crate::accounts::bridge::AccountsBridge>,
     diag:crate::diag::DiagClient,
     /// Só testes: ambiente-base da subida do Codex por registro. `None` = o do processo, lido a cada subida.
     codex_env:Option<Arc<crate::accounts::environment::AccountEnvironment>>,
@@ -33,7 +36,19 @@ pub struct PolicyClient {
 
 impl PolicyClient {
     pub fn new(upstream:std::net::SocketAddr,secret:String) -> Self {
-        Self { diag:crate::diag::DiagClient::new(upstream,secret),accounts:None,codex_env:None,plugin_bridge:None }
+        Self { diag:crate::diag::DiagClient::new(upstream,secret),accounts:None,preparation:None,codex_env:None,plugin_bridge:None }
+    }
+    pub(super) fn with_preparation(mut self,bridge:Option<crate::accounts::bridge::AccountsBridge>) -> Self { self.preparation=bridge; self }
+    pub(super) async fn prepare_codex(&self,home:&str) -> Result<(),RuntimeError> {
+        let Some(accounts) = &self.accounts else { return Ok(()) };
+        let key = crate::accounts::AccountKey::new(crate::accounts::Provider::Codex,std::path::Path::new(home))
+            .map_err(|_|failure("codex_account_invalid"))?;
+        let account = accounts.snapshot(crate::accounts::Provider::Codex).map_err(|_|failure("codex_account_invalid"))?
+            .into_iter().find(|account|crate::accounts::AccountKey::new(crate::accounts::Provider::Codex,&account.home).is_ok_and(|candidate|candidate==key))
+            .ok_or_else(||failure("codex_account_invalid"))?;
+        let bridge = self.preparation.clone().ok_or_else(||failure("account_prepare_bridge_unavailable"))?;
+        accounts.prepare_for_session(&account,bridge,tokio::time::Instant::now()+Duration::from_secs(60)).await
+            .map(|_|()).map_err(|error|RuntimeError::new(error.code,&error.message))
     }
     pub fn with_plugin_bridge(mut self,bridge:crate::session_open::claude::PluginBridge) -> Self { self.plugin_bridge = Some(bridge); self }
     pub(super) fn plugin_bridge(&self) -> Option<crate::session_open::claude::PluginBridge> { self.plugin_bridge.clone() }
@@ -151,6 +166,9 @@ impl RuntimeEngine {
     fn set_problem(&mut self,code:&str,detail:Option<String>) -> Vec<Effect> {
         match &mut self.core { Core::Codex(core)=>core.set_problem(code,detail),Core::Claude(_)=>Vec::new() }
     }
+    fn plugins_changed(&mut self) -> Vec<Effect> {
+        match &mut self.core { Core::Codex(core)=>core.plugins_changed(),Core::Claude(_)=>Vec::new() }
+    }
     /// O problema que vem de fora do ator (`Message::Problem`), nos dois provedores.
     fn show_problem(&mut self,code:&str,detail:Option<String>) -> Vec<Effect> {
         match &mut self.core { Core::Codex(core)=>core.set_problem(code,detail),Core::Claude(core)=>core.set_problem(code,detail) }
@@ -205,7 +223,7 @@ impl RuntimeEngine {
         match &mut self.core { Core::Claude(core)=>core.mods_call(token,call,left_s,clock),Core::Codex(_)=>Err(crate::mods::model::missing()) }
     }
     fn park_idle(&self,now:f64) -> Option<f64> {
-        match &self.core { Core::Claude(core)=>core.park_idle(now),Core::Codex(_)=>None }
+        match &self.core { Core::Claude(core)=>core.park_idle(now),Core::Codex(core)=>core.park_idle(now) }
     }
     fn view(&self) -> Value {
         match &self.core { Core::Claude(core)=>core.view(),Core::Codex(core)=> {
@@ -266,6 +284,7 @@ impl RuntimeEngine {
     }
     fn interaction_guard(&self,id:&str) -> Result<Option<hangar_codex::client::RawWriteGuard>,RuntimeError> {
         use crate::interactions::{InteractionError,runtime_error};
+        if let Core::Codex(core)=&self.core && let Some(guard)=core.subagent_write_guard(id) {return Ok(Some(guard));}
         // Resposta reservada: o id gravado pode ser de outra vida, então a guarda confere só que a pergunta segue aberta.
         if let Core::Codex(core) = &self.core && let Some(request_id) = core.reserved_question(id) {
             let open = Arc::new(AtomicBool::new(core.async_question_pending(&request_id)));
@@ -835,7 +854,7 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
     // Claude sem terminal: próxima conferência da fila enquanto houver entrada entregue sem prova. Nasce
     // vencida para a subida acertar o que ficou da vida anterior.
     let mut confirm_recheck: Option<Instant> = (target.provider == "claude").then(Instant::now);
-    let mut channels:BTreeMap<String,Value> = ["preview","thinking","tool"].into_iter().map(|channel|
+    let mut channels:BTreeMap<String,Value> = ["preview","thinking","tool","output"].into_iter().map(|channel|
         (channel.into(),json!({"session":target.name,"text":"","md":true,"full":true,"vivo":true}))).collect();
     let mut live = LiveOut { sender:engine.live.clone(),state:LiveState {
         binding:engine.view()["conversation"].as_str().filter(|conversation|!conversation.is_empty()).map(|conversation|crate::interactions::InteractionBinding {key:target.key.clone(),generation:target.generation,conversation:conversation.into()}),
@@ -873,6 +892,11 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
     // Retenção de turnos (`hold_turns`): só a referência fraca fica aqui; quem segura é dono da forte.
     let mut turn_hold:Option<std::sync::Weak<()>> = None;
     let turn_hold_released = Arc::new(Notify::new());
+    // Plugin reinstalado pelo próprio Codex: a reaprovação sai quando a troca assenta, antes do próximo hook.
+    let mut plugins = (target.provider == "codex").then(||super::codex_plugins::cache_dir(&target.metadata)).flatten()
+        .and_then(|cache|super::codex_plugins::subscribe(&cache)
+            .map_err(|err|tracing::warn!(session=%target.name,error=%err,"codex: sem observador de plugins; a reaprovação espera a recusa do hook")).ok());
+    let mut plugins_due:Option<Instant> = None;
     // Pedidos de retenção que chegaram com uma drenagem em curso: respondem quando ela termina.
     let mut hold_waiters:Vec<oneshot::Sender<Result<TurnHold,RuntimeError>>> = Vec::new();
     // O snapshot é do cano; no WebSocket o estado vem do próprio app-server depois de conectar.
@@ -1085,7 +1109,7 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                     });
                 }
                 Effect::Publish { channel,data } => {
-                    if ["preview","thinking","tool"].contains(&channel.as_str()) {
+                    if ["preview","thinking","tool","output"].contains(&channel.as_str()) {
                         channels.insert(channel.clone(),data.clone());
                         // Prévia só pelo canal do hub: no `events` ela subiria a
                         // revisão e o Python a decodificaria a cada delta.
@@ -1139,8 +1163,10 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                         let queue = queue.clone(); let generation = target.generation; let sample = clock(start);
                         let text = payload["text"].as_str().unwrap_or("").to_owned();
                         let confirms = payload["source"].as_str().map(str::to_owned);
+                        let hook_error = payload["hook_error"].as_str().map(str::to_owned);
+                        let notice = payload["notice"].as_str().map(str::to_owned);
                         jobs.spawn(async move { Job::Saved(queue.exec(generation,&format!("local:{}",unique()),sample,
-                            Action::AppendLocal { text,entry_id:None,confirms }).await.map(|_|()).map_err(io_failure)) });
+                            Action::AppendLocal { text,entry_id:None,confirms,hook_error,notice }).await.map(|_|()).map_err(io_failure)) });
                         continue;
                     }
                     sequence += 1;
@@ -2329,6 +2355,16 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
             }
             // Só acorda; a limpeza da retenção solta é a do topo do laço.
             _ = turn_hold_released.notified(), if turn_hold.is_some() => {}
+            changed = async { plugins.as_mut().unwrap().changes.changed().await }, if plugins.is_some() => {
+                if changed.is_ok() { plugins_due = Some(Instant::now() + PLUGINS_SETTLE); } else {
+                    tracing::warn!(session=%target.name,"codex: observador de plugins encerrou; a reaprovação espera a recusa do hook");
+                    plugins = None;
+                }
+            }
+            _ = tokio::time::sleep_until(tokio::time::Instant::from_std(plugins_due.unwrap_or_else(Instant::now))), if plugins_due.is_some() => {
+                plugins_due = None;
+                effects.extend(engine.plugins_changed());
+            }
             _ = tokio::time::sleep_until(tokio::time::Instant::from_std(confirm_recheck.unwrap_or_else(Instant::now))), if confirm_recheck.is_some() && !confirming => {
                 confirm_recheck = None;
                 confirming = true;
@@ -2862,7 +2898,7 @@ impl LiveOut {
     fn channel(&mut self,channel:&str,data:&Value) -> bool {
         if self.sender.is_none() { return false; }
         let text = data["text"].as_str().unwrap_or("").to_owned();
-        self.update(|state| match channel { "preview"=>state.preview = text, "thinking"=>state.thinking = text, _=>state.tool = text });
+        self.update(|state| match channel { "preview"=>state.preview = text, "thinking"=>state.thinking = text, "output"=>state.output = text, _=>state.tool = text });
         true
     }
     fn error(&mut self,error:&Option<RuntimeError>) {

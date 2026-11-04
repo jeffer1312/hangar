@@ -6,6 +6,123 @@ use std::collections::HashSet;
 fn event(value: Value) -> ChatEvent { serde_json::from_value(value).unwrap() }
 
 #[test]
+fn codex_history_stays_in_place_without_running_pins_until_native_state_arrives() {
+    let events = vec![
+        event(json!({"id":"spawn","kind":"tool_use","tool_use_id":"launch","tool_name":"spawn_agent","tool_input":{"task_name":"review"}})),
+        event(json!({"id":"created","kind":"tool_result","tool_use_id":"launch","result":"{\"task_name\":\"/root/review\"}"})),
+    ];
+    let mut fold = Incremental::default();
+    fold.require_agent_states(true);
+    for _ in 0..2 {
+        fold.update(&events, 0, View::default());
+        assert_eq!(fold.running_agents().count(), 0);
+        assert_eq!(fold.activity_badge(), 0);
+        assert!(fold.pinned.is_empty());
+        assert!(fold.items.iter().any(|item| matches!(item, Item::Tool(tool) if tool.call == 0)));
+    }
+    fold.set_agent_states([("/root/review".into(), true, None)]);
+    fold.update(&events, events.len(), View::default());
+    assert_eq!(fold.running_agents().count(), 1);
+}
+
+#[test]
+fn codex_known_uuid_does_not_take_the_state_of_another_child_at_the_same_path() {
+    let events = vec![
+        event(json!({"id":"spawn","kind":"tool_use","tool_use_id":"launch","tool_name":"spawn_agent","tool_input":{"task_name":"review"}})),
+        event(json!({"id":"created","kind":"tool_result","tool_use_id":"launch","result":"{\"agent_id\":\"old-child\",\"task_name\":\"/root/review\"}"})),
+    ];
+    let mut fold = Incremental::default();
+    fold.set_agent_states([("/root/review".into(), false, Some(1010.))]);
+    fold.update(&events, 0, View::default());
+    assert_eq!(fold.running_agents().count(), 1);
+    fold.set_agent_states([("old-child".into(), false, Some(1010.))]);
+    fold.update(&events, events.len(), View::default());
+    assert_eq!(fold.running_agents().count(), 0);
+}
+
+#[test]
+fn codex_native_identity_applies_to_new_and_rebuilt_history_without_timestamps() {
+    for (identity, result) in [
+        ("thread-uuid", "{\"agent_id\":\"thread-uuid\"}"),
+        ("/root/review", "{\"task_name\":\"/root/review\"}"),
+    ] {
+        let events = vec![
+            event(json!({"id":"spawn","kind":"tool_use","tool_use_id":"launch","tool_name":"spawn_agent",
+                "tool_input":{"task_name":"review","agent_type":"worker"}})),
+            event(json!({"id":"created","kind":"tool_result","tool_use_id":"launch","result":result})),
+        ];
+        let mut fold = Incremental::default();
+        fold.set_agent_states([(identity.into(), false, Some(1010.0))]);
+        for _ in 0..2 {
+            fold.update(&events, 0, View::default());
+            assert_eq!(fold.running_agents().count(), 0);
+            assert_eq!(fold.activity_badge(), 0);
+            assert!(!fold.pinned.contains(&0));
+            assert!(fold.items.iter().any(|item| matches!(item, Item::Tool(tool) if tool.call == 0)));
+        }
+        fold.set_agent_states([(identity.into(), true, None)]);
+        fold.update(&events, events.len(), View::default());
+        assert_eq!(fold.running_agents().count(), 1);
+        assert!(fold.pinned.contains(&0));
+        fold.set_agent_states([(identity.into(), false, Some(1020.0))]);
+        fold.update(&events, events.len(), View::default());
+        assert_eq!(fold.running_agents().count(), 0);
+        assert!(!fold.pinned.contains(&0));
+    }
+}
+
+#[test]
+fn codex_spawn_refused_without_error_flag_does_not_leave_a_running_pin() {
+    let events = vec![
+        event(json!({"id":"spawn","kind":"tool_use","tool_use_id":"launch","tool_name":"spawn_agent",
+            "tool_input":{"task_name":"review","agent_type":"worker"},"ts":1000.0})),
+        event(json!({"id":"refused","kind":"tool_result","tool_use_id":"launch",
+            "result":"collab spawn failed: agent thread limit reached","is_error":false,"ts":1001.0})),
+    ];
+    let mut fold = Incremental::default();
+    for n in 1..=events.len() { fold.update(&events[..n], n - 1, View::default()); }
+    assert_eq!(fold.activity, conversation::fold_activity(&events));
+    assert_eq!(fold.running_agents().count(), 0);
+    assert_eq!(fold.activity_badge(), 0);
+    assert!(!fold.pinned.contains(&0));
+    assert_eq!(fold.activity.agents[0].finished_at, Some(1001.0));
+}
+
+#[test]
+fn codex_native_state_moves_a_completed_pin_back_to_its_body_and_reopens_it() {
+    let events = vec![
+        event(json!({"id":"spawn","kind":"tool_use","tool_use_id":"launch","tool_name":"spawn_agent",
+            "tool_input":{"task_name":"review","agent_type":"worker","message":"gAAAA-ciphertext"},"ts":1000.0})),
+        event(json!({"id":"created","kind":"tool_result","tool_use_id":"launch","result":"{\"task_name\":\"/root/review\"}","ts":1001.0})),
+        event(json!({"id":"parent","kind":"assistant_msg","text":"Continuo trabalhando.","ts":1002.0})),
+    ];
+    let mut fold = Incremental::default();
+    for n in 1..=events.len() { fold.update(&events[..n], n - 1, View::default()); }
+    assert_eq!(fold.activity, conversation::fold_activity(&events));
+    assert_eq!(fold.running_agents().count(), 1);
+    assert_eq!(fold.activity.agents[0].agent_path.as_deref(), Some("/root/review"));
+    assert_eq!(fold.activity.agents[0].agent_id, None);
+    assert_eq!(fold.activity.agents[0].prompt, None);
+    assert!(fold.pinned.contains(&0));
+
+    fold.set_agent_states([("launch".into(), false, Some(1010.0))]);
+    let delta = fold.update(&events, events.len(), View::default());
+    assert!(delta.activity_changed);
+    assert_eq!(fold.running_agents().count(), 0);
+    assert_eq!(fold.activity_badge(), 0);
+    assert!(!fold.pinned.contains(&0));
+    assert!(fold.items.iter().any(|item| matches!(item, Item::Tool(tool) if tool.call == 0)));
+    assert_eq!(fold.activity.agents[0].elapsed(1100.0).map(|duration| duration.as_secs()), Some(10));
+
+    fold.set_agent_states([("launch".into(), true, None)]);
+    fold.update(&events, events.len(), View::default());
+    assert_eq!(fold.running_agents().count(), 1);
+    assert_eq!(fold.activity_badge(), 1);
+    assert!(fold.pinned.contains(&0));
+    assert!(!fold.items.iter().any(|item| matches!(item, Item::Tool(tool) if tool.call == 0)));
+}
+
+#[test]
 fn review_notices_and_empty_replies_leave_no_rows_in_history_or_live_updates() {
     let mut events = vec![
         event(json!({"id":"notice","kind":"user_msg","text":"[painel: revisão do PR] Evento de acompanhamento"})),
@@ -102,6 +219,25 @@ fn background_agent_stopped_by_the_user_ends_by_its_description() {
     let mut fold = super::ActivityFold::default();
     for (i, ev) in events.iter().enumerate() { fold.push(i, ev); }
     assert!(!fold.snapshot().agents[0].running);
+    assert_eq!(fold.snapshot(), conversation::fold_activity(&events));
+}
+
+#[test]
+fn waiting_notice_keeps_the_agent_running_as_waiting_until_its_end() {
+    let events = [
+        event(json!({"id":"agent","kind":"tool_use","tool_use_id":"a","tool_name":"Agent","tool_input":{"prompt":"Ler","run_in_background":true}})),
+        event(json!({"id":"launch","kind":"tool_result","tool_use_id":"a","result":"Async agent launched successfully.\nagentId: ab12 (use it)"})),
+        event(json!({"id":"wait","kind":"tool_result","tool_use_id":"task:waiting:ab12","result":"task-notification","ts":5.0})),
+        event(json!({"id":"end","kind":"tool_result","tool_use_id":"task:ab12","result":"task-notification","ts":9.0})),
+    ];
+    let mut fold = super::ActivityFold::default();
+    for (i, ev) in events.iter().enumerate().take(3) { fold.push(i, ev); }
+    let run = &fold.snapshot().agents[0];
+    assert_eq!((run.running, run.waiting), (true, true));
+    assert_eq!(fold.snapshot(), conversation::fold_activity(&events[..3]));
+    fold.push(3, &events[3]);
+    let run = &fold.snapshot().agents[0];
+    assert_eq!((run.running, run.waiting), (false, false));
     assert_eq!(fold.snapshot(), conversation::fold_activity(&events));
 }
 

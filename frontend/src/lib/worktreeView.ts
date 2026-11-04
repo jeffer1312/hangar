@@ -26,6 +26,7 @@ export function worktreesSizeSum(ws: WorktreeStatus[]): string {
 export const worktreeStateLabel: Record<WorktreeState, () => string> = {
   gone: m.worktree_estado_sumida,
   session: m.worktree_estado_em_uso,
+  residual: m.worktree_estado_residual,
   dirty: m.worktree_estado_nao_commitado,
   merged: m.worktree_estado_mesclada,
   detached: m.worktree_estado_sem_branch,
@@ -35,6 +36,7 @@ export const worktreeStateLabel: Record<WorktreeState, () => string> = {
 export const worktreeStateColor: Record<WorktreeState, string> = {
   gone: 'var(--error)',
   session: 'var(--accent)',
+  residual: 'var(--warning)',
   dirty: 'var(--warning)',
   merged: 'var(--success)',
   detached: 'var(--border-strong)',

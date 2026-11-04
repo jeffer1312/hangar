@@ -165,9 +165,15 @@ async fn catalog_is_the_python_one_with_the_whole_open_request() {
     let mut mcp = Mcp::open(s.addr, &[]).await;
     let listed = mcp.request("tools/list", json!({})).await["result"]["tools"].clone();
     // Tools que nasceram depois do Python (ele não tem mais MCP) ficam fora da comparação.
-    let listed: Vec<Value> = listed.as_array().unwrap().iter().filter(|t| !matches!(t["name"].as_str(), Some("interrupt" | "contract"))).cloned().collect();
     let python: Vec<Value> = serde_json::from_str(PYTHON_CATALOG).unwrap();
     let names = |tools: &[Value]| tools.iter().map(|t| t["name"].as_str().unwrap().to_owned()).collect::<Vec<_>>();
+    let known = names(&python);
+    let all = names(listed.as_array().unwrap());
+    for tool in ["request_secret", "vault_list", "vault_exec", "vault_file", "vault_fill"] {
+        assert!(all.iter().any(|n| n == tool), "falta {tool} no catálogo");
+    }
+    let listed: Vec<Value> = listed.as_array().unwrap().iter()
+        .filter(|t| t["name"].as_str().is_some_and(|n| known.iter().any(|k| k == n))).cloned().collect();
     assert_eq!(names(&listed), names(&python), "as 14 tools do Python, na mesma ordem");
     for (rust, python) in listed.iter().zip(&python) {
         // O texto destas mudou com o grupo entre máquinas; os parâmetros continuam os do Python.
@@ -181,7 +187,8 @@ async fn catalog_is_the_python_one_with_the_whole_open_request() {
         }
         // A herança do modo mudou depois do Python (o padrão salvo vem antes): só a abertura do texto segue igual.
         let (rust_text, python_text) = (rust["description"].as_str().unwrap(), python["description"].as_str().unwrap());
-        assert!(rust_text.starts_with(python_text.split(" O que for omitido").next().unwrap()), "{rust_text}");
+        // "nesta máquina" saiu com o `servidor::nome`.
+        assert!(rust_text.starts_with(python_text.replacen(" nesta máquina", "", 1).split(" O que for omitido").next().unwrap()), "{rust_text}");
         assert!(rust_text.contains("padrão salvo no servidor"), "{rust_text}");
         assert_eq!(rust["outputSchema"], python["outputSchema"]);
         assert_eq!(rust["inputSchema"]["required"], python["inputSchema"]["required"]);
@@ -515,4 +522,25 @@ async fn browser_goal_only_with_the_session_jev() {
     let mut jev = Mcp::open(s.addr, &[("x-hangar-pane", "%7"), ("x-hangar-jev", "on")]).await;
     let unconfigured = jev.call("browser_check", json!({"estado": "lista com o item"})).await;
     assert!(failed(&unconfigured) && first_text(&unconfigured).contains("não está configurado"), "{unconfigured}");
+}
+
+/// Outra execução do app publicou o servidor dela e morreu: o arquivo aponta um pid sem processo.
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread")]
+async fn browser_open_with_a_dead_desktop_server_fails_at_once() {
+    let s = scene().await;
+    let mut child = std::process::Command::new("true").spawn().unwrap();
+    let dead = child.id();
+    child.wait().unwrap();
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    write_json(&s.home.join(".hangar/nav/_srv.json"), json!({"porta": port, "token": "t", "pid": dead}));
+    write_json(&s.home.join(".hangar/nav/casa-beta.json"), json!({"chave": "casa::beta", "url": "http://antes/", "ts": 0}));
+    let mut mcp = Mcp::open(s.addr, &[("x-hangar-pane", "%7")]).await;
+    let started = std::time::Instant::now();
+    let result = mcp.call("browser_open", json!({"url": "http://x"})).await;
+    let text = first_text(&result);
+    assert!(failed(&result) && text.contains(&format!("pid {dead}")) && text.contains("abra o app desktop do Hangar"), "{text}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(10), "esperou {:?}", started.elapsed());
+    let verb = mcp.call("browser", json!({"verbo": "snapshot"})).await;
+    assert!(failed(&verb) && first_text(&verb).contains(&format!("pid {dead}")), "{verb}");
 }

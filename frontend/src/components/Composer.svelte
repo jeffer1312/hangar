@@ -126,6 +126,7 @@ import { cachePrazo } from '../lib/cachePrazo';
     // dizia "N shells still running" e o app não dizia nada; o chip é o atalho, o detalhe (qual
     // comando, há quanto tempo) fica no painel de Atividade, que o toque abre.
     shellsRodando?: number;
+    codexCommandsLabel?: string;
     onOpenActivity?: () => void;
     // A COLUNA (não a janela) é estreita: com o navegador embutido ou o painel de contexto largo
     // abertos, o chat vive em ~500px dentro de uma janela de 1900. A fileira de controles precisa
@@ -157,7 +158,7 @@ import { cachePrazo } from '../lib/cachePrazo';
     sessionName, sessionState, status, lastCache = null, onSend, onSteer, onCommand, onInterrupt, onOpenGit,
     onOpenUsage, onOpenPreview, pairPeers = null, pairedState = null, onOpenPair, onOpenOrq = undefined,
     sendToPair = false, onToggleSendToPair,
-    shellsRodando = 0, onOpenActivity,
+    shellsRodando = 0, codexCommandsLabel, onOpenActivity,
     inputText = $bindable(''),
     sugestao = '',
     provider = 'claude',
@@ -581,6 +582,7 @@ import { cachePrazo } from '../lib/cachePrazo';
     !!status?.repo || !!lastCache || status?.ctxPct != null
     || !!onOpenPair || chipFila
     || (shellsRodando > 0 && !!onOpenActivity)
+    || (!!codexCommandsLabel && !!onOpenActivity)
     || (!desktop.atual && (!!placeFolder || !!accountLabel)),
   );
 
@@ -2280,6 +2282,13 @@ import { cachePrazo } from '../lib/cachePrazo';
             <span class="repo-sep" aria-hidden="true">·</span>
             <span class="repo-branch">{placeBranch}{#if status?.dirty}<span class="repo-dirty" aria-label={m.composer_alteracoes_nao_commitadas()}>*</span>{/if}</span>
           {/if}
+        </button>
+      {/if}
+      {#if codexCommandsLabel && onOpenActivity}
+        <button class="repo-chip shell-chip" onclick={onOpenActivity} aria-label={codexCommandsLabel}>
+          <span class="repo-glyph" aria-hidden="true">&gt;_</span>
+          <span class="repo-name">{codexCommandsLabel}</span>
+          <span class="shell-dot" aria-hidden="true"></span>
         </button>
       {/if}
       {#if shellsRodando > 0 && onOpenActivity}

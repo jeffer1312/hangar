@@ -19,7 +19,7 @@ const FAILURE_WINDOW: chrono::TimeDelta = chrono::TimeDelta::hours(24);
 
 /// O que um tique pergunta à máquina; o teste troca.
 pub trait Machine {
-    /// O canal do pacote instalado; `None` fora do modo pacote.
+    /// O canal que o Atualizar segue (`super::channel`); `None` fora do modo pacote.
     fn package_channel(&self) -> Option<String>;
     fn automations(&self) -> bool;
     fn state(&self) -> Map<String, Value>;
@@ -85,8 +85,7 @@ impl Live {
 
 impl Machine for Live {
     fn package_channel(&self) -> Option<String> {
-        matches!(super::http::mode(&self.env.home), super::http::Mode::Package(_)).then(|| super::installed(&self.layout()))?
-            .map(|m| m.channel)
+        matches!(super::http::mode(&self.env.home), super::http::Mode::Package(_)).then(|| super::channel(&self.layout()))
     }
 
     fn automations(&self) -> bool { crate::push::watch::Settings::read(&self.claude_dir(), &crate::push::server_env()).automations }
@@ -96,9 +95,13 @@ impl Machine for Live {
     }
 
     async fn newer(&self, channel: &str) -> Result<Option<String>, String> {
-        let installed = super::installed(&self.layout()).and_then(|m| m.version.parse().ok());
+        // Canal trocado na tela: o publicado no outro vale mesmo com número menor, como no Atualizar; a mesma
+        // versão não é troca nenhuma.
+        let manifest = super::installed(&self.layout());
+        let installed = manifest.as_ref().filter(|m| m.channel == channel).and_then(|m| m.version.parse().ok());
         let release = Release::github(channel);
-        super::check(&self.client, &release, &super::platform(), installed).await.map(|e| e.map(|e| e.version)).map_err(|e| e.to_string())
+        let entry = super::check(&self.client, &release, &super::platform(), installed).await.map_err(|e| e.to_string())?;
+        Ok(entry.map(|e| e.version).filter(|v| manifest.as_ref().is_none_or(|m| *v != m.version)))
     }
 
     async fn working(&self) -> Result<bool, String> {

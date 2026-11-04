@@ -1,5 +1,5 @@
 import { useRef } from 'react';
-import { View } from 'react-native';
+import { Text, View } from 'react-native';
 
 // Animação não roda no teste: o valor final entra direto e o estilo animado vira estilo comum.
 const passa = (v: any) => v;
@@ -27,5 +27,5 @@ export const FadeOut: any = layoutBuilder();
 export const LinearTransition: any = layoutBuilder();
 export type SharedValue<T = any> = { value: T };
 
-const Animated = { View, createAnimatedComponent: passa };
+const Animated = { View, Text, createAnimatedComponent: passa };
 export default Animated;

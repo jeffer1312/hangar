@@ -45,6 +45,7 @@ const LIVE_FRESH: Duration = Duration::from_secs(15);
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(5);
 const CONFIG_DIRS_TTL: Duration = Duration::from_secs(30);
 const MAX_BODY: usize = 64 * 1024;
+const MAX_PROVIDER_BODY: usize = 2 * 1024 * 1024;
 /// `git status` simultâneos da lista (`_git_pool`).
 const GIT_SLOTS: usize = 4;
 
@@ -272,6 +273,8 @@ pub struct ListBridge {
     pub nav: Arc<crate::nav_requests::NavStore>,
     /// Chaveiro desta máquina: a lista do dono publica o estado dele.
     pub keyring: Arc<crate::keyring::Keyring>,
+    /// Etiquetas de máquina e contas: a lista do dono publica o evento `tags`.
+    pub tags: crate::tags::Feed,
 }
 
 /// Tarefa bloqueante que entrou em pânico: o hook já registrou onde; aqui fica qual operação.
@@ -289,7 +292,7 @@ impl ListBridge {
         let (caches, demoted) = (Arc::<Caches>::default(), Arc::<crate::state::demote::Demoted>::default());
         caches.classify.with(|c| c.hooks.set_demoted(demoted.clone()));
         let nav = Arc::new(crate::nav_requests::NavStore::load(env.dirs.as_ref().map(|d| d.home.as_path())));
-        Self { nav, keyring: Arc::new(crate::keyring::Keyring::system()), env: Arc::new(env), local: Mutex::default(), shortcuts: Default::default(), facts, caches, runtime: std::sync::OnceLock::new(),
+        Self { nav, keyring: Arc::new(crate::keyring::Keyring::system()), tags: Default::default(), env: Arc::new(env), local: Mutex::default(), shortcuts: Default::default(), facts, caches, runtime: std::sync::OnceLock::new(),
             shares: std::sync::OnceLock::new(), owner_clients: AtomicU32::new(0), seen: Mutex::default(),
             discovery: tokio::sync::Mutex::new(None),
             snapshot: tokio::sync::Mutex::new(None), git_running: Arc::default(),
@@ -473,6 +476,12 @@ impl ListBridge {
         Ok(rows.iter().find(|row| row.name == name).cloned().map(|row| (row, pids.get(name).copied())))
     }
 
+    /// Como `discovered_session`, por uma rodada feita agora, sem descartar o retrato da lista.
+    pub async fn fresh_session(&self, name: &str) -> Result<Option<(SessionRow, Option<u32>)>, ListError> {
+        let (rows, pids, _, _) = self.discovery(Some(wall_now())).await?;
+        Ok(rows.iter().find(|row| row.name == name).cloned().map(|row| (row, pids.get(name).copied())))
+    }
+
     async fn discovery(&self, newer_than: Option<f64>)
         -> Result<(Arc<Vec<SessionRow>>, Arc<HashMap<String, u32>>, Arc<Vec<Pane>>, Arc<ChildrenMap>), ListError> {
         let mut slot = self.discovery.lock().await;
@@ -576,10 +585,12 @@ impl ListBridge {
         }).await.map_err(|e| joined(e, "rodada parcial interrompida"))?;
         self.flush_notes();
         let Some((mut changed, effects)) = done else { return Ok(Partial::Unchanged) };
+        crate::dictation::rename_suggestion::fill_rows(&self.dirs()?.home, &self.env.mux, &mut changed).await;
         let plugins = self.plugin_facts(&changed).await;
         self.project_plugins(&mut changed, &plugins);
         public_problems(&mut changed);
         list_facts::mark_stale(&mut changed, &snap.facts, snap.facts_ok);
+        crate::session_visibility::fill::fill_rows(&self.dirs()?.home, &self.env.mux, &mut changed, &self.facts.diag).await;
         self.gate_problems(&mut changed, false);
         self.demote(effects);
         let mut rows = (*snap.rows).clone();
@@ -687,10 +698,12 @@ impl ListBridge {
         self.refresh_git(git_dirs);
         self.demote(effects);
         let mut rows = rows;
+        crate::dictation::rename_suggestion::fill_rows(&self.dirs()?.home, &self.env.mux, &mut rows).await;
         self.project_plugins(&mut rows, &plugins);
         public_problems(&mut rows);
         rows.extend(aside);
         list_facts::mark_stale(&mut rows, &facts, facts_ok);
+        crate::session_visibility::fill::fill_rows(&self.dirs()?.home, &self.env.mux, &mut rows, &self.facts.diag).await;
         self.gate_problems(&mut rows, true);
         self.prune_gone(&rows, Instant::now());
         self.record_live(&rows, facts_fresh && !facts.unknown);
@@ -710,8 +723,9 @@ impl ListBridge {
             (local_transfers::transfers(&found, &d), local_facts::orq_rows(&d.home, wall_now()),
                 local_facts::Guests::read(&d.claude), problems, local_facts::stall_seconds(&d.claude))
         }).await.map_err(|e| joined(e, "fatos locais interrompidos"))?;
-        if orq_failed {
-            self.facts.diag.report("rust.list_orq_unavailable", "", "list_orq_unavailable", "orquestração ilegível; fica a última linha boa");
+        if let Some(why) = orq_failed {
+            self.facts.diag.report_with("rust.list_orq_unavailable", "", "list_orq_unavailable", "orquestração ilegível; fica a última linha boa",
+                serde_json::json!({"detalhe": why}));
         }
         let (unknown, (overrides, frozen), shortcuts) = {
             let mut last = lock(&self.local);
@@ -806,7 +820,7 @@ impl ListBridge {
     /// Falhas vistas pela leitura síncrona da rodada, ao diário.
     fn flush_notes(&self) {
         for n in list_facts::take_notes() {
-            self.facts.diag.report(n.event, &n.session, &n.code, n.reason);
+            self.facts.diag.report_with(n.event, &n.session, &n.code, n.reason, n.fields);
         }
         let hits = std::mem::take(&mut *self.caches.limits.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
         for hit in hits {
@@ -961,7 +975,9 @@ impl ListBridge {
         for row in rows.iter_mut() {
             // Diagnóstico sai já, sem prazo: o código fica no diário da lista, nunca na tela nem no `Shown`.
             if let Some(code) = row.problema.as_deref().filter(|code| crate::problem_gate::diagnostic(code, &row.state)) {
-                list_facts::note("rust.problem_hidden", &row.name, code.to_owned(), "aviso de diagnóstico fora da tela");
+                // A linha não traz o detalhe do problema: vão o estado e o tipo da sessão, que situam o código.
+                list_facts::note_with("rust.problem_hidden", &row.name, code.to_owned(), "aviso de diagnóstico fora da tela",
+                    serde_json::json!({"via": "lista", "estado": &row.state, "provider": &row.provider, "sem_terminal": if row.headless { 1 } else { 0 }}));
                 row.problema = None;
             }
             let gate = gates.entry(row.name.clone()).or_default();
@@ -1076,6 +1092,20 @@ fn apply_git(row: &mut SessionRow, summary: &Value, diff: &Value) {
 #[allow(clippy::too_many_arguments)]
 fn decorate(env: &ListEnv, caches: &Caches, dirs: &Dirs, config_dirs: &[PathBuf], inp: &RoundInputs,
             rows: &mut [SessionRow], wall: f64, mono: f64, whole: bool) -> Vec<GitDue> {
+    let mut accounts = crate::accounts::environment::AccountEnvironment::capture();
+    accounts.home = dirs.home.clone();
+    accounts.claude_base = dirs.claude.clone();
+    for row in rows.iter_mut().filter(|row| row.engine.is_none()) {
+        if row.provider == "kimi" {
+            row.conta = crate::provider_accounts::kimi_account(&accounts);
+        } else if matches!(row.provider.as_str(), "pi" | "omp") {
+            let config = inp.agent_pids.get(&row.name)
+                .and_then(|pid| env.procs.env_var(i64::from(*pid), "CLAUDE_CONFIG_DIR").ok().flatten())
+                .map(PathBuf::from).unwrap_or_else(|| dirs.claude.clone());
+            let provider = row.jsonl.as_deref().and_then(|jsonl| crate::provider_models::pi_provider(jsonl, &config));
+            row.conta = crate::provider_accounts::pi_account(&accounts, provider.as_deref());
+        }
+    }
     caches.decor.with(|d| {
         for row in rows.iter_mut().filter(|r| r.provider == "claude") {
             let pid = inp.agent_pids.get(&row.name).map(|p| i64::from(*p));
@@ -1167,6 +1197,8 @@ fn headless_meta(path: &Path, session: &str) -> Value {
 #[derive(Deserialize)]
 #[serde(tag = "op", content = "args")]
 enum Operation {
+    #[serde(rename = "providers.inbox")]
+    ProviderInbox(Value),
     #[serde(rename = "list.discover")]
     Discover { #[serde(default)] newer_than: Option<f64> },
     #[serde(rename = "list.snapshot")]
@@ -1196,7 +1228,18 @@ async fn execute(bridge: &Arc<ListBridge>, op: Operation) -> Result<Value, ListE
         }
     };
     match op {
-        Operation::Discover { newer_than } => rows(&bridge.discover(newer_than).await?),
+        Operation::Discover { newer_than } => {
+            let mut found = bridge.discover(newer_than).await?.as_ref().clone();
+            let home = bridge.dirs()?.home;
+            let (orq, failed) = tokio::task::spawn_blocking(move || local_facts::orq_rows(&home, wall_now())).await
+                .map_err(|e| joined(e, "orquestrações interrompidas"))?;
+            if let Some(why) = failed {
+                bridge.facts.diag.report_with("rust.list_orq_unavailable", "", "list_orq_unavailable", "orquestração ilegível; fica a última linha boa",
+                    serde_json::json!({"detalhe": why}));
+            }
+            found.extend(orq);
+            rows(&found)
+        },
         Operation::Snapshot {} => {
             let produced = bridge.snapshot().await?;
             // Sem nenhuma resposta boa do Python, acesso, escondidas e transferências são
@@ -1214,7 +1257,7 @@ async fn execute(bridge: &Arc<ListBridge>, op: Operation) -> Result<Value, ListE
         Operation::Seed { name, jsonl } => cache(Box::new(move |b| b.seed(&name, &jsonl))).await,
         Operation::Forget { name } => cache(Box::new(move |b| b.forget(&name))).await,
         // Respondido pelo `private`, que tem os painéis.
-        Operation::TermActive { .. } => Err(fail("list_bridge_invalid_request", "term.active fora do private")),
+        Operation::TermActive { .. } | Operation::ProviderInbox(_) => Err(fail("list_bridge_invalid_request", "operação fora do private")),
         Operation::StateFacts { name, facts } => {
             use crate::state::facts::Push;
             Ok(match bridge.state_facts.push(&name, facts, Instant::now()) {
@@ -1244,14 +1287,21 @@ pub async fn private(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
         }
         StatusCode::BAD_REQUEST.into_response()
     };
-    let Ok(Ok(bytes)) = tokio::time::timeout(Duration::from_secs(6), to_bytes(req.into_body(), MAX_BODY)).await else {
+    let Ok(Ok(bytes)) = tokio::time::timeout(Duration::from_secs(6), to_bytes(req.into_body(), MAX_PROVIDER_BODY)).await else {
         return refused("list_bridge_body");
     };
     // Operação desconhecida aqui costuma ser Python e Rust de versões diferentes.
     let Ok(op) = serde_json::from_slice::<Operation>(&bytes) else {
         return refused("list_bridge_invalid_request");
     };
+    if bytes.len() > MAX_BODY && !matches!(&op, Operation::ProviderInbox(_)) {
+        return refused("list_bridge_body");
+    }
     let result = match op {
+        Operation::ProviderInbox(arguments) => return match crate::provider_models::inbox::call(arguments).await {
+            Ok(result) => reply(json!({"ok": true, "result": result})),
+            Err(error) => reply(json!({"ok": false, "error": {"code": "providers_inbox_failed", "detail": error.detail}})),
+        },
         Operation::TermActive { name } => term_active(&st, &name),
         op => execute(&st.list, op).await,
     };

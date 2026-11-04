@@ -1,4 +1,4 @@
-"""Ponte de organização: envelope do Rust validado, limites e espera do modo pending."""
+"""Ponte dos catálogos: envelope do Rust validado, limites e espera do modo pending."""
 import json
 from types import SimpleNamespace
 
@@ -53,7 +53,7 @@ def _rust_answers(monkeypatch, body: bytes) -> list:
 def test_invalid_envelope_is_503(monkeypatch, envelope):
     _rust_answers(monkeypatch, json.dumps(envelope).encode())
     with pytest.raises(transport.BridgeError) as error:
-        dictation_bridge.request("organize", {"raw": "texto"})
+        dictation_bridge.request("catalog_models", {"raw": "texto"})
     assert (error.value.status, error.value.code) == (503, "dictation_rust_unavailable")
 
 
@@ -68,7 +68,7 @@ def test_rust_error_keeps_its_status_and_code(monkeypatch):
 def test_response_over_4_mib_is_503(monkeypatch):
     _rust_answers(monkeypatch, b'{"ok":true,"result":{"t":"' + b"a" * (4 * 1024 * 1024) + b'"}}')
     with pytest.raises(transport.BridgeError) as error:
-        dictation_bridge.request("organize", {})
+        dictation_bridge.request("catalog_models", {})
     assert error.value.status == 503
 
 
@@ -77,25 +77,17 @@ def test_failure_records_cause_class_without_text(monkeypatch):
     monkeypatch.setattr(diag, "registrar", lambda evento, nivel="ok", **campos: logged.append(campos))
     _rust_answers(monkeypatch, b"not json com texto ditado")
     with pytest.raises(transport.BridgeError):
-        dictation_bridge.request("organize", {})
-    assert logged == [{"codigo": "dictation_rust_unavailable", "etapa": "organize",
+        dictation_bridge.request("catalog_models", {})
+    assert logged == [{"codigo": "dictation_rust_unavailable", "etapa": "catalog_models",
                        "causa": "JSONDecodeError", "causa_interna": None}]
 
 
 def test_payload_over_1_mib_is_413_without_calling_rust(monkeypatch):
     calls = _rust_answers(monkeypatch, b"{}")
     with pytest.raises(transport.BridgeError) as error:
-        dictation_bridge.request("organize", {"raw": "a" * (1024 * 1024)})
+        dictation_bridge.request("catalog_models", {"raw": "a" * (1024 * 1024)})
     assert error.value.status == 413
     assert calls == []
-
-
-def test_raw_mismatch_returns_original_text(monkeypatch):
-    _rust_answers(monkeypatch, json.dumps({"ok": True, "result": {"text": "Outro.", "raw": "outro cru"}}).encode())
-    result = dictation_bridge.organize("fala original", "prosa", mode="external_api")
-    assert result["text"] == result["raw"] == "fala original"
-    assert result["estilo_aplicado"] == "cru"
-    assert result["organization_code"] == "dictation_rust_unavailable"
 
 
 def test_pending_waits_for_rust_then_succeeds(monkeypatch):

@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
-import hashlib
 import http.client
 import importlib.machinery
 import importlib.util
@@ -32,10 +31,10 @@ import urllib.request
 from collections import Counter
 from contextlib import redirect_stdout
 from datetime import datetime
-from functools import cache
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parents[2] / "backend"))
 JOURNAL_CAP = 40_000
 COMMON_CAP = 8_000
 # A session that died holding a shared resource cannot freeze the team.
@@ -116,6 +115,15 @@ class OrqError(Exception):
 
 class SendError(OrqError):
     """hangar-send did not deliver: the step may be tried again."""
+
+
+def _rust(operation: str, **arguments):
+    """Transporte local dos leitores compartilhados com o servidor."""
+    from app.providers_bridge import local
+    try:
+        return local("orq-info", operation, **arguments)
+    except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
+        raise OrqError(str(exc)) from None
 
 
 def now() -> str:
@@ -235,22 +243,12 @@ def _validator():
     return mod
 
 
-@cache
-def _identity_reader():
-    path = HERE.parents[2] / "backend" / "app" / "orq_identity.py"
-    spec = importlib.util.spec_from_file_location("orq_session_identity", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
 
 
 def session_identity(name: str) -> str:
     if "::" in name:
         raise OrqError("cannot capture another server's session locally")
-    identity = _identity_reader().identity(name)
-    if not isinstance(identity, str) or not identity:
-        raise OrqError("session identity is empty")
-    return identity
+    return _rust("identity", name=name)
 
 
 def capture_identities(d: Path, names) -> dict[str, str]:
@@ -267,18 +265,7 @@ def capture_identities(d: Path, names) -> dict[str, str]:
 
 
 def events(d: Path) -> list[dict]:
-    p = d / "eventos.jsonl"
-    if not p.exists():
-        return []
-    out = []
-    for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
-        try:
-            ev = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(ev, dict):
-            out.append(ev)
-    return out
+    return _rust("events", directory=str(d))
 
 
 def event_append(d: Path, ev: dict) -> dict:
@@ -302,114 +289,21 @@ def event_append(d: Path, ev: dict) -> dict:
 
 
 def _closed(d: Path) -> dict:
-    """Task → ts of its latest close (None: an old line without ts)."""
-    p = d / "closed.jsonl"
-    if not p.exists():
-        return {}
-    out = {}
-    for line in p.read_text(encoding="utf-8").splitlines():
-        try:
-            c = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(c, dict):
-            out[c.get("task")] = c.get("ts")
-    return out
+    return {int(n): ts for n, ts in _rust("closed", directory=str(d)).items()}
 
 
-def _closed_after(closed_ts, ev_ts) -> bool:
-    """A Task reopened under the same number after its close owns the ball again. A line without
-    ts, or a ts that does not parse, closes everything before it."""
-    if closed_ts is None:
-        return True
-    try:
-        return datetime.fromisoformat(closed_ts) >= datetime.fromisoformat(ev_ts)
-    except (TypeError, ValueError):
-        return True
 
 
 def _until_future(deadline) -> bool:
-    """Prazo inválido não dispensa ninguém: o responsável continua com a bola."""
-    try:
-        return datetime.fromisoformat(deadline) > datetime.now().astimezone()
-    except (TypeError, ValueError):
-        return False
+    return _rust("until-future", deadline=deadline)
 
 
 def state(d: Path) -> dict:
-    """One pass over the events: who executes and reviews each Task (after swaps), who has the
-    ball, who the arbiter is now, which Tasks are open, whether the run has ended, and which swaps
-    replaced an executor or reviewer. The ball table is arbitro-vigia.md's."""
-    arbiter = config(d)["arbiter"]
-    roles: dict[int, dict] = {}
-    last: dict[int, dict] = {}
-    ended = False
-    replaced: list[tuple[str, str]] = []
-    waits: dict[str, dict] = {}   # sessão → última espera ainda não encerrada por evento
-    for ev in events(d):
-        t = ev.get("tipo")
-        if t == "espera":
-            waits[ev.get("sessao")] = ev
-            continue
-        # Só evento registrado encerra a espera antes do prazo; `orq log` não é evento.
-        waits.pop(ev.get("sessao"), None)
-        if isinstance(ev.get("task"), int):
-            # task_inicio nomeia suas sessões antes de registrá-las em roles.
-            r = ev if t == "task_inicio" else roles.get(ev["task"], {})
-            for who, w in list(waits.items()):
-                if w.get("task") == ev["task"] or (w.get("task") is None and who in (r.get("executor"), r.get("par"))):
-                    del waits[who]
-        if t == "task_inicio":
-            roles[ev.get("task")] = {"executor": ev.get("executor"), "par": ev.get("par")}
-            last[ev.get("task")] = ev
-        elif t in ("entrega", "veredito"):
-            last[ev.get("task")] = ev
-        elif t == "sessao_trocada":
-            waits.pop(ev.get("de"), None)
-            was_arbiter = ev.get("de") == arbiter
-            if was_arbiter:
-                arbiter = ev.get("para")
-            held = False
-            for r in roles.values():
-                for k in ("executor", "par"):
-                    if r.get(k) == ev.get("de"):
-                        r[k] = ev.get("para")
-                        held = True
-            # Only who held a Task role is closable, and never an arbiter swapped out: it may be
-            # the user's own coordinator session.
-            if held and not was_arbiter:
-                replaced.append((ev.get("de"), ev.get("para")))
-        elif t == "execucao_fim":
-            # Work may resume in the same file without a new execucao_inicio; only Tasks
-            # touched after the end can own the ball.
-            last.clear()
-            waits.clear()
-            ended = True
-        if t != "execucao_fim" and isinstance(ev.get("task"), int):
-            ended = False
-    owners: list[str] = []
-    open_tasks: list[int] = []
-    closed = _closed(d)
-    for task, ev in last.items():
-        if task in closed and _closed_after(closed[task], ev.get("ts")):
-            continue
-        open_tasks.append(task)
-        r = roles.get(task, {})
-        if ev["tipo"] == "entrega":
-            # A subagent reviewer runs inside the executor's turn: the executor holds the ball.
-            owner = r.get("executor") if r.get("par") == SUBAGENT else r.get("par")
-        elif ev["tipo"] == "veredito" and ev.get("resultado") == "devolvido":
-            owner = None  # the arbiter's, and he is always watched
-        else:
-            owner = r.get("executor")
-        if owner and owner not in owners:
-            owners.append(owner)
-    # Fechar a Task encerra sua cobertura, mesmo sem evento de integração.
-    waiting = {who for who, w in waits.items()
-               if _until_future(w.get("ate")) and (w.get("task") is None or w["task"] in open_tasks)}
-    ball = [o for o in owners if o not in waiting]
-    return {"roles": roles, "ball": ball, "owners": owners, "waiting": waiting, "arbiter": arbiter,
-            "open": open_tasks, "ended": ended, "replaced": replaced}
+    value = _rust("state", directory=str(d))
+    value["roles"] = {int(n): row for n, row in value["roles"].items()}
+    value["waiting"] = set(value["waiting"])
+    value["replaced"] = [tuple(pair) for pair in value["replaced"]]
+    return value
 
 
 def done(d: Path) -> list[tuple[str, str]]:
@@ -583,15 +477,7 @@ def snapshot_plan(d: Path, path: str | None = None) -> None:
 
 
 def _section(text: str, name: str) -> list[str]:
-    out, inside = [], False
-    for line in text.splitlines():
-        m = SECTION.match(line)
-        if m:
-            inside = m.group(1).strip() == name
-            continue
-        if inside:
-            out.append(line)
-    return out
+    return _rust("section", text=text, name=name)
 
 
 def projeto(text: str) -> dict:
@@ -623,97 +509,15 @@ def projeto(text: str) -> dict:
 
 
 def plan_tasks(text: str) -> list[dict]:
-    rows = [l for l in _section(text, "Tasks") if l.strip().startswith("|")]
-    if len(rows) < 2:
-        return []
-    head = [c.strip().lower() for c in rows[0].strip().strip("|").split("|")]
-    col = {name: head.index(name) for name in ("#", "what it is", "files", "verification", "wave",
-                                               "risk", "roteiro") if name in head}
-    out = []
-    for row in rows[2:]:
-        cells = [c.strip() for c in row.strip().strip("|").split("|")]
-        get = lambda name: cells[col[name]] if name in col and col[name] < len(cells) else ""
-        if not get("#").isdigit():
-            continue
-        rot = get("roteiro").strip("`")
-        risk = get("risk").strip("`").lower()
-        out.append({"n": int(get("#")), "title": get("what it is"),
-                    "files": re.findall(r"`([^`]+)`", get("files")),
-                    "verification": get("verification"), "wave": get("wave"),
-                    "risk": "" if risk in ("", "—", "-") else risk,
-                    "roteiro": "" if rot in ("", "—", "-") else rot})
-    return out
+    return _rust("plan-tasks", text=text)
 
 
 def plan_sha(text: str) -> str:
-    """Over the text without the `Preparado:` line and with blank runs collapsed, so stamping
-    (which inserts that line) never changes the sha it writes."""
-    body = re.sub(r"\n{3,}", "\n\n", PREPARADO.sub("", text))
-    return hashlib.sha256(body.encode("utf-8")).hexdigest()[:12]
-
-
-PLAN_TASK_HEAD = re.compile(r"^### Task \d+:", re.MULTILINE)
-# Closing fence: same character, at least as long, up to 3 spaces of indent (CommonMark).
-FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})[^\n]*\n.*?^ {0,3}\1[`~]*[ \t]*$", re.MULTILINE | re.DOTALL)
-OPEN_STEP = re.compile(r"^\s*- \[ \] \*\*Step", re.MULTILINE)
-DONE_STEP = re.compile(r"^\s*- \[[xX]\] \*\*Step", re.MULTILINE)
-
-
-def _repo_files(repo: Path, problems: list[str], *args: str) -> list[str]:
-    # Exit 1 of `git grep` is "no match" and a folder outside git has no plan: both are empty, not
-    # errors. Anything else (timeout, dubious ownership, no git) is reported, never read as "no plan".
-    try:
-        r = subprocess.run(["git", "-c", "core.quotePath=false", "-C", str(repo), *args],
-                           capture_output=True, text=True, timeout=10)
-    except (OSError, subprocess.TimeoutExpired) as e:
-        problems.append(f"git {args[0]}: {e}")
-        return []
-    if r.returncode == 0:
-        return [line for line in r.stdout.splitlines() if line]
-    if not (r.returncode == 1 and args[0] == "grep") and "not a git repository" not in r.stderr:
-        problems.append(f"git {args[0]}: {r.stderr.strip()[:160]}")
-    return []
+    return _rust("plan-sha", text=text)
 
 
 def find_plan(repo: Path) -> dict:
-    """The plan a run would start from, best first: stamped, stamped then edited, an unstamped
-    `.orq.md`, then any plan in the Task/Step format, newest first. `path`/`state` only when one
-    is found; `problems` = what could not be read (a plan may be hiding there); `finished` = the
-    newest plan with every step ticked."""
-    problems: list[str] = []
-    orq = _repo_files(repo, problems, "ls-files", "-co", "--exclude-standard", "*.orq.md")
-    tasks = _repo_files(repo, problems, "grep", "-l", "--untracked", "-E", r"^### Task [0-9]+:", "--", "*.md")
-    # The superpowers plans folder is usually gitignored, so git sees none of it.
-    kept = sorted(str(p.relative_to(repo)) for p in (repo / "docs/superpowers/plans").glob("*.md"))
-    rank = {"stamped": 0, "changed": 1, "unstamped": 2, "tasks": 3}
-    found, done = [], []
-    for rel in dict.fromkeys(orq + tasks + kept):
-        path = repo / rel
-        try:
-            text, mtime = path.read_text(encoding="utf-8"), path.stat().st_mtime
-        except (OSError, UnicodeDecodeError) as e:
-            problems.append(f"{path}: {type(e).__name__}")
-            continue
-        m = PREPARADO.search(text)
-        # A fenced `### Task` is a doc showing the format, not a plan; every step ticked is work done.
-        body = FENCE.sub("", text)
-        if DONE_STEP.search(body) and not OPEN_STEP.search(body):
-            done.append((mtime, str(path)))
-            continue
-        if not m and not rel.endswith(".orq.md") and not PLAN_TASK_HEAD.search(body):
-            continue
-        state = ("stamped" if m.group(1) == plan_sha(text) else "changed") if m else \
-            "unstamped" if rel.endswith(".orq.md") else "tasks"
-        found.append((rank[state], -mtime, str(path), state))
-    out: dict = {}
-    if found:
-        _, _, path, state = min(found)
-        out = {"path": path, "state": state}
-    if problems:
-        out["problems"] = problems
-    if done:
-        out["finished"] = max(done)[1]
-    return out
+    return _rust("find-plan", repo=str(repo))
 
 
 def cmd_readiness(a) -> int:
@@ -1662,38 +1466,15 @@ PASSO_PT = {"integrate": "integrar", "open": "abrir", "batch": "anunciar o lote 
 
 
 def _at_or_after(ts, ref) -> bool:
-    """`ts` at or after `ref`; ts has second precision, so the same second counts. A ref missing
-    or that does not parse lets every event count."""
-    if ref is None:
-        return True
-    try:
-        return datetime.fromisoformat(ts) >= datetime.fromisoformat(ref)
-    except (TypeError, ValueError):
-        return True
+    return _rust("at-or-after", ts=ts, reference=ref)
 
 
 def _closes(d: Path) -> dict[int, dict]:
-    """Task → its latest closed.jsonl line, ordered by when it closed: the merge order."""
-    out: dict[int, dict] = {}
-    for c in _jsonl(d / "closed.jsonl"):
-        if isinstance(c.get("task"), int) and c.get("hash"):
-            out.pop(c["task"], None)
-            out[c["task"]] = c
-    return out
+    return {int(n): row for n, row in _rust("closes", directory=str(d)).items()}
 
 
 def _outcome(evs: list[dict], n: int, close: dict) -> str | None:
-    """How integrating this close ended, None while not tried. A new close (the fix of a red
-    integration, or a correction after a conflict) starts over."""
-    out = None
-    for ev in evs:
-        if ev.get("task") != n or not _at_or_after(ev.get("ts"), close.get("ts")):
-            continue
-        t = ev.get("tipo")
-        if t in ("integrada", "conflito", "integracao_vermelha") or (
-                t == "advance_falhou" and ev.get("passo") == "integrate"):
-            out = t
-    return out
+    return _rust("outcome", events=evs, task=n, close=close)
 
 
 def _integrated(d: Path, evs: list[dict]) -> set[int]:
@@ -2091,30 +1872,13 @@ def render_kickoff(role: str, ctx: dict) -> str:
 
 
 def _norm(cell: str) -> str:
-    """Compared the way backend/app/orq_md.py does: no accents, no markdown, lower case."""
-    s = unicodedata.normalize("NFKD", cell.strip().strip("`").replace("**", "").strip())
-    return re.sub(r"\s+", " ", "".join(c for c in s if not unicodedata.combining(c))).lower()
+    return _rust("normalize", text=cell)
 
 
-TEAM_KEYS = ("papel", "vez", "sessao", "provider", "conta", "modelo", "esforco", "janela", "abertura")
 
 
 def team_rows(text: str) -> list[dict]:
-    """`## Quem é quem`, read as backend/app/orq_papeis.py reads it: orq stays stdlib and runs
-    outside the backend. Keys without accents, `-` read as empty."""
-    lines = [l for l in _section(text, "Quem é quem") if l.strip().startswith("|")]
-    if len(lines) < 2:
-        return []
-    cells = lambda l: [c.strip() for c in l.strip().strip("|").split("|")]
-    head = [_norm(c) for c in cells(lines[0])]
-    out = []
-    for l in lines[2:]:
-        # orq_md.limpar: bold, then backticks; `-` is empty.
-        vals = [re.sub(r"^\*\*(.*)\*\*$", r"\1", c).strip().strip("`").strip() for c in cells(l)]
-        row = dict.fromkeys(TEAM_KEYS, "") | {h: ("" if v in ("-", "—") else v) for h, v in zip(head, vals)}
-        if row["papel"]:
-            out.append(row)
-    return out
+    return _rust("team-rows", text=text)
 
 
 def role_row(rows: list[dict], role: str, n: int, risk: str) -> dict:

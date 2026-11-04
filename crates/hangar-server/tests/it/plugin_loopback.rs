@@ -254,6 +254,7 @@ mod held_routes {
         rate: Mutex<Option<(u64, f64)>>,
         context: Mutex<Option<(u64, u64)>>,
         turn_errors: Mutex<Vec<String>>,
+        adoptions: Mutex<Vec<(String, String, String)>>,
     }
     impl Sources for Facts {
         fn enabled(&self) -> SourceFuture<'_, bool> { Box::pin(async { Ok(self.enabled.load(Ordering::Relaxed)) }) }
@@ -278,6 +279,9 @@ mod held_routes {
         fn turn_error<'a>(&'a self, identity: &'a Identity) -> SourceFuture<'a, ()> {
             Box::pin(async move { self.turn_errors.lock().unwrap().push(identity.name.clone()); Ok(()) })
         }
+        fn adopt<'a>(&'a self, name: &'a str, key: &'a str, conversation: &'a str) -> SourceFuture<'a, bool> {
+            Box::pin(async move { self.adoptions.lock().unwrap().push((name.into(), key.into(), conversation.into())); Ok(false) })
+        }
     }
     struct Running(tokio::task::JoinHandle<()>);
     impl Drop for Running { fn drop(&mut self) { self.0.abort(); } }
@@ -286,7 +290,7 @@ mod held_routes {
             binding: InteractionBinding { key: "runtime-key".into(), conversation: "sid".into(), generation: 2 } };
         let facts = Arc::new(Facts { enabled: AtomicBool::new(true), rows: vec![Discovery { identity: identity.clone(), pane: Some("%1".into()),
             socket: Some("/tmp/tmux-socket".into()), mux_session: Some("$2".into()), psmux_pid: None }], identity,
-            rate: Mutex::new(None), context: Mutex::new(None), turn_errors: Mutex::new(Vec::new()) });
+            rate: Mutex::new(None), context: Mutex::new(None), turn_errors: Mutex::new(Vec::new()), adoptions: Mutex::new(Vec::new()) });
         let store = Arc::new(plugin::Store::new(Arc::new(InteractionStore::default())));
         store.interactions().bind(&facts.identity.binding).unwrap();
         store.bind(&facts.identity.binding).unwrap();
@@ -361,6 +365,17 @@ mod held_routes {
         assert_eq!(post(address, "state", stale).await.status().as_u16(), 200);
         let ghost = json!({"sessao":"ghost","token":mint_keyed(OWNER,"ghost","python-key"),"estado":"working"});
         assert_eq!(post(address, "state", ghost).await.status().as_u16(), 409);
+    }
+
+    #[tokio::test]
+    async fn plugin_loopback_pull_of_a_session_without_actor_asks_the_adoption_with_its_conversation() {
+        let (_store, facts, address, _server) = start().await;
+        let pull = |modos: Value, sid: Value| json!({"sessao":"ghost","token":mint_keyed(OWNER,"ghost","ghost-key"),"instance":"i","modos":modos,"session_id":sid});
+        assert_eq!(post(address, "pull", pull(json!(["fill"]), json!("sid-ghost"))).await.status().as_u16(), 409, "a adoção não saiu: segue recusado");
+        assert_eq!(*facts.adoptions.lock().unwrap(), [("ghost".to_owned(), "ghost-key".to_owned(), "sid-ghost".to_owned())]);
+        assert_eq!(post(address, "pull", pull(json!(["agent_message"]), json!("sid-filho"))).await.status().as_u16(), 409);
+        assert_eq!(post(address, "pull", pull(json!(["fill"]), Value::Null)).await.status().as_u16(), 409);
+        assert_eq!(facts.adoptions.lock().unwrap().len(), 1, "/pull só de subagente ou sem conversa não pede adoção");
     }
 
     #[tokio::test]

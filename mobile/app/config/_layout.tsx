@@ -16,6 +16,7 @@ export default function ConfigLayout() {
         }}
       />
       <Stack.Screen name="voice" options={{ title: m.native_settings_page_voice() }} />
+      <Stack.Screen name="cofre" options={{ title: m.vault_app_title() }} />
     </Stack>
   );
 }

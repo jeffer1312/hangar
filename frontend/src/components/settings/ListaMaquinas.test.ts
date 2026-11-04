@@ -451,6 +451,12 @@ describe('ListaMaquinas — detalhe do servidor', () => {
     expect(b.querySelector('.mq-editar .escopo')).toBeNull();
   });
 
+  it('etiqueta da máquina só no celular: a vista desktop web não ganha o editor', () => {
+    expect(montar([B]).detalhe('srv:srv-b').textContent).toContain(m.tags_machine_title());
+    unmount(aberto!.comp); aberto = null;
+    expect(montar([B], { desktop: true }).detalhe('srv:srv-b').textContent).not.toContain(m.tags_machine_title());
+  });
+
   it('o Remover segue os lados que a linha tem, no chip e no nome acessível', () => {
     const t = montar([D, B, C]);
     const d = t.detalhe('srv:srv-d');

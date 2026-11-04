@@ -133,9 +133,22 @@ def wake_signature(s):
     return hashlib.sha1(json.dumps(key, sort_keys=True).encode()).hexdigest()
 
 
-def ready(s):
+def local_review_file(owner, repo, pr):
+    return Path.home() / ".cache" / "hangar-pr-watch" / f"{owner}_{repo}_{pr}.local-review"
+
+
+def locally_reviewed_head(owner, repo, pr):
+    try:
+        return local_review_file(owner, repo, pr).read_text().strip()
+    except OSError:
+        return None
+
+
+def ready(s, reviewed_head=None):
+    # NEUTRAL: CodeRabbit concluded without reviewing this head; only a local review replaces it.
+    reviewed = s["coderabbit"] == "SUCCESS" or (s["coderabbit"] == "NEUTRAL" and reviewed_head == s["head"])
     return (s["state"] == "OPEN" and not s["draft"] and s["mergeable"] == "MERGEABLE"
-            and s["coderabbit"] == "SUCCESS" and not s["threads"] and not s["failed"] and not s["pending"])
+            and reviewed and not s["threads"] and not s["failed"] and not s["pending"])
 
 
 def load_state(path):
@@ -210,7 +223,8 @@ def watch(a, owner, repo):
             save_state(state_file, st)
 
         full = sig + json.dumps([s["pending"], s["mergeable"], len(s["threads"])])
-        if ready(s):
+        is_ready = ready(s, locally_reviewed_head(owner, repo, a.pr))
+        if is_ready:
             if full != stable_sig:
                 stable_sig, stable_since = full, now
             elif now - stable_since >= a.stable and ready_sent != full:
@@ -219,7 +233,7 @@ def watch(a, owner, repo):
                 emit({"event": "ready", "pr": a.pr, "head": s["head"], "url": s["url"]})
         else:
             stable_sig = None
-        time.sleep(min(a.interval, 30) if ready(s) else a.interval)
+        time.sleep(min(a.interval, 30) if is_ready else a.interval)
 
 
 def main():
@@ -232,6 +246,7 @@ def main():
     ap.add_argument("--duration", type=int, default=24 * 3600)
     ap.add_argument("--reset", action="store_true", help="forget the saved state and emit the current snapshot")
     ap.add_argument("--once", action="store_true", help="print the current snapshot and exit")
+    ap.add_argument("--mark-local-review", metavar="HEAD", help="record that a local review covered this head and exit")
     a = ap.parse_args()
     if not a.repo:
         out = subprocess.run(["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
@@ -243,9 +258,14 @@ def main():
     if not owner or not repo:
         raise Fatal(f"--repo must be owner/name, got {a.repo!r}")
 
+    if a.mark_local_review is not None:
+        marker = local_review_file(owner, repo, a.pr)
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(a.mark_local_review)
+        return
     if a.once:
         s = snapshot(*fetch(owner, repo, a.pr))
-        s["ready"] = ready(s)
+        s["ready"] = ready(s, locally_reviewed_head(owner, repo, a.pr))
         emit({k: v for k, v in s.items() if not k.startswith("_")})
         return
     watch(a, owner, repo)

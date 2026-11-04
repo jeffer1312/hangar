@@ -56,10 +56,11 @@ async fn no_codex_account_means_unavailable_and_guest_token_refused() {
     std::fs::create_dir_all(home.path().join(".claude")).unwrap();
     // A chave antiga ligada não basta: sem conta Codex a voz não aparece.
     std::fs::write(home.path().join(".claude/runtime-config.json"), r#"{"codex_voice_beta": true}"#).unwrap();
-    let addr = crate::voice_support::server_with_accounts(home.path(), Vec::new()).await;
+    let (addr, python) = crate::voice_support::server_with_accounts_and_python(home.path(), Vec::new()).await;
     assert_eq!(get(addr, fake::OWNER).await.1["enabled"], false);
-    // Quem não é dono segue ao Python (o falso responde texto a qualquer rota): nunca recebe a configuração.
-    assert_eq!(get(addr, "outro-token").await.1, Value::Null);
+    // Quem não é dono é recusado na borda Rust, sem receber a configuração.
+    assert_eq!(get(addr, "outro-token").await, (401, json!({"error_code": "voice_owner_only"})));
+    assert_eq!(python.hits_to("/api/voice/settings"), 0);
 }
 
 #[tokio::test]
@@ -69,12 +70,14 @@ async fn memory_is_listed_and_deleted_by_the_owner_only() {
     std::fs::write(home.path().join(".hangar/voz/memoria.json"),
         r#"{"next":1,"entries":[{"id":"m1","kind":"pessoa","text":"Dev","learned":"2026-10-01","confirmed":"2026-10-01"}]}"#).unwrap();
     std::fs::create_dir_all(home.path().join(".claude")).unwrap();
-    let addr = crate::voice_support::server(home.path()).await;
+    let (addr, python) = crate::voice_support::server_with_accounts_and_python(home.path(), vec!["default".into()]).await;
     let (status, body) = read(fake::client().get(format!("http://{addr}/api/voice/memory")).bearer_auth(fake::OWNER).send().await.unwrap()).await;
     assert_eq!(status, 200);
     assert_eq!(body["entries"][0]["text"], "Dev");
-    let (_, body) = read(fake::client().get(format!("http://{addr}/api/voice/memory")).bearer_auth("convidado").send().await.unwrap()).await;
-    assert!(body["entries"].is_null(), "quem não é dono segue ao Python");
+    // A memória também recusa quem não é dono na borda Rust.
+    let (status, body) = read(fake::client().get(format!("http://{addr}/api/voice/memory")).bearer_auth("convidado").send().await.unwrap()).await;
+    assert_eq!((status, body), (401, json!({"error_code": "voice_owner_only"})));
+    assert_eq!(python.hits_to("/api/voice/memory"), 0);
     let (status, _) = read(fake::client().delete(format!("http://{addr}/api/voice/memory/m1")).bearer_auth(fake::OWNER).send().await.unwrap()).await;
     assert_eq!(status, 200);
     let (status, body) = read(fake::client().delete(format!("http://{addr}/api/voice/memory/m1")).bearer_auth(fake::OWNER).send().await.unwrap()).await;

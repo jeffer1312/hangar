@@ -303,6 +303,15 @@ it('alinhamento da conversa mantém fim por padrão e permite topo explícito', 
   expect(list.alignment.mock.lastCall?.[0]).toBe(false);
 });
 
+it.each(['hook_prompt', 'hook_failed'])('o aviso %s conserva seu significado e mostra a causa', text => {
+  const detail = 'hook-detail-127';
+  const { container } = mount(createElement(MessageList, props([
+    event({ id: 'hook-1', kind: 'notice', text, hook_error: detail }),
+  ])));
+  const row = container.querySelector('[data-row="hook-1"]');
+  expect(row?.textContent).toBe(`${text === 'hook_failed' ? m.notice_hook_failed() : m.notice_hook_prompt()}\n${detail}`);
+});
+
 it('timeline orq entra antes do aviso genérico e atualiza só a fronteira do dia ao carregar anteriores', () => {
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(new Date(2026, 9, 16, 18));

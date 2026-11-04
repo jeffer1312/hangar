@@ -196,7 +196,7 @@ class Settings(BaseSettings):
     # Default off: ligado, um terminal movimentado enche o log.
     diag_term_input: bool = False
     # CP_FRONT_PORT: onde o PWA é servido — entra no QR e no painel de alcance. VAZIO (0) = o
-    # próprio backend, que monta o `frontend/dist` na raiz (api.py, `_UIStatic`); é a topologia
+    # próprio servidor Rust, que serve o `frontend/dist` na raiz; é a topologia
     # padrão desde que o serviço separado de front deixou de ser instalado. Só quem mantém o
     # `vite preview` (instalação antiga, ou reverse proxy apontado pra lá) grava 5173 aqui — e os
     # instaladores gravam por ele. Cravar 5173 como default fazia o QR apontar pra uma porta que
@@ -292,6 +292,8 @@ class Settings(BaseSettings):
     # Reconciliacao automatica do Codex (codex_integracao.acompanhar + abertura de TUI). Portao
     # PROPRIO por cima do `automations`, editavel pela tela (card do Codex em Harnesses).
     codex_sync: bool = True
+    # Desligar o 1M do Codex fica gravado aqui: sem a chave no config.toml, o padrão é ligado.
+    codex_extended_context: bool = True
     # Organização é opt-in, independentemente de credenciais antigas de LLM.
     dictation_organization_mode: str = "none"
     dictation_claude_model: str = ""

@@ -5,19 +5,16 @@ Contas e cotas de todas as fontes são do Rust (`crates/hangar-server/src/accoun
 `cotas_claude` devolvem nada. Ficam aqui só:
 
  - os leitores Codex que a transferência de conversa usa (`conversation_transfer.py`);
- - o mapeamento de provider Kimi/Pi para o id da cota, que a lista de sessões usa.
 """
 import json
 import logging
 import math
-import tomllib
 from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel
 
-from app import codex_appserver, codex_contas, engines
-from app.adapters.kimi import sessions as kimi_sessions
+from app import codex_appserver, codex_contas
 
 _log = logging.getLogger("hangar.cotas")
 
@@ -260,127 +257,6 @@ def _ler_codex(home: Path | str | None = None) -> _Leitura:
     if not janelas:
         return "indisponivel", [], "formato-desconhecido"
     return "lida", janelas, None
-
-
-def _providers_kimi() -> list[tuple[str, str, str]]:
-    """(nome, api_key, base_url) de cada provider Kimi com chave. Provider por OAuth fica de fora:
-    o arquivo de storage é vazio nesta máquina e adivinhar o formato dele seria inventar."""
-    cfg = kimi_sessions.kimi_home() / "config.toml"
-    try:
-        dados = tomllib.loads(cfg.read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError, ValueError):
-        return []
-    provedores = dados.get("providers")
-    if not isinstance(provedores, dict):
-        return []
-    out = []
-    for nome, p in provedores.items():
-        if not isinstance(p, dict) or p.get("type") != "kimi":
-            continue
-        key, base = p.get("api_key"), p.get("base_url")
-        if isinstance(key, str) and key and isinstance(base, str) and base:
-            out.append((str(nome), key, base))
-    return out
-
-
-# Provider do default_model do Kimi ("apikey/k3" -> "apikey") — a conta que uma sessão Kimi sem
-# motor gasta. Cache por mtime: a registry chama por sessão a cada varredura de lista, e reler o
-# config a cada poll seria I/O por sessão por tick sem ganho nenhum.
-_padrao_kimi: tuple[float, str | None] | None = None
-
-
-def provider_padrao_kimi() -> str | None:
-    global _padrao_kimi
-    cfg = kimi_sessions.kimi_home() / "config.toml"
-    try:
-        mt = cfg.stat().st_mtime
-    except OSError:
-        return None
-    if _padrao_kimi and _padrao_kimi[0] == mt:
-        return _padrao_kimi[1]
-    try:
-        dados = tomllib.loads(cfg.read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError, ValueError):
-        # Falha também cacheia (por mtime): sem isto um config ruim era relido por sessão por tick.
-        _padrao_kimi = (mt, None)
-        return None
-    modelo = dados.get("default_model")
-    prov = modelo.split("/", 1)[0] if isinstance(modelo, str) and "/" in modelo else None
-    # O id "kimi:<nome>" só existe pra provider COM chave (type kimi + api_key + base_url, ver
-    # _providers_kimi): default_model apontando pra OAuth/sem-chave não tem cota — None, e a
-    # pílula cai no pior-geral em vez de carregar um id que nunca casa.
-    if prov is not None and prov not in {nome for nome, _, _ in _providers_kimi()}:
-        prov = None
-    _padrao_kimi = (mt, prov)
-    return prov
-
-
-# Provider do Pi -> conta desta lista, casado pela CHAVE e não pelo nome: o Pi chama de
-# "kimi-coding" a MESMA credencial que o Kimi Code chama de "apikey" (verificado: a chave é byte a
-# byte a mesma), e cota é da credencial, não do rótulo que cada CLI deu pra ela. Casar por nome
-# exigiria uma tabela de sinônimos que envelhece a cada provedor novo.
-# Provider sem chave conhecida aqui (OAuth do Codex, provedor que só o Pi tem) devolve None e a
-# pílula cai no pior-geral — o comportamento de antes, nunca um id que não casa com nada.
-_PI_AGENT = Path.home() / ".pi" / "agent"
-_mapa_pi_cache: tuple[tuple[float, ...], dict[str, str]] | None = None
-
-
-def _mtimes(*caminhos: Path) -> tuple[float, ...]:
-    out = []
-    for p in caminhos:
-        try:
-            out.append(p.stat().st_mtime)
-        except OSError:
-            out.append(0.0)
-    return tuple(out)
-
-
-def _chaves_do_pi() -> dict[str, str]:
-    """provider do Pi -> api key. Dois arquivos: `auth.json` (o que o `/login` do Pi grava) e os
-    provedores manuais de `models.json`, que trazem a chave no próprio bloco."""
-    out: dict[str, str] = {}
-    try:
-        auth = json.loads((_PI_AGENT / "auth.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        auth = {}
-    for nome, d in (auth if isinstance(auth, dict) else {}).items():
-        k = d.get("key") if isinstance(d, dict) else None
-        if isinstance(k, str) and k:
-            out[str(nome)] = k
-    try:
-        mods = json.loads((_PI_AGENT / "models.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        mods = {}
-    provs = mods.get("providers") if isinstance(mods, dict) else None
-    for nome, d in (provs if isinstance(provs, dict) else {}).items():
-        k = d.get("apiKey") if isinstance(d, dict) else None
-        if isinstance(k, str) and k:
-            out.setdefault(str(nome), k)
-    return out
-
-
-def _mapa_pi() -> dict[str, str]:
-    """provider do Pi -> id de conta. Cache pelos mtimes dos quatro arquivos porque isto roda por
-    sessão Pi a cada varredura da lista (mesma razão do cache do `provider_padrao_kimi`)."""
-    global _mapa_pi_cache
-    chave = _mtimes(_PI_AGENT / "auth.json", _PI_AGENT / "models.json",
-                    kimi_sessions.kimi_home() / "config.toml", engines.caminho())
-    if _mapa_pi_cache and _mapa_pi_cache[0] == chave:
-        return _mapa_pi_cache[1]
-    por_chave: dict[str, str] = {}
-    for nome, key, _base in _providers_kimi():
-        por_chave.setdefault(key, f"kimi:{nome}")
-    for nome, dados in engines.listar().items():
-        key = dados.get("api_key")
-        if isinstance(key, str) and key:
-            por_chave.setdefault(key, f"chave:{nome}")
-    mapa = {prov: por_chave[key] for prov, key in _chaves_do_pi().items() if key in por_chave}
-    _mapa_pi_cache = (chave, mapa)
-    return mapa
-
-
-def conta_de_provider_pi(provider: str | None) -> str | None:
-    return _mapa_pi().get(provider) if provider else None
 
 
 def listar_cotas(forcar: bool = False) -> list[CotaConta]:

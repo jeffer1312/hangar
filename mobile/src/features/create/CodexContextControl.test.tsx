@@ -11,6 +11,8 @@ function ContextHarness({ server, onBusy }: { server: Server; onBusy: (busy: boo
   return createElement(CodexContextControl, { control });
 }
 
+// Uma máquina só: a opção "em todas" não aparece e o store real (SecureStore) fica fora.
+vi.mock('../../stores/servers', () => ({ useServers: (select: (s: { servers: Server[] }) => unknown) => select({ servers: [] }) }));
 vi.mock('react-native', async (original) => ({
   ...await original<typeof import('react-native')>(),
   Switch: ({ value, disabled, onValueChange }: { value: boolean; disabled: boolean; onValueChange: (value: boolean) => void }) =>

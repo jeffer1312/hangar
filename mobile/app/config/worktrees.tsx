@@ -284,7 +284,7 @@ function Linha({ w, serverId, onPick }: { w: WorktreeStatus; serverId: string; o
         {w.degraded ? <Text style={styles.aviso}>{m.worktree_leitura_incompleta()}</Text> : null}
         <Text style={[styles.meta, { color: c.faint }]} numberOfLines={1}>
           {[`↑${w.ahead} ↓${w.behind ?? 0}`,
-            w.dirty ? m.worktree_n_nao_commitados({ n: w.dirty }) : m.worktree_limpa(),
+            w.residual ? m.worktree_estado_residual() : w.dirty ? m.worktree_n_nao_commitados({ n: w.dirty }) : m.worktree_limpa(),
             ...(atividade ? [atividade] : [])].join(' · ')}
         </Text>
       </Pressable>

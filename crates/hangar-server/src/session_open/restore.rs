@@ -404,6 +404,38 @@ fn settle(results: &[(String, Result<(), String>)], attempts: &mut std::collecti
     !left
 }
 
+/// Por que o multiplexador perdeu as sessões: a máquina reiniciou (o boot é depois do servidor
+/// antigo) ou ele caiu ou foi trocado com ela de pé. No Linux, as linhas do journal do usuário
+/// desde a subida do antigo que falam de OOM, tmux ou processo morto dizem quem o derrubou.
+async fn mux_lost_event(previous: Option<u64>, current: MuxStart, sessions: usize) -> serde_json::Value {
+    let boot = sysinfo::System::boot_time();
+    let iso = |secs: u64| chrono::DateTime::from_timestamp(i64::try_from(secs).unwrap_or(0), 0)
+        .map(|at| at.with_timezone(&chrono::Local).format("%Y-%m-%dT%H:%M:%S%:z").to_string());
+    let cause = match (previous, current) {
+        (Some(before), _) if boot > before => "machine_rebooted",
+        (None, _) => "no_previous_server_known",
+        (_, MuxStart::NoServer) => "mux_died_machine_up",
+        _ => "mux_replaced_machine_up",
+    };
+    let journal = match previous {
+        Some(since) if cfg!(target_os = "linux") && cause != "machine_rebooted" => {
+            let run = tokio::process::Command::new("journalctl")
+                .args(["--user", "--since", &format!("@{since}"), "--no-pager", "-o", "short-iso", "-n", "12", "-g", "(?i)oom|tmux|killed|memory"])
+                .stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).output();
+            match tokio::time::timeout(Duration::from_secs(10), run).await {
+                Ok(Ok(out)) => String::from_utf8_lossy(&out.stdout).lines().map(|l| l.chars().take(220).collect::<String>()).collect::<Vec<_>>(),
+                Ok(Err(e)) => vec![format!("journalctl não rodou: {e}")],
+                Err(_) => vec!["journalctl passou de 10 s".to_owned()],
+            }
+        }
+        _ => Vec::new(),
+    };
+    json!({"evento": "multiplexador.perdido", "nivel": "aviso", "codigo": cause, "sessoes": sessions,
+        "servidor_anterior_desde": previous.and_then(iso), "boot": iso(boot),
+        "servidor_atual": match current { MuxStart::Started(at) => iso(at), MuxStart::NoServer => Some("nenhum".to_owned()), MuxStart::Unknown => None },
+        "journal": journal})
+}
+
 /// Reabre uma sessão e grava o resultado no diário.
 /// Quanto o restore espera o agente sair do shell depois de abrir.
 const AGENT_WAIT: Duration = Duration::from_secs(20);
@@ -494,7 +526,13 @@ pub async fn run(st: Arc<crate::routes::AppState>, home: PathBuf, program: std::
             }
             (false, Some(pending)) => {
                 let pending: Vec<(String, Entry)> = pending.into_iter().filter(|(key, _)| !done.contains(key)).collect();
-                if !pending.is_empty() { tracing::info!(count = pending.len(), "restaurando as sessões com terminal que o multiplexador perdeu"); }
+                if !pending.is_empty() {
+                    tracing::info!(count = pending.len(), "restaurando as sessões com terminal que o multiplexador perdeu");
+                    if attempts.is_empty() {
+                        let event = mux_lost_event(snap.mux_started, current, pending.len()).await;
+                        crate::diag::record_blocking(crate::diag::diary_dir().as_deref(), &[event], "multiplexador perdido");
+                    }
+                }
                 let mut results = Vec::new();
                 if !pending.is_empty() {
                     let host = super::server::ServerHost::new(st.clone()).await;
@@ -582,7 +620,8 @@ mod tests {
             surface: Surface::Terminal, account: if provider == AgentProvider::Codex { super::super::Account::Codex { account_id: "default".into() } }
             else { super::super::Account::Default }, account_source: super::super::AccountSource::Default, model: None, effort: None,
             service_tier: None, permission_mode: Some(mode), subagent_model: None, customizations: None, jev: false, read_only: false,
-            worktree: None, creator: None, created_at: 1.0, conversation: Some("c1".into()) };
+            worktree: None, creator: None, created_at: 1.0, conversation: Some("c1".into()),
+            name_auto: None, rename_suggestion: None, rename_weak_at: None, rename_dismissed: false };
         super::super::record::write(home, &spec).unwrap();
     }
 

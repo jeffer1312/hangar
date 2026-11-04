@@ -31,10 +31,29 @@ fn wire_event(event:&str) -> String {
 }
 
 #[derive(Clone)]
-pub struct DiagClient { upstream:SocketAddr,secret:String,http:crate::proxy::HttpClient }
+pub struct DiagClient { upstream:SocketAddr,secret:String,http:crate::proxy::HttpClient,
+    /// O diário do próprio Rust, para `report_with`; nos testes, nenhum: não sujar o diário da máquina.
+    diary:Option<std::path::PathBuf> }
 
 impl DiagClient {
-    pub fn new(upstream:SocketAddr,secret:String) -> Self { Self { upstream,secret,http:crate::proxy::client() } }
+    pub fn new(upstream:SocketAddr,secret:String) -> Self {
+        Self { upstream,secret,http:crate::proxy::client(),diary:if cfg!(test) { None } else { diary_dir() } }
+    }
+
+    /// `report` com o que diagnostica a falha (`detalhe`, caminho, `io_kind`, ms…) no próprio evento: o
+    /// `/internal/diag` do Python só aceita os quatro campos fixos, então a linha vai ao diário do Rust.
+    /// `fields`: objeto de valores curtos (texto até 300, números), nunca texto de conversa.
+    /// Sem a pasta do diário do Rust (nos testes, ou sem pasta de logs), vai ao do Python sem os campos.
+    pub fn report_with(&self,event:&'static str,session:&str,code:&str,reason:&'static str,fields:serde_json::Value) {
+        // A chave dos testes é lida aqui, não na construção: há teste que monta o estado antes de desligar.
+        if self.diary.is_none() || DIARY_OFF.load(std::sync::atomic::Ordering::Relaxed) { return self.report(event,session,code,reason); }
+        if !crate::warn_limit::allow(Some(session),&format!("diag:{}:{event}:{code}",self.upstream)) { return; }
+        let level = if matches!(event,"rust.groups_sweep_failed" | "rust.groups_sweep_recovered") { "aviso" } else { "erro" };
+        let mut line = json!({"evento":wire_event(event),"nivel":level,"sessao":session.chars().take(128).collect::<String>(),
+            "codigo":wire_code(code),"motivo":reason});
+        if let (Some(line), serde_json::Value::Object(extra)) = (line.as_object_mut(), fields) { line.extend(extra); }
+        record(self.diary.clone(),vec![line],"diag");
+    }
 
     /// `event` começa com `rust.`; `reason` é frase fixa do código (por isso `'static`), nunca texto
     /// de conversa nem erro formatado, que pode ecoar valores.
@@ -80,8 +99,17 @@ const DIARY_HARD_CAP: u64 = 8 << 20;
 /// `uso-*.jsonl` da árvore do diário (baixar, últimas linhas, poda dos 7 dias), e cada arquivo fica
 /// com um escritor só: no Windows o append de dois processos no mesmo arquivo se sobrescreve.
 pub fn diary_dir() -> Option<std::path::PathBuf> {
+    if DIARY_OFF.load(std::sync::atomic::Ordering::Relaxed) { return None; }
     Some(crate::runtime::local_policy::log_base()?.join("diario").join("servidor-rust"))
 }
+
+/// Os testes de integração rodam o servidor no processo deles, fora do `cfg!(test)`: sem isto
+/// gravariam no diário real de quem roda os testes. `diary_dir_in` fica de fora: segue o HOME do
+/// ambiente da conta, que os testes já apontam para pasta temporária e leem.
+static DIARY_OFF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[doc(hidden)]
+pub fn disable_diary() { DIARY_OFF.store(true, std::sync::atomic::Ordering::Relaxed) }
 /// `diary_dir` pelo ambiente-base do registro.
 pub fn diary_dir_in(env: &crate::accounts::environment::AccountEnvironment) -> Option<std::path::PathBuf> {
     Some(crate::runtime::local_policy::log_base_in(env)?.join("diario").join("servidor-rust"))

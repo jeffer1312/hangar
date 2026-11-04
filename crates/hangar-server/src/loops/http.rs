@@ -305,7 +305,7 @@ impl Backend for Live {
     fn refine<'a>(&'a self, goal: &'a str, check_cmd: Option<&'a str>) -> BoxFuture<'a, Result<String, String>> {
         Box::pin(async move {
             let bridge = crate::accounts::http::bridge(&self.st).ok();
-            let cli = super::refine::Cli { accounts: self.st.accounts.clone(), bridge };
+            let cli = crate::claude_p::Cli { accounts: self.st.accounts.clone(), bridge };
             super::refine::refine(goal, check_cmd, &cli).await
         })
     }
@@ -313,7 +313,7 @@ impl Backend for Live {
 
 /// Só o dono; o resto segue ao Python.
 pub async fn route(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (fwd, owner) = crate::routes::gate(&st, peer, &req);
+    let (fwd, owner) = match crate::routes::gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     if !owner { return crate::routes::pass(&st, req, &fwd).await; }
     let headers = req.headers().clone();
     let mut r = serve(&st, req).await;

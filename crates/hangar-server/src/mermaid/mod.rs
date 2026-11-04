@@ -192,7 +192,7 @@ async fn produce(cache: Arc<Cache>, chromium: fn() -> Option<PathBuf>, req: Diag
 
 /// Só o dono; o resto segue ao Python, que repassa o dono do Connect pela ponte e recusa os demais.
 pub async fn route(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request<Body>) -> Response {
-    let (fwd, owner) = gate(&st, peer, &req);
+    let (fwd, owner) = match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     if !owner { return pass(&st, req, &fwd).await; }
     let headers = req.headers().clone();
     let mut r = serve(&st, req).await;

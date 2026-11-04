@@ -323,7 +323,7 @@ async fn health_port_must_belong_to_the_started_process() {
 }
 
 #[tokio::test]
-async fn private_bridge_authorizes_then_transcribes_with_server_configuration() {
+async fn transcribe_here_uses_server_configuration() {
     let (provider, provider_task) = endpoint(Router::new().route("/audio/transcriptions", post(openai_endpoint))).await;
     let snapshot = serde_json::json!({"providers":[{"id":"p", "kind":"openai", "model":"modelo-do-usuario", "base_url":provider}], "vocabulary":"hangar-send"}).to_string();
     let (upstream, upstream_task) = endpoint(Router::new().route("/internal/transcription/config", axum::routing::get(move || {
@@ -335,17 +335,8 @@ async fn private_bridge_authorizes_then_transcribes_with_server_configuration() 
         internal_secret: "fixture-internal".into(), auth_token: "fixture-owner".into(), log_path: None,
         trusted: crate::auth::TrustedHosts::parse("127.0.0.1"),
     }));
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let app = Router::new().route("/__hangar_server/transcription/transcribe", post(super::routes::private)).with_state(state);
-    let task = tokio::spawn(async move { axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap(); });
-    let client = reqwest::Client::new();
-    let url = format!("http://{address}/__hangar_server/transcription/transcribe?filename=fala.wav&profile=dictation");
-    assert_eq!(client.post(&url).body("bytes-do-audio").send().await.unwrap().status(), StatusCode::NOT_FOUND);
-    let response = client.post(&url).header("x-hangar-internal", "fixture-internal")
-        .body("bytes-do-audio").send().await.unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let value: serde_json::Value = serde_json::from_slice(&response.bytes().await.unwrap()).unwrap();
-    assert_eq!(value["result"]["text"], "Transcrição em português.");
-    task.abort(); upstream_task.abort(); provider_task.abort();
+    let result = super::routes::transcribe_here(&state, bytes::Bytes::from_static(b"bytes-do-audio"), Some("fala.wav".into()), Profile::Dictation)
+        .await.unwrap();
+    assert_eq!(result.text, "Transcrição em português.");
+    upstream_task.abort(); provider_task.abort();
 }

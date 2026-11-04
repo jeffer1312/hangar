@@ -70,6 +70,11 @@ A `change` carries the full snapshot. Handle, in this order:
   Skipped nitpicks get one top-level `@coderabbitai` comment saying which and why.
 - **`bot_comments`** that answer you: read; a new technical objection needs analysis, agreement
   needs nothing.
+- **`coderabbit: "NEUTRAL"`** (it concluded without reviewing this head, usually its rate limit):
+  run the `code-review` skill once on the PR (`high <N>`; a harness without it runs the stack
+  reviewer on `gh pr diff <N>`). Fix every valid finding (§4), log the rest, then
+  `python3 SKILL_DIR/scripts/pr_watch.py <N> --mark-local-review <head of the last push>`. A head
+  that only adds those fixes is marked without another review.
 - **`failed`** checks: `gh run view <run> --log-failed`. Caused by the PR → fix. Known flaky or
   infra (runner, network) → `gh run rerun <run> --failed` once; fails again → report and stop.
   Unrelated to the PR and not flaky → report and stop; do not merge.
@@ -97,8 +102,8 @@ same point.
 
 ## 5. Ready → merge
 
-`ready` means: PR open, not draft, mergeable, CodeRabbit status `SUCCESS` on the head, no
-unresolved thread, every check terminal and none failed, unchanged for 90 s. The script does not
+`ready` means: PR open, not draft, mergeable, CodeRabbit status `SUCCESS` on the head (or `NEUTRAL`
+with the local review marked for it), no unresolved thread, every check terminal and none failed, unchanged for 90 s. The script does not
 know about nitpicks: confirm every nitpick in the log was handled. Your own notes never wake
 you, including ones the user wrote by hand under the same GitHub account.
 

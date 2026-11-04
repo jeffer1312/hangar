@@ -44,8 +44,10 @@
     // Config do servidor, só pra linha das origens do terminal. Opcional porque a tela existe (e
     // é útil) mesmo com o servidor fora do ar, quando não há config nenhuma pra ler.
     store?: ConfigServidorStore;
+    // Vista desktop web: legada, não ganha recurso novo (a etiqueta da máquina fica só no celular).
+    desktop?: boolean;
   }
-  let { resolvedServer, apiTarget, fallbackFocus = null, onLogout, store }: Props = $props();
+  let { resolvedServer, apiTarget, fallbackFocus = null, onLogout, store, desktop = false }: Props = $props();
 
   const CAMPO_TERM_ORIGINS = {
     chave: 'term_origins', tipo: 'texto' as const,
@@ -988,7 +990,7 @@
 <ListaMaquinas
   linhas={linhas.filter((l) => !l.estaMaquina)} {estados} meuIdentificador={identificador}
   esteNome={resolvedServer?.label ?? ''} enderecos={resumo?.enderecos ?? []}
-  carregando={idsCarregando || peersCarregando}
+  carregando={idsCarregando || peersCarregando} {desktop}
   {onAcompanhar} {onFalar} {onToggleScan}
   idSalvando={idRemotoSalvando} idErro={idRemotoErro}
   {tokenSalvando} {tokenErro} erro={peersErro}

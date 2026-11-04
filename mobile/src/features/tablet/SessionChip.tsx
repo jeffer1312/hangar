@@ -6,6 +6,7 @@ import { SessionAvatar } from '../sessions/SessionAvatar';
 import { HeadlessSignal } from '../sessions/HeadlessSignal';
 import { Icon } from '../../ui/Icon';
 import { Sheet } from '../../ui/Sheet';
+import { MACHINE_ICON_NAME } from '../tags/tagVisuals';
 import { superficie } from '../../theme/superficie';
 import * as m from '../../paraglide/messages';
 
@@ -20,7 +21,7 @@ type Props = {
 
 const keyOf = (s: { serverId: string; name: string }) => `${s.serverId}::${s.name}`;
 const waits = (s: AggSession) => s.state === 'awaiting_input' || !!s.pending_questions || !!s.limited;
-const description = (s: AggSession) => `${s.serverLabel}, ${rotuloEstado(s.state)}${s.limited ? `, ${m.sessao_limite()}` : ''}`;
+const description = (s: AggSession) => `${s.serverLabel}, ${rotuloEstado(s.state)}${s.limited ? `, ${m.sessao_limite()}` : ''}${s.asleep ? `, ${m.session_asleep_badge()}` : ''}`;
 const agentOf = (s: AggSession) => s.provider === 'claude' && /gpt|openai|codex/i.test(s.engine ?? '') ? 'codex' : s.provider;
 
 // O prefixo compartilhado sai só até um separador; o nome inteiro continua no toque longo.
@@ -95,7 +96,8 @@ export const SessionChip = memo(function SessionChip({ session, members = [], la
           </Pressable> : null}
         </View>
         <View testID="machine-legend" pointerEvents="none" style={styles.machine}>
-          <Icon name="Monitor" size={11} color={theme.tokens.text.muted} />
+          {/* Nome e cor já vêm da etiqueta da máquina pelo core; o ícone também. */}
+          <Icon name={session.machineTag ? MACHINE_ICON_NAME[session.machineTag.icon] : 'Monitor'} size={11} color={session.serverColor} />
           <Text numberOfLines={1} style={styles.metaText}>{session.serverLabel}</Text>
         </View>
       </View>

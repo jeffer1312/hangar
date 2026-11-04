@@ -37,7 +37,7 @@ fn refuse(headers: &HeaderMap, status: StatusCode, code: &str, msg: &str, params
 }
 
 pub async fn route(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (fwd, caller) = who(&st, peer, &req);
+    let (fwd, caller) = match who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     let name = session_name(req.uri().path()).filter(|n| caller.as_ref().is_some_and(|c| c.can(n, req.method())));
     // Quem não é o dono nem convidado com acesso completo: o Python atende (convidado com conta) ou recusa.
     let Some(name) = name else { return pass(&st, req, &fwd).await };
@@ -171,6 +171,9 @@ impl Ctx {
     async fn apply(&self, kind: Kind, old: &str, new: &str, done: &mut Vec<Done>, detached: &mut Option<Detached>) -> Result<(), (&'static str, String)> {
         self.group(old, new).await.map_err(|code| ("group", code))?;
         done.push(Done::Group);
+        // O Codex com terminal segue vivo e com a trava da fila: a vigia o readota no nome novo e grava o
+        // nome na fila ela mesma. Pegar a trava aqui esperaria o ator e desfaria o rename (`runtime_lease`).
+        let codex_live = kind == Kind::Terminal && self.runtime.owns_codex_terminal(old);
         *detached = self.runtime.detach_for_rename(old).await.map_err(|e| ("runtime_close", e.code))?;
         if kind == Kind::Terminal {
             if !self.mux_rename(old, new).await { return Err(("mux", "sessao_falha_renomear".into())); }
@@ -180,7 +183,7 @@ impl Ctx {
             let (d, o, n) = (dir.clone(), old.to_owned(), new.to_owned());
             if blocking(move || files::move_sidecar(&d, &o, &n)).await.map_err(|e| ("sidecar", io_code(&e)))? { done.push(Done::Sidecar(dir)); }
         }
-        if detached.is_none() {
+        if detached.is_none() && !codex_live {
             let parked = match self.parked_queue_key(new).await {
                 Some(key) => self.runtime.rename_parked_queue(&key, new).await.map_err(|e| ("queue", e.code))?.then_some(key),
                 None => None,
@@ -311,6 +314,14 @@ impl Ctx {
         if !done.iter().any(|d| matches!(d, Done::HiddenShell)) && self.mux.is_hidden(&from).await && self.mux.kill_session(&from).await != Some(true) {
             tracing::warn!(session = %new, code = "hidden_shell_kept", "o shell escondido do nome antigo não fechou no rename");
             self.st.diag.report("sessao.rename_shell", new, "hidden_shell_kept", "o shell escondido do nome antigo ficou aberto");
+        }
+        let life = self.identity(new).await.1;
+        if let Some(key) = crate::dictation::rename_suggestion::key_of(&self.st, new, life.as_deref()).await {
+            let home = self.home.clone();
+            if let Err(error) = blocking(move || crate::dictation::rename_suggestion::forget_after_rename(&home, &key)).await {
+                tracing::warn!(session = %new, %error, "marca de nome genérico não apagada no rename");
+                self.st.diag.report("rust.rename_suggestion", new, "rename_mark_kept", "marca de nome generico ficou no rename");
+            }
         }
         self.st.list.rename(old, new);
         self.st.list.invalidate();

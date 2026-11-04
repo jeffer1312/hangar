@@ -375,6 +375,16 @@ pub fn server_color(id: &str) -> Hsla {
     let hash = id.encode_utf16().fold(0u32, |h, unit| h.wrapping_mul(31).wrapping_add(unit as u32));
     rgb(COLORS[hash as usize % COLORS.len()]).into()
 }
+/// Cor de uma etiqueta (`/api/tags`) pela chave, os tons do `TAG_COLOR_HEX` do core; chave desconhecida fica sem cor
+/// e quem desenha usa a do hash.
+pub fn tag_color(key: &str) -> Option<Hsla> {
+    let hex = match key {
+        "slate" => 0x64748b, "blue" => 0x3b82f6, "green" => 0x22c55e, "lime" => 0x84cc16,
+        "amber" => 0xf59e0b, "orange" => 0xf97316, "pink" => 0xec4899, "violet" => 0x8b5cf6,
+        _ => return None,
+    };
+    Some(rgb(hex).into())
+}
 pub fn border() -> Hsla { hex(colors().line, if floating() { 0.09 } else { 0.08 }) }
 pub fn border_strong() -> Hsla { hex(colors().line_strong, if floating() { 0.16 } else { 0.14 }) }
 pub fn glass_border() -> Hsla { border_strong() }

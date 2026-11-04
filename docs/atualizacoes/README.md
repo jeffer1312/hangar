@@ -78,11 +78,14 @@ Passos marcados:
 | `2026-10-21-orq-durable-cleanup` | dados em `~/.hangar` |
 | `2026-10-22-python-install-manager-windows` | interpretador Python e atalhos no `PATH` do Windows |
 | `2026-10-24-pacote-por-versao` | migra a máquina para o pacote: dados em `~/.hangar/config`, `current`, unit/tarefa no lançador, hooks e atalhos |
+| `2026-10-31-links-do-pacote` | atalhos, skills, agentes e bloco do shell que ficaram no checkout voltam ao `current` |
 
 Ficam sem o campo, mesmo com comando: os que rodam `install-hangar-send.sh`,
 `install-claude-wrapper.sh`/`setup-windows-wrappers.ps1` ou `registrar-mcp.py` (conteúdo e
 atalhos), `2026-10-02-hangar-server-binarios` (o binário vem no pacote) e
-`2026-10-19-trava-do-client-api` (hook do git do checkout, só no modo desenvolvedor).
+`2026-10-19-trava-do-client-api` (hook do git do checkout, só no modo desenvolvedor). A exceção
+é o `2026-10-31-links-do-pacote`: ele roda o `install-claude-wrapper.sh` para levar ao `current`
+os atalhos que ficaram fora da pasta da versão, apontando para o checkout.
 
 ## O que o botão faz sozinho, e o que só um passo faz
 

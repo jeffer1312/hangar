@@ -199,3 +199,13 @@ it('fechar por fora (voltar do Android) e reabrir a mesma imagem volta sem zoom'
   await act(async () => root.render(createElement(Lightbox, { ...props, visible: true })));
   expect(native.style().transform).toEqual([{ translateX: 0 }, { translateY: 0 }, { scale: 1 }]);
 });
+
+it('vídeo também tem o botão de salvar, e ele salva o vídeo aberto', async () => {
+  const { saveImage } = await import('./mediaCache');
+  vi.mocked(saveImage).mockResolvedValue(false);
+  const { container } = await render({ kind: 'video', uri: 'https://example.test/demo.mp4', filename: 'demo.mp4' });
+  const salvar = container.querySelector<HTMLButtonElement>('[aria-label="salvar"]');
+  expect(salvar).not.toBeNull();
+  await act(async () => salvar!.click());
+  expect(saveImage).toHaveBeenCalledWith('https://example.test/demo.mp4', undefined, 'demo.mp4');
+});

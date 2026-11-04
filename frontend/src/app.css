@@ -1153,11 +1153,11 @@ body > .bp-wrap .bp-count { margin-top: calc(16px + env(safe-area-inset-top)); }
   color: #fff;
   font-family: var(--font-ui);
   font-size: var(--text-xs);
+  white-space: nowrap;
   text-decoration: none;
   cursor: pointer;
 }
 .visor-btn:hover { background: rgba(255, 255, 255, 0.2); }
-.visor-baixar { font-size: var(--text-base); }
 
 /* Chip de arquivo citado (lib/markdown.ts): resposta do assistente e recado de outra sessão. */
 .file-citation {

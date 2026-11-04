@@ -49,8 +49,8 @@ pub async fn public(state: Arc<crate::routes::AppState>, request: Request) -> Re
     };
     let (result, late) = state.accounts.quotas_within(Some(bridge), force, CLIENT_DEADLINE, None).await;
     if late {
-        state.diag.report("rust.quota_sources_partial", "cotas", "quota_deadline",
-            "cotas passaram do prazo; a resposta sai com o cache e a leitura segue");
+        state.diag.report_with("rust.quota_sources_partial", "cotas", "quota_deadline",
+            "cotas passaram do prazo; a resposta sai com o cache e a leitura segue", state.accounts.quotas_late_fields(CLIENT_DEADLINE));
     }
     if suggestion_only {
         return match result {
@@ -121,6 +121,8 @@ pub struct Quotas {
     pub endpoints: other::Endpoints,
     /// Problemas de config já levados ao diário: a lista é lida a cada poll e só a mudança conta.
     pub reported: Arc<std::sync::Mutex<Vec<&'static str>>>,
+    /// Fontes lendo agora (id → início): no prazo estourado, dizem quem atrasou e quanto.
+    pub in_flight: Arc<std::sync::Mutex<std::collections::BTreeMap<String, std::time::Instant>>>,
 }
 
 /// De onde sai a leitura de uma fonte.
@@ -129,6 +131,15 @@ enum Origin {
     Account(Provider, Account),
     Other(other::Reader),
 }
+
+/// A leitura curta de cota da abertura sai pela rede; os testes de integração a desligam, porque as
+/// contas deles têm token falso e ela iria à Anthropic. Do processo inteiro, como o `use_cano_binary`.
+static OPEN_READ_OFFLINE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[doc(hidden)]
+pub fn disable_open_network_read() { OPEN_READ_OFFLINE.store(true, std::sync::atomic::Ordering::Relaxed) }
+
+pub fn open_network_read() -> bool { !OPEN_READ_OFFLINE.load(std::sync::atomic::Ordering::Relaxed) }
 
 pub fn now() -> f64 {
     SystemTime::now()
@@ -243,6 +254,14 @@ impl AccountService {
             Ok(result) => (result, false),
             Err(_) => (self.quotas_with(bridge, false, true, config).await, true),
         }
+    }
+
+    /// Campos do diário do prazo estourado: as fontes ainda lendo, com quanto tempo cada uma, e o prazo.
+    pub fn quotas_late_fields(&self, deadline: Duration) -> Value {
+        let pending = self.quotas.in_flight.lock().unwrap_or_else(|p| p.into_inner()).iter()
+            .map(|(id, at)| format!("{id} {} ms", at.elapsed().as_millis())).collect::<Vec<_>>();
+        json!({"pendentes": if pending.is_empty() { "nenhuma fonte lendo (o atraso foi antes da rede)".to_owned() } else { pending.join(", ") },
+            "prazo_ms": deadline.as_millis() as u64})
     }
 
     /// Conta ocupada (login, renovação, redefinição) é `sessao-viva`, que as telas calam; trava que
@@ -397,6 +416,8 @@ impl AccountService {
                     let service = self.clone();
                     async move {
                         let id = source["id"].as_str().unwrap_or("");
+                        let flight = || service.quotas.in_flight.lock().unwrap_or_else(|p| p.into_inner());
+                        flight().insert(id.to_owned(), std::time::Instant::now());
                         let (mut value, signature, contact) = match origin {
                             Origin::Account(provider, account) => {
                                 let (value, signature) = service
@@ -418,6 +439,7 @@ impl AccountService {
                         for field in ["id", "label", "provedor", "ativa"] {
                             value[field] = source[field].clone();
                         }
+                        flight().remove(id);
                         (id.to_owned(), value, signature, contact)
                     }
                 })
@@ -619,15 +641,13 @@ impl AccountService {
         let value = match provider {
             Provider::Claude => {
                 let value = claude::read(client, &account.home, now()).await;
-                // Sem ponte, quem pede não renova: a renovação ainda passa pela janela de login do Python.
-                if value["estado"] == "expirada"
-                    && let Some(bridge) = bridge
-                {
+                // Só quem lê com a ponte renova a conta expirada.
+                if value["estado"] == "expirada" && bridge.is_some() {
                     drop(guard);
                     if let Err(reason) = self
                         .refresh_claude(
                             account,
-                            bridge.clone(),
+                            self.claude_windows.clone(),
                             self.quotas.runtime.get().cloned(),
                             true,
                         )

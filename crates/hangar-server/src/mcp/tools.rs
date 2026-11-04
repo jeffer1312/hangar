@@ -1,4 +1,4 @@
-//! As 16 tools. Cada uma chama a rota pública que o `hangar-send`/`hangar-preview` chama, pelo
+//! As 21 tools. Cada uma chama a rota pública que o `hangar-send`/`hangar-preview` chama, pelo
 //! roteador deste processo e como o dono; o `html_render` publica direto na loja de páginas e os
 //! verbos do navegador vão ao app desktop, como no CLI.
 use std::collections::HashMap;
@@ -22,8 +22,11 @@ use super::identity::{self, Local, Origin};
 use super::nav;
 use crate::groups::exit::segment;
 use crate::groups::model::Sidecar;
+use crate::groups::peers::PeerClient;
 use crate::routes::AppState;
 use crate::transcript::pyjson::dumps_unicode;
+use crate::vault::{VaultError, exec, files, remote::WaitStatus, wire::{AskReq, UseKind, UseReq}};
+use zeroize::Zeroizing;
 
 const VOICE_CLOSE_REFUSED: &str = "recusado: a voz fecha sessão pela própria ferramenta close_session, que pede o sim \
 falado do usuário";
@@ -74,7 +77,10 @@ fn image(path: &Path) -> Option<ContentBlock> {
 }
 
 fn args<T: DeserializeOwned>(tool: &str, raw: JsonObject) -> Result<T, String> {
-    serde_json::from_value(Value::Object(raw)).map_err(|e| format!("argumentos inválidos para {tool}: {e}"))
+    serde_json::from_value(Value::Object(raw)).map_err(|e| match super::expected_fields(tool) {
+        Some(fields) => format!("argumentos inválidos para {tool}: {e}. Campos: {fields}"),
+        None => format!("argumentos inválidos para {tool}: {e}"),
+    })
 }
 
 /// A frase do erro de uma rota: `detail.msg` do `erro()`, o `detail` texto, ou o status.
@@ -111,8 +117,25 @@ struct Contract { conteudo: Option<String>, #[serde(default)] mtime: Option<Stri
 struct Close { alvo: String }
 
 #[derive(Deserialize)]
+struct RequestSecret { label: String, reason: String, #[serde(default)] placeholder: Option<String> }
+
+#[derive(Deserialize)]
+struct VaultExec { entry: String, env: String, command: String, reason: String, #[serde(default)] timeout_s: Option<u64> }
+
+#[derive(Deserialize)]
+struct VaultFile { entry: String, reason: String }
+
+#[derive(Deserialize)]
+struct VaultFill { entry: String, field: String, #[serde(rename = "ref")] target: String, reason: String }
+
+const VAULT_NO_KEY: &str = "erro_cofre_sem_chave_sessao: o cofre só atende uma sessão identificada pela chave dela (X-Hangar-Key, \
+a CP_SESSION_KEY); registre o MCP de novo (scripts/registrar-mcp.py) e reabra a sessão";
+/// O alvo que o cartão mostra cabe no limite da dona.
+const TARGET_CHARS: usize = 2000;
+
+#[derive(Deserialize)]
 struct NewSession {
-    nome: String, cwd: String, provider: Option<String>, engine: Option<String>, model: Option<String>, effort: Option<String>,
+    nome: String, cwd: Option<String>, provider: Option<String>, engine: Option<String>, model: Option<String>, effort: Option<String>,
     permissao: Option<String>, headless: Option<bool>, #[serde(default)] read_only: bool, conta: Option<String>, jev: Option<bool>,
     service_tier: Option<String>, branch: Option<String>, #[serde(default)] new_branch: bool, base: Option<String>,
     codex_account: Option<String>, subagent_model: Option<String>, initial_prompt: Option<String>, engine_account: Option<String>,
@@ -137,6 +160,93 @@ impl NewSession {
         if let Some(headless) = self.headless { body["headless"] = json!(headless); }
         Ok(body)
     }
+
+    /// O corpo do `POST /api/sessions` com o que veio explícito; `inherit`, `link` e `creator` são desta máquina e
+    /// quem chama acrescenta.
+    fn create_body(self, cwd: String) -> Value {
+        let mut body = json!({"name": self.nome, "cwd": cwd});
+        let optional = [("provider", self.provider.map(Value::from)), ("engine", self.engine.map(Value::from)), ("model", self.model.map(Value::from)),
+            ("effort", self.effort.map(Value::from)), ("permission_mode", self.permissao.map(Value::from)), ("headless", self.headless.map(Value::from)),
+            ("config_dir", self.conta.map(Value::from)), ("jev", self.jev.map(Value::from)), ("service_tier", self.service_tier.map(Value::from)),
+            ("branch", self.branch.filter(|b| !b.is_empty()).map(Value::from)), ("base", self.base.filter(|b| !b.is_empty()).map(Value::from)),
+            ("codex_account", self.codex_account.map(Value::from)), ("subagent_model", self.subagent_model.map(Value::from)),
+            ("initial_prompt", self.initial_prompt.map(Value::from)), ("engine_account", self.engine_account.map(Value::from)),
+            ("omp_profile", self.omp_profile.map(Value::from)), ("claude_customizations", self.claude_customizations),
+            ("read_only", self.read_only.then_some(Value::Bool(true))), ("new_branch", self.new_branch.then_some(Value::Bool(true))),
+            ("remember_provider", self.remember_provider.then_some(Value::Bool(true)))];
+        for (key, value) in optional {
+            if let Some(value) = value { body[key] = value; }
+        }
+        body
+    }
+}
+
+/// `servidor::nome` → `Some((servidor, nome))`; nome sem `::` é desta máquina.
+fn remote_target(nome: &str) -> Result<Option<(String, String)>, String> {
+    let Some((server, name)) = nome.split_once("::") else { return Ok(None) };
+    if server.is_empty() || name.is_empty() || name.contains("::") {
+        return Err(format!("nome inválido '{nome}': use servidor::nome (um '::' só)"));
+    }
+    Ok(Some((server.to_owned(), name.to_owned())))
+}
+
+/// A conta de lá pelo caminho, rótulo ou nome da pasta (`work` acha `.claude-work`), como o `hangar-send`.
+fn remote_account(rows: &[Value], conta: &str) -> Option<String> {
+    rows.iter().filter_map(|c| Some((c["path"].as_str()?, c["label"].as_str().unwrap_or_default()))).find(|(path, label)| {
+        let folder = path.replace('\\', "/").rsplit('/').next().unwrap_or_default().to_owned();
+        [*path, *label, folder.as_str()].contains(&conta) || folder == format!(".claude-{conta}")
+    }).map(|(path, _)| path.to_owned())
+}
+
+/// A resposta da criação, igual para esta e para outra máquina.
+fn created(info: &Value, server: Option<&str>) -> Outcome {
+    let mut out = json!({"name": info["name"], "cwd": info["cwd"], "provider": info["provider"], "headless": info["headless"],
+        // Volta na resposta para que herdar errado nunca passe despercebido.
+        "config_dir": info["config_dir"], "account_source": info["account_source"]});
+    if let Some(server) = server { out["server"] = json!(server); }
+    if info["avisos"].as_array().is_some_and(|a| !a.is_empty()) { out["avisos"] = info["avisos"].clone(); }
+    // A sessão abriu: o erro diz isso e leva a resposta inteira, para nada se perder.
+    if let Some(e) = info.get("link_error").filter(|e| !e.is_null()) {
+        return Err(format!("sessão '{}' abriu SEM a ligação: {}: {} — {out}",
+            info["name"].as_str().unwrap_or_default(), e["code"].as_str().unwrap_or_default(), e["detail"].as_str().unwrap_or_default()));
+    }
+    Ok(dict(out))
+}
+
+/// `new_session` com `servidor::nome`: abre lá, pela API de lá (`peers.json`), com as contas e os padrões de lá, como
+/// `hangar-send --new servidor::nome`. Vai só o que veio explícito: nada herda de quem chama noutra máquina.
+async fn remote_session(peers: &PeerClient, server: &str, mut a: NewSession) -> Outcome {
+    if a.link { return Err("erro_link_remoto: a ligação só vale entre sessões desta máquina".into()); }
+    if a.inherit == Some(true) { return Err("inherit não vale noutra máquina: lá nada herda de quem chama".into()); }
+    a.inherit = None;
+    let resume = a.resume.clone().filter(|s| !s.is_empty());
+    // Sem pasta, a home de lá: o servidor de lá expande o `~`.
+    let cwd = a.cwd.clone().filter(|c| !c.is_empty()).unwrap_or_else(|| "~".into());
+    let call = move |method, path: String, body: Option<Value>| async move {
+        peers.call(server, method, &path, body.as_ref()).await.map(|v| v.unwrap_or(Value::Null)).map_err(|e| e.text(server))
+    };
+    if let Some(conta) = a.conta.clone().filter(|c| !c.is_empty()) {
+        let configs = call(reqwest::Method::GET, "/api/claude-configs".into(), None).await?;
+        let rows = configs.as_array().map(Vec::as_slice).unwrap_or_default();
+        let labels: Vec<&str> = rows.iter().filter_map(|c| c["label"].as_str()).collect();
+        a.conta = Some(remote_account(rows, &conta)
+            .ok_or_else(|| format!("conta '{conta}' não existe em '{server}' — lá há: {}", labels.join(", ")))?);
+    }
+    if let Some(sid) = resume {
+        let info = call(reqwest::Method::POST, format!("/api/archive/-/{}/resume", segment(&sid)), Some(a.clone_for_resume()?)).await?;
+        return Ok(resumed(&info, Some(server)));
+    }
+    let info = call(reqwest::Method::POST, "/api/sessions".into(), Some(a.create_body(cwd))).await?;
+    created(&info, Some(server))
+}
+
+/// A resposta da retomada do Arquivo, igual para esta e para outra máquina.
+fn resumed(info: &Value, server: Option<&str>) -> CallToolResult {
+    let mut out = json!({"name": info["name"], "cwd": info["cwd"], "provider": info["provider"], "headless": info["headless"]});
+    if let Some(server) = server { out["server"] = json!(server); }
+    // O aviso de troca de conta por cota é a única notícia de que a sessão nasceu noutra conta.
+    if info["avisos"].as_array().is_some_and(|a| !a.is_empty()) { out["avisos"] = info["avisos"].clone(); }
+    dict(out)
 }
 
 #[derive(Deserialize)]
@@ -168,6 +278,12 @@ fn verb_args(raw: Option<&[Value]>) -> Result<Vec<String>, String> {
         Value::Number(n) if n.is_i64() || n.is_u64() => Ok(n.to_string()),
         other => Err(format!("argumento de verbo inválido: {other}")),
     }).collect()
+}
+
+/// O verbo que `browser`/`browser_batch` não mandam. `fill-secret` sai só do `vault_fill`, com o valor fora dos args.
+fn verb_refusal(verb: &str) -> Option<String> {
+    if verb == "fill-secret" { return Some("erro_cofre_so_vault_fill: fill-secret só pela tool vault_fill".into()); }
+    (!NAV_VERBS.contains(&verb)).then(|| format!("verbo desconhecido: {verb} (aceitos: {})", NAV_VERBS.join(", ")))
 }
 
 /// `interrupt`: a voz não abre filha ligada (nasce sem `creator`), e Esc na própria sessão mataria o turno de quem chama.
@@ -207,6 +323,11 @@ impl Tools {
             "browser_batch" => match args(name, raw) { Ok(a) => self.browser_batch(headers, a).await, Err(e) => Err(e) },
             "browser_goal" => match args(name, raw) { Ok(a) => self.browser_goal(headers, a).await, Err(e) => Err(e) },
             "browser_check" => match args(name, raw) { Ok(a) => self.browser_check(headers, a).await, Err(e) => Err(e) },
+            "request_secret" => match args(name, raw) { Ok(a) => self.request_secret(headers, a).await, Err(e) => Err(e) },
+            "vault_list" => self.vault_list(headers).await,
+            "vault_exec" => match args(name, raw) { Ok(a) => self.vault_exec(headers, a).await, Err(e) => Err(e) },
+            "vault_file" => match args(name, raw) { Ok(a) => self.vault_file(headers, a).await, Err(e) => Err(e) },
+            "vault_fill" => match args(name, raw) { Ok(a) => self.vault_fill(headers, a).await, Err(e) => Err(e) },
             _ => Err(format!("Unknown tool: {name}")),
         };
         outcome.unwrap_or_else(|msg| CallToolResult::error(vec![ContentBlock::text(msg)]))
@@ -237,8 +358,13 @@ impl Tools {
     }
 
     /// A rota pública, como o dono desta máquina; `(status, corpo)`.
-    async fn route(&self, method: Method, path: &str, body: Option<Value>) -> (u16, Value) {
-        let mut request = Request::builder().method(method).uri(path)
+    async fn route(&self, method: Method, path: &str, body: Option<Value>) -> (u16, Value) { self.route_from(None, method, path, body).await }
+
+    /// `caller`: a sessão que chamou a tool. Vai no `user-agent`, que o diário grava como `cliente`:
+    /// sem ele, fechar ou mandar pelo MCP fica igual a um clique do dono.
+    async fn route_from(&self, caller: Option<&str>, method: Method, path: &str, body: Option<Value>) -> (u16, Value) {
+        let agent = caller.map_or_else(|| "hangar-mcp".to_owned(), |c| format!("hangar-mcp (de {c})"));
+        let mut request = Request::builder().method(method).uri(path).header("user-agent", agent)
             .header("authorization", format!("Bearer {}", self.st.cfg.auth_token));
         if body.is_some() { request = request.header("content-type", "application/json"); }
         let Ok(mut request) = request.body(body.map_or_else(Body::empty, |b| Body::from(b.to_string()))) else {
@@ -253,7 +379,11 @@ impl Tools {
 
     /// Corpo de sucesso da rota, ou a frase do erro.
     async fn ok(&self, method: Method, path: &str, body: Option<Value>) -> Result<Value, String> {
-        let (status, value) = self.route(method, path, body).await;
+        self.ok_from(None, method, path, body).await
+    }
+
+    async fn ok_from(&self, caller: Option<&str>, method: Method, path: &str, body: Option<Value>) -> Result<Value, String> {
+        let (status, value) = self.route_from(caller, method, path, body).await;
         if (200..300).contains(&status) { Ok(value) } else { Err(detail(status, &value)) }
     }
 
@@ -298,7 +428,7 @@ impl Tools {
         };
         let Some((server_id, session)) = a.alvo.split_once("::") else {
             let body = json!({"text": format!("[de: {me}] {texto}"), "steer": true});
-            return self.ok(Method::POST, &format!("/api/sessions/{}/input", segment(&a.alvo)), Some(body)).await.map(with_target);
+            return self.ok_from(Some(&me), Method::POST, &format!("/api/sessions/{}/input", segment(&a.alvo)), Some(body)).await.map(with_target);
         };
         // Par externo primeiro (só o Rust sabe chamar a máquina de outra pessoa); apelido que não é
         // par desta sessão segue como máquina própria.
@@ -352,46 +482,34 @@ impl Tools {
         })
     }
 
-    async fn new_session(&self, headers: &HeaderMap, a: NewSession) -> Outcome {
-        let (me, voice) = self.caller(headers).await?;
+    async fn new_session(&self, headers: &HeaderMap, mut a: NewSession) -> Outcome {
         if a.headless == Some(true) && let Some(provider) = a.provider.as_deref().filter(|p| !matches!(*p, "claude" | "codex")) {
             return Err(format!("headless só vale com provider claude ou codex (veio: {provider})"));
         }
+        // Quem chama precisa ser resolvido também para abrir noutra máquina, mesmo sem herdar nada.
+        let (me, voice) = self.caller(headers).await?;
+        if let Some((server, name)) = remote_target(&a.nome)? {
+            a.nome = name;
+            return remote_session(&self.st.peers, &server, a).await;
+        }
         if let Some(sid) = a.resume.as_deref().filter(|s| !s.is_empty()) { return self.resume_session(sid, a.clone_for_resume()).await; }
-        let mut body = json!({"name": a.nome, "cwd": a.cwd});
-        let optional = [("provider", a.provider.map(Value::from)), ("engine", a.engine.map(Value::from)), ("model", a.model.map(Value::from)),
-            ("effort", a.effort.map(Value::from)), ("permission_mode", a.permissao.map(Value::from)), ("headless", a.headless.map(Value::from)),
-            ("config_dir", a.conta.map(Value::from)), ("jev", a.jev.map(Value::from)), ("service_tier", a.service_tier.map(Value::from)),
-            ("branch", a.branch.filter(|b| !b.is_empty()).map(Value::from)), ("base", a.base.filter(|b| !b.is_empty()).map(Value::from)),
-            ("codex_account", a.codex_account.map(Value::from)), ("subagent_model", a.subagent_model.map(Value::from)),
-            ("initial_prompt", a.initial_prompt.map(Value::from)), ("engine_account", a.engine_account.map(Value::from)),
-            ("omp_profile", a.omp_profile.map(Value::from)), ("claude_customizations", a.claude_customizations),
-            ("inherit", a.inherit.map(Value::from)), ("read_only", a.read_only.then_some(Value::Bool(true))),
-            ("new_branch", a.new_branch.then_some(Value::Bool(true))), ("remember_provider", a.remember_provider.then_some(Value::Bool(true))),
-            ("link", a.link.then_some(Value::Bool(true))),
+        let (inherit, link) = (a.inherit, a.link);
+        let cwd = a.cwd.clone().filter(|c| !c.is_empty()).unwrap_or_else(|| self.home().display().to_string());
+        let mut body = a.create_body(cwd);
+        for (key, value) in [("inherit", inherit.map(Value::from)), ("link", link.then_some(Value::Bool(true))),
             // A voz não tem conta nem modo para herdar: o omitido fica com o padrão do servidor.
-            ("creator", (!voice).then_some(Value::from(me)))];
-        for (key, value) in optional {
+            ("creator", (!voice).then_some(Value::from(me)))] {
             if let Some(value) = value { body[key] = value; }
         }
         let info = self.ok(Method::POST, "/api/sessions", Some(body)).await?;
-        let mut out = json!({"name": info["name"], "cwd": info["cwd"], "provider": info["provider"], "headless": info["headless"],
-            // Volta na resposta para que herdar errado nunca passe despercebido.
-            "config_dir": info["config_dir"], "account_source": info["account_source"]});
-        if info["avisos"].as_array().is_some_and(|a| !a.is_empty()) { out["avisos"] = info["avisos"].clone(); }
-        // A sessão abriu: o erro diz isso e leva a resposta inteira, para nada se perder.
-        if let Some(e) = info.get("link_error").filter(|e| !e.is_null()) {
-            return Err(format!("sessão '{}' abriu SEM a ligação: {}: {} — {out}",
-                info["name"].as_str().unwrap_or_default(), e["code"].as_str().unwrap_or_default(), e["detail"].as_str().unwrap_or_default()));
-        }
-        Ok(dict(out))
+        created(&info, None)
     }
 
     /// `resume`: a conversa volta pela rota do Arquivo (`-` = a pasta que a guarda), com nome e superfície.
     async fn resume_session(&self, sid: &str, a: Result<Value, String>) -> Outcome {
         let body = a?;
         let info = self.ok(Method::POST, &format!("/api/archive/-/{}/resume", segment(sid)), Some(body)).await?;
-        Ok(dict(json!({"name": info["name"], "cwd": info["cwd"], "provider": info["provider"], "headless": info["headless"]})))
+        Ok(resumed(&info, None))
     }
 
     async fn close_session(&self, headers: &HeaderMap, alvo: &str) -> Outcome {
@@ -404,7 +522,7 @@ impl Tools {
         if !identity::exists(&Local { home: &home, mux: &self.st.list.env().mux }, alvo).await {
             return Err(format!("sessão '{alvo}' não existe (tool `sessions`)"));
         }
-        self.ok(Method::DELETE, &format!("/api/sessions/{}", segment(alvo)), None).await.map(dict)
+        self.ok_from(Some(&me), Method::DELETE, &format!("/api/sessions/{}", segment(alvo)), None).await.map(dict)
     }
 
     async fn interrupt(&self, headers: &HeaderMap, alvo: &str) -> Outcome {
@@ -417,7 +535,7 @@ impl Tools {
         let groups = self.st.groups.as_ref().ok_or("grupos indisponíveis neste servidor: o vínculo da filha não pode ser conferido")?;
         let sidecar = groups.link(alvo).await.map_err(|e| format!("arquivo de grupo de '{alvo}' ilegível: {e}"))?;
         if let Some(refusal) = link_refusal(&me, alvo, sidecar.as_ref()) { return Err(refusal); }
-        self.ok(Method::POST, &format!("/api/sessions/{}/interrupt", segment(alvo)), None).await.map(dict)
+        self.ok_from(Some(&me), Method::POST, &format!("/api/sessions/{}/interrupt", segment(alvo)), None).await.map(dict)
     }
 
     async fn browser_open(&self, headers: &HeaderMap, a: BrowserOpen) -> Outcome {
@@ -460,7 +578,7 @@ impl Tools {
     }
 
     async fn nav_verb(&self, name: &str, verb: &str, mut args: Vec<String>, tab: Option<i64>) -> Result<String, String> {
-        if !NAV_VERBS.contains(&verb) { return Err(format!("verbo desconhecido: {verb} (aceitos: {})", NAV_VERBS.join(", "))); }
+        if let Some(refusal) = verb_refusal(verb) { return Err(refusal); }
         if verb == "eval" && args.is_empty() { return Err("eval precisa de um trecho JS".into()); }
         let home = self.home();
         if verb == "shot" {
@@ -524,7 +642,7 @@ impl Tools {
             .and_then(|raw| serde_json::from_slice::<Value>(&raw).ok()).filter(Value::is_object).unwrap_or_else(|| json!({}));
         let mut env: Vec<(String, String)> = std::env::vars()
             .filter(|(k, _)| k != "TYPESAFE_API_KEY" && !k.starts_with("JEV_")
-                && !matches!(k.as_str(), "CP_AUTH_TOKEN" | "HANGAR_INTERNAL_SECRET" | "HANGAR_RUNTIME_INSTANCE"))
+                && !matches!(k.as_str(), "CP_AUTH_TOKEN" | "HANGAR_INTERNAL_SECRET" | "HANGAR_RUNTIME_INSTANCE" | "HANGAR_AUTH_CONTEXT"))
             .collect();
         env.extend(crate::session_open::claude::jev_pairs(true, &runtime));
         if !env.iter().any(|(k, v)| k == "TYPESAFE_API_KEY" && !v.is_empty()) { return Err(JEV_UNCONFIGURED.into()); }
@@ -585,9 +703,161 @@ impl Tools {
     }
 }
 
+/// O cofre (`vault/exec.rs`): o valor nunca entra no resultado nem no erro.
+impl Tools {
+    /// A sessão pela chave dela, nunca pelo pane nem pelo nome: é a chave que a dona prende à
+    /// entrada temporária e à liberação.
+    async fn vault_caller(&self, headers: &HeaderMap) -> Result<(String, String), String> {
+        let (name, origin) = self.resolve(headers).await?;
+        match (origin, header(headers, "x-hangar-key").filter(|k| !k.is_empty())) {
+            (Origin::Key, Some(key)) => Ok((name, key)),
+            _ => Err(VAULT_NO_KEY.into()),
+        }
+    }
+
+    /// Para a tool que espera o dono: sessão sem o prazo longo cairia antes da resposta.
+    async fn vault_agent(&self, name: &str) -> Result<exec::Agent, String> {
+        let agent = exec::agent(&self.st, name).await?;
+        if agent.lacks_deadline { return Err(exec::NO_DEADLINE.into()); }
+        Ok(agent)
+    }
+
+    /// A origem do cartão; sem `CP_SERVER_ID` a máquina é a única e o nome não decide nada.
+    fn vault_origin(&self) -> String { if self.server_id.is_empty() { "local".into() } else { self.server_id.clone() } }
+
+    async fn request_secret(&self, headers: &HeaderMap, a: RequestSecret) -> Outcome {
+        let deadline = tokio::time::Instant::now() + exec::BUDGET;
+        let (name, key) = self.vault_caller(headers).await?;
+        self.vault_agent(&name).await?;
+        let owner = exec::Owner::of(&self.st)?;
+        let req = AskReq { origin_server: self.vault_origin(), session_key: key, session: name, label: a.label, reason: a.reason,
+            placeholder: a.placeholder };
+        let id = owner.start_ask(req).await?;
+        let status = match exec::Pending::new(owner, id).settle(deadline).await? {
+            WaitStatus::Saved { entry, temporary } => return Ok(dict(json!({"status": "saved", "entry": entry, "temporary": temporary}))),
+            WaitStatus::Declined => "declined",
+            WaitStatus::TimedOut => "timed_out",
+            _ => return Err(exec::off_contract()),
+        };
+        Ok(dict(json!({"status": status})))
+    }
+
+    async fn vault_list(&self, headers: &HeaderMap) -> Outcome {
+        self.caller(headers).await?;
+        let entries = exec::Owner::of(&self.st)?.entries().await?;
+        let rows: Vec<Value> = entries.iter().map(|e| {
+            let mut row = json!({"name": e.name, "policy": e.policy});
+            if let Some(username) = &e.username { row["username"] = json!(username); }
+            if let Some(url) = &e.url { row["url"] = json!(url); }
+            row
+        }).collect();
+        let mut result = text(serde_json::to_string_pretty(&rows).unwrap_or_default());
+        result.structured_content = Some(json!({"result": rows}));
+        Ok(result)
+    }
+
+    async fn vault_exec(&self, headers: &HeaderMap, a: VaultExec) -> Outcome {
+        let deadline = tokio::time::Instant::now() + exec::BUDGET;
+        if !exec::env_name_ok(&a.env) {
+            return Err("erro_cofre_argumento_invalido: `env` é o nome da variável (letras, números e _, sem começar por número)".into());
+        }
+        if a.command.trim().is_empty() { return Err("erro_cofre_argumento_invalido: `command` vazio".into()); }
+        // O dono aprova o comando que vê no cartão: o que não cabe nele não roda.
+        if a.command.chars().count() > TARGET_CHARS {
+            return Err(format!("erro_cofre_argumento_invalido: `command` com mais de {TARGET_CHARS} caracteres; ponha o resto num script"));
+        }
+        let (name, key) = self.vault_caller(headers).await?;
+        let agent = self.vault_agent(&name).await?;
+        let cwd = agent.cwd.clone().ok_or("erro_cofre_sem_pasta: a pasta de trabalho da sessão é desconhecida")?;
+        let env = agent.env.ok_or(exec::NO_ENV)?;
+        let owner = exec::Owner::of(&self.st)?;
+        let req = UseReq { origin_server: self.vault_origin(), session_key: key, session: name, entry: a.entry, kind: UseKind::Exec,
+            reason: a.reason, target: a.command.clone() };
+        let value = exec::secret(&owner, req, deadline).await?;
+        let asked = a.timeout_s.map_or(exec::DEFAULT_TIMEOUT, |s| Duration::from_secs(s.max(1)));
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if left.is_zero() { return Err(exec::NO_ANSWER.into()); }
+        let (exit, output) = exec::run(&a.command, &cwd, env, &a.env, &value, asked.min(left)).await;
+        Ok(dict(json!({"exit": exit, "output": output})))
+    }
+
+    async fn vault_file(&self, headers: &HeaderMap, a: VaultFile) -> Outcome {
+        let deadline = tokio::time::Instant::now() + exec::BUDGET;
+        let (name, key) = self.vault_caller(headers).await?;
+        self.vault_agent(&name).await?;
+        let dir = files::base().ok_or("erro_cofre_sem_pasta_privada: o servidor não tem XDG_RUNTIME_DIR (Linux) nem LOCALAPPDATA (Windows)")?;
+        let owner = exec::Owner::of(&self.st)?;
+        let req = UseReq { origin_server: self.vault_origin(), session_key: key.clone(), session: name.clone(), entry: a.entry,
+            kind: UseKind::File, reason: a.reason, target: "arquivo".into() };
+        let value = exec::secret(&owner, req, deadline).await?;
+        files::sweep_live(&self.st).await;
+        // Tarefa própria: quem desiste da chamada não tira o prazo de um arquivo já gravado.
+        let written = tokio::spawn(async move {
+            let path = tokio::task::spawn_blocking(move || files::write(&dir, &key, &name, value.as_bytes())).await
+                .map_err(|_| "erro_cofre_arquivo: a gravação foi interrompida".to_owned())?
+                .map_err(|e| format!("erro_cofre_arquivo: o arquivo não foi gravado: {e}"))?;
+            files::expire_later(path.clone());
+            Ok::<_, String>(path)
+        });
+        let path = written.await.map_err(|_| "erro_cofre_arquivo: a gravação foi interrompida".to_owned())??;
+        Ok(dict(json!({"file": path})))
+    }
+
+    /// O host da página do navegador da sessão; só http(s) tem domínio para comparar com a entrada.
+    async fn fill_host(&self, home: &Path, name: &str) -> Result<String, String> {
+        let url = nav::page_url(&self.http, home, name).await.map_err(|e| format!("erro_cofre_sem_navegador: {}", e.0))?;
+        exec::host_of(&url).filter(|_| url.starts_with("https://") || url.starts_with("http://"))
+            .ok_or_else(|| format!("erro_cofre_dominio_diferente: a página ({url}) não tem domínio"))
+    }
+
+    /// O usuário sai do resumo da entrada (o `vault_list` já o mostra); a senha, pelo pedido de uso
+    /// `fill` com o domínio da página como alvo.
+    async fn vault_fill(&self, headers: &HeaderMap, a: VaultFill) -> Outcome {
+        let deadline = tokio::time::Instant::now() + exec::BUDGET;
+        let password = match a.field.as_str() {
+            "password" => true,
+            "username" => false,
+            _ => return Err("erro_cofre_argumento_invalido: `field` é \"username\" ou \"password\"".into()),
+        };
+        if !exec::ref_ok(&a.target) { return Err("erro_cofre_argumento_invalido: `ref` é a ref @eN de um snapshot".into()); }
+        let (name, key) = self.vault_caller(headers).await?;
+        let owner = exec::Owner::of(&self.st)?;
+        let home = self.home();
+        let long_enough = async { if password { self.vault_agent(&name).await.map(drop) } else { Ok(()) } };
+        let ((), host, entries) = tokio::try_join!(long_enough, self.fill_host(&home, &name), owner.entries())?;
+        let entry = entries.iter().find(|e| crate::vault::same_name(&e.name, &a.entry)).ok_or_else(|| exec::vault_text(VaultError::UnknownEntry))?;
+        if let Some(refusal) = exec::fill_refusal(entry.url.as_deref(), &host) { return Err(refusal); }
+        let value = if password {
+            let req = UseReq { origin_server: self.vault_origin(), session_key: key, session: name.clone(), entry: a.entry, kind: UseKind::Fill,
+                reason: a.reason, target: host.clone() };
+            exec::secret(&owner, req, deadline).await?
+        } else {
+            Zeroizing::new(entry.username.clone().ok_or("erro_cofre_sem_usuario: esta senha não tem usuário cadastrado")?)
+        };
+        let lock = self.nav_lock(&name);
+        let _held = lock.lock().await;
+        // A página pode ter navegado durante a aprovação: o valor só entra no domínio aprovado.
+        let now = self.fill_host(&home, &name).await?;
+        if now != host { return Err(format!("erro_cofre_dominio_diferente: a página saiu de {host} para {now} durante a aprovação")); }
+        let answer = nav::fill_secret(&self.http, &home, &name, &[a.target, a.field], &value).await
+            .map_err(|e| format!("erro_cofre_sem_navegador: {}", e.0))?;
+        let answer = exec::mask(&answer, &value);
+        if answer.starts_with("ok:") { return Ok(text("preenchido")); }
+        let detail = answer.strip_prefix("erro:").map_or(answer.as_str(), str::trim);
+        Err(if detail.starts_with("erro_cofre_") { detail.to_owned() } else { format!("erro_cofre_preenchimento: {detail}") })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_wrong_argument_lists_every_field_of_the_tool() {
+        let raw = json!({"to": "s", "message": "oi"}).as_object().unwrap().clone();
+        assert_eq!(args::<Send>("send", raw).err().as_deref(),
+            Some("argumentos inválidos para send: missing field `alvo`. Campos: alvo (string), texto (string), tmux (boolean, opcional)"));
+    }
 
     fn child(linked_by: Option<&str>, peers: &[&str]) -> Sidecar {
         Sidecar { peers: peers.iter().map(|p| (*p).to_owned()).collect(), linked_by: linked_by.map(str::to_owned), ..Sidecar::default() }
@@ -604,10 +874,108 @@ mod tests {
     }
 
     #[test]
+    fn the_browser_tool_cannot_send_fill_secret() {
+        assert!(verb_refusal("fill-secret").is_some_and(|e| e.starts_with("erro_cofre_so_vault_fill:")));
+        assert!(verb_refusal("fill").is_none());
+        assert!(verb_refusal("inventado").is_some_and(|e| e.starts_with("verbo desconhecido")));
+    }
+
+    #[test]
     fn voice_self_and_remote_are_refused_before_the_link() {
         assert!(interrupt_caller_refusal("voz", true, "filha").is_some());
         assert!(interrupt_caller_refusal("pai", false, "pai").is_some());
         assert!(interrupt_caller_refusal("pai", false, "srv::filha").is_some());
         assert_eq!(interrupt_caller_refusal("pai", false, "filha"), None);
+    }
+
+    fn new_args(v: Value) -> NewSession { serde_json::from_value(v).unwrap() }
+
+    fn peers_with_lab(dir: &Path, base_url: &str) -> PeerClient {
+        let file = dir.join("peers.json");
+        std::fs::write(&file, json!({"lab": {"base_url": base_url, "token": "tok-lab"}}).to_string()).unwrap();
+        PeerClient::new(crate::groups::peers::PeerBook::new(Some(file)))
+    }
+
+    #[test]
+    fn server_prefix_is_split_once() {
+        assert_eq!(remote_target("lab::filha").unwrap(), Some(("lab".into(), "filha".into())));
+        assert_eq!(remote_target("filha").unwrap(), None);
+        for bad in ["::filha", "lab::", "a::b::c"] { assert!(remote_target(bad).is_err(), "{bad}"); }
+    }
+
+    /// Lá recebe só o explícito: nada de `creator`, `inherit` ou conta daqui; a conta e a pasta são resolvidas lá.
+    #[tokio::test]
+    async fn remote_session_posts_to_the_peer_only_what_was_passed() {
+        use axum::routing::{get, post};
+        // O axum do projeto não tem a feature `json`.
+        let reply = |v: Value| ([(axum::http::header::CONTENT_TYPE, "application/json")], v.to_string());
+        let seen: Arc<Mutex<Option<(String, Value)>>> = Arc::default();
+        let sink = seen.clone();
+        let app = Router::new()
+            .route("/api/claude-configs", get(move || async move { reply(json!([
+                {"path": "/home/r/.claude", "label": "default", "active": true},
+                {"path": "/home/r/.claude-work", "label": "trabalho", "active": false}])) }))
+            .route("/api/sessions", post(move |h: HeaderMap, b: String| {
+                let sink = sink.clone();
+                async move {
+                    let auth = h.get("authorization").and_then(|v| v.to_str().ok()).unwrap_or_default().to_owned();
+                    *sink.lock().unwrap() = Some((auth, serde_json::from_str(&b).unwrap()));
+                    reply(json!({"name": "filha", "cwd": "/home/r", "provider": "claude", "headless": true,
+                        "config_dir": "/home/r/.claude-work", "account_source": "explicit"}))
+                }
+            }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let dir = tempfile::tempdir().unwrap();
+        let peers = peers_with_lab(dir.path(), &format!("http://{addr}"));
+        let a = new_args(json!({"nome": "filha", "conta": "work", "model": "opus", "headless": true, "inherit": false,
+            "initial_prompt": "oi"}));
+        let result = remote_session(&peers, "lab", a).await.unwrap();
+        let (auth, body) = seen.lock().unwrap().take().expect("POST /api/sessions lá");
+        assert_eq!(auth, "Bearer tok-lab");
+        assert_eq!(body, json!({"name": "filha", "cwd": "~", "model": "opus", "headless": true,
+            "config_dir": "/home/r/.claude-work", "initial_prompt": "oi"}));
+        let out = result.structured_content.unwrap();
+        assert_eq!((out["server"].clone(), out["name"].clone(), out["config_dir"].clone()),
+            (json!("lab"), json!("filha"), json!("/home/r/.claude-work")));
+    }
+
+    #[tokio::test]
+    async fn unknown_server_is_an_error_naming_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let peers = peers_with_lab(dir.path(), "http://127.0.0.1:9");
+        let err = remote_session(&peers, "vps", new_args(json!({"nome": "filha", "cwd": "/tmp"}))).await.unwrap_err();
+        assert!(err.contains("'vps'") && err.contains("peers.json"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn link_and_inherit_are_refused_on_another_machine() {
+        let peers = PeerClient::new(crate::groups::peers::PeerBook::new(None));
+        let err = remote_session(&peers, "lab", new_args(json!({"nome": "filha", "cwd": "/tmp", "link": true}))).await.unwrap_err();
+        assert!(err.starts_with("erro_link_remoto:"), "{err}");
+        let err = remote_session(&peers, "lab", new_args(json!({"nome": "filha", "cwd": "/tmp", "inherit": true}))).await.unwrap_err();
+        assert!(err.contains("inherit"), "{err}");
+    }
+
+    #[test]
+    fn remote_account_comes_from_the_peer_configs() {
+        let rows = [json!({"path": "C:\\Users\\r\\.claude", "label": "default"}), json!({"path": "C:\\Users\\r\\.claude-work", "label": "trabalho"})];
+        for conta in ["work", "trabalho", ".claude-work", "C:\\Users\\r\\.claude-work"] {
+            assert_eq!(remote_account(&rows, conta).as_deref(), Some("C:\\Users\\r\\.claude-work"), "{conta}");
+        }
+        assert_eq!(remote_account(&rows, "outra"), None);
+    }
+
+    /// A retomada desta máquina leva os avisos (troca de conta por cota) como a de outra.
+    #[test]
+    fn a_resume_carries_the_warnings_here_and_there() {
+        let info = json!({"name": "s", "cwd": "/w", "provider": "codex", "headless": true, "avisos": ["conta Codex com 99% de uso; a sessão nasceu em b"]});
+        for server in [None, Some("lab")] {
+            let out = resumed(&info, server).structured_content.unwrap();
+            assert_eq!(out["avisos"], info["avisos"], "{server:?}");
+            assert_eq!(out.get("server").and_then(Value::as_str), server);
+        }
+        assert!(resumed(&json!({"name": "s", "avisos": []}), None).structured_content.unwrap().get("avisos").is_none());
     }
 }

@@ -13,7 +13,7 @@ use axum::extract::{ConnectInfo, Request, State};
 use axum::http::StatusCode;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use rmcp::model::{CacheScope, CallToolRequestParams, CallToolResponse, ListPromptsResult, ListResourceTemplatesResult,
+use rmcp::model::{CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ListPromptsResult, ListResourceTemplatesResult,
     ListResourcesResult, ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool};
 use rmcp::service::RequestContext;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
@@ -29,11 +29,51 @@ html_render, sem esperar pedido; imagem por caminho só para print real de tela.
 Ver ou testar uma página: browser_open e depois browser (um verbo) ou browser_batch (vários já conhecidos); \
 tela desconhecida com várias ações: browser_goal, quando a sessão tem o Jev. \
 Falar com outra sessão: sessions, send, group, pair; abrir ou fechar: new_session, close_session; parar o turno de uma filha ligada: interrupt; \
-ler ou gravar o contrato do grupo: contract.";
+ler ou gravar o contrato do grupo: contract. \
+Senha nunca no chat: request_secret ou vault_* (vault_list, vault_fill, vault_exec, vault_file).";
 
 static CATALOG: LazyLock<Vec<Tool>> = LazyLock::new(|| {
     serde_json::from_str(include_str!("catalog.json")).expect("catalog.json é o catálogo do MCP")
 });
+
+/// O cliente pode adiar o schema e mostrar só o nome da tool; as instruções sempre chegam, então
+/// levam os campos obrigatórios para o modelo não chutar `to`/`message`.
+static FULL_INSTRUCTIONS: LazyLock<String> = LazyLock::new(|| {
+    let signatures: Vec<String> = CATALOG.iter().map(|tool| {
+        let (required, optional) = split_fields(tool);
+        let mut names: Vec<&str> = required.iter().map(|(name, _)| *name).collect();
+        if !optional.is_empty() { names.push("…"); }
+        format!("{}({})", tool.name, names.join(", "))
+    }).collect();
+    format!("{INSTRUCTIONS} Campos obrigatórios (… = há opcionais, no schema da tool): {}.", signatures.join(", "))
+});
+
+/// Campos da tool como estão no catálogo: obrigatórios na ordem de `required`, depois os opcionais.
+fn split_fields(tool: &Tool) -> (Vec<(&str, Option<&str>)>, Vec<(&str, Option<&str>)>) {
+    let schema = &*tool.input_schema;
+    let required: Vec<&str> = schema.get("required").and_then(serde_json::Value::as_array)
+        .map(|r| r.iter().filter_map(serde_json::Value::as_str).collect()).unwrap_or_default();
+    let props = schema.get("properties").and_then(serde_json::Value::as_object);
+    let kind = |name: &str| props.and_then(|p| p.get(name)).and_then(|p| p["type"].as_str()
+        .or_else(|| p["anyOf"].as_array()?.iter().filter_map(|v| v["type"].as_str()).find(|t| *t != "null")));
+    let optional = props.map(|p| p.keys().map(String::as_str).filter(|k| !required.contains(k)).collect::<Vec<_>>()).unwrap_or_default();
+    (required.iter().map(|n| (*n, kind(n))).collect(), optional.into_iter().map(|n| (n, kind(n))).collect())
+}
+
+/// `alvo (string), texto (string), tmux (boolean, opcional)`: o que o erro de argumento mostra.
+pub(crate) fn expected_fields(tool: &str) -> Option<String> {
+    let tool = CATALOG.iter().find(|t| t.name == tool)?;
+    let (required, optional) = split_fields(tool);
+    let describe = |(name, kind): (&str, Option<&str>), extra: &str| match (kind, extra) {
+        (Some(k), "") => format!("{name} ({k})"),
+        (Some(k), e) => format!("{name} ({k}, {e})"),
+        (None, "") => name.to_owned(),
+        (None, e) => format!("{name} ({e})"),
+    };
+    let all: Vec<String> = required.into_iter().map(|f| describe(f, ""))
+        .chain(optional.into_iter().map(|f| describe(f, "opcional"))).collect();
+    (!all.is_empty()).then(|| all.join(", "))
+}
 
 /// Nomes antigos (português) que sessões abertas antes do rename ainda chamam: chamáveis, fora do
 /// catálogo. Ponte, não API: sai quando não houver sessão viva de antes.
@@ -46,7 +86,7 @@ struct Handler { tools: Arc<tools::Tools> }
 
 impl ServerHandler for Handler {
     fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(INSTRUCTIONS)
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(FULL_INSTRUCTIONS.as_str())
     }
 
     async fn list_tools(&self, _: Option<PaginatedRequestParams>, _: RequestContext<RoleServer>) -> Result<ListToolsResult, ErrorData> {
@@ -69,7 +109,15 @@ impl ServerHandler for Handler {
         let headers = context.extensions.get::<axum::http::request::Parts>().map(|p| p.headers.clone()).unwrap_or_default();
         let name = OLD_NAMES.iter().find(|(old, _)| *old == request.name).map_or(&*request.name, |(_, new)| new);
         let args = request.arguments.unwrap_or_default();
-        Ok(CallToolResponse::Complete(self.tools.call(name, args, &headers).await))
+        let call = self.tools.call(name, args, &headers);
+        // O rmcp só cancela o token no `notifications/cancelled`: largar o futuro é o que cancela o pedido na dona do cofre.
+        if name == "request_secret" || name.starts_with("vault_") {
+            return Ok(CallToolResponse::Complete(tokio::select! {
+                result = call => result,
+                () = context.ct.cancelled() => CallToolResult::error(vec![ContentBlock::text("erro_cofre_cancelado: a chamada foi cancelada")]),
+            }));
+        }
+        Ok(CallToolResponse::Complete(call.await))
     }
 }
 
@@ -78,6 +126,7 @@ pub fn router(st: Arc<AppState>, api: Router) -> Router {
     let service = service(Handler { tools: Arc::new(tools::Tools::new(st.clone(), api)) });
     Router::new().route_service("/mcp", service.clone()).route_service("/mcp/", service)
         .layer(axum::middleware::from_fn_with_state(st, gate))
+        .layer(axum::middleware::from_fn(crate::migration_status::count_public))
 }
 
 fn service<H: ServerHandler + Clone + Send + Sync + 'static>(handler: H) -> StreamableHttpService<H, LocalSessionManager> {
@@ -145,6 +194,15 @@ mod tests {
         assert!(body.contains("pronto"), "a resposta da tool lenta se perdeu: {body}");
         let (_, again) = post(&mut svc, Some(&session), json!({"jsonrpc": "2.0", "id": 3, "method": "tools/list"})).await;
         assert!(again.contains("\"id\":3"), "a sessão fechou depois da tool lenta: {again}");
+    }
+
+    /// Com o schema adiado pelo cliente, as instruções são o único lugar onde o modelo vê os campos.
+    #[test]
+    fn the_instructions_name_the_required_fields_of_each_tool() {
+        let text = FULL_INSTRUCTIONS.as_str();
+        for signature in ["who_am_i()", "send(alvo, texto, …)", "close_session(alvo)", "new_session(nome, cwd, …)", "pair(…)"] {
+            assert!(text.contains(signature), "faltou {signature} em: {text}");
+        }
     }
 }
 

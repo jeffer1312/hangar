@@ -75,6 +75,8 @@ def _fake_bins(tmp: Path, os_name: str) -> Path:
         p = d / f"{b}-{os_name}{exe}"
         p.write_bytes(f"bin {b}".encode())
         p.chmod(0o755)
+    suffix = ".dll" if os_name.startswith("windows") else ".so"
+    (d / f"hangar-auth-{os_name}{suffix}").write_bytes(b"auth-library-fixture")
     return d
 
 
@@ -128,6 +130,11 @@ def test_pacote_tem_exatamente_os_arquivos_do_manifesto(tmp_path, monkeypatch, o
     for b in ("hangar-server", "hangar-cano"):
         data, mode = members[f"bin/{b}{exe}"]
         assert data == f"bin {b}".encode() and mode & 0o111
+    auth_pair = json.loads(members["bin/hangar-server.auth.json"][0])
+    assert auth_pair["abi"] == auth_pair["store_version"] == 1
+    assert hashlib.sha256(members[f"bin/hangar-server{exe}"][0]).hexdigest() == auth_pair["server_sha256"]
+    assert members["bin/" + auth_pair["library"]][0] == b"auth-library-fixture"
+    assert hashlib.sha256(members["bin/" + auth_pair["library"]][0]).hexdigest() == auth_pair["library_sha256"]
     # Os instaladores vão no pacote: a instalação nova roda o do `current`, em modo pacote; o install.ps1
     # carrega os dois .ps1 de scripts/ na primeira linha.
     for must in ("VERSION", "install.sh", "install.ps1", "scripts/windows-tasks.ps1", "scripts/windows-wrappers.ps1",
@@ -191,6 +198,13 @@ def test_pacote_tem_exatamente_os_arquivos_do_manifesto(tmp_path, monkeypatch, o
     assert "2026-10-26-historico-do-compositor" in {n["id"] for n in notes["news"]}
 
 
+def test_toda_novidade_do_repo_chega_a_algum_sistema():
+    """Campo com erro de digitação (`sistema: Linux`, `onde: tablet`) descarta o arquivo calado: falha aqui."""
+    files = {mp._stem(name) for name, _ in mp._note_files(REPO / "docs/novidades")}
+    shown = {n["id"] for os_name in (*mp.OSES, "macos-aarch64") for n in mp.notes(REPO, os_name)["news"]}
+    assert files == shown, sorted(files - shown)
+
+
 def test_notas_iguais_as_do_rust(tmp_path):
     """Os casos que o update_notes/tests.rs também lê: as duas leituras dão as mesmas notas."""
     cases = json.loads((REPO / "crates/hangar-server/src/update_notes/fixtures.json").read_text(encoding="utf-8"))
@@ -199,7 +213,7 @@ def test_notas_iguais_as_do_rust(tmp_path):
         for name, text in cases[pasta].items():
             (tmp_path / "docs" / pasta / name).write_bytes(text.encode())
     for os_name in ("linux-x86_64", "windows-x86_64"):
-        assert mp.notes(tmp_path, os_name) == {"warnings": cases["notes"][os_name], "news": cases["notes"]["news"]}, os_name
+        assert mp.notes(tmp_path, os_name) == cases["notes"][os_name], os_name
 
 
 def test_manifesto_acima_do_teto_do_extrator_falha_no_build(tmp_path, monkeypatch):

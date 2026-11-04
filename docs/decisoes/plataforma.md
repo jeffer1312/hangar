@@ -101,8 +101,7 @@ reproduziu depois.
 Em 04/10/2026 o diário desta máquina de 03/10 bateu os 4 MiB às 23:39 e parou de gravar
 tudo, falhas inclusive: 94,8% dos bytes eram nível `ok`, e 60% do arquivo (8.259 linhas) era
 `api.servidor` de `POST /api/plugin/pull`, o long-poll do plugin, que fecha vazio a cada 25 s
-e caía como "pedido lento". O sucesso do long-poll saiu do diário (falha dele continua), e o
-teto passou a valer por nível: acima de `_TETO_DIA` (4 MiB) só entram `aviso`/`erro`, até o
+e caía como "pedido lento". O teto passou a valer por nível: acima de `_TETO_DIA` (4 MiB) só entram `aviso`/`erro`, até o
 `_TETO_RIGIDO` (8 MiB), que existe só para um laço de falhas não encher o disco. Cada teto
 cruzado deixa uma linha `diag.teto` com `etapa` `sucesso` ou `tudo`. Os 4 MiB a mais só
 existem num dia de laço de falhas, que é justamente o dia que precisa ir para quem analisa.
@@ -289,6 +288,26 @@ Este
     de `barra`/`traço traço` — 0,727 contra o piso 0,80 de `limpar`, idêntico pela Groq.
 
 ## Transcrição no Rust e envio encerra o ditado
+
+**Rotas públicas e auxiliares (28/10/2026):** `/api/dictation/transcribe`,
+`/api/ditado/relimpar`, `/api/dictation/models` e status/teste de provedores de transcrição
+chamam os motores dentro do Rust. As portas Python não as atendem nem repassam: por elas
+(convidado com login próprio, 8768) e no modo `python`, o ditado responde 404.
+Os fatos de configuração continuam no Python, sem chamar o Rust de volta; as pontes de
+catálogo só ficam onde ainda têm consumidores. TTS é outra capacidade: sua migração e a dos
+consumidores de narração estão descritas em [Leitura, narração e traduções no Rust](#leitura-narração-e-traduções-no-rust-29102026).
+
+As referências de equivalência vêm da execução do Python antes da remoção e estão escritas em
+`crates/hangar-server/tests/it/dictation_public_cases.rs`. Elas incluem validação da borda HTTP,
+erros acumulados de query, avisos e seleção de provedor; os testes públicos Rust verificam
+também autorização, limites, conta e referência da conversa. A contagem de MCP inclui a
+requisição externa ao serviço, separada das rotas que suas ferramentas chamam.
+
+Diferença aprovada na migração: áudio acima de 100 MiB enviado em blocos, sem
+`Content-Length`, recebe 413 `request body too large`, como o tamanho declarado. O Python
+retornava 500 nesse caso. Outros erros de leitura
+mantêm seu tratamento. Catálogo, status dos provedores e transcrição/teste conservam os tetos
+públicos de 60, 15 e 180 segundos, incluindo espera por configuração e consultas concorrentes.
 
 Em 09/10/2026, a issue 116 separou instalação e execução do Whisper: o usuário instala
 whisper.cpp, modelo e FFmpeg, e informa seus caminhos no servidor escolhido. O Hangar inicia
@@ -664,6 +683,22 @@ As sondas que produziram isso ficam em `~/.hangar/diag/` (da máquina, fora do r
 `sonda-iphone.py` amostra rede + estado do app a cada 2 s, e um coletor do `idevicesyslog` guarda o
 lado de dentro do iPhone.
 
+Em 29/10/2026 o usuário apontou que a lista inicial do Expo e do PWA mostrava, sem nunca sumir,
+uma linha vermelha "<máquina> offline" por máquina fora do ar, e a máquina pode só estar
+desligada. Cada nova tentativa regravava o slot com `error: 'offline'`, e o aviso vivia enquanto
+durasse a queda. Agora o slot guarda a primeira falha da queda (`offlineSince`, em `patchSlot`),
+e o aviso de queda só aparece por `OFFLINE_NOTICE_MS` (30 s, as primeiras tentativas) a partir
+dela (`machineNoticeVisible`, `packages/core/src/sessions.ts`); um timer só por janela redesenha
+a tela no fim. O início é gravado em registro próprio (`hangar_quedas`, `startOutage`/`endOutage`
+em `esfriamento.ts`), senão cada recarga do PWA ou reabertura do Expo mostrava a linha de novo por
+30 s. Ele não pode morar no registro do prazo de tentativas: o servidor ativo nunca ganha prazo,
+"buscar agora" e a abertura do app apagam o prazo de quem respondeu nas últimas 24 h, e qualquer
+resposta (ping, erro HTTP, `list_error`) o apaga também; com o início ali, a janela reabria em
+cada um desses casos. Alternar entre offline e erro HTTP não reabre a janela: só uma lista boa encerra
+a queda. Erro HTTP e os demais erros continuam à vista. Com todas as máquinas próprias fora e
+nenhuma sessão, a lista vazia diz que elas estão fora do ar (texto neutro), não "Nenhuma sessão
+ativa". A escala de esperas não mudou.
+
 ## Compartilhado por sessão, não por conexão
 
 (`app/difusor.py`, `stats.Accumulator.
@@ -712,9 +747,8 @@ transcript. Prova ponta a ponta: `enviar` de `hangar-2` pra `cx-pergunta` entreg
 (`crates/hangar-server/src/mcp/`, SDK `rmcp` 3.5.0); `mcp_server.py` saiu. Mesmas tools,
 nomes, parâmetros e identidade; cada tool chama a rota pública que o CLI chama, por dentro do
 processo. A sessão MCP fecha após 30 min parada, como no Python: o padrão do `rmcp` (5 min) não
-conta a tool em curso como atividade e o `browser_goal` (até 300 s) perdia a resposta. No modo
-`python` do Supervisor, `/mcp` e `/mcp/` respondem 503 `mcp_needs_rust_server`, sem reserva
-Python; antes da rota própria caíam no estático e voltavam 405.
+conta a tool em curso como atividade e o `browser_goal` (até 300 s) perdia a resposta. O Rust
+atende todo método de `/mcp`; o Python não tem a rota.
 
 ## Arquivo citado na conversa é editável, com a citação como consentimento
 
@@ -1196,7 +1230,7 @@ cada 5 s por até 3 min:
 
 A rota só aceita link com o nome Tailscale desta máquina (`tailscale status --json`), para não virar
 cliente HTTP genérico. Link local (`http://<ip>:8766`) não é conferido. Sem o Rust (modo `python`),
-o Python responde 404 (ou 405, quando serve o `frontend/dist` na raiz) e o cliente diz que a conferência precisa do servidor Rust, sem mostrar o link.
+o Python responde 404 (405 só em backend antigo, que ainda servia o `frontend/dist` na raiz) e o cliente diz que a conferência precisa do servidor Rust, sem mostrar o link.
 Pelo Hangar Connect (8768), o Python só repassa o pedido do dono à rota privada do Rust
 `/__hangar_server/share/reachability`, sem decidir nada; sem o Rust, responde 404
 `share_needs_rust_server`.
@@ -2257,6 +2291,53 @@ mostrar a worktree e a branch dela.
 
 ## Worktrees mescladas usam a origem e a base publicada
 
+### Recuperação manual de worktrees residuais
+
+(27/10/2026.) Pasta existente sem `.git`, ainda registrada na administração do repositório,
+é um estado residual explícito. O PR #220 recuperou pasta ausente; o PR #262 manteve os resíduos
+existentes protegidos como leitura incerta, sem um caminho manual de exclusão. Na reprodução,
+o detalhe respondia 404 e a exclusão falhava antes de permitir o descarte informado. Em pasta
+aninhada em outro checkout, ainda havia o risco de ler HEAD e arquivos do repositório pai.
+
+O estado residual lê HEAD, branch e vínculo na administração do repositório principal. A tela
+informa que todos os arquivos remanescentes serão perdidos, mostra a quantidade de entradas e
+até 50 exemplos, incluindo fontes e ignorados, e conserva a branch. A confirmação é manual:
+resíduo nunca comprova limpeza ou merge. Caminho não registrado, checkout principal, sessão
+ou terminal em uso, lock do Git e vínculo administrativo alterado continuam recusados.
+
+A remoção protege o registro contra prune com o lock da worktree, e uma trava do sistema
+separa execução viva de retomada. O inventário e o vínculo são reconferidos depois da guarda
+de sessões. A pasta sai primeiro; falha conserva o registro para outra tentativa, inclusive
+quando a pasta já acabou de sair. Repetir um sucesso conhecido não tenta apagar outro caminho.
+
+O `git worktree remove` não usa mais o prazo de 20 s das consultas: a operação destrutiva é
+acompanhada até concluir, com proteção da árvore de processos. O worker HTTP não é cancelado
+pela desconexão do cliente; uma interrupção do servidor admite recuperação residual. O teste
+de prazo mantém um comando bloqueado por sinal além dos 20 s e então o libera. Isso corrige
+o mecanismo capaz de produzir remoção parcial, sem afirmar que ele originou os resíduos
+históricos, para os quais não há log dessa causa.
+
+As provas usam Git e disco reais descartáveis, chamadas HTTP ao servidor de teste e os
+componentes dos três clientes. Cobrem confirmação, preservação da branch, retomada, reentrada,
+locks, sessões e revalidação. Nenhuma prova apaga uma pasta residual do ambiente em uso.
+
+### Diretórios ignorados e submódulos na confirmação
+
+**Regra:** a lista do que será perdido inclui os diretórios ignorados inteiros e cada
+submódulo inicializado (`<caminho>/`); a confirmação existente autoriza o descarte deles.
+
+**Por quê (28/10/2026):** `ls-files --others --ignored --directory` devolve diretórios com
+`/` no fim, e o inventário descartava essas linhas. Uma worktree limpa com submódulo
+inicializado parecia não perder nada: o cliente enviava `confirm=false`, e o Git recusava a
+remoção do submódulo com 500. Com `confirm=true`, o `--force` apagava o conteúdo do
+submódulo sem mostrá-lo antes. Os testes HTTP usam Git e disco descartáveis: um com submódulo
+e pastas ignoradas, outro só com o submódulo inicializado. Nos dois, o detalhe lista o que
+some, a tentativa sem confirmação recusa com 409 e conserva os arquivos, e a confirmação
+conclui preservando a branch. No nativo, resposta de falha conserva o motivo do servidor;
+resultado incerto orienta reconferir a lista de worktrees antes de repetir.
+
+### Base publicada e elegibilidade
+
 **Regra:** `branch.<branch>.hangar-base` tem prioridade. Sem ela, a base vem da referência
 nomeada de criação no reflog; `HEAD`, hashes e o upstream da própria branch não informam o
 destino. Sem origem recuperável, permanece o fallback para a branch do checkout principal.
@@ -2609,8 +2690,19 @@ Python. Regras como ficaram, cada uma conferida por teste:
 
 Medição antes/depois na DELPHI-02: pendente. Pendências com dono a definir: o login Claude da lista
 não tem prazo total (10 s por chamada do CLI, 4 em paralelo: com 5 ou mais contas e cache frio a
-lista passa dos 8 s do cliente), e a renovação do token Claude vencido ainda volta ao Python pela
-janela de login (`/internal/accounts/claude-window`), em todo chamador da cota.
+lista passa dos 8 s do cliente). A janela de login e da renovação passou ao Rust em 30/10/2026
+(`accounts/claude_window.rs`, protocolo 97), sem volta ao Python.
+
+### Janela de login do Claude no Rust (30/10/2026)
+
+No Windows o link de autorização chegava cortado no meio do `client_id`, sem `redirect_uri`
+("Solicitação OAuth inválida"). Medido na DELPHI-02 com psmux 3.3.8: `capture-pane -J` sai igual
+a sem `-J`; a CLI quebra o link em linhas de exatamente `#{pane_width}` colunas, sem espaço no fim.
+O Rust lê a largura e junta só a linha que ocupa a largura inteira (fixture real em
+`accounts/fixtures/claude-login-psmux-120.txt`). A janela nasce com `BROWSER` que não abre nada
+(o link e o botão estão na tela do Hangar) e com `@cp_login_owner` = `~/.claude` do servidor: a
+varredura de janelas esquecidas, que agora roda também na subida, só derruba as marcadas
+`@cp_hidden` deste servidor.
 
 ## A conversa da sessão é escolhida pelo Rust, e a troca espera duas leituras
 
@@ -3006,6 +3098,33 @@ defeitos achados nele (todos consertados no Rust, decisão do usuário) estão n
   herdados como antes. Convidado não recebe o padrão do dono. Registro ilegível vira aviso e a
   abertura segue sem ele. No Codex com terminal o modo salvo entra como o herdado (o pedido
   explícito continua recusado).
+- **Abertura nunca nasce numa conta sem cota (28/10/2026).** Em 28/10, às 15:03, uma sessão aberta
+  sem conta escolhida nasceu numa conta com 100% nos 7 dias, e a troca automática só a tirou de lá
+  depois que bateu o limite. A causa foi a regra dos 95%: ela lia só o cache, e uma leitura com token
+  vencido apagava o 100%, de modo que, sem número, a conta passava calada. Hoje:
+  - o cache guarda a última leitura boa também quando a nova vem `expirada`;
+  - sem cota conhecida, a abertura faz uma leitura de 5 s e considera o `limit-spent.json`. Se ainda
+    não souber, segue e registra `rust.open_quota_unknown` no diário;
+  - a regra vale também para conta Codex;
+  - conta com 95% ou mais sai da escolha mesmo quando a tela a mandou (`config_dir` ou
+    `codex_account`): a sessão nasce direto na de mais folga, sem pergunta e sem trocar depois. Com
+    todas a 95% ou mais, vai para a de uso estritamente menor, mesmo acima dos 95%; nenhuma com
+    menos uso, segue na pedida e o log registra `open_quota_no_room`. A tela mostra o aviso de
+    sempre ("conta X com N% de uso; a sessão nasceu em Y"), e `account_source` vem `quota`.
+    Decisão do usuário em 28/10: a regra é a mesma para todo cliente (D-003 da abertura única),
+    sem confirmação;
+  - cota da conta desconhecida mesmo depois da leitura: a escolhida fica; a padrão ou herdada vai
+    para a de cota lida abaixo dos 95% e de mais folga, com aviso; nenhuma assim, fica;
+  - destino só com leitura atual (`lida`), e conta no limite (100% ou `limit-spent.json` valendo)
+    nunca é destino;
+  - no Codex, a troca só acontece se a conta de destino aceitar o modelo, o esforço e o Fast
+    pedidos; se não aceitar, a sessão fica na pedida, e a troca nunca faz a abertura falhar. A
+    retomada do Arquivo (`account_bound`) não troca. A conta escolhida pelo convidado não troca;
+  - a leitura de cota da abertura usa o serviço de contas do servidor (o mesmo cache, a mesma fila
+    e a mesma espera depois de um 429) e acontece uma vez por abertura, mesmo quando a resolução
+    roda de novo sem o padrão salvo.
+
+  Nos testes, a leitura pela rede é desligada (`disable_open_network_read`, `HANGAR_QUOTA_NETWORK=0`).
 
 ## WebSocket do dono com token não confere Origin (17/10/2026)
 
@@ -3027,10 +3146,13 @@ defeitos achados nele (todos consertados no Rust, decisão do usuário) estão n
 
 ## Feed do condutor no Rust, watchdog compartilhado no Python
 
+Etapa histórica de 18/10/2026, substituída pela migração completa descrita em
+[Provedores e orquestração no Rust](#provedores-e-orquestração-no-rust).
+
 Em 18/10/2026, `GET /api/orq/{exec_id}/conductor` passou a montar registro, sombra do Jev e eventos
 no `hangar-server`. O contrato foi congelado executando `orq_conductor.py` e `orq.py` do commit
-`70d0b9ef4`, em `backend/tests/fixtures/contract/orq-conductor/`: o gerador registra a origem e o
-comando, e o teste Rust compara os valores sem produzir o esperado.
+`70d0b9ef4`; os 93 casos, com o esperado escrito, moram em
+`crates/hangar-server/tests/contract_orq_conductor_cases.rs`.
 
 O watchdog não foi migrado: `GET /api/orq`, `runs._active_run` e os fatos da lista dependem dele.
 O Rust faz uma ida a `/internal/orq/{exec_id}/conductor-facts` para receber caminho validado e
@@ -3055,6 +3177,40 @@ NaN em probabilidades continua nulo; valor não finito em campo devolvido cru e 
 continuam erro HTTP, como a serialização Python. Erros originais de tipo de evento não hashável e
 inteiro grande demais para probabilidade permanecem recusas visíveis, sem feed parcial. O
 watchdog e os auxiliares ainda compartilhados com a timeline ficaram no Python.
+
+## Provedores e orquestração no Rust
+
+Em 27/10/2026, a migração levou o caminho inteiro dos catálogos e controles Pi/omp/Kimi, do
+sincronizador omp e do backend de orquestração ao `hangar-server`. O contrato de referência é o
+Python do commit `d2a42410f9fe6df4ea491b296c7fea7b98d8b844`; as fixtures em
+`backend/tests/fixtures/contract/` registram a origem e os comandos de caracterização.
+
+- `provider_models/` mantém os catálogos, a seleção e sua confirmação no agente. O inbox Pi
+  mantém registro, batimento, confirmação e limpeza no Rust. A escrita de modelo e a entrada
+  geral compartilham a mesma trava de arquivo por sessão, inclusive quando o consumidor de
+  entrada ainda é Python. O catálogo usa a conta do processo do agente.
+- `provider_accounts.rs` associa a credencial do modelo Pi/omp e o modelo padrão Kimi às fontes
+  de cota. A lista não aceita sobrescrever essa conta pelos fatos do Python.
+- `omp_sync/` mantém reconciliação conservadora, registro, contexto, kill switch, suspensão,
+  intervalo e encerramento do worker. A inicialização termina o contexto antes de iniciar a
+  rotina periódica; o encerramento espera o trabalho em andamento terminar.
+- `orchestration/` mantém política, papéis, contexto, plano, execuções, consumo, watchdog,
+  timeline e painéis. A conversa sintética `-orq` usa o parser e o hub compartilhado do Rust;
+  a vida da sessão limita o produtor de estado. O condutor lê os mesmos fatos em processo.
+  Grupos consultam fase e promoção em processo, sem `POST /internal/orq/*`.
+- O motor externo da skill continua sendo uma ferramenta Python. Seus leitores compartilhados
+  chamam `hangar-server orq-info`; a preparação read-only usa o mesmo envelope do lançador Rust.
+  Esses consumidores não mantêm uma segunda implementação dos leitores.
+
+As portas do Python preservam autenticação e transporte em um sentido. Falha no Rust é erro
+visível; o modo `python` não oferece os controles migrados. Os módulos Python correspondentes
+foram apagados. Transcript, classificação de estado e entrada geral de Pi/omp/Kimi continuam
+fora deste recorte. O protocolo interno foi elevado de 90 para 91 nos dois lados.
+
+A prova usa sessões e pastas descartáveis, sem enviar prompts a um LLM. Os contratos incluem
+efeitos em disco e no terminal, erros HTTP completos, cache por mtime, Unicode, exclusão entre
+escritores e comportamento do `Path`/`PATHEXT` no Windows. Medições de drivers isolados não
+demonstram ganho na interface; esta migração não afirma melhoria perceptível de desempenho.
 
 ## Sessão filha ligada a quem a abriu
 
@@ -3309,3 +3465,514 @@ cada escopo. Num boot, 15 linhas tinham `TYPESAFE_API_KEY`, `JEV_AUX_API_KEY` e
 **Limite.** Janela nova aberta dentro da sessão tmux não herda essas chaves (antes herdava pelo
 ambiente da sessão). O journal antigo e as chaves já gravadas lá não mudam com isto: trocar as
 chaves e limpar o journal são passos à parte.
+
+## Reportar problema: o pacote de diagnóstico vai ao dono (27/10/2026)
+
+**Decisão.** Configurações > Diário de uso tem **Reportar problema** nos três clientes. O cliente
+manda ao seu servidor `POST /api/diag/report` (só o dono) com o texto opcional da pessoa e as
+falhas recentes dele contra aquele servidor. O `hangar-server` (`diag_report/`) monta o pacote e o
+envia ao worker `hangar-relatorio` (`kind: "diagnostico"`, KV `diag/<código>` por 90 dias e
+e-mail ao dono); o diário inteiro dos 7 dias vai compactado num `PUT` separado, gravado pelo
+worker sem decodificar (o plano Free tem 10 ms de CPU por pedido). A pessoa recebe um código de 8
+caracteres para passar ao dono.
+
+**Por quê.** Em 27/10 três casos no mesmo dia só se explicaram pedindo log por SSH ou por comando:
+a fila travada depois da troca de conta numa máquina de casa (`input_unproved`), o
+`runtime_unhealthy` no Windows de outra pessoa depois de uma atualização automática, e o Orientar
+recusado. O diário exportado não tinha a causa e o 503 do envio não estava em lugar nenhum; nem
+todo mundo que usa sabe rodar comando. "Só erros não ajudam: tem que ser ele completo" — por isso o
+diário vai inteiro, com os eventos `ok` em volta da falha.
+
+**Privacidade (invariante).** Os logs privados podem ter token, caminho, conversa e `peer_info`:
+do `hangar-server.log` saem só hora, nível, a mensagem fixa e os campos `code`, `session`,
+`reason`, `stage`, `kind`, `window`, `outcome`, `status`, `attempt`, `wait_s` (o `detail` fica de
+fora); do log do Python, só a contagem por logger. Sessões sem `last_reply`, pergunta, opções,
+linha de status nem texto de fila; contas sem `id`, caminho, assinatura de credencial nem token.
+O `scrub` roda em cada parte do texto, antes de qualquer corte, e em cada linha do diário anexo: home e `C:\Users\<nome>`,
+`sk-…`, `Bearer …`, `token=` em URL, hex/base64 longos, e-mail, `*.ts.net` e IPv4.
+
+**Limites.** O worker usa KV: a senha de uso único do envio do diário não é atômica (dois envios
+quase simultâneos com a mesma senha podem gravar os dois). O teto diário do KV conta escritas
+(o diagnóstico custa 2, o diário mais 2) e, passado o teto, o diagnóstico recebe 503 em vez de um
+código que não abre.
+
+**Envio automático:** feito para a falha de atualização, na entrada seguinte.
+
+## Relatório automático quando a atualização falha (30/10/2026)
+
+**Decisão.** Atualização por pacote que falha manda o "Reportar problema" sozinha, pelo próprio
+`hangar-server` da máquina, só com o consentimento dela: `~/.hangar/auto-report.json`
+(`{"auto_report": bool}`, rota `GET`/`PUT /api/auto-report` só do dono). Sem o arquivo, a resposta
+é `null` e nada sai. Os três clientes perguntam uma vez, na abertura, para as máquinas próprias
+sem resposta (uma pergunta cobre todas), e a escolha muda na tela da máquina (nativo e Expo) ou em
+Diário de uso (PWA). O servidor confere a falha na subida, a cada gravação do `estado.json` (vigia
+de arquivo: quem grava é o executor, outro processo, e depois da volta o servidor de pé não o lançou)
+e quando a pessoa responde "sim", sem ler o estado de tempos em tempos; manda uma vez por falha (chave
+`ts|versao_para|erro`, falhas de até 24 h) e grava o código ou o erro em
+`.hangar-update/relatorio.json`. Sem rede ou com o worker limitando, a falha volta a ser tentada na
+próxima subida, dentro das 24 h; recusa do worker não se repete. `GET /api/atualizacao` junta ao `estado` `relatorio` (`pendente`
+ou o código) e `relatorio_erro`; as telas de atualização mostram a linha e seguem lendo enquanto
+está `pendente`, até 12 min. 429 do worker tenta de novo depois de 1, 3 e 7 min.
+
+Quando um reinício não volta (a versão nova, a volta para a anterior ou o reinício avulso), o
+executor grava como `update: saída`, com `scrub`, o que explica a falha sem precisar pedir mais
+nada à pessoa (`update/startup_output.rs`):
+
+- `etapas:` tempo de baixar, trocar, passos, comando de reinício e espera, o prazo e o pid de antes;
+- `prova a–b s:` cada mudança no que a porta respondeu, com a causa do erro de conexão inteira
+  (recusada = ninguém escutando; tempo esgotado = processo de pé e travado);
+- `log:` a saída da versão nova desde antes do reinício (Windows: o `hangar-backend*.log`; Linux: o
+  journal da unit), reduzida: traceback, linhas do lançador, do uvicorn e `[hangar]` inteiras; do
+  Python com logger, aviso e erro inteiros e INFO só nível e logger; do `hangar-server`, a lista
+  fixa de campos (INFO, só a mensagem fixa). Repetidas viram `×N`; ficam as 25 primeiras e as 60
+  últimas, e quantas linhas de acesso HTTP e sem formato saíram;
+- o retrato do fim do prazo: o Python que o lançador acharia, se o pacote novo tem manifesto,
+  Python, `main.py` e binário, cada `python`/`hangar-server`/`hangar-cano` do Hangar (pid, pai,
+  versão, idade, memória, CPU, linha de comando; Python de fora só conta), a tarefa
+  `hangar-backend` (estado, última execução, último resultado, ação) ou a unit (estado, pid,
+  status de saída, reinícios) e quem escuta a porta.
+
+O lançador escreve no mesmo log `launch_start` (versão, pid) e, no Windows,
+`launch_backend_started`/`launch_backend_exited` com versão, pid do Python, código e duração:
+o `0xffffffff` da versão anterior parada pelo `Stop-Process` do reinício não se confunde mais com
+a saída da nova. O relatório mostra as linhas embaixo da linha da falha, nas 3 falhas mais
+recentes. É a única exceção ao "do log do Python, só a contagem".
+
+**Por que tudo de uma vez (03/11/2026).** O relatório `f7rtsvcv` (Windows, 9074 → 9091) trouxe só
+a linha do lançador antigo morto, e a análise parou em "falta saber se a tarefa subiu". Cada
+leitura que termina em "acrescentar X para a próxima" deixa a falha sem causa: a captura cobre o
+que um investigador perguntaria na primeira leitura.
+
+**Por quê.** O relatório `5z4vw3l3` (Mayron, 30/10): toda atualização acima da `0.1.0.8589`
+falhava com "o servidor não voltou depois de reiniciar", a máquina voltava sozinha, e o relatório
+não tinha o motivo; só o `hangar-backend.log` daquela máquina, pedido à mão, o diria. E cada falha
+dependia de alguém lembrar de apertar o botão.
+
+**Limites.** O executor é o binário da versão de onde se atualiza, e depois da volta quem fica de
+pé é a anterior: o recurso só vale quando a versão de origem já o tem. A linha de exceção do
+Python pode trazer texto da conversa que o `scrub` não reconhece; ela sai porque é o motivo da
+falha, e só sai com o consentimento. O consentimento é por máquina: duas telas abertas ao mesmo
+tempo podem perguntar duas vezes.
+
+## Navegador remoto e contador compartilhado de autenticação (28/10/2026)
+
+**Regra.** `GET /api/sessions/{name}/navegador` e `WS /api/sessions/{name}/nav-remoto`
+são atendidos por `crates/hangar-server/src/remote_browser/`: descoberta, CDP, entrada e layout.
+As portas Python só autenticam e transportam; sem Rust, HTTP responde 503 e WS fecha 1013.
+Não há motor Python de reserva nem volta Rust → Python → Rust.
+
+**Contador.** `hangar-auth` (`rlib` + `cdylib`) é a implementação comum ao `hangar-server` e ao
+Python, que a chama por `ctypes` em `shared_auth.py`, sem callback HTTP. A época nasce no pai
+Python; arquivo e trava conservam a contagem ao relançar o filho. Pai novo começa vazio.
+Bloquear, comparar e registrar/limpar são uma transação: oito falhas em 30 s, até 512 origens.
+Depois da ativação, erro de estado/ABI/época é indisponibilidade (503/1013), nunca outro contador.
+
+**Perfis preservados.** `RequireAuthHttp`, usado pela GET do navegador e pela guarda Python,
+limpa no acerto, exceto no Connect, onde token ausente não conta e acerto não limpa.
+`LegacyOwnerProbe`, usado pelos portões existentes do Rust, conserva a limpeza inclusive no
+Connect. WS do navegador e aliases Python não limpam; terminal e voz Rust mantêm seus perfis
+próprios. O recibo assinado é vinculado ao pedido já admitido: o repasse não repete
+limpeza, corpo, SSE ou upgrade, nem cria uma comparação preliminar de credenciais.
+
+**Par de artefatos.** Biblioteca em `auth/<sha256>/`, metadado `hangar-server.auth.json`,
+hashes do servidor e da biblioteca, ABI 1 e esquema 1 são conferidos antes de ativar. A DLL
+carregada nunca é substituída. Se o hash da biblioteca publicada mudar, `Context.child_env`
+recusa com `auth_pair_changed_restart_parent`: é preciso um pai novo. O protocolo interno é 94
+nos dois lados.
+
+**Primeira atualização Git.** Em `atualizacoes.aplicar_pendentes`, somente o motor com
+`HANGAR_UPDATE_OWNS_RUST=1` renova `rust_bins`/`rust_release` já carregados quando falta a
+capacidade do par. Conserva as referências do motor, o manifesto escolhido, um único fluxo de
+download e o desfazer. Pacote e fluxo novo de desenvolvimento já incluem biblioteca e metadado;
+falha no download do modo desenvolvedor continua sendo aviso, não garantia de instalação.
+
+**Parada protegida.** `Supervisor.stop` espera o filho por até 120 s e retorna assim que ele
+sair; os 45 s de `/cmd` são preservados. O ensaio com atraso artificial de 6 s não mede
+desempenho normal; os 6,080 s da captura Python original também não são uma medição do Rust.
+
+**Provas de escopo.** `backend/tests/test_shared_auth.py` cobre `hangar-server` e borda Python reais,
+contador cruzado, recibos e biblioteca carregada; `test_shared_auth_pair.py` cobre hashes e
+desfazer; `test_legacy_auth_pair_update.py` carrega os módulos antigos em pasta temporária,
+troca suas fontes e conserva manifesto/download/desfazer. `test_protected_browser_shutdown.py`
+cobre devolução protegida com Supervisor real; `scripts/test_cargo_pinned.py`, publicação só
+após Cargo válido e conservação do par anterior quando ele falha.
+
+**Limites.** Uso real no Linux/Windows, interface e desempenho continuam pendentes; estas provas
+não encerram a migração nem os 136 itens de inventário. Não se afirma igualdade literal da
+representação privada de `InvalidStatus`.
+
+## Etiquetas de máquina e conta moram no servidor da máquina (28/10/2026)
+
+**Regra.** A etiqueta da máquina (nome curto, ícone, cor) e a de cada conta (ícone, cor) ficam em
+`~/.hangar/tags.json` da própria máquina, por `GET/PUT /api/tags` (só o dono, Rust,
+`crates/hangar-server/src/tags.rs`). Os clientes recebem tudo resolvido pelo evento `tags` da
+lista do dono, publicado só quando muda: `machine_id`, a etiqueta da máquina e, por `conta` da
+linha, `{name, icon, color}` com o nome já cortado no `@`. Cor e ícone viajam como chave
+(`slate…violet`; `laptop…cloud`; `credit-card…id-card`); `color: null` é a cor por hash que já
+existia. O apelido da conta continua em `.hangar-apelidos.json`.
+
+**Por quê.** Pedido de 28/10: ver de relance em que máquina e com que conta cada sessão roda, igual
+nos três clientes. O nome da máquina vinha da lista de servidores de cada cliente, que diverge entre
+eles; guardado no servidor, uma troca aparece em todos sem recarregar.
+
+**Id único da conta.** A `conta` da linha e o `id` de `/api/credenciais` saem da mesma função
+(`accounts::catalog::resolved` = `list::links::resolve_lenient`). Antes divergiam com a pasta da
+conta sob link e na rota de motor com conta Codex (`canonicalize` cru, prefixo `\\?\` no Windows).
+
+**Custo.** Um vigia (`notify`, sem recursão) acorda o evento quando muda `tags.json`, apelidos,
+`engines.json`, config do Kimi ou uma pasta `.claude*`/`.codex*` da HOME com os marcadores de conta,
+e um PUT o refaz na hora; só com lista do dono aberta. Sem vigia (erro do `notify`), vale a
+assinatura por metadados a cada tique, avisada uma vez no log (`rust.tags_watch_unavailable`). A
+lista de contas do evento e a do `/api/credenciais` saem de `accounts::credentials::listed_ids`.
+
+**Limites.** A rota não passa pela porta do Connect (8768, Python, inativa). Servidor antigo responde
+404 e fica sem etiqueta, sem aviso na tela. "Em todas as minhas máquinas" (padrão de criação no
+nativo; 1M do Codex nos três) repete a gravação em cada máquina própria e diz por máquina o que não
+foi aplicado: motor, conta de proxy ou Codex ausente ali conta como "não existe nesta máquina".
+
+## Sugestão de nome para sessão com nome genérico (28/10/2026)
+
+**Regra.** Só o nome que o Hangar deu a partir da pasta ganha sugestão: `sanitize(basename(cwd))`,
+ou isso com `-N`, ou `sessao[-N]`. O servidor grava `name_auto` no `SessionSpec` na criação
+(pelo padrão, porque os três clientes mandam o nome da pasta já calculado) e renomear apaga a
+marca. Nome de PM, de branch, dado por outra sessão ou já trocado fica como está. Sessão antiga
+sem a marca cai no padrão.
+
+**Fluxo.** O cliente do dono, ao abrir a conversa de uma sessão genérica que já tem um pedido,
+chama `POST /api/sessions/{name}/rename-suggestion` uma vez; o servidor gera o nome com o executor
+da organização do ditado (`dictation::harness::run_prompt`, mesmo semáforo, trava de conta e prazo,
+com prompt próprio) a partir do primeiro pedido e da branch, guarda no spec, e a linha da lista traz
+`rename_suggestion` aos três clientes. A faixa "Renomear para X?" aplica a rota de renomear que já
+existe; "Agora não" (`DELETE`) fica guardado. Nunca renomeia sozinho: o nome é o endereço da sessão
+em recados, grupos e pares.
+
+**Por quê.** Pedido de 28/10: sessões abertas sem nome ficavam como `hangar-2` e ninguém sabia o
+que eram. Renomear sozinho foi descartado pelo usuário em favor da sugestão com um clique.
+
+**Limites.** O modelo sai sempre do catálogo da conta da sessão (o mesmo do seletor do ditado, que
+já conhece motor, gateway e prefixo de conta), porque a organização do ditado nasce desligada e a
+sugestão não funcionava sem configurar. Ordem: o modelo de organização escolhido (fora do catálogo =
+`dictation_model_unavailable`); no Codex, o `model` do `config.toml` da conta (perfil ativo vence o
+topo) se o catálogo o oferece; o padrão marcado no catálogo (`active` do Claude); o primeiro do
+catálogo. Alias fixo foi descartado na revisão: numa sessão em motor, `--model sonnet` ia ao proxy
+do motor e cobrava outra credencial. Catálogo vazio = sem sugestão, e a causa vai ao diário
+(`rename_suggestion_no_model`), sem aviso na tela. Cada sugestão ocupa uma das vagas do ditado e a
+trava compartilhada da conta enquanto roda. Erro do executor vira 204 e registro no diário
+(`rust.rename_suggestion`). O executor só roda a pedido do dono, por isso o gatilho é do cliente e
+não um trabalho de fundo.
+
+**Sugestão fraca se refaz (29/10/2026).** O modelo responde o nome e, na segunda linha, `boa` ou
+`fraca` (pedido vago ou curto demais). A fraca grava `rename_weak_at` (quantos pedidos a conversa
+tinha) e a linha da lista leva `rename_weak`; os clientes mostram "Pouco contexto: outra sugestão na
+próxima mensagem" e pedem de novo a cada mensagem da pessoa. O servidor só refaz quando a conversa
+tem mais pedidos que `rename_weak_at`, lendo o primeiro pedido e os três últimos, com o nome que não
+serviu. "Outra" (`?again=1`) refaz na hora em qualquer caso. Aceita ou recusada, nada mais muda. O
+gatilho é a mensagem da pessoa, nunca um prazo: sem mensagem nova não há contexto novo.
+
+**Conferência da vida pela mesma fonte (29/10/2026).** Depois do executor, a sessão é relida pela
+descoberta (`list.discover`), a mesma da leitura inicial. O retrato publicado reescreve a vida do
+Claude com terminal para `k:<chave>` enquanto a descoberta dá `t:<nascimento>`: comparar os dois
+descartava toda sugestão como `dictation_target_changed`, e a faixa nunca apareceu.
+
+## Leitura, narração e traduções no Rust (29/10/2026)
+
+**Regra.** As cinco rotas `/api/tts*`, `/api/pensamento/pt`,
+`/api/config-sync/translate` e `/api/pair/task-suggestion` são atendidas em `speech/` no
+`hangar-server`. O Python não conserva os motores, handlers, schemas ou repasses dessas
+funções. O Connect já estava desativado; seus handlers e endpoints privados de voz saíram,
+assim como a ponte antiga da conferência de convite que só ele usava. O transporte genérico
+que o compartilhamento ainda usa tem responsabilidade própria.
+
+**Configuração.** O Rust lê `runtime-config.json` e os valores de ambiente que já existiam,
+sem buscar credenciais em uma rota interna. Narração e traduções funcionam independentemente
+do modo de organização do ditado. Endpoint próprio não herda a chave de outro serviço. A
+edição dos campos continua no escritor da configuração geral; a capacidade
+`somente_leitura.traducao_pensamento` é calculada no Rust sobre a resposta geral existente,
+sem uma chamada adicional ao Python. Mudar configuração vale no pedido seguinte.
+
+**Equivalência.** Referências congeladas em `crates/hangar-server/tests/fixtures/speech/`,
+capturadas dos helpers e handlers Python antes da remoção: 724 casos de preparo, 60 hashes,
+417 comandos locais, 36 de cliente de texto, 84 HTTP, 12 de ranges de áudio, 10 de histórico
+Pi/omp/Kimi, quatro de janela nativa e 11 de histórico transferido. Os programas de captura estão preservados nas
+próprias referências. Os testes Rust comparam as saídas e exercitam HTTP com o upstream Python
+indisponível. HEAD de áudio continua 405, e tipo MIME, Range e validadores conservam o contrato
+de arquivo anterior, com uma correção: `If-Range` aceita o ETag forte; uma data sem a precisão
+do arquivo recebe o áudio completo (200). Isso impede juntar faixas de representações alteradas
+no mesmo segundo. As duas respostas antigas por data permanecem nas capturas, e a diferença é
+conferida explicitamente nos testes, junto com a alteração de bytes dentro do mesmo segundo.
+
+O hash continua usando a codificação JSON Python, incluindo espaços e floats; áudios remotos já
+em cache não geram novo gasto por causa da migração. A síntese local inclui o SHA-256 do argv
+normalizado na identidade: trocar o comando troca o áudio. O cache local antigo não comprova
+qual comando o produziu e não é reutilizado pela nova síntese; suas URLs continuam legíveis até
+a retenção vencer. Nenhum argumento ou credencial é persistido nessa identidade.
+O contexto da sugestão conserva a janela
+inteira que o consumidor original lia, os hooks e a fila dos provedores, e os snapshots e a
+fronteira das conversas transferidas. Overrides de transferência substituem somente suas
+linhas; uma máquina sem transferência não perde as sessões nativas da sugestão. O resumo
+percorre a janela a partir do fim e guarda no máximo os 3.000 caracteres de contexto anterior,
+conservando a mesma saída sem materializar o texto de todos os eventos.
+
+**Correções do caminho.** Pedidos simultâneos de síntese do mesmo hash compartilham uma
+produção; o aguardante recebe 503 após 30 s, sem liberar a posse do produtor. O áudio atravessa
+um canal de dois blocos de 64 KiB até um temporário exclusivo, fechado e validado antes da troca
+atômica que tolera leitores no Windows. Cancelamento e prazo do motor local conservam sua
+árvore e o guard até o fim da limpeza, mesmo depois de responder 504; stdin e áudio continuam
+binários, sem shell. O comando configurado mantém suas variáveis de provedor, removendo somente
+a autoridade privada do Hangar. Não existe teto arbitrário de bytes que recuse um WAV válido dentro do limite de
+texto. Áudio vazio/inválido, JSON externo inválido e falha de disco têm erro visível.
+Há no máximo dois motores locais simultâneos; a espera por vaga termina em 30 s com 503, e a
+vaga acompanha a limpeza da árvore. A manutenção por pasta roda no máximo uma vez por hora
+enquanto há uso, repetindo após um minuto em caso de erro. Só remove arquivos regulares com
+nome de hash e extensão MP3/WAV. A seleção protege o último uso mesmo quando o mtime de um
+arquivo somente leitura não pode ser renovado; arquivos alheios e links ficam intactos.
+
+O cliente de texto reaproveita conexões, recusa UTF-8 inválido em resposta de sucesso e
+resposta interrompida por limite de tokens, além de redirecionamento de credenciais, sem usar
+assinatura como reserva. Cache e pausa de pensamento distinguem a configuração do provedor;
+o esforço usa o mesmo valor normalizado enviado ao provedor, evitando repetir chamadas por
+espaços externos. Trocar de chave não deixa uma falha antiga bloqueando a tradução nova.
+O prazo do lote inclui
+o item em curso; cancelá-lo conserva o original sem contaminar pausa ou cache. Tradução de
+descrições conserva lotes, resultado parcial e cache persistente; só limite HTTP real provoca repetição.
+Cache ilegível ou corrompido conserva o arquivo e expõe a causa, sem apagar entradas anteriores.
+Erros públicos dos provedores de texto e áudio levam somente status e categoria fixa: o corpo
+externo pode ecoar credenciais codificadas e nunca entra no diagnóstico público. O cache de
+descrições distingue endpoint, modelo e esforço; entradas antigas sem essa identidade ficam
+preservadas no arquivo, mas não são reutilizadas automaticamente. Palavras comuns aos dois
+idiomas não provam idioma, e textos mistos passam pela tradução. O orçamento total é de 60 s,
+incluindo espera pelo mutex, disco, chamadas e backoff; conserva lotes concluídos e responde
+com resultado parcial e causa. Se uma gravação atômica já começou ao vencer o prazo, a exclusão
+acompanha sua conclusão sem atrasar a resposta nem permitir uma gravação concorrente.
+As mensagens corrigidas levam acentos, mantendo os códigos usados pelos clientes.
+
+**Limite de medição.** Uma prova HTTP com provedor controlado mede a borda e o cache do Hangar;
+ela não comprova aceleração da inferência de fala ou do modelo externo. Não atribuir ao Rust
+ganho de ponta a ponta que não tenha sido medido.
+
+## Cofre de senhas: uma máquina dona, chave no chaveiro, uso aprovado por senha (30/10/2026)
+
+**Regra.** O Hangar guarda as senhas do dono num **cofre** único, numa máquina dona; as outras máquinas pedem a ela pelos peers, por qualquer endereço que o
+`peers.json` dá, inclusive o `app.hangar.dev.br`. O arquivo é criptografado e a chave mora no
+chaveiro do sistema da dona. Cada senha é **pedir sempre** (padrão: o uso por agente abre cartão
+e push no celular, espera até 10 min) ou **liberada**. O agente usa por três caminhos: login
+preenchido pelo navegador da sessão (não vê o valor), comando no shell com o valor numa variável
+de ambiente e apagado da saída, e arquivo 0600 que some no fim da sessão ou em 24 h. Entrada pela
+tela dos três clientes e pelo cartão `request_secret`; ver e copiar não pedem confirmação extra.
+O login só é preenchido em entrada com site cadastrado e na página desse site; token sem site
+serve ao shell e ao arquivo. Cópia diária criptografada vai à máquina escolhida em `backup_peer`
+(nesta implantação, a VPS) e abre só com a senha de recuperação que o dono guarda fora.
+Tudo no Rust, espera por evento.
+
+**Por quê.** O pedido é parar de colar senha no chat (fica no transcript e vai ao modelo) e de
+guardar senha em site de terceiro, com acesso fácil pelo celular. Alternativas recusadas:
+gerenciador pronto como ponte (Bitwarden/Vaultwarden), senha mestra só na memória do servidor,
+um cofre por máquina, rede só por Tailscale.
+
+**Medição.** O agente roda com o mesmo usuário do sistema: com a coleção `login` aberta,
+`secret-tool lookup` devolve o que estiver nela sem prompt, então ele consegue a chave do cofre.
+A memória do `hangar-server` ele não lê (`kernel.yama.ptrace_scope=1`; o agente é filho do
+servidor, não o contrário). A VPS medida não tem chaveiro do sistema (sem
+`gnome-keyring-daemon` nem `secret-tool`).
+
+**Medição do item da chave (daemon isolado, HOME/XDG_RUNTIME_DIR/barramento temporários,
+gnome-keyring 51.1, componentes `secrets` e `pkcs11,secrets,ssh`).** `CreateItem` na coleção
+`login` aberta, com sessão `plain`, volta prompt `/` e o valor de 32 bytes lido de volta por
+`GetSecrets` na mesma conexão é igual. Com o `login` trancado, `SearchItems` põe o item na lista
+`locked` e `GetSecret` responde `org.freedesktop.Secret.Error.IsLocked`. O defeito de
+`keyring.rs` (`Get` de cliente que já saiu derruba o daemon) não se reproduziu: 30 `secret-tool
+lookup`, 30 `busctl get-property` com o `login` aberto e trancado, 30 `Get`/`GetAll`/`OpenSession`
+com `--expect-reply=no` (o cliente sai antes da resposta) e `GetSecret` com a sessão de um processo
+que já saiu (`NoSession`) deixaram o daemon de pé. Mesmo assim o cofre abre uma conexão só, que vive
+com o servidor, abre e fecha a sessão `plain` nela e nunca pergunta sem dono do nome
+(`NoAutoStart`): o caso que derrubou o daemon de verdade não foi isolado.
+
+**Limite.** A aprovação e a saída apagada barram o uso normal, não um agente decidido a burlar: com
+a chave no chaveiro ele abre o cofre, e no shell e no arquivo ele vê o valor se quiser. Entre a
+conferência do domínio e o `Input.insertText` há uma janela de milissegundos em que uma navegação
+pode trocar o documento, porque o CDP não amarra a inserção ao documento. Senha que
+passa pelo `app.hangar.dev.br` é decifrada no servidor intermediário. Notebook fechado = nenhuma
+outra máquina tem senha. 2FA fica fora da primeira entrega: o login pede o código num cartão. O
+token do `peers.json` é o token de dono da outra máquina, então a origem de um pedido entre
+máquinas é declarada por quem pede, não conferida: uma máquina com o token, e o agente dela, chama
+as rotas do cofre direto. Endereço de peer que cai no Connect (8768, Python) não alcança o cofre
+até o Connect migrar para o Rust: nenhum repasse no Python. A `X-Hangar-Key` (a `CP_SESSION_KEY`)
+é lida por outro processo do mesmo usuário (`tmux show-environment`): a entrada temporária e a
+liberação do "guardar" presas à sessão evitam engano entre sessões, não um agente hostil. Sessão
+aberta antes de a conta receber o prazo longo passa na conferência (a configuração já está certa no
+disco) e a tool cai em 60 s, porque o agente só lê a configuração ao subir: reabrir resolve.
+
+**Prazo das tools que esperam o dono. Medição (30/10/2026, Claude Code 2.1.314, servidor MCP por
+HTTP, aprovação segurada):** cada POST ao MCP tem um temporizador próprio, o `timeout` do servidor
+ou o `MCP_TOOL_TIMEOUT`, senão 60 s, sem relação com a janela de ociosidade. Três resultados: só com
+`CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT=660000`, o `vault_exec` morreu em 60,5 s com "The operation timed
+out." (o servidor mandou os cabeçalhos do SSE em 1 ms e manteve o fluxo aberto por 90 s, então a falha
+não é dele); com `MCP_TOOL_TIMEOUT=660000`, aprovação em 370 s deu certo; só com `"timeout": 660000`
+na entrada `hangar` (`--strict-mcp-config`, sem variável), aprovação em 370 s deu certo, 389 s no
+total. A variável global foi recusada: baixaria o teto de relógio de todos os outros servidores MCP de
+~28 h para 11 min. O campo por servidor cobre o temporizador de 60 s e a ociosidade (o Claude Code usa
+o maior entre os dois). Por isso o `scripts/registrar-mcp.py` grava `timeout` no `mcpServers.hangar`
+do `.claude.json` de cada conta e `tool_timeout_sec = 660` no `[mcp_servers.hangar]` do `config.toml`
+(o padrão do Codex também é 60 s), e `erro_cofre_sessao_sem_prazo` confere essa configuração da conta
+da sessão. No Codex não vai por `-c`: com o `config.toml` da conta sem `[mcp_servers.hangar]`, `-c
+mcp_servers.hangar.tool_timeout_sec=660` cria o servidor sem transporte e o Codex recusa subir
+("invalid transport in mcp_servers.hangar"). O rmcp não larga o futuro da tool no
+`notifications/cancelled`, só cancela o token: o `call_tool` das tools do cofre corre contra ele, e
+largar a espera cancela o pedido na dona.
+
+**O que sai da máquina e quando a cópia tenta de novo.** O aviso de pedido do cofre leva o nome da
+senha (ou o rótulo do cadastro) e o `servidor::sessao` de quem pede aos provedores de push (Expo e
+Web Push); o valor nunca. A cópia diária que falha (máquina da cópia fora, chaveiro trancado) tenta
+de novo em 1 h, não no dia seguinte.
+
+**`vault_fill`: o que a árvore de acessibilidade mostra. Medição (30/10/2026, Chromium 149.0.7827.55
+do Playwright, sem janela, perfil temporário):** página com um `input type=text` e dois
+`type=password` (um vazio, um com `value` no HTML); `Input.insertText` em cada um com o foco nele;
+`Accessibility.getFullAXTree`. O campo de texto vem com `value` cru (`"meuusuario"`); o de senha vem
+com um `•` por caractere (`"••••••••••••"` para 12), tanto o digitado quanto o do HTML. Nenhuma
+propriedade do nó diz que é senha: os dois são `textbox` com as mesmas `properties`. Por isso o
+snapshot esconde o valor de três jeitos: valor só de `•` nunca sai (nem o tamanho), o nó que o
+`fill-secret` preencheu sai sem `value` mesmo que a acessibilidade exponha senhas, e toda resposta
+de texto do controlador troca a senha preenchida por `••••` (literal, JSON, base64 e percent-encoded)
+enquanto o navegador viver, inclusive depois de a página navegar (a marca do nó some; a máscara não).
+**Limite:** o `eval` continua sendo um oráculo para um agente decidido (`value.length`,
+`value.split('')`, trocar o `type` e tirar `shot`); a máscara barra a leitura comum, não essa.
+
+## Busca, Perguntar e Arquivo no Rust (01/11/2026)
+
+`/api/search`, `/api/search/context`, `/api/ask-history` e `/api/archive*` saíram do Python. O índice
+(`busca-rust.sqlite3`, na pasta do índice de custos) cobre Claude, Codex, Pi, omp e Kimi de todas as
+contas, com duas tabelas FTS5: trigram (pedaço de palavra, acento e caixa ignorados) e `unicode61`
+(palavra inteira). A passada é disparada pelo observador de arquivos (500 ms de calma), não por
+relógio; a primeira roda 90 s depois da subida. O id de cada trecho sai do mesmo filtro de reescrita
+do histórico, então todo trecho abre no contexto.
+
+Ordem: conversas com todos os termos como palavra inteira primeiro, por recência, depois as só de
+pedaço (`whole` no trecho). Sem isso, buscar "tour" listava dez conversas com "estoura" à frente da
+que falava do tour, e o lote de 2000 candidatos recentes escondia a conversa antiga com a palavra
+inteira. Cada trecho traz `provider`, `conta`, `codex_account`, `name` (nome ao fechar) e `preview`;
+o total considerado vai no cabeçalho `X-Hangar-Conversations` (o corpo continua lista: a voz espera
+array). Sem Rust, as rotas respondem 503 `erro_busca_precisa_rust`.
+
+Antes do índice pronto a busca varre os transcripts no processo, sem `rg` (o Windows não precisa mais
+do binário), com os tetos do `rg` e pré-filtro na linha crua antes do JSON.
+
+Medido no uso real (Linux, 878 Claude + 733 Codex + 197 Pi + 86 Kimi + 48 omp, 65 mil mensagens):
+busca com índice 0,01–0,08 s; Arquivo 0,01–0,05 s; Perguntar 8,9 s (com `claude -p`). Primeira
+passada ~5 min. Varredura antes do índice, termo raro: 132 s antes do pré-filtro; depois, 67,3 s →
+7,7 s sobre 521 MB em build de debug. Contrato, inventários (218 itens) e conferência ficaram na
+pasta de fase do trabalho.
+
+## Sessão oculta adormece e acorda onde estava (03/11/2026)
+
+**Regra.** Com "Adormecer sessões ocultas" ligado (Configurações › Sessões; nasce desligado, prazo
+padrão 24 h, de 1 min a `MAX_MINUTES`, separado do prazo de ocultar), a vigia
+`crates/hangar-server/src/session_sleep/` fecha o processo da sessão Claude ou Codex, com ou sem
+terminal, que está oculta e parada além do prazo. A sessão continua na lista com o selo
+"Adormecida". Ler não a acorda; escrever acorda: a mensagem vai para a fila durável, a sessão reabre
+em segundo plano na mesma conversa (com terminal se tinha terminal) e a fila entrega o texto.
+Falha de adormecer vai ao diário (`rust.session_sleep_failed`), nunca à tela; falha de acordar
+marca a sessão com o erro (`mark_live_error`), porque a pessoa mandou e o texto não foi entregue.
+
+**Medição.** Neste notebook, em 03/11/2026, as sessões paradas havia 90–122 h ocupavam 670–850 MB
+cada de RAM+swap, somando todos os processos da árvore do `claude` de cada uma (o próprio Claude
+Code, MCPs e hooks filhos). Sessão oculta e esquecida por dias era o maior consumo de memória fixo
+da máquina, sem nenhum uso.
+
+**Configuração.** `AutoHide` ganhou `sleep: {enabled, after_minutes}` com `#[serde(default)]`; o
+`GET /api/session-auto-hide` sempre o devolve e o `PUT` sem `sleep` mantém o gravado (a web, que
+não recebe recurso novo, continua gravando só o ocultar). Como `AutoHide` tem
+`deny_unknown_fields`, o nativo e o Expo só mandam `sleep` ao servidor cujo `GET` o trouxe: servidor
+antigo responderia 422 e deixaria de gravar até o ocultar. A mudança de API é aditiva e não subiu o
+`CLIENT_API`: app novo com servidor antigo só não mostra a linha nem o selo.
+
+**Quem adormece.** A vigia roda a cada 5 min; desligada, não assina nada. Ligada, assina a lista do
+dono só durante a rodada (até 30 s pela primeira produção boa) e pré-seleciona: `claude` ou `codex`,
+oculta, `idle`, sem `problema`, sem pergunta, ainda não adormecida, sem filha ligada e sem ser filha,
+fora de grupo `orq` (membro cujo `pair_gid` é o da linha `orq` viva), sem convite, sem dono convidado
+e sem par de fora (a vida nova encerraria o acesso deles), sem loop ativo e com `last_activity` além
+do prazo (estrito). Claude sem terminal fica de fora: segue o estacionamento de 65 min de sempre, oculto ou não. A linha é só a
+pré-seleção; quem decide é o `sleep_*` do `RuntimeRegistry`, que fecha a porta de entrada da
+sessão (1 s) e reconfere sob ela: tempo parado pelo mtime do transcript (a linha não é republicada
+quando só `last_activity` muda), fila entregue, pergunta, turno, comandos nos shells do pane,
+terminal do rodapé aberto, cliente do multiplexador anexado e modo só leitura. Qualquer um desses
+desiste (`Ok(false)`), sem erro.
+
+**Marca `asleep`.** Mora no sidecar sem terminal (Claude: `~/.hangar/claude-headless/<nome>.json`;
+Codex: `~/.hangar/codex-sessions/<nome>.json` com `headless: true`), sem `cano`:
+`"asleep": {"wake_surface": "terminal" | "headless", "since": <epoch>}`, e no Codex com terminal
+também `mode` (colaboração, para `plan` voltar `plan`). Sessão com terminal vira sidecar sem terminal
+estacionado com a marca, mas o spec gravado continua `surface: Terminal`: `/conta` e `/recarregar`
+nela reabrem com terminal. Adormecer tira a chave da fotografia de restauração (`restore::forget`) e
+fecha também o shell escondido `term-<nome>`. Renomear leva o sidecar inteiro, marca incluída. A
+linha da lista (`SessionRow.asleep`) é verdadeira para todo sidecar sem terminal sem `cano` vivo e
+fora do registro do Rust, inclusive o Claude sem terminal estacionado nos 65 min: ele também mostra
+"Adormecida".
+
+**Acordar.** Toda escrita (`/input`, Orientar da fila, resposta, `POST` de modo ou modelo, pergunta
+`btw`) numa adormecida passa por `adopt_now`, que dispara `wake` e devolve `session_asleep_waking`; o
+`/input` grava o texto na fila da chave com `pre_transcript` e responde como texto guardado, o resto
+espera. O painel da fila (tirar, editar, mover) não acorda: age no arquivo da fila da chave, senão o
+texto que a pessoa quis cancelar seria entregue; por isso `write_health` responde `true` para a
+adormecida. Acordando, os botões somem e a rota recusa com 409 sem mexer. Antes de a vida nova nascer, o texto guardado desde
+`since` volta à fila com a hora de agora (`restamp_asleep`): a vida com terminal só entrega o que tem
+até 15 min antes do nascimento dela, e um acordar que falhou deixaria o texto de fora. O acordar roda num `tokio::spawn` próprio: cliente que cai no meio não o interrompe, e o sidecar só
+sai dentro dessa tarefa. Uma vaga por sessão (`waking`) garante um acordar só; texto que chega com a
+vaga tomada marca `rewake`, e ao soltar a vaga o acordar se repete se a sessão voltou a dormir (uma
+reabertura de `/conta` que falhou, por exemplo), então nenhum texto fica parado na fila. A subida do
+Rust com adormecida e fila pendente acorda pela marca: com terminal se ela tinha terminal, nunca
+sem. Leituras (`GET permission-modes`, `models`, `commands`, `codex-permissions`, `limits`, a
+listagem do `btw`) respondem pelo arquivo, como a estacionada, e não acordam: passar o mouse numa
+aba não pode subir um Claude de 600 MB. A transferência Claude→Codex numa adormecida é recusada com
+409 `erro_sessao_adormecida`. No Codex com terminal adormecido, pedir a troca para sem terminal
+também recusa, pedir terminal acorda, e `/recarregar` recusa. O histórico de rolagem do pane se
+perde: a sessão volta na conversa, não na tela.
+
+**Codex com terminal.** O motor não acompanha o `/permissions` digitado na TUI e ler a tela é
+proibido, então a permissão do acordar é a **menos permissiva** entre a do último `turn_context` do
+rollout e a gravada no sidecar (que o seletor do app passa a gravar ao confirmar); permissão
+desconhecida confirmada pelo app (`permission_unknown`), rollout ilegível ou política fora dos três
+modos desistem. Ela nunca acorda com mais permissão do que tinha. E só adormece se ninguém se ligou
+nem digitou depois da última rodada: o maior entre `#{session_last_attached}` e
+`#{session_activity}` (tmux, lidos por `list-sessions`) tem de ser anterior ao `timestamp` do último
+`turn_context`; leitura que falha desiste. Preço conhecido, aceito: a sessão cuja última rodada foi
+digitada na TUI quase nunca adormece (o Enter e o desligar movem `session_activity` depois do
+`turn_context`), e os clientes de controle do próprio Hangar contam como ligados. Só o tmux 3.8 foi
+conferido.
+
+**Limites desta etapa.**
+- Windows: Codex com terminal nunca adormece, até alguém conferir se o psmux preenche
+  `session_last_attached`/`session_activity` (sem isso o vazio não prova "nunca ligada"). Codex sem
+  terminal segue a regra geral; Claude com terminal depende de o psmux responder quantos clientes
+  estão anexados (`#{session_attached}`, não conferido), e sem resposta desiste.
+- Pi, omp e Kimi ficam para uma segunda etapa: só existem com terminal, e estado e entrada ainda são
+  do Python.
+- `DELETE` de um Codex durante o acordar com terminal pode ressuscitar a sessão (o fechamento ainda
+  passa pelo Python, que não respeita a porta).
+- O acordar não passa pelo `during_life_change`: convite de compartilhamento ativo não acompanha a
+  vida nova.
+- Rótulo nos clientes: trilho, aba estreita, aba-mãe e etiquetas das filhas do nativo e as abas e o
+  trilho do tablet no Expo dizem "Adormecida" só na dica e no leitor de tela, por largura.
+
+**Riscos e onde estão testados.** Os testes de integração (`tests/it/runtime_claude_reopen.rs`,
+`runtime_codex_watch.rs`) cobrem os cinco riscos do desenho: duas mensagens seguidas = um acordar e
+as duas entregues em ordem pela vida nova; cliente que desconecta no meio do acordar; reinício do
+Rust com adormecida e fila pendente; atividade entre a escolha da vigia e o fechamento; texto
+gravado na geração antiga entregue pela nova. O tmux é falso nesses testes: a garantia é "acordou e
+a mensagem está na fila da vida nova", não a resposta do agente. Plano e decisões em
+`docs/superpowers/plans/2026-11-03-adormecer-sessoes-ocultas.md`.
+
+**Prova em uso real (03/11/2026).** Build de `c2f9e053e` mais as correções abaixo, com a vigia
+limitada a `cx-*` e rodada de 60 s só nesse binário, no servidor deste notebook. Claude com terminal,
+Codex com e sem terminal, prazo de 1 min: adormeceram em uma ou duas rodadas e ficaram sem processo
+(primeira rodada: 381, 295 e 765 MB, RAM+swap da árvore de cada sessão). `GET` de histórico e de modos
+não acordou, e reiniciar o backend manteve as três adormecidas. A mensagem acordou cada uma na mesma
+conversa, com a superfície de antes, e o agente respondeu a palavra guardada antes de dormir. No
+Claude, duas mensagens seguidas chegaram em ordem. Não conferido: selo e tela nos clientes, psmux.
+
+**O que o uso real achou e o Codex falso não.** O Codex real recusa tudo antes do `initialize` com
+`Not initialized`, e o falso aceitava. Dois defeitos: a vista gravada da vida anterior (`ready`,
+`initialized`) fazia o processo novo pular a subida, e a mensagem ficava sem entrega; e a reaprovação
+de hooks sem resposta respondia a uma operação que a fila nunca teve, o que punha o ator em erro
+(`queue_io`, `operação não preparada`). Processo recém-lançado agora zera as duas marcas
+(`open_with_launch`), e a reaprovação não responde à fila (`in_queue`, em `codex.rs`).

@@ -266,6 +266,8 @@ pub struct Appearance {
     pub jev_delivery: bool,
     /// Contas e modelos em uma linha por conta, sem barras: escolha deste aparelho, como no web.
     pub accounts_compact: bool,
+    /// Bandeja "Máquinas e convidados" sem a última resposta, o anel de contexto, as linhas mudadas e o modelo.
+    pub machines_tray_compact: bool,
     pub sidebar_group: SidebarGroup,
     pub side_tab: SideTab,
     pub terminal_font: CodeFont,
@@ -290,7 +292,7 @@ const DEFAULT: Appearance = Appearance { panels: Panels::Attached, theme: ThemeM
     navigation: Navigation::Sidebar, show_remote_tabs: true, sidebar_width: None, sidebar_compact: false, tabs_full: false, tab_preview: false, tabs_working_first: false, tabs_recent_first: false, live_corner: [16., 16.],
     side_width: 300., side_browser_width: None, terminal_height: 260.,
     tool_look: ToolLook::Classic, task_list: false, thinking_tools: ThinkingTools::Search, thinking_collapsed: false, table_chart: false, ask_highlight: AskHighlight::Accent,
-    language: Language::System, currency: Currency::Usd, hands_free: false, skip_chat_confirmations: false, steer_while_working: false, jev_delivery: false, accounts_compact: false, sidebar_group: SidebarGroup::None, side_tab: SideTab::Context,
+    language: Language::System, currency: Currency::Usd, hands_free: false, skip_chat_confirmations: false, steer_while_working: false, jev_delivery: false, accounts_compact: false, machines_tray_compact: false, sidebar_group: SidebarGroup::None, side_tab: SideTab::Context,
     terminal_font: CodeFont::JetBrainsMono, terminal_size: 12, code_font: CodeFont::JetBrainsMono, code_size: 25, keep_in_tray: false, chrome_autofill: false, full_chrome: false };
 
 impl Default for Appearance {
@@ -313,7 +315,7 @@ impl Appearance {
             thinking_tools: self.thinking_tools, table_chart: self.table_chart, navigation: self.navigation, show_remote_tabs: self.show_remote_tabs, sidebar_width: self.sidebar_width, sidebar_compact: self.sidebar_compact, live_corner: self.live_corner,
             side_width: self.side_width, side_browser_width: self.side_browser_width, terminal_height: self.terminal_height,
             language: self.language, currency: self.currency, hands_free: self.hands_free, skip_chat_confirmations: self.skip_chat_confirmations,
-            steer_while_working: self.steer_while_working, jev_delivery: self.jev_delivery, accounts_compact: self.accounts_compact, sidebar_group: self.sidebar_group, side_tab: self.side_tab,
+            steer_while_working: self.steer_while_working, jev_delivery: self.jev_delivery, accounts_compact: self.accounts_compact, machines_tray_compact: self.machines_tray_compact, sidebar_group: self.sidebar_group, side_tab: self.side_tab,
             code_font: self.code_font, terminal_font: self.terminal_font, keep_in_tray: self.keep_in_tray, chrome_autofill: self.chrome_autofill, full_chrome: self.full_chrome,
             ..Self::default() }
     }
@@ -378,6 +380,47 @@ pub(crate) fn dir() -> Option<PathBuf> {
 }
 
 fn path() -> Option<PathBuf> { Some(dir()?.join("appearance.json")) }
+
+/// O que já foi visto do tour e das dicas (`tour::state`).
+pub(crate) fn tour_path() -> Option<PathBuf> { Some(dir()?.join("tour.json")) }
+
+/// Bloqueante. Arquivo ausente é `None`; ilegível ou inválido volta com o motivo, para quem precisa não gravar por cima.
+pub(crate) fn read_json<T: serde::de::DeserializeOwned>(path: &std::path::Path) -> Result<Option<T>, String> {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("arquivo ilegível em {}: {e}", path.display())),
+    };
+    serde_json::from_slice(&bytes).map(Some).map_err(|e| format!("arquivo inválido em {}: {e}", path.display()))
+}
+
+/// Arquivo ausente é a primeira abertura; ilegível vai ao log em vez de voltar ao padrão sem explicação.
+pub(crate) fn load_json<T: serde::de::DeserializeOwned + Default>(path: Option<PathBuf>) -> T {
+    let Some(path) = path else { return T::default() };
+    read_json(&path).unwrap_or_else(|e| { eprintln!("{e}"); None }).unwrap_or_default()
+}
+
+/// Bloqueante. Só a geração mais nova de cada arquivo grava, trocando o arquivo inteiro (tmp + rename), como `save`.
+pub(crate) fn save_json<T: serde::Serialize>(path: Option<PathBuf>, generation: u64, written: &std::sync::Mutex<u64>, saved: &T) -> std::io::Result<()> {
+    let mut written = written.lock().unwrap_or_else(|e| e.into_inner());
+    if generation <= *written { return Ok(()); }
+    let path = path.ok_or_else(|| std::io::Error::other("sem pasta de configuração"))?;
+    std::fs::create_dir_all(path.parent().expect("arquivo dentro de hangar-native"))?;
+    let tmp = path.with_extension("tmp");
+    let bytes = serde_json::to_vec(saved).map_err(std::io::Error::other)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    // Só do usuário: o `tour.json` guarda os ids dos celulares.
+    #[cfg(unix)] { use std::os::unix::fs::OpenOptionsExt; options.mode(0o600); }
+    let mut file = options.open(&tmp)?;
+    // O `mode` só vale na criação: um tmp que sobrou levaria o modo antigo ao arquivo no `rename`.
+    #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; file.set_permissions(std::fs::Permissions::from_mode(0o600))?; }
+    std::io::Write::write_all(&mut file, &bytes)?;
+    drop(file);
+    std::fs::rename(&tmp, &path)?;
+    *written = generation;
+    Ok(())
+}
 
 /// Cópia da imagem de fundo escolhida: o original pode sumir ou mudar depois.
 pub fn image_path() -> Option<PathBuf> { Some(dir()?.join("background-image")) }

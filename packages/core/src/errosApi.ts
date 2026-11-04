@@ -289,6 +289,13 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   // Existencia: sessao/pane/transcript que nao existe (shell, rename, loop, history,
   // workflows, subagents, events, uploads, plan, file, model/options, engine/model)
   erro_sessao_inexistente: () => m.erro_sessao_inexistente(),
+  // Ocultar da lista e ocultação automática.
+  session_hidden_owner_only: () => m.session_hidden_owner_only(),
+  session_hidden_no_key: () => m.session_hidden_no_key(),
+  session_hidden_store_failed: () => m.session_hidden_store_failed(),
+  session_auto_hide_owner_only: () => m.session_auto_hide_owner_only(),
+  session_auto_hide_invalid: () => m.session_auto_hide_invalid(),
+  session_auto_hide_store_failed: () => m.session_auto_hide_store_failed(),
   erro_sessao_nao_encontrada_detalhe: (p) => m.erro_sessao_nao_encontrada_detalhe({ detalhe: String(p.detalhe) }),
   erro_sessao_recado_nao_enfileirado: () => m.erro_sessao_recado_nao_enfileirado(),
   erro_sessao_opcao_nao_enviada: () => m.erro_sessao_opcao_nao_enviada(),

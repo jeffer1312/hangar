@@ -39,7 +39,8 @@ vi.mock('@react-native-menu/menu', () => ({ MenuView: ({ children }: React.Props
   React.createElement('div', { 'data-menu': true }, children) }));
 vi.mock('../ui/Icon', () => ({ Icon: ({ name, color }: { name: string; color: string }) =>
   React.createElement('span', { 'data-icon': name, style: { color } }) }));
-vi.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 34, left: 0, right: 0 }) }));
+vi.mock('../stores/prefs', () => ({ prefs: { getBoolean: () => undefined, set: () => {} } }));
+vi.mock('react-native-safe-area-context',() => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 34, left: 0, right: 0 }) }));
 vi.mock('react-native-keyboard-controller', () => ({ KeyboardAvoidingView: ({ children, ...props }: React.PropsWithChildren<typeof calls.keyboard>) => {
   calls.keyboard = props;
   return React.createElement('div', null, children);

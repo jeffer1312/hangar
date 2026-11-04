@@ -20,6 +20,11 @@ export const sessionGroupKey = (mode: GroupBy, id: string) => id.startsWith('sta
 
 const rowKey = (r: AggSession) => `${r.serverId}::${r.name}`;
 
+/** O que fazer com as linhas `hidden_from_list`: cada tela escolhe, nenhuma herda sem querer.
+ *  `collapsed`/`expanded`: seção "Ocultas (N)" no fim (lista, seletor); `exclude`: fora (barra do tablet). */
+export type HiddenRows = 'collapsed' | 'expanded' | 'exclude';
+export const HIDDEN_SECTION_ID = 'hidden';
+
 // O grupo é um bloco só, com os membros de todas as máquinas, onde o primeiro deles cairia na lista.
 // Recolhido, o bloco guarda só o primeiro membro, que carrega o cabeçalho.
 function gatherGroups(sections: GrupoSessoes[], groupOf: ReadonlyMap<string, GlobalGroup>, collapsedGroups: ReadonlySet<string>) {
@@ -48,8 +53,18 @@ function gatherGroups(sections: GrupoSessoes[], groupOf: ReadonlyMap<string, Glo
   return { sections: out, heads };
 }
 
-export function buildSessionSections(rows: AggSession[], mode: GroupBy, search: string, collapsedGroups: ReadonlySet<string>, preferredServerId?: string, pairGroups: GlobalGroup[] = []): SessionSection[] {
-  const liveRows = rows.filter((r) => r.state !== 'dead');
+export function buildSessionSections(rows: AggSession[], hiddenRows: HiddenRows, mode: GroupBy, search: string, collapsedGroups: ReadonlySet<string>, preferredServerId?: string, pairGroups: GlobalGroup[] = [], keep?: string): SessionSection[] {
+  const allLive = rows.filter((r) => r.state !== 'dead');
+  // A sessão de fora acompanha a do par: some e volta junto com ela. `keep` (a aberta) fica no lugar,
+  // e sendo de fora leva a do par, onde ela se encaixa; as outras de fora do mesmo par ficam com ela.
+  const hiddenKeys = new Set(allLive.filter((r) => r.hidden_from_list).map(rowKey));
+  const anchorKey = (r?: AggSession) => r?.outside && `${r.outside.localServerId}::${r.outside.localSession}`;
+  const kept = new Set([keep, anchorKey(allLive.find((r) => rowKey(r) === keep))]);
+  const isHidden = (r: AggSession) => {
+    const anchor = anchorKey(r);
+    return (hiddenKeys.has(rowKey(r)) && !kept.has(rowKey(r))) || (!!anchor && hiddenKeys.has(anchor) && !kept.has(anchor));
+  };
+  const liveRows = hiddenKeys.size ? allLive.filter((r) => !isHidden(r)) : allLive;
   const live = new Set(liveRows.map(rowKey));
   const groupOf = new Map<string, GlobalGroup>();
   for (const g of pairGroups) {
@@ -80,10 +95,19 @@ export function buildSessionSections(rows: AggSession[], mode: GroupBy, search: 
     groups.sort((a, b) => rank(a.id) - rank(b.id)
       || Number(b.id === preferredServerId) - Number(a.id === preferredServerId) || a.label.localeCompare(b.label));
   }
-  return groups.filter((g) => g.sessions.length).map((g) => {
+  const out: SessionSection[] = groups.filter((g) => g.sessions.length).map((g) => {
     const collapsed = !!g.label && collapsedGroups.has(sessionGroupKey(mode, g.id));
     // o grupo recolhido ainda conta todos os membros
     const total = g.sessions.reduce((n, r) => { const h = gathered.heads.get(rowKey(r)); return n + (h?.collapsed ? h.size : 1); }, 0);
     return { id: g.id, label: g.label, color: g.color, total, collapsed, data: collapsed ? [] : g.sessions, heads: gathered.heads };
   });
+  if (hiddenRows !== 'collapsed' && hiddenRows !== 'expanded') return out;
+  const hidden = allLive.filter((r) => isHidden(r) && matches(r));
+  if (!hidden.length) return out;
+  // Lista corrida de todas as máquinas, sem blocos de grupo; buscando, a seção abre como os grupos.
+  const data = placeOutside([{ id: HIDDEN_SECTION_ID, label: '', color: null, sessions: sortSessions(hidden.filter((r) => !r.outside)) }],
+    hidden.filter((r) => r.outside), mode, hidden)[0].sessions;
+  const collapsed = hiddenRows === 'collapsed' && !search;
+  return [...out, { id: HIDDEN_SECTION_ID, label: m.session_hidden_group({ n: data.length }), color: null, total: data.length,
+    collapsed, data: collapsed ? [] : data, heads: new Map() }];
 }

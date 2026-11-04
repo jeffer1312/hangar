@@ -2,13 +2,14 @@
 import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AggSession, GroupBy, Server, SessionInfo } from '@hangar/core';
+import { OFFLINE_NOTICE_MS, type AggSession, type GroupBy, type Server, type SessionInfo } from '@hangar/core';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const calls = vi.hoisted(() => ({
   alert: vi.fn(),
   deleteSession: vi.fn(),
+  hideSession: vi.fn(),
   error: vi.fn(),
   ok: vi.fn(),
   push: vi.fn(),
@@ -27,6 +28,7 @@ const calls = vi.hoisted(() => ({
 vi.mock('@hangar/core', async (original) => ({
   ...await original<typeof import('@hangar/core')>(),
   deleteSession: calls.deleteSession,
+  hideSession: calls.hideSession,
   rotaDecidida: () => true,
   probeServerResponse: async (server: Server) => ({ ok: true, status: 200,
     json: async () => calls.sessions.map((s) => ({ ...s,
@@ -63,6 +65,7 @@ vi.mock('@react-native-menu/menu', () => ({
       React.createElement('button', { key: action.id, 'data-action': action.id, 'data-state': action.state,
         onClick: () => onPressAction({ nativeEvent: { event: action.id } }) }, action.title)) : [])),
 }));
+vi.mock('../../stores/prefs', () => ({ prefs: { getBoolean: () => undefined, set: () => {} } }));
 vi.mock('../../ui/HangarMark', () => ({ HangarMark: () => null }));
 vi.mock('../../ui/Icon', () => ({ Icon: () => null }));
 vi.mock('../../ui/Toast', () => ({ toast: { erro: calls.error, ok: calls.ok } }));
@@ -83,14 +86,24 @@ vi.mock('../pair/leaveExternal', () => ({ leaveExternal: vi.fn() }));
 vi.mock('./ConversationList', () => ({ ConversationList: () => null }));
 vi.mock('./RenameSheet', () => ({ RenameSheet: () => null }));
 vi.mock('../worktrees/WorktreeSheet', () => ({ WorktreeSheet: () => null }));
+vi.mock('../vault/VaultRequests', () => ({ VaultRequests: ({ byServer }: { byServer: { server: { id: string } }[] }) =>
+  React.createElement('div', { 'data-vault-servers': byServer.map((bucket) => bucket.server.id).join(',') }) }));
 vi.mock('../../paraglide/messages', () => ({ ...Object.fromEntries((
   'lista_agrupar_nenhum lista_agrupar_servidor lista_agrupar_projeto lista_agrupar ' +
   'native_brand lista_buscar lista_filtrar lista_filtro_limpar native_connected config_modal_titulo switcher_buscar_conversas nav_custos ' +
   'native_new_chat_title native_sidebar_all_sessions lista_sessoes_plural sessao_expandir sessao_recolher ' +
   'lista_carregando lista_vazia_filtro lista_nenhuma_ativa comum_cancelar sessao_excluir sessao_excluir_curto servidor_nao_existe ' +
-  'comum_carregando lista_nenhum_servidor lista_pareie_qr native_sidebar_awaiting home_sessions_awaiting home_sessions_working home_sessions_ready sessao_recolher ' +
-  'sessao_renomear sessao_git convite_parar orq_row_badge native_par_convidar native_par_menu sessao_worktree_abrir'
+  'comum_carregando lista_nenhum_servidor lista_pareie_qr native_sidebar_awaiting home_sessions_awaiting home_sessions_working home_sessions_ready home_machines_offline sessao_recolher ' +
+  'sessao_renomear sessao_git convite_parar orq_row_badge native_par_convidar native_par_menu sessao_worktree_abrir ' +
+  'session_hide_from_list session_show_in_list session_hide_waiting session_hide_group_title session_hide_only_this estado_aguardando'
 ).split(' ').map((key) => [key, () => key])),
+  grupo_selo_maquinas: ({ n }: { n: number }) => `grupo_selo_maquinas:${n}`,
+  par_grupo_titulo: ({ n }: { n: number }) => `par_grupo_titulo:${n}`,
+  session_hide_whole_group: ({ n }: { n: number }) => `session_hide_whole_group:${n}`,
+  session_hide_group_skipped: ({ names }: { names: string }) => `session_hide_group_skipped:${names}`,
+  session_hidden_group: ({ n }: { n: number }) => `session_hidden_group:${n}`,
+  session_hide_failed: ({ error }: { error: string }) => `session_hide_failed:${error}`,
+  session_show_failed: ({ error }: { error: string }) => `session_show_failed:${error}`,
   home_sessions_more_ready: ({ n }: { n: number }) => `home_sessions_more_ready:${n}`,
   lista_buscar_dentro: ({ q }: { q: string }) => `lista_buscar_dentro:${q}`,
   lista_servidor_offline: ({ label }: { label: string }) => `${label}:offline`,
@@ -600,6 +613,12 @@ describe('SessionList', () => {
     expect(names()).toEqual(['ready-a', 'ready-a-outside', 'ready-b', 'ready-b-outside']);
   });
 
+  it('os pedidos do cofre recebem os servidores da lista', async () => {
+    await mount({ variant: 'home' });
+    await act(async () => useSessions.setState({ byServer: [{ server, sessions: [], loaded: true, error: null }] }));
+    expect(container.querySelector('[data-vault-servers]')?.getAttribute('data-vault-servers')).toBe(server.id);
+  });
+
   it('home mostra carregamento, vazio e falha identificada por máquina', async () => {
     await mount({ variant: 'home' });
     await act(async () => useSessions.setState({ rows: [], loading: true }));
@@ -610,6 +629,29 @@ describe('SessionList', () => {
     await act(async () => useSessions.setState({ byServer: [{ server, sessions: [], loaded: true, error: 'list-unavailable' }] }));
     expect(container.textContent).toContain('fixture-server: list-unavailable');
     expect(container.textContent).not.toContain('lista_nenhuma_ativa');
+  });
+
+  it('home mostra a máquina offline só no começo da queda e some sozinha depois', async () => {
+    await mount({ variant: 'home' });
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    try {
+      const offline = { server, sessions: [], loaded: false, error: 'offline', offlineSince: Date.now() };
+      await act(async () => useSessions.setState({ rows: [], loading: false, byServer: [offline] }));
+      expect(container.textContent).toContain('fixture-server:offline');
+      await act(async () => vi.advanceTimersByTime(OFFLINE_NOTICE_MS - 1));
+      expect(container.textContent).toContain('fixture-server:offline');
+      // O timer pode disparar um pouco antes do fim da janela: o aviso não pode ficar preso.
+      vi.setSystemTime(Date.now() - 1);
+      await act(async () => vi.advanceTimersByTime(1));
+      expect(container.textContent).not.toContain('fixture-server:offline');
+      // Sem lista nem aviso: não volta a dizer "carregando" para a máquina desligada.
+      expect(container.textContent).not.toContain('fixture-server: lista_carregando');
+      // Todas as máquinas fora: lista vazia não diz "nenhuma sessão ativa".
+      expect(container.textContent).toContain('home_machines_offline');
+      expect(container.textContent).not.toContain('lista_nenhuma_ativa');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('Nova conversa usa sua ação própria sem confundir fechamento para navegação', async () => {
@@ -772,6 +814,55 @@ describe('SessionList', () => {
     expect(container.querySelector('[data-row]')).toBeNull();
     expect(container.textContent).toContain('lista_vazia_filtro');
     expect(container.textContent).not.toContain('lista_nenhuma_ativa');
+  });
+
+  describe('ocultar sessão em grupo', () => {
+    async function mountGroup() {
+      calls.realRow = true;
+      calls.hideSession.mockImplementation(async (_server: Server, name: string) => {
+        if (name === 'beta') throw new Error('boom');
+      });
+      useServers.setState({ servers: [server, { ...server, id: 'srv2', label: 'another-server', baseUrl: 'https://another.test' }] });
+      await mount();
+      const row = useSessions.getState().rows[0];
+      await act(async () => useSessions.setState({ loading: false, rows: [
+        { ...row, name: 'alpha', pair_gid: 'g1', state: 'idle' },
+        { ...row, name: 'beta', pair_gid: 'g1', state: 'idle' },
+        { ...row, name: 'gamma', pair_gid: 'g1', state: 'idle', serverId: 'srv2' },
+        { ...row, name: 'waiting', pair_gid: 'g1', state: 'awaiting_input' },
+        { ...row, name: 'solo', state: 'idle' },
+      ] }));
+    }
+    const hideOf = (name: string) => [...container.querySelectorAll<HTMLButtonElement>('[data-action="hide"]')]
+      .find((b) => b.parentElement!.querySelector(`button[aria-label^="${name},"]`))!;
+    const choice = (text: string) => calls.alert.mock.calls[0][2].find((b: { text: string }) => b.text === text);
+
+    it('fora de grupo oculta direto, sem perguntar', async () => {
+      await mountGroup();
+      await act(async () => hideOf('solo').click());
+      expect(calls.alert).not.toHaveBeenCalled();
+      expect(calls.hideSession).toHaveBeenCalledExactlyOnceWith(server, 'solo');
+    });
+
+    it('pergunta e "só esta" oculta apenas a clicada', async () => {
+      await mountGroup();
+      await act(async () => hideOf('alpha').click());
+      expect(calls.alert.mock.calls[0][0]).toBe('session_hide_group_title');
+      expect(calls.alert.mock.calls[0][2].map((b: { text: string }) => b.text))
+        .toEqual(['comum_cancelar', 'session_hide_only_this', 'session_hide_whole_group:3']);
+      expect(calls.hideSession).not.toHaveBeenCalled();
+      await act(async () => choice('session_hide_only_this').onPress());
+      expect(calls.hideSession).toHaveBeenCalledExactlyOnceWith(server, 'alpha');
+    });
+
+    it('"grupo inteiro" oculta cada uma no próprio servidor e junta as falhas num aviso', async () => {
+      await mountGroup();
+      await act(async () => hideOf('alpha').click());
+      await act(async () => choice('session_hide_whole_group:3').onPress());
+      expect(calls.hideSession.mock.calls.map(([s, name]) => `${(s as Server).id}::${name as string}`))
+        .toEqual(['srv1::alpha', 'srv1::beta', 'srv2::gamma']);
+      expect(calls.error).toHaveBeenCalledExactlyOnceWith('session_hide_group_skipped:beta\nboom');
+    });
   });
 
   it('grupo recolhido não mostra aviso de lista vazia', async () => {

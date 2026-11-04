@@ -61,6 +61,16 @@ export interface SessionInfo {
   worktree_gone?: boolean;
   /** Raiz do repositório onde o agente trabalha quando saiu do da pasta de abertura; o git da sessão é lido ali. */
   git_cwd?: string | null;
+  /** Nome sugerido para a sessão de nome genérico; some quando a pessoa renomeia ou diz "agora não". */
+  rename_suggestion?: string | null;
+  /** A sugestão saiu com pouco contexto: o servidor gera outra na próxima mensagem da pessoa. */
+  rename_weak?: boolean;
+  /** Fora da lista principal (oculta à mão ou parada além do prazo); o servidor só manda quando é `true`. */
+  hidden_from_list?: boolean;
+  /** Sem processo vivo; acorda na próxima mensagem. O servidor só manda quando é `true`. */
+  asleep?: boolean;
+  /** Onde a sessão adormecida reabre ao acordar. */
+  wake_surface?: 'terminal' | 'headless';
   /** Servidores MCP criados por plugin (`$.tool.register`); a pele 'terminal' deixa as chamadas deles fora da dobra. */
   plugin_tool_servers?: string[] | null;
   // Linhas adicionadas/removidas no working tree vs HEAD (git diff --numstat, staged+unstaged;
@@ -108,6 +118,8 @@ export interface SessionInfo {
   // Statusline crua da sessão (cache ~20s no backend) — o card do board/canvas parseia com
   // parseStatusLine (modelo/contexto no composer; ⚡5h/📅7d na RateStrip). Chat usa a versão ao vivo.
   status_line?: string | null;
+  // Contexto lido do transcript pela lista do Rust (só Claude); vence a statusline no anel.
+  context?: { used: number; 'window': number } | null;
   // Id do modelo em uso na sessão Claude (`claude-opus-5-5[1m]`), resolvido pelo backend: dá nome à
   // pílula quando a statusline não é a do Hangar ou ainda não chegou.
   model?: string | null;
@@ -172,6 +184,10 @@ export interface AggSession extends SessionInfo {
   serverColor: string;
   // A linha veio de um servidor de convite: é a sessão de outra pessoa, compartilhada com você.
   serverInvite?: boolean;
+  // Do evento `tags` da lista; `null` = servidor sem etiqueta ou versão antiga.
+  machineTag?: import('./tags').Tag | null;
+  // Conta da linha (`conta`) como o servidor a mostra; `null` = conta desconhecida ou sem evento.
+  accountTag?: import('./tags').AccountBadge | null;
   // Sessão de fora posta no grupo local por `placeExternalRows`; `serverId` continua o da entrada
   // do convite (é por ela que a sessão é chamada).
   outside?: OutsideMark;
@@ -230,7 +246,27 @@ export interface ChatEvent {
   skill?: { name: string; path?: string | null; body: string } | null;
 }
 
+export interface CodexCommand {
+  id: string;
+  process_id: string;
+  command: string;
+  started_at: number;
+  background: boolean;
+}
+
+export interface CodexSubagent {
+  agent_path: string | null;
+  activity_revision?: number;
+  state: 'running' | 'finished' | 'failed' | null;
+  ended_at: number | null;
+  can_message: boolean;
+  message_blocked: string | null;
+}
+export type CodexSubagents = Record<string, CodexSubagent>;
+
 export interface StateEvent {
+  codex_subagents?: CodexSubagents;
+  codex_commands?: CodexCommand[];
   interaction_id?: string | null;
   codex_service_tier?: string | null;
   codex_buffering?: boolean;
@@ -340,6 +376,8 @@ export interface WorkflowAgent {
 // Subagente solto (tool Agent), lido do transcript dele em <session-dir>/subagents/.
 export interface SubagentRun {
   agentId: string;
+  agentPath?: string | null;
+  nickname?: string | null;
   agentType: string | null;
   prompt: string | null;
   startedAt: string;
@@ -1029,6 +1067,10 @@ export interface AtualizacaoEstado {
   reiniciar_manual?: boolean;
   /** O último reinício pedido pela tela falhou. Escrito pelo processo destacado, único canal dele. */
   reinicio_erro?: string | null;
+  /** Relatório automático da falha: `pendente` enquanto sai, depois o código do worker. */
+  relatorio?: string;
+  /** Código do erro quando o relatório automático não saiu. */
+  relatorio_erro?: string;
   /** Arquivos de `docs/atualizacoes/` que o app ignorou por estarem malformados. */
   passos_invalidos?: string[];
   /** Comandos e saída, pra tela poder mostrar o que está rodando agora. */
@@ -1070,6 +1112,8 @@ export interface Atualizacao {
   /** Commits em origin/main que ainda não estão aqui. */
   atras?: number;
   atualizacao_disponivel: boolean;
+  /** Aviso importante ainda não aceito: oferece o Atualizar mesmo sem versão nova. */
+  pending_warning?: boolean;
   /** API de cliente do servidor publicado para esta máquina; ausente em servidor anterior = 1. */
   api_publicado?: number;
   mudancas: AtualizacaoMudanca[];
@@ -1125,7 +1169,9 @@ export interface MigrationStatus {
 }
 
 /** `GET /api/update/notes`: o que a próxima atualização traz, lido antes de atualizar. */
-export interface UpdateWarning { id: string; title: string; text: string }
+export type UpdateMode = 'package' | 'developer';
+/** `choice: 'mode'` = o aviso da migração, que pede o modo; `mode` é o atual (`null` = não migrou). */
+export interface UpdateWarning { id: string; title: string; text: string; choice?: 'mode'; mode?: UpdateMode | null }
 export type UpdateNewsKind = 'new' | 'improvement' | 'fix';
 export type UpdateNewsPlatforms = 'desktop' | 'mobile' | 'all';
 export interface UpdateNews {
@@ -1137,4 +1183,5 @@ export interface UpdateNews {
   try_it: string | null;
   animation: string | null;
 }
-export interface UpdateNotes { target: string; warnings: UpdateWarning[]; news: UpdateNews[] }
+/** `incomplete`: o servidor não leu os avisos da versão nova (só o da migração, que é local). */
+export interface UpdateNotes { target: string; warnings: UpdateWarning[]; news: UpdateNews[]; incomplete?: boolean }

@@ -1,0 +1,15 @@
+[package]
+name = "hangar-auth"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+serde.workspace = true
+serde_json = { workspace = true, features = ["float_roundtrip"] }
+subtle.workspace = true
+tempfile.workspace = true
+ring = "=0.17.14"

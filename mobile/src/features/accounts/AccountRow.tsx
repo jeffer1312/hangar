@@ -1,4 +1,4 @@
-import { memo } from 'react';
+import { memo, useState } from 'react';
 import { Text, View } from 'react-native';
 import Animated, { FadeIn, FadeInDown, FadeOut, LinearTransition, useReducedMotion } from 'react-native-reanimated';
 import { StyleSheet } from 'react-native-unistyles';
@@ -9,6 +9,8 @@ import { ProviderGlyph } from '../../ui/ProviderGlyph';
 import { AccountUsage } from './AccountUsage';
 import { AccountReset } from './CodexReset';
 import { ClaudeAccountActions } from './ClaudeAccountActions';
+import { MachineSheet } from '../machines/parts';
+import { TagEditor } from '../tags/TagEditor';
 import * as m from '../../paraglide/messages';
 
 export type AccountRowData = {
@@ -74,6 +76,9 @@ export const AccountRow = memo(function AccountRow({ row, term, enterIndex, serv
   const c = useSettingsColors();
   const reduced = useReducedMotion();
   const { credential, account } = row;
+  // A folha só monta na primeira abertura. Convidado não tem `/api/tags`.
+  const [tagOpen, setTagOpen] = useState(false);
+  const tagServer = credential && server && !server.invite ? server : null;
   const entering = reduced ? undefined : enterIndex == null ? FadeIn.duration(320)
     : FadeInDown.duration(500).delay(35 * Math.min(enterIndex, 12)).withInitialValues({ opacity: 0, transform: [{ translateY: 4 }] });
   return (
@@ -97,6 +102,16 @@ export const AccountRow = memo(function AccountRow({ row, term, enterIndex, serv
         {credential && server ? <AccountReset server={server} credential={credential} /> : null}
         {credential?.tipo === 'claude' && server ? (
           <ClaudeAccountActions server={server} credential={credential} onChanged={handlers.refreshClaude} />
+        ) : null}
+        {tagServer ? (
+          <View style={styles.actions}>
+            <Pill icon="Tag" label={m.tags_account_title()} onPress={() => setTagOpen(true)} />
+          </View>
+        ) : null}
+        {tagOpen && tagServer && credential ? (
+          <MachineSheet title={m.tags_account_title()} onClose={() => setTagOpen(false)}>
+            <TagEditor target={{ kind: 'account', server: tagServer, accountId: credential.id, provider: row.provider || credential.tipo }} />
+          </MachineSheet>
         ) : null}
         {row.engineName && engineReady ? (
           <View style={styles.actions}>

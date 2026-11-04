@@ -4,7 +4,7 @@ use crate::terminal_input::{self as input,TerminalBinding,TerminalDriver,Termina
 use crate::mods::click::{Pane,PaneFuture,PaneOp,PaneReply};
 use crate::interactions::{ExpectedInteraction,InteractionBinding,InteractionError,InteractionStore,runtime_error};
 use serde_json::{Value,json};
-use std::{collections::VecDeque,path::PathBuf,sync::{Arc,atomic::{AtomicBool,AtomicU64,Ordering}},time::{Duration,SystemTime,UNIX_EPOCH}};
+use std::{collections::VecDeque,path::{Path,PathBuf},sync::{Arc,atomic::{AtomicBool,AtomicU64,Ordering}},time::{Duration,SystemTime,UNIX_EPOCH}};
 use tokio::sync::{Mutex,mpsc,oneshot,broadcast};
 use super::terminal_status::{self, StatusSender};
 
@@ -47,6 +47,8 @@ const FOCUS_STEP_POLL:Duration=Duration::from_millis(20);
 /// foram. É da linha, como a série do `Stall`: a linha seguinte começa do zero.
 struct Away {row:String,since:tokio::time::Instant,next:tokio::time::Instant,tries:u32}
 fn error(code:&str)->RuntimeError {RuntimeError::new(code,"operação terminal conservada no diário")}
+pub const GIVE_UP_COMPOSER_BUSY:&str="terminal_give_up_composer_busy";
+pub const GIVE_UP_COMPOSER_UNREAD:&str="terminal_give_up_composer_unread";
 /// O Claude só põe o bypass no Shift+Tab de quem nasceu com ele.
 /// argv ilegível é erro com código, nunca "sem bypass" (que reabriria a sessão à toa).
 fn bypass_in_cycle(agent:u32)->Result<bool,RuntimeError> {
@@ -245,6 +247,9 @@ struct Executor {
     focus_refused:bool,
     /// Comandos e pedidos de drenagem que chegaram com o pane reservado: saem na ordem depois do `Release`.
     parked:VecDeque<Message>,
+    /// Entradas guardadas enquanto o Claude sobe: um comando de barra não tem linha na fila para esperar a
+    /// conversa abrir, e o que chega depois dele espera atrás, na ordem.
+    starting:VecDeque<Message>,
     /// A entrada adiada porque o foco está num painel ou na faixa de um mod (`focus_guard`).
     away:Option<Away>,
     /// Trava do `/clear` erguida: quando conferir se a conversa nova apareceu (`expire_clear`).
@@ -263,6 +268,12 @@ struct Executor {
     /// `stall_notice`, a vista mostra `no_safe_delivery`.
     unproved_since:Option<tokio::time::Instant>,
     no_safe_delivery:bool,
+    /// Com a entrega incerta segurando a escrita, o campo do terminal tem texto: só a pessoa o tira.
+    composer_held:bool,
+    composer_read_at:Option<tokio::time::Instant>,
+    /// O plugin pedindo (`/pull`) no último tique; `None` antes de saber. A mudança vai ao diário.
+    plugin_alive:Option<bool>,
+    born:tokio::time::Instant,
     /// Quando a reabertura deste incidente foi pedida. Reabertura que falhou é pedida de novo depois do
     /// intervalo do registro, senão a fila ficava parada para sempre com o aviso prometendo reabrir.
     heal_requested:Option<tokio::time::Instant>,
@@ -302,6 +313,25 @@ const CLEAR_APPLY_WAIT:Duration=Duration::from_secs(10);
 const START_GRACE:Duration=Duration::from_secs(60);
 /// O `give_up_after` padrão: a prova chega em segundos; minutos sem ela, com o Claude parado, é perda.
 const GIVE_UP_AFTER:Duration=Duration::from_secs(180);
+const COMPOSER_READ_EVERY:Duration=Duration::from_secs(5);
+/// Sem `/pull` aceito há mais que isso o plugin conta como fora: o `/pull` dura até 25 s e o seguinte sai em 50 ms.
+const PLUGIN_OFF_AFTER:Duration=Duration::from_secs(120);
+
+/// Estado do plugin depois deste tique e a borda que vai ao diário (`Some(true)` voltou, `Some(false)` caiu).
+/// A primeira leitura da vida não é borda; plugin que nunca pediu (desligado, não instalado) não cai.
+/// `life`: idade desta vida no ator; antes do prazo, quem ainda não pediu está subindo.
+fn plugin_edge(was:Option<bool>,status:Option<&crate::plugin::PullStatus>,life:Duration)->(Option<bool>,Option<bool>) {
+    let Some(status)=status else { return (was,None) };
+    let on=status.open || status.last_seen_s.is_some_and(|s|s<=PLUGIN_OFF_AFTER.as_secs());
+    match (was,on) {
+        (Some(false),true)=>(Some(true),Some(true)),
+        (_,true)=>(Some(true),None),
+        (Some(true),false)=>(Some(false),Some(false)),
+        (None,false) if status.last_seen_s.is_none() || life<PLUGIN_OFF_AFTER=>(None,None),
+        (None,false)=>(Some(false),Some(false)),
+        (Some(false),false)=>(was,None),
+    }
+}
 /// Quanto o aviso de `/clear` não aplicado fica na vista.
 const CLEAR_NOTICE:Duration=Duration::from_secs(60);
 /// Até quando um transcript novo começado por `/clear` segura a trava esperando o Python trocar o
@@ -344,6 +374,26 @@ fn clear_on_disk(transcript:&std::path::Path,since:f64)->Result<bool,std::io::Er
 /// limpeza renova a sua a cada volta ao prompt, também abaixo disto. Vence sozinha: uma tarefa de clique que
 /// sumiu sem o `Release` não segura a fila.
 pub(crate) const MAX_MODS_HOLD:Duration=Duration::from_secs(10);
+
+/// O ciclo de modos lido do terminal sobrevive ao reinício do servidor: sem ele o menu fica travado até
+/// nova leitura. Fora de `*.json`, que é o estado da fila varrido pelos dois lados.
+fn modes_path(state:&Path)->PathBuf {state.with_extension("modes")}
+fn read_modes(state:&Path)->Option<Value> {
+    let bytes=match std::fs::read(modes_path(state)) {
+        Ok(bytes)=>bytes,
+        Err(failure) if failure.kind()==std::io::ErrorKind::NotFound=>return None,
+        Err(failure)=>{tracing::warn!(code="permission_modes_read_failed",%failure,"ciclo de modos gravado e não lido; o menu espera nova leitura");return None;}
+    };
+    let modes=serde_json::from_slice::<Value>(&bytes).ok().filter(|modes|modes.as_array().is_some_and(|list|!list.is_empty()));
+    if modes.is_none() {tracing::warn!(code="permission_modes_read_failed","ciclo de modos gravado ilegível; o menu espera nova leitura");}
+    modes
+}
+fn save_modes(state:&Path,modes:&Value) {
+    if let Err(failure)=super::queue::atomic_write(&modes_path(state),modes.to_string().as_bytes()) {
+        tracing::warn!(code="permission_modes_save_failed",%failure,"ciclo de modos lido e não gravado; o próximo reinício o esquece");
+    }
+}
+
 pub struct TerminalActor;
 impl TerminalActor {
     pub fn spawn(target:TerminalTarget,queue:QueueActor,policy:PolicyClient,options:TerminalOptions,events:broadcast::Sender<RuntimeEvent>,revision:Arc<AtomicU64>)->TerminalHandle {
@@ -355,8 +405,9 @@ impl TerminalActor {
         let local=Arc::new(crate::terminal_facts::LocalTerminalFacts::new(options.io.clone(),options.plugin.clone(),options.mode_facts.clone()));
         let status=options.status.clone();
         if let Some(sender)=&status { sender.send_replace(Default::default()); }
-        let executor=Executor {batch_blocked:false,target,queue:Arc::new(queue),local,options,events,revision,sequence,receipt,deliverable:false,last_error:None,uncertain:vec![],unprovable:false,mode_unproved:false,modes_cache:None,uncertain_since:None,loan:None,stall:None,hold:None,hold_checked:false,focus_refused:false,parked:VecDeque::new(),away:None,clear_watch:None,clear_notice:None,footer_misses:None,reconciliation:None,confirm_until:None,confirm_seen:None,
-            unproved_since:None,no_safe_delivery:false,heal_requested:None,turn_wait:None,diag:policy.diag(),conversation_proved:false};
+        let modes_cache=read_modes(&target.state_path);
+        let executor=Executor {batch_blocked:false,target,queue:Arc::new(queue),local,options,events,revision,sequence,receipt,deliverable:false,last_error:None,uncertain:vec![],unprovable:false,mode_unproved:false,modes_cache,uncertain_since:None,loan:None,stall:None,hold:None,hold_checked:false,focus_refused:false,parked:VecDeque::new(),starting:VecDeque::new(),away:None,clear_watch:None,clear_notice:None,footer_misses:None,reconciliation:None,confirm_until:None,confirm_seen:None,
+            unproved_since:None,no_safe_delivery:false,composer_held:false,composer_read_at:None,plugin_alive:None,born:tokio::time::Instant::now(),heal_requested:None,turn_wait:None,diag:policy.diag(),conversation_proved:false};
         let run=executor.run(receiver,closed.clone());
         let task=tokio::spawn(async move {
             let mut guard=terminal_status::PanicMark(status);
@@ -396,6 +447,20 @@ impl Executor {
         if self.hold.is_some_and(|until|tokio::time::Instant::now()>=until) {self.hold=None; self.hold_checked=false;}
         self.hold.is_some()
     }
+    /// O Claude Code só registra e abre a conversa depois de subir. O prazo conta da idade do processo do
+    /// agente: sessão adotada com o Claude de pé há tempo não espera.
+    fn in_start_grace(&self)->bool {
+        !self.conversation_proved && sample().epoch_s-self.target.metadata.agent_birth<self.options.start_grace.as_secs_f64()
+    }
+    fn starting_life(&self,failure:&ServiceError)->bool {failure.0=="terminal_conversation_unavailable" && self.in_start_grace()}
+    /// A conversa desta vida ainda não abriu e ela está no prazo de subida.
+    async fn conversation_pending(&mut self)->bool {
+        if !self.in_start_grace() {return false;}
+        match self.services("maintenance","maintenance","").facts(&self.target.binding).await {
+            Ok(facts)=>{if facts.binding==self.target.binding {self.conversation_proved=true;} false},
+            Err(failure)=>self.starting_life(&failure),
+        }
+    }
     /// O Python pede o teclado por uma operação; fila, trava e estado continuam aqui. O ator é serial:
     /// quando o pedido chega não há digitação em curso.
     fn loan_control(&mut self,id:&str,kind:&str,payload:&Value)->Result<RuntimeReply,RuntimeError> {
@@ -432,7 +497,7 @@ impl Executor {
         Ok(json!({"key":self.target.key,"generation":self.target.generation,"revision":self.revision.load(Ordering::Acquire),
             "view":{"terminal":true,"working_revision":self.working_revision(),"conversation":self.target.binding.conversation,"deliverable":self.deliverable && !self.cleared(&state),"preserve_binding":state.runtime_state["preserve_binding"],"clear_barrier":state.runtime_state["clear_barrier"],
                 "input_stalled":self.stall.as_ref().filter(|s|s.surfaced).map(|s|s.code.clone()).or_else(||self.clear_notice.map(|_|"clear_not_applied".into()))
-                    .or_else(||state.terminal_write_blocked(&self.target.binding.conversation).then(||"delivery_unproved".to_owned()))
+                    .or_else(||state.terminal_write_blocked(&self.target.binding.conversation).then(||if self.composer_held {"delivery_composer_busy"} else {"delivery_unproved"}.to_owned()))
                     .or_else(||self.no_safe_delivery.then(||"no_safe_delivery".to_owned()))
                     .or_else(||self.batch_blocked.then(||super::queue::BATCH_TOO_LARGE.to_owned()))},"channels":{},"error":self.last_error}))
     }
@@ -494,11 +559,21 @@ impl Executor {
                 let message=tokio::select! {biased;
                     message=receiver.recv()=>message,
                     _=tokio::time::sleep_until(release_at.unwrap_or_else(tokio::time::Instant::now)),if release_at.is_some()=>continue,
-                    _=timer.tick(),if !closed.load(Ordering::Acquire) && (self.last_error.is_none() || self.last_error.as_deref()==Some("terminal_facts") || self.reconciling() || self.clear_watch.is_some() || self.clear_notice.is_some() || self.options.lifecycle.is_some())=>{
+                    _=timer.tick(),if !closed.load(Ordering::Acquire) && (!self.starting.is_empty() || self.last_error.is_none() || self.last_error.as_deref()==Some("terminal_facts") || self.reconciling() || self.clear_watch.is_some() || self.clear_notice.is_some() || self.options.lifecycle.is_some())=>{
                         if self.clear_notice.is_some_and(|until|tokio::time::Instant::now()>=until) {self.clear_notice=None; self.publish().await?;}
+                        self.watch_plugin();
                         // Clique de mod em curso, ou o que ele guardou ainda por sair: a fila não entrega nem
                         // reconcilia no pane antes disso (C6).
                         if self.held() || !self.parked.is_empty() {continue;}
+                        // Conversa aberta ou prazo de subida vencido: as entradas guardadas saem na ordem, e
+                        // passado o prazo o `execute` as recusa como antes.
+                        if !self.starting.is_empty() {
+                            if self.conversation_pending().await {continue;}
+                            while let Some(Message::Command {id,kind,payload,response})=self.starting.pop_front() {
+                                let result=self.execute(&id,&kind,payload,None,false).await;
+                                let _=response.send(result);
+                            }
+                        }
                         // Sem ciclo de vida ligado a reconciliação só falharia; a trava do `/clear` sai pelo `expire_clear` da drenagem.
                         if self.options.lifecycle.is_some() && let Err(failure)=self.reconcile_life().await {self.enter_error(failure).await?;}
                         self.watch_proof().await?;
@@ -538,6 +613,12 @@ impl Executor {
                 Some(message@(Message::Command {..}|Message::Drain(_))) if wait=>{self.parked.push_back(message);continue;},
                 other=>other,
             };
+            let starting=match &message {
+                Some(Message::Command {kind,payload,..}) if kind=="input"=>!self.starting.is_empty()
+                    || (payload["text"].as_str().is_some_and(|text|text.trim_start().starts_with('/')) && self.conversation_pending().await),
+                _=>false,
+            };
+            if starting {if let Some(message)=message {self.starting.push_back(message);} continue;}
             match message {
                 Some(Message::Command {id,kind,payload,response})=>{
                     let result=if matches!(kind.as_str(),"keyboard_loan"|"keyboard_return") {self.loan_control(&id,&kind,&payload)}
@@ -548,9 +629,15 @@ impl Executor {
                     let _=response.send(result);},
                 Some(Message::Queue {id,action,response})=>{
                     let retry_batch=matches!(&action,Action::Append {delivered:false,..}|Action::Edit {..}|Action::Cancel {..}|Action::Remove {..});
+                    // Leitura que falha não vale como campo vazio nem reaproveita a trava antiga: recusa com o motivo.
+                    let field=if matches!(&action,Action::GiveUp {..}) {self.read_composer().await} else {Some(true)};
                     let result=match action {
                         Action::Finish {id,status,result}=>self.native_receipt(&id,status,result).await,
                         Action::ClaimBatch {..}|Action::Claim {..}|Action::SetDelivered {value:false,..}|Action::BumpAttempts {..}|Action::Reconcile {..}|Action::ReplaceRows {..}|Action::Prepare {..}|Action::BeginDispatch {..}|Action::MarkWriting {..}|Action::BindDispatch {..}|Action::BindDispatchIfPrepared {..}|Action::Recover|Action::Confirm {..}|Action::ConfirmOccurrence {..}|Action::ConfirmLegacy {..}|Action::SetRuntimeState {..}|Action::LateRpcResolution {..}=>Err(error("terminal_queue_action")),
+                        // Desistir com o nosso texto no campo deixaria a pessoa com ele preso: vale para
+                        // qualquer cliente, inclusive o que não esconde o Descartar.
+                        Action::GiveUp {..} if field==Some(false)=>Err(RuntimeError::new(GIVE_UP_COMPOSER_BUSY,"há texto no campo do terminal")),
+                        Action::GiveUp {..} if field.is_none()=>Err(RuntimeError::new(GIVE_UP_COMPOSER_UNREAD,"o campo do terminal não foi lido")),
                         action@Action::GiveUp {..}=>{
                             let result=self.queue.exec(self.target.generation,&id,sample(),action).await.map_err(|_|error("queue_io"));
                             if result.as_ref().is_ok_and(|given|*given==json!(true)) {self.release_uncertain().await;}
@@ -592,7 +679,8 @@ impl Executor {
     /// Parada com algo guardado pelo clique de mod: quem esperava ouve `runtime_stopping`, como quem chama
     /// um ator que já está parando, e não a caixa fechada.
     fn refuse_parked(&mut self) {
-        for message in self.parked.drain(..) {
+        let starting=std::mem::take(&mut self.starting);
+        for message in self.parked.drain(..).chain(starting) {
             match message {
                 Message::Command {response,..}=>{let _=response.send(Err(error("runtime_stopping")));},
                 Message::Drain(response)=>{let _=response.send(Err(error("runtime_stopping")));},
@@ -889,7 +977,10 @@ impl Executor {
             Err(failure)=>(json!({"ok":false,"current":null,"error_code":failure.code,"uncertain":true}),Disposition::Unknown),
         };
         if let Some(modes)=cached {value["modes"]=modes;}
-        else if probe && value["uncertain"]==false && value["modes"].as_array().is_some_and(|modes|!modes.is_empty()) {self.modes_cache=Some(value["modes"].clone());}
+        else if probe && value["uncertain"]==false && value["modes"].as_array().is_some_and(|modes|!modes.is_empty()) {
+            save_modes(&self.target.state_path,&value["modes"]);
+            self.modes_cache=Some(value["modes"].clone());
+        }
         // Como o Python: tecla sem efeito visível relê o rodapé e responde o modo que ficou, sem outra tecla.
         if disposition==Disposition::Unknown && let Ok(read)=permission_control::claude(&driver,PermissionAction::Read {probe:false}).await
             && let Some(mode)=read["current"].as_str() {
@@ -946,8 +1037,10 @@ impl Executor {
     /// `steer`: o "Orientar" de uma entrada, que passa pelo turno em curso em vez de esperar o Claude parar.
     async fn execute(&mut self,id:&str,kind:&str,mut payload:Value,entry:Option<String>,steer:bool)->Result<RuntimeReply,RuntimeError> {
         if !valid_operation_id(id) {return Err(error("operation_id"));}
-        // Texto colado no Windows chega com `\r\n`; o `\r` é controle e o Claude Code só entende `\n`.
-        let unix=payload["text"].as_str().filter(|t|kind=="input" && t.contains('\r')).map(|t|t.replace("\r\n","\n").replace('\r',"\n"));
+        // Texto colado no Windows chega com `\r\n`; o `\r` é controle e o Claude Code só entende `\n`. Outro controle
+        // colado (um NUL invisível) sai do texto: recusar travava o envio sem a pessoa ver o que apagar.
+        let unix=payload["text"].as_str().filter(|t|kind=="input" && !safe_characters(t))
+            .map(|t|t.replace("\r\n","\n").replace('\r',"\n").chars().filter(|c|!c.is_control() || matches!(c,'\n'|'\t')).collect::<String>());
         if let Some(text)=unix {payload["text"]=json!(text);}
         if kind=="lifecycle_guard" {
             if self.loaned() || self.held() || self.last_error.is_some() || !self.uncertain.is_empty() || self.unprovable || self.mode_unproved {return Err(error("lifecycle_busy"));}
@@ -1062,6 +1155,7 @@ impl Executor {
         if self.footer_misses.as_ref().is_some_and(|(row,misses)|row==root && *misses>=FOCUS_RETURN_TRIES) {driver=driver.footer_kept();}
         let facts=if prompt {Some(services.facts(&self.target.binding).await)}else{None};
         let current=facts.as_ref().is_none_or(|result|result.as_ref().is_ok_and(|facts|facts.binding==self.target.binding));
+        if prompt && current {self.conversation_proved=true;}
         if let Some(facts)=&facts {self.deliverable=facts.as_ref().is_ok_and(|facts|current && facts.ready && !facts.open_question);}
         // Com o Claude trabalhando a mensagem fica na fila do Hangar, onde o painel a apaga, edita e reordena.
         // O recado com socket nativo segue: é o canal do próprio Claude Code para o meio do turno.
@@ -1256,7 +1350,9 @@ impl Executor {
     }
     async fn conversation_unproved(&self)->bool {
         let binding=crate::terminal_facts::LocalTerminalFacts::binding(&self.target);
-        if self.options.plugin.as_ref().is_some_and(|store|store.conversation_proved(&binding).unwrap_or(false)) {return false;}
+        // Só o `/pull` aberto: o visto há pouco pode ser do agente anterior com o mesmo vínculo, e o intervalo
+        // entre dois `/pull` já não pisca pelo `stall_notice`.
+        if self.options.plugin.as_ref().is_some_and(|store|store.conversation_pulling(&binding).unwrap_or(false)) {return false;}
         let (config,pid)=(self.target.metadata.config_dir.clone(),i64::from(self.target.metadata.agent_pid));
         // Qualquer falha de leitura (ausente, corrompido, de outro pid) deixa a conversa sem prova.
         tokio::task::spawn_blocking(move||super::lifecycle::read_native_conversation(&config,pid).is_err()).await.unwrap_or(true)
@@ -1340,8 +1436,7 @@ impl Executor {
             Ok(facts)=>{self.conversation_proved=true;facts},
             // O Claude Code só registra e abre a conversa depois de subir: a entrada espera, sem erro na sessão.
             // O prazo conta da idade do processo do agente: sessão adotada com o Claude de pé há tempo não espera.
-            Err(failure) if failure.0=="terminal_conversation_unavailable" && !self.conversation_proved
-                && sample().epoch_s-self.target.metadata.agent_birth<self.options.start_grace.as_secs_f64()=>return Ok(json!({"drained":0,"starting":true})),
+            Err(failure) if self.starting_life(&failure)=>return Ok(json!({"drained":0,"starting":true})),
             Err(_)=>return Err(error("terminal_facts")),
         };
         // O composer legível e sem pergunta é o que libera a escrita; o turno é conferido logo abaixo.
@@ -1542,24 +1637,27 @@ impl Executor {
         };
         let state=match self.queue.snapshot().await {Ok(state)=>state, Err(_)=>{skip(&self.target.key,"give_up_queue_io","prazo da entrega incerta: fila ilegível, tenta no próximo tique"); return}};
         let owner=state.runtime_state["terminal_write_barrier"]["operation_id"].as_str().map(str::to_owned);
-        let Some(entry)=owner.as_deref().and_then(|id|state.operations.get(id)).and_then(|op|op.entry_id.clone()) else {self.uncertain_since=None; return};
+        let Some(entry)=owner.as_deref().and_then(|id|state.operations.get(id)).and_then(|op|op.entry_id.clone()) else {self.uncertain_since=None; self.composer_read_at=None; self.hold_composer(false).await; return};
         let now=tokio::time::Instant::now();
+        // Uma captura do pane a cada poucos segundos basta para o aviso; o tique é mais curto.
+        let read_due=self.composer_read_at.is_none_or(|at|now.duration_since(at)>=COMPOSER_READ_EVERY);
+        if read_due {
+            self.composer_read_at=Some(now);
+            self.read_composer().await;
+        }
         let since=match &self.uncertain_since {Some((seen,at)) if *seen==entry=>*at, _=>{self.uncertain_since=Some((entry,now)); return}};
         if now.duration_since(since)<self.options.give_up_after {return;}
-        let services=self.services("maintenance","maintenance","");
-        match services.facts(&self.target.binding).await {
+        match self.services("maintenance","maintenance","").facts(&self.target.binding).await {
             Ok(facts) if facts.binding==self.target.binding && facts.idle=>{},
             Ok(_)=>return,
             Err(_)=>{skip(&self.target.key,"give_up_facts","prazo da entrega incerta: fatos indisponíveis, sem saber se o Claude parou"); return},
         }
-        // Texto ainda no composer é a própria entrega parada: desistir deixaria o dono com ele preso no prompt.
-        let driver=TerminalDriver::new(self.target.binding.clone(),services,self.options.io.clone(),self.options.limits.clone());
-        if !driver.composer_free().await {
-            skip(&self.target.key,"give_up_composer_busy","prazo da entrega incerta: o composer tem texto; a desistência fica com o Descartar");
-            return;
-        }
-        // Última chance da prova antes de desistir.
+        // Texto ainda no composer é a própria entrega parada: desistir deixaria o dono com ele preso no prompt. O
+        // campo é lido antes da prova (com ele ocupado, nada de transcript a cada tique) e de novo logo antes de
+        // desistir, porque a pessoa pode ter digitado durante a prova.
+        if !self.composer_free().await {return;}
         if self.confirm_rows().await.is_err() {skip(&self.target.key,"give_up_receipt","prazo da entrega incerta: transcript ilegível, tenta no próximo tique"); return;}
+        if !self.composer_free().await {return;}
         let id=format!("give_up:{entry}:{}",self.sequence.fetch_add(1,Ordering::Relaxed));
         let given=self.queue.exec(self.target.generation,&id,sample(),Action::GiveUp {entry_id:entry.clone()}).await;
         self.uncertain_since=None;
@@ -1571,6 +1669,16 @@ impl Executor {
             waited_s=now.duration_since(since).as_secs(),"entrega incerta sem prova no prazo: desistida, sem reenviar; a fila segue");
         self.release_uncertain().await;
         if let Err(failure)=self.publish().await {tracing::warn!(key=%self.target.key,code=%failure.code,"vista da desistência não publicou");}
+    }
+    /// O campo vazio libera a desistência; com texto, a trava sobe; ilegível, nada muda e ela espera.
+    async fn composer_free(&mut self)->bool {
+        let (code,reason)=match self.read_composer().await {
+            Some(true)=>return true,
+            Some(false)=>("give_up_composer_busy","prazo da entrega incerta: o composer tem texto; a desistência fica com o Descartar"),
+            None=>("give_up_composer_unread","prazo da entrega incerta: o composer não foi lido; tenta no próximo tique"),
+        };
+        if crate::warn_limit::allow(Some(&self.target.key),code) {tracing::warn!(key=%self.target.key,code=%code,"{reason}");}
+        false
     }
     /// Entrega aceita sem prova (eco diferente, prompt barrado por hook) passado o prazo, com o Claude
     /// parado: vira desistida, que o Descartar tira. Nada é reenviado; a prova que chegar depois ainda a
@@ -1597,6 +1705,38 @@ impl Executor {
                 tracing::warn!(key=%self.target.key,code="give_up_unproved_queue_io","desistência da entrega sem prova não gravou; tenta no próximo tique");
             },
         }
+    }
+    /// Diário de quando o plugin desta sessão liga e some: sem isso, a queda dele só aparecia como a entrada em erro.
+    fn watch_plugin(&mut self) {
+        let Some(store)=&self.options.plugin else { return };
+        let status=store.pull_status(&crate::terminal_facts::LocalTerminalFacts::binding(&self.target),std::time::Instant::now()).ok();
+        let (now,edge)=plugin_edge(self.plugin_alive,status.as_ref(),self.born.elapsed());
+        self.plugin_alive=now;
+        match edge {
+            Some(true)=>{
+                tracing::info!(key=%self.target.key,session=%self.target.name,code="plugin_on","plugin da sessão pedindo de novo");
+                self.diag.report("rust.plugin_on",&self.target.name,"plugin_on","o plugin da sessão voltou a pedir (/pull)");
+            }
+            Some(false)=>{
+                let since=status.and_then(|s|s.last_seen_s).map_or("nunca".to_owned(),|s|format!("{s}s"));
+                tracing::warn!(key=%self.target.key,session=%self.target.name,code="plugin_off",last_pull=%since,"plugin da sessão sem /pull aceito");
+                self.diag.report("rust.plugin_off",&self.target.name,"plugin_off","o plugin da sessão parou de pedir (/pull)");
+            }
+            None=>{}
+        }
+    }
+    /// `Some(vazio)` atualiza a trava do campo; leitura que falhou (`None`) não diz nada dele e a deixa como
+    /// estava. Lido só pelo pane, sem os fatos da conversa: com eles fora, o campo ocupado ainda aparece.
+    async fn read_composer(&mut self)->Option<bool> {
+        let services=self.services("maintenance","maintenance","");
+        let empty=TerminalDriver::new(self.target.binding.clone(),services,self.options.io.clone(),self.options.limits.clone()).composer_empty().await;
+        if let Some(empty)=empty {self.hold_composer(!empty).await;}
+        empty
+    }
+    async fn hold_composer(&mut self,held:bool) {
+        if self.composer_held==held {return;}
+        self.composer_held=held;
+        if let Err(failure)=self.publish().await {tracing::warn!(key=%self.target.key,code=%failure.code,"vista do campo ocupado não publicou");}
     }
     /// Depois de uma desistência: a memória da entrega incerta só sai quando o disco não segura mais a escrita.
     async fn release_uncertain(&mut self) {
@@ -1749,6 +1889,26 @@ fn validate(kind:&str,payload:&Value)->Result<(),RuntimeError> {
 
 #[cfg(test)]
 mod tests {
+    /// O diário ganha uma linha quando o plugin liga e outra quando some: a queda tem hora, mesmo sem nenhum erro.
+    #[test]
+    fn plugin_on_and_off_are_edges_with_a_grace_for_a_fresh_life() {
+        use crate::plugin::PullStatus;
+        use std::time::Duration;
+        let seen = |s: u64| PullStatus { open: false, last_seen_s: Some(s), reported: false, ended: false };
+        let open = PullStatus { open: true, last_seen_s: Some(0), reported: false, ended: false };
+        let never = PullStatus { open: false, last_seen_s: None, reported: false, ended: false };
+        let short = Duration::from_secs(10);
+        let long = Duration::from_secs(300);
+        assert_eq!(super::plugin_edge(None, Some(&never), short), (None, None), "vida recém-aberta: o plugin ainda está subindo");
+        assert_eq!(super::plugin_edge(None, Some(&never), long), (None, None), "nunca pediu: desligado ou não instalado, não caiu");
+        assert_eq!(super::plugin_edge(None, Some(&seen(500)), long), (Some(false), Some(false)), "pediu nesta vida e parou");
+        assert_eq!(super::plugin_edge(None, Some(&open), short), (Some(true), None), "a primeira leitura da vida não é volta");
+        assert_eq!(super::plugin_edge(Some(true), Some(&seen(30)), long), (Some(true), None), "entre um /pull e o seguinte segue ligado");
+        assert_eq!(super::plugin_edge(Some(true), Some(&seen(121)), long), (Some(false), Some(false)));
+        assert_eq!(super::plugin_edge(Some(false), Some(&seen(500)), long), (Some(false), None), "uma linha por queda");
+        assert_eq!(super::plugin_edge(Some(false), Some(&open), long), (Some(true), Some(true)), "voltou");
+        assert_eq!(super::plugin_edge(Some(true), None, long), (Some(true), None), "vínculo ilegível não decide nada");
+    }
     /// argv ilegível (processo que sumiu, `/proc` negado) é erro com código, não "sem bypass".
     #[test]
     fn unreadable_argv_is_a_coded_error_not_a_reopen() {

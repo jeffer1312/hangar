@@ -28,6 +28,8 @@ vi.mock('../../stores/prefs', () => ({ prefs: {
 } }));
 vi.mock('expo-linking', () => ({ openURL: vi.fn() }));
 vi.mock('expo-clipboard', () => ({ setStringAsync: vi.fn() }));
+// A folha da etiqueta puxa o teclado e a área segura nativos, que não carregam no teste.
+vi.mock('../machines/parts', () => ({ MachineSheet: () => null, Notice: () => null }));
 vi.mock('../../ui/Sheet', () => ({
   Sheet: ({ children, open }: { children: ReactNode; open?: boolean }) => open === false ? null : createElement('div', null, children),
 }));

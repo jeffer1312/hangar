@@ -1103,10 +1103,6 @@ def merged_history(name: str, jsonl: str, provider: str = "claude",
     elif provider == "kimi":
         # parse_obj solto basta: o parser do wire do Kimi nao guarda estado entre linhas.
         from app.adapters.kimi.transcript import parse_obj as _parse
-    elif provider == "orq":
-        from functools import partial
-        from app.adapters.orq.adapter import parse_obj as orq_parse_obj
-        _parse = partial(orq_parse_obj, run_dir=Path(jsonl).parent)
     else:
         _parse = parse_obj
     items: list[tuple[float, int, ChatEvent]] = []

@@ -118,12 +118,15 @@ jobs:
             exit "$rc"
           fi
           exe=; [ "$PLATFORM" = windows-x86_64 ] && exe=.exe
+          case "$PLATFORM" in windows-*) auth=.dll ;; macos-*) auth=.dylib ;; *) auth=.so ;; esac
           gh release download "$stag" --repo "$GITHUB_REPOSITORY" --dir bins \
-            --pattern "hangar-server-$PLATFORM$exe" --pattern "hangar-cano-$PLATFORM$exe"
+            --pattern "hangar-server-$PLATFORM$exe" --pattern "hangar-cano-$PLATFORM$exe" --pattern "hangar-auth-$PLATFORM$auth"
           for b in hangar-server hangar-cano; do
             want=$(jq -r --arg k "$PLATFORM/$b" '.files[$k].sha256' srv/server-latest.json)
             echo "$want  bins/$b-$PLATFORM$exe" | sha256sum -c -
           done
+          want=$(jq -r --arg k "$PLATFORM/hangar-auth" '.files[$k].sha256' srv/server-latest.json)
+          echo "$want  bins/hangar-auth-$PLATFORM$auth" | sha256sum -c -
           echo "::notice::$PLATFORM: binários de $stag ($de), mesmas fontes testadas de $SHA"
           echo ok=true >> "$GITHUB_OUTPUT"
       - if: steps.pronto.outputs.ok == 'true'

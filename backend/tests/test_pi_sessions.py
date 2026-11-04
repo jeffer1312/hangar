@@ -72,7 +72,7 @@ def test_transcript_path_globs_past_the_timestamp_prefix(tmp_path, monkeypatch):
     assert got == str(target)
 
 
-def test_omp_transcript_fora_da_pasta_do_cwd_e_achado_pelo_nome(tmp_path, monkeypatch):
+def test_omp_transcript_fora_da_pasta_do_cwd_e_achado_pelo_nome(tmp_path, monkeypatch, hangar_server_bin):
     # omp 18.1.6 grava o transcript principal em `sessions/-/<nome>` e nao no diretorio do
     # `--session`; o Pi nao faz isso, entao no Pi a busca fica restrita a pasta do cwd.
     monkeypatch.setenv("PI_CODING_AGENT_DIR", str(tmp_path))
@@ -124,7 +124,7 @@ def test_transcript_path_picks_newest_on_duplicate_id(tmp_path, monkeypatch):
     assert pi_sessions.transcript_path("/w", "abc", "pi") == str(new)
 
 
-def test_sessions_root_por_provider(monkeypatch, tmp_path):
+def test_sessions_root_por_provider(monkeypatch, tmp_path, hangar_server_bin):
     monkeypatch.delenv("PI_CODING_AGENT_SESSION_DIR", raising=False)
     monkeypatch.delenv("PI_CODING_AGENT_DIR", raising=False)
     assert pi_sessions.sessions_root("pi") == Path.home() / ".pi" / "agent" / "sessions"
@@ -135,7 +135,7 @@ def test_sessions_root_por_provider(monkeypatch, tmp_path):
         pi_sessions.sessions_root("kimi")
 
 
-def test_transcript_path_le_a_raiz_do_provider_pedido(monkeypatch, tmp_path):
+def test_transcript_path_le_a_raiz_do_provider_pedido(monkeypatch, tmp_path, hangar_server_bin):
     monkeypatch.setenv("PI_CODING_AGENT_DIR", str(tmp_path / "omp"))
     d = tmp_path / "omp" / "sessions" / pi_sessions.cwd_slug("/w")
     d.mkdir(parents=True)

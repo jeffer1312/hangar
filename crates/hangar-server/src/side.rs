@@ -64,6 +64,7 @@ impl Binding {
         match (self.provider, self.headless) {
             (Provider::Claude, _) => Some(&STATE_EVENTS),
             (Provider::ClaudeHeadless, _) | (Provider::Codex, true) => Some(&FEED_EVENTS),
+            (Provider::Orq, _) => Some(&["state"]),
             _ => None,
         }
     }
@@ -137,7 +138,7 @@ fn file_name(p: &std::path::Path) -> String {
 /// recebe pela lista de sessões. `plugin_ui` (faixa dos mods) sai quando muda: sem o cache, quem
 /// abre o chat depois ficava sem a faixa até o mod redesenhar. `queue` (painel da fila) sai quando muda e vale
 /// para quem chega depois.
-const LATEST: [&str; 9] = ["state", "suggest", "ask_question", "stats", "preview", "pensamento", "ferramenta", "plugin_ui", crate::queue_panel::EVENT];
+const LATEST: [&str; 10] = ["state", "suggest", "ask_question", "stats", "preview", "pensamento", "ferramenta", "plugin_ui", crate::queue_panel::EVENT, "saida"];
 const ASK_QUESTION: usize = 2;
 const PLUGIN_UI: usize = 7;
 /// Mesmos tetos do Python (`plugin_bridge.TOASTS_KEPT`, `TOAST_MAX_MS`).
@@ -195,8 +196,8 @@ pub type SpawnMonitor = Arc<dyn Fn(&Arc<Hub>) -> tokio::task::JoinHandle<()> + S
 
 /// Os quatro eventos que, com o `Monitor` vivo, só o Rust produz para a sessão.
 const STATE_EVENTS: [&str; 4] = ["state", "preview", "ask_question", "suggest"];
-/// Os seis do feed (Claude e Codex sem terminal): os quatro mais pensamento e ferramenta em voo.
-const FEED_EVENTS: [&str; 6] = ["state", "preview", "ask_question", "suggest", "pensamento", "ferramenta"];
+/// Os do feed (Claude e Codex sem terminal): os quatro mais pensamento e ferramenta em voo e a saída dos comandos do Codex.
+const FEED_EVENTS: [&str; 7] = ["state", "preview", "ask_question", "suggest", "pensamento", "ferramenta", "saida"];
 
 #[derive(Clone)]
 pub struct SideCtx {
@@ -231,7 +232,7 @@ impl SideCtx {
 
 #[derive(Default)]
 struct SideCache {
-    latest: [Option<Bytes>; 9],
+    latest: [Option<Bytes>; 10],
     /// Sobe a cada `plugin_ui` gravado; é o que o marcador `Out::Ui` leva.
     ui_version: u64,
     /// A vista da versão atual, lida, para calcular a diferença da próxima.
@@ -377,6 +378,8 @@ pub struct Hub {
     pub(crate) monitor: Mutex<Option<(tokio::task::AbortHandle, tokio::task::AbortHandle, OwnerKey)>>,
     /// Última resposta gravada no transcript desta ligação, normalizada (`preview::norm`).
     committed: Mutex<Option<Arc<str>>>,
+    /// Geração + 1 cuja leitura inicial de `committed` já voltou; 0 = nenhuma.
+    seeded: std::sync::atomic::AtomicU64,
     /// Acorda o `Monitor`: `rebind` (rodada já) ou resposta gravada (prévia sai já).
     wake: Arc<Notify>,
     /// O ator do Codex com terminal desta sessão é do Rust: o feed publica o estado. O pane continua no
@@ -453,6 +456,7 @@ impl Hub {
                 side: Mutex::new(None),
                 monitor: Mutex::new(None),
                 committed: Mutex::new(None),
+                seeded: std::sync::atomic::AtomicU64::new(0),
                 wake: Arc::new(Notify::new()),
                 runtime_owned: std::sync::atomic::AtomicBool::new(owned),
                 guests: std::sync::atomic::AtomicUsize::new(0),
@@ -582,6 +586,21 @@ impl Hub {
 
     pub fn committed(&self) -> Option<Arc<str>> { self.committed.lock().unwrap().clone() }
 
+    pub fn committed_known(&self) -> bool {
+        let generation = self.bound.lock().unwrap().as_ref().map(|b| b.generation);
+        generation.is_some_and(|g| self.seeded.load(std::sync::atomic::Ordering::Acquire) == g + 1)
+    }
+
+    /// Leitura de outra ligação não vale para a atual.
+    fn mark_seeded(&self, generation: u64) {
+        let bound = self.bound.lock().unwrap();
+        if bound.as_ref().is_some_and(|b| b.generation == generation) {
+            self.seeded.store(generation + 1, std::sync::atomic::Ordering::Release);
+            drop(bound);
+            self.wake.notify_one();
+        }
+    }
+
     /// Resposta gravada lida na geração `generation`; troca de ligação no meio descarta.
     pub(crate) fn set_committed(&self, generation: u64, text: String, only_if_empty: bool) {
         let bound = self.bound.lock().unwrap();
@@ -648,6 +667,7 @@ impl Hub {
     /// Produtor da fila da geração dada; o anterior sai. Chamado sob a trava da ligação (ou com o hub
     /// ainda só deste chamador): duas trocas seguidas não deixam o da geração velha por último.
     fn start_queue_feed(self: &Arc<Self>, generation: u64, binding: &Binding) {
+        if binding.provider == Provider::Orq { return; }
         let Some(dir) = &self.ctx.queue_dir else {
             if crate::warn_limit::allow(None, "queue_feed_disabled") {
                 tracing::warn!(session = %self.name, code = "queue_feed_disabled", "fila: pasta da fila desconhecida; o chat fica sem as bolhas da fila");
@@ -672,6 +692,7 @@ impl Hub {
 
     /// Produtor do `stats` da geração dada, chamado junto com o da fila e sob a mesma trava.
     fn start_stats_feed(self: &Arc<Self>, generation: u64, binding: &Binding) {
+        if binding.provider == Provider::Orq { return; }
         let feed = tokio::spawn(crate::stats::run(Arc::downgrade(self), generation, binding.clone(), self.ctx.watchers.clone()));
         if let Some(old) = self.stats_feed.lock().unwrap().replace(feed.abort_handle()) {
             old.abort();
@@ -1085,9 +1106,10 @@ fn private_frame(frame: &[u8], events: &[&str], guest: bool) -> bool {
         || (!guest && state_frame(frame, &["plugin_toast"]))
 }
 
-/// Quadro que só o dono recebe: aviso de mod (texto dele) e pedido de navegador (url com o token).
+/// Quadro que só o dono recebe: aviso de mod (texto dele), pedido de navegador (url com o token) e
+/// pedido do cofre.
 pub(crate) fn owner_only(frame: &[u8]) -> bool {
-    state_frame(frame, &["plugin_toast", "nav"])
+    state_frame(frame, &["plugin_toast", "nav", "vault"])
 }
 
 /// Quadro de um dos eventos do estado dados.
@@ -1116,11 +1138,13 @@ async fn watch_commits(hub: Weak<Hub>, mut rx: broadcast::Receiver<Out>) {
     }
 }
 
+const SEED_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// O leitor do transcript começa no fim do arquivo: sem isto a resposta já gravada voltaria como
 /// prévia logo depois de abrir o chat. Só preenche o vazio; a resposta ao vivo vence.
 async fn seed_committed(hub: &Weak<Hub>, only_if_empty: bool) {
     let Some((binding, generation)) = hub.upgrade().and_then(|h| h.bound.lock().unwrap().as_ref().map(|b| (b.binding.clone(), b.generation))) else { return };
-    let last = tokio::task::spawn_blocking(move || match tail::last_committed(&binding.jsonl, binding.provider) {
+    let mut read = tokio::task::spawn_blocking(move || match tail::last_committed(&binding.jsonl, binding.provider) {
         Ok(text) => text,
         Err(e) => {
             if e.kind() != std::io::ErrorKind::NotFound && crate::warn_limit::allow(None, "state_committed_seed") {
@@ -1128,13 +1152,32 @@ async fn seed_committed(hub: &Weak<Hub>, only_if_empty: bool) {
             }
             None
         }
-    })
-    .await;
+    });
+    // Disco travado não pode calar a prévia da sessão: passado o prazo, ela segue, e a resposta gravada
+    // entra quando a leitura acabar.
+    let last = match tokio::time::timeout(SEED_TIMEOUT, &mut read).await {
+        Ok(done) => done,
+        Err(_) => {
+            tracing::warn!(code = "state_committed_seed_timeout", "estado: leitura da resposta gravada passou do prazo; a prévia segue sem ela");
+            let Some(h) = hub.upgrade() else { return };
+            h.mark_seeded(generation);
+            // Fora do laço de `watch_commits`: as respostas novas do transcript não esperam o disco travado.
+            // Atrasada, só preenche o vazio: a resposta ao vivo que chegou nesse meio-tempo vence.
+            let hub = hub.clone();
+            tokio::spawn(async move {
+                if let (Ok(Some(text)), Some(h)) = (read.await, hub.upgrade()) { h.set_committed(generation, text, true); }
+            });
+            return;
+        }
+    };
+    let Some(h) = hub.upgrade() else { return };
     match last {
-        Ok(Some(text)) => if let Some(h) = hub.upgrade() { h.set_committed(generation, text, only_if_empty) },
+        Ok(Some(text)) => h.set_committed(generation, text, only_if_empty),
         Ok(None) => {}
         Err(e) => tracing::warn!(panic = e.is_panic(), code = "state_committed_seed", "estado: leitura da resposta gravada caiu"),
     }
+    // Com ou sem texto: a prévia só esperava esta leitura terminar.
+    h.mark_seeded(generation);
 }
 
 /// `GET /__hangar_server/state/{name}/events` na porta privada: o Python lê daqui `state`,
@@ -1393,6 +1436,41 @@ pub(crate) fn fake_monitors(pane: &'static str) -> (SpawnMonitor, Arc<std::sync:
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn orchestration_activity_is_published_by_its_hub_and_stops_with_the_old_life() {
+        use super::*;
+        let dir = tempfile::tempdir().unwrap();
+        let timeline = dir.path().join("timeline-run.jsonl");
+        std::fs::write(&timeline, "").unwrap();
+        let spawn: SpawnMonitor = Arc::new(|hub| tokio::spawn(crate::state::live::orchestration_states(Arc::downgrade(hub))));
+        let ctx = SideCtx { monitors: Some(spawn), ..test_ctx() };
+        let binding = |life: &str| Binding { provider: Provider::Orq, jsonl: timeline.clone(), key: "run".into(), headless: false, life: Some(life.into()) };
+        let lease = ctx.hubs.acquire("run-orq", binding("old"), &ctx);
+        assert_eq!(lease.hub.owned_events(), &["state"]);
+        let mut rx = lease.hub.tx.subscribe();
+        async fn next_state(rx: &mut broadcast::Receiver<Out>) -> String {
+            tokio::time::timeout(Duration::from_secs(4), async {
+                loop {
+                    if let Out::Side(bytes) = rx.recv().await.unwrap() {
+                        let text = String::from_utf8(bytes.to_vec()).unwrap();
+                        if text.starts_with("event: state") { return text; }
+                    }
+                }
+            }).await.unwrap()
+        }
+        assert!(next_state(&mut rx).await.contains("\"state\":\"working\""));
+        let old = std::time::UNIX_EPOCH + Duration::from_secs(1);
+        std::fs::OpenOptions::new().write(true).open(&timeline).unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(old)).unwrap();
+        assert!(next_state(&mut rx).await.contains("\"state\":\"idle\""));
+        let stale = lease.hub.source_binding().unwrap();
+        lease.hub.close();
+        let fresh = ctx.hubs.acquire("run-orq", binding("new"), &ctx);
+        let mut rx = fresh.hub.tx.subscribe();
+        assert!(next_state(&mut rx).await.contains("\"state\":\"idle\""));
+        assert!(!fresh.hub.publish_own_bound(&stale, "state", "{\"state\":\"working\"}"));
+        fresh.hub.close();
+    }
     use super::*;
     use std::sync::atomic::AtomicU32;
 
@@ -1800,7 +1878,7 @@ mod tests {
 
     #[test]
     fn private_channel_serves_headless_six_events() {
-        let six = ["state", "preview", "ask_question", "suggest", "pensamento", "ferramenta"];
+        let six = ["state", "preview", "ask_question", "suggest", "pensamento", "ferramenta", "saida"];
         let codex = Binding { provider: Provider::Codex, jsonl: "c".into(), key: "c".into(), headless: true, life: None };
         let claude = Binding { headless: false, provider: Provider::Claude, ..codex.clone() };
         let terminal = Binding { headless: false, ..codex.clone() };
@@ -1947,6 +2025,33 @@ mod tests {
         c.record("queue", r#"{"entries":[],"actions":true}"#, &frame, false);
         assert!(c.replay().iter().any(|f| f.starts_with(b"event: queue\r\n")));
         assert!(private_frame(&frame, &STATE_EVENTS, true), "o canal privado leva a fila a quem entrou pelo Python");
+    }
+
+    /// A adormecida não tem ator, e o painel age no arquivo da fila dela: a lista sai com os botões.
+    #[tokio::test]
+    async fn queue_watch_gives_the_asleep_panel_its_buttons() {
+        let dir = tempfile::tempdir().unwrap();
+        let (jsonl, queue) = (dir.path().join("t.jsonl"), dir.path().join("s.jsonl"));
+        std::fs::write(&jsonl, "{\"type\":\"user\",\"timestamp\":\"2026-10-14T12:00:00Z\",\"message\":{\"content\":\"oi\"}}\n").unwrap();
+        std::fs::write(&queue, format!("{}\n", serde_json::json!({"id":"a","text":"guardada","ts":1_791_979_201.0,"delivered":false}))).unwrap();
+        let sidecars = dir.path().join(".hangar").join("claude-headless");
+        std::fs::create_dir_all(&sidecars).unwrap();
+        std::fs::write(sidecars.join("s.json"), serde_json::json!({"name":"s","key":"k","asleep":{"wake_surface":"terminal","since":1.0}}).to_string()).unwrap();
+        let home = dir.path().to_string_lossy().into_owned();
+        let env = crate::accounts::environment::AccountEnvironment::from_map([("HOME".to_owned(), home.clone()), ("USERPROFILE".to_owned(), home)].into());
+        let registry = crate::runtime::gateway::RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "s".into(), "i".into()).with_codex_environment(env);
+        let ctx = SideCtx { locate: Arc::new(crate::locate::Unavailable), ..idle_ctx() };
+        assert!(ctx.runtime.set(Arc::new(registry)).is_ok());
+        let binding = Binding { provider: Provider::Claude, jsonl: jsonl.clone(), key: "k".into(), headless: false, life: None };
+        let lease = ctx.hubs.acquire("s", binding, &ctx);
+        let info: InternalInfo = serde_json::from_value(serde_json::json!({"provider": "claude", "jsonl": jsonl, "session_key": "k", "history": {"queue": queue}})).unwrap();
+        lease.hub.learn_queue(&info);
+        let frames = |hub: &Hub| hub.cache.lock().unwrap().replay().into_iter()
+            .filter(|f| f.starts_with(b"event: queue\r\n")).map(|f| String::from_utf8_lossy(&f).into_owned()).collect::<Vec<_>>();
+        tokio::time::timeout(Duration::from_secs(5), async { while frames(&lease.hub).is_empty() { tokio::time::sleep(Duration::from_millis(20)).await } })
+            .await.expect("a lista sai");
+        let first = frames(&lease.hub);
+        assert!(first[0].contains(r#""id":"a""#) && first[0].contains(r#""actions":true"#), "{first:?}");
     }
 
     #[tokio::test]

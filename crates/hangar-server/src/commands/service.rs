@@ -155,7 +155,7 @@ pub async fn route(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     req: Request,
 ) -> Response {
-    let (forward, who) = crate::routes::who(&st, peer, &req);
+    let (forward, who) = match crate::routes::who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     let Some(name) = crate::session_write::session_name(req.uri().path()).filter(|name| {
         who.as_ref()
             .is_some_and(|caller| caller.can(name, req.method()))

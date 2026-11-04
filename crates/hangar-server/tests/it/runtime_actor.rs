@@ -1596,6 +1596,8 @@ for line in sys.stdin:
         let path = dir.join("codex");
         crate::write_executable(&path, format!(r#"#!/usr/bin/env python3
 import json, os, sys, threading, time
+if sys.argv[1:4] == ["plugin", "marketplace", "upgrade"]:
+    sys.exit(0)
 d = os.path.dirname(os.path.abspath(__file__))
 def note(entry):
     with open(os.path.join(d, "calls.jsonl"), "a") as f:

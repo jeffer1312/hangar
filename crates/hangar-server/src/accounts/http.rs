@@ -47,7 +47,7 @@ pub fn matches(method: &Method, path: &str) -> bool {
     if matches!(*method,Method::GET|Method::POST|Method::DELETE) && path.strip_prefix("/api/codex-contas/")
         .and_then(|tail|tail.strip_suffix("/login")).is_some_and(|id|!id.is_empty() && !id.contains('/')) {return true;}
     if *method == Method::POST && codex_sign_out(path).is_some() {return true;}
-    if claude_matches(method, path) {
+    if claude_matches(method, path) || super::login_browser::matches(method, path) {
         return true;
     }
     (matches!(*method, Method::GET | Method::POST)
@@ -109,6 +109,9 @@ pub async fn public(state: Arc<crate::routes::AppState>, request: Request) -> Re
     }
     if claude_matches(&method, &path) {
         return claude_public(state, request).await;
+    }
+    if super::login_browser::matches(&method, &path) {
+        return super::login_browser::public(state, request).await;
     }
     if !deletion && let Some(id) = codex_sign_out(&path) {
         let Ok(id) = percent_encoding::percent_decode_str(id).decode_utf8() else {
@@ -545,6 +548,13 @@ async fn codex_operation(state:&crate::routes::AppState,action:&str,id:&str,atte
     let account=match state.accounts.resolve(Provider::Codex,id) {Ok(account)=>account,Err(err)=>return error(err)};
     let result=match action {
         "status"=>Ok(state.accounts.codex_login_status(&account)),
+        "refresh_hooks"=>match state.state.runtime.get() {
+            Some(runtime)=>match AccountKey::new(Provider::Codex,&account.home) {
+                Ok(key)=>Ok(runtime.refresh_hooks(&key).await),
+                Err(_)=>Err(AccountError::io()),
+            },
+            None=>Err(AccountError::io()),
+        },
         "login"=>match bridge(state) {
             Ok(bridge)=>match super::codex_login::CodexInvalidator::new(state.cfg.upstream,state.cfg.internal_secret.clone(),bridge.instance().into()) {
                 Ok(invalidator)=>state.accounts.start_codex_login(&account,state.state.runtime.get().cloned(),invalidator).await,
@@ -622,27 +632,26 @@ fn claude_matches(method: &Method, path: &str) -> bool {
     }
     false
 }
-fn window_client(
-    state: &crate::routes::AppState,
-) -> Result<super::claude_login::WindowClient, AccountError> {
-    super::claude_login::WindowClient::new(
-        state.cfg.upstream,
-        state.cfg.internal_secret.clone(),
-        crate::config::Config::runtime_instance()
-            .ok()
-            .flatten()
-            .ok_or_else(AccountError::io)?,
-    )
-}
 async fn claude_operation(
     state: &crate::routes::AppState,
     action: &str,
     label: &str,
     code: String,
+    target: Option<super::login_browser::Target>,
 ) -> Result<Value, AccountError> {
-    let client = window_client(state)?;
+    let client = state.accounts.claude_windows.clone();
     match action {
-        "open" => state.accounts.start_claude_login(label, client).await,
+        "open" => {
+            let login = target.map(|target| {
+                let channel = super::login_browser::AppChannel {
+                    peers: state.peers.clone(),
+                    server_id: state.server_id.clone(),
+                    browser: state.login_browser.clone(),
+                };
+                super::claude_login::LoginTarget::new(target, Arc::new(channel))
+            });
+            state.accounts.start_claude_login_to(label, client, login).await
+        }
         "step" => state.accounts.claude_step(label, client).await,
         "code" => state.accounts.confirm_claude(label, code, client).await,
         "cancel" => state.accounts.cancel_claude(label, client).await,
@@ -685,10 +694,19 @@ async fn claude_public(state: Arc<crate::routes::AppState>, request: Request) ->
             return StatusCode::BAD_REQUEST.into_response();
         };
         let mut code = String::new();
-        if action == "code" {
+        if action == "code" || action == "open" {
             let Ok(bytes) = axum::body::to_bytes(request.into_body(), 16384).await else {
                 return StatusCode::PAYLOAD_TOO_LARGE.into_response();
             };
+            if action == "open" {
+                let Ok(target) = super::login_browser::target_from_body(&bytes) else {
+                    return StatusCode::UNPROCESSABLE_ENTITY.into_response();
+                };
+                return match claude_operation(&state, action, &label, code, target).await {
+                    Ok(value) => Json(value).into_response(),
+                    Err(err) => error(err),
+                };
+            }
             let body: Value = match serde_json::from_slice(&bytes) {
                 Ok(body) => body,
                 Err(_) => return StatusCode::UNPROCESSABLE_ENTITY.into_response(),
@@ -700,7 +718,7 @@ async fn claude_public(state: Arc<crate::routes::AppState>, request: Request) ->
             };
             code = value.to_owned();
         }
-        claude_operation(&state, action, &label, code).await
+        claude_operation(&state, action, &label, code, None).await
     };
     match result {
         Ok(value) => Json(value).into_response(),
@@ -767,6 +785,7 @@ pub async fn private_claude(
             &body.action,
             body.label.as_deref().unwrap_or(""),
             body.code.unwrap_or_default(),
+            None,
         )
         .await
     };

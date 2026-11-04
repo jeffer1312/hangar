@@ -112,6 +112,17 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   tem grupo próprio sem cancelamento e nunca é cortado no meio do upload. Cache só a main grava, e quem
   grava apaga as cópias antigas do mesmo prefixo. O LTO completo do `dist` fica. Evidência em
   [CI paralelo e cancelamento](#ci-testes-em-paralelo-e-cancelamento-do-run-substituído-19102026).
+- **macOS no CI roda à parte e nada espera por ele.** `server.yml` e `native.yml` compilam só Linux e
+  Windows; os jobs estão em `server-jobs.yml` e `native-build.yml` (`workflow_call`). O `server-macos.yml`
+  e o `native-macos.yml` disparam por `workflow_run` quando o Server ou o Native da main ou do `beta`
+  termina, sobre o mesmo commit (`branch`/`ref` passados aos jobs: no `workflow_run` o `github.ref_name`
+  e o `github.sha` são os da main). O Server macOS publica as entradas dele no `server-latest.json` pelas
+  fontes por sistema; o Native macOS acrescenta os arquivos ao `native-latest.json` só se o manifesto
+  ainda é do mesmo commit, e troca a linha dele nas notas, no mesmo grupo de concorrência do publish do
+  Native (a release não tem gravação condicional). O topo do `server-latest.json` e a tag ficam no commit
+  mais novo entre as fontes, para o Mac atrasado não voltá-los. O Package escuta só Server e CI. Outras
+  branches não testam macOS. Antes, o run inteiro esperava o Mac (cerca de 1 h a 1,5 h contra 20 min do
+  Linux) e o Package e as publicações de Linux e Windows ficavam presas nele.
 - **O app nativo segue o canal do servidor desta máquina.** `pre_voo.alvo` fora da main → release
   `native-<branch>`, que o `native.yml` publica a cada push no canal `beta` (mesma limpeza de nome no
   workflow e no `update.rs`); a `native-latest` continua só da main. Branch sem release, ou sem o
@@ -153,7 +164,9 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   "pronto". Nas etapas `reiniciar` e `nativo`, backend com outro pid e disco no `commit_para` =
   sucesso com aviso de que o app nativo não foi atualizado; fora disso, falha.
 - **`scripts/verificar-local` é exigido ao abrir PR e ao subir para a `main` ou para branch com PR
-  aberto; branch sem PR sobe livre.** O hook PreToolUse do `gh pr create` (`.claude/settings.json`)
+  aberto; branch sem PR sobe livre.** Todo passo fixa o par do porteiro numa cópia própria
+  (`target/par-auth`), e com a `main` juntada a base do plano é o `merge-base` com `origin/main`.
+  O hook PreToolUse do `gh pr create` (`.claude/settings.json`)
   confere o PR inteiro, desde o ponto em que a ponta saiu da base; a trava `pre-push` confere cada
   push, e consulta o PR com prazo de 10 s: sem `gh` ou sem resposta, segue com aviso. PR aberto pelo
   site fica com o CI. O padrão, que as travas exigem, é o rápido: só o ligado aos arquivos mudados
@@ -311,6 +324,36 @@ desenvolvedor e para a máquina ainda não migrada. Evidência em
   (checkout: `frontend/dist`). `GET`/`PUT /api/web-ui` (só o dono) grava `~/.hangar/web-ui.json`;
   desligada, a raiz responde 404 `web_ui_disabled` e o atualizador não baixa a tela. O interruptor
   fica no nativo e no Expo: desligar pelo PWA desligaria o próprio PWA.
+  Os arquivos e suas recusas são só do Rust, sem repasse pelas portas do Python (convidado com
+  login próprio, 8768) e sem reserva no modo `python`: lá a tela responde 404. HTML revalida também no 304;
+  assets preservam cache imutável, e GET/HEAD, Range e Last-Modified mantêm o contrato HTTP.
+  O caminho real fica dentro da pasta da tela, inclusive quando há links simbólicos.
+  No Windows, nome inválido ou longo demais retorna 404. A ausência normal de `web-ui.json`
+  não usa a espera por substituição da fila: ela acrescentava cerca de 50 ms a cada arquivo.
+  O caminho HTTP relê a opção sob a mesma trava do escritor, sem cache e sem confundir uma
+  gravação concorrente com a configuração padrão ligada.
+- **Máquina no pacote: o que os instaladores gravam fora do Hangar aponta para o `current`.**
+  `install-claude-wrapper.sh` e `install-hangar-send.sh` trocam a própria raiz pelo
+  `~/.hangar/current` quando ele é a pasta de onde rodam ou quando `~/.hangar/migration.json` diz
+  `"mode": "package"`, também rodando de um checkout. No Linux e no macOS o servidor abre o Codex
+  pelo `current/scripts/hangar-codex-tui`, e não pelo nome no PATH. Ver
+  [a entrada](#links-que-voltaram-ao-checkout-depois-da-migração-31102026).
+
+## Links que voltaram ao checkout depois da migração (31/10/2026)
+
+Motivo: numa máquina migrada em 27/10, o Codex parou de abrir depois da atualização de 31/10 com
+`o terminal fechou logo depois de abrir`. Na mesma rodada do motor `git`, o passo
+`2026-10-24-pacote-por-versao` apontou os links para o `current` e, 300 ms depois, o
+`2026-10-26-instalacao-no-macos` rodou `./scripts/install-claude-wrapper.sh` de dentro do checkout
+e devolveu ao checkout os links de `~/.local/bin`, as skills, os agentes e o bloco do shell. O
+checkout parou ali, e o servidor novo passou `--config` a um `hangar-codex-tui` que não conhecia o
+argumento: o lançador saiu com erro de uso e o pane morreu ao nascer. A causa é o motor `git`
+(`backend/app/atualizacoes.py`) continuar a rodada do checkout depois do passo de migração; a
+correção dele é no Python e ficou para quando for autorizada. Os instaladores se defendem por
+conta própria, e o servidor deixa de depender do PATH. O passo
+`2026-10-31-links-do-pacote` repara as máquinas nesse estado. A prova é
+`scripts/test-install-hangar-send.sh`, que roda os dois instaladores a partir de um checkout numa
+máquina migrada.
 
 ## Pacote por versão em vez de `git pull` (24/10/2026)
 
@@ -900,6 +943,12 @@ As tentativas relatadas às 07:49–07:57 não têm POST no journal desta máqui
 comprova o defeito do lançamento, sem atribuir a ele aqueles cliques sem a resposta capturada.
 
 ## Verificação local antes do push (06/10/2026)
+
+**Dois desencontros com o CI (30/10/2026).** Numa branch de login, a rodada falhou em testes que ela
+não tocava. (1) O par do porteiro só era fixado com arquivo de autenticação no diff, e teste mudado no
+backend puxa a suíte inteira, e outro `cargo` com outros pacotes religava o executável de
+`target/debug`, e o par deixava de conferir. (2) Com a main juntada, a base do plano continuava antes
+da junção e o diff trazia tudo que veio dela.
 
 **Rápido por padrão (14/10/2026).** A rodada da bateria do CI virou espera de mais de 40 min por push.
 Numa rodada real de outra sessão (commit `a2c14ee7a6`): preparo 441 s, rust 327 s, backend 813 s,

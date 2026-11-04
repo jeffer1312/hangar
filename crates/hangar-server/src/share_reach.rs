@@ -1,7 +1,7 @@
 //! Conferência de que um link de convite abre pela internet: o nome público existe e o Funnel
 //! entrega a página desta máquina. O DNS da máquina não serve: na tailnet ele sempre responde.
 use crate::routes::AppState;
-use axum::{body::to_bytes, extract::{ConnectInfo, Request, State}, http::{Method, StatusCode, header}, response::{IntoResponse, Response}};
+use axum::{body::to_bytes, extract::Request, http::{Method, StatusCode, header}, response::{IntoResponse, Response}};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::net::{IpAddr, SocketAddr};
@@ -191,19 +191,13 @@ fn json_response(status: StatusCode, v: Value) -> Response {
 
 /// Não-dono: 401 aqui mesmo. O Python não tem esta rota e responderia 404, que o cliente lê
 /// como "precisa do servidor Rust"; a falha conta para o bloqueio como a de qualquer rota.
-pub fn unauthorized(st: &AppState, client_ip: &str) -> Response {
-    st.auth.record_fail(client_ip);
+pub async fn unauthorized(st: &AppState, client_ip: &str) -> Response {
+    if let Err(e) = st.auth.record_failure(client_ip).await { return crate::auth::unavailable(e); }
     let (s, v) = refused(StatusCode::UNAUTHORIZED, "erro_nao_autorizado", "unauthorized");
     json_response(s, v)
 }
 
 pub async fn public(_st: Arc<AppState>, req: Request) -> Response { reply(req).await }
-
-/// Ponte do Connect (8768): o Python só repassa; a decisão é a mesma da rota pública.
-pub async fn private(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    if !crate::workspace_routes::private_ok(&st, peer, req.headers()) { return StatusCode::NOT_FOUND.into_response(); }
-    reply(req).await
-}
 
 async fn reply(req: Request) -> Response {
     let Ok(bytes) = to_bytes(req.into_body(), BODY_LIMIT).await else {

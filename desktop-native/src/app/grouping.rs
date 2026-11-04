@@ -225,6 +225,27 @@ pub(super) fn candidates<'a>(origin: Row, mut machines: Vec<String>, sessions: i
     }).collect()
 }
 
+/// "Ocultar o grupo inteiro" (`groupHideTargets` do core): as sessões do mesmo `pair_gid` de todas as máquinas, a própria
+/// primeiro. Ficam de fora a de outra pessoa, a já oculta e a que espera resposta (o servidor tiraria a marca).
+pub(super) fn group_hide_targets(origin: Row, rows: &[Row]) -> Vec<Target> {
+    let me = Target::new(origin.server, &origin.session.name);
+    let Some(gid) = origin.session.pair_gid.as_deref().filter(|g| !g.is_empty()) else { return vec![me] };
+    let waiting = |s: &SessionInfo| s.state == "awaiting_input" || s.pending_questions > 0;
+    let others = rows.iter().filter(|r| r.session.pair_gid.as_deref() == Some(gid) && !(r.server == origin.server && r.session.name == origin.session.name)
+        && !r.invite && r.session.outside.is_none() && !r.session.read_only() && !r.session.hidden_from_list && !waiting(r.session))
+        .map(|r| Target::new(r.server, &r.session.name));
+    std::iter::once(me).chain(others).collect()
+}
+
+/// Mensagem numa oculta (`groupShowTargets` do core): as outras ocultas do mesmo `pair_gid`, de todas as máquinas, sem a de
+/// outra pessoa.
+pub(super) fn group_show_targets(origin: Row, rows: &[Row]) -> Vec<Target> {
+    let Some(gid) = origin.session.pair_gid.as_deref().filter(|g| !g.is_empty()) else { return Vec::new() };
+    rows.iter().filter(|r| r.session.pair_gid.as_deref() == Some(gid) && !(r.server == origin.server && r.session.name == origin.session.name)
+        && !r.invite && r.session.outside.is_none() && !r.session.read_only() && r.session.hidden_from_list)
+        .map(|r| Target::new(r.server, &r.session.name)).collect()
+}
+
 pub(super) fn can_pair(origin: Row, target: Row, ids: &HashMap<String, String>) -> Result<(), Refusal> {
     let (o, t) = (origin.session, target.session);
     let same_server = origin.server == target.server;
@@ -670,10 +691,12 @@ impl Hangar {
     }
 
     /// Linha da lista, de qualquer máquina: arrastável, alvo de soltar e, no bloco, recuada com a faixa do grupo (âmbar
-    /// quando espera resposta, como o web). `remote` é a chave da máquina quando ela não é a ativa.
-    pub(super) fn group_row(&self, el: Stateful<Div>, session: &SessionInfo, remote: Option<&str>, radius: f32, cx: &mut Context<Self>) -> Stateful<Div> {
+    /// quando espera resposta, como o web). `remote` é a chave da máquina quando ela não é a ativa; `outside_block`, a linha
+    /// desenhada fora do bloco do par (o grupo "Ocultas"), que não leva a faixa.
+    pub(super) fn group_row(&self, el: Stateful<Div>, session: &SessionInfo, remote: Option<&str>, radius: f32, outside_block: bool,
+        cx: &mut Context<Self>) -> Stateful<Div> {
         let target = Target::new(&remote.map(str::to_owned).unwrap_or_else(|| self.active_key()), &session.name);
-        let member = session.pair_gid.is_some();
+        let member = session.pair_gid.is_some() && !outside_block;
         let lifted = self.dragging(cx) == Some(&target);
         let bar = if session.state == "awaiting_input" { theme::warning() } else { theme::accent() };
         let el = el.when(member, |el| el.ml(px(8.)).child(div().absolute().left_0().top(px(6.)).bottom(px(6.)).w(px(2.)).rounded_full().bg(bar)))
@@ -798,13 +821,17 @@ impl Hangar {
                 v.block.clone().filter(|_| v.error.is_none() && v.conflict.is_none() && !v.busy).map(|t| alert("group-block", t)),
             ];
             let variant = if v.join { ButtonVariant::Primary } else { ButtonVariant::Danger };
+            // Fechar o diálogo, confirmado ou cancelado, é o gesto do passo do tour.
+            let learned = |weak: WeakEntity<Hangar>| move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                let _ = weak.update(cx, |this, cx| this.close_group_ask(window, cx));
+            };
             let footer = div().flex().justify_end().gap_2().map(|el| if v.done {
-                el.child(Button::new("group-close").label(web("sessao_fechar")).with_variant(variant).on_click(|_, window, cx| window.close_dialog(cx)))
+                el.child(Button::new("group-close").label(web("sessao_fechar")).with_variant(variant).on_click(learned(weak.clone())))
             } else {
                 let replace = v.join && v.conflict.is_some();
                 let label = web(if replace { "grupo_drop_substituir_tarefa" } else if v.join { "grupo_drop_confirmar" } else { "grupo_drop_sair_confirmar" });
                 let confirm = weak.clone();
-                el.child(Button::new("group-cancel").label(tr("cancel")).disabled(v.busy).on_click(|_, window, cx| window.close_dialog(cx)))
+                el.child(Button::new("group-cancel").label(tr("cancel")).disabled(v.busy).on_click(learned(weak.clone())))
                     .child(Button::new("group-ok").label(label).with_variant(variant).loading(v.busy).disabled(v.busy || v.suggesting || v.block.is_some())
                         .on_click(move |_, window, cx| { let _ = confirm.update(cx, |this, cx| this.confirm_group(replace, window, cx)); }))
             });
@@ -814,8 +841,9 @@ impl Hangar {
                 .child(div().flex().flex_col().gap(px(12.)).children(affected).children(notices).children(task_row).children(alerts.into_iter().flatten()))
                 .footer(footer)
                 .on_ok(super::machines::enter_to_focused)
-                .on_close(move |_, _, cx| { let _ = close.update(cx, |this, _| {
+                .on_close(move |_, _, cx| { let _ = close.update(cx, |this, cx| {
                     if this.sidebar.grouping.ask.as_ref().is_some_and(|a| a.seq == seq) { this.sidebar.grouping.ask = None; }
+                    this.tour_event(crate::tour::TourEvent::GroupClosed, cx);
                 }); })
         });
         cx.notify();
@@ -941,11 +969,15 @@ impl Hangar {
                 GroupReply::Suggested(Err(error)) => (v.suggesting, v.error) = (false, Some(failed(&error, "grupo_drop_falhou"))),
             }
         }
-        if close {
-            self.sidebar.grouping.ask = None;
-            window.close_dialog(cx);
-        }
+        if close { self.close_group_ask(window, cx); }
         cx.notify();
+    }
+
+    /// Fecha o diálogo por código. `close_dialog` não chama o `on_close` dele: o passo do tour sai daqui, uma vez.
+    fn close_group_ask(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.sidebar.grouping.ask = None;
+        window.close_dialog(cx);
+        self.tour_event(crate::tour::TourEvent::GroupClosed, cx);
     }
 }
 
@@ -981,8 +1013,8 @@ pub(super) fn fill_group(menu: PopupMenu, hangar: &WeakEntity<Hangar>, origin: &
 mod tests {
     // Sem glob: o `test` do gpui_kit, que o `super::*` traz, esconderia o `#[test]` da linguagem.
     use super::{GlobalGroup, Grant, IdSlot, ListRow, Member, Refusal, Row, SessionInfo, can_leave, can_pair, candidates, cluster, existing_group, full_grants,
-        global_groups, id_slot, identity_settled, memo, pair_header_label, qualified, seal_text, split_code};
-    use crate::api::dto::{PairExternal, PairExternalEntry, PairResult};
+        global_groups, group_hide_targets, group_show_targets, id_slot, identity_settled, memo, pair_header_label, qualified, seal_text, split_code};
+    use crate::api::dto::{OutsideMark, PairExternal, PairExternalEntry, PairResult};
     use serde_json::Value;
     use std::{cell::RefCell, collections::HashMap, rc::Rc, time::Instant};
 
@@ -1043,6 +1075,42 @@ mod tests {
             .into_iter().map(|(t, _)| t.name).collect::<Vec<_>>();
         assert_eq!(names(Row { server: "h", session: me, invite: false }), ["b"], "a que está sendo apagada não entra");
         assert!(names(Row { server: "h", session: me, invite: true }).is_empty(), "sessão de servidor de convite não agrupa");
+    }
+
+    /// Os mesmos casos do `groupHideTargets` em `packages/core/src/sessions.test.ts`.
+    #[test]
+    fn hiding_a_group_takes_every_machine_but_skips_foreign_hidden_and_waiting() {
+        let solo = s("solo", None, &[]);
+        let names = |origin: Row, rows: &[Row]| group_hide_targets(origin, rows).into_iter().map(|t| t.id()).collect::<Vec<_>>();
+        assert_eq!(names(Row { server: "pc", session: &solo, invite: false }, &[]), ["pc::solo"], "fora de grupo, só a própria");
+        let me = s("a", Some("g"), &[]);
+        let b = s("b", Some("g"), &[]);
+        let c = s("c", Some("g"), &[]);
+        let other_group = s("x", Some("h"), &[]);
+        let hidden = SessionInfo { hidden_from_list: true, ..s("hid", Some("g"), &[]) };
+        let waiting = SessionInfo { state: "awaiting_input".into(), ..s("wait", Some("g"), &[]) };
+        let asking = SessionInfo { pending_questions: 1, ..s("ask", Some("g"), &[]) };
+        let foreign = SessionInfo { outside: Some(OutsideMark { own: "pc".into(), alias: "ana".into(), owner: "Ana".into() }), ..s("ext", Some("g"), &[]) };
+        let row = |server, session| Row { server, session, invite: false };
+        let rows = [row("pc", &b), row("pc", &me), row("pc", &other_group), row("pc", &hidden), row("pc", &waiting), row("nb", &asking),
+            row("nb", &c), row("nb", &foreign), Row { server: "guest", session: &b, invite: true }];
+        assert_eq!(names(row("pc", &me), &rows), ["pc::a", "pc::b", "nb::c"], "a própria primeiro, depois as do mesmo grupo nas máquinas");
+    }
+
+    /// Os mesmos casos do `groupShowTargets` em `packages/core/src/sessions.test.ts`.
+    #[test]
+    fn showing_a_group_takes_the_other_hidden_members_of_every_machine() {
+        let hid = |name: &str, gid: Option<&str>| SessionInfo { hidden_from_list: true, ..s(name, gid, &[]) };
+        let names = |origin: Row, rows: &[Row]| group_show_targets(origin, rows).into_iter().map(|t| t.id()).collect::<Vec<_>>();
+        let solo = hid("solo", None);
+        let row = |server, session| Row { server, session, invite: false };
+        assert!(names(row("pc", &solo), &[row("pc", &solo)]).is_empty(), "fora de grupo, ninguém");
+        let (me, b, c, other_group) = (hid("a", Some("g")), hid("b", Some("g")), hid("c", Some("g")), hid("x", Some("h")));
+        let shown = s("shown", Some("g"), &[]);
+        let foreign = SessionInfo { outside: Some(OutsideMark { own: "pc".into(), alias: "ana".into(), owner: "Ana".into() }), ..hid("ext", Some("g")) };
+        let rows = [row("pc", &me), row("pc", &b), row("nb", &c), row("pc", &shown), row("pc", &other_group), row("nb", &foreign),
+            Row { server: "guest", session: &b, invite: true }];
+        assert_eq!(names(row("pc", &me), &rows), ["pc::b", "nb::c"], "só as outras ocultas do grupo, nas máquinas do dono");
     }
 
     #[test]

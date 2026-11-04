@@ -969,6 +969,9 @@ def main():
     # Filho com ambiente limpo e cwd fora do repositório: o Settings lê `.env` do cwd e variáveis CP_*.
     env = {"PATH": os.environ.get("PATH", ""), "HOME": tempfile.gettempdir(), "LANG": "C.UTF-8",
            "TZ": "UTC", "PYTHONHASHSEED": "0"}
+    binary = Path(os.environ.get("CP_RUST_SERVER_BIN") or BACKEND.parent / "crates/target/debug/hangar-server")
+    assert binary.is_file(), "compile antes: scripts/cargo-pinned build -p hangar-server"
+    env["CP_RUST_SERVER_BIN"] = str(binary.resolve())
     subprocess.run([sys.executable, __file__, "--child", str(Path(out).resolve())], env=env,
                    cwd=tempfile.gettempdir(), check=True)
     print(f"gravado em {out}")

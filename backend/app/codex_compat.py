@@ -2,10 +2,12 @@
 
 from copy import deepcopy
 import json
+import logging
 import os
 from pathlib import Path, PureWindowsPath
 import re
 import shlex
+import shutil
 import subprocess
 from typing import Callable
 
@@ -14,6 +16,7 @@ from app.codex_arquivos import gravar, json_bytes, json_obj, ler, transformar
 
 
 _REPO = install_root.root()  # o `current` com o pacote: a cópia do wrapper sai da versão em uso
+_log = logging.getLogger(__name__)
 
 
 INICIO_INSTRUCOES = "<!-- hangar:codex-instrucoes:start -->"
@@ -219,6 +222,90 @@ def normalizar_security_guidance(config: dict, python_bin: str, wrapper: Path, *
     return novo
 
 
+def edicoes_confianca_hooks(dados: dict, codex_home: Path, *, recarregar: bool = False) -> tuple[list[dict], int]:
+    entries = dados.get("data") if isinstance(dados,dict) else None
+    if not isinstance(entries, list):
+        raise ValueError("Lista de hooks inválida")
+    prefixes = tuple(str(path / "hooks.json").replace("\\", "/")+":"
+                     for path in (codex_home, Path.home() / ".codex"))
+    edits, manual = [], 0
+    for entry in entries:
+        if not isinstance(entry, dict) or entry.get("errors") or entry.get("warnings"):
+            raise ValueError("O Codex não conseguiu carregar todos os hooks")
+        hooks = entry.get("hooks", [])
+        if not isinstance(hooks, list):
+            raise ValueError("Lista de hooks inválida")
+        for hook in hooks:
+            if not isinstance(hook, dict):
+                raise ValueError("Hook inválido")
+            status = hook.get("trustStatus")
+            pending = status in ("untrusted", "modified")
+            if hook.get("enabled") is not True or not (pending or recarregar and status == "trusted"):
+                continue
+            key, current = hook.get("key"), hook.get("currentHash")
+            if not isinstance(key, str) or not isinstance(current, str):
+                raise ValueError("Identidade de hook inválida")
+            synced = hook.get("source") in ("user", "plugin") or key.replace("\\", "/").startswith(prefixes)
+            if synced:
+                path = ".".join(json.dumps(part) for part in ("hooks", "state", key, "trusted_hash"))
+                edits.append({"keyPath":path,"value":current,"mergeStrategy":"replace"})
+            elif pending:
+                manual += 1
+    return edits, manual
+
+
+def _preparar_runtime_ecc(raiz: Path, backups: Path) -> bool:
+    package = json_obj(raiz / "package.json")
+    dependencies = package.get("dependencies", {})
+    if not dependencies:
+        return False
+    if not isinstance(dependencies, dict):
+        raise ValueError("Dependências do ECC inválidas")
+    locked = json_obj(raiz / "package-lock.json").get("packages", {})
+    expected = {}
+    for name, declared in dependencies.items():
+        if not isinstance(name, str) or not re.fullmatch(r"(?:@[a-z0-9._-]+/)?[a-z0-9._-]+", name):
+            raise ValueError("Nome de dependência do ECC inválido")
+        version = locked.get(f"node_modules/{name}", {}).get("version", declared)
+        if not isinstance(version, str) or not re.fullmatch(r"\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?", version):
+            raise ValueError("Dependência do ECC sem versão fixada")
+        expected[name] = version
+    node, npm = shutil.which("node"), shutil.which("npm")
+    if not node or not npm:
+        raise RuntimeError("O ECC precisa de Node e npm para concluir o preparo")
+    probe = "const r=require('module').createRequire(require('path').join(process.argv[1],'package.json'));for(const n of JSON.parse(process.argv[2]))r(n)"
+
+    def healthy():
+        if any(json_obj(raiz / "node_modules" / name / "package.json").get("version") != version
+               for name, version in expected.items()):
+            return False
+        try:
+            return subprocess.run([node,"-e",probe,str(raiz),json.dumps(list(expected))],
+                                  capture_output=True,timeout=15).returncode == 0
+        except subprocess.TimeoutExpired:
+            return False
+
+    if healthy():
+        return False
+    candidates = [Path(npm).resolve(), Path(npm).parent / "node_modules/npm/bin/npm-cli.js"]
+    cli = next((path for path in candidates if path.is_file() and path.suffix in (".js", ".cjs", ".mjs")), None)
+    if cli is None:
+        raise RuntimeError("O executável JavaScript do npm não foi encontrado")
+    try:
+        result = subprocess.run([node,str(cli),"install","--prefix",str(raiz),"--omit=dev",
+                                 "--ignore-scripts","--no-bin-links","--no-save","--no-audit","--no-fund"],
+                                capture_output=True,stdin=subprocess.DEVNULL,timeout=120,cwd=raiz)
+    except subprocess.TimeoutExpired as exc:
+        result = subprocess.CompletedProcess(exc.cmd,1,stdout=exc.stdout or b"",
+                                             stderr=(exc.stderr or b"")+b"\nnpm deadline exceeded")
+    if result.returncode or not healthy():
+        diagnostic = backups / "ecc-runtime-npm.log"
+        gravar(diagnostic,result.stderr + result.stdout,ler(diagnostic))
+        _log.warning("O preparo das dependências do ECC falhou; diagnóstico local: %s", diagnostic)
+        raise RuntimeError("As dependências do ECC não foram confirmadas")
+    return True
+
+
 def adaptar_hooks_plugin(
     raiz: Path,
     codex_home: Path,
@@ -238,12 +325,14 @@ def adaptar_hooks_plugin(
         raise ValueError("Plugin fora do cache do Codex")
     paths = {raiz / "hooks" / "hooks.json", raiz / "hooks.json"}
     security_guidance = False
+    ecc = False
     for rel in (".codex-plugin/plugin.json", ".claude-plugin/plugin.json"):
         manifest = raiz / rel
         if not manifest.is_file():
             continue
         dados = json_obj(manifest)
         security_guidance |= dados.get("name") == "security-guidance"
+        ecc |= dados.get("name") in ("ecc", "everything-claude-code")
         declaradas = dados.get("hooks")
         if isinstance(declaradas, dict):
             paths.add(manifest)
@@ -272,6 +361,8 @@ def adaptar_hooks_plugin(
 
         if transformar(path, converter, backups):
             ao_alterar()
+    if ecc and _preparar_runtime_ecc(raiz, backups):
+        ao_alterar()
 
 
 def remover_instrucao_de_leitura(atual: str) -> str:

@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from app import orq_md, orq_politica as pol
+from orq_contract_client import markdown as orq_md, policies as pol
 from app.config import ConfigDirInfo
 
 ARQUIVO_VIVO = """# Contas e modelos desta máquina — política de uso
@@ -163,7 +163,8 @@ def test_migrar_nao_move_link_nem_derruba_a_subida(maquina, monkeypatch):
     assert pol.migrar() is False and antigo.is_symlink()
     antigo.unlink()
     antigo.write_text(ARQUIVO_VIVO, encoding="utf-8")
-    monkeypatch.setattr(pol.shutil, "move", lambda *a: (_ for _ in ()).throw(PermissionError("nope")))
+    (Path.home() / ".hangar").rmdir()
+    (Path.home() / ".hangar").write_text("não é um diretório", encoding="utf-8")
     assert pol.migrar() is False          # fail-soft: avisa no log, nao levanta
     assert antigo.exists() and not pol.caminho().exists()
 

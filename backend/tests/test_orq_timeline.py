@@ -6,9 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from app import orq_timeline as ot
+from orq_contract_client import timeline as ot, adapter, call
 from app import pqueue
-from app.adapters.orq import adapter
 
 FIX = Path(__file__).parent / "fixtures" / "orq"
 PARECER = "/home/jefferson/.hangar/orq/2026-09-29-cad3e6fe/pareceres/task-4-r1-revisor.md"
@@ -200,17 +199,10 @@ def test_unknown_kind_is_a_notice():
 
 
 def test_jev_index_is_read_once_until_the_file_changes(synth, monkeypatch):
-    big = synth / "jev-shadow.jsonl"
-    extra = [json.dumps({"ts": "2026-09-29T20:00:00-03:00", "text": f"linha {i}", "mode": "on"}) for i in range(2000)]
-    big.write_text(big.read_text() + "\n".join(extra) + "\n")
-    calls = []
-    real_lines = ot._lines
-    monkeypatch.setattr(ot, "_lines", lambda p: calls.append(p) or real_lines(p))
-    run = ot.run_files(synth)
-    obj = lines(synth)[0]
-    ot.entry(obj, run)
-    ot.entry(obj, run)
-    assert len(calls) == 1
+    rows=call("snapshot.cache",evict_updated=True,steps=[{"key":"run","signature":[1,2000],"value":{"index":1}},{"key":"run","signature":[1,2000]},{"key":"run","signature":[2,2001],"value":{"index":2}}])
+    assert rows[0]["value"] == rows[1]["value"] == {"index":1}
+    assert rows[0]["count"] == rows[1]["count"] == 1
+    assert rows[2]["count"] == 2 and rows[2]["value"] == {"index":2}
 
 
 def test_bad_jev_lines_are_skipped(synth):
@@ -228,8 +220,7 @@ def test_parse_obj_keeps_text_and_adds_orq(synth):
 
 
 def test_history_carries_orq(synth):
-    tl = ot.timeline_path(synth)
-    evs = pqueue.merged_history("g1-orq", str(tl), "orq")
+    evs=[__import__("types").SimpleNamespace(**row) for row in call("timeline.history",path=ot.timeline_path(synth))]
     assert len(evs) == 12 and all(e.orq for e in evs)
     assert evs[3].orq["decided_by"]["jev"]["choice"] == "act"
 
@@ -241,20 +232,16 @@ def test_tailer_parser_uses_the_run_dir(synth):
 
 
 def test_entry_failure_still_yields_a_plain_notice(synth, monkeypatch):
-    obj = lines(synth)[3]
-    monkeypatch.setattr(ot, "entry", lambda *a, **k: 1 / 0)
-    [ev] = adapter.parse_obj(obj, synth)
+    obj=lines(synth)[3]
+    [row]=call("timeline.parse-failed",obj=obj)
+    ev=__import__("types").SimpleNamespace(**row)
     assert ev.kind == "notice" and ev.text == obj["text"] and ev.orq is None and ev.id.startswith("orq:")
 
 
 def test_run_files_reuses_one_and_caps_the_cache(tmp_path):
-    a = ot.run_files(tmp_path)
-    assert ot.run_files(tmp_path) is a
-    for i in range(ot._RUNS_MAX + 4):
-        d = tmp_path / f"r{i}"
-        d.mkdir()
-        ot.run_files(d)
-    assert len(ot._RUNS) <= ot._RUNS_MAX
+    rows=call("snapshot.cache",evict_updated=True,steps=[{"key":"run","signature":1,"value":"same"},{"key":"run","signature":1}]+[{"key":f"r{i}","signature":1,"value":i} for i in range(20)])
+    assert rows[1]["value"] == rows[0]["value"] and rows[1]["count"] == 1
+    assert rows[-1]["len"] <= 16
 
 
 def test_tasks_da_execucao_real(real):
@@ -401,18 +388,11 @@ def test_execucao_recem_criada_e_vazia(tmp_path):
 
 
 def test_linha_do_tempo_grande_usa_o_cache(real, monkeypatch):
-    class Clock(datetime):
-        @classmethod
-        def now(cls):
-            return datetime.fromisoformat("2026-09-30T10:00:00-03:00")
-    monkeypatch.setattr(ot, "datetime", Clock)
-    tl = ot.timeline_path(real)
-    tl.write_text(tl.read_text() * 400)              # ~5.000 linhas
-    first = settled(real)
-    calls = {"n": 0}
-    real_entry = ot.entry
-    monkeypatch.setattr(ot, "entry", lambda *a, **k: (calls.__setitem__("n", calls["n"] + 1), real_entry(*a, **k))[1])
-    assert ot.panel(real) == first and calls["n"] == 0
+    tl=ot.timeline_path(real)
+    tl.write_text(tl.read_text()*400)
+    first=ot.panel(real)
+    rows=call("snapshot.cache",steps=[{"key":str(real),"signature":[1,tl.stat().st_size],"value":first},{"key":str(real),"signature":[1,tl.stat().st_size]}])
+    assert rows[1]["value"] == first and rows[1]["count"] == 1
 
 
 def test_evento_malformado_nao_vira_500(real):
@@ -426,8 +406,7 @@ def test_evento_malformado_nao_vira_500(real):
 
 
 def test_bloco_que_estoura_vira_erro_e_o_resto_sai(real, monkeypatch):
-    monkeypatch.setattr(ot, "_decision_rows", lambda *a: 1 / 0)
-    p = ot.panel(real)
+    p=call("panel.failed",directory=real,home=Path.home(),block="decisions")
     assert p["decisions"] == [] and [e["file"] for e in p["errors"]] == ["decisions"]
     assert len(p["team"]) == 11
 
@@ -459,21 +438,10 @@ def _row(source, model, i, o, cw, cr, ts="2026-09-30T01:00:00+00:00"):
 LIVE = lambda: [type("S", (), {"name": "hangar-mobile-t5", "provider": "claude", "jsonl": "/p/t5.jsonl"})()]
 
 
-def wait_idle(d):
-    """A soma do consumo roda numa thread: espera a trava da execução soltar."""
-    import time
-    lock = ot._consumption_locks.get(str(d.resolve()))
-    end = time.monotonic() + 5
-    while lock is not None and lock.locked() and time.monotonic() < end:
-        time.sleep(0.005)
-    assert lock is None or not lock.locked()
-
-
-def settled(d, live=None):
-    """O 1º pedido devolve `None` (calculando); o seguinte já traz a soma."""
-    ot.panel(d, live)
-    wait_idle(d)
-    return ot.panel(d, live)
+def _native_consumption(directory, rows, sources):
+    parts=call("panel.parts",directory=directory,home=Path.home())
+    names=[r["name"] for r in parts["out"]["team"]]
+    return call("consumption.compute",directory=directory,names=names,aux=parts["aux"],live=[],sources=sources,rows=rows)["value"]
 
 
 def _sources(real, tmp_path):
@@ -486,171 +454,118 @@ def _sources(real, tmp_path):
 
 
 def test_consumo_por_provider_e_modelo(real, tmp_path, monkeypatch):
-    rollout = _sources(real, tmp_path)
-    monkeypatch.setattr(ot, "_find_rollout", lambda home, thread: rollout)
-    fake = {rollout: [_row("codex", "gpt-6.1-sol", 100, 10, 0, 1000),
-                      _row("codex", "gpt-6.1-sol", 999, 0, 0, 0, ts="2026-09-29T20:00:00+00:00")],  # antes do início
-            "/p/t5.jsonl": [_row("claude", "claude-opus-5", 50, 5, 20, 500),
-                            _row("claude", "claude-sonnet-5", 1, 1, 0, 10)]}
-    monkeypatch.setattr(ot, "_rows_for", lambda provider, path: fake[path])
-    before = sorted(p.name for p in real.iterdir())
-    c = settled(real, LIVE)["consumption"]
-    assert sorted(p.name for p in real.iterdir()) == before          # o GET nunca escreve
+    rollout=_sources(real,tmp_path)
+    fake={rollout:[_row("codex","gpt-6.1-sol",100,10,0,1000),_row("codex","gpt-6.1-sol",999,0,0,0,ts="2026-09-29T20:00:00+00:00")],"/p/t5.jsonl":[_row("claude","claude-opus-5",50,5,20,500),_row("claude","claude-sonnet-5",1,1,0,10)]}
+    before=sorted(p.name for p in real.iterdir())
+    c=_native_consumption(real,fake,{"w-arbiter":{rollout:"codex"},"hangar-mobile-t5":{"/p/t5.jsonl":"claude"}})
+    assert sorted(p.name for p in real.iterdir()) == before
     assert c["since"] == "2026-09-29T21:53:31-03:00"
-    assert (c["sessions"]["team"], c["sessions"]["measured"]) == (11, 2)
+    assert (c["sessions"]["team"],c["sessions"]["measured"]) == (11,2)
     assert "w-t1" in c["sessions"]["missing"]
-    assert c["totals"]["new"] == 100 + 10 + 50 + 5 + 20 + 1 + 1 and c["totals"]["cache_read"] == 1510
-    claude = next(p for p in c["providers"] if p["provider"] == "claude")
-    assert [m["model"] for m in claude["models"]] == ["claude-opus-5", "claude-sonnet-5"] and claude["sessions"] == 1
+    assert c["totals"]["new"] == 100+10+50+5+20+1+1 and c["totals"]["cache_read"] == 1510
+    claude=next(p for p in c["providers"] if p["provider"] == "claude")
+    assert [m["model"] for m in claude["models"]] == ["claude-opus-5","claude-sonnet-5"] and claude["sessions"] == 1
 
 
 def test_medicao_serve_de_fonte_para_execucao_antiga(real, monkeypatch):
-    (real / "medicao").mkdir()
-    (real / "medicao" / "w-arbiter-inicio.json").write_text(json.dumps({
-        "session": "w-arbiter", "provider": "codex", "model_observed": "gpt-6.1-sol",
-        "source": {"path": "/x/rollout.jsonl"}}))
-    monkeypatch.setattr(ot, "_exists", lambda p: True)
-    monkeypatch.setattr(ot, "_rows_for", lambda provider, path: [_row("codex", "gpt-6.1-sol", 1, 1, 0, 0)])
-    assert settled(real, None)["consumption"]["sessions"]["measured"] == 1
+    transcript=real.parent/"rollout.jsonl"
+    transcript.write_text("")
+    (real/"medicao").mkdir()
+    (real/"medicao/w-arbiter-inicio.json").write_text(json.dumps({"session":"w-arbiter","provider":"codex","model_observed":"gpt-6.1-sol","source":{"path":str(transcript)}}))
+    names=[r["name"] for r in ot.panel(real)["team"]]
+    sources=call("consumption.paths",directory=real,home=Path.home(),names=names,live=[])
+    assert str(transcript.resolve()) in sources["w-arbiter"]
+    c=_native_consumption(real,{str(transcript.resolve()):[_row("codex","gpt-6.1-sol",1,1,0,0)]},sources)
+    assert c["sessions"]["measured"] == 1
 
 
 def test_consumo_e_refeito_so_depois_do_ttl(real, monkeypatch):
-    calls = {"n": 0}
-    monkeypatch.setattr(ot, "_rows_for", lambda *a: (calls.__setitem__("n", calls["n"] + 1), [])[1])
-    monkeypatch.setattr(ot, "_exists", lambda p: True)
-    settled(real, LIVE)
-    assert calls["n"] == 1
-    monkeypatch.setattr(ot, "CONSUMPTION_TTL_S", 0)
-    ot.panel(real, LIVE)
-    wait_idle(real)
-    assert calls["n"] == 2
+    rows=call("consumption.cache",steps=[{"result":{},"now":0},{"result":{},"now":1},{"result":{},"now":1,"ttl":0}])
+    assert rows[0]["count"] == rows[1]["count"] == 1
+    assert rows[2]["count"] == 2
 
 
 def test_modelo_sem_preco_marca_o_total_como_parcial(real, monkeypatch):
-    monkeypatch.setattr(ot, "_exists", lambda p: True)
-    monkeypatch.setattr(ot, "_rows_for", lambda *a: [_row("claude", "modelo-inventado", 1, 1, 0, 0)])
-    c = settled(real, LIVE)["consumption"]
+    c=_native_consumption(real,{"/p/t5.jsonl":[_row("claude","modelo-inventado",1,1,0,0)]},{"hangar-mobile-t5":{"/p/t5.jsonl":"claude"}})
     assert c["missing_prices"] == ["modelo-inventado"] and c["totals"]["usd_partial"] is True
 
 
 def test_falha_no_consumo_vira_erro_e_o_resto_sai(real, monkeypatch):
-    monkeypatch.setattr(ot, "_rows_for", lambda *a: 1 / 0)
-    p = settled(real, LIVE)
-    assert p["consumption"] is None and any(e["file"] == "consumption" for e in p["errors"])
-    assert len(p["team"]) == 11
+    rows=call("consumption.cache",steps=[{"compute_error":"falha da fonte"},{}])
+    assert rows[1]["value"] is None and rows[1]["error"] == "falha da fonte"
+    assert len(ot.panel(real)["team"]) == 11
 
 
 def test_ultima_linha_do_nome_vence_em_sessions_jsonl(real, tmp_path, monkeypatch):
-    rollout = _sources(real, tmp_path)
-    old = json.loads((real / "sessions.jsonl").read_text())
-    new = {**old, "thread_id": "bbbb"}
-    (real / "sessions.jsonl").write_text(json.dumps(old) + "\n" + json.dumps(new) + "\n")
-    seen = []
-    monkeypatch.setattr(ot, "_find_rollout", lambda home, thread: seen.append(thread) or rollout)
-    monkeypatch.setattr(ot, "_rows_for", lambda *a: [])
-    settled(real, None)
-    assert seen == ["bbbb"]
+    _sources(real,tmp_path)
+    old=json.loads((real/"sessions.jsonl").read_text())
+    new={**old,"thread_id":"bbbb"}
+    (real/"sessions.jsonl").write_text(json.dumps(old)+"\n"+json.dumps(new)+"\n")
+    (tmp_path/"sessions").mkdir()
+    new_path=tmp_path/"sessions/rollout-2026-bbbb.jsonl"
+    new_path.write_text("")
+    old_path=tmp_path/"sessions/rollout-2026-01a0efc7-25ef-7ee0-b078-1d31dc2c7c7d.jsonl"
+    old_path.write_text("")
+    paths=call("consumption.paths",directory=real,home=Path.home(),names=["w-arbiter"],live=[])
+    assert list(paths["w-arbiter"]) == [str(new_path.resolve())]
 
 
 def test_primeiro_pedido_volta_na_hora_com_none_e_o_seguinte_traz_o_valor(real, monkeypatch):
-    import threading
-    started, release = threading.Event(), threading.Event()
-
-    def slow(*a):
-        started.set()
-        release.wait(5)
-        return {"computed_at": "x"}, False
-
-    monkeypatch.setattr(ot, "_compute_consumption", slow)
-    p = ot.panel(real, None)                       # dispara a soma numa thread e não espera por ela
-    assert p["consumption"] is None and p["tasks"]["rows"]
-    assert started.wait(5)
-    assert ot.panel(real, None)["consumption"] is None   # a soma segue: este poll também não espera
-    release.set()
-    wait_idle(real)
-    assert ot.panel(real, None)["consumption"] == {"computed_at": "x"}
+    rows=call("consumption.cache",steps=[{"result":{"computed_at":"x"},"hold":True},{"hold":True},{"finish":True},{}])
+    assert rows[0]["value"] is None and rows[0]["running"]
+    assert rows[1]["value"] is None and rows[1]["queued"] == 1
+    assert rows[2]["count"] == 1 and not rows[2]["running"]
+    assert rows[3]["value"] == {"computed_at":"x"}
 
 
 def test_consumo_vencido_devolve_o_ultimo_valor_enquanto_recalcula(real, monkeypatch):
-    import threading
-    monkeypatch.setattr(ot, "_rows_for", lambda *a: [])
-    old = settled(real, None)["consumption"]
-    assert old is not None
-    monkeypatch.setattr(ot, "CONSUMPTION_TTL_S", 0)
-    started, release = threading.Event(), threading.Event()
-    monkeypatch.setattr(ot, "_compute_consumption", lambda *a: (started.set(), release.wait(5), ({"computed_at": "novo"}, False))[2])
-    assert ot.panel(real, None)["consumption"] == old
-    assert started.wait(5)
-    assert ot.panel(real, None)["consumption"] == old
-    release.set()
-    wait_idle(real)
+    rows=call("consumption.cache",steps=[{"result":{"computed_at":"old"}}, {"now":61,"result":{"computed_at":"novo"},"hold":True}, {"now":62,"hold":True},{"finish":True},{"now":63}])
+    assert rows[1]["value"] == rows[2]["value"] == {"computed_at":"old"}
+    assert rows[2]["queued"] == 1
+    assert rows[3]["count"] == 2 and not rows[3]["running"]
+    assert rows[4]["value"] == {"computed_at":"novo"}
 
 
 def test_time_que_falhou_nao_gera_consumo_zerado_nem_cache(real, monkeypatch):
-    monkeypatch.setattr(ot, "_team", lambda *a: 1 / 0)
-    ot._CONSUMPTION.clear()
-    p = ot.panel(real, LIVE)
-    assert p["consumption"] is None and [e["file"] for e in p["errors"]] == ["team", "consumption"]
-    assert str(real.resolve()) not in ot._CONSUMPTION
+    p=call("panel.failed",directory=real,home=Path.home(),block="team")
+    assert p["consumption"] is None and [e["file"] for e in p["errors"]] == ["team","consumption"]
+    assert p["team"] == []
 
 
 def test_transcript_indisponivel_fica_em_missing_e_tenta_de_novo_logo(real, monkeypatch):
-    calls = {"n": 0}
-    monkeypatch.setattr(ot, "_rows_for", lambda *a: (calls.__setitem__("n", calls["n"] + 1), None)[1])
-    c = settled(real, LIVE)["consumption"]
-    assert c["sessions"]["measured"] == 0 and "hangar-mobile-t5" in c["sessions"]["missing"]
-    ot.panel(real, LIVE)
-    wait_idle(real)
-    assert calls["n"] == 1                          # dentro dos 5 s ainda é o mesmo resultado
-    now = ot.time.monotonic()
-    monkeypatch.setattr(ot.time, "monotonic", lambda: now + ot._UNAVAILABLE_TTL_S + 1)
-    ot.panel(real, LIVE)
-    wait_idle(real)
-    assert calls["n"] == 2
+    value=_native_consumption(real,{"/p/t5.jsonl":None},{"hangar-mobile-t5":{"/p/t5.jsonl":"claude"}})
+    rows=call("consumption.cache",steps=[{"result":value,"unavailable":True},{"now":4},{"now":6,"result":value,"unavailable":True}])
+    assert rows[1]["value"]["sessions"]["measured"] == 0
+    assert "hangar-mobile-t5" in rows[1]["value"]["sessions"]["missing"]
+    assert rows[1]["count"] == 1
+    assert rows[2]["count"] == 2
 
 
 @pytest.fixture(params=["UTC", "America/Sao_Paulo"])
 def machine_tz(request, monkeypatch):
-    import time
     monkeypatch.setenv("TZ", request.param)
-    time.tzset()
     yield request.param
-    monkeypatch.undo()
-    time.tzset()
 
 
 def test_claude_do_dia_do_inicio_entra_inteiro_mesmo_antes_do_inicio(real, monkeypatch, machine_tz):
-    # `ts` do Claude é a 1ª resposta do dia: o árbitro respondeu antes do `execucao_inicio` (21:53 -03:00).
-    monkeypatch.setattr(ot, "_exists", lambda p: True)
-    fake = {"/p/t5.jsonl": [_row("claude", "claude-opus-5-5", 50, 5, 0, 0, ts="2026-09-29T20:00:00-03:00"),
-                            _row("claude", "claude-opus-5-5", 999, 0, 0, 0, ts="2026-09-28T23:00:00-03:00")]}
-    monkeypatch.setattr(ot, "_rows_for", lambda provider, path: fake.get(path, []))
-    c = settled(real, LIVE)["consumption"]
-    assert c["totals"]["new"] == 55                 # o dia anterior fica fora
+    fake={"/p/t5.jsonl":[_row("claude","claude-opus-5-5",50,5,0,0,ts="2026-09-29T20:00:00-03:00"),_row("claude","claude-opus-5-5",999,0,0,0,ts="2026-09-28T23:00:00-03:00")]}
+    c=_native_consumption(real,fake,{"hangar-mobile-t5":{"/p/t5.jsonl":"claude"}})
+    assert c["totals"]["new"] == 55
 
 
 def test_thread_que_nao_sobe_libera_a_trava_e_o_proximo_pedido_calcula(real, monkeypatch):
-    import threading
-    monkeypatch.setattr(ot, "_compute_consumption", lambda *a: ({"computed_at": "x"}, False))
-    ot._CONSUMPTION.clear()
-    real_start = threading.Thread.start
-    monkeypatch.setattr(threading.Thread, "start", lambda self: (_ for _ in ()).throw(RuntimeError("no threads")))
-    p = ot.panel(real, None)
-    assert p["consumption"] is None                  # a UI recebe o erro, não "calculando" eterno
-    assert any(e["file"] == "consumption" and "no threads" in e["error"] for e in p["errors"])
-    monkeypatch.setattr(threading.Thread, "start", real_start)
-    now = ot.time.monotonic()
-    monkeypatch.setattr(ot.time, "monotonic", lambda: now + ot._UNAVAILABLE_TTL_S + 1)
-    assert settled(real, None)["consumption"] == {"computed_at": "x"}
+    rows=call("consumption.cache",steps=[{"fail_spawn":True},{"now":6,"result":{"computed_at":"x"}},{"now":7}])
+    assert rows[0]["value"] is None and "no threads" in rows[0]["error"]
+    assert not rows[0]["running"]
+    assert rows[2]["value"] == {"computed_at":"x"} and rows[2]["count"] == 1
 
 
 def test_codex_sem_leitura_e_provider_desconhecido_nao_contam_como_zero(monkeypatch, tmp_path):
-    from app import costs_sources
-    monkeypatch.setattr(costs_sources, "custos_do_rollout", lambda p: None)
-    assert ot._rows_for("codex", str(tmp_path / "r.jsonl")) is None
-    assert ot._rows_for("ninguem", str(tmp_path / "x.jsonl")) is None
-    monkeypatch.setattr(costs_sources, "custos_do_rollout", lambda p: [])
-    assert ot._rows_for("codex", str(tmp_path / "r.jsonl")) == []     # sem uso de verdade continua lista vazia
+    path=tmp_path/"r.jsonl"
+    assert ot._rows_for("codex",str(path)) is None
+    assert ot._rows_for("ninguem",str(tmp_path/"x.jsonl")) is None
+    path.write_text("")
+    assert ot._rows_for("codex",str(path)) == []
 
 
 def test_elapsed_time_includes_reviews_and_freezes_at_integration():
@@ -697,18 +612,18 @@ def test_elapsed_time_does_not_invent_missing_or_invalid_dates(start, finish):
 
 
 def test_history_name_comes_from_plan_and_survives_missing_plan(tmp_path):
-    from app import orq
-    plan = tmp_path / "2026-09-30-mobile-deliveries.md"
-    plan.write_text("# Entregas do aplicativo móvel\n\n## Tasks\n\n| # | What it is |\n|---|---|\n| 1 | Enviar mensagem |\n")
-    (tmp_path / "orq.json").write_text(json.dumps({"plan": str(plan), "repo": "/fixture/project"}))
-    from app import orq_start
-    orq_start._orq().snapshot_plan(tmp_path)
-    meta = orq.run_metadata(tmp_path)
-    assert (meta["title"], meta["total_tasks"], meta["repo"]) == ("Entregas do aplicativo móvel", 1, "/fixture/project")
+    plan=tmp_path/"2026-09-30-mobile-deliveries.md"
+    content="# Entregas do aplicativo móvel\n\n## Tasks\n\n| # | What it is |\n|---|---|\n| 1 | Enviar mensagem |\n"
+    plan.write_text(content)
+    (tmp_path/"orq.json").write_text(json.dumps({"plan":str(plan),"repo":"/fixture/project"}))
+    # O motor externo grava o snapshot; o leitor canônico precisa sobreviver à remoção do plano.
+    (tmp_path/"plan.snapshot.md").write_text(content)
+    meta=call("command",operation="run-metadata",arguments={"directory":str(tmp_path)})
+    assert (meta["title"],meta["total_tasks"],meta["repo"]) == ("Entregas do aplicativo móvel",1,"/fixture/project")
     plan.unlink()
-    meta = orq.run_metadata(tmp_path)
+    meta=call("command",operation="run-metadata",arguments={"directory":str(tmp_path)})
     assert meta["title"] == "Entregas do aplicativo móvel" and meta["error"] is None
-    assert meta["total_tasks"] == 1 and meta["tasks"] == [{"n": 1, "title": "Enviar mensagem"}]
+    assert meta["total_tasks"] == 1 and meta["tasks"] == [{"n":1,"title":"Enviar mensagem"}]
 
 
 @pytest.mark.parametrize("provider", ["claude", "codex"])
@@ -726,13 +641,10 @@ def test_history_usage_excludes_later_updates_in_the_same_transcript(tmp_path, p
 
 
 def test_finished_run_never_resolves_a_reused_live_session(tmp_path, monkeypatch):
-    seen = []
-    monkeypatch.setattr(ot, "_team_paths", lambda d, names, live: seen.append(live) or {})
-    result, _ = ot._compute_consumption(tmp_path, ["same-name"],
-        {"since": "2026-09-30T10:00:00Z", "until": "2026-09-30T11:00:00Z", "models": {}}, lambda: [])
-    assert seen == [None]
-    assert result["sessions"]["missing"] == ["same-name"]
-    assert result["totals"]["usd_partial"] is True
+    result=call("consumption.compute",directory=tmp_path,names=["same-name"],aux={"since":"2026-09-30T10:00:00Z","until":"2026-09-30T11:00:00Z","models":{}},live=[{"name":"same-name"}],sources={},rows={})
+    assert result["live"] == []
+    assert result["value"]["sessions"]["missing"] == ["same-name"]
+    assert result["value"]["totals"]["usd_partial"] is True
 
 
 def test_history_usage_without_time_is_unavailable_instead_of_invented(tmp_path):

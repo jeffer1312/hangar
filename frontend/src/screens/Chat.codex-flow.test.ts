@@ -16,7 +16,6 @@ vi.mock('../components/CreateSessionSheet.svelte', vazio);
 vi.mock('../components/UsageSheet.svelte', vazio);
 vi.mock('../components/Git.svelte', vazio);
 vi.mock('../components/PreviewSheet.svelte', vazio);
-vi.mock('../components/ActivitySheet.svelte', vazio);
 vi.mock('../components/TerminalMirror.svelte', vazio);
 vi.mock('../components/RunSheet.svelte', vazio);
 vi.mock('../components/MoreSheet.svelte', vazio);
@@ -160,6 +159,7 @@ it('digita, enfileira, orienta e reconcilia a mensagem definitiva sem duplicaç�
 });
 
 it('não sobrepõe consultas de subagentes mesmo se o estado mudar durante a resposta', async () => {
+  harness.provider = 'claude';
   let responder!: (lista: Awaited<ReturnType<typeof api.getSubagents>>) => void;
   vi.mocked(api.getSubagents).mockImplementationOnce(() => new Promise(resolve => { responder = resolve; }));
   const intervalos = vi.spyOn(globalThis, 'setInterval');
@@ -172,6 +172,83 @@ it('não sobrepõe consultas de subagentes mesmo se o estado mudar durante a res
   expect(api.getSubagents).toHaveBeenCalledTimes(1);
   responder([]);
   await flush();
+});
+
+it('fixa só o agente Codex confirmado pelo state antes da descoberta e mesmo após falha na leitura', async () => {
+  let failSubs!: (cause: Error) => void;
+  const pending = new Promise<Awaited<ReturnType<typeof api.getSubagents>>>((_, reject) => { failSubs = reject; });
+  vi.mocked(api.getSubagents).mockReturnValue(pending);
+  try {
+    await montar(false);
+    await emit('message', { id: 'spawn', kind: 'tool_use', tool_use_id: 'launch', tool_name: 'spawn_agent', tool_input: { task_name: 'revisar-painel' } });
+    await emit('message', { id: 'created', kind: 'tool_result', tool_use_id: 'launch', result: '{"agent_id":"child","task_name":"/root/revisar-painel"}' });
+    expect(document.querySelector('.agentes-rodando')).toBeNull();
+    const native = { agent_path: '/root/revisar-painel', ended_at: null, can_message: true, message_blocked: null };
+    await emit('state', { session: 'codex-flow', state: 'working', codex_subagents: { child: { ...native, state: 'running' } } });
+    expect(document.querySelector('.agentes-rodando')).not.toBeNull();
+    for (const state of ['finished', null]) {
+      await emit('state', { session: 'codex-flow', state: 'working', codex_subagents: { child: { ...native, state } } });
+      expect(document.querySelector('.agentes-rodando')).toBeNull();
+    }
+    await emit('state', { session: 'codex-flow', state: 'working', codex_subagents: { child: { ...native, state: 'running' } } });
+    failSubs(new Error('leitura indisponível'));
+    await flush();
+    expect(document.querySelector('.agentes-rodando')).not.toBeNull();
+  } finally { vi.mocked(api.getSubagents).mockResolvedValue([]); }
+});
+
+it('eventos de atividade da mesma filha motivam leitura sem sobrepor pedidos', async () => {
+  const child: api.SubagentRun = { agentId: 'child', agentPath: '/root/review', agentType: null, prompt: null,
+    startedAt: '', updatedAt: '', mtime: 1, toolCalls: 1, tools: [], recent: [], lastText: '', state: 'running' };
+  vi.mocked(api.getSubagents).mockResolvedValue([child]);
+  try {
+    await montar(false);
+    const state = (activity_revision: number) => ({ session: 'codex-flow', state: 'working', codex_subagents: { child: {
+      agent_path: '/root/review', activity_revision, state: 'running', ended_at: null, can_message: true, message_blocked: null,
+    } }, codex_commands: [{ id: 'exec', process_id: '42', command: 'pwd', started_at: 1, background: true }] });
+    await emit('state', state(1));
+    document.querySelector<HTMLButtonElement>('button.shell-chip')!.click();
+    await flush();
+    const shownCalls = () => document.querySelector('[role="dialog"] .agent-now')?.textContent;
+    expect(shownCalls()).toContain(m.atividade_chamadas({ n: 1 }));
+    const reads = vi.mocked(api.getSubagents).mock.calls.length;
+    // Sem Promise.withResolvers: o lib do tsconfig do PWA não o tem.
+    let resolvePending!: (runs: api.SubagentRun[]) => void;
+    const pending = {
+      promise: new Promise<api.SubagentRun[]>((resolve) => { resolvePending = resolve; }),
+      resolve: (runs: api.SubagentRun[]) => resolvePending(runs),
+    };
+    vi.mocked(api.getSubagents).mockReturnValueOnce(pending.promise).mockResolvedValue([{ ...child, toolCalls: 5 }]);
+    await emit('state', state(2));
+    expect(api.getSubagents).toHaveBeenCalledTimes(reads + 1);
+    await emit('state', state(3));
+    expect(api.getSubagents).toHaveBeenCalledTimes(reads + 1);
+    pending.resolve([{ ...child, toolCalls: 2 }]);
+    await flush(); await flush();
+    expect(api.getSubagents).toHaveBeenCalledTimes(reads + 2);
+    expect(shownCalls()).toContain(m.atividade_chamadas({ n: 5 }));
+  } finally { vi.mocked(api.getSubagents).mockResolvedValue([]); }
+});
+
+it.each(['claude', 'codex'] as const)('preserva a descoberta de subagentes ao chegar histórico antigo de %s e a renova no reset', async provider => {
+  harness.provider = provider;
+  let finishHistory!: (value: Awaited<ReturnType<typeof api.getHistoryDesde>>) => void;
+  vi.mocked(api.getHistoryDesde).mockReturnValueOnce(new Promise(resolve => { finishHistory = resolve; }));
+  await montar();
+  await emit('state', { session: 'codex-flow', state: 'idle' });
+  const reads = vi.mocked(api.getSubagents).mock.calls.length;
+  expect(reads).toBeGreaterThan(0);
+  const tail = { id: 'tail', kind: 'assistant_msg', ts: 2, text: 'mensagem atual' } as const;
+  await emit('message', tail);
+  expect(api.getSubagents).toHaveBeenCalledTimes(reads);
+  finishHistory({ eventos: [
+    { id: 'older', kind: 'assistant_msg', ts: 1, text: 'mensagem antiga' }, tail,
+  ], etag: 'history-v1' });
+  await flush();
+  expect(document.body.textContent).toContain('mensagem antiga');
+  expect(api.getSubagents).toHaveBeenCalledTimes(reads);
+  await emit('reset', {});
+  expect(api.getSubagents).toHaveBeenCalledTimes(reads + 1);
 });
 
 it('abrir uma conversa Claude não consulta o seletor de modelos', async () => {

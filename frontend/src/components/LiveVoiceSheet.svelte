@@ -3,9 +3,22 @@
   import BottomSheet from './BottomSheet.svelte';
   import { liveVoiceStore, listVoiceMemory, forgetVoiceMemory, type LiveVoiceSettings, type VoiceMemory } from '../lib/liveVoiceStore.svelte';
   import { renderMarkdown } from '../lib/markdown';
-  import { listarCredenciais, modelOptionsForServer, type Credencial, type ModelOption } from '@hangar/core';
+  import { listarCredenciais, liveVoiceBackstageKeys, liveVoiceClock, modelOptionsForServer, type Credencial, type ModelOption } from '@hangar/core';
   import * as m from '../paraglide/messages';
   import { thoughtTail, type VoiceStatus } from '../lib/liveVoiceStatus';
+  import type { LiveVoiceState } from '../lib/liveVoice';
+
+  function backstageLabel(line: LiveVoiceState['backstage'][number]): string {
+    switch (line.kind) {
+      case 'you': return m.native_voice_backstage_you();
+      case 'voice': return m.native_voice_backstage_voice();
+      case 'heard': return m.native_voice_backstage_heard();
+      case 'answer': return m.native_voice_backstage_answer();
+      // O texto do resultado é só o nome da sessão.
+      case 'result': return line.text ? m.native_voice_backstage_result({ session: line.text }) : m.native_voice_backstage_answer_session();
+      default: return '';
+    }
+  }
 
   type Mode = 'direct' | 'plan';
   const MODES: Mode[] = ['direct', 'plan'];
@@ -31,6 +44,7 @@
   const entry = $derived(liveVoiceStore.settingsOf(target));
   const reply = $derived(entry?.reply ?? null);
   const vs = $derived(liveVoiceStore.state);
+  const backstageKeys = $derived(vs ? liveVoiceBackstageKeys(vs.backstage) : []);
   const STATUS: Record<VoiceStatus, () => string> = {
     connecting: m.codex_voice_connecting, voice: m.live_voice_status_voice, muted: m.codex_voice_muted,
     you: m.live_voice_status_you, thinking: m.live_voice_status_thinking, searching: m.live_voice_status_searching,
@@ -252,9 +266,19 @@
         {#if vs.backstage.length}
           <section class="lv-block">
             <h3 class="lv-label">{m.live_voice_backstage()}</h3>
-            <ul class="lv-lines">
-              {#each vs.backstage.slice(-6) as line, i (i)}
-                <li class="lv-line lv-{line.kind}">{line.text}</li>
+            <ul class="lv-backstage">
+              {#each vs.backstage as line, i (backstageKeys[i])}
+                {@const label = backstageLabel(line)}
+                <li class="lv-bs lv-bs-{line.kind}">
+                  {#if label || line.at !== undefined}
+                    <div class="lv-bs-head">
+                      {#if label}<span class="lv-bs-who">{label}</span>{/if}
+                      {#if line.at !== undefined}<span class="lv-bs-at">{liveVoiceClock(line.at)}</span>{/if}
+                      {#if line.live}<span class="lv-bs-at">{m.native_voice_backstage_live()}</span>{/if}
+                    </div>
+                  {/if}
+                  {#if line.kind !== 'result' && line.text}<p class="lv-bs-text">{line.text}</p>{/if}
+                </li>
               {/each}
             </ul>
           </section>
@@ -435,8 +459,16 @@
   .lv-seg button.on { background: var(--accent-dim); color: var(--accent); font-weight: 600; }
 
   .lv-lines { display: flex; flex-direction: column; gap: 4px; list-style: none; margin: 0; padding: 0; }
-  .lv-line { font-size: var(--text-sm); color: var(--text-secondary); line-height: 1.45; }
-  .lv-heard { color: var(--text-primary); }
+  .lv-backstage { display: flex; flex-direction: column; gap: 12px; list-style: none; margin: 0; padding: 0; }
+  .lv-bs-head { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 8px; }
+  .lv-bs-who { font-size: var(--text-sm); font-weight: 700; color: var(--text-secondary); }
+  .lv-bs-you .lv-bs-who { color: var(--accent); }
+  .lv-bs-voice .lv-bs-who { color: var(--success); }
+  .lv-bs-answer .lv-bs-who { color: var(--text-primary); }
+  .lv-bs-result .lv-bs-who { color: var(--warning); }
+  .lv-bs-at { font-size: var(--text-xs); color: var(--text-muted); font-variant-numeric: tabular-nums; }
+  .lv-bs-text { margin: 2px 0 0; font-size: var(--text-sm); line-height: 1.45; color: var(--text-primary); white-space: pre-wrap; }
+  .lv-bs-heard .lv-bs-text { color: var(--text-muted); }
   .lv-plan {
     font-size: var(--text-sm); line-height: 1.55; color: var(--text-secondary);
     border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: var(--space-3);

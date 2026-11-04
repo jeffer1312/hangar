@@ -1,5 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { buildCreateSessionBody, pickFolderRoot, uniqueSessionName } from './api';
+import { buildCreateSessionBody, looksGenericName, pickFolderRoot, uniqueSessionName } from './api';
+
+describe('looksGenericName', () => {
+  it('reconhece o nome da pasta, com ou sem -N, e sessao[-N]', () => {
+    const cwd = '/home/u/Projetos/hangar';
+    for (const name of ['hangar', 'hangar-2', 'sessao', 'sessao-3']) expect(looksGenericName(name, cwd)).toBe(true);
+  });
+  it('não toma nome escolhido por genérico', () => {
+    const cwd = '/home/u/Projetos/hangar';
+    for (const name of ['ABC-123-Coordenadora', 'etiquetas-maquina-conta', 'hangar-x']) expect(looksGenericName(name, cwd)).toBe(false);
+  });
+  it('pasta saneada como na abertura', () => {
+    expect(looksGenericName('Area-de-trabalho-2', '/home/u/Área de trabalho/')).toBe(true);
+  });
+});
 
 describe('uniqueSessionName', () => {
   it('sanitiza como o backend e desempata com -2', () => {

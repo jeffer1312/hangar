@@ -1,6 +1,5 @@
-//! O lado Rust do harness de contrato da abertura (`session_open_contract.py diff --side rust`): a
-//! abertura do Rust sobre o cenário montado em disco, com o multiplexador, os programas e as pontes
-//! gravados na forma em que o lado Python os grava. Só para o harness e os testes.
+//! A abertura do Rust sobre o cenário montado em disco, com o multiplexador, os programas e as pontes
+//! gravados. Só para os testes.
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -161,10 +160,16 @@ impl OpenFacts for Facts {
         self.local.saved_defaults(provider, engine, engine_account)
     }
     fn codex_logins(&self) -> Result<Vec<CodexLogin>, OpenError> { self.local.codex_logins() }
-    fn claude_quotas(&self) -> Vec<Value> {
-        self.record.lock().unwrap().rust_bridge.push(json!({"bridge": "accounts", "op": "quotas", "args": {"cached_only": true}}));
-        self.quotas.iter().filter(|row| row["provedor"] == "claude").cloned().collect()
+    fn quotas(&self, network: bool) -> Vec<Value> {
+        // O Python só lia o cache: a leitura de rede, que ele não fazia, devolve as mesmas linhas e não entra no registro.
+        if !network {
+            self.record.lock().unwrap().rust_bridge.push(json!({"bridge": "accounts", "op": "quotas", "args": {"cached_only": true}}));
+        }
+        self.quotas.iter().filter(|row| matches!(row["provedor"].as_str(), Some("claude" | "codex"))).cloned().collect()
     }
+    fn spent_accounts(&self) -> BTreeMap<String, f64> { BTreeMap::new() }
+    // O Python não registrava cota desconhecida; o diário do harness segue o dele.
+    fn quota_unknown(&self, _name: &str, _account: &str) {}
     fn existing_dir(&self, cwd: &str) -> Option<String> { self.local.existing_dir(cwd) }
     fn config_dirs(&self) -> Result<Vec<String>, OpenError> { self.local.config_dirs() }
     fn engines(&self) -> Vec<String> { self.local.engines() }
@@ -302,7 +307,7 @@ impl OpenHost for Host {
 }
 
 /// Roda os passos do cenário (só `POST /api/sessions`) pela abertura do Rust. `{"not_ours": true}`
-/// quando algum passo não é do Rust (o Python o atende): o harness diz a rota que falta.
+/// quando algum passo não é do Rust.
 pub async fn run(scenario: &Value, root: &Path, env: BTreeMap<String, String>) -> Value { run_with(scenario, root, env, None).await }
 
 /// A resolução de `request` com os fatos do cenário, como a do passo `POST /api/sessions`, sem gravar

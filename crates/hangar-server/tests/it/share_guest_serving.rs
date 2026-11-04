@@ -109,6 +109,7 @@ async fn list_srv(root: &Path, n: usize) -> Srv {
         "omp_agent": home.join(".omp/agent"), "kimi_home": home.join(".kimi-code")}).to_string());
     let (python, upstream) = spawn_fake().await;
     let mut state = AppState::new(config(upstream, ""));
+    state.devices = Arc::new(hangar_server::devices::Registry::new(home.join(".hangar/devices.json")));
     state.list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&script, Duration::from_secs(5)),
         capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
         FactsClient::new(upstream, SECRET.into())));
@@ -223,6 +224,17 @@ async fn stream_da_lista_filtrado_e_sem_contar_app() {
         assert!(ev.event == "sessions", "o convidado não recebe {}", ev.event);
         if ev.data.contains("working") { break; }
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn guest_list_with_a_device_records_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let srv = list_srv(dir.path(), 2).await;
+    let t = srv.g.token("s0", Kind::Share);
+    let mut es = open_sse(format!("http://{}/api/sessions/events?token={t}&device=ios%3Bg-1", srv.guest)).await;
+    // O dono grava antes de assinar: com a primeira lista na mão, um registro já estaria no disco.
+    assert_eq!(names(&serde_json::from_str(&next_named(&mut es, "sessions").await.data).unwrap()), ["s0"]);
+    assert!(!dir.path().join("home/.hangar/devices.json").exists(), "convidado com concessão não registra aparelho");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -366,7 +378,7 @@ async fn guest_forward_never_touches_the_owner_backoff() {
     assert!(srv.st.auth.is_owner(&lan.to_string(), Some(OWNER.as_bytes())), "o dono nesse IP segue livre");
 }
 
-/// WebSocket repassado ao Python (o navegador remoto): revogar fecha com 4410, que o Python não sabe.
+/// O proxy genérico precisa encerrar o WebSocket quando o convite é revogado.
 #[tokio::test(flavor = "multi_thread")]
 async fn forwarded_guest_websocket_closes_4410_when_revoked() {
     use tokio::io::AsyncReadExt;
@@ -374,7 +386,7 @@ async fn forwarded_guest_websocket_closes_4410_when_revoked() {
     let srv = plain_srv(dir.path(), |_| {}).await;
     let t = srv.g.token("cc", Kind::Share);
     let mut s = tokio::net::TcpStream::connect(srv.guest).await.unwrap();
-    s.write_all(format!("GET /api/sessions/cc/nav-remoto?token={t} HTTP/1.1\r\nHost: h\r\n\
+    s.write_all(format!("GET /api/sessions/cc/proxy-ws-test?token={t} HTTP/1.1\r\nHost: h\r\n\
         Connection: Upgrade\r\nUpgrade: websocket\r\n\r\n").as_bytes()).await.unwrap();
     let mut head = Vec::new();
     let mut byte = [0u8; 1];
@@ -388,7 +400,7 @@ async fn forwarded_guest_websocket_closes_4410_when_revoked() {
     tokio::time::timeout(Duration::from_secs(5), s.read_exact(&mut got)).await.unwrap().unwrap();
     assert_eq!(&got, b"ola");
     let (_, h) = srv.python.last_hit();
-    verified(&h, "GET", "/api/sessions/cc/nav-remoto");
+    verified(&h, "GET", "/api/sessions/cc/proxy-ws-test");
     srv.g.revoke_all();
     let mut rest = Vec::new();
     tokio::time::timeout(Duration::from_secs(12), s.read_to_end(&mut rest)).await.expect("o vigia fecha em até 5 s").unwrap();
@@ -722,7 +734,8 @@ fn group_of_three(root: &Path) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn convidado_de_par_ve_o_grupo_dentro_do_acesso() {
-    let dir = tempfile::tempdir().unwrap();
+    // Um caminho pode conter o nome de uma sessão sem conceder acesso a ela.
+    let dir = tempfile::Builder::new().prefix("s2-").tempdir().unwrap();
     group_of_three(dir.path());
     let srv = list_srv(dir.path(), 3).await;
     let (pair, t) = srv.g.share.store.create_redeemed("s0", Some("k:L-s0".into()), Kind::Pair).unwrap();
@@ -732,7 +745,8 @@ async fn convidado_de_par_ve_o_grupo_dentro_do_acesso() {
     let s0 = row(&rows, "s0");
     assert_eq!((&s0["pair_gid"], &s0["pair_peers"], &s0["pair_task"]), (&json!("g1"), &json!(["s1"]), &json!("T")));
     assert_eq!(row(&rows, "s1")["pair_peers"], json!(["s0"]));
-    assert!(!serde_json::to_string(&rows).unwrap().contains("s2"), "{rows}");
+    let temp_name = dir.path().file_name().unwrap().to_str().unwrap();
+    assert!(!serde_json::to_string(&rows).unwrap().replace(temp_name, "").contains("s2"), "{rows}");
     for field in ["pair_external", "pair_externals", "then_target"] {
         assert_eq!(s0[field], Value::Null, "{field}");
     }

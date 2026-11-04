@@ -20,7 +20,7 @@ escopo), nunca pelo agente: registre e pergunte, uma pergunta por vez, opções 
 
 **Nada nasce no Python.** O objetivo é tirar o Python do projeto: sem pedido do usuário, no Python
 só se apaga código. Toda linha acrescentada lá (lógica, releitura, cache, ponte, rota, repasse,
-condição de modo) é perguntada antes de escrever, dizendo o que é, por que o Rust sozinho não
+condição de modo, teste, dublê, fixture) é perguntada antes de escrever, dizendo o que é, por que o Rust sozinho não
 basta e o que se perde sem ela. Subagente para e pergunta pela sessão; linha nova no Python sem a
 autorização registrada no `decisoes.md` é defeito na revisão.
 
@@ -83,9 +83,10 @@ commit, decisão) | plataforma`. Mostre a contagem por área e peça a aprovaç�
 
 ## 4. Prender o comportamento antes de portar
 
-1. **Caracterização:** valor esperado só vem de executar o Python, nunca de ler o código. Fixture
-   de contrato (crie `backend/tests/fixtures/contract/<area>/`) grava o commit de origem e o comando que a
-   gerou; nunca é editada à mão.
+1. **Caracterização:** valor esperado só vem de executar o Python, nunca de ler o código. A captura
+   mora em `.superpowers/sdd/<data>-<assunto>/contract/<area>/`, fora do que é commitado, junto
+   com o script do diferencial; grava o commit de origem e o comando que a gerou; nunca é editada
+   à mão.
 2. **Diferencial:** enquanto o Python existe, as mesmas entradas vão aos dois lados. Cada lado roda
    isolado, partindo do mesmo estado inicial restaurado (config dir temporário, sidecars; nunca o
    Rust sobre o estado que o Python já alterou), com o mesmo relógio e os mesmos ids injetados (sem ponto de injeção, registre o limite no
@@ -94,8 +95,8 @@ commit, decisão) | plataforma`. Mostre a contagem por área e peça a aprovaç�
 3. **Entradas** cruzam cada armadilha abaixo, cada ramo de erro do inventário e cada fim de vida
    do item 1.4, com a vida nova já de pé no mesmo nome.
 4. **Teste não é ajustado para passar:** sem truncar saída, sem comparar mais frouxo que o
-   contrato, sem gravar a saída do Rust como esperada; Python ausente faz o teste falhar dizendo o
-   que não rodou, nunca pular calado.
+   contrato, sem gravar a saída do Rust como esperada; até o portão 7, Python ausente faz o
+   diferencial falhar dizendo o que não rodou, nunca pular calado.
 5. **Armadilhas de semântica**, conferidas em cada item que as toca:
    - inteiro sem limite no Python × largura fixa no Rust;
    - `//` e `%` arredondam para baixo (`div_euclid`/`rem_euclid`), `round()` é meio-par;
@@ -137,8 +138,9 @@ commit, decisão) | plataforma`. Mostre a contagem por área e peça a aprovaç�
 
 **Regras de cada item, para o subagente e para a sessão:**
 
-1. Um teste Rust por item, pela interface pública (rota, ator, fila), com o esperado vindo da
-   fixture, do teste Python ou do commit de fix. RED com falha de asserção, depois GREEN.
+1. Um teste Rust por item, pela interface pública (rota, ator, fila), com o esperado tirado da
+   captura, do teste Python ou do commit de fix e escrito no próprio teste. RED com falha de
+   asserção, depois GREEN.
 2. Diferença achada: primeiro um teste que falha por ela, depois o conserto; então varra a classe
    inteira (os casos irmãos) e registre a linha de inventário que faltava, com o motivo de não
    ter sido pega (o subagente, no relato).
@@ -170,8 +172,7 @@ Todos passam antes de dizer "migrado":
    diff inteiro; correção volta ao portão 1.
 4. **Caminho inteiro:** `grep` nos dois lados pelos chamadores do `escopo.md`; nenhum aponta para
    o Python, nenhuma volta entre os dois. Antes de apagar o Python, cada pytest da área tem par
-   Rust no `conferencia.md`, e as entradas gravadas ficam congeladas e seguem lidas pelos testes
-   Rust.
+   Rust no `conferencia.md`.
 5. **Uso real:** release compilado de checkout limpo do commit, com o Python na mesma versão do
    contrato, no Linux e no Windows (DELPHI-02) quando a área tem ramo de plataforma.
 6. **Desempenho** (`medicao.md`): o mesmo roteiro antes e depois, p50/p95 das rotas, CPU e
@@ -181,7 +182,14 @@ Todos passam antes de dizer "migrado":
    Python → Rust → Python, prendia o pool de 8 threads de uma VM de 4 vCPU e já fez um envio de
    mensagem esperar 67 s; uma fonte em `127.0.0.1` recusado custava 2 s por ciclo no Windows.
    Mais lento sem motivo registrado não fecha.
+7. **Limpeza antes do PR:** o PR leva o Rust, os testes Rust e a remoção do Python. Saem junto com
+   o código: os pytests da área, inclusive os que sobem o Rust contra uma referência Python; os
+   dublês e fixtures que só eles usam; capturas e diferencial; e o teste Rust que só compara com
+   captura. Teste Rust que fica traz o esperado escrito nele; entrada real (pane, JSONL) fica ao
+   lado dele. Confira: `git diff --numstat origin/main -- backend/` só tem linhas adicionadas com
+   autorização no `decisoes.md` ou na constante do protocolo, e `git grep` pelos módulos apagados
+   não acha nada em `backend/`.
 
-Done when: os arquivos de todas as fases existem, os seis portões passaram, `conferencia.md` não
+Done when: os arquivos de todas as fases existem, os sete portões passaram, `conferencia.md` não
 tem item aberto, o caminho Python da responsabilidade foi apagado e `git worktree list` não tem
 worktree de rota sobrando.

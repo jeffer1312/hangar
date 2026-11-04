@@ -338,7 +338,7 @@ def assert_writer(name):
 
 
 def facts(payload, metadata):
-    from app import terminal_input as ti, plugin_bridge as plugin, askquestion, uds_messaging, api, tmux
+    from app import terminal_input as ti, askquestion, uds_messaging, api, tmux
     metadata['validate']()
     descriptor = metadata['descriptor']
     current = validate_binding(descriptor)
@@ -357,15 +357,10 @@ def facts(payload, metadata):
     if native_state is not None:
         idle = native_state == 'idle'
     else:
-        plugin_state = plugin.estado_recente(current.name) if _plugin_current(current) else None
         hook_state = api.hook_state.get_state(current.meta['session_id'])
-        if plugin_state is not None:
-            idle = plugin_state[0] == 'idle'
-        elif hook_state is not None and hook_state[1] >= current.meta.get('legacy_import_after', current.meta.get('created', 0)):
+        if hook_state is not None and hook_state[1] >= current.meta.get('legacy_import_after', current.meta.get('created', 0)):
             idle = hook_state[0] == 'idle'
-    question = bool(askquestion.pergunta_aberta(Path(current.jsonl).stem) or plugin.pergunta_pendente(current.name))
-    modes = plugin.declared_modes(current.name)
-    live = plugin.aguardando(current.name) and _plugin_current(current)
+    question = bool(askquestion.pergunta_aberta(Path(current.jsonl).stem))
     native = None
     sender, _ = uds_messaging.separar_prefixo(text)
     endpoint = _native_socket(current) if sender and os.name == 'posix' else None
@@ -384,60 +379,25 @@ def facts(payload, metadata):
         clipboard = ours is not None and theirs is not None and ours > 0 and ours == theirs
     metadata['validate']()
     return dict(binding=binding, ready=ready, idle=idle, open_question=question,
-        plugin_live=live, plugin_user=live and 'user' in modes, clipboard_available=clipboard, native=native)
+        plugin_live=False, plugin_user=False, clipboard_available=clipboard, native=native)
 
 
 def publish(payload, metadata):
-    from app import plugin_bridge
+    """O Python não tem mais a espera do plugin: nenhuma publicação é escrita por ele."""
     metadata['validate']()
     current = validate_binding(metadata['descriptor'])
     if payload.get('binding') != current.meta['terminal'] or payload.get('generation') != current.generation:
         raise ValueError('publicação de outra vida')
-    if not _plugin_current(current):
-        return 'not_written'
-    return plugin_bridge.publish_terminal(current.name, current.meta['session_id'], current.generation,
-        payload['publication'], metadata['validate'])
+    return 'not_written'
 
 
 def plugin_control(payload, metadata):
-    from app import plugin_bridge
-    from app.adapters.claude_headless.adapter import respostas_do_app, _mensagem_conversar
+    """O Python não segura pergunta do plugin: nada a responder por ele."""
     metadata['validate']()
     current = validate_binding(metadata['descriptor'])
     if payload.get('binding') != current.meta['terminal'] or payload.get('generation') != current.generation:
         raise ValueError('controle de outra vida')
-    body = payload['payload']
-    request_id = body.get('request_id')
-    pending = plugin_bridge.pergunta_pendente(current.name)
-    if not pending:
-        return {'disposition':'rejected'}
-    normalized_id = pending['id'] if str(pending['id']).startswith(('perm:', 'ask:')) else 'ask:' + pending['id']
-    if normalized_id != request_id:
-        return {'disposition':'rejected'}
-    # Pergunta `ask:` corre também no diálogo da TUI: sem resposta pelo plugin, escolhe o teclado.
-    # Permissão segurada pelo plugin não tem menu no terminal; lá a recusa é a resposta.
-    fallback = {'disposition':'rejected' if request_id.startswith('perm:') else 'unavailable'}
-    if payload['control'] == 'select' and not request_id.startswith('perm:'):
-        return fallback
-    if 'receipt_v2' not in plugin_bridge.declared_modes(current.name):
-        return fallback
-    if not _plugin_current(current):
-        return fallback
-    if payload['control'] == 'select' and request_id.startswith('perm:'):
-        if body.get('option') not in (1,2):
-            raise ValueError('opção fora do pedido de permissão')
-        response = {'permitir':body['option'] == 1}
-    elif payload['control'] == 'answer_questions' and pending['questions']:
-        answers, conversation = respostas_do_app(pending['questions'], body['answers'])
-        response = {'deny':_mensagem_conversar(answers, conversation)} if conversation else {'answers':answers}
-    else:
-        return {'disposition':'rejected'}
-    metadata['validate']()
-    receipt = {'publication_id':payload['publication_id'], 'generation':current.generation,
-        'session_id':current.meta['session_id']}
-    if plugin_bridge.responder_pergunta(current.name, response, pending['id'], receipt):
-        return {'disposition':'accepted'}
-    return {'disposition':'unknown'}
+    return {'disposition':'rejected'}
 
 
 async def _return_lost_loan(coordinator, name, descriptor, request, request_id):
@@ -1074,7 +1034,7 @@ class ClipboardLock:
 
 
 def answer_sync(name, answers, request_id, jsonl):
-    from app import runtime_coordinator, api, terminal_input as ti, plugin_bridge
+    from app import runtime_coordinator, api, terminal_input as ti
     from app.runtime_adapter import run_sync
     owner = runtime_coordinator.current()
     if owner is None or owner.legacy is None or _writer.get() is not None:
@@ -1086,13 +1046,7 @@ def answer_sync(name, answers, request_id, jsonl):
         if not await owner.prepare_session(name,'claude') or not owner.slot(name).binding.meta.get('terminal'):
             return None
         ti._validate(answers)
-        pending = await asyncio.to_thread(plugin_bridge.pergunta_pendente, name)
-        if pending:
-            current_id = pending['id']
-            if request_id and request_id not in {current_id, current_id.removeprefix('ask:')}:
-                raise ValueError('a pergunta mudou; resposta conservada')
-            payload['request_id'] = current_id if current_id.startswith(('ask:', 'perm:')) else 'ask:' + current_id
-        if any(answer.get('kind') == 'chat' for answer in answers) and pending is None:
+        if any(answer.get('kind') == 'chat' for answer in answers):
             text = await asyncio.to_thread(api._askq_conversar_text, answers, jsonl)
             if not text:
                 raise ValueError('resposta sem texto para conversar')
@@ -1252,20 +1206,6 @@ def _native_socket(current):
 def _native_state(current):
     record = _native_record(current)
     return {'idle':'idle','busy':'working','waiting':'awaiting_input','shell':'idle'}.get((record or {}).get('status'))
-
-
-def _plugin_current(current):
-    from app import plugin_bridge
-    with plugin_bridge._lock:
-        owner = plugin_bridge._donos.get(current.name)
-    if owner is None:
-        return False
-    try:
-        born = int(owner[0].split('-',1)[0], 36) / 1000
-    except (ValueError, TypeError):
-        return False
-    cut = max(current.meta.get('legacy_import_after') or current.meta.get('created', 0), current.meta.get('agent_birth') or 0)
-    return born >= cut
 
 
 def _composer_snapshot(name):

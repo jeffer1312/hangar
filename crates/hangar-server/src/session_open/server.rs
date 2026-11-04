@@ -229,7 +229,7 @@ pub async fn run_program(env: &BTreeMap<String, String>, argv: Vec<String>, time
     let Some(exe) = crate::runtime::process::resolve_program(program, env) else { return failed(format!("{program} não está no PATH")) };
     let mut command = tokio::process::Command::new(exe);
     command.args(args).env_clear().stdin(std::process::Stdio::null()).kill_on_drop(true)
-        .envs(env.iter().filter(|(k, _)| !matches!(k.as_str(), "CP_AUTH_TOKEN" | "HANGAR_INTERNAL_SECRET" | "HANGAR_RUNTIME_INSTANCE")));
+        .envs(env.iter().filter(|(k, _)| !matches!(k.as_str(), "CP_AUTH_TOKEN" | "HANGAR_INTERNAL_SECRET" | "HANGAR_RUNTIME_INSTANCE" | "HANGAR_AUTH_CONTEXT")));
     match tokio::time::timeout(timeout, command.output()).await {
         Ok(Ok(out)) => MuxOutput { code: out.status.code(), stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
             stderr: String::from_utf8_lossy(&out.stderr).into_owned() },
@@ -435,12 +435,12 @@ async fn decide_adopting(st: &Arc<AppState>, host: &ServerHost, request: &Sessio
                          mut adopting: Option<&mut super::adopt::Adopting>) -> Decision {
     let facts_env = host.env.clone();
     let runtime = tokio::runtime::Handle::current();
-    let (request_for_facts, caller_for_facts) = (request.clone(), caller.clone());
+    let (request_for_facts, caller_for_facts, accounts) = (request.clone(), caller.clone(), st.accounts.clone());
     let resolved = tokio::task::spawn_blocking(move || {
-        let facts = super::facts::LocalFacts::new(facts_env, runtime);
+        let facts = super::facts::LocalFacts::shared(facts_env, &accounts, runtime);
         super::resolve_open(&request_for_facts, &caller_for_facts, &facts)
     }).await;
-    let resolved = match resolved.unwrap_or_else(|_| Err(OpenError::new(500, "erro_criacao_sessao", "a resolução da abertura não terminou"))) {
+    let mut resolved = match resolved.unwrap_or_else(|_| Err(OpenError::new(500, "erro_criacao_sessao", "a resolução da abertura não terminou"))) {
         Ok(resolved) => resolved,
         Err(error) => {
             if let Some(events) = super::open::refusal_diary(crate::mods::state::random_hex(8), request.name.as_deref().unwrap_or(""), super::open::requested_provider(request), &error) { host.diary(events); }
@@ -450,26 +450,35 @@ async fn decide_adopting(st: &Arc<AppState>, host: &ServerHost, request: &Sessio
     // O spec desta resolução contra o guardado na reserva: nada resolvido nem montado de novo para ela.
     if let Some(adopting) = adopting.as_deref_mut() { adopting.compare(&resolved).await; }
     if !super::open::opens_here(&resolved.spec) { return Decision::NotOurs; }
-    if let super::Account::Codex { account_id } = &resolved.spec.account { codex_preparation_warning(st, account_id).await; }
+    if let super::Account::Codex { account_id } = &resolved.spec.account {
+        match codex_preparation(st,account_id).await {
+            Ok(warning) => resolved.warnings.extend(warning),
+            Err(error) => return Decision::Refused(error),
+        }
+    }
     match super::open::open_adopting(host, resolved, caller, adopting).await {
         Ok(opened) => Decision::Opened(opened),
         Err(error) => Decision::Refused(error),
     }
 }
 
-/// `_codex_require_idle_preparation`: conta Codex adicional com a sincronização fora de `ready` abre
-/// assim mesmo; o estado fica no log.
-async fn codex_preparation_warning(st: &AppState, account_id: &str) {
-    let Ok(account) = st.accounts.resolve(crate::accounts::Provider::Codex, account_id) else { return };
-    if account.is_default { return; }
-    let status = match crate::accounts::http::bridge(st) {
-        Ok(bridge) => st.accounts.preparation_status(&account, &bridge).await,
-        Err(error) => return tracing::warn!(code = error.code, "conta Codex {account_id}: sincronização não lida antes de abrir"),
-    };
-    if status["status"] != "ready" {
-        let issues: Vec<&str> = status["issues"].as_array().into_iter().flatten().filter_map(|i| i["code"].as_str()).collect();
-        tracing::warn!("conta Codex {account_id} com sincronização {}; pendências: {issues:?}", status["status"]);
-    }
+/// O preparo da conta Codex antes de abrir; o parcial abre e volta como aviso com as pendências.
+async fn codex_preparation(st: &AppState, account_id: &str) -> Result<Option<String>,OpenError> {
+    let account = st.accounts.resolve(crate::accounts::Provider::Codex,account_id)
+        .map_err(|error|OpenError::new(error.status,error.code,error.message))?;
+    let bridge = crate::accounts::http::bridge(st)
+        .map_err(|error|OpenError::new(error.status,error.code,error.message))?;
+    let status = st.accounts.prepare_for_session(&account,bridge,tokio::time::Instant::now()+std::time::Duration::from_secs(60)).await
+        .map_err(|error|OpenError::new(error.status,error.code,error.message).with_params(error.params))?;
+    Ok(partial_preparation_warning(&status))
+}
+
+fn partial_preparation_warning(status: &Value) -> Option<String> {
+    if status["status"] != "partial" { return None; }
+    let codes: Vec<&str> = status["issues"].as_array().into_iter().flatten().filter_map(|issue| issue["code"].as_str()).collect();
+    let codes = if codes.is_empty() { String::new() } else { format!(" ({})", codes.join(", ")) };
+    Some(format!("a sincronização da conta Codex terminou com pendências{codes}; a sessão abriu assim mesmo. \
+        Confira a sincronização da conta"))
 }
 
 /// A linha `api.servidor` do middleware de acesso do Python, para o pedido que o Rust atendeu
@@ -500,7 +509,7 @@ pub(crate) fn reply(error: &OpenError) -> Response {
 /// corpo intacto (corpo que não é pedido válido também: o 422 é o dele).
 pub async fn create(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let (started, diag) = (Instant::now(), crate::routes::diag_req(&req));
-    let (fwd, owner) = crate::routes::gate(&st, peer, &req);
+    let (fwd, owner) = match crate::routes::gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     let (mut parts, body) = req.into_parts();
     // Só o Rust diz ao Python que já olhou.
     parts.headers.remove(DECLINED);
@@ -544,7 +553,7 @@ pub async fn create(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
 /// `GET /api/sessions/creation-progress?name=`: o passo da criação em curso, do dono e do convidado com
 /// login (as duas pontas que criam). O resto segue ao Python, que recusa.
 pub async fn creation_progress(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (fwd, owner) = crate::routes::gate(&st, peer, &req);
+    let (fwd, owner) = match crate::routes::gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     let guest = !owner && crate::auth::presented_token(req.headers(), req.uri().query(), req.method(), fwd.https)
         .and_then(|token| login_guest(&AccountEnvironment::capture().claude_base, &token)).is_some();
     if !owner && !guest { return crate::routes::pass(&st, req, &fwd).await; }
@@ -562,7 +571,7 @@ pub(super) fn baton_step(asked: &Value) -> &'static str {
 /// `POST /api/sessions/{name}/bastao` do dono: o Python monta e grava o dossiê (é dele) e devolve o
 /// pedido de abertura da sucessora em vez de abrir; o Rust a abre com o kick-off como primeira mensagem.
 pub async fn bastao(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (fwd, owner) = crate::routes::gate(&st, peer, &req);
+    let (fwd, owner) = match crate::routes::gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     let (mut parts, body) = req.into_parts();
     parts.headers.remove(DECLINED);
     let Ok(bytes) = to_bytes(body, crate::session_write::BODY_LIMIT).await else {
@@ -643,9 +652,9 @@ pub async fn resume_archived(st: &Arc<AppState>, project: &str, sid: &str, body:
         let host = ServerHost::new(st.clone()).await;
         let live = host.live_sessions().await?;
         let (env, runtime, server_projects) = (host.env.clone(), tokio::runtime::Handle::current(), host.server_projects());
-        let (p, s) = (project.clone(), sid.clone());
+        let (p, s, accounts) = (project.clone(), sid.clone(), st.accounts.clone());
         let planned = tokio::task::spawn_blocking(move || {
-            let facts = super::facts::LocalFacts::new(env.clone(), runtime);
+            let facts = super::facts::LocalFacts::shared(env.clone(), &accounts, runtime);
             let config_dirs = super::OpenFacts::config_dirs(&facts)?;
             let w = super::archive::Where { home: &env.home, env: &env.base, server_projects: &server_projects, config_dirs: &config_dirs, live: &live };
             let plan = super::archive::plan(&w, &facts, &p, &s, body)?;
@@ -663,7 +672,7 @@ pub async fn resume_archived(st: &Arc<AppState>, project: &str, sid: &str, body:
 pub async fn archive_resume(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>,
                             axum::extract::Path((project, sid)): axum::extract::Path<(String, String)>, req: Request) -> Response {
     let (started, diag) = (Instant::now(), crate::routes::diag_req(&req));
-    let (fwd, owner) = crate::routes::gate(&st, peer, &req);
+    let (fwd, owner) = match crate::routes::gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     if !owner { return crate::routes::pass(&st, req, &fwd).await; }
     let headers = req.headers().clone();
     let Ok(bytes) = to_bytes(req.into_body(), crate::session_write::BODY_LIMIT).await else {
@@ -685,5 +694,16 @@ mod tests {
         let warnings = super::exit_warnings(&errs);
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("par"), "{warnings:?}");
+    }
+
+    /// O preparo parcial vira aviso com o código de cada pendência; o pronto não avisa.
+    #[test]
+    fn a_partial_preparation_warns_with_its_issue_codes() {
+        let partial = serde_json::json!({"status": "partial", "issues": [{"code": "codex_account_source_sync_incomplete", "params": {}}]});
+        let warning = super::partial_preparation_warning(&partial).unwrap();
+        assert!(warning.contains("codex_account_source_sync_incomplete"), "{warning}");
+        assert_eq!(super::partial_preparation_warning(&serde_json::json!({"status": "ready", "issues": []})), None);
+        let bare = super::partial_preparation_warning(&serde_json::json!({"status": "partial", "issues": []})).unwrap();
+        assert!(!bare.contains("()"), "{bare}");
     }
 }

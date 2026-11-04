@@ -14,7 +14,7 @@ import tomllib
 from urllib.parse import urlsplit
 
 from app.codex_arquivos import backup, editar_config
-from app.codex_compat import adaptar_hooks_plugin, normalizar_hooks
+from app.codex_compat import adaptar_hooks_plugin, edicoes_confianca_hooks, normalizar_hooks
 from app.codex_contas import Account
 from app.codex_importador import CodexNativo, CodexNativoErro
 from app import install_root
@@ -439,7 +439,8 @@ async def _adapt_hooks(target: Account, item: dict, issues: list[dict]) -> bool:
         return False
     changed = []
     try:
-        adaptar_hooks_plugin(
+        from app import account_lifecycle
+        await account_lifecycle.complete_on_cancel(asyncio.to_thread(adaptar_hooks_plugin,
             root,
             target.home,
             _private_dir(target) / "backups",
@@ -447,7 +448,7 @@ async def _adapt_hooks(target: Account, item: dict, issues: list[dict]) -> bool:
                                                       _REPO / "scripts/codex-hook-allow.py",
                                                       windows=os.name == "nt"),
             ao_alterar=lambda: changed.append(True),
-        )
+        ))
     except (OSError, ValueError, RuntimeError) as exc:
         issues.append(_issue("codex_account_plugin_hooks_failed", error=type(exc).__name__))
     return bool(changed)
@@ -466,17 +467,22 @@ def _manifest_origin(item: dict | None) -> tuple[str, str] | None:
     return _source_of(item)
 
 
-async def _trust_state(native) -> bool | None:
+async def _trust_state(native, approve: Account | None = None) -> bool | None:
     if not hasattr(native, "request") or not hasattr(native, "__aenter__"):
         return None
     try:
         async with native:
             result = await native.request("hooks/list", {"cwds": []})
+            if approve is not None:
+                edits, manual = edicoes_confianca_hooks(result, approve.home)
+                if edits:
+                    await native.request("config/batchWrite", {"edits":edits,"reloadUserConfig":True})
+                return manual > 0
     except (OSError, ValueError, RuntimeError, CodexNativoErro):
         return None
     entries = result.get("data") if isinstance(result, dict) else None
     if not isinstance(entries, list) or any(
-        not isinstance(entry, dict) or not isinstance(entry.get("hooks", []), list)
+        not isinstance(entry, dict) or entry.get("errors") or entry.get("warnings") or not isinstance(entry.get("hooks", []), list)
         or any(not isinstance(hook, dict) for hook in entry.get("hooks", []))
         for entry in entries
     ):
@@ -630,7 +636,7 @@ async def sync_plugins(source: Account, target: Account, previous: dict) -> dict
     for plugin_id, entry in managed.items():
         if plugin_id in target_items and isinstance(target_items[plugin_id].get("enabled"), bool):
             entry["enabled"] = target_items[plugin_id]["enabled"]
-    current_trust = await _trust_state(target_native)
+    current_trust = await _trust_state(target_native, target)
     if current_trust is not None:
         trust_pending = current_trust
     elif hasattr(target_native, "request"):

@@ -165,6 +165,12 @@ impl Panel {
 
     fn shell_index(&self) -> Option<usize> { self.tabs.iter().position(|slot| slot.kind == Kind::Shell) }
 
+    /// Pane conectado: com o socket caindo ou em erro o menu não está à vista, e o cartão continua sendo o caminho.
+    pub(super) fn shows_pane_of(&self, server: &str, session: &str) -> bool {
+        self.server == server && self.session == session
+            && self.tabs.get(self.active).is_some_and(|slot| slot.kind == Kind::Session && matches!(slot.status, Status::Connected))
+    }
+
     /// Acerta as abas de atalho (ou, com `hangar`, as No Hangar) com a lista do servidor: novas entram no fim, as que
     /// sumiram saem. Devolve os `uid` das novas, para conectar.
     fn sync_terms(&mut self, terms: &[ShortcutTerm], hangar: bool) -> Vec<u64> {

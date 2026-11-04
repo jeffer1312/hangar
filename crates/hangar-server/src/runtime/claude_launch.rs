@@ -41,7 +41,7 @@ const DROPPED: [&str; 22] = ["TMUX", "TMUX_PANE", "CP_ENGINE_ACCOUNT", "CP_ENGIN
     "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS", "TYPESAFE_API_KEY", "JEV_ENDPOINT", "JEV_MODEL", "JEV_TEXTO_BASE_URL",
     "JEV_TEXTO_API_KEY", "JEV_TEXTO_MODELO", "JEV_TEXTO_CMD", "JEV_AUX_BASE_URL", "JEV_AUX_API_KEY", "JEV_AUX_MODELO",
     "JEV_AUX_ESFORCO", "CP_AUTH_TOKEN"];
-const SECRETS: [&str; 2] = ["HANGAR_INTERNAL_SECRET", "HANGAR_RUNTIME_INSTANCE"];
+const SECRETS: [&str; 3] = ["HANGAR_INTERNAL_SECRET", "HANGAR_RUNTIME_INSTANCE", "HANGAR_AUTH_CONTEXT"];
 
 fn refused(code: &str, message: &str) -> RuntimeError { RuntimeError::new(code, message) }
 
@@ -109,7 +109,9 @@ pub fn plan(spec: &SessionSpec, meta: &Value, ctx: &Context) -> Result<Launch, R
     let mut claude: Vec<String> = ["claude", "-p", "--output-format", "stream-json", "--input-format", "stream-json", "--verbose",
         "--include-partial-messages", "--permission-prompt-tool", "stdio", "--setting-sources", "user,project,local",
         // O eco com o mesmo `uuid` é a prova de entrega (o prompt barrado por hook não ecoa).
-        "--replay-user-messages"].map(str::to_owned).into();
+        "--replay-user-messages",
+        // Sem a flag só SessionStart e Setup chegam: hook lento ou com falha ficaria calado.
+        "--include-hook-events"].map(str::to_owned).into();
     claude.extend([(if resume { "--resume" } else { "--session-id" }).to_owned(), sid.to_owned()]);
     for root in ctx.plugin_roots { claude.extend(["--plugin-dir".into(), root.clone()]); }
     // Com `-p` a CLI ignora `showThinkingSummaries`; só a flag traz o texto do pensamento.
@@ -223,12 +225,12 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// O cenário do fixture do Python com os marcadores trocados pela raiz desta árvore.
+    /// O cenário com os marcadores trocados pela raiz desta árvore.
     struct Case { root: PathBuf, repo: PathBuf, fixture: Value, sid: String, key: String }
 
     fn case(name: &str) -> Case {
         let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap();
-        let raw = std::fs::read_to_string(repo.join(format!("backend/tests/fixtures/contract/session-open/{name}.json"))).unwrap();
+        let raw = crate::session_open::cases::named(name).to_string();
         let root = tempfile::tempdir().unwrap().keep();
         let (sid, key) = ("0c657c79-1745-406b-a97f-bbbf5402ff19".to_owned(), "ab".repeat(16));
         // A troca acontece dentro de strings JSON: a barra invertida do caminho no Windows vai escapada.
@@ -239,7 +241,7 @@ mod tests {
     }
 
     impl Case {
-        /// `base_env` do harness: é o ambiente do servidor que o lado Python herdou.
+        /// O ambiente do servidor.
         fn server_env(&self) -> BTreeMap<String, String> {
             let root = self.root.to_string_lossy();
             [("HOME", format!("{root}/home")), ("PATH", format!("{root}/bin:/usr/bin:/bin")), ("LANG", "C.UTF-8".into()),
@@ -271,18 +273,18 @@ mod tests {
 
     fn launch_of(case: &Case, runtime: &Value) -> Launch {
         let env = AccountEnvironment::from_map(case.server_env());
-        // Na forma do fixture (`<REPO>/plugins/...`), que o Python montou com `/`.
+        // Na forma do cenário (`<REPO>/plugins/...`), com `/`.
         let roots = ["hangar", "github-actions"].map(|p| format!("{}/plugins/{p}", case.repo.display()));
         let bridge = PluginBridge { port: 8765, secret: "hso-token".into() };
         let ctx = Context { env: &env, runtime_config: runtime, plugin_roots: &roots, bridge: Some(&bridge), engine_route: None, fast: false };
         plan(&case.spec(), &case.meta(), &ctx).unwrap()
     }
 
-    /// O ambiente que o Python deu ao processo: o do servidor mais o `set` do fixture.
+    /// O ambiente esperado do processo: o do servidor mais o `set` do cenário.
     fn expected_env(case: &Case, launch: &Launch) -> BTreeMap<String, String> {
         let mut env = case.server_env();
         for (k, v) in case.launched()["env"]["set"].as_object().unwrap() { env.insert(k.clone(), v.as_str().unwrap().to_owned()); }
-        // O token é um HMAC: o fixture só guarda a forma. A chave da sessão vem antes do ponto.
+        // O token é um HMAC: o cenário só guarda a forma. A chave da sessão vem antes do ponto.
         let token = env.get_mut("HANGAR_PLUGIN_TOKEN").unwrap();
         let minted = &launch.env["HANGAR_PLUGIN_TOKEN"];
         assert!(minted.starts_with(&format!("{}.", case.key)) && minted.len() == 32 + 1 + 32, "token da ponte pela chave: {minted}");
@@ -295,7 +297,7 @@ mod tests {
     }
 
     #[test]
-    fn plan_matches_the_python_launch_of_a_new_conversation() {
+    fn plan_matches_the_launch_of_a_new_conversation() {
         let case = case("create_claude_headless_then_launch");
         let launch = launch_of(&case, &json!({"jev_api_key": "tsk-fake"}));
         assert_eq!(launch.program, case.expected_program());
@@ -303,7 +305,7 @@ mod tests {
     }
 
     #[test]
-    fn plan_matches_the_python_launch_with_engine_and_with_customizations() {
+    fn plan_matches_the_launch_with_engine_and_with_customizations() {
         for name in ["create_claude_headless_engine_then_launch", "create_claude_headless_customizations_then_launch"] {
             let case = case(name);
             let launch = launch_of(&case, &json!({}));

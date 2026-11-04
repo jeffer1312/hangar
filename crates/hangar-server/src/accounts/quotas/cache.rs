@@ -76,16 +76,26 @@ impl QuotaCache {
         let good = reading["estado"] == "lida";
         // A última leitura boa fica, mas com o motivo da falha nova: números velhos sem aviso
         // pareciam certos.
-        let value = if reading["estado"] == "indisponivel" {
-            match self.get(id).filter(|old| old["estado"] == "lida") {
+        let value = match reading["estado"].as_str() {
+            Some("indisponivel") => match self.get(id).filter(|old| old["estado"] == "lida") {
                 Some(mut old) => {
                     old["motivo"] = reading["motivo"].clone();
                     old
                 }
                 None => reading,
-            }
-        } else {
-            reading
+            },
+            // Token vencido não zera o uso: a abertura ainda precisa saber que a conta estava a 100%.
+            // O estado fica `expirada` (as telas pedem login) e `ts` é o da leitura guardada, nunca agora.
+            Some("expirada") => match self.get(id).filter(|old| old["ts"].is_number() && old["janelas"].as_array().is_some_and(|w| !w.is_empty())) {
+                Some(old) => {
+                    let mut kept = reading;
+                    kept["janelas"] = old["janelas"].clone();
+                    kept["ts"] = old["ts"].clone();
+                    kept
+                }
+                None => reading,
+            },
+            _ => reading,
         };
         let mut entry = json!({"gravado_em": now, "cota": value,
             "retry_at": if limited { Some(now + RATE_LIMIT_WAIT) } else { None }});
@@ -286,6 +296,21 @@ mod tests {
         assert_eq!(kept["motivo"], "painel-sem-numeros");
         cache.update("test", good(), 1200.0);
         assert_eq!(cache.get("test").unwrap()["motivo"], Value::Null);
+    }
+
+    #[test]
+    fn expired_token_keeps_the_last_usage_with_its_own_age() {
+        let mut cache = QuotaCache::default();
+        cache.update("claude:x", json!({"estado":"lida","ts":1000,"janelas":[{"pct":100.0}]}), 1000.0);
+        cache.update("claude:x", json!({"estado":"expirada","ts":null,"janelas":[],"motivo":"token-expirado"}), 1500.0);
+        let kept = cache.get("claude:x").unwrap();
+        assert_eq!((&kept["estado"], &kept["motivo"]), (&json!("expirada"), &json!("token-expirado")), "as telas seguem pedindo login");
+        assert_eq!((&kept["janelas"], &kept["ts"]), (&json!([{"pct":100.0}]), &json!(1000)), "o uso e a idade são os da leitura boa");
+        cache.update("claude:x", json!({"estado":"expirada","ts":null,"janelas":[],"motivo":"login-necessario"}), 1600.0);
+        assert_eq!(cache.get("claude:x").unwrap()["janelas"], json!([{"pct":100.0}]), "a segunda falha não apaga");
+        let mut fresh = QuotaCache::default();
+        fresh.update("claude:y", json!({"estado":"expirada","ts":null,"janelas":[]}), 1000.0);
+        assert_eq!(fresh.get("claude:y").unwrap()["janelas"], json!([]), "sem leitura boa não inventa uso");
     }
 
     #[test]

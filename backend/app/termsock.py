@@ -389,7 +389,16 @@ async def _porta_de_entrada(ws: WebSocket, name: str, resolve=None) -> Optional[
     host = ws.client.host if ws.client else ""
     agora = time.time()
     tok = ws.query_params.get("token", "")
-    if _blocked(host, agora):
+    from app import shared_auth
+    decision = await shared_auth.websocket(ws, shared_auth.TERMINAL_WS,
+                                          verified_guest=guest_of(ws) is not None,
+                                          login_guest=guest_users.current.get() is not None)
+    if decision is False:
+        return None
+    if decision is not None and decision.status not in (shared_auth.OWNER, shared_auth.GUEST):
+        await ws.close(code=1008)
+        return None
+    if decision is None and _blocked(host, agora):
         await ws.close(code=1008)
         return                                   # NAO registra: registrar aqui estende o bloqueio
     # Convidado ja passou pelo porteiro (token dele + a sessao dele); a Origin e a do app DELE.
@@ -397,7 +406,8 @@ async def _porta_de_entrada(ws: WebSocket, name: str, resolve=None) -> Optional[
         # compare_digest, nao `!=` de string (mesmo cuidado do require_auth, auth.py:104): `!=` sai fora
         # na primeira letra diferente e vira canal lateral de tempo. Este e o endpoint que abre um shell
         # completo. `.encode()` tambem evita o TypeError do compare_digest com string nao-ASCII.
-        dono = bool(settings.auth_token) and secrets.compare_digest(tok.encode(), settings.auth_token.encode())
+        dono = (decision.status == shared_auth.OWNER if decision is not None else
+                bool(settings.auth_token) and secrets.compare_digest(tok.encode(), settings.auth_token.encode()))
         if not dono and guest_users.current.get() is None:
             if host not in _LOOPBACK:            # mesma isencao do require_auth (auth.py:46)
                 _record_fail(host, agora)

@@ -2,7 +2,8 @@
 regras- no pair (leave/merge)."""
 import pytest
 
-from app import orq_papeis as op, pair
+from app import pair
+from orq_contract_client import roles as op
 from app.models import SessionInfo
 
 

@@ -5,17 +5,70 @@
 import type { SessionInfo, AggSession } from './types';
 import type { Server } from './servers';
 import { serverColor } from './servers';
+import { machineLabel, tagHex, type TagsEvent } from './tags';
+import { isOwnMachine } from './machineImport';
 
 export type KeyringState = 'unlocked' | 'locked' | 'absent';
 
-export interface Slot { sessions: SessionInfo[] | null; error: string | null; keyring?: KeyringState | null }
+// `tags`: último evento `tags` do servidor; ausente = versão antiga, valem o nome e a cor locais.
+// `tagsRaw`: o `data` cru dele, para a reconexão que repete o mesmo evento não refazer as linhas.
+// `offlineSince`: primeira falha da queda atual; vale até a próxima lista boa (`error: null`).
+export interface Slot { sessions: SessionInfo[] | null; error: string | null; keyring?: KeyringState | null; tags?: TagsEvent | null; tagsRaw?: string; offlineSince?: number }
+
+/** Slot novo com o `patch` por cima do anterior: o que ele não cita (etiquetas, chaveiro) segue igual.
+ *  `patch.offlineSince` é o início gravado da queda (`startOutage`) e vence o que o slot tem em memória. */
+export function patchSlot(slots: ReadonlyMap<string, Slot>, id: string, patch: Partial<Slot>): Slot {
+  const prev = slots.get(id);
+  const { offlineSince: _, ...next } = { sessions: null, error: null, ...prev, ...patch };
+  if (!next.error) return next;
+  // Tentativas frustradas regravam o slot, às vezes alternando offline e erro HTTP; a queda
+  // continua contando da primeira até uma lista boa.
+  const since = patch.offlineSince ?? ((prev?.error && prev.offlineSince) || (next.error === 'offline' ? Date.now() : undefined));
+  return since ? { ...next, offlineSince: since } : next;
+}
+
+// A máquina pode só estar desligada: o aviso vermelho cobre as primeiras tentativas, não a queda inteira.
+export const OFFLINE_NOTICE_MS = 30_000;
+
+type Notice = { error: string | null; offlineSince?: number };
+
+/** Até quando o aviso da máquina fica na tela: 0 sem aviso; erro que não é queda não expira. */
+function noticeUntil(b: Notice): number {
+  if (!b.error) return 0;
+  if (b.error !== 'offline') return Infinity;
+  return b.offlineSince ? b.offlineSince + OFFLINE_NOTICE_MS : 0;
+}
+
+export function machineNoticeVisible(b: Notice, now: number): boolean {
+  return noticeUntil(b) > now;
+}
+
+/** Toda máquina própria ligada fora do ar: lista vazia não é "nenhuma sessão ativa". */
+export function machinesAllDown(buckets: readonly { server: Pick<Server, 'invite' | 'ephemeral' | 'removed' | 'disabled'>; error: string | null }[]): boolean {
+  const own = buckets.filter((b) => isOwnMachine(b.server) && !b.server.disabled);
+  return own.length > 0 && own.every((b) => b.error === 'offline');
+}
+
+/** Próximo instante em que um aviso some, para um único timer redesenhar a tela; null = nenhum. */
+export function nextNoticeEnd(buckets: readonly Notice[], now: number): number | null {
+  let next: number | null = null;
+  for (const b of buckets) {
+    const until = noticeUntil(b);
+    if (until > now && Number.isFinite(until) && (next === null || until < next)) next = until;
+  }
+  return next;
+}
 
 export interface ServerBucket {
   server: Server;
+  // Nome e cor da máquina já resolvidos pela etiqueta; ausentes = valem `server.label` e `serverColor`.
+  label?: string;
+  color?: string;
   sessions: AggSession[];   // já deduplicadas e enriquecidas
   error: string | null;     // 'offline' quando o stream caiu ou veio frame malformado
   loaded: boolean;          // já recebeu ao menos uma lista boa (pode coexistir com error = stale)
   keyringLocked?: boolean;  // evento `keyring` da lista: o chaveiro `login` da máquina está trancado
+  offlineSince?: number;    // primeira falha da queda atual (ver `machineNoticeVisible`)
 }
 
 export interface Aggregate {
@@ -29,7 +82,7 @@ export interface Aggregate {
 // Sem isto, todo evento recriava {...s} pra TODAS as rows -> o keyed each das 4 views via prop nova
 // em 50+ cards e re-renderizava tudo ~3-4x/s com 5 servidores ativos. WeakMap: o array velho morre,
 // a entrada vai junto. label/color validados porque o usuário pode editar o servidor sem o slot mudar.
-const _rowCache = new WeakMap<object, { label: string; color: string; invite: boolean; byKey: Map<string, AggSession> }>();
+const _rowCache = new WeakMap<object, { label: string; color: string; invite: boolean; tags: TagsEvent | null; byKey: Map<string, AggSession> }>();
 
 // `hidden` = exclusão OTIMISTA: chaves `serverId::name` marcadas pelo doDelete das views somem da
 // lista na hora, sem esperar o SSE re-emitir (~1-2s). Se o delete falhar, a view desmarca e a linha
@@ -53,13 +106,18 @@ export function aggregateSessions(
       error: slot?.error ?? null,
       loaded: slot?.sessions != null,
       keyringLocked: slot?.keyring === 'locked' && slot.error !== 'offline',
+      offlineSince: slot?.offlineSince,
     };
     if (slot?.sessions && slot.error !== 'offline') {
-      const color = serverColor(srv.id);
+      const tags = slot.tags ?? null;
+      const color = tagHex(tags?.machine?.color) ?? serverColor(srv.id);
+      const label = machineLabel(srv, tags);
+      bucket.label = label;
+      bucket.color = color;
       const invite = srv.invite === true;
       let cache = _rowCache.get(slot.sessions);
-      if (!cache || cache.label !== srv.label || cache.color !== color || cache.invite !== invite) {
-        cache = { label: srv.label, color, invite, byKey: new Map() };
+      if (!cache || cache.label !== label || cache.color !== color || cache.invite !== invite || cache.tags !== tags) {
+        cache = { label, color, invite, tags, byKey: new Map() };
         _rowCache.set(slot.sessions, cache);
       }
       for (const s of slot.sessions) {
@@ -69,7 +127,8 @@ export function aggregateSessions(
         seen.add(key);
         let row = cache.byKey.get(key);
         if (!row) {
-          row = { ...s, serverId: srv.id, serverLabel: srv.label, serverColor: color, serverInvite: invite };
+          row = { ...s, serverId: srv.id, serverLabel: label, serverColor: color, serverInvite: invite,
+            machineTag: tags?.machine ?? null, accountTag: (s.conta && tags?.accounts[s.conta]) || null };
           cache.byKey.set(key, row);
         }
         bucket.sessions.push(row);
@@ -135,4 +194,33 @@ export function sweepHidden(hidden: ReadonlyMap<string, string | null>,
     if (!sessions || sessions.some((s) => s.name === name && (s.jsonl ?? null) === jsonl)) kept.set(key, jsonl);
   }
   return kept;
+}
+
+type GroupRow = Pick<AggSession, 'serverId' | 'name' | 'pair_gid' | 'outside' | 'hidden_from_list' | 'state' | 'pending_questions' | 'serverInvite' | 'guest_kind'>;
+
+/** "Ocultar o grupo inteiro": as sessões do mesmo `pair_gid`, de todas as máquinas, a própria primeiro.
+ *  Ficam de fora a sessão de outra pessoa (de fora, de convite ou par só de ver), a já oculta e a que espera resposta
+ *  (o servidor tiraria a marca na rodada seguinte). Fora de grupo, só a própria. */
+export function groupHideTargets<T extends GroupRow>(row: T, rows: readonly T[]): T[] {
+  if (!row.pair_gid) return [row];
+  const waiting = (r: T) => r.state === 'awaiting_input' || (r.pending_questions ?? 0) > 0;
+  const others = rows.filter((r) => r.pair_gid === row.pair_gid && !(r.serverId === row.serverId && r.name === row.name)
+    && !r.outside && !r.serverInvite && r.guest_kind !== 'pair' && !r.hidden_from_list && !waiting(r));
+  return [row, ...others];
+}
+
+/** Mensagem numa oculta: as outras ocultas do mesmo `pair_gid`, de todas as máquinas, para perguntar se voltam junto.
+ *  A sessão de outra pessoa fica de fora, como em `groupHideTargets`. */
+export function groupShowTargets<T extends GroupRow>(row: T, rows: readonly T[]): T[] {
+  if (!row.pair_gid) return [];
+  return rows.filter((r) => r.pair_gid === row.pair_gid && !(r.serverId === row.serverId && r.name === row.name)
+    && !r.outside && !r.serverInvite && r.guest_kind !== 'pair' && r.hidden_from_list);
+}
+
+/** Linhas visíveis e ocultas (`hidden_from_list`), cada grupo na ordem em que chegou. */
+export function splitHidden<T extends Pick<SessionInfo, 'hidden_from_list'>>(rows: readonly T[]): { shown: T[]; hidden: T[] } {
+  const shown: T[] = [];
+  const hidden: T[] = [];
+  for (const row of rows) (row.hidden_from_list ? hidden : shown).push(row);
+  return { shown, hidden };
 }

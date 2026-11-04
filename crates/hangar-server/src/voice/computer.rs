@@ -237,7 +237,7 @@ mod tests {
         let command = command(&launch);
         let envs: Vec<(String, Option<OsString>)> = command.as_std().get_envs()
             .map(|(k, v)| (k.to_string_lossy().into_owned(), v.map(OsString::from))).collect();
-        for key in ["CP_AUTH_TOKEN", "HANGAR_INTERNAL_SECRET", "HANGAR_SERVER_UPSTREAM", "HANGAR_SERVER_LISTEN", "HANGAR_RUNTIME_INSTANCE"] {
+        for key in ["CP_AUTH_TOKEN", "HANGAR_INTERNAL_SECRET", "HANGAR_SERVER_UPSTREAM", "HANGAR_SERVER_LISTEN", "HANGAR_RUNTIME_INSTANCE", "HANGAR_AUTH_CONTEXT"] {
             assert!(envs.contains(&(key.to_owned(), None)), "{key} chega ao filho");
         }
         assert!(envs.contains(&("LLM_MODEL".to_owned(), Some("m".into()))));

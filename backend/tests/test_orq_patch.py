@@ -6,6 +6,8 @@ import pytest
 
 from test_orq_plano import PROJETO, congelar, iniciar, repo, run  # noqa: F401  (fixture repo)
 
+pytestmark = pytest.mark.usefixtures("hangar_server_bin")
+
 
 def patch_de(r, g, tmp_path, novo="3\n", arquivo="a.txt"):
     """Diff de `arquivo` para `novo`, sem mexer na árvore."""

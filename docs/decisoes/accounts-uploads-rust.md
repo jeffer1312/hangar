@@ -7,7 +7,8 @@ backend continuam no Python. O protocolo interno muda nos dois lados juntos.
 
 O catálogo, a criação, o preparo, o login, o estado, o cancelamento e o logout são
 decididos pelo Rust. Os auxiliares nativos usam a CLI do provedor e a proteção por
-conta. A ponte fornece fatos de uso e controla as janelas necessárias ao Claude.
+conta. A ponte fornece fatos de uso; as janelas do login e da renovação do Claude
+são do Rust (`accounts/claude_window.rs`).
 Os destinos secundários Pi/omp são escritos diretamente pelo Rust.
 
 O cache de cotas continua no formato existente, com um escritor e publicação
@@ -54,8 +55,7 @@ responde 503 `accounts_need_rust_server`.
 
 Continua no Python, por ser o que o Rust consome ou o que ele não atende:
 
-- as rotas `/internal` de contas: janela escondida do login e da renovação
-  (`ClaudeWindows`, em `claude_window.py`), fatos de uso, preparo das contas Codex e
+- as rotas `/internal` de contas: fatos de uso, preparo das contas Codex e
   invalidação do catálogo de modelos do Codex;
 - os leitores de cota Codex que a transferência de conversa usa;
 - as escritas de credenciais: apelido, cookie do OpenCode, sincronização nos agentes e
@@ -83,9 +83,8 @@ semeadura do `.claude.json` sem `oauthAccount` na criação) é do Rust:
   comando (`contas.reconciliar`/`contas.criar`).
 - Travas: guarda da conta (`~/.hangar/account-locks`), `~/.hangar-contas.lock` e o marcador da
   conta (`.hangar-account-pending` na semeadura), nessa ordem, inclusive no Windows.
-- Paridade provada contra o Python de origem (b2832ee04) por fixtures geradas rodando o
-  `scripts/hangar-conta` antigo (`backend/tests/fixtures/contract/accounts-reconcile/`, gerador
-  `accounts_reconcile::generate_fixtures` com `HANGAR_FIXTURE_PY_ROOT` num checkout de b2832ee04).
+- Paridade provada contra o Python de origem (b2832ee04) rodando o `scripts/hangar-conta` antigo; o
+  esperado medido fica em `crates/hangar-server/tests/it/accounts_reconcile_cases.rs`.
 - Corrigido depois da paridade: `.claude.json.lock` e `mcp-needs-auth-cache.json` entram no
   runtime por conta (iam para a gaveta ou subiam para o `~/.claude`); a poda da gaveta nunca apaga
   a versão que acabou de guardar; erro de disco na criação Claude diz o motivo e o caminho (antes

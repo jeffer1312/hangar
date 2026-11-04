@@ -13,6 +13,7 @@ use axum::body::Body;
 use hangar_api::session::SessionRow;
 use http_body_util::BodyExt;
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
 /// Prazo da resposta, e idade máxima da última para a mesma entrada.
 pub const FACTS_TIMEOUT: Duration = Duration::from_secs(1);
@@ -49,9 +50,6 @@ pub struct RowState {
     pub limit_reset: Option<String>,
     #[serde(default)]
     pub stalled: bool,
-    /// A descoberta não sabe a credencial.
-    #[serde(default)]
-    pub conta: Option<String>,
     /// O histórico deles ainda é lido pelo Python.
     #[serde(default)]
     pub last_reply: Option<String>,
@@ -139,7 +137,7 @@ impl FactsClient {
         let mut last = self.last.lock().await;
         let body = match serde_json::to_vec(&Request { rows, pane_pids }) {
             Ok(b) => b,
-            Err(_) => return self.failed(&mut last, "list_facts_request".into()),
+            Err(_) => return self.failed(&mut last, "list_facts_request".into(), rows.len(), Duration::ZERO),
         };
         let mut h = std::collections::hash_map::DefaultHasher::new();
         body.hash(&mut h);
@@ -147,6 +145,7 @@ impl FactsClient {
         if let Some(l) = last.as_ref().filter(|l| l.at.elapsed() < FACTS_TTL && (l.key == key || !l.ok)) {
             return l.fetched();
         }
+        let asked = Instant::now();
         match self.ask(body).await {
             Ok(states) => {
                 let now = Instant::now();
@@ -155,16 +154,20 @@ impl FactsClient {
                 *last = Some(l);
                 got
             }
-            Err(code) => self.failed(&mut last, code),
+            Err(code) => self.failed(&mut last, code, rows.len(), asked.elapsed()),
         }
     }
 
-    fn failed(&self, last: &mut Option<Last>, code: String) -> Fetched {
+    /// `rows`: as linhas pedidas; `took`: quanto o pedido levou até falhar (zero se nem saiu).
+    fn failed(&self, last: &mut Option<Last>, code: String, rows: usize, took: Duration) -> Fetched {
         if crate::warn_limit::allow(None, &code) {
             tracing::warn!(code, "lista: fatos do Python indisponíveis; fica o último valor");
         }
-        self.diag.report("rust.list_facts_unavailable", "", &code, "fatos do Python indisponíveis; fica o último valor");
         let (states, fails, good_at) = last.as_ref().map_or_else(|| (States::default(), 0, None), |l| (l.states.clone(), l.fails, l.good_at));
+        self.diag.report_with("rust.list_facts_unavailable", "", &code, "fatos do Python indisponíveis; fica o último valor", json!({
+            "rota": "POST /internal/list/facts", "linhas": rows, "ms": took.as_millis() as u64,
+            "prazo_ms": FACTS_TIMEOUT.as_millis() as u64, "falhas_seguidas": fails + 1,
+            "ultimo_bom_s": good_at.map(|at: Instant| at.elapsed().as_secs())}));
         let l = Last { key: 0, at: Instant::now(), ok: false, states, fails: fails + 1, good_at };
         let got = l.fetched();
         *last = Some(l);
@@ -204,7 +207,8 @@ pub fn mark_stale(rows: &mut [SessionRow], facts: &ListFacts, ok: bool) {
 
 /// Falha vista em código síncrono (arquivo lido dentro do `spawn_blocking`) a caminho do diário:
 /// a produção esvazia e manda pelo `diag`. Uma por minuto por (sessão, código); fila com teto.
-pub struct Note { pub event: &'static str, pub session: String, pub code: String, pub reason: &'static str }
+/// `fields`: o que diagnostica a falha (`Value::Null` sem nada); com ele a nota vai por `report_with`.
+pub struct Note { pub event: &'static str, pub session: String, pub code: String, pub reason: &'static str, pub fields: Value }
 
 #[cfg(not(test))]
 const MAX_NOTES: usize = 64;
@@ -216,7 +220,9 @@ static NOTES: LazyLock<Mutex<Vec<Note>>> = LazyLock::new(Default::default);
 #[cfg(test)]
 static NOTED: LazyLock<Mutex<Vec<(String, String)>>> = LazyLock::new(Default::default);
 
-pub fn note(event: &'static str, session: &str, code: String, reason: &'static str) {
+pub fn note(event: &'static str, session: &str, code: String, reason: &'static str) { note_with(event, session, code, reason, Value::Null) }
+
+pub fn note_with(event: &'static str, session: &str, code: String, reason: &'static str, fields: Value) {
     let mut q = NOTES.lock().unwrap_or_else(|e| e.into_inner());
     // Cheia (ninguém produzindo para esvaziar): o aviso vai ao log, e o teto por minuto não é gasto.
     if q.len() >= MAX_NOTES {
@@ -228,7 +234,7 @@ pub fn note(event: &'static str, session: &str, code: String, reason: &'static s
     if crate::warn_limit::allow(Some(session), &format!("note:{event}:{code}")) {
         #[cfg(test)]
         NOTED.lock().unwrap_or_else(|e| e.into_inner()).push((session.to_owned(), code.clone()));
-        q.push(Note { event, session: session.to_owned(), code, reason });
+        q.push(Note { event, session: session.to_owned(), code, reason, fields });
     }
 }
 
@@ -283,7 +289,6 @@ pub fn apply(rows: Vec<SessionRow>, facts: &ListFacts, ok: bool) -> (Vec<Session
             row.limited = s.limited;
             row.limit_reset.clone_from(&s.limit_reset);
             row.stalled = s.stalled;
-            row.conta.clone_from(&s.conta);
             row.last_reply.clone_from(&s.last_reply);
             row.last_reply_at = s.last_reply_at;
         }
@@ -380,7 +385,11 @@ mod tests {
         let client = FactsClient::new(addr, "s".into());
         let got = client.fetch(&[pi("p")], &BTreeMap::from([("p".into(), 7)])).await;
         assert!(got.ok && got.fresh);
-        assert_eq!(got.states["p"].conta.as_deref(), Some("pi:x"));
+        let mut row = pi("p");
+        row.conta = Some("kimi:known".into());
+        let facts = ListFacts { states: got.states.clone(), ..Default::default() };
+        let (rows, _) = apply(vec![row], &facts, true);
+        assert_eq!(rows[0].conta.as_deref(), Some("kimi:known"), "os fatos Python não substituem a credencial do Rust");
         let body = seen.lock().unwrap()[0].1.clone();
         let mut keys: Vec<_> = body.as_object().unwrap().keys().cloned().collect();
         keys.sort();

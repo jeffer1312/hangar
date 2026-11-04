@@ -100,11 +100,18 @@ class _Monitor:
         self.lag = _Throttle()
         self.pools = {name: _Throttle() for name, _, _ in _POOLS}
         self.probing: set[str] = set()
+        # Onde o laço estava no atraso mais recente: o `loop.atraso` sem ela só diz quanto, não o quê.
+        self.lag_stack = ""
 
     def watch_thread(self) -> None:
         reported = False
         while not self.stop.wait(1.0):
             stale = time.monotonic() - self.heartbeat
+            # Um tique inteiro mais o limiar do aviso: o laço está preso agora, e a moldura é a culpada.
+            if stale >= TICK_S + LOOP_LAG_WARN_S and self.loop_thread is not None:
+                frame = sys._current_frames().get(self.loop_thread)
+                if frame is not None:
+                    self.lag_stack = compact_stack(frame, limit=6)
             if stale < LOOP_STALL_S:
                 reported = False
                 continue
@@ -169,7 +176,8 @@ class _Monitor:
                 if lag >= LOOP_LAG_WARN_S:
                     worst = self.lag.offer(int(lag * 1000))
                     if worst is not None:
-                        diag.registrar("loop.atraso", "aviso", ms=worst)
+                        diag.registrar("loop.atraso", "aviso", ms=worst, pilha=self.lag_stack or None)
+                        self.lag_stack = ""
                 if self.heartbeat >= next_probe:
                     next_probe = self.heartbeat + POOL_PROBE_EVERY_S
                     for name, executor, prefixes in _POOLS:

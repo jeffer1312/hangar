@@ -37,8 +37,7 @@ const ELEMENT_MAX: usize = 256;
 const CAPS_MAX: usize = 16;
 
 /// O que toda chamada da ponte traz: a sessão (o nome com que o processo nasceu) e o token dela.
-#[derive(Deserialize)]
-struct Envelope<T> { sessao: String, token: String, #[serde(flatten)] body: T }
+use crate::json_envelope::Envelope;
 
 /// Corpo do `press-start` e do `pressed`. `plugin`: o mod do press, que o plugin do Hangar carregado antes
 /// desta versão não manda. O Python, que atende a sessão fora do Rust, ignora o campo.
@@ -73,7 +72,7 @@ fn hmac_hex(secret: &str, message: &str) -> String {
 /// o plugin manda o nome com que nasceu). Corpo que não serve ao tipo, de sessão do Rust, é 422, como o
 /// Pydantic do Python.
 async fn owned_sized<T: DeserializeOwned>(st: &Arc<AppState>, peer: SocketAddr, req: Request, limit: usize) -> Result<(Envelope<T>, String), Box<Response>> {
-    let (fwd, _) = gate(st, peer, &req);
+    let (fwd, _) = match gate(st, peer, &req).await { Ok(value) => value, Err(e) => return Err(Box::new(crate::auth::unavailable(e))) };
     let (parts, raw) = req.into_parts();
     let Ok(bytes) = to_bytes(raw, limit).await else { return Err(Box::new(StatusCode::PAYLOAD_TOO_LARGE.into_response())) };
     let parsed = serde_json::from_slice::<Envelope<T>>(&bytes);

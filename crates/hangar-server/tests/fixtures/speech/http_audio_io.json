@@ -1,0 +1,18 @@
+{
+  "source_commit": "a136bcb1693bd542974608dcf1d60073e802fcd9",
+  "source": "tts_audio original extraído por AST e executado em FastAPI efêmero; cache temporário com diretório e arquivo sem leitura quando a plataforma o permite.",
+  "cases": [
+    {
+      "name": "directory",
+      "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "status": 500,
+      "response_text": "Internal Server Error"
+    },
+    {
+      "name": "permission",
+      "hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "status": 200,
+      "response_text": ""
+    }
+  ]
+}

@@ -312,7 +312,7 @@ pub async fn input(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
     }
     let (steer, note, expected_turn) = if let Some((task, message)) = task.filter(|_| !text.trim_start().starts_with('/')) {
         let before = ctx.target.handle.snapshot().await.ok();
-        let (mut direct, mut note) = super::delivery_timing::decide(&ctx.st, &message, &task).await;
+        let (mut direct, mut note) = super::delivery_timing::decide(&ctx.st, &ctx.name, &message, &task).await;
         if direct {
             let after = ctx.target.handle.snapshot().await.ok();
             if !super::delivery_timing::same_work(before.as_ref(), after.as_ref()) { direct = false; note = "work_changed"; }
@@ -327,7 +327,28 @@ pub async fn input(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
         tracing::info!(target: "delivery_timing", session=%ctx.name, outcome, "decisão de entrega aplicada");
         result.1["timing_note"] = json!(outcome);
     }
+    crate::diag::record(crate::diag::diary_dir(), vec![received_line(&ctx.name, ctx.headers(), peer, &text, steer, &result)], "mensagem recebida");
     answer(&ctx, result)
+}
+
+static COMMAND: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"^/[a-z][a-z0-9:_-]{0,30}$").unwrap());
+static FROM: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"^\s*\[(de|grupo|de fora|painel):\s*([A-Za-z0-9._:-]{1,64})").unwrap());
+
+/// De onde veio cada mensagem e o que aconteceu com ela, sem o texto: o cliente (`hangar-mcp (de x)`,
+/// app), o remetente do recado (`[de: x]`), o endereço, o pedido do cliente e a resposta da entrega.
+fn received_line(name: &str, headers: &HeaderMap, peer: SocketAddr, text: &str, steer: bool, result: &(StatusCode, Value)) -> Value {
+    let header = |key: &str| headers.get(key).and_then(|v| v.to_str().ok()).map(|v| v.chars().take(80).collect::<String>());
+    let from = FROM.captures(text).map(|c| format!("{}: {}", &c[1], &c[2]));
+    let (status, body) = result;
+    let failed = !status.is_success();
+    json!({"evento": "sessao.mensagem_recebida", "nivel": if failed { "erro" } else { "ok" }, "sessao": name,
+        "codigo": if failed { body["detail"]["code"].as_str().or(body["code"].as_str()).map(str::to_owned).or(Some(status.as_u16().to_string())) } else { None },
+        "remetente": from, "cliente": header("user-agent"), "req": header("x-hangar-req"),
+        "origem": header("x-forwarded-for").unwrap_or_else(|| peer.ip().to_string()),
+        // Só nome de comando: caminho colado (`/home/…`) também começa com barra.
+        "comando": text.split_whitespace().next().filter(|w| COMMAND.is_match(w)),
+        "caracteres": text.chars().count(), "orientar": steer, "status": status.as_u16(),
+        "entregue": body["delivered"].as_bool(), "fila": body["queued"].as_bool().or(body["queue_id"].as_str().map(|_| true))})
 }
 
 /// Texto para o Codex com terminal que ainda abre a conversa: fica na fila da chave dela e a resposta é a
@@ -360,6 +381,39 @@ async fn queue_opening(st: &AppState, name: &str, key: &str, text: &str, steer: 
 pub(super) async fn opening_response(st: &Arc<AppState>, name: &str, key: &str, headers: &HeaderMap, bytes: &Bytes) -> Response {
     let Some((text, steer, _)) = parse_input(bytes).filter(|_| json_content_type(headers)) else { return invalid_body(headers) };
     let (status, body) = queue_opening(st, name, key, &text, steer).await;
+    let mut response = json_response(status, body);
+    cors(headers, response.headers_mut());
+    response
+}
+
+/// Texto para a sessão adormecida: vai à fila da chave dela e a vida nova o entrega; o acordar já corre à parte.
+async fn queue_while_asleep(st: &AppState, name: &str, key: &str, text: &str) -> (StatusCode, Value) {
+    let Some(runtime) = st.state.runtime.get() else { return (StatusCode::SERVICE_UNAVAILABLE, detail_body("runtime_watcher", "o servidor ainda não abriu as sessões", json!({}))) };
+    // Comando de barra não tem linha na fila: só a vida nova o executa.
+    if !queued(text) {
+        let error = crate::runtime::gateway::asleep_waking();
+        return (StatusCode::CONFLICT, detail_body(&error.code, &error.message, json!({})));
+    }
+    match runtime.queue_asleep(name, key, text).await {
+        Ok(()) => (StatusCode::OK, json!({"ok": true, "delivered": false, "steered": false, "native": false})),
+        // A vida nova já pegou a fila e o acordar ainda confere a subida (a porta segue fechada): o texto entra
+        // pela fila do ator dela, uma vez só, e ele o entrega quando ficar pronto.
+        Err(error) if error.code == "runtime_lease" => {
+            let id = random_hex(16);
+            let row = crate::runtime::queue::Action::Append { text: text.into(), delivered: false, ts: None, pre_transcript: true, entry_id: Some(id.clone()) };
+            match runtime.queue_action(name, id, row).await {
+                Ok(_) => (StatusCode::OK, json!({"ok": true, "delivered": false, "steered": false, "native": false})),
+                Err(other) => (StatusCode::SERVICE_UNAVAILABLE, detail_body(&other.code, &other.message, json!({}))),
+            }
+        }
+        Err(error) => (StatusCode::SERVICE_UNAVAILABLE, detail_body(&error.code, &error.message, json!({}))),
+    }
+}
+
+/// `/input` do dono (ou pela ponte) para a sessão adormecida.
+pub(super) async fn asleep_response(st: &Arc<AppState>, name: &str, key: &str, headers: &HeaderMap, bytes: &Bytes) -> Response {
+    let Some((text, _, _)) = parse_input(bytes).filter(|_| json_content_type(headers)) else { return invalid_body(headers) };
+    let (status, body) = queue_while_asleep(st, name, key, &text).await;
     let mut response = json_response(status, body);
     cors(headers, response.headers_mut());
     response
@@ -409,6 +463,7 @@ pub async fn write_input(st: &AppState, name: &str, text: &str, steer: bool) -> 
         }
         Write::Busy => (StatusCode::CONFLICT, busy_body()),
         Write::Opening(key) => queue_opening(st, name, &key, text, steer).await,
+        Write::Asleep(key) => queue_while_asleep(st, name, &key, text).await,
         // Pela ponte do Python: ele mesmo entrega, depois de a ponte responder (sem ida e volta).
         Write::Python => match crate::groups::bridge::current() {
             Some(ctx) => { ctx.defer_delivery(name, text, steer); (StatusCode::OK, json!({"ok": true, "deferred": true})) }
@@ -433,7 +488,7 @@ fn parse_broadcast(bytes: &Bytes) -> Option<(Vec<String>, String)> {
 /// num pedido só com os nomes deles, e os resultados se juntam na ordem pedida. Sem alvo do Rust, o pedido
 /// vai ao Python como chegou.
 pub async fn broadcast(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (fwd, owner) = crate::routes::gate(&st, peer, &req);
+    let (fwd, owner) = match crate::routes::gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     let (Some(runtime), true) = (st.state.runtime.get().cloned(), owner) else { return pass(&st, req, &fwd).await };
     let (parts, body) = req.into_parts();
     let Ok(bytes) = to_bytes(body, super::BODY_LIMIT).await else { return super::too_large(&parts.headers) };
@@ -447,8 +502,8 @@ pub async fn broadcast(State(st): State<Arc<AppState>>, ConnectInfo(peer): Conne
         if runtime.has_entry(None, name).await { ours.insert(name.clone()); continue; }
         match runtime.adopt_now(name).await {
             Some(Ok(())) => { ours.insert(name.clone()); }
-            // Conversa ainda abrindo: a entrega do `/input` guarda o texto na fila dela.
-            Some(Err(error)) if error.code == crate::runtime::codex_relaunch::STARTING => { ours.insert(name.clone()); }
+            // Conversa ainda abrindo ou sessão adormecida: a entrega do `/input` guarda o texto na fila dela.
+            Some(Err(error)) if error.code == crate::runtime::codex_relaunch::STARTING || error.code == crate::runtime::gateway::ASLEEP_WAKING => { ours.insert(name.clone()); }
             Some(Err(error)) => {
                 let detail = detail_body(&error.code, &error.message, json!({}))["detail"].clone();
                 refused.insert(name.clone(), json!({"ok": false, "error": detail, "delivered": false}));
@@ -463,7 +518,7 @@ pub async fn broadcast(State(st): State<Arc<AppState>>, ConnectInfo(peer): Conne
         let body = json!({"names": rest, "text": text}).to_string();
         let Ok(forwarded) = Request::post("/api/broadcast").header(header::AUTHORIZATION, format!("Bearer {}", st.cfg.auth_token))
             .header(header::CONTENT_TYPE, "application/json").body(Body::from(body)) else { return super::forward_whole(&st, parts, bytes, &fwd).await };
-        let response = pass(&st, forwarded, &Forward { client_ip: "127.0.0.1".into(), https: false, guest: None }).await;
+        let response = pass(&st, forwarded, &Forward { client_ip: "127.0.0.1".into(), https: false, guest: None, auth_receipt: None }).await;
         if !response.status().is_success() { return response; }
         let reply = to_bytes(response.into_body(), RELAY_REPLY_LIMIT).await.unwrap_or_default();
         if let Some(results) = serde_json::from_slice::<Value>(&reply).ok().and_then(|v| v["results"].as_object().cloned()) { python = results; }
@@ -498,7 +553,7 @@ async fn relay_as_owner(st: &AppState, name: &str, body: String) -> (StatusCode,
     let path = format!("/api/sessions/{}/input", utf8_percent_encode(name, SEGMENT));
     let Ok(req) = Request::post(path).header(header::AUTHORIZATION, format!("Bearer {}", st.cfg.auth_token))
         .header(header::CONTENT_TYPE, "application/json").body(Body::from(body)) else { return (StatusCode::BAD_REQUEST, Value::Null) };
-    let fwd = Forward { client_ip: "127.0.0.1".into(), https: false, guest: None };
+    let fwd = Forward { client_ip: "127.0.0.1".into(), https: false, guest: None, auth_receipt: None };
     let response = pass(st, req, &fwd).await;
     let status = response.status();
     let bytes = to_bytes(response.into_body(), RELAY_REPLY_LIMIT).await.unwrap_or_default();
