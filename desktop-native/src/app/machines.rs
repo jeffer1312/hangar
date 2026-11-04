@@ -451,6 +451,8 @@ pub(super) enum MachinesReply {
     Discovered(EntityId, u64, Result<Value, Failure>),
     Probed(EntityId, u64, Result<Found, String>),
     Registered(EntityId, u64, Result<(Going, Going), String>),
+    /// Recados ligados pela chave do detalhe, pela geração de `peer_seq` e o identificador da máquina.
+    LineRegistered(u64, String, Result<(Going, Going), String>),
     Paired(u64, Result<Value, Failure>),
     WebUi(u64, Result<Value, Failure>),
     WebUiSaved(u64, Result<Value, Failure>),
@@ -776,6 +778,23 @@ impl Hangar {
             };
             done(MachinesReply::PeerSaved(seq, write, result, entries, far_failed)).await
         });
+        cx.notify();
+    }
+
+    /// Liga os recados de uma máquina que este aparelho já guarda: o mesmo registro nas duas pontas do diálogo Adicionar.
+    fn register_line(&mut self, entry: ServerEntry, id: String, cx: &mut Context<Self>) {
+        let Some(api) = self.api.clone() else { return };
+        let own_id = self.machines.id_loaded().to_owned();
+        if own_id.is_empty() { return; }
+        // O token com que este app fala com este servidor: é o que o outro lado usa para responder.
+        let own_token = self.token.read(cx).value().trim().to_owned();
+        let m = &mut self.machines;
+        if m.peer_busy.is_some() { return; }
+        m.peer_seq += 1;
+        (m.peer_busy, m.peer_error) = (Some((id.clone(), Spot::Messages)), None);
+        let (seq, done) = (m.peer_seq, self.machines_send_later());
+        let found = add::Found::known(entry.address, entry.token, id.clone());
+        self.runtime.spawn(async move { done(MachinesReply::LineRegistered(seq, id, add::register(api, found, own_id, own_token).await)).await });
         cx.notify();
     }
 
@@ -1371,6 +1390,16 @@ impl Hangar {
                     add.update(cx, |add, cx| add.registered(seq, result, cx));
                 }
             }
+            MachinesReply::LineRegistered(seq, id, result) => {
+                let m = &mut self.machines;
+                if seq != m.peer_seq { return; }
+                m.peer_busy = None;
+                // Gravou aqui: a lista nova traz o registro, e a medição dela mostra como ficou cada ponta.
+                match result {
+                    Ok(_) => { m.checks.remove(&id); self.load_peers(cx); }
+                    Err(error) => m.peer_error = Some((id, Spot::Messages, error)),
+                }
+            }
             MachinesReply::Paired(seq, result) => self.paired(seq, result, window),
             MachinesReply::WebUi(seq, result) => { self.machines.web_ui.finish(seq, web_ui_value(result)); }
             MachinesReply::WebUiSaved(seq, result) => self.machines.web_ui_saved(seq, result),
@@ -1713,7 +1742,6 @@ impl Hangar {
             }
         };
         let busy = m.peer_busy.is_some();
-        let next = tr("settings_next_version");
         let muted = |text: String| div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(text);
         let setting = |title: String, help: String| div().border_t_1().border_color(theme::border()).flex().items_center().gap(px(14.)).px_4().py(px(12.))
             .child(div().flex_1().min_w_0().flex().flex_col().gap(px(2.)).child(div().font_weight(FontWeight::MEDIUM).child(title)).child(muted(help)));
@@ -1763,17 +1791,26 @@ impl Hangar {
             .when(line.entries.len() > 1, |el| el.child(div().px_4().pb(px(12.)).text_size(px(12.5)).text_color(theme::warning()).whitespace_normal()
                 .child(tr("machines_saved_explain").replace("{n}", &line.entries.len().to_string()))));
 
-        // Recados: desligar é remover o registro, com a mesma pergunta do Remover. Ligar a partir daqui ainda não existe no app.
+        // Recados: ligar registra as duas pontas com o token deste aparelho; desligar é remover, com a mesma pergunta do Remover.
         let has_id = !own_id.is_empty();
         let registered = line.peer.is_some();
+        let to_register = line.entry.clone().zip(line.ident.clone()).filter(|_| !registered);
+        // Sem como ligar: sem token aqui, ou o identificador dela ainda não veio.
+        let blocked = (!registered && to_register.is_none())
+            .then(|| tr(if line.entry.is_none() { "machines_peer_no_token_here" } else { "machines_row_silent" }));
+        let no_token = blocked.is_some();
         let remove_line = line.clone();
-        let messages_switch = Switch::new("machines-peer-messages").checked(registered).disabled(!registered || !has_id || busy)
-            // Desligado sem identificador: o motivo vai no nome e embaixo da legenda.
-            .accessibility_label(if !registered { format!("{}. {next}", fill("machines_peer_messages_title")) } else if has_id {
-                fill("machines_peer_messages_title") } else { format!("{}. {}", fill("machines_peer_messages_title"), tr("machines_no_id_short")) })
-            .on_click(cx.listener(move |this, on: &bool, window, cx| if !*on { this.confirm_line_removal(&remove_line, Spot::Messages, window, cx) }));
+        let messages_switch = Switch::new("machines-peer-messages").checked(registered).disabled(no_token || !has_id || busy)
+            // Desligado sem como ligar: o motivo vai no nome e embaixo da legenda.
+            .accessibility_label(if let Some(why) = &blocked { format!("{}. {why}", fill("machines_peer_messages_title")) }
+                else if has_id { fill("machines_peer_messages_title") } else { format!("{}. {}", fill("machines_peer_messages_title"), tr("machines_no_id_short")) })
+            .on_click(cx.listener(move |this, on: &bool, window, cx| match (&to_register, *on) {
+                (Some((entry, id)), true) => this.register_line(entry.clone(), id.clone(), cx),
+                (_, false) => this.confirm_line_removal(&remove_line, Spot::Messages, window, cx),
+                _ => {}
+            }));
         let messages_switch = div().id("machines-peer-messages-slot").child(messages_switch)
-            .when(!registered, |el| { let next = next.clone(); el.tooltip(move |window, cx| Tooltip::new(next.clone()).build(window, cx)) });
+            .when_some(blocked, |el, why| el.tooltip(move |window, cx| Tooltip::new(why.clone()).build(window, cx)));
         let tone = match card {
             Card::Testing | Card::Off => theme::border(),
             Card::Ok => theme::success(),
@@ -1844,9 +1881,10 @@ impl Hangar {
             .child(section_head(IconName::MessageSquare, tr("machines_peer_messages"), None, Some(scope().flex_shrink_0().into_any_element()), px(16.)))
             .child(setting(fill("machines_peer_messages_title"), fill(if card == Card::Off { "machines_peer_messages_off" } else { "machines_peer_messages_legend" }))
                 .child(div().flex_shrink_0().child(messages_switch)))
-            .when(!has_id && registered, |el| el.child(div().px_4().pb(px(12.)).text_size(px(12.5)).text_color(theme::warning()).whitespace_normal()
+            .when(!has_id && !no_token, |el| el.child(div().px_4().pb(px(12.)).text_size(px(12.5)).text_color(theme::warning()).whitespace_normal()
                 .child(tr("machines_no_id_short"))))
-            .children(error("machines-peer-messages-error", peer_id.as_deref().and_then(|id| self.peer_error_at(id, Spot::Messages))))
+            // Pelo identificador da linha: antes de ligar ainda não há registro com o id.
+            .children(error("machines-peer-messages-error", line.ident.as_deref().and_then(|id| self.peer_error_at(id, Spot::Messages))))
             .when(card != Card::Off, |el| el.child(div().border_t_1().border_color(theme::border()).p(px(12.)).child(result)));
 
         // Avançado: tirar da varredura grava no servidor; os endereços de ida e de volta são os que cada lado guardou.

@@ -80,7 +80,11 @@ pub(super) fn parse_discovered(value: &Value) -> Option<Vec<Discovered>> {
 #[derive(Clone)]
 pub(in crate::app) struct Found { base: String, token: String, id: String, id_error: Option<String> }
 
-impl Found { pub(super) fn id(&self) -> &str { &self.id } }
+impl Found {
+    pub(super) fn id(&self) -> &str { &self.id }
+    /// Máquina já conhecida por este aparelho: endereço, token e identificador já lidos, sem novo teste.
+    pub(super) fn known(base: String, token: String, id: String) -> Self { Self { base, token, id, id_error: None } }
+}
 
 /// O que o outro servidor disse, como o web mostra ("401: …"); queda de rede não tem texto próprio.
 fn reason(error: &Failure) -> Option<String> {
@@ -151,7 +155,7 @@ pub(super) async fn check(api: &Api, url: &str, id: &str) -> Going {
 }
 
 /// Grava aqui (falha aqui é o resultado: nada mudou), grava este servidor lá e testa as duas pontas.
-async fn register(here: Api, found: Found, own_id: String, own_token: String) -> Result<(Going, Going), String> {
+pub(super) async fn register(here: Api, found: Found, own_id: String, own_token: String) -> Result<(Going, Going), String> {
     let body = json!({"id": found.id, "base_url": found.base, "token": found.token});
     here.server_send(reqwest::Method::POST, &["peers"], Some(body), 15).await.map_err(|e| Hangar::fetch_failure(&e))?;
     let own_base = own_address(&here).await;
