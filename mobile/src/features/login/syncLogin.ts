@@ -45,6 +45,6 @@ export async function syncLogin(address: string, user: string, password: string)
     if (!enc_blob) return [];
     // Endereço vazio no cofre é o próprio hub.
     const list = decryptJson<Server[]>(encKey, enc_blob).map((server) => ({ ...server, baseUrl: server.baseUrl || hub }));
-    return parseMachineImportPayload(JSON.stringify(list));
+    return parseMachineImportPayload(JSON.stringify(list)).filter((server) => !server.disabled);
   } catch { throw new Error(m.machine_import_invalid_item()); }
 }

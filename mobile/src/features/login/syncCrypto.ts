@@ -35,8 +35,11 @@ export function toBase64(bytes: Uint8Array): string {
   return text;
 }
 
+// `encodeURIComponent` recusa surrogate sozinho; o `TextEncoder` da web o troca por U+FFFD.
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
 const utf8 = (text: string) => Uint8Array.from(
-  (encodeURIComponent(text).match(/%..|./g) ?? []).map((c) => (c.length > 1 ? parseInt(c.slice(1), 16) : c.charCodeAt(0))),
+  (encodeURIComponent(text.replace(LONE_SURROGATE, '�')).match(/%..|./g) ?? [])
+    .map((c) => (c.length > 1 ? parseInt(c.slice(1), 16) : c.charCodeAt(0))),
 );
 const fromUtf8 = (bytes: Uint8Array) =>
   decodeURIComponent(Array.from(bytes, (b) => `%${b.toString(16).padStart(2, '0')}`).join(''));

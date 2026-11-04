@@ -217,6 +217,11 @@ describe('padrões de criação do servidor', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('proibido', { status: 403 }));
     await expect(getSessionDefaultsForServer(server, 'claude')).rejects.toMatchObject({ status: 403 });
   });
+
+  it('403 com outro código continua falha de leitura', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ detail: { code: 'outro_erro', message: 'x' } }), { status: 403 }));
+    await expect(getSessionDefaultsForServer(server, 'claude')).rejects.toMatchObject({ code: 'outro_erro' });
+  });
 });
 
 describe('rotaGenerica — o que pode ir pro diário de uso', () => {

@@ -13,7 +13,7 @@ export function LoginField({ label, ...props }: TextInputProps & { label: string
 
 export function LoginSubmit({ label, text = label, blocked, onPress }: { label: string; text?: string; blocked: boolean; onPress: () => void }) {
   return <Pressable style={[styles.button, blocked && styles.buttonBlocked]} onPress={onPress} disabled={blocked}
-    accessibilityLabel={label} accessibilityState={{ disabled: blocked }}>
+    accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ disabled: blocked }}>
     <Text style={[styles.buttonText, blocked && styles.buttonTextBlocked]}>{text}</Text>
   </Pressable>;
 }

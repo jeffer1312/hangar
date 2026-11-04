@@ -25,6 +25,14 @@ describe('syncCrypto', () => {
     }
   });
 
+  test('senha com surrogate sozinho dá a mesma conta do TextEncoder', async () => {
+    const salt = new Uint8Array(16);
+    for (const password of ['a\uD800b', '\uDC00fim', 'par 🔑 e \uD83D']) {
+      const web = await webCryptoKeys(password, salt, 1000);
+      expect((await deriveKeys(password, toBase64(salt), 1000)).authHash).toBe(web.authHash);
+    }
+  });
+
   test('deriva as chaves do Web Crypto e abre o cofre que ele cifrou', async () => {
     const salt = Uint8Array.from({ length: 16 }, (_, i) => i * 11);
     const password = 'senha çom açento 🔑';

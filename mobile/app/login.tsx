@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { Pressable, ScrollView, Text, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { useRouter } from 'expo-router';
 import { Screen } from '../src/ui/Screen';
@@ -58,8 +58,8 @@ export default function Login() {
         return;
       }
       // `add`, e não a importação: entrar de novo troca o token que a conta recebeu no mesmo endereço.
-      const [first] = servers.filter((s) => !s.disabled).map((s) => useServers.getState().add(s));
-      if (first) useServers.getState().setActive(first.id);
+      const [first] = servers.map((s) => useServers.getState().add(s));
+      useServers.getState().setActive(first.id);
       router.replace('/');
     } catch (e) {
       setError(e instanceof Error && e.message ? e.message : m.login_falha());
@@ -110,7 +110,7 @@ export default function Login() {
 
   return (
     <Screen>
-      <View style={styles.container}>
+      <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets>
         <Glass variant="modal" style={styles.card}>
           <View style={styles.header}>
             <Text style={styles.title}>{m.login_titulo()}</Text>
@@ -130,7 +130,14 @@ export default function Login() {
 
             {withPassword ? (
               <>
-                <LoginField label={m.login_usuario()} value={user} onChangeText={setUser} spellCheck={false} textContentType="username" />
+                <LoginField
+                  label={m.login_usuario()}
+                  value={user}
+                  onChangeText={setUser}
+                  placeholder={m.mobile_sync_login_user_hint()}
+                  spellCheck={false}
+                  textContentType="username"
+                />
                 <LoginField
                   label={m.login_senha()}
                   value={password}
@@ -177,7 +184,7 @@ export default function Login() {
             </Pressable>
           </View>
         </Glass>
-      </View>
+      </ScrollView>
 
       {/* `scrollable` é o que faz a sheet dar a altura do detent ao conteúdo; sem ele o flex:1 da câmera colapsa numa faixa. */}
       <Sheet open={scanning} sizes={['large']} scrollable onDismiss={() => setScanning(false)}>
@@ -198,7 +205,7 @@ export default function Login() {
 
 const styles = StyleSheet.create((theme, rt) => ({
   container: {
-    flex: 1,
+    flexGrow: 1,
     justifyContent: 'flex-start',
     alignItems: 'center',
     paddingTop: 80,
