@@ -93,7 +93,8 @@ export function BranchPicker({ server, cwd, sessionName, value, onChange, onPick
   const known = !!info && !!typed && typed !== info.current && !openElsewhere && [...info.branches, ...info.remotes].includes(typed);
   const taken = fresh && !!info && !!typed && (typed === info.current || openElsewhere);
 
-  useEffect(() => { onTakenChange?.(taken); }, [taken, onTakenChange]);
+  // A pasta nova zera o estado no pai: avisa de novo mesmo sem `taken` mudar.
+  useEffect(() => { onTakenChange?.(taken); }, [taken, cwd, onTakenChange]);
 
   useEffect(() => {
     if (!info) return;   // sem a leitura não dá para saber se o nome já existe
