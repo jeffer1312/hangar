@@ -194,7 +194,7 @@ DOWNLOADS = [  # (plataforma, nome pt/en, arquitetura pt/en, arquivo pt/en, dest
     ("macos", ("macOS", "macOS"), ("Apple Silicon · .zip",) * 2, ("Hangar-macos-aarch64.zip",) * 2, f"{NATIVE}/Hangar-macos-aarch64.zip"),
     ("macos", ("macOS", "macOS"), ("Intel · .zip",) * 2, ("Hangar-macos-x86_64.zip",) * 2, f"{NATIVE}/Hangar-macos-x86_64.zip"),
     ("android", ("Android", "Android"), ("App nativo · .apk", "Native app · .apk"), ("hangar.apk",) * 2, f"{MOBILE}/hangar.apk"),
-    ("iphone", ("iPhone", "iPhone"), ("App nativo · pelo app de desktop, com cabo", "Native app · from the desktop app, over USB"),
+    ("iphone", ("iPhone", "iPhone"), ("App nativo · pelo app de desktop", "Native app · via the desktop app"),
      ("Configurações · Instalar no celular", "Settings · Install on phone"), "#celular"),
 ]
 
