@@ -31,7 +31,8 @@ swap_pages() {
 }
 
 show() {
-    local arquivo agora inicio linha hora resto ativo="" ativo_desde=0
+    local arquivo agora inicio hora resto passo
+    local -A ativos=()
     arquivo="$(ls -t "$ESTADO"/andamento/* 2>/dev/null | head -1)"
     [[ -n "$arquivo" ]] || { echo "nenhuma rodada registrada"; return; }
     agora="$(date +%s)"
@@ -39,15 +40,15 @@ show() {
     echo "rodada $(basename "$arquivo"), começou há $(( (agora - inicio) / 60 )) min"
     while read -r hora resto; do
         case "$resto" in
-            ">> "*) ativo="${resto#>> }"; ativo_desde="$hora" ;;
-            "<< "*) echo "  ${resto#<< }"; ativo="" ;;
-            fim\ *) echo "  terminou com código ${resto#fim }"; ativo=""; ;;
+            ">> "*) passo="${resto#>> }"; ativos["${passo%…}"]="$hora" ;;
+            "<< "*) echo "  ${resto#<< }"; passo="${resto#<< }"; unset "ativos[${passo% * *}]" ;;
+            fim\ *) echo "  terminou com código ${resto#fim }"; ativos=() ;;
         esac
     done < "$arquivo"
-    [[ -n "$ativo" ]] && echo "  agora: $ativo há $(( (agora - ativo_desde) / 60 )) min"
+    for passo in "${!ativos[@]}"; do echo "  agora: $passo há $(( (agora - ativos[$passo]) / 60 )) min"; done
     local log
     log="$(ls -t "$ESTADO"/logs/*.log 2>/dev/null | head -1)"
-    [[ -n "$ativo" && -n "$log" ]] && awk '
+    (( ${#ativos[@]} )) && [[ -n "$log" ]] && awk '
         /^running [0-9]+ test/ {total += $2}
         /^test .* \.\.\. (ok|FAILED|ignored)/ {feitos++}
         / \.\.\. FAILED$/ {falhas++}
