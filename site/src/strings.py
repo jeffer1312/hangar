@@ -4,6 +4,7 @@ LANGS = ("pt", "en")
 BASE_URL = "https://hangar.dev.br"
 NATIVE = "https://github.com/jeffer1312/hangar/releases/download/native-latest"
 MOBILE = "https://github.com/jeffer1312/hangar/releases/download/mobile-latest"
+RELEASE_PAGE = "https://github.com/jeffer1312/hangar/releases/tag/native-latest"
 
 
 def chips(items):
@@ -43,8 +44,8 @@ T = {
  't_b3': ('Claude e Codex também rodam como processo do Hangar: permissões e perguntas chegam como cartão, e reiniciar o app não corta o turno.',
           'Claude and Codex can also run as a Hangar process: permissions and questions arrive as cards, and restarting the app never cuts a turn.'),
  't_b4h': ('Sem nuvem do Hangar no meio.', 'No Hangar cloud in the middle.'),
- 't_b4': ('Self-hosted, pela sua rede local ou pela sua VPN: as sessões não passam por nenhum servidor nosso. Diagnóstico só sai se você mandar.',
-          'Self-hosted, over your LAN or your VPN: your sessions never go through a server of ours. Diagnostics leave only if you send them.'),
+ 't_b4': ('Self-hosted, pela sua rede local ou pela sua VPN: as sessões não passam por nenhum servidor nosso. Diagnóstico só sai com o seu consentimento.',
+          'Self-hosted, over your LAN or your VPN: your sessions never go through a server of ours. Diagnostics leave only with your consent.'),
  'term1': ('sessão <span style="color: #ECEBE6">shop</span> no tmux · já aparece no Hangar', 'session <span style="color: #ECEBE6">shop</span> in tmux · already in Hangar'),
  'term_away': ('# saiu pra almoçar — pelo celular:', '# out for lunch — from the phone:'),
  'term2': ('respondeu "A) Aplicar a correção"', 'answered "A) Apply the fix"'),
@@ -119,8 +120,8 @@ T = {
  'p_h2': ('Levantou da mesa? A sessão vai junto.', 'Left your desk? The session comes along.'),
  'p_p': ('Responda a pergunta que travou o agente, aprove uma permissão, interrompa, mande o próximo prompt ou dite por voz. No Wi-Fi de casa ou de qualquer lugar pela Tailscale.',
          'Answer the question that blocked the agent, approve a permission, interrupt, send the next prompt or dictate it. On your home Wi-Fi, or anywhere over Tailscale.'),
- 'p_app': ('Android e iPhone têm app nativo, por enquanto fora das lojas. Se preferir não instalar nada, o PWA abre no navegador. Nos dois, é só ler o QR do Hangar.',
-           'Android and iPhone have a native app, outside the stores for now. Prefer not to install anything? The PWA opens in the browser. Either way, just scan the Hangar QR code.'),
+ 'p_app': ('Android e iPhone têm app nativo, por enquanto fora das lojas: no app de desktop, abra Configurações, Instalar no celular, e siga os passos. No iPhone vai por cabo USB, e não chegam notificações. Se preferir não instalar nada, o PWA abre no navegador. Nos dois, é só ler o QR do Hangar.',
+           'Android and iPhone have a native app, outside the stores for now: in the desktop app, open Settings, Install on phone, and follow the steps. iPhone goes over a USB cable and gets no notifications. Prefer not to install anything? The PWA opens in the browser. Either way, just scan the Hangar QR code.'),
  'cta_app': ('Baixar o app do celular', 'Get the phone app'),
  'p_chips': (chips(['Perguntas com botões', 'Fila de prompts', 'Ditado', 'Notificações', 'Diffs']), chips(['Tap-to-answer questions', 'Prompt queue', 'Dictation', 'Notifications', 'Diffs'])),
  'alt_phone': ('Hangar no celular respondendo uma pergunta do agente', 'Hangar on the phone answering an agent question'),
@@ -134,14 +135,14 @@ T = {
  'h_s3h': ('Solte os agentes', 'Let the agents loose'),
  'h_s3': ('Escolha pasta, agente e modelo. As sessões que você já tinha abertas no terminal aparecem sozinhas.', 'Pick a folder, agent and model. Sessions you already had open in the terminal show up on their own.'),
  'd_h2': ('Baixe o Hangar', 'Download Hangar'),
- 'd_p': ('Grátis e open source. Baixe o app e abra: no Linux e no Windows, ele mesmo instala o servidor e o que faltar.', 'Free and open source. Download the app and open it: on Linux and Windows it installs the server and anything missing by itself.'),
- 'd_alt': (f'Outros Linux: <a href="{NATIVE}/Hangar-linux-x86_64.rpm" style="color: var(--a)">.rpm</a> (Fedora) ou <a href="{NATIVE}/Hangar-linux-x86_64.tar.gz" style="color: var(--a)">.tar.gz</a>',
-           f'Other Linux: <a href="{NATIVE}/Hangar-linux-x86_64.rpm" style="color: var(--a)">.rpm</a> (Fedora) or <a href="{NATIVE}/Hangar-linux-x86_64.tar.gz" style="color: var(--a)">.tar.gz</a>'),
+ 'd_p': ('Grátis e open source. Baixe o app e abra: no Linux e no Windows, ele mesmo instala o servidor e o que faltar. No macOS, use o comando mais abaixo.', 'Free and open source. Download the app and open it: on Linux and Windows it installs the server and anything missing by itself. On macOS, use the command below.'),
+ 'd_alt': (f'Outros Linux com glibc 2.39+: <a href="{NATIVE}/Hangar-linux-x86_64.rpm" style="color: var(--a)">.rpm</a> (Fedora 40+) ou <a href="{NATIVE}/Hangar-linux-x86_64.tar.gz" style="color: var(--a)">.tar.gz</a> (rode o install-linux.sh dentro dele). Notas e .sha256 na <a href="{RELEASE_PAGE}" style="color: var(--a)">página da release</a>.',
+           f'Other Linux with glibc 2.39+: <a href="{NATIVE}/Hangar-linux-x86_64.rpm" style="color: var(--a)">.rpm</a> (Fedora 40+) or <a href="{NATIVE}/Hangar-linux-x86_64.tar.gz" style="color: var(--a)">.tar.gz</a> (run the install-linux.sh inside it). Notes and .sha256 on the <a href="{RELEASE_PAGE}" style="color: var(--a)">release page</a>.'),
  'd_cli': ('No macOS, ou se preferir o terminal', 'On macOS, or if you prefer the terminal'),
- 'd_cli_p': ('Um comando instala o servidor. No macOS, rode antes de abrir o app.', 'One command installs the server. On macOS, run it before opening the app.'),
+ 'd_cli_p': ('Um comando instala o servidor e o app. No macOS, o .zip sozinho só conecta a um Hangar que já roda em outra máquina.', 'One command installs the server and the app. On macOS, the .zip alone only connects to a Hangar already running on another machine.'),
  'copy_label': ('Copiar comando', 'Copy command'),
- 'd_req': ('Binários sem assinatura: no Windows, o SmartScreen avisa na primeira vez (Mais informações, Executar assim mesmo); no macOS, abra pelo botão direito. No iPhone, a instalação é pelo <a href="https://sidestore.io" style="color: var(--a)">SideStore</a>.',
-           'Binaries are unsigned: on Windows, SmartScreen warns the first time (More info, Run anyway); on macOS, right-click to open. On iPhone, install it with <a href="https://sidestore.io" style="color: var(--a)">SideStore</a>.'),
+ 'd_req': ('Binários sem assinatura: no Windows, o SmartScreen avisa na primeira vez (Mais informações, Executar assim mesmo); no macOS, libere em Ajustes do Sistema, Privacidade e Segurança.',
+           'Binaries are unsigned: on Windows, SmartScreen warns the first time (More info, Run anyway); on macOS, allow it in System Settings, Privacy &amp; Security.'),
  'close_h2': ('Traga seus agentes pro mesmo hangar.', 'Bring your agents under one roof.'),
  'disclaimer': ('Ferramenta independente, licença MIT. Não é afiliada nem endossada pela Anthropic, OpenAI, Moonshot AI ou pelo projeto Pi.',
                 'Independent tool, MIT licensed. Not affiliated with or endorsed by Anthropic, OpenAI, Moonshot AI or the Pi project.'),
@@ -187,13 +188,14 @@ SMALL = {
 }
 
 DOWNLOADS = [  # (plataforma, nome pt/en, arquitetura pt/en, arquivo pt/en, destino)
-    ("linux", ("Linux", "Linux"), ("Ubuntu 24.04+ e Debian · .deb", "Ubuntu 24.04+ and Debian · .deb"),
+    ("linux", ("Linux", "Linux"), ("Ubuntu 24.04+ e Debian 13+ · .deb", "Ubuntu 24.04+ and Debian 13+ · .deb"),
      ("Hangar-linux-x86_64.deb",) * 2, f"{NATIVE}/Hangar-linux-x86_64.deb"),
     ("windows", ("Windows", "Windows"), ("x64 · .exe",) * 2, ("Hangar-windows-x86_64.exe",) * 2, f"{NATIVE}/Hangar-windows-x86_64.exe"),
     ("macos", ("macOS", "macOS"), ("Apple Silicon · .zip",) * 2, ("Hangar-macos-aarch64.zip",) * 2, f"{NATIVE}/Hangar-macos-aarch64.zip"),
     ("macos", ("macOS", "macOS"), ("Intel · .zip",) * 2, ("Hangar-macos-x86_64.zip",) * 2, f"{NATIVE}/Hangar-macos-x86_64.zip"),
-    ("phone", ("Android", "Android"), ("App nativo · .apk", "Native app · .apk"), ("hangar.apk",) * 2, f"{MOBILE}/hangar.apk"),
-    ("phone", ("iPhone", "iPhone"), ("App nativo · pelo SideStore", "Native app · with SideStore"), ("hangar.ipa",) * 2, f"{MOBILE}/hangar.ipa"),
+    ("android", ("Android", "Android"), ("App nativo · .apk", "Native app · .apk"), ("hangar.apk",) * 2, f"{MOBILE}/hangar.apk"),
+    ("iphone", ("iPhone", "iPhone"), ("App nativo · pelo app de desktop, com cabo", "Native app · from the desktop app, over USB"),
+     ("Configurações · Instalar no celular", "Settings · Install on phone"), "#celular"),
 ]
 
 CLIPS = [

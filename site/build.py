@@ -13,12 +13,12 @@ import strings as S  # noqa: E402
 
 ICONS = json.loads((SITE / "src" / "icons.json").read_text(encoding="utf-8"))
 OS_ICONS = json.loads((SITE / "src" / "os-icons.json").read_text(encoding="utf-8"))
-OS_LOOK = {  # nome do cartão: (ícone, tom)
-    "Linux": ("linux", "#F2C94C"),
-    "Windows": ("windows", "#5AB0F0"),
-    "macOS": ("apple", "#ECEBE6"),
-    "Android": ("android", "#3DDC84"),
-    "iPhone": ("apple", "#ECEBE6"),
+OS_LOOK = {  # plataforma do cartão: (ícone, tom)
+    "linux": ("linux", "#F2C94C"),
+    "windows": ("windows", "#5AB0F0"),
+    "macos": ("apple", "#ECEBE6"),
+    "android": ("android", "#3DDC84"),
+    "iphone": ("apple", "#ECEBE6"),
 }
 HANGAR_ARCS = '<path d="M 34.18 138 A 76 76 0 1 1 165.82 138"></path><path d="M 49.59 116.38 A 53 53 0 1 1 150.41 116.38"></path><path d="M 70.16 103.14 A 30 30 0 1 1 129.84 103.14"></path>'
 esc = html.escape
@@ -47,7 +47,7 @@ def render_downloads(i):
     # corpo do <sc-for list="{{downloads}}"> do molde, linhas 460-466; a borda vem de .dl/.dl.is-mine
     out = []
     for platform, os_, arch, file_, href in S.DOWNLOADS:
-        icon, tone = OS_LOOK[os_[0]]
+        icon, tone = OS_LOOK[platform]
         out.append(
             f'<a class="card reveal dl" data-platform="{platform}" href="{href}" style="--t: {tone}; border-radius: 16px; background: #0F1112; padding: 22px 24px 18px; display: flex; flex-direction: column; gap: 18px">'
             f'<svg class="dl-mark" viewBox="0 0 200 200" aria-hidden="true"><g transform="translate(0,16)" fill="none" stroke="currentColor" stroke-width="13" stroke-linecap="round">{HANGAR_ARCS}</g></svg>'
@@ -106,6 +106,7 @@ def render_page(i):
         "lang_switch": lang_switch(lang),
         "SMALL": render_small(i),
         "DOWNLOADS": render_downloads(i),
+        "HANGAR_ARCS": HANGAR_ARCS,
         "SHOWCASE": render_showcase(i),
         "VIDEO_orq": media(clip["orq"]["video"][i]), "POSTER_orq": media(clip["orq"]["poster"][i]),
         "VIDEO_pair": media(clip["pair"]["video"][i]), "POSTER_pair": media(clip["pair"]["poster"][i]),

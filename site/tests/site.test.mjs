@@ -1,6 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { detectPlatform, installFor, INSTALL, nextIndex, prevIndex } from '../src/site.js';
+import { detectPlatform, deviceFor, installFor, INSTALL, nextIndex, prevIndex } from '../src/site.js';
+
+test('celular escolhe o cartão certo', () => {
+  assert.equal(deviceFor('phone', 'Mozilla/5.0 (Linux; Android 15; Pixel 9)'), 'android');
+  assert.equal(deviceFor('phone', 'Mozilla/5.0 (iPhone; CPU iPhone OS 19_0 like Mac OS X)'), 'iphone');
+  assert.equal(deviceFor('macos', 'Mozilla/5.0 (Macintosh)'), 'macos');
+});
 
 test('desktop por userAgent', () => {
   assert.equal(detectPlatform('Mozilla/5.0 (X11; Linux x86_64) Chrome/140', 'Linux x86_64'), 'linux');

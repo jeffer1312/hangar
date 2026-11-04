@@ -12,6 +12,10 @@ export function detectPlatform(ua = '', platform = '', touchPoints = 0) {
   return 'linux';
 }
 
+export const deviceFor = (platform, ua = '') => {
+  if (platform !== 'phone') return platform;
+  return /Android/i.test(ua) ? 'android' : 'iphone';
+};
 export const installFor = (p) => (p === 'windows' ? 'win' : 'unix');
 export const nextIndex = (i, n) => (i + 1) % n;
 export const prevIndex = (i, n) => (i - 1 + n) % n;
@@ -130,17 +134,18 @@ function initInstall(root, platform) {
   render();
 }
 
-function initPlatform(platform) {
+function initPlatform(platform, device) {
   const key = `label${platform[0].toUpperCase()}${platform.slice(1)}`;
   document.querySelectorAll('[data-cta-os]').forEach((a) => {
     a.querySelector('.cta-text').textContent = a.dataset[key];
     if (platform === 'phone') a.setAttribute('href', '#celular');
   });
-  document.querySelectorAll('[data-platform]').forEach((card) => {
-    const mine = card.dataset.platform === platform;
-    card.classList.toggle('is-mine', mine);
-    card.querySelector('.badge-mine').hidden = !mine;
-  });
+  const mine = [...document.querySelectorAll('[data-platform]')].filter((c) => c.dataset.platform === device);
+  mine.forEach((c) => c.classList.add('is-mine'));
+  // o navegador não diz se o Mac é Intel ou Apple Silicon: com dois cartões, o selo seria palpite
+  if (mine.length === 1) mine[0].querySelector('.badge-mine').hidden = false;
+  // mover no DOM, não por CSS: Tab e leitor de tela seguem a mesma ordem da tela
+  mine[0]?.parentElement.prepend(...mine);
 }
 
 function initLoopVideos() {
@@ -161,7 +166,7 @@ if (typeof document !== 'undefined') {
     safe('showcase', () => document.querySelectorAll('[data-showcase]').forEach(initShowcase));
     safe('terminal', () => document.querySelectorAll('[data-terminal]').forEach(initTerminal));
     safe('install', () => document.querySelectorAll('[data-install]').forEach((el) => initInstall(el, platform)));
-    safe('platform', () => initPlatform(platform));
+    safe('platform', () => initPlatform(platform, deviceFor(platform, navigator.userAgent)));
     safe('loopVideos', initLoopVideos);
   });
 }
