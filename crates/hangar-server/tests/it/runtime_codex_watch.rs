@@ -1737,9 +1737,12 @@ async fn codex_headless_sleeps_and_open_parked_wakes() {
         assert!(Instant::now() < delivered_until,"a vida nova entregou o texto guardado: {methods:?}");
         tokio::time::sleep(Duration::from_millis(50)).await;
     };
-    let resumed = methods.iter().position(|m|m["method"] == "thread/resume" && m["params"]["threadId"] == "thread-1");
+    // O log junta as duas vidas: a acordada tem de abrir de novo, ou o Codex real recusa com `Not initialized`.
+    let initialized = methods.iter().rposition(|m|m["method"] == "initialize");
+    let resumed = methods.iter().rposition(|m|m["method"] == "thread/resume" && m["params"]["threadId"] == "thread-1");
     let turn = methods.iter().position(|m|m["method"] == "turn/start" && m["params"]["threadId"] == "thread-1");
-    assert!(resumed.is_some() && resumed < turn,"retomou a mesma conversa antes de entregar: {methods:?}");
+    assert_eq!(methods.iter().filter(|m|m["method"] == "initialize").count(),2,"{methods:?}");
+    assert!(initialized < resumed && resumed < turn,"a vida nova inicializou e retomou antes de entregar: {methods:?}");
     let generation = fx.queue_json("k-sleep")["generation"].as_u64().unwrap();
     registry.close_with_kill("k-sleep",generation).await.unwrap();
 }

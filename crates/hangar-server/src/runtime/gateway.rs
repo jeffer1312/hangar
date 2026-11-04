@@ -1686,6 +1686,8 @@ impl RuntimeRegistry {
             },
         };
         let fresh = matches!(launched,Ok(Some(_)));
+        // A vista gravada é do processo anterior: com ela o novo nunca recebe o `initialize`.
+        if fresh { metadata["initialized"] = json!(false); metadata["ready"] = json!(false); }
         let epoch_s = SystemTime::now().duration_since(UNIX_EPOCH).map(|d|d.as_secs_f64()).unwrap_or(0.0);
         let revision = self.revisions.lock().await.entry(target.key.clone()).or_insert_with(||Arc::new(AtomicU64::new(0))).clone();
         let mut engine = RuntimeEngine::new(&target.provider,metadata,target.generation,ClockSample { monotonic_s:0.0,epoch_s })?

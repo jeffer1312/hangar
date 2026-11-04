@@ -1149,7 +1149,7 @@ impl Engine {
             uncertain.extend(reserved_entry(&rpc));
             if let Some(wire) = self.wires.get_mut(&rpc.operation_id) { wire.final_result = true; }
             if rpc.timed_out { continue; }
-            effects.push(Effect::Reply { operation_id:rpc.operation_id.clone(),disposition:Disposition::Unknown,payload:json!({"error":"a conexão com o Codex caiu"}) });
+            if in_queue(&rpc) { effects.push(Effect::Reply { operation_id:rpc.operation_id.clone(),disposition:Disposition::Unknown,payload:json!({"error":"a conexão com o Codex caiu"}) }); }
             if let Some(parent) = rpc.continuation.as_ref().and_then(|next|next["parent"].as_str()) {
                 let disposition = if skill_parent(&rpc).is_some() { Disposition::Deferred } else { Disposition::Unknown };
                 effects.push(Effect::Reply { operation_id:parent.into(),disposition,payload:json!({"error":"a conexão com o Codex caiu"}) });
@@ -1948,7 +1948,7 @@ impl Engine {
                         trust_expired |= hook_trust.is_some_and(|next|next["early"] != true);
                         subscribe_lost |= subscribe_rpc(rpc) && rpc.params["threadId"] == self.thread_id.as_str();
                         uncertain.extend(reserved_entry(rpc));
-                        effects.push(Effect::Reply { operation_id:rpc.operation_id.clone(),disposition:Disposition::Unknown,payload:json!({"error":"RPC sem resposta"}) });
+                        if in_queue(rpc) { effects.push(Effect::Reply { operation_id:rpc.operation_id.clone(),disposition:Disposition::Unknown,payload:json!({"error":"RPC sem resposta"}) }); }
                         if let Some(parent) = rpc.continuation.as_ref().and_then(|next|next["parent"].as_str()) {
                             // Ler o catálogo não escreve nada no turno: a mensagem volta à fila em vez de ficar incerta.
                             let disposition = if skill_parent(rpc).is_some() { Disposition::Deferred } else { Disposition::Unknown };
@@ -2723,6 +2723,8 @@ fn input_turn(rpc:&Rpc) -> bool { rpc.method == "turn/start" && rpc.continuation
 fn skill_parent(rpc:&Rpc) -> Option<String> {
     rpc.continuation.as_ref().filter(|next|next["kind"] == "skill_lookup").and_then(|next|next["parent"].as_str()).map(str::to_owned)
 }
+/// A reaprovação de hooks nasce do motor, sem operação na fila: responder a ela derruba o ator.
+fn in_queue(rpc:&Rpc) -> bool { !rpc.continuation.as_ref().is_some_and(|next|next["kind"] == "hook_trust") }
 fn reserved_entry(rpc:&Rpc) -> Option<String> {
     rpc.continuation.as_ref().filter(|next|next["kind"] == "async_answer" && next["reserved"] == true)
         .and_then(|next|next["entry_id"].as_str()).map(str::to_owned)
@@ -2764,6 +2766,31 @@ fn question_response(question:&Value,answers:&Value) -> Result<Value,RuntimeErro
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn awaiting_hook_trust() -> Engine {
+        let mut engine = Engine::new(json!({"name":"s","thread_id":"t","headless":true,"initialized":true,"ready":true,"cwd":"/w"}),
+            1,ClockSample { monotonic_s:10.0,epoch_s:1.0 });
+        assert!(!engine.plugins_changed().is_empty(),"a reaprovação saiu");
+        engine
+    }
+
+    fn replies_to_hook_trust(effects:&[Effect]) -> usize {
+        effects.iter().filter(|effect|matches!(effect,Effect::Reply { operation_id,.. } if operation_id.starts_with("hook_trust"))).count()
+    }
+
+    #[test]
+    fn hook_trust_without_answer_replies_to_no_queue_operation() {
+        let mut engine = awaiting_hook_trust();
+        let effects = engine.apply(EngineInput::Tick,ClockSample { monotonic_s:41.0,epoch_s:32.0 }).unwrap();
+        assert_eq!(replies_to_hook_trust(&effects),0,"{effects:?}");
+    }
+
+    #[test]
+    fn hook_trust_on_a_lost_connection_replies_to_no_queue_operation() {
+        let mut engine = awaiting_hook_trust();
+        let effects = engine.transport_lost("",&std::collections::BTreeSet::new());
+        assert_eq!(replies_to_hook_trust(&effects),0,"{effects:?}");
+    }
 
     #[test]
     fn shown_card_without_its_request_keeps_both_identity_errors() {
