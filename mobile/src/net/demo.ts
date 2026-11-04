@@ -1,4 +1,5 @@
 import type { ChatEvent, EventSourceLike, SessionInfo, StateEvent } from '@hangar/core';
+import data from './demoData.json';
 
 // A revisão do Google Play não tem servidor próprio: este endereço responde dentro do app, sem rede.
 export const DEMO_BASE_URL = 'http://127.0.0.1:1';
@@ -11,35 +12,16 @@ let seq = 0;
 const nextId = () => `demo-${++seq}`;
 
 // shortcut: conteúdo só em inglês, o idioma da revisão; traduzir se a demonstração virar recurso para usuários.
-const SESSIONS: SessionInfo[] = [
-  {
-    name: 'landing-page', state: 'idle', provider: 'claude', headless: true, tracked: true,
-    cwd: '/home/demo/landing-page', branch: 'main', last_activity: now() - 120,
-    last_reply: 'The pricing section now stacks correctly on small screens.', last_reply_at: now() - 120,
-  },
-  {
-    name: 'api-tests', state: 'idle', provider: 'codex', headless: true, tracked: true,
-    cwd: '/home/demo/api', branch: 'fix/timeouts', last_activity: now() - 3600,
-    last_reply: 'All 42 tests pass after raising the request timeout.', last_reply_at: now() - 3600,
-  },
-];
+const SESSIONS = data.sessions.map(({ ago, reply, ...session }) => ({
+  ...session, state: 'idle', headless: true, tracked: true,
+  last_activity: now() - ago, last_reply: reply, last_reply_at: now() - ago,
+} as SessionInfo));
 
 const message = (kind: 'user_msg' | 'assistant_msg', text: string, ago: number): ChatEvent =>
   ({ kind, id: nextId(), text, ts: now() - ago });
 
-const CHATS: Record<string, ChatEvent[]> = {
-  'landing-page': [
-    message('user_msg', 'The pricing cards overflow on phones. Can you fix it?', 300),
-    { kind: 'tool_use', id: nextId(), tool_name: 'Read', tool_use_id: 'demo-read',
-      tool_input: { file_path: 'src/pricing.css' }, ts: now() - 280 },
-    { kind: 'tool_result', id: nextId(), tool_use_id: 'demo-read', result: '.cards { display: flex; }', ts: now() - 270 },
-    message('assistant_msg', 'The pricing section now stacks correctly on small screens.', 120),
-  ],
-  'api-tests': [
-    message('user_msg', 'Run the API tests and fix what fails.', 3700),
-    message('assistant_msg', 'All 42 tests pass after raising the request timeout.', 3600),
-  ],
-};
+const CHATS: Record<string, ChatEvent[]> = Object.fromEntries(Object.entries(data.chats).map(([session, events]) =>
+  [session, events.map(({ ago, ...event }) => ({ ...event, id: nextId(), ts: now() - ago } as ChatEvent))]));
 
 class DemoEventSource implements EventSourceLike {
   readyState = 1;
@@ -97,7 +79,7 @@ function answer(session: string, text: string) {
   record(session, message('user_msg', text, 0));
   publish(session, 'state', stateOf(session, 'working'));
   setTimeout(() => {
-    record(session, message('assistant_msg', 'This is a demo with sample data, so no agent ran. Connect your own Hangar server to use real sessions.', 0));
+    record(session, message('assistant_msg', data.reply, 0));
     publish(session, 'state', stateOf(session, 'idle'));
   }, 800);
 }
@@ -105,7 +87,7 @@ function answer(session: string, text: string) {
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 
-const unavailable = () => json({ detail: 'Not available in the demo' }, 404);
+const unavailable = () => json({ detail: data.unavailable }, 404);
 
 const VOICE_MODEL = { model: null, effort: 'low', tier: null };
 const VOICE_SETTINGS = {
