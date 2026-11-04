@@ -19,6 +19,7 @@ import * as m from '../src/paraglide/messages';
 
 export default function Login() {
   const router = useRouter();
+  const withoutServers = useServers((s) => s.servers.length === 0);
   const [baseUrl, setBaseUrl] = useState('');
   const [token, setToken] = useState('');
   const [withPassword, setWithPassword] = useState(false);
@@ -188,9 +189,9 @@ export default function Login() {
             <Pressable style={styles.scanBtn} onPress={() => { setInviteLink(''); setInviteOpen(true); }} disabled={loading} accessibilityRole="button" accessibilityLabel={m.mobile_share_invite_open()}>
               <Text style={styles.scanText}>{m.mobile_share_invite_open()}</Text>
             </Pressable>
-            <Pressable style={styles.scanBtn} onPress={openDemo} disabled={loading} accessibilityRole="button" accessibilityLabel={m.mobile_demo_open()}>
+            {withoutServers ? <Pressable style={styles.scanBtn} onPress={openDemo} disabled={loading} accessibilityRole="button" accessibilityLabel={m.mobile_demo_open()}>
               <Text style={styles.scanText}>{m.mobile_demo_open()}</Text>
-            </Pressable>
+            </Pressable> : null}
           </View>
         </Glass>
       </KeyboardAwareScrollView>
