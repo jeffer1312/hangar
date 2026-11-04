@@ -1,24 +1,27 @@
 import { useState } from 'react';
-import { Pressable, Text, TextInput, View } from 'react-native';
-import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { Pressable, Text, View } from 'react-native';
+import { StyleSheet } from 'react-native-unistyles';
 import { useRouter } from 'expo-router';
 import { Screen } from '../src/ui/Screen';
 import { Glass } from '../src/ui/Glass';
 import { Sheet } from '../src/ui/Sheet';
+import { LoginField, LoginSubmit } from '../src/features/login/LoginFields';
 import { QrScanner } from '../src/features/login/QrScanner';
 import { parsePairing } from '../src/features/login/pairing';
+import { syncLogin } from '../src/features/login/syncLogin';
 import { useServers } from '../src/stores/servers';
 import { parseInviteLink } from '@hangar/core';
 import { verifyLoginMachine } from '../src/features/machines/loginMachine';
 import { InvitePanel } from '../src/features/share/InvitePanel';
 import * as m from '../src/paraglide/messages';
-import { superficie } from '../src/theme/superficie';
 
 export default function Login() {
   const router = useRouter();
-  const { theme } = useUnistyles();
   const [baseUrl, setBaseUrl] = useState('');
   const [token, setToken] = useState('');
+  const [withPassword, setWithPassword] = useState(false);
+  const [user, setUser] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [scanning, setScanning] = useState(false);
@@ -41,7 +44,28 @@ export default function Login() {
     }
     setBaseUrl(p.base);
     setToken(p.token);
+    setWithPassword(false);
     setError('');
+  };
+
+  const signIn = async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const servers = await syncLogin(baseUrl.trim(), user.trim(), password);
+      if (!servers.length) {
+        setError(m.mobile_sync_login_empty());
+        return;
+      }
+      // `add`, e não a importação: entrar de novo troca o token que a conta recebeu no mesmo endereço.
+      const [first] = servers.filter((s) => !s.disabled).map((s) => useServers.getState().add(s));
+      if (first) useServers.getState().setActive(first.id);
+      router.replace('/');
+    } catch (e) {
+      setError(e instanceof Error && e.message ? e.message : m.login_falha());
+    } finally {
+      setLoading(false);
+    }
   };
 
   const connect = async () => {
@@ -81,6 +105,9 @@ export default function Login() {
     }
   };
 
+  const blocked = loading || (withPassword ? !baseUrl.trim() || !user.trim() || !password : !token.trim());
+  const submitLabel = withPassword ? m.login_entrar() : m.login_conectar();
+
   return (
     <Screen>
       <View style={styles.container}>
@@ -91,38 +118,38 @@ export default function Login() {
           </View>
 
           <View style={styles.form}>
-            <View style={styles.field}>
-              <Text style={styles.label}>{m.sessao_url_servidor()}</Text>
-              <TextInput
-                style={styles.input}
-                value={baseUrl}
-                onChangeText={setBaseUrl}
-                placeholder="http://192.168.x.x:8000"
-                placeholderTextColor={theme.tokens.text.muted}
-                autoCapitalize="none"
-                autoCorrect={false}
-                spellCheck={false}
-                keyboardType="url"
-                textContentType="URL"
-                accessibilityLabel={m.sessao_url_servidor()}
-              />
-            </View>
+            <LoginField
+              label={m.sessao_url_servidor()}
+              value={baseUrl}
+              onChangeText={setBaseUrl}
+              placeholder={withPassword ? 'https://hangar.example.com' : 'http://192.168.x.x:8000'}
+              spellCheck={false}
+              keyboardType="url"
+              textContentType="URL"
+            />
 
-            <View style={styles.field}>
-              <Text style={styles.label}>{m.sessao_token()}</Text>
-              <TextInput
-                style={styles.input}
+            {withPassword ? (
+              <>
+                <LoginField label={m.login_usuario()} value={user} onChangeText={setUser} spellCheck={false} textContentType="username" />
+                <LoginField
+                  label={m.login_senha()}
+                  value={password}
+                  onChangeText={setPassword}
+                  placeholder="••••••••••••••••"
+                  secureTextEntry
+                  textContentType="password"
+                />
+              </>
+            ) : (
+              <LoginField
+                label={m.sessao_token()}
                 value={token}
                 onChangeText={setToken}
                 placeholder="••••••••••••••••"
-                placeholderTextColor={theme.tokens.text.muted}
                 secureTextEntry
-                autoCapitalize="none"
-                autoCorrect={false}
                 textContentType="password"
-                accessibilityLabel={m.sessao_token()}
               />
-            </View>
+            )}
 
             {error ? (
               <View style={styles.errorBox}>
@@ -130,22 +157,22 @@ export default function Login() {
               </View>
             ) : null}
 
-            <Pressable
-              style={[styles.connectBtn, (loading || !token.trim()) && styles.connectBtnDisabled]}
-              onPress={connect}
-              disabled={loading || !token.trim()}
-              accessibilityLabel={m.login_conectar()}
-              accessibilityState={{ disabled: loading || !token.trim() }}
-            >
-              <Text style={[styles.connectText, (loading || !token.trim()) && styles.connectTextDisabled]}>
-                {loading ? m.login_conectando() : m.login_conectar()}
-              </Text>
-            </Pressable>
+            <LoginSubmit label={submitLabel} text={loading ? m.login_conectando() : submitLabel} blocked={blocked} onPress={withPassword ? signIn : connect} />
+            {loading && withPassword ? <Text accessibilityRole="alert" style={styles.waitText}>{m.mobile_sync_login_wait()}</Text> : null}
 
-            <Pressable style={styles.scanBtn} onPress={() => setScanning(true)} accessibilityLabel={m.login_qr()}>
+            <Pressable
+              style={styles.scanBtn}
+              onPress={() => { setWithPassword(!withPassword); setError(''); }}
+              disabled={loading}
+              accessibilityRole="button"
+              accessibilityLabel={withPassword ? m.mobile_sync_login_token() : m.mobile_sync_login_open()}
+            >
+              <Text style={styles.scanText}>{withPassword ? m.mobile_sync_login_token() : m.mobile_sync_login_open()}</Text>
+            </Pressable>
+            <Pressable style={styles.scanBtn} onPress={() => setScanning(true)} disabled={loading} accessibilityLabel={m.login_qr()}>
               <Text style={styles.scanText}>{m.login_qr()}</Text>
             </Pressable>
-            <Pressable style={styles.scanBtn} onPress={() => { setInviteLink(''); setInviteOpen(true); }} accessibilityRole="button" accessibilityLabel={m.mobile_share_invite_open()}>
+            <Pressable style={styles.scanBtn} onPress={() => { setInviteLink(''); setInviteOpen(true); }} disabled={loading} accessibilityRole="button" accessibilityLabel={m.mobile_share_invite_open()}>
               <Text style={styles.scanText}>{m.mobile_share_invite_open()}</Text>
             </Pressable>
           </View>
@@ -204,24 +231,6 @@ const styles = StyleSheet.create((theme, rt) => ({
   form: {
     gap: theme.base.space[5],
   },
-  field: {
-    gap: theme.base.space[2],
-  },
-  label: {
-    fontSize: theme.base.text.sm,
-    fontWeight: theme.base.weight.medium,
-    color: theme.tokens.text.secondary,
-  },
-  input: {
-    height: 48,
-    backgroundColor: superficie(theme, 0.8),
-    borderWidth: 1,
-    borderColor: theme.tokens.border.default,
-    borderRadius: theme.base.radius.md,
-    color: theme.tokens.text.primary,
-    fontSize: theme.base.text.sm,
-    paddingHorizontal: theme.base.space[4],
-  },
   errorBox: {
     backgroundColor: theme.tokens.status.error + '14',
     borderWidth: 1,
@@ -233,24 +242,10 @@ const styles = StyleSheet.create((theme, rt) => ({
     fontSize: theme.base.text.sm,
     color: theme.tokens.status.error,
   },
-  connectBtn: {
-    height: 52,
-    backgroundColor: theme.tokens.accent.base,
-    borderRadius: theme.base.radius.md,
-    justifyContent: 'center',
-    alignItems: 'center',
-    minHeight: 44,
-  },
-  connectBtnDisabled: {
-    backgroundColor: theme.tokens.bg.hover,
-  },
-  connectText: {
-    color: theme.ink.onAccent,
-    fontSize: theme.base.text.base,
-    fontWeight: theme.base.weight.semibold,
-  },
-  connectTextDisabled: {
+  waitText: {
+    fontSize: theme.base.text.sm,
     color: theme.tokens.text.muted,
+    textAlign: 'center',
   },
   scanBtn: {
     height: 48,

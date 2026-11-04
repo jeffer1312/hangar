@@ -1192,7 +1192,11 @@ export async function getSessionDefaultsForServer(server: Server, provider: Prov
   signal?: AbortSignal): Promise<SessionDefaults | null> {
   const query = new URLSearchParams({ provider, ...(engine ? { engine } : {}) });
   const result = await apiFetchForServer<{ defaults: SessionDefaults | null }>(server,
-    `/api/session-defaults?${query}`, { signal: comTeto(signal, 8000) });
+    `/api/session-defaults?${query}`, { signal: comTeto(signal, 8000) }).catch((e: { code?: string }) => {
+    // Convidado não tem padrão salvo; a recusa não é falha de leitura, que travaria a criação.
+    if (e?.code === 'erro_fora_do_convidado' || e?.code === 'session_defaults_owner_only') return { defaults: null };
+    throw e;
+  });
   return result.defaults;
 }
 
