@@ -2788,7 +2788,8 @@ mod tests {
     #[test]
     fn hook_trust_on_a_lost_connection_replies_to_no_queue_operation() {
         let mut engine = awaiting_hook_trust();
-        let effects = engine.transport_lost("",&std::collections::BTreeSet::new());
+        let written = engine.rpc.values().map(|rpc|rpc.operation_id.clone()).collect();
+        let effects = engine.transport_lost("",&written);
         assert_eq!(replies_to_hook_trust(&effects),0,"{effects:?}");
     }
 

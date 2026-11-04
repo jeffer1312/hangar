@@ -3959,7 +3959,20 @@ conferido.
 as duas entregues em ordem pela vida nova; cliente que desconecta no meio do acordar; reinício do
 Rust com adormecida e fila pendente; atividade entre a escolha da vigia e o fechamento; texto
 gravado na geração antiga entregue pela nova. O tmux é falso nesses testes: a garantia é "acordou e
-a mensagem está na fila da vida nova", não a resposta do agente. Na escrita desta entrada nada fora
-compilado nem rodado (testes escritos e revisados no papel; o uso real no app fica para quando o
-build for liberado). Plano e decisões em
+a mensagem está na fila da vida nova", não a resposta do agente. Plano e decisões em
 `docs/superpowers/plans/2026-11-03-adormecer-sessoes-ocultas.md`.
+
+**Prova em uso real (03/11/2026).** Build de `c2f9e053e` mais as correções abaixo, com a vigia
+limitada a `cx-*` e rodada de 60 s só nesse binário, no servidor deste notebook. Claude com terminal,
+Codex com e sem terminal, prazo de 1 min: adormeceram em uma ou duas rodadas e ficaram sem processo
+(primeira rodada: 381, 295 e 765 MB, RAM+swap da árvore de cada sessão). `GET` de histórico e de modos
+não acordou, e reiniciar o backend manteve as três adormecidas. A mensagem acordou cada uma na mesma
+conversa, com a superfície de antes, e o agente respondeu a palavra guardada antes de dormir. No
+Claude, duas mensagens seguidas chegaram em ordem. Não conferido: selo e tela nos clientes, psmux.
+
+**O que o uso real achou e o Codex falso não.** O Codex real recusa tudo antes do `initialize` com
+`Not initialized`, e o falso aceitava. Dois defeitos: a vista gravada da vida anterior (`ready`,
+`initialized`) fazia o processo novo pular a subida, e a mensagem ficava sem entrega; e a reaprovação
+de hooks sem resposta respondia a uma operação que a fila nunca teve, o que punha o ator em erro
+(`queue_io`, `operação não preparada`). Processo recém-lançado agora zera as duas marcas
+(`open_with_launch`), e a reaprovação não responde à fila (`in_queue`, em `codex.rs`).
