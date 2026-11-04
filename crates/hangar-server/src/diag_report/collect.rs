@@ -28,11 +28,18 @@ const TARGET_WAIT: Duration = Duration::from_secs(2);
 /// Subidas e quedas do backend e do `hangar-server`, conferidas no diário real.
 const RESTARTS: [&str; 6] = ["backend.inicio", "backend.encerrando", "hangar_server.de_pe", "hangar_server.caiu",
     "hangar_server.partida", "hangar_server.reserva"];
-/// Campos do `hangar-server.log` que podem sair; `detail` e o resto ficam de fora.
-/// Os campos que dizem o que caiu e onde. Valores passam pelo `scrub`, caminho vira o último segmento
-/// e cada um é cortado em `VALUE_MAX`.
+/// Campos do `hangar-server.log` que podem sair: os que dizem o que caiu e onde. Valores passam pelo
+/// `scrub`, caminho vira o último segmento e cada um é cortado em `VALUE_MAX`.
 const LOG_FIELDS: [&str; 21] = ["code", "session", "account", "reason", "stage", "step", "kind", "io_kind", "os_error", "error",
     "detail", "panic", "path", "route", "method", "window", "outcome", "status", "attempt", "wait_s", "pid"];
+/// Campos cujo valor é texto livre (erro formatado, saída de processo, texto do agente): só saem com
+/// cara de código; o resto vira o tamanho.
+const FREE_TEXT_FIELDS: [&str; 4] = ["detail", "error", "reason", "panic"];
+static CODE_LIKE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[A-Za-z0-9_.:/-]{1,80}$").unwrap());
+
+fn code_or_size(value: String) -> String {
+    if CODE_LIKE.is_match(&value) { value } else { format!("<texto {} car.>", value.chars().count()) }
+}
 
 pub(crate) fn window() -> chrono::TimeDelta { chrono::TimeDelta::hours(24) }
 
@@ -221,7 +228,11 @@ pub(crate) fn reduce_server_line(line: &str, since: DateTime<Utc>, s: &Scrubber)
     for (i, (_, end, key)) in marks.iter().enumerate() {
         let value = body[*end..marks.get(i + 1).map_or(body.len(), |m| m.0)].trim();
         let value = value.strip_prefix('"').and_then(|v| v.strip_suffix('"')).unwrap_or(value);
-        if LOG_FIELDS.contains(key) { fields.entry(key).or_insert_with(|| tidy(value, VALUE_MAX)); }
+        if LOG_FIELDS.contains(key) {
+            fields.entry(key).or_insert_with(|| {
+                if FREE_TEXT_FIELDS.contains(key) { code_or_size(tidy(value, usize::MAX)) } else { tidy(value, VALUE_MAX) }
+            });
+        }
     }
     let mut out = format!("{} {} {}", at.with_timezone(&Local).format("%m-%d %H:%M:%S"), &c[2], tidy(message, MESSAGE_MAX));
     for key in LOG_FIELDS {

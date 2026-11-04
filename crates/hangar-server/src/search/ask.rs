@@ -170,7 +170,8 @@ async fn answer(st: &Arc<AppState>, headers: &HeaderMap, bytes: &[u8]) -> Respon
     match result {
         Ok(answer) => json_response(StatusCode::OK, json!({"answer": answer, "hits": hits})),
         Err(msg) => {
-            tracing::warn!(code = "ask_history_failed", "ask-history falhou: {msg}");
+            // `msg` leva a saída do `claude -p`, montada com trechos de conversa: fora do relatório.
+            tracing::warn!(code = "ask_history_failed", output = %msg, "ask-history falhou");
             json_response(StatusCode::BAD_GATEWAY, json!({"detail": msg}))
         }
     }

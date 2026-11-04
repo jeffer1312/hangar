@@ -1620,6 +1620,8 @@ fn the_claude_terminal_open_runs_in_order() {
             .map(|(k, v)| (k.to_owned(), v.to_string_lossy().into_owned())).into_iter().collect();
         let raw = runtime.block_on(contract::run(&fixture["scenario"], &root, env));
         assert_eq!(raw["steps"][0]["status"], status, "{name}: {}", raw["steps"][0]["body"]);
+        // O stderr do tmux é saída crua: não vai ao diário exportável.
+        assert!(!raw["diary"].to_string().contains("server exited"), "{name}: {}", raw["diary"]);
         let events: Vec<String> = raw["diary"].as_array().unwrap().iter().map(|e| format!("{}:{}", e["evento"].as_str().unwrap(), e["etapa"].as_str().unwrap_or(""))).collect();
         let at = |e: &str| events.iter().position(|x| x == e).unwrap_or_else(|| panic!("{name}: {e} em {events:?}"));
         assert!(at("sessao.criar.inicio:") < at("sessao.criar_etapa:validar") && at("sessao.criar_etapa:confiar_pasta") < at("sessao.criar_etapa:criar_terminal"));

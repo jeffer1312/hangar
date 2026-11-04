@@ -913,3 +913,14 @@ def test_terminal_panel_from_rust_health(monkeypatch):
         internal_api.set_secret(None)
         for bridge in (terminal_observer, workspace_bridge, list_bridge):
             bridge.configure(None, None)
+
+
+def test_crash_output_keeps_codes_and_drops_the_message(tmp_path):
+    log = tmp_path / "hangar-server.log"
+    log.write_text(
+        "2026-11-03T10:55:00.123Z  INFO de pé\n"
+        "2026-11-03T10:55:01.123Z  WARN hangar_server::loops: claude -p falhou: conversa secreta code=loop_refine_failed\n"
+        '2026-11-03T10:55:02.123Z ERROR alvo: caiu detail="conversa secreta" panic=true\n', encoding="utf-8")
+    saida = rust_server._last_errors(log)
+    assert saida == "10:55:01 code=loop_refine_failed | 10:55:02 panic=true"
+    assert "conversa" not in saida

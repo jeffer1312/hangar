@@ -100,7 +100,8 @@ pub async fn claude_p(prompt: &str, runner: &dyn Runner) -> Result<String, Strin
     let mut out = runner.run(prompt, account.as_deref()).await?;
     if limited(&out) {
         let first = format!("claude -p: conta {} bateu o limite: {}", account_name(&account), reason(&out));
-        tracing::warn!(code = "loop_refine_limit", "{first}");
+        // A saída do `claude -p` pode trazer texto da conversa: vai num campo que o relatório não leva.
+        tracing::warn!(code = "loop_refine_limit", output = %reason(&out), "claude -p: conta {} bateu o limite", account_name(&account));
         // A leitura em cache pode ser velha: relê antes de escolher a próxima.
         let rows = runner.quotas(true).await.map_err(|_| first.clone())?;
         let Some(next) = order(&rows).into_iter().find(|a| *a != account) else { return Err(first) };

@@ -99,7 +99,7 @@ impl Diary {
     fn refused(&mut self, level: &str, code: &str, etapa: Option<&str>, detail: Option<&str>) {
         let mut e = json!({"evento": "sessao.criar_recusada", "nivel": level, "sessao": self.session(), "provider": self.provider, "operacao": self.op});
         match (etapa, detail) {
-            // Falha de lançamento leva a etapa, o código e o stderr resumido.
+            // Falha de lançamento leva a etapa, o código e o tipo do erro; nunca saída crua.
             (Some(etapa), detail) => { e["etapa"] = etapa.into(); e["codigo"] = code.into(); e["detalhe"] = detail.unwrap_or("").into(); }
             (None, _) => e["detalhe"] = code.into(),
         }
@@ -863,7 +863,9 @@ async fn terminal_life(host: &dyn OpenHost, spec: &mut SessionSpec, read_only: O
         }
     };
     if let Err(error) = terminal::spawn(host.mux(), host.terminal(), &pane).await {
-        diary.refused("erro", error.code, Some("criar_terminal"), Some(&error.stderr));
+        // O stderr é saída crua: fica no log privado, num campo que o relatório não leva.
+        tracing::warn!(code = error.code, stderr = %error.stderr, "terminal da sessão não criado");
+        diary.refused("erro", error.code, Some("criar_terminal"), None);
         if error.code == terminal::UNCERTAIN {
             return Err(OpenError::new(504, UNCERTAIN, "o tmux não respondeu e a sessão pode ter nascido; confira a lista antes de tentar de novo"));
         }

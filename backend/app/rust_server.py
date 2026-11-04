@@ -133,13 +133,13 @@ _KEPT_FIELD = re.compile(r"\s((?:code|panic)=(?:\"[^\"]{0,160}\"|\S{1,80}))")
 
 
 def _reduce_error(line: str) -> str:
-    """`2026-11-03T10:55:00.123Z  ERROR alvo: msg code=x detail="…"` vira `10:55:00 ERROR alvo: msg code=x`:
-    só a mensagem fixa e os campos que nunca levam texto de conversa."""
+    """`2026-11-03T10:55:00.123Z  ERROR alvo: msg code=x detail="…"` vira `10:55:00 code=x`: a mensagem
+    pode ser formatada com texto de conversa; ficam só os campos que nunca o levam."""
     head = line.split(maxsplit=1)[1] if line[:4].isdigit() and " " in line else line
     cut = _FIELD.search(head)
     kept = " ".join(_KEPT_FIELD.findall(head[cut.start():])) if cut else ""
     when = f"{line[11:19]} " if line[:4].isdigit() else ""
-    return f"{when}{(head[:cut.start()] if cut else head)[:200]} {kept}".rstrip()
+    return f"{when}{kept}".rstrip()
 
 
 def _health(host: str, port: int) -> dict | None:

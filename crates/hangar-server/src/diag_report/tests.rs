@@ -110,7 +110,7 @@ fn server_line_keeps_the_fields_that_explain_the_failure() {
 
     let line = format!("{ts}  WARN runtime entrou em erro key=9d232527a8bd8aedc110caa59a939238 session=cx-b code=cano_closed reason=runtime indisponível; operação conservada no diário");
     let out = collect::reduce_server_line(&line, since, &s).unwrap();
-    assert!(out.ends_with(" WARN runtime entrou em erro code=cano_closed session=cx-b reason=runtime indisponível; operação conservada no diário"), "{out}");
+    assert!(out.ends_with(" WARN runtime entrou em erro code=cano_closed session=cx-b reason=<texto 51 car.>"), "{out}");
     assert!(!out.contains("9d232527"));
 
     let line = format!(r#"{ts} ERROR Python parado há ~1 min: o vigia pede para religar o serviço code="python_restart" unit=hangar-backend.service"#);
@@ -120,6 +120,22 @@ fn server_line_keeps_the_fields_that_explain_the_failure() {
     let line = format!(r#"{ts}  WARN hangar_server::list::mux: lista falhou entries=["x"] attempt=2 code="mux_refused""#);
     let out = collect::reduce_server_line(&line, since, &s).unwrap();
     assert!(out.ends_with(" WARN lista falhou code=mux_refused attempt=2"), "{out}");
+}
+
+#[test]
+fn server_line_free_text_fields_keep_codes_and_drop_conversation() {
+    let s = scrubber();
+    let since = "2026-10-30T11:00:00Z".parse::<chrono::DateTime<Utc>>().unwrap();
+    let ts = "2026-10-30T11:31:00.300000Z";
+    for key in ["detail", "error", "reason", "panic"] {
+        let line = format!(r#"{ts}  WARN estado: falhou code=x {key}="conversa secreta do usuário""#);
+        let out = collect::reduce_server_line(&line, since, &s).unwrap();
+        assert!(out.ends_with(&format!(" code=x {key}=<texto 27 car.>")), "{out}");
+        assert!(!out.contains("conversa secreta"), "{out}");
+        let line = format!("{ts}  WARN estado: falhou code=x {key}=src/x.rs:12:no_such_file");
+        let out = collect::reduce_server_line(&line, since, &s).unwrap();
+        assert!(out.ends_with(&format!(" {key}=src/x.rs:12:no_such_file")), "{out}");
+    }
 }
 
 #[test]
