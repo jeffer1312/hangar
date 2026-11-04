@@ -3204,7 +3204,8 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   let pendingShortcut = $state<ShortcutSendText | ShortcutShell | null>(null);
 
   function triggerShortcut(s: ShortcutSendText | ShortcutShell) {
-    if (s.confirm) { pendingShortcut = s; return; }
+    // Com o terminal vivo o clique para ou responde: a folha de confirmação é só para rodar.
+    if (s.confirm && !(s.type === 'shell' && shortcutTerminal(s)?.alive)) { pendingShortcut = s; return; }
     void runShortcut(s);
   }
 
@@ -3213,15 +3214,28 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   const tileHangar = (key: string) => hangarForShortcut(chatServerId, key);
   const tileSessionTerminal = (key: string) => sessionTerminalFor(chatServerId, sessionName, key);
   function tileServer() {
-    const server = listServers().find((item) => item.id === chatServerId);
+    const server = sessionServer();
     if (!server) throw new Error(m.servidor_nao_existe());
     return server;
+  }
+  // Segundo toque com o fechamento em curso não repete o pedido; 404 é o terminal que já saiu.
+  const closingTerminals = new Set<string>();
+  async function stopTerminal(id: string, close: () => Promise<unknown>) {
+    if (closingTerminals.has(id)) return;
+    closingTerminals.add(id);
+    try { await close(); }
+    catch (err) { if ((err as { status?: number } | null)?.status !== 404) throw err; }
+    finally { closingTerminals.delete(id); }
   }
 
   // Identidade do atalho clicado: a mesma que os tiles usam (`hangarKeyOf`).
   function shortcutKeyOf(s: ShortcutShell): string {
     const scoped = shortcuts.find((x) => x.shortcut === s);
     return hangarKeyOf(scoped?.scope ?? 'global', s.id, projectShortcuts?.key);
+  }
+  function shortcutTerminal(s: ShortcutShell) {
+    const key = shortcutKeyOf(s);
+    return runsInHangar(s) ? hangarForShortcut(chatServerId, key) : sessionTerminalFor(chatServerId, sessionName, key);
   }
 
   async function rodarAtalhoShell(s: ShortcutShell) {
@@ -3233,7 +3247,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
     if (current?.alive && current.question) { openQuestion(chatServerId, sessionName, current.id); return; }
     const key = atalhoKey;
     if (current?.alive) {
-      try { await closeShortcutTerminal(tileServer(), sessionName, current.id); }
+      try { await stopTerminal(current.id, () => closeShortcutTerminal(tileServer(), sessionName, current.id)); }
       finally { await refreshShortcutTerminals(key).catch(() => null); }
       return;
     }
@@ -3289,7 +3303,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
     const shortcutKey = shortcutKeyOf(s);
     const current = hangarForShortcut(chatServerId, shortcutKey);
     if (current?.alive && current.question) { openQuestion(chatServerId, '', current.id); return; }
-    if (current?.alive) { await closeHangarTerminal(tileServer(), current.id); return; }
+    if (current?.alive) { await stopTerminal(current.id, () => closeHangarTerminal(tileServer(), current.id)); return; }
     let r;
     try {
       r = await runShortcutShell(sessionName, s.command, s.label, s.pasta,

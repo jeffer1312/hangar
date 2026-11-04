@@ -37,7 +37,7 @@
   const elsewhere = $derived(shortcuts.flatMap(({ shortcut: s, scope }) => {
     const term = runsInHangar(s) ? hangarOf?.(hangarKeyOf(scope, s.id, projectKey)) ?? null : null;
     return term?.alive && term.origin && term.origin !== sessionName
-      ? [{ key: scope + s.id, label: s.label, origin: term.origin }] : [];
+      ? [{ key: scope + s.id, label: s.label, origin: term.origin, asking: !!term.question }] : [];
   }));
 
   function elapsed(created: number) {
@@ -73,7 +73,7 @@
         : tileState === 'asking' ? m.atalho_tile_pergunta()
         : tileState === 'exited' && hangarTerm ? m.atalho_tile_caiu({ codigo: String(hangarTerm.exit_code ?? '?') }) : ''}
       {@const tooltip = hangarTerm?.alive && hangarTerm.origin && hangarTerm.origin !== sessionName
-        ? m.atalho_tile_dica_hangar({ rotulo: s.label, sessao: hangarTerm.origin })
+        ? (hangarTerm.question ? m.atalho_tile_dica_hangar_pergunta : m.atalho_tile_dica_hangar)({ rotulo: s.label, sessao: hangarTerm.origin })
         : tileState === 'running' ? m.atalho_tile_parar({ rotulo: s.label }) : rotulo}
       <!-- Credencial em branco (veio de uma importação): o bloco fica apagado e o clique avisa. -->
       <button type="button" class="acao-bloco" class:pendente={!!falta} class:hg={runsInHangar(s)} class:rodando={tileState === 'running'}
@@ -97,7 +97,7 @@
   {#if elsewhere.length}
     <div class="acoes-nota">
       {#each elsewhere as n (n.key)}
-        <span><b>{n.label}</b> {m.atalho_tile_nota_hangar({ sessao: n.origin })}</span>
+        <span><b>{n.label}</b> {(n.asking ? m.atalho_tile_nota_hangar_pergunta : m.atalho_tile_nota_hangar)({ sessao: n.origin })}</span>
       {/each}
     </div>
   {/if}

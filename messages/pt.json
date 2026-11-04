@@ -8207,6 +8207,8 @@
   "atalho_tile_caiu": "caiu · {codigo}",
   "atalho_tile_dica_hangar": "{rotulo} foi aberto na sessão {sessao}. Um clique aqui o encerra.",
   "atalho_tile_nota_hangar": "foi aberto na sessão {sessao}. Um clique no bloco o encerra.",
+  "atalho_tile_dica_hangar_pergunta": "{rotulo} foi aberto na sessão {sessao} e espera uma resposta. Um clique aqui abre a pergunta.",
+  "atalho_tile_nota_hangar_pergunta": "foi aberto na sessão {sessao} e espera uma resposta. Um clique no bloco abre a pergunta.",
   "atalho_tile_parar": "{rotulo} está rodando. Um clique o encerra.",
   "atalhos_titulo": "Atalhos",
   "atalhos_editando": "editando",

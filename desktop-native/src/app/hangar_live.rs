@@ -55,7 +55,10 @@ pub(super) fn tile_of(live: &[LiveTerm], session: &str, shortcut: &Shortcut, now
     };
     let elsewhere = term.filter(|t| *hangar && t.term.alive && !t.origin.is_empty() && t.origin != session);
     let tip = match elsewhere {
-        Some(t) => Some(tr_shared("atalho_tile_dica_hangar", &[("rotulo", label), ("sessao", &t.origin)])),
+        Some(t) => {
+            let text = if state == TileState::Asking { "atalho_tile_dica_hangar_pergunta" } else { "atalho_tile_dica_hangar" };
+            Some(tr_shared(text, &[("rotulo", label), ("sessao", &t.origin)]))
+        }
         None => (state == TileState::Running).then(|| tr_shared("atalho_tile_parar", &[("rotulo", label)])),
     };
     Tile { state, line, tip, mark: *hangar, opened_in: elsewhere.map(|t| t.origin.clone()) }
@@ -92,14 +95,19 @@ impl Hangar {
         self.live_for(server).into_iter().filter(|t| t.owner.is_empty()).map(|t| t.term).collect()
     }
 
-    /// Todos os No Hangar de todas as máquinas, a ativa primeiro.
-    fn all_hangar(&self) -> Vec<(String, LiveTerm)> {
+    /// Terminais de atalho de todas as máquinas, a ativa primeiro.
+    fn all_live(&self) -> Vec<(String, LiveTerm)> {
         let mut keys = vec![self.active_key()];
         for entry in &self.servers {
             let key = servers::norm(&entry.address);
             if !keys.contains(&key) { keys.push(key); }
         }
-        keys.into_iter().flat_map(|key| self.live_for(&key).into_iter().filter(|t| t.owner.is_empty()).map(move |t| (key.clone(), t))).collect()
+        keys.into_iter().flat_map(|key| self.live_for(&key).into_iter().map(move |t| (key.clone(), t))).collect()
+    }
+
+    /// Todos os No Hangar de todas as máquinas, a ativa primeiro.
+    fn all_hangar(&self) -> Vec<(String, LiveTerm)> {
+        self.all_live().into_iter().filter(|(_, t)| t.owner.is_empty()).collect()
     }
 
     /// Terminal do atalho com pergunta na tela (a cópia No Hangar, ou o mais novo da sessão `session`).
@@ -112,10 +120,13 @@ impl Hangar {
         tile_of(&self.live_for(server), session, shortcut, now_seconds() as i64)
     }
 
-    /// Uma linha por atalho No Hangar vivo que outra sessão abriu (rótulo e sessão), para a nota única sob a grade.
-    pub(super) fn hangar_notes(&self, server: &str, session: &str, tiles: &[(String, Shortcut, bool)]) -> Vec<(String, String)> {
+    /// Uma linha por atalho No Hangar vivo que outra sessão abriu (rótulo, sessão e se pergunta), para a nota única sob a grade.
+    pub(super) fn hangar_notes(&self, server: &str, session: &str, tiles: &[(String, Shortcut, bool)]) -> Vec<(String, String, bool)> {
         let live = self.live_for(server);
-        tiles.iter().filter_map(|(_, shortcut, _)| tile_of(&live, session, shortcut, 0).opened_in.map(|origin| (shortcut.label(), origin))).collect()
+        tiles.iter().filter_map(|(_, shortcut, _)| {
+            let tile = tile_of(&live, session, shortcut, 0);
+            tile.opened_in.map(|origin| (shortcut.label(), origin, tile.state == TileState::Asking))
+        }).collect()
     }
 
     /// A lista viva de `server` mudou (ou o stream caiu): o que depende dela se acerta.
@@ -127,8 +138,8 @@ impl Hangar {
         cx.notify();
     }
 
-    /// O tempo de "rodando · 3 min" anda enquanto houver um No Hangar vivo com hora de início.
-    fn live_running(&self) -> bool { self.all_hangar().iter().any(|(_, t)| t.term.alive && t.created > 0) }
+    /// O tempo de "rodando · 3 min" anda enquanto houver um terminal de atalho vivo com hora de início.
+    fn live_running(&self) -> bool { self.all_live().iter().any(|(_, t)| t.term.alive && t.created > 0) }
 
     fn keep_live_clock(&mut self, cx: &mut Context<Self>) {
         if self.live_clock.is_some() || !self.live_running() { return; }
@@ -622,6 +633,9 @@ mod live_tests {
         assert_eq!((hangar.state, hangar.mark), (TileState::Running, true));
         assert_eq!(hangar.line, "rodando · 5 min");
         assert!(hangar.tip.is_some_and(|tip| tip.contains("pm-1")));
+        // Perguntando, o clique abre a pergunta: a dica não promete parar.
+        let asking = tile_of(&[term("global:vm", "", true, Some("Porta"), 500)], "pm-2", &shell("global:vm", true), 800);
+        assert_eq!(asking.tip, Some(crate::i18n::tr_shared("atalho_tile_dica_hangar_pergunta", &[("rotulo", "VM"), ("sessao", "pm-1")])));
         // Na sessão: vale o terminal dela, e a cópia No Hangar não interfere.
         let session = tile_of(&live, "pm-2", &shell("global:vm", false), 0);
         assert_eq!((session.state, session.mark, session.line.is_empty()), (TileState::Asking, false, false));

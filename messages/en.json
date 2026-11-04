@@ -8207,6 +8207,8 @@
   "atalho_tile_caiu": "stopped · {codigo}",
   "atalho_tile_dica_hangar": "{rotulo} was opened in session {sessao}. Clicking here stops it.",
   "atalho_tile_nota_hangar": "was opened in session {sessao}. Clicking the tile stops it.",
+  "atalho_tile_dica_hangar_pergunta": "{rotulo} was opened in session {sessao} and is waiting for an answer. Clicking here opens the question.",
+  "atalho_tile_nota_hangar_pergunta": "was opened in session {sessao} and is waiting for an answer. Clicking the tile opens the question.",
   "atalho_tile_parar": "{rotulo} is running. Click to stop it.",
   "atalhos_titulo": "Shortcuts",
   "atalhos_editando": "editing",
