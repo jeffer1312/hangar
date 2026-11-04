@@ -132,6 +132,10 @@ pub fn bridge_guest(envelope: &Value, claude_base: &Path) -> Result<Option<Login
 /// O convidado `id` do `guests.json`, para a ponte do Connect, que chega com o id já autenticado lá.
 pub fn guest_by_id(claude_base: &Path, id: &str) -> Option<LoginGuest> {
     let raw: Value = serde_json::from_slice(&std::fs::read(claude_base.join("guests.json")).ok()?).ok()?;
+    guest_in(&raw, id)
+}
+
+fn guest_in(raw: &Value, id: &str) -> Option<LoginGuest> {
     let guest = raw["guests"].as_array()?.iter().find(|g| g["id"] == id)?;
     Some(LoginGuest { id: id.into(), name: guest["name"].as_str()?.into(), root: guest["root"].as_str()?.into() })
 }
@@ -199,7 +203,7 @@ impl ServerHost {
         if raw["sessions"].get(creator).is_none() { return Ok(None); }
         let life = self.lives().life(creator, true).await;
         let Some(id) = session_guest(&raw, creator, life.as_deref()) else { return Ok(None) };
-        guest_by_id(&self.env.claude_base, &id).map(Some)
+        guest_in(&raw, &id).map(Some)
             .ok_or_else(|| OpenError::new(403, "erro_convidado_inexistente", "o convidado desta sessão não existe mais"))
     }
 
