@@ -136,6 +136,14 @@ pub fn guest_by_id(claude_base: &Path, id: &str) -> Option<LoginGuest> {
     Some(LoginGuest { id: id.into(), name: guest["name"].as_str()?.into(), root: guest["root"].as_str()?.into() })
 }
 
+/// O id do convidado dono de `session` no `guests.json`. Só outra vida desfaz o dono, como no `owner_of`.
+fn session_guest(raw: &Value, session: &str, life: Option<&str>) -> Option<String> {
+    let entry = &raw["sessions"][session];
+    let stored = entry["life"].as_str();
+    if stored.is_some() && life.is_some() && stored != life { return None; }
+    entry["guest"].as_str().map(str::to_owned)
+}
+
 /// A fila que a sessão morta deixou no nome (a projeção `.hangar-queue/<nome>.jsonl`, que o Rust lê
 /// no histórico), o vínculo `then` dela (`.hangar-chain/<nome>.json`) e o loop: a nova não os herda.
 pub fn forget_queue(claude_base: &Path, name: &str) -> std::io::Result<()> {
@@ -167,11 +175,27 @@ impl ServerHost {
         Self { st, env, terminal, mux }
     }
 
+    fn lives(&self) -> crate::share::life::Lives {
+        crate::share::life::Lives::new(Arc::new(crate::share::life::MuxProbe::new(self.terminal.program.clone(), self.env.home.clone())), Arc::default())
+    }
+
+    /// A sessão de convidado abre pelo token do dono (`hangar-send`, MCP): sem isto, a filha nasce do dono.
+    async fn creator_guest(&self, creator: &str) -> Option<LoginGuest> {
+        let raw: Value = match crate::runtime::queue::read_replaced(&self.env.claude_base.join("guests.json")) {
+            Ok(bytes) => serde_json::from_slice(&bytes).inspect_err(|e| tracing::warn!("guests.json ilegível: a sessão abre sem dono convidado: {e}")).ok()?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+            Err(error) => { tracing::warn!("guests.json ilegível: a sessão abre sem dono convidado: {error}"); return None; }
+        };
+        raw["sessions"].get(creator)?;
+        let life = self.lives().life(creator, true).await;
+        guest_by_id(&self.env.claude_base, &session_guest(&raw, creator, life.as_deref())?)
+    }
+
     /// O dono da sessão que o convidado com login abriu vai ao `guests.json`. Falhou: a sessão sai
     /// com a worktree que ela criou, como no `_kill_unclaimed`.
     async fn claim(&self, mut opened: super::open::Opened, guest: &LoginGuest) -> Result<super::open::Opened, OpenError> {
         let name = opened.body["name"].as_str().unwrap_or_default().to_owned();
-        let lives = crate::share::life::Lives::new(Arc::new(crate::share::life::MuxProbe::new(self.terminal.program.clone(), self.env.home.clone())), Arc::default());
+        let lives = self.lives();
         // Logo após criar, o multiplexador pode ainda não responder a vida (`claim` do Python).
         let mut life = None;
         for _ in 0..3 {
@@ -366,13 +390,19 @@ pub enum Decision { Opened(super::open::Opened), Refused(OpenError), NotOurs }
 /// criada sem o pane ficaria para trás) nem o registro do convidado (`claim`), como o
 /// `complete_on_cancel` do Python.
 async fn decide_detached(st: &Arc<AppState>, request: SessionOpenRequest, caller: OpenCaller, claim: Option<LoginGuest>) -> Decision {
-    let link = match request.link_plan(&caller) {
-        Ok(link) => link,
-        Err(error) => return Decision::Refused(error),
-    };
     let st = st.clone();
     tokio::spawn(async move {
         let host = ServerHost::new(st.clone()).await;
+        let claim = match (claim, request.creator.as_deref()) {
+            (None, Some(creator)) => host.creator_guest(creator).await,
+            (claim, _) => claim,
+        };
+        // A filha de sessão de convidado segue as regras dele, mesmo aberta com o token do dono.
+        let caller = claim.as_ref().map_or(caller, |g| OpenCaller::Guest { root: g.root.clone() });
+        let link = match request.link_plan(&caller) {
+            Ok(link) => link,
+            Err(error) => return Decision::Refused(error),
+        };
         let decision = match (decide(&st, &host, request, caller).await, claim) {
             (Decision::Opened(opened), Some(guest)) => match host.claim(opened, &guest).await {
                 Ok(opened) => Decision::Opened(opened),
@@ -686,6 +716,17 @@ pub async fn archive_resume(State(st): State<Arc<AppState>>, ConnectInfo(peer): 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_session_guest_is_undone_only_by_another_life() {
+        let raw = serde_json::json!({"sessions": {"dela": {"guest": "g1", "life": "k:1"}, "nova": {"guest": "g1", "life": null}}});
+        let guest = |name, life| super::session_guest(&raw, name, life);
+        assert_eq!(guest("dela", Some("k:1")).as_deref(), Some("g1"));
+        assert_eq!(guest("dela", None).as_deref(), Some("g1"), "vida desconhecida mantém o dono");
+        assert_eq!(guest("nova", Some("k:2")).as_deref(), Some("g1"), "vida ainda não gravada mantém o dono");
+        assert_eq!(guest("dela", Some("k:2")), None, "o mesmo nome em outra vida é do dono");
+        assert_eq!(guest("do-dono", Some("k:1")), None);
+    }
+
     /// SF7: o aviso de saída que não chegou ao grupo antigo vira aviso da criação, com quem e por quê.
     #[test]
     fn a_group_exit_that_did_not_reach_everyone_is_a_creation_warning() {

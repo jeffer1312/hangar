@@ -5,6 +5,7 @@
   import { getArchiveRecentForServer, relativeTime, mergeConversations, rememberEntry, type ArchiveEntry } from '@hangar/core';
   import { listOwnServers } from '../lib/auth';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
+  import { negadaAoConvidado } from '../lib/papel.svelte';
 
   interface Props {
     onNavigateToChat: (serverId: string, name: string) => void;
@@ -39,6 +40,8 @@
     }
     results.forEach((r, i) => {
       if (r.status === 'fulfilled') next.set(tried[i].id, r.value);
+      // Convidado não tem Arquivo: a máquina respondeu, só não há o que listar.
+      else if (negadaAoConvidado(r.reason)) next.set(tried[i].id, []);
       else {
         bad.push(tried[i].label);
         // Mantém a última lista boa do servidor que falhou agora.

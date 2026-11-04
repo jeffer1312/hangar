@@ -30,7 +30,7 @@ export interface AlcanceDoServidor {
 
 export async function alcanceDoServidor(s: Server, init?: RequestInit): Promise<AlcanceDoServidor> {
   const res = await probeServerResponse(s, '/api/alcance', init);
-  if (!res.ok) throw new Error(`${res.status}: ${await errorDetail(res)}`);
+  if (!res.ok) throw Object.assign(new Error(`${res.status}: ${await errorDetail(res)}`), { status: res.status });
   return res.json() as Promise<AlcanceDoServidor>;
 }
 
