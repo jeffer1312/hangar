@@ -531,6 +531,23 @@ pub fn undo_worktree(source: &Path, made: &Worktree, branch: &str) -> Result<()>
     }
     Ok(())
 }
+/// A pasta onde `create_worktree_in` põe a worktree nova desta pasta: `<location>/<pasta principal>`.
+pub fn worktree_parent(cwd: &Path, root: &Path, location: &Path) -> Option<String> {
+    let top = command(cwd, &["rev-parse", "--show-toplevel"]).ok().filter(|o| o.code == 0)?;
+    let main = main_root(cwd, &real(Path::new(top.stdout.trim())), &real(root));
+    Some(location.join(main.file_name()?).to_string_lossy().into_owned())
+}
+/// A mesma pasta para mostrar na tela: lida da configuração de worktrees de `home` e abreviada com `~`, como a pessoa
+/// a escreve nas configurações. Sem configuração legível, `None`: a tela só não mostra a pasta.
+pub fn worktree_parent_shown(cwd: &Path, root: &Path, home: &Path) -> Option<String> {
+    let location = crate::worktree_settings::WorktreeSettings::load_at(&home.join(".hangar/worktree-settings.json"))
+        .and_then(|s| s.location_path(home)).ok()?;
+    let parent = worktree_parent(cwd, root, &location)?;
+    Some(match Path::new(&parent).strip_prefix(home) {
+        Ok(rest) => Path::new("~").join(rest).to_string_lossy().into_owned(),
+        Err(_) => parent,
+    })
+}
 /// Raiz do repositório principal: com `cwd` numa worktree ligada, a config mora no principal.
 fn main_root(cwd: &Path, repo: &Path, root: &Path) -> PathBuf {
     match command(

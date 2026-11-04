@@ -8,6 +8,8 @@ fn git(dir: &std::path::Path, args: &[&str]) {
         .arg(dir)
         .args(args)
         .env("GIT_CONFIG_NOSYSTEM", "1")
+        // Config global ausente: gpgsign ou hooks da máquina não mudam o repositório montado pelo teste.
+        .env("GIT_CONFIG_GLOBAL", std::env::temp_dir().join("hangar-test-sem-gitconfig"))
         .output()
         .unwrap();
     assert!(
@@ -211,6 +213,25 @@ fn branches_say_which_ones_are_open_in_another_worktree() {
     assert_eq!(hangar_workspace::real(from_other_path), hangar_workspace::real(&main));
     assert_eq!(from_other["elsewhere"]["main"]["main"], json!(true));
     assert!(from_other["elsewhere"].get("feat").is_none());
+}
+
+/// A pasta-mãe da worktree nova é a da pasta principal, também quando a sessão parte de outra worktree.
+#[test]
+fn worktree_parent_is_named_after_the_main_folder() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = hangar_workspace::simplify(dir.path().canonicalize().unwrap());
+    let main = root.join("repo");
+    fs::create_dir(&main).unwrap();
+    git(&main, &["init", "-q", "-b", "main"]);
+    git(&main, &["-c", "user.name=T", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "c"]);
+    let other = root.join("outra");
+    git(&main, &["worktree", "add", "-q", "-b", "feat", other.to_str().unwrap()]);
+    let location = root.join("worktrees");
+    let expected = location.join("repo").to_string_lossy().into_owned();
+    for cwd in [&main, &other] {
+        assert_eq!(hangar_workspace::git::worktree_parent(cwd, &root, &location), Some(expected.clone()));
+    }
+    assert_eq!(hangar_workspace::git::worktree_parent(&root, &root, &location), None, "fora de repositório não há pasta");
 }
 
 /// Desfazer a worktree apaga só a branch local que a criação fez (a nova e a trazida do
