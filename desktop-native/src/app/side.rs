@@ -604,9 +604,9 @@ impl Hangar {
             Reply::ShellStopped(label, id) => {
                 self.side.stop_pending.remove(&id);
                 self.refresh_shortcut_terms(&key.name);
-                // 404 é o terminal que já saiu antes de a lista contar. Falha sempre aparece: o terminal segue vivo.
+                // Só estes códigos dizem que o terminal já saiu; outra falha o deixa vivo e sempre aparece.
                 match result {
-                    Err(error) if error.status != Some(404) => { self.action_feedback.insert(key, (format!("{label}: {}", Self::failure(&error)), true)); }
+                    Err(error) if !matches!(error.code.as_deref(), Some("erro_shortcut_terminal_inexistente" | "erro_hangar_terminal_inexistente")) => { self.action_feedback.insert(key, (format!("{label}: {}", Self::failure(&error)), true)); }
                     _ => {
                         let stopping = tr("shortcut_stopping").replace("{label}", &label);
                         if self.action_feedback.get(&key).is_some_and(|(text, _)| *text == stopping) { self.action_feedback.remove(&key); }

@@ -3218,13 +3218,15 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
     if (!server) throw new Error(m.servidor_nao_existe());
     return server;
   }
-  // Segundo toque com o fechamento em curso não repete o pedido; 404 é o terminal que já saiu.
+  // Segundo toque com o fechamento em curso não repete o pedido. Só estes códigos dizem que o
+  // terminal já saiu: outro 404 (rota ausente, dono diferente) deixa ele vivo e tem que aparecer.
+  const TERMINAL_GONE = ['erro_shortcut_terminal_inexistente', 'erro_hangar_terminal_inexistente'];
   const closingTerminals = new Set<string>();
   async function stopTerminal(id: string, close: () => Promise<unknown>) {
     if (closingTerminals.has(id)) return;
     closingTerminals.add(id);
     try { await close(); }
-    catch (err) { if ((err as { status?: number } | null)?.status !== 404) throw err; }
+    catch (err) { if (!TERMINAL_GONE.includes((err as { code?: string } | null)?.code ?? '')) throw err; }
     finally { closingTerminals.delete(id); }
   }
 
