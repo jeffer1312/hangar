@@ -416,6 +416,22 @@ describe('CreateSessionSheet Codex', () => {
     } finally { act(() => root.unmount()); }
   });
 
+  it('worktree nova com a branch atual da pasta não envia a primeira mensagem', async () => {
+    const { container, root } = await renderSheet(false, false);
+    try {
+      const pill = [...container.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.getAttribute('aria-label')?.startsWith('native_create_checkout_branch'))!;
+      await act(async () => pill.click());
+      for (let i = 0; i < 3; i++) await act(async () => Promise.resolve());
+      const panel = container.querySelector('[data-testid="folder-panel"][aria-label="native_create_checkout_branch"]') as HTMLElement;
+      await act(async () => button(panel, 'worktree_menu_nova')!.click());
+      const field = panel.querySelector('textarea[aria-label="worktree_menu_branch"]') as HTMLTextAreaElement;
+      await act(async () => { field.value = 'main'; field.dispatchEvent(new Event('input', { bubbles: true })); });
+      expect(panel.textContent).toContain('worktree_menu_ja_aberta');
+      await send(container);
+      expect(calls.create).not.toHaveBeenCalled();
+    } finally { act(() => root.unmount()); }
+  });
+
   it('padrão do servidor vence a última escolha local, mas permite trocar nesta abertura', async () => {
     localStorage.setItem('create.choices.v1:server-b', JSON.stringify({ provider: 'claude', model: 'sonnet', effort: 'low' }));
     calls.models.mockResolvedValue({ models: [{ id: 'opus', name: 'Opus' }, { id: 'sonnet', name: 'Sonnet' }], reduced: false });

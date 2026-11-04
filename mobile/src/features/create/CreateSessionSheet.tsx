@@ -905,7 +905,8 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   );
 
   const blocked = contextBusy || retomando || !!retomavel || (!!picked && !codexReady);
-  const canCreate = !!body && !blocked && !creating && !(worktree?.new_branch && branchTaken);
+  const branchBlocked = !!(worktree?.new_branch && branchTaken);
+  const canCreate = !!body && !blocked && !creating && !branchBlocked;
   // Sem primeira mensagem: cria e abre a conversa vazia, como o formulário do PWA. O nome escolhido vale
   // para a mesma pasta e nome digitado: repetir depois de uma falha de rede não abre uma segunda sessão.
   const createInFlight = useRef(false);
@@ -1115,7 +1116,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       body={body}
       takePrewarm={takePrewarm}
       resumePrewarm={resumePrewarm}
-      blocked={blocked}
+      blocked={blocked || branchBlocked}
       keyboardOffset={keyboardOffset}
     />
     {branchPanel}

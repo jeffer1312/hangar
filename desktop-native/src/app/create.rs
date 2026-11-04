@@ -2512,10 +2512,14 @@ impl NewSession {
         let notice = if !self.branch.is_empty() {
             let remote = checkout.remotes.contains(&self.branch).then(|| tr_shared("worktree_nova_so_remoto", &[]));
             Some(tr_shared("worktree_menu_ja_existe", &[("branch", &self.branch)]) + &remote.map(|r| format!(" ({r})")).unwrap_or_default())
-        } else if !typed.is_empty() && checkout.current.as_deref() == Some(typed.as_str()) {
-            Some(tr_shared("worktree_menu_ja_aberta", &[("branch", &typed), ("pasta", self.picked.as_deref().map(basename).unwrap_or_default())]))
         } else {
-            checkout.elsewhere.get(&typed).map(|at| tr_shared("worktree_menu_ja_aberta", &[("branch", &typed), ("pasta", basename(&at.path))]))
+            let wanted = self.wanted_branch(cx);
+            if wanted.is_empty() { None }
+            else if checkout.current.as_deref() == Some(wanted.as_str()) {
+                Some(tr_shared("worktree_menu_ja_aberta", &[("branch", &wanted), ("pasta", self.picked.as_deref().map(basename).unwrap_or_default())]))
+            } else {
+                checkout.elsewhere.get(&wanted).map(|at| tr_shared("worktree_menu_ja_aberta", &[("branch", &wanted), ("pasta", basename(&at.path))]))
+            }
         };
         let folder = checkout.worktree_parent.as_ref().map(|parent| {
             let sep = if parent.contains('\\') && !parent.contains('/') { '\\' } else { '/' };
@@ -2615,9 +2619,17 @@ impl NewSession {
 
     /// Branch nova com o nome de uma que já está aberta (nesta pasta ou em outra): o servidor recusaria, o menu já avisa.
     fn typed_branch_taken(&self, cx: &App) -> bool {
+        let wanted = self.wanted_branch(cx);
+        self.new_branch && !wanted.is_empty() && self.checkout.ok().and_then(Option::as_ref)
+            .is_some_and(|c| c.current.as_deref() == Some(wanted.as_str()) || c.elsewhere.contains_key(&wanted))
+    }
+
+    /// O nome da branch nova como a criação o manda: o digitado, ou em branco o nome da sessão (a pasta no compacto).
+    fn wanted_branch(&self, cx: &App) -> String {
         let typed = self.new_branch_name.read(cx).value().trim().to_owned();
-        self.new_branch && !typed.is_empty() && self.checkout.ok().and_then(Option::as_ref)
-            .is_some_and(|c| c.current.as_deref() == Some(typed.as_str()) || c.elsewhere.contains_key(&typed))
+        if !typed.is_empty() { return typed; }
+        if self.compact { self.picked.as_deref().map(basename).unwrap_or_default().to_owned() }
+        else { self.name.read(cx).value().trim().to_owned() }
     }
 
     /// Aviso de que a worktree escolhida já tem outra sessão trabalhando nela.
