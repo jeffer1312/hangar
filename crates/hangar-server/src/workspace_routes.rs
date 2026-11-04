@@ -771,7 +771,7 @@ async fn folder_operation(
         .to_string_lossy()
         .into_owned();
     if tail == "/api/fs/branches" {
-        return execute(st, Operation::ListBranches { cwd })
+        return execute(st, Operation::ListBranches { cwd, root: root.to_owned() })
             .await
             .map_err(session_error);
     }

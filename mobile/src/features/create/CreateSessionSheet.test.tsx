@@ -241,7 +241,7 @@ vi.mock('../../paraglide/messages', () => ({
     'native_create_codex_account native_loading native_new_chat_machine native_network_error criar_providers_erro ' +
     'native_new_chat_no_accounts nova_conversa_anexo_falhou nova_conversa_candidata nova_conversa_conferir_erro nova_conversa_criando ' +
     'nova_conversa_nao_encontrada nova_conversa_nome_conflito nova_conversa_so_terminal nova_conversa_tentativa_invalida sync_retry ' +
-    'worktree_base worktree_modo worktree_modo_ajuda worktree_nome_branch worktree_nova_branch ' +
+    'worktree_menu_pill_nova worktree_menu_pill_existente worktree_menu_nome_sessao ' +
     'composer_session_settings composer_session_settings_hint native_ctl_model_title native_ctl_search native_ctl_no_results ' +
     'comum_nenhum_modelo native_new_chat_reasoning modelo_sem_niveis native_ctl_loading native_ctl_retry native_ctl_failed ' +
     'native_ctl_fast native_ctl_fast_on native_ctl_fast_off native_ctl_fast_hint native_ctl_fast_unavailable ' +

@@ -20,7 +20,7 @@ import { CwdPicker } from './CwdPicker';
 import { loadErrorText } from './loadError';
 import { useCanceledLoadRetry } from './useCanceledLoadRetry';
 import { ProviderPicker } from './ProviderPicker';
-import { BranchPicker } from './BranchPicker';
+import { BranchPicker, samePath } from './BranchPicker';
 import { CodexContextControl, useCodexContextControl } from './CodexContextControl';
 import { NewConversation, type HomePresentation } from './NewConversation';
 import { QuietPill } from './QuietPill';
@@ -672,9 +672,12 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   const folderRef = useRef<View>(null);
   const branchRef = useRef<View>(null);
   // Branch nova sem nome digitado leva o nome final da sessão, que só existe ao criar.
-  const branchLabel = !worktree ? m.native_create_checkout_current()
-    : !worktree.new_branch ? worktree.branch
-    : worktree.branch || name.trim() || m.worktree_nova_branch({ base: worktree.base ?? '' });
+  // A pasta escolhida pode já ser uma worktree que existe: a pílula diz isso, não "atual".
+  const pickedWorktree = !worktree && picked ? repos.flatMap((r) => r.worktrees).find((w) => samePath(w.path, picked)) : undefined;
+  const branchLabel = pickedWorktree ? m.worktree_menu_pill_existente({ nome: basename(pickedWorktree.path) })
+    : !worktree ? m.native_create_checkout_current()
+    : !worktree.new_branch ? m.worktree_menu_pill_existente({ nome: worktree.branch })
+    : m.worktree_menu_pill_nova({ branch: worktree.branch || m.worktree_menu_nome_sessao() });
 
   const on = (yes: boolean) => (yes ? 'on' : 'off') as 'on' | 'off';
 
@@ -893,7 +896,8 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       closeLabel={m.native_close()}
     >
       {picked ? <BranchPicker server={active} cwd={picked} sessionName={name.trim() || basename(picked)}
-                              value={worktree} onChange={onWorktree} /> : null}
+                              value={worktree} onChange={onWorktree}
+                              onPickFolder={(path, keepOpen) => { void handlePick(path); if (!keepOpen) setBranchOpen(false); }} /> : null}
     </AnchoredPanel>
   );
 

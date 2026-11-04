@@ -42,6 +42,8 @@ pub(super) struct GitPanel {
     /// A troca (ou criação que troca) parada esperando a confirmação por causa das sessões na pasta.
     confirm: Option<(GitAction, String)>,
     create_tab: bool,
+    /// O menu de branch mostrando trocar e criar a branch da própria pasta.
+    branching: bool,
     /// Base da branch nova; vazia é a atual.
     base: String,
     checkout: bool,
@@ -110,6 +112,7 @@ impl NewSession {
 
     /// Abrir o painel busca as remotas uma vez por pasta: é assim que se sabe se ela está atualizada.
     pub(super) fn git_opened(&mut self, cx: &mut Context<Self>) {
+        self.git.branching = false;
         if self.picked.is_some() && self.git.fetched != self.picked && self.git.status.ok().is_some_and(|g| g.repo) {
             self.git.fetched = self.picked.clone();
             self.git_act(GitAction::Fetch, String::new(), false, cx);
@@ -229,12 +232,6 @@ impl NewSession {
         }
     }
 
-    /// A pílula do Git ao lado da de branch: some fora de repositório; lendo, fica parada com o nome.
-    pub(super) fn render_git_pill(&self, open: bool, cx: &mut Context<Self>) -> Option<Div> {
-        let (label, waiting) = self.git_label()?;
-        Some(quiet_pill(Menu::Git, open, IconName::RefreshCw, label, tr("folder_git_title"), waiting, cx))
-    }
-
     /// O resumo do Git da pasta e se ainda é a primeira leitura; `None` fora de repositório.
     pub(super) fn git_label(&self) -> Option<(String, bool)> {
         let label = match (&self.git.status.value, self.git.status.ok()) {
@@ -247,16 +244,18 @@ impl NewSession {
         Some((label, self.git.status.loading && self.git.status.value.is_none()))
     }
 
-    /// `room`: a altura livre abaixo da pílula; o painel rola dentro dela.
-    pub(super) fn render_git_menu(&mut self, room: Pixels, cx: &mut Context<Self>) -> AnyElement {
-        let frame = |body: AnyElement| div().id("new-chat-git-menu").w(rems(26.)).max_w_full().max_h(room).overflow_y_scroll()
-            .p(px(popup::INSET)).flex().flex_col().gap(px(6.)).child(body).into_any_element();
+    /// O menu de branch está na tela interna de trocar e criar a branch da pasta.
+    pub(super) fn git_branching(&self) -> bool { self.git.branching }
+
+    /// O topo do menu de branch: a pasta, a branch, a situação dela, Fetch, Pull e os avisos da última ação. Lendo, linhas
+    /// vazias; falhou, o erro com tentar de novo; fora de repositório, nada.
+    pub(super) fn render_git_head(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let git = match (&self.git.status.value, self.git.status.ok()) {
+            (_, Some(git)) if !git.repo => return None,
             (_, Some(git)) => git.clone(),
-            (Some(Err(error)), _) => return frame(Self::menu_failure("new-chat-git-error", error.clone(), |this, _, cx| this.load_git(cx), cx)),
-            _ => return frame(popup::skeleton("new-chat-git", 3).into_any_element()),
+            (Some(Err(error)), _) => return Some(Self::menu_failure("new-chat-git-error", error.clone(), |this, _, cx| this.load_git(cx), cx)),
+            _ => return Some(popup::skeleton("new-chat-git", 2).into_any_element()),
         };
-        if !git.repo { return frame(div().p(px(8.)).child(muted(tr("folder_git_not_repo"))).into_any_element()); }
         let busy = self.git.busy;
         let locked = self.git_locked();
         let now = chrono::Local::now().timestamp() as f64;
@@ -269,7 +268,7 @@ impl NewSession {
             .child(div().id("new-chat-git-status").role(Role::Status).text_xs().text_color(theme::muted()).whitespace_normal()
                 .child(status_line(&git, now)));
         let pull_blocked = git.dirty > 0 || git.upstream.is_none() || git.diverged();
-        let actions = div().px(px(8.)).flex().gap_2()
+        let actions = div().px(px(8.)).pt(px(4.)).flex().gap_2()
             .child(Button::new("new-chat-git-fetch").outline().small().icon(IconName::RefreshCw).label(tr("folder_git_fetch"))
                 .loading(busy == Some(GitAction::Fetch)).disabled(locked)
                 .on_click(cx.listener(|this, _, _, cx| this.git_act(GitAction::Fetch, String::new(), false, cx))))
@@ -277,16 +276,40 @@ impl NewSession {
                 .map(|b| if git.behind.unwrap_or(0) > 0 && !pull_blocked { b.primary() } else { b.outline() })
                 .loading(busy == Some(GitAction::Pull)).disabled(locked || pull_blocked)
                 .on_click(cx.listener(|this, _, _, cx| this.git_act(GitAction::Pull, String::new(), false, cx))));
+        Some(div().pb(px(4.)).flex().flex_col().gap(px(6.)).child(head).child(actions).children(self.git_feedback(cx)).into_any_element())
+    }
+
+    /// A linha que leva à tela interna de trocar e criar a branch da própria pasta; some fora de repositório.
+    pub(super) fn render_git_branch_entry(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        self.git.status.ok().filter(|git| git.repo)?;
+        Some(popup::row("new-chat-git-branches", false).accessibility_label(tr("folder_git_branch_entry")).disabled(self.creating)
+            .child(div().w_full().flex().items_center().gap_2()
+                .child(div().flex_1().min_w_0().truncate().text_sm().child(tr("folder_git_branch_entry")))
+                .child(chrome::small_icon(IconName::ChevronRight, 14., theme::faint())))
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.git.branching = true;
+                this.menu_query.update(cx, |input, cx| { input.set_value("", window, cx); input.focus(window, cx); });
+                cx.notify();
+            }))
+            .into_any_element())
+    }
+
+    /// A tela interna de trocar e criar a branch da própria pasta, com o caminho de volta e os avisos da ação.
+    pub(super) fn render_git_branches(&self, cx: &mut Context<Self>) -> AnyElement {
+        let back = popup::row("new-chat-git-back", false).accessibility_label(tr("costs_back"))
+            .child(div().w_full().flex().items_center().gap_2()
+                .child(chrome::small_icon(IconName::ChevronLeft, 14., theme::faint()))
+                .child(div().flex_1().min_w_0().truncate().text_sm().font_weight(FontWeight::MEDIUM).child(tr("folder_git_branch_title"))))
+            .on_click(cx.listener(|this, _, _, cx| { this.git.branching = false; cx.notify(); }));
+        let Some(git) = self.git.status.ok().cloned() else { return div().child(back).into_any_element() };
+        let locked = self.git_locked();
         let tabs = div().px(px(4.)).flex().gap_1()
             .child(Button::new("new-chat-git-tab-switch").ghost().xsmall().selected(!self.git.create_tab).label(tr("folder_git_switch_tab"))
                 .on_click(cx.listener(|this, _, _, cx| { this.git.create_tab = false; cx.notify(); })))
             .child(Button::new("new-chat-git-tab-create").ghost().xsmall().selected(self.git.create_tab).label(tr("folder_git_create_tab"))
                 .on_click(cx.listener(|this, _, _, cx| { this.git.create_tab = true; cx.notify(); })));
         let body = if self.git.create_tab { self.render_git_create(&git, locked, cx) } else { self.render_git_switch(&git, locked, cx) };
-        frame(div().flex().flex_col().gap(px(8.))
-            .child(head).child(actions).children(self.git_feedback(cx))
-            .child(popup::separator()).child(tabs).child(body)
-            .into_any_element())
+        div().flex().flex_col().gap(px(6.)).child(back).child(tabs).child(body).children(self.git_feedback(cx)).into_any_element()
     }
 
     pub(super) fn git_locked(&self) -> bool { self.git.busy.is_some() || self.creating }

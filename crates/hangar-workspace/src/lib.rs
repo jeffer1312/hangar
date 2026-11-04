@@ -72,6 +72,8 @@ pub enum Operation {
     },
     ListBranches {
         cwd: String,
+        #[serde(default)]
+        root: String,
     },
     SwitchBranch {
         cwd: String,
@@ -382,7 +384,21 @@ pub fn execute(op: Operation) -> Result<Value> {
         BranchOf { cwd } => Ok(json!(git::head_info(cwd.as_deref()).0)),
         GitSummary { cwd } => Ok(git::summary(cwd.as_deref(), false)),
         GitDiffstat { cwd } => Ok(git::summary(cwd.as_deref(), true)),
-        ListBranches { cwd } => git::branches(Path::new(&cwd)),
+        ListBranches { cwd, root } => {
+            let mut info = git::branches(Path::new(&cwd))?;
+            // Só mostra onde a worktree nova vai nascer; sem a configuração legível, a tela não mostra a pasta.
+            let parent = home().and_then(|home| {
+                let location = worktree_settings::load_default().and_then(|s| s.location_path(&home)).ok()?;
+                let parent = git::worktree_parent(Path::new(&cwd), Path::new(&root), &location)?;
+                // Abreviada com `~`, como a pessoa escreve a pasta nas configurações.
+                Some(match Path::new(&parent).strip_prefix(&home) {
+                    Ok(rest) => Path::new("~").join(rest).to_string_lossy().into_owned(),
+                    Err(_) => parent,
+                })
+            });
+            info["worktree_parent"] = json!(parent);
+            Ok(info)
+        }
         SwitchBranch { cwd, branch } => git::switch(Path::new(&cwd), &branch),
         CreateWorktree {
             cwd,

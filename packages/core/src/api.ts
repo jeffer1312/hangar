@@ -1541,6 +1541,7 @@ export interface FolderBranches {
   branches: string[];
   remotes: string[];   // nome curto, sem a local correspondente
   dirty: boolean;
+  worktree_parent?: string | null;   // onde a worktree nova desta pasta nasce, sem o nome dela; servidor antigo não manda
 }
 
 // Base padrão da branch nova: a atual, ou com HEAD solto a primeira branch local (o backend recusa base vazia).
