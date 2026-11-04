@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Pressable, ScrollView, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
+import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
 import { StyleSheet } from 'react-native-unistyles';
 import { useRouter } from 'expo-router';
 import { Screen } from '../src/ui/Screen';
@@ -57,9 +58,8 @@ export default function Login() {
         setError(m.mobile_sync_login_empty());
         return;
       }
-      // `add`, e não a importação: entrar de novo troca o token que a conta recebeu no mesmo endereço.
-      const [first] = servers.map((s) => useServers.getState().add(s));
-      useServers.getState().setActive(first.id);
+      // Máquina já pareada fica como está: o cofre pode trazer token velho; token que morreu sai pelo 401.
+      useServers.getState().appendImported(servers);
       router.replace('/');
     } catch (e) {
       setError(e instanceof Error && e.message ? e.message : m.login_falha());
@@ -110,7 +110,7 @@ export default function Login() {
 
   return (
     <Screen>
-      <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets>
+      <KeyboardAwareScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled" bottomOffset={16}>
         <Glass variant="modal" style={styles.card}>
           <View style={styles.header}>
             <Text style={styles.title}>{m.login_titulo()}</Text>
@@ -184,7 +184,7 @@ export default function Login() {
             </Pressable>
           </View>
         </Glass>
-      </ScrollView>
+      </KeyboardAwareScrollView>
 
       {/* `scrollable` é o que faz a sheet dar a altura do detent ao conteúdo; sem ele o flex:1 da câmera colapsa numa faixa. */}
       <Sheet open={scanning} sizes={['large']} scrollable onDismiss={() => setScanning(false)}>
