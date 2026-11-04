@@ -15,6 +15,7 @@ vi.mock('expo-constants', () => ({ default: { deviceName: 'Test phone' } }));
 vi.mock('expo-secure-store', () => ({ getItemAsync: async (key: string) => boundary.vault.get(key) ?? null, setItemAsync: async (key: string, value: string) => { boundary.vault.set(key, value); } }));
 vi.mock('expo-blur', () => ({ BlurView: ({ children }: { children: ReactNode }) => createElement('div', null, children), BlurTargetView: ({ children }: { children: ReactNode }) => createElement('div', null, children) }));
 vi.mock('expo-glass-effect', async () => ({ GlassView: (await import('react-native')).View, isLiquidGlassAvailable: () => false }));
+vi.mock('react-native-keyboard-controller', async () => ({ KeyboardAwareScrollView: (await import('react-native')).View, KeyboardAvoidingView: (await import('react-native')).View }));
 vi.mock('expo-linear-gradient', async () => ({ LinearGradient: (await import('react-native')).View }));
 vi.mock('expo-file-system', () => ({ Directory: class {}, File: class {}, Paths: { cache: '/cache', document: '/document' } }));
 vi.mock('react-native-mmkv', () => ({ createMMKV: () => ({ getString: () => undefined, getNumber: () => undefined, getBoolean: () => undefined, set: () => {}, remove: () => {} }) }));

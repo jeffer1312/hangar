@@ -143,7 +143,7 @@ const styles = StyleSheet.create((theme) => ({
     marginHorizontal: theme.base.space[3], marginVertical: theme.base.space[1], paddingHorizontal: theme.base.space[3], paddingVertical: theme.base.space[2],
     borderRadius: theme.base.radius.lg,
   },
-  noticeText: { flex: 1, gap: 2 },
+  noticeText: { flex: 1, gap: theme.base.space[0.5] },
   title: { fontSize: theme.base.text.sm, fontWeight: theme.base.weight.semibold },
   hint: { fontSize: theme.base.text.xs },
 }));

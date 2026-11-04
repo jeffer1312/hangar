@@ -1042,6 +1042,10 @@ function criarChatStore(serverId: string, name: string): ChatApi {
         // A resposta se perdeu (app em segundo plano), mas a mensagem já está na conversa.
         // Erro de antes do POST (outro envio pendente) nunca vira sucesso.
         if (delivering && confirmSubmission(useChatStore.getState().events)) return;
+        // A conversa pode ter confirmado com o POST em voo: o rascunho já não guarda o envio.
+        let confirmed = false;
+        try { confirmed = delivering && !readDraft(serverId, name)?.submission; } catch { /* sem leitura, o erro fica */ }
+        if (confirmed) return;
         throw error;
       });
     },

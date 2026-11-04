@@ -11,7 +11,7 @@ import { useReports } from './useReports';
 import { Icon } from '../../ui/Icon';
 import { useSettingsColors, withAlpha } from '../config/colors';
 import * as m from '../../paraglide/messages';
-import { SPACE } from '../../theme/scale';
+import { RADIUS, SPACE } from '../../theme/scale';
 
 const dimensionNames = () => ({ provider: m.custos_dim_provedor(), source: m.custos_dim_fonte(), project: m.custos_dim_projeto(), model: m.custos_dim_modelo(), servidor: m.custos_dim_maquina() });
 const typeNames = () => ({ input: m.custos_input_sem_cache(), output: m.custos_output_total(), cache_write: m.custos_tipo_cache_escrito(), cache_read: m.custos_tipo_cache_lido() });
@@ -201,8 +201,8 @@ export function CostsScreen() {
         const next = previous.includes(layer.key) ? previous.filter((key) => key !== layer.key) : [...previous, layer.key];
         return layers.every((item) => next.includes(item.key)) ? [] : next;
       })} />)}</View>
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: SPACE[3] }}>{visible.map((layer) => <View key={layer.key} style={{ flexDirection: 'row', alignItems: 'center', gap: SPACE[1.5] }}><View style={{ width: 9, height: 9, borderRadius: 3, backgroundColor: layer.color }} /><Copy muted>{layer.label}</Copy></View>)}
-        {marks.length > 0 && <View style={{ flexDirection: 'row', alignItems: 'center', gap: SPACE[1.5] }}><View style={{ width: 9, height: 9, borderRadius: 5, backgroundColor: theme.tokens.status.error }} /><Copy muted>{m.custos_legenda_fora_curva()}</Copy></View>}</View>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: SPACE[3] }}>{visible.map((layer) => <View key={layer.key} style={{ flexDirection: 'row', alignItems: 'center', gap: SPACE[1.5] }}><View style={{ width: 9, height: 9, borderRadius: RADIUS.xs, backgroundColor: layer.color }} /><Copy muted>{layer.label}</Copy></View>)}
+        {marks.length > 0 && <View style={{ flexDirection: 'row', alignItems: 'center', gap: SPACE[1.5] }}><View style={{ width: 9, height: 9, borderRadius: RADIUS.full, backgroundColor: theme.tokens.status.error }} /><Copy muted>{m.custos_legenda_fora_curva()}</Copy></View>}</View>
     </Panel>;
   }
 
@@ -223,7 +223,7 @@ export function CostsScreen() {
     return <Panel title={m.custos_por_modelo()} icon="Cpu"><Copy muted>{m.custos_com_tarifa()}</Copy><Copy muted>{m.custos_col_entrada_ajuda()}</Copy>
       <Segmented label={m.custos_por_modelo()} value={modelSort} onChange={(v) => setModelSort(v as typeof modelSort)} options={[{ key: 'cost', label: m.custos_custo() }, { key: 'tokens', label: m.ctx_tokens() }, { key: 'name', label: m.uso_col_nome() }]} />
       <Paged key={modelSort} items={buckets} render={(bucket, index) => <Card flat>
-        <Bar compact color={colors[index % 4]} icon={<View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: colors[index % 4] }} />} label={bucket.key} value={bucket.cost} max={Math.max(1, ...buckets.map((item) => item.cost))} detail={cost(bucket, bucket.key)} onPress={() => toggleFilter('model', bucket.key)} />
+        <Bar compact color={colors[index % 4]} icon={<View style={{ width: 8, height: 8, borderRadius: RADIUS.xs, backgroundColor: colors[index % 4] }} />} label={bucket.key} value={bucket.cost} max={Math.max(1, ...buckets.map((item) => item.cost))} detail={cost(bucket, bucket.key)} onPress={() => toggleFilter('model', bucket.key)} />
         <Copy>{`${m.custos_col_entrada()}: ${compactNumber(bucket.input + bucket.cache_write + bucket.cache_read)} / ${compactNumber(bucket.input)}${bucket.cache_write === 0 && bucket.cache_read > 0 ? '*' : ''}`}</Copy>
         <Copy>{`${m.custos_output_total()}: ${compactNumber(bucket.output)} · ${m.custos_tipo_cache_lido()}: ${compactNumber(bucket.cache_read)}`}</Copy>
         <Copy>{`${m.custos_col_pct_conta()}: ${custoDesconhecido(bucket) ? '—' : percent(bucket.cost, total.cost)}`}</Copy>
@@ -362,7 +362,7 @@ export function CostsScreen() {
             </View>
           </View>
           <Composition label={m.custos_o_que_cache()} items={parts} />
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: SPACE[3] }}>{parts.map((part) => <View key={part.label} style={{ flexDirection: 'row', alignItems: 'center', gap: SPACE[1.5] }}><View style={{ width: 9, height: 9, borderRadius: 3, backgroundColor: part.color }} /><Copy muted>{part.label}</Copy></View>)}</View>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: SPACE[3] }}>{parts.map((part) => <View key={part.label} style={{ flexDirection: 'row', alignItems: 'center', gap: SPACE[1.5] }}><View style={{ width: 9, height: 9, borderRadius: RADIUS.xs, backgroundColor: part.color }} /><Copy muted>{part.label}</Copy></View>)}</View>
           <Copy muted>{`${percent(cacheTotal.cache_read, rawTokens(cacheTotal))} ${m.custos_do_volume_cache_lido()}`}</Copy>
           <Copy muted>{report.cache_detalhado ? m.custos_cache_1h_pe({ h1: compactNumber(cacheTotal.cache_write_1h ?? 0), total: compactNumber(cacheTotal.cache_write) }) : m.custos_cache_sem_dado()}</Copy>
         </Panel>;

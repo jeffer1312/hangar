@@ -183,7 +183,7 @@ export default function SessionsSettings() {
 const styles = StyleSheet.create((theme) => ({
   row: { minHeight: 56, flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2], paddingHorizontal: theme.base.space[4], paddingVertical: theme.base.space[2], borderTopWidth: 1 },
   label: { flex: 1, minWidth: 0, fontSize: theme.base.text.base },
-  labelCol: { flex: 1, minWidth: 0, gap: 2 },
+  labelCol: { flex: 1, minWidth: 0, gap: theme.base.space[0.5] },
   hint: { fontSize: theme.base.text.xs, lineHeight: 19 },
   hours: { width: 56, minHeight: 44, borderWidth: 1, borderRadius: theme.base.radius.sm, textAlign: 'center', fontSize: theme.base.text.base, fontVariant: ['tabular-nums'] },
   unit: { fontSize: theme.base.text.base },
