@@ -21,6 +21,8 @@ OS_LOOK = {  # plataforma do cartão: (ícone, tom)
     "iphone": ("apple", "#ECEBE6"),
 }
 HANGAR_ARCS = '<path d="M 34.18 138 A 76 76 0 1 1 165.82 138"></path><path d="M 49.59 116.38 A 53 53 0 1 1 150.41 116.38"></path><path d="M 70.16 103.14 A 30 30 0 1 1 129.84 103.14"></path>'
+DOWNLOAD_ARROW = '<path d="M12 4v12"></path><path d="m7 11 5 5 5-5"></path><path d="M5 20h14"></path>'
+GO_ARROW = '<path d="M5 12h14"></path><path d="m13 6 6 6-6 6"></path>'
 esc = html.escape
 
 
@@ -62,7 +64,7 @@ def render_downloads(i):
             '</span></span>'
             '<span class="dl-foot">'
             f'<span style="min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: \'Geist Mono\', monospace; font-size: 12px; color: var(--a)">{file_[i]}</span>'
-            '<svg class="dl-arrow" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v12"></path><path d="m7 11 5 5 5-5"></path><path d="M5 20h14"></path></svg>'
+            f'<svg class="dl-arrow" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{GO_ARROW if href.startswith("#") else DOWNLOAD_ARROW}</svg>'
             '</span></a>'
         )
     return "\n".join(out)
