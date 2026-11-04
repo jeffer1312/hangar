@@ -47,13 +47,17 @@ PADROES+=('IP da tailnet (endereço real de máquina)::100\.(6[5-9]|[7-9][0-9]|1
 ZERO=0000000000000000000000000000000000000000
 achou=0
 enviados=()
+# Fora da varredura: o que o destino já tem e a main pública. O fork de um PR não tem a main, e
+# `$1` nem é nome de remoto quando o push vai por URL: sem isso o merge dela cairia inteiro aqui.
+publicado="--remotes=$1"
+git rev-parse -q --verify refs/remotes/origin/main >/dev/null && publicado+=" refs/remotes/origin/main"
 while read -r _localref localsha _remoteref remotesha; do
     [[ "$localsha" == "$ZERO" ]] && continue          # delete de branch: nada sai
     if [[ "$remotesha" == "$ZERO" ]]; then
-        intervalo="$localsha --not --remotes=$1"       # branch nova: só o que o remoto ainda não tem
+        intervalo="$localsha --not $publicado"         # branch nova: só o que ainda não saiu
     else
-        # Merge da main traz commits que já estão publicados no destino: não são deste push.
-        intervalo="$remotesha..$localsha --not --remotes=$1"
+        # Merge da main traz commits já publicados: não são deste push.
+        intervalo="$remotesha..$localsha --not $publicado"
     fi
     # Só linhas ADICIONADAS pelos commits que vão sair; a própria trava fica de fora (precisa
     # conter os padrões pra procurá-los — mesmo motivo do pre-commit).

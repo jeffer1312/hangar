@@ -197,5 +197,38 @@ printf '<< windows: rust ok\n  ok      rust 1s\n' | "$V" --marcar "$anda" > /dev
     { echo "FALHOU --marcar saiu com erro numa última linha que não é de passo"; falhou=1; }
 rm -f "$anda"
 
+# Trava do pre-push no fork de um PR: a main pública juntada passa, segredo novo não.
+gancho="$(cd "$(dirname "$0")/hooks" && pwd)/pre-push"
+base="$(mktemp -d)"
+(
+    set -e
+    unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+    export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t.invalid GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t.invalid HANGAR_SEM_VERIFICACAO=1
+    chave="sk-$(printf 'a%.0s' {1..24})"
+    git init -q --bare -b main "$base/publico.git"
+    git clone -q "$base/publico.git" "$base/w" 2> /dev/null
+    cd "$base/w"
+    git checkout -q -B main
+    git commit -q --allow-empty -m raiz
+    git push -q origin main
+    git checkout -q -b pr
+    git commit -q --allow-empty -m pr
+    no_fork="$(git rev-parse HEAD)"
+    git checkout -q main
+    echo "$chave" > fixture.txt
+    git add fixture.txt
+    git commit -q -m fixture
+    git push -q origin main
+    git checkout -q pr
+    git merge -q --no-edit main
+    empurra() { printf 'refs/heads/pr %s refs/heads/pr %s\n' "$(git rev-parse HEAD)" "$no_fork" | "$gancho" "file://$base/fork.git" > /dev/null 2>&1; }
+    empurra || { echo "FALHOU pre-push cobrou do fork o que a main pública já tem"; exit 1; }
+    echo "$chave" > novo.txt
+    git add novo.txt
+    git commit -q -m novo
+    if empurra; then echo "FALHOU pre-push deixou passar segredo novo"; exit 1; fi
+) || falhou=1
+rm -rf "$base"
+
 (( falhou )) && exit 1
 echo "ok: classificação do verificar-local"
