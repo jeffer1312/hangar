@@ -1,3 +1,4 @@
+mod block_column;
 mod document;
 mod format;
 mod inline;

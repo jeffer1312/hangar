@@ -1,14 +1,18 @@
 use gpui::{
-    App, IntoElement, ListState, ParentElement as _, SharedString, Styled as _, Window, div,
+    AnyElement, App, IntoElement, ListState, ParentElement as _, SharedString, Styled as _,
+    Window, div,
 };
 
 use std::{
+    cell::RefCell,
     ops::{Range, RangeInclusive},
+    rc::Rc,
     sync::Arc,
 };
 
 use crate::text::{
     SelectionFormat,
+    block_column::{BlockColumn, BlockPlaces, MIN_BLOCKS},
     node::{BlockNode, NodeContext, SourceRangeSelection},
 };
 
@@ -189,12 +193,23 @@ impl ParsedDocument {
     pub(super) fn render_root(
         &self,
         list_state: Option<ListState>,
+        column: Option<(Rc<RefCell<BlockPlaces>>, bool)>,
         node_cx: &NodeContext,
         window: &mut Window,
         cx: &mut App,
-    ) -> impl IntoElement {
+    ) -> AnyElement {
         let Some(list_state) = list_state else {
             let blocks_len = self.blocks.len();
+            if let Some((places, skip_unseen)) = column.filter(|_| blocks_len >= MIN_BLOCKS) {
+                return BlockColumn::new(
+                    "text-blocks",
+                    self.blocks.clone(),
+                    node_cx.clone(),
+                    places,
+                    skip_unseen,
+                )
+                .into_any_element();
+            }
             return div().children(self.blocks.iter().enumerate().map(move |(ix, node)| {
                 let is_last = ix + 1 == blocks_len;
                 node.render_block(
@@ -207,7 +222,8 @@ impl ParsedDocument {
                     window,
                     cx,
                 )
-            }));
+            }))
+            .into_any_element();
         };
 
         let options = NodeRenderOptions {
@@ -244,5 +260,6 @@ impl ParsedDocument {
             })
             .size_full(),
         )
+        .into_any_element()
     }
 }

@@ -86,3 +86,9 @@ Não compilados aqui: gpui-pre-apple/-macos (revisados só por leitura).
 | Ajuste | Onde | Por quê |
 |---|---|---|
 | Coluna encolhe até a maior palavra (teto 160 px) e barra horizontal sempre visível quando a tabela rola | gpui-base `text/node.rs` (`measure_table_columns`, `render_scroll_table`), `scrollable_mask.rs` (`horizontal_scroll_area`) | o piso do kit (metade do conteúdo, 160 a 480 px) fazia tabela de prosa de 4 colunas passar da coluna do chat, e a rolagem não tinha barra |
+
+## Rolagem da conversa
+
+| Ajuste | Onde | Por quê |
+|---|---|---|
+| Blocos fora da tela não são montados em documento sem rolagem própria | gpui-base `text/block_column.rs`, `text/document.rs`, `text/state.rs` | a linha da conversa guarda a mensagem inteira: cada quadro montava, posicionava e pintava até o que estava fora da tela |
