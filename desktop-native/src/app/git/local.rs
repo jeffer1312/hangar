@@ -25,7 +25,7 @@ pub(super) fn call(cwd: &Path, op: &super::Op) -> Result<Value, Refusal> {
     use super::Op;
     let path = cwd.to_string_lossy().into_owned();
     let operation = match op {
-        Op::Branches => Operation::ListBranches { cwd: path, root: String::new() },
+        Op::Branches => Operation::ListBranches { cwd: path },
         Op::Files => {
             let files = execute(Operation::ChangedFiles { cwd: path.clone() }).map_err(refusal)?;
             let sequencer = execute(Operation::SequencerState { cwd: path }).map_err(refusal)?;

@@ -771,9 +771,19 @@ async fn folder_operation(
         .to_string_lossy()
         .into_owned();
     if tail == "/api/fs/branches" {
-        return execute(st, Operation::ListBranches { cwd, root: root.to_owned() })
+        let mut info = execute(st, Operation::ListBranches { cwd: cwd.clone() })
             .await
-            .map_err(session_error);
+            .map_err(session_error)?;
+        // Onde a worktree nova vai nascer, para a tela de criação mostrar; fora da operação, que o Python também atende.
+        let (root, home) = (root.to_owned(), st.origins_home.clone());
+        let parent = tokio::task::spawn_blocking(move || {
+            hangar_workspace::git::worktree_parent_shown(Path::new(&cwd), Path::new(&root), &home)
+        })
+        .await
+        .ok()
+        .flatten();
+        info["worktree_parent"] = json!(parent);
+        return Ok(info);
     }
     let status = execute(st, Operation::FolderStatus { cwd: cwd.clone() }).await?;
     let affected = sessions(ctx, status["toplevel"].as_str());
