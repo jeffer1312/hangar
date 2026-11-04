@@ -85,7 +85,9 @@ export function BranchPicker({ server, cwd, sessionName, value, onChange, onPick
 
   const typed = name.trim();
   // Nome de uma branch que já existe abre a worktree nela, sem criar outra; a base não vale para ela.
-  const known = !!info && !!typed && typed !== info.current && [...info.branches, ...info.remotes].includes(typed);
+  // Branch aberta em outra worktree (ou na pasta principal) não abre outra: o git recusa.
+  const openElsewhere = !!wts?.list.some((w) => w.branch === typed || w.main_branch === typed);
+  const known = !!info && !!typed && typed !== info.current && !openElsewhere && [...info.branches, ...info.remotes].includes(typed);
 
   useEffect(() => {
     if (!info) return;   // sem a leitura não dá para saber se o nome já existe
@@ -132,14 +134,16 @@ export function BranchPicker({ server, cwd, sessionName, value, onChange, onPick
     const list = wts?.list ?? [];
     const agents = list.filter(worktreeIsAgent);
     const mine = list.filter((w) => !worktreeIsAgent(w)).sort((a, b) => Number(!!b.sessions.length) - Number(!!a.sessions.length));
-    const body = wtsFailed && !wts ? (
+    // A falha da releitura aparece mesmo com a lista anterior na tela: ela pode estar velha.
+    const failure = wtsFailed ? (
       <View style={styles.box}>
         <Text style={styles.error} accessibilityRole="alert">{wtsFailed}</Text>
         <Pressable onPress={() => setWtsTry((n) => n + 1)} accessibilityRole="button" accessibilityLabel={m.native_retry()} style={styles.option}>
           <Text style={styles.link}>{m.native_retry()}</Text>
         </Pressable>
       </View>
-    ) : wtsLoading && !wts ? <Text style={styles.help} accessibilityLiveRegion="polite">{m.native_create_checkout_loading()}</Text>
+    ) : null;
+    const body = wtsFailed && !wts ? null : wtsLoading && !wts ? <Text style={styles.help} accessibilityLiveRegion="polite">{m.native_create_checkout_loading()}</Text>
       : !list.length ? <Text style={styles.help}>{m.worktree_menu_nenhuma()}</Text>
       : (
         <>
@@ -161,6 +165,7 @@ export function BranchPicker({ server, cwd, sessionName, value, onChange, onPick
           <Icon name="ChevronLeft" size={14} color={theme.tokens.text.muted} />
           <Text style={[styles.optionTitle, styles.grow]} numberOfLines={1}>{m.worktree_menu_existentes()}</Text>
         </Pressable>
+        {failure}
         {body}
         {notice}
       </ScrollView>
@@ -170,7 +175,7 @@ export function BranchPicker({ server, cwd, sessionName, value, onChange, onPick
   const list = wts?.list ?? [];
   const inUse = list.filter((w) => w.sessions.length).length;
   const summary = wtsLoading && !wts ? m.native_create_checkout_loading()
-    : wtsFailed && !wts ? ''
+    : wtsFailed ? wtsFailed
     : chosen && !fresh ? worktreeTitle(chosen)
     : !list.length ? m.worktree_menu_nenhuma()
     : (list.length === 1 ? m.worktree_menu_uma() : m.worktree_menu_n({ n: list.length })) + (inUse ? ` · ${m.worktree_menu_n_em_uso({ n: inUse })}` : '');

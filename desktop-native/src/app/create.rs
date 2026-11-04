@@ -2196,11 +2196,11 @@ impl NewSession {
 
     /// A pílula única de branch: onde o agente trabalha e, depois, a situação do Git da pasta.
     fn branch_pill_label(&self, cx: &App) -> Option<String> {
-        let branch = self.branch_label(cx)?;
-        Some(match self.git_label() {
-            Some((git, false)) => format!("{branch} · {git}"),
-            _ => branch,
-        })
+        match (self.branch_label(cx), self.git_label()) {
+            (Some(branch), Some((git, false))) => Some(format!("{branch} · {git}")),
+            (Some(branch), _) => Some(branch),
+            (None, git) => git.map(|(git, _)| git),
+        }
     }
 
     /// O texto da pílula de branch (e do campo no formulário): a pasta principal, a worktree escolhida ou a nova.
@@ -2411,7 +2411,8 @@ impl NewSession {
     /// (direto na pasta, numa worktree nova ou numa que já existe) e no fim a troca e criação da branch da pasta; a lista
     /// das worktrees e a troca de branch abrem como telas internas.
     fn render_branch_menu(&self, query: &str, cx: &mut Context<Self>) -> AnyElement {
-        let Some(Some(checkout)) = self.checkout.ok() else { return div().into_any_element() };
+        // Sem a leitura das branches, o Git da pasta (com o erro dele) continua alcançável.
+        let Some(Some(checkout)) = self.checkout.ok() else { return div().children(self.render_git_head(cx)).into_any_element() };
         if self.picking { return self.render_existing_menu(query, cx); }
         if self.git_branching() { return self.render_git_branches(cx); }
         let git_head = self.render_git_head(cx);
@@ -2448,7 +2449,7 @@ impl NewSession {
             }));
         let summary = match self.worktrees.ok() {
             _ if self.worktrees.loading => tr("create_checkout_loading"),
-            None => String::new(),
+            None => self.worktrees.value.as_ref().and_then(|v| v.as_ref().err()).cloned().unwrap_or_default(),
             Some(_) if chosen.is_some() => chosen.map(basename).unwrap_or_default().to_owned(),
             Some(list) if list.is_empty() => tr_shared("worktree_menu_nenhuma", &[]),
             Some(list) => {
