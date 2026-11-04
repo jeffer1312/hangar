@@ -12,6 +12,15 @@ sys.path.insert(0, str(SITE / "src"))
 import strings as S  # noqa: E402
 
 ICONS = json.loads((SITE / "src" / "icons.json").read_text(encoding="utf-8"))
+OS_ICONS = json.loads((SITE / "src" / "os-icons.json").read_text(encoding="utf-8"))
+OS_LOOK = {  # nome do cartão: (ícone, tom)
+    "Linux": ("linux", "#F2C94C"),
+    "Windows": ("windows", "#5AB0F0"),
+    "macOS": ("apple", "#ECEBE6"),
+    "Android": ("android", "#3DDC84"),
+    "iPhone": ("apple", "#ECEBE6"),
+}
+HANGAR_ARCS = '<path d="M 34.18 138 A 76 76 0 1 1 165.82 138"></path><path d="M 49.59 116.38 A 53 53 0 1 1 150.41 116.38"></path><path d="M 70.16 103.14 A 30 30 0 1 1 129.84 103.14"></path>'
 esc = html.escape
 
 
@@ -38,13 +47,23 @@ def render_downloads(i):
     # corpo do <sc-for list="{{downloads}}"> do molde, linhas 460-466; a borda vem de .dl/.dl.is-mine
     out = []
     for platform, os_, arch, file_, href in S.DOWNLOADS:
+        icon, tone = OS_LOOK[os_[0]]
         out.append(
-            f'<a class="card reveal dl" data-platform="{platform}" href="{href}" style="border-radius: 16px; background: #0F1112; padding: 24px; display: flex; flex-direction: column; gap: 6px; min-height: 150px">'
-            '<svg class="dl-arrow" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v12"></path><path d="m7 11 5 5 5-5"></path><path d="M5 20h14"></path></svg>'
-            f'<span class="badge-mine" hidden style="align-self: flex-start; margin-bottom: 6px; padding: 2px 8px; border-radius: 999px; background: rgba(163,166,255,.12); color: var(--a); font-size: 11.5px; font-weight: 500">{S.T["your_os"][i]}</span>'
-            f'<span style="font-family: \'Space Grotesk\', sans-serif; font-weight: 600; font-size: 22px">{os_[i]}</span>'
+            f'<a class="card reveal dl" data-platform="{platform}" href="{href}" style="--t: {tone}; border-radius: 16px; background: #0F1112; padding: 22px 24px 18px; display: flex; flex-direction: column; gap: 18px">'
+            f'<svg class="dl-mark" viewBox="0 0 200 200" aria-hidden="true"><g transform="translate(0,16)" fill="none" stroke="currentColor" stroke-width="13" stroke-linecap="round">{HANGAR_ARCS}</g></svg>'
+            '<span class="dl-head">'
+            f'<span class="dl-ic"><svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="{OS_ICONS[icon]}"></path></svg></span>'
+            '<span style="display: flex; flex-direction: column; gap: 3px; min-width: 0">'
+            '<span class="dl-name">'
+            f'<span style="font-family: \'Space Grotesk\', sans-serif; font-weight: 600; font-size: 22px; line-height: 1.15">{os_[i]}</span>'
+            f'<span class="badge-mine" hidden style="padding: 2px 8px; border-radius: 999px; background: rgba(163,166,255,.12); color: var(--a); font-size: 11.5px; font-weight: 500; white-space: nowrap">{S.T["your_os"][i]}</span>'
+            '</span>'
             f'<span style="font-size: 14px; color: #8E908D">{arch[i]}</span>'
-            f'<span style="margin-top: auto; font-family: \'Geist Mono\', monospace; font-size: 12px; color: var(--a)">{file_[i]}</span></a>'
+            '</span></span>'
+            '<span class="dl-foot">'
+            f'<span style="min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: \'Geist Mono\', monospace; font-size: 12px; color: var(--a)">{file_[i]}</span>'
+            '<svg class="dl-arrow" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v12"></path><path d="m7 11 5 5 5-5"></path><path d="M5 20h14"></path></svg>'
+            '</span></a>'
         )
     return "\n".join(out)
 

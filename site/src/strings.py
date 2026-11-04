@@ -2,7 +2,8 @@
 
 LANGS = ("pt", "en")
 BASE_URL = "https://hangar.dev.br"
-RELEASES = "https://github.com/jeffer1312/hangar/releases/tag/native-latest"
+NATIVE = "https://github.com/jeffer1312/hangar/releases/download/native-latest"
+MOBILE = "https://github.com/jeffer1312/hangar/releases/download/mobile-latest"
 
 
 def chips(items):
@@ -30,8 +31,8 @@ T = {
  'alt_hero': ('App nativo do Hangar: sessões Claude, Codex, Pi e Kimi na lateral e uma conversa com ferramentas e código', 'Hangar native app: Claude, Codex, Pi and Kimi sessions in the sidebar and a conversation with tool calls and code'),
  't_eyebrow': ('Sem trocar de ferramenta', 'No new tool to learn'),
  't_h2': ('O terminal continua sendo o terminal.', 'Your terminal stays your terminal.'),
- 't_p': ('O Hangar não reimplementa nenhum agente. Cada sessão é o CLI original, com as suas skills, hooks e contas, rodando no tmux. O app só lê a conversa e manda o que você digita.',
-         "Hangar doesn't reimplement any agent. Each session is the original CLI — your skills, hooks and accounts — running in tmux. The app reads the conversation and sends what you type."),
+ 't_p': ('O Hangar não reimplementa nenhum agente. Cada sessão é o CLI original, com as suas skills, hooks e contas. O app só lê a conversa e manda o que você digita.',
+         "Hangar doesn't reimplement any agent. Each session is the original CLI — your skills, hooks and accounts. The app reads the conversation and sends what you type."),
  't_b1h': ('Continue no terminal quando quiser.', 'Jump back into the terminal anytime.'),
  't_b1': ('Um <code style="font-family: \'Geist Mono\', monospace; color: #ECEBE6">tmux attach</code> e você está de volta na TUI, na mesma conversa, com tudo que foi respondido pelo app.',
           'One <code style="font-family: \'Geist Mono\', monospace; color: #ECEBE6">tmux attach</code> and you are back in the TUI, same conversation, with everything answered from the app.'),
@@ -41,9 +42,9 @@ T = {
  't_b3h': ('Ou sem terminal nenhum.', 'Or no terminal at all.'),
  't_b3': ('Claude e Codex também rodam como processo do Hangar: permissões e perguntas chegam como cartão, e reiniciar o app não corta o turno.',
           'Claude and Codex can also run as a Hangar process: permissions and questions arrive as cards, and restarting the app never cuts a turn.'),
- 't_b4h': ('Nada sai da sua máquina.', 'Nothing leaves your machine.'),
- 't_b4': ('Self-hosted, pela sua rede local ou pela sua VPN. Não existe nuvem do Hangar no meio.',
-          'Self-hosted, over your LAN or your VPN. There is no Hangar cloud in the middle.'),
+ 't_b4h': ('Sem nuvem do Hangar no meio.', 'No Hangar cloud in the middle.'),
+ 't_b4': ('Self-hosted, pela sua rede local ou pela sua VPN: as sessões não passam por nenhum servidor nosso. Diagnóstico só sai se você mandar.',
+          'Self-hosted, over your LAN or your VPN: your sessions never go through a server of ours. Diagnostics leave only if you send them.'),
  'term1': ('sessão <span style="color: #ECEBE6">shop</span> no tmux · já aparece no Hangar', 'session <span style="color: #ECEBE6">shop</span> in tmux · already in Hangar'),
  'term_away': ('# saiu pra almoçar — pelo celular:', '# out for lunch — from the phone:'),
  'term2': ('respondeu "A) Aplicar a correção"', 'answered "A) Apply the fix"'),
@@ -106,8 +107,8 @@ T = {
  'your_os': ('Seu sistema', 'Your system'),
  'n_eyebrow': ('App nativo em Rust', 'Native app, in Rust'),
  'n_h2': ('Rápido como deveria ser.', 'As fast as it should be.'),
- 'n_p': ('Desenhado na GPU, sem navegador por baixo. Conversas longas rolam lisas, dezenas de sessões cabem na lista, e o app se atualiza sozinho pelo botão do topo.',
-         'GPU-rendered, no browser underneath. Long conversations scroll smoothly, dozens of sessions fit in the list, and the app updates itself from the top bar.'),
+ 'n_p': ('Desenhado na GPU, sem navegador por baixo. Conversas longas rolam lisas, dezenas de sessões cabem na lista, e o app se atualiza pelo botão do topo.',
+         'GPU-rendered, no browser underneath. Long conversations scroll smoothly, dozens of sessions fit in the list, and the app updates from the top bar.'),
  'alt_group': ('Sessão de revisão recebendo recado do par e perguntando antes de aplicar a correção', 'Review session receiving a message from its pair and asking before applying the fix'),
  'n_c1h': ('Um revisa o outro.', 'One reviews the other.'),
  'n_c1': ('O revisor recebe o recado do par, aponta o problema e pergunta antes de mexer.', 'The reviewer gets the pair’s message, points out the bug and asks before touching anything.'),
@@ -118,22 +119,29 @@ T = {
  'p_h2': ('Levantou da mesa? A sessão vai junto.', 'Left your desk? The session comes along.'),
  'p_p': ('Responda a pergunta que travou o agente, aprove uma permissão, interrompa, mande o próximo prompt ou dite por voz. No Wi-Fi de casa ou de qualquer lugar pela Tailscale.',
          'Answer the question that blocked the agent, approve a permission, interrupt, send the next prompt or dictate it. On your home Wi-Fi, or anywhere over Tailscale.'),
+ 'p_app': ('Android e iPhone têm app nativo, por enquanto fora das lojas. Se preferir não instalar nada, o PWA abre no navegador. Nos dois, é só ler o QR do Hangar.',
+           'Android and iPhone have a native app, outside the stores for now. Prefer not to install anything? The PWA opens in the browser. Either way, just scan the Hangar QR code.'),
+ 'cta_app': ('Baixar o app do celular', 'Get the phone app'),
  'p_chips': (chips(['Perguntas com botões', 'Fila de prompts', 'Ditado', 'Notificações', 'Diffs']), chips(['Tap-to-answer questions', 'Prompt queue', 'Dictation', 'Notifications', 'Diffs'])),
  'alt_phone': ('Hangar no celular respondendo uma pergunta do agente', 'Hangar on the phone answering an agent question'),
  'h_eyebrow': ('Como funciona', 'How it works'),
  'h_h2': ('Três passos até a primeira sessão.', 'Three steps to your first session.'),
  'h_s1h': ('Instale na máquina dos agentes', 'Install it where your agents run'),
- 'h_s1': ('Um comando prepara o servidor do Hangar e os atalhos de sessão no computador onde o Claude, o Codex e os outros já rodam.',
-          'One command sets up the Hangar server and session shortcuts on the computer where Claude, Codex and the rest already run.'),
- 'h_s2h': ('Abra o app', 'Open the app'),
- 'h_s2': ('O app nativo no desktop. No celular, o instalador mostra um QR: leia com a câmera e pronto.', 'The native app on the desktop. For the phone, the installer shows a QR code: scan it and you are in.'),
+ 'h_s1': ('Baixe e abra o app no computador dos agentes. No Linux e no Windows, ele instala o servidor em poucas telas, sem terminal. No macOS, um comando faz isso.',
+          'Download and open the app on the computer your agents use. On Linux and Windows it installs the server in a few screens, no terminal needed. On macOS, one command does it.'),
+ 'h_s2h': ('Conecte o celular', 'Connect your phone'),
+ 'h_s2': ('No fim da instalação aparece um QR. Leia no app do celular ou com a câmera e pronto.', 'A QR code shows up when the install finishes. Scan it with the phone app or your camera and you are in.'),
  'h_s3h': ('Solte os agentes', 'Let the agents loose'),
  'h_s3': ('Escolha pasta, agente e modelo. As sessões que você já tinha abertas no terminal aparecem sozinhas.', 'Pick a folder, agent and model. Sessions you already had open in the terminal show up on their own.'),
  'd_h2': ('Baixe o Hangar', 'Download Hangar'),
- 'd_p': ('Grátis e open source. O instalador sobe o servidor e já traz o app nativo da sua plataforma.', 'Free and open source. The installer sets up the server and brings the native app for your platform.'),
+ 'd_p': ('Grátis e open source. Baixe o app e abra: no Linux e no Windows, ele mesmo instala o servidor e o que faltar.', 'Free and open source. Download the app and open it: on Linux and Windows it installs the server and anything missing by itself.'),
+ 'd_alt': (f'Outros Linux: <a href="{NATIVE}/Hangar-linux-x86_64.rpm" style="color: var(--a)">.rpm</a> (Fedora) ou <a href="{NATIVE}/Hangar-linux-x86_64.tar.gz" style="color: var(--a)">.tar.gz</a>',
+           f'Other Linux: <a href="{NATIVE}/Hangar-linux-x86_64.rpm" style="color: var(--a)">.rpm</a> (Fedora) or <a href="{NATIVE}/Hangar-linux-x86_64.tar.gz" style="color: var(--a)">.tar.gz</a>'),
+ 'd_cli': ('No macOS, ou se preferir o terminal', 'On macOS, or if you prefer the terminal'),
+ 'd_cli_p': ('Um comando instala o servidor. No macOS, rode antes de abrir o app.', 'One command installs the server. On macOS, run it before opening the app.'),
  'copy_label': ('Copiar comando', 'Copy command'),
- 'd_req': ('Requer <span style="font-family: \'Geist Mono\', monospace; color: #B9BBB7">tmux</span> e pelo menos um agente instalado. Binários sem assinatura: no macOS, abra pelo botão direito na primeira vez.',
-           'Requires <span style="font-family: \'Geist Mono\', monospace; color: #B9BBB7">tmux</span> and at least one agent installed. Binaries are unsigned: on macOS, right-click to open the first time.'),
+ 'd_req': ('Binários sem assinatura: no Windows, o SmartScreen avisa na primeira vez (Mais informações, Executar assim mesmo); no macOS, abra pelo botão direito. No iPhone, a instalação é pelo <a href="https://sidestore.io" style="color: var(--a)">SideStore</a>.',
+           'Binaries are unsigned: on Windows, SmartScreen warns the first time (More info, Run anyway); on macOS, right-click to open. On iPhone, install it with <a href="https://sidestore.io" style="color: var(--a)">SideStore</a>.'),
  'close_h2': ('Traga seus agentes pro mesmo hangar.', 'Bring your agents under one roof.'),
  'disclaimer': ('Ferramenta independente, licença MIT. Não é afiliada nem endossada pela Anthropic, OpenAI, Moonshot AI ou pelo projeto Pi.',
                 'Independent tool, MIT licensed. Not affiliated with or endorsed by Anthropic, OpenAI, Moonshot AI or the Pi project.'),
@@ -158,6 +166,9 @@ SMALL = {
   {'k': 'convidado', 't': 'Compartilhe uma sessão', 'd': 'Mande um link pra alguém acompanhar uma sessão, sem abrir o resto da máquina.'},
   {'k': 'mcp', 't': 'Os agentes também dirigem', 'd': 'Pelo MCP do Hangar, um agente cria sessões, lista o grupo e conversa com os outros.'},
   {'k': 'pi · omp', 't': 'Checkpoints', 'd': 'Cada pedido vira um ponto de volta: desfaça o código, a conversa ou os dois.'},
+  {'k': 'voz ao vivo · beta', 't': 'Converse com as sessões', 'd': 'Fale com um assistente que acompanha as sessões, troca de sessão e manda pedidos a elas. Usa uma conta Codex do servidor.'},
+  {'k': 'cofre', 't': 'Cofre de senhas', 'd': 'O agente usa a senha ou o token sem o valor passar pela conversa. Se você marcar, ele pede sua aprovação antes.'},
+  {'k': 'par externo', 't': 'Pareie com outra pessoa', 'd': 'Com um convite, sua sessão conversa com a de outra pessoa, e cada lado escolhe o acesso que dá.'},
  ],
  'en': [
   {'k': 'git', 't': 'Git without leaving the chat', 'd': 'Checkbox staging, per-file discard, history with graph and search, cherry-pick and revert per commit.'},
@@ -169,15 +180,20 @@ SMALL = {
   {'k': 'guest', 't': 'Share a session', 'd': 'Send someone a link to follow one session without exposing the rest of the machine.'},
   {'k': 'mcp', 't': 'Agents drive it too', 'd': 'Through the Hangar MCP, an agent creates sessions, lists its group and talks to the others.'},
   {'k': 'pi · omp', 't': 'Checkpoints', 'd': 'Every prompt is a restore point: roll back the code, the conversation, or both.'},
+  {'k': 'live voice · beta', 't': 'Talk to your sessions', 'd': 'Speak with an assistant that follows your sessions, switches between them and sends them requests. Uses a Codex account on the server.'},
+  {'k': 'vault', 't': 'Password vault', 'd': 'The agent uses a password or token without the value going through the chat. Mark it, and it asks for your approval first.'},
+  {'k': 'external pair', 't': 'Pair with another person', 'd': 'With an invite, your session talks to someone else’s, and each side picks the access it gives.'},
  ],
 }
 
 DOWNLOADS = [  # (plataforma, nome pt/en, arquitetura pt/en, arquivo pt/en, destino)
-    ("linux", ("Linux", "Linux"), ("x86_64 · .tar.gz",) * 2, ("Hangar-linux-x86_64.tar.gz",) * 2, RELEASES),
-    ("windows", ("Windows", "Windows"), ("x64 · .zip",) * 2, ("Hangar-windows-x86_64.zip",) * 2, RELEASES),
-    ("macos", ("macOS", "macOS"), ("Apple Silicon · .zip",) * 2, ("Hangar-macos-aarch64.zip",) * 2, RELEASES),
-    ("phone", ("Celular", "Phone"), ("PWA · Android e iPhone", "PWA · Android and iPhone"),
-     ("leia o QR do instalador", "scan the installer QR code"), "#celular"),
+    ("linux", ("Linux", "Linux"), ("Ubuntu 24.04+ e Debian · .deb", "Ubuntu 24.04+ and Debian · .deb"),
+     ("Hangar-linux-x86_64.deb",) * 2, f"{NATIVE}/Hangar-linux-x86_64.deb"),
+    ("windows", ("Windows", "Windows"), ("x64 · .exe",) * 2, ("Hangar-windows-x86_64.exe",) * 2, f"{NATIVE}/Hangar-windows-x86_64.exe"),
+    ("macos", ("macOS", "macOS"), ("Apple Silicon · .zip",) * 2, ("Hangar-macos-aarch64.zip",) * 2, f"{NATIVE}/Hangar-macos-aarch64.zip"),
+    ("macos", ("macOS", "macOS"), ("Intel · .zip",) * 2, ("Hangar-macos-x86_64.zip",) * 2, f"{NATIVE}/Hangar-macos-x86_64.zip"),
+    ("phone", ("Android", "Android"), ("App nativo · .apk", "Native app · .apk"), ("hangar.apk",) * 2, f"{MOBILE}/hangar.apk"),
+    ("phone", ("iPhone", "iPhone"), ("App nativo · pelo SideStore", "Native app · with SideStore"), ("hangar.ipa",) * 2, f"{MOBILE}/hangar.ipa"),
 ]
 
 CLIPS = [
