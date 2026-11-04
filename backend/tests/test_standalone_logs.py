@@ -95,8 +95,8 @@ def test_motor_atualizador_instala_log_central_antes_de_executar(tmp_path, monke
         assert called == [9000]
         assert "token-secreto" in (root / "privado" / "atualizacao.log").read_text()
         raw = diag.caminho_do_dia().read_text()
-        assert any(row["evento"] == "backend.erro" and row.get("mensagem") == "falha privada: token-secreto"
-                   for row in map(json.loads, raw.splitlines()))
+        assert "token-secreto" not in raw
+        assert any(row["evento"] == "backend.erro" for row in map(json.loads, raw.splitlines()))
     finally:
         created = {handler for logger in loggers for handler in logger.handlers
                    if isinstance(handler, (diag_logging.PrivateLog, diag_logging.DiaryHandler))}
