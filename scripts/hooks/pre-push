@@ -52,7 +52,7 @@ enviados=()
 # A ponta vem do próprio GitHub: `origin/main` local pode ser de um espelho privado ou estar velha.
 # Sem resposta, ou sem esse commit aqui, nada sai da varredura.
 publicado="--remotes=$1"
-ponta="$(GIT_TERMINAL_PROMPT=0 git ls-remote https://github.com/jeffer1312/hangar.git refs/heads/main 2>/dev/null | cut -f1)"
+ponta="$(GIT_TERMINAL_PROMPT=0 timeout 10 git ls-remote https://github.com/jeffer1312/hangar.git refs/heads/main 2>/dev/null | cut -f1)"
 if [[ -n "$ponta" ]] && git cat-file -e "$ponta^{commit}" 2>/dev/null; then publicado+=" $ponta"; fi
 while read -r _localref localsha _remoteref remotesha; do
     [[ "$localsha" == "$ZERO" ]] && continue          # delete de branch: nada sai

@@ -226,6 +226,12 @@ base="$(mktemp -d)"
     # Recusa pela varredura: um hook quebrado também sai com erro e não pode contar como barrado.
     barra() { local saida; if saida="$(empurra)"; then return 1; fi; grep -q 'push recusado' <<< "$saida"; }
     empurra > /dev/null || { echo "FALHOU pre-push cobrou do fork o que a main pública já tem"; exit 1; }
+    # Sem resposta do GitHub nada sai da varredura.
+    git config --unset url."$base/publico.git".insteadOf
+    git config url."$base/nada.git".insteadOf https://github.com/jeffer1312/hangar.git
+    barra || { echo "FALHOU pre-push descontou a main sem resposta do GitHub"; exit 1; }
+    git config --unset url."$base/nada.git".insteadOf
+    git config url."$base/publico.git".insteadOf https://github.com/jeffer1312/hangar.git
     # `origin/main` local com commit que o GitHub não tem (espelho privado, ref velha) não conta.
     git checkout -q main
     echo "$chave" > privado.txt
