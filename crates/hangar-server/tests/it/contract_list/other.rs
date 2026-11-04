@@ -130,10 +130,10 @@ fn pane_of(p: &Value) -> Pane {
     }
 }
 
-/// A linha como o golden grava: campo igual ao padrão sai.
+/// A linha como o golden grava: campo igual ao padrão sai. O golden vem do Python, que não adormece.
 fn dump(row: &SessionRow, defaults: &Map<String, Value>) -> Value {
     let Value::Object(mut map) = serde_json::to_value(row).unwrap() else { unreachable!() };
-    map.retain(|k, v| defaults.get(k) != Some(v));
+    map.retain(|k, v| defaults.get(k) != Some(v) && !matches!(k.as_str(), "asleep" | "wake_surface"));
     Value::Object(map)
 }
 
