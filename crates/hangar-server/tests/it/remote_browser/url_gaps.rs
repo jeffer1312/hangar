@@ -67,7 +67,7 @@ fn write_valid_last(scene: &Scene, files: &Value, port: u16) -> Vec<String> {
     let required: Vec<&str> = files.iter().map(|file| file["name"].as_str().unwrap()).filter(|name| *name != "browser.json").collect();
     assert_eq!(required.len() + 1, files.len(), "a preparação exige um navegador válido");
     let candidates = ["browser.json".to_owned(), "z-browser.json".to_owned()].into_iter()
-        .chain((0..64).map(|index| format!("z-browser-{index:03}.json")));
+        .chain((0..1024).map(|index| format!("z-browser-{index:03}.json")));
     for valid in candidates {
         let mut renamed = files.clone();
         renamed.iter_mut().filter(|file| file["name"] == "browser.json").for_each(|file| file["name"] = json!(valid));
