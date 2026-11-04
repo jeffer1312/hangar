@@ -49,12 +49,11 @@ achou=0
 enviados=()
 # Fora da varredura: o que o destino já tem e a main pública. O fork de um PR não tem a main, e
 # `$1` nem é nome de remoto quando o push vai por URL: sem isso o merge dela cairia inteiro aqui.
-# Só vale com `origin` no repositório público: a main de um espelho privado não está publicada.
+# A ponta vem do próprio GitHub: `origin/main` local pode ser de um espelho privado ou estar velha.
+# Sem resposta, ou sem esse commit aqui, nada sai da varredura.
 publicado="--remotes=$1"
-case "$(git config --get remote.origin.url)" in
-    *github.com[:/]jeffer1312/hangar|*github.com[:/]jeffer1312/hangar.git)
-        git rev-parse -q --verify refs/remotes/origin/main >/dev/null && publicado+=" refs/remotes/origin/main" ;;
-esac
+ponta="$(GIT_TERMINAL_PROMPT=0 git ls-remote https://github.com/jeffer1312/hangar.git refs/heads/main 2>/dev/null | cut -f1)"
+if [[ -n "$ponta" ]] && git cat-file -e "$ponta^{commit}" 2>/dev/null; then publicado+=" $ponta"; fi
 while read -r _localref localsha _remoteref remotesha; do
     [[ "$localsha" == "$ZERO" ]] && continue          # delete de branch: nada sai
     if [[ "$remotesha" == "$ZERO" ]]; then
