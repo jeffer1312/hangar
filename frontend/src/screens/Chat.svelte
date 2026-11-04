@@ -3219,7 +3219,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
     return server;
   }
   // Segundo toque com o fechamento em curso não repete o pedido. Só estes códigos dizem que o
-  // terminal já saiu: outro 404 (rota ausente, dono diferente) deixa ele vivo e tem que aparecer.
+  // terminal já saiu: outro 404 (servidor sem a rota) deixa ele vivo e tem que aparecer.
   const TERMINAL_GONE = ['erro_shortcut_terminal_inexistente', 'erro_hangar_terminal_inexistente'];
   const closingTerminals = new Set<string>();
   async function stopTerminal(id: string, close: () => Promise<unknown>) {
@@ -3240,15 +3240,16 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
     return runsInHangar(s) ? hangarForShortcut(chatServerId, key) : sessionTerminalFor(chatServerId, sessionName, key);
   }
 
-  async function rodarAtalhoShell(s: ShortcutShell) {
-    if (runsInHangar(s)) { await runInHangar(s); return; }
+  // `confirmed`: quem confirmou pediu para rodar, então um terminal que surgiu com a folha aberta não é parado.
+  async function rodarAtalhoShell(s: ShortcutShell, confirmed: boolean) {
+    if (runsInHangar(s)) { await runInHangar(s, confirmed); return; }
     const shortcutKey = shortcutKeyOf(s);
     // Pergunta pendente do terminal deste atalho: o clique abre a pergunta em vez de rodar outro.
     // Rodando sem pergunta, o clique para o terminal dele.
     const current = sessionTerminalFor(chatServerId, sessionName, shortcutKey);
     if (current?.alive && current.question) { openQuestion(chatServerId, sessionName, current.id); return; }
     const key = atalhoKey;
-    if (current?.alive) {
+    if (current?.alive && !confirmed) {
       try { await stopTerminal(current.id, () => closeShortcutTerminal(tileServer(), sessionName, current.id)); }
       finally { await refreshShortcutTerminals(key).catch(() => null); }
       return;
@@ -3301,11 +3302,11 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   }
 
   // Cópia única do servidor: perguntando abre a pergunta; rodando, o clique a para; parado, roda.
-  async function runInHangar(s: ShortcutShell) {
+  async function runInHangar(s: ShortcutShell, confirmed: boolean) {
     const shortcutKey = shortcutKeyOf(s);
     const current = hangarForShortcut(chatServerId, shortcutKey);
     if (current?.alive && current.question) { openQuestion(chatServerId, '', current.id); return; }
-    if (current?.alive) { await stopTerminal(current.id, () => closeHangarTerminal(tileServer(), current.id)); return; }
+    if (current?.alive && !confirmed) { await stopTerminal(current.id, () => closeHangarTerminal(tileServer(), current.id)); return; }
     let r;
     try {
       r = await runShortcutShell(sessionName, s.command, s.label, s.pasta,
@@ -3320,14 +3321,15 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
     }
   }
 
-  async function runShortcut(s: ShortcutSendText | ShortcutShell) {
-    // Importado com a credencial em branco: rodar mandaria o marcador literal.
+  async function runShortcut(s: ShortcutSendText | ShortcutShell, confirmed = false) {
+    // Importado com a credencial em branco: rodar mandaria o marcador literal. Com terminal vivo o
+    // toque não roda nada, só para ou responde.
     const falta = shortcutMissingSecret(s);
-    if (falta) { mostrarAviso(new Error(m.atalhos_segredo_falta({ nome: falta }))); return; }
+    if (falta && !(s.type === 'shell' && shortcutTerminal(s)?.alive)) { mostrarAviso(new Error(m.atalhos_segredo_falta({ nome: falta }))); return; }
     // O 202 do shell é só "o processo nasceu", e o handleSend lança pro Composer mostrar — aqui
     // não há Composer no meio, então sem este aviso o clique falho não faz NADA em silêncio.
     try {
-      if (s.type === 'shell') await rodarAtalhoShell(s);
+      if (s.type === 'shell') await rodarAtalhoShell(s, confirmed);
       else if (sendsDirect(s)) await handleSend(s.text);
       else await composerRef?.prefillText(s.text);
     } catch (err) {
@@ -4168,7 +4170,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   <ConfirmSheet open={pendingShortcut !== null}
                 title={pendingShortcut?.label ?? ''}
                 message={pendingShortcut?.type === 'shell' ? pendingShortcut.command : pendingShortcut?.text ?? null}
-                onConfirm={() => { const s = pendingShortcut; pendingShortcut = null; if (s) void runShortcut(s); }}
+                onConfirm={() => { const s = pendingShortcut; pendingShortcut = null; if (s) void runShortcut(s, true); }}
                 onClose={() => (pendingShortcut = null)} />
   <AttachmentsSheet open={anexosOpen} {sessionName} onClose={() => (anexosOpen = false)}
                     onUsarNoDitado={usarAnexoNoDitado} />

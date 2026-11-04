@@ -444,11 +444,20 @@ impl Hangar {
 
     pub(super) fn run_shortcut(&mut self, shortcut: Shortcut, confirmed: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(key) = self.selected_key() else { return; };
-        // Bloco aceso (terminal vivo, sem pergunta): o clique encerra o atalho, antes de qualquer confirmação de rodar.
-        if let Some(term) = hangar_live::running_term(&self.live_for(&key.server), &key.name, &shortcut) {
-            self.stop_shortcut(key, shortcut.label(), term);
-            cx.notify();
-            return;
+        // Credencial e confirmação são de rodar: com terminal vivo o clique abre a pergunta dele ou o encerra. Quem
+        // confirmou pediu para rodar, então um terminal que surgiu com o diálogo aberto não é parado.
+        if let Shortcut::Shell { key: term_key, hangar, .. } = &shortcut {
+            if let Some(asking) = self.asking_term(&key.server, term_key, *hangar, &key.name) {
+                self.open_question(&key.server, &asking.owner, &asking.term.id, window, cx);
+                return;
+            }
+        }
+        if !confirmed {
+            if let Some(term) = hangar_live::running_term(&self.live_for(&key.server), &key.name, &shortcut) {
+                self.stop_shortcut(key, shortcut.label(), term);
+                cx.notify();
+                return;
+            }
         }
         if let Some(name) = shortcut.missing_secret() {
             self.action_feedback.insert(key, (tr("shortcut_secret_missing").replace("{name}", &name), true));
@@ -480,11 +489,6 @@ impl Hangar {
             // aba do painel, onde dá pra ver a saída e fechar o programa.
             Shortcut::Shell { label, command, pasta, key: shortcut_key, hangar, home, ask, .. } => {
                 let Some(api) = self.api_for(&key.server) else { return; };
-                // Terminal desse atalho perguntando: o clique abre a pergunta em vez de rodar outro.
-                if let Some(asking) = self.asking_term(&key.server, &shortcut_key, hangar, &key.name) {
-                    self.open_question(&key.server, &asking.owner, &asking.term.id, window, cx);
-                    return;
-                }
                 self.action_feedback.insert(key.clone(), (tr("shortcut_started").replace("{label}", &label), false));
                 let (connection, tx) = (self.connection, self.tx.clone());
                 let mut body = json!({"command": command, "label": label, "ask": ask, "key": shortcut_key});
@@ -501,7 +505,10 @@ impl Hangar {
 
     /// Fecha o terminal do atalho: No Hangar pela cópia do servidor; na sessão, pelo terminal dela.
     fn stop_shortcut(&mut self, key: SessionKey, label: String, term: super::terminal::LiveTerm) {
-        let Some(api) = self.api_for(&key.server) else { return; };
+        let Some(api) = self.api_for(&key.server) else {
+            self.action_feedback.insert(key, (tr("term_disconnected"), true));
+            return;
+        };
         let id = term.term.id.clone();
         if !self.side.stop_pending.insert(id.clone()) { return; }
         self.action_feedback.insert(key.clone(), (tr("shortcut_stopping").replace("{label}", &label), false));
@@ -931,7 +938,7 @@ impl Hangar {
                 _ => (shortcut.label(), shortcut.label()),
             };
             let missing = shortcut.missing_secret();
-            // Estado do terminal do atalho (No Hangar: a cópia do servidor; na sessão: só a pergunta): borda e fundo verdes
+            // Estado do terminal do atalho (No Hangar: a cópia do servidor; na sessão: o mais novo dela): borda e fundo verdes
             // rodando, âmbar perguntando, com a marca HANGAR no canto e a linha de estado embaixo.
             let live = key.as_ref().map(|key| self.tile_for(&key.server, &key.name, &shortcut)).unwrap_or_default();
             let tip = live.tip.clone().unwrap_or(tip);
