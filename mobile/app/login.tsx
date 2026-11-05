@@ -12,7 +12,7 @@ import { parsePairing } from '../src/features/login/pairing';
 import { syncLogin } from '../src/features/login/syncLogin';
 import { useServers } from '../src/stores/servers';
 import { DEMO_BASE_URL, DEMO_TOKEN } from '../src/net/demo';
-import { parseInviteLink } from '@hangar/core';
+import { isNoResponse, parseInviteLink, tailscaleHost } from '@hangar/core';
 import { verifyLoginMachine } from '../src/features/machines/loginMachine';
 import { InvitePanel } from '../src/features/share/InvitePanel';
 import * as m from '../src/paraglide/messages';
@@ -101,8 +101,11 @@ export default function Login() {
       // rollback: remove o servidor que acabamos de adicionar (mesmo que persist falhe, remove da memória)
       useServers.getState().remove(added.id);
       const status = (e as any)?.status;
+      const tailscale = isNoResponse(e) ? tailscaleHost(added.baseUrl) : null;
       if (status === 401) {
         setError(m.login_url_token_invalidos());
+      } else if (tailscale) {
+        setError(m.login_tailscale_sem_acesso({ host: tailscale }));
       } else {
         const msg = e instanceof Error && e.message ? e.message : m.login_falha();
         setError(msg ? `${m.login_falha()}: ${msg}` : m.login_url_token_invalidos());

@@ -94,6 +94,19 @@ function ipPrivado(host: string): boolean {
   return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
 }
 
+// Nome da tailnet ou faixa 100.64.0.0/10: só responde com o Tailscale ligado neste aparelho.
+export function tailscaleHost(baseUrl: string): string | null {
+  let host: string;
+  try {
+    host = new URL(baseUrl).hostname;
+  } catch {
+    return null;
+  }
+  const ip = /^100\.(\d+)\.\d+\.\d+$/.exec(host);
+  const cgnat = ip !== null && Number(ip[1]) >= 64 && Number(ip[1]) <= 127;
+  return cgnat || host.endsWith('.ts.net') ? host : null;
+}
+
 export function parseInviteLink(text: string): { address: string; code: string } | null {
   const t = text.trim();
   const web = HTTP_LINK.exec(t);
