@@ -57,6 +57,14 @@ def test_pairing_url_api_usa_porta_do_backend():
 def test_pairing_url_api_com_public_url_leva_api_na_query():
     s = Settings(lan_bind_ip="10.0.0.5", port=8765, auth_token="t", public_url="https://casa.ts.net/")
     assert pairing_url_api(s) == "https://casa.ts.net/?token=t&api=http://10.0.0.5:8765"
+
+
+def test_url_de_pareamento_codifica_a_senha():
+    s = Settings(lan_bind_ip="10.0.0.5", port=8765, front_port=5173, auth_token="a+b&c%d#", public_url="")
+    assert pairing_url(s) == "http://10.0.0.5:5173/?token=a%2Bb%26c%25d%23"
+    assert pairing_url_api(s) == "http://10.0.0.5:8765/?token=a%2Bb%26c%25d%23"
+    s = Settings(lan_bind_ip="10.0.0.5", port=8765, auth_token="a+b&c%d#", public_url="https://casa.ts.net/")
+    assert pairing_url_api(s) == "https://casa.ts.net/?token=a%2Bb%26c%25d%23&api=http://10.0.0.5:8765"
 def test_porta_do_front_cai_no_backend_quando_nao_ha_servico_de_front():
     # Sem serviço de front instalado (o padrão desde que o backend passou a servir o dist), o QR
     # e o painel de alcance têm de apontar pra porta do BACKEND. Com 5173 cravado como default,
