@@ -122,6 +122,26 @@ _CAMPOS: dict[str, type] = {
     "espera_ms": int,
     "commit": str,      # hash do manifesto da release do hangar-server
     "tag": str,         # release do hangar-server (server-latest ou server-<branch>)
+    # Campos que os produtores do backend já mandavam e sumiam aqui: sem eles a linha chega sem a causa.
+    "operacao_rust": str,  # rota da ponte com o Rust que falhou (lista, grupos, convites, workspace)
+    "motivo": str,
+    "escrita": bool,
+    "esperado": int,    # protocolo do Rust que este backend fala
+    "recebido": str,    # o que o Rust respondeu, em texto: pode vir de qualquer tipo
+    "causa": str,       # classe da exceção, nunca a mensagem
+    "causa_interna": str,
+    "campo": str,
+    "pasta": str,       # nome da pasta da conta, sem o caminho
+    "raise_site": str,  # `arquivo:linha função` de onde a exceção nasceu
+    "falhas": int,
+    "sessoes": str,
+    "entradas": int,
+    "importadas": int,
+    "preservadas": int,
+    "api": int,
+    "requires_api": int,
+    "rota": str,        # caminho do pedido sem rota conhecida, com nomes e ids mascarados
+    "saida": str,       # últimas linhas do stderr do hangar-server que caiu
 }
 
 

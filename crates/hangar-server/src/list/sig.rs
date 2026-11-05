@@ -79,6 +79,8 @@ pub fn list_sig<'a>(rows: impl IntoIterator<Item = &'a SessionRow>) -> String {
             if let (Value::Array(items), Some(owner)) = (&mut sig, i.pair_owner.as_ref()) { items.push(json!({"pair_owner": owner})); }
             if let (Value::Array(items), Some(lead)) = (&mut sig, i.pair_lead.as_ref()) { items.push(json!({"pair_lead": lead})); }
             if let (Value::Array(items), Some(name)) = (&mut sig, i.rename_suggestion.as_ref()) { items.push(json!({"rename_suggestion": name, "weak": i.rename_weak})); }
+            if let (Value::Array(items), true) = (&mut sig, i.hidden_from_list) { items.push(json!({"hidden_from_list": true})); }
+            if let (Value::Array(items), true) = (&mut sig, i.asleep) { items.push(json!({"asleep": true, "wake": i.wake_surface})); }
             sig
         })
         .collect();
@@ -130,6 +132,17 @@ mod tests {
         let len = |v: &Value| v[0].as_array().unwrap().len();
         assert_eq!(len(&with), len(&empty) + 1);
         assert_eq!(with[0].as_array().unwrap().last(), Some(&json!(["pmedico"])));
+    }
+
+    #[test]
+    fn asleep_enters_the_signature_only_when_set() {
+        let mut row: SessionRow = serde_json::from_value(json!({"name": "s"})).unwrap();
+        let awake = list_sig(&[row.clone()]);
+        row.asleep = true;
+        let asleep = list_sig(&[row.clone()]);
+        assert_ne!(awake, asleep);
+        row.wake_surface = Some("terminal".into());
+        assert_ne!(asleep, list_sig(&[row]));
     }
 
     #[test]

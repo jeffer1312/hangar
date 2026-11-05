@@ -31,6 +31,7 @@ use tokio::sync::{mpsc, watch};
 use super::bridge::{ListBridge, ListError, Partial, Produced};
 use super::facts_files;
 use super::sig;
+use crate::devices::Registry;
 use crate::diag::DiagClient;
 use crate::routes::{AppState, cors, pass, who};
 use crate::share::ShareState;
@@ -76,8 +77,14 @@ struct Published {
     /// Etiquetas de máquina e contas; só o dono recebe.
     tags: Option<Bytes>,
     tags_seq: u64,
+    /// Aparelhos que já abriram a lista; só o dono recebe.
+    devices: Option<Bytes>,
+    devices_seq: u64,
     /// (nome, `ts` do pedido, quadro `{name, url}`)
     nav: Arc<Vec<(String, f64, Bytes)>>,
+    /// `{state, requests}` do cofre desta máquina; só o dono recebe.
+    vault: Option<Bytes>,
+    vault_seq: u64,
 }
 
 /// `clients`: listas do dono (o que o Python conta como app aberto); `guests`, as da 8766 e a
@@ -88,10 +95,12 @@ struct Refs { clients: u32, guests: u32, running: bool }
 pub struct ListHub {
     tx: watch::Sender<Arc<Published>>,
     refs: Mutex<Refs>,
+    /// Pedidos do cofre (`vault::requests`); o padrão é um canal sem quem escreva.
+    vault: watch::Receiver<Arc<crate::vault::requests::Feed>>,
 }
 
 impl Default for ListHub {
-    fn default() -> Self { Self { tx: watch::channel(Arc::default()).0, refs: Mutex::default() } }
+    fn default() -> Self { Self { tx: watch::channel(Arc::default()).0, refs: Mutex::default(), vault: watch::channel(Arc::default()).1 } }
 }
 
 /// Uma lista aberta; solta a contagem ao cair.
@@ -108,20 +117,22 @@ impl Drop for Subscription {
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> { m.lock().unwrap_or_else(|e| e.into_inner()) }
 
 impl ListHub {
-    fn subscribe(self: &Arc<Self>, list: &Arc<ListBridge>, diag: &DiagClient, owner: bool) -> Subscription {
+    pub fn with_vault(vault: watch::Receiver<Arc<crate::vault::requests::Feed>>) -> Self { Self { vault, ..Self::default() } }
+
+    fn subscribe(self: &Arc<Self>, list: &Arc<ListBridge>, devices: &Arc<Registry>, diag: &DiagClient, owner: bool) -> Subscription {
         let mut r = lock(&self.refs);
         if owner { r.clients += 1 } else { r.guests += 1 }
         if !r.running {
             r.running = true;
-            tokio::spawn(supervise(self.clone(), list.clone(), diag.clone()));
+            tokio::spawn(supervise(self.clone(), list.clone(), devices.clone(), diag.clone()));
         }
         Subscription { hub: self.clone(), rx: self.tx.subscribe(), owner }
     }
 
     /// Para tarefa de dentro do servidor: conta como convidado, fora de `set_owner_clients`, senão o
     /// push do celular acharia o app aberto.
-    pub(crate) fn subscribe_internal(self: &Arc<Self>, list: &Arc<ListBridge>, diag: &DiagClient) -> InternalSubscription {
-        InternalSubscription(self.subscribe(list, diag, false))
+    pub(crate) fn subscribe_internal(self: &Arc<Self>, list: &Arc<ListBridge>, devices: &Arc<Registry>, diag: &DiagClient) -> InternalSubscription {
+        InternalSubscription(self.subscribe(list, devices, diag, false))
     }
 }
 
@@ -140,13 +151,14 @@ impl InternalSubscription {
 /// O que o produtor guarda entre tiques para só publicar mudança.
 #[derive(Default)]
 struct Last { sig: Option<String>, nav: Vec<(String, crate::nav_requests::Marker)>, shortcuts: Option<String>,
-    keyring: Option<crate::keyring::KeyringState>, tags: Option<Arc<str>>, tags_error: Option<&'static str> }
+    keyring: Option<crate::keyring::KeyringState>, tags: Option<Arc<str>>, tags_error: Option<&'static str>,
+    devices: Option<Arc<str>>, vault: Option<Arc<crate::vault::requests::Feed>> }
 
 /// Pânico fora da produção (assinatura, publicação) não deixa o hub sem produtor: as listas abertas
 /// ficariam só com `ping`, e nenhuma nova religaria.
-async fn supervise(hub: Arc<ListHub>, list: Arc<ListBridge>, diag: DiagClient) {
+async fn supervise(hub: Arc<ListHub>, list: Arc<ListBridge>, devices: Arc<Registry>, diag: DiagClient) {
     loop {
-        match tokio::spawn(produce(hub.clone(), list.clone(), diag.clone())).await {
+        match tokio::spawn(produce(hub.clone(), list.clone(), devices.clone(), diag.clone())).await {
             Err(e) if e.is_panic() => {
                 diag.report("rust.list_failed", "", "list_producer_panic", "produtor da lista do dono caiu; recomeça");
                 tokio::time::sleep(TICK).await;
@@ -157,10 +169,24 @@ async fn supervise(hub: Arc<ListHub>, list: Arc<ListBridge>, diag: DiagClient) {
 }
 
 /// O laço único. Para quando a última lista fecha; quem abrir depois religa.
-async fn produce(hub: Arc<ListHub>, list: Arc<ListBridge>, diag: DiagClient) {
+async fn produce(hub: Arc<ListHub>, list: Arc<ListBridge>, devices: Arc<Registry>, diag: DiagClient) {
     let mut last = Last::default();
     let mut files = FileWake::new();
     let mut keyring = list.keyring.subscribe();
+    // A única leitura do arquivo, fora do runtime e sem segurar o laço: disco travado não para a lista
+    // das sessões. Terminada, o `changed` publica o retrato sem esperar o tique.
+    let (d, g) = (devices.clone(), diag.clone());
+    tokio::spawn(async move {
+        let (r, rg) = (d.clone(), g.clone());
+        match tokio::task::spawn_blocking(move || r.snapshot(&rg)).await {
+            Ok(_) => d.changed.notify_one(),
+            Err(error) => {
+                tracing::warn!(code = "devices_task_failed", %error, "leitura de devices.json caiu");
+                g.report("rust.devices", "", "devices_task_failed", "leitura de devices.json caiu");
+            }
+        }
+    });
+    let mut vault = hub.vault.clone();
     loop {
         let clients = {
             let mut r = lock(&hub.refs);
@@ -191,9 +217,13 @@ async fn produce(hub: Arc<ListHub>, list: Arc<ListBridge>, diag: DiagClient) {
         publish(&hub.tx, &mut last, outcome, &diag);
         publish_nav(&hub.tx, &mut last, list.nav.live(crate::nav_requests::now()));
         publish_keyring(&hub.tx, &mut last, *keyring.borrow_and_update());
+        publish_vault(&hub.tx, &mut last, vault.borrow_and_update().clone());
         // Só a lista do dono recebe: sem ela (convidado, assinatura interna) nada é lido.
         if clients > 0 {
             publish_tags(&hub.tx, &mut last, list.tags.read().await, &diag);
+            // Aparelho novo acorda pelo `changed`; aqui a primeira publicação e o aviso lido com a trava ocupada (o
+            // retrato igual não sai de novo).
+            if let Some(json) = devices.current() { publish_devices(&hub.tx, &mut last, json); }
         }
         let tick = tokio::time::Instant::now() + TICK;
         // Até o tique, escrita numa pasta de estado reclassifica só a sessão dela.
@@ -208,8 +238,16 @@ async fn produce(hub: Arc<ListHub>, list: Arc<ListBridge>, diag: DiagClient) {
                     publish_keyring(&hub.tx, &mut last, *keyring.borrow_and_update());
                     continue;
                 }
+                Ok(()) = vault.changed() => {
+                    publish_vault(&hub.tx, &mut last, vault.borrow_and_update().clone());
+                    continue;
+                }
                 () = list.tags.changed.notified(), if clients > 0 => {
                     publish_tags(&hub.tx, &mut last, list.tags.read().await, &diag);
+                    continue;
+                }
+                () = devices.changed.notified(), if clients > 0 => {
+                    if let Some(json) = devices.current() { publish_devices(&hub.tx, &mut last, json); }
                     continue;
                 }
                 w = files.recv() => w,
@@ -465,6 +503,17 @@ fn publish_keyring(tx: &watch::Sender<Arc<Published>>, last: &mut Last, state: c
     tx.send_replace(Arc::new(next));
 }
 
+/// Fora da rodada, como o chaveiro; sai só quando muda e chega só à lista do dono (`frames`).
+fn publish_vault(tx: &watch::Sender<Arc<Published>>, last: &mut Last, feed: Arc<crate::vault::requests::Feed>) {
+    if last.vault.as_deref() == Some(&*feed) { return; }
+    let Ok(json) = serde_json::to_string(&*feed) else { return };
+    let mut next = (**tx.borrow()).clone();
+    next.vault = Some(sse_frame("vault", &json, None));
+    next.vault_seq += 1;
+    last.vault = Some(feed);
+    tx.send_replace(Arc::new(next));
+}
+
 /// Fora da rodada; sai só quando o texto muda (mesmo `Arc` compara pelo ponteiro). Leitura com falha
 /// mantém o último publicado.
 fn publish_tags(tx: &watch::Sender<Arc<Published>>, last: &mut Last, read: Option<Result<Arc<str>, &'static str>>, diag: &DiagClient) {
@@ -487,6 +536,16 @@ fn publish_tags(tx: &watch::Sender<Arc<Published>>, last: &mut Last, read: Optio
     }
 }
 
+/// Fora da rodada, como `tags`: sai só quando um aparelho entra (o registro troca o `Arc`).
+fn publish_devices(tx: &watch::Sender<Arc<Published>>, last: &mut Last, json: Arc<str>) {
+    if last.devices.as_ref().is_some_and(|prev| Arc::ptr_eq(prev, &json)) { return; }
+    let mut next = (**tx.borrow()).clone();
+    next.devices = Some(sse_frame("devices", &json, None));
+    next.devices_seq += 1;
+    last.devices = Some(json);
+    tx.send_replace(Arc::new(next));
+}
+
 /// Na transição ou na troca de motivo: lista vazia por falha seria igual a nenhuma sessão.
 fn fail(prev: &Published, next: &mut Published, code: &'static str) -> bool {
     if prev.error.as_ref().map(|e| e.0) == Some(code) {
@@ -504,7 +563,7 @@ fn nav_entries(nav: &[(String, crate::nav_requests::Marker)]) -> Vec<(String, f6
 
 /// O que uma conexão já entregou.
 #[derive(Default)]
-struct Sent { sessions: u64, error: u64, shortcuts: u64, keyring: u64, tags: u64, nav: HashMap<String, f64> }
+struct Sent { sessions: u64, error: u64, shortcuts: u64, keyring: u64, tags: u64, devices: u64, vault: u64, nav: HashMap<String, f64> }
 
 /// Quadros que esta conexão ainda não mandou do que está publicado.
 fn frames(p: &Published, sent: &mut Sent) -> Vec<Bytes> {
@@ -529,6 +588,14 @@ fn frames(p: &Published, sent: &mut Sent) -> Vec<Bytes> {
     if let Some(t) = p.tags.as_ref().filter(|_| sent.tags != p.tags_seq) {
         sent.tags = p.tags_seq;
         out.push(t.clone());
+    }
+    if let Some(d) = p.devices.as_ref().filter(|_| sent.devices != p.devices_seq) {
+        sent.devices = p.devices_seq;
+        out.push(d.clone());
+    }
+    if let Some(v) = p.vault.as_ref().filter(|_| sent.vault != p.vault_seq) {
+        sent.vault = p.vault_seq;
+        out.push(v.clone());
     }
     for (name, ts, frame) in p.nav.iter() {
         if sent.nav.get(name) != Some(ts) {
@@ -583,6 +650,8 @@ fn guest_rows<'a>(rows: impl IntoIterator<Item = &'a SessionRow>, guest: &Guest)
         (r.pair_external, r.pair_externals, r.then_target) = (None, None, None);
         // Renomear pela sugestão é do dono.
         (r.rename_suggestion, r.rename_weak) = (None, false);
+        // Ocultar é organização da lista do dono.
+        r.hidden_from_list = false;
         r.guest_kind = guest.kind_of(&r.name).map(|k| match k { Kind::Share => "share", Kind::Pair => "pair" }.to_owned());
         r
     }).collect()
@@ -641,11 +710,23 @@ pub async fn events(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     };
     let (tx, rx) = mpsc::channel::<Bytes>(16);
     if let Some(login) = req.extensions().get::<crate::login_guests::gate::Login>() {
-        tokio::spawn(login_loop(st.hub.subscribe(&st.list, &st.diag, false), st.login_guests.clone(), login.token.clone(), tx));
+        tokio::spawn(login_loop(st.hub.subscribe(&st.list, &st.devices, &st.diag, false), st.login_guests.clone(), login.token.clone(), tx));
     } else { match (grant, st.share.clone()) {
-        (None, _) => { tokio::spawn(client_loop(st.hub.subscribe(&st.list, &st.diag, true), tx)); }
+        (None, _) => {
+            // Só o dono e nunca pela porta do Connect; aparelho ilegível é ignorado sem afetar a lista.
+            if fwd.client_ip != crate::devices::CONNECT_PEER && let Some((kind, id)) = crate::devices::parse(req.uri().query())
+                && !st.devices.is_known(&id) {
+                let (devices, diag) = (st.devices.clone(), st.diag.clone());
+                // Antes de assinar: a primeira lista desta conexão já traz o aparelho.
+                if let Err(error) = tokio::task::spawn_blocking({ let diag = diag.clone(); move || devices.record(kind, &id, &diag) }).await {
+                    tracing::warn!(code = "devices_task_failed", %error, "registro do aparelho caiu");
+                    diag.report("rust.devices", "", "devices_task_failed", "registro do aparelho caiu");
+                }
+            }
+            tokio::spawn(client_loop(st.hub.subscribe(&st.list, &st.devices, &st.diag, true), tx));
+        }
         (Some(grant), Some(share)) => {
-            tokio::spawn(guest_loop(st.hub.subscribe(&st.list, &st.diag, false), share, grant.token.clone(), tx));
+            tokio::spawn(guest_loop(st.hub.subscribe(&st.list, &st.devices, &st.diag, false), share, grant.token.clone(), tx));
         }
         // Convidado sem convites no Rust não existe: o porteiro nem sobe.
         (Some(_), None) => return pass(&st, req, &fwd).await,
@@ -750,6 +831,51 @@ mod tests {
         assert_eq!(frames(&p, &mut sent).len(), 1);
         frames(&Published::default(), &mut sent);
         assert!(sent.nav.is_empty());
+    }
+
+    #[test]
+    fn the_vault_event_goes_out_only_on_change_and_again_to_a_new_list() {
+        let (tx, _rx) = watch::channel(Arc::new(Published::default()));
+        let mut last = Last::default();
+        let feed = Arc::new(crate::vault::requests::Feed { state: Some(crate::vault::State::Open), requests: vec![] });
+        publish_vault(&tx, &mut last, feed.clone());
+        let seq = tx.borrow().vault_seq;
+        publish_vault(&tx, &mut last, Arc::new((*feed).clone()));
+        assert_eq!(tx.borrow().vault_seq, seq, "igual não republica");
+        let p = tx.borrow().clone();
+        let f = frames(&p, &mut Sent::default());
+        assert!(f.iter().any(|f| f.starts_with(b"event: vault\r\n")), "quem abre a lista recebe o último");
+        let mut sent = Sent::default();
+        frames(&p, &mut sent);
+        assert!(frames(&p, &mut sent).is_empty(), "uma vez por conexão");
+    }
+
+    async fn drain(mut rx: mpsc::Receiver<Bytes>) -> Vec<Bytes> {
+        let mut out = Vec::new();
+        while let Ok(Some(frame)) = tokio::time::timeout(Duration::from_millis(300), rx.recv()).await { out.push(frame); }
+        out
+    }
+
+    #[tokio::test]
+    async fn the_vault_event_reaches_the_owner_list_and_never_a_guest() {
+        assert!(crate::side::owner_only(b"event: vault\r\ndata: {}\r\n\r\n"), "no chat também é só do dono");
+        let tmp = tempfile::tempdir().unwrap();
+        let dirs = crate::list::discover_other::Dirs { home: tmp.path().into(), claude: tmp.path().join(".claude"),
+            codex_home: tmp.path().join(".codex"), pi_sessions: tmp.path().join("pi"), omp_config: tmp.path().join("omp"),
+            omp_agent: tmp.path().join("omp/agent"), kimi_home: tmp.path().join("kimi") };
+        let share = crate::share::from_env(Some(tmp.path().join("shares.json")), Some(&dirs), "missing-test-mux".into()).unwrap();
+        let requests = crate::vault::requests::Requests::default();
+        let hub = Arc::new(ListHub::with_vault(requests.feed()));
+        requests.note_state(crate::vault::State::Open);
+        publish_vault(&hub.tx, &mut Last::default(), hub.vault.clone().borrow_and_update().clone());
+        let (owner_tx, owner_rx) = mpsc::channel(16);
+        tokio::spawn(client_loop(Subscription { hub: hub.clone(), rx: hub.tx.subscribe(), owner: true }, owner_tx));
+        let (guest_tx, guest_rx) = mpsc::channel(16);
+        let rx = hub.tx.subscribe();
+        tokio::spawn(guest_loop(Subscription { hub, rx, owner: false }, share, "tok".into(), guest_tx));
+        let is_vault = |f: &Bytes| f.starts_with(b"event: vault\r\n");
+        assert!(drain(owner_rx).await.iter().any(is_vault));
+        assert!(!drain(guest_rx).await.iter().any(is_vault));
     }
 }
 

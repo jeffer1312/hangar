@@ -99,7 +99,7 @@ export function KeyringNotice({ server }: { server: Server }) {
 const styles = StyleSheet.create((theme) => ({
   box: { paddingHorizontal: theme.base.space[3], paddingVertical: theme.base.space[2], gap: theme.base.space[2] },
   head: { flexDirection: 'row', alignItems: 'flex-start', gap: theme.base.space[2] },
-  headText: { flex: 1, gap: 2 },
+  headText: { flex: 1, gap: theme.base.space[0.5] },
   title: { fontSize: theme.base.text.sm, fontWeight: theme.base.weight.semibold },
   hint: { fontSize: theme.base.text.xs },
   field: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderRadius: theme.base.radius.lg },

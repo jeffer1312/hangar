@@ -299,9 +299,33 @@ mod gap_tests {
     use super::*;
 
     fn reference() -> Value {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../backend/tests/fixtures/contract/remote-browser/transport-gaps.json");
-        serde_json::from_slice::<Value>(&std::fs::read(path).unwrap()).unwrap()["cdp"].clone()
+        json!({
+            "out_of_order": {
+                "replies": [
+                    {"id": 1, "result": {"first": true}, "extra": {"nested": [false, null]}},
+                    {"id": 2, "error": {"code": -32001, "message": "second refused", "data": {"full": [1, "ação 😀"]}}, "extra": "kept"},
+                ],
+                "event": {"method": "Gap.done", "params": {"complete": true}},
+                "events_remaining": 0, "pending": 0,
+            },
+            "timeout": {"message": "", "repr": "TimeoutError()", "pending": 0},
+            "closed_waiters": {
+                "errors": [
+                    {"message": "CDP fechou", "repr": "ConnectionError('CDP fechou')"},
+                    {"message": "CDP fechou", "repr": "ConnectionError('CDP fechou')"},
+                ],
+                "pending": 0, "events_remaining": 0,
+            },
+            "silent_send_failures": {"results": [null, null], "pending": 0},
+            "after_exit": {"pump_done": true, "loose_pending": 0, "pending": 0},
+            "fire_and_forget_exit": {
+                "wire": [
+                    {"id": 1, "method": "Input.insertText", "params": {"text": "ação 😀"}},
+                    {"id": 2, "method": "Page.screencastFrameAck", "params": {"sessionId": 702}},
+                ],
+                "pump_done": true, "loose_pending": 0, "pending": 0,
+            },
+        })
     }
 
     async fn connect(address: std::net::SocketAddr) -> Cdp {

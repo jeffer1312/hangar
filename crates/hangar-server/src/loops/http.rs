@@ -291,7 +291,8 @@ async fn refine(b: &dyn Backend, body: &[u8]) -> Result<Reply, Reply> {
     match b.refine(&goal, check_cmd.as_deref()).await {
         Ok(goal) => Ok((StatusCode::OK, json!({"goal": goal}))),
         Err(msg) => {
-            tracing::warn!(code = "loop_refine_failed", "loop/refine falhou: {msg}");
+            // `msg` leva a saída do `claude -p`: fora do relatório.
+            tracing::warn!(code = "loop_refine_failed", output = %msg, "loop/refine falhou");
             Err((StatusCode::BAD_GATEWAY, json!({"detail": msg})))
         }
     }
@@ -372,7 +373,7 @@ impl Backend for Live<'_> {
     fn refine<'a>(&'a self, goal: &'a str, check_cmd: Option<&'a str>) -> BoxFuture<'a, Result<String, String>> {
         Box::pin(async move {
             let bridge = crate::accounts::http::bridge(&self.st).ok();
-            let cli = super::refine::Cli { accounts: self.st.accounts.clone(), bridge };
+            let cli = crate::claude_p::Cli { accounts: self.st.accounts.clone(), bridge };
             super::refine::refine(goal, check_cmd, &cli).await
         })
     }

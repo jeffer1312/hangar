@@ -106,7 +106,7 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
         || crate::speech::http::matches(method, path) { return true; }
     // O serviço MCP responde também aos métodos recusados, sem repasse ao Python.
     if matches!(path, "/mcp" | "/mcp/") { return true; }
-    if matches!(*method, Method::GET | Method::PUT) && matches!(path, "/api/session-defaults" | "/api/tags" | "/api/web-ui" | "/api/auto-report") { return true; }
+    if matches!(*method, Method::GET | Method::PUT) && matches!(path, "/api/auto-report" | "/api/session-defaults" | "/api/tags" | "/api/tour-progress" | "/api/web-ui" | "/api/session-auto-hide") { return true; }
     if (matches!(*method, Method::GET | Method::PUT) && path == "/api/update-channel") { return true; }
     if (*method == Method::GET && path == "/api/atualizacao")
         || (*method == Method::POST && matches!(path, "/api/atualizacao/iniciar" | "/api/atualizacao/reiniciar" | "/api/atualizacao/dev-mode")) { return true; }
@@ -120,18 +120,23 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     if crate::loops::http::matches(method, path) { return true; }
     if crate::push::http::matches(method, path) { return true; }
     if crate::session_media::is_media(method, path) { return true; }
+    if crate::archive_history::matches(method, path) || crate::archive_list::matches(method, path) { return true; }
     if crate::accounts::http::matches(method, path) { return true; }
     // Senha do chaveiro (`keyring::unlock_route`): nunca repassada.
     if *method == Method::POST && path == "/api/keyring/unlock" { return true; }
+    // Cofre de senhas (`vault::http`): nunca repassado.
+    if crate::vault::http::matches(method, path) { return true; }
     // Relatório de diagnóstico (`diag_report::report_route`): só o dono, nunca repassado.
     if *method == Method::POST && path == "/api/diag/report" { return true; }
     // SideStore no aparelho do cabo (`device_install::routes`): nunca repassado.
     if *method == Method::GET && matches!(path, "/api/device-install/devices" | "/api/device-install/progress") { return true; }
     if *method == Method::POST && matches!(path, "/api/device-install/trust" | "/api/device-install/start" | "/api/device-install/code" | "/api/device-install/certs") { return true; }
     if *method == Method::POST && path == "/api/update/accept" { return true; }
+    if *method == Method::POST && path == "/api/ask-history" { return true; }
     if *method == Method::GET {
         if matches!(path, "/api/sessions" | "/api/sessions/events" | "/api/sessions/creation-progress" | "/api/costs" | "/api/cotacao" | "/api/uso" | "/api/migration/status" | "/api/presence" | "/api/update/notes"
-            | "/api/voice" | "/api/voice/settings" | "/api/voice/memory" | "/api/jev/aux/cliproxy" | "/api/jev/delivery" | "/api/client-api") {
+            | "/api/voice" | "/api/voice/settings" | "/api/voice/memory" | "/api/jev/aux/cliproxy" | "/api/jev/delivery" | "/api/client-api"
+            | "/api/search" | "/api/search/context") {
             return true;
         }
         let tail = path.strip_prefix("/api/sessions/").and_then(|r| r.split_once('/')).map(|(_, t)| t);
@@ -183,6 +188,10 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     if matches!(*method, Method::POST | Method::DELETE) && tail == Some("rename-suggestion") {
         return true;
     }
+    // Ocultar da lista (`session_visibility`): só o dono, nunca repassada.
+    if matches!(*method, Method::PUT | Method::DELETE) && tail == Some("hidden") {
+        return true;
+    }
     // A pergunta lateral do Claude, com e sem terminal, e o histórico dela.
     if matches!(*method, Method::POST | Method::GET) && tail == Some("btw") {
         return true;
@@ -231,6 +240,8 @@ fn share_route(method: &Method, path: &str) -> bool {
 /// Um ou mais pedidos reais por área, só para a tabela; a decisão é de `rust_route`.
 const PROBES: &[(&str, &str)] = &[
     ("GET", "/api/sessions/x/history"), ("GET", "/api/sessions/x/events"),
+    ("GET", "/api/archive/p/s/history"), ("GET", "/api/archive/p/s/transcript-image/u/0"),
+    ("GET", "/api/archive"), ("GET", "/api/archive/recent"), ("GET", "/api/archive/p"), ("GET", "/api/archive-por-cwd"),
     ("GET", "/api/sessions/x/navegador"),
     ("GET", "/api/sessions/x/nav-remoto"),
     ("GET", "/api/sessions"), ("GET", "/api/sessions/events"), ("POST", "/api/sessions"),
@@ -265,6 +276,9 @@ const PROBES: &[(&str, &str)] = &[
     ("POST", "/api/sessions/x/plugin/press"), ("POST", "/api/sessions/x/plugin/close"), ("POST", "/api/plugin/ui"), ("POST", "/api/plugin/ask"),
     ("GET", "/"), ("GET", "/assets/index.js"),
     ("GET", "/api/config"),
+    ("GET", "/api/search"),
+    ("GET", "/api/search/context"),
+    ("POST", "/api/ask-history"),
 ];
 
 struct Bucket {

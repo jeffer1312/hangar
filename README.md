@@ -28,6 +28,20 @@
 > Independent tool. Not affiliated with or endorsed by Anthropic, OpenAI, Moonshot AI or the Pi
 > project. Screenshots and clips use synthetic demo data.
 
+## Quick install
+
+```bash
+# Linux or macOS
+curl -fsSL https://raw.githubusercontent.com/jeffer1312/hangar/main/bootstrap.sh | bash
+```
+
+```powershell
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/jeffer1312/hangar/main/bootstrap.ps1 | iex
+```
+
+Prefer an app, or want to read the files first? See [Install](#install).
+
 ## Why
 
 One agent session is easy. Hangar is for when there are ten: some working, some waiting on a
@@ -70,7 +84,10 @@ question, some on another machine, one of them on your phone while you're out fo
 
 **Left your desk? The session comes along.** Answer the question that blocked the agent, approve a
 permission, interrupt, queue the next prompt or dictate it, on your home Wi-Fi or anywhere over
-Tailscale. The phone uses the installable web app (PWA).
+Tailscale. The PWA opens in the phone's browser with nothing to install. Android and iPhone also
+have a native app, outside the stores for now: in the desktop app, open Settings, Install on phone.
+iPhone goes over USB, plugged into the computer running the server, with SideStore, self-signed
+with your Apple ID, and shows alerts only while the app is open.
 
 ### And also
 
@@ -89,7 +106,9 @@ Tailscale. The phone uses the installable web app (PWA).
 - **Git without leaving the chat.** Checkbox staging, per-file discard, history with graph and
   search, cherry-pick and revert. Start a session in a fresh worktree.
 - **Search every conversation**, live and closed, and resume an old one on the right account.
-- **Speak and listen.** Dictation that keeps file names intact; answers read aloud.
+- **Speak and listen.** Dictation that keeps file names intact; answers read aloud. A live voice
+  assistant asks what an agent came up with or sends a task to another session (needs Codex and a
+  Codex account on the server).
 - **Other models in Claude Code.** Run a Claude session on another provider and keep skills, hooks
   and history.
 - **Agents drive it too.** Through the `hangar` MCP server and the `hangar-send` CLI, an agent
@@ -156,7 +175,7 @@ Kimi Code. Setup details, Tailscale, the phone and every feature are in the
 ## How it works
 
 ```text
- Native app (desktop)     PWA (phone)
+ Native app (desktop)   Phone app / PWA
             │                 │
             └──── HTTPS / SSE / WebSocket ────┐
                                                ▼

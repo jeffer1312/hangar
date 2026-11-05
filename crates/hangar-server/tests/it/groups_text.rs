@@ -1,110 +1,85 @@
-//! Texto do protocolo no Rust contra o que o Python devolvia (`fixtures/contract/pair_text`), mais as
-//! diferenças decididas: grupo com par de fora (I-3A) e a linha do contrato por tipo de membro (I-4A).
+//! Texto do protocolo por variante, mais grupo com par de fora e a linha do contrato por tipo de membro.
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use hangar_server::groups::text::{ContractLine, Kind, OutsidePeer, TextArgs, render};
-use serde_json::Value;
 
-fn fixtures() -> BTreeMap<String, Value> {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../backend/tests/fixtures/contract/pair_text");
-    std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|x| x == "json"))
-        .map(|p| (p.file_stem().unwrap().to_string_lossy().into_owned(), serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap()))
-        .collect()
-}
+#[path = "groups_text_cases.rs"]
+mod cases;
+use cases::*;
 
-fn expected(name: &str) -> String {
-    fixtures()[name]["response"]["text"].as_str().unwrap().to_owned()
-}
-
-fn kind_of(body: &Value) -> Kind {
-    match body["kind"].as_str().unwrap() {
-        "group" => Kind::Group,
-        "orq" => Kind::Orq,
-        "external" => Kind::External,
-        other => panic!("kind {other}"),
-    }
-}
-
-/// O corpo do `/internal/pair/text` como `TextArgs`. `contract_remote` não carregava dono e o Python o
-/// ignorava (TXT-14): o caminho segue como contrato local.
-fn args_of(body: &Value) -> TextArgs {
-    let s = |k: &str| body[k].as_str().unwrap_or_default().to_owned();
+/// `contract_remote` antigo não trazia dono: o caminho segue como contrato local (caso `group_contract_remote_ignored`).
+fn args_of(case: &Case) -> TextArgs {
+    let text = |s: &str| s.to_owned();
     TextArgs {
-        me: s("me"),
-        others: body["others"].as_array().map(|a| a.iter().map(|v| v.as_str().unwrap().to_owned()).collect()).unwrap_or_default(),
-        task: s("task"),
-        harness: body["harness"].as_object().map(|m| m.iter().map(|(k, v)| (k.clone(), v.as_str().unwrap().to_owned())).collect()).unwrap_or_default(),
-        contract: ContractLine { path: body["contract"].as_str().map(PathBuf::from), remote_owner: None },
-        peer: s("peer"),
-        owner: s("owner"),
+        me: text(case.me),
+        others: case.others.iter().map(|x| text(x)).collect(),
+        task: text(case.task),
+        harness: case.harness.iter().map(|(k, v)| (text(k), text(v))).collect(),
+        contract: ContractLine { path: case.contract.map(PathBuf::from), remote_owner: None },
+        peer: text(case.peer),
+        owner: text(case.owner),
         ..Default::default()
     }
 }
 
+fn case(name: &str) -> &'static Case {
+    CASES.iter().find(|c| c.name == name).unwrap()
+}
+
 #[test]
-fn render_matches_every_python_text() {
-    let mut checked = 0;
-    let mut skipped = Vec::new();
-    for (name, fx) in fixtures() {
-        if fx["status"] != 200 { skipped.push(name); continue; }
-        let body = &fx["request"]["body"];
-        assert_eq!(render(kind_of(body), &args_of(body)), fx["response"]["text"].as_str().unwrap(), "{name}");
-        checked += 1;
+fn render_matches_every_text() {
+    assert_eq!(CASES.len(), 18);
+    for c in CASES {
+        assert_eq!(render(c.kind, &args_of(c)), c.text, "{}", c.name);
     }
-    assert_eq!(checked, 18);
-    // Recusas da rota interna, que deixa de existir: corpo, segredo e surrogate não chegam a `render`.
-    // `group` sem outro membro fica com `protocol_text`.
-    assert_eq!(skipped, ["group_task_surrogate", "refused_bad_kind", "refused_extra_field", "refused_group_without_others", "refused_without_secret"]);
 }
 
-/// `str.strip()` do Python também tira os separadores \x1c..\x1f, que `char::is_whitespace` não conhece.
+/// Os separadores \x1c..\x1f também saem da tarefa, embora `char::is_whitespace` não os conheça.
 #[test]
-fn task_is_trimmed_like_python() {
-    let fx = fixtures();
-    let body = &fx["group_with_task"]["request"]["body"];
-    let mut args = args_of(body);
+fn task_trim_includes_control_separators() {
+    let mut args = args_of(case("group_with_task"));
     args.task = "\u{1f}\u{3000} T-1 filtro\u{a0}\u{1c}".into();
-    assert_eq!(render(Kind::Group, &args), expected("group_with_task"));
+    assert_eq!(render(case("group_with_task").kind, &args), TEXT_GROUP_WITH_TASK);
 }
 
-/// I-3A: membro local de grupo que tem par de fora recebe o texto de grupo seguido do bloco externo.
+/// Membro local de grupo que tem par de fora recebe o texto de grupo seguido do bloco externo.
 #[test]
 fn mixed_group_gets_group_and_external_text() {
-    let fx = fixtures();
-    let mut args = args_of(&fx["group_with_contract"]["request"]["body"]);
+    let c = case("group_with_contract");
+    let mut args = args_of(c);
     args.outside = vec![OutsidePeer { address: "ana::rev".into(), owner: "Ana".into() }];
-    assert_eq!(render(Kind::Group, &args), format!("{}\n{}", expected("group_with_contract"), expected("external")));
+    assert_eq!(render(c.kind, &args), format!("{}\n{}", c.text, TEXT_EXTERNAL));
 }
 
-/// I-4A: na dona, o caminho; em outra máquina do dono, a dona pela tool `contract`/`hangar-send
-/// --contrato`; membro de fora, sem linha.
+/// Na dona, o caminho; em outra máquina do dono, a dona pela tool `contract`/`hangar-send --contrato`;
+/// membro de fora, sem linha.
 #[test]
 fn contract_line_by_member_kind() {
-    let fx = fixtures();
-    let mut args = args_of(&fx["group_with_contract"]["request"]["body"]);
-    assert_eq!(render(Kind::Group, &args), expected("group_with_contract"), "dona");
+    let c = case("group_with_contract");
+    let without = case("group_without_contract").text;
+    let mut args = args_of(c);
+    assert_eq!(render(c.kind, &args), c.text, "dona");
 
     args.contract = ContractLine { path: None, remote_owner: Some("casa".into()) };
     let remote = "- Decisões que o grupo consulta ficam com a máquina `casa`: leia e grave pela tool `contract` do MCP ou `hangar-send --contrato`.\n";
     let invite = "- Convite de par";
-    assert_eq!(render(Kind::Group, &args), expected("group_without_contract").replacen(invite, &format!("{remote}{invite}"), 1), "máquina própria");
+    assert_eq!(render(c.kind, &args), without.replacen(invite, &format!("{remote}{invite}"), 1), "máquina própria");
 
     args.contract = ContractLine::default();
-    assert_eq!(render(Kind::Group, &args), expected("group_without_contract"), "de fora");
+    assert_eq!(render(c.kind, &args), without, "de fora");
 }
 
-/// Grupo entre máquinas: uma linha a mais para quem não lê o CLAUDE.md (Codex, Pi, omp, Kimi). É
-/// diferença decidida: as fixtures do Python estão congeladas e não a têm.
+/// Grupo entre máquinas: uma linha a mais para quem não lê o CLAUDE.md (Codex, Pi, omp, Kimi).
 #[test]
 fn across_machines_group_explains_relayed_outside_notice() {
-    let fx = fixtures();
-    let mut args = args_of(&fx["group_with_contract"]["request"]["body"]);
+    let c = case("group_with_contract");
+    let mut args = args_of(c);
     args.across = true;
     let line = "- Aviso [de fora: <apelido>::<sessão> via <máquina>] veio de fora por outra máquina do grupo: se precisar responder, \
         só com um aviso de grupo, uma vez.\n";
     let invite = "- Decisões que o grupo consulta";
-    assert_eq!(render(Kind::Group, &args), expected("group_with_contract").replacen(invite, &format!("{line}{invite}"), 1));
+    assert_eq!(render(c.kind, &args), c.text.replacen(invite, &format!("{line}{invite}"), 1));
 }
 
 proptest::proptest! {

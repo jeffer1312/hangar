@@ -362,47 +362,6 @@ def historical_image(record: TransferRecord, event_id: str, index: int):
     return None
 
 
-def archived_image(session_id: str, event_id: str, index: int, codex_account: str | None = None):
-    from app.conversation_transfer import load_transfer
-    from app.codex_contas import account_for_rollout, AccountError
-    parts = event_id.split(":", 3)
-    if len(parts) != 4 or parts[0] != "transfer" or parts[2] != "claude":
-        return None
-    record = load_transfer(parts[1])
-    if record is None:
-        return None
-    boundary = record.boundary
-    if record.phase != TransferPhase.COMPLETE or not boundary or not record.source:
-        raise HistoryError("a transferência da imagem não possui história concluída")
-    if boundary.thread_id != session_id:
-        return None
-    if not getattr(boundary, "prefix_digest", None):
-        raise HistoryError("a fronteira histórica da imagem não foi conferida")
-    owner = account_for_rollout(Path(boundary.rollout_path))
-    home = (record.destination_meta or {}).get("codex_home")
-    if owner is None or not home or os.path.realpath(owner.home) != os.path.realpath(home):
-        raise HistoryError("a conta histórica da imagem não está registrada")
-    if codex_account is not None and codex_account != owner.id:
-        raise AccountError(409, "codex_account_archive_mismatch",
-                           {"account_id": codex_account, "origin_account": owner.id})
-    rollout = Path(boundary.rollout_path)
-    if not rollout.is_file():
-        # O movimento nativo conserva o nome; só a pasta de arquivo desta conta participa.
-        candidates = []
-        for candidate in (owner.home / "archived_sessions").rglob(rollout.name):
-            candidate_owner = account_for_rollout(candidate)
-            if (candidate.is_file() and candidate_owner
-                    and os.path.realpath(candidate_owner.home) == os.path.realpath(owner.home)):
-                candidates.append(candidate)
-        candidates = list({os.path.realpath(candidate): candidate for candidate in candidates}.values())
-        if len(candidates) != 1:
-            raise HistoryError("o rollout arquivado não possui uma origem única nesta conta")
-        rollout = candidates[0]
-    verify_boundary(record, rollout)
-    # O ID aponta para um registro e uma thread; não procura imagem noutras contas.
-    return historical_image(record, event_id, index)
-
-
 def transcript_image(info, event_id: str, index: int):
     from app.transcript import get_transcript_image
     provider = getattr(info, "provider", "claude")

@@ -75,6 +75,22 @@ it('evento keyring marca só o servidor dele, sobrevive ao quadro de sessões e 
   expect(vpn()?.keyringLocked).toBe(false);
 });
 
+it('o cofre de uma máquina some enquanto ela está em erro', () => {
+  vi.useFakeTimers();
+  sessionsStore.retain();
+  streams.get('vpn')!.get('vault')!({ data: JSON.stringify({ state: 'open', requests: [] }) });
+  expect(sessionsStore.vaultFor('vpn')?.state).toBe('open');
+  expect(sessionsStore.vaultFor('lan')).toBeNull();
+  objetos.get('vpn')!.onerror!();
+  expect(sessionsStore.vaultFor('vpn')).toBeNull();
+  // A conexão nova traz a lista antes do cofre: o pedido velho não volta nesse intervalo.
+  sessionsStore.buscarAgora('vpn');
+  streams.get('vpn')!.get('sessions')!({ data: JSON.stringify([]) });
+  expect(sessionsStore.vaultFor('vpn')).toBeNull();
+  streams.get('vpn')!.get('vault')!({ data: JSON.stringify({ state: 'open', requests: [] }) });
+  expect(sessionsStore.vaultFor('vpn')?.state).toBe('open');
+});
+
 it('falha do produtor sem linha nenhuma em todos os servidores continua marcando cada um', () => {
   sessionsStore.retain();
   for (const id of ['lan', 'vpn']) streams.get(id)!.get('list_error')!({ data: '' });

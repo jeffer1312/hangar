@@ -13,6 +13,7 @@ use std::time::Duration;
 
 const SID:&str = "11111111-1111-4111-8111-111111111111";
 const FOOTER:&str = "\n❯ \n  ⏵⏵ accept edits on (shift+tab to cycle)\n";
+const UNREADABLE_FOOTER:&str = "\n❯ \n";
 
 struct Fixture { _dir:tempfile::TempDir, home:PathBuf, queue:PathBuf, state:PathBuf, tmux:PathBuf, cwd:PathBuf }
 
@@ -32,8 +33,14 @@ S='{s}'
 read_state() {{ [ -f "$S" ] && read -r NAME PID BORN < "$S"; }}
 case "$1" in
   new-session)
+    # `$S.hold`: a subida espera aqui até o teste soltar, e marca `$S.held`.
+    while [ -f "$S.hold" ]; do : > "$S.held"; sleep 0.05; done
     printf '%s\n' "$@" > "$S.args"
+    echo "$4" >> "$S.spawns"
     [ -f "$S.nospawn" ] && exit 1
+    [ -f "$S.nospawn-once" ] && rm -f "$S.nospawn-once" && exit 1
+    # `$S.next-screen`: a tela do pane que nasce agora; a do pane antigo fica até aqui.
+    [ -f "$S.next-screen" ] && mv "$S.next-screen" "$S.screen"
     : > "$S.env"; prev=""; for a in "$@"; do [ "$prev" = "-e" ] && echo "$a" >> "$S.env"; prev="$a"; done
     # O processo leva o ambiente do `-e` e o que o `hangar-engine` poria; `$S.forge` sobrepõe (outra identidade).
     E=(); while IFS= read -r l; do E+=("$l"); done < "$S.env"
@@ -44,7 +51,9 @@ case "$1" in
     [ -f "$S.forge" ] && while IFS= read -r l; do E+=("$l"); done < "$S.forge"
     # `$S.stubborn`: este `claude` ignora o SIGTERM (só esta subida).
     pre=''; [ -f "$S.stubborn" ] && pre='trap "" TERM; ' && rm -f "$S.stubborn"
-    env -u CLAUDE_CONFIG_DIR "${{E[@]}}" bash -c "${{pre}}exec -a claude sleep 120" </dev/null >/dev/null 2>&1 &
+    # `$S.shell`: o `claude` roda este script (um comando no shell dele).
+    run='exec -a claude sleep 120'; [ -f "$S.shell" ] && run="exec -a claude /bin/bash $S.shell"
+    env -u CLAUDE_CONFIG_DIR "${{E[@]}}" bash -c "${{pre}}${{run}}" </dev/null >/dev/null 2>&1 &
     pid=$!; for i in $(seq 100); do tr '\0' ' ' < /proc/$pid/cmdline | grep -q '^claude ' && break; sleep 0.01; done
     echo "$4 $pid 1700000100" > "$S"
     sid=$(printf '%s\n' "$@" | grep -oE -- '--(resume|session-id) [0-9a-f-]{{36}}' | head -1 | cut -d' ' -f2); [ -n "$sid" ] || sid='{SID}'
@@ -52,7 +61,14 @@ case "$1" in
     dir='{sessions}'; for l in "${{E[@]}}"; do case "$l" in CLAUDE_CONFIG_DIR=*) dir="${{l#CLAUDE_CONFIG_DIR=}}/sessions";; esac; done
     mkdir -p "$dir"; echo "{{\"pid\":$pid,\"sessionId\":\"$sid\"}}" > "$dir/$pid.json";;
   has-session) read_state && [ "$3" = "=$NAME" ];;
-  kill-session) read_state && kill "$PID" 2>/dev/null; rm -f "$S";;
+  # O shell escondido `term-<nome>` existe enquanto houver `$S.term`.
+  kill-session) case "$3" in *term-*) rm -f "$S.term";; *) read_state && kill "$PID" 2>/dev/null; rm -f "$S";; esac;;
+  show-options) [ -f "$S.term" ] && [ "$4" = "=term-s1:" ] && echo 1;;
+  # O cliente de controle do Hangar sempre ligado; `$S.attached`: também um terminal de verdade.
+  list-clients) read_state || exit 1; echo 'attached,control-mode,UTF-8'; if [ -f "$S.attached" ]; then echo 'attached,focused,UTF-8'; fi;;
+  # `$S.keys`: o pane aceita o que se digita nele (a vida nova entrega a fila).
+  load-buffer) [ -f "$S.keys" ] && cat >/dev/null && read_state;;
+  send-keys|paste-buffer) [ -f "$S.keys" ] && read_state;;
   list-panes) read_state && printf '%s\t1\t%s\t%s\t%%7\t\tclaude\t%s\t0\t0\n' "$NAME" "$PID" '{c}' "$BORN";;
   show-environment) grep "^$4=" "$S.env" || exit 1;;
   set-environment) echo "$4=$5" >> "$S.env";;
@@ -60,6 +76,7 @@ case "$1" in
     read_state || exit 1
     case "$5" in
       '#{{pane_pid}}') echo "$PID";;
+      $'#{{session_name}}\t#{{pane_id}}\t#{{session_created}}') printf '%s\t%%7\t%s\n' "$NAME" "$BORN";;
       '#{{session_name}}'*) printf '%s\t%%7\t%s\t%s\t0\t0\t0\n' "$NAME" "$BORN" "$PID";;
       '#{{pane_pid}}'*) printf '%s\t%s\t%%7\t%s\n' "$PID" "$NAME" "$BORN";;
       *) exit 1;;
@@ -95,6 +112,8 @@ impl Fixture {
         std::fs::write(dir.join(format!("{SID}.jsonl")),"{\"type\":\"user\"}\n").unwrap();
     }
     fn args(&self) -> Vec<String> { std::fs::read_to_string(self.state.with_extension("args")).unwrap_or_default().lines().map(str::to_owned).collect() }
+    /// Quantos `new-session` o multiplexador falso recebeu.
+    fn spawns(&self) -> usize { std::fs::read_to_string(self.state.with_extension("spawns")).unwrap_or_default().lines().count() }
     fn agent(&self) -> Option<u32> { std::fs::read_to_string(&self.state).ok()?.split_whitespace().nth(1)?.parse().ok() }
     fn finish(&self) { if let Some(pid) = self.agent() { let _ = std::process::Command::new("kill").arg(pid.to_string()).status(); } }
 }
@@ -613,6 +632,9 @@ async fn an_old_claude_that_ignores_the_stop_is_killed_and_the_reopen_goes_on() 
     let _ = std::process::Command::new("kill").args(["-9",&old_agent.to_string()]).status();
     assert_eq!(outcome,Ok(()));
     assert!(std::fs::read_to_string(format!("/proc/{old_agent}/cmdline")).unwrap_or_default().is_empty(),"o antigo saiu à força");
+    let args = fx.args();
+    let command = args.last().unwrap();
+    assert!(command.contains(&format!("claude --resume {SID}")) && command.contains("--permission-mode acceptEdits"),"a mesma conversa no mesmo modo: {command}");
     let (found,_) = registry.terminal_view("s1").await.unwrap();
     registry.close(&found,2).await.unwrap();
     fx.finish();
@@ -929,4 +951,681 @@ async fn reload_without_stalled_delivery_still_refuses_a_waiting_queue() {
     assert_eq!((status,body["detail"]["code"].as_str()),(409,Some("erro_fila_pendente")),"{body}");
     assert!(hangar_server::runtime::process::liveness(deaf.first,&deaf.key)==hangar_server::runtime::process::Liveness::Ours,"nada foi encerrado");
     deaf.registry.close_with_kill(&deaf.key,1).await.unwrap();
+}
+
+/// O terminal da sessão `s1` na conta padrão, com o spec gravado pela chave dele.
+fn terminal_with_spec(fx:&Fixture,key:&str) {
+    std::process::Command::new(&fx.tmux).args(["new-session","-d","-s","s1","-c"]).arg(&fx.cwd).arg("-e").arg(format!("CP_SESSION_KEY={key}")).status().unwrap();
+    let spec = json!({"version":1,"key":key,"name":"s1","cwd":fx.cwd,"provider":"claude","surface":"terminal","account":{"kind":"default"},
+        "account_source":"default","model":null,"effort":null,"service_tier":null,"permission_mode":"acceptEdits","subagent_model":null,
+        "customizations":null,"jev":false,"read_only":false,"worktree":null,"creator":null,"created_at":1.0});
+    std::fs::create_dir_all(fx.home.join(".hangar/session-specs")).unwrap();
+    std::fs::write(fx.home.join(format!(".hangar/session-specs/{key}.json")),spec.to_string()).unwrap();
+}
+
+fn logged_in_default(fx:&Fixture) {
+    std::fs::write(fx.home.join(".claude/.credentials.json"),"{\"claudeAiOauth\":{\"accessToken\":\"a\"}}").unwrap();
+}
+
+/// O sem terminal de verdade: o cano desta compilação e um `claude` falso que responde aos pedidos de
+/// controle e anota os argumentos em `claude.args`.
+async fn headless_registry(fx:&Fixture) -> Arc<RuntimeRegistry> {
+    crate::use_cano_bin();
+    let bin = fx.home.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let fake = fx.home.join("fake-claude.sh");
+    crate::write_executable(&fake,format!(r#"#!/bin/bash
+printf '%s\n' "$*" >> '{args}'
+while IFS= read -r -t 120 line; do
+  case "$line" in
+    *'"type":"control_request"'*)
+      rid=$(sed -E 's/^.*"request_id":"([^"]*)".*$/\1/' <<<"$line")
+      printf '{{"type":"control_response","response":{{"subtype":"success","request_id":"%s","response":{{"commands":[]}}}}}}\n' "$rid";;
+  esac
+done
+"#,args=fx.home.join("claude.args").display()));
+    crate::write_executable(&bin.join("claude"),format!("#!/bin/bash\nexec -a claude /bin/bash '{}' \"$@\"\n",fake.display()));
+    let path = format!("{}:{}",bin.display(),std::env::var("PATH").unwrap());
+    let env = AccountEnvironment::from_map([("HOME".to_owned(),fx.home.to_string_lossy().into_owned()),("PATH".to_owned(),path)].into());
+    let registry = crate::runtime_open::registry_with(|registry|registry.with_codex_environment(env)
+        .with_terms(Arc::new(hangar_server::term::Terms::default()))
+        .with_processes(Arc::new(hangar_server::list::procs::SystemProcs::default()))).await;
+    registry.bind_watcher(fx_watcher(fx));
+    registry
+}
+
+fn fx_watcher(fx:&Fixture) -> Arc<Watcher> {
+    Arc::new(Watcher::new(WatchConfig { home:fx.home.clone(),queue_dir:fx.queue.clone(),
+        mux:Mux::with_program(&fx.tmux,Duration::from_secs(5)),mux_program:fx.tmux.clone().into_os_string() }).with_scope_probe(Vec::new))
+}
+
+/// Com o painel de terminal: sem ele a guarda da reabertura de um terminal não abre.
+async fn terminal_registry(fx:&Fixture) -> Arc<RuntimeRegistry> {
+    let registry = crate::runtime_open::registry_with(|registry|registry
+        .with_codex_environment(AccountEnvironment::from_map([("HOME".to_owned(),fx.home.to_string_lossy().into_owned()),("PATH".to_owned(),std::env::var("PATH").unwrap())].into()))
+        .with_terms(Arc::new(hangar_server::term::Terms::default()))).await;
+    registry.bind_watcher(fx_watcher(fx));
+    registry
+}
+
+fn generation(fx:&Fixture,key:&str) -> u64 {
+    let state:Value = serde_json::from_slice(&std::fs::read(fx.queue.join(format!("runtime/{key}.json"))).unwrap()).unwrap();
+    state["generation"].as_u64().unwrap()
+}
+
+fn gone(pid:u32) -> bool { std::fs::read_to_string(format!("/proc/{pid}/cmdline")).unwrap_or_default().is_empty() }
+
+fn to_bypass() -> SessionChange {
+    SessionChange { reason:ChangeReason::Bypass,surface:None,account:None,permission_mode:Some(hangar_server::session_open::PermissionMode::BypassPermissions),
+        model:None,effort:None,service_tier:None }
+}
+
+#[tokio::test]
+async fn a_terminal_session_goes_headless_on_the_same_conversation_and_mode() {
+    let fx = fixture();
+    fx.transcript();
+    let key = "34".repeat(16);
+    terminal_with_spec(&fx,&key);
+    let old_agent = fx.agent().unwrap();
+    let registry = headless_registry(&fx).await;
+    let reopened = registry.reopen_claude_session("s1",mode_switch(false),None).await.expect("é sessão Claude daqui");
+    let reopened = reopened.map_err(|f|(f.error.code,f.error.message,f.stopped)).unwrap();
+    assert!(reopened.changed);
+    assert!(gone(old_agent),"o pane fechou");
+    let meta:Value = serde_json::from_slice(&std::fs::read(fx.sidecar_path("s1")).unwrap()).unwrap();
+    assert_eq!((meta["headless"].as_bool(),meta["session_id"].as_str(),meta["permission_mode"].as_str(),meta["key"].as_str()),
+        (Some(true),Some(SID),Some("acceptEdits"),Some(key.as_str())));
+    registry.close_with_kill(&key,generation(&fx,&key)).await.unwrap();
+}
+
+/// Rodapé sem o modo na hora de ir ao sem terminal: o modo sai do spec.
+#[tokio::test]
+async fn an_unreadable_footer_does_not_change_the_mode_of_the_switch_to_headless() {
+    let fx = fixture();
+    fx.transcript();
+    let key = "35".repeat(16);
+    terminal_with_spec(&fx,&key);
+    std::fs::write(fx.state.with_extension("screen"),UNREADABLE_FOOTER).unwrap();
+    let old_agent = fx.agent().unwrap();
+    let registry = headless_registry(&fx).await;
+    let reopened = registry.reopen_claude_session("s1",mode_switch(false),None).await.expect("é sessão Claude daqui");
+    assert!(reopened.map_err(|f|(f.error.code,f.error.message,f.stopped)).unwrap().changed);
+    assert!(gone(old_agent),"o pane fechou");
+    let meta:Value = serde_json::from_slice(&std::fs::read(fx.sidecar_path("s1")).unwrap()).unwrap();
+    assert_eq!((meta["headless"].as_bool(),meta["permission_mode"].as_str()),(Some(true),Some("acceptEdits")));
+    let args = std::fs::read_to_string(fx.home.join("claude.args")).unwrap();
+    assert!(args.contains(&format!("--resume {SID}")) && args.contains("--permission-mode acceptEdits"),"{args}");
+    registry.close_with_kill(&key,generation(&fx,&key)).await.unwrap();
+}
+
+/// Rodapé sem o modo na hora de recarregar: o pane novo abre no modo do spec. Quem confirma a volta é o
+/// rodapé do pane novo.
+#[tokio::test]
+async fn an_unreadable_footer_does_not_change_the_mode_of_a_reload() {
+    let fx = fixture();
+    fx.transcript();
+    let key = "57".repeat(16);
+    terminal_with_spec(&fx,&key);
+    std::fs::write(fx.state.with_extension("screen"),UNREADABLE_FOOTER).unwrap();
+    std::fs::write(fx.state.with_extension("next-screen"),FOOTER).unwrap();
+    let old_agent = fx.agent().unwrap();
+    let registry = terminal_registry(&fx).await;
+    let change = SessionChange { reason:ChangeReason::Reload,surface:None,account:None,permission_mode:None,model:None,effort:None,service_tier:None };
+    let reopened = registry.reopen_claude_session("s1",change,None).await.expect("é sessão Claude daqui");
+    reopened.map_err(|f|(f.error.code,f.error.message,f.stopped)).unwrap();
+    assert!(gone(old_agent),"o Claude antigo saiu");
+    let args = fx.args();
+    let command = args.last().unwrap();
+    assert!(command.contains(&format!("claude --resume {SID}")) && command.contains("--permission-mode acceptEdits"),"{command}");
+    let (found,_) = registry.terminal_view("s1").await.unwrap();
+    registry.close(&found,2).await.unwrap();
+    fx.finish();
+}
+
+#[tokio::test]
+async fn bypass_reopens_a_terminal_on_the_same_conversation() {
+    let fx = fixture();
+    fx.transcript();
+    let key = "78".repeat(16);
+    terminal_with_spec(&fx,&key);
+    let old_agent = fx.agent().unwrap();
+    // A reabertura só termina ao ver o modo pedido no rodapé do pane novo.
+    std::fs::write(fx.state.with_extension("screen"),"\n❯ \n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n").unwrap();
+    let registry = terminal_registry(&fx).await;
+    let reopened = registry.reopen_claude_session("s1",to_bypass(),None).await.expect("é sessão Claude daqui");
+    reopened.map_err(|f|(f.error.code,f.error.message,f.stopped)).unwrap();
+    assert!(gone(old_agent),"o Claude antigo saiu");
+    let args = fx.args();
+    let command = args.last().unwrap();
+    assert!(command.contains(&format!("claude --resume {SID}")) && command.contains("--permission-mode bypassPermissions"),"{command}");
+    let (found,_) = registry.terminal_view("s1").await.unwrap();
+    registry.close(&found,2).await.unwrap();
+    fx.finish();
+}
+
+#[tokio::test]
+async fn bypass_reopens_a_headless_session_on_the_same_conversation() {
+    let fx = fixture();
+    fx.transcript();
+    let key = "9a".repeat(16);
+    fx.put_sidecar(json!({"name":"s1","provider":"claude","headless":true,"key":key,"cwd":fx.cwd,"session_id":SID,"permission_mode":"manual","cano":null}));
+    let registry = headless_registry(&fx).await;
+    let reopened = registry.reopen_claude_session("s1",to_bypass(),None).await.expect("é sessão Claude daqui");
+    reopened.map_err(|f|(f.error.code,f.error.message,f.stopped)).unwrap();
+    let meta:Value = serde_json::from_slice(&std::fs::read(fx.sidecar_path("s1")).unwrap()).unwrap();
+    assert_eq!((meta["permission_mode"].as_str(),meta["session_id"].as_str()),(Some("bypassPermissions"),Some(SID)));
+    let args = std::fs::read_to_string(fx.home.join("claude.args")).unwrap();
+    assert!(args.contains(&format!("--resume {SID}")) && args.contains("--permission-mode bypassPermissions"),"{args}");
+    registry.close_with_kill(&key,generation(&fx,&key)).await.unwrap();
+}
+
+/// Pergunta aberta na tela: a troca de modo recusa com a frase do app e nada muda.
+#[tokio::test]
+async fn an_open_question_holds_the_mode_switch_of_a_terminal() {
+    let fx = fixture();
+    fx.transcript();
+    let key = "bc".repeat(16);
+    terminal_with_spec(&fx,&key);
+    let old_agent = fx.agent().unwrap();
+    let asks = fx.home.join(".claude/.hangar-askq");
+    std::fs::create_dir_all(&asks).unwrap();
+    std::fs::write(asks.join(format!("{SID}.json")),json!({"tool_use_id":"t1","tool_input":{"questions":[
+        {"question":"Cor?","header":"Cor","multiSelect":false,"options":[{"label":"Azul","description":""},{"label":"Verde","description":""}]}]}}).to_string()).unwrap();
+    let registry = terminal_registry(&fx).await;
+    let (_python,server) = crate::runtime_codex_watch::serve_owner(registry).await;
+    let (status,body) = post(server,"modo-execucao",json!({"terminal":false})).await;
+    assert_eq!((status,body["detail"]["code"].as_str(),body["detail"]["msg"].as_str()),
+        (409,Some("erro_sessao_esperando_resposta"),Some("há uma permissão ou pergunta esperando resposta")),"{body}");
+    assert!(!gone(old_agent),"o Claude do terminal segue vivo");
+    assert!(!fx.sidecar_path("s1").exists());
+    fx.finish();
+}
+
+fn seed_quota(fx:&Fixture,account:&std::path::Path,pct:f64) {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
+    std::fs::write(account.join(".hangar-conta"),"").unwrap();
+    let cache = json!({format!("claude:{}",account.display()):{"gravado_em":now,
+        "cota":{"estado":"lida","janelas":[{"rotulo":"5h","pct":pct}],"ts":now,"motivo":null,"reset_credits":null}}});
+    std::fs::create_dir_all(fx.home.join(".hangar")).unwrap();
+    std::fs::write(fx.home.join(".hangar/cotas-cache.json"),cache.to_string()).unwrap();
+}
+
+#[tokio::test]
+async fn a_full_destination_account_is_refused_before_anything_stops() {
+    let fx = fixture();
+    let b = account_b(&fx);
+    logged_in_default(&fx);
+    fx.transcript();
+    terminal_with_spec(&fx,&"e1".repeat(16));
+    let (agent,before) = (fx.agent().unwrap(),fx.args());
+    seed_quota(&fx,&b,99.5);
+    let server = serve_with_accounts(&fx,terminal_registry(&fx).await).await;
+    let (status,body) = post(server,"conta",json!({"config_dir":b})).await;
+    assert_eq!((status,&body["detail"]),(409,&json!({"code":"erro_conta_cheia","params":{"conta":"b","pct":99.5},"msg":"a conta b está em 100% da cota"})),"{body}");
+    assert!(!gone(agent),"o Claude do terminal segue vivo");
+    assert_eq!(fx.args(),before,"nenhum terminal novo");
+    fx.finish();
+}
+
+#[tokio::test]
+async fn an_unknown_account_folder_is_refused() {
+    let fx = fixture();
+    logged_in_default(&fx);
+    fx.transcript();
+    terminal_with_spec(&fx,&"e2".repeat(16));
+    let (agent,before) = (fx.agent().unwrap(),fx.args());
+    let server = serve_with_accounts(&fx,terminal_registry(&fx).await).await;
+    let (status,body) = post(server,"conta",json!({"config_dir":fx.home.join(".claude-x")})).await;
+    assert_eq!((status,body["detail"]["code"].as_str(),body["detail"]["msg"].as_str()),(400,Some("erro_config_dir_invalido"),Some("config_dir invalido")),"{body}");
+    assert!(!gone(agent),"o Claude do terminal segue vivo");
+    assert_eq!(fx.args(),before,"nenhum terminal novo");
+    fx.finish();
+}
+
+#[tokio::test]
+async fn switching_to_the_account_the_terminal_is_in_changes_nothing() {
+    let fx = fixture();
+    logged_in_default(&fx);
+    fx.transcript();
+    let key = "de".repeat(16);
+    terminal_with_spec(&fx,&key);
+    let (old_agent,before) = (fx.agent().unwrap(),fx.args());
+    let registry = fx.registry().await;
+    let server = serve_with_accounts(&fx,registry.clone()).await;
+    let current = fx.home.join(".claude");
+    let (status,body) = post(server,"conta",json!({"config_dir":current})).await;
+    assert_eq!((status,&body),(200,&json!({"ok":true,"config_dir":current})),"{body}");
+    assert!(!gone(old_agent),"o Claude do terminal segue vivo");
+    assert_eq!(fx.args(),before,"nenhum terminal novo");
+    fx.finish();
+}
+
+#[tokio::test]
+async fn the_account_route_moves_a_headless_conversation_to_the_new_account() {
+    let fx = fixture();
+    let b = account_b(&fx);
+    logged_in_default(&fx);
+    fx.transcript();
+    let key = "f1".repeat(16);
+    fx.put_sidecar(json!({"name":"s1","provider":"claude","headless":true,"key":key,"cwd":fx.cwd,"session_id":SID,"permission_mode":"acceptEdits","cano":null}));
+    let registry = headless_registry(&fx).await;
+    let server = serve_with_accounts(&fx,registry.clone()).await;
+    let (status,body) = post(server,"conta",json!({"config_dir":b})).await;
+    assert_eq!((status,&body),(200,&json!({"ok":true,"config_dir":b})),"{body}");
+    let project = hangar_workspace::worktrees::sanitize_cwd(&fx.cwd.to_string_lossy());
+    assert!(b.join(format!("projects/{project}/{SID}.jsonl")).exists(),"a conversa foi para a conta B");
+    assert!(!fx.home.join(format!(".claude/projects/{project}/{SID}.jsonl")).exists(),"nada ficou na conta de antes");
+    let meta:Value = serde_json::from_slice(&std::fs::read(fx.sidecar_path("s1")).unwrap()).unwrap();
+    assert_eq!((meta["headless"].as_bool(),meta["config_dir"].as_str(),meta["session_id"].as_str()),(Some(true),b.to_str(),Some(SID)));
+    registry.close_with_kill(&key,generation(&fx,&key)).await.unwrap();
+}
+
+#[tokio::test]
+async fn resume_refuses_a_bad_id_and_a_session_that_does_not_exist() {
+    let fx = fixture();
+    // O multiplexador de pé com outra sessão: `s1` não existe.
+    std::process::Command::new(&fx.tmux).args(["new-session","-d","-s","outra","-c"]).arg(&fx.cwd).status().unwrap();
+    let (_python,server) = crate::runtime_codex_watch::serve_owner(fx.registry().await).await;
+    let (status,body) = post(server,"resume",json!({"session_id":"nao-e-uuid"})).await;
+    assert_eq!((status,body["detail"]["code"].as_str(),body["detail"]["msg"].as_str()),(422,Some("erro_session_id_invalido"),Some("session_id invalido")),"{body}");
+    let (status,body) = post(server,"resume",json!({"session_id":SID})).await;
+    assert_eq!((status,body["detail"]["code"].as_str(),body["detail"]["msg"].as_str()),(404,Some("erro_sessao_inexistente"),Some("sessao nao encontrada")),"{body}");
+    fx.finish();
+}
+
+fn home_env(fx:&Fixture) -> AccountEnvironment {
+    AccountEnvironment::from_map([("HOME".to_owned(),fx.home.to_string_lossy().into_owned()),("PATH".to_owned(),std::env::var("PATH").unwrap())].into())
+}
+
+/// A sessão `s1` adormecida: o spec com terminal e o sidecar sem processo com a marca `asleep`.
+fn asleep_terminal(fx:&Fixture,key:&str) {
+    fx.transcript();
+    let spec = json!({"version":1,"key":key,"name":"s1","cwd":fx.cwd,"provider":"claude","surface":"terminal","account":{"kind":"default"},
+        "account_source":"default","model":null,"effort":null,"service_tier":null,"permission_mode":"acceptEdits","subagent_model":null,
+        "customizations":null,"jev":false,"read_only":false,"worktree":null,"creator":null,"created_at":1.0});
+    std::fs::create_dir_all(fx.home.join(".hangar/session-specs")).unwrap();
+    std::fs::write(fx.home.join(format!(".hangar/session-specs/{key}.json")),spec.to_string()).unwrap();
+    fx.put_sidecar(json!({"name":"s1","provider":"claude","headless":true,"key":key,"cwd":fx.cwd,"session_id":SID,
+        "permission_mode":"acceptEdits","asleep":{"wake_surface":"terminal","since":1.0}}));
+}
+
+fn asleep_waking() -> String { hangar_server::runtime::gateway::ASLEEP_WAKING.to_owned() }
+
+/// Adormecer: o Claude e o terminal saem, o shell escondido também, e o sidecar sem processo leva a marca;
+/// o spec segue com terminal, a fila passa à geração seguinte e a sessão sai da fotografia do restore.
+#[tokio::test]
+async fn sleep_terminal_writes_asleep_sidecar_and_keeps_terminal_spec() {
+    let fx = fixture();
+    fx.transcript();
+    let key = "a1".repeat(16);
+    terminal_with_spec(&fx,&key);
+    std::fs::write(fx.state.with_extension("term"),"").unwrap();
+    let agent = fx.agent().unwrap();
+    let mut sessions = serde_json::Map::new();
+    sessions.insert(key.clone(),json!({"name":"s1","provider":"claude","conversation":SID}));
+    std::fs::create_dir_all(fx.home.join(".hangar")).unwrap();
+    std::fs::write(fx.home.join(".hangar/session-restore.json"),json!({"mux_started":1,"sessions":sessions}).to_string()).unwrap();
+    let in_snapshot = || hangar_server::session_open::restore::read(&fx.home).sessions.values().any(|entry|entry.name=="s1");
+    assert!(in_snapshot(),"a fotografia do teste tem a sessão");
+    let registry = terminal_registry(&fx).await;
+    registry.adopt_claude_terminal("s1").await.map_err(|e|e.code).unwrap();
+    let before = registry.terminal_target("s1").await.map_err(|e|e.code).unwrap().expect("adotado").generation;
+    let slept = registry.sleep_claude_terminal("s1",Duration::ZERO).await.map_err(|e|(e.code,e.message));
+    assert_eq!(slept,Ok(true));
+    assert!(gone(agent),"o Claude saiu");
+    assert!(!fx.state.exists(),"o terminal fechou");
+    assert!(!fx.state.with_extension("term").exists(),"o shell escondido fechou junto");
+    let meta:Value = serde_json::from_slice(&std::fs::read(fx.sidecar_path("s1")).unwrap()).unwrap();
+    assert_eq!((meta["asleep"]["wake_surface"].as_str(),meta["headless"].as_bool(),meta["session_id"].as_str(),meta["key"].as_str(),meta["permission_mode"].as_str()),
+        (Some("terminal"),Some(true),Some(SID),Some(key.as_str()),Some("acceptEdits")),"{meta}");
+    assert!(meta["asleep"]["since"].as_f64().is_some_and(|since|since>0.0),"{meta}");
+    assert!(meta["cano"].is_null(),"sem processo, nada sobe sem terminal: {meta}");
+    let spec:Value = serde_json::from_slice(&std::fs::read(fx.home.join(format!(".hangar/session-specs/{key}.json"))).unwrap()).unwrap();
+    assert_eq!(spec["surface"],"terminal","o spec segue com terminal");
+    assert!(!in_snapshot(),"fora da fotografia: o reboot não a reabre");
+    assert_eq!(generation(&fx,&key),before+1,"a vida que acordar é a geração seguinte");
+    assert!(registry.terminal_view("s1").await.is_none(),"nenhuma entrada fica aberta");
+}
+
+/// O terminal da sessão `s1` adotado, com o painel de terminal ligado; `shell`: um comando roda no shell do Claude.
+struct Awake { fx:Fixture, agent:u32, registry:Arc<RuntimeRegistry>, terms:Arc<hangar_server::term::Terms> }
+
+async fn awake_terminal(key:&str,shell:bool) -> Awake {
+    let fx = fixture();
+    fx.transcript();
+    if shell { std::fs::write(fx.state.with_extension("shell"),"sh -c 'while :; do sleep 1; done' &\nwait\n").unwrap(); }
+    terminal_with_spec(&fx,key);
+    let agent = fx.agent().unwrap();
+    let terms = Arc::new(hangar_server::term::Terms::default());
+    let registry = crate::runtime_open::registry_with(|registry|registry.with_codex_environment(home_env(&fx)).with_terms(terms.clone())).await;
+    registry.bind_watcher(fx_watcher(&fx));
+    registry.adopt_claude_terminal("s1").await.map_err(|e|e.code).unwrap();
+    Awake { fx,agent,registry,terms }
+}
+
+impl Awake {
+    /// Pedir para adormecer desiste, e nada muda.
+    async fn refused(self,after:Duration,what:&str) {
+        let outcome = self.registry.sleep_claude_terminal("s1",after).await.map_err(|e|(e.code,e.message));
+        // Lido antes do `pkill`: o `claude` falso que espera o filho sai junto com ele.
+        let alive = !gone(self.agent);
+        // O comando do shell não morre com o Claude: sai antes.
+        let _ = std::process::Command::new("pkill").args(["-P",&self.agent.to_string()]).status();
+        self.fx.finish();
+        assert_eq!(outcome,Ok(false),"{what}");
+        assert!(alive,"{what}: o Claude seguiu vivo");
+        assert!(!self.fx.sidecar_path("s1").exists(),"{what}: sem sidecar");
+    }
+}
+
+/// Atividade entre a escolha da vigia e o fechamento: tudo é conferido de novo com a porta fechada.
+#[tokio::test]
+async fn sleep_terminal_gives_up_when_busy() {
+    // Mexida há pouco: o tempo parado conta do transcript, não da linha da lista.
+    awake_terminal(&"b1".repeat(16),false).await.refused(Duration::from_secs(3600),"transcript recente").await;
+    let awake = awake_terminal(&"b2".repeat(16),false).await;
+    let asks = awake.fx.home.join(".claude/.hangar-askq");
+    std::fs::create_dir_all(&asks).unwrap();
+    std::fs::write(asks.join(format!("{SID}.json")),json!({"tool_use_id":"t1","tool_input":{"questions":[
+        {"question":"Cor?","header":"Cor","multiSelect":false,"options":[{"label":"Azul","description":""},{"label":"Verde","description":""}]}]}}).to_string()).unwrap();
+    awake.refused(Duration::ZERO,"pergunta aberta").await;
+    let awake = awake_terminal(&"b3".repeat(16),false).await;
+    awake.registry.queue_action("s1","fila".into(),hangar_server::runtime::queue::Action::Append { text:"fila".into(),delivered:false,ts:None,
+        pre_transcript:false,entry_id:Some("fila".into()) }).await.map_err(|e|e.code).unwrap();
+    awake.refused(Duration::ZERO,"fila pendente").await;
+    awake_terminal(&"b4".repeat(16),true).await.refused(Duration::ZERO,"comando no shell").await;
+    let awake = awake_terminal(&"b5".repeat(16),false).await;
+    awake.terms.mark_open_for_test("s1",&hangar_server::diag::DiagClient::new("127.0.0.1:9".parse().unwrap(),"teste".into())).await;
+    awake.refused(Duration::ZERO,"terminal do rodapé").await;
+    let awake = awake_terminal(&"b6".repeat(16),false).await;
+    std::fs::write(awake.fx.state.with_extension("attached"),"").unwrap();
+    awake.refused(Duration::ZERO,"cliente do multiplexador olhando").await;
+}
+
+/// Duas mensagens na adormecida, a segunda no meio do acordar: as duas guardadas, um acordar só e um terminal
+/// só; a reabertura de acordar que chega depois acha a marca fora, com a porta fechada, e não reabre por cima.
+/// Guardadas como `pre_transcript` na fila que a vida nova (geração seguinte) assume, elas valem para ela
+/// mesmo com o terminal nascendo depois.
+#[tokio::test]
+async fn write_to_asleep_queues_text_and_wakes_once() {
+    let fx = fixture();
+    let key = "c1".repeat(16);
+    asleep_terminal(&fx,&key);
+    std::fs::write(fx.state.with_extension("hold"),"").unwrap();
+    // A vida nova digita a fila no pane: sem isso a entrega falharia e a linha ficaria incerta.
+    std::fs::write(fx.state.with_extension("keys"),"").unwrap();
+    let registry = fx.registry().await;
+    let (python,server) = crate::runtime_codex_watch::serve_owner(registry.clone()).await;
+    let stored = (200,json!({"ok":true,"delivered":false,"steered":false,"native":false}));
+    assert_eq!(post(server,"input",json!({"text":"um"})).await,stored,"a primeira guarda e acorda");
+    until("o acordar chegou à subida do terminal",||{let held=fx.state.with_extension("held");async move {held.exists()}}).await;
+    assert_eq!(registry.waking_key("s1"),Some(key.clone()));
+    assert_eq!(post(server,"input",json!({"text":"dois"})).await,stored,"a segunda, no meio do acordar, também vai à fila");
+    assert_eq!(registry.write_health("s1").await,Some(false),"acordando, o painel fica sem botões");
+    let queued:Value = serde_json::from_slice(&std::fs::read(fx.queue.join(format!("runtime/{key}.json"))).unwrap()).unwrap();
+    let first = queued["rows"][0]["id"].as_str().unwrap().to_owned();
+    assert_eq!(queue_panel(server,reqwest::Method::DELETE,&format!("queue/{first}?only_waiting=true"),Value::Null).await,409,"no meio do acordar: recusa, sem mexer");
+    std::fs::remove_file(fx.state.with_extension("hold")).unwrap();
+    until("acordou",||{let registry=registry.clone();async move {registry.waking_key("s1").is_none()}}).await;
+    let (found,_) = registry.terminal_view("s1").await.expect("acordou com terminal");
+    assert_eq!(found,key);
+    let late = SessionChange { reason:ChangeReason::ParkWake,surface:Some(Surface::Terminal),account:None,permission_mode:None,model:None,effort:None,service_tier:None };
+    let late = registry.reopen_claude_session("s1",late,None).await.expect("é sessão Claude daqui").map_err(|f|f.error.code).unwrap();
+    assert!(!late.changed,"nada reabre por cima");
+    assert_eq!(fx.spawns(),1,"um terminal só");
+    assert!(command(&fx.args()).contains(&format!("claude --resume {SID}")),"a mesma conversa");
+    assert!(!fx.sidecar_path("s1").exists(),"a marca saiu com o sidecar");
+    assert_eq!(python.hits_to("/api/sessions/s1/input"),0,"o Python não recebe nada");
+    let raw = std::fs::read(fx.queue.join(format!("runtime/{key}.json"))).unwrap();
+    let state:Value = serde_json::from_slice(&raw).unwrap();
+    assert_eq!(state["generation"],2,"a vida nova é a geração seguinte");
+    // Em linhas separadas ou no lote que a entrega junta: as duas, na ordem.
+    let ours:Vec<&Value> = state["rows"].as_array().unwrap().iter()
+        .filter(|r|r["text"].as_str().is_some_and(|text|text.lines().any(|line|line=="um" || line=="dois"))).collect();
+    assert_eq!(ours.iter().map(|r|r["text"].as_str().unwrap()).collect::<Vec<_>>().join("\n"),"um\ndois","{state}");
+    let (loaded,_) = hangar_server::runtime::queue::State::load(&raw).unwrap();
+    let born_later = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64()+60.0;
+    let waiting = hangar_server::runtime::queue::waiting_ids(&loaded,born_later);
+    for row in ours {
+        assert_eq!(row["pre_transcript"],true,"{row}");
+        assert_ne!(row["desistiu"],true,"{row}");
+        assert!(row["delivered"]==true || waiting.iter().any(|id|row["id"]==id.as_str()),"a vida nova a entrega: {row}");
+    }
+    registry.close(&key,2).await.unwrap();
+    fx.finish();
+}
+
+/// Mensagem que chega com a vida nova já dona da fila e o acordar ainda conferindo a subida (o rodapé sem o
+/// modo segura a confirmação): guardada pela fila do ator novo, nunca 503.
+#[tokio::test]
+async fn write_after_the_new_life_took_the_queue_is_stored_not_refused() {
+    let fx = fixture();
+    let key = "c6".repeat(16);
+    asleep_terminal(&fx,&key);
+    std::fs::write(fx.state.with_extension("keys"),"").unwrap();
+    std::fs::write(fx.state.with_extension("next-screen"),UNREADABLE_FOOTER).unwrap();
+    let registry = fx.registry().await;
+    let (_python,server) = crate::runtime_codex_watch::serve_owner(registry.clone()).await;
+    let stored = (200,json!({"ok":true,"delivered":false,"steered":false,"native":false}));
+    assert_eq!(post(server,"input",json!({"text":"um"})).await,stored);
+    until("a vida nova pegou a fila e o acordar segue",||{let registry=registry.clone();async move {
+        registry.terminal_view("s1").await.is_some() && registry.waking_key("s1").is_some()}}).await;
+    assert_eq!(post(server,"input",json!({"text":"tres"})).await,stored,"guardada, sem 503");
+    std::fs::write(fx.state.with_extension("screen"),FOOTER).unwrap();
+    until("acordou",||{let registry=registry.clone();async move {registry.waking_key("s1").is_none()}}).await;
+    assert!(registry.terminal_view("s1").await.is_some(),"acordou com terminal");
+    let state:Value = serde_json::from_slice(&std::fs::read(fx.queue.join(format!("runtime/{key}.json"))).unwrap()).unwrap();
+    assert_eq!(state["generation"],2);
+    let row = state["rows"].as_array().unwrap().iter().find(|r|r["text"]=="tres").cloned().unwrap_or(Value::Null);
+    assert_eq!((row["pre_transcript"].as_bool(),row["desistiu"].as_bool()),(Some(true),None),"na fila da vida nova: {state}");
+    registry.close(&key,2).await.unwrap();
+    fx.finish();
+}
+
+/// Texto guardado no sono há uma hora (um acordar anterior falhou): o acordar seguinte o devolve à fila com a
+/// hora de agora, e a vida nova, nascida depois, o entrega em vez de deixá-lo de fora pelo corte de 15 min.
+#[tokio::test]
+async fn text_stored_long_before_the_wake_is_still_delivered() {
+    let fx = fixture();
+    let key = "c9".repeat(16);
+    asleep_terminal(&fx,&key);
+    std::fs::write(fx.state.with_extension("keys"),"").unwrap();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
+    let registry = fx.registry().await;
+    for text in ["antigo","antigo2"] { registry.queue_asleep("s1",&key,text).await.map_err(|e|e.code).unwrap(); }
+    let path = fx.queue.join(format!("runtime/{key}.json"));
+    let mut queued:Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    for row in queued["rows"].as_array_mut().unwrap() { row["ts"] = json!(now-3600.0); }
+    std::fs::write(&path,queued.to_string()).unwrap();
+    registry.clone().register_claude_headless().await;
+    until("acordou",||{let registry=registry.clone();async move {
+        registry.waking_key("s1").is_none() && registry.terminal_view("s1").await.is_some()}}).await;
+    let raw = std::fs::read(fx.queue.join(format!("runtime/{key}.json"))).unwrap();
+    let state:Value = serde_json::from_slice(&raw).unwrap();
+    // Em linhas separadas ou no lote que a entrega junta: uma de cada, na ordem.
+    let ours:Vec<&Value> = state["rows"].as_array().unwrap().iter().filter(|r|r["text"].as_str().is_some_and(|text|text.contains("antigo"))).collect();
+    assert_eq!(ours.iter().map(|r|r["text"].as_str().unwrap()).collect::<Vec<_>>().join("\n"),"antigo\nantigo2","{state}");
+    let (loaded,_) = hangar_server::runtime::queue::State::load(&raw).unwrap();
+    let waiting = hangar_server::runtime::queue::waiting_ids(&loaded,now+60.0);
+    for row in ours {
+        assert!(row["ts"].as_f64().is_some_and(|ts|ts>=now),"com a hora do acordar: {row}");
+        assert!(row["delivered"]==true || waiting.iter().any(|id|row["id"]==id.as_str()),"a vida nova a entrega: {row}");
+    }
+    registry.close(&key,2).await.unwrap();
+    fx.finish();
+}
+
+async fn queue_panel(server:std::net::SocketAddr,method:reqwest::Method,route:&str,body:Value) -> u16 {
+    crate::fake::client().request(method,format!("http://{server}/api/sessions/s1/{route}"))
+        .header("authorization", format!("Bearer {}", crate::fake::OWNER)).header("content-type", "application/json")
+        .body(body.to_string()).send().await.unwrap().status().as_u16()
+}
+
+/// O painel da fila na adormecida (editar, mover, tirar) age no arquivo da fila: a marca fica, nenhum terminal
+/// nasce e a linha tirada não sobra para a vida nova entregar.
+#[tokio::test]
+async fn queue_panel_on_asleep_changes_the_queue_and_wakes_nothing() {
+    let fx = fixture();
+    let key = "d1".repeat(16);
+    asleep_terminal(&fx,&key);
+    let registry = fx.registry().await;
+    let (python,server) = crate::runtime_codex_watch::serve_owner(registry.clone()).await;
+    for text in ["um","dois"] { registry.queue_asleep("s1",&key,text).await.map_err(|e|e.code).unwrap(); }
+    assert_eq!(registry.write_health("s1").await,Some(true),"o painel da adormecida tem botões");
+    let rows = || -> Vec<Value> {
+        let state:Value = serde_json::from_slice(&std::fs::read(fx.queue.join(format!("runtime/{key}.json"))).unwrap()).unwrap();
+        state["rows"].as_array().unwrap().clone()
+    };
+    let texts = || rows().iter().map(|r|r["text"].as_str().unwrap().to_owned()).collect::<Vec<_>>();
+    let ids:Vec<String> = rows().iter().map(|r|r["id"].as_str().unwrap().to_owned()).collect();
+
+    assert_eq!(queue_panel(server,reqwest::Method::PATCH,&format!("queue/{}",ids[0]),json!({"text":"editado"})).await,200);
+    assert_eq!(texts(),["editado","dois"]);
+    let (status,body) = post(server,"queue/reorder",json!({"id":ids[1],"before_id":ids[0]})).await;
+    assert_eq!(status,200,"{body}");
+    assert_eq!(texts(),["dois","editado"]);
+    assert_eq!(queue_panel(server,reqwest::Method::DELETE,&format!("queue/{}?only_waiting=true",ids[0]),Value::Null).await,200);
+    assert_eq!(texts(),["dois"],"a linha tirada saiu");
+    assert_eq!(queue_panel(server,reqwest::Method::DELETE,&format!("queue/{}?only_waiting=true",ids[0]),Value::Null).await,409,"já saiu");
+
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(registry.waking_key("s1").is_none(),"nada acorda");
+    assert_eq!(fx.spawns(),0,"nenhum terminal nasce");
+    let meta:Value = serde_json::from_slice(&std::fs::read(fx.sidecar_path("s1")).unwrap()).unwrap();
+    assert_eq!(meta["asleep"]["wake_surface"],"terminal","segue adormecida");
+    assert_eq!(python.hits_to(&format!("/api/sessions/s1/queue/{}",ids[0])),0,"o Python não recebe nada");
+}
+
+/// Outra reabertura da adormecida tem a vaga de acordar (aqui a troca de modo) e falha: ela volta a dormir.
+/// A mensagem guardada nesse meio-tempo não fica esperando a próxima: a vaga, ao soltar, acorda a sessão,
+/// e o terminal sobe com a mensagem na fila da vida nova (entregue ou esperando por ela).
+#[tokio::test]
+async fn text_stored_while_another_reopen_fails_wakes_the_session_again() {
+    let fx = fixture();
+    let key = "c8".repeat(16);
+    asleep_terminal(&fx,&key);
+    std::fs::write(fx.state.with_extension("keys"),"").unwrap();
+    std::fs::write(fx.state.with_extension("hold"),"").unwrap();
+    let registry = fx.registry().await;
+    let (_python,server) = crate::runtime_codex_watch::serve_owner(registry.clone()).await;
+    let switch = {let registry=registry.clone();tokio::spawn(async move {
+        registry.reopen_claude_session("s1",mode_switch(true),None).await.map(|outcome|outcome.map(|_|()).map_err(|f|(f.error.code,f.stopped)))
+    })};
+    until("a troca segura a vaga na subida do terminal",||{let held=fx.state.with_extension("held");async move {held.exists()}}).await;
+    assert_eq!(registry.waking_key("s1"),Some(key.clone()),"a troca reservou a vaga");
+    let stored = (200,json!({"ok":true,"delivered":false,"steered":false,"native":false}));
+    assert_eq!(post(server,"input",json!({"text":"oi"})).await,stored,"guardada enquanto a troca tem a vaga");
+    // O terminal da troca não nasce: ela falha e a sessão volta a dormir.
+    std::fs::write(fx.state.with_extension("nospawn-once"),"").unwrap();
+    std::fs::remove_file(fx.state.with_extension("hold")).unwrap();
+    let failed = switch.await.unwrap().expect("é sessão Claude daqui");
+    assert_eq!(failed.map_err(|(_,stopped)|stopped),Err(true),"a troca falhou depois de encerrar");
+    until("a vaga soltou e acordou de novo",||{let registry=registry.clone();async move {
+        registry.waking_key("s1").is_none() && registry.terminal_view("s1").await.is_some()}}).await;
+    assert_eq!(fx.spawns(),2,"o terminal da troca, que falhou, e o do acordar");
+    assert!(!fx.sidecar_path("s1").exists(),"acordada");
+    let generation = generation(&fx,&key);
+    let state:Value = serde_json::from_slice(&std::fs::read(fx.queue.join(format!("runtime/{key}.json"))).unwrap()).unwrap();
+    let row = state["rows"].as_array().unwrap().iter().find(|r|r["text"]=="oi").cloned().unwrap_or(Value::Null);
+    assert_eq!((row["pre_transcript"].as_bool(),row["desistiu"].as_bool()),(Some(true),None),"na fila que a vida nova assume: {state}");
+    registry.close(&key,generation).await.unwrap();
+    fx.finish();
+}
+
+/// Ler o modo de permissão da adormecida (o app pergunta ao passar o mouse na aba) responde pelo spec e não
+/// a acorda: a marca fica e nenhum terminal nasce.
+#[tokio::test]
+async fn reading_the_permission_mode_does_not_wake_the_asleep_session() {
+    let fx = fixture();
+    asleep_terminal(&fx,&"c7".repeat(16));
+    let registry = fx.registry().await;
+    let (_python,server) = crate::runtime_codex_watch::serve_owner(registry.clone()).await;
+    let response = crate::fake::client().get(format!("http://{server}/api/sessions/s1/permission-modes"))
+        .header("authorization", format!("Bearer {}", crate::fake::OWNER)).send().await.unwrap();
+    let status = response.status().as_u16();
+    let body:Value = serde_json::from_str(&response.text().await.unwrap()).unwrap_or(Value::Null);
+    assert_eq!((status,body["current"].as_str()),(200,Some("acceptEdits")),"{body}");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(registry.waking_key("s1").is_none(),"nada acorda");
+    assert_eq!(fx.spawns(),0,"nenhum terminal nasce");
+    let meta:Value = serde_json::from_slice(&std::fs::read(fx.sidecar_path("s1")).unwrap()).unwrap();
+    assert_eq!(meta["asleep"]["wake_surface"],"terminal","segue adormecida");
+}
+
+/// Quem escreveu desiste logo depois de pedir: o acordar corre numa tarefa própria e o terminal sobe assim mesmo.
+#[tokio::test]
+async fn wake_survives_dropped_request() {
+    let fx = fixture();
+    let key = "c2".repeat(16);
+    asleep_terminal(&fx,&key);
+    std::fs::write(fx.state.with_extension("hold"),"").unwrap();
+    let registry = fx.registry().await;
+    let (asked,answer) = tokio::sync::oneshot::channel();
+    let caller = {let registry=registry.clone();tokio::spawn(async move {
+        let _ = asked.send(registry.adopt_now("s1").await.map(|opened|opened.map_err(|e|e.code)));
+        std::future::pending::<()>().await;
+    })};
+    assert_eq!(answer.await.unwrap(),Some(Err(asleep_waking())),"a escrita volta na hora");
+    until("o acordar chegou à subida do terminal",||{let held=fx.state.with_extension("held");async move {held.exists()}}).await;
+    caller.abort();
+    std::fs::remove_file(fx.state.with_extension("hold")).unwrap();
+    until("acordou sem ninguém esperando",||{let registry=registry.clone();async move {registry.waking_key("s1").is_none()}}).await;
+    assert!(registry.terminal_view("s1").await.is_some(),"o terminal subiu");
+    assert!(!fx.sidecar_path("s1").exists(),"o sidecar saiu dentro do acordar");
+    assert_eq!(fx.spawns(),1);
+    registry.close(&key,2).await.unwrap();
+    fx.finish();
+}
+
+/// O Rust que sobe com a adormecida e uma mensagem esperando a acorda com terminal; sem terminal ela não sobe.
+#[tokio::test]
+async fn register_wakes_asleep_with_pending_queue_in_terminal() {
+    let fx = fixture();
+    let key = "c3".repeat(16);
+    asleep_terminal(&fx,&key);
+    let registry = fx.registry().await;
+    registry.queue_asleep("s1",&key,"oi").await.map_err(|e|e.code).unwrap();
+    registry.clone().register_claude_headless().await;
+    until("acordou na subida",||{let registry=registry.clone();async move {
+        registry.waking_key("s1").is_none() && registry.terminal_view("s1").await.is_some()}}).await;
+    assert_eq!(fx.spawns(),1,"um terminal");
+    assert!(command(&fx.args()).contains(&format!("claude --resume {SID}")),"a mesma conversa, com terminal");
+    assert!(!fx.sidecar_path("s1").exists());
+    registry.close(&key,2).await.unwrap();
+    fx.finish();
+}
+
+/// `/conta` na adormecida reabre com terminal na conta nova, levando a conversa; a marca sai com o sidecar.
+#[tokio::test]
+async fn account_switch_on_asleep_reopens_with_terminal() {
+    let fx = fixture();
+    let b = account_b(&fx);
+    logged_in_default(&fx);
+    let key = "c4".repeat(16);
+    asleep_terminal(&fx,&key);
+    let registry = fx.registry().await;
+    let server = serve_with_accounts(&fx,registry.clone()).await;
+    let (status,body) = post(server,"conta",json!({"config_dir":b})).await;
+    assert_eq!((status,&body),(200,&json!({"ok":true,"config_dir":b})),"{body}");
+    let args = fx.args();
+    assert!(args.windows(2).any(|w|w[0]=="-e" && w[1]==format!("CLAUDE_CONFIG_DIR={}",b.display())),"com terminal, na conta B: {args:?}");
+    assert!(command(&args).contains(&format!("--resume {SID}")),"{args:?}");
+    assert!(!fx.sidecar_path("s1").exists(),"a marca saiu com o sidecar");
+    let spec:Value = serde_json::from_slice(&std::fs::read(fx.home.join(format!(".hangar/session-specs/{key}.json"))).unwrap()).unwrap();
+    assert_eq!((spec["surface"].as_str(),spec["account"]["config_dir"].as_str()),(Some("terminal"),b.to_str()));
+    let (found,_) = registry.terminal_view("s1").await.expect("com terminal");
+    registry.close(&found,2).await.unwrap();
+    fx.finish();
+}
+
+/// A transferência para o Codex, que segue ao Python, é recusada na adormecida antes de repassar.
+#[tokio::test]
+async fn transfer_on_asleep_is_refused() {
+    let fx = fixture();
+    asleep_terminal(&fx,&"c5".repeat(16));
+    let (python,server) = crate::runtime_codex_watch::serve_owner(fx.registry().await).await;
+    let (status,body) = post(server,"conta",json!({"credential_id":"codex:x"})).await;
+    assert_eq!((status,body["detail"]["code"].as_str()),(409,Some("erro_sessao_adormecida")),"{body}");
+    assert_eq!(python.hits_to("/api/sessions/s1/conta"),0,"nada foi ao Python");
+    assert!(fx.sidecar_path("s1").exists(),"segue adormecida");
 }

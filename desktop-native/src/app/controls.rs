@@ -748,7 +748,12 @@ impl Hangar {
                                 (true, true) => { self.send_mode(key, cx); cx.notify(); return; }
                                 (true, false) => { self.controls.mode_target.remove(&key); }
                                 // Chegou ao alvo, ou o backend recusou: a pílula assenta no modo que ficou.
-                                (false, _) => self.settle_mode_target(key.clone(), label.clone(), cx),
+                                (false, _) => {
+                                    // Só o Shift+Tab cria o alvo, e o passo do tour conta só com o modo novo confirmado.
+                                    let reached = self.controls.mode_target.get(&key).is_some_and(|target| target.mode == label);
+                                    self.settle_mode_target(key.clone(), label.clone(), cx);
+                                    if reached { self.tour_event(crate::tour::TourEvent::PermissionCycled, cx); }
+                                }
                             }
                         }
                         let pending = value.get("pending_confirm").is_some_and(|v| !v.is_null());
@@ -1375,7 +1380,13 @@ impl Hangar {
 #[cfg(test)]
 mod tests {
     // Sem glob: o `test` da gpui colide com o atributo padrão.
-    use super::{Choice, ModeTarget, claude_effort_current, claude_model_current, codex_fast_state, keep, mode_ahead, only_match, prethread_problem, reopen_warnings, spaced, step_free};
+    use super::{Choice, Ctl, ModeTarget, claude_effort_current, claude_model_current, codex_fast_state, keep, mode_ahead, only_match, prethread_problem, reopen_warnings, spaced, step_free};
+
+    /// As pílulas gravam a âncora por `format!("ctl-{}")`; o tour aponta pela constante.
+    #[test]
+    fn pill_anchors_match_the_tour_ids() {
+        assert_eq!(format!("ctl-{}", Ctl::Mode.key()), crate::tour::anchors::CTL_MODE);
+    }
 
     #[test]
     fn prethread_problem_shows_the_phrase_never_the_raw_code() {

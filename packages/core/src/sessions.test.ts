@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Slot } from './sessions';
 import type { Server } from './servers';
 import type { SessionInfo } from './types';
-import { aggregateSessions, epocasDeRecriacao, machineNoticeVisible, machinesAllDown, nextNoticeEnd, OFFLINE_NOTICE_MS, patchSlot, sweepHidden } from './sessions';
+import { aggregateSessions, epocasDeRecriacao, machineNoticeVisible, machinesAllDown, nextNoticeEnd, OFFLINE_NOTICE_MS, patchSlot, splitHidden, sweepHidden, groupHideTargets, groupShowTargets } from './sessions';
 
 const srv = (id: string): Server => ({ id, label: `srv-${id}`, baseUrl: `http://${id}`, token: 't' });
 const sess = (name: string, extra: Partial<SessionInfo> = {}): SessionInfo =>
@@ -252,5 +252,68 @@ describe('aviso de máquina fora do ar', () => {
     expect(nextNoticeEnd(b, 0)).toBe(1_000 + OFFLINE_NOTICE_MS);
     expect(nextNoticeEnd(b, 1_000 + OFFLINE_NOTICE_MS)).toBe(10_000 + OFFLINE_NOTICE_MS);
     expect(nextNoticeEnd(b, 10_000 + OFFLINE_NOTICE_MS)).toBeNull();
+  });
+});
+
+describe('splitHidden', () => {
+  it('separa pelas linhas marcadas, preservando a ordem de cada grupo', () => {
+    const rows = [sess('a'), sess('b', { hidden_from_list: true }), sess('c', { hidden_from_list: false }), sess('d', { hidden_from_list: true })];
+    const { shown, hidden } = splitHidden(rows);
+    expect(shown.map((s) => s.name)).toEqual(['a', 'c']);
+    expect(hidden.map((s) => s.name)).toEqual(['b', 'd']);
+  });
+});
+
+describe('groupHideTargets', () => {
+  type Row = Parameters<typeof groupHideTargets>[0];
+  const row = (serverId: string, name: string, extra: Partial<Row> = {}): Row =>
+    ({ serverId, name, pair_gid: 'g1', state: 'idle', ...extra }) as Row;
+
+  it('fora de grupo devolve só a própria', () => {
+    const solo = row('pc', 'solo', { pair_gid: null });
+    expect(groupHideTargets(solo, [solo, row('pc', 'x')])).toEqual([solo]);
+  });
+
+  it('junta o grupo de todas as máquinas, a própria primeiro, sem as de fora, ocultas ou esperando', () => {
+    const me = row('pc', 'a');
+    const rows = [
+      row('pc', 'b'),
+      me,
+      row('nb', 'c'),
+      row('pc', 'outra-pessoa', { outside: { alias: 'x', owner: 'y', localServerId: 'pc', localSession: 'a' } }),
+      row('pc', 'ja-oculta', { hidden_from_list: true }),
+      row('pc', 'esperando', { state: 'awaiting_input' }),
+      row('pc', 'pergunta', { pending_questions: 1 }),
+      row('pc', 'outro-grupo', { pair_gid: 'g2' }),
+      row('convite', 'de-convite', { serverInvite: true }),
+      row('pc', 'par-so-ver', { guest_kind: 'pair' }),
+    ];
+    expect(groupHideTargets(me, rows).map((r) => `${r.serverId}::${r.name}`)).toEqual(['pc::a', 'pc::b', 'nb::c']);
+  });
+});
+
+describe('groupShowTargets', () => {
+  type Row = Parameters<typeof groupShowTargets>[0];
+  const row = (serverId: string, name: string, extra: Partial<Row> = {}): Row =>
+    ({ serverId, name, pair_gid: 'g1', state: 'idle', hidden_from_list: true, ...extra }) as Row;
+
+  it('fora de grupo não traz ninguém', () => {
+    const solo = row('pc', 'solo', { pair_gid: null });
+    expect(groupShowTargets(solo, [solo, row('pc', 'x')])).toEqual([]);
+  });
+
+  it('traz as outras ocultas do grupo, de todas as máquinas, sem a própria, as visíveis e as de outra pessoa', () => {
+    const me = row('pc', 'a');
+    const rows = [
+      me,
+      row('pc', 'b'),
+      row('nb', 'c'),
+      row('pc', 'visivel', { hidden_from_list: false }),
+      row('pc', 'outro-grupo', { pair_gid: 'g2' }),
+      row('pc', 'outra-pessoa', { outside: { alias: 'x', owner: 'y', localServerId: 'pc', localSession: 'a' } }),
+      row('convite', 'de-convite', { serverInvite: true }),
+      row('pc', 'par-so-ver', { guest_kind: 'pair' }),
+    ];
+    expect(groupShowTargets(me, rows).map((r) => `${r.serverId}::${r.name}`)).toEqual(['pc::b', 'nb::c']);
   });
 });

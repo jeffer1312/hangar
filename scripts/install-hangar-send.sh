@@ -12,8 +12,18 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$(realpath "$0")")/.." && pwd)"
-# Pacote: os links gravados fora do Hangar apontam para o `current`, não para a versão (a poda a apaga).
-if [ "$(realpath "$HOME/.hangar/current" 2>/dev/null)" = "$REPO" ]; then REPO="$HOME/.hangar/current"; fi
+# Pacote: os links gravados fora do Hangar apontam para o `current`, não para a versão (a poda a
+# apaga) nem para o checkout de antes da migração, de onde o motor git ainda roda passos. Rodando
+# de outra pasta, quem instala é o instalador do `current`, para código e arquivos serem da mesma versão.
+if [ -d "$HOME/.hangar/current" ]; then
+    if [ "$(realpath "$HOME/.hangar/current")" = "$REPO" ]; then
+        REPO="$HOME/.hangar/current"
+    elif grep -q '"mode": "package"' "$HOME/.hangar/migration.json" 2>/dev/null \
+            && [ -f "$HOME/.hangar/current/scripts/install-hangar-send.sh" ]; then
+        echo "máquina no pacote: quem instala é o $HOME/.hangar/current/scripts/install-hangar-send.sh" >&2
+        exec bash "$HOME/.hangar/current/scripts/install-hangar-send.sh" "$@"
+    fi
+fi
 
 mkdir -p "$HOME/.local/bin"
 

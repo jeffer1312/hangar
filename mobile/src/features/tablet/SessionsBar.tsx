@@ -35,8 +35,11 @@ export function SessionsBar({ placement, selected, onPick, onNew }: Props) {
   const horizontal = placement === 'bottom' || placement === 'top';
   const tabsWorkingFirst = useTabletPrefs(s => s.tabsWorkingFirst);
   const tabsRecentFirst = useTabletPrefs(s => s.tabsRecentFirst);
-  const items = useMemo(() => barRows(rows, identities, horizontal, { tabsWorkingFirst, tabsRecentFirst }),
-    [rows, identities, horizontal, tabsWorkingFirst, tabsRecentFirst]);
+  const currentServer = selected?.serverId;
+  const currentName = selected?.name;
+  const items = useMemo(() => barRows(rows, identities, horizontal, { tabsWorkingFirst, tabsRecentFirst },
+    currentServer && currentName ? { serverId: currentServer, name: currentName } : undefined),
+    [rows, identities, horizontal, tabsWorkingFirst, tabsRecentFirst, currentServer, currentName]);
   const tabsDetail = useTabletPrefs(s => s.tabsDetail);
   const collapsed = useTabletPrefs(s => s.collapsed);
   const toggleCollapsed = useTabletPrefs(s => s.toggleCollapsed);
@@ -52,7 +55,7 @@ export function SessionsBar({ placement, selected, onPick, onNew }: Props) {
     if (placement === 'left' && !rail) return <SessionRow key={keyOf(s)} session={s} mostrarServidor compact selected={isSelected(s)} onPress={onPick} />;
     if (rail) return (
       <Pressable key={keyOf(s)} onPress={() => onPick(s)} accessibilityRole="button"
-        accessibilityLabel={`${s.name}, ${s.serverLabel}, ${rotuloEstado(s.state)}`} accessibilityState={{ selected: isSelected(s) }}
+        accessibilityLabel={`${s.name}, ${s.serverLabel}, ${rotuloEstado(s.state)}${s.asleep ? `, ${m.session_asleep_badge()}` : ''}`} accessibilityState={{ selected: isSelected(s) }}
         style={({ pressed }) => [styles.railItem, { backgroundColor: isSelected(s) || pressed ? superficie(theme, 0.8) : 'transparent' }]}>
         <SessionAvatar session={s} size={30} />
         <View style={styles.dot}><StateDot state={s.state} size={6} /></View>

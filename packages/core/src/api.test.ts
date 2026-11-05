@@ -15,7 +15,7 @@ import { getConfig, getConfigForServer, patchConfig, patchConfigForServer, creat
 import { createSessionForServer, getSessionDefaultsForServer, getFolderGitForServer, folderGitActionForServer, defaultBase, resumeArchivedConversation } from './api';
 import { mensagemDeErro, formataErro } from './errosApi';
 import { passarBastao, getSyncSetupForServer, setupSyncForServer, disableSyncForServer } from './api';
-import { fetchSessionsForServer, getSessions, probeServerResponse } from './api';
+import { fetchSessionsForServer, getSessions, openSessionsStream, probeServerResponse } from './api';
 import { scanDir, scanDirForServer, listClaudeConfigs, listClaudeConfigsForServer } from './api';
 import { answerQuestions, closePluginPane, inputPluginField, interrupt, openEventStreamForServer, pressPluginButton, selectOption, selectOptionForServer, sendInputForServer, showPluginPane, skipQuestion, submitSelected, submitSelectedForServer } from './api';
 import type { AskQuestionPayload, StateEvent } from './types';
@@ -206,6 +206,21 @@ describe('padrões de criação do servidor', () => {
     deadline.abort(new DOMException('deadline', 'TimeoutError'));
     expect(fetchMock.mock.calls[0][1]?.signal?.aborted).toBe(true);
     expect(caller.signal.aborted).toBe(false);
+  });
+
+  it.each(['erro_fora_do_convidado', 'session_defaults_owner_only'])('convidado fica sem padrão, sem falha: %s', async (code) => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ detail: { code, message: 'x' } }), { status: 403 }));
+    expect(await getSessionDefaultsForServer(server, 'claude')).toBeNull();
+  });
+
+  it('403 de quem não é o Hangar continua falha de leitura', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('proibido', { status: 403 }));
+    await expect(getSessionDefaultsForServer(server, 'claude')).rejects.toMatchObject({ status: 403 });
+  });
+
+  it('403 com outro código continua falha de leitura', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ detail: { code: 'outro_erro', message: 'x' } }), { status: 403 }));
+    await expect(getSessionDefaultsForServer(server, 'claude')).rejects.toMatchObject({ code: 'outro_erro' });
   });
 });
 
@@ -685,6 +700,35 @@ describe('contratos de conversa com servidor explícito', () => {
     expect(create.mock.calls[0][1]).toEqual({ withCredentials: credentials });
     openEventStreamForServer(target, 'sessao', 'req-legado');
     expect(new URL(create.mock.calls[1][0]).searchParams.has('last_event_id')).toBe(false);
+  });
+});
+
+describe('openSessionsStream — parâmetro do aparelho', () => {
+  const target = { id: 'b', label: 'Servidor B', baseUrl: 'https://b.test', token: 'token-b' };
+  function urlOf(env: Partial<import('./apiEnv').ApiEnv>, s: Server = target): string {
+    const create = vi.fn<import('./apiEnv').ApiEnv['createEventSource']>(() => stubEventSource());
+    configureApi({ getBaseUrl: () => 'https://a.test', getToken: () => 'token-a', onUnauthorized: onUnauthorizedSpy,
+      origin: 'https://app.test', createEventSource: create, ...env });
+    openSessionsStream(s, 'diag-x');
+    return create.mock.calls[0][0];
+  }
+
+  it('com identidade, a URL leva device=<tipo>;<id> codificado junto do token', () => {
+    const url = urlOf({ deviceIdentity: () => ({ kind: 'ios', id: 'abc-1' }) });
+    expect(url).toContain('device=ios%3Babc-1');
+    expect(new URL(url).searchParams.get('device')).toBe('ios;abc-1');
+    expect(new URL(url).searchParams.get('token')).toBe('token-b');
+  });
+
+  it('sem deviceIdentity, ou com null, a URL não leva device', () => {
+    expect(new URL(urlOf({})).searchParams.has('device')).toBe(false);
+    expect(new URL(urlOf({ deviceIdentity: () => null })).searchParams.has('device')).toBe(false);
+  });
+
+  it('servidor de convite não manda o aparelho; o do dono manda mesmo com um convite ativo', () => {
+    const deviceIdentity = () => ({ kind: 'pwa' as const, id: 'abc-1' });
+    expect(new URL(urlOf({ deviceIdentity }, { ...target, invite: true })).searchParams.has('device')).toBe(false);
+    expect(new URL(urlOf({ deviceIdentity, isInvite: () => true })).searchParams.get('device')).toBe('pwa;abc-1');
   });
 });
 
@@ -1508,5 +1552,101 @@ describe('subscribeExpoPushForServer', () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('{"detail":"x"}', { status: 404 }));
     await expect(subscribeExpoPushForServer({ id: 'b', label: 'Casa', baseUrl: 'https://b.test', token: 'token-b' }, 't', 'pt'))
       .rejects.toThrow();
+  });
+});
+
+describe('ocultar da lista e ocultação automática', () => {
+  const b: Server = { id: 'b', label: 'Casa', baseUrl: 'https://b.test', token: 'token-b' };
+  const c: Server = { id: 'c', label: 'VPS', baseUrl: 'https://c.test', token: 'token-c' };
+
+  it('ocultar e mostrar usam PUT e DELETE na rota da sessão, no servidor dela', async () => {
+    const { hideSession, showSession } = await import('./api');
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(null, { status: 204 }));
+    await hideSession(b, 'api front');
+    await showSession(b, 'api front');
+    expect(fetchMock.mock.calls.map(([url, init]) => [url, init?.method])).toEqual([
+      ['https://b.test/api/sessions/api%20front/hidden', 'PUT'],
+      ['https://b.test/api/sessions/api%20front/hidden', 'DELETE'],
+    ]);
+    expect(fetchMock.mock.calls[0][1]?.headers).toMatchObject({ Authorization: 'Bearer token-b' });
+  });
+
+  it('a recusa traz o código do servidor', async () => {
+    const { hideSession } = await import('./api');
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({
+      detail: { code: 'session_hidden_no_key', params: {}, msg: 'sem chave' },
+    }), { status: 409 }));
+    await expect(hideSession(b, 'x')).rejects.toMatchObject({ status: 409, code: 'session_hidden_no_key' });
+  });
+
+  it('404 sem código é servidor desatualizado; sessão inexistente fica com o próprio código', async () => {
+    const { hideSession, getAutoHide } = await import('./api');
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('{"detail":"Not Found"}', { status: 404 }));
+    await expect(hideSession(b, 'x')).rejects.toMatchObject({ status: 404, code: 'session_visibility_server_outdated' });
+    await expect(getAutoHide(b)).rejects.toMatchObject({ status: 404, code: 'session_visibility_server_outdated' });
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({
+      detail: { code: 'erro_sessao_inexistente', params: {}, msg: 'sessão não encontrada' },
+    }), { status: 404 }));
+    await expect(hideSession(b, 'x')).rejects.toMatchObject({ status: 404, code: 'erro_sessao_inexistente' });
+  });
+
+  it('lê com GET e grava com PUT só enabled e after_minutes', async () => {
+    const { getAutoHide, saveAutoHide } = await import('./api');
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('{"enabled":true,"after_minutes":180}'));
+    expect(await getAutoHide(b)).toEqual({ enabled: true, after_minutes: 180 });
+    expect(await saveAutoHide(b, { enabled: true, after_minutes: 180, extra: 1 } as never)).toEqual({ enabled: true, after_minutes: 180 });
+    expect(fetchMock.mock.calls[0][0]).toBe('https://b.test/api/session-auto-hide');
+    expect(fetchMock.mock.calls[0][1]?.method ?? 'GET').toBe('GET');
+    expect(fetchMock.mock.calls[1][0]).toBe('https://b.test/api/session-auto-hide');
+    expect(fetchMock.mock.calls[1][1]).toMatchObject({ method: 'PUT', body: '{"enabled":true,"after_minutes":180}' });
+  });
+
+  it('grava em todas sem parar na que falha, um resultado por máquina', async () => {
+    const { saveAutoHideAll } = await import('./api');
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => String(url).startsWith('https://b.test')
+      ? new Response(JSON.stringify({ detail: { code: 'session_auto_hide_store_failed', params: {}, msg: 'falhou' } }), { status: 500 })
+      : new Response('{"enabled":true,"after_minutes":240}'));
+    const results = await saveAutoHideAll([b, c], { enabled: true, after_minutes: 240 });
+    expect(results).toEqual([
+      { serverId: 'b', ok: false, error: expect.any(String) },
+      { serverId: 'c', ok: true, config: { enabled: true, after_minutes: 240 } },
+    ]);
+  });
+
+  it('manda sleep só a quem o trouxe na leitura; servidor sem ele não diverge por isso', async () => {
+    const { saveAutoHideAll, autoHideDiverges } = await import('./api');
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('{"enabled":true,"after_minutes":240}'));
+    const cfg = { enabled: true, after_minutes: 240, sleep: { enabled: true, after_minutes: 1440 } };
+    await saveAutoHideAll([b, c], cfg, new Set(['b']));
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual(cfg);
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({ enabled: true, after_minutes: 240 });
+    const sleep = { enabled: true, after_minutes: 1440 };
+    expect(autoHideDiverges([
+      { serverId: 'a', ok: true, config: { enabled: true, after_minutes: 240, sleep } },
+      { serverId: 'b', ok: true, config: { enabled: true, after_minutes: 240 } },
+    ])).toEqual([]);
+  });
+
+  it('aponta só quem respondeu com configuração diferente da mais comum', async () => {
+    const { autoHideDiverges } = await import('./api');
+    const on3 = { enabled: true, after_minutes: 180 };
+    expect(autoHideDiverges([
+      { serverId: 'a', ok: true, config: { enabled: false, after_minutes: 180 } },
+      { serverId: 'b', ok: true, config: on3 },
+      { serverId: 'c', ok: true, config: on3 },
+      { serverId: 'd', ok: false, error: 'x' },
+    ])).toEqual(['a']);
+    // Máquina fora do ar é erro de leitura, não "diferente".
+    expect(autoHideDiverges([
+      { serverId: 'a', ok: false, error: 'x' },
+      { serverId: 'b', ok: true, config: on3 },
+    ])).toEqual([]);
+    expect(autoHideDiverges([{ serverId: 'a', ok: false, error: 'x' }])).toEqual([]);
+    // Empate: vale a primeira resposta boa.
+    expect(autoHideDiverges([
+      { serverId: 'a', ok: true, config: on3 },
+      { serverId: 'b', ok: true, config: { enabled: true, after_minutes: 60 } },
+    ])).toEqual(['b']);
+    expect(autoHideDiverges([{ serverId: 'a', ok: true, config: on3 }, { serverId: 'b', ok: true, config: on3 }])).toEqual([]);
   });
 });

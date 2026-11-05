@@ -196,7 +196,7 @@ pub fn committed_from_frame(frame: &[u8]) -> Option<String> {
 
 /// A resposta que o evento grava, normalizada como a prévia compara.
 pub fn committed_from_event(ev: ChatEvent) -> Option<String> {
-    (ev.kind == ChatKind::AssistantMsg).then_some(ev.text).flatten().filter(|t| !t.is_empty()).map(|t| norm(&t))
+    (ev.kind == ChatKind::AssistantMsg && !crate::transcript::is_cli_note(&ev.id)).then_some(ev.text).flatten().filter(|t| !t.is_empty()).map(|t| norm(&t))
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -516,6 +516,10 @@ mod tests {
         let frame = tail_frame("assistant_msg", "**Pronto**, terminei.");
         assert_eq!(committed_from_frame(&frame).as_deref(), Some("Pronto, terminei."));
         assert_eq!(committed_from_frame(&tail_frame("user_msg", "oi")), None);
+        // O aviso da CLI sai depois da resposta, no mesmo formato: não pode tomar o lugar dela.
+        let note = crate::tail::sse_frame("message", &serde_json::json!({"kind": "assistant_msg", "id": "retry-ok:u1",
+            "text": "⚙️ A API voltou na 3ª tentativa"}).to_string(), Some("k:2"));
+        assert_eq!(committed_from_frame(&note), None);
     }
 
     fn tail_frame(kind: &str, text: &str) -> bytes::Bytes {

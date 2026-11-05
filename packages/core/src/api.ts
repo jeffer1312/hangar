@@ -441,7 +441,14 @@ async function apiFetchForServer<T>(s: Server, path: string, init?: RequestInit,
     const { msg, code, envelope } = await lerErro(res);
     throw Object.assign(new Error(`${res.status}: ${msg}`), { status: res.status, code, envelope });
   }
+  // 204 não tem corpo: `res.json()` falharia num pedido que deu certo.
+  if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
+}
+
+/** Rotas do cofre (`passwordVault.ts`): o mesmo pedido de `apiFetchForServer`. */
+export function vaultFetchForServer<T>(s: Server, path: string, init?: RequestInit, prazoMs?: number): Promise<T> {
+  return apiFetchForServer<T>(s, path, init, prazoMs);
 }
 
 export { recentFailures, type RecentFailure };
@@ -1048,6 +1055,111 @@ export async function dismissRenameSuggestion(server: Server, name: string): Pro
   await ensureOk(res, server);
 }
 
+const hiddenPath = (name: string) => `/api/sessions/${encodeURIComponent(name)}/hidden`;
+
+// Servidor sem as rotas de ocultar responde 404 sem código (mesma regra do nativo); 404 com código
+// (`erro_sessao_inexistente`) mantém a própria frase.
+async function ensureVisibilityOk(res: Response, server: Server): Promise<void> {
+  try {
+    await ensureOk(res, server);
+  } catch (e) {
+    const { status, code } = e as { status?: number; code?: string };
+    if (status === 404 && !code) {
+      throw Object.assign(new Error(m.session_visibility_server_outdated()), { status: 404, code: 'session_visibility_server_outdated' });
+    }
+    throw e;
+  }
+}
+
+/** "Ocultar da lista": a marca fica no servidor da sessão e vale em todos os aparelhos. */
+export async function hideSession(server: Server, name: string): Promise<void> {
+  const res = await apiFetchRes(hiddenPath(name), { method: 'PUT', signal: AbortSignal.timeout(8000) }, server);
+  await ensureVisibilityOk(res, server);
+}
+
+/** "Mostrar na lista": tira a marca e recomeça o prazo da ocultação automática. */
+export async function showSession(server: Server, name: string): Promise<void> {
+  const res = await apiFetchRes(hiddenPath(name), { method: 'DELETE', signal: AbortSignal.timeout(8000) }, server);
+  await ensureVisibilityOk(res, server);
+}
+
+/** Ocultação automática de um servidor. */
+export interface SleepConfig { enabled: boolean; after_minutes: number }
+// `sleep` só vem de servidor com o adormecer; o antigo recusa o campo (422).
+export interface AutoHideConfig { enabled: boolean; after_minutes: number; sleep?: SleepConfig }
+
+export async function getAutoHide(server: Server): Promise<AutoHideConfig> {
+  const res = await apiFetchRes('/api/session-auto-hide', { signal: AbortSignal.timeout(8000) }, server);
+  await ensureVisibilityOk(res, server);
+  return res.json() as Promise<AutoHideConfig>;
+}
+
+/** Grava e devolve o valor que o servidor guardou. */
+export async function saveAutoHide(server: Server, cfg: AutoHideConfig): Promise<AutoHideConfig> {
+  const res = await apiFetchRes('/api/session-auto-hide', {
+    method: 'PUT',
+    body: JSON.stringify({ enabled: cfg.enabled, after_minutes: cfg.after_minutes, ...(cfg.sleep ? { sleep: cfg.sleep } : {}) }),
+    signal: AbortSignal.timeout(8000),
+  }, server);
+  await ensureVisibilityOk(res, server);
+  return res.json() as Promise<AutoHideConfig>;
+}
+
+/** Resultado de uma máquina; `error` é a frase pronta para a tela. */
+export interface AutoHideResult { serverId: string; ok: boolean; config?: AutoHideConfig; error?: string }
+
+// Todas em paralelo: a máquina que falha não impede as outras.
+function autoHidePerServer(servers: readonly Server[], fn: (server: Server) => Promise<AutoHideConfig>): Promise<AutoHideResult[]> {
+  return Promise.all(servers.map(async (server): Promise<AutoHideResult> => {
+    try {
+      return { serverId: server.id, ok: true, config: await fn(server) };
+    } catch (e) {
+      return { serverId: server.id, ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }));
+}
+
+/** Lê a configuração de cada servidor; quem chama passa as máquinas próprias (`ownUpdatableServers`). */
+export function readAutoHideAll(servers: readonly Server[]): Promise<AutoHideResult[]> {
+  return autoHidePerServer(servers, getAutoHide);
+}
+
+/** Grava a mesma configuração em cada servidor e devolve o resultado de cada um.
+ *  `sleepServers`: ids que trouxeram `sleep` na leitura; só esses recebem o campo. */
+export function saveAutoHideAll(servers: readonly Server[], cfg: AutoHideConfig, sleepServers: ReadonlySet<string> = new Set()): Promise<AutoHideResult[]> {
+  const { sleep: _sleep, ...plain } = cfg;
+  return autoHidePerServer(servers, (server) => saveAutoHide(server, sleepServers.has(server.id) ? cfg : plain));
+}
+
+// Mais comum; no empate, o que veio primeiro.
+function mostCommon(keys: string[]): string | null {
+  const counts = new Map<string, number>();
+  for (const k of keys) counts.set(k, (counts.get(k) ?? 0) + 1);
+  let best: string | null = null;
+  for (const [k, n] of counts) if (best === null || n > counts.get(best)!) best = k;
+  return best;
+}
+const sleepKey = (s: SleepConfig) => `${s.enabled}:${s.after_minutes}`;
+
+/** Adormecer mais comum entre as leituras boas que o trazem; `undefined` se nenhuma o trouxe. */
+export function autoHideSleepReference(results: readonly AutoHideResult[]): SleepConfig | undefined {
+  const sleeps = results.flatMap((r) => (r.ok && r.config?.sleep ? [r.config.sleep] : []));
+  const best = mostCommon(sleeps.map(sleepKey));
+  return sleeps.find((s) => sleepKey(s) === best);
+}
+
+/** Servidores que responderam com configuração diferente da mais comum entre as respostas boas
+ *  (empate: a que veio primeiro). Falha de leitura não entra: as telas a mostram como erro.
+ *  Servidor sem adormecer não difere por isso. Sem nenhuma resposta boa, lista vazia. */
+export function autoHideDiverges(results: readonly AutoHideResult[]): string[] {
+  const keyOf = (c: AutoHideConfig) => `${c.enabled}:${c.after_minutes}`;
+  const majority = mostCommon(results.flatMap((r) => (r.ok && r.config ? [keyOf(r.config)] : [])));
+  const sleepRef = autoHideSleepReference(results);
+  return results.filter((r) => r.ok && r.config
+    && (keyOf(r.config) !== majority || (r.config.sleep && sleepRef && sleepKey(r.config.sleep) !== sleepKey(sleepRef))))
+    .map((r) => r.serverId);
+}
+
 // Abrir ou retomar sessão leva bem mais que o prazo padrão: estourar antes faz a tela acusar erro
 // com a sessão nascendo e o reenvio duplicá-la.
 const SESSION_BIRTH_MS = 120_000;
@@ -1080,7 +1192,11 @@ export async function getSessionDefaultsForServer(server: Server, provider: Prov
   signal?: AbortSignal): Promise<SessionDefaults | null> {
   const query = new URLSearchParams({ provider, ...(engine ? { engine } : {}) });
   const result = await apiFetchForServer<{ defaults: SessionDefaults | null }>(server,
-    `/api/session-defaults?${query}`, { signal: comTeto(signal, 8000) });
+    `/api/session-defaults?${query}`, { signal: comTeto(signal, 8000) }).catch((e: { code?: string }) => {
+    // Convidado não tem padrão salvo; a recusa não é falha de leitura, que travaria a criação.
+    if (e?.code === 'erro_fora_do_convidado' || e?.code === 'session_defaults_owner_only') return { defaults: null };
+    throw e;
+  });
   return result.defaults;
 }
 
@@ -1429,6 +1545,8 @@ export interface FolderBranches {
   branches: string[];
   remotes: string[];   // nome curto, sem a local correspondente
   dirty: boolean;
+  worktree_parent?: string | null;   // onde a worktree nova desta pasta nasce, sem o nome dela; servidor antigo não manda
+  elsewhere?: Record<string, { path: string; main?: boolean }>;   // branch aberta em outra pasta do mesmo repositório
 }
 
 // Base padrão da branch nova: a atual, ou com HEAD solto a primeira branch local (o backend recusa base vazia).
@@ -2032,6 +2150,7 @@ export interface ArchiveEntry {
   config_dir: string | null;   // conta dona do transcript (null = a do backend)
   conta: string;               // rotulo dela, pra mostrar na lista
   provider: Provider;          // cada agente guarda transcript num lugar proprio
+  name?: string | null;        // nome que a sessão tinha no Hangar ao ser fechada
 }
 
 export function getArchive(): Promise<ArchiveFolder[]> {
@@ -2042,8 +2161,10 @@ export function getArchiveRecentForServer(server: Server, cap = 40, signal?: Abo
   return apiFetchForServer(server, `/api/archive/recent?cap=${cap}`, { signal: comTeto(signal, 8000) });
 }
 
-export function getArchiveFolder(project: string): Promise<ArchiveEntry[]> {
-  return apiFetch<ArchiveEntry[]>(`/api/archive/${encodeURIComponent(project)}`);
+// `filter`: `session_id`, `provider`, `codex_account` e `config_dir` estreitam a pasta a uma conversa e conta.
+export function getArchiveFolder(project: string, filter?: Record<string, string>): Promise<ArchiveEntry[]> {
+  const query = filter && Object.keys(filter).length ? `?${new URLSearchParams(filter)}` : '';
+  return apiFetch<ArchiveEntry[]>(`/api/archive/${encodeURIComponent(project)}${query}`);
 }
 
 // "Retomar conversa": sobe uma sessao tmux NOVA no cwd original com `claude --resume <uuid>`,
@@ -2117,13 +2238,26 @@ export interface SearchHit {
   role?: 'user' | 'assistant' | null;  // quem escreveu a mensagem casada
   event_id?: string | null;            // id do evento no histórico: abre a conversa no ponto
   ts?: number | null;                  // quando a mensagem foi escrita
+  provider?: Provider;                 // agente da conversa ("claude")
+  conta?: string;                      // conta da conversa, na forma provedor:caminho
+  config_dir?: string | null;
+  codex_account?: string | null;       // só no Codex
+  whole?: boolean;                     // todos os termos como palavra inteira (vem antes na lista)
+  name?: string | null;                // nome que a sessão tinha ao ser fechada
+  preview?: string | null;             // 1ª mensagem do usuário da conversa
 }
 
 // A mensagem do trecho e as vizinhas (suas e do assistente), pra ler sem sair da busca.
 export async function getSearchContextForServer(
   s: Server, project: string, sessionId: string, eventId: string,
+  provider?: Provider | null, codexAccount?: string | null, configDir?: string | null,
 ): Promise<ChatEvent[]> {
   const q = new URLSearchParams({ project, session_id: sessionId, event_id: eventId });
+  // Sem `provider` o servidor lê como Claude; os outros agentes têm parser próprio.
+  if (provider) q.set('provider', provider);
+  if (codexAccount) q.set('codex_account', codexAccount);
+  // A mesma conversa em duas contas Claude: a do trecho.
+  if (configDir) q.set('config_dir', configDir);
   return apiFetchForServer(s, `/api/search/context?${q}`);
 }
 
@@ -3651,6 +3785,9 @@ export function openSessionsStream(s: Server, req = novoReq()): EventSourceLike 
   const params = new URLSearchParams();
   if (!isSameOrigin) params.set('token', s.token);
   if (req) params.set('diag_req', req);
+  // Só o dono registra aparelho: token de convidado não conta. Vale o alvo, não o servidor ativo.
+  const device = s.invite ? null : apiEnv().deviceIdentity?.();
+  if (device) params.set('device', `${device.kind};${device.id}`);
   const qs = params.toString();
   const url = `${base}/api/sessions/events${qs ? `?${qs}` : ''}`;
   return apiEnv().createEventSource(url, { withCredentials: isSameOrigin });

@@ -221,18 +221,17 @@ registrado, fora do caminho de leitura, para não competir com o que vale hoje.
   Lógica (API, formatação, parser, tipos) entra em `packages/core` e serve as duas. Tela é por
   interface, escrita duas vezes. O check completo, quando pedido, é `npm run check` **na raiz**,
   que cobre as três.
-- **Melhoria visual ou recurso que o usuário vê entra nos três clientes quando faz sentido nos
-  três: app Expo (`mobile/`), desktop nativo (`desktop-native/`) e PWA (`frontend/`, vista
-  celular).** O nativo costuma estar à frente e é a referência de comportamento. Quem implementa
-  num cliente leva aos outros no mesmo trabalho ou deixa a pendência dita no relato.
-- **Desktop evolui no Rust (`desktop-native/`); web (`frontend/`) evolui para PWA/mobile.**
-  Mudanças desktop entram só no nativo. No Svelte entra apenas o que serve ao PWA/celular; a
-  tela desktop web e o Electron ficam parados onde estão, sem recurso novo. Recursos usados no
-  celular continuam entrando na web/PWA e no app `mobile/`, conforme o escopo. O Electron e o
-  desktop web estão em descontinuação: preserve o que existe; remoção exige pedido explícito.
-  A paridade desktop entre web e Rust deixou de ser requisito.
+- **Melhoria visual ou recurso que o usuário vê entra no desktop nativo (`desktop-native/`) e no
+  app Expo (`mobile/`), quando faz sentido nos dois.** O nativo costuma estar à frente e é a
+  referência de comportamento. Quem implementa num cliente leva ao outro no mesmo trabalho ou deixa
+  a pendência dita no relato.
+- **A web (`frontend/`, PWA incluído) não recebe recurso novo: fica com o que já tem.** Desktop
+  evolui no Rust (`desktop-native/`) e celular no app `mobile/`. No Svelte entra só conserto do que
+  já existe e o necessário para ele continuar funcionando com o servidor. O Electron e o desktop
+  web estão em descontinuação: preserve o que existe; remoção exige pedido explícito. A paridade
+  entre a web e os outros clientes deixou de ser requisito.
   O nativo não importa `packages/core`; compartilha a API do backend e `messages/*.json`.
-  Decisão e alcance em [frontend.md](docs/decisoes/frontend.md#desktop-no-rust-web-para-pwamobile).
+  Decisão e alcance em [frontend.md](docs/decisoes/frontend.md#a-web-fica-com-o-que-já-tem-30102026).
   O nativo é o único app de desktop do instalador: ele o baixa da release `native-latest` no
   pacote da máquina (`scripts/install-native.sh`/`.ps1`); sem o nativo, a reserva é o navegador.
   O instalador não instala mais o Electron. No Windows e no Linux o nativo atende o
@@ -240,9 +239,15 @@ registrado, fora do caminho de leitura, para não competir com o que vale hoje.
   repasse em `/cdp`): no Windows por CDP dentro do WebView2; no Linux por um Chromium sem janela
   com CDP por pipe, pintado no painel pelo screencast. Os passos `2026-10-02-electron-removido-*`
   tiram o Electron de quem ainda o tem. No macOS, quem já o tinha fica com ele.
+- **Mudança numa lista ou barra de sessões é conferida em todas as outras.** Nativo: barra
+  lateral (cheia e trilho), abas em cima ou embaixo, que não têm barra lateral, com a bandeja
+  "Máquinas e convidados", seletor de sessões e busca. Expo: lista, barra do tablet e seletor. A
+  `SessionList` do PWA entra só para conserto, pela regra acima. Cada uma recebe a mudança ou
+  fica fora com o motivo dito no plano.
+  [Motivo](docs/decisoes/frontend.md#mudança-numa-lista-de-sessões-vale-para-todas-31102026).
 - **A web existente tem duas vistas (820px):** `Sidebar` (desktop legado) e `SessionList`
-  (mobile). Trabalho novo na web é só para PWA/mobile; a vista desktop não ganha recurso.
-  Preserve o desktop existente ao tocar código compartilhado. Lógica da lista vai
+  (mobile). Nenhuma das duas ganha recurso novo.
+  Preserve as duas ao tocar código compartilhado. Lógica da lista vai
   no `lib/sessionListModel.svelte.ts`, e a agregação SSE no `lib/sessionsStore.svelte.ts` — uma
   por servidor, nunca uma por card.
 - **Todo texto de interface vem de `m.<chave>()`** (Paraglide). `pt.json` e `en.json` no mesmo
@@ -282,6 +287,13 @@ registrado, fora do caminho de leitura, para não competir com o que vale hoje.
 - **Mods no nativo começam minimizados e têm altura estável entre abas; Minimizar é local.**
   Perguntas ocupam o mesmo espaço do mod e só devolvem o painel quando a interação termina. Minimização manual, aba e
   rolagem pertencem à sessão. Evidência em [frontend.md](docs/decisoes/frontend.md#mods-altura-estável-e-pergunta-no-mesmo-espaço-16102026).
+- **Tour, dicas e "Mostrar no app" do nativo são balões presos a peças reais, pelo módulo `tour/`.**
+  A peça se registra com `popup::anchor` e um id de `tour/anchors.rs`; a posição vale só enquanto a
+  área que a desenhou não redesenhou sem ela, e é lida no render da raiz. O balão avança pela ação
+  real no ponto do código onde ela acontece, nunca por polling. O que foi visto fica em `tour.json`
+  e em `/api/tour-progress` de cada servidor (junção que nunca desfaz). O primeiro acesso de um
+  celular chega pelo parâmetro `device` da lista ao vivo do dono, lido só no ramo do dono e nunca
+  pela porta do Connect. Evidência em [frontend.md](docs/decisoes/frontend.md#tour-de-primeiro-uso-do-nativo-30102026).
 - **Mensagem esperando na fila do Hangar aparece no painel "Na fila", não como bolha.** A lista e a
   ordem vêm do evento `queue`; o modelo é `packages/core/src/queuePanel.ts` (o nativo repete em
   `desktop-native/src/queue_panel.rs`).
@@ -545,6 +557,10 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
 - **Mermaid é desenhado pelo `hangar-server` (`POST /api/mermaid`), em PNG, num Chromium sem rede**,
   com a biblioteca embutida no binário; os clientes só exibem a imagem. Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#mermaid-desenhado-no-servidor-15102026).
+- **Busca, Perguntar e Arquivo são do Rust, com um índice de todos os agentes e contas.** A passada
+  é por evento de arquivo; palavra inteira vem antes de pedaço (`whole`); o id do trecho é o do
+  histórico. Sem Rust, 503 `erro_busca_precisa_rust`. Evidência em
+  [plataforma.md](docs/decisoes/plataforma.md#busca-perguntar-e-arquivo-no-rust-01112026).
 - **Página da conversa mora no Rust e some com a sessão.** `html_render` publica dentro do processo
   do Rust (`pages::routes::publish_value`); lê o dono, convidado não vê. Link e URL do rascunho nunca
   levam token ao transcript; o documento da página nunca tem `allow-same-origin` nem token na URL
@@ -603,9 +619,12 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   contagem), e o `scrub` passa em cada parte do texto, antes de qualquer corte, e em cada linha do diário anexo. O diário vai
   completo, compactado, num segundo envio que o worker grava sem abrir. Motivo e invariante em
   [plataforma.md](docs/decisoes/plataforma.md#reportar-problema-o-pacote-de-diagnóstico-vai-ao-dono-27102026).
-  Exceção única ao "só contagem": quando a versão nova não responde depois do reinício, o executor
-  da atualização grava como `update: saída` só o traceback e as linhas ERROR/CRITICAL que ela
-  escreveu, com `scrub`. Atualização que falha manda o relatório sozinha apenas com o consentimento
+  Exceção única ao "só contagem": quando um reinício não volta (atualização, a volta dela ou
+  reinício avulso), o executor grava como `update: saída`, com `scrub`, tudo o que explica a falha:
+  tempo de cada etapa, cada mudança na resposta da saúde, a saída da versão nova reduzida
+  (`startup_output::lines`: traceback, lançador, uvicorn e aviso/erro inteiros; INFO só nível e
+  logger) e o retrato do fim do prazo (lançador, pacote, processos do Hangar, tarefa ou unit, porta).
+  Atualização que falha manda o relatório sozinha apenas com o consentimento
   da máquina (`~/.hangar/auto-report.json`, perguntado uma vez pelos clientes; sem resposta, nada
   sai); o resultado mora em `.hangar-update/relatorio.json`, fora do `estado.json`. Contrato em
   [plataforma.md](docs/decisoes/plataforma.md#relatório-automático-quando-a-atualização-falha-30102026).
@@ -624,6 +643,13 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   (com daemon de pé ele sobe outro e não abre nada), linha de comando, log ou disco. Os três
   clientes mostram o aviso por servidor. Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#chaveiro-trancado-no-boot-o-rust-detecta-e-o-dono-destranca-de-outra-máquina-26102026).
+- **Cofre de senhas: um só, na máquina dona, chave no chaveiro dela; o valor nunca entra em
+  transcript, evento, diário nem log.** As outras máquinas pedem pelos peers. Senha **pedir
+  sempre** só sai com aprovação do dono num cartão; **liberada** sai direto. O agente usa por
+  login preenchido no navegador da sessão, comando com variável de ambiente e saída apagada, ou
+  arquivo 0600 de vida curta. Convidado não vê nem aprova. A aprovação não é barreira contra um
+  agente decidido: ele alcança o chaveiro. Decisão e limites em
+  [plataforma.md](docs/decisoes/plataforma.md#cofre-de-senhas-uma-máquina-dona-chave-no-chaveiro-uso-aprovado-por-senha-30102026).
 - **Chave secreta nunca vai no argv do `new-session`.** O escopo leva `--description`, e o
   `ProcessMux::run` passa `*_API_KEY`/`*_TOKEN`/`*_SECRET` por um arquivo 0600 que o pane lê e
   apaga: o systemd grava a linha de comando do escopo no journal. Evidência em
@@ -692,14 +718,16 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
     `accounts/codex-invalidate`, `workspace/context`,
     `worktrees/context`,
     `transcription/config`, `costs/scopes`, `migration/status`, `diag` e `ping`.
-  - Partes ainda no Python: transcript, estado e entrada geral de Pi, omp e Kimi; Arquivo;
+  - Partes ainda no Python: transcript, estado e entrada geral de Pi, omp e Kimi;
     transferência Claude→Codex; workflows e runners. O Connect (8768) está inativo.
+  - Arquivo e busca são do Rust. O `archive.py` guarda só o que o Python ainda usa:
+    `list_folders`/`_head_info` para `/internal/worktrees/context` (`_worktree_inputs`) e
+    `archive_jsonl`/`archive_cwd` para o bastão (`_bastao_alvo`, `api.py`).
   - Atualização: rotas, passos iniciais, fetch e atualização automática são do Rust.
     O pacote usa `update/http.rs` e `update/periodic.rs`; o checkout usa `update/git_engine/`.
     O `rust_bins.py` lança o Rust pelo caminho real da versão.
   - Tarefas próprias do Python em modo `rust`: `hook_state.watch` (estado de Pi/omp/Kimi; não reage
-    a sessão do Rust), `watch_sessions` do Codex a cada 2 s (desligada quando todo Codex é do Rust),
-    índice do Arquivo. Travada, limite e queda são avisados
+    a sessão do Rust) e `watch_sessions` do Codex a cada 2 s (desligada quando todo Codex é do Rust). Travada, limite e queda são avisados
     pelo Rust (`push/watch.rs`); o vigia Python foi apagado e, no modo `python`, esses avisos não
     saem. A retomada dos loops ativos na subida também é só do Rust (`loops/watch.rs`): no modo
     `python` eles não voltam depois do reinício.
@@ -710,8 +738,9 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   (`RuntimeRegistry::request_reopen`), sem pedir ao Python. Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#a-conversa-da-sessão-é-escolhida-pelo-rust-e-a-troca-espera-duas-leituras).
 - **A porta 8765 é do `hangar-server` (Rust); o Python escuta atrás, numa porta de loopback.**
-  O Rust atende `/history` e `/events` de Claude/Codex, `/api/costs`, `/api/uso`, `/api/cotacao` e o
-  custo de sessão Codex com o token do dono, e o terminal real do dono (só pelo
+  O Rust atende `/history` e `/events` de Claude/Codex, `/api/costs`, `/api/uso`, `/api/cotacao`, o
+  custo de sessão Codex, a busca (`/api/search`, com o índice das conversas), o Perguntar
+  (`/api/ask-history`) e o Arquivo (`/api/archive*`) com o token do dono, e o terminal real do dono (só pelo
   `?token=`, sem conferir Origin). Custos e uso têm índice próprio
   (`custos-rust.sqlite3`) no cache local; a faixa `stats` do chat também é do Rust. Contas Claude/Codex e
   cotas são só do Rust: no modo `python` respondem `accounts_need_rust_server`, sem reserva
@@ -799,6 +828,15 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   com impressão, nome, conta, `config_marca` e pasta iguais, senão descarta e abre frio. Falha não
   vai à tela. Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#reserva-pré-aquecida-da-nova-conversa-do-claude-22102026).
+- **Sessão oculta e parada além do prazo adormece; ler não acorda, escrever acorda onde estava.**
+  A vigia `session_sleep/` só pré-seleciona; o `sleep_*` do `RuntimeRegistry` reconfere sob a porta
+  fechada e desiste calado. A marca `asleep` mora no sidecar sem terminal e o spec segue com a
+  superfície de antes: acorda com terminal se tinha, também na subida do Rust. Um acordar por vez
+  (`waking` + `rewake`), texto pela fila durável. O Codex com terminal acorda com a permissão menor
+  entre rollout e sidecar e só adormece sem ninguém ligado depois da última rodada. Claude sem
+  terminal segue no estacionamento de 65 min. O cliente só manda `sleep` a servidor cujo `GET` o
+  trouxe. Evidência e limites em
+  [plataforma.md](docs/decisoes/plataforma.md#sessão-oculta-adormece-e-acorda-onde-estava-03112026).
 - **Perguntas, permissões e ciclo de vida da sessão aberta são do Rust.** Rust: plugin do Claude (`/api/plugin/*`, `plugin::Store`), fatos e entrega, modos de
   permissão (sondagem, troca, memória), Codex e Claude com terminal adotados (o Claude pela
   `CP_SESSION_KEY` do pane, que o vínculo do Python também usa), pane morto, fechamento, `/clear`,

@@ -5,7 +5,7 @@
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::io::{self, BufRead, BufReader, Seek, SeekFrom};
+use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::time::UNIX_EPOCH;
@@ -100,19 +100,49 @@ pub fn merged_history(req: &HistoryRequest) -> io::Result<Vec<ChatEvent>> {
     merged_history_capped(req, u64::MAX)
 }
 
+/// O histórico do chat, com as notas dos avisos da CLI do Claude com terminal. Só o chat as pede: quem lê a
+/// última resposta (lista, retorno da filha, ditado, leitura em voz) tomaria uma nota `⚙️` pela resposta.
+pub fn merged_history_with_notices(req: &HistoryRequest) -> io::Result<Vec<ChatEvent>> {
+    merged_history_impl(req, u64::MAX, true, true)
+}
+
 /// Como `merged_history`, mas a janela com `limit` para em `max_window` bytes mesmo sem `limit`
 /// eventos: quem só quer o fim (a última resposta da lista) não relê o transcript inteiro quando
 /// a cauda é só anexo e tool_result.
 pub(crate) fn merged_history_capped(req: &HistoryRequest, max_window: u64) -> io::Result<Vec<ChatEvent>> {
-    merged_history_impl(req, max_window, true)
+    merged_history_impl(req, max_window, true, false)
 }
 
 /// A sugestão de tarefa conserva a janela lida inteira, como o consumidor original do histórico.
 pub(crate) fn merged_history_window(req: &HistoryRequest) -> io::Result<Vec<ChatEvent>> {
-    merged_history_impl(req, u64::MAX, false)
+    merged_history_impl(req, u64::MAX, false, false)
 }
 
-fn merged_history_impl(req: &HistoryRequest, max_window: u64, truncate: bool) -> io::Result<Vec<ChatEvent>> {
+/// As últimas `n` mensagens com texto (pedido e resposta), lidas pelo fim com a janela crescendo ×8 e
+/// pelo mesmo filtro do histórico inteiro: a prévia não mostra o que o `--resume` regravou nem repete
+/// um `held:`. A janela cresce porque a cauda de um transcript longo é quase só ferramenta e anexo.
+pub(crate) fn message_tail(req: &HistoryRequest, n: usize) -> io::Result<Vec<ChatEvent>> {
+    let mut window = req.tail_window.max(1);
+    loop {
+        let off = tail_offset(&req.jsonl, window);
+        let start = if off > 0 { transcript_start_ts(&req.jsonl) } else { 0.0 };
+        let mut parsed = parse_from(req, off, start, false)?;
+        if let Some(queue) = &req.queue {
+            merge_queue(queue, &mut parsed)?;
+        }
+        parsed.items.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal).then(a.1.cmp(&b.1)));
+        let mut msgs: Vec<ChatEvent> = parsed.items.into_iter().map(|(_, _, ev)| ev)
+            .filter(|ev| matches!(ev.kind, ChatKind::UserMsg | ChatKind::AssistantMsg) && ev.text.as_deref().is_some_and(|t| !t.is_empty()))
+            .collect();
+        if off == 0 || msgs.len() >= n {
+            msgs.drain(..msgs.len().saturating_sub(n));
+            return Ok(msgs);
+        }
+        window = window.saturating_mul(8);
+    }
+}
+
+fn merged_history_impl(req: &HistoryRequest, max_window: u64, truncate: bool, notices: bool) -> io::Result<Vec<ChatEvent>> {
     let mut parsed = match req.limit {
         Some(limit) => {
             let mut window = req.tail_window.max(1).min(max_window);
@@ -120,7 +150,7 @@ fn merged_history_impl(req: &HistoryRequest, max_window: u64, truncate: bool) ->
             loop {
                 let off = tail_offset(&req.jsonl, window);
                 let start = if off > 0 { *start_ts.get_or_insert_with(|| transcript_start_ts(&req.jsonl)) } else { 0.0 };
-                let parsed = parse_from(req, off, start)?;
+                let parsed = parse_from(req, off, start, notices)?;
                 if off == 0 || parsed.items.len() >= limit || window >= max_window {
                     break parsed;
                 }
@@ -134,7 +164,7 @@ fn merged_history_impl(req: &HistoryRequest, max_window: u64, truncate: bool) ->
                 window = guess.clamp(window.saturating_mul(4), window.saturating_mul(grow)).min(max_window);
             }
         }
-        None => parse_from(req, 0, 0.0)?,
+        None => parse_from(req, 0, 0.0, notices)?,
     };
     if let Some(queue) = &req.queue {
         merge_queue(queue, &mut parsed)?;
@@ -174,6 +204,82 @@ pub(crate) fn each_event(provider: Provider, jsonl: &Path, mut visit: impl FnMut
         }
     }
     Ok(())
+}
+
+/// Até onde se volta procurando o começo do turno para as notas; turno maior que isso fica sem nota.
+const TURN_SEED_MAX: u64 = 4 * 1024 * 1024;
+
+/// Começo da linha do último `turn_duration` antes de `before`; sem ele, o começo do arquivo (se coube) ou o
+/// próprio `before`. As notas só contam a partir de um começo de turno, e a janela da cauda não cobre um turno longo.
+/// Lê de trás para frente em blocos que crescem; achar o texto num resultado de ferramenta só faz semear mais.
+pub(crate) fn turn_seed_start(path: &Path, before: u64) -> u64 {
+    let failed = |e: io::Error| {
+        if crate::warn_limit::allow(None, "transcript_notice_seed") {
+            tracing::warn!(code = "transcript_notice_seed", path = %path.display(), "notas: começo do turno ilegível; somas podem sair incompletas: {e}");
+        }
+        before
+    };
+    let mut f = match File::open(path) {
+        Ok(f) => f,
+        Err(e) => return failed(e),
+    };
+    let mut window = 64 * 1024;
+    loop {
+        let from = before.saturating_sub(window);
+        let mut buf = Vec::new();
+        if let Err(e) = f.seek(SeekFrom::Start(from)).and_then(|_| (&mut f).take(before - from).read_to_end(&mut buf)) {
+            return failed(e);
+        }
+        if let Some(hit) = memchr::memmem::rfind(&buf, b"\"turn_duration\"") {
+            match buf[..hit].iter().rposition(|&b| b == b'\n') {
+                Some(nl) => return from + nl as u64 + 1,
+                None if from == 0 => return 0,
+                // A linha começa antes do bloco: cresce, nunca devolve o meio dela.
+                None => {}
+            }
+        } else if from == 0 {
+            return 0;
+        }
+        if window >= TURN_SEED_MAX {
+            return before;
+        }
+        window = (window * 4).min(TURN_SEED_MAX);
+    }
+}
+
+/// Passa `[from, to)` só pelo fold das notas: a janela do `/history` que começa no meio do turno conta as falhas
+/// desde o começo dele, como a cauda ao vivo. O filtro de reescrita é à parte: não muda o que a janela mostra.
+fn seed_notices(path: &Path, fold: &mut claude::NoticeFold, from: u64, to: u64) {
+    if from == 0 {
+        fold.file_start();
+    }
+    if from >= to {
+        return;
+    }
+    let failed = |e: io::Error| {
+        if crate::warn_limit::allow(None, "transcript_notice_seed") {
+            tracing::warn!(code = "transcript_notice_seed", path = %path.display(), "notas: semeadura do turno parou; somas podem sair incompletas: {e}");
+        }
+    };
+    let mut rd = match File::open(path).and_then(|f| { let mut rd = BufReader::new(f); rd.seek(SeekFrom::Start(from)).map(|_| rd) }) {
+        Ok(rd) => rd,
+        Err(e) => return failed(e),
+    };
+    let mut rewrite = claude::RewriteFilter::default();
+    let (mut at, mut raw) = (from, Vec::new());
+    while at < to {
+        raw.clear();
+        match rd.read_until(b'\n', &mut raw) {
+            Ok(0) => return,
+            Ok(n) => at += n as u64,
+            Err(e) => return failed(e),
+        }
+        if let Some(Value::Object(obj)) = pyjson::loads_lossless(&String::from_utf8_lossy(&raw)) {
+            if rewrite.keep(&obj) {
+                fold.feed(&obj, &mut Vec::new());
+            }
+        }
+    }
 }
 
 /// `_tail_offset` (pqueue.py:961): primeira linha completa dentro dos últimos `window` bytes.
@@ -225,7 +331,7 @@ pub(crate) fn transcript_start_ts(path: &Path) -> f64 {
 
 /// `_parse_from` (pqueue.py:1021).
 /// `start_ts`: relógio da primeira linha do arquivo quando `offset > 0` (0.0 quando lê do início).
-fn parse_from(req: &HistoryRequest, offset: u64, start_ts: f64) -> io::Result<Parsed> {
+fn parse_from(req: &HistoryRequest, offset: u64, start_ts: f64, notices: bool) -> io::Result<Parsed> {
     let mut p = Parsed { items: Vec::new(), committed: HashMap::new(), prev_ts: 0.0, start_ts };
     // Só a ausência é histórico vazio: um 200 vazio com ETag faria o aparelho apagar a conversa.
     let file = match File::open(&req.jsonl) {
@@ -237,6 +343,10 @@ fn parse_from(req: &HistoryRequest, offset: u64, start_ts: f64) -> io::Result<Pa
     rd.seek(SeekFrom::Start(offset))?;
     // Reescrita do `--resume`: só o Claude regrava o jsonl.
     let mut rewrite = matches!(req.provider, Provider::Claude | Provider::ClaudeHeadless).then(claude::RewriteFilter::default);
+    let mut notices = (notices && rewrite.is_some()).then(|| claude::NoticeFold::new(offset == 0));
+    if let Some(fold) = notices.as_mut().filter(|_| offset > 0) {
+        seed_notices(&req.jsonl, fold, turn_seed_start(&req.jsonl, offset), offset);
+    }
     let mut held_ids = HashSet::new();
     let mut raw = Vec::new();
     let mut i = 0u64;
@@ -255,7 +365,7 @@ fn parse_from(req: &HistoryRequest, offset: u64, start_ts: f64) -> io::Result<Pa
             fixed.truncate(fixed.len() - 2);
             fixed.push('\n');
         }
-        let silent = rewrite.as_ref().and_then(|_| claude::silent_attachment_timestamp(&line));
+        let silent = rewrite.as_ref().and_then(|_| claude::silent_attachment_timestamp(&line, notices.is_some()));
         let (line_ts, evs) = match silent {
             Some(att) => (py::iso_timestamp(&att.replace('Z', "+00:00")).unwrap_or(0.0), Vec::new()),
             None => {
@@ -274,11 +384,12 @@ fn parse_from(req: &HistoryRequest, offset: u64, start_ts: f64) -> io::Result<Pa
                         continue;
                     }
                 }
-                let evs = match req.provider {
+                let mut evs = match req.provider {
                     Provider::Claude | Provider::ClaudeHeadless => claude::parse_obj(obj, peer::name_of_pid),
                     Provider::Codex => codex::parse_rollout_obj(&value),
                     Provider::Orq => crate::orchestration::timeline::parse_obj(&value, req.jsonl.parent()),
                 };
+                if let Some(fold) = notices.as_mut() { fold.feed(obj, &mut evs); }
                 let ts = if req.provider == Provider::Orq {
                     obj.get("ts").and_then(Value::as_str).and_then(py::iso_timestamp).unwrap_or(0.0)
                 } else { ts_of_obj(obj) };

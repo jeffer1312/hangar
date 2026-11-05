@@ -314,3 +314,25 @@ pub fn remove(text: &str, name: &str, rotation: &str) -> Result<String, String> 
     }
     Ok(md::remove_row(text, &h, &key))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn live_glob_keeps_the_first_candidate_when_activity_ties() {
+        let role = Role { sessao: "worker-*".into(), ..Role::default() };
+        let cases = [
+            (json!(1.0), json!(1.0)),
+            (Value::Null, Value::Null),
+            (json!(-0.0), json!(0.0)),
+        ];
+        for (first, second) in cases {
+            let rows = [
+                json!({"name": "worker-a", "last_activity": first}),
+                json!({"name": "worker-b", "last_activity": second}),
+            ];
+            assert_eq!(live(&role, &rows).as_deref(), Some("worker-a"), "{rows:?}");
+        }
+    }
+}

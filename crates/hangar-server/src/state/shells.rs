@@ -80,10 +80,13 @@ mod tests {
     }
 
     #[test]
-    fn shells_match_python() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../backend/tests/fixtures/contract/golden/shells.json");
-        let rows: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-        for row in rows.as_array().unwrap() {
+    fn shells_keep_only_children_with_a_command() {
+        const CASES: [&str; 2] = [
+            r##"{"name":"children","pid":100,"children":{"100":[101,102,103,104,105]},"argv":{"101":["/bin/bash","-c","source /tmp/snap && eval 'sleep 600' < /dev/null && pwd -P >| '/tmp/x'"],"102":["node","mcp-server.js"],"103":["zsh","-c","x && eval 'echo '\\''oi'\\'' fim'"],"104":["/usr/bin/fish","-c","y && eval 'a'\"'\"'b' resto"],"105":["bash"]},"start":{"101":1000.5,"103":2000.0,"104":null,"105":5.0},"expected":[{"pid":101,"cmd":"sleep 600","desde":1000.5},{"pid":103,"cmd":"echo 'oi' fim","desde":2000.0},{"pid":104,"cmd":"a'b","desde":null},{"pid":105,"cmd":"bash","desde":5.0}]}"##,
+            r##"{"name":"no_children","pid":7,"children":{"100":[101,102,103,104,105]},"argv":{"101":["/bin/bash","-c","source /tmp/snap && eval 'sleep 600' < /dev/null && pwd -P >| '/tmp/x'"],"102":["node","mcp-server.js"],"103":["zsh","-c","x && eval 'echo '\\''oi'\\'' fim'"],"104":["/usr/bin/fish","-c","y && eval 'a'\"'\"'b' resto"],"105":["bash"]},"start":{"101":1000.5,"103":2000.0,"104":null,"105":5.0},"expected":[]}"##,
+        ];
+        for row in CASES {
+            let row: Value = serde_json::from_str(row).unwrap();
             let fake = Fake { children: by_pid(&row["children"]), argv: by_pid(&row["argv"]), start: by_pid(&row["start"]) };
             let expected: Vec<ShellVivo> = serde_json::from_value(row["expected"].clone()).unwrap();
             assert_eq!(shells_of(row["pid"].as_i64().unwrap(), &fake), expected, "{}", row["name"]);

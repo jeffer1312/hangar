@@ -1106,9 +1106,10 @@ fn private_frame(frame: &[u8], events: &[&str], guest: bool) -> bool {
         || (!guest && state_frame(frame, &["plugin_toast"]))
 }
 
-/// Quadro que só o dono recebe: aviso de mod (texto dele) e pedido de navegador (url com o token).
+/// Quadro que só o dono recebe: aviso de mod (texto dele), pedido de navegador (url com o token) e
+/// pedido do cofre.
 pub(crate) fn owner_only(frame: &[u8]) -> bool {
-    state_frame(frame, &["plugin_toast", "nav"])
+    state_frame(frame, &["plugin_toast", "nav", "vault"])
 }
 
 /// Quadro de um dos eventos do estado dados.
@@ -2024,6 +2025,33 @@ mod tests {
         c.record("queue", r#"{"entries":[],"actions":true}"#, &frame, false);
         assert!(c.replay().iter().any(|f| f.starts_with(b"event: queue\r\n")));
         assert!(private_frame(&frame, &STATE_EVENTS, true), "o canal privado leva a fila a quem entrou pelo Python");
+    }
+
+    /// A adormecida não tem ator, e o painel age no arquivo da fila dela: a lista sai com os botões.
+    #[tokio::test]
+    async fn queue_watch_gives_the_asleep_panel_its_buttons() {
+        let dir = tempfile::tempdir().unwrap();
+        let (jsonl, queue) = (dir.path().join("t.jsonl"), dir.path().join("s.jsonl"));
+        std::fs::write(&jsonl, "{\"type\":\"user\",\"timestamp\":\"2026-10-14T12:00:00Z\",\"message\":{\"content\":\"oi\"}}\n").unwrap();
+        std::fs::write(&queue, format!("{}\n", serde_json::json!({"id":"a","text":"guardada","ts":1_791_979_201.0,"delivered":false}))).unwrap();
+        let sidecars = dir.path().join(".hangar").join("claude-headless");
+        std::fs::create_dir_all(&sidecars).unwrap();
+        std::fs::write(sidecars.join("s.json"), serde_json::json!({"name":"s","key":"k","asleep":{"wake_surface":"terminal","since":1.0}}).to_string()).unwrap();
+        let home = dir.path().to_string_lossy().into_owned();
+        let env = crate::accounts::environment::AccountEnvironment::from_map([("HOME".to_owned(), home.clone()), ("USERPROFILE".to_owned(), home)].into());
+        let registry = crate::runtime::gateway::RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "s".into(), "i".into()).with_codex_environment(env);
+        let ctx = SideCtx { locate: Arc::new(crate::locate::Unavailable), ..idle_ctx() };
+        assert!(ctx.runtime.set(Arc::new(registry)).is_ok());
+        let binding = Binding { provider: Provider::Claude, jsonl: jsonl.clone(), key: "k".into(), headless: false, life: None };
+        let lease = ctx.hubs.acquire("s", binding, &ctx);
+        let info: InternalInfo = serde_json::from_value(serde_json::json!({"provider": "claude", "jsonl": jsonl, "session_key": "k", "history": {"queue": queue}})).unwrap();
+        lease.hub.learn_queue(&info);
+        let frames = |hub: &Hub| hub.cache.lock().unwrap().replay().into_iter()
+            .filter(|f| f.starts_with(b"event: queue\r\n")).map(|f| String::from_utf8_lossy(&f).into_owned()).collect::<Vec<_>>();
+        tokio::time::timeout(Duration::from_secs(5), async { while frames(&lease.hub).is_empty() { tokio::time::sleep(Duration::from_millis(20)).await } })
+            .await.expect("a lista sai");
+        let first = frames(&lease.hub);
+        assert!(first[0].contains(r#""id":"a""#) && first[0].contains(r#""actions":true"#), "{first:?}");
     }
 
     #[tokio::test]

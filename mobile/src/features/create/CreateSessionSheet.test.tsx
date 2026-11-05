@@ -33,6 +33,7 @@ const calls = vi.hoisted(() => ({
   pickerHistory: [] as number[],
   cotas: [] as unknown[],
   worktrees: vi.fn(),
+  branches: vi.fn(),
 }));
 const server = { id: 'server-b', label: 'Servidor B', baseUrl: 'https://b.local', token: 'token-b' };
 
@@ -160,6 +161,7 @@ vi.mock('@hangar/core', async (original) => ({
   prewarmSessionForServer: calls.prewarm,
   releasePrewarmForServer: calls.releasePrewarm,
   getWorktreesForServer: calls.worktrees,
+  getFolderBranchesForServer: calls.branches,
   sendInputForServer: calls.send,
   getHistory: calls.history,
   getArchivePorCwd: calls.archives,
@@ -241,7 +243,11 @@ vi.mock('../../paraglide/messages', () => ({
     'native_create_codex_account native_loading native_new_chat_machine native_network_error criar_providers_erro ' +
     'native_new_chat_no_accounts nova_conversa_anexo_falhou nova_conversa_candidata nova_conversa_conferir_erro nova_conversa_criando ' +
     'nova_conversa_nao_encontrada nova_conversa_nome_conflito nova_conversa_so_terminal nova_conversa_tentativa_invalida sync_retry ' +
-    'worktree_base worktree_modo worktree_modo_ajuda worktree_nome_branch worktree_nova_branch ' +
+    'worktree_menu_pill_nova worktree_menu_pill_existente worktree_menu_nome_sessao ' +
+    'worktree_menu_titulo worktree_menu_pasta worktree_menu_pasta_dica worktree_menu_nova worktree_menu_nova_dica worktree_menu_existente ' +
+    'worktree_menu_existentes worktree_menu_uma worktree_menu_n worktree_menu_n_em_uso worktree_menu_nenhuma worktree_menu_em_uso ' +
+    'worktree_menu_ocupada worktree_menu_parte_de worktree_menu_branch worktree_menu_ja_existe worktree_menu_ja_aberta worktree_menu_pasta_destino ' +
+    'worktree_nova_so_remoto worktree_subagentes worktree_parada_dias worktree_dias_atras ' +
     'composer_session_settings composer_session_settings_hint native_ctl_model_title native_ctl_search native_ctl_no_results ' +
     'comum_nenhum_modelo native_new_chat_reasoning modelo_sem_niveis native_ctl_loading native_ctl_retry native_ctl_failed ' +
     'native_ctl_fast native_ctl_fast_on native_ctl_fast_off native_ctl_fast_hint native_ctl_fast_unavailable ' +
@@ -315,6 +321,7 @@ describe('CreateSessionSheet Codex', () => {
     calls.prewarm.mockReset().mockImplementation(() => new Promise(() => {}));
     calls.releasePrewarm.mockReset().mockResolvedValue(undefined);
     calls.worktrees.mockReset().mockResolvedValue([]);
+    calls.branches.mockReset().mockResolvedValue({ current: 'main', branches: ['main'], remotes: [], dirty: false });
     calls.send.mockReset().mockResolvedValue(undefined);
     calls.history.mockReset().mockResolvedValue([]);
     calls.archives.mockReset().mockResolvedValue([]);
@@ -406,6 +413,22 @@ describe('CreateSessionSheet Codex', () => {
       expect(calls.create).toHaveBeenCalledWith(server, expect.objectContaining({
         model: 'opus', effort: 'high', permission_mode: 'bypassPermissions',
       }));
+    } finally { act(() => root.unmount()); }
+  });
+
+  it('worktree nova com a branch atual da pasta não envia a primeira mensagem', async () => {
+    const { container, root } = await renderSheet(false, false);
+    try {
+      const pill = [...container.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.getAttribute('aria-label')?.startsWith('native_create_checkout_branch'))!;
+      await act(async () => pill.click());
+      for (let i = 0; i < 3; i++) await act(async () => Promise.resolve());
+      const panel = container.querySelector('[data-testid="folder-panel"][aria-label="native_create_checkout_branch"]') as HTMLElement;
+      await act(async () => button(panel, 'worktree_menu_nova')!.click());
+      const field = panel.querySelector('textarea[aria-label="worktree_menu_branch"]') as HTMLTextAreaElement;
+      await act(async () => { field.value = 'main'; field.dispatchEvent(new Event('input', { bubbles: true })); });
+      expect(panel.textContent).toContain('worktree_menu_ja_aberta');
+      await send(container);
+      expect(calls.create).not.toHaveBeenCalled();
     } finally { act(() => root.unmount()); }
   });
 
@@ -2139,6 +2162,29 @@ describe('CreateSessionSheet Codex', () => {
         await act(async () => button(container, 'hangar-anim')!.click());
         await act(async () => Promise.resolve());
         expect(button(container, 'native_new_chat_folder: hangar-anim')).toBeDefined();
+      } finally { act(() => root.unmount()); }
+    });
+
+    it('escolher uma worktree que já existe no painel de branch cria a sessão na pasta dela, sem branch', async () => {
+      calls.scan.mockResolvedValue({ entries: [folder] });
+      calls.worktrees.mockResolvedValue([{ repo: '/repo/hangar', worktrees: [{ path: '/repo/hangar-menu', repo: '/repo/hangar', exists: true,
+        branch: 'b/menu', base: 'main', main_branch: 'main', merged: false, ahead: 0, dirty: 0, ignored: [], sessions: [], closed: 0 }] }]);
+      const { container, root } = await renderForm();
+      try {
+        await pickFolder(container);
+        await act(async () => button(container, 'native_create_checkout_branch: native_create_checkout_current')!.click());
+        await act(async () => Promise.resolve());
+        const panel = () => container.querySelector('[data-testid="folder-panel"][aria-label="native_create_checkout_branch"]') as HTMLElement;
+        await act(async () => button(panel(), 'worktree_menu_existente')!.click());
+        await act(async () => button(panel(), 'hangar-menu')!.click());
+        await act(async () => Promise.resolve());
+        await act(async () => button(container, 'criar_criar')!.click());
+        await act(async () => Promise.resolve());
+        expect(calls.create).toHaveBeenCalledTimes(1);
+        const body = calls.create.mock.calls[0][1];
+        expect(body.cwd).toBe('/repo/hangar-menu');
+        expect(body).not.toHaveProperty('branch');
+        expect(body).not.toHaveProperty('new_branch');
       } finally { act(() => root.unmount()); }
     });
 

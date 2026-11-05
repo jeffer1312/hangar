@@ -1,62 +1,37 @@
+mod contract_orq_conductor_cases;
+
 use serde_json::Value;
 #[test]
-fn conductor_frozen_python_contract() {
+fn conductor_feed_answers_each_case() {
     std::thread::Builder::new()
         .stack_size(64 * 1024 * 1024)
-        .spawn(frozen_contract)
+        .spawn(feed_cases)
         .unwrap()
         .join()
         .unwrap();
 }
-fn frozen_contract() {
-    use serde::Deserialize;
-    let mut decoder = serde_json::Deserializer::from_str(include_str!(
-        "../../../backend/tests/fixtures/contract/orq-conductor/feed.json"
-    ));
-    decoder.disable_recursion_limit();
-    let fixture = Value::deserialize(&mut decoder).unwrap();
-    for case in fixture["cases"].as_array().unwrap() {
+fn feed_cases() {
+    let cases = contract_orq_conductor_cases::cases();
+    assert_eq!(cases.len(), 93);
+    for case in &cases {
         let root = tempfile::tempdir().unwrap();
-        for (path, text) in case["files"].as_object().unwrap() {
-            std::fs::write(root.path().join(path), text.as_str().unwrap()).unwrap()
+        for (path, text) in &case.files {
+            std::fs::write(root.path().join(path), text).unwrap()
         }
-        if let Some(bytes) = case["bytes"].as_array() {
-            std::fs::write(
-                root.path().join("registro.md"),
-                bytes
-                    .iter()
-                    .map(|v| v.as_u64().unwrap() as u8)
-                    .collect::<Vec<_>>(),
-            )
-            .unwrap()
+        if let Some(bytes) = &case.journal_bytes {
+            std::fs::write(root.path().join("registro.md"), bytes).unwrap()
         }
         let actual = hangar_server::orq_conductor::feed_json_with_timezone(
             root.path(),
             chrono::FixedOffset::east_opt(0).unwrap(),
         );
-        if case.get("error").is_some() {
-            assert!(
-                actual.is_err(),
-                "{}: erro Python precisa continuar uma recusa",
-                case["name"]
-            )
-        } else {
+        if let Some(expected) = &case.expected {
             let bytes = actual.unwrap();
             let text = String::from_utf8(bytes).unwrap();
-            let expected = case["expected_json"].as_str().unwrap();
-            let marker = contract_marker(&text, expected);
-            assert_eq!(
-                normalized_json(&text, &marker),
-                normalized_json(expected, &marker),
-                "cenário {}",
-                case["name"]
-            );
-            assert_eq!(
-                large_integer_tokens(&text),
-                large_integer_tokens(expected),
-                "inteiros exatos no cenário {}",
-                case["name"]
-            );
+            // Texto exato: a ordem das chaves e os inteiros enormes contam.
+            assert_eq!(text, *expected, "cenário {}", case.name);
+        } else {
+            assert!(actual.is_err(), "{}: precisa continuar uma recusa", case.name)
         }
     }
 }
@@ -446,138 +421,4 @@ async fn conductor_http_python_errors_remain_visible() {
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(decoded(response).await["detail"]["code"], code);
     }
-}
-
-fn large_integer_tokens(text: &str) -> Vec<String> {
-    let bytes = text.as_bytes();
-    let (mut i, mut quoted, mut escaped) = (0, false, false);
-    let mut out = Vec::new();
-    while i < bytes.len() {
-        let byte = bytes[i];
-        if quoted {
-            if escaped {
-                escaped = false
-            } else if byte == b'\\' {
-                escaped = true
-            } else if byte == b'"' {
-                quoted = false
-            }
-            i += 1;
-            continue;
-        }
-        if byte == b'"' {
-            quoted = true;
-            i += 1;
-            continue;
-        }
-        if byte == b'-' || byte.is_ascii_digit() {
-            let start = i;
-            i += 1;
-            while i < bytes.len()
-                && matches!(bytes[i], b'0'..=b'9' | b'.' | b'e' | b'E' | b'+' | b'-')
-            {
-                i += 1
-            }
-            let value = &text[start..i];
-            if !value.contains(['.', 'e', 'E'])
-                && value.parse::<i64>().is_err()
-                && value.parse::<u64>().is_err()
-            {
-                out.push(value.to_owned())
-            }
-        } else {
-            i += 1
-        }
-    }
-    out
-}
-
-fn json_strings(text: &str) -> Vec<String> {
-    let bytes = text.as_bytes();
-    let mut i = 0;
-    let mut strings = Vec::new();
-    while i < bytes.len() {
-        if bytes[i] != b'"' {
-            i += 1;
-            continue;
-        }
-        let start = i;
-        i += 1;
-        let mut escaped = false;
-        while i < bytes.len() {
-            let byte = bytes[i];
-            i += 1;
-            if escaped {
-                escaped = false
-            } else if byte == b'\\' {
-                escaped = true
-            } else if byte == b'"' {
-                break;
-            }
-        }
-        strings.push(serde_json::from_str(&text[start..i]).unwrap())
-    }
-    strings
-}
-fn contract_marker(actual: &str, expected: &str) -> String {
-    let strings = json_strings(actual)
-        .into_iter()
-        .chain(json_strings(expected))
-        .collect::<Vec<_>>();
-    let mut marker = "\u{10ffff}contract-integer:".to_owned();
-    while strings.iter().any(|text| text.contains(&marker)) {
-        marker.push('#')
-    }
-    marker
-}
-fn normalized_json(text: &str, marker: &str) -> Value {
-    use serde::Deserialize;
-    let bytes = text.as_bytes();
-    let mut i = 0;
-    let mut normalized = String::new();
-    while i < bytes.len() {
-        if bytes[i] == b'"' {
-            let start = i;
-            i += 1;
-            let mut escaped = false;
-            while i < bytes.len() {
-                let byte = bytes[i];
-                i += 1;
-                if escaped {
-                    escaped = false
-                } else if byte == b'\\' {
-                    escaped = true
-                } else if byte == b'"' {
-                    break;
-                }
-            }
-            normalized.push_str(&text[start..i]);
-            continue;
-        }
-        if bytes[i] == b'-' || bytes[i].is_ascii_digit() {
-            let start = i;
-            i += 1;
-            while i < bytes.len()
-                && matches!(bytes[i], b'0'..=b'9' | b'.' | b'e' | b'E' | b'+' | b'-')
-            {
-                i += 1
-            }
-            let token = &text[start..i];
-            if !token.contains(['.', 'e', 'E'])
-                && token.parse::<i64>().is_err()
-                && token.parse::<u64>().is_err()
-            {
-                normalized.push_str(&serde_json::to_string(&format!("{marker}{token}")).unwrap())
-            } else {
-                normalized.push_str(token)
-            }
-            continue;
-        }
-        let ch = text[i..].chars().next().unwrap();
-        normalized.push(ch);
-        i += ch.len_utf8();
-    }
-    let mut decoder = serde_json::Deserializer::from_str(&normalized);
-    decoder.disable_recursion_limit();
-    Value::deserialize(&mut decoder).unwrap()
 }

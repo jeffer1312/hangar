@@ -85,7 +85,8 @@ pub async fn claude(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         match runtime.adopt_now(&name).await {
             None => return not_ours(),
             // Sem sidecar o Python toma o Codex que ainda abre por Claude: o `/input` o guarda na fila dele.
-            Some(Err(error)) if error.code == crate::runtime::codex_relaunch::STARTING && rest == "input" => {
+            // A adormecida também: o `/input` guarda o texto na fila dela, e o acordar já corre à parte.
+            Some(Err(error)) if (error.code == crate::runtime::codex_relaunch::STARTING || error.code == crate::runtime::gateway::ASLEEP_WAKING) && rest == "input" => {
                 if !as_owner(&mut req, &name, &rest) { return not_ours(); }
                 return input::input(State(st), ConnectInfo(peer), req).await;
             }
@@ -119,11 +120,17 @@ pub async fn codex(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
     let outcome = match (method.as_str(), rest.as_str()) {
         ("POST", "kill") => runtime.kill_codex_terminal(&name).await,
         _ => {
-            if !runtime.owns_codex_terminal(&name) && !runtime.owns_codex_headless(&name).await {
+            // Leitura não acorda a adormecida: a rota responde por ela.
+            let asleep = if method == "GET" { runtime.asleep(&name).await } else { None };
+            // Adormecida de outro agente não é desta rota, e ler não a acorda.
+            if asleep.as_ref().is_some_and(|mark| mark.provider != "codex") { return not_ours(); }
+            let reading = asleep.is_some();
+            if !reading && !runtime.owns_codex_terminal(&name) && !runtime.owns_codex_headless(&name).await {
                 match runtime.adopt_now(&name).await {
                     None => return not_ours(),
-                    // Conversa ainda abrindo: a rota decide (texto vai à fila, o resto espera).
-                    Some(Err(error)) if error.code == crate::runtime::codex_relaunch::STARTING => {}
+                    // Conversa ainda abrindo ou adormecida acordando: a rota decide (texto vai à fila, o resto espera).
+                    Some(Err(error)) if error.code == crate::runtime::codex_relaunch::STARTING
+                        || error.code == crate::runtime::gateway::ASLEEP_WAKING => {}
                     Some(Err(error)) => return super::detail(super::failed_status(&error), &error.code, &error.message, json!({})),
                     Some(Ok(())) => {}
                 }
@@ -167,11 +174,13 @@ pub async fn delete(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     if let (true, Some(name), Some(dirs)) = (owner, name.as_deref(), st.list.env().dirs.as_ref()) {
         crate::session_open::restore::forget(&dirs.home, name);
     }
+    // A chave antes do kill (depois dele o pane não a diz mais); os arquivos do cofre saem só no sucesso.
+    let vault_files = match (owner, name.as_deref()) { (true, Some(name)) => crate::vault::files::before_close(&st, name).await, _ => None };
     if let (true, Some(name)) = (owner, name.as_deref()) {
         crate::diag::record(crate::diag::diary_dir(), vec![close_line(name, req.headers(), peer)], "sessão fechada");
     }
     let (Some(runtime), true, Some(name)) = (st.state.runtime.get().cloned(), owner, name)
-        else { return crate::routes::pass(&st, req, &fwd).await };
+        else { return vault_files_after(vault_files, crate::routes::pass(&st, req, &fwd).await) };
     // Claude aberto aqui (com ou sem terminal) também fecha aqui: só matar pelo nome no Python deixava a
     // entrada da vida morta presa ao nome, e a próxima sessão com ele herdava a conversa dela.
     let closed = match runtime.kill_codex_terminal(&name).await {
@@ -184,7 +193,7 @@ pub async fn delete(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
             // Marca com o segredo: o Python não pede a saída pela ponte, que seria ida e volta.
             if let Ok(mark) = axum::http::HeaderValue::from_str(&st.cfg.internal_secret) { req.headers_mut().insert(RUST_LEAVES, mark); }
             let response = crate::routes::pass(&st, req, &fwd).await;
-            return leave_after_forward(&st, &name, response).await;
+            return vault_files_after(vault_files, leave_after_forward(&st, &name, response).await);
         }
         Some(Err(error)) => {
             let mut response = close_refusal(&error);
@@ -192,6 +201,7 @@ pub async fn delete(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
             return response;
         }
         Some(Ok(closed)) => {
+            if let Some(files) = vault_files { files.done(); }
             // Só o caminho da conversa, para o Python guardar o nome fechado; sem ele, o Python registra a falta.
             if let Some(path) = closed["transcript"].as_str() {
                 let encoded = percent_encoding::utf8_percent_encode(path, percent_encoding::NON_ALPHANUMERIC).to_string();
@@ -216,6 +226,12 @@ pub async fn delete(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     }
     let response = crate::routes::pass(&st, req, &fwd).await;
     with_warnings(&name, response, leave).await
+}
+
+/// Os arquivos do cofre da sessão fechada pelo Python saem só com o fechamento confirmado.
+fn vault_files_after(files: Option<crate::vault::files::Closing>, response: Response) -> Response {
+    if let Some(files) = files.filter(|_| response.status().is_success()) { files.done(); }
+    response
 }
 
 /// Fechamento feito pelo Python (sessão sem entrada aqui: Pi, omp, Kimi): sai do grupo depois do

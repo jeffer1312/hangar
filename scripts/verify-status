@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# Mostra a rodada do verificar-local e diz se o passo atual está andando, preso no swap ou parado.
+#
+# Uso:  scripts/verify-status          uma leitura
+#       scripts/verify-status --follow  repete a cada 5 s
+set -uo pipefail
+
+ESTADO="${XDG_STATE_HOME:-$HOME/.local/state}/hangar-verificacao"
+FIXO="${HANGAR_VERIFICAR_ARVORE:-${XDG_CACHE_HOME:-$HOME/.cache}/hangar-verificacao/arvore}"
+JANELA=3
+
+tree_pids() {
+    local p
+    for p in /proc/[0-9]*; do
+        [[ "$(readlink "$p/cwd" 2>/dev/null)" == "$FIXO"* ]] && echo "${p#/proc/}"
+    done
+}
+
+cpu_ticks() {
+    local p campos
+    for p in $(tree_pids); do
+        campos="$(cut -d')' -f2- "/proc/$p/stat" 2>/dev/null)" || continue
+        read -ra f <<< "$campos"
+        echo "$p $(( ${f[11]:-0} + ${f[12]:-0} ))"
+    done
+}
+
+# Parte do tempo em que todas as tarefas ficaram esperando memória, nos últimos 10 s.
+memory_stall() {
+    awk -F'avg10=' '/^full/ {print int($2)}' /proc/pressure/memory
+}
+
+show() {
+    local arquivo agora inicio hora resto passo
+    local -A ativos=()
+    arquivo="$(ls -t "$ESTADO"/andamento/* 2>/dev/null | head -1)"
+    [[ -n "$arquivo" ]] || { echo "nenhuma rodada registrada"; return; }
+    agora="$(date +%s)"
+    inicio="$(head -1 "$arquivo" | cut -d' ' -f1)"
+    echo "rodada $(basename "$arquivo"), começou há $(( (agora - inicio) / 60 )) min"
+    while read -r hora resto; do
+        case "$resto" in
+            ">> "*) passo="${resto#>> }"; ativos["${passo%…}"]="$hora" ;;
+            "<< "*) echo "  ${resto#<< }"; passo="${resto#<< }"; unset "ativos[${passo% * *}]" ;;
+            fim\ *) echo "  terminou com código ${resto#fim }"; ativos=() ;;
+        esac
+    done < "$arquivo"
+    for passo in "${!ativos[@]}"; do echo "  agora: $passo há $(( (agora - ativos[$passo]) / 60 )) min"; done
+    local log
+    log="$(ls -t "$ESTADO"/logs/*.log 2>/dev/null | head -1)"
+    (( ${#ativos[@]} )) && [[ -n "$log" ]] && awk '
+        /^running [0-9]+ test/ {total += $2}
+        /^test .* \.\.\. (ok|FAILED|ignored)/ {feitos++}
+        / \.\.\. FAILED$/ {falhas++}
+        END {if (total) printf "  testes: %d de %d, %d falharam\n", feitos, total, falhas
+             else print "  compilando: o rustc não informa progresso"}' "$log"
+
+    local pids antes depois cpu espera
+    mapfile -t pids < <(tree_pids)
+    if (( ${#pids[@]} == 0 )); then echo "nenhum processo da verificação rodando"; return; fi
+    antes="$(cpu_ticks)"
+    sleep "$JANELA"
+    depois="$(cpu_ticks)"
+    # Por processo: quem saiu na janela não desconta, e quem nasceu nela conta inteiro.
+    cpu="$(awk -v janela="$JANELA" 'NR == FNR {a[$1] = $2; next} {d += $2 - a[$1]} END {print int(d / janela)}' \
+        <(echo "$antes") <(echo "$depois"))"
+    espera="$(memory_stall)"
+    local veredito
+    if (( espera >= 30 )); then veredito="PRESO NO SWAP"
+    elif (( cpu >= 50 )); then veredito="ANDANDO"
+    elif (( cpu >= 5 )); then veredito="LENTO"
+    else veredito="PARADO"
+    fi
+    echo "$veredito: CPU ${cpu}%, ${espera}% do tempo esperando memória, ${#pids[@]} processos"
+    ps -o pid=,etime=,pcpu=,rss=,comm= -p "$(IFS=,; echo "${pids[*]}")" --sort=-rss 2>/dev/null | head -3 |
+        awk '{printf "  %s %s, %d MB em RAM\n", $5, $2, $4 / 1024}'
+    awk '/MemAvailable/ {a = $2} /SwapTotal/ {t = $2} /SwapFree/ {f = $2}
+        END {printf "memória livre %.1f GB, swap usado %.1f GB\n", a / 1048576, (t - f) / 1048576}' /proc/meminfo
+}
+
+if [[ "${1:-}" == --follow ]]; then
+    while true; do clear; show; sleep 2; done
+fi
+show

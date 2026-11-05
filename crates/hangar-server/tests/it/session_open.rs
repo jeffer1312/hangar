@@ -90,12 +90,7 @@ async fn the_creation_progress_is_answered_by_rust() {
     assert_eq!(fake.hits_to("/api/sessions/creation-progress"), 0);
 }
 
-fn fixture(name: &str) -> Value {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../backend/tests/fixtures/contract/session-open").join(format!("{name}.json"));
-    serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
-}
-
-/// `<ROOT>/a/b` vira o caminho desta máquina, com o separador dela (o fixture foi gravado no Linux e
+/// `<ROOT>/a/b` vira o caminho desta máquina, com o separador dela (o cenário está escrito com `/` e
 /// as contas comparam o caminho como texto); `json` escapa a barra invertida para dentro de string JSON.
 fn place(text: &str, root: &Path, json: bool) -> String {
     let root = root.to_string_lossy();
@@ -157,7 +152,7 @@ async fn the_command_resolves_from_the_same_files_with_the_server_down() {
     let root = dir.path().canonicalize().unwrap();
     // O prefixo `\\?\` do Windows não aceita `/`, e os caminhos do fixture vêm com ela.
     let root = std::path::PathBuf::from(root.to_string_lossy().strip_prefix(r"\\?\").map_or(root.clone().into_os_string(), Into::into));
-    let fixture = fixture("create_inherit_from_headless_creator");
+    let fixture: Value = serde_json::from_str(super::session_open_cases::INHERIT_FROM_HEADLESS_CREATOR).unwrap();
     materialize(&fixture, &root);
     // PATH vazio: nem tmux nem agentes, como uma máquina sem sessão de terminal.
     std::fs::create_dir_all(root.join("bin")).unwrap();
@@ -309,7 +304,7 @@ async fn the_command_opens_claude_with_terminal_locally_with_the_server_down() {
     use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
-    let fixture = fixture("create_claude_terminal_default");
+    let fixture: Value = serde_json::from_str(super::session_open_cases::CLAUDE_TERMINAL_DEFAULT).unwrap();
     materialize(&fixture, &root);
     std::fs::create_dir_all(root.join("bin")).unwrap();
     let tmux = root.join("bin/tmux");

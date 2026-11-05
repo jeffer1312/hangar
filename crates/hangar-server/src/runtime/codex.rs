@@ -641,6 +641,16 @@ impl Engine {
             "subagents":self.subagent_views()})
     }
 
+    /// Segundos sem evento da conversa, só com nada em aberto: turno, pedido, pergunta, comando de pé,
+    /// resposta reservada na fila ou envio a caminho. `None`: algo segura a sessão acordada.
+    pub fn park_idle(&self,now:f64) -> Option<f64> {
+        let open = !self.alive || self.in_progress || self.compacting || !self.server_requests.is_empty() || !self.lost_requests.is_empty()
+            || !self.async_questions.pending.is_empty() || !self.running_commands.is_empty() || !self.reservations.is_empty()
+            || !self.skill_preparations.is_empty() || self.mode_write.is_some()
+            || self.rpc.values().any(|rpc|matches!(rpc.method.as_str(),"turn/start" | "turn/steer" | "thread/compact/start"));
+        (!open).then(||now - self.last_event)
+    }
+
     fn blocking_question(&self) -> Option<Value> {
         let (id,request) = self.server_requests.iter().find(|(_,r)|r["method"] == "item/tool/requestUserInput" || form_fields(r).is_some())?;
         Self::question_for(id,request)
@@ -797,28 +807,46 @@ impl Engine {
 
     /// Plugin ou `hooks.json` sincronizado pelo Hangar mudou com a sessão aberta e o Codex passou a
     /// recusar o hook. Só a conexão desta sessão recarrega a confiança que o app-server dela tem em memória.
-    fn trust_synced_hooks(&mut self,parent:Option<&str>,effects:&mut Vec<Effect>) -> bool {
+    /// Plugin reinstalado no disco: reaprova antes do próximo hook, sem esperar a recusa dele.
+    pub fn plugins_changed(&mut self) -> Vec<Effect> {
+        let mut effects = Vec::new();
+        if self.sendable() { self.trust_synced_hooks(None,true,&mut effects); }
+        effects
+    }
+
+    fn trust_synced_hooks(&mut self,parent:Option<&str>,early:bool,effects:&mut Vec<Effect>) -> bool {
         if let Some(rpc) = self.rpc.values_mut().find(|rpc|!rpc.timed_out && rpc.continuation.as_ref().is_some_and(|next|next["kind"] == "hook_trust")) {
             if let Some(parent) = parent {
                 let next = rpc.continuation.as_mut().unwrap();
                 if next["parent"].is_string() { return false; }
                 next["parent"] = parent.into();
+                // Quem pediu espera resposta: a rodada antecipada passa a responder e avisar como as outras.
+                next["early"] = false.into();
             }
             return true;
         }
         let cwds:Vec<Value> = self.metadata["cwd"].as_str().map(Value::from).into_iter().collect();
         self.counter += 1;
         self.rpc(format!("hook_trust:{}:{}",self.generation,self.counter),"hooks/list",json!({"cwds":cwds}),
-            Some(json!({"kind":"hook_trust","parent":parent})),effects);
+            Some(json!({"kind":"hook_trust","parent":parent,"early":early})),effects);
         true
     }
 
     fn hook_trust_reply(&mut self,rpc:&Rpc,line:&Value,effects:&mut Vec<Effect>) {
         let parent = rpc.continuation.as_ref().and_then(|next|next["parent"].as_str());
+        // A antecipada não gasta a rodada do turno nem avisa: se falhar, a recusa do hook dispara a reativa.
+        let early = rpc.continuation.as_ref().is_some_and(|next|next["early"] == true);
         let review = "Use uma sessão com terminal na mesma conta para executar /hooks e depois recarregue esta sessão no Hangar.";
         let reply = |effects:&mut Vec<Effect>,disposition,payload| {
             if let Some(parent) = parent { effects.push(Effect::Reply { operation_id:parent.into(),disposition,payload }); }
         };
+        if early && (rpc.method != "hooks/list" || !line["error"].is_null() || !line["result"]["data"].is_array()) {
+            if !line["error"].is_null() || rpc.method == "hooks/list" {
+                tracing::warn!(session=%self.state.session,method=%rpc.method,error=%line["error"]["message"].as_str().unwrap_or("sem a lista de hooks"),
+                    "codex: reaprovação antecipada falhou; a recusa do hook dispara a reativa");
+            }
+            return;
+        }
         // Uma rodada por turno: a recusa que voltar depois dela é falha de verdade e aparece como as outras.
         if rpc.method != "hooks/list" || !line["error"].is_null() { self.hook_trust_settled = true; }
         if !line["error"].is_null() {
@@ -841,6 +869,10 @@ impl Engine {
             return;
         };
         if entries.iter().any(|entry|["errors","warnings"].iter().any(|field|entry[field].as_array().is_some_and(|items|!items.is_empty()))) {
+            if early {
+                tracing::warn!(session=%self.state.session,"codex: reaprovação antecipada parou; o Codex não carregou todos os hooks");
+                return;
+            }
             self.hook_trust_settled = true;
             self.hook_notice("hook_failed",&format!("o Codex não conseguiu carregar todos os hooks. {review}"),effects);
             reply(effects,Disposition::Rejected,json!({"error":"O Codex não conseguiu carregar todos os hooks","approval_required":true}));
@@ -866,6 +898,7 @@ impl Engine {
             })
             .collect();
         if edits.is_empty() {
+            if early { return; }
             self.hook_trust_settled = true;
             if manual { self.hook_notice("hook_prompt",review,effects); }
             reply(effects,Disposition::Accepted,json!({"refreshed":true,"approval_required":manual}));
@@ -874,7 +907,7 @@ impl Engine {
         // Reescreve também os já confiados: a recarga é o que tira a recusa da memória desta sessão.
         self.counter += 1;
         self.rpc(format!("hook_trust:{}:{}",self.generation,self.counter),"config/batchWrite",
-            json!({"edits":edits,"reloadUserConfig":true}),Some(json!({"kind":"hook_trust","parent":parent,"approval_required":manual})),effects);
+            json!({"edits":edits,"reloadUserConfig":true}),Some(json!({"kind":"hook_trust","parent":parent,"approval_required":manual,"early":early})),effects);
     }
 
     fn send(&mut self,operation_id:String,request:ClientRequest,continuation:Option<Value>,effects:&mut Vec<Effect>) {
@@ -1116,7 +1149,7 @@ impl Engine {
             uncertain.extend(reserved_entry(&rpc));
             if let Some(wire) = self.wires.get_mut(&rpc.operation_id) { wire.final_result = true; }
             if rpc.timed_out { continue; }
-            effects.push(Effect::Reply { operation_id:rpc.operation_id.clone(),disposition:Disposition::Unknown,payload:json!({"error":"a conexão com o Codex caiu"}) });
+            if in_queue(&rpc) { effects.push(Effect::Reply { operation_id:rpc.operation_id.clone(),disposition:Disposition::Unknown,payload:json!({"error":"a conexão com o Codex caiu"}) }); }
             if let Some(parent) = rpc.continuation.as_ref().and_then(|next|next["parent"].as_str()) {
                 let disposition = if skill_parent(&rpc).is_some() { Disposition::Deferred } else { Disposition::Unknown };
                 effects.push(Effect::Reply { operation_id:parent.into(),disposition,payload:json!({"error":"a conexão com o Codex caiu"}) });
@@ -1600,7 +1633,7 @@ impl Engine {
             OperationKind::ReadRateLimits => self.send(id,ClientRequest::AccountRateLimitsRead,None,&mut effects),
             OperationKind::ReadSettings => self.send(id,self.thread_read(payload["include_turns"].as_bool().unwrap_or(false)),None,&mut effects),
             OperationKind::RefreshHooks => {
-                if !self.trust_synced_hooks(Some(&id),&mut effects) { return Err(error("A recarga dos hooks já está em andamento; tente novamente.")); }
+                if !self.trust_synced_hooks(Some(&id),false,&mut effects) { return Err(error("A recarga dos hooks já está em andamento; tente novamente.")); }
                 self.hook_trust_settled = false;
             }
             OperationKind::SetModel | OperationKind::SetEffort => {
@@ -1908,10 +1941,14 @@ impl Engine {
                 for rpc in self.rpc.values_mut() {
                     if !rpc.timed_out && clock.monotonic_s >= rpc.deadline {
                         rpc.timed_out = true;
-                        trust_expired |= rpc.continuation.as_ref().is_some_and(|next|next["kind"] == "hook_trust");
+                        let hook_trust = rpc.continuation.as_ref().filter(|next|next["kind"] == "hook_trust");
+                        if hook_trust.is_some_and(|next|next["early"] == true) {
+                            tracing::warn!(session=%self.state.session,method=%rpc.method,"codex: reaprovação antecipada sem resposta");
+                        }
+                        trust_expired |= hook_trust.is_some_and(|next|next["early"] != true);
                         subscribe_lost |= subscribe_rpc(rpc) && rpc.params["threadId"] == self.thread_id.as_str();
                         uncertain.extend(reserved_entry(rpc));
-                        effects.push(Effect::Reply { operation_id:rpc.operation_id.clone(),disposition:Disposition::Unknown,payload:json!({"error":"RPC sem resposta"}) });
+                        if in_queue(rpc) { effects.push(Effect::Reply { operation_id:rpc.operation_id.clone(),disposition:Disposition::Unknown,payload:json!({"error":"RPC sem resposta"}) }); }
                         if let Some(parent) = rpc.continuation.as_ref().and_then(|next|next["parent"].as_str()) {
                             // Ler o catálogo não escreve nada no turno: a mensagem volta à fila em vez de ficar incerta.
                             let disposition = if skill_parent(rpc).is_some() { Disposition::Deferred } else { Disposition::Unknown };
@@ -2569,7 +2606,7 @@ impl Engine {
             // Só a recusa do próprio Codex (`failed` com a entrada de erro dele), não um texto que o hook escreveu.
             N::HookCompleted(n) if !self.hook_trust_settled && n.run.status == "failed" && n.run.entries.iter()
                 .any(|entry|entry.kind == "error" && entry.text.as_deref().is_some_and(|text|text.contains(HOOK_APPROVAL_REQUIRED))) => {
-                self.trust_synced_hooks(None,effects);
+                self.trust_synced_hooks(None,false,effects);
                 return Ok(());
             }
             N::HookCompleted(n) if n.run.event_name == "userPromptSubmit" && ["blocked","stopped"].contains(&n.run.status.as_str()) => {
@@ -2686,6 +2723,8 @@ fn input_turn(rpc:&Rpc) -> bool { rpc.method == "turn/start" && rpc.continuation
 fn skill_parent(rpc:&Rpc) -> Option<String> {
     rpc.continuation.as_ref().filter(|next|next["kind"] == "skill_lookup").and_then(|next|next["parent"].as_str()).map(str::to_owned)
 }
+/// A reaprovação de hooks nasce do motor, sem operação na fila: responder a ela derruba o ator.
+fn in_queue(rpc:&Rpc) -> bool { !rpc.continuation.as_ref().is_some_and(|next|next["kind"] == "hook_trust") }
 fn reserved_entry(rpc:&Rpc) -> Option<String> {
     rpc.continuation.as_ref().filter(|next|next["kind"] == "async_answer" && next["reserved"] == true)
         .and_then(|next|next["entry_id"].as_str()).map(str::to_owned)
@@ -2727,6 +2766,32 @@ fn question_response(question:&Value,answers:&Value) -> Result<Value,RuntimeErro
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn awaiting_hook_trust() -> Engine {
+        let mut engine = Engine::new(json!({"name":"s","thread_id":"t","headless":true,"initialized":true,"ready":true,"cwd":"/w"}),
+            1,ClockSample { monotonic_s:10.0,epoch_s:1.0 });
+        assert!(!engine.plugins_changed().is_empty(),"a reaprovação saiu");
+        engine
+    }
+
+    fn replies_to_hook_trust(effects:&[Effect]) -> usize {
+        effects.iter().filter(|effect|matches!(effect,Effect::Reply { operation_id,.. } if operation_id.starts_with("hook_trust"))).count()
+    }
+
+    #[test]
+    fn hook_trust_without_answer_replies_to_no_queue_operation() {
+        let mut engine = awaiting_hook_trust();
+        let effects = engine.apply(EngineInput::Tick,ClockSample { monotonic_s:41.0,epoch_s:32.0 }).unwrap();
+        assert_eq!(replies_to_hook_trust(&effects),0,"{effects:?}");
+    }
+
+    #[test]
+    fn hook_trust_on_a_lost_connection_replies_to_no_queue_operation() {
+        let mut engine = awaiting_hook_trust();
+        let written = engine.rpc.values().map(|rpc|rpc.operation_id.clone()).collect();
+        let effects = engine.transport_lost("",&written);
+        assert_eq!(replies_to_hook_trust(&effects),0,"{effects:?}");
+    }
 
     #[test]
     fn shown_card_without_its_request_keeps_both_identity_errors() {

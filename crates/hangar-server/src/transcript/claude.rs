@@ -104,16 +104,29 @@ impl RewriteFilter {
         }
         true
     }
+
+    /// Estado para continuar o filtro noutra leitura do mesmo arquivo (o índice lê aos pedaços).
+    pub(crate) fn to_state(&self) -> String {
+        let recent: Vec<(&str, &str, f64)> = self.recent.iter().map(|((t, h), ts)| (t.as_str(), h.as_str(), *ts)).collect();
+        serde_json::json!({"max": self.max, "recent": recent}).to_string()
+    }
+
+    pub(crate) fn from_state(state: &str) -> Option<Self> {
+        #[derive(serde::Deserialize)]
+        struct Saved { max: f64, recent: Vec<(String, String, f64)> }
+        let saved: Saved = serde_json::from_str(state).ok()?;
+        Some(Self { max: saved.max, recent: saved.recent.into_iter().map(|(t, h, ts)| ((t, h), ts)).collect() })
+    }
 }
 
 /// `silent_attachment_timestamp` (transcript.py:381): relógio de um anexo que nunca vira bolha,
-/// lido sem json.
-pub(crate) fn silent_attachment_timestamp(line: &str) -> Option<&str> {
+/// lido sem json. A falha de hook só vira nota quem pediu as notas (`notices`).
+pub(crate) fn silent_attachment_timestamp(line: &str, notices: bool) -> Option<&str> {
     if !line.ends_with("}\n") {
         return None;
     }
     let head = ATTACHMENT_HEAD.captures(line)?;
-    if matches!(&head[1], "queued_command" | "hook_additional_context") {
+    if matches!(&head[1], "queued_command" | "hook_additional_context") || (notices && &head[1] == "hook_non_blocking_error") {
         return None;
     }
     let i = line.rfind(ATTACHMENT_TAIL)?;
@@ -146,6 +159,173 @@ fn parse_raw(obj: &Map<String, Value>, resolve: PeerResolver) -> Vec<ChatEvent> 
             assistant(obj, msg, uid, &[serde_json::json!({"type":"text", "text":text})]),
         _ => Vec::new(),
     }
+}
+
+/// Avisos da CLI que o terminal mostra e o transcript grava, somados por turno como no Claude sem terminal.
+/// Só linhas `"entrypoint":"cli"`: as do sem terminal (`sdk-cli`) já viram nota pelo ator.
+#[derive(Default)]
+pub(crate) struct NoticeFold {
+    /// Já viu um começo ou fim de turno, ou leu do começo do arquivo: lido a partir do meio, a 2ª falha viraria
+    /// uma "primeira" com outro id. Não volta a falso.
+    synced: bool,
+    /// Turno em curso: a mensagem da fila (`queued_command`) no meio dele é injetada no turno, não abre outro.
+    turn_open: bool,
+    /// Falhas do turno por `hookName` → (detalhe da primeira, total). Por nome: o `stderr` muda a cada chamada.
+    hooks: std::collections::BTreeMap<String, (String, u32)>,
+    /// Maior tentativa do grupo aberto pela `retryAttempt == 1`.
+    retries: Option<u64>,
+}
+
+const HOOK_STDERR_PREFIX: &str = "Failed with non-blocking status code: ";
+
+impl NoticeFold {
+    /// Leitura que começa no byte 0 sabe onde está: a falha do `SessionStart`, antes do primeiro prompt, também conta.
+    pub(crate) fn new(from_file_start: bool) -> Self {
+        Self { synced: from_file_start, ..Self::default() }
+    }
+
+    pub(crate) fn file_start(&mut self) {
+        self.synced = true;
+    }
+
+    /// Notas da linha: o fecho do turno anterior entra antes dos eventos dela (o prompt novo vem depois), o resto depois.
+    pub(crate) fn feed(&mut self, obj: &Map<String, Value>, events: &mut Vec<ChatEvent>) {
+        if obj.get("entrypoint").and_then(Value::as_str) != Some("cli") {
+            return;
+        }
+        let uid = obj.get("uuid").and_then(Value::as_str).unwrap_or("");
+        let at = ts(obj);
+        match obj.get("type").and_then(Value::as_str) {
+            // Turno interrompido não grava `turn_duration`: o prompt seguinte também fecha, e a marca da CLI
+            // ("[Request interrupted by user]") conta como prompt.
+            Some("user") if is_prompt(obj) => self.open_turn(uid, at, events),
+            // Recado de outra sessão: `isMeta`, sem prompt; com a sessão parada é ele que abre o turno.
+            Some("user") if !self.turn_open && obj.get("origin").and_then(|o| o.get("kind")).and_then(Value::as_str) == Some("peer") => {
+                self.wake(uid, at, events)
+            }
+            Some("user") => self.retries = None,
+            Some("system") => match obj.get("subtype").and_then(Value::as_str) {
+                Some("turn_duration") => {
+                    let closed = self.close_turn(uid, at);
+                    events.extend(closed);
+                    self.synced = true;
+                    self.turn_open = false;
+                    self.retries = None;
+                }
+                Some("api_error") => {
+                    let attempt = obj.get("retryAttempt").and_then(Value::as_u64).unwrap_or(0);
+                    if attempt == 1 && self.synced {
+                        let why = obj.get("error").and_then(|e| e.get("formatted")).and_then(Value::as_str).unwrap_or("erro");
+                        let max = obj.get("maxRetries").and_then(Value::as_u64).unwrap_or(1);
+                        events.push(note(format!("retry:{uid}"), format!("⚙️ A API falhou ({why}); nova tentativa 1 de {max}"), at));
+                        self.retries = Some(1);
+                    } else if let Some(seen) = self.retries.as_mut() {
+                        *seen = (*seen).max(attempt);
+                    }
+                }
+                _ => {}
+            },
+            Some("attachment") => self.on_attachment(obj, uid, at, events),
+            Some("assistant") => {
+                // Só a resposta fecha o grupo: um anexo no meio (mensagem digitada na espera) não.
+                if let Some(failed) = self.retries.take() {
+                    if failed > 1 && obj.get("isApiErrorMessage") != Some(&Value::Bool(true)) {
+                        events.push(note(format!("retry-ok:{uid}"), format!("⚙️ A API voltou na {}ª tentativa", failed + 1), at));
+                    }
+                }
+                let stop = obj.get("message").and_then(|m| m.get("stop_reason")).and_then(Value::as_str);
+                if stop == Some("refusal") {
+                    events.push(note(format!("refusal:{uid}"), "⚙️ O modelo recusou responder".into(), at));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Fila ou recado com a sessão parada. Antes da sincronia não se sabe se ela estava parada (a leitura pode ter
+    /// começado no meio de um turno, onde a fila é injetada): só marca o turno, sem soma nem nota.
+    fn wake(&mut self, uid: &str, at: Option<f64>, events: &mut Vec<ChatEvent>) {
+        if self.synced {
+            self.open_turn(uid, at, events);
+        } else {
+            self.turn_open = true;
+        }
+    }
+
+    /// Prompt novo: fecha as somas do turno anterior antes dele (turno interrompido não grava `turn_duration`).
+    fn open_turn(&mut self, uid: &str, at: Option<f64>, events: &mut Vec<ChatEvent>) {
+        let closed = self.close_turn(uid, at);
+        events.splice(0..0, closed);
+        self.synced = true;
+        self.turn_open = true;
+        self.retries = None;
+    }
+
+    /// Prompt que vem da fila com a sessão parada abre turno; falha de hook (não bloqueio) vira nota, as seguintes somam.
+    fn on_attachment(&mut self, obj: &Map<String, Value>, uid: &str, at: Option<f64>, events: &mut Vec<ChatEvent>) {
+        let Some(att) = obj.get("attachment").and_then(Value::as_object) else { return };
+        match att.get("type").and_then(Value::as_str) {
+            Some("queued_command") if !self.turn_open => return self.wake(uid, at, events),
+            Some("hook_non_blocking_error") if self.synced => {}
+            _ => return,
+        }
+        let name = att.get("hookName").or_else(|| att.get("hookEvent")).and_then(Value::as_str).unwrap_or("hook").to_owned();
+        if let Some(streak) = self.hooks.get_mut(&name) {
+            streak.1 += 1;
+            return;
+        }
+        let reason = hook_failure_reason(att.get("stderr").and_then(Value::as_str), att.get("exitCode").and_then(Value::as_i64));
+        let detail = format!("{name}: {reason}");
+        events.push(hook_note(format!("hookfail:{uid}"), detail.clone(), at));
+        self.hooks.insert(name, (detail, 1));
+    }
+
+    fn close_turn(&mut self, uid: &str, at: Option<f64>) -> Vec<ChatEvent> {
+        std::mem::take(&mut self.hooks).into_iter().filter(|(_, (_, count))| *count > 1)
+            .map(|(name, (detail, count))| hook_note(format!("hookfail-sum:{uid}:{}", md5_8(&name)), format!("{detail} ({count}× neste turno)"), at))
+            .collect()
+    }
+}
+
+/// Prompt da pessoa (ou de quem fala por ela): abre um turno. Resultado de ferramenta, resumo da compactação
+/// (cai no meio do turno) e `/comando` local (não grava `turn_duration`) não.
+fn is_prompt(obj: &Map<String, Value>) -> bool {
+    if py::truthy(obj.get("isMeta")) || py::truthy(obj.get("isCompactSummary")) {
+        return false;
+    }
+    match obj.get("message").and_then(|m| m.get("content")) {
+        Some(Value::String(text)) => !strip(text).is_empty() && !is_command_meta(text),
+        Some(Value::Array(blocks)) => !blocks.iter().any(|b| b.get("type").and_then(Value::as_str) == Some("tool_result"))
+            && blocks.iter().find(|b| b.get("type").and_then(Value::as_str) == Some("text"))
+                .is_some_and(|b| !is_command_meta(b.get("text").and_then(Value::as_str).unwrap_or(""))),
+        _ => false,
+    }
+}
+
+/// Motivo da falha de hook, o mesmo com e sem terminal: primeira linha com texto, cortada; senão o código de saída.
+pub(crate) fn hook_failure_reason<'a>(texts: impl IntoIterator<Item = &'a str>, exit: Option<i64>) -> String {
+    texts.into_iter().map(|text| text.strip_prefix(HOOK_STDERR_PREFIX).unwrap_or(text)).flat_map(str::lines).map(str::trim)
+        .find(|row| !row.is_empty())
+        .map(|row| match row.char_indices().nth(300) { Some((at, _)) => format!("{}…", &row[..at]), None => row.to_owned() })
+        .or_else(|| exit.map(|code| format!("exit {code}")))
+        .unwrap_or_else(|| "sem mensagem de erro".into())
+}
+
+/// Nota de aviso da CLI no formato de resposta: não é a resposta do modelo (prévia, última resposta).
+pub(crate) fn is_cli_note(id: &str) -> bool {
+    ["retry:", "retry-ok:", "refusal:"].iter().any(|prefix| id.starts_with(prefix))
+}
+
+fn note(id: String, text: String, at: Option<f64>) -> ChatEvent {
+    let mut ev = ChatEvent { ts: at, ..text_event(ChatKind::AssistantMsg, id, text) };
+    finish(&mut ev);
+    ev
+}
+
+fn hook_note(id: String, detail: String, at: Option<f64>) -> ChatEvent {
+    let mut ev = ChatEvent { ts: at, hook_error: Some(detail), ..text_event(ChatKind::Notice, id, "hook_failed".into()) };
+    finish(&mut ev);
+    ev
 }
 
 fn ts(obj: &Map<String, Value>) -> Option<f64> {

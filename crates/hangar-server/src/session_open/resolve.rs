@@ -552,9 +552,38 @@ fn quota_check(provider: AgentProvider, current: Option<&str>, facts: &dyn OpenF
 }
 
 /// `Path(a).resolve() == Path(b).resolve()`, sem exigir que existam.
-fn same_dir(a: &str, b: &str) -> bool {
+fn same_dir(a: &str, b: &str) -> bool { same_dir_on(a, b, cfg!(windows)) }
+
+/// Texto igual vence; os dois no disco decide o disco (pasta NTFS pode diferenciar maiúsculas); só
+/// sem resposta dele vale a regra do texto.
+fn same_dir_on(a: &str, b: &str, windows: bool) -> bool {
     let trim = |p: &str| p.trim_end_matches(['/', '\\']).to_owned();
-    trim(a) == trim(b) || crate::list::discover::real(a) == crate::list::discover::real(b)
+    if trim(a) == trim(b) {
+        return true;
+    }
+    // Sem o `\\?\` antes de resolver: nele o Windows não lê `/` como separador e o canonicalize falha.
+    let input = |p: &str| crate::list::links::without_verbatim(std::path::PathBuf::from(trim(p)));
+    let (a, b) = (input(a), input(b));
+    if a.canonicalize().is_ok() && b.canonicalize().is_ok() {
+        return crate::accounts::catalog::resolved(&a) == crate::accounts::catalog::resolved(&b);
+    }
+    lexical_same(&a.to_string_lossy(), &b.to_string_lossy(), windows)
+}
+
+/// Grafias da mesma pasta sem o disco (o `canonicalize` falhou): barra final; no Windows também
+/// `/` e `\` e a caixa, que lá não distinguem pastas.
+fn lexical_same(a: &str, b: &str, windows: bool) -> bool {
+    let norm = |p: &str| {
+        let p = p.trim_end_matches(['/', '\\']);
+        if windows { p.replace('/', "\\").to_lowercase() } else { p.to_owned() }
+    };
+    norm(a) == norm(b)
+}
+
+/// A grafia do catálogo da conta que `dir` nomeia: barra final, `\\?\` ou `/` no Windows não fazem
+/// outra conta, e quem segue usa o caminho como o catálogo o escreve.
+pub(crate) fn known_config_dir<'a>(known: impl IntoIterator<Item = &'a str>, dir: &str) -> Option<&'a str> {
+    known.into_iter().find(|k| same_dir(k, dir))
 }
 
 /// Validação na ordem do `_create_session_owned` (o primeiro erro vence), tudo antes de qualquer
@@ -776,5 +805,42 @@ mod quota_usage_tests {
         assert_eq!(quota_usage(Some(&row), None, 100.), Some(100.));
         let renewed = json!({"estado": "lida", "janelas": [{"pct": 100.0, "reset_ts": 500.0}]});
         assert_eq!(quota_usage(Some(&renewed), None, 1000.), Some(0.));
+    }
+}
+
+#[cfg(test)]
+mod same_dir_tests {
+    use super::*;
+
+    #[test]
+    fn spellings_of_a_folder_that_does_not_resolve() {
+        assert!(lexical_same("C:/x/", r"C:\x", true));
+        assert!(lexical_same(r"C:\X", r"C:\x", true));
+        assert!(lexical_same("/a/x/", "/a/x", false));
+        // Fora do Windows `\` é parte do nome e a caixa distingue pastas.
+        assert!(!lexical_same(r"/a/X", "/a/x", false));
+        assert!(!lexical_same(r"/a\x", "/a/x", false));
+    }
+
+    // `Account` e `account` só coexistem num sistema de arquivos que diferencia maiúsculas.
+    #[cfg(not(any(windows, target_os = "macos")))]
+    #[test]
+    fn folders_on_disk_are_compared_by_the_disk_before_the_lexical_rule() {
+        // Pasta que diferencia maiúsculas (NTFS por pasta, Linux): `Account` e `account` são contas distintas.
+        let dir = tempfile::tempdir().unwrap();
+        let (upper, lower) = (dir.path().join("Account"), dir.path().join("account"));
+        std::fs::create_dir(&upper).unwrap();
+        std::fs::create_dir(&lower).unwrap();
+        let s = |p: &std::path::Path| p.to_string_lossy().into_owned();
+        assert!(!same_dir_on(&s(&upper), &s(&lower), true));
+        assert!(same_dir_on(&format!("{}/", s(&upper)), &s(&upper), true));
+        // Só sem resposta do disco vale a regra do texto.
+        assert!(same_dir_on(&s(&dir.path().join("Sumida")), &format!("{}/", s(&dir.path().join("sumida"))), true));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn missing_folder_spellings_are_the_same_on_windows() {
+        assert!(same_dir(r"C:\nao\existe\X", "c:/nao/existe/x/"));
     }
 }

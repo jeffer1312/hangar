@@ -18,11 +18,11 @@ use super::input::{
     Diary, MSG_CODEX_CONTROL, MSG_CONTROL_DEFERRED, MSG_CONTROL_UNCONFIRMED, MSG_STEER_REFUSED, MSG_STEER_UNKNOWN, answer, codex_control,
     control_failed, diary_code, json_content_type, payload_code, runtime_failed, sem_turno,
 };
-use super::{Ctx, WriteRoute, admit, detail_body, invalid_body};
+use super::{Ctx, WriteRoute, admit, busy_body, detail_body, invalid_body, json_response};
 use crate::mods::state::random_hex;
 use crate::interactions::{ExpectedInteraction, InteractionError};
-use crate::routes::AppState;
-use crate::runtime::gateway::EntryHandle;
+use crate::routes::{AppState, cors};
+use crate::runtime::gateway::{EntryHandle, RuntimeRegistry};
 use crate::runtime::protocol::{Disposition, OperationKind, RuntimeCommand, RuntimeError, RuntimeReply};
 use crate::runtime::queue::{Action, queue_text_ok};
 
@@ -488,6 +488,53 @@ pub async fn term_input(State(st): State<Arc<AppState>>, ConnectInfo(peer): Conn
         }
     };
     answer(&ctx, result)
+}
+
+/// O painel da fila na adormecida (tirar, editar, mover): a ação vai ao arquivo da fila dela e ela segue
+/// dormindo, com as respostas de sempre. `None`: outra rota, ou sessão acordada, que seguem o caminho comum.
+/// Orientar fica de fora: pedir a entrega agora é pedir para ela acordar.
+pub(super) async fn asleep_queue(runtime: &RuntimeRegistry, name: &str, route: WriteRoute, wait: std::time::Duration, parts: &Parts, bytes: &Bytes) -> Option<Response> {
+    if !matches!(route, WriteRoute::QueueRemove | WriteRoute::QueueEdit | WriteRoute::QueueReorder) { return None; }
+    let busy = || {
+        let mut response = json_response(StatusCode::CONFLICT, busy_body());
+        cors(&parts.headers, response.headers_mut());
+        Some(response)
+    };
+    // Acordando, recusa sem mexer: a rota comum, com o acordar que falhou, acordaria de novo.
+    if runtime.waking_key(name).is_some() { return busy(); }
+    // A porta aberta segura o acordar até a ação terminar.
+    let Ok(_pass) = runtime.ingress().enter(name, wait).await else { return busy() };
+    if runtime.waking_key(name).is_some() { return busy(); }
+    if runtime.writable(name).await.is_some() { return None; }
+    let mark = runtime.asleep(name).await?;
+    let (key, headers) = (mark.key.as_str(), &parts.headers);
+    let action = |action: Action| async move { runtime.asleep_queue_action(name, key, &random_hex(16), action).await };
+    let result = match route {
+        WriteRoute::QueueRemove => {
+            let Some(entry_id) = queue_entry(parts) else { return Some(invalid_body(headers)) };
+            let only_waiting = match crate::auth::query_param(parts.uri.query(), "only_waiting").as_deref() {
+                None => false,
+                Some("true" | "1") => true,
+                Some(_) => return Some(invalid_body(headers)),
+            };
+            let cancelled = action(Action::Cancel { entry_id: entry_id.clone() }).await;
+            if only_waiting || matches!(cancelled, Ok(ref done) if *done == json!("cancelled")) { queue_change_answer(&cancelled, "cancelled") }
+            else { queue_answer(&action(Action::Remove { entry_id }).await) }
+        }
+        WriteRoute::QueueEdit => {
+            let (Some(entry_id), Some(text)) = (queue_entry(parts), parse_queue_text(bytes).filter(|_| json_content_type(headers)))
+                else { return Some(invalid_body(headers)) };
+            if !queue_text_ok(&text) { (StatusCode::UNPROCESSABLE_ENTITY, detail_body("queue_text_invalid", MSG_QUEUE_TEXT, json!({}))) }
+            else { queue_change_answer(&action(Action::Edit { entry_id, text }).await, "edited") }
+        }
+        _ => {
+            let Some((entry_id, before_id)) = parse_queue_reorder(bytes).filter(|_| json_content_type(headers)) else { return Some(invalid_body(headers)) };
+            queue_change_answer(&action(Action::Reorder { entry_id, before_id }).await, "moved")
+        }
+    };
+    let mut response = json_response(result.0, result.1);
+    cors(headers, response.headers_mut());
+    Some(response)
 }
 
 pub async fn queue_remove(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {

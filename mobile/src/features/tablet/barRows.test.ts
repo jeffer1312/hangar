@@ -150,4 +150,14 @@ describe('barRows', () => {
     expect(barRows([parent, session('filha', 'nb', { linked_by: 'mae', state: 'dead' })], identities))
       .toEqual([{ kind: 'single', session: parent }]);
   });
+
+  it('tira as ocultas, menos a aberta, que sai quando a pessoa troca de sessão', () => {
+    const rows = [session('a'), session('b-oculta', 'nb', { hidden_from_list: true }), session('c-oculta', 'nb', { hidden_from_list: true })];
+    const names = (current?: { serverId: string; name: string }) =>
+      barRows(rows, identities, true, {}, current).map(item => item.kind === 'single' ? item.session.name : item.key);
+    expect(names()).toEqual(['a']);
+    expect(names({ serverId: 'nb', name: 'b-oculta' })).toEqual(['a', 'b-oculta']);
+    expect(names({ serverId: 'vm', name: 'b-oculta' })).toEqual(['a']);
+    expect(names({ serverId: 'nb', name: 'a' })).toEqual(['a']);
+  });
 });

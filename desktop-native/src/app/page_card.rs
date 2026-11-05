@@ -772,7 +772,8 @@ impl Hangar {
             });
             let focused = view.focus.clone();
             let (down, up, up_out, moved, key_down, key_up) = (id.clone(), id.clone(), id.clone(), id.clone(), id.clone(), id.clone());
-            let card = div().id(SharedString::from(format!("page-{id}"))).relative().w_full().h(height).overflow_hidden()
+            // A borda sai da altura: sem somá-la, a página mede 2 px a menos, informa isso e o cartão encolhe a cada volta.
+            let card = div().id(SharedString::from(format!("page-{id}"))).relative().w_full().h(height + px(2.)).overflow_hidden()
                 .rounded(px(8.)).border_1().border_color(transparent_black())
                 .track_focus(&view.focus).key_context("BrowserPage").aria_label(title.clone())
                 .focus(|el| el.border_color(theme::accent_focus()))

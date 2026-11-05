@@ -3748,6 +3748,7 @@ dependencies = [
  "notify",
  "notify-rust",
  "opus-rs",
+ "proptest",
  "qrcode",
  "reqwest",
  "resvg 0.46.0",

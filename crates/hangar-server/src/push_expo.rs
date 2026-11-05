@@ -71,6 +71,9 @@ struct Notify {
     body: Localized,
     #[serde(default)]
     list: bool,
+    /// `request_id` do pedido do cofre: o app abre a folha dele. Só o Rust preenche.
+    #[serde(skip)]
+    vault_request: Option<String>,
 }
 
 // O Expo guarda recibos por 24 h e lê até 1000 por chamada; ticket sem recibo não fica para sempre.
@@ -183,6 +186,7 @@ pub(crate) fn send(
     title: (String, String),
     body: (String, String),
     list: bool,
+    vault_request: Option<String>,
 ) {
     let base = state
         .accounts
@@ -204,6 +208,7 @@ pub(crate) fn send(
             en: body.1,
         },
         list,
+        vault_request,
     };
     tokio::spawn(deliver(
         path(&state.accounts.env.home),
@@ -300,7 +305,12 @@ async fn deliver(path: PathBuf, base: String, diag: DiagClient, notify: Notify) 
     let mut tickets = Vec::new();
     for targets in all.chunks(MAX_MESSAGES) {
         let messages: Vec<Value> = targets.iter().map(|e| {
-            let data = if notify.list { json!({"server": e.server_id}) } else { json!({"server": e.server_id, "session": notify.session}) };
+            let mut data = if notify.list { json!({"server": e.server_id}) } else { json!({"server": e.server_id, "session": notify.session}) };
+            // Como no Web Push: o id da máquina é o que o aparelho registrou para ela.
+            if let Some(request_id) = &notify.vault_request {
+                data["server_id"] = json!(e.server_id);
+                data["request_id"] = json!(request_id);
+            }
             json!({"to": e.token, "title": format!("{} · {}", e.label, notify.title.pick(&e.locale)),
                 "body": notify.body.pick(&e.locale), "data": data, "channelId": "default", "priority": "high"})
         }).collect();

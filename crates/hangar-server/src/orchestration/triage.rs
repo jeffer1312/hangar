@@ -67,14 +67,26 @@ pub fn decide(text: &str) -> (&'static str, Option<String>) {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn or039_waiting_veto_preserves_python_case_insensitivity() {
-        let fixture: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../backend/tests/fixtures/contract/orq/triage-case.json"
-        )).unwrap();
-        for case in fixture["cases"].as_array().unwrap() {
-            let text = case["text"].as_str().unwrap();
-            let (verdict, category) = super::decide(text);
-            assert_eq!(serde_json::json!([verdict, category]), case["expected"], "{text}");
+    fn or039_waiting_veto_is_case_insensitive() {
+        let cases = [
+            ("ack; aguardo revisor que analise", "wake", None),
+            ("ack; aguardo revisor QUE analise", "wake", None),
+            ("ack; aguardo REVISOR Que analise", "wake", None),
+            ("ACK; AGUARDO REVISOR QUE analise", "wake", None),
+            ("ack; espero Revisor qUe analise", "wake", None),
+            ("ack; aguardando revisor Que analise", "wake", None),
+            ("ack; aguardo revisor", "drop", Some("ack")),
+            ("ack; aguardo REVISOR", "drop", Some("ack")),
+            ("ack; aguardo PARECER", "drop", Some("ack")),
+            ("ack; aguardo VEREDITO", "drop", Some("ack")),
+            ("ack; aguardo revisor. QUE analise", "drop", Some("ack")),
+            ("ack; aguardo revisor\nQUE analise", "drop", Some("ack")),
+            ("ack; aguardo revisor  QUE analise", "drop", Some("ack")),
+            ("ack; aguardo revisor queijo", "wake", None),
+        ];
+        for (text, verdict, category) in cases {
+            let (got, got_category) = super::decide(text);
+            assert_eq!((got, got_category.as_deref()), (verdict, category), "{text}");
         }
     }
 }

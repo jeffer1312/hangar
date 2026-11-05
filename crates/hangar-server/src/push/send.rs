@@ -101,6 +101,8 @@ pub fn msg(locale: &str, key: &str) -> &'static str {
                 "loop falhou: {reason}"
             }
         }
+        "cofre" => if en { "Password vault" } else { "Cofre de senhas" },
+        "cofre_pedido" => if en { "{origin} asks for {label}" } else { "{origin} pede {label}" },
         _ => "",
     }
 }
@@ -125,6 +127,8 @@ pub enum Notice {
         status: String,
         reason: String,
     },
+    /// Pedido do cofre esperando o dono; `label` é o nome da senha ou o rótulo do cadastro, nunca o valor.
+    VaultRequest { server_id: String, request_id: String, origin: String, label: String },
 }
 
 impl Notice {
@@ -146,6 +150,7 @@ impl Notice {
                 "" => reason.clone(),
                 text => text.replace("{reason}", reason),
             },
+            Self::VaultRequest { origin, label, .. } => clip(&msg(locale, "cofre_pedido").replace("{origin}", origin).replace("{label}", label)),
         }
     }
 }
@@ -157,6 +162,8 @@ pub struct Outgoing {
     pub title: Option<Box<dyn Fn(&str) -> String + Send + Sync>>,
     pub tag: Option<&'static str>,
     pub url: Option<String>,
+    /// (`server_id`, `request_id`) do pedido do cofre: o aviso abre a folha dele.
+    pub vault: Option<(String, String)>,
 }
 
 impl Outgoing {
@@ -167,7 +174,15 @@ impl Outgoing {
             title: None,
             tag: None,
             url: None,
+            vault: None,
         }
+    }
+
+    /// Pedido do cofre: título fixo e `url` `/` (o Expo abre a lista, onde o cartão está).
+    pub fn vault_request(session: &str, server_id: String, request_id: String, origin: String, label: String) -> Self {
+        let notice = Notice::VaultRequest { server_id: server_id.clone(), request_id: request_id.clone(), origin, label };
+        Self { session: session.to_owned(), body: Box::new(move |l| notice.body(l)), title: Some(Box::new(|l| msg(l, "cofre").to_owned())),
+            tag: None, url: Some("/".to_owned()), vault: Some((server_id, request_id)) }
     }
 
     /// Várias sessões no mesmo ciclo: "N sessões aguardando: a, b", abre a lista.
@@ -181,6 +196,7 @@ impl Outgoing {
             title: Some(Box::new(move |l| msg(l, "sessoes").replace("{n}", &n))),
             tag: Some(COALESCE_TAG),
             url: Some("/".to_owned()),
+            vault: None,
         }
     }
 
@@ -218,8 +234,22 @@ impl Outgoing {
         if let Some(tag) = self.tag {
             p["tag"] = json!(tag);
         }
+        if let Some((server_id, request_id)) = &self.vault {
+            // O id que o cliente conhece para esta máquina é o da inscrição.
+            let server = entry["serverId"].as_str().filter(|s| !s.is_empty()).unwrap_or(server_id);
+            p["url"] = json!(format!("/?server={server}&vault_request={request_id}"));
+            p["server_id"] = json!(server);
+            p["request_id"] = json!(request_id);
+        }
         Ok(p)
     }
+}
+
+/// Binário de teste: o `cargo test` põe todos em `target/<perfil>/deps/`, e o teste de integração
+/// compila a crate sem `cfg(test)`. Nele o pedido do cofre nunca chega ao celular real do dono, que
+/// o `AccountEnvironment` capturado do ambiente aponta.
+fn test_binary() -> bool {
+    cfg!(test) || std::env::current_exe().ok().is_some_and(|exe| exe.parent().and_then(|dir| dir.file_name()).is_some_and(|name| name == "deps"))
 }
 
 /// O que segura um aviso, lido na hora (arquivo de preferências, convidados e presença).
@@ -366,6 +396,22 @@ impl Sender {
         });
     }
 
+    /// Pedido do cofre: só o horário de silêncio segura; o mudo da sessão que pediu, não. Não depende de
+    /// app aberto nem do dono no PC: o agente fica parado esperando a resposta.
+    pub fn vault_request(self: &Arc<Self>, session: &str, server_id: String, request_id: String, origin: String, label: String) {
+        if test_binary() { return; }
+        let (me, session) = (self.clone(), session.to_owned());
+        tokio::spawn(async move {
+            let dir = me.dir();
+            let Ok(prefs) = tokio::task::spawn_blocking(move || store::prefs(&dir)).await else {
+                tracing::warn!(code = "push_gate_read_failed", "aviso do cofre: preferências não leram; aviso segurado");
+                return;
+            };
+            if store::in_quiet_hours(&prefs, chrono::Local::now().time()) { return; }
+            me.broadcast(Outgoing::vault_request(&session, server_id, request_id, origin, label)).await
+        });
+    }
+
     /// "Aguardando": entra na janela de 2 s; quem chega nela sai junto.
     pub fn awaiting(self: &Arc<Self>, session: &str, question: Option<String>) {
         let (me, session) = (self.clone(), session.to_owned());
@@ -418,6 +464,7 @@ impl Sender {
             pick(&|l| out.title_suffix(l)),
             pick(&*out.body),
             out.url.as_deref() == Some("/"),
+            out.vault.as_ref().map(|(_, request_id)| request_id.clone()),
         );
         let Some(vapid) = webpush::vapid(&self.env) else {
             // Sem chave o Web Push está desligado; chave pública presente e par inválido é falha.

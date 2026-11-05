@@ -7,6 +7,7 @@
   import { rememberedIds, rememberIds, saveMotivos, savePeerStates, savedMotivos, savedPeerStates, unirMaquinas,
            type EstadoPeer, type LinhaMaquina, type MotivoSemId } from '../../lib/maquinas';
   import { sessionsStore } from '../../lib/sessionsStore.svelte';
+  import { negadaAoConvidado } from '../../lib/papel.svelte';
   import ConfirmDialog from '../ConfirmDialog.svelte';
   import ModalDialog from '../ModalDialog.svelte';
   import { alcanceDoServidor, type AlcanceDoServidor, type TipoEndereco } from '../../lib/alcance';
@@ -178,6 +179,7 @@
   function msgErro(e: unknown): string {
     return e instanceof Error ? `${m.falha_conexao()}: ${e.message}` : m.erro_desconhecido();
   }
+  let soConvidado = $state(false);
 
   let identificador = $state('');
   let idOriginal = $state('');          // último valor commitado: blur sem mudança não re-PUTa
@@ -242,7 +244,7 @@
     estados = resolvedServer ? savedPeerStates(resolvedServer.id) : {};
     descobertas = null; descobrindo = false; descobertasErro = '';
     esteAberto = false; parearAberto = false;
-    resumo = null; resumoErro = '';
+    resumo = null; resumoErro = ''; soConvidado = false;
     if (!resolvedServer) {
       // Servidor indisponível (resolvedServer null): não há o que ler — sem este gate a seção
       // lia o servidor ATIVO com a aba dizendo que o escolhido não existe.
@@ -256,7 +258,11 @@
     const alvoResumo = resolvedServer;
     alcanceDoServidor(alvoResumo)
       .then((r) => { if (meu === geracao) resumo = r; })
-      .catch((e) => { if (meu === geracao) resumoErro = msgErro(e); });
+      .catch((e) => {
+        if (meu !== geracao) return;
+        if (negadaAoConvidado(e)) soConvidado = true;
+        else resumoErro = msgErro(e);
+      });
     void (async () => {
       // Ordem de carga: espera os identificadores do navegador ANTES de medir. Sem
       // isso `checarLista` lê `linhas` com `idsNavegador` vazio, nenhuma linha casa navegador
@@ -276,7 +282,8 @@
       idOriginal = r.identificador;
     } catch (e) {
       if (meu !== geracao) return;
-      idErro = msgErro(e);
+      if (negadaAoConvidado(e)) soConvidado = true;
+      else idErro = msgErro(e);
     } finally {
       if (meu === geracao) idCarregado = true;
     }
@@ -291,7 +298,8 @@
       peers = lista;
     } catch (e) {
       if (meu !== geracao) return;
-      peersErro = msgErro(e);
+      if (negadaAoConvidado(e)) soConvidado = true;
+      else peersErro = msgErro(e);
     } finally {
       if (meu === geracao) peersCarregando = false;
     }
@@ -311,7 +319,8 @@
         // 401 é o token deste aparelho recusado, não a máquina fora do ar — a mesma distinção que
         // a volta do peer já faz. Qualquer outra falha é rede: ela não respondeu.
         id = null;
-        motivo = (e as Error & { status?: number }).status === 401 ? 'token' : 'sem_resposta';
+        const status = (e as Error & { status?: number }).status;
+        motivo = status === 401 ? 'token' : negadaAoConvidado(e) ? 'vazio' : 'sem_resposta';
       }
       if (id) cacheIds.set(k, id);   // só sucesso entra no cache — fracasso não trava sem identificador pra sempre
       // Fora do ar ela não diz o nome: vale o último que respondeu, pra continuar uma linha só.
@@ -737,6 +746,7 @@
   };
   const resumoTexto = $derived.by(() => {
     if (resumoErro) return { texto: resumoErro, farol: 'nao' as const };
+    if (soConvidado) return { texto: m.mobile_machines_connected(), farol: 'ok' as const };
     if (!resumo) return { texto: m.acesso_testando(), farol: 'test' as const };
     const melhor = resumo.enderecos
       .filter((e) => e.estado === 'ok' && e.tipo !== 'nesta_maquina')
@@ -955,7 +965,7 @@
     <span class="sv-txt">
       <span class="sv-nome">{resolvedServer.label}{#if identificador}<span class="sv-id">{identificador}</span>{/if}</span>
       <span class="sv-estado">{m.peers_esta_maquina()} · {resumoTexto.texto}</span>
-      {#if idCarregado && !identificador && !idErro}<span class="sv-estado aviso">{m.servidores_sem_identificador_curto()}</span>{/if}
+      {#if idCarregado && !identificador && !idErro && !soConvidado}<span class="sv-estado aviso">{m.servidores_sem_identificador_curto()}</span>{/if}
       {#if origemRecusada}<span class="sv-estado aviso">{m.servidores_origem_recusada_curto()}</span>{/if}
       {#if esteDup.length}<span class="sv-estado aviso">{m.servidores_guardado_vezes({ n: esteDup.length + 1 })}</span>{/if}
     </span>

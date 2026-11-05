@@ -374,8 +374,21 @@ mod real {
         })
     }
 
+    // O rootcause não imprime o `source()` dos erros; sem ele, falha de rede vira só "error sending request".
+    fn full_text(e: &Report) -> String {
+        let mut t = e.to_string();
+        for node in e.iter_reports() {
+            let mut source = node.current_context_error_source();
+            while let Some(err) = source {
+                t.push_str(&format!("\n  causa: {err}"));
+                source = err.source();
+            }
+        }
+        t
+    }
+
     pub(super) fn login_failure(e: &Report) -> Failure {
-        let t = e.to_string();
+        let t = full_text(e);
         if busy(&t) {
             return Failure::with(APPLE_BUSY, t);
         }
@@ -383,7 +396,7 @@ mod real {
     }
 
     pub(super) fn sign_failure(e: &Report) -> Failure {
-        let t = e.to_string();
+        let t = full_text(e);
         if busy(&t) {
             return Failure::with(APPLE_BUSY, t);
         }
@@ -401,7 +414,8 @@ mod real {
     }
 
     fn busy(t: &str) -> bool {
-        t.contains("503") || t.contains("429") || t.contains("Too Many Requests")
+        // O texto leva arquivo:linha do código; casar só o status HTTP, nunca o número solto.
+        t.contains("503 Service Unavailable") || t.contains("Too Many Requests")
     }
 
     #[cfg(test)]
@@ -417,6 +431,30 @@ mod real {
             assert_eq!(login_failure(&r), Failure::with(LOGIN_REFUSED, "-20101: Your Apple ID or password was incorrect"));
             let r: Report = report!("HTTP status server error (503 Service Unavailable)").into();
             assert_eq!(login_failure(&r).code, APPLE_BUSY);
+        }
+
+        #[derive(Debug)]
+        struct Sending(std::io::Error);
+        impl std::fmt::Display for Sending {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("error sending request for url")
+            }
+        }
+        impl std::error::Error for Sending {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                Some(&self.0)
+            }
+        }
+
+        #[test]
+        fn network_failure_shows_the_underlying_cause() {
+            let io = std::io::Error::new(std::io::ErrorKind::ConnectionReset, "connection reset by peer (os error 10054)");
+            let r: Report = report!(Sending(io)).context("Failed to add developer device").into();
+            let detail = sign_failure(&r).detail.unwrap();
+            assert!(detail.contains("error sending request for url"), "{detail}");
+            assert!(detail.contains("os error 10054"), "{detail}");
+            let r: Report = report!(Sending(std::io::Error::other("timed out"))).into();
+            assert!(login_failure(&r).detail.unwrap().contains("timed out"));
         }
     }
 }

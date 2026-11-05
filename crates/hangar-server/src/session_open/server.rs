@@ -85,6 +85,32 @@ pub fn guest_set_life(claude_base: &Path, session: &str, life: &str) -> std::io:
         .map_err(|_| std::io::Error::other("registro de convidados indisponível"))
 }
 
+fn guest_in(raw: &Value, id: &str) -> Option<LoginGuest> {
+    let guest = raw["guests"].as_array()?.iter().find(|g| g["id"] == id)?;
+    Some(LoginGuest { id: id.into(), name: guest["name"].as_str()?.into(), root: guest["root"].as_str()?.into() })
+}
+
+/// O `guests.json`, `None` sem arquivo; ilegível é erro, nunca "sem convidados".
+pub(crate) fn read_guests(claude_base: &Path) -> Result<Option<Value>, OpenError> {
+    let unreadable = |cause: &dyn std::fmt::Display| {
+        tracing::warn!(code = "guests_unreadable", output = %cause, "guests.json ilegível: abertura recusada");
+        OpenError::new(503, "erro_convidados_ilegivel", "o arquivo de convidados está ilegível")
+    };
+    match crate::runtime::queue::read_replaced(&claude_base.join("guests.json")) {
+        Ok(bytes) => serde_json::from_slice(&bytes).map(Some).map_err(|error| unreadable(&error)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(unreadable(&error)),
+    }
+}
+
+/// O id do convidado dono de `session` no `guests.json`. Só outra vida desfaz o dono, como no `owner_of`.
+fn session_guest(raw: &Value, session: &str, life: Option<&str>) -> Option<String> {
+    let entry = &raw["sessions"][session];
+    let stored = entry["life"].as_str();
+    if stored.is_some() && life.is_some() && stored != life { return None; }
+    entry["guest"].as_str().map(str::to_owned)
+}
+
 /// A fila que a sessão morta deixou no nome (a projeção `.hangar-queue/<nome>.jsonl`, que o Rust lê
 /// no histórico), o vínculo `then` dela (`.hangar-chain/<nome>.json`) e o loop: a nova não os herda.
 pub fn forget_queue(claude_base: &Path, name: &str) -> std::io::Result<()> {
@@ -116,11 +142,26 @@ impl ServerHost {
         Self { st, env, terminal, mux }
     }
 
+    fn lives(&self) -> crate::share::life::Lives {
+        crate::share::life::Lives::new(Arc::new(crate::share::life::MuxProbe::new(self.terminal.program.clone(), self.env.home.clone())), Arc::default())
+    }
+
+    /// A sessão de convidado abre pelo token do dono (`hangar-send`, MCP): sem isto, a filha nasce do dono.
+    /// Na dúvida recusa: abrir sem saber quem é o criador daria à filha os poderes do dono.
+    async fn creator_guest(&self, creator: &str) -> Result<Option<LoginGuest>, OpenError> {
+        let Some(raw) = read_guests(&self.env.claude_base)? else { return Ok(None) };
+        if raw["sessions"].get(creator).is_none() { return Ok(None); }
+        let life = self.lives().life(creator, true).await;
+        let Some(id) = session_guest(&raw, creator, life.as_deref()) else { return Ok(None) };
+        guest_in(&raw, &id).map(Some)
+            .ok_or_else(|| OpenError::new(403, "erro_convidado_inexistente", "o convidado desta sessão não existe mais"))
+    }
+
     /// O dono da sessão que o convidado com login abriu vai ao `guests.json`. Falhou: a sessão sai
     /// com a worktree que ela criou, como no `_kill_unclaimed`.
     async fn claim(&self, mut opened: super::open::Opened, guest: &LoginGuest) -> Result<super::open::Opened, OpenError> {
         let name = opened.body["name"].as_str().unwrap_or_default().to_owned();
-        let lives = crate::share::life::Lives::new(Arc::new(crate::share::life::MuxProbe::new(self.terminal.program.clone(), self.env.home.clone())), Arc::default());
+        let lives = self.lives();
         // Logo após criar, o multiplexador pode ainda não responder a vida (`claim` do Python).
         let mut life = None;
         for _ in 0..3 {
@@ -315,13 +356,22 @@ pub enum Decision { Opened(super::open::Opened), Refused(OpenError), NotOurs }
 /// criada sem o pane ficaria para trás) nem o registro do convidado (`claim`), como o
 /// `complete_on_cancel` do Python.
 async fn decide_detached(st: &Arc<AppState>, request: SessionOpenRequest, caller: OpenCaller, claim: Option<LoginGuest>) -> Decision {
-    let link = match request.link_plan(&caller) {
-        Ok(link) => link,
-        Err(error) => return Decision::Refused(error),
-    };
     let st = st.clone();
     tokio::spawn(async move {
         let host = ServerHost::new(st.clone()).await;
+        let claim = match (claim, request.creator.as_deref()) {
+            (None, Some(creator)) => match host.creator_guest(creator).await {
+                Ok(guest) => guest,
+                Err(error) => return Decision::Refused(error),
+            },
+            (claim, _) => claim,
+        };
+        // A filha de sessão de convidado segue as regras dele, mesmo aberta com o token do dono.
+        let caller = claim.as_ref().map_or(caller, |g| OpenCaller::Guest { root: g.root.clone() });
+        let link = match request.link_plan(&caller) {
+            Ok(link) => link,
+            Err(error) => return Decision::Refused(error),
+        };
         let decision = match (decide(&st, &host, request, caller).await, claim) {
             (Decision::Opened(opened), Some(guest)) => match host.claim(opened, &guest).await {
                 Ok(opened) => Decision::Opened(opened),
@@ -389,7 +439,7 @@ async fn decide_adopting(st: &Arc<AppState>, host: &ServerHost, request: &Sessio
         let facts = super::facts::LocalFacts::shared(facts_env, &accounts, runtime);
         super::resolve_open(&request_for_facts, &caller_for_facts, &facts)
     }).await;
-    let resolved = match resolved.unwrap_or_else(|_| Err(OpenError::new(500, "erro_criacao_sessao", "a resolução da abertura não terminou"))) {
+    let mut resolved = match resolved.unwrap_or_else(|_| Err(OpenError::new(500, "erro_criacao_sessao", "a resolução da abertura não terminou"))) {
         Ok(resolved) => resolved,
         Err(error) => {
             if let Some(events) = super::open::refusal_diary(crate::mods::state::random_hex(8), request.name.as_deref().unwrap_or(""), super::open::requested_provider(request), &error) { host.diary(events); }
@@ -400,7 +450,10 @@ async fn decide_adopting(st: &Arc<AppState>, host: &ServerHost, request: &Sessio
     if let Some(adopting) = adopting.as_deref_mut() { adopting.compare(&resolved).await; }
     if !super::open::opens_here(&resolved.spec) { return Decision::NotOurs; }
     if let super::Account::Codex { account_id } = &resolved.spec.account {
-        if let Err(error) = codex_preparation(st,account_id).await { return Decision::Refused(error); }
+        match codex_preparation(st,account_id).await {
+            Ok(warning) => resolved.warnings.extend(warning),
+            Err(error) => return Decision::Refused(error),
+        }
     }
     match super::open::open_adopting(host, resolved, caller, adopting).await {
         Ok(opened) => Decision::Opened(opened),
@@ -408,13 +461,23 @@ async fn decide_adopting(st: &Arc<AppState>, host: &ServerHost, request: &Sessio
     }
 }
 
-async fn codex_preparation(st: &AppState, account_id: &str) -> Result<(),OpenError> {
+/// O preparo da conta Codex antes de abrir; o parcial abre e volta como aviso com as pendências.
+async fn codex_preparation(st: &AppState, account_id: &str) -> Result<Option<String>,OpenError> {
     let account = st.accounts.resolve(crate::accounts::Provider::Codex,account_id)
         .map_err(|error|OpenError::new(error.status,error.code,error.message))?;
     let bridge = crate::accounts::http::bridge(st)
         .map_err(|error|OpenError::new(error.status,error.code,error.message))?;
-    st.accounts.prepare_for_session(&account,bridge,tokio::time::Instant::now()+std::time::Duration::from_secs(60)).await
-        .map(|_|()).map_err(|error|OpenError::new(error.status,error.code,error.message).with_params(error.params))
+    let status = st.accounts.prepare_for_session(&account,bridge,tokio::time::Instant::now()+std::time::Duration::from_secs(60)).await
+        .map_err(|error|OpenError::new(error.status,error.code,error.message).with_params(error.params))?;
+    Ok(partial_preparation_warning(&status))
+}
+
+fn partial_preparation_warning(status: &Value) -> Option<String> {
+    if status["status"] != "partial" { return None; }
+    let codes: Vec<&str> = status["issues"].as_array().into_iter().flatten().filter_map(|issue| issue["code"].as_str()).collect();
+    let codes = if codes.is_empty() { String::new() } else { format!(" ({})", codes.join(", ")) };
+    Some(format!("a sincronização da conta Codex terminou com pendências{codes}; a sessão abriu assim mesmo. \
+        Confira a sincronização da conta"))
 }
 
 /// A linha `api.servidor` do middleware de acesso do Python, para o pedido que o Rust atendeu
@@ -643,6 +706,17 @@ pub async fn archive_resume(State(st): State<Arc<AppState>>, ConnectInfo(peer): 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_session_guest_is_undone_only_by_another_life() {
+        let raw = serde_json::json!({"sessions": {"dela": {"guest": "g1", "life": "k:1"}, "nova": {"guest": "g1", "life": null}}});
+        let guest = |name, life| super::session_guest(&raw, name, life);
+        assert_eq!(guest("dela", Some("k:1")).as_deref(), Some("g1"));
+        assert_eq!(guest("dela", None).as_deref(), Some("g1"), "vida desconhecida mantém o dono");
+        assert_eq!(guest("nova", Some("k:2")).as_deref(), Some("g1"), "vida ainda não gravada mantém o dono");
+        assert_eq!(guest("dela", Some("k:2")), None, "o mesmo nome em outra vida é do dono");
+        assert_eq!(guest("do-dono", Some("k:1")), None);
+    }
+
     /// SF7: o aviso de saída que não chegou ao grupo antigo vira aviso da criação, com quem e por quê.
     #[test]
     fn a_group_exit_that_did_not_reach_everyone_is_a_creation_warning() {
@@ -651,5 +725,16 @@ mod tests {
         let warnings = super::exit_warnings(&errs);
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("par"), "{warnings:?}");
+    }
+
+    /// O preparo parcial vira aviso com o código de cada pendência; o pronto não avisa.
+    #[test]
+    fn a_partial_preparation_warns_with_its_issue_codes() {
+        let partial = serde_json::json!({"status": "partial", "issues": [{"code": "codex_account_source_sync_incomplete", "params": {}}]});
+        let warning = super::partial_preparation_warning(&partial).unwrap();
+        assert!(warning.contains("codex_account_source_sync_incomplete"), "{warning}");
+        assert_eq!(super::partial_preparation_warning(&serde_json::json!({"status": "ready", "issues": []})), None);
+        let bare = super::partial_preparation_warning(&serde_json::json!({"status": "partial", "issues": []})).unwrap();
+        assert!(!bare.contains("()"), "{bare}");
     }
 }

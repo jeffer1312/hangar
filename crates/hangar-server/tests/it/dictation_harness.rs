@@ -226,24 +226,12 @@ async fn attempt_with_budget(
         server.abort();
         python.abort();
         let responses = responses.expect("fresh concorrentes ultrapassaram o teto público de60s");
-        let fixture: Value = serde_json::from_str(include_str!(
-            "../../../../backend/tests/fixtures/contract/dictation_public/edges.json"
-        ))
-        .unwrap();
-        let expected = fixture["cases"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|c| c["id"] == "catalog_timeout")
-            .unwrap();
+        let expected: Value = serde_json::from_str(super::dictation_public_cases::CATALOG_TIMEOUT).unwrap();
         let mut timed_out = 0;
         for response in responses {
             let response = response.unwrap();
             if response.status() == 503 {
-                assert_eq!(
-                    response.json::<Value>().await.unwrap(),
-                    expected["response"]
-                );
+                assert_eq!(response.json::<Value>().await.unwrap(), expected);
                 timed_out += 1;
             }
         }

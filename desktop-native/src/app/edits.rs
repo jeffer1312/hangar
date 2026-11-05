@@ -16,6 +16,8 @@ pub(super) type Painted = Rc<Vec<(Vec<Marks>, Vec<Marks>)>>;
 thread_local! {
     /// Por chamada e tema: o parse roda uma vez, não a cada quadro.
     static PAINTED: RefCell<HashMap<(String, usize), Painted>> = RefCell::new(HashMap::new());
+    /// Um por linguagem: criar um compila a consulta de realce, e isto roda na thread da tela, a cada lado de cada edição.
+    static HIGHLIGHTERS: RefCell<HashMap<String, SyntaxHighlighter>> = RefCell::new(HashMap::new());
 }
 
 /// "+5 −2" da chamada, na mesma forma do fim da linha nos Chips e na Árvore.
@@ -32,20 +34,23 @@ fn paint(lang: &str, text: &str, upto: usize, theme: &HighlightTheme) -> Vec<Mar
     if upto == 0 || lang == "text" { return Vec::new(); }
     let starts: Vec<usize> = std::iter::once(0).chain(text.match_indices('\n').map(|(i, _)| i + 1)).collect();
     let code = &text[..starts.get(upto).map_or(text.len(), |s| s - 1)];
-    let mut highlighter = SyntaxHighlighter::new(lang);
-    highlighter.update(None, &Rope::from_str(code), None);
     let mut out = vec![Vec::new(); upto.min(starts.len())];
-    for (range, style) in highlighter.styles(&(0..code.len()), theme) {
-        // Um nó pode atravessar linhas (comentário de bloco, string longa): cada linha leva o seu pedaço.
-        let mut line = starts.partition_point(|&s| s <= range.start).saturating_sub(1);
-        let mut start = range.start;
-        while start < range.end && line < out.len() {
-            let end = range.end.min(starts.get(line + 1).map_or(code.len(), |s| s - 1));
-            if end > start { out[line].push((start - starts[line]..end - starts[line], style)); }
-            line += 1;
-            start = starts.get(line).copied().unwrap_or(usize::MAX);
+    HIGHLIGHTERS.with(|highlighters| {
+        let mut highlighters = highlighters.borrow_mut();
+        let highlighter = highlighters.entry(lang.to_owned()).or_insert_with(|| SyntaxHighlighter::new(lang));
+        highlighter.update(None, &Rope::from_str(code), None);
+        for (range, style) in highlighter.styles(&(0..code.len()), theme) {
+            // Um nó pode atravessar linhas (comentário de bloco, string longa): cada linha leva o seu pedaço.
+            let mut line = starts.partition_point(|&s| s <= range.start).saturating_sub(1);
+            let mut start = range.start;
+            while start < range.end && line < out.len() {
+                let end = range.end.min(starts.get(line + 1).map_or(code.len(), |s| s - 1));
+                if end > start { out[line].push((start - starts[line]..end - starts[line], style)); }
+                line += 1;
+                start = starts.get(line).copied().unwrap_or(usize::MAX);
+            }
         }
-    }
+    });
     out
 }
 
@@ -132,4 +137,19 @@ pub(super) fn card(call: &ChatEvent, result: Option<&ChatEvent>, cx: &App) -> Op
     Some(div().flex().flex_col().gap_2().children(cards)
         .when_some(note, |el, note| el.child(div().text_xs().text_color(theme::muted()).child(note)))
         .into_any_element())
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui_kit::component::highlighter::HighlightTheme;
+
+    #[test]
+    fn reused_highlighter_paints_like_a_new_one() {
+        let theme = HighlightTheme::default_dark();
+        let (long, short) = ("fn main() {\n    let answer = 42;\n    println!(\"{answer}\");\n}", "struct Point { x: i32 }");
+        let fresh = super::paint("rust", short, 1, &theme);
+        assert!(!fresh[0].is_empty());
+        super::paint("rust", long, 4, &theme);
+        assert_eq!(super::paint("rust", short, 1, &theme), fresh);
+    }
 }

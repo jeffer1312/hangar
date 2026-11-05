@@ -2,8 +2,10 @@ use futures::Stream as _;
 #[cfg(not(target_family = "wasm"))]
 use std::time::Instant;
 use std::{
+    cell::RefCell,
     ops::{Range, RangeInclusive},
     pin::Pin,
+    rc::Rc,
     sync::{Arc, Mutex, OnceLock},
     task::Poll,
     time::Duration,
@@ -24,6 +26,7 @@ use crate::{
     text::{
         CodeBlockActionsFn, CodeBlockHighlighterFn, LinkClickHandlerFn, MarkdownExtensions,
         RangeHighlight, RangeHighlightError, RenderedText, TableActionsFn, TextViewStyle,
+        block_column::BlockPlaces,
         document::ParsedDocument,
         format,
         node::{self, NodeContext},
@@ -98,6 +101,8 @@ pub struct TextViewState {
     entity_id: EntityId,
     pub(super) focus_handle: FocusHandle,
     pub(super) list_state: ListState,
+    /// Where the blocks of a view that does not scroll by itself sit.
+    block_places: Rc<RefCell<BlockPlaces>>,
 
     /// The bounds of the text view
     bounds: Bounds<Pixels>,
@@ -250,6 +255,7 @@ impl TextViewState {
             // as zero height until scrolled into view, which makes the
             // scrollbar jitter as more blocks get measured during scrolling.
             list_state: ListState::new(0, gpui::ListAlignment::Top, px(1000.)).measure_all(),
+            block_places: Rc::default(),
             text_view_style: Arc::default(),
             code_block_actions: None,
             code_block_highlighter: None,
@@ -505,6 +511,7 @@ impl TextViewState {
     /// while keeping their old sizes as hints, so the scrollbar does not
     /// collapse in the frame before the next layout measures the real heights.
     fn invalidate_measured_heights(&self) {
+        self.block_places.borrow_mut().forget();
         let count = self.list_state.item_count();
         if count > 0 {
             self.list_state.remeasure_items(0..count);
@@ -1024,6 +1031,10 @@ impl Render for TextViewState {
             }));
         }
         let (reveal, reveal_block) = self.reveal_frame(cx.background_executor().now(), window);
+        let skip_unseen = reveal.is_none()
+            && stream_fade.is_none()
+            && !self.is_selecting
+            && !self.selection_adapter.has_selection_snapshot(cx);
         // Built every frame, so everything in it is shared, not copied.
         let node_cx = NodeContext {
             offset: self.parsed_content.node_cx.offset,
@@ -1053,6 +1064,9 @@ impl Render for TextViewState {
                     } else {
                         None
                     },
+                    self.max_lines
+                        .is_none()
+                        .then(|| (self.block_places.clone(), skip_unseen)),
                     &node_cx,
                     window,
                     cx,

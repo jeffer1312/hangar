@@ -14,6 +14,7 @@ use actions::{ActionReply, AddAccount, Change, ChangeKind, SignIn};
 use codex::{CodexFlow, CodexReply, ResetOffer, ResetTry};
 use keys::{CookieForm, EngineForm, KeysReply};
 pub(super) use keys::ModelChoice;
+pub(crate) use actions::{login_heading, target_row};
 use super::settings::{Page, segments, settings_box};
 use chrono::{Datelike, Local, TimeZone, Timelike};
 use gpui_kit::component::menu::DropdownMenu;
@@ -743,6 +744,13 @@ impl Hangar {
         if self.open_api.is_some() { &self.accounts.session_list } else { &self.accounts.list }
     }
 
+    /// Contas Claude e se há uma Codex, na lista do anel: o que o anel oferece para levar a conversa. `None` enquanto a lista
+    /// não chegou; a leitura que falhou conta como lista vazia, para quem espera por ela não ficar preso.
+    pub(super) fn account_kinds(&self) -> Option<(usize, bool)> {
+        let list = match self.session_accounts().value.as_ref()? { Ok(list) => list.as_slice(), Err(_) => &[][..] };
+        Some((list.iter().filter(|c| c.kind == "claude").count(), list.iter().any(|c| c.kind == "codex")))
+    }
+
     fn load_session_engines(&mut self, cx: &mut Context<Self>) {
         let Some(api) = self.open_api.clone().or_else(|| self.api.clone()) else { return; };
         let server = self.open_server();
@@ -838,6 +846,8 @@ impl Hangar {
     }
 
     pub(super) fn receive_accounts(&mut self, reply: AccountsReply, window: &mut Window, cx: &mut Context<Self>) {
+        // As contas decidem passos do tour (`account_kinds`).
+        self.tour_dirty = true;
         let accounts = &mut self.accounts;
         match reply {
             AccountsReply::List(seq, result) => {
@@ -924,7 +934,10 @@ impl Hangar {
                 .into_any_element();
         }
         let page = div().flex().flex_col();
-        if let Some(panel) = self.render_sign_in(cx) { return page.child(top(None)).child(panel).into_any_element(); }
+        if let Some(panel) = self.render_sign_in(window, cx) {
+            let page = if self.login_view_open() { page } else { page.child(top(None)) };
+            return page.child(panel).into_any_element();
+        }
         if let Some(panel) = self.render_engine_form(cx) { return page.child(top(None)).child(panel).into_any_element(); }
         if let Some(panel) = self.render_codex(cx) { return page.child(top(None)).child(panel).into_any_element(); }
         match (&accounts.list.value, accounts.list.loading) {

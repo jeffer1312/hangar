@@ -53,7 +53,10 @@ async def _worker(binary):
         (sessions / "nav-contract.json").write_text(json.dumps({"name": "nav-contract", "key": "nav-contract-key",
             "session_id": "headless-transcript", "cwd": str(home)}))
         measured = json.loads((ROOT / "backend/tests/fixtures/contract/remote-browser/chromium.json").read_bytes())
-        reference = json.loads((ROOT / "backend/tests/fixtures/contract/remote-browser/shutdown-reference.json").read_bytes())["observed"]
+        reference = {"desktop_layout": "mobile", "client_close": {"code": 1012, "reason": ""}, "cmd": [
+            {"authorization": "Bearer remote-browser-contract-desktop", "receiver_pid": 123,
+             "body": {"chave": "contract::nav-contract", "verbo": "layout", "args": args}}
+            for args in ([], ["900", "700"], [], ["mobile"])]}
         requests = []
         layout = "mobile"
         stopping = False

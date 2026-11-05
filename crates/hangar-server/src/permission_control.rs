@@ -393,13 +393,15 @@ mod tests {
             mux_argv: vec!["fake".into(), "-L".into(), "isolated".into()], windows, clipboard_lock_path: None }
     }
     fn screen(mode: &str) -> String {
-        let name = match mode {
-            "manual" => "no_glyph_fallback", "plan" => "glyph_plan", "auto" => "conversation_without_glyph_loses",
-            "acceptEdits" => "last_glyph_wins", "bypassPermissions" => "glyph_bypass", "dontAsk" => "upper_and_curly",
-            _ => "unknown",
+        let footer = match mode {
+            "manual" => "x\nmanual mode on",
+            "plan" => "⏸ plan mode on (shift+tab to cycle)",
+            "auto" => "plan mode on\n⏵⏵ auto mode on",
+            "acceptEdits" => "⏸ plan mode on\n⏵⏵ accept edits on",
+            "bypassPermissions" => "texto\n⏵⏵ bypass permissions on (shift+tab to cycle)",
+            "dontAsk" => "⏵⏵ DON\u{2019}T ASK ON",
+            _ => "⏵⏵ turbo mode on",
         };
-        let fixtures: Value = serde_json::from_str(include_str!("../../../backend/tests/fixtures/contract/golden/permission_mode.json")).unwrap();
-        let footer = fixtures.as_array().unwrap().iter().find(|row| row["name"] == name).unwrap()["pane"].as_str().unwrap();
         format!("history\n{}\n❯ \n{}\n{footer}\n", "─".repeat(30), "─".repeat(30))
     }
     struct Services { facts: Mutex<InputFacts>, panel: Mutex<bool>, guard_count: Mutex<usize>, panel_after: Mutex<Option<usize>> }

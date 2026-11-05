@@ -55,7 +55,7 @@ fn websocket_matches_frozen_auth_sequences() {
             let query = token.as_str().map(|token| form_urlencoded::Serializer::new(String::new()).append_pair("token", token).finish());
             access::websocket(&auth, input["client_ip"].as_str().unwrap(), query.as_deref(), false, now).is_ok()
         }).collect();
-        // O Python só chega à recusa de sessão inexistente depois de autorizar.
+        // A recusa de sessão inexistente só vem depois de autorizar.
         let want: Vec<_> = case["expected"]["closes"].as_array().unwrap().iter().map(|c| c["reason"] == "sessao nao existe").collect();
         assert_eq!(got, want, "{}", case["name"]);
     }

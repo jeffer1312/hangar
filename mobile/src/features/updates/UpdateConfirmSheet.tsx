@@ -176,8 +176,8 @@ const own = StyleSheet.create((theme) => ({
   box: { width: 22, height: 22, borderRadius: theme.base.radius.xs, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center' },
   checkLabel: { fontSize: theme.base.text.sm, fontWeight: theme.base.weight.medium },
   option: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: theme.base.space[3], paddingVertical: theme.base.space[2] },
-  radio: { width: 22, height: 22, borderRadius: 11, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center' },
-  dot: { width: 12, height: 12, borderRadius: 6 },
-  optionText: { flex: 1, gap: 2 },
+  radio: { width: 22, height: 22, borderRadius: theme.base.radius.full, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center' },
+  dot: { width: 12, height: 12, borderRadius: theme.base.radius.full },
+  optionText: { flex: 1, gap: theme.base.space[0.5] },
   optionDesc: { fontSize: theme.base.text.xs },
 }));

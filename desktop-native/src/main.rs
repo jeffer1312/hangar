@@ -30,6 +30,7 @@ mod status;
 mod tables;
 mod ws;
 mod theme;
+mod tour;
 mod tray;
 mod ui_map;
 mod update;
@@ -46,13 +47,14 @@ use gpui_kit::{component::{Root, Theme, ThemeMode}, *};
 use std::{borrow::Cow, sync::Arc};
 
 gpui_kit::assets::icon_assets!(ExtraIcons, [ArrowUp, GitBranch, RotateCcwClock, Paperclip, Plug, SquareSlash,
-    Activity, Contrast, Droplet, Image, Keyboard, Layers, List, Mic, Monitor, RefreshCw, Server, SlidersHorizontal, Type, Users,
+    Activity, Contrast, Droplet, Image, Keyboard, Layers, Lightbulb, List, Mic, Monitor, RefreshCw, Server, SlidersHorizontal, Type, Users,
     SquarePen, FilePlus, Wrench, Circle, CircleDashed, ChartColumn, Table, ListChecks, Download, Clock, Languages, Banknote,
     Zap, Rocket, MessageCircle, Key, Pencil, GripVertical, AudioLines, Volume2, Hash, LogOut, Smartphone, FolderTree, ChevronsDownUp, FileCode,
     RotateCcw, CornerDownRight, MessageSquare, Square, Sparkles, CircleAlert, CircleCheck, TriangleAlert, Link, Wifi,
     CircleStop, Upload, Workflow, CloudDownload, ArrowDownToLine, ArrowUpFromLine, GitFork, Trash, MessageCircleQuestionMark, Brain,
     ListOrdered, CornerUpRight, TextQuote, MousePointerClick, Code, Hourglass,
-    CreditCard, House, Laptop, Briefcase, Cloud, KeyRound, Wallet, UserRound, CircleUser, Contact, BadgeCheck, AtSign, Ticket, IdCard]);
+    CreditCard, House, Laptop, Briefcase, Cloud, KeyRound, Wallet, UserRound, CircleUser, Contact, BadgeCheck, AtSign, Ticket, IdCard,
+    Recycle, ChartLine, PiggyBank, Gauge, Database, Coins, Boxes, TrendingUp, TrendingDown]);
 
 pub const HANGAR_MARK: &str = "brand/hangar-mark.svg";
 pub const GROUP_GLYPH: &str = "brand/group-glyph.svg";

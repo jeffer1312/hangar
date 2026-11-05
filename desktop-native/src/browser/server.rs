@@ -6,7 +6,7 @@ use futures::channel::oneshot;
 use serde_json::{Value, json};
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::TcpStream, runtime::Runtime};
 
-use super::{control::Reply, preview_fmt::sidecar_name};
+use super::{control::{Reply, Secret}, preview_fmt::sidecar_name};
 
 const HEAD_MAX: usize = 16 * 1024;
 const BODY_MAX: usize = 128 * 1024;
@@ -14,10 +14,13 @@ const BODY_MAX: usize = 128 * 1024;
 const REPLY_SECS: u64 = 45;
 /// Abaixo dos 120 s em que o Bash do Claude Code mata um comando.
 const LOGIN_SECS: u64 = 110;
+/// Quanto um `_srv.json` órfão pode durar com este app aberto.
+const RECLAIM_EVERY: Duration = Duration::from_secs(3);
 
 pub enum Request {
     /// Verbo do `/cmd`, o do hangar-preview.
-    Command { key: String, verb: String, args: Vec<String>, tab: Option<i64>, reply: oneshot::Sender<Reply> },
+    /// `secret`: o `valor` do corpo (senha do cofre do `fill-secret`), fora dos `args`.
+    Command { key: String, verb: String, args: Vec<String>, tab: Option<i64>, secret: Option<Secret>, reply: oneshot::Sender<Reply> },
     /// Comando CDP do `/cdp`, já conferido contra `relay::RELAYED`.
     Cdp { key: String, method: String, params: Value, reply: oneshot::Sender<Result<Value, String>> },
     /// Espectador novo da tela remota; tira o anterior daquele navegador.
@@ -43,27 +46,53 @@ struct Head {
 enum Route { Cmd, Cdp(String), Browser(String), Local(String) }
 
 /// `cdp`: a página é de fora do app (`hangar-preview --cdp`), e `alvo` escolhe qual; aí a chave de sessão não entra.
-struct Body { key: String, verb: String, args: Vec<String>, tab: Option<i64>, cdp: Option<String>, alvo: Option<String> }
+struct Body { key: String, verb: String, args: Vec<String>, tab: Option<i64>, cdp: Option<String>, alvo: Option<String>, secret: Option<Secret> }
 
 fn nav_dir() -> Option<PathBuf> { std::env::home_dir().map(|h| h.join(".hangar").join("nav")) }
 
 /// Escrita em tmp + rename: o CLI nunca lê um arquivo pela metade.
 fn write_json(name: &str, value: &Value) -> std::io::Result<()> {
-    let dir = nav_dir().ok_or_else(|| std::io::Error::other("sem pasta do usuario"))?;
+    write_json_in(&nav_dir().ok_or_else(|| std::io::Error::other("sem pasta do usuario"))?, name, value)
+}
+
+fn write_json_in(dir: &std::path::Path, name: &str, value: &Value) -> std::io::Result<()> {
     let tmp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
     // O `_srv.json` leva o token: só o dono lê, como no shell Electron.
     #[cfg(unix)]
     {
         use std::{io::Write, os::unix::fs::{DirBuilderExt, OpenOptionsExt}};
-        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&dir)?;
+        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
         std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&tmp)?.write_all(value.to_string().as_bytes())?;
     }
     #[cfg(not(unix))]
     {
-        std::fs::create_dir_all(&dir)?;
+        std::fs::create_dir_all(dir)?;
         std::fs::write(&tmp, value.to_string())?;
     }
     std::fs::rename(tmp, dir.join(format!("{name}.json")))
+}
+
+/// Outra execução do app com outra pasta de configuração (teste, prova de tela) escapa da trava de janela única,
+/// publica o servidor dela neste arquivo e, ao morrer, deixa o CLI e o MCP numa porta sem dono. `true` = retomado.
+async fn reclaim(dir: &std::path::Path, own: &Value) -> std::io::Result<bool> {
+    let current = std::fs::read(dir.join("_srv.json")).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok());
+    if current.as_ref() == Some(own) { return Ok(false); }
+    let other_pid = current.as_ref().and_then(|v| v["pid"].as_u64()).filter(|p| Some(*p) != own["pid"].as_u64());
+    match other_pid.and_then(pid_alive) {
+        Some(true) => return Ok(false),
+        Some(false) => {}
+        // ponytail: sem pid legível, porta que atende = dono vivo; porta reciclada fica sem retomada até o app reabrir.
+        None => {
+            let other = current.as_ref().and_then(|v| v["porta"].as_u64()).filter(|p| Some(*p) != own["porta"].as_u64())
+                .and_then(|p| u16::try_from(p).ok());
+            if let Some(port) = other
+                && matches!(tokio::time::timeout(Duration::from_secs(1), TcpStream::connect(("127.0.0.1", port))).await, Ok(Ok(_))) {
+                return Ok(false);
+            }
+        }
+    }
+    write_json_in(dir, "_srv", own)?;
+    Ok(true)
 }
 
 fn now_ms() -> u128 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis()) }
@@ -112,8 +141,17 @@ pub fn remove_sidecar(key: &str) {
 }
 
 /// Só o app nativo grava `pid`: sidecar do Electron (sem `pid`) nunca é tocado.
+/// Sidecar de outro app nativo ainda vivo (uma execução de prova sobe ao lado do principal) também fica.
 fn is_stale_native_sidecar(value: &Value, pid: u32) -> bool {
-    value.get("pid").is_some_and(|p| p.as_u64() != Some(u64::from(pid)))
+    value.get("pid").is_some_and(|p| p.as_u64() != Some(u64::from(pid)) && p.as_u64().and_then(pid_alive) != Some(true))
+}
+
+/// Outro app nativo vivo nesse pid: o processo existe e tem o nome deste (pid de antes do reboot costuma ser de outro
+/// programa). `None` onde não há como saber sem custo (fora do Linux).
+fn pid_alive(pid: u64) -> Option<bool> {
+    if !cfg!(target_os = "linux") { return None; }
+    let comm = |p: &str| std::fs::read_to_string(format!("/proc/{p}/comm")).ok();
+    Some(comm(&pid.to_string()).is_some_and(|c| Some(c) == comm("self")))
 }
 
 /// O app não apaga os sidecars ao sair; sem isto, cada reinício deixa navegadores fantasmas para o CLI e o backend.
@@ -203,7 +241,9 @@ fn parse_body(bytes: &[u8]) -> Result<Body, String> {
     let key = match v["chave"].as_str() { Some(k) => k.to_owned(), None if cdp.is_some() => String::new(), None => return Err(invalid()) };
     let verb = v["verbo"].as_str().ok_or_else(invalid)?.to_owned();
     let args = v["args"].as_array().into_iter().flatten().map(|a| a.as_str().map_or_else(|| a.to_string(), str::to_owned)).collect();
-    Ok(Body { key, verb, args, tab: v["aba"].as_i64(), cdp, alvo: v["alvo"].as_str().map(str::to_owned) })
+    // shortcut: o corpo lido e o `Value` não são zerados; só o valor que fica vivo no controlador é.
+    let secret = v["valor"].as_str().map(|s| Secret::new(s.to_owned()));
+    Ok(Body { key, verb, args, tab: v["aba"].as_i64(), cdp, alvo: v["alvo"].as_str().map(str::to_owned), secret })
 }
 
 pub fn start(runtime: &Runtime, requests: async_channel::Sender<Request>) -> std::io::Result<u16> {
@@ -220,8 +260,21 @@ pub fn start(runtime: &Runtime, requests: async_channel::Sender<Request>) -> std
     // Converte antes de publicar a porta: servidor que não sobe nunca aparece no `_srv.json`.
     let listener = { let _guard = runtime.enter(); tokio::net::TcpListener::from_std(listener)? };
     drop_stale_sidecars();
-    write_json("_srv", &json!({"porta": port, "token": token, "pid": std::process::id(), "ts": now_ms()}))?;
+    let own = json!({"porta": port, "token": token, "pid": std::process::id(), "ts": now_ms()});
+    write_json("_srv", &own)?;
     let _ = PORT.set(port);
+    if let Some(dir) = nav_dir() {
+        runtime.spawn(async move {
+            loop {
+                tokio::time::sleep(RECLAIM_EVERY).await;
+                match reclaim(&dir, &own).await {
+                    Ok(true) => crate::log_line("nav: _srv.json apontava um servidor que não atende; retomado por este app"),
+                    Ok(false) => {}
+                    Err(e) => crate::log_line(&format!("nav: _srv.json não retomado: {e}")),
+                }
+            }
+        });
+    }
     let token: Arc<str> = token.into();
     runtime.spawn(async move {
         loop {
@@ -342,7 +395,7 @@ async fn answer(bytes: &[u8], requests: &async_channel::Sender<Request>) -> Stri
         match super::external::submit(&cdp, body.alvo, body.verb, body.args) { Ok(rx) => rx, Err(e) => return e }
     } else {
         let (tx, rx) = oneshot::channel();
-        if requests.send(Request::Command { key: body.key, verb: body.verb, args: body.args, tab: body.tab, reply: tx }).await.is_err() {
+        if requests.send(Request::Command { key: body.key, verb: body.verb, args: body.args, tab: body.tab, secret: body.secret, reply: tx }).await.is_err() {
             return "erro: o app nativo esta fechando".into();
         }
         rx
@@ -369,6 +422,14 @@ async fn answer(bytes: &[u8], requests: &async_channel::Sender<Request>) -> Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Pid de um processo que já terminou.
+    fn dead_pid() -> u64 {
+        let mut child = if cfg!(windows) { std::process::Command::new("cmd").args(["/C", "exit"]).spawn() }
+            else { std::process::Command::new("true").spawn() }.unwrap();
+        child.wait().unwrap();
+        u64::from(child.id())
+    }
 
     async fn component_request(text: &str) -> (TcpStream, async_channel::Receiver<Request>, tokio::task::JoinHandle<()>) {
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
@@ -507,7 +568,7 @@ mod tests {
         assert_eq!(std::env::home_dir().as_deref(), Some(root.as_path()));
         assert!(root.join("proof-owner").is_file());
         let dir = nav_dir().unwrap();
-        write_json("stale", &json!({"pid": u64::from(std::process::id()) + 1, "chave": "old"})).unwrap();
+        write_json("stale", &json!({"pid": dead_pid(), "chave": "old"})).unwrap();
         write_json("live", &json!({"pid": std::process::id(), "chave": "live"})).unwrap();
         write_json("legacy", &json!({"chave": "electron", "url": "http://legacy/"})).unwrap();
         write_json("_reserved", &json!({"pid": 0})).unwrap();
@@ -581,6 +642,39 @@ mod tests {
         assert!(!std::fs::read_dir(&dir).unwrap().flatten().any(|e| e.path().extension().is_some_and(|ext| ext == "tmp")));
         runtime.shutdown_timeout(Duration::from_secs(2));
         std::fs::write(root.join("completed"), std::fs::read(root.join("proof-owner")).unwrap()).unwrap();
+    }
+
+    #[tokio::test]
+    async fn srv_file_is_taken_back_only_from_an_owner_that_no_longer_answers() {
+        let dir = std::env::temp_dir().join(format!("hangar-srv-reclaim-{}-{}", std::process::id(), now_ms()));
+        let live = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let dead = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
+        // Este processo faz o papel do outro app vivo (mesmo nome); o dono do teste é um pid qualquer.
+        let own = json!({"porta": live.local_addr().unwrap().port(), "token": "meu", "pid": dead_pid(), "ts": 1});
+        let read = || serde_json::from_slice::<Value>(&std::fs::read(dir.join("_srv.json")).unwrap()).unwrap();
+
+        assert!(reclaim(&dir, &own).await.unwrap(), "sem arquivo, o dono publica");
+        assert_eq!(read(), own);
+        assert!(!reclaim(&dir, &own).await.unwrap(), "arquivo já é deste processo");
+
+        let other = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let alive = json!({"porta": other.local_addr().unwrap().port(), "token": "outro", "pid": std::process::id(), "ts": 2});
+        write_json_in(&dir, "_srv", &alive).unwrap();
+        assert!(!reclaim(&dir, &own).await.unwrap(), "outra instância viva não é desalojada");
+        assert_eq!(read(), alive);
+
+        write_json_in(&dir, "_srv", &json!({"porta": dead, "token": "morto", "pid": dead_pid(), "ts": 3})).unwrap();
+        assert!(reclaim(&dir, &own).await.unwrap(), "porta sem dono é retomada");
+        assert_eq!(read(), own);
+
+        if cfg!(target_os = "linux") {
+            let recycled = json!({"porta": other.local_addr().unwrap().port(), "token": "morto", "pid": dead_pid(), "ts": 4});
+            write_json_in(&dir, "_srv", &recycled).unwrap();
+            assert!(reclaim(&dir, &own).await.unwrap(), "pid morto vence a porta reaproveitada por outro programa");
+            write_json_in(&dir, "_srv", &json!({"porta": dead, "token": "antigo", "pid": 1, "ts": 5})).unwrap();
+            assert!(reclaim(&dir, &own).await.unwrap(), "pid reaproveitado por outro programa não é dono");
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
@@ -727,7 +821,12 @@ mod tests {
 
     #[test]
     fn only_native_sidecars_of_another_pid_are_stale() {
-        assert!(is_stale_native_sidecar(&json!({"chave": "s::a", "pid": 10}), 20));
+        assert!(is_stale_native_sidecar(&json!({"chave": "s::a", "pid": dead_pid()}), 20));
+        if cfg!(target_os = "linux") {
+            let other_live_app = u64::from(std::process::id());
+            assert!(!is_stale_native_sidecar(&json!({"chave": "s::a", "pid": other_live_app}), 20), "app vivo ao lado guarda os seus");
+            assert!(is_stale_native_sidecar(&json!({"chave": "s::a", "pid": 1}), 20), "pid de antes do reboot, agora de outro programa");
+        }
         assert!(!is_stale_native_sidecar(&json!({"chave": "s::a", "pid": 20}), 20));
         assert!(!is_stale_native_sidecar(&json!({"chave": "s::a", "url": "http://x/"}), 20));
     }

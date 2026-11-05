@@ -82,6 +82,40 @@ pub fn thumbnail(bytes: &[u8]) -> Option<Arc<RenderImage>> {
     decode(bytes, THUMB_W, THUMB_H, None)
 }
 
+pub const REVEAL_FRAMES: usize = 12;
+// Largura da borda esfumada, em fração da meia diagonal.
+const REVEAL_FEATHER: f32 = 0.45;
+
+/// Quadros da revelação da miniatura que acabou de chegar: a imagem a 1/4 do lado, com uma máscara radial de borda
+/// esfumada crescendo do centro. A GPUI não tem máscara: o alfa vai nos pixels, e assim vale sobre papel de parede.
+/// GIF animado não ganha revelação.
+pub fn reveal(image: &RenderImage) -> Vec<Arc<RenderImage>> {
+    if image.frame_count() != 1 { return Vec::new(); }
+    let size = image.size(0);
+    let (w, h) = (size.width.0.max(0) as u32, size.height.0.max(0) as u32);
+    let Some(full) = image.as_bytes(0).and_then(|bytes| RgbaImage::from_raw(w, h, bytes.to_vec())) else { return Vec::new() };
+    // Os canais estão em BGRA; reduzir e mexer no alfa não depende da ordem.
+    let small = image::imageops::thumbnail(&full, (w / 4).max(1), (h / 4).max(1));
+    let (center_x, center_y) = (small.width() as f32 / 2., small.height() as f32 / 2.);
+    let half = center_x.hypot(center_y);
+    let feather = half * REVEAL_FEATHER;
+    (1..=REVEAL_FRAMES).map(|k| {
+        let radius = k as f32 / REVEAL_FRAMES as f32 * (half + feather);
+        let mut frame = small.clone();
+        for (x, y, pixel) in frame.enumerate_pixels_mut() {
+            let distance = (x as f32 + 0.5 - center_x).hypot(y as f32 + 0.5 - center_y);
+            pixel.0[3] = (pixel.0[3] as f32 * reveal_alpha(radius - distance, feather)).round() as u8;
+        }
+        Arc::new(RenderImage::new(vec![Frame::new(frame)]))
+    }).collect()
+}
+
+/// Alfa a `inside` px para dentro do raio: 0 no raio, 1 a `feather` px dele, em `smoothstep`.
+fn reveal_alpha(inside: f32, feather: f32) -> f32 {
+    let t = (inside / feather).clamp(0., 1.);
+    t * t * (3. - 2. * t)
+}
+
 /// Quadros do GIF reduzidos, com o atraso de cada um; `None` = um quadro só, ilegível ou acima do teto (fica o 1º quadro).
 fn animated(bytes: &[u8]) -> Option<Vec<Frame>> {
     let mut decoder = GifDecoder::new(Cursor::new(bytes)).ok()?;
@@ -208,6 +242,20 @@ mod tests {
     use core::prelude::v1::test;
 
     fn picture(side: u32) -> MediaState { MediaState::Image(Arc::new(RenderImage::new(vec![Frame::new(RgbaImage::new(side, side))]))) }
+
+    #[test]
+    fn reveal_grows_from_the_center_and_ends_opaque() {
+        let opaque = RenderImage::new(vec![Frame::new(RgbaImage::from_pixel(80, 40, image::Rgba([10, 20, 30, 255])))]);
+        let frames = reveal(&opaque);
+        assert_eq!(frames.len(), REVEAL_FRAMES);
+        let alpha = |frame: &RenderImage, x: usize, y: usize| frame.as_bytes(0).unwrap()[(y * 20 + x) * 4 + 3];
+        assert_eq!(frames[0].size(0).width.0, 20);
+        assert_eq!(alpha(&frames[0], 0, 0), 0, "o canto começa escondido");
+        assert!(alpha(&frames[0], 10, 5) > 0, "o centro aparece primeiro");
+        assert!(frames.last().unwrap().as_bytes(0).unwrap().chunks_exact(4).all(|p| p[3] == 255), "termina inteira");
+        let gif = RenderImage::new(vec![Frame::new(RgbaImage::new(4, 4)), Frame::new(RgbaImage::new(4, 4))]);
+        assert!(reveal(&gif).is_empty());
+    }
 
     #[test]
     fn budget_evicts_oldest_but_keeps_what_was_drawn_last_frame() {

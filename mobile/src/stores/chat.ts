@@ -316,6 +316,9 @@ function criarChatStore(serverId: string, name: string): ChatApi {
     confirmSubmission(events);
   }
 
+  // A conversa pode confirmar com o POST em voo; sem isto, a queda seguinte viraria erro de mensagem entregue.
+  let confirmedSend: string | null = null;
+
   // Envio incerto que a conversa já mostra chegou: o aviso sai, e o texto devolvido ao campo também.
   function confirmSubmission(events: readonly ChatEvent[]): boolean {
     let draft: ConversationDraft | null;
@@ -334,6 +337,7 @@ function criarChatStore(serverId: string, name: string): ChatApi {
       writeDraft(serverId, name, { ...draft, submission: null, ...(recordings ? { recordings } : {}),
         ...(restored ? { text: '', revision: draft.revision + 1 } : {}) });
     } catch { return false; }
+    confirmedSend = sent.text;
     useChatStore.setState((s) => ({ draftUpdate: s.draftUpdate + 1 }));
     return true;
   }
@@ -1020,6 +1024,7 @@ function criarChatStore(serverId: string, name: string): ChatApi {
       let delivering = false;
       return submitConversationDraft(serverId, name, trimmed, async () => {
         delivering = true;
+        confirmedSend = null;
         if (wasUnknown) useChatStore.setState((s) => ({ pending: s.pending.filter((p) => p.text !== trimmed) }));
         showDeliveryFeedback(null);
         const id = `pending-${pendingSeq++}`;
@@ -1041,7 +1046,7 @@ function criarChatStore(serverId: string, name: string): ChatApi {
       }, draftRevision).catch((error: unknown) => {
         // A resposta se perdeu (app em segundo plano), mas a mensagem já está na conversa.
         // Erro de antes do POST (outro envio pendente) nunca vira sucesso.
-        if (delivering && confirmSubmission(useChatStore.getState().events)) return;
+        if (delivering && (confirmSubmission(useChatStore.getState().events) || confirmedSend === trimmed)) return;
         throw error;
       });
     },

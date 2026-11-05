@@ -2648,6 +2648,38 @@ fn plugin_hook_refused_after_update_is_trusted_again_through_the_session_connect
 }
 
 #[test]
+fn reinstalled_plugin_is_trusted_again_before_any_hook_is_refused() {
+    let mut engine = Engine::new(json!({"name":"session","thread_id":"thread-1","headless":true,"initialized":true,"ready":true,
+        "cwd":"/home/u","codex_home":"/home/u/.codex"}),1,clock(10.0));
+    let list = frames(&engine.plugins_changed());
+    assert_eq!(list[0]["method"],"hooks/list");
+    let hooks = json!([
+        {"key":"p@m:hooks/hooks.json:post_tool_use:0:0","currentHash":"sha256:decl/sha256:content","source":"plugin","trustStatus":"modified","enabled":true},
+        {"key":"novo@m:hooks/hooks.json:stop:0:0","currentHash":"sha256:never","source":"plugin","trustStatus":"untrusted","enabled":true}]);
+    let written = line(&mut engine,json!({"id":list[0]["id"],"result":{"data":[{"cwd":"/home/u","hooks":hooks}]}}),11.0);
+    assert!(hook_notices(&written).is_empty(),"a antecipada não avisa: o hook nunca aprovado só aparece quando falhar");
+    let write = frames(&written);
+    assert_eq!(write[0]["method"],"config/batchWrite");
+    assert_eq!(write[0]["params"]["edits"][0]["value"],"sha256:decl/sha256:content");
+    let done = line(&mut engine,json!({"id":write[0]["id"],"result":{}}),11.1);
+    assert!(frames(&done).is_empty() && hook_notices(&done).is_empty());
+
+    // Não gasta a rodada do turno: uma recusa depois ainda reaprova.
+    let refused = json!({"method":"hook/completed","params":{"threadId":"thread-1","run":{"eventName":"postToolUse","status":"failed",
+        "sourcePath":"/home/u/.codex/plugins/cache/m/p/local/hooks/hooks.json",
+        "entries":[{"kind":"error","text":"plugin contents changed; hook approval required"}]}}});
+    assert_eq!(frames(&line(&mut engine,refused,12.0))[0]["method"],"hooks/list");
+}
+
+#[test]
+fn early_trust_without_answer_stays_silent() {
+    let mut engine = Engine::new(json!({"name":"session","thread_id":"thread-1","headless":true,"initialized":true,"ready":true,
+        "cwd":"/home/u","codex_home":"/home/u/.codex"}),1,clock(10.0));
+    assert_eq!(frames(&engine.plugins_changed())[0]["method"],"hooks/list");
+    assert!(hook_notices(&engine.apply(EngineInput::Tick,clock(60.0)).unwrap()).is_empty());
+}
+
+#[test]
 fn synced_hooks_refresh_waits_for_native_approval_before_confirming() {
     for headless in [true,false] {
         let mut engine = Engine::new(json!({"name":"session","thread_id":"thread-1","headless":headless,

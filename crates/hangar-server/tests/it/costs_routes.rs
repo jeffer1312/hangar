@@ -476,6 +476,34 @@ async fn missing_or_guest_token_goes_to_python_without_starting_scopes() {
 }
 
 #[tokio::test]
+async fn only_the_owner_reaches_the_login_window_routes() {
+    let h = Harness::new(true, false).await;
+    let client = hangar_server::http_client().build().unwrap();
+    for (method, path) in [
+        (reqwest::Method::GET, "/api/login-browser/targets"),
+        (reqwest::Method::GET, "/api/login-browser/view"),
+        (reqwest::Method::POST, "/api/login-browser/input"),
+        (reqwest::Method::POST, "/api/login-browser/activate"),
+        (reqwest::Method::POST, "/api/login-browser/close"),
+        (reqwest::Method::GET, "/api/login-browser/result"),
+        (reqwest::Method::POST, "/api/login-browser/open"),
+    ] {
+        let url = format!("http://{}{path}", h.address);
+        assert_eq!(client.request(method.clone(), &url).send().await.unwrap().status(), 401, "{path} sem token");
+        assert_eq!(client.request(method.clone(), &url).bearer_auth("convidado").send().await.unwrap().status(), 401, "{path} convidado");
+        assert!(h.forwarded(method.as_str(), path), "{path} tem que ir ao porteiro, sem resposta do Rust");
+    }
+    for (method, path) in [
+        (reqwest::Method::GET, "/api/login-browser/view"),
+        (reqwest::Method::GET, "/api/login-browser/result"),
+        // Sem corpo é recusado antes de abrir o navegador.
+        (reqwest::Method::POST, "/api/login-browser/open"),
+    ] {
+        assert_ne!(h.request(method, path).send().await.unwrap().status(), 401, "{path} com o token do dono");
+    }
+}
+
+#[tokio::test]
 async fn missing_internal_scopes_fail_with_code_instead_of_returning_empty_report() {
     let h = Harness::new(false, false).await;
     assert_eq!(h.request(reqwest::Method::GET, "/api/costs").send().await.unwrap().status(), 202);

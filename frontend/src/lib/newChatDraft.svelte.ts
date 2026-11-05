@@ -12,6 +12,7 @@ import {
   type CodexAccount, type ConfigDirInfo, type FolderBranches, type FsRoot, type ModelOption, type Provider,
   type WorktreeChoice, type Motor, type CliProxyAccount,
 } from '@hangar/core';
+import { negadaAoConvidado } from './papel.svelte';
 import { listOwnServers, selectServer, getActiveId, type Server } from './auth';
 import { carregarModelos, matchRemembered, valorModelo } from './modelosPorConta';
 import { type ContaCota } from './cota';
@@ -74,6 +75,8 @@ export class NewChatDraft {
   // null = config do servidor ainda não lida: o corpo não manda o campo e vale o padrão do servidor.
   headless = $state<boolean | null>(null);
   executionError = $state('');
+  // Convidado não lê a config: segue sem o campo, e o padrão vale como no `null`.
+  executionDenied = $state(false);
   // Padrão marcado com "Usar como padrão" (o harness-defaults.json do nativo, aqui no localStorage).
   savedDefault = $state<{ model: string; effort: string; permission: string } | null>(null);
   #permissionTouched = false;
@@ -132,7 +135,7 @@ export class NewChatDraft {
   /** Contas ou modelos ainda chegando: enviar agora mandaria conta/modelo vazios e cairia no padrão do servidor calado. */
   get loading(): boolean {
     return this.providersLoading || this.configsLoading || this.codexLoading || this.modelsLoading
-      || (this.headless === null && !this.executionError);
+      || (this.headless === null && !this.executionError && !this.executionDenied);
   }
   get motor(): Motor | null { return this.provider === 'claude' && this.engine ? this.engines[this.engine] ?? null : null; }
   // Só conta de credencial Codex do Hangar serve: é dela que sai a cota e o login do proxy.
@@ -217,12 +220,15 @@ export class NewChatDraft {
     const server = this.serverObj;
     this.headless = null;
     this.executionError = '';
+    this.executionDenied = false;
     if (!server) return;
     try {
       const r = await getConfigForServer(server);
       if (seq === this.#execSeq) this.headless = r.campos.headless_default?.valor !== false;
     } catch (e) {
-      if (seq === this.#execSeq) this.executionError = errText(e, m.falha_conexao());
+      if (seq !== this.#execSeq) return;
+      if (negadaAoConvidado(e)) this.executionDenied = true;
+      else this.executionError = errText(e, m.falha_conexao());
     }
   }
 

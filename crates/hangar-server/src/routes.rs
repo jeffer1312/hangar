@@ -27,7 +27,7 @@ use crate::share::caller::{Caller, SessionPath, caller};
 use crate::share::pair_routes::PairState;
 use crate::side::{Binding, Hub, Hubs, Lease, Out, Queued, SideCtx};
 use crate::tail::{self, Watchers};
-use crate::transcript::{InternalInfo, SKIPPED_LINES, history_etag, merged_history};
+use crate::transcript::{InternalInfo, SKIPPED_LINES, history_etag, merged_history_with_notices};
 
 const PING_EVERY: Duration = Duration::from_secs(10);
 const COMMENT_EVERY: Duration = Duration::from_secs(15);
@@ -68,7 +68,11 @@ pub struct AppState {
     pub workspace_meta_slots: Arc<tokio::sync::Semaphore>,
     pub diag: crate::diag::DiagClient,
     pub costs: Arc<crate::costs::collect::Collector>,
-    pub fx: Arc<crate::costs::fx::Fx>,
+    /// Índice de conversas da busca e do Arquivo; o produtor liga só na subida real (`main.rs`).
+    pub search: crate::search::Index,
+    /// O `claude -p` do Perguntar; `None` = o CLI do PATH (o teste troca por um falso).
+    pub claude_p: Option<Arc<dyn crate::claude_p::Runner>>,
+    pub fx:Arc<crate::costs::fx::Fx>,
     pub reports: Arc<crate::costs::ReportCache>,
     pub origins_home: std::path::PathBuf,
     /// `~/.hangar`: etapas de ferramenta e cofre de anexos; o teste troca por uma pasta temporária.
@@ -79,6 +83,8 @@ pub struct AppState {
     pub list: Arc<crate::list::bridge::ListBridge>,
     /// Produtor único da lista do dono; liga com a primeira lista aberta.
     pub hub: Arc<crate::list::hub::ListHub>,
+    /// Aparelhos que já abriram a lista do dono (`~/.hangar/devices.json`); o teste troca por uma pasta temporária.
+    pub devices: Arc<crate::devices::Registry>,
     /// Painéis de terminal real de todas as portas.
     pub term: Arc<crate::term::Terms>,
     /// O que os `Monitor`s de estado compartilham (Claude com terminal).
@@ -102,6 +108,8 @@ pub struct AppState {
     pub groups: Option<Arc<crate::groups::service::GroupService>>,
     /// Outras máquinas do dono (`peers.json`), para os grupos entre máquinas.
     pub peers: Arc<crate::groups::peers::PeerClient>,
+    /// Abertura do navegador do login Claude e escuta do retorno nesta máquina.
+    pub login_browser: Arc<crate::accounts::login_browser::LoginBrowser>,
     /// Id desta máquina entre as do dono (`CP_SERVER_ID`); vazio = sem id.
     pub server_id: String,
     pub machine_identity: std::sync::RwLock<Option<String>>,
@@ -120,6 +128,10 @@ pub struct AppState {
     pub update_release_base: String,
     /// Base do worker do "Reportar problema" (`/api/relatorio`); o teste troca por um falso.
     pub diag_report_base: String,
+    /// Cofre de senhas desta máquina; o teste troca o chaveiro por um falso.
+    pub vault: Arc<crate::vault::Vault>,
+    /// Pedidos do cofre (aprovação e cadastro) na memória; o `hub` publica o evento `vault` deles.
+    pub vault_requests: Arc<crate::vault::requests::Requests>,
 }
 
 impl AppState {
@@ -214,10 +226,13 @@ impl AppState {
                 .with_paths(list.env().dirs.as_ref().map(|d| d.home.clone()).unwrap_or_default(),
                     list.env().dirs.as_ref().map(|d| d.claude.join(".hangar-pair")).unwrap_or_default())
                 .with_mux(list.env().capture_program.to_string_lossy().into_owned())), list.clone(), diag.clone());
-        let accounts=crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture());
-        AppState { startup: Default::default(), startup_producers: Arc::default(), settings_snapshot: std::sync::OnceLock::new(), login_guests: Arc::new(crate::login_guests::Service::uninitialized(&accounts.env.home,&accounts.env.claude_base)), accounts, command_catalog: Arc::default(), groups, server_id, machine_identity: std::sync::RwLock::new(None), peers: Arc::new(crate::groups::peers_from_env()), auth: Auth::configured(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, public_v6: None, front: None, diag,
+        let vault_requests = Arc::new(crate::vault::requests::Requests::default());
+        let accounts = crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture());
+        let search = crate::search::Index::server(accounts.clone());
+        AppState { startup: Default::default(), startup_producers: Arc::default(), settings_snapshot: std::sync::OnceLock::new(), login_guests: Arc::new(crate::login_guests::Service::uninitialized(&accounts.env.home,&accounts.env.claude_base)), accounts, search, claude_p: None, command_catalog: Arc::default(), groups, server_id, machine_identity: std::sync::RwLock::new(None), peers: Arc::new(crate::groups::peers_from_env()), auth: Auth::configured(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, public_v6: None, front: None, diag,
             migration_branch: Arc::default(),
             workspace_slots: Arc::new(tokio::sync::Semaphore::new(4)),
+            login_browser: Arc::default(),
             interactions, plugin,
             remote_browser: Arc::default(),
             transcription: Arc::default(),
@@ -234,13 +249,16 @@ impl AppState {
             costs, fx, reports: Arc::new(crate::costs::ReportCache::default()),
             origins_home: std::path::PathBuf::from(std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).unwrap_or_default()),
             prewarm: Arc::new(crate::prewarm::Store::server(&hangar_dir)),
+            devices: Arc::new(crate::devices::Registry::new(hangar_dir.join("devices.json"))),
             update_release_base: crate::update::RELEASE_BASE.to_owned(),
             diag_report_base: crate::diag_report::WORKER_BASE.to_owned(),
+            vault: Arc::new(crate::vault::Vault::system()),
+            hub: Arc::new(crate::list::hub::ListHub::with_vault(vault_requests.feed())),
+            vault_requests,
             hangar_dir, device_install,
             upload_naming: Default::default(),
             origins: std::sync::Mutex::new(indexmap::IndexMap::new()),
             list, state,
-            hub: Arc::default(),
             term: Arc::default(),
             mods,
             pages: Arc::new(crate::pages::store::Store::new(crate::pages::store::Store::default_root())),
@@ -340,6 +358,8 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
     }
     let _worktree_sweep=crate::AbortOnDrop(crate::worktree_policy::spawn(state.clone()));
     let _keyring_watch = crate::AbortOnDrop(crate::keyring::spawn(state.list.keyring.clone()));
+    let _vault_backup = crate::AbortOnDrop(crate::vault::backup::spawn(state.clone()));
+    let _vault_files = crate::AbortOnDrop(tokio::spawn(crate::vault::files::sweep_at_start()));
     let _auto_report = crate::AbortOnDrop(crate::diag_report::auto::spawn(state.clone()));
     // Abortada na saída: a tarefa segura o estado do servidor, que sobreviveria a ele.
     // As sessões com terminal que o multiplexador perdeu voltam pelo spec; antes da varredura de grupos, que
@@ -347,6 +367,7 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
     let _session_restore = crate::session_open::restore::spawn(state.clone()).map(crate::AbortOnDrop);
     let _group_sweep = crate::groups::sweep::spawn(state.clone()).map(crate::AbortOnDrop);
     let _link_return = crate::groups::link_return::spawn(state.clone()).map(crate::AbortOnDrop);
+    let _session_sleep = crate::AbortOnDrop(crate::session_sleep::spawn(state.clone()));
     let _federation = crate::groups::federation::spawn(state.clone()).map(crate::AbortOnDrop);
     // O aviso no celular é decidido aqui, com ou sem lista aberta.
     let _push_watch: Vec<crate::AbortOnDrop> = crate::push::start(state.clone()).into_iter().map(crate::AbortOnDrop).collect();
@@ -683,6 +704,14 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/sessions/{name}/bastao", axum::routing::post(crate::session_open::server::bastao).fallback(pass_any))
         // Retomar do Arquivo e o `/resume` ao vivo: a abertura e a reabertura do Rust, com a conversa que já existe.
         .route("/api/archive/{project}/{session_id}/resume", axum::routing::post(crate::session_open::server::archive_resume).fallback(pass_any))
+        // Ler a conversa do Arquivo e a imagem dela: só o dono; o resto segue ao Python, que recusa.
+        // O Arquivo (pastas, recentes, uma pasta, um cwd): só o dono; `recent` antes da pasta.
+        .route("/api/archive", get(crate::archive_list::folders).fallback(pass_any))
+        .route("/api/archive/recent", get(crate::archive_list::recent).fallback(pass_any))
+        .route("/api/archive/{project}", get(crate::archive_list::folder).fallback(pass_any))
+        .route("/api/archive-por-cwd", get(crate::archive_list::by_cwd).fallback(pass_any))
+        .route("/api/archive/{project}/{session_id}/history", get(crate::archive_history::history).fallback(pass_any))
+        .route("/api/archive/{project}/{session_id}/transcript-image/{uuid}/{idx}", get(crate::archive_history::image).fallback(pass_any))
         .route("/api/sessions/{name}/resume", axum::routing::post(crate::session_write::resume::route).fallback(pass_any))
         // Broadcast do dono: o alvo Codex com terminal do Rust recebe aqui; o resto segue ao Python.
         .route("/api/broadcast", axum::routing::post(crate::session_write::input::broadcast).fallback(pass_any))
@@ -700,17 +729,25 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/costs", get(crate::costs_routes::costs).fallback(pass_any))
         .route("/api/cotacao", get(crate::costs_routes::cotacao).fallback(pass_any))
         .route("/api/uso", get(crate::costs_routes::usage).fallback(pass_any))
+        .route("/api/search", get(crate::search::http::route).fallback(pass_any))
+        .route("/api/ask-history", axum::routing::post(crate::search::ask::route).fallback(pass_any))
+        .route("/api/search/context", get(crate::search_context::route).fallback(pass_any))
         .route("/api/migration/status", get(crate::migration_status::status).fallback(pass_any))
         // Novidades e avisos da próxima atualização: só o dono, nunca repassado (o Python não tem a rota).
         .route("/api/update/notes", get(crate::update_notes::route))
         .route("/api/claude/defaults", axum::routing::post(crate::claude_defaults::save).fallback(pass_any))
         .route("/api/session-defaults", axum::routing::get(crate::session_defaults::handle).put(crate::session_defaults::handle))
+        // O que já foi visto do tour do nativo: só o dono, nunca repassado (o Python não tem a rota).
+        .route("/api/tour-progress", axum::routing::get(crate::tour_progress::handle).put(crate::tour_progress::handle))
         // Sugestão de nome da sessão genérica: só o dono, nunca repassada (o Python não tem a rota).
         .route("/api/sessions/{name}/rename-suggestion", axum::routing::post(crate::dictation::rename_suggestion::route).delete(crate::dictation::rename_suggestion::route))
         .route("/api/peers", axum::routing::any(crate::machine_peers::handle))
         .route("/api/peers/{*path}", axum::routing::any(crate::machine_peers::handle))
         .route("/api/alcance", axum::routing::any(crate::machine_peers::handle))
         .route("/api/alcance/pareamento", axum::routing::any(crate::machine_peers::handle))
+        // Ocultar da lista: só o dono, nunca repassada (o Python não tem a rota).
+        .route("/api/sessions/{name}/hidden", axum::routing::put(crate::session_visibility::route).delete(crate::session_visibility::route))
+        .route("/api/session-auto-hide", axum::routing::get(crate::session_visibility::auto::route).put(crate::session_visibility::auto::route))
         .route("/api/tags", axum::routing::get(crate::tags::handle).put(crate::tags::handle))
         .route("/api/config-sync/manifest", axum::routing::get(crate::config_sync::http::handle))
         .route("/api/config-sync/bundle", axum::routing::get(crate::config_sync::http::handle))
@@ -742,6 +779,19 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/claude/customizations", get(crate::claude_customizations::catalog_route).fallback(pass_any))
         // Senha do chaveiro: só o dono, nunca repassada; só o preflight do CORS vai ao Python.
         .route("/api/keyring/unlock", axum::routing::post(crate::keyring::unlock_route).options(pass_any))
+        // Cofre de senhas: só o dono, nunca repassado; só o preflight do CORS vai ao Python.
+        .route("/api/vault/status", get(crate::vault::http::status).options(pass_any))
+        .route("/api/vault/config", axum::routing::put(crate::vault::http::config).options(pass_any))
+        .route("/api/vault/entries", get(crate::vault::http::entries).post(crate::vault::http::entries).options(pass_any))
+        .route("/api/vault/entries/{id}", axum::routing::patch(crate::vault::http::entry).delete(crate::vault::http::entry).options(pass_any))
+        .route("/api/vault/entries/{id}/password", get(crate::vault::http::password).options(pass_any))
+        .route("/api/vault/use", axum::routing::post(crate::vault::http::use_entry).options(pass_any))
+        .route("/api/vault/ask-entry", axum::routing::post(crate::vault::http::ask_entry).options(pass_any))
+        .route("/api/vault/requests/{id}", axum::routing::post(crate::vault::http::request).delete(crate::vault::http::request).options(pass_any))
+        .route("/api/vault/requests/{id}/wait", get(crate::vault::http::wait).options(pass_any))
+        .route("/api/vault/recovery", axum::routing::post(crate::vault::http::recovery).options(pass_any))
+        .route("/api/vault/restore", axum::routing::post(crate::vault::http::restore).options(pass_any))
+        .route("/api/vault/backup/{server_id}", get(crate::vault::http::backup_copy).put(crate::vault::http::backup_copy).options(pass_any))
         // Relatório de diagnóstico: só o dono, nunca repassado; só o preflight do CORS vai ao Python.
         .route("/api/diag/report", axum::routing::post(crate::diag_report::report_route).options(pass_any))
         // SideStore no iPhone/iPad do cabo: só o dono, nunca repassado (a senha da Apple ID não vai ao Python).
@@ -1226,7 +1276,7 @@ pub(crate) async fn history(
         }
         let before = SKIPPED_LINES.load(Ordering::Relaxed);
         // Já vem com o corte `evs[-limit:]` da rota (Task 9).
-        let evs = merged_history(&hreq)?;
+        let evs = merged_history_with_notices(&hreq)?;
         tail::log_skipped(&log_name, before);
         Ok((etag, Some(serde_json::to_vec(&evs)?)))
     })
@@ -1273,8 +1323,15 @@ pub(crate) async fn events(
     };
     // Convidado não recebe aviso de mod nem pedido de navegador, e não conta como app do dono.
     let guest = matches!(who, Some(Caller::Guest(_))) || req.extensions().get::<crate::forwarded::ReadGuest>().is_some_and(|guest| guest.0);
-    let Ok(info) = st.info(&name).await else {
-        return route_failed(&st, req.headers(), "rust.events_failed", &name, "internal_info", INFO_REASON);
+    let started = std::time::Instant::now();
+    let info = match st.info(&name).await {
+        Ok(info) => info,
+        Err(crate::locate::InfoFailed(cause)) => {
+            // A etapa da descoberta que não respondeu e o tempo: `internal_info` sozinho não diz qual.
+            st.diag.report_with("rust.events_failed", &name, "internal_info", INFO_REASON,
+                serde_json::json!({"etapa": cause, "ms": started.elapsed().as_millis() as u64}));
+            return route_failed(&st, req.headers(), "rust.events_failed", &name, "internal_info", INFO_REASON);
+        }
     };
     // Antes de qualquer repasse: sessão em erro ainda sem transcript também é reaberta.
     if info.is_some() { st.request_reopen(&name); }
@@ -1465,8 +1522,7 @@ mod tests {
     async fn orchestration_history_uses_the_same_parser_on_public_and_forwarded_ports() {
         let dir = tempfile::tempdir().unwrap();
         let timeline = dir.path().join("timeline.jsonl");
-        let fixture: serde_json::Value = serde_json::from_str(include_str!("../../../backend/tests/fixtures/contract/orq-events/events.json")).unwrap();
-        let lines = fixture["cases"].as_array().unwrap().iter().map(|case| format!("{}\n", case["input"])).collect::<String>();
+        let lines = crate::transcript::orq_cases::CASES.iter().map(|(input, _)| format!("{input}\n")).collect::<String>();
         std::fs::write(&timeline, lines).unwrap();
         let mut state = Arc::try_unwrap(state_with_upstream().await).ok().unwrap();
         state.side.locate = Arc::new(crate::locate::Fixed(Some(InternalInfo {

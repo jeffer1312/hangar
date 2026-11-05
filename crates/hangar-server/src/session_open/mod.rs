@@ -4,12 +4,13 @@
 pub mod adopt;
 pub mod agents;
 pub mod archive;
+#[cfg(test)]
+pub(crate) mod cases;
 pub mod claude;
 pub mod cli;
 pub mod codex;
-#[cfg(target_os = "linux")]
-#[doc(hidden)]
-pub mod contract;
+#[cfg(all(test, target_os = "linux"))]
+mod contract;
 pub mod facts;
 pub mod legacy_restore;
 pub mod local;
@@ -363,7 +364,7 @@ pub struct SessionSpec {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ChangeReason { ModeSwitch, AccountSwitch, Bypass, Reload, Resume, RebootRestore, ParkWake, LimitSwitch }
+pub enum ChangeReason { ModeSwitch, AccountSwitch, Bypass, Reload, Resume, RebootRestore, ParkWake, LimitSwitch, Sleep }
 
 /// O que uma reabertura muda; o campo ausente fica como está no spec gravado.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

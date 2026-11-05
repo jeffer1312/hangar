@@ -13,12 +13,15 @@ credencial) e `env_http_headers` pra identidade. Idempotente. Stdlib só.
 import json
 import os
 import re
+import stat
 import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 HOME = Path.home()
 INICIO, FIM = "# >>> hangar: mcp", "# <<< hangar: mcp"
+# A tool do cofre espera o dono por até 10 min; sem isso o Claude corta a chamada em 60 s e o Codex também.
+TOOL_TIMEOUT_S = 660
 
 
 def env_backend() -> dict[str, str]:
@@ -32,25 +35,40 @@ def env_backend() -> dict[str, str]:
     return out
 
 
-def claude(url: str, helper: str) -> None:
+def claude_conta(arq: Path, novo: dict) -> None:
+    try:
+        dados = json.loads(arq.read_text(encoding="utf-8")) if arq.exists() else {}
+    except ValueError:
+        print(f"aviso: {arq} não é JSON válido — pulado", file=sys.stderr)
+        return
+    servidores = dados.setdefault("mcpServers", {})
+    if servidores.get("hangar") == novo:
+        return
+    servidores["hangar"] = novo
+    # O .claude.json guarda dados da conta: o modo do original fica, e o temporário nunca nasce aberto.
+    modo = stat.S_IMODE(arq.stat().st_mode) if arq.exists() else 0o600
+    tmp = arq.with_name(arq.name + ".hangar-novo")
+    with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as saida:
+        saida.write(json.dumps(dados, indent=2))
+    os.chmod(tmp, modo)
+    os.replace(tmp, arq)
+    print(f"ok: MCP hangar em {arq}")
+
+
+def claude(url: str, helper: str) -> bool:
+    """Uma conta com problema não impede as outras. False = alguma falhou (já dito no stderr)."""
     # Conta é pasta que já tem `.claude.json`; pasta `.claude-*` sem ele não é conta (uploads etc).
     alvos = [HOME / ".claude.json"] + sorted(p / ".claude.json" for p in HOME.glob(".claude-*")
                                              if (p / ".claude.json").is_file() and not p.name.endswith(".lock"))
+    novo = {"type": "http", "url": url, "headersHelper": helper, "timeout": TOOL_TIMEOUT_S * 1000}
+    tudo_certo = True
     for arq in alvos:
         try:
-            dados = json.loads(arq.read_text(encoding="utf-8")) if arq.exists() else {}
-        except ValueError:
-            print(f"aviso: {arq} não é JSON válido — pulado", file=sys.stderr)
-            continue
-        servidores = dados.setdefault("mcpServers", {})
-        novo = {"type": "http", "url": url, "headersHelper": helper}
-        if servidores.get("hangar") == novo:
-            continue
-        servidores["hangar"] = novo
-        tmp = arq.with_name(arq.name + ".hangar-novo")
-        tmp.write_text(json.dumps(dados, indent=2), encoding="utf-8")
-        os.replace(tmp, arq)
-        print(f"ok: MCP hangar em {arq}")
+            claude_conta(arq, novo)
+        except (OSError, AttributeError, TypeError) as erro:
+            print(f"erro: {arq}: MCP hangar não registrado: {erro}", file=sys.stderr)
+            tudo_certo = False
+    return tudo_certo
 
 
 # Só as ferramentas de recado: `Bash(hangar-send:*)` ou `mcp__hangar__*` liberariam também criar
@@ -130,6 +148,7 @@ def codex(url: str, token: str) -> None:
         INICIO,
         "[mcp_servers.hangar]",
         f'url = "{url}"',
+        f"tool_timeout_sec = {TOOL_TIMEOUT_S}",
         f'http_headers = {{ "Authorization" = "Bearer {token}" }}',
         'env_http_headers = { "X-Hangar-Key" = "CP_SESSION_KEY", "X-Hangar-Pane" = "TMUX_PANE", '
         '"X-Hangar-Session" = "CP_SESSION_NAME", "X-Hangar-Jev" = "HANGAR_JEV" }',
@@ -156,6 +175,8 @@ if __name__ == "__main__":
     url = f"http://127.0.0.1:{env.get('CP_PORT') or 8765}/mcp/"
     # Windows não executa o shim sem extensão; o .cmd vem do install.ps1.
     helper = "hangar-mcp-headers.cmd" if os.name == "nt" else "hangar-mcp-headers"
-    claude(url, str(HOME / ".local" / "bin" / helper))
+    claude_ok = claude(url, str(HOME / ".local" / "bin" / helper))
     claude_permissoes(HOME / ".claude" / "settings.json")
     codex(url, env["CP_AUTH_TOKEN"])
+    if not claude_ok:
+        sys.exit("erro: alguma conta do Claude ficou sem o MCP hangar (veja acima)")

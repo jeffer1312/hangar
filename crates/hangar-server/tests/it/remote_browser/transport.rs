@@ -1685,15 +1685,6 @@ async fn subframe_navigation_never_replaces_the_main_frame_url() {
     scene.close().await;
 }
 
-fn review_contract() -> Value {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../backend/tests/fixtures/contract/remote-browser/transport-review-supplement.json");
-    let raw = std::fs::read(path).expect(
-        "referência Python da revisão pendente: execute generate_transport_supplement.py --review-only --output backend/tests/fixtures/contract/remote-browser/transport-review-supplement.json",
-    );
-    serde_json::from_slice(&raw).unwrap()
-}
-
 struct RaceController {
     address: std::net::SocketAddr,
     started: Arc<Notify>,
@@ -1807,7 +1798,7 @@ async fn layout_wait_only_overwrites_live_dimensions_after_confirmed_size() {
     ).await {
         return;
     }
-    let reference = review_contract();
+    let reference = support::contract("transport-review-supplement");
     let scene = Scene::new().await;
     seed_session(&scene);
     let desktop = Desktop::new(&json!({})).await;

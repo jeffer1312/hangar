@@ -1,55 +1,64 @@
-use crate::common;
 use hangar_server::groups::model::{Fed, GroupRecord, Member, OutsideRef, Sidecar};
 use hangar_server::groups::store::{IdentityChanged, PairDir, file_stem};
 use serde_json::Value;
 
-fn golden_dir() -> std::path::PathBuf { common::contract().join("golden/pair_sidecars") }
+/// Sidecars gravados pelo formato anterior ao de `fed`; o `legado` tem só `peer`.
+const SIDECAR_A: &str = r#"{"peers": ["b"], "task": "T-1 filtro", "gid": "ab12cd34", "harness": {"a": "claude", "b": "codex"}}"#;
+const SIDECAR_FED: &str = r#"{"peers": ["b", "lab::c"], "task": "t", "gid": "ab12cd34", "harness": {}, "fed": {"owner": "casa", "local": true, "version": 7}}"#;
+const SIDECARS: [(&str, &str); 6] = [
+    ("a.json", SIDECAR_A),
+    ("fed.json", SIDECAR_FED),
+    ("legado.json", r#"{"peer": "x"}"#),
+    ("nome-com-espa-o.json", r#"{"peers": ["a"], "task": "", "gid": "ab12cd34", "harness": {}}"#),
+    ("orq-solo.json", r#"{"peers": [], "task": "", "gid": "cd34ef56", "harness": {}, "orq": true}"#),
+    ("quebrado.json", "[1, 2]"),
+];
 
 fn fresh_dir(tmp: &tempfile::TempDir) -> PairDir {
     PairDir::new(tmp.path().to_path_buf(), tmp.path().join("arquivo"))
 }
 
 #[test]
-fn reads_what_python_wrote() {
+fn reads_older_sidecar_formats() {
     let tmp = tempfile::tempdir().unwrap();
-    for f in std::fs::read_dir(golden_dir()).unwrap() {
-        let f = f.unwrap().path();
-        if f.extension().is_some_and(|e| e == "json") && f.file_name().unwrap() != "expected.json" {
-            std::fs::copy(&f, tmp.path().join(f.file_name().unwrap())).unwrap();
-        }
-    }
-    let dir = PairDir::new(tmp.path().to_path_buf(), tmp.path().join("arquivo"));
-    let expected: Value = serde_json::from_str(&std::fs::read_to_string(golden_dir().join("expected.json")).unwrap()).unwrap();
-    assert!(expected.as_object().unwrap().len() >= 6, "o golden perdeu casos");
-    for (name, want) in expected.as_object().unwrap() {
+    for (file, text) in SIDECARS { std::fs::write(tmp.path().join(file), text).unwrap(); }
+    let dir = fresh_dir(&tmp);
+    let claude_codex = [("a", "claude"), ("b", "codex")];
+    let wanted: [(&str, Option<(&[&str], &str, &str, &[(&str, &str)], bool)>); 6] = [
+        ("a", Some((&["b"], "T-1 filtro", "ab12cd34", &claude_codex, false))),
+        ("orq-solo", Some((&[], "", "cd34ef56", &[], true))),
+        ("nome com espaço", Some((&["a"], "", "ab12cd34", &[], false))),
+        // Sem `gid` no arquivo: o derivado de legado+x.
+        ("legado", Some((&["x"], "", "78cd83da", &[], false))),
+        ("quebrado", None),
+        ("fed", Some((&["b", "lab::c"], "t", "ab12cd34", &[], false))),
+    ];
+    for (name, want) in wanted {
         let got = dir.sidecar(name).unwrap();
-        match want {
-            Value::Null => assert!(got.is_none(), "{name}"),
-            w => {
-                let got = got.unwrap();
-                let peers: Vec<String> = w["peers"].as_array().unwrap().iter().map(|p| p.as_str().unwrap().to_owned()).collect();
-                assert_eq!(got.peers, peers, "{name}");
-                assert_eq!(got.gid, w["gid"].as_str().unwrap(), "{name}: gid legado igual ao do Python");
-                assert_eq!(got.orq, w["orq"].as_bool().unwrap(), "{name}");
-                assert_eq!(got.task.as_deref(), w["task"].as_str(), "{name}");
-                let harness: std::collections::BTreeMap<String, String> =
-                    w["harness"].as_object().unwrap().iter().map(|(k, v)| (k.clone(), v.as_str().unwrap().to_owned())).collect();
-                assert_eq!(got.harness, harness, "{name}");
-            }
-        }
+        let Some((peers, task, gid, harness, orq)) = want else {
+            assert!(got.is_none(), "{name}");
+            continue;
+        };
+        let got = got.unwrap();
+        assert_eq!(got.peers, peers, "{name}");
+        assert_eq!(got.gid, gid, "{name}");
+        assert_eq!(got.orq, orq, "{name}");
+        assert_eq!(got.task.as_deref(), Some(task), "{name}");
+        let harness: std::collections::BTreeMap<String, String> = harness.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        assert_eq!(got.harness, harness, "{name}");
     }
 }
 
 #[test]
-fn sidecar_with_fed_is_read_and_python_formats_are_not_confused_for_it() {
+fn sidecar_with_fed_is_read_and_older_formats_have_none() {
     let tmp = tempfile::tempdir().unwrap();
-    std::fs::copy(golden_dir().join("fed.json"), tmp.path().join("fed.json")).unwrap();
-    std::fs::copy(golden_dir().join("a.json"), tmp.path().join("a.json")).unwrap();
+    std::fs::write(tmp.path().join("fed.json"), SIDECAR_FED).unwrap();
+    std::fs::write(tmp.path().join("a.json"), SIDECAR_A).unwrap();
     let dir = fresh_dir(&tmp);
     let fed = dir.sidecar("fed").unwrap().unwrap();
     assert_eq!(fed.fed, Some(Fed { owner: "casa".into(), local: true, version: 7 }));
     assert_eq!(fed.peers, ["b", "lab::c"]);
-    assert_eq!(dir.sidecar("a").unwrap().unwrap().fed, None, "o Python de hoje não grava fed");
+    assert_eq!(dir.sidecar("a").unwrap().unwrap().fed, None);
 }
 
 #[test]

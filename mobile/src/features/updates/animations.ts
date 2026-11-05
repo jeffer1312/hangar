@@ -1,14 +1,24 @@
 import type { ComponentType } from 'react';
 import { AutoReportAnimation } from './AutoReportAnimation';
 import { CodexActivityAnimation } from './CodexActivityAnimation';
+import { HideFromListAnimation } from './HideFromListAnimation';
+import { ImageRevealAnimation } from './ImageRevealAnimation';
+import { LoginPasswordAnimation } from './LoginPasswordAnimation';
 import { RenameSuggestionAnimation } from './RenameSuggestionAnimation';
+import { SleepHiddenAnimation } from './SleepHiddenAnimation';
 import { TagsPlateAnimation } from './TagsPlateAnimation';
+import { VaultAnimation } from './VaultAnimation';
 
 // Miniaturas feitas dos componentes reais (ex.: src/chat/ComposerField.tsx) entram aqui pelo nome da novidade.
 const animations: Record<string, ComponentType<{ width: number }>> = {
+  'adormecer-ocultas': SleepHiddenAnimation,
+  'cofre-de-senhas': VaultAnimation,
   'codex-atividade': CodexActivityAnimation,
   'etiquetas-maquina-conta': TagsPlateAnimation,
+  'login-usuario-senha': LoginPasswordAnimation,
+  'ocultar-da-lista': HideFromListAnimation,
   'relatorio-automatico': AutoReportAnimation,
+  'revelacao-imagem': ImageRevealAnimation,
   'sugestao-de-nome': RenameSuggestionAnimation,
 };
 

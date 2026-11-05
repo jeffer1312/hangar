@@ -129,16 +129,22 @@ pub async fn route(
     };
     let catalogs = st.artifacts.clone();
     let session = name.clone();
+    let jsonl = binding.jsonl.clone();
     match tokio::task::spawn_blocking(move || catalogs.read(&session, binding)).await {
         Ok(Ok(items)) => reply(&req, StatusCode::OK, json!({"items":items})),
-        Ok(Err(_)) => route_failed(
-            &st,
-            req.headers(),
-            "rust.artifacts_failed",
-            &name,
-            "artifacts_io",
-            "a leitura dos metadados de artefatos falhou",
-        ),
+        Ok(Err(error)) => {
+            // O erro de E/S e o transcript lido: o código sozinho não diz qual leitura caiu.
+            st.diag.report_with("rust.artifacts_failed", &name, "artifacts_io", "a leitura dos metadados de artefatos falhou",
+                json!({"io_kind": format!("{:?}", error.kind()), "detalhe": error.to_string(), "caminho": jsonl.display().to_string()}));
+            route_failed(
+                &st,
+                req.headers(),
+                "rust.artifacts_failed",
+                &name,
+                "artifacts_io",
+                "a leitura dos metadados de artefatos falhou",
+            )
+        }
         Err(_) => route_failed(
             &st,
             req.headers(),

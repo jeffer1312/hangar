@@ -5,6 +5,9 @@ use serde_json::{Value, json};
 use std::path::Path;
 use std::sync::Arc;
 
+#[path = "web_ui_static_cases.rs"]
+mod static_cases;
+
 const KEY: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 struct Fixture {
@@ -316,16 +319,18 @@ async fn fetch_refuses_a_key_that_is_not_a_sha256_and_a_key_never_published() {
 }
 
 #[tokio::test]
-async fn static_python_contract() {
+async fn static_responses_per_request() {
     let fixture = Fixture::start().await;
-    let data: Value = serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/web_static/reference.json")).unwrap();
-    for (name, content) in data["files"].as_object().unwrap() {
+    let files: Value = serde_json::from_str(static_cases::FILES).unwrap();
+    let cases: Value = serde_json::from_str(static_cases::CASES).unwrap();
+    assert_eq!(cases.as_array().unwrap().len(), 29);
+    for (name, content) in files.as_object().unwrap() {
         let path = fixture.root().join("frontend/dist").join(name);
         write(&path, content.as_str().unwrap());
         std::fs::File::options().write(true).open(path).unwrap().set_times(std::fs::FileTimes::new().set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1700000000))).unwrap();
     }
     let client = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
-    for case in data["cases"].as_array().unwrap() {
+    for case in cases.as_array().unwrap() {
         let mut request = client.request(case["method"].as_str().unwrap().parse().unwrap(), format!("{}{}",fixture.base,case["path"].as_str().unwrap())).header("accept-encoding","identity");
         for (k,v) in case["headers"].as_object().unwrap() { request=request.header(k,v.as_str().unwrap()); }
         let response=request.send().await.unwrap();
@@ -389,20 +394,6 @@ fn static_external_paths_and_ranges_do_not_panic() {
     }).unwrap();
     fixture.task.abort();
     runtime.block_on(async { while !fixture.task.is_finished() { tokio::task::yield_now().await; } });
-}
-
-/// Sonda de uso HTTP isolada: o roteiro de medição encerra por SIGINT e espera a limpeza.
-#[tokio::test]
-#[ignore = "Executada pelo roteiro fixtures/contract/web_static/measure.py"]
-async fn static_http_probe() {
-    let fixture=Fixture::start().await;
-    write(&fixture.root().join("frontend/dist/index.html"),"<p>tela</p>");
-    write(&fixture.root().join("frontend/dist/assets/app.js"),&"const value = 1;\n".repeat(4096));
-    assert_eq!(fixture.get("/").await.status(),200);
-    println!("STATIC_PROBE {}",fixture.base);
-    tokio::signal::ctrl_c().await.unwrap();
-    fixture.task.abort();
-    while !fixture.task.is_finished() { tokio::task::yield_now().await; }
 }
 
 #[cfg(windows)]

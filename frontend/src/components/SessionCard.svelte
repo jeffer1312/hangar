@@ -6,6 +6,7 @@ import { textoProblema } from '../lib/problema';
   import { cwdParts, rotuloEstado, stateColors, untrackedReason, providerName, relativeTime, fmtWhen, isOrq, worktreeLabel } from '@hangar/core';
   import { getPushSettings, setSessionMute, getBranches, checkoutBranch, gitAction, openEditor, setThenLink, clearThenLink, canPair, canLeave } from '@hangar/core';
   import { leavePair, pairExternals, setPairAccess, type PairExternal } from '@hangar/core';
+  import { groupHideTargets, hideSession, showSession } from '@hangar/core';
   import { sessionServerFor, type SessionServer } from '../lib/sessionServer';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
   import { worktreeStatus } from '../lib/worktreeStatus.svelte';
@@ -210,7 +211,7 @@ import { textoProblema } from '../lib/problema';
   const outside = $derived((session as AggSession).outside ?? null);
   const pairs = $derived(invite ? [] : pairExternals(session));
   const pendentes = $derived(pairs.filter((p) => p.pending));
-  type MenuView = 'main' | 'branch' | 'chain' | 'group' | 'confirm';
+  type MenuView = 'main' | 'branch' | 'chain' | 'group' | 'confirm' | 'hide';
   let confirma = $state<{ title: string; body: string; run: () => Promise<unknown> } | null>(null);
   function pedirConfirmacao(title: string, body: string, run: () => Promise<unknown>) {
     confirma = { title, body, run };
@@ -289,6 +290,49 @@ import { textoProblema } from '../lib/problema';
   async function copyCwd() {
     if (await copyText(session.cwd ?? '')) menuOpen = false;
     else say(m.toast_copiar_falhou(), true);
+  }
+  // A marca mora no servidor da sessão; a linha some/volta pelo SSE da lista. Esperando você, o
+  // servidor tiraria a marca na rodada seguinte, por isso ocultar fica desligado.
+  const hidden = $derived(session.hidden_from_list === true);
+  const hideBlocked = $derived(!hidden && asking);
+  // Em grupo, a pergunta vem antes: lista congelada ao abrir, como os outros subníveis.
+  let hideTargets = $state<AggSession[]>([]);
+  function toggleHidden() {
+    if (!hidden) {
+      const targets = groupHideTargets(session as AggSession, peers?.() ?? []);
+      if (targets.length > 1) { hideTargets = targets; view = 'hide'; say(''); return; }
+    }
+    hideOnly();
+  }
+  function hideGroup() {
+    const targets = hideTargets;
+    void act(async () => {
+      const servers = listOwnServers();
+      const results = await Promise.allSettled(targets.map((t) => {
+        const server = servers.find((s) => s.id === t.serverId);
+        return server ? hideSession(server, t.name) : Promise.reject(new Error(m.convidados_servidor_fora_da_lista()));
+      }));
+      const failed = targets.filter((_, i) => results[i].status === 'rejected');
+      if (!failed.length) return null;
+      const reason = results.find((r): r is PromiseRejectedResult => r.status === 'rejected')!.reason;
+      throw new Error(`${m.session_hide_group_skipped({ names: failed.map((t) => t.name).join(', ') })} (${errMsg(reason)})`);
+    });
+  }
+  function hideOnly() {
+    const server = listOwnServers().find((s) => s.id === serverId);
+    if (!server) {
+      const error = m.convidados_servidor_fora_da_lista();
+      say(hidden ? m.session_show_failed({ error }) : m.session_hide_failed({ error }), true);
+      return;
+    }
+    void act(async () => {
+      try {
+        await (hidden ? showSession(server, session.name) : hideSession(server, session.name));
+      } catch (e) {
+        throw new Error(hidden ? m.session_show_failed({ error: errMsg(e) }) : m.session_hide_failed({ error: errMsg(e) }));
+      }
+      return null;
+    });
   }
   function doOpenEditor() {
     void act(async () => { await withServer(serverId, () => openEditor(session.name)); return null; });
@@ -780,6 +824,11 @@ import { textoProblema } from '../lib/problema';
           {#if !invite}
             {@render item(muteError ? m.ctx_flash_silenciar({ n: muteError }) : muted ? m.ctx_reativar_notif() : m.ctx_silenciar_notif(),
               'M6 16V11a6 6 0 0 1 12 0v5l2 2H4l2-2zM10 21h4', toggleMute, { disabled: muted === null })}
+            {#if serverId}
+              {@render item(hidden ? m.session_show_in_list() : m.session_hide_from_list(),
+                hidden ? 'M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z' : 'M3 3l18 18M10.6 5.1A10 10 0 0 1 12 5c6 0 10 7 10 7a17 17 0 0 1-3 3.6M6.6 6.6C3.9 8.3 2 12 2 12s4 7 10 7a10 10 0 0 0 5.4-1.6M9.9 9.9a3 3 0 0 0 4.2 4.2',
+                toggleHidden, { disabled: hideBlocked, value: hideBlocked ? m.session_hide_waiting() : null })}
+            {/if}
             {#if onPairAccept}
               {@render item(m.native_par_menu(), 'M8 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM16 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8z', () => menuPick(() => onPairAccept?.()), {})}
             {/if}
@@ -843,12 +892,21 @@ import { textoProblema } from '../lib/problema';
           {view === 'confirm' ? (confirma?.title ?? '')
             : view === 'branch' ? m.ctx_trocar_branch()
             : view === 'group' ? m.sessao_agrupar_com()
+            : view === 'hide' ? m.session_hide_group_title()
             : session.then_target ? m.sessao_chain_encadeado({ n: session.then_target }) : m.sessao_chain_enviar()}
         </h2>
       </div>
       {#if view === 'confirm' && confirma}
         <p class="card-menu-info">{confirma.body}</p>
         <button class="card-menu-cta" disabled={busy} onclick={confirmar}>{confirma.title}</button>
+      {:else if view === 'hide'}
+        <div class="card-menu-group">
+          {@render item(m.session_hide_only_this(), 'M3 3l18 18M10.6 5.1A10 10 0 0 1 12 5c6 0 10 7 10 7a17 17 0 0 1-3 3.6M6.6 6.6C3.9 8.3 2 12 2 12s4 7 10 7a10 10 0 0 0 5.4-1.6M9.9 9.9a3 3 0 0 0 4.2 4.2', hideOnly, {})}
+          {@render item(m.session_hide_whole_group({ n: hideTargets.length }), 'M8 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM16 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8z', hideGroup, {})}
+        </div>
+        <div class="card-menu-actions">
+          <button class="card-menu-cta secondary" disabled={busy} onclick={() => { view = 'main'; say(''); }}>{m.comum_cancelar()}</button>
+        </div>
       {:else if view === 'branch'}
         {#if !branches}
           {#if busy}<p class="card-menu-info" role="status">{m.comum_carregando()}</p>{/if}

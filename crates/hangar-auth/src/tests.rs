@@ -1,6 +1,8 @@
 use super::*;
 use serde_json::{Value, json};
 
+mod cases;
+
 fn state(origins: &Origins) -> Value {
     json!(origins.0.iter().map(|(ip,hits)| json!({"ip":ip,"hits":hits})).collect::<Vec<_>>())
 }
@@ -18,23 +20,45 @@ fn apply(origins: &mut Origins, owner: &[u8], input: &Value) -> Option<AuthDecis
         verified_guest: input["guest"] == "signed", login_guest: input["guest"] == "login" }, now))
 }
 
+fn capacity_ip(index: usize) -> String { format!("198.18.{}.{}", index / 256, index % 256) }
+
+fn capacity_origins(indexes: impl IntoIterator<Item = usize>) -> Value {
+    json!(indexes.into_iter().map(|index| json!({"ip": capacity_ip(index), "hits": [1000.0]})).collect::<Vec<_>>())
+}
+
+/// 513 origens no mesmo instante: a primeira sai; quem foi limpo e voltou entra por último.
+fn capacity_cases(owner: &str) -> [Value; 3] {
+    let setup = |first: f64| json!((0..513).map(|index| json!({"profile": "record", "ip": capacity_ip(index),
+        "now": if index == 0 { first } else { 1000.0 }})).collect::<Vec<_>>());
+    let live = capacity_origins(1..513);
+    [
+        json!({"name": "capacity_513_origins_same_timestamp_insertion_tie", "setup": setup(1000.0), "setup_origins": live, "steps": []}),
+        json!({"name": "capacity_evicts_expired_before_same_time_live_origins", "setup": setup(970.0), "setup_origins": live, "steps": []}),
+        json!({"name": "clear_remove_reinsert_enters_last_before_tie_eviction", "setup": setup(1000.0), "setup_origins": live, "steps": [
+            {"input": {"profile": "http", "ip": capacity_ip(1), "token": owner, "now": 1000}, "output": {"return": null},
+                "origins": capacity_origins(2..513)},
+            {"input": {"profile": "record", "ip": capacity_ip(1), "now": 1000}, "output": {"return": null},
+                "origins": capacity_origins((2..513).chain([1]))},
+            {"input": {"profile": "record", "ip": capacity_ip(513), "now": 1000}, "output": {"return": null},
+                "origins": capacity_origins((3..513).chain([1, 513]))},
+        ]}),
+    ]
+}
+
 #[test]
-fn original_python_corpus_keeps_every_timestamp_origin_and_insertion_position() {
-    let raw = include_bytes!("../../../backend/tests/fixtures/contract/remote-browser/shared-auth.json");
-    let corpus: Value = serde_json::from_slice(raw).unwrap();
-    assert_eq!(corpus["source_commit"], "ba2db1021ab7fb801eca50a50f9509dcb825ac7e");
-    for source in corpus["sources"].as_object().unwrap().values() {
-        let digest = ring::digest::digest(&ring::digest::SHA256, source["text"].as_str().unwrap().as_bytes());
-        assert_eq!(crate::shared::hex(digest.as_ref()), source["sha256"].as_str().unwrap());
-    }
-    let owner = corpus["owner_token"].as_str().unwrap().as_bytes();
-    for case in corpus["cases"].as_array().unwrap() {
+fn every_timestamp_origin_and_insertion_position_is_kept() {
+    let owner = "auth-reference-owner-fake";
+    let mut cases: Vec<Value> = serde_json::from_str(cases::CASES).unwrap();
+    assert_eq!(cases.len(), 15);
+    cases.extend(capacity_cases(owner));
+    let owner = owner.as_bytes();
+    for case in &cases {
         let mut origins = Origins::default();
         for input in case["setup"].as_array().unwrap() { apply(&mut origins, owner, input); }
-        assert_eq!(state(&origins), case["setup_state"]["origins"], "{} setup", case["name"]);
+        assert_eq!(state(&origins), case["setup_origins"], "{} setup", case["name"]);
         for step in case["steps"].as_array().unwrap() {
             let result = apply(&mut origins, owner, &step["input"]);
-            assert_eq!(state(&origins), step["state"]["origins"], "{} {}", case["name"], step["input"]);
+            assert_eq!(state(&origins), step["origins"], "{} {}", case["name"], step["input"]);
             let profile = step["input"]["profile"].as_str().unwrap();
             if profile == "record" { continue; }
             let result = result.unwrap();

@@ -17,9 +17,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use hangar_api::chat::{ChatEvent, ChatKind};
 use serde_json::Value;
 
-pub use history::{history_etag, merged_history, HistoryRequest, InternalInfo, TAIL_WINDOW};
+pub use history::{history_etag, merged_history, merged_history_with_notices, HistoryRequest, InternalInfo, TAIL_WINDOW};
 pub use py::ts_of_iso;
-pub(crate) use claude::{is_command_meta, strip_meta_blocks};
+pub(crate) use claude::{hook_failure_reason, is_cli_note, is_command_meta, strip_meta_blocks, RewriteFilter};
+pub(crate) use history::turn_seed_start;
 pub(crate) use codex::is_context_wrapper;
 
 /// O histórico transferido já validou ramo e fronteira; não passa pelo filtro temporal do stream.
@@ -75,11 +76,21 @@ pub struct LineParser {
     rewrite: claude::RewriteFilter,
     peer_resolver: claude::PeerResolver,
     run_dir: Option<std::path::PathBuf>,
+    notices: Option<claude::NoticeFold>,
 }
 
 impl LineParser {
     pub fn new(provider: Provider) -> Self {
-        Self { provider, rewrite: claude::RewriteFilter::default(), peer_resolver: peer::name_of_pid, run_dir: None }
+        Self { provider, rewrite: claude::RewriteFilter::default(), peer_resolver: peer::name_of_pid, run_dir: None, notices: None }
+    }
+
+    /// Com as notas dos avisos da CLI (hook que falha, nova tentativa, recusa). Só o chat as pede: quem procura
+    /// a última resposta ou o texto da pessoa (push, loops, retomada) tomaria uma nota por resposta.
+    pub fn with_notices(mut self) -> Self {
+        if matches!(self.provider, Provider::Claude | Provider::ClaudeHeadless) {
+            self.notices = Some(claude::NoticeFold::default());
+        }
+        self
     }
 
     pub fn with_path(mut self, path: &std::path::Path) -> Self {
@@ -95,24 +106,33 @@ impl LineParser {
 
     /// Só passa a linha pelo filtro de reescrita, sem gerar evento: o leitor compartilhado começa
     /// no fim do arquivo e precisa do relógio das linhas anteriores, como o Python que lê a cauda.
-    pub fn seed(&mut self, line: &[u8]) {
+    pub fn seed(&mut self, line: &[u8], offset: u64) {
         if !matches!(self.provider, Provider::Claude | Provider::ClaudeHeadless) {
             return;
         }
+        self.at_line(offset);
         let text = String::from_utf8_lossy(line);
         if let Some(Value::Object(obj)) = pyjson::loads_lossless(py::strip(&text)) {
-            self.rewrite.keep(&obj);
+            // O fold também precisa do começo do turno que já passou: senão a 2ª falha viraria a "primeira".
+            if self.rewrite.keep(&obj) && let Some(fold) = self.notices.as_mut() { fold.feed(&obj, &mut Vec::new()); }
         }
+    }
+
+    fn at_line(&mut self, offset: u64) {
+        if offset == 0 && let Some(fold) = self.notices.as_mut() { fold.file_start(); }
     }
 
     /// Eventos de uma linha completa; `offset` é o byte onde ela começa (vira o `id:` do SSE).
     pub fn feed(&mut self, line: &[u8], offset: u64) -> Vec<ChatEvent> {
+        self.at_line(offset);
         let Some(value) = line_value(line) else { return Vec::new() };
         let mut evs = match (self.provider, &value) {
             (Provider::Codex, _) => codex::parse_rollout_obj(&value),
             (Provider::Orq, _) => crate::orchestration::timeline::parse_obj(&value, self.run_dir.as_deref()),
             (Provider::Claude | Provider::ClaudeHeadless, Value::Object(obj)) if self.rewrite.keep(obj) => {
-                claude::parse_obj(obj, self.peer_resolver)
+                let mut evs = claude::parse_obj(obj, self.peer_resolver);
+                if let Some(fold) = self.notices.as_mut() { fold.feed(obj, &mut evs); }
+                evs
             }
             _ => Vec::new(),
         };
@@ -161,20 +181,25 @@ pub(crate) fn finish(ev: &mut ChatEvent) {
 }
 
 #[cfg(test)]
+pub(crate) mod orq_cases;
+
+#[cfg(test)]
 mod orq_contract {
     use super::*;
 
     #[test]
-    fn orq_history_and_live_parser_preserve_the_python_notice_contract() {
+    fn orq_history_and_live_parser_keep_the_notice_contract() {
         let provider = Provider::parse("orq");
         assert!(provider.is_some(), "o histórico do orq precisa ser lido pelo Rust");
-        let fixture: Value = serde_json::from_str(include_str!("../../../../backend/tests/fixtures/contract/orq-events/events.json")).unwrap();
-        for case in fixture["cases"].as_array().unwrap() {
-            let events = LineParser::new(provider.unwrap()).feed(case["input"].to_string().as_bytes(), 0);
+        assert_eq!(orq_cases::CASES.len(), 13);
+        for (input, expected) in orq_cases::CASES {
+            let input: Value = serde_json::from_str(input).unwrap();
+            let expected: Value = serde_json::from_str(expected).unwrap();
+            let events = LineParser::new(provider.unwrap()).feed(input.to_string().as_bytes(), 0);
             let actual: Vec<Value> = events.iter().map(|event| {
                 serde_json::json!({"kind": event.kind, "id": event.id, "text": event.text, "ts": event.ts, "orq": event.orq})
             }).collect();
-            assert_eq!(serde_json::to_value(actual).unwrap(), case["expected"], "{}", case["input"]);
+            assert_eq!(serde_json::to_value(actual).unwrap(), expected, "{input}");
         }
     }
 }

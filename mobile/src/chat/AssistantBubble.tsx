@@ -260,7 +260,7 @@ export const AssistantBubble = memo(function AssistantBubble({
           {atts.map((r) => {
             if (r.kind === 'image' || r.kind === 'video') {
               const i = galeria.findIndex((g) => g.uri === r.uri);
-              return <ImageThumb key={r.path} items={galeria} index={i} style={styles.thumb} />;
+              return <ImageThumb key={r.path} items={galeria} index={i} style={styles.thumb} revealTs={ts ?? null} />;
             }
             if (r.kind === 'audio') return <AudioChip key={r.path} uri={r.uri} headers={r.headers} name={r.name} />;
             const kind = r.kind;

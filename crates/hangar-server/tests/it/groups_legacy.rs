@@ -1,7 +1,6 @@
-//! Par 1:1 entre máquinas no Rust com as respostas do Python: o golden `group_cross_routes.json`
-//! roda a mesma sequência nas rotas do FastAPI com `casa`, `lab` e `anon` (sem id) no mesmo processo.
-//! Aqui são três servidores de verdade, cada um com a pasta, o id e o `peers.json` dele; `lab` é
-//! alcançado por um repasse que anota o pedido e `off` aceita a conexão e a derruba sem responder.
+//! Par 1:1 entre máquinas. São três servidores de verdade (`casa`, `lab` e `anon`, sem id), cada um com
+//! a pasta, o id e o `peers.json` dele; `lab` é alcançado por um repasse que anota o pedido e `off`
+//! aceita a conexão e a derruba sem responder.
 #![cfg(unix)]
 use crate::common;
 use crate::fake;
@@ -30,8 +29,6 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const NAMES: [&str; 4] = ["s0", "s1", "s2", "s3"];
-/// Passos do golden que passavam pelo iniciador `pair_cross`, que saiu.
-const REPLACED: [&str; 5] = ["cross_with_local", "cross_unknown_server", "cross_refused", "cross_network_down", "cross_pair"];
 
 struct Machine { addr: SocketAddr, python: Arc<fake::Fake>, pair: PathBuf, share: Arc<hangar_server::share::ShareState> }
 
@@ -152,7 +149,7 @@ fn inputs(m: &Machine) -> Vec<usize> {
     NAMES.iter().map(|n| m.python.hits_to(&format!("/api/sessions/{n}/input"))).collect()
 }
 
-/// O texto da rede caída depende da biblioteca: no golden é `<rede>`.
+/// O texto da rede caída depende da biblioteca: na tabela é `<rede>`.
 fn mask_network(v: &Value) -> Value {
     fn find(v: &Value) -> Option<String> {
         match v {
@@ -174,7 +171,7 @@ fn mask_network(v: &Value) -> Value {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn cross_routes_answer_like_python() {
+async fn cross_routes_sequence() {
     let dirs: HashMap<&str, tempfile::TempDir> = ["casa", "lab", "anon"].into_iter().map(|m| (m, tempfile::tempdir().unwrap())).collect();
     let casa = machine(dirs["casa"].path(), "casa").await;
     let lab = machine(dirs["lab"].path(), "lab").await;
@@ -186,20 +183,19 @@ async fn cross_routes_answer_like_python() {
     let machines: HashMap<&str, &Machine> = HashMap::from([("casa", &casa), ("lab", &lab), ("anon", &anon)]);
     let refusal = json!({"detail": {"code": "erro_fila_nao_digitada", "params": {}, "msg": "composer ilegível"}});
 
-    for step in common::golden("group_cross_routes.json").as_array().unwrap() {
+    let steps: Value = serde_json::from_str(crate::groups_routes::cases::CROSS_ROUTES).unwrap();
+    assert_eq!(steps.as_array().unwrap().len(), 16);
+    for step in steps.as_array().unwrap() {
         let name = step["name"].as_str().unwrap();
-        let at = machines[step["at"].as_str().unwrap()];
-        // O iniciador do par 1:1 saiu: pedido novo vira grupo entre máquinas (`groups_federation`).
-        // O par que `cross_pair` criava é semeado, para os passos seguintes do receptor antigo.
-        if REPLACED.contains(&name) {
-            if name == "cross_pair" {
-                std::fs::create_dir_all(&casa.pair).unwrap();
-                std::fs::create_dir_all(&lab.pair).unwrap();
-                std::fs::write(casa.pair.join("s0.json"), json!({"peers": ["lab::s1"], "task": "t1", "gid": "c0c0c0c0", "harness": {}}).to_string()).unwrap();
-                std::fs::write(lab.pair.join("s1.json"), json!({"peers": ["casa::s0"], "task": "t1", "gid": "c1c1c1c1", "harness": {}}).to_string()).unwrap();
-            }
+        // Pedido novo vira grupo entre máquinas (`groups_federation`); o par antigo só existe semeado.
+        if step["seed_old_pair"] == true {
+            std::fs::create_dir_all(&casa.pair).unwrap();
+            std::fs::create_dir_all(&lab.pair).unwrap();
+            std::fs::write(casa.pair.join("s0.json"), json!({"peers": ["lab::s1"], "task": "t1", "gid": "c0c0c0c0", "harness": {}}).to_string()).unwrap();
+            std::fs::write(lab.pair.join("s1.json"), json!({"peers": ["casa::s0"], "task": "t1", "gid": "c1c1c1c1", "harness": {}}).to_string()).unwrap();
             continue;
         }
+        let at = machines[step["at"].as_str().unwrap()];
         if let Some(seed) = step.get("seed").and_then(Value::as_object) {
             std::fs::create_dir_all(&at.pair).unwrap();
             for (n, sidecar) in seed { std::fs::write(at.pair.join(format!("{n}.json")), sidecar.to_string()).unwrap(); }
@@ -211,12 +207,12 @@ async fn cross_routes_answer_like_python() {
 
         let (status, body) = call(at.addr, step["method"].as_str().unwrap(), step["path"].as_str().unwrap(), step.get("body")).await;
         if let Some(m) = failing { m.python.set_input_reply(None); }
-        if step["python_only"] == true {
-            // I-1A: o 422 é do Rust, com código, sem repasse.
+        if step["body_refused"] == true {
+            // O 422 é do Rust, com código, sem repasse.
             assert_eq!((status, body["detail"]["code"].clone()), (422, json!("erro_corpo_invalido")), "{name}");
             continue;
         }
-        // Diferença decidida: o texto da recusa `Mix` diz o que vale hoje (o par 1:1 antigo), não o do Python.
+        // O texto da recusa `Mix` diz o que vale hoje (o par 1:1 antigo), não o da tabela.
         let mut body = body;
         if body["detail"]["code"] == "erro_pareamento_mistura_cross" {
             assert!(body["detail"]["msg"].as_str().unwrap().starts_with("sessão em par 1:1 antigo"), "{name}: {body}");
@@ -230,8 +226,8 @@ async fn cross_routes_answer_like_python() {
         delivered.sort();
         assert_eq!(json!(delivered), step["delivered"], "{name}: quem recebeu recado");
         let mut sent = calls.lock().unwrap().clone();
-        // I-8B: antes da recusa de mistura, o Rust tenta converter o par antigo; lab não conhece casa
-        // no peers.json dela, recusa, e o par segue 1:1 com a resposta de sempre.
+        // Antes da recusa de mistura, o Rust tenta converter o par antigo; lab não conhece casa no
+        // peers.json dela, recusa, e o par segue 1:1 com a resposta de sempre.
         if name == "cross_local_mix" {
             assert!(sent.iter().any(|c| c["body"]["convert_from_legacy"].is_string()), "{name}: a conversão foi tentada");
             sent.retain(|c| c["path"] != "/api/sessions/s1/group" && !c["body"]["convert_from_legacy"].is_string());

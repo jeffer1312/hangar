@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Alert, LayoutAnimation, Pressable, RefreshControl, SectionList, Text, TextInput, View, ActivityIndicator } from 'react-native';
+import { ActionSheetIOS, Alert, LayoutAnimation, Platform, Pressable, RefreshControl, SectionList, Text, TextInput, View, ActivityIndicator } from 'react-native';
 import { useReducedMotion } from 'react-native-reanimated';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useRouter } from 'expo-router';
@@ -11,11 +11,14 @@ import {
   formataErro,
   groupBadges,
   groupGlobal,
+  groupHideTargets,
+  hideSession,
   machineNoticeVisible,
   machinesAllDown,
   renameSession,
   setPairAccess,
   resumeSession,
+  showSession,
   type AggSession,
   type GroupBy,
   type Server,
@@ -28,7 +31,8 @@ import { LiveVoiceChatButton } from '../voice/LiveVoiceChatButton';
 import { Icon } from '../../ui/Icon';
 import { toast } from '../../ui/Toast';
 import { SessionRow, type PairAction } from './SessionRow';
-import { buildSessionSections, sessionGroupKey, type SessionSection } from './sessionSections';
+import { buildSessionSections, HIDDEN_SECTION_ID, sessionGroupKey, type SessionSection } from './sessionSections';
+import { setHiddenSectionOpen, useHiddenSectionOpen } from './hiddenSectionPref';
 import { GroupBlockHeader, SessionSectionCard, SessionSectionHeader } from './SessionSection';
 import { PairInviteSheet, type PairTarget } from '../pair/PairInviteSheet';
 import { PairAcceptSheet, type PairAcceptTarget } from '../pair/PairAcceptSheet';
@@ -37,6 +41,7 @@ import { pickKey } from '../pair/groupPairs';
 import { useIdentities } from '../pair/identities';
 import { ConversationList } from './ConversationList';
 import { KeyringNotice } from './KeyringNotice';
+import { VaultRequests } from '../vault/VaultRequests';
 import { useNoticeClock } from './useNoticeClock';
 import { RenameSheet } from './RenameSheet';
 import { WorktreeSheet } from '../worktrees/WorktreeSheet';
@@ -212,6 +217,45 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
     [comServidor],
   );
 
+  // A marca mora no servidor da sessão, por endereço explícito: não troca a ativa. A linha muda de
+  // lugar quando a lista do servidor chega, sem aviso de sucesso.
+  const toggleHidden = useCallback((s: AggSession, hide: boolean) => {
+    const ownServer = (id: string) => useServers.getState().servers.find((x) => x.id === id && !x.invite);
+    const hideOne = () => {
+      const server = ownServer(s.serverId);
+      if (!server) { toast.erro(m.servidor_nao_existe()); return; }
+      (hide ? hideSession : showSession)(server, s.name).catch((e: unknown) =>
+        toast.erro((hide ? m.session_hide_failed : m.session_show_failed)({ error: mensagemDe(e) })));
+    };
+    const targets = hide ? groupHideTargets(s, useSessions.getState().rows) : [s];
+    if (targets.length < 2) { hideOne(); return; }
+    // Cada sessão é ocultada no próprio servidor; as que falharem saem num aviso só.
+    const hideGroup = async () => {
+      const results = await Promise.allSettled(targets.map((t) => {
+        const server = ownServer(t.serverId);
+        return server ? hideSession(server, t.name) : Promise.reject(new Error(m.servidor_nao_existe()));
+      }));
+      const failed = results.flatMap((r, i) => (r.status === 'rejected' ? [{ name: targets[i].name, error: mensagemDe(r.reason) }] : []));
+      if (failed.length === 0) return;
+      const reasons = [...new Set(failed.map((f) => f.error))].join('; ');
+      toast.erro(`${m.session_hide_group_skipped({ names: failed.map((f) => f.name).join(', ') })}\n${reasons}`);
+    };
+    const onlyThis = m.session_hide_only_this();
+    const wholeGroup = m.session_hide_whole_group({ n: targets.length });
+    if (Platform.OS === 'ios') {
+      ActionSheetIOS.showActionSheetWithOptions(
+        { title: m.session_hide_group_title(), options: [onlyThis, wholeGroup, m.comum_cancelar()], cancelButtonIndex: 2 },
+        (i) => { if (i === 0) hideOne(); else if (i === 1) void hideGroup(); },
+      );
+    } else {
+      Alert.alert(m.session_hide_group_title(), undefined, [
+        { text: m.comum_cancelar(), style: 'cancel' },
+        { text: onlyThis, onPress: hideOne },
+        { text: wholeGroup, onPress: () => void hideGroup() },
+      ]);
+    }
+  }, []);
+
   // O par é desfeito e liberado no servidor PRÓPRIO, por endereço explícito: não troca a ativa.
   const fazerPar = useCallback((s: AggSession, a: PairAction) => {
     const own = (id: string) => useServers.getState().servers.find((x) => x.id === id && !x.invite);
@@ -259,7 +303,9 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
   const busca = filtro.trim().toLowerCase();
   // Filtrar + ordenar + agrupar a lista inteira a cada render é caro, e arrastar um slider de
   // material re-renderiza todo mundo que lê o tema — inclusive esta tela.
-  const sections = useMemo(() => buildSessionSections(rows, modo, busca, recolhidos, undefined, pairGroups), [rows, busca, modo, recolhidos, pairGroups]);
+  const hiddenOpen = useHiddenSectionOpen();
+  const sections = useMemo(() => buildSessionSections(rows, hiddenOpen ? 'expanded' : 'collapsed', modo, busca, recolhidos, undefined, pairGroups),
+    [rows, hiddenOpen, busca, modo, recolhidos, pairGroups]);
   const variosServidores = servers.length > 1;
 
   // Sessão que entra ou sai do topo desliza para o lugar novo em vez de pular. A chave ignora a
@@ -275,7 +321,7 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
   }
 
   const alternarGrupo = useCallback(
-    (id: string) =>
+    (id: string) => id === HIDDEN_SECTION_ID ? setHiddenSectionOpen(!hiddenOpen) :
       setRecolhidos((atual) => {
         const novo = new Set(atual);
         const chave = sessionGroupKey(modo, id);
@@ -284,7 +330,7 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
         if (home) homeView.collapsedGroups = novo;
         return novo;
       }),
-    [modo, home],
+    [modo, home, hiddenOpen],
   );
 
   // "Todas as sessões" desfaz tudo que esconde linha: filtro e grupos recolhidos.
@@ -495,6 +541,7 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
               onResume={retomar}
               onWorktree={proprios.has(item.serverId) ? abrirWorktree : undefined}
               onPair={proprios.has(item.serverId) || item.outside ? fazerPar : undefined}
+              onHidden={proprios.has(item.serverId) && !item.outside ? toggleHidden : undefined}
               crossBadgeText={crossBadges.get(pickKey(item.serverId, item.name))?.text}
               crossBadgeMachines={crossBadges.get(pickKey(item.serverId, item.name))?.machines}
             />}
@@ -521,6 +568,7 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
         {conversas ? null : buscarDentro}
         {machineStatus}
         {keyringNotices}
+        <VaultRequests byServer={byServer} />
         <View style={styles.corpo}>{corpo}</View>
         {home ? null : rodape}
       </View>

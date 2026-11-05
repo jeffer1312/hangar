@@ -24,6 +24,11 @@ pub trait WindowBackend: Send + Sync {
     /// `open`, `refresh`, `read` (devolve `url`), `code` e `close`. Erro = código para o log.
     fn call<'a>(&'a self, key: &'a AccountKey, operation: &'a str, action: &'a str, code: Option<&'a str>)
         -> BoxFuture<'a, Result<Value, &'static str>>;
+    /// `open` com a janela nascendo com `BROWSER` apontando para o script da tentativa.
+    fn open_with_browser<'a>(&'a self, key: &'a AccountKey, operation: &'a str, _script: &'a Path)
+        -> BoxFuture<'a, Result<Value, &'static str>> {
+        self.call(key, operation, "open", None)
+    }
     /// Fecha as janelas de login deste servidor que nenhuma operação viva usa.
     fn sweep(&self) -> BoxFuture<'_, ()>;
 }
@@ -113,7 +118,11 @@ impl ClaudeWindows {
     }
 
     pub async fn open(&self, key: &AccountKey, operation: &str) -> Result<(), &'static str> {
-        self.start(key, operation, None, "claude auth login --claudeai").await
+        self.start(key, operation, None, "claude auth login --claudeai", self.browser.as_deref()).await
+    }
+
+    pub async fn open_with_browser(&self, key: &AccountKey, operation: &str, script: &Path) -> Result<(), &'static str> {
+        self.start(key, operation, None, "claude auth login --claudeai", Some(&script.to_string_lossy())).await
     }
 
     pub async fn refresh(&self, key: &AccountKey, operation: &str) -> Result<(), &'static str> {
@@ -124,10 +133,10 @@ impl ClaudeWindows {
             _ => key.canonical_home.join(".claude.json"),
         };
         let folder = trusted_folder(&config_file).ok_or("window_no_trusted_folder")?;
-        self.start(key, operation, Some(folder), "claude").await
+        self.start(key, operation, Some(folder), "claude", self.browser.as_deref()).await
     }
 
-    async fn start(&self, key: &AccountKey, operation: &str, folder: Option<PathBuf>, command: &str) -> Result<(), &'static str> {
+    async fn start(&self, key: &AccountKey, operation: &str, folder: Option<PathBuf>, command: &str, browser: Option<&str>) -> Result<(), &'static str> {
         if !valid_operation(operation) { return Err("window_operation_invalid"); }
         let mut table = self.table.lock().await;
         if table.closed.contains(operation) { return Err("window_operation_closed"); }
@@ -140,7 +149,7 @@ impl ClaudeWindows {
         let name = format!("{PREFIX}{operation}");
         let home = key.canonical_home.to_string_lossy().into_owned();
         let cwd = folder.map_or_else(|| home.clone(), |folder| folder.to_string_lossy().into_owned());
-        self.spawn(&name, &cwd, &home).await?;
+        self.spawn(&name, &cwd, &home, browser).await?;
         table.active.insert(operation.to_owned(), key.clone());
         if let Err(error) = self.type_line(&name, command).await {
             if self.kill(&name).await.is_err() { self.note("nao_fechou"); }
@@ -150,7 +159,7 @@ impl ClaudeWindows {
         Ok(())
     }
 
-    async fn spawn(&self, name: &str, cwd: &str, home: &str) -> Result<(), &'static str> {
+    async fn spawn(&self, name: &str, cwd: &str, home: &str, browser: Option<&str>) -> Result<(), &'static str> {
         // Larga o bastante para o link (~500 colunas) caber numa linha: juntar linhas quebradas não
         // distingue a última linha cheia do link da linha seguinte da tela.
         let mut args: Vec<String> = ["new-session", "-d", "-s", name, "-c", cwd, "-x", "1000", "-y", "50"].map(str::to_owned).into();
@@ -159,7 +168,7 @@ impl ClaudeWindows {
         // e a conta padrão é a ausência da variável.
         let config = exports_config_dir(&self.env, Some(home)).or_else(|| (!self.env.windows).then(|| home.to_owned()));
         if let Some(dir) = config { args.extend(["-e".into(), format!("CLAUDE_CONFIG_DIR={dir}")]); }
-        if let Some(browser) = &self.browser { args.extend(["-e".into(), format!("BROWSER={browser}")]); }
+        if let Some(browser) = browser { args.extend(["-e".into(), format!("BROWSER={browser}")]); }
         let scope = if self.env.windows { Vec::new() } else { self.mux.scope().await };
         let scoped = !scope.is_empty();
         let mut created = self.mux.run(scope, args.clone(), Vec::new()).await;
@@ -331,6 +340,11 @@ impl WindowBackend for ClaudeWindows {
                 _ => Err("window_action_invalid"),
             }
         })
+    }
+
+    fn open_with_browser<'a>(&'a self, key: &'a AccountKey, operation: &'a str, script: &'a Path)
+        -> BoxFuture<'a, Result<Value, &'static str>> {
+        Box::pin(async move { ClaudeWindows::open_with_browser(self, key, operation, script).await.map(|()| json!({"ok": true})) })
     }
 
     fn sweep(&self) -> BoxFuture<'_, ()> { Box::pin(ClaudeWindows::sweep(self)) }

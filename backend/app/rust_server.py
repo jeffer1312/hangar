@@ -13,6 +13,7 @@ import http.client
 import json
 import logging
 import os
+import re
 import secrets
 import socket
 import subprocess
@@ -112,6 +113,33 @@ def server_log_path() -> Path:
     folder = log_paths.base() / "privado"
     folder.mkdir(parents=True, exist_ok=True, mode=0o700)
     return folder / "hangar-server.log"
+
+
+def _last_errors(path: Path, count: int = 3) -> str:
+    """As últimas linhas ERROR/WARN do log do filho, sem a data: o pânico sai por elas (gancho do
+    `tracing`), e o código de saída sozinho não diz por que ele caiu."""
+    try:
+        with path.open("rb") as f:
+            f.seek(max(0, f.seek(0, os.SEEK_END) - 65536))
+            tail = f.read().decode("utf-8", errors="replace").splitlines()
+    except OSError as e:
+        return f"log ilegível: {type(e).__name__}"
+    kept = [line for line in tail if " ERROR " in line or " WARN " in line][-count:]
+    return " | ".join(_reduce_error(line) for line in kept)
+
+
+_FIELD = re.compile(r"\s[a-z_][a-z0-9_.]*=")
+_KEPT_FIELD = re.compile(r"\s((?:code|panic)=(?:\"[^\"]{0,160}\"|\S{1,80}))")
+
+
+def _reduce_error(line: str) -> str:
+    """`2026-11-03T10:55:00.123Z  ERROR alvo: msg code=x detail="…"` vira `10:55:00 code=x`: a mensagem
+    pode ser formatada com texto de conversa; ficam só os campos que nunca o levam."""
+    head = line.split(maxsplit=1)[1] if line[:4].isdigit() and " " in line else line
+    cut = _FIELD.search(head)
+    kept = " ".join(_KEPT_FIELD.findall(head[cut.start():])) if cut else ""
+    when = f"{line[11:19]} " if line[:4].isdigit() else ""
+    return f"{when}{kept}".rstrip()
 
 
 def _health(host: str, port: int) -> dict | None:
@@ -416,7 +444,7 @@ class Supervisor:
                                             env["HANGAR_RUNTIME_INSTANCE"]), START_TIMEOUT)
         except ProtocolMismatch as e:
             _log.error("hangar-server fala o protocolo %r; este backend fala %d", e.args[0], RUST_SERVER_PROTOCOL)
-            diag.registrar("hangar_server.protocolo", "erro", esperado=RUST_SERVER_PROTOCOL, recebido=e.args[0])
+            diag.registrar("hangar_server.protocolo", "erro", esperado=RUST_SERVER_PROTOCOL, recebido=repr(e.args[0]))
             return "protocol"
         except (OSError, ValueError, asyncio.TimeoutError):
             diag.registrar("hangar_server.partida", "erro", codigo="runtime_invalido")
@@ -430,7 +458,7 @@ class Supervisor:
                 got = health.get("protocol")
                 if isinstance(got, bool) or got != RUST_SERVER_PROTOCOL:
                     _log.error("hangar-server fala o protocolo %r; este backend fala %d", got, RUST_SERVER_PROTOCOL)
-                    diag.registrar("hangar_server.protocolo", "erro", esperado=RUST_SERVER_PROTOCOL, recebido=got)
+                    diag.registrar("hangar_server.protocolo", "erro", esperado=RUST_SERVER_PROTOCOL, recebido=repr(got))
                     return "protocol"
                 if self.proc.poll() is not None:
                     return "died"
@@ -516,8 +544,9 @@ class Supervisor:
                 crashes = [t for t in crashes if now - t < CRASH_WINDOW] + [now]
                 _log.warning("hangar-server saiu (código %s), queda %d em %ds",
                              self.proc.returncode, len(crashes), int(CRASH_WINDOW))
+                saida = await asyncio.to_thread(_last_errors, server_log_path())
                 diag.registrar("hangar_server.caiu", "aviso", retorno=self.proc.returncode,
-                               tentativa=len(crashes))
+                               tentativa=len(crashes), saida=saida)
                 if len(crashes) >= MAX_CRASHES:
                     return "quedas"
         except Exception as e:                           # noqa: BLE001 — a porta pública não fica sem dono

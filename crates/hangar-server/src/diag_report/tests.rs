@@ -100,18 +100,17 @@ fn scrub_is_idempotent() {
 // ---------- hangar-server.log ----------
 
 #[test]
-fn server_line_keeps_only_listed_fields() {
+fn server_line_keeps_the_fields_that_explain_the_failure() {
     let s = scrubber();
     let since = Utc::now() - TimeDelta::hours(24);
     let ts = (Utc::now() - TimeDelta::minutes(5)).format("%Y-%m-%dT%H:%M:%S%.6fZ").to_string();
     let line = format!(r#"{ts}  WARN estado: permission.observe falhou session="sessao-a" code="permission_observe_failed" detail="permission_capture_stale""#);
     let out = collect::reduce_server_line(&line, since, &s).unwrap();
-    assert!(out.ends_with(" WARN estado: permission.observe falhou code=permission_observe_failed session=sessao-a"), "{out}");
-    assert!(!out.contains("detail") && !out.contains("permission_capture_stale"));
+    assert!(out.ends_with(" WARN estado: permission.observe falhou code=permission_observe_failed session=sessao-a detail=permission_capture_stale"), "{out}");
 
     let line = format!("{ts}  WARN runtime entrou em erro key=9d232527a8bd8aedc110caa59a939238 session=cx-b code=cano_closed reason=runtime indisponível; operação conservada no diário");
     let out = collect::reduce_server_line(&line, since, &s).unwrap();
-    assert!(out.ends_with(" WARN runtime entrou em erro code=cano_closed session=cx-b reason=runtime indisponível; operação conservada no diário"), "{out}");
+    assert!(out.ends_with(" WARN runtime entrou em erro code=cano_closed session=cx-b reason=<texto 51 car.>"), "{out}");
     assert!(!out.contains("9d232527"));
 
     let line = format!(r#"{ts} ERROR Python parado há ~1 min: o vigia pede para religar o serviço code="python_restart" unit=hangar-backend.service"#);
@@ -121,6 +120,22 @@ fn server_line_keeps_only_listed_fields() {
     let line = format!(r#"{ts}  WARN hangar_server::list::mux: lista falhou entries=["x"] attempt=2 code="mux_refused""#);
     let out = collect::reduce_server_line(&line, since, &s).unwrap();
     assert!(out.ends_with(" WARN lista falhou code=mux_refused attempt=2"), "{out}");
+}
+
+#[test]
+fn server_line_free_text_fields_keep_codes_and_drop_conversation() {
+    let s = scrubber();
+    let since = "2026-10-30T11:00:00Z".parse::<chrono::DateTime<Utc>>().unwrap();
+    let ts = "2026-10-30T11:31:00.300000Z";
+    for key in ["detail", "error", "reason", "panic"] {
+        let line = format!(r#"{ts}  WARN estado: falhou code=x {key}="conversa secreta do usuário""#);
+        let out = collect::reduce_server_line(&line, since, &s).unwrap();
+        assert!(out.ends_with(&format!(" code=x {key}=<texto 27 car.>")), "{out}");
+        assert!(!out.contains("conversa secreta"), "{out}");
+        let line = format!("{ts}  WARN estado: falhou code=x {key}=src/x.rs:12:no_such_file");
+        let out = collect::reduce_server_line(&line, since, &s).unwrap();
+        assert!(out.ends_with(&format!(" {key}=src/x.rs:12:no_such_file")), "{out}");
+    }
 }
 
 #[test]
@@ -181,8 +196,14 @@ fn diary_keeps_problems_and_restarts_of_the_last_day_only() {
     let Diary { problems, restarts } = collect::read_diary(&collect::diary_files(dir.path()), now, &scrubber());
     let events: Vec<_> = problems.iter().map(|e| e.event.as_str()).collect();
     assert_eq!(events, ["rust.x", "lista.falhou"]);
-    assert!(problems[1].compact().ends_with(" lista.falhou erro x s1 m"));
-    assert!(!problems[1].compact().contains("segredo"));
+    assert!(problems[1].compact().ends_with(" lista.falhou erro x s1 m detalhe=\"segredo\""), "{}", problems[1].compact());
+    let mux = |h: i64, ms: u64| json!({"ts": ts(h), "evento": "mux.comando", "nivel": "erro", "comando": "list-sessions", "retorno": 1, "ms": ms,
+        "erro_tipo": "retorno", "origem": "10.0.0.1"});
+    write(&dir.path().join(format!("diario/uso-{}.jsonl", day(now))), &format!("{}\n{}\n", mux(2, 32), mux(1, 40)));
+    let Diary { problems, .. } = collect::read_diary(&collect::diary_files(dir.path()), now, &scrubber());
+    assert_eq!(problems.len(), 2, "os dois mux.comando viram uma linha");
+    let line = problems.last().unwrap().compact();
+    assert!(line.contains("mux.comando erro - -  comando=list-sessions retorno=1 ms=40 erro_tipo=retorno ×2 até "), "{line}");
     assert_eq!(restarts.len(), 1);
     assert!(restarts[0].restart_line().contains("backend.inicio ok - 0.1.0.8380"));
 }
@@ -273,11 +294,19 @@ fn full_diary_over_the_cap_drops_the_oldest_days() {
 
 fn versions() -> Versions {
     Versions { server: "0.1.0".into(), package: "0.1.0.8380".into(), commit: "fe204bec6".into(), os: "Linux".into(),
-        arch: "linux-x86_64".into(), claude: "2.1.0".into(), mux: "tmux 3.5".into(), offset: "-03:00".into() }
+        arch: "linux-x86_64".into(), machine: "DELPHI-02".into(), claude: "2.1.0".into(), mux: "tmux 3.5".into(), offset: "-03:00".into() }
+}
+
+#[test]
+fn report_label_is_the_system_when_the_machine_name_has_nothing_the_worker_accepts() {
+    let label = |machine: &str| Versions { machine: machine.into(), ..versions() }.label();
+    assert_eq!(label(""), "linux-x86_64");
+    assert_eq!(label("ПК"), "linux-x86_64");
+    assert_eq!(label("RECEPÇÃO"), "RECEPO · linux-x86_64");
 }
 
 fn entry(at: chrono::DateTime<Local>, n: usize) -> DiaryEntry {
-    DiaryEntry { at, event: format!("evento.n{n}"), level: "erro".into(), code: "codigo".into(), session: "s".into(), reason: String::new(), backend: String::new() }
+    DiaryEntry { at, event: format!("evento.n{n}"), level: "erro".into(), code: "codigo".into(), session: "s".into(), reason: String::new(), backend: String::new(), extra: String::new(), count: 1, last: at }
 }
 
 fn facts(problems: Vec<DiaryEntry>, sessions: Vec<collect::SessionFact>, accounts: Vec<AccountFact>) -> Facts {
@@ -303,7 +332,8 @@ fn report_has_the_summary_first_and_the_sections_in_order() {
     let (value, text) = report(&body);
     assert_eq!((value["v"].as_u64(), value["kind"].as_str(), value["outcome"].as_str()), (Some(1), Some("diagnostico"), Some("aberto")));
     assert_eq!(value["app"], "hangar-server 0.1.0.8380");
-    assert_eq!(value["os"], "linux-x86_64");
+    assert_eq!(value["os"], "DELPHI-02 · linux-x86_64");
+    assert!(text.contains("máquina DELPHI-02"), "{text}");
     assert!(value["code"].is_null() && value["agent"].is_null());
     let said = text.find("travou a fila").unwrap();
     let mut last = said;

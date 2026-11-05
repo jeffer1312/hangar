@@ -1,0 +1,423 @@
+{
+ "origin_commit": "0894896ce10992950253c6ab4e0e02b137c809df",
+ "command": "cd backend && uv run python ../.superpowers/sdd/2026-10-31-busca-rust/contract/capture.py",
+ "data": {
+  "automations_enabled_default": true,
+  "extract_terms": {
+   "onde falei sobre o clippy?": [
+    "clippy"
+   ],
+   "Quando conversamos sobre a rodada do revisor e o árbitro?": [
+    "rodada",
+    "revisor",
+    "árbitro"
+   ],
+   "o que é isso": [],
+   "a b c de": [],
+   "ponytail ponytail PONYTAIL": [
+    "ponytail"
+   ],
+   "onde falei da paleta de busca?": [
+    "paleta",
+    "busca"
+   ],
+   "um dois três quatro cinco seis sete oito": [
+    "dois",
+    "três",
+    "quatro",
+    "cinco",
+    "seis",
+    "sete"
+   ],
+   "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx": [
+    "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   ],
+   "café_com_leite 2026 foo-bar": [
+    "café_com_leite",
+    "2026",
+    "foo",
+    "bar"
+   ]
+  },
+  "search_terms": {
+   "onde falei sobre o clippy?": [
+    {
+     "project": "-home-jefferson-Projetos-hangar-computer-control-9c0b634f-t1",
+     "session_id": "0cc60e6c-eafc-4915-9936-f0c7b81191d9",
+     "session_name": "sessao-viva",
+     "cwd": "/home/jefferson/Projetos/hangar-computer-control-9c0b634f-t1",
+     "line": "Testes do workspace verdes (6+5 novos). Rodando clippy, check Windows-msvc e o teste na VM em paralelo.",
+     "mtime": 1793001400.0,
+     "live": true,
+     "role": "assistant",
+     "event_id": "f207bd0c-89b1-435e-b6b2-b310d57b91ef",
+     "ts": 1791546412.715
+    },
+    {
+     "project": "-home-jefferson-Projetos-hangar-computer-control-9c0b634f-t1",
+     "session_id": "0cc60e6c-eafc-4915-9936-f0c7b81191d9",
+     "session_name": "sessao-viva",
+     "cwd": "/home/jefferson/Projetos/hangar-computer-control-9c0b634f-t1",
+     "line": "…!= 0. (2) rust-toolchain.toml: adicione components = [\"clippy\"] nesta mesma Task (a checagem global exige clippy).",
+     "mtime": 1793001400.0,
+     "live": true,
+     "role": "user",
+     "event_id": "5e8cb008-5006-4c01-9db4-b3f34791fd91",
+     "ts": null
+    },
+    {
+     "project": "-home-jefferson-Projetos-hangar-computer-control-9c0b634f-t1",
+     "session_id": "0cc60e6c-eafc-4915-9936-f0c7b81191d9",
+     "session_name": "sessao-viva",
+     "cwd": "/home/jefferson/Projetos/hangar-computer-control-9c0b634f-t1",
+     "line": "…`scripts/windows-test.sh` e mandou incluir `components = [\"clippy\"]` no `rust-toolchain.toml` dentro desta mesma Task. Ainda não mexi no arquivo. A rodada 1 está com o revisor, e a regra é não alterar a árvore enquanto ele lê. Quando o…",
+     "mtime": 1793001400.0,
+     "live": true,
+     "role": "assistant",
+     "event_id": "dd7ece7e-9d51-4d61-9243-44cc7fbc8840",
+     "ts": 1791546759.601
+    }
+   ],
+   "Quando conversamos sobre a rodada do revisor e o árbitro?": [
+    {
+     "project": "-home-jefferson-Projetos-hangar-computer-control-9c0b634f-t1",
+     "session_id": "0cc60e6c-eafc-4915-9936-f0c7b81191d9",
+     "session_name": "sessao-viva",
+     "cwd": "/home/jefferson/Projetos/hangar-computer-control-9c0b634f-t1",
+     "line": "…dentro desta mesma Task. Ainda não mexi no arquivo. A rodada 1 está com o revisor, e a regra é não alterar a árvore enquanto ele lê. Quando o veredito chegar, a linha do clippy entra na rodada 2: - **Se for reprovação:** junto com as…",
+     "mtime": 1793001400.0,
+     "live": true,
+     "role": "assistant",
+     "event_id": "dd7ece7e-9d51-4d61-9243-44cc7fbc8840",
+     "ts": 1791546759.601
+    },
+    {
+     "project": "-home-jefferson-Projetos-hangar-computer-control-9c0b634f-t1",
+     "session_id": "0cc60e6c-eafc-4915-9936-f0c7b81191d9",
+     "session_name": "sessao-viva",
+     "cwd": "/home/jefferson/Projetos/hangar-computer-control-9c0b634f-t1",
+     "line": "…do Step 6 (exit code do cargo test remoto) prevalece. Revisor: confira a prova com crate inexistente → exit != 0. (2) rust-toolchain.toml: adicione components = [\"clippy\"] nesta mesma Task (a checagem global exige clippy).",
+     "mtime": 1793001400.0,
+     "live": true,
+     "role": "user",
+     "event_id": "5e8cb008-5006-4c01-9db4-b3f34791fd91",
+     "ts": null
+    },
+    {
+     "project": "-home-jefferson-Projetos-hangar-computer-control-9c0b634f-t1",
+     "session_id": "0cc60e6c-eafc-4915-9936-f0c7b81191d9",
+     "session_name": "sessao-viva",
+     "cwd": "/home/jefferson/Projetos/hangar-computer-control-9c0b634f-t1",
+     "line": "…Task. Ainda não mexi no arquivo. A rodada 1 está com o revisor, e a regra é não alterar a árvore enquanto ele lê. Quando o veredito chegar, a linha do clippy entra na rodada 2: - **Se for reprovação:** junto com as correções que o revisor…",
+     "mtime": 1793001400.0,
+     "live": true,
+     "role": "assistant",
+     "event_id": "dd7ece7e-9d51-4d61-9243-44cc7fbc8840",
+     "ts": 1791546759.601
+    },
+    {
+     "project": "-home-jefferson-Projetos-hangar-computer-control-9c0b634f-t1",
+     "session_id": "0cc60e6c-eafc-4915-9936-f0c7b81191d9",
+     "session_name": "sessao-viva",
+     "cwd": "/home/jefferson/Projetos/hangar-computer-control-9c0b634f-t1",
+     "line": "O árbitro aceitou a correção do `scripts/windows-test.sh` e mandou incluir `components = [\"clippy\"]` no `rust-toolchain.toml` dentro desta mesma Task. Ainda não mexi no arquivo. A rodada 1 está com o revisor, e a regra é não alterar a…",
+     "mtime": 1793001400.0,
+     "live": true,
+     "role": "assistant",
+     "event_id": "dd7ece7e-9d51-4d61-9243-44cc7fbc8840",
+     "ts": 1791546759.601
+    },
+    {
+     "project": "-home-jefferson-Projetos-hangar",
+     "session_id": "db401d8f-fc08-463c-a3cc-4734fc5dc634",
+     "session_name": null,
+     "cwd": "/home/jefferson/Projetos/hangar-mobile-deliveries-cad3e6fe-t32",
+     "line": "Revisor da Task 32 pronto: proteção de escrita comprovada (EROFS no código, escrita aceita em pareceres/). Aguardando a primeira rodada do hangar-mobile-t32.",
+     "mtime": 1793000900.0,
+     "live": false,
+     "role": "assistant",
+     "event_id": "f94331cf-dc2c-4f1e-890e-b6a3d87836a0",
+     "ts": 1790774404.486
+    },
+    {
+     "project": "-home-jefferson-Projetos-hangar",
+     "session_id": "db401d8f-fc08-463c-a3cc-4734fc5dc634",
+     "session_name": null,
+     "cwd": "/home/jefferson/Projetos/hangar-mobile-deliveries-cad3e6fe-t32",
+     "line": "Decisão do árbitro anotada (sem resposta; não pede retorno). Seguindo à espera da rodada do hangar-mobile-t32.",
+     "mtime": 1793000900.0,
+     "live": false,
+     "role": "assistant",
+     "event_id": "5890f428-ec93-4815-ada4-1451c1f963e3",
+     "ts": 1790775470.242
+    },
+    {
+     "project": "-home-jefferson-Projetos-hangar",
+     "session_id": "db401d8f-fc08-463c-a3cc-4734fc5dc634",
+     "session_name": null,
+     "cwd": "/home/jefferson/Projetos/hangar-mobile-deliveries-cad3e6fe-t32",
+     "line": "Nenhuma rodada chegou ainda; o árbitro fechou a espera do EAS (APK/Android ficam como não conferidos). Sigo aguardando a rodada de fechamento do hangar-mobile-t32.",
+     "mtime": 1793000900.0,
+     "live": false,
+     "role": "assistant",
+     "event_id": "ddb698b0-7106-430f-aca8-90104352e9c1",
+     "ts": 1790776603.385
+    },
+    {
+     "project": "-home-jefferson-Projetos-hangar",
+     "session_id": "db401d8f-fc08-463c-a3cc-4734fc5dc634",
+     "session_name": null,
+     "cwd": "/home/jefferson/Projetos/hangar-mobile-deliveries-cad3e6fe-t32",
+     "line": "…cad3e6fe] Read ~/.claude/skills/orquestrar/references/revisor.md — your role's page, plus the sibling pages it names; nothing else of that skill. Role: reviewer. Your Task: 32 — Lote amplo 3: cotidiano Android. Contract: `orq read contract…",
+     "mtime": 1793000900.0,
+     "live": false,
+     "role": "user",
+     "event_id": "6a423210-6022-4738-a03a-4933cb59ab2d",
+     "ts": null
+    },
+    {
+     "project": "-home-jefferson-Projetos-hangar",
+     "session_id": "db401d8f-fc08-463c-a3cc-4734fc5dc634",
+     "session_name": null,
+     "cwd": "/home/jefferson/Projetos/hangar-mobile-deliveries-cad3e6fe-t32",
+     "line": "…Não rodei nenhum teste; a regra dos lotes proíbe o revisor de repetir as baterias. - **Fica vermelho:** - o typecheck do mobile, porque a biblioteca de áudio não acha a declaração de que depende (conferi no disco que ela está instalada só…",
+     "mtime": 1793000900.0,
+     "live": false,
+     "role": "assistant",
+     "event_id": "bd423af7-29f8-4f83-9dc0-dc54ee75495e",
+     "ts": 1790776928.527
+    },
+    {
+     "project": "-home-jefferson-Projetos-hangar",
+     "session_id": "db401d8f-fc08-463c-a3cc-4734fc5dc634",
+     "session_name": null,
+     "cwd": "/home/jefferson/Projetos/hangar-mobile-deliveries-cad3e6fe-t32",
+     "line": "[painel: orquestrador cad3e6fe] Read ~/.claude/skills/orquestrar/references/revisor.md — your role's page, plus the sibling pages it names; nothing else of that skill. Role: reviewer. Your Task: 32 — Lote amplo 3: cotidiano Android.…",
+     "mtime": 1793000900.0,
+     "live": false,
+     "role": "user",
+     "event_id": "6a423210-6022-4738-a03a-4933cb59ab2d",
+     "ts": null
+    },
+    {
+     "project": "-home-jefferson-Projetos-hangar",
+     "session_id": "db401d8f-fc08-463c-a3cc-4734fc5dc634",
+     "session_name": null,
+     "cwd": "/home/jefferson/Projetos/hangar-mobile-deliveries-cad3e6fe-t32",
+     "line": "[de: hangar-mobile-arbitro] Decisão t32-eas-window no contrato: mesma buildEASccb85697, acompanhamento até13:55UTC(10:55-03), max4leituras adicionais5min; sem rebuild/cancelamento/renovação. Se artefato ausente, APK/Android não conferidos…",
+     "mtime": 1793000900.0,
+     "live": false,
+     "role": "user",
+     "event_id": "6f580d44-3a57-48cf-a736-207526433f7f",
+     "ts": null
+    }
+   ],
+   "o que é isso": [],
+   "a b c de": [],
+   "ponytail ponytail PONYTAIL": [],
+   "onde falei da paleta de busca?": []
+  },
+  "prompt": {
+   "onde falei sobre o clippy?": "Você responde onde um assunto apareceu nas conversas do usuário, a partir de TRECHOS de transcripts. Responda curto em pt-BR: diga em QUAL(is) sessão(ões) o assunto apareceu e o contexto, citando os NOMES EXATOS das sessões como aparecem nos rótulos. Se os trechos não responderem à pergunta, diga que não encontrou. Sem preâmbulo, sem markdown.\n\nPERGUNTA: onde falei sobre o clippy?\n\nTrechos das conversas:\n[sessão sessao-viva — viva]: Testes do workspace verdes (6+5 novos). Rodando clippy, check Windows-msvc e o teste na VM em paralelo.\n[sessão sessao-viva — viva]: …!= 0. (2) rust-toolchain.toml: adicione components = [\"clippy\"] nesta mesma Task (a checagem global exige clippy).\n[sessão sessao-viva — viva]: …`scripts/windows-test.sh` e mandou incluir `components = [\"clippy\"]` no `rust-toolchain.toml` dentro desta mesma Task. Ainda não mexi no arquivo. A rodada 1 está com o revisor, e a regra é não alterar a árvore enquanto ele lê. Quando o…",
+   "Quando conversamos sobre a rodada do revisor e o árbitro?": "Você responde onde um assunto apareceu nas conversas do usuário, a partir de TRECHOS de transcripts. Responda curto em pt-BR: diga em QUAL(is) sessão(ões) o assunto apareceu e o contexto, citando os NOMES EXATOS das sessões como aparecem nos rótulos. Se os trechos não responderem à pergunta, diga que não encontrou. Sem preâmbulo, sem markdown.\n\nPERGUNTA: Quando conversamos sobre a rodada do revisor e o árbitro?\n\nTrechos das conversas:\n[sessão sessao-viva — viva]: …dentro desta mesma Task. Ainda não mexi no arquivo. A rodada 1 está com o revisor, e a regra é não alterar a árvore enquanto ele lê. Quando o veredito chegar, a linha do clippy entra na rodada 2: - **Se for reprovação:** junto com as…\n[sessão sessao-viva — viva]: …do Step 6 (exit code do cargo test remoto) prevalece. Revisor: confira a prova com crate inexistente → exit != 0. (2) rust-toolchain.toml: adicione components = [\"clippy\"] nesta mesma Task (a checagem global exige clippy).\n[sessão sessao-viva — viva]: …Task. Ainda não mexi no arquivo. A rodada 1 está com o revisor, e a regra é não alterar a árvore enquanto ele lê. Quando o veredito chegar, a linha do clippy entra na rodada 2: - **Se for reprovação:** junto com as correções que o revisor…\n[sessão sessao-viva — viva]: O árbitro aceitou a correção do `scripts/windows-test.sh` e mandou incluir `components = [\"clippy\"]` no `rust-toolchain.toml` dentro desta mesma Task. Ainda não mexi no arquivo. A rodada 1 está com o revisor, e a regra é não alterar a…\n[sessão -home-jefferson-Projetos-hangar — arquivada]: Revisor da Task 32 pronto: proteção de escrita comprovada (EROFS no código, escrita aceita em pareceres/). Aguardando a primeira rodada do hangar-mobile-t32.\n[sessão -home-jefferson-Projetos-hangar — arquivada]: Decisão do árbitro anotada (sem resposta; não pede retorno). Seguindo à espera da rodada do hangar-mobile-t32.\n[sessão -home-jefferson-Projetos-hangar — arquivada]: Nenhuma rodada chegou ainda; o árbitro fechou a espera do EAS (APK/Android ficam como não conferidos). Sigo aguardando a rodada de fechamento do hangar-mobile-t32.\n[sessão -home-jefferson-Projetos-hangar — arquivada]: …cad3e6fe] Read ~/.claude/skills/orquestrar/references/revisor.md — your role's page, plus the sibling pages it names; nothing else of that skill. Role: reviewer. Your Task: 32 — Lote amplo 3: cotidiano Android. Contract: `orq read contract…\n[sessão -home-jefferson-Projetos-hangar — arquivada]: …Não rodei nenhum teste; a regra dos lotes proíbe o revisor de repetir as baterias. - **Fica vermelho:** - o typecheck do mobile, porque a biblioteca de áudio não acha a declaração de que depende (conferi no disco que ela está instalada só…\n[sessão -home-jefferson-Projetos-hangar — arquivada]: [painel: orquestrador cad3e6fe] Read ~/.claude/skills/orquestrar/references/revisor.md — your role's page, plus the sibling pages it names; nothing else of that skill. Role: reviewer. Your Task: 32 — Lote amplo 3: cotidiano Android.…\n[sessão -home-jefferson-Projetos-hangar — arquivada]: [de: hangar-mobile-arbitro] Decisão t32-eas-window no contrato: mesma buildEASccb85697, acompanhamento até13:55UTC(10:55-03), max4leituras adicionais5min; sem rebuild/cancelamento/renovação. Se artefato ausente, APK/Android não conferidos…",
+   "o que é isso": "Você responde onde um assunto apareceu nas conversas do usuário, a partir de TRECHOS de transcripts. Responda curto em pt-BR: diga em QUAL(is) sessão(ões) o assunto apareceu e o contexto, citando os NOMES EXATOS das sessões como aparecem nos rótulos. Se os trechos não responderem à pergunta, diga que não encontrou. Sem preâmbulo, sem markdown.\n\nPERGUNTA: o que é isso\n\nTrechos das conversas:",
+   "a b c de": "Você responde onde um assunto apareceu nas conversas do usuário, a partir de TRECHOS de transcripts. Responda curto em pt-BR: diga em QUAL(is) sessão(ões) o assunto apareceu e o contexto, citando os NOMES EXATOS das sessões como aparecem nos rótulos. Se os trechos não responderem à pergunta, diga que não encontrou. Sem preâmbulo, sem markdown.\n\nPERGUNTA: a b c de\n\nTrechos das conversas:",
+   "ponytail ponytail PONYTAIL": "Você responde onde um assunto apareceu nas conversas do usuário, a partir de TRECHOS de transcripts. Responda curto em pt-BR: diga em QUAL(is) sessão(ões) o assunto apareceu e o contexto, citando os NOMES EXATOS das sessões como aparecem nos rótulos. Se os trechos não responderem à pergunta, diga que não encontrou. Sem preâmbulo, sem markdown.\n\nPERGUNTA: ponytail ponytail PONYTAIL\n\nTrechos das conversas:",
+   "onde falei da paleta de busca?": "Você responde onde um assunto apareceu nas conversas do usuário, a partir de TRECHOS de transcripts. Responda curto em pt-BR: diga em QUAL(is) sessão(ões) o assunto apareceu e o contexto, citando os NOMES EXATOS das sessões como aparecem nos rótulos. Se os trechos não responderem à pergunta, diga que não encontrou. Sem preâmbulo, sem markdown.\n\nPERGUNTA: onde falei da paleta de busca?\n\nTrechos das conversas:"
+  },
+  "prefixos_internos": [
+   "Você responde onde um assunto apareceu nas conversas do usuá",
+   "Você reescreve OBJETIVOS pra um loop autônomo de código. Boa",
+   "Você recebeu abaixo um resumo automático de uma sessão de tr"
+  ],
+  "route": {
+   "ok": {
+    "status": 200,
+    "body": {
+     "answer": "resposta da sessão sessao-viva",
+     "hits": [
+      {
+       "project": "-home-jefferson-Projetos-hangar-computer-control-9c0b634f-t1",
+       "session_id": "0cc60e6c-eafc-4915-9936-f0c7b81191d9",
+       "session_name": "sessao-viva",
+       "cwd": "/home/jefferson/Projetos/hangar-computer-control-9c0b634f-t1",
+       "line": "Testes do workspace verdes (6+5 novos). Rodando clippy, check Windows-msvc e o teste na VM em paralelo.",
+       "mtime": 1793001400.0,
+       "live": true,
+       "role": "assistant",
+       "event_id": "f207bd0c-89b1-435e-b6b2-b310d57b91ef",
+       "ts": 1791546412.715
+      },
+      {
+       "project": "-home-jefferson-Projetos-hangar-computer-control-9c0b634f-t1",
+       "session_id": "0cc60e6c-eafc-4915-9936-f0c7b81191d9",
+       "session_name": "sessao-viva",
+       "cwd": "/home/jefferson/Projetos/hangar-computer-control-9c0b634f-t1",
+       "line": "…!= 0. (2) rust-toolchain.toml: adicione components = [\"clippy\"] nesta mesma Task (a checagem global exige clippy).",
+       "mtime": 1793001400.0,
+       "live": true,
+       "role": "user",
+       "event_id": "5e8cb008-5006-4c01-9db4-b3f34791fd91",
+       "ts": null
+      },
+      {
+       "project": "-home-jefferson-Projetos-hangar-computer-control-9c0b634f-t1",
+       "session_id": "0cc60e6c-eafc-4915-9936-f0c7b81191d9",
+       "session_name": "sessao-viva",
+       "cwd": "/home/jefferson/Projetos/hangar-computer-control-9c0b634f-t1",
+       "line": "…`scripts/windows-test.sh` e mandou incluir `components = [\"clippy\"]` no `rust-toolchain.toml` dentro desta mesma Task. Ainda não mexi no arquivo. A rodada 1 está com o revisor, e a regra é não alterar a árvore enquanto ele lê. Quando o…",
+       "mtime": 1793001400.0,
+       "live": true,
+       "role": "assistant",
+       "event_id": "dd7ece7e-9d51-4d61-9243-44cc7fbc8840",
+       "ts": 1791546759.601
+      }
+     ]
+    },
+    "calls": [
+     {
+      "argv": [
+       "/usr/bin/claude",
+       "-p",
+       "--model",
+       "sonnet",
+       "--no-session-persistence",
+       "--disallowedTools",
+       "Bash",
+       "Edit",
+       "Write",
+       "NotebookEdit",
+       "WebFetch",
+       "WebSearch"
+      ],
+      "input": "Você responde onde um assunto apareceu nas conversas do usuário, a partir de TRECHOS de transcripts. Responda curto em pt-BR: diga em QUAL(is) sessão(ões) o assunto apareceu e o contexto, citando os NOMES EXATOS das sessões como aparecem nos rótulos. Se os trechos não responderem à pergunta, diga que não encontrou. Sem preâmbulo, sem markdown.\n\nPERGUNTA: onde falei sobre o clippy?\n\nTrechos das conversas:\n[sessão sessao-viva — viva]: Testes do workspace verdes (6+5 novos). Rodando clippy, check Windows-msvc e o teste na VM em paralelo.\n[sessão sessao-viva — viva]: …!= 0. (2) rust-toolchain.toml: adicione components = [\"clippy\"] nesta mesma Task (a checagem global exige clippy).\n[sessão sessao-viva — viva]: …`scripts/windows-test.sh` e mandou incluir `components = [\"clippy\"]` no `rust-toolchain.toml` dentro desta mesma Task. Ainda não mexi no arquivo. A rodada 1 está com o revisor, e a regra é não alterar a árvore enquanto ele lê. Quando o…",
+      "cwd": "/tmp",
+      "timeout": 60,
+      "env_config_dir": null,
+      "env_is_none": true,
+      "text": true,
+      "encoding": "utf-8",
+      "errors": "replace",
+      "capture_output": true
+     }
+    ]
+   },
+   "fail": {
+    "status": 502,
+    "body": {
+     "detail": "claude -p falhou (exit 1): boom no stderr"
+    },
+    "calls": [
+     {
+      "argv": [
+       "/usr/bin/claude",
+       "-p",
+       "--model",
+       "sonnet",
+       "--no-session-persistence",
+       "--disallowedTools",
+       "Bash",
+       "Edit",
+       "Write",
+       "NotebookEdit",
+       "WebFetch",
+       "WebSearch"
+      ],
+      "input": "Você responde onde um assunto apareceu nas conversas do usuário, a partir de TRECHOS de transcripts. Responda curto em pt-BR: diga em QUAL(is) sessão(ões) o assunto apareceu e o contexto, citando os NOMES EXATOS das sessões como aparecem nos rótulos. Se os trechos não responderem à pergunta, diga que não encontrou. Sem preâmbulo, sem markdown.\n\nPERGUNTA: onde falei sobre o clippy?\n\nTrechos das conversas:\n[sessão sessao-viva — viva]: Testes do workspace verdes (6+5 novos). Rodando clippy, check Windows-msvc e o teste na VM em paralelo.\n[sessão sessao-viva — viva]: …!= 0. (2) rust-toolchain.toml: adicione components = [\"clippy\"] nesta mesma Task (a checagem global exige clippy).\n[sessão sessao-viva — viva]: …`scripts/windows-test.sh` e mandou incluir `components = [\"clippy\"]` no `rust-toolchain.toml` dentro desta mesma Task. Ainda não mexi no arquivo. A rodada 1 está com o revisor, e a regra é não alterar a árvore enquanto ele lê. Quando o…",
+      "cwd": "/tmp",
+      "timeout": 60,
+      "env_config_dir": null,
+      "env_is_none": true,
+      "text": true,
+      "encoding": "utf-8",
+      "errors": "replace",
+      "capture_output": true
+     }
+    ]
+   },
+   "empty": {
+    "status": 502,
+    "body": {
+     "detail": "claude -p devolveu saída vazia"
+    },
+    "calls": [
+     {
+      "argv": [
+       "/usr/bin/claude",
+       "-p",
+       "--model",
+       "sonnet",
+       "--no-session-persistence",
+       "--disallowedTools",
+       "Bash",
+       "Edit",
+       "Write",
+       "NotebookEdit",
+       "WebFetch",
+       "WebSearch"
+      ],
+      "input": "Você responde onde um assunto apareceu nas conversas do usuário, a partir de TRECHOS de transcripts. Responda curto em pt-BR: diga em QUAL(is) sessão(ões) o assunto apareceu e o contexto, citando os NOMES EXATOS das sessões como aparecem nos rótulos. Se os trechos não responderem à pergunta, diga que não encontrou. Sem preâmbulo, sem markdown.\n\nPERGUNTA: onde falei sobre o clippy?\n\nTrechos das conversas:\n[sessão sessao-viva — viva]: Testes do workspace verdes (6+5 novos). Rodando clippy, check Windows-msvc e o teste na VM em paralelo.\n[sessão sessao-viva — viva]: …!= 0. (2) rust-toolchain.toml: adicione components = [\"clippy\"] nesta mesma Task (a checagem global exige clippy).\n[sessão sessao-viva — viva]: …`scripts/windows-test.sh` e mandou incluir `components = [\"clippy\"]` no `rust-toolchain.toml` dentro desta mesma Task. Ainda não mexi no arquivo. A rodada 1 está com o revisor, e a regra é não alterar a árvore enquanto ele lê. Quando o…",
+      "cwd": "/tmp",
+      "timeout": 60,
+      "env_config_dir": null,
+      "env_is_none": true,
+      "text": true,
+      "encoding": "utf-8",
+      "errors": "replace",
+      "capture_output": true
+     }
+    ]
+   },
+   "limit": {
+    "status": 502,
+    "body": {
+     "detail": "claude -p: conta padrão bateu o limite: You've hit your weekly limit · resets 3pm"
+    },
+    "calls": [
+     {
+      "argv": [
+       "/usr/bin/claude",
+       "-p",
+       "--model",
+       "sonnet",
+       "--no-session-persistence",
+       "--disallowedTools",
+       "Bash",
+       "Edit",
+       "Write",
+       "NotebookEdit",
+       "WebFetch",
+       "WebSearch"
+      ],
+      "input": "Você responde onde um assunto apareceu nas conversas do usuário, a partir de TRECHOS de transcripts. Responda curto em pt-BR: diga em QUAL(is) sessão(ões) o assunto apareceu e o contexto, citando os NOMES EXATOS das sessões como aparecem nos rótulos. Se os trechos não responderem à pergunta, diga que não encontrou. Sem preâmbulo, sem markdown.\n\nPERGUNTA: onde falei sobre o clippy?\n\nTrechos das conversas:\n[sessão sessao-viva — viva]: Testes do workspace verdes (6+5 novos). Rodando clippy, check Windows-msvc e o teste na VM em paralelo.\n[sessão sessao-viva — viva]: …!= 0. (2) rust-toolchain.toml: adicione components = [\"clippy\"] nesta mesma Task (a checagem global exige clippy).\n[sessão sessao-viva — viva]: …`scripts/windows-test.sh` e mandou incluir `components = [\"clippy\"]` no `rust-toolchain.toml` dentro desta mesma Task. Ainda não mexi no arquivo. A rodada 1 está com o revisor, e a regra é não alterar a árvore enquanto ele lê. Quando o…",
+      "cwd": "/tmp",
+      "timeout": 60,
+      "env_config_dir": null,
+      "env_is_none": true,
+      "text": true,
+      "encoding": "utf-8",
+      "errors": "replace",
+      "capture_output": true
+     }
+    ]
+   },
+   "no_hits": {
+    "status": 200,
+    "body": {
+     "answer": "não achei nada sobre isso nas conversas",
+     "hits": []
+    }
+   },
+   "kill_switch": {
+    "status": 409,
+    "body": {
+     "detail": {
+      "code": "erro_automacoes_desligadas",
+      "params": {},
+      "msg": "automações desligadas (kill-switch)"
+     }
+    }
+   }
+  }
+ }
+}

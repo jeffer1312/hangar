@@ -24,13 +24,14 @@ pub fn diagnostic(code: &str, state: &str) -> bool {
 /// Diagnóstico não cobre código de tela: `new` não entra no lugar de `current`, que o portão mostraria.
 pub fn keeps(current: Option<&str>, new: &str) -> bool { current.is_some_and(|current| !is_diagnostic(current)) && is_diagnostic(new) }
 
-/// Registro do aviso tirado da tela: o diário recebe o código (uma vez por minuto por sessão e código) e o
-/// log, o detalhe, que o diário não aceita por ser texto livre.
+/// Registro do aviso tirado da tela: o diário recebe o código e o detalhe que a tela teria mostrado (uma
+/// vez por minuto por sessão e código), e o log também.
 pub fn report_hidden(diag: &crate::diag::DiagClient, session: &str, code: &str, detail: Option<&str>) {
     if crate::warn_limit::allow(Some(session), &format!("problem_hidden:{code}")) {
         tracing::warn!(session, code, detail, "aviso de diagnóstico fora da tela");
     }
-    diag.report("rust.problem_hidden", session, code, "aviso de diagnóstico fora da tela");
+    diag.report_with("rust.problem_hidden", session, code, "aviso de diagnóstico fora da tela",
+        serde_json::json!({"detalhe": detail, "via": "conversa"}));
 }
 
 /// A entrega incerta segura a fila com ou sem texto no campo: a troca do motivo não é problema novo.

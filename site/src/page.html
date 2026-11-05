@@ -30,7 +30,7 @@
 <header style="position: sticky; top: 0; z-index: 10; background: rgba(10,11,12,.72); backdrop-filter: blur(14px); border-bottom: 1px solid rgba(255,255,255,.06)">
 <nav aria-label="«nav_label»" style="max-width: 1200px; margin: 0 auto; padding: 0 clamp(16px, 4vw, 24px); height: 68px; display: flex; align-items: center; gap: 24px">
 <a href="#top" style="display: flex; align-items: center; gap: 10px; font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 20px; letter-spacing: -0.02em">
-<svg width="28" height="28" viewBox="0 0 200 200" aria-hidden="true"><g transform="translate(0,16)" fill="none" stroke="currentColor" stroke-width="15" stroke-linecap="round"><path d="M 34.18 138 A 76 76 0 1 1 165.82 138"></path><path d="M 49.59 116.38 A 53 53 0 1 1 150.41 116.38"></path><path d="M 70.16 103.14 A 30 30 0 1 1 129.84 103.14"></path></g></svg>
+<svg width="28" height="28" viewBox="0 0 200 200" aria-hidden="true"><g transform="translate(0,16)" fill="none" stroke="currentColor" stroke-width="15" stroke-linecap="round">«HANGAR_ARCS»</g></svg>
 <span>Hangar</span>
 </a>
 <div class="hide-sm" style="display: flex; gap: 4px; margin-left: 12px">
@@ -308,9 +308,11 @@ GitHub
 <p style="margin: 0; font-family: 'Geist Mono', monospace; font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--a)">«p_eyebrow»</p>
 <h2 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: clamp(34px, 4.2vw, 54px); line-height: 1.02; letter-spacing: -0.035em">«p_h2»</h2>
 <p style="margin: 0; font-size: 18px; color: #A7A9A5">«p_p»</p>
+<p style="margin: 0; font-size: 18px; color: #A7A9A5">«p_app»</p>
 <div style="display: flex; flex-wrap: wrap; gap: 10px">
 «p_chips»
 </div>
+<a class="btn btn-ghost" href="#download" style="align-self: flex-start">«cta_app»</a>
 </div>
 <div class="reveal" style="display: flex; justify-content: center">
 <div class="bob" style="position: relative; width: min(300px, 80%); border-radius: 44px; padding: 10px; background: linear-gradient(160deg, #3A3E41, #151719 45%, #2A2D30); box-shadow: 0 40px 100px -30px rgba(0,0,0,.9)">
@@ -359,6 +361,17 @@ GitHub
 <p style="margin: 0; font-size: 18px; color: #A7A9A5; max-width: 560px">«d_p»</p>
 </div>
 
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: 16px">
+«DOWNLOADS»
+</div>
+<div style="display: flex; flex-direction: column; gap: 8px; text-align: center; font-size: 14px; color: #8E908D">
+<p style="margin: 0">«d_alt»</p>
+<p style="margin: 0">«d_req»</p>
+</div>
+<div class="reveal" style="text-align: center; display: flex; flex-direction: column; gap: 8px; align-items: center; margin-top: 16px">
+<h3 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 22px">«d_cli»</h3>
+<p style="margin: 0; color: #A7A9A5">«d_cli_p»</p>
+</div>
 <div class="reveal" data-install style="max-width: 820px; width: 100%; margin: 0 auto; border-radius: 16px; border: 1px solid rgba(255,255,255,.10); background: #0E1011; overflow: hidden">
 <div role="tablist" aria-label="«d_h2»" style="display: flex; gap: 4px; padding: 8px; border-bottom: 1px solid rgba(255,255,255,.06)">
 <button type="button" role="tab" class="inst-tab" data-os="unix" aria-selected="true" tabindex="0" aria-controls="install-cmd">Linux · macOS</button>
@@ -375,10 +388,6 @@ GitHub
 </div>
 </div>
 
-<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(250px, 100%), 1fr)); gap: 16px">
-«DOWNLOADS»
-</div>
-<p style="margin: 0; text-align: center; font-size: 14px; color: #8E908D">«d_req»</p>
 </div>
 </section>
 
@@ -387,7 +396,7 @@ GitHub
 <div class="ring"></div><div class="ring r2"></div><div class="ring r3"></div>
 </div>
 <div class="reveal" style="position: relative; display: flex; flex-direction: column; align-items: center; gap: 28px">
-<svg width="96" height="96" viewBox="0 0 200 200" aria-hidden="true"><defs><linearGradient id="hgmetal" x2=".18" y2="1"><stop stop-color="#ffffff"></stop><stop offset=".44" stop-color="#f1f1ec"></stop><stop offset="1" stop-color="#9ea3a6"></stop></linearGradient></defs><g transform="translate(0,16)" fill="none" stroke="url(#hgmetal)" stroke-width="13" stroke-linecap="round"><path d="M 34.18 138 A 76 76 0 1 1 165.82 138"></path><path d="M 49.59 116.38 A 53 53 0 1 1 150.41 116.38"></path><path d="M 70.16 103.14 A 30 30 0 1 1 129.84 103.14"></path></g></svg>
+<svg width="96" height="96" viewBox="0 0 200 200" aria-hidden="true"><defs><linearGradient id="hgmetal" x2=".18" y2="1"><stop stop-color="#ffffff"></stop><stop offset=".44" stop-color="#f1f1ec"></stop><stop offset="1" stop-color="#9ea3a6"></stop></linearGradient></defs><g transform="translate(0,16)" fill="none" stroke="url(#hgmetal)" stroke-width="13" stroke-linecap="round">«HANGAR_ARCS»</g></svg>
 <h2 style="margin: 0; max-width: 820px; font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: clamp(38px, 5.4vw, 72px); line-height: 1; letter-spacing: -0.04em">«close_h2»</h2>
 <div style="display: flex; flex-wrap: wrap; gap: 12px; justify-content: center">
 <a class="btn btn-primary" href="#download">«cta_main»</a>

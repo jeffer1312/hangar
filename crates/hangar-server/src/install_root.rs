@@ -58,8 +58,12 @@ pub fn launch(args: &[String]) -> ExitCode {
     }
     let home = crate::accounts::environment::AccountEnvironment::capture().home;
     let log = args.iter().position(|a| a == "--log").and_then(|i| args.get(i + 1)).map(PathBuf::from);
+    // A versão vai em toda linha do lançador: na troca, o log recebe a saída da anterior e da nova.
+    let version = std::fs::canonicalize(current(&home)).ok()
+        .and_then(|real| real.file_name().map(|n| n.to_string_lossy().into_owned())).unwrap_or_else(|| "?".to_owned());
+    report(log.as_deref(), &format!("launch_start: versão {version}, lançador pid {}", std::process::id()));
     match backend_command(&home, &args[1..], cfg!(windows)) {
-        Ok(command) => run(command, log.as_deref()),
+        Ok(command) => run(command, log.as_deref(), &version),
         Err((code, path)) => {
             report(log.as_deref(), &format!("{code}: {}", path.display()));
             ExitCode::from(3)
@@ -95,27 +99,39 @@ pub fn backend_command(home: &Path, args: &[String], windows: bool) -> Result<st
 
 /// No Unix o lançador vira o backend: o serviço acompanha o próprio Python.
 #[cfg(unix)]
-fn run(mut command: std::process::Command, log: Option<&Path>) -> ExitCode {
+fn run(mut command: std::process::Command, log: Option<&Path>, version: &str) -> ExitCode {
     use std::os::unix::process::CommandExt;
     let error = command.exec();
-    report(log, &format!("launch_exec_failed: {error}"));
+    report(log, &format!("launch_exec_failed: versão {version}: {error}"));
     ExitCode::from(126)
 }
 
 /// No Windows não há `exec`: espera o backend e sai com o código dele, os dois no mesmo Job.
 #[cfg(windows)]
-fn run(mut command: std::process::Command, log: Option<&Path>) -> ExitCode {
+fn run(mut command: std::process::Command, log: Option<&Path>, version: &str) -> ExitCode {
     // Sem o Job o backend sobe como antes, só sem a proteção: a falha vai ao log da tarefa.
     if let Err(error) = die_with_the_launcher() {
         report(log, &format!("launch_job_failed: {error}"));
     }
-    match command.status() {
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            report(log, &format!("launch_exec_failed: versão {version}: {error}"));
+            return ExitCode::from(126);
+        }
+    };
+    let (pid, started) = (child.id(), std::time::Instant::now());
+    report(log, &format!("launch_backend_started: versão {version}, python pid {pid}"));
+    match child.wait() {
         Ok(status) => {
-            if !status.success() { report(log, &format!("launch_backend_exited: {status}")); }
+            // 0xffffffff é o `Stop-Process` do reinício: a versão que estava de pé sendo parada.
+            if !status.success() {
+                report(log, &format!("launch_backend_exited: versão {version}, python pid {pid}, {status}, depois de {} s", started.elapsed().as_secs()));
+            }
             std::process::exit(status.code().unwrap_or(1))
         }
         Err(error) => {
-            report(log, &format!("launch_exec_failed: {error}"));
+            report(log, &format!("launch_wait_failed: versão {version}, python pid {pid}: {error}"));
             ExitCode::from(126)
         }
     }

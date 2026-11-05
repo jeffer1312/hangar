@@ -1922,7 +1922,7 @@ impl Render for BrowserPanel {
             toolbar = toolbar.child(chrome::icon_button("browser-shot", IconName::Image, tr("browser_send_shot"), cx)
                 .disabled(!ready || self.page.url.is_none() || self.shooting)
                 .on_click(cx.listener(|this, _, _, cx| this.send_shot(cx))));
-            toolbar = toolbar.child(self.pick_button(ready, cx));
+            toolbar = toolbar.child(popup::anchor(div().flex_shrink_0(), crate::tour::anchors::PICK_ELEMENT).child(self.pick_button(ready, cx)));
             toolbar = toolbar.child(Button::new("browser-cookies")
                 .custom(ButtonCustomVariant::new(cx).color(transparent_black()).foreground(theme::muted())
                     .hover(theme::hover()).active(theme::hover()))
@@ -2286,8 +2286,8 @@ impl Hangar {
         use crate::browser::{control::Reply, server::Request};
         fn answer(reply: futures::channel::oneshot::Sender<Reply>, text: String) { let _ = reply.send(Reply::Text(text)); }
         let missing = |key: &str| format!("erro: a sessao {key} nao tem navegador aberto");
-        let (key, verb, args, tab, reply) = match request {
-            Request::Command { key, verb, args, tab, reply } => (key, verb, args, tab, reply),
+        let (key, verb, args, tab, secret, reply) = match request {
+            Request::Command { key, verb, args, tab, secret, reply } => (key, verb, args, tab, secret, reply),
             Request::Cdp { key, method, params, reply } => {
                 let Some(cdp) = self.side.browsers.get(&key).and_then(|b| b.read(cx).relay_cdp()) else { let _ = reply.send(Err(missing(&key))); return };
                 let call = cdp.call(&method, params);
@@ -2359,7 +2359,7 @@ impl Hangar {
         cx.spawn(async move |_, cx| {
             #[cfg(target_os = "windows")]
             if let Some(settle) = settle { settle.await; }
-            let _ = reply.send(ctl.run(&verb, &args).await);
+            let _ = reply.send(ctl.run_with(&verb, &args, secret).await);
             let _ = browser.update(cx, |panel, cx| panel.agent_finished(cx));
         }).detach();
     }

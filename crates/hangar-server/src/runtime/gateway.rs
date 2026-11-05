@@ -114,6 +114,42 @@ pub struct RuntimeRegistry {
     limits:std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<LimitHit>>,
     /// Sessões Claude paradas no limite à espera da troca: a fila não entrega nada até ela terminar.
     limit_holds:std::sync::Mutex<std::collections::BTreeSet<String>>,
+    /// Acordar em curso por nome, com a chave da fila: um por sessão, e o texto que chega no meio vai a ela.
+    waking:std::sync::Mutex<BTreeMap<String,String>>,
+    /// Sessões que receberam texto enquanto outra tinha a vaga: ao soltar, a vaga acorda de novo.
+    rewake:std::sync::Mutex<std::collections::BTreeSet<String>>,
+}
+
+/// A vaga de acordar de uma sessão (nome e chave), solta ao sair (também em pânico).
+pub(super) struct WakingSlot<'a>(&'a RuntimeRegistry,String,String);
+impl Drop for WakingSlot<'_> {
+    fn drop(&mut self) {
+        let again = {
+            let mut waking = self.0.waking.lock().unwrap_or_else(|e|e.into_inner());
+            waking.remove(&self.1);
+            self.0.rewake.lock().unwrap_or_else(|e|e.into_inner()).remove(&self.1)
+        };
+        // Texto guardado enquanto a vaga estava tomada: se quem a tinha devolveu a sessão ao sono, ele acorda
+        // agora; acordada, o `wake` não acha a marca e não faz nada.
+        if again { self.0.wake(&self.1,&self.2); }
+    }
+}
+
+/// A escrita achou a sessão adormecida, acordando ou sendo reaberta: o texto vai à fila, o resto espera.
+pub const ASLEEP_WAKING:&str = "session_asleep_waking";
+pub(crate) fn asleep_waking() -> RuntimeError { RuntimeError::new(ASLEEP_WAKING,"a sessão adormecida está sendo reaberta; tente de novo em instantes") }
+
+/// Sessão adormecida: o agente, a chave da fila e onde ela acorda.
+#[derive(Clone,Debug,PartialEq)]
+pub struct AsleepMark { pub provider:&'static str, pub key:String, pub wake_surface:crate::session_open::Surface }
+
+/// A marca `asleep` do sidecar sem terminal: onde a sessão acorda. `None`: acordada (ou marca torta).
+pub(crate) fn asleep_surface(meta:&serde_json::Map<String,Value>) -> Option<crate::session_open::Surface> {
+    match meta.get("asleep")?.get("wake_surface")?.as_str()? {
+        "terminal"=>Some(crate::session_open::Surface::Terminal),
+        "headless"=>Some(crate::session_open::Surface::Headless),
+        _=>None,
+    }
 }
 
 /// O que o fim de turno achou: sem terminal quem vê o limite é o ator da sessão.
@@ -228,6 +264,7 @@ pub(super) async fn launch_if_needed(policy:&PolicyClient,target:&mut RuntimeTar
     }).await.map_err(|_|failure("launch_job"))??;
     if target.provider == "codex" {
         policy.prepare_codex(env.get("CODEX_HOME").ok_or_else(||failure("codex_account_invalid"))?).await?;
+        upgrade_marketplaces(&program,&env).await;
     }
     let cwd = target.metadata["cwd"].as_str().filter(|cwd|!cwd.is_empty()).ok_or_else(||failure("launch_cwd"))?;
     let spec = process::LaunchSpec { provider:process::Provider::from_str(&target.provider).ok_or_else(||failure("runtime_provider"))?,
@@ -253,6 +290,30 @@ pub(super) async fn launch_if_needed(policy:&PolicyClient,target:&mut RuntimeTar
     target.metadata["cano"] = value;
     Ok(Some(cano))
 }
+/// Ao subir, o app-server confere os marketplaces git sozinho e reinstala o plugin que mudou com a
+/// sessão já aberta, recusando os hooks dele até a reaprovação; conferidos antes, ele não acha nada
+/// novo. Falha não impede a abertura: o Codex confere depois e o ator reaprova o que mudar.
+async fn upgrade_marketplaces(program:&[String],env:&std::collections::BTreeMap<String,String>) {
+    let Some(codex) = program.first().and_then(|name|process::resolve_program(name,env.iter())) else { return };
+    let mut command = tokio::process::Command::new(codex);
+    command.args(["plugin","marketplace","upgrade","--json"]).env_clear().envs(env)
+        .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped()).kill_on_drop(true);
+    #[cfg(windows)]
+    command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    match tokio::time::timeout(MARKETPLACES_TIMEOUT,command.output()).await {
+        Ok(Ok(out)) if out.status.success() => {}
+        Ok(Ok(out)) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            let detail = stderr.lines().find(|line|line.starts_with("Failed to upgrade marketplace")).unwrap_or("");
+            tracing::warn!(code=?out.status.code(),detail=%detail.chars().take(200).collect::<String>(),"codex: conferência dos marketplaces falhou");
+        }
+        Ok(Err(err)) => tracing::warn!(kind=?err.kind(),"codex: conferência dos marketplaces não rodou"),
+        Err(_) => tracing::warn!("codex: conferência dos marketplaces passou do prazo"),
+    }
+}
+/// Toda abertura espera a conferência: sem rede, o `git fetch` não pode segurar a sessão; o ator cobre o resto.
+const MARKETPLACES_TIMEOUT:Duration = Duration::from_secs(20);
+
 /// Marca da configuração que o `claude -p` leu ao nascer: o botão Recarregar e a adoção da reserva
 /// pré-aquecida comparam com ela. Bloqueante.
 pub(crate) fn claude_config_stamp(config_dir:Option<&str>) -> Option<String> {
@@ -338,7 +399,7 @@ impl RuntimeRegistry {
         Self { startup: Default::default(), diag:crate::diag::DiagClient::new(upstream,secret.clone()),reopening:Default::default(),terminal_problems:Default::default(),terminal_status:Default::default(),heal_attempts:Default::default(),interactions:None,entries:Arc::new(Mutex::new(BTreeMap::new())),terminal_states:None,terms:None,events:broadcast::channel(1024).0,
             policy:PolicyClient::new(upstream,secret).with_preparation(preparation),instance,lifecycle:Mutex::new(BTreeMap::new()),revisions:Mutex::new(BTreeMap::new()),mods:None,plugin:None,ingress:Default::default(),
             respawn_base:Duration::from_secs(5),reconnect_waits:Default::default(),permissions:None,processes:Arc::new(crate::list::procs::SystemProcs::default()),live:Default::default(),codex_owned:Default::default(),hubs:std::sync::OnceLock::new(),self_ref:std::sync::OnceLock::new(),
-            watcher:std::sync::OnceLock::new(),codex_wake:Arc::new(tokio::sync::Notify::new()),native:Default::default(),limits:std::sync::OnceLock::new(),limit_holds:Default::default() }
+            watcher:std::sync::OnceLock::new(),codex_wake:Arc::new(tokio::sync::Notify::new()),native:Default::default(),limits:std::sync::OnceLock::new(),limit_holds:Default::default(),waking:Default::default(),rewake:Default::default() }
     }
     /// Escrita para sessão doente, ou a conversa aberta: a sessão em erro é reaberta aqui, em segundo plano
     /// e uma por vez; a saudável só refaz a projeção da fila. Responde na hora; quem escreveu recebe o 503
@@ -444,10 +505,13 @@ impl RuntimeRegistry {
     /// `None` = não é sessão sem ator do Rust.
     pub async fn adopt_now(&self,name:&str) -> Option<Result<(),RuntimeError>> {
         if let Err(error) = self.retire_other_life(name).await { return Some(Err(error)); }
+        // Antes da porta: o acordar a fecha, e quem chega no meio dele espera o mesmo acordar.
+        if let Some(mark) = self.asleep(name).await { self.wake(name,&mark.key); return Some(Err(asleep_waking())); }
         // Pela porta, como as escritas: no meio de uma troca (porta fechada) abrir ou adotar subiria a vida
         // antiga por cima da que está nascendo.
         let _pass = match self.ingress.enter(name,Duration::ZERO).await {
             Ok(pass)=>pass,
+            Err(_) if self.waking_key(name).is_some()=>return Some(Err(asleep_waking())),
             Err(_)=>return Some(Err(RuntimeError::new("session_transfer_busy","a sessão está trocando de agente"))),
         };
         if let Some(opened) = self.open_claude_headless(name,true).await { return Some(opened); }
@@ -455,6 +519,138 @@ impl RuntimeRegistry {
         if let Some(adopted) = watcher.adopt_now(self,name).await { return Some(adopted); }
         watcher.adopt_claude(self,name).await
     }
+    /// A marca de adormecida no sidecar sem terminal da sessão, Claude ou Codex. `None`: acordada, sem
+    /// sidecar ou sidecar ilegível (quem abre mostra esse erro).
+    pub async fn asleep(&self,name:&str) -> Option<AsleepMark> {
+        let (home,name)=(self.policy.codex_environment().home,name.to_owned());
+        tokio::task::spawn_blocking(move||{
+            [("claude",home.join(".hangar").join("claude-headless")),("codex",super::codex_sidecar::dir(&home))].into_iter().find_map(|(provider,dir)|{
+                let meta=super::codex_sidecar::read(&super::codex_sidecar::path(&dir,&name)).ok()??;
+                let wake_surface=asleep_surface(&meta)?;
+                let key=meta.get("key").and_then(Value::as_str).filter(|key|!key.is_empty())?.to_owned();
+                Some(AsleepMark { provider,key,wake_surface })
+            })
+        }).await.ok().flatten()
+    }
+    /// Acordar em curso na sessão: a chave da fila dela.
+    pub fn waking_key(&self,name:&str) -> Option<String> { self.waking.lock().unwrap_or_else(|e|e.into_inner()).get(name).cloned() }
+    fn claim_waking(&self,name:&str,key:&str) -> bool {
+        let mut waking = self.waking.lock().unwrap_or_else(|e|e.into_inner());
+        if waking.contains_key(name) { return false; }
+        waking.insert(name.to_owned(),key.to_owned());
+        true
+    }
+    /// A vaga de acordar para outra reabertura da adormecida (`/conta`, modo, motor): `None` se o acordar
+    /// ou outra reabertura já a tem. Duas juntas subiriam dois terminais no mesmo nome.
+    pub(super) fn reserve_waking(&self,name:&str,key:&str) -> Option<WakingSlot<'_>> {
+        self.claim_waking(name,key).then(||WakingSlot(self,name.to_owned(),key.to_owned()))
+    }
+    /// Para o texto que chega com a vaga tomada: a chave da fila, e a vaga acorda a sessão ao soltar, caso
+    /// quem a tinha (outra reabertura que falhou) a devolva ao sono. Sob a trava da vaga, para não perder a soltura.
+    pub fn waking_key_for_text(&self,name:&str) -> Option<String> {
+        let waking = self.waking.lock().unwrap_or_else(|e|e.into_inner());
+        let key = waking.get(name).cloned()?;
+        self.rewake.lock().unwrap_or_else(|e|e.into_inner()).insert(name.to_owned());
+        Some(key)
+    }
+    /// Acorda a sessão adormecida numa tarefa própria e volta na hora: quem escreveu pode desistir sem
+    /// interromper. Um acordar por sessão; o segundo pedido no meio dele não faz nada.
+    pub fn wake(&self,name:&str,key:&str) {
+        let Some(registry) = self.self_ref.get().and_then(std::sync::Weak::upgrade) else {
+            tracing::warn!(session=%name,code="runtime_unbound","a sessão adormecida não acorda sem o registro ligado");
+            self.diag.report("runtime.wake_failed",name,"runtime_unbound","a sessão adormecida não pôde acordar");
+            return;
+        };
+        if !self.claim_waking(name,key) { return; }
+        let (name,key) = (name.to_owned(),key.to_owned());
+        tokio::spawn(async move {
+            // Solta a vaga mesmo se a tarefa cair no meio: senão a sessão nunca mais acordaria.
+            let slot = WakingSlot(registry.as_ref(),name.clone(),key);
+            let (provider,result) = match registry.asleep(&name).await {
+                None=>("",Ok(false)),
+                Some(mark) if mark.provider=="claude"=>("claude",registry.wake_claude(&name,mark.wake_surface).await),
+                Some(mark)=>(mark.provider,match registry.watcher.get().cloned() {
+                    Some(watcher)=>watcher.wake(&registry,&name,mark.wake_surface).await,
+                    None=>Err(RuntimeError::new("runtime_watcher","a vigia do Codex não está ligada; a sessão adormecida não acorda")),
+                }),
+            };
+            drop(slot);
+            let event = match &result {
+                // A marca já tinha saído: outro acordar ou outra reabertura venceu.
+                Ok(false)=>return,
+                Ok(true)=>{
+                    tracing::info!(session=%name,"sessão adormecida acordou");
+                    json!({"evento":"sessao.acordada","nivel":"ok","sessao":name,"provider":provider})
+                },
+                Err(error)=>{
+                    // A pessoa mandou e o texto não foi entregue: a sessão mostra o erro, e a próxima mensagem tenta de novo.
+                    tracing::warn!(session=%name,code=%error.code,"a sessão adormecida não acordou");
+                    super::actor::mark_live_error(&registry.live_sender(&name),&error.code,&error.message);
+                    json!({"evento":"sessao.acordada","nivel":"erro","sessao":name,"provider":provider,"codigo":error.code})
+                },
+            };
+            crate::diag::record(crate::diag::diary_dir_in(&registry.policy.codex_environment()),vec![event],"acordar");
+        });
+    }
+    /// Texto para a sessão adormecida: entra na fila da chave dela como `pre_transcript`, e a vida nova o
+    /// entrega. `runtime_lease`: a vida nova já tem a fila, e o texto vai pela entrada dela.
+    pub async fn queue_asleep(&self,name:&str,key:&str,text:&str) -> Result<(),RuntimeError> {
+        let epoch_s = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0,|d|d.as_secs_f64());
+        let id = crate::mods::state::random_hex(16);
+        let row = Action::Append { text:text.to_owned(),delivered:false,ts:Some(epoch_s),pre_transcript:true,entry_id:Some(id.clone()) };
+        self.asleep_queue_action(name,key,&format!("append:{id}"),row).await.map(|_|())
+    }
+    /// Ação na fila da adormecida direto no arquivo dela, sem processo: guardar texto e o painel da fila
+    /// (tirar, editar, mover) não a acordam. `runtime_lease`: uma vida já tem a fila.
+    pub async fn asleep_queue_action(&self,name:&str,key:&str,call_id:&str,action:Action) -> Result<Value,RuntimeError> {
+        let queue_dir = self.claude_dirs().1;
+        let (key,name,call_id) = (key.to_owned(),name.to_owned(),call_id.to_owned());
+        tokio::task::spawn_blocking(move || -> Result<Value,RuntimeError> {
+            let (state_path,lease_path) = super::codex_terminal::queue_files(&queue_dir,&key);
+            if let Some(dir) = state_path.parent() { std::fs::create_dir_all(dir).map_err(|_|failure("queue_io"))?; }
+            let _lease = acquire_lease_within(&lease_path,Duration::from_secs(3)).map_err(|_|RuntimeError::new("runtime_lease","a fila da sessão já tem dono"))?;
+            let mut store = Store::open(&state_path,&queue_dir,QueueState::new(&key,1,&name,Vec::new())).map_err(|_|failure("queue_io"))?;
+            let epoch_s = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0,|d|d.as_secs_f64());
+            let generation = store.state().generation;
+            store.exec(generation,&call_id,ClockSample { monotonic_s:0.0,epoch_s },action).map_err(|_|failure("queue_io"))
+        }).await.map_err(|_|failure("queue_job"))?
+    }
+    /// Antes da vida nova da adormecida: o texto guardado desde `since` que ainda espera volta à fila com a
+    /// hora de agora, na mesma ordem. A vida nova só entrega o que tem até 15 min antes do nascimento dela, e
+    /// um acordar que falhou deixaria o texto antigo de fora para sempre.
+    pub(super) async fn restamp_asleep(&self,key:&str,since:f64) -> Result<usize,RuntimeError> {
+        let queue_dir = self.claude_dirs().1;
+        let key = key.to_owned();
+        tokio::task::spawn_blocking(move || -> Result<usize,RuntimeError> {
+            let (state_path,lease_path) = super::codex_terminal::queue_files(&queue_dir,&key);
+            if !state_path.exists() { return Ok(0); }
+            let _lease = acquire_lease_within(&lease_path,Duration::from_secs(3)).map_err(|_|RuntimeError::new("runtime_lease","a fila da sessão já tem dono"))?;
+            let mut store = Store::open(&state_path,&queue_dir,QueueState::new(&key,1,"",Vec::new())).map_err(|_|failure("queue_io"))?;
+            let generation = store.state().generation;
+            let rows:Vec<Value> = store.state().rows.iter()
+                .filter(|row|super::queue::row_waits(row) && row["ts"].as_f64().is_some_and(|ts|ts >= since)).cloned().collect();
+            let clock = || ClockSample { monotonic_s:0.0,epoch_s:SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0,|d|d.as_secs_f64()) };
+            let mut restamped = 0;
+            for row in rows {
+                let (old,text) = (row["id"].as_str().unwrap_or("").to_owned(),row["text"].as_str().unwrap_or("").to_owned());
+                if old.is_empty() || text.is_empty() { continue; }
+                // A nova entra antes de a antiga sair: falha no meio deixa o texto em dobro, nunca sem ele.
+                let id = crate::mods::state::random_hex(16);
+                store.exec(generation,&format!("restamp:{id}"),clock(),Action::Append { text,delivered:false,ts:None,
+                    pre_transcript:row["pre_transcript"]==true,entry_id:Some(id.clone()) }).map_err(|_|failure("queue_io"))?;
+                let cancelled = store.exec(generation,&format!("restamp-cancel:{id}"),clock(),Action::Cancel { entry_id:old }).map_err(|_|failure("queue_io"))?;
+                // A antiga em voo fica onde está: a cópia sai, para não entregar duas vezes.
+                if cancelled != json!("cancelled") {
+                    store.exec(generation,&format!("restamp-undo:{id}"),clock(),Action::Cancel { entry_id:id }).map_err(|_|failure("queue_io"))?;
+                    continue;
+                }
+                restamped += 1;
+            }
+            Ok(restamped)
+        }).await.map_err(|_|failure("queue_job"))?
+    }
+    /// Painel de terminal aberto na sessão (rodapé ou celular).
+    pub(super) fn panel_open(&self,name:&str) -> bool { self.terms.as_ref().is_some_and(|terms|terms.is_active(name)) }
     /// A chave da fila do Codex com terminal que ainda abre a conversa (`Watcher::opening`).
     pub async fn codex_opening(&self,name:&str) -> Option<Result<String,RuntimeError>> { self.watcher.get()?.opening(name).await }
     /// Texto guardado para a conversa que ainda abre; a adoção o entrega.
@@ -678,7 +874,8 @@ impl RuntimeRegistry {
         let opens = listed.into_iter().filter(|(_,alive,pending)|*alive || *pending).map(|(name,_,pending)| {
             let registry = self.clone();
             async move {
-                if let Some(Err(error)) = registry.open_claude_headless(&name,pending).await {
+                // A adormecida com fila esperando acorda com terminal, à parte: não é falha da subida.
+                if let Some(Err(error)) = registry.open_claude_headless(&name,pending).await && error.code != ASLEEP_WAKING {
                     tracing::warn!(session=%name,code=%error.code,"sessão sem terminal não abriu na subida");
                     registry.diag.report("runtime.registration_failed",&name,&error.code,"a sessão sem terminal não abriu na subida do Rust");
                 }
@@ -730,6 +927,47 @@ impl RuntimeRegistry {
         *barrier.parked.lock().map_err(|_|failure("lifecycle_parked"))?=Some(name.to_owned());
         Ok(Some(idle))
     }
+    /// A vigia de adormecer pede: o Codex `name`, com ou sem terminal, parado há `after` e sem nada em aberto,
+    /// tem os processos fechados e fica no sidecar sem terminal marcado `asleep`. Tudo é conferido de novo
+    /// com a porta fechada. `Ok(false)`: desistiu.
+    pub async fn sleep_codex(&self,name:&str,after:Duration) -> Result<bool,RuntimeError> {
+        let Some(watcher) = self.watcher.get().cloned() else { return Ok(false) };
+        watcher.sleep(self,name,after).await
+    }
+    /// O Codex sem terminal aberto aqui adormece como o Claude estaciona: porta fechada, conferência de novo,
+    /// o cano morre e o sidecar fica, sem `cano` e com a marca. `Some(segundos parada)` = adormeceu.
+    pub(super) async fn park_codex(&self,name:&str,after:Duration) -> Result<Option<f64>,RuntimeError> {
+        let idle=|view:&Value|view["park_idle_s"].as_f64().filter(|idle|*idle>=after.as_secs_f64());
+        let Some((key,generation,handle))=self.codex_headless(name).await else {return Ok(None)};
+        if idle(&handle.view().await?).is_none() {return Ok(None);}
+        let Ok(_ingress)=super::lifecycle::ClosedIngress::acquire_within(&self.ingress,name,Duration::from_secs(1)).await else {return Ok(None)};
+        let home=self.policy.codex_environment().home;
+        let dir=super::codex_sidecar::dir(&home);
+        // A porta fechada não exclui a troca de agente nem o acordar: os dois são conferidos aqui.
+        if super::codex_relaunch::transfer_open(&home,name,None,Some(key.as_str())) || self.waking_key(name).is_some() {return Ok(None);}
+        let barrier=self.barrier(&key).await;
+        if barrier.operation.lock().map_err(|_|failure("lifecycle_operation"))?.is_some() {return Ok(None);}
+        let Ok(_guard)=barrier.try_lock() else {return Ok(None)};
+        let Ok(_parking)=barrier.park.try_write() else {return Ok(None)};
+        if !self.entries.lock().await.get(&key).is_some_and(|entry|entry.generation==generation) {return Ok(None);}
+        let Some(idle)=idle(&handle.view().await?) else {return Ok(None)};
+        let state_path=super::codex_terminal::queue_files(&self.claude_dirs().1,&key).0;
+        if tokio::task::spawn_blocking(move||pending(&state_path)).await.map_err(|_|failure("queue_job"))? {return Ok(None);}
+        let closed=self.close_locked_as(&key,generation,true,true).await?;
+        // O cano que não morreu continua no sidecar: a próxima escrita o reaproveita, sem marca.
+        if closed["killed"]!=true {return Err(failure("codex_sleep_kill"));}
+        let since=SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0,|d|d.as_secs_f64());
+        let (owned,key2)=(name.to_owned(),key.clone());
+        let marked=tokio::task::spawn_blocking(move||super::codex_sidecar::locked(&dir,&owned,|path| {
+            let Some(mut meta)=super::codex_sidecar::load(path) else {return Ok(false)};
+            if meta.get("key").and_then(Value::as_str)!=Some(key2.as_str()) {return Ok(false);}
+            meta.remove("cano");
+            meta.insert("asleep".into(),json!({"wake_surface":"headless","since":since}));
+            super::codex_sidecar::write(path,&meta).map(|()|true)
+        })).await.map_err(|_|failure("queue_job"))?;
+        if !matches!(marked,Ok(true)) {return Err(failure("codex_sleep_sidecar"));}
+        Ok(Some(idle))
+    }
     /// `_vigiar_ociosas`: uma rodada por minuto enquanto o registro existir.
     pub async fn watch_idle_claude(self:Arc<Self>) {
         let registry=Arc::downgrade(&self);
@@ -754,6 +992,11 @@ impl RuntimeRegistry {
             },
         };
         let key = meta.get("key").and_then(Value::as_str).filter(|key|!key.is_empty())?.to_owned();
+        // A adormecida que era com terminal nunca sobe sem ele: acorda no terminal, pelo spec.
+        if asleep_surface(&meta) == Some(crate::session_open::Surface::Terminal) {
+            self.wake(name,&key);
+            return Some(Err(asleep_waking()));
+        }
         let open = self.entries.lock().await.get(&key).filter(|entry|entry.name == name).map(|entry|entry.handle.clone());
         if let Some(handle) = open {
             if handle.snapshot().await.is_ok() { return Some(Ok(())); }
@@ -1460,6 +1703,8 @@ impl RuntimeRegistry {
             },
         };
         let fresh = matches!(launched,Ok(Some(_)));
+        // A vista gravada é do processo anterior: com ela o novo nunca recebe o `initialize`.
+        if fresh { metadata["initialized"] = json!(false); metadata["ready"] = json!(false); }
         let epoch_s = SystemTime::now().duration_since(UNIX_EPOCH).map(|d|d.as_secs_f64()).unwrap_or(0.0);
         let revision = self.revisions.lock().await.entry(target.key.clone()).or_insert_with(||Arc::new(AtomicU64::new(0))).clone();
         let mut engine = RuntimeEngine::new(&target.provider,metadata,target.generation,ClockSample { monotonic_s:0.0,epoch_s })?
@@ -2589,10 +2834,14 @@ impl RuntimeRegistry {
         Some(WriteTarget { key,generation,provider,terminal,healthy,handle })
     }
     /// A saúde que o painel da fila mostra: `None` quando o ator não respondeu no prazo (ocupado entregando),
-    /// para quem pergunta manter o último valor em vez de piscar os botões a cada entrega.
+    /// para quem pergunta manter o último valor em vez de piscar os botões a cada entrega. A adormecida não tem
+    /// ator e o painel age no arquivo da fila dela; acordando, os botões somem até a vida nova.
     pub async fn write_health(&self,name:&str) -> Option<bool> {
         let handle = self.entries.lock().await.values().filter(|e|e.name==name).max_by_key(|e|e.generation).map(|e|e.handle.clone());
-        match handle { Some(handle)=>probe(&handle).await, None=>Some(false) }
+        match handle {
+            Some(handle)=>probe(&handle).await,
+            None=>Some(self.waking_key(name).is_none() && self.asleep(name).await.is_some()),
+        }
     }
     /// A entrada mais nova do nome é de terminal? Sem retrato: serve a decisão que vem antes da porta.
     pub async fn is_terminal(&self,name:&str) -> bool {

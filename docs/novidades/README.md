@@ -30,6 +30,7 @@ O nome do arquivo é `<data>-<nome>.md` (ex.: `2026-10-26-historico-do-composito
 | `sistema` | Opcional. O sistema da máquina que atualiza: `linux`, `windows` e/ou `macos`, separados por vírgula ou espaço (`sistema: linux, macos`). Sem o campo, vale para todos. Nome desconhecido: arquivo ignorado. |
 | `experimente` | Opcional. Uma frase dizendo como testar agora. |
 | `animacao` | Opcional. Nome de um roteiro animado que os apps conhecem. Nome que o app não conhece vira cartão só com texto. `correcao` nunca tem animação: o campo é descartado. |
+| `ancora` | Opcional. Id de uma peça da tela do app nativo (lista em `desktop-native/src/tour/anchors.rs`); com ele, o modal oferece "Mostrar no app", que aponta a peça com um balão. Id desconhecido: o teste do nativo falha. O Expo ignora. |
 
 ## Mudança visível sem novidade
 

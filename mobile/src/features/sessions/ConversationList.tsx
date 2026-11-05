@@ -72,6 +72,8 @@ export function ConversationList({ header, onClose }: { header: ReactElement; on
     }
     results.forEach((r, i) => {
       if (r.status === 'fulfilled') next.set(tried[i].id, r.value);
+      // Convidado não tem Arquivo: a máquina respondeu, só não há o que listar.
+      else if ((r.reason as { code?: string } | undefined)?.code === 'erro_fora_do_convidado') next.set(tried[i].id, []);
       else {
         bad.push({ id: tried[i].id, label: tried[i].label });
         const old = prev.get(tried[i].id);

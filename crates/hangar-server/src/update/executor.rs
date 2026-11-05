@@ -361,14 +361,23 @@ pub async fn restart_only<R: Restarter, H: HealthProbe>(parts: &Parts, request_i
     for note in &parts.notes { state.warn(note); }
     state.step("reiniciar");
     let before = match health.read().await { Reading::Rust { pid, .. } => pid, _ => None };
+    let mark = (!restarter.manual()).then(|| super::startup_output::Mark::take(false));
+    let trail = super::startup_output::Trail::new(health);
+    let restarting = std::time::Instant::now();
     let result = match restarter.restart().await {
         Err(e) => Err(format!("o servidor não reiniciou: {e}")),
-        Ok(()) => super::wait_new(health, before, settings).await,
+        Ok(()) => super::wait_new(&trail, before, settings).await,
     };
     match result {
         Ok(()) => { if !state.publish(json!({"fase": "pronto", "ok": true, "texto": "Reiniciado"})) { return false; } true }
         Err(erro) => {
+            let mut lines = vec![format!("reinício avulso: {:.1} s até desistir; pid antes {}", restarting.elapsed().as_secs_f64(),
+                before.map_or("?".into(), |p| p.to_string()))];
+            lines.extend(trail.lines("prova"));
+            super::log_failure_detail(lines, mark, &parts.home, parts.port, None, None).await;
             tracing::warn!("update: reinício falhou: {erro}");
+            // O relatório pendura as `update: saída` na `update: fim` seguinte: sem ela, iriam para outra rodada.
+            tracing::info!("update: fim outcome=RestartFailed {{ erro: {erro:?} }}");
             if !state.publish(json!({"fase": "pronto", "ok": false, "erro": erro, "reinicio_erro": erro, "voltou": false})) { return false; }
             false
         }
@@ -592,7 +601,7 @@ async fn execute(env: &AccountEnvironment, args: &Args) -> bool {
             };
             let platform = super::platform();
             let job = super::Job { client: &client, release: &parts.release, platform: &platform, layout: &parts.layout, home: &parts.home,
-                state_dir: &parts.state_dir, diary_dir: parts.diary_dir.clone(), ui: Some(&super::ReleaseUi), notes: parts.notes.clone(), settings, startup_output: true };
+                state_dir: &parts.state_dir, diary_dir: parts.diary_dir.clone(), ui: Some(&super::ReleaseUi), notes: parts.notes.clone(), settings, startup_output: Some(parts.port) };
             let outcome = super::run(&job, runner, &restarter, &health, Arc::new(super::ProcInUse)).await;
             tracing::info!(?outcome, "update: fim");
             matches!(outcome, Outcome::Updated { .. } | Outcome::UpdatedManual { .. } | Outcome::UpToDate)

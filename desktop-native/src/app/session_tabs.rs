@@ -77,7 +77,7 @@ pub(crate) fn plate(machine: Option<PlateSegment>, account: Option<PlateSegment>
 
 /// Contexto usado da sessão, em %: o que o backend leu do transcript, senão o da linha de status (a ordem do PWA e do
 /// Expo). Sem a sessão no `parse`: o transcript já foi consultado aqui.
-fn context_pct(session: &SessionInfo) -> Option<f64> {
+pub(super) fn context_pct(session: &SessionInfo) -> Option<f64> {
     session.context.as_ref().filter(|c| c.window > 0.).map(|c| (c.used / c.window * 100.).clamp(0., 100.))
         .or_else(|| crate::status::parse(session.status_line.as_deref(), None)?.ctx_pct)
 }
@@ -466,12 +466,21 @@ impl Hangar {
             cx.on_next_frame(window, move |this, window, cx| this.follow_open_tab(seq, new, from, start, None, window, cx));
         }
         let machines = self.plate_machines(&bands);
-        bands.iter().zip(keys).map(|(group, key)| {
+        // Só uma aba-mãe leva a âncora da dica das filhas: duas com o mesmo id brigariam pela posição. Vai na primeira à
+        // vista na faixa (posição do quadro anterior), senão a dica esperaria por uma aba rolada para fora.
+        let kids_tip = self.tour.tip_pending("kids").then(|| {
+            let view = self.tabs_scroll.bounds();
+            let mothers: Vec<usize> = bands.iter().enumerate().filter(|(_, g)| g.mother && g.label.is_some()).map(|(ix, _)| ix).collect();
+            let shown = |test: &dyn Fn(Bounds<Pixels>) -> bool| mothers.iter().copied().find(|ix| self.tabs_scroll.bounds_for_item(*ix).is_some_and(|b| test(b)));
+            // Nenhuma com o centro à vista: a que aparece em parte ainda pode ter o contador na faixa.
+            shown(&|b| view.contains(&b.center())).or_else(|| shown(&|b| view.intersects(&b))).or(mothers.first().copied())
+        }).flatten();
+        bands.iter().zip(keys).enumerate().map(|(ix, (group, key))| {
             let first = order;
             order += group.members.len();
             let tab = match group.label.as_deref() {
                 None => div().flex_shrink_0().children(self.render_session_tab(&group.members[0], None, None, first, &machines, window, cx)).into_any_element(),
-                Some(label) => match group.mother.then(|| self.render_mother_tab(group, label, first, &machines, window, cx)).flatten() {
+                Some(label) => match group.mother.then(|| self.render_mother_tab(group, label, first, kids_tip == Some(ix), &machines, window, cx)).flatten() {
                     Some(tab) => tab,
                     None => {
                         let (last, size) = group.slot(group.members.len() - 1).expect("grupo com membro");
@@ -491,7 +500,7 @@ impl Hangar {
 
     /// Grupo com mãe: uma aba só, a dela. As filhas viram etiquetas pequenas sobre o nome (o clique abre a filha); o clique no
     /// resto abre a mãe e a janela com as abas inteiras das filhas, para cima quando a faixa fica embaixo.
-    fn render_mother_tab(&self, group: &TabGroup, label: &str, tab_index: usize, machines: &PlateMachines, window: &mut Window,
+    fn render_mother_tab(&self, group: &TabGroup, label: &str, tab_index: usize, kids_anchor: bool, machines: &PlateMachines, window: &mut Window,
         cx: &mut Context<Self>) -> Option<AnyElement> {
         let mother = &group.members[0];
         let session = self.target_session(mother)?;
@@ -509,7 +518,11 @@ impl Hangar {
         // Quem espera a pessoa vem primeiro: com muitas filhas as últimas etiquetas ficam fora da aba.
         kids.sort_by_key(|(_, s, _)| !waits(s));
         let waiting = kids.iter().filter(|(_, s, _)| waits(s)).count();
-        let state = |s: &SessionInfo| tr(&format!("chip_{}", if s.limited == Some(true) { "limited" } else { s.state.as_str() }));
+        let state = |s: &SessionInfo| {
+            let text = tr(&format!("chip_{}", if s.limited == Some(true) { "limited" } else { s.state.as_str() }));
+            // A etiqueta da filha e a aba-mãe não têm largura para o selo: ele vai na dica e no que o leitor de tela diz.
+            if s.asleep { format!("{text} · {}", tr_shared("session_asleep_badge", &[])) } else { text }
+        };
         let host = self.server_label(cx);
         let machine = |t: &Target| self.server_entry(&t.server).map(|s| s.label.clone()).unwrap_or_else(|| host.clone());
         let multi = self.multi_server();
@@ -597,6 +610,7 @@ impl Hangar {
             // A janela das filhas abre só pelo contador; o resto da aba abre a sessão-mãe. Alterna descendo, no mesmo
             // despacho do "clique fora" da janela (que já fechou): `was_open` ainda é o do quadro com ela aberta.
             .child(div().id(SharedString::from(format!("tab-kids-{}", mother.id()))).flex_shrink_0().h(px(22.)).px(px(5.))
+                .when(kids_anchor, |el| popup::anchor(el, crate::tour::anchors::TAB_KIDS))
                 // Borda e fundo no hover: o contador é um botão dentro da aba, e precisa parecer um.
                 .flex().items_center().gap(px(3.)).rounded(px(6.)).cursor_pointer().border_1().border_color(transparent_black())
                 .when(was_open, |el| el.bg(theme::accent_dim()).border_color(theme::accent()))
@@ -623,14 +637,15 @@ impl Hangar {
             }))
             .on_mouse_down(MouseButton::Right, cx.listener(move |this, _, _, cx| this.start_menu(menu_target.clone(), cx)))
             .when(!self.invite_target(mother) && !session.read_only(), |el| {
-                self.group_row(el, session, remote.then_some(mother.server.as_str()), 6., cx).ml(px(0.))
+                self.group_row(el, session, remote.then_some(mother.server.as_str()), 6., false, cx).ml(px(0.))
             })
             .children(window_tabs);
         // As filhas montadas na borda de baixo, a partir do canto esquerdo, e a máquina na de cima. Fora da aba e depois
         // dela: o GPUI pinta a borda por cima do conteúdo do próprio elemento, e aqui é a legenda que tem de cobrir a linha.
         let legend = div().absolute().bottom(px(-KID_CHIP / 2.)).left(px(8.)).right(px(8.)).flex().gap(px(4.)).children(chips);
         Some(div().relative().flex_shrink_0()
-            .child(tab.context_menu(sidebar::session_menu(weak, mother.server.clone(), session.clone())))
+            .child(popup::anchor(tab, crate::tour::anchors::session_row(&mother.server, &mother.name))
+                .context_menu(sidebar::session_menu(weak, mother.server.clone(), session.clone())))
             .child(legend)
             .children(plate.map(|(plate, _)| plate)).into_any_element())
     }
@@ -652,6 +667,8 @@ impl Hangar {
             label.push_str(&format!(" · {}", tr_shared("sessao_grupo_pareado", &[("label", group)])));
         }
         if session.pending_questions > 0 { label.push_str(&format!(" · ? {}", session.pending_questions)); }
+        let asleep = tr_shared("session_asleep_badge", &[]);
+        if session.asleep { label.push_str(&format!(" · {asleep}")); }
         // A aba de trás de um grupo é posicionada pela faixa dele: sem placa.
         let plate = slot.is_none().then(|| self.tab_plate(target, session, on, self.multi_server().then(|| machine.to_owned()), machines)).flatten();
         let ctx = context_pct(session);
@@ -674,6 +691,8 @@ impl Hangar {
             .when(!appearance::get().tab_preview, |el| el.tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(label.clone()).build(window, cx)))
             .child(mark).children(self.session_number_badge(target))
             .child(title)
+            // A aba estreita de trás da faixa não tem largura para o selo: lá ele fica só na dica.
+            .when(session.asleep && !compact, |el| el.child(badge(asleep, theme::muted())))
             .when(session.pending_questions > 0, |el| el.child(div().flex_shrink_0().text_size(px(if compact { 9. } else { 12. })).text_color(theme::warning())
                 .child(if compact { format!("?{}", session.pending_questions) } else { format!("? {}", session.pending_questions) })))
             .on_click(cx.listener(move |this, _, window, cx| this.open_target(&pick, window, cx)))
@@ -685,9 +704,10 @@ impl Hangar {
             }))
             .on_mouse_down(MouseButton::Right, cx.listener(move |this, _, _, cx| this.start_menu(menu_target.clone(), cx)))
             .when(!self.invite_target(target) && !session.read_only(), |el| {
-                self.group_row(el, session, remote.then_some(target.server.as_str()), 6., cx).ml(px(0.))
+                self.group_row(el, session, remote.then_some(target.server.as_str()), 6., false, cx).ml(px(0.))
             });
-        let tab = tab.context_menu(sidebar::session_menu(weak, target.server.clone(), session.clone()));
+        let tab = popup::anchor(tab, crate::tour::anchors::session_row(&target.server, &target.name))
+            .context_menu(sidebar::session_menu(weak, target.server.clone(), session.clone()));
         let Some((plate, _)) = plate else { return Some(tab.into_any_element()) };
         Some(div().relative().flex_shrink_0().child(tab).child(plate).into_any_element())
     }

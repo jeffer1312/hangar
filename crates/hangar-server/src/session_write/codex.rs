@@ -243,9 +243,15 @@ fn literal(fields: &Map<String, Value>, key: &str, values: &[&str]) -> Option<St
 
 /// Sessão Codex que a tabela entrega ao Rust nesta rota. Sem ator aberto, o Codex do Rust é adotado (com
 /// terminal) ou aberto (sem terminal parado) agora: o Python recusaria o próprio cliente.
-async fn ours(st: &AppState, name: Option<&str>) -> Result<bool, RuntimeError> {
+async fn ours(st: &AppState, name: Option<&str>, read: bool) -> Result<bool, RuntimeError> {
     let (Some(runtime), Some(name)) = (st.state.runtime.get(), name) else { return Ok(false) };
     if runtime.writable(name).await.is_none() {
+        // Leitura não acorda a adormecida: só a próxima mensagem sobe o processo dela.
+        // Adormecida de outro agente não é desta rota: segue como antes, sem acordar.
+        if read && let Some(mark) = runtime.asleep(name).await {
+            if mark.provider != "codex" { return Ok(false); }
+            return Err(RuntimeError::new(ASLEEP_READ, "a sessão está adormecida; ela acorda com a próxima mensagem"));
+        }
         match runtime.adopt_now(name).await {
             None => return Ok(false),
             // É do Rust e não abriu: a falha aparece com o código dela, nunca vira repasse.
@@ -254,6 +260,31 @@ async fn ours(st: &AppState, name: Option<&str>) -> Result<bool, RuntimeError> {
         }
     }
     Ok(runtime.writable(name).await.is_some_and(|t| codex_owned(&t.provider, t.terminal)))
+}
+
+/// Leitura numa sessão adormecida, que segue dormindo.
+const ASLEEP_READ: &str = "session_asleep";
+
+/// O arquivo da adormecida: o que ele grava é o que vale quando ela acordar.
+async fn asleep_sidecar(st: &AppState, name: &str) -> Map<String, Value> {
+    let Some(runtime) = st.state.runtime.get() else { return Map::new() };
+    let file = crate::runtime::codex_sidecar::path(&crate::runtime::codex_sidecar::dir(&runtime.codex_environment().home), name);
+    tokio::task::spawn_blocking(move || crate::runtime::codex_sidecar::load(&file)).await.ok().flatten().unwrap_or_default()
+}
+
+/// A leitura da adormecida responde pelo arquivo dela, nas formas de sempre: o modo de permissão, a
+/// configuração sem catálogo (como quando a lista de modelos falha) e nenhum comando. `None`: outra leitura.
+async fn asleep_answer(st: &AppState, name: &str, path: &str, route: WriteRoute) -> Option<Answer> {
+    let meta = asleep_sidecar(st, name).await;
+    let field = |f: &str| meta.get(f).cloned().unwrap_or(Value::Null);
+    if route == WriteRoute::CodexPermission { return Some((StatusCode::OK, permission_modes(meta.get("permission_mode").and_then(Value::as_str)))); }
+    if path.ends_with("/models") {
+        // O plan/default da adormecida com terminal mora na marca.
+        let mode = meta.get("asleep").map(|mark| mark["mode"].clone()).filter(|mode| !mode.is_null()).unwrap_or_else(|| field("mode"));
+        let current = json!({"model": field("model"), "effort": field("effort"), "service_tier": field("service_tier"), "mode": mode});
+        return Some((StatusCode::OK, json!({"models": [], "current": current})));
+    }
+    path.ends_with("/commands").then(|| (StatusCode::OK, json!([])))
 }
 
 /// A saúde fica com a admissão; aqui só provedor e modo, pela mesma tabela que anuncia a posse.
@@ -270,11 +301,17 @@ async fn admit_codex_as(st: &Arc<AppState>, peer: SocketAddr, req: Request, rout
     let (fwd, owner) = match gate(st, peer, &req).await { Ok(value) => value, Err(e) => return Err(crate::auth::unavailable(e)) };
     // Só o dono abre ou adota: o convidado segue ao Python, que o autentica.
     if !owner { return Err(pass(st, req, &fwd).await); }
-    match ours(st, session_name(req.uri().path()).as_deref()).await {
+    let name = session_name(req.uri().path());
+    match ours(st, name.as_deref(), req.method() == axum::http::Method::GET).await {
         Ok(true) => admit(st, peer, req, route).await,
         Ok(false) => Err(pass(st, req, &fwd).await),
         Err(error) => {
-            let mut response = json_response(super::failed_status(&error), detail_body(&error.code, &error.message, json!({})));
+            let asleep = match name.as_deref() {
+                Some(name) if error.code == ASLEEP_READ => asleep_answer(st, name, req.uri().path(), route).await,
+                _ => None,
+            };
+            let (status, body) = asleep.unwrap_or_else(|| (super::failed_status(&error), detail_body(&error.code, &error.message, json!({}))));
+            let mut response = json_response(status, body);
             cors(req.headers(), response.headers_mut());
             Err(response)
         }
@@ -340,11 +377,11 @@ pub async fn limits(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     let (fwd, who) = match who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     let name = session_name(req.uri().path()).filter(|n| who.as_ref().is_some_and(|c| c.can(n, req.method())));
     let (Some(runtime), Some(name)) = (st.state.runtime.get(), name) else { return pass(&st, req, &fwd).await };
-    match ours(&st, Some(&name)).await {
+    match ours(&st, Some(&name), true).await {
         Ok(true) => {}
         Ok(false) => return pass(&st, req, &fwd).await,
-        // Conversa ainda abrindo: ainda não há cota a ler, e a resposta é a neutra.
-        Err(error) if error.code == crate::runtime::codex_relaunch::STARTING => {}
+        // Conversa ainda abrindo ou adormecida: não há cota a ler, e a resposta é a neutra.
+        Err(error) if error.code == crate::runtime::codex_relaunch::STARTING || error.code == ASLEEP_READ => {}
         // Do Rust e não abriu: o código da falha, como nas outras rotas do Codex, nunca a resposta neutra.
         Err(error) => {
             let mut response = json_response(StatusCode::SERVICE_UNAVAILABLE, detail_body(&error.code, &error.message, json!({})));
@@ -489,9 +526,18 @@ async fn terminal_permission(ctx: &Ctx, action: PermissionAction) -> Answer {
         Err(_) => None,
     };
     let driver = crate::runtime::codex_terminal::pane_driver(&target.terminal, cell.pane_serial(), Some(ctx.st.term.clone()));
+    let setting = matches!(action, PermissionAction::Set { .. });
     let sent = crate::permission_control::codex(&driver, action).await;
     if let Err(error) = &sent && crate::warn_limit::allow(Some(&ctx.name), &format!("codex_permission:{}", error.code)) {
         tracing::warn!(session = %ctx.name, code = %error.code, message = %error.message, "seletor de permissões do Codex falhou");
+    }
+    // O modo trocado vai ao arquivo da sessão: o rollout só o grava na próxima rodada, e adormecer antes
+    // dela acordaria com o modo antigo, às vezes mais permissivo.
+    let confirmed = sent.as_ref().ok().filter(|_| setting).and_then(|value| value["current"].as_str()).map(str::to_owned);
+    if let (Some(mode), Some(dir)) = (confirmed, target.sidecar_dir.clone()) {
+        let (name, key, app_pid) = (ctx.name.clone(), target.key.clone(), target.app_pid);
+        let saved = tokio::task::spawn_blocking(move || crate::runtime::codex_sidecar::remember_permission(&dir, &name, &key, app_pid, &mode)).await;
+        if !matches!(saved, Ok(Ok(true))) { tracing::warn!(session = %ctx.name, code = "codex_permission_unsaved", "o modo trocado no terminal não foi gravado no arquivo da sessão"); }
     }
     terminal_permission_answer(&sent)
 }

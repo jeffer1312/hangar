@@ -4,7 +4,6 @@ O registry so enxerga sessoes tmux; os jsonl antigos ficam orfaos. Aqui: listage
 data, se esta em uso por uma sessao viva) + resolucao de path VALIDADA (nunca leitura arbitraria de
 disco: projeto no alfabeto do sanitize_cwd, session_id uuid, e o arquivo tem que existir dentro do
 projects_dir)."""
-import heapq
 import json
 import logging
 import os
@@ -16,9 +15,7 @@ from typing import Optional
 from pydantic import BaseModel
 
 from app.config import list_config_dirs, settings
-from app.models import ChatEvent
 from app.transcript import parse_obj
-from app import closed_names, codex_contas
 
 _log = logging.getLogger("hangar.archive")
 
@@ -34,30 +31,6 @@ class ArchiveFolder(BaseModel):
     cwd: Optional[str] = None    # cwd real, lido do transcript mais recente
     count: int                   # quantas conversas na pasta
     mtime: float                 # atividade mais recente
-
-
-class ArchiveEntry(BaseModel):
-    project: str                 # nome do dir em projects/ (cwd sanitizado)
-    cwd: Optional[str] = None    # cwd real, lido de dentro do transcript
-    session_id: str
-    mtime: float
-    preview: str                 # 1a msg de usuario (de onde a conversa partiu)
-    ultima: str = ""             # ULTIMA msg da conversa -- e o que identifica "qual e essa" meses
-                                 # depois; a 1a msg, nao (todas comecam parecidas).
-    live: bool = False           # em uso por uma sessao tmux viva agora
-    # CONTA dona do transcript (config_dir) e o rotulo dela (conta). Um `claude --resume <uuid>`
-    # rodado na conta errada morre na hora com "No conversation found with session ID" -> retomar
-    # precisa levar a conta junto, e a tela precisa mostrar de qual conta e cada conversa.
-    config_dir: Optional[str] = None
-    conta: str = ""
-    # Pi, Kimi e Codex guardam transcript FORA do projects/ da conta (ver app.archive_providers).
-    # `project` continua sendo o cwd sanitizado, entao a pasta e a mesma pros quatro.
-    provider: str = "claude"
-    codex_home: Optional[str] = None
-    codex_account: Optional[str] = None
-    # Nome que a sessão tinha no Hangar ao ser fechada (closed_names); conversa fechada antes do
-    # registro existir fica sem nome.
-    name: Optional[str] = None
 
 
 def _head_info(jsonl: Path, max_lines: int = 60) -> tuple[str, Optional[str]]:
@@ -86,8 +59,6 @@ def _head_info(jsonl: Path, max_lines: int = 60) -> tuple[str, Optional[str]]:
         pass
     return preview, cwd
 
-
-_TAIL_BYTES = 64 * 1024
 
 # Marcacao que o assistente escreve e que numa LINHA de lista so vira ruido (`**titulo**`, crase,
 # `#`, `>` e marcador de item). Aqui a saida e uma linha de 100 caracteres, entao renderizar nao e
@@ -134,13 +105,6 @@ def _obj_da_linha(linha: bytes) -> Optional[dict]:
     return obj if isinstance(obj, dict) else None
 
 
-def _parse(provider: str, obj: dict) -> list[ChatEvent]:
-    if provider == "claude":
-        return parse_obj(obj)
-    from app import archive_providers
-    return archive_providers.parse_obj(provider, obj)
-
-
 def _cortar(texto: str, limite: int = 120) -> str:
     """Corte na palavra e com reticencias: quem le a lista precisa saber que a frase continua --
     cortar no caractere 100 exato deixava 'fronte' e 'reenvi' parecendo a mensagem inteira."""
@@ -151,29 +115,6 @@ def _cortar(texto: str, limite: int = 120) -> str:
     if espaco > limite // 2:
         curto = curto[:espaco]
     return curto.rstrip(" ,;:.") + "…"
-
-
-def _tail_info(jsonl: Path, provider: str = "claude") -> str:
-    """Ultima msg (de quem for) da conversa. Duas passadas de tamanho crescente porque UMA entrada
-    pode passar de 64KB sozinha (imagem colada, saida grande de ferramenta)."""
-    if provider == "codex":
-        from app import archive_providers
-        composed = archive_providers.transferred_history(jsonl)
-        if composed is not None:
-            return next((_cortar(_texto_simples(event.text)) for event in reversed(composed)
-                         if event.kind in ("user_msg", "assistant_msg") and event.text), "")
-    for span in (_TAIL_BYTES, _TAIL_BYTES * 16):
-        linhas, do_inicio = _linhas_do_fim(jsonl, span)
-        for linha in reversed(linhas):
-            obj = _obj_da_linha(linha)
-            if obj is None:
-                continue
-            for ev in reversed(_parse(provider, obj)):
-                if ev.kind in ("user_msg", "assistant_msg") and ev.text:
-                    return _cortar(_texto_simples(ev.text))
-        if do_inicio:
-            break   # ja era o arquivo inteiro: aumentar o span nao traz mais nada
-    return ""
 
 
 def conversation_files(proj: Path) -> list[Path]:
@@ -287,26 +228,8 @@ def _projeto_de(cwd: Optional[str]) -> Optional[str]:
 
 
 def _conversas_de_outros_providers():
-    from app import archive_providers, transcript_index
-    idx = transcript_index.current()
-    # A varredura de Pi/Kimi/Codex custa mais que o resto da listagem: vale a da ultima passada do
-    # indice (conversa nova aparece com no maximo um intervalo de atraso).
-    if idx is not None and idx.providers is not None:
-        return idx.providers
+    from app import archive_providers
     return archive_providers.conversas()
-
-
-def _heads() -> dict[str, tuple[str, Optional[str]]]:
-    """Cabecalhos (preview, cwd) ja lidos pelo indice; arquivo fora dele cai no _head_info."""
-    from app import transcript_index
-    idx = transcript_index.current()
-    if idx is None:
-        return {}
-    try:
-        return idx.heads()
-    except Exception:
-        _log.warning("arquivo: indice ilegivel, lendo cabecalhos do disco", exc_info=True)
-        return {}
 
 
 def list_folders(config_dir: Optional[str] = None) -> list[ArchiveFolder]:
@@ -314,7 +237,6 @@ def list_folders(config_dir: Optional[str] = None) -> list[ArchiveFolder]:
     costuma existir em varias contas -- aqui elas somam numa linha so (a pasta e o que o usuario
     procura; de qual conta e cada conversa so importa um nivel abaixo)."""
     agg: dict[str, ArchiveFolder] = {}
-    heads = _heads()
     for _cfg, _rot, base in _contas(config_dir):
         try:
             projdirs = [d for d in base.iterdir() if d.is_dir()]
@@ -322,11 +244,10 @@ def list_folders(config_dir: Optional[str] = None) -> list[ArchiveFolder]:
             continue
         for proj in projdirs:
             files = [(mt, f) for mt, f in _folder_files(proj)
-                     if _tem_usuario(f, (heads.get(str(f)) or ("", None))[0], mt)]
+                     if _tem_usuario(f, "", mt)]
             if not files:
                 continue
-            # cwd real do transcript mais recente (1 leitura/pasta quando o indice ainda nao tem)
-            _, cwd = heads.get(str(files[0][1])) or _head_info(files[0][1])
+            _, cwd = _head_info(files[0][1])
             ja = agg.get(proj.name)
             if ja is None:
                 agg[proj.name] = ArchiveFolder(project=proj.name, cwd=cwd, count=len(files),
@@ -355,113 +276,6 @@ def list_folders(config_dir: Optional[str] = None) -> list[ArchiveFolder]:
     return out
 
 
-def list_conversations(project: str, live_realpaths: set[str], cap: int = 100,
-                       config_dir: Optional[str] = None,
-                       codex_account: str | None = None,
-                       provider: str | None = None,
-                       closed: dict[str, str] | None = None) -> list[ArchiveEntry]:
-    """`closed`: os nomes de `closed_names.names()` já lidos (o `list_recent` lê uma vez só).
-
-    Nivel 2: conversas de UMA pasta, em TODAS as contas (ou so na pedida), mais recentes
-    primeiro. O preview abre cada arquivo -> o teto limita o custo por request; ele vale pro
-    resultado JUNTO, senao 4 contas custariam 4x o teto. FileNotFoundError so quando a pasta nao
-    existe em conta nenhuma."""
-    if not _PROJ_RE.match(project):
-        raise ValueError("caminho invalido")
-    if codex_account is not None:
-        codex_contas.resolve_account(codex_account)
-    achou = False
-    linhas: list[tuple[float, Path, Optional[str], str]] = []
-    for cfg, rotulo, base in _contas(config_dir):
-        proj = base / project
-        if not proj.is_dir():
-            continue
-        achou = True
-        linhas += [(mt, f, cfg, rotulo) for mt, f in _folder_files(proj)]
-    # Ordenar ANTES do teto: a ordem que vem do disco e a do glob/indice, nao a de recencia, entao
-    # cortar direto descartaria conversa NOVA e manteria velha -- calado, e justo na lista que diz
-    # "mais recentes primeiro".
-    # Pedido so de Claude nao paga a varredura dos rollouts de Codex/Pi/Kimi: o filtro logo abaixo
-    # descartaria tudo, mas a leitura ja teria acontecido (7x o tempo da listagem multi-conta).
-    outras = sorted((c for c in (() if config_dir or provider == "claude"
-                                 else _conversas_de_outros_providers())
-                     if _projeto_de(c.cwd) == project
-                     and (provider is None or c.provider == provider)),
-                    key=lambda c: c.mtime, reverse=True)
-    if not achou and not outras:
-        raise FileNotFoundError(project)
-    linhas.sort(key=lambda t: t[0], reverse=True)
-    if provider is not None and provider != "claude":
-        linhas = []
-    out: list[ArchiveEntry] = []
-    heads = _heads() if linhas else {}
-    if closed is None:
-        closed = closed_names.names() if linhas or outras else {}
-    for mt, f, cfg, rotulo in linhas:
-        if len(out) >= cap:
-            break
-        preview, cwd = heads.get(str(f)) or _head_info(f)
-        if not _tem_usuario(f, preview, mt):
-            continue
-        real = os.path.realpath(str(f))
-        out.append(ArchiveEntry(
-            project=project, cwd=cwd, session_id=f.stem, mtime=mt,
-            preview=preview, ultima=_tail_info(f), config_dir=cfg, conta=rotulo,
-            live=real in live_realpaths, name=closed.get(real),
-        ))
-    outras_com_origem: list[tuple[object, object | None]] = []
-    for c in outras:
-        owner = None
-        if c.provider == "codex":
-            owner = codex_contas.account_for_rollout(c.path)
-            if codex_account is not None and (owner is None or owner.id != codex_account):
-                continue
-        outras_com_origem.append((c, owner))
-    for c, owner in outras_com_origem[:cap]:
-        # `preview` fica vazio de proposito: nos outros providers o cwd ja veio do indice/cabecalho,
-        # entao abrir o comeco do arquivo so pra pegar a 1a msg seria uma leitura a mais por uma
-        # informacao que a lista nem mostra (quem identifica a conversa e a ULTIMA msg).
-        out.append(ArchiveEntry(
-            project=project, cwd=c.cwd, session_id=c.session_id, mtime=c.mtime,
-            preview="", ultima=_tail_info(c.path, c.provider), provider=c.provider,
-            live=os.path.realpath(str(c.path)) in live_realpaths,
-            codex_home=c.codex_home if c.provider == "codex" else None,
-            codex_account=owner.id if owner is not None else None,
-            name=closed.get(os.path.realpath(str(c.path))),
-        ))
-    out.sort(key=lambda e: e.mtime, reverse=True)
-    return out[:cap]
-
-
-def list_recent(live_realpaths: set[str], cap: int = 40) -> list[ArchiveEntry]:
-    """Conversas mais recentes de TODAS as pastas. Duas fases: uma varredura barata (so mtime) acha
-    de quais pastas vem as `cap` mais novas e quantas de cada; so entao se le o preview/fim delas."""
-    candidatas: list[tuple[float, str]] = []
-    for _cfg, _rot, base in _contas():
-        try:
-            projdirs = [d for d in base.iterdir() if d.is_dir()]
-        except OSError:
-            continue
-        for proj in projdirs:
-            candidatas += [(mt, proj.name) for mt, _f in _folder_files(proj)]
-    for c in _conversas_de_outros_providers():
-        proj = _projeto_de(c.cwd)
-        if proj is not None:
-            candidatas.append((c.mtime, proj))
-    por_pasta: dict[str, int] = {}
-    for _mt, proj in heapq.nlargest(cap, candidatas, key=lambda t: t[0]):
-        por_pasta[proj] = por_pasta.get(proj, 0) + 1
-    out: list[ArchiveEntry] = []
-    closed = closed_names.names() if por_pasta else {}
-    for proj, k in por_pasta.items():
-        try:
-            out += list_conversations(proj, live_realpaths, cap=k, closed=closed)
-        except (ValueError, FileNotFoundError):
-            continue
-    out.sort(key=lambda e: e.mtime, reverse=True)
-    return out[:cap]
-
-
 def archive_jsonl(project: str, session_id: str, config_dir: Optional[str] = None,
                   provider: str = "claude", codex_account: str | None = None) -> Path:
     """Path validado do transcript arquivado. ValueError = componente invalido (traversal barrado);
@@ -485,42 +299,6 @@ def archive_jsonl(project: str, session_id: str, config_dir: Optional[str] = Non
         if p.is_file():
             return p
     raise FileNotFoundError(str(ultimo or (_base(config_dir) / project / f"{session_id}.jsonl")))
-
-
-def tail_events(project: str, session_id: str, n: int = 30, config_dir: Optional[str] = None,
-                provider: str = "claude", codex_account: str | None = None) -> list[ChatEvent]:
-    """As ULTIMAS n mensagens da conversa, pra confirmar "e essa mesmo?" antes de retomar. Le pelo
-    fim (`seek`), NAO pelo /history: aquele carrega o transcript inteiro, e aqui um arquivo de 19MB
-    seria aberto so pra mostrar cinco balões. So user/assistente -- chamada de ferramenta encheria a
-    caixa de ruido justamente onde o espaco e pouco.
-
-    O span cresce ate juntar n eventos ou ate o arquivo acabar; conversa curta devolve menos que n.
-    Crescer e obrigatorio, nao otimizacao: medido nesta sessao, as ultimas 2MB de um transcript de
-    15MB tinham 300 linhas e apenas SEIS mensagens de texto -- o resto era `attachment`, tool_use e
-    metadado. Com um span fixo a previa vinha quase vazia justo nas conversas longas."""
-    p = archive_jsonl(project, session_id, config_dir, provider, codex_account)
-    if provider == "codex":
-        from app import archive_providers
-        composed = archive_providers.transferred_history(p)
-        if composed is not None:
-            return [event for event in composed if event.kind in ("user_msg", "assistant_msg") and event.text][-n:]
-    out: list[ChatEvent] = []
-    span = _TAIL_BYTES * 4
-    while True:
-        linhas, do_inicio = _linhas_do_fim(p, span)
-        out = []
-        for linha in reversed(linhas):
-            obj = _obj_da_linha(linha)
-            if obj is None:
-                continue
-            for ev in reversed(_parse(provider, obj)):
-                if ev.kind in ("user_msg", "assistant_msg") and ev.text:
-                    out.append(ev)
-            if len(out) >= n:
-                break
-        if len(out) >= n or do_inicio:
-            return list(reversed(out[:n]))
-        span *= 8
 
 
 def archive_cwd(project: str, session_id: str, config_dir: Optional[str] = None,

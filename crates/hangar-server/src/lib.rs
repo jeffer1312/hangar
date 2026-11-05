@@ -1,6 +1,8 @@
 //! Servidor do Hangar: lê conversas e custos das sessões e repassa o restante ao backend Python.
 pub mod startup;
 pub mod accounts;
+pub mod archive_history;
+pub mod archive_list;
 pub mod artifacts;
 pub mod auth;
 pub mod remote_browser;
@@ -15,12 +17,14 @@ pub mod claude_customizations;
 pub mod jev_aux;
 pub mod keyring;
 pub mod claude_defaults;
+pub mod claude_p;
 pub mod presence;
 pub mod watchdog;
 pub mod costs;
 pub mod costs_routes;
 pub mod costs_failure;
 pub mod device_install;
+pub mod devices;
 pub mod diag;
 pub(crate) mod diag_report;
 pub mod display_env;
@@ -46,10 +50,15 @@ pub mod queue_panel;
 mod plugin_listener;
 pub mod routes;
 pub mod runtime;
+pub mod search;
+pub mod search_context;
 pub mod session_open;
 pub mod session_rename;
 pub mod session_defaults;
+pub mod session_sleep;
+pub mod session_visibility;
 pub mod tags;
+pub mod tour_progress;
 pub mod push;
 pub mod push_expo;
 pub mod session_media;
@@ -89,6 +98,7 @@ pub mod machine_peers;
 pub mod install_root;
 pub mod update;
 pub mod ui;
+pub mod vault;
 pub mod voice;
 pub mod plans;
 mod forwarded;
@@ -420,7 +430,7 @@ mod tests {
 /// Grava um executável de teste sem abrir o arquivo para escrita neste processo: quem grava é um
 /// `install` à parte. Gravado aqui, um filho de outro teste nascido nesse instante herdaria o descritor
 /// de escrita, e rodar o arquivo daria "Text file busy" (ETXTBSY).
-#[cfg(all(unix, any(test, target_os = "linux")))]
+#[cfg(all(unix, test))]
 pub(crate) fn write_test_executable(path: &std::path::Path, content: impl AsRef<[u8]>) {
     let source = path.with_extension("conteudo");
     std::fs::write(&source, content).unwrap();

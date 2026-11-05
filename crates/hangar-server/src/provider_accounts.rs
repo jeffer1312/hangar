@@ -105,7 +105,7 @@ pub fn kimi_account(env: &AccountEnvironment) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::Value;
+    use serde_json::json;
     use std::collections::BTreeMap;
 
     fn environment(home: &std::path::Path) -> AccountEnvironment {
@@ -121,8 +121,11 @@ mod tests {
     }
 
     #[test]
-    fn source_timestamps_keep_the_python_float_precision() {
-        let fixture: Value = serde_json::from_str(include_str!("../../../backend/tests/fixtures/contract/provider-accounts/mtime.json")).unwrap();
+    fn source_timestamps_keep_float_precision() {
+        const STAMP_NS: u64 = 1_800_000_000_000_000_000;
+        // A 1 ns de distância o carimbo em float não muda: a conta segue no cache.
+        const DELTA_NS: u64 = 1;
+        let expected = serde_json::json!({"kimi": "apikey", "pi": "kimi:apikey"});
         let home = tempfile::tempdir().unwrap();
         let env = environment(home.path());
         let kimi = home.path().join(".kimi-code/config.toml");
@@ -130,17 +133,17 @@ mod tests {
         for path in [&kimi, &auth] { std::fs::create_dir_all(path.parent().unwrap()).unwrap(); }
         std::fs::write(&kimi, "default_model=\"apikey/k3\"\n[providers.apikey]\ntype=\"kimi\"\napi_key=\"synthetic\"\nbase_url=\"https://example.invalid\"\n").unwrap();
         std::fs::write(&auth, r#"{"provider":{"key":"synthetic"}}"#).unwrap();
-        let stamp = std::time::UNIX_EPOCH + std::time::Duration::from_nanos(fixture["stamp_ns"].as_u64().unwrap());
+        let stamp = std::time::UNIX_EPOCH + std::time::Duration::from_nanos(STAMP_NS);
         for path in [&kimi, &auth] { at(path, stamp); }
         let read = || serde_json::json!({
             "pi": pi_account(&env, Some("provider")),
             "kimi": kimi_account(&env).map(|account| account.strip_prefix("kimi:").unwrap().to_owned()),
         });
-        assert_eq!(read(), fixture["first"]);
+        assert_eq!(read(), expected);
         std::fs::write(&kimi, "default_model=\"outro/k3\"\n[providers.outro]\ntype=\"kimi\"\napi_key=\"other\"\nbase_url=\"https://example.invalid\"\n").unwrap();
         std::fs::write(&auth, r#"{"provider":{"key":"unknown"}}"#).unwrap();
-        for path in [&kimi, &auth] { at(path, stamp + std::time::Duration::from_nanos(fixture["delta_ns"].as_u64().unwrap())); }
-        assert_eq!(read(), fixture["after"]);
+        for path in [&kimi, &auth] { at(path, stamp + std::time::Duration::from_nanos(DELTA_NS)); }
+        assert_eq!(read(), expected);
     }
 
     #[test]
@@ -189,22 +192,35 @@ mod tests {
     }
 
     #[test]
-    fn provider_accounts_match_the_python_characterization_including_credential_priority() {
-        let fixture: Value = serde_json::from_str(include_str!("../../../backend/tests/fixtures/contract/provider-accounts/accounts.json")).unwrap();
-        for case in fixture["cases"].as_array().unwrap() {
+    fn provider_accounts_follow_the_credential_priority() {
+        const KIMI_A: &str = "[providers.apikey]\ntype=\"kimi\"\napi_key=\"synthetic-a\"\nbase_url=\"https://example.invalid\"\n";
+        const KIMI_A_DEFAULT: &str = "default_model=\"apikey/k3\"\n[providers.apikey]\ntype=\"kimi\"\napi_key=\"synthetic-a\"\nbase_url=\"https://example.invalid\"\n";
+        const KIMI_OAUTH: &str = "default_model=\"oauth/k3\"\n[providers.oauth]\ntype=\"oauth\"\n";
+        let empty = || json!({});
+        let manual_model = || json!({"providers": {"manual": {"apiKey": "synthetic-a"}}});
+        // (nome, auth, models, config do Kimi, engines, provider, conta do Pi, conta do Kimi)
+        let cases = [
+            ("same-key-different-provider-name", json!({"kimi-coding": {"type": "api_key", "key": "synthetic-a"}}), empty(), KIMI_A_DEFAULT, empty(), Some("kimi-coding"), Some("kimi:apikey"), Some("apikey")),
+            ("engine-key", json!({"zen": {"key": "synthetic-b"}}), empty(), "", json!({"deepseek": {"api_key": "synthetic-b", "base_url": "https://example.invalid"}}), Some("zen"), Some("chave:deepseek"), None),
+            ("oauth-does-not-invent-an-account", json!({"codex": {"type": "oauth", "access": "synthetic"}}), empty(), "", empty(), Some("codex"), None, None),
+            ("manual-model-key", empty(), manual_model(), KIMI_A, empty(), Some("manual"), Some("kimi:apikey"), None),
+            ("auth-has-priority-over-models", json!({"manual": {"key": "unknown"}}), manual_model(), KIMI_A, empty(), Some("manual"), None, None),
+            ("kimi-key-has-priority-over-engine-key", json!({"shared": {"key": "synthetic-a"}}), empty(), KIMI_A, json!({"engine": {"api_key": "synthetic-a"}}), Some("shared"), Some("kimi:apikey"), None),
+            ("kimi-oauth-default-has-no-account", empty(), empty(), KIMI_OAUTH, empty(), None, None, None),
+        ];
+        for (name, auth, models, kimi, engines, provider, pi_expected, kimi_expected) in cases {
             let home = tempfile::tempdir().unwrap();
             for dir in [".pi/agent", ".kimi-code", ".claude"] {
                 std::fs::create_dir_all(home.path().join(dir)).unwrap();
             }
-            for (path, value) in [(".pi/agent/auth.json", &case["auth"]), (".pi/agent/models.json", &case["models"]), (".claude/engines.json", &case["engines"])] {
+            for (path, value) in [(".pi/agent/auth.json", &auth), (".pi/agent/models.json", &models), (".claude/engines.json", &engines)] {
                 std::fs::write(home.path().join(path), value.to_string()).unwrap();
             }
-            std::fs::write(home.path().join(".kimi-code/config.toml"), case["kimi"].as_str().unwrap()).unwrap();
+            std::fs::write(home.path().join(".kimi-code/config.toml"), kimi).unwrap();
             let env = environment(home.path());
-            assert_eq!(serde_json::to_value(pi_account(&env, case["provider"].as_str())).unwrap(), case["expected"]["pi"], "{}", case["name"]);
-            // O leitor Python devolvia o provider; a lista acrescentava o prefixo da conta.
-            let provider = kimi_account(&env).map(|account| account.strip_prefix("kimi:").unwrap().to_owned());
-            assert_eq!(serde_json::to_value(provider).unwrap(), case["expected"]["kimi"], "{}", case["name"]);
+            assert_eq!(pi_account(&env, provider).as_deref(), pi_expected, "{name}");
+            let got = kimi_account(&env).map(|account| account.strip_prefix("kimi:").unwrap().to_owned());
+            assert_eq!(got.as_deref(), kimi_expected, "{name}");
         }
     }
 }

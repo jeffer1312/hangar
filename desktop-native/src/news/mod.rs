@@ -4,7 +4,14 @@ mod account_tags;
 mod auto_report;
 mod codex_activity;
 mod composer_history;
+mod login_browser;
+mod password_vault;
+mod hide_from_list;
+mod image_reveal;
 mod rename_suggestion;
+mod search_conversations;
+mod sleep_hidden;
+mod tour;
 
 use std::time::Instant;
 use gpui_kit::*;
@@ -19,7 +26,14 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "codex-atividade" => Some(codex_activity::render),
         "etiquetas-maquina-conta" => Some(account_tags::render),
         "sugestao-de-nome" => Some(rename_suggestion::render),
+        "tour-nativo" => Some(tour::render),
+        "cofre-de-senhas" => Some(password_vault::render),
         "relatorio-automatico" => Some(auto_report::render),
+        "login-navegador" => Some(login_browser::render),
+        "ocultar-da-lista" => Some(hide_from_list::render),
+        "busca-conversas" => Some(search_conversations::render),
+        "revelacao-imagem" => Some(image_reveal::render),
+        "adormecer-ocultas" => Some(sleep_hidden::render),
         _ => None,
     }
 }

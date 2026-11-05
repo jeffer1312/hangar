@@ -445,8 +445,12 @@ const DIARY_COMMANDS: [&str; 19] = ["list-sessions", "list-panes", "has-session"
 /// Consultas cujo "não existe" (rc 1) é resposta, não falha.
 const ABSENCE_OK: [&str; 4] = ["list-sessions", "list-panes", "has-session", "show-options"];
 
+/// Comandos cujo argv leva texto da sessão: o stderr deles pode repetir esse texto.
+const TEXT_COMMANDS: [&str; 4] = ["send-keys", "set-buffer", "load-buffer", "paste-buffer"];
+
 /// A linha `mux.comando` do `tmux._run` do Python: comando falho (fora a ausência esperada), sem
-/// resposta ou de 1 s ou mais. Nem argv nem stderr.
+/// resposta ou de 1 s ou mais. Sem argv; do stderr, a primeira linha (o que separa ausência que o
+/// filtro não conhece de falha real), fora dos comandos que levam texto.
 fn command_line(argv: &[String], out: &MuxOutput, failure: Option<(&str, Option<i32>)>, elapsed: Duration, limit: Duration,
                 simultaneous: usize) -> Option<serde_json::Value> {
     let mux = Path::new(&argv[0]).file_stem().is_some_and(|s| s == "tmux" || s == "psmux");
@@ -462,6 +466,9 @@ fn command_line(argv: &[String], out: &MuxOutput, failure: Option<(&str, Option<
     let mut line = serde_json::json!({"evento": "mux.comando", "nivel": if failed && !expected { "erro" } else { "aviso" }, "comando": command,
         "ms": ms, "limite_ms": limit.as_millis() as u64, "simultaneos": simultaneous, "retorno": out.code,
         "erro_tipo": failure.map_or(if failed { "retorno" } else { "" }, |(kind, _)| kind), "errno": failure.and_then(|(_, errno)| errno)});
+    if failed && !TEXT_COMMANDS.contains(&command) && let Some(first) = stderr.lines().map(str::trim).find(|l| !l.is_empty()) {
+        line["stderr"] = first.chars().take(160).collect::<String>().into();
+    }
     #[cfg(target_os = "linux")]
     if let Ok(text) = std::fs::read_to_string("/proc/meminfo") {
         let kb = |key: &str| text.lines().find_map(|l| l.strip_prefix(key)?.trim().split_whitespace().next()?.parse::<u64>().ok());
@@ -536,15 +543,10 @@ pub(crate) mod tests {
             default_config_dir: "/r/home/.claude".into(), birth: Duration::from_millis(500) }
     }
 
-    fn fixture(name: &str) -> Value {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../backend/tests/fixtures/contract/session-open").join(format!("{name}.json"));
-        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
-    }
-
-    /// O argv que o Python passou ao `new-session` no cenário e o `-e` da sessão (depois de `CP_PROVIDER`
-    /// e do `WAYLAND_DISPLAY`, antes da conta).
-    fn python_argv(name: &str) -> (Vec<String>, Vec<(String, String)>) {
-        let fixture = fixture(name);
+    /// O argv do `new-session` escrito no cenário e o `-e` da sessão (depois de `CP_PROVIDER` e do
+    /// `WAYLAND_DISPLAY`, antes da conta).
+    fn expected_argv(name: &str) -> (Vec<String>, Vec<(String, String)>) {
+        let fixture = crate::session_open::cases::named(name);
         let tmux = fixture["result"]["subprocesses"].as_array().unwrap().iter().find(|p| p["prog"] == "tmux").unwrap();
         let concrete = |a: &str| a.replace("<ROOT>", "/r").replace("<REPO>", "/repo").replace("<uuid:1>", "11111111-1111-4111-8111-111111111111");
         let argv: Vec<String> = tmux["argv"].as_array().unwrap().iter().map(|a| concrete(a.as_str().unwrap())).collect();
@@ -562,12 +564,12 @@ pub(crate) mod tests {
                 "/repo/plugins/github-actions", "--permission-mode", "bypassPermissions"].map(str::to_owned).into() }
     }
 
-    /// O mesmo argv do Python, mais o `CP_SESSION_KEY` (matriz, item 2) e o `/bin/sh -c` que tira o
+    /// O argv do cenário, mais o `CP_SESSION_KEY` (matriz, item 2) e o `/bin/sh -c` que tira o
     /// `default-shell` do caminho: conta padrão com `env -u`, conta escolhida por `-e`.
     #[test]
-    fn the_new_session_argv_is_the_python_one_plus_the_session_key() {
+    fn the_new_session_argv_is_the_expected_one_plus_the_session_key() {
         for (fixture, config_dir) in [("create_claude_terminal_default", None), ("create_claude_terminal_account_b", Some("/r/home/.claude-b"))] {
-            let (mut python, env) = python_argv(fixture);
+            let (mut python, env) = expected_argv(fixture);
             let at = python.iter().position(|a| a == "CP_PROVIDER=claude").unwrap() + 1;
             python.splice(at..at, ["-e".to_owned(), format!("CP_SESSION_KEY={}", "k".repeat(32))]);
             python.insert(0, "tmux".into());
@@ -811,18 +813,22 @@ pub(crate) mod tests {
     async fn a_failed_mux_command_goes_to_the_diary() {
         let dir = tempfile::tempdir().unwrap();
         let tmux = dir.path().join("tmux");
-        crate::write_test_executable(&tmux, "#!/bin/sh\ncase \"$1\" in new-session) echo segredo >&2; exit 1;; has-session) echo \"can't find session: x\" >&2; exit 1;; esac\n");
+        crate::write_test_executable(&tmux, concat!("#!/bin/sh\ncase \"$1\" in new-session) echo 'create window failed: fork failed' >&2; exit 1;; ",
+            "send-keys) echo 'texto digitado secreto' >&2; exit 1;; has-session) echo \"can't find session: x\" >&2; exit 1;; esac\n"));
         let diary = dir.path().join("diario");
         let mux = ProcessMux { diary: Some(diary.clone()), ..ProcessMux::default() };
         let tmux = tmux.to_string_lossy().into_owned();
         mux.run(vec![tmux.clone(), "has-session".into(), "-t".into(), "=x".into()]).await;
-        mux.run(vec![tmux, "new-session".into(), "-d".into(), "-s".into(), "s1".into()]).await;
+        mux.run(vec![tmux.clone(), "new-session".into(), "-d".into(), "-s".into(), "s1".into()]).await;
+        mux.run(vec![tmux, "send-keys".into(), "-t".into(), "=s1".into(), "argv secreto".into()]).await;
         let text: String = std::fs::read_dir(&diary).unwrap().flatten().map(|f| std::fs::read_to_string(f.path()).unwrap()).collect();
         let lines: Vec<Value> = text.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
-        assert_eq!(lines.len(), 1, "a ausência esperada do has-session não entra: {text}");
+        assert_eq!(lines.len(), 2, "a ausência esperada do has-session não entra: {text}");
         assert_eq!((&lines[0]["evento"], &lines[0]["nivel"], &lines[0]["comando"], &lines[0]["retorno"], &lines[0]["erro_tipo"], &lines[0]["limite_ms"]),
             (&serde_json::json!("mux.comando"), &serde_json::json!("erro"), &serde_json::json!("new-session"), &serde_json::json!(1), &serde_json::json!("retorno"), &serde_json::json!(5000)));
-        assert!(!text.contains("segredo") && !text.contains("s1"), "{text}");
+        assert_eq!(lines[0]["stderr"], "create window failed: fork failed");
+        assert_eq!(lines[1]["comando"], "send-keys");
+        assert!(!text.contains("secreto"), "argv nunca, e stderr de comando com texto também não: {text}");
     }
 
     /// A recusa passageira do systemd a escopos criados juntos se repete, com espera, até três

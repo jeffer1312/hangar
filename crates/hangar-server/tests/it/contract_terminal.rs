@@ -1,4 +1,47 @@
 use hangar_server::terminal_state::{analyze, reduce, ReducerFacts, ReducerMemory, STALE_LIMIT, IDLE_DEBOUNCE};
+use serde_json::Value;
+
+#[path = "contract_terminal_cases.rs"]
+mod cases;
+
+fn expand(base: &str, compact: &Value) -> Value {
+    let mut full: Value = serde_json::from_str(base).unwrap();
+    for (key, value) in compact.as_object().unwrap() { full[key] = value.clone(); }
+    full
+}
+
+fn terminal_rows() -> Value {
+    let mut rows: Value = serde_json::from_str(cases::ROWS).unwrap();
+    assert_eq!(rows.as_array().unwrap().len(), 85);
+    for row in rows.as_array_mut().unwrap() {
+        if let Some(file) = row["pane_file"].as_str() {
+            // Sem `-text` no .gitattributes, o checkout do Windows pode trazer CRLF.
+            let text = cases::PANE_FILES.iter().find(|(name, _)| *name == file).unwrap().1.replace("\r\n", "\n");
+            row["pane"] = Value::String(text);
+        }
+        if row["expected"].is_object() { row["expected"] = expand(cases::ANALYSIS, &row["expected"]); }
+        let Some(frames) = row.get_mut("expected_sequence") else { continue };
+        for frame in frames.as_array_mut().unwrap() {
+            frame["analysis"] = expand(cases::ANALYSIS, &frame["analysis"]);
+            frame["memory"] = expand(cases::MEMORY, &frame["memory"]);
+        }
+    }
+    rows
+}
+
+fn monitor_rows() -> Value {
+    let mut rows: Value = serde_json::from_str(cases::MONITOR).unwrap();
+    assert_eq!(rows.as_array().unwrap().len(), 19);
+    for row in rows.as_array_mut().unwrap() {
+        for frame in row["frames"].as_array_mut().unwrap() {
+            if frame["facts"].is_object() { frame["facts"] = expand(cases::FACTS, &frame["facts"]); }
+        }
+        for round in row["rounds"].as_array_mut().unwrap() {
+            if round["event"].is_object() { round["event"] = expand(cases::EVENT, &round["event"]); }
+        }
+    }
+    rows
+}
 
 /// O aviso de esforço que o Claude Code pinta à direita, acima da caixa de digitar, começa com ●.
 #[test]
@@ -35,18 +78,14 @@ fn terminal_debounce_limits_match_python_state_monitor() {
 }
 
 #[test]
-fn terminal_parsers_and_sequences_match_python() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../backend/tests/fixtures/contract");
-    let rows: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(root.join("golden/terminal.json")).unwrap(),
-    ).unwrap();
+fn terminal_parsers_and_sequences() {
+    let rows = terminal_rows();
     let mut failures = Vec::new();
     for row in rows.as_array().unwrap() {
         if let Some(pane) = row["pane"].as_str() {
             let actual = serde_json::to_value(analyze(pane)).unwrap();
             if actual != row["expected"] {
-                failures.push(format!("{}: Rust {actual}; Python {}", row["name"], row["expected"]));
+                failures.push(format!("{}: recebido {actual}; esperado {}", row["name"], row["expected"]));
             }
         } else {
             let mut memory = ReducerMemory::default();
@@ -72,7 +111,7 @@ mod monitor {
     use std::time::Instant;
     use tokio::sync::Notify;
 
-    /// Repete as entradas que o `StateMonitor` do Python recebeu, uma por rodada.
+    /// Repete as entradas de um roteiro, uma por rodada.
     struct Scripted { frames: Vec<Value>, rounds: Vec<Value>, round: AtomicUsize, wake: Arc<Notify>, done: Notify,
                       events: Mutex<Vec<(usize, StateEvent)>> }
 
@@ -127,7 +166,7 @@ mod monitor {
             assert_eq!(key, "fixture-sid");
             let i = self.round.load(Ordering::SeqCst) - 1;
             let answer = &self.rounds[i]["observe"];
-            assert!(!answer.is_null(), "o Rust perguntou numa rodada em que o Python não chamou");
+            assert!(!answer.is_null(), "o Monitor perguntou numa rodada que não prevê a pergunta");
             Ok((answer[0].as_str().unwrap().into(), answer[1].as_str().unwrap().into()))
         }
         async fn files(&self, _: Option<&str>) -> FileFacts {
@@ -166,11 +205,8 @@ mod monitor {
 
     #[tokio::test(start_paused = true)]
     async fn monitor_sequences() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../backend/tests/fixtures/contract");
-        let rows: Value = serde_json::from_slice(&std::fs::read(root.join("golden/terminal_monitor.json")).unwrap()).unwrap();
-        let rows = rows.as_array().unwrap();
-        assert!(rows.len() >= 15);
-        for row in rows {
+        let rows = super::monitor_rows();
+        for row in rows.as_array().unwrap() {
             let name = row["name"].as_str().unwrap();
             let rounds = row["rounds"].as_array().unwrap().clone();
             let src = Arc::new(Scripted { frames: row["frames"].as_array().unwrap().clone(), rounds: rounds.clone(),
@@ -209,8 +245,7 @@ mod monitor {
         use hangar_server::list::classify::{Classifier, Facts};
         use hangar_server::list::facts_files::HookStates;
         use std::collections::BTreeMap;
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../backend/tests/fixtures/contract");
-        let rows: Value = serde_json::from_slice(&std::fs::read(root.join("golden/terminal_monitor.json")).unwrap()).unwrap();
+        let rows = super::monitor_rows();
         let row = rows.as_array().unwrap().iter().find(|r| r["name"] == "permission_card_after_bash").expect("sequência gravada");
         let dir = tempfile::tempdir().unwrap();
         let cfg = dir.path().join(".claude");

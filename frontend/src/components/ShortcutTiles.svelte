@@ -37,7 +37,7 @@
   const elsewhere = $derived(shortcuts.flatMap(({ shortcut: s, scope }) => {
     const term = runsInHangar(s) ? hangarOf?.(hangarKeyOf(scope, s.id, projectKey)) ?? null : null;
     return term?.alive && term.origin && term.origin !== sessionName
-      ? [{ key: scope + s.id, label: s.label, origin: term.origin }] : [];
+      ? [{ key: scope + s.id, label: s.label, origin: term.origin, asking: !!term.question }] : [];
   }));
 
   function elapsed(created: number) {
@@ -66,12 +66,15 @@
       {@const tileKey = hangarKeyOf(scope, s.id, projectKey)}
       {@const hangarTerm = runsInHangar(s) ? hangarOf?.(tileKey) ?? null : null}
       {@const sessionTerm = s.type === 'shell' && !runsInHangar(s) ? sessionTerminal?.(tileKey) ?? null : null}
-      {@const tileState = sessionTerm?.alive && sessionTerm.question ? 'asking' : tileStateOf(hangarTerm)}
-      {@const stateLine = tileState === 'running' && hangarTerm?.created ? m.hangar_rodando_ha({ tempo: elapsed(hangarTerm.created) })
+      <!-- O da sessão que saiu não acende nem marca "caiu": a saída continua na aba do painel. -->
+      {@const tileState = sessionTerm ? (sessionTerm.alive ? tileStateOf(sessionTerm) : 'idle') : tileStateOf(hangarTerm)}
+      {@const liveTerm = sessionTerm ?? hangarTerm}
+      {@const stateLine = tileState === 'running' && liveTerm?.created ? m.hangar_rodando_ha({ tempo: elapsed(liveTerm.created) })
         : tileState === 'asking' ? m.atalho_tile_pergunta()
         : tileState === 'exited' && hangarTerm ? m.atalho_tile_caiu({ codigo: String(hangarTerm.exit_code ?? '?') }) : ''}
       {@const tooltip = hangarTerm?.alive && hangarTerm.origin && hangarTerm.origin !== sessionName
-        ? m.atalho_tile_dica_hangar({ rotulo: s.label, sessao: hangarTerm.origin }) : rotulo}
+        ? (hangarTerm.question ? m.atalho_tile_dica_hangar_pergunta : m.atalho_tile_dica_hangar)({ rotulo: s.label, sessao: hangarTerm.origin })
+        : tileState === 'running' ? m.atalho_tile_parar({ rotulo: s.label }) : rotulo}
       <!-- Credencial em branco (veio de uma importação): o bloco fica apagado e o clique avisa. -->
       <button type="button" class="acao-bloco" class:pendente={!!falta} class:hg={runsInHangar(s)} class:rodando={tileState === 'running'}
               class:pergunta={tileState === 'asking'} onclick={() => onShortcut(s)}
@@ -94,7 +97,7 @@
   {#if elsewhere.length}
     <div class="acoes-nota">
       {#each elsewhere as n (n.key)}
-        <span><b>{n.label}</b> {m.atalho_tile_nota_hangar({ sessao: n.origin })}</span>
+        <span><b>{n.label}</b> {(n.asking ? m.atalho_tile_nota_hangar_pergunta : m.atalho_tile_nota_hangar)({ sessao: n.origin })}</span>
       {/each}
     </div>
   {/if}

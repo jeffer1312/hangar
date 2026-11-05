@@ -20,8 +20,14 @@ export interface ApiEnv {
   onInviteEnded?(serverId: string | null): void;
   /** Guarda o endereço da rede local aprendido para um servidor. Ausente = só em memória. */
   rememberLan?(serverId: string, lan: import('./servers').LanInfo, source?: import('./servers').Server): void;
+  /** Aparelho que abre a lista ao vivo; o servidor registra o primeiro acesso. Ausente ou null = não manda. */
+  deviceIdentity?(): { kind: 'ios' | 'android' | 'pwa'; id: string } | null;
+  /** Resolve quando a identidade guardada já foi lida (o cofre do Expo é assíncrono). Ausente = já pronta. */
+  deviceReady?(): Promise<void>;
 }
 let _env: ApiEnv | null = null;
+/** A lista ao vivo fica aberta por horas: abrir antes de ler o id deixaria o primeiro acesso sem registro. */
+export function deviceIdentityReady(): Promise<void> { return _env?.deviceReady?.() ?? Promise.resolve(); }
 export function configureApi(env: ApiEnv): void { _env = env; }
 export function apiEnv(): ApiEnv {
   if (!_env) throw new Error('@hangar/core: chame configureApi() antes de usar a API');

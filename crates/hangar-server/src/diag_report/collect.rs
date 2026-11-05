@@ -28,8 +28,18 @@ const TARGET_WAIT: Duration = Duration::from_secs(2);
 /// Subidas e quedas do backend e do `hangar-server`, conferidas no diário real.
 const RESTARTS: [&str; 6] = ["backend.inicio", "backend.encerrando", "hangar_server.de_pe", "hangar_server.caiu",
     "hangar_server.partida", "hangar_server.reserva"];
-/// Campos do `hangar-server.log` que podem sair; `detail` e o resto ficam de fora.
-const LOG_FIELDS: [&str; 10] = ["code", "session", "reason", "stage", "kind", "window", "outcome", "status", "attempt", "wait_s"];
+/// Campos do `hangar-server.log` que podem sair: os que dizem o que caiu e onde. Valores passam pelo
+/// `scrub`, caminho vira o último segmento e cada um é cortado em `VALUE_MAX`.
+const LOG_FIELDS: [&str; 21] = ["code", "session", "account", "reason", "stage", "step", "kind", "io_kind", "os_error", "error",
+    "detail", "panic", "path", "route", "method", "window", "outcome", "status", "attempt", "wait_s", "pid"];
+/// Campos cujo valor é texto livre (erro formatado, saída de processo, texto do agente): só saem com
+/// cara de código; o resto vira o tamanho.
+const FREE_TEXT_FIELDS: [&str; 4] = ["detail", "error", "reason", "panic"];
+static CODE_LIKE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[A-Za-z0-9_.:/-]{1,80}$").unwrap());
+
+fn code_or_size(value: String) -> String {
+    if CODE_LIKE.is_match(&value) { value } else { format!("<texto {} car.>", value.chars().count()) }
+}
 
 pub(crate) fn window() -> chrono::TimeDelta { chrono::TimeDelta::hours(24) }
 
@@ -73,21 +83,60 @@ pub(crate) struct DiaryEntry {
     pub session: String,
     pub reason: String,
     pub backend: String,
+    /// O `detalhe` e os outros campos curtos do evento (`comando=list-sessions retorno=1 ms=32`).
+    pub extra: String,
+    /// Quantas vezes o mesmo evento (evento, nível, código, sessão, motivo) se repetiu, e a última.
+    pub count: usize,
+    pub last: DateTime<Local>,
+}
+
+/// Campos que a linha já mostra ou que são da subida do processo.
+const DIARY_SKIP: [&str; 13] = ["ts", "evento", "nivel", "codigo", "sessao", "motivo", "backend", "pid_backend", "inicio_backend",
+    "origem", "threads_backend", "memoria_total_mb", "memoria_disponivel_mb"];
+const EXTRA_VALUE_MAX: usize = 80;
+const DETAIL_MAX: usize = 200;
+
+fn extra_fields(s: &Scrubber, value: &Value) -> String {
+    let Some(object) = value.as_object() else { return String::new() };
+    let detail = value["detalhe"].as_str().filter(|d| !d.is_empty()).map(|d| format!("detalhe=\"{}\"", shorten_paths(&clean(s, d, DETAIL_MAX))));
+    let fields = object.iter().filter(|(key, _)| !DIARY_SKIP.contains(&key.as_str()) && key.as_str() != "detalhe").filter_map(|(key, v)| match v {
+        Value::Number(n) => Some(format!("{key}={n}")),
+        Value::Bool(b) => Some(format!("{key}={b}")),
+        Value::String(t) if !t.is_empty() && t.chars().count() <= EXTRA_VALUE_MAX => Some(format!("{key}={}", clean(s, t, EXTRA_VALUE_MAX))),
+        _ => None,
+    }).take(12);
+    detail.into_iter().chain(fields).collect::<Vec<_>>().join(" ")
 }
 
 impl DiaryEntry {
-    /// `MM-DD hh:mm:ss evento nível código sessão motivo`; campo vazio vira `-`.
+    /// `MM-DD hh:mm:ss evento nível código sessão motivo campos [×N até hh:mm:ss]`; campo vazio vira `-`.
     pub(crate) fn compact(&self) -> String {
         let dash = |v: &str| if v.is_empty() { "-".to_owned() } else { v.to_owned() };
-        let line = format!("{} {} {} {} {} {}", self.at.format("%m-%d %H:%M:%S"), dash(&self.event), dash(&self.level),
-            dash(&self.code), dash(&self.session), self.reason);
-        line.trim_end().to_owned()
+        let repeated = if self.count > 1 { format!(" ×{} até {}", self.count, self.last.format("%m-%d %H:%M:%S")) } else { String::new() };
+        let line = format!("{} {} {} {} {} {} {}", self.at.format("%m-%d %H:%M:%S"), dash(&self.event), dash(&self.level),
+            dash(&self.code), dash(&self.session), self.reason, self.extra);
+        format!("{}{repeated}", line.trim_end())
     }
 
     pub(crate) fn restart_line(&self) -> String {
-        format!("{} {} {} {} {}", self.at.format("%m-%d %H:%M:%S"), self.event, self.level,
-            if self.code.is_empty() { "-" } else { &self.code }, self.backend).trim_end().to_owned()
+        format!("{} {} {} {} {} {}", self.at.format("%m-%d %H:%M:%S"), self.event, self.level,
+            if self.code.is_empty() { "-" } else { &self.code }, self.backend, self.extra).trim_end().to_owned()
     }
+}
+
+/// Junta os repetidos numa linha (a primeira, com a contagem, a hora e os campos da última): um evento
+/// que se repete milhares de vezes não empurra a causa para fora do corte de tamanho.
+fn fold(entries: Vec<DiaryEntry>) -> Vec<DiaryEntry> {
+    let mut out: Vec<DiaryEntry> = Vec::new();
+    let mut index: std::collections::HashMap<(String, String, String, String, String), usize> = std::collections::HashMap::new();
+    for entry in entries {
+        let key = (entry.event.clone(), entry.level.clone(), entry.code.clone(), entry.session.clone(), entry.reason.clone());
+        match index.get(&key) {
+            Some(&i) => { let first = &mut out[i]; first.count += 1; first.last = entry.at; first.extra = entry.extra; }
+            None => { index.insert(key, out.len()); out.push(entry); }
+        }
+    }
+    out
 }
 
 #[derive(Default)]
@@ -146,14 +195,15 @@ pub(crate) fn read_diary(paths: &[(String, PathBuf)], now: DateTime<Local>, s: &
             if level == "ok" && !restart { return; }
             let entry = DiaryEntry { at, event: text_field(s, &value["evento"]), level: text_field(s, &value["nivel"]),
                 code: text_field(s, &value["codigo"]), session: text_field(s, &value["sessao"]),
-                reason: text_field(s, &value["motivo"]), backend: text_field(s, &value["backend"]) };
+                reason: text_field(s, &value["motivo"]), backend: text_field(s, &value["backend"]), extra: extra_fields(s, &value),
+                count: 1, last: at };
             if level != "ok" { problems.push(entry.clone()); }
             if restart { restarts.push(entry); }
         });
     }
     problems.sort_by_key(|e| e.at);
     restarts.sort_by_key(|e| e.at);
-    Diary { problems, restarts }
+    Diary { problems: fold(problems), restarts }
 }
 
 // ---------- hangar-server.log ----------
@@ -178,7 +228,11 @@ pub(crate) fn reduce_server_line(line: &str, since: DateTime<Utc>, s: &Scrubber)
     for (i, (_, end, key)) in marks.iter().enumerate() {
         let value = body[*end..marks.get(i + 1).map_or(body.len(), |m| m.0)].trim();
         let value = value.strip_prefix('"').and_then(|v| v.strip_suffix('"')).unwrap_or(value);
-        if LOG_FIELDS.contains(key) { fields.entry(key).or_insert_with(|| tidy(value, VALUE_MAX)); }
+        if LOG_FIELDS.contains(key) {
+            fields.entry(key).or_insert_with(|| {
+                if FREE_TEXT_FIELDS.contains(key) { code_or_size(tidy(value, usize::MAX)) } else { tidy(value, VALUE_MAX) }
+            });
+        }
     }
     let mut out = format!("{} {} {}", at.with_timezone(&Local).format("%m-%d %H:%M:%S"), &c[2], tidy(message, MESSAGE_MAX));
     for key in LOG_FIELDS {
@@ -535,6 +589,8 @@ pub(crate) struct Versions {
     pub commit: String,
     pub os: String,
     pub arch: String,
+    /// Nome do computador: o relatório automático não tem quem diga de onde veio.
+    pub machine: String,
     pub claude: String,
     pub mux: String,
     /// Fuso do servidor, que dá a hora das linhas.
@@ -547,6 +603,12 @@ impl Versions {
         format!("hangar-server {}", if self.package == "dev" || self.package.is_empty() { &self.server } else { &self.package })
     }
 
+    /// O `os` do relatório, que o worker põe no assunto: o nome vem antes porque o e-mail corta o fim.
+    pub(crate) fn label(&self) -> String {
+        let name = super::short(&self.machine);
+        if name.trim().is_empty() { self.arch.clone() } else { format!("{name} · {}", self.arch) }
+    }
+
     /// Só o que não depende de sonda: serve quando o prazo do `build` estoura antes.
     pub(crate) fn local() -> Self {
         let (package, commit) = match crate::update::running_package() {
@@ -554,7 +616,8 @@ impl Versions {
             None => ("dev".to_owned(), crate::update::dev::boot_head().map(|h| h.chars().take(9).collect()).unwrap_or_default()),
         };
         Versions { server: env!("CARGO_PKG_VERSION").to_owned(), package, commit, os: "?".into(),
-            arch: format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH), claude: "?".into(), mux: "?".into(),
+            arch: format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
+            machine: sysinfo::System::host_name().unwrap_or_default(), claude: "?".into(), mux: "?".into(),
             offset: Local::now().format("%:z").to_string() }
     }
 }

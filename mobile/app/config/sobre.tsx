@@ -13,6 +13,7 @@ import { useServers } from '../../src/stores/servers';
 import * as m from '../../src/paraglide/messages';
 
 const REPO = 'https://github.com/jeffer1312/hangar';
+const PRIVACY_URL = 'https://hangar.dev.br/privacy';
 // O backend expõe a versão dele em `somente_leitura`, mas o nome da chave já mudou de mão:
 // mostrar a primeira que vier evita uma tela muda a cada renomeação lá.
 const CHAVES_VERSAO = ['versao', 'version', 'commit'] as const;
@@ -36,8 +37,8 @@ export default function Sobre() {
     return () => { vivo = false; };
   }, [ativo?.baseUrl]);
 
-  const abrirRepo = () => {
-    Linking.openURL(REPO).catch((e: unknown) =>
+  const abrirLink = (url: string) => {
+    Linking.openURL(url).catch((e: unknown) =>
       toast.erro(e instanceof Error ? e.message : m.erro_desconhecido()),
     );
   };
@@ -50,7 +51,7 @@ export default function Sobre() {
       <PageHeader
         title={m.config_modal_sobre()}
         subtitle={m.config_sobre_desc()}
-        actions={[{ icon: 'ExternalLink', label: REPO.replace('https://', ''), onPress: abrirRepo }]}
+        actions={[{ icon: 'ExternalLink', label: REPO.replace('https://', ''), onPress: () => abrirLink(REPO) }]}
       />
       {versao ? (
         <SectionCard icon="Smartphone" title={m.native_settings_about_app_group()}>
@@ -58,6 +59,7 @@ export default function Sobre() {
             title={m.atualizar_versao()}
             description={typeof runtime === 'string' ? `${versao} · ${runtime}` : versao}
           />
+          <SettingsRow title={m.mobile_privacy_policy()} onPress={() => abrirLink(PRIVACY_URL)} />
         </SectionCard>
       ) : null}
       <LastErrorSection />

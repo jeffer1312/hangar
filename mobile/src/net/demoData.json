@@ -1,0 +1,40 @@
+{
+  "sessions": [
+    {
+      "name": "landing-page",
+      "provider": "claude",
+      "cwd": "/home/demo/landing-page",
+      "branch": "main",
+      "ago": 120,
+      "reply": "The pricing section now stacks correctly on small screens."
+    },
+    {
+      "name": "api-tests",
+      "provider": "codex",
+      "cwd": "/home/demo/api",
+      "branch": "fix/timeouts",
+      "ago": 3600,
+      "reply": "All 42 tests pass after raising the request timeout."
+    }
+  ],
+  "chats": {
+    "landing-page": [
+      { "kind": "user_msg", "text": "The pricing cards overflow on phones. Can you fix it?", "ago": 300 },
+      {
+        "kind": "tool_use",
+        "tool_name": "Read",
+        "tool_use_id": "demo-read",
+        "tool_input": { "file_path": "src/pricing.css" },
+        "ago": 280
+      },
+      { "kind": "tool_result", "tool_use_id": "demo-read", "result": ".cards { display: flex; }", "ago": 270 },
+      { "kind": "assistant_msg", "text": "The pricing section now stacks correctly on small screens.", "ago": 120 }
+    ],
+    "api-tests": [
+      { "kind": "user_msg", "text": "Run the API tests and fix what fails.", "ago": 3700 },
+      { "kind": "assistant_msg", "text": "All 42 tests pass after raising the request timeout.", "ago": 3600 }
+    ]
+  },
+  "reply": "This is a demo with sample data, so no agent ran. Connect your own Hangar server to use real sessions.",
+  "unavailable": "Not available in the demo"
+}

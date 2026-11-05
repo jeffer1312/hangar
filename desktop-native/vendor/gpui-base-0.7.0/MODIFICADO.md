@@ -47,3 +47,7 @@ Os testes que montam `KeyDownEvent` passam `physical_digit: None`, o campo novo 
 
 Acessibilidade: `Slider::aria_label` dá nome ao slider; o parágrafo do markdown (`text/inline_flow.rs`) entrega o texto
 à árvore por `Window::a11y_text`.
+
+Rolagem: `text/block_column.rs` guarda onde cada bloco de um documento sem rolagem própria fica e, a partir de oito
+blocos, monta só os que estão dentro da máscara de conteúdo. Seleção, revelação, fade do texto chegando, `max_lines` e
+mudança de largura ou de altura voltam a montar todos.

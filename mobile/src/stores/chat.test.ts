@@ -1,5 +1,5 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
-import { configureApi, configureDiag } from '@hangar/core';
+import { configureApi, configureDiag, registrarSucesso } from '@hangar/core';
 import type { ChatEvent } from '@hangar/core';
 import { chatStore, _resetChatsForTests, filaCount, setChatsForeground, submitConversationDraft, isSubmitting } from './chat';
 import * as m from '../paraglide/messages';
@@ -1891,6 +1891,9 @@ describe('envio Direto e Jev pelo mesmo rascunho', () => {
 });
 
 describe('envio incerto que a conversa confirma', () => {
+  // A queda simulada grava prazo para o servidor, e o teste seguinte nem chegaria ao POST.
+  beforeEach(() => registrarSucesso('srv1'));
+
   function stubInput(input: () => Promise<Response>) {
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       if (String(url).endsWith('/input')) return input();

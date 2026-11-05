@@ -4,7 +4,7 @@ use std::{cell::{Cell, RefCell}, rc::Rc, sync::OnceLock, time::{Duration, Instan
 use gpui_kit::{prelude::FluentBuilder, *};
 use super::Hangar;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) enum Area { Nav, Conversation, Bottom, Side, Top }
 
 pub(super) struct Pane { hangar: WeakEntity<Hangar>, area: Area, _observe: Option<Subscription> }
@@ -72,7 +72,9 @@ impl Render for Pane {
             let epoch = *EPOCH.get_or_init(|| started);
             eprintln!("pane {area:?} {} {}", started.elapsed().as_micros(), started.duration_since(epoch).as_millis());
         }
-        element
+        // Depois do desenho: quem lê as âncoras durante ele ainda vê as do desenho anterior.
+        super::popup::area_redrawn(area);
+        super::popup::area_scope(area, element)
     }
 }
 
@@ -112,12 +114,15 @@ impl Hangar {
     /// A área desenhada neste quadro sem a cópia guardada quando `live`.
     pub(super) fn pane_element_live(&self, area: Area, style: StyleRefinement, live: bool) -> AnyElement {
         let pane = self.pane(area);
+        let shown = super::popup::area_on_screen(area);
         if live {
             let mut frame = div();
             frame.style().refine(&style);
-            return frame.child(AnyView::from(pane.clone())).into_any_element();
+            return frame.child(shown).child(AnyView::from(pane.clone())).into_any_element();
         }
-        cached_selectable(pane.clone().into(), style)
+        let mut frame = div().relative();
+        frame.style().refine(&style);
+        frame.child(shown).child(AnyView::from(pane.clone()).cached(StyleRefinement::default().size_full())).into_any_element()
     }
 
     /// Redesenha uma área só, sem acordar as outras: para o que muda só nela (texto chegando, rolagem, digitação).
