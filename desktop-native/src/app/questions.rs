@@ -131,7 +131,7 @@ mod tests {
         assert!(body.size.height > px(1500.), "a pergunta não deve ser truncada");
         let position = point(body.left() + px(20.), body.top() + px(20.));
         cx.simulate_event(gpui::ScrollEvent { position, delta: gpui::ScrollDelta::Pixels(point(px(0.), px(-1500.))),
-            modifiers: Modifiers::default(), touch_phase: gpui::TouchPhase::Moved });
+            modifiers: Modifiers::default(), touch_phase: gpui::TouchPhase::Moved, ..Default::default() });
         draw(cx);
         assert!(view.read_with(cx, |view, _| view.scroll.offset().y) < px(0.), "o corpo comprido precisa rolar");
         assert_eq!(cx.debug_bounds("question-footer").unwrap(), footer, "rolar a pergunta não desloca as ações");
@@ -154,7 +154,7 @@ mod tests {
         assert!(header.top() >= space.top() && footer.bottom() <= space.bottom(), "cabeçalho e ações dentro da área");
         let body = cx.debug_bounds("question-body").unwrap();
         cx.simulate_event(gpui::ScrollEvent { position: point(body.left() + px(20.), footer.top() - px(20.)),
-            delta: gpui::ScrollDelta::Pixels(point(px(0.), px(-1500.))), modifiers: Modifiers::default(), touch_phase: gpui::TouchPhase::Moved });
+            delta: gpui::ScrollDelta::Pixels(point(px(0.), px(-1500.))), modifiers: Modifiers::default(), touch_phase: gpui::TouchPhase::Moved, ..Default::default() });
         draw(cx);
         assert!(view.read_with(cx, |view, _| view.scroll.offset().y) < px(0.), "o corpo comprido precisa rolar");
         assert_eq!(cx.debug_bounds("ask-minimize").unwrap(), header, "rolar não esconde o cabeçalho");

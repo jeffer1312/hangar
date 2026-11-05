@@ -999,7 +999,7 @@ mod tests {
         assert_eq!(survey.text("b"), None);
     }
 
-    #[gpui::test]
+    #[::gpui::test]
     fn update_all_machine_registry_change_keeps_running_aliases(cx: &mut gpui::TestAppContext) {
         let updater = cx.new(|_| Updater { runtime: Arc::new(Runtime::new().unwrap()), client: reqwest::Client::new(), exe: None, exe_stamp: None, offer: None,
             local: None, server: None, server_api: None, server_seq: 0, active: None, active_state: None, active_api: None, active_seq: 0,

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use gpui::{HighlightStyle, Hsla, Rems, SharedString, StyleRefinement, rems};
+use gpui::{HighlightStyle, Hsla, Pixels, Rems, SharedString, StyleRefinement, rems};
 
 use crate::ColorTokens;
 
@@ -37,6 +37,7 @@ pub struct TextViewStyle {
     table_background: Option<Hsla>,
     is_dark: bool,
     // Modified for Hangar: both off by default, so every existing view keeps the kit's look.
+    list_marker_width: Option<Pixels>,
     code_language_band: Option<SharedString>,
     inline_code_font_family: Option<SharedString>,
 }
@@ -62,6 +63,7 @@ impl PartialEq for TextViewStyle {
             && self.blockquote_style == other.blockquote_style
             && self.table_background == other.table_background
             && self.is_dark == other.is_dark
+            && self.list_marker_width == other.list_marker_width
             && self.code_language_band == other.code_language_band
             && self.inline_code_font_family == other.inline_code_font_family
     }
@@ -110,6 +112,7 @@ impl TextViewStyle {
             blockquote_style: StyleRefinement::default(),
             table_background: None,
             is_dark,
+            list_marker_width: None,
             code_language_band: None,
             inline_code_font_family: None,
         }
@@ -275,6 +278,18 @@ impl TextViewStyle {
     pub fn with_dark(mut self, is_dark: bool) -> Self {
         self.is_dark = is_dark;
         self
+    }
+
+    /// Modified for Hangar: nested lists and continuation blocks indent by this width, so they line
+    /// up with a fixed marker column set through [`Self::with_list_style`]. `None` keeps the kit's indent.
+    pub fn with_list_marker_width(mut self, width: Option<Pixels>) -> Self {
+        self.list_marker_width = width;
+        self
+    }
+
+    /// The indent of list content, when it follows a fixed marker column.
+    pub fn list_marker_width(&self) -> Option<Pixels> {
+        self.list_marker_width
     }
 
     /// Modified for Hangar: tops each fenced code block with a band holding
@@ -510,6 +525,7 @@ mod tests {
                 .clone()
                 .with_blockquote_style(StyleRefinement::default().border_color(gpui::red()))
         );
+        assert!(base != base.clone().with_list_marker_width(Some(gpui::px(20.))));
         assert!(base != base.clone().with_code_language_band(Some("code".into())));
         assert!(base.inline_code_font_family().is_none());
         assert!(base != base.clone().with_inline_code_font_family(Some("monospace".into())));
@@ -560,6 +576,7 @@ mod tests {
         assert_eq!(style.code_block().corner_radii.top_right, None);
         assert_eq!(style.code_block().corner_radii.bottom_left, None);
         assert_eq!(style.code_block().corner_radii.bottom_right, None);
+        assert_eq!(style.list_marker_width(), None);
         assert_eq!(style.code_language_band(), None);
     }
 

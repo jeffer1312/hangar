@@ -28,7 +28,6 @@ pub enum Align {
 /// How a popup derives its position.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Strategy {
-    Center,
     /// Place `anchor`'s corner of the popup at `position`, then clamp into the
     /// viewport. This reproduces GPUI's `anchored` corner behavior and does not
     /// flip to the opposite side.
@@ -76,12 +75,6 @@ pub struct PositionerState {
 }
 
 impl Positioner {
-    /// Centraliza o conteúdo medido na janela.
-    pub fn centered(mut self) -> Self {
-        self.strategy = Strategy::Center;
-        self
-    }
-
     /// Places the popup on a side of `trigger_bounds`, flipping when needed.
     pub fn side(trigger_bounds: Bounds<Pixels>) -> Self {
         Self {
@@ -222,17 +215,6 @@ fn resolve(
     margin: Edges<Pixels>,
 ) -> ResolvedPosition {
     match strategy {
-        Strategy::Center => ResolvedPosition {
-            bounds: clamp(
-                Bounds::new(
-                    point((viewport_size.width - popup_size.width) / 2., (viewport_size.height - popup_size.height) / 2.),
-                    popup_size,
-                ),
-                viewport_size,
-                margin,
-            ),
-            placement: None,
-        },
         Strategy::Corner { anchor, position } => ResolvedPosition {
             bounds: clamp(
                 Bounds::from_anchor_and_size(anchor, position, popup_size),

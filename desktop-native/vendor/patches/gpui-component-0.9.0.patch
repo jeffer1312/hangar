@@ -269,15 +269,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                      .test_support()
                      // A closing dialog is leaving: it must not swallow input
                      // aimed at what is already usable again beneath it.
-@@ -771,6 +790,7 @@
-                                     point(window_paddings.left + x, window_paddings.top + y),
-                                 )
-                                 .margin(margin)
-+                                .when(self.props.centered, |positioner| positioner.centered())
-                                 .child(
-                                     v_flex()
-                                         .id("surface")
-@@ -790,6 +810,19 @@
+@@ -790,6 +809,19 @@
                                          .w(width)
                                          .when_some(self.props.max_width, |this, w| this.max_w(w))
                                          .max_h(max_height)
@@ -297,7 +289,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                                          .child(
                                              v_flex()
                                                  .flex_1()
-@@ -912,7 +945,8 @@
+@@ -912,7 +944,8 @@
                                      |positioner| {
                                          positioner.position(point(
                                              window_paddings.left + x,

@@ -3887,7 +3887,8 @@ impl BlockNode {
                 ..
             } => {
                 let body = body_font_size(node_cx, window);
-                let indent = body * 1.4;
+                // Modified for Hangar: with a fixed marker column, content steps by its width.
+                let indent = node_cx.style.list_marker_width().unwrap_or(body * 1.4);
                 div()
                     .w_full()
                     .min_w_0()

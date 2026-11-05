@@ -1,7 +1,7 @@
 diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-base-0.9.0/MODIFICADO.md gpui-base-0.9.0/MODIFICADO.md
 --- gpui-base-0.9.0/MODIFICADO.md
 +++ gpui-base-0.9.0/MODIFICADO.md
-@@ -0,0 +1,48 @@
+@@ -0,0 +1,51 @@
 +# Cópia modificada do gpui-base 0.9.0
 +
 +Origem: crate `gpui-base` 0.9.0 do crates.io (repositório `longbridge/gpui-kit`), checksum `cff6377e30f0c857681662e7edc7286bf30f5606033390401b0706d7bd930833`, licença Apache-2.0 (`LICENSE-APACHE`).
@@ -9,14 +9,17 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
 +
 +Mudanças, todas marcadas com "Modified for Hangar":
 +
-+1. `src/text/style.rs` e `src/text/node.rs`: um campo novo no `TextViewStyle`, **desligado por padrão**
-+   (`None`), então toda view que não o liga continua com o desenho do kit.
++1. `src/text/style.rs` e `src/text/node.rs`: dois campos novos no `TextViewStyle`, **desligados por padrão**
++   (`None`), então toda view que não os liga continua com o desenho do kit.
++   - `with_list_marker_width`: a lista aninhada e o parágrafo de continuação recuam essa largura, para acompanhar a
++     coluna fixa que o app dá ao marcador por `with_list_style`.
 +   - `with_code_language_band`: o bloco de código ganha uma faixa no topo com a linguagem (ou o rótulo dado,
 +     quando a cerca não nomeia nenhuma) e as ações do bloco à direita, em vez de no canto sobre o código
 +     (`CodeBlock::render`). O código dentro da faixa mantém os destaques de trecho e o `reveal` do kit.
-+   - Testes: o campo entra no `PartialEq` e nasce `None` (testes do `style.rs`).
++   - Testes: os campos entram no `PartialEq` e nascem `None` (testes do `style.rs`).
 +
-+   Motivo: o kit não tem gancho para a faixa de linguagem; só o estilo da conversa do app a liga.
++   Motivo: o kit não tem gancho para o recuo da lista nem para a faixa de linguagem; só o estilo da conversa do app
++   liga os dois.
 +
 +2. `src/text/style.rs` e `src/text/node.rs`: `inline_code_font_family`, opcional e desligada
 +   por padrão, permite que uma view preserve a fonte dos trechos de código quando o tema muda.
@@ -94,48 +97,6 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
          });
          cx.simulate_event(KeyUpEvent { keystroke });
      }
-diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-base-0.9.0/src/positioner.rs gpui-base-0.9.0/src/positioner.rs
---- gpui-base-0.9.0/src/positioner.rs
-+++ gpui-base-0.9.0/src/positioner.rs
-@@ -28,6 +28,7 @@
- /// How a popup derives its position.
- #[derive(Clone, Copy, Debug, PartialEq)]
- enum Strategy {
-+    Center,
-     /// Place `anchor`'s corner of the popup at `position`, then clamp into the
-     /// viewport. This reproduces GPUI's `anchored` corner behavior and does not
-     /// flip to the opposite side.
-@@ -75,6 +76,12 @@
- }
- 
- impl Positioner {
-+    /// Centraliza o conteúdo medido na janela.
-+    pub fn centered(mut self) -> Self {
-+        self.strategy = Strategy::Center;
-+        self
-+    }
-+
-     /// Places the popup on a side of `trigger_bounds`, flipping when needed.
-     pub fn side(trigger_bounds: Bounds<Pixels>) -> Self {
-         Self {
-@@ -215,6 +222,17 @@
-     margin: Edges<Pixels>,
- ) -> ResolvedPosition {
-     match strategy {
-+        Strategy::Center => ResolvedPosition {
-+            bounds: clamp(
-+                Bounds::new(
-+                    point((viewport_size.width - popup_size.width) / 2., (viewport_size.height - popup_size.height) / 2.),
-+                    popup_size,
-+                ),
-+                viewport_size,
-+                margin,
-+            ),
-+            placement: None,
-+        },
-         Strategy::Corner { anchor, position } => ResolvedPosition {
-             bounds: clamp(
-                 Bounds::from_anchor_and_size(anchor, position, popup_size),
 diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-base-0.9.0/src/radio.rs gpui-base-0.9.0/src/radio.rs
 --- gpui-base-0.9.0/src/radio.rs
 +++ gpui-base-0.9.0/src/radio.rs
@@ -1049,7 +1010,17 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
  }
  
  impl Paragraph {
-@@ -3952,14 +4045,10 @@
+@@ -3794,7 +3887,8 @@
+                 ..
+             } => {
+                 let body = body_font_size(node_cx, window);
+-                let indent = body * 1.4;
++                // Modified for Hangar: with a fixed marker column, content steps by its width.
++                let indent = node_cx.style.list_marker_width().unwrap_or(body * 1.4);
+                 div()
+                     .w_full()
+                     .min_w_0()
+@@ -3952,14 +4046,10 @@
          window: &mut Window,
          cx: &mut App,
      ) -> impl IntoElement {
@@ -1068,7 +1039,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
          const TABLE_BORDER_PX: f32 = 2.0; // the frame's border_1, left + right
  
          let table = match item {
-@@ -3974,7 +4063,8 @@
+@@ -3974,7 +4064,8 @@
              .map(|row| row.children.len())
              .max()
              .unwrap_or(0);
@@ -1078,7 +1049,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
          let scroll = matches!(style.table().overflow.x, Some(Overflow::Scroll));
          let nowrap = style.table_cell().text.white_space == Some(WhiteSpace::Nowrap);
          let rem_size = window.rem_size();
-@@ -3994,8 +4084,8 @@
+@@ -3994,8 +4085,8 @@
                  let floor = if scroll && nowrap {
                      w
                  } else if scroll {
@@ -1089,7 +1060,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                          .min(w)
                  } else {
                      w.min(wrap_min_px)
-@@ -4055,7 +4145,12 @@
+@@ -4055,7 +4146,12 @@
                  // shrink-to-fit (their text wrapping), the definite
                  // `w(min_total_w)` keeps the floors once they are reached,
                  // letting the track exceed the viewport and scroll.
@@ -1303,39 +1274,42 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
  use std::sync::Arc;
  
 -use gpui::{HighlightStyle, Hsla, Rems, StyleRefinement, rems};
-+use gpui::{HighlightStyle, Hsla, Rems, SharedString, StyleRefinement, rems};
++use gpui::{HighlightStyle, Hsla, Pixels, Rems, SharedString, StyleRefinement, rems};
  
  use crate::ColorTokens;
  
-@@ -36,6 +36,9 @@
+@@ -36,6 +36,10 @@
      /// show that surface.
      table_background: Option<Hsla>,
      is_dark: bool,
 +    // Modified for Hangar: both off by default, so every existing view keeps the kit's look.
++    list_marker_width: Option<Pixels>,
 +    code_language_band: Option<SharedString>,
 +    inline_code_font_family: Option<SharedString>,
  }
  
  impl PartialEq for TextViewStyle {
-@@ -59,6 +62,8 @@
+@@ -59,6 +63,9 @@
              && self.blockquote_style == other.blockquote_style
              && self.table_background == other.table_background
              && self.is_dark == other.is_dark
++            && self.list_marker_width == other.list_marker_width
 +            && self.code_language_band == other.code_language_band
 +            && self.inline_code_font_family == other.inline_code_font_family
      }
  }
  
-@@ -105,6 +110,8 @@
+@@ -105,6 +112,9 @@
              blockquote_style: StyleRefinement::default(),
              table_background: None,
              is_dark,
++            list_marker_width: None,
 +            code_language_band: None,
 +            inline_code_font_family: None,
          }
      }
  
-@@ -225,6 +232,16 @@
+@@ -225,6 +235,16 @@
          self
      }
  
@@ -1352,10 +1326,22 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
      /// Sets the style refinement for the table container (the bordered wrapper
      /// in wrap mode, the scroll viewport in horizontal-scroll mode).
      ///
-@@ -260,6 +277,19 @@
+@@ -260,6 +280,31 @@
          self
      }
  
++    /// Modified for Hangar: nested lists and continuation blocks indent by this width, so they line
++    /// up with a fixed marker column set through [`Self::with_list_style`]. `None` keeps the kit's indent.
++    pub fn with_list_marker_width(mut self, width: Option<Pixels>) -> Self {
++        self.list_marker_width = width;
++        self
++    }
++
++    /// The indent of list content, when it follows a fixed marker column.
++    pub fn list_marker_width(&self) -> Option<Pixels> {
++        self.list_marker_width
++    }
++
 +    /// Modified for Hangar: tops each fenced code block with a band holding
 +    /// its language (or `label` when the fence names none) and the code block
 +    /// actions. `None` keeps the plain block with the actions in its corner.
@@ -1372,20 +1358,22 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
      /// The default body-text color.
      pub fn foreground(&self) -> Hsla {
          self.foreground
-@@ -480,6 +510,9 @@
+@@ -480,6 +525,10 @@
                  .clone()
                  .with_blockquote_style(StyleRefinement::default().border_color(gpui::red()))
          );
++        assert!(base != base.clone().with_list_marker_width(Some(gpui::px(20.))));
 +        assert!(base != base.clone().with_code_language_band(Some("code".into())));
 +        assert!(base.inline_code_font_family().is_none());
 +        assert!(base != base.clone().with_inline_code_font_family(Some("monospace".into())));
      }
  
      #[test]
-@@ -527,6 +560,7 @@
+@@ -527,6 +576,8 @@
          assert_eq!(style.code_block().corner_radii.top_right, None);
          assert_eq!(style.code_block().corner_radii.bottom_left, None);
          assert_eq!(style.code_block().corner_radii.bottom_right, None);
++        assert_eq!(style.list_marker_width(), None);
 +        assert_eq!(style.code_language_band(), None);
      }
  

@@ -790,7 +790,6 @@ impl RenderOnce for Dialog {
                                     point(window_paddings.left + x, window_paddings.top + y),
                                 )
                                 .margin(margin)
-                                .when(self.props.centered, |positioner| positioner.centered())
                                 .child(
                                     v_flex()
                                         .id("surface")

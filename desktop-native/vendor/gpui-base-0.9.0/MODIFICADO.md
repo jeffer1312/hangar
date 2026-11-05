@@ -5,14 +5,17 @@ Entra no build por `[patch.crates-io]` em `desktop-native/Cargo.toml`.
 
 Mudanças, todas marcadas com "Modified for Hangar":
 
-1. `src/text/style.rs` e `src/text/node.rs`: um campo novo no `TextViewStyle`, **desligado por padrão**
-   (`None`), então toda view que não o liga continua com o desenho do kit.
+1. `src/text/style.rs` e `src/text/node.rs`: dois campos novos no `TextViewStyle`, **desligados por padrão**
+   (`None`), então toda view que não os liga continua com o desenho do kit.
+   - `with_list_marker_width`: a lista aninhada e o parágrafo de continuação recuam essa largura, para acompanhar a
+     coluna fixa que o app dá ao marcador por `with_list_style`.
    - `with_code_language_band`: o bloco de código ganha uma faixa no topo com a linguagem (ou o rótulo dado,
      quando a cerca não nomeia nenhuma) e as ações do bloco à direita, em vez de no canto sobre o código
      (`CodeBlock::render`). O código dentro da faixa mantém os destaques de trecho e o `reveal` do kit.
-   - Testes: o campo entra no `PartialEq` e nasce `None` (testes do `style.rs`).
+   - Testes: os campos entram no `PartialEq` e nascem `None` (testes do `style.rs`).
 
-   Motivo: o kit não tem gancho para a faixa de linguagem; só o estilo da conversa do app a liga.
+   Motivo: o kit não tem gancho para o recuo da lista nem para a faixa de linguagem; só o estilo da conversa do app
+   liga os dois.
 
 2. `src/text/style.rs` e `src/text/node.rs`: `inline_code_font_family`, opcional e desligada
    por padrão, permite que uma view preserve a fonte dos trechos de código quando o tema muda.

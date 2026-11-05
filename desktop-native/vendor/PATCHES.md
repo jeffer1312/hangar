@@ -26,7 +26,7 @@ fizemos, e só vale se acompanhar a cópia.
 | Desfoque de fundo (vidro) | gpui-pre `scene.rs`/`window.rs`, gpui-pre-wgpu, -apple, -windows | reescrito no -apple, mantido nos demais | a 0.3.11 trocou `metal`/`objc` por `objc2-metal` no renderer do Mac; o desfoque foi portado para essa API e o kernel do MPS passou a viver num `Retained` |
 | Redesenho parcial e pular quadro igual | gpui-pre `scene_damage.rs`/`window.rs`/`platform.rs`, gpui-pre-linux, gpui-pre-wgpu, gpui-pre-windows `directx_renderer.rs`/`backdrop.rs`/`window.rs` | adaptado | o renderer do Linux virou `Option` nas janelas, o `present` passou para a fila e a configuração da superfície saiu de `new_internal`. O upstream não tem nada equivalente |
 | `text_input_focused` | gpui-pre `window.rs` | adaptado | lê `focused_text_input`, o campo novo do upstream |
-| Coluna do marcador de lista, cor do marcador | gpui-base `text/node.rs`/`style.rs` | descartado | o kit passou a ter a coluna e `with_list_style`; o app só pinta o marcador por ela |
+| Coluna do marcador de lista, cor do marcador | gpui-base `text/node.rs`/`style.rs` | adaptado | o kit passou a ter a coluna e `with_list_style`, que dá largura e cor ao marcador e também contorna a caixa desmarcada de lista de tarefas. Só o recuo do conteúdo ficou nosso (`with_list_marker_width`): com a coluna do kit, que cresce, o item 10 sairia do alinhamento |
 | Imagem por referência no markdown | gpui-base `text/format/markdown.rs` | descartado | a 0.9.0 resolve sozinha |
 | Rótulo de acessibilidade do `Slider` | gpui-base e gpui-component `slider.rs` | descartado | o kit passou a ter `accessibility_label` |
 | Marca de escolhido e primeira opção do menu | gpui-component `menu/menu_item.rs`/`popup_menu.rs` | descartado | o kit anuncia `checked` e pula títulos na primeira seta |
@@ -35,9 +35,10 @@ fizemos, e só vale se acompanhar a cópia.
 | Fonte própria do código inline | gpui-base `text/*`, gpui-component `text/style.rs`/`compat.rs` | adaptado | a fonte da view vence a do `with_inline_code_style` novo do kit |
 | Piso da coluna da tabela | gpui-base `text/node.rs` | adaptado | a tabela do kit foi reescrita com cache de larguras; a largura da maior palavra entrou nesse cache |
 | Entrada `dialog-in` do diálogo | gpui-component `dialog/dialog.rs` | adaptado | o kit trocou `Animation` por `Transition`; a curva `ease` e a subida de 2 px foram para lá |
+| Diálogo centrado (`Positioner::centered`) | gpui-base `positioner.rs`, gpui-component `dialog/dialog.rs` | descartado | o kit centra pela altura real e mantém o deslocamento entre diálogos empilhados |
 | `KeyBinding::load_with_mapper` | gpui-pre `keymap/binding.rs` | novo | `load` passou a pedir `App`, e a config de atalhos e seus testes só têm o mapper |
 
-Não compilados aqui: gpui-pre-apple/-macos (revisados só por leitura; o CI do `native-macos.yml` compila).
+gpui-pre-apple/-macos: só checagem de tipos para `aarch64-apple-darwin`, com o shader trocado por um arquivo vazio. O `.metal` e o desfoque nunca rodaram num Mac; o build completo é do `native-macos.yml`.
 
 ## Navegador embutido
 

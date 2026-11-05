@@ -1,6 +1,6 @@
 use super::*;
 use core::prelude::v1::test;
-use gpui::{TestAppContext, VisualTestContext};
+use ::gpui::{TestAppContext, VisualTestContext};
 
 fn dialog(cx: &mut TestAppContext) -> (Entity<NewSession>, &mut VisualTestContext) {
     cx.update(gpui_kit::init);
@@ -17,7 +17,7 @@ fn choice(model: &str) -> (String, String, String) {
     (model.into(), "high".into(), "bypassPermissions".into())
 }
 
-#[gpui::test]
+#[::gpui::test]
 fn stale_save_reply_does_not_release_a_newer_save_or_replace_its_default(cx: &mut TestAppContext) {
     let (view, cx) = dialog(cx);
     cx.update(|window, cx| view.update(cx, |dialog, cx| {
@@ -34,7 +34,7 @@ fn stale_save_reply_does_not_release_a_newer_save_or_replace_its_default(cx: &mu
     }));
 }
 
-#[gpui::test]
+#[::gpui::test]
 fn changing_scope_keeps_the_save_pending_and_ignores_its_old_default(cx: &mut TestAppContext) {
     let (view, cx) = dialog(cx);
     cx.update(|window, cx| view.update(cx, |dialog, cx| {
@@ -54,7 +54,7 @@ fn changing_scope_keeps_the_save_pending_and_ignores_its_old_default(cx: &mut Te
     }));
 }
 
-#[gpui::test]
+#[::gpui::test]
 fn failed_save_stays_visible_after_changing_scope_without_replacing_the_current_default(cx: &mut TestAppContext) {
     let (view, cx) = dialog(cx);
     cx.update(|window, cx| view.update(cx, |dialog, cx| {
@@ -70,7 +70,7 @@ fn failed_save_stays_visible_after_changing_scope_without_replacing_the_current_
     }));
 }
 
-#[gpui::test]
+#[::gpui::test]
 fn changing_server_invalidates_the_old_save_reply(cx: &mut TestAppContext) {
     let (view, cx) = dialog(cx);
     cx.update(|window, cx| view.update(cx, |dialog, cx| {
