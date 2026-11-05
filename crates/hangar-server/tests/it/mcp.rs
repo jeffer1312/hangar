@@ -24,7 +24,9 @@ struct Scene { addr: SocketAddr, python: Arc<fake::Fake>, home: PathBuf, _dir: t
 async fn scene() -> Scene { scene_with(false).await }
 
 /// `groups`: o serviço de grupo do Rust sobre `home/.claude/.hangar-pair` (sem ele, grupo segue ao Python).
-async fn scene_with(groups: bool) -> Scene {
+async fn scene_with(groups: bool) -> Scene { scene_full(groups, None).await }
+
+async fn scene_full(groups: bool, peers: Option<hangar_server::groups::peers::PeerClient>) -> Scene {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     list_support::sessions(root, 2);
@@ -47,6 +49,7 @@ async fn scene_with(groups: bool) -> Scene {
     state.side.locate = Arc::new(hangar_server::locate::ListLocate { list });
     state.pages = Arc::new(hangar_server::pages::store::Store::new(root.join("paginas")));
     state.chromium = || None;
+    if let Some(peers) = peers { state.peers = Arc::new(peers); }
     if groups {
         use hangar_server::groups::{orq::PythonOrq, service::GroupService, store::PairDir};
         let pair = PairDir::new(home.join(".claude/.hangar-pair"), root.join("arquivo"));
@@ -343,6 +346,41 @@ async fn close_session_refuses_itself_unknown_server_and_unknown() {
     let voice = hangar_server::voice::machines::voice_signature(SECRET).unwrap();
     let refused = Mcp::open(s.addr, &[("x-hangar-voice", &voice)]).await.call("close_session", json!({"alvo": "outra"})).await;
     assert!(failed(&refused) && first_text(&refused).contains("sim"), "fechar pela voz só com o sim falado");
+}
+
+/// `servidor::sessao` pelo ponto de entrada: fecha lá, com o token de lá e dizendo quem pediu.
+#[tokio::test(flavor = "multi_thread")]
+async fn close_session_reaches_the_peer() {
+    use axum::http::{HeaderMap, HeaderValue, Uri, header::CONTENT_TYPE};
+    use axum::routing::{delete, get};
+    use hangar_server::groups::peers::{PeerBook, PeerClient};
+    let seen: Arc<Mutex<Vec<(String, String, String)>>> = Arc::default();
+    let sink = seen.clone();
+    let app = axum::Router::new()
+        .route("/api/sessions", get(|| async { ([(CONTENT_TYPE, "application/json")], json!([{"name": "filha"}]).to_string()) }))
+        .route("/api/sessions/{name}", delete(move |h: HeaderMap, uri: Uri| {
+            let sink = sink.clone();
+            async move {
+                let header = |name| h.get(name).and_then(|v: &HeaderValue| v.to_str().ok()).unwrap_or_default().to_owned();
+                sink.lock().unwrap().push((header("authorization"), header("user-agent"), uri.path().to_owned()));
+                ([(CONTENT_TYPE, "application/json")], json!({"ok": true}).to_string())
+            }
+        }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("peers.json");
+    write_json(&file, json!({"lab": {"base_url": format!("http://{addr}"), "token": "tok-lab"}}));
+    let s = scene_full(false, Some(PeerClient::new(PeerBook::new(Some(file))))).await;
+    let mut mcp = Mcp::open(s.addr, &[("x-hangar-pane", "%7")]).await;
+    let closed = mcp.call("close_session", json!({"alvo": "lab::filha"})).await;
+    assert!(!failed(&closed), "{closed}");
+    assert_eq!(closed["structuredContent"]["server"], "lab");
+    let (auth, agent, path) = seen.lock().unwrap().pop().expect("DELETE lá");
+    assert_eq!((auth.as_str(), path.as_str()), ("Bearer tok-lab", "/api/sessions/filha"));
+    assert!(agent.contains("beta"), "{agent}");
+    assert_eq!(s.python.hits_to("/api/sessions/filha"), 0, "nada fecha aqui");
 }
 
 /// `contract` lê e grava pela rota `/pair/contract` da sessão que chama; gravar exige o `mtime` lido.

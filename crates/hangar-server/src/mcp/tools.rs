@@ -252,13 +252,14 @@ fn close_target(alvo: &str, own_server: &str) -> Result<(Option<String>, String)
 
 /// `close_session` com `servidor::sessao`: fecha lá, pela rota de lá (`peers.json`), como
 /// `hangar-send --close servidor::sessao`. Par externo não está no `peers.json`: sessão de outra pessoa não fecha.
-async fn remote_close(peers: &PeerClient, server: &str, name: &str) -> Outcome {
+async fn remote_close(peers: &PeerClient, server: &str, name: &str, caller: &str) -> Outcome {
     // O DELETE responde ok para nome que não existe: nome errado não pode virar "fechada".
     let rows = peers.call(server, reqwest::Method::GET, "/api/sessions", None).await.map_err(|e| e.text(server))?;
     if !rows.as_ref().and_then(Value::as_array).is_some_and(|rows| rows.iter().any(|s| s["name"] == name)) {
         return Err(format!("sessão '{name}' não existe em '{server}' (tool `sessions`)"));
     }
-    let resp = peers.call(server, reqwest::Method::DELETE, &format!("/api/sessions/{}", segment(name)), None).await.map_err(|e| {
+    let agent = format!("hangar-mcp (de {caller})");
+    let resp = peers.call_as(&agent, server, reqwest::Method::DELETE, &format!("/api/sessions/{}", segment(name)), None).await.map_err(|e| {
         // Sem resposta legível o fechamento pode ter acontecido: quem repete ouviria "não existe" sem entender.
         if e.is_transport() { format!("{} — a sessão pode ter fechado lá: confira com `sessions`", e.text(server)) } else { e.text(server) }
     })?;
@@ -543,7 +544,7 @@ impl Tools {
         let (me, voice) = self.caller(headers).await?;
         if voice { return Err(VOICE_CLOSE_REFUSED.into()); }
         let (server, alvo) = close_target(alvo, &self.server_id)?;
-        if let Some(server) = server { return remote_close(&self.st.peers, &server, &alvo).await; }
+        if let Some(server) = server { return remote_close(&self.st.peers, &server, &alvo, &format!("{}::{me}", self.server_id)).await; }
         let alvo = alvo.as_str();
         if alvo == me { return Err(format!("recusado: '{alvo}' é esta sessão — peça pra outra fechar")); }
         // O DELETE responde ok para nome que não existe: nome errado não pode virar "fechada".
@@ -985,15 +986,15 @@ mod tests {
         use axum::http::StatusCode;
         use axum::routing::{delete, get};
         let reply = |v: Value| ([(axum::http::header::CONTENT_TYPE, "application/json")], v.to_string());
-        let seen: Arc<Mutex<Vec<(String, String)>>> = Arc::default();
+        let seen: Arc<Mutex<Vec<(String, String, String)>>> = Arc::default();
         let sink = seen.clone();
         let app = Router::new()
             .route("/api/sessions", get(move || async move { reply(json!([{"name": "filha"}, {"name": "dono so"}, {"name": "travada"}, {"name": "muda"}])) }))
             .route("/api/sessions/{name}", delete(move |h: HeaderMap, uri: axum::http::Uri| {
                 let sink = sink.clone();
                 async move {
-                    let auth = h.get("authorization").and_then(|v| v.to_str().ok()).unwrap_or_default().to_owned();
-                    sink.lock().unwrap().push((auth, uri.path().to_owned()));
+                    let header = |name| h.get(name).and_then(|v: &axum::http::HeaderValue| v.to_str().ok()).unwrap_or_default().to_owned();
+                    sink.lock().unwrap().push((header("authorization"), header("user-agent"), uri.path().to_owned()));
                     if uri.path().ends_with("/travada") {
                         return (StatusCode::CONFLICT, [(axum::http::header::CONTENT_TYPE, "application/json")], json!({"detail": "recusada lá"}).to_string());
                     }
@@ -1009,22 +1010,23 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let peers = peers_with_lab(dir.path(), &format!("http://{addr}"));
 
-        let out = remote_close(&peers, "lab", "filha").await.unwrap().structured_content.unwrap();
+        let out = remote_close(&peers, "lab", "filha", "aqui::eu").await.unwrap().structured_content.unwrap();
         assert_eq!((out["server"].clone(), out["ok"].clone(), out["warning"]["msg"].clone()),
             (json!("lab"), json!(true), json!("par não avisado")));
-        assert_eq!(seen.lock().unwrap().pop().unwrap(), ("Bearer tok-lab".to_owned(), "/api/sessions/filha".to_owned()));
+        assert_eq!(seen.lock().unwrap().pop().unwrap(),
+            ("Bearer tok-lab".to_owned(), "hangar-mcp (de aqui::eu)".to_owned(), "/api/sessions/filha".to_owned()));
 
-        remote_close(&peers, "lab", "dono so").await.unwrap();
-        assert_eq!(seen.lock().unwrap().pop().unwrap().1, "/api/sessions/dono%20so");
+        remote_close(&peers, "lab", "dono so", "aqui::eu").await.unwrap();
+        assert_eq!(seen.lock().unwrap().pop().unwrap().2, "/api/sessions/dono%20so");
 
-        let err = remote_close(&peers, "lab", "sumiu").await.unwrap_err();
+        let err = remote_close(&peers, "lab", "sumiu", "aqui::eu").await.unwrap_err();
         assert!(err.contains("'sumiu'") && err.contains("'lab'"), "{err}");
         assert!(seen.lock().unwrap().is_empty(), "nome que lá não existe não chega ao DELETE");
 
-        let err = remote_close(&peers, "lab", "travada").await.unwrap_err();
+        let err = remote_close(&peers, "lab", "travada", "aqui::eu").await.unwrap_err();
         assert!(err.contains("recusada lá") && !err.contains("pode ter fechado"), "{err}");
 
-        let err = remote_close(&peers, "lab", "muda").await.unwrap_err();
+        let err = remote_close(&peers, "lab", "muda", "aqui::eu").await.unwrap_err();
         assert!(err.contains("pode ter fechado"), "resposta ilegível não diz que falhou: {err}");
     }
 

@@ -166,10 +166,16 @@ impl PeerClient {
     /// Como `call`, com o status 2xx exato.
     pub async fn call_status(&self, server: &str, method: reqwest::Method, path: &str, body: Option<&Value>)
         -> Result<(u16, Option<Value>), PeerError> {
-        self.send(false, server, method, path, body).await
+        self.send(None, false, server, method, path, body).await
     }
 
-    async fn send(&self, waiting: bool, server: &str, method: reqwest::Method, path: &str, body: Option<&Value>)
+    /// Como `call`, dizendo quem pede: o `user-agent` é o `cliente` que o diário de lá grava.
+    pub async fn call_as(&self, agent: &str, server: &str, method: reqwest::Method, path: &str, body: Option<&Value>)
+        -> Result<Option<Value>, PeerError> {
+        self.send(Some(agent), false, server, method, path, body).await.map(|(_, v)| v)
+    }
+
+    async fn send(&self, agent: Option<&str>, waiting: bool, server: &str, method: reqwest::Method, path: &str, body: Option<&Value>)
         -> Result<(u16, Option<Value>), PeerError> {
         let book = self.book.clone();
         let key = server.to_owned();
@@ -183,7 +189,7 @@ impl PeerClient {
                 slot.get_or_init(|| built)
             }
         };
-        request(http, server, &format!("{}{path}", cfg.base_url), Some(&cfg.token), method, body).await
+        request_as(agent, http, server, &format!("{}{path}", cfg.base_url), Some(&cfg.token), method, body).await
     }
 
     /// Como `call`, sem redirect e com o corpo 2xx cru em `Zeroizing` até `limit`: a resposta pode levar
@@ -252,7 +258,7 @@ impl PeerClient {
     async fn group(&self, waiting: bool, server: &str, method: reqwest::Method, path: &str, body: Option<&Value>) -> Result<Value, PeerError> {
         let group_get = method == reqwest::Method::GET
             && path.strip_prefix("/api/groups/").is_some_and(|rest| !rest.is_empty() && !rest.contains('/'));
-        let answer = match self.send(waiting, server, method, path, body).await.map(|(_, v)| v) {
+        let answer = match self.send(None, waiting, server, method, path, body).await.map(|(_, v)| v) {
             Err(PeerError::Refused { status: 404, detail }) if path.starts_with("/api/groups/") && detail.get("code").is_none() => {
                 return Err(PeerError::OldVersion);
             }
@@ -286,7 +292,13 @@ pub(crate) fn transport(label: &str, e: &dyn std::error::Error) -> PeerError {
 /// token vazio não manda `Authorization`.
 pub(crate) async fn request(http: &reqwest::Client, label: &str, url: &str, token: Option<&str>, method: reqwest::Method,
                             body: Option<&Value>) -> Result<(u16, Option<Value>), PeerError> {
+    request_as(None, http, label, url, token, method, body).await
+}
+
+async fn request_as(agent: Option<&str>, http: &reqwest::Client, label: &str, url: &str, token: Option<&str>, method: reqwest::Method,
+                    body: Option<&Value>) -> Result<(u16, Option<Value>), PeerError> {
     let mut req = http.request(method, url).header(reqwest::header::CONTENT_TYPE, "application/json");
+    if let Some(agent) = agent { req = req.header(reqwest::header::USER_AGENT, agent); }
     if let Some(token) = token.filter(|t| !t.is_empty()) { req = req.bearer_auth(token); }
     if let Some(body) = body { req = req.body(body.to_string()); }
     let mut resp = req.send().await.map_err(|e| transport(label, &e))?;
