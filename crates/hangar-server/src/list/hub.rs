@@ -701,12 +701,23 @@ async fn guest_loop(mut sub: Subscription, share: Arc<ShareState>, token: String
     }
 }
 
+/// O Python não tem mais o `GET` da lista: sem dono, a recusa (401/429) sai daqui, não um 405 de lá.
+async fn refuse_or_pass(st: &AppState, peer: SocketAddr, req: Request, fwd: &crate::proxy::Forward) -> Response {
+    if req.method() == Method::GET && !crate::routes::on_guest_port(&req)
+        && req.extensions().get::<crate::login_guests::gate::Login>().is_none()
+        && let Err(mut refused) = crate::routes::owner_gate(st, peer, &req).await {
+        cors(req.headers(), refused.headers_mut());
+        return refused;
+    }
+    pass(st, req, fwd).await
+}
+
 /// `GET /api/sessions/events` do dono e do convidado da 8766.
 pub async fn events(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let (fwd, who) = match who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     let grant = match &who {
         Some(caller) if req.method() == Method::GET => caller.grant().cloned(),
-        _ => return pass(&st, req, &fwd).await,
+        _ => return refuse_or_pass(&st, peer, req, &fwd).await,
     };
     let (tx, rx) = mpsc::channel::<Bytes>(16);
     if let Some(login) = req.extensions().get::<crate::login_guests::gate::Login>() {
@@ -747,7 +758,7 @@ pub async fn events(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
 pub async fn list(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let (fwd, who) = match who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     if who.is_none() || req.method() != Method::GET {
-        return pass(&st, req, &fwd).await;
+        return refuse_or_pass(&st, peer, req, &fwd).await;
     }
     // Relido agora: o grant do porteiro é desta mesma requisição, mas o registro é a fonte.
     let login = req.extensions().get::<crate::login_guests::gate::Login>().cloned();

@@ -144,8 +144,10 @@ async fn answer(st: &Arc<AppState>, headers: &HeaderMap, bytes: &[u8]) -> Respon
         Ok(q) => q,
         Err(detail) => return json_response(StatusCode::UNPROCESSABLE_ENTITY, json!({"detail": detail})),
     };
-    if !crate::loops::automations(st) {
-        return json_response(StatusCode::CONFLICT, detail_body("erro_automacoes_desligadas", "automações desligadas (kill-switch)", json!({})));
+    match crate::loops::automations(st) {
+        Ok(true) => {}
+        Ok(false) => return json_response(StatusCode::CONFLICT, detail_body("erro_automacoes_desligadas", "automações desligadas (kill-switch)", json!({}))),
+        Err(code) => return json_response(StatusCode::SERVICE_UNAVAILABLE, detail_body(code, "a configuração das automações está inválida", json!({}))),
     }
     let live = match super::http::live_names(st).await {
         Ok(live) => live,

@@ -458,6 +458,9 @@ fn announce(st: &Arc<AppState>, session: &str, card: &Card) {
     // Teste nunca manda aviso real ao celular do dono.
     if cfg!(test) { return; }
     let label = card.entry_name.clone().or_else(|| card.label.clone()).unwrap_or_default();
-    crate::push::send::Sender::new(st.clone(), crate::push::server_env())
-        .vault_request(session, st.server_id.clone(), card.id.clone(), card.origin.clone(), label);
+    let sender = match crate::push::send::Sender::from_state(st.clone()) {
+        Ok(sender) => sender,
+        Err(code) => { st.diag.report("rust.push_config_failed", session, code, "configuração inválida impediu o aviso do cofre"); return; }
+    };
+    sender.vault_request(session, st.server_id.clone(), card.id.clone(), card.origin.clone(), label);
 }

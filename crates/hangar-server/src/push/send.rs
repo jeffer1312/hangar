@@ -402,12 +402,16 @@ impl Sender {
         if test_binary() { return; }
         let (me, session) = (self.clone(), session.to_owned());
         tokio::spawn(async move {
+            let held = || me.st.diag.report("rust.push_gate_failed", &session, "push_gate_invalid", "preferências incompatíveis; aviso do cofre segurado");
             let dir = me.dir();
-            let Ok(prefs) = tokio::task::spawn_blocking(move || store::prefs(&dir)).await else {
-                tracing::warn!(code = "push_gate_read_failed", "aviso do cofre: preferências não leram; aviso segurado");
-                return;
-            };
-            if store::in_quiet_hours(&prefs, chrono::Local::now().time()) { return; }
+            let Ok(Ok(prefs)) = tokio::task::spawn_blocking(move || store::prefs(&dir)).await else { return held() };
+            let quiet = store::in_quiet_hours(&prefs, chrono::Local::now().time());
+            crate::orchestration::codec::discard(prefs);
+            match quiet {
+                Ok(false) => {}
+                Ok(true) => return,
+                Err(_) => return held(),
+            }
             me.broadcast(Outgoing::vault_request(&session, server_id, request_id, origin, label)).await
         });
     }
