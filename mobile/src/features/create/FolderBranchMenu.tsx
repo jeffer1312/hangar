@@ -53,7 +53,7 @@ export function FolderBranchMenu({ server, cwd, info, git, onBack, onDone, onRef
   const typed = name.trim();
   const clear = () => { setFailure(''); setPending(null); setElsewhere(null); };
 
-  const run = async (action: Pending, confirm: boolean) => {
+  const run = async (action: Pending, confirm: boolean, closed?: string) => {
     setBusy(true);
     clear();
     try {
@@ -64,7 +64,7 @@ export function FolderBranchMenu({ server, cwd, info, git, onBack, onDone, onRef
       onDone(status, action.kind === 'switch' ? m.native_folder_git_switched({ branch: status.current ?? action.branch }) : m.native_folder_git_created({ branch: action.branch }));
     } catch (e) {
       if ((e as { code?: string } | null)?.code === SESSIONS_REFUSAL) setPending(action);
-      else { setFailure(reason(e)); haptic.error(); }
+      else { setFailure(closed ? m.native_git_elsewhere_closed_failed({ pasta: closed, motivo: reason(e) }) : reason(e)); haptic.error(); }
       onRefused();
       setBusy(false);
     }
@@ -95,7 +95,7 @@ export function FolderBranchMenu({ server, cwd, info, git, onBack, onDone, onRef
       setBusy(false);
       return;
     }
-    await run({ kind: 'switch', branch }, false);
+    await run({ kind: 'switch', branch }, false, basename(path));
   };
 
   const search = query.trim().toLowerCase();

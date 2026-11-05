@@ -10075,6 +10075,7 @@
   "news_auto_report_sample_machine": "escritorio",
   "news_auto_report_sample_step": "Reiniciando",
   "news_auto_report_sample_error": "a versão nova não respondeu",
+  "native_git_elsewhere_closed_failed": "{pasta} foi fechada, mas a troca de branch falhou: {motivo}",
   "news_branch_sample_main": "main",
   "news_branch_sample_work": "nova-tela",
   "news_branch_sample_upstream": "origin/main"

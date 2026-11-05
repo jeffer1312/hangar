@@ -35,14 +35,14 @@ vi.mock('../../paraglide/messages', () => ({
 vi.mock('../../ui/haptics', () => ({ haptic: { success: vi.fn(), error: vi.fn(), selection: vi.fn() } }));
 vi.mock('./FolderBranchMenu', () => ({ FolderBranchMenu: () => createElement('div', { 'data-menu': 'branches' }) }));
 const MAIN = { current: 'main' as string | null, branches: ['main', 'x'], remotes: [] as string[], dirty: false, worktree_parent: null as string | null };
-const folder = vi.hoisted(() => ({ value: null as unknown, worktrees: [] as unknown[], git: null as unknown, action: null as unknown as (action: string) => Promise<unknown> }));
+const folder = vi.hoisted(() => ({ value: null as unknown, worktrees: [] as unknown[], git: null as unknown, gitFails: false, action: null as unknown as (action: string) => Promise<unknown> }));
 folder.value = { ...MAIN };
 const GIT = { repo: true, current: 'main', upstream: 'origin/main', dirty: 0, ahead: 0, behind: 2, last_fetch: null };
 folder.git = GIT;
 folder.action = () => Promise.resolve(folder.git);
 vi.mock('@hangar/core', async (original) => ({ ...await original<typeof import('@hangar/core')>(),
   getFolderBranchesForServer: () => Promise.resolve(folder.value),
-  getFolderGitForServer: () => Promise.resolve(folder.git),
+  getFolderGitForServer: () => folder.gitFails ? Promise.reject(new Error('sem rede')) : Promise.resolve(folder.git),
   folderGitActionForServer: (_server: unknown, _cwd: string, action: string) => folder.action(action),
   getWorktreesForServer: () => Promise.resolve([{ repo: '/r', worktrees: folder.worktrees }]) }));
 import { BranchPicker } from './BranchPicker';
@@ -245,6 +245,17 @@ describe('BranchPicker', () => {
       expect(el.textContent).toContain('divergiu agora');
       expect(el.textContent).not.toContain('409');
     } finally { folder.action = () => Promise.resolve(folder.git); }
+  });
+
+  it('pull recusado com a releitura também falhando mantém o motivo na tela', async () => {
+    folder.action = (action) => action === 'pull' ? Promise.reject(new Error('409: divergiu agora')) : Promise.resolve(folder.git);
+    try {
+      const { el } = await mount();
+      folder.gitFails = true;
+      await press(el, 'pull');
+      expect(el.textContent).toContain('divergiu agora');
+      expect(el.querySelector('[aria-label="pull"]')).toBeTruthy();
+    } finally { folder.gitFails = false; folder.action = () => Promise.resolve(folder.git); }
   });
 
   it('sem worktrees o resumo diz que não há nenhuma', async () => {

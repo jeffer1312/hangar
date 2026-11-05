@@ -28,6 +28,7 @@ vi.mock('../../paraglide/messages', () => ({
   native_git_elsewhere_close_help: () => 'ajuda', native_git_elsewhere_use: () => 'abrir-la', native_git_elsewhere_close: () => 'fechar-e-trazer',
   native_git_elsewhere_busy: ({ pasta, nomes }: { pasta: string; nomes: string }) => `ocupada:${pasta}:${nomes}`,
   native_git_elsewhere_dirty: ({ pasta }: { pasta: string }) => `alterada:${pasta}`,
+  native_git_elsewhere_closed_failed: ({ pasta, motivo }: { pasta: string; motivo: string }) => `fechada:${pasta}:${motivo}`,
   native_git_elsewhere_failed: ({ pasta, motivo }: { pasta: string; motivo: string }) => `falhou:${pasta}:${motivo}` }));
 const api = vi.hoisted(() => ({ switchTo: vi.fn(), create: vi.fn(), remove: vi.fn() }));
 vi.mock('@hangar/core', async (original) => ({ ...await original<typeof import('@hangar/core')>(),
@@ -117,6 +118,15 @@ describe('FolderBranchMenu', () => {
     await press(el, 'fechar-e-trazer');
     expect(api.switchTo).not.toHaveBeenCalled();
     expect(el.textContent).toContain('ocupada:presa:filha');
+  });
+
+  it('troca que falha depois de fechar a outra pasta diz que ela já foi fechada', async () => {
+    api.remove.mockResolvedValue({});
+    api.switchTo.mockRejectedValue(new Error('409: conflito'));
+    const { el } = await mount();
+    await press(el, 'presa');
+    await press(el, 'fechar-e-trazer');
+    expect(el.textContent).toContain('fechada:presa:conflito');
   });
 
   it('criar leva o nome, a base escolhida e se troca para ela', async () => {

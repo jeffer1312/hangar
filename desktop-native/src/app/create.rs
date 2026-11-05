@@ -1106,6 +1106,9 @@ impl NewSession {
         if self.no_project() {
             let seq = self.checkout.start();
             self.checkout.finish(seq, Ok(None));
+            self.clear_git();
+            let seq = self.worktrees.start();
+            self.worktrees.finish(seq, Ok(Vec::new()));
             (self.branch, self.new_branch, self.base, self.existing, self.base_open) = (String::new(), false, String::new(), None, false);
             (self.picking, self.agents_open) = (false, false);
             cx.notify();

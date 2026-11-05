@@ -10075,6 +10075,7 @@
   "news_auto_report_sample_machine": "office",
   "news_auto_report_sample_step": "Restarting",
   "news_auto_report_sample_error": "the new version did not respond",
+  "native_git_elsewhere_closed_failed": "{pasta} was closed, but switching the branch failed: {motivo}",
   "news_branch_sample_main": "main",
   "news_branch_sample_work": "new-screen",
   "news_branch_sample_upstream": "origin/main"

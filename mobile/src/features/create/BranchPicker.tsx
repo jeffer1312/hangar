@@ -70,13 +70,19 @@ export function BranchPicker({ server, cwd, worktreePath, sessionName, value, on
   const [wtQuery, setWtQuery] = useState('');
   // Resposta de outra pasta, ou de antes de o painel fechar, não entra nesta.
   const gitTurn = useRef(0);
+  // O objeto do servidor muda de identidade (rede local, token) sem ser outra máquina: não pode descartar um Pull em curso.
+  const serverNow = useRef(server);
+  serverNow.current = server;
+  const gitShown = useRef(git);
+  gitShown.current = git;
+  const infoFolder = useRef<string | null>(null);
 
   const runGit = useCallback(async (action: 'fetch' | 'pull', quiet = false) => {
-    const turn = gitTurn.current;
+    const turn = ++gitTurn.current;
     setGitBusy(action);
     setGitNote(null);
     try {
-      const status = await folderGitActionForServer(server, cwd, action);
+      const status = await folderGitActionForServer(serverNow.current, cwd, action);
       if (turn !== gitTurn.current) return;
       setGit(status);
       // Fetch traz branches remotas novas; a lista de bases precisa delas.
@@ -93,7 +99,7 @@ export function BranchPicker({ server, cwd, worktreePath, sessionName, value, on
     } finally {
       if (turn === gitTurn.current) setGitBusy(null);
     }
-  }, [server, cwd]);
+  }, [cwd]);
 
   // Abrir o menu busca as remotas uma vez: sem isso "atualizada" só diz respeito ao último fetch.
   useEffect(() => {
@@ -102,7 +108,7 @@ export function BranchPicker({ server, cwd, worktreePath, sessionName, value, on
     setGitNote(null);
     setGitBusy(null);
     setGitFailed('');
-    getFolderGitForServer(server, cwd)
+    getFolderGitForServer(serverNow.current, cwd)
       .then((status) => {
         if (turn !== gitTurn.current) return;
         setGit(status);
@@ -110,16 +116,17 @@ export function BranchPicker({ server, cwd, worktreePath, sessionName, value, on
       })
       .catch((e: unknown) => { if (turn === gitTurn.current) setGitFailed(reason(e)); });
     return () => { gitTurn.current++; };
-  }, [server, cwd, runGit]);
+  }, [server.id, cwd, runGit]);
 
   useEffect(() => {
     if (!gitTry) return;
     const turn = gitTurn.current;
     setGitFailed('');
-    getFolderGitForServer(server, cwd)
+    getFolderGitForServer(serverNow.current, cwd)
       .then((status) => { if (turn === gitTurn.current) setGit(status); })
-      .catch((e: unknown) => { if (turn === gitTurn.current) setGitFailed(reason(e)); });
-  }, [server, cwd, gitTry]);
+      // Releitura depois de uma ação: o erro dela não pode tomar o lugar do motivo da ação na tela.
+      .catch((e: unknown) => { if (turn === gitTurn.current && !gitShown.current) setGitFailed(reason(e)); });
+  }, [server.id, cwd, gitTry]);
 
   useEffect(() => {
     let vivo = true;
@@ -127,9 +134,10 @@ export function BranchPicker({ server, cwd, worktreePath, sessionName, value, on
     setFailed('');
     setLoading(true);
     getFolderBranchesForServer(server, cwd)
-      .then((r) => { if (vivo) { setInfo(r); setBase((b) => b || defaultBase(r)); } })
+      .then((r) => { if (vivo) { infoFolder.current = cwd; setInfo(r); setBase((b) => b || defaultBase(r)); } })
       .catch((e: unknown) => {
-        if (!vivo) return;
+        // Releitura da mesma pasta que falhou: a lista anterior fica, com o aviso da ação que veio antes.
+        if (!vivo || infoFolder.current === cwd) return;
         setInfo(null);
         if (!isNotRepo(e)) setFailed(m.native_create_checkout_failed({ reason: reason(e) }));
       })
@@ -203,6 +211,9 @@ export function BranchPicker({ server, cwd, worktreePath, sessionName, value, on
   if (branching && git?.repo) {
     return <FolderBranchMenu server={server} cwd={cwd} info={info} git={git} onBack={() => setBranching(false)}
       onDone={(status, note) => {
+        // Um fetch ainda em voo traz a branch de antes da troca: a resposta dele não entra.
+        gitTurn.current++;
+        setGitBusy(null);
         setGit(status);
         setGitNote({ ok: true, text: note });
         setBranching(false);
@@ -211,7 +222,7 @@ export function BranchPicker({ server, cwd, worktreePath, sessionName, value, on
         setWtsTry((n) => n + 1);
       }}
       onRefused={() => { setGitTry((n) => n + 1); setBranchesTry((n) => n + 1); setWtsTry((n) => n + 1); }}
-      onOpenFolder={(path) => { setBranching(false); setFresh(false); setName(''); onPickFolder(path, false, wts?.repo); }} />;
+      onOpenFolder={(path) => { setBranching(false); setFresh(false); setName(''); onPickFolder(path, false, wts?.repo ?? cwd); }} />;
   }
 
   if (picking) {

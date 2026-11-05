@@ -110,6 +110,12 @@ impl NewSession {
         self.git = GitPanel { status, ..Default::default() };
     }
 
+    /// "Sem projeto" não tem git: a resposta pendente da pasta anterior não pode entrar nele.
+    pub(super) fn clear_git(&mut self) {
+        let seq = self.git.status.start();
+        self.git.status.finish(seq, Ok(FolderGit::default()));
+    }
+
     /// Abrir o painel busca as remotas uma vez por pasta: é assim que se sabe se ela está atualizada.
     pub(super) fn git_opened(&mut self, cx: &mut Context<Self>) {
         self.git.branching = false;
