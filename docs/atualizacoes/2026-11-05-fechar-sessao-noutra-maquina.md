@@ -3,7 +3,7 @@ id: 2026-11-05-fechar-sessao-noutra-maquina
 titulo: Fechar sessão de outra máquina por servidor::sessao
 comando_posix: ./scripts/install-hangar-send.sh
 comando_windows: powershell -ExecutionPolicy Bypass -File install.ps1 -Update
-prova: scripts/hangar-send
+prova: ~/.claude/CLAUDE.md
 destrutivo: false
 ---
 
