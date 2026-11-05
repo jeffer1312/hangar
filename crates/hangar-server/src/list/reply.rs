@@ -39,6 +39,7 @@ struct Cached {
     provider: String,
     text: Option<String>,
     at: Option<f64>,
+    activity: Option<f64>,
 }
 
 /// Por sessão, a resposta lida para (transcript, mtime, provider): a lista roda a cada 2 s e o
@@ -49,7 +50,8 @@ pub struct ReplyCache(Capped<String, Cached>);
 impl ReplyCache {
     /// Preenche `last_reply`/`last_reply_at` das linhas Claude e Codex: só a parada com transcript
     /// tem resposta. Linha de provedor que o Rust não lê fica como veio. Falha de leitura deixa a
-    /// linha sem resposta, sem cache, e volta para quem chamou registrar.
+    /// linha sem resposta, sem cache, e volta para quem chamou registrar. Na parada, `last_activity`
+    /// entra com o mtime (a chave do cache) e sai com a hora do último evento da conversa.
     #[must_use = "sem registrar a falha, a linha parece só não ter resposta"]
     pub fn decorate(
         &mut self,
@@ -82,6 +84,9 @@ impl ReplyCache {
                         continue;
                     }
                 };
+                let activity = events.iter().rev()
+                    .filter(|ev| matches!(ev.kind, ChatKind::UserMsg | ChatKind::AssistantMsg | ChatKind::ToolUse | ChatKind::ToolResult | ChatKind::Thinking))
+                    .find_map(|ev| ev.ts.filter(|&ts| ts != 0.0));
                 let event = events
                     .into_iter()
                     .rev()
@@ -94,12 +99,14 @@ impl ReplyCache {
                     None => (None, None),
                 };
                 let entry =
-                    Cached { jsonl, mtime: row.last_activity, provider: row.provider.clone(), text, at };
+                    Cached { jsonl, mtime: row.last_activity, provider: row.provider.clone(), text, at, activity };
                 self.0.insert(row.name.clone(), entry);
             }
             let Some(cached) = self.0.get(&row.name) else { continue };
             row.last_reply = cached.text.clone();
             row.last_reply_at = cached.at;
+            // O mtime do transcript anda sem conversa nenhuma (o Claude toca o arquivo parado), e o prazo de ocultar e adormecer nunca venceria.
+            if let Some(at) = cached.activity { row.last_activity = Some(at); }
         }
         failures
     }

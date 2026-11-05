@@ -103,8 +103,9 @@ fn last_reply_cache_by_transcript_and_mtime() {
     // O corte de 160 é por caractere, como o fatiamento do Python.
     assert_eq!(row.last_reply.as_deref(), Some("ç".repeat(160).as_str()));
 
-    // Mesmo transcript e mtime: não relê.
+    // Mesmo transcript e mtime: não relê. A classificação devolve o mtime à linha a cada rodada.
     std::fs::write(&jsonl, line("nova")).unwrap();
+    row.last_activity = Some(10.0);
     assert!(cache.decorate(std::slice::from_mut(&mut row), |_| None).is_empty());
     assert_eq!(row.last_reply.as_deref(), Some("ç".repeat(160).as_str()));
 
@@ -121,6 +122,33 @@ fn last_reply_cache_by_transcript_and_mtime() {
     assert!(cache.decorate(std::slice::from_mut(&mut pi), |_| None).is_empty());
     assert_eq!((row.last_reply, row.last_reply_at), (None, None));
     assert_eq!(pi.last_reply.as_deref(), Some("do python"));
+}
+
+/// O transcript tocado sem conversa nova, com aviso de sistema no fim: o tempo da sessão parada não anda.
+#[test]
+fn idle_activity_is_the_last_conversation_event_not_the_mtime() {
+    let dir = tempfile::tempdir().unwrap();
+    let jsonl = dir.path().join("s.jsonl");
+    let lines = [
+        serde_json::json!({"type": "assistant", "timestamp": "2027-01-15T08:00:05.000Z",
+            "message": {"role": "assistant", "content": [{"type": "text", "text": "pronto"}]}}),
+        serde_json::json!({"type": "system", "subtype": "informational", "timestamp": "2027-01-15T20:00:00.000Z",
+            "content": "hangar: hooks.json changed — reloaded"}),
+    ];
+    std::fs::write(&jsonl, lines.map(|l| l.to_string() + "\n").concat()).unwrap();
+    let touched = 1_900_000_000.0;
+    let mut row: SessionRow = serde_json::from_value(serde_json::json!({
+        "name": "s", "state": "idle", "jsonl": jsonl.to_str().unwrap(), "last_activity": touched})).unwrap();
+    let mut cache = ReplyCache::default();
+    assert!(cache.decorate(std::slice::from_mut(&mut row), |_| None).is_empty());
+    assert_eq!(row.last_activity, row.last_reply_at);
+    assert_ne!(row.last_activity, Some(touched));
+
+    // Trabalhando continua no mtime: é ele que mostra o turno andando.
+    row.state = "working".into();
+    row.last_activity = Some(touched);
+    assert!(cache.decorate(std::slice::from_mut(&mut row), |_| None).is_empty());
+    assert_eq!(row.last_activity, Some(touched));
 }
 
 #[test]

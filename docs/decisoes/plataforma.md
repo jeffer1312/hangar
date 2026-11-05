@@ -3976,3 +3976,18 @@ Claude, duas mensagens seguidas chegaram em ordem. Não conferido: selo e tela n
 de hooks sem resposta respondia a uma operação que a fila nunca teve, o que punha o ator em erro
 (`queue_io`, `operação não preparada`). Processo recém-lançado agora zera as duas marcas
 (`open_with_launch`), e a reaprovação não responde à fila (`in_queue`, em `codex.rs`).
+
+## Tempo da sessão parada vem da conversa, não do mtime (05/11/2026)
+
+**Regra.** Com a sessão `idle`, `last_activity` é a hora do último evento da conversa (pedido,
+resposta, ferramenta ou pensamento), lida pelo `ReplyCache` junto com a última resposta. Aviso de
+sistema não conta. Fora de `idle`, e sem evento na cauda, continua o mtime do transcript. O mtime
+segue sendo a chave dos caches: o vigia de limite roda antes das respostas por isso.
+
+**Por quê.** A regra de ocultar usava o mtime, e ele anda sem conversa. Uma sessão parada desde as
+17:46 aparecia como "11 min atrás" na manhã seguinte, com ocultar em 3 h ligado. Medido em três
+sessões paradas: foram tocadas de hora em hora (05:08:21 → 06:08:21, 05:11:36 → 06:11:36,
+05:20:02 → 06:20:02), sem mudar de tamanho, com mtime em milissegundo exato, o que indica `utimes`
+e não escrita. Elas rodavam Claude Code 2.1.312 e 2.1.317; outra, em 2.1.318, ficou 14 h sem toque.
+Quem chama não foi identificado (sem strace na máquina): a correção não depende disso. Os avisos
+`hooks.json changed — reloaded` também entram no arquivo sem ninguém conversar.
