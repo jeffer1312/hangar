@@ -78,9 +78,9 @@ class H(http.server.BaseHTTPRequestHandler):
         if self.headers.get("Authorization") == "Bearer tok-cai":
             self.close_connection = True
             return
-        falhou = self.headers.get("Authorization") == "Bearer tok-falha"
-        self.send_response(500 if falhou else 200); self.send_header("Content-Type", "application/json"); self.end_headers()
-        self.wfile.write(b'{"detail":"falhou"}' if falhou else b'{"ok":true}')
+        failed = self.headers.get("Authorization") == "Bearer tok-falha"
+        self.send_response(500 if failed else 200); self.send_header("Content-Type", "application/json"); self.end_headers()
+        self.wfile.write(b'{"detail":"falhou"}' if failed else b'{"ok":true}')
     def log_message(self, *a): pass
 http.server.HTTPServer(("127.0.0.1", porta), H).serve_forever()
 PY
