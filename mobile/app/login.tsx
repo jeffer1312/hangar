@@ -105,7 +105,8 @@ export default function Login() {
       if (status === 401) {
         setError(m.login_url_token_invalidos());
       } else if (tailscale) {
-        setError(m.login_tailscale_sem_acesso({ host: tailscale }));
+        const hint = m.login_tailscale_sem_acesso({ host: tailscale });
+        setError(e instanceof Error && e.message ? `${hint}\n\n${e.message}` : hint);
       } else {
         const msg = e instanceof Error && e.message ? e.message : m.login_falha();
         setError(msg ? `${m.login_falha()}: ${msg}` : m.login_url_token_invalidos());

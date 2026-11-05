@@ -3255,7 +3255,7 @@
   "login_url_token_invalidos": "URL ou token inválidos — use http/https com o token (sem espaços).",
   "login_deeplink_invalido": "Deep-link de pareamento inválido — o link tem token/api duplicados ou api vazia.",
   "login_falha": "falha",
-  "login_tailscale_sem_acesso": "Não consegui falar com {host}. Esse endereço é do Tailscale: confira se ele está ligado neste aparelho, na mesma conta do servidor.",
+  "login_tailscale_sem_acesso": "Não consegui falar com {host}. Esse endereço é do Tailscale: confira se ele está ligado neste aparelho, na mesma conta do servidor, e se o servidor está ligado.",
   "sessao_expirada": "sessão expirada — faça login novamente",
   "loop_objetivo_titulo": "Objetivo — uma coisa só.",
   "loop_objetivo_corpo": "Resultado final, não passos; pequeno e verificável. ✗ \"refatore o projeto\" / ✓ \"migre utils/date.ts pra date-fns e mantenha npm run check verde\". Tarefa grande → quebrar num arquivo de plano e mandar o loop fazer \"o próximo item pendente\".",
