@@ -86,8 +86,8 @@ question, some on another machine, one of them on your phone while you're out fo
 permission, interrupt, queue the next prompt or dictate it, on your home Wi-Fi or anywhere over
 Tailscale. The PWA opens in the phone's browser with nothing to install. Android and iPhone also
 have a native app, outside the stores for now: in the desktop app, open Settings, Install on phone.
-iPhone goes over a USB cable with SideStore, self-signed with your Apple ID, and gets no
-notifications.
+iPhone goes over USB, plugged into the computer running the server, with SideStore, self-signed
+with your Apple ID, and shows alerts only while the app is open.
 
 ### And also
 
