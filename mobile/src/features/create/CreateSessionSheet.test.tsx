@@ -247,7 +247,7 @@ vi.mock('../../paraglide/messages', () => ({
     'worktree_menu_pill_nova worktree_menu_pill_existente worktree_menu_nome_sessao ' +
     'worktree_menu_titulo worktree_menu_pasta worktree_menu_pasta_dica worktree_menu_nova worktree_menu_nova_dica worktree_menu_existente ' +
     'worktree_menu_existentes worktree_menu_uma worktree_menu_n worktree_menu_n_em_uso worktree_menu_nenhuma worktree_menu_em_uso ' +
-    'worktree_menu_buscar native_create_checkout_dirty native_folder_git_branch_entry ' +
+    'worktree_menu_buscar worktree_menu_no_match native_create_checkout_dirty native_folder_git_branch_entry ' +
     'worktree_menu_ocupada worktree_menu_parte_de worktree_menu_branch worktree_menu_ja_existe worktree_menu_ja_aberta worktree_menu_pasta_destino ' +
     'worktree_nova_so_remoto worktree_subagentes worktree_parada_dias worktree_dias_atras ' +
     'composer_session_settings composer_session_settings_hint native_ctl_model_title native_ctl_search native_ctl_no_results ' +

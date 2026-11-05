@@ -8844,6 +8844,7 @@
   "worktree_menu_buscar": "Search branch or worktree",
   "worktree_menu_ocupada": "{nome} is already working there: two sessions in one folder get in each other's way.",
   "worktree_menu_em_uso": "in use: {nome}",
+  "worktree_menu_no_match": "No worktree found.",
   "worktree_menu_pill_nova": "{branch} · new worktree",
   "worktree_menu_pill_existente": "{nome} · worktree",
   "worktree_apagar_branch_perde": "The {n} commits aren't on the base: checking this loses them too.",

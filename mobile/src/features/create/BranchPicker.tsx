@@ -261,7 +261,7 @@ export function BranchPicker({ server, cwd, worktreePath, sessionName, value, on
     ) : null;
     const body = wtsFailed && !wts ? null : wtsLoading && !wts ? <Text style={styles.help} accessibilityLiveRegion="polite">{m.native_create_checkout_loading()}</Text>
       : !list.length ? <Text style={styles.help}>{m.worktree_menu_nenhuma()}</Text>
-      : !found.length ? <Text style={styles.help}>{m.native_git_no_branch()}</Text>
+      : !found.length ? <Text style={styles.help}>{m.worktree_menu_no_match()}</Text>
       : (
         <>
           {mine.map(row)}
@@ -316,7 +316,8 @@ export function BranchPicker({ server, cwd, worktreePath, sessionName, value, on
       </Pressable>
     </View>
   ) : !git ? <Text style={styles.help} accessibilityLiveRegion="polite">{m.native_create_checkout_loading()}</Text>
-    : !git.repo ? null : <FolderGitCard folder={basename(cwd)} git={git} busy={gitBusy} note={gitNote} onAction={(action) => { void runGit(action); }} />;
+    : !git.repo ? (gitNote && !gitNote.ok ? <Text selectable style={styles.error} accessibilityRole="alert">{gitNote.text}</Text> : null)
+    : <FolderGitCard folder={basename(cwd)} git={git} busy={gitBusy} note={gitNote} onAction={(action) => { void runGit(action); }} />;
 
   return (
     <ScrollView contentContainerStyle={styles.box} keyboardShouldPersistTaps="handled">

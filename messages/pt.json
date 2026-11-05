@@ -8844,6 +8844,7 @@
   "worktree_menu_buscar": "Buscar branch ou worktree",
   "worktree_menu_ocupada": "{nome} já trabalha nela: duas sessões na mesma pasta se atrapalham.",
   "worktree_menu_em_uso": "em uso: {nome}",
+  "worktree_menu_no_match": "Nenhuma worktree encontrada.",
   "worktree_menu_pill_nova": "{branch} · worktree nova",
   "worktree_menu_pill_existente": "{nome} · worktree",
   "worktree_apagar_branch_perde": "Os {n} commits não estão na base: marcando, eles também são perdidos.",

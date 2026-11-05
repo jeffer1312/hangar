@@ -186,7 +186,7 @@ export function FolderBranchMenu({ server, cwd, info, git, locked, onBack, onDon
         <>
           <TextInput accessibilityLabel={m.native_folder_git_name()} placeholder={m.native_folder_git_name()} value={name} onChangeText={setName}
             autoCapitalize="none" autoCorrect={false} editable={!busy} style={styles.input} placeholderTextColor={theme.tokens.text.muted} />
-          <Pressable onPress={() => setCheckout((on) => !on)} disabled={busy} accessibilityRole="checkbox" accessibilityLabel={m.native_folder_git_checkout()}
+          <Pressable onPress={() => { haptic.selection(); setCheckout((on) => !on); }} disabled={busy} accessibilityRole="checkbox" accessibilityLabel={m.native_folder_git_checkout()}
             accessibilityState={{ checked: checkout, disabled: busy }} style={styles.check}>
             <Icon name={checkout ? 'SquareCheck' : 'Square'} size={18} color={checkout ? theme.tokens.accent.base : theme.tokens.text.muted} />
             <Text style={styles.rowName}>{m.native_folder_git_checkout()}</Text>

@@ -954,13 +954,14 @@ impl NewSession {
         self.request(cx, move |api, send| Box::pin(async move { send(CreateReply::Codex(seq, api.server_read(&["codex-contas"], &[], 30).await)).await }));
     }
 
-    fn select_root(&mut self, root: Root, window: &mut Window, cx: &mut Context<Self>) {
+    fn select_root(&mut self, root: Root, window: &mut Window, cx: &mut Context<Self>) { self.open_root(root, true, window, cx); }
+
+    fn open_root(&mut self, root: Root, pick: bool, window: &mut Window, cx: &mut Context<Self>) {
         let path = root.path.clone();
         // A pasta da criação em voo não muda: a coluna da esquerda fica parada até a resposta.
         if self.creating { return; }
         self.root = Some(root);
-        // As raízes podem chegar depois do clique em "Sem projeto": a escolha da pessoa fica.
-        if self.compact && !self.no_project() { self.picked = Some(path.clone()); self.reset_git(); self.load_branches(window, cx); }
+        if self.compact && pick { self.picked = Some(path.clone()); self.reset_git(); self.load_branches(window, cx); }
         let remember = path.clone();
         self.link.runtime.spawn_blocking(move || crate::appearance::remember_root(&remember));
         self.scan_dir(path, cx);
@@ -1133,6 +1134,7 @@ impl NewSession {
     }
 
     fn load_folder_worktrees(&mut self, cx: &mut Context<Self>) {
+        if self.no_project() { return; }
         let Some(folder) = self.picked.clone() else { return };
         let seq = self.worktrees.start();
         // Só o repositório da pasta e sem medir o disco: o menu não mostra espaço.
@@ -1370,7 +1372,8 @@ impl NewSession {
                 }
                 let list = self.roots.ok().cloned().unwrap_or_default();
                 self.root_scans = list.iter().cloned().map(|root| RootScan { root, scan: Remote::default() }).collect();
-                if let Some(root) = list.iter().find(|r| Some(&r.path) == last.as_ref()).or(list.first()).cloned() { self.select_root(root, window, cx); }
+                // As raízes podem chegar depois do clique em "Sem projeto": a escolha da pessoa fica.
+                if let Some(root) = list.iter().find(|r| Some(&r.path) == last.as_ref()).or(list.first()).cloned() { self.open_root(root, !self.no_project(), window, cx); }
                 self.apply_preset(window, cx);
                 self.refilter(cx);
             }
@@ -1573,7 +1576,8 @@ fn worktree_body(branch: &str, new_branch: bool, base: &str) -> Value {
 fn created_here(session: &SessionInfo, name: &str, cwd: &str, branch: Option<&str>) -> bool {
     if session.name != name { return false; }
     match branch {
-        None => session.cwd.as_deref() == Some(cwd),
+        // A sessão volta com o caminho já expandido, e o nome foi escolhido livre logo antes do pedido.
+        None => cwd == NO_PROJECT_CWD || session.cwd.as_deref() == Some(cwd),
         Some(branch) => session.branch.as_deref() == Some(branch) && session.cwd.as_deref().is_some_and(|path| {
             if path == cwd { return true; }
             let path = path.replace('\\', "/");
@@ -3270,6 +3274,8 @@ mod tests {
             branch: Some("feature".into()), ..Default::default() };
         assert!(super::created_here(&created, "api", "/projects/repo/src", Some("feature")));
         assert!(!super::created_here(&created, "api", "/projects/repo/src", None));
+        assert!(super::created_here(&created, "api", super::NO_PROJECT_CWD, None));
+        assert!(!super::created_here(&created, "outra", super::NO_PROJECT_CWD, None));
         assert!(!super::created_here(&created, "api", "/other/repo", Some("feature")));
         assert!(!super::created_here(&created, "api", "/projects/other-repo", Some("feature")));
         assert!(!super::created_here(&created, "api", "/projects/repo", Some("main")));
