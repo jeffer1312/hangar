@@ -951,15 +951,56 @@ describe('recusas e recuperação da lista', () => {
     await settle();
     const delays = [2000, 5000, 30000, 60000, 120000, 240000, 300000, 600000, 1800000, 1800000];
     for (const [index, delay] of delays.entries()) {
-      created[index].onerror?.({});
-      created[index].onerror?.({});
+      if (index < 3) {
+        created[index].onerror?.({});
+        created[index].onerror?.({});
+      }
       expect(retryAfterMs('srv1')).toBe(delay);
       expect(JSON.parse(prefs.getString(outageKey)!).srv1.failures).toBe(Math.min(index + 1, 9));
+      const attempts = fetchMock.mock.calls.length;
       await advance(delay - 1);
-      expect(created).toHaveLength(index + 1);
+      expect(fetchMock).toHaveBeenCalledTimes(attempts);
       await advance(1);
-      expect(created).toHaveLength(index + 2);
+      expect(fetchMock.mock.calls.length).toBeGreaterThan(attempts);
+      expect(created).toHaveLength(Math.min(index + 2, 3));
     }
+    rel();
+  });
+
+  test('máquina recente fica em 30s mesmo depois de deixar de abrir SSE', async () => {
+    useServers.setState({ activeId: null });
+    registrarSucesso('srv1');
+    fetchMock.mockRejectedValue(new TypeError('offline'));
+    const rel = useSessions.getState().retain();
+    await settle();
+    for (const delay of [2000, 5000]) {
+      created.at(-1)!.onerror?.({});
+      await advance(delay);
+    }
+    created.at(-1)!.onerror?.({});
+    expect(retryAfterMs('srv1')).toBe(30000);
+    await advance(30000);
+    expect(retryAfterMs('srv1')).toBe(30000);
+    expect(created).toHaveLength(3);
+    rel();
+  });
+
+  test('volta ao app não reinicia a espera de inativo depois de três falhas seguidas', async () => {
+    useServers.setState({ activeId: null });
+    registrarSucesso('srv1');
+    fetchMock.mockRejectedValue(new TypeError('offline'));
+    const rel = useSessions.getState().retain();
+    await settle();
+    for (const delay of [2000, 5000]) {
+      created.at(-1)!.onerror?.({});
+      await advance(delay);
+    }
+    created.at(-1)!.onerror?.({});
+    const attempts = fetchMock.mock.calls.length;
+    useSessions.getState().setForeground(false);
+    useSessions.getState().setForeground(true);
+    await settle();
+    expect(fetchMock).toHaveBeenCalledTimes(attempts);
     rel();
   });
 
@@ -1131,9 +1172,9 @@ describe('recusas e recuperação da lista', () => {
     fetchMock.mockRejectedValue(new TypeError('offline'));
     const rel = useSessions.getState().retain();
     await settle();
-    for (const delay of [2000, 5000, 30000, 60000]) {
+    for (const delay of [2000, 5000]) {
       created.at(-1)!.onerror?.({});
-      expect(retryAfterMs('srv1')).toBe(Math.min(delay, 30000));
+      expect(retryAfterMs('srv1')).toBe(delay);
       await advance(delay);
     }
     const count = created.length;

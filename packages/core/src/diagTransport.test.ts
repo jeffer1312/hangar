@@ -20,7 +20,7 @@ it('retém sem token, após offline e HTTP falho; entrega só ao destino origina
   expect(fetchMock).not.toHaveBeenCalled();
   tokens.set('https://a.test', 'velho');
   await diario.enviar();
-  await diario.enviar();
+  await vi.advanceTimersByTimeAsync(10000);
   tokens.set('https://a.test', 'novo');
   await diario.enviar();
   await diario.enviar();
@@ -61,6 +61,50 @@ it('limita a retenção e retenta automaticamente depois da falha', async () => 
   const eventos = lotes.flat();
   expect(eventos).toHaveLength(200);
   expect(eventos[0].seq).toBe(40);
+});
+
+it('destino sem rede espera cada vez mais, mesmo com envio pedido pela volta ao app', async () => {
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('offline'));
+  const diario = criarTransporteDiag(() => 'token');
+  diario.registrar('https://desligado.test', { evento: 'lista.falhou' });
+  await vi.advanceTimersByTimeAsync(4000);
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  await diario.enviar();
+  await vi.advanceTimersByTimeAsync(9999);
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  await vi.advanceTimersByTimeAsync(29999);
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(fetchMock).toHaveBeenCalledTimes(3);
+  await vi.advanceTimersByTimeAsync(60000 + 120000 + 300000 + 600000);
+  expect(fetchMock).toHaveBeenCalledTimes(7);
+  await vi.advanceTimersByTimeAsync(1800000 - 1);
+  expect(fetchMock).toHaveBeenCalledTimes(7);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(fetchMock).toHaveBeenCalledTimes(8);
+});
+
+it('destino sem rede não atrasa evento de outro destino e entrega ao voltar', async () => {
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+    if (String(url).startsWith('https://desligado.test')) throw new Error('offline');
+    return aceitar(url, init);
+  });
+  const diario = criarTransporteDiag(() => 'token');
+  diario.registrar('https://desligado.test', { evento: 'lista.falhou' });
+  await vi.advanceTimersByTimeAsync(4000);
+  await vi.advanceTimersByTimeAsync(10000);
+  await vi.advanceTimersByTimeAsync(30000);
+  diario.registrar('https://ligado.test', { evento: 'tela.ver' });
+  await vi.advanceTimersByTimeAsync(4000);
+  expect(fetchMock.mock.calls.filter(([url]) => String(url).startsWith('https://ligado.test'))).toHaveLength(1);
+  fetchMock.mockImplementation(aceitar);
+  await vi.advanceTimersByTimeAsync(60000);
+  expect(fetchMock.mock.calls.at(-1)?.[0]).toBe('https://desligado.test/api/diag');
+  diario.registrar('https://desligado.test', { evento: 'novo' });
+  await vi.advanceTimersByTimeAsync(4000);
+  expect(JSON.parse(fetchMock.mock.calls.at(-1)?.[1]?.body as string)).toEqual({ eventos: [{ evento: 'novo' }] });
 });
 
 it('retém quando o servidor não confirma a gravação e evita keepalive em lote grande', async () => {

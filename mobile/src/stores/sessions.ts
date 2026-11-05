@@ -67,6 +67,8 @@ const httpFailures = new Map<string, number>();
 const httpRetryAt = new Map<string, number>();
 const lastFailureHttp = new Map<string, boolean>();
 const HTTP_RETRY_DELAYS_MS = [2000, 5000, 30000, 60000, 120000, 240000, 300000, 600000, 1800000];
+const MACHINE_OFF_FAILURES = 3;
+const machineLooksOff = (id: string) => (httpFailures.get(id) ?? 0) >= MACHINE_OFF_FAILURES;
 const refused = new Map<string, number>();
 const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 let hidden = new Map<string, string | null>();
@@ -392,7 +394,11 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
       registrarDiag({ evento: 'lista.falhou', nivel: 'erro', tela: 'lista', codigo: status ?? 'sincronia',
         detalhe: `${httpResponse ? 'resposta' : 'conexao'}: ${error instanceof Error ? error.name : 'erro'}`,
         ms: Date.now() - inicio }, s.baseUrl);
-      if (!httpResponse) failed(true);
+      if (!httpResponse) {
+        failed(true);
+        // REST lento ainda se recupera pelo SSE; máquina desligada só ganharia mais uma conexão.
+        if (machineLooksOff(s.id) && useServers.getState().activeId !== s.id) httpFailed();
+      }
       slots.set(s.id, failedSlot(s.id, httpResponse ? m.sessao_erro_servidor() : 'offline'));
       recompute(set);
       if (countedHttpFailure) {
@@ -642,8 +648,11 @@ export const useSessions = create<SessionsState>((set, get) => ({
       if (refs > 0 && useServers.getState().ready) initialKickPending = false;
       for (const s of serversCache) {
         const wasRefused = refused.delete(s.id);
+        const isActive = s.id === useServers.getState().activeId;
+        // O erro falso da suspensão é uma falha só; quem já falhou seguido segue no prazo.
+        if (!wasRefused && !isActive && machineLooksOff(s.id)) continue;
         httpRetryAt.delete(s.id);
-        if (wasRefused || s.id === useServers.getState().activeId || respondeuRecentemente(s.id)) {
+        if (wasRefused || isActive || respondeuRecentemente(s.id)) {
           retentarAgora(s.id);
           retryAt.delete(s.id);
         }

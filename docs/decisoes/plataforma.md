@@ -699,6 +699,16 @@ a queda. Erro HTTP e os demais erros continuam à vista. Com todas as máquinas 
 nenhuma sessão, a lista vazia diz que elas estão fora do ar (texto neutro), não "Nenhuma sessão
 ativa". A escala de esperas não mudou.
 
+Em 05/11/2026 o usuário pediu que o Expo parasse de insistir em servidor desligado. O
+`notebook-lhais` saiu do Tailscale em 03/11/2026 às 20:23 UTC, o mesmo dia em que a falha no iPhone
+voltou a aparecer. A coincidência não prova a causa: em 16/09/2026 a VPN caiu duas vezes com o app
+fechado. Mas a tailscale/tailscale#21773 descreve pacotes para um nó morto esgotando os 64 buffers
+do `mem_ios.go`, e o diário tinha uma brecha: a falha da máquina era enviada à própria máquina a
+cada 8 + 10 s, por fora do esfriamento. Agora o diário recua por destino sem rede até 30 min. Com
+três falhas seguidas, servidor inativo não abre SSE depois de erro de rede nem é liberado ao
+voltar ao app. As duas primeiras falhas mantêm a liberação de 23/09, para não voltar o erro falso
+da suspensão.
+
 ## Compartilhado por sessão, não por conexão
 
 (`app/difusor.py`, `stats.Accumulator.
