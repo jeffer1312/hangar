@@ -7,6 +7,21 @@ const PCM_LIMIT: usize = pcm_limit(30 * 60);
 const fn pcm_limit(seconds: u64) -> usize { 16_000 * 2 * seconds as usize }
 const SILENCE: Duration = Duration::from_secs(2);
 const COUNTDOWN: Duration = Duration::from_secs(3);
+const PILL_BARS: usize = 12;
+const PILL_WIDTH: f32 = 72.;
+const PILL_HEIGHT: f32 = 28.;
+const PILL_GAP: f32 = 8.;
+const PILL_BAR_MIN: f32 = 4.;
+const PILL_BAR_MAX: f32 = 16.;
+
+/// Altura das barras da pílula: a amostra mais nova no centro, e as velhas saem para as duas pontas.
+fn pill_heights(bars: &std::collections::VecDeque<f32>) -> [f32; PILL_BARS] {
+    std::array::from_fn(|index| {
+        let from_center = PILL_BARS / 2 - 1 - index.min(PILL_BARS - 1 - index);
+        let level = bars.iter().rev().nth(from_center).copied().unwrap_or(0.);
+        PILL_BAR_MIN + level.clamp(0., 1.) * (PILL_BAR_MAX - PILL_BAR_MIN)
+    })
+}
 
 fn organization_warning(value:&Value)->Option<String> {
     let warning=value["aviso"].as_str().filter(|s|!s.is_empty())?;
@@ -833,7 +848,7 @@ impl Hangar {
                                 this.redraw(panes::Area::Bottom, cx);
                                 return false;
                             }
-                            this.redraw(panes::Area::Bottom, cx);
+                            this.redraw(panes::Area::Dictation, cx);
                             if this.dictation.started.is_some_and(|start| start.elapsed() >= Duration::from_secs(this.dictation.max_seconds)) {
                                 this.stop_dictation(false, this.dictation.hands_free, cx);
                             }
@@ -841,6 +856,8 @@ impl Hangar {
                         });
                         if !matches!(keep, Ok(true)) { break; }
                     }
+                    // A pílula mora na raiz: quem encerrou a gravação pode ter redesenhado só a própria área.
+                    let _ = this.update_in(cx, |_, _, cx| cx.notify());
                 }).detach();
             }
             Err(error) => window.push_notification(Notification::error(Self::dictation_failure(&error)), cx),
@@ -1177,6 +1194,39 @@ impl Hangar {
         }
     }
 
+    /// Esc descarta a gravação: a pílula não tem botão. Quem chama vem depois de tudo que o Esc fecha e antes de interromper.
+    pub(super) fn escape_dictation(&mut self) -> bool {
+        if self.dictation.recorder.is_none() { return false; }
+        self.cancel_dictation();
+        true
+    }
+
+    /// A pílula da gravação centrada acima do Composer: o rodapé da janela pode ser das abas. Sem Composer na tela, vai ao
+    /// rodapé. Não intercepta clique.
+    pub(super) fn render_dictation_overlay(&self) -> Option<AnyElement> {
+        self.dictation.recorder.as_ref()?;
+        let pill = self.pane_element(panes::Area::Dictation, StyleRefinement::default().w(px(PILL_WIDTH)).h(px(PILL_HEIGHT)));
+        let place = match popup::anchor_bounds(crate::tour::anchors::COMPOSER) {
+            Some(composer) => div().absolute().left(composer.origin.x).w(composer.size.width).top(composer.origin.y - px(PILL_HEIGHT + PILL_GAP)),
+            None => div().absolute().left_0().right_0().bottom(px(PILL_GAP)),
+        };
+        Some(place.flex().justify_center().child(pill).into_any_element())
+    }
+
+    pub(super) fn render_dictation_pill(&self) -> AnyElement {
+        let radius = px(PILL_HEIGHT / 2.);
+        let pill = div().id("dictation-status").role(Role::Status).aria_label(tr("dictation_active")).size_full()
+            .flex().items_center().justify_center().rounded(radius).border_1().border_color(theme::glass_border())
+            .bg(theme::popup_fill(theme::raised())).shadow(theme::popover_shadow())
+            .child(div().id("dictation-level").role(Role::Meter).aria_label(tr("dictation_level"))
+                .aria_min_numeric_value(0.).aria_max_numeric_value(100.).aria_numeric_value((self.dictation.level * 100.) as f64)
+                .flex().items_center().gap(px(2.))
+                .children(pill_heights(&self.dictation.bars).map(|height| div().flex_shrink_0().w(px(2.)).h(px(height))
+                    .rounded(px(1.)).bg(theme::accent()))));
+        if appearance::get().surface_material == appearance::SurfaceMaterial::Glass { chrome::Glass::new(pill, radius).into_any_element() }
+        else { pill.into_any_element() }
+    }
+
     /// O microfone, a pílula do estilo (ao lado dele, como no web) e a faixa de estado do ditado, só quando há o que mostrar.
     pub(super) fn render_dictation(&self, readable: bool, cx: &mut Context<Self>) -> (Button, Option<AnyElement>, Option<AnyElement>) {
         let here = self.dictation_here(cx);
@@ -1256,22 +1306,11 @@ impl Hangar {
                 let filename = this.dictation.file_name.clone().unwrap_or_else(|| "ditado.wav".into());
                 this.toggle_audio("dictation".into(), &filename, async move { Ok(audio) }, cx);
             }, cx))));
-        let status = (here && (recording || transcribing)).then(|| {
-            let label = tr(if recording { "dictation_active" } else if self.dictation.cleaning { "dictation_cleaning" } else { "dictation_working" });
-            let seconds = self.dictation.started.map(|start| start.elapsed().as_secs()).unwrap_or(0);
+        let status = transcribing.then(|| {
+            let label = tr(if self.dictation.cleaning { "dictation_cleaning" } else { "dictation_working" });
             div().flex().items_center().gap_2().text_sm().text_color(theme::muted())
                 .child(div().id("dictation-status").role(Role::Status).aria_label(label.clone()).child(label))
-                .when(recording, |el| el
-                    .child(div().font_family(theme::MONO).child(format!("{}:{:02}", seconds / 60, seconds % 60)))
-                    // Onda: cresce da esquerda até encher a faixa; cheia, a mais nova fica na ponta direita e as velhas
-                    // saem pela esquerda (a de dentro encolhe até a largura da de fora e alinha as barras à direita).
-                    .child(div().id("dictation-level").role(Role::Meter).aria_label(tr("dictation_level"))
-                        .aria_min_numeric_value(0.).aria_max_numeric_value(100.).aria_numeric_value((self.dictation.level * 100.) as f64)
-                        .flex_1().min_w_0().h(px(64.)).flex().items_center().overflow_hidden()
-                        .child(div().min_w_0().h_full().flex().items_center().justify_end().gap(px(2.)).overflow_hidden()
-                            .children(self.dictation.bars.iter().map(|level| div().flex_shrink_0().w(px(3.)).rounded(px(3.))
-                                .h(px(8. + level.clamp(0., 1.) * 56.)).bg(theme::accent()))))))
-                .when(!recording, |el| el.child(div().flex_1()))
+                .child(div().flex_1())
                 .child(Button::new("dictation-cancel").ghost().small().label(tr("dictation_cancel"))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.cancel_dictation();
@@ -1333,6 +1372,18 @@ fn dictation_insert(value: &str, range: std::ops::Range<usize>, text: &str) -> S
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pill_bars_grow_from_the_center_and_mirror() {
+        let silent = super::pill_heights(&Default::default());
+        assert!(silent.iter().all(|height| *height == super::PILL_BAR_MIN), "sem áudio, só os pontos");
+        let heights = super::pill_heights(&[0., 0.5, 1.].into_iter().collect());
+        assert_eq!(heights[5], super::PILL_BAR_MAX, "a mais nova no centro");
+        assert_eq!(heights[5], heights[6], "espelhada");
+        assert_eq!(heights[4], heights[7]);
+        assert!(heights[4] < heights[5] && heights[3] < heights[4]);
+        assert_eq!(heights[0], super::PILL_BAR_MIN, "a ponta ainda sem amostra");
+    }
+
     /// Ditado com a voz ligada: a voz fica surda enquanto ele dita e volta como estava, inclusive se já estava silenciada.
     #[test]
     fn dictation_silences_the_live_voice_and_gives_its_mic_back() {

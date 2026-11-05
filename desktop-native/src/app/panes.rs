@@ -5,7 +5,7 @@ use gpui_kit::{prelude::FluentBuilder, *};
 use super::Hangar;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(super) enum Area { Nav, Conversation, Bottom, Side, Top }
+pub(super) enum Area { Nav, Conversation, Bottom, Side, Top, Dictation }
 
 pub(super) struct Pane { hangar: WeakEntity<Hangar>, area: Area, _observe: Option<Subscription> }
 
@@ -15,6 +15,7 @@ pub(super) struct Panes {
     pub bottom: Entity<Pane>,
     pub side: Entity<Pane>,
     pub top: Entity<Pane>,
+    pub dictation: Entity<Pane>,
     /// O `beside` da barra do app no último desenho: vem de medidas da raiz que mudam sem aviso (painel deslizando).
     pub top_beside: Cell<Option<f32>>,
     /// Altura medida da faixa de baixo: a view guardada precisa de altura definida, e o compositor cresce com o texto.
@@ -45,7 +46,7 @@ impl Panes {
         });
         Self {
             nav: pane(Area::Nav), conversation: pane(Area::Conversation), bottom: pane(Area::Bottom), side: pane(Area::Side),
-            top: pane(Area::Top), top_beside: Cell::new(None),
+            top: pane(Area::Top), dictation: pane(Area::Dictation), top_beside: Cell::new(None),
             bottom_height: Rc::new(Cell::new(120.)), marks: Rc::default(),
         }
     }
@@ -93,13 +94,14 @@ impl Hangar {
                 side.unwrap_or_else(|| div().into_any_element())
             }
             Area::Top => self.render_topbar(self.panes.top_beside.get(), window, cx),
+            Area::Dictation => self.render_dictation_pill(),
         }
     }
 
     fn pane(&self, area: Area) -> &Entity<Pane> {
         match area {
             Area::Nav => &self.panes.nav, Area::Conversation => &self.panes.conversation, Area::Bottom => &self.panes.bottom,
-            Area::Side => &self.panes.side, Area::Top => &self.panes.top,
+            Area::Side => &self.panes.side, Area::Top => &self.panes.top, Area::Dictation => &self.panes.dictation,
         }
     }
 

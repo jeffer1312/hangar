@@ -51,6 +51,8 @@ impl Command {
             Self::RenameSession => "!Terminal && !BrowserPage",
             // No painel do navegador, Ctrl+L vai ao endereço, como em todo navegador.
             Self::FocusComposer => "!Terminal && !BrowserPanel",
+            // Ditar não depende de onde está o foco: o texto vai para o Composer, mesmo saindo do terminal.
+            Self::Dictation => "Terminal || !Terminal",
             _ => self.context(),
         }
     }
@@ -914,6 +916,16 @@ mod tests {
         assert!(!binding_applies(close, &inside("Terminal")));
         for name in ["Input", "BrowserPage"] { assert_eq!(binding_applies(close, &inside(name)), cfg!(target_os = "macos"), "{name}"); }
         assert_eq!(Command::CloseSession.context(), "!Terminal");
+    }
+
+    #[test]
+    fn dictation_key_fires_with_the_focus_anywhere() {
+        let bindings = Config::default().bindings(&DummyKeyboardMapper).unwrap();
+        let dictation = bindings.iter().find(|b| b.action().as_any().is::<ToggleDictation>()).unwrap();
+        let root = KeyContext::new_with_defaults(HOST_OS);
+        let inside = |name: &str| { let mut context = KeyContext::default(); context.add(name); vec![root.clone(), context] };
+        assert!(binding_applies(dictation, std::slice::from_ref(&root)));
+        for name in ["Terminal", "FileViewer", "Input", "BrowserPage"] { assert!(binding_applies(dictation, &inside(name)), "{name}"); }
     }
 
     #[test]

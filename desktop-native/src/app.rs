@@ -5221,6 +5221,7 @@ impl Hangar {
         else if self.queue_edit_active() { self.finish_queue_edit(window, cx); }
         else if self.close_popups() {}
         else if self.side_menu_escape(cx) {}
+        else if self.escape_dictation() {}
         else if self.can_interrupt() {
             if appearance::get().skip_chat_confirmations { self.interrupt(window, cx); }
             else { self.confirm = Some(Confirm::Stop); self.confirm_no_ask = false; }
@@ -8021,6 +8022,7 @@ impl Render for Hangar {
                     cx.stop_propagation();
                     return;
                 }
+                if this.escape_dictation() { cx.stop_propagation(); cx.notify(); return; }
                 // Foco na resposta digitada, na raiz (clique numa opção ou no vazio devolve o foco a ela) ou em lugar nenhum:
                 // o Esc cancela a pergunta como no campo. Outros campos (renomear, endereço) têm o Esc deles.
                 let in_ask = window.focused(cx).is_none_or(|focus| focus == this.root_focus
@@ -8091,6 +8093,7 @@ impl Render for Hangar {
             // Na raiz, fora da área guardada da barra: dentro dela, fechar a prévia derrubava o reaproveitamento do GPUI.
             .children(self.render_tab_preview(window, cx))
             .children(if preview_popup { self.render_tab_preview_popup(window, cx) } else { None })
+            .children(self.render_dictation_overlay())
             .children(self.render_search(window, cx))
             .children(self.render_plan_review_overlay(window, cx))
             .children(self.render_tour(window, cx))
