@@ -94,7 +94,7 @@ function ipPrivado(host: string): boolean {
   return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
 }
 
-// Nome da tailnet ou faixa 100.64.0.0/10: só responde com o Tailscale ligado neste aparelho.
+// Nome da tailnet ou faixa 100.64.0.0/10: costuma depender do Tailscale ligado neste aparelho.
 export function tailscaleHost(baseUrl: string): string | null {
   let host: string;
   try {

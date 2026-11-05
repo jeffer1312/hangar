@@ -99,8 +99,8 @@ Assert ($script:pare -and $script:pare.Contains('FRASE-PROIBIDA') -and -not $scr
 Assert (-not $script:pare.Contains('senha#forte') -and -not ($script:saida -join '|').Contains('senha#forte')) '-App: a senha recusada nao aparece na saida'
 Run-TokenStep 'curta'
 Assert ($script:pare -and -not $script:gravado) '-App: senha curta para a instalacao'
-Run-TokenStep 'senha boa 123'
-Assert (-not $script:pare -and $script:gravado -eq 'senha boa 123') '-App: senha valida gravada como veio'
+Run-TokenStep 'senha+boa&123'
+Assert (-not $script:pare -and $script:gravado -eq 'senha+boa&123') '-App: senha valida gravada como veio'
 Run-TokenStep ''
 Assert (-not $script:pare -and $script:gravado -match '^[0-9a-f]{48}$') '-App: senha vazia gera a aleatoria'
 

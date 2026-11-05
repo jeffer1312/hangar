@@ -380,6 +380,8 @@ echo "  instalar o programa que mantém as sessões abertas (tmux), liberar a po
 echo "  Wi-Fi e, se você quiser, o Tailscale."
 if [ -f "$ENV_FILE" ] && grep -q '^CP_AUTH_TOKEN=' "$ENV_FILE"; then
   ok "$ENV_FILE já tem CP_AUTH_TOKEN (mantido)"
+  grep -Eq '^CP_AUTH_TOKEN=.*[^[:blank:]][[:blank:]]+[^[:blank:]]' "$ENV_FILE" \
+    && falta "a senha do celular tem espaço e não entra pelo celular: troque CP_AUTH_TOKEN em $ENV_FILE"
 elif [ "$APP" = 1 ]; then
   # Mesmo piso da pergunta do terminal; vazio = o app pediu a senha gerada.
   case $APP_TOKEN in *$'\n'*|*$'\r'*) fail "a senha do celular veio do app com quebra de linha" ;; esac

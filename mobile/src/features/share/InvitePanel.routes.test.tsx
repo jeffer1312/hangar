@@ -130,6 +130,24 @@ describe('nome de máquina no login', () => {
     expect(useServers.getState().active()).toEqual({ ...saved, token: 'new-token' });
     expect(boundary.fetch.mock.calls.some(([url]) => String(url).endsWith('/identificador'))).toBe(false);
   });
+
+  it('queda de rede conserva a máquina salva e aponta o Tailscale', async () => {
+    const other = { id: 'other', baseUrl: 'http://10.0.0.6:8765', token: 'other-token', label: 'other' };
+    const saved = { id: 'saved', baseUrl: 'https://hangar.tail0000.ts.net', token: 'old-token', label: 'casa' };
+    boundary.vault.set('cp_servers_v1', JSON.stringify({ servers: [other, saved], activeId: other.id }));
+    await useServers.getState().load();
+    boundary.fetch.mockRejectedValue(new TypeError('Network request failed'));
+    const el = await mount(Login);
+    await click(el, m.login_qr());
+    await act(async () => { boundary.scan?.({ data: `${saved.baseUrl}/?token=new-token` }); });
+
+    await click(el, m.login_conectar());
+
+    expect(useServers.getState().servers).toEqual([other, saved]);
+    expect(useServers.getState().activeId).toBe(other.id);
+    expect(el.textContent).toContain(m.login_tailscale_sem_acesso({ host: 'hangar.tail0000.ts.net' }));
+    expect(boundary.replace).not.toHaveBeenCalled();
+  });
 });
 
 describe('entrada de convite nas rotas', () => {

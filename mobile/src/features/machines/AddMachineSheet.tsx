@@ -7,7 +7,7 @@ import { SectionCard } from '../config/SectionCard';
 import { InfoNotice } from '../config/InfoNotice';
 import { Pill } from '../config/PageHeader';
 import { useSettingsColors } from '../config/colors';
-import { discover, ensureActive, normalizeUrl, readIdentifier, reason, registerBoth, type Directions, type Discovered } from './api';
+import { discover, ensureActive, normalizeUrl, readIdentifier, reason, registerBoth, tailscaleFailure, type Directions, type Discovered } from './api';
 import { DirectionsNotice, Field, MachineSheet, Notice, styles, useMachineAction } from './parts';
 import { discoverSavedMachines } from './importMachines';
 import * as m from '../../paraglide/messages';
@@ -28,7 +28,10 @@ export function AddMachineSheet({ owner, onClose, onQr }: { owner: Server | null
     const credential = token.trim();
     if (!credential) throw new Error(m.mobile_machines_token_required());
     const candidate = { id: `machine-probe:${baseUrl}`, baseUrl, token: credential, label: label.trim() || m.native_settings_group_server() };
-    const config = await getConfigForServer(candidate, 15_000);
+    const config = await getConfigForServer(candidate, 15_000).catch((error: unknown) => {
+      const hint = tailscaleFailure(error, baseUrl);
+      throw hint ? new Error(hint) : error;
+    });
     ensureActive(signal);
     if (!config || !config.campos || typeof config.campos !== 'object') throw new Error(m.mobile_machines_invalid_response());
     const warnings: string[] = [];

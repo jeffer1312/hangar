@@ -3255,7 +3255,7 @@
   "login_url_token_invalidos": "Invalid URL or token — use http/https with the token (no spaces).",
   "login_deeplink_invalido": "Invalid pairing deep-link — the link has duplicate token/api or an empty api.",
   "login_falha": "failed",
-  "login_tailscale_sem_acesso": "Couldn't reach {host}. This is a Tailscale address: make sure Tailscale is running on this device, signed in to the same account as the server, and that the server is on.",
+  "login_tailscale_sem_acesso": "Couldn't reach {host}. This looks like a Tailscale address: make sure Tailscale is running on this device, signed in to the same account as the server, and that the server is on.",
   "sessao_expirada": "session expired — please log in again",
   "loop_objetivo_titulo": "Goal — one thing only.",
   "loop_objetivo_corpo": "Final result, not steps; small and verifiable. ✗ \"refactor the project\" / ✓ \"migrate utils/date.ts to date-fns and keep npm run check green\". Big task → break it into a plan file and have the loop do \"the next pending item\".",

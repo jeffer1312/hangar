@@ -784,6 +784,7 @@ Write-Host '  Se pedir permissao de administrador (UAC) e so pra uma coisa pontu
 Pausa-Log
 if ($temToken) {
     Ok "$envFile ja tem CP_AUTH_TOKEN (mantido)"
+    if ((Token-Do-Env) -match '\S\s+\S') { Falta "a senha do celular tem espaco e nao entra pelo celular: troque CP_AUTH_TOKEN em $envFile" }
 } elseif ($App) {
     # Mesmo piso da pergunta do terminal; vazio = o app pediu a senha gerada.
     if (-not $tokenDoApp) {

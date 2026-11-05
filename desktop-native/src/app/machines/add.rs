@@ -101,7 +101,7 @@ fn failed(errors: &[&Failure]) -> String {
     if parts.is_empty() { tr("connection_failed") } else { format!("{}: {}", tr("connection_failed"), parts.join(" · ")) }
 }
 
-/// Nome da tailnet ou faixa 100.64.0.0/10: só responde com o Tailscale ligado neste aparelho.
+/// Nome da tailnet ou faixa 100.64.0.0/10: costuma depender do Tailscale ligado neste aparelho.
 fn tailscale_host(base: &str) -> Option<String> {
     let url = Url::parse(base).ok()?;
     let tailscale = match url.host()? {
@@ -114,7 +114,7 @@ fn tailscale_host(base: &str) -> Option<String> {
 
 fn failed_at(base: &str, errors: &[&Failure]) -> String {
     match tailscale_host(base) {
-        Some(host) if errors.iter().all(|e| reason(e).is_none()) => tr_shared("login_tailscale_sem_acesso", &[("host", &host)]),
+        Some(host) if errors.iter().all(|e| e.detail == "network_error") => tr_shared("login_tailscale_sem_acesso", &[("host", &host)]),
         _ => failed(errors),
     }
 }
