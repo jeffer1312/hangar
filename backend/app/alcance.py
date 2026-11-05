@@ -22,6 +22,7 @@ import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import quote
 
 import qrcode
 import qrcode.image.svg
@@ -239,7 +240,7 @@ def pareamento(endereco: str) -> dict:
     candidato = conhecidos[endereco]
     if candidato["url"]:
         base = candidato["url"].rstrip("/")
-        url = f"{base}/?token={settings.auth_token}"
+        url = f"{base}/?token={quote(settings.auth_token, safe='')}"
     else:
         url = pairing_url(settings)
     return {"url": url, "qr_svg": _qr_pareamento(url)}

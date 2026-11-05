@@ -37,12 +37,10 @@ pub(crate) fn phone_password(mode: &PasswordMode, typed: &str, confirm: &str) ->
     }
 }
 
-/// Mesma regra dos scripts: ASCII imprimível, sem os caracteres que quebram o `.env`, sem espaço nas pontas.
+/// Mesma regra dos scripts: ASCII imprimível, sem os caracteres que quebram o `.env`, sem espaço (o login recusa).
 fn forbidden(pw: &str) -> bool {
     !pw.chars().all(|c| (' '..='~').contains(&c))
-        || pw.contains(['#', '$', '\'', '"', '\\'])
-        || pw.starts_with([' ', '\t'])
-        || pw.ends_with([' ', '\t'])
+        || pw.contains(['#', '$', '\'', '"', '\\', ' '])
         || pw == "change-me"
 }
 
@@ -185,9 +183,9 @@ mod tests {
         assert_eq!(phone_password(&PasswordMode::Choose, "1234567", "1234567"), Err(PasswordProblem::Short));
         assert_eq!(phone_password(&PasswordMode::Choose, "12345678", "12345679"), Err(PasswordProblem::Mismatch));
         assert_eq!(phone_password(&PasswordMode::Choose, "12345678", "12345678"), Ok(Some("12345678".into())));
-        assert_eq!(phone_password(&PasswordMode::Choose, "pass word 1", "pass word 1"), Ok(Some("pass word 1".into())));
+        assert_eq!(phone_password(&PasswordMode::Choose, "pass+word&1", "pass+word&1"), Ok(Some("pass+word&1".into())));
         // Fora do ASCII imprimível o instalador recusa; o app avisa antes.
-        let forbidden = ["çãõéíóúâ", "abcd#efgh", "abcd$efgh", "abcd'efgh", "abcd\"efgh", "abcd\\efgh", " abcdefgh", "abcdefgh ", "\tabcdefgh", "abcdefgh\t", "change-me"];
+        let forbidden = ["çãõéíóúâ", "abcd#efgh", "abcd$efgh", "abcd'efgh", "abcd\"efgh", "abcd\\efgh", " abcdefgh", "abcdefgh ", "pass word 1", "\tabcdefgh", "abcdefgh\t", "change-me"];
         for pw in forbidden {
             assert_eq!(phone_password(&PasswordMode::Choose, pw, pw), Err(PasswordProblem::Forbidden), "{pw:?}");
         }

@@ -1,4 +1,4 @@
-import { comTeto, errorDetail, getConfigForServer, isLocalMachineUrl, normalizeMachineUrl, probeServerResponse, verifyServerIdentity, type LanInfo, type Server } from '@hangar/core';
+import { comTeto, errorDetail, getConfigForServer, isLocalMachineUrl, isNoResponse, normalizeMachineUrl, probeServerResponse, tailscaleHost, verifyServerIdentity, type LanInfo, type Server } from '@hangar/core';
 import * as m from '../../paraglide/messages';
 
 export type MachineId = { identificador: string; lan_url: string };
@@ -14,6 +14,12 @@ const invalid = () => new Error(m.mobile_machines_invalid_response());
 export const reason = (error: unknown) => error instanceof Error
   ? error.message === 'machine_address_duplicate' ? m.mobile_machines_duplicate_address() : error.message
   : m.erro_desconhecido();
+export function tailscaleFailure(error: unknown, baseUrl: string): string | null {
+  const host = isNoResponse(error) ? tailscaleHost(baseUrl) : null;
+  if (!host) return null;
+  const hint = m.login_tailscale_sem_acesso({ host });
+  return error instanceof Error && error.message ? `${hint}\n\n${error.message}` : hint;
+}
 export function ensureActive(signal: AbortSignal) {
   if (signal.aborted) throw Object.assign(new Error('cancelled'), { name: 'AbortError' });
 }

@@ -123,6 +123,21 @@ def test_pareamento_tailscale_usa_o_endereco_do_candidato(cli, monkeypatch):
     assert dados["url"] == "https://hangar.tail0000.ts.net/?token=9f4c2ae1b73d08e5"
 
 
+def test_pareamento_codifica_senha_com_caractere_especial(cli, monkeypatch):
+    monkeypatch.setattr(alcance, "_detectar_lan", lambda: "192.168.0.42")
+    monkeypatch.setattr(config, "detect_lan_ip", lambda: "192.168.0.42")
+    monkeypatch.setattr(settings, "lan_bind_ip", "127.0.0.1")
+    monkeypatch.setattr(settings, "public_url", "")
+    monkeypatch.setattr(settings, "front_port", 5173)
+    monkeypatch.setattr(settings, "auth_token", "a+b&c%d#")
+    r = cli.get(
+        "/api/alcance/pareamento?endereco=tailscale",
+        headers={"Authorization": "Bearer a+b&c%d#"},
+    )
+    assert r.status_code == 200
+    assert r.json()["url"] == "https://hangar.tail0000.ts.net/?token=a%2Bb%26c%25d%23"
+
+
 def test_pareamento_endereco_desconhecido_recusado(cli):
     r = cli.get("/api/alcance/pareamento?endereco=nao_existe", headers=AUTH)
     assert r.status_code == 404

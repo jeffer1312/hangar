@@ -4,6 +4,7 @@ import re
 import socket
 import time
 from pathlib import Path
+from urllib.parse import quote
 from pydantic import AliasChoices, BaseModel, Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -552,7 +553,7 @@ def pairing_url(s: "Settings") -> str:
     else:
         host = detect_lan_ip() if s.lan_bind_ip in _LOOPBACK else s.lan_bind_ip
         base = f"http://{host}:{porta_do_front(s)}"
-    return f"{base}/?token={s.auth_token}"
+    return f"{base}/?token={quote(s.auth_token, safe='')}"
 
 
 def pairing_url_api(s: "Settings") -> str:
@@ -562,8 +563,8 @@ def pairing_url_api(s: "Settings") -> str:
     host = detect_lan_ip() if s.lan_bind_ip in _LOOPBACK else s.lan_bind_ip
     api = f"http://{host}:{s.port}"
     if s.public_url:
-        return f"{s.public_url.rstrip('/')}/?token={s.auth_token}&api={api}"
-    return f"{api}/?token={s.auth_token}"
+        return f"{s.public_url.rstrip('/')}/?token={quote(s.auth_token, safe='')}&api={api}"
+    return f"{api}/?token={quote(s.auth_token, safe='')}"
 
 
 # Porta do convidado: quem escuta é o hangar-server (Rust); o Python nunca a abre.

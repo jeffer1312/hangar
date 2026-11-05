@@ -22,7 +22,7 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   `ask_extra` não, Tailscale pela opção, nada espera teclado. O log nunca carrega o token, e no
   `--app` nem a saída: a senha chega por `HANGAR_TOKEN`. O portão do 1/8 do `install.ps1` só barra
   pendência sem código; as com código são extras e vão ao portão do fim. A senha do celular recusa
-  ASCII não visível (acento), `#`, `$`, aspas, `\` e espaço nas pontas (o `.env` é lido pelo python-dotenv; o app nativo monta o cabeçalho só com ASCII visível). Ver
+  ASCII não visível (acento), `#`, `$`, aspas, `\` e espaço (o `.env` é lido pelo python-dotenv; o app nativo monta o cabeçalho só com ASCII visível; o login do celular e do desktop recusa token com espaço). Ver
   [a entrada](#modo---app-o-assistente-responde-pelas-telas).
 - **O instalador exige UM agente de código, não o Claude Code.** Usa os que já existem; nenhum →
   instala o Claude Code (o padrão). `--agentes=`/`-Agentes` e o `--avancado` escolhem; o comando
@@ -866,9 +866,10 @@ cano; no Windows o `Eleva-E-Roda` pede o UAC mesmo sem terminal. Nada espera
 teclado: o login da Tailscale vira `##HANGAR-LINK## tailscale-login` e o HTTPS desligado vira a
 pendência `tailscale-https`, e quem roda de novo é o app. A senha do celular chega por
 `HANGAR_TOKEN` (nunca argv nem saída) e sai do ambiente antes de qualquer instalador de terceiro;
-token já gravado é mantido. Ela recusa o que não é ASCII visível (acento), `#`, `$`, aspas, `\` e espaço nas pontas: o backend lê o
+token já gravado é mantido. Ela recusa o que não é ASCII visível (acento), `#`, `$`, aspas, `\` e espaço: o backend lê o
 `.env` pelo python-dotenv, que corta o valor em ` #`, expande `${VAR}` e tira aspas, e a senha
-gravada sem aspas não chegaria inteira. O `--app` não abre o app nem o navegador no fim, não
+gravada sem aspas não chegaria inteira; e o login do celular e do desktop recusa token com espaço,
+digitado ou pelo QR. O `--app` não abre o app nem o navegador no fim, não
 imprime o token, e no Windows escreve em UTF-8. O bootstrap puxa sem hooks (`core.hooksPath`
 vazio): o post-merge rodaria um `--update` inteiro antes do `##HANGAR-PROTOCOLO##`. Ele também
 tira `HANGAR_TOKEN`/`HANGAR_ASKPASS*` do ambiente e só os devolve na linha do instalador. No `install.ps1`, o portão do 1/8 só barra

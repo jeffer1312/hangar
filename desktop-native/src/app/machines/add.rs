@@ -101,6 +101,24 @@ fn failed(errors: &[&Failure]) -> String {
     if parts.is_empty() { tr("connection_failed") } else { format!("{}: {}", tr("connection_failed"), parts.join(" · ")) }
 }
 
+/// Nome da tailnet ou faixa 100.64.0.0/10: costuma depender do Tailscale ligado neste aparelho.
+fn tailscale_host(base: &str) -> Option<String> {
+    let url = Url::parse(base).ok()?;
+    let tailscale = match url.host()? {
+        Host::Domain(name) => name.ends_with(".ts.net"),
+        Host::Ipv4(ip) => ip.octets()[0] == 100 && (64..=127).contains(&ip.octets()[1]),
+        Host::Ipv6(_) => false,
+    };
+    tailscale.then(|| url.host_str().unwrap_or_default().to_owned())
+}
+
+fn failed_at(base: &str, errors: &[&Failure]) -> String {
+    match tailscale_host(base) {
+        Some(host) if errors.iter().all(|e| e.detail == "network_error") => tr_shared("login_tailscale_sem_acesso", &[("host", &host)]),
+        _ => failed(errors),
+    }
+}
+
 async fn ask_config(base: &str, token: &str) -> Result<Api, Failure> {
     let api = Api::new(base, token)?;
     // 20 s: pela Tailscale em relay a primeira conexão passa dos prazos curtos.
@@ -112,10 +130,10 @@ async fn probe(target: Target, token: String) -> Result<Found, String> {
     let (base, api) = match ask_config(&target.base, &token).await {
         Ok(api) => (target.base, api),
         Err(first) => match target.alternative.filter(|_| first.status.is_none()) {
-            None => return Err(failed(&[&first])),
+            None => return Err(failed_at(&target.base, &[&first])),
             Some(alternative) => match ask_config(&alternative, &token).await {
                 Ok(api) => (alternative, api),
-                Err(second) => return Err(failed(&[&first, &second])),
+                Err(second) => return Err(failed_at(&target.base, &[&first, &second])),
             },
         },
     };
@@ -617,7 +635,16 @@ impl Hangar {
 
 #[cfg(test)]
 mod tests {
-    use super::{Discovered, EntityId, Remote, ServerEntry, Target, normalize, owns, place_machine, short_host};
+    use super::{Discovered, EntityId, Remote, ServerEntry, Target, normalize, owns, place_machine, short_host, tailscale_host};
+
+    #[test]
+    fn tailscale_addresses_are_the_tailnet_name_and_the_cgnat_range() {
+        assert_eq!(tailscale_host("https://hangar.tail0000.ts.net").as_deref(), Some("hangar.tail0000.ts.net"));
+        assert_eq!(tailscale_host("http://100.64.0.2:8765").as_deref(), Some("100.64.0.2"));
+        for other in ["http://100.128.0.1:8765", "http://100.63.0.1:8765", "http://192.168.0.5:8765", "https://exemplo.com", "https://ts.net.exemplo.com"] {
+            assert_eq!(tailscale_host(other), None, "{other}");
+        }
+    }
 
     #[test]
     fn saving_updates_the_same_address_and_never_an_invite() {
