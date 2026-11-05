@@ -3,10 +3,11 @@
 //! lida pelo histórico Rust com o mesmo corte de 8 eventos do Python.
 
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
+use std::time::{Duration, SystemTime};
 
-use hangar_api::chat::ChatKind;
+use hangar_api::chat::{ChatEvent, ChatKind};
 use hangar_api::session::SessionRow;
 use regex::Regex;
 
@@ -31,6 +32,20 @@ pub fn plain_text(text: &str) -> String {
     let text = MD_START.replace_all(&text, "");
     let text = MD_MARK.replace_all(&text, "");
     text.split(is_space).filter(|w| !w.is_empty()).collect::<Vec<_>>().join(" ")
+}
+
+fn last_event_at(events: &[ChatEvent]) -> Option<f64> {
+    events.iter().rev()
+        .filter(|ev| matches!(ev.kind, ChatKind::UserMsg | ChatKind::AssistantMsg | ChatKind::ToolUse | ChatKind::ToolResult | ChatKind::Thinking))
+        .find_map(|ev| ev.ts.filter(|&ts| ts != 0.0))
+}
+
+/// Há quanto a conversa parou. O mtime só vale sem evento datado na cauda: ele anda sem conversa nenhuma.
+pub fn conversation_idle(provider: Provider, transcript: &Path) -> Option<Duration> {
+    let req = HistoryRequest { provider, jsonl: transcript.to_owned(), queue: None, limit: Some(HISTORY_LIMIT), tail_window: TAIL_WINDOW };
+    let event = merged_history_capped(&req, MAX_TAIL).ok().and_then(|events| last_event_at(&events))
+        .and_then(|ts| SystemTime::UNIX_EPOCH.checked_add(Duration::try_from_secs_f64(ts).ok()?));
+    event.or_else(|| std::fs::metadata(transcript).and_then(|m| m.modified()).ok())?.elapsed().ok()
 }
 
 struct Cached {
@@ -84,9 +99,7 @@ impl ReplyCache {
                         continue;
                     }
                 };
-                let activity = events.iter().rev()
-                    .filter(|ev| matches!(ev.kind, ChatKind::UserMsg | ChatKind::AssistantMsg | ChatKind::ToolUse | ChatKind::ToolResult | ChatKind::Thinking))
-                    .find_map(|ev| ev.ts.filter(|&ts| ts != 0.0));
+                let activity = last_event_at(&events);
                 let event = events
                     .into_iter()
                     .rev()

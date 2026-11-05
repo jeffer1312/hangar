@@ -132,6 +132,8 @@ fn idle_activity_is_the_last_conversation_event_not_the_mtime() {
     let lines = [
         serde_json::json!({"type": "assistant", "timestamp": "2027-01-15T08:00:05.000Z",
             "message": {"role": "assistant", "content": [{"type": "text", "text": "pronto"}]}}),
+        serde_json::json!({"type": "user", "timestamp": "2027-01-15T09:00:00.000Z",
+            "message": {"role": "user", "content": "e agora?"}}),
         serde_json::json!({"type": "system", "subtype": "informational", "timestamp": "2027-01-15T20:00:00.000Z",
             "content": "hangar: hooks.json changed — reloaded"}),
     ];
@@ -141,7 +143,8 @@ fn idle_activity_is_the_last_conversation_event_not_the_mtime() {
         "name": "s", "state": "idle", "jsonl": jsonl.to_str().unwrap(), "last_activity": touched})).unwrap();
     let mut cache = ReplyCache::default();
     assert!(cache.decorate(std::slice::from_mut(&mut row), |_| None).is_empty());
-    assert_eq!(row.last_activity, row.last_reply_at);
+    // O pedido depois da resposta conta; o aviso de sistema, não.
+    assert_eq!(row.last_activity, row.last_reply_at.map(|at| at + 3595.0));
     assert_ne!(row.last_activity, Some(touched));
 
     // Trabalhando continua no mtime: é ele que mostra o turno andando.
@@ -149,6 +152,25 @@ fn idle_activity_is_the_last_conversation_event_not_the_mtime() {
     row.last_activity = Some(touched);
     assert!(cache.decorate(std::slice::from_mut(&mut row), |_| None).is_empty());
     assert_eq!(row.last_activity, Some(touched));
+}
+
+/// O adormecer reconfere pelo mesmo tempo: o arquivo recém-tocado não faz a conversa antiga parecer nova.
+#[test]
+fn conversation_idle_ignores_the_mtime_unless_no_event_is_dated() {
+    use hangar_server::list::reply::conversation_idle;
+    use hangar_server::transcript::Provider;
+    use std::time::Duration;
+
+    let dir = tempfile::tempdir().unwrap();
+    let jsonl = dir.path().join("s.jsonl");
+    let old = serde_json::json!({"type": "assistant", "timestamp": "2020-01-01T00:00:00.000Z",
+        "message": {"role": "assistant", "content": [{"type": "text", "text": "pronto"}]}});
+    std::fs::write(&jsonl, old.to_string() + "\n").unwrap();
+    assert!(conversation_idle(Provider::Claude, &jsonl).unwrap() > Duration::from_secs(86_400));
+
+    let notice = serde_json::json!({"type": "system", "subtype": "informational", "timestamp": "2020-01-01T00:00:00.000Z", "content": "x"});
+    std::fs::write(&jsonl, notice.to_string() + "\n").unwrap();
+    assert!(conversation_idle(Provider::Claude, &jsonl).unwrap() < Duration::from_secs(3_600));
 }
 
 #[test]
