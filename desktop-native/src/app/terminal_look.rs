@@ -90,7 +90,7 @@ pub(super) fn tool_body_control(
 fn thinking_markdown(view: &Entity<TextViewState>, cx: &App) -> gpui_kit::base::TextView {
     let dim = theme::muted();
     let style = theme::conversation_markdown(cx).with_foreground(dim).with_muted_foreground(dim)
-        .with_link(dim).with_list_style(StyleRefinement::default().text_color(dim))
+        .with_link(dim).with_list_style(StyleRefinement::default().w(px(26.)).pr(px(6.)).text_color(dim))
         .with_inline_code(HighlightStyle { color: Some(dim), ..Default::default() });
     gpui_kit::base::TextView::new(view).selectable(true).scrollable(false).style(style)
 }

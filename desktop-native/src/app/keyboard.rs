@@ -911,7 +911,8 @@ mod tests {
         let inside = |name: &str| { let mut context = KeyContext::default(); context.add(name); vec![root.clone(), context] };
         assert!(binding_applies(close, std::slice::from_ref(&root)));
         assert!(binding_applies(close, &inside("FileViewer")));
-        for name in ["Input", "BrowserPage", "Terminal"] { assert!(!binding_applies(close, &inside(name)), "{name}"); }
+        assert!(!binding_applies(close, &inside("Terminal")));
+        for name in ["Input", "BrowserPage"] { assert_eq!(binding_applies(close, &inside(name)), cfg!(target_os = "macos"), "{name}"); }
         assert_eq!(Command::CloseSession.context(), "!Terminal");
     }
 

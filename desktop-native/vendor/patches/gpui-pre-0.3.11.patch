@@ -2879,7 +2879,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
      /// Schedule the given closure to be run directly after the current frame is rendered.
      pub fn on_next_frame(&self, callback: impl FnOnce(&mut Window, &mut App) + 'static) {
          RefCell::borrow_mut(&self.next_frame_callbacks).push(Box::new(callback));
-@@ -3195,6 +3256,11 @@
+@@ -3195,6 +3256,16 @@
          self.active.get()
      }
  
@@ -2888,10 +2888,15 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
 +        self.focused_text_input.is_some()
 +    }
 +
++    /// Whether this frame feeds the accessibility tree, which wants off-screen content too.
++    pub fn a11y_active(&self) -> bool {
++        self.a11y.is_active()
++    }
++
      /// Returns whether this window is considered to be the window
      /// that currently owns the mouse cursor.
      /// On mac, this is equivalent to `is_window_active`.
-@@ -3628,6 +3694,11 @@
+@@ -3628,6 +3699,11 @@
          self.modifiers
      }
  
@@ -2903,7 +2908,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
      /// Returns true if the last input event was keyboard-based (key press, tab navigation, etc.)
      /// This is used for focus-visible styling to show focus indicators only for keyboard navigation.
      pub fn last_input_was_keyboard(&self) -> bool {
-@@ -3737,8 +3808,21 @@
+@@ -3737,8 +3813,21 @@
          self.invalidator.set_phase(DrawPhase::Focus);
          let previous_focus_path = self.rendered_frame.focus_path();
          let previous_window_active = self.rendered_frame.window_active;
@@ -2925,7 +2930,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
          let current_focus_path = self.rendered_frame.focus_path();
          let current_window_active = self.rendered_frame.window_active;
          let mut focus_before_listeners = self.focus;
-@@ -3788,7 +3872,14 @@
+@@ -3788,7 +3877,14 @@
          if self.focus != focus_before_listeners {
              self.refresh();
          }
@@ -2941,7 +2946,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
  
          #[cfg(feature = "profiler")]
          {
-@@ -3833,7 +3924,15 @@
+@@ -3833,7 +3929,15 @@
          let _foreground_turn = profiler::journal::foreground_turn();
          #[cfg(feature = "profiler")]
          let present_start = Instant::now();
@@ -2958,7 +2963,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
          #[cfg(feature = "profiler")]
          self.window_profiler.record_present(
              present_start,
-@@ -4122,7 +4221,7 @@
+@@ -4122,7 +4226,7 @@
              traversal_order.sort_by_key(|ix| self.next_frame.deferred_draws[*ix].priority);
  
              for deferred_draw_ix in traversal_order {
@@ -2967,7 +2972,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                      let deferred_draw = &mut self.next_frame.deferred_draws[deferred_draw_ix];
                      self.element_id_stack
                          .clone_from(&deferred_draw.element_id_stack);
-@@ -4135,12 +4234,15 @@
+@@ -4135,12 +4239,15 @@
                          deferred_draw.rem_size,
                          deferred_draw.absolute_offset,
                          deferred_draw.prepaint_range.clone(),
@@ -2983,7 +2988,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                      self.with_rendered_view(current_view, |window| {
                          window.with_rem_size(Some(rem_size), |window| {
                              window.with_absolute_element_offset(absolute_offset, |window| {
-@@ -4148,8 +4250,21 @@
+@@ -4148,8 +4255,21 @@
                              });
                          });
                      });
@@ -3006,7 +3011,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                      self.reuse_prepaint(prepaint_range);
                  }
                  let prepaint_end = self.prepaint_index();
-@@ -4212,6 +4327,7 @@
+@@ -4212,6 +4332,7 @@
      pub(crate) fn prepaint_index(&self) -> PrepaintStateIndex {
          PrepaintStateIndex {
              hitboxes_index: self.next_frame.hitboxes.len(),
@@ -3014,7 +3019,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
              tooltips_index: self.next_frame.tooltip_requests.len(),
              deferred_draws_index: self.next_frame.deferred_draws.len(),
              dispatch_tree_index: self.next_frame.dispatch_tree.len(),
-@@ -4221,6 +4337,12 @@
+@@ -4221,6 +4342,12 @@
      }
  
      pub(crate) fn reuse_prepaint(&mut self, range: Range<PrepaintStateIndex>) {
@@ -3027,7 +3032,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
          self.next_frame.hitboxes.extend(
              self.rendered_frame.hitboxes[range.start.hitboxes_index..range.end.hitboxes_index]
                  .iter()
-@@ -4267,6 +4389,8 @@
+@@ -4267,6 +4394,8 @@
                      absolute_offset: deferred_draw.absolute_offset,
                      prepaint_range: deferred_draw.prepaint_range.clone(),
                      paint_range: deferred_draw.paint_range.clone(),
@@ -3036,7 +3041,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                  }),
          );
      }
-@@ -4466,6 +4590,9 @@
+@@ -4466,6 +4595,9 @@
          if result.is_err() {
              self.next_frame.hitboxes.truncate(index.hitboxes_index);
              self.next_frame
@@ -3046,7 +3051,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                  .tooltip_requests
                  .truncate(index.tooltips_index);
              self.next_frame
-@@ -4749,6 +4876,8 @@
+@@ -4749,6 +4881,8 @@
              absolute_offset,
              prepaint_range: PrepaintStateIndex::default()..PrepaintStateIndex::default(),
              paint_range: PaintIndex::default()..PaintIndex::default(),
@@ -3055,7 +3060,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
          });
      }
  
-@@ -4777,6 +4906,41 @@
+@@ -4777,6 +4911,41 @@
          result
      }
  
@@ -3097,7 +3102,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
      /// Paint the drop (non-inset) shadows from `shadows` into the scene at the current
      /// z-index. Inset shadows are skipped; paint those with [`Self::paint_inset_shadows`]
      /// after the element's background so they layer on top of the fill.
-@@ -5398,6 +5562,30 @@
+@@ -5398,6 +5567,30 @@
          });
      }
  
@@ -3128,7 +3133,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
      /// Removes an image from the sprite atlas.
      pub fn drop_image(&mut self, data: Arc<RenderImage>) -> Result<()> {
          for frame_index in 0..data.frame_count() {
-@@ -5804,6 +5992,7 @@
+@@ -5804,6 +5997,7 @@
                  keystroke: keystroke.clone(),
                  is_held: false,
                  prefer_character_input: false,
@@ -3136,7 +3141,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
              }),
              cx,
          );
-@@ -5843,6 +6032,8 @@
+@@ -5843,6 +6037,8 @@
          #[cfg(feature = "profiler")]
          self.window_profiler.begin_input(event.kind_name());
          let update_count_before = self.invalidator.update_count();
@@ -3145,7 +3150,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
          // Track input modality for focus-visible styling and hover suppression.
          // Hover is suppressed during keyboard modality so that keyboard navigation
          // doesn't show hover highlights on the item under the mouse cursor.
-@@ -6006,6 +6197,7 @@
+@@ -6006,6 +6202,7 @@
          }
          #[cfg(feature = "profiler")]
          self.window_profiler.end_input(caused_invalidation);
@@ -3153,7 +3158,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
  
          DispatchEventResult {
              propagate: cx.propagate_event,
-@@ -6697,6 +6889,7 @@
+@@ -6697,6 +6894,7 @@
                  keystroke: replay.keystroke.clone(),
                  is_held: false,
                  prefer_character_input: true,
@@ -3161,19 +3166,21 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
              };
  
              cx.propagate_event = true;
-@@ -6903,6 +7096,11 @@
+@@ -6903,6 +7101,13 @@
          self.platform_window.minimize();
      }
  
 +    /// Hangar: esconde a janela sem fechá-la, ou a mostra de novo. Sem efeito onde a plataforma não implementa.
-+    pub fn set_hidden(&self, hidden: bool) {
++    pub fn set_hidden(&mut self, hidden: bool) {
 +        self.platform_window.set_hidden(hidden);
++        // The restored surface has no buffer, so an unchanged scene must still be presented.
++        self.presented = false;
 +    }
 +
      /// Toggle full screen status on the current window at the platform level.
      pub fn toggle_fullscreen(&self) {
          self.platform_window.toggle_fullscreen();
-@@ -7323,6 +7521,17 @@
+@@ -7323,6 +7528,17 @@
              accesskit::Action::Click => {
                  if let Some(bounds) = self.a11y.node_bounds.get(&request.target_node).copied() {
                      let center = bounds.center();
@@ -3191,7 +3198,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                      let mouse_down = PlatformInput::MouseDown(crate::MouseDownEvent {
                          button: MouseButton::Left,
                          position: center,
-@@ -8581,6 +8790,42 @@
+@@ -8581,6 +8797,42 @@
      }
  
      #[gpui::test]
@@ -3234,7 +3241,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
      fn test_fully_visible_bounds_preserve_layout_viewport(cx: &mut TestAppContext) {
          let window = cx.add_window(|_, _| EmptyView);
          let mut platform_window = cx.test_window(window.into());
-@@ -9354,6 +9599,7 @@
+@@ -9354,6 +9606,7 @@
                      keystroke: Keystroke::parse("down").expect("valid keystroke"),
                      is_held: false,
                      prefer_character_input: false,

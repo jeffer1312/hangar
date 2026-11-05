@@ -3261,6 +3261,11 @@ impl Window {
         self.focused_text_input.is_some()
     }
 
+    /// Whether this frame feeds the accessibility tree, which wants off-screen content too.
+    pub fn a11y_active(&self) -> bool {
+        self.a11y.is_active()
+    }
+
     /// Returns whether this window is considered to be the window
     /// that currently owns the mouse cursor.
     /// On mac, this is equivalent to `is_window_active`.
@@ -7097,8 +7102,10 @@ impl Window {
     }
 
     /// Hangar: esconde a janela sem fechá-la, ou a mostra de novo. Sem efeito onde a plataforma não implementa.
-    pub fn set_hidden(&self, hidden: bool) {
+    pub fn set_hidden(&mut self, hidden: bool) {
         self.platform_window.set_hidden(hidden);
+        // The restored surface has no buffer, so an unchanged scene must still be presented.
+        self.presented = false;
     }
 
     /// Toggle full screen status on the current window at the platform level.

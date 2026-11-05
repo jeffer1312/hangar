@@ -141,7 +141,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
 diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-base-0.9.0/src/text/block_column.rs gpui-base-0.9.0/src/text/block_column.rs
 --- gpui-base-0.9.0/src/text/block_column.rs
 +++ gpui-base-0.9.0/src/text/block_column.rs
-@@ -0,0 +1,436 @@
+@@ -0,0 +1,439 @@
 +use std::{cell::RefCell, rc::Rc, sync::Arc};
 +
 +use gpui::{
@@ -150,7 +150,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
 +};
 +
 +use super::{
-+    document::NodeRenderOptions,
++    document::{NodeRenderOptions, flow_position},
 +    node::{BlockNode, NodeContext},
 +};
 +
@@ -269,9 +269,12 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
 +    fn render(&self, ix: usize, window: &mut Window, cx: &mut App) -> AnyElement {
 +        #[cfg(test)]
 +        BUILT.with(|built| built.set(built.get() + 1));
++        let (is_first, prev) = flow_position(self.blocks.as_slice(), ix);
 +        self.blocks[ix].render_block(
 +            NodeRenderOptions {
 +                ix,
++                is_first,
++                prev,
 +                is_last: ix + 1 == self.blocks.len(),
 +                ..Default::default()
 +            },
@@ -1229,18 +1232,19 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
          let count = self.list_state.item_count();
          if count > 0 {
              self.list_state.remeasure_items(0..count);
-@@ -1126,6 +1135,10 @@
+@@ -1126,6 +1135,11 @@
              }));
          }
          let (reveal, reveal_block) = self.reveal_frame(cx.background_executor().now(), window);
 +        let skip_unseen = reveal.is_none()
 +            && stream_fade.is_none()
++            && !window.a11y_active()
 +            && !self.is_selecting
 +            && !self.selection_adapter.has_selection_snapshot(cx);
          // Built every frame, so everything in it is shared, not copied.
          let node_cx = NodeContext {
              offset: self.parsed_content.node_cx.offset,
-@@ -1136,6 +1149,7 @@
+@@ -1136,6 +1150,7 @@
              table_actions: self.table_actions.clone(),
              link_click_handler: self.link_click_handler.clone(),
              image_source: self.image_source.clone(),
@@ -1248,7 +1252,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
              markdown_extensions: self.markdown_extensions.clone(),
              stream_fade,
              range_highlights: self.range_highlights.clone(),
-@@ -1155,6 +1169,9 @@
+@@ -1155,6 +1170,9 @@
                      } else {
                          None
                      },
@@ -1258,12 +1262,18 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                      &node_cx,
                      window,
                      cx,
-@@ -1391,6 +1408,8 @@
+@@ -1391,6 +1409,14 @@
          content.document = new_document;
      }
  
-+    if options.append { content.node_cx.link_refs.extend(node_cx.link_refs); }
-+    else { content.node_cx.link_refs = node_cx.link_refs; }
++    if options.append {
++        // A first definition wins, as in a full parse.
++        for (identifier, link) in node_cx.link_refs {
++            content.node_cx.link_refs.entry(identifier).or_insert(link);
++        }
++    } else {
++        content.node_cx.link_refs = node_cx.link_refs;
++    }
      Ok(content)
  }
  

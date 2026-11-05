@@ -6,7 +6,7 @@ use gpui::{
 };
 
 use super::{
-    document::NodeRenderOptions,
+    document::{NodeRenderOptions, flow_position},
     node::{BlockNode, NodeContext},
 };
 
@@ -125,9 +125,12 @@ impl BlockColumn {
     fn render(&self, ix: usize, window: &mut Window, cx: &mut App) -> AnyElement {
         #[cfg(test)]
         BUILT.with(|built| built.set(built.get() + 1));
+        let (is_first, prev) = flow_position(self.blocks.as_slice(), ix);
         self.blocks[ix].render_block(
             NodeRenderOptions {
                 ix,
+                is_first,
+                prev,
                 is_last: ix + 1 == self.blocks.len(),
                 ..Default::default()
             },

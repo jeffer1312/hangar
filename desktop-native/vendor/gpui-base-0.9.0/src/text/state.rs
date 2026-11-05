@@ -1137,6 +1137,7 @@ impl Render for TextViewState {
         let (reveal, reveal_block) = self.reveal_frame(cx.background_executor().now(), window);
         let skip_unseen = reveal.is_none()
             && stream_fade.is_none()
+            && !window.a11y_active()
             && !self.is_selecting
             && !self.selection_adapter.has_selection_snapshot(cx);
         // Built every frame, so everything in it is shared, not copied.
@@ -1408,8 +1409,14 @@ fn parse_content(
         content.document = new_document;
     }
 
-    if options.append { content.node_cx.link_refs.extend(node_cx.link_refs); }
-    else { content.node_cx.link_refs = node_cx.link_refs; }
+    if options.append {
+        // A first definition wins, as in a full parse.
+        for (identifier, link) in node_cx.link_refs {
+            content.node_cx.link_refs.entry(identifier).or_insert(link);
+        }
+    } else {
+        content.node_cx.link_refs = node_cx.link_refs;
+    }
     Ok(content)
 }
 
