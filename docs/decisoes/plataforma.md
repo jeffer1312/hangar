@@ -3498,7 +3498,9 @@ código que não abre.
 
 **Nome da máquina (05/11/2026).** O relatório leva o nome do computador no texto e, antes do
 sistema, no campo `os`, que o worker põe no assunto. Sem ele, relatório automático só se
-identificava por contas e sessões. O worker não muda: `short()` já tira o que ele recusaria.
+identificava por contas e sessões. O worker não muda: `short()` tira o que ele recusaria, então
+acento some do assunto (só o texto mantém o nome inteiro) e nome sem ASCII sai só com o sistema. Os
+avisos de envio manual e automático dizem que o nome vai junto.
 
 **Envio automático:** feito para a falha de atualização, na entrada seguinte.
 

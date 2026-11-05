@@ -69,10 +69,12 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 - **A tarefa Windows acompanha o processo até ele terminar.** Reinício controlado não encerra
   a árvore inteira: sessões e atualizador sobrevivem. A vigia confirma falha HTTP, respeita
   instalação/atualização e só inicia outra instância após confirmar a parada da anterior.
-- **Início de tarefa só vale com o `LastRunTime` mudado, e a porta do front pode ser do servidor.**
-  `Start-HangarTask` repete o `Start-ScheduledTask` até 3 vezes e falha com erro se a tarefa não
-  rodou: o comando pode voltar sem erro sem abrir instância. Na máquina migrada, porta do front com
-  o `hangar-server` é tela servida, nunca conflito: `hangar-frontend` sai sem subir. Medição em
+- **O reinício do backend só vale com a tarefa rodando de novo, e a porta do front pode ser do
+  servidor.** `Start-HangarTask` repete o `Start-ScheduledTask` até 3 vezes, conferindo o
+  `LastRunTime`, e falha com erro se a tarefa não rodou: o comando pode voltar sem erro sem abrir
+  instância. O front não passa por ele: front parado não desfaz uma versão boa, e a vigia o sobe. Na
+  máquina migrada, porta do front com o `hangar-server` é tela servida, nunca conflito:
+  `hangar-frontend` sai sem subir. A migração e o `atualizar.py` seguem com o início direto. Medição em
   [Reinício sem início e porta do front](#reinício-sem-início-e-porta-do-front-05112026).
 - **O backend abre o próprio log (`python -m app.main --log <arquivo>`), nunca pelo `>` do cmd.**
   O `>` abre sem escrita compartilhada, e qualquer neto que sobreviva ao backend com a cópia

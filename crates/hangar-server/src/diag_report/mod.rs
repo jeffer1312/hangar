@@ -122,6 +122,8 @@ pub async fn build(st: &crate::routes::AppState, input: ClientInput) -> Bundle {
         async { tokio::time::timeout_at(deadline, collect::accounts(st, s)).await.unwrap_or_else(|_| Err("diag_deadline".to_owned())) },
         read_logs(base, paths, scrubber.clone(), now, deadline),
     );
+    // Aqui, e não na sonda: a resposta de prazo estourado também passa por esta limpeza.
+    let versions = collect::Versions { machine: collect::clean(s, &versions.machine, 80), ..versions };
     let facts = Facts { now, versions, sessions, accounts, diary, server_log, python, updates };
     let (app, os) = (facts.versions.app(), facts.versions.label());
     let assembled = {

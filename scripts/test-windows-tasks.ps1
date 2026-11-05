@@ -43,6 +43,9 @@ function Reset-State {
     $script:lateOwner = $null
     $script:slowRelease = 0
     $script:ignoredStarts = 0
+    $script:frozenLastRun = $false
+    $script:migrated = $true
+    $script:tableReads = 0
     $script:stopFails = $false
     $script:tableFails = $false
     $script:processRows = $rows
@@ -53,7 +56,12 @@ function Reset-State {
 }
 function Get-HangarProcessTable {
     if ($script:tableFails) { throw 'WMI indisponivel' }
+    $script:tableReads++
     return $script:processRows
+}
+function Test-Path { param($LiteralPath)
+    if ($LiteralPath -like '*\.hangar\current') { return $script:migrated }
+    return Microsoft.PowerShell.Management\Test-Path -LiteralPath $LiteralPath
 }
 function Get-ScheduledTask { param($TaskName, $ErrorAction) return $script:task }
 function Get-ScheduledTaskInfo { param($TaskName, $ErrorAction) return @{ LastRunTime = $script:lastRun } }
@@ -76,7 +84,7 @@ function Start-ScheduledTask { param($TaskName, $ErrorAction)
     $script:events += 'start'
     if ($script:ignoredStarts -gt 0) { $script:ignoredStarts--; return }
     $script:task.State = 'Running'
-    $script:lastRun = $script:lastRun.AddSeconds(1)
+    if (-not $script:frozenLastRun) { $script:lastRun = $script:lastRun.AddSeconds(1) }
 }
 function Start-Sleep { param($Seconds, $Milliseconds) }
 function Test-HangarHttp { param($port) return $script:httpReplies.Dequeue() }
@@ -101,17 +109,27 @@ try {
     Assert ($failed -match 'nao iniciou') "Tarefa que nunca iniciou passou por reiniciada: $failed"
     Assert (@($script:events | Where-Object { $_ -eq 'start' }).Count -eq 3) 'Tentativas de inicio fora do limite'
     Reset-State
+    $script:frozenLastRun = $true
+    Restart-HangarTask 'hangar-backend' 8765 'C:\repo\backend'
+    Assert ('start' -in $script:events) 'LastRunTime atrasado desfez um reinicio que subiu'
+    Reset-State
     $script:slowRelease = 2
     Restart-HangarTask 'hangar-backend' 8765 'C:\repo\backend'
     Assert ('start' -in $script:events) 'Porta que soltou logo depois barrou o reinicio'
+    Assert ($script:tableReads -eq 1) 'Espera da porta voltou a depender do WMI depois da parada'
     # Maquina migrada: o hangar-server novo abre a porta do front entre as duas conferencias.
     $frontRows = @(
         (Row 70 1 'node.exe' 'C:\repo\frontend\node_modules\vite\bin\vite.js preview'),
         (Row 71 1 'hangar-server.exe' 'C:\Users\u\.hangar\current\bin\hangar-server.exe'),
         (Row 72 1 'node.exe' 'C:\outro\server.js')
     )
-    foreach ($case in @(@{ late = 71; served = $true }, @{ late = 72; served = $false })) {
+    foreach ($case in @(
+        @{ late = 71; migrated = $true; served = $true; holder = '' },
+        @{ late = 72; migrated = $true; served = $false; holder = 'node\.exe PID 72' },
+        @{ late = 71; migrated = $false; served = $false; holder = 'hangar-server\.exe PID 71' }
+    )) {
         Reset-State
+        $script:migrated = $case.migrated
         $script:processRows = $frontRows
         $script:live = @{}
         $vite = [pscustomobject]@{ Id = 70; StartTime = $old }
@@ -123,7 +141,7 @@ try {
         try { Restart-HangarTask 'hangar-frontend' 5173 'C:\repo\frontend' } catch { $failed = "$_" }
         Assert ('start' -notin $script:events) "Front subiu com a porta tomada: $($case.late)"
         if ($case.served) { Assert (-not $failed) "Porta do front no hangar-server virou falha: $failed" }
-        else { Assert ($failed -match 'ainda ocupada por node\.exe PID 72') "Porta presa nao disse quem segura: $failed" }
+        else { Assert ($failed -match "ainda ocupada por $($case.holder)") "Porta presa nao disse quem segura: $failed" }
     }
     Reset-State
     $script:processRows = $frontRows
@@ -132,6 +150,14 @@ try {
     $script:owner = 71
     Restart-HangarTask 'hangar-frontend' 5173 'C:\repo\frontend'
     Assert ('start' -notin $script:events) 'Front subiu com a tela ja servida pelo hangar-server'
+    Reset-State
+    $script:processRows = $frontRows
+    $script:live = @{}
+    $script:task.State = 'Ready'
+    $script:owner = $null
+    $script:ignoredStarts = 99
+    Restart-HangarTask 'hangar-frontend' 5173 'C:\repo\frontend'
+    Assert (@($script:events | Where-Object { $_ -eq 'start' }).Count -eq 1) 'Front que nao abriu derrubaria uma versao boa'
     Reset-State
     $script:processRows = $frontRows
     $script:owner = 71

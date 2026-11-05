@@ -297,6 +297,14 @@ fn versions() -> Versions {
         arch: "linux-x86_64".into(), machine: "DELPHI-02".into(), claude: "2.1.0".into(), mux: "tmux 3.5".into(), offset: "-03:00".into() }
 }
 
+#[test]
+fn report_label_is_the_system_when_the_machine_name_has_nothing_the_worker_accepts() {
+    let label = |machine: &str| Versions { machine: machine.into(), ..versions() }.label();
+    assert_eq!(label(""), "linux-x86_64");
+    assert_eq!(label("ПК"), "linux-x86_64");
+    assert_eq!(label("RECEPÇÃO"), "RECEPO · linux-x86_64");
+}
+
 fn entry(at: chrono::DateTime<Local>, n: usize) -> DiaryEntry {
     DiaryEntry { at, event: format!("evento.n{n}"), level: "erro".into(), code: "codigo".into(), session: "s".into(), reason: String::new(), backend: String::new(), extra: String::new(), count: 1, last: at }
 }

@@ -605,7 +605,8 @@ impl Versions {
 
     /// O `os` do relatório, que o worker põe no assunto: o nome vem antes porque o e-mail corta o fim.
     pub(crate) fn label(&self) -> String {
-        if self.machine.is_empty() { self.arch.clone() } else { format!("{} · {}", self.machine, self.arch) }
+        let name = super::short(&self.machine);
+        if name.trim().is_empty() { self.arch.clone() } else { format!("{name} · {}", self.arch) }
     }
 
     /// Só o que não depende de sonda: serve quando o prazo do `build` estoura antes.
@@ -642,6 +643,5 @@ pub(crate) async fn versions(st: &crate::routes::AppState, s: &Scrubber) -> Vers
         }
     };
     let (claude, mux, os) = tokio::join!(claude, mux, os);
-    let local = Versions::local();
-    Versions { claude, mux, os, machine: clean(s, &local.machine, 80), ..local }
+    Versions { claude, mux, os, ..Versions::local() }
 }

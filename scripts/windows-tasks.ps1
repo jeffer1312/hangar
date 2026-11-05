@@ -62,25 +62,29 @@ function Test-HangarHttp([int]$port) {
     } finally { if ($response) { $response.Close() } }
 }
 
-# -NoStart: so para (a migracao para o pacote troca o lancador entre parar e subir).
+function Get-HangarPortOwner($rows, $listener) {
+    return $rows | Where-Object { [int]$_.ProcessId -eq [int]$listener.OwningProcess } | Select-Object -First 1
+}
+
 function Format-HangarPortOwner($rows, $listener) {
-    $owner = $rows | Where-Object { [int]$_.ProcessId -eq [int]$listener.OwningProcess } | Select-Object -First 1
+    $owner = Get-HangarPortOwner $rows $listener
     if ($owner) { return "$($owner.Name) PID $($owner.ProcessId): $($owner.CommandLine)" }
     return "PID $($listener.OwningProcess)"
 }
 
 # Em maquina migrada o hangar-server abre a porta do front e entrega a mesma tela: nao ha o que subir.
 function Test-HangarServedFront($rows, [string]$name, $listeners) {
-    if ($name -ne 'hangar-frontend') { return $false }
+    if ($name -ne 'hangar-frontend' -or -not (Test-Path -LiteralPath "$env:USERPROFILE\.hangar\current")) { return $false }
     foreach ($listener in $listeners) {
-        $owner = $rows | Where-Object { [int]$_.ProcessId -eq [int]$listener.OwningProcess } | Select-Object -First 1
+        $owner = Get-HangarPortOwner $rows $listener
         if (-not $owner -or $owner.Name -ne 'hangar-server.exe') { return $false }
     }
     return $true
 }
 
-# Start-ScheduledTask volta sem erro mesmo quando nenhuma instancia abre. So o LastRunTime prova o
-# inicio: State pode ser da instancia que esta saindo, e repetir com uma de pe e descartado pelo IgnoreNew.
+# Start-ScheduledTask volta sem erro mesmo quando nenhuma instancia abre: o LastRunTime prova o inicio.
+# Repetir com uma instancia de pe e seguro, o IgnoreNew descarta. No fim vale tambem o Running, que com
+# a anterior ja encerrada so pode ser a nova: atraso do LastRunTime nao pode desfazer a atualizacao.
 function Start-HangarTask([string]$name) {
     $before = (Get-ScheduledTaskInfo -TaskName $name -ErrorAction Stop).LastRunTime
     foreach ($attempt in 1..3) {
@@ -90,9 +94,11 @@ function Start-HangarTask([string]$name) {
             Start-Sleep -Milliseconds 100
         }
     }
+    if ((Get-ScheduledTask -TaskName $name -ErrorAction Stop).State -eq 'Running') { return }
     throw "Tarefa $name nao iniciou depois de 3 tentativas"
 }
 
+# -NoStart: so para (a migracao para o pacote troca o lancador entre parar e subir).
 function Restart-HangarTask([string]$name, [int]$port, [string]$directory, [switch]$NoStart) {
     $mutex = New-Object Threading.Mutex($false, "Local\HangarRestart-$name")
     $locked = $false
@@ -155,15 +161,19 @@ function Restart-HangarTask([string]$name, [int]$port, [string]$directory, [swit
         foreach ($attempt in 1..10) {
             $held = @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue)
             if (-not $held.Count) { break }
-            $rows = Get-HangarProcessTable
-            if (Test-HangarServedFront $rows $name $held) { return }
             Start-Sleep -Milliseconds 500
         }
         if ($held.Count) {
+            # WMI fora do ar nao pode trocar o motivo: fica a tabela lida antes da parada.
+            try { $rows = Get-HangarProcessTable } catch { }
+            if (Test-HangarServedFront $rows $name $held) { return }
             $quem = Format-HangarPortOwner $rows $held[0]
             throw "Porta $port ainda ocupada por $quem; nova instancia nao sera iniciada"
         }
-        if (-not $NoStart) { Start-HangarTask $name }
+        # Front que nao sobe nao desfaz uma versao boa: quem o recupera e a vigia.
+        if (-not $NoStart) {
+            if ($name -eq 'hangar-backend') { Start-HangarTask $name } else { Start-ScheduledTask -TaskName $name -ErrorAction Stop }
+        }
     } finally {
         if ($locked) { $mutex.ReleaseMutex() }
         $mutex.Dispose()
