@@ -338,6 +338,7 @@ async fn partial_preparation_opens_and_error_refuses() {
         let home = root.path().to_string_lossy().into_owned();
         let env = || AccountEnvironment::from_map([("HOME".into(),home.clone()),("USERPROFILE".into(),home.clone())].into());
         let service = AccountService::new(env());
+        let _native = bind_native(&service);
         let account = service.resolve(Provider::Codex,"default").unwrap();
         let prepared_home = account.home.clone();
         let calls = Arc::new(AtomicUsize::new(0));
@@ -353,8 +354,11 @@ async fn partial_preparation_opens_and_error_refuses() {
         let server = tokio::spawn(async move { axum::serve(listener,router).await.unwrap(); });
         let result = service.prepare_for_session(&account,bridge.clone(),
             tokio::time::Instant::now()+std::time::Duration::from_secs(15)).await;
-        let open = || async { AccountService::new(env()).prepare_for_session(&account,bridge.clone(),
-            tokio::time::Instant::now()+std::time::Duration::from_secs(15)).await };
+        let open = || async {
+            let service = AccountService::new(env());
+            let _native = bind_native(&service);
+            service.prepare_for_session(&account,bridge.clone(), tokio::time::Instant::now()+std::time::Duration::from_secs(15)).await
+        };
         // Parcial recente é reaproveitado (aqui, com o servidor reiniciado); passado o intervalo, a
         // abertura seguinte tenta de novo.
         let (reused, retried) = if opens {
