@@ -103,6 +103,7 @@ def render_page(i):
     clip = {c["key"]: c for c in S.CLIPS}
     extra = {
         "canonical": S.BASE_URL + ("/" if lang == "pt" else "/en/"),
+        "og_image": S.BASE_URL + media(f"og-card-{lang}.png"),
         "h1_plain": S.T["h1"][i],
         "h1_words": " ".join(f'<span class="w" style="animation-delay: {0.1 + j * 0.07:.2f}s">{w}</span>' for j, w in enumerate(words)),
         "lang_switch": lang_switch(lang),
