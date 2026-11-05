@@ -3893,8 +3893,8 @@ fora de grupo `orq` (membro cujo `pair_gid` é o da linha `orq` viva), sem convi
 e sem par de fora (a vida nova encerraria o acesso deles), sem loop ativo e com `last_activity` além
 do prazo (estrito). Claude sem terminal fica de fora: segue o estacionamento de 65 min de sempre, oculto ou não. A linha é só a
 pré-seleção; quem decide é o `sleep_*` do `RuntimeRegistry`, que fecha a porta de entrada da
-sessão (1 s) e reconfere sob ela: tempo parado pela conversa (`conversation_idle`; a linha não é
-republicada quando só `last_activity` muda), fila entregue, pergunta, turno, comandos nos shells do pane,
+sessão (1 s) e reconfere sob ela: tempo parado (no Claude pela conversa, `conversation_idle`; no
+Codex pelo mtime do rollout; a linha não é republicada quando só `last_activity` muda), fila entregue, pergunta, turno, comandos nos shells do pane,
 terminal do rodapé aberto, cliente do multiplexador anexado e modo só leitura. Qualquer um desses
 desiste (`Ok(false)`), sem erro.
 
@@ -3979,12 +3979,14 @@ de hooks sem resposta respondia a uma operação que a fila nunca teve, o que pu
 
 ## Tempo da sessão parada vem da conversa, não do mtime (05/11/2026)
 
-**Regra.** Com a sessão classificada `idle`, `last_activity` é a hora do último evento da conversa
-(pedido, resposta, ferramenta ou pensamento), lida pelo `ReplyCache` junto com a última resposta.
-Aviso de sistema não conta. Nos outros estados, e sem evento na cauda, continua o mtime do
-transcript; pergunta segurada pelo plugin vira `awaiting_input` depois disso e mantém a hora da
+**Regra.** Com a sessão classificada `idle`, `last_activity` é a hora do último evento datado da
+conversa (resposta, ferramenta ou pensamento), lida pelo `ReplyCache` junto com a última resposta.
+Pedido digitado não tem hora no parser do Claude, e aviso de sistema não conta. Nos outros estados, e
+sem evento datado na cauda, continua o mtime do transcript; é sempre o caso do Codex, cujo rollout não
+data evento. Pergunta segurada pelo plugin vira `awaiting_input` depois disso e mantém a hora da
 conversa, o que só muda a hora exibida. O mtime segue sendo a chave dos caches: o vigia de limite
-roda antes das respostas por isso. O adormecer reconfere pelo mesmo tempo (`conversation_idle`).
+roda antes das respostas por isso. O adormecer do Claude reconfere pelo mesmo tempo
+(`conversation_idle`); o do Codex segue no mtime do rollout.
 
 **Por quê.** A regra de ocultar usava o mtime, e ele anda sem conversa. Uma sessão parada desde as
 17:46 aparecia como "11 min atrás" na manhã seguinte, com ocultar em 3 h ligado. Medido em três

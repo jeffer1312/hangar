@@ -40,9 +40,10 @@ fn last_event_at(events: &[ChatEvent]) -> Option<f64> {
         .find_map(|ev| ev.ts.filter(|&ts| ts != 0.0))
 }
 
-/// Há quanto a conversa parou. O mtime só vale sem evento datado na cauda: ele anda sem conversa nenhuma.
-pub fn conversation_idle(provider: Provider, transcript: &Path) -> Option<Duration> {
-    let req = HistoryRequest { provider, jsonl: transcript.to_owned(), queue: None, limit: Some(HISTORY_LIMIT), tail_window: TAIL_WINDOW };
+/// Há quanto a conversa do Claude parou. O mtime só vale sem evento datado na cauda: ele anda sem conversa
+/// nenhuma. O rollout do Codex não data evento, por isso ele fica fora daqui.
+pub fn conversation_idle(transcript: &Path) -> Option<Duration> {
+    let req = HistoryRequest { provider: Provider::Claude, jsonl: transcript.to_owned(), queue: None, limit: Some(HISTORY_LIMIT), tail_window: TAIL_WINDOW };
     let event = merged_history_capped(&req, MAX_TAIL).ok().and_then(|events| last_event_at(&events))
         .and_then(|ts| SystemTime::UNIX_EPOCH.checked_add(Duration::try_from_secs_f64(ts).ok()?));
     event.or_else(|| std::fs::metadata(transcript).and_then(|m| m.modified()).ok())?.elapsed().ok()
