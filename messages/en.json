@@ -5656,6 +5656,7 @@
   "native_git_elsewhere_busy": "{pasta} has an open session ({nomes}): close it first, or use See where it is.",
   "native_git_elsewhere_dirty": "{pasta} has uncommitted changes: use See where it is and sort them out before closing.",
   "native_git_elsewhere_failed": "Couldn't close {pasta}: {motivo}",
+  "native_git_elsewhere_busy_unnamed": "{pasta} has an open session: close the session before closing the folder.",
   "native_git_current": "current",
   "native_git_branch_create": "Create branch {n} and switch to it",
   "native_git_branch_created": "branch: {n} — created",

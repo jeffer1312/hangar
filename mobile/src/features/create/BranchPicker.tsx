@@ -93,7 +93,9 @@ export function BranchPicker({ server, cwd, worktreePath, sessionName, value, on
       }
     } catch (e) {
       if (turn !== gitTurn.current) return;
-      if (!quiet) { setGitNote({ ok: false, text: reason(e) }); haptic.error(); }
+      // Mesmo no fetch da abertura: sem o aviso, o cartão diria "Atualizada" sem ter falado com o remoto.
+      setGitNote({ ok: false, text: reason(e) });
+      if (!quiet) haptic.error();
       // A recusa pode vir de um estado mais novo que o da tela.
       setGitTry((n) => n + 1);
     } finally {
@@ -138,6 +140,7 @@ export function BranchPicker({ server, cwd, worktreePath, sessionName, value, on
       .catch((e: unknown) => {
         // Releitura da mesma pasta que falhou: a lista anterior fica, com o aviso da ação que veio antes.
         if (!vivo || infoFolder.current === cwd) return;
+        infoFolder.current = null;
         setInfo(null);
         if (!isNotRepo(e)) setFailed(m.native_create_checkout_failed({ reason: reason(e) }));
       })
@@ -209,7 +212,9 @@ export function BranchPicker({ server, cwd, worktreePath, sessionName, value, on
   );
 
   if (branching && git?.repo) {
-    return <FolderBranchMenu server={server} cwd={cwd} info={info} git={git} onBack={() => setBranching(false)}
+    return <FolderBranchMenu server={server} cwd={cwd} info={info} git={git} locked={!!gitBusy} onBack={() => setBranching(false)}
+      // Fechar a própria worktree escolhida: a sessão não tem mais onde abrir ali.
+      onFolderClosed={(path) => { if (worktreePath && samePath(path, worktreePath)) onPickFolder(cwd, true); }}
       onDone={(status, note) => {
         // Um fetch ainda em voo traz a branch de antes da troca: a resposta dele não entra.
         gitTurn.current++;
@@ -256,6 +261,7 @@ export function BranchPicker({ server, cwd, worktreePath, sessionName, value, on
     ) : null;
     const body = wtsFailed && !wts ? null : wtsLoading && !wts ? <Text style={styles.help} accessibilityLiveRegion="polite">{m.native_create_checkout_loading()}</Text>
       : !list.length ? <Text style={styles.help}>{m.worktree_menu_nenhuma()}</Text>
+      : !found.length ? <Text style={styles.help}>{m.native_git_no_branch()}</Text>
       : (
         <>
           {mine.map(row)}
@@ -310,7 +316,7 @@ export function BranchPicker({ server, cwd, worktreePath, sessionName, value, on
       </Pressable>
     </View>
   ) : !git ? <Text style={styles.help} accessibilityLiveRegion="polite">{m.native_create_checkout_loading()}</Text>
-    : !git.repo ? null : <FolderGitCard git={git} busy={gitBusy} note={gitNote} onAction={(action) => { void runGit(action); }} />;
+    : !git.repo ? null : <FolderGitCard folder={basename(cwd)} git={git} busy={gitBusy} note={gitNote} onAction={(action) => { void runGit(action); }} />;
 
   return (
     <ScrollView contentContainerStyle={styles.box} keyboardShouldPersistTaps="handled">

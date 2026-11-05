@@ -27,6 +27,7 @@ vi.mock('../../paraglide/messages', () => ({
   native_git_elsewhere_body: ({ branch }: { branch: string }) => `aberta:${branch}`, native_git_elsewhere_main: () => 'principal',
   native_git_elsewhere_close_help: () => 'ajuda', native_git_elsewhere_use: () => 'abrir-la', native_git_elsewhere_close: () => 'fechar-e-trazer',
   native_git_elsewhere_busy: ({ pasta, nomes }: { pasta: string; nomes: string }) => `ocupada:${pasta}:${nomes}`,
+  native_git_elsewhere_busy_unnamed: ({ pasta }: { pasta: string }) => `ocupada:${pasta}`,
   native_git_elsewhere_dirty: ({ pasta }: { pasta: string }) => `alterada:${pasta}`,
   native_git_elsewhere_closed_failed: ({ pasta, motivo }: { pasta: string; motivo: string }) => `fechada:${pasta}:${motivo}`,
   native_git_elsewhere_failed: ({ pasta, motivo }: { pasta: string; motivo: string }) => `falhou:${pasta}:${motivo}` }));
@@ -39,11 +40,11 @@ const INFO = { current: 'main', branches: ['main', 'dev', 'presa'], remotes: ['s
   elsewhere: { presa: { path: '/wt/presa', main: false } } };
 const GIT = { repo: true, current: 'main', upstream: 'origin/main', dirty: 0, sessions: [] as string[] };
 
-async function mount(git: Partial<typeof GIT> = {}) {
-  const props = { onBack: vi.fn(), onDone: vi.fn(), onRefused: vi.fn(), onOpenFolder: vi.fn() };
+async function mount(git: Partial<typeof GIT> = {}, locked = false) {
+  const props = { onBack: vi.fn(), onDone: vi.fn(), onRefused: vi.fn(), onOpenFolder: vi.fn(), onFolderClosed: vi.fn() };
   const el = document.createElement('div');
   await act(async () => { createRoot(el).render(createElement(FolderBranchMenu, {
-    server: { id: 's' } as never, cwd: '/r', info: INFO, git: { ...GIT, ...git }, ...props })); });
+    server: { id: 's' } as never, cwd: '/r', info: INFO, git: { ...GIT, ...git }, locked, ...props })); });
   return { el, ...props };
 }
 const press = (el: HTMLElement, label: string) => act(async () => { (el.querySelector(`[aria-label="${label}"]`) as HTMLElement).click(); });
@@ -118,6 +119,33 @@ describe('FolderBranchMenu', () => {
     await press(el, 'fechar-e-trazer');
     expect(api.switchTo).not.toHaveBeenCalled();
     expect(el.textContent).toContain('ocupada:presa:filha');
+  });
+
+  it('a recusa do servidor sem os nomes das sessões também vira o aviso de pasta ocupada', async () => {
+    api.remove.mockRejectedValue(new Error('409: sessão aberta dentro da worktree'));
+    const { el } = await mount();
+    await press(el, 'presa');
+    await press(el, 'fechar-e-trazer');
+    expect(el.textContent).toContain('ocupada:presa');
+  });
+
+  it('com sessões nesta pasta a confirmação vem antes de apagar a outra', async () => {
+    api.remove.mockResolvedValue({});
+    api.switchTo.mockResolvedValue({ ...GIT, current: 'presa' });
+    const { el, onFolderClosed } = await mount({ sessions: ['outra'] });
+    await press(el, 'presa');
+    await press(el, 'fechar-e-trazer');
+    expect(api.remove).not.toHaveBeenCalled();
+    expect(el.textContent).toContain('sessoes:outra:presa');
+    await press(el, 'trocar-mesmo');
+    expect(api.remove).toHaveBeenCalled();
+    expect(onFolderClosed).toHaveBeenCalledWith('/wt/presa');
+    expect(api.switchTo).toHaveBeenCalledWith({ id: 's' }, '/r', 'presa', true);
+  });
+
+  it('com Fetch ou Pull em curso a lista fica travada', async () => {
+    const { el } = await mount({}, true);
+    expect(el.querySelector('[aria-label="dev"]')!.getAttribute('data-disabled')).toBe('true');
   });
 
   it('troca que falha depois de fechar a outra pasta diz que ela já foi fechada', async () => {

@@ -959,7 +959,8 @@ impl NewSession {
         // A pasta da criação em voo não muda: a coluna da esquerda fica parada até a resposta.
         if self.creating { return; }
         self.root = Some(root);
-        if self.compact { self.picked = Some(path.clone()); self.reset_git(); self.load_branches(window, cx); }
+        // As raízes podem chegar depois do clique em "Sem projeto": a escolha da pessoa fica.
+        if self.compact && !self.no_project() { self.picked = Some(path.clone()); self.reset_git(); self.load_branches(window, cx); }
         let remember = path.clone();
         self.link.runtime.spawn_blocking(move || crate::appearance::remember_root(&remember));
         self.scan_dir(path, cx);

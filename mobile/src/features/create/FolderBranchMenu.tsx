@@ -13,29 +13,33 @@ import * as m from '../../paraglide/messages';
 
 type Props = {
   server: Server; cwd: string; info: FolderBranches; git: FolderGit;
+  // Fetch ou Pull em curso na mesma pasta: trocar junto disputa o repositório.
+  locked: boolean;
   onBack: () => void;
   // O estado relido e o aviso do que mudou.
   onDone: (status: FolderGit, note: string) => void;
   // A recusa pode vir de um estado mais novo que o da tela.
   onRefused: () => void;
   onOpenFolder: (path: string) => void;
+  onFolderClosed: (path: string) => void;
 };
 type Tab = 'switch' | 'create';
-type Pending = { kind: Tab; branch: string };
 type Elsewhere = { branch: string; path: string; main: boolean };
+// `close`: a confirmação das sessões vem antes de apagar a outra worktree.
+type Pending = { kind: Tab; branch: string; close?: Elsewhere };
 
 const SESSIONS_REFUSAL = 'erro_git_folder_sessions';
 const reason = (e: unknown) => (e instanceof Error ? e.message.replace(/^\d{3}: /, '') : String(e));
 
 function closeRefusal(e: unknown, folder: string): string {
   const text = reason(e);
-  const busy = text.match(/sessão aberta dentro: (.+)$/);
-  if (busy) return m.native_git_elsewhere_busy({ pasta: folder, nomes: busy[1] });
+  const busy = text.match(/sessão aberta dentro(?:: (.+))?/);
+  if (busy) return busy[1] ? m.native_git_elsewhere_busy({ pasta: folder, nomes: busy[1] }) : m.native_git_elsewhere_busy_unnamed({ pasta: folder });
   if (/há arquivos que serão perdidos/.test(text)) return m.native_git_elsewhere_dirty({ pasta: folder });
   return m.native_git_elsewhere_failed({ pasta: folder, motivo: text });
 }
 
-export function FolderBranchMenu({ server, cwd, info, git, onBack, onDone, onRefused, onOpenFolder }: Props) {
+export function FolderBranchMenu({ server, cwd, info, git, locked, onBack, onDone, onRefused, onOpenFolder, onFolderClosed }: Props) {
   const { theme } = useUnistyles();
   const [tab, setTab] = useState<Tab>('switch');
   const [query, setQuery] = useState('');
@@ -84,7 +88,9 @@ export function FolderBranchMenu({ server, cwd, info, git, onBack, onDone, onRef
   };
 
   // Fecha a outra worktree (o servidor recusa com sessão ou alteração) e então traz a branch para esta pasta.
-  const closeElsewhere = async ({ branch, path }: Elsewhere) => {
+  const closeElsewhere = async (held: Elsewhere, confirm = false) => {
+    const { branch, path } = held;
+    if (!confirm && sessions.length) { clear(); setPending({ kind: 'switch', branch, close: held }); return; }
     setBusy(true);
     setFailure('');
     try {
@@ -95,7 +101,8 @@ export function FolderBranchMenu({ server, cwd, info, git, onBack, onDone, onRef
       setBusy(false);
       return;
     }
-    await run({ kind: 'switch', branch }, false, basename(path));
+    onFolderClosed(path);
+    await run({ kind: 'switch', branch }, confirm, basename(path));
   };
 
   const search = query.trim().toLowerCase();
@@ -153,7 +160,7 @@ export function FolderBranchMenu({ server, cwd, info, git, onBack, onDone, onRef
         <View style={styles.notice} accessibilityRole="alert">
           <Text style={styles.noticeText}>{m.native_folder_git_sessions({ sessoes: sessions.join(', '), branch: pending.branch })}</Text>
           <View style={styles.line}>
-            {button(m.native_folder_git_switch_anyway(), () => { void run(pending, true); }, 'danger', busy)}
+            {button(m.native_folder_git_switch_anyway(), () => { void (pending.close ? closeElsewhere(pending.close, true) : run(pending, true)); }, 'danger', busy || locked)}
             {button(m.comum_cancelar(), () => setPending(null))}
           </View>
         </View>
@@ -165,7 +172,7 @@ export function FolderBranchMenu({ server, cwd, info, git, onBack, onDone, onRef
           <Text selectable style={styles.path}>{elsewhere.path}</Text>
           <Text style={styles.help}>{elsewhere.main ? m.native_git_elsewhere_main() : m.native_git_elsewhere_close_help({ branch: elsewhere.branch })}</Text>
           {button(m.native_git_elsewhere_use(), () => onOpenFolder(elsewhere.path), 'plain', busy)}
-          {!elsewhere.main ? button(m.native_git_elsewhere_close(), () => { void closeElsewhere(elsewhere); }, 'primary', busy || dirty) : null}
+          {!elsewhere.main ? button(m.native_git_elsewhere_close(), () => { void closeElsewhere(elsewhere); }, 'primary', busy || dirty || locked) : null}
           {button(m.comum_cancelar(), () => setElsewhere(null))}
         </View>
       ) : null}
@@ -173,7 +180,7 @@ export function FolderBranchMenu({ server, cwd, info, git, onBack, onDone, onRef
       {tab === 'switch' ? (
         <>
           {searchField}
-          {list(current, busy || dirty, pickBranch)}
+          {list(current, busy || dirty || locked, pickBranch)}
         </>
       ) : (
         <>
@@ -184,7 +191,7 @@ export function FolderBranchMenu({ server, cwd, info, git, onBack, onDone, onRef
             <Icon name={checkout ? 'SquareCheck' : 'Square'} size={18} color={checkout ? theme.tokens.accent.base : theme.tokens.text.muted} />
             <Text style={styles.rowName}>{m.native_folder_git_checkout()}</Text>
           </Pressable>
-          {button(m.native_folder_git_create(), () => request({ kind: 'create', branch: typed }), 'primary', busy || !typed || (checkout && dirty))}
+          {button(m.native_folder_git_create(), () => request({ kind: 'create', branch: typed }), 'primary', busy || locked || !typed || (checkout && dirty))}
           <Text style={styles.label}>{m.native_folder_git_base()}</Text>
           {searchField}
           {list(base || current, busy, (b) => setBase(b === current ? '' : b))}

@@ -31,8 +31,8 @@ export function FolderBranchAnimation({ width }: { width: number }) {
   const git: FolderGit = { repo: true, current: t >= SWITCHED ? work : main, upstream: m.news_branch_sample_upstream(), behind: t >= PULLED ? 0 : 2, ahead: 0, dirty: 0, last_fetch: Date.now() / 1000 };
   return <View style={[styles.stage, { width }]} pointerEvents="none" accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
     {t >= LIST
-      ? <FolderBranchMenu server={NO_SERVER} cwd="" info={info} git={git} onBack={noop} onDone={noop} onRefused={noop} onOpenFolder={noop} />
-      : <FolderGitCard git={git} busy={t >= PULLING && t < PULLED ? 'pull' : null}
+      ? <FolderBranchMenu server={NO_SERVER} cwd="" info={info} git={git} locked={false} onBack={noop} onDone={noop} onRefused={noop} onOpenFolder={noop} onFolderClosed={noop} />
+      : <FolderGitCard folder={m.news_tags_sample_session()} git={git} busy={t >= PULLING && t < PULLED ? 'pull' : null}
           note={t >= PULLED ? { ok: true, text: m.native_folder_git_pull_done({ upstream: m.news_branch_sample_upstream() }) } : null} onAction={noop} />}
   </View>;
 }

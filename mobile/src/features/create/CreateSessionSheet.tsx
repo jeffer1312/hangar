@@ -15,7 +15,7 @@ import { semEsforco } from '../pills/pills';
 import { SettingsList } from '../../ui/SettingsList';
 import { useServers } from '../../stores/servers';
 import { readProject, rememberProject } from '../../stores/createPreferences';
-import { autoSessionName, type NewConversationInput } from '../../stores/newConversation';
+import { autoSessionName, NO_PROJECT_CWD, type NewConversationInput } from '../../stores/newConversation';
 import { CwdPicker } from './CwdPicker';
 import { loadErrorText } from './loadError';
 import { useCanceledLoadRetry } from './useCanceledLoadRetry';
@@ -62,9 +62,6 @@ function PanelSelect({
     </AnchoredPanel>
   </>;
 }
-
-// O servidor expande na abertura: o app não sabe a pasta do usuário e ela costuma estar fora das raízes.
-const NO_PROJECT_CWD = '~';
 
 // `layout: 'form'`: o formulário completo em linhas (Nova sessão do menu); o padrão é a conversa nova da inicial.
 export function CreateSessionSheet({ onClose, keyboardOffset, home, layout = 'conversation' }: {

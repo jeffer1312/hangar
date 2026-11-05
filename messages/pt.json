@@ -5656,6 +5656,7 @@
   "native_git_elsewhere_busy": "{pasta} tem sessão aberta ({nomes}): feche a sessão antes, ou use Ver onde está.",
   "native_git_elsewhere_dirty": "{pasta} tem alteração não commitada: use Ver onde está e resolva lá antes de fechar.",
   "native_git_elsewhere_failed": "Não consegui fechar {pasta}: {motivo}",
+  "native_git_elsewhere_busy_unnamed": "{pasta} tem sessão aberta: feche a sessão antes de fechar a pasta.",
   "native_git_current": "atual",
   "native_git_branch_create": "Criar a branch {n} e trocar para ela",
   "native_git_branch_created": "branch: {n} — criada",

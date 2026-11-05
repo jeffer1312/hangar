@@ -6,11 +6,12 @@ import { superficie } from '../../theme/superficie';
 import * as m from '../../paraglide/messages';
 
 export type GitAction = 'fetch' | 'pull';
-type Props = { git: FolderGit; busy: GitAction | null; note: { ok: boolean; text: string } | null; onAction: (action: GitAction) => void };
+type Props = { folder: string; git: FolderGit; busy: GitAction | null; note: { ok: boolean; text: string } | null; onAction: (action: GitAction) => void };
 
-function gitDetail(git: FolderGit): string {
+// A pasta vem junto: com uma worktree escolhida, o Fetch e o Pull agem no repositório principal.
+function gitDetail(folder: string, git: FolderGit): string {
   const fetched = git.last_fetch ? m.native_folder_git_fetched({ quando: relativeTime(git.last_fetch) }) : m.native_folder_git_never_fetched();
-  return `${git.upstream ?? m.native_folder_git_no_upstream()} · ${fetched}`;
+  return `${folder} · ${git.upstream ?? m.native_folder_git_no_upstream()} · ${fetched}`;
 }
 
 // Mesmas condições da recusa do servidor: o motivo aparece antes do toque.
@@ -21,7 +22,7 @@ function pullBlock(git: FolderGit): string {
   return '';
 }
 
-export function FolderGitCard({ git, busy, note, onAction }: Props) {
+export function FolderGitCard({ folder, git, busy, note, onAction }: Props) {
   const { theme } = useUnistyles();
   const blocked = pullBlock(git);
   const behind = git.behind ?? 0;
@@ -56,7 +57,7 @@ export function FolderGitCard({ git, busy, note, onAction }: Props) {
         {git.upstream && behind ? count('ArrowDown', behind, m.native_folder_git_behind({ n: behind })) : null}
         {git.upstream && ahead ? count('ArrowUp', ahead, m.native_folder_git_ahead({ n: ahead })) : null}
       </View>
-      <Text style={styles.detail} numberOfLines={2} accessibilityLiveRegion="polite">{gitDetail(git)}</Text>
+      <Text style={styles.detail} numberOfLines={2} accessibilityLiveRegion="polite">{gitDetail(folder, git)}</Text>
       <View style={styles.line}>
         {button('fetch', m.native_folder_git_fetch(), 'RefreshCw', !!busy)}
         {button('pull', m.native_folder_git_pull(), 'ArrowDown', !!busy || !!blocked, behind > 0 && !blocked)}

@@ -12,6 +12,9 @@ import { clearDraft, readDraft, withoutUpload, writeDraft, type DraftAttachment 
 import { submitConversationDraft } from './chat';
 import * as m from '../paraglide/messages';
 
+// O servidor expande na abertura: o app não sabe a pasta do usuário e ela costuma estar fora das raízes.
+export const NO_PROJECT_CWD = '~';
+
 export type NewConversationIssue =
   | { kind: 'rejected'; message: string }
   | { kind: 'unknown'; message: string; events?: ChatEvent[] }
@@ -391,7 +394,8 @@ export function recoverAttempt(serverId: string): Promise<void> {
     try {
       const found = (await fetchSessionsForServer(server)).find((s) => s.name === name);
       if (found) {
-        const compatible = found.cwd === attempt.body.cwd
+        // A sessão volta com o caminho já expandido: "~" não tem com o que comparar aqui.
+        const compatible = (attempt.body.cwd === NO_PROJECT_CWD || found.cwd === attempt.body.cwd)
           && (found.provider ?? 'claude') === (attempt.body.provider ?? 'claude');
         setIssue(serverId, compatible
           ? { kind: 'candidate', message: m.nova_conversa_candidata({ nome: name }), session: found }

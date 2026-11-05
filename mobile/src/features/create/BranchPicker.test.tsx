@@ -31,7 +31,7 @@ vi.mock('../../paraglide/messages', () => ({
   native_folder_git_fetch: () => 'fetch', native_folder_git_pull: () => 'pull', native_folder_git_fetch_done: () => 'fetch-ok',
   native_folder_git_pull_done: ({ upstream }: { upstream: string }) => `pull-ok:${upstream}`, native_folder_git_dirty: ({ n }: { n: number }) => `suja:${n}`,
   native_folder_git_no_upstream_pull: () => 'sem-de-onde', native_folder_git_diverged: ({ upstream }: { upstream: string }) => `divergiu:${upstream}`,
-  native_folder_git_branch_entry: () => 'trocar-ou-criar', worktree_menu_buscar: () => 'buscar', native_create_checkout_dirty: () => 'fica-na-pasta' }));
+  native_folder_git_branch_entry: () => 'trocar-ou-criar', worktree_menu_buscar: () => 'buscar', native_create_checkout_dirty: () => 'fica-na-pasta', native_git_no_branch: () => 'sem-resultado' }));
 vi.mock('../../ui/haptics', () => ({ haptic: { success: vi.fn(), error: vi.fn(), selection: vi.fn() } }));
 vi.mock('./FolderBranchMenu', () => ({ FolderBranchMenu: () => createElement('div', { 'data-menu': 'branches' }) }));
 const MAIN = { current: 'main' as string | null, branches: ['main', 'x'], remotes: [] as string[], dirty: false, worktree_parent: null as string | null };
@@ -187,6 +187,20 @@ describe('BranchPicker', () => {
     } finally { folder.worktrees = []; }
   });
 
+  it('busca sem resultado diz isso em vez de deixar a lista em branco', async () => {
+    folder.worktrees = [wt('livre')];
+    try {
+      const { el } = await mount();
+      await press(el, 'existente');
+      await act(async () => {
+        const input = el.querySelector('[aria-label="buscar"]') as HTMLInputElement;
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'xyz');
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      expect(el.textContent).toContain('sem-resultado');
+    } finally { folder.worktrees = []; }
+  });
+
   it('cópia nova com a pasta alterada avisa que as mudanças ficam nela', async () => {
     folder.value = { ...MAIN, dirty: true };
     try {
@@ -210,8 +224,16 @@ describe('BranchPicker', () => {
       const { el } = await mount();
       expect(calls).toEqual(['fetch']);
       expect(el.querySelector('[aria-label="2 atras"]')).toBeTruthy();
-      expect(el.textContent).toContain('origin/main · sem-fetch');
+      expect(el.textContent).toContain('r · origin/main · sem-fetch');
       expect(el.textContent).not.toContain('fetch-ok');
+    } finally { folder.action = () => Promise.resolve(folder.git); }
+  });
+
+  it('fetch da abertura que falha avisa: sem ele o cartão diria que está atualizada', async () => {
+    folder.action = () => Promise.reject(new Error('502: remoto fora'));
+    try {
+      const { el } = await mount();
+      expect(el.textContent).toContain('remoto fora');
     } finally { folder.action = () => Promise.resolve(folder.git); }
   });
 
