@@ -46,9 +46,6 @@ class HookState:
         self._registro_arquivo: dict[str, str] = {}  # caminho -> session_id (pra remover na saida)
         # Dirs registrados (load_existing/watch) — demote_awaiting precisa achar o sidecar.
         self._dirs: list[Path] = []
-        # Disparado na transicao -> awaiting_input (so no watch ao vivo, nao no load_existing do boot).
-        # Wiring em api.py manda o push. Recebe o session_id (uuid); best-effort, nunca levanta.
-        self.on_awaiting: Optional[Callable[[str], None]] = None
         # Disparado em QUALQUER mudanca de estado ao vivo: (session_id, state). Wiring em api.py:
         # drain server-side (entrega a fila sem depender de conexao SSE) + confirmacao de entrega.
         self.on_transition: Optional[Callable[[str, str], None]] = None
@@ -142,15 +139,6 @@ class HookState:
         if cur is None:
             return
         state = cur[0]
-        # Transicao -> awaiting_input (so ao vivo). prev None = marcador novo aparecendo ja awaiting
-        # (sessao acabou de pedir input) tambem conta. awaiting->awaiting (so o ts mudou) nao re-dispara.
-        if state == "awaiting_input" and (prev is None or prev[0] != "awaiting_input"):
-            cb = self.on_awaiting
-            if cb:
-                try:
-                    cb(sid)
-                except Exception:
-                    pass
         # Mudanca de estado (qualquer) ao vivo -> on_transition (drain server-side / confirmacao).
         if prev is None or prev[0] != state:
             cb2 = self.on_transition

@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from app import account_bridge, guest_users, runtime_coordinator
+from app import account_bridge, runtime_coordinator
 from app.api import app
 from app.config import settings
 
@@ -93,12 +93,9 @@ def test_unauthenticated_request_never_reaches_the_owner(rust):
     assert _Rust.seen == []
 
 
-def test_guest_stays_without_the_route(rust):
-    marker = guest_users.current.set(object())
-    try:
+def test_guest_stays_without_the_route(rust, forwarded_guest):
+    with forwarded_guest():
         response = TestClient(app).post("/api/mermaid", headers=AUTH, json=BODY)
-    finally:
-        guest_users.current.reset(marker)
     assert response.status_code == 404
     assert _Rust.seen == []
 

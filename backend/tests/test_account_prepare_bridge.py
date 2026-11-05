@@ -1,5 +1,6 @@
 """A ponte prepara configuração sem herdar autenticação ou liberar trabalho vivo."""
 import json
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -56,11 +57,12 @@ def test_http_python_worker_blocks_delete_after_rust_restart(tmp_path, force_pen
                 "x-hangar-runtime-instance": "replacement"})
         with urllib.request.urlopen(request, timeout=10) as response:
             assert json.load(response)["status"] == "ready"
-        for _ in range(100):
-            if rust.request("GET", "/api/codex-contas/alpha/prepare").json()["status"] == "ready":
-                break
-        else:
-            raise AssertionError("a retomada não concluiu o preparo")
+        # O preparo forçado roda uma segunda vez: espera pelo estado, com teto de tempo, não por número de consultas.
+        deadline = time.monotonic() + 30
+        while rust.request("GET", "/api/codex-contas/alpha/prepare").json()["status"] != "ready":
+            if time.monotonic() > deadline:
+                raise AssertionError("a retomada não concluiu o preparo")
+            time.sleep(0.05)
         assert reference.request("GET", "/__contract__/preparation-calls").json() == ([False, True] if force_pending else [False])
         assert rust.request("DELETE", "/api/codex-contas/alpha").status_code == 200
         assert reference.calls() == []

@@ -1,5 +1,5 @@
-//! Aviso no celular decidido e enviado pelo Rust (Web Push e Expo): o que o `push.py`, as
-//! transições do `hook_state` e o `stall_watch` do Python faziam para as sessões.
+//! Avisos de sessão pelos canais Web Push e Expo, com produtores e preferências compartilhados.
+mod config;
 pub mod http;
 pub mod send;
 pub mod store;

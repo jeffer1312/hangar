@@ -194,7 +194,7 @@ def test_parked_read_only_sidecar_is_not_transferred(monkeypatch, tmp_path):
 @pytest.mark.skipif(sys.platform != "linux" or not shutil.which("bash"),
                     reason="stub de curl usa executável POSIX")
 @pytest.mark.parametrize("status", [200, 422])
-def test_cli_sends_read_only_and_does_not_claim_success_on_old_backend(tmp_path, status):
+def test_cli_sends_read_only_and_does_not_claim_success_on_old_backend(tmp_path, status, hangar_server_bin):
     scripts = tmp_path / "scripts"
     scripts.mkdir()
     backend = tmp_path / "backend"
@@ -202,6 +202,7 @@ def test_cli_sends_read_only_and_does_not_claim_success_on_old_backend(tmp_path,
     (backend / ".env").write_text("CP_AUTH_TOKEN=test-only\n")
     cli = scripts / "hangar-send"
     shutil.copyfile(Path(__file__).resolve().parents[2] / "scripts" / "hangar-send", cli)
+    shutil.copy(Path(__file__).resolve().parents[2] / "scripts" / "hangar-server-command", scripts / "hangar-server-command")
     capture = tmp_path / "payload.json"
     curl = scripts / "curl"
     curl.write_text(f"#!{sys.executable}\n" + """import json,os,pathlib,sys
@@ -216,7 +217,9 @@ else:
 """)
     curl.chmod(0o700)
     result = subprocess.run(["bash", str(cli), "--new", "review", str(tmp_path), "--read-only"],
-                            env={**os.environ, "PATH": str(scripts) + os.pathsep + os.environ["PATH"],
+                            env={**os.environ, "HOME": str(tmp_path), "USERPROFILE": str(tmp_path),
+                                 "CP_RUST_SERVER_BIN": str(hangar_server_bin),
+                                 "PATH": str(scripts) + os.pathsep + os.environ["PATH"],
                                  "TEST_PAYLOAD": str(capture), "TEST_STATUS": str(status)},
                             capture_output=True, text=True, timeout=10)
     assert json.loads(capture.read_text())["read_only"] is True

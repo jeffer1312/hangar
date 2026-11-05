@@ -1,0 +1,18 @@
+#!/bin/sh
+# Instala recursos dos harnesses sem serviço ou interpretador Python.
+set -eu
+setup_script=$0
+while [ -L "$setup_script" ]; do
+    setup_dir=$(CDPATH= cd -- "$(dirname -- "$setup_script")" && pwd)
+    setup_link=$(readlink "$setup_script")
+    case "$setup_link" in /*) setup_script=$setup_link ;; *) setup_script=$setup_dir/$setup_link ;; esac
+done
+setup_root=$(CDPATH= cd -- "$(dirname -- "$setup_script")/.." && pwd)
+if [ -n "${CP_RUST_SERVER_BIN:-}" ] && [ -x "$CP_RUST_SERVER_BIN" ]; then
+    exec "$CP_RUST_SERVER_BIN" harness-setup "$@"
+fi
+for setup_binary in "$setup_root/bin/hangar-server" "$setup_root/crates/target/release/hangar-server" "$HOME/.hangar/bin/hangar-server"; do
+    if [ -x "$setup_binary" ]; then exec "$setup_binary" harness-setup "$@"; fi
+done
+printf '%s\n' 'hangar-harness-setup: hangar-server não encontrado; instale o Hangar ou configure CP_RUST_SERVER_BIN' >&2
+exit 126

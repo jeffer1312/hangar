@@ -39,198 +39,28 @@ async def _take(gen, n):
     return out
 
 
-def test_emits_snapshot_on_connect(monkeypatch):
-    async def fake_list(_snap=None):
-        return [_Info("cc", "idle")]
-    monkeypatch.setattr(sse._list_registry, "list_with_state", fake_list)
-    evs = asyncio.run(_take(sse.list_events(ping_secs=9999), 1))
-    assert evs[0]["event"] == "sessions"
-    assert json.loads(evs[0]["data"])[0]["name"] == "cc"
 
 
-def test_emits_again_only_on_change(monkeypatch):
-    seq = [[_Info("cc", "idle")], [_Info("cc", "idle")], [_Info("cc", "working")]]
-    calls = {"i": 0}
-    async def fake_list(_snap=None):
-        r = seq[min(calls["i"], len(seq) - 1)]; calls["i"] += 1; return r
-    monkeypatch.setattr(sse._list_registry, "list_with_state", fake_list)
-    # connect-emit (idle), unchanged (idle, no emit), then working -> 2nd emit
-    evs = asyncio.run(_take(sse.list_events(ping_secs=9999), 2))
-    assert [e["event"] for e in evs] == ["sessions", "sessions"]
-    assert json.loads(evs[0]["data"])[0]["state"] == "idle"
-    assert json.loads(evs[1]["data"])[0]["state"] == "working"
 
 
-def test_nav_marcador_vai_a_toda_conexao_uma_vez_e_sai_no_ack(monkeypatch, tmp_path):
-    # O celular lendo a sessão não pode mais "comer" o pedido do agente: cada conexão recebe o
-    # marcador uma vez, ele fica até o desktop confirmar (DELETE /nav) e sobrevive em disco.
-    monkeypatch.setattr(sse, "_nav_arquivo", lambda: tmp_path / "pendentes.json")
-    sse._NAV_MARCADORES.clear()
-    monkeypatch.setattr(sse, "_nav_carregado", False)
-    async def fake_list(_snap=None):
-        return []
-    monkeypatch.setattr(sse._list_registry, "list_with_state", fake_list)
-    sse.nav_pendente("hangar-2", "http://127.0.0.1:8765/")
-    assert json.loads((tmp_path / "pendentes.json").read_text())["hangar-2"]["url"] == "http://127.0.0.1:8765/"
-
-    async def primeiro_nav(gen):
-        async for ev in gen:
-            if ev["event"] == "nav":
-                return json.loads(ev["data"])
-    # duas conexões (celular + desktop): as duas recebem
-    a = asyncio.run(primeiro_nav(sse.list_events(ping_secs=9999)))
-    b = asyncio.run(primeiro_nav(sse.list_events(ping_secs=9999)))
-    assert a == b == {"name": "hangar-2", "url": "http://127.0.0.1:8765/"}
-    # a mesma conexão não recebe duas vezes o mesmo marcador
-    vistos: dict = {}
-    assert [n for n, _ in sse.nav_novos(vistos)] == ["hangar-2"]
-    assert sse.nav_novos(vistos) == []
-    # url nova = ts novo = entrega de novo
-    sse.nav_pendente("hangar-2", "http://127.0.0.1:8765/#/x")
-    assert [m["url"] for _, m in sse.nav_novos(vistos)] == ["http://127.0.0.1:8765/#/x"]
-    # ack tira do ar e do disco
-    sse.nav_confirmar("hangar-2")
-    assert sse.nav_novos({}) == []
-    assert json.loads((tmp_path / "pendentes.json").read_text()) == {}
-    # reinício do backend: relê o disco (uma vez por processo — dict vazio sozinho não relê)
-    sse.nav_pendente("outra", "http://a")
-    sse._NAV_MARCADORES.clear()
-    assert sse.nav_novos({}) == []
-    sse._nav_carregado = False
-    assert [n for n, _ in sse.nav_novos({})] == ["outra"]
-    # vencido sai sozinho
-    sse._NAV_MARCADORES["outra"]["ts"] -= sse._NAV_TTL_S + 1
-    assert sse.nav_novos({}) == []
-    sse._NAV_MARCADORES.clear()
 
 
-def test_no_reemit_on_last_activity_only_change(monkeypatch):
-    # last_activity = mtime do jsonl (float sub-segundo); muda a cada escrita de uma sessao ativa.
-    # Sozinho NAO pode re-emitir (senao a lista inteira pisca a cada poll). State change SIM emite.
-    a0 = _Info("cc", "working"); a0.last_activity = 1.0
-    a1 = _Info("cc", "working"); a1.last_activity = 2.5   # so last_activity mudou -> sem emit
-    a2 = _Info("cc", "idle");    a2.last_activity = 3.0   # state mudou -> emite
-    seq = [[a0], [a1], [a2]]
-    calls = {"i": 0}
-    async def fake_list(_snap=None):
-        r = seq[min(calls["i"], len(seq) - 1)]; calls["i"] += 1; return r
-    monkeypatch.setattr(sse._list_registry, "list_with_state", fake_list)
-    evs = asyncio.run(_take(sse.list_events(ping_secs=9999), 2))
-    assert [e["event"] for e in evs] == ["sessions", "sessions"]
-    assert json.loads(evs[0]["data"])[0]["state"] == "working"
-    assert json.loads(evs[1]["data"])[0]["state"] == "idle"
-    assert json.loads(evs[1]["data"])[0]["last_activity"] == 3.0  # ainda no payload
 
 
-def test_reemit_on_question_change(monkeypatch):
-    # Uma sessao awaiting que troca a pergunta re-emite a lista (feature #1): a linha atualiza o texto,
-    # mesmo com name/state/cwd/jsonl iguais. Sem question na sig, a 2a emissao nao viria.
-    a0 = _Info("cc", "awaiting_input"); a0.question = "Qual ambiente?"
-    a1 = _Info("cc", "awaiting_input"); a1.question = "Confirma o deploy?"
-    seq = [[a0], [a1]]
-    calls = {"i": 0}
-    async def fake_list(_snap=None):
-        r = seq[min(calls["i"], len(seq) - 1)]; calls["i"] += 1; return r
-    monkeypatch.setattr(sse._list_registry, "list_with_state", fake_list)
-    evs = asyncio.run(_take(sse.list_events(ping_secs=9999), 2))
-    assert [e["event"] for e in evs] == ["sessions", "sessions"]
-    assert json.loads(evs[1]["data"])[0]["question"] == "Confirma o deploy?"
 
 
-def test_reemit_on_stalled_change(monkeypatch):
-    # Uma sessao "working" que passa a stalled re-emite a lista (feature #7): a linha tinge mesmo com
-    # name/state/cwd/jsonl/question iguais. Sem stalled na sig, a 2a emissao nao viria.
-    a0 = _Info("cc", "working"); a0.stalled = False
-    a1 = _Info("cc", "working"); a1.stalled = True
-    seq = [[a0], [a1]]
-    calls = {"i": 0}
-    async def fake_list(_snap=None):
-        r = seq[min(calls["i"], len(seq) - 1)]; calls["i"] += 1; return r
-    monkeypatch.setattr(sse._list_registry, "list_with_state", fake_list)
-    evs = asyncio.run(_take(sse.list_events(ping_secs=9999), 2))
-    assert [e["event"] for e in evs] == ["sessions", "sessions"]
-    assert json.loads(evs[0]["data"])[0]["stalled"] is False
-    assert json.loads(evs[1]["data"])[0]["stalled"] is True
 
 
-def test_reemit_on_limited_change(monkeypatch):
-    # Uma sessao que bate no rate-limit re-emite a lista (feature #8): o chip "limitado" aparece mesmo
-    # com name/state/cwd/jsonl/question/stalled iguais. Sem limited na sig, a 2a emissao nao viria.
-    a0 = _Info("cc", "working"); a0.limited = False
-    a1 = _Info("cc", "working"); a1.limited = True; a1.limit_reset = "3pm"
-    seq = [[a0], [a1]]
-    calls = {"i": 0}
-    async def fake_list(_snap=None):
-        r = seq[min(calls["i"], len(seq) - 1)]; calls["i"] += 1; return r
-    monkeypatch.setattr(sse._list_registry, "list_with_state", fake_list)
-    evs = asyncio.run(_take(sse.list_events(ping_secs=9999), 2))
-    assert [e["event"] for e in evs] == ["sessions", "sessions"]
-    assert json.loads(evs[0]["data"])[0]["limited"] is False
-    assert json.loads(evs[1]["data"])[0]["limited"] is True
-    assert json.loads(evs[1]["data"])[0]["limit_reset"] == "3pm"
 
 
-def test_reemit_on_limit_reset_change(monkeypatch):
-    # Mesmo com limited seguindo True, mudar SO o horario de reset re-emite (feature #8): o chip
-    # "limitado · HH:MM" atualiza. Sem limit_reset na sig, a 2a emissao nao viria.
-    a0 = _Info("cc", "working"); a0.limited = True; a0.limit_reset = "3pm"
-    a1 = _Info("cc", "working"); a1.limited = True; a1.limit_reset = "4pm"
-    seq = [[a0], [a1]]
-    calls = {"i": 0}
-    async def fake_list(_snap=None):
-        r = seq[min(calls["i"], len(seq) - 1)]; calls["i"] += 1; return r
-    monkeypatch.setattr(sse._list_registry, "list_with_state", fake_list)
-    evs = asyncio.run(_take(sse.list_events(ping_secs=9999), 2))
-    assert [e["event"] for e in evs] == ["sessions", "sessions"]
-    assert json.loads(evs[1]["data"])[0]["limit_reset"] == "4pm"
 
 
-def test_ping_emitted_on_cadence(monkeypatch):
-    async def fake_list(_snap=None):
-        return [_Info("cc", "idle")]
-    monkeypatch.setattr(sse._list_registry, "list_with_state", fake_list)
-    # ping em timer FIXO por conexao: apos o snapshot, o ping chega pelo seu proprio timer.
-    evs = asyncio.run(_take(sse.list_events(ping_secs=0.001), 2))
-    assert evs[0]["event"] == "sessions"
-    assert any(e["event"] == "ping" for e in evs[1:])
 
 
-def test_ping_not_blocked_by_slow_refresher(monkeypatch):
-    # CERNE do desenho: o refresher (shared) pendurado num list_with_state lento (git status) NAO pode
-    # atrasar o ping — a conexao so LE o snapshot e pinga em task propria. Ping chega mesmo travado.
-    async def slow_list(_snap=None):
-        await asyncio.sleep(9999)   # trava o refresher no 1o ciclo (nenhum snapshot pronto)
-
-    monkeypatch.setattr(sse._list_registry, "list_with_state", slow_list)
-    evs = asyncio.run(_take(sse.list_events(ping_secs=0.001), 1))
-    assert evs[0]["event"] == "ping"   # ping chegou apesar do refresher pendurado (sem snapshot ainda)
 
 
-def test_refresher_error_emits_list_error(monkeypatch):
-    # Erro no refresher NAO derruba a conexao E aparece pro USUARIO: emite 'list_error' (front distingue
-    # de offline; lista vazia por falha != zero sessoes). Sem ping (9999) -> o 1o evento e o list_error.
-    async def boom(_snap=None):
-        raise RuntimeError("list quebrou")
-    monkeypatch.setattr(sse._list_registry, "list_with_state", boom)
-    evs = asyncio.run(_take(sse.list_events(ping_secs=9999), 1))
-    assert evs[0]["event"] == "list_error"
 
 
-def test_refresher_recovers_after_error_emits_sessions(monkeypatch):
-    # Ciclo bom depois de um erro re-emite 'sessions' (o front LIMPA o list_error). 1o falha, depois ok.
-    calls = {"i": 0}
-
-    async def flaky(_snap=None):
-        calls["i"] += 1
-        if calls["i"] == 1:
-            raise RuntimeError("primeiro ciclo falhou")
-        return [_Info("cc", "idle")]
-
-    monkeypatch.setattr(sse._list_registry, "list_with_state", flaky)
-    evs = asyncio.run(_take(sse.list_events(ping_secs=9999), 2))
-    assert evs[0]["event"] == "list_error"
-    assert evs[1]["event"] == "sessions"
-    assert json.loads(evs[1]["data"])[0]["name"] == "cc"
 
 
 def test_status_sig_reduz_sem_relogio_e_custo():
@@ -250,84 +80,3 @@ def test_status_sig_reduz_sem_relogio_e_custo():
     assert sse._status_sig(a) != sse._status_sig(c)          # % mudou -> sig muda
     assert sse._status_sig(None) is None
     assert sse._status_sig("sem emojis") == (None, None, None, None, None)
-
-
-def test_shortcut_terminals_go_out_as_own_event_without_resending_sessions(monkeypatch):
-    async def fake_list(_snap=None):
-        return [_Info("cc", "idle")]
-    monkeypatch.setattr(sse._list_registry, "list_with_state", fake_list)
-    frames = iter(["[]", '[{"id": "abc123"}]'])
-    last = {"v": "[]"}
-
-    def snap():
-        last["v"] = next(frames, last["v"])
-        return last["v"]
-    monkeypatch.setattr(sse, "_shortcuts_snapshot", snap)
-    evs = asyncio.run(_take(sse.list_events(ping_secs=9999), 3))
-    assert [e["event"] for e in evs] == ["sessions", "shortcut_terminals", "shortcut_terminals"]
-    assert json.loads(evs[2]["data"]) == [{"id": "abc123"}]
-
-
-def test_guest_never_gets_shortcut_terminals(monkeypatch):
-    async def fake_list(_snap=None):
-        return [_Info("cc", "idle")]
-    monkeypatch.setattr(sse._list_registry, "list_with_state", fake_list)
-    monkeypatch.setattr(sse, "_shortcuts_snapshot", lambda: '[{"id": "abc123"}]')
-    evs = asyncio.run(_take(sse.list_events(ping_secs=0.05, only="cc"), 3))
-    assert "shortcut_terminals" not in [e["event"] for e in evs]
-
-
-def test_hanging_shortcuts_snapshot_never_delays_sessions(monkeypatch):
-    import threading, time
-    release = threading.Event()
-    async def fake_list(_snap=None):
-        return [_Info("cc", "idle")]
-    monkeypatch.setattr(sse._list_registry, "list_with_state", fake_list)
-    monkeypatch.setattr(sse, "_shortcuts_snapshot", lambda: release.wait(2) and '[{"id": "old"}]')
-    try:
-        async def go():
-            t0 = time.monotonic()
-            evs = await _take(sse.list_events(ping_secs=0.05), 2)
-            return evs, time.monotonic() - t0
-        evs, took = asyncio.run(go())
-        assert evs[0]["event"] == "sessions"
-        assert took < 1.0
-        assert "shortcut_terminals" not in [e["event"] for e in evs]
-    finally:
-        release.set()
-
-
-def test_failing_shortcuts_snapshot_keeps_previous_and_leaves_list_alone(monkeypatch):
-    async def fake_list(_snap=None):
-        return [_Info("cc", "idle")]
-    monkeypatch.setattr(sse._list_registry, "list_with_state", fake_list)
-    calls = {"n": 0}
-
-    def snap():
-        calls["n"] += 1
-        if calls["n"] > 1:
-            raise RuntimeError("tmux caiu")
-        return '[{"id": "a"}]'
-    monkeypatch.setattr(sse, "_shortcuts_snapshot", snap)
-    evs = asyncio.run(_take(sse.list_events(ping_secs=0.1), 3))
-    names = [e["event"] for e in evs]
-    assert "list_error" not in names
-    assert names.count("shortcut_terminals") == 1
-    assert calls["n"] > 1
-    assert not sse._list_refresher.errored
-
-
-
-def test_guest_filter_failure_emits_list_error_instead_of_freezing(monkeypatch):
-    from app import guest_users
-
-    async def fake_list(_snap=None):
-        return [_Info("cc", "idle")]
-
-    def boom(*_a, **_k):
-        raise OSError("disco cheio")
-    monkeypatch.setattr(sse._list_registry, "list_with_state", fake_list)
-    monkeypatch.setattr(guest_users, "has_claims", lambda: True)
-    monkeypatch.setattr(guest_users, "filter_visible", boom)
-    evs = asyncio.run(_take(sse.list_events(ping_secs=9999), 1))
-    assert evs[0]["event"] == "list_error"

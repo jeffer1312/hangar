@@ -110,7 +110,7 @@ fn read_outcome(state_dir: &Path) -> Option<Outcome> {
 
 /// Os campos que `GET /api/atualizacao` junta ao `estado`: o código, o erro do envio, ou `pendente`
 /// enquanto a falha atual espera o envio com consentimento.
-pub fn merge(estado: &mut Map<String, Value>, home: &Path, state_dir: &Path) {
+pub fn merge(estado: &mut crate::update::StateSnapshot, home: &Path, state_dir: &Path) {
     let Some(key) = failure_key(estado) else { return };
     match read_outcome(state_dir).filter(|o| o.falha == key) {
         Some(Outcome { codigo: Some(code), .. }) => { estado.insert("relatorio".into(), code.into()); }
@@ -126,7 +126,7 @@ static SENDING: std::sync::LazyLock<tokio::sync::Mutex<()>> = std::sync::LazyLoc
 fn is_transient(code: &str) -> bool { matches!(code, "diag_report_unreachable" | "diag_report_rate_limited") }
 
 /// A falha atual, se a pessoa consentiu e ela ainda não saiu. Bloqueante.
-fn unsent_failure(home: &Path, state_dir: &Path) -> Option<(String, Map<String, Value>)> {
+fn unsent_failure(home: &Path, state_dir: &Path) -> Option<(String, crate::update::StateSnapshot)> {
     let estado = crate::update::StateFile::new(state_dir).read();
     let key = failure_key(&estado)?;
     if read_outcome(state_dir).is_some_and(|o| o.falha == key && !o.erro.as_deref().is_some_and(is_transient)) { return None; }
@@ -272,7 +272,7 @@ mod tests {
             }
         }
 
-        fn screen(&self) -> Map<String, Value> {
+        fn screen(&self) -> crate::update::StateSnapshot {
             let mut estado = crate::update::StateFile::new(&self.state_dir()).read();
             merge(&mut estado, self.home.path(), &self.state_dir());
             estado

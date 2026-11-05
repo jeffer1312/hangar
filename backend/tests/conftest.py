@@ -461,3 +461,17 @@ def hangar_server_bin(monkeypatch, tmp_path):
     # No Windows o diário do subprocesso sai do LOCALAPPDATA, que o HOME de teste não troca.
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
     return binary
+
+
+@pytest.fixture
+def forwarded_guest():
+    """Identidade já verificada na borda; a assinatura tem prova em test_guest_header."""
+    from contextlib import contextmanager
+    from app import guest_header
+
+    @contextmanager
+    def scope():
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(guest_header, "_verify", lambda request: guest_header.GuestView({"s": "share"}))
+            yield
+    return scope

@@ -9,7 +9,7 @@ import time
 import traceback
 import uuid
 from pathlib import Path
-from app import atomico, diag, guest_users, list_bridge, plugin_bridge
+from app import atomico, diag, list_bridge, plugin_bridge
 from app import registry as registry_mod
 from app.adapters import CLAUDE_HEADLESS, chave_de, get_adapter
 from app.adapters.preview_push import PushPreviewSource, fonte_ferramenta, fonte_pensamento
@@ -594,95 +594,6 @@ def invalidate_recent_list() -> None:
     _list_invalidated_at = time.monotonic()
 
 
-async def list_events(ping_secs: float = 8.0, only=None, viewer=None):
-    """SSE da LISTA de sessoes. Conexao = PRIORIDADE ABSOLUTA, zero trabalho: um reader que so LE o
-    snapshot compartilhado (produzido pelo _ListRefresher unico) e emite quando a versao muda, + um
-    ping em timer FIXO por conexao (incondicional). Refresher travado nao afeta a conexao — o ping
-    segue e o front ve a lista velha (stale > desconectado).
-
-    `only` = conexao de convidado: ve so a sessao compartilhada, nao recebe os pedidos de navegador
-    do dono (`nav`) e nao conta como app do dono aberto. Aceita o nome ou o convidado assinado
-    pelo Rust (`guest_header`); a lista do convidado de convite em si é servida pelo Rust.
-    `viewer` = convidado com login proprio (ou None = dono): a lista passa pelo mesmo filtro da
-    rota `/api/sessions`."""
-    queue: asyncio.Queue = asyncio.Queue()
-    cond = _list_refresher.acquire()
-    started = time.monotonic()
-    diag.registrar("sse.lista_abriu")
-    async def reader():
-        last_version, last_data, last_shortcuts, was_error = -1, None, None, False
-        while True:
-            async with cond:
-                await cond.wait_for(lambda: _list_refresher.version != last_version)
-                last_version = _list_refresher.version
-                errored = _list_refresher.errored
-                data = _list_refresher.data
-                shortcuts = _list_refresher.shortcuts_data
-            if errored:
-                await queue.put(("list_error", "{}"))   # falha do refresher — front distingue de offline
-                was_error = True
-                continue
-            if data is not None:
-                try:
-                    if only is not None:
-                        # `only` em str é só o nome (usos internos); senão é o convidado que o Rust assinou.
-                        # Import tardio: guest_header → internal_api → sse.
-                        from app.guest_header import guest_safe
-                        guest = None if isinstance(only, str) else only
-                        sees = (lambda n: n == only) if guest is None else guest.sees
-                        data = json.dumps([guest_safe(x, guest) for x in json.loads(data)
-                                           if sees(x.get("name"))], ensure_ascii=False)
-                    if guest_users.has_claims() or viewer is not None:
-                        itens = await asyncio.to_thread(guest_users.filter_visible, viewer,
-                                                        json.loads(data), lambda x: x.get("name"))
-                        data = json.dumps(itens, ensure_ascii=False)
-                except Exception:
-                    # Sem isto o reader morre calado e o cliente fica com a lista congelada e só ping.
-                    _log.exception("sse: recorte da lista falhou")
-                    await queue.put(("list_error", "{}"))
-                    was_error = True
-                    continue
-                # Compara o que sairia: versão só dos terminais de atalho não reenvia `sessions`,
-                # mas renomear a sessão do convidado muda o recorte sem mudar o dado da lista.
-                if data != last_data or was_error:
-                    last_data, was_error = data, False
-                    await queue.put(("sessions", data))
-            # Terminal de atalho não entra no stream do convidado.
-            if only is None and viewer is None and shortcuts is not None and shortcuts != last_shortcuts:
-                last_shortcuts = shortcuts
-                await queue.put(("shortcut_terminals", shortcuts))
-
-    async def ping_loop():
-        while True:
-            await asyncio.sleep(ping_secs)
-            await queue.put(("ping", "{}"))
-
-    async def nav_pump():
-        # A lista e o unico stream que o desktop mantem aberto o tempo todo: e por aqui que "abrir
-        # navegador" chega com a sessao FORA da tela, e o shell cria o view escondido.
-        vistos: dict[str, float] = {}
-        try:
-            while True:
-                await asyncio.sleep(1.0)
-                for nome, marc in nav_novos(vistos):
-                    queue.put_nowait(("nav", json.dumps({"name": nome, "url": marc["url"]})))
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _log.exception("sse: nav_pump da lista morreu")
-
-    tasks = [asyncio.create_task(reader()), asyncio.create_task(ping_loop())]
-    if only is None and viewer is None:
-        tasks.append(asyncio.create_task(nav_pump()))
-    try:
-        while True:
-            event, data = await queue.get()
-            yield {"event": event, "data": data}
-    finally:
-        for t in tasks:
-            t.cancel()
-        _list_refresher.release()
-        diag.registrar("sse.lista_fechou", ms=int((time.monotonic() - started) * 1000))
 
 
 def _confirm_codex_queue(name: str, jsonl: str) -> None:

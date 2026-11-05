@@ -231,14 +231,3 @@ def test_rota_do_condutor_connect_repassa_pedido(cli, monkeypatch):
     answer = cli.get("/api/orq/execução/conductor?limit=3", headers=H)
     assert answer.status_code == 200 and answer.json() == {"fixture": True}
     assert calls == [("GET", "/api/orq/execução/conductor", "limit=3", "/__hangar_server/forwarded")]
-
-
-def test_rota_do_condutor_recusa_convidado_antes_da_ponte(cli, monkeypatch):
-    from app import account_bridge, guest_users
-    monkeypatch.setattr(guest_users, "lookup_token", lambda token: object())
-
-    async def forbidden(*args, **kwargs):
-        pytest.fail("o convidado não pode chegar à ponte do condutor")
-
-    monkeypatch.setattr(account_bridge, "forward_public", forbidden)
-    assert cli.get("/api/orq/x/conductor", headers={"Authorization": "Bearer guest"}).status_code == 403

@@ -1,4 +1,3 @@
-import io
 import os
 import socket
 import sys
@@ -64,9 +63,8 @@ if __name__ == "__main__":
     _saida_para_log(sys.argv)
 
 import uvicorn
-import qrcode
 
-from app.config import pairing_url_api, settings, resolve_bind_ip, pairing_url, list_config_dirs, _backend_config_base
+from app.config import settings, resolve_bind_ip, list_config_dirs, _backend_config_base
 from app.hook_installer import (
     ensure_askq_hook_installed,
     ensure_guard_hooks_installed,
@@ -115,33 +113,6 @@ def _saida_utf8() -> None:
             pass   # fluxo sem reconfigure (redirecionado pra objeto custom) — segue como estiver
 
 
-def print_pairing(settings) -> None:
-    """Print a scannable QR (PWA URL + token) so a phone pairs without typing anything."""
-    url = pairing_url(settings)
-    url_api = pairing_url_api(settings)
-    # QR so faz sentido em TERMINAL: ele existe pra ser apontado com a camera do celular. Rodando
-    # como servico (systemd, tarefa agendada) a saida vai pra arquivo, onde o desenho e ruido puro
-    # — e era justamente ali que ele derrubava o backend por codificacao. A URL com o token, essa
-    # sim, e util no log: e o que se copia pra parear na mao.
-    if sys.stdout.isatty():
-        qr = qrcode.QRCode(border=1)
-        qr.add_data(url)
-        qr.make(fit=True)
-        buf = io.StringIO()
-        qr.print_ascii(out=buf, invert=True)
-        print(buf.getvalue(), flush=True)
-        print(f"  Scan to pair, or open: {url}\n", flush=True)
-        # Segundo QR — app nativo (API direto, sem PWA)
-        qr2 = qrcode.QRCode(border=1)
-        qr2.add_data(url_api)
-        qr2.make(fit=True)
-        buf2 = io.StringIO()
-        qr2.print_ascii(out=buf2, invert=True)
-        print(buf2.getvalue(), flush=True)
-        print(f"  App nativo: {url_api}\n", flush=True)
-    else:
-        print(f"  Pareamento (abra no celular): {url}\n", flush=True)
-        print(f"  App nativo: {url_api}\n", flush=True)
 
 
 def _setup_diag_logging() -> None:
@@ -161,33 +132,6 @@ def _setup_diag_logging() -> None:
     diag_logging.instalar()
 
 
-def _passos_pendentes_da_versao(windows: bool = os.name == "nt") -> None:
-    """Passos que a versão exige e que ainda não rodaram AQUI — os não destrutivos.
-
-    Aqui, e não no installer, pelo mesmo motivo do `migracao_sidecars` logo acima: atualizar neste
-    projeto é `git pull` + reiniciar o serviço, e rodar `install-*.sh` não é garantido. Assim quem
-    atualizou pela linha de comando, sem tocar no botão do app, fica em dia no restart seguinte.
-
-    Só os NÃO destrutivos: passo que apaga ou sobrescreve alguma coisa espera o botão, onde há uma
-    pessoa olhando e o motor já guardou o disco numa branch de resgate antes.
-
-    Fail-soft, como os hooks: um passo com defeito não pode impedir o backend de subir — a máquina
-    ficaria sem app por causa de uma linha errada num arquivo de atualização.
-    """
-    try:
-        from app import atualizacoes, diag
-        # Pacote: quem aplica os passos de máquina é o atualizador do Rust, fora deste processo.
-        if diag.install_manifest():
-            return
-        # O instalador reinicia as tarefas e mataria este backend no meio da subida: fica para o botão.
-        if windows and any("install.ps1" in p["comando"] for p in atualizacoes.pendentes(incluir_destrutivos=False)):
-            print("[hangar] passos de atualizacao pendentes que chamam o instalador ficam para o botao Atualizar")
-            return
-        feitos = atualizacoes.aplicar_pendentes(incluir_destrutivos=False)
-        if feitos:
-            print(f"[hangar] passos de atualizacao aplicados: {', '.join(feitos)}")
-    except Exception as e:                            # noqa: BLE001 — nunca derruba a subida
-        print(f"[hangar] AVISO: passo de atualizacao falhou ({e}); o app segue subindo")
 
 
 def _tcp_socket(host: str, port: int) -> socket.socket:
@@ -240,7 +184,6 @@ def main():
         skill_bridge.rebuild(log=lambda m: print(f"[hangar] {m}"))
     except Exception as e:                            # noqa: BLE001 — nunca derruba a subida
         print(f"[hangar] AVISO: ponte de skills falhou ({e}); o app segue subindo")
-    _passos_pendentes_da_versao()
     # Instala (idempotente, fail-soft) os hooks de estado e de AskUserQuestion.
     ensure_askq_hook_installed()
     ensure_state_hooks_installed()
@@ -256,7 +199,6 @@ def main():
     from app.codex_hook_installer import ensure_codex_state_hook_installed
     ensure_codex_state_hook_installed()
     hook_state.load_existing(_state_dirs)
-    print_pairing(settings)
     # Windows: cliente que aborta no meio do accept nao pode fechar o listener (ver o modulo).
     resilient_accept.install()
     # workers=1 explicito: o cache de classe SessionRegistry._jsonl_cache e compartilhado SO dentro de

@@ -74,7 +74,7 @@ pub struct GroupService {
     dir: Arc<PairDir>,
     lock: Arc<Mutex<()>>,
     orq: Arc<dyn OrqFacts>,
-    server_id: String,
+    server_id: std::sync::RwLock<String>,
     /// Avisa a lista de que o disco do grupo mudou: sem isso ela só relê no prazo da descoberta.
     on_change: Option<Arc<dyn Fn() + Send + Sync>>,
     /// Falha que só vira faxina (contrato não herdado, `orq` sozinho que não saiu) vai ao diário exportável.
@@ -83,7 +83,7 @@ pub struct GroupService {
 
 impl GroupService {
     pub fn new(dir: PairDir, orq: Arc<dyn OrqFacts>, server_id: String) -> Self {
-        Self { dir: Arc::new(dir), lock: Arc::new(Mutex::new(())), orq, server_id, on_change: None, diary: None }
+        Self { dir: Arc::new(dir), lock: Arc::new(Mutex::new(())), orq, server_id: std::sync::RwLock::new(server_id), on_change: None, diary: None }
     }
 
     pub fn with_diary(mut self, diary: crate::diag::DiagClient) -> Self {
@@ -109,7 +109,8 @@ impl GroupService {
     /// O nome ainda tem grupo no disco (ilegível conta como tem): a criação recusa em vez de nascer nele.
     pub fn has_sidecar(&self, name: &str) -> bool { self.dir.sidecar(name).map_or(true, |s| s.is_some()) }
 
-    pub fn server_id(&self) -> &str { &self.server_id }
+    pub fn server_id(&self) -> String { self.server_id.read().unwrap_or_else(|e| e.into_inner()).clone() }
+    pub fn set_server_id(&self, id: String) { *self.server_id.write().unwrap_or_else(|e| e.into_inner()) = id; }
 
     /// Sidecar de `name` sem o lock, como o `PairLink.get`: leitura de quem só consulta.
     pub async fn link(&self, name: &str) -> Result<Option<Sidecar>, GroupError> {

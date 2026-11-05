@@ -48,35 +48,6 @@ def test_contexto_e_resumo_preservados(tmp_path):
     assert json.loads(r.stdout) == {"hookSpecificOutput": contexto, "systemMessage": "Aviso"}
 
 
-@pytest.mark.parametrize("nome", ["security-guidance", "outro-plugin"])
-def test_plugin_alvo_e_adaptado_sem_reescrever_em_novo_checkout(tmp_path, nome):
-    from app.codex_integracao import IntegracaoCodex
-    service = IntegracaoCodex(tmp_path, tmp_path / ".codex")
-    service._estado = {"avisos": [], "confianca_pendente": False}
-    root = service.codex_home / "plugins/cache/market" / nome / "1"
-    (root / ".codex-plugin").mkdir(parents=True)
-    (root / ".codex-plugin/plugin.json").write_text(json.dumps({"name": nome}))
-    programa = root / "hook.py"
-    programa.write_text("print('{\"metrics\":{\"no_changes\":true}}')\n")
-    command = subprocess.list2cmdline([sys.executable, str(programa)]) if sys.platform == "win32" else shlex.join([sys.executable, str(programa)])
-    hooks = root / "hooks.json"
-    hooks.write_text(json.dumps({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": command}]}]}}))
-    service._hooks_plugin(root)
-    convertido = json.loads(hooks.read_text())["hooks"]["Stop"][0]["hooks"][0]["command"]
-    r = subprocess.run(convertido, shell=True, input=b"{}", capture_output=True, timeout=5)
-    assert r.returncode == 0, r.stderr
-    if nome == "security-guidance":
-        assert json.loads(r.stdout) == {}
-        assert service._estado["confianca_pendente"] is True
-        assert str(service.codex_home / ".hangar-hooks/codex-hook-json.py") in convertido
-    else:
-        assert convertido == command
-        assert json.loads(r.stdout) == {"metrics": {"no_changes": True}}
-    antes = hooks.read_bytes(), hooks.stat().st_mtime_ns
-    service._hooks_plugin(root)
-    assert (hooks.read_bytes(), hooks.stat().st_mtime_ns) == antes
-
-
 def test_wrapper_windows_preserva_comando_e_interpretador_ja_instalado():
     from app.codex_compat import _split_windows, normalizar_security_guidance
     command = 'bash "C:\\plugin com espaço\\hooks\\sg-python.sh" "C:\\plugin com espaço\\hooks\\ensure_agent_sdk.py"'

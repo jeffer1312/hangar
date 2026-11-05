@@ -18,20 +18,12 @@ if [ -e "$marca" ]; then echo "já migrada: $marca"; exit 0; fi
 # Sem o aviso aceito na tela (o motor ou o app antigo atualizando), nada muda: a versão nova mostra o
 # aviso com a escolha, e a migração roda pela tela.
 # Mesma leitura do servidor (`update::accepted`): só uma lista de textos vale; outro formato é nada aceito.
-# O Python do backend (o do checkout), senão o do sistema; sem nenhum, falha e o Atualizar tenta de novo
-# (adivinhar pelo texto aceitaria arquivo que o servidor recusa).
-py=""
-for candidato in backend/.venv/bin/python python3; do
-    if "$candidato" -c 'import sys' 2>/dev/null; then py="$candidato"; break; fi
-done
-if [ -z "$py" ]; then
-    echo "##HANGAR-FALHA## sem Python para ler o aceite em $HOME/.hangar/update-accepted.json"
+# O Node já é pré-requisito do instalador; a leitura conserva a validação de lista de textos.
+if ! command -v node >/dev/null 2>&1; then
+    echo "##HANGAR-FALHA## sem Node para ler o aceite em $HOME/.hangar/update-accepted.json"
     exit 1
 fi
-if ! "$py" -I -c 'import json, sys
-d = json.load(open(sys.argv[1], encoding="utf-8"))
-sys.exit(0 if isinstance(d, list) and all(isinstance(x, str) for x in d) and "2026-10-24-pacote-por-versao" in d else 1)' \
-    "$HOME/.hangar/update-accepted.json" 2>/dev/null; then
+if ! node -e 'const fs=require("fs");try{const d=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));process.exit(Array.isArray(d)&&d.every(v=>typeof v==="string")&&d.includes("2026-10-24-pacote-por-versao")?0:1)}catch{process.exit(1)}' "$HOME/.hangar/update-accepted.json" 2>/dev/null; then
     echo "migração pendente: espera o aviso ser aceito na tela de atualização"
     exit 0
 fi
@@ -45,10 +37,7 @@ if ! rm -rf "$pasta"; then
 fi
 
 # 2 = a release não tem build para esta máquina; os avisos do download vão para a saída do passo.
-avisos="$( cd backend && uv run --no-sync python -c "from pathlib import Path; from app import rust_release as r
-a = r.fetch(dest=Path.home() / '.hangar' / 'migrate')
-print(*(a or []), sep='\n')
-raise SystemExit(2 if a is None else 0)" 2>&1 )"
+avisos="$( HANGAR_UPDATE_OWNS_RUST= HANGAR_SERVER_BIN_DIR="$pasta" bash scripts/install-server-binaries.sh --fetch 2>&1 )"
 rc=$?
 [ -n "$avisos" ] && printf '%s\n' "$avisos"
 

@@ -113,11 +113,8 @@ def test_unauthenticated_account_route_is_refused_before_unavailable(python_owne
     assert response.status_code == 401
 
 
-def test_python_only_alias_and_cookie_keep_working(python_owner):
+def test_python_only_cookie_keeps_working(python_owner):
     client = TestClient(app)
-    alias = client.put("/api/credenciais/apelido", headers=AUTH,
-                       json={"id": "chave:opencode", "apelido": "Meu"})
-    assert (alias.status_code, alias.json()) == (200, {"id": "chave:opencode", "apelido": "Meu"})
     cookie = client.put("/api/credenciais/cookie", headers=AUTH,
                         json={"id": "chave:opencode", "workspace_id": "w", "auth_cookie": "c"})
     assert (cookie.status_code, cookie.json()) == (200, {"id": "chave:opencode", "cookie_definido": True})
@@ -156,11 +153,3 @@ def test_device_login_spread_is_refused_without_rust(python_owner):
             action()
         assert (error.value.status_code, error.value.detail["code"]) == (503, "accounts_need_rust_server")
     assert not (Path.home() / ".codex" / "auth.json").exists()
-
-
-def test_harness_sync_reports_the_refusal_and_keeps_going(python_owner, monkeypatch):
-    from app import harness_saude
-    from app.oauth_codex import PROVEDOR
-    monkeypatch.setattr(harness_saude, "_no_harness", lambda cli: set())
-    monkeypatch.setattr(harness_saude, "_do_app", lambda cli: {PROVEDOR: None})
-    assert harness_saude._sincronizar("pi") == f"{PROVEDOR}: accounts_need_rust_server"

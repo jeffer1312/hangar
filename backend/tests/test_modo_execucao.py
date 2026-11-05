@@ -79,76 +79,8 @@ def test_pane_vira_sem_terminal_com_sid_vivo_conta_e_modo(reg, tmp_path, monkeyp
     assert meta["subagent_model"] == "haiku"
 
 
-@pytest.mark.parametrize("tier", ["default", "priority"])
-@pytest.mark.parametrize("rollback", [False, True])
-@pytest.mark.parametrize("fixed_account", [False, True])
-@pytest.mark.parametrize("live_model", ["gpt-6.1-sol", None])
-def test_engine_tier_survives_transport_and_rollback(reg, tmp_path, monkeypatch, tier, rollback, fixed_account, live_model):
-    from app import registry as R, engines, cliproxy, cliproxy_accounts
-    stopped = _pane(reg, tmp_path, monkeypatch)
-    monkeypatch.setattr(engines, "caminho", lambda: tmp_path / "engines.json")
-    engines.salvar("proxy", {"base_url": "http://127.0.0.1:8317", "api_key": "test", "model": "gpt-5.5"})
-    monkeypatch.setattr(R, "_engine_of", lambda pid: "proxy")
-    monkeypatch.setattr(R.procinfo, "_model_of", lambda pid: ("gpt-5.5", "high"))
-    monkeypatch.setattr(R, "_escolhas_status", lambda sid: (live_model, "high"))
-    monkeypatch.delenv("CLAUDE_CODE_EXTRA_BODY", raising=False)
-    historical = tmp_path / "projects" / "x" / f"{SID}.jsonl"
-    historical.parent.mkdir(parents=True, exist_ok=True)
-    historical.write_text('{"type":"assistant","message":{"model":"gpt-4","usage":{"input_tokens":100}}}', encoding="utf-8")
-    monkeypatch.setattr(cliproxy, "supports_fast", lambda *a: True)
-    monkeypatch.setattr(R, "_exigir_cp_engine", lambda: None)
-    account = {"account": "default", "prefix": "fixed", "credential_id": "codex:/tmp/codex",
-               "home": "/tmp/codex", "base_url": "http://127.0.0.1:8317"}
-    monkeypatch.setattr(cliproxy, "account_for_engine", lambda *a, **k: account)
-    monkeypatch.setattr(cliproxy_accounts, "resolve", lambda *a, **k: account)
-    monkeypatch.setattr("app.engine_probe.listar_modelos", lambda *a: [{"id": "fixed/gpt-5.5"}, {"id": "fixed/gpt-6.1-sol"}])
-    markers = {"CP_ENGINE_SERVICE_TIER": tier}
-    if fixed_account:
-        markers.update(CP_ENGINE_ACCOUNT="default", CP_ENGINE_CREDENTIAL_ID="codex:/tmp/codex",
-                       CP_ENGINE_ACCOUNT_BASE_URL="http://127.0.0.1:8317")
-    expected_model = ("fixed/" if fixed_account else "") + (live_model or "gpt-5.5")
-    def read(pid, name):
-        assert not stopped
-        return markers.get(name)
-    monkeypatch.setattr(R.procinfo, "_env_var_of", read)
-    commands = []
-    monkeypatch.setattr(R.tmux, "new_session", lambda name, cwd, cmd, *a, **k: commands.append(cmd) or True)
-    if rollback:
-        monkeypatch.setattr(S, "save", MagicMock(side_effect=OSError("sidecar indisponível")))
-        monkeypatch.setattr("app.terminal_input._wait_input_ready", lambda name, timeout=None: True)
-        with pytest.raises(OSError, match="sidecar indisponível"):
-            reg.para_headless("t1", "acceptEdits", transfer_meta=_tm(tmp_path))
-    else:
-        meta = reg.para_headless("t1", "acceptEdits", transfer_meta=_tm(tmp_path))
-        assert meta["service_tier"] == tier and S.load("t1")["service_tier"] == tier
-        assert meta["model"] == expected_model and S.load("t1")["model"] == expected_model
-        # A volta ao terminal é do Rust; o comando que ela montaria sai do sidecar gravado.
-        commands.append(R.SessionRegistry._comando_terminal(S.load("t1"), resume=True))
-    assert stopped == [("t1", False)]
-    assert f"--service-tier {tier} -- claude" in commands[0]
-    assert f"--model {expected_model}" in commands[0] and "--model gpt-4" not in commands[0]
-    if live_model is not None:
-        assert "--model gpt-5.5" not in commands[0]
-    if fixed_account:
-        assert "--account default --account-home /tmp/codex" in commands[0]
 
 
-@pytest.mark.parametrize("removed", [False, True])
-def test_transport_incompatible_priority_refuses_before_kill_or_clears_fallback(reg, tmp_path, monkeypatch, removed):
-    from app import registry as R, engines, cliproxy
-    stopped = _pane(reg, tmp_path, monkeypatch)
-    monkeypatch.setattr(engines, "caminho", lambda: tmp_path / "engines.json")
-    engines.salvar("proxy", {"base_url": "http://127.0.0.1:8317", "api_key": "test", "model": "gpt-5.5"})
-    monkeypatch.setattr(R, "_engine_of", lambda pid: "removed" if removed else "proxy")
-    monkeypatch.setattr(R.procinfo, "_env_var_of", lambda pid, name: "priority" if name == "CP_ENGINE_SERVICE_TIER" else None)
-    monkeypatch.setattr(cliproxy, "supports_fast", lambda *a: False)
-    if removed:
-        meta = reg.para_headless("t1", "acceptEdits", transfer_meta=_tm(tmp_path))
-        assert "service_tier" not in meta and meta["engine"] is None
-    else:
-        with pytest.raises(ValueError, match="service_tier"):
-            reg.para_headless("t1", "acceptEdits", transfer_meta=_tm(tmp_path))
-        assert not stopped and not S.exists("t1")
 
 
 def test_pane_aberto_no_shell_le_conta_e_escolhas_do_claude_filho(reg, tmp_path, monkeypatch):

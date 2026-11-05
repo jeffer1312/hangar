@@ -65,6 +65,7 @@ pub(crate) struct CommandTree {group:i32}
 #[cfg(unix)]
 impl CommandTree {
     pub(crate) fn configure(command:&mut Command)->io::Result<Self> {command.process_group(0);Ok(Self {group:0})}
+    pub(crate) fn configure_detached(command:&mut Command)->io::Result<Self> {Self::configure(command)}
     pub(crate) fn attach(&mut self,child:&Child)->io::Result<()> {
         self.group=child.id().ok_or_else(||io::Error::other("auxiliar sem identidade"))? as i32;Ok(())
     }
@@ -140,21 +141,41 @@ mod windows {
     impl CommandTree {
         pub(crate) fn configure(command:&mut Command)->io::Result<Self> {
             command.creation_flags(0x00000004 | 0x08000000);
+            Self::create(true)
+        }
+        /// A conclusão normal conserva auxiliares; prazo e cancelamento terminam o Job explicitamente.
+        pub(crate) fn configure_detached(command: &mut Command) -> io::Result<Self> {
+            command.creation_flags(0x00000004 | 0x08000000);
+            Self::create(false)
+        }
+        pub(crate) fn configure_std(command: &mut std::process::Command) -> io::Result<Self> {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x00000004 | 0x08000000);
+            Self::create(false)
+        }
+        fn create(kill_on_close: bool) -> io::Result<Self> {
             let handle=unsafe {CreateJobObjectW(std::ptr::null_mut(),std::ptr::null())};
             if handle.is_null(){return Err(io::Error::last_os_error());}
-            let job=Resource(handle);let mut limits=Extended::default();limits.basic.flags=0x2000;
+            let job=Resource(handle);let mut limits=Extended::default();limits.basic.flags=if kill_on_close {0x2000} else {0};
             check(unsafe {SetInformationJobObject(handle,9,&limits as *const _ as _,std::mem::size_of::<Extended>() as u32)})?;
             Ok(Self {job,process:std::ptr::null_mut(),assigned:false})
         }
         pub(crate) fn attach(&mut self,child:&Child)->io::Result<()> {
-            self.process=child.raw_handle().ok_or_else(||io::Error::other("auxiliar sem handle"))? as Handle;
+            self.attach_handle(child.raw_handle().ok_or_else(||io::Error::other("auxiliar sem handle"))? as Handle, child.id())
+        }
+        pub(crate) fn attach_std(&mut self, child: &std::process::Child) -> io::Result<()> {
+            use std::os::windows::io::AsRawHandle;
+            self.attach_handle(child.as_raw_handle(), Some(child.id()))
+        }
+        fn attach_handle(&mut self, handle: Handle, pid: Option<u32>) -> io::Result<()> {
+            self.process=handle;
             check(unsafe {AssignProcessToJobObject(self.job.0,self.process)})?;self.assigned=true;
             let snapshot=unsafe {CreateToolhelp32Snapshot(0x4,0)};
             if snapshot as usize==usize::MAX {return Err(io::Error::last_os_error());}
             let snapshot=Resource(snapshot);let mut entry=ThreadEntry {size:std::mem::size_of::<ThreadEntry>() as u32,..ThreadEntry::default()};
             check(unsafe {Thread32First(snapshot.0,&mut entry)})?;let mut resumed=false;
             loop {
-                if Some(entry.owner)==child.id() {
+                if Some(entry.owner)==pid {
                     let thread=unsafe {OpenThread(0x2,0,entry.id)};
                     if thread.is_null(){return Err(io::Error::last_os_error());}
                     let thread=Resource(thread);
@@ -227,4 +248,27 @@ mod tests {
         assert_eq!(text.matches("command_tree_stuck").count(),1,"{text}");
         active.store(false,Ordering::Release);tokio::time::timeout(Duration::from_secs(1),task).await.unwrap().unwrap();
     }
+}
+
+pub(crate) fn pid_alive(pid:u32)->io::Result<bool>{
+    pid_alive_with(i64::from(pid),||{
+        #[cfg(unix)] {
+            let pid=i32::try_from(pid).map_err(|_|io::Error::new(io::ErrorKind::InvalidInput,"PID fora da faixa do sistema"))?;
+            if unsafe{libc::kill(pid,0)}==0{return Ok(());}
+            let error=io::Error::last_os_error();
+            return match error.raw_os_error(){Some(libc::ESRCH)=>Err(io::ErrorKind::NotFound.into()),Some(libc::EPERM)=>Err(io::ErrorKind::PermissionDenied.into()),_=>Err(error)};
+        }
+        #[cfg(windows)] unsafe {
+            use windows_sys::Win32::{Foundation::{CloseHandle,GetLastError,ERROR_ACCESS_DENIED,ERROR_INVALID_PARAMETER},System::Threading::{OpenProcess,GetExitCodeProcess,PROCESS_QUERY_LIMITED_INFORMATION}};
+            let handle=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,0,pid);
+            if handle.is_null(){return match GetLastError(){ERROR_ACCESS_DENIED=>Err(io::ErrorKind::PermissionDenied.into()),ERROR_INVALID_PARAMETER=>Err(io::ErrorKind::NotFound.into()),error=>Err(io::Error::from_raw_os_error(error as i32))};}
+            let mut code=0;let result=GetExitCodeProcess(handle,&mut code);let error=if result==0{Some(io::Error::last_os_error())}else{None};CloseHandle(handle);
+            if let Some(error)=error{return Err(error);}
+            if code==259{Ok(())}else{Err(io::ErrorKind::NotFound.into())}
+        }
+    })
+}
+fn pid_alive_with(pid:i64,probe:impl FnOnce()->io::Result<()>)->io::Result<bool>{
+    if pid<=0{return Ok(false);}
+    match probe(){Ok(())=>Ok(true),Err(error) if error.kind()==io::ErrorKind::NotFound=>Ok(false),Err(error) if error.kind()==io::ErrorKind::PermissionDenied=>Ok(true),Err(error)=>Err(error)}
 }

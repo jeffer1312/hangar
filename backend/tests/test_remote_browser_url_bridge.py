@@ -19,8 +19,7 @@ import uvicorn
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
-from app import account_bridge, auth, guest_users, internal_api, runtime_coordinator
-from app.guest_user_gate import GuestUserGate
+from app import account_bridge, auth, internal_api, runtime_coordinator
 from app.mensagens import erro
 
 OWNER = "contract-owner-token"
@@ -31,12 +30,9 @@ SECRET = "remote-browser-test-internal"
 def border(monkeypatch, tmp_path, request):
     monkeypatch.setattr(auth.settings, "auth_token", OWNER)
     monkeypatch.setattr(runtime_coordinator, "_current", SimpleNamespace(mode="rust"))
-    monkeypatch.setattr(guest_users, "_path_override", tmp_path / "guests.json")
-    monkeypatch.setattr(guest_users, "_state", None)
     auth.reset_backoff()
     internal_api.set_secret(SECRET)
     app = FastAPI()
-    app.add_middleware(GuestUserGate)
     source = Path(__file__).resolve().parents[1] / "app" / "api.py"
     text = source.read_text()
     nodes = [node for node in ast.parse(text).body
@@ -150,16 +146,6 @@ def test_auth_precedence_and_rate_limit_stop_before_forwarding(border, rust):
         assert response.status_code == 429
         assert response.headers["retry-after"] == "30"
     assert rust == []
-
-
-def test_login_guest_gate_blocks_before_auth_counter_or_transport(border, rust, tmp_path):
-    _, token = guest_users.create("contract-guest", str(tmp_path), False, True)
-    with TestClient(border, client=("198.51.100.9", 1234)) as client:
-        response = client.get("/api/sessions/session/navegador", headers={"Authorization": "Bearer " + token})
-    assert response.status_code == 403
-    assert response.json() == {"detail": {"code": "erro_fora_do_convidado", "params": {}, "msg": "fora do acesso do convidado"}}
-    assert rust == []
-    assert auth._fails == {}
 
 
 def test_signed_share_uses_existing_authentication_and_transport(border, rust):

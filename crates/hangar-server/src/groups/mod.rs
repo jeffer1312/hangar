@@ -49,8 +49,13 @@ pub fn from_env(dirs: Option<&Dirs>, server_id: String, orq: Arc<dyn OrqFacts>, 
     Some(Arc::new(service.with_change_hook(Arc::new(move || { list.invalidate(); link_return::wake(); }))))
 }
 
-/// Outras máquinas pelo `peers.json` que o Python indica (`HANGAR_PEERS_FILE`); sem ele, nenhuma.
+/// O livro das outras máquinas é resolvido no Rust, no mesmo lugar das rotas e do CLI.
 pub fn peers_from_env() -> peers::PeerClient {
-    let path = std::env::var_os("HANGAR_PEERS_FILE").filter(|v| !v.is_empty()).map(PathBuf::from);
+    let home = crate::accounts::environment::AccountEnvironment::capture().home;
+    let backend = crate::session_open::cli::backend_dir();
+    let path = match crate::user_data::path(&home, backend.as_deref(), "peers.json") {
+        Ok(path) => path,
+        Err(error) => { tracing::warn!(code="peers_unreadable", %error, "não consegui resolver o livro das máquinas"); None }
+    };
     peers::PeerClient::new(peers::PeerBook::new(path))
 }

@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from app import account_bridge, guest_users, runtime_coordinator
+from app import account_bridge, runtime_coordinator
 from app.api import app
 from app.config import settings
 
@@ -111,12 +111,9 @@ def test_head_of_an_upload_also_goes_to_rust(rust):
     assert [s["method"] for s in _Rust.seen] == ["HEAD"]
 
 
-def test_guest_with_login_is_marked_for_the_rust_limits(rust):
-    marker = guest_users.current.set(object())
-    try:
+def test_guest_with_login_is_marked_for_the_rust_limits(rust, forwarded_guest):
+    with forwarded_guest():
         TestClient(app).post("/api/sessions/s/transcribe?arquivo=/abs.webm", headers=AUTH)
-    finally:
-        guest_users.current.reset(marker)
     assert [s["guest"] for s in _Rust.seen] == ["1"]
 
 

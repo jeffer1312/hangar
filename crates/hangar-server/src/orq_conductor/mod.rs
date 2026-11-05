@@ -83,7 +83,39 @@ fn repr_string(text: &str, marker: &str) -> String {
     out
 }
 fn py_repr(v: &Value, marker: &str) -> String {
-    match v {
+    enum Part<'a> {
+        Value(&'a Value),
+        Key(&'a str),
+        Text(&'static str),
+    }
+    let mut output = String::new();
+    let mut pending = vec![Part::Value(v)];
+    while let Some(part) = pending.pop() {
+        let value = match part {
+            Part::Text(text) => { output.push_str(text); continue; }
+            Part::Key(key) => { output.push_str(&repr_string(key, marker)); continue; }
+            Part::Value(value) => value,
+        };
+        match value {
+            Value::Array(items) => {
+                output.push('[');
+                pending.push(Part::Text("]"));
+                for (index, item) in items.iter().enumerate().rev() {
+                    pending.push(Part::Value(item));
+                    if index > 0 { pending.push(Part::Text(", ")); }
+                }
+            }
+            Value::Object(items) => {
+                output.push('{');
+                pending.push(Part::Text("}"));
+                for (index, (key, item)) in items.iter().enumerate().rev() {
+                    pending.push(Part::Value(item));
+                    pending.push(Part::Text(": "));
+                    pending.push(Part::Key(key));
+                    if index > 0 { pending.push(Part::Text(", ")); }
+                }
+            }
+            scalar => output.push_str(&match scalar {
         Value::String(text)
             if ["NaN", "Infinity", "-Infinity"]
                 .iter()
@@ -105,24 +137,11 @@ fn py_repr(v: &Value, marker: &str) -> String {
                 "inf".into()
             }
         }
-        Value::Array(items) => format!(
-            "[{}]",
-            items
-                .iter()
-                .map(|v| py_repr(v, marker))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-        Value::Object(items) => format!(
-            "{{{}}}",
-            items
-                .iter()
-                .map(|(k, v)| format!("{}: {}", repr_string(k, marker), py_repr(v, marker)))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-        _ => py::py_repr(v),
+                _ => py::py_repr(scalar),
+            }),
+        }
     }
+    output
 }
 pub(crate) fn python_string(value:&Value)->String { py_str(value,MARK) }
 pub(crate) fn py_str(v: &Value, marker: &str) -> String {

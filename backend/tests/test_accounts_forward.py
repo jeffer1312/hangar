@@ -156,12 +156,8 @@ def test_plan_routes_need_rust_and_never_reach_it_unauthenticated(rust, monkeypa
     assert _Rust.seen == []
 
 
-def test_guest_never_gets_the_owners_catalog(rust, monkeypatch):
-    from app import guest_users
-    token = guest_users.current.set(object())
-    try:
+def test_guest_never_gets_the_owners_catalog(rust, monkeypatch, forwarded_guest):
+    with forwarded_guest():
         response = TestClient(app).get("/api/claude/customizations?cwd=/tmp", headers=AUTH)
-    finally:
-        guest_users.current.reset(token)
     assert (response.status_code, response.json()["detail"]["code"]) == (403, "erro_fora_da_pasta")
     assert _Rust.seen == []

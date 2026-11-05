@@ -141,8 +141,9 @@ impl Cli {
                 return Err(failed(e));
             }
             let (mut stdin, mut out, mut err) = (child.stdin.take().unwrap(), child.stdout.take().unwrap(), child.stderr.take().unwrap());
+            let input = crate::orchestration::codec::encode_utf8_replace(prompt);
             let done = tokio::time::timeout(limit, async {
-                let write = async { let r = stdin.write_all(prompt.as_bytes()).await; drop(stdin); r };
+                let write = async { let r = stdin.write_all(&input).await; drop(stdin); r };
                 let (mut o, mut e) = (Vec::new(), Vec::new());
                 let (w, ro, re) = tokio::join!(write, out.read_to_end(&mut o), err.read_to_end(&mut e));
                 // Pipe fechado cedo pelo CLI não é falha: o código de saída diz.

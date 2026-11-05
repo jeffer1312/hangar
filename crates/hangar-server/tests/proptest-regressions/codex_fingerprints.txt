@@ -1,0 +1,2 @@
+# Sementes preservadas: o proptest repete estes casos antes de gerar novas entradas.
+cc f2b7be2c46c53ca9dfb953f8c19f9b8a59034b075456baa5ee671103b2c4f4ac

@@ -1,5 +1,4 @@
 import asyncio
-from types import SimpleNamespace
 
 import pytest
 from fastapi import Request, Response
@@ -56,29 +55,9 @@ async def test_produtores_compartilhados_nao_herdam_req_do_primeiro_ouvinte(monk
 
 
 @pytest.mark.asyncio
-async def test_lista_registra_abertura_e_fechamento_por_conexao(monkeypatch):
-    records = []
-    monkeypatch.setattr(diag, "registrar", lambda event, **fields: records.append((event, diag.req_atual.get())))
-    monkeypatch.setattr(sse, "_list_refresher", SimpleNamespace(
-        acquire=lambda: asyncio.Condition(), release=lambda: None,
-        version=1, errored=False, data="[]", shortcuts_data=None))
-    previous = diag.req_atual.set("lista-1")
-    try:
-        stream = sse.list_events()
-        assert (await anext(stream))["event"] == "sessions"
-        await stream.aclose()
-        assert records == [("sse.lista_abriu", "lista-1"), ("sse.lista_fechou", "lista-1")]
-    finally:
-        diag.req_atual.reset(previous)
-
-
-@pytest.mark.asyncio
 async def test_duas_conexoes_mantem_ids_distintos_ate_o_fechamento(monkeypatch):
     records = []
-    monkeypatch.setattr(diag, "registrar", lambda event, **fields: records.append((event, diag.req_atual.get())))
-    monkeypatch.setattr(sse, "_list_refresher", SimpleNamespace(
-        acquire=lambda: asyncio.Condition(), release=lambda: None,
-        version=1, errored=False, data="[]", shortcuts_data=None))
+    monkeypatch.setattr(diag, "registrar", lambda event, *args, **fields: records.append((event, diag.req_atual.get())))
     barrier = asyncio.Barrier(2)
 
     async def connect(req):
@@ -86,14 +65,13 @@ async def test_duas_conexoes_mantem_ids_distintos_ate_o_fechamento(monkeypatch):
                            "path": "/api/sessions/events", "headers": [],
                            "query_string": f"diag_req={req}".encode(), "server": ("localhost", 80)})
         async def respond(_):
-            stream = sse.list_events()
-            await anext(stream)
+            diag.registrar("prova.abriu")
             await barrier.wait()
-            await stream.aclose()
+            diag.registrar("prova.fechou")
             return Response(status_code=200)
         await _correlaciona_diag(request, respond)
 
     async with asyncio.timeout(2):
         await asyncio.gather(connect("desktop-1"), connect("mobile-1"))
     for req in ("desktop-1", "mobile-1"):
-        assert [event for event, owner in records if owner == req] == ["sse.lista_abriu", "sse.lista_fechou"]
+        assert [event for event, owner in records if owner == req] == ["prova.abriu", "prova.fechou"]

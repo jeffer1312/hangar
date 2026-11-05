@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from app import account_bridge, guest_users, runtime_coordinator
+from app import account_bridge, runtime_coordinator
 from app.api import app
 from app.config import settings
 
@@ -57,13 +57,10 @@ def test_connect_owner_gets_the_number_from_rust(rust):
     assert (seen["path"], seen["original"], seen["secret"]) == ("/__hangar_server/forwarded", "/api/client-api", "segredo-sintetico")
 
 
-def test_unauthenticated_and_guest_never_reach_rust(rust):
+def test_unauthenticated_and_guest_never_reach_rust(rust, forwarded_guest):
     assert TestClient(app).get("/api/client-api").status_code == 401
-    marker = guest_users.current.set(object())
-    try:
+    with forwarded_guest():
         assert TestClient(app).get("/api/client-api", headers=AUTH).status_code == 404
-    finally:
-        guest_users.current.reset(marker)
     assert _Rust.seen == []
 
 

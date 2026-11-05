@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -312,9 +313,9 @@ async def test_monitor_carries_loop_fields(tmp_path, monkeypatch):
     # Chip 🔁 no Chat mobile vem do evento 'state' por sessao (sem reter o sessionsStore -> 1 SSE/sessao).
     from app import loop as loop_mod
     monkeypatch.setattr(loop_mod.settings, "projects_dir", tmp_path / "projects")
-    d = loop_mod.new_loop("g", "pytest", 7, True)
+    d = {"status": "running", "max_iters": 7}
     d["iter"] = 3
-    loop_mod.LoopLink("cc").set(d)
+    loop_mod.LoopLink("cc").path.write_text(json.dumps(d), encoding="utf-8")
     with patch.object(state_mod.tmux, "has_session", return_value=True), \
          patch.object(state_mod.tmux, "capture_pane", return_value="❯ \n"):
         mon = StateMonitor("cc", poll=0.001)

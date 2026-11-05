@@ -227,6 +227,7 @@ mod reopened {
         fill_rows(home.path(), &mux, &mut rows, &diag).await;
         assert!(!rows[0].hidden_from_list, "acabou de abrir");
 
+        // estavel: o código compara a data do arquivo com o relógio real; 5 h de folga contra o prazo.
         let old = std::time::SystemTime::now() - Duration::from_secs(300 * 60);
         std::fs::File::options().write(true).open(&spec).unwrap().set_modified(old).unwrap();
         fill_rows(home.path(), &mux, &mut rows, &diag).await;

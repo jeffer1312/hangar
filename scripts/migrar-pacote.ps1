@@ -46,11 +46,17 @@ try {
 }
 
 # 2 = a release nao tem build para esta maquina; os avisos do download vao para a saida do passo.
-Push-Location backend
+$savedDest = $env:HANGAR_SERVER_BIN_DIR
+$savedOwner = $env:HANGAR_UPDATE_OWNS_RUST
 try {
-    $avisos = (& .\.venv\Scripts\python.exe -c "from pathlib import Path; from app import rust_release as r; a = r.fetch(dest=Path.home() / '.hangar' / 'migrate'); print(*(a or []), sep=chr(10)); raise SystemExit(2 if a is None else 0)" | Out-String).Trim()
+    $env:HANGAR_SERVER_BIN_DIR = $pasta
+    $env:HANGAR_UPDATE_OWNS_RUST = ''
+    $avisos = (& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'install-server-binaries.ps1') -Fetch | Out-String).Trim()
     $rc = $LASTEXITCODE
-} finally { Pop-Location }
+} finally {
+    $env:HANGAR_SERVER_BIN_DIR = $savedDest
+    $env:HANGAR_UPDATE_OWNS_RUST = $savedOwner
+}
 if ($avisos) { Write-Output $avisos }
 
 if ($rc -eq 2) {

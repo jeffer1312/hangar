@@ -92,6 +92,8 @@ jobs:
             crates/target/debug
           key: server-v3-${{ runner.os }}-${{ runner.arch }}-dev-${{ hashFiles('crates/Cargo.lock', 'crates/rust-toolchain.toml') }}
           restore-keys: server-v3-${{ runner.os }}-${{ runner.arch }}-dev-
+      # O lib e o lib test do hangar-server compilados juntos estouram a memória do runner Linux.
+      - run: cargo test --locked --workspace --lib --no-run
       # Os testes do hangar-api leem as amostras de backend/tests/fixtures/, que vêm no mesmo checkout.
       # --no-fail-fast: sem ele o cargo para no primeiro executável que falha e esconde os outros.
       - run: cargo test --locked --workspace --no-fail-fast

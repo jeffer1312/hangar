@@ -16,8 +16,6 @@ use crate::accounts::{AccountService, Provider};
 use crate::list::bridge::expand_home;
 use crate::list::procs::{ProcessView, SystemProcs};
 
-/// `engines._NOME_OK`: o nome entra num `$SHELL -c`.
-static ENGINE_NAME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\A[a-z0-9][a-z0-9_-]{0,31}\z").unwrap());
 static GPT_MODEL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\Agpt-\d[^/]*\z").unwrap());
 
 pub struct LocalFacts {
@@ -140,7 +138,6 @@ impl LocalFacts {
     }
 }
 
-static SAFE_ACCOUNT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\A[a-z0-9][a-z0-9_-]{0,31}\z").unwrap());
 static SAFE_PREFIX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\A[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\z").unwrap());
 static SAFE_MODEL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\A[A-Za-z0-9][A-Za-z0-9_.:\[\]-]*\z").unwrap());
 
@@ -153,7 +150,8 @@ pub(crate) fn engine_names(env: &AccountEnvironment) -> Result<Vec<String>, Stri
         .unwrap_or_else(|| env.home.join(".claude").join("engines.json"));
     match read_json(&path)? {
         None => Ok(Vec::new()),
-        Some(Value::Object(map)) => Ok(map.keys().filter(|name| ENGINE_NAME.is_match(name)).cloned().collect()),
+        // `engines._NOME_OK`: o nome entra num `$SHELL -c`.
+        Some(Value::Object(map)) => Ok(map.keys().filter(|name| crate::accounts::catalog::valid_name(name)).cloned().collect()),
         Some(_) => Err(format!("{}: não é um objeto", path.display())),
     }
 }
@@ -191,9 +189,9 @@ fn credentials(home: &Path) -> Result<Vec<(PathBuf, Value)>, OpenError> {
 pub fn fixed_account(accounts: &AccountService, engine: &str, account: &str) -> Result<super::claude::EngineRoute, OpenError> {
     let env = &accounts.env;
     let cfg = &engines_of(env)[engine];
-    let local = cliproxy_base(&env.home).filter(|local| normalize_base(cfg["base_url"].as_str().unwrap_or("")) == *local)
+    let local = cliproxy_base(&env.home).filter(|local| crate::engines::store::normalize_base(cfg["base_url"].as_str().unwrap_or("").trim()) == *local)
         .ok_or_else(|| cliproxy("a conta ChatGPT só pode ser fixada no CLIProxyAPI local"))?;
-    if !SAFE_ACCOUNT.is_match(account) { return Err(cliproxy("CLIProxyAPI: identificador de conta inválido")); }
+    if !crate::accounts::catalog::valid_name(account) { return Err(cliproxy("CLIProxyAPI: identificador de conta inválido")); }
     let creds = credentials(&env.home)?;
     let visible = accounts.visible_codex_accounts().map_err(|e| OpenError::new(e.status, e.code, e.message))?;
     let mut entries: Vec<(String, String, Option<String>, usize)> = Vec::new();
@@ -320,7 +318,7 @@ fn codex_error(error: AccountError) -> OpenError {
 /// `cliproxy.is_local_engine`: o motor aponta para o CLIProxyAPI desta máquina.
 pub(crate) fn local_engine(env: &AccountEnvironment, engine: &str) -> bool {
     let cfg = &engines_of(env)[engine];
-    cliproxy_base(&env.home).is_some_and(|local| normalize_base(cfg["base_url"].as_str().unwrap_or("")) == local)
+    cliproxy_base(&env.home).is_some_and(|local| crate::engines::store::normalize_base(cfg["base_url"].as_str().unwrap_or("").trim()) == local)
 }
 
 fn cliproxy_base(home: &Path) -> Option<String> {
@@ -341,83 +339,10 @@ fn cliproxy_base(home: &Path) -> Option<String> {
     Some(format!("{scheme}://{host}:{port}"))
 }
 
-fn normalize_base(url: &str) -> String {
-    let url = url.trim().trim_end_matches('/');
-    url.strip_suffix("/v1").map_or(url, |u| u.trim_end_matches('/')).to_owned()
-}
-
-/// `cli_probe.sondar_providers`: o CLI que o pane acha pelo PATH do shell de login, com permissão de
-/// execução. Resultado por 60 s, por shell e PATH do servidor.
-pub(crate) fn installed_providers(env: &BTreeMap<String, String>) -> Vec<AgentProvider> {
-    type Cache = Mutex<BTreeMap<(Option<String>, Option<String>), (std::time::Instant, Vec<AgentProvider>)>>;
-    static CACHE: LazyLock<Cache> = LazyLock::new(Default::default);
-    let key = (env.get("SHELL").cloned(), env.get("PATH").cloned());
-    // A trava cobre a sondagem: duas aberturas com o cache vencido não sondam em paralelo.
-    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some((at, found)) = cache.get(&key) && at.elapsed() < std::time::Duration::from_secs(60) { return found.clone(); }
-    let path = login_path(env);
-    let found: Vec<AgentProvider> = AgentProvider::ALL.into_iter().filter(|p| runnable_in(p.name(), &path)).collect();
-    cache.insert(key, (std::time::Instant::now(), found.clone()));
-    found
-}
-
-/// `$SHELL -l -c 'printenv PATH'` (5 s); sem shell, falha ou saída vazia, o PATH do servidor. No
-/// Windows, sempre o do servidor.
-fn login_path(env: &BTreeMap<String, String>) -> String {
-    let own = || env.get("PATH").cloned().unwrap_or_default();
-    let Some(shell) = env.get("SHELL").filter(|s| !s.is_empty() && cfg!(unix)) else { return own() };
-    let mut child = match std::process::Command::new(shell).args(["-l", "-c", "printenv PATH"]).env_clear().envs(env)
-        .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).spawn() {
-        Ok(child) => child,
-        Err(_) => return own(),
-    };
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while matches!(child.try_wait(), Ok(None)) && std::time::Instant::now() < deadline { std::thread::sleep(std::time::Duration::from_millis(10)); }
-    let Ok(Some(status)) = child.try_wait() else {
-        let _ = child.kill();
-        let _ = child.wait();
-        return own();
-    };
-    let mut out = String::new();
-    let _ = std::io::Read::read_to_string(&mut child.stdout.take().unwrap(), &mut out);
-    let out = out.trim();
-    if status.success() && !out.is_empty() { out.to_owned() } else { own() }
-}
-
-/// Arquivo executável no PATH; no Windows, só com extensão que o pane roda como CLI.
-fn runnable_in(name: &str, path: &str) -> bool {
-    std::env::split_paths(path).filter(|d| !d.as_os_str().is_empty()).any(|dir| {
-        if cfg!(windows) {
-            return [".exe", ".cmd", ".bat", ".com"].iter().any(|ext| dir.join(format!("{name}{ext}")).is_file());
-        }
-        let file = dir.join(name);
-        #[cfg(unix)]
-        { use std::os::unix::fs::PermissionsExt; file.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0) }
-        #[cfg(not(unix))]
-        { file.is_file() }
-    })
-}
-
 impl OpenFacts for LocalFacts {
     fn providers(&self) -> Result<ProviderCatalog, OpenError> {
-        let available = installed_providers(&self.env().base);
-        let claude_logins: Vec<Option<bool>> = if available.contains(&AgentProvider::Claude) {
-            // Login ilegível só deixa de preferir quem está conectado, como no Python.
-            let accounts = self.accounts.claude_accounts().unwrap_or_else(|error| {
-                tracing::warn!(code = error.code, "catálogo de provedores: login Claude ilegível");
-                Vec::new()
-            });
-            accounts.iter().map(|(_, account)| self.runtime.block_on(self.accounts.read_claude_auth(account))["loggedIn"].as_bool()).collect()
-        } else {
-            Vec::new()
-        };
-        let codex_states: Vec<String> = if available.contains(&AgentProvider::Codex) {
-            self.codex_states()?.into_iter().map(|(_, state)| state).collect()
-        } else {
-            Vec::new()
-        };
-        let runtime = crate::runtime::codex_launch::runtime_config(self.env());
-        Ok(provider_catalog(available, &claude_logins, !self.engines().is_empty(), &codex_states, text(&runtime["last_session_provider"])))
+        self.runtime.block_on(crate::engines::providers::read(&self.accounts))
+            .map(|snapshot| snapshot.selection)
     }
 
     fn creator(&self, name: &str) -> Result<Option<CreatorFacts>, OpenError> {
@@ -507,7 +432,7 @@ impl OpenFacts for LocalFacts {
 
     fn engines(&self) -> Vec<String> {
         self.engines_file().as_object().into_iter().flatten().map(|(name, _)| name.clone())
-            .filter(|name| ENGINE_NAME.is_match(name)).collect()
+            .filter(|name| crate::accounts::catalog::valid_name(name)).collect()
     }
 
     fn supports_fast(&self, engine: Option<&str>, model: Option<&str>) -> bool {
@@ -516,7 +441,7 @@ impl OpenFacts for LocalFacts {
         // `model or cfg.model`: texto vazio também cai no modelo do motor.
         let base = model.filter(|m| !m.is_empty()).or_else(|| cfg["model"].as_str()).unwrap_or("").rsplit('/').next().unwrap_or("");
         GPT_MODEL.is_match(base)
-            && cliproxy_base(&self.env().home).is_some_and(|local| normalize_base(cfg["base_url"].as_str().unwrap_or("")) == local)
+            && cliproxy_base(&self.env().home).is_some_and(|local| crate::engines::store::normalize_base(cfg["base_url"].as_str().unwrap_or("").trim()) == local)
     }
 
     /// `create_session` com `engine_account`: a credencial da conta, o catálogo dela (o do motor só com

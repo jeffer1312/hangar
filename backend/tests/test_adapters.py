@@ -13,12 +13,14 @@ def test_unknown_provider_raises():
         get_adapter("nope")
 
 
-def test_claude_adapter_spawn_command():
+def test_claude_adapter_spawn_command(monkeypatch):
+    from app import plugin_bridge
+    monkeypatch.setattr(plugin_bridge, "raizes_dos_plugins", lambda: ["/fixture/plugin"])
     # spawn_command devolve os argv do processo claude, sem reescrever a logica de sessao (a
     # tmux.new_session so aceita string -> o registry junta com " ".join()).
     a = get_adapter("claude")
     cmd = a.spawn_command("/tmp/proj", "abc-123")
-    assert cmd == ["claude", "--session-id", "abc-123"]
+    assert cmd == ["claude", "--session-id", "abc-123", "--plugin-dir", "/fixture/plugin"]
 
 
 def test_claude_adapter_transcript_path():

@@ -14,7 +14,6 @@ from pathlib import Path
 import threading
 import time
 import uuid
-from collections.abc import Awaitable, Callable
 
 from app import codex_contas as accounts
 from app import account_lifecycle
@@ -32,9 +31,6 @@ _NEED_RUST_PREPARATION = {"status": "error", "trust_pending": False, "issues": [
 
 class CodexContasLogin:
     """Leitura de autenticação e preparo das contas Codex, pela ponte do Rust."""
-
-    def __init__(self, *, atualizar_principal: Callable[[bool], Awaitable[dict | None]] | None = None):
-        self.atualizar_principal = atualizar_principal
 
     def _invalidate_auth(self, key: str) -> None:
         """O login da conta mudou no Rust: o catálogo de modelos dela vale de novo."""
