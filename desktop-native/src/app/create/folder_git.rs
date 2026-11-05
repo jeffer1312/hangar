@@ -95,6 +95,8 @@ fn refusal_text(code: &str, git: Option<&FolderGit>) -> String {
 
 impl NewSession {
     pub(super) fn load_git(&mut self, cx: &mut Context<Self>) {
+        // Uma ação da pasta anterior pode terminar depois do clique em "Sem projeto".
+        if self.no_project() { return; }
         let (Some(root), Some(path)) = (self.root.as_ref().map(|r| r.path.clone()), self.picked.clone()) else { return };
         let seq = self.git.status.start();
         self.request(cx, move |api, send| Box::pin(async move {
@@ -108,6 +110,12 @@ impl NewSession {
         let mut status = std::mem::take(&mut self.git.status);
         status.value = None;
         self.git = GitPanel { status, ..Default::default() };
+    }
+
+    /// "Sem projeto" não tem git: a resposta pendente da pasta anterior não pode entrar nele.
+    pub(super) fn clear_git(&mut self) {
+        let seq = self.git.status.start();
+        self.git.status.finish(seq, Ok(FolderGit::default()));
     }
 
     /// Abrir o painel busca as remotas uma vez por pasta: é assim que se sabe se ela está atualizada.

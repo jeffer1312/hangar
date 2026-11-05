@@ -5656,6 +5656,7 @@
   "native_git_elsewhere_busy": "{pasta} tem sessão aberta ({nomes}): feche a sessão antes, ou use Ver onde está.",
   "native_git_elsewhere_dirty": "{pasta} tem alteração não commitada: use Ver onde está e resolva lá antes de fechar.",
   "native_git_elsewhere_failed": "Não consegui fechar {pasta}: {motivo}",
+  "native_git_elsewhere_busy_unnamed": "{pasta} tem sessão aberta: feche a sessão antes de fechar a pasta.",
   "native_git_current": "atual",
   "native_git_branch_create": "Criar a branch {n} e trocar para ela",
   "native_git_branch_created": "branch: {n} — criada",
@@ -7675,6 +7676,8 @@
   "native_create_no_roots": "Nenhuma raiz configurada. Defina CP_SCAN_ROOTS no backend.",
   "native_new_chat_title": "Nova conversa",
   "native_new_chat_folder": "Pasta",
+  "native_new_chat_no_project": "Sem projeto",
+  "native_new_chat_no_project_hint": "Abrir na pasta do usuário, sem escolher projeto",
   "native_new_chat_no_roots": "Nenhuma pasta configurada neste servidor.",
   "native_new_chat_no_accounts": "Nenhuma conta disponível.",
   "native_new_chat_machine": "Máquina",
@@ -8841,6 +8844,7 @@
   "worktree_menu_buscar": "Buscar branch ou worktree",
   "worktree_menu_ocupada": "{nome} já trabalha nela: duas sessões na mesma pasta se atrapalham.",
   "worktree_menu_em_uso": "em uso: {nome}",
+  "worktree_menu_no_match": "Nenhuma worktree encontrada.",
   "worktree_menu_pill_nova": "{branch} · worktree nova",
   "worktree_menu_pill_existente": "{nome} · worktree",
   "worktree_apagar_branch_perde": "Os {n} commits não estão na base: marcando, eles também são perdidos.",
@@ -10072,5 +10076,9 @@
   "news_rename_sample_name": "corrigir-login-do-app",
   "news_auto_report_sample_machine": "escritorio",
   "news_auto_report_sample_step": "Reiniciando",
-  "news_auto_report_sample_error": "a versão nova não respondeu"
+  "news_auto_report_sample_error": "a versão nova não respondeu",
+  "native_git_elsewhere_closed_failed": "{pasta} foi fechada, mas a troca de branch falhou: {motivo}",
+  "news_branch_sample_main": "main",
+  "news_branch_sample_work": "nova-tela",
+  "news_branch_sample_upstream": "origin/main"
 }
