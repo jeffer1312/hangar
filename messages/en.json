@@ -9069,7 +9069,7 @@
   "native_setup_password_field": "Password",
   "native_setup_password_confirm": "Confirm password",
   "native_setup_password_short": "Use at least 8 characters.",
-  "native_setup_password_forbidden": "Use only unaccented letters, numbers and common symbols. Don't use # $ ' \" \\ or a space at the start or end.",
+  "native_setup_password_forbidden": "Use only unaccented letters, numbers and common symbols. Don't use # $ ' \" \\ or spaces.",
   "native_setup_password_mismatch": "The passwords don't match.",
   "native_setup_password_kept": "Current password kept",
   "native_setup_password_kept_hint": "This computer already has a phone password; it stays the same.",

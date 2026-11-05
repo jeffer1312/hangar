@@ -365,10 +365,11 @@ gera_token() { openssl rand -hex 24 2>/dev/null || python3 -c 'import secrets; p
 # O backend lê o .env pelo python-dotenv, que corta o valor em " #" e expande "${VAR}": sem aspas
 # no .env, a senha com esses caracteres não chega inteira e o celular nunca entra.
 # Só ASCII visível: o app nativo monta o cabeçalho Authorization com a senha, e acento não autentica.
-TOKEN_PROIBIDO="só vale ASCII sem acento; não vale # \$ ' \" \\ nem espaço no começo ou no fim"
+# Sem espaço: o login do celular e do desktop recusa token com espaço, digitado ou pelo QR.
+TOKEN_PROIBIDO="só vale ASCII sem acento; não vale # \$ ' \" \\ nem espaço"
 token_proibido() {
   local LC_ALL=C
-  case $1 in *[!\ -~]*|*'#'*|*'$'*|*\'*|*'"'*|*'\'*|[[:blank:]]*|*[[:blank:]]) return 0 ;; esac
+  case $1 in *[!\ -~]*|*'#'*|*'$'*|*\'*|*'"'*|*'\'*|*' '*) return 0 ;; esac
   return 1
 }
 if [ "$UPDATE" = 0 ] && [ "$CHECK" = 0 ]; then
@@ -387,7 +388,7 @@ elif [ "$APP" = 1 ]; then
   elif [ ${#APP_TOKEN} -lt 8 ] || [ "$APP_TOKEN" = change-me ]; then
     fail "a senha do celular veio do app com menos de 8 caracteres"
   elif token_proibido "$APP_TOKEN"; then
-    fail "a senha do celular veio do app com caractere que o backend não lê inteiro: $TOKEN_PROIBIDO"
+    fail "a senha do celular veio do app com caractere recusado: $TOKEN_PROIBIDO"
   else
     ok "senha do celular escolhida no app"
   fi

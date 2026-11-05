@@ -73,10 +73,10 @@ Assert ($bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) 'ins
 $def = $ast.Find({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Test-ForbiddenToken' }, $true)
 if (-not $def) { throw 'Funcao ausente: Test-ForbiddenToken' }
 . ([scriptblock]::Create($def.Extent.Text))
-foreach ($ruim in @('senha#forte', 'senha$forte', "senha'forte", 'senha"forte', 'senha\forte', ' senhaforte', "senhaforte`t", ("senha " + [char]0xE7 + [char]0xE3 + "o"))) {
+foreach ($ruim in @('senha#forte', 'senha$forte', "senha'forte", 'senha"forte', 'senha\forte', ' senhaforte', 'senha boa 123', "senhaforte`t", ("senha " + [char]0xE7 + [char]0xE3 + "o"))) {
     Assert (Test-ForbiddenToken $ruim) "senha recusada: [$ruim]"
 }
-Assert (-not (Test-ForbiddenToken 'senha boa 123')) 'espaco no meio continua valendo'
+Assert (-not (Test-ForbiddenToken 'senha+boa&123')) 'simbolo comum continua valendo'
 Assert ($texto.Contains('if (Test-ForbiddenToken $token) { Erro $tokenForbiddenText; continue }')) 'a pergunta do terminal recusa os mesmos caracteres'
 
 $tokenIf = $ast.Find({ param($n) $n -is [Management.Automation.Language.IfStatementAst] -and $n.Clauses[0].Item1.Extent.Text -eq '$temToken' }, $true)

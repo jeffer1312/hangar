@@ -9069,7 +9069,7 @@
   "native_setup_password_field": "Senha",
   "native_setup_password_confirm": "Confirmar senha",
   "native_setup_password_short": "Use pelo menos 8 caracteres.",
-  "native_setup_password_forbidden": "Use só letras sem acento, números e símbolos comuns. Não use # $ ' \" \\ nem espaço no começo ou no fim.",
+  "native_setup_password_forbidden": "Use só letras sem acento, números e símbolos comuns. Não use # $ ' \" \\ nem espaço.",
   "native_setup_password_mismatch": "As senhas não conferem.",
   "native_setup_password_kept": "Senha atual mantida",
   "native_setup_password_kept_hint": "Este computador já tem uma senha do celular; ela continua valendo.",

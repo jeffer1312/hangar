@@ -696,8 +696,9 @@ function Token-Aleatorio {
 }
 # O backend le o .env pelo python-dotenv, que corta o valor em " #", expande "${VAR}" e tira
 # aspas: sem aspas no .env, a senha com esses caracteres nao chega inteira e o celular nunca entra.
-$tokenForbiddenText = 'so vale ASCII sem acento; nao vale # $ '' " \ nem espaco no comeco ou no fim'
-function Test-ForbiddenToken($token) { return ($token -match '[^\x20-\x7E]|[#$''"\\]|^[ \t]|[ \t]$') }
+# Sem espaco: o login do celular e do desktop recusa token com espaco, digitado ou pelo QR.
+$tokenForbiddenText = 'so vale ASCII sem acento; nao vale # $ '' " \ nem espaco'
+function Test-ForbiddenToken($token) { return ($token -match '[^\x20-\x7E]|[#$''"\\ ]') }
 
 function Token-Do-Env {
     # -Encoding UTF8 pelo mesmo motivo do Set-EnvKey: sem ele o Get-Content do PS 5.1 decodifica
@@ -791,7 +792,7 @@ if ($temToken) {
     } elseif ($tokenDoApp.Length -lt 8 -or $tokenDoApp -eq 'change-me' -or $tokenDoApp -match '[\r\n]') {
         Pare 'a senha do celular veio do app invalida (minimo 8 caracteres, sem quebra de linha)' @()
     } elseif (Test-ForbiddenToken $tokenDoApp) {
-        Pare "a senha do celular veio do app com caractere que o backend nao le inteiro: $tokenForbiddenText" @()
+        Pare "a senha do celular veio do app com caractere recusado: $tokenForbiddenText" @()
     } else {
         Ok 'senha do celular escolhida no app'
     }
