@@ -1111,13 +1111,8 @@ fn decorate(env: &ListEnv, caches: &Caches, dirs: &Dirs, config_dirs: &[PathBuf]
             let pid = inp.agent_pids.get(&row.name).map(|p| i64::from(*p));
             decorate_context(&mut d.context, row, pid, &*env.procs, dirs, config_dirs, wall, mono);
         }
-        for (name, error) in d.replies.decorate(rows, |_| None) {
-            if crate::warn_limit::allow(Some(&name), "list_reply_unreadable") {
-                tracing::warn!(session = %name, kind = ?error.kind(), "lista: última resposta ilegível");
-            }
-            list_facts::note("rust.list_reply_unreadable", &name, format!("{:?}", error.kind()), "última resposta ilegível");
-        }
         // O fim do transcript já gravado: o aviso de limite do Claude com terminal vai ao vigia daqui.
+        // Antes das respostas: o vigia relê pelo mtime, e elas trocam `last_activity` pela hora da conversa.
         for row in rows.iter() {
             let started = inp.agent_pids.get(&row.name).and_then(|pid| env.procs.start_time(i64::from(*pid)));
             if let Some(limit) = d.limits.seen(row, started, wall) {
@@ -1125,6 +1120,12 @@ fn decorate(env: &ListEnv, caches: &Caches, dirs: &Dirs, config_dirs: &[PathBuf]
                 caches.limits.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(crate::runtime::gateway::LimitHit {
                     name: row.name.clone(), provider: "claude".into(), account: Some(account.to_string_lossy().into_owned()), limit });
             }
+        }
+        for (name, error) in d.replies.decorate(rows, |_| None) {
+            if crate::warn_limit::allow(Some(&name), "list_reply_unreadable") {
+                tracing::warn!(session = %name, kind = ?error.kind(), "lista: última resposta ilegível");
+            }
+            list_facts::note("rust.list_reply_unreadable", &name, format!("{:?}", error.kind()), "última resposta ilegível");
         }
     });
     caches.plans.with(|plans| rows.iter_mut().for_each(|row| plans.decorate(row, wall, mono)));

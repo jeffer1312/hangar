@@ -754,8 +754,8 @@ export async function getHistoryTailForServer(s: Server, name: string, limit: nu
 // DesktopShell desmonta board/canvas inteiros, então um cache em componente morreria junto — e é
 // exatamente a troca de view que dispara a tempestade de 50 GET /history. A chave inclui STATE e
 // LAST_ACTIVITY: só state deixava buraco — ciclo idle→working→idle completo dentro do TTL voltava
-// pra MESMA chave e servia a cauda pré-troca como atual; last_activity (mtime do jsonl, re-emitido
-// pelo stream de lista a cada mudança real) muda junto com conteúdo novo e fura o cache na volta.
+// pra MESMA chave e servia a cauda pré-troca como atual; last_activity (re-emitido pelo stream de
+// lista a cada mudança real) muda junto com conteúdo novo e fura o cache na volta.
 // `at` volta pro chamador: o retire de eco pendente do BoardCard só pode aposentar echos
 // confirmados ANTES da cauda ser buscada (não do hit) — senão msg entregue some da UI até o
 // próximo fetch real. `evs` sai como CÓPIA rasa: o chamador joga o array num $state (proxy sobre a

@@ -3899,8 +3899,8 @@ fora de grupo `orq` (membro cujo `pair_gid` é o da linha `orq` viva), sem convi
 e sem par de fora (a vida nova encerraria o acesso deles), sem loop ativo e com `last_activity` além
 do prazo (estrito). Claude sem terminal fica de fora: segue o estacionamento de 65 min de sempre, oculto ou não. A linha é só a
 pré-seleção; quem decide é o `sleep_*` do `RuntimeRegistry`, que fecha a porta de entrada da
-sessão (1 s) e reconfere sob ela: tempo parado pelo mtime do transcript (a linha não é republicada
-quando só `last_activity` muda), fila entregue, pergunta, turno, comandos nos shells do pane,
+sessão (1 s) e reconfere sob ela: tempo parado pela conversa (`conversation_idle`; a linha não é
+republicada quando só `last_activity` muda), fila entregue, pergunta, turno, comandos nos shells do pane,
 terminal do rodapé aberto, cliente do multiplexador anexado e modo só leitura. Qualquer um desses
 desiste (`Ok(false)`), sem erro.
 
@@ -3982,3 +3982,29 @@ Claude, duas mensagens seguidas chegaram em ordem. Não conferido: selo e tela n
 de hooks sem resposta respondia a uma operação que a fila nunca teve, o que punha o ator em erro
 (`queue_io`, `operação não preparada`). Processo recém-lançado agora zera as duas marcas
 (`open_with_launch`), e a reaprovação não responde à fila (`in_queue`, em `codex.rs`).
+
+## Tempo da sessão parada vem da conversa, não do mtime (05/11/2026)
+
+**Regra.** Com a sessão classificada `idle`, `last_activity` é a hora da linha do último evento da
+conversa (pedido, resposta, ferramenta ou pensamento; `dated_history_capped`), lida pelo `ReplyCache`
+junto com a última resposta, no Claude e no Codex. Aviso não conta. Nos outros estados, e sem evento
+na cauda, continua o mtime do transcript. Pergunta segurada pelo plugin vira `awaiting_input` depois
+disso e mantém a hora da conversa, o que só muda a hora exibida. O mtime segue sendo a chave dos
+caches: o vigia de limite roda antes das respostas por isso. O adormecer reconfere pelo mesmo tempo
+(`conversation_idle`).
+
+O prazo de ocultar recomeça quando a sessão abre: `fill_rows` trata a hora do registro em
+`session-specs` como um "Mostrar", porque toda abertura, retomada e reabertura o regrava e a conversa
+antiga reaberta nasceria com o prazo vencido. A hora exibida continua sendo a da conversa. A sugestão
+de nome também regrava o registro, o que reinicia o prazo uma vez.
+
+Limite aceito: subagente de fundo não escreve linha datada no líder, e a reconferência já não vê
+escrita recente sem data. Sobram as guardas de turno, fila, pergunta, shells, painel e cliente anexado.
+
+**Por quê.** A regra de ocultar usava o mtime, e ele anda sem conversa. Uma sessão parada desde as
+17:46 aparecia como "11 min atrás" na manhã seguinte, com ocultar em 3 h ligado. Medido em três
+sessões paradas: foram tocadas de hora em hora (05:08:21 → 06:08:21, 05:11:36 → 06:11:36,
+05:20:02 → 06:20:02), sem mudar de tamanho, com mtime em milissegundo exato, o que indica `utimes`
+e não escrita. Elas rodavam Claude Code 2.1.312 e 2.1.317; outra, em 2.1.318, ficou 14 h sem toque.
+Quem chama não foi identificado (sem strace na máquina): a correção não depende disso. Os avisos
+`hooks.json changed — reloaded` também entram no arquivo sem ninguém conversar.

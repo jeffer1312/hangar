@@ -55,6 +55,13 @@ async fn pane_key(mux: &Mux, row: &SessionRow) -> Option<String> {
     key
 }
 
+/// Quando a sessão abriu pela última vez: toda abertura, retomada e reabertura regrava o registro.
+fn opened_at(home: &Path, key: &str) -> Option<f64> {
+    let path = crate::session_open::record::path(home, key).ok()?;
+    let at = std::fs::metadata(path).and_then(|m| m.modified()).ok()?;
+    at.duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs_f64())
+}
+
 /// Falha deixa a linha visível e vai ao log e ao diário; a rodada seguinte tenta de novo.
 fn failed(diag: &DiagClient, code: &str, error: &io::Error) {
     // Roda a cada rodada da lista: arquivo ilegível repetiria a linha a cada 1,5 s.
@@ -84,8 +91,8 @@ pub async fn fill_rows(home: &Path, mux: &Mux, rows: &mut [SessionRow], diag: &D
     // Sem registro a sessão não volta pelo "Mostrar" (a rota recusa): nem a marca nem o automático a escondem.
     let (at, asked) = (home.to_owned(), keys.iter().flatten().chain(marks.keys()).cloned().collect::<HashSet<_>>());
     let known = match blocking(move || {
-        let mut known = HashSet::new();
-        for key in asked { if registered(&at, &key)? { known.insert(key); } }
+        let mut known = HashMap::new();
+        for key in asked { if registered(&at, &key)? { let opened = opened_at(&at, &key); known.insert(key, opened); } }
         Ok(known)
     }).await {
         Ok(known) => known,
@@ -94,12 +101,15 @@ pub async fn fill_rows(home: &Path, mux: &Mux, rows: &mut [SessionRow], diag: &D
     let now = crate::state::monitor::wall_now();
     let mut clear = Vec::new();
     for (row, key) in rows.iter_mut().zip(keys) {
-        let Some(key) = key.filter(|k| known.contains(k)) else { continue };
-        let (hidden, clear_mark) = decide(row, marks.get(&key), &cfg, now);
+        let Some(key) = key.filter(|k| known.contains_key(k)) else { continue };
+        // Conta como "Mostrar": a conversa antiga reaberta nasceria com o prazo vencido.
+        let mark = marks.get(&key).copied().unwrap_or_default();
+        let shown_at = [mark.shown_at, known[&key]].into_iter().flatten().reduce(f64::max);
+        let (hidden, clear_mark) = decide(row, Some(&Mark { shown_at, ..mark }), &cfg, now);
         row.hidden_from_list = hidden;
         if clear_mark { clear.push(key); }
     }
-    let stale = marks.keys().any(|k| !known.contains(k));
+    let stale = marks.keys().any(|k| !known.contains_key(k));
     if clear.is_empty() && !stale { return; }
     let at = home.to_owned();
     let written = blocking(move || {
@@ -193,6 +203,34 @@ mod tests {
         let marks = store::read(home.path()).unwrap();
         assert!(!marks[&live].hidden && marks[&live].shown_at.is_some(), "a marca caiu: {marks:?}");
         assert!(!marks.contains_key(&gone), "sem registro sai do arquivo");
+    }
+}
+
+#[cfg(test)]
+mod reopened {
+    use super::*;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn opening_again_restarts_the_deadline_of_an_old_conversation() {
+        let home = tempfile::tempdir().unwrap();
+        let key = "a".repeat(32);
+        let spec = home.path().join(".hangar/session-specs").join(format!("{key}.json"));
+        std::fs::create_dir_all(spec.parent().unwrap()).unwrap();
+        std::fs::write(&spec, "{}").unwrap();
+        auto::save(home.path(), &AutoHide { enabled: true, after_minutes: 180, ..AutoHide::default() }).unwrap();
+        let now = crate::state::monitor::wall_now();
+        let mut rows: Vec<SessionRow> = vec![serde_json::from_value(json!({"name": "s", "lifecycle_id": format!("k:{key}"),
+            "state": "idle", "last_activity": now - 600.0 * 60.0})).unwrap()];
+        let mux = Mux::with_program("missing-test-mux", Duration::from_secs(1));
+        let diag = DiagClient::new("127.0.0.1:9".parse().unwrap(), "s".into());
+        fill_rows(home.path(), &mux, &mut rows, &diag).await;
+        assert!(!rows[0].hidden_from_list, "acabou de abrir");
+
+        let old = std::time::SystemTime::now() - Duration::from_secs(300 * 60);
+        std::fs::File::options().write(true).open(&spec).unwrap().set_modified(old).unwrap();
+        fill_rows(home.path(), &mux, &mut rows, &diag).await;
+        assert!(rows[0].hidden_from_list, "aberta além do prazo");
     }
 }
 
