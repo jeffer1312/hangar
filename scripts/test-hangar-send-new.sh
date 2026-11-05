@@ -31,6 +31,18 @@ export PATH="$TMP/bin:$PATH"
 PORTA=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
 mkdir -p "$TMP/scripts" "$TMP/backend"
 cp "$REPO/scripts/hangar-send" "$TMP/scripts/hangar-send"
+# O hangar-send lê o peers.json pelo binário do servidor; aqui, um falso sobre a pasta do teste.
+cat > "$TMP/scripts/hangar-server-command" <<'SH'
+#!/usr/bin/env bash
+peers="$(dirname "$0")/../backend/peers.json"
+case "$2" in
+    path) echo "$peers" ;;
+    config) python3 -c 'import json,sys
+p = json.load(open(sys.argv[1])).get(sys.argv[2])
+print("%s\t%s" % (p["base_url"], p["token"])) if p else sys.exit("erro: servidor desconhecido")' "$peers" "$3" ;;
+esac
+SH
+chmod +x "$TMP/scripts/hangar-server-command"
 printf 'CP_AUTH_TOKEN=teste\nCP_PORT=%s\n' "$PORTA" > "$TMP/backend/.env"
 
 python3 - "$PORTA" "$TMP/corpo.json" <<'PY' &
@@ -137,7 +149,7 @@ bash "$TMP/scripts/hangar-send" --new hl-2x /tmp --headless --headless >/dev/nul
 checa "--headless duas vezes: código" '2' "$?"
 
 # 5. O --help documenta o flag (a ajuda é o cabeçalho do script).
-bash "$REPO/scripts/hangar-send" --help 2>/dev/null | grep -q -- '--headless'
+bash "$REPO/scripts/hangar-send" --help 2>/dev/null | grep -- '--headless' >/dev/null
 checa "--help menciona --headless" '0' "$?"
 
 # 6. HANGAR_SEND_PAINEL=1: aviso de programa vai como está, sem [de: …] e sem procurar o remetente.
@@ -156,7 +168,7 @@ HANGAR_SEND_PAINEL=1 bash "$TMP/scripts/hangar-send" srv::alvo "[painel: x] oi" 
 checa "painel para outro servidor: código" '2' "$?"
 
 # 8. O --help documenta a variável (a ajuda é o cabeçalho do script).
-bash "$REPO/scripts/hangar-send" --help 2>/dev/null | grep -q HANGAR_SEND_PAINEL
+bash "$REPO/scripts/hangar-send" --help 2>/dev/null | grep HANGAR_SEND_PAINEL >/dev/null
 checa "--help menciona HANGAR_SEND_PAINEL" '0' "$?"
 
 # 9. --contrato: o conteúdo sai limpo no stdout (cabe num arquivo), o mtime e o comando de gravar no
@@ -178,7 +190,7 @@ rm -f "$TMP/corpo.json"
 checa "--gravar sem --mtime: só cria" 'null' "$(campo mtime 2>/dev/null || echo 'nada enviado')"
 "${sessao[@]}" bash "$TMP/scripts/hangar-send" --contrato --mtime 111 >/dev/null 2>&1
 checa "--mtime sem --gravar: código" '2' "$?"
-bash "$REPO/scripts/hangar-send" --help 2>/dev/null | grep -q -- '--contrato'
+bash "$REPO/scripts/hangar-send" --help 2>/dev/null | grep -- '--contrato' >/dev/null
 checa "--help menciona --contrato" '0' "$?"
 
 # 10. --close servidor::sessao: confere a lista de lá e fecha lá, com o token de lá.
