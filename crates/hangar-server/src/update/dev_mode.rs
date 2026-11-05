@@ -232,7 +232,7 @@ pub fn cli(args: &[String]) -> ExitCode {
     };
     let runner = Arc::new(super::ShellRunner { timeout: super::steps::STEP_TIMEOUT });
     let topology = Topology::detect(&*runner, &home, cfg!(windows));
-    let restarter = SystemRestarter { topology, runner, home: home.clone(), port };
+    let restarter = SystemRestarter { topology, runner, home: home.clone(), port, diary_dir: crate::diag::diary_dir_in(&env) };
     let health = super::HttpHealth::new(&format!("http://127.0.0.1:{port}"));
     let runtime = match tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build() {
         Ok(runtime) => runtime,

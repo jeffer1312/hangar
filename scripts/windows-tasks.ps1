@@ -82,19 +82,28 @@ function Test-HangarServedFront($rows, [string]$name, $listeners) {
     return $true
 }
 
-# Start-ScheduledTask volta sem erro mesmo quando nenhuma instancia abre: o LastRunTime prova o inicio.
-# Repetir com uma instancia de pe e seguro, o IgnoreNew descarta. No fim vale tambem o Running, que com
-# a anterior ja encerrada so pode ser a nova: atraso do LastRunTime nao pode desfazer a atualizacao.
-function Start-HangarTask([string]$name) {
-    $before = (Get-ScheduledTaskInfo -TaskName $name -ErrorAction Stop).LastRunTime
+# Start-ScheduledTask volta sem erro mesmo quando nenhuma instancia abre, e o LastRunTime ja passou por
+# inicio que nao deixou processo de pe: so a porta prova a subida. Repetir e seguro, o IgnoreNew descarta.
+# Tarefa rodando sem porta e subida lenta: quem julga e a espera de quem pediu o reinicio.
+# Cada tentativa sai numa linha `hangar-tarefa:`, que o atualizador leva ao diario: repetir esconde a falha.
+function Start-HangarTask([string]$name, [int]$port) {
+    $before = Get-ScheduledTaskInfo -TaskName $name -ErrorAction Stop
+    $watch = [Diagnostics.Stopwatch]::StartNew()
     foreach ($attempt in 1..3) {
         Start-ScheduledTask -TaskName $name -ErrorAction Stop
-        foreach ($check in 1..10) {
-            if ((Get-ScheduledTaskInfo -TaskName $name -ErrorAction Stop).LastRunTime -ne $before) { return }
-            Start-Sleep -Milliseconds 100
+        $stopped = 0
+        foreach ($check in 1..40) {
+            $open = [bool](Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue)
+            $state = (Get-ScheduledTask -TaskName $name -ErrorAction Stop).State
+            if ($open) { break }
+            if ($state -eq 'Running') { $stopped = 0 } elseif (++$stopped -ge 5) { break }
+            Start-Sleep -Milliseconds 200
         }
+        $after = Get-ScheduledTaskInfo -TaskName $name -ErrorAction Stop
+        Write-Output ("hangar-tarefa: $name tentativa=$attempt porta=$(if ($open) { 'sim' } else { 'nao' }) estado=$state " +
+            ("antes={0:s}/0x{1:X8} depois={2:s}/0x{3:X8} ms={4}" -f $before.LastRunTime, $before.LastTaskResult, $after.LastRunTime, $after.LastTaskResult, $watch.ElapsedMilliseconds))
+        if ($open -or $state -eq 'Running') { return }
     }
-    if ((Get-ScheduledTask -TaskName $name -ErrorAction Stop).State -eq 'Running') { return }
     throw "Tarefa $name nao iniciou depois de 3 tentativas"
 }
 
@@ -172,7 +181,7 @@ function Restart-HangarTask([string]$name, [int]$port, [string]$directory, [swit
         }
         # O front fica no inicio direto: quem o recupera e a vigia.
         if (-not $NoStart) {
-            if ($name -eq 'hangar-backend') { Start-HangarTask $name } else { Start-ScheduledTask -TaskName $name -ErrorAction Stop }
+            if ($name -eq 'hangar-backend') { Start-HangarTask $name $port } else { Start-ScheduledTask -TaskName $name -ErrorAction Stop }
         }
     } finally {
         if ($locked) { $mutex.ReleaseMutex() }

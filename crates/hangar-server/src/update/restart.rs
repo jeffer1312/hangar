@@ -40,6 +40,18 @@ pub struct SystemRestarter {
     pub home: PathBuf,
     /// A porta do backend que as tarefas do Windows sobem.
     pub port: u16,
+    /// Pasta do diário; as tentativas de início da tarefa vão para lá.
+    pub diary_dir: Option<PathBuf>,
+}
+
+/// Uma linha por tentativa do `Start-HangarTask`. Início repetido que deu certo não vira falha nem
+/// relatório: sem o diário, o Agendador descartando o pedido sumiria da medição.
+fn task_attempts(output: &str) -> Vec<serde_json::Value> {
+    output.lines().filter_map(|line| line.trim().strip_prefix("hangar-tarefa: ")).map(|attempt| serde_json::json!({
+        "evento": "rust.update_task_start",
+        "nivel": if attempt.contains(" porta=sim ") { "ok" } else { "aviso" },
+        "detalhe": attempt,
+    })).collect()
 }
 
 impl SystemRestarter {
@@ -87,6 +99,10 @@ impl Restarter for SystemRestarter {
         let Some(command) = self.command()? else { return Ok(()) };
         let (runner, home) = (self.runner.clone(), self.home.clone());
         let run = tokio::task::spawn_blocking(move || runner.run(&command, &home)).await.map_err(|e| e.to_string())?;
+        let attempts = task_attempts(&run.output);
+        if !attempts.is_empty() {
+            let _ = crate::diag::record(self.diary_dir.clone(), attempts, "início da tarefa").await;
+        }
         match run.code {
             Some(0) => Ok(()),
             code => Err(format!("o reinício saiu com {code:?}: {}", tail(&run.output))),
@@ -123,7 +139,7 @@ mod tests {
     fn code(code: i32, output: &str) -> StepRun { StepRun { code: Some(code), output: output.into() } }
 
     fn restarter(topology: Topology, runner: Arc<Script>, home: &Path) -> SystemRestarter {
-        SystemRestarter { topology, runner, home: home.to_path_buf(), port: 8765 }
+        SystemRestarter { topology, runner, home: home.to_path_buf(), port: 8765, diary_dir: None }
     }
 
     #[test]
@@ -174,6 +190,20 @@ mod tests {
         assert_eq!(runner.ran.lock().unwrap().as_slice(), [format!(
             "powershell -NoProfile -ExecutionPolicy Bypass -Command \". '{}'; Restart-HangarTasks '{}' 8765 5173\"",
             helper.display(), root.display())]);
+    }
+
+    #[tokio::test]
+    async fn update_windows_restart_keeps_each_start_attempt_in_the_diary() {
+        let (dir, _root) = windows_home("0.1.0.11");
+        let diary = dir.path().join("diario");
+        let output = "hangar-tarefa: hangar-backend tentativa=1 porta=nao estado=Ready ms=2100\nhangar-tarefa: hangar-backend tentativa=2 porta=sim estado=Running ms=3400\n";
+        let mut restarter = restarter(Topology::Windows, script(move |_| code(0, output)), dir.path());
+        restarter.diary_dir = Some(diary.clone());
+        restarter.restart().await.unwrap();
+        let lines: String = std::fs::read_dir(&diary).unwrap().flatten().map(|e| std::fs::read_to_string(e.path()).unwrap()).collect();
+        let levels: Vec<String> = lines.lines().map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap()["nivel"].as_str().unwrap().to_owned()).collect();
+        assert_eq!(levels, ["aviso", "ok"], "{lines}");
+        assert!(lines.contains("tentativa=2"), "{lines}");
     }
 
     #[tokio::test]

@@ -45,6 +45,9 @@ function Reset-State {
     $script:slowRelease = 0
     $script:ignoredStarts = 0
     $script:frozenLastRun = $false
+    $script:listening = $false
+    $script:noPort = $false
+    $script:phantomStarts = 0
     $script:migrated = $true
     $script:tableReads = 0
     $script:stopFails = $false
@@ -68,6 +71,7 @@ function Get-ScheduledTask { param($TaskName, $ErrorAction) return $script:task 
 function Get-ScheduledTaskInfo { param($TaskName, $ErrorAction) return @{ LastRunTime = $script:lastRun } }
 function Set-ScheduledTask { param($TaskName, $Settings, $ErrorAction) $script:events += "settings:$($Settings.RestartCount)" }
 function Get-NetTCPConnection { param($State, $LocalPort, $ErrorAction)
+    if ($LocalPort -eq 8765 -and $script:listening) { return @{ OwningProcess = 500 } }
     if ($LocalPort -eq 5173 -and $script:frontOwner) { return @{ OwningProcess = $script:frontOwner } }
     if ($script:events.Count -and $script:lateOwner) { return @{ OwningProcess = $script:lateOwner } }
     if ($script:events.Count -and $script:slowRelease -gt 0) { $script:slowRelease--; return @{ OwningProcess = 777 } }
@@ -85,8 +89,10 @@ function Start-ScheduledTask { param($TaskName, $ErrorAction)
     Assert (-not $script:live.Count -and -not $script:owner) 'Nova instancia iniciada antes de encerrar a antiga'
     $script:events += 'start'
     if ($script:ignoredStarts -gt 0) { $script:ignoredStarts--; return }
-    $script:task.State = 'Running'
     if (-not $script:frozenLastRun) { $script:lastRun = $script:lastRun.AddSeconds(1) }
+    if ($script:phantomStarts -gt 0) { $script:phantomStarts--; $script:task.State = 'Ready'; return }
+    $script:task.State = 'Running'
+    $script:listening = -not $script:noPort
 }
 function Start-Sleep { param($Seconds, $Milliseconds) }
 function Test-HangarHttp { param($port) return $script:httpReplies.Dequeue() }
@@ -114,6 +120,21 @@ try {
     $script:frozenLastRun = $true
     Restart-HangarTask 'hangar-backend' 8765 'C:\repo\backend'
     Assert ('start' -in $script:events) 'LastRunTime atrasado desfez um reinicio que subiu'
+    # Medido em atualizacao real: saiu com 0, sem processo nem porta. LastRunTime nao prova a subida.
+    Reset-State
+    $script:phantomStarts = 1
+    $trail = @(Restart-HangarTask 'hangar-backend' 8765 'C:\repo\backend')
+    Assert (@($script:events | Where-Object { $_ -eq 'start' }).Count -eq 2) "Inicio sem processo nao foi repetido: $($script:events -join ',')"
+    Assert ($trail.Count -eq 2 -and $trail[0] -match 'tentativa=1 porta=nao' -and $trail[1] -match 'tentativa=2 porta=sim') "Trilha das tentativas fora do formato: $($trail -join ' | ')"
+    Reset-State
+    $script:phantomStarts = 99
+    $failed = $null
+    try { Restart-HangarTask 'hangar-backend' 8765 'C:\repo\backend' } catch { $failed = "$_" }
+    Assert ($failed -match 'nao iniciou') "Inicio que nunca deixou processo passou por reiniciado: $failed"
+    Reset-State
+    $script:noPort = $true
+    Restart-HangarTask 'hangar-backend' 8765 'C:\repo\backend' | Out-Null
+    Assert (@($script:events | Where-Object { $_ -eq 'start' }).Count -eq 1) 'Subida lenta virou inicio repetido ou falha'
     Reset-State
     $script:slowRelease = 2
     Restart-HangarTask 'hangar-backend' 8765 'C:\repo\backend'

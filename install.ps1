@@ -2228,7 +2228,7 @@ if ($registrou) {
             # proximo login e a pessoa abre o navegador numa porta morta logo apos instalar.
             # O equivalente no Linux (`systemctl --user enable --now`) liga na hora - o `--now`
             # e justamente esta metade, e ela tinha ficado de fora aqui.
-            Restart-HangarTask $t.Nome $t.Porta $t.Dir
+            $null = Restart-HangarTask $t.Nome $t.Porta $t.Dir
             $iniciou = $true
             if ($reaproveitou) { Ok "tarefa $($t.Nome) reaproveitada e reiniciada" } else { Ok "tarefa $($t.Nome) registrada e iniciada" }
         }

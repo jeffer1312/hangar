@@ -69,10 +69,13 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 - **A tarefa Windows acompanha o processo até ele terminar.** Reinício controlado não encerra
   a árvore inteira: sessões e atualizador sobrevivem. A vigia confirma falha HTTP, respeita
   instalação/atualização e só inicia outra instância após confirmar a parada da anterior.
-- **O reinício do backend só vale com a tarefa rodando de novo, e a porta do front pode ser do
-  servidor.** `Start-HangarTask` repete o `Start-ScheduledTask` até 3 vezes, conferindo o
-  `LastRunTime`, e falha com erro se a tarefa não rodou: o comando pode voltar sem erro sem abrir
-  instância. O front não passa por ele, e erro dele em `Restart-HangarTasks` vira aviso: front parado
+- **O reinício do backend só vale com a porta aberta, e a porta do front pode ser do servidor.**
+  `Start-HangarTask` repete o `Start-ScheduledTask` até 3 vezes enquanto a tarefa parar sem abrir a
+  porta, e falha com erro se nenhuma tentativa ficar de pé; `LastRunTime` não prova a subida. Tarefa
+  rodando sem porta é subida lenta: segue para a espera de quem pediu o reinício. Cada tentativa
+  sai numa linha `hangar-tarefa:`, que o atualizador grava no diário (`rust.update_task_start`,
+  `aviso` sem porta), porque o início repetido que deu certo não gera relatório.
+  O front não passa por ele, e erro dele em `Restart-HangarTasks` vira aviso: front parado
   não desfaz uma versão boa, e a vigia o sobe. Na
   máquina migrada, porta do front com o `hangar-server` é tela servida, nunca conflito:
   `hangar-frontend` sai sem subir. A migração e o `atualizar.py` seguem com o início direto. Medição em
@@ -189,6 +192,18 @@ e o log do Agendador vem desligado. `Start-HangarTask` cobre o sintoma e, se a t
 transforma o sucesso falso em erro visível. O `LastRunTime` tem resolução de 1 s; só instância
 nascida no mesmo segundo do início anterior o engana. O reinício por falha do Agendador não agiu
 em nenhum desses 92 s, então não é rede de segurança para processo morto.
+
+**O `LastRunTime` não segurou.** `umhb7h5y` (`0.1.0.9208` para `0.1.0.9213`, Windows 11) já tinha o
+`Start-HangarTask` conferindo esse campo: o comando saiu com 0 em 3,5 s, a tarefa ficou `Ready` com
+o `LastRunTime` da atualização anterior e `0xFFFFFFFF`, e a porta fechada. `dyqv7oi7` (`0.1.0.9214`
+para `0.1.0.9467`, Server 2025) terminou igual, depois de a `0.1.0.9467` subir às 14:05:13, a mesma
+hora gravada no `LastRunTime`; a suposição é que o `install.ps1 -Update` dos passos a iniciou e o
+reinício a derrubou, sem prova. Por que a conferência passou sem instância segue sem resposta, e é
+para isso que a linha `hangar-tarefa:` grava o `LastRunTime`, o `LastTaskResult` e o estado antes e
+depois de cada tentativa. Prova com tarefa descartável na DELPHI-02: subida imediata, subida com 6 s
+e tarefa que morre sem abrir a porta (3 tentativas e erro). O caso real, o início descartado, nunca
+se reproduziu lá. Cada conferência leva cerca de 0,9 s na VM, não os 200 ms da espera, porque
+`Get-NetTCPConnection` e `Get-ScheduledTask` são lentos: os limites contam conferências, não tempo.
 
 Na máquina em modo desenvolvedor com a tarefa do front, 4 de 4 atualizações saíram com "Porta 5173
 ainda ocupada", com o servidor já atualizado. O `Restart-HangarTasks` reinicia o backend primeiro;

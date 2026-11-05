@@ -581,7 +581,7 @@ async fn execute(env: &AccountEnvironment, args: &Args) -> bool {
         let (runner, home) = (runner.clone(), parts.home.clone());
         tokio::task::spawn_blocking(move || Topology::detect(&*runner, &home, cfg!(windows))).await.unwrap_or(Topology::Manual)
     };
-    let restarter = SystemRestarter { topology, runner: runner.clone(), home: parts.home.clone(), port: parts.port };
+    let restarter = SystemRestarter { topology, runner: runner.clone(), home: parts.home.clone(), port: parts.port, diary_dir: parts.diary_dir.clone() };
     let health = super::HttpHealth::new(&parts.health_url);
     let settings = Settings::default();
     tracing::info!(task = ?args.task, topology = topology.name(), "update: executor de pé");
