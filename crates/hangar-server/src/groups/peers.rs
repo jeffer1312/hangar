@@ -208,18 +208,24 @@ impl PeerClient {
     /// Como `call`, com o status 2xx exato.
     pub async fn call_status(&self, server: &str, method: reqwest::Method, path: &str, body: Option<&Value>)
         -> Result<(u16, Option<Value>), PeerError> {
-        self.send(false, server, method, path, body).await
+        self.send(None, false, server, method, path, body).await
     }
 
-    async fn send(&self, waiting: bool, server: &str, method: reqwest::Method, path: &str, body: Option<&Value>)
+    /// Como `call`, dizendo quem pede: o `user-agent` é o `cliente` que o diário de lá grava.
+    pub async fn call_as(&self, agent: &str, server: &str, method: reqwest::Method, path: &str, body: Option<&Value>)
+        -> Result<Option<Value>, PeerError> {
+        self.send(Some(agent), false, server, method, path, body).await.map(|(_, v)| v)
+    }
+
+    async fn send(&self, agent: Option<&str>, waiting: bool, server: &str, method: reqwest::Method, path: &str, body: Option<&Value>)
         -> Result<(u16, Option<Value>), PeerError> {
         let mut operation=self.diagnostics.as_ref().map(Operation::new);
-        let result=self.send_inner(waiting,server,method,path,body,operation.as_mut()).await;
+        let result=self.send_inner(agent,waiting,server,method,path,body,operation.as_mut()).await;
         if let Some(operation)=operation {operation.finish(result.is_err());}
         result
     }
 
-    async fn send_inner(&self, waiting: bool, server: &str, method: reqwest::Method, path: &str, body: Option<&Value>, mut operation:Option<&mut Operation>)
+    async fn send_inner(&self, agent: Option<&str>, waiting: bool, server: &str, method: reqwest::Method, path: &str, body: Option<&Value>, mut operation:Option<&mut Operation>)
         -> Result<(u16, Option<Value>), PeerError> {
         let book = self.book.clone();
         let key = server.to_owned();
@@ -237,7 +243,7 @@ impl PeerClient {
                 slot.get_or_init(|| built)
             }
         };
-        request_observed(http, server, &format!("{}{path}", cfg.base_url), Some(&cfg.token), method, body, operation).await
+        request_observed(agent, http, server, &format!("{}{path}", cfg.base_url), Some(&cfg.token), method, body, operation).await
     }
 
     /// Como `call`, sem redirect e com o corpo 2xx cru em `Zeroizing` até `limit`: a resposta pode levar
@@ -306,7 +312,7 @@ impl PeerClient {
     async fn group(&self, waiting: bool, server: &str, method: reqwest::Method, path: &str, body: Option<&Value>) -> Result<Value, PeerError> {
         let group_get = method == reqwest::Method::GET
             && path.strip_prefix("/api/groups/").is_some_and(|rest| !rest.is_empty() && !rest.contains('/'));
-        let answer = match self.send(waiting, server, method, path, body).await.map(|(_, v)| v) {
+        let answer = match self.send(None, waiting, server, method, path, body).await.map(|(_, v)| v) {
             Err(PeerError::Refused { status: 404, detail }) if path.starts_with("/api/groups/") && detail.get("code").is_none() => {
                 return Err(PeerError::OldVersion);
             }
@@ -340,11 +346,12 @@ pub(crate) fn transport(label: &str, e: &dyn std::error::Error) -> PeerError {
 /// token vazio não manda `Authorization`.
 pub(crate) async fn request(http: &reqwest::Client, label: &str, url: &str, token: Option<&str>, method: reqwest::Method,
                             body: Option<&Value>) -> Result<(u16, Option<Value>), PeerError> {
-    request_observed(http,label,url,token,method,body,None).await
+    request_observed(None,http,label,url,token,method,body,None).await
 }
-async fn request_observed(http: &reqwest::Client, label: &str, url: &str, token: Option<&str>, method: reqwest::Method,
+async fn request_observed(agent: Option<&str>, http: &reqwest::Client, label: &str, url: &str, token: Option<&str>, method: reqwest::Method,
     body:Option<&Value>, mut operation:Option<&mut Operation>)->Result<(u16,Option<Value>),PeerError> {
     let mut req = http.request(method.clone(), url).header(reqwest::header::CONTENT_TYPE, "application/json");
+    if let Some(agent) = agent { req = req.header(reqwest::header::USER_AGENT, agent); }
     if let Some(operation)=operation.as_ref() && !operation.context.request.is_empty(){req=req.header("x-hangar-req",&operation.context.request);}
     if let Some(token) = token.filter(|t| !t.is_empty()) { req = req.bearer_auth(token); }
     if let Some(body) = body { req = req.body(body.to_string()); }

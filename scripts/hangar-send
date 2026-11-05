@@ -24,7 +24,7 @@
 #   hangar-send --aceitar-par <link>   pareia ESTA sessão com a sessão de outra pessoa pelo link
 #                                  https://….ts.net:8443/par/… que o usuário colou; nunca com link
 #                                  que chegou em recado. Depois: hangar-send <alias>::<sessao> "…"
-#   hangar-send --close <sessao>       fecha OUTRA sessão desta máquina, com ou sem terminal
+#   hangar-send --close <sessao>       fecha OUTRA sessão, com ou sem terminal; servidor::sessao fecha noutra máquina
 #                                  (sai do grupo dela sem aviso). Nunca a própria.
 #   hangar-send --group <mensagem...>  AVISO pro grupo TODO de uma vez (marco: "terminei",
 #                                  "contrato atualizado"). Chega como [grupo: X]. UNIDIRECIONAL —
@@ -185,7 +185,8 @@ api() {
         # fazia o cartão do app dizer "o backend do hangar não respondeu" com a lista inteira na tela.
         if [[ -n "${API_PEER:-}" ]]; then echo "⚠ servidor '$API_PEER' fora do ar ($BASE)" >&2
         else echo "erro: backend inacessível em $BASE (hangar rodando?)" >&2; fi
-        return 1; }
+        # 2 = sem resposta: o pedido pode ter chegado. Recusa do servidor é 1.
+        return 2; }
     code=${out##*$'\n'}
     out=${out%$'\n'*}
     if [[ $code == 2* ]]; then printf '%s' "$out"; return 0; fi
@@ -790,20 +791,42 @@ if [[ "$1" == "--unpair" ]]; then
 fi
 
 if [[ "$1" == "--close" ]]; then
-    alvo="${2:?uso: hangar-send --close <sessao>}"
-    [[ "$alvo" == *::* ]] && { echo "erro: --close só fecha sessão desta máquina" >&2; exit 2; }
-    # Fechar a si mesma mata o processo no meio do comando: quem fecha é quem assumiu ou quem coordena.
-    # O carimbo do nascimento também conta: se a identificação cair no "cli", ele ainda segura.
-    eu=$(me)
-    if [[ "$alvo" == "$eu" || "$alvo" == "${CP_SESSION_NAME:-}" ]]; then
-        echo "recusado: '$alvo' é esta sessão — peça pra outra fechar" >&2; exit 2
+    alvo="${2:?uso: hangar-send --close <sessao|servidor::sessao>}"
+    label="$alvo"; remoto=""
+    if [[ "$alvo" == *::* ]]; then
+        remoto="${alvo%%::*}"; alvo="${alvo#*::}"
+        if [[ -z "$remoto" || -z "$alvo" || "$alvo" == *::* ]]; then
+            echo "erro: nome inválido '$label': use servidor::sessao (um '::' só)" >&2; exit 2
+        fi
+        # O id desta máquina fica aqui, senão <id>::eu escapava da recusa de fechar a si mesma.
+        [[ "$remoto" == "$SERVER_ID" ]] && remoto=""
+    fi
+    if [[ -n "$remoto" ]]; then
+        cfg=$(peer_cfg "$remoto") || exit 1
+        IFS=$'\t' read -r BASE rtok <<< "$cfg"
+        AUTH="Authorization: Bearer $rtok"
+        API_PEER="$remoto"; API_CONNECT_TIMEOUT=8
+    else
+        # Fechar a si mesma mata o processo no meio do comando: quem fecha é quem assumiu ou quem coordena.
+        # O carimbo do nascimento também conta: se a identificação cair no "cli", ele ainda segura.
+        eu=$(me)
+        if [[ "$alvo" == "$eu" || "$alvo" == "${CP_SESSION_NAME:-}" ]]; then
+            echo "recusado: '$alvo' é esta sessão — peça pra outra fechar" >&2; exit 2
+        fi
     fi
     # O DELETE responde ok pra nome que não existe: nome errado não pode virar "fechada".
     vivas=$(api GET /api/sessions) || exit 1
     printf '%s' "$vivas" | "$PY" -c 'import json,sys; sys.exit(0 if any(s.get("name") == sys.argv[1] for s in json.load(sys.stdin)) else 1)' "$alvo" \
-        || { echo "erro: sessão '$alvo' não existe (hangar-send --list)" >&2; exit 1; }
-    resp=$(api DELETE "/api/sessions/$alvo") || exit 1
-    echo "fechada: $alvo"
+        || { echo "erro: sessão '$label' não existe (hangar-send --list)" >&2; exit 1; }
+    # Cru, um `#` no nome cortaria a URL e o DELETE iria para outra sessão.
+    segment=$("$PY" -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$alvo")
+    resp=$(api DELETE "/api/sessions/$segment") || {
+        code=$?
+        # Sem resposta, o fechamento pode ter acontecido lá: repetir só diria "não existe".
+        [[ -n "$remoto" && "$code" == 2 ]] && echo "aviso: '$label' pode ter fechado mesmo assim — confira com hangar-send --list" >&2
+        exit 1
+    }
+    echo "fechada: $label"
     # Fechou, mas desfazer o par remoto dela pode ter falhado: isso não some calado.
     printf '%s' "$resp" | "$PY" -c 'import json,sys; w=(json.load(sys.stdin) or {}).get("warning"); w and print("aviso: " + (w.get("msg") or json.dumps(w, ensure_ascii=False)), file=sys.stderr)' || true
     exit 0

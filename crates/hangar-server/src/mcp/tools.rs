@@ -240,6 +240,36 @@ async fn remote_session(peers: &PeerClient, server: &str, mut a: NewSession) -> 
     created(&info, Some(server))
 }
 
+/// Para quem vai o `close_session`: `(servidor, nome)`, sem servidor quando é desta máquina. O id daqui
+/// fica aqui, senão `<id>::eu` escapava da recusa de fechar a si mesma.
+fn close_target(alvo: &str, own_server: &str) -> Result<(Option<String>, String), String> {
+    Ok(match remote_target(alvo)? {
+        Some((server, name)) if server != own_server => (Some(server), name),
+        Some((_, name)) => (None, name),
+        None => (None, alvo.to_owned()),
+    })
+}
+
+/// O `user-agent` que o diário grava como `cliente`.
+fn mcp_agent(caller: &str) -> String { format!("hangar-mcp (de {caller})") }
+
+/// `close_session` com `servidor::sessao`: fecha lá, pela rota de lá (`peers.json`), como
+/// `hangar-send --close servidor::sessao`. Par externo não está no `peers.json`: sessão de outra pessoa não fecha.
+async fn remote_close(peers: &PeerClient, server: &str, name: &str, caller: &str) -> Outcome {
+    // O DELETE responde ok para nome que não existe: nome errado não pode virar "fechada".
+    let rows = peers.call(server, reqwest::Method::GET, "/api/sessions", None).await.map_err(|e| e.text(server))?;
+    if !rows.as_ref().and_then(Value::as_array).is_some_and(|rows| rows.iter().any(|s| s["name"] == name)) {
+        return Err(format!("sessão '{name}' não existe em '{server}' (`hangar-send --list`)"));
+    }
+    let resp = peers.call_as(&mcp_agent(caller), server, reqwest::Method::DELETE, &format!("/api/sessions/{}", segment(name)), None).await.map_err(|e| {
+        // Sem resposta legível o fechamento pode ter acontecido: quem repete ouviria "não existe" sem entender.
+        if e.is_transport() { format!("{} — a sessão pode ter fechado lá: confira com `hangar-send --list`", e.text(server)) } else { e.text(server) }
+    })?;
+    let mut out = Map::from_iter([("server".to_owned(), json!(server))]);
+    if let Some(Value::Object(fields)) = resp { out.extend(fields); }
+    Ok(dict(Value::Object(out)))
+}
+
 /// A resposta da retomada do Arquivo, igual para esta e para outra máquina.
 fn resumed(info: &Value, server: Option<&str>) -> CallToolResult {
     let mut out = json!({"name": info["name"], "cwd": info["cwd"], "provider": info["provider"], "headless": info["headless"]});
@@ -363,7 +393,7 @@ impl Tools {
     /// `caller`: a sessão que chamou a tool. Vai no `user-agent`, que o diário grava como `cliente`:
     /// sem ele, fechar ou mandar pelo MCP fica igual a um clique do dono.
     async fn route_from(&self, caller: Option<&str>, method: Method, path: &str, body: Option<Value>) -> (u16, Value) {
-        let agent = caller.map_or_else(|| "hangar-mcp".to_owned(), |c| format!("hangar-mcp (de {c})"));
+        let agent = caller.map_or_else(|| "hangar-mcp".to_owned(), mcp_agent);
         let mut request = Request::builder().method(method).uri(path).header("user-agent", agent)
             .header("authorization", format!("Bearer {}", self.st.cfg.auth_token));
         if body.is_some() { request = request.header("content-type", "application/json"); }
@@ -515,7 +545,14 @@ impl Tools {
     async fn close_session(&self, headers: &HeaderMap, alvo: &str) -> Outcome {
         let (me, voice) = self.caller(headers).await?;
         if voice { return Err(VOICE_CLOSE_REFUSED.into()); }
-        if alvo.contains("::") { return Err("close_session só fecha sessão desta máquina".into()); }
+        // A identidade muda em execução pelo painel: `self.server_id` é a da subida.
+        let own = self.st.current_server_id();
+        let (server, alvo) = close_target(alvo, &own)?;
+        if let Some(server) = server {
+            let caller = if own.is_empty() { me } else { format!("{own}::{me}") };
+            return remote_close(&self.st.peers, &server, &alvo, &caller).await;
+        }
+        let alvo = alvo.as_str();
         if alvo == me { return Err(format!("recusado: '{alvo}' é esta sessão — peça pra outra fechar")); }
         // O DELETE responde ok para nome que não existe: nome errado não pode virar "fechada".
         let home = self.home();
@@ -939,6 +976,65 @@ mod tests {
         let out = result.structured_content.unwrap();
         assert_eq!((out["server"].clone(), out["name"].clone(), out["config_dir"].clone()),
             (json!("lab"), json!("filha"), json!("/home/r/.claude-work")));
+    }
+
+    #[test]
+    fn close_target_keeps_this_machine_id_here() {
+        assert_eq!(close_target("eu", "aqui").unwrap(), (None, "eu".into()));
+        assert_eq!(close_target("aqui::eu", "aqui").unwrap(), (None, "eu".into()));
+        assert_eq!(close_target("lab::eu", "aqui").unwrap(), (Some("lab".into()), "eu".into()));
+        assert_eq!(close_target("lab::eu", "").unwrap(), (Some("lab".into()), "eu".into()));
+        assert!(close_target("a::b::c", "aqui").is_err());
+    }
+
+    /// Fecha pela rota de lá, com o token de lá; nome que lá não existe não chega ao DELETE, e a recusa de lá volta.
+    #[tokio::test]
+    async fn remote_close_deletes_on_the_peer_only_a_live_session() {
+        use axum::http::StatusCode;
+        use axum::routing::{delete, get};
+        let reply = |v: Value| ([(axum::http::header::CONTENT_TYPE, "application/json")], v.to_string());
+        let seen: Arc<Mutex<Vec<(String, String, String)>>> = Arc::default();
+        let sink = seen.clone();
+        let app = Router::new()
+            .route("/api/sessions", get(move || async move { reply(json!([{"name": "filha"}, {"name": "dono so"}, {"name": "travada"}, {"name": "muda"}])) }))
+            .route("/api/sessions/{name}", delete(move |h: HeaderMap, uri: axum::http::Uri| {
+                let sink = sink.clone();
+                async move {
+                    let header = |name| h.get(name).and_then(|v: &axum::http::HeaderValue| v.to_str().ok()).unwrap_or_default().to_owned();
+                    sink.lock().unwrap().push((header("authorization"), header("user-agent"), uri.path().to_owned()));
+                    if uri.path().ends_with("/travada") {
+                        return (StatusCode::CONFLICT, [(axum::http::header::CONTENT_TYPE, "application/json")], json!({"detail": "recusada lá"}).to_string());
+                    }
+                    if uri.path().ends_with("/muda") {
+                        return (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "application/json")], "<html>".to_owned());
+                    }
+                    (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "application/json")], json!({"ok": true, "warning": {"msg": "par não avisado"}}).to_string())
+                }
+            }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let dir = tempfile::tempdir().unwrap();
+        let peers = peers_with_lab(dir.path(), &format!("http://{addr}"));
+
+        let out = remote_close(&peers, "lab", "filha", "aqui::eu").await.unwrap().structured_content.unwrap();
+        assert_eq!((out["server"].clone(), out["ok"].clone(), out["warning"]["msg"].clone()),
+            (json!("lab"), json!(true), json!("par não avisado")));
+        assert_eq!(seen.lock().unwrap().pop().unwrap(),
+            ("Bearer tok-lab".to_owned(), "hangar-mcp (de aqui::eu)".to_owned(), "/api/sessions/filha".to_owned()));
+
+        remote_close(&peers, "lab", "dono so", "aqui::eu").await.unwrap();
+        assert_eq!(seen.lock().unwrap().pop().unwrap().2, "/api/sessions/dono%20so");
+
+        let err = remote_close(&peers, "lab", "sumiu", "aqui::eu").await.unwrap_err();
+        assert!(err.contains("'sumiu'") && err.contains("'lab'"), "{err}");
+        assert!(seen.lock().unwrap().is_empty(), "nome que lá não existe não chega ao DELETE");
+
+        let err = remote_close(&peers, "lab", "travada", "aqui::eu").await.unwrap_err();
+        assert!(err.contains("recusada lá") && !err.contains("pode ter fechado"), "{err}");
+
+        let err = remote_close(&peers, "lab", "muda", "aqui::eu").await.unwrap_err();
+        assert!(err.contains("pode ter fechado"), "resposta ilegível não diz que falhou: {err}");
     }
 
     #[tokio::test]
