@@ -170,7 +170,7 @@ function Restart-HangarTask([string]$name, [int]$port, [string]$directory, [swit
             $quem = Format-HangarPortOwner $rows $held[0]
             throw "Porta $port ainda ocupada por $quem; nova instancia nao sera iniciada"
         }
-        # Front que nao sobe nao desfaz uma versao boa: quem o recupera e a vigia.
+        # O front fica no inicio direto: quem o recupera e a vigia.
         if (-not $NoStart) {
             if ($name -eq 'hangar-backend') { Start-HangarTask $name } else { Start-ScheduledTask -TaskName $name -ErrorAction Stop }
         }
@@ -218,7 +218,9 @@ function Restart-HangarTasks([string]$raiz, [int]$portaBack, [int]$portaFront) {
         if (-not $locked) { throw 'Instalacao ou recuperacao em andamento; tente de novo em instantes' }
         Restart-HangarTask 'hangar-backend' $portaBack (Join-Path $raiz 'backend')
         if ($portaFront -gt 0 -and (Get-ScheduledTask -TaskName 'hangar-frontend' -ErrorAction SilentlyContinue)) {
-            Restart-HangarTask 'hangar-frontend' $portaFront (Join-Path $raiz 'frontend')
+            # Com o backend novo de pe, erro aqui faria o atualizador desfazer uma versao boa.
+            try { Restart-HangarTask 'hangar-frontend' $portaFront (Join-Path $raiz 'frontend') }
+            catch { Write-Warning "hangar-frontend nao reiniciou, a vigia recupera: $_" }
         }
     } finally {
         if ($locked) { $mutex.ReleaseMutex() }

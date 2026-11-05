@@ -72,7 +72,8 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 - **O reinício do backend só vale com a tarefa rodando de novo, e a porta do front pode ser do
   servidor.** `Start-HangarTask` repete o `Start-ScheduledTask` até 3 vezes, conferindo o
   `LastRunTime`, e falha com erro se a tarefa não rodou: o comando pode voltar sem erro sem abrir
-  instância. O front não passa por ele: front parado não desfaz uma versão boa, e a vigia o sobe. Na
+  instância. O front não passa por ele, e erro dele em `Restart-HangarTasks` vira aviso: front parado
+  não desfaz uma versão boa, e a vigia o sobe. Na
   máquina migrada, porta do front com o `hangar-server` é tela servida, nunca conflito:
   `hangar-frontend` sai sem subir. A migração e o `atualizar.py` seguem com o início direto. Medição em
   [Reinício sem início e porta do front](#reinício-sem-início-e-porta-do-front-05112026).

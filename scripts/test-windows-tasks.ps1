@@ -41,6 +41,7 @@ function Reset-State {
     $script:owner = 11
     $script:stuckLauncher = $false
     $script:lateOwner = $null
+    $script:frontOwner = $null
     $script:slowRelease = 0
     $script:ignoredStarts = 0
     $script:frozenLastRun = $false
@@ -67,6 +68,7 @@ function Get-ScheduledTask { param($TaskName, $ErrorAction) return $script:task 
 function Get-ScheduledTaskInfo { param($TaskName, $ErrorAction) return @{ LastRunTime = $script:lastRun } }
 function Set-ScheduledTask { param($TaskName, $Settings, $ErrorAction) $script:events += "settings:$($Settings.RestartCount)" }
 function Get-NetTCPConnection { param($State, $LocalPort, $ErrorAction)
+    if ($LocalPort -eq 5173 -and $script:frontOwner) { return @{ OwningProcess = $script:frontOwner } }
     if ($script:events.Count -and $script:lateOwner) { return @{ OwningProcess = $script:lateOwner } }
     if ($script:events.Count -and $script:slowRelease -gt 0) { $script:slowRelease--; return @{ OwningProcess = 777 } }
     if ($script:owner) { return @{ OwningProcess = $script:owner } }
@@ -158,6 +160,11 @@ try {
     $script:ignoredStarts = 99
     Restart-HangarTask 'hangar-frontend' 5173 'C:\repo\frontend'
     Assert (@($script:events | Where-Object { $_ -eq 'start' }).Count -eq 1) 'Front que nao abriu derrubaria uma versao boa'
+    Reset-State
+    $script:processRows = @($rows) + @($frontRows[2])
+    $script:frontOwner = 72
+    Restart-HangarTasks 'C:\repo' 8765 5173 3>$null
+    Assert ('start' -in $script:events) 'Falha do front derrubou o reinicio do backend'
     Reset-State
     $script:processRows = $frontRows
     $script:owner = 71
